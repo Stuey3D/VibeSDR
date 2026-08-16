@@ -3205,6 +3205,19 @@ struct LocalSdrShim::Impl {
     };
     std::mutex outboxMtx;
     std::map<net::Socket*, std::shared_ptr<Outbox>> outboxes;
+    /** ★★★ BYTES SENT, PER SESSION, SURVIVING THE FIRST SOCKET TO CLOSE. The connection log's
+     *  `bytes` field was written as 0 for EVERY record ever logged — 818 of 818 on the demo Pi,
+     *  including sessions that had plainly streamed audio for minutes (2026-08-16). The counter
+     *  existed all along (`Outbox::sentTotal`, which the live monitor reads); the close path simply
+     *  never passed it, so `noteConnectionClosed` took its default argument of zero.
+     *  ★★ It matters because it is THE question an owner asks of this log: did that 11-second
+     *     visitor from Canada hear anything, or bounce off a broken server? Duration alone cannot
+     *     say, and a field that always reads zero answers "no" for everybody.
+     *  ★★★ ACCUMULATED, NOT READ ONCE, because a visit is TWO sockets and either may close first.
+     *     Reading only at the spectrum close would lose the audio socket's bytes whenever audio
+     *     went first — which is the common case, and the socket carrying almost all the volume. */
+    std::mutex sessionBytesMtx;
+    std::map<std::string, unsigned long long> sessionBytes;
 
     /** The ONLY thread that ever writes to this client's socket. Blocking sends are fine HERE —
      *  blocking is exactly what this thread is for, and it holds no lock any other client wants. */
@@ -8144,11 +8157,51 @@ struct LocalSdrShim::Impl {
           //   path already makes with no session at all.
           // ★ Spectrum only, to mirror the open: the audio socket is optional and arrives second,
           //   so closing on it would end the record while the listener is still here.
+          // ★★★ BANK WHAT THIS SOCKET SENT BEFORE IT DISAPPEARS — audio or spectrum, whichever
+          //     this is. Its outbox is destroyed a few lines below, taking `sentTotal` with it, so
+          //     reading it later is reading nothing. See Impl::sessionBytes.
+          {
+              // ★ From sockSession, which is keyed by socket and covers BOTH sockets on every
+              //   radio — clientDsp only exists when perClientDsp() is true, and on a
+              //   single-listener receiver it is empty, which is exactly where this log matters.
+              std::string bsess;
+              { auto si = sockSession.find(sock.get());
+                if (si != sockSession.end()) bsess = si->second; }
+              if (!bsess.empty()) {
+                  unsigned long long sent = 0;
+                  { std::lock_guard<std::mutex> ol(outboxMtx);
+                    auto ob = outboxes.find(sock.get());
+                    if (ob != outboxes.end() && ob->second)
+                        sent = ob->second->sentTotal.load(std::memory_order_relaxed); }
+                  if (sent) { std::lock_guard<std::mutex> bl(sessionBytesMtx);
+                              sessionBytes[bsess] += sent; }
+              }
+          }
           if (!isAudio) {
-            auto it = clientDsp.find(sock.get());
-            const std::string sess = (it != clientDsp.end() && it->second)
-                                   ? it->second->session : std::string();
-            LocalSdrShim::noteConnectionClosed(sock->peerAddress(), sess, "closed");
+            // ★★★ sockSession FIRST, clientDsp only as a fallback. clientDsp exists ONLY when
+            //     perClientDsp() is true — a LOCKED CENTRE and maxUsers > 1 — so on a
+            //     single-listener receiver it is empty and this read produced no session at all.
+            //     That is the radio the demo runs and the one whose log we are trying to fix, and
+            //     it is the same "fixed a path that never runs" trap this file cost a whole
+            //     evening to today. sockSession is written at the handshake, for every radio.
+            std::string sess;
+            { auto si = sockSession.find(sock.get());
+              if (si != sockSession.end()) sess = si->second; }
+            if (sess.empty()) {
+                auto it = clientDsp.find(sock.get());
+                if (it != clientDsp.end() && it->second) sess = it->second->session;
+            }
+            // ★ The spectrum socket ends the RECORD, so it reports the whole visit's total — its
+            //   own bytes, banked just above, plus the audio socket's if that went first. Taken
+            //   and ERASED: a session id is not reused, and a map fed by unauthenticated traffic
+            //   must not grow for ever.
+            unsigned long long total = 0;
+            if (!sess.empty()) {
+                std::lock_guard<std::mutex> bl(sessionBytesMtx);
+                auto b = sessionBytes.find(sess);
+                if (b != sessionBytes.end()) { total = b->second; sessionBytes.erase(b); }
+            }
+            LocalSdrShim::noteConnectionClosed(sock->peerAddress(), sess, "closed", total);
           }
           // ★ The channel goes with the listener: its pipeline, its slice, its encoder.
           // ★ Lift it out under the lock, stop its thread OUTSIDE — joining a thread while
