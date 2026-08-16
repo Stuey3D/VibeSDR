@@ -171,15 +171,26 @@ export default function LocalAudioPlayer(
     // the same format byte in Android's native pump. Nothing had to be built to receive it; the
     // request was simply hardcoded (Hans identified Opus by ear on first listen, 2026-07-27, and
     // this is the setting that was built for him everywhere except the phone).
-    // ★ adminAuth already carries its leading '&' (setAdminAuth normalises it in the client), and
-    //   it is the SAME string the spectrum socket appends — built once in JS so the two sockets
-    //   cannot disagree about who is asking.
+    // ★★★ NORMALISE THE LEADING '&' — I ASSERTED IT WAS ALREADY THERE AND IT WAS NOT. adminAuthQ
+    //     is stored bare ("vs_admin_ticket=…"); only UberSDRClient.setAdminAuth() adds the '&', and
+    //     that is the SPECTRUM socket's copy. Appended raw here it produced
+    //     "…&codec=opusvs_admin_ticket=…" — the credential glued onto the codec value, so the
+    //     server saw a nonsense codec and NO TICKET, and logged "no credential" while the app
+    //     insisted it was sending one. Visible only in the front door's route line (2026-08-16).
+    // ★★ THIS FILE ALREADY WARNS ABOUT IT, in UberSDRClient: "THE LEADING & IS NORMALISED HERE …
+    //    one of the two would have produced '…&mode=binary8vs_admin_ticket=…': a malformed URL,
+    //    refused at the handshake, which reads to a user as exactly the connection error they
+    //    reported." I read that warning, wrote a comment claiming the normalisation had happened,
+    //    and did not check. An assumption stated confidently in a comment is not evidence.
+    const adminQ = !adminAuth || adminAuth.startsWith('&') ? (adminAuth || '') : `&${adminAuth}`;
     const combinedSuffix = (sessionId ? `&user_session_id=${encodeURIComponent(sessionId)}` : '')
-      + (raw ? '' : '&codec=opus') + authSuffix + adminAuth;
+      + (raw ? '' : '&codec=opus') + authSuffix + adminQ;
 
     if (USE_NATIVE_PUMP) {
+      // ★ Log the SUFFIX, not a boolean. "[admin]" told me a credential was held and nothing about
+      //   whether it was well formed — which is precisely what was wrong with it.
       noteAudioEvent(`native pump start → ${(wsBase || `ws://${host}:${port}`)}/ws/audio`
-                     + (adminAuth ? ' [admin]' : ' [no admin]'));
+                     + (adminQ ? ` [admin ${adminQ.slice(0, 18)}…]` : ' [no admin]'));
       Vibe?.startLocalAudio?.(host, port, tuneJson(f, m, bl, bh), combinedSuffix, wsBase ?? '');
       started.current = true;
       // ★★ THE LINK METER MUST STILL SEE THE AUDIO. The JS reader below counted every byte as it
