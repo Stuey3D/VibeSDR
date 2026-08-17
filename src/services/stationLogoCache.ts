@@ -105,7 +105,8 @@ export async function resolveStationLogo(
     const info = await FileSystem.getInfoAsync(e.path);
     if (info.exists) {
       if (Date.now() - e.ts > REFRESH_MS)
-        refresh(key, name, iso, { pi, ecc: ecc || eccForIso(iso, pi), freqHz }).catch(() => {});
+        refresh(key, name, iso, { pi, ecc: ecc || eccForIso(iso, pi) || eccForIso(receiverIso(), pi),
+                                  freqHz }).catch(() => {});
       return e.path;
     }
     delete idx[key];   // file vanished — fall through to re-fetch
@@ -117,7 +118,12 @@ export async function resolveStationLogo(
   // ★ The ECC is derived from the country when the station did not transmit one — which is most
   //   of them. See eccForIso: it is a table lookup against an ISO that has already been validated,
   //   not an assumption about where the signal came from.
-  const gccEcc = ecc || eccForIso(iso, pi);
+  // ★★★ AND FALL BACK TO THE RECEIVER'S OWN POSITION. Without an ECC the RadioDNS lookup is
+  //     skipped entirely (fqdnFor returns ''), so a server configured with only a Maidenhead
+  //     locator — no country — never asked RadioDNS anything and every station dropped to the name
+  //     search. That is why the phone "missed stations the Pi finds": the Pi's config carries a
+  //     country and the phone's carried a grid square. See receiverIsoFromGrid.
+  const gccEcc = ecc || eccForIso(iso, pi) || eccForIso(receiverIso(), pi);
   if (pi && gccEcc && freqHz) url = await radioDnsLogo(pi, gccEcc, freqHz).catch(() => '');
   if (!url && name) url = (await lookupStationLogo(name, iso, receiverIso() || undefined)) || '';
   if (!url) return null;

@@ -2,6 +2,9 @@
 // RTL-SDR / network WFM station display. The logo lookup (stationLogo.ts) is
 // already backend-agnostic; this centralises the country resolution + flag.
 
+import { gridToLatLon } from './grid';
+import { countryForCoord } from './countryLookup';
+
 /** ISO-3166 alpha-2 → flag emoji (regional indicator symbols). '' if invalid. */
 export function isoToFlag(iso?: string): string {
   if (!iso || iso.length !== 2 || !/^[A-Za-z]{2}$/.test(iso)) return '';
@@ -111,6 +114,29 @@ export function eccForIso(iso?: string, pi?: string): string {
 let receiverIsoState = '';
 export function setReceiverIso(iso?: string) { receiverIsoState = (iso || '').toUpperCase(); }
 export function receiverIso(): string { return receiverIsoState; }
+
+/**
+ * ★★★ A LOCATOR IS A POSITION, AND A POSITION HAS A COUNTRY. The ECC is what RadioDNS is keyed on,
+ *     and most stations never transmit one — so it is derived from the receiver's COUNTRY. An
+ *     owner who set only a Maidenhead locator (which is what the phone's setup asks for, and what
+ *     a radio amateur naturally gives) therefore had no country, no ECC, and `fqdnFor` returned an
+ *     empty string: the RadioDNS lookup was SKIPPED ENTIRELY and every station fell through to the
+ *     name search. The symptom was "RadioDNS is less reliable on the phone — it misses stations
+ *     the Pi finds", and the Pi's advantage was simply that its config carries a country.
+ *     Stuart, 2026-08-17: "well you should be able to obtain a country from the locator."
+ * ★★ Everything needed was already here — gridToLatLon and countryForCoord, with real polygons —
+ *    just never joined up. This is the join.
+ * ★ Only a fallback: an explicitly configured country always wins, because a locator sitting a
+ *   few km from a border is a worse authority than an owner who typed GB.
+ */
+export function receiverIsoFromGrid(grid?: string | null): string {
+  if (!grid) return '';
+  try {
+    const ll = gridToLatLon(grid);
+    if (!ll) return '';
+    return (countryForCoord(ll.lat, ll.lon) || '').toUpperCase();
+  } catch { return ''; }
+}
 
 /**
  * All the countries a PI code's country nibble COULD mean.

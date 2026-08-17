@@ -54,7 +54,7 @@ import { KiwiAdapter } from '../services/KiwiAdapter';
 import { localSessionGen } from '../services/localSession';
 import { startBookmarkAutosave, stopBookmarkAutosave,
          getLearnedBookmarksNow } from '../services/vibeServer';
-import { setReceiverIso } from '../services/rdsCountry';
+import { setReceiverIso, receiverIsoFromGrid } from '../services/rdsCountry';
 import { watchProvider } from '../services/watchProvider';
 
 /** FFT rate divisor while the phone is backgrounded but the watch is watching.
@@ -823,7 +823,19 @@ export default function SDRScreen({ route, navigation }: Props) {
         try {
           const r = await fetch(`http://${route.params.localHost}:${route.params.localPort}/location`);
           const j = await r.json();
-          if (!cancelled) setReceiverIso(typeof j?.iso === 'string' ? j.iso : '');
+          // ★★★ A LOCATOR IS A POSITION, AND A POSITION HAS A COUNTRY. Without a country there is
+          //     no ECC, and without an ECC the RadioDNS lookup is SKIPPED ENTIRELY — so a server
+          //     configured with only a Maidenhead grid (which is what the phone's setup asks for,
+          //     and what a radio amateur naturally gives) found no logos at all and fell back to
+          //     the name search for everything. That is why the Moto "missed stations the Pi
+          //     finds": the Pi's config carries a country, the phone's carried a grid square
+          //     (Stuart, 2026-08-17).
+          // ★ The configured country still wins — a grid a few km from a border is a worse
+          //   authority than an owner who typed GB.
+          if (!cancelled) {
+            const iso = typeof j?.iso === 'string' ? j.iso : '';
+            setReceiverIso(iso || receiverIsoFromGrid(j?.grid || j?.locator || ''));
+          }
         } catch { if (!cancelled) setReceiverIso(''); }
         return;
       }
