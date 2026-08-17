@@ -12,6 +12,7 @@ import { getServerName, saveServerName } from '../services/rtlTcpServer';
 import {
   startVibeServer, stopVibeServer, getVibeServerStatus, setVibeServerCompressAudio, getConnectedRadio,
   setVibeServerAdminSecret, setVibeServerUncompressedAudio, setVibeServerSessionLimit,
+  setVibeServerBiasT,
   vibeServerSupported, randomPin, fmtRate, FPS_TIERS, fpsForTier,
   getServerLocationMode, setServerLocationMode, getManualServerLocation,
   setManualServerLocation, resolveLocation,
@@ -65,7 +66,8 @@ const K = {
   advanced: 'vs_advanced', maxUsers: 'vs_maxusers',
   allowRanges: 'vs_allow', blockRanges: 'vs_block',
   gainLimits: 'vs_gainlimits', restGain: 'vs_restgain', agcLock: 'vs_agclock',
-  proxies: 'vs_proxies',
+  proxies: 'vs_proxies', radioUse: 'vs_radiouse',
+  landingHz: 'vs_landinghz', landingMode: 'vs_landingmode', biasT: 'vs_biast',
 };
 
 export default function ServerModeScreen({ navigation, route }: Props) {
@@ -88,12 +90,36 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   // cannot deliver (Stuart, 2026-08-12). It adds no process and no second port: everything it
   // offers is applied to the radio this app is already running.
   const [advanced, setAdvanced]   = useState(false);
+  /**
+   * ★★★ HOW WILL THIS RADIO BE USED — and it is asked FIRST in Advanced, because it decides which
+   *     of the questions below even apply. A shared radio has a locked range and a listener count;
+   *     a single-user one has neither and gets the allow/block lists instead. Asking it last means
+   *     answering questions that the next answer makes irrelevant — the web setup page learnt this
+   *     and says so in its own comment; this is the same choice, worded the same way.
+   * ★★ 'single' = one user at a time, the whole radio and every control, as if it were plugged
+   *    into their machine. 'locked' = you choose the window, listeners tune inside it and cannot
+   *    move the radio for everybody.
+   * ★ Simple mode IS 'single' without the restrictions, so this only appears under Advanced.
+   */
+  const [radioUse, setRadioUse]   = useState<'single' | 'locked'>('single');
   // ★ Listeners sharing the radio. 1 = single occupant, which is Simple mode's behaviour.
   const [maxUsers, setMaxUsers]   = useState(1);
   const [allowRanges, setAllowRanges] = useState('');
   const [blockRanges, setBlockRanges] = useState('');
   const [gainLimits, setGainLimits]   = useState('');
   const [restGain, setRestGain]       = useState(-1);
+  /** ★★ WHERE A LISTENER LANDS. The macOS settings window calls these "Listener's starting
+   *  frequency / mode"; same setting, same words, so an owner who runs both meets one idea once.
+   *  ★ 0 = leave it to the server's own default rather than assert a frequency nobody chose. */
+  const [landingHz, setLandingHz]     = useState(0);
+  const [landingMode, setLandingMode] = useState('wfm');
+  /** ★★ BIAS-T LIVES HERE, not only in the client's hardware panel. On a phone acting as the
+   *  server there may be no client attached at all — and a powered loop needs its DC before the
+   *  first listener arrives, not after one turns up and unlocks the hardware (Stuart, 2026-08-17:
+   *  "as soon as you press go live you are in play").
+   *  ★★★ SHOWN ONLY WHERE THE RADIO HAS ONE. The Airspy HF+ has no bias-T; drawing a dead switch
+   *  teaches the owner the FEATURE is broken rather than absent — the rule in AGENTS.md. */
+  const [biasT, setBiasT]             = useState(false);
   const [agcLock, setAgcLock]         = useState(false);
   const [proxies, setProxies]         = useState('');
   const [showAdminPw, setShowAdminPw] = useState(false);
@@ -105,6 +131,20 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [radio, setRadio] = useState<{ driver: string; model: string } | null>(null);
   useEffect(() => { void getConnectedRadio().then(setRadio); }, []);
   const rateOptions = radio?.driver === 'airspyhf' ? RATE_OPTIONS_AHF : RATE_OPTIONS_RTL;
+  /**
+   * ★★★ THE HF+ HAS NOTHING TO SET UP, so do not draw it a panel of dead controls. Android has no
+   *     SDRplay support, which leaves two radios and a very short answer: the Airspy HF+ has no
+   *     choosable sample rate (it is pinned to the one rate that tunes correctly — see
+   *     nearestRate()), no bias-T, and its AGC is locked on. Everything hardware in here is
+   *     therefore RTL-SDR's (Stuart, 2026-08-17: "the radio settings in simple mode is literally
+   *     just RTL-SDR stuff").
+   * ★★ This is the rule AGENTS.md states outright: branch on the driver and draw the right control,
+   *    or remove it. A switch that does nothing teaches the owner the FEATURE is broken, not that
+   *    their radio hasn't got one.
+   * ★ Where a listener LANDS is not hardware and applies to both — it stays on show.
+   */
+  const isAhf = radio?.driver === 'airspyhf';
+  const hasHwSetup = !isAhf;
   // The rate ceiling to quote in prose, so the hint cannot drift from the list above it.
   const topRateLabel = radio?.driver === 'airspyhf' ? '912 kHz' : '2.4 MHz';
   const [webServer, setWebServer] = useState(true);
@@ -131,7 +171,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       setName(n);
       try {
         const [p, a, pm, sp, r, fp, cp, ws, ar, apw, unc, lim, fm,
-               mu, alw, blk, gl, rg, agl, px] = await Promise.all([
+               mu, alw, blk, gl, rg, agl, px, ru, lhz, lmd, bt] = await Promise.all([
           AsyncStorage.getItem(K.proto), AsyncStorage.getItem(K.advertise),
           AsyncStorage.getItem(K.pinMode), AsyncStorage.getItem(K.pin),
           AsyncStorage.getItem(K.rate), AsyncStorage.getItem(K.fps),
@@ -142,7 +182,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           AsyncStorage.getItem(K.maxUsers), AsyncStorage.getItem(K.allowRanges),
           AsyncStorage.getItem(K.blockRanges), AsyncStorage.getItem(K.gainLimits),
           AsyncStorage.getItem(K.restGain), AsyncStorage.getItem(K.agcLock),
-          AsyncStorage.getItem(K.proxies),
+          AsyncStorage.getItem(K.proxies), AsyncStorage.getItem(K.radioUse),
+          AsyncStorage.getItem(K.landingHz), AsyncStorage.getItem(K.landingMode),
+          AsyncStorage.getItem(K.biasT),
         ]);
         if (p === 'rtltcp' || p === 'vibeserver') setProto(p);
         if (a != null) setAdvertise(a !== '0');
@@ -152,6 +194,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         if (unc === '1' || unc === '2') setUncomp(unc === '1' ? 1 : 2);
         if (lim != null) setLimitMin(Number(lim) || 0);
         if (fm != null) setAdvanced(fm === '1');
+        if (ru === 'locked' || ru === 'single') setRadioUse(ru);
+        if (lhz != null && Number.isFinite(Number(lhz))) setLandingHz(Number(lhz));
+        if (lmd) setLandingMode(lmd);
+        if (bt != null) setBiasT(bt === '1');
         if (mu != null) setMaxUsers(Math.max(1, Number(mu) || 1));
         if (alw != null) setAllowRanges(alw);
         if (blk != null) setBlockRanges(blk);
@@ -254,7 +300,19 @@ export default function ServerModeScreen({ navigation, route }: Props) {
    *  the admin page — banning, the connection log, per-address monitoring — and every one of those
    *  is decoration if a stranger can reach the page that operates them. Simple mode asks for
    *  nothing and only warns: a home receiver on a home network is a fair thing to run. */
-  const advBlocked = advanced && !adminPw.trim();
+  /**
+   * ★★★ NO ADMIN PASSWORD, NO SERVER — IN EITHER MODE. This was `advanced && !adminPw.trim()`, so
+   *     Simple mode would start wide open: anybody who could reach the page could change the
+   *     radio's hardware settings, and the only thing standing between a Simple server and the
+   *     internet was the owner remembering not to put it there.
+   * ★★ Stuart, 2026-08-17: make the user set one either way and "simple is basically ready to
+   *    serve to the web straight away". The cost is exactly one field; what it buys is a mode that
+   *    is safe to expose by DEFAULT rather than safe only on a trusted LAN.
+   * ★ Still typed by the owner, never generated — a password minted silently and shown to nobody
+   *   is what issue #19 was, and it leaves a stranger being asked for something that does not
+   *   exist anywhere they can read it.
+   */
+  const needsAdminPw = !adminPw.trim();
 
   /**
    * Warn if the OS has BACKGROUND-RESTRICTED us, before we start serving.
@@ -337,6 +395,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         // narrow it. Anything else both starts AND pins there.
         sampleRate: rate || 2_400_000,
         lockedRate: rate,
+        // ★★ WHERE A LISTENER LANDS. 0 = say nothing and let the server keep its own default,
+        //    rather than asserting a frequency the owner never chose.
+        ...(landingHz > 0 ? { centerFreq: landingHz, mode: landingMode } : {}),
+
         pin: effectivePin,
         maxFftRate: fpsForTier(fps),
         compressAudio: compress,
@@ -353,6 +415,11 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       setRunning(info);
       runningRef.current = true;
       setStarting(false);
+      // ★★★ BIAS-T THE MOMENT THE RADIO IS UP, not when a client eventually turns up and unlocks
+      //     the hardware — a powered loop needs its DC before the first listener arrives, which is
+      //     the whole point of setting it here (Stuart, 2026-08-17: "as soon as you press go live
+      //     you are in play"). Never sent to a radio that has none; see hasHwSetup.
+      if (hasHwSetup) setVibeServerBiasT(biasT);
       if (advertise) advertiseServer(n, info.port, 'vibeserver', effectivePin !== '');
     } catch (e: any) {
       setStarting(false);
@@ -554,6 +621,15 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   + 'several people listening at once.'}
             </Text>
 
+            {/* ─── SERVER SETTINGS ───────────────────────────────────────────────────────────
+                ★★ Everything from here to RADIO SETTINGS belongs to the SERVER — who may reach it,
+                   what it calls itself, what it costs the uplink. The radio in front of it is a
+                   separate group below, because they are separate ideas and eighteen sections in
+                   one undifferentiated scroll made them look like one. */}
+            <Text style={[styles.section, { color: C.gold, fontFamily: F, marginTop: 22 }]}>
+              SERVER SETTINGS
+            </Text>
+
             {/* ★★ SECURITY — the PIN and the admin password TOGETHER, because they are two
                 secrets with two different jobs and having them in separate parts of the screen
                 invited the reading that one replaces the other (Stuart, 2026-07-27).
@@ -564,19 +640,47 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               <Text style={[styles.value, { color: C.amber, fontFamily: F, fontSize: 14 }]}>
                 Two separate protections
               </Text>
+              {/* ★★ SHORT ON PURPOSE. This ran to a dozen lines and pushed everything else off the
+                  screen; the club example carries the whole distinction in one sentence and is
+                  the thing people remember (Stuart, 2026-08-17: the explanations "are super long
+                  winded and makes the GUI long to scroll"). */}
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
-                <Text style={{ color: C.gold }}>PIN — protects the CONNECTION.</Text>{'\n'}
-                Decides who may connect and listen at all. Without it, anyone who can reach this
-                server can use the radio.{'\n\n'}
-                <Text style={{ color: C.gold }}>Password — protects the SERVER and HARDWARE.</Text>{'\n'}
-                Anyone already listening can still tune and set the gain — that is what a
-                receiver is for. The password guards the few settings that can damage equipment
-                or leave the radio broken for the next person: bias-T, direct sampling and
-                calibration.{'\n\n'}
-                They are independent on purpose. A public receiver has NO PIN so everyone can
-                listen, and a password so no visitor can put DC on the feedline.
+                <Text style={{ color: C.gold }}>Password — the SETTINGS.</Text> Bias-T, direct
+                sampling, calibration, the admin page.{'\n\n'}
+                <Text style={{ color: C.gold }}>PIN — the CONNECTION.</Text> Who may listen at all.
+                {'\n\n'}
+                A radio club keeps the password and hands out the PIN. A public receiver has a
+                password and no PIN.
               </Text>
             </View>
+
+            {/* ★★ SECURITY, IN ONE PLACE AND IN THE RIGHT ORDER: the password that protects the
+                SETTINGS first, then the PIN that gates ACCESS. They answer two different
+                questions and were a screen apart, which is how an owner ends up setting one
+                believing it did the other's job. Stuart's example is the one that makes it
+                land: a radio club keeps the admin password and hands the PIN to members. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>PASSWORD — WHO MAY CHANGE THINGS</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <TextInput value={adminPw}
+                onChangeText={(v) => { setAdminPw(v); AsyncStorage.setItem(K.adminPw, v);
+                                       if (runningRef.current) setVibeServerAdminSecret(v); }}
+                placeholder="none — controls are open" placeholderTextColor={C.goldDim}
+                autoCapitalize="none" autoCorrect={false}
+                // ★ Dots by default: this gets typed at a rally or a club night with people
+                // stood behind you (Stuart, 2026-07-27).
+                secureTextEntry={!showAdminPw}
+                style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F, flex: 1 }]} />
+              <TouchableOpacity onPress={() => setShowAdminPw(v => !v)}
+                style={[styles.card, { borderColor: C.border, paddingVertical: 10, paddingHorizontal: 12 }]}>
+                <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>
+                  {showAdminPw ? 'HIDE' : 'SHOW'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              Required. Protects the SETTINGS — bias-T, direct sampling, calibration, the admin
+              page. A club owner keeps this; members get the PIN below.
+            </Text>
 
             {/* PIN */}
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>PIN — WHO MAY CONNECT</Text>
@@ -605,6 +709,23 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               {pinMode === 'off'
                 ? 'Anyone on the network can connect and tune. Use only on a trusted LAN.'
                 : 'Clients enter this PIN once. It authenticates control without ever crossing the wire (HMAC challenge-response).'}
+            </Text>
+
+            {/* ★★★ NOT AN ADVANCED SETTING. This lived under Advanced, but a SIMPLE server put on
+                the internet through a tunnel needs it just as much — and without it every visitor
+                arrives as 127.0.0.1, which counts as the owner, so the time limit switches itself
+                OFF and the ban list cannot tell two people apart. We hit exactly that on the demo
+                (2026-08-11). It belongs wherever the server is reachable from outside. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>BEHIND A REVERSE PROXY</Text>
+            <TextInput value={proxies}
+              onChangeText={(v) => { setProxies(v); AsyncStorage.setItem(K.proxies, v); }}
+              placeholder="e.g. 127.0.0.1, 10.0.0.0/8  (empty = direct)" placeholderTextColor={C.goldDim}
+              autoCapitalize="none" autoCorrect={false}
+              style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              Only if you reach this phone through a tunnel (Cloudflare, nginx, Tailscale). List the
+              addresses you trust. Empty otherwise \u2014 without it everyone behind the tunnel looks
+              like you, so the time limit and the ban list stop working.
             </Text>
 
             {/* Bookmarks. The server LEARNS stations from RDS as clients tune, so the
@@ -769,6 +890,90 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               your UPLINK, and listening on the same device never touches it.
             </Text>
 
+            {/* ─── RADIO SETTINGS ────────────────────────────────────────────────────────────
+                ★★ The group heading matters as much as the contents: this screen was eighteen
+                   sections in one scroll with nothing to say which belonged to the SERVER and
+                   which to the RADIO in front of it. */}
+            <Text style={[styles.section, { color: C.gold, fontFamily: F, marginTop: 22 }]}>
+              RADIO SETTINGS
+            </Text>
+
+            {/* ★★★ IN ADVANCED, THIS QUESTION COMES FIRST BECAUSE IT DECIDES THE REST. A shared
+                radio has a locked range and a listener count; a single-user one has neither and
+                gets the allow/block lists instead. Asked last, as the web page once did, the
+                owner answers questions the next answer makes irrelevant. */}
+            {advanced && (<>
+              <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>HOW WILL IT BE USED?</Text>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                {([['single', 'One user at a time', 'The whole radio, every control'],
+                   ['locked', 'Shared, locked range', 'You set the window, they tune inside it']] as const)
+                  .map(([v, title, sub]) => (
+                  <TouchableOpacity key={v}
+                    onPress={() => { setRadioUse(v); AsyncStorage.setItem(K.radioUse, v); }}
+                    style={[styles.card, { flex: 1, borderColor: radioUse === v ? C.green : C.border,
+                                           backgroundColor: radioUse === v ? C.green + '18' : 'transparent' }]}>
+                    <Text style={{ color: radioUse === v ? C.green : C.gold, fontFamily: F, fontSize: 13 }}>
+                      {title}
+                    </Text>
+                    <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 4 }]}>{sub}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </>)}
+
+            {/* ★★ WHERE A LISTENER LANDS — not hardware, so it applies to either radio. Same name
+                as the macOS settings window uses, so an owner who runs both meets one idea once. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WHERE LISTENERS START</Text>
+            <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+              <TextInput value={landingHz ? String(Math.round(landingHz / 1000)) : ''}
+                onChangeText={(v) => { const hz = Math.round((Number(v.replace(/[^0-9.]/g, '')) || 0) * 1000);
+                                       setLandingHz(hz); AsyncStorage.setItem(K.landingHz, String(hz)); }}
+                placeholder="kHz — blank leaves it to the server" placeholderTextColor={C.goldDim}
+                keyboardType="numeric"
+                style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F, flex: 1 }]} />
+            </View>
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+              {(['wfm', 'nfm', 'am', 'usb', 'lsb'] as const).map(m => (
+                <TouchableOpacity key={m}
+                  onPress={() => { setLandingMode(m); AsyncStorage.setItem(K.landingMode, m); }}
+                  style={[styles.card, { borderColor: landingMode === m ? C.green : C.border,
+                                         backgroundColor: landingMode === m ? C.green + '18' : 'transparent',
+                                         paddingVertical: 8, paddingHorizontal: 12 }]}>
+                  <Text style={{ color: landingMode === m ? C.green : C.textDim, fontFamily: F, fontSize: 12 }}>
+                    {m.toUpperCase()}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              Where a listener is tuned when they first open the page. Their browser remembers where
+              they were after that, so this mostly affects first-time visitors.
+            </Text>
+
+            {/* ★★★ HARDWARE, AND ONLY WHERE THERE IS ANY. See isAhf: the HF+ has no rate to choose,
+                no bias-T and a locked AGC, so it gets a sentence instead of a panel of dead
+                switches. */}
+            {hasHwSetup ? (<>
+              <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>BIAS-T</Text>
+              <TouchableOpacity onPress={() => { const v = !biasT; setBiasT(v);
+                                                 AsyncStorage.setItem(K.biasT, v ? '1' : '0'); }}
+                style={[styles.card, { borderColor: biasT ? C.green : C.border,
+                                       backgroundColor: biasT ? C.green + '18' : 'transparent' }]}>
+                <Text style={{ color: biasT ? C.green : C.gold, fontFamily: F, fontSize: 14 }}>
+                  {biasT ? 'ON — DC on the feedline' : 'OFF'}
+                </Text>
+              </TouchableOpacity>
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                Powers an antenna amplifier or an active loop. Leave it off for anything else — DC
+                into the wrong antenna can damage it.
+              </Text>
+            </>) : (
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                The Airspy HF+ has nothing to set up here — one fixed sample rate, no bias-T, and
+                its AGC stays on.
+              </Text>
+            )}
+
             {/* ★★ TIME LIMIT — only earns its place on a PUBLIC receiver. */}
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>TIME LIMIT PER LISTENER</Text>
             {([[0, 'Unlimited'], [15, '15 minutes'], [30, '30 minutes'],
@@ -793,7 +998,11 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 app is already running — there is no second process and no second port. */}
             {advanced && (
               <>
-                <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WHO MAY LISTEN AT ONCE</Text>
+                {/* ★★ ONLY IN LOCKED-RANGE MODE. "One user at a time" answers this question by
+                    its name; offering a listener count beside it invites setting them to
+                    disagree. */}
+                {radioUse === 'locked' && (<>
+                <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>HOW MANY LISTENERS</Text>
                 <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
                   {[1, 2, 3, 4, 6, 8].map(n => (
                     <TouchableOpacity key={n} onPress={() => setMaxUsers(n)}
@@ -815,7 +1024,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                       + 'share one FFT. What actually runs out is UPLINK, so on a phone this is a '
                       + 'question about your connection, not about the handset.'}
                 </Text>
+                </>)}
 
+                {/* ★★★ NOT IN LOCKED-RANGE MODE. The window IS the limit there, so an allow/block
+                    list is a second answer to a question already answered — and two ways to say
+                    the same thing is how they end up disagreeing. The web setup page gates it the
+                    same way, for the same reason. */}
+                {radioUse === 'single' && (<>
                 <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WHERE LISTENERS MAY TUNE</Text>
                 <TextInput value={allowRanges}
                   onChangeText={(v) => { setAllowRanges(v); AsyncStorage.setItem(K.allowRanges, v); }}
@@ -833,6 +1048,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   You are exempt: listening on this phone, and any session unlocked with the admin
                   password, tune anywhere the radio can hear.
                 </Text>
+                </>)}
 
                 <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>GAIN LIMITS</Text>
                 <TextInput value={gainLimits}
@@ -868,49 +1084,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   gain down automatically.
                 </Text>
 
-                <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>BEHIND A REVERSE PROXY</Text>
-                <TextInput value={proxies}
-                  onChangeText={(v) => { setProxies(v); AsyncStorage.setItem(K.proxies, v); }}
-                  placeholder="e.g. 127.0.0.1, 10.0.0.0/8  (empty = direct)" placeholderTextColor={C.goldDim}
-                  autoCapitalize="none" autoCorrect={false}
-                  style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
-                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-                  Only if you reach this phone through a tunnel or proxy (Cloudflare, nginx,
-                  Tailscale). List the addresses you trust and their X-Forwarded-For is believed.
-                  {'\n\n'}
-                  ★ Leave it empty otherwise. Trusting the wrong thing lets a visitor CLAIM any
-                  address; but behind a tunnel with it unset, everyone arrives as 127.0.0.1 \u2014
-                  which counts as you, so the time limit switches itself off and the ban list cannot
-                  tell two people apart.
-                </Text>
               </>
             )}
-
-            {/* ★★ ADMIN PASSWORD — control, not access. */}
-            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>PASSWORD — WHO MAY CHANGE THINGS</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <TextInput value={adminPw}
-                onChangeText={(v) => { setAdminPw(v); AsyncStorage.setItem(K.adminPw, v);
-                                       if (runningRef.current) setVibeServerAdminSecret(v); }}
-                placeholder="none — controls are open" placeholderTextColor={C.goldDim}
-                autoCapitalize="none" autoCorrect={false}
-                // ★ Dots by default: this gets typed at a rally or a club night with people
-                // stood behind you (Stuart, 2026-07-27).
-                secureTextEntry={!showAdminPw}
-                style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F, flex: 1 }]} />
-              <TouchableOpacity onPress={() => setShowAdminPw(v => !v)}
-                style={[styles.card, { borderColor: C.border, paddingVertical: 10, paddingHorizontal: 12 }]}>
-                <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>
-                  {showAdminPw ? 'HIDE' : 'SHOW'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-              Protects the settings that can damage hardware or spoil the band for everyone —
-              bias-T, direct sampling, frequency calibration. Separate from the listening PIN:
-              a receiver can be open to every listener and still refuse a visitor putting DC on
-              the feedline. Leave empty and nothing is protected.
-            </Text>
 
             {/* ★★★ WARN WHILE SERVING, AND ONLY THEN. The phone is a SIMPLE-mode server: plug in
                 and share, which is the behaviour people like, so a password is NOT forced here.
@@ -963,19 +1138,31 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 nothing: the owner cannot tell "not allowed yet" from "this app is broken", and the
                 remedy is a section away. Pressing it says what to do (Stuart, 2026-08-12: "it will
                 give an error stating to setup an admin password first"). */}
-            <TouchableOpacity style={[styles.startBtn, { borderColor: C.green, backgroundColor: C.green + '18' }]}
+            {/* ★★ THE BUTTON IS THE INSTRUCTION. Red and saying what is missing, rather than
+                   green-and-refusing or greyed-out-and-silent: a disabled control cannot be told
+                   apart from a broken app, and an error raised on tap puts the reason at the top
+                   of the screen while the remedy is at the bottom. Stuart, 2026-08-17: "keep the
+                   green serve now button red with the text set an admin password to serve".
+                ★ Still pressable, and pressing it says where to go — the password field is far
+                  enough down that "set one" is not obviously actionable on a phone. */}
+            <TouchableOpacity
+              style={[styles.startBtn, needsAdminPw
+                ? { borderColor: C.red,   backgroundColor: C.red   + '18' }
+                : { borderColor: C.green, backgroundColor: C.green + '18' }]}
               onPress={() => {
-                if (advBlocked) {
-                  setError('Advanced mode needs an admin password first \u2014 it is what stops a '
-                         + 'listener reaching the admin page and changing your radio or lifting a ban. '
-                         + 'Set one under PASSWORD below, then Start.');
+                if (needsAdminPw) {
+                  setError('Set an admin password below, then Start. It is what stops a listener '
+                         + 'reaching the admin page and changing your radio \u2014 and it is what '
+                         + 'makes this server safe to put on the internet.');
                   return;
                 }
                 void start();
               }} disabled={starting}>
               {starting
                 ? <ActivityIndicator color={C.green} />
-                : <Text style={{ color: C.green, fontFamily: F, fontSize: 16 }}>▶ Start VibeServer</Text>}
+                : <Text style={{ color: needsAdminPw ? C.red : C.green, fontFamily: F, fontSize: 16 }}>
+                    {needsAdminPw ? 'Set an admin password to serve' : '▶ Start VibeServer'}
+                  </Text>}
             </TouchableOpacity>
           </>
         ) : (

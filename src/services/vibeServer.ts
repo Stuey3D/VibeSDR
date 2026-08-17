@@ -487,6 +487,16 @@ export function setVibeServerCompressAudio(on: boolean): void {
 export function setVibeServerAdminSecret(secret: string): void {
   try { Local?.setVibeServerAdminSecret?.(secret); } catch {}
 }
+/** ★★★ BIAS-T, APPLIED AFTER THE RADIO IS OPEN. It is NOT a start option: `startVibeServer` on the
+ *  Kotlin side reads no such key, so passing one there would have been a switch that saved, redrew
+ *  itself green, and did nothing to the feedline — which is worse than not offering it. The native
+ *  setter has existed all along (VibeLocalSdrModule.setBiasTee); it just needs calling once the
+ *  radio is up.
+ *  ★ Only for a radio that HAS one — the Airspy HF+ does not, and the caller checks. */
+export function setVibeServerBiasT(on: boolean): void {
+  try { (Local as any)?.setBiasTee?.(on); } catch { /* older build, or no bias-T on this radio */ }
+}
+
 export function setVibeServerUncompressedAudio(mode: 0 | 1 | 2): void {
   try { Local?.setVibeServerUncompressedAudio?.(mode); } catch {}
 }
