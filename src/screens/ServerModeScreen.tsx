@@ -809,17 +809,6 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               </Text>
             </View>
 
-            {/* Bandwidth (sample rate) */}
-            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>BANDWIDTH</Text>
-            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
-              {rate === 0
-                ? `Clients choose their own span, up to the full ${topRateLabel}.`
-                : 'Pinned — clients cannot change the span. Lower it to save processing power on a low-end phone.'}
-            </Text>
-            {rateOptions.map(o => (
-              <OptRow key={o.value} C={C} F={F} active={rate === o.value} label={o.label} onPress={() => setRate(o.value)} />
-            ))}
-
             {/* Receiver location. A SEPARATE consent from the app's own location
                 permission: granting location to sort the instance list by distance is
                 not consent to BROADCAST that position to every client. So this is
@@ -950,6 +939,40 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               they were after that, so this mostly affects first-time visitors.
             </Text>
 
+            {/* ★★★ THE GAIN THE RADIO STARTS AT, and returns to when the last listener leaves.
+                It was buried in Advanced beside the gain LIMITS, which is a different idea —
+                limits are what a listener may not exceed, this is where the radio sits by default.
+                Simple mode needs it more than Advanced does: set it here and the receiver is right
+                the moment it goes live, with no client attached to fix it afterwards.
+                ★ One control, one value — it was not duplicated into Advanced, because two fields
+                  writing one setting is how they end up disagreeing. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>STARTING GAIN</Text>
+            <TextInput value={restGain < 0 ? '' : String(restGain / 10)}
+              onChangeText={(v) => {
+                const n = parseFloat(v.replace(/[^0-9.]/g, ''));
+                const raw = Number.isFinite(n) ? Math.round(n * 10) : -1;
+                setRestGain(raw); AsyncStorage.setItem(K.restGain, String(raw)); }}
+              placeholder="dB — blank leaves it on automatic" placeholderTextColor={C.goldDim}
+              keyboardType="decimal-pad"
+              style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              Where the radio sits before anyone connects, and where it returns when they leave —
+              so somebody who winds it up does not leave it up for the next person.
+            </Text>
+
+            {/* ★★ THE RADIO'S CAPTURE WIDTH, so it sits with the radio rather than with the
+                server. On an HF+ there is one usable rate and the list says so; the choice here
+                is really the RTL's. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>CAPTURE WIDTH</Text>
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
+              {rate === 0
+                ? `Listeners choose their own span, up to ${topRateLabel}.`
+                : 'Pinned — listeners cannot change it. Lower it to save processing on a slow phone.'}
+            </Text>
+            {rateOptions.map(o => (
+              <OptRow key={o.value} C={C} F={F} active={rate === o.value} label={o.label} onPress={() => setRate(o.value)} />
+            ))}
+
             {/* ★★★ HARDWARE, AND ONLY WHERE THERE IS ANY. See isAhf: the HF+ has no rate to choose,
                 no bias-T and a locked AGC, so it gets a sentence instead of a panel of dead
                 switches. */}
@@ -1057,14 +1080,6 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   autoCapitalize="none" autoCorrect={false}
                   style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 }}>
-                  <TextInput value={restGain < 0 ? '' : String(restGain / 10)}
-                    onChangeText={(v) => {
-                      const n = parseFloat(v.replace(/[^0-9.]/g, ''));
-                      const raw = Number.isFinite(n) ? Math.round(n * 10) : -1;
-                      setRestGain(raw); AsyncStorage.setItem(K.restGain, String(raw)); }}
-                    placeholder="return to this gain, e.g. 19.7" placeholderTextColor={C.goldDim}
-                    keyboardType="decimal-pad"
-                    style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F, flex: 1 }]} />
                   <TouchableOpacity onPress={() => { const v = !agcLock; setAgcLock(v);
                                                      AsyncStorage.setItem(K.agcLock, v ? '1' : '0'); }}
                     style={[styles.card, { borderColor: agcLock ? C.green : C.border,
