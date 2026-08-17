@@ -2776,6 +2776,36 @@ function updateStatus() {
  *  ★ Nothing renders for a single-radio machine: the landing page it has always had is correct,
  *    and a list of one is just noise.
  */
+/** ★★★ ONE IMPLEMENTATION OF "WHAT DOES THIS RADIO SAY", used by the first paint AND by the live
+ *  refresh below. Two copies of this would drift the moment either was touched, and the drift would
+ *  be invisible: the card would simply disagree with itself between refreshes. This file has paid
+ *  for that lesson more than once (the tour cards, the macOS download block).
+ *  ★ `blocked` is the same test the card's clickability uses — a radio that is full is unreachable
+ *    unless you are the admin, and a radio that is DOWN is unreachable for everybody. */
+function radioCardState(r: any, st: any): { state: string; blocked: boolean } {
+  const mmss = (sec: number) => {
+    const m = Math.floor(sec / 60), sx = Math.max(0, Math.floor(sec % 60));
+    return `${m}:${String(sx).padStart(2, '0')}`;
+  };
+  const listeners = Number(st?.listeners) || 0;
+  const max = Number(st?.maxUsers) || Number(r.users) || 1;
+  const waiting = Number(st?.waiting) || 0;
+  const freeIn = typeof st?.freeInSec === 'number' ? st.freeInSec : -1;
+  const down = !st;
+  const full = !down && max > 0 && listeners >= max;
+  const admin = inAdminMode();
+  let state: string;
+  if (down)         state = 'NOT RESPONDING';
+  else if (full && admin) state = freeIn >= 0 ? `IN USE ${mmss(freeIn)} · TAKE OVER`
+                                              : 'IN USE · TAKE OVER';
+  else if (full && freeIn >= 0) state = `FULL · FREE IN ${mmss(freeIn)}`;
+  else if (full && waiting > 0) state = `FULL · ${waiting} WAITING`;
+  else if (full)    state = 'IN USE';
+  else if (max > 1) state = `${listeners} OF ${max} LISTENING`;
+  else              state = 'FREE';
+  return { state, blocked: down || (full && !admin) };
+}
+
 async function showSplashRadios(): Promise<void> {
   const host = document.getElementById('splashRadios');
   if (!host) return;
@@ -2833,23 +2863,10 @@ async function showSplashRadios(): Promise<void> {
     const st = live[i];
     const listeners = Number(st?.listeners) || 0;
     const max = Number(st?.maxUsers) || Number(r.users) || 1;
-    const waiting = Number(st?.waiting) || 0;
-    const freeIn = typeof st?.freeInSec === 'number' ? st.freeInSec : -1;
     const down = !st;
     const full = !down && max > 0 && listeners >= max;
-
-    let state: string;
-    // ★ The countdown is the difference between waiting and giving up, so it is shown wherever
-    //   the server can supply one — on a single-user radio that is the current listener's time
-    //   left, which is exactly "when can I have it".
-    if (down)         state = 'NOT RESPONDING';
-    else if (full && inAdminMode()) state = freeIn >= 0 ? `IN USE ${mmss(freeIn)} · TAKE OVER`
-                                                        : 'IN USE · TAKE OVER';
-    else if (full && freeIn >= 0) state = `FULL · FREE IN ${mmss(freeIn)}`;
-    else if (full && waiting > 0) state = `FULL · ${waiting} WAITING`;
-    else if (full)    state = 'IN USE';
-    else if (max > 1) state = `${listeners} OF ${max} LISTENING`;
-    else              state = 'FREE';
+    // ★ Text and reachability both from radioCardState — see the note on it.
+    const { state } = radioCardState(r, st);
 
     const lo = Number(st?.rangeLo) || 0, hi = Number(st?.rangeHi) || 0;
     // ★★★ SAY WHAT IT COVERS, NOT WHERE IT IS PARKED. This showed a single frequency for any radio
@@ -2898,7 +2915,7 @@ async function showSplashRadios(): Promise<void> {
          + `text-decoration:none;color:inherit;${dim}">`
          + `<div style="display:flex;justify-content:space-between;gap:12px">`
          + `<strong style="letter-spacing:.05em">${r.label}</strong>`
-         + `<span style="font-size:11px;opacity:.85">${state}</span></div>`
+         + `<span class="rcState" style="font-size:11px;opacity:.85">${state}</span></div>`
          + `<div class="sub" style="margin-top:2px;font-size:11px;opacity:.7"${
               rangeTitle ? ` title="${rangeTitle.replace(/"/g, '&quot;')}"` : ''
             }>${range} · ${kind}</div>`
@@ -8121,6 +8138,69 @@ setInterval(() => {
   const sp = document.getElementById('splash');
   if (sp && !sp.classList.contains('hidden')) drawSplashSpectrogram();
 }, 15000);
+
+/**
+ * ★★★ THE RADIO LIST UPDATES ITSELF. It was drawn once, so "FREE" or "IN USE" was only ever true
+ *     at the moment the page loaded — someone watching the landing page waiting for a radio to come
+ *     free had to keep reloading to find out, and the `FREE IN 2:34` countdowns sat frozen at
+ *     whatever they said on arrival. A frozen countdown is worse than none, because people watch it
+ *     (Stuart, 2026-08-17).
+ *
+ * ★★ NOT WHILE THE TAB IS HIDDEN. A landing page left open in a background tab all afternoon would
+ *    otherwise poll a Pi that is also running the DSP, for nobody's benefit — the same reasoning as
+ *    the idle saver and the frame-rate ceilings. `visibilityState` is checked every tick rather
+ *    than subscribed to, so returning to the tab picks straight back up.
+ *
+ * ★★ UPDATED IN PLACE, NOT REDRAWN. Replacing innerHTML on a timer can swallow a click that lands
+ *    in the same instant, and this list IS the thing people click. Only the state text changes on a
+ *    normal tick; a FULL redraw happens solely when reachability flips, which is the moment the
+ *    card must become clickable (or stop being) and its handlers have to be rebuilt anyway.
+ *
+ * ★ 10 s: this changes when somebody arrives or leaves, not sub-second, and three radios is three
+ *   requests a tick. Under that starts to be real traffic on a Pi for no more information.
+ */
+async function refreshSplashRadios(): Promise<void> {
+  const sp = document.getElementById('splash');
+  if (!sp || sp.classList.contains('hidden')) return;
+  if (document.visibilityState !== 'visible') return;
+  const host = document.getElementById('splashRadios');
+  if (!host) return;
+  const cards = Array.from(host.querySelectorAll('[data-serial]')) as HTMLElement[];
+  if (!cards.length) return;
+
+  let dir: any;
+  try {
+    const r = await fetch(P('/vibeserver/radios'), { cache: 'no-store' });
+    if (!r.ok) return;
+    dir = await r.json();
+  } catch { return; }
+  const radios: any[] = Array.isArray(dir?.radios) ? dir.radios : [];
+  // ★ The directory itself changed (a radio added or removed) — the rows are wrong, not just their
+  //   text. Hand it back to the full renderer.
+  if (radios.length !== cards.length) { void showSplashRadios(); return; }
+
+  const live = await Promise.all(radios.map(async (r) => {
+    try {
+      const rid = encodeURIComponent((r as any).id || r.serial);
+      const resp = await fetch(`${location.origin}/r/${rid}/vibeserver.json`, { cache: 'no-store' });
+      return resp.ok ? await resp.json() : null;
+    } catch { return null; }
+  }));
+
+  let needsRedraw = false;
+  radios.forEach((r, i) => {
+    const card = cards.find((c) => c.dataset.serial === r.serial);
+    if (!card) { needsRedraw = true; return; }
+    const { state, blocked } = radioCardState(r, live[i]);
+    const span = card.querySelector('.rcState');
+    if (span && span.textContent !== state) span.textContent = state;
+    // A blocked card is a <div>, a reachable one an <a> — the tag itself has to change.
+    const wasBlocked = card.tagName.toLowerCase() !== 'a';
+    if (wasBlocked !== blocked) needsRedraw = true;
+  });
+  if (needsRedraw) void showSplashRadios();
+}
+setInterval(() => { void refreshSplashRadios(); }, 10000);
 addEventListener('resize', () => {
   const sp = document.getElementById('splash');
   if (sp && !sp.classList.contains('hidden')) drawSplashSpectrogram();
