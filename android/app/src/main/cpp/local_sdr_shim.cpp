@@ -3102,6 +3102,26 @@ struct LocalSdrShim::Impl {
     int specListenerCountLocked() {
         int n = (specClient && specClient->isOpen()) ? 1 : 0;
         for (auto& s : specExtra) if (s && s->isOpen()) ++n;
+        // ★★★ A LISTENER WHO HAS PUT THE APP IN THEIR POCKET IS STILL A LISTENER. Backgrounding
+        //     the phone app CLOSES THE SPECTRUM SOCKET to save power and keeps the audio playing —
+        //     so this count, which only ever saw spectrum sockets, dropped to zero and the radio
+        //     advertised itself as FREE while somebody was listening to it. The next person picked
+        //     it, and was then refused as "in use" by isFullLocked(), which DOES check the audio
+        //     socket (Stuart, 2026-08-17). Two definitions of "in use" that disagreed: one for the
+        //     shop window, one for the door.
+        // ★★ Fixed HERE, not in the clients, because every client derives "busy" from this number
+        //    — the app's picker, Jr's picker and the browser's landing page all compare listeners
+        //    against maxUsers. Fixing it in one of them would leave the other two lying.
+        // ★ Added only where the spectrum socket is ABSENT, so nobody is counted twice: a listener
+        //   with both sockets open is already counted above.
+        if (n == 0 && audioClient && audioClient->isOpen() && !occupantSession.empty()) n = 1;
+        for (auto& kv : clientDsp) {
+            auto& c = kv.second;
+            if (!c) continue;
+            const bool specOpen  = c->spec  && c->spec->isOpen();
+            const bool audioOpen = c->audio && c->audio->isOpen();
+            if (!specOpen && audioOpen) ++n;
+        }
         return n;
     }
     /** How many listeners are attached. Call WITHOUT clientMtx held. */
