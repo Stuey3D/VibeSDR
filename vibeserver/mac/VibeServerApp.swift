@@ -1493,14 +1493,9 @@ struct SettingsView: View {
                + "calibration.")
                 .font(.caption).foregroundStyle(.orange)
         } else if !server.fullMode && server.adminPassword.trimmingCharacters(in: .whitespaces).isEmpty {
-            Text("Optional here. You are at this machine, and listening from it is always allowed "
-               + "to change the radio — so Simple mode needs no password to be fully usable on "
-               + "your own network.\n\nRecommended if you are on a PUBLIC NETWORK, or intend to "
-               + "port forward this and serve it to the internet: anyone who can reach the server "
-               + "can otherwise change the gain, switch on the bias-T or alter the calibration.\n\n"
-               + "Serving to the internet? Use FULL MODE. It is built for it — a password is "
-               + "required there, and it brings the controls that go with being public: "
-               + "per-address monitoring and banning, frequency limits and a connection log.")
+            Text("Optional on your own network — you are at this machine. Set one before putting "
+               + "this on the internet, or anyone who can reach it can change the gain, the "
+               + "bias-T or the calibration. For public sharing, Full mode is built for it.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -1643,16 +1638,10 @@ struct SettingsView: View {
                 // Most operators are not happy publishing a home address to everyone who connects
                 // (Stuart, 2026-07-27, after Hans expected exact coordinates and had to look the
                 // square up to check it was even his town).
-                Text("A receiver's position is published to everyone who connects to it, so this "
-                     + "is a MAIDENHEAD GRID SQUARE rather than an address — roughly 4 km across, "
-                     + "which is all a distance or a bearing needs, and not enough to find you by."
-                     + "\n\n"
-                     + "\"Fill in locator from this Mac\" works that square out for you. macOS "
-                     + "asks for permission the first time, and needs Wi-Fi switched on — a Mac "
-                     + "locates itself from nearby networks, so it can fail on a wired connection."
-                     + "\n\n"
-                     + "You can type a locator by hand instead, or give exact coordinates if you "
-                     + "would rather — those win if you give both.")
+                Text("Published to everyone who connects, so it is a grid square rather than an "
+                     + "address — about 4 km across, enough for a distance and a bearing, not "
+                     + "enough to find you by. Fill it in from this Mac (needs Wi-Fi on), or type "
+                     + "a locator. Exact coordinates win if you give both.")
                     .font(.caption).foregroundStyle(.secondary)
                 if !server.locationJson().isEmpty && server.running {
                     Text("Restart the server to apply a change.")
@@ -1670,30 +1659,20 @@ struct SettingsView: View {
                 // apart on the screen, they invited the reading that one replaces the other
                 // (Stuart, 2026-07-27). PIN = the door. Password = the controls inside.
                 Text("SECURITY").font(.headline).padding(.top, 6)
-                Text("Two separate protections, and they are independent on purpose.\n\n"
-                   + "PIN — PROTECTS THE CONNECTION. Decides who may connect and listen at all. "
-                   + "Without it, anyone who can reach this server can use the radio.\n\n"
-                   + "PASSWORD — PROTECTS THE SERVER AND HARDWARE. Anyone already listening can "
-                   + "still tune and set the gain; that is what a receiver is for. The password "
-                   + "guards the few settings that can damage equipment or leave the radio "
-                   + "broken for the next person: bias-T, direct sampling and calibration.\n\n"
-                   + "A public receiver typically has NO PIN, so everyone can listen — and a "
-                   + "password, so no visitor can put DC on your feedline.")
+                // ★★ SHORT ON PURPOSE. This ran to two paragraphs plus a bulleted list and pushed
+                //    everything below it off the window; the club example carries the whole
+                //    distinction in one sentence and is the part people remember (Stuart,
+                //    2026-08-17: the explanations "are super long winded and makes the GUI long
+                //    to scroll"). Same wording as the phone app, so one idea is met once.
+                Text("PIN — the CONNECTION. Who may listen at all.\n"
+                   + "PASSWORD — the SETTINGS. Bias-T, direct sampling, calibration.\n\n"
+                   + "A radio club keeps the password and hands out the PIN. A public receiver "
+                   + "has a password and no PIN.")
                     .font(.caption).foregroundStyle(.secondary)
                 adminPasswordRow
-                Text("A SECOND password, for a different job. The PIN decides who may listen; "
-                   + "this decides who may change the settings a visitor has no business "
-                   + "touching on someone else's radio:\n\n"
-                   + "• BIAS-T — it puts DC on the feedline, and a stranger switching it on can "
-                   + "damage whatever is connected.\n"
-                   + "• DIRECT SAMPLING — reconfigures the front end; left on, the receiver "
-                   + "looks broken to everyone after.\n"
-                   + "• CALIBRATION — miscalibrates the radio invisibly and permanently.\n\n"
-                   + "Tuning, mode and the audio controls stay open to listeners — those are "
-                   + "what anyone needs to actually use the receiver, and they undo in a click.\n\n"
-                   + "Listeners see those "
-                   + "controls locked with a box to unlock them — which is how YOU change them "
-                   + "on your own server from anywhere.")
+                Text("Tuning, mode and audio stay open to listeners — that is what a receiver is "
+                   + "for. Listeners see the protected controls locked with a box to unlock them, "
+                   + "which is how you change them on your own server from anywhere.")
                     .font(.caption).foregroundStyle(.secondary)
                 // ★★ THE TIME LIMIT. Only earns its place on a PUBLIC receiver, which is
                 // why the default is Unlimited and the help says plainly when to leave it alone.
@@ -1705,16 +1684,10 @@ struct SettingsView: View {
                     Text("1 hour").tag(60)
                     Text("2 hours").tag(120)
                 }
-                Text("For a receiver you have put on the internet. This server serves ONE "
-                   + "listener at a time, so without a limit the first person to connect can "
-                   + "hold it all evening and everyone else just sees IN USE.\n\n"
-                   + "A listener is warned at two minutes and again at thirty seconds, then "
-                   + "disconnected with an explanation. Their address is then held off for two "
-                   + "minutes — otherwise their client would simply reconnect and carry on, and "
-                   + "the limit would achieve nothing.\n\n"
-                   + "YOU are not affected: listening on this Mac is exempt, and so is any "
-                   + "session unlocked with the admin password. Leave it Unlimited for a private "
-                   + "receiver.")
+                Text("For a receiver on the internet: one listener at a time means the first "
+                   + "person can otherwise hold it all evening. They are warned, disconnected "
+                   + "with a reason, then held off for two minutes so they cannot simply "
+                   + "reconnect. You are exempt, and so is anyone with the admin password.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Serve the browser client", isOn: $server.serveWeb)
                 Picker("Uncompressed audio", selection: $server.uncompressedAudio) {
@@ -1722,20 +1695,10 @@ struct SettingsView: View {
                     Text("Listener's choice").tag(1)
                     Text("Compatibility only").tag(2)
                 }
-                Text("Listeners normally get compressed audio — around 10 KB/s each. Uncompressed "
-                   + "is roughly 187 KB/s per listener out of YOUR connection, some twenty times "
-                   + "more.\n\n"
-                   + "OFF — nobody gets it. A client too old to decode the compressed stream is "
-                   + "turned away with an explanation rather than left in silence.\n\n"
-                   + "LISTENER'S CHOICE — a switch appears in each listener's audio menu, off by "
-                   + "default. Compression is audible on good headphones, so a DXer on a fast link "
-                   + "may well want the raw stream; this lets them take it without imposing it on "
-                   + "everyone else.\n\n"
-                   + "COMPATIBILITY ONLY — no switch is offered, but a client that cannot decode "
-                   + "the compressed stream still gets raw audio rather than silence. Choose this "
-                   + "to keep the safety net without advertising a 187 KB/s option.\n\n"
-                   + "This Mac's own browser always gets uncompressed audio whatever you pick "
-                   + "here — it never touches your uplink, so there is nothing to ration.")
+                Text("Compressed audio is about 10 KB/s per listener; uncompressed is nearer "
+                   + "187 KB/s out of YOUR connection. OFF turns it away with an explanation, "
+                   + "LISTENER'S CHOICE offers it, COMPATIBILITY ONLY gives it only to clients "
+                   + "that cannot decode the compressed stream.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Advertise on the network", isOn: Binding(
                     get: { server.advertise },
@@ -1796,7 +1759,9 @@ struct SettingsView: View {
                 Text("Caps what each listener may ask for. The server tells them the limit, so they settle at it instead of mistaking it for a bad connection.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Require idle power saving", isOn: $server.forceIdleSaver)
-                Text("When nobody is touching the waterfall it slows down, which cuts this machine's CPU and the data it sends. Listeners can normally switch that off — turn this on to make it compulsory. Worth doing if you have a data allowance to protect, or the server runs on battery or solar.")
+                Text("The waterfall slows when nobody is touching it, which cuts CPU and data. Listeners "
+                       + "can normally switch that off — turn this on to make it compulsory, for a metered "
+                       + "connection, battery or solar.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Advanced · Network") {
@@ -1804,7 +1769,8 @@ struct SettingsView: View {
                 // Say what the default IS, then what typing here would do.
                 TextField("Port", value: $server.wantedPort, format: .number,
                           prompt: Text("48000"))
-                Text("VibeServer uses port 48000. Leave this at 0 to keep that — it will pick the next free port if 48000 is already taken. Enter a number only if you need a specific port, for example to match a router rule you have already set up.")
+                Text("0 keeps the default 48000, and moves to the next free port if it is taken. Set a "
+                       + "number only to match a router rule you already have.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if server.radioLost {
