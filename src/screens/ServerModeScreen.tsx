@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import GainSlider from '../components/GainSlider';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator,
   StyleSheet, Platform, PermissionsAndroid, Switch, Alert, NativeModules,
@@ -57,6 +58,14 @@ const RATE_OPTIONS_AHF = [
   { label: '768 kHz',         value: 768_000 },
   { label: '384 kHz (light)', value: 384_000 },
 ];
+
+/** ★★ THE R820T/R828D's 29 TUNER GAINS, tenths of a dB. Fixed in the tuner, identical across
+ *  every RTL dongle we support, and the reason the control is a slider: there is nothing between
+ *  these values, so a typed number is a value the radio will quietly move.
+ *  ★ 157 (15.7 dB) is in here and is the figure Stuart measured as the sweet spot on broadcast FM
+ *    — a useful default for the AUTO toggle to fall back to rather than an invented number. */
+const RTL_GAINS = [0, 9, 14, 27, 37, 77, 87, 125, 144, 157, 166, 197, 207, 229, 254,
+                   280, 297, 328, 338, 364, 372, 386, 402, 421, 434, 439, 445, 480, 496];
 
 const K = {
   proto: 'vs_proto', advertise: 'vs_advertise', pinMode: 'vs_pinmode',
@@ -590,37 +599,6 @@ export default function ServerModeScreen({ navigation, route }: Props) {
 
         {proto === 'vibeserver' ? (
           <>
-            {/* ★★★ THE MODE SWITCH LEADS, because it changes what everything below it means.
-                It sat at the BOTTOM, under the last setting, where it read as one more option
-                rather than the choice the page is organised around (Stuart, 2026-08-12: "the
-                simple and full button is at the bottom and doesnt change the GUI"). */}
-            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>MODE</Text>
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-              {([false, true] as const).map(v => (
-                <TouchableOpacity key={String(v)} onPress={() => { setAdvanced(v);
-                                                                   AsyncStorage.setItem(K.advanced, v ? '1' : '0'); }}
-                  style={[styles.card, { flex: 1, borderColor: advanced === v ? C.green : C.border,
-                                         backgroundColor: advanced === v ? C.green + '18' : 'transparent' }]}>
-                  <Text style={{ color: advanced === v ? C.green : C.gold, fontFamily: F, fontSize: 14 }}>
-                    {v ? 'Advanced' : 'Simple'}
-                  </Text>
-                  <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 4 }]}>
-                    {v ? 'Shared, managed, public' : 'Plug in and share'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-              {advanced
-                ? 'Adds shared listening, tuning and gain limits, and the admin page \u2014 '
-                  + 'per-address monitoring, banning and a connection log, reachable from a browser '
-                  + 'wherever you are. An admin password is REQUIRED: that page can ban people and '
-                  + 'change your radio.'
-                : 'Plug in and share. No password, no PIN, nothing to set up \u2014 right for your '
-                  + 'own network. Choose Advanced if this is going on the internet, or if you want '
-                  + 'several people listening at once.'}
-            </Text>
-
             {/* ─── SERVER SETTINGS ───────────────────────────────────────────────────────────
                 ★★ Everything from here to RADIO SETTINGS belongs to the SERVER — who may reach it,
                    what it calls itself, what it costs the uplink. The radio in front of it is a
@@ -709,6 +687,35 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               {pinMode === 'off'
                 ? 'Anyone on the network can connect and tune. Use only on a trusted LAN.'
                 : 'Clients enter this PIN once. It authenticates control without ever crossing the wire (HMAC challenge-response).'}
+            </Text>
+
+            {/* Receiver location. A SEPARATE consent from the app's own location
+                permission: granting location to sort the instance list by distance is
+                not consent to BROADCAST that position to every client. So this is
+                opt-in, and 'off' is the default. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>RECEIVER LOCATION</Text>
+            <View style={styles.pillRow}>
+              {(['off', 'device', 'manual'] as LocationMode[]).map(m => (
+                <Pill key={m} C={C} F={F} active={locMode === m}
+                  label={m === 'off' ? 'Not set' : m === 'device' ? 'Use device' : 'Enter city'}
+                  onPress={() => setLocMode(m)} />
+              ))}
+            </View>
+            {locMode === 'manual' && (
+              <TextInput value={locCity} onChangeText={setLocCity}
+                placeholder="Town, or grid locator (Northampton / IO92nh)" placeholderTextColor={C.textDim}
+                style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
+            )}
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
+              {locMode === 'off'
+                ? 'No location is published. Clients show "receiver location not set" and go without spot distances, map centring and the regional band plan.'
+                : locMode === 'device'
+                ? "This phone's coarse position (~1 km) is published to every client that connects."
+                : 'A town or city needs an internet connection when you press Start (looked up once, then stored). A Maidenhead locator works OFFLINE — use it if this server has no internet. Published to every client; set it if the receiver lives somewhere other than where you are.'}
+            </Text>
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              Distances and band edges are properties of the ANTENNA, not the listener —
+              80m is 3.5–3.8 MHz in Region 1 but 3.5–4.0 in Region 2.
             </Text>
 
             {/* ★★★ NOT AN ADVANCED SETTING. This lived under Advanced, but a SIMPLE server put on
@@ -809,35 +816,6 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               </Text>
             </View>
 
-            {/* Receiver location. A SEPARATE consent from the app's own location
-                permission: granting location to sort the instance list by distance is
-                not consent to BROADCAST that position to every client. So this is
-                opt-in, and 'off' is the default. */}
-            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>RECEIVER LOCATION</Text>
-            <View style={styles.pillRow}>
-              {(['off', 'device', 'manual'] as LocationMode[]).map(m => (
-                <Pill key={m} C={C} F={F} active={locMode === m}
-                  label={m === 'off' ? 'Not set' : m === 'device' ? 'Use device' : 'Enter city'}
-                  onPress={() => setLocMode(m)} />
-              ))}
-            </View>
-            {locMode === 'manual' && (
-              <TextInput value={locCity} onChangeText={setLocCity}
-                placeholder="Town, or grid locator (Northampton / IO92nh)" placeholderTextColor={C.textDim}
-                style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
-            )}
-            <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
-              {locMode === 'off'
-                ? 'No location is published. Clients show "receiver location not set" and go without spot distances, map centring and the regional band plan.'
-                : locMode === 'device'
-                ? "This phone's coarse position (~1 km) is published to every client that connects."
-                : 'A town or city needs an internet connection when you press Start (looked up once, then stored). A Maidenhead locator works OFFLINE — use it if this server has no internet. Published to every client; set it if the receiver lives somewhere other than where you are.'}
-            </Text>
-            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-              Distances and band edges are properties of the ANTENNA, not the listener —
-              80m is 3.5–3.8 MHz in Region 1 but 3.5–4.0 in Region 2.
-            </Text>
-
             {/* Waterfall frame rate */}
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WATERFALL RATE</Text>
             {FPS_TIERS.map(t => (
@@ -878,6 +856,44 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               This phone always gets uncompressed audio from its own server — the setting rations
               your UPLINK, and listening on the same device never touches it.
             </Text>
+
+            {/* ★★★ THE MODE SWITCH SITS WHERE IT CHANGES SOMETHING — immediately above the radio
+                controls, because that is the only half of this screen it affects. It used to lead
+                the whole page, which read as though it governed everything below it; the SERVER
+                settings are identical in both modes, and putting a mode question above them
+                implied a choice that was not there (Stuart, 2026-08-17: "the simple and advanced
+                toggle needs to be above the radio controls since the server controls are identical
+                in both modes").
+                It sat at the BOTTOM, under the last setting, where it read as one more option
+                rather than the choice the page is organised around (Stuart, 2026-08-12: "the
+                simple and full button is at the bottom and doesnt change the GUI"). */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>MODE</Text>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              {([false, true] as const).map(v => (
+                <TouchableOpacity key={String(v)} onPress={() => { setAdvanced(v);
+                                                                   AsyncStorage.setItem(K.advanced, v ? '1' : '0'); }}
+                  style={[styles.card, { flex: 1, borderColor: advanced === v ? C.green : C.border,
+                                         backgroundColor: advanced === v ? C.green + '18' : 'transparent' }]}>
+                  <Text style={{ color: advanced === v ? C.green : C.gold, fontFamily: F, fontSize: 14 }}>
+                    {v ? 'Advanced' : 'Simple'}
+                  </Text>
+                  <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 4 }]}>
+                    {v ? 'Shared, managed, public' : 'Plug in and share'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              {advanced
+                ? 'Adds shared listening, tuning and gain limits, and the admin page \u2014 '
+                  + 'per-address monitoring, banning and a connection log, reachable from a browser '
+                  + 'wherever you are. An admin password is REQUIRED: that page can ban people and '
+                  + 'change your radio.'
+                : 'One listener at a time with the whole radio, and nothing to decide beyond the '
+                  + 'settings above. Choose Advanced to share it between several people, or to '
+                  + 'limit where they may tune.'}
+            </Text>
+
 
             {/* ─── RADIO SETTINGS ────────────────────────────────────────────────────────────
                 ★★ The group heading matters as much as the contents: this screen was eighteen
@@ -946,15 +962,23 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 the moment it goes live, with no client attached to fix it afterwards.
                 ★ One control, one value — it was not duplicated into Advanced, because two fields
                   writing one setting is how they end up disagreeing. */}
-            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>STARTING GAIN</Text>
-            <TextInput value={restGain < 0 ? '' : String(restGain / 10)}
-              onChangeText={(v) => {
-                const n = parseFloat(v.replace(/[^0-9.]/g, ''));
-                const raw = Number.isFinite(n) ? Math.round(n * 10) : -1;
-                setRestGain(raw); AsyncStorage.setItem(K.restGain, String(raw)); }}
-              placeholder="dB — blank leaves it on automatic" placeholderTextColor={C.goldDim}
-              keyboardType="decimal-pad"
-              style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
+            {/* ★★★ A SLIDER, NOT A TYPING BOX. Tuner gain is not a continuous number — an R820T
+                offers 29 fixed steps and nothing between them — so a text field invites a value
+                the radio cannot take and then silently snaps it somewhere else. The same mistake
+                was made on the Pi's setup page and fixed there for the same reason (Stuart,
+                2026-08-17: "we had this issue before on the Pi").
+                ★★ GainSlider is the control the hardware panel already uses: it snaps to the
+                   supported list, shows the value, and owns the AUTO position — so the server
+                   screen and the listener's panel behave identically rather than being two
+                   different ideas of the same setting. */}
+            <GainSlider
+              gains={RTL_GAINS}
+              gainTenthDb={restGain < 0 ? 157 : restGain}
+              auto={restGain < 0}
+              onAuto={(a) => { const v = a ? -1 : 157;
+                               setRestGain(v); AsyncStorage.setItem(K.restGain, String(v)); }}
+              onGain={(t) => { setRestGain(t); AsyncStorage.setItem(K.restGain, String(t)); }}
+              label="STARTING GAIN" />
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
               Where the radio sits before anyone connects, and where it returns when they leave —
               so somebody who winds it up does not leave it up for the next person.
