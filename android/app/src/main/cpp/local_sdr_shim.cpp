@@ -8730,6 +8730,7 @@ struct LocalSdrShim::Impl {
     // ★ Accumulators for the 1 Hz overload evaluation above. Touched only on the IQ producer
     //   thread, so they need no lock; the two published figures are atomics.
     uint32_t adcRails_ = 0, adcTotal_ = 0;
+    int      clipRun_ = 0;   // consecutive seconds with rail hits — see the dwell above
     uint8_t  adcMax_ = 0, adcMin_ = 255;
     double   adcAt_ = 0;
 
@@ -8760,10 +8761,17 @@ struct LocalSdrShim::Impl {
                                     std::memory_order_relaxed);
                 const double clipPct = 100.0 * (double)adcRails_ / (double)adcTotal_;
                 g_adcClipPct.store(clipPct, std::memory_order_relaxed);
-                // ★ Logged only when it MATTERS — a line a second about a receiver that is fine
-                //   is noise that hides the one that is not. Threshold is deliberately low: at
-                //   0.01% of samples on the rail there is already audible damage on AM.
-                if (clipPct >= 0.01)
+                // ★★★ THE THRESHOLD WAS SIXTEEN TIMES TOO HIGH, and picked out of the air. The
+                //     first real overload measured on the Pi railed BOTH ends at 0.0006% of
+                //     samples — a genuine event, comfortably under the 0.01% I had guessed at, so
+                //     nothing was reported while the operator watched the band fill with ghosts
+                //     (2026-08-17). A number chosen by reasoning rather than measurement, which is
+                //     the mistake this file keeps writing down.
+                // ★★ TWO CONSECUTIVE SECONDS, because one is a spark plug. An impulse rails the
+                //    ADC for a handful of samples and means nothing; a front end being overdriven
+                //    keeps doing it. The dwell is what separates them.
+                clipRun_ = (clipPct > 0.0) ? clipRun_ + 1 : 0;
+                if (clipRun_ >= 2)
                     LOGI("ADC OVERLOAD: %.3f%% of samples on the rail, peak %.1f dBFS "
                          "(gain is too high for this signal)",
                          clipPct, g_adcPeakDbfs.load(std::memory_order_relaxed));
