@@ -119,12 +119,44 @@ constexpr int STREAM_BUFFER_SIZE = 1000000;
 
 // Convert `nF` interleaved u8 I/Q bytes to floats: f = (b - 127.4)/128. Runs at
 // the full IQ rate (2.4 MHz) for every mode, so NEON it on AArch64.
-static inline void convU8ToF32(const uint8_t* in, float* out, int nF) {
+/** ★★★ ADC OVERLOAD, MEASURED THE WAY THE RSP MEASURES IT — except the RSP has a hardware flag and
+ *  the RTL has none, so we count the evidence ourselves. An 8-bit dongle that is being overdriven
+ *  puts samples ON THE RAILS: 0 and 255. Nothing else does that, and no inference is required.
+ *
+ *  ★★ WHY A NUMBER AND NOT JUST A LAMP. Stuart, 2026-08-17: broadcast FM may want 2.7 dB where HF
+ *     wants nearly 20 — so the right gain is "whatever leaves headroom", and you cannot aim for
+ *     that with a warning light. `peak` gives the distance to full scale, so the gain can be wound
+ *     up TO a target rather than up until it breaks.
+ *
+ *  ★★ COUNTED INSIDE THE CONVERSION, which already touches every sample at the full IQ rate. A
+ *     second pass over 2.4 MS/s to measure what this loop is holding in registers would be pure
+ *     waste. Three NEON ops per 16 bytes: two compares and a horizontal add.
+ *
+ *  ★ Both rails counted, not just the top. A dongle with a DC offset clips asymmetrically — it
+ *    will sit on 0 long before it reaches 255 — and counting only the high rail would call that
+ *    receiver clean. */
+struct AdcStats {
+    uint32_t rails = 0;    // samples at 0 or 255
+    uint32_t total = 0;    // samples examined
+    uint8_t  maxV  = 0;    // highest sample seen
+    uint8_t  minV  = 255;  // lowest sample seen
+};
+
+static inline void convU8ToF32(const uint8_t* in, float* out, int nF, AdcStats* st = nullptr) {
 #if defined(__aarch64__)
     const float32x4_t bias = vdupq_n_f32(127.4f), inv = vdupq_n_f32(1.0f / 128.0f);
+    const uint8x16_t hiRail = vdupq_n_u8(254), loRail = vdupq_n_u8(1), one = vdupq_n_u8(1);
+    uint32_t rails = 0; uint8_t mx = 0, mn = 255;
     int i = 0;
     for (; i + 16 <= nF; i += 16) {
         const uint8x16_t b = vld1q_u8(in + i);
+        if (st) {
+            const uint8x16_t hit = vorrq_u8(vcgeq_u8(b, hiRail), vcleq_u8(b, loRail));
+            rails += vaddvq_u8(vandq_u8(hit, one));
+            const uint8_t bmax = vmaxvq_u8(b), bmin = vminvq_u8(b);
+            if (bmax > mx) mx = bmax;
+            if (bmin < mn) mn = bmin;
+        }
         const uint16x8_t lo = vmovl_u8(vget_low_u8(b)), hi = vmovl_u8(vget_high_u8(b));
         const float32x4_t f0 = vcvtq_f32_u32(vmovl_u16(vget_low_u16(lo)));
         const float32x4_t f1 = vcvtq_f32_u32(vmovl_u16(vget_high_u16(lo)));
@@ -135,9 +167,24 @@ static inline void convU8ToF32(const uint8_t* in, float* out, int nF) {
         vst1q_f32(out + i + 8,  vmulq_f32(vsubq_f32(f2, bias), inv));
         vst1q_f32(out + i + 12, vmulq_f32(vsubq_f32(f3, bias), inv));
     }
-    for (; i < nF; ++i) out[i] = ((float)in[i] - 127.4f) * (1.0f / 128.0f);
+    for (; i < nF; ++i) {
+        if (st) { const uint8_t v = in[i];
+                  if (v >= 254 || v <= 1) ++rails;
+                  if (v > mx) mx = v; if (v < mn) mn = v; }
+        out[i] = ((float)in[i] - 127.4f) * (1.0f / 128.0f);
+    }
+    if (st) { st->rails += rails; st->total += (uint32_t)nF;
+              if (mx > st->maxV) st->maxV = mx; if (mn < st->minV) st->minV = mn; }
 #else
-    for (int i = 0; i < nF; ++i) out[i] = ((float)in[i] - 127.4f) * (1.0f / 128.0f);
+    uint32_t rails = 0; uint8_t mx = 0, mn = 255;
+    for (int i = 0; i < nF; ++i) {
+        if (st) { const uint8_t v = in[i];
+                  if (v >= 254 || v <= 1) ++rails;
+                  if (v > mx) mx = v; if (v < mn) mn = v; }
+        out[i] = ((float)in[i] - 127.4f) * (1.0f / 128.0f);
+    }
+    if (st) { st->rails += rails; st->total += (uint32_t)nF;
+              if (mx > st->maxV) st->maxV = mx; if (mn < st->minV) st->minV = mn; }
 #endif
 }
 
@@ -922,6 +969,11 @@ static std::atomic<int>    g_vsAdminIdleMin{30};
 /** False = a local/household receiver: the admin page hides the panels about managing strangers.
  *  Default false so an install from before this setting behaves exactly as it always did. */
 static std::atomic<bool>   g_vsPublicSharing{false};
+/** ★★ THE RTL'S OVERLOAD READINGS, published once a second from the IQ thread. `peak` is how close
+ *  the loudest sample came to full scale (0 dBFS = on the rail); `clip` is the percentage of
+ *  samples that actually sat on it. Aim the gain at a peak of about -3 dBFS with clip at zero. */
+static std::atomic<double> g_adcPeakDbfs{-99.0};
+static std::atomic<double> g_adcClipPct{0.0};
 /** The scheduled-update settings, mirrored here purely so the admin page can DISPLAY them. The
  *  daemon owns the actual firing (its 1 Hz loop) — this is a readout, not a second scheduler. */
 static std::atomic<int>    g_vsUpdSrvHour{-1}, g_vsUpdSrvDay{-1};
@@ -8630,11 +8682,49 @@ struct LocalSdrShim::Impl {
     // receive buffer, where u8 IQ is 4x denser than cf32). The USB callback must
     // NEVER block — blocking libusb's handler stalls the whole device — so it
     // keeps the drop-oldest behaviour.
+    // ★ Accumulators for the 1 Hz overload evaluation above. Touched only on the IQ producer
+    //   thread, so they need no lock; the two published figures are atomics.
+    uint32_t adcRails_ = 0, adcTotal_ = 0;
+    uint8_t  adcMax_ = 0, adcMin_ = 255;
+    double   adcAt_ = 0;
+
     void enqueueIq(const uint8_t* buf, int sampCount, bool blockIfFull = false) {
         if (sampCount <= 0) return;
         if (sampCount > STREAM_BUFFER_SIZE) sampCount = STREAM_BUFFER_SIZE;
         std::vector<cf32> v((size_t)sampCount);
-        convU8ToF32(buf, reinterpret_cast<float*>(v.data()), sampCount * 2);  // NEON
+        // ★★★ ADC OVERLOAD, MEASURED WHILE WE ARE ALREADY HERE. See AdcStats: this is the RTL's
+        //     answer to the flag the RSP gets in hardware. Evaluated once a second rather than per
+        //     buffer — a single sample on the rail is a spark plug or a lightning crash, not an
+        //     overloaded front end, and a detector that cries wolf at those is one the owner
+        //     learns to ignore.
+        AdcStats st;
+        convU8ToF32(buf, reinterpret_cast<float*>(v.data()), sampCount * 2, &st);  // NEON
+        {
+            adcRails_ += st.rails; adcTotal_ += st.total;
+            if (st.maxV > adcMax_) adcMax_ = st.maxV;
+            if (st.minV < adcMin_) adcMin_ = st.minV;
+            const double now = Impl::nowSecs();
+            if (adcAt_ == 0) adcAt_ = now;
+            if (now - adcAt_ >= 1.0 && adcTotal_ > 0) {
+                // ★ Peak as a fraction of full scale, from whichever rail is closer — a DC-offset
+                //   dongle reaches one long before the other, and the nearer one is the truth.
+                const int devHi = (int)adcMax_ - 127, devLo = 127 - (int)adcMin_;
+                const int dev   = devHi > devLo ? devHi : devLo;
+                const double frac = dev / 128.0;
+                g_adcPeakDbfs.store(frac > 0 ? 20.0 * std::log10(frac) : -99.0,
+                                    std::memory_order_relaxed);
+                const double clipPct = 100.0 * (double)adcRails_ / (double)adcTotal_;
+                g_adcClipPct.store(clipPct, std::memory_order_relaxed);
+                // ★ Logged only when it MATTERS — a line a second about a receiver that is fine
+                //   is noise that hides the one that is not. Threshold is deliberately low: at
+                //   0.01% of samples on the rail there is already audible damage on AM.
+                if (clipPct >= 0.01)
+                    LOGI("ADC OVERLOAD: %.3f%% of samples on the rail, peak %.1f dBFS "
+                         "(gain is too high for this signal)",
+                         clipPct, g_adcPeakDbfs.load(std::memory_order_relaxed));
+                adcRails_ = adcTotal_ = 0; adcMax_ = 0; adcMin_ = 255; adcAt_ = now;
+            }
+        }
         {
             std::unique_lock<std::mutex> lk(iqMtx);
             if (iqMaxSamples > 0) {
@@ -10365,6 +10455,16 @@ std::string LocalSdrShim::adminStatusJson() {
     const vibeadmin::SysStats sys = vibeadmin::readSys();
     std::string j = "{\"sys\":" + vibeadmin::sysJson(sys);
 
+    // ★★ THE RTL'S OVERLOAD FIGURES, for whatever is drawing the gain controls. Sent for every
+    //    radio — a receiver with no rail-counting simply reports its resting values, and a client
+    //    that shows a meter for one radio and nothing for another is the confusing half of this.
+    {
+        char ab[96];
+        snprintf(ab, sizeof ab, ",\"adcPeakDb\":%.1f,\"adcClipPct\":%.4f",
+                 g_adcPeakDbfs.load(std::memory_order_relaxed),
+                 g_adcClipPct.load(std::memory_order_relaxed));
+        j += ab;
+    }
     j += ",\"listeners\":" + std::to_string(listenerCount())
        + ",\"maxUsers\":"  + std::to_string(g_vsMaxUsers.load())
        + ",\"waiting\":"   + std::to_string(waitingCount());
