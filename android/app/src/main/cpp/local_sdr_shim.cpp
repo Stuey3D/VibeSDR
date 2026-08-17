@@ -8767,6 +8767,18 @@ struct LocalSdrShim::Impl {
                     LOGI("ADC OVERLOAD: %.3f%% of samples on the rail, peak %.1f dBFS "
                          "(gain is too high for this signal)",
                          clipPct, g_adcPeakDbfs.load(std::memory_order_relaxed));
+                // ★★★ AND A HEARTBEAT, SO THE READING CAN BE TRUSTED. A detector that says nothing
+                //     is indistinguishable from one that is not running — which is exactly how the
+                //     first test of this went (Stuart forced the gain up, saw no line, and there
+                //     was no way to tell whether the ADC was clean or the code was dead).
+                //     ★ Every 10 s, so it is watchable without drowning the journal.
+                static double lastHb = 0;
+                if (now - lastHb >= 10.0) {
+                    lastHb = now;
+                    LOGI("adc: peak %.1f dBFS, clip %.4f%%, max=%u min=%u (0 dBFS = on the rail)",
+                         g_adcPeakDbfs.load(std::memory_order_relaxed), clipPct,
+                         (unsigned)adcMax_, (unsigned)adcMin_);
+                }
                 adcRails_ = adcTotal_ = 0; adcMax_ = 0; adcMin_ = 255; adcAt_ = now;
             }
         }
