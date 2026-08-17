@@ -86,7 +86,14 @@ export async function resolveStationLogo(
   //     what Stuart photographed on 2026-08-11: a weak Radio 3 wearing the Radio 1 roundel.
   //     ▶ So ask RadioDNS FIRST, which is keyed on the PI + ECC + frequency the transmitter
   //       error-protects, and returns the broadcaster's OWN artwork. The name search stays as the
-  //       fallback for the many stations that publish no SPI at all (Heart, FLEX — verified).
+  //       fallback for the many stations that publish no SPI at all.
+  //     ★★★ HEART IS NOT ONE OF THEM, whatever this comment used to say. It read "(Heart, FLEX —
+  //         verified)", and that was wrong: 09660.c363.ce1.fm.radiodns.org resolves to
+  //         rdns.musicradio.com, whose _radioepg._tcp SRV gives epg.musicradio.com:80 (checked
+  //         2026-08-17, after Stuart said "heart does have radiodns as the pi gets it" — his Pi
+  //         was fetching it while this file claimed it could not exist).
+  //     ★★ A comment asserting a fact is a place a reader STOPS LOOKING. This one sent the search
+  //        off to radio-browser's artwork for a station whose broadcaster publishes its own.
   //     ★ This is the app's PRIMARY case, not an edge one: driving local hardware there is no
   //       server to ask, so the in-app lookup is the only route to identity-keyed artwork.
   if (!name && !(pi && ecc && freqHz)) return null;
