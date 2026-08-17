@@ -59,6 +59,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <dirent.h>
 #include <deque>
 #include <memory>
 #include <map>
@@ -972,6 +973,21 @@ static std::atomic<bool>   g_vsPublicSharing{false};
 /** ★★ THE RTL'S OVERLOAD READINGS, published once a second from the IQ thread. `peak` is how close
  *  the loudest sample came to full scale (0 dBFS = on the rail); `clip` is the percentage of
  *  samples that actually sat on it. Aim the gain at a peak of about -3 dBFS with clip at zero. */
+/** ★★★ ONE RADIO PER ADDRESS. Deliberately NOT punitive — the aim is stopping one visitor holding
+ *  every radio on a multi-radio machine, not policing who may listen (Stuart, 2026-08-17: "dont
+ *  want to be punative but also need to prevent one person holding up the entire server").
+ *  ★★ LOOPBACK IS EXEMPT, and that exemption is load-bearing rather than tidy: behind a tunnel with
+ *     no trusted proxies configured EVERY visitor arrives as 127.0.0.1, so without this the second
+ *     person to reach such a server would be refused as "already listening" — the same 127.0.0.1
+ *     trap that once switched the session limit off for everybody.
+ *  ★ Admin is exempt: the owner reaching several of their own radios at once is the normal case. */
+static std::atomic<bool>   g_vsOneRadioPerIp{true};
+static std::mutex          g_occMtx;
+static std::string         g_occDir, g_occSerial, g_occLabel, g_occHeldIp;
+/** Defined below, beside the registry it reads — declared here because the ADMISSION check needs
+ *  it thousands of lines earlier. */
+static std::string occHeldElsewhere(const std::string& ip);
+static void        occWrite(const std::string& ip);
 static std::atomic<double> g_adcPeakDbfs{-99.0};
 static std::atomic<double> g_adcClipPct{0.0};
 /** The scheduled-update settings, mirrored here purely so the admin page can DISPLAY them. The
@@ -7653,6 +7669,16 @@ struct LocalSdrShim::Impl {
             //     deadlocked this thread against itself and froze the whole server for
             //     every listener. See specListenerCountLocked().
             bool occupied = isFullLocked(me);
+            // ★★★ AND ARE THEY ALREADY ON ANOTHER RADIO HERE? Occupancy is per radio and each
+            //     radio is its own process, so nothing had a view across the machine — one address
+            //     held two of the three single-user radios for twenty minutes and each process was
+            //     individually right to admit it. Checked BEFORE the slot is claimed, like every
+            //     other refusal, and reported with the NAME of the radio they are already on so
+            //     the message is actionable rather than a flat no.
+            // ★ Admin exempt, loopback exempt — see g_vsOneRadioPerIp.
+            std::string elsewhereOn;
+            if (!occupied && !adminAuthed)
+                elsewhereOn = occHeldElsewhere(sock->peerAddress());
             // ★★★ A LIVE RESERVATION REFUSES EVERYONE ELSE, EVEN THOUGH A SLOT IS FREE. That is
             //     the entire value of the queue: we told someone they were next, and this is the
             //     window in which that has to be true. Without it the freed slot goes to whoever
@@ -7738,6 +7764,18 @@ struct LocalSdrShim::Impl {
                 }
             }
 
+            // ★★★ ALREADY ON ANOTHER RADIO HERE. Refused with a REASON and a NAME, not held in a
+            //     queue: there is no slot to wait for — the visitor is holding one themselves, and
+            //     a countdown to nothing would be a lie. Closing one radio frees them instantly.
+            if (!elsewhereOn.empty() && !override_) {
+                LOGI("%s WS refused — [%s] is already listening on %s (one radio per address)",
+                     isAudio ? "audio" : "spectrum", sock->peerAddress().c_str(), elsewhereOn.c_str());
+                const std::string msg = std::string("{\"type\":\"elsewhere\",\"radio\":\"")
+                                      + jsonEscape(elsewhereOn) + "\"}";
+                sendText(sock, msg.c_str());
+                sock->closeAfterFlush();
+                return;
+            }
             if (occupied && !override_) {
                 // Tell them plainly, as a WS text frame (we have already upgraded), then close. The
                 // client shows "in use, try again later" and must NOT retry-storm — see the web
@@ -7765,6 +7803,10 @@ struct LocalSdrShim::Impl {
             // socket of the same session would be a quiet bug nobody would ever see.
             const bool newOccupant = (occupantSession != me);
             if (newOccupant) {
+                // ★ Tell the rest of the machine who holds this radio, so the OTHER radios can
+                //   refuse the same address. See occHeldElsewhere.
+                { std::lock_guard<std::mutex> ol(g_occMtx); g_occHeldIp = sock->peerAddress(); }
+                occWrite(sock->peerAddress());
                 occupantSince   = Impl::nowSecs();
                 occupantWarned  = 0;
                 occupantAddr    = sock->peerAddress();
@@ -8293,6 +8335,9 @@ struct LocalSdrShim::Impl {
           const bool specGone  = !specClient  || !specClient->isOpen();
           const bool audioGone = !audioClient || !audioClient->isOpen();
           if (specGone && audioGone) { occupantSession.clear(); bothGone = true; } }
+        // ★ And release the machine-wide claim, so this address may take another radio at once.
+        if (bothGone) { { std::lock_guard<std::mutex> ol(g_occMtx); g_occHeldIp.clear(); }
+                        occWrite(""); }
         outboxClose(sock);   // drain, then close — see outboxClose()
         // ★ The slow listener has gone: the survivors get their rate back. OUTSIDE the lock —
         //   recomputeEngineRate() takes clientMtx, and a helper that locks must never be called
@@ -10408,6 +10453,66 @@ std::string LocalSdrShim::noticeText() { return g_vsNotice.current(); }
 bool LocalSdrShim::setNotice(const std::string& text, int minutes, std::string& err) {
     return g_vsNotice.set(text, minutes, err);
 }
+void LocalSdrShim::setOccupancyRegistry(const std::string& dir, const std::string& serial,
+                                        const std::string& label) {
+    std::lock_guard<std::mutex> lk(g_occMtx);
+    g_occDir = dir; g_occSerial = serial; g_occLabel = label;
+    if (!dir.empty()) ::mkdir((dir + "/occupants").c_str(), 0700);
+}
+
+/** This radio's entry: who holds it, when we last said so, and what to call this radio.
+ *  ★ Written on claim and rewritten once a second. The timestamp is the whole safety of the
+ *    scheme — a radio that crashes stops refreshing, and its slot frees itself. */
+static void occWrite(const std::string& ip) {
+    std::string dir, serial, label;
+    { std::lock_guard<std::mutex> lk(g_occMtx); dir = g_occDir; serial = g_occSerial; label = g_occLabel; }
+    if (dir.empty() || serial.empty()) return;
+    const std::string path = dir + "/occupants/" + serial;
+    if (ip.empty()) { ::unlink(path.c_str()); return; }
+    FILE* f = fopen(path.c_str(), "w");
+    if (!f) return;
+    fprintf(f, "%s\n%lld\n%s\n", ip.c_str(), (long long)vsNowEpoch(), label.c_str());
+    fclose(f);
+}
+
+void LocalSdrShim::refreshOccupancy() {
+    std::string ip; { std::lock_guard<std::mutex> lk(g_occMtx); ip = g_occHeldIp; }
+    if (!ip.empty()) occWrite(ip);
+}
+
+/** Is this address already listening on ANOTHER radio on this machine? Returns that radio's label.
+ *  ★★ Entries older than 15 s are ignored: they belong to a process that has stopped refreshing,
+ *     which means it is gone. Without that a crash would lock a visitor out until a reboot. */
+static std::string occHeldElsewhere(const std::string& ip) {
+    if (ip.empty() || !g_vsOneRadioPerIp.load()) return "";
+    if (isLoopback(ip)) return "";
+    std::string dir, serial;
+    { std::lock_guard<std::mutex> lk(g_occMtx); dir = g_occDir; serial = g_occSerial; }
+    if (dir.empty()) return "";
+    const std::string base = dir + "/occupants";
+    DIR* d = opendir(base.c_str());
+    if (!d) return "";
+    std::string found;
+    while (dirent* e = readdir(d)) {
+        if (e->d_name[0] == '.' || e->d_name == serial) continue;
+        FILE* f = fopen((base + "/" + e->d_name).c_str(), "r");
+        if (!f) continue;
+        char cip[128] = {0}, cts[64] = {0}, clabel[160] = {0};
+        if (fgets(cip, sizeof cip, f) && fgets(cts, sizeof cts, f)) {
+            fgets(clabel, sizeof clabel, f);
+            std::string sip(cip), sts(cts), slabel(clabel);
+            while (!sip.empty() && (sip.back()=='\n'||sip.back()=='\r')) sip.pop_back();
+            while (!slabel.empty() && (slabel.back()=='\n'||slabel.back()=='\r')) slabel.pop_back();
+            const long long ts = atoll(sts.c_str());
+            if (sip == ip && (vsNowEpoch() - ts) <= 15) found = slabel.empty() ? std::string("another radio") : slabel;
+        }
+        fclose(f);
+        if (!found.empty()) break;
+    }
+    closedir(d);
+    return found;
+}
+
 void LocalSdrShim::setConnLogPath(const std::string& path) {
     // ★ Teach the log how to resolve a country and a network. It cannot call geoip/asndb itself —
     //   they live out here — and without these the history could only ever replay the SNAPSHOT

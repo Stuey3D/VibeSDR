@@ -249,6 +249,7 @@ export interface SpectrumCallbacks {
   onEvicted?: () => void;
   /** This address is on the receiver's ban list. Terminal — there is no waiting it out. */
   onBanned?: () => void;
+  onElsewhere?: (radio: string) => void;
   /** ★ The dial has JUMPED far enough that anything already buffered is a different signal.
    *  main.ts uses this to drop queued audio — see AudioPlayer.flush(). */
   onRetuneJump?: () => void;
@@ -450,6 +451,13 @@ export class SpectrumClient {
         // something to retry into.
         this.refused = true;
         this.cb.onEvicted?.();
+        break;
+      // ★★★ ALREADY ON ANOTHER RADIO HERE. Terminal like the rest, and it names the radio: "in
+      //     use" would send the visitor to wait for a slot that is not coming, when the fix is one
+      //     click away — close the other radio.
+      case 'elsewhere':
+        this.refused = true;
+        this.cb.onElsewhere?.(String(msg.radio || 'another radio'));
         break;
       case 'banned':
         // ★ The most terminal refusal there is: unlike busy or cooldown there is nothing to

@@ -2242,6 +2242,16 @@ int main(int argc, char** argv) {
     //       radio returned everything.
     //     ★ A server with no radio of its own (the front door) and a single-radio Simple server
     //       both keep the original path, so nothing changes for them and their history survives.
+    // ★★★ THE MACHINE-WIDE OCCUPANCY REGISTRY. Every radio is its own process, so "one listener,
+    //     one radio" needs somewhere they can all see — the same runtime directory the handover
+    //     sockets already use. A front door (no serial of its own) registers nothing and simply
+    //     routes. See LocalSdrShim::setOccupancyRegistry.
+    if (!g_myRadioSerial.empty()) {
+        std::string label = g_myRadioSerial;
+        for (const auto& r : g_serverConfig.radios)
+            if (r.serial == g_myRadioSerial && !r.label.empty()) { label = r.label; break; }
+        LocalSdrShim::instance().setOccupancyRegistry(handoffDir(), g_myRadioSerial, label);
+    }
     LocalSdrShim::instance().setConnLogPath(
         g_myRadioSerial.empty() ? vsDataDir() + "/connections.jsonl"
                                 : vsDataDir() + "/connections-" + g_myRadioSerial + ".jsonl");
@@ -2412,6 +2422,8 @@ int main(int argc, char** argv) {
         // ★ The DSP path only raises a FLAG; the write happens here, off that thread.
         LocalSdrShim::instance().saveSpectrogramIfDue();
         LocalSdrShim::instance().saveConnLogIfDue();
+        // ★ The heartbeat that makes a crashed radio give its slot back — see refreshOccupancy.
+        LocalSdrShim::instance().refreshOccupancy();
 
         // ── ★★★ SCHEDULED UPDATES ────────────────────────────────────────────────────────
         // ★★ Two independent schedules. They ask the SAME helper the admin page's buttons ask,

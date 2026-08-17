@@ -167,6 +167,17 @@ public:
      *  wiped the history — and an update is the most common reason this server restarts. Empty
      *  path = memory only (every phone). */
     void setConnLogPath(const std::string& path);
+    /** ★★★ ONE LISTENER, ONE RADIO — across the whole machine, not per process. Occupancy is
+     *  enforced per radio and every radio is its own process, so nothing had a view across them:
+     *  one address held two of the three single-user radios for twenty minutes and each process
+     *  was individually right to admit it (Stuart, 2026-08-17). `dir` is the shared runtime
+     *  directory the handover sockets already live in; `serial` and `label` identify this radio
+     *  in the registry, so a refusal can name the radio the visitor is ALREADY on. */
+    void setOccupancyRegistry(const std::string& dir, const std::string& serial,
+                              const std::string& label);
+    /** Refresh this radio's registry entry. Called from the daemon's 1 Hz loop — a heartbeat, so a
+     *  radio that dies cannot hold a slot for ever. */
+    void refreshOccupancy();
     /** Append anything that closed since the last call. Driven from the daemon's 1 Hz loop so
      *  file I/O never lands on a connection thread — see ConnLog::saveIfDue. */
     void saveConnLogIfDue();

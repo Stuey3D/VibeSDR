@@ -836,6 +836,12 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       clearAdminTicket();
       showPill('Admin taken by a more recent login elsewhere — you are still listening');
     },
+    // ★ Named, and phrased as a choice rather than a refusal — the visitor already has a radio,
+    //   and closing it frees this one immediately. No countdown: there is nothing to wait for.
+    onElsewhere: (radio: string) => showRefusal('ALREADY LISTENING',
+      `You are already listening on <b>${radio}</b> from this address.<br><br>`
+      + 'This receiver serves one radio per listener, so that nobody takes them all. '
+      + 'Close the other one and this will let you straight in.'),
     onSessionEnded: (cd) => showSessionEnded(cd),
     onCooldown: (secs) => showCooldown(secs),
     // ★ Shown to EVERYONE, not only the admin. "3 of 30 listening" answers the question a
