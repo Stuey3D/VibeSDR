@@ -116,6 +116,29 @@ namespace {
 using cf32     = vibedsp::cf32;       // interleaved IQ sample (std::complex<float>)
 using stereo_t = vibedsp::stereo;     // { float l, r; }
 // Cap on samples copied out of one IQ buffer (was SDR++'s STREAM_BUFFER_SIZE).
+/** ★★★ JOIN ONCE, AND NEVER LET A LOST RACE KILL THE APP.
+ *
+ *  `if (t.joinable()) t.join();` is correct for a single caller and unsafe for two: both see
+ *  joinable, both call join, the loser gets EINVAL — and std::thread::join reports that by
+ *  THROWING. Uncaught, on a bridge or socket thread, that aborts the whole process:
+ *
+ *      terminating due to uncaught exception of type std::system_error:
+ *      thread::join failed: Invalid argument
+ *
+ *  Seen twice on the Moto in one evening from two different functions — setSampleRate when a
+ *  browser connected, and stopLocked when the server was stopped and started again (2026-08-17).
+ *  Eleven sites in this file had the same shape, so it is fixed as a PATTERN rather than at each
+ *  place it happens to surface next.
+ *
+ *  ★★ It still LOGS. A join that fails means a thread was not waited for, which can leave the
+ *     teardown half-done — that is worth knowing about, and a silent catch would just move the
+ *     mystery somewhere harder to find. What it must not do is take the app with it.
+ */
+static inline void joinOnce(std::thread& t, const char* what) {
+    try { if (t.joinable()) t.join(); }
+    catch (const std::exception& e) { LOGE("%s: join failed — %s", what, e.what()); }
+}
+
 constexpr int STREAM_BUFFER_SIZE = 1000000;
 
 // Convert `nF` interleaved u8 I/Q bytes to floats: f = (b - 127.4)/128. Runs at
@@ -2553,7 +2576,7 @@ struct LocalSdrShim::Impl {
     void stopClientThread(const std::shared_ptr<ClientDsp>& c) {
         { std::lock_guard<std::mutex> lk(c->qm); c->run.store(false); }
         c->qcv.notify_all();
-        if (c->th.joinable()) c->th.join();
+        joinOnce(c->th, "client dsp");
         freeClientFx(c.get());        // ★ after the thread has stopped touching them
     }
 
@@ -3359,7 +3382,7 @@ struct LocalSdrShim::Impl {
         }
         ob->sock->close();                    // unblocks the writer if it is stuck mid-send
         ob->cv.notify_all();
-        if (ob->th.joinable()) ob->th.join();
+        joinOnce(ob->th, "outbox");
     }
 
     /** Append a framed message for one client. NEVER blocks on the network. */
@@ -4854,6 +4877,13 @@ struct LocalSdrShim::Impl {
 
     // retune the demod (and RTL centre if the offset would fall outside span)
     void retune(double freq) {
+        // ★★ ONE LINE PER TUNE, KEPT. Tuning is a deliberate act a few times a minute, not a
+        //    stream — this costs nothing and answers the question that has now been asked twice:
+        //    did the server receive the tune and act on it, or not receive it at all? "It only
+        //    tunes when I refresh the browser" (Stuart, 2026-08-17) is consistent with BOTH, and
+        //    they need opposite fixes.
+        LOGI("retune -> %.3f kHz (was %.3f, centre %.3f)",
+             freq / 1e3, audioFreq.load() / 1e3, rtlCenter.load() / 1e3);
         // Hold modeMtx across the WHOLE placement (rtlCenter/viewCenter store +
         // tuneHw + rx.setTune), not just rx.setTune. retune() runs on the audio-WS
         // thread while the "zoom" handler runs on the spectrum-WS thread, and BOTH
@@ -9359,7 +9389,7 @@ struct LocalSdrShim::Impl {
         // ★★ EVERY SOURCE NAMED EXPLICITLY. The final `else` used to mean "must be a dongle",
         // which was true with two sources and silently wrong with three — see resumeCaptureIdle
         // for what that cost.
-        if (useTcp()) { tcpRunning.store(false); if (rtlThread.joinable()) rtlThread.join(); }
+        if (useTcp()) { tcpRunning.store(false); joinOnce(rtlThread, "tcp reader"); }
         else if (useSdrplay()) { sdrp->setPaused(true); }
         else if (useAirspyHf()) { ahf->setPaused(true); }
         else {
@@ -9849,7 +9879,7 @@ struct LocalSdrShim::Impl {
         const int idx = findOurDevice();
         if (idx < 0) return false;
 
-        if (rtlThread.joinable()) rtlThread.join();     // the old capture thread has exited
+        joinOnce(rtlThread, "capture");     // the old capture thread has exited
         if (dev) { rtlsdr_close(dev); dev = nullptr; }
 
         if (rtlsdr_open(&dev, (uint32_t)idx) != 0 || !dev) { dev = nullptr; return false; }
@@ -10146,7 +10176,7 @@ struct LocalSdrShim::Impl {
 
     void stopHotplugWatch() {
         if (!hotplugRun.exchange(false)) return;
-        if (hotplugThread.joinable()) hotplugThread.join();
+        joinOnce(hotplugThread, "hotplug");
     }
 
     void startDspThread() {
@@ -10157,7 +10187,7 @@ struct LocalSdrShim::Impl {
         dspRunning.store(false);
         iqCv.notify_all();
         iqSpaceCv.notify_all();      // release a TCP reader parked on backpressure
-        if (dspThread.joinable()) dspThread.join();
+        joinOnce(dspThread, "dsp");
         std::lock_guard<std::mutex> lk(iqMtx);
         iqQueue.clear();
         iqQueuedSamples = 0;
@@ -11898,7 +11928,7 @@ void LocalSdrShim::stopLocked() {
         impl->tcpRunning.store(false);
         impl->spyFftRunning.store(false);
         impl->spyFftCv.notify_all();
-        if (impl->spyFftThread.joinable()) impl->spyFftThread.join();
+        joinOnce(impl->spyFftThread, "spy fft");
         impl->spy->close();
     }
     if (impl->useTcp()) { impl->tcpRunning.store(false); if (impl->tcpSock) impl->tcpSock->close(); }
@@ -11916,7 +11946,7 @@ void LocalSdrShim::stopLocked() {
     // are stopped explicitly now, in the same place every other source is.
     if (impl->useAirspyHf()) { impl->ahf->stop(); impl->ahf->close(); }
     if (impl->useSdrplay())  { impl->sdrp->close(); }
-    if (impl->rtlThread.joinable()) impl->rtlThread.join();
+    joinOnce(impl->rtlThread, "reader");
     // IQ source stopped -> stop the DSP consumer (drains/clears the queue) before
     // tearing the engine down, so no rx.feed runs against a destroyed engine.
     impl->stopDspThread();
@@ -12106,7 +12136,7 @@ bool LocalSdrShim::releaseRadio() {
     if (rsp)      impl->sdrp->setPaused(true);
     else if (ahf) impl->ahf->setPaused(true);
     else if (impl->dev) { impl->restarting.store(true); rtlsdr_cancel_async(impl->dev); }
-    if (impl->rtlThread.joinable()) impl->rtlThread.join();
+    joinOnce(impl->rtlThread, "reader");
     impl->stopDspThread();
     {
         std::lock_guard<std::recursive_mutex> lk(impl->modeMtx);
@@ -12441,10 +12471,8 @@ void LocalSdrShim::setSampleRate(double rate) {
     // ★★ AND A NET UNDER BOTH JOINS. The lock above removes the race we know about; this keeps a
     //    future one from killing the APP rather than the operation. It logs, because a swallowed
     //    failure that says nothing just moves the mystery somewhere harder to find.
-    try { if (impl->rtlThread.joinable()) impl->rtlThread.join(); }
-    catch (const std::exception& e) { LOGE("rate change: reader join failed — %s", e.what()); }
-    try { impl->stopDspThread(); }
-    catch (const std::exception& e) { LOGE("rate change: dsp join failed — %s", e.what()); }
+    joinOnce(impl->rtlThread, "rate change reader");
+    impl->stopDspThread();
     std::lock_guard<std::recursive_mutex> lk(impl->modeMtx);
     uint32_t actual;
     if (tcp) {
