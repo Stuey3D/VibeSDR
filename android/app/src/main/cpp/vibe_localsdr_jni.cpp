@@ -80,6 +80,17 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeStartSpectrum(
     const char* modeC = mode ? env->GetStringUTFChars(mode, nullptr) : "";
     std::string modeS = modeC ? modeC : "";
     if (mode && modeC) env->ReleaseStringUTFChars(mode, modeC);
+    // ★★★ ANDROID CONFIGURES ITSELF IN THE APP, so it must never serve the first-run WIZARD. The
+    //     flag for exactly this has existed since the wizard was written and was NEVER WIRED UP
+    //     here — so `configured` stayed false for ever on a phone and GET / answered with the
+    //     setup page instead of the receiver. A browser could not reach the client at all
+    //     (Stuart, 2026-08-17, on the Moto).
+    // ★★ Set on the START path rather than at load: it is a statement about how THIS server was
+    //    configured, and the phone's server is always configured by the screen that starts it.
+    // ★ setConfigured too, so /vibeserver.json tells the truth about itself — the daemon sets both
+    //   from its config file, and a phone had no equivalent.
+    vibe::LocalSdrShim::setNativeSetup(true);
+    vibe::LocalSdrShim::setConfigured(true);
     std::string err;
     int port = vibe::LocalSdrShim::instance().start(
         fd, vid, pid, centerFreq, sampleRate, gainTenthDb, fftSize, fftRate, modeS, err);
@@ -94,6 +105,10 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeStartTcp(
         JNIEnv* env, jobject /*thiz*/, jstring host, jint port,
         jdouble centerFreq, jdouble sampleRate, jint gainTenthDb,
         jint fftSize, jdouble fftRate, jstring mode) {
+    // ★ Same as nativeStartSpectrum: a phone is always configured by the app that starts it, so
+    //   the first-run wizard must never be served here either. See the note there.
+    vibe::LocalSdrShim::setNativeSetup(true);
+    vibe::LocalSdrShim::setConfigured(true);
     const char* hostC = host ? env->GetStringUTFChars(host, nullptr) : "";
     std::string hostS = hostC ? hostC : "";
     if (host && hostC) env->ReleaseStringUTFChars(host, hostC);
@@ -114,6 +129,10 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeStartSpyServer(
         JNIEnv* env, jobject /*thiz*/, jstring host, jint port,
         jdouble centerFreq, jdouble sampleRate, jint gainTenthDb,
         jint fftSize, jdouble fftRate, jstring mode) {
+    // ★ Same as nativeStartSpectrum: a phone is always configured by the app that starts it, so
+    //   the first-run wizard must never be served here either. See the note there.
+    vibe::LocalSdrShim::setNativeSetup(true);
+    vibe::LocalSdrShim::setConfigured(true);
     const char* hostC = host ? env->GetStringUTFChars(host, nullptr) : "";
     std::string hostS = hostC ? hostC : "";
     if (host && hostC) env->ReleaseStringUTFChars(host, hostC);

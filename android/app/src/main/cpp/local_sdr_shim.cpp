@@ -3291,6 +3291,8 @@ struct LocalSdrShim::Impl {
         bool   overran = false;      // dropped for backlog, not for leaving
         std::thread th;
     };
+    /** Serialises the stop/join/restart dance in setSampleRate — see the note there. */
+    std::mutex rateMtx;
     std::mutex outboxMtx;
     std::map<net::Socket*, std::shared_ptr<Outbox>> outboxes;
     /** ★★★ BYTES SENT, PER SESSION, SURVIVING THE FIRST SOCKET TO CLOSE. The connection log's
@@ -12377,6 +12379,25 @@ bool LocalSdrShim::isAirspyHf() const { return p && p->useAirspyHf(); }
 
 void LocalSdrShim::setSampleRate(double rate) {
     if (!p || rate <= 0) return;
+    /**
+     * ★★★ ONE RATE CHANGE AT A TIME, OR THE APP DIES. This function stops the IQ source, JOINS the
+     *     reader thread and joins the DSP thread. Both joins are guarded by `joinable()`, which is
+     *     correct for one caller and useless for two: both see joinable, both call join(), the
+     *     loser gets EINVAL, and `std::thread::join` reports that by THROWING — uncaught, through
+     *     a socket thread, so the whole app aborts:
+     *
+     *         terminating due to uncaught exception of type std::system_error:
+     *         thread::join failed: Invalid argument
+     *
+     *     Seen on the Moto the moment a browser connected (2026-08-17): a browser opens TWO
+     *     sockets and each ran the accept-time control block, so two rate changes raced by
+     *     milliseconds. The symptom was "it will not tune" — the server was dying, not refusing.
+     * ★★ A DEDICATED LOCK, not modeMtx. modeMtx cannot be held across these joins (the DSP thread
+     *    takes it per buffer, so holding it here deadlocks — see the note below), which is exactly
+     *    why this sequence had no mutual exclusion at all.
+     * ★ Ordered rateMtx → modeMtx, and nothing takes them the other way round.
+     */
+    std::lock_guard<std::mutex> rateLk(p->rateMtx);
     // ★★★ NO VIBE_HW_LOCK HERE, DELIBERATELY. This function calls stopDspThread() before it
     //     takes modeMtx, and that join waits on a thread which takes modeMtx per buffer —
     //     holding it from the top would deadlock exactly as the stopDspThread note warns.
@@ -12417,8 +12438,13 @@ void LocalSdrShim::setSampleRate(double rate) {
     //   than tearing the device down — tearing down is what crashed the RSP earlier.
     else if (ahf) { impl->ahf->setPaused(true); }
     else          { impl->restarting.store(true); rtlsdr_cancel_async(impl->dev); }
-    if (impl->rtlThread.joinable()) impl->rtlThread.join();
-    impl->stopDspThread();
+    // ★★ AND A NET UNDER BOTH JOINS. The lock above removes the race we know about; this keeps a
+    //    future one from killing the APP rather than the operation. It logs, because a swallowed
+    //    failure that says nothing just moves the mystery somewhere harder to find.
+    try { if (impl->rtlThread.joinable()) impl->rtlThread.join(); }
+    catch (const std::exception& e) { LOGE("rate change: reader join failed — %s", e.what()); }
+    try { impl->stopDspThread(); }
+    catch (const std::exception& e) { LOGE("rate change: dsp join failed — %s", e.what()); }
     std::lock_guard<std::recursive_mutex> lk(impl->modeMtx);
     uint32_t actual;
     if (tcp) {
