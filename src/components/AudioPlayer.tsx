@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { NativeModules } from 'react-native';
+import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
+import { noteAudioEvent } from '../services/audioPathLog';
 import { v4 as uuidv4 } from 'uuid';
 
 // Both platforms expose the SAME native surface as "VibePowerModule"
@@ -71,9 +72,15 @@ export interface AudioPlayerProps {
    *    collide with its own session earlier tonight — the engine must come back as the SAME
    *    listener. */
   restartKey?:   number;
+  /** ★★★ THE NATIVE WATCHDOG HAS REOPENED THE AUDIO SOCKET SEVERAL TIMES AND NO PACKET HAS COME
+   *  BACK. Native cannot cure that on its own: an UberSDR server drops a socket whose session it
+   *  never registered, and only a fresh POST /connection — which lives in JS — makes it keep one.
+   *  Without this the watchdog retried every four seconds indefinitely and the user simply had no
+   *  sound (issue #20). */
+  onStuck?:      () => void;
 }
 
-export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceName, uuid: propUuid, password, adminAuth, restartKey }: AudioPlayerProps) {
+export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceName, uuid: propUuid, password, adminAuth, restartKey, onStuck }: AudioPlayerProps) {
   const activeUrl  = useRef<string | null>(null);
   const activeFreq = useRef<number>(0);
   const activeMode = useRef<string>('');
@@ -84,6 +91,26 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
   // is torn down and a fresh native session is opened.
   const lastRestart = useRef<number | undefined>(restartKey);
   const lastAdmin   = useRef<string | undefined>(adminAuth);
+  /** ★★★ NATIVE IS THE ONLY LAYER THAT KNOWS WHAT THE SOCKET DID. It opens its own connection, so
+   *  every fact worth having — engine started, WS ready, WS aborted, first packet, a feed refused
+   *  — was reachable only through a Mac, a cable and Console.app. The person who can reproduce the
+   *  fault is holding a phone; put it in the report they can send. */
+  useEffect(() => {
+    // ★ iOS only: these events come from VibePowerModule.swift. Android's VibeStreamModule stubs
+    //   addListener/removeListeners as no-ops and emits neither, so subscribing there would buy a
+    //   listener that can never fire — and the native pump is a different design in any case.
+    if (!VibePowerModule || Platform.OS !== 'ios') return;
+    const em = new NativeEventEmitter(VibePowerModule as never);
+    const path  = em.addListener('VibeAudioPath',  (e: { what?: string }) => {
+      if (e?.what) noteAudioEvent('native: ' + e.what);
+    });
+    const stuck = em.addListener('VibeAudioStuck', (e: { reopens?: number }) => {
+      noteAudioEvent(`native: STUCK after ${e?.reopens ?? '?'} reopens — re-registering session`);
+      onStuck?.();
+    });
+    return () => { path.remove(); stuck.remove(); };
+  }, [onStuck]);
+
   useEffect(() => {
     // ★★★ A CREDENTIAL THAT ARRIVES LATER IS STILL A REASON TO REBUILD. adminAuth was in the
     //     dependency list — so this effect re-ran when the owner typed the password — and then
@@ -102,7 +129,7 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
     if (!forced && baseUrl === activeUrl.current && propUuid === uuid.current) return;
     // ★ A forced restart tears the engine down first: startAudioEngine on a live engine is not a
     //   reconnect, and the socket we are trying to replace is the one that was refused.
-    if (forced && baseUrl) VibePowerModule?.stopAudioEngine();
+    if (forced && baseUrl) { noteAudioEvent('forced restart — stopping engine'); VibePowerModule?.stopAudioEngine(); }
     activeUrl.current = baseUrl;
 
     if (!VibePowerModule) {
@@ -114,15 +141,21 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
       // ★ BEFORE the engine starts, never after: the credential is read when the socket URL is
       //   built, and a busy receiver decides whether to refuse us at that handshake.
       VibePowerModule?.setAdminAuth?.(adminAuth ?? '');
+      noteAudioEvent(`startAudioEngine → ${baseUrl} ${frequency} ${mode}`
+                   + ` session=${uuid.current.slice(0, 8)}${adminAuth ? ' [admin]' : ''}`);
       VibePowerModule?.startAudioEngine(baseUrl, frequency, mode, uuid.current, password ?? '');
       VibePowerModule?.setInstanceName(instanceName ?? '');
       activeFreq.current = frequency;
       activeMode.current = mode;
     } else {
+      // ★ baseUrl null is a GATE, not an absence — a refusal, a tune not yet loaded, or (since
+      //   issue #20) a session the server has not registered yet. Say so: this is the state that
+      //   produces no socket at all, which no server-side log can ever show.
+      noteAudioEvent('no baseUrl — gate closed (refusal, tune, or session not registered)');
       VibePowerModule?.stopAudioEngine();
     }
 
-    return () => { VibePowerModule?.stopAudioEngine(); };
+    return () => { noteAudioEvent('unmount/deps changed — stopping engine'); VibePowerModule?.stopAudioEngine(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseUrl, propUuid, restartKey, adminAuth]);
 

@@ -58,7 +58,14 @@ export function audioPathDump(): string[] {
   out.push(`gates     : ${g.length ? g.map(([k, v]) => `${k}=${String(v)}`).join('  ') : '(none)'}`);
   // ★ The gates are the point. "component=LocalAudioPlayer port=null" says the socket was never
   //   opened and WHY, which no amount of server-side log can tell you.
-  if (!state.events.length) out.push('events    : none — the socket was never opened');
+  // ★★★ SAY "NOTHING WAS RECORDED", NOT "NOTHING HAPPENED". This line used to read "the socket was
+  //     never opened" whenever the ring was empty — and only LocalAudioPlayer ever called
+  //     noteAudioEvent, so a report from the UberSDR path stated, as a finding, something it had no
+  //     instrumentation to know. It sent us to the wrong layer on issue #20 while the real fault
+  //     (a session the server had never registered) was three sockets away.
+  // ★★ An absence of evidence printed as evidence of absence is worse than a blank line: the blank
+  //    line makes you go and look.
+  if (!state.events.length) out.push('events    : NONE RECORDED — no instrumentation reported in');
   else for (const e of state.events) out.push(`  ${e}`);
   return out;
 }

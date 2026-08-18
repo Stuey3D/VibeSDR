@@ -60,6 +60,18 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
             //   worse than useless — it once read 12 KB/s while the link carried 198, and hid the
             //   real problem for months. Now the socket is native, only native can count it.
             "VibeLocalAudioBytes",
+            // ★★★ THE AUDIO PATH'S OWN VOICE. The diagnostics report could describe the LOCAL
+            //     player's socket and had NOTHING to say about this one — so a report from the
+            //     UberSDR path printed "the socket was never opened" as a DEFAULT, with no
+            //     instrumentation behind it, and we read a guess as a finding (issue #20).
+            //     Native is the only layer that knows whether the engine started, whether the
+            //     socket reached .ready, and whether a packet was refused after arriving.
+            "VibeAudioPath",
+            // ★★★ THE WATCHDOG ASKING FOR HELP. Native can reopen a socket; it cannot re-register a
+            //     session, because that is an HTTP POST the JS client owns. Without this event the
+            //     one recovery that works was unreachable from the only layer that knew it was
+            //     needed.
+            "VibeAudioStuck",
             // ★ What the local-audio socket is DOING. It reported bytes once flowing and nothing
             //   at all before that, so a socket that never connected was indistinguishable from
             //   one that was never started — and the server cannot see either. A whole night of
@@ -286,6 +298,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   private func startAudioEngineOnMain(_ baseUrl: String, frequency: Int, mode: String, uuid: String, password: String) {
     NSLog("[VibePowerModule] startAudioEngine %@ %d %@", baseUrl, frequency, mode)
+    notePath("startAudioEngine \(baseUrl) \(frequency) \(mode)")
     stopEngine()
     currentBase  = baseUrl
     currentFreq  = frequency
@@ -321,6 +334,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   private func stopAudioEngineOnMain() {
     NSLog("[VibePowerModule] stopAudioEngine")
+    notePath("stopAudioEngine")
     stopEngine()
   }
 
@@ -378,10 +392,19 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   ///     to us; a boolean nobody prints cannot be read by anyone.
   /// ★ Rate-limited rather than per packet: fifty of these a second would bury the log that is
   ///   meant to explain the fault.
+  /// Report a step of the audio path to JS, where audioPathLog keeps it for the diagnostics
+  /// report. NSLog alone is unreachable: it needs a Mac, a cable and Console.app, and the person
+  /// who can reproduce the fault is holding a phone.
+  private func notePath(_ what: String) {
+    NSLog("[VibePowerModule] path: %@", what)
+    sendEvent(withName: "VibeAudioPath", body: ["what": what])
+  }
+
   private var lastRefusedLogAt = Date.distantPast
   private func noteFeedRefused(_ what: String) {
     guard Date().timeIntervalSince(lastRefusedLogAt) > 2 else { return }
     lastRefusedLogAt = Date()
+    notePath("\(what) DROPPED — externalAudio=\(externalAudio) isMuted=\(isMuted) isRunning=\(isRunning)")
     NSLog("[VibePowerModule] %@ DROPPED — externalAudio=%@ isMuted=%@ isRunning=%@",
           what, externalAudio ? "true" : "false", isMuted ? "true" : "false",
           isRunning ? "true" : "false")
@@ -917,6 +940,17 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     pathMonitor = nil
   }
 
+  /// ★★★ HOW MANY TIMES THE WATCHDOG HAS REOPENED THIS SOCKET WITHOUT A SINGLE PACKET COMING BACK.
+  ///     Reset by the first packet. An UberSDR server drops an audio socket whose session it has
+  ///     never registered (POST /connection) — accepted at the handshake, closed in the same
+  ///     breath — and reopening it can NEVER fix that: only re-registering can, and only JS can do
+  ///     that. So the watchdog used to retry every 4 seconds for ever, silently, while the user sat
+  ///     in front of a perfect waterfall with no sound (issue #20, the UberSDR-over-LAN case).
+  /// ★★ THE RETRY THAT CANNOT WORK MUST ASK FOR HELP. Two dead reopens is the same threshold JS
+  ///    already uses for the spectrum socket (REOPENS_BEFORE_RECHECK) — reached here in ~8s.
+  private var deadRevives = 0
+  private var lastStuckAt = Date.distantPast
+
   private func reviveIfDead(staleAfter: TimeInterval) {
     // externalAudio (OWRX/Kiwi) has NO native WS to revive — the socket + decode
     // live in JS, which drives its own resume. Reviving here would (re)open a
@@ -931,6 +965,15 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     NSLog("[VibePowerModule] watchdog: stale=%.1fs wsDead=%d — reviving audio WS",
           stale, wsDead ? 1 : 0)
     lastPacketAt = Date() // debounce — one revive attempt per window
+    // ★ Counted BEFORE the reopen, so the first attempt is 1 and the ask for help lands on the
+    //   second failure rather than the third.
+    deadRevives += 1
+    if deadRevives >= 2 && Date().timeIntervalSince(lastStuckAt) > 15 {
+      lastStuckAt = Date()
+      notePath("audio STUCK — \(deadRevives) reopens, no packets")
+      NSLog("[VibePowerModule] audio stuck after %d reopens — asking JS to re-register", deadRevives)
+      sendEvent(withName: "VibeAudioStuck", body: ["reopens": deadRevives])
+    }
     closeAudioWs()
     if let engine = audioEngine, !engine.isRunning {
       try? AVAudioSession.sharedInstance().setActive(true)
@@ -1411,6 +1454,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private func onAudioData(_ data: Data) -> Bool {
     packetCount += 1
     lastPacketAt = Date()
+    // ★ A packet is the only proof the session is real. Everything else — a 101, a .ready — is
+    //   equally true of a socket the server is about to drop.
+    deadRevives = 0
     if wsNeedsTuneAssert {
       wsNeedsTuneAssert = false
       sendWsJson(["type": "tune", "frequency": currentFreq, "mode": currentMode])
@@ -1441,6 +1487,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
     if packetCount <= 3 {
       NSLog("[VibePowerModule] ws pkt#%d len=%d", packetCount, data.count)
+      // ★ The FIRST packet is the one that matters: it separates "the socket never delivered" from
+      //   "audio arrived and something downstream ate it", and those have opposite cures.
+      if packetCount == 1 { notePath("first audio packet (\(data.count) B)") }
     }
     // Recording must keep decoding through mutes (file taps the converter feed);
     // playback gating happens after conversion.
@@ -1477,6 +1526,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       case .ready:
         self.wsReady = true
         NSLog("[VibePowerModule] audio WS ready")
+        self.notePath("audio WS ready")
         self.wsReceive(conn, gen: gen)
       case .waiting(let err):
         // Path not satisfiable yet (e.g. just after airplane-mode off). NWConnection
@@ -1486,6 +1536,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       case .failed(let err):
         self.wsReady = false
         NSLog("[VibePowerModule] audio WS failed: %@ — reconnecting in 2s", "\(err)")
+        self.notePath("audio WS FAILED \(err)")
         self.scheduleAudioWsReconnect(gen: gen)
       case .cancelled:
         self.wsReady = false
@@ -2008,8 +2059,10 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       try engine.start()
       player.play()
       NSLog("[VibePowerModule] engine started %.0fHz %dch", ENGINE_RATE, Int(ENGINE_CH))
+      notePath("engine started")
     } catch {
-      NSLog("[VibePowerModule] engine start error: %@", error.localizedDescription); return
+      NSLog("[VibePowerModule] engine start error: %@", error.localizedDescription)
+      notePath("engine START FAILED \(error.localizedDescription)"); return
     }
     audioEngine = engine
     playerNode  = player

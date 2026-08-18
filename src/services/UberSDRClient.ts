@@ -180,6 +180,13 @@ export interface SDRCallbacks {
    *  overlay thrown over a recovery that is working. */
   onReconnecting?: (busy: boolean) => void;
   onDbg?:       (msg: string) => void;
+  /** ★★★ THE SESSION IS NOW REGISTERED WITH THE SERVER (POST /connection returned allowed).
+   *  UberSDR drops an audio WebSocket whose session it has never seen — it completes the
+   *  handshake and closes in the same breath, which the phone reports as an abort and the user
+   *  hears as silence on a perfect waterfall. The native audio engine opens its OWN socket from a
+   *  separate component, so nothing made it wait for this; over a LAN it always lost the race and
+   *  over a slow tunnel it usually won (issue #20). Fire it, and let the audio start here. */
+  onSessionRegistered?: () => void;
   /** VibeServer: the serving device's supported tuner gains (tenths of dB), so a
    *  remote client can populate its gain slider (it can't query the HW natively). */
   /** The broadcast-FM treatments as the RADIO reports them — sticky and shared, so this is the
@@ -1004,6 +1011,14 @@ export class UberSDRClient {
    *  a tune took: our own status is set by tune() itself. */
   private lastServerVfo = 0;
 
+  /** Re-run the preflight for THIS session id. Public because the fault it cures is detected by
+   *  the NATIVE audio watchdog, which can reopen a socket but cannot POST — see onSessionRegistered
+   *  and the VibeAudioStuck event. Proven against a live server: a session that was refused
+   *  recovers on the same id the moment it is registered. */
+  async reregisterSession(): Promise<void> {
+    await this._checkConnection();
+  }
+
   private async _checkConnection() {
     this.dbg('POST /connection uuid=' + this.uuid.slice(0, 8));
     // ★★ THE ID GOES IN THE QUERY STRING TOO, not just the body. VibeServer's
@@ -1075,6 +1090,12 @@ export class UberSDRClient {
            + `dailyLeft=${this.idlePolicy.dailyLeftSecs}s`);
     this.callbacks.onIdlePolicy?.({ ...this.idlePolicy });
     if (!json.allowed) throw new Error(json.reason ?? 'Server rejected connection');
+    // ★★★ ONLY NOW MAY THE AUDIO SOCKET OPEN. Proved against a live UberSDR (2026-08-18): a WS
+    //     carrying a session id this POST has not registered gets a 101 and 213 bytes — the
+    //     handshake and nothing else — while the identical id, POSTed first, streams 28 KB in the
+    //     same five seconds. The server never says why; the phone reports POSIX 53 and the user
+    //     hears silence over a working waterfall.
+    this.callbacks.onSessionRegistered?.();
   }
 
   private _wsUrl(path: string): string {
