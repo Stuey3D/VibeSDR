@@ -1472,6 +1472,10 @@ final class UberClient: ObservableObject {
       }
     case 0x04:                                     // delta uint8
       guard body.count >= 2 else { return }
+      // ★ If a delta somehow arrives before the config that sizes the array (a reconnect where
+      //   the server does not re-send config), fall back to the last declared bin count rather
+      //   than dropping the frame. Silently discarding is what made this invisible.
+      if bins.isEmpty && binCount > 0 { bins = [Float](repeating: -120, count: binCount) }
       let changes: UInt16 = body.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 0, as: UInt16.self) }
       var off = 2
       for _ in 0..<Int(changes) {
@@ -1489,6 +1493,7 @@ final class UberClient: ObservableObject {
       }
     case 0x02:                                     // delta float32
       guard body.count >= 2 else { return }
+      if bins.isEmpty && binCount > 0 { bins = [Float](repeating: -120, count: binCount) }
       let changes: UInt16 = body.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 0, as: UInt16.self) }
       var off = 2
       for _ in 0..<Int(changes) {
@@ -1720,7 +1725,27 @@ final class UberClient: ObservableObject {
       return
     }
     guard type == "config" else { return }
-    if let bc = j["binCount"] as? Int { binCount = bc }
+    if let bc = j["binCount"] as? Int {
+      binCount = bc
+      // ★★★ SIZE THE BIN ARRAY HERE — A DELTA CANNOT CREATE IT.
+      //
+      //     The server sends `flags 0x04` (delta uint8) and, on this version, NOTHING ELSE: a
+      //     capture of a live feed is deltas from the first frame to the last. Our delta path
+      //     writes through `if Int(idx) < bins.count`, and `bins` was only ever sized by a FULL
+      //     frame — so with a delta-only server every change was silently discarded, for ever.
+      //     Frames counted, fps healthy, socket green, waterfall BLACK, audio perfect (Stuart,
+      //     2026-08-18: "spectrum doesn't work until I zoom… soon as I zoom it snaps into
+      //     existence"). Zooming worked because a parameter change makes the server emit one
+      //     full frame, which sized the array the deltas needed all along.
+      // ★★ THE CONFIG IS THE RIGHT PLACE. It is the message that DECLARES the bin count, it
+      //    arrives before the frames, and it is re-sent on every subscription — so the array
+      //    exists before the first delta can need it, and it is re-made whenever the scale
+      //    changes. Waiting for a full frame was an assumption about the server's encoder, not
+      //    a fact about the protocol.
+      // ★ −120 dBFS is the same floor a full frame initialises with, so a partially-filled
+      //   first row reads as noise rather than as signal.
+      if bc > 0 && bins.count != bc { bins = [Float](repeating: -120, count: bc) }
+    }
     if let bb = j["binBandwidth"] as? Double { binBandwidth = bb }
     if let cf = j["centerFreq"] as? Double { centerHz = cf }
     // The server has confirmed the scale for the current subscription — rows may paint now.
