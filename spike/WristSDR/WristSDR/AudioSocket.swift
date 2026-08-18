@@ -105,7 +105,10 @@ final class AudioSocket {
     //    private/link-local address or a .local name. Everything else — public hosts, wss, the
     //    tunnel — keeps Network.framework, which is there for the iOS 27 URLSession regression
     //    and is the better transport where it works.
-    if !secure && Self.isPrivateHost(url) {
+    // ★ Read the scheme from the URL, not from `secure` — that is declared further down, and
+    //   using it here is what failed build 41. `swiftc -parse` does not catch a use-before-
+    //   declaration; only a real type-check does.
+    if url.scheme != "wss" && Self.isPrivateHost(url) {
       onState?("\(name) ws: private address on plain ws — using URLSession directly")
       openURLSession(url: url, headers: headers, g: g)
       return
