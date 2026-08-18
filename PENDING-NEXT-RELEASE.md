@@ -35,6 +35,21 @@ Worker that already serves the website, version-gated and fail-silent, so a know
 fault can be announced to users instead of one GitHub issue being the whole
 channel.
 
-## 4. Jr
+## 4. Jr: "spectrum lost" flashes on a server you have not visited before
+Reported 2026-08-18 after build 42 shipped to TestFlight. On a FRESH server there is
+no saved view, so the server starts at its own default centre and Jr asks once to move
+it to the VFO — one legitimate round trip. The overlay reads the gap as a stopped
+spectrum and flashes "Lost the server" for a second before the first row paints.
+
+★★ The delay is correct behaviour; the WARNING is the bug. ContentView already draws
+   this distinction for reconnects — "a recovery IN PROGRESS is not a failure, and must
+   not be drawn as one" — and simply does not extend it to a first subscribe. Suppress
+   the overlay while a subscription is in flight (a sendView within the last ~3 s with
+   no frame yet).
+
+★ Stuart: "not the end of the world as it seems to connect a few seconds later" — so it
+  waits for 1.3.2 rather than churning a build while 1.3.1 is in review.
+
+## 5. Jr
 1.3.1 carries the `.waiting` connect deadline, the IPv4 escalation and the
 `stop()` serialisation. Awaiting Stuart's test before submission.
