@@ -38,10 +38,21 @@ final class AudioSocket {
   ///     indefinitely with no error anywhere (Stuart, 2026-08-18, UberSDR by LAN address).
   ///     THE SAME SHAPE AS THE PHONE'S: an open socket is not a working socket, and a socket
   ///     that is still opening is not a socket that will open.
-  ///  ★ 8s: long enough for a slow DDNS + TLS handshake over the watch's relay, short enough
-  ///    that a person has not yet decided the app is broken.
+  ///  ★★★ AND IT MUST TELL "STUCK" FROM "SLOW", WHICH THE FIRST CUT DID NOT. A flat 8s deadline
+  ///      cancelled connections that were WORKING: a tunnel with TLS, reached over the watch's
+  ///      Bluetooth relay, legitimately takes longer than that to hand shake. Each cancellation
+  ///      threw away real progress, retried, and fell into the caller's 2s→10s ladder — so a
+  ///      slow-but-fine server took a FULL MINUTE to show a waterfall where before it just worked
+  ///      (Stuart, 2026-08-18, UberSDR over the tunnel).
+  ///  ★★★ THE STATES ALREADY SAY WHICH IS WHICH. `.preparing` is a handshake in progress;
+  ///      `.waiting` is "this path cannot be satisfied", which is the one that never ends. So the
+  ///      deadline only acts on a connection sitting in `.waiting` — a slow handshake is left
+  ///      alone however long it takes, and a stuck one still gets its way out.
+  ///  ★ 12s of continuous `.waiting`. Nothing recovers from that state by itself here; the margin
+  ///    is for a path that flickers on a watch waking its radio.
   private var connectDeadline: DispatchWorkItem?
-  private static let connectTimeout: TimeInterval = 8
+  private var isWaiting = false
+  private static let connectTimeout: TimeInterval = 12
   /// ★★ ONE SILENT ESCALATION BEFORE GIVING UP. The OWRX client reaches a LAN address happily and
   ///    the UberSDR one hangs, and the ONLY difference between the two open() calls is
   ///    `forceIPv4` — OWRX pins v4 because a dynamic-DNS host can hand back an AAAA the watch
@@ -101,6 +112,7 @@ final class AudioSocket {
       switch state {
       case .ready:
         // Tag the interface actually in use so the UI can show wifi vs the phone relay (.other).
+        self.isWaiting = false
         self.connectDeadline?.cancel(); self.connectDeadline = nil
         self.onState?("\(name) ws ready [\(Self.pathName(c.currentPath))]")
         self.receive(c, g)
@@ -111,37 +123,46 @@ final class AudioSocket {
         //   it turns out to be permanent. Naming the error matters — POSIX 53 (aborted), 61
         //   (refused) and 65 (no route) send you to three different places.
         self.onState?("\(name) ws waiting: \(e)")
+        // ★ The deadline is ARMED HERE, by the state that means stuck — not by open(), which
+        //   cannot know yet. Re-entering `.waiting` restarts it; leaving it disarms it.
+        self.isWaiting = true
+        self.armConnectDeadline(c, g, url)
       case .failed(let e):
+        self.isWaiting = false
         self.connectDeadline?.cancel(); self.connectDeadline = nil
         self.onState?("\(name) ws failed: \(e)")
       case .cancelled:
+        self.isWaiting = false
+        self.connectDeadline?.cancel(); self.connectDeadline = nil
         self.onState?("\(name) ws cancelled")
       default:
         break
       }
     }
-    // ★★★ THE DEADLINE. Fires only if the socket has not reached `.ready`, and reports itself as
-    //     a FAILURE — which is the word every caller's retry already looks for. A hang becomes a
-    //     retry, and an invisible fault becomes a line on the screen naming the address.
+    c.start(queue: queue)
+  }
+
+  /// ★★ Armed by `.waiting`, cleared by anything else. A connection that is preparing, ready or
+  ///    finished has no deadline at all — only one that says it cannot get a path.
+  private func armConnectDeadline(_ c: NWConnection, _ g: Int, _ url: URL) {
+    connectDeadline?.cancel()
     let dl = DispatchWorkItem { [weak self] in
-      guard let self, self.gen == g, self.conn === c else { return }
+      guard let self, self.gen == g, self.conn === c, self.isWaiting else { return }
       self.connectDeadline = nil
       c.cancel()
       if !self.retriedV4, let again = self.lastOpen {
         self.retriedV4 = true
-        self.onState?("\(self.name) ws waiting: no connection after \(Int(Self.connectTimeout))s — retrying pinned to IPv4")
+        self.onState?("\(self.name) ws waiting: \(Int(Self.connectTimeout))s with no path — retrying pinned to IPv4")
         self.open(url: again.url, headers: again.headers, forceIPv4: true,
                   autoReplyPing: again.autoReplyPing, avoidRelay: again.avoidRelay)
         return
       }
       // ★ "failed" is the word every caller's retry looks for — and the address is named, so the
       //   person reading it knows WHICH server and port never answered.
-      self.onState?("\(self.name) ws failed: no connection after \(Int(Self.connectTimeout))s — \(url.host ?? "?"):\(url.port.map(String.init) ?? "default")")
+      self.onState?("\(self.name) ws failed: no path after \(Int(Self.connectTimeout))s — \(url.host ?? "?"):\(url.port.map(String.init) ?? "default")")
     }
-    connectDeadline?.cancel()
     connectDeadline = dl
     queue.asyncAfter(deadline: .now() + Self.connectTimeout, execute: dl)
-    c.start(queue: queue)
   }
 
   private func receive(_ c: NWConnection, _ g: Int) {
