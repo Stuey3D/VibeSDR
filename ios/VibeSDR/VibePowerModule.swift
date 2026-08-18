@@ -264,7 +264,27 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     adminSuffix = q.hasPrefix("&") || q.isEmpty ? q : "&" + q
   }
 
+  /// ★★★ A BRIDGE METHOD DOES NOT RUN ON MAIN — and the engine lifecycle only runs there.
+  ///     `requiresMainQueueSetup` is false, so React Native gives this module its own serial
+  ///     background queue and every @objc method below arrives on it. When stopEngine() and
+  ///     startEngine() learned to hop to main by themselves (build 135, the AVFAudio abort), the
+  ///     three START methods stopped being sequences: `stopEngine()` was DEFERRED while the lines
+  ///     after it ran immediately, so the deferred stop landed last and undid them —
+  ///     `externalAudio = false`, `isRunning = false`, `closeAudioWs()` over a socket that had
+  ///     just been opened. The engine ran and played silence, because every feed path checks the
+  ///     flags the stop had just cleared. NO SOUND AT ALL, on every server (issue #20).
+  /// ★★ So hop ONCE, for the WHOLE sequence, rather than per call. The per-call guards in
+  ///    stop/startEngine stay as the net; this is the rule. Inline when already on main, so the
+  ///    local audio pump (which hops first) keeps its ordering too.
+  private func onMain(_ work: @escaping () -> Void) {
+    if Thread.isMainThread { work() } else { DispatchQueue.main.async(execute: work) }
+  }
+
   @objc func startAudioEngine(_ baseUrl: String, frequency: Int, mode: String, uuid: String, password: String) {
+    onMain { self.startAudioEngineOnMain(baseUrl, frequency: frequency, mode: mode, uuid: uuid, password: password) }
+  }
+
+  private func startAudioEngineOnMain(_ baseUrl: String, frequency: Int, mode: String, uuid: String, password: String) {
     NSLog("[VibePowerModule] startAudioEngine %@ %d %@", baseUrl, frequency, mode)
     stopEngine()
     currentBase  = baseUrl
@@ -296,6 +316,10 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   }
 
   @objc func stopAudioEngine() {
+    onMain { self.stopAudioEngineOnMain() }
+  }
+
+  private func stopAudioEngineOnMain() {
     NSLog("[VibePowerModule] stopAudioEngine")
     stopEngine()
   }
@@ -311,6 +335,10 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private var externalRate: Double = 12000
 
   @objc func startExternalAudio(_ sampleRate: NSNumber, pauseMode: String) {
+    onMain { self.startExternalAudioOnMain(sampleRate, pauseMode: pauseMode) }
+  }
+
+  private func startExternalAudioOnMain(_ sampleRate: NSNumber, pauseMode: String) {
     NSLog("[VibePowerModule] startExternalAudio %@ pauseMode=%@", sampleRate, pauseMode)
     stopEngine()
     externalAudio = true
@@ -484,6 +512,10 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   }
 
   @objc func stopExternalAudio() {
+    onMain { self.stopExternalAudioOnMain() }
+  }
+
+  private func stopExternalAudioOnMain() {
     NSLog("[VibePowerModule] stopExternalAudio")
     externalAudio = false
     stopEngine()
@@ -499,6 +531,10 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   /// baseUrl = the FM-DX server root (http(s)://host[:port]); we open `<host>/audio`.
   @objc func startFmdxAudio(_ baseUrl: String) {
+    onMain { self.startFmdxAudioOnMain(baseUrl) }
+  }
+
+  private func startFmdxAudioOnMain(_ baseUrl: String) {
     NSLog("[VibePowerModule] startFmdxAudio %@", baseUrl)
     stopEngine()
     fmdxBase   = baseUrl
@@ -530,6 +566,10 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   }
 
   @objc func stopFmdxAudio() {
+    onMain { self.stopFmdxAudioOnMain() }
+  }
+
+  private func stopFmdxAudioOnMain() {
     NSLog("[VibePowerModule] stopFmdxAudio")
     stopEngine()                     // closeFmdxWs() runs inside stopEngine
   }
