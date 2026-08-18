@@ -97,6 +97,19 @@ final class AudioSocket {
     cancel()
     if !forceIPv4 { retriedV4 = false }          // a fresh caller-driven open starts the ladder again
     lastOpen = (url, headers, autoReplyPing, avoidRelay)
+    // ★★★ A PLAIN ws:// ON A PRIVATE ADDRESS: DO NOT EVEN TRY NWConnection. We know how that
+    //     ends — POSIX 53 at connect, on this watch and on the phone — so attempting it costs a
+    //     12-second deadline and buys nothing. Stuart, on build 40: "local connection still takes
+    //     an eternity to connect." An eternity is exactly what a deadline for a KNOWN failure is.
+    // ★★ Scoped as narrowly as the evidence: only when the scheme is plain `ws` AND the host is a
+    //    private/link-local address or a .local name. Everything else — public hosts, wss, the
+    //    tunnel — keeps Network.framework, which is there for the iOS 27 URLSession regression
+    //    and is the better transport where it works.
+    if !secure && Self.isPrivateHost(url) {
+      onState?("\(name) ws: private address on plain ws — using URLSession directly")
+      openURLSession(url: url, headers: headers, g: g)
+      return
+    }
     // ★ Already learned this address needs the other transport — go straight there rather than
     //   spending another 12s deadline discovering it again.
     if Self.forceURLSession.contains(Self.hostKey(url)) {
@@ -168,6 +181,21 @@ final class AudioSocket {
 
   /// ★★ Armed by `.waiting`, cleared by anything else. A connection that is preparing, ready or
   ///    finished has no deadline at all — only one that says it cannot get a path.
+  /// RFC1918 / link-local / loopback / .local — the addresses Network.framework will not reach
+  /// over a plain ws:// on iOS 27 and watchOS 27.
+  private static func isPrivateHost(_ u: URL) -> Bool {
+    guard let h = u.host?.lowercased() else { return false }
+    if h == "localhost" || h.hasSuffix(".local") { return true }
+    let p = h.split(separator: ".").compactMap { Int($0) }
+    guard p.count == 4 else { return false }          // not a v4 literal — treat as public
+    switch (p[0], p[1]) {
+    case (10, _), (127, _), (192, 168): return true
+    case (172, 16...31):                return true
+    case (169, 254):                    return true   // link-local
+    default:                            return false
+    }
+  }
+
   private static func hostKey(_ u: URL) -> String {
     "\(u.host ?? "?"):\(u.port.map(String.init) ?? "-")"
   }

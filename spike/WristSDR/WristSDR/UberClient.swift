@@ -1918,7 +1918,26 @@ final class UberClient: ObservableObject {
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
   }
 
-  private func sendView(_ freq: Double, _ binBw: Double) {
+  private func sendView(_ freq: Double, _ binBwRequested: Double) {
+    // ★★★ CLAMP HERE — THE ONE PLACE EVERY VIEW GOES THROUGH. The first cut bounded the span
+    //     inside zoom(), which is only ONE of the paths that sends a view: a restored view, a
+    //     re-assert after a reconnect and the initial subscribe all arrive here without passing
+    //     through it. And it did its arithmetic with `max(binCount, 256)` while the SERVER
+    //     multiplies by its real binCount — 1024 — so whenever binCount was not yet known the
+    //     span came out FOUR TIMES wider than intended and the clamp achieved nothing. Stuart
+    //     tested build 40 and got the identical picture: fully zoomed out, every signal below
+    //     0 kHz.
+    // ★★ A LIMIT APPLIED ON ONE PATH IS NOT A LIMIT. Put it where the request leaves the client,
+    //    use the server's OWN bin count, and no caller can route around it.
+    let bins = Double(binCount > 0 ? binCount : 1024)     // the server's count, not a guess
+    let widestUsefulSpan = 2_000_000.0                    // ~11 kHz/px on this screen — see zoom()
+    let lowestHz = 10_000.0
+    let centrable = max(2 * (freq - lowestHz), 100_000)   // a VFO-centred view cannot cross 0 Hz
+    let maxBinBw = min(widestUsefulSpan, centrable) / bins
+    let binBw = min(binBwRequested, maxBinBw)
+    if binBw < binBwRequested {
+      Vitals.crumb("UBER span clamped: asked \(Int(binBwRequested * bins)) Hz, sending \(Int(binBw * bins)) Hz (VFO \(Int(freq)))")
+    }
     viewCenterHz = freq
     viewBinBw = binBw
     lastViewSentAt = ProcessInfo.processInfo.systemUptime
@@ -2444,11 +2463,9 @@ final class UberClient: ObservableObject {
     //    screen that is worth drawing.
     // ★ One constant, deliberately: if a wider view ever earns its place, this is the only line
     //   to change.
-    let widestUsefulSpan = 2_000_000.0
-    let lowestHz = 10_000.0
-    let centrableSpan = max(2 * (frequency - lowestHz), 100_000)   // never below a usable 100 kHz
-    let maxSpan = min(widestUsefulSpan, centrableSpan)
-    let bb = max(6_000 / n, min(viewBinBw * factor, maxSpan / n))
+    // ★ No ceiling here any more: sendView() clamps every request with the SERVER'S bin count,
+    //   which is the only arithmetic that matches what the server will actually do.
+    let bb = max(6_000 / n, viewBinBw * factor)
     // Anchor the zoom on the TUNED frequency, not viewCenterHz. viewCenterHz gets
     // overwritten by the server's reported frame centre (see line ~578), which can
     // drift a touch from where we're actually tuned — so zooming off viewCenterHz
