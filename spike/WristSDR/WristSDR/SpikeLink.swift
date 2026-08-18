@@ -212,6 +212,7 @@ final class SpikeLink: ObservableObject {
   func leaveServer() {
     client?.goIdle()
     client = nil
+    lastRowAt = nil          // ★ leaving takes the row clock with it — see the note in the setter above
     serverName = ""
     sessionEnded = false
     evicted = false
@@ -535,6 +536,18 @@ final class SpikeLink: ObservableObject {
       c = u
     }
     client = c
+    // ★★★ AND THE ROW CLOCK, WHICH IS THE ONE THAT LIES LOUDEST. `lastRowAt` is written when a
+    //     spectrum row arrives and was NEVER cleared — so every connection after the first in an
+    //     app session inherited a timestamp minutes old. The overlay's test is "rows have been
+    //     seen and have now stopped for 10s", which that satisfies INSTANTLY, so a perfectly
+    //     healthy new session was met with "Lost the server — Spectrum stopped" until its first
+    //     row landed (Stuart, 2026-08-18: "it happens on all servers as its just happened on mine
+    //     too"). Nil is the honest value: this session has seen nothing yet, which is what the
+    //     cold-start message is FOR.
+    // ★★ Stale state surviving a session change, presented as a measurement of the new session.
+    //    The same shape as the audio-path gates chased earlier today — the clock was right, it
+    //    was just timing the wrong thing.
+    lastRowAt = nil
     // Clear cross-backend state so nothing from the previous server lingers (e.g. OWRX's profiles menu
     // showing over an FM-DX session). driverTick re-mirrors from the new client on the next tick anyway.
     profiles = []; clients = 0; chatLog = []; chatActivity = 0
