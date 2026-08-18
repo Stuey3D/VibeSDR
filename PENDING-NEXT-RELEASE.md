@@ -65,6 +65,28 @@ answer, the WS close reason, and what the picker/landing page does while waiting
   borrowed time, evicted-for-a-waiter). A refusal nobody sees quickly is the fault
   that made tonight feel like an outage.
 
-## 6. Jr
+## 6. The front door serves the WRONG PAGE first, then swaps
+Stuart, 2026-08-19: *"on slower connections it looks like it is the old single user
+single radio (the simple mode) splash screen which then gives way to the main landing
+page."*
+
+So the front door (port 48000, multi-radio) serves the single-radio receiver page, and
+the client only switches to the radio picker once JavaScript has fetched the radio list.
+Fast connection: a flash. Slow connection: several seconds of the WRONG PRODUCT, and
+slow connections are exactly who arrives from a blog post on a phone.
+
+★★ THE SERVER ALREADY KNOWS. `/vibeserver.json` answers `"frontDoor": true` at request
+   time — so the handler can serve the picker page directly instead of shipping the
+   receiver page and letting the browser discover it was wrong. First paint should be
+   the truth, not a guess corrected later.
+
+★ Probably also the CLS blemish in Cloudflare's Web Vitals — the only "needs
+  improvement" in an otherwise green report (LCP 96% good, 675 ms page load). One swap
+  of the whole page is exactly what Cumulative Layout Shift measures.
+
+★★★ Worth doing BEFORE the RTL-SDR Blog post lands: it is the first thing every new
+    visitor sees, and the last post reset the site's baseline permanently.
+
+## 7. Jr
 1.3.1 carries the `.waiting` connect deadline, the IPv4 escalation and the
 `stop()` serialisation. Awaiting Stuart's test before submission.
