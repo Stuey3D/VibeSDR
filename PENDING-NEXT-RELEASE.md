@@ -50,6 +50,21 @@ spectrum and flashes "Lost the server" for a second before the first row paints.
 ★ Stuart: "not the end of the world as it seems to connect a few seconds later" — so it
   waits for 1.3.2 rather than churning a build while 1.3.1 is in review.
 
-## 5. Jr
+## 5. The "already on another radio" refusal takes too long to appear
+Stuart, 2026-08-18: connected on the Mac, then tried the RSP1B from the web client —
+correctly refused by the one-radio-per-IP rule (`occHeldElsewhere`), "but the warning
+took ages to come up".
+
+The server decides this INSTANTLY, at the handshake, and names the radio you are
+already on. Whatever the client does with that answer, it is not showing it promptly —
+so a refusal that should read as "you are already listening on the Mac" reads as a
+broken radio for several seconds. Check the refusal path end to end: the preflight
+answer, the WS close reason, and what the picker/landing page does while waiting.
+
+★ Worth doing BEFORE the soft-limit work, which adds more refusal states (waiting,
+  borrowed time, evicted-for-a-waiter). A refusal nobody sees quickly is the fault
+  that made tonight feel like an outage.
+
+## 6. Jr
 1.3.1 carries the `.waiting` connect deadline, the IPv4 escalation and the
 `stop()` serialisation. Awaiting Stuart's test before submission.
