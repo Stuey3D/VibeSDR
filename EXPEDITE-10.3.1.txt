@@ -1,0 +1,76 @@
+EXPEDITED APP REVIEW REQUEST — VibeSDR 10.3.1
+=============================================
+Form: https://developer.apple.com/contact/app-store/?topic=expedite
+
+WHERE IT IS — it is NOT in App Store Connect. There is no button beside the
+version and nothing in the submission flow; the form lives on the DEVELOPER
+site. Open the link above and sign in when prompted (it redirects to Apple's
+sign-in and comes back to the form).
+
+If you land on the generic contact page instead:
+   Contact Us -> App Store & Distribution -> App Review
+              -> Request an expedited review
+
+You must be signed in as Account Holder or Admin on the team, or the option is
+not shown at all.
+
+WHAT THE FORM ACTUALLY ASKS (checked 18 Aug 2026)
+-------------------------------------------------
+Select app, select OS, submit. THAT IS ALL — there is no box for a reason, no
+version picker and no free text. So nothing below is needed to FILE the request;
+it is for the reply.
+
+★ App Review normally follows up BY EMAIL asking why the request is urgent, and
+  the answer below is what to send back. Keep it until that email arrives — the
+  case has to be made once, and this is the moment it counts.
+
+Details you may be asked for
+---------------------------
+App name        : VibeSDR
+Apple ID        : 6786344049
+Bundle ID       : com.vibesdr.app
+Version         : 10.3.1 (build 140)
+Platform        : iOS
+Submitted       : 18 August 2026
+
+
+THE REASON — send this if App Review asks why it is urgent
+----------------------------------------------------------
+VibeSDR 10.3 has been live since 16 August and contains a defect that leaves
+users with no audio at all.
+
+Audio playback startup races with itself: on many connections the app sets up
+the audio path and immediately tears it down again, so the signal, the waterfall
+and the data meter all look perfect and there is simply no sound. It is
+intermittent, there is no reliable workaround, and it affects the app's core
+function, which is listening to a radio.
+
+It was reported by a user on both iPad and iPhone (GitHub issue #20) and
+reproduced on our own devices.
+
+10.3.1 (build 140) fixes that fault and two related audio failures. There are no
+new features and no other changes.
+
+We are requesting an expedited review because every user who updates to 10.3 is
+currently left with a silent app, and we have no way to reach them or to roll
+the release back.
+
+
+IF THEY ASK WHAT CHANGED (short version)
+----------------------------------------
+1. Audio engine start/stop was split across two threads, so a teardown could
+   land after the setup it was meant to precede and silence the session.
+2. The audio connection could open before the server had registered the session,
+   which some servers refuse silently; it now waits, and re-registers if audio
+   stalls instead of retrying indefinitely.
+3. On a local network address the audio connection could not be established at
+   all by one transport; it now falls back to the other automatically.
+
+Nothing outside the audio path was touched.
+
+
+NOTES
+-----
+- Review notes on the version already contain the test server address; the
+  reviewer does not need any additional set-up.
+- 10.3.1 is set to release automatically on approval, as 10.3 was.
