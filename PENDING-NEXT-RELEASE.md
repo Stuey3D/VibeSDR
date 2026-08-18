@@ -19,12 +19,22 @@ app keeps explaining its own most visible fault with the wrong reason.
   you came to fix. The first note was written before the cause was known and read
   as settled fact.
 
-## 2. The in-app notice endpoint
+## 2. A guard in the phone's delta decoder (already in the tree, NOT urgent)
+`src/services/UberSDRClient.ts` — the phone sizes `bins` from the config's `binCount`,
+which is exactly why UberSDR's delta-only encoder never broke it. Jr's port of the
+same decoder omitted that line and went black (2026-08-18). The added guard also
+sizes the array if a delta arrives BEFORE a config — the one ordering the phone
+does not currently defend against.
+
+★ Deliberately NOT shipped as its own release: nothing is broken. Stuart,
+  2026-08-18: "if the phone doesnt need the fix then keep it as it is."
+
+## 3. The in-app notice endpoint
 See the `app_notice_endpoint` memory. Agreed 2026-08-18: `/api/notice` on the
 Worker that already serves the website, version-gated and fail-silent, so a known
 fault can be announced to users instead of one GitHub issue being the whole
 channel.
 
-## 3. Jr
+## 4. Jr
 1.3.1 carries the `.waiting` connect deadline, the IPv4 escalation and the
 `stop()` serialisation. Awaiting Stuart's test before submission.

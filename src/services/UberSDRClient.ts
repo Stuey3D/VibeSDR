@@ -1283,6 +1283,10 @@ export class UberSDRClient {
   private _applyDeltaF32(body: ArrayBuffer, frequency: number) {
     const view = new DataView(body);
     if (body.byteLength < 2) return;
+    // ★ Same guard as _applyDeltaU8 — see the note there.
+    if (this.bins.length === 0 && this.status.binCount > 0) {
+      this.bins = new Float32Array(this.status.binCount);
+    }
     const changeCount = view.getUint16(0, true);
     let offset = 2;
     for (let i = 0; i < changeCount; i++) {
@@ -1309,6 +1313,17 @@ export class UberSDRClient {
   private _applyDeltaU8(body: ArrayBuffer, frequency: number) {
     const view  = new DataView(body);
     if (body.byteLength < 2) return;
+    // ★★★ A DELTA CANNOT CREATE THE ARRAY IT WRITES INTO, and this server sends NOTHING ELSE.
+    //     UberSDR's current encoder emits only `flags 0x04` — a capture of a live feed is deltas
+    //     from first frame to last. The write below is bounds-checked against `this.bins`, so an
+    //     unsized array discards every sample in silence: frames counted, fps healthy, socket
+    //     green, waterfall BLACK. That is exactly what it did to Jr, whose port of this decoder
+    //     omitted the config sizing below (2026-08-18) — the phone was saved by having it.
+    // ★★ So do not rely on the config having arrived FIRST either. It normally does, and on a
+    //    reconnect where the server does not re-send it, "normally" is the whole bug.
+    if (this.bins.length === 0 && this.status.binCount > 0) {
+      this.bins = new Float32Array(this.status.binCount);
+    }
     const changeCount = view.getUint16(0, true);
     let offset = 2;
     for (let i = 0; i < changeCount; i++) {
