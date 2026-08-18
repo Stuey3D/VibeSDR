@@ -867,6 +867,7 @@ final class UberClient: ObservableObject {
   private var gatedFrames = 0
   private var viewBinBw: Double = 0
 
+  private var everPainted = false
   private var frameCount = 0
   private var audioCount = 0
   private var specBytes  = 0        // DEBUG byte tallies for kbps
@@ -1110,8 +1111,18 @@ final class UberClient: ObservableObject {
     audioSock.onReady = { [weak self] in
       Task { @MainActor in
         guard let self, !self.specOpened else { return }
-        self.specOpened = true
+        // ★★★ CLAIM THE SLOT WHERE THE OPEN HAPPENS, NOT A SECOND EARLIER. This set the flag,
+        //     then SLEPT — and the 8s fallback below reads the same flag. Both paths ran on
+        //     build 36 and opened the spectrum socket TWICE, a second apart:
+        //         20:50:51 UBER spec open wss://…   20:50:52 spec ws ready
+        //         20:50:52 UBER spec open wss://…   20:50:53 spec ws ready
+        //     The second open cancels the first, and the server had already answered the first
+        //     subscribe with the config — so the config for the LIVE socket never arrived, the
+        //     bin array was never sized, and the waterfall stayed black. A guard that is read
+        //     across a suspension point is not a guard.
         try? await Task.sleep(nanoseconds: 1_000_000_000)   // the server's 2/sec limit
+        guard !self.specOpened else { return }              // re-check AFTER the wait
+        self.specOpened = true
         self.openSpectrum()
       }
     }
@@ -1519,10 +1530,15 @@ final class UberClient: ObservableObject {
     // Fail open after ~2s so a server that never re-sends config can't blank us forever.
     if specConfigSeq != specSubscribeSeq {
       gatedFrames += 1
+      if gatedFrames == 1 { Vitals.crumb("UBER paint GATED — waiting for config (sub=\(specSubscribeSeq) cfg=\(specConfigSeq))") }
       if gatedFrames < 20 { return }
+      Vitals.crumb("UBER paint gate FAILED OPEN after 20 frames — drawing anyway")
       specConfigSeq = specSubscribeSeq          // give up waiting; draw with what we have
     }
     gatedFrames = 0
+    // ★ The one line that says the picture is real. Everything else in this file can be healthy
+    //   while this never happens — which is precisely what the black waterfall was.
+    if !everPainted { everPainted = true; Vitals.crumb("UBER FIRST ROW PAINTED (bins=\(bins.count))") }
 
     // ── THE COST JR PAYS. Unwrap, then the full DSP, then the paint. Every frame.
     let n = bins.count
@@ -1724,6 +1740,7 @@ final class UberClient: ObservableObject {
       if let left = (j["secsLeft"] as? NSNumber)?.intValue { sessionSecsLeft = left }
       return
     }
+    Vitals.crumb("UBER json: type=\(type)")
     guard type == "config" else { return }
     if let bc = j["binCount"] as? Int {
       binCount = bc
@@ -1744,7 +1761,10 @@ final class UberClient: ObservableObject {
       //    a fact about the protocol.
       // ★ −120 dBFS is the same floor a full frame initialises with, so a partially-filled
       //   first row reads as noise rather than as signal.
-      if bc > 0 && bins.count != bc { bins = [Float](repeating: -120, count: bc) }
+      if bc > 0 && bins.count != bc {
+        bins = [Float](repeating: -120, count: bc)
+        Vitals.crumb("UBER config: binCount=\(bc) → sized the bin array")
+      }
     }
     if let bb = j["binBandwidth"] as? Double { binBandwidth = bb }
     if let cf = j["centerFreq"] as? Double { centerHz = cf }

@@ -60,6 +60,24 @@ final class AudioSocket {
   ///    one timeout, and it is the difference that is already known to work on this device.
   /// ★ Remembered so the retry does not loop: v4-forced is the LAST attempt, never the first.
   private var retriedV4 = false
+  /// ★★★ NWConnection CANNOT REACH A PLAIN ws:// ON A PRIVATE ADDRESS — proved on the watch, and
+  ///     on the phone before it. The crumb log from build 36:
+  ///        UBER preflight POST http://192.168.86.11:8080/connection → HTTP 200 allowed=true
+  ///        audio ws waiting: POSIXErrorCode(53): Software caused connection abort
+  ///        spec  ws waiting: POSIXErrorCode(53): Software caused connection abort
+  ///     An HTTP request to that exact host and port SUCCEEDS in the same second, so it is the
+  ///     transport, not the network. URLSession reaches it; Network.framework does not.
+  /// ★★ SO FALL BACK, PER HOST, AND REMEMBER. Keyed by host:port because it is a property of the
+  ///    address, not of this socket — and shared statically so the spectrum socket does not have
+  ///    to rediscover what the audio socket just learned, 12 seconds at a time.
+  /// ★ THE KNOWN RISK, WRITTEN DOWN: this file exists because two concurrent
+  ///   URLSessionWebSocketTasks did not work on watchOS — the second never connected. If that is
+  ///   still true, a LAN server will get one working socket and one dead one. The transport is
+  ///   crumbed on every open precisely so that shows up as a FACT instead of a theory.
+  private static var forceURLSession = Set<String>()
+  private var task: URLSessionWebSocketTask?
+  private var urlSession: URLSession?
+  private var usingURLSession = false
   private var lastOpen: (url: URL, headers: [(name: String, value: String)], autoReplyPing: Bool, avoidRelay: Bool)?
 
   /// Raw WebSocket binary frames — one Opus packet each, with UberSDR's 21-byte header.
@@ -79,6 +97,12 @@ final class AudioSocket {
     cancel()
     if !forceIPv4 { retriedV4 = false }          // a fresh caller-driven open starts the ladder again
     lastOpen = (url, headers, autoReplyPing, avoidRelay)
+    // ★ Already learned this address needs the other transport — go straight there rather than
+    //   spending another 12s deadline discovering it again.
+    if Self.forceURLSession.contains(Self.hostKey(url)) {
+      openURLSession(url: url, headers: headers, g: g)
+      return
+    }
 
     let secure = (url.scheme == "wss")
     let params: NWParameters = secure ? .tls : .tcp
@@ -144,6 +168,10 @@ final class AudioSocket {
 
   /// ★★ Armed by `.waiting`, cleared by anything else. A connection that is preparing, ready or
   ///    finished has no deadline at all — only one that says it cannot get a path.
+  private static func hostKey(_ u: URL) -> String {
+    "\(u.host ?? "?"):\(u.port.map(String.init) ?? "-")"
+  }
+
   private func armConnectDeadline(_ c: NWConnection, _ g: Int, _ url: URL) {
     connectDeadline?.cancel()
     let dl = DispatchWorkItem { [weak self] in
@@ -157,12 +185,68 @@ final class AudioSocket {
                   autoReplyPing: again.autoReplyPing, avoidRelay: again.avoidRelay)
         return
       }
+      // ★★★ NW COULD NOT GET A PATH. Before declaring failure, try the transport that reaches
+      //     these addresses — see forceURLSession. Only then is it a failure worth reporting.
+      let key = Self.hostKey(url)
+      if !Self.forceURLSession.contains(key), let again = self.lastOpen {
+        Self.forceURLSession.insert(key)
+        self.onState?("\(self.name) ws: no path via NWConnection — switching to URLSession for \(key)")
+        self.openURLSession(url: again.url, headers: again.headers, g: g)
+        return
+      }
       // ★ "failed" is the word every caller's retry looks for — and the address is named, so the
       //   person reading it knows WHICH server and port never answered.
       self.onState?("\(self.name) ws failed: no path after \(Int(Self.connectTimeout))s — \(url.host ?? "?"):\(url.port.map(String.init) ?? "default")")
     }
     connectDeadline = dl
     queue.asyncAfter(deadline: .now() + Self.connectTimeout, execute: dl)
+  }
+
+
+  // ── Transport B: URLSession, for addresses Network.framework cannot reach ────────────────
+  //
+  /// Same callbacks, same semantics, different plumbing. Kept deliberately small: this exists for
+  /// LAN servers on plain ws://, not as a second full implementation to maintain.
+  /// ★ `maximumMessageSize` matches the NW path — an OWRX ADS-B table blows past the default and
+  ///   the framework silently drops the oversized message.
+  private func openURLSession(url: URL, headers: [(name: String, value: String)], g: Int) {
+    connectDeadline?.cancel(); connectDeadline = nil
+    usingURLSession = true
+    var req = URLRequest(url: url)
+    for h in headers { req.setValue(h.value, forHTTPHeaderField: h.name) }
+    let cfg = URLSessionConfiguration.default
+    cfg.waitsForConnectivity = true
+    let sess = URLSession(configuration: cfg)
+    let t = sess.webSocketTask(with: req)
+    t.maximumMessageSize = 16 * 1024 * 1024
+    urlSession = sess
+    task = t
+    onState?("\(name) ws opening [URLSession]")
+    t.resume()
+    // URLSessionWebSocketTask has no "ready" callback — the first successful receive IS the
+    // handshake having completed, so report ready there rather than guessing from resume().
+    receiveURLSession(t, g, first: true)
+  }
+
+  private func receiveURLSession(_ t: URLSessionWebSocketTask, _ g: Int, first: Bool = false) {
+    t.receive { [weak self] result in
+      guard let self, self.gen == g, self.task === t else { return }
+      switch result {
+      case .failure(let e):
+        self.onState?("\(self.name) ws failed: \(e.localizedDescription)")
+      case .success(let msg):
+        if first {
+          self.onState?("\(self.name) ws ready [URLSession]")
+          self.onReady?()
+        }
+        switch msg {
+        case .data(let d):   if !d.isEmpty { self.onData?(d) }
+        case .string(let str): self.onText?(str)
+        @unknown default: break
+        }
+        self.receiveURLSession(t, g)
+      }
+    }
   }
 
   private func receive(_ c: NWConnection, _ g: Int) {
@@ -196,6 +280,7 @@ final class AudioSocket {
   /// NWConnection does not, so an OWRX stream with no outbound traffic gets reaped by NAT/idle timeout
   /// after a few minutes. A periodic client ping keeps the mapping (and the server session) alive.
   func sendPing() {
+    if usingURLSession { task?.sendPing { _ in }; return }
     guard let c = conn else { return }
     let meta = NWProtocolWebSocket.Metadata(opcode: .ping)
     let ctx = NWConnection.ContentContext(identifier: "ping", metadata: [meta])
@@ -204,6 +289,10 @@ final class AudioSocket {
 
   /// Text control frame — KiwiSDR's `SET …` command plane (UberSDR uses JSON below).
   func send(text: String) {
+    // ★ Whichever transport is LIVE. On the phone, three places asked a compile-time flag instead
+    //   and a fallen-back socket would have sent no tune at all — "audio works, tuning does
+    //   nothing". The same trap is one line away here.
+    if usingURLSession { task?.send(.string(text)) { _ in }; return }
     guard let c = conn, let d = text.data(using: .utf8) else { return }
     let meta = NWProtocolWebSocket.Metadata(opcode: .text)
     let ctx = NWConnection.ContentContext(identifier: "text", metadata: [meta])
@@ -212,6 +301,11 @@ final class AudioSocket {
 
   /// JSON control (the tune). Text frame, same as the phone.
   func send(json: [String: Any]) {
+    if usingURLSession {
+      if let d = try? JSONSerialization.data(withJSONObject: json),
+         let str = String(data: d, encoding: .utf8) { task?.send(.string(str)) { _ in } }
+      return
+    }
     guard let c = conn,
           let d = try? JSONSerialization.data(withJSONObject: json) else { return }
     let meta = NWProtocolWebSocket.Metadata(opcode: .text)
@@ -233,7 +327,12 @@ final class AudioSocket {
 
   func cancel() {
     connectDeadline?.cancel(); connectDeadline = nil
+    isWaiting = false
     conn?.cancel()
     conn = nil
+    task?.cancel(with: .goingAway, reason: nil)
+    task = nil
+    urlSession = nil
+    usingURLSession = false
   }
 }
