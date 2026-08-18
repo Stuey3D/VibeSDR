@@ -371,8 +371,24 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     feedExternalPcm(data, sampleRate: sampleRate.doubleValue, stereo: channels.intValue == 2)
   }
 
+  /// ★★★ AUDIO ARRIVING AT A PATH THAT REFUSES IT IS THE SILENT FAILURE. Both feed guards drop
+  ///     the packet and return, so a cleared `externalAudio` produces a perfect stream, a running
+  ///     engine, a moving byte meter — and no sound, with nothing anywhere saying why (issue #20).
+  ///     Say it, once every two seconds, naming the flag that refused. A user can read this back
+  ///     to us; a boolean nobody prints cannot be read by anyone.
+  /// ★ Rate-limited rather than per packet: fifty of these a second would bury the log that is
+  ///   meant to explain the fault.
+  private var lastRefusedLogAt = Date.distantPast
+  private func noteFeedRefused(_ what: String) {
+    guard Date().timeIntervalSince(lastRefusedLogAt) > 2 else { return }
+    lastRefusedLogAt = Date()
+    NSLog("[VibePowerModule] %@ DROPPED — externalAudio=%@ isMuted=%@ isRunning=%@",
+          what, externalAudio ? "true" : "false", isMuted ? "true" : "false",
+          isRunning ? "true" : "false")
+  }
+
   func feedExternalPcm(_ data: Data, sampleRate: Double, stereo: Bool) {
-    guard externalAudio, !isMuted, data.count >= 2 else { return }
+    guard externalAudio, !isMuted, data.count >= 2 else { noteFeedRefused("pcm"); return }
     let rate = max(8000, sampleRate)
     let ch2  = stereo                   // interleaved L,R (local WFM stereo)
     audioQ.async { [weak self] in
@@ -451,7 +467,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   }
 
   func feedExternalOpus(_ pkt: Data, sampleRate: Int, channels: Int) {
-    guard externalAudio, !isMuted, pkt.count >= 3 else { return }
+    guard externalAudio, !isMuted, pkt.count >= 3 else { noteFeedRefused("opus"); return }
     let sr = Int32(max(8000, sampleRate))
     let ch = Int32(channels == 2 ? 2 : 1)
     audioQ.async { [weak self] in
