@@ -762,14 +762,28 @@ final class WatchAudio {
     }
   }
 
+  /// ★★★ ON `q`, LIKE EVERY OTHER NODE OPERATION. This was the ONE path that touched the graph
+  ///     from the caller's thread — and every caller is a client teardown (UberClient, OwrxClient,
+  ///     KiwiClient, FmDxClient) running off a socket. `play`, `flush`, `setVolume` and
+  ///     `restartAudio` are all serialised here precisely because "AVAudioEngine's graph mutation
+  ///     is not thread-safe" — the note is a few lines below and this call ignored it.
+  /// ★★ The phone learned this the expensive way: two threads reaching one engine made AVFAudio
+  ///    abort inside its own attach lock, uncatchable through Obj-C frames, and it killed VibeSDR
+  ///    build 134. A disconnect racing the audio queue is the same collision, and the crash it
+  ///    produces is one no `try` can see.
+  /// ★ `async`, not `sync`: a teardown that blocks on the audio queue while that queue is inside a
+  ///   scheduleBuffer completion is a deadlock, and stopping is not something a caller waits for.
   func stop() {
-    keeper?.cancel()
-    keeper = nil
-    player.stop()
-    engine.stop()
-    started = false
-    live = false
-    try? AVAudioSession.sharedInstance().setActive(false)
+    q.async { [weak self] in
+      guard let self else { return }
+      self.keeper?.cancel()
+      self.keeper = nil
+      self.player.stop()
+      self.engine.stop()
+      self.started = false
+      self.live = false
+      try? AVAudioSession.sharedInstance().setActive(false)
+    }
   }
 
   /// Everything below runs on ONE queue.
