@@ -867,6 +867,10 @@ final class UberClient: ObservableObject {
   private var gatedFrames = 0
   private var viewBinBw: Double = 0
 
+  /// ★ How many times we have argued with the server about the centre / span for THIS view.
+  ///   Reset when it agrees, and when the user asks for something new — see sendView.
+  private var centreAsserts = 0
+  private var spanAsserts = 0
   private var everPainted = false
   private var frameCount = 0
   private var audioCount = 0
@@ -1798,9 +1802,32 @@ final class UberClient: ObservableObject {
     // until a zoom nudges it, the "starts centre not at 648 kHz" bug), or a reset — must be
     // forced back to the VFO. The bin-width tolerance absorbs the server snapping the centre
     // to its bin grid, so a legitimately-acked centre doesn't ping-pong.
+    // ★★★ ASK TWICE, THEN BELIEVE THE SERVER. A centre the server CANNOT honour makes this an
+    //     infinite loop: we correct, it answers with the same clamped centre, we correct again.
+    //     Every sendView bumps `specSubscribeSeq`, so the paint gate below is permanently one
+    //     behind and the 20-frame fail-open never arrives either — frames flow, nothing paints,
+    //     and the watchdog eventually calls it "lost the server".
+    //
+    // ★★★ IT IS TRIVIAL TO PROVOKE: tune 693 kHz and zoom out past ~1.4 MHz of span. Centring
+    //     693 kHz in a 30 MHz view would put the left edge below 0 Hz, so the server clamps the
+    //     centre — correctly — and cannot ever agree with us. Stuart, 2026-08-18: "at low zoom
+    //     levels the spectrum effectively disconnects… zoom in it works, zoom back out and when
+    //     you hit a certain level it freezes and a few seconds later a disconnection warning
+    //     appears." The crumb log had it plainly: sub=969 cfg=968, climbing, one per config.
+    //
+    // ★★ A CORRECTION THAT IS NOT ACCEPTED IS INFORMATION, NOT A REASON TO REPEAT IT. Two goes
+    //    per subscription, then adopt what the server says and PAINT — a view slightly off-centre
+    //    is a cosmetic complaint; a frozen waterfall is a broken app.
     if abs(centerHz - frequency) > max(binBandwidth, 1) {
-      sendView(frequency, viewBinBw > 0 ? viewBinBw : binBandwidth)
-      return
+      if centreAsserts < 2 {
+        centreAsserts += 1
+        sendView(frequency, viewBinBw > 0 ? viewBinBw : binBandwidth)
+        return
+      }
+      Vitals.crumb("UBER centre clamped by server (\(Int(centerHz)) vs \(Int(frequency))) — adopting it")
+      viewCenterHz = centerHz
+    } else {
+      centreAsserts = 0                 // it agreed — the next disagreement starts fresh
     }
 
     // PRESERVE THE ZOOM ACROSS A RECONNECT. A fresh/reconnected server session starts at
@@ -1823,8 +1850,18 @@ final class UberClient: ObservableObject {
     } else if viewBinBw > 0, abs(binBandwidth - viewBinBw) > viewBinBw * 1e-3 {
       // Unsolicited reset to full span after a blip — force our zoom back and hold the paint
       // (sendView bumps the subscribe seq, so the gate won't draw the wide frame).
-      sendView(viewCenterHz > 0 ? viewCenterHz : frequency, viewBinBw)
-      return
+      // ★ Bounded for the same reason as the centre above: if the server will not give us this
+      //   span it never will, and repeating the request is how a waterfall freezes for ever.
+      if spanAsserts < 2 {
+        spanAsserts += 1
+        sendView(viewCenterHz > 0 ? viewCenterHz : frequency, viewBinBw)
+        return
+      }
+      Vitals.crumb("UBER span not honoured (\(Int(binBandwidth)) vs \(Int(viewBinBw))) — adopting it")
+      viewBinBw = binBandwidth
+      viewCenterHz = centerHz
+    } else {
+      spanAsserts = 0
     }
 
     // RE-ASSERT THE RATE. A binBandwidth change means the session may have MIGRATED between
@@ -1858,6 +1895,10 @@ final class UberClient: ObservableObject {
   /// snapped it ("gets stuck, then jumps"). This collapses the flurry into one clean
   /// re-subscribe once the gesture settles.
   private func sendViewCoalesced(_ freq: Double, _ binBw: Double) {
+    // ★ The USER asking for something new is a fresh argument — let the client make its case
+    //   again rather than inheriting a truce from the last view.
+    centreAsserts = 0
+    spanAsserts = 0
     viewCenterHz = freq
     viewBinBw = binBw
     pendingView = (freq, binBw)
