@@ -2430,9 +2430,18 @@ final class UberClient: ObservableObject {
     //
     // ★ 10 kHz is the bottom of UberSDR's range (its own client clamps 10 kHz–30 MHz), and 30 MHz
     //   remains the ceiling for a VFO high enough to allow it.
+    // ★★ AND A PRACTICAL CEILING, BECAUSE THE SCREEN IS THE OTHER CONSTRAINT. The waterfall is
+    //    ~180 px wide: 30 MHz across it is ~170 kHz PER PIXEL, which is a smear, not a view — a
+    //    whole broadcast band collapses into three pixels. Stuart: "no point being able to zoom
+    //    out to the full 0-30MHz anyway." 2 MHz is ~11 kHz/px, which still shows an entire
+    //    broadcast band with its stations distinguishable, and it is the widest view on this
+    //    screen that is worth drawing.
+    // ★ One constant, deliberately: if a wider view ever earns its place, this is the only line
+    //   to change.
+    let widestUsefulSpan = 2_000_000.0
     let lowestHz = 10_000.0
     let centrableSpan = max(2 * (frequency - lowestHz), 100_000)   // never below a usable 100 kHz
-    let maxSpan = min(30_000_000, centrableSpan)
+    let maxSpan = min(widestUsefulSpan, centrableSpan)
     let bb = max(6_000 / n, min(viewBinBw * factor, maxSpan / n))
     // Anchor the zoom on the TUNED frequency, not viewCenterHz. viewCenterHz gets
     // overwritten by the server's reported frame centre (see line ~578), which can
