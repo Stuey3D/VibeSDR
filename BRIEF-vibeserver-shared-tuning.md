@@ -55,6 +55,31 @@ Reuse what exists — occupancy is already tracked per session (`occupantSession
 phrase ids. `/vibeserver.json` gains `tuneMode: "exclusive" | "spectator" | "open"`; absent means
 exclusive, so every existing client and server stays correct.
 
+## ★★★ WHAT IT COSTS — AND WHY THIS MODE SCALES WHERE THE OTHER ONE DOES NOT
+
+Stuart, 2026-08-19: *"if we limit it to 1 VFO like FM-DX then it is only one CPU decode too, just
+showing the same spectrum/audio to each connected user — in fact in that mode you could probably
+have lots of users if you had the bandwidth."* Correct, and it is the strongest argument for the
+mode:
+
+- **DSP is CONSTANT.** One VFO means one demod and one FFT whether two people are listening or
+  fifty. Today's shared path pays `perClientDsp()` per listener — measured at 80–92% of real time
+  on the RSP1B with a handful — and that is precisely the cost this mode does not incur.
+- **The ENCODE can be shared as well.** Everyone hears the same audio, so it is one Opus encoder
+  and one packed spectrum frame, fanned out. Audio is encoded per client TODAY for a good reason
+  (two listeners may want different codecs) — a reason that evaporates here for everyone on the
+  default. Keep a per-client path only for the odd client asking for something else.
+- **So the only thing that scales is BYTES.**
+
+Rough arithmetic per listener: Opus audio ~7.5 KB/s + spectrum ~12 KB/s (1024 bins @ 10 fps)
+≈ **20 KB/s ≈ 160 kbps**. So a 10 Mbit domestic upload carries ~60 listeners and a 20 Mbit one
+~120, before the radio's CPU is anywhere near the limit.
+
+★ And the levers already exist to make each listener cheaper: the `set_rate` divisor, and a client
+  asking for fewer bins (Jr asks for 128). A watch listener costs a fraction of a browser one.
+★★ Which means the SETTING an owner needs is not "how many users" but "how much of my upload may
+   this radio use" — the honest constraint, and the one they can actually answer.
+
 ## Fits with the other brief
 [Soft session limits](BRIEF-vibeserver-soft-session-limit.md) answers "how long may I keep the
 radio?"; this answers "who may turn the knob?". A shared-tuning receiver arguably needs no session
