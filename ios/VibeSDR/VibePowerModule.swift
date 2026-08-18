@@ -960,7 +960,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     let stale  = Date().timeIntervalSince(lastPacketAt)
     // Packet staleness stays the PRIMARY zombie detector — the regression is
     // "state says alive, frames stop", so wsReady/.running is only a secondary cue.
-    let wsDead = Self.useNWConnectionAudioWs ? !wsReady : (wsTask?.state != .running)
+    let wsDead = wsUsingNW ? !wsReady : (wsTask?.state != .running)
     guard stale > staleAfter || wsDead else { return }
     NSLog("[VibePowerModule] watchdog: stale=%.1fs wsDead=%d — reviving audio WS",
           stale, wsDead ? 1 : 0)
@@ -1294,7 +1294,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   @objc func getDebugInfoSync() -> String {
     let eng = audioEngine != nil ? "yes" : "no"
     let dec = opusDecoder != nil ? "yes" : "no"
-    let ws  = (Self.useNWConnectionAudioWs ? wsReady : (wsTask?.state == .running)) ? "open" : "closed"
+    let ws  = (wsUsingNW ? wsReady : (wsTask?.state == .running)) ? "open" : "closed"
     return "run=\(isRunning) pkts=\(packetCount) eng=\(eng) dec=\(dec) sr=\(decoderSampleRate) ws=\(ws) rec=\(recArmed)"
   }
 
@@ -1440,7 +1440,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   // MARK: - Native WebSocket
 
-  /// Open the native audio WS via whichever transport the toggle selects.
+  /// Open the native audio WS. NWConnection first (see the toggle), with a per-server fallback to
+  /// URLSession when it cannot reach the host at all — see wsForceURLSession.
   private func openAudioWs(baseUrl: String, frequency: Int, mode: String, uuid: String) {
     if Self.useNWConnectionAudioWs {
       openAudioWsNW(baseUrl: baseUrl, frequency: frequency, mode: mode, uuid: uuid)
@@ -1506,12 +1507,46 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     return false
   }
 
+  /// ★★★ WHICH TRANSPORT THIS BASE URL HAS EARNED. Neither is right everywhere:
+  ///
+  ///  - URLSessionWebSocketTask regressed on iOS 27 beta for the TUNNEL stream — task reports
+  ///    `.running`, frames stop, audio dies (c9fd37e8, 26 June). That is why NWConnection became
+  ///    the default.
+  ///  - NWConnection, on this device, cannot reach a plain `ws://` on a PRIVATE address: the
+  ///    connection is aborted at connect (POSIX 53) and never reaches the handshake, while a
+  ///    `fetch` to the SAME host and port, at the same moment, succeeds — which is proven every
+  ///    time, because the preflight that opens the audio gate is exactly that fetch. Symptom:
+  ///    UberSDR over a LAN address has no sound while the tunnel is perfect, OWRX-over-LAN is fine
+  ///    (its audio is a JS socket) and the waterfall never falters (Stuart, 2026-08-18).
+  ///
+  /// ★★ SO CHOOSE PER CONNECTION, AND LET IT PROVE ITSELF. The first attempt uses NWConnection; a
+  ///    connect-time abort falls back to URLSession for THIS base URL and remembers it, so a
+  ///    reconnect does not pay the timeout again. A static toggle could only ever be wrong for one
+  ///    of the two cases — and it was, for eight weeks.
+  private var wsForceURLSession = Set<String>()
+  /// ★★★ WHICH TRANSPORT IS LIVE RIGHT NOW — not which one is compiled in. Three places asked the
+  ///     STATIC toggle instead: the watchdog's "is it dead" test, the debug line, and the TEXT SEND
+  ///     that carries every tune and DSP command. On a URLSession socket they would all have read
+  ///     the NWConnection's state: `wsReady` is never set there, so the watchdog would have
+  ///     reopened a perfectly healthy socket every four seconds and no tune would ever have been
+  ///     sent — "audio works but tuning does nothing", a fault we have chased before.
+  /// ★★ A fallback is not finished when the connection succeeds. Everything that ASKS about the
+  ///    connection has to move with it.
+  private var wsUsingNW = true
+
   // ── Transport A: Network.framework (iOS 27-safe, default) ────────────────
   private func openAudioWsNW(baseUrl: String, frequency: Int, mode: String, uuid: String) {
+    // ★ Already learned that this server needs the other transport — go straight there.
+    if wsForceURLSession.contains(baseUrl) {
+      notePath("using URLSession transport (learned) for \(baseUrl)")
+      openAudioWsURLSession(baseUrl: baseUrl, frequency: frequency, mode: mode, uuid: uuid)
+      return
+    }
     guard let url = audioWsURL(baseUrl: baseUrl, frequency: frequency, mode: mode, uuid: uuid) else {
       NSLog("[VibePowerModule] bad WS URL from base: %@", baseUrl); return
     }
     NSLog("[VibePowerModule] opening audio WS (NWConnection): %@", url.absoluteString)
+    wsUsingNW = true
     wsNeedsTuneAssert = true
     wsBaseSr = 0
     srFlipCount = 0
@@ -1540,6 +1575,22 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
         // auto-retries toward .ready; don't reconnect here — the watchdog covers a
         // stuck wait via packet staleness.
         NSLog("[VibePowerModule] audio WS waiting: %@", "\(err)")
+        self.notePath("audio WS waiting: \(err)")
+        // ★★★ .waiting IS NOT ALWAYS "NOT YET". For a plain ws:// on a private address this state
+        //     is terminal in practice: NWConnection retries for ever and never connects, so the
+        //     watchdog reopened it every four seconds and the listener simply had no sound. Take
+        //     the abort as the answer it is, and try the transport that CAN reach this server —
+        //     the same one the preflight fetch just used successfully.
+        // ★ Only for this base, only once: the flag makes every later reconnect go straight there.
+        if !self.wsForceURLSession.contains(baseUrl) {
+          self.wsForceURLSession.insert(baseUrl)
+          self.notePath("NWConnection aborted — falling back to URLSession for \(baseUrl)")
+          NSLog("[VibePowerModule] NWConnection cannot reach %@ — falling back to URLSession", baseUrl)
+          conn.cancel()
+          DispatchQueue.main.async {
+            self.openAudioWsURLSession(baseUrl: baseUrl, frequency: frequency, mode: mode, uuid: uuid)
+          }
+        }
       case .failed(let err):
         self.wsReady = false
         NSLog("[VibePowerModule] audio WS failed: %@ — reconnecting in 2s", "\(err)")
@@ -1845,6 +1896,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       NSLog("[VibePowerModule] bad WS URL from base: %@", baseUrl); return
     }
     NSLog("[VibePowerModule] opening audio WS (URLSession): %@", url.absoluteString)
+    wsUsingNW = false
     let session = URLSession(configuration: .default)
     wsSession = session
     let task = session.webSocketTask(with: url)
@@ -1906,7 +1958,10 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
         NSLog("[VibePowerModule] ws error: %@ — reconnecting in 2s", err.localizedDescription)
         guard self.isRunning else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-          guard self.isRunning, !Self.useNWConnectionAudioWs else { return }
+          // ★ `wsUsingNW`, not the compile-time toggle: this reconnect belongs to whichever
+          //   transport is LIVE. Asking the static flag disabled it entirely for a socket that had
+          //   fallen back to URLSession — the fallback would have worked once and never recovered.
+          guard self.isRunning, !self.wsUsingNW else { return }
           // MUST reconnect with the SAME session uuid — audio extensions
           // (decoders) and the spectrum WS are keyed to it server-side. A
           // fresh UUID here silently orphans them ("no active audio session").
@@ -1924,7 +1979,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   /// Transport-agnostic text send (tune asserts, DSP commands). No-op unless the
   /// active socket is connected.
   private func sendWsText(_ text: String) {
-    if Self.useNWConnectionAudioWs {
+    if wsUsingNW {
       guard let conn = wsConn, wsReady, let data = text.data(using: .utf8) else { return }
       let md  = NWProtocolWebSocket.Metadata(opcode: .text)
       let ctx = NWConnection.ContentContext(identifier: "send", metadata: [md])

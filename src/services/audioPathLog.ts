@@ -29,7 +29,11 @@ interface AudioPathState {
 }
 
 const state: AudioPathState = { component: 'none', gates: {}, events: [] };
-const kMaxEvents = 12;
+// ★★★ TWELVE WAS TOO FEW AND IT COST US A ROUND TRIP. A report arrived with the ring FULL, so the
+//     original connection and the FIRST escalation had already scrolled off — what survived read
+//     like a first failure and was actually the second cycle, which sent me looking at the wrong
+//     end of the problem (2026-08-18). The oldest events are the ones that explain the newest.
+const kMaxEvents = 40;
 
 function stamp(): string {
   const d = new Date();
