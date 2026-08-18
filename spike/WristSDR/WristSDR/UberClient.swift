@@ -1151,6 +1151,12 @@ final class UberClient: ObservableObject {
     guard let cu = URL(string: "\(httpScheme)://\(host)\(radioPath)/connection") else {
       status = "bad server URL"; return false
     }
+    // ★★★ THE NETWORK WAS INVISIBLE IN JR'S OWN LOG. jr-vitals.log carried seventy lines of audio
+    //     and scene state and NOT ONE about a socket or a server — so when UberSDR-by-LAN sat on a
+    //     black screen, the log could not say whether the preflight ran, what it answered, or
+    //     which URL the sockets tried. We reasoned from symptoms for an hour (2026-08-18).
+    //     The phone's fault was cracked the moment it could account for itself; this is that.
+    Vitals.crumb("UBER preflight POST \(cu.absoluteString)")
     var req = URLRequest(url: cu)
     req.httpMethod = "POST"
     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -1172,6 +1178,7 @@ final class UberClient: ObservableObject {
       let obj = try? JSONSerialization.jsonObject(with: data)
       let j = obj as? [String: Any]
       let allowed = (j?["allowed"] as? Bool) ?? false
+      Vitals.crumb("UBER preflight → HTTP \(http.statusCode) allowed=\(allowed)")
       if !allowed {
         // THE SERVER SAID WHY. Throwing that away and printing "REJECTED" was the single
         // most useless thing this app could have done — the answer was in the response
@@ -1184,6 +1191,7 @@ final class UberClient: ObservableObject {
       return allowed
     } catch {
       status = "connection failed: \(error.localizedDescription)"
+      Vitals.crumb("UBER preflight FAILED \(error.localizedDescription)")
       return false
     }
   }
@@ -1216,6 +1224,9 @@ final class UberClient: ObservableObject {
       Task { @MainActor in self?.onSpectrumJSON(Data(t.utf8)) }
     }
     specSock.onState = { [weak self] st in
+      // ★ Crumbed OUTSIDE the main hop so a state that arrives while the app is being suspended
+      //   is still written down — that is exactly when the interesting ones arrive.
+      Vitals.crumb("UBER spec state: \(st)")
       Task { @MainActor in
         guard let self else { return }
         self.specWsState = st
@@ -1234,6 +1245,7 @@ final class UberClient: ObservableObject {
     // fixed on the phone, and it is worth saying plainly: an open socket is not a working
     // socket, and only FRAMES prove it.
     specSock.onReady = { [weak self] in
+      Vitals.crumb("UBER spec READY — subscribing")
       Task { @MainActor in
         guard let self, self.specOpenSeq == seq else { return }
         self.sendView(self.frequency, self.viewBinBw > 0 ? self.viewBinBw : 100)
@@ -1246,6 +1258,7 @@ final class UberClient: ObservableObject {
     //    owner deciding whether to BLOCK an address is exactly who needs to know it is our app.
     //    ★ The /connection POST has always sent it; the SOCKET, which is what the log records,
     //      never did.
+    Vitals.crumb("UBER spec open \(url.absoluteString)")
     specSock.open(url: url, headers: [("User-Agent", jrUserAgent)])
   }
 
@@ -1892,6 +1905,7 @@ final class UberClient: ObservableObject {
     }
     guard let url else { return }
     audioSock.onState = { [weak self] s in
+      Vitals.crumb("UBER audio state: \(s)")
       Task { @MainActor in
         guard let self else { return }
         self.audioWsState = s
