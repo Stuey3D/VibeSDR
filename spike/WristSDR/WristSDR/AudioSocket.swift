@@ -25,6 +25,31 @@ final class AudioSocket {
   private var conn: NWConnection?
   private let queue = DispatchQueue(label: "wristsdr.audiows")
   private var gen = 0
+  /// ★★★ A CONNECTION THAT NEVER CONNECTS HAD NO WAY OUT.
+  ///
+  ///  `.waiting` means "not satisfiable YET", and the framework retries toward `.ready` on its
+  ///  own — so the rule below is right in general and fatal as an absolute. When the path is
+  ///  never going to be satisfied (wrong port, an address this device cannot route, a plain
+  ///  `ws://` the stack refuses) NWConnection sits in `.waiting` for ever, perfectly silently.
+  ///
+  ///  ★★ AND EVERY ESCAPE WAS DOWNSTREAM OF `.ready`. UberClient arms its spectrum watchdog
+  ///     inside `onReady`, and retries only on a state containing "failed" — so a socket that
+  ///     never became ready armed nothing and failed nothing. Jr sat on "waiting for signal"
+  ///     indefinitely with no error anywhere (Stuart, 2026-08-18, UberSDR by LAN address).
+  ///     THE SAME SHAPE AS THE PHONE'S: an open socket is not a working socket, and a socket
+  ///     that is still opening is not a socket that will open.
+  ///  ★ 8s: long enough for a slow DDNS + TLS handshake over the watch's relay, short enough
+  ///    that a person has not yet decided the app is broken.
+  private var connectDeadline: DispatchWorkItem?
+  private static let connectTimeout: TimeInterval = 8
+  /// ★★ ONE SILENT ESCALATION BEFORE GIVING UP. The OWRX client reaches a LAN address happily and
+  ///    the UberSDR one hangs, and the ONLY difference between the two open() calls is
+  ///    `forceIPv4` — OWRX pins v4 because a dynamic-DNS host can hand back an AAAA the watch
+  ///    cannot route. So when a connection never arrives, try that once before reporting: it costs
+  ///    one timeout, and it is the difference that is already known to work on this device.
+  /// ★ Remembered so the retry does not loop: v4-forced is the LAST attempt, never the first.
+  private var retriedV4 = false
+  private var lastOpen: (url: URL, headers: [(name: String, value: String)], autoReplyPing: Bool, avoidRelay: Bool)?
 
   /// Raw WebSocket binary frames — one Opus packet each, with UberSDR's 21-byte header.
   var onData: ((Data) -> Void)?
@@ -41,6 +66,8 @@ final class AudioSocket {
     gen &+= 1
     let g = gen
     cancel()
+    if !forceIPv4 { retriedV4 = false }          // a fresh caller-driven open starts the ladder again
+    lastOpen = (url, headers, autoReplyPing, avoidRelay)
 
     let secure = (url.scheme == "wss")
     let params: NWParameters = secure ? .tls : .tcp
@@ -74,13 +101,18 @@ final class AudioSocket {
       switch state {
       case .ready:
         // Tag the interface actually in use so the UI can show wifi vs the phone relay (.other).
+        self.connectDeadline?.cancel(); self.connectDeadline = nil
         self.onState?("\(name) ws ready [\(Self.pathName(c.currentPath))]")
         self.receive(c, g)
       case .waiting(let e):
         // Path not satisfiable YET. NWConnection retries toward .ready on its own — do not
         // tear it down here or you fight the framework and lose.
+        // ★ Reported, but NOT acted on: the deadline armed in open() is what ends this state if
+        //   it turns out to be permanent. Naming the error matters — POSIX 53 (aborted), 61
+        //   (refused) and 65 (no route) send you to three different places.
         self.onState?("\(name) ws waiting: \(e)")
       case .failed(let e):
+        self.connectDeadline?.cancel(); self.connectDeadline = nil
         self.onState?("\(name) ws failed: \(e)")
       case .cancelled:
         self.onState?("\(name) ws cancelled")
@@ -88,6 +120,27 @@ final class AudioSocket {
         break
       }
     }
+    // ★★★ THE DEADLINE. Fires only if the socket has not reached `.ready`, and reports itself as
+    //     a FAILURE — which is the word every caller's retry already looks for. A hang becomes a
+    //     retry, and an invisible fault becomes a line on the screen naming the address.
+    let dl = DispatchWorkItem { [weak self] in
+      guard let self, self.gen == g, self.conn === c else { return }
+      self.connectDeadline = nil
+      c.cancel()
+      if !self.retriedV4, let again = self.lastOpen {
+        self.retriedV4 = true
+        self.onState?("\(self.name) ws waiting: no connection after \(Int(Self.connectTimeout))s — retrying pinned to IPv4")
+        self.open(url: again.url, headers: again.headers, forceIPv4: true,
+                  autoReplyPing: again.autoReplyPing, avoidRelay: again.avoidRelay)
+        return
+      }
+      // ★ "failed" is the word every caller's retry looks for — and the address is named, so the
+      //   person reading it knows WHICH server and port never answered.
+      self.onState?("\(self.name) ws failed: no connection after \(Int(Self.connectTimeout))s — \(url.host ?? "?"):\(url.port.map(String.init) ?? "default")")
+    }
+    connectDeadline?.cancel()
+    connectDeadline = dl
+    queue.asyncAfter(deadline: .now() + Self.connectTimeout, execute: dl)
     c.start(queue: queue)
   }
 
@@ -158,6 +211,7 @@ final class AudioSocket {
   }
 
   func cancel() {
+    connectDeadline?.cancel(); connectDeadline = nil
     conn?.cancel()
     conn = nil
   }
