@@ -2412,7 +2412,28 @@ final class UberClient: ObservableObject {
     // steps cross a server level every ~1–2 clicks, snappy without being a full-octave lurch.
     let factor = pow(2.0, -Double(delta) / 2.0)
     let n = Double(max(binCount, 256))
-    let bb = max(6_000 / n, min(viewBinBw * factor, 30_000_000 / n))
+    // ★★★ DO NOT ASK FOR A SPAN THE SERVER CANNOT CENTRE ON THE VFO.
+    //
+    //     This display is VFO-CENTRED by design — drawVFO puts the needle in the middle and the
+    //     scale is drawn around it. So a span wider than TWICE the distance from the VFO to the
+    //     bottom of the receiver's range cannot be honoured: at 648 kHz, a 30 MHz view would need
+    //     to start 14.35 MHz below zero. The server clamps the centre — correctly — and then
+    //     every bin we receive is offset from where we draw it: the signals bunch into the left
+    //     half and the right half is empty, with the needle stranded at "0.0M" (Stuart's
+    //     screenshot, 2026-08-18, tuned to 648 kHz and fully zoomed out).
+    //
+    // ★★ AND IT IS THE SAME ROOT AS THE FREEZE. Asking for an un-centrable span is what made the
+    //    client and server argue for ever (see the bounded re-assertions in the config handler).
+    //    Bounding the argument stopped the freeze; bounding the REQUEST stops the disagreement
+    //    from happening at all — which is the better half of the fix, because the picture is then
+    //    honest rather than merely unfrozen.
+    //
+    // ★ 10 kHz is the bottom of UberSDR's range (its own client clamps 10 kHz–30 MHz), and 30 MHz
+    //   remains the ceiling for a VFO high enough to allow it.
+    let lowestHz = 10_000.0
+    let centrableSpan = max(2 * (frequency - lowestHz), 100_000)   // never below a usable 100 kHz
+    let maxSpan = min(30_000_000, centrableSpan)
+    let bb = max(6_000 / n, min(viewBinBw * factor, maxSpan / n))
     // Anchor the zoom on the TUNED frequency, not viewCenterHz. viewCenterHz gets
     // overwritten by the server's reported frame centre (see line ~578), which can
     // drift a touch from where we're actually tuned — so zooming off viewCenterHz
