@@ -5,5 +5,11 @@
   //   server-side because a browser on an HTTPS page may not fetch the receiver's plain HTTP.
   //   Everything else falls through to the assets exactly as before.
   "main": "website/worker.js",
-  "assets": { "directory": "./website", "binding": "ASSETS" }
+  "assets": { "directory": "./website", "binding": "ASSETS" },
+  // ★★★ WORKERS LOGS — off until 2026-08-19, which is why the observability API returned ZERO
+  //     requests for the whole week the site was being discovered. The traffic happened; nothing
+  //     was recording it. This is retention going forward only: it cannot recover the past.
+  // ★ This measures REQUESTS (counts, status, errors, latency), not PEOPLE. Visitors, countries
+  //   and referrers come from Web Analytics — see website/index.html.
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
 }
