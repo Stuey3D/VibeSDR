@@ -1750,10 +1750,16 @@ final class UberClient: ObservableObject {
       binCount = bc
       // ★★★ SIZE THE BIN ARRAY HERE — A DELTA CANNOT CREATE IT.
       //
-      //     The server sends `flags 0x04` (delta uint8) and, on this version, NOTHING ELSE: a
-      //     capture of a live feed is deltas from the first frame to the last. Our delta path
-      //     writes through `if Int(idx) < bins.count`, and `bins` was only ever sized by a FULL
-      //     frame — so with a delta-only server every change was silently discarded, for ever.
+      //     ★ CORRECTED 2026-08-18, same night: I claimed the server sends "nothing but deltas".
+      //       It does NOT — `scripts/probe-ubersdr.py` sees flags 0x03 (full) AND 0x04 (delta).
+      //       The full frame arrives IMMEDIATELY on subscribe, and my capture windows all began
+      //       after it. I read the absence of evidence in a badly-timed sample as evidence of
+      //       absence, and wrote it into a commit message as a fact.
+      //     What actually starved this path was the DOUBLE SUBSCRIBE (see connect()): the config
+      //     and the full frame both went to a socket that was cancelled a second later, so the
+      //     live socket had neither. Our delta path writes through `if Int(idx) < bins.count`
+      //     and `bins` was only ever sized by a full frame, so every change was then discarded
+      //     in silence — the symptom, not the cause.
       //     Frames counted, fps healthy, socket green, waterfall BLACK, audio perfect (Stuart,
       //     2026-08-18: "spectrum doesn't work until I zoom… soon as I zoom it snaps into
       //     existence"). Zooming worked because a parameter change makes the server emit one
