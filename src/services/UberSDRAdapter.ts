@@ -112,6 +112,20 @@ export class UberSDRAdapter implements SDRBackend {
   /** Admin credentials for the CONNECT URL — set BEFORE connect(), or the handshake goes out
    *  without them and a busy or cooling-down receiver refuses us as an ordinary listener. */
   setAdminAuth(q: string) { this.client.setAdminAuth(q); }
+
+  /** ★★★ THE ADAPTER IS WHAT THE SCREEN HOLDS, so a method that exists only on the client below it
+   *  might as well not exist. The audio recovery reached for `reregisterSession` on
+   *  `client.current`, found an UberSDRAdapter that had never heard of it, and returned — silently,
+   *  because the guard that missed it was written as an early return with nothing to say. The
+   *  native watchdog asked for help, the help was three lines away, and the diagnostics report
+   *  showed the ask and no answer (Stuart, 2026-08-18, 18:30:36).
+   *  ★★ THE SAME SHAPE AS THE FAULT IT WAS FIXING. Twice in one afternoon: a path that cannot
+   *     work, failing quietly. Anything that can decline must say so — see the throw below and the
+   *     noteAudioEvent on the calling side. */
+  async reregisterSession(): Promise<void> {
+    await this.client.reregisterSession();
+  }
+
   connect(frequency?: number, mode?: SDRMode, opts?: { allowServerDefault?: boolean }) { this.fetchReceiverLon(); return this.client.connect(frequency, mode, opts); }
   destroy()                                   { this.client.destroy(); }
 

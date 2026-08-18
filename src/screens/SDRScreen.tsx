@@ -119,7 +119,7 @@ import RecordingsOverlay from '../components/RecordingsOverlay';
 import { IS_TV } from '../utils/tv';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
 import { resolveStationLogo } from '../services/stationLogoCache';
-import { noteAudioPath } from '../services/audioPathLog';
+import { noteAudioPath, noteAudioEvent } from '../services/audioPathLog';
 import { fetchFrontDoor, radioBaseUrl, describeRadio,
          type VibeRadio, type VibeFrontDoor } from '../services/vibeserverRadios';
 import { tidyStationName } from '../services/stationLogo';
@@ -1045,12 +1045,26 @@ export default function SDRScreen({ route, navigation }: Props) {
    *    the app. */
   const onAudioStuck = useCallback(() => {
     // ★ Only UberSDR has a preflight to redo; the cast keeps the shared SDRBackend type honest
-    //   rather than widening it for one backend's recovery.
+    //   rather than widening it for one backend's recovery. It is the ADAPTER that must carry the
+    //   method — the screen never holds the client itself.
     const c = client.current as unknown as { reregisterSession?: () => Promise<void> } | null;
-    if (!c?.reregisterSession) return;
+    // ★★★ EVERY EXIT FROM HERE SAYS SOMETHING. The first version returned quietly when the method
+    //     was missing, and the report showed the watchdog asking for help followed by nothing at
+    //     all — which reads as "the recovery ran and did not work" when in fact it never started.
+    if (!c?.reregisterSession) {
+      noteAudioEvent('re-register UNAVAILABLE on this backend — audio cannot recover');
+      return;
+    }
+    noteAudioEvent('re-registering session…');
     c.reregisterSession()
-      .then(() => { if (!destroyed.current) setAudioRestart((n: number) => n + 1); })
-      .catch(() => {});
+      .then(() => {
+        if (destroyed.current) return;
+        noteAudioEvent('re-registered — restarting the audio engine');
+        setAudioRestart((n: number) => n + 1);
+      })
+      .catch((e: unknown) => {
+        noteAudioEvent('re-register FAILED: ' + (e instanceof Error ? e.message : String(e)));
+      });
   }, []);
   const lastReconnectAt = useRef(0);
   const fullReconnect = useCallback(() => {
