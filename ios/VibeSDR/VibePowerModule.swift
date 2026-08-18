@@ -968,7 +968,14 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     // ★ Counted BEFORE the reopen, so the first attempt is 1 and the ask for help lands on the
     //   second failure rather than the third.
     deadRevives += 1
-    if deadRevives >= 2 && Date().timeIntervalSince(lastStuckAt) > 15 {
+    // ★★★ ASK ON THE FIRST FAILED REOPEN, NOT THE SECOND. A socket the server accepts and drops in
+    //     the same breath is not a flaky link — it is a refusal, and no number of reopens will
+    //     change the server's mind. At two, the listener sat in silence for sixteen seconds before
+    //     anything tried the one cure that works (measured on the device, 19:03:15 → 19:03:31).
+    // ★★ Re-registering is cheap and idempotent — one small POST — so the cost of being early is
+    //    nothing, and the cost of being late is the whole point of the feature.
+    // ★ The 15 s throttle still stops a genuinely unreachable server from being asked repeatedly.
+    if deadRevives >= 1 && Date().timeIntervalSince(lastStuckAt) > 15 {
       lastStuckAt = Date()
       notePath("audio STUCK — \(deadRevives) reopens, no packets")
       NSLog("[VibePowerModule] audio stuck after %d reopens — asking JS to re-register", deadRevives)

@@ -1031,18 +1031,32 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  audio socket never tries again. Reconnecting afterwards needs no credential: by then we ARE
    *  the occupant. Bumped only when we connected holding one, so an ordinary session is untouched. */
   const [audioRestart, setAudioRestart] = useState(0);
-  /** ★★★ HAS THE SERVER REGISTERED THIS SESSION YET? UberSDR drops an audio WebSocket whose
-   *  session id it has never seen in a POST /connection — 101, then closed, with no reason given.
-   *  The native audio engine is a SEPARATE component opening its OWN socket, so nothing made it
-   *  wait for the preflight: over a tunnel the POST usually won the race, over the LAN it never
-   *  did, and the user got a perfect waterfall in silence (issue #20). False until the client says
-   *  otherwise, and reset for every new session — a registration belongs to ONE id on ONE server. */
-  const [sessionRegistered, setSessionRegistered] = useState(false);
+  /** ★★★ WHICH server+session the preflight has actually registered — NOT a boolean.
+   *
+   *  UberSDR drops an audio WebSocket whose session id it has never seen in a POST /connection:
+   *  101, then closed, no reason given. The native audio engine is a SEPARATE component opening
+   *  its OWN socket, so nothing made it wait for that POST — over a tunnel it usually won the
+   *  race, over a LAN it never did, and the user got a perfect waterfall in silence (issue #20).
+   *
+   *  ★★★ THE FIRST CUT OF THIS GATE WAS A BOOLEAN CLEARED BY AN EFFECT, AND IT LEAKED. Switching
+   *      servers renders with the NEW connectBase while the flag is still true from the OLD one —
+   *      effects run after the render that already handed AudioPlayer a live URL — so the audio
+   *      socket went out against a session that server had never registered, exactly as before.
+   *      Holding the KEY instead makes the answer derive from what is being asked: a registration
+   *      for another server, or another session id, simply does not match, and there is no window
+   *      in which it can. Seen on the device at 19:03 with the gate supposedly in place. */
+  const [registeredKey, setRegisteredKey] = useState<string | null>(null);
   /** ★★★ RE-REGISTER, THEN RESTART. The native watchdog reopens a socket the server will keep
    *  dropping until the session is registered again, so the reopen alone can never win.
    *  ★ Stable identity (useCallback): AudioPlayer subscribes to the native events in an effect
    *    keyed on this, and an inline arrow re-subscribed on every render of the busiest screen in
    *    the app. */
+  /** ★ Where the listener actually is, readable from a callback that is created once. The stuck
+   *    handler is useCallback([]) on purpose (AudioPlayer subscribes to native events keyed on its
+   *    identity), so it cannot read `status` — and a stale frequency re-asserted after a recovery
+   *    would be its own bug. */
+  const tuneRef = useRef<{ frequency: number; mode: SDRMode }>({ frequency: 0, mode: 'am' });
+
   const onAudioStuck = useCallback(() => {
     // ★ Only UberSDR has a preflight to redo; the cast keeps the shared SDRBackend type honest
     //   rather than widening it for one backend's recovery. It is the ADAPTER that must carry the
@@ -1061,6 +1075,17 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         noteAudioEvent('re-registered — restarting the audio engine');
         setAudioRestart((n: number) => n + 1);
+        // ★★★ AND PUT THEM BACK WHERE THEY WERE. A re-registered session is a NEW session to the
+        //     server, so it lands us on ITS default frequency — the recovery worked and the
+        //     listener was moved off the station they were listening to (Stuart, 2026-08-18:
+        //     "it did finally connect but the whole thing reconnected and came back at a
+        //     different frequency"). A fix that silently retunes you is not a fix you would
+        //     choose. Re-assert from a REF, not from the closure: this callback is created once.
+        const want = tuneRef.current;
+        if (want.frequency) {
+          noteAudioEvent(`re-asserting the tune ${want.frequency} ${want.mode}`);
+          setTimeout(() => { client.current?.tune(want.frequency, want.mode); }, 600);
+        }
       })
       .catch((e: unknown) => {
         noteAudioEvent('re-register FAILED: ' + (e instanceof Error ? e.message : String(e)));
@@ -1169,8 +1194,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *   which it genuinely is.
    */
   const sessionUuid = useMemo(() => uuidv4(), [connectBase]);
-  // ★ A registration belongs to ONE session id on ONE server — never carry it across either.
-  useEffect(() => { setSessionRegistered(false); }, [connectBase, sessionUuid]);
+
 
   // ── SDR state ─────────────────────────────────────────────────────────────
 
@@ -1290,6 +1314,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     bandwidthLow: -3000, bandwidthHigh: 3000,
     binCount: 1024, binBandwidth: 0, centerHz: 0, bwHz: 0,
   });
+  // ★ Mirrored for the stuck-audio recovery, which is created once and cannot read state.
+  useEffect(() => { tuneRef.current = { frequency: status.frequency, mode: status.mode }; },
+            [status.frequency, status.mode]);
   // Hot-path frame sink — WaterfallView registers its imperative frame handler
   // here; spectrum frames bypass React state entirely (CPU audit 2026-06-11:
   // setState per 10–20Hz frame re-rendered the whole tree ≈ a full core).
@@ -3051,7 +3078,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       //    is no case where both can be true: a genuinely refused session has no connection to
       //    announce, and `refused` stops the client retrying into one.
       // ★ The one signal that the audio socket may now be opened. See sessionRegistered.
-      onSessionRegistered: () => { if (!destroyed.current) setSessionRegistered(true); },
+      onSessionRegistered: () => {
+        // ★ Stamped with the pair it was registered FOR — this closure belongs to this backend,
+        //   which is created per connectBase/sessionUuid.
+        if (!destroyed.current) setRegisteredKey(`${connectBase}|${sessionUuid}`);
+      },
       onConnect:    () => { if (!destroyed.current) { connectedOnceRef.current = true;
         // ★★ THE TAKEOVER IS SPENT. We are in; every reconnect from here is an accident of the
         //    network or the app lifecycle, and none of them asked to displace anybody. Clearing it
@@ -7617,7 +7648,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         //     others quietly left behind.
         // ★★★ AND NOT UNTIL THE SESSION IS REGISTERED (sessionRegistered). This gate is the fix for
         //     the audio socket that arrived before POST /connection and was dropped on sight.
-        baseUrl={!refusal && tuneLoaded && sessionRegistered && !route.params.isLocal && (route.params.serverType ?? 'ubersdr') === 'ubersdr' ? connectBase : null}
+        baseUrl={!refusal && tuneLoaded && registeredKey === `${connectBase}|${sessionUuid}` && !route.params.isLocal && (route.params.serverType ?? 'ubersdr') === 'ubersdr' ? connectBase : null}
         password={password}
         frequency={status.frequency}
         mode={status.mode}
