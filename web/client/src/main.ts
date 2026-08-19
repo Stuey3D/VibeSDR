@@ -3910,6 +3910,19 @@ async function loadOwnerNotice() {
     //     field. This file is served by the front door AND by every radio, so it always answers.
     // ★ showSplashRadios() renders the same message again from the directory when there is one;
     //   it is the same value, and whichever arrives first is correct.
+    // ★★★ TELL THE LISTENER THE LIMIT IS A GUARANTEE, BEFORE IT MATTERS. Without this a soft
+    //     server's countdown reaches zero, nothing happens, and the listener is left working out
+    //     for themselves whether the receiver is broken or the rule is. Said ONCE, as a pill —
+    //     they have not been refused anything, and a modal between a person and the radio to
+    //     deliver good news would be absurd.
+    // ★ Absent limitMode means hard, so this never fires on a server that has not chosen soft.
+    softLimit = j?.limitMode === 'soft';
+    if (softLimit && Number(j?.limitMin) > 0 && !softLimitTold) {
+      softLimitTold = true;
+      const mins = Number(j.limitMin);
+      showPill(`This receiver is shared. It is yours for ${mins} minutes — after that you keep it `
+             + `until somebody else wants it.`, 11000);
+    }
     showLandingMessage(j?.landingMessage, j?.landingLinkUrl, j?.landingLinkLabel);
     const ant = typeof j?.antenna === 'string' ? j.antenna.trim() : '';
     const ael = document.getElementById('splashAntenna');
@@ -4788,6 +4801,12 @@ let listenerCount = 0, listenerMax = 0;
 let sessionDeadline = 0;      // epoch ms, 0 = no limit
 let sessionTicker: ReturnType<typeof setInterval> | null = null;
 
+/** ★★ Does THIS server keep you past the limit? Read from /vibeserver.json at connect; absent
+ *  means hard, which is what every server said before this existed. */
+let softLimit = false;
+/** ★ Once per page load. Repeating it on every poll would turn an explanation into nagging. */
+let softLimitTold = false;
+
 function setTimeLeft(secs: number) {
   sessionDeadline = Date.now() + secs * 1000;
   if (!sessionTicker) sessionTicker = setInterval(paintTimeLeft, 1000);
@@ -4832,6 +4851,20 @@ function paintTimeLeft() {
   // explanation reads as the receiver having broken. Shown once; the ticker stops
   // so nothing overwrites it, and it remains until the tab is closed.
   if (left === 0) {
+    // ★★★ ON A SOFT SERVER THE CLOCK RUNNING OUT IS NOT THE END, AND MUST NOT LOOK LIKE IT. The
+    //     listener stays connected past zero — so "Your turn ends in 0:00" sits there being wrong,
+    //     and the reader is left wondering why they are still listening. That is the same fault
+    //     clearTimeLeft() records for the admin exemption twenty lines up: a countdown that runs
+    //     down to a threat nobody carries out teaches people not to trust the readout.
+    // ★ Stuart, 2026-08-19: "users need to be advised that there is a soft limit so that when the
+    //   time limit runs out they dont wonder why they are staying connected."
+    if (softLimit) {
+      el.textContent = 'Your guaranteed time is up — you keep the radio until someone else wants it';
+      el.className = '';
+      el.hidden = false;
+      if (sessionTicker) { clearInterval(sessionTicker); sessionTicker = null; }
+      return;
+    }
     el.textContent = 'Your turn ends in 0:00';
     el.className = 'crit';
     el.hidden = false;
