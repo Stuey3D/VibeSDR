@@ -59,6 +59,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <cctype>    // ★ tolower — reached transitively on the desktop toolchains, not guaranteed on the NDK's libc++
 #include <dirent.h>
 #include <deque>
 #include <memory>
