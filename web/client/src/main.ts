@@ -743,6 +743,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   authState = auth;
   $('splash').classList.add('hidden');
   $('app').classList.add('live');
+  // ★ The owner's notice had to outrank the splash to be seen at all; on the receiver it must
+  //   outrank NOTHING, or it covers the panels. See showOwnerNotice.
+  const on = document.getElementById('ownerNotice');
+  if (on) on.style.zIndex = '45';
 
   const canvas = $<HTMLCanvasElement>('wf');
   const p = prefs();
@@ -4013,13 +4017,47 @@ function showOwnerNotice(text: string) {
   if (!t || t === noticeDismissed) return;
   const el = document.createElement('div');
   el.id = id;
+  // ★★★ IT SAT ON TOP OF THE WHOLE APP. z-index 9400 against a frequency panel at 51 — nearly two
+  //     hundred layers above every control — so on a narrow screen a six-line notice covered the
+  //     panel a listener had just opened (Stuart, 2026-08-19, iPhone SE: "it blocks most things in
+  //     the UI").
+  // ★★★ ONE VALUE CANNOT BE RIGHT FOR BOTH SCREENS. It must clear the SPLASH, which is 100, and
+  //     sit under the panels, which are around 51 — so the layer depends on which screen you are
+  //     on, and noticeToFront/Back below moves it when startApp() swaps them. The two screens are
+  //     never visible at once, which is what makes that safe.
+  // ★★ AND IT NEEDS A VISIBLE WAY OUT. Clicking it has always dismissed it, but nothing said so —
+  //    an affordance only the author knows about is not an affordance. The × is a real button with
+  //    a real touch target, in the flex row rather than floated over the text, because a × that
+  //    lands ON the words is unreadable at exactly the width where it matters most.
+  // ★ Font and padding shrink with the viewport rather than at a breakpoint: the SE in Display
+  //   Zoom is the narrowest layout this has to survive, and it is not a size anybody tests on.
   el.style.cssText =
-    'position:fixed;left:50%;top:16px;transform:translateX(-50%);z-index:9400;max-width:min(92vw,640px);' +
-    'background:rgba(30,20,0,0.94);color:#ffd479;border:1px solid rgba(255,180,60,0.55);' +
-    'border-radius:8px;padding:9px 14px;font:13px ui-monospace,monospace;text-align:center;' +
-    'box-shadow:0 4px 18px rgba(0,0,0,0.55);cursor:pointer';
-  el.title = 'Dismiss';
-  el.textContent = t;
+    `position:fixed;left:50%;top:12px;transform:translateX(-50%);max-width:min(92vw,640px);` +
+    `z-index:${document.getElementById('app')?.classList.contains('live') ? 45 : 101};` + +
+    'background:rgba(30,20,0,0.96);color:#ffd479;border:1px solid rgba(255,180,60,0.55);' +
+    'border-radius:8px;padding:7px 8px 7px 12px;font:clamp(11px,3vw,13px) ui-monospace,monospace;' +
+    'box-shadow:0 4px 18px rgba(0,0,0,0.55);display:flex;align-items:flex-start;gap:8px;' +
+    'line-height:1.4';
+  const msg = document.createElement('span');
+  msg.textContent = t;
+  msg.style.cssText = 'flex:1 1 auto;min-width:0';
+  const x = document.createElement('button');
+  x.type = 'button';
+  x.textContent = '\u00D7';
+  x.title = 'Dismiss this message';
+  x.setAttribute('aria-label', 'Dismiss this message');
+  // ★★ 28px, not a glyph with padding: this is the smallest thing on screen and the one people
+  //    jab at with a thumb. ★ flex:none so it can never be squeezed to nothing by a long message —
+  //    a clipped × is a TRAP, not untidiness (see the SE display-zoom note in AGENTS.md).
+  x.style.cssText =
+    'flex:none;width:28px;height:28px;margin:-3px -2px 0 0;padding:0;background:none;border:0;' +
+    'color:#ffd479;font:18px/1 ui-monospace,monospace;cursor:pointer;opacity:.75;border-radius:6px';
+  x.addEventListener('click', (e) => { e.stopPropagation(); noticeDismissed = t; el.remove(); });
+  el.appendChild(msg);
+  el.appendChild(x);
+  // ★ The whole box still dismisses, as it always did — the × makes that discoverable rather than
+  //   replacing it.
+  el.style.cursor = 'pointer';
   el.addEventListener('click', () => { noticeDismissed = t; el.remove(); });
   document.body.appendChild(el);
 }
