@@ -522,8 +522,19 @@ function renderVisitors(list: any[], busyIps: Set<string>) {
   if (!idle.length) { el.innerHTML = ''; el.hidden = true; return; }
   el.hidden = false;
   el.innerHTML = '<div class="qHead">ON THE LANDING PAGE</div>' + idle
-    .map((v) => `<div class="qRow">${withFlag(v.cc, v.ip || '—')} `
-              + `<span class="dim">choosing a radio · seen ${esc(dur(v.secs || 0))} ago</span></div>`)
+    // ★★ "CHOOSING A RADIO" IS ONLY TRUE FOR THE FIRST MINUTE OR SO. The page polls itself, so
+    //    `secs` (time since last seen) is always a few seconds — a tab parked for hours looked
+    //    exactly like somebody actively deciding. `forSecs` is how long they have been there, and
+    //    past a couple of minutes the honest description is a page left open.
+    // ★ Absent forSecs (an older server) keeps the original wording rather than guessing.
+    .map((v) => {
+      const on = Number(v.forSecs) || 0;
+      const what = !v.forSecs ? 'choosing a radio'
+                 : on > 180   ? `page left open for ${esc(dur(on))}`
+                              : 'choosing a radio';
+      return `<div class="qRow">${withFlag(v.cc, v.ip || '—')} `
+           + `<span class="dim">${what} · seen ${esc(dur(v.secs || 0))} ago</span></div>`;
+    })
     .join('');
 }
 

@@ -1152,14 +1152,22 @@ static const std::string& vsInstanceId() {
  *  perfectly good heartbeat: last-seen per address, and anything older than a minute has gone.
  *  ★ Addresses only, held in memory, pruned — the same data the connection log already keeps. */
 static std::mutex g_vsVisitorMtx;
-static std::map<std::string, double> g_vsVisitors;
+/** ★★★ FIRST SEEN AS WELL AS LAST. Only last-seen was kept, and the page's heartbeat means that is
+ *  always a few seconds ago — so a tab PARKED on the landing page for hours rendered as "choosing a
+ *  radio · seen 3s ago", which reads as somebody actively deciding. Stuart, 2026-08-19: an address
+ *  "that hasnt moved for a couple of hours". How long they have been there is the fact that tells
+ *  an owner whether they are looking at demand or at a forgotten tab. */
+struct VsVisitor { double first = 0, last = 0; };
+static std::map<std::string, VsVisitor> g_vsVisitors;
 static void vsNoteVisitor(const std::string& ip) {
     if (ip.empty()) return;
     const double now = (double)::time(nullptr);
     std::lock_guard<std::mutex> lk(g_vsVisitorMtx);
-    g_vsVisitors[ip] = now;
+    auto& v = g_vsVisitors[ip];
+    if (v.first <= 0) v.first = now;      // ★ set once; the whole point is that it does not move
+    v.last = now;
     for (auto it = g_vsVisitors.begin(); it != g_vsVisitors.end();)
-        it = (now - it->second > 60.0) ? g_vsVisitors.erase(it) : std::next(it);
+        it = (now - it->second.last > 60.0) ? g_vsVisitors.erase(it) : std::next(it);
 }
 
 static LocalSdrShim::RtlSerialFn g_vsRtlSerialFn;
@@ -11323,12 +11331,16 @@ std::string LocalSdrShim::adminSessionsJson() {
         std::lock_guard<std::mutex> vl(g_vsVisitorMtx);
         bool vfirst = true;
         for (const auto& kv : g_vsVisitors) {
-            if (nowEpoch - kv.second > 60.0) continue;
+            if (nowEpoch - kv.second.last > 60.0) continue;
             if (!vfirst) visitorsJson += ',';
             vfirst = false;
             visitorsJson += "{\"ip\":\"" + vibeadmin::esc(kv.first) + "\""
                           + ",\"cc\":\"" + vibeadmin::esc(vsCountry(kv.first)) + "\""
-                          + ",\"secs\":" + std::to_string((long long)(nowEpoch - kv.second)) + "}";
+                          + ",\"secs\":" + std::to_string((long long)(nowEpoch - kv.second.last))
+                          // ★ How long they have been ON the page, which is the number that
+                          //   separates a person choosing from a tab somebody forgot.
+                          + ",\"forSecs\":" + std::to_string((long long)(nowEpoch - kv.second.first))
+                          + "}";
         }
     }
     std::string curDecoder;
