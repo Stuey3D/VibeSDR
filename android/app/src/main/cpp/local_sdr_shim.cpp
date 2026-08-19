@@ -10814,7 +10814,23 @@ std::string LocalSdrShim::adminSessionsJson() {
     const double now = Impl::nowSecs();
     for (auto& kv : p->clientDsp) {
         auto& c = kv.second;
-        if (!c || !c->spec || !c->spec->isOpen()) continue;
+        if (!c) continue;
+        // ★★★ AN AUDIO-ONLY LISTENER IS STILL A LISTENER — THE THIRD PLACE THAT HAD TO LEARN IT.
+        //     Backgrounding the phone app closes the SPECTRUM socket and keeps the audio playing,
+        //     so keying this table on the spectrum socket dropped that listener out of the one
+        //     view whose entire job is "who is on my radio right now" — while they still held the
+        //     slot, still counted in `listeners`, and still cost uplink (Stuart, 2026-08-19: an
+        //     RTL showing one listener, no rows, and 67 kbit/s instead of the usual 240).
+        // ★★★ specListenerCountLocked() was taught this on 2026-08-17 and its comment names the
+        //     fault exactly — "two definitions of in use that disagreed". There were THREE. The
+        //     count and the door agree; this table was still using the old one.
+        // ★★ Whichever socket is alive answers for the row. Every field below that reached
+        //    through `c->spec` would dereference a closed — or absent — socket otherwise, which is
+        //    precisely why the old guard was there. Removing the guard means fixing the reach.
+        const bool specOpen  = c->spec  && c->spec->isOpen();
+        const bool audioOpen = c->audio && c->audio->isOpen();
+        if (!specOpen && !audioOpen) continue;
+        const std::string peer = specOpen ? c->spec->peerAddress() : c->audio->peerAddress();
         if (!first) j += ',';
         first = false;
         const bool isOccupant = !p->occupantSession.empty() && p->occupantSession == c->session;
@@ -10828,7 +10844,9 @@ std::string LocalSdrShim::adminSessionsJson() {
             if (it != sentBySock.end()) nowBytes += it->second;
         }
         int cpuPct = -1, kbps = -1;
-        if (c->lastSampleAt > 0) {
+        // ★ Same guard as the sole-occupant path below: a listener whose audio socket drops and
+        //   reconnects gets a fresh outbox counter, so this total can fall mid-session too.
+        if (c->lastSampleAt > 0 && nowBytes >= c->lastSentBytes && nowNanos >= c->lastDspNanos) {
             const double dt = now - c->lastSampleAt;
             if (dt > 0.2) {
                 cpuPct = (int)(((double)(nowNanos - c->lastDspNanos) / 1e9) / dt * 100.0 + 0.5);
@@ -10850,18 +10868,23 @@ std::string LocalSdrShim::adminSessionsJson() {
             if (owns) dec = curDecoder;
         }
         j += "{\"session\":\"" + vibeadmin::esc(c->session) + "\""
-           + ",\"ip\":\"" + vibeadmin::esc(c->spec->peerAddress()) + "\""
+           + ",\"ip\":\"" + vibeadmin::esc(peer) + "\""
            + ",\"vfoHz\":" + std::to_string((long long)c->vfoHz)
            + ",\"mode\":\"" + vibeadmin::esc(c->mode) + "\""
            + ",\"bwHz\":" + std::to_string((long long)c->bwHz)
-           + ",\"audio\":" + ((c->audio && c->audio->isOpen()) ? "true" : "false")
+           + ",\"audio\":" + (audioOpen ? "true" : "false")
+           // ★★ SAY WHETHER THE WATERFALL IS RUNNING, so a row costing 68 kbit/s instead of the
+           //    usual 240 explains itself. Without it an audio-only listener now appears in the
+           //    table but reads as a listener on a suspiciously slow link — which is a fault an
+           //    owner would go looking for, and there is none. Absent means true on an older page.
+           + ",\"spectrum\":" + (specOpen ? "true" : "false")
            + ",\"opus\":" + (c->wantsOpus ? "true" : "false")
            // ★ How far behind this listener's own DSP thread has fallen. The one per-listener
            //   number that says WHOSE link is the problem when the server is struggling.
            + ",\"dropped\":" + std::to_string((unsigned long long)c->dropped.load())
            + ",\"zoomed\":" + (c->ownView ? "true" : "false")
-           + ",\"cc\":\"" + vibeadmin::esc(vsCountry(c->spec->peerAddress())) + "\""
-           + ",\"net\":\"" + vibeadmin::esc(vsAsnLabel(c->spec->peerAddress())) + "\""
+           + ",\"cc\":\"" + vibeadmin::esc(vsCountry(peer)) + "\""
+           + ",\"net\":\"" + vibeadmin::esc(vsAsnLabel(peer)) + "\""
            + ",\"agent\":\"" + vibeadmin::esc(c->agent.substr(0, 160)) + "\""
            // ★★ WHAT THIS ONE LISTENER COSTS. Both are rates derived from two samples of a
            //    monotonic counter — the first poll shows nothing, which is honest, rather than an
@@ -10891,7 +10914,16 @@ std::string LocalSdrShim::adminSessionsJson() {
     //     which DSP shape a radio happens to use.
     // ★ CPU is the whole process's DSP load, and on a single-user radio that is honest: all of it
     //   is being spent on this one listener.
-    if (p->clientDsp.empty() && p->specClient && p->specClient->isOpen()) {
+    // ★★★ AND THE SAME ON THIS PATH — which is the one that matters most, because it is the path
+    //     every SINGLE-USER radio takes: the dongle and the Airspy HF+. A backgrounded listener
+    //     closes the spectrum socket, this guard went false, and the radio reported nobody while
+    //     holding the slot for them.
+    // ★ The audio-only case is admitted only with an occupant claimed, exactly as
+    //   specListenerCountLocked() admits it. Same condition in both places, deliberately: they are
+    //   answering the same question and have already disagreed once.
+    const bool soleSpec  = p->specClient  && p->specClient->isOpen();
+    const bool soleAudio = p->audioClient && p->audioClient->isOpen();
+    if (p->clientDsp.empty() && (soleSpec || (soleAudio && !p->occupantSession.empty()))) {
         unsigned long long bytes = 0;
         for (auto* sk : { p->specClient.get(), p->audioClient.get() }) {
             if (!sk) continue;
@@ -10899,7 +10931,15 @@ std::string LocalSdrShim::adminSessionsJson() {
             if (it != sentBySock.end()) bytes += it->second;
         }
         int kbps = -1;
-        if (p->soleLastAt > 0) {
+        // ★★★ THE COUNTER GOES BACKWARDS WHEN THE OCCUPANT CHANGES. soleLastBytes lives on the
+        //     Impl, not on the session, so the first poll after a NEW listener arrives subtracts
+        //     the previous occupant's total from this one's — and the subtraction is unsigned, so
+        //     it wraps and the table showed `2147483647k` (Stuart's admin page would read that as
+        //     a two-terabit listener). Seen live 2026-08-19 while testing the audio-only row.
+        // ★ A decrease is not an error to report, it is a new baseline: reseed and show a dash,
+        //   exactly as the very first poll does. Same shape as the `total >= lastBytes` guard the
+        //   whole-server rate in adminStatusJson has always had — this path simply never got it.
+        if (p->soleLastAt > 0 && bytes >= p->soleLastBytes) {
             const double dt = now - p->soleLastAt;
             if (dt > 0.2) {
                 kbps = (int)(((double)(bytes - p->soleLastBytes) * 8.0 / 1000.0) / dt + 0.5);
@@ -10907,14 +10947,19 @@ std::string LocalSdrShim::adminSessionsJson() {
             }
         } else { p->soleLastBytes = bytes; p->soleLastAt = now; }
 
-        const std::string ip = p->occupantAddr.empty() ? p->specClient->peerAddress() : p->occupantAddr;
+        // ★ occupantAddr first, then whichever socket is actually open — specClient may be gone.
+        const std::string ip = !p->occupantAddr.empty() ? p->occupantAddr
+                             : soleSpec  ? p->specClient->peerAddress()
+                             : soleAudio ? p->audioClient->peerAddress()
+                                         : std::string();
         if (!first) j += ',';
         first = false;
         j += "{\"session\":\"" + vibeadmin::esc(p->occupantSession) + "\""
            + ",\"ip\":\"" + vibeadmin::esc(ip) + "\""
            + ",\"vfoHz\":" + std::to_string((long long)p->audioFreq.load())
            + ",\"mode\":\"" + vibeadmin::esc(p->mode) + "\""
-           + ",\"audio\":" + ((p->audioClient && p->audioClient->isOpen()) ? "true" : "false")
+           + ",\"audio\":" + (soleAudio ? "true" : "false")
+           + ",\"spectrum\":" + (soleSpec ? "true" : "false")
            + ",\"dropped\":0,\"zoomed\":false"
            + ",\"cc\":\"" + vibeadmin::esc(vsCountry(ip)) + "\""
            + ",\"net\":\"" + vibeadmin::esc(vsAsnLabel(ip)) + "\""

@@ -472,7 +472,15 @@ function renderSessions(s: any) {
     <td>${withFlag(c.cc, c.ip || '—')}</td>
     <td>${c.radio ? esc(c.radio) : '<span class="dim">—</span>'}</td>
     <td>${esc(mhz(c.vfoHz))}</td>
-    <td>${esc(String(c.mode || '').toUpperCase())}${c.zoomed ? ' <span class="dim">zoom</span>' : ''}</td>
+    <td>${esc(String(c.mode || '').toUpperCase())}${c.zoomed ? ' <span class="dim">zoom</span>' : ''}${
+      // ★★ WHY THIS ROW IS CHEAP. A backgrounded listener closes the spectrum socket and keeps the
+      //    audio, so they cost about a quarter of a full listener. Without saying so, the row reads
+      //    as somebody on a bad link — a fault an owner would go hunting for, and there is none.
+      // ★ ABSENT MEANS TRUE: a server older than this field sends no `spectrum`, and every one of
+      //   its listeners must keep rendering exactly as before rather than all claiming audio only.
+      c.spectrum === false
+        ? ' <span class="dim" title="Listening with the waterfall stopped — the app is in the background or the tab is hidden. They still hold the slot; they just cost much less.">audio only</span>'
+        : ''}</td>
     <td>${c.decoder ? esc(String(c.decoder).toUpperCase()) : '<span class="dim">—</span>'}</td>
     <td>${esc(c.secs ? dur(c.secs) : '—')}</td>
     <td title="Share of ONE core: 100% = a core fully busy keeping up with this listener's stream. Not a share of the whole machine — the HEALTH card above is that.">${rate(c.cpu, '% core')}</td>
