@@ -38,6 +38,16 @@ VIBE_VER=$(sed -n 's/^project(vibeserver VERSION \([0-9.]*\).*/\1/p' "$ROOT/vibe
 [ -n "$VIBE_VER" ] || { echo "!! could not read the version from vibeserver/CMakeLists.txt"; exit 1; }
 echo "==> version $VIBE_VER (from CMakeLists.txt)"
 
+# ★★★ AND THE BUILD NUMBER COMES FROM IT TOO. This was hard-coded to 32 in the plist heredoc below
+#     — the SAME fault the note above describes, fixed for the marketing version and missed for
+#     this one, so 3.1.18 and 3.1.20 both called themselves build 32. macOS caches app metadata by
+#     bundle version, and two different builds claiming one number is how a machine keeps showing
+#     you the old one long after you replaced it.
+# ★ Derived, not counted: major*10000 + minor*100 + patch. Monotonic while versions go up, needs
+#   no state file, and cannot drift from the version the way a hand-typed counter does.
+VIBE_BUILD=$(echo "$VIBE_VER" | awk -F. '{printf "%d", $1*10000 + $2*100 + $3}')
+echo "==> build $VIBE_BUILD (derived from $VIBE_VER)"
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -53,7 +63,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
        the V3 core; the number had simply not moved since the alpha, so the About box and the
        GitHub release disagreed with the product (2026-08-11). -->
   <key>CFBundleShortVersionString</key><string>${VIBE_VER}</string>
-  <key>CFBundleVersion</key>           <string>32</string>
+  <key>CFBundleVersion</key>           <string>${VIBE_BUILD}</string>
   <key>LSMinimumSystemVersion</key>    <string>14.0</string>
   <!-- Menu-bar resident: no Dock icon, no window on launch. -->
   <key>LSUIElement</key>               <true/>
