@@ -2511,6 +2511,10 @@ select.btn { padding: 6px 8px; }
 
     <div id="secCountries" hidden>
     <h2>WHERE THEY CONNECT FROM <span class="dim">— distinct addresses, last 24 hours</span></h2>
+    <!-- ★★ THE MAP, when Leaflet loads. Hidden until then so a server with no route out shows the
+         bar chart below and nothing else — an empty grey box would read as a broken panel. -->
+    <div id="adminCountryMap" hidden
+         style="border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#0a0704"></div>
     <div id="adminCountries"></div>
     <!-- ★ Explains its own emptiness. A blank chart otherwise reads as "nobody has connected",
          which is a very different claim from "the country data has not downloaded yet". -->

@@ -412,6 +412,105 @@ function renderGraphs(h: any) {
  *  counting — see ConnLog::topCountriesJson for why connections would be the wrong unit).
  *  ★ Plain divs rather than a chart library: eight labelled bars do not justify a dependency,
  *    and this page may be opened over 4G from a field. */
+/** ★★★ ROUGH CENTRE OF EACH COUNTRY, for dropping a flag on the map.
+ *
+ *  ★★ APPROXIMATE ON PURPOSE and that is not a compromise: the marker is a FLAG, sized by how many
+ *     people came from there. Nobody reads a position off it, and a country the size of Russia has
+ *     no single honest point anyway. Close enough to land in the right country is the whole
+ *     requirement.
+ *  ★ Unknown codes are simply not drawn — an unplaced flag would sit at 0,0 in the Atlantic and
+ *    look like a real visitor from the middle of the ocean. Add a row when one shows up. */
+const CC_POS: Record<string, [number, number]> = {
+  AE:[24,54], AR:[-34,-64], AT:[47.5,14], AU:[-25,134], BE:[50.8,4.5], BG:[42.7,25.5],
+  BR:[-10,-52], CA:[58,-100], CH:[46.8,8.2], CL:[-33,-71], CN:[35,105], CO:[4,-73],
+  CZ:[49.8,15.5], DE:[51,10], DK:[56,10], EE:[58.6,25], EG:[27,30], ES:[40,-4],
+  ET:[9,39], FI:[64,26], FR:[46.5,2.5], GB:[54,-2.5], GR:[39,22], GT:[15.5,-90.3],
+  HK:[22.3,114.2], HR:[45.2,15.5], HU:[47,19.5], ID:[-2,118], IE:[53.3,-8],
+  IL:[31.5,34.8], IN:[22,79], IQ:[33,44], IS:[65,-18], IT:[42.8,12.6], JP:[36,138],
+  KE:[0.2,37.9], KR:[36.5,127.8], LT:[55.2,23.9], LU:[49.8,6.1], LV:[56.9,24.6],
+  MA:[32,-6], MX:[23,-102], MY:[4.2,102], NG:[9.1,8.7], NL:[52.2,5.5], NO:[62,10],
+  NZ:[-41,174], PA:[8.5,-80], PE:[-10,-76], PH:[12.9,121.8], PK:[30,70], PL:[52,19.5],
+  PT:[39.5,-8], RO:[45.9,25], RS:[44,21], RU:[57,60], SA:[24,45], SE:[62,15],
+  SG:[1.35,103.8], SI:[46.1,14.8], SK:[48.7,19.7], TH:[15,101], TR:[39,35],
+  TW:[23.7,121], UA:[49,32], US:[39.5,-98.5], UY:[-33,-56], VE:[7,-66], VN:[16,107],
+  ZA:[-29,24.7],
+};
+
+let ccMap: any = null;               // the Leaflet map, once it exists
+let ccMarkers: any[] = [];
+let leafletPending: Promise<boolean> | null = null;
+
+/** ★★ LOADED ONLY WHEN AN OWNER OPENS ADMIN, and from the same CDN the spots map already uses.
+ *  ★★★ THE PAGE MUST NOT DEPEND ON IT. VibeServer runs on Pis behind LANs with no route out, and
+ *      the admin page is otherwise entirely self-contained — so this resolves FALSE on failure and
+ *      the bar chart stays. A map that cannot load must cost nothing but a map. */
+function loadLeaflet(): Promise<boolean> {
+  if ((window as any).L) return Promise.resolve(true);
+  if (leafletPending) return leafletPending;
+  leafletPending = new Promise<boolean>((resolve) => {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    document.head.appendChild(css);
+    const js = document.createElement('script');
+    js.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    js.onload = () => resolve(true);
+    js.onerror = () => resolve(false);
+    // ★ A server with no internet must not leave the panel waiting for ever.
+    setTimeout(() => resolve(!!(window as any).L), 6000);
+    document.head.appendChild(js);
+  });
+  return leafletPending;
+}
+
+/** The dark world map, with a flag per country sized by how many distinct addresses came from it. */
+async function renderCountryMap(list: any[]): Promise<boolean> {
+  const host = document.getElementById('adminCountryMap');
+  if (!host || !list.length) return false;
+  if (!await loadLeaflet()) return false;
+  const L = (window as any).L;
+
+  if (!ccMap) {
+    host.hidden = false;
+    host.style.height = '360px';
+    ccMap = L.map(host, {
+      worldCopyJump: true, zoomControl: true, attributionControl: true,
+      // ★ Nobody navigates this map; it is a picture of where people are. Scroll-zoom would steal
+      //   the page's scroll wheel on the way past it, which is the classic embedded-map annoyance.
+      scrollWheelZoom: false,
+    }).setView([25, 5], 1);
+    // ★★ CARTO DARK MATTER — the dark basemap, so the panel matches the rest of the page rather
+    //    than punching a bright white hole in it. Same dependency class as the spots map's OSM
+    //    tiles, which this product has shipped for months.
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap, &copy; CARTO', subdomains: 'abcd', maxZoom: 6, minZoom: 1,
+    }).addTo(ccMap);
+  }
+
+  ccMarkers.forEach((m) => ccMap.removeLayer(m));
+  ccMarkers = [];
+  const max = Math.max(...list.map((c) => Number(c.n) || 0), 1);
+  for (const c of list) {
+    const pos = CC_POS[String(c.cc || '').toUpperCase()];
+    if (!pos) continue;
+    const n = Number(c.n) || 0;
+    // ★★ SQUARE ROOT, NOT LINEAR. With 21 from the US and 1 from most others, a linear scale makes
+    //    every other country a speck — the visitors are the interesting part and they are the small
+    //    numbers. Area-proportional is also what the eye actually reads from a symbol.
+    const size = 14 + Math.round(22 * Math.sqrt(n / max));
+    const icon = L.divIcon({
+      className: '',
+      html: `<div style="display:flex;align-items:center;gap:4px;white-space:nowrap;`
+          + `transform:translate(-50%,-50%);text-shadow:0 1px 3px #000">`
+          + `<span style="font-size:${size}px;line-height:1">${flag(c.cc) || ''}</span>`
+          + `<span style="font:600 12px/1 ui-monospace,monospace;color:#ffb833">${n}</span></div>`,
+      iconSize: [0, 0],
+    });
+    ccMarkers.push(L.marker(pos, { icon, title: `${c.cc}: ${n}` }).addTo(ccMap));
+  }
+  return true;
+}
+
 function renderCountries(list: any[]) {
   const wrap = $('adminCountries');
   const none = $('adminNoCountries');
@@ -955,7 +1054,15 @@ async function refresh() {
       //     answered the status call, from ITS OWN connection log — so a listener on another radio
       //     is simply absent. Stuart, 2026-08-19: "brazil is on there but not shown", with a
       //     Brazilian listening on the RSP1B at that moment. Same root cause as the visitor count.
-      renderCountries(countriesFrom(conns.connections ?? [], st.countries ?? []));
+      // ★★ THE MAP IS THE PICTURE; THE BARS ARE THE GUARANTEE. renderCountries() draws first and
+      //    always, so a server with no route out (a Pi on a LAN, which is most of them) still gets
+      //    the chart it has always had. The map replaces it only once Leaflet has actually loaded.
+      const ccList = countriesFrom(conns.connections ?? [], st.countries ?? []);
+      renderCountries(ccList);
+      renderCountryMap(ccList).then((ok) => {
+        const bars = document.getElementById('adminCountries');
+        if (ok && bars) bars.hidden = true;
+      });
       renderConns(conns.connections ?? []);
     }
     // ★ Always, in both modes: the header names which server you are looking at, and an early
