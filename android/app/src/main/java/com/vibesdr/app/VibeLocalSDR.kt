@@ -213,6 +213,28 @@ object VibeLocalSDR {
     fun setVibeServerWebEnabled(on: Boolean) { ensureLoaded(); nativeSetVibeServerWebEnabled(on) }
     /** Pin the capture rate (Hz). 0 = client-controlled. */
     fun setVibeServerLockedRate(rate: Double) { ensureLoaded(); nativeSetVibeServerLockedRate(rate) }
+
+    // ── The rest of the server's settings, one radio at a time ────────────────────────────────
+    // ★★★ ALL OF THESE ALREADY WORKED IN THE ENGINE and were reachable only from the desktop
+    //     binary. The phone runs the same server; it simply had no way to ask.
+
+    /** The time limit is a GUARANTEE, not a deadline: kept past its time until somebody waits. */
+    fun setVibeServerSessionLimitSoft(soft: Boolean) { ensureLoaded(); nativeSetVibeServerSessionLimitSoft(soft) }
+    /** The aerial on this radio, its icon, and the machine's standing landing-screen message. */
+    fun setVibeServerLandingInfo(antenna: String, icon: String, message: String,
+                                 linkUrl: String, linkLabel: String) {
+        ensureLoaded(); nativeSetVibeServerLandingInfo(antenna, icon, message, linkUrl, linkLabel)
+    }
+    /** Pin the CENTRE (Hz) — the captured window everyone shares. 0 = follows the listener. */
+    fun setVibeServerLockedCentre(hz: Double) { ensureLoaded(); nativeSetVibeServerLockedCentre(hz) }
+    /** Real bins at deep zoom instead of interpolation. Without it a shared radio goes blocky. */
+    fun setVibeServerZoomSpectrum(on: Boolean) { ensureLoaded(); nativeSetVibeServerZoomSpectrum(on) }
+    /** Does this radio draw the landing page's 24-hour spectrogram? */
+    fun setVibeServerSpectrogram(on: Boolean) { ensureLoaded(); nativeSetVibeServerSpectrogram(on) }
+    /** The spectrum slowdown when nobody is looking. CPU and uplink, not the radio. */
+    fun setVibeServerForceIdleSaver(on: Boolean) { ensureLoaded(); nativeSetVibeServerForceIdleSaver(on) }
+    /** Seconds after the last listener before the capture parks. The device stays CLAIMED. */
+    fun setVibeServerIdleGrace(sec: Double) { ensureLoaded(); nativeSetVibeServerIdleGrace(sec) }
     private external fun nativeSetVibeServerWebEnabled(on: Boolean)
     private external fun nativeSetVibeServerLockedRate(rate: Double)
     /** Station list (JSON array) served at GET /stations for the web client's
@@ -247,6 +269,14 @@ object VibeLocalSDR {
     private external fun nativeSetVibeServerAdminSecret(secret: String)
     private external fun nativeSetVibeServerUncompressedAudio(mode: Int)
     private external fun nativeSetVibeServerSessionLimit(minutes: Int)
+    private external fun nativeSetVibeServerSessionLimitSoft(soft: Boolean)
+    private external fun nativeSetVibeServerLandingInfo(antenna: String, icon: String, message: String,
+                                                        linkUrl: String, linkLabel: String)
+    private external fun nativeSetVibeServerLockedCentre(hz: Double)
+    private external fun nativeSetVibeServerZoomSpectrum(on: Boolean)
+    private external fun nativeSetVibeServerSpectrogram(on: Boolean)
+    private external fun nativeSetVibeServerForceIdleSaver(on: Boolean)
+    private external fun nativeSetVibeServerIdleGrace(sec: Double)
     private external fun nativeSetStationsJson(json: String)
     private external fun nativeSetLocationJson(json: String)
 

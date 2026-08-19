@@ -186,6 +186,79 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerSessionLimit(JNIEnv*, jobje
     vibe::LocalSdrShim::setVibeServerSessionLimit((int)minutes);
 }
 
+// ★★★ THE ANDROID SERVER IS THE SAME SERVER, ONE RADIO AT A TIME (Stuart, 2026-08-19:
+//     "functionally identical to the main server app just with only one radio at a time and the
+//     setup done on the phone rather than a web gui/tui"). Everything below already existed on the
+//     shim and was reachable ONLY from vibeserver/main.cpp — so the engine on the phone supported
+//     it and nothing could ask for it. These are the bindings that close that gap.
+// ★ Deliberately NOT bound: the SDRplay controls (rfNotch, dabNotch, IF gain reduction, LNA
+//   state). No RSP is driven from a phone, and a control that can never apply is the "control that
+//   only works on one radio" fault in AGENTS.md.
+
+// The limit is a GUARANTEE rather than a deadline — kept past its time until somebody waits.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerSessionLimitSoft(JNIEnv*, jobject, jboolean soft) {
+    vibe::LocalSdrShim::instance().setSessionLimitSoft(soft == JNI_TRUE);
+}
+
+// What is bolted to this radio, and the owner's standing message for the landing screen.
+// ★ One call for all four: they are set together at start-up and a half-applied set (an aerial
+//   with no message, a link with no label) is a state nothing wants to reason about.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerLandingInfo(JNIEnv* env, jobject,
+        jstring antenna, jstring icon, jstring message, jstring linkUrl, jstring linkLabel) {
+    auto str = [&](jstring j) -> std::string {
+        if (!j) return std::string();
+        const char* c = env->GetStringUTFChars(j, nullptr);
+        std::string out = c ? c : "";
+        if (c) env->ReleaseStringUTFChars(j, c);
+        return out;
+    };
+    const std::string ant = str(antenna);
+    vibe::LocalSdrShim::instance().setAntennaIcon(str(icon));
+    // ★ The URL is scheme-checked inside setLandingInfo — the shim keeps its own copy of that test
+    //   precisely because this path exists and cannot reach vsconfig. See vsSafeLinkUrl.
+    vibe::LocalSdrShim::instance().setLandingInfo(ant, str(message), str(linkUrl), str(linkLabel));
+}
+
+// ★★ THE CAPTURED WINDOW, which is what makes shared listening possible at all: every listener
+//    gets a slice of ONE window, so the centre must not move. On the phone the centre has always
+//    been wherever the landing frequency was — fine for one listener who retunes the radio itself,
+//    and meaningless the moment several people share it.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerLockedCentre(JNIEnv*, jobject, jdouble hz) {
+    vibe::LocalSdrShim::setVibeServerLockedCentre((double)hz);
+}
+
+// Real bins at deep zoom instead of interpolation — without it a shared, locked receiver goes
+// blocky the moment anybody zooms in, which is the whole point of the mode.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerZoomSpectrum(JNIEnv*, jobject, jboolean on) {
+    vibe::LocalSdrShim::setVibeServerZoomSpectrum(on == JNI_TRUE);
+}
+
+// Does this radio draw the landing page's 24-hour spectrogram?
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerSpectrogram(JNIEnv*, jobject, jboolean on) {
+    vibe::LocalSdrShim::setProvidesSpectrogram(on == JNI_TRUE);
+}
+
+// The machine-wide spectrum slowdown when nobody is looking — CPU and uplink, not the radio.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerForceIdleSaver(JNIEnv*, jobject, jboolean on) {
+    vibe::LocalSdrShim::setVibeServerForceIdleSaver(on == JNI_TRUE);
+}
+
+// ★★★ POWER DOWN WHEN NOBODY IS LISTENING, WITHOUT LETTING THE RADIO GO. Seconds after the last
+//     listener before the capture parks. The device stays CLAIMED so it can start again instantly.
+// ★★ AND NOT releaseWhenIdle, deliberately, which is the Linux behaviour of handing the dongle to
+//    another program: Android's permission model means nothing else can pick it up anyway (Stuart,
+//    2026-08-19), so releasing would cost the restart and buy nothing.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerIdleGrace(JNIEnv*, jobject, jdouble sec) {
+    vibe::LocalSdrShim::setVibeServerIdleGrace((double)sec);
+}
+
 // VibeServer compatibility limits. <=0 = no cap / server default. BEFORE start().
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerLimits(JNIEnv*, jobject,

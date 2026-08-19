@@ -3030,9 +3030,16 @@ async function showSplashRadios(): Promise<void> {
     const listeners = Number(st?.listeners) || 0;
     const max = Number(st?.maxUsers) || Number(r.users) || 1;
     const down = !st;
-    const full = !down && max > 0 && listeners >= max;
     // ★ Text and reachability both from radioCardState — see the note on it.
-    const { state } = radioCardState(r, st);
+    // ★★★ BOTH VALUES FROM ONE PLACE. This took `state` from radioCardState and then computed
+    //     `full` ITSELF for the clickability — two definitions of "is this radio available", and
+    //     they drifted the moment one of them learned about `claimable`. A soft-limit radio held
+    //     past its guarantee said FREE and was greyed out and unclickable, so nobody could take it
+    //     and the limit had effectively become unlimited (Stuart, 2026-08-19).
+    // ★★ That is exactly what radioCardState's own comment warns about — "two copies of this would
+    //    drift the moment either was touched, and the drift would be invisible". It was written to
+    //    stop this and the caller quietly kept its own copy anyway.
+    const { state, blocked } = radioCardState(r, st);
 
     const lo = Number(st?.rangeLo) || 0, hi = Number(st?.rangeHi) || 0;
     // ★★★ SAY WHAT IT COVERS, NOT WHERE IT IS PARKED. This showed a single frequency for any radio
@@ -3072,7 +3079,6 @@ async function showSplashRadios(): Promise<void> {
     //   and that is exactly when a visitor is deciding whether to come back for it.
     const ant = String((r as any).antenna || '').trim();
     const admin = inAdminMode();
-    const blocked = down || (full && !admin);
     const dim = blocked ? 'opacity:.45;cursor:not-allowed' : 'cursor:pointer';
     const tag = blocked ? 'div' : 'a';
     // ★ ?join so the click opens the RECEIVER. Without it the primary's card reloads this very

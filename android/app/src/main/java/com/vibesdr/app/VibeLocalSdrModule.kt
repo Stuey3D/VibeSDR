@@ -336,6 +336,25 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         val uncomp     = if (opts.hasKey("uncompressedAudio")) opts.getInt("uncompressedAudio") else 0
         val limitMin   = if (opts.hasKey("sessionLimitMin")) opts.getInt("sessionLimitMin") else 0
         val lockedRate = if (opts.hasKey("lockedRate")) opts.getDouble("lockedRate") else 0.0
+        // ★★★ THE CAPTURED WINDOW. Shared listening only works because everybody gets a slice of
+        //     ONE window, so the centre must be pinned — on the phone it has always been wherever
+        //     the landing frequency happened to be, which is fine for a single listener who
+        //     retunes the radio itself and meaningless once several people share it.
+        val lockedCentre = if (opts.hasKey("lockedCentre")) opts.getDouble("lockedCentre") else 0.0
+        val limitSoft    = if (opts.hasKey("sessionLimitSoft")) opts.getBoolean("sessionLimitSoft") else false
+        val zoomSpec     = if (opts.hasKey("zoomSpectrum")) opts.getBoolean("zoomSpectrum") else false
+        val spectrogram  = if (opts.hasKey("spectrogram")) opts.getBoolean("spectrogram") else false
+        val idleSaver    = if (opts.hasKey("forceIdleSaver")) opts.getBoolean("forceIdleSaver") else false
+        // ★★★ POWER DOWN WHEN NOBODY IS LISTENING — ON BY DEFAULT, and 300 s is the desktop's own
+        //     default. The device stays CLAIMED so it restarts instantly; this is the idle PARK,
+        //     not the Linux release-to-another-program, which Android's permission model makes
+        //     pointless anyway (Stuart, 2026-08-19). 0 = never park.
+        val idleGrace    = if (opts.hasKey("idleGraceSec")) opts.getDouble("idleGraceSec") else 300.0
+        val antenna      = if (opts.hasKey("antenna")) opts.getString("antenna") ?: "" else ""
+        val antennaIcon  = if (opts.hasKey("antennaIcon")) opts.getString("antennaIcon") ?: "" else ""
+        val landingMsg   = if (opts.hasKey("landingMessage")) opts.getString("landingMessage") ?: "" else ""
+        val landingUrl   = if (opts.hasKey("landingLinkUrl")) opts.getString("landingLinkUrl") ?: "" else ""
+        val landingLbl   = if (opts.hasKey("landingLinkLabel")) opts.getString("landingLinkLabel") ?: "" else ""
         // Only needed so a CRASH-restored server re-advertises as the app would have.
         val advertiseOnStart = if (opts.hasKey("advertise")) opts.getBoolean("advertise") else true
         // Rebuild the server if the process dies under it? Owner's choice: a shim that
@@ -356,7 +375,16 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         VibeLocalSDR.setVibeServerAdminSecret(adminPw)
         VibeLocalSDR.setVibeServerUncompressedAudio(uncomp)
         VibeLocalSDR.setVibeServerSessionLimit(limitMin)
+        VibeLocalSDR.setVibeServerSessionLimitSoft(limitSoft)
         VibeLocalSDR.setVibeServerWebEnabled(webSrv)
+        // ★ Applied on EVERY start, including the crash-restore path, so a rebuilt server is the
+        //   same server — the note below says why that matters for the advanced settings.
+        VibeLocalSDR.setVibeServerLockedCentre(lockedCentre)
+        VibeLocalSDR.setVibeServerZoomSpectrum(zoomSpec)
+        VibeLocalSDR.setVibeServerSpectrogram(spectrogram)
+        VibeLocalSDR.setVibeServerForceIdleSaver(idleSaver)
+        VibeLocalSDR.setVibeServerIdleGrace(idleGrace)
+        VibeLocalSDR.setVibeServerLandingInfo(antenna, antennaIcon, landingMsg, landingUrl, landingLbl)
 
         // ── ★★★ ADVANCED MODE ────────────────────────────────────────────────────────────────
         // ★★ Applied on EVERY start, including the crash-restore path, and always to a definite
