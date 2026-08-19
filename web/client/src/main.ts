@@ -4874,7 +4874,10 @@ function paintTimeLeft() {
     // ★ Stuart, 2026-08-19: "users need to be advised that there is a soft limit so that when the
     //   time limit runs out they dont wonder why they are staying connected."
     if (softLimit) {
-      el.textContent = 'Your guaranteed time is up — you keep the radio until someone else wants it';
+      // ★ SHORT. This is a one-line status slot in the corner under the receiver's name, not a
+      //   place for a sentence — the explanation was already given as a pill on arrival, and all
+      //   this has to do is say which state you are in now.
+      el.textContent = 'Yours until someone else wants it';
       el.className = '';
       el.hidden = false;
       if (sessionTicker) { clearInterval(sessionTicker); sessionTicker = null; }
@@ -4894,8 +4897,18 @@ function paintTimeLeft() {
   }
   // ★ Say what the clock IS. A bare "1:47" over a waterfall is a mystery; people assume it is
   // a recording timer or the station's clock.
-  el.textContent = `Your turn ends in ${mm}:${String(ss).padStart(2, '0')}`;
-  el.className = left <= 30 ? 'crit' : left <= 120 ? 'warn' : '';
+  // ★★★ AND SAY THE RIGHT THING ABOUT IT. On a SOFT server this number is not a countdown to
+  //     being disconnected — it is how long the radio is GUARANTEED to be yours, after which you
+  //     keep it until somebody else turns up. "Your turn ends in 29:39" is simply false for the
+  //     whole half hour, not merely at zero (Stuart, 2026-08-19: "their turn wont end but their
+  //     guaranteed time will").
+  // ★★ The COLOURS go with the meaning. Red and amber say "something is about to be taken from
+  //    you", and on a soft server nothing is: the number running out changes what MAY happen, not
+  //    what WILL. Dressing a guarantee as an alarm is how a listener learns to distrust it.
+  el.textContent = softLimit
+    ? `Yours for ${mm}:${String(ss).padStart(2, '0')}`
+    : `Your turn ends in ${mm}:${String(ss).padStart(2, '0')}`;
+  el.className = softLimit ? '' : (left <= 30 ? 'crit' : left <= 120 ? 'warn' : '');
   el.hidden = false;
   $('rxBadge').hidden = false;   // the badge may be empty if the owner set no name
 }
