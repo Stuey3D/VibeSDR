@@ -746,7 +746,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   // ★ The owner's notice had to outrank the splash to be seen at all; on the receiver it must
   //   outrank NOTHING, or it covers the panels. See showOwnerNotice.
   const on = document.getElementById('ownerNotice');
-  if (on) on.style.zIndex = '45';
+  if (on) on.style.zIndex = '48';
 
   const canvas = $<HTMLCanvasElement>('wf');
   const p = prefs();
@@ -4023,8 +4023,13 @@ function showOwnerNotice(text: string) {
   //     the UI").
   // ★★★ ONE VALUE CANNOT BE RIGHT FOR BOTH SCREENS. It must clear the SPLASH, which is 100, and
   //     sit under the panels, which are around 51 — so the layer depends on which screen you are
-  //     on, and noticeToFront/Back below moves it when startApp() swaps them. The two screens are
-  //     never visible at once, which is what makes that safe.
+  //     on, and startApp() moves it when the screens swap. The two are never visible at once,
+  //     which is what makes that safe.
+  // ★★★ 48, NOT 45 — AND THE GAP IS ONLY THREE. The receiver's own overlays sit at 44, 45 and 46
+  //     (the frequency scale among them) and the panels at 51, so there is exactly one usable slot
+  //     between them. At 45 the scale drew straight over the notice and the box vanished, leaving
+  //     text floating on the spectrum. Anything added to this file in the 47-50 range will collide
+  //     with it.
   // ★★ AND IT NEEDS A VISIBLE WAY OUT. Clicking it has always dismissed it, but nothing said so —
   //    an affordance only the author knows about is not an affordance. The × is a real button with
   //    a real touch target, in the flex row rather than floated over the text, because a × that
@@ -4033,8 +4038,12 @@ function showOwnerNotice(text: string) {
   //   Zoom is the narrowest layout this has to survive, and it is not a size anybody tests on.
   el.style.cssText =
     `position:fixed;left:50%;top:12px;transform:translateX(-50%);max-width:min(92vw,640px);` +
-    `z-index:${document.getElementById('app')?.classList.contains('live') ? 45 : 101};` + +
-    'background:rgba(30,20,0,0.96);color:#ffd479;border:1px solid rgba(255,180,60,0.55);' +
+    `z-index:${document.getElementById('app')?.classList.contains('live') ? 48 : 101};` + +
+    // ★★★ FULLY OPAQUE. At 96% the waterfall and the frequency scale showed straight through and
+    //     the text became hard to read against a moving picture — the one thing a notice must not
+    //     be (Stuart, 2026-08-19). Nothing behind this needs to be visible THROUGH it; it is a
+    //     message, and it can be dismissed.
+    'background:#17100a;color:#ffd479;border:1px solid rgba(255,180,60,0.55);' +
     'border-radius:8px;padding:7px 8px 7px 12px;font:clamp(11px,3vw,13px) ui-monospace,monospace;' +
     'box-shadow:0 4px 18px rgba(0,0,0,0.55);display:flex;align-items:flex-start;gap:8px;' +
     'line-height:1.4';
