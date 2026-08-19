@@ -305,7 +305,7 @@ function machineStats(conns: any[]): {
 
   const ips = new Set<string>();
   const perRadioIps: Record<string, Set<string>> = {};
-  const spans: Record<string, { start: number; end: number }> = {};
+  const spans: Record<string, Array<[number, number]>> = {};
   for (const c of today) {
     const ip = String(c.ip || '');
     if (ip) ips.add(ip);
@@ -317,11 +317,26 @@ function machineStats(conns: any[]): {
     if (!key) continue;
     const start = Number(c.at) || 0;
     const end = Number(c.end) || start;
-    const cur = spans[key];
-    if (!cur) spans[key] = { start, end };
-    else { cur.start = Math.min(cur.start, start); cur.end = Math.max(cur.end, end); }
+    (spans[key] ||= []).push([start, end]);
   }
-  const lengths = Object.values(spans).map((s) => Math.max(0, s.end - s.start)).sort((a, b) => a - b);
+  // ★★★ MERGED INTERVALS, NOT FIRST-TO-LAST. A span from a session's first connect to its last
+  //     close counts the GAPS as listening, and a session id lives in the tab: one visitor showed
+  //     as 288 minutes when they were actually on for 47s, then 10m, then 30m, then came back FOUR
+  //     HOURS LATER for 3 minutes (Stuart, 2026-08-19: "that super long session though I cannot
+  //     see in the list" — he was right, it never happened).
+  // ★★ AND NOT A SUM OF RECORD LENGTHS EITHER: every listener holds a spectrum AND an audio socket
+  //    at the same time, so adding their durations counts the same minutes twice. Overlapping
+  //    intervals are merged, which handles the pair and the gaps with one rule.
+  const lengths = Object.values(spans).map((iv) => {
+    iv.sort((a, b) => a[0] - b[0]);
+    let total = 0, curStart = iv[0][0], curEnd = iv[0][1];
+    for (let i = 1; i < iv.length; i++) {
+      const [s2, e2] = iv[i];
+      if (s2 <= curEnd) curEnd = Math.max(curEnd, e2);        // overlapping — extend
+      else { total += Math.max(0, curEnd - curStart); curStart = s2; curEnd = e2; }
+    }
+    return total + Math.max(0, curEnd - curStart);
+  }).sort((a, b) => a - b);
   let topRadio: { label: string; n: number } | null = null;
   for (const [label, set] of Object.entries(perRadioIps))
     if (!topRadio || set.size > topRadio.n) topRadio = { label, n: set.size };
