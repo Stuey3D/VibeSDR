@@ -173,6 +173,11 @@ public:
      *  was individually right to admit it (Stuart, 2026-08-17). `dir` is the shared runtime
      *  directory the handover sockets already live in; `serial` and `label` identify this radio
      *  in the registry, so a refusal can name the radio the visitor is ALREADY on. */
+    /** The aerial bolted to THIS radio, and the machine's standing landing-screen message.
+     *  ★ The URL is scheme-checked here and stored empty if it fails, so nothing downstream has to
+     *    wonder whether it was. See vsconfig::safeLinkUrl. */
+    void setLandingInfo(const std::string& antenna, const std::string& message,
+                        const std::string& linkUrl, const std::string& linkLabel);
     void setOccupancyRegistry(const std::string& dir, const std::string& serial,
                               const std::string& label);
     /** Refresh this radio's registry entry. Called from the daemon's 1 Hz loop — a heartbeat, so a

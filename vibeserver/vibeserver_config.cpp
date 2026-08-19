@@ -358,6 +358,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     auto B = [&](const char* k, bool& dst)        { if (getBool(j, k, b)) dst = b; };
 
     S("serial", r.serial); S("driver", r.driver); S("usbPath", r.usbPath); S("label", r.label);
+    S("antenna", r.antenna);
     B("enabled", r.enabled); B("configured", r.configured);
     I("port", r.port);
     // ★ SAME VOCABULARY AS THE TOP-LEVEL FIELD — "locked"/"single", not a second spelling.
@@ -387,6 +388,9 @@ std::string radioToJson(const RadioConfig& r) {
     auto N = [&](const char* k, double v) { o += "\"" + std::string(k) + "\":" + num(v) + ","; };
     auto B = [&](const char* k, bool v)   { o += "\"" + std::string(k) + "\":" + (v ? "true" : "false") + ","; };
     S("serial", r.serial); S("driver", r.driver); S("usbPath", r.usbPath); S("label", r.label);
+    // ★ The aerial. Written HERE as well as read above — the setup page reads this writer, and
+    //   the note further down records what a field in only one of them costs.
+    S("antenna", r.antenna);
     B("enabled", r.enabled); B("configured", r.configured);
     N("port", r.port);
     S("mode", r.mode == Mode::LockedRange ? "locked" : "single");
@@ -489,6 +493,9 @@ std::string toJson(const ServerConfig& c) {
     N("adminIdleMin", c.adminIdleMin);
     S("cpuGovernor", c.cpuGovernor);
     S("trustedProxies", c.trustedProxies);
+    // ★ The owner's standing message for the landing screen, and its link. See ServerConfig.
+    S("landingMessage", c.landingMessage);
+    S("landingLinkUrl", c.landingLinkUrl); S("landingLinkLabel", c.landingLinkLabel);
     N("port", c.port); B("web", c.web);
     o += "  \"radios\": [";
     for (size_t i = 0; i < c.radios.size(); i++) {
@@ -535,6 +542,11 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     I("adminIdleMin", c.adminIdleMin);
     S("cpuGovernor", c.cpuGovernor);
     S("trustedProxies", c.trustedProxies);
+    S("landingMessage", c.landingMessage);
+    S("landingLinkUrl", c.landingLinkUrl); S("landingLinkLabel", c.landingLinkLabel);
+    // ★★★ WHATEVER THE SOURCE, IT PASSES THROUGH HERE — a hand-edited file, a restored backup or
+    //     an older build that had no check all arrive by this path. See safeLinkUrl().
+    c.landingLinkUrl = safeLinkUrl(c.landingLinkUrl);
     I("uncompressed", c.uncompressed);
     B("forceIdleSaver", c.forceIdleSaver);
     I("port", c.port); B("web", c.web);
@@ -564,6 +576,29 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
 }
 
 bool needsFrontDoor(const ServerConfig& cfg) { return cfg.fullMode; }
+
+std::string safeLinkUrl(const std::string& url) {
+    std::string u = url;
+    // Trim: a pasted URL very often arrives with surrounding whitespace.
+    while (!u.empty() && (unsigned char)u.front() <= ' ') u.erase(u.begin());
+    while (!u.empty() && (unsigned char)u.back()  <= ' ') u.pop_back();
+    if (u.empty()) return "";
+    // ★ Nothing we cannot vouch for. A quote would break out of the attribute; a control character
+    //   has no business in a URL and is how a "URL" smuggles a second thing.
+    for (unsigned char ch : u)
+        if (ch < 0x20 || ch == 0x7F || ch == '"' || ch == '\'' || ch == '<' || ch == '>') return "";
+    // ★ Scheme test is CASE-INSENSITIVE: "JavaScript:" is the same scheme, and a lowercase-only
+    //   comparison is the classic way this check is passed by something that should not.
+    auto startsWithNoCase = [&](const char* pre) {
+        const size_t n = strlen(pre);
+        if (u.size() < n) return false;
+        for (size_t i = 0; i < n; i++)
+            if (tolower((unsigned char)u[i]) != (unsigned char)pre[i]) return false;
+        return true;
+    };
+    if (startsWithNoCase("https://") || startsWithNoCase("http://")) return u;
+    return "";
+}
 
 bool canDrawSpectrogram(const RadioConfig& r) {
     // ★ Fixed window, kept, and actually served. Any one of those missing and the picture would

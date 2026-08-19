@@ -2817,6 +2817,43 @@ function radioCardState(r: any, st: any): { state: string; blocked: boolean } {
   return { state, blocked: down || (full && !admin) };
 }
 
+/** ★★★ THE OWNER'S PERMANENT MESSAGE ON THE LANDING SCREEN — house rules, why the waterfall
+ *  slows down, or a link if people can chip in.
+ *
+ *  ★★★ NOT the same thing as showOwnerNotice(). That one is TRANSIENT — it expires in minutes, is
+ *      dismissible, and is drawn over the receiver once you are connected, because it answers
+ *      "something is happening right now". This is permanent and sits on the landing screen
+ *      BEFORE you commit. Sharing one mechanism would mean a donation link that expires, or a
+ *      maintenance warning nobody can dismiss.
+ *
+ *  ★★★ THE LINK IS A SEPARATE FIELD AND ITS SCHEME IS RE-CHECKED HERE. The server checked it when
+ *      it loaded the config and again when it served the directory — and this checks it a third
+ *      time, because THIS is the line that actually builds the href. `javascript:` in an href runs
+ *      on click; "the server would never send that" is exactly the assumption that makes a
+ *      cross-site hole, and this client talks to servers we do not control.
+ *  ★ Text is escaped and never linkified: parsing owner prose into markup is the other way this
+ *    goes wrong, and a discrete URL field needs no parsing at all. */
+function showLandingMessage(text?: unknown, linkUrl?: unknown, linkLabel?: unknown): void {
+  const host = document.getElementById('splashOwnerMsg');
+  if (!host) return;
+  const msg = typeof text === 'string' ? text.trim() : '';
+  const rawUrl = typeof linkUrl === 'string' ? linkUrl.trim() : '';
+  const url = /^https?:\/\//i.test(rawUrl) ? rawUrl : '';
+  if (!msg && !url) { host.innerHTML = ''; host.style.display = 'none'; return; }
+  const label = (typeof linkLabel === 'string' && linkLabel.trim())
+    ? linkLabel.trim()
+    // ★ Fall back to the HOST, not the whole URL: a bare tracking-laden link as anchor text is
+    //   unreadable, and the host is the part that tells you where you are being sent.
+    : (() => { try { return new URL(url).host; } catch { return url; } })();
+  host.style.display = '';
+  host.innerHTML =
+      (msg ? `<div style="white-space:pre-wrap">${escapeHtml(msg)}</div>` : '')
+    + (url ? `<div style="margin-top:6px"><a href="${escapeHtml(url)}" target="_blank" `
+           // ★ noopener is not decoration: without it the opened page gets window.opener and can
+           //   navigate this tab somewhere else.
+           + `rel="noopener noreferrer" style="color:var(--amber)">${escapeHtml(label)}</a></div>` : '');
+}
+
 async function showSplashRadios(): Promise<void> {
   const host = document.getElementById('splashRadios');
   if (!host) return;
@@ -2843,6 +2880,11 @@ async function showSplashRadios(): Promise<void> {
     hide('hostRow');
     hide('splashListeners');     // a listener count and a range belong to a radio, not a door
   }
+
+  // ★★ THE OWNER'S STANDING MESSAGE, from the directory. Rendered before the early return below,
+  //    because a machine with ONE radio has no picker and still has something to say.
+  if (dir?.landingMessage || dir?.landingLinkUrl)
+    showLandingMessage(dir.landingMessage, dir.landingLinkUrl, dir.landingLinkLabel);
 
   if (radios.length < 2 && !dir?.frontDoor) { host.innerHTML = ''; return; }
 
@@ -2913,6 +2955,9 @@ async function showSplashRadios(): Promise<void> {
     //     full one must stay reachable for them — that is the whole point of signing in here. A
     //     radio that is DOWN stays unreachable for everybody: there is nothing to take over, and
     //     offering it would just be a link to a failure.
+    // ★ From the DIRECTORY entry, not the live probe: a radio that is down still has an aerial,
+    //   and that is exactly when a visitor is deciding whether to come back for it.
+    const ant = String((r as any).antenna || '').trim();
     const admin = inAdminMode();
     const blocked = down || (full && !admin);
     const dim = blocked ? 'opacity:.45;cursor:not-allowed' : 'cursor:pointer';
@@ -2925,11 +2970,19 @@ async function showSplashRadios(): Promise<void> {
          + `border:1px solid rgba(255,176,0,.35);border-radius:8px;padding:10px 12px;margin:8px 0;`
          + `text-decoration:none;color:inherit;${dim}">`
          + `<div style="display:flex;justify-content:space-between;gap:12px">`
-         + `<strong style="letter-spacing:.05em">${r.label}</strong>`
+         + `<strong style="letter-spacing:.05em">${escapeHtml(r.label)}</strong>`
          + `<span class="rcState" style="font-size:11px;opacity:.85">${state}</span></div>`
          + `<div class="sub" style="margin-top:2px;font-size:11px;opacity:.7"${
               rangeTitle ? ` title="${rangeTitle.replace(/"/g, '&quot;')}"` : ''
             }>${range} · ${kind}</div>`
+         // ★★ THE AERIAL, UNDER THE RANGE IT QUALIFIES. That order is the point: the range says
+         //    where this radio CAN tune, and the aerial says where it will actually hear anything.
+         //    A dongle advertising 1 kHz – 1.7 GHz above "Discone, good to 300 MHz" tells a visitor
+         //    something neither line says alone.
+         // ★ ESCAPED — owner-authored text going into innerHTML. So is the label beside it, which
+         //   was not before: it comes from the same place and had the same hole.
+         + (ant ? `<div class="sub" style="margin-top:2px;font-size:11px;opacity:.55">`
+                + `\u{1F4E1} ${escapeHtml(ant)}</div>` : '')
          + `</${tag}>`;
   }).join('');
 
@@ -3742,6 +3795,19 @@ async function loadOwnerNotice() {
     if (!r.ok) return;
     const j = await r.json();
     if (typeof j?.notice === 'string' && j.notice) showOwnerNotice(j.notice);
+    // ★★★ THE LANDING FIELDS COME FROM HERE TOO, AND THIS IS THE ONLY SOURCE A SIMPLE SERVER HAS.
+    //     A one-radio machine never draws a picker, so it never fetches /vibeserver/radios — a
+    //     field that only travelled with the directory would be invisible on most servers in the
+    //     field. This file is served by the front door AND by every radio, so it always answers.
+    // ★ showSplashRadios() renders the same message again from the directory when there is one;
+    //   it is the same value, and whichever arrives first is correct.
+    showLandingMessage(j?.landingMessage, j?.landingLinkUrl, j?.landingLinkLabel);
+    const ant = typeof j?.antenna === 'string' ? j.antenna.trim() : '';
+    const ael = document.getElementById('splashAntenna');
+    if (ael) {
+      ael.textContent = ant ? `\u{1F4E1} ${ant}` : '';
+      ael.style.display = ant ? '' : 'none';
+    }
   } catch { /* an older server has no notice field — nothing to show */ }
 }
 void loadOwnerNotice();

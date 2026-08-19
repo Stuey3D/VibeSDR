@@ -177,6 +177,26 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
     </div>
 
       <div class="card">
+        <h2>Message on the landing screen</h2>
+        <p class="why">Something you want every visitor to read before they connect &mdash; house
+          rules, a note about how this server behaves, or a link if people can help pay for it.
+          This one <b>stays up</b>: it is not the temporary notice you post when you are working
+          on the server.</p>
+        <label><span class="lbl">Message</span>
+          <textarea id="landingMessage" rows="3" maxlength="500"
+            placeholder="e.g. The waterfall slows to 5 fps when nobody is listening. That is normal — turn it off in the menu."></textarea></label>
+        <div class="row">
+          <label><span class="lbl">Link (optional)</span>
+            <input type="url" id="landingLinkUrl" placeholder="https://…"></label>
+          <label><span class="lbl">Link text</span>
+            <input type="text" id="landingLinkLabel" maxlength="60" placeholder="e.g. Support this server"></label>
+        </div>
+        <div class="hint" id="landingLinkHint">Only <code>http://</code> and <code>https://</code>
+          links are accepted &mdash; anything else is dropped when you save.</div>
+        <p class="why">Shown to strangers on the landing screen, so nothing private here.</p>
+      </div>
+
+      <div class="card">
         <h2>Network port</h2>
         <p class="why">The one port this machine listens on. Leave it alone unless something else
           already uses it, or your router needs a particular one.</p>
@@ -345,6 +365,20 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
         <div id="hw"></div>
       </div>
     </div>
+      <div class="card">
+        <h2>Antenna</h2>
+        <p class="why">A receiver publishes what the TUNER can reach, never what the AERIAL can.
+           Say what is actually connected and a visitor knows what to expect &mdash; an unlocked
+           dongle will honestly tune to 1.7&nbsp;GHz whether or not the antenna follows it up
+           there. It is also where a good aerial becomes a reason to visit.</p>
+        <label><span class="lbl">What is connected to this radio</span>
+          <input type="text" id="antenna" maxlength="120" list="antennaList"
+                 placeholder="e.g. Discone in the loft, good to 300 MHz"></label>
+        <datalist id="antennaList"></datalist>
+        <p class="why" id="antennaShared" style="display:none"></p>
+        <p class="why">Shown to everybody who visits, so keep it about the aerial &mdash; not
+           about where you live.</p>
+      </div>
       <div class="card">
         <h2>Where new listeners start</h2>
         <p class="why">What someone sees the moment they connect.</p>
@@ -1546,6 +1580,61 @@ function stashRadio() {
   Object.assign(list[curRadio], collectRadio());
 }
 
+/** ★★★ THE AERIAL, OFFERED FROM THE OTHER RADIOS. Three radios on one mast is the ordinary case,
+ *  and typing the same sentence three times is the annoyance (Stuart, 2026-08-19: "a dropdown box
+ *  after youve filled it out once ... you can quickly select it on the next 2 radios").
+ *
+ *  ★★★ READ FROM radioList(), NOT FROM THE SAVED CONFIG. stashRadio() copies the open form into
+ *      cfg.radios[curRadio] on every tab switch, so an aerial typed on radio 1 is already here
+ *      when radio 2 is opened — with no save in between, which is the whole point. Built against
+ *      what the SERVER has stored, this would offer nothing until each radio had been saved, and
+ *      "fill it out once, then pick it" would silently become a save-per-radio round trip.
+ *
+ *  ★★ A datalist, not a select: the band lists next door use a "copy from another radio" picker
+ *     because a band list is compound and only makes sense wholesale. An aerial is ONE STRING, so
+ *     choosing the VALUE is a step shorter — and typing a new one must always stay possible,
+ *     because the second aerial on a machine is exactly when the list stops being right.
+ *
+ *  ★ Distinct values only, and never this radio's own: offering you what you have already got is
+ *    noise, and it is the one entry that cannot help. */
+/** ★★ SAY SO HERE, WHERE IT CAN STILL BE FIXED. The server drops any link that is not http(s) —
+ *  that check is the real one and it stays — but a value that silently disappears on save reads as
+ *  the server losing settings. This is the same rule the setup page follows elsewhere: tell the
+ *  owner at the point of typing, and never make the page's opinion the one that matters.
+ *  ★ Deliberately permissive about what it ACCEPTS: it only warns, so being wrong here costs a
+ *    stray hint, while being wrong in the server would cost an href we should not render. */
+function landingLinkCheck() {
+  const el = $("landingLinkUrl"), hint = $("landingLinkHint");
+  if (!el || !hint) return;
+  const v = (el.value || "").trim();
+  const ok = !v || /^https?:\/\//i.test(v);
+  hint.innerHTML = ok
+    ? "Only <code>http://</code> and <code>https://</code> links are accepted &mdash; anything else is dropped when you save."
+    : "<b>This link will not be saved.</b> It has to start with <code>https://</code> or <code>http://</code>.";
+  hint.style.color = ok ? "" : "#ffb833";
+}
+
+function fillAntennaSuggestions() {
+  const dl = $("antennaList");
+  const note = $("antennaShared");
+  if (!dl) return;
+  const seen = [];
+  radioList().forEach((r, i) => {
+    if (i === curRadio) return;
+    const a = (r.antenna || "").trim();
+    if (a && seen.indexOf(a) < 0) seen.push(a);
+  });
+  dl.innerHTML = seen.map(a => `<option value="${esc(a)}"></option>`).join("");
+  if (note) {
+    note.style.display = seen.length ? "" : "none";
+    note.textContent = seen.length
+      ? (seen.length === 1
+          ? "Another radio on this machine uses: " + seen[0] + " — pick it from the box to share it."
+          : "Other radios here use " + seen.length + " different aerials — pick one from the box to share it.")
+      : "";
+  }
+}
+
 function fill() {
   // ★ The MACHINE — the same on every tab.
   $("name").value = cfg.name || "";
@@ -1560,6 +1649,10 @@ function fill() {
   $("uncompressed").value = String(cfg.uncompressed || 0);
   $("forceIdle").checked = !!cfg.forceIdleSaver;
   $("trustedProxies").value = cfg.trustedProxies || "";
+  $("landingMessage").value   = cfg.landingMessage || "";
+  $("landingLinkUrl").value   = cfg.landingLinkUrl || "";
+  $("landingLinkLabel").value = cfg.landingLinkLabel || "";
+  landingLinkCheck();
   // ★ Blank rather than 48000 when unset, so the placeholder can say what the default IS. Filling
   //   the box with the default makes it look like a deliberate choice the owner made.
   $("srvPort").value = cfg.port > 0 ? cfg.port : "";
@@ -1569,6 +1662,8 @@ function fill() {
   // ★★ THIS RADIO. Read from the open tab, never from cfg — reading a radio setting off the
   //    machine is how every receiver would show the first one's frequency.
   const r = radio();
+  $("antenna").value = r.antenna || "";
+  fillAntennaSuggestions();
   // ★ Default ON for a shared receiver. The 1024-bin window only stays sharp BECAUSE of the zoom
   //   resampling — without it, deep zoom interpolates and looks blocky, which is what a listener
   //   reads as a poor receiver. Off by default was right when this was experimental; it is not
@@ -1653,6 +1748,7 @@ function collectRadio() {
     //     the MODE stuck, because demodMode below was never gated, and the frequency did not).
     // ★ lockFreq and users stay gated: those genuinely only exist for a locked radio.
     landingFreq: Math.round(parseFloat($("landingFreq").value || "0") * 1e3),
+    antenna: ($("antenna").value || "").trim(),
     demodMode: $("demodMode").value,
     users: locked ? parseInt($("users").value || "1", 10) : 1,
 
@@ -1701,6 +1797,11 @@ function collect() {
     uncompressed: parseInt($("uncompressed").value, 10),
     forceIdleSaver: $("forceIdle").checked,
     trustedProxies: $("trustedProxies").value.trim(),
+    landingMessage:   $("landingMessage").value.trim(),
+    // ★ Sent as typed; the SERVER decides whether it survives (vsconfig::safeLinkUrl). The check
+    //   below is only so the owner finds out here rather than wondering why it vanished.
+    landingLinkUrl:   $("landingLinkUrl").value.trim(),
+    landingLinkLabel: $("landingLinkLabel").value.trim(),
     // ★ 0 means "no preference", which is what an empty box means. Sending NaN would be written
     //   out as a port and the server would fail to bind with nothing to point at.
     port: parseInt($("srvPort").value, 10) > 0 ? parseInt($("srvPort").value, 10) : 0,
@@ -1746,7 +1847,9 @@ document.addEventListener("change", (e) => {
 // ★ `input` as well as `change`: the derived range is the whole point of the field, and a hint
 //   that only catches up when the box loses focus reads as broken.
 document.addEventListener("input", (e) => {
-  if (e.target && e.target.id === "srvPort") renderPortHint();
+  if (!e.target) return;
+  if (e.target.id === "srvPort") renderPortHint();
+  if (e.target.id === "landingLinkUrl") landingLinkCheck();
 });
 
 async function signIn(fromTicket) {

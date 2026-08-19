@@ -1005,6 +1005,44 @@ static std::atomic<bool>   g_vsPublicSharing{false};
  *     trap that once switched the session limit off for everybody.
  *  ★ Admin is exempt: the owner reaching several of their own radios at once is the normal case. */
 static std::atomic<bool>   g_vsOneRadioPerIp{true};
+
+// ★★ THE AERIAL (per radio) AND THE OWNER'S STANDING LANDING MESSAGE (per machine). Set once at
+//    start-up from the config — see LocalSdrShim::setLandingInfo — and only ever read from here.
+// ★ NOT g_vsLandingMtx — that name is already taken, by the landing FREQUENCY/mode state further
+//   down. Two different meanings of "landing" in one file; this one is the site blurb.
+static std::mutex          g_vsSiteMtx;
+static std::string         g_vsAntenna, g_vsLandingMsg, g_vsLandingUrl, g_vsLandingLabel;
+
+/** ★★★ AN OWNER-SUPPLIED LINK, MADE SAFE TO PUT IN AN href — http and https ONLY.
+ *
+ *  ★★★ `javascript:` (or `data:`) in an href RUNS when a visitor clicks it, on a page served by
+ *      somebody else's receiver. That is the whole reason this exists: it is the line between "the
+ *      owner added a donation link" and "the owner can run code in every listener's browser".
+ *
+ *  ★★ THIS IS DELIBERATELY A SECOND COPY of vsconfig::safeLinkUrl, not a call to it. This file is
+ *     also compiled for ANDROID, where vsconfig does not exist — and "validate at both ends" means
+ *     the end that RENDERS checks for itself rather than trusting how it was stored. Two short
+ *     independent checks beat one shared check reached through a dependency that is not always
+ *     there. ★ If one is ever loosened, loosen both — or neither.
+ *  ★ Case-insensitive: "JavaScript:" is the same scheme, and a lowercase-only compare is the
+ *    classic way this test gets passed by the thing it exists to stop. */
+static std::string vsSafeLinkUrl(const std::string& url) {
+    std::string u = url;
+    while (!u.empty() && (unsigned char)u.front() <= ' ') u.erase(u.begin());
+    while (!u.empty() && (unsigned char)u.back()  <= ' ') u.pop_back();
+    if (u.empty()) return "";
+    for (unsigned char ch : u)
+        if (ch < 0x20 || ch == 0x7F || ch == '"' || ch == '\'' || ch == '<' || ch == '>') return "";
+    auto pre = [&](const char* p2) {
+        const size_t n = strlen(p2);
+        if (u.size() < n) return false;
+        for (size_t i = 0; i < n; i++)
+            if (tolower((unsigned char)u[i]) != (unsigned char)p2[i]) return false;
+        return true;
+    };
+    return (pre("https://") || pre("http://")) ? u : std::string();
+}
+
 static std::mutex          g_occMtx;
 static std::string         g_occDir, g_occSerial, g_occLabel, g_occHeldIp;
 /** Defined below, beside the registry it reads — declared here because the ADMISSION check needs
@@ -4815,6 +4853,24 @@ struct LocalSdrShim::Impl {
         }
         return o;
     }
+    /** The landing fields for /vibeserver.json — the aerial and the owner's standing message.
+     *  Each is omitted entirely when unset, so a client reads absence as "nothing to show".
+     *  ★ A member because it needs jsonEscape, which is one. */
+    static std::string vsLandingJson() {
+        std::lock_guard<std::mutex> lk(g_vsSiteMtx);
+        std::string j;
+        if (!g_vsAntenna.empty())    j += ",\"antenna\":\""        + jsonEscape(g_vsAntenna)    + "\"";
+        if (!g_vsLandingMsg.empty()) j += ",\"landingMessage\":\"" + jsonEscape(g_vsLandingMsg) + "\"";
+        // ★ The URL was checked before it was stored (setLandingInfo) — stored empty if it did
+        //   not pass — so an unsafe value never became this string in the first place.
+        if (!g_vsLandingUrl.empty()) {
+            j += ",\"landingLinkUrl\":\"" + jsonEscape(g_vsLandingUrl) + "\"";
+            if (!g_vsLandingLabel.empty())
+                j += ",\"landingLinkLabel\":\"" + jsonEscape(g_vsLandingLabel) + "\"";
+        }
+        return j;
+    }
+
     /** ★ Each listener has their own change-detection now (it lives in their RdsState), so this
      *  is a plain loop: nobody can suppress anybody else's message, and a listener who joins
      *  mid-song is told the station's name on their first tick because their own lastSent* are
@@ -7192,6 +7248,14 @@ struct LocalSdrShim::Impl {
                              // the picker say "free in 4 min" instead of a bare "in use", which
                              // is the difference between waiting and giving up.
                              + ",\"freeInSec\":" + std::to_string(LocalSdrShim::instance().occupantSecsLeft())
+                             // ★★ THE AERIAL AND THE OWNER'S STANDING MESSAGE. Here as well as in
+                             //    /vibeserver/radios because a SIMPLE server has no picker at all:
+                             //    its splash is this radio, and this file is what that splash
+                             //    reads. A field that only reached the directory would be
+                             //    invisible on every single-radio server — which is most of them.
+                             // ★ Both omitted when unset; a client must read absence as "nothing
+                             //   to show", exactly as it does for `frontDoor`.
+                             + vsLandingJson()
                              + "}";
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Access-Control-Allow-Origin: *\r\n"
@@ -10654,6 +10718,21 @@ std::string LocalSdrShim::noticeText() { return g_vsNotice.current(); }
 bool LocalSdrShim::setNotice(const std::string& text, int minutes, std::string& err) {
     return g_vsNotice.set(text, minutes, err);
 }
+void LocalSdrShim::setLandingInfo(const std::string& antenna, const std::string& message,
+                                  const std::string& linkUrl, const std::string& linkLabel) {
+    std::lock_guard<std::mutex> lk(g_vsSiteMtx);
+    g_vsAntenna    = antenna;
+    g_vsLandingMsg = message;
+    // ★★★ CHECKED HERE, ONCE, so every reader downstream can treat a non-empty value as safe. The
+    //     caller passes whatever is in the config; what gets stored has passed safeLinkUrl().
+    g_vsLandingUrl = vsSafeLinkUrl(linkUrl);
+    // ★ A label with no surviving URL is not a link, it is a stray word on the page.
+    g_vsLandingLabel = g_vsLandingUrl.empty() ? std::string() : linkLabel;
+    if (!antenna.empty()) LOGI("antenna: %s", antenna.c_str());
+    if (!linkUrl.empty() && g_vsLandingUrl.empty())
+        LOGI("landing link REJECTED (http/https only): %s", linkUrl.c_str());
+}
+
 void LocalSdrShim::setOccupancyRegistry(const std::string& dir, const std::string& serial,
                                         const std::string& label) {
     std::lock_guard<std::mutex> lk(g_occMtx);

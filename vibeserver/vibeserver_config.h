@@ -191,6 +191,19 @@ struct RadioConfig {
     std::string driver;      // "rtlsdr" | "sdrplay" | "airspyhf"
     std::string usbPath;     // physical socket, e.g. "1-2" — the tie-break when serials collide
     std::string label;       // what the owner calls it; shown to listeners
+    /** ★★★ WHAT IS ACTUALLY BOLTED TO THIS RADIO. A receiver publishes what the TUNER can do and
+     *  never what the ANTENNA can do — and the antenna is what decides whether tuning somewhere is
+     *  worth a visitor's time. The Pi's RTL is deliberately unlocked to 1.7 GHz and will honestly
+     *  tune there; the aerial will not follow it up, so a visitor who hears nothing concludes the
+     *  RECEIVER is broken (Stuart, 2026-08-19: "it sets reception expectations then").
+     *  ★★ And the better half: a 300 MHz-rated aerial pulling in a lot of ADS-B is a REASON to
+     *     visit, and there was nowhere to say so. The interesting fact about a receiver is often
+     *     the aerial, not the dongle.
+     *  ★★ PER RADIO, because it describes the hardware — but the setup page can copy it from
+     *     another radio, since three radios on one mast is the ordinary case.
+     *  ★ Free text, published to strangers. Empty = say nothing at all, which is what almost
+     *    every server will do. */
+    std::string antenna;
 
     /** ★★ TWO GATES, AND THEY MEAN DIFFERENT THINGS. `enabled` is the owner saying "serve this
      *  radio" (the TUI toggle); `configured` is "I have said what it should do" (its setup tab was
@@ -288,6 +301,30 @@ struct ServerConfig {
     Sharing sharing = Sharing::Local;
     std::string place, country, locator, lat, lon;   // ★ the SITE — one machine, one location
     std::string name;                                // the machine's name, shown above the list
+    /** ★★★ THE OWNER'S STANDING MESSAGE ON THE LANDING SCREEN — house rules, a donation link, or
+     *  an explanation of behaviour that looks wrong and is not. Stuart's own case: the demo drops
+     *  to 5 fps when idle, which is deliberate and reversible in the menu, but to a first-time
+     *  visitor it reads as a struggling server (2026-08-19).
+     *
+     *  ★★★ THIS IS NOT `notice` / vibe_notice, AND MUST NOT BE FOLDED INTO IT. That one takes a
+     *      lifetime in MINUTES, is drawn over the RECEIVER once you have connected, and is
+     *      dismissible — it answers "something is happening right now". This is permanent, sits on
+     *      the LANDING screen before you commit, and is part of the page. Sharing one field would
+     *      mean a donation link that expires, or a maintenance warning nobody can dismiss.
+     *
+     *  ★★ PER MACHINE, not per radio: it is typed on the setup page's SERVER tab, the one tab with
+     *     no radio behind it (Stuart, 2026-08-19: "that would live under the server tab").
+     *
+     *  ★★★ THE LINK IS A SEPARATE FIELD ON PURPOSE. A donation link is the stated use, so this
+     *      WILL carry URLs — and it is owner-authored text rendered to strangers by every client
+     *      we ship. Linkifying inside the message means parsing owner text into markup, which is
+     *      stored XSS on every VibeServer in the world the first time it is got wrong. A discrete
+     *      URL needs no parsing, and the SCHEME IS CHECKED AT BOTH ENDS — a `javascript:` href is
+     *      the whole vulnerability, and validating only where it is typed means the next client to
+     *      render it is the one that ships the hole. */
+    std::string landingMessage;
+    std::string landingLinkUrl;      ///< http/https only, enforced on save AND on render
+    std::string landingLinkLabel;    ///< what the link says; falls back to the URL's host
     bool        mdnsAdvertise = true;
     std::string mdnsName;
     std::string pin, adminPass;
@@ -347,6 +384,20 @@ bool fromJson(const std::string& json, ServerConfig& cfg, std::string& err);
  *    three-radio server does not.
  */
 bool needsFrontDoor(const ServerConfig& cfg);
+
+/** ★★★ AN OWNER-SUPPLIED LINK, MADE SAFE TO PUT IN AN href. Returns the URL, or "" if it is not
+ *  something we are willing to render.
+ *
+ *  ★★★ THE SCHEME IS THE WHOLE POINT. `javascript:` (and `data:`) in an href executes when a
+ *      visitor clicks it, on a page served by somebody else's receiver — so this is not a tidiness
+ *      check, it is the boundary between "the owner wrote a donation link" and "the owner can run
+ *      code in every listener's browser". http and https only, nothing else, ever.
+ *  ★★ Applied when the config is READ, not only when it is saved: a config file can be edited by
+ *     hand, restored from a backup, or written by an older build that had no check. Whatever the
+ *     source, what reaches a client has passed through here.
+ *  ★ Also rejects control characters and quotes outright rather than escaping them — there is no
+ *    legitimate URL with a newline in it, and a value we cannot vouch for is not worth rendering. */
+std::string safeLinkUrl(const std::string& url);
 
 /** ★ May this radio drive the landing page's spectrogram? Fixed window, not released when idle,
  *  and actually being served. See RadioConfig::spectrogram for why each of those matters. */

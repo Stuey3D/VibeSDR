@@ -1448,9 +1448,26 @@ int main(int argc, char** argv) {
         //    is no radio here, so START has nothing to start and a listener count is not ours to
         //    report. Without this the page offered both and then failed with "enter a server
         //    address" (Stuart, 2026-08-08: "why is there a start button?").
+        // ★★ THE OWNER'S STANDING MESSAGE TRAVELS WITH THE DIRECTORY, because the directory is
+        //    what the landing screen renders. Machine-level, beside the machine's name — the
+        //    radios array below carries the per-radio aerial.
+        // ★ Sent only when set: absent means "show nothing", and almost every server will send
+        //   nothing. See ServerConfig::landingMessage for why this is NOT the transient notice.
         std::string j = std::string("{\"frontDoor\":")
                       + (g_amFrontDoor.load() ? "true" : "false")
-                      + ",\"name\":\"" + jsonEscape(srv.name) + "\",\"radios\":[";
+                      + ",\"name\":\"" + jsonEscape(srv.name) + "\"";
+        if (!srv.landingMessage.empty())
+            j += ",\"landingMessage\":\"" + jsonEscape(srv.landingMessage) + "\"";
+        // ★★★ RE-CHECKED HERE, not trusted from the config. safeLinkUrl() already ran when the
+        //     file was read, but this is the point where the value becomes an href in somebody
+        //     else's browser — and "validate at both ends" means the render side checks too,
+        //     however sure the load side was.
+        if (const std::string u = vsconfig::safeLinkUrl(srv.landingLinkUrl); !u.empty()) {
+            j += ",\"landingLinkUrl\":\"" + jsonEscape(u) + "\"";
+            if (!srv.landingLinkLabel.empty())
+                j += ",\"landingLinkLabel\":\"" + jsonEscape(srv.landingLinkLabel) + "\"";
+        }
+        j += ",\"radios\":[";
         bool first = true;
         for (size_t i = 0; i < srv.radios.size(); i++) {
             const auto& r = srv.radios[i];
@@ -1467,6 +1484,10 @@ int main(int argc, char** argv) {
             //   name. The setup and admin pages read the config API instead and keep the full one.
             j += ",\"label\":\"" + jsonEscape(vsconfig::publicLabel(r.label.empty() ? r.driver : r.label)) + "\"";
             j += ",\"driver\":\"" + jsonEscape(r.driver) + "\"";
+            // ★ The aerial, per radio — what the listener is actually working with. Omitted when
+            //   unset so an unconfigured radio renders exactly as it does today.
+            if (!r.antenna.empty())
+                j += ",\"antenna\":\"" + jsonEscape(r.antenna) + "\"";
             j += ",\"port\":" + std::to_string(vsconfig::portForRadio(srv, i));
             // ★★★ WHAT THIS RADIO CAN HEAR, AND WHETHER THE OWNER HAS NARROWED IT. The directory
             //     published only the frequency it happens to be parked on, which makes three very
@@ -2246,6 +2267,19 @@ int main(int argc, char** argv) {
     //     one radio" needs somewhere they can all see — the same runtime directory the handover
     //     sockets already use. A front door (no serial of its own) registers nothing and simply
     //     routes. See LocalSdrShim::setOccupancyRegistry.
+    // ★★ WHAT THIS RADIO IS ATTACHED TO, AND WHAT THE OWNER WANTS SAID. Both reach listeners
+    //    through /vibeserver.json, which is the ONLY landing-page source a Simple single-radio
+    //    server has — it never fetches the radio directory because it has no picker.
+    // ★ The aerial is this radio's; the message belongs to the machine, so a front door (which
+    //   owns no radio) still carries it.
+    {
+        std::string ant;
+        for (const auto& r : g_serverConfig.radios)
+            if (!g_myRadioSerial.empty() && r.serial == g_myRadioSerial) { ant = r.antenna; break; }
+        LocalSdrShim::instance().setLandingInfo(ant, g_serverConfig.landingMessage,
+                                                g_serverConfig.landingLinkUrl,
+                                                g_serverConfig.landingLinkLabel);
+    }
     if (!g_myRadioSerial.empty()) {
         std::string label = g_myRadioSerial;
         for (const auto& r : g_serverConfig.radios)
