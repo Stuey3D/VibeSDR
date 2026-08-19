@@ -4162,6 +4162,16 @@ function showPill(text: string, ms = 9000) {
     document.body.appendChild(el);
   }
   el.textContent = text;
+  // ★★★ SIT BELOW THE OWNER'S NOTICE, NOT UNDER IT. Both are fixed, centred and pinned to the top
+  //     of the screen, and the notice's z-index is two orders above the pill's — so on a server
+  //     carrying a maintenance notice the pill was drawn and then covered by it (Stuart,
+  //     2026-08-19: "the pill is showing but it is hidden behind the maintenance message").
+  // ★★ MEASURED, not a guessed constant: the notice wraps to two or three lines on a phone, and a
+  //    fixed offset that clears it on this screen would overlap on a narrower one.
+  // ★ Read at SHOW time, because the notice can be dismissed between one pill and the next.
+  const notice = document.getElementById('ownerNotice');
+  const below = notice ? Math.round(notice.getBoundingClientRect().bottom) + 10 : 14;
+  el.style.top = `${below}px`;
   el.classList.add('show');
   clearTimeout(pillTimer);
   pillTimer = window.setTimeout(() => el?.classList.remove('show'), ms);
