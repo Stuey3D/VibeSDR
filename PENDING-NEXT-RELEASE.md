@@ -65,6 +65,45 @@ answer, the WS close reason, and what the picker/landing page does while waiting
   borrowed time, evicted-for-a-waiter). A refusal nobody sees quickly is the fault
   that made tonight feel like an outage.
 
+### DONE 2026-08-19 — it was never SLOW, it was never SENT
+
+The client was not being slow with the answer; it never received one. `sendWs()`
+only QUEUES — `outboxOpen()` runs at the top of `acceptWs`, so a writer thread owns
+the socket from there on — and `closeAfterFlush()` clears `open_` and shuts the fd
+before that thread runs, so the writer drops the frame. The client got a bare 1006
+with no message and waited for something else to time out.
+
+★★★ Three sites, all breaking a rule written twelve lines under `outboxOpen`:
+    "EVERY exit from this function must call outboxClose(sock), the refusals
+    included." Fixed and each measured against local radios, before and after:
+
+- **`elsewhere`** — the reported one. Never arrived; now at 5 ms, naming the radio.
+- **`evicted`** — worse. This line has now been fixed TWICE for the same symptom
+  (`close()` → `closeAfterFlush()` cured an abort but not the loss). Takeover
+  depends on the displaced client being told why, or it retries — the reconnect war
+  `vs_takeover` was added to stop. That flag treated the symptom.
+- **`session_expired`** — fires most: every session reaching the limit on the public
+  server. Listeners were retrying into the cooldown and meeting "PLEASE WAIT"
+  having never been told their turn was over.
+
+★★ STILL OPEN, deliberately: the close code is 1006 (no WS close frame). Every
+   client treats the message as terminal, so this is cosmetic — but it is why the
+   symptom was so hard to read from the client side.
+
+## 8. The admin table hid a backgrounded listener (DONE 2026-08-19)
+
+Found from Stuart's report of the Pi showing one listener, no rows, and 67 kbit/s
+instead of 240. Backgrounding closes the SPECTRUM socket and keeps audio playing;
+`adminSessionsJson` was keyed on the spectrum socket, so the listener vanished from
+the one view whose job is saying who is on. `specListenerCountLocked()` learned this
+on 2026-08-17 and its comment says "two definitions of in use that disagreed" —
+there were THREE. New `spectrum` field renders as "audio only" so the cheap row
+explains itself.
+
+★ Also fixed a rate that read `2147483647k`, seen live while testing: `soleLastBytes`
+  lives on the Impl, not the session, so the first poll after a new occupant did an
+  unsigned subtraction of the previous occupant's total.
+
 ## 6. The front door serves the WRONG PAGE first, then swaps
 Stuart, 2026-08-19: *"on slower connections it looks like it is the old single user
 single radio (the simple mode) splash screen which then gives way to the main landing
