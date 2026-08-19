@@ -291,6 +291,38 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     if (runningRef.current) { stopAdvertiseRtlTcp(); stopVibeServer(); }
   }, []);
 
+  /** ★★★ ADOPT A SERVER THAT IS ALREADY RUNNING. `running` was set in exactly ONE place — after
+   *  the user pressed START — so the screen only ever knew about a server IT had started. The
+   *  foreground service outlives the JS process: it is START_STICKY and VibeServerRestore rebuilds
+   *  the radio behind it, which is the whole point. Come back to a phone that has restarted the
+   *  app and the server is serving, the browser is connected, and this screen says nothing is
+   *  happening (Stuart, 2026-08-19: "the server status screen on the phone itself is not showing
+   *  any connection").
+   *
+   *  ★★★ AND ARMING AUTO-RESTORE PERMANENTLY MADE IT MORE LIKELY, not less — that change removed
+   *      the one case where a dead app meant a dead server, so from now on the UI and the service
+   *      disagree far more often. A recovery feature that the interface cannot see is
+   *      indistinguishable from a broken server.
+   *
+   *  ★ Native is the authority, asked once on mount: it knows whether the radio is open, which is
+   *    the only thing that settles it. `ip`/`port` come back with the status, so the screen can
+   *    rebuild everything it would have had from start().
+   */
+  useEffect(() => {
+    if (running) return;                    // we started it ourselves; nothing to adopt
+    let cancelled = false;
+    void (async () => {
+      const s = await getVibeServerStatus();
+      if (cancelled || !s?.running) return;
+      setRunning({ ip: s.ip || '', port: s.port || 0, name });
+      setStatus(s);
+    })();
+    return () => { cancelled = true; };
+    // ★ `name` deliberately not a dependency: this is a one-shot adoption on mount, and re-running
+    //   it every time the owner types a character in the name box would be absurd.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running]);
+
   // Poll live status once serving.
   useEffect(() => {
     if (!running) return;
@@ -1127,9 +1159,34 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               unlocked with the admin password. Leave it Unlimited for a private receiver.
             </Text>
 
-            {/* ★★★ WHAT IS BOLTED TO THIS RADIO. A receiver publishes what the TUNER can reach and
-                never what the AERIAL can — and the aerial decides whether tuning somewhere is
-                worth a visitor's time. Shown under the radio on the landing screen. */}
+            {/* ★★ WHAT THE LIMIT MEANS. Offered in BOTH modes, because a private receiver with a
+                limit wants the same choice: soft turns the number into a guarantee rather than a
+                deadline — you keep the radio past it until somebody else wants it, then get a few
+                seconds' notice. Hard is what a limit has always meant here and stays the default. */}
+            {limitMin > 0 && (
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+                {([false, true] as const).map(v => (
+                  <TouchableOpacity key={String(v)} onPress={() => setLimitSoft(v)}
+                    style={[styles.card, { flex: 1, borderColor: limitSoft === v ? C.green : C.border,
+                                           backgroundColor: limitSoft === v ? C.green + '18' : 'transparent' }]}>
+                    <Text style={{ color: limitSoft === v ? C.green : C.gold, fontFamily: F, fontSize: 13 }}>
+                      {v ? 'Soft limit' : 'Hard limit'}
+                    </Text>
+                    <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 4 }]}>
+                      {v ? 'Kept until somebody else wants it' : 'Disconnected at the limit'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
+            {/* ★★★ WHAT IS BOLTED TO THIS RADIO — ADVANCED ONLY. It exists to set a stranger's
+                expectations on a landing page they are choosing from, and a Simple server is one
+                person sharing a receiver with people who already know what is on the end of it
+                (Stuart, 2026-08-19: "remove the antenna details as its not really needed in simple
+                mode"). Same reasoning as everything else Advanced adds: it is about being read by
+                somebody who has never seen your receiver. */}
+            {advanced && (<>
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>ANTENNA</Text>
             <TextInput value={antenna} onChangeText={setAntenna}
               placeholder="e.g. Discone in the loft, good to 300 MHz"
@@ -1152,6 +1209,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               live. Tap a picture again to choose none; a radio without one simply shows the
               description.
             </Text>
+            </>)}
 
             {/* ★★★ POWER DOWN WHEN NOBODY IS LISTENING — ON by default, and it never lets the
                 dongle go. The capture parks so the phone stops burning power on a radio nobody is
@@ -1196,27 +1254,6 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   which says more about whether it is worth connecting to than any description.
                   Only possible while the radio keeps capturing.
                 </Text>
-              </View>
-            )}
-
-            {/* ★★ WHAT THE LIMIT MEANS. Offered in BOTH modes, because a private receiver with a
-                limit wants the same choice: soft turns the number into a guarantee rather than a
-                deadline — you keep the radio past it until somebody else wants it, then get a few
-                seconds' notice. Hard is what a limit has always meant here and stays the default. */}
-            {limitMin > 0 && (
-              <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-                {([false, true] as const).map(v => (
-                  <TouchableOpacity key={String(v)} onPress={() => setLimitSoft(v)}
-                    style={[styles.card, { flex: 1, borderColor: limitSoft === v ? C.green : C.border,
-                                           backgroundColor: limitSoft === v ? C.green + '18' : 'transparent' }]}>
-                    <Text style={{ color: limitSoft === v ? C.green : C.gold, fontFamily: F, fontSize: 13 }}>
-                      {v ? 'Soft limit' : 'Hard limit'}
-                    </Text>
-                    <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 4 }]}>
-                      {v ? 'Kept until somebody else wants it' : 'Disconnected at the limit'}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
               </View>
             )}
 
