@@ -598,11 +598,29 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             // showed "—" despite the native side emitting it.
             m.putDouble("sampleRate", o.optLong("sampleRate", 0).toDouble())
             m.putInt("port", o.optInt("port", 0))
-            m.putString("ip", if (o.optBoolean("running", false)) (getLocalIp() ?: "") else "")
-            m.putDouble("cpu", processCpuPercent())
-            m.putInt("cores", Runtime.getRuntime().availableProcessors())
+            // ★★★ THE DECORATIONS MUST NOT BE ABLE TO KILL THE READING. Everything above comes
+            //     from the shim's own JSON and is the ANSWER; everything in this block is a nicety
+            //     read from the phone — the local address, a CPU percentage out of /proc, the core
+            //     count. They were inside the same try as the rest, so ONE of them throwing
+            //     rejected the WHOLE promise: getVibeServerStatus() returned null, `if (s)
+            //     setStatus(s)` never fired, and the screen sat on "Waiting for a client…" while
+            //     the server had a listener and the admin page showed it correctly (Stuart,
+            //     2026-08-19, on a Unisoc Moto — exactly the sort of device where reading /proc is
+            //     restricted).
+            // ★★ Same shape as the comment above about a field being silently dropped: this
+            //    screen's job is to say what the server is doing, and it must degrade to "I could
+            //    not measure the CPU" rather than "there is nothing here".
+            try { m.putString("ip", if (o.optBoolean("running", false)) (getLocalIp() ?: "") else "") }
+            catch (e: Throwable) { m.putString("ip", "") }
+            try { m.putDouble("cpu", processCpuPercent()) }
+            catch (e: Throwable) { m.putDouble("cpu", 0.0) }
+            try { m.putInt("cores", Runtime.getRuntime().availableProcessors()) }
+            catch (e: Throwable) { m.putInt("cores", 0) }
             promise.resolve(m)
         } catch (e: Throwable) {
+            // ★ And say WHY in the log. A rejected status is invisible on the screen — it looks
+            //   exactly like a server with nobody on it, which is the fault this cost us.
+            Log.w(TAG, "getVibeServerStatus failed: ${e}")
             promise.reject("status_failed", e.message)
         }
     }

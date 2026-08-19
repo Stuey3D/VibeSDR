@@ -311,13 +311,25 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (running) return;                    // we started it ourselves; nothing to adopt
     let cancelled = false;
-    void (async () => {
+    // ★★★ KEEP LOOKING, DO NOT ASK ONCE. A single check on mount loses every race there is: the
+    //     service may still be rebuilding the radio, the USB permission may not have landed, or
+    //     the screen may simply have opened first. Miss it and this effect NEVER runs again —
+    //     `running` cannot change, so its own dependency cannot retrigger it — and the screen
+    //     shows dashes for ever while the server serves happily and the admin page in a browser
+    //     shows every detail correctly (Stuart, 2026-08-19: "0 and dashes", with a perfect admin
+    //     page on the same server).
+    // ★★ That asymmetry is the tell: a fault that shows in ONE of two readers of the same state
+    //    is in the reading, not the state. The server was never wrong here.
+    // ★ Stops the moment it adopts — setRunning re-runs this effect, which returns at the guard.
+    const look = async () => {
       const s = await getVibeServerStatus();
       if (cancelled || !s?.running) return;
       setRunning({ ip: s.ip || '', port: s.port || 0, name });
       setStatus(s);
-    })();
-    return () => { cancelled = true; };
+    };
+    void look();
+    const t = setInterval(look, 2000);
+    return () => { cancelled = true; clearInterval(t); };
     // ★ `name` deliberately not a dependency: this is a one-shot adoption on mount, and re-running
     //   it every time the owner types a character in the name box would be absurd.
     // eslint-disable-next-line react-hooks/exhaustive-deps
