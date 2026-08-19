@@ -3308,6 +3308,53 @@ struct LocalSdrShim::Impl {
     /** address -> monotonic time the cooldown ends. Pruned lazily on lookup. */
     std::map<std::string, double> cooldownUntil;
 
+    /** ★★★ WHOSE TURN IS IT, AND WHEN DID IT START — KEYED ON THE ADDRESS, NOT THE SESSION.
+     *
+     *  ★★★ A SESSION ID IS BORN WITH THE PAGE. Reload the tab and the client generates a new one,
+     *      so a clock started per session restarted too: "right now there is nothing to stop
+     *      someone from refreshing at 1 min left to get a fresh 30" (Stuart, 2026-08-19). That is
+     *      not a loophole in the limit, it is the absence of one — the limit only ever measured
+     *      how long this PAGE had been open.
+     *
+     *  ★★ THE ADDRESS IS ALREADY THE IDENTITY EVERYWHERE ELSE HERE: the cooldown is keyed on it,
+     *     bans are, and one-radio-per-IP is. Using anything else for this one rule would mean two
+     *     notions of "the same person" that disagree — and the other three are the ones a
+     *     determined visitor already cannot dodge by reloading.
+     *
+     *  ★ `seen` is what makes a turn END rather than follow somebody for ever: stay away longer
+     *    than the limit itself and the next arrival is a fresh turn. Anything shorter would let a
+     *    reload-and-wait defeat it again; anything longer would punish somebody who came back an
+     *    hour later for a different band.
+     */
+    struct Turn { double started = 0; double seen = 0; };
+    std::map<std::string, Turn> turns;
+
+    /** The start time to use for a listener arriving from `addr`. Call with clientMtx HELD. */
+    double turnStartForLocked(const std::string& addr, double now) {
+        const int limitMin = g_vsSessionLimitMin.load();
+        const double grace = limitMin > 0 ? (double)limitMin * 60.0 : 300.0;
+        // ★ Prune while we are here: this map would otherwise grow for the life of the process,
+        //   one entry per address ever seen, on a server whose whole point is strangers.
+        for (auto it = turns.begin(); it != turns.end(); ) {
+            if (now - it->second.seen > grace && it->first != addr) it = turns.erase(it);
+            else ++it;
+        }
+        if (addr.empty()) return now;
+        auto it = turns.find(addr);
+        if (it != turns.end() && (now - it->second.seen) <= grace) {
+            it->second.seen = now;
+            return it->second.started;          // ★ same person, still within their turn
+        }
+        turns[addr] = Turn{ now, now };
+        return now;
+    }
+    /** Keep a live listener's turn from expiring while they are still here. clientMtx HELD. */
+    void touchTurnLocked(const std::string& addr, double now) {
+        if (addr.empty()) return;
+        auto it = turns.find(addr);
+        if (it != turns.end()) it->second.seen = now;
+    }
+
     // ── The waiting queue ──────────────────────────────────────────────────────────────────
     // ★★★ THE QUEUE *IS* THE SET OF WAITING SOCKETS, IN ARRIVAL ORDER. A refused listener used to
     //     be told "busy" and closed, which gives a person nothing to decide with — so they hammer
@@ -8016,7 +8063,9 @@ struct LocalSdrShim::Impl {
                 //   refuse the same address. See occHeldElsewhere.
                 { std::lock_guard<std::mutex> ol(g_occMtx); g_occHeldIp = sock->peerAddress(); }
                 occWrite(sock->peerAddress());
-                occupantSince   = Impl::nowSecs();
+                // ★★★ NOT nowSecs() — see turnStartForLocked. A reload made a new session id and
+                //     this line handed it a brand-new half hour.
+                occupantSince   = turnStartForLocked(sock->peerAddress(), Impl::nowSecs());
                 occupantWarned  = 0;
                 occupantAddr    = sock->peerAddress();
                 occupantAgent   = userAgent;   // for the admin view, same as ClientDsp::agent
@@ -8349,7 +8398,10 @@ struct LocalSdrShim::Impl {
                 if (c->adminOk.load()) c->lastAdminTouch.store(Impl::nowSecs());
                 c->spec = sock;
                 c->session = session;
-                c->since = Impl::nowSecs();      // ★ the per-listener clock; see ClientDsp::since
+                // ★ The per-listener clock — and it CONTINUES a turn this address already had, so a
+                //   page reload does not buy a fresh one. See turnStartForLocked.
+                { std::lock_guard<std::mutex> lk(clientMtx);
+                  c->since = turnStartForLocked(sock->peerAddress(), Impl::nowSecs()); }
                 c->agent = userAgent;
                 // ★★★ BUILD THE CHANNEL WHERE THE LISTENER ASKED TO BE, not at the landing.
                 //     This was the SECOND half of the same fault: even with the landing gate
@@ -10013,6 +10065,7 @@ struct LocalSdrShim::Impl {
                 const std::string addr = specOpen ? c->spec->peerAddress()
                                                   : c->audio->peerAddress();
                 if (addr.empty() || isLoopback(addr)) continue;
+                touchTurnLocked(addr, now);      // ★ still here — their turn has not lapsed
                 const double left = (double)limitMin * 60.0 - (now - c->since);
                 if (left > 0) {
                     const int stage = left <= 30 ? 2 : left <= 120 ? 1 : 0;
@@ -10098,7 +10151,9 @@ struct LocalSdrShim::Impl {
           addr = occupantAddr; since = occupantSince; warned = occupantWarned;
           // ★ Which session this pass is about, so the termination below can prove that nothing
           //   changed underneath it. Needed now that TWO threads call this — see the tick note.
-          sess = occupantSession; }
+          sess = occupantSession;
+          // ★ Still connected, so the turn does not lapse while they are sitting here.
+          touchTurnLocked(occupantAddr, Impl::nowSecs()); }
         if (addr.empty() || isLoopback(addr)) return;    // the host's own listening
         // ★★★ THE EXEMPTION IS THE OCCUPANT'S OWN, and this read the radio-wide flag while
         //     occupantSecsLeft() had just been made per-listener — so the countdown would say "no

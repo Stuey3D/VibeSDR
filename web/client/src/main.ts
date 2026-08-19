@@ -3900,7 +3900,12 @@ adoptAdminTicketFromUrl();
  *  a misbehaving receiver. Read from /vibeserver.json, which every client already fetches. */
 async function loadOwnerNotice() {
   try {
-    const r = await fetch('/vibeserver.json', { cache: 'no-store' });
+    // ★★★ P(), NOT A ROOT PATH. Behind a front door every radio lives under /r/<id>/, and a bare
+    //     "/vibeserver.json" reads the DOOR's file — a process that owns no radio, so it has no
+    //     limit, no aerial and no countdown. The owner's notice is machine-level and came back
+    //     correct either way, which is exactly why this went unseen: the one field that worked
+    //     hid the ones that could not (Stuart, 2026-08-19: "I never saw the new time message").
+    const r = await fetch(P('/vibeserver.json'), { cache: 'no-store' });
     if (!r.ok) return;
     const j = await r.json();
     if (typeof j?.notice === 'string' && j.notice) showOwnerNotice(j.notice);
