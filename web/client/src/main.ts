@@ -2914,6 +2914,14 @@ function showLandingMessage(text?: unknown, linkUrl?: unknown, linkLabel?: unkno
     //   unreadable, and the host is the part that tells you where you are being sent.
     : (() => { try { return new URL(url).host; } catch { return url; } })();
   host.style.display = '';
+  // ★★ CENTRED FOR A SENTENCE, RANGED LEFT FOR A PARAGRAPH. This was sized for a one-liner, and
+  //    Stuart's first real message was 407 characters — which centring turns into twelve short
+  //    ragged lines with both edges moving, the hardest thing to read on the page. A block that
+  //    stays centred while its TEXT ranges left keeps the layout symmetrical and the prose
+  //    readable. ★ 90 characters is roughly where a message stops being a caption.
+  const long = msg.length > 90;
+  host.style.textAlign = long ? 'left' : 'center';
+  host.style.maxWidth = long ? '560px' : '340px';
   host.innerHTML =
       (msg ? `<div style="white-space:pre-wrap">${escapeHtml(msg)}</div>` : '')
     + (url ? `<div style="margin-top:6px"><a href="${escapeHtml(url)}" target="_blank" `
