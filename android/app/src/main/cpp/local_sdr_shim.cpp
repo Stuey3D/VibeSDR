@@ -953,6 +953,22 @@ static std::string         g_vsAdminSecret;
  *  anything, and timing them out of their own radio would be absurd. Admin sessions are
  *  exempt too — the owner should not be able to lock themselves out. */
 static std::atomic<int>     g_vsSessionLimitMin{0};
+/** ★★★ SOFT = THE LIMIT IS A GUARANTEE, NOT A DEADLINE. See RadioConfig::sessionLimitSoft.
+ *  ★ Default FALSE so an upgrade changes nothing for an owner who already chose a limit. */
+static std::atomic<bool>    g_vsSessionLimitSoft{false};
+/** When the incumbent's 60 seconds of notice run out (monotonic secs). 0 = no handover running.
+ *  ★ Guarded by clientMtx with the rest of the occupancy state — one lock for one idea. */
+static double               g_vsHandoverAt = 0;
+/** ★★★ HOW LONG THE INCUMBENT GETS ONCE SOMEBODY IS WAITING. Walked down 60 → 30 → 15 with
+ *  Stuart on 2026-08-19, and the direction of travel is the point: every second here is a second
+ *  the ARRIVING listener spends staring at a wait, and one who gives up leaves us having evicted
+ *  somebody on behalf of nobody.
+ *  ★★ THE FLOOR IS ABOUT 10. Below that the incumbent cannot act on the notice at all — they
+ *     cannot read the frequency off their own screen — and it stops being a warning and becomes a
+ *     disconnect with a delay, which is the thing the hard limit already does badly.
+ *  ★ 15 is bearable at the other end because the waiter is shown a COUNTDOWN, not a spinner. An
+ *    indeterminate wait is what people abandon; a number that is visibly running out is not. */
+static constexpr int        kHandoverNoticeSec = 15;
 
 // ── ★★★ GAIN LIMITS ─────────────────────────────────────────────────────────────────────────
 static std::mutex            g_gainLimMtx;
@@ -2067,6 +2083,21 @@ struct LocalSdrShim::Impl {
         std::shared_ptr<net::Socket> spec;      // whose channel this is
         std::shared_ptr<net::Socket> audio;     // its own audio socket, or null until one opens
         std::string session;
+        /** ★★★ WHEN THIS LISTENER ARRIVED. There was no per-listener clock at all, and on a SHARED
+         *  radio that made the session limit incoherent: `occupantSince` is ONE clock for the
+         *  whole receiver, reset by every joiner whose session differs, so the limit tracked
+         *  whoever arrived MOST RECENTLY and the longest-staying listener could never be timed out
+         *  — the exact inverse of what a shared radio needs (Stuart, 2026-08-19, who asked for
+         *  "the longest user being the first to get kicked"). Live on the Pi's RSP: users=10,
+         *  limitMin=30.
+         *  ★ Set once, at creation, and never touched again — it is what "longest connected" is
+         *    measured from, so anything that resets it re-opens the same hole. */
+        double since = 0;
+        /** Warnings already sent to THIS listener: bit 0 = 2 min, bit 1 = 30 s. Per listener for
+         *  the same reason the clock is. */
+        int    warned = 0;
+        /** When this listener's soft-limit notice expires (monotonic secs). 0 = none running. */
+        double handoverAt = 0;
         /** ★ What connected — app, watch, browser or bot. Already recorded in the connection LOG;
          *  kept here too so the LIVE listener list can show it, which is where an owner looks when
          *  deciding whether the address they are about to block is a person (Stuart, 2026-08-08:
@@ -7249,6 +7280,24 @@ struct LocalSdrShim::Impl {
                              // the picker say "free in 4 min" instead of a bare "in use", which
                              // is the difference between waiting and giving up.
                              + ",\"freeInSec\":" + std::to_string(LocalSdrShim::instance().occupantSecsLeft())
+                             // ★★★ HOW THE LIMIT BEHAVES, or a client cannot describe it honestly.
+                             //     Absent means HARD, so every older client and server reads right.
+                             + (g_vsSessionLimitSoft.load()
+                                  ? std::string(",\"limitMode\":\"soft\"") : std::string())
+                             // ★★★ CLAIMABLE: somebody IS listening, and you may take the radio
+                             //     anyway — they are past their guarantee. Stuart, 2026-08-19:
+                             //     present it as FREE, "otherwise new visitors may be put off
+                             //     using a radio if someone is lingering on it", and nobody should
+                             //     feel they are kicking a stranger off when the rule is on their
+                             //     side.
+                             // ★★ A SEPARATE FLAG, and `listeners` stays TRUE. The admin table and
+                             //    the connection stats must keep showing what is actually
+                             //    happening (Stuart, same conversation) — so the polite fiction
+                             //    lives here, where only the public card reads it, and nowhere
+                             //    else. A client that does not know this key sees today's "IN
+                             //    USE", which is the safe way to be wrong.
+                             + (LocalSdrShim::instance().claimableNow()
+                                  ? std::string(",\"claimable\":true") : std::string())
                              // ★★ THE AERIAL AND THE OWNER'S STANDING MESSAGE. Here as well as in
                              //    /vibeserver/radios because a SIMPLE server has no picker at all:
                              //    its splash is this radio, and this file is what that splash
@@ -7905,6 +7954,7 @@ struct LocalSdrShim::Impl {
                     if (audioClient && audioClient->isOpen())
                         { sendWs(audioClient, 0x1, (const uint8_t*)kEvict, strlen(kEvict)); outboxClose(audioClient, 100); }
                     occupantSession.clear();
+                    g_vsHandoverAt = 0;   // ★ evicted by an admin — no handover is running now
                     // ★ NOT put on cooldown. They were evicted by the owner, not caught
                     // overstaying — punishing them for someone else's decision would be wrong.
                 }
@@ -8299,6 +8349,7 @@ struct LocalSdrShim::Impl {
                 if (c->adminOk.load()) c->lastAdminTouch.store(Impl::nowSecs());
                 c->spec = sock;
                 c->session = session;
+                c->since = Impl::nowSecs();      // ★ the per-listener clock; see ClientDsp::since
                 c->agent = userAgent;
                 // ★★★ BUILD THE CHANNEL WHERE THE LISTENER ASKED TO BE, not at the landing.
                 //     This was the SECOND half of the same fault: even with the landing gate
@@ -8493,7 +8544,9 @@ struct LocalSdrShim::Impl {
           // clear an occupancy it never held.
           const bool specGone  = !specClient  || !specClient->isOpen();
           const bool audioGone = !audioClient || !audioClient->isOpen();
-          if (specGone && audioGone) { occupantSession.clear(); bothGone = true; } }
+          // ★ The occupant left of their own accord. Any soft-limit handover dies with them —
+          //   leaving it set would start the next listener already 60 seconds into a notice.
+          if (specGone && audioGone) { occupantSession.clear(); g_vsHandoverAt = 0; bothGone = true; } }
         // ★ And release the machine-wide claim, so this address may take another radio at once.
         if (bothGone) { { std::lock_guard<std::mutex> ol(g_occMtx); g_occHeldIp.clear(); }
                         occWrite(""); }
@@ -9919,9 +9972,123 @@ struct LocalSdrShim::Impl {
                        + std::to_string(idleMin) + "}");
     }
 
+    /** ★★★ THE SHARED-RADIO LIMIT — ONE CLOCK PER LISTENER, LONGEST OUT FIRST.
+     *
+     *  A receiver with several slots cannot be policed by `occupantSince`: that is ONE clock for
+     *  the whole radio, taken over by every joiner, so it timed out the most RECENT arrival and
+     *  never the person who had been sitting there all afternoon. Each listener now carries its
+     *  own `since`, and this walks them.
+     *
+     *  ★★ HARD: every listener is disconnected at their own limit, independently. That is what an
+     *     owner who set 30 minutes has always believed was happening.
+     *  ★★★ SOFT: nobody is disconnected while there is ROOM. The limit only bites when the radio
+     *      is FULL and somebody is waiting — and then it is the LONGEST-CONNECTED listener who is
+     *      over their guarantee who gets the notice, because they have had the most of it
+     *      (Stuart, 2026-08-19: "the longest user being the first to get kicked").
+     *  ★ One at a time: a single waiter displaces a single listener. Evicting several because
+     *    several are over time would empty a busy radio to seat one person.
+     */
+    void enforceSharedSessionLimit(int limitMin) {
+        const bool soft = g_vsSessionLimitSoft.load();
+        const double now = Impl::nowSecs();
+
+        struct Cand { std::shared_ptr<ClientDsp> c; double since; };
+        std::vector<Cand> over;                  // past their limit, and not exempt
+        std::vector<std::pair<std::shared_ptr<ClientDsp>, int>> toWarn;
+        int waiters = 0, listeners = 0;
+        const int maxUsers = g_vsMaxUsers.load();
+
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            waiters = (int)waitQueue.size();
+            for (auto& kv : clientDsp) {
+                auto& c = kv.second;
+                if (!c || c->since <= 0) continue;
+                const bool specOpen  = c->spec  && c->spec->isOpen();
+                const bool audioOpen = c->audio && c->audio->isOpen();
+                if (!specOpen && !audioOpen) continue;          // gone; see the backgrounding note
+                ++listeners;
+                // ★ Same exemptions as everywhere else: the owner, and the host's own listening.
+                if (c->adminOk.load()) continue;
+                const std::string addr = specOpen ? c->spec->peerAddress()
+                                                  : c->audio->peerAddress();
+                if (addr.empty() || isLoopback(addr)) continue;
+                const double left = (double)limitMin * 60.0 - (now - c->since);
+                if (left > 0) {
+                    const int stage = left <= 30 ? 2 : left <= 120 ? 1 : 0;
+                    if (stage > 0 && !(c->warned & stage)) { c->warned |= stage; toWarn.push_back({c, (int)(left + 0.5)}); }
+                } else {
+                    over.push_back({c, c->since});
+                }
+            }
+        }
+
+        // ★ Warnings first, and outside the lock — sendWs queues, but outboxPush takes its own.
+        for (auto& w : toWarn) {
+            const std::string m = "{\"type\":\"session_warning\",\"secs\":"
+                                + std::to_string(w.second) + "}";
+            auto sk = w.first->spec && w.first->spec->isOpen() ? w.first->spec : w.first->audio;
+            if (sk && sk->isOpen()) sendWs(sk, 0x1, (const uint8_t*)m.data(), m.size());
+        }
+        if (over.empty()) return;
+
+        // ★★★ THE LONGEST-CONNECTED OVER-TIME LISTENER IS THE ONE WHO GOES.
+        std::sort(over.begin(), over.end(), [](const Cand& a, const Cand& b){ return a.since < b.since; });
+
+        if (soft) {
+            // ★★ Nobody is moved while there is room. A soft limit on a shared radio is a promise
+            //    about CONTENTION, and an empty slot means there is none.
+            const bool full = maxUsers > 0 && listeners >= maxUsers;
+            if (!full || waiters <= 0) {
+                // ★ And drop any notice that is running: whatever it was for has gone away.
+                std::lock_guard<std::mutex> lk(clientMtx);
+                for (auto& o : over) if (o.c->handoverAt > 0) o.c->handoverAt = 0;
+                return;
+            }
+        }
+
+        auto& victim = over.front().c;
+        double due = 0;
+        { std::lock_guard<std::mutex> lk(clientMtx); due = victim->handoverAt; }
+
+        if (soft) {
+            if (due <= 0) {
+                { std::lock_guard<std::mutex> lk(clientMtx); victim->handoverAt = now + kHandoverNoticeSec; }
+                const std::string m = "{\"type\":\"session_handover\",\"secs\":"
+                                    + std::to_string(kHandoverNoticeSec) + "}";
+                auto sk = victim->spec && victim->spec->isOpen() ? victim->spec : victim->audio;
+                if (sk && sk->isOpen()) sendWs(sk, 0x1, (const uint8_t*)m.data(), m.size());
+                LOGI("shared soft limit — longest listener [%s] over time, %ds notice",
+                     victim->session.c_str(), kHandoverNoticeSec);
+                return;
+            }
+            if (now < due) return;                        // notice still running
+        }
+
+        // ── End this listener's session ────────────────────────────────────────────────────
+        const std::string m = "{\"type\":\"session_expired\",\"cooldown\":"
+                            + std::to_string(kSessionCooldownSec) + "}";
+        std::shared_ptr<net::Socket> sp, au; std::string addr;
+        { std::lock_guard<std::mutex> lk(clientMtx);
+          sp = victim->spec; au = victim->audio; victim->handoverAt = 0; victim->since = 0;
+          addr = sp && sp->isOpen() ? sp->peerAddress() : (au ? au->peerAddress() : std::string());
+          if (!addr.empty()) cooldownUntil[addr] = now + kSessionCooldownSec; }
+        LOGI("shared limit reached (%d min) — ending %s", limitMin, addr.c_str());
+        // ★ Tell them, THEN drain — the same fault fixed in three other places today.
+        if (sp && sp->isOpen()) { sendWs(sp, 0x1, (const uint8_t*)m.data(), m.size()); outboxClose(sp); }
+        else if (au && au->isOpen()) { sendWs(au, 0x1, (const uint8_t*)m.data(), m.size()); outboxClose(au); }
+        if (au && au->isOpen()) au->close();
+        LocalSdrShim::noteConnectionClosed(addr, "", "timeout");
+    }
+
     void enforceSessionLimit() {
         const int limitMin = g_vsSessionLimitMin.load();
         if (limitMin <= 0) return;                       // unlimited: the default
+
+        // ★★★ A SHARED RADIO IS A DIFFERENT PROBLEM AND HAS ITS OWN PASS. Everything below this
+        //     line reasons about `occupantSession` — a SINGLE occupant — which is right for a
+        //     one-at-a-time receiver and meaningless where ten people are listening.
+        if (g_vsMaxUsers.load() > 1) { enforceSharedSessionLimit(limitMin); return; }
 
         std::shared_ptr<net::Socket> spec, aud;
         std::string addr, sess; double since; int warned;
@@ -9943,6 +10110,60 @@ struct LocalSdrShim::Impl {
 
         const double elapsed = Impl::nowSecs() - since;
         const double left    = (double)limitMin * 60.0 - elapsed;
+
+        // ★★★ SOFT: PAST THE LIMIT IS NOT THE END, IT IS THE END OF THE GUARANTEE.
+        //
+        //     Hard falls straight through to the eviction below, exactly as it always has. Soft
+        //     keeps the listener until somebody actually wants the radio — the Pi's own logs are
+        //     the argument: three days, not one listener refused for a busy radio, while the only
+        //     genuine repeat visitor stopped dead at 24-30 minutes every time and came back.
+        //
+        //  ★★ THE HANDOVER IS A DEADLINE THE INCUMBENT CAN SEE. The moment somebody is waiting we
+        //     start the clock and TELL them, then evict. Being cut off mid-station with no warning
+        //     is what the hard limit already does badly; a soft limit that did the same would not
+        //     be an improvement.
+        //
+        //  ★★★ 30 SECONDS, NOT 60, AND RE-CHECKED AT THE END. Stuart, 2026-08-19: "we dont want to
+        //      wait too long as a new connecting user will get fed up and leave and then we've
+        //      just booted a person to allow someone who has left the server to connect." Both
+        //      halves of that matter, and they point the same way — a minute is long enough for
+        //      the waiter to give up, which turns the whole mechanism into a machine for evicting
+        //      people on behalf of nobody.
+        //  ★★ So the queue is re-read when the notice expires, NOT trusted from when it started.
+        //     If the waiter has gone, the incumbent keeps the radio and the notice is simply
+        //     cleared — the next arrival starts a fresh 30 seconds. An earlier draft of this
+        //     deliberately refused to cancel, on the grounds that taking back a warning makes it
+        //     a lie; that reasoning was wrong, because the alternative is worse than a reprieve.
+        if (g_vsSessionLimitSoft.load() && left <= 0) {
+            double handoverAt = 0; int waiters = 0;
+            { std::lock_guard<std::mutex> lk(clientMtx);
+              handoverAt = g_vsHandoverAt;
+              waiters = (int)waitQueue.size(); }
+            if (handoverAt <= 0) {
+                if (waiters <= 0) return;                // borrowed time, and nobody is waiting
+                const double at = Impl::nowSecs() + kHandoverNoticeSec;
+                { std::lock_guard<std::mutex> lk(clientMtx);
+                  if (g_vsHandoverAt > 0) return;        // another thread started it first
+                  g_vsHandoverAt = at; }
+                LOGI("soft limit — [%s] is over time and %d waiting: %ds notice",
+                     addr.c_str(), waiters, kHandoverNoticeSec);
+                const std::string m = "{\"type\":\"session_handover\",\"secs\":"
+                                    + std::to_string(kHandoverNoticeSec) + "}";
+                if (spec && spec->isOpen()) sendWs(spec, 0x1, (const uint8_t*)m.data(), m.size());
+                else if (aud && aud->isOpen()) sendWs(aud, 0x1, (const uint8_t*)m.data(), m.size());
+                return;
+            }
+            if (Impl::nowSecs() < handoverAt) return;    // notice still running
+            if (waiters <= 0) {
+                // ★ The waiter left while we were counting. Do NOT evict for nobody.
+                { std::lock_guard<std::mutex> lk(clientMtx); g_vsHandoverAt = 0; }
+                LOGI("soft limit — the waiter left; [%s] keeps the radio", addr.c_str());
+                const char* kStay = "{\"type\":\"session_handover_off\"}";
+                if (spec && spec->isOpen()) sendWs(spec, 0x1, (const uint8_t*)kStay, strlen(kStay));
+                return;
+            }
+            // Notice served and somebody is still waiting — end it exactly as a hard limit would.
+        }
 
         if (left > 0) {
             // Two warnings, each once: enough notice to finish listening to something, then a
@@ -9967,7 +10188,8 @@ struct LocalSdrShim::Impl {
         { std::lock_guard<std::mutex> lk(clientMtx);
           if (occupantSession != sess || occupantSince != since) return;   // already handled
           cooldownUntil[addr] = Impl::nowSecs() + kSessionCooldownSec;
-          occupantSession.clear(); occupantSince = 0; occupantWarned = 0; occupantAddr.clear(); }
+          occupantSession.clear(); occupantSince = 0; occupantWarned = 0; occupantAddr.clear();
+          g_vsHandoverAt = 0; }
 
         LOGI("session limit reached (%d min) — ending %s", limitMin, addr.c_str());
         const std::string m = "{\"type\":\"session_expired\",\"cooldown\":"
@@ -10675,6 +10897,9 @@ void LocalSdrShim::setVibeServerAdminSecret(const std::string& secret) {
 
 void LocalSdrShim::setVibeServerSessionLimit(int minutes) {
     g_vsSessionLimitMin.store(minutes > 0 ? minutes : 0);
+    // ★ Minutes only. The MODE is set by a different call that may not have run yet, and a line
+    //   claiming "hard" while the config says soft is a diagnostic that lies — which is worse than
+    //   one that says less. setSessionLimitSoft() announces the mode when it actually knows it.
     LOGI("session limit set to %d min", g_vsSessionLimitMin.load());
 }
 
@@ -10719,6 +10944,48 @@ std::string LocalSdrShim::noticeText() { return g_vsNotice.current(); }
 bool LocalSdrShim::setNotice(const std::string& text, int minutes, std::string& err) {
     return g_vsNotice.set(text, minutes, err);
 }
+void LocalSdrShim::setSessionLimitSoft(bool soft) {
+    g_vsSessionLimitSoft.store(soft);
+    if (g_vsSessionLimitMin.load() > 0)
+        LOGI("session limit is %s", soft ? "SOFT — kept past the limit until somebody is waiting"
+                                         : "HARD — disconnected at the limit");
+}
+
+bool LocalSdrShim::claimableNow() const {
+    const int limitMin = g_vsSessionLimitMin.load();
+    if (!p || limitMin <= 0 || !g_vsSessionLimitSoft.load()) return false;
+    const double now = Impl::nowSecs();
+    // ★★★ A SHARED RADIO IS CLAIMABLE WHEN IT IS FULL AND SOMEBODY IN IT IS OVER THEIR GUARANTEE.
+    //     Not full = there is a free slot and the card already says so; nobody over time = the
+    //     next arrival genuinely has to wait, and telling them otherwise would be a lie that
+    //     turns into a stuck "connecting" screen.
+    if (g_vsMaxUsers.load() > 1) {
+        std::lock_guard<std::mutex> lk(p->clientMtx);
+        int live = 0; bool anyOver = false;
+        for (auto& kv : p->clientDsp) {
+            auto& c = kv.second;
+            if (!c || c->since <= 0) continue;
+            const bool specOpen  = c->spec  && c->spec->isOpen();
+            const bool audioOpen = c->audio && c->audio->isOpen();
+            if (!specOpen && !audioOpen) continue;
+            ++live;
+            if (c->adminOk.load()) continue;
+            const std::string a = specOpen ? c->spec->peerAddress() : c->audio->peerAddress();
+            if (a.empty() || isLoopback(a)) continue;
+            if ((now - c->since) >= (double)limitMin * 60.0) anyOver = true;
+        }
+        return anyOver && live >= g_vsMaxUsers.load();
+    }
+    std::lock_guard<std::mutex> lk(p->clientMtx);
+    if (p->occupantSession.empty() || p->occupantSince <= 0) return false;
+    // ★ The exemptions that keep somebody OFF the clock also keep them un-claimable: an admin's
+    //   session and the host's own listening never fall out of their guarantee, so a stranger must
+    //   not be told the radio is theirs for the taking.
+    if (p->occupantAddr.empty() || isLoopback(p->occupantAddr)) return false;
+    if (p->adminOk.load()) return false;
+    return (Impl::nowSecs() - p->occupantSince) >= (double)limitMin * 60.0;
+}
+
 void LocalSdrShim::setAntennaIcon(const std::string& key) {
     std::lock_guard<std::mutex> lk(g_vsSiteMtx);
     g_vsAntennaIcon = key;
@@ -11108,8 +11375,20 @@ std::string LocalSdrShim::adminSessionsJson() {
            // ★ Only ever on the OCCUPANT: `adminOk` is cleared whenever the spectrum client
            //   changes, so it describes the session in the chair and nobody else.
            + ",\"admin\":" + ((isOccupant && p->adminOk.load()) ? "true" : "false");
-        if (isOccupant && p->occupantSince > 0)
+        // ★★★ THE OWNER SEES THE REAL CLOCK, PER LISTENER. The public card may be showing this
+        //     radio as FREE (a soft-limit overstay), but the admin table and the connection stats
+        //     must keep saying what is actually happening — Stuart, 2026-08-19: "obviously the
+        //     admin menu and connection stats should still show its actual status".
+        // ★ c->since for everybody on a shared radio; occupantSince is only right where there IS
+        //   a single occupant, and reading it for all of them is the bug this replaces.
+        if (c->since > 0)      j += ",\"secs\":" + std::to_string((long long)(now - c->since));
+        else if (isOccupant && p->occupantSince > 0)
             j += ",\"secs\":" + std::to_string((long long)(now - p->occupantSince));
+        if (c->handoverAt > 0) j += ",\"handoverSecs\":"
+                                  + std::to_string((long long)(c->handoverAt - now > 0 ? c->handoverAt - now : 0));
+        j += std::string(",\"overTime\":")
+           + ((g_vsSessionLimitMin.load() > 0 && c->since > 0
+               && (now - c->since) >= (double)g_vsSessionLimitMin.load() * 60.0) ? "true" : "false");
         j += "}";
     }
     // ★★★ A SINGLE-USER RADIO HAS NO ClientDsp AT ALL. Per-client pipelines only exist when the
@@ -11222,6 +11501,7 @@ int LocalSdrShim::adminKick(const std::string& session, const std::string& ip) {
             logged.emplace_back(addr, c->session);
             if (p->occupantSession == c->session) {
                 p->occupantSession.clear(); p->occupantSince = 0; p->occupantAddr.clear();
+                g_vsHandoverAt = 0;
             }
         }
     }

@@ -250,6 +250,8 @@ export interface SpectrumCallbacks {
   /** This address is on the receiver's ban list. Terminal — there is no waiting it out. */
   onBanned?: () => void;
   onElsewhere?: (radio: string) => void;
+  onHandover?: (secs: number) => void;
+  onHandoverOff?: () => void;
   /** ★ The dial has JUMPED far enough that anything already buffered is a different signal.
    *  main.ts uses this to drop queued audio — see AudioPlayer.flush(). */
   onRetuneJump?: () => void;
@@ -465,6 +467,18 @@ export class SpectrumClient {
         //   auto-reconnect, and it matters most here.
         this.refused = true;
         this.cb.onBanned?.();
+        break;
+      // ★★★ SOFT LIMIT: SOMEBODY IS WAITING, AND THIS IS THE ONLY WARNING THERE IS. NOT terminal —
+      //     the listener is still connected and still listening, and setting `refused` here would
+      //     stop the reconnect they are entitled to attempt afterwards.
+      case 'session_handover':
+        this.cb.onHandover?.(Number(msg.secs) || 0);
+        break;
+      // ★ The waiter gave up before the clock ran out, so the notice is withdrawn. Without this
+      //   the listener sits watching a countdown that will never fire and assumes the receiver
+      //   has hung — the reprieve has to be as visible as the threat.
+      case 'session_handover_off':
+        this.cb.onHandoverOff?.();
         break;
       case 'session_warning':
         // Still connected — this is a countdown, not a refusal. Do NOT set refused.

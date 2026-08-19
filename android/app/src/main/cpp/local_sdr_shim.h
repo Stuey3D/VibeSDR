@@ -176,6 +176,11 @@ public:
     /** The aerial bolted to THIS radio, and the machine's standing landing-screen message.
      *  ★ The URL is scheme-checked here and stored empty if it fails, so nothing downstream has to
      *    wonder whether it was. See vsconfig::safeLinkUrl. */
+    /** Is the session limit a GUARANTEE (soft) rather than a deadline? See sessionLimitSoft. */
+    void setSessionLimitSoft(bool soft);
+    /** True when somebody is listening but is past their guarantee, so an arriving listener may
+     *  take the radio. ★ For the PUBLIC card only — the admin views report the truth. */
+    bool claimableNow() const;
     /** Which aerial picture this radio shows — a key, see RadioConfig::antennaIcon. */
     void setAntennaIcon(const std::string& key);
     void setLandingInfo(const std::string& antenna, const std::string& message,

@@ -847,6 +847,12 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       `You are already listening on <b>${radio}</b> from this address.<br><br>`
       + 'This receiver serves one radio per listener, so that nobody takes them all. '
       + 'Close the other one and this will let you straight in.'),
+    // ★★ THE SOFT LIMIT'S ONE WARNING. A pill, not an overlay: the listener has not been refused
+    //    anything and is still hearing the radio — putting a modal over it would take away the
+    //    seconds the notice exists to give them.
+    onHandover: (secs) => showPill(
+      `Someone is waiting for this radio — you have about ${Math.max(1, secs)} seconds`, 12000),
+    onHandoverOff: () => showPill('They stopped waiting — the radio is still yours', 6000),
     onSessionEnded: (cd) => showSessionEnded(cd),
     onCooldown: (secs) => showCooldown(secs),
     // ★ Shown to EVERYONE, not only the admin. "3 of 30 listening" answers the question a
@@ -2803,7 +2809,20 @@ function radioCardState(r: any, st: any): { state: string; blocked: boolean } {
   const waiting = Number(st?.waiting) || 0;
   const freeIn = typeof st?.freeInSec === 'number' ? st.freeInSec : -1;
   const down = !st;
-  const full = !down && max > 0 && listeners >= max;
+  // ★★★ CLAIMABLE MEANS SAY "FREE", EVEN THOUGH SOMEBODY IS ON IT. On a soft-limit server a
+  //     listener past their guarantee holds the radio only until somebody wants it — so the slot
+  //     IS available to whoever arrives, and the machinery to hand it over is the server's
+  //     business, not something a stranger should have to reason about.
+  // ★★★ Stuart, 2026-08-19, and the reasoning is the whole point: present it as free "otherwise
+  //     new visitors may be put off using a radio if someone is lingering on it". Nobody should
+  //     feel they are kicking a stranger off when the rule is on their side.
+  // ★★ THE ADMIN VIEWS ARE NOT TOUCHED BY THIS. `listeners` stays true, so the admin table and the
+  //    connection stats keep showing what is actually happening — "obviously the admin menu and
+  //    connection stats should still show its actual status" (same conversation). The polite
+  //    fiction lives on this card and nowhere else.
+  // ★ Absent = today's behaviour, so an older server still reads as IN USE.
+  const claimable = st?.claimable === true;
+  const full = !down && max > 0 && listeners >= max && !claimable;
   const admin = inAdminMode();
   let state: string;
   if (down)         state = 'NOT RESPONDING';
@@ -2812,6 +2831,9 @@ function radioCardState(r: any, st: any): { state: string; blocked: boolean } {
   else if (full && freeIn >= 0) state = `FULL · FREE IN ${mmss(freeIn)}`;
   else if (full && waiting > 0) state = `FULL · ${waiting} WAITING`;
   else if (full)    state = 'IN USE';
+  // ★★ A CLAIMABLE SHARED RADIO WOULD OTHERWISE READ "2 OF 2 LISTENING", which is true and looks
+  //    exactly like FULL — the impression this decision exists to avoid. Say FREE, because it is.
+  else if (claimable) state = 'FREE';
   else if (max > 1) state = `${listeners} OF ${max} LISTENING`;
   else              state = 'FREE';
   return { state, blocked: down || (full && !admin) };

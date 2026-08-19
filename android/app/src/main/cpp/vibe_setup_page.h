@@ -425,6 +425,21 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           and whoever has it has all of it. On a shared radio it matters far less: everyone already
           has their own VFO, so a long session costs nobody else anything.
           <br>The owner is exempt, and so is anything connecting from this machine.</div></label>
+      <label style="margin-top:12px"><span class="lbl">What the limit means</span>
+        <select id="sessionLimitMode">
+          <option value="hard">Hard — disconnect at the limit, always</option>
+          <option value="soft">Soft — keep the radio until somebody else wants it</option>
+        </select>
+        <div class="hint"><b>Hard</b> is what a time limit has always done here: at the limit the
+          listener is disconnected whether or not anybody is waiting.
+          <br><b>Soft</b> turns the limit into a <em>guarantee</em> instead of a deadline. Nobody
+          can take the radio from a listener inside their time — that is the promise — and
+          afterwards they simply keep listening until somebody else arrives, at which point they
+          get a few seconds' notice and the slot passes on. On a radio with several slots it is the
+          person who has been connected <em>longest</em> who moves.
+          <br>Worth knowing: while a listener is over their time the radio advertises itself as
+          <b>free</b>, so a visitor is never put off by an "in use" sign when the rule is on their
+          side. Your admin page still shows exactly who is connected and for how long.</div></label>
     </div>
       <!-- ★★★ WHERE LISTENERS MAY TUNE THIS RADIO. Single-user only: in shared mode the locked
            range IS the limit, so offering these there would be two answers to one question
@@ -1769,6 +1784,7 @@ function fill() {
   //   keeps the behaviour it already had rather than silently changing.
   if ($("idleGrace")) $("idleGrace").value = String(r.idleGrace != null ? Math.round(r.idleGrace) : 300);
   $("sessionLimit").value = r.sessionLimitMin || 0;
+  $("sessionLimitMode").value = r.sessionLimitSoft ? "soft" : "hard";
   if ($("spectrogram"))     $("spectrogram").checked = !!r.spectrogram;
   setMode((r.mode || "single") === "locked");
   addr(); coverage(); bwNote(); refreshHw(); eibiStatus(); renderGain();
@@ -1858,6 +1874,8 @@ function collectRadio() {
     // ★ ALWAYS, not just when locked. A one-listener radio is precisely the one someone can sit
     //   on all evening, so it is the radio that most needs a limit.
     sessionLimitMin: parseInt($("sessionLimit").value || "0", 10),
+    // ★ Absent/false = hard, so an existing radio keeps doing exactly what its owner chose.
+    sessionLimitSoft: $("sessionLimitMode").value === "soft",
     // ★ Never claim the spectrogram for a radio that cannot honestly draw one — the checkbox is
     //   hidden in that case, and a hidden control must not still be sending a value.
     spectrogram: !$("hwSpectro").classList.contains("hide") && $("spectrogram").checked

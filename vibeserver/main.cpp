@@ -2277,12 +2277,28 @@ int main(int argc, char** argv) {
     // ★ The aerial is this radio's; the message belongs to the machine, so a front door (which
     //   owns no radio) still carries it.
     {
-        std::string ant, antIcon;
-        for (const auto& r : g_serverConfig.radios)
-            if (!g_myRadioSerial.empty() && r.serial == g_myRadioSerial) {
-                ant = r.antenna; antIcon = r.antennaIcon; break; }
-        LocalSdrShim::instance().setAntennaIcon(antIcon);
-        LocalSdrShim::instance().setLandingInfo(ant, g_serverConfig.landingMessage,
+        // ★★★ WHICH RADIO AM I? Matching on g_myRadioSerial ALONE is wrong for a SIMPLE server:
+        //     that variable is only set when a configured radio matched a real device, so a
+        //     one-radio machine can reach here with it empty — and every per-radio setting below
+        //     then silently applied to nobody. It cost the soft session limit, which read as
+        //     "hard" in the startup log with `sessionLimitSoft: true` sitting in the config.
+        // ★★ Fall back to the PRIMARY radio, which is what the rest of the file means by "the
+        //    radio this process is" when no serial was named. Front door only: it owns no radio,
+        //    so it takes none of these and keeps the machine-wide message below.
+        const vsconfig::RadioConfig* mine = nullptr;
+        if (!g_myRadioSerial.empty()) {
+            for (const auto& r : g_serverConfig.radios)
+                if (r.serial == g_myRadioSerial) { mine = &r; break; }
+        } else if (!frontDoorOnly && !g_serverConfig.radios.empty()) {
+            const int pi = vsconfig::primaryRadio(g_serverConfig);
+            if (pi >= 0 && pi < (int)g_serverConfig.radios.size()) mine = &g_serverConfig.radios[pi];
+        }
+        LocalSdrShim::instance().setAntennaIcon(mine ? mine->antennaIcon : std::string());
+        // ★ Per radio, like the limit it modifies — a shared 30-listener receiver and a
+        //   one-at-a-time dongle want different answers to "is the limit a deadline".
+        LocalSdrShim::instance().setSessionLimitSoft(mine ? mine->sessionLimitSoft : false);
+        LocalSdrShim::instance().setLandingInfo(mine ? mine->antenna : std::string(),
+                                                g_serverConfig.landingMessage,
                                                 g_serverConfig.landingLinkUrl,
                                                 g_serverConfig.landingLinkLabel);
     }

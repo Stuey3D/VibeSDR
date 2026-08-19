@@ -295,6 +295,19 @@ struct RadioConfig {
      *  (Stuart, 2026-08-08: "no time limits for the single user radios").
      *  ★ 0 = unlimited. Loopback and admin sessions are exempt wherever this is enforced. */
     int    sessionLimitMin = 0;
+    /** ★★★ IS THE LIMIT A DEADLINE OR A GUARANTEE? false = HARD, today's behaviour: disconnected
+     *  at the limit, always. true = SOFT: you keep the radio PAST the limit until somebody else
+     *  wants it, then get 60 seconds' notice.
+     *
+     *  ★★★ THE PUBLIC ARGUMENT FOR IT, from the Pi's own logs: three days, and not ONE listener
+     *      was refused for a busy radio — while the only genuine repeat visitor stopped at 24,
+     *      25, 25, 29 and 30 minutes every time and came back. The limit was costing the most
+     *      engaged user and protecting nobody.
+     *
+     *  ★★ HARD IS THE DEFAULT AND STAYS THE DEFAULT ON UPGRADE. An owner who chose 30 minutes
+     *     chose it under today's meaning, and a setting must never change what it does underneath
+     *     the person who set it. */
+    bool   sessionLimitSoft = false;
 };
 
 /** The whole machine: what every radio shares, plus the radios themselves. */
