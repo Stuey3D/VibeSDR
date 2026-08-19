@@ -181,6 +181,25 @@ input, textarea, [contenteditable],
 #hostRow, #pinRow { display: flex; flex-direction: column; gap: 6px; }
 #hostRow[hidden], #pinRow[hidden] { display: none; }
 #splash button[hidden] { display: none; }
+
+/* ★★★ THE FRONT DOOR, AT FIRST PAINT — NOT AFTER A FETCH. The door serves the same bundle as a
+   radio, so the splash used to draw the single-radio receiver controls (CONNECT, PIN) and only
+   hide them once showSplashRadios() had fetched /vibeserver/radios and set isFrontDoor. On a fast
+   link that is a flash; on a slow one it is SEVERAL SECONDS OF THE WRONG PRODUCT, and a slow link
+   on a phone is exactly who arrives from a blog post (Stuart, 2026-08-19: "on slower connections
+   it looks like it is the old single user single radio (the simple mode) splash screen which then
+   gives way to the main landing page").
+   ★★ The server already knows at request time — it is the front-door process — so it stamps
+   data-frontdoor on <html> as it serves the page (local_sdr_shim.cpp, the GET / handler). This
+   rule is the whole point of that stamp: first paint is the truth, not a guess corrected later.
+   ★ These are exactly the elements showSplashRadios() hides at runtime, and that JS STAYS — it is
+   what an older server (no stamp) still relies on, and it is what covers a door that only learns
+   what it is from the directory. Keep the two lists in step. */
+html[data-frontdoor] #btnConnect,
+html[data-frontdoor] #btnSaveConnect,
+html[data-frontdoor] #pinRow,
+html[data-frontdoor] #hostRow,
+html[data-frontdoor] #splashListeners { display: none !important; }
 /* ★★★ 16px IS NOT A DESIGN CHOICE, IT IS THE iOS AUTO-ZOOM THRESHOLD. Safari zooms the whole page
    in when you focus an input whose font-size is below 16px, and it does not zoom back out when the
    field is blurred. This was 15px — one pixel under — so tapping the host or PIN box left the SDR

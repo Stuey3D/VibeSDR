@@ -44,7 +44,12 @@ import { saveAdminTicket, getAdminTicket, clearAdminTicket, inAdminMode, adminTi
 
 /** True when THIS process is the front door — it owns no radio, so START and the PIN are
  *  meaningless here and ADMIN means 'unlock every radio', not 'connect as admin'. */
-let isFrontDoor = false;
+/** ★★ SEEDED FROM THE PAGE, NOT FROM THE FETCH. The front-door process stamps
+ *  data-frontdoor on <html> as it serves the bundle, so the answer is already here at
+ *  first paint and the splash never draws the single-radio controls it is about to hide.
+ *  showSplashRadios() still sets it from /vibeserver/radios — that is the authority, and
+ *  the only source an older, unstamped server has. */
+let isFrontDoor = document.documentElement.hasAttribute('data-frontdoor');
 
 /** ★★★ ADMIN ON SCREEN MEANS "YOU PROVED IT ON THIS PAGE", NOT "A TICKET EXISTS SOMEWHERE".
  *  sessionStorage survives a reload, so a ticket from an earlier sign-in made the banner and the

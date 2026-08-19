@@ -7536,7 +7536,35 @@ struct LocalSdrShim::Impl {
             //     bytes (the WASM Opus decoder embeds its module as a binary string). It served
             //     233,787 bytes of a 488,109-byte page for exactly one deploy, with no error at
             //     either end. vibeWebPage() decodes base64 and knows its own length.
-            const std::string& kPage = vibeWebPage();
+            // ★★★ THE DOOR STAMPS ITSELF ON THE PAGE IT SERVES. The front door serves the
+            //     SAME bundle as a radio, so the splash drew the single-radio controls (CONNECT,
+            //     PIN, a listener count) and only hid them once the client had fetched
+            //     /vibeserver/radios and learned what it was talking to. A fast link shows that
+            //     as a flash; a slow one shows SEVERAL SECONDS OF THE WRONG PRODUCT, and a slow
+            //     link on a phone is exactly who arrives from a blog post (Stuart, 2026-08-19).
+            //     The server knows the answer at request time and no fetch can beat it, so it
+            //     says so in the markup and the page's CSS hides those controls before first
+            //     paint. `html[data-frontdoor]` in web/client/index.html is the other half.
+            // ★★ A COPY, PATCHED ONCE — never the shared string vibeWebPage() returns, which is
+            //    a function-local static handed out by reference to every request.
+            // ★ Injected after the leading <meta charset>, not before it: a byte ahead of the
+            //   charset declaration is the one place a stray <script> can change how the rest of
+            //   the document is decoded.
+            // ★ Built on demand, INSIDE the branch: a radio never serves this and must not pay
+            //   750 KB of resident copy for a page it will never send.
+            auto frontDoorPage = []() -> const std::string& {
+                static const std::string stamped = [] {
+                    static const char kMeta[] = "<meta charset=\"utf-8\">";
+                    std::string p = vibeWebPage();
+                    const size_t at = p.find(kMeta);
+                    if (at == std::string::npos) return p;  // page changed shape — serve it plain
+                    p.insert(at + sizeof(kMeta) - 1,
+                             "<script>document.documentElement.setAttribute('data-frontdoor','1')</script>");
+                    return p;
+                }();
+                return stamped;
+            };
+            const std::string& kPage = frontDoorOnly ? frontDoorPage() : vibeWebPage();
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
                           "Access-Control-Allow-Origin: *\r\n"
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "

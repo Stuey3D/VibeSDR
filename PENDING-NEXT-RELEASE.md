@@ -87,6 +87,36 @@ slow connections are exactly who arrives from a blog post on a phone.
 ★★★ Worth doing BEFORE the RTL-SDR Blog post lands: it is the first thing every new
     visitor sees, and the last post reset the site's baseline permanently.
 
+### DONE 2026-08-19 — and the note above got the mechanism WRONG
+
+There is no second page and never was. The front door serves the **same single bundle** a
+radio does; what looked like one page giving way to another was the splash drawing its
+receiver controls (CONNECT, PIN, the listener count) and `showSplashRadios()` hiding them
+once `/vibeserver/radios` had answered. "Serve the picker page directly" was not a thing
+that could be done — there is nothing else to serve.
+
+★★ So the cure is the same idea one level down: the door **stamps the page it serves**.
+   `GET /` on a front-door process now injects
+   `<script>document.documentElement.setAttribute('data-frontdoor','1')</script>` straight
+   after the leading `<meta charset>`, and `html[data-frontdoor]` in `index.html` hides
+   exactly the elements the JS hides. First paint is the truth; no fetch can beat markup.
+
+- `android/app/src/main/cpp/local_sdr_shim.cpp` — the `GET /` handler; a lazily-built
+  patched COPY, never the shared string `vibeWebPage()` hands out by reference, and only
+  built inside the front-door branch so a radio pays nothing for a page it never sends.
+- `web/client/index.html` — the `html[data-frontdoor]` rules.
+- `web/client/src/main.ts` — `isFrontDoor` now SEEDS from the stamp instead of starting
+  false. `showSplashRadios()` still sets it from the directory: that stays the authority,
+  and it is the only source an older, unstamped server has.
+
+★ Verified against a real front door (`VIBESERVER_CONFIG` on a throwaway config, port
+  48133): the stamp lands immediately after the charset meta and the body is 754,473 bytes
+  — the bundle's 754,397 plus the 76-byte script, so nothing else moved.
+
+★★★ The two lists — the CSS selectors and the `hide()` calls in `showSplashRadios()` — must
+    stay in step. Two places that hide the same five elements is exactly the shape that
+    drifts, so a control added to one belongs in the other in the same edit.
+
 ## 7. Jr
 1.3.1 carries the `.waiting` connect deadline, the IPv4 escalation and the
 `stop()` serialisation. Awaiting Stuart's test before submission.
