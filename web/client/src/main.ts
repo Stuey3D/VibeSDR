@@ -2888,6 +2888,17 @@ async function showSplashRadios(): Promise<void> {
 
   if (radios.length < 2 && !dir?.frontDoor) { host.innerHTML = ''; return; }
 
+  // ★★★ ONE AERIAL LINE, NOT TWO. Past this point we are drawing CARDS, and each card carries its
+  //     own aerial — so the standalone line above the list is the same sentence twice (Stuart,
+  //     2026-08-19: "the antenna detail in the box per radio is perfect, it doesnt need to be
+  //     separate like it is as well").
+  // ★★ It is not dead code: it is the ONLY place a SIMPLE one-radio machine can show an aerial,
+  //    because that server never gets here — it took the early return above. loadOwnerNotice()
+  //    fills it from /vibeserver.json before this runs, which is why it has to be cleared HERE
+  //    rather than simply not set: by now it may already be on screen.
+  const solo = document.getElementById('splashAntenna');
+  if (solo) { solo.textContent = ''; solo.style.display = 'none'; }
+
   // ★ Ask every radio at once. One slow or dead radio must not hold up the others: each entry
   //   resolves independently and an unreachable one is rendered as unreachable.
   const live = await Promise.all(radios.map(async (r) => {
