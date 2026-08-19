@@ -45,13 +45,40 @@ and shown on the landing page next to the radio it belongs to.
 > next 2 radios
 
 ★★ The list is built from WHAT THIS SERVER HAS ALREADY BEEN TOLD — the distinct non-empty
-   `antenna` values across `g_serverConfig.radios` — not from a curated list and not from
-   anything remembered per browser. Three radios on one mast is the common case and it is the
-   case that makes typing it three times annoying.
+   `antenna` values across the other radios — not from a curated list and not from anything
+   remembered per browser. Three radios on one mast is the common case and it is the case that
+   makes typing it three times annoying.
 
 ★ So it is a text box with suggestions, not a select: typing a new one must always be possible,
   because the second antenna on a machine is exactly when the list stops being right. An
   `<input list=…>` + `<datalist>` is the whole control.
+
+### ★★★ THE PRECEDENT ALREADY EXISTS — "Copy from another radio"
+
+`vibe_setup_page.h:1032` already ships exactly this affordance for the band allow/block lists:
+`bandCopyRow` / `bandCopyFrom`, built from
+`list.map((r, i) => ({r, i})).filter(x => x.i !== curRadio)`, and hidden entirely when there is
+only one radio. **Reuse that enumeration.** Its own comment also records the rule that keeps it
+safe — it copies *"the lists only ... and sidesteps carrying a per-device calibration (or a
+bias-T) onto hardware it does not suit"*. An antenna string is safe to copy by that test; it
+describes what is BOLTED TO THE MACHINE, not how a particular tuner is set up.
+
+★★ Where the antenna SHOULD diverge from that control: the band row asks you to pick a SOURCE
+   RADIO, because a band list is compound and only makes sense wholesale. An antenna is ONE
+   SHORT STRING, so picking the VALUE is the shorter path — "quickly select it on the next 2
+   radios" (Stuart) is one interaction with a datalist and two with a copy-from row. Same idea,
+   one fewer step, and it still allows typing something new.
+
+### ★★★ IT MUST READ THE UNSAVED CONFIG, NOT THE SAVED ONE
+
+`stashRadio()` (`vibe_setup_page.h:1546`) does `Object.assign(list[curRadio], collectRadio())` on
+every tab switch, so the whole machine's config — **including edits not yet saved** — lives in the
+page's `cfg.radios[]`.
+
+★★ That is precisely what makes Stuart's flow work: type the antenna on radio 1, switch to radio
+   2, and it is already offered — with no save in between. Built against the SAVED config instead,
+   the suggestion list would be empty until you saved each radio, and the feature would silently
+   require a save-per-radio round trip that nobody asked for. Read `radioList()`, not the server.
 
 ## Where it has to appear — the grep list applies
 
