@@ -68,6 +68,47 @@ export type VibeServerConfig = {
   advanced?: boolean;
   /** Listeners sharing one radio. 1 = single occupant, the Simple-mode behaviour. */
   maxUsers?: number;
+
+  // ── The rest of the server's settings ──────────────────────────────────────────────────────
+  // ★★★ THE PHONE RUNS THE SAME SERVER, ONE RADIO AT A TIME (Stuart, 2026-08-19: "functionally
+  //     identical to the main server app just with only one radio at a time and the setup done on
+  //     the phone rather than a web gui/tui"). Everything below already worked in the engine and
+  //     was reachable only from the desktop binary — the phone simply had no way to ask.
+
+  /** The time limit is a GUARANTEE rather than a deadline: kept past its time until someone waits.
+   *  ★ Absent/false = hard, which is what a limit has always meant here. */
+  sessionLimitSoft?: boolean;
+  /** Minutes with NO interaction before a listener is asked "still listening?", then released.
+   *  0 = off (the default). The server clamps to a 15-minute floor, and a listener watching a
+   *  decoder is never interrupted. Shared radios only. */
+  idleKickMin?: number;
+  /** ★★★ THE CAPTURED WINDOW, in Hz — what makes shared listening possible: everyone gets a slice
+   *  of ONE window, so the centre must not move. 0 = follows the listener, which is the only
+   *  behaviour the phone has ever had and is right for a single occupant who retunes the radio
+   *  itself. Meaningless the moment several people share it. */
+  lockedCentre?: number;
+  /** Real bins at deep zoom instead of interpolation. Without it a shared, locked receiver goes
+   *  blocky the moment anybody zooms, which is the whole point of the mode. */
+  zoomSpectrum?: boolean;
+  /** Draw the landing page's 24-hour spectrogram from this radio. Not available when the radio
+   *  powers down while idle — it cannot picture a band it is not listening to. */
+  spectrogram?: boolean;
+  /** The spectrum slowdown when nobody is looking. CPU and uplink, not the radio. */
+  forceIdleSaver?: boolean;
+  /** Seconds after the last listener before the capture parks to save power. The device stays
+   *  CLAIMED so it restarts instantly.
+   *  ★ NOT the Linux "release to another program": Android's permission model means nothing else
+   *    can pick the dongle up anyway, so releasing would cost the restart and buy nothing. */
+  idleGraceSec?: number;
+  /** What is bolted to this radio, and which of the eleven icons to draw beside it. */
+  antenna?: string;
+  antennaIcon?: string;
+  /** The owner's standing message on the landing screen, and an optional link.
+   *  ★ NOT the transient maintenance notice: this one stays up. http/https only — the server
+   *    drops anything else. */
+  landingMessage?: string;
+  landingLinkUrl?: string;
+  landingLinkLabel?: string;
   /** Where listeners may tune. Block always wins over allow. */
   allowRanges?: string;
   blockRanges?: string;
@@ -124,6 +165,21 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     autoRestore: cfg.autoRestore ?? true,
     advanced: cfg.advanced ?? false,
     maxUsers: cfg.maxUsers ?? 1,
+    // ★ Every one of these is applied on EVERY start, including the crash-restore path, so a
+    //   rebuilt server is the same server rather than one that quietly lost half its settings.
+    sessionLimitSoft: cfg.sessionLimitSoft ?? false,
+    idleKickMin: cfg.idleKickMin ?? 0,
+    lockedCentre: cfg.lockedCentre ?? 0,
+    zoomSpectrum: cfg.zoomSpectrum ?? false,
+    spectrogram: cfg.spectrogram ?? false,
+    forceIdleSaver: cfg.forceIdleSaver ?? false,
+    // ★ 300 s matches the desktop default. The radio parks; it is never handed away.
+    idleGraceSec: cfg.idleGraceSec ?? 300,
+    antenna: cfg.antenna ?? '',
+    antennaIcon: cfg.antennaIcon ?? '',
+    landingMessage: cfg.landingMessage ?? '',
+    landingLinkUrl: cfg.landingLinkUrl ?? '',
+    landingLinkLabel: cfg.landingLinkLabel ?? '',
     allowRanges: cfg.allowRanges ?? '',
     blockRanges: cfg.blockRanges ?? '',
     gainLimits: cfg.gainLimits ?? '',

@@ -17,12 +17,10 @@ import {
   vibeServerSupported, randomPin, fmtRate, FPS_TIERS, fpsForTier,
   getServerLocationMode, setServerLocationMode, getManualServerLocation,
   setManualServerLocation, resolveLocation,
-  getLearnedBookmarksNow, importServerBookmarks, clearServerBookmarks,
   type FpsTier, type VibeServerInfo, type VibeServerStatus, type LocationMode,
 } from '../services/vibeServer';
+import { loadActiveEibi } from '../services/eibi';
 import { advertiseServer, stopAdvertiseRtlTcp } from '../services/mdns';
-import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ServerMode'>;
 
@@ -67,10 +65,34 @@ const RATE_OPTIONS_AHF = [
 const RTL_GAINS = [0, 9, 14, 27, 37, 77, 87, 125, 144, 157, 166, 197, 207, 229, 254,
                    280, 297, 328, 338, 364, 372, 386, 402, 421, 434, 439, 445, 480, 496];
 
+/** ★★★ THE SAME ELEVEN KEYS THE WEB CLIENT AND THE SETUP PAGE DRAW. The phone shows NAMES rather
+ *  than the line art — a small glyph in a wrapped row is harder to read than a word, and the
+ *  drawing is what a listener sees on the landing screen anyway.
+ *  ★★★ THE KEYS ARE THE CONTRACT: they are what the config stores and what every other client
+ *      looks up, so a key renamed here silently unsets an owner's choice on a radio they set up
+ *      months ago. Redraw freely; rename never. See ANT_ICONS in web/client/src/main.ts. */
+const ANT_ICONS = [
+  { key: 'vertical',    label: 'Vertical' },
+  { key: 'groundplane', label: 'Ground plane' },
+  { key: 'whip',        label: 'Whip' },
+  { key: 'discone',     label: 'Discone' },
+  { key: 'dipole',      label: 'Dipole' },
+  { key: 'longwire',    label: 'Long wire' },
+  { key: 'loop',        label: 'Loop' },
+  { key: 'deltaloop',   label: 'Delta loop' },
+  { key: 'qfh',         label: 'QFH' },
+  { key: 'yagi',        label: 'Yagi' },
+  { key: 'dish',        label: 'Dish' },
+];
+
 const K = {
   proto: 'vs_proto', advertise: 'vs_advertise', pinMode: 'vs_pinmode',
   pin: 'vs_pin', rate: 'vs_rate', fps: 'vs_fps', compress: 'vs_compress',
-  webServer: 'vs_webserver', autoRestore: 'vs_autorestore',
+  webServer: 'vs_webserver',
+  landingMsg: 'vs_landingmsg', landingUrl: 'vs_landingurl', landingLbl: 'vs_landinglbl',
+  idleKick: 'vs_idlekick', limitSoft: 'vs_limitsoft', idleSaver: 'vs_idlesaver',
+  lockedCentre: 'vs_lockedcentre', zoomSpectrum: 'vs_zoomspec', spectrogram: 'vs_spectrogram',
+  idleGrace: 'vs_idlegrace', antenna: 'vs_antenna', antennaIcon: 'vs_antennaicon',
   adminPw: 'vs_adminpw', uncomp: 'vs_uncompressed', limitMin: 'vs_sessionlimit',
   advanced: 'vs_advanced', maxUsers: 'vs_maxusers',
   allowRanges: 'vs_allow', blockRanges: 'vs_block',
@@ -99,6 +121,24 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   // cannot deliver (Stuart, 2026-08-12). It adds no process and no second port: everything it
   // offers is applied to the radio this app is already running.
   const [advanced, setAdvanced]   = useState(false);
+  const [landingMsg, setLandingMsg] = useState('');
+  const [landingUrl, setLandingUrl] = useState('');
+  const [landingLbl, setLandingLbl] = useState('');
+  const [eibiBusy, setEibiBusy]     = useState(false);
+  const [eibiMsg, setEibiMsg]       = useState('');
+  /** The time limit as a GUARANTEE rather than a deadline, and the optional idle release. */
+  const [limitSoft, setLimitSoft]   = useState(false);
+  const [idleKick, setIdleKick]     = useState(0);
+  /** Machine-wide spectrum slowdown when nobody is looking — lives with the frame rate. */
+  const [idleSaver, setIdleSaver]   = useState(false);
+  /** ★ Locked mode only: the captured window everyone shares, and real bins at deep zoom. */
+  const [lockedCentre, setLockedCentre] = useState(0);
+  const [zoomSpec, setZoomSpec]     = useState(false);
+  const [spectrogram, setSpectrogram] = useState(false);
+  /** Power down the radio when nobody is listening. ON by default; it never releases the dongle. */
+  const [idleGrace, setIdleGrace]   = useState(300);
+  const [antenna, setAntenna]       = useState('');
+  const [antennaIcon, setAntennaIcon] = useState('');
   /**
    * ★★★ HOW WILL THIS RADIO BE USED — and it is asked FIRST in Advanced, because it decides which
    *     of the questions below even apply. A shared radio has a locked range and a listener count;
@@ -157,9 +197,6 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   // The rate ceiling to quote in prose, so the hint cannot drift from the list above it.
   const topRateLabel = radio?.driver === 'airspyhf' ? '912 kHz' : '2.4 MHz';
   const [webServer, setWebServer] = useState(true);
-  const [autoRestore, setAutoRestore] = useState(true);
-  const [bmCount, setBmCount] = useState<number | null>(null);
-  const [bmMsg, setBmMsg]     = useState('');
   const [locMode, setLocMode]     = useState<LocationMode>('off');
   const [locCity, setLocCity]     = useState('');
 
@@ -179,13 +216,12 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       const n = await getServerName(route.params?.name ?? 'VibeSDR');
       setName(n);
       try {
-        const [p, a, pm, sp, r, fp, cp, ws, ar, apw, unc, lim, fm,
+        const [p, a, pm, sp, r, fp, cp, ws, apw, unc, lim, fm,
                mu, alw, blk, gl, rg, agl, px, ru, lhz, lmd, bt] = await Promise.all([
           AsyncStorage.getItem(K.proto), AsyncStorage.getItem(K.advertise),
           AsyncStorage.getItem(K.pinMode), AsyncStorage.getItem(K.pin),
           AsyncStorage.getItem(K.rate), AsyncStorage.getItem(K.fps),
           AsyncStorage.getItem(K.compress), AsyncStorage.getItem(K.webServer),
-          AsyncStorage.getItem(K.autoRestore),
           AsyncStorage.getItem(K.adminPw), AsyncStorage.getItem(K.uncomp),
           AsyncStorage.getItem(K.limitMin), AsyncStorage.getItem(K.advanced),
           AsyncStorage.getItem(K.maxUsers), AsyncStorage.getItem(K.allowRanges),
@@ -198,11 +234,29 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         if (p === 'rtltcp' || p === 'vibeserver') setProto(p);
         if (a != null) setAdvertise(a !== '0');
         if (ws != null) setWebServer(ws !== '0');
-        if (ar != null) setAutoRestore(ar !== '0');
         if (apw != null) setAdminPw(apw);
         if (unc === '1' || unc === '2') setUncomp(unc === '1' ? 1 : 2);
         if (lim != null) setLimitMin(Number(lim) || 0);
         if (fm != null) setAdvanced(fm === '1');
+        // ★ Loaded separately from the tuple above: adding thirteen more entries to a positional
+        //   destructure of twenty-three is how the wrong value ends up in the wrong setting.
+        void (async () => {
+          const g = async (k: string) => (await AsyncStorage.getItem(k)) ?? '';
+          setLandingMsg(await g(K.landingMsg));
+          setLandingUrl(await g(K.landingUrl));
+          setLandingLbl(await g(K.landingLbl));
+          setLimitSoft((await g(K.limitSoft)) === '1');
+          setIdleKick(Number(await g(K.idleKick)) || 0);
+          setIdleSaver((await g(K.idleSaver)) === '1');
+          setLockedCentre(Number(await g(K.lockedCentre)) || 0);
+          setZoomSpec((await g(K.zoomSpectrum)) === '1');
+          setSpectrogram((await g(K.spectrogram)) === '1');
+          const ig = await g(K.idleGrace);
+          // ★ Default ON at 300 s — an absent value means "never set", not "off".
+          setIdleGrace(ig === '' ? 300 : (Number(ig) || 0));
+          setAntenna(await g(K.antenna));
+          setAntennaIcon(await g(K.antennaIcon));
+        })();
         if (ru === 'locked' || ru === 'single') setRadioUse(ru);
         if (lhz != null && Number.isFinite(Number(lhz))) setLandingHz(Number(lhz));
         if (lmd) setLandingMode(lmd);
@@ -268,41 +322,29 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     return () => { cancelled = true; };
   }, [running]);
 
-  // The bookmark count grows on its own as clients tune, so refresh it rather than
-  // compute it once.
-  const refreshBmCount = useCallback(async () => {
-    const list = await getLearnedBookmarksNow();
-    setBmCount(list.length);
-  }, []);
-  useEffect(() => { void refreshBmCount(); }, [refreshBmCount, running]);
 
-  const onImportBookmarks = useCallback(async () => {
+
+  /** ★★ FETCH THE SHORTWAVE SCHEDULE ON DEMAND. It already happens at start-up; this only makes
+   *  it visible and repeatable, because a silent step is indistinguishable from a broken one —
+   *  nobody could tell "no schedule" from "the phone had no signal that day".
+   *  ★ Reports the COUNT, not just success: a schedule that downloads and parses to nothing is
+   *    the failure worth catching, and it looks identical to working from the outside. */
+  const onRefreshEibi = useCallback(async () => {
+    setEibiBusy(true);
+    setEibiMsg('');
     try {
-      const res = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
-      if (res.canceled || !res.assets?.length) return;
-      const text = await FileSystem.readAsStringAsync(res.assets[0].uri);
-      const n = await importServerBookmarks(text);
-      setBmMsg(`Imported ${n} bookmark${n === 1 ? '' : 's'}`);
-      void refreshBmCount();
+      const list = await loadActiveEibi();
+      const Local = (NativeModules as any).VibeLocalSDR;
+      if (list.length) Local?.setStationsJson?.(JSON.stringify(list));
+      setEibiMsg(list.length
+        ? `${list.length} stations loaded — clients will see these names.`
+        : 'Nothing came back. Check the phone has a connection and try again.');
     } catch (e: any) {
-      setBmMsg(e?.message ?? 'Could not read that file');
+      setEibiMsg(e?.message ?? 'Could not download the schedule');
+    } finally {
+      setEibiBusy(false);
     }
-  }, [refreshBmCount]);
-
-  const onResetBookmarks = useCallback(() => {
-    Alert.alert(
-      'Reset bookmarks',
-      'Delete every station this server has learned or had imported? Clients will see an empty list. This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Reset', style: 'destructive', onPress: async () => {
-            await clearServerBookmarks();
-            setBmMsg('Bookmarks cleared');
-            void refreshBmCount();
-          } },
-      ],
-    );
-  }, [refreshBmCount]);
+  }, []);
 
   const effectivePin = pinMode === 'off' ? '' : pin;
   /** ★★★ ADVANCED MODE DOES NOT START WITHOUT AN ADMIN PASSWORD (Stuart, 2026-08-12). It exposes
@@ -369,9 +411,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.pinMode, pinMode], [K.pin, pin], [K.rate, String(rate)],
       [K.fps, fps], [K.compress, compress ? '1' : '0'],
       [K.webServer, webServer ? '1' : '0'],
-      [K.autoRestore, autoRestore ? '1' : '0'],
       [K.adminPw, adminPw], [K.uncomp, String(uncomp)], [K.limitMin, String(limitMin)],
       [K.advanced, advanced ? '1' : '0'], [K.maxUsers, String(maxUsers)],
+      [K.landingMsg, landingMsg], [K.landingUrl, landingUrl], [K.landingLbl, landingLbl],
+      [K.limitSoft, limitSoft ? '1' : '0'], [K.idleKick, String(idleKick)],
+      [K.idleSaver, idleSaver ? '1' : '0'], [K.lockedCentre, String(lockedCentre)],
+      [K.zoomSpectrum, zoomSpec ? '1' : '0'], [K.spectrogram, spectrogram ? '1' : '0'],
+      [K.idleGrace, String(idleGrace)], [K.antenna, antenna], [K.antennaIcon, antennaIcon],
       [K.allowRanges, allowRanges], [K.blockRanges, blockRanges],
       [K.gainLimits, gainLimits], [K.restGain, String(restGain)],
       [K.agcLock, agcLock ? '1' : '0'], [K.proxies, proxies],
@@ -416,9 +462,23 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         sessionLimitMin: limitMin,
         webServer,
         advertise,
-        autoRestore,
+        // ★ Always. See the note where the switch used to be.
+        autoRestore: true,
         advanced,
         maxUsers, allowRanges, blockRanges,
+        // ★ The rest of the server's settings — the phone runs the same server, one radio at a
+        //   time, so everything the desktop can set is set from here.
+        sessionLimitSoft: limitSoft,
+        idleKickMin: idleKick,
+        forceIdleSaver: idleSaver,
+        idleGraceSec: idleGrace,
+        antenna, antennaIcon,
+        landingMessage: landingMsg, landingLinkUrl: landingUrl, landingLinkLabel: landingLbl,
+        // ★★ Locked mode only. In single-user mode the centre follows the listener, which is what
+        //    the phone has always done and is right for one person retuning the radio themselves.
+        ...(advanced && radioUse === 'locked'
+          ? { lockedCentre, zoomSpectrum: zoomSpec, spectrogram }
+          : {}),
         gainLimits, restGain, agcLock, trustedProxies: proxies,
       });
       setRunning(info);
@@ -444,7 +504,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   // and an evening of looking at the server for a fault that was three lines above it
   // (Stuart, 2026-07-27).
   }, [name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
-      webServer, autoRestore, locMode, locCity, checkBackgroundAllowed,
+      webServer, locMode, locCity, checkBackgroundAllowed,
       adminPw, uncomp, limitMin, advanced, maxUsers, allowRanges, blockRanges,
       gainLimits, restGain, agcLock, proxies]);
 
@@ -738,84 +798,52 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             {/* Bookmarks. The server LEARNS stations from RDS as clients tune, so the
                 list grows on its own — which means it also needs a way to be emptied,
                 and a way to be seeded from a list you already have. */}
-            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>BOOKMARKS</Text>
-            <View style={[styles.card, { borderColor: C.border }]}>
-              <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
-                {bmCount === null
-                  ? 'Stations this receiver hears are added automatically and shared with every client.'
-                  : `${bmCount} station${bmCount === 1 ? '' : 's'} — learned from RDS as clients tune, plus anything imported. Shared with every client.`}
-              </Text>
-              <View style={[styles.rowBetween, { marginTop: 10 }]}>
-                <TouchableOpacity onPress={onImportBookmarks}
-                  style={[styles.regen, { borderColor: C.border, flex: 1, marginRight: 8, alignItems: 'center' }]}>
-                  <Text style={{ color: C.gold, fontFamily: F, fontSize: 13 }}>IMPORT LIST</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={onResetBookmarks}
-                  style={[styles.regen, { borderColor: C.border, flex: 1, alignItems: 'center' }]}>
-                  <Text style={{ color: C.amber, fontFamily: F, fontSize: 13 }}>RESET</Text>
-                </TouchableOpacity>
-              </View>
-              {bmMsg ? (
-                <Text style={[styles.hint, { color: C.amber, fontFamily: F, marginTop: 8 }]}>{bmMsg}</Text>
-              ) : null}
-            </View>
+            {/* ★★ THE BOOKMARK IMPORT LIVED HERE AND HAS GONE. The server still learns stations
+                from RDS as clients tune, still shares them with every client, and still accepts
+                an imported list — through the web client or the app, signed in as admin, which
+                is where somebody actually has a file to hand (Stuart, 2026-08-19). A second
+                importer on a phone screen was a control for a job nobody does there. */}
 
-            {/* Crash recovery. The foreground service is already START_STICKY, so Android
-                brings the SERVICE back by itself — but the radio died with the process,
-                so without rebuilding it you'd be left with a notification claiming the
-                server is up and nothing behind it. Switchable, because a shim that
-                crashes REPEATEDLY would otherwise crash-loop. */}
-            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>RECOVERY</Text>
-            <View style={[styles.card, { borderColor: C.border }]}>
-              <View style={styles.rowBetween}>
-                <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
-                  Restart if it crashes
-                </Text>
-                <Switch value={autoRestore} onValueChange={setAutoRestore}
-                  trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
-              </View>
-              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
-                {autoRestore
-                  ? 'If the app is killed while serving, the server rebuilds itself and carries on. The dongle is never unplugged, so nothing is lost.'
-                  : 'A crash stops the server for good until you start it again. Turn this on for a receiver left running unattended.'}
-              </Text>
-              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
-                This does not survive a REBOOT — Android will not detect a dongle that was
-                plugged in while the phone was off, and no app can change that. Replug it.
-              </Text>
-              {/* ★★ LEAVING IT UP FOR WEEKS IS A DIFFERENT PROBLEM FROM SURVIVING A CRASH, and the
-                  phone is the thing that breaks it. The start-up check asks for background usage,
-                  which covers being throttled — it does NOT cover the phone deciding to reboot on a
-                  schedule. Samsung ships "Auto restart" ON by default (every few days, ~3am), and a
-                  reboot is exactly the case the line above says we cannot recover from: the dongle
-                  needs replugging by hand. Somebody running a public receiver will otherwise find
-                  it dead every few days with no idea why. */}
-              <Text style={[styles.hint, { color: C.amber, fontFamily: F, marginTop: 10 }]}>
-                Leaving this running long term? Turn OFF battery optimisation for VibeSDR, and turn
-                OFF any scheduled auto-restart — Samsung phones restart every few days by default,
-                and a reboot needs the dongle replugged by hand.
-              </Text>
-            </View>
+            {/* ★★★ THE "RESTART IF IT CRASHES" SWITCH HAS GONE, THE BEHAVIOUR HAS NOT. It is
+                always armed now: the foreground service is START_STICKY, so Android brings the
+                SERVICE back on its own, and VibeServerRestore.arm() is what rebuilds the RADIO
+                behind it — without which the notification claims a server that is not there.
+                ★★ Nobody would rationally choose "do not come back after a crash", so the switch
+                   was a decision that could only be got wrong (Stuart, 2026-08-19). The old
+                   argument for it was a shim crashing REPEATEDLY and crash-looping; that is a bug
+                   to fix, not a setting to offer.
+                ★ The long-term warning it carried was real and moved to LEAVING IT RUNNING below
+                  — a reboot needs the dongle replugged by hand, and Samsung ships scheduled
+                  restarts ON, which kills an unattended receiver every few days. */}
 
             {/* Web server. Turning this OFF means a browser gets nothing — only the
                 VibeSDR app can connect. It's the blunt lock for a server you don't
                 want a stranger stumbling into via a URL. */}
-            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WEB CLIENT</Text>
-            <View style={[styles.card, { borderColor: C.border }]}>
-              <View style={styles.rowBetween}>
-                <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
-                  Serve the web client
-                </Text>
-                <Switch value={webServer} onValueChange={setWebServer}
-                  trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
-              </View>
-              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
-                {webServer
-                  ? 'Anyone on the network can open this server in a browser (the PIN still applies).'
-                  : 'Browsers get nothing — only the VibeSDR app can connect.'}
-              </Text>
-            </View>
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>UNCOMPRESSED AUDIO</Text>
+            {([
+              [0, 'Off', 'Never send raw audio. Listeners who cannot decode Opus are turned away with a reason.'],
+              [1, "Listener's choice", 'An UNCOMPRESSED button appears in each listener\u2019s audio menu. Defaults to Opus.'],
+              [2, 'Compatibility only', 'Raw only as a fallback for a client that cannot decode Opus — no user-facing switch.'],
+            ] as const).map(([v, label, hint]) => (
+              <OptRow key={v} C={C} F={F} active={uncomp === v} label={label} hint={hint}
+                onPress={() => { setUncomp(v as 0 | 1 | 2); AsyncStorage.setItem(K.uncomp, String(v));
+                                 if (runningRef.current) setVibeServerUncompressedAudio(v as 0 | 1 | 2); }} />
+            ))}
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              This phone always gets uncompressed audio from its own server — the setting rations
+              your UPLINK, and listening on the same device never touches it.
+            </Text>
 
+            {/* ★★★ THE MODE SWITCH SITS WHERE IT CHANGES SOMETHING — immediately above the radio
+                controls, because that is the only half of this screen it affects. It used to lead
+                the whole page, which read as though it governed everything below it; the SERVER
+                settings are identical in both modes, and putting a mode question above them
+                implied a choice that was not there (Stuart, 2026-08-17: "the simple and advanced
+                toggle needs to be above the radio controls since the server controls are identical
+                in both modes").
+                It sat at the BOTTOM, under the last setting, where it read as one more option
+                rather than the choice the page is organised around (Stuart, 2026-08-12: "the
+                simple and full button is at the bottom and doesnt change the GUI"). */}
             {/* Waterfall frame rate */}
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WATERFALL RATE</Text>
             {FPS_TIERS.map(t => (
@@ -842,38 +870,91 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             {/* ★★ UNCOMPRESSED AUDIO — the owner's UPLINK policy, three-way.
                 Raw is 48 kHz stereo int16: ~187 KB/s per listener, which is why this is not
                 a plain switch. Hans asked for it after hearing Opus on a good system. */}
-            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>UNCOMPRESSED AUDIO</Text>
-            {([
-              [0, 'Off', 'Never send raw audio. Listeners who cannot decode Opus are turned away with a reason.'],
-              [1, "Listener's choice", 'An UNCOMPRESSED button appears in each listener\u2019s audio menu. Defaults to Opus.'],
-              [2, 'Compatibility only', 'Raw only as a fallback for a client that cannot decode Opus — no user-facing switch.'],
-            ] as const).map(([v, label, hint]) => (
-              <OptRow key={v} C={C} F={F} active={uncomp === v} label={label} hint={hint}
-                onPress={() => { setUncomp(v as 0 | 1 | 2); AsyncStorage.setItem(K.uncomp, String(v));
-                                 if (runningRef.current) setVibeServerUncompressedAudio(v as 0 | 1 | 2); }} />
-            ))}
-            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-              This phone always gets uncompressed audio from its own server — the setting rations
-              your UPLINK, and listening on the same device never touches it.
-            </Text>
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WEB CLIENT</Text>
+            <View style={[styles.card, { borderColor: C.border }]}>
+              <View style={styles.rowBetween}>
+                <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                  Serve the web client
+                </Text>
+                <Switch value={webServer} onValueChange={(v) => {
+                  setWebServer(v);
+                  // ★★★ NO WEB CLIENT, NO ADVANCED MODE. Everything Advanced adds beyond sharing —
+                  //     the connection log, per-address monitoring, banning, the country map — is
+                  //     ON THE ADMIN PAGE, and the admin page is the web client. Leaving Advanced
+                  //     selected with the web client off would offer a management surface with no
+                  //     way to reach it (Stuart, 2026-08-19).
+                  // ★ Switched back rather than left dangling: a mode that silently does nothing
+                  //   is worse than one that visibly turns itself off.
+                  if (!v && advanced) { setAdvanced(false); AsyncStorage.setItem(K.advanced, '0'); }
+                }}
+                  trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
+              </View>
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                {webServer
+                  ? 'Anyone on the network can open this server in a browser (the PIN still applies).'
+                  : 'Browsers get nothing — only the VibeSDR app can connect.'}
+              </Text>
+            </View>
 
-            {/* ★★★ THE MODE SWITCH SITS WHERE IT CHANGES SOMETHING — immediately above the radio
-                controls, because that is the only half of this screen it affects. It used to lead
-                the whole page, which read as though it governed everything below it; the SERVER
-                settings are identical in both modes, and putting a mode question above them
-                implied a choice that was not there (Stuart, 2026-08-17: "the simple and advanced
-                toggle needs to be above the radio controls since the server controls are identical
-                in both modes").
-                It sat at the BOTTOM, under the last setting, where it read as one more option
-                rather than the choice the page is organised around (Stuart, 2026-08-12: "the
-                simple and full button is at the bottom and doesnt change the GUI"). */}
+
+            {/* ★★★ THE OWNER'S STANDING MESSAGE — the same field the Pi and the Mac carry, so a
+                phone server can say the same things: house rules, a donation link, or an
+                explanation of behaviour that looks wrong and is not.
+                ★★ NOT the temporary maintenance notice, which expires and can be dismissed. This
+                   one stays up and sits on the landing screen before anybody connects. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>LANDING SCREEN MESSAGE</Text>
+            <View style={[styles.card, { borderColor: C.border }]}>
+              <TextInput value={landingMsg} onChangeText={setLandingMsg}
+                placeholder="e.g. Shared receiver — please retune before you leave" multiline
+                placeholderTextColor={C.textDim} maxLength={500}
+                style={[styles.input, { color: C.amber, fontFamily: F, borderColor: C.border,
+                                        minHeight: 74, textAlignVertical: 'top' }]} />
+              <View style={[styles.rowBetween, { marginTop: 8, gap: 8 }]}>
+                <TextInput value={landingUrl} onChangeText={setLandingUrl}
+                  placeholder="https://… (optional link)" placeholderTextColor={C.textDim}
+                  autoCapitalize="none" keyboardType="url"
+                  style={[styles.input, { flex: 1, color: C.amber, fontFamily: F, borderColor: C.border }]} />
+              </View>
+              <TextInput value={landingLbl} onChangeText={setLandingLbl}
+                placeholder="Link text — e.g. Support this server" placeholderTextColor={C.textDim}
+                maxLength={60}
+                style={[styles.input, { marginTop: 8, color: C.amber, fontFamily: F, borderColor: C.border }]} />
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                Shown to everybody who opens this server, so nothing private here.
+                {'\n'}Only http:// and https:// links are kept — the server drops anything else.
+              </Text>
+            </View>
+
+            {/* ★★ EiBi: the shortwave schedule, fetched from eibispace.de and handed to the shim so
+                every client sees station names. It has always happened silently at start-up, which
+                meant nobody could tell "no schedule" from "the phone had no signal that day". */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>SHORTWAVE SCHEDULE</Text>
+            <View style={[styles.card, { borderColor: C.border }]}>
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
+                {eibiMsg || 'The EiBi schedule names shortwave stations for every client. Downloaded '
+                          + 'automatically when the server starts; refresh it here if you want the '
+                          + 'newest season now.'}
+              </Text>
+              <TouchableOpacity onPress={onRefreshEibi} disabled={eibiBusy}
+                style={[styles.regen, { borderColor: C.border, marginTop: 10, alignItems: 'center',
+                                        opacity: eibiBusy ? 0.5 : 1 }]}>
+                <Text style={{ color: C.gold, fontFamily: F, fontSize: 13 }}>
+                  {eibiBusy ? 'DOWNLOADING…' : 'DOWNLOAD NOW'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>MODE</Text>
             <View style={{ flexDirection: 'row', gap: 8 }}>
               {([false, true] as const).map(v => (
-                <TouchableOpacity key={String(v)} onPress={() => { setAdvanced(v);
-                                                                   AsyncStorage.setItem(K.advanced, v ? '1' : '0'); }}
+                <TouchableOpacity key={String(v)} disabled={v && !webServer}
+                  onPress={() => { setAdvanced(v);
+                                   AsyncStorage.setItem(K.advanced, v ? '1' : '0'); }}
                   style={[styles.card, { flex: 1, borderColor: advanced === v ? C.green : C.border,
-                                         backgroundColor: advanced === v ? C.green + '18' : 'transparent' }]}>
+                                         backgroundColor: advanced === v ? C.green + '18' : 'transparent',
+                                         // ★ Greyed, not hidden: an option that vanishes leaves the
+                                         //   owner wondering whether it ever existed.
+                                         opacity: (v && !webServer) ? 0.4 : 1 }]}>
                   <Text style={{ color: advanced === v ? C.green : C.gold, fontFamily: F, fontSize: 14 }}>
                     {v ? 'Advanced' : 'Simple'}
                   </Text>
@@ -884,7 +965,12 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               ))}
             </View>
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-              {advanced
+              {!webServer
+                ? 'Advanced needs the web client: the admin page \u2014 the connection log, '
+                  + 'per-address monitoring and banning \u2014 is served to a browser, so with the '
+                  + 'web client off there is no way to reach any of it. Turn it back on to choose '
+                  + 'Advanced.'
+                : advanced
                 ? 'Adds shared listening, tuning and gain limits, and the admin page \u2014 '
                   + 'per-address monitoring, banning and a connection log, reachable from a browser '
                   + 'wherever you are. An admin password is REQUIRED: that page can ban people and '
@@ -1041,14 +1127,177 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               unlocked with the admin password. Leave it Unlimited for a private receiver.
             </Text>
 
+            {/* ★★★ WHAT IS BOLTED TO THIS RADIO. A receiver publishes what the TUNER can reach and
+                never what the AERIAL can — and the aerial decides whether tuning somewhere is
+                worth a visitor's time. Shown under the radio on the landing screen. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>ANTENNA</Text>
+            <TextInput value={antenna} onChangeText={setAntenna}
+              placeholder="e.g. Discone in the loft, good to 300 MHz"
+              placeholderTextColor={C.textDim} maxLength={120}
+              style={[styles.input, { color: C.amber, fontFamily: F, borderColor: C.border }]} />
+            <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+              {ANT_ICONS.map(a => (
+                <TouchableOpacity key={a.key} onPress={() => setAntennaIcon(antennaIcon === a.key ? '' : a.key)}
+                  style={[styles.card, { borderColor: antennaIcon === a.key ? C.green : C.border,
+                                         backgroundColor: antennaIcon === a.key ? C.green + '18' : 'transparent',
+                                         paddingHorizontal: 12, paddingVertical: 8 }]}>
+                  <Text style={{ color: antennaIcon === a.key ? C.green : C.gold, fontFamily: F, fontSize: 12 }}>
+                    {a.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              Shown to everybody who visits, so keep it about the aerial — not about where you
+              live. Tap a picture again to choose none; a radio without one simply shows the
+              description.
+            </Text>
+
+            {/* ★★★ POWER DOWN WHEN NOBODY IS LISTENING — ON by default, and it never lets the
+                dongle go. The capture parks so the phone stops burning power on a radio nobody is
+                hearing; the device stays CLAIMED, so it starts again instantly.
+                ★★ NOT the Linux "release when idle", which hands the dongle to another program:
+                   Android's permission model means nothing else can pick it up anyway, so
+                   releasing would cost the restart and buy nothing (Stuart, 2026-08-19). */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WHEN NOBODY IS LISTENING</Text>
+            <View style={[styles.card, { borderColor: C.border }]}>
+              <View style={styles.rowBetween}>
+                <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                  Power down the radio
+                </Text>
+                <Switch value={idleGrace > 0}
+                  onValueChange={(v) => { setIdleGrace(v ? 300 : 0); if (v) setSpectrogram(false); }}
+                  trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
+              </View>
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                {idleGrace > 0
+                  ? 'After five minutes with nobody connected the radio stops capturing and draws '
+                    + 'much less power. It is never unplugged or handed away, so the next listener '
+                    + 'starts it again immediately.'
+                  : 'The radio keeps capturing whether or not anybody is listening — warmer phone, '
+                    + 'flatter battery, and the only way to draw the 24-hour spectrogram.'}
+              </Text>
+            </View>
+
+            {/* ★★ THE SPECTROGRAM AND THE POWER SAVER CANNOT BOTH BE ON, and the reason is
+                physical rather than a rule: a radio that stops capturing cannot picture a band it
+                is not listening to. Same on Linux. */}
+            {idleGrace === 0 && advanced && radioUse === 'locked' && (
+              <View style={[styles.card, { borderColor: C.border, marginTop: 10 }]}>
+                <View style={styles.rowBetween}>
+                  <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                    Draw the 24-hour spectrogram
+                  </Text>
+                  <Switch value={spectrogram} onValueChange={setSpectrogram}
+                    trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
+                </View>
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                  The landing page shows what this receiver has actually been hearing all day —
+                  which says more about whether it is worth connecting to than any description.
+                  Only possible while the radio keeps capturing.
+                </Text>
+              </View>
+            )}
+
+            {/* ★★ WHAT THE LIMIT MEANS. Offered in BOTH modes, because a private receiver with a
+                limit wants the same choice: soft turns the number into a guarantee rather than a
+                deadline — you keep the radio past it until somebody else wants it, then get a few
+                seconds' notice. Hard is what a limit has always meant here and stays the default. */}
+            {limitMin > 0 && (
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+                {([false, true] as const).map(v => (
+                  <TouchableOpacity key={String(v)} onPress={() => setLimitSoft(v)}
+                    style={[styles.card, { flex: 1, borderColor: limitSoft === v ? C.green : C.border,
+                                           backgroundColor: limitSoft === v ? C.green + '18' : 'transparent' }]}>
+                    <Text style={{ color: limitSoft === v ? C.green : C.gold, fontFamily: F, fontSize: 13 }}>
+                      {v ? 'Soft limit' : 'Hard limit'}
+                    </Text>
+                    <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 4 }]}>
+                      {v ? 'Kept until somebody else wants it' : 'Disconnected at the limit'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
             {/* ★★★ THE ADVANCED SECTIONS. Everything from here down is applied to the radio this
                 app is already running — there is no second process and no second port. */}
             {advanced && (
               <>
+                {/* ★★★ THE LISTENER WHO WENT AWAY. Shared radios only — a one-at-a-time receiver
+                    has nobody to reclaim the slot for, which is why this sits inside `advanced`
+                    AND behind the listener count.
+                    ★★ It ASKS before it acts: "no interaction" is not "not listening", and
+                       somebody sitting on one frequency for an hour is the best listener there
+                       is. Watching a decoder counts as using the radio, so a weather-fax image is
+                       never interrupted. */}
+                {radioUse === 'locked' && (<>
+                <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>IDLE LISTENERS</Text>
+                <View style={[styles.card, { borderColor: C.border }]}>
+                  <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                    {[0, 15, 30, 60].map(n => (
+                      <TouchableOpacity key={n} onPress={() => setIdleKick(n)}
+                        style={[styles.card, { borderColor: idleKick === n ? C.green : C.border,
+                                               backgroundColor: idleKick === n ? C.green + '18' : 'transparent',
+                                               paddingHorizontal: 14 }]}>
+                        <Text style={{ color: idleKick === n ? C.green : C.gold, fontFamily: F, fontSize: 14 }}>
+                          {n === 0 ? 'Off' : `${n} min`}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                    Release a listener who has stopped using the radio, so somebody else can have
+                    it. They are ASKED first — a "still listening?" prompt with a countdown, and
+                    anything they do answers it.{'\n\n'}
+                    Somebody watching a decoder is never interrupted: a weather-fax image takes ten
+                    minutes to draw and RTTY runs for hours.{'\n\n'}
+                    Fifteen minutes is the shortest offered — long enough to hear a block of music
+                    before the ad break. Off by default.
+                  </Text>
+                </View>
+                </>)}
                 {/* ★★ ONLY IN LOCKED-RANGE MODE. "One user at a time" answers this question by
                     its name; offering a listener count beside it invites setting them to
                     disagree. */}
                 {radioUse === 'locked' && (<>
+                {/* ★★★ THE CAPTURED WINDOW — the setting that makes shared listening possible at
+                    all. Everybody gets a slice of ONE window, so the centre must not move; on this
+                    phone the centre has always followed whatever the landing frequency was, which
+                    is right for a single listener retuning the radio themselves and meaningless
+                    the moment several people share it.
+                    ★ Blank/0 = follow the listener, i.e. the old behaviour. */}
+                <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>CENTRE FREQUENCY</Text>
+                <TextInput
+                  value={lockedCentre ? String(Math.round(lockedCentre / 1000)) : ''}
+                  onChangeText={(t) => setLockedCentre(Math.round((Number(t) || 0) * 1000))}
+                  placeholder="kHz — the window everyone shares"
+                  placeholderTextColor={C.textDim} keyboardType="numeric"
+                  style={[styles.input, { color: C.amber, fontFamily: F, borderColor: C.border }]} />
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                  Listeners tune freely INSIDE this window but cannot move the radio for everybody.
+                  The width is the capture rate above, so the window runs half that either side.
+                </Text>
+
+                {/* ★★★ REAL BINS AT DEEP ZOOM. Without it a shared receiver interpolates, and the
+                    waterfall turns to blocks the moment anybody zooms in — which a listener reads
+                    as a poor receiver rather than a setting. */}
+                <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>ZOOM DETAIL</Text>
+                <View style={[styles.card, { borderColor: C.border }]}>
+                  <View style={styles.rowBetween}>
+                    <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                      Sharp zoom (KA9Q)
+                    </Text>
+                    <Switch value={zoomSpec} onValueChange={setZoomSpec}
+                      trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
+                  </View>
+                  <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                    {zoomSpec
+                      ? 'Zooming shows real detail instead of a stretched picture. Costs CPU, and it is what makes a shared radio worth zooming into.'
+                      : 'Zooming stretches the wide view — quick, but blocky past a point.'}
+                  </Text>
+                </View>
+
                 <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>HOW MANY LISTENERS</Text>
                 <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
                   {[1, 2, 3, 4, 6, 8].map(n => (

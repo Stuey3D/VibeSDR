@@ -220,6 +220,8 @@ object VibeLocalSDR {
 
     /** The time limit is a GUARANTEE, not a deadline: kept past its time until somebody waits. */
     fun setVibeServerSessionLimitSoft(soft: Boolean) { ensureLoaded(); nativeSetVibeServerSessionLimitSoft(soft) }
+    /** Minutes with no interaction before a listener is asked, then released. 0 = off. */
+    fun setVibeServerIdleKick(minutes: Int) { ensureLoaded(); nativeSetVibeServerIdleKick(minutes) }
     /** The aerial on this radio, its icon, and the machine's standing landing-screen message. */
     fun setVibeServerLandingInfo(antenna: String, icon: String, message: String,
                                  linkUrl: String, linkLabel: String) {
@@ -270,6 +272,7 @@ object VibeLocalSDR {
     private external fun nativeSetVibeServerUncompressedAudio(mode: Int)
     private external fun nativeSetVibeServerSessionLimit(minutes: Int)
     private external fun nativeSetVibeServerSessionLimitSoft(soft: Boolean)
+    private external fun nativeSetVibeServerIdleKick(minutes: Int)
     private external fun nativeSetVibeServerLandingInfo(antenna: String, icon: String, message: String,
                                                         linkUrl: String, linkLabel: String)
     private external fun nativeSetVibeServerLockedCentre(hz: Double)

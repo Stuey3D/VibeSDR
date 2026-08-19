@@ -201,6 +201,13 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerSessionLimitSoft(JNIEnv*, j
     vibe::LocalSdrShim::instance().setSessionLimitSoft(soft == JNI_TRUE);
 }
 
+// Minutes of asking for nothing before a listener is prompted and then released. 0 = off.
+// ★ The shim clamps to its 15-minute floor; this passes what the owner typed.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerIdleKick(JNIEnv*, jobject, jint minutes) {
+    vibe::LocalSdrShim::instance().setIdleKickMinutes((int)minutes);
+}
+
 // What is bolted to this radio, and the owner's standing message for the landing screen.
 // ★ One call for all four: they are set together at start-up and a half-applied set (an aerial
 //   with no message, a link with no label) is a state nothing wants to reason about.

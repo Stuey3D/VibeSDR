@@ -342,6 +342,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         //     retunes the radio itself and meaningless once several people share it.
         val lockedCentre = if (opts.hasKey("lockedCentre")) opts.getDouble("lockedCentre") else 0.0
         val limitSoft    = if (opts.hasKey("sessionLimitSoft")) opts.getBoolean("sessionLimitSoft") else false
+        val idleKick     = if (opts.hasKey("idleKickMin")) opts.getInt("idleKickMin") else 0
         val zoomSpec     = if (opts.hasKey("zoomSpectrum")) opts.getBoolean("zoomSpectrum") else false
         val spectrogram  = if (opts.hasKey("spectrogram")) opts.getBoolean("spectrogram") else false
         val idleSaver    = if (opts.hasKey("forceIdleSaver")) opts.getBoolean("forceIdleSaver") else false
@@ -376,6 +377,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         VibeLocalSDR.setVibeServerUncompressedAudio(uncomp)
         VibeLocalSDR.setVibeServerSessionLimit(limitMin)
         VibeLocalSDR.setVibeServerSessionLimitSoft(limitSoft)
+        VibeLocalSDR.setVibeServerIdleKick(idleKick)
         VibeLocalSDR.setVibeServerWebEnabled(webSrv)
         // ★ Applied on EVERY start, including the crash-restore path, so a rebuilt server is the
         //   same server — the note below says why that matters for the advanced settings.
