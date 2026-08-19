@@ -521,6 +521,13 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeGetServerStatus(JNIEnv* env, jobject) {
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeGetVibeServerStatus(JNIEnv* env, jobject) {
     auto s = vibe::LocalSdrShim::instance().getVibeServerStatus();
+    // ★ DIAGNOSTIC (2026-08-19): the app's status reads empty while the phone's OWN admin page —
+    //   same process, same `p` — shows listeners, frequency, span and uplink correctly. Every
+    //   remaining theory needs a value from the device rather than another reading of the code,
+    //   so this prints what the struct actually contains. Remove once the cause is known.
+    LOGI("status: running=%d client=%d addr=%s rate=%.0f fft=%.0f",
+         s.running ? 1 : 0, s.clientConnected ? 1 : 0,
+         s.clientAddr.empty() ? "(none)" : s.clientAddr.c_str(), s.sampleRate, s.fftRate);
     std::string j = "{";
     j += "\"running\":"          + std::string(s.running ? "true" : "false");
     j += ",\"client\":"          + std::string(s.clientConnected ? "true" : "false");

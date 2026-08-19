@@ -340,6 +340,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     if (!running) return;
     const t = setInterval(async () => {
       const s = await getVibeServerStatus();
+      // ★ DIAGNOSTIC (2026-08-19): says whether the poll is even running, and what it got back.
+      //   A null here means the bridge call rejected; a populated object with client=false means
+      //   the shim said so. Those need opposite fixes. Remove once the cause is known.
+      console.log('[vibeserver] poll ->', s ? JSON.stringify(s) : 'NULL (bridge rejected)');
       if (s) setStatus(s);
     }, 1500);
     return () => clearInterval(t);
