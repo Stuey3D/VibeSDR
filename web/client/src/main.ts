@@ -854,6 +854,15 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     // ★★ THE SOFT LIMIT'S ONE WARNING. A pill, not an overlay: the listener has not been refused
     //    anything and is still hearing the radio — putting a modal over it would take away the
     //    seconds the notice exists to give them.
+    // ★★★ ASKED, NOT KICKED — and the answer is any use of the radio at all. The button is a
+    //     convenience, not the mechanism: tuning, changing mode or zooming clears it server-side
+    //     just as well, because the server counts a control message as evidence a human is here.
+    // ★★ AN OVERLAY IS RIGHT HERE, unlike the soft-limit pill: this one needs an answer, and a
+    //    notice that can be missed is exactly what would disconnect somebody who was listening.
+    onIdleCheck: (secs) => showIdleCheck(secs),
+    onIdleClosed: () => showRefusal('DISCONNECTED',
+      'This receiver releases a listener who has gone quiet, so somebody else can use it.'
+      + '<br><br>Nothing is wrong — press Try again to carry on listening.'),
     onHandover: (secs) => showPill(
       `Someone is waiting for this radio — you have about ${Math.max(1, secs)} seconds`, 12000),
     onHandoverOff: () => showPill('They stopped waiting — the radio is still yours', 6000),
@@ -4252,6 +4261,52 @@ function showCooldown(secs: number) {
   showRefusal('PLEASE WAIT',
     'You have just had a turn on this shared receiver.' +
     `<br><br>Try again in about ${m} minute${m === 1 ? '' : 's'}.`);
+}
+
+/** ★★★ "STILL LISTENING?" — the one prompt on this page that must be ANSWERED rather than read.
+ *
+ *  ★★ It clears itself when the server sees any control message, so the honest instruction is
+ *     "touch anything". The button just sends a ping so somebody who is listening and does not
+ *     want to change a thing can say so without retuning their radio.
+ *  ★ Counts down visibly. A prompt with a deadline you cannot see is how a listener discovers the
+ *    rule by losing their slot to it.
+ */
+let idleTimer: ReturnType<typeof setInterval> | null = null;
+function showIdleCheck(secs: number) {
+  const id = 'idleCheck';
+  document.getElementById(id)?.remove();
+  if (idleTimer) { clearInterval(idleTimer); idleTimer = null; }
+  let left = Math.max(5, secs || 60);
+  const el = document.createElement('div');
+  el.id = id;
+  el.style.cssText =
+    'position:fixed;inset:0;z-index:9700;background:rgba(8,6,1,0.9);display:flex;'
+  + 'align-items:center;justify-content:center;text-align:center;font:15px ui-monospace,monospace;color:#ffb833';
+  const paint = () =>
+    `<div style="max-width:340px;padding:24px">`
+  + `<div style="font-size:20px;letter-spacing:4px;margin-bottom:12px">STILL LISTENING?</div>`
+  + `<div style="opacity:.8;line-height:1.5">This receiver is shared, and nobody has used it for a `
+  + `while. Tap anything to carry on &mdash; otherwise the radio goes back to the queue in `
+  + `<b>${left}s</b>.</div>`
+  + `<button id="idleYes" style="margin-top:18px;background:none;border:1px solid rgba(255,180,50,0.5);`
+  + `color:#ffb833;border-radius:6px;padding:8px 18px;font:13px ui-monospace,monospace;cursor:pointer">`
+  + `I'm still here</button></div>`;
+  el.innerHTML = paint();
+  const answer = () => {
+    // ★ Any control message clears it server-side; ping is the smallest one that changes nothing.
+    try { spec?.send({ type: 'ping' }); } catch {}
+    if (idleTimer) { clearInterval(idleTimer); idleTimer = null; }
+    el.remove();
+  };
+  el.addEventListener('click', answer);
+  document.body.appendChild(el);
+  document.getElementById('idleYes')?.addEventListener('click', answer);
+  idleTimer = setInterval(() => {
+    left--;
+    if (left <= 0) { clearInterval(idleTimer!); idleTimer = null; return; }  // the server closes it
+    const b = el.querySelector('b');
+    if (b) b.textContent = `${left}s`;
+  }, 1000);
 }
 
 function showRefusal(title: string, bodyHtml: string, offerOverride = false) {

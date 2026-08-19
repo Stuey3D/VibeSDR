@@ -308,6 +308,19 @@ struct RadioConfig {
      *     chose it under today's meaning, and a setting must never change what it does underneath
      *     the person who set it. */
     bool   sessionLimitSoft = false;
+    /** ★★★ DISCONNECT A LISTENER WHO HAS GONE AWAY — minutes of asking for nothing. 0 = OFF, and
+     *  off is the default: this is an option for a busy shared receiver, not a policy.
+     *
+     *  ★★ IT ASKS BEFORE IT ACTS. "No interaction" is not "not listening" — somebody on one
+     *     frequency for an hour is the best listener there is and touches nothing, and a forgotten
+     *     tab is identical from the server's side. So the listener is asked, and any use of the
+     *     radio answers it.
+     *  ★★ A DECODER OPEN COUNTS AS USING IT: a WEFAX image takes ten minutes to draw and RTTY runs
+     *     for hours. Advanced RDS does not count — it runs passively beside the audio.
+     *  ★ 15 minutes is the floor — long enough to hear a block of music on a commercial station
+     *    before the ad break (Stuart, 2026-08-19). Shared radios only; a one-listener receiver has
+     *    nobody to reclaim it for. */
+    int    idleKickMin = 0;
 };
 
 /** The whole machine: what every radio shares, plus the radios themselves. */

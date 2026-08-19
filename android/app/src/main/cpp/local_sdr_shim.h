@@ -178,6 +178,8 @@ public:
      *    wonder whether it was. See vsconfig::safeLinkUrl. */
     /** Is the session limit a GUARANTEE (soft) rather than a deadline? See sessionLimitSoft. */
     void setSessionLimitSoft(bool soft);
+    /** Minutes of asking for nothing before a listener is prompted, then released. 0 = off. */
+    void setIdleKickMinutes(int minutes);
     /** True when somebody is listening but is past their guarantee, so an arriving listener may
      *  take the radio. ★ For the PUBLIC card only — the admin views report the truth. */
     bool claimableNow() const;

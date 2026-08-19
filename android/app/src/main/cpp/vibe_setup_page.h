@@ -440,6 +440,19 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           <br>Worth knowing: while a listener is over their time the radio advertises itself as
           <b>free</b>, so a visitor is never put off by an "in use" sign when the rule is on their
           side. Your admin page still shows exactly who is connected and for how long.</div></label>
+      <label style="margin-top:12px" id="idleKickRow"><span class="lbl">Disconnect a listener who has gone away</span>
+        <input type="number" id="idleKick" min="0" step="5" placeholder="0">
+        <div class="hint">Minutes with <b>no interaction at all</b> &mdash; no tuning, no mode
+          change, nothing. <b>0 turns it off, and off is the default.</b>
+          <br>It <em>asks</em> before it acts: the listener gets a &ldquo;still listening?&rdquo;
+          prompt with a countdown, and anything they do answers it. That matters because somebody
+          sitting on one frequency for an hour touches nothing and is the best kind of listener
+          &mdash; from here they look exactly like a tab somebody forgot.
+          <br>Watching a decoder counts as using the radio: a weather-fax image takes ten minutes
+          to draw and RTTY runs for hours, so a decode in progress is never interrupted.
+          <br><b>15 minutes is the shortest it will accept</b> &mdash; enough to hear a block of
+          music before the ad break. Only offered on a radio with several slots: a one-at-a-time
+          receiver has nobody to reclaim it for.</div></label>
     </div>
       <!-- ★★★ WHERE LISTENERS MAY TUNE THIS RADIO. Single-user only: in shared mode the locked
            range IS the limit, so offering these there would be two answers to one question
@@ -1785,6 +1798,11 @@ function fill() {
   if ($("idleGrace")) $("idleGrace").value = String(r.idleGrace != null ? Math.round(r.idleGrace) : 300);
   $("sessionLimit").value = r.sessionLimitMin || 0;
   $("sessionLimitMode").value = r.sessionLimitSoft ? "soft" : "hard";
+  $("idleKick").value = r.idleKickMin || 0;
+  // ★ Hidden on a one-listener radio: there is nobody to reclaim the slot FOR, so the setting
+  //   would be a control whose every use is a no-op — the fault FmdxSettings names.
+  { const row = $("idleKickRow");
+    if (row) row.classList.toggle("hide", (r.users || 1) <= 1); }
   if ($("spectrogram"))     $("spectrogram").checked = !!r.spectrogram;
   setMode((r.mode || "single") === "locked");
   addr(); coverage(); bwNote(); refreshHw(); eibiStatus(); renderGain();
@@ -1876,6 +1894,9 @@ function collectRadio() {
     sessionLimitMin: parseInt($("sessionLimit").value || "0", 10),
     // ★ Absent/false = hard, so an existing radio keeps doing exactly what its owner chose.
     sessionLimitSoft: $("sessionLimitMode").value === "soft",
+    // ★ Sent as typed; the SERVER clamps to the 15-minute floor, so the page cannot be the thing
+    //   that decides what is too short.
+    idleKickMin: parseInt($("idleKick").value || "0", 10),
     // ★ Never claim the spectrogram for a radio that cannot honestly draw one — the checkbox is
     //   hidden in that case, and a hidden control must not still be sending a value.
     spectrogram: !$("hwSpectro").classList.contains("hide") && $("spectrogram").checked

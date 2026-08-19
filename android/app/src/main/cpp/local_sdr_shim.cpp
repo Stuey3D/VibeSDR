@@ -957,6 +957,19 @@ static std::atomic<int>     g_vsSessionLimitMin{0};
 /** ★★★ SOFT = THE LIMIT IS A GUARANTEE, NOT A DEADLINE. See RadioConfig::sessionLimitSoft.
  *  ★ Default FALSE so an upgrade changes nothing for an owner who already chose a limit. */
 static std::atomic<bool>    g_vsSessionLimitSoft{false};
+/** ★★★ DISCONNECT A LISTENER WHO HAS GONE AWAY — minutes, 0 = OFF, and off is the default.
+ *
+ *  ★★★ "NO INTERACTION" IS NOT "NOT LISTENING", and that is the whole difficulty. Somebody sitting
+ *      on one frequency for an hour is the BEST kind of listener and touches nothing; a forgotten
+ *      tab looks identical from here — same sockets, same audio. So this does not kick, it ASKS,
+ *      and any use of the radio answers it.
+ *  ★★ Shared receivers only. On a one-listener radio there is nobody to reclaim it for, which is
+ *     why Simple mode never offers this (Stuart, 2026-08-19).
+ *  ★ 15 minutes is the floor, deliberately: it is long enough to hear a block of music on a
+ *    commercial station before the ad break. Anything shorter interrupts ordinary listening. */
+static std::atomic<int>     g_vsIdleKickMin{0};
+/** How long the "still listening?" prompt waits for an answer before the slot is taken back. */
+static constexpr int        kIdleAnswerSec = 60;
 /** When the incumbent's 60 seconds of notice run out (monotonic secs). 0 = no handover running.
  *  ★ Guarded by clientMtx with the rest of the occupancy state — one lock for one idea. */
 static double               g_vsHandoverAt = 0;
@@ -2107,6 +2120,13 @@ struct LocalSdrShim::Impl {
         int    warned = 0;
         /** When this listener's soft-limit notice expires (monotonic secs). 0 = none running. */
         double handoverAt = 0;
+        /** ★★★ THE LAST TIME THIS LISTENER ASKED FOR ANYTHING — a tune, a mode, a zoom. Stamped in
+         *  handleControl(), whose own comment says why that is the only honest test: "the frames
+         *  going the other way keep flowing to an empty room forever".
+         *  ★ Set at CONNECT, not zero, or a listener would arrive already idle. */
+        double lastAsk = 0;
+        /** When the "still listening?" prompt runs out. 0 = none showing. */
+        double idleAskAt = 0;
         /** ★ What connected — app, watch, browser or bot. Already recorded in the connection LOG;
          *  kept here too so the LIVE listener list can show it, which is where an owner looks when
          *  deciding whether the address they are about to block is a person (Stuart, 2026-08-08:
@@ -5306,6 +5326,10 @@ struct LocalSdrShim::Impl {
         //      mode are all evidence that somebody is there, and re-locking an admin who is
         //      plainly using the receiver would be a bug wearing a security feature's clothes.
         touchAdmin(sock);
+        // ★★ AND THE LISTENER'S OWN IDLE CLOCK, for the optional idle disconnect on a SHARED
+        //    receiver. Same evidence, same reasoning as the line above — and any message at all
+        //    clears a "still listening?" prompt, so answering it is simply using the radio.
+        if (auto c = dspFor(sock)) { c->lastAsk = Impl::nowSecs(); c->idleAskAt = 0; }
         // ★★★ PER-CLIENT CONTROL COMES FIRST, AND THE ORDER IS LOAD-BEARING. The shared handlers
         //     below (zoom, reset, tune…) return as soon as they match, so a per-client block
         //     placed after them is dead code for every message they claim. It was, for zoom: one
@@ -8423,7 +8447,8 @@ struct LocalSdrShim::Impl {
                 // ★ The per-listener clock — and it CONTINUES a turn this address already had, so a
                 //   page reload does not buy a fresh one. See turnStartForLocked.
                 { std::lock_guard<std::mutex> lk(clientMtx);
-                  c->since = turnStartForLocked(sock->peerAddress(), Impl::nowSecs()); }
+                  c->since = turnStartForLocked(sock->peerAddress(), Impl::nowSecs());
+                  c->lastAsk = Impl::nowSecs(); }   // ★ arriving is not being idle
                 c->agent = userAgent;
                 // ★★★ BUILD THE CHANNEL WHERE THE LISTENER ASKED TO BE, not at the landing.
                 //     This was the SECOND half of the same fault: even with the landing gate
@@ -10156,6 +10181,83 @@ struct LocalSdrShim::Impl {
         LocalSdrShim::noteConnectionClosed(addr, "", "timeout");
     }
 
+    /** ★★★ THE LISTENER WHO WENT AWAY — optional, off by default, shared receivers only.
+     *
+     *  ★★★ IT ASKS, IT DOES NOT KICK. A person on one frequency for an hour touches nothing and is
+     *      the best listener the server has; a forgotten tab is identical from here. Nothing the
+     *      server can see separates them — so the server stops guessing and asks, and any use of
+     *      the radio at all answers it (handleControl clears the prompt).
+     *
+     *  ★★★ A DECODER OPEN MEANS THEY ARE WATCHING. A WEFAX image takes about ten minutes to draw
+     *      and RTTY can run for hours, both with zero interaction — kicking somebody mid-picture
+     *      would be the worst version of this feature (Stuart, 2026-08-19). Advanced RDS does NOT
+     *      count: it runs passively beside the audio and says nothing about attention, which is
+     *      why `rdsxOn` is a separate flag from `currentDecoder` and this reads the latter.
+     *
+     *  ★ The owner is exempt, as everywhere else, and so is the host's own listening.
+     */
+    void enforceIdleListeners() {
+        const int idleMin = g_vsIdleKickMin.load();
+        if (idleMin <= 0 || g_vsMaxUsers.load() <= 1) return;   // off, or a one-listener radio
+        const double now = Impl::nowSecs();
+        std::string decoderOwnerSession;
+        { std::lock_guard<std::mutex> dl(decoderMtx);
+          if (!currentDecoder.empty()) decoderOwnerSession = decoderSession; }
+
+        std::vector<std::pair<std::shared_ptr<ClientDsp>, bool>> act;   // client, isTimeUp
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            for (auto& kv : clientDsp) {
+                auto& c = kv.second;
+                if (!c || c->lastAsk <= 0) continue;
+                const bool specOpen  = c->spec  && c->spec->isOpen();
+                const bool audioOpen = c->audio && c->audio->isOpen();
+                if (!specOpen && !audioOpen) continue;
+                if (c->adminOk.load()) continue;
+                const std::string addr = specOpen ? c->spec->peerAddress() : c->audio->peerAddress();
+                if (addr.empty() || isLoopback(addr)) continue;
+                // ★ Watching a decode IS using the radio. Also resets the clock, so the prompt does
+                //   not fire the moment they close it having watched for an hour.
+                if (!decoderOwnerSession.empty() && c->session == decoderOwnerSession) {
+                    c->lastAsk = now; c->idleAskAt = 0; continue;
+                }
+                if (c->idleAskAt > 0) {
+                    if (now >= c->idleAskAt) act.push_back({c, true});
+                    continue;                             // prompt already showing
+                }
+                if ((now - c->lastAsk) >= (double)idleMin * 60.0) {
+                    c->idleAskAt = now + kIdleAnswerSec;
+                    act.push_back({c, false});
+                }
+            }
+        }
+
+        for (auto& [c, timeUp] : act) {
+            auto sk = (c->spec && c->spec->isOpen()) ? c->spec : c->audio;
+            if (!sk || !sk->isOpen()) continue;
+            if (!timeUp) {
+                const std::string m = "{\"type\":\"idle_check\",\"secs\":"
+                                    + std::to_string(kIdleAnswerSec) + "}";
+                sendWs(sk, 0x1, (const uint8_t*)m.data(), m.size());
+                LOGI("idle check — [%s] has asked for nothing in %d min", c->session.c_str(), idleMin);
+                continue;
+            }
+            // ★ Terminal, and named for what it is: a client must not auto-retry into this the way
+            //   it would after a dropped socket. Same shape as the other refusals.
+            static const char* kGone = "{\"type\":\"idle_closed\"}";
+            std::string addr;
+            { std::lock_guard<std::mutex> lk(clientMtx);
+              addr = (c->spec && c->spec->isOpen()) ? c->spec->peerAddress()
+                   : (c->audio ? c->audio->peerAddress() : std::string());
+              c->idleAskAt = 0; c->lastAsk = 0; }
+            LOGI("idle disconnect — %s answered nothing in %ds", addr.c_str(), kIdleAnswerSec);
+            sendWs(sk, 0x1, (const uint8_t*)kGone, strlen(kGone));
+            outboxClose(sk);
+            if (c->audio && c->audio->isOpen() && c->audio != sk) c->audio->close();
+            LocalSdrShim::noteConnectionClosed(addr, "", "idle");
+        }
+    }
+
     void enforceSessionLimit() {
         const int limitMin = g_vsSessionLimitMin.load();
         if (limitMin <= 0) return;                       // unlimited: the default
@@ -10687,6 +10789,7 @@ struct LocalSdrShim::Impl {
                 if (stopping.load() || restarting.load()) continue;
                 enforceSessionLimit();
                 enforceAdminIdle();
+                enforceIdleListeners();
             }
         });
     }
@@ -11021,6 +11124,14 @@ std::string LocalSdrShim::noticeText() { return g_vsNotice.current(); }
 bool LocalSdrShim::setNotice(const std::string& text, int minutes, std::string& err) {
     return g_vsNotice.set(text, minutes, err);
 }
+void LocalSdrShim::setIdleKickMinutes(int minutes) {
+    // ★ Clamped to the floor rather than accepted as typed: 15 minutes is short enough already,
+    //   and a 2-minute idle kick would interrupt ordinary listening on any band.
+    const int m = minutes <= 0 ? 0 : (minutes < 15 ? 15 : minutes);
+    g_vsIdleKickMin.store(m);
+    if (m > 0) LOGI("idle disconnect: after %d min with no interaction (asks first)", m);
+}
+
 void LocalSdrShim::setSessionLimitSoft(bool soft) {
     g_vsSessionLimitSoft.store(soft);
     if (g_vsSessionLimitMin.load() > 0)

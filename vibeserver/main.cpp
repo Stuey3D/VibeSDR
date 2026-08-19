@@ -2297,6 +2297,7 @@ int main(int argc, char** argv) {
         // ★ Per radio, like the limit it modifies — a shared 30-listener receiver and a
         //   one-at-a-time dongle want different answers to "is the limit a deadline".
         LocalSdrShim::instance().setSessionLimitSoft(mine ? mine->sessionLimitSoft : false);
+        LocalSdrShim::instance().setIdleKickMinutes(mine ? mine->idleKickMin : 0);
         LocalSdrShim::instance().setLandingInfo(mine ? mine->antenna : std::string(),
                                                 g_serverConfig.landingMessage,
                                                 g_serverConfig.landingLinkUrl,

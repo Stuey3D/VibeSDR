@@ -380,6 +380,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     I("ppm", r.ppm); I("ppb", r.ppb); I("directSampling", r.directSampling);
     B("spectrogram", r.spectrogram);
     I("sessionLimitMin", r.sessionLimitMin); B("sessionLimitSoft", r.sessionLimitSoft);
+    I("idleKickMin", r.idleKickMin);
 }
 
 std::string radioToJson(const RadioConfig& r) {
@@ -414,6 +415,7 @@ std::string radioToJson(const RadioConfig& r) {
     N("ppm", r.ppm); N("ppb", r.ppb); N("directSampling", r.directSampling);
     B("spectrogram", r.spectrogram);
     N("sessionLimitMin", r.sessionLimitMin); B("sessionLimitSoft", r.sessionLimitSoft);
+    N("idleKickMin", r.idleKickMin);
     if (!o.empty() && o.back() == ',') o.pop_back();
     return o + "}";
 }

@@ -251,6 +251,8 @@ export interface SpectrumCallbacks {
   onBanned?: () => void;
   onElsewhere?: (radio: string) => void;
   onHandover?: (secs: number) => void;
+  onIdleCheck?: (secs: number) => void;
+  onIdleClosed?: () => void;
   onHandoverOff?: () => void;
   /** ★ The dial has JUMPED far enough that anything already buffered is a different signal.
    *  main.ts uses this to drop queued audio — see AudioPlayer.flush(). */
@@ -471,6 +473,18 @@ export class SpectrumClient {
       // ★★★ SOFT LIMIT: SOMEBODY IS WAITING, AND THIS IS THE ONLY WARNING THERE IS. NOT terminal —
       //     the listener is still connected and still listening, and setting `refused` here would
       //     stop the reconnect they are entitled to attempt afterwards.
+      // ★★★ "STILL LISTENING?" — NOT a refusal, and not terminal. The listener is connected and
+      //     hearing the radio; this only asks whether anybody is there. Setting `refused` here
+      //     would stop the reconnect they are perfectly entitled to.
+      case 'idle_check':
+        this.cb.onIdleCheck?.(Number(msg.secs) || 0);
+        break;
+      // ★ They did not answer. Terminal, so the client does not treat it as a dropped socket and
+      //   silently reconnect into the slot it was just asked to give up.
+      case 'idle_closed':
+        this.refused = true;
+        this.cb.onIdleClosed?.();
+        break;
       case 'session_handover':
         this.cb.onHandover?.(Number(msg.secs) || 0);
         break;
