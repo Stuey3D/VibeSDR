@@ -286,6 +286,24 @@ function renderHealth(st: any, perRadio: Array<{ radio: string; data: any }> = [
   $('adminHealth').innerHTML = out.join('');
 }
 
+/** Distinct addresses per country across the WHOLE machine, newest 24h, biggest first.
+ *  ★ Falls back to the single-process list if the merged log is empty, so an older server or a
+ *    failed fetch still shows something rather than an empty chart that reads as "nobody came". */
+function countriesFrom(conns: any[], fallback: any[]): any[] {
+  const dayAgo = Math.floor(Date.now() / 1000) - 24 * 3600;
+  const byCc: Record<string, Set<string>> = {};
+  for (const c of conns || []) {
+    if ((Number(c.at) || 0) < dayAgo) continue;
+    const cc = String(c.cc || '').trim();
+    const ip = String(c.ip || '');
+    if (!cc || !ip) continue;
+    (byCc[cc] ||= new Set()).add(ip);
+  }
+  const out = Object.entries(byCc).map(([cc, set]) => ({ cc, n: set.size }))
+                    .sort((a, b) => b.n - a.n);
+  return out.length ? out : fallback;
+}
+
 /** ★★★ WHAT THE WHOLE MACHINE DID TODAY, from the merged per-radio connection logs.
  *
  *  ★★★ GROUPED BY SESSION, NOT BY RECORD. Every listener opens TWO sockets — spectrum and audio —
@@ -933,7 +951,11 @@ async function refresh() {
     if (full) {
       renderSessions(ses);
       renderBans(st.bans ?? []);
-      renderCountries(st.countries ?? []);
+      // ★★★ MACHINE-WIDE, not one radio's. `st.countries` is computed inside whichever process
+      //     answered the status call, from ITS OWN connection log — so a listener on another radio
+      //     is simply absent. Stuart, 2026-08-19: "brazil is on there but not shown", with a
+      //     Brazilian listening on the RSP1B at that moment. Same root cause as the visitor count.
+      renderCountries(countriesFrom(conns.connections ?? [], st.countries ?? []));
       renderConns(conns.connections ?? []);
     }
     // ★ Always, in both modes: the header names which server you are looking at, and an early
