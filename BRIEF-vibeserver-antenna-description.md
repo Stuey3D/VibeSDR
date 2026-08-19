@@ -146,8 +146,19 @@ the web client's splash and picker cards, the setup page (where it is typed), `/
 and the apps' pickers. ★ ABSENT MEANS NOTHING SHOWN — a server that never sets it must look
 exactly as it does today.
 
-## Open question
+## SETTLED — where it is typed
 
-Does it belong on the front door's PICKER (once, for the machine) or on each radio's splash, or
-both? A donation appeal belongs to the machine; "this one drops to 5 fps" arguably belongs to the
-radio. Starting server-level is the smaller move and covers both of Stuart's examples.
+Stuart, 2026-08-19: *"so that would live under the server tab of the setup page"*.
+
+★★★ That decides the SCOPE, not just the location. The setup page's SERVER tab is the one place
+    with **no radio behind it** — `curRadio` is -1 there, deliberately (`vibe_setup_page.h`). So
+    this is one statement per MACHINE, saved to the server config rather than to a `RadioConfig`,
+    and it renders on the front door's picker where the machine is what the visitor is looking at.
+
+★★ It also settles Part 1 by contrast: the antenna belongs to a RADIO, so it is typed on that
+   radio's tab and lives in `RadioConfig`. Two fields, two tabs, two scopes — and the SERVER tab
+   already exists and is always shown, "even with one radio", so there is no new navigation to
+   build for either.
+
+★ A single-radio Simple server has no picker, so the message has to reach that splash too — same
+  grep list, and the reason the list matters.
