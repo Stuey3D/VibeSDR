@@ -98,7 +98,9 @@ function when(epoch: number): string {
 const flag = (cc?: string) => (cc ? isoToFlag(cc) : '');
 const withFlag = (cc: string | undefined, text: string) => {
   const f = flag(cc);
-  return f ? `<span class="cc" title="${esc(cc!)}">${f}</span> ${esc(text)}` : esc(text);
+  // ★ The country's NAME in the tooltip, not its code — the code is exactly the thing the reader
+  //   could not decipher, so repeating it explains nothing.
+  return f ? `<span class="cc" title="${esc(ccName(cc))}">${f}</span> ${esc(text)}` : esc(text);
 };
 
 const mhz = (hz: number) => hz > 0 ? `${(hz / 1e6).toFixed(3)} MHz` : '—';
@@ -420,6 +422,31 @@ function renderGraphs(h: any) {
  *     requirement.
  *  ★ Unknown codes are simply not drawn — an unplaced flag would sit at 0,0 in the Atlantic and
  *    look like a real visitor from the middle of the ocean. Add a row when one shows up. */
+/** ★★ THE NAME, because a flag and two letters are not recognisable to most people. "LV: 1" tells
+ *  an owner nothing; "Latvia — 1 visitor" tells them everything (Stuart, 2026-08-19: "some of
+ *  these country codes and flags are not easily recognisable").
+ *  ★ Deliberately WIDER than CC_POS: this also names the flags in the listeners table and the
+ *    landing-page rows, which see countries the map has no position for. A code with no name here
+ *    falls back to the code itself, which is what the page showed before. */
+const CC_NAME: Record<string, string> = {
+  AE:'United Arab Emirates', AR:'Argentina', AT:'Austria', AU:'Australia', BD:'Bangladesh',
+  BE:'Belgium', BG:'Bulgaria', BR:'Brazil', BY:'Belarus', CA:'Canada', CH:'Switzerland',
+  CL:'Chile', CN:'China', CO:'Colombia', CR:'Costa Rica', CY:'Cyprus', CZ:'Czechia',
+  DE:'Germany', DK:'Denmark', DO:'Dominican Republic', DZ:'Algeria', EC:'Ecuador',
+  EE:'Estonia', EG:'Egypt', ES:'Spain', ET:'Ethiopia', FI:'Finland', FR:'France',
+  GB:'United Kingdom', GE:'Georgia', GR:'Greece', GT:'Guatemala', HK:'Hong Kong',
+  HR:'Croatia', HU:'Hungary', ID:'Indonesia', IE:'Ireland', IL:'Israel', IN:'India',
+  IQ:'Iraq', IR:'Iran', IS:'Iceland', IT:'Italy', JP:'Japan', KE:'Kenya', KR:'South Korea',
+  KZ:'Kazakhstan', LT:'Lithuania', LU:'Luxembourg', LV:'Latvia', MA:'Morocco', MD:'Moldova',
+  MX:'Mexico', MY:'Malaysia', NG:'Nigeria', NL:'Netherlands', NO:'Norway', NZ:'New Zealand',
+  PA:'Panama', PE:'Peru', PH:'Philippines', PK:'Pakistan', PL:'Poland', PT:'Portugal',
+  PY:'Paraguay', QA:'Qatar', RO:'Romania', RS:'Serbia', RU:'Russia', SA:'Saudi Arabia',
+  SE:'Sweden', SG:'Singapore', SI:'Slovenia', SK:'Slovakia', TH:'Thailand', TN:'Tunisia',
+  TR:'Türkiye', TW:'Taiwan', UA:'Ukraine', US:'United States', UY:'Uruguay', VE:'Venezuela',
+  VN:'Vietnam', ZA:'South Africa',
+};
+const ccName = (cc?: string) => CC_NAME[String(cc || '').toUpperCase()] || String(cc || '');
+
 const CC_POS: Record<string, [number, number]> = {
   AE:[24,54], AR:[-34,-64], AT:[47.5,14], AU:[-25,134], BE:[50.8,4.5], BG:[42.7,25.5],
   BR:[-10,-52], CA:[58,-100], CH:[46.8,8.2], CL:[-33,-71], CN:[35,105], CO:[4,-73],
@@ -506,7 +533,10 @@ async function renderCountryMap(list: any[]): Promise<boolean> {
           + `<span style="font:600 12px/1 ui-monospace,monospace;color:#ffb833">${n}</span></div>`,
       iconSize: [0, 0],
     });
-    ccMarkers.push(L.marker(pos, { icon, title: `${c.cc}: ${n}` }).addTo(ccMap));
+    // ★ The tooltip has room for the whole sentence, so say it: "Latvia — 1 visitor".
+    ccMarkers.push(L.marker(pos, {
+      icon, title: `${ccName(c.cc)} — ${n} visitor${n === 1 ? '' : 's'}`,
+    }).addTo(ccMap));
   }
   return true;
 }
@@ -525,7 +555,7 @@ function renderCountries(list: any[]) {
   none.hidden = true;
   const max = Math.max(...list.map((c) => c.n), 1);
   wrap.innerHTML = list.map((c) => `
-    <div class="ccRow">
+    <div class="ccRow" title="${esc(ccName(c.cc))}">
       <span class="ccFlag">${flag(c.cc)}</span>
       <span class="ccName">${esc(c.cc)}</span>
       <span class="ccBar"><i style="width:${(100 * c.n / max).toFixed(1)}%"></i></span>

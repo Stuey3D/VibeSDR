@@ -7741,6 +7741,19 @@ struct LocalSdrShim::Impl {
                           + std::to_string(kPage.size()) + "\r\n\r\n" + kPage);
             sock->close();
         } else {
+            // ★★★ A 404 IS THE ONLY TRACE A SCANNER LEAVES, so write it down. Everything that asks
+            //     for /wp-login.php or /.env reached exactly this line and vanished. See
+            //     vibeadmin::noteScan — one row per address+path, counted, capped.
+            // ★ The PATH only, never the query: a scanner's query string is the payload, and this
+            //   goes on a page an owner reads.
+            {
+                const size_t sp = reqLine.find(' ');
+                size_t e = (sp == std::string::npos) ? std::string::npos
+                                                     : reqLine.find_first_of(" ?", sp + 1);
+                std::string path = (sp == std::string::npos) ? std::string()
+                                 : reqLine.substr(sp + 1, (e == std::string::npos ? reqLine.size() : e) - sp - 1);
+                g_vsConnLog.noteScan(sock->peerAddress(), path, userAgent, vsCountry(sock->peerAddress()));
+            }
             sock->sendstr("HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
             sock->close();
         }
@@ -11257,6 +11270,7 @@ std::string LocalSdrShim::adminStatusJson() {
     }
 
     j += ",\"bans\":" + g_vsBans.json();
+    j += ",\"scans\":" + g_vsConnLog.scansJson();
     j += ",\"uniqueDay\":" + std::to_string(g_vsConnLog.uniqueSince(24 * 3600));
     // ★ Where listeners come from, over the last day. Empty when the country data has not been
     //   downloaded yet — the page must draw that as absence, not as "nowhere".

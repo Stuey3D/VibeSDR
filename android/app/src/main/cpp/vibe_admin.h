@@ -511,8 +511,44 @@ public:
     void open(const std::string& ip, const std::string& session, const std::string& agent,
               const std::string& cc = "") {
         std::lock_guard<std::mutex> lk(mtx_);
+        const long long now = nowEpoch();
+
+        // ★★★ THE CLIENT KNOCKS BEFORE IT COMES IN, AND THAT IS NOT A VISIT. The web client opens
+        //     a throwaway spectrum socket to test reachability and the PIN, closes it, then opens
+        //     the real one — so EVERY listener produced two rows, one of them a one-second stub
+        //     with a couple of KB. On the demo that was 111 of 218 records, and 61 of 71 sessions
+        //     had one (Stuart, 2026-08-19: "fix the list so that it is genuine connections").
+        //
+        //  ★★★ COALESCED, NOT FILTERED, AND NOT MARKED BY THE CLIENT. A `probe=1` flag would be
+        //      the obvious fix and it is the wrong one: anything that lets a CALLER say "do not
+        //      log me" is a hole, and the same request asked to keep seeing "bots and malware
+        //      trying to connect". So the server decides, from evidence the caller cannot forge —
+        //      the stub shares this connection's SESSION and closed a moment ago having carried
+        //      almost nothing. A scanner opening one socket still gets exactly one row.
+        //
+        //  ★★ Reopening the stub rather than adding a row also keeps the session's start time
+        //     honest: the visit began when they first knocked, not when the second socket landed.
+        //  ★ Session-keyed only. With no session there is nothing to be sure of, and merging on
+        //    address alone would fold two different people behind one NAT into one visit.
+        if (!session.empty()) {
+            for (auto it = recs_.rbegin(); it != recs_.rend(); ++it) {
+                if (it->session != session) continue;
+                const bool closedJustNow = it->endEpoch > 0 && (now - it->endEpoch) <= 2;
+                const bool carriedNothing = it->bytes < 20000;
+                const bool wasBrief = (it->endEpoch - it->atEpoch) <= 1;
+                if (closedJustNow && carriedNothing && wasBrief) {
+                    it->endEpoch = 0;                 // open again — same visit, second socket
+                    it->bytes = 0;
+                    if (it->agent.empty()) it->agent = agent.substr(0, 160);
+                    if (it->cc.empty())    it->cc = cc;
+                    return;
+                }
+                break;                                // the newest row for this session is not a stub
+            }
+        }
+
         ConnRec r;
-        r.atEpoch = nowEpoch();
+        r.atEpoch = now;
         r.ip = ip;
         r.session = session;
         r.cc = cc;
@@ -664,6 +700,55 @@ public:
         return j + "]";
     }
 
+    /** ★★★ WHAT WENT LOOKING FOR SOMETHING THAT IS NOT HERE — the scanners.
+     *
+     *  ★★★ NONE OF THIS WAS RECORDED. The connection log only ever sees an ACCEPTED WebSocket, so
+     *      anything probing for /wp-login.php, /.env, /admin.php or a PHP shell got a bare 404 and
+     *      left no trace at all. An owner asking "is anything trying to get in" had nothing to
+     *      read (Stuart, 2026-08-19: "we also need to see bots and malware trying to connect").
+     *
+     *  ★★ THE PATH IS THE EVIDENCE, so it is kept — a 404 for /favicon.ico is a browser and a 404
+     *     for /.git/config is somebody's scanner, and a count alone cannot tell them apart.
+     *  ★ Trimmed hard and capped: this is attacker-controlled text arriving at whatever rate they
+     *    choose, and it must never become a way to fill a Pi's memory or its disk.
+     */
+    struct ProbeRec { long long atEpoch = 0; std::string ip, cc, path, agent; int n = 1; };
+
+    void noteScan(const std::string& ip, const std::string& path, const std::string& agent,
+                  const std::string& cc = "") {
+        if (ip.empty() || path.empty()) return;
+        std::lock_guard<std::mutex> lk(mtx_);
+        const long long now = nowEpoch();
+        // ★★ ONE ROW PER ADDRESS+PATH, COUNTED. A scanner walks a list of a hundred URLs and would
+        //    otherwise bury every real connection in the panel above it; and one that retries the
+        //    same path a thousand times is one FACT, not a thousand.
+        for (auto it = scans_.rbegin(); it != scans_.rend(); ++it) {
+            if (it->ip == ip && it->path == path) { it->n++; it->atEpoch = now; return; }
+        }
+        ProbeRec r;
+        r.atEpoch = now; r.ip = ip; r.cc = cc;
+        r.path = path.substr(0, 120);
+        r.agent = agent.substr(0, 120);
+        scans_.push_back(std::move(r));
+        while (scans_.size() > kMaxScans) scans_.pop_front();
+    }
+
+    std::string scansJson(size_t limit = 60) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        std::string j = "[";
+        size_t n = 0;
+        for (auto it = scans_.rbegin(); it != scans_.rend() && n < limit; ++it, ++n) {
+            if (n) j += ',';
+            j += "{\"at\":" + std::to_string(it->atEpoch)
+               + ",\"ip\":\"" + esc(it->ip) + "\""
+               + ",\"cc\":\"" + esc(liveCc(it->ip, it->cc)) + "\""
+               + ",\"path\":\"" + esc(it->path) + "\""
+               + ",\"agent\":\"" + esc(it->agent) + "\""
+               + ",\"n\":" + std::to_string(it->n) + "}";
+        }
+        return j + "]";
+    }
+
     /** How many distinct addresses connected in the last `secs`. The one number that says
      *  whether the receiver is being USED or being SCANNED. */
     int uniqueSince(long long secs) {
@@ -679,6 +764,10 @@ public:
 
 private:
     static const size_t kMax = 2000;
+    /** ★ Far smaller than the connection log: this is a curiosity, not a record to keep, and it is
+     *  filled by whoever is scanning rather than by people using the receiver. */
+    static const size_t kMaxScans = 200;
+    std::deque<ProbeRec> scans_;
 
     void load() {
         std::lock_guard<std::mutex> lk(mtx_);
