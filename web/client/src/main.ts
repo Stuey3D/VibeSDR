@@ -4038,7 +4038,7 @@ function showOwnerNotice(text: string) {
   //   Zoom is the narrowest layout this has to survive, and it is not a size anybody tests on.
   el.style.cssText =
     `position:fixed;left:50%;top:12px;transform:translateX(-50%);max-width:min(92vw,640px);` +
-    `z-index:${document.getElementById('app')?.classList.contains('live') ? 48 : 101};` + +
+    `z-index:${document.getElementById('app')?.classList.contains('live') ? 48 : 101};` +
     // ★★★ FULLY OPAQUE. At 96% the waterfall and the frequency scale showed straight through and
     //     the text became hard to read against a moving picture — the one thing a notice must not
     //     be (Stuart, 2026-08-19). Nothing behind this needs to be visible THROUGH it; it is a
