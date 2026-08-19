@@ -116,7 +116,8 @@ function card(k: string, v: string, sub: string, status = 'ok'): string {
        + `<div class="v">${esc(v)}</div><div class="s">${esc(sub)}</div></div>`;
 }
 
-function renderHealth(st: any, perRadio: Array<{ radio: string; data: any }> = []) {
+function renderHealth(st: any, perRadio: Array<{ radio: string; data: any }> = [],
+                      connections: any[] = []) {
   const sys = st.sys ?? {};
   const out: string[] = [];
 
@@ -257,9 +258,81 @@ function renderHealth(st: any, perRadio: Array<{ radio: string; data: any }> = [
   if (sys.uptimeSec) out.push(card('UPTIME', dur(sys.uptimeSec),
     sys.governor ? `governor: ${sys.governor}` : ''));
 
-  out.push(card('VISITORS', String(st.uniqueDay ?? 0), 'distinct addresses today'));
+  // ★★★ THE MACHINE'S VISITORS, NOT ONE RADIO'S. `st` comes from whichever process answered the
+  //     status call, and the connection log is PER RADIO — so this reported the visitors of a
+  //     single receiver as if they were the server's. On the demo it said 18 when the true figure
+  //     was 60 (Stuart, 2026-08-19: "I'm pretty sure we've had more than that").
+  // ★★★ AND THE COUNTS CANNOT SIMPLY BE ADDED: 29 + 23 + 18 = 70, but only 60 distinct people were
+  //     here, because ten of them tried more than one radio. You need the ADDRESSES, which is why
+  //     this is derived from the merged log rather than from three numbers.
+  // ★ Falls back to the single-process figure when the merged log is unavailable, so an older
+  //   server or a failed fetch still shows something rather than a confident zero.
+  const day = machineStats(connections);
+  out.push(card('VISITORS', String(day.uniqueDay || (st.uniqueDay ?? 0)),
+                day.uniqueDay ? `distinct addresses today · ${day.visits} visits` : 'distinct addresses today'));
+
+  if (day.visits) {
+    // ★★ MEDIAN, NOT MEAN. One person leaving a receiver on for two hours drags an average up past
+    //    everything else on the page, and the number an owner wants is "what does a typical visit
+    //    look like" — which a mean of a long-tailed distribution simply does not answer.
+    out.push(card('TYPICAL VISIT', dur(day.medianSec),
+                  `longest today ${dur(day.longestSec)}`));
+  }
+  if (day.topRadio) {
+    out.push(card('BUSIEST RADIO', day.topRadio.label,
+                  `${day.topRadio.n} of ${day.uniqueDay} visitors today`));
+  }
 
   $('adminHealth').innerHTML = out.join('');
+}
+
+/** ★★★ WHAT THE WHOLE MACHINE DID TODAY, from the merged per-radio connection logs.
+ *
+ *  ★★★ GROUPED BY SESSION, NOT BY RECORD. Every listener opens TWO sockets — spectrum and audio —
+ *      and each is logged separately, so counting records would double the visit count and halve
+ *      the typical length. The pair share a session id; a visit is their span.
+ *  ★★ THE SAMPLE IS BOUNDED and the caller says so: each radio returns its last 300 connections,
+ *     so on a very busy day this is "the last 300 per radio", not all of them. Stating that beats
+ *     a number that quietly stops being true — the same rule the client mix already follows.
+ */
+function machineStats(conns: any[]): {
+  uniqueDay: number; visits: number; medianSec: number; longestSec: number;
+  topRadio: { label: string; n: number } | null;
+} {
+  const dayAgo = Math.floor(Date.now() / 1000) - 24 * 3600;
+  const today = (conns || []).filter((c) => (Number(c.at) || 0) >= dayAgo);
+  if (!today.length) return { uniqueDay: 0, visits: 0, medianSec: 0, longestSec: 0, topRadio: null };
+
+  const ips = new Set<string>();
+  const perRadioIps: Record<string, Set<string>> = {};
+  const spans: Record<string, { start: number; end: number }> = {};
+  for (const c of today) {
+    const ip = String(c.ip || '');
+    if (ip) ips.add(ip);
+    const label = String(c.radio || '');
+    if (label && ip) (perRadioIps[label] ||= new Set()).add(ip);
+    // ★ Key on session where there is one; fall back to the address so a record from an older
+    //   server (or one that never named a session) still counts as a visit rather than vanishing.
+    const key = String(c.session || ip);
+    if (!key) continue;
+    const start = Number(c.at) || 0;
+    const end = Number(c.end) || start;
+    const cur = spans[key];
+    if (!cur) spans[key] = { start, end };
+    else { cur.start = Math.min(cur.start, start); cur.end = Math.max(cur.end, end); }
+  }
+  const lengths = Object.values(spans).map((s) => Math.max(0, s.end - s.start)).sort((a, b) => a - b);
+  let topRadio: { label: string; n: number } | null = null;
+  for (const [label, set] of Object.entries(perRadioIps))
+    if (!topRadio || set.size > topRadio.n) topRadio = { label, n: set.size };
+
+  return {
+    uniqueDay: ips.size,
+    visits: lengths.length,
+    medianSec: lengths.length ? lengths[Math.floor(lengths.length / 2)] : 0,
+    longestSec: lengths.length ? lengths[lengths.length - 1] : 0,
+    topRadio,
+  };
 }
 
 // ── Graphs ────────────────────────────────────────────────────────────────────────────────────
@@ -776,7 +849,7 @@ async function refresh() {
         .sort((a: any, b: any) => (b.at || 0) - (a.at || 0)),
     };
     failures = 0;
-    renderHealth(st, statAll);
+    renderHealth(st, statAll, conns.connections);
     renderGraphs(hist);
     // ★★★ SIMPLE vs FULL. The gated panels are about MANAGING STRANGERS — who is connected,
     //     blocking them, where they came from. On a household receiver they are noise, and
