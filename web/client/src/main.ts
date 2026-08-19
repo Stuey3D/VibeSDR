@@ -2817,6 +2817,74 @@ function radioCardState(r: any, st: any): { state: string; blocked: boolean } {
   return { state, blocked: down || (full && !admin) };
 }
 
+/** ★★★ THE AERIAL ICONS — ONE SET, DRAWN THE SAME EVERYWHERE.
+ *
+ *  Line art rather than emoji, deliberately: this page is monospace amber on black and an emoji
+ *  is a full-colour cartoon in the middle of it — which is exactly what the satellite dish looked
+ *  like (Stuart, 2026-08-19). These inherit currentColor, so they dim with the text they sit in.
+ *
+ *  ★★ KEYED, AND THE KEY IS WHAT TRAVELS (RadioConfig::antennaIcon). An unknown key falls back to
+ *     `wire` rather than drawing nothing, so a server newer than this client still renders.
+ *  ★ 24x24, stroke-only, no fill: they sit at 11px beside the description and a filled shape at
+ *    that size is a blob. */
+/** ★★★ THE AERIAL ICONS — ONE SET, AND THE KEYS ARE THE WIRE FORMAT.
+ *
+ *  ★★★ THESE ARE DUPLICATED IN vibe_setup_page.h, which draws the same eleven in its picker. Two
+ *      copies is the cost of the page being a C++ raw string; the KEYS are what must never drift,
+ *      because they are what a config stores and what every other client will look up. Change a
+ *      drawing freely — change or remove a key and an owner's saved choice stops resolving.
+ *
+ *  ★★ Stroke-only line art, inheriting currentColor so it dims with the text it sits in. The tip
+ *     BALLS are filled and the loop's circle is not: the parent <svg> sets fill:none, so a bare
+ *     <circle> draws as a ring, which reads as a small loop on a stick rather than the end of an
+ *     aerial (Stuart, 2026-08-19: "the ball needs to be solid so it looks like a tip").
+ *
+ *  ★ Drawn on a 24x24 grid and shown at 12px, which is the size that decided every one of them. */
+const ANT_ICONS: Record<string, string> = {
+  vertical:    '<circle cx="12" cy="3.4" r="1.5" fill="currentColor" stroke="none"/>'
+             + '<path d="M12 5.2V21"/>',
+  groundplane: '<circle cx="12" cy="3" r="1.5" fill="currentColor" stroke="none"/>'
+             + '<path d="M12 4.8v8.7M12 13.5l-7 5M12 13.5l7 5"/>',
+  // ★ The taper is the point, and it needs three stroke widths in one drawing — which is why
+  //   these are raw markup rather than a single path string.
+  whip:        '<circle cx="12" cy="3.5" r="1.6" fill="currentColor" stroke="none"/>'
+             + '<path d="M12 5.1v4.3" stroke-width="1"/>'
+             + '<path d="M12 9.4v5.2" stroke-width="1.9"/>'
+             + '<path d="M12 14.6V21" stroke-width="2.9"/>',
+  // ★★ The disc sits at the TOP of the cone, where the whip meets it — this was drawn upside down
+  //    once, cone-down onto a base rail, until Stuart sent a photograph of a real one.
+  discone:     '<circle cx="12" cy="2.8" r="1.5" fill="currentColor" stroke="none"/>'
+             + '<path d="M12 4.6v6.6M3.5 11.2h17M12 11.2L6.2 20.5M12 11.2L17.8 20.5"/>',
+  dipole:      '<path d="M3 8h8M13 8h8M12 9v11"/>',
+  longwire:    '<path d="M3 6v4M21 6v4M3 8c6 5 12 5 18 0M12 10.5V20"/>',
+  loop:        '<circle cx="12" cy="9" r="6"/><path d="M10.6 14.8L11.4 20M13.4 14.8L12.6 20"/>',
+  // ★ Fed like `loop` — gap in the conductor, twin leads — so the two read as one family.
+  deltaloop:   '<path d="M12 3.4L4.4 15.6M12 3.4L19.6 15.6M4.4 15.6h6.3M13.3 15.6h6.3'
+             + 'M11 16.4V21M13 16.4V21"/>',
+  // ★ Two helices meeting at top, middle and bottom. No mast: the crossings imply the axis, and
+  //   a third line down the centre is mud at 12px.
+  qfh:         '<path d="M12 3.5C6.5 6 6.5 9.5 12 12C17.5 14.5 17.5 18 12 20.5"/>'
+             + '<path d="M12 3.5C17.5 6 17.5 9.5 12 12C6.5 14.5 6.5 18 12 20.5"/>',
+  yagi:        '<path d="M4 12h16M6 5v14M10 7.5v9M14 9v6M18 10.5v3"/>',
+  dish:        '<path d="M6 4a9 9 0 0 1 0 15M6 11.5h6M12 11.5V20"/>',
+};
+
+/** The aerial icon for a radio, as inline SVG — or nothing at all.
+ *  ★★★ NO FALLBACK DRAWING. An owner who has not chosen gets no icon, rather than one we picked
+ *      for them: guessing would put a vertical beside a description that says "loop", which is
+ *      worse than a bare line of text and is the kind of inferred detail this project has already
+ *      decided against elsewhere. It also means every server that never touches this looks
+ *      exactly as it does today.
+ *  ★ An UNKNOWN key is treated the same as none — a server newer than this client draws nothing
+ *    rather than the wrong aerial. */
+function antIcon(key?: unknown): string {
+  const d = typeof key === 'string' ? ANT_ICONS[key] : undefined;
+  if (!d) return '';
+  return `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" `
+       + `stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" `
+       + `style="vertical-align:-2px;margin-right:5px;opacity:.9">${d}</svg>`;
+}
+
 /** ★★★ THE OWNER'S PERMANENT MESSAGE ON THE LANDING SCREEN — house rules, why the waterfall
  *  slows down, or a link if people can chip in.
  *
@@ -2993,7 +3061,7 @@ async function showSplashRadios(): Promise<void> {
          // ★ ESCAPED — owner-authored text going into innerHTML. So is the label beside it, which
          //   was not before: it comes from the same place and had the same hole.
          + (ant ? `<div class="sub" style="margin-top:2px;font-size:11px;opacity:.55">`
-                + `\u{1F4E1} ${escapeHtml(ant)}</div>` : '')
+                + `${antIcon((r as any).antennaIcon)}${escapeHtml(ant)}</div>` : '')
          + `</${tag}>`;
   }).join('');
 
@@ -3816,7 +3884,9 @@ async function loadOwnerNotice() {
     const ant = typeof j?.antenna === 'string' ? j.antenna.trim() : '';
     const ael = document.getElementById('splashAntenna');
     if (ael) {
-      ael.textContent = ant ? `\u{1F4E1} ${ant}` : '';
+      // ★ innerHTML now that there is an SVG in it — so the description must be ESCAPED, which
+      //   textContent used to do for free. Owner-authored text going into markup.
+      ael.innerHTML = ant ? `${antIcon(j?.antennaIcon)}${escapeHtml(ant)}` : '';
       ael.style.display = ant ? '' : 'none';
     }
   } catch { /* an older server has no notice field — nothing to show */ }

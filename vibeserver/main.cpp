@@ -1488,6 +1488,10 @@ int main(int argc, char** argv) {
             //   unset so an unconfigured radio renders exactly as it does today.
             if (!r.antenna.empty())
                 j += ",\"antenna\":\"" + jsonEscape(r.antenna) + "\"";
+            // ★ Which picture to draw beside it. A key, so an older client that does not know
+            //   this one simply draws its default.
+            if (!r.antennaIcon.empty())
+                j += ",\"antennaIcon\":\"" + jsonEscape(r.antennaIcon) + "\"";
             j += ",\"port\":" + std::to_string(vsconfig::portForRadio(srv, i));
             // ★★★ WHAT THIS RADIO CAN HEAR, AND WHETHER THE OWNER HAS NARROWED IT. The directory
             //     published only the frequency it happens to be parked on, which makes three very
@@ -2273,9 +2277,11 @@ int main(int argc, char** argv) {
     // ★ The aerial is this radio's; the message belongs to the machine, so a front door (which
     //   owns no radio) still carries it.
     {
-        std::string ant;
+        std::string ant, antIcon;
         for (const auto& r : g_serverConfig.radios)
-            if (!g_myRadioSerial.empty() && r.serial == g_myRadioSerial) { ant = r.antenna; break; }
+            if (!g_myRadioSerial.empty() && r.serial == g_myRadioSerial) {
+                ant = r.antenna; antIcon = r.antennaIcon; break; }
+        LocalSdrShim::instance().setAntennaIcon(antIcon);
         LocalSdrShim::instance().setLandingInfo(ant, g_serverConfig.landingMessage,
                                                 g_serverConfig.landingLinkUrl,
                                                 g_serverConfig.landingLinkLabel);

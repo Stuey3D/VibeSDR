@@ -204,6 +204,14 @@ struct RadioConfig {
      *  ★ Free text, published to strangers. Empty = say nothing at all, which is what almost
      *    every server will do. */
     std::string antenna;
+    /** ★★ WHICH AERIAL THIS IS, AS A PICTURE. One of a short fixed set — "vertical", "loop",
+     *  "wire", "yagi", "dish", "discone", "whip" — drawn beside the description.
+     *  ★★★ A KEY, NOT A GLYPH. Storing the drawing itself would put markup in the config and pin
+     *      every client to one rendering; a key lets the phone, the watch and the browser each
+     *      draw it in their own idiom, and an UNKNOWN key falls back to the default rather than
+     *      rendering nothing. That matters because this list will grow.
+     *  ★ Empty = the generic aerial, which is what every existing radio has. */
+    std::string antennaIcon;
 
     /** ★★ TWO GATES, AND THEY MEAN DIFFERENT THINGS. `enabled` is the owner saying "serve this
      *  radio" (the TUI toggle); `configured` is "I have said what it should do" (its setup tab was

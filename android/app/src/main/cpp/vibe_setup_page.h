@@ -41,11 +41,30 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
   label{display:block;margin:14px 0 0}
   .lbl{display:block;font-size:13.5px;margin-bottom:5px}
   .hint{color:var(--dim);font-size:12.5px;margin-top:4px}
-  input[type=text],input[type=password],input[type=number],select{
+  /* ★★ EVERY input TYPE THAT EXISTS ON THIS PAGE, and textarea with them. This listed types one
+     by one, so `type=url` and the message box inherited NOTHING — a narrow unstyled field beside
+     styled ones, on a page whose whole job is looking like the product (Stuart, 2026-08-19). */
+  input[type=text],input[type=password],input[type=number],input[type=url],select,textarea{
       width:100%;padding:9px 11px;background:#0a0704;color:var(--ink);
       border:1px solid var(--line);border-radius:7px;font:inherit}
-  input:focus,select:focus{outline:none;border-color:var(--amber)}
+  /* ★★★ VERTICAL ONLY. A textarea is resizable by default and the handle drags it WIDER than its
+     card, straight through the amber border — the one element on the page that can break the
+     layout by being used normally. Taller is useful for a long message; wider never is.
+     ★ max-width belt-and-braces: a browser that ignores `resize` still cannot escape the card. */
+  textarea{resize:vertical;max-width:100%;min-height:74px;line-height:1.45}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--amber)}
   .row{display:flex;gap:14px;flex-wrap:wrap}
+  /* The aerial icon picker: the drawings ARE the labels, so they have to be big enough to read. */
+  .antIcons{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .antIcons button{
+      background:#0a0704;border:1px solid var(--line);border-radius:8px;
+      width:52px;height:52px;padding:0;display:flex;align-items:center;justify-content:center;
+      color:var(--ink);cursor:pointer}
+  .antIcons button:hover{border-color:var(--amber)}
+  .antIcons button[aria-pressed="true"]{border-color:var(--amber);color:var(--amber);
+      background:rgba(255,184,51,.09)}
+  .antIcons button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+  .antIcons .none{font-size:11px;letter-spacing:.1em}
   .row>label{flex:1 1 200px}
   button{background:var(--amber);color:#1a1200;border:0;border-radius:8px;
          padding:11px 20px;font:600 15px/1 inherit;cursor:pointer}
@@ -376,6 +395,8 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
                  placeholder="e.g. Discone in the loft, good to 300 MHz"></label>
         <datalist id="antennaList"></datalist>
         <p class="why" id="antennaShared" style="display:none"></p>
+        <span class="lbl" style="display:block;margin-top:12px">Icon shown beside it</span>
+        <div id="antIconPick" class="antIcons"></div>
         <p class="why">Shown to everybody who visits, so keep it about the aerial &mdash; not
            about where you live.</p>
       </div>
@@ -1547,7 +1568,15 @@ function renderTabs() {
     b.onclick = () => {
       // ★ Switching tabs KEEPS what you typed, in memory, so flipping between two radios to
       //   compare them does not quietly discard the one you were editing.
+      // ★★★ AND THE MACHINE'S FIELDS TOO — this said "what you typed" and meant only the RADIO's.
+      //     fill() below re-reads every machine field from cfg, so anything typed on the SERVER
+      //     tab was overwritten by the old value the moment you opened a radio: type the landing
+      //     message, go and fill in the aerials, save, and the message saved as "" (Stuart,
+      //     2026-08-19: "i filled this out and hit save but it never saved"). True of every field
+      //     on that tab — name, place, locator, proxies — and it was simply never the natural
+      //     order to type one and then visit a radio before saving.
       stashRadio();
+      stashServer();
       curRadio = parseInt(b.getAttribute("data-i"), 10);
       renderTabs(); paintPanes();
       if (curRadio >= 0) { fill(); refreshHw(); }
@@ -1614,6 +1643,59 @@ function landingLinkCheck() {
   hint.style.color = ok ? "" : "#ffb833";
 }
 
+/** ★★★ THE SAME ELEVEN DRAWINGS THE CLIENT USES — see ANT_ICONS in web/client/src/main.ts.
+ *  ★★★ TWO COPIES, AND ONLY THE KEYS MUST MATCH. This page is a C++ raw string and cannot import
+ *      anything, so the drawings are duplicated deliberately. A key is what a config STORES and
+ *      what every other client looks up, so renaming or dropping one silently unsets an owner's
+ *      choice on a radio they set up months ago. Redraw freely; rename never. */
+const ANT_ICONS = {
+  vertical:    '<circle cx="12" cy="3.4" r="1.5" fill="currentColor" stroke="none"/>'
+             + '<path d="M12 5.2V21"/>',
+  groundplane: '<circle cx="12" cy="3" r="1.5" fill="currentColor" stroke="none"/>'
+             + '<path d="M12 4.8v8.7M12 13.5l-7 5M12 13.5l7 5"/>',
+  whip:        '<circle cx="12" cy="3.5" r="1.6" fill="currentColor" stroke="none"/>'
+             + '<path d="M12 5.1v4.3" stroke-width="1"/>'
+             + '<path d="M12 9.4v5.2" stroke-width="1.9"/>'
+             + '<path d="M12 14.6V21" stroke-width="2.9"/>',
+  discone:     '<circle cx="12" cy="2.8" r="1.5" fill="currentColor" stroke="none"/>'
+             + '<path d="M12 4.6v6.6M3.5 11.2h17M12 11.2L6.2 20.5M12 11.2L17.8 20.5"/>',
+  dipole:      '<path d="M3 8h8M13 8h8M12 9v11"/>',
+  longwire:    '<path d="M3 6v4M21 6v4M3 8c6 5 12 5 18 0M12 10.5V20"/>',
+  loop:        '<circle cx="12" cy="9" r="6"/><path d="M10.6 14.8L11.4 20M13.4 14.8L12.6 20"/>',
+  deltaloop:   '<path d="M12 3.4L4.4 15.6M12 3.4L19.6 15.6M4.4 15.6h6.3M13.3 15.6h6.3'
+             + 'M11 16.4V21M13 16.4V21"/>',
+  qfh:         '<path d="M12 3.5C6.5 6 6.5 9.5 12 12C17.5 14.5 17.5 18 12 20.5"/>'
+             + '<path d="M12 3.5C17.5 6 17.5 9.5 12 12C6.5 14.5 6.5 18 12 20.5"/>',
+  yagi:        '<path d="M4 12h16M6 5v14M10 7.5v9M14 9v6M18 10.5v3"/>',
+  dish:        '<path d="M6 4a9 9 0 0 1 0 15M6 11.5h6M12 11.5V20"/>',
+};
+const ANT_NAMES = {
+  vertical:"Vertical", groundplane:"Ground plane", whip:"Whip", discone:"Discone",
+  dipole:"Dipole", longwire:"Long wire", loop:"Loop", deltaloop:"Delta loop",
+  qfh:"QFH", yagi:"Yagi", dish:"Dish",
+};
+let antIconSel = "";
+
+/** ★★ NONE IS A REAL CHOICE, AND IT IS THE DEFAULT. A radio whose owner has not picked shows no
+ *  icon rather than one we guessed — putting a vertical beside a description that says "loop" is
+ *  worse than plain text, and it keeps every existing server looking exactly as it does now. */
+function renderAntIcons() {
+  const host = $("antIconPick");
+  if (!host) return;
+  const cell = (key, inner, title) =>
+    `<button type="button" data-ant="${key}" title="${esc(title)}" aria-label="${esc(title)}"
+       aria-pressed="${antIconSel === key}">${inner}</button>`;
+  host.innerHTML =
+      cell("", '<span class="none">NONE</span>', "No icon")
+    + Object.keys(ANT_ICONS).map(k => cell(k,
+        `<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor"
+           stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${ANT_ICONS[k]}</svg>`,
+        ANT_NAMES[k] || k)).join("");
+  Array.from(host.querySelectorAll("button")).forEach(b => {
+    b.onclick = () => { antIconSel = b.getAttribute("data-ant") || ""; renderAntIcons(); };
+  });
+}
+
 function fillAntennaSuggestions() {
   const dl = $("antennaList");
   const note = $("antennaShared");
@@ -1663,6 +1745,8 @@ function fill() {
   //    machine is how every receiver would show the first one's frequency.
   const r = radio();
   $("antenna").value = r.antenna || "";
+  antIconSel = r.antennaIcon || "";
+  renderAntIcons();
   fillAntennaSuggestions();
   // ★ Default ON for a shared receiver. The 1024-bin window only stays sharp BECAUSE of the zoom
   //   resampling — without it, deep zoom interpolates and looks blocky, which is what a listener
@@ -1749,6 +1833,7 @@ function collectRadio() {
     // ★ lockFreq and users stay gated: those genuinely only exist for a locked radio.
     landingFreq: Math.round(parseFloat($("landingFreq").value || "0") * 1e3),
     antenna: ($("antenna").value || "").trim(),
+    antennaIcon: antIconSel,
     demodMode: $("demodMode").value,
     users: locked ? parseInt($("users").value || "1", 10) : 1,
 
@@ -1777,6 +1862,35 @@ function collectRadio() {
     //   hidden in that case, and a hidden control must not still be sending a value.
     spectrogram: !$("hwSpectro").classList.contains("hide") && $("spectrogram").checked
   };
+}
+
+/** ★★★ THE MACHINE'S FORM, KEPT THE WAY stashRadio() KEEPS A RADIO'S. Without this, fill() —
+ *  which runs on every tab switch and re-reads every machine field from cfg — silently reverted
+ *  anything typed on the SERVER tab to its last saved value.
+ *  ★★ NOT collect(): that calls stashRadio() and carries cfg.radios with it, and assigning the
+ *     radios array back over itself here is exactly the shape that has already deleted a
+ *     machine's radios once (see the merge-by-serial note in vibeserver_config.cpp). Only the
+ *     machine's own scalars, listed explicitly.
+ *  ★ Reads the DOM directly rather than sharing collect()'s object so that adding a field to the
+ *    server tab and forgetting this is a missing VALUE, not a deleted radio list. */
+function stashServer() {
+  if (!cfg) return;
+  cfg.name = $("name").value.trim();
+  cfg.place = $("place").value.trim();
+  cfg.country = $("country").value.trim().toUpperCase();
+  cfg.locator = $("locator").value.trim();
+  cfg.lat = $("lat").value.trim();
+  cfg.lon = $("lon").value.trim();
+  cfg.mdnsAdvertise = $("mdns").checked;
+  cfg.cpuGovernor = $("cpuGovernor").value;
+  cfg.uncompressed = parseInt($("uncompressed").value, 10);
+  cfg.forceIdleSaver = $("forceIdle").checked;
+  cfg.trustedProxies = $("trustedProxies").value.trim();
+  cfg.landingMessage = $("landingMessage").value.trim();
+  cfg.landingLinkUrl = $("landingLinkUrl").value.trim();
+  cfg.landingLinkLabel = $("landingLinkLabel").value.trim();
+  cfg.port = parseInt($("srvPort").value, 10) > 0 ? parseInt($("srvPort").value, 10) : 0;
+  cfg.maxFps = parseFloat($("maxFps").value) || 0;
 }
 
 /** The machine: stated once, the same on every tab. */
@@ -1914,6 +2028,10 @@ $("saveRadioBtn").onclick = async () => {
   //   after opening a tab, which is precisely the window where the form is still the last radio's.
   await hwPending;
   stashRadio();
+  // ★ Saving ONE radio still posts the whole machine (collect() below), so the server tab's
+  //   unsaved edits must be in cfg by now or this button would wipe them — the same fault as the
+  //   tab switch, reached by a different route.
+  stashServer();
   list[curRadio].configured = true;   // ★ THIS is what puts the radio on air after a restart
   $("saveRadioBtn").disabled = true;
   $("barMsg").textContent = "Saving " + (list[curRadio].label || "radio") + "…";

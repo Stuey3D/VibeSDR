@@ -358,7 +358,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     auto B = [&](const char* k, bool& dst)        { if (getBool(j, k, b)) dst = b; };
 
     S("serial", r.serial); S("driver", r.driver); S("usbPath", r.usbPath); S("label", r.label);
-    S("antenna", r.antenna);
+    S("antenna", r.antenna); S("antennaIcon", r.antennaIcon);
     B("enabled", r.enabled); B("configured", r.configured);
     I("port", r.port);
     // ★ SAME VOCABULARY AS THE TOP-LEVEL FIELD — "locked"/"single", not a second spelling.
@@ -390,7 +390,7 @@ std::string radioToJson(const RadioConfig& r) {
     S("serial", r.serial); S("driver", r.driver); S("usbPath", r.usbPath); S("label", r.label);
     // ★ The aerial. Written HERE as well as read above — the setup page reads this writer, and
     //   the note further down records what a field in only one of them costs.
-    S("antenna", r.antenna);
+    S("antenna", r.antenna); S("antennaIcon", r.antennaIcon);
     B("enabled", r.enabled); B("configured", r.configured);
     N("port", r.port);
     S("mode", r.mode == Mode::LockedRange ? "locked" : "single");

@@ -176,6 +176,8 @@ public:
     /** The aerial bolted to THIS radio, and the machine's standing landing-screen message.
      *  ★ The URL is scheme-checked here and stored empty if it fails, so nothing downstream has to
      *    wonder whether it was. See vsconfig::safeLinkUrl. */
+    /** Which aerial picture this radio shows — a key, see RadioConfig::antennaIcon. */
+    void setAntennaIcon(const std::string& key);
     void setLandingInfo(const std::string& antenna, const std::string& message,
                         const std::string& linkUrl, const std::string& linkLabel);
     void setOccupancyRegistry(const std::string& dir, const std::string& serial,

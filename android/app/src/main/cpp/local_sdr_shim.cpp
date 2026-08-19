@@ -1011,7 +1011,7 @@ static std::atomic<bool>   g_vsOneRadioPerIp{true};
 // ★ NOT g_vsLandingMtx — that name is already taken, by the landing FREQUENCY/mode state further
 //   down. Two different meanings of "landing" in one file; this one is the site blurb.
 static std::mutex          g_vsSiteMtx;
-static std::string         g_vsAntenna, g_vsLandingMsg, g_vsLandingUrl, g_vsLandingLabel;
+static std::string         g_vsAntenna, g_vsAntennaIcon, g_vsLandingMsg, g_vsLandingUrl, g_vsLandingLabel;
 
 /** ★★★ AN OWNER-SUPPLIED LINK, MADE SAFE TO PUT IN AN href — http and https ONLY.
  *
@@ -4860,6 +4860,7 @@ struct LocalSdrShim::Impl {
         std::lock_guard<std::mutex> lk(g_vsSiteMtx);
         std::string j;
         if (!g_vsAntenna.empty())    j += ",\"antenna\":\""        + jsonEscape(g_vsAntenna)    + "\"";
+        if (!g_vsAntennaIcon.empty()) j += ",\"antennaIcon\":\"" + jsonEscape(g_vsAntennaIcon) + "\"";
         if (!g_vsLandingMsg.empty()) j += ",\"landingMessage\":\"" + jsonEscape(g_vsLandingMsg) + "\"";
         // ★ The URL was checked before it was stored (setLandingInfo) — stored empty if it did
         //   not pass — so an unsafe value never became this string in the first place.
@@ -10718,6 +10719,11 @@ std::string LocalSdrShim::noticeText() { return g_vsNotice.current(); }
 bool LocalSdrShim::setNotice(const std::string& text, int minutes, std::string& err) {
     return g_vsNotice.set(text, minutes, err);
 }
+void LocalSdrShim::setAntennaIcon(const std::string& key) {
+    std::lock_guard<std::mutex> lk(g_vsSiteMtx);
+    g_vsAntennaIcon = key;
+}
+
 void LocalSdrShim::setLandingInfo(const std::string& antenna, const std::string& message,
                                   const std::string& linkUrl, const std::string& linkLabel) {
     std::lock_guard<std::mutex> lk(g_vsSiteMtx);
