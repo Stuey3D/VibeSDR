@@ -7812,12 +7812,33 @@ struct LocalSdrShim::Impl {
                 LOGI("admin override — [%s] evicting the current occupant [%s]",
                          me.c_str(), occupantSession.c_str());
                     static const char* kEvict = "{\"type\":\"evicted\"}";
-                    // ★ closeAfterFlush, not close: the whole point of this frame is that the
-                    //   displaced listener learns WHY, and an aborting close threw it away.
+                    // ★★★ outboxClose, NOT closeAfterFlush — AND THIS IS THE SECOND TIME THIS LINE
+                    //     HAS BEEN FIXED FOR THE SAME SYMPTOM. It once said close(), which aborted
+                    //     and threw the frame away; closeAfterFlush() cured the abort but not the
+                    //     loss, because these sockets have OUTBOXES. sendWs() only queues, and
+                    //     closeAfterFlush() clears open_ and shuts the fd, so the writer thread's
+                    //     `if (!ob->sock->isOpen()) return;` drops the frame it was about to send.
+                    //     Measured 2026-08-19: the displaced client got a bare 1006 and no notice.
+                    // ★★★ WHAT IT COSTS is the whole takeover design. "every client auto-reconnects
+                    //     on close, so two of them displaced each other forever. The difference
+                    //     here is the DISPLACED client is told WHY ('evicted'), which the clients
+                    //     treat as terminal and do not retry." A notice that never arrives makes
+                    //     eviction indistinguishable from a dropped socket, so the displaced client
+                    //     retries — which is exactly the reconnect war vs_takeover was added to
+                    //     stop (Stuart, 2026-08-16: "when I switch back to it it fights to take the
+                    //     radio back"). That flag treated the symptom; this is the cause.
+                    // ★★ A TIGHTER DRAIN THAN THE DEFAULT, because clientMtx IS HELD HERE. The
+                    //    frame is 19 bytes and the writer is woken immediately, so this returns in
+                    //    microseconds in every normal case; the bound only bites when the peer has
+                    //    stopped reading, and stalling every listener behind one dead socket is a
+                    //    worse fault than a notice that occasionally does not land.
+                    // ★ Safe to join under clientMtx: outboxWriter touches only its own Outbox
+                    //   mutex and the socket, never clientMtx. See the deadlock notes on
+                    //   adminSessionsJson for why that has to be checked rather than assumed.
                     if (specClient  && specClient->isOpen())
-                        { sendWs(specClient,  0x1, (const uint8_t*)kEvict, strlen(kEvict)); specClient->closeAfterFlush(); }
+                        { sendWs(specClient,  0x1, (const uint8_t*)kEvict, strlen(kEvict)); outboxClose(specClient,  100); }
                     if (audioClient && audioClient->isOpen())
-                        { sendWs(audioClient, 0x1, (const uint8_t*)kEvict, strlen(kEvict)); audioClient->closeAfterFlush(); }
+                        { sendWs(audioClient, 0x1, (const uint8_t*)kEvict, strlen(kEvict)); outboxClose(audioClient, 100); }
                     occupantSession.clear();
                     // ★ NOT put on cooldown. They were evicted by the owner, not caught
                     // overstaying — punishing them for someone else's decision would be wrong.
@@ -7833,7 +7854,20 @@ struct LocalSdrShim::Impl {
                 const std::string msg = std::string("{\"type\":\"elsewhere\",\"radio\":\"")
                                       + jsonEscape(elsewhereOn) + "\"}";
                 sendText(sock, msg.c_str());
-                sock->closeAfterFlush();
+                // ★★★ outboxClose, NOT sock->closeAfterFlush(). outboxOpen() ran at the top of this
+                //     function, so by here EVERY write goes through the outbox and a writer thread
+                //     owns the socket. closeAfterFlush() clears open_ and shuts the fd immediately
+                //     — the writer's `if (!ob->sock->isOpen()) return;` then bails and the frame we
+                //     just queued is thrown away. The client saw a bare 1006 with no message and
+                //     sat there until something else timed out, which is why a refusal the server
+                //     decides in microseconds "took ages to come up" (Stuart, 2026-08-18).
+                // ★★★ The rule was already written, twelve lines under outboxOpen: "EVERY exit
+                //     from this function must call outboxClose(sock), the refusals included: they
+                //     say their piece and hang up in the next line, so without the drain the
+                //     server stops explaining itself and just disconnects, which a user reads as a
+                //     crash." Every other refusal here obeys it — cooldown, busy, banned,
+                //     needs_codec. This one was added later and reached for the socket directly.
+                outboxClose(sock);   // drain, then close — see outboxClose()
                 return;
             }
             if (occupied && !override_) {
@@ -9860,7 +9894,15 @@ struct LocalSdrShim::Impl {
                             + std::to_string(kSessionCooldownSec) + "}";
         // ★ TELL THEM FIRST, THEN CLOSE. The message is what stops the client treating this as
         // a dropped link and retry-storming a server that is deliberately turning it away.
-        if (spec && spec->isOpen()) { sendWs(spec, 0x1, (const uint8_t*)m.data(), m.size()); spec->closeAfterFlush(); }
+        // ★★★ outboxClose, not closeAfterFlush — the third site with this fault, and the one that
+        //     fires most: every session that reaches the limit on the public server. sendWs() only
+        //     QUEUES, and closeAfterFlush() shuts the fd before the writer thread runs, so the
+        //     notice the comment above depends on was never actually delivered. The listener saw a
+        //     bare disconnect, retried exactly as that comment predicts, and met the cooldown —
+        //     arriving at "PLEASE WAIT" having never been told their turn was over.
+        // ★ clientMtx is NOT held here (it is taken in the scope below), so the default drain is
+        //   fine — unlike the eviction path, which tightens it for that reason.
+        if (spec && spec->isOpen()) { sendWs(spec, 0x1, (const uint8_t*)m.data(), m.size()); outboxClose(spec); }
         if (aud  && aud->isOpen())  { aud->close(); }
         LocalSdrShim::noteConnectionClosed(addr, "", "timeout");
         { std::lock_guard<std::mutex> lk(clientMtx);
