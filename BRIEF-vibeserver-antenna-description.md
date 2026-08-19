@@ -75,3 +75,79 @@ that exists and is invisible on two of the three clients:
 - Should a range hint travel with it ("good to 300 MHz")? Structured beats prose for the one
   thing a client could ACT on — greying the band edges the aerial cannot reach — but it is a
   second field to get wrong, and Stuart asked for a description, not a spec. Prose first.
+
+---
+
+# Part 2 — a PERMANENT owner message on the landing screen
+
+Stuart, 2026-08-19:
+
+> alongside the antenna description box I think a admin message for the landing screen would be
+> useful too. Right now by default the server goes to idle 5fps mode, so for the demo server I
+> would put a note on the landing screen advising users that this is normal behaviour and can be
+> disbled in the menu.
+>
+> the landing screen one was more for **permanent messages from the server admin, such as a
+> donation link to keep the server running, or rules etc.**
+
+## ★★★ This is NOT the existing notice, and must not reuse it
+
+The server already has `notice` — and it is the wrong vehicle on all three counts:
+
+| | existing `notice` | what this needs |
+|---|---|---|
+| lifetime | `setNotice(text, **minutes**, err)` — expires | permanent, no expiry |
+| where | drawn over the RECEIVER, after you connect | the LANDING screen, before you commit |
+| behaviour | dismissible, and stays dismissed | part of the page |
+
+The notice answers "something is happening right now" (the Pi is currently carrying *"Currently
+experimenting and developing the server software"*). This answers "what you should know about this
+receiver, always". Folding one into the other would mean a donation link that expires, or a
+maintenance warning nobody can dismiss.
+
+## What it is for — the owner's standing statement
+
+Three uses, all named by Stuart:
+
+- **Setting expectations about our own behaviour.** The demo drops to 5 fps when idle. That is
+  deliberate and reversible in the menu, but to a first-time visitor it looks like a struggling
+  server — the *same failure as the antenna*: they blame the receiver for something that is
+  working as designed. ★★ Worth noting we keep re-learning this: a thing that is correct but
+  unexplained gets read as a fault.
+- **Asking for support.** A donation link, because somebody is paying for this.
+- **House rules.** Whatever the owner needs to say to strangers.
+
+## Shape
+
+Server-level free text, shown on the landing screen beside the radio list — one statement per
+machine, not per radio (the antenna field in Part 1 is the per-radio one).
+
+★★★ **THE LINK IS THE HARD PART.** A donation link is the stated use, so this field WILL contain
+    URLs — and it is owner-authored text rendered on a page served to strangers. Raw HTML is out:
+    that is stored XSS on every VibeServer in the world, and we ship this to other people's
+    machines. Options, in order of preference:
+
+  1. **A separate `linkUrl` + `linkLabel`** beside the text. Nothing to parse, nothing to escape
+     beyond attribute quoting, and the client controls exactly how the anchor is rendered.
+     Scheme-restricted to `https:` and `http:` at BOTH ends — a `javascript:` URL in an href is
+     the whole vulnerability, and validating only in the setup page means the next client to
+     render it is the one that ships it.
+  2. Autolink bare URLs in escaped text. More forgiving to type, one more thing to get wrong.
+
+  ★ `rel="noopener noreferrer"` and `target="_blank"` on whatever we render.
+
+★ Length cap and the same personal-data warning as the antenna field: this is published, and the
+  helper text should say so.
+
+## Where it has to appear — same grep list as Part 1
+
+The landing screen exists in four places and they will drift unless all four learn it at once:
+the web client's splash and picker cards, the setup page (where it is typed), `/vibeserver.json`,
+and the apps' pickers. ★ ABSENT MEANS NOTHING SHOWN — a server that never sets it must look
+exactly as it does today.
+
+## Open question
+
+Does it belong on the front door's PICKER (once, for the machine) or on each radio's splash, or
+both? A donation appeal belongs to the machine; "this one drops to 5 fps" arguably belongs to the
+radio. Starting server-level is the smaller move and covers both of Stuart's examples.
