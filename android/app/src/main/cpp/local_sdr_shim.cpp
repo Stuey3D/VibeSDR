@@ -9859,11 +9859,14 @@ struct LocalSdrShim::Impl {
         if (limitMin <= 0) return;                       // unlimited: the default
 
         std::shared_ptr<net::Socket> spec, aud;
-        std::string addr; double since; int warned;
+        std::string addr, sess; double since; int warned;
         { std::lock_guard<std::mutex> lk(clientMtx);
           if (occupantSession.empty() || occupantSince <= 0) return;
           spec = specClient; aud = audioClient;
-          addr = occupantAddr; since = occupantSince; warned = occupantWarned; }
+          addr = occupantAddr; since = occupantSince; warned = occupantWarned;
+          // ★ Which session this pass is about, so the termination below can prove that nothing
+          //   changed underneath it. Needed now that TWO threads call this — see the tick note.
+          sess = occupantSession; }
         if (addr.empty() || isLoopback(addr)) return;    // the host's own listening
         // ★★★ THE EXEMPTION IS THE OCCUPANT'S OWN, and this read the radio-wide flag while
         //     occupantSecsLeft() had just been made per-listener — so the countdown would say "no
@@ -9889,6 +9892,18 @@ struct LocalSdrShim::Impl {
             return;
         }
 
+        // ★★★ CLAIM THE TERMINATION BEFORE PERFORMING IT. Two threads run this now (the spectrum
+        //     callback and the hotplug tick), and both can pass the `left <= 0` test on the same
+        //     session — which would log it twice, cool the address down twice and close sockets
+        //     somebody else was already closing. Whoever clears occupantSession first wins; the
+        //     loser sees it changed and returns. Doing the state change FIRST is also what makes
+        //     the sockets below safe to touch: they are local shared_ptrs by then, and no longer
+        //     anybody's idea of the current occupant.
+        { std::lock_guard<std::mutex> lk(clientMtx);
+          if (occupantSession != sess || occupantSince != since) return;   // already handled
+          cooldownUntil[addr] = Impl::nowSecs() + kSessionCooldownSec;
+          occupantSession.clear(); occupantSince = 0; occupantWarned = 0; occupantAddr.clear(); }
+
         LOGI("session limit reached (%d min) — ending %s", limitMin, addr.c_str());
         const std::string m = "{\"type\":\"session_expired\",\"cooldown\":"
                             + std::to_string(kSessionCooldownSec) + "}";
@@ -9903,11 +9918,20 @@ struct LocalSdrShim::Impl {
         // ★ clientMtx is NOT held here (it is taken in the scope below), so the default drain is
         //   fine — unlike the eviction path, which tightens it for that reason.
         if (spec && spec->isOpen()) { sendWs(spec, 0x1, (const uint8_t*)m.data(), m.size()); outboxClose(spec); }
+        // ★★ TELL A BACKGROUNDED LISTENER TOO. When the spectrum socket is gone the line above
+        //    sends nothing, and that listener is precisely the one who cannot see the radio to
+        //    work out what happened. The audio socket already carries text frames both ways (it
+        //    handles `needs_codec`), and a client that does not know this type ignores it.
+        if (aud && aud->isOpen() && !(spec && spec->isOpen())) {
+            sendWs(aud, 0x1, (const uint8_t*)m.data(), m.size());
+            // ★★★ AND DRAIN IT — close() here would abort the frame queued one line above, which
+            //     is the SAME fault as the three refusals fixed earlier today. Writing the send
+            //     and the close as adjacent lines is what makes it so easy to miss: the send
+            //     looks synchronous and is not.
+            outboxClose(aud);
+        }
         if (aud  && aud->isOpen())  { aud->close(); }
         LocalSdrShim::noteConnectionClosed(addr, "", "timeout");
-        { std::lock_guard<std::mutex> lk(clientMtx);
-          cooldownUntil[addr] = Impl::nowSecs() + kSessionCooldownSec;
-          occupantSession.clear(); occupantSince = 0; occupantWarned = 0; occupantAddr.clear(); }
     }
 
     /** Tell every connected client whether we currently have a radio. They draw the message. */
@@ -10252,11 +10276,66 @@ struct LocalSdrShim::Impl {
     void startDspThread() {
         dspRunning.store(true);
         dspThread = std::thread([this]{ dspLoop(); });
+        startHousekeeping();
     }
+
+    std::thread      houseThread;
+    std::atomic<bool> houseRun{false};
+
+    /** ★★★ THE THINGS THAT MUST HAPPEN WHETHER OR NOT ANYBODY IS WATCHING A WATERFALL.
+     *
+     *  enforceSessionLimit() was ticked ONLY from onSpectrum(), the per-frame spectrum callback,
+     *  so a listener with no spectrum socket was never checked at all. Backgrounding the app
+     *  closes exactly that socket and keeps the audio playing — so putting a phone in a pocket
+     *  defeated the time limit outright: the countdown ran to zero and the radio sat "in use, 0
+     *  left" for ever, holding the slot against everybody else (Stuart, 2026-08-19, "the RTL
+     *  still shows in use but with 0 time left"). Reproduced: 110 s of a 1-minute limit, still
+     *  connected.
+     *
+     *  ★★★ SAME FAMILY AS THE LISTENER COUNT AND THE ADMIN TABLE, both fixed the same day. The
+     *      spectrum socket is the CHEAPEST one to lose and the first one clients drop, so nothing
+     *      that decides something ABOUT A LISTENER may be reached only through it.
+     *
+     *  ★★★ ITS OWN THREAD, AND STARTED FROM startDspThread(), because that is the one call EVERY
+     *      start path makes — RTL, Airspy HF+, SDRplay, rtl_tcp and the front door. The obvious
+     *      home was the hotplug watchdog, which already ticks every 2 s; it is started from three
+     *      of those paths and not the fourth, and this file has already paid for that shape once
+     *      ("startHotplugWatch() was only ever called from the RTL start, so nothing ever READ
+     *      it" — the silent RSP stall). A rule enforced on some sources and not others is the bug
+     *      being fixed here, one level up.
+     *
+     *  ★★ NOT on the DSP thread, which runs at audio priority: enforceSessionLimit() can take
+     *     clientMtx, close sockets and JOIN an outbox writer, and none of that belongs anywhere
+     *     near the demod chain.
+     *
+     *  ★ 2 s, against limits measured in minutes. Both calls return immediately when there is
+     *    nothing to do, and the session warnings are latched by a bitmask, so the spectrum path
+     *    ticking the same functions ~11 times a second changes nothing.
+     */
+    void startHousekeeping() {
+        if (houseRun.exchange(true)) return;
+        houseThread = std::thread([this]{
+            vibeThreadName("vibe-house");
+            while (houseRun.load()) {
+                for (int i = 0; i < 20 && houseRun.load(); i++)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                if (!houseRun.load()) break;
+                if (stopping.load() || restarting.load()) continue;
+                enforceSessionLimit();
+                enforceAdminIdle();
+            }
+        });
+    }
+    void stopHousekeeping() {
+        houseRun.store(false);
+        joinOnce(houseThread, "house");
+    }
+
     void stopDspThread() {
         dspRunning.store(false);
         iqCv.notify_all();
         iqSpaceCv.notify_all();      // release a TCP reader parked on backpressure
+        stopHousekeeping();
         joinOnce(dspThread, "dsp");
         std::lock_guard<std::mutex> lk(iqMtx);
         iqQueue.clear();
