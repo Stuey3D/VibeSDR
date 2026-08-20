@@ -305,6 +305,15 @@ export interface ServerOccupancy {
    *  connect so someone arriving AFTER it was posted still sees it — the live push only reaches
    *  sockets that were already open. */
   notice?: string;
+  /** ★★ WHAT IS PLUGGED INTO IT, and the owner's standing message. Carried here as well as in the
+   *  door's radio list because a SINGLE-radio server has no door — and those two fields are
+   *  exactly what decides whether it deserves a landing screen at all (Stuart, 2026-08-20: "if no
+   *  antenna details or landing screen text then it connects straight through"). */
+  antenna?: string;
+  antennaIcon?: string;
+  landingMessage?: string;
+  landingLinkUrl?: string;
+  landingLinkLabel?: string;
 }
 
 /** Ask a VibeServer whether it is free. Returns null for anything that is not a VibeServer or
@@ -330,6 +339,14 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
                     || j.uncompressed === 'off' ? j.uncompressed : undefined,
       version:   typeof j.version === 'string' && j.version ? j.version : undefined,
       notice:    typeof j.notice === 'string' && j.notice ? j.notice : undefined,
+      antenna:   typeof j.antenna === 'string' && j.antenna ? j.antenna : undefined,
+      antennaIcon: typeof j.antennaIcon === 'string' ? j.antennaIcon : undefined,
+      landingMessage: typeof j.landingMessage === 'string' && j.landingMessage
+                      ? j.landingMessage : undefined,
+      landingLinkUrl: typeof j.landingLinkUrl === 'string' && j.landingLinkUrl
+                      ? j.landingLinkUrl : undefined,
+      landingLinkLabel: typeof j.landingLinkLabel === 'string' && j.landingLinkLabel
+                        ? j.landingLinkLabel : undefined,
     };
   } catch { return null; }
   finally { clearTimeout(t); }

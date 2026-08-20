@@ -400,13 +400,44 @@ export default function SDRScreen({ route, navigation }: Props) {
     (async () => {
       const d = await fetchFrontDoor(baseUrl);
       if (cancelled) return;
-      // ★ null is the overwhelmingly common answer — an ordinary VibeServer, a Kiwi, an OWRX, a
-      //   Simple-mode phone. Connect exactly as before.
-      if (!d) { setDoorPending(false); return; }
+      if (!d) {
+        // ★★★ NO DOOR, BUT PERHAPS SOMETHING TO SAY. An ordinary single-radio VibeServer has no
+        //     radio list — and it may still have an AERIAL and the owner's standing message, which
+        //     the browser shows on its splash and the app had nowhere to put. Stuart's rule, and
+        //     it is the right one because it is about CONTENT rather than about counting radios:
+        //     "if no antenna details or landing screen text then it connects straight through, if
+        //     antenna or landing screen text is present then show the landing screen."
+        //  ★★ A synthetic door of ONE radio with an empty id — radioBaseUrl('') returns the base
+        //     unchanged, so choosing it connects exactly where a straight-through connect would.
+        //     Nothing downstream needs to know this door was invented.
+        //  ★ Silent on failure: a Kiwi, an OWRX, a Simple-mode phone and an older VibeServer all
+        //    answer nothing useful here and connect as they always have.
+        const occ = await fetchOccupancy(baseUrl).catch(() => null);
+        if (cancelled) return;
+        if (occ && (occ.antenna || occ.landingMessage)) {
+          setDoor({
+            name: instanceName || 'VibeServer',
+            radios: [{
+              id: '', label: instanceName || 'Receiver', driver: '', users: 1,
+              locked: false, restricted: false,
+              antenna: occ.antenna, antennaIcon: occ.antennaIcon,
+            }],
+            landingMessage: occ.landingMessage,
+            landingLinkUrl: occ.landingLinkUrl,
+            landingLinkLabel: occ.landingLinkLabel,
+          });
+        }
+        setDoorPending(false);
+        return;
+      }
       setDoor(d);
-      // ★★ A LIST OF ONE IS NOISE, not a choice. A single-radio V3 still needs the prefix, so it
-      //    is resolved silently rather than shown — the user sees no difference from today.
-      if (d.radios.length === 1) { setRadioBase(radioBaseUrl(baseUrl, d.radios[0].id)); }
+      // ★★ A LIST OF ONE IS NOISE, not a choice — UNLESS the owner has written something to read.
+      //    A single-radio V3 still needs the prefix, so it is resolved silently in the usual case
+      //    and the user sees no difference from today.
+      const worthReading = !!d.landingMessage || d.radios.some((r) => !!r.antenna);
+      if (d.radios.length === 1 && !worthReading) {
+        setRadioBase(radioBaseUrl(baseUrl, d.radios[0].id));
+      }
       setDoorPending(false);
     })();
     return () => { cancelled = true; };
@@ -571,8 +602,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => { dead = true; clearInterval(t); };
   }, [door, baseUrl]);
 
-  /** Waiting for the owner to pick — the connect must not start. */
-  const awaitingRadio = !!door && door.radios.length > 1 && !radioBase;
+  /** Waiting for the owner to pick — the connect must not start.
+   *  ★ A door of ONE still waits when it has something to say: the aerial and the owner's message
+   *    are the reason the screen exists in that case, and connecting past them would show them to
+   *    nobody. See the resolver above. */
+  const awaitingRadio = !!door && !radioBase
+    && (door.radios.length > 1 || !!door.landingMessage || door.radios.some((r) => !!r.antenna));
   /** The radio we are actually on, when there is a choice — the door already described it. */
   const chosenRadio = useMemo(() => {
     if (!door || !radioBase) return null;
@@ -6310,8 +6345,26 @@ export default function SDRScreen({ route, navigation }: Props) {
               rule), which is why it is called out here before anyone lays it out again.
           ★★ Every radio is described WITHOUT opening it: what it is, where it is pointed, and
              whether arriving means sharing. Choosing well is the whole point of the screen. */}
+      {/* ★ The top padding follows the SAFE AREA plus the back button's height, rather than the
+          fixed 64 in the style: on a notched phone the inset alone is nearly that, and the title
+          would have been drawn underneath the button. */}
       {awaitingRadio && door && (
-        <View style={styles.radioPickBackdrop}>
+        <View style={[styles.radioPickBackdrop, { paddingTop: insets.top + 46 }]}>
+          {/* ★★★ THE WAY OUT. This screen covers the whole app and nothing on it went back, so a
+              listener who opened the wrong server was stuck with the system gesture (or nothing at
+              all on Android's gesture nav) — on the one screen where changing your mind is the
+              expected thing to do, because it exists to help you CHOOSE (Stuart, 2026-08-20).
+              ★ goBack(), the same call the "server stopped responding" card uses, so there is one
+                route back to the list rather than two that can drift. */}
+          <TouchableOpacity
+            onPress={() => navigation.goBack()}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            accessibilityRole="button"
+            accessibilityLabel="Back to the server list"
+            style={[styles.radioPickBack, { top: insets.top + 10, left: Math.max(14, insets.left + 10) }]}
+          >
+            <Text style={styles.radioPickBackTxt}>‹ SERVERS</Text>
+          </TouchableOpacity>
           <Text style={styles.radioPickTitle}>{door.name}</Text>
           <Text style={styles.radioPickSub}>Choose a receiver</Text>
           {/* ★★★ THE OWNER'S STANDING MESSAGE. Donation link, house rules, "5 fps idle is
@@ -7785,6 +7838,10 @@ const styles = StyleSheet.create({
     position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, zIndex: 50,
     backgroundColor: 'rgba(0,0,0,0.94)', paddingHorizontal: 20, paddingTop: 64,
   },
+  // ★ Absolutely positioned so the title stays optically centred on the screen rather than being
+  //   pushed off-centre by a button that only exists on one side.
+  radioPickBack:    { position: 'absolute', zIndex: 2, paddingVertical: 6, paddingHorizontal: 4 },
+  radioPickBackTxt: { color: '#ffb833', fontSize: 13, letterSpacing: 1.2, fontWeight: '600' },
   radioPickTitle: { color: '#ffe566', fontSize: 18, fontWeight: '600', textAlign: 'center' },
   radioPickSub:   { color: '#9a9a9a', fontSize: 13, textAlign: 'center', marginTop: 4, marginBottom: 16 },
   // ★ flex: 1 is what makes the ScrollView bounded and therefore scrollable at all — an
