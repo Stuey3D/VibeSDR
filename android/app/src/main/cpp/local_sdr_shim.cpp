@@ -2032,6 +2032,24 @@ struct LocalSdrShim::Impl {
      *  it to the others when its up"). A decoder is expensive — one per listener would be the
      *  wrong answer on a receiver whose whole point is that N listeners cost what one does. */
     std::vector<std::shared_ptr<net::Socket>> dxExtra;
+    /** ★★★ WHAT THE DECODE HAS DRAWN SO FAR, so a listener who joins halfway sees the whole image.
+     *
+     *  A WEFAX chart takes about ten minutes and an SSTV frame a couple, and a mirror that only
+     *  receives what arrives AFTER it attaches gets the bottom half of a picture on a blank canvas
+     *  — which reads as a broken decoder rather than a late arrival (Stuart asked the right
+     *  question: "if a user connects halfway through a wefax decode do they see what has already
+     *  been decoded?").
+     *  ★★ FORMAT-AGNOSTIC ON PURPOSE. This records the FRAMES, not the picture: a 0x02 start marker
+     *     clears the log, everything after it is kept, and a joiner is handed the lot. It therefore
+     *     works for WEFAX, SSTV and anything else added later without knowing what a row means.
+     *  ★ Bounded, and it stops recording rather than dropping the oldest: losing the TOP of an
+     *    image to make room for the bottom is worse than a short one, and a full-height WEFAX at
+     *    1200-odd rows fits inside this comfortably. */
+    std::mutex dxReplayMtx;
+    std::vector<std::vector<uint8_t>> dxReplay;
+    size_t dxReplayBytes = 0;
+    static constexpr size_t kDxReplayMax = 4u * 1024 * 1024;
+
     /** Send one decoder frame to every attached decoder socket. Call WITHOUT clientMtx held. */
     void dxBroadcast(int op, const uint8_t* data, size_t len) {
         std::vector<std::shared_ptr<net::Socket>> socks;
@@ -2039,6 +2057,23 @@ struct LocalSdrShim::Impl {
           if (dxClient && dxClient->isOpen()) socks.push_back(dxClient);
           for (auto& d : dxExtra) if (d && d->isOpen()) socks.push_back(d); }
         for (auto& sk : socks) sendWs(sk, op, data, len);
+        // ★ Only the binary decoder stream is replayable; a text line carries its own timestamp
+        //   and is history the client already keeps.
+        if (op != 0x2 || len == 0) return;
+        std::lock_guard<std::mutex> rl(dxReplayMtx);
+        if (len == 1 && data[0] == 0x02) { dxReplay.clear(); dxReplayBytes = 0; }   // a new image
+        if (dxReplayBytes + len > kDxReplayMax) return;
+        dxReplay.emplace_back(data, data + len);
+        dxReplayBytes += len;
+    }
+
+    /** Hand a newly attached mirror everything the running decode has produced. */
+    void dxSendReplay(const std::shared_ptr<net::Socket>& sock) {
+        std::vector<std::vector<uint8_t>> frames;
+        { std::lock_guard<std::mutex> rl(dxReplayMtx); frames = dxReplay; }
+        if (frames.empty() || !sock || !sock->isOpen()) return;
+        LOGI("decoder mirror joined — replaying %zu frames of the image so far", frames.size());
+        for (auto& f : frames) sendWs(sock, 0x2, f.data(), f.size());
     }
     /** ★★ WHOSE AUDIO THE DECODERS ARE LISTENING TO. Empty = the shared pipeline (a personal
      *  receiver, where there is only one). On a shared receiver the decoders must follow the
@@ -9461,6 +9496,7 @@ struct LocalSdrShim::Impl {
         // FT8 spots), so they need the same protection as the spectrum path — a browser tab that
         // stops draining its decoder stream must not stall the decoders for everyone else.
         outboxOpen(sock);
+        bool mirror = false;
         {
             std::lock_guard<std::mutex> lk(clientMtx);
             dxExtra.erase(std::remove_if(dxExtra.begin(), dxExtra.end(),
@@ -9474,13 +9510,16 @@ struct LocalSdrShim::Impl {
             //    decode off the signal the person who opened it chose.
             if (g_vsMaxUsers.load() > 1 && dxClient && dxClient->isOpen()) {
                 dxExtra.push_back(sock);
+                mirror = true;
             } else {
                 dxClient = sock;
                 decoderSession = session;
             }
         }
         decoderAttached.store(true, std::memory_order_relaxed);
-        LOGI("dxcluster (decoder) WS connected");
+        LOGI("dxcluster (decoder) WS connected%s", mirror ? " (mirror)" : "");
+        // ★ Catch the mirror up on the decode already in progress — see dxReplay.
+        if (mirror) dxSendReplay(sock);
         while (serverRunning.load() && sock->isOpen()) {
             std::string payload;
             int op = recvWs(sock, payload);
