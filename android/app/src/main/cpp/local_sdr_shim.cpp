@@ -2026,6 +2026,20 @@ struct LocalSdrShim::Impl {
     int  sstvDecim = 0; float sstvAcc = 0.0f;
     std::mutex dxSendMtx;
     std::shared_ptr<net::Socket> dxClient;
+    /** ★★★ THE OTHER LISTENERS' DECODER SOCKETS. On a shared dial the decoder is shared like the
+     *  audio and the RDS: whoever opens it drives it, and everybody else sees a MIRROR of the same
+     *  output (Stuart, 2026-08-20: "the decoder box needs to be shared too, just show a mirror of
+     *  it to the others when its up"). A decoder is expensive — one per listener would be the
+     *  wrong answer on a receiver whose whole point is that N listeners cost what one does. */
+    std::vector<std::shared_ptr<net::Socket>> dxExtra;
+    /** Send one decoder frame to every attached decoder socket. Call WITHOUT clientMtx held. */
+    void dxBroadcast(int op, const uint8_t* data, size_t len) {
+        std::vector<std::shared_ptr<net::Socket>> socks;
+        { std::lock_guard<std::mutex> lk(clientMtx);
+          if (dxClient && dxClient->isOpen()) socks.push_back(dxClient);
+          for (auto& d : dxExtra) if (d && d->isOpen()) socks.push_back(d); }
+        for (auto& sk : socks) sendWs(sk, op, data, len);
+    }
     /** ★★ WHOSE AUDIO THE DECODERS ARE LISTENING TO. Empty = the shared pipeline (a personal
      *  receiver, where there is only one). On a shared receiver the decoders must follow the
      *  listener who OPENED them — fed from the shared VFO they decode a signal nobody chose,
@@ -5026,7 +5040,7 @@ struct LocalSdrShim::Impl {
                 msg[9] = (uint8_t)(len >> 24); msg[10] = (uint8_t)(len >> 16);
                 msg[11] = (uint8_t)(len >> 8); msg[12] = (uint8_t)len;
                 std::memcpy(msg.data() + 13, text.data(), text.size());
-                sendWs(dx, 0x2, msg.data(), msg.size());
+                dxBroadcast(0x2, msg.data(), msg.size());
             }
         }
     }
@@ -5042,7 +5056,7 @@ struct LocalSdrShim::Impl {
     void sendDecoderState(int st) {
         std::shared_ptr<net::Socket> dx;
         { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
-        if (dx && dx->isOpen()) { uint8_t m[2] = { 0x03, (uint8_t)st }; sendWs(dx, 0x2, m, 2); }
+        if (dx && dx->isOpen()) { uint8_t m[2] = { 0x03, (uint8_t)st }; dxBroadcast(0x2, m, 2); }
     }
 
     // ── FT8/FT4 digital spots ──────────────────────────────────────────────
@@ -9246,17 +9260,17 @@ struct LocalSdrShim::Impl {
             m[1] = (uint8_t)(ln >> 24); m[2] = (uint8_t)(ln >> 16); m[3] = (uint8_t)(ln >> 8); m[4] = (uint8_t)ln;
             m[5] = (uint8_t)(w >> 24);  m[6] = (uint8_t)(w >> 16);  m[7] = (uint8_t)(w >> 8);  m[8] = (uint8_t)w;
             std::memcpy(m.data() + 9, px, w);
-            sendWs(dx, 0x2, m.data(), m.size());
+            dxBroadcast(0x2, m.data(), m.size());
         };
         wefax->onStart = [this]() {
             std::shared_ptr<net::Socket> dx;
             { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
-            if (dx && dx->isOpen()) { uint8_t b = 0x02; sendWs(dx, 0x2, &b, 1); }
+            if (dx && dx->isOpen()) { uint8_t b = 0x02; dxBroadcast(0x2, &b, 1); }
         };
         wefax->onStop = [this]() {
             std::shared_ptr<net::Socket> dx;
             { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
-            if (dx && dx->isOpen()) { uint8_t b = 0x03; sendWs(dx, 0x2, &b, 1); }
+            if (dx && dx->isOpen()) { uint8_t b = 0x03; dxBroadcast(0x2, &b, 1); }
         };
         LOGI("decoder attached: wefax lpm=%d width=%d carrier=%.0f", cfg.lpm, cfg.imageWidth, cfg.carrier);
     }
@@ -9266,7 +9280,7 @@ struct LocalSdrShim::Impl {
         { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
         if (!dx || !dx->isOpen()) return;
         std::lock_guard<std::mutex> sl(dxSendMtx);
-        sendWs(dx, 0x2, d, n);
+        dxBroadcast(0x2, d, n);
     }
     static void put32(std::vector<uint8_t>& v, uint32_t x) {
         v.push_back((uint8_t)(x>>24)); v.push_back((uint8_t)(x>>16));
@@ -9447,7 +9461,24 @@ struct LocalSdrShim::Impl {
         // FT8 spots), so they need the same protection as the spectrum path — a browser tab that
         // stops draining its decoder stream must not stall the decoders for everyone else.
         outboxOpen(sock);
-        { std::lock_guard<std::mutex> lk(clientMtx); dxClient = sock; decoderSession = session; }
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            dxExtra.erase(std::remove_if(dxExtra.begin(), dxExtra.end(),
+                [](const std::shared_ptr<net::Socket>& d){ return !d || !d->isOpen(); }), dxExtra.end());
+            // ★★★ A SECOND DECODER SOCKET ON A SHARED DIAL IS A MIRROR, NOT A TAKEOVER. Replacing
+            //     the pointer pointed the running decoder's output at the newcomer and left the
+            //     listener who STARTED it with a dead panel — the same shape as the audio socket
+            //     steal, one channel along.
+            //  ★ `decoderSession` is only reassigned when there is no decoder running: it says
+            //    whose AUDIO the decoders follow, and handing that to a mirror would move the
+            //    decode off the signal the person who opened it chose.
+            if (g_vsMaxUsers.load() > 1 && dxClient && dxClient->isOpen()) {
+                dxExtra.push_back(sock);
+            } else {
+                dxClient = sock;
+                decoderSession = session;
+            }
+        }
         decoderAttached.store(true, std::memory_order_relaxed);
         LOGI("dxcluster (decoder) WS connected");
         while (serverRunning.load() && sock->isOpen()) {
@@ -9491,8 +9522,20 @@ struct LocalSdrShim::Impl {
         // the bookkeeping that follows it.
         bool stillCurrent;
         { std::lock_guard<std::mutex> lk(clientMtx);
+          dxExtra.erase(std::remove_if(dxExtra.begin(), dxExtra.end(),
+              [&](const std::shared_ptr<net::Socket>& d){ return !d || d == sock || !d->isOpen(); }),
+              dxExtra.end());
           stillCurrent = (dxClient == sock);
-          if (stillCurrent) { dxClient = nullptr; decoderSession.clear(); } }
+          if (stillCurrent) {
+              dxClient = nullptr;
+              // ★ A mirror is still watching: hand it the primary pointer rather than tearing the
+              //   decoder down under it. Only when NOBODY is left does the decoder stop.
+              for (auto& d : dxExtra)
+                  if (d && d->isOpen()) { dxClient = d; d = nullptr; stillCurrent = false; break; }
+              dxExtra.erase(std::remove(dxExtra.begin(), dxExtra.end(),
+                                        std::shared_ptr<net::Socket>()), dxExtra.end());
+              if (stillCurrent) decoderSession.clear();
+          } }
         if (stillCurrent) { decoderAttached.store(false, std::memory_order_relaxed);
                             stopDecoder(); stopSpots(); }
         outboxClose(sock);
