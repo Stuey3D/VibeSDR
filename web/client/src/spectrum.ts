@@ -267,6 +267,9 @@ export interface SpectrumCallbacks {
   /** ★ The dial has JUMPED far enough that anything already buffered is a different signal.
    *  main.ts uses this to drop queued audio — see AudioPlayer.flush(). */
   onRetuneJump?: () => void;
+  /** ★★ SOMEBODY ELSE TURNED THE DIAL. Only ever fires on a shared receiver: the page redraws its
+   *  readout, its mode and its VFO marker from values it did not choose. */
+  onDialMoved?: (hz: number, mode: SDRMode) => void;
   /** ★ Admin controls were re-locked after an idle period. NOT a disconnection: the session,
    *  the audio and any decoder are all still running. `idleMin` is how long it waited. */
   /** Another session proved the owner's password more recently; this one is now an ordinary
@@ -306,6 +309,8 @@ export class SpectrumClient {
   private view = { centerHz: 0, binBandwidth: 0 };
   private pendingView: { frequency: number; binBandwidth: number } | null = null;
   private sendTimer: number | null = null;
+  /** When this client last tuned itself — see the dial-follow in the config handler. */
+  private lastLocalTuneAt = 0;
   private lastSendAt = 0;
   private pingTimer: number | null = null;
   private lastPingAt = 0;
@@ -445,6 +450,42 @@ export class SpectrumClient {
         if (!this._viewInFlight()) {
           this.view.centerHz     = cfg.centerFreq;
           this.view.binBandwidth = cfg.binBandwidth;
+        }
+        // ★★★ FOLLOW THE DIAL. On a shared receiver somebody ELSE moves the VFO, and this client
+        //     adopted the server's frequency only on the FIRST config — so the audio moved and the
+        //     readout, the VFO marker and the view all stayed where they were: "I can hear the
+        //     audio moving about but my spectrum and my tuning readout are not updating" (Stuart,
+        //     2026-08-20, listening to a dial I was turning).
+        //  ★★ NOT WHILE OUR OWN TUNE IS IN FLIGHT. The server echoes every tune back as a config,
+        //     so adopting blindly would fight a drag or a held step key with a value from before
+        //     it — the same reason the view above waits for sends to settle.
+        //  ★ Threshold and guard match the local path: below one bandwidth this is the same
+        //    station and moving the readout would just make it jitter.
+        {
+          const bw = Math.abs(this.bandwidthHigh - this.bandwidthLow) || 3000;
+          const settled = Date.now() - this.lastLocalTuneAt > 1500;
+          // ★★★ THE READOUT FOLLOWS EVERY MOVE; only the EXPENSIVE half waits for a real jump.
+          //     Gating the adopt on the demodulator's bandwidth meant 100 kHz steps on WFM (~200
+          //     kHz wide) never registered, so a mirror lagged and then settled on the wrong
+          //     frequency — found on the phone, fixed in both clients (2026-08-20).
+          const moved = cfg.serverVfo ? Math.abs(cfg.serverVfo - this.frequency) : 0;
+          if (settled && cfg.serverVfo && moved > 100) {
+            this.frequency = Math.round(cfg.serverVfo);
+            if (cfg.serverMode && cfg.serverMode !== this.mode) {
+              this.mode = cfg.serverMode as SDRMode;
+              const b = MODE_BANDWIDTHS[this.mode];
+              if (b) { this.bandwidthLow = b[0]; this.bandwidthHigh = b[1]; }
+            }
+            // ★ Bring the VIEW with it when this client is following the VFO, exactly as a local
+            //   tune does — otherwise the dial moves to a station that is off the side of the
+            //   spectrum somebody is watching.
+            if (this.followVfo && moved > bw) {
+              const n = this.cfg.binCount || 4096;
+              this.view.centerHz = this.frequency;
+              this.zoom(this.frequency, this.view.binBandwidth || (this.cfg.totalBandwidth / n));
+            }
+            this.cb.onDialMoved?.(this.frequency, this.mode);
+          }
         }
         this.cb.onConfig?.(cfg);
         break;
@@ -788,6 +829,7 @@ export class SpectrumClient {
     //    re-arm it, turning a smooth tune into stuttering silence. Below one bandwidth the
     //    buffered audio is still substantially the signal you are listening to, so it is kept.
     const prev = this.frequency;
+    this.lastLocalTuneAt = Date.now();   // ★ so a config echo is not mistaken for somebody else
     if (frequency) this.frequency = Math.round(frequency);
     {
       const bw = Math.abs(this.bandwidthHigh - this.bandwidthLow) || 3000;

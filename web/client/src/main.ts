@@ -925,6 +925,24 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     },
     onDialRefused: () => { chatRefused(); togglePanel('chatPanel'); },
     onSaid: (from, id) => chatSaid(from, id),
+    // ★★★ SOMEBODY ELSE MOVED THE DIAL — REDRAW WHAT THEY MOVED. The readout, the mode and the
+    //     VFO marker are all drawn from values this client chose, and on a shared receiver it
+    //     chose none of them. Without this the audio followed and the screen did not.
+    onDialMoved: (hz, mode) => {
+      renderFreq();
+      if (mode && mode !== undefined) setMode(mode, false);   // ★ false: adopting, not commanding
+      updateViewOverlays();
+      // ★ Say it on the strip, briefly. A frequency that changes on its own reads as a fault
+      //   unless something on screen accounts for it — the strip is where the room's state lives,
+      //   so it is where "moved to 96.600" belongs (the brief asks for exactly this).
+      const strip = document.getElementById('dialStrip');
+      if (strip && !strip.hidden) {
+        const mhz = (hz / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+        const was = strip.textContent || '';
+        strip.textContent = `moved to ${mhz} MHz`;
+        setTimeout(() => { if (strip.textContent === `moved to ${mhz} MHz`) strip.textContent = was; }, 2500);
+      }
+    },
     onSessionWarning: (secs) => setTimeLeft(secs),
     onDevice: (present) => showDeviceBanner(present),
     // ★ Pushed the instant the owner posts one — the people already watching the spectrum

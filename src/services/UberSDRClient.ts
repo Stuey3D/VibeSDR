@@ -2019,8 +2019,18 @@ export class UberSDRClient {
         const sv = Number(msg.vfo);
         const bw = Math.abs(Number(this.status.bandwidthHigh) - Number(this.status.bandwidthLow)) || 3000;
         const settled = Date.now() - this.lastLocalTuneAt > 1500;
-        if (!this.wantTune && settled && Number.isFinite(sv) && sv > 0
-            && Math.abs(sv - Number(this.status.frequency)) > bw) {
+        // ★★★ ADOPT EVERY MOVE, HOWEVER SMALL — the READOUT is not a jitter problem. This was
+        //     gated on the move exceeding the demodulator's bandwidth, which on WFM is ~200 kHz,
+        //     so 100 kHz steps never qualified: the phone followed only once several steps had
+        //     accumulated past the threshold, and settled wherever the arithmetic left it.
+        //     Stuart, watching both screens: "on the webclient i am on 96.6 but on the moto its
+        //     on 96.4" (2026-08-20).
+        //  ★★ The BANDWIDTH threshold still governs the expensive half — flushing audio and
+        //     recentring the view — because doing those on every 100 Hz nudge of somebody else's
+        //     drum would stutter for everyone watching. Two questions, two thresholds; they were
+        //     one, and the cheap one inherited the costly one's caution.
+        const moved = Math.abs(sv - Number(this.status.frequency));
+        if (!this.wantTune && settled && Number.isFinite(sv) && sv > 0 && moved > 100) {
           this.dbg(`another listener moved the dial to ${sv}`);
           this.status.frequency = sv;
           if (typeof msg.mode === 'string' && msg.mode) this.status.mode = msg.mode as SDRMode;
@@ -2032,7 +2042,7 @@ export class UberSDRClient {
           //  ★ Only when this client is following the VFO. Somebody who has deliberately panned
           //    away to watch another part of the band chose that view, and yanking it back on
           //    every move somebody else makes would be the opposite of helpful.
-          if (this.followVfo) {
+          if (this.followVfo && moved > bw) {
             const bb = this.view.binBandwidth || this.status.binBandwidth;
             if (bb) this.zoom(sv, bb); else this.pan(sv);
           }

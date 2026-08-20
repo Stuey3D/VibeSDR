@@ -10,7 +10,11 @@
 #include <cmath>
 #include <cstdint>
 
-#if defined(__aarch64__)
+// ★★ VIBE_FORCE_SCALAR builds the fallback path on a machine that HAS NEON — the only way to
+//    measure what the vector kernels are worth, and to prove the scalar path still computes the
+//    same answers. It is also the path an x86 build would take, so this is how that port is costed
+//    without owning an x86 box (2026-08-20).
+#if defined(__aarch64__) && !defined(VIBE_FORCE_SCALAR)
   #include <arm_neon.h>
   #define VIBE_NEON 1
 #endif
