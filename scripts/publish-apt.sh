@@ -102,6 +102,17 @@ REV=$((HIGH + 1))
 FULLVER="${UPSTREAM}-${REV}"
 echo "==> publishing vibeserver $FULLVER ($ARCH)"
 
+# ★★★ WHAT GETS COPIED INTO THE BUILD ROOT — and what emphatically does not.
+#     The Linux build reads `vibeserver/` and `android/app/src/main/cpp/`. It has never read
+#     node_modules, Pods, or the ios/tvos projects, and copying them cost ~GB per publish. On
+#     2026-08-20 that overflowed colima's 12 GB disk MID-RSYNC and the publish died with "No space
+#     left on device" naming a maccatalyst React framework — an error that sends you to look at the
+#     Mac, at Xcode, at anything except a copy step that had no business carrying the file at all.
+# ★★ EXCLUDED FROM THE COPY, NOT FROM THE TREE. Nothing on the developer's machine is removed; the
+#    standing rule against stripping node_modules/Pods is about the working tree and is unaffected.
+COPY_EXCLUDES="--exclude build --exclude .git --exclude node_modules --exclude Pods
+               --exclude tvos --exclude ios --exclude spike --exclude web/dist"
+
 # ── Build, INSIDE A DEBIAN BOOKWORM ROOT ─────────────────────────────────────
 # ★★★ NOT ON THE HOST. CPack derives Depends: from whatever the build machine links against, so
 #     building on this Pi (trixie) stamped the package `libc6 (>= 2.38), libstdc++6 (>= 14)` and
@@ -154,7 +165,7 @@ if [ -r /etc/os-release ] && grep -q 'VERSION_CODENAME=bookworm' /etc/os-release
   #    build dies with "No such file or directory" pointing at a path that cannot exist here.
   # ★ --exclude build is the line that matters; .git is excluded only for speed.
   mkdir -p /build
-  rsync -a --delete --exclude build --exclude .git "$SRC_DIR/" /build/VibeSDR/
+  rsync -a --delete $COPY_EXCLUDES "$SRC_DIR/" /build/VibeSDR/
 else
   NATIVE_BUILD=0
   BUILD_ROOT="${VIBESERVER_BUILD_ROOT:-/srv/bookworm}"
@@ -168,7 +179,7 @@ else
   for d in proc sys dev dev/pts; do
     sudo mountpoint -q "$BUILD_ROOT/$d" || sudo mount --bind "/$d" "$BUILD_ROOT/$d"
   done
-  sudo rsync -a --delete --exclude build --exclude .git "$SRC_DIR/" "$BUILD_ROOT/build/VibeSDR/"
+  sudo rsync -a --delete $COPY_EXCLUDES "$SRC_DIR/" "$BUILD_ROOT/build/VibeSDR/"
 fi
 
 # ★ One command, run either through the chroot or straight. Keeping a single copy of the cmake

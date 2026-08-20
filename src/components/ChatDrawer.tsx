@@ -354,7 +354,7 @@ export default function ChatDrawer({
           {isCanned && (
             <View style={[cd.inputRow, { borderTopColor: cc.border, flexWrap: 'wrap', gap: 6 }]}>
               {!!dialLine && (
-                <Text style={[cd.meLbl, { color: cc.title, fontFamily: t.font, width: '100%' }]}
+                <Text style={[cd.cannedLine, { color: cc.title, fontFamily: t.font }]}
                       numberOfLines={2}>
                   {dialLine}
                 </Text>
@@ -362,11 +362,11 @@ export default function ChatDrawer({
               {canned!.map(ph => (
                 <TouchableOpacity
                   key={ph.id}
-                  style={[cd.sendBtn, { borderColor: cc.btnBdr, paddingHorizontal: 10 }]}
+                  style={[cd.cannedBtn, { borderColor: cc.btnBdr }]}
                   activeOpacity={0.75}
                   onPress={() => onSay?.(ph.id)}
                 >
-                  <Text style={[cd.sendBtnTxt, { color: cc.btnText, fontFamily: t.font, fontSize: 12 }]}>
+                  <Text style={[cd.cannedTxt, { color: cc.btnText, fontFamily: t.font }]}>
                     {ph.text}
                   </Text>
                 </TouchableOpacity>
@@ -499,4 +499,22 @@ const cd = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
   sendBtnTxt: { color: C.gold, fontSize: 16 },
+  // ★★★ THE PHRASE PAD HAS ITS OWN STYLE, and this is why: it first reused `sendBtn`, which is a
+  //     fixed 36×36 CIRCLE built for a single ▶ glyph. Twelve sentences in twelve circles came out
+  //     as unreadable two-letter stacks — "C an", "A nyt", "Tu nir" (Stuart, on an iPad, 2026-08-20).
+  //     A button that must hold a SENTENCE has to be sized by its text, never by a fixed box.
+  // ★★ alignSelf 'flex-start' so a wrapped row does not stretch every pill to the tallest one, and
+  //    no width cap at all: the longest phrase decides, and the row wraps when it must.
+  cannedBtn: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 12, paddingVertical: 8, borderRadius: 14,
+    backgroundColor: 'rgba(255,160,0,0.12)',
+    borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)',
+  },
+  cannedTxt: { fontFamily: FONT, fontSize: 13, color: '#ffe0a0' },
+  // ★ The room line is a SENTENCE too — `meLbl` caps at 80px, which squeezed it into a column.
+  cannedLine: {
+    width: '100%', fontFamily: FONT, fontSize: 11,
+    color: 'rgba(255,184,51,0.75)', marginBottom: 2,
+  },
 });

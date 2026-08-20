@@ -284,6 +284,14 @@ export interface ControlsBarProps {
   readOnly?: boolean;
   /** Time-limited receiver countdown shown beside the clock. */
   sessionLeft?: { text: string; urgent: boolean } | null;
+  /** ★★★ WHO ELSE IS ON THIS DIAL — the answer to the only question that matters before you turn
+   *  it. On a shared-VFO receiver anybody may tune and the server stops nobody, so the etiquette is
+   *  the whole mechanism; but asking in the chat every time would be absurd when you are the only
+   *  person here. Stuart, 2026-08-20: *"the app needs a user counter on the shared tuner so that
+   *  you know if its safe to tune without asking the chat."*
+   *  ★★ ALONE IS THE LOAD-BEARING STATE, so it gets words rather than a number: "Only you" is
+   *     instantly readable as permission, where "1 listening" makes you count. */
+  sharedDial?: { listeners: number; alone: boolean; tuning: string } | null;
   /** ★★ ADMIN SESSIONS ARE NOT TIMED, so this slot says WHY rather than counting down. An admin is
    *  exempt from the session limit, and the honest thing to show where a countdown would be is
    *  what is actually true of this session (Stuart, 2026-08-12). Takes precedence over
@@ -687,7 +695,7 @@ function useHandbackFlash() {
 function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia,
-  readOnly, sessionLeft, adminMode, vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
+  readOnly, sessionLeft, sharedDial, adminMode, vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
   onControlRects }: any) {
   const handbackFlash = useHandbackFlash();
 
@@ -891,6 +899,20 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
             <Text style={{ color: sessionLeft.urgent ? '#ff6b6b' : t.clockColor,
                            fontFamily: t.font, fontSize: CLOCK_FONT, opacity: 0.9 }}>
               ⏳{sessionLeft.text}
+            </Text>
+          )}
+          {/* The room, beside the clock — the same kind of fact as "how long have I got", and read
+              at the same moment. ★ Green when you are alone: a colour you can take in without
+              reading, because the point is to answer "may I just tune?" at a glance. */}
+          {!!sharedDial && (
+            <Text style={{ color: sharedDial.alone ? '#7bd88f' : t.clockColor,
+                           fontFamily: t.font, fontSize: CLOCK_FONT, opacity: 0.9 }}
+                  numberOfLines={1}
+                  accessibilityLabel={sharedDial.alone
+                    ? 'You are the only listener — free to tune'
+                    : `${sharedDial.listeners} listening on this shared dial`}>
+              {sharedDial.alone ? '👤 Only you' : `👥 ${sharedDial.listeners}`}
+              {sharedDial.tuning ? ` · ${sharedDial.tuning}` : ''}
             </Text>
           )}
         </View>

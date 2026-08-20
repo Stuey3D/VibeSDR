@@ -2411,25 +2411,34 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
 
   const openChat = useCallback(() => {
-    if (isLandscape) { showChatRotateHint(); return; }
+    // ★★★ THE ROTATE RULE IS ABOUT THE KEYBOARD, AND THE CANNED CHAT HAS NONE. Landscape is refused
+    //     because a text keyboard leaves almost no room for the conversation above it — a real
+    //     problem for the free-text backends and no problem at all here, where speaking is tapping
+    //     one of twelve buttons. Stuart hit this on an iPad (2026-08-20): told to rotate a device
+    //     that was perfectly capable of showing the whole panel.
+    //  ★ Guarded on the DIAL, not on the drawer's own props, because this decides whether the
+    //    drawer opens at all.
+    if (isLandscape && !sharedDial) { showChatRotateHint(); return; }
     // Prime the chat stream (history replay arrives quiet) even before join
     decoderClient.current?.subscribeChat();
     setChatUsers(chatUsersRef.current);  // ref is live; state only while open
     setChatOpen(true);
     setChatUnread(false);
-  }, [isLandscape, showChatRotateHint]);
+  }, [isLandscape, sharedDial, showChatRotateHint]);
 
   const closeChat = useCallback(() => {
     setChatOpen(false);
   }, []);
 
-  // Rotating to landscape with chat open → close it and explain why
+  // Rotating to landscape with chat open → close it and explain why.
+  // ★ ...unless it is the canned chat, which needs no keyboard and is perfectly readable in
+  //   landscape. Closing a panel the user can plainly see working reads as a fault, not a policy.
   useEffect(() => {
-    if (isLandscape && chatOpen) {
+    if (isLandscape && chatOpen && !sharedDial) {
       setChatOpen(false);
       showChatRotateHint();
     }
-  }, [isLandscape, chatOpen, showChatRotateHint]);
+  }, [isLandscape, chatOpen, sharedDial, showChatRotateHint]);
 
   // Android back gesture/button: CONSUME it on this screen (iOS parity —
   // gestureEnabled:false on the stack). Edge swipes while working the VFO
@@ -7099,6 +7108,17 @@ export default function SDRScreen({ route, navigation }: Props) {
             text: `${Math.floor(sessionLeftMs / 60000)}:${String(Math.floor((sessionLeftMs % 60000) / 1000)).padStart(2, '0')}`,
             urgent: sessionLeftMs < 120_000,
           }}
+          // ★ Only on a shared dial: on an ordinary receiver the dial is yours and a listener
+          //   count is trivia, not permission.
+          sharedDial={sharedDial && dialState ? {
+            listeners: dialState.listeners,
+            alone: dialState.listeners <= 1,
+            // ★★ NAME THE TUNER, NOT YOURSELF. "User 2 tuning" is the warning; your own last move
+            //    is not news to you, and putting it here would make the badge cry wolf.
+            tuning: (dialState.tuner && !dialState.mine)
+              ? (dialState.decoding ? `User ${dialState.tuner} decoding` : `User ${dialState.tuner} tuning`)
+              : '',
+          } : null}
           frequency={status.frequency}
           mode={status.mode}
           step={step}
