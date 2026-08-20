@@ -2299,7 +2299,8 @@ int main(int argc, char** argv) {
         LocalSdrShim::instance().setSessionLimitSoft(mine ? mine->sessionLimitSoft : false);
         // ★ Per radio, like everything else here: one machine may run a shared FM-DX dial and a
         //   private HF receiver at the same time, and they want opposite answers.
-        LocalSdrShim::instance().setTuneMode(mine ? mine->tuneMode : 0);
+        // ★ Nothing to set for the shared dial: it IS "unlocked centre + more than one listener",
+        //   which the two settings below already carry. See vsSharedDial() in the shim.
         LocalSdrShim::instance().setIdleKickMinutes(mine ? mine->idleKickMin : 0);
         LocalSdrShim::instance().setLandingInfo(mine ? mine->antenna : std::string(),
                                                 g_serverConfig.landingMessage,

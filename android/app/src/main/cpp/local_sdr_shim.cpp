@@ -521,37 +521,29 @@ static std::atomic<bool>   g_vsRfNotch{false};
 static std::atomic<bool>   g_vsDabNotch{false};
 // ★ How many spectrum listeners may attach at once. 1 = the old single-occupant behaviour.
 static std::atomic<int>    g_vsMaxUsers{1};
-/** ★★★ WHO MAY TURN THE KNOB — the FM-DX question, and it is NOT the same as how many may listen.
+/** ★★★ THERE ARE STILL ONLY TWO MODES, AND THIS IS NOT A THIRD ONE.
  *
- *  Stuart, 2026-08-19, correcting me: *"the single user isn't about CPU, it is about users fighting
- *  each other for tuning."* A shared receiver today gives everybody the same one VFO and lets all
- *  of them move it, which works right up until two people want different stations.
+ *  Stuart, 2026-08-20, cutting a whole concept out of this: *"Why are we building this as a full
+ *  3rd mode, all we are doing is adding the ability to have multiple users on the single user
+ *  unlocked radio mode."* He is right, and the two modes now read:
  *
- *    0 EXCLUSIVE  — today's behaviour, and the DEFAULT so an upgrade changes nothing. One listener
- *                   at a time on a single-user radio.
- *    1 SPECTATOR  — many may listen, only the OWNER tunes. A fixed watch: a beacon band, a net
- *                   frequency, an airport.
- *    2 OPEN       — the FM-DX model: many listen, ANYBODY may tune, and the etiquette is social.
+ *    UNLOCKED RADIO        — one VFO, 1..N users. The hardware really retunes, so the allowed-band
+ *                            list and the per-band gain ceilings apply. With ONE user it is the
+ *                            receiver we have always had; with SEVERAL it is the FM-DX model —
+ *                            everybody hears the same dial and anybody may move it.
+ *    LOCKED CENTRE         — N users, INDEPENDENT VFOs. The window is pinned and each listener
+ *                            gets their own channel inside it (perClientDsp).
  *
- *  ★★★ OPEN MEANS OPEN — THERE IS NO PERMISSION TO GRANT. An earlier draft of this made the dial
- *      something one listener HELD and others asked for, which sounds fairer and is unusable:
- *      Stuart, 2026-08-20, and it is the whole design in one line — *"the dial must be like FM-DX
- *      where anybody can tune it, otherwise I would need to be on the server 24/7 to allow access
- *      to it."* A permission system on an unattended public receiver is a locked door with nobody
- *      behind it. So the server enforces NOTHING here; it only says who moved the dial last, and
- *      the canned chat is how two strangers sort it out between themselves.
- *  ★★ Which is exactly why the chat is not a nicety bolted on beside this — it IS the mechanism.
- *
- *  ★★ OPEN MODE FORCES ONE VFO — see perClientDsp(). Per-client DSP hands every listener their own
- *     tuning, which is a perfectly good feature and the exact opposite of this one: there is no
- *     dial to pass if everybody already has their own.
+ *  ★★★ So "is the dial shared?" is not a setting anybody has to find: it is what the two existing
+ *      settings already say. A new switch would have been a third way to describe a state the
+ *      config could already express, and those drift.
+ *  ★ Which also makes the two mutually exclusive by construction — a locked centre gives everyone
+ *    their own tuning, and there is no dial to share.
  */
-static std::atomic<int>    g_vsTuneMode{0};
-/** ★★ HOW LONG "User 3 is tuning" STAYS ON SCREEN after they stop. Display only — nothing is
- *  released, because in open mode nothing was ever held. A decode holds the label open regardless,
- *  which is the case that matters: ten minutes of a WEFAX frame is ten minutes of nobody touching
- *  anything, and the room needs to see why. */
+static bool vsSharedDial();
+
 static constexpr double    kDialShowSec = 120.0;
+static bool vsSharedDial() { return g_vsLockedCentre.load() <= 0.0 && g_vsMaxUsers.load() > 1; }
 
 // Station list (EiBi + anything else the app has) served at GET /stations for the
 // web client's search. Supplied BY THE APP — it already downloads and caches EiBi,
@@ -2597,11 +2589,9 @@ struct LocalSdrShim::Impl {
     /** ★ The gate. Per-client DSP exists only where it means something: a SHARED receiver, where
      *  the owner has locked the centre and more than one listener is allowed. */
     bool perClientDsp() const {
-        // ★★★ OPEN TUNING AND PER-CLIENT DSP ARE MUTUALLY EXCLUSIVE, and open wins. Per-client DSP
-        //     gives every listener their own VFO inside a locked window; open tuning is one dial
-        //     that people take turns with. An owner who sets both has asked for two contradictory
-        //     things, and the one they chose most recently and most deliberately is the mode.
-        if (g_vsTuneMode.load() == 2) return false;
+        // ★ THIS IS THE LOCKED-CENTRE MODE, and vsSharedDial() is exactly its complement: a pinned
+        //   window gives every listener their own VFO, an unpinned one gives them all the same
+        //   dial. Two settings, two modes, no third flag to keep in step.
         return g_vsLockedCentre.load() > 0.0 && g_vsMaxUsers.load() > 1;
     }
 
@@ -3420,8 +3410,8 @@ struct LocalSdrShim::Impl {
 
     /** Open tuning in force? ★ Deliberately NOT conditioned on maxUsers: an owner who has said
      *  "one dial, taken in turns" has said something true of a receiver with one listener too. */
-    bool dialOpen()      const { return g_vsTuneMode.load() == 2; }
-    bool dialSpectator() const { return g_vsTuneMode.load() == 1; }
+    /** Everybody on one dial: an unlocked radio with room for more than one listener. */
+    bool dialOpen() const { return vsSharedDial(); }
 
     /** This session is the signed-in admin. Call WITH clientMtx held. */
     bool isAdminSessionLocked(const std::string& session) const {
@@ -3452,23 +3442,21 @@ struct LocalSdrShim::Impl {
     /** ★★★ MAY THIS SESSION TURN THE KNOB — the one place that decides, so every control path
      *  gets the same answer. Call WITH clientMtx held.
      *
-     *  ★★★ IN OPEN MODE THE ANSWER IS ALWAYS YES. See the note on g_vsTuneMode: a public receiver
-     *      nobody is sitting in front of cannot ask an owner for permission. All that happens here
-     *      is that we remember who moved it, for the strip.
-     *  ★ SPECTATOR is the mode that says no, and it says it to everybody except the owner — which
-     *    is a setting an owner chooses deliberately for a receiver parked on one frequency.
+     *  ★★★ THE ANSWER IS ALWAYS YES. A public receiver with nobody sitting in front of it cannot
+     *      ask an owner for permission — "the dial must be like FM-DX where anybody can tune it,
+     *      otherwise I would need to be on the server 24/7" (Stuart). All that happens here is
+     *      that we remember who moved it, for the strip.
      */
     bool dialMayTuneLocked(const std::string& session, bool admin) {
-        if (dialSpectator()) return admin;
+        (void)admin;
         if (dialOpen() && !session.empty()) dialTouchLocked(session);
         return true;
     }
 
     /** What the occupancy strip draws, from THIS listener's point of view. */
     std::string dialJsonLocked(const std::string& forSession) {
-        const int mode = g_vsTuneMode.load();
         std::string j = "{\"type\":\"dial\",\"mode\":\"";
-        j += mode == 2 ? "open" : mode == 1 ? "spectator" : "exclusive";
+        j += dialOpen() ? "open" : "exclusive";
         // ★ WHO MOVED IT LAST — a handle, never an identity. 0 = nobody has, or it has faded.
         j += "\",\"tuner\":" + std::to_string(handleForLocked(dialSession));
         j += ",\"mine\":" + std::string(!dialSession.empty() && dialSession == forSession ? "true" : "false");
@@ -3526,7 +3514,7 @@ struct LocalSdrShim::Impl {
 
     /** Tell everybody where the dial is. Call WITHOUT clientMtx held. */
     void sendDialState() {
-        if (g_vsTuneMode.load() == 0) return;               // exclusive: there is no dial to report
+        if (!vsSharedDial()) return;                        // one listener, or independent VFOs
         std::vector<std::pair<std::shared_ptr<net::Socket>, std::string>> out;
         {
             std::lock_guard<std::mutex> lk(clientMtx);
@@ -5985,41 +5973,41 @@ struct LocalSdrShim::Impl {
             sendConfig(sock);
             return;
         }
-        // ── ★★★ THE DIAL: WHO MAY TURN THE KNOB ────────────────────────────────────────────
+        // ── ★★★ THE SHARED DIAL: REMEMBER WHO MOVED IT ─────────────────────────────────────
         //  Everything below this line moves the radio for EVERYBODY — one VFO, one front end, one
-        //  audio stream. In OPEN mode that is allowed and expected: anybody may tune, exactly as
-        //  on an FM-DX receiver, and all this does is remember who did it so the strip can say so.
-        //  SPECTATOR is the only mode that refuses, and only to non-owners.
-        //  ★ EXCLUSIVE reaches none of it and behaves precisely as it always has.
+        //  audio stream. On an unlocked radio with several listeners that is allowed and expected,
+        //  exactly as on an FM-DX receiver, and nothing here refuses anybody. All it does is note
+        //  who tuned, so the strip can say so: a frequency that changes under you with no
+        //  explanation reads as the receiver glitching, which is the one thing a shared dial must
+        //  never look like.
+        //  ★ A one-listener radio and a locked-centre one both skip it entirely.
         {
             const bool movesTheRadio =
                    type == "tune" || type == "mode" || type == "bandwidth"
                 || type == "gain" || type == "rsp_control" || type == "ahf_control";
-            if (movesTheRadio && g_vsTuneMode.load() != 0) {
-                std::string me; bool refused = false, changed = false;
+            if (movesTheRadio && vsSharedDial()) {
+                bool changed = false;
                 {
                     std::lock_guard<std::mutex> lk(clientMtx);
                     auto it = sockSession.find(sock.get());
-                    if (it != sockSession.end()) me = it->second;
+                    const std::string me = it == sockSession.end() ? std::string() : it->second;
                     const std::string was = dialSession;
-                    const bool admin = isAdminSessionLocked(me) || (adminOk.load() && me.empty());
-                    if (!dialMayTuneLocked(me, admin)) refused = true;
+                    if (!me.empty()) dialTouchLocked(me);
                     changed = was != dialSession;
-                }
-                if (refused) {
-                    // ★★ SAY SO. A control that silently does nothing reads as a broken radio —
-                    //    the same lesson as the superseded admin and the idle re-lock.
-                    sendText(sock, "{\"type\":\"dial_refused\"}");
-                    return;
                 }
                 if (changed) sendDialState();
             }
         }
 
-        // ── The dial's own messages ────────────────────────────────────────────────────────────
-        // ★ ONE TAP EACH, and nothing carries text: a request is a session id appearing in a list
-        //   and a grant is a handle going back. Nobody can say anything unpleasant with either.
         if (type == "say") {
+            // ★★★ THE CHAT EXISTS ONLY WHERE THE DIAL IS SHARED. Stuart, 2026-08-20: "chat needs
+            //     to be disabled in both the existing modes." On a one-user radio there is nobody
+            //     to talk to, and on a locked-range one everybody already has their own VFO, so
+            //     there is nothing to agree about — a chat there would be a channel with no
+            //     purpose and an owner's problem to think about for no benefit.
+            //  ★★ ENFORCED HERE, not only by hiding the button: the button is a client's choice
+            //     and this is the server's. A page from anywhere can send this frame.
+            if (!vsSharedDial()) return;
             // ★ Nothing here is text. An id that is not in the table is not a message we know how
             //   to render anywhere, so it is dropped rather than passed on — the one place a
             //   client could otherwise smuggle a string through this channel.
@@ -7686,9 +7674,8 @@ struct LocalSdrShim::Impl {
                              // ★★★ WHO MAY TUNE — the third usage mode. OMITTED when exclusive, so
                              //     an older client sees exactly what it saw before and a newer one
                              //     reads absence as "today's behaviour". Same rule as limitMode.
-                             + (g_vsTuneMode.load() == 2 ? std::string(",\"tuneMode\":\"open\"")
-                              : g_vsTuneMode.load() == 1 ? std::string(",\"tuneMode\":\"spectator\"")
-                                                         : std::string())
+                             + (vsSharedDial() ? std::string(",\"tuneMode\":\"open\"")
+                                               : std::string())
                              // ★★ THE AERIAL AND THE OWNER'S STANDING MESSAGE. Here as well as in
                              //    /vibeserver/radios because a SIMPLE server has no picker at all:
                              //    its splash is this radio, and this file is what that splash
@@ -8813,6 +8800,17 @@ struct LocalSdrShim::Impl {
             // is the first thing anyone tries; it must be the moment they learn what is wrong.
             if (deviceLost.load())
                 sendText(sock, "{\"type\":\"device\",\"present\":false}");
+            // ★★★ AND TELL A NEW ARRIVAL WHERE THE DIAL IS. Same reasoning as the device line
+            //     above: the strip is otherwise only sent when somebody TUNES, so a listener who
+            //     joins a quiet room sees no strip and no chat button at all, on a receiver whose
+            //     whole arrangement is that people talk to each other. Also tells everybody ELSE
+            //     that the listener count just changed.
+            if (vsSharedDial()) {
+                { std::lock_guard<std::mutex> lk(clientMtx);
+                  auto it = sockSession.find(sock.get());
+                  sendText(sock, dialJsonLocked(it == sockSession.end() ? std::string() : it->second)); }
+                sendDialState();
+            }
         }
         // Boot the ghost (if any) now that the new socket has taken its place. Outside the lock:
         // close() only flips the old socket's flags/fd; its own accept loop does the bookkeeping.
@@ -10533,7 +10531,7 @@ struct LocalSdrShim::Impl {
         //     quietly turn it back on.
         //  ★ The DIAL's own idle release is a different thing and still applies: it frees a knob
         //    nobody is turning, it never disconnects anybody, and a decode suspends it.
-        if (g_vsTuneMode.load() != 0) return;
+        if (vsSharedDial()) return;
         const double now = Impl::nowSecs();
         std::string decoderOwnerSession;
         { std::lock_guard<std::mutex> dl(decoderMtx);
@@ -11468,15 +11466,6 @@ void LocalSdrShim::setIdleKickMinutes(int minutes) {
     g_vsIdleKickMin.store(m);
     if (m > 0) LOGI("idle disconnect: after %d min with no interaction (asks first)", m);
 }
-
-void LocalSdrShim::setTuneMode(int mode) {
-    const int m = (mode >= 0 && mode <= 2) ? mode : 0;
-    g_vsTuneMode.store(m);
-    LOGI("tuning: %s", m == 2 ? "OPEN — one dial, taken in turns, asking is one tap"
-                     : m == 1 ? "SPECTATOR — many may listen, only the owner tunes"
-                              : "EXCLUSIVE — whoever holds the radio tunes it");
-}
-int LocalSdrShim::tuneMode() const { return g_vsTuneMode.load(); }
 
 void LocalSdrShim::setSessionLimitSoft(bool soft) {
     g_vsSessionLimitSoft.store(soft);

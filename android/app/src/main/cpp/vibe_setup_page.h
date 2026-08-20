@@ -333,16 +333,26 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
       <h2>How will it be used?</h2>
       <p class="why">This decides what listeners are allowed to change.</p>
       <div class="modes">
+        <!-- ★★★ TWO MODES, RENAMED SO THEY SAY WHAT ACTUALLY DIFFERS: whether the radio's centre
+             is pinned, and therefore whether listeners share one dial or each get their own VFO.
+             The old names ("one user at a time" / "shared, locked range") described a USER COUNT
+             that is really just the Listeners box below, and that made the multi-user unlocked
+             receiver — the FM-DX one — look like a third mode it never was (Stuart, 2026-08-20). -->
         <div class="mode" id="modeSingle" tabindex="0">
-          <b>One user at a time</b>
-          <span>The listener has the whole radio and every control, as if it were plugged into
-                their own machine. Best for your own use from elsewhere in the house.</span>
+          <b>Unlocked radio &mdash; one dial</b>
+          <span>The radio really retunes, so a listener has the whole thing and every control.
+                With <b>one</b> listener that is a receiver of your own, reachable from anywhere.
+                With <b>several</b> it is the FM-DX arrangement: everybody hears the same dial,
+                anybody may move it, and a small set of fixed messages lets them agree who goes
+                next.</span>
         </div>
         <div class="mode" id="modeLocked" tabindex="0">
-          <b>Shared, locked range</b>
-          <span>You choose the frequency range and the rules; listeners tune freely inside it but
-                cannot move the radio for everybody. Best for a receiver other people use.</span>
+          <b>Locked centre &mdash; independent VFOs</b>
+          <span>You pin the window and each listener gets their own tuning inside it. Nobody can
+                move the radio for anybody else, so there is nothing to agree about and no chat.
+                Best for a busy public receiver on one band.</span>
         </div>
+
       </div>
     </div>
       <div id="lockedOnly" class="hide">
@@ -374,6 +384,11 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           <label><span class="lbl">Maximum listeners</span>
             <input type="number" id="users" min="1" max="50"></label>
         </div>
+        <!-- ★★★ THIS BOX IS WHAT TURNS AN UNLOCKED RADIO INTO AN FM-DX ONE, so it is where the
+             consequence is explained rather than in a mode card. Two settings already say
+             everything: an unpinned centre means one dial, and a count above one means several
+             people are on it. -->
+        <div class="note" id="usersNote"></div>
         <div class="note" id="bwNote"></div>
       </div>
 
@@ -801,12 +816,34 @@ function bwNote() {
       : `.`);
 }
 
+/** ★ Says what the Listeners count MEANS on an unlocked radio, live as it is typed — the shared
+ *  dial has no switch of its own, so this is the only place an owner can learn that going from 1
+ *  to 2 changes how the receiver behaves. */
+function usersNote() {
+  const el = $("usersNote"); if (!el) return;
+  const n = parseInt($("users").value || "1", 10);
+  const locked = radio().mode === "locked";
+  if (locked) {
+    el.innerHTML = "Each listener tunes independently inside the window you pinned.";
+  } else if (n > 1) {
+    el.innerHTML = "<b>One dial, shared.</b> Everybody hears the same frequency and anybody may "
+      + "move it &mdash; the way FM-DX receivers work. Listeners get a small set of fixed "
+      + "messages (\"Can I tune?\", \"Please hold &mdash; chasing DX\") to agree who goes next; "
+      + "there is no free text and nobody has a name, so there is nothing to moderate.";
+  } else {
+    el.innerHTML = "One listener has the whole radio.";
+  }
+}
+
 function setMode(locked) {
   radio().mode = locked ? "locked" : "single";   // ★ the OPEN tab, not the machine
   $("modeLocked").classList.toggle("sel", locked);
   $("modeSingle").classList.toggle("sel", !locked);
   if (typeof renderBands === "function") renderBands();
   $("lockedOnly").classList.toggle("hide", !locked);
+  // ★★ THE SHARED DIAL IS NOT A MODE — it is this mode with the Listeners box set above one, so
+  //    the note explaining it follows the COUNT rather than a switch. See usersNote().
+  if (typeof usersNote === "function") usersNote();
   syncSpectroOffer();
 }
 
@@ -1805,7 +1842,7 @@ function fill() {
     if (row) row.classList.toggle("hide", (r.users || 1) <= 1); }
   if ($("spectrogram"))     $("spectrogram").checked = !!r.spectrogram;
   setMode((r.mode || "single") === "locked");
-  addr(); coverage(); bwNote(); refreshHw(); eibiStatus(); renderGain();
+  addr(); coverage(); bwNote(); usersNote(); refreshHw(); eibiStatus(); renderGain();
   $("eibiGet").addEventListener("click", eibiFetch);
   $("rtlSerialGo").addEventListener("click", serialModalOpen);
   $("serialCancel").addEventListener("click", () => { $("serialModal").hidden = true; });
@@ -2054,7 +2091,8 @@ $("modeLocked").onclick = () => setMode(true);
 $("name").addEventListener("input", addr);
 $("mdns").addEventListener("change", addr);
 for (const id of ["lockFreq","rate"]) $(id).addEventListener("input", coverage);
-for (const id of ["users","uncompressed"]) $(id).addEventListener("input", bwNote);
+for (const id of ["users","uncompressed"])
+  $(id).addEventListener("input", () => { bwNote(); usersNote(); });
 
 // ★★★ SAVE THIS RADIO, AND ONLY THIS RADIO. No restart: the owner is working through three tabs,
 //     and bouncing every listener on every radio after each one would make the page unusable. The

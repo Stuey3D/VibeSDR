@@ -238,6 +238,16 @@ export interface SpectrumCallbacks {
   onStatus?: (s: 'connecting' | 'open' | 'closed' | 'error', detail?: string) => void;
   /** The server is already serving someone else — do not retry. */
   onBusy?: (q?: { queuePos?: number; queueLen?: number; freeIn?: number; queueFull?: boolean }) => void;
+  /** ★★ THE OCCUPANCY STRIP on a shared-dial receiver: which mode this radio runs, how many are
+   *  listening, who moved the dial last (an ordinal — never an identity), and whether somebody is
+   *  mid-decode. Absent on an exclusive receiver, which is every existing one. */
+  onDial?: (d: { mode: string; tuner: number; mine: boolean; you: number;
+                 listeners: number; decoding?: boolean }) => void;
+  /** Spectator mode refused a control. ★ Said out loud, because a control that silently does
+   *  nothing reads as a broken radio rather than as a receiver somebody has parked deliberately. */
+  onDialRefused?: () => void;
+  /** Somebody said one of the canned phrases. `id` is a phrase id, never text. */
+  onSaid?: (from: number, id: string) => void;
   onYourTurn?: (withinSec: number) => void;
   /** Session limit: seconds remaining (fires at 2 min and 30 s). Still connected. */
   onSessionWarning?: (secs: number) => void;
@@ -585,6 +595,24 @@ export class SpectrumClient {
           ber: typeof msg.ber === 'number' ? msg.ber : -1,
           sig: typeof msg.sig === 'number' ? msg.sig : -99,
         });
+        break;
+      case 'dial':
+        this.cb.onDial?.({
+          mode: String(msg.mode || 'exclusive'),
+          tuner: Number(msg.tuner) || 0,
+          mine: msg.mine === true,
+          you: Number(msg.you) || 0,
+          listeners: Number(msg.listeners) || 0,
+          decoding: msg.decoding === true,
+        });
+        break;
+      case 'dial_refused':
+        this.cb.onDialRefused?.();
+        break;
+      case 'said':
+        // ★ An id we do not know how to draw is DROPPED, not shown raw — the client half of the
+        //   rule that keeps free text off this channel in both directions.
+        this.cb.onSaid?.(Number(msg.from) || 0, String(msg.id || ''));
         break;
       case 'users':
         this.cb.onUsers?.(Number(msg.n) || 0, Number(msg.max) || 0);

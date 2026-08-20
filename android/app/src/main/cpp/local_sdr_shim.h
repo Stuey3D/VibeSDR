@@ -415,10 +415,6 @@ public:
      *  server). The DSP cost of an extra listener is ~nothing now the channelizer shares one
      *  forward FFT (+0.02% of a Pi core each, measured); the real ceiling is UPLINK. */
     static void setVibeServerMaxUsers(int n);
-    /** ★★★ WHO MAY TURN THE KNOB: 0 exclusive (default), 1 spectator, 2 open. NOT the same
-     *  question as how many may listen — see g_vsTuneMode. */
-    void setTuneMode(int mode);
-    int  tuneMode() const;
 
     // ── ★★★ THE CONFIG API — the browser setup page is a CLIENT of this, not a special case ──
     //

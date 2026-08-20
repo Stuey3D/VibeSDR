@@ -46,6 +46,9 @@ export type MobileDeps = {
   openMenu: () => void;
   openAudio: () => void;
   openDecoders: () => void;
+  /** ★ On a shared-dial receiver only — see chat.ts. The button that opens it is hidden
+   *  everywhere else, because on an ordinary receiver there is nobody to talk to. */
+  openChat: () => void;
 };
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -131,7 +134,7 @@ export function initMobileControls(deps: MobileDeps) {
   $('mStep').onclick = () => deps.openStepMenu($('mStep'));
   $('mAudio').onclick = () => deps.openAudio();
   $('mMenu').onclick  = () => deps.openMenu();
-  $('mDec').onclick   = () => deps.openDecoders();
+  $('mChat').onclick  = () => deps.openChat();
   // ★★ TWO SEPARATE TARGETS, exactly as the app's pill has: the FREQUENCY opens frequency
   //    entry (onFreqTap) and the MODE opens the demodulator picker (onModeTap). Each is its
   //    own boxed button and the PILL ITSELF IS NOT CLICKABLE — an earlier version put the
@@ -309,6 +312,19 @@ export function initMobileControls(deps: MobileDeps) {
       menu.appendChild(sep);
       menu.appendChild(bw);
     }
+
+    // ★★★ AND THE DECODERS COME WITH THEM, for the same reason the bandwidth row does: what you
+    //     demodulate and what you decode out of it are one decision (USB then RTTY, CW then TIME),
+    //     which is how the app's ModeSelector has always been laid out. Moving them here is also
+    //     what freed the bar's second button for the chat (Stuart, 2026-08-20).
+    // ★ A door, not a copy: the decoders panel is a screenful of settings, image views and spot
+    //   lists. Rebuilding it inside a popup anchored to the pill would be a second implementation
+    //   of a thing that already works.
+    const decRow = document.createElement('button');
+    decRow.className = 'mModeOpt';
+    decRow.textContent = 'DECODERS…';
+    decRow.onclick = () => { close(); deps.openDecoders(); };
+    grid.appendChild(decRow);
 
     // ★★ AN EXPLICIT WAY OUT. Dismiss-by-clicking-away is fine when the backdrop is inert; here
     //    the backdrop is the WATERFALL, and a click on it TUNES. So the only obvious way to leave

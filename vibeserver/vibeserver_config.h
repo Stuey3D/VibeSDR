@@ -25,9 +25,20 @@ namespace vsconfig {
  *  ★ `Locked` was previously an EMERGENT state — it happened whenever lockFreq > 0, and every
  *  gate in the shim keyed off that. Making it an explicit, named mode is what lets the setup page
  *  ask the question once and lets everything else read the answer. */
+/** ★★★ TWO MODES, AND THE SECOND NUMBER (`users`) IS WHAT VARIES INSIDE THEM.
+ *  ★★ Stuart, 2026-08-20, deleting a mode I had started building: "all we are doing is adding the
+ *     ability to have multiple users on the single user unlocked radio mode. This doesnt need a
+ *     full 3rd option. We just need to rename the modes." */
 enum class Mode {
-    SingleUser,   // one listener at a time; they get the full settings surface
-    LockedRange,  // owner sets the window and the policy; listeners get a view inside it
+    /** UNLOCKED RADIO — one VFO, 1..N users. The hardware retunes for real, so the allowed-band
+     *  list and the per-band gain ceilings apply. One user is the receiver we have always had;
+     *  several is the FM-DX model, where everybody hears the same dial and anybody may move it
+     *  (and the canned chat appears, because now there is somebody to agree with). */
+    SingleUser,
+    /** LOCKED CENTRE — N users with INDEPENDENT VFOs. The owner pins the window and each listener
+     *  gets their own channel inside it. Nobody can move the radio for anybody else, so there is
+     *  no dial to share and no chat. */
+    LockedRange,
 };
 
 /** ★★★ WHO IS THIS RECEIVER FOR? Deliberately SEPARATE from `Mode` above, which is about the
@@ -308,14 +319,6 @@ struct RadioConfig {
      *     chose it under today's meaning, and a setting must never change what it does underneath
      *     the person who set it. */
     bool   sessionLimitSoft = false;
-    /** ★★★ WHO MAY TUNE — the third usage mode, and the one the FM-DX world runs on.
-     *    0 EXCLUSIVE (default, today's behaviour) · 1 SPECTATOR (owner tunes, many listen)
-     *    2 OPEN (many listen, one holds the dial, asking is one tap).
-     *  ★★ It is a HYBRID of the two modes that already exist (Stuart, 2026-08-20): the allow/block
-     *     list and the per-band gain ceilings come from the single-user radio, the listener count
-     *     from the multi-user one. Nothing new had to be invented for either half.
-     *  ★ Absent = 0, so every existing config keeps its meaning exactly. */
-    int    tuneMode = 0;
 
     /** ★★★ DISCONNECT A LISTENER WHO HAS GONE AWAY — minutes of asking for nothing. 0 = OFF, and
      *  off is the default: this is an option for a busy shared receiver, not a policy.

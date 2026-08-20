@@ -38,6 +38,8 @@ import {
 } from './search';
 import { parseBookmarksAny } from '../../../src/services/userBookmarks';
 import { DecoderClient, type Spot } from './decoders';
+import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
+         onDialRefused as chatRefused, chatAvailable } from './chat';
 import { initAdmin, closeAdmin, openAdmin, startAdminTicketRenewal } from './admin';
 import { httpBase, wsBase } from './origin';
 import { saveAdminTicket, getAdminTicket, clearAdminTicket, inAdminMode, adminTicketQuery } from './adminticket';
@@ -883,6 +885,18 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         ? `${n} listening${max > 1 ? ` of ${max}` : ''}`
         : '';
     },
+    // ── ★★ THE SHARED DIAL. Only a receiver running open or spectator tuning sends these; on an
+    //    ordinary one the chat button never appears at all.
+    onDial: (d) => {
+      chatDial(d);
+      const on = d.mode !== 'exclusive';
+      for (const id of ['chatBtn', 'mChat']) {
+        const b = document.getElementById(id);
+        if (b) (b as HTMLElement).hidden = !on;
+      }
+    },
+    onDialRefused: () => { chatRefused(); togglePanel('chatPanel'); },
+    onSaid: (from, id) => chatSaid(from, id),
     onSessionWarning: (secs) => setTimeLeft(secs),
     onDevice: (present) => showDeviceBanner(present),
     // ★ Pushed the instant the owner posts one — the people already watching the spectrum
@@ -3603,6 +3617,7 @@ function buildControls() {
     openMenu:      () => togglePanel('menu'),
     openAudio:     () => togglePanel('audioPanel'),
     openDecoders:  () => togglePanel('decodersPanel'),
+    openChat:      () => { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); },
   });
   initBw();
   initPanels();
@@ -4818,9 +4833,13 @@ async function attachBookmarkLogo(row: HTMLElement, name: string, itu?: string, 
 // you can only dismiss with its own CLOSE button is a modal that traps people.
 
 const PANELS = ['menu', 'audioPanel', 'decodersPanel', 'recordingsPanel',
-                'bookmarksPanel', 'freqPanel'];
+                'bookmarksPanel', 'freqPanel', 'chatPanel'];
 
 function closePanels() {
+  // ★ The chat's unread counter keys off whether its panel is open, and EVERY close route lands
+  //   here — Escape, a click away, opening something else. Telling it from the button handlers
+  //   alone would leave the count frozen at zero after any of the other three.
+  if (isPanelOpen('chatPanel')) chatOpened(false);
   for (const id of PANELS) $(id).classList.remove('open');
 }
 
@@ -4828,6 +4847,12 @@ function togglePanel(id: string) {
   const open = $(id).classList.contains('open');
   closePanels();
   if (!open) $(id).classList.add('open');
+}
+
+/** ★ Asked AFTER togglePanel, because "open" is the DOM's answer and not the caller's guess —
+ *  closePanels() may have shut something else and a caller tracking it itself would drift. */
+function isPanelOpen(id: string): boolean {
+  return !!document.getElementById(id)?.classList.contains('open');
 }
 
 function initPanels() {
@@ -5246,6 +5271,21 @@ function initDecoders(host: string, auth: AuthState) {
   initAhfControls();
   $('decodersBtn').onclick = () => togglePanel('decodersPanel');
   $('decClose').onclick = () => closePanels();
+  // ★ The panel owns the unread count only while it is OPEN — chatOpened(false) on close is what
+  //   lets it start counting again, so a message that lands while you are reading is not "unread".
+  $('chatBtn').onclick = () => { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); };
+  $('chatClose').onclick = () => { closePanels(); chatOpened(false); };
+  initChat({
+    say: (id) => spec?.send({ type: 'say', id }),
+    onUnread: (n) => {
+      for (const id of ['chatUnread', 'mChatUnread']) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        el.textContent = String(n);
+        (el as HTMLElement).hidden = n <= 0;
+      }
+    },
+  });
 
   // ── Decoder selection: toggles start/stop, and the MENU STAYS OPEN (skin
   //    semantics, same as the app). Selecting one opens the output box.

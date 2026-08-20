@@ -1151,7 +1151,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 /* Panels are centred POP-UPS, not side drawers — a full-height drawer holding
    five sliders is mostly empty space. Sized to their content, capped at 80vh.
    The huge box-shadow spread is the backdrop dim (no extra element needed). */
-#menu, #bookmarksPanel, #decodersPanel, #recordingsPanel, #audioPanel, #freqPanel {
+#menu, #bookmarksPanel, #decodersPanel, #recordingsPanel, #audioPanel, #freqPanel, #chatPanel {
   position: fixed; top: 50%; left: 50%; z-index: 51;
   width: min(92vw, 520px); max-height: 82vh; overflow-y: auto;
   background: rgba(8,6,2,0.98); border: 1px solid var(--btn-border);
@@ -1161,13 +1161,36 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   opacity: 0; visibility: hidden;
   transition: opacity .14s ease-out, transform .14s ease-out, visibility .14s;
 }
-#menu.open, #bookmarksPanel.open, #decodersPanel.open,
+#menu.open, #bookmarksPanel.open, #decodersPanel.open, #chatPanel.open,
 #recordingsPanel.open, #audioPanel.open, #freqPanel.open {
   opacity: 1; visibility: visible;
   transform: translate(-50%, -50%) scale(1);
 }
 /* Wider ones: bookmarks/recordings/decoders list real content. */
 #bookmarksPanel, #recordingsPanel, #decodersPanel { width: min(94vw, 640px); }
+#chatPanel { width: min(94vw, 460px); }
+
+/* ★ The transcript. Oldest at the top and it scrolls, because the last thing said is the thing
+   that matters and it must be the thing you land on. */
+#chatLog {
+  max-height: 40vh; overflow-y: auto; margin: 8px 0;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.chatLine { font-size: 13px; line-height: 1.35; }
+.chatWho  { color: var(--unit); margin-right: 0.5em; }
+/* ★★ THE STRIP IS NOT A CHAT LINE. It is the state of the room — who is tuning, how many are
+   here, whether somebody is mid-decode — and it stays put at the top while the log scrolls. */
+#dialStrip {
+  font-size: 12px; letter-spacing: 0.06em; color: var(--unit);
+  border: 1px solid var(--btn-border); border-radius: 6px; padding: 6px 8px;
+}
+#dialStrip.busy { color: var(--amber); border-color: rgba(255, 176, 0, 0.5); }
+/* ★ The unread mark: a count, not a dot. "3" says whether it is worth opening; a dot does not. */
+.unread {
+  display: inline-block; min-width: 1.1em; margin-left: 0.4em; padding: 0 0.25em;
+  border-radius: 999px; background: var(--amber); color: #000;
+  font-size: 10px; line-height: 1.4; text-align: center; font-variant-numeric: tabular-nums;
+}
 
 /* Decoder output. */
 #decText {
@@ -2376,7 +2399,10 @@ select.btn { padding: 6px 8px; }
 
       <div class="mStack" id="mStackR">
         <button class="mBtn" id="mAudio" title="Audio: squelch, noise reduction, notch" aria-label="Audio"><span class="mIcLive"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M12.5 8a3 3 0 0 1 0 4"/><path d="M14.5 6a6 6 0 0 1 0 8"/></svg></span><span class="mIcMute"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M13 8L17 12M17 8L13 12"/></svg></span></button>
-        <button class="mBtn" id="mDec" title="Decoders">DECODERS</button>
+        <!-- ★★ Was DECODERS, which now lives with the demodulators in the mode picker — same
+             layout the app already has. On a receiver with no shared dial this button is hidden
+             and the pair collapses to one, exactly as it did before the chat existed. -->
+        <button class="mBtn" id="mChat" title="Chat" hidden>CHAT<span class="unread" id="mChatUnread" hidden></span></button>
       </div>
       <div class="mDial" id="mZoomDial">
         <button class="mBtn" id="mZoomOut" aria-label="Zoom out">−</button>
@@ -2433,6 +2459,14 @@ select.btn { padding: 6px 8px; }
            listening to and how you're demodulating it are one decision. -->
       <div id="demod">
         <div class="group" id="modes"></div>
+        <!-- ★★★ THE DECODERS LIVE WITH THE DEMODULATORS, as they do in the app (ModeSelector's
+             `decoderControls`). What you demodulate and what you decode out of it are one
+             decision — USB then RTTY, CW then TIME — and the app has always said so. This is
+             also what frees the cluster's button for the chat (Stuart, 2026-08-20).
+             ★ MOVED, NOT REBUILT: the panel it opens is unchanged. -->
+        <div class="group">
+          <button class="btn" id="decodersBtn" title="RTTY / NAVTEX / WEFAX / SSTV / FT8">DECODERS</button>
+        </div>
         <!-- Bandwidth: mirrored sliders around the carrier (app's ModeSelector).
              Slide the LEFT one left to widen the lower sideband, the RIGHT one
              right to widen the upper. SYNC mirrors both edges. -->
@@ -2464,7 +2498,10 @@ select.btn { padding: 6px 8px; }
           <!-- Only useful while unlocked: snap the view back onto the VFO. -->
           <button class="btn" id="centreBtn" title="Centre the view on the VFO" hidden>CENTRE</button>
           <button class="btn" id="menuBtn">MENU</button>
-          <button class="btn" id="decodersBtn" title="RTTY / NAVTEX / WEFAX / SSTV / FT8">DECODERS</button>
+          <!-- ★★ THE CHAT SITS WHERE DECODERS USED TO. On a shared-dial receiver it is not a
+               nicety: the server enforces nothing about who tunes, so this is how two strangers
+               agree. Hidden entirely on an ordinary receiver, where there is nobody to talk to. -->
+          <button class="btn" id="chatBtn" title="Ask about the dial — canned messages only" hidden>CHAT<span class="unread" id="chatUnread" hidden></span></button>
         </div>
         <div class="group">
           <span class="lbl">VOL</span>
@@ -2846,6 +2883,23 @@ select.btn { padding: 6px 8px; }
       id="ceqBtn" title="CEQ — blind channel equaliser. Undoes a REFLECTION (multipath), which is distortion rather than weakness. FM is a constant-amplitude signal, so the equaliser adapts by driving the envelope back toward constant — no training signal needed. It engages only on a good signal with real multipath, because on noise it would amplify what it cannot fix. Watch MULTIPATH in the Advanced RDS panel: it shows the depth before and after.">CEQ ON</button><button class="btn on"
       id="nbBtn" title="Noise blanker — impulse noise: ignition, thermostats, switch-mode supplies, electric fences. A different fault again: impulses are brief and enormous, so the cure is to remove the moments they occupy rather than to filter continuously. On a clean signal it blanks nothing. The BLANKER figure in the Advanced RDS panel shows how much it is actually removing.">NB ON</button></div>
   </div>
+</div>
+
+<!-- ★★★ CHAT — a fixed vocabulary and nothing else. No text box anywhere on this page is the
+     point: nothing unpleasant can be said, so nobody has to police it, which is the only reason a
+     one-person operator would ever switch this on. People are ordinals; there is no name to set
+     and no account to make. -->
+<div id="chatPanel">
+  <div id="menuHead">
+    <span>CHAT</span>
+    <button class="btn" id="chatClose">CLOSE</button>
+  </div>
+  <div id="dialStrip" hidden></div>
+  <div id="chatLog"></div>
+  <h2>SAY</h2>
+  <div class="btnRow" id="chatPhrases"></div>
+  <p class="hint">Anybody may tune this receiver. These messages are how listeners agree who
+     goes next — there is no free text, and nobody has a name here.</p>
 </div>
 
 <!-- DECODERS menu — a copy of the app's CLIENT DECODERS + DECODED SPOTS section.
