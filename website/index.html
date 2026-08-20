@@ -608,23 +608,42 @@ async function loadDemo() {
   if (!sec) return;
   const fmt = (hz) => hz >= 1e6 ? (hz / 1e6).toFixed(3).replace(/\.?0+$/, '') + ' MHz'
                                 : Math.round(hz / 1e3) + ' kHz';
+  // ★★★ AN ON AIR SIGN MUST BE ABLE TO GO OUT. Every path in here used to set `hidden = false`
+  //     and nothing ever set it back, so the first successful poll lit the sign permanently: when
+  //     the demo went down the radio cards updated but the sign kept saying "3 receivers live from
+  //     England — tune them yourself", inviting people to click through to nothing (Stuart,
+  //     2026-08-20, with a screenshot taken while the Pi was off the LAN).
+  //  ★★ It is the same rule the sign's own comment states — "hidden until the server answers" —
+  //     applied to the case nobody wrote: the server answering and then STOPPING. A stale sign is
+  //     worse than no sign, because it is a promise the page cannot keep.
+  const hideDemo = () => {
+    const bar = document.getElementById('onAirBar');
+    if (bar) bar.hidden = true;
+    sec.hidden = true;
+  };
   try {
     const r = await fetch('/api/demo', { cache: 'no-store' });
+    if (!r.ok) { hideDemo(); return; }
     const d = await r.json();
-    if (!d.onAir || !d.radios.length) return;          // ★ stays hidden
+    if (!d.onAir || !d.radios || !d.radios.length) { hideDemo(); return; }
 
     document.getElementById('demoOpen').href = d.url;
 
     // ★★★ THE SIGN AND THE CARD ARE FED BY THE SAME ANSWER. Two fetches would let them disagree —
     //     a lit ON AIR sign above a card saying the receiver is down is exactly the sort of thing
     //     nobody notices until a visitor screenshots it.
+    // ★ "0 receivers live" is not an invitation, it is an apology — so the sign goes out entirely
+    //   when every radio is down, even though the machine itself answered.
+    const up = d.radios.filter((x) => x.up).length;
     const bar = document.getElementById('onAirBar');
     if (bar) {
-      const up = d.radios.filter((x) => x.up).length;
-      document.getElementById('oaCount').textContent =
-        up === 1 ? '1 receiver' : `${up} receivers`;
-      document.getElementById('oaListen').href = d.url;
-      bar.hidden = false;
+      if (up === 0) { bar.hidden = true; }
+      else {
+        document.getElementById('oaCount').textContent =
+          up === 1 ? '1 receiver' : `${up} receivers`;
+        document.getElementById('oaListen').href = d.url;
+        bar.hidden = false;
+      }
     }
     document.getElementById('demoLive').textContent =
       d.listeners === 1 ? 'On air · 1 listening' :
@@ -691,7 +710,12 @@ async function loadDemo() {
       'Runs on a Raspberry Pi on a home broadband line, so please be gentle with it. '
       + 'Everything you see there is in the source.';
     sec.hidden = false;
-  } catch (e) { /* ★ off, or unreachable — the card simply never appears */ }
+  } catch (e) {
+    // ★ Off, or unreachable. The card never appears on a first visit — and DISAPPEARS on a tab
+    //   that has been open since before the demo went down, which is the case this catch used to
+    //   leave stale.
+    hideDemo();
+  }
 }
 
 loadDemo();

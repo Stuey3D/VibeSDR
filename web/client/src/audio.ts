@@ -94,6 +94,8 @@ class VibeSink extends AudioWorkletProcessor {
     //   counting it would make the buffer grow every time the dial moved — punishing the user for
     //   tuning, which is the one thing they do constantly.
     this.armedByFlush = false;
+    this.drained = 0;            // samples this node has actually put out — see process()
+    this.lastReport = 0;
     this.port.onmessage = (e) => {
       // ★★★ FLUSH ON RETUNE. Everything already queued was demodulated at the OLD frequency, so
       //     playing it out after the dial has moved is just the previous station arriving late —
@@ -181,6 +183,17 @@ class VibeSink extends AudioWorkletProcessor {
     }
     this.r = (this.r + n) % this.cap;
     this.filled -= n;
+    // ★★★ SAY THAT SOUND IS ACTUALLY LEAVING. Everything else the page can see — frames arriving,
+    //     packets decoding, a peak level, even a clean RECORDING — is measured BEFORE this node.
+    //     So a stalled output looks identical to a healthy stream from every vantage point the
+    //     page had, which is exactly how a listener sat in silence while his own recording of the
+    //     same stream came out perfect (Stuart, 2026-08-20, shared VFO, another user tuning).
+    //  ★ Once a second, not per block: this is a heartbeat, not telemetry.
+    this.drained += n;
+    if (this.drained - this.lastReport >= 48000) {
+      this.lastReport = this.drained;
+      this.port.postMessage({ drained: this.drained });
+    }
     return true;
   }
 }
@@ -465,11 +478,16 @@ export class AudioPlayer {
         //   behind the waterfall?" has an answer on this side of the port — an adaptive value
         //   nobody can read is indistinguishable from a bug.
         this.node.port.onmessage = (e: MessageEvent) => {
-          const ms = (e.data as { jitterMs?: number })?.jitterMs;
-          if (typeof ms === 'number') this.jitterMs = ms;
+          const d = e.data as { jitterMs?: number; drained?: number };
+          if (typeof d?.jitterMs === 'number') this.jitterMs = d.jitterMs;
+          // ★★★ THE ONLY PROOF THAT SOUND IS LEAVING. See the note in the worklet: every other
+          //     signal this class has is measured before the node.
+          if (typeof d?.drained === 'number') this.lastDrainAt = performance.now();
         };
         this.node.connect(this.gain);
         this._connectOutput();
+        this.lastDrainAt = performance.now();
+        this._watchOutput();
       } else {
         this._startScriptProcessor();
       }
@@ -963,6 +981,54 @@ export class AudioPlayer {
   }
 
   private lastAudibleAt = 0;
+  /** When the playout node last reported that it had actually put samples out. */
+  private lastDrainAt = 0;
+  private stallWatch: number | null = null;
+  private stallRebuilds = 0;
+
+  /** ★★★ FRAMES IN, NO SOUND OUT — NOTICE IT, AND REBUILD.
+   *
+   *  A worklet that stops draining while audio keeps arriving is silence the page cannot see:
+   *  `health()` reports `ok` because it reads the DATA (frames, peak level, decoder state), and a
+   *  recording made at the same moment comes out perfect because the recorder taps the PCM before
+   *  this node. That combination is precisely what happened on the shared dial while another
+   *  listener tuned around (Stuart, 2026-08-20) — a clean 13.7 s recording of audio nobody could
+   *  hear.
+   *
+   *  ★★ REBUILD, DO NOT DIAGNOSE. The same rule the Opus decoder already follows: a node that has
+   *     stopped draining rarely starts again on its own, and a fresh one costs a few milliseconds.
+   *     Bounded to three attempts so a genuinely dead output stops thrashing and is left for
+   *     health() to report honestly.
+   *  ★ Squelch, mute and a suspended context are all NOT stalls — they are silence somebody asked
+   *    for, and rebuilding through them would be a bug wearing a fix's clothes. */
+  private _watchOutput() {
+    if (this.stallWatch !== null) return;
+    this.stallWatch = window.setInterval(() => {
+      if (!this.node || !this.ctx || this.ctx.state !== 'running') return;
+      if (this._muted || this.squelchActive || this.suspended) return;
+      const now = performance.now();
+      const feeding = this.lastAudibleAt > 0 && now - this.lastAudibleAt < 2000;
+      const draining = this.lastDrainAt > 0 && now - this.lastDrainAt < 2000;
+      if (!feeding || draining) return;
+      if (this.stallRebuilds >= 3) return;
+      this.stallRebuilds++;
+      console.warn('[audio] frames are arriving but the output has stopped draining — '
+                 + `rebuilding the playout node (attempt ${this.stallRebuilds})`);
+      try {
+        this.node.disconnect();
+        this.node = new AudioWorkletNode(this.ctx, 'vibe-sink', { outputChannelCount: [2] });
+        this.node.port.onmessage = (e: MessageEvent) => {
+          const d = e.data as { jitterMs?: number; drained?: number };
+          if (typeof d?.jitterMs === 'number') this.jitterMs = d.jitterMs;
+          if (typeof d?.drained === 'number') this.lastDrainAt = performance.now();
+        };
+        this.node.connect(this.gain!);
+        this.lastDrainAt = performance.now();     // give the new node its own two seconds
+      } catch (e) {
+        console.error('[audio] rebuilding the playout node failed', e);
+      }
+    }, 1000);
+  }
 
   async resume() {
     if (this.ctx && this.ctx.state === 'suspended') await this.ctx.resume();
@@ -982,6 +1048,9 @@ export class AudioPlayer {
   get muted() { return this._muted; }
 
   close() {
+    // ★ Stop the output watchdog with the output it watches — an interval that outlives its
+    //   AudioContext is a timer firing against a dead node for the life of the page.
+    if (this.stallWatch !== null) { clearInterval(this.stallWatch); this.stallWatch = null; }
     this.closedByUs = true;
     this.ws?.close();
     this.ws = null;

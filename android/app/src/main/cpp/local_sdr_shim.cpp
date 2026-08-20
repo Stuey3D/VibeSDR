@@ -3378,6 +3378,24 @@ struct LocalSdrShim::Impl {
         return specListenerCountLocked();
     }
     std::shared_ptr<net::Socket> audioClient;
+    /** ★★★ THE OTHER LISTENERS' AUDIO, on a receiver where everybody hears ONE VFO.
+     *
+     *  `audioClient` is a single pointer built for a one-at-a-time receiver, and the accept path
+     *  treated a second listener's audio socket as a RECONNECT: it took the slot and CLOSED the
+     *  previous one as stale. On the shared dial that is the first listener being cut off the
+     *  moment anybody else arrives — "audio for a second or so then silence" (Stuart, 2026-08-20,
+     *  the first time two people were on the demo's shared VFO at once).
+     *  ★★ The spectrum path already had this shape (specClient + specExtra) and this is the same
+     *     answer, deliberately: one primary so every existing path keeps working, plus the rest. */
+    std::vector<std::shared_ptr<net::Socket>> audioExtra;
+    /** Every open audio socket — primary first. Call WITHOUT clientMtx held. */
+    std::vector<std::shared_ptr<net::Socket>> allAudioSocks() {
+        std::vector<std::shared_ptr<net::Socket>> out;
+        std::lock_guard<std::mutex> lk(clientMtx);
+        if (audioClient && audioClient->isOpen()) out.push_back(audioClient);
+        for (auto& a : audioExtra) if (a && a->isOpen()) out.push_back(a);
+        return out;
+    }
     // The single occupant's session id (empty = free). Guarded by clientMtx. A client's spectrum +
     // audio sockets share this id; a second client is refused while it is held. See acceptWs.
     std::string occupantSession;
@@ -4769,7 +4787,18 @@ struct LocalSdrShim::Impl {
         vsAudioBytes.fetch_add(frame.size(), std::memory_order_relaxed);
     }
 
-    void sendAudioPcm(const std::shared_ptr<net::Socket>& sock, const int16_t* pcm, int count, int ch) {
+    /** ★★ ONE ENCODE, MANY SOCKETS. The Opus encoder is stateful and there is exactly one audio
+     *  stream here, so the frames are built ONCE and fanned out — encoding per listener would
+     *  produce different packet boundaries from the same samples and cost N times the CPU for no
+     *  difference anyone can hear. */
+    void sendAudioPcm(const std::vector<std::shared_ptr<net::Socket>>& socks,
+                      const int16_t* pcm, int count, int ch) {
+        if (socks.empty()) return;
+        auto fanOut = [&](const std::vector<uint8_t>& frame) {
+            for (auto& sk : socks)
+                if (sk && sk->isOpen()) sendWs(sk, 0x2, frame.data(), frame.size(), Out::Audio);
+            vsAudioBytes.fetch_add(frame.size() * socks.size(), std::memory_order_relaxed);
+        };
         if (count <= 0) return;
 
         // Mono-request fold (see audioForceMono): stereo → mono BEFORE encoding. Covers both the Opus
@@ -4796,8 +4825,7 @@ struct LocalSdrShim::Impl {
                 frame.push_back((uint8_t)(sr & 0xff));         frame.push_back((uint8_t)((sr >> 8) & 0xff));
                 frame.push_back((uint8_t)((sr >> 16) & 0xff)); frame.push_back((uint8_t)((sr >> 24) & 0xff));
                 frame.insert(frame.end(), pkt.begin(), pkt.end());
-                sendWs(sock, 0x2, frame.data(), frame.size(), Out::Audio);
-                vsAudioBytes.fetch_add(frame.size(), std::memory_order_relaxed);
+                fanOut(frame);
             }
             return;
         }
@@ -4808,8 +4836,7 @@ struct LocalSdrShim::Impl {
         frame[0] = (uint8_t)ch; frame[1] = 0;
         uint32_t sr = (uint32_t)AUDIO_SR; std::memcpy(&frame[2], &sr, 4);
         std::memcpy(frame.data() + 6, pcm, (size_t)count * ch * 2);
-        sendWs(sock, 0x2, frame.data(), frame.size(), Out::Audio);
-        vsAudioBytes.fetch_add(frame.size(), std::memory_order_relaxed);
+        fanOut(frame);
     }
 
     // ── Audio fault audit (passive) ────────────────────────────────────────
@@ -4879,9 +4906,11 @@ struct LocalSdrShim::Impl {
             for (int i = 0; i < count; i++) { data[i].l = 0.0f; data[i].r = 0.0f; }
         }
 
-        std::shared_ptr<net::Socket> sock;
-        { std::lock_guard<std::mutex> lk(clientMtx); sock = audioClient; }
-        if (!sock || !sock->isOpen()) return;
+        // ★★★ EVERY LISTENER, NOT JUST THE LAST ONE TO ARRIVE. One VFO means one demodulation and
+        //     one encode; the only thing that scales is the fan-out — which is exactly why this
+        //     mode is cheap enough to run on a phone (BRIEF-vibeserver-shared-tuning).
+        const std::vector<std::shared_ptr<net::Socket>> socks = allAudioSocks();
+        if (socks.empty()) return;
 
         // Auto notch (mono listening path, opt-in): removes steady tones before NR.
         if (notchOn.load() && ch == 1) {
@@ -4916,7 +4945,7 @@ struct LocalSdrShim::Impl {
                 int s = (int)lround(nrOut[i] * 32767.0f);
                 pcm0[i] = (int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s));
             }
-            sendAudioPcm(sock, pcm0.data(), n2, 1);
+            sendAudioPcm(socks, pcm0.data(), n2, 1);
             return;
         }
 
@@ -4933,7 +4962,7 @@ struct LocalSdrShim::Impl {
         } else {
             for (int i = 0; i < count; i++) pcm[i] = cvt(data[i].l);
         }
-        sendAudioPcm(sock, pcm.data(), count, ch);
+        sendAudioPcm(socks, pcm.data(), count, ch);
     }
 
     // ── Audio-extension decoder (RTTY) ─────────────────────────────────────
@@ -7009,7 +7038,12 @@ struct LocalSdrShim::Impl {
             // password — because the override has to be decided BEFORE the slot is claimed,
             // and the admin_unlock message arrives over a socket a busy server will not open.
             acceptWs(sock, wsKey, wsAudio, queryParam(reqLine, "user_session_id"),
-                     queryParam(reqLine, "codec") == "opus",
+                     // ★★★ ON A SHARED DIAL, OPUS IS NOT A REQUEST — IT IS THE STREAM. One encode
+                     //     is fanned out to everybody, so an older client asking for raw would
+                     //     otherwise re-cut what every other listener is receiving (and cost the
+                     //     owner ten times the uplink). /vibeserver.json already reports
+                     //     `uncompressed: off` there, so a current client never asks.
+                     queryParam(reqLine, "codec") == "opus" || vsSharedDial(),
                      queryParam(reqLine, "channels") == "1", wantBins,
                      queryParam(reqLine, "vs_admin_nonce"),
                      queryParam(reqLine, "vs_admin_auth"),
@@ -7599,8 +7633,16 @@ struct LocalSdrShim::Impl {
             std::string body = std::string("{\"server\":\"vibeserver\",\"proto\":1,\"pin\":")
                              + (pinOn ? "true" : "false") + ",\"web\":"
                              + (g_vsWebEnabled.load() ? "true" : "false")
+                             // ★★★ NEVER OFFER RAW ON A SHARED DIAL. Everybody hears ONE encode
+                             //     fanned out (see sendAudioPcm), so "uncompressed audio" is not a
+                             //     per-listener choice there — it is a switch whose every use is a
+                             //     no-op for the person who flips it and a tenfold uplink bill for
+                             //     the owner if it were honoured. Stuart, 2026-08-20: "maybe in
+                             //     shared VFO mode it is compressed only". Reported as OFF so the
+                             //     client hides the control rather than showing a dead one.
                              + ",\"uncompressed\":\""
-                             + (um == 1 ? "choice" : um == 2 ? "compat" : "off")
+                             + (vsSharedDial() ? "off"
+                                : um == 1 ? "choice" : um == 2 ? "compat" : "off")
                              + "\",\"local\":" + (loop ? "true" : "false")
                              + ",\"admin\":" + (adminSet ? "true" : "false") + verField
                              // ★ The owner's notice, so a client can say WHY the receiver is odd
@@ -8638,18 +8680,63 @@ struct LocalSdrShim::Impl {
                      wantsOpus ? "opus" : "pcm");
             }
             { std::lock_guard<std::mutex> lk(clientMtx);
-              stale = perClientDsp() ? nullptr : audioClient;
-              if (!perClientDsp()) audioClient = sock; }
-            audioForceMono.store(forceMono);
+              if (perClientDsp()) {
+                  stale = nullptr;                       // each listener owns its own channel
+              } else if (g_vsMaxUsers.load() > 1) {
+                  // ★★★ A SECOND LISTENER IS NOT A RECONNECT. On the shared dial every listener has
+                  //     their own audio socket while sharing ONE stream, so taking the single slot
+                  //     and closing the previous holder — which is what this did — cut the first
+                  //     listener off the instant anybody else arrived. Stuart heard it the first
+                  //     time two people were on the demo at once: "audio for a second or so then
+                  //     silence", with a recording proving the audio itself never stopped.
+                  //  ★★ A RECONNECT IS STILL A RECONNECT: a socket belonging to the SAME session is
+                  //     the ghost this logic was written for (watchOS suspends without a FIN), and
+                  //     that one is still closed. Matched on the session, not on the slot.
+                  audioExtra.erase(std::remove_if(audioExtra.begin(), audioExtra.end(),
+                      [](const std::shared_ptr<net::Socket>& a){ return !a || !a->isOpen(); }),
+                      audioExtra.end());
+                  if (!session.empty()) {
+                      for (auto& kv : sockSession) {
+                          if (kv.second != session || kv.first == sock.get()) continue;
+                          if (audioClient && audioClient.get() == kv.first) { stale = audioClient; audioClient = nullptr; break; }
+                          for (auto& a : audioExtra)
+                              if (a && a.get() == kv.first) { stale = a; a = nullptr; break; }
+                          if (stale) break;
+                      }
+                      audioExtra.erase(std::remove(audioExtra.begin(), audioExtra.end(),
+                                                   std::shared_ptr<net::Socket>()), audioExtra.end());
+                  }
+                  if (!audioClient || !audioClient->isOpen()) audioClient = sock;
+                  else audioExtra.push_back(sock);
+              } else {
+                  stale = audioClient;                   // one listener at a time: today's behaviour
+                  audioClient = sock;
+              } }
+            // ★★★ THE ARRIVING LISTENER DOES NOT GET TO RE-CUT EVERYBODY ELSE'S STREAM. On the
+            //     shared dial there is ONE encode fanned out to all of them, so a joiner storing
+            //     its own codec and resetting the encoder would change what the people already
+            //     listening receive — mid-sentence, and to something their decoder was never told
+            //     about. Whoever is first sets it; later joiners take what is playing.
+            //  ★ Alone (or on a one-at-a-time receiver) this is exactly as it was: there is nobody
+            //    to disturb, so the new listener's choice is the stream's choice.
+            const bool firstAudio = allAudioSocks().size() <= 1;
+            if (firstAudio) {
+                audioForceMono.store(forceMono);
 #ifdef VIBE_HAVE_OPUS
-            audioWantsOpus.store(wantsOpus);
-            opusEnc.reset();   // fresh stream for the new listener — no carried-over frame remainder
-            LOGI("audio WS connected (codec=%s, channels=%s)", wantsOpus ? "opus" : "pcm",
-                 forceMono ? "mono" : "native");
+                audioWantsOpus.store(wantsOpus);
+                opusEnc.reset();   // fresh stream for the new listener — no carried-over remainder
 #else
-            audioWantsOpus.store(false);   // no encoder in this build
-            LOGI("audio WS connected (pcm, channels=%s)", forceMono ? "mono" : "native");
+                audioWantsOpus.store(false);   // no encoder in this build
 #endif
+            } else if (wantsOpus != audioWantsOpus.load() || forceMono != audioForceMono.load()) {
+                LOGI("audio WS joined a shared stream — keeping %s/%s, not this listener's %s/%s",
+                     audioWantsOpus.load() ? "opus" : "pcm", audioForceMono.load() ? "mono" : "native",
+                     wantsOpus ? "opus" : "pcm", forceMono ? "mono" : "native");
+            }
+            LOGI("audio WS connected (codec=%s, channels=%s%s)",
+                 audioWantsOpus.load() ? "opus" : "pcm",
+                 audioForceMono.load() ? "mono" : "native",
+                 firstAudio ? "" : ", shared");
         } else {
             // ★★★ FIRST LISTENER IS THE PRIMARY; the rest join the list. Every existing path uses
             //     `specClient`, so the primary keeps them all working unchanged, and the extras get
@@ -8950,7 +9037,16 @@ struct LocalSdrShim::Impl {
               if (it->second == sock) it = pendingAudio.erase(it); else ++it;
           }
           for (auto& kv : clientDsp) if (kv.second->audio == sock) kv.second->audio = nullptr;
-          if (audioClient == sock) audioClient = nullptr;
+          if (audioClient == sock) {
+              audioClient = nullptr;
+              // ★ Promote, exactly as the spectrum path does when the primary leaves — the stream
+              //   is shared, so "primary" is only which pointer holds it.
+              for (auto& a : audioExtra)
+                  if (a && a->isOpen()) { audioClient = a; a = nullptr; break; }
+          }
+          audioExtra.erase(std::remove_if(audioExtra.begin(), audioExtra.end(),
+              [&](const std::shared_ptr<net::Socket>& a){ return !a || a == sock || !a->isOpen(); }),
+              audioExtra.end());
           // Free the slot once BOTH of the occupant's sockets are gone (a browser closing one tab
           // drops both). Until then a momentary spectrum reconnect must not surrender the slot to a
           // waiting device. A refused socket never reached here (it returned early), so it can't

@@ -250,8 +250,8 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           <option value="1">Listener's choice</option>
           <option value="2">Only as a fallback for old browsers</option>
         </select>
-        <div class="hint">Raw audio is about twenty times the bandwidth of Opus, out of your
-          upload.</div></label>
+        <div class="hint" id="uncompHint">Raw audio is about twenty times the bandwidth of Opus,
+          out of your upload.</div></label>
       </div>
 
       <!-- ★★★ ONE CHOICE FOR THE MACHINE. Opus or uncompressed is about what this server's UPLINK
@@ -828,6 +828,26 @@ function bwNote() {
 /** ★ Says what the Listeners count MEANS on an unlocked radio, live as it is typed — the shared
  *  dial has no switch of its own, so this is the only place an owner can learn that going from 1
  *  to 2 changes how the receiver behaves. */
+/** ★★★ RAW AUDIO IS NOT A CHOICE ON A SHARED DIAL. There, every listener hears ONE encode fanned
+ *  out to all of them (sendAudioPcm), so a per-listener "uncompressed" switch is a control whose
+ *  every use is a no-op for the person flipping it — and would be a tenfold uplink bill for the
+ *  owner if it were honoured. Greyed with the reason ON the control, the moment the Listeners box
+ *  goes above one (Stuart, 2026-08-20).
+ *  ★ Greyed rather than hidden: a setting that VANISHES reads as a bug, and this one comes back
+ *    the instant the count returns to 1. */
+function syncUncompressed() {
+  const sel = $("uncompressed"); if (!sel) return;
+  const n = parseInt($("users").value || "1", 10);
+  const shared = radio().mode !== "locked" && n > 1;
+  sel.disabled = shared;
+  if (shared) sel.value = "0";
+  const hint = $("uncompHint");
+  if (hint) hint.innerHTML = shared
+    ? "<b>Not available in shared VFO mode.</b> Every listener hears the same encode, so this is "
+      + "not a per-listener choice — everybody gets Opus."
+    : "Raw audio is about twenty times the bandwidth of Opus, out of your upload.";
+}
+
 function usersNote() {
   const el = $("usersNote"); if (!el) return;
   const n = parseInt($("users").value || "1", 10);
@@ -853,6 +873,7 @@ function setMode(locked) {
   // ★★ THE SHARED DIAL IS NOT A MODE — it is this mode with the Listeners box set above one, so
   //    the note explaining it follows the COUNT rather than a switch. See usersNote().
   if (typeof usersNote === "function") usersNote();
+  if (typeof syncUncompressed === "function") syncUncompressed();
   syncSpectroOffer();
 }
 
@@ -1851,7 +1872,7 @@ function fill() {
     if (row) row.classList.toggle("hide", (r.users || 1) <= 1); }
   if ($("spectrogram"))     $("spectrogram").checked = !!r.spectrogram;
   setMode((r.mode || "single") === "locked");
-  addr(); coverage(); bwNote(); usersNote(); refreshHw(); eibiStatus(); renderGain();
+  addr(); coverage(); bwNote(); usersNote(); syncUncompressed(); refreshHw(); eibiStatus(); renderGain();
   $("eibiGet").addEventListener("click", eibiFetch);
   $("rtlSerialGo").addEventListener("click", serialModalOpen);
   $("serialCancel").addEventListener("click", () => { $("serialModal").hidden = true; });
@@ -2104,7 +2125,7 @@ $("name").addEventListener("input", addr);
 $("mdns").addEventListener("change", addr);
 for (const id of ["lockFreq","rate"]) $(id).addEventListener("input", coverage);
 for (const id of ["users","uncompressed"])
-  $(id).addEventListener("input", () => { bwNote(); usersNote(); });
+  $(id).addEventListener("input", () => { bwNote(); usersNote(); syncUncompressed(); });
 
 // ★★★ SAVE THIS RADIO, AND ONLY THIS RADIO. No restart: the owner is working through three tabs,
 //     and bouncing every listener on every radio after each one would make the page unusable. The
