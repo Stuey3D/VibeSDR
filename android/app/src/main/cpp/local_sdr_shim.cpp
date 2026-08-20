@@ -7202,11 +7202,23 @@ struct LocalSdrShim::Impl {
             // available here, so an id sent in the POST body cannot be seen. Old
             // clients send nothing, and fall back to the previous behaviour.
             const std::string me = queryParam(reqLine, "user_session_id");
+            // ★★★ ROOM, NOT OCCUPANCY. This asked "is somebody else here", which is the right
+            //     question for a one-at-a-time receiver and the wrong one for a shared dial: with
+            //     ten slots and one listener the preflight refused everybody with `in-use`, so the
+            //     app let you tap the radio and then failed before a socket was ever opened
+            //     (Stuart, 2026-08-20: "it now allows you to tap the radio to connect then
+            //     fails"). Third copy of this test to be corrected today — isFullLocked() has
+            //     always known about capacity; these two did not.
             bool busy;
             { std::lock_guard<std::mutex> lk(clientMtx);
-              busy = !occupantSession.empty()
-                     && (me.empty() || occupantSession != me)
-                     && ((specClient && specClient->isOpen()) || (audioClient && audioClient->isOpen())); }
+              const int maxU = g_vsMaxUsers.load();
+              if (maxU > 1) {
+                  busy = specListenerCountLocked() >= maxU;
+              } else {
+                  busy = !occupantSession.empty()
+                         && (me.empty() || occupantSession != me)
+                         && ((specClient && specClient->isOpen()) || (audioClient && audioClient->isOpen()));
+              } }
             // Loopback exemption retained for the host's own browser, which is
             // the occupant or about to become one. It was also masking the bug
             // above, which is why only NETWORK clients ever saw it.
