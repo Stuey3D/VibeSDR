@@ -308,6 +308,17 @@ struct RadioConfig {
      *     chose it under today's meaning, and a setting must never change what it does underneath
      *     the person who set it. */
     bool   sessionLimitSoft = false;
+    /** ★★★ WHO MAY TUNE — the third usage mode, and the one the FM-DX world runs on.
+     *    0 EXCLUSIVE (default, today's behaviour) · 1 SPECTATOR (owner tunes, many listen)
+     *    2 OPEN (many listen, one holds the dial, asking is one tap).
+     *  ★★ It is a HYBRID of the two modes that already exist (Stuart, 2026-08-20): the allow/block
+     *     list and the per-band gain ceilings come from the single-user radio, the listener count
+     *     from the multi-user one. Nothing new had to be invented for either half.
+     *  ★ Absent = 0, so every existing config keeps its meaning exactly. */
+    int    tuneMode = 0;
+    /** Seconds before an untouched dial frees itself. 0 = never — the release is NOT mandatory
+     *  (Stuart, 2026-08-20). A decode suspends it regardless. */
+    int    dialIdleSec = 180;
     /** ★★★ DISCONNECT A LISTENER WHO HAS GONE AWAY — minutes of asking for nothing. 0 = OFF, and
      *  off is the default: this is an option for a busy shared receiver, not a policy.
      *
