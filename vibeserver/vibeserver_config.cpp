@@ -10,6 +10,10 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+// ★ <cstdint> BY NAME for uint64_t in radioId(). It arrives transitively on bookworm's g++ 12 and
+//   on clang, and NOT on Ubuntu 24.04's g++ 13 — where the whole file fails. Found the first time
+//   this was compiled on x86 (2026-08-20), the same shape as <cmath> in vibe_bands.h that morning.
+#include <cstdint>
 
 namespace vsconfig {
 namespace {
