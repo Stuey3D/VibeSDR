@@ -1047,11 +1047,24 @@ async function refresh() {
     //       is listening or thirty, and updating from a browser beats SSH more for a simple user,
     //       not less. Session limits and the queue also stay: they exist today, and taking away
     //       something people already have is far worse than never adding it.
+    // ★★★ WHO IS ON MY RECEIVER IS NOT A "MANAGING STRANGERS" QUESTION — IT IS THE FIRST QUESTION.
+    //     The three IP panels used to be gated on public sharing, on the reasoning that a
+    //     household receiver has nobody to police. That reasoning came from a Simple mode that
+    //     meant ONE listener at a time; it now means a receiver that can be shared, including the
+    //     FM-DX arrangement where several people are on one dial — and then "who is connected"
+    //     matters to an owner whether or not the internet can reach them (Stuart, 2026-08-20:
+    //     "we have changed the definition of simple mode now so the IP panels are needed here
+    //     too").
+    //  ★★ THE MAP STAYS GATED. It answers "where in the world do my visitors come from", which is
+    //     a public-receiver question; on a LAN it is one pin on your own house. That is the line:
+    //     panels that say WHO IS HERE are for everybody, the one that says WHERE THEY CAME FROM is
+    //     for a receiver strangers can reach.
     const full = st.publicSharing === true;
-    for (const id of ['secListeners', 'secBlocking', 'secHistory', 'secCountries']) {
+    for (const id of ['secListeners', 'secBlocking', 'secHistory']) {
       const el = document.getElementById(id);
-      if (el) el.hidden = !full;
+      if (el) el.hidden = false;
     }
+    { const el = document.getElementById('secCountries'); if (el) el.hidden = !full; }
     // ★★★ ONLY DRAW WHAT THIS PLATFORM CAN ACTUALLY DO. The server advertises its maintenance
     //     actions; anything not listed is not shown. On macOS a reboot stops at the FileVault
     //     login and needs someone physically present, and on Android the USB radio is not
@@ -1083,14 +1096,19 @@ async function refresh() {
 
     }
 
+    // ★ The note explained a short page. The page is no longer short — only the visitor MAP is
+    //   gated now — so it would be describing panels that are on screen.
     const note = document.getElementById('adminSimpleNote');
-    if (note) note.hidden = full;
+    if (note) note.hidden = true;
 
     // ★ Only render what is on screen. Not an optimisation for its own sake — rendering into a
     //   hidden panel is how a stale table survives a mode change and reappears wrong.
+    // ★★ RENDER WHAT IS ON SCREEN. Listeners, bans and history are drawn in BOTH modes now; only
+    //    the country map is still gated, so only it sits inside the `full` block below.
+    renderSessions(ses);
+    renderBans(st.bans ?? []);
+    renderConns(conns.connections ?? []);
     if (full) {
-      renderSessions(ses);
-      renderBans(st.bans ?? []);
       // ★★★ MACHINE-WIDE, not one radio's. `st.countries` is computed inside whichever process
       //     answered the status call, from ITS OWN connection log — so a listener on another radio
       //     is simply absent. Stuart, 2026-08-19: "brazil is on there but not shown", with a
@@ -1104,7 +1122,6 @@ async function refresh() {
         const bars = document.getElementById('adminCountries');
         if (ok && bars) bars.hidden = true;
       });
-      renderConns(conns.connections ?? []);
     }
     // ★ Always, in both modes: the header names which server you are looking at, and an early
     //   return past it would leave it stale — which on an admin page is the one thing that must
