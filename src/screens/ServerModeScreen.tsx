@@ -340,10 +340,6 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     if (!running) return;
     const t = setInterval(async () => {
       const s = await getVibeServerStatus();
-      // ★ DIAGNOSTIC (2026-08-19): says whether the poll is even running, and what it got back.
-      //   A null here means the bridge call rejected; a populated object with client=false means
-      //   the shim said so. Those need opposite fixes. Remove once the cause is known.
-      console.log('[vibeserver] poll ->', s ? JSON.stringify(s) : 'NULL (bridge rejected)');
       if (s) setStatus(s);
     }, 1500);
     return () => clearInterval(t);
@@ -595,6 +591,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     const spec = status?.specBytesPerSec ?? 0;
     const aud = status?.audioBytesPerSec ?? 0;
     const client = status?.client;
+    const listeners = status?.listeners ?? 0;
+    const maxUsers = status?.maxUsers ?? 1;
     return (
       <SafeAreaView style={[styles.root, { backgroundColor: C.bg }]}>
         <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
@@ -614,8 +612,16 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               <Row C={C} F={F} k="NAME" v={`${mdnsHost}.local:${running.port}`} vc={C.amber} />
             )}
             <Row C={C} F={F} k="ACCESS" v={effectivePin ? `PIN ${effectivePin}` : 'Open (no PIN)'} vc={effectivePin ? C.green : C.amber} />
+            {/* ★★ SAY HOW MANY, not just yes/no — a shared receiver has a number, and this row is
+                   the host's whole view of who is on. `listeners` and `client` come from the same
+                   count in the shim (specListenerCount), so they cannot disagree with the admin
+                   page the way the old spectrum-socket test did. */}
             <Row C={C} F={F} k="STATUS"
-              v={client ? (status?.clientAddr ? `Connected: ${status.clientAddr}` : 'Client connected') : 'Waiting for a client…'}
+              v={client
+                   ? (listeners > 1
+                        ? `${listeners} listening${maxUsers > 1 ? ` of ${maxUsers}` : ''}`
+                        : (status?.clientAddr ? `Connected: ${status.clientAddr}` : 'Client connected'))
+                   : 'Waiting for a client…'}
               vc={client ? C.green : C.goldDim} />
             <Row C={C} F={F} k="WATERFALL" v={`${fmtRate(spec)}`} vc={client ? C.amber : C.goldDim} />
             <Row C={C} F={F} k="AUDIO" v={`${fmtRate(aud)}${status?.compressed ? '' : ' (raw)'}`} vc={client ? C.amber : C.goldDim} />

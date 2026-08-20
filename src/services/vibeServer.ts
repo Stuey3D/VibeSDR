@@ -144,6 +144,11 @@ export type VibeServerStatus = {
    *  directly comparable with the Pi figures. 0 = not measured. */
   cpu: number;
   cores: number;
+  /** ★★ HOW MANY ARE LISTENING, from the shim's one authoritative counter — the same number the
+   *  admin page and every picker use. `client` is derived from it, so the host's screen and the
+   *  server can no longer hold different opinions about whether anybody is on. */
+  listeners: number;
+  maxUsers: number;
 };
 
 export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServerInfo> {

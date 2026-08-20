@@ -598,6 +598,10 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             // showed "—" despite the native side emitting it.
             m.putDouble("sampleRate", o.optLong("sampleRate", 0).toDouble())
             m.putInt("port", o.optInt("port", 0))
+            // ★ The listener COUNT, from the shim's one authoritative counter. See the note on
+            //   clientConnected in getVibeServerStatus() — the screen used to have its own idea.
+            m.putInt("listeners", o.optInt("listeners", 0))
+            m.putInt("maxUsers", o.optInt("maxUsers", 1))
             // ★★★ THE DECORATIONS MUST NOT BE ABLE TO KILL THE READING. Everything above comes
             //     from the shim's own JSON and is the ANSWER; everything in this block is a nicety
             //     read from the phone — the local address, a CPU percentage out of /proc, the core

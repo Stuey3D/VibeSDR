@@ -521,13 +521,6 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeGetServerStatus(JNIEnv* env, jobject) {
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeGetVibeServerStatus(JNIEnv* env, jobject) {
     auto s = vibe::LocalSdrShim::instance().getVibeServerStatus();
-    // ★ DIAGNOSTIC (2026-08-19): the app's status reads empty while the phone's OWN admin page —
-    //   same process, same `p` — shows listeners, frequency, span and uplink correctly. Every
-    //   remaining theory needs a value from the device rather than another reading of the code,
-    //   so this prints what the struct actually contains. Remove once the cause is known.
-    LOGI("status: running=%d client=%d addr=%s rate=%.0f fft=%.0f",
-         s.running ? 1 : 0, s.clientConnected ? 1 : 0,
-         s.clientAddr.empty() ? "(none)" : s.clientAddr.c_str(), s.sampleRate, s.fftRate);
     std::string j = "{";
     j += "\"running\":"          + std::string(s.running ? "true" : "false");
     j += ",\"client\":"          + std::string(s.clientConnected ? "true" : "false");
@@ -539,6 +532,12 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeGetVibeServerStatus(JNIEnv* env, jobject
     j += ",\"fftRate\":"         + std::to_string((long long)(s.fftRate + 0.5));
     j += ",\"bandwidthHz\":"     + std::to_string((long long)(s.bandwidthHz + 0.5));
     j += ",\"sampleRate\":"      + std::to_string((long long)(s.sampleRate + 0.5));
+    // ★★ THE COUNT, NOT JUST THE YES/NO — the same figure the admin page shows, so the two
+    //    readings of one server can never disagree again. `port` is here because the screen
+    //    ADOPTS a server it did not start and had no other way to learn it (it showed `ip:0`).
+    j += ",\"listeners\":"       + std::to_string(s.listeners);
+    j += ",\"maxUsers\":"        + std::to_string(s.maxUsers);
+    j += ",\"port\":"            + std::to_string(s.port);
     j += "}";
     return env->NewStringUTF(j.c_str());
 }

@@ -623,6 +623,15 @@ public:
         /** The radio has stopped delivering IQ — unplugged or failed. The server is still up and
          *  still serving; it simply has nothing to serve. */
         bool     deviceLost       = false;
+        /** ★★★ THE SAME COUNT THE ADMIN PAGE AND EVERY PICKER USE (specListenerCount). The host's
+         *  own screen used to derive "is anybody on" from the spectrum socket alone, which is a
+         *  SECOND definition of the same state — and the two disagreed exactly when it mattered.
+         *  See the note on clientConnected in getVibeServerStatus(). */
+        int      listeners        = 0;
+        int      maxUsers         = 1;
+        /** The port it actually bound. The status is how a screen ADOPTS a server it did not
+         *  start, and without this it could only ever show `ip:0`. */
+        int      port             = 0;
     };
     VibeServerStatus getVibeServerStatus();
 

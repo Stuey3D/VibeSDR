@@ -13397,11 +13397,39 @@ LocalSdrShim::VibeServerStatus LocalSdrShim::getVibeServerStatus() {
     s.fftRate   = p->fftRate;
     s.bandwidthHz = p->vfoBwHz.load();
     s.sampleRate  = p->sampleRate;
+    s.port = p->port;
+    s.maxUsers = g_vsMaxUsers.load();
     { std::lock_guard<std::mutex> lk(p->clientMtx);
+      // ★★★ ONE DEFINITION OF "SOMEBODY IS LISTENING", AND IT IS specListenerCountLocked().
+      //     This asked the spectrum and audio sockets DIRECTLY — a second definition of the same
+      //     state, and on a phone the two disagree in exactly the case the screen exists for.
+      //
+      //     THE FAULT IT CAUSED (Stuart, 2026-08-19, phone only, unexplained for a day): to look
+      //     at this screen you must leave the browser, and OUR WEB CLIENT CLOSES ITS SPECTRUM
+      //     SOCKET WHEN IT IS BACKGROUNDED and keeps the audio — so by the time the host has
+      //     switched to the app, `specClient` is gone. The server was right, the admin page was
+      //     right, the app said "Waiting for a client…". The one reader that had to leave the
+      //     page to be read was the one reading a value the leaving destroyed.
+      //
+      //  ★★ specListenerCountLocked() already knows this: it was taught the audio-socket
+      //     fallback on 2026-08-17 when the same closure made a busy radio advertise itself as
+      //     FREE. That fix went into every client's picker and this screen kept its own copy.
+      //     See [[spectrum_socket_is_not_the_listener]] — third occurrence of the same shape.
+      s.listeners = p->specListenerCountLocked();
+      s.clientConnected = s.listeners > 0;
       auto sp = p->specClient, au = p->audioClient;
-      s.clientConnected = (sp && sp->isOpen()) || (au && au->isOpen());
-      if (au && au->isOpen()) s.clientAddr = au->peerAddress();
-      else if (sp && sp->isOpen()) s.clientAddr = sp->peerAddress(); }
+      if (sp && sp->isOpen())      s.clientAddr = sp->peerAddress();
+      else if (au && au->isOpen()) s.clientAddr = au->peerAddress();
+      // ★ Neither socket is the primary's? Then the listener is a per-client one (a shared
+      //   receiver with a locked centre) — take the first live address rather than reporting a
+      //   connection with nobody's name on it.
+      if (s.clientAddr.empty())
+          for (auto& kv : p->clientDsp) {
+              auto& c = kv.second;
+              if (!c) continue;
+              if (c->spec && c->spec->isOpen())  { s.clientAddr = c->spec->peerAddress();  break; }
+              if (c->audio && c->audio->isOpen()){ s.clientAddr = c->audio->peerAddress(); break; }
+          } }
     // Byte rates = delta since the previous poll (the sharing screen polls ~1-2 s).
     uint64_t spec = p->vsSpecBytes.load(std::memory_order_relaxed);
     uint64_t aud  = p->vsAudioBytes.load(std::memory_order_relaxed);
