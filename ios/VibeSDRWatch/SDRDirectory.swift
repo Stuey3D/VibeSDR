@@ -32,8 +32,24 @@ enum ServerType: String, Codable, CaseIterable {
     case .fmdx: return 3; case .vibeserver: return 4; case .spyserver: return 5; case .rtltcp: return 6
     }
   }
-  /// Can the spike actually connect to this yet? (Others land as adapters arrive.)
-  var connectable: Bool { self == .ubersdr || self == .kiwi || self == .owrx || self == .fmdx || self == .vibeserver }
+  /// ★★★ EVERYTHING, BECAUSE BUDDY DOES NOT CONNECT TO ANYTHING. This list was copied from Jr,
+  /// where it is correct and load-bearing: Jr is STANDALONE, it opens the receiver itself, and it
+  /// genuinely cannot speak raw IQ — rtl_tcp and SpyServer would saturate the watch's link and its
+  /// CPU. See [the two apps are different products].
+  ///
+  /// Buddy is the REMOTE. It never opens a receiver; it names one and the PHONE connects, and the
+  /// phone is the full app — `applyInstance` in App.tsx already parses `rtltcp://host:port` and
+  /// calls `connectLocal`, which has existed the whole time. So Jr's limitation arrived here as
+  /// pure inheritance and gated a capability the phone always had.
+  ///
+  /// ★★ AND IT FAILED SILENTLY. `guard type.connectable else { return }` in InstancePickerView —
+  /// tapping an RTL-TCP favourite on the wrist did NOTHING AT ALL: no error, no hint, no screen.
+  /// That is what the user in GitHub #21 reported ("nothing happen when you click the fav
+  /// server"), and why it worked the moment they tapped the same server on the phone.
+  ///
+  /// ★ Kept as a property rather than deleted, so a future type that Buddy really cannot forward
+  ///   has somewhere to say so — but the default for a remote is yes.
+  var connectable: Bool { true }
 }
 
 /// A server row — from a directory or a saved favourite. `url` is the connect key.

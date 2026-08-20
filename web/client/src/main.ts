@@ -914,13 +914,24 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         : '';
     },
     // ── ★★ THE SHARED DIAL. Only a receiver running open or spectator tuning sends these; on an
-    //    ordinary one the chat button never appears at all.
+    //    ordinary one this never fires, and the buttons stay in the disabled state they start in.
     onDial: (d) => {
       chatDial(d);
       const on = d.mode !== 'exclusive';
       for (const id of ['chatBtn', 'mChat']) {
-        const b = document.getElementById(id);
-        if (b) (b as HTMLElement).hidden = !on;
+        const b = document.getElementById(id) as HTMLButtonElement | null;
+        if (!b) continue;
+        // ★★★ DISABLED, NOT HIDDEN (Stuart, 2026-08-20). A vanishing button collapsed the right
+        //     stack to one cell and left portrait with three buttons where the layout wants four,
+        //     so the island changed shape depending on which receiver you were on. Greying keeps
+        //     one geometry everywhere.
+        b.disabled = !on;
+        // ★★ And it must say why it is grey, or "permanently disabled" reads as "broken". The
+        //    reason belongs here, beside the condition that causes it — not in a static title
+        //    that would be wrong half the time.
+        b.title = on
+          ? 'Ask about the dial — canned messages only'
+          : 'Chat is only on shared-dial receivers, where several people share one tuner';
       }
     },
     onDialRefused: () => { chatRefused(); togglePanel('chatPanel'); },

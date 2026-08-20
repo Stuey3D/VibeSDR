@@ -38,8 +38,9 @@ private func haversineKm(_ a: CLLocationCoordinate2D, _ blat: Double, _ blon: Do
 ///
 /// Favourites at the top (six sort modes + drag-to-reorder in Manual), then the directories
 /// (UberSDR / Receiverbook / KiwiSDR / FM-DX) each expandable into their server list, plus a
-/// manual custom-URL add. Only UberSDR is connectable today; other rows show a "soon" hint until
-/// their protocol lands in the spike.
+/// manual custom-URL add. EVERY server type is connectable from here — Buddy names a server and
+/// the PHONE connects it, so there is no protocol for the watch to lack. (Jr, which opens the
+/// receiver itself, is the one with real limits; its copy of this file keeps them.)
 /// ★ NO LOCAL DISCOVERY IN BUDDY (Stuart: "nah not needed in buddy"). mDNS found VibeServers for
 ///   the WATCH to open; here the phone owns the connection, so a server the watch can see but the
 ///   phone cannot reach would be a dead row.
@@ -300,6 +301,8 @@ struct InstancePickerView: View {
     if let cc = s.countryCode { bits.append(cc) } else if !s.location.isEmpty { bits.append(s.location) }
     if let d = s.distance { bits.append("\(Int(d.rounded())) km") }
     if let sn = s.bestSnr { bits.append("SNR \(Int(sn.rounded()))") }
+    // ★ Kept, and now never fires: `connectable` is true for every type Buddy forwards. If one is
+    //   ever added that the phone cannot drive, this is where the row says so.
     if !s.serverType.connectable { bits.append("· soon") }
     return bits.joined(separator: " · ")
   }

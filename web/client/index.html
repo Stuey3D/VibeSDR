@@ -341,7 +341,13 @@ html #bar { display: none; }
 }
 #mMain .mDial { min-width: 10.5em; }
 /* Two half-height buttons in the space one full-height one would take. */
-.mStack { display: grid; grid-template-rows: 1fr 1fr; gap: 0.3em; }
+/* ★★ BOTH STACKS ARE ONE WIDTH, and it belongs to the STACK rather than to a button inside it.
+   The 7.2em used to live on #mStep alone, so the left stack was step-sized and the right stack
+   was content-sized — an icon and "CHAT" are narrower than "100kHz", and the island came out
+   visibly lopsided (Stuart, 2026-08-20). Sizing the container instead makes the pair symmetrical
+   whatever either label says, which is the actual requirement: the two stacks flank the pill. */
+.mStack { display: grid; grid-template-rows: 1fr 1fr; gap: 0.3em;
+          width: 7.2em; max-width: 30vw; box-sizing: border-box; }
 .mStack .mBtn { min-height: 0; padding: 0.2em 0.7em; font-size: 0.95em; }
 
 /* NARROW: the pads and stacks FLOW UNDER the frequency (Stuart). `order` keeps the pill on
@@ -509,11 +515,18 @@ html #bar { display: none; }
 }
 .mBtn:active { background: rgba(255, 160, 0, 0.18); }
 .mBtn.on { border-color: var(--phosphor); color: var(--phosphor); }
+/* ★★★ A CONTROL THAT DOES NOT APPLY IS GREYED, NOT REMOVED. Hiding the chat collapsed the right
+   stack to a single button and made the island asymmetric — and in portrait it left a row of
+   three where the layout is built for four (Stuart, 2026-08-20). Disabled keeps the geometry
+   identical on every receiver, so one layout serves both.
+   ★★ It also has to SAY WHY, or a permanently grey button reads as broken rather than as not
+      applicable — the `title` is set with the state, next to the code that sets the state. */
+.mBtn[disabled], .btn[disabled] { opacity: 0.38; cursor: default; pointer-events: none; }
 
 /* ★★ The card's step button carries the SAME full label as the desktop one ("6.25kHz", not
    "6.25k"), and this stack is content-sized — so without a reserved width, changing step
    resized the stack and pushed the island wider. Fixed width, same reasoning as #stepBtn. */
-#mStep { width: 7.2em; max-width: 30vw; box-sizing: border-box;
+#mStep { width: 100%; box-sizing: border-box;
          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* ★★★ THE STEP BUTTON FILLS ITS CELL ON A PHONE — AND THIS RULE MUST LIVE *AFTER* THE ONE ABOVE.
    The fixed 7.2em exists to stop a CONTENT-SIZED island resizing when the label changes ("6.25kHz"
@@ -524,9 +537,12 @@ html #bar { display: none; }
       EARLIER in this file. Same specificity (#mStep both), so SOURCE ORDER decides and the base
       rule won — a media query does not raise specificity, and the override silently did nothing.
       Placing it here is what makes it apply. */
-@media (max-width: 900px) { #mStep { width: 100%; max-width: none; } }
+/* ★ ...and on the narrow layouts it is the STACK that must let go, since the width now lives
+   there. Releasing #mStep alone would leave the fixed 7.2em on the container and achieve
+   nothing — the same trap as before, one level up. */
+@media (max-width: 900px) { .mStack { width: 100%; max-width: none; } }
 @media (orientation: landscape) and (max-height: 560px) and (min-width: 700px) {
-  #mStep { width: 100%; max-width: none; }
+  .mStack { width: 100%; max-width: none; }
 }
 
 /* ★★ AUDIO SHOWS ITS STATE. Muting is the one setting on this card whose effect is total
@@ -2414,9 +2430,10 @@ select.btn { padding: 6px 8px; }
       <div class="mStack" id="mStackR">
         <button class="mBtn" id="mAudio" title="Audio: squelch, noise reduction, notch" aria-label="Audio"><span class="mIcLive"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M12.5 8a3 3 0 0 1 0 4"/><path d="M14.5 6a6 6 0 0 1 0 8"/></svg></span><span class="mIcMute"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M13 8L17 12M17 8L13 12"/></svg></span></button>
         <!-- ★★ Was DECODERS, which now lives with the demodulators in the mode picker — same
-             layout the app already has. On a receiver with no shared dial this button is hidden
-             and the pair collapses to one, exactly as it did before the chat existed. -->
-        <button class="mBtn" id="mChat" title="Chat" hidden>CHAT<span class="unread" id="mChatUnread" hidden></span></button>
+             layout the app already has. On a receiver with no shared dial this button is GREYED,
+             not hidden: the stack keeps both cells, so the island stays symmetrical and portrait
+             keeps four buttons instead of three. -->
+        <button class="mBtn" id="mChat" title="Chat" disabled>CHAT<span class="unread" id="mChatUnread" hidden></span></button>
       </div>
       <div class="mDial" id="mZoomDial">
         <button class="mBtn" id="mZoomOut" aria-label="Zoom out">−</button>
@@ -2514,8 +2531,9 @@ select.btn { padding: 6px 8px; }
           <button class="btn" id="menuBtn">MENU</button>
           <!-- ★★ THE CHAT SITS WHERE DECODERS USED TO. On a shared-dial receiver it is not a
                nicety: the server enforces nothing about who tunes, so this is how two strangers
-               agree. Hidden entirely on an ordinary receiver, where there is nobody to talk to. -->
-          <button class="btn" id="chatBtn" title="Ask about the dial — canned messages only" hidden>CHAT<span class="unread" id="chatUnread" hidden></span></button>
+               agree. Greyed out on an ordinary receiver, where there is nobody to talk to — and
+               greyed rather than hidden so the cluster does not change shape per receiver. -->
+          <button class="btn" id="chatBtn" title="Ask about the dial — canned messages only" disabled>CHAT<span class="unread" id="chatUnread" hidden></span></button>
         </div>
         <div class="group">
           <span class="lbl">VOL</span>
