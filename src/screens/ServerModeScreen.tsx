@@ -1050,8 +1050,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             {advanced && (<>
               <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>HOW WILL IT BE USED?</Text>
               <View style={{ flexDirection: 'row', gap: 8 }}>
-                {([['single', 'One user at a time', 'The whole radio, every control'],
-                   ['locked', 'Shared, locked range', 'You set the window, they tune inside it']] as const)
+                {/* ★★★ NAMED FOR WHAT ACTUALLY DIFFERS: whether the centre is pinned, and so
+                    whether listeners share one dial or each get their own VFO. The old names
+                    described a USER COUNT, which is the separate question below — and that made
+                    the multi-listener UNLOCKED receiver (the FM-DX one) look like a third mode it
+                    never was (Stuart, 2026-08-20). Same words as the browser's setup page. */}
+                {([['single', 'Unlocked radio — one dial', 'It really retunes; 1 or many listeners'],
+                   ['locked', 'Locked centre — own VFOs', 'You set the window, they tune inside it']] as const)
                   .map(([v, title, sub]) => (
                   <TouchableOpacity key={v}
                     onPress={() => { setRadioUse(v); AsyncStorage.setItem(K.radioUse, v); }}
@@ -1316,9 +1321,49 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   </Text>
                 </View>
                 </>)}
-                {/* ★★ ONLY IN LOCKED-RANGE MODE. "One user at a time" answers this question by
-                    its name; offering a listener count beside it invites setting them to
-                    disagree. */}
+                {/* ★★★ HOW MANY — ON EITHER KIND OF RECEIVER, and on an unlocked one this is the
+                    control that turns it into an FM-DX receiver. It used to live inside the
+                    locked-range block, so an unlocked radio was stuck at one listener and the
+                    shared dial had no switch at all (Stuart, 2026-08-20: "you forgot the most
+                    important control"). The browser's setup page had the identical fault. */}
+                <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>HOW MANY LISTENERS</Text>
+                <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                  {[1, 2, 3, 4, 6, 8].map(n => (
+                    <TouchableOpacity key={n} onPress={() => setMaxUsers(n)}
+                      style={[styles.card, { borderColor: maxUsers === n ? C.green : C.border,
+                                             backgroundColor: maxUsers === n ? C.green + '18' : 'transparent',
+                                             paddingVertical: 10, paddingHorizontal: 14 }]}>
+                      <Text style={{ color: maxUsers === n ? C.green : C.gold, fontFamily: F, fontSize: 14 }}>
+                        {n === 1 ? 'One' : n}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                {/* ★★★ WHAT THE NUMBER MEANS DEPENDS ON THE MODE ABOVE, and the difference is the
+                    whole feature: pinned centre = everybody tunes independently; unpinned = one
+                    dial everybody hears, which is how FM-DX receivers work. Said here because
+                    this is where the owner is standing when it matters. */}
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                  {maxUsers === 1
+                    ? 'One listener at a time, each with the full settings surface \u2014 the second '
+                      + 'person sees IN USE and waits. Right for a receiver you mostly use yourself.'
+                    : radioUse === 'locked'
+                    ? `Up to ${maxUsers} listeners share the radio, each with their own tuning inside `
+                      + 'what the radio is receiving.\n\nThe extra DSP is close to nothing \u2014 they '
+                      + 'share one FFT. What actually runs out is UPLINK, so on a phone this is a '
+                      + 'question about your connection, not about the handset.'
+                    : `ONE DIAL, SHARED. Up to ${maxUsers} listeners hear the same frequency and `
+                      + 'anybody may move it \u2014 the way FM-DX receivers work. They get a small set '
+                      + 'of fixed messages ("Can I tune?", "Please hold \u2014 chasing DX") to agree who '
+                      + 'goes next; there is no free text and nobody has a name, so there is nothing '
+                      + 'to moderate.\n\nOne VFO means the DSP cost barely moves with the number of '
+                      + 'listeners. What runs out is UPLINK.'}
+                </Text>
+
+                {/* ★★ LOCKED-RANGE ONLY, and it is the setting that DEFINES that mode: pinning the
+                    centre is what gives every listener their own VFO inside one captured window.
+                    An unlocked radio has no window to pin — it retunes — which is why the listener
+                    count above now sits outside this block and this does not. */}
                 {radioUse === 'locked' && (<>
                 {/* ★★★ THE CAPTURED WINDOW — the setting that makes shared listening possible at
                     all. Everybody gets a slice of ONE window, so the centre must not move; on this
@@ -1357,29 +1402,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   </Text>
                 </View>
 
-                <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>HOW MANY LISTENERS</Text>
-                <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-                  {[1, 2, 3, 4, 6, 8].map(n => (
-                    <TouchableOpacity key={n} onPress={() => setMaxUsers(n)}
-                      style={[styles.card, { borderColor: maxUsers === n ? C.green : C.border,
-                                             backgroundColor: maxUsers === n ? C.green + '18' : 'transparent',
-                                             paddingVertical: 10, paddingHorizontal: 14 }]}>
-                      <Text style={{ color: maxUsers === n ? C.green : C.gold, fontFamily: F, fontSize: 14 }}>
-                        {n === 1 ? 'One' : n}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-                  {maxUsers === 1
-                    ? 'One listener at a time, each with the full settings surface \u2014 the second '
-                      + 'person sees IN USE and waits. Right for a receiver you mostly use yourself.'
-                    : `Up to ${maxUsers} listeners share the radio, each with their own tuning inside `
-                      + 'what the radio is receiving.\n\nThe extra DSP is close to nothing \u2014 they '
-                      + 'share one FFT. What actually runs out is UPLINK, so on a phone this is a '
-                      + 'question about your connection, not about the handset.'}
-                </Text>
                 </>)}
+
 
                 {/* ★★★ NOT IN LOCKED-RANGE MODE. The window IS the limit there, so an allow/block
                     list is a second answer to a question already answered — and two ways to say
