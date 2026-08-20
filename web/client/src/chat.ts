@@ -129,7 +129,9 @@ export function onDial(d: DialState) {
   //    the one thing a shared dial must never look like.
   if (d.mode === 'spectator') bits.push('the owner tunes this receiver');
   else if (d.decoding)        bits.push(d.mine ? 'you are decoding' : `User ${d.tuner} is decoding`);
-  else if (d.tuner && d.mine) bits.push('you have the dial');
+  // ★ "You are tuning", not "you have the dial": nobody HOLDS it. Saying otherwise would promise
+  //   an exclusivity the server does not enforce and Stuart deliberately did not want.
+  else if (d.tuner && d.mine) bits.push('you tuned last');
   else if (d.tuner)           bits.push(`User ${d.tuner} is tuning`);
   else                        bits.push('nobody is tuning — go ahead');
   strip.textContent = bits.join(' · ');

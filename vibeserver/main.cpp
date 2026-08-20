@@ -1526,6 +1526,18 @@ int main(int argc, char** argv) {
                 const bool restricted = !r.allowRanges.empty() || !r.blockRanges.empty();
                 if (!cov.empty())  j += ",\"coverage\":" + vibebands::toJson(cov);
                 if (!perm.empty()) j += ",\"allowed\":"  + vibebands::toJson(perm);
+                // ★★★ AND NAME THEM WHERE THEY HAVE NAMES. A restricted radio was publishing the
+                //     HARDWARE's reach — "1 kHz – 31 MHz, 60 MHz – 260 MHz · RESTRICTIONS IN
+                //     PLACE" — which describes a receiver nobody can use as advertised. What a
+                //     visitor wants is the two words that say what it is FOR: "AM (medium wave)
+                //     broadcast, FM broadcast" (Stuart, 2026-08-20).
+                //  ★ Server-side because the BAND PLAN is server-side, and it is region-aware:
+                //    medium wave ends at 1606.5 kHz here and 1705 in the Americas.
+                if (restricted && !perm.empty()) {
+                    const std::string labels =
+                        vibebands::labelsJson(perm, vibebands::defaultRegion());
+                    if (labels != "[]") j += ",\"allowedNames\":" + labels;
+                }
                 j += std::string(",\"restricted\":") + (restricted ? "true" : "false");
                 if (!r.allowRanges.empty())
                     j += ",\"allowList\":\"" + jsonEscape(r.allowRanges) + "\"";

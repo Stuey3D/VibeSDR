@@ -1185,6 +1185,20 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   border: 1px solid var(--btn-border); border-radius: 6px; padding: 6px 8px;
 }
 #dialStrip.busy { color: var(--amber); border-color: rgba(255, 176, 0, 0.5); }
+/* ★★★ THE PHRASES ARE SENTENCES, NOT LABELS, so they must be allowed to wrap. `.btn` is nowrap
+   everywhere else in this page — right for MENU and FIT, wrong for "I'm running a decoder — can
+   you wait please?", which ran straight out through the side of the panel (Stuart, 2026-08-20).
+   ★★ And on a phone each one takes the full width rather than fighting for a share of a row: a
+      half-width button holding a sentence is two words a line. This panel has to work on the
+      narrowest screen we support, because the receiver it belongs to is the one people share. */
+#chatPhrases .btn {
+  white-space: normal; text-align: left; line-height: 1.3;
+  max-width: 100%; flex: 0 1 auto; padding: 6px 10px;
+}
+@media (max-width: 520px) {
+  #chatPhrases .btn { flex: 1 1 100%; }
+  #chatLog { max-height: 30vh; }
+}
 /* ★ The unread mark: a count, not a dot. "3" says whether it is worth opening; a dot does not. */
 .unread {
   display: inline-block; min-width: 1.1em; margin-left: 0.4em; padding: 0 0.25em;

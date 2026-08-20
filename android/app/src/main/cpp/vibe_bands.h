@@ -17,6 +17,10 @@
 
 #include <algorithm>
 #include <cctype>
+// ★ <cmath> for std::fabs in bandLabel(). It arrives transitively on clang/macOS and NOT on
+//   Debian's gcc, so leaving it out builds clean here and fails on the machine that ships —
+//   see mac_only_compile_is_not_a_build. Named includes only.
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -347,6 +351,40 @@ inline std::string toJson(const Ranges& r) {
         snprintf(b, sizeof b, "%s[%lld,%lld]", i ? "," : "",
                  (long long)(r[i].lo + 0.5), (long long)(r[i].hi + 0.5));
         j += b;
+    }
+    return j + "]";
+}
+
+/** ★★★ NAME THE BANDS A LISTENER IS ACTUALLY ALLOWED INTO, rather than reciting the hardware's
+ *  reach. A card reading "1 kHz – 31 MHz, 60 MHz – 260 MHz · RESTRICTIONS IN PLACE" describes a
+ *  receiver nobody can use as advertised; "AM (medium wave) broadcast, FM broadcast" describes the
+ *  one that is actually there (Stuart, 2026-08-20).
+ *
+ *  ★★ A range is named when it MATCHES a band in the plan closely enough to be that band — within
+ *     `tol` at each edge, so an owner who typed 87.5–108.0 and one who typed the band id `fm` get
+ *     the same words. An owner's arbitrary slice has no name and keeps its numbers, which is the
+ *     honest answer: inventing "part of FM broadcast" would be worse than the figures.
+ *  ★ Region-aware, because the plan is: medium wave stops at 1606.5 kHz in Region 1 and 1705 in
+ *    Region 2, and the label follows whichever this server is in. */
+inline std::string bandLabel(const Range& r, int region, double tol = 50000.0) {
+    for (const auto& b : namedBands(region))
+        if (std::fabs(r.lo - b.lo) <= tol && std::fabs(r.hi - b.hi) <= tol) return b.label;
+    return std::string();
+}
+
+/** Labels for a permitted set, as a JSON array. Unnamed ranges are omitted — the caller still has
+ *  the numbers, and a half-named list ("FM broadcast, 4.1–4.9 MHz") is for the caller to compose. */
+inline std::string labelsJson(const Ranges& rs, int region) {
+    std::string j = "[";
+    bool first = true;
+    for (const auto& r : rs) {
+        const std::string l = bandLabel(r, region);
+        if (l.empty()) continue;
+        if (!first) j += ',';
+        first = false;
+        j += '"';
+        for (char c : l) { if (c == '"' || c == '\\') j += '\\'; j += c; }
+        j += '"';
     }
     return j + "]";
 }

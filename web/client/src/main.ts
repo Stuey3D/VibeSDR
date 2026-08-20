@@ -3098,10 +3098,25 @@ async function showSplashRadios(): Promise<void> {
     const lists = [ (r as any).allowList ? `Allowed: ${(r as any).allowList}` : '',
                     (r as any).blockList ? `Blocked: ${(r as any).blockList}` : '' ]
                   .filter(Boolean).join(' — ');
+    // ★★★ SAY WHAT A LISTENER MAY ACTUALLY TUNE, IN WORDS WHERE THERE ARE WORDS. A restricted
+    //     radio recited the HARDWARE's reach and then apologised for it — "1 kHz – 31 MHz,
+    //     60 MHz – 260 MHz · RESTRICTIONS IN PLACE" — which describes a receiver nobody can use as
+    //     advertised, and buries what it is FOR (Stuart, 2026-08-20). The server names the
+    //     permitted bands from its own region-aware plan; we prefer those words to any numbers.
+    //  ★ `allowed` (the permitted RANGES) is the fallback when a slice has no name, because an
+    //    owner's arbitrary window is real and unnameable — better its figures than a vague label.
+    const named: string[] = Array.isArray((r as any).allowedNames) ? (r as any).allowedNames : [];
+    const allowed: [number, number][] = Array.isArray((r as any).allowed) ? (r as any).allowed : [];
     let range: string;
     let rangeTitle = '';
     if (lo > 0 && hi > lo) {
       range = `${mhz(lo)} – ${mhz(hi)} MHz`;
+    } else if (restricted && named.length) {
+      range = named.join(', ');
+      rangeTitle = lists || 'The operator has limited where this receiver may tune.';
+    } else if (restricted && allowed.length) {
+      range = allowed.map(([a, b]) => `${hzTxt(a)} – ${hzTxt(b)}`).join(', ');
+      rangeTitle = lists || 'The operator has limited where this receiver may tune.';
     } else if (cov.length) {
       range = cov.map(([a, b]) => `${hzTxt(a)} – ${hzTxt(b)}`).join(', ')
             + (restricted ? ' · RESTRICTIONS IN PLACE' : ' · UNRESTRICTED');
@@ -3109,7 +3124,15 @@ async function showSplashRadios(): Promise<void> {
     } else {
       range = `${mhz(Number(r.centreHz) || 0)} MHz`;
     }
-    const kind = max > 1 ? 'shared' : 'one listener at a time';
+    // ★★★ "SHARED" WAS TRUE OF TWO COMPLETELY DIFFERENT RECEIVERS. A locked-centre radio gives
+    //     every listener their own VFO inside one window; an unlocked one gives them all the same
+    //     dial, which is a different experience and the one worth coming for. The word said
+    //     neither (Stuart, 2026-08-20: "we need to differentiate the tuning").
+    // ★ Read from the DIRECTORY's `locked`, which is the radio's mode — not from whether a centre
+    //   happens to be set, so the two can never disagree.
+    const kind = max <= 1 ? 'one listener at a time'
+               : (r as any).locked ? 'individual VFOs · locked RF centre'
+                                   : 'shared VFO · unlocked RF centre';
     // ★ A radio that is full or down is not a link. Greying it out but leaving it clickable would
     //   send someone to a page that refuses them, which is worse than saying so here.
     // ★★★ UNLESS YOU ARE THE ADMIN. The owner can take a radio back off whoever is using it, so a
