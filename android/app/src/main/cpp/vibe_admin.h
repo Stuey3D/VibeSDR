@@ -441,6 +441,17 @@ struct ConnRec {
      *     is per-process and clears on restart, so anything computed from it would forget exactly
      *     the history this is for. */
     bool        admin = false;
+    /** ★★★ HOW MANY SOCKETS OF THIS VISIT ARE STILL OPEN. A listener holds a spectrum socket AND
+     *  an audio socket; the log used to open on the spectrum one alone and close on whichever
+     *  ended first, which worked only as long as the two never raced. They do: the client's
+     *  reachability KNOCK is still closing when the real socket lands, so open() found a row that
+     *  was still open, gave up, and started a second one. On the demo that was 104 of 246 rows
+     *  stamped ZERO SECONDS — a log that reads as a stream of people bouncing off the server when
+     *  in fact the median visit was two and a half minutes (2026-08-20).
+     *  ★★ So a visit is one row and the row closes when its LAST socket does. Transient — not
+     *     serialised, and a value restored from disk starts at zero, which close() treats as
+     *     "already the last one". */
+    int         live = 0;
 };
 
 /**
@@ -533,12 +544,27 @@ public:
         if (!session.empty()) {
             for (auto it = recs_.rbegin(); it != recs_.rend(); ++it) {
                 if (it->session != session) continue;
+                // ★★★ STILL OPEN = THE SECOND SOCKET OF THE SAME VISIT. This is the case the
+                //     coalescer below was missing: it only knew how to absorb a stub that had
+                //     already CLOSED, and the knock frequently has not by the time the real
+                //     socket arrives. Falling through to a new row is what produced the pairs.
+                // ★ Insurance: a row that somehow never closed must not swallow every later
+                //   visit from the same tab for ever. Half a day is far longer than any real
+                //   listen and far shorter than "for ever".
+                if (it->endEpoch == 0 && (now - it->atEpoch) > 12 * 3600) break;
+                if (it->endEpoch == 0) {
+                    ++it->live;
+                    if (it->agent.empty()) it->agent = agent.substr(0, 160);
+                    if (it->cc.empty())    it->cc = cc;
+                    return;
+                }
                 const bool closedJustNow = it->endEpoch > 0 && (now - it->endEpoch) <= 2;
                 const bool carriedNothing = it->bytes < 20000;
                 const bool wasBrief = (it->endEpoch - it->atEpoch) <= 1;
                 if (closedJustNow && carriedNothing && wasBrief) {
                     it->endEpoch = 0;                 // open again — same visit, second socket
                     it->bytes = 0;
+                    it->live = 1;
                     if (it->agent.empty()) it->agent = agent.substr(0, 160);
                     if (it->cc.empty())    it->cc = cc;
                     return;
@@ -549,6 +575,7 @@ public:
 
         ConnRec r;
         r.atEpoch = now;
+        r.live = 1;
         r.ip = ip;
         r.session = session;
         r.cc = cc;
@@ -596,9 +623,18 @@ public:
             if (it->endEpoch) continue;
             const bool hit = session.empty() ? (it->ip == ip) : (it->session == session);
             if (!hit) continue;
+            // ★★★ THE BYTES ARE THE SESSION'S RUNNING TOTAL, not this socket's, so the LARGEST
+            //     figure seen is the true one — taking whatever the last caller passed let a
+            //     socket that carried almost nothing overwrite a megabyte count.
+            if (bytes > it->bytes) it->bytes = bytes;
+            // ★★★ CLOSE ON THE LAST SOCKET, NOT THE FIRST. A visit holds two; ending the row when
+            //     the first one goes stamped the visit with the length of whichever socket died
+            //     soonest, which on a reconnect is zero. A record restored from disk has live 0
+            //     and is treated as its own last socket, so nothing can be left open for ever.
+            if (it->live > 1) { --it->live; return; }
+            it->live = 0;
             it->endEpoch = nowEpoch();
             it->endReason = reason;
-            it->bytes = bytes;
             pending_.push_back(*it);
             dirty_ = true;
             return;
