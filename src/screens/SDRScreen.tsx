@@ -21,6 +21,7 @@ import { setSessionTeardown } from '../services/crashGuard';
 import {
   Alert,
   AppState,
+  Linking,
   Modal,
   BackHandler,
   ActivityIndicator,
@@ -6313,6 +6314,22 @@ export default function SDRScreen({ route, navigation }: Props) {
         <View style={styles.radioPickBackdrop}>
           <Text style={styles.radioPickTitle}>{door.name}</Text>
           <Text style={styles.radioPickSub}>Choose a receiver</Text>
+          {/* ★★★ THE OWNER'S STANDING MESSAGE. Donation link, house rules, "5 fps idle is
+              normal" — the things that stop a correct-but-unexplained receiver reading as a
+              broken one. The browser's landing page has carried it since 2026-08-19 and the app
+              showed nothing, so an operator writing it reached only half their visitors.
+              ★ NOT the transient notice: this one never expires and is not dismissed. */}
+          {!!door.landingMessage && (
+            <Text style={styles.radioPickMsg}>{door.landingMessage}</Text>
+          )}
+          {!!door.landingLinkUrl && (
+            <Text
+              style={styles.radioPickLink}
+              onPress={() => Linking.openURL(door.landingLinkUrl!).catch(() => {})}
+            >
+              {door.landingLinkLabel || door.landingLinkUrl}
+            </Text>
+          )}
           <ScrollView
             style={styles.radioPickList}
             contentContainerStyle={{ paddingBottom: 24 }}
@@ -6370,6 +6387,14 @@ export default function SDRScreen({ route, navigation }: Props) {
                   {blocked ? ' · owner’s password below to take it' : ''}
                   {busy && !!adminAuthQ ? ' · you can take this one' : ''}
                 </Text>
+                {/* ★★★ THE AERIAL, UNDER THE RANGE IT QUALIFIES — the same order the browser's
+                    card uses, and the order is the point: the range says where this radio CAN
+                    tune, the aerial says where it will actually hear anything. A dongle offering
+                    1.7 GHz above "YouLoop, 10 kHz – 300 MHz" tells a listener something neither
+                    line says alone. */}
+                {!!r.antenna && (
+                  <Text style={styles.radioPickAnt} numberOfLines={2}>{`\u2191 ${r.antenna}`}</Text>
+                )}
               </Pressable>
             ); })}
           </ScrollView>
@@ -6999,11 +7024,27 @@ export default function SDRScreen({ route, navigation }: Props) {
           right and the Servers chip on the left — it is a sentence, and it needs the width.
           ★ Tappable to dismiss, and amber rather than red: this is the owner talking, not an
             error. A red banner over a working receiver teaches people to distrust red. */}
+      {/* ★★★ AND SHOW THE WAY OUT. Tapping the pill has always dismissed it, and nothing on
+          screen said so — an undiscoverable gesture is the same as no gesture, and this pill sits
+          over the waterfall (Stuart, 2026-08-20: "the Maintenance message doesnt have the X to
+          dismiss button either").
+          ★★ The × is its own touch target rather than a decoration: 44 pt, and the TEXT flexes
+             around it. On the SE in Display Zoom — the narrowest layout we support — a × that is
+             merely drawn at the end of a wrapping string is the first thing to be clipped, and a
+             clipped dismiss is a trap rather than an untidiness (se_display_zoom_narrowest_layout). */}
       {!!ownerNotice && ownerNotice !== noticeSeen && (
         <TouchableOpacity activeOpacity={0.85}
           onPress={() => setNoticeSeen(ownerNotice)}
           style={[styles.ownerNotice, { top: insets.top + 8 }]}>
-          <Text style={styles.ownerNoticeTxt} numberOfLines={3}>{ownerNotice}</Text>
+          <Text style={[styles.ownerNoticeTxt, { flex: 1 }]} numberOfLines={3}>{ownerNotice}</Text>
+          <TouchableOpacity
+            onPress={() => setNoticeSeen(ownerNotice)}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss this message"
+            style={styles.ownerNoticeX}>
+            <Text style={styles.ownerNoticeXTxt}>×</Text>
+          </TouchableOpacity>
         </TouchableOpacity>
       )}
 
@@ -7716,10 +7757,18 @@ export default function SDRScreen({ route, navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
+  // ★ A row now, because the × sits beside the text rather than inside it — see the note at the
+  //   render site. `maxWidth` stays: a notice as wide as the screen is a banner, not a pill.
   ownerNotice: { position: 'absolute', alignSelf: 'center', zIndex: 215, maxWidth: '70%',
-                 paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, borderWidth: 1,
+                 flexDirection: 'row', alignItems: 'center', gap: 6,
+                 paddingLeft: 14, paddingRight: 6, paddingVertical: 8, borderRadius: 8, borderWidth: 1,
                  borderColor: 'rgba(255,180,60,0.55)', backgroundColor: 'rgba(30,20,0,0.94)' },
   ownerNoticeTxt: { color: '#ffd479', fontFamily: 'Nixie One', fontSize: 13, textAlign: 'center' },
+  // ★ 30 pt of drawn box plus 10 pt of hitSlop each way clears the 44 pt target without making the
+  //   pill look like it has a button bolted on.
+  ownerNoticeX:    { width: 30, height: 30, alignItems: 'center', justifyContent: 'center' },
+  ownerNoticeXTxt: { color: '#ffd479', fontFamily: 'Nixie One', fontSize: 20, lineHeight: 22,
+                     opacity: 0.85 },
   rxClock:     { position: 'absolute', zIndex: 210,
                  paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10,
                  borderWidth: 1, backgroundColor: 'rgba(8,6,2,0.72)', alignItems: 'flex-end' },
@@ -7747,6 +7796,16 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,229,102,0.06)',
   },
   radioPickName:   { color: '#ffe566', fontSize: 16 },
+  // ★ The owner's standing message and its link, above the radio list. Left-aligned and allowed
+  //   to run to several lines: it is prose, not a label, and centring prose makes it harder to read.
+  radioPickMsg:  { color: 'rgba(255,212,121,0.92)', fontFamily: 'Nixie One', fontSize: 13,
+                   lineHeight: 18, marginTop: 10, marginBottom: 2, paddingHorizontal: 18 },
+  radioPickLink: { color: '#ffb833', fontFamily: 'Nixie One', fontSize: 13, lineHeight: 18,
+                   textDecorationLine: 'underline', marginBottom: 6, paddingHorizontal: 18 },
+  // ★ Dimmer than the description above it: the aerial qualifies the range, it does not compete
+  //   with it.
+  radioPickAnt:  { color: 'rgba(255,200,120,0.6)', fontFamily: 'Nixie One', fontSize: 12,
+                   marginTop: 2 },
   radioPickAdmin: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4, marginBottom: 6 },
   radioPickAdminInput: {
     flex: 1, color: '#eee', fontSize: 14, paddingVertical: 10, paddingHorizontal: 12,

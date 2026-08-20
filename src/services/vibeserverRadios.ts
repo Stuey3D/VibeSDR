@@ -41,12 +41,27 @@ export interface VibeRadio {
   allowedNames?: string[];
   /** The radio this machine nominates for the spectrogram and band conditions. */
   primary?: boolean;
+  /** ★★ WHAT IS ACTUALLY CONNECTED TO IT — "YouLoop 10 kHz – 300 MHz". A receiver publishes what
+   *  the TUNER can reach and never what the AERIAL can, and the gap between those two is the
+   *  difference between a promising card and a disappointing listen. The browser has shown this
+   *  since 2026-08-19; the app never asked for it. */
+  antenna?: string;
+  /** Which line drawing goes beside it — a key, so an app that does not know this one draws its
+   *  default rather than nothing. */
+  antennaIcon?: string;
 }
 
 export interface VibeFrontDoor {
   /** The machine's name, shown above the list. */
   name: string;
   radios: VibeRadio[];
+  /** ★★★ THE OWNER'S STANDING MESSAGE — donation link, house rules, "5 fps idle is normal". NOT
+   *  the transient notice: this one does not expire and is not dismissed, because it is what the
+   *  operator wants every visitor to read. It has been on the browser's landing page since
+   *  2026-08-19 and the app showed nothing at all. */
+  landingMessage?: string;
+  landingLinkUrl?: string;
+  landingLinkLabel?: string;
 }
 
 const num = (v: any, d = 0) => (typeof v === 'number' && isFinite(v) ? v : d);
@@ -90,9 +105,20 @@ export async function fetchFrontDoor(
         allowedNames: Array.isArray(x.allowedNames)
           ? x.allowedNames.filter((n: any) => typeof n === 'string') : undefined,
         primary: x.primary === true,
+        antenna: typeof x.antenna === 'string' && x.antenna ? x.antenna : undefined,
+        antennaIcon: typeof x.antennaIcon === 'string' ? x.antennaIcon : undefined,
       }));
     if (!radios.length) return null;         // a door with nothing behind it is not a choice
-    return { name: String(j.name || 'VibeServer'), radios };
+    return {
+      name: String(j.name || 'VibeServer'),
+      radios,
+      landingMessage: typeof j.landingMessage === 'string' && j.landingMessage
+        ? j.landingMessage : undefined,
+      landingLinkUrl: typeof j.landingLinkUrl === 'string' && j.landingLinkUrl
+        ? j.landingLinkUrl : undefined,
+      landingLinkLabel: typeof j.landingLinkLabel === 'string' && j.landingLinkLabel
+        ? j.landingLinkLabel : undefined,
+    };
   } catch {
     return null;                             // offline, or not a VibeServer — same answer either way
   } finally {
