@@ -299,7 +299,12 @@ function initSplash() {
         try {
           const r = await fetch(`${httpBase(host)}/vibeserver.json`, { cache: 'no-store' });
           const j = await r.json();
-          busy = j.busy === true;
+          // ★★★ CLAIMABLE IS NOT BUSY. Past the guarantee the slot belongs to whoever wants it,
+          //     so warning "connecting will disconnect them" describes the SERVER'S OWN RULE as
+          //     if it were the operator's doing — and makes an ordinary arrival feel like an
+          //     eviction (Stuart, 2026-08-20). The card says FREE for exactly this case; this
+          //     gate has to agree with it.
+          busy = j.busy === true && j.claimable !== true;
           freeIn = typeof j.freeInSec === 'number' ? j.freeInSec : -1;
         } catch { /* unreachable is reported by connect() below */ }
         if (busy) {
@@ -3125,7 +3130,19 @@ async function showSplashRadios(): Promise<void> {
       if (i < 0) return;
       const st = live[i];
       const max = Number(st?.maxUsers) || Number(radios[i].users) || 1;
-      const busy = st && max > 0 && (Number(st.listeners) || 0) >= max;
+      // ★★★ A CLAIMABLE RADIO IS NOT BUSY — NOT EVEN FOR THE ADMIN. Past the guarantee the
+      //     incumbent holds the slot only until somebody wants it, so arriving IS the rule
+      //     working, not an act of eviction. The card already says FREE (radioCardState); asking
+      //     "taking over will disconnect them, continue?" on top of that contradicts the card and
+      //     makes the arriving user feel like a queue-jumper for doing the ordinary thing
+      //     (Stuart, 2026-08-20: "should not be made to feel guilty for taking it over").
+      //     The only thing they should see is the handover countdown while the server gives the
+      //     incumbent their notice.
+      // ★★ THIS IS THE SAME DRIFT, A THIRD TIME: a private copy of "is this radio available" that
+      //    does not know about `claimable`. The confirm belongs to a radio that is genuinely full
+      //    — somebody inside their guarantee — which is what `blocked` from radioCardState means.
+      const busy = st && max > 0 && (Number(st.listeners) || 0) >= max
+                   && st.claimable !== true;
       if (!busy) return;
       a.addEventListener('click', (ev) => {
         const left = typeof st?.freeInSec === 'number' && st.freeInSec >= 0
