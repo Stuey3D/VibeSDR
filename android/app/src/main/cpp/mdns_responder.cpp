@@ -429,7 +429,39 @@ void loop(std::string base, uint32_t addr) {
              (unsigned)g_svcPort);
 
     // ── Serve ────────────────────────────────────────────────────────────────
+    // ★★★ RE-JOIN THE GROUP, FOR EVER. A multicast membership does NOT survive the interface it
+    //     was made on going away, and on a phone that happens without anything else breaking:
+    //     leave the screen off, Wi-Fi power-saves and re-associates, and the membership is
+    //     silently gone. The socket stays open, the server keeps serving on its IP, TCP is
+    //     untouched — and `vibesdr-moto-g35.local` simply stops resolving, for ever, because
+    //     nothing ever re-joins (Stuart, 2026-08-20: it "isn't reactivating", with the screen off).
+    //
+    //  ★★ IP_ADD_MEMBERSHIP IS THE TEST AS WELL AS THE CURE. Re-adding a membership we still hold
+    //     fails with EADDRINUSE, which we ignore; if it SUCCEEDS we had lost it, and that is
+    //     exactly when the network needs to hear our name again — so a successful re-join
+    //     re-announces. No timer guessing, no polling of interface state, no false announcements.
+    //
+    //  ★ 20 s: fast enough that a listener who reaches for the name after a power-save blip finds
+    //    it, slow enough to be invisible — this is two setsockopt calls a minute.
+    time_t lastJoin = time(nullptr);
     while (g_run.load()) {
+        {
+            const time_t nowT = time(nullptr);
+            if (nowT - lastJoin >= 20 || nowT < lastJoin) {
+                lastJoin = nowT;
+                ip_mreq re{};
+                re.imr_multiaddr.s_addr = inet_addr(kGroup);
+                re.imr_interface.s_addr = htonl(INADDR_ANY);
+                if (setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &re, sizeof re) == 0) {
+                    LOGI("mDNS multicast membership had been lost — re-joined and re-announcing");
+                    sendTo(fd, buildAnswer(host, addr, 0), group);
+                    if (g_svcPort) {
+                        const std::string svc = buildService(host, addr, 0, true);
+                        if (!svc.empty()) sendTo(fd, svc, group);
+                    }
+                }
+            }
+        }
         timeval tv{1, 0};
         fd_set rd;
         FD_ZERO(&rd);

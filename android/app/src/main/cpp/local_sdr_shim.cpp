@@ -12973,6 +12973,27 @@ void LocalSdrShim::stopLocked() {
     Impl* impl = p; p = nullptr;
 
     impl->serverRunning.store(false);
+    // ★★★ AND STOP LISTENING NOW, NOT WHEN THE TEARDOWN FINISHES. Everything below this line can
+    //     take time — audio, decoders, the front end, and threads that have to notice they are
+    //     being stopped — and the listening socket used to stay bound for all of it, released only
+    //     by ~Listener when `delete impl` finally ran at the very bottom.
+    //
+    //  ★★★ SO A STOPPING SERVER STILL ACCEPTED TCP AND THEN ANSWERED NOTHING. On the Moto today
+    //      that left port 48000 bound with two of Stuart's connections in CLOSE_WAIT and fresh
+    //      requests hanging for ever — which from a browser is indistinguishable from a wedged
+    //      server: the page loads nothing, tuning does nothing, gain does nothing. "The webclient
+    //      isnt working again… same no tuning or gain as before" (2026-08-20). A REFUSED
+    //      connection is a fact a client can act on; an accepted one that never answers is not.
+    //
+    //  ★★ Stop() is idempotent (it checks open_) and ~Listener calls it again harmlessly, so this
+    //     is not the double-close that once tripped fdsan — that was an explicit close BEFORE the
+    //     open_ guard existed. The note below still stands for the ACCEPT LOOP, which needs no
+    //     poking to exit; this is about the PORT, which does.
+    //
+    //  ★ It does not fix the underlying hang — the radio threads were still alive with the accept
+    //    loop long gone — but it converts an invisible failure into a visible one, and that is
+    //    what let the hang hide for two days.
+    if (impl->listener) impl->listener->stop();
     // Close the client sockets FIRST. The FFT/audio worker threads write to them
     // via sendWs; if a client has stopped reading (e.g. the app is tearing the
     // spectrum/audio WS down while switching to a network instance), that send
@@ -13051,13 +13072,12 @@ void LocalSdrShim::stopLocked() {
     impl->stopSpots();
     { std::lock_guard<std::mutex> lk(impl->nrMtx); delete impl->nrEng; impl->nrEng = nullptr; }
     { std::lock_guard<std::mutex> lk(impl->notchMtx); delete impl->notchEng; impl->notchEng = nullptr; }
-    // NOTE: do NOT call listener->stop() here. acceptLoop polls accept() with a
-    // 500ms timeout and checks serverRunning, so clearing it (above) exits the
-    // loop on its own. net::Listener::stop() isn't idempotent (it closeSocket()s
-    // unconditionally) and ~Listener calls stop() again on `delete impl` — an
-    // explicit stop() here made that a DOUBLE close of the same fd, which after
-    // the number was reused tripped fdsan → SIGABRT on teardown. Let ~Listener
-    // close it exactly once.
+    // NOTE: the accept loop needs no poking to exit — it polls accept() with a 500 ms timeout and
+    // checks serverRunning, which was cleared at the top. The PORT is closed up there too, and
+    // deliberately early; see the note beside it.
+    // ★ The old warning here said stop() was not idempotent and would double-close the fd (fdsan →
+    //   SIGABRT). It guards on `open_` and clears `fd_` now, so ~Listener's second call is a
+    //   no-op. Checked in net_shim.cpp rather than assumed, because that abort was real.
     // ★★★ NEVER JOIN THE THREAD YOU ARE ON. `joinable()` means "has an associated thread", NOT
     //     "is not me" — so a CONNECTION THREAD that reaches this teardown (a client disconnecting
     //     is exactly that) walked the list and joined ITSELF. std::thread::join() then throws
