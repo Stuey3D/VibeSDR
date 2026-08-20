@@ -4158,7 +4158,19 @@ struct LocalSdrShim::Impl {
             // A quantity that is meant to be steady must not be derived from one that is not.
             if (rdsxOn.load()) {
                 const double now = nowSecs();
-                if (now - rdsxLastAt >= 1.0 / 6.0) { rdsxLastAt = now; sendRdsExt(sock); }
+                if (now - rdsxLastAt >= 1.0 / 6.0) {
+                    rdsxLastAt = now;
+                    // ★★★ TO EVERY LISTENER, NOT JUST peers.front(). `sock` here is the FIRST
+                    //     peer, so on a shared dial the Advanced RDS panel populated for whoever
+                    //     joined first and stayed empty for everybody else — the same fault as the
+                    //     RDS metadata beside it, and found the same way: Stuart had the analyser
+                    //     filling while my mirror had never received a single frame (2026-08-20).
+                    //  ★ Per-client receivers keep the per-socket call: there the payload is built
+                    //    from THAT listener's own decoder, so one socket is the right answer.
+                    if (perClientDsp()) sendRdsExt(sock);
+                    else for (auto& pr : peers)
+                        if (pr.sock && pr.sock->isOpen()) sendRdsExt(pr.sock);
+                }
             }
             if (n % 2 == 0) { enforceSessionLimit(); enforceAdminIdle(); }
         }
@@ -5241,9 +5253,33 @@ struct LocalSdrShim::Impl {
      *  is a plain loop: nobody can suppress anybody else's message, and a listener who joins
      *  mid-song is told the station's name on their first tick because their own lastSent* are
      *  empty. The peer-tracking set this needed a moment ago was a symptom of shared state. */
-    void sendFmMetaAll() { for (auto& p : allSpecPeers()) sendFmMeta(p.sock); }
+    /** ★★★ ONE CHANGE-DETECT FOR ONE STREAM, THEN FAN IT OUT.
+     *
+     *  sendFmMeta() suppresses a message identical to the last one — right, because re-sending
+     *  the same RDS re-triggers the client's marquee. But on a SHARED receiver the "last sent"
+     *  state is the RADIO's, not the listener's (`R = rdsS` when there is no per-client DSP), so
+     *  the loop that was here sent to the first peer, stamped the state, and every listener after
+     *  it was told nothing had changed. The primary saw RDS and stereo; every mirror saw neither,
+     *  for ever — which is exactly what Stuart and I saw from the two ends of the same dial today:
+     *  "I have the RDS", and my monitor had not received a single rds frame.
+     *  ★★ So: ask ONCE whether it changed, and give the answer to everybody. It is the same shape
+     *     as the audio fan-out and the config broadcast — one demod, one decode, N sends.
+     *  ★ The per-client path is untouched: there each listener has its own decoder AND its own
+     *    change-detect, so the loop is right there. */
+    void sendFmMetaAll() {
+        auto peers = allSpecPeers();
+        if (peers.empty()) return;
+        if (perClientDsp()) { for (auto& p : peers) sendFmMeta(p.sock); return; }
+        std::string sent;
+        if (!sendFmMeta(peers[0].sock, &sent) || sent.empty()) return;
+        for (size_t i = 1; i < peers.size(); ++i)
+            if (peers[i].sock && peers[i].sock->isOpen()) sendText(peers[i].sock, sent);
+    }
 
-    bool sendFmMeta(const std::shared_ptr<net::Socket>& sock) {
+    /** @param out  when non-null, receives the message this call sent — so a shared receiver can
+     *               ask the change-detect ONCE and hand the same text to every other listener.
+     *               See sendFmMetaAll(). */
+    bool sendFmMeta(const std::shared_ptr<net::Socket>& sock, std::string* out = nullptr) {
         std::string ps, rt; int pi = -1, ecc = 0, ber = -1; float sig = -99.0f;
         // ★★★ THIS LISTENER'S MODE, not the shared one. `mode` is the shared pipeline's, which in
         //     per-client mode is whatever the server started in — so a listener who tuned WFM
@@ -5294,6 +5330,7 @@ struct LocalSdrShim::Impl {
             st ? "true" : "false",
             jsonEscape(ps).c_str(), jsonEscape(rt).c_str(), pi, ecc, ber, sig);
         sendText(sock, buf);
+        if (out) *out = buf;
         return true;
     }
 
@@ -5439,6 +5476,24 @@ struct LocalSdrShim::Impl {
                   Out cls = Out::Control) {
         sendWs(sock, 0x1, (const uint8_t*)s.data(), s.size(), cls);
     }
+    /** ★★★ TELL THE WHOLE ROOM WHERE THE DIAL IS NOW.
+     *
+     *  A tune on the shared path retunes the radio and returns — no config goes anywhere, because
+     *  the client that SENT it predicts the move itself and never needed telling. On a shared dial
+     *  every other listener needed telling and got nothing: the audio followed (it is one stream)
+     *  while their readout, their VFO marker and their view stayed where they were. Stuart, live on
+     *  the demo while I turned the dial: "I can hear the audio moving about but my spectrum and my
+     *  tuning readout are not updating."
+     *  ★★ Per socket, because sendConfig() computes the bin count THIS listener asked for — a
+     *     broadcast that sent one listener's width to everybody is the "derive a wire value the
+     *     same way at both ends" bug, and it lands every zoom off by the ratio.
+     *  ★ Only where there is a room to tell: on a one-listener radio this is the sender's own echo
+     *    and the client already has it. */
+    void broadcastConfig() {
+        if (!vsSharedDial()) return;
+        for (auto& c : allSpecClients()) if (c && c->isOpen()) sendConfig(c);
+    }
+
     void sendConfig(const std::shared_ptr<net::Socket>& sock) {
         // NB: displaySpan(), not sampleRate. On SpyServer the waterfall is the
         // server's wide FFT while the IQ is narrow, so the client's zoom/pan model
@@ -6084,6 +6139,7 @@ struct LocalSdrShim::Impl {
             if (jsonNum(msg, "frequency", v) && v > 0) retune(v);
             double lo, hi;
             if (!rebuilt && jsonNum(msg,"bandwidthLow",lo) && jsonNum(msg,"bandwidthHigh",hi)) setBandwidth(hi - lo);
+            broadcastConfig();          // ★ everybody else is listening to this dial too
             return;
         }
         if (type == "mode") {
@@ -6091,12 +6147,14 @@ struct LocalSdrShim::Impl {
             // Decimation is derived from the mode's bandwidth, so re-negotiate it
             // BEFORE rebuilding the audio chain (it may change sampleRate/fftSize).
             if (!m.empty() && m != mode) { mode = m; spyRetuneDecimation(); buildAudio(); }
+            broadcastConfig();
             return;
         }
         if (type == "bandwidth") {
             double lo, hi, bw;
             if (jsonNum(msg,"bandwidthLow",lo) && jsonNum(msg,"bandwidthHigh",hi)) setBandwidth(hi - lo);
             else if (jsonNum(msg,"bandwidth",bw)) setBandwidth(bw);
+            broadcastConfig();
             return;
         }
         // ── Hardware controls (VibeServer: the client drives the radio) ──────
@@ -9037,6 +9095,7 @@ struct LocalSdrShim::Impl {
               if (it->second == sock) it = pendingAudio.erase(it); else ++it;
           }
           for (auto& kv : clientDsp) if (kv.second->audio == sock) kv.second->audio = nullptr;
+          { std::lock_guard<std::mutex> al(adminSockMtx); adminSocks.erase(sock.get()); }
           if (audioClient == sock) {
               audioClient = nullptr;
               // ★ Promote, exactly as the spectrum path does when the primary leaves — the stream
@@ -9641,10 +9700,28 @@ struct LocalSdrShim::Impl {
 
     /** This listener's admin state. ★ Falls back to the radio-wide flag when this receiver has no
      *  per-client DSP — on such a radio there is only ever one listener, so it IS theirs. */
+    /** ★★★ ADMIN BELONGS TO A SESSION, NOT TO THE RADIO.
+     *
+     *  This fell back to the radio-wide `adminOk` whenever there was no per-client DSP — which is
+     *  precisely how a SHARED DIAL runs. So while the owner was signed in, EVERY other listener's
+     *  socket answered yes here: gain, bias-T, calibration, the lot. Stuart saw the symptom before
+     *  the cause and asked the right question (2026-08-20): "I hope that when I am admin on a
+     *  shared vfo everybody else doesnt accidentally get admin."
+     *  ★★ The membership is by SOCKET, held in its own leaf mutex, so this can be asked from the
+     *     control path without touching clientMtx (which the caller may already hold).
+     *  ★ The fallback stays for a receiver that cannot have a second listener: there the radio-wide
+     *    flag IS this listener's, and removing it would break every single-user server. */
     bool adminNow(const std::shared_ptr<net::Socket>& sock) {
         if (auto d = dspFor(sock)) return d->adminOk.load();
+        if (g_vsMaxUsers.load() > 1) {
+            std::lock_guard<std::mutex> lk(adminSockMtx);
+            return sock && adminSocks.count(sock.get()) > 0;
+        }
         return adminOk.load();
     }
+    /** Sockets that have proved the password, for receivers with no per-client DSP. */
+    std::mutex adminSockMtx;
+    std::set<const net::Socket*> adminSocks;
     /** Grant or revoke it for this listener.
      *
      *  ★★★ ADMIN IS EXCLUSIVE, AND THE MOST RECENT LOGIN WINS. Stuart, 2026-08-15: "if only one
@@ -9665,6 +9742,22 @@ struct LocalSdrShim::Impl {
      */
     void setAdminNow(const std::shared_ptr<net::Socket>& sock, bool on) {
         if (on) demoteOtherAdmins(sock);
+        // ★★★ REMEMBER WHICH SOCKETS THIS SESSION OWNS. A listener holds two — spectrum and audio —
+        //     and a control can arrive on either, so both are admitted; and admin is EXCLUSIVE, so
+        //     granting it to one session revokes every other socket in the same breath.
+        {
+            std::string sess;
+            std::vector<const net::Socket*> mine;
+            { std::lock_guard<std::mutex> lk(clientMtx);
+              auto it = sockSession.find(sock.get());
+              if (it != sockSession.end()) sess = it->second;
+              for (auto& kv : sockSession)
+                  if (!sess.empty() && kv.second == sess) mine.push_back(kv.first); }
+            if (mine.empty()) mine.push_back(sock.get());
+            std::lock_guard<std::mutex> lk(adminSockMtx);
+            if (on) { adminSocks.clear(); for (auto* sk : mine) adminSocks.insert(sk); }
+            else    { for (auto* sk : mine) adminSocks.erase(sk); }
+        }
         // ★★★ REMEMBER WHOSE SESSION IT IS. `adminOk` is radio-wide, and on a receiver with no
         //     per-client DSP — which is what open tuning runs on — there is nothing else to ask.
         //     Without this the dial would treat EVERY listener as the admin the moment one owner
