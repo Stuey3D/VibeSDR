@@ -580,6 +580,16 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         }
     } catch (_: Throwable) { 0.0 }                                  // never break a status for a stat read
 
+    /** ★★★ THE ANNOTATION IS THE WHOLE FEATURE. Without @ReactMethod this is not exported to JS at
+     *  all — and the call site reads `Local?.getVibeServerStatus?.()`, whose optional call returns
+     *  UNDEFINED for a missing method rather than throwing. So the screen asked for the status
+     *  forever, got nothing, threw no error and logged nothing, and sat on "Waiting for a client…"
+     *  while the server it was describing had a listener and its own admin page showed every
+     *  detail correctly. Two days of hunting (2026-08-19/20), and the fault was one missing line.
+     *  ★★ It also explains the shape that made it so hard: the SERVER was provably fine from every
+     *     other direction, because every other direction reads the shim over HTTP. Only the app
+     *     reads it through this bridge. */
+    @ReactMethod
     fun getVibeServerStatus(promise: Promise) {
         try {
             val o = org.json.JSONObject(VibeLocalSDR.getVibeServerStatus())

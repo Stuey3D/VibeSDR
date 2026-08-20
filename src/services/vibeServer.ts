@@ -535,8 +535,24 @@ export async function stopVibeServer(): Promise<void> {
 }
 
 export async function getVibeServerStatus(): Promise<VibeServerStatus | null> {
-  try { return await Local?.getVibeServerStatus?.(); } catch { return null; }
+  // ★★★ AN OPTIONAL CALL HIDES A MISSING BRIDGE METHOD. `Local?.x?.()` returns undefined when the
+  //     native side never exported `x` — no throw, no log, indistinguishable from a server with
+  //     nothing to report. That is exactly how a missing @ReactMethod cost two days: the status
+  //     screen showed "Waiting for a client…" for ever while the server had a listener
+  //     (2026-08-19/20). A method we depend on is either there or it is a BUG, so say so once.
+  //  ★ Once, not per poll: this is called every 1.5 s and a repeated warning would be noise that
+  //    teaches everyone to ignore the channel.
+  if (typeof (Local as any)?.getVibeServerStatus !== 'function') {
+    if (!warnedNoStatusBridge) {
+      warnedNoStatusBridge = true;
+      console.error('[vibeserver] getVibeServerStatus is not exported by the native module — '
+                  + 'the status screen cannot work. Check @ReactMethod in VibeLocalSdrModule.kt.');
+    }
+    return null;
+  }
+  try { return await Local.getVibeServerStatus(); } catch { return null; }
 }
+let warnedNoStatusBridge = false;
 
 // Live toggle — flip compressed audio without restarting the server (a fallback
 // if a client hits a decode issue).
