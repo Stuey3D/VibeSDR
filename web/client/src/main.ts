@@ -427,6 +427,10 @@ let srvUncompressed: UncompressedPolicy = 'off';
 let srvLocal = false;
 // ★ Does this server have an admin password at all? Only then is there anything to unlock.
 let srvAdminProtected = false;
+/** ★★ The receiver runs ONE dial that everybody hears (an unlocked radio with room for several).
+ *  What changes here is not what you may do — anybody may tune — but what happens WITHOUT you
+ *  doing anything: nothing at all. See the restore in onConfig. */
+let srvSharedDial = false;
 let adminUnlocked = false;
 /** ★★ THE ADMIN PASSWORD, IN MEMORY ONLY, for the duration of this tab.
  *  The admin API signs every request with HMAC(password, fresh nonce), so the page genuinely
@@ -452,6 +456,7 @@ async function loadAudioPolicy(httpBase: string) {
   // guessing our way into 187 KB/s of someone else's uplink.
   srvUncompressed = 'off';
   srvLocal = false;
+  srvSharedDial = false;
   try {
     const r = await fetch(`${httpBase}/vibeserver.json`, { cache: 'no-store' });
     if (!r.ok) return;
@@ -460,6 +465,12 @@ async function loadAudioPolicy(httpBase: string) {
       srvUncompressed = j.uncompressed;
     srvLocal = j.local === true;
     srvAdminProtected = j.admin === true;
+    // ★★★ IS THE DIAL SHARED? Needed BEFORE the first config arrives, because the very first
+    //     thing this client does with a config is restore the frequency it was last on — and on a
+    //     shared dial that would drag the whole room to somebody's remembered station the instant
+    //     they connected (Stuart, 2026-08-20). Read from the same probe that already tells us
+    //     about audio and admin, so it costs nothing and cannot arrive late.
+    srvSharedDial = j.tuneMode === 'open';
   } catch { /* leave the safe defaults */ }
 }
 
@@ -813,16 +824,33 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         //     reaches. Restored blind, it put the dial on 10 kHz on a 2.8-10.8 MHz receiver: the
         //     server clamped the audio to the edge and the readout went on claiming 10 kHz, which
         //     is the one thing on screen a listener cannot check (2026-08-06).
-        spec!.frequency = clampTune(last?.hz ?? cfg.serverVfo ?? cfg.centerFreq);
+        // ★★★ ON A SHARED DIAL, ARRIVING IS NOT TUNING. Restoring a remembered frequency is a
+        //     move nobody made: the listener has just connected and said nothing, and everybody
+        //     already here would hear the station change under them. So a joiner ADOPTS the dial
+        //     as it stands and the memory is simply not applied — it is still saved, and it still
+        //     applies on every receiver where the dial is your own.
+        //  ★ The landing frequency is not applied either, for the same reason: it is where a NEW
+        //    SESSION starts, and the server already knows whether this is one (it applies the
+        //    landing itself when nobody is listening). Sending it from here would re-park a busy
+        //    receiver on the owner's default.
+        const adopt = srvSharedDial ? (cfg.serverVfo ?? cfg.centerFreq) : (last?.hz ?? cfg.serverVfo ?? cfg.centerFreq);
+        spec!.frequency = clampTune(adopt);
         // Server's mode wins over the client's built-in default on a fresh visit — the owner can
         // set the starting demodulator, and defaulting to nfm showed the wrong mode + a thin NFM
         // passband until the user clicked. A remembered session still wins over both.
-        const initialMode = (last?.mode ?? cfg.serverMode ?? spec!.mode) as SDRMode;
-        setMode(initialMode, !!last);
+        const initialMode = (srvSharedDial ? (cfg.serverMode ?? spec!.mode)
+                                           : (last?.mode ?? cfg.serverMode ?? spec!.mode)) as SDRMode;
+        // ★ `false` on a shared dial: setMode's second argument SENDS the mode to the server, and
+        //   the mode is shared here too — adopting what the radio is already doing must not be
+        //   broadcast back to it as a change.
+        setMode(initialMode, !srvSharedDial && !!last);
         renderFreq();
-        if (last) spec!.tune(clampTune(last.hz), last.mode, { recenter: true });
+        if (srvSharedDial) { /* adopted above — say nothing, move nothing */ }
+        else if (last) spec!.tune(clampTune(last.hz), last.mode, { recenter: true });
         // ★ A first-time visitor must be TUNED to the landing frequency, not merely shown it —
         //   setting spec.frequency only moves the dial readout; the demodulator has to be told.
+        //   (Not on a shared dial: there the server has already placed the radio, and this client
+        //   has just adopted it.)
         else if (cfg.serverVfo) spec!.tune(clampTune(cfg.serverVfo), initialMode, { recenter: true });
       }
     },

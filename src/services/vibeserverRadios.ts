@@ -34,6 +34,11 @@ export interface VibeRadio {
   /** Tuning ranges the owner permits, [loHz, hiHz] pairs. */
   coverage?: [number, number][];
   allowed?: [number, number][];
+  /** ★ Those same permitted ranges NAMED, where they match the server's band plan — "FM
+   *  broadcast", "AM (medium wave) broadcast". The server names them because the plan is region
+   *  aware; a client that recited the hardware's reach instead described a receiver nobody can
+   *  use as advertised. Absent when nothing matched, or on an older server. */
+  allowedNames?: string[];
   /** The radio this machine nominates for the spectrogram and band conditions. */
   primary?: boolean;
 }
@@ -82,6 +87,8 @@ export async function fetchFrontDoor(
         mode: typeof x.mode === 'string' ? x.mode : undefined,
         coverage: Array.isArray(x.coverage) ? x.coverage : undefined,
         allowed: Array.isArray(x.allowed) ? x.allowed : undefined,
+        allowedNames: Array.isArray(x.allowedNames)
+          ? x.allowedNames.filter((n: any) => typeof n === 'string') : undefined,
         primary: x.primary === true,
       }));
     if (!radios.length) return null;         // a door with nothing behind it is not a choice
@@ -108,6 +115,19 @@ export function radioBaseUrl(baseUrl: string, id: string): string {
   return id ? `${base}/r/${encodeURIComponent(id)}` : base;
 }
 
+/** ★★★ ONE DIAL EVERYBODY HEARS — an UNLOCKED radio with room for more than one listener.
+ *
+ *  The distinction the app has to make before it connects, because it decides whether arriving is
+ *  allowed to move the radio: on a shared dial, restoring the frequency you were last on would
+ *  drag everybody else's listening to your remembered station the moment you appeared, and
+ *  nobody would have asked for it (Stuart, 2026-08-20).
+ *  ★ Derived, not a new wire field: `locked` and `users` already say it, and a third way to
+ *    describe one state is a thing to keep in step for ever.
+ */
+export function isSharedDial(r: VibeRadio | null | undefined): boolean {
+  return !!r && !r.locked && (r.users ?? 1) > 1;
+}
+
 /** A short human description of what a radio is for — driver, where it is pointed, how it shares. */
 export function describeRadio(r: VibeRadio): string {
   const bits: string[] = [];
@@ -115,11 +135,15 @@ export function describeRadio(r: VibeRadio): string {
     const mhz = r.centreHz / 1e6;
     bits.push(`${mhz >= 100 ? mhz.toFixed(1) : mhz.toFixed(3)} MHz${r.mode ? ' ' + r.mode.toUpperCase() : ''}`);
   }
-  // ★ "Shared" is the useful word, not the number: what a listener needs to know before choosing
-  //   is whether arriving means waiting, not the exact cap.
-  if (r.users > 1) bits.push(`shared · up to ${r.users}`);
-  else bits.push('one listener at a time');
+  // ★★ SAY WHICH KIND OF SHARING. "Shared" was true of two completely different receivers — one
+  //    dial everybody hears, or a fixed window in which everybody tunes independently — and those
+  //    are the two things a listener most wants to know apart before choosing.
+  if (isSharedDial(r))     bits.push(`shared VFO · up to ${r.users}`);
+  else if (r.users > 1)    bits.push(`individual VFOs · up to ${r.users}`);
+  else                     bits.push('one listener at a time');
   if (r.locked) bits.push('fixed window');
-  if (r.restricted) bits.push('limited range');
+  // ★ Name the bands where the server named them; "limited range" says only that a wall exists.
+  if (r.allowedNames && r.allowedNames.length) bits.push(r.allowedNames.join(', '));
+  else if (r.restricted) bits.push('limited range');
   return bits.join(' · ');
 }

@@ -121,6 +121,7 @@ import VTSBar, { type VtsNotifData } from '../components/VTSBar';
 import { resolveStationLogo } from '../services/stationLogoCache';
 import { noteAudioPath, noteAudioEvent } from '../services/audioPathLog';
 import { fetchFrontDoor, radioBaseUrl, describeRadio,
+         isSharedDial,
          type VibeRadio, type VibeFrontDoor } from '../services/vibeserverRadios';
 import { tidyStationName } from '../services/stationLogo';
 import { isWholeProfileMode } from '../services/dataModes';
@@ -3749,6 +3750,17 @@ export default function SDRScreen({ route, navigation }: Props) {
       // data falls through to the default, and that case must still be allowed to take the
       // receiver's own landing spot. Precedence: saved tune > server default > ours.
       let restored = false;
+      // ★★★ ON A SHARED DIAL, ARRIVING IS NOT TUNING. This radio has ONE VFO that every listener
+      //     hears, so restoring "where I was last time" would drag the whole room to a station
+      //     nobody asked for, the instant the app connected — and the people already there would
+      //     see the frequency move with no explanation (Stuart, 2026-08-20). We adopt the dial as
+      //     the door reported it (centreHz above) and say nothing.
+      //  ★ The saved tune is still WRITTEN, and still restored on every receiver where the dial is
+      //    your own. What changes is not what you may do — anybody may tune here — but what
+      //    happens without you doing anything.
+      //  ★★ A DEEP LINK IS DIFFERENT and is left alone below: somebody followed a link to hear a
+      //     specific thing, which is a deliberate act and reads as one in the room's strip.
+      if (j && isSharedDial(chosenRadio)) j = null;
       if (j) {
         try {
           const p = JSON.parse(j) as { frequency?: unknown; mode?: unknown };
