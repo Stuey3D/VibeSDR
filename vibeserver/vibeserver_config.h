@@ -316,9 +316,7 @@ struct RadioConfig {
      *     from the multi-user one. Nothing new had to be invented for either half.
      *  ★ Absent = 0, so every existing config keeps its meaning exactly. */
     int    tuneMode = 0;
-    /** Seconds before an untouched dial frees itself. 0 = never — the release is NOT mandatory
-     *  (Stuart, 2026-08-20). A decode suspends it regardless. */
-    int    dialIdleSec = 180;
+
     /** ★★★ DISCONNECT A LISTENER WHO HAS GONE AWAY — minutes of asking for nothing. 0 = OFF, and
      *  off is the default: this is an option for a busy shared receiver, not a policy.
      *

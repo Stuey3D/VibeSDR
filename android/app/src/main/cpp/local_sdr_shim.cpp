@@ -528,28 +528,30 @@ static std::atomic<int>    g_vsMaxUsers{1};
  *  of them move it, which works right up until two people want different stations.
  *
  *    0 EXCLUSIVE  — today's behaviour, and the DEFAULT so an upgrade changes nothing. One listener
- *                   at a time on a single-user radio; on a shared one, everybody tunes and the
- *                   fastest hand wins.
+ *                   at a time on a single-user radio.
  *    1 SPECTATOR  — many may listen, only the OWNER tunes. A fixed watch: a beacon band, a net
  *                   frequency, an airport.
- *    2 OPEN       — the FM-DX model. Many listen, ONE holds the dial, and asking for it is one tap.
+ *    2 OPEN       — the FM-DX model: many listen, ANYBODY may tune, and the etiquette is social.
+ *
+ *  ★★★ OPEN MEANS OPEN — THERE IS NO PERMISSION TO GRANT. An earlier draft of this made the dial
+ *      something one listener HELD and others asked for, which sounds fairer and is unusable:
+ *      Stuart, 2026-08-20, and it is the whole design in one line — *"the dial must be like FM-DX
+ *      where anybody can tune it, otherwise I would need to be on the server 24/7 to allow access
+ *      to it."* A permission system on an unattended public receiver is a locked door with nobody
+ *      behind it. So the server enforces NOTHING here; it only says who moved the dial last, and
+ *      the canned chat is how two strangers sort it out between themselves.
+ *  ★★ Which is exactly why the chat is not a nicety bolted on beside this — it IS the mechanism.
  *
  *  ★★ OPEN MODE FORCES ONE VFO — see perClientDsp(). Per-client DSP hands every listener their own
  *     tuning, which is a perfectly good feature and the exact opposite of this one: there is no
  *     dial to pass if everybody already has their own.
  */
 static std::atomic<int>    g_vsTuneMode{0};
-/** How long a dial-holder may sit doing nothing before it is released — SECONDS, and **0 = never**.
- *
- *  ★★ It is the rule that makes these systems bearable (an abandoned tab must not hold a receiver
- *     hostage) but it is NOT mandatory (Stuart, 2026-08-20). An owner running a net, or a receiver
- *     used by two people who know each other, may reasonably want the dial to stay exactly where
- *     it was put until somebody hands it back.
- *  ★ A decode suspends it regardless of this setting — see dialExpireLocked(). */
-static std::atomic<int>    g_vsDialIdleSec{180};
-/** How long an unanswered request stands before it lapses, so a tuner who stepped away does not
- *  accumulate a queue of requests from people who have long since left. */
-static constexpr double    kDialAskTtlSec = 90.0;
+/** ★★ HOW LONG "User 3 is tuning" STAYS ON SCREEN after they stop. Display only — nothing is
+ *  released, because in open mode nothing was ever held. A decode holds the label open regardless,
+ *  which is the case that matters: ten minutes of a WEFAX frame is ten minutes of nobody touching
+ *  anything, and the room needs to see why. */
+static constexpr double    kDialShowSec = 120.0;
 
 // Station list (EiBi + anything else the app has) served at GET /stations for the
 // web client's search. Supplied BY THE APP — it already downloads and caches EiBi,
@@ -3390,17 +3392,12 @@ struct LocalSdrShim::Impl {
     std::string occupantAgent;          ///< User-Agent of the single-user occupant, for the admin view
 
     // ── ★★★ THE DIAL (open tuning) ────────────────────────────────────────────────────────────
-    /** Who holds it (session id), when they took it, and when they last did anything with it.
-     *  Empty = the dial is FREE and the next person to tune simply takes it. All guarded by
-     *  clientMtx, like every other piece of occupancy state. */
+    /** ★★ WHO MOVED IT LAST, and when. NOT ownership — nobody owns the dial in open mode — but
+     *  the room does need to know that the frequency just changed under them and who did it, or a
+     *  retune reads as the receiver glitching. It fades on its own (kDialShowSec) so a name does
+     *  not sit there for ever after somebody has gone quiet. Guarded by clientMtx. */
     std::string dialSession;
     double      dialSince = 0, dialTouched = 0;
-    /** Who has asked for it, oldest first. ★ A REQUEST IS ONE TAP AND NOTHING ELSE — no message,
-     *  no name, no way to pester: a session appears here at most once, and its entry lapses on
-     *  its own (kDialAskTtlSec) so a tuner who walked away does not come back to a queue of
-     *  people who left long ago. */
-    struct DialAsk { std::string session; double at; };
-    std::vector<DialAsk> dialAsks;
     /** ★★ A HANDLE PER SESSION, BECAUSE THE ALTERNATIVE IS AN IDENTITY. Everyone in the room has
      *  to be able to say "listener 3 has the dial" without the server publishing an address, a
      *  country or a user agent to strangers — the brief is explicit that nobody signs up for
@@ -3431,65 +3428,40 @@ struct LocalSdrShim::Impl {
         return !session.empty() && session == adminSession && adminOk.load();
     }
 
-    /** Release an abandoned dial and drop requests nobody is waiting on any more.
-     *  Call WITH clientMtx held. @return true if anything changed and the room should be told. */
+    /** Let the "who tuned last" label fade. Call WITH clientMtx held.
+     *  @return true if it changed and the room should be told.
+     *  ★ A DECODE HOLDS THE LABEL. Ten minutes of a WEFAX frame is ten minutes of touching
+     *    nothing, and that is precisely when the room most needs to see WHY the dial is not
+     *    moving (Stuart, 2026-08-20). Same reasoning that keeps the idle disconnect away from a
+     *    decoding listener — the server already knows, from decoderAttached. */
     bool dialExpireLocked() {
-        const double now = Impl::nowSecs();
-        bool changed = false;
-        // ★★★ A DECODE IS NOT IDLENESS — IT IS THE MOST DEMANDING USE THERE IS. A WEFAX frame is
-        //     ten minutes of touching absolutely nothing, and an SSTV image or a long FT8 watch is
-        //     the same shape: the listener is working, and every keystroke they DON'T make is the
-        //     point (Stuart, 2026-08-20: "this could be used in HF where WEFAX comes in and needs
-        //     10 mins or so"). Releasing the dial there would retune the radio in the middle of
-        //     somebody's image — the single worst thing this feature could do.
-        //  ★★ The server already knows: decoderAttached is what the audio path checks on every
-        //     block. No new state, no client promise to trust, and it clears itself the moment
-        //     they close the decoder.
-        //  ★ The room is TOLD (see the `decoding` flag in the strip), because a dial that is held
-        //    for ten minutes with no visible reason is exactly what makes people impatient — and
-        //    "User 3 is decoding" turns a wait into something anybody can understand.
-        const bool busyDecoding = decoderAttached.load();
-        const double idleSec = (double)g_vsDialIdleSec.load();
-        if (idleSec > 0 && !busyDecoding && !dialSession.empty() && dialTouched > 0
-            && (now - dialTouched) >= idleSec) {
-            LOGI("dial released — %s did nothing for %ds", dialSession.c_str(), (int)idleSec);
-            dialSession.clear(); dialSince = 0; dialTouched = 0;
-            changed = true;
-        }
-        const size_t before = dialAsks.size();
-        dialAsks.erase(std::remove_if(dialAsks.begin(), dialAsks.end(),
-            [&](const DialAsk& a){ return (now - a.at) >= kDialAskTtlSec; }), dialAsks.end());
-        // ★ And nobody may queue for a dial that is already theirs, or that is free.
-        if (dialSession.empty()) dialAsks.clear();
-        return changed || dialAsks.size() != before;
+        if (dialSession.empty() || dialTouched <= 0) return false;
+        if (decoderAttached.load()) return false;
+        if ((Impl::nowSecs() - dialTouched) < kDialShowSec) return false;
+        dialSession.clear(); dialSince = 0; dialTouched = 0;
+        return true;
     }
 
-    /** Hand the dial to `session` (empty = release it). Call WITH clientMtx held. */
-    void dialGiveLocked(const std::string& session) {
+    /** Note that this session just moved the radio. Call WITH clientMtx held. */
+    void dialTouchLocked(const std::string& session) {
+        if (dialSession != session) dialSince = Impl::nowSecs();
         dialSession = session;
-        dialSince = dialTouched = session.empty() ? 0 : Impl::nowSecs();
-        dialAsks.erase(std::remove_if(dialAsks.begin(), dialAsks.end(),
-            [&](const DialAsk& a){ return a.session == session; }), dialAsks.end());
+        dialTouched = Impl::nowSecs();
     }
 
     /** ★★★ MAY THIS SESSION TURN THE KNOB — the one place that decides, so every control path
      *  gets the same answer. Call WITH clientMtx held.
      *
-     *  ★★ THE ADMIN ALWAYS OUTRANKS IT, and takes the dial when they use it: an owner reaching in
-     *     to move their own receiver is not jumping a queue, and leaving the dial with somebody
-     *     else while the frequency moves under them would be a lie the strip is telling.
-     *  ★ Taking a FREE dial is not an act a listener has to perform — the first tune claims it.
-     *    Asking people to press "take the dial" before they may tune would be a step that exists
-     *    only to serve the mechanism.
+     *  ★★★ IN OPEN MODE THE ANSWER IS ALWAYS YES. See the note on g_vsTuneMode: a public receiver
+     *      nobody is sitting in front of cannot ask an owner for permission. All that happens here
+     *      is that we remember who moved it, for the strip.
+     *  ★ SPECTATOR is the mode that says no, and it says it to everybody except the owner — which
+     *    is a setting an owner chooses deliberately for a receiver parked on one frequency.
      */
     bool dialMayTuneLocked(const std::string& session, bool admin) {
         if (dialSpectator()) return admin;
-        if (!dialOpen()) return true;                       // exclusive: today's behaviour
-        if (admin) { if (dialSession != session) dialGiveLocked(session); dialTouched = Impl::nowSecs(); return true; }
-        if (session.empty()) return false;                  // no id, no turn — nothing to hand back to
-        if (dialSession.empty()) { dialGiveLocked(session); return true; }
-        if (dialSession == session) { dialTouched = Impl::nowSecs(); return true; }
-        return false;
+        if (dialOpen() && !session.empty()) dialTouchLocked(session);
+        return true;
     }
 
     /** What the occupancy strip draws, from THIS listener's point of view. */
@@ -3497,31 +3469,14 @@ struct LocalSdrShim::Impl {
         const int mode = g_vsTuneMode.load();
         std::string j = "{\"type\":\"dial\",\"mode\":\"";
         j += mode == 2 ? "open" : mode == 1 ? "spectator" : "exclusive";
-        j += "\",\"holder\":" + std::to_string(handleForLocked(dialSession));
+        // ★ WHO MOVED IT LAST — a handle, never an identity. 0 = nobody has, or it has faded.
+        j += "\",\"tuner\":" + std::to_string(handleForLocked(dialSession));
         j += ",\"mine\":" + std::string(!dialSession.empty() && dialSession == forSession ? "true" : "false");
         j += ",\"you\":" + std::to_string(handleForLocked(forSession));
         j += ",\"listeners\":" + std::to_string(specListenerCountLocked());
-        // ★ Seconds the holder has left before the dial frees itself, so the strip can show the
-        //   truth rather than "held" for ever — the reason people trust these systems.
-        if (!dialSession.empty() && dialTouched > 0 && !decoderAttached.load()
-            && g_vsDialIdleSec.load() > 0) {
-            const int left = (int)((double)g_vsDialIdleSec.load() - (Impl::nowSecs() - dialTouched) + 0.5);
-            j += ",\"idleFreeIn\":" + std::to_string(left > 0 ? left : 0);
-        }
-        // ★★ WHY THE DIAL IS NOT MOVING. A decode holds it indefinitely and deliberately, so the
-        //    strip says so instead of showing a countdown that will never reach zero.
+        // ★★ WHY THE DIAL IS NOT MOVING, when it is not. A decode runs for ten minutes with no
+        //    interaction, and a room that cannot see that is a room that starts retuning over it.
         if (decoderAttached.load()) j += ",\"decoding\":true";
-        // ★★ THE REQUESTS GO ONLY TO THE PERSON WHO CAN ANSWER THEM. Everyone else gets the count,
-        //    which is all they need ("2 waiting to tune") and nothing they could act on.
-        j += ",\"asks\":" + std::to_string((int)dialAsks.size());
-        if (!dialSession.empty() && dialSession == forSession) {
-            j += ",\"asking\":[";
-            for (size_t i = 0; i < dialAsks.size(); ++i) {
-                if (i) j += ',';
-                j += std::to_string(handleForLocked(dialAsks[i].session));
-            }
-            j += "]";
-        }
         return j + "}";
     }
 
@@ -6032,15 +5987,10 @@ struct LocalSdrShim::Impl {
         }
         // ── ★★★ THE DIAL: WHO MAY TURN THE KNOB ────────────────────────────────────────────
         //  Everything below this line moves the radio for EVERYBODY — one VFO, one front end, one
-        //  audio stream. On a shared receiver that is the whole difficulty: the fastest hand wins
-        //  and two people wanting different stations simply fight (Stuart, 2026-08-19: "the single
-        //  user isn't about CPU, it is about users fighting each other for tuning").
-        //
-        //  ★★ EXCLUSIVE MODE REACHES NONE OF THIS. dialMayTuneLocked() returns true immediately,
-        //     so an existing receiver behaves exactly as it did and every older client still works.
-        //  ★ GAIN IS IN THE LIST for the same reason tuning is: it is the front end, shared. The
-        //    owner's per-band ceilings still cap whoever holds the dial — this decides WHO may
-        //    move it, not HOW FAR, and those are different questions with different answers.
+        //  audio stream. In OPEN mode that is allowed and expected: anybody may tune, exactly as
+        //  on an FM-DX receiver, and all this does is remember who did it so the strip can say so.
+        //  SPECTATOR is the only mode that refuses, and only to non-owners.
+        //  ★ EXCLUSIVE reaches none of it and behaves precisely as it always has.
         {
             const bool movesTheRadio =
                    type == "tune" || type == "mode" || type == "bandwidth"
@@ -6051,20 +6001,15 @@ struct LocalSdrShim::Impl {
                     std::lock_guard<std::mutex> lk(clientMtx);
                     auto it = sockSession.find(sock.get());
                     if (it != sockSession.end()) me = it->second;
-                    changed = dialExpireLocked();
-                    const bool admin = isAdminSessionLocked(me) || (adminOk.load() && me.empty());
                     const std::string was = dialSession;
+                    const bool admin = isAdminSessionLocked(me) || (adminOk.load() && me.empty());
                     if (!dialMayTuneLocked(me, admin)) refused = true;
-                    changed = changed || was != dialSession;
+                    changed = was != dialSession;
                 }
                 if (refused) {
-                    // ★★ SAY SO, ONCE, AND SAY WHO HAS IT. A control that silently does nothing
-                    //    reads as a broken radio — the same lesson as the superseded admin and the
-                    //    idle re-lock. The strip that comes with this refusal carries the ASK.
+                    // ★★ SAY SO. A control that silently does nothing reads as a broken radio —
+                    //    the same lesson as the superseded admin and the idle re-lock.
                     sendText(sock, "{\"type\":\"dial_refused\"}");
-                    { std::lock_guard<std::mutex> lk(clientMtx);
-                      auto it = sockSession.find(sock.get());
-                      sendText(sock, dialJsonLocked(it == sockSession.end() ? std::string() : it->second)); }
                     return;
                 }
                 if (changed) sendDialState();
@@ -6101,49 +6046,6 @@ struct LocalSdrShim::Impl {
             for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, line);
             return;
         }
-        if (type == "ask_dial" || type == "grant_dial" || type == "release_dial") {
-            std::string me;
-            bool tell = false;
-            {
-                std::lock_guard<std::mutex> lk(clientMtx);
-                auto it = sockSession.find(sock.get());
-                if (it != sockSession.end()) me = it->second;
-                dialExpireLocked();
-                const bool admin = isAdminSessionLocked(me) || (adminOk.load() && me.empty());
-                if (type == "ask_dial") {
-                    // ★ A free dial needs no asking, and asking twice must not queue you twice.
-                    if (!me.empty() && dialSession.empty()) { dialGiveLocked(me); tell = true; }
-                    else if (!me.empty() && dialSession != me
-                             && std::none_of(dialAsks.begin(), dialAsks.end(),
-                                             [&](const DialAsk& a){ return a.session == me; })) {
-                        dialAsks.push_back({me, Impl::nowSecs()});
-                        tell = true;
-                    }
-                } else if (type == "release_dial") {
-                    if (!me.empty() && dialSession == me) { dialGiveLocked(std::string()); tell = true; }
-                } else {   // grant_dial
-                    // ★★ ONLY THE HOLDER MAY GIVE IT AWAY (or the admin, who outranks everything).
-                    //    The handle is what travels — see dialHandles: a stranger's address is not
-                    //    the room's business.
-                    double h = 0;
-                    if ((dialSession == me || admin) && jsonNum(msg, "to", h)) {
-                        for (auto& kv : dialHandles)
-                            if (kv.second == (int)h) {
-                                // ★ Only somebody who actually asked can be handed it — otherwise a
-                                //   grant is a way to force the dial on a listener who never wanted it.
-                                if (std::any_of(dialAsks.begin(), dialAsks.end(),
-                                                [&](const DialAsk& a){ return a.session == kv.first; })) {
-                                    dialGiveLocked(kv.first); tell = true;
-                                }
-                                break;
-                            }
-                    }
-                }
-            }
-            if (tell) sendDialState();
-            return;
-        }
-
         if (type == "tune") {
             // ★★★ REMEMBER THAT THIS SESSION HAS PLACED ITSELF, so the landing gate does not
             //     later overrule it — see preTunedSession. Keyed off sockSession, NOT pendingAudio:
@@ -10619,6 +10521,19 @@ struct LocalSdrShim::Impl {
     void enforceIdleListeners() {
         const int idleMin = g_vsIdleKickMin.load();
         if (idleMin <= 0 || g_vsMaxUsers.load() <= 1) return;   // off, or a one-listener radio
+        // ★★★ NOT IN A SHARED-DIAL MODE, AT ALL. This whole feature rests on "no interaction is
+        //     weak evidence of absence" — and in open or spectator tuning that evidence does not
+        //     exist: the mode is DESIGNED so that one person tunes and everybody else follows
+        //     (Stuart, 2026-08-20: "a user could be passive connected and not tuning and simply
+        //     following another user tuning"). Every well-behaved listener would look identical to
+        //     a forgotten tab, so the prompt would fire on exactly the people it should not.
+        //  ★★ It is currently inert here by accident — it walks clientDsp, which open mode never
+        //     populates — and an accident is not a decision. Said out loud so that teaching this
+        //     loop about shared listeners (which the session limit is about to need) does not
+        //     quietly turn it back on.
+        //  ★ The DIAL's own idle release is a different thing and still applies: it frees a knob
+        //    nobody is turning, it never disconnects anybody, and a decode suspends it.
+        if (g_vsTuneMode.load() != 0) return;
         const double now = Impl::nowSecs();
         std::string decoderOwnerSession;
         { std::lock_guard<std::mutex> dl(decoderMtx);
@@ -11553,14 +11468,6 @@ void LocalSdrShim::setIdleKickMinutes(int minutes) {
     g_vsIdleKickMin.store(m);
     if (m > 0) LOGI("idle disconnect: after %d min with no interaction (asks first)", m);
 }
-
-void LocalSdrShim::setDialIdleSec(int sec) {
-    const int v = sec <= 0 ? 0 : (sec < 30 ? 30 : sec);   // ★ a 5-second dial would be a fairground game
-    g_vsDialIdleSec.store(v);
-    if (g_vsTuneMode.load() == 2)
-        LOGI("dial idle release: %s", v ? (std::to_string(v) + "s").c_str() : "never (owner's choice)");
-}
-int LocalSdrShim::dialIdleSec() const { return g_vsDialIdleSec.load(); }
 
 void LocalSdrShim::setTuneMode(int mode) {
     const int m = (mode >= 0 && mode <= 2) ? mode : 0;

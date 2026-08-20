@@ -2300,7 +2300,6 @@ int main(int argc, char** argv) {
         // ★ Per radio, like everything else here: one machine may run a shared FM-DX dial and a
         //   private HF receiver at the same time, and they want opposite answers.
         LocalSdrShim::instance().setTuneMode(mine ? mine->tuneMode : 0);
-        LocalSdrShim::instance().setDialIdleSec(mine ? mine->dialIdleSec : 180);
         LocalSdrShim::instance().setIdleKickMinutes(mine ? mine->idleKickMin : 0);
         LocalSdrShim::instance().setLandingInfo(mine ? mine->antenna : std::string(),
                                                 g_serverConfig.landingMessage,

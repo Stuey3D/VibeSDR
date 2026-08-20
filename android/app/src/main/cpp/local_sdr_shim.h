@@ -419,10 +419,7 @@ public:
      *  question as how many may listen — see g_vsTuneMode. */
     void setTuneMode(int mode);
     int  tuneMode() const;
-    /** Seconds a dial-holder may do nothing before it frees itself. 0 = never; a decode suspends
-     *  it whatever this says. */
-    void setDialIdleSec(int sec);
-    int  dialIdleSec() const;
+
     // ── ★★★ THE CONFIG API — the browser setup page is a CLIENT of this, not a special case ──
     //
     // WHY HANDLERS AND NOT CODE IN HERE. This shim compiles into the Android and iOS apps as well
