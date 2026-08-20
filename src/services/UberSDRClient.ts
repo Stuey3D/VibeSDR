@@ -529,6 +529,7 @@ export class UberSDRClient {
 
   /** Tune to a new frequency (and optionally mode). Sends to native audio WS + spectrum WS. */
   tune(frequency: number, mode?: SDRMode, opts?: { recenter?: boolean }) {
+    this.lastLocalTuneAt = Date.now();   // ★ so the server's echo is not read as somebody else
     if (frequency) this.status.frequency = frequency;
     if (mode)      this.status.mode = mode;
     VibePowerModule?.sendTuneCommand(frequency, mode ?? this.status.mode);
@@ -1007,6 +1008,9 @@ export class UberSDRClient {
   /** The tune we connected FOR, when it came from memory rather than from the server. Re-sent once
    *  the server has told us where it actually put us; cleared the moment it is honoured. */
   private wantTune: { frequency: number; mode: SDRMode } | null = null;
+  /** When this client last tuned itself — so the server's echo of our own tune is not mistaken
+   *  for another listener moving a shared dial. */
+  private lastLocalTuneAt = 0;
   /** The VFO the SERVER last told us it has us on (config.vfo). The only honest way to ask whether
    *  a tune took: our own status is set by tune() itself. */
   private lastServerVfo = 0;
@@ -2000,6 +2004,41 @@ export class UberSDRClient {
       // ★ Once. Cleared either way, so a server that lands us somewhere on purpose is argued with
       //   exactly once and never again.
       if (Number.isFinite(Number(msg.vfo)) && Number(msg.vfo) > 0) this.lastServerVfo = Number(msg.vfo);
+      // ★★★ FOLLOW THE DIAL WHEN SOMEBODY ELSE TURNS IT. On a shared-VFO receiver the frequency
+      //     moves because another listener moved it, and this client adopted the server's vfo only
+      //     during the first-connect negotiation below — so the audio followed and the readout,
+      //     the mode and everything keyed off them did not. The browser had the identical gap
+      //     (fixed 2026-08-20); this is the same fix in the app.
+      //  ★★ AND IT IS WHY RadioDNS LOGOS WERE MISSING on the phone: the lookup is keyed on the
+      //     frequency (with the PI), so a stale readout asks about a station nobody is listening
+      //     to and finds nothing. Stuart spotted the pair — "the moto doesnt get the RadioDNS
+      //     icons which is odd but could be related to the wrong frequency". It was.
+      //  ★ Guarded against our own echo: the server confirms every tune WE send as a config, and
+      //    adopting inside that window would fight a drag or a held step key.
+      {
+        const sv = Number(msg.vfo);
+        const bw = Math.abs(Number(this.status.bandwidthHigh) - Number(this.status.bandwidthLow)) || 3000;
+        const settled = Date.now() - this.lastLocalTuneAt > 1500;
+        if (!this.wantTune && settled && Number.isFinite(sv) && sv > 0
+            && Math.abs(sv - Number(this.status.frequency)) > bw) {
+          this.dbg(`another listener moved the dial to ${sv}`);
+          this.status.frequency = sv;
+          if (typeof msg.mode === 'string' && msg.mode) this.status.mode = msg.mode as SDRMode;
+          // ★★★ AND BRING THE VIEW WITH IT. Adopting the frequency alone leaves the waterfall
+          //     pointed where the radio ISN'T — the server is capturing around the new dial, so
+          //     the old view has no data behind it and goes BLACK. Stuart hit exactly that from
+          //     the phone (2026-08-20): "it made the spectrum go black and the audio stayed on
+          //     greatest hits". A local tune already does this (see tune()); a remote one must.
+          //  ★ Only when this client is following the VFO. Somebody who has deliberately panned
+          //    away to watch another part of the band chose that view, and yanking it back on
+          //    every move somebody else makes would be the opposite of helpful.
+          if (this.followVfo) {
+            const bb = this.view.binBandwidth || this.status.binBandwidth;
+            if (bb) this.zoom(sv, bb); else this.pan(sv);
+          }
+          this.callbacks.onStatus({ ...this.status });
+        }
+      }
       if (this.wantTune) {
         const want = this.wantTune;
         this.wantTune = null;
