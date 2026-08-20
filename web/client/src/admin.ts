@@ -135,13 +135,20 @@ function renderHealth(st: any, perRadio: Array<{ radio: string; data: any }> = [
   //     ★ The CARD'S STATUS still comes from the 15-minute load, not from usage — see
   //       loadStatus() in vibe_admin.h. Usage is instantaneous and spikes to 100% every time the
   //       FFT runs, so alarming on it would light this card up permanently.
+  // ★★★ SAY WHOSE CPU IT IS. On Android an app cannot read /proc/stat at all, so the server falls
+  //     back to its OWN usage from /proc/self/stat — the same figure the phone's status screen has
+  //     always shown. That is why the page said "not available" beside an app screen reading 45%
+  //     (Stuart, 2026-08-20). Reporting the fallback as if it were the machine would be worse than
+  //     the blank it replaces: it is a percentage of ONE core and it counts only us.
   out.push(typeof sys.cpuPct === 'number'
-    ? card('CPU USAGE', `${sys.cpuPct.toFixed(0)}%`,
-           sys.loadStatus === 'unknown'
+    ? card(sys.cpuIsProcess ? 'CPU · THIS SERVER' : 'CPU USAGE', `${sys.cpuPct.toFixed(0)}%`,
+           sys.cpuIsProcess
+             ? `of one core${sys.cores ? ` · ${sys.cores} cores` : ''} — the machine's total is not readable here`
+             : sys.loadStatus === 'unknown'
              ? `${sys.cores ?? '?'} cores`
              : `load ${(sys.load1 ?? 0).toFixed(2)} / ${(sys.load5 ?? 0).toFixed(2)} / `
                + `${(sys.load15 ?? 0).toFixed(2)} · ${sys.cores} cores`,
-           sys.loadStatus)
+           sys.cpuIsProcess ? 'ok' : sys.loadStatus)
     : sys.loadStatus === 'unknown'
     ? card('CPU USAGE', 'not available', `${sys.cores ?? '?'} cores`, 'unknown')
     // ★ cpuPct needs two samples, so the very first poll after a restart has none. Fall back to

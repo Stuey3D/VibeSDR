@@ -24,6 +24,9 @@
 #include <cstring>
 #include <ctime>
 #include <sys/stat.h>
+// ★ sysconf(_SC_CLK_TCK) and clock_gettime for the per-process CPU fallback — named rather than
+//   relied on transitively, the same lesson <cmath> taught in vibe_bands.h this afternoon.
+#include <unistd.h>
 #include <deque>
 #include <set>
 #include <mutex>
@@ -945,13 +948,82 @@ inline CpuSample readCpuSample() {
     return s;
 }
 
+/** ★★★ THIS PROCESS'S OWN CPU, as a fraction of ONE core — the fallback for a machine that will
+ *  not let us read the whole picture.
+ *
+ *  ★★★ ON ANDROID, AN APP CANNOT READ /proc/stat. SELinux and hidepid keep it to the shell, so the
+ *      admin page served BY THE PHONE said "CPU USAGE not available" while the app's own status
+ *      screen, three inches away, showed "45% of 1 core" — because the Kotlin side reads
+ *      /proc/self/stat, which a process may always read about itself (Stuart, 2026-08-20: "what I
+ *      dont understand is on the phone screen I can see the actual CPU usage").
+ *  ★★ Two readers of one machine disagreeing is the shape this file keeps meeting. The cure is the
+ *     same each time: ONE source. So the page now falls back to exactly what the app reads, and
+ *     SAYS which of the two numbers it is showing — see SysStats::cpuIsProcess. A percentage that
+ *     silently changes meaning between platforms would be worse than the blank it replaces.
+ *  ★ Percent of one core, so >100 is possible and meaningful on a multi-core phone — the same
+ *    convention the app screen and the DSP benchmarks already use.
+ */
+struct SelfCpuSample { unsigned long long ticks = 0; double wall = 0; bool valid = false; };
+
+inline SelfCpuSample readSelfCpu() {
+    SelfCpuSample s;
+#if defined(__linux__)
+    FILE* f = fopen("/proc/self/stat", "r");
+    if (!f) return s;
+    char buf[1024];
+    const size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    if (!n) return s;
+    buf[n] = 0;
+    // ★ Fields are space separated, but field 2 is the executable name IN PARENTHESES and may
+    //   itself contain spaces — so counting from the start is wrong. Everyone who reads this file
+    //   scans from the LAST ')' instead; utime is field 14, stime 15, i.e. 12 and 13 after it.
+    const char* p2 = strrchr(buf, ')');
+    if (!p2) return s;
+    unsigned long long utime = 0, stime = 0;
+    int field = 2;                       // the ')' closes field 2
+    for (const char* q = p2 + 1; *q; ) {
+        while (*q == ' ') ++q;
+        if (!*q) break;
+        ++field;
+        if (field == 14) utime = strtoull(q, nullptr, 10);
+        else if (field == 15) { stime = strtoull(q, nullptr, 10); break; }
+        while (*q && *q != ' ') ++q;
+    }
+    const long hz = sysconf(_SC_CLK_TCK) > 0 ? sysconf(_SC_CLK_TCK) : 100;
+    s.ticks = (utime + stime) * 1000ull / (unsigned long long)hz;   // milliseconds of CPU
+    struct timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    s.wall = (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
+    s.valid = s.wall > 0;
+#endif
+    return s;
+}
+
+/** True when the last cpuUsagePct() answer described THIS PROCESS rather than the machine. */
+inline bool& cpuPctIsProcess() { static bool v = false; return v; }
+
 /** Percent busy since the previous call, or -1 until there is a previous call. */
 inline double cpuUsagePct() {
     static std::mutex  mtx;
     static CpuSample   prev;
     std::lock_guard<std::mutex> lk(mtx);
     const CpuSample now = readCpuSample();
-    if (!now.valid) return -1;
+    if (!now.valid) {
+        // ★ The machine-wide view is closed to us (an Android app). Report our own, and say so.
+        static SelfCpuSample selfPrev;
+        const SelfCpuSample selfNow = readSelfCpu();
+        if (!selfNow.valid) { cpuPctIsProcess() = false; return -1; }
+        const double dWall = selfNow.wall - selfPrev.wall;
+        const bool first = !selfPrev.valid || dWall <= 0 || selfNow.ticks < selfPrev.ticks;
+        const double dCpu = first ? 0 : (double)(selfNow.ticks - selfPrev.ticks);
+        selfPrev = selfNow;
+        if (first) { cpuPctIsProcess() = false; return -1; }   // ★ one sample is not a rate
+        cpuPctIsProcess() = true;
+        const double pct = 100.0 * dCpu / dWall;
+        return pct < 0 ? 0 : pct;
+    }
+    cpuPctIsProcess() = false;
     if (!prev.valid || now.total <= prev.total) { prev = now; return -1; }
     const double dTotal = (double)(now.total - prev.total);
     const double dBusy  = (double)(now.busy  - prev.busy);
@@ -966,6 +1038,9 @@ struct SysStats {
     double load1 = 0, load5 = 0, load15 = 0;
     /** Percent of the whole machine in use since the last sample; <0 = not yet known. */
     double cpuPct = -1;
+    /** ★ The percentage above is THIS PROCESS on one core, not the machine — see cpuUsagePct().
+     *  The page must say which, or the same number means two different things on two platforms. */
+    bool   cpuIsProcess = false;
     int    cores = 0;
     bool   haveTemp = false;
     double tempC = 0;
@@ -1135,6 +1210,7 @@ inline SysStats readSys() {
     }
 #endif
     s.cpuPct = cpuUsagePct();
+    s.cpuIsProcess = cpuPctIsProcess();
     s.cores = (int)std::max(1u, std::thread::hardware_concurrency());
     return s;
 }
@@ -1179,7 +1255,10 @@ inline std::string sysJson(const SysStats& s) {
         snprintf(b, sizeof b, ",\"load1\":%.2f,\"load5\":%.2f,\"load15\":%.2f", s.load1, s.load5, s.load15);
         j += b;
     }
-    if (s.cpuPct >= 0) { char b[48]; snprintf(b, sizeof b, ",\"cpuPct\":%.1f", s.cpuPct); j += b; }
+    if (s.cpuPct >= 0) {
+        char b[48]; snprintf(b, sizeof b, ",\"cpuPct\":%.1f", s.cpuPct); j += b;
+        if (s.cpuIsProcess) j += ",\"cpuIsProcess\":true";
+    }
     j += std::string(",\"loadStatus\":\"") + loadStatus(s) + "\"";
     if (s.haveTemp) { char b[64]; snprintf(b, sizeof b, ",\"tempC\":%.1f", s.tempC); j += b; }
     if (s.haveVolt) {
