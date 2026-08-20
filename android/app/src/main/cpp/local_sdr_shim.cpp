@@ -1046,6 +1046,11 @@ static std::atomic<int>    g_vsAdminIdleMin{30};
 /** False = a local/household receiver: the admin page hides the panels about managing strangers.
  *  Default false so an install from before this setting behaves exactly as it always did. */
 static std::atomic<bool>   g_vsPublicSharing{false};
+/** ★★★ A RADIO WE COULD NOT GET BACK. Set when the reader thread refuses to stop and its Impl is
+ *  leaked (see stopLocked). The device stays claimed by this process until it exits, so the next
+ *  start must say THAT rather than let libusb report a device that is plugged in and busy as a
+ *  device that is missing. */
+static std::atomic<bool>   g_radioOrphaned{false};
 /** ★★ THE RTL'S OVERLOAD READINGS, published once a second from the IQ thread. `peak` is how close
  *  the loudest sample came to full scale (0 dBFS = on the rail); `clip` is the percentage of
  *  samples that actually sat on it. Aim the gain at a peak of about -3 dBFS with clip at zero. */
@@ -9928,11 +9933,20 @@ struct LocalSdrShim::Impl {
     /** Start (or restart) the USB capture thread. ONE definition, so every path that relaunches
      *  capture also gets the loss detection — the sample-rate path originally did not, which would
      *  have silently disabled unplug detection for the rest of the session. */
+    /** ★★★ HAS THE READER ACTUALLY LEFT? A join cannot be asked "would you block", so the teardown
+     *  needs the answer BEFORE it commits to waiting for ever. Set by the reader itself on the way
+     *  out, whichever way it leaves. See the stop sequence in stopLocked(). */
+    std::atomic<bool> rtlThreadDone{false};
+
     void launchCapture() {
         const uint32_t bufLen = rtlBufLenForRate(sampleRate);
         Impl* self = this;
+        rtlThreadDone.store(false);
         rtlThread = std::thread([self, bufLen]{
             vibeThreadName("vibe-rtl");
+            // ★ Set on EVERY exit path, including the early returns below — a flag that is only
+            //   correct on the happy path is worse than none, because it is trusted.
+            struct Done { Impl* s; ~Done(){ s->rtlThreadDone.store(true); } } done{self};
             rtlsdr_read_async(self->dev, &Impl::asyncHandler, self, 0, bufLen);
             // We only reach here when the IQ stops. Three reasons, and they must not be confused:
             if (self->stopping.load() || self->restarting.load()) return;   // we asked for it
@@ -10135,7 +10149,14 @@ struct LocalSdrShim::Impl {
         // server" (Stuart, 2026-07-27, with a screenshot of exactly that).
         // ★ Same shape as radioCapsJson's `if (!useSdrplay())`: a two-source world expressed as
         // "the other one" quietly mis-handles the third. Name every source.
-        if (useTcp()) { tcpRunning.store(true); rtlThread = std::thread([this]{ tcpReadLoop(); }); }
+        if (useTcp()) {
+            tcpRunning.store(true);
+            rtlThreadDone.store(false);
+            rtlThread = std::thread([this]{
+                struct Done { Impl* s; ~Done(){ s->rtlThreadDone.store(true); } } done{this};
+                tcpReadLoop();
+            });
+        }
         else if (useSdrplay()) { sdrp->setPaused(false); }
         else if (useAirspyHf()) { ahf->setPaused(false); }
         else          { idleDiscard.store(false); }   // never stopped; just start wanting it again
@@ -12404,6 +12425,16 @@ int LocalSdrShim::start(int fd, int vid, int pid,
                                fftSize, fftRate, mode, err);
     }
     std::lock_guard<std::mutex> life(g_lifecycle);
+    // ★★★ A RADIO WE ORPHANED IS NOT A RADIO THAT IS MISSING. If a previous stop left a reader
+    //     thread we could not kill, this process still holds the dongle — libusb will refuse to
+    //     open it, and the honest report of that is NOT "no SDR found — is it plugged in?", which
+    //     sends an owner looking for a cable fault of our making. Say what actually happened and
+    //     what fixes it, once, here.
+    if (g_radioOrphaned.load()) {
+        err = "the previous radio did not shut down — restart the app to reclaim the dongle";
+        LOGE("start refused: %s", err.c_str());
+        return -1;
+    }
     // Recover from a stale shim left by a dirty exit (app swiped away while the
     // foreground service kept the process — and the shim — alive). Without this
     // the new connect got "already running" and wedged on the next launch.
@@ -12809,7 +12840,11 @@ int LocalSdrShim::startTcp(const std::string& host, int port,
 
     impl->startDspThread();
     impl->tcpRunning.store(true);
-    impl->rtlThread = std::thread([impl]{ impl->tcpReadLoop(); });
+    impl->rtlThreadDone.store(false);
+    impl->rtlThread = std::thread([impl]{
+        struct Done { Impl* s; ~Done(){ s->rtlThreadDone.store(true); } } done{impl};
+        impl->tcpReadLoop();
+    });
 
     p = impl;
     LocalSdrShim::applyDesiredDsp(impl);   // the listener's DSP choices survive this restart
@@ -13061,7 +13096,59 @@ void LocalSdrShim::stopLocked() {
     // are stopped explicitly now, in the same place every other source is.
     if (impl->useAirspyHf()) { impl->ahf->stop(); impl->ahf->close(); }
     if (impl->useSdrplay())  { impl->sdrp->close(); }
-    joinOnce(impl->rtlThread, "reader");
+    // ★★★ CANCEL, KEEP CANCELLING, AND NEVER WAIT FOR EVER.
+    //
+    //  ★★★ THE HANG THIS FIXES, measured on the Moto (2026-08-20): the accept thread had gone,
+    //      the listening socket was still bound, and `vibe-rtl` and `vibe-dsp` were STILL ALIVE —
+    //      so the teardown was parked HERE, on this join, with everything below it never running.
+    //      To a listener that is a server which accepts connections and answers nothing: "the
+    //      webclient isnt working… no tuning or gain", twice in an evening, and the thing that
+    //      "cleared itself" on 08-19 was a later restart rather than any cure.
+    //
+    //  ★★★ WHY ONE CANCEL IS NOT ENOUGH: rtlsdr_cancel_async() only raises the flag when the async
+    //      loop has reached RUNNING. Ask a moment too early — which a stop racing a start does —
+    //      and the request is silently dropped, the loop never notices, and this join blocks until
+    //      the process dies. So it is retried while we wait, which costs nothing when the first one
+    //      worked.
+    //
+    //  ★★ AND IF IT STILL WILL NOT LEAVE, WE DO NOT JOIN IT. A wedged libusb must not take the app
+    //     with it. The thread is detached and THE Impl IS DELIBERATELY LEAKED — see the orphan flag
+    //     below. That is not tidiness lost for nothing: the detached reader can still call
+    //     asyncHandler() → enqueueIq(), and deleting the Impl under it is precisely the
+    //     "std::mutex::lock -> abort" crash the Airspy taught us on 2026-07-27. A leaked Impl in a
+    //     process the user can restart beats an abort, and beats a hang that looks like a bug in
+    //     everything else.
+    bool readerStuck = false;
+    if (impl->rtlThread.joinable()) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!impl->rtlThreadDone.load() && std::chrono::steady_clock::now() < deadline) {
+            if (impl->dev) rtlsdr_cancel_async(impl->dev);
+            if (impl->useTcp() && impl->tcpSock) impl->tcpSock->close();
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        if (impl->rtlThreadDone.load()) {
+            joinOnce(impl->rtlThread, "reader");
+        } else {
+            readerStuck = true;
+            LOGE("RADIO READER WOULD NOT STOP after 5s — detaching it and LEAKING this radio "
+                 "rather than hanging the teardown or freeing memory it is still writing to. "
+                 "The dongle stays claimed until the app is restarted.");
+            impl->rtlThread.detach();
+        }
+    }
+    if (readerStuck) {
+        // ★★★ STOP HERE, DELIBERATELY. Everything below tears down structures the runaway reader
+        //     is still using — the DSP queue, the audio chain, the engine — so continuing would
+        //     turn a stuck thread into a crash. The SERVER is already down (its port was closed
+        //     and its clients dropped at the top), which is what the user asked for; the RADIO is
+        //     what we cannot take back.
+        //  ★ Flagged so the next start REFUSES with a sentence somebody can act on, rather than
+        //    failing to open the device and reporting "no SDR found — is it plugged in?", which
+        //    would send an owner hunting for a cable fault we caused.
+        g_radioOrphaned.store(true);
+        LOGE("local SDR stopped — RADIO ORPHANED, restart the app to reclaim it");
+        return;
+    }
     // IQ source stopped -> stop the DSP consumer (drains/clears the queue) before
     // tearing the engine down, so no rx.feed runs against a destroyed engine.
     impl->stopDspThread();
@@ -13650,7 +13737,14 @@ void LocalSdrShim::setSampleRate(double rate) {
     { std::lock_guard<std::mutex> lk(impl->clientMtx); scfg = impl->specClient; }
     if (scfg) impl->sendConfig(scfg);
     impl->startDspThread();
-    if (tcp) { impl->tcpRunning.store(true); impl->rtlThread = std::thread([impl]{ impl->tcpReadLoop(); }); }
+    if (tcp) {
+        impl->tcpRunning.store(true);
+        impl->rtlThreadDone.store(false);
+        impl->rtlThread = std::thread([impl]{
+            struct Done { Impl* s; ~Done(){ s->rtlThreadDone.store(true); } } done{impl};
+            impl->tcpReadLoop();
+        });
+    }
     else if (rsp) { impl->sdrp->setPaused(false); }
     else if (impl->useAirspyHf()) {
         // ★ The device rate and the re-tune are applied UP THERE, before the engine is built —
