@@ -5902,10 +5902,19 @@ struct LocalSdrShim::Impl {
             //   that is unlocked and then never touched still re-locks on schedule.
             // (setAdminNow stamps the idle clock for this listener.)
             LOGI("admin unlock %s", ok ? "granted" : "REFUSED");
-            std::shared_ptr<net::Socket> sc;
-            { std::lock_guard<std::mutex> lk(clientMtx); sc = specClient; }
-            if (sc) sendText(sc, ok ? "{\"type\":\"admin\",\"ok\":true}"
-                                    : "{\"type\":\"admin\",\"ok\":false}");
+            // ★★★ ANSWER THE LISTENER WHO ASKED, NOT THE PRIMARY. This replied to `specClient` —
+            //     whoever happened to connect first — so on a shared dial the password was
+            //     accepted and the ANSWER went to somebody else's browser. Stuart typed it ten
+            //     times from the Mac while his Moto (the primary) silently received ten grants:
+            //     "password just appears to not do anything, which is why I unlocked it 10 times
+            //     in a row" (2026-08-20). The server was right every time and told the wrong
+            //     device, which is indistinguishable from a dead button.
+            //  ★★ It is also the last of the ADMIN-badge confusion: the badge follows this answer,
+            //     so it landed on whichever session was primary rather than the one that unlocked.
+            //  ★ `sock` is the socket the request arrived on, which is by definition the one whose
+            //    listener is waiting for the reply.
+            sendText(sock, ok ? "{\"type\":\"admin\",\"ok\":true}"
+                              : "{\"type\":\"admin\",\"ok\":false}");
             return;
         }
         // ★★★ ON A SHARED RECEIVER, NOTHING SHARED IS UNLOCKED. The radio's front end and the
