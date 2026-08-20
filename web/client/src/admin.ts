@@ -117,8 +117,8 @@ function card(k: string, v: string, sub: string, status = 'ok'): string {
   // ★ The subtitle is clamped to two fixed lines so the card never changes height — see the CSS.
   //   Carry the full text as a title, because clamping must not be able to hide the half of a
   //   sentence that says what to DO about a fault.
-  return `<div class="aCard ${cls}"><div class="k">${esc(k)}</div>`
-       + `<div class="v">${esc(v)}</div>`
+  return `<div class="aCard ${cls}"><div class="k" title="${esc(k)}">${esc(k)}</div>`
+       + `<div class="v" title="${esc(v)}">${esc(v)}</div>`
        + `<div class="s" title="${esc(sub)}">${esc(sub)}</div></div>`;
 }
 

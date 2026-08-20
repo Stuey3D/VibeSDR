@@ -1855,8 +1855,25 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   background: var(--btn-bg); border: 1px solid var(--btn-border);
   border-radius: 8px; padding: 9px 11px;
 }
-.aCard .k { font-size: 10px; letter-spacing: 1.5px; color: var(--text-dim); }
-.aCard .v { font-size: 19px; margin-top: 3px; font-variant-numeric: tabular-nums; color: var(--freq); }
+/* ★★★ EVERY LINE OF A CARD GETS A FIXED SLOT, sized for the longest text it will ever hold.
+   ALL THREE of these wrap, and each one moved the page when it did: the key ("RTLSDRBlog Blog V4"
+   over two lines beside "CPU TEMP" on one), the value (POWER flipping between "DIPPED" and
+   "UNDER-VOLTAGE", "0 listening", "SDRplay RSP1B"), and the subtitle. Fixing only the subtitle
+   left two thirds of the jitter in place (Stuart, 2026-08-20: "I just assumed you were going to
+   size the boxes to handle the longest text").
+   ★★ Two lines each, clamped rather than allowed to push, with the full text on the element's
+      title so nothing a clamp hides is lost. The cost is some empty space under a short value —
+      which is exactly what a dashboard that never moves while you read it is worth. */
+.aCard .k {
+  font-size: 10px; letter-spacing: 1.5px; color: var(--text-dim);
+  line-height: 1.2; height: 2.4em; overflow: hidden;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+}
+.aCard .v {
+  font-size: 19px; margin-top: 3px; font-variant-numeric: tabular-nums; color: var(--freq);
+  line-height: 1.15; height: 2.3em; overflow: hidden;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+}
 /* ★★★ A FIXED TWO LINES, ALWAYS. The explanations under these numbers change length as the
    machine changes state — POWER goes from "supply voltage has stayed in range" to a sentence
    about performance governors — and every time one wrapped onto a second line the card grew, the
