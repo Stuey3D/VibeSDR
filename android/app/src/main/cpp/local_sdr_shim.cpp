@@ -8677,7 +8677,20 @@ struct LocalSdrShim::Impl {
                     LOGI("admin superseded — a newer login arrived holding the password");
                 }
             }
-            if (newOccupant || adminAuthed) adminOk.store(adminAuthed);
+            // ★★★ AN ARRIVING STRANGER MUST NOT REVOKE THE OWNER. This read
+            //     `if (newOccupant || adminAuthed) adminOk.store(adminAuthed)` — so ANY new
+            //     session without a password stored FALSE over the radio-wide admin flag. On a
+            //     one-at-a-time receiver that is correct, because the new occupant IS the only
+            //     listener and the flag is theirs. On a shared dial it hands every visitor a
+            //     master switch: Stuart was working in the admin page when I connected an
+            //     ordinary listener and it threw him out, mid-session, on a fresh unlock
+            //     (2026-08-20). The same shape as everything else today — state that belongs to
+            //     "the radio" when it belongs to a SESSION.
+            //  ★★ A new ADMIN still takes it, exactly as before: whoever proves the password most
+            //     recently holds it, which is the rule that lets an owner reclaim their receiver
+            //     from a phone when they have left it unlocked on the Mac.
+            if (adminAuthed) adminOk.store(true);
+            else if (g_vsMaxUsers.load() <= 1 && newOccupant) adminOk.store(false);
             if (adminAuthed) lastAdminTouch.store(Impl::nowSecs());
             if (adminAuthed) LOGI("admin session — controls unlocked, no session limit");
         }
