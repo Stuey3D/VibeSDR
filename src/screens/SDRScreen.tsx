@@ -2418,13 +2418,20 @@ export default function SDRScreen({ route, navigation }: Props) {
     //     that was perfectly capable of showing the whole panel.
     //  ★ Guarded on the DIAL, not on the drawer's own props, because this decides whether the
     //    drawer opens at all.
-    if (isLandscape && !sharedDial) { showChatRotateHint(); return; }
+    //
+    // ★★★ AND IT WAS NEVER MEANT TO APPLY TO A TABLET. Stuart, 2026-08-20: *"the ipad should have
+    //     never needed to be rotated to portrait for chat, only the iPhone. Same with the decoder
+    //     boxes."* The decoder banner has carried `!isTablet` all along; the chat gate was written
+    //     without it and nobody noticed, because the people who use chat most are on phones. A
+    //     landscape iPad has room for the keyboard AND the conversation — that is the entire
+    //     premise of the rule, and it simply is not true there.
+    if (isLandscape && !isTablet && !sharedDial) { showChatRotateHint(); return; }
     // Prime the chat stream (history replay arrives quiet) even before join
     decoderClient.current?.subscribeChat();
     setChatUsers(chatUsersRef.current);  // ref is live; state only while open
     setChatOpen(true);
     setChatUnread(false);
-  }, [isLandscape, sharedDial, showChatRotateHint]);
+  }, [isLandscape, isTablet, sharedDial, showChatRotateHint]);
 
   const closeChat = useCallback(() => {
     setChatOpen(false);
@@ -2434,11 +2441,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ★ ...unless it is the canned chat, which needs no keyboard and is perfectly readable in
   //   landscape. Closing a panel the user can plainly see working reads as a fault, not a policy.
   useEffect(() => {
-    if (isLandscape && chatOpen && !sharedDial) {
+    if (isLandscape && !isTablet && chatOpen && !sharedDial) {
       setChatOpen(false);
       showChatRotateHint();
     }
-  }, [isLandscape, chatOpen, sharedDial, showChatRotateHint]);
+  }, [isLandscape, isTablet, chatOpen, sharedDial, showChatRotateHint]);
 
   // Android back gesture/button: CONSUME it on this screen (iOS parity —
   // gestureEnabled:false on the stack). Edge swipes while working the VFO
