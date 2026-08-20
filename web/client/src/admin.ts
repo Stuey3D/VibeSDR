@@ -114,8 +114,12 @@ const mhz = (hz: number) => hz > 0 ? `${(hz / 1e6).toFixed(3)} MHz` : '—';
 function card(k: string, v: string, sub: string, status = 'ok'): string {
   const cls = status === 'critical' ? 'crit' : status === 'warning' ? 'warn'
             : status === 'unknown' ? 'none' : '';
+  // ★ The subtitle is clamped to two fixed lines so the card never changes height — see the CSS.
+  //   Carry the full text as a title, because clamping must not be able to hide the half of a
+  //   sentence that says what to DO about a fault.
   return `<div class="aCard ${cls}"><div class="k">${esc(k)}</div>`
-       + `<div class="v">${esc(v)}</div><div class="s">${esc(sub)}</div></div>`;
+       + `<div class="v">${esc(v)}</div>`
+       + `<div class="s" title="${esc(sub)}">${esc(sub)}</div></div>`;
 }
 
 function renderHealth(st: any, perRadio: Array<{ radio: string; data: any }> = [],

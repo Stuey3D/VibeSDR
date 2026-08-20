@@ -3174,21 +3174,28 @@ struct LocalSdrShim::Impl {
             std::lock_guard<std::mutex> lk(clientMtx);
             // ★ Bounded. Each waiter costs a thread and a socket; past some depth the honest
             //   answer is "too many waiting" rather than a queue position nobody will reach.
-            if ((int)waitQueue.size() >= kMaxWaiting) {
+            if (distinctWaitingLocked() >= kMaxWaiting) {
                 sendWs(sock, 0x1, (const uint8_t*)"{\"type\":\"busy\",\"queueFull\":true}", 34);
                 outboxClose(sock);
                 return;
             }
             waitQueue.push_back({sock.get(), me, Impl::nowSecs(), sock->peerAddress()});
         }
-        int lastPos = -1, lastFree = -2;
+        int lastPos = -1, lastFree = -2, sinceSend = 0;
         while (serverRunning.load() && sock->isOpen()) {
             bool mine = false; int pos = 0, len = 0, freeIn = -1;
             {
                 std::lock_guard<std::mutex> lk(clientMtx);
-                len = (int)waitQueue.size();
-                for (int i = 0; i < len; i++)
-                    if (waitQueue[i].sock == sock.get()) { pos = i + 1; break; }
+                // ★★★ A QUEUE OF PEOPLE, NOT OF SOCKETS. Every listener opens TWO — spectrum and
+                //     audio — so a lone visitor was told "you are 2 of 2 waiting", and each press
+                //     of TRY AGAIN added two more: Stuart got it to 18 with one browser
+                //     (2026-08-20). Position and length are both counted over DISTINCT SESSIONS,
+                //     which is the same key the reservation uses and for the same reason — see
+                //     the note on `reservedFor`.
+                // ★★ The socket stays the queue's unit of bookkeeping (it is what we write to and
+                //    what dies when they give up); only what we COUNT and REPORT changes.
+                len = distinctWaitingLocked();
+                pos = waitPositionLocked(me);
                 freeIn = freeInSecsLocked();
                 // ★★★ ONLY THE HEAD MAY CLAIM, and it claims by RESERVING ITS OWN ADDRESS. This is
                 //     what makes the position we displayed true: for the next kReservationSec no
@@ -3213,7 +3220,16 @@ struct LocalSdrShim::Impl {
                      (int)kReservationSec);
                 break;
             }
-            if (pos != lastPos || freeIn / 5 != lastFree / 5) {   // ★ only on a real change
+            // ★★★ AND SAY IT AT LEAST EVERY FIVE SECONDS EVEN WHEN NOTHING CHANGED. A waiting
+            //     socket has no reader here, so a peer that closes the tab is invisible: FIN alone
+            //     never fails a send, and a queue that only writes on a CHANGE can go minutes
+            //     without writing at all. Its entry then sat in the queue for as long as the
+            //     occupant stayed, inflating the length for everybody behind it — the other half
+            //     of Stuart's queue of 18. The write is what discovers the death: the peer answers
+            //     with RST, the send fails, and outboxWriter closes the socket, which ends this
+            //     loop and drops the entry below.
+            if (pos != lastPos || freeIn / 5 != lastFree / 5 || ++sinceSend >= 5) {
+                sinceSend = 0;
                 lastPos = pos; lastFree = freeIn;
                 char msg[160];
                 int n = snprintf(msg, sizeof msg,
@@ -3398,6 +3414,30 @@ struct LocalSdrShim::Impl {
     //     worse than telling them nothing (Stuart, 2026-08-04).
     struct Waiter { const net::Socket* sock; std::string who; double since; std::string ip; };
     std::vector<Waiter> waitQueue;              // arrival order; front = next served
+    /** ★★★ HOW MANY PEOPLE ARE WAITING — not how many sockets are. One listener holds two, so
+     *  every count taken off waitQueue.size() was double, including the one shown to the person
+     *  waiting and the one the ceiling is checked against. Both callers hold clientMtx. */
+    int distinctWaitingLocked() const {
+        int n = 0;
+        for (size_t i = 0; i < waitQueue.size(); i++) {
+            bool seen = false;
+            for (size_t j = 0; j < i && !seen; j++) seen = (waitQueue[j].who == waitQueue[i].who);
+            if (!seen) ++n;
+        }
+        return n;
+    }
+    /** This session's place in that queue of people, 1-based; 0 if it is not waiting. */
+    int waitPositionLocked(const std::string& who) const {
+        int n = 0;
+        for (size_t i = 0; i < waitQueue.size(); i++) {
+            bool seen = false;
+            for (size_t j = 0; j < i && !seen; j++) seen = (waitQueue[j].who == waitQueue[i].who);
+            if (seen) continue;
+            ++n;
+            if (waitQueue[i].who == who) return n;
+        }
+        return 0;
+    }
     // ★★★ KEYED BY SESSION, NOT BY ADDRESS. The very same trap the occupancy check already
     //     documents: "browsers on the SAME machine share an IP but have different ids — which is
     //     why IP won't do". Reserving an ADDRESS means two people behind one NAT, or two tabs on
@@ -7297,6 +7337,15 @@ struct LocalSdrShim::Impl {
 #else
             const std::string verField;
 #endif
+            // ★★★ ONE READING OF THE STATE, USED BY BOTH FIELDS. `claimable` and `freeInSec` are
+            //     two answers to the same question — is this listener still inside their
+            //     guarantee — and a client that reads them as one sentence gets a contradiction
+            //     if they are ever computed apart: a card saying FREE beside a dialog saying
+            //     "they have 1:17 left" (Stuart, 2026-08-20). Claimable means the guarantee is
+            //     spent, so the countdown that goes with it is ZERO, not whatever a second
+            //     evaluation of a moving clock returns.
+            const bool vsClaimNow = LocalSdrShim::instance().claimableNow();
+            const int  vsFreeIn   = vsClaimNow ? 0 : LocalSdrShim::instance().occupantSecsLeft();
             std::string body = std::string("{\"server\":\"vibeserver\",\"proto\":1,\"pin\":")
                              + (pinOn ? "true" : "false") + ",\"web\":"
                              + (g_vsWebEnabled.load() ? "true" : "false")
@@ -7359,7 +7408,7 @@ struct LocalSdrShim::Impl {
                              // Seconds the current listener has left, -1 = no limit / free. Lets
                              // the picker say "free in 4 min" instead of a bare "in use", which
                              // is the difference between waiting and giving up.
-                             + ",\"freeInSec\":" + std::to_string(LocalSdrShim::instance().occupantSecsLeft())
+                             + ",\"freeInSec\":" + std::to_string(vsFreeIn)
                              // ★★★ HOW THE LIMIT BEHAVES, or a client cannot describe it honestly.
                              //     Absent means HARD, so every older client and server reads right.
                              + (g_vsSessionLimitSoft.load()
@@ -7376,8 +7425,7 @@ struct LocalSdrShim::Impl {
                              //    lives here, where only the public card reads it, and nowhere
                              //    else. A client that does not know this key sees today's "IN
                              //    USE", which is the safe way to be wrong.
-                             + (LocalSdrShim::instance().claimableNow()
-                                  ? std::string(",\"claimable\":true") : std::string())
+                             + (vsClaimNow ? std::string(",\"claimable\":true") : std::string())
                              // ★★ THE AERIAL AND THE OWNER'S STANDING MESSAGE. Here as well as in
                              //    /vibeserver/radios because a SIMPLE server has no picker at all:
                              //    its splash is this radio, and this file is what that splash
@@ -10099,7 +10147,7 @@ struct LocalSdrShim::Impl {
 
         {
             std::lock_guard<std::mutex> lk(clientMtx);
-            waiters = (int)waitQueue.size();
+            waiters = distinctWaitingLocked();
             for (auto& kv : clientDsp) {
                 auto& c = kv.second;
                 if (!c || c->since <= 0) continue;
@@ -10317,7 +10365,7 @@ struct LocalSdrShim::Impl {
             double handoverAt = 0; int waiters = 0;
             { std::lock_guard<std::mutex> lk(clientMtx);
               handoverAt = g_vsHandoverAt;
-              waiters = (int)waitQueue.size(); }
+              waiters = distinctWaitingLocked(); }
             if (handoverAt <= 0) {
                 if (waiters <= 0) return;                // borrowed time, and nobody is waiting
                 const double at = Impl::nowSecs() + kHandoverNoticeSec;
@@ -11113,7 +11161,9 @@ void LocalSdrShim::saveSpectrogramIfDue() {
 int LocalSdrShim::waitingCount() const {
     if (!p) return 0;
     std::lock_guard<std::mutex> lk(p->clientMtx);
-    return (int)p->waitQueue.size();
+    // ★ PEOPLE, not sockets — this is the number the landing page and the admin card show, and
+    //   each waiter holds two sockets. See distinctWaitingLocked().
+    return p->distinctWaitingLocked();
 }
 
 // ── ★★★ THE ADMIN API's back end ──────────────────────────────────────────────────────────────
@@ -11661,11 +11711,18 @@ std::string LocalSdrShim::adminSessionsJson() {
     // ★★ THE PEOPLE WHO ARE NOT ON YET. A queue is invisible in a listener list by definition, and
     //    "nobody is listening" reads very differently from "nobody is listening and four are
     //    waiting". Position is 1-based and is the order that will actually be honoured.
+    // ★★★ ONE ROW PER PERSON. A listener waits on TWO sockets, so this table listed everybody
+    //     twice and the owner read a queue of four as eight (2026-08-20). Same rule as the count
+    //     the waiter is shown — see distinctWaitingLocked().
     j += "],\"queue\":[";
+    int qpos = 0;
     for (size_t i = 0; i < p->waitQueue.size(); ++i) {
         const auto& w = p->waitQueue[i];
-        if (i) j += ',';
-        j += "{\"pos\":" + std::to_string(i + 1)
+        bool seen = false;
+        for (size_t k = 0; k < i && !seen; k++) seen = (p->waitQueue[k].who == w.who);
+        if (seen) continue;
+        if (qpos) j += ',';
+        j += "{\"pos\":" + std::to_string(++qpos)
            + ",\"ip\":\"" + vibeadmin::esc(w.ip) + "\""
            + ",\"cc\":\"" + vibeadmin::esc(vsCountry(w.ip)) + "\""
            + ",\"secs\":" + std::to_string((long long)(now - w.since)) + "}";

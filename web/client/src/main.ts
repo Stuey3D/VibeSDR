@@ -2817,6 +2817,17 @@ function updateStatus() {
  *  for that lesson more than once (the tour cards, the macOS download block).
  *  ★ `blocked` is the same test the card's clickability uses — a radio that is full is unreachable
  *    unless you are the admin, and a radio that is DOWN is unreachable for everybody. */
+/** ★★★ THE FRESHEST STATUS PER RADIO, because the CARD refreshes and the CLICK HANDLER does not.
+ *  refreshSplashRadios() updates the state text in place every 10 s (deliberately — a redraw can
+ *  swallow a click), but the takeover confirm was built by the LAST FULL RENDER and closed over
+ *  the status object from that moment. So the card said FREE while the dialog quoted a countdown
+ *  from minutes earlier: "the page says the airspy is free but the admin dialog is saying 1:17
+ *  left" (Stuart, 2026-08-20). Anything a handler decides with must be READ AT CLICK TIME, and
+ *  this is where it is read from. Keyed by serial, written by both renderers.
+ *  ★★ THE GENERAL SHAPE, worth remembering: an in-place refresh leaves every closure behind it
+ *     stale, and the staleness is invisible because the visible half is correct. */
+const latestRadioStatus = new Map<string, any>();
+
 function radioCardState(r: any, st: any): { state: string; blocked: boolean } {
   const mmss = (sec: number) => {
     const m = Math.floor(sec / 60), sx = Math.max(0, Math.floor(sec % 60));
@@ -3028,8 +3039,10 @@ async function showSplashRadios(): Promise<void> {
       const rid = encodeURIComponent((r as any).id || r.serial);
       const base = `${location.origin}/r/${rid}`;
       const resp = await fetch(`${base}/vibeserver.json`, { cache: 'no-store' });
-      if (!resp.ok) return null;
-      return await resp.json();
+      if (!resp.ok) { latestRadioStatus.delete(r.serial); return null; }
+      const j = await resp.json();
+      latestRadioStatus.set(r.serial, j);
+      return j;
     } catch { return null; }
   }));
 
@@ -3128,28 +3141,31 @@ async function showSplashRadios(): Promise<void> {
       const a = el as HTMLAnchorElement;
       const i = radios.findIndex((r) => r.serial === a.dataset.serial);
       if (i < 0) return;
-      const st = live[i];
-      const max = Number(st?.maxUsers) || Number(radios[i].users) || 1;
-      // ★★★ A CLAIMABLE RADIO IS NOT BUSY — NOT EVEN FOR THE ADMIN. Past the guarantee the
-      //     incumbent holds the slot only until somebody wants it, so arriving IS the rule
-      //     working, not an act of eviction. The card already says FREE (radioCardState); asking
-      //     "taking over will disconnect them, continue?" on top of that contradicts the card and
-      //     makes the arriving user feel like a queue-jumper for doing the ordinary thing
-      //     (Stuart, 2026-08-20: "should not be made to feel guilty for taking it over").
-      //     The only thing they should see is the handover countdown while the server gives the
-      //     incumbent their notice.
-      // ★★ THIS IS THE SAME DRIFT, A THIRD TIME: a private copy of "is this radio available" that
-      //    does not know about `claimable`. The confirm belongs to a radio that is genuinely full
-      //    — somebody inside their guarantee — which is what `blocked` from radioCardState means.
-      const busy = st && max > 0 && (Number(st.listeners) || 0) >= max
-                   && st.claimable !== true;
-      if (!busy) return;
+      // ★★★ ATTACH ALWAYS, DECIDE AT CLICK. Whether a radio is busy was read up to ten seconds
+      //     ago; the previous code used it to decide whether to attach the handler AT ALL, so a
+      //     radio that filled up after the render got no confirm and one that emptied got a
+      //     dialog about a listener who had left. Nothing here is decided until the click.
       a.addEventListener('click', (ev) => {
-        const left = typeof st?.freeInSec === 'number' && st.freeInSec >= 0
-          ? ` They have ${mmss(st.freeInSec)} left.` : '';
-        const who = max > 1 ? `${max} listeners are` : 'Someone is';
+        // ★★★ RE-READ THE STATUS. refreshSplashRadios() updates the card text in place without
+        //     rebuilding these handlers, so anything captured at render time is stale by design —
+        //     that is what put "they have 1:17 left" under a card saying FREE (Stuart,
+        //     2026-08-20).
+        const cur = latestRadioStatus.get(radios[i].serial);
+        const curMax = Number(cur?.maxUsers) || Number(radios[i].users) || 1;
+        // ★★★ CLAIMABLE IS NOT BUSY, and neither is empty. Past the guarantee the incumbent holds
+        //     the slot only until somebody wants it, so arriving IS the rule working — the card
+        //     says FREE for exactly this case and a dialog asking whether to disconnect them
+        //     contradicts it and makes the arriving user feel like a queue-jumper ("should not be
+        //     made to feel guilty for taking it over"). They see the handover countdown and
+        //     nothing else.
+        const busyNow = !!cur && cur.claimable !== true
+                        && curMax > 0 && (Number(cur.listeners) || 0) >= curMax;
+        if (!busyNow) return;                       // the link just follows
+        const left = typeof cur.freeInSec === 'number' && cur.freeInSec > 0
+          ? ` They have ${mmss(cur.freeInSec)} left.` : '';
+        const who = curMax > 1 ? `${curMax} listeners are` : 'Someone is';
         if (!confirm(`${who} using ${radios[i].label}.${left}\n\n`
-                   + `Taking over will disconnect ${max > 1 ? 'one of them' : 'them'}. Continue?`))
+                   + `Taking over will disconnect ${curMax > 1 ? 'one of them' : 'them'}. Continue?`))
           ev.preventDefault();
         // ★ Answering that confirm is the deliberate act — see the takeover flag in connect().
         //   Without it the navigation that follows arrives as an ordinary admin reconnect and
@@ -8557,7 +8573,11 @@ async function refreshSplashRadios(): Promise<void> {
     try {
       const rid = encodeURIComponent((r as any).id || r.serial);
       const resp = await fetch(`${location.origin}/r/${rid}/vibeserver.json`, { cache: 'no-store' });
-      return resp.ok ? await resp.json() : null;
+      if (!resp.ok) { latestRadioStatus.delete(r.serial); return null; }
+      const j = await resp.json();
+      // ★ The click handler reads THIS, not the object the card was built from — see the map.
+      latestRadioStatus.set(r.serial, j);
+      return j;
     } catch { return null; }
   }));
 
