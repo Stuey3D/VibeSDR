@@ -1,5 +1,8 @@
 <!doctype html>
-<!-- Template for the VibeServer landing page. publish-apt.sh substitutes __VERSION__/__ARCH__
+<!-- Template for the VibeServer landing page. publish-apt.sh fills in the two placeholders
+     below (both derived from what is actually in the pool, per architecture).
+     ★ Do NOT name them in this comment: they would be substituted here too, which is exactly
+       what happened the first time and put an install command inside an HTML comment.
      and writes the result to the repository root. Edit it HERE, not there — the copy in the
      artefact repo is generated and will be overwritten on the next publish. -->
 <html lang="en">
@@ -31,21 +34,29 @@
 <main>
   <h1>VibeServer</h1>
   <p>Turn an SDR into a network receiver for the VibeSDR apps and any browser.<br>
-     <span class="ver">Current package: __VERSION__ (__ARCH__)</span></p>
+     <span class="ver">Current package: __ARCHVERSIONS__</span></p>
 
-  <h2>Debian / Raspberry Pi OS &mdash; 64-bit ARM</h2>
-  <p>Tested on Debian 13 (trixie) and Raspberry Pi OS on a Pi 500. Anything arm64 running Debian
-     or Ubuntu should work.</p>
-  <p><strong>64-bit only, in practice.</strong> The DSP's NEON path is gated on
-     <code>__aarch64__</code>, and a 32-bit userland silently loses all of it &mdash; roughly
-     <strong>13&times; slower</strong> on the same hardware.</p>
+  <h2>Debian / Ubuntu / Raspberry Pi OS &mdash; ARM or Intel/AMD</h2>
+  <p>Tested on Debian 13 (trixie) and Raspberry Pi OS on a Pi 500, and on Ubuntu 24.04 on an
+     Intel i5. Anything <strong>arm64</strong> or <strong>amd64</strong> running Debian or Ubuntu
+     should work &mdash; the install below is the same command on either.</p>
+  <p><strong>64-bit only.</strong> On ARM the DSP's NEON path is gated on <code>__aarch64__</code>,
+     and a 32-bit userland silently loses all of it &mdash; roughly <strong>13&times; slower</strong>
+     on the same hardware. There is no 32-bit package for that reason.</p>
+  <p><strong>On Intel/AMD it runs the scalar path</strong>, which costs about
+     <strong>12.8% of one core</strong> for a stereo FM listener at 1.92&nbsp;MSPS (measured on an
+     i5-11300H). That is roughly twice what NEON costs on an Apple M4, and it does not matter:
+     extra listeners share one channelizer and add about <strong>0.02%</strong> each, so a single
+     modern core carries a full receiver comfortably.</p>
 
   <h3>1. Install</h3>
-  <p>Copy and paste the whole block. <strong>Nothing else needs installing</strong> &mdash; apt
-     pulls in every library VibeServer needs.</p>
+  <p>Copy and paste the whole block &mdash; it is <strong>the same block on ARM and on
+     Intel/AMD</strong>, because it asks your machine which one it is.
+     <strong>Nothing else needs installing</strong> &mdash; apt pulls in every library VibeServer
+     needs.</p>
 <pre>curl -fsSL https://apt.vibesdr.net/KEY.gpg \
   | sudo gpg --dearmor -o /usr/share/keyrings/vibesdr.gpg
-echo "deb [arch=arm64 signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net stable main" \
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net stable main" \
   | sudo tee /etc/apt/sources.list.d/vibesdr.list
 sudo apt update
 sudo apt install vibeserver</pre>
@@ -98,7 +109,9 @@ systemctl status sdrplay        # should be active (running)</pre>
   <p>Install the <code>.deb</code> with <code>apt install ./&hellip;</code> &mdash; with the
      <code>./</code> &mdash; so apt still resolves the dependencies. Never
      <code>dpkg -i</code>: it does not resolve them, and leaves you part-installed.</p>
-<pre>sudo apt install ./vibeserver___VERSION____ARCH__.deb</pre>
+  <p>Take the line for your architecture &mdash; <code>dpkg --print-architecture</code> tells you
+     which, if you are not sure.</p>
+<pre>__DEBLINES__</pre>
 
   <h2>macOS</h2>
   <p>A signed, notarised build — download, open, and it runs without a Gatekeeper argument.</p>

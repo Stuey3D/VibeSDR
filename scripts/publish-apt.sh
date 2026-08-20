@@ -4,9 +4,17 @@
 #   scripts/publish-apt.sh              # build, index, sign, push
 #   scripts/publish-apt.sh --dry-run    # everything except the push
 #
-# ★★★ RUN THIS ON A DEBIAN BOX (the Pi). It needs dpkg-scanpackages, apt-ftparchive and the
-# signing key — none of which exist on the Mac. That is not a limitation worth working around:
-# the .deb is built there anyway, and an arm64 package should be built on arm64.
+# ★★★ RUN THIS ON A DEBIAN BOX. It needs dpkg-scanpackages, apt-ftparchive and the signing key —
+# none of which exist on the Mac. In practice that box is the bookworm container started by
+# scripts/publish-apt-docker.sh, which is also what makes it multi-architecture: this script
+# publishes for whatever `dpkg --print-architecture` says it is running on, and the container is
+# started once per architecture.
+#
+# ★★ THE REPOSITORY NOW CARRIES arm64 AND amd64 (since 2026-08-20, for x86 Linux users — see
+#    GitHub issue #21). Everything arch-specific below is keyed on $ARCH: the pool filenames, the
+#    revision high-water mark, the prune, and the per-architecture Packages index. What is NOT
+#    per-arch is the Release file, which must name EVERY architecture the repository holds — get
+#    that wrong and one architecture silently disappears from apt. See the note where it is built.
 #
 # ★★★ WHY THE VERSION IS BUMPED AUTOMATICALLY. `apt install ./x.deb` is a SILENT NO-OP when the
 # version already installed matches — it prints "already the newest version" and exits 0. That cost
@@ -61,9 +69,15 @@ UPSTREAM="$(grep -oE 'project\([^)]*VERSION[[:space:]]+[0-9.]+' "$SRC_DIR/vibese
 #     nothing to contribute FAILED THE SCRIPT. It could only ever survive when a revision of this
 #     exact upstream version was already published, which meant the FIRST publish of any new
 #     version died at exit 1 with not one line of output. (Hit on 3.0.0.) An `if` cannot do that.
+# ★★★ AND THE HIGH-WATER MARK IS PER ARCHITECTURE, since amd64 joined arm64 (2026-08-20). It used
+#     to scan `_*.deb` — every arch — so publishing amd64 right after arm64 made it 3.1.55-2 while
+#     arm64 was 3.1.55-1, and the two architectures of ONE release drifted apart in version for no
+#     reason. An (upstream, revision) pair may safely repeat across architectures: they are
+#     different files with different Filename: lines and apt indexes them separately. What must
+#     never repeat is the pair WITHIN one architecture, and that is exactly what this now tracks.
 bump() { [ -n "${1:-}" ] && [ "$1" -gt "$HIGH" ] 2>/dev/null && HIGH="$1"; return 0; }
 HIGH=0
-for f in "$POOL"/vibeserver_"${UPSTREAM}"-*_*.deb; do
+for f in "$POOL"/vibeserver_"${UPSTREAM}"-*_"${ARCH}".deb; do
   [ -e "$f" ] || continue
   bump "$(basename "$f" | sed -nE "s/^vibeserver_${UPSTREAM}-([0-9]+)_.*/\1/p")"
 done
@@ -77,8 +91,13 @@ fi
 #    3.0.0-1 has never been 2.0.0-1.
 # ★ Written just below, before the prune. Use $MARK for both — the write used to spell the path
 #   out in full, so a `grep MARK` said the file was read and never written, and I believed it.
-MARK="$APT_DIR/.highest-revision-$UPSTREAM"
+MARK="$APT_DIR/.highest-revision-$UPSTREAM-$ARCH"
 [ -f "$MARK" ] && bump "$(tr -cd '0-9' < "$MARK")"
+# ★★★ AND THE OLD SHARED MARKER IS STILL READ. Every arm64 revision published before the split
+#     recorded itself in `.highest-revision-$UPSTREAM` with no arch in the name. Renaming the file
+#     without reading it would hand arm64 a revision number it has ALREADY PUBLISHED — the precise
+#     disaster the comment above describes, arriving through the fix for something else.
+[ -f "$APT_DIR/.highest-revision-$UPSTREAM" ] && bump "$(tr -cd '0-9' < "$APT_DIR/.highest-revision-$UPSTREAM")"
 REV=$((HIGH + 1))
 FULLVER="${UPSTREAM}-${REV}"
 echo "==> publishing vibeserver $FULLVER ($ARCH)"
@@ -225,12 +244,23 @@ fi
 gzip -9kf "$DIST/main/binary-$ARCH/Packages"
 echo "==> indexed $(grep -c '^Package:' "$DIST/main/binary-$ARCH/Packages") package(s)"
 
+# ★★★ EVERY ARCHITECTURE THE REPOSITORY HOLDS, NOT THE ONE WE JUST BUILT. This said "$ARCH", and
+#     with a second architecture in the pool that is actively destructive: publishing amd64 would
+#     have stamped `Architectures "amd64"` on the Release file, and every Pi in the world would
+#     then be told this repository has nothing for arm64 — an existing install stops seeing
+#     updates, silently, with no error anywhere. The arm64 Packages file would still be sitting
+#     right there, correct and signed and ignored.
+# ★★ Derived from what is ON DISK rather than from a list kept up here, so adding armhf or riscv64
+#    later is a build, not a build plus an edit somebody forgets.
+ALL_ARCHES="$(cd "$DIST/main" && ls -d binary-* 2>/dev/null | sed 's/^binary-//' | sort | tr '\n' ' ' | sed 's/ $//')"
+echo "==> repository architectures: $ALL_ARCHES"
+
 cat > "$APT_DIR/aptftp.conf" <<EOF
 APT::FTPArchive::Release::Origin "VibeSDR";
 APT::FTPArchive::Release::Label "VibeSDR";
 APT::FTPArchive::Release::Suite "stable";
 APT::FTPArchive::Release::Codename "stable";
-APT::FTPArchive::Release::Architectures "$ARCH";
+APT::FTPArchive::Release::Architectures "$ALL_ARCHES";
 APT::FTPArchive::Release::Components "main";
 APT::FTPArchive::Release::Description "VibeServer — turn an SDR into a network receiver";
 EOF
@@ -245,8 +275,26 @@ gpg --armor --export "$SIGN_KEY" > "$APT_DIR/KEY.gpg"
 echo "==> signed with $(gpg --list-keys --keyid-format=long "$SIGN_KEY" | sed -n '2p' | tr -s ' ')"
 
 # ── Landing page ─────────────────────────────────────────────────────────────
-sed -e "s/__VERSION__/$FULLVER/g" -e "s/__ARCH__/$ARCH/g" \
-    "$SRC_DIR/scripts/apt-index.html" > "$APT_DIR/index.html"
+# ★★ THE PAGE DESCRIBES THE WHOLE POOL, not this build. With two architectures the page is written
+#    by whichever one published LAST, so anything derived from $ARCH/$FULLVER alone would advertise
+#    amd64's version to Pi users half the time. Both substitutions are read back out of the signed
+#    indexes instead, so the page cannot disagree with what apt will actually serve.
+ARCHVERSIONS=""; DEBLINES=""
+for a in $ALL_ARCHES; do
+  av="$(grep -oE "^Version: [0-9][^ ]*" "$DIST/main/binary-$a/Packages" 2>/dev/null | awk '{print $2}' | sort -V | tail -1)"
+  [ -n "$av" ] || continue
+  # ★★★ NO BARE `&` HERE. In a sed REPLACEMENT `&` means "everything the pattern matched", so an
+  #     innocent `&middot;` separator expanded to `__ARCHVERSIONS__middot;` and published the
+  #     placeholder to the live page. Escaped at the point of use below; kept out of the value.
+  ARCHVERSIONS="${ARCHVERSIONS:+$ARCHVERSIONS, }$a $av"
+  DEBLINES="${DEBLINES:+$DEBLINES\n}sudo apt install ./vibeserver_${av}_${a}.deb"
+done
+# ★ Escape & in both replacements, for the reason above — the versions carry none today, but a
+#   separator or a filename gaining one must not be able to corrupt the page silently.
+ARCHVERSIONS="${ARCHVERSIONS//&/\\&}"; DEBLINES="${DEBLINES//&/\\&}"
+sed -e "s/__ARCHVERSIONS__/$ARCHVERSIONS/g" \
+    "$SRC_DIR/scripts/apt-index.html" \
+  | sed -e "s|__DEBLINES__|$DEBLINES|g" > "$APT_DIR/index.html"
 touch "$APT_DIR/.nojekyll"     # Pages would otherwise skip files starting with an underscore
 
 # ── Commit locally — the Mac does the pushing ────────────────────────────────

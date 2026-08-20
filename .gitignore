@@ -92,3 +92,8 @@ scripts/asc-submit.py
 
 # Scratch probe scripts left at the root
 fr2.mjs
+
+# SDRplay headers staged into the build context at publish time — theirs to license,
+# so they are copied from the build machine per build and never committed. See
+# scripts/publish-apt-docker.sh and vibeserver/linux/Dockerfile.build.
+vibeserver/linux/sdrplay-inc/
