@@ -403,6 +403,29 @@ export class SpectrumClient {
           serverMode:     typeof msg.mode === 'string' ? msg.mode : this.cfg.serverMode,
           serverVfo:      typeof msg.vfo === 'number' && msg.vfo > 0 ? msg.vfo : this.cfg.serverVfo,
         };
+        // ★★★ SOMEBODY ELSE MOVED THE DIAL — GIVE THIS LISTENER THE SAME RESET THE TUNER GETS.
+        //
+        //     A LOCAL tune flushes the audio buffer and re-arms it (see onRetuneJump in tune()):
+        //     everything queued was demodulated at the old frequency, so playing it out is the
+        //     previous station arriving late. On a shared dial the person tuning gets that reset
+        //     and every MIRROR gets nothing — the retune simply lands mid-buffer, and any state
+        //     that gets stuck stays stuck for the mirrors and never for the tuner.
+        //
+        //  ★★ Stuart put it exactly right (2026-08-20): "the stereo mono thing doesn't have an
+        //     issue when the single user is controlling the VFO, so why does it if I am just
+        //     listening to a mirror of it?" — because one of them is reset and the other is not.
+        //     This is that asymmetry removed, not a workaround for it.
+        //  ★ Same threshold as the local path, and for the same reason: below one bandwidth the
+        //    buffered audio is still substantially what you are listening to, and flushing on
+        //    every nudge would turn somebody else's smooth tune into stuttering silence here.
+        {
+          const oldVfo = this.cfg.serverVfo;
+          const bw = Math.abs(this.bandwidthHigh - this.bandwidthLow) || 3000;
+          if (oldVfo && cfg.serverVfo && Math.abs(cfg.serverVfo - oldVfo) > bw
+              && Math.abs(cfg.serverVfo - this.frequency) > bw) {
+            this.cb.onRetuneJump?.();
+          }
+        }
         this.cfg = cfg;
         // ★ Never let the view be WIDER than the capture. On a sample-rate DROP the device span
         // shrinks, but our old (wider) view span would persist and over-spread the axis — signals

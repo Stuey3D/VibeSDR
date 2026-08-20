@@ -1004,10 +1004,25 @@ export class AudioPlayer {
   private _watchOutput() {
     if (this.stallWatch !== null) return;
     this.stallWatch = window.setInterval(() => {
-      if (!this.node || !this.ctx || this.ctx.state !== 'running') return;
+      if (!this.node || !this.ctx) return;
       if (this._muted || this.squelchActive || this.suspended) return;
       const now = performance.now();
       const feeding = this.lastAudibleAt > 0 && now - this.lastAudibleAt < 2000;
+      // ★★★ RESUME BEFORE REBUILDING — IT COSTS NOTHING AND LOSES NOTHING. An AudioContext that is
+      //     not `running` cannot pull from the worklet, and Safari has a THIRD state nobody codes
+      //     for: `interrupted`, which is neither running nor suspended and is what you get when
+      //     the audio session is taken away (another app, a call, a route change). The old check
+      //     bailed out on anything that was not `running`, so the one case that most looks like
+      //     "frames arriving, no sound" was the one it declined to touch.
+      //  ★ A resume is not a rebuild: the ring keeps its samples and playback continues where it
+      //    left off, so there is no gap to hear. The rebuild below stays as the last resort.
+      if (this.ctx.state !== 'running') {
+        if (feeding) {
+          console.warn(`[audio] frames are arriving but the context is "${this.ctx.state}" — resuming`);
+          void this.ctx.resume().catch(() => {});
+        }
+        return;
+      }
       const draining = this.lastDrainAt > 0 && now - this.lastDrainAt < 2000;
       if (!feeding || draining) return;
       if (this.stallRebuilds >= 3) return;
