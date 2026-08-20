@@ -355,6 +355,28 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
 
       </div>
     </div>
+      <!-- ★★★ HOW MANY PEOPLE — AND IT BELONGS TO BOTH MODES. This card lived inside the
+           locked-only block, so on an UNLOCKED radio the box was hidden and the count was stuck
+           at one. That is the single control the shared dial depends on: the FM-DX arrangement
+           IS an unlocked radio with this set above one, and there was no way to set it (Stuart,
+           2026-08-20: "you forgot the most important control on that setup screen").
+           ★ It was a fair place for it while a multi-user radio could only ever be a locked one.
+             The moment that stopped being true, the control was in the wrong block. -->
+      <div class="card">
+        <h2>Listeners</h2>
+        <p class="why">How many people at once &mdash; on either kind of receiver.</p>
+        <div class="row">
+          <label><span class="lbl">Maximum listeners</span>
+            <input type="number" id="users" min="1" max="50"></label>
+        </div>
+        <!-- ★★★ THIS BOX IS WHAT TURNS AN UNLOCKED RADIO INTO AN FM-DX ONE, so it is where the
+             consequence is explained rather than in a mode card. Two settings already say
+             everything: an unpinned centre means one dial, and a count above one means several
+             people are on it. -->
+        <div class="note" id="usersNote"></div>
+        <div class="note" id="bwNote"></div>
+      </div>
+
       <div id="lockedOnly" class="hide">
       <div class="card">
         <h2>Range</h2>
@@ -377,20 +399,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
 
       
 
-      <div class="card">
-        <h2>Listeners</h2>
-        <p class="why">How many people at once.</p>
-        <div class="row">
-          <label><span class="lbl">Maximum listeners</span>
-            <input type="number" id="users" min="1" max="50"></label>
-        </div>
-        <!-- ★★★ THIS BOX IS WHAT TURNS AN UNLOCKED RADIO INTO AN FM-DX ONE, so it is where the
-             consequence is explained rather than in a mode card. Two settings already say
-             everything: an unpinned centre means one dial, and a count above one means several
-             people are on it. -->
-        <div class="note" id="usersNote"></div>
-        <div class="note" id="bwNote"></div>
-      </div>
+
 
       <div class="card">
         <h2>Radio</h2>
@@ -1906,7 +1915,10 @@ function collectRadio() {
     antenna: ($("antenna").value || "").trim(),
     antennaIcon: antIconSel,
     demodMode: $("demodMode").value,
-    users: locked ? parseInt($("users").value || "1", 10) : 1,
+    // ★★★ SENT IN BOTH MODES. Forcing 1 on an unlocked radio silently threw away the box the
+    //     owner had just typed in, and with it the entire shared-dial arrangement — the count is
+    //     what turns an unlocked receiver into an FM-DX one.
+    users: parseInt($("users").value || "1", 10),
 
 
     // ★ Only send what this radio actually has a control for. Posting rfNotch for an Airspy would

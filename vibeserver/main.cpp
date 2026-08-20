@@ -1216,7 +1216,15 @@ int main(int argc, char** argv) {
     // Stuart, 2026-08-02: "never switch methods live, it is in the setup". Switching mid-stream
     // would swap filter state under a running demodulator — the same discontinuity that leaves
     // RDS half-dead after an idle resume.
-    bool shared = o.channels.empty() ? (o.users > 1) : (o.channels == "shared");
+    // ★★★ SEVERAL LISTENERS NO LONGER IMPLIES SHARED CHANNELS. The channelizer hands each listener
+    //     their own slice of one captured band, which is the right answer for a LOCKED receiver
+    //     and is meaningless on an unlocked one: there, everybody is on the SAME dial and the
+    //     hardware really retunes, so there is one channel and no slicing to do. Deriving it from
+    //     the user count alone refused the FM-DX arrangement two lines below, with a message
+    //     telling the owner to lock a centre they deliberately left free (Stuart, 2026-08-20).
+    //  ★ An explicit --channels still wins, as it always did.
+    bool shared = o.channels.empty() ? (o.users > 1 && o.lockFreq > 0.0)
+                                     : (o.channels == "shared");
     if (!o.channels.empty() && o.channels != "shared" && o.channels != "direct") {
         std::fprintf(stderr, "VibeServer: --channels must be 'direct' or 'shared'\n");
         return 2;

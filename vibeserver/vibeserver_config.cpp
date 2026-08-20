@@ -286,10 +286,14 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     //    reject only the contradictory.
     if (c.users < 1) c.users = 1;
     if (!validate) return true;      // a live patch — see the note in the header
-    if (c.users > 1 && c.lockFreq <= 0) {
-        err = "multi-user needs a locked centre frequency (lockFreq)";
-        return false;
-    }
+    // ★★★ MULTI-USER NO LONGER MEANS LOCKED. This rejected the FM-DX arrangement outright — an
+    //     UNLOCKED radio with room for several listeners, all sharing one dial — which is now a
+    //     first-class way to run a receiver rather than a contradiction (Stuart, 2026-08-20).
+    //     The rule was correct when the only way to serve several people was to pin the window
+    //     and give each of them their own VFO; it stopped being correct the moment the shim
+    //     learned to share the dial instead. See vsSharedDial().
+    //  ★ Nothing replaces it: both combinations are now legal, and which one you get is exactly
+    //    what the two settings say.
     if (c.configured && c.adminPass.empty()) {
         err = "a configured server must have an admin password";
         return false;
