@@ -33,6 +33,8 @@ RCT_EXTERN_METHOD(stopWatchSpectrum)
 
 RCT_EXTERN_METHOD(sendFmdx : (NSString *)json)
 
+RCT_EXTERN_METHOD(sendDial : (NSString *)json)
+
 RCT_EXTERN_METHOD(sendLogo : (NSString *)b64)
 
 RCT_EXTERN_METHOD(sendStations : (NSString *)json)

@@ -109,6 +109,8 @@ import AudioSheet      from '../components/AudioSheet';
 import StepPicker      from '../components/StepPicker';
 import ChatDrawer,
   { type ChatMessage } from '../components/ChatDrawer';
+import { DIAL_PHRASES, phraseText, dialSummary, speakerName,
+         type DialState } from '../services/dialChat';
 import DecoderPanel,
   { type DecoderType } from '../components/DecoderPanel';
 import SpecRatioOverlay  from '../components/SpecRatioOverlay';
@@ -2093,6 +2095,16 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // ── Chat ──────────────────────────────────────────────────────────────────
 
+  // ★★ THE SHARED DIAL. Null on every ordinary receiver — the server only sends `dial` when one
+  //    tuner is shared between listeners, so this doubles as "is this that kind of receiver".
+  const [dialState,    setDialState]    = useState<DialState | null>(null);
+  /** A brief line when SOMEBODY ELSE moves the dial. A frequency that changes under you with no
+   *  explanation reads as the radio glitching, which is the one thing a shared dial must not look
+   *  like — and the chat may well be closed when it happens. */
+  const [dialHint,     setDialHint]     = useState('');
+  /** This receiver shares ONE tuner between its listeners — the only state in which the chat
+   *  means anything, and the only one in which anybody but the owner may turn the dial. */
+  const sharedDial = !!dialState && dialState.mode !== 'exclusive';
   const [chatOpen,     setChatOpen]     = useState(false);
   const [chatUnread,   setChatUnread]   = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -2424,8 +2436,23 @@ export default function SDRScreen({ route, navigation }: Props) {
   // drum were popping to the picker / exiting the app. Close transient UI
   // if open; leaving the instance is the menu's ← BACK button. RN Modals
   // (menu, maps, browser) intercept back themselves before this fires.
+  // ★ Read at CALLBACK time, not captured: the client's callbacks are registered once, so a
+  //   captured `dialState` would be for ever the value it had on the first connect.
+  const dialStateRef = useRef<DialState | null>(null);
+  useEffect(() => { dialStateRef.current = dialState; }, [dialState]);
+  /// ★ Read inside the watch command handlers, which are registered once — a captured boolean
+  ///   would be whatever it was when the screen mounted, i.e. always false.
+  const sharedDialRef = useRef(false);
   const chatOpenRef = useRef(false);
   useEffect(() => { chatOpenRef.current = chatOpen; }, [chatOpen]);
+  useEffect(() => { sharedDialRef.current = sharedDial; }, [sharedDial]);
+  // ★ The hint is a sentence, not a state — it says what just happened and then gets out of the
+  //   way. Keyed on the text so a second move restarts the clock rather than inheriting the first.
+  useEffect(() => {
+    if (!dialHint) return;
+    const t = setTimeout(() => setDialHint(''), 5000);
+    return () => clearTimeout(t);
+  }, [dialHint]);
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -3480,6 +3507,44 @@ export default function SDRScreen({ route, navigation }: Props) {
       //    ONGOING — an aerial being worked on — so it must stay on screen while it is true, not
       //    flash past while the listener is looking at the waterfall.
       onNotice: (text: string) => { if (!destroyed.current) setOwnerNotice(text || ''); },
+      // ── ★★ THE SHARED DIAL AND ITS CHAT ──────────────────────────────────────────
+      onDial: (d) => {
+        if (destroyed.current) return;
+        setDialState(d);
+        watchProvider.sendDial(d);      // Buddy needs this to know it must ARM before it may tune
+      },
+      onDialMoved: (hz: number) => {
+        if (destroyed.current) return;
+        const who = dialStateRef.current?.tuner;
+        setDialHint(`${who ? `User ${who}` : 'Another listener'} tuned to ${(hz / 1e6).toFixed(3)} MHz`);
+      },
+      onDialRefused: () => {
+        if (destroyed.current) return;
+        // ★ An explanation, not an error: this receiver is listen-only and the owner tunes it.
+        setDialHint('This receiver is set to listen only — the owner tunes it.');
+      },
+      onSaid: (from: number, id: string) => {
+        if (destroyed.current) return;
+        const text = phraseText(id);
+        if (!text) return;              // an id this build cannot draw — see dialChat's header
+        const you = dialStateRef.current?.you ?? 0;
+        const mine = from === you;
+        const line: ChatMessage = {
+          id: `dial-${from}-${id}-${Date.now()}`,
+          type: mine ? 'own' : 'other',
+          user: speakerName(from, you),
+          text,
+          ts: new Date().toISOString().slice(11, 16).replace(':', '') + 'z',
+        };
+        setChatMessages((prev: ChatMessage[]) => [...prev, line].slice(-60));
+        // ★ The wrist gets the phrase too — on a watch the canned chat is not a lesser version of
+        //   the feature, it is the ONLY version that can work there (no keyboard).
+        const ds = dialStateRef.current;
+        if (ds) watchProvider.sendDial({ ...ds, said: { from, id } });
+        // ★ Unread only for OTHER people, and only while the drawer is shut — your own phrase
+        //   echoing back as an unread badge would be absurd.
+        if (!mine && !chatOpenRef.current) setChatUnread(true);
+      },
       onAdminState: (st) => {
         if (destroyed.current) return;
         setAdminSet(st.set); setAdminOk(st.ok);
@@ -5087,8 +5152,19 @@ export default function SDRScreen({ route, navigation }: Props) {
     watchProvider.attach({
       // No arming here: Kiwi/OWRX/UberSDR give every user their OWN VFO, so tuning
       // disturbs nobody. Arming is an FM-DX rule, not a "shared backend" rule.
-      onTuneDelta: (delta: number) => {
+      onSay: (id: string) => { client.current?.say?.(id); },
+      onTuneDelta: (delta: number, armed: boolean) => {
         const c = client.current; if (!c || !delta) return;
+        // ★★★ A SHARED TUNER MUST BE ARMED, AND THE GATE LIVES HERE. The watch has its own arm
+        //     switch, but a gate that exists only in the watch's UI is not a gate: any other watch
+        //     screen — or an older Buddy build — can turn the dial out from under every listener on
+        //     the server. This is the interface's own promise (WatchCommandHandlers.onTuneDelta)
+        //     finally kept for VibeServer, having been written for FM-DX (Stuart, 2026-08-20:
+        //     "Jr and Buddy are going to need an arm button for the tuning on Shared VFO as we
+        //     will want tuning disabled by default like FM-DX").
+        //  ★ Exclusive receivers are unaffected: the dial is yours, and arming your own radio to
+        //    turn your own knob would be pure ceremony.
+        if (sharedDialRef.current && !armed) return;
         markInteract();           // a watch tune is an interaction — wake the idle saver + clear its pill
         wakeSpectrumForWatch();   // a turning crown is proof the watch is watching
         if (isWholeProfileMode(String(c.getStatus().mode))) return;   // locked to its ensemble
@@ -7052,8 +7128,15 @@ export default function SDRScreen({ route, navigation }: Props) {
           onFreqTap={onFreqOpen}
           onModeTap={onModeOpen}
           freqUnit={freqUnit}
-          chatShareDisabled={isLocal}
-          chatDisabled={isKiwi}
+          chatShareDisabled={isLocal && !sharedDial}
+          // ★★★ GREYED, NOT REMOVED (Stuart, 2026-08-20, of the web client's island: "on radios
+          //     that dont support chat don't remove the button just grey it out as this preserves
+          //     symmetry"). The same rule holds here: a control that comes and goes with the
+          //     receiver makes the bar a different shape on every server.
+          // ★★ AND A VIBESERVER WITHOUT A SHARED DIAL NOW GREYS IT TOO. It used to be live on any
+          //    VibeServer and did nothing at all — there is no text chat on that backend — which
+          //    is the "never offer a control whose every use is a no-op" rule, broken quietly.
+          chatDisabled={isKiwi || (isVibeServer && !sharedDial)}
         />
       </View>}
 
@@ -7085,6 +7168,14 @@ export default function SDRScreen({ route, navigation }: Props) {
              around it. On the SE in Display Zoom — the narrowest layout we support — a × that is
              merely drawn at the end of a wrapping string is the first thing to be clipped, and a
              clipped dismiss is a trap rather than an untidiness (se_display_zoom_narrowest_layout). */}
+      {/* ★ Somebody else moved the dial. Same furniture as the owner's notice — this is the same
+             kind of thing (the receiver telling you something) and inventing a second look for it
+             would only make the screen busier. */}
+      {!!dialHint && (
+        <View style={[styles.ownerNotice, { top: insets.top + 8 }]} pointerEvents="none">
+          <Text style={[styles.ownerNoticeTxt, { flex: 1 }]} numberOfLines={2}>{dialHint}</Text>
+        </View>
+      )}
       {!!ownerNotice && ownerNotice !== noticeSeen && (
         <TouchableOpacity activeOpacity={0.85}
           onPress={() => setNoticeSeen(ownerNotice)}
@@ -7722,6 +7813,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         onUserTap={chatUserTap}
         textOnly={isOwrx}
         onChangeName={() => setMyCallsign(null)}
+        // ★★ ONE DRAWER, TWO WAYS OF SPEAKING. A shared-dial VibeServer has no names and no text
+        //    box; everything else about the chat — the transcript, the unread pulse, the open and
+        //    close — is the same component it has always been.
+        canned={sharedDial ? DIAL_PHRASES : undefined}
+        onSay={(id: string) => client.current?.say?.(id)}
+        dialLine={dialState ? dialSummary(dialState) : undefined}
       />
 
       {/* Bypass password — rate-limit recovery (replaces the session) */}

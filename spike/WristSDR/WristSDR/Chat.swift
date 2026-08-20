@@ -29,6 +29,47 @@ enum ChatIdentity {
 /// The tap-to-send canned messages. Short replies from a wrist read as gruff, so EVERY set opens with
 /// the "why so terse" line — sent explicitly, never auto-prepended. Sending "switching now" does NOT
 /// perform the switch: the message and the action stay two deliberate steps (the explicit-only etiquette).
+/// ★★★ THE SHARED-DIAL VOCABULARY — IDS, NOT TEXT.
+///
+/// `Canned` below is for the free-text chats (OWRX, FM-DX), where the wrist sends whole strings
+/// because that is what those servers carry. A VibeServer shared dial is different in kind: the
+/// vocabulary is FIXED, the wire carries an id (`ask_tune`), and each client renders it in its own
+/// words. That single decision removes the moderation burden, the abuse vector, the translation
+/// problem and the injection surface together — and it is why this works on a watch, where a
+/// keyboard cannot be (Stuart, 2026-08-20).
+///
+/// ★★ THE IDS ARE THE SERVER'S (`chatPhrases()` in local_sdr_shim.cpp) and the wording matches the
+///    browser and the phone. Change WORDING freely — it is per-client by design. Change or remove
+///    an ID and the ends stop understanding each other.
+/// ★ These phrases came FROM here in the first place: `Canned.fmdx` plus the mid-decode line, which
+///   is why they read like a wrist app rather than like a protocol.
+enum CannedDial {
+  /// In the order a conversation actually runs: ask, act, answer, thank.
+  static let all: [(id: String, text: String)] = [
+    ("ask_tune",       "Can I tune?"),
+    ("anyone_using",   "Anyone using this?"),
+    ("tuning_now",     "Tuning now"),
+    ("go_ahead",       "Go ahead, tune"),
+    ("please_hold",    "Please hold — chasing DX"),
+    ("mid_decode",     "Mid-decode — please wait"),
+    // ★★ A WEFAX chart is ten minutes of holding still, and "please wait" with no duration is what
+    //    makes people ask again in ninety seconds. The number is the difference between a queue
+    //    and an argument.
+    ("decoding_10min", "Decoding — about 10 min"),
+    ("decode_done",    "Decode done — all yours"),
+    ("wont_tune",      "OK, I won't tune yet"),
+    ("all_yours",      "Done — all yours"),
+    ("thanks",         "Thanks!"),
+    ("sorry",          "Sorry, didn't realise!"),
+  ]
+  private static let map: [String: String] = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0.text) })
+  /// nil when this build cannot draw the id — the caller DROPS it rather than showing it raw.
+  static func text(_ id: String) -> String? { map[id] }
+  /// ★ "You" rather than your own ordinal: everybody else sees a number and you know which is
+  ///   yours, but reading your own words back as a stranger's is oddly cold.
+  static func speaker(_ from: Int, you: Int) -> String { from == you ? "You" : "User \(from)" }
+}
+
 enum Canned {
   /// The one line that explains the terseness — offered as its own send button at the top of the list.
   static let jr = "Using VibeSDR Jr on an Apple Watch — replies limited 🙂"

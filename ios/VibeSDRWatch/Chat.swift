@@ -29,6 +29,38 @@ enum ChatIdentity {
 /// The tap-to-send canned messages. Short replies from a wrist read as gruff, so EVERY set opens with
 /// the "why so terse" line — sent explicitly, never auto-prepended. Sending "switching now" does NOT
 /// perform the switch: the message and the action stay two deliberate steps (the explicit-only etiquette).
+/// ★★★ THE SHARED-DIAL VOCABULARY — IDS, NOT TEXT.
+///
+/// `Canned` below is for the free-text chats (OWRX, FM-DX). A VibeServer shared dial is different
+/// in kind: the vocabulary is FIXED and the wire carries an id, so there is nothing to moderate,
+/// translate or inject — which is what lets a chat exist on a receiver whose owner is asleep, and
+/// what lets it exist on a watch at all.
+///
+/// ★★ DUPLICATED FROM Jr's Chat.swift ON PURPOSE. Jr and Buddy are separate products with separate
+///    targets and no shared module ([[watch_split_jr_buddy]]); the ids are the contract they share,
+///    and those live in the SERVER (`chatPhrases()` in local_sdr_shim.cpp). Keep the ids identical;
+///    the wording is per-client by design.
+enum CannedDial {
+  static let all: [(id: String, text: String)] = [
+    ("ask_tune",       "Can I tune?"),
+    ("anyone_using",   "Anyone using this?"),
+    ("tuning_now",     "Tuning now"),
+    ("go_ahead",       "Go ahead, tune"),
+    ("please_hold",    "Please hold — chasing DX"),
+    ("mid_decode",     "Mid-decode — please wait"),
+    ("decoding_10min", "Decoding — about 10 min"),
+    ("decode_done",    "Decode done — all yours"),
+    ("wont_tune",      "OK, I won't tune yet"),
+    ("all_yours",      "Done — all yours"),
+    ("thanks",         "Thanks!"),
+    ("sorry",          "Sorry, didn't realise!"),
+  ]
+  private static let map: [String: String] = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0.text) })
+  /// nil when this build cannot draw the id — the caller DROPS it rather than showing it raw.
+  static func text(_ id: String) -> String? { map[id] }
+  static func speaker(_ from: Int, you: Int) -> String { from == you ? "You" : "User \(from)" }
+}
+
 enum Canned {
   /// The one line that explains the terseness — offered as its own send button at the top of the list.
   static let jr = "Using VibeSDR Jr on an Apple Watch — replies limited 🙂"

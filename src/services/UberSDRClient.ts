@@ -180,6 +180,23 @@ export interface SDRCallbacks {
    *  overlay thrown over a recovery that is working. */
   onReconnecting?: (busy: boolean) => void;
   onDbg?:       (msg: string) => void;
+  /** ★★★ THE SHARED DIAL, and the canned chat that goes with it. On an unlocked receiver with
+   *  room for several listeners the server enforces NOTHING about who tunes — Stuart, 2026-08-20:
+   *  "the dial must be like FM-DX where anybody can tune it, otherwise I would need to be on the
+   *  server 24/7 to allow access to it." So the chat is not decoration beside the mechanism; it
+   *  IS the mechanism by which two strangers sort the dial out between themselves.
+   *  ★ `mode` is 'exclusive' on an ordinary receiver, and nothing chat-shaped should be shown. */
+  onDial?:      (d: { mode: string; tuner: number; mine: boolean; you: number;
+                      listeners: number; decoding: boolean }) => void;
+  /** Spectator mode said no — the owner tunes this one. An explanation, not an error. */
+  onDialRefused?: () => void;
+  /** ★ Somebody ELSE moved the shared dial, with the frequency they moved it to. Distinct from
+   *  onStatus, which cannot say WHO caused the change — and "why did it move" needs an answer on
+   *  screen or the receiver looks broken. */
+  onDialMoved?: (hz: number, mode?: string) => void;
+  /** Somebody said one of the canned phrases. IDS TRAVEL, NOT TEXT: `from` is an ordinal ("User
+   *  3"), and an id this build cannot draw must be DROPPED rather than shown raw. */
+  onSaid?:      (from: number, id: string) => void;
   /** ★★★ THE SESSION IS NOW REGISTERED WITH THE SERVER (POST /connection returned allowed).
    *  UberSDR drops an audio WebSocket whose session it has never seen — it completes the
    *  handshake and closes in the same breath, which the phone reports as an abort and the user
@@ -657,6 +674,14 @@ export class UberSDRClient {
     this._sendCtl(auto ? { type: 'gain', auto: true } : { type: 'gain', value: tenthDb });
   }
   setHwBiasT(on: boolean) { this._sendCtl({ type: 'biasT', on }); }
+  /** Say one of the canned phrases on a shared-dial receiver.
+   *  ★★ AN ID, NEVER TEXT. The vocabulary is fixed server-side (`chatPhrases()` in the shim) and
+   *  an unknown id is dropped there, so this channel cannot carry free text in either direction —
+   *  which is what removes the moderation burden, the abuse vector and the translation problem in
+   *  one go, and is the only reason a one-person operator can run this at all.
+   *  ★ The server also rate-limits to one phrase per 3s per session; that is flood control, not
+   *    moderation. Nothing here can be offensive, but anything can be repeated. */
+  say(id: string) { this._sendCtl({ type: 'say', id }); }
   setHwAgc(on: boolean)   { this._sendCtl({ type: 'agc', on }); }
   setHwPpm(ppm: number)   { this._sendCtl({ type: 'ppm', value: Math.round(ppm) }); }
   /** ★★★ FM DE-EMPHASIS — tau in SECONDS (0 = off, 50e-6 EU/UK, 75e-6 Americas).
@@ -1818,6 +1843,22 @@ export class UberSDRClient {
       this.callbacks.onSessionWarning?.(Number(msg.secs) || 0);
       return;
     }
+    if (msg.type === 'dial') {
+      this.callbacks.onDial?.({
+        mode: String(msg.mode || 'exclusive'),
+        tuner: Number(msg.tuner) || 0,
+        mine: msg.mine === true,
+        you: Number(msg.you) || 0,
+        listeners: Number(msg.listeners) || 0,
+        decoding: msg.decoding === true,
+      });
+      return;
+    }
+    if (msg.type === 'dial_refused') { this.callbacks.onDialRefused?.(); return; }
+    if (msg.type === 'said') {
+      this.callbacks.onSaid?.(Number(msg.from) || 0, String(msg.id || ''));
+      return;
+    }
     if (msg.type === 'notice') {
       this.callbacks.onNotice?.(typeof msg.text === 'string' ? msg.text : '');
       return;
@@ -2032,6 +2073,7 @@ export class UberSDRClient {
         const moved = Math.abs(sv - Number(this.status.frequency));
         if (!this.wantTune && settled && Number.isFinite(sv) && sv > 0 && moved > 100) {
           this.dbg(`another listener moved the dial to ${sv}`);
+          this.callbacks.onDialMoved?.(sv, typeof msg.mode === 'string' ? msg.mode : undefined);
           this.status.frequency = sv;
           if (typeof msg.mode === 'string' && msg.mode) this.status.mode = msg.mode as SDRMode;
           // ★★★ AND BRING THE VIEW WITH IT. Adopting the frequency alone leaves the waterfall

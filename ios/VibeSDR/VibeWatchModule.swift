@@ -351,6 +351,16 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     s.sendMessage(["k": "fmdx", "j": json], replyHandler: nil, errorHandler: nil)
   }
 
+  /// ★★ THE SHARED DIAL — who is in the room, who moved it last, and anything said.
+  /// Buddy needs this for two reasons that both matter: it is the only way the watch can know the
+  /// dial is SHARED (and so must be armed before it will tune), and it carries the canned chat that
+  /// is how listeners agree about a tuner none of them owns.
+  @objc(sendDial:)
+  func sendDial(_ json: String) {
+    guard let s = session, linkAlive else { return }
+    s.sendMessage(["k": "dial", "j": json], replyHandler: nil, errorHandler: nil)
+  }
+
   /// OWRX ADS-B — the live aircraft table. A LIST, not a band: the profile IS the
   /// content (1090 MHz), and there is nothing to tune.
   @objc(sendAircraft:)

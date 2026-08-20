@@ -58,6 +58,18 @@ export interface ChatDrawerProps {
   onUserTap?:        (user: ChatUserRow) => void;
   /** OWRX = basic text chat: hide the active-users panel + tune/zoom-sync UI. */
   textOnly?:         boolean;
+  /** ★★★ CANNED MODE — a shared-VFO VibeServer. When this is set there is NO text input and NO
+   *  join: the vocabulary is fixed, ids travel on the wire, and people are ordinals ("User 3").
+   *  That is what removes the moderation burden, the abuse vector and the translation problem in
+   *  one go, and it is the only reason this can exist on a receiver run by one person who is
+   *  asleep. It also makes the chat usable on a WATCH, where a keyboard cannot be.
+   *  ★ The drawer chrome is deliberately unchanged: same open/close, same unread pulse, same
+   *    transcript. Only the way you SPEAK differs, so there is one chat in this app, not two. */
+  canned?:           { id: string; text: string }[];
+  /** Send a canned phrase id (canned mode only). */
+  onSay?:            (id: string) => void;
+  /** One line about the room — who is tuning, how many are here, why it is not moving. */
+  dialLine?:         string;
 }
 
 function fmtUserFreq(hz?: number): string {
@@ -97,7 +109,7 @@ export default function ChatDrawer({
   onJoin, onSend, onClose, onChangeName,
   onMute, muted = false,
   users = [], syncedUser = null, zoomSync = false,
-  onToggleSync, onToggleZoomSync, onUserTap, textOnly = false,
+  onToggleSync, onToggleZoomSync, onUserTap, textOnly = false, canned, onSay, dialLine,
 }: ChatDrawerProps) {
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
@@ -123,6 +135,12 @@ export default function ChatDrawer({
   const [msgInput,  setMsgInput]  = useState('');
   const [showUsers, setShowUsers] = useState(false);
   const listRef = useRef<FlatList>(null);
+  // ★★ CANNED MODE IS ALWAYS "JOINED". Every gate below asked `myCallsign`, which conflated two
+  //    different questions: "may I speak?" and "have I chosen a name?". On a shared dial there are
+  //    no names at all — the server hands out ordinals — so asking for one would be a join flow
+  //    with nothing to type into it, and the transcript would never render.
+  const isCanned = !!canned && canned.length > 0;
+  const joined = isCanned || !!myCallsign;
   const nameRef = useRef<TextInput>(null);
   const msgRef  = useRef<TextInput>(null);
 
@@ -135,7 +153,8 @@ export default function ChatDrawer({
         Animated.spring(translateY, { toValue: 0, damping: 24, stiffness: 220, useNativeDriver: true }),
       ]).start(() => {
         // Focus appropriate input after open animation
-        if (!myCallsign) nameRef.current?.focus();
+        if (isCanned) { /* no text input anywhere in canned mode — nothing to focus */ }
+        else if (!myCallsign) nameRef.current?.focus();
         else             msgRef.current?.focus();
       });
     } else {
@@ -196,7 +215,7 @@ export default function ChatDrawer({
 
           {/* Header */}
           <View style={[cd.header, { borderBottomColor: cc.border }]}>
-            {!showUsers && myCallsign && onChangeName ? (
+            {!showUsers && !isCanned && myCallsign && onChangeName ? (
               <TouchableOpacity onPress={onChangeName} hitSlop={8} activeOpacity={0.6}>
                 <Text style={[cd.title, { color: cc.title, fontFamily: t.font }]}>
                   CHAT · {myCallsign} <Text style={{ color: cc.btnText }}>✎</Text>
@@ -204,10 +223,12 @@ export default function ChatDrawer({
               </TouchableOpacity>
             ) : (
               <Text style={[cd.title, { color: cc.title, fontFamily: t.font }]}>
-                {showUsers ? `USERS · ${users.length}` : myCallsign ? `CHAT · ${myCallsign}` : 'CHAT'}
+                {showUsers ? `USERS · ${users.length}`
+                  : isCanned ? 'CHAT'
+                  : myCallsign ? `CHAT · ${myCallsign}` : 'CHAT'}
               </Text>
             )}
-            {!!myCallsign && !textOnly && (
+            {joined && !textOnly && !isCanned && (
               <TouchableOpacity style={cd.hbtn} onPress={() => setShowUsers((p: boolean) => !p)} hitSlop={8}>
                 <Text style={[cd.hbtnTxt, { color: cc.btnText }, showUsers && cd.hbtnActive]}>👥</Text>
               </TouchableOpacity>
@@ -225,8 +246,8 @@ export default function ChatDrawer({
             </TouchableOpacity>
           </View>
 
-          {/* Join flow */}
-          {!myCallsign && (
+          {/* Join flow — never in canned mode: there are no names to choose. */}
+          {!joined && (
             <View style={cd.setupWrap}>
               <Text style={[cd.setupLbl, { color: cc.title, fontFamily: t.font }]}>
                 Enter your callsign or handle to join
@@ -257,7 +278,7 @@ export default function ChatDrawer({
 
           {/* Active users — tap a row to jump to their tune once, SYNC to
               follow continuously; 🔍 in the header also mirrors their zoom */}
-          {!!myCallsign && showUsers && (
+          {joined && showUsers && (
             <FlatList
               data={users}
               keyExtractor={(u: ChatUserRow) => u.username}
@@ -298,7 +319,7 @@ export default function ChatDrawer({
           )}
 
           {/* Message list */}
-          {!!myCallsign && !showUsers && (
+          {joined && !showUsers && (
             <FlatList
               ref={listRef}
               data={messages}
@@ -327,8 +348,34 @@ export default function ChatDrawer({
             />
           )}
 
+          {/* ★★ THE PHRASE PAD — canned mode's entire means of speaking. Wrapped, not a row: the
+               longest line ("I'm running a decoder — can you wait please?") must not force a
+               horizontal scroll on the narrowest phone. */}
+          {isCanned && (
+            <View style={[cd.inputRow, { borderTopColor: cc.border, flexWrap: 'wrap', gap: 6 }]}>
+              {!!dialLine && (
+                <Text style={[cd.meLbl, { color: cc.title, fontFamily: t.font, width: '100%' }]}
+                      numberOfLines={2}>
+                  {dialLine}
+                </Text>
+              )}
+              {canned!.map(ph => (
+                <TouchableOpacity
+                  key={ph.id}
+                  style={[cd.sendBtn, { borderColor: cc.btnBdr, paddingHorizontal: 10 }]}
+                  activeOpacity={0.75}
+                  onPress={() => onSay?.(ph.id)}
+                >
+                  <Text style={[cd.sendBtnTxt, { color: cc.btnText, fontFamily: t.font, fontSize: 12 }]}>
+                    {ph.text}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
           {/* Input row */}
-          {!!myCallsign && (
+          {joined && !isCanned && (
             <View style={[cd.inputRow, { borderTopColor: cc.border }]}>
               <Text style={[cd.meLbl, { color: cc.title, fontFamily: t.font }]} numberOfLines={1}>
                 {myCallsign}

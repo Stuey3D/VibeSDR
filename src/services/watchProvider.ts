@@ -38,6 +38,7 @@ const Native = NativeModules.VibeWatchModule as
                 bandLo: number, bandHi: number): void;
       sendVolume(vol: number, muted: boolean): void;
       sendFmdx(json: string): void;
+      sendDial(json: string): void;
       sendStations(json: string): void;
       sendDab(json: string): void;
       sendAircraft(json: string): void;
@@ -183,6 +184,9 @@ export interface WatchCommandHandlers {
   onTuneDelta(delta: number, armed: boolean): void;
   /** Absolute tune from the watch numpad — the one non-delta command. */
   onTuneHz(hz: number): void;
+  /** A canned phrase from the wrist, on a shared-dial receiver. Optional: most sessions have no
+   *  shared dial and nothing to say. */
+  onSay?(id: string): void;
   onMode(mode: string): void;
   onStep(hz: number): void;
   /** Crown in zoom mode. Drives the REAL server zoom, so the watch gets finer
@@ -431,6 +435,9 @@ class WatchProvider {
           case 'zoom': this.lastGestureAt = Date.now(); handlers.onZoomDelta(Number(e.delta ?? 0)); break;
           case 'vol':  handlers.onVolumeDelta(Number(e.delta ?? 0)); break;
           case 'mute': handlers.onMute(e.val === true); break;
+          // ★ The watch names a canned phrase; the PHONE says it to the server. Buddy never speaks
+          //   to a receiver directly — same division as every other command here.
+          case 'say': handlers.onSay?.(String((e as { id?: unknown }).id ?? '')); break;
           case 'ping':
             // The watch pings on appear, on wake and every 4s. Treat the FIRST one
             // after a gap as "it has nothing" — cheap, and it heals a watch that was
@@ -533,6 +540,24 @@ class WatchProvider {
       this.fmdxTimer = setTimeout(() => { this.fmdxTimer = null; this.flushFmdx(); }, wait);
     }
   }
+
+  /** ★★ THE SHARED DIAL, FORWARDED TO THE WRIST. Two things the watch cannot work out for itself:
+   *  that this receiver shares one tuner (so Buddy must ARM before it will send a tune), and what
+   *  anybody has said about it. Sent on change — it is a handful of small fields, not a stream.
+   *  ★ Retained, so a watch that connects late or wakes up is told at once rather than waiting for
+   *    the next person to speak. Same lesson as the palette and the logo: a peer that restarted
+   *    has NOTHING, and send-on-change to a peer with nothing sends nothing for ever. */
+  sendDial(state: { mode: string; tuner: number; mine: boolean; you: number;
+                    listeners: number; decoding: boolean; said?: { from: number; id: string } }) {
+    if (!this.available) return;
+    const j = JSON.stringify(state);
+    // ★ A `said` is an EVENT and must always go; the rest is state and only goes when it changes.
+    if (!state.said && j === this.lastDial) return;
+    if (!state.said) this.lastDial = j;
+    if (!this.isActive) return;
+    Native!.sendDial(j);
+  }
+  private lastDial = '';
 
   private flushFmdx() {
     const j = this.pendingFmdx;

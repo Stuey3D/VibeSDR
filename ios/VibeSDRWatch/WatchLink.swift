@@ -13,7 +13,7 @@ import WatchKit
 ///
 /// Keys are terse because every row rides this dictionary at ~10fps.
 enum WK {
-  static let kind    = "k"   // "row" | "state" | "fmdx" | "logo" | "settings" | "pong"
+  static let kind    = "k"   // "row" | "state" | "fmdx" | "dial" | "logo" | "settings" | "pong"
   static let meter   = "mt"  // String — the meter text the PHONE is drawing
   static let json    = "j"   // String — FM-DX state blob
   static let image   = "img" // Data — station logo PNG/JPEG bytes
@@ -209,6 +209,41 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   // so the STATION is the content. We route on whichever message arrived last —
   // the phone never has to tell us which screen to be, because what it SENDS
   // already says: rows mean a spectrum, an fmdx blob means a station.
+  // ── ★★★ THE SHARED DIAL ────────────────────────────────────────────────────────
+  // A VibeServer running unlocked with room for several listeners gives them ONE tuner and
+  // enforces nothing about who turns it. On a WATCH that is a hazard as much as a feature: a crown
+  // turns in a coat sleeve, and the cost on a shared receiver is a stranger's station changing
+  // under them for no reason they can see. So the dial is DISARMED until somebody says otherwise —
+  // the same rule the FM-DX screen has always had, for the same reason (Stuart, 2026-08-20).
+  @Published var dialMode = "exclusive"
+  @Published var dialTuner = 0
+  @Published var dialMine = false
+  @Published var dialYou = 0
+  @Published var dialListeners = 0
+  @Published var dialDecoding = false
+  /// This receiver shares one tuner between its listeners.
+  var sharedDial: Bool { dialMode != "exclusive" }
+  /// ★★ NEVER PERSISTED, and cleared whenever the receiver stops being shared: "armed" describes
+  ///    what you are doing right now, and a remembered one would be armed at exactly the moment
+  ///    you had forgotten it was.
+  @Published var dialArmed = false { didSet { armedAt = Date() } }
+  private var armedAt = Date.distantPast
+  static let armMinutes: Double = 2
+  /// May this watch move the dial right now? ★ True on an exclusive receiver — arming your own
+  /// radio to turn your own knob would be ceremony.
+  var canTune: Bool {
+    guard sharedDial else { return true }
+    return dialArmed && Date().timeIntervalSince(armedAt) < Self.armMinutes * 60
+  }
+
+  struct DialLine: Identifiable, Equatable { let id = UUID(); let from: Int; let phrase: String }
+  @Published var chatLines: [DialLine] = []
+  @Published var chatUnread = 0
+
+  /// Say a canned phrase. ★ The PHONE speaks to the server; the watch only names the phrase — the
+  /// same division as everything else in Buddy.
+  func say(_ id: String) { send(["cmd": "say", "id": id]) }
+
   @Published var fmdx: FmdxState? = nil
   /// Directory listings MIRRORED from the phone (keyed by directory id). Buddy keeps no server list of
   /// its own — the phone fetches on `browse` and sends the rows; Buddy just displays and references them.
@@ -618,7 +653,14 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
   private func flushCrown() {
     flushScheduled = false
-    if pendingTune != 0 { send(["cmd": "tune", "delta": pendingTune]); pendingTune = 0 }
+    // ★★★ THE ASSERTION TRAVELS WITH THE COMMAND (see tuneArmed above — this is the waterfall
+    //     screen's half of the same rule, which it never had). The phone REQUIRES `armed` before it
+    //     will move a shared tuner, so an unarmed crown here is simply ignored at the far end and
+    //     nobody's listening is disturbed by a sleeve.
+    if pendingTune != 0 {
+      if canTune { send(["cmd": "tune", "delta": pendingTune, "armed": true]) }
+      pendingTune = 0
+    }
     if pendingZoom != 0 { send(["cmd": "zoom", "delta": pendingZoom]); pendingZoom = 0 }
     if pendingVol  != 0 { send(["cmd": "vol",  "delta": pendingVol]);  pendingVol  = 0 }
   }
@@ -1001,6 +1043,32 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
         volume = min(1, max(0, vo))
       }
       if let mu = m[WK.muted] as? Bool { muted = mu }
+
+    // ★★★ THE SHARED DIAL. Two things the watch cannot work out for itself: that this receiver
+    //     hands ONE tuner to everybody (so the crown must be armed before it will move it), and
+    //     what anybody has said about it.
+    case "dial":
+      if let j = m[WK.json] as? String, let d = j.data(using: .utf8),
+         let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] {
+        dialMode      = (o["mode"] as? String) ?? "exclusive"
+        dialTuner     = (o["tuner"] as? Int) ?? 0
+        dialMine      = (o["mine"] as? Bool) ?? false
+        dialYou       = (o["you"] as? Int) ?? 0
+        dialListeners = (o["listeners"] as? Int) ?? 0
+        dialDecoding  = (o["decoding"] as? Bool) ?? false
+        // ★ A phrase rides the same message as an EVENT rather than as state, so a repeat of the
+        //   same phrase is still delivered — "Thanks!" twice is two things said, not one.
+        if let said = o["said"] as? [String: Any],
+           let id = said["id"] as? String, CannedDial.text(id) != nil {
+          let from = (said["from"] as? Int) ?? 0
+          chatLines.append(DialLine(from: from, phrase: id))
+          if chatLines.count > 40 { chatLines.removeFirst(chatLines.count - 40) }
+          if from != dialYou { chatUnread += 1 }
+        }
+        // ★★ AND IT DISARMS ITSELF WHEN THE RECEIVER STOPS BEING SHARED. Moving to an exclusive
+        //    radio and back must not leave a stale "armed" behind it.
+        if dialMode == "exclusive" { dialArmed = false }
+      }
 
     case "fmdx":
       if let j = m[WK.json] as? String,

@@ -275,7 +275,14 @@ final class SpikeLink: ObservableObject {
   // ── Shared server chat (OWRX; FM-DX later) ──
   @Published var chatLog: [ChatLine] = []
   @Published var chatActivity = 0
-  var supportsChat: Bool { client?.supportsChat ?? false }
+  /// ★★ A SHARED-DIAL VIBESERVER HAS A CHAT TOO — a different one. The backends' own chats carry
+  ///    free text (OWRX, FM-DX); a shared VibeServer carries CANNED IDS, because its chat exists to
+  ///    settle who turns one tuner rather than to be a chat room. Both open from the same glyph, so
+  ///    there is one chat door on this watch and not two — the sheet decides which room is behind
+  ///    it (see ContentView).
+  var supportsChat: Bool { (client?.supportsChat ?? false) || (vibe?.sharedDial ?? false) }
+  /// True when that glyph should open the canned dial chat rather than the free-text one.
+  var sharedDialChat: Bool { vibe?.sharedDial ?? false }
   func sendChat(_ text: String) { client?.sendChat(text) }
   /// EXPLICIT profile switch from the profile menu — never automatic (etiquette).
   func selectProfile(_ id: String) { client?.selectProfile(id) }

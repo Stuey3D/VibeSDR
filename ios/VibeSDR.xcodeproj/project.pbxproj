@@ -32,6 +32,7 @@
 		AA000002000000000000F2A0D /* SDRTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D2A0D /* SDRTypes.swift */; };
 		AA000002000000000000F4849 /* CpuMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D4849 /* CpuMeter.swift */; };
 		AA000002000000000000F49CC /* Chat.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D49CC /* Chat.swift */; };
+		D2B26E0B45666A165E75FD16 /* DialChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 244EDDFD0995EF5720BD3034 /* DialChatView.swift */; };
 		AA000002000000000000F4BE4 /* BandPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D4BE4 /* BandPlan.swift */; };
 		AA000002000000000000F4E67 /* DabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D4E67 /* DabView.swift */; };
 		AA000002000000000000F5E4F /* ControlMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D5E4F /* ControlMenu.swift */; };
@@ -91,6 +92,7 @@
 		AA000002000000000000D2A0D /* SDRTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDRTypes.swift; sourceTree = "<group>"; };
 		AA000002000000000000D4849 /* CpuMeter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CpuMeter.swift; sourceTree = "<group>"; };
 		AA000002000000000000D49CC /* Chat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Chat.swift; sourceTree = "<group>"; };
+		244EDDFD0995EF5720BD3034 /* DialChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DialChatView.swift; sourceTree = "<group>"; };
 		AA000002000000000000D4BE4 /* BandPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BandPlan.swift; sourceTree = "<group>"; };
 		AA000002000000000000D4E67 /* DabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DabView.swift; sourceTree = "<group>"; };
 		AA000002000000000000D5E4F /* ControlMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlMenu.swift; sourceTree = "<group>"; };
@@ -222,6 +224,7 @@
 				AA000002000000000000D2863 /* AircraftView.swift */,
 				AA000002000000000000D4BE4 /* BandPlan.swift */,
 				AA000002000000000000D49CC /* Chat.swift */,
+				244EDDFD0995EF5720BD3034 /* DialChatView.swift */,
 				AA000002000000000000D9727 /* ContentView.swift */,
 				AA000002000000000000D5E4F /* ControlMenu.swift */,
 				AA000002000000000000D4849 /* CpuMeter.swift */,
@@ -525,6 +528,7 @@
 				AA000002000000000000F2863 /* AircraftView.swift in Sources */,
 				AA000002000000000000F4BE4 /* BandPlan.swift in Sources */,
 				AA000002000000000000F49CC /* Chat.swift in Sources */,
+				D2B26E0B45666A165E75FD16 /* DialChatView.swift in Sources */,
 				AA000002000000000000F9727 /* ContentView.swift in Sources */,
 				AA000002000000000000F5E4F /* ControlMenu.swift in Sources */,
 				AA000002000000000000F4849 /* CpuMeter.swift in Sources */,
@@ -574,7 +578,7 @@
 					"@executable_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.4;
-				MARKETING_VERSION = 10.3.1;
+				MARKETING_VERSION = 10.4;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -608,7 +612,7 @@
 					"@executable_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.4;
-				MARKETING_VERSION = 10.3.1;
+				MARKETING_VERSION = 10.4;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -776,7 +780,7 @@
 					"@executable_path/Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(SDKROOT)/usr/lib/swift$(inherited)";
-				MARKETING_VERSION = 10.3.1;
+				MARKETING_VERSION = 10.4;
 				OTHER_CFLAGS = "$(inherited)";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited)";
 				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_DEBUG";
@@ -808,7 +812,7 @@
 					"@executable_path/Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(SDKROOT)/usr/lib/swift$(inherited)";
-				MARKETING_VERSION = 10.3.1;
+				MARKETING_VERSION = 10.4;
 				OTHER_CFLAGS = "$(inherited)";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited)";
 				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_RELEASE";

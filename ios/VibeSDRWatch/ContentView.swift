@@ -345,7 +345,8 @@ struct ContentView: View {
       if link.supportsChat {
         VStack {
           HStack {
-            ChatGlyph(clients: link.clients, activity: link.chatActivity) {
+            ChatGlyph(clients: link.sharedDial ? link.dialListeners : link.clients,
+                      activity: link.chatActivity) {
               if !locked { showChat = true }
             }
             .padding(.leading, 6).padding(.top, 19)
@@ -591,7 +592,13 @@ struct ContentView: View {
     //   never appears; this branch exists only to keep the ported sheet stack intact.
     .sheet(isPresented: $showHardware) { EmptyView() }
     .sheet(isPresented: $showChat) {
-      NavigationStack { ChatSheet().environmentObject(link) }
+      // ★ On Buddy the glyph only appears for a shared dial (WatchLinkCompat.supportsChat), so this
+      //   is the only room behind it — but the check stays explicit rather than implied, because
+      //   the two conditions living in different files is exactly how they drift apart.
+      NavigationStack {
+        if link.sharedDial { DialChatView().environmentObject(link) }
+        else { ChatSheet().environmentObject(link) }
+      }
     }
     .ignoresSafeArea()
     // ★★ BUDDY KEEPS THE CROWN IN VOLUME MODE. Jr makes this view non-focusable in volume mode so

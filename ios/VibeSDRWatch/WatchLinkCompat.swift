@@ -56,8 +56,13 @@ extension WatchLink {
   ///   nor WatchLink has any notion of chat today — nothing sends it, nothing receives it. Wiring
   ///   the sheet up to nothing would give a chat box that silently swallows messages on a SHARED
   ///   receiver, which is worse than not offering it. False until both ends exist.
-  var supportsChat: Bool { false }
-  var chatActivity: Int { 0 }
+  /// ★★★ NO LONGER FALSE — THE SHARED DIAL BROUGHT ITS OWN WIRE PROTOCOL (2026-08-20). This was
+  /// stubbed off because Buddy's chat had none: the free-text backends' chats live on the phone
+  /// and there was no remote command for them. A shared-dial VibeServer is different — the phone
+  /// forwards `dial`/`said` and sends `cmd:say` back — so the glyph now has somewhere real to go,
+  /// and ONLY on a receiver where several listeners share one tuner.
+  var supportsChat: Bool { sharedDial }
+  var chatActivity: Int { chatUnread }
 
   /// Hardware controls (gain, bias-T, AGC, ppm, rate) belong to whoever owns the dongle — the
   /// phone. There is no remote command for them, so the sheet must not appear at all rather than
@@ -139,7 +144,8 @@ extension WatchLink {
 
   func reconnectIfNeeded() { ping() }
 
-  /// ☐ Chat has no wire protocol yet (neither side). `supportsChat` is false so nothing offers it;
+  /// ✅ Chat now HAS a wire protocol, for the shared dial only (see `supportsChat` above).
+  /// ☐ The free-text backend chats still have none. `supportsChat` stays false for those;
   ///   this exists only so the ported sheet compiles.
   func sendChat(_ text: String) {}
 

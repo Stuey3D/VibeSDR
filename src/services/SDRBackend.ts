@@ -198,6 +198,9 @@ export interface SDRBackend {
   /** OWRX: send a chat message on the main WS (basic text chat, no tune/zoom sync).
    *  name = the user's chosen handle, prefixed to each message server-side. */
   sendChat?(text: string, name: string): void;
+  /** Say a CANNED phrase on a shared-VFO VibeServer. Optional because it is meaningless on every
+   *  other backend — an id, never text (see src/services/dialChat.ts for why that matters). */
+  say?(id: string): void;
   /** OWRX: squelch level in dB (−150 = off/open). */
   setSquelch?(level: number): void;
   /** OWRX: noise reduction — threshold ≤ 0 = off, higher = more NR. */

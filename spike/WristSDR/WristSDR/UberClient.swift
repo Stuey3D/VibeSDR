@@ -348,6 +348,71 @@ final class UberClient: ObservableObject {
   func setGainAuto(_ auto: Bool) { guard isVibe else { return }; gainAuto = auto; specSock.send(json: ["type": "gain", "auto": auto]); saveVibeHw() }
   func setGainValue(_ tenthDb: Double) { guard isVibe else { return }; gainAuto = false; gainValue = tenthDb; specSock.send(json: ["type": "gain", "value": Int(tenthDb)]); saveVibeHw() }
   func setBiasT(_ on: Bool) { guard isVibe else { return }; biasT = on; specSock.send(json: ["type": "biasT", "on": on]); saveVibeHw() }
+
+  // ── ★★★ THE SHARED DIAL, AND THE CANNED CHAT THAT GOES WITH IT ──────────────────
+  //
+  // On an unlocked VibeServer with room for several listeners the server enforces NOTHING about
+  // who tunes — Stuart, 2026-08-20: *"the dial must be like FM-DX where anybody can tune it,
+  // otherwise I would need to be on the server 24/7 to allow access to it."* The chat is therefore
+  // not decoration beside the mechanism; it IS how two strangers sort the dial out between
+  // themselves while the owner is asleep.
+  //
+  // ★★★ AND A FIXED VOCABULARY IS WHAT PUTS IT ON A WATCH AT ALL. There is no keyboard here worth
+  //     the name, so a text chat would be a feature Jr could receive and never join. Twelve
+  //     buttons is a conversation the wrist can hold — and it removes moderation, abuse,
+  //     translation and injection in the same stroke.
+  /// 'exclusive' on an ordinary receiver — the state in which none of this should be shown.
+  @Published var dialMode = "exclusive"
+  @Published var dialTuner = 0          // whose ordinal moved it last (0 = nobody yet)
+  @Published var dialMine = false       // ...and was that us
+  @Published var dialYou = 0            // our own ordinal, so "You" can replace a number
+  @Published var dialListeners = 0
+  @Published var dialDecoding = false
+  /// True when this receiver shares one tuner between its listeners.
+  var sharedDial: Bool { isVibe && dialMode != "exclusive" }
+
+  struct ChatLine: Identifiable, Equatable { let id = UUID(); let from: Int; let phrase: String }
+  @Published var chatLines: [ChatLine] = []
+  /// Unread count for the menu badge. Cleared by the chat view when it appears.
+  @Published var chatUnread = 0
+  /// Set when a spectator-mode receiver refuses a tune. An explanation, not an error.
+  @Published var dialRefusedNote = ""
+
+  // ── ★★★ THE DIAL IS DISARMED UNTIL YOU SAY OTHERWISE ────────────────────────────
+  //
+  // On a shared VFO the dial belongs to everybody, and a watch is the worst possible place to
+  // leave it live: the crown turns in a coat sleeve, the drum takes a stray thumb, and the cost of
+  // either is that a stranger's station changes under them for no reason they can see. FM-DX asks
+  // before it lets you tune, and it is right to (Stuart, 2026-08-20).
+  //
+  // ★★ DEFAULT OFF, EVERY TIME. Not remembered between sessions and not remembered across a
+  //    reconnect: "armed" is a statement about what you are doing right now, and a persisted one
+  //    would be armed at exactly the moment you had forgotten it was.
+  // ★ Meaningless on an exclusive receiver, where the dial is yours alone — `canTune` is therefore
+  //   true there without anybody arming anything.
+  @Published var dialArmed = false {
+    didSet { if dialArmed { armedAt = ProcessInfo.processInfo.systemUptime } }
+  }
+  private var armedAt: Double = 0
+  /// ★★ AND IT DISARMS ITSELF. An arm that lasts for ever is just a switch you left on; this one
+  ///    exists to cover a deliberate act, so it expires a couple of minutes after the last tune.
+  static let armMinutes: Double = 2
+  /// May this watch move the dial right now?
+  var canTune: Bool {
+    guard sharedDial else { return true }           // an ordinary receiver: always yours
+    guard dialArmed else { return false }
+    return ProcessInfo.processInfo.systemUptime - max(armedAt, lastLocalTuneAt) < Self.armMinutes * 60
+  }
+
+  /// Say one of the canned phrases.
+  /// ★★ AN ID, NEVER TEXT — the vocabulary is the server's (`chatPhrases()` in the shim) and an
+  ///    unknown id is dropped at both ends, so this channel cannot carry free text in either
+  ///    direction. The server also rate-limits to one phrase every 3s: flood control, not
+  ///    moderation. Nothing in the list can offend; anything can be repeated.
+  func say(_ id: String) {
+    guard sharedDial else { return }
+    specSock.send(json: ["type": "say", "id": id])
+  }
   func setRspRfNotch(_ on: Bool)  { rspRfNotch = on;  rspSend(["rfnotch": on ? 1 : 0]);  saveVibeHw() }
   func setRspDabNotch(_ on: Bool) { rspDabNotch = on; rspSend(["dabnotch": on ? 1 : 0]); saveVibeHw() }
 
@@ -1740,6 +1805,38 @@ final class UberClient: ObservableObject {
       }
       return
     }
+    // ── The shared dial's own messages ─────────────────────────────────────────
+    if type == "dial" {
+      Task { @MainActor in
+        self.dialMode      = (j["mode"] as? String) ?? "exclusive"
+        self.dialTuner     = (j["tuner"] as? NSNumber)?.intValue ?? 0
+        self.dialMine      = (j["mine"] as? Bool) ?? false
+        self.dialYou       = (j["you"] as? NSNumber)?.intValue ?? 0
+        self.dialListeners = (j["listeners"] as? NSNumber)?.intValue ?? 0
+        self.dialDecoding  = (j["decoding"] as? Bool) ?? false
+      }
+      return
+    }
+    if type == "dial_refused" {
+      Task { @MainActor in
+        self.dialRefusedNote = "This receiver is listen-only — the owner tunes it."
+      }
+      return
+    }
+    if type == "said" {
+      let from = (j["from"] as? NSNumber)?.intValue ?? 0
+      let id   = (j["id"] as? String) ?? ""
+      // ★ AN ID WE CANNOT DRAW IS DROPPED, not shown raw: a newer server may know a phrase this
+      //   build does not, and showing `decode_done` on the wrist would be worse than silence.
+      guard !id.isEmpty, CannedDial.text(id) != nil else { return }
+      Task { @MainActor in
+        self.chatLines.append(ChatLine(from: from, phrase: id))
+        if self.chatLines.count > 40 { self.chatLines.removeFirst(self.chatLines.count - 40) }
+        // ★ Your own phrase echoing back as an unread badge would be absurd.
+        if from != self.dialYou { self.chatUnread += 1 }
+      }
+      return
+    }
     if type == "session_warning" {
       if let left = (j["secsLeft"] as? NSNumber)?.intValue { sessionSecsLeft = left }
       return
@@ -1799,6 +1896,46 @@ final class UberClient: ObservableObject {
           mode = "wfm"
           if let d = Self.modeBW["wfm"] { bwLow = d.low; bwHigh = d.high }
         }
+      }
+    }
+
+    // ★★★ FOLLOW THE DIAL WHEN SOMEBODY ELSE TURNS IT. On a shared-VFO VibeServer (unlocked radio,
+    //     more than one user) the frequency moves because ANOTHER listener moved it. Jr adopted the
+    //     server's tune only once, in the first-config negotiation above — so the audio followed and
+    //     the readout, the mode, the RDS keying and the band plan did not. The browser and the phone
+    //     both had the identical gap; this is the same fix on the wrist (2026-08-20).
+    //
+    // ★★ TWO QUESTIONS, TWO THRESHOLDS, and collapsing them is the bug the phone shipped first.
+    //    The READOUT adopts EVERY move over 100 Hz, because a dial that lags reads as wrong: gated
+    //    on the demodulator bandwidth instead (~200 kHz on WFM), 100 kHz steps never qualified and
+    //    the watch settled on a different station from the one it was playing — "on the webclient i
+    //    am on 96.6 but on the moto its on 96.4" (Stuart, 2026-08-20). The COSTLY half — moving the
+    //    view — still waits for a move bigger than the passband, because recentring on every small
+    //    nudge of somebody else's drum would stutter the waterfall for everyone.
+    //
+    // ★ Never inside our own echo: `lastLocalTuneAt` is stamped by tune()/tuneTo(), and the server
+    //   answers each of those with a config carrying the frequency we just asked for.
+    if isVibe, vibeAdopted,
+       let sv = (j["vfo"] as? NSNumber)?.doubleValue, sv > 0,
+       ProcessInfo.processInfo.systemUptime - lastLocalTuneAt > 1.5 {
+      let moved = abs(sv - frequency)
+      if moved > 100 {
+        Vitals.crumb("UBER shared dial: another listener moved it to \(Int(sv))")
+        frequency = sv
+        clearRds()          // it is a different station now — the old name must not linger
+        // The shim sends the mode with the config on a shared dial, so the passband follows too.
+        if let m = j["mode"] as? String, !m.isEmpty, m != mode {
+          mode = m
+          if let d = Self.modeBW[m] { bwLow = d.low; bwHigh = d.high }
+        }
+        let bw = max(abs(bwHigh - bwLow), 3_000)
+        if moved > bw {
+          viewCenterHz = sv
+          sendViewCoalesced(sv, viewBinBw > 0 ? viewBinBw : binBandwidth)
+        }
+        saveVibeState()
+        // ★ Adopted, so the centre-assert below must not now "correct" the server back to where
+        //   we used to be — it compares centerHz against `frequency`, which we have just moved.
       }
     }
 
@@ -1889,6 +2026,9 @@ final class UberClient: ObservableObject {
   /// a config arriving OUTSIDE it at the wrong scale is an unsolicited reset to re-assert
   /// against. See onSpectrumJSON.
   private var lastViewSentAt: Double = 0
+  /// When THIS watch last moved the dial. The server confirms every tune we send as a config, so
+  /// without this the shared-dial follow below would adopt our own echo and fight a held step key.
+  private var lastLocalTuneAt: Double = 0
 
   // ── Coalesced view sends (rapid gestures) ─────────────────────────────────────
   private var pendingView: (freq: Double, binBw: Double)?
@@ -2299,10 +2439,15 @@ final class UberClient: ObservableObject {
   /// Crown tuning. The audio socket carries the tune; the spectrum view follows it.
   func tune(delta: Int, step: Double) {
     guard delta != 0 else { return }
+    // ★ The shared dial is disarmed by default — see `canTune`. Silently ignoring a crown turn is
+    //   correct here: the UI shows the disarmed state, so this is not a surprise, and beeping at
+    //   somebody whose sleeve moved would be worse than doing nothing.
+    guard canTune else { return }
     let base = delta > 0 ? (frequency / step).rounded(.down) : (frequency / step).rounded(.up)
     let f = max(freqMin, min(freqMax, (base + Double(delta)) * step))
     guard f != frequency else { return }
     frequency = f
+    lastLocalTuneAt = ProcessInfo.processInfo.systemUptime
     clearRds()            // moved off the old station — don't show its name on the new frequency
     saveVibeState()
     sendTuneThrottled()   // 100ms debounce — match the companion/main app (see sendTuneThrottled)
@@ -2352,9 +2497,11 @@ final class UberClient: ObservableObject {
   /// Absolute tune, for the numpad — jump straight from 648 kHz AM to the 40m band
   /// without spinning the crown across 6 MHz.
   func tuneTo(_ hz: Double) {
+    guard canTune else { return }
     let f = max(freqMin, min(freqMax, hz))
     guard f != frequency else { return }
     frequency = f
+    lastLocalTuneAt = ProcessInfo.processInfo.systemUptime
     clearRds()            // jumped bands — drop the old station's name immediately
     saveVibeState()
     sendTune()

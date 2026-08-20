@@ -387,7 +387,11 @@ link.setAutoContrast(wfAutoContrast)
       if link.supportsChat {
         VStack {
           HStack {
-            ChatGlyph(clients: link.clients, activity: link.chatActivity) {
+            // ★ The glyph breathes for EITHER chat — a canned "Can I tune?" is exactly the kind of
+            //   message it exists to announce, and it arrives on a different path from the
+            //   free-text backends' `chatActivity`.
+            ChatGlyph(clients: link.sharedDialChat ? (link.vibe?.dialListeners ?? 0) : link.clients,
+                      activity: link.chatActivity + (link.vibe?.chatUnread ?? 0)) {
               if !locked { showChat = true }
             }
             .padding(.leading, 6).padding(.top, 19)
@@ -699,7 +703,15 @@ link.setAutoContrast(wfAutoContrast)
       if let radio = link.vibe { NavigationStack { HardwareSheet(radio: radio) } }
     }
     .sheet(isPresented: $showChat) {
-      NavigationStack { ChatSheet().environmentObject(link) }
+      // ★ One door, two rooms — see SpikeLink.supportsChat. A shared VibeServer's chat is canned
+      //   ids and an arm switch; every other backend's is free text.
+      NavigationStack {
+        if link.sharedDialChat, let radio = link.vibe {
+          DialChatView(radio: radio)
+        } else {
+          ChatSheet().environmentObject(link)
+        }
+      }
     }
     // ★ THE PIN PROMPT, ON EVERY ROUTE. It used to live only on the mDNS row in the
     // picker, so a favourite or a typed IP — the only ways in over Bluetooth — sat
