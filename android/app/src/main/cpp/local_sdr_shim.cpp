@@ -11730,9 +11730,20 @@ void LocalSdrShim::setVibeServerSessionLimit(int minutes) {
     LOGI("session limit set to %d min", g_vsSessionLimitMin.load());
 }
 
+/** ★★★ BUSY MEANS "NO ROOM", NOT "SOMEBODY IS HERE".
+ *
+ *  This answered "is anyone listening", which on a ONE-AT-A-TIME receiver is the same question —
+ *  and on a shared one is not. A ten-slot dial with a single listener reported busy, so the app's
+ *  picker greyed the radio out as IN USE and asked for the owner's password to "take it" (Stuart,
+ *  2026-08-20, unable to join his own shared Airspy from the Moto).
+ *  ★★ The browser never showed it because its card compares listeners against maxUsers itself; the
+ *     app trusts this flag. Two readings of one state again — and this is the one that was wrong.
+ *  ★ The single-user meaning is unchanged, because there the occupant IS the capacity. */
 bool LocalSdrShim::isBusy() const {
     if (!p) return false;
     std::lock_guard<std::mutex> lk(p->clientMtx);
+    const int max = g_vsMaxUsers.load();
+    if (max > 1) return p->specListenerCountLocked() >= max;
     return !p->occupantSession.empty()
         && ((p->specClient && p->specClient->isOpen())
          || (p->audioClient && p->audioClient->isOpen()));
