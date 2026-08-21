@@ -13757,7 +13757,19 @@ void LocalSdrShim::overloadTick() {
     //     quietly moved it — the same fault the gain-ceiling broadcast above exists to prevent, and
     //     worse here because nobody pressed anything. It is also the only way to WATCH this work on
     //     a phone whose logcat cannot be read.
-    if (p) for (auto& pr : p->allSpecPeers()) p->sendHwInfo(pr.sock);
+    // ★★ TWO MESSAGES, EACH DOING ONE THING: hwinfo carries the new gain so the SLIDER follows, and
+    //    `ovl` says what just happened so the status bar can SAY it. A chip driven off the gain
+    //    alone could not tell "the protection backed off" from "somebody moved the slider".
+    if (p) {
+        const std::string m = std::string("{\"type\":\"ovl\",\"steps\":") + std::to_string(want)
+                            + ",\"dir\":" + (want > steps ? "-1" : "1") + "}";
+        for (auto& pr : p->allSpecPeers()) {
+            p->sendHwInfo(pr.sock);
+            // ★ Through the Impl, like sendHwInfo above it: sendWs/sendText are members, and this
+            //   function is on LocalSdrShim rather than inside Impl.
+            if (pr.sock && pr.sock->isOpen()) p->sendText(pr.sock, m);
+        }
+    }
 }
 /** ★★★ LET THE RADIO GO WITHOUT STOPPING THE SERVER.
  *

@@ -920,6 +920,10 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
            border-radius: 3px; border: 1px solid rgba(255,120,60,0.8); color: #ff8a3d;
            line-height: 1.2; animation: sqlBreathe 1.2s ease-in-out infinite; }
 #ovlChip.set { display: inline-block; }
+/* ★ RECOVERING IS GOOD NEWS, so it must not wear the fault's colours or its urgency: the gain is
+   going back UP because the band calmed down. Same chip, quieter voice — and it stops breathing,
+   because nothing needs attention any more. */
+#ovlChip.easing { border-color: rgba(120,200,255,0.7); color: #7bc6ff; animation: none; }
 #sqlChip.muting { color: #ff6b6b; border-color: rgba(255,80,80,0.75);
                   animation: sqlBreathe 1.5s ease-in-out infinite; }
 @keyframes sqlBreathe { 0%,100% { opacity: 0.45; } 50% { opacity: 1; } }
@@ -2586,7 +2590,10 @@ select.btn { padding: 6px 8px; }
                    warning nobody sees is not a warning. Overload is the one condition that
                    silently ruins reception (it is what has been destroying RDS all evening),
                    so it belongs where the user is already looking (Stuart, 2026-07-26). -->
-              <span id="ovlChip" title="The receiver's front end is overloading — reduce RF gain, or switch a notch in">OVERLOAD</span>
+              <span id="ovlChip" title="The receiver's front end is overloading — reduce RF gain, or switch a notch in">OVERLOAD</span><!--
+                ★ The text is REPLACED at runtime on a dongle, where the server also acts on the
+                  overload and the chip reports which way the gain went (see onOverload). On an RSP
+                  the hardware raises the flag and we only report it, so it keeps this wording. -->
               <span id="status">—</span>
             </span>
           </div>

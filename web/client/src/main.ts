@@ -1094,6 +1094,30 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       applyRateOptions();
       populateHw();
     },
+    // ★★★ THE DONGLE'S PROTECTION, SAID OUT LOUD. The RSP gets a hardware overload flag and shows
+    //     a lamp; the RTL has no flag, so we measure it — and because we also ACT on it, the chip
+    //     says what happened rather than only that something is wrong. Stuart's wording:
+    //     "Overload: Gain ↓" while it is backing off, "Overload Passed: Gain ↑" as it recovers.
+    //  ★★ IT CLEARS ITSELF once the gain is all the way back to the owner's value. A chip that
+    //     stayed up would become part of the furniture, and this one is meant to be noticed.
+    //  ★ The recovering state is calmer than the fault state on purpose: going up is good news,
+    //    and it must not read as a second alarm.
+    onOverload: (steps: number, dir: number) => {
+      const chip = $('ovlChip');
+      if (steps <= 0 && dir > 0) {          // fully recovered — say so briefly, then go quiet
+        chip.textContent = 'OVERLOAD PASSED: GAIN ↑';
+        chip.classList.add('set', 'easing');
+        window.clearTimeout(ovlClearTimer);
+        ovlClearTimer = window.setTimeout(() => {
+          chip.classList.remove('set', 'easing');
+        }, 4000);
+        return;
+      }
+      window.clearTimeout(ovlClearTimer);
+      chip.textContent = dir > 0 ? 'OVERLOAD PASSED: GAIN ↑' : 'OVERLOAD: GAIN ↓';
+      chip.classList.toggle('easing', dir > 0);
+      chip.classList.add('set');
+    },
     onRspStat: (sys, lna, ifgr, overload, settling) => {
       $('initChip').classList.toggle('set', settling);
       // Same fact, two places: beside the gain controls where it can be ACTED on, and on the
@@ -1442,6 +1466,8 @@ let hwGains: number[] = [];
 let hwGainCap = -1;
 /** ★ The radio's ACTUAL gain, from hwinfo. -1 = auto, or a server too old to send it. */
 let hwGainNow = -1;
+/** Clears the "overload passed" chip once the gain is home — see onOverload. */
+let ovlClearTimer = 0;
 let hwAgcLocked = false;
 let hwRates: number[] = [];
 /** >0 = the SERVER pinned the capture rate; the picker is hidden. */
