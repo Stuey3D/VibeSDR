@@ -30,6 +30,14 @@ export interface ServerBookmark {
   flag?:           string;    // emoji flag of the transmitter country (EiBi ITU)
   itu?:            string;    // EiBi transmitter-country code (raw, col 4)
   source?:         'eibi' | 'server' | 'user';   // origin — drives the VTS source icon
+  /** ★★ VibeServer only: was this SAVED by the owner, or LEARNED from RDS as the receiver tuned?
+   *  The shim publishes it (`"manual": true|false` in /api/bookmarks) and the browser has always
+   *  read it; the app's type simply never carried it, so both arrived as an undifferentiated
+   *  "server" entry. They are different claims — one is somebody's choice, the other is evidence
+   *  this aerial heard something — and a learned one EXPIRES if it stops being heard.
+   *  ★ undefined on backends that do not say (UberSDR, OWRX, Kiwi): the honest label there is
+   *    simply "the server's", not a guess at which. */
+  manual?:         boolean;
 }
 
 export interface ServerBand {

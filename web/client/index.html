@@ -950,6 +950,24 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 .sres .f { color: var(--freq); font-variant-numeric: tabular-nums; min-width: 84px; }
 .sres .n { color: var(--btn-text); flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sres .src { color: var(--unit); font-size: 10px; letter-spacing: 1px; }
+/* ★★ A HEADING FOR EACH KIND OF BOOKMARK — see renderBookmarks(). Your own choices, the owner's
+   saved entries and what this aerial has actually HEARD are three different claims, and they used
+   to run together in one list separated only by a glyph. ★ Quiet by design: these are signposts in
+   a list you are scanning, not banners. */
+.bmHead {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 10px 8px 3px; border-bottom: 1px solid var(--btn-border);
+  margin-bottom: 2px;
+}
+.bmHead + .bmHead { margin-top: 0; }
+.bmHeadT { color: var(--freq); font-size: 10px; letter-spacing: 1.5px; font-weight: 700; }
+.bmHeadN { color: var(--unit); font-size: 10px; font-variant-numeric: tabular-nums; }
+/* ★ The hint is the part that stops "heard by this receiver" being a mystery — it says the entry
+   expires, which is why it may not be there tomorrow. Hidden on a narrow screen rather than
+   wrapping the heading onto two lines. */
+.bmHeadH { color: var(--unit); font-size: 10px; opacity: 0.75; margin-left: auto;
+           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 560px) { .bmHeadH { display: none; } }
 /* Everything from here is pushed to the right edge, so BOOKMARKS lands directly
    under the search box above it and the two rows line up. */
 .pushRight { margin-left: auto; }

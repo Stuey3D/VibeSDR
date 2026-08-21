@@ -4813,7 +4813,44 @@ function renderBookmarks() {
     return;
   }
 
-  for (const b of rows.sort((a, z) => a.frequency - z.frequency)) {
+  // ★★★ THREE DIFFERENT CLAIMS, THREE HEADINGS. These were one flat run distinguished only by a
+  //     glyph and a tooltip, and the difference between them is not cosmetic: a bookmark somebody
+  //     CHOSE, a station this aerial has actually HEARD, and an entry the receiver's owner saved
+  //     for everyone are three different kinds of fact. Stuart, seeing his own CB channels
+  //     interleaved with RDS-learned BBC services (2026-08-21): "maybe the bookmarks and learnt
+  //     stations need a split to differentiate them."
+  // ★★ AND IT IS ABOUT TO MATTER FAR MORE. DAB service discovery will add a whole multiplex at a
+  //    time — a hundred entries from one scan — and dropping those into an undifferentiated list
+  //    would bury the handful the user actually chose.
+  // ★ Headings only appear when they have rows, so an ordinary receiver with nothing learned looks
+  //   exactly as it always did.
+  const sections: Array<{ title: string; hint: string; of: (r: Row) => boolean }> = [
+    { title: 'YOUR BOOKMARKS', hint: 'Saved in this browser', of: r => r.local },
+    { title: 'SAVED ON THE RECEIVER', hint: 'Saved by the owner, shared with everyone',
+      of: r => !r.local && !r.heard },
+    { title: 'HEARD BY THIS RECEIVER', hint: 'Found automatically over RDS — expires if it stops being heard',
+      of: r => !r.local && !!r.heard },
+  ];
+
+  for (const sec of sections) {
+    const mine = rows.filter(sec.of).sort((a, z) => a.frequency - z.frequency);
+    if (!mine.length) continue;
+    const head = document.createElement('div');
+    head.className = 'bmHead';
+    head.innerHTML = `<span class="bmHeadT">${sec.title}</span>` +
+                     `<span class="bmHeadN">${mine.length}</span>` +
+                     `<span class="bmHeadH">${escapeHtml(sec.hint)}</span>`;
+    host.appendChild(head);
+    renderBookmarkRows(host, mine);
+  }
+}
+
+/** One section's worth of rows. Split out only so the sectioning above reads as sectioning. */
+function renderBookmarkRows(host: HTMLElement, rows: Array<{
+  name: string; frequency: number; mode?: string;
+  local: boolean; heard?: boolean; bwLo?: number | null; bwHi?: number | null;
+}>) {
+  for (const b of rows) {
     const row = document.createElement('div');
     row.className = 'sres';
     row.title = b.local ? 'Saved in this browser'

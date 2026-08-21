@@ -141,6 +141,18 @@ function KeyCap({ letter, color, label, font, textStyle }: {
 /** Below this the "keyboard" is an accessory bar, not something to move out of the way. */
 const KB_ANCHOR_MIN = 140;
 
+/** The short provenance tag at the end of a search row — see the note where it is drawn.
+ *  ★ 'SERVER' rather than a guess when the backend does not distinguish saved from heard: UberSDR,
+ *    OWRX and Kiwi send no such flag, and inventing one would be a label that is sometimes a lie. */
+function srcTag(b?: ServerBookmark): string {
+  if (!b) return '';
+  if (b.source === 'user') return 'YOURS';
+  if (b.source === 'eibi') return 'EiBi';
+  if (b.manual === true)  return 'SAVED';
+  if (b.manual === false) return 'HEARD';
+  return 'SERVER';
+}
+
 export default function FreqModal({
   visible, currentHz, onConfirm, onClose,
   unit: unitProp, onUnit,

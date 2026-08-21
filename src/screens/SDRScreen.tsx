@@ -5651,7 +5651,27 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     const mine = bookmarksForInstance(userBookmarks, bookmarkScope, legacyScopes);
     const seen = new Set(mine.map((b: UserBookmark) => `${b.name}|${b.frequency}`));
-    const fallback = serverBookmarks.length > 0 ? serverBookmarks : (eibiEnabled ? eibiBookmarks : []);
+    // ★★★ EiBi IS NOT A FALLBACK — IT IS ITS OWN KIND OF ENTRY. This was
+    //     `serverBookmarks.length > 0 ? serverBookmarks : eibi`, so the schedule appeared ONLY on a
+    //     backend that offered nothing of its own. On a VibeServer — which offers plenty, its
+    //     owner's saved entries and everything it has learned over RDS — the schedule was therefore
+    //     suppressed entirely, however plainly the EiBi SCHEDULE switch said ON. Stuart, searching
+    //     "bbc" and getting 26 results without one schedule row among them (2026-08-21): "for some
+    //     reason Eibi is not showing here".
+    //  ★★ THEY ARE DIFFERENT CLAIMS ABOUT REALITY, which is the reason they must not displace one
+    //     another: a server bookmark is what the owner saved, a learned station is what this aerial
+    //     has actually HEARD, and EiBi is a TIMETABLE of what should be transmitting somewhere in
+    //     the world. All three are worth searching; none is a substitute for another.
+    //  ★ EXCEPT where they are the same thing: UberSDR serves a list that already includes schedule
+    //    entries, and we cannot tell them apart in it, so ours would simply duplicate that list.
+    //    There it stays server-provided, exactly as Stuart described the split.
+    const serverListIsSchedule = !isLocal && (route.params.serverType ?? 'ubersdr') === 'ubersdr';
+    const fromServer = serverBookmarks.filter(
+      (b: ServerBookmark) => !seen.has(`${b.name}|${b.frequency}`));
+    const serverSeen = new Set(fromServer.map((b: ServerBookmark) => `${b.name}|${b.frequency}`));
+    const fromEibi = (eibiEnabled && !serverListIsSchedule ? eibiBookmarks : [])
+      .filter((b: ServerBookmark) => !seen.has(`${b.name}|${b.frequency}`)
+                                  && !serverSeen.has(`${b.name}|${b.frequency}`));
     const merged: ServerBookmark[] = [
       ...mine.map((b: UserBookmark) => ({
         name: b.name, frequency: b.frequency, mode: b.mode,
@@ -5660,12 +5680,14 @@ export default function SDRScreen({ route, navigation }: Props) {
         bandwidth_high: b.bandwidth_high ?? undefined,
         source: 'user' as const,
       })),
-      ...fallback.filter((b: ServerBookmark) => !seen.has(`${b.name}|${b.frequency}`)),
+      ...fromServer,
+      ...fromEibi,
     ];
     vtsBookmarks.current = merged;
     setSearchBookmarks(merged);
     pushCarBrowse(merged);
-  }, [serverBookmarks, eibiBookmarks, eibiEnabled, userBookmarks, baseUrl, ituRegion]);
+  }, [serverBookmarks, eibiBookmarks, eibiEnabled, userBookmarks, baseUrl, ituRegion,
+      isLocal, route.params.serverType, bookmarkScope, legacyScopes]);
 
   // Push the car browse tree (Bookmarks + Band Plan folders) to the native
   // media-browser service. Bookmarks come from the merged list; the band plan is
