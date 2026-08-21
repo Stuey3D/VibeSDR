@@ -1093,6 +1093,21 @@ static std::atomic<bool>     g_ovlProtect{true};
 static std::atomic<bool>     g_rtlAgc{false};
 static std::atomic<double>   g_ovlMargin{3.0};
 static std::atomic<double>   g_ovlLastChangeAt{0.0};
+/** ★★★ MORE GAIN IS NOT MORE SIGNAL, AND THIS IS WHERE A HEADROOM-ONLY AGC GOES WRONG.
+ *
+ *  Climbing until the ADC nearly clips finds the LOUDEST gain, not the best one. Past the tuner's
+ *  optimum an R820T goes into compression: the noise floor comes up faster than the signal, and
+ *  weak stations vanish into it. Stuart watched exactly that happen — a station at 105.4 came up
+ *  "legible but noisy, in stereo", and then "as the gain kept increasing that signal just faded
+ *  into the noise" (2026-08-21). The loop was doing what it was told and the instruction was wrong.
+ *
+ *  ★★ SO A CLIMB IS A HYPOTHESIS, AND IT GETS CHECKED. The SNR is measured before the step and
+ *     again a few seconds after; if it got WORSE, the extra gain was buying compression rather than
+ *     sensitivity, so the step is given back and the price of the next one goes up. The loop
+ *     therefore settles at the knee — the most gain that still improves the signal — instead of the
+ *     most gain the converter will tolerate. */
+static std::atomic<double>   g_climbAt{0.0};
+static std::atomic<float>    g_snrBeforeClimb{0.0f};
 static std::atomic<int>      g_ovlLastDir{0};
 
 /** ★★★ THE COOLDOWN IS WHAT MAKES THE LIMIT REAL. Every client auto-reconnects on close, so a
@@ -13889,6 +13904,7 @@ void LocalSdrShim::overloadTick() {
     const int target = g_gainTarget.load(std::memory_order_relaxed);
     if (target < 0) return;            // nothing set — no ceiling to work against
 
+    bool steps_forceDown = false;
     const int clipRun  = g_adcClipRun.load(std::memory_order_relaxed);
     const int cleanRun = g_adcCleanRun.load(std::memory_order_relaxed);
     const int steps    = g_ovlSteps.load(std::memory_order_relaxed);
@@ -13905,8 +13921,30 @@ void LocalSdrShim::overloadTick() {
     //     listening, so coming down is never made to wait.
     if (clipRun < 2 && now - g_ovlLastChangeAt.load(std::memory_order_relaxed) < 6.0) return;
 
+    // ★★★ DID THE LAST CLIMB ACTUALLY HELP? Judged on SNR, a few seconds later, once the meters
+    //     have caught up with the new gain.
+    const double climbAt = g_climbAt.load(std::memory_order_relaxed);
+    if (climbAt > 0 && now - climbAt >= 4.0) {
+        g_climbAt.store(0.0, std::memory_order_relaxed);
+        const float snrNow = p->spectrumSnr.load();
+        const float snrWas = g_snrBeforeClimb.load(std::memory_order_relaxed);
+        if (snrWas > 0.0f && snrNow < snrWas - 1.5f) {
+            // ★ Give it back, and make the next attempt prove more. This is the same "learn from a
+            //   failed climb" the clipping path uses — the two failures differ in what they measure,
+            //   not in what they mean: this step was not worth taking.
+            const double m = std::min(12.0, g_ovlMargin.load(std::memory_order_relaxed) + 3.0);
+            g_ovlMargin.store(m, std::memory_order_relaxed);
+            LOGI("that step cost %.1f dB of SNR — giving it back (a climb now needs %.0f dB)",
+                 snrWas - snrNow, m);
+            g_adcCleanRun.store(0, std::memory_order_relaxed);
+            steps_forceDown = true;
+        }
+    }
+
     int want = steps;
-    if (clipRun >= 2) {
+    if (steps_forceDown) {
+        want = steps + 1;                                        // undo the unhelpful climb
+    } else if (clipRun >= 2) {
         // ★★★ AND IT COMES DOWN BY AS MUCH AS IT IS OVER. One step at a time is a search; the clip
         //     PERCENTAGE already says how badly the front end is being overdriven, so use it. A few
         //     samples on the rail is a light overload worth one step; several per cent is gross and
@@ -14003,6 +14041,10 @@ void LocalSdrShim::overloadTick() {
             dg = (float)std::pow(10.0, cl / 20.0);
         }
         g_digGain.store(dg, std::memory_order_relaxed);
+    }
+    if (want < steps) {                       // this was a climb — put it on trial
+        g_snrBeforeClimb.store(p->spectrumSnr.load(), std::memory_order_relaxed);
+        g_climbAt.store(now, std::memory_order_relaxed);
     }
     g_ovlSteps.store(want, std::memory_order_relaxed);
     g_ovlLastChangeAt.store(now, std::memory_order_relaxed);
