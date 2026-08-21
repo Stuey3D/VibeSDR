@@ -249,6 +249,13 @@ export interface SDRCallbacks {
    *  web/client/src/spectrum.ts — the failure mode of a per-client protocol is SILENCE. */
   /** Someone else holds the receiver. Terminal — do not retry into a busy server. */
   onBusy?: () => void;
+  /** ★★★ ONE RADIO PER ADDRESS — you are already listening on another radio of THIS server.
+   *  Deliberate policy, added after one visitor held both single-user radios of the demo at once by
+   *  opening a tab on each (Stuart, 2026-08-21). ★★ It is NOT a queue and must never be presented
+   *  as one: there is no slot to wait for, because the slot is yours — closing the other radio
+   *  frees this one instantly, which is the one thing the message has to say.
+   *  ★ `radio` names the one being held, so the app can say WHICH. */
+  onElsewhere?: (radio: string) => void;
   /** The owner took their radio back with the admin password. Terminal, and not a fault. */
   onEvicted?: () => void;
   /** Still connected — the server's own countdown, at T-120s and T-30s. NOT a refusal.
@@ -1830,6 +1837,17 @@ export class UberSDRClient {
     if (msg.type === 'busy') {
       this.refused = true;                    // a busy server must not be hammered
       this.callbacks.onBusy?.();
+      return;
+    }
+    if (msg.type === 'elsewhere') {
+      // ★★★ THE SERVER EXPLAINED ITSELF AND THE APP WAS NOT LISTENING. This arrives, correctly and
+      //     within microseconds, naming the radio already held — and only the BROWSER handled it.
+      //     The app and Jr ignored it and sat on "waterfall initializing" until something else
+      //     timed out, so a deliberate, well-explained policy looked exactly like a broken server.
+      //     Found from the field: ff-mish's watch shares its iPhone's address (a watch tunnels
+      //     through its paired phone), so the pair trips a rule an iPad never does (GitHub #21).
+      this.refused = true;                    // nothing to wait for — retrying cannot help
+      this.callbacks.onElsewhere?.(String(msg.radio || 'another radio'));
       return;
     }
     if (msg.type === 'evicted') {

@@ -3338,6 +3338,27 @@ export default function SDRScreen({ route, navigation }: Props) {
           note: 'Try again in a few minutes, or pick another server.',
         });
       },
+      // ★★★ ALREADY LISTENING ON ANOTHER RADIO OF THIS SERVER. A deliberate policy — one radio per
+      //     address, so one visitor cannot hold every radio of a multi-radio server at once — and
+      //     the server names the radio being held. Until now the app ignored the message entirely
+      //     and sat on "waterfall initializing" for ever, which made a rule working perfectly look
+      //     like a broken server (GitHub #21).
+      //  ★★ NOT A QUEUE, and it must not read like one: there is nothing to wait for, because the
+      //     slot is already yours. Closing the other radio frees this one at once — which is the
+      //     only instruction that helps, so it is the one on the card.
+      //  ★ The wording says "on this network" rather than "on this device": a watch tunnels through
+      //    its paired phone and shares its address, so the other radio may genuinely be held by a
+      //    different gadget of yours — which is exactly how this was found.
+      onElsewhere: (radio: string) => {
+        if (destroyed.current) return;
+        setRefusal({
+          title: 'ALREADY LISTENING',
+          body: `Something on this network is already listening to ${radio} on this server, `
+              + 'and it serves one radio per address at a time.',
+          note: 'Close that one and this will free up straight away. An Apple Watch shares its '
+              + "iPhone's address, so it counts as the same listener.",
+        });
+      },
       onEvicted: () => {
         if (destroyed.current) return;
         // ★ Cancel any armed connection-lost card: the socket is about to close, and "TAKEN BACK"

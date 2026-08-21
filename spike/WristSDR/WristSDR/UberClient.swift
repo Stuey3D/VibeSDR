@@ -1840,6 +1840,25 @@ final class UberClient: ObservableObject {
       }
       return
     }
+    // ★★★ ALREADY LISTENING ON ANOTHER RADIO OF THIS SERVER — one radio per address, deliberately,
+    //     so one visitor cannot hold every radio of a multi-radio server at once. The server says so
+    //     within microseconds and names the radio; Jr ignored the message entirely and sat on
+    //     "waiting for signal" until something else timed out, so a rule working exactly as designed
+    //     looked like a dead server.
+    //  ★★ A WATCH IS THE MOST LIKELY THING TO TRIP IT AND THE LEAST OBVIOUS: it tunnels through its
+    //     paired iPhone, so the two share ONE address and count as one listener — while an iPad,
+    //     having its own, never does. That asymmetry is exactly how ff-mish found it (GitHub #21).
+    //  ★ Terminal: there is no slot to wait for, so retrying cannot help. Closing the other radio
+    //    frees this one at once, and that is the only instruction worth putting on a watch screen.
+    if type == "elsewhere" {
+        let radio = (j["radio"] as? String) ?? "another radio"
+        Task { @MainActor in
+            self.vibeDiag = "Already listening to \(radio) on this server — one radio per address. "
+                          + "Close it (or the phone/watch sharing this address) to free this one."
+            self.status = "refused: already listening elsewhere"
+        }
+        return
+    }
     if type == "dial_refused" {
       Task { @MainActor in
         self.dialRefusedNote = "This receiver is listen-only — the owner tunes it."
