@@ -189,6 +189,22 @@ struct AdcStats {
  *    put it, and the loop moves underneath without being noticed. Bounded, because a compensation
  *    of tens of dB would be amplifying almost nothing. */
 static std::atomic<float> g_digGain{1.0f};
+/** ★★★ WHERE THE COMPENSATION IS GOING, AND WHY IT GLIDES RATHER THAN JUMPS.
+ *
+ *  The tuner's gain changes at the tuner; the compensation is applied at the CONVERSION. In between
+ *  sit the samples already in flight — captured at the OLD RF gain, waiting in the USB buffers and
+ *  the IQ queue — and those would be multiplied by the NEW compensation. For one buffer the level is
+ *  wrong by the size of the step, in the wrong direction, and then it corrects: a step for the audio
+ *  AGC to chase, which is what Stuart kept hearing and kept attributing to the audio AGC. He was
+ *  right about the mechanism; the step was just being made somewhere I had not looked.
+ *
+ *  ★★ A GLIDE HAS NO EDGE FOR IT TO CHASE. Moving 20% of the way per buffer reaches the new value in
+ *     about 80 ms — slow enough that the in-flight samples are never multiplied by a wildly wrong
+ *     figure, fast enough that the compensation has caught up long before anybody could notice a
+ *     drift. It also costs nothing: the conversion already reads a constant per buffer.
+ *  ★ Exactly the asymmetry the RF loop uses, for the same reason: what hurts is never the size of a
+ *    change, it is the suddenness. */
+static std::atomic<float> g_digGainTarget{1.0f};
 
 static inline void convU8ToF32(const uint8_t* in, float* out, int nF, AdcStats* st = nullptr) {
     const float dg = g_digGain.load(std::memory_order_relaxed);
@@ -1834,7 +1850,23 @@ struct LocalSdrShim::Impl {
     std::condition_variable iqSpaceCv;          // TCP reader waits here when full
     std::atomic<bool> dspRunning{false};
     std::thread dspThread;
-    static constexpr size_t IQ_QUEUE_MAX = 8;   // USB: drop oldest beyond this (overrun)
+    /** ★★★ DEEP ENOUGH TO SURVIVE A GAIN CHANGE. This was 8, on the reasoning written just below —
+     *  USB IQ arrives on a hardware clock and the queue idles near empty, so it never fills. True,
+     *  until the DSP thread BLOCKS: it takes modeMtx per buffer, and writing the tuner's gain holds
+     *  that same lock across several I2C control transfers. The queue then fills in tens of
+     *  milliseconds and dropOldestLocked() punches a HOLE IN THE MIDDLE OF THE STREAM.
+     *
+     *  ★★ A DROPPED BUFFER IS NOT A LEVEL PROBLEM, WHICH IS WHY IT LOOKED SO STRANGE. Stuart heard
+     *     "almost a full mute" and saw "the RDS unlocks too" — and RDS is the tell that settles it:
+     *     the FM discriminator's output is an ANGLE, so nothing about amplitude can unlock it. Only
+     *     missing samples can. Every level-based explanation (the audio AGC, the compensation, the
+     *     stereo blend) was chasing a symptom that was never amplitude at all.
+     *
+     *  ★ 24 chunks buys roughly 80 ms of absorption. The DSP drains faster than real time, so the
+     *    queue empties again the moment it is unblocked: the cost is a few milliseconds of extra
+     *    latency during an event that used to be a click, and nothing at all the rest of the time.
+     *  ★ The memory is trivial — chunks of cf32 that are allocated and freed either way. */
+    static constexpr size_t IQ_QUEUE_MAX = 24;  // USB: drop oldest beyond this (overrun)
 
     // ── Network jitter buffer (TCP path only) ────────────────────────────────
     // USB IQ arrives on a hardware clock and the queue idles near empty, so 8
@@ -9789,6 +9821,14 @@ struct LocalSdrShim::Impl {
         //     overloaded front end, and a detector that cries wolf at those is one the owner
         //     learns to ignore.
         AdcStats st;
+        // ★ Glide the compensation towards its target — see g_digGainTarget. One multiply-add per
+        //   BUFFER, not per sample.
+        {
+            const float tgt = g_digGainTarget.load(std::memory_order_relaxed);
+            const float cur = g_digGain.load(std::memory_order_relaxed);
+            const float nxt = (std::fabs(tgt - cur) < 1e-4f) ? tgt : cur + (tgt - cur) * 0.2f;
+            g_digGain.store(nxt, std::memory_order_relaxed);
+        }
         convU8ToF32(buf, reinterpret_cast<float*>(v.data()), sampCount * 2, &st);  // NEON
         {
             adcRails_ += st.rails; adcTotal_ += st.total;
@@ -9852,6 +9892,15 @@ struct LocalSdrShim::Impl {
                     dropOldestLocked();
                 }
             } else if (iqQueue.size() >= IQ_QUEUE_MAX) {
+                // ★★ SAY IT. A dropped buffer is a discontinuity — slipped PLLs, unlocked RDS, a
+                //    gap in the audio — and it used to happen in silence, which is why it was
+                //    diagnosed by ear instead of from the log.
+                static double lastDropLog = 0;
+                const double nd = nowSecs();
+                if (nd - lastDropLog > 2.0) {
+                    lastDropLog = nd;
+                    LOGI("IQ overrun — dropping a buffer (the DSP thread was blocked)");
+                }
                 dropOldestLocked();                       // USB: bounded by chunk count
             }
             iqQueuedSamples += v.size();
@@ -13096,7 +13145,8 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     }
     g_gainTarget.store(ceiling, std::memory_order_relaxed);
     g_gainRef.store(applyGain, std::memory_order_relaxed);   // where the owner put it
-    g_digGain.store(1.0f, std::memory_order_relaxed);
+    g_digGain.store(1.0f, std::memory_order_relaxed);        // a fresh start has nothing to glide from
+    g_digGainTarget.store(1.0f, std::memory_order_relaxed);
     g_ovlSteps.store(startSteps, std::memory_order_relaxed);
     rtlsdr_set_tuner_gain_mode(impl->dev, 1);
     if (applyGain >= 0) rtlsdr_set_tuner_gain(impl->dev, applyGain);
@@ -13904,7 +13954,9 @@ void LocalSdrShim::setGain(int gainTenthDb) {
     p->lastGainTenthDb = gainTenthDb;
     g_gainTarget.store(gainTenthDb, std::memory_order_relaxed);
     g_gainRef.store(gainTenthDb, std::memory_order_relaxed);
-    g_digGain.store(1.0f, std::memory_order_relaxed);   // a chosen gain IS the reference level
+    // ★ A chosen gain IS the reference level, so the compensation goes home — gliding, like every
+    //   other move, because a listener moving the slider deserves no click either.
+    g_digGainTarget.store(1.0f, std::memory_order_relaxed);
     g_ovlSteps.store(0, std::memory_order_relaxed);
     rtlsdr_set_tuner_gain_mode(p->dev, 1);
     rtlsdr_set_tuner_gain(p->dev, gainTenthDb);
@@ -14093,7 +14145,7 @@ void LocalSdrShim::overloadTick() {
             const double cl = dB > 20.0 ? 20.0 : (dB < -20.0 ? -20.0 : dB);
             dg = (float)std::pow(10.0, cl / 20.0);
         }
-        g_digGain.store(dg, std::memory_order_relaxed);
+        g_digGainTarget.store(dg, std::memory_order_relaxed);
     }
     if (want < steps) {                       // this was a climb — put it on trial
         g_floorBeforeClimb.store(p->iqFloorDb.load(), std::memory_order_relaxed);
