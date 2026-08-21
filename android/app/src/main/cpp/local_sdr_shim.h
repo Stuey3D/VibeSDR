@@ -102,6 +102,10 @@ public:
      *  what the owner means by "when I tune into FM". */
     double listenFrequency() const;
     static bool agcLocked();
+    /** ★★★ RTL OVERLOAD PROTECTION — one call per second, FROM THE DSP THREAD ONLY. It takes the
+     *  hardware lock and touches the tuner, so the libusb callback must never call it (see the
+     *  note on enqueueIq). Non-static: it works on the live device. */
+    void overloadTick();
     /** The gain the radio is ACTUALLY set to, in its own units (tenths of a dB on an RTL);
      *  -1 = auto/AGC. Sent in hwinfo so a remote client can SHOW the truth instead of imposing
      *  its own remembered value on a radio it does not own. */

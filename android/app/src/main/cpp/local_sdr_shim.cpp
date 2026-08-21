@@ -1012,6 +1012,27 @@ static std::mutex            g_gainLimMtx;
 static vibebands::GainRules  g_gainLimits;
 static std::atomic<int>      g_restGain{-1};
 static std::atomic<bool>     g_agcLock{false};
+/** ★★★ RTL OVERLOAD PROTECTION — the RSP gets a hardware flag, the dongle gets this.
+ *
+ *  `g_gainTarget` is what the OWNER (or an admin listener) asked for; `g_ovlSteps` is how many
+ *  tuner steps BELOW it we are currently sitting because the front end was being overdriven.
+ *  Applied gain is therefore always `target - ovlSteps` steps down the tuner's own list, and the
+ *  protection can only ever REDUCE gain from the asked-for value — never exceed it, never invent
+ *  one. That bound is what makes it safe to leave on: at worst it costs sensitivity on a signal
+ *  that was already clipping, and clipping is not sensitivity, it is ghosts.
+ *
+ *  ★★ IT MUST RECOVER, or a lightning crash would deafen the receiver until somebody restarted it.
+ *     Down fast (two seconds of rail hits is already the detector's own dwell), up slowly, one step
+ *     at a time — asymmetry is what stops a loop like this pumping.
+ *  ★ An explicit setGain() is a NEW INTENT and resets the backoff: whoever just moved the slider
+ *    gets what they asked for, and the protection starts again from there. */
+static std::atomic<int>      g_gainTarget{-1};
+static std::atomic<int>      g_ovlSteps{0};
+/** Consecutive 1-second windows with, and without, samples on the rail. Written by the libusb
+ *  callback (cheap: two stores), read by the DSP thread, which is the only one that may touch the
+ *  radio — see the note on enqueueIq. */
+static std::atomic<int>      g_adcClipRun{0};
+static std::atomic<int>      g_adcCleanRun{0};
 
 /** ★★★ THE COOLDOWN IS WHAT MAKES THE LIMIT REAL. Every client auto-reconnects on close, so a
  *  plain disconnect would be a blip: the same listener would retake the free radio within
@@ -9667,6 +9688,11 @@ struct LocalSdrShim::Impl {
                 //    ADC for a handful of samples and means nothing; a front end being overdriven
                 //    keeps doing it. The dwell is what separates them.
                 clipRun_ = (clipPct > 0.0) ? clipRun_ + 1 : 0;
+                // ★ Published for the overload protection, which runs on the DSP thread — this is
+                //   the libusb callback and may not touch the radio (see the header note).
+                g_adcClipRun.store(clipRun_, std::memory_order_relaxed);
+                g_adcCleanRun.store(clipPct > 0.0 ? 0 : g_adcCleanRun.load(std::memory_order_relaxed) + 1,
+                                    std::memory_order_relaxed);
                 if (clipRun_ >= 2)
                     LOGI("ADC OVERLOAD: %.3f%% of samples on the rail, peak %.1f dBFS "
                          "(gain is too high for this signal)",
@@ -10150,7 +10176,15 @@ struct LocalSdrShim::Impl {
         // (e.g. Moto G35 / Unisoc) cores. Pin it to real audio priority so the
         // scheduler treats it like the AudioTrack callback (v5/old-arch behaviour).
         vibeAudioThread("vibe-dsp");
+        // ★ The overload protection lives HERE, not in the IQ producer: enqueueIq is the libusb
+        //   callback and must take no locks and touch no hardware. This thread already takes
+        //   modeMtx per buffer, so the hardware lock is nothing new for it.
+        double ovlAt = 0;
         while (dspRunning.load()) {
+            {
+                const double now = nowSecs();
+                if (now - ovlAt >= 1.0) { ovlAt = now; LocalSdrShim::instance().overloadTick(); }
+            }
             std::vector<cf32> buf;
             {
                 std::unique_lock<std::mutex> lk(iqMtx);
@@ -13594,6 +13628,12 @@ void LocalSdrShim::setDecoderFreq(double hz) {
 
 void LocalSdrShim::setGain(int gainTenthDb) {
     if (!p) return;
+    // ★★ WHOEVER MOVED THE SLIDER GETS WHAT THEY ASKED FOR. An explicit gain is a new intent, so
+    //    any overload backoff is forgotten and the protection starts again from here. Without this
+    //    the owner would set 12.5 dB, the protection would still be holding it 4 steps down from a
+    //    signal that has since gone, and the radio would sit somewhere nobody chose.
+    g_gainTarget.store(gainTenthDb, std::memory_order_relaxed);
+    g_ovlSteps.store(0, std::memory_order_relaxed);
     // ★★ THE SAME LOCK THE RSP AND AIRSPY SETTERS ALREADY USE (VIBE_HW_LOCK). The RTL ones
     //    never took it, which is why reopenDevice() could never be called: a close could
     //    land mid-tune, and libusb turns that into an ABORT, not an error.
@@ -13637,6 +13677,67 @@ void LocalSdrShim::setGain(int gainTenthDb) {
 }
 /** The gain the radio is ACTUALLY set to, in its own units; -1 = auto/AGC. */
 int LocalSdrShim::currentGainTenthDb() const { return p ? p->lastGainTenthDb : -1; }
+
+/**
+ * ★★★ OVERLOAD PROTECTION FOR THE DONGLE — what the RSP gets from a hardware flag.
+ *
+ * Called once a second FROM THE DSP THREAD (never the libusb callback, which may not take modeMtx
+ * or touch the radio). Reads the rail counters the ADC detector already produces and walks the
+ * tuner's OWN gain list, because an R820T has 29 fixed steps and nothing in between — asking for a
+ * value it does not have would be silently snapped somewhere else.
+ *
+ * ★★ IT CANNOT RUN AWAY. `g_gainTarget` is the ceiling: the protection only ever sits at or below
+ *    what the owner asked for, so the worst it can do is cost sensitivity on a signal that was
+ *    already clipping — and clipping is not sensitivity, it is intermodulation and ghosts.
+ * ★★ DOWN FAST, UP SLOW. Two seconds of rail hits is the detector's own dwell and already means "a
+ *    front end being overdriven, not a spark plug". Recovery waits far longer and moves one step,
+ *    because a loop that rises as eagerly as it falls is a loop that pumps.
+ * ★ Only the dongle. The HF+ and the RSP have their own AGC and their own lock; this is the radio
+ *   that has neither, which is the whole reason it exists.
+ */
+void LocalSdrShim::overloadTick() {
+    if (!p) return;
+    if (p->useSpy() || p->useTcp() || p->useSdrplay()) return;   // they manage themselves
+    const int target = g_gainTarget.load(std::memory_order_relaxed);
+    if (target < 0) return;            // auto, or nothing set — no ceiling to protect from
+
+    const int clipRun  = g_adcClipRun.load(std::memory_order_relaxed);
+    const int cleanRun = g_adcCleanRun.load(std::memory_order_relaxed);
+    const int steps    = g_ovlSteps.load(std::memory_order_relaxed);
+
+    int want = steps;
+    if (clipRun >= 2)                     want = steps + 1;      // overdriven — back off
+    else if (steps > 0 && cleanRun >= 20) want = steps - 1;      // long since clean — creep back
+    if (want == steps) return;
+
+    VIBE_HW_LOCK();
+    if (!p || !p->dev || p->radioReleased.load()) return;
+    int n = rtlsdr_get_tuner_gains(p->dev, nullptr);
+    if (n <= 1) return;
+    std::vector<int> gains((size_t)n);
+    rtlsdr_get_tuner_gains(p->dev, gains.data());
+    // The tuner's list is ascending; find where the owner's target sits on it.
+    int tgtIdx = 0;
+    for (int i = 0; i < n; i++) if (gains[(size_t)i] <= target) tgtIdx = i;
+    if (want > tgtIdx) want = tgtIdx;                 // cannot go below the bottom of the list
+    if (want < 0) want = 0;
+    const int idx = tgtIdx - want;
+    const int applied = gains[(size_t)idx];
+    g_ovlSteps.store(want, std::memory_order_relaxed);
+    p->lastGainTenthDb = applied;
+    rtlsdr_set_tuner_gain_mode(p->dev, 1);
+    rtlsdr_set_tuner_gain(p->dev, applied);
+    if (want > steps)
+        LOGI("ADC overload — gain %.1f dB (%d step%s below the owner's %.1f dB)",
+             applied / 10.0, want, want == 1 ? "" : "s", target / 10.0);
+    else
+        LOGI("clean for %ds — gain back up to %.1f dB (%d below %.1f dB)",
+             cleanRun, applied / 10.0, want, target / 10.0);
+    // ★ Reset the run that triggered us, or one sustained overload would walk the gain to the
+    //   bottom in as many seconds as there are steps.
+    if (want > steps) g_adcClipRun.store(0, std::memory_order_relaxed);
+    else              g_adcCleanRun.store(0, std::memory_order_relaxed);
+}
 /** ★★★ LET THE RADIO GO WITHOUT STOPPING THE SERVER.
  *
  *  For a machine where VibeServer shares one SDR with something else (OpenWebRX, a decoder), the
