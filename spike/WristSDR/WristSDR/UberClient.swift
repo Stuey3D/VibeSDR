@@ -472,8 +472,19 @@ final class UberClient: ObservableObject {
       return false      // ★ Can't tell ⇒ carry on. A failed probe must not block a connect.
     }
     takeoverPossible = (j["admin"] as? Bool) ?? false
+    // ★★★ HOW THE LIMIT BEHAVES, not just how long it is. On a SOFT limit the clock is a GUARANTEE,
+    //     not a deadline: when it runs out you keep the radio until somebody else actually wants
+    //     it. A client that cannot tell the two apart has to assume the worst, and Jr did — it
+    //     declared the session over at zero while the audio was still playing (Stuart, 2026-08-21:
+    //     "it isnt respecting the soft limit … all I can do is try again or back to servers").
+    //  ★ ABSENT MEANS HARD, which is what every older server implies and what the shim documents.
+    sessionLimitSoft = (j["limitMode"] as? String) == "soft"
     return (j["busy"] as? Bool) ?? false
   }
+
+  /// The session limit is a GUARANTEE rather than a deadline — see `vibeIsBusy`. Published so the
+  /// pill can say something true, and so nothing downstream ends a session the server has not.
+  @Published var sessionLimitSoft = false
 
   /// Whether the owner's password has been proved for the NEXT connection.
   @Published var adminProved = false

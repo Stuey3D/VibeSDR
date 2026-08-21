@@ -496,12 +496,21 @@ link.setAutoContrast(wfAutoContrast)
           .transition(.opacity)
         } else if link.showSessionPill {
           HStack(spacing: 4) {
-            Image(systemName: "hourglass").font(.system(size: 10, weight: .bold))
-            Text(link.sessionLeftText).font(.system(size: 12, weight: .semibold, design: .rounded))
+            // ★ A soft limit is a SHIELD, not an hourglass draining away — and once it has expired
+            //   the number is meaningless, so the pill stops counting and says what is true.
+            Image(systemName: link.sessionLimitSoft
+                  ? (link.sessionSecsLeft == 0 ? "checkmark.shield" : "shield.lefthalf.filled")
+                  : "hourglass")
+              .font(.system(size: 10, weight: .bold))
+            Text(link.sessionLimitSoft && link.sessionSecsLeft == 0 ? "OPEN" : link.sessionLeftText)
+              .font(.system(size: 12, weight: .semibold, design: .rounded))
           }
           .foregroundStyle(.white)
           .padding(.horizontal, 9).padding(.vertical, 4)
-          .background((link.sessionSecsLeft <= 120 ? Color.red : Color.black).opacity(0.75), in: Capsule())
+          // ★★ RED IS FOR "YOU ARE ABOUT TO BE CUT OFF", which on a soft receiver is never true at
+          //    zero — nobody is cut off until another listener wants the slot. Alarming someone
+          //    about a deadline that does not exist is how a promise gets read as a threat.
+          .background(((link.sessionSecsLeft <= 120 && !link.sessionLimitSoft) ? Color.red : Color.black).opacity(0.75), in: Capsule())
           .overlay(Capsule().stroke(.white.opacity(0.2), lineWidth: 1))
           .padding(.bottom, 2)
           .transition(.opacity)

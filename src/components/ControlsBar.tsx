@@ -283,7 +283,7 @@ export interface ControlsBarProps {
   /** SpyServer: another client owns the tuner — grey the drums, disable tuning. */
   readOnly?: boolean;
   /** Time-limited receiver countdown shown beside the clock. */
-  sessionLeft?: { text: string; urgent: boolean } | null;
+  sessionLeft?: { text: string; urgent: boolean; soft?: boolean } | null;
   /** ★★★ WHO ELSE IS ON THIS DIAL — the answer to the only question that matters before you turn
    *  it. On a shared-VFO receiver anybody may tune and the server stops nobody, so the etiquette is
    *  the whole mechanism; but asking in the chat every time would be absurd when you are the only
@@ -898,7 +898,8 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
           ) : !!sessionLeft && (
             <Text style={{ color: sessionLeft.urgent ? '#ff6b6b' : t.clockColor,
                            fontFamily: t.font, fontSize: CLOCK_FONT, opacity: 0.9 }}>
-              ⏳{sessionLeft.text}
+              {/* ★ A soft limit is a shield, not a draining hourglass — see SDRScreen. */}
+              {sessionLeft.soft ? '🛡' : '⏳'}{sessionLeft.text}
             </Text>
           )}
           {/* The room, beside the clock — the same kind of fact as "how long have I got", and read

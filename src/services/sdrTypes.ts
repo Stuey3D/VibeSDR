@@ -287,6 +287,13 @@ export interface ServerOccupancy {
   freeInSec: number;
   /** The owner's per-listener limit in minutes, 0 = unlimited. */
   limitMin: number;
+  /** ★★★ HOW THAT LIMIT BEHAVES. 'soft' means it is a GUARANTEE, not a deadline: when it runs out
+   *  you keep the radio until somebody else actually wants it, and only then does the server give
+   *  60 seconds' notice. ★ ABSENT MEANS HARD — every older server implies that, and a client which
+   *  cannot tell them apart has to assume the worst and says so, wrongly, for the rest of a session
+   *  that is not ending. (Jr did exactly that: it declared the session over at zero while the audio
+   *  was still playing — GitHub #21 / Stuart, 2026-08-21.) */
+  limitSoft: boolean;
   /** Does this server have an admin password? Only then is an override box worth offering. */
   admin: boolean;
   /** ★★ THE OWNER'S UNCOMPRESSED-AUDIO POLICY, and it is THREE-way for a reason — see
@@ -334,6 +341,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       // distinct from "free now", which are very different things to show someone.
       freeInSec: typeof j.freeInSec === 'number' ? j.freeInSec : -1,
       limitMin:  typeof j.limitMin === 'number' ? j.limitMin : 0,
+      limitSoft: j.limitMode === 'soft',
       admin:     j.admin === true,
       uncompressed: j.uncompressed === 'choice' || j.uncompressed === 'compat'
                     || j.uncompressed === 'off' ? j.uncompressed : undefined,

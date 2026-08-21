@@ -3987,6 +3987,22 @@ export default function SDRScreen({ route, navigation }: Props) {
     setSessionEndsAt(Date.now() + sessionLimitMins * 60_000);
   }, [connected, sessionLimitMins, sessionEndsAt, adminOk]);
 
+  /** ★★★ IS THE LIMIT A DEADLINE OR A GUARANTEE? Asked of the RADIO we actually connected to
+   *  (`connectBase`), not the front door — on a multi-radio server the door has no limit of its own
+   *  and each receiver sets its own policy.
+   *  ★★ The app never had Jr's bug — only `session_expired` from the server ends a session here —
+   *     but it would still sit showing a dead red ⏳0:00 for the rest of a session that is not
+   *     ending, which tells the same lie more quietly. */
+  const [limitSoft, setLimitSoft] = useState(false);
+  useEffect(() => {
+    if (!connected) return;
+    let cancelled = false;
+    fetchOccupancy(connectBase)
+      .then((o) => { if (!cancelled && o) setLimitSoft(!!o.limitSoft); })
+      .catch(() => {});   // ★ Silent: a Kiwi/OWRX/older VibeServer answers nothing useful here.
+    return () => { cancelled = true; };
+  }, [connected, connectBase]);
+
   useEffect(() => {
     if (!sessionEndsAt) return;
     const tick = () => setSessionLeftMs(Math.max(0, sessionEndsAt - Date.now()));
@@ -7123,8 +7139,15 @@ export default function SDRScreen({ route, navigation }: Props) {
           activeDecoder={activeDecoder}
           adminMode={adminOk}
           sessionLeft={sessionLeftMs == null ? null : {
-            text: `${Math.floor(sessionLeftMs / 60000)}:${String(Math.floor((sessionLeftMs % 60000) / 1000)).padStart(2, '0')}`,
-            urgent: sessionLeftMs < 120_000,
+            // ★ Once a GUARANTEE has run out the number means nothing — you are not counting down
+            //   to anything — so it stops being a clock and says what is actually true.
+            text: (limitSoft && sessionLeftMs <= 0)
+              ? 'open'
+              : `${Math.floor(sessionLeftMs / 60000)}:${String(Math.floor((sessionLeftMs % 60000) / 1000)).padStart(2, '0')}`,
+            // ★★ RED MEANS "YOU ARE ABOUT TO BE CUT OFF", which on a soft receiver is never true:
+            //    nobody is moved until another listener wants the slot, and then with 60s notice.
+            urgent: !limitSoft && sessionLeftMs < 120_000,
+            soft: limitSoft,
           }}
           // ★ Only on a shared dial: on an ordinary receiver the dial is yours and a listener
           //   count is trivia, not permission.

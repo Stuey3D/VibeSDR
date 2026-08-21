@@ -153,6 +153,10 @@ final class SpikeLink: ObservableObject {
   @Published var sessionSecsLeft = -1
   /// The owner's limit in minutes, for the one-off "you have XX minutes" notice.
   @Published var sessionLimitMin = 0
+  /// ★★ THE LIMIT IS A GUARANTEE, NOT A DEADLINE. On a soft-limited receiver the clock running out
+  /// means "your protected time is up" — you keep the radio until somebody else actually wants it,
+  /// and the SERVER decides when that is. Mirrored from the client so the pill can say so.
+  @Published var sessionLimitSoft = false
   /// True while the countdown pill should be ON SCREEN. ★ Not a permanent readout:
   /// a clock ticking down all session long is nagging, and one that only appears at
   /// the very end is a shock. So it SHOWS at the marks that matter and stays put
@@ -235,7 +239,12 @@ final class SpikeLink: ObservableObject {
     if !sessionNoticeDone {
       sessionNoticeDone = true
       if sessionLimitMin > 0 {
-        sessionNotice = "The owner limits each listener to \(sessionLimitMin) minutes."
+        // ★★ SAY WHICH KIND OF LIMIT IT IS. "Limited to 30 minutes" is simply untrue on a soft
+        //    receiver — you are GUARANTEED 30 and usually keep it far longer — and a listener who
+        //    believes the wrong one either rushes or feels cheated when the clock passes zero.
+        sessionNotice = sessionLimitSoft
+          ? "The owner guarantees you \(sessionLimitMin) minutes — after that you keep the radio until somebody else wants it."
+          : "The owner limits each listener to \(sessionLimitMin) minutes."
         sessionNoticeUntil = now + 10   // ★ it goes on its own; a tap is a shortcut, not the only way
       }
       sessionPillUntil = now + 10     // hold it up while the notice is read
@@ -249,9 +258,24 @@ final class SpikeLink: ObservableObject {
     showSessionPill = left <= 120 || now < sessionPillUntil
     // Ran out. Hold 00:00 on screen with the reason, then hand back to the picker —
     // WristSDRApp does the waiting so the message survives the disconnect.
+    // ★★★ RUNNING OUT IS NOT THE SAME AS BEING ENDED, AND ONLY THE SERVER KNOWS WHICH. This set
+    //     `sessionEnded` — a TERMINAL state whose only exits are "try again" and "back to servers"
+    //     — purely because a local countdown hit zero. On a SOFT limit the server does not end
+    //     anything while the radio has room: it keeps streaming, and Stuart watched Jr put up a
+    //     dead-session screen with the audio still playing behind it (2026-08-21).
+    //  ★★ So on a soft limit, zero changes the WORDING and nothing else. The session ends when
+    //     `session_expired` arrives — which the server sends only when somebody else is actually
+    //     waiting, after its 60-second handover notice.
+    //  ★ A HARD limit keeps the old behaviour exactly: zero means gone.
     if left == 0 && !sessionEnded {
-      sessionEnded = true
-      showSessionPill = true
+      if sessionLimitSoft {
+        showSessionPill = true
+        sessionNotice = "Your guaranteed time is up — you keep the radio until somebody else wants it."
+        sessionNoticeUntil = now + 12
+      } else {
+        sessionEnded = true
+        showSessionPill = true
+      }
     }
   }
 
@@ -497,7 +521,7 @@ final class SpikeLink: ObservableObject {
     //   claim an exemption this server has never granted — and hide a countdown that is running.
     adminOk = false
     adminArmed = false; adminArmFailed = false
-    sessionSecsLeft = -1; sessionLimitMin = 0
+    sessionSecsLeft = -1; sessionLimitMin = 0; sessionLimitSoft = false
     sessionShownMarks.removeAll(); sessionNoticeDone = false
     sessionNotice = nil; showSessionPill = false; sessionPillUntil = 0; sessionEnded = false
     sessionDeadline = nil; lastServerSecs = -1; sessionNoticeUntil = 0
@@ -636,6 +660,7 @@ final class SpikeLink: ObservableObject {
       if serverBusy != u.serverBusy { serverBusy = u.serverBusy }
       if takeoverPossible != u.takeoverPossible { takeoverPossible = u.takeoverPossible }
       if sessionLimitMin != u.sessionLimitMin { sessionLimitMin = u.sessionLimitMin }
+      if sessionLimitSoft != u.sessionLimitSoft { sessionLimitSoft = u.sessionLimitSoft }
       // The SERVER's word re-bases the clock; between its messages we run the clock
       // ourselves, which is what makes the pill actually count down.
       if u.sessionSecsLeft != lastServerSecs {
