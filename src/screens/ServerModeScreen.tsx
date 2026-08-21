@@ -97,6 +97,7 @@ const K = {
   advanced: 'vs_advanced', maxUsers: 'vs_maxusers',
   allowRanges: 'vs_allow', blockRanges: 'vs_block',
   gainLimits: 'vs_gainlimits', restGain: 'vs_restgain', agcLock: 'vs_agclock',
+  ovlProtect: 'vs_ovlprotect', rtlAgc: 'vs_rtlagc',
   proxies: 'vs_proxies', radioUse: 'vs_radiouse',
   landingHz: 'vs_landinghz', landingMode: 'vs_landingmode', biasT: 'vs_biast',
 };
@@ -157,6 +158,11 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [blockRanges, setBlockRanges] = useState('');
   const [gainLimits, setGainLimits]   = useState('');
   const [restGain, setRestGain]       = useState(-1);
+  /** ★★★ ONE SLIDER, TWO MEANINGS — see the note by the toggles. Protection is ON by default (it
+   *  can only ever prevent clipping); the AGC is OFF, because it may raise the gain above what the
+   *  owner set and that has to be asked for. */
+  const [ovlProtect, setOvlProtect]   = useState(true);
+  const [rtlAgc, setRtlAgc]           = useState(false);
   /** ★★ WHERE A LISTENER LANDS. The macOS settings window calls these "Listener's starting
    *  frequency / mode"; same setting, same words, so an owner who runs both meets one idea once.
    *  ★ 0 = leave it to the server's own default rather than assert a frequency nobody chose. */
@@ -217,7 +223,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       setName(n);
       try {
         const [p, a, pm, sp, r, fp, cp, ws, apw, unc, lim, fm,
-               mu, alw, blk, gl, rg, agl, px, ru, lhz, lmd, bt] = await Promise.all([
+               mu, alw, blk, gl, rg, agl, ovp, ragc, px, ru, lhz, lmd, bt] = await Promise.all([
           AsyncStorage.getItem(K.proto), AsyncStorage.getItem(K.advertise),
           AsyncStorage.getItem(K.pinMode), AsyncStorage.getItem(K.pin),
           AsyncStorage.getItem(K.rate), AsyncStorage.getItem(K.fps),
@@ -227,6 +233,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           AsyncStorage.getItem(K.maxUsers), AsyncStorage.getItem(K.allowRanges),
           AsyncStorage.getItem(K.blockRanges), AsyncStorage.getItem(K.gainLimits),
           AsyncStorage.getItem(K.restGain), AsyncStorage.getItem(K.agcLock),
+          AsyncStorage.getItem(K.ovlProtect), AsyncStorage.getItem(K.rtlAgc),
           AsyncStorage.getItem(K.proxies), AsyncStorage.getItem(K.radioUse),
           AsyncStorage.getItem(K.landingHz), AsyncStorage.getItem(K.landingMode),
           AsyncStorage.getItem(K.biasT),
@@ -236,6 +243,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         if (ws != null) setWebServer(ws !== '0');
         if (apw != null) setAdminPw(apw);
         if (unc === '1' || unc === '2') setUncomp(unc === '1' ? 1 : 2);
+        // ★ Absent = the safe default: protection ON, AGC OFF. An existing server must not come
+        //   back with the AGC quietly enabled by an upgrade.
+        if (ovp != null) setOvlProtect(ovp !== '0');
+        if (ragc != null) setRtlAgc(ragc === '1');
         if (lim != null) setLimitMin(Number(lim) || 0);
         if (fm != null) setAdvanced(fm === '1');
         // ★ Loaded separately from the tuple above: adding thirteen more entries to a positional
@@ -464,6 +475,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.idleGrace, String(idleGrace)], [K.antenna, antenna], [K.antennaIcon, antennaIcon],
       [K.allowRanges, allowRanges], [K.blockRanges, blockRanges],
       [K.gainLimits, gainLimits], [K.restGain, String(restGain)],
+      [K.ovlProtect, ovlProtect ? '1' : '0'], [K.rtlAgc, rtlAgc ? '1' : '0'],
       [K.agcLock, agcLock ? '1' : '0'], [K.proxies, proxies],
     ]);
     if (Platform.OS === 'android' && Platform.Version >= 33) {
@@ -524,6 +536,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           ? { lockedCentre, zoomSpectrum: zoomSpec, spectrogram }
           : {}),
         gainLimits, restGain, agcLock, trustedProxies: proxies,
+        overloadProtect: ovlProtect, rtlAgc,
       });
       setRunning(info);
       runningRef.current = true;
@@ -550,7 +563,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   }, [name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
       webServer, locMode, locCity, checkBackgroundAllowed,
       adminPw, uncomp, limitMin, advanced, maxUsers, allowRanges, blockRanges,
-      gainLimits, restGain, agcLock, proxies]);
+      gainLimits, restGain, agcLock, proxies, ovlProtect, rtlAgc]);
 
   const stopAndBack = useCallback(() => {
     stopAdvertiseRtlTcp();
@@ -1125,8 +1138,45 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               onGain={(t) => { setRestGain(t); AsyncStorage.setItem(K.restGain, String(t)); }}
               label="STARTING GAIN" />
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-              Where the radio sits before anyone connects, and where it returns when they leave —
-              so somebody who winds it up does not leave it up for the next person.
+              {rtlAgc
+                ? 'Where the AGC starts. It moves up and down from here as the band demands.'
+                : 'Where the radio sits before anyone connects, and where it returns when they leave — '
+                  + 'so somebody who winds it up does not leave it up for the next person.'}
+            </Text>
+
+            {/* ★★★ ONE SLIDER, TWO MEANINGS — Stuart, 2026-08-21: "the current return to/starting
+                gain slider applies in manual mode and with overload protection on it raises and
+                lowers to the gain a listener sets at the time, in AGC mode that same slider just
+                becomes the starting gain and the AGC will either increase or decrease as it sees
+                fit." So the slider above never moves; only what it MEANS changes, and the hint
+                changes with it.
+                ★★ The dongle is the only radio that needs any of this: the Airspy HF+ and the
+                   SDRplay have their own AGC and their own lock. */}
+            <View style={styles.rowBetween}>
+              <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                Overload protection
+              </Text>
+              <Switch value={ovlProtect} onValueChange={setOvlProtect} disabled={rtlAgc}
+                trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
+            </View>
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              {rtlAgc
+                ? 'Included in AGC — the same loop brings the gain down when the front end overloads.'
+                : 'Winds the gain down when the front end overloads, and puts it back when the '
+                  + 'signal eases. It can never go above the gain that is set.'}
+            </Text>
+
+            <View style={[styles.rowBetween, { marginTop: 12 }]}>
+              <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                AGC
+              </Text>
+              <Switch value={rtlAgc} onValueChange={setRtlAgc}
+                trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
+            </View>
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              Lets the radio use its whole gain range, starting from the figure above. The dongle
+              has no working automatic gain of its own, so this is ours: it measures how close the
+              signal is to overloading and moves a step at a time.
             </Text>
 
             {/* ★★ THE RADIO'S CAPTURE WIDTH, so it sits with the radio rather than with the

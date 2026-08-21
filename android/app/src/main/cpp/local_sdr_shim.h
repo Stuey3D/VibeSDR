@@ -94,6 +94,11 @@ public:
     static void setRestGain(int gain);
     /** Force the AGC on and refuse to let a listener turn it off (RSP and Airspy HF+). */
     static void setAgcLock(bool on);
+    /** RTL only. Protection: come DOWN from the owner's gain when the ADC rails, and return to it.
+     *  AGC: the same loop with the ceiling raised to the tuner's maximum, the owner's figure
+     *  becoming the starting point. See the notes by g_ovlProtect. */
+    static void setOverloadProtect(bool on);
+    void        setRtlAgc(bool on);
     /** The ceiling in force at a frequency, or -1 for none. Public so the client can be told. */
     static int  gainCapAt(double hz);
     /** Where the listener actually is — the VFO, falling back to the capture centre. This is the

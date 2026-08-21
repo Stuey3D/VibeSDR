@@ -744,6 +744,14 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetGainLimits(JNIEnv* env, jobject,
     vibe::LocalSdrShim::setAgcLock(agcLock == JNI_TRUE);
 }
 
+/** RTL gain automation: overload protection (manual gain) and the AGC proper. See the shim. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetGainAutomation(JNIEnv*, jobject,
+                                                          jboolean protect, jboolean agc) {
+    vibe::LocalSdrShim::setOverloadProtect(protect == JNI_TRUE);
+    vibe::LocalSdrShim::instance().setRtlAgc(agc == JNI_TRUE);
+}
+
 /** ★★ THE RADIO'S REAL GAIN LADDER, so the phone's limiter slider is over steps the hardware
  *  actually has rather than a scale invented in the GUI — the same rule the setup page follows.
  *  `lnaStates` is the RSP's RF POSITION count (0 otherwise): its limit is a position, not dB. */

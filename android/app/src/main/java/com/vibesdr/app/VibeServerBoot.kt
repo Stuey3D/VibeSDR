@@ -145,6 +145,12 @@ object VibeServerBoot {
             //    keeps them independent (setGainLimits / setRestGain / setAgcLock are separate
             //    there), so an empty limit list with a real resting gain is a perfectly ordinary
             //    combination — which is exactly what Simple mode wants.
+            // ★★★ GAIN AUTOMATION, IN BOTH MODES. Protection defaults ON — it can only ever
+            //     prevent clipping, so there is nothing to opt into. AGC defaults OFF, because it
+            //     may raise the gain ABOVE the owner's figure and that has to be asked for.
+            //  ★ Not gated on `adv`: an overloading front end is not a sharing decision, and the
+            //    starting gain it works against is offered in Simple mode too.
+            VibeLocalSDR.setGainAutomation(cfg.b("overloadProtect", true), cfg.b("rtlAgc", false))
             VibeLocalSDR.setGainLimits(
                 if (adv) cfg.s("gainLimits") else "",
                 restGain,

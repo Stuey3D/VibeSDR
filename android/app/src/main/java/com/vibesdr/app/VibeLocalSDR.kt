@@ -184,7 +184,10 @@ object VibeLocalSDR {
      *  an AGC lock. ★ Ceilings are enforced on SET, on RETUNE INTO a capped band, at START and at
      *  the idle park — a cap applied at only one of those is one a listener can walk around. */
     fun setGainLimits(csv: String, restGain: Int, agcLock: Boolean) { ensureLoaded(); nativeSetGainLimits(csv, restGain, agcLock) }
+    /** RTL only: overload protection (for a manual gain) and the AGC (the whole tuner range). */
+    fun setGainAutomation(overloadProtect: Boolean, agc: Boolean) { ensureLoaded(); nativeSetGainAutomation(overloadProtect, agc) }
     private external fun nativeSetGainLimits(csv: String, restGain: Int, agcLock: Boolean)
+    private external fun nativeSetGainAutomation(overloadProtect: Boolean, agc: Boolean)
 
     /** The radio's REAL gain ladder + the RSP's RF position count, for the limiter's slider. */
     fun gainStepsJson(): String { ensureLoaded(); return nativeGainStepsJson() }

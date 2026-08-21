@@ -117,6 +117,10 @@ export type VibeServerConfig = {
   gainLimits?: string;
   restGain?: number;
   agcLock?: boolean;
+  /** ★ RTL gain automation. Protection defaults ON (it can only prevent clipping); the AGC defaults
+   *  OFF, because it may raise the gain above the owner's figure. See VibeServerBoot. */
+  overloadProtect?: boolean;
+  rtlAgc?: boolean;
   /** Reverse proxies whose X-Forwarded-For we believe — required behind a tunnel, or every
    *  visitor arrives as 127.0.0.1 and the limits and ban list cannot tell anyone apart. */
   trustedProxies?: string;
@@ -190,6 +194,8 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     gainLimits: cfg.gainLimits ?? '',
     restGain: cfg.restGain ?? -1,
     agcLock: cfg.agcLock ?? false,
+    overloadProtect: cfg.overloadProtect ?? true,
+    rtlAgc: cfg.rtlAgc ?? false,
     trustedProxies: cfg.trustedProxies ?? '',
   });
   // Hand the web client's search its station list. Fire-and-forget: the server is

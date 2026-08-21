@@ -1033,6 +1033,39 @@ static std::atomic<int>      g_ovlSteps{0};
  *  radio — see the note on enqueueIq. */
 static std::atomic<int>      g_adcClipRun{0};
 static std::atomic<int>      g_adcCleanRun{0};
+/** ★★★ HOW MUCH HEADROOM A CLIMB MUST PROVE, and why it is not a constant.
+ *
+ *  The prediction (peak + step must still clear full scale) is right in principle and works off a
+ *  peak that is up to a second old, on a signal that moves. So it can say "this fits" and be wrong
+ *  — and the loop then straddles two steps, which is exactly what Stuart watched it do between 3.7
+ *  and 7.7 dB: the R820T has nothing in between, the radio wanted about 5, and neither neighbour
+ *  was stable.
+ *
+ *  ★★ SO THE LOOP LEARNS. A climb that clips is not just undone, it RAISES THE PRICE of the next
+ *     attempt. Try, fail, and the margin widens — so the second attempt needs conditions to be
+ *     genuinely better, not marginally. It settles on the safe step and stays there.
+ *  ★ And it decays again after a long quiet spell, so a receiver that was overloaded at breakfast is
+ *    not still being cautious about it at midnight. Tuning away from the strong signal drops the
+ *    peak by far more than the margin ever widens, which is what makes "it goes back up when I
+ *    leave 104.2" work. */
+/** ★★★ TWO SETTINGS, ONE LOOP — and the difference is only what the CEILING is.
+ *
+ *  · OVERLOAD PROTECTION (manual gain): the ceiling is the gain the owner chose. The loop may only
+ *    come DOWN from it and return to it. It cannot make a receiver louder than it was told to be.
+ *  · AGC: the ceiling is the tuner's maximum (49.6 dB on an R820T), and the owner's figure becomes
+ *    the STARTING point instead — "AGC starting at 14.4" (Stuart, 2026-08-21). The loop then has
+ *    the full range in both directions.
+ *
+ *  ★★ AGC INCLUDES THE PROTECTION by construction: coming down when the ADC rails is the same code
+ *     either way. So AGC wins where both are set, and the protection toggle simply stops mattering.
+ *  ★ Protection defaults ON (it can only ever prevent clipping, so there is nothing to opt into);
+ *    AGC defaults OFF, because it may RAISE gain beyond what the owner set and that must be asked
+ *    for. */
+static std::atomic<bool>     g_ovlProtect{true};
+static std::atomic<bool>     g_rtlAgc{false};
+static std::atomic<double>   g_ovlMargin{3.0};
+static std::atomic<double>   g_ovlLastChangeAt{0.0};
+static std::atomic<int>      g_ovlLastDir{0};
 
 /** ★★★ THE COOLDOWN IS WHAT MAKES THE LIMIT REAL. Every client auto-reconnects on close, so a
  *  plain disconnect would be a blip: the same listener would retake the free radio within
@@ -10176,15 +10209,7 @@ struct LocalSdrShim::Impl {
         // (e.g. Moto G35 / Unisoc) cores. Pin it to real audio priority so the
         // scheduler treats it like the AudioTrack callback (v5/old-arch behaviour).
         vibeAudioThread("vibe-dsp");
-        // ★ The overload protection lives HERE, not in the IQ producer: enqueueIq is the libusb
-        //   callback and must take no locks and touch no hardware. This thread already takes
-        //   modeMtx per buffer, so the hardware lock is nothing new for it.
-        double ovlAt = 0;
         while (dspRunning.load()) {
-            {
-                const double now = nowSecs();
-                if (now - ovlAt >= 1.0) { ovlAt = now; LocalSdrShim::instance().overloadTick(); }
-            }
             std::vector<cf32> buf;
             {
                 std::unique_lock<std::mutex> lk(iqMtx);
@@ -11165,6 +11190,17 @@ struct LocalSdrShim::Impl {
                 if (!hotplugRun.load()) break;
                 if (stopping.load() || restarting.load()) continue;
 
+                // ── ★★★ RTL OVERLOAD PROTECTION ─────────────────────────────────────────
+                // ★★★ NOT ON THE DSP THREAD, WHICH IS WHERE THIS STARTED. Setting the tuner gain
+                //     is several USB CONTROL TRANSFERS, and every millisecond the DSP thread spends
+                //     in libusb is a millisecond it is not producing audio — so each step made the
+                //     sound stutter. Stuart, immediately: "each gain change causes audio pausing".
+                //  ★★ This thread already exists to touch the radio on a slow cadence (it runs the
+                //     idle park, which releases the device outright), so it is the proven home for
+                //     work that is allowed to take milliseconds. 2 s also matches the detector's
+                //     own two-second dwell — there is nothing to react to faster than that.
+                LocalSdrShim::instance().overloadTick();
+
                 // ── Deferred idle park (see armIdlePark / g_vsIdleGraceSec) ──────────────
                 // ★ THE PARK IS RE-JUSTIFIED HERE, NOT MERELY REMEMBERED. Anything could have
                 //   happened during the grace period, so the decision is taken against the state
@@ -11749,6 +11785,41 @@ void LocalSdrShim::setRestGain(int gain) {
     g_restGain.store(gain);
     LOGI("resting gain: %d", gain);
 }
+void LocalSdrShim::setOverloadProtect(bool on) {
+    g_ovlProtect.store(on, std::memory_order_relaxed);
+    LOGI("overload protection: %s", on ? "on — gain comes down when the ADC rails" : "off");
+}
+/** Turning the AGC on RAISES the ceiling to the tuner's maximum; turning it off puts the ceiling
+ *  back to wherever the gain is now, so the receiver does not lurch when the mode changes. */
+void LocalSdrShim::setRtlAgc(bool on) {
+    const bool was = g_rtlAgc.exchange(on, std::memory_order_relaxed);
+    if (was == on) return;
+    LOGI("RTL AGC: %s", on ? "ON — free to use the tuner's whole range" : "off");
+    if (!p || !p->dev) return;
+    // ★ The same recursive mutex VIBE_HW_LOCK wraps — that macro is defined further down the file
+    //   than this function, so it is spelled out rather than moved.
+    std::lock_guard<std::recursive_mutex> hwlk(p->modeMtx);
+    int n = rtlsdr_get_tuner_gains(p->dev, nullptr);
+    if (n <= 1) return;
+    std::vector<int> gains((size_t)n);
+    rtlsdr_get_tuner_gains(p->dev, gains.data());
+    const int cur = p->lastGainTenthDb;
+    if (on) {
+        // ★ Ceiling to the top, and the CURRENT gain becomes the starting point — expressed, as
+        //   always, as "how many steps below the ceiling are we".
+        int curIdx = 0;
+        for (int i = 0; i < n; i++) if (gains[(size_t)i] <= cur) curIdx = i;
+        g_gainTarget.store(gains[(size_t)(n - 1)], std::memory_order_relaxed);
+        g_ovlSteps.store((n - 1) - curIdx, std::memory_order_relaxed);
+    } else {
+        // ★ Ceiling back down to where we actually are. Leaving it at the maximum would let the
+        //   protection climb far above the owner's figure the moment the band went quiet.
+        g_gainTarget.store(cur, std::memory_order_relaxed);
+        g_ovlSteps.store(0, std::memory_order_relaxed);
+    }
+    g_ovlMargin.store(3.0, std::memory_order_relaxed);   // a new mode starts with a clean slate
+}
+
 void LocalSdrShim::setAgcLock(bool on) {
     g_agcLock.store(on);
     LOGI("AGC lock: %s", on ? "ON — listeners may not turn it off" : "off");
@@ -12869,15 +12940,30 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     //     than at the mercy of a gain loop we do not control and cannot fix.
     //     ★ Quiet is recoverable in one click; an overloaded front end on an unknown aerial is
     //       not, and neither is a listener concluding the receiver is deaf because its AGC misbehaved.
+    // ★★★ AND NOW `gain < 0` MEANS OUR OWN AGC — because there finally is one. The overload loop
+    //     (see overloadTick) walks the tuner's list against measured ADC headroom, so "auto" no
+    //     longer has to mean the tuner's broken one OR a permanently deaf receiver: the CEILING
+    //     becomes the tuner's maximum and the loop finds the operating point itself.
+    //     ★★ Stuart got there first, watching it work: "we already have an AGC because if i was to
+    //        set this at the max gain then the overload protection would just control the up and
+    //        down anyway" (2026-08-21). He is right — the algorithm was finished; only what it was
+    //        pointed at was missing.
+    // ★★★ IT STILL STARTS AT THE BOTTOM AND CLIMBS. Starting at the top and crashing down would be
+    //     a few seconds of an overloaded front end on an unknown aerial every single time the
+    //     server starts, which is the exact thing the old comment here refused to do — and it was
+    //     right. Climbing is safe by construction: a step is only taken when the MEASURED peak says
+    //     the whole step still fits, so the loop converges upward without ever clipping on the way.
     int applyGain = gainTenthDb;
+    int agcCeiling = -1;
     if (applyGain < 0) {
         int n = rtlsdr_get_tuner_gains(impl->dev, nullptr);
         if (n > 0) {
             std::vector<int> gs((size_t)n);
             rtlsdr_get_tuner_gains(impl->dev, gs.data());
-            applyGain = *std::min_element(gs.begin(), gs.end());
-            LOGI("gain: no setting yet — starting at the tuner's minimum, %.1f dB (never auto)",
-                 applyGain / 10.0);
+            applyGain   = *std::min_element(gs.begin(), gs.end());
+            agcCeiling  = *std::max_element(gs.begin(), gs.end());
+            LOGI("gain: AGC — starting at %.1f dB and climbing towards %.1f dB as headroom allows",
+                 applyGain / 10.0, agcCeiling / 10.0);
         }
     }
     impl->lastGainTenthDb = applyGain;   // re-applied if the dongle is replugged
@@ -12889,8 +12975,14 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     // ★★ A CEILING THAT IS ONLY SET ON THE PATH NOBODY TAKES IS NOT A CEILING. The starting gain is
     //    the owner's intent just as much as a slider move is, and it is the one that is in force
     //    for the whole time nobody has touched anything.
-    g_gainTarget.store(applyGain, std::memory_order_relaxed);
+    // ★ Under AGC the ceiling is the tuner's maximum and we are starting at the bottom, so the
+    //   backoff is "every step" — the loop's climb is what closes that distance.
+    g_gainTarget.store(agcCeiling >= 0 ? agcCeiling : applyGain, std::memory_order_relaxed);
     g_ovlSteps.store(0, std::memory_order_relaxed);
+    if (agcCeiling >= 0) {
+        int n2 = rtlsdr_get_tuner_gains(impl->dev, nullptr);
+        if (n2 > 1) g_ovlSteps.store(n2 - 1, std::memory_order_relaxed);
+    }
     rtlsdr_set_tuner_gain_mode(impl->dev, 1);
     if (applyGain >= 0) rtlsdr_set_tuner_gain(impl->dev, applyGain);
     rtlsdr_reset_buffer(impl->dev);
@@ -13708,16 +13800,53 @@ int LocalSdrShim::currentGainTenthDb() const { return p ? p->lastGainTenthDb : -
 void LocalSdrShim::overloadTick() {
     if (!p) return;
     if (p->useSpy() || p->useTcp() || p->useSdrplay()) return;   // they manage themselves
+    // ★ Both off means the owner wants the gain left exactly where it was put.
+    if (!g_ovlProtect.load(std::memory_order_relaxed) && !g_rtlAgc.load(std::memory_order_relaxed))
+        return;
     const int target = g_gainTarget.load(std::memory_order_relaxed);
-    if (target < 0) return;            // auto, or nothing set — no ceiling to protect from
+    if (target < 0) return;            // nothing set — no ceiling to work against
 
     const int clipRun  = g_adcClipRun.load(std::memory_order_relaxed);
     const int cleanRun = g_adcCleanRun.load(std::memory_order_relaxed);
     const int steps    = g_ovlSteps.load(std::memory_order_relaxed);
 
+    // ★ A MINIMUM DWELL between any two changes. Each one is a USB control transfer and a visible
+    //   jump on every listener's slider; twice in four seconds is a fault being chased, not a band
+    //   being tracked.
+    const double now = Impl::nowSecs();
+    if (now - g_ovlLastChangeAt.load(std::memory_order_relaxed) < 6.0) return;
+
     int want = steps;
-    if (clipRun >= 2)                     want = steps + 1;      // overdriven — back off
-    else if (steps > 0 && cleanRun >= 20) want = steps - 1;      // long since clean — creep back
+    if (clipRun >= 2) {
+        want = steps + 1;                                        // overdriven — back off
+        // ★★★ IF THAT OVERLOAD FOLLOWED A CLIMB, THE CLIMB WAS THE MISTAKE. Widen the margin so the
+        //     next attempt has to prove more. This is what stops the straddle: one failed try and
+        //     the loop stops reaching for a step it cannot hold.
+        if (g_ovlLastDir.load(std::memory_order_relaxed) > 0 &&
+            now - g_ovlLastChangeAt.load(std::memory_order_relaxed) < 45.0) {
+            const double m = std::min(12.0, g_ovlMargin.load(std::memory_order_relaxed) + 3.0);
+            g_ovlMargin.store(m, std::memory_order_relaxed);
+            LOGI("that climb did not hold — a step up now needs %.0f dB of headroom", m);
+        }
+    } else if (steps > 0 && cleanRun >= 3) {
+        // ★ Long and quiet: relax again, one dB at a time, never below the 3 dB floor.
+        if (cleanRun >= 120 && g_ovlMargin.load(std::memory_order_relaxed) > 3.0)
+            g_ovlMargin.store(std::max(3.0, g_ovlMargin.load(std::memory_order_relaxed) - 1.0),
+                              std::memory_order_relaxed);
+        // ★★★ "CLEAN HERE" DOES NOT MEAN "SAFE ONE STEP UP", AND ASSUMING IT DID MADE THIS HUNT.
+        //     The first version climbed after 20 clean seconds, walked straight back into the
+        //     overload it had just escaped, dropped, waited, climbed again — Stuart watched it
+        //     alternate between GAIN ↓ and GAIN ↑ (2026-08-21). Trial and error is the wrong
+        //     instrument when the answer can be PREDICTED.
+        // ★★ So predict it. We know the measured peak, and we know exactly how many dB the next
+        //    step adds (the tuner's list is irregular — 3.7 → 7.7 is 4.0 dB, 7.7 → 14.4 is 6.7 —
+        //    so it must be read, not assumed). Climb only if the peak would still land clear of
+        //    full scale afterwards. A step that is predicted to clip is simply not taken, and the
+        //    loop settles one step below the overload instead of straddling it.
+        // ★ The margin is what stops it settling exactly ON the edge, where any fade or a passing
+        //   lorry would start the cycle again.
+        want = steps - 1;   // provisional; the prediction below may refuse it
+    }
     if (want == steps) return;
 
     // ★ Scoped so the hardware lock is RELEASED before we touch sockets. Announcing takes the
@@ -13736,8 +13865,24 @@ void LocalSdrShim::overloadTick() {
     if (want > tgtIdx) want = tgtIdx;                 // cannot go below the bottom of the list
     if (want < 0) want = 0;
     const int idx = tgtIdx - want;
+    // ★★★ THE PREDICTION. Only for a climb — backing off is never refused.
+    if (want < steps) {
+        const int from = tgtIdx - steps;               // where we are now
+        if (idx <= from) return;                       // nothing to gain
+        const double stepDb = (gains[(size_t)idx] - gains[(size_t)from]) / 10.0;
+        const double peak   = g_adcPeakDbfs.load(std::memory_order_relaxed);
+        // ★ 3 dB of margin below full scale. Chosen to be audible-signal-safe rather than tight:
+        //   the peak we measured is one second old and the band moves.
+        if (peak + stepDb > -g_ovlMargin.load(std::memory_order_relaxed)) {
+            // ★ Silent. This runs every 2 s and would otherwise fill the log with a line saying
+            //   nothing happened — the one thing guaranteed to make the useful lines unreadable.
+            return;
+        }
+    }
     const int applied = gains[(size_t)idx];
     g_ovlSteps.store(want, std::memory_order_relaxed);
+    g_ovlLastChangeAt.store(now, std::memory_order_relaxed);
+    g_ovlLastDir.store(want > steps ? -1 : 1, std::memory_order_relaxed);
     p->lastGainTenthDb = applied;
     rtlsdr_set_tuner_gain_mode(p->dev, 1);
     rtlsdr_set_tuner_gain(p->dev, applied);
