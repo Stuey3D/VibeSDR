@@ -91,9 +91,31 @@ export async function saveUserBookmarks(list: UserBookmark[]): Promise<void> {
  *  instead, and the old url is passed here so anything saved under it still appears rather than
  *  vanishing on upgrade. */
 export function bookmarksForInstance(list: UserBookmark[], baseUrl: string,
-                                     alsoScope?: string): UserBookmark[] {
-  return list.filter((b) => !b.scope || b.scope === baseUrl
-                            || (!!alsoScope && b.scope === alsoScope));
+                                     alsoScope?: string | string[]): UserBookmark[] {
+  const also = alsoScope == null ? [] : (Array.isArray(alsoScope) ? alsoScope : [alsoScope]);
+  return list.filter((b) => !b.scope || b.scope === baseUrl || also.includes(b.scope));
+}
+
+/** ★★★ MOVE BOOKMARKS ONTO THE SERVER'S OWN IDENTITY once we learn it.
+ *
+ *  A bookmark scoped to `http://192.168.86.88:48000` was saved on THIS receiver — we are connected
+ *  to it by that very address as we run this — so re-scoping it to the server's instance id loses
+ *  nothing and gains everything: reach the same server through a tunnel, a hostname or a VPN and
+ *  the bookmarks are simply there. Do it for each route as it is used and the two copies converge.
+ *
+ *  ★★ GLOBAL BOOKMARKS ARE NEVER TOUCHED. `scope === ''` means "show me everywhere", which is a
+ *     deliberate choice by the user and not a URL waiting to be corrected.
+ *  ★ Returns the SAME array when nothing changed, so callers can skip a write and a re-render. */
+export function adoptInstanceScope(list: UserBookmark[], fromScope: string,
+                                   instanceScope: string): UserBookmark[] {
+  if (!fromScope || !instanceScope || fromScope === instanceScope) return list;
+  let touched = false;
+  const out = list.map((b) => {
+    if (b.scope !== fromScope) return b;
+    touched = true;
+    return { ...b, scope: instanceScope };
+  });
+  return touched ? out : list;
 }
 
 /** Remove all bookmarks scoped to one instance (instance-settings reset). */

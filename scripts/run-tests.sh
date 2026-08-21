@@ -93,6 +93,10 @@ if node scripts/test-setup-tabswitch.mjs; then pass=$((pass+1)); else fail=$((fa
 # ★ The admin log folds a visit's per-radio rows into one. Pure logic, so it is testable without a
 #   browser — and the cases that matter are the ones it must NOT fold (session-less refusals).
 if node scripts/test-visit-grouping.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ A DATA MIGRATION, so it is tested: bookmarks move from being keyed on the URL you arrived by
+#    to the server's own identity. The failure modes are somebody's bookmarks going invisible on
+#    upgrade, or one server adopting another's — neither of which looks wrong in a screenshot.
+if node scripts/test-bookmark-scope.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★ The two ends of the advanced-RDS message must agree on field NAMES. A stray "R." prefix meant
 #   the deviation readout never populated at all, and neither half looked wrong on its own.
 if node scripts/check-rdsx-wire.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi

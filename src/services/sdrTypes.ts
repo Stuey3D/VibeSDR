@@ -296,6 +296,14 @@ export interface ServerOccupancy {
   limitSoft: boolean;
   /** Does this server have an admin password? Only then is an override box worth offering. */
   admin: boolean;
+  /** ★★★ THE SERVER'S OWN IDENTITY, stable across every route into it. A VibeServer reached as
+   *  `demo.vibesdr.net` and as `192.168.86.88:48000` is ONE receiver, and anything keyed on the URL
+   *  believes it is two — which is exactly what made bookmarks appear to vanish (Stuart, explaining
+   *  it on GitHub #21: "to VibeSDR these are 2 completely different servers"). The shim mints this
+   *  per radio and it does not change with the address you arrived by.
+   *  ★ undefined on every other backend and on older VibeServers, so callers must keep a URL
+   *    fallback rather than assuming it. */
+  instance?: string;
   /** ★★ THE OWNER'S UNCOMPRESSED-AUDIO POLICY, and it is THREE-way for a reason — see
    *  the note in VibeServer: 'off' never offers raw PCM to a networked listener, 'compat'
    *  falls back automatically with no control shown, and only 'choice' means the listener
@@ -346,6 +354,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       uncompressed: j.uncompressed === 'choice' || j.uncompressed === 'compat'
                     || j.uncompressed === 'off' ? j.uncompressed : undefined,
       version:   typeof j.version === 'string' && j.version ? j.version : undefined,
+      instance:  typeof j.instance === 'string' && j.instance ? j.instance : undefined,
       notice:    typeof j.notice === 'string' && j.notice ? j.notice : undefined,
       antenna:   typeof j.antenna === 'string' && j.antenna ? j.antenna : undefined,
       antennaIcon: typeof j.antennaIcon === 'string' ? j.antennaIcon : undefined,

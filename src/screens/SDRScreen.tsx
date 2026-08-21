@@ -139,7 +139,7 @@ import {
   type ServerUiConfig, type ReceiverInfo,
 } from '../services/stations';
 import {
-  loadUserBookmarks, saveUserBookmarks, bookmarksForInstance, withoutInstance,
+  loadUserBookmarks, saveUserBookmarks, bookmarksForInstance, withoutInstance, adoptInstanceScope,
   exportBookmarksJSON, parseBookmarksAny, mergeBookmarks, setBookmarkSynced,
   type UserBookmark,
 } from '../services/userBookmarks';
@@ -711,7 +711,27 @@ export default function SDRScreen({ route, navigation }: Props) {
    *    local source keeps its own remembered setup, keyed by `tcp:host:port` or `usb`. One notion
    *    of "which local radio is this", not two that can disagree.
    *  ★ A VibeServer is unaffected — its baseUrl is `http://host:port` and was always stable. */
-  const bookmarkScope = (isLocal && !isVibeServer) ? `local:${localDeviceKey}` : baseUrl;
+  /** Is the limit a deadline or a guarantee, and which receiver is this really? Both are answered
+   *  by the radio's own `/vibeserver.json` once connected (see the effect further down).
+   *  ★ Declared HERE, above `bookmarkScope`, which reads the identity — putting them beside the
+   *    effect that fills them left them in the temporal dead zone and tsc said so plainly. */
+  const [limitSoft, setLimitSoft] = useState(false);
+  const [serverInstance, setServerInstance] = useState<string | null>(null);
+
+  const urlScope = (isLocal && !isVibeServer) ? `local:${localDeviceKey}` : baseUrl;
+  /** ★★★ THE RECEIVER'S IDENTITY BEATS THE ROUTE YOU TOOK TO IT. Keyed on the URL, one server
+   *  reached two ways is two servers — save a bookmark on `demo.vibesdr.net` and it is invisible
+   *  when you arrive on the LAN address, which is precisely the confusion reported on GitHub #21.
+   *  ★ Falls back to the URL for every non-VibeServer backend and for older servers that mint no
+   *    id, so nothing depends on the new field existing. */
+  const bookmarkScope = serverInstance ? `vs:${serverInstance}` : urlScope;
+  /** Scopes that are STILL OURS even though we no longer write them: the plain URL (before the
+   *  identity was known, or on an older server) and the locally-served ws url that local hardware
+   *  used to be keyed by. Read-only — a key change must never make somebody's bookmarks vanish. */
+  const legacyScopes = useMemo(
+    () => Array.from(new Set([urlScope, baseUrl])),
+    [urlScope, baseUrl],
+  );
   const LocalHw = (NativeModules as any).VibeLocalSDR;
   const [hwOpen,        setHwOpen]        = useState(false);
   const [hwGains,       setHwGains]       = useState<number[]>([]);
@@ -3993,12 +4013,15 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  ★★ The app never had Jr's bug — only `session_expired` from the server ends a session here —
    *     but it would still sit showing a dead red ⏳0:00 for the rest of a session that is not
    *     ending, which tells the same lie more quietly. */
-  const [limitSoft, setLimitSoft] = useState(false);
   useEffect(() => {
     if (!connected) return;
     let cancelled = false;
     fetchOccupancy(connectBase)
-      .then((o) => { if (!cancelled && o) setLimitSoft(!!o.limitSoft); })
+      .then((o) => {
+        if (cancelled || !o) return;
+        setLimitSoft(!!o.limitSoft);
+        setServerInstance(o.instance ?? null);
+      })
       .catch(() => {});   // ★ Silent: a Kiwi/OWRX/older VibeServer answers nothing useful here.
     return () => { cancelled = true; };
   }, [connected, connectBase]);
@@ -5626,7 +5649,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // the search bar identically. User entries win name+freq collisions. Each
   // carries a `source` so the VTS can show its origin icon.
   useEffect(() => {
-    const mine = bookmarksForInstance(userBookmarks, bookmarkScope, baseUrl);
+    const mine = bookmarksForInstance(userBookmarks, bookmarkScope, legacyScopes);
     const seen = new Set(mine.map((b: UserBookmark) => `${b.name}|${b.frequency}`));
     const fallback = serverBookmarks.length > 0 ? serverBookmarks : (eibiEnabled ? eibiBookmarks : []);
     const merged: ServerBookmark[] = [
@@ -5673,6 +5696,24 @@ export default function SDRScreen({ route, navigation }: Props) {
     saveUserBookmarks(next).catch(() => {});
   }, []);
 
+  /** ★★★ ADOPT THE IDENTITY, ONCE PER ROUTE. Anything scoped to the ADDRESS we are connected by
+   *  was saved on THIS receiver — we are talking to it right now — so re-scoping it to the server's
+   *  own id loses nothing and makes it follow the receiver instead of the route. Arrive by a
+   *  hostname today and a LAN address tomorrow and both sets converge on the same key.
+   *  ★★ Global bookmarks (scope '') are never touched: "show me everywhere" is a choice, not a URL
+   *     waiting to be corrected.
+   *  ★ Writes only when something actually moved — adoptInstanceScope returns the same array
+   *    otherwise, so a reconnect is not a storage write and not a re-render. */
+  useEffect(() => {
+    if (!serverInstance || !userBookmarks.length) return;
+    const target = `vs:${serverInstance}`;
+    let next = userBookmarks;
+    for (const legacy of legacyScopes) next = adoptInstanceScope(next, legacy, target);
+    if (next !== userBookmarks) {
+      persistUserBookmarks(next);
+    }
+  }, [serverInstance, legacyScopes, userBookmarks, persistUserBookmarks]);
+
   const onAddBookmark = useCallback((name: string, allInstances: boolean) => {
     const clean = name.trim();
     if (!clean) return;
@@ -5693,8 +5734,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   // global ('') + this-instance — not bookmarks scoped to OTHER instances (a
   // 'this instance only' bookmark was showing on every instance's list).
   const visibleBookmarks = useMemo(
-    () => bookmarksForInstance(userBookmarks, bookmarkScope, baseUrl),
-    [userBookmarks, bookmarkScope, baseUrl],
+    () => bookmarksForInstance(userBookmarks, bookmarkScope, legacyScopes),
+    [userBookmarks, bookmarkScope, legacyScopes],
   );
 
   const onDeleteBookmark = useCallback((bm: UserBookmark) => {
@@ -7447,7 +7488,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           if (serverDspEnabled) onServerDsp(false);
           setMenuOpen(false);
           // Bookmarks are precious — never clear silently with a reset
-          const instCount = bookmarksForInstance(userBookmarks, bookmarkScope, baseUrl)
+          const instCount = bookmarksForInstance(userBookmarks, bookmarkScope, legacyScopes)
             .filter((b: UserBookmark) => b.scope === baseUrl).length;
           if (instCount > 0) {
             Alert.alert(
