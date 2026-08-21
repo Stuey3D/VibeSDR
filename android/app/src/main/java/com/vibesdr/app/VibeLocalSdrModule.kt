@@ -10,6 +10,7 @@ import android.hardware.usb.UsbManager
 import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
+import org.json.JSONObject
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -315,108 +316,20 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         if (fd < 0) { conn.close(); promise.reject("bad_fd", "Invalid file descriptor"); return }
         sessionConn = conn
 
-        val name       = if (opts.hasKey("name")) opts.getString("name") ?: "VibeSDR" else "VibeSDR"
-        val centerFreq = if (opts.hasKey("centerFreq")) opts.getDouble("centerFreq") else 100_000_000.0
-        val sampleRate = if (opts.hasKey("sampleRate")) opts.getDouble("sampleRate") else 2_400_000.0
-        val gain       = if (opts.hasKey("gainTenthDb")) opts.getInt("gainTenthDb") else -1
-        val fftSize    = if (opts.hasKey("fftSize")) opts.getInt("fftSize") else 1024
-        val fftRate    = if (opts.hasKey("fftRate")) opts.getDouble("fftRate") else 20.0
-        val mode       = if (opts.hasKey("mode")) opts.getString("mode") ?: "nfm" else "nfm"
-        // VibeServer config: PIN ("" = open), limits (0 = none), audio compression.
-        val pin        = if (opts.hasKey("pin")) opts.getString("pin") ?: "" else ""
-        val maxBw      = if (opts.hasKey("maxBandwidthHz")) opts.getDouble("maxBandwidthHz") else 0.0
-        val maxFps     = if (opts.hasKey("maxFftRate")) opts.getDouble("maxFftRate") else 0.0
-        val compress   = if (opts.hasKey("compressAudio")) opts.getBoolean("compressAudio") else true
-        // Web client on/off, and a pinned capture rate (0 = client-controlled).
-        val webSrv     = if (opts.hasKey("webServer")) opts.getBoolean("webServer") else true
-        // ★ Admin password gates CONTROL (bias-T, direct sampling, calibration), not access —
-        // separate from the listening PIN on purpose. Empty = nothing protected.
-        val adminPw    = if (opts.hasKey("adminPassword")) opts.getString("adminPassword") ?: "" else ""
-        // 0 = off, 1 = listener's choice, 2 = compatibility fallback only. Loopback is exempt.
-        val uncomp     = if (opts.hasKey("uncompressedAudio")) opts.getInt("uncompressedAudio") else 0
-        val limitMin   = if (opts.hasKey("sessionLimitMin")) opts.getInt("sessionLimitMin") else 0
-        val lockedRate = if (opts.hasKey("lockedRate")) opts.getDouble("lockedRate") else 0.0
-        // ★★★ THE CAPTURED WINDOW. Shared listening only works because everybody gets a slice of
-        //     ONE window, so the centre must be pinned — on the phone it has always been wherever
-        //     the landing frequency happened to be, which is fine for a single listener who
-        //     retunes the radio itself and meaningless once several people share it.
-        val lockedCentre = if (opts.hasKey("lockedCentre")) opts.getDouble("lockedCentre") else 0.0
-        val limitSoft    = if (opts.hasKey("sessionLimitSoft")) opts.getBoolean("sessionLimitSoft") else false
-        val idleKick     = if (opts.hasKey("idleKickMin")) opts.getInt("idleKickMin") else 0
-        val zoomSpec     = if (opts.hasKey("zoomSpectrum")) opts.getBoolean("zoomSpectrum") else false
-        val spectrogram  = if (opts.hasKey("spectrogram")) opts.getBoolean("spectrogram") else false
-        val idleSaver    = if (opts.hasKey("forceIdleSaver")) opts.getBoolean("forceIdleSaver") else false
-        // ★★★ POWER DOWN WHEN NOBODY IS LISTENING — ON BY DEFAULT, and 300 s is the desktop's own
-        //     default. The device stays CLAIMED so it restarts instantly; this is the idle PARK,
-        //     not the Linux release-to-another-program, which Android's permission model makes
-        //     pointless anyway (Stuart, 2026-08-19). 0 = never park.
-        val idleGrace    = if (opts.hasKey("idleGraceSec")) opts.getDouble("idleGraceSec") else 300.0
-        val antenna      = if (opts.hasKey("antenna")) opts.getString("antenna") ?: "" else ""
-        val antennaIcon  = if (opts.hasKey("antennaIcon")) opts.getString("antennaIcon") ?: "" else ""
-        val landingMsg   = if (opts.hasKey("landingMessage")) opts.getString("landingMessage") ?: "" else ""
-        val landingUrl   = if (opts.hasKey("landingLinkUrl")) opts.getString("landingLinkUrl") ?: "" else ""
-        val landingLbl   = if (opts.hasKey("landingLinkLabel")) opts.getString("landingLinkLabel") ?: "" else ""
-        // Only needed so a CRASH-restored server re-advertises as the app would have.
-        val advertiseOnStart = if (opts.hasKey("advertise")) opts.getBoolean("advertise") else true
-        // Rebuild the server if the process dies under it? Owner's choice: a shim that
-        // crashes REPEATEDLY would otherwise crash-loop, re-opening the dongle each time.
-        val autoRestore = if (opts.hasKey("autoRestore")) opts.getBoolean("autoRestore") else true
+        // ★★★ THE CONFIG TRAVELS WHOLE. Every setting is read and applied by VibeServerBoot, which
+        //     the CRASH-RESTORE path also uses — see that file for why there is no longer a second,
+        //     hand-maintained list of "settings worth restoring". `toHashMap` gives plain
+        //     JSON-shaped values, so the same object stores itself in SharedPreferences unchanged.
+        val cfg = JSONObject(opts.toHashMap() as Map<*, *>)
+        val name       = VibeServerBoot.name(cfg)
+        val pin        = VibeServerBoot.pin(cfg)
+        val advertiseOnStart = VibeServerBoot.advertise(cfg)
+        // Rebuild the server if the process dies under it? Owner's choice: a shim that crashes
+        // REPEATEDLY would otherwise crash-loop, re-opening the dongle each time.
+        val autoRestore = VibeServerBoot.autoRestore(cfg)
 
-        // Give the shim a file for its bookmarks BEFORE it starts, so it loads the saved
-        // set and then saves every change itself. The JS side cannot be relied on: it is
-        // backgrounded while serving, where its timers are suspended.
-        VibeLocalSDR.setBookmarksPath(java.io.File(reactContext.filesDir, "vibe_bookmarks.json").absolutePath)
-        VibeLocalSDR.setVibeServerAuth(pin)
-        VibeLocalSDR.setVibeServerLimits(maxBw, maxFps)
-        VibeLocalSDR.setVibeServerCompressAudio(compress)
-        // ★ Diagnostic: the password itself is NEVER logged — only whether one arrived, and how
-        // long it is. Enough to tell "the setting did not reach the shim" from "the shim ignored
-        // it", which is exactly the question that cost an evening.
-        Log.i(TAG, "VibeServer cfg: adminPw=${adminPw.length} chars, limitMin=$limitMin, uncomp=$uncomp")
-        VibeLocalSDR.setVibeServerAdminSecret(adminPw)
-        VibeLocalSDR.setVibeServerUncompressedAudio(uncomp)
-        VibeLocalSDR.setVibeServerSessionLimit(limitMin)
-        VibeLocalSDR.setVibeServerSessionLimitSoft(limitSoft)
-        VibeLocalSDR.setVibeServerIdleKick(idleKick)
-        VibeLocalSDR.setVibeServerWebEnabled(webSrv)
-        // ★ Applied on EVERY start, including the crash-restore path, so a rebuilt server is the
-        //   same server — the note below says why that matters for the advanced settings.
-        VibeLocalSDR.setVibeServerLockedCentre(lockedCentre)
-        VibeLocalSDR.setVibeServerZoomSpectrum(zoomSpec)
-        VibeLocalSDR.setVibeServerSpectrogram(spectrogram)
-        VibeLocalSDR.setVibeServerForceIdleSaver(idleSaver)
-        VibeLocalSDR.setVibeServerIdleGrace(idleGrace)
-        VibeLocalSDR.setVibeServerLandingInfo(antenna, antennaIcon, landingMsg, landingUrl, landingLbl)
-
-        // ── ★★★ ADVANCED MODE ────────────────────────────────────────────────────────────────
-        // ★★ Applied on EVERY start, including the crash-restore path, and always to a definite
-        //    value — never "only when advanced". A limit left set from a previous run would
-        //    outlive the mode that asked for it, and the owner would have no way to see why.
-        run {
-            val adv = if (opts.hasKey("advanced")) opts.getBoolean("advanced") else false
-            // ★ Bans and the log are recorded in BOTH modes and only DISPLAYED in Advanced — so
-            //   switching a receiver public later arrives with its history already there.
-            val dir = reactContext.filesDir
-            VibeLocalSDR.setAdminPaths(java.io.File(dir, "vibe_bans.json").absolutePath,
-                                       java.io.File(dir, "vibe_connlog.json").absolutePath)
-            VibeLocalSDR.setPublicSharing(adv)
-            VibeLocalSDR.setTrustedProxies(
-                if (adv && opts.hasKey("trustedProxies")) opts.getString("trustedProxies") ?: "" else "")
-            VibeLocalSDR.setMaxUsers(
-                if (adv && opts.hasKey("maxUsers")) opts.getInt("maxUsers").coerceAtLeast(1) else 1)
-            VibeLocalSDR.setTuneLimits(
-                if (adv && opts.hasKey("allowRanges")) opts.getString("allowRanges") ?: "" else "",
-                if (adv && opts.hasKey("blockRanges")) opts.getString("blockRanges") ?: "" else "")
-            VibeLocalSDR.setGainLimits(
-                if (adv && opts.hasKey("gainLimits")) opts.getString("gainLimits") ?: "" else "",
-                if (adv && opts.hasKey("restGain")) opts.getInt("restGain") else -1,
-                adv && opts.hasKey("agcLock") && opts.getBoolean("agcLock"))
-        }
-        VibeLocalSDR.setVibeServerLockedRate(lockedRate)
-        VibeLocalSDR.setServeOnLan(true)
-
-        val port = VibeLocalSDR.startSpectrum(
-            fd, dev.vendorId, dev.productId, centerFreq, sampleRate, gain, fftSize, fftRate, mode)
+        val port = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId,
+                                                reactContext.filesDir)
         if (port <= 0) {
             VibeLocalSDR.setServeOnLan(false)
             conn.close(); sessionConn = null
@@ -435,9 +348,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // Remember the live config so the service can rebuild the shim if the process
         // dies under it (START_STICKY brings the service back, but not the radio).
         if (autoRestore) {
-            VibeServerRestore.arm(reactContext, name, pin, sampleRate, lockedRate, maxFps,
-                                  compress, webSrv, advertiseOnStart,
-                                  adminPw, uncomp, limitMin)
+            VibeServerRestore.arm(reactContext, cfg)
         } else {
             VibeServerRestore.disarm(reactContext)
         }

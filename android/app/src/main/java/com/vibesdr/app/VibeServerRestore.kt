@@ -31,50 +31,25 @@ object VibeServerRestore {
     private const val PREFS = "vibe_server_restore"
 
     private const val K_ARMED     = "armed"       // a server was running when we died
-    private const val K_NAME      = "name"
-    private const val K_PIN       = "pin"
-    private const val K_RATE      = "sampleRate"
-    private const val K_LOCKED    = "lockedRate"
-    private const val K_FFTRATE   = "maxFftRate"
-    private const val K_COMPRESS  = "compressAudio"
-    private const val K_WEB       = "webServer"
-    private const val K_ADVERTISE = "advertise"
     private const val K_LOCJSON   = "locationJson"
-    // ★★★ EVERY SETTING THE SERVER RUNS WITH BELONGS HERE. This snapshot is a HAND-MAINTAINED
-    // SUBSET, and anything left out is silently DROPPED on the next restore — the server comes
-    // back looking healthy with that protection quietly switched off.
-    // ★ It bit exactly that way: the admin password and the session limit were added to the
-    // start path and not to this one, so a process restart brought the server back with
-    // admin:false and limitMin:0 while the PIN survived (because the PIN was on the list).
-    // Stuart set both, saw neither take, and was right (2026-07-27).
-    // ★ ADDING A SERVER SETTING? ADD IT HERE TOO. A security setting that fails OPEN across a
-    // restart is worse than one that was never offered.
-    private const val K_ADMINPW   = "adminPassword"
-    private const val K_UNCOMP    = "uncompressedAudio"
-    private const val K_LIMITMIN  = "sessionLimitMin"
+    /** ★★★ THE WHOLE CONFIG, AS THE APP SENT IT. This used to be a dozen hand-picked keys, and
+     *  anything left off the list was silently dropped on restore — the server came back looking
+     *  healthy with that setting quietly back at its default. It bit twice: the admin password and
+     *  session limit (2026-07-27), then the RESTING GAIN, which reverted on every load (Stuart,
+     *  2026-08-21). The instruction "add it here too" was written in capitals beside the old keys
+     *  and was still missed both times, because a list you must remember to update is a list that
+     *  will be wrong.
+     *  ★ Now there is nothing to remember: the config is stored whole and replayed through the same
+     *    VibeServerBoot.applyAndStart the normal start uses. */
+    private const val K_CONFIG    = "configJson"
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    /** Remember the live config. Called when the server starts. */
-    fun arm(
-        ctx: Context, name: String, pin: String,
-        sampleRate: Double, lockedRate: Double, maxFftRate: Double,
-        compressAudio: Boolean, webServer: Boolean, advertise: Boolean,
-        adminPassword: String, uncompressedAudio: Int, sessionLimitMin: Int,
-    ) {
+    /** Remember the live config, whole. Called when the server starts. */
+    fun arm(ctx: Context, cfg: org.json.JSONObject) {
         prefs(ctx).edit()
             .putBoolean(K_ARMED, true)
-            .putString(K_NAME, name)
-            .putString(K_PIN, pin)
-            .putFloat(K_RATE, sampleRate.toFloat())
-            .putFloat(K_LOCKED, lockedRate.toFloat())
-            .putFloat(K_FFTRATE, maxFftRate.toFloat())
-            .putBoolean(K_COMPRESS, compressAudio)
-            .putBoolean(K_WEB, webServer)
-            .putBoolean(K_ADVERTISE, advertise)
-            .putString(K_ADMINPW, adminPassword)
-            .putInt(K_UNCOMP, uncompressedAudio)
-            .putInt(K_LIMITMIN, sessionLimitMin)
+            .putString(K_CONFIG, cfg.toString())
             .apply()
     }
 
@@ -115,29 +90,18 @@ object VibeServerRestore {
         val fd = conn.fileDescriptor
         if (fd < 0) { conn.close(); return "bad fd" }
 
-        val name    = p.getString(K_NAME, "VibeSDR") ?: "VibeSDR"
-        val pin     = p.getString(K_PIN, "") ?: ""
-        val rate    = p.getFloat(K_RATE, 2_400_000f).toDouble()
-        val locked  = p.getFloat(K_LOCKED, 0f).toDouble()
-        val fftRate = p.getFloat(K_FFTRATE, 20f).toDouble()
+        // ★★★ THE SAME APPLY PATH THE APP USES — see VibeServerBoot. Nothing is reconstructed or
+        //     assumed here any more: whatever the server was running with is what it comes back
+        //     with, including everything added since this file was last thought about.
+        val cfg = try { org.json.JSONObject(p.getString(K_CONFIG, "{}") ?: "{}") }
+                  catch (t: Throwable) { org.json.JSONObject() }
+        // ★★ A restore with no stored config would silently rebuild a DEFAULT server — 100 MHz,
+        //    nfm, no admin password, no limits — which is precisely the failure this rewrite
+        //    exists to end. Refuse instead: a server that does not come back is a great deal
+        //    easier to notice than one that comes back wrong.
+        if (cfg.length() == 0) { conn.close(); return "no stored config" }
 
-        VibeLocalSDR.setVibeServerAuth(pin)
-        VibeLocalSDR.setVibeServerLimits(0.0, fftRate)
-        VibeLocalSDR.setVibeServerCompressAudio(p.getBoolean(K_COMPRESS, true))
-        VibeLocalSDR.setVibeServerWebEnabled(p.getBoolean(K_WEB, true))
-        // ★ Restore the protections too — see the note by the keys. Defaults here are the SAFE
-        // ones only because they match the product defaults; the point is that the stored value
-        // is used, not that the fallback is harmless.
-        Log.i(TAG, "restore cfg: adminPw=${(p.getString(K_ADMINPW, "") ?: "").length} chars, " +
-                   "limitMin=${p.getInt(K_LIMITMIN, 0)}")
-        VibeLocalSDR.setVibeServerAdminSecret(p.getString(K_ADMINPW, "") ?: "")
-        VibeLocalSDR.setVibeServerUncompressedAudio(p.getInt(K_UNCOMP, 0))
-        VibeLocalSDR.setVibeServerSessionLimit(p.getInt(K_LIMITMIN, 0))
-        VibeLocalSDR.setVibeServerLockedRate(locked)
-        VibeLocalSDR.setServeOnLan(true)
-
-        val port = VibeLocalSDR.startSpectrum(
-            fd, dev.vendorId, dev.productId, 100_000_000.0, rate, -1, 1024, fftRate, "nfm")
+        val port = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId, ctx.filesDir)
         if (port <= 0) {
             VibeLocalSDR.setServeOnLan(false)
             conn.close()
@@ -153,7 +117,8 @@ object VibeServerRestore {
             if (f.exists()) VibeLocalSDR.setStationsJson(f.readText())
         } catch (_: Throwable) {}
 
-        if (p.getBoolean(K_ADVERTISE, true)) advertise(ctx, name, port, pin.isNotEmpty())
+        if (VibeServerBoot.advertise(cfg))
+            advertise(ctx, VibeServerBoot.name(cfg), port, VibeServerBoot.pin(cfg).isNotEmpty())
         Log.i(TAG, "VibeServer rebuilt after a process death, port $port")
         return null
     }
