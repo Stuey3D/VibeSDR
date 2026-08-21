@@ -22,6 +22,7 @@
 		4BBBE5A5D455F015F2705056 /* KiwiClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1629C7E4EFDC0509FC3A567 /* KiwiClient.swift */; };
 		4EDBFA3C99C68E8D846ED86C /* BandwidthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D4434780FAA0BCA12A4738A /* BandwidthView.swift */; };
 		4FCD0DC9A5E82E9D1E016896 /* Chat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AB51A8941C99A626615A0FC /* Chat.swift */; };
+		1ECBD5E04A51EE934B500343 /* ViewMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 398EA67E3DF9994DCAABFA4C /* ViewMemory.swift */; };
 		C9ED5F518B3B69CF247E84C9 /* DialChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F75850ECD424239D80257C94 /* DialChatView.swift */; };
 		559629F1F786C14523FFE7AA /* OwrxClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EEA65462FB06374237A24A2 /* OwrxClient.swift */; };
 		A1B2C3D40001FR0NTD00R001 /* FrontDoor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40002FR0NTD00R002 /* FrontDoor.swift */; };
@@ -77,6 +78,7 @@
 /* Begin PBXFileReference section */
 		09436CC1B635338E3E4DD851 /* DabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DabView.swift; sourceTree = "<group>"; };
 		0AB51A8941C99A626615A0FC /* Chat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Chat.swift; sourceTree = "<group>"; };
+		398EA67E3DF9994DCAABFA4C /* ViewMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewMemory.swift; sourceTree = "<group>"; };
 		F75850ECD424239D80257C94 /* DialChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DialChatView.swift; sourceTree = "<group>"; };
 		10CE8998C4E2A9D6C2D4AB73 /* AircraftView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AircraftView.swift; sourceTree = "<group>"; };
 		1C35F1528A85321526664EFB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -152,6 +154,7 @@
 				D363E607DCD2E02F223F5B09 /* BandPlan.swift */,
 				1D4434780FAA0BCA12A4738A /* BandwidthView.swift */,
 				0AB51A8941C99A626615A0FC /* Chat.swift */,
+				398EA67E3DF9994DCAABFA4C /* ViewMemory.swift */,
 				F75850ECD424239D80257C94 /* DialChatView.swift */,
 				C66B81E885A802F50F032812 /* CloudSync.swift */,
 				C66B81E885A802F50F032813 /* WFPalettes.generated.swift */,
@@ -335,6 +338,7 @@
 				EFFBFE3DA8A548A9B1A5906C /* BandPlan.swift in Sources */,
 				4EDBFA3C99C68E8D846ED86C /* BandwidthView.swift in Sources */,
 				4FCD0DC9A5E82E9D1E016896 /* Chat.swift in Sources */,
+				1ECBD5E04A51EE934B500343 /* ViewMemory.swift in Sources */,
 				C9ED5F518B3B69CF247E84C9 /* DialChatView.swift in Sources */,
 				1ADDB622AF9179CABE199142 /* CloudSync.swift in Sources */,
 				1ADDB622AF9179CABE199143 /* WFPalettes.generated.swift in Sources */,

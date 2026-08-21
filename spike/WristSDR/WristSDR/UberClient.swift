@@ -931,6 +931,11 @@ final class UberClient: ObservableObject {
   /// gated frames (~2s at 10fps) accept the scale we have and paint.
   private var gatedFrames = 0
   private var viewBinBw: Double = 0
+  /// Which family of receiver this connection is, for [[ViewMemory]] — one client class serves two.
+  private var viewKind: String { isVibe ? "vibe" : "uber" }
+  /// A remembered SPAN waiting for the first config to tell us the bin count. ★ It cannot be applied
+  /// at connect: span → binBandwidth needs `bins`, and until a config arrives we do not know it.
+  private var pendingRestoreSpanHz: Double?
 
   /// ★ How many times we have argued with the server about the centre / span for THIS view.
   ///   Reset when it agrees, and when the user asks for something new — see sendView.
@@ -1104,6 +1109,13 @@ final class UberClient: ObservableObject {
     // VibeServer: resolve the PIN handshake up front (GET /vibeserver/auth → nonce → HMAC), then open the
     // sockets with the auth suffix. No UberSDR /connection preflight — the shim answers that unconditionally
     // and doesn't need it. The nonce is a reusable 1-hour session credential shared by both WS.
+    // ★★ THE REMEMBERED ZOOM, FOR EITHER BACKEND THIS CLASS SERVES — outside the `isVibe` branch on
+    //    purpose: a plain UberSDR receiver deserves to reopen at the scale you left it just as much
+    //    as a VibeServer does (Stuart: "so that UberSDR KiwiSDR etc remember the rate I last used").
+    // ★ Only on a COLD open. On a reconnect `viewBinBw` already holds the zoom the user is looking
+    //   at, and reaching for the saved one would undo a mid-session change they had not saved yet.
+    if viewBinBw == 0 { pendingRestoreSpanHz = ViewMemory.span(kind: viewKind, host: host) }
+
     if isVibe {
       restoreVibeState()          // reopen where we left it (per host); else adopt the server's tune on config
       status = "authenticating"
@@ -1987,9 +1999,32 @@ final class UberClient: ObservableObject {
     if viewBinBw == 0, binBandwidth > 0 {
       viewBinBw = binBandwidth          // first config of the session — adopt
       viewCenterHz = centerHz
+      // ★★★ ...UNLESS WE REMEMBER THIS RECEIVER'S ZOOM. Adopting the server's opening span is right
+      //     for a receiver you have never opened and wrong for one you have: it lands you on a scale
+      //     nobody chose (GitHub #21). Now the bin count is known, so the remembered span converts.
+      //  ★★ REQUESTED, NOT ASSERTED. We set our want and send it once; the block below already
+      //     handles a server that answers with something else — bounded to two tries, then it
+      //     adopts what the server will actually give. A remembered zoom must never be able to
+      //     start the freeze loop that machinery exists to prevent.
+      if let want = pendingRestoreSpanHz, bins.count > 0 {
+        pendingRestoreSpanHz = nil
+        let wantBinBw = want / Double(bins.count)
+        if wantBinBw > 0, abs(wantBinBw - binBandwidth) > binBandwidth * 1e-3 {
+          Vitals.crumb("UBER restoring remembered span \(Int(want)) Hz")
+          viewBinBw = wantBinBw
+          sendView(viewCenterHz > 0 ? viewCenterHz : frequency, wantBinBw)
+          return
+        }
+      }
+      pendingRestoreSpanHz = nil
     } else if recentlyRequested {
       viewBinBw = binBandwidth          // ack of our own zoom (ladder-snapped) — adopt
       viewCenterHz = centerHz
+      // ★ SAVED ON THE ACK, which is both the settled value and a natural throttle: a crown spin
+      //   fires many zooms and exactly one of these per server reply. Saving inside zoom() would
+      //   write UserDefaults per detent and remember a span the server never granted.
+      if bins.count > 0 { ViewMemory.save(kind: viewKind, host: host,
+                                          spanHz: binBandwidth * Double(bins.count)) }
     } else if viewBinBw > 0, abs(binBandwidth - viewBinBw) > viewBinBw * 1e-3 {
       // Unsolicited reset to full span after a blip — force our zoom back and hold the paint
       // (sendView bumps the subscribe seq, so the gate won't draw the wide frame).

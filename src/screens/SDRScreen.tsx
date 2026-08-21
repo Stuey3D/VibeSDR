@@ -701,6 +701,17 @@ export default function SDRScreen({ route, navigation }: Props) {
     ? `tcp:${route.params.tcpHost ?? ''}:${route.params.tcpPort ?? ''}`
     : 'usb';
   const localHwKey = `lsv_local_hw:${localDeviceKey}`;
+  /** ★★★ WHAT A BOOKMARK IS SCOPED TO — and it must be STABLE ACROSS SESSIONS or the bookmark is
+   *  gone. For a network receiver that is its address, which does not move. For LOCAL HARDWARE and
+   *  RTL-TCP `baseUrl` is the url the phone serves ITSELF on (`ws://127.0.0.1:<port>`), and that
+   *  port is picked at runtime from 48000-48049 — usually 48000, so this looked fine, until
+   *  something else holds it. Running VibeServer on the same phone does exactly that, and every
+   *  local bookmark silently disappears.
+   *  ★ Reuses `localDeviceKey`, which already exists for the same reason one directory up: each
+   *    local source keeps its own remembered setup, keyed by `tcp:host:port` or `usb`. One notion
+   *    of "which local radio is this", not two that can disagree.
+   *  ★ A VibeServer is unaffected — its baseUrl is `http://host:port` and was always stable. */
+  const bookmarkScope = (isLocal && !isVibeServer) ? `local:${localDeviceKey}` : baseUrl;
   const LocalHw = (NativeModules as any).VibeLocalSDR;
   const [hwOpen,        setHwOpen]        = useState(false);
   const [hwGains,       setHwGains]       = useState<number[]>([]);
@@ -5599,7 +5610,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // the search bar identically. User entries win name+freq collisions. Each
   // carries a `source` so the VTS can show its origin icon.
   useEffect(() => {
-    const mine = bookmarksForInstance(userBookmarks, baseUrl);
+    const mine = bookmarksForInstance(userBookmarks, bookmarkScope, baseUrl);
     const seen = new Set(mine.map((b: UserBookmark) => `${b.name}|${b.frequency}`));
     const fallback = serverBookmarks.length > 0 ? serverBookmarks : (eibiEnabled ? eibiBookmarks : []);
     const merged: ServerBookmark[] = [
@@ -5656,18 +5667,18 @@ export default function SDRScreen({ route, navigation }: Props) {
       bandwidth_low:  status.bandwidthLow,
       bandwidth_high: status.bandwidthHigh,
       group:          null, comment: null, extension: null,
-      scope:          allInstances ? '' : baseUrl,
+      scope:          allInstances ? '' : bookmarkScope,
     };
     persistUserBookmarks(mergeBookmarks(userBookmarks, [bm]));
   }, [status.frequency, status.mode, status.bandwidthLow, status.bandwidthHigh,
-      baseUrl, userBookmarks, persistUserBookmarks]);
+      bookmarkScope, baseUrl, userBookmarks, persistUserBookmarks]);
 
   // The menu's saved list should show only what applies to THIS instance —
   // global ('') + this-instance — not bookmarks scoped to OTHER instances (a
   // 'this instance only' bookmark was showing on every instance's list).
   const visibleBookmarks = useMemo(
-    () => bookmarksForInstance(userBookmarks, baseUrl),
-    [userBookmarks, baseUrl],
+    () => bookmarksForInstance(userBookmarks, bookmarkScope, baseUrl),
+    [userBookmarks, bookmarkScope, baseUrl],
   );
 
   const onDeleteBookmark = useCallback((bm: UserBookmark) => {
@@ -7413,7 +7424,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           if (serverDspEnabled) onServerDsp(false);
           setMenuOpen(false);
           // Bookmarks are precious — never clear silently with a reset
-          const instCount = bookmarksForInstance(userBookmarks, baseUrl)
+          const instCount = bookmarksForInstance(userBookmarks, bookmarkScope, baseUrl)
             .filter((b: UserBookmark) => b.scope === baseUrl).length;
           if (instCount > 0) {
             Alert.alert(
@@ -7422,7 +7433,7 @@ export default function SDRScreen({ route, navigation }: Props) {
               [
                 { text: 'Keep', style: 'default' },
                 { text: 'Clear', style: 'destructive',
-                  onPress: () => persistUserBookmarks(withoutInstance(userBookmarks, baseUrl)) },
+                  onPress: () => persistUserBookmarks(withoutInstance(userBookmarks, bookmarkScope)) },
               ],
             );
           }

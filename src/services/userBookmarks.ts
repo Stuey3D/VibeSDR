@@ -82,9 +82,18 @@ export async function saveUserBookmarks(list: UserBookmark[]): Promise<void> {
   await AsyncStorage.setItem(KEY, JSON.stringify(list));
 }
 
-/** Bookmarks visible on an instance: global ('') + instance-scoped. */
-export function bookmarksForInstance(list: UserBookmark[], baseUrl: string): UserBookmark[] {
-  return list.filter((b) => !b.scope || b.scope === baseUrl);
+/** Bookmarks visible on an instance: global ('') + instance-scoped.
+ *
+ *  ★★ `alsoScope` EXISTS TO STOP A KEY CHANGE LOSING SOMEBODY'S BOOKMARKS. Local hardware and
+ *  rtl_tcp used to be scoped by the LOCALLY SERVED url — `ws://127.0.0.1:<port>` — whose port is
+ *  chosen at runtime from a range, so it only stayed the same while nothing else had taken 48000.
+ *  Run VibeServer on the same phone and it does not. Those are now scoped by the stable device key
+ *  instead, and the old url is passed here so anything saved under it still appears rather than
+ *  vanishing on upgrade. */
+export function bookmarksForInstance(list: UserBookmark[], baseUrl: string,
+                                     alsoScope?: string): UserBookmark[] {
+  return list.filter((b) => !b.scope || b.scope === baseUrl
+                            || (!!alsoScope && b.scope === alsoScope));
 }
 
 /** Remove all bookmarks scoped to one instance (instance-settings reset). */

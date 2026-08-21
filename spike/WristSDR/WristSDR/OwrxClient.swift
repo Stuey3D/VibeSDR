@@ -735,6 +735,13 @@ final class OwrxClient: ObservableObject, SDRClient {
       // Show a GENEROUS chunk of the band by default (OWRX profiles are often multi-MHz — a 12 kHz
       // window looked "extremely zoomed"). The crown zoom narrows/widens from here.
       viewBw = min(sampRate > 0 ? sampRate : 192_000, 250_000)
+      // ★★ ...OR THE ZOOM YOU LEFT THIS RECEIVER AT. A default is what a receiver you have never
+      //    opened deserves; one you have opened deserves the scale you chose (GitHub #21).
+      // ★ CLAMPED HERE, because only this client knows its own limits — the same span is legal on a
+      //   30 MHz Kiwi and nonsense on a 192 kHz OWRX profile, and profiles change under us.
+      if let want = ViewMemory.span(kind: "owrx", host: hostPart), want > 0 {
+        viewBw = min(sampRate > 0 ? sampRate : 192_000, max(6_000, want))
+      }
       stationName = ""   // new profile/station — drop any stale RDS name until fresh metadata lands
       dabProgrammes = []; audioServiceId = -1; dabEnsemble = ""   // new ensemble on a DAB profile switch
       dabServiceMap = [:]                                         // drop the old mux's accumulated services
@@ -1005,6 +1012,9 @@ final class OwrxClient: ObservableObject, SDRClient {
     // 6 kHz floor (was 2 kHz — narrower than an SSB channel, which let one contact overrun
     // the screen and flood it with auto-contrast white). Matches Uber/Kiwi's max-zoom floor.
     viewBw = min(maxSpan, max(6_000, viewBw * factor))
+    // ★ OWRX zooms CLIENT-SIDE (the row is sliced locally), so there is no server ack to hang this
+    //   on as UberSDR does — the value here is already the settled one.
+    ViewMemory.save(kind: "owrx", host: hostPart, spanHz: viewBw)
   }
   func setVolume(_ v: Double) { audio.setVolume(Float(v)) }
   func setMode(_ m: String) {

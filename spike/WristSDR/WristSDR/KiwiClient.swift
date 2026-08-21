@@ -567,6 +567,14 @@ final class KiwiClient: ObservableObject, SDRClient {
         self.wfSend("SET wf_comp=1")
         self.wfSend("SET wf_speed=\(self.wfSpeedNow)")
         self.wfSend("SET maxdb=-10 mindb=-110")
+        // ★★ REOPEN AT THE ZOOM YOU LEFT THIS RECEIVER AT (GitHub #21). Applied BEFORE the first
+        //    sendZoom so the Kiwi is asked for it once, rather than being moved a moment later.
+        // ★ Kiwi's zoom is a power-of-two LEVEL from a 30 MHz full scale, so `zoomLevel()` rounds
+        //   this to the nearest legal step and `sendZoom` writes the snapped value back — an
+        //   arbitrary remembered span cannot put it somewhere the protocol has no name for.
+        if let want = ViewMemory.span(kind: "kiwi", host: self.wsBase), want > 0 {
+          self.viewBw = min(Self.fullBW, max(Self.fullBW / pow(2, Double(Self.maxZoom)), want))
+        }
         self.sendZoom()
       }
     }
@@ -843,6 +851,9 @@ final class KiwiClient: ObservableObject, SDRClient {
     let factor = pow(2.0, Double(-delta))
     viewBw = min(Self.fullBW, max(Self.fullBW / pow(2, Double(Self.maxZoom)), viewBw * factor))
     sendZoom()
+    // ★ AFTER sendZoom, which snaps viewBw to the legal ladder — saving before it would remember a
+    //   span this receiver cannot actually produce, and every reopen would round it again.
+    ViewMemory.save(kind: "kiwi", host: wsBase, spanHz: viewBw)
   }
   func setVolume(_ v: Double) { audio.setVolume(Float(v)) }
   func setMode(_ m: String) {
