@@ -1053,7 +1053,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       }
     },
     onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio, lockedCentre, gainCap, agcLocked,
-               gainNow, agc, ovlSteps) => {
+               gainNow, agc, ovlSteps, adcPeak) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
       hwGainNow = typeof gainNow === 'number' ? gainNow : -1;
       // ★ Paint the chip from STATE, so it is right on arrival and after a reload — not only after
@@ -1061,11 +1061,12 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       {
         const chip = $('ovlChip');
         const dB = (hwGainNow / 10).toFixed(1);
+        const pk = typeof adcPeak === 'number' ? ` · pk ${adcPeak} dBFS` : '';
         if (agc && hwGainNow >= 0) {
-          chip.textContent = `AGC ${dB} dB`;
+          chip.textContent = `AGC ${dB} dB${pk}`;
           chip.classList.add('set', 'easing');
         } else if ((ovlSteps ?? 0) > 0 && hwGainNow >= 0) {
-          chip.textContent = `GAIN HELD ${dB} dB`;
+          chip.textContent = `GAIN HELD ${dB} dB${pk}`;
           chip.classList.add('set', 'easing');
         } else if (!agc) {
           chip.classList.remove('set', 'easing');
@@ -1127,9 +1128,11 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     //     stayed up would become part of the furniture, and this one is meant to be noticed.
     //  ★ The recovering state is calmer than the fault state on purpose: going up is good news,
     //    and it must not read as a second alarm.
-    onOverload: (steps: number, dir: number, gainTenthDb: number, agc: boolean) => {
+    onOverload: (steps: number, dir: number, gainTenthDb: number, agc: boolean,
+                 adcPeak?: number) => {
       const chip = $('ovlChip');
       const dB = (gainTenthDb / 10).toFixed(1);
+      const pk = typeof adcPeak === 'number' ? ` · pk ${adcPeak} dBFS` : '';
       // ★★★ THE MOVEMENT IS THE NEWS; THE RESTING PLACE IS THE READOUT. While the loop is stepping,
       //     the chip says WHICH WAY — that is a thing happening, and worth an alarm's colours going
       //     down. Once it settles it stops shouting and simply says where the gain ended up
@@ -1140,18 +1143,18 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       //     learn to ignore. Under manual protection it goes quiet instead, because there the
       //     normal condition is "the gain is where you put it".
       window.clearTimeout(ovlClearTimer);
-      chip.textContent = dir > 0 ? `GAIN ↑ ${dB} dB` : `OVERLOAD: GAIN ↓ ${dB} dB`;
+      chip.textContent = (dir > 0 ? `GAIN ↑ ${dB} dB` : `OVERLOAD: GAIN ↓ ${dB} dB`) + pk;
       chip.classList.toggle('easing', dir > 0);
       chip.classList.add('set');
       ovlClearTimer = window.setTimeout(() => {
         if (agc) {
           // Settled, and the AGC owns the gain from here — show it, quietly.
-          chip.textContent = `AGC ${dB} dB`;
+          chip.textContent = `AGC ${dB} dB${pk}`;
           chip.classList.add('easing');
         } else if (steps > 0) {
           // Still holding the gain below what was asked for: say so, or the slider and the radio
           // appear to disagree with nobody explaining why.
-          chip.textContent = `GAIN HELD ${dB} dB`;
+          chip.textContent = `GAIN HELD ${dB} dB${pk}`;
           chip.classList.add('easing');
         } else {
           chip.classList.remove('set', 'easing');   // back where it was told to be

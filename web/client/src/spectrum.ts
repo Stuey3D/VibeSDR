@@ -190,7 +190,9 @@ export interface SpectrumCallbacks {
                *  everyone already on it. */
               gainNow?: number,
               /** RTL only: is VibeSDR's AGC running, and how many steps below the ceiling is it? */
-              agc?: boolean, ovlSteps?: number) => void;
+              agc?: boolean, ovlSteps?: number,
+              /** Peak ADC level in dBFS — what the AGC is actually aiming at. */
+              adcPeak?: number) => void;
   /** ★★★ Demodulators/decoders the owner has switched off on this receiver. The server refuses
    *  them anyway; this exists so the client can HIDE them. Per AGENTS.md, a control that is
    *  visible and refused reads as a broken feature, not a blocked one. */
@@ -249,7 +251,8 @@ export interface SpectrumCallbacks {
    *  nothing reads as a broken radio rather than as a receiver somebody has parked deliberately. */
   /** The RTL overload protection stepped the gain: `steps` below the owner's ceiling, `dir` -1
    *  when backing off and +1 when recovering. */
-  onOverload?: (steps: number, dir: number, gainTenthDb: number, agc: boolean) => void;
+  onOverload?: (steps: number, dir: number, gainTenthDb: number, agc: boolean,
+                adcPeak?: number) => void;
   onDialRefused?: () => void;
   /** Somebody said one of the canned phrases. `id` is a phrase id, never text. */
   onSaid?: (from: number, id: string) => void;
@@ -599,7 +602,8 @@ export class SpectrumClient {
                            msg.agcLocked === true,
                            typeof msg.gainNow === 'number' ? msg.gainNow : undefined,
                            msg.agc === 1 || msg.agc === true,
-                           Number(msg.ovlSteps) || 0);
+                           Number(msg.ovlSteps) || 0,
+                           typeof msg.adcPeak === 'number' ? msg.adcPeak : undefined);
         // ★★ Demodulators the OWNER has switched off. The server also REFUSES them, so this is
         //    not the enforcement — it is what lets us leave them out of the menu entirely.
         //    Offering a mode that will be refused reads as "the feature is broken"; not offering
@@ -682,7 +686,8 @@ export class SpectrumClient {
       //     the chip can say which way the gain went rather than only that something is wrong.
       case 'ovl':
         this.cb.onOverload?.(Number(msg.steps) || 0, Number(msg.dir) || 0,
-                            Number(msg.gain) || 0, msg.agc === 1 || msg.agc === true);
+                            Number(msg.gain) || 0, msg.agc === 1 || msg.agc === true,
+                            typeof msg.adcPeak === 'number' ? msg.adcPeak : undefined);
         break;
       case 'dial_refused':
         this.cb.onDialRefused?.();

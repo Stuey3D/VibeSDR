@@ -1091,6 +1091,13 @@ static std::atomic<int>      g_adcCleanRun{0};
  *    for. */
 static std::atomic<bool>     g_ovlProtect{true};
 static std::atomic<bool>     g_rtlAgc{false};
+/** ★★★ WHERE THE AGC AIMS: peak ADC level, in dBFS. Not the clipping point — the LINEAR operating
+ *  point. An 8-bit tuner is well behaved with its peaks around -12 dBFS and starts generating
+ *  intermodulation long before it rails, so a loop that aims at the rail arrives somewhere the
+ *  radio cannot do its job. Backing off begins at kAgcBackoffDbfs, and the gap between the two is
+ *  the deadband that stops it toggling on its own threshold. */
+static constexpr double      kAgcTargetDbfs  = -12.0;
+static constexpr double      kAgcBackoffDbfs = -6.0;
 static std::atomic<double>   g_ovlMargin{3.0};
 static std::atomic<double>   g_ovlLastChangeAt{0.0};
 /** ★★★ MORE GAIN IS NOT MORE SIGNAL, AND THIS IS WHERE A HEADROOM-ONLY AGC GOES WRONG.
@@ -1107,7 +1114,21 @@ static std::atomic<double>   g_ovlLastChangeAt{0.0};
  *     therefore settles at the knee — the most gain that still improves the signal — instead of the
  *     most gain the converter will tolerate. */
 static std::atomic<double>   g_climbAt{0.0};
-static std::atomic<float>    g_snrBeforeClimb{0.0f};
+/** ★★★ THE NOISE FLOOR, NOT THE SNR — and the difference is the whole trick.
+ *
+ *  SNR looked like the obvious way to judge a climb and is actively MISLEADING here: when the front
+ *  end starts intermodulating, the centre bins fill with the products, so "peak minus floor" goes
+ *  UP as the radio gets worse. Stuart's two screenshots of 106.0 MHz make it plain — SNR read 14 dB
+ *  on the good one and 22 dB on the ruined one (2026-08-21). A guard watching SNR would have cheered
+ *  the loop on.
+ *
+ *  ★★ THE FLOOR CANNOT LIE THE SAME WAY, because the digital compensation has already removed the
+ *     honest part of the change. A linear step adds gain to signal AND noise alike; the
+ *     compensation takes exactly that back; so a well-behaved climb leaves the measured floor where
+ *     it was. Any RISE that survives compensation is noise the RECEIVER made — compression, and
+ *     precisely what ruins weak signals. In that second screenshot it rose about 20 dB.
+ *  ★ Which is also why this is measured AFTER the compensation is applied, not before. */
+static std::atomic<float>    g_floorBeforeClimb{0.0f};
 static std::atomic<int>      g_ovlLastDir{0};
 
 /** ★★★ THE COOLDOWN IS WHAT MAKES THE LIMIT REAL. Every client auto-reconnects on close, so a
@@ -6600,6 +6621,12 @@ struct LocalSdrShim::Impl {
                       //     state.
                       + ",\"agc\":" + (g_rtlAgc.load(std::memory_order_relaxed) ? "1" : "0")
                       + ",\"ovlSteps\":" + std::to_string(g_ovlSteps.load(std::memory_order_relaxed))
+                      // ★★★ WHAT THE LOOP IS ACTUALLY MEASURING, so a person can see WHY it chose a
+                      //     gain instead of only what it chose. Every wrong turn this AGC has taken
+                      //     was diagnosed by Stuart watching the radio, because the phone's logcat
+                      //     cannot be read — so the number it decides on has to be on screen.
+                      + ",\"adcPeak\":" + std::to_string((int)llround(
+                            g_adcPeakDbfs.load(std::memory_order_relaxed)))
                       + ",\"gains\":[";
         for (size_t i = 0; i < gains.size(); i++) { if (i) j += ','; j += std::to_string(gains[i]); }
         // Capture sample rates this server offers (= the spectrum spans the client
@@ -13934,24 +13961,30 @@ void LocalSdrShim::overloadTick() {
     const double climbAt = g_climbAt.load(std::memory_order_relaxed);
     if (climbAt > 0 && now - climbAt >= 4.0) {
         g_climbAt.store(0.0, std::memory_order_relaxed);
-        const float snrNow = p->spectrumSnr.load();
-        const float snrWas = g_snrBeforeClimb.load(std::memory_order_relaxed);
-        if (snrWas > 0.0f && snrNow < snrWas - 1.5f) {
+        const float floorNow = p->iqFloorDb.load();
+        const float floorWas = g_floorBeforeClimb.load(std::memory_order_relaxed);
+        if (floorWas < -1.0f && floorNow > floorWas + 2.0f) {
             // ★ Give it back, and make the next attempt prove more. This is the same "learn from a
             //   failed climb" the clipping path uses — the two failures differ in what they measure,
             //   not in what they mean: this step was not worth taking.
             const double m = std::min(12.0, g_ovlMargin.load(std::memory_order_relaxed) + 3.0);
             g_ovlMargin.store(m, std::memory_order_relaxed);
-            LOGI("that step cost %.1f dB of SNR — giving it back (a climb now needs %.0f dB)",
-                 snrWas - snrNow, m);
+            LOGI("that step raised the noise floor %.1f dB — the front end is compressing, "
+                 "giving it back (a climb now needs %.0f dB)", floorNow - floorWas, m);
             g_adcCleanRun.store(0, std::memory_order_relaxed);
             steps_forceDown = true;
         }
     }
 
+    const double peakNow = g_adcPeakDbfs.load(std::memory_order_relaxed);
     int want = steps;
     if (steps_forceDown) {
         want = steps + 1;                                        // undo the unhelpful climb
+    } else if (clipRun < 2 && peakNow > kAgcBackoffDbfs) {
+        // ★★ TOO HOT WITHOUT ACTUALLY RAILING — which is exactly where intermodulation lives. The
+        //    rail counter only fires at the very end of the scale, so waiting for it means waiting
+        //    until the damage is audible.
+        want = steps + 1;
     } else if (clipRun >= 2) {
         // ★★★ AND IT COMES DOWN BY AS MUCH AS IT IS OVER. One step at a time is a search; the clip
         //     PERCENTAGE already says how badly the front end is being overdriven, so use it. A few
@@ -14028,6 +14061,18 @@ void LocalSdrShim::overloadTick() {
         if (idx <= from) return;                       // nothing to gain
         const double stepDb = (gains[(size_t)idx] - gains[(size_t)from]) / 10.0;
         const double peak   = g_adcPeakDbfs.load(std::memory_order_relaxed);
+        // ★★★ AIM WELL BACK FROM THE RAIL, NOT AT IT. This climbed until the next step would only
+        //     just avoid clipping — which is the LOUDEST gain the converter tolerates, and far past
+        //     the point where an R820T's front end starts making intermodulation. Stuart, on
+        //     Greatest Hits: it "blasted past the ideal gain level", then "now i'm getting
+        //     intermodulation issues".
+        //  ★★ THE TARGET IS AN OPERATING POINT, WHICH IS HOW PEOPLE ACTUALLY SET AN RTL BY HAND:
+        //     leave the peaks around -12 dBFS and the tuner stays linear. Clipping protection is
+        //     still there underneath as the emergency, but it is no longer what the loop aims for —
+        //     an emergency brake is a terrible cruise control.
+        //  ★ The gap between this and the back-off point is the deadband; without one the loop would
+        //    sit exactly on its own threshold and toggle.
+        if (peak + stepDb > kAgcTargetDbfs) return;
         // ★ 3 dB of margin below full scale. Chosen to be audible-signal-safe rather than tight:
         //   the peak we measured is one second old and the band moves.
         if (peak + stepDb > -g_ovlMargin.load(std::memory_order_relaxed)) {
@@ -14051,7 +14096,7 @@ void LocalSdrShim::overloadTick() {
         g_digGain.store(dg, std::memory_order_relaxed);
     }
     if (want < steps) {                       // this was a climb — put it on trial
-        g_snrBeforeClimb.store(p->spectrumSnr.load(), std::memory_order_relaxed);
+        g_floorBeforeClimb.store(p->iqFloorDb.load(), std::memory_order_relaxed);
         g_climbAt.store(now, std::memory_order_relaxed);
     }
     g_ovlSteps.store(want, std::memory_order_relaxed);
@@ -14089,6 +14134,8 @@ void LocalSdrShim::overloadTick() {
                             + ",\"dir\":" + (want > steps ? "-1" : "1")
                             + ",\"gain\":" + std::to_string(applied)
                             + ",\"agc\":" + (g_rtlAgc.load(std::memory_order_relaxed) ? "1" : "0")
+                            + ",\"adcPeak\":" + std::to_string((int)llround(
+                                  g_adcPeakDbfs.load(std::memory_order_relaxed)))
                             + "}";
         for (auto& pr : p->allSpecPeers()) {
             p->sendHwInfo(pr.sock);
