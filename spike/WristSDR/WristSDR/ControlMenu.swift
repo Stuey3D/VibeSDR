@@ -789,7 +789,16 @@ struct HardwareSheet: View {
           Button {
             let a = !radio.gainAuto; radio.setGainAuto(a)
             if a { gainArmed = false; crownFocused = false }
-          } label: { cell(title: "AUTO GAIN", value: radio.gainAuto ? "ON" : "OFF", lit: radio.gainAuto) }
+            // ★★★ "VIBE AGC", NOT "AUTO GAIN". This sends {"type":"gain","auto":true}, which a
+            //     VibeServer maps to VIBESDR'S OWN AGC — the shim watches the ADC and steps the
+            //     tuner itself, and deliberately never touches the dongle's built-in loop.
+            //  ★★ The name matters because of what people have READ. The RTL-SDR's own AGC is
+            //     unreliable and known broken on the v4, so a bare "AUTO GAIN" reads as that one
+            //     and a listener skips a control that works — Stuart, 2026-08-21: "we dont want
+            //     users to ignore it as they think it is a setting that is broken because of what
+            //     is online about the RTL-SDR". Distinct from DIGITAL AGC below, which is the
+            //     RTL2832's own and a different thing again.
+          } label: { cell(title: "VIBE AGC", value: radio.gainAuto ? "ON" : "OFF", lit: radio.gainAuto) }
             .buttonStyle(.plain)
         }
         }

@@ -150,7 +150,10 @@ object VibeServerBoot {
             //     may raise the gain ABOVE the owner's figure and that has to be asked for.
             //  ★ Not gated on `adv`: an overloading front end is not a sharing decision, and the
             //    starting gain it works against is offered in Simple mode too.
-            VibeLocalSDR.setGainAutomation(cfg.b("overloadProtect", true), cfg.b("rtlAgc", false))
+            // ★ Manual is manual: the first argument is the removed overload-protection flag and
+            //   is now ignored by the shim. Passed false so a stored config carrying it cannot
+            //   resurrect the behaviour.
+            VibeLocalSDR.setGainAutomation(false, cfg.b("rtlAgc", false))
             VibeLocalSDR.setGainLimits(
                 if (adv) cfg.s("gainLimits") else "",
                 restGain,

@@ -422,8 +422,9 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           ) : (
             <>
               <Text style={styles.section}>GAIN</Text>
+              {/* ★ Over RTL-TCP "auto" is the dongle's own broken AGC — see GainSlider.vibeAgc. */}
               <GainSlider gains={p.gains} gainTenthDb={p.gainTenthDb} auto={p.autoGain}
-                          onAuto={p.onAuto} onGain={p.onGain} />
+                          onAuto={p.onAuto} onGain={p.onGain} vibeAgc={!p.isTcp} />
             </>
           )}
           {p.isSpy && <Text style={styles.note}>

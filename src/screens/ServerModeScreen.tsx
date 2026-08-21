@@ -97,7 +97,7 @@ const K = {
   advanced: 'vs_advanced', maxUsers: 'vs_maxusers',
   allowRanges: 'vs_allow', blockRanges: 'vs_block',
   gainLimits: 'vs_gainlimits', restGain: 'vs_restgain', agcLock: 'vs_agclock',
-  ovlProtect: 'vs_ovlprotect', rtlAgc: 'vs_rtlagc',
+  rtlAgc: 'vs_rtlagc',
   proxies: 'vs_proxies', radioUse: 'vs_radiouse',
   landingHz: 'vs_landinghz', landingMode: 'vs_landingmode', biasT: 'vs_biast',
 };
@@ -161,7 +161,6 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   /** ★★★ ONE SLIDER, TWO MEANINGS — see the note by the toggles. Protection is ON by default (it
    *  can only ever prevent clipping); the AGC is OFF, because it may raise the gain above what the
    *  owner set and that has to be asked for. */
-  const [ovlProtect, setOvlProtect]   = useState(true);
   const [rtlAgc, setRtlAgc]           = useState(false);
   /** ★★ WHERE A LISTENER LANDS. The macOS settings window calls these "Listener's starting
    *  frequency / mode"; same setting, same words, so an owner who runs both meets one idea once.
@@ -223,7 +222,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       setName(n);
       try {
         const [p, a, pm, sp, r, fp, cp, ws, apw, unc, lim, fm,
-               mu, alw, blk, gl, rg, agl, ovp, ragc, px, ru, lhz, lmd, bt] = await Promise.all([
+               mu, alw, blk, gl, rg, agl, ragc, px, ru, lhz, lmd, bt] = await Promise.all([
           AsyncStorage.getItem(K.proto), AsyncStorage.getItem(K.advertise),
           AsyncStorage.getItem(K.pinMode), AsyncStorage.getItem(K.pin),
           AsyncStorage.getItem(K.rate), AsyncStorage.getItem(K.fps),
@@ -233,7 +232,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           AsyncStorage.getItem(K.maxUsers), AsyncStorage.getItem(K.allowRanges),
           AsyncStorage.getItem(K.blockRanges), AsyncStorage.getItem(K.gainLimits),
           AsyncStorage.getItem(K.restGain), AsyncStorage.getItem(K.agcLock),
-          AsyncStorage.getItem(K.ovlProtect), AsyncStorage.getItem(K.rtlAgc),
+          AsyncStorage.getItem(K.rtlAgc),
           AsyncStorage.getItem(K.proxies), AsyncStorage.getItem(K.radioUse),
           AsyncStorage.getItem(K.landingHz), AsyncStorage.getItem(K.landingMode),
           AsyncStorage.getItem(K.biasT),
@@ -243,9 +242,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         if (ws != null) setWebServer(ws !== '0');
         if (apw != null) setAdminPw(apw);
         if (unc === '1' || unc === '2') setUncomp(unc === '1' ? 1 : 2);
-        // ★ Absent = the safe default: protection ON, AGC OFF. An existing server must not come
-        //   back with the AGC quietly enabled by an upgrade.
-        if (ovp != null) setOvlProtect(ovp !== '0');
+        // ★ Absent = AGC OFF. An existing server must not come back with the AGC quietly enabled
+        //   by an upgrade — it may raise the gain above what the owner set.
         if (ragc != null) setRtlAgc(ragc === '1');
         if (lim != null) setLimitMin(Number(lim) || 0);
         if (fm != null) setAdvanced(fm === '1');
@@ -475,7 +473,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.idleGrace, String(idleGrace)], [K.antenna, antenna], [K.antennaIcon, antennaIcon],
       [K.allowRanges, allowRanges], [K.blockRanges, blockRanges],
       [K.gainLimits, gainLimits], [K.restGain, String(restGain)],
-      [K.ovlProtect, ovlProtect ? '1' : '0'], [K.rtlAgc, rtlAgc ? '1' : '0'],
+      [K.rtlAgc, rtlAgc ? '1' : '0'],
       [K.agcLock, agcLock ? '1' : '0'], [K.proxies, proxies],
     ]);
     if (Platform.OS === 'android' && Platform.Version >= 33) {
@@ -536,7 +534,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           ? { lockedCentre, zoomSpectrum: zoomSpec, spectrogram }
           : {}),
         gainLimits, restGain, agcLock, trustedProxies: proxies,
-        overloadProtect: ovlProtect, rtlAgc,
+        rtlAgc,
       });
       setRunning(info);
       runningRef.current = true;
@@ -563,7 +561,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   }, [name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
       webServer, locMode, locCity, checkBackgroundAllowed,
       adminPw, uncomp, limitMin, advanced, maxUsers, allowRanges, blockRanges,
-      gainLimits, restGain, agcLock, proxies, ovlProtect, rtlAgc]);
+      gainLimits, restGain, agcLock, proxies, rtlAgc]);
 
   const stopAndBack = useCallback(() => {
     stopAdvertiseRtlTcp();
@@ -1152,19 +1150,6 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 changes with it.
                 ★★ The dongle is the only radio that needs any of this: the Airspy HF+ and the
                    SDRplay have their own AGC and their own lock. */}
-            <View style={styles.rowBetween}>
-              <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
-                Overload protection
-              </Text>
-              <Switch value={ovlProtect} onValueChange={setOvlProtect} disabled={rtlAgc}
-                trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
-            </View>
-            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-              {rtlAgc
-                ? 'Included in AGC — the same loop brings the gain down when the front end overloads.'
-                : 'Winds the gain down when the front end overloads, and puts it back when the '
-                  + 'signal eases. It can never go above the gain that is set.'}
-            </Text>
 
             <View style={[styles.rowBetween, { marginTop: 12 }]}>
               <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
@@ -1180,6 +1165,30 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               This is NOT the dongle's built-in AGC — that one is unreliable and known broken on
               the RTL-SDR Blog v4, and VibeServer never uses it. Anything you have read about RTL
               automatic gain being no good is about the hardware one, not this.
+            </Text>
+
+            {/* ★★★ THE LOCK BELONGS UNDER THE THING IT LOCKS. It lived in GAIN LIMITS, in Advanced,
+                which is a different subject entirely — an owner who had just switched the AGC on
+                had no reason to look there, and the two settings only make sense read together.
+                Stuart, 2026-08-21: "it should be on with the ability to lock it on underneath it."
+                ★★ It only means anything while the AGC is ON, so it is disabled and dimmed when it
+                   is off rather than offered as a switch that governs nothing — the same rule as
+                   everywhere else here. */}
+            <View style={[styles.rowBetween, { marginTop: 12, opacity: rtlAgc ? 1 : 0.4 }]}>
+              <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                Lock AGC on
+              </Text>
+              <Switch value={agcLock && rtlAgc} disabled={!rtlAgc}
+                onValueChange={(v) => { setAgcLock(v); AsyncStorage.setItem(K.agcLock, v ? '1' : '0'); }}
+                trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
+            </View>
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              {rtlAgc
+                ? 'Listeners get the AGC already on and can leave it on, but cannot switch it off '
+                  + '\u2014 the same promise the SDRplay and Airspy locks have always kept. Without '
+                  + 'this, any listener can turn it off and set their own gain, which on a shared '
+                  + 'receiver changes it for everybody.'
+                : 'Turn the AGC on above to lock it.'}
             </Text>
 
             {/* ★★ THE RADIO'S CAPTURE WIDTH, so it sits with the radio rather than with the
@@ -1488,17 +1497,6 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   placeholder="e.g. all:25dB, fm:15dB  (empty = full range)" placeholderTextColor={C.goldDim}
                   autoCapitalize="none" autoCorrect={false}
                   style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 }}>
-                  <TouchableOpacity onPress={() => { const v = !agcLock; setAgcLock(v);
-                                                     AsyncStorage.setItem(K.agcLock, v ? '1' : '0'); }}
-                    style={[styles.card, { borderColor: agcLock ? C.green : C.border,
-                                           backgroundColor: agcLock ? C.green + '18' : 'transparent',
-                                           paddingVertical: 10, paddingHorizontal: 12 }]}>
-                    <Text style={{ color: agcLock ? C.green : C.textDim, fontFamily: F, fontSize: 12 }}>
-                      AGC LOCK
-                    </Text>
-                  </TouchableOpacity>
-                </View>
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
                   Cap the bands that overload and leave the rest open \u2014 a strong local FM
                   transmitter is the usual reason, while HF wants everything the radio has.

@@ -212,15 +212,35 @@ static inline void convU8ToF32(const uint8_t* in, float* out, int nF, AdcStats* 
     const float32x4_t bias = vdupq_n_f32(127.4f), inv = vdupq_n_f32(dg / 128.0f);
     const uint8x16_t hiRail = vdupq_n_u8(254), loRail = vdupq_n_u8(1), one = vdupq_n_u8(1);
     uint32_t rails = 0; uint8_t mx = 0, mn = 255;
+    // ★★★ THE REDUCTIONS COME OUT OF THE LOOP. This measured the ADC with THREE horizontal vector
+    //     reductions per 16 bytes — vaddvq_u8 for the rail count, vmaxvq_u8 and vminvq_u8 for the
+    //     extremes — and a horizontal reduction serialises the pipeline, so on the little cores
+    //     this phone schedules us on they cost MORE THAN THE CONVERSION THEY WERE WRAPPED AROUND.
+    //     At 2.4 MSPS that is 300k of them a second, for a figure the AGC reads ONCE A SECOND.
+    //  ★★ Stuart spotted it from the outside — "the agc is hammering the CPU", with a measured
+    //     111% of one core — while the DSP-thread instrumentation said the demodulator was
+    //     innocent (lock 0 ms). It was: this runs on the CAPTURE thread, so it never appeared in
+    //     dspWorkMs at all, and it stole the cycles the DSP thread needed anyway.
+    //  ★ Max and min accumulate LANEWISE (vmaxq/vminq are ordinary cheap vector ops) and the rail
+    //    hits into a byte accumulator, all reduced once at the end. Identical results.
+    uint8x16_t vmax = vdupq_n_u8(0), vmin = vdupq_n_u8(255);
+    uint32x4_t railAcc = vdupq_n_u32(0);
+    uint8x16_t railBlk = vdupq_n_u8(0);
+    int blk = 0;
     int i = 0;
     for (; i + 16 <= nF; i += 16) {
         const uint8x16_t b = vld1q_u8(in + i);
         if (st) {
             const uint8x16_t hit = vorrq_u8(vcgeq_u8(b, hiRail), vcleq_u8(b, loRail));
-            rails += vaddvq_u8(vandq_u8(hit, one));
-            const uint8_t bmax = vmaxvq_u8(b), bmin = vminvq_u8(b);
-            if (bmax > mx) mx = bmax;
-            if (bmin < mn) mn = bmin;
+            railBlk = vaddq_u8(railBlk, vandq_u8(hit, one));
+            vmax = vmaxq_u8(vmax, b);
+            vmin = vminq_u8(vmin, b);
+            // ★ Each lane gains at most 1 per iteration, so 128 iterations cannot overflow a byte.
+            //   Widen and bank it before it can.
+            if (++blk == 128) {
+                railAcc = vaddq_u32(railAcc, vpaddlq_u16(vpaddlq_u8(railBlk)));
+                railBlk = vdupq_n_u8(0); blk = 0;
+            }
         }
         const uint16x8_t lo = vmovl_u8(vget_low_u8(b)), hi = vmovl_u8(vget_high_u8(b));
         const float32x4_t f0 = vcvtq_f32_u32(vmovl_u16(vget_low_u16(lo)));
@@ -231,6 +251,13 @@ static inline void convU8ToF32(const uint8_t* in, float* out, int nF, AdcStats* 
         vst1q_f32(out + i + 4,  vmulq_f32(vsubq_f32(f1, bias), inv));
         vst1q_f32(out + i + 8,  vmulq_f32(vsubq_f32(f2, bias), inv));
         vst1q_f32(out + i + 12, vmulq_f32(vsubq_f32(f3, bias), inv));
+    }
+    if (st) {
+        // ★ The one reduction per CALL that replaces 300k per second.
+        railAcc = vaddq_u32(railAcc, vpaddlq_u16(vpaddlq_u8(railBlk)));
+        rails += vaddvq_u32(railAcc);
+        mx = vmaxvq_u8(vmax);
+        mn = vminvq_u8(vmin);
     }
     for (; i < nF; ++i) {
         if (st) { const uint8_t v = in[i];
@@ -1083,7 +1110,54 @@ static std::atomic<int>      g_ovlSteps{0};
  *     dropping samples" from "something further downstream is stuttering". One of those is worth
  *     chasing in the DSP and the other very much is not. */
 static std::atomic<long long> g_iqDrops{0};
+// ★★★ A STALL IS A MAXIMUM, NOT AN AVERAGE — which is why the dsp-load figure next to the loop
+//     never showed this. It averages 200 blocks and writes to logcat; a 40 ms freeze inside a
+//     200-block window is invisible in the mean AND unreadable on a phone that filters the log.
+//     These two are peaks over a rolling 10 s window, published in /vibeserver.json, and between
+//     them they say WHICH of the two possible stalls happened:
+//       • dspLockMs — time the DSP thread spent WAITING for modeMtx. Somebody else was holding the
+//         hardware lock: a tune, a gain write, a client joining. Blame is OUTSIDE the DSP.
+//       • dspWorkMs — time spent demodulating one buffer once it had the lock. Blame is INSIDE:
+//         the demodulator itself, which is where Stuart's RDS-reacquisition theory lives.
+//     Either can overflow an 8-deep queue; they need completely different fixes, and guessing
+//     between them is what has cost two days.
+static std::atomic<double> g_dspLockMaxMs{0.0};
+static std::atomic<double> g_dspWorkMaxMs{0.0};
+static std::atomic<double> g_dspStatAt{0.0};
 static std::atomic<double>    g_iqLastDropAt{0.0};
+// ★★★ A HANDFUL OF RAILED SAMPLES IN A SECOND IS NOISE, NOT AN OVERLOAD. At 2.4 MSPS a second is
+//     4.8 million bytes; an impulse — a thermostat, a switching supply, a car — rails a few of
+//     them and means nothing. Treating ANY rail as clipping had two consequences, and the second
+//     is what Stuart saw: it reset the CLEAN RUN every second, so the loop could never accumulate
+//     the quiet time it needs to climb, and the gain sat far below where it belonged ("the agc is
+//     super slow — before 96.6 used to sit at 7.7db", 2026-08-21, found at 0.9 dB).
+//  ★ Well under the smallest REAL overload measured (0.0006% of samples on the Pi ≈ 29 of them),
+//    so a genuine event still counts on its first second.
+static constexpr uint32_t kAdcRailNoise = 8;
+// ★★★ AND THE PEAK NEEDS THE DWELL THE RAIL COUNT ALREADY HAS. Peak is the MAXIMUM over a whole
+//     second, so ONE outlying sample pins it at 0 dBFS and the back-off branch fires on it — which
+//     is how the gain reached minimum while the ADC reported full scale on a station that had
+//     always sat happily at 7.7 dB. The file wrote this lesson down for clipRun ("one is a spark
+//     plug") and left the peak acting on a single window.
+// ★★★ THE ANNOUNCE IS BACK ON — the fault was never in SENDING it. Build 131 suppressed it as a
+//     diagnostic and cut the artefacts from ten in 35 s to three in 110 s, which found the cause:
+//     the CLIENT rebuilt its radio controls and gain list in the DOM on every hwinfo, stalling the
+//     main thread that feeds the audio decoder, and Opus concealed the resulting gap. Fixed where
+//     it belongs, in the client (see onHwInfo): a gain move changes no structure, so only the
+//     slider position and the chip are updated.
+//  ★ Kept as a constant rather than deleted: if this ever needs proving again, one edit does it.
+static constexpr bool        g_agcQuietAnnounce = false;
+// ★★★ THE STEP THAT FAILED, REMEMBERED. Without this the loop straddles: 15.7 dB overloads, it
+//     drops to 14.4, the band is clean at 14.4 — which says nothing whatever about 15.7 — so it
+//     climbs straight back into the overload it just escaped and repeats for ever. Stuart watched
+//     exactly that: "climbed up to 15.7 then immediately going overload 14.4 then back to 15.7".
+//  ★★ An SDRplay does not do this because its AGC has hysteresis: having been burned at a level it
+//     stays below until conditions genuinely change. This is that memory — the gain we were AT
+//     when the overload hit, and a refusal to return to it or above.
+//  ★ It expires two ways, both meaning "the world is different now": a RETUNE (a new dial position
+//    is a new signal, see tuneHw) or a long, genuinely clean run at the step below.
+static std::atomic<int>      g_ovlBadGain{-1};    // tenth-dB, -1 = nothing has failed here
+static std::atomic<int>      g_adcHotRun{0};
 static std::atomic<int>      g_adcClipRun{0};
 static std::atomic<int>      g_adcCleanRun{0};
 /** ★★★ HOW MUCH HEADROOM A CLIMB MUST PROVE, and why it is not a constant.
@@ -1109,12 +1183,17 @@ static std::atomic<int>      g_adcCleanRun{0};
  *    the STARTING point instead — "AGC starting at 14.4" (Stuart, 2026-08-21). The loop then has
  *    the full range in both directions.
  *
- *  ★★ AGC INCLUDES THE PROTECTION by construction: coming down when the ADC rails is the same code
- *     either way. So AGC wins where both are set, and the protection toggle simply stops mattering.
- *  ★ Protection defaults ON (it can only ever prevent clipping, so there is nothing to opt into);
- *    AGC defaults OFF, because it may RAISE gain beyond what the owner set and that must be asked
- *    for. */
-static std::atomic<bool>     g_ovlProtect{true};
+ *  ★★★ MANUAL IS MANUAL — THERE IS NO SEPARATE "OVERLOAD PROTECTION" ANY MORE. It existed to wind
+ *      the gain down when the ADC railed even while a human had set the gain by hand, and the case
+ *      against it is Stuart's, 2026-08-21: *"manual mode is full manual no overload protection,
+ *      agc is what we should work on exclusively"*.
+ *   ★★ AND IT WAS NOT FREE. Every automatic gain move costs a real artefact on this hardware —
+ *      about 50 ms where the level dips and the stereo pilot drops out — so a protection nobody
+ *      asked for was spending the listener's audio to correct a level the listener had CHOSEN.
+ *      With it on, a manual sweep produced nine of them, on the housekeeping tick, spaced 1.84 s
+ *      apart; with it off, the same sweep measured ZERO.
+ *   ★ AGC still comes down when the ADC rails — that half of the behaviour was never in question
+ *     and lives on in overloadTick. What has gone is doing it BEHIND a manual setting. */
 static std::atomic<bool>     g_rtlAgc{false};
 /** ★★★ WHERE THE AGC AIMS: peak ADC level, in dBFS. Not the clipping point — the LINEAR operating
  *  point. An 8-bit tuner is well behaved with its peaks around -12 dBFS and starts generating
@@ -1154,6 +1233,22 @@ static std::atomic<double>   g_climbAt{0.0};
  *     precisely what ruins weak signals. In that second screenshot it rose about 20 dB.
  *  ★ Which is also why this is measured AFTER the compensation is applied, not before. */
 static std::atomic<float>    g_floorBeforeClimb{0.0f};
+/** ★★★ THE BEST (LOWEST) NOISE FLOOR SEEN AT THIS DIAL, and the continuous intermod detector built
+ *  on it.
+ *
+ *  ADC headroom is NOT the binding constraint on an R820T. Its mixer goes non-linear long before an
+ *  8-bit converter fills — most obviously at the top of the FM band, where a dozen strong stations
+ *  sum into the front end. Stuart, at 105.8 with the readout finally visible: "gain is perfect below
+ *  103 but from 103 upwards it really struggles and is overcooking it" — while the ADC peak sat at
+ *  -15 dBFS, i.e. the converter reporting plenty of room as the tuner made mud.
+ *
+ *  ★★ SO WATCH THE FLOOR CONTINUOUSLY, not just for four seconds after a climb. Compensation has
+ *     already removed the honest part of any gain change, so the measured floor should sit still;
+ *     a floor that RISES is the receiver manufacturing noise, which is intermodulation by another
+ *     name. Backing off on that catches what headroom cannot see.
+ *  ★ Reset on a retune: "best floor" is a property of where the dial is, and carrying one band's
+ *    quiet floor to another would make the loop refuse gain it genuinely needs. */
+static std::atomic<float>    g_bestFloorDb{0.0f};
 static std::atomic<int>      g_ovlLastDir{0};
 
 /** ★★★ THE COOLDOWN IS WHAT MAKES THE LIMIT REAL. Every client auto-reconnects on close, so a
@@ -1826,6 +1921,34 @@ struct LocalSdrShim::Impl {
     std::string usbSerial;
     std::thread hotplugThread;
     std::atomic<bool> hotplugRun{false};
+    // ── The hardware writer's queue. See startHwWriter(). One slot, because latest wins.
+    std::thread hwWrThread;
+    std::atomic<bool> hwWrRun{false};
+    std::mutex hwWrMtx;
+    std::condition_variable hwWrCv;
+    std::deque<uint32_t> pendingFreq;   // written in order — see startHwWriter()
+    static constexpr size_t HW_FREQ_MAX = 16;
+    // ★★★ THE PACE OF A HAND YANKING THE SLIDER, not of one nudging it. 25 ms per step (build 127)
+    //     made a LADDER the listener heard every rung of — Stuart, testing the case that matters,
+    //     a weak station then 104.2: "a single drop to 0.9 gain was better than it slowly creeping
+    //     down". But the jump was not right either; what he asked for is the third thing, and it is
+    //     what a person actually does: "do the large jump as a gain sweep down like me manually
+    //     grabbing the gain slider and pulling it down in one move."
+    //  ★★ So the whole move happens inside ONE settling window rather than spread across ten. At
+    //     5 ms a step the tuner's entire range (29 steps on an R820T) is crossed in about 150 ms —
+    //     a fast pull — and the demodulator rides through it as a single event instead of a series.
+    //  ★ Still walked rather than jumped, because the tuner is stepped through its own real gain
+    //    positions the way a slider steps through them; and still abandoned mid-stride if a newer
+    //    target arrives.
+    static constexpr int HW_GAIN_STEP_MS = 5;
+    // ★ Gain is LATEST-WINS, unlike frequency. A sweep is meant to be heard step by step; a gain
+    //   drag is not — only the value you release on matters, and every superseded one is a control
+    //   transfer contending with the stream for nothing.
+    int pendingGainTenth = -1;          // -1 = nothing to write
+    // ★ The tuner's own gain steps, cached for the writer so it can WALK to a target rather than
+    //   jump. Filled the first time anything needs it; a tuner's list never changes.
+    std::vector<int> hwGainList;
+    int hwGainNow = -1;                 // last value actually written to the tuner
 
     // IQ producer/consumer. CRITICAL: rtlsdr_read_async's callback runs on
     // libusb's event-handling thread, so it must return fast — running the heavy
@@ -2031,6 +2154,11 @@ struct LocalSdrShim::Impl {
 
     // Tune the radio to (logical centre + HW_OFFSET_HZ).
     void tuneHw(double logicalCenter) {
+        // ★ A new dial position is a new noise floor — see g_bestFloorDb. Carrying the old one
+        //   across would have the AGC refusing gain on a quiet band because a busy one was noisy.
+        g_bestFloorDb.store(0.0f, std::memory_order_relaxed);
+        // ★ And the failed step belongs to the OLD frequency — see g_ovlBadGain.
+        g_ovlBadGain.store(-1, std::memory_order_relaxed);
         uint32_t hz = (uint32_t)llround(logicalCenter + hwOffsetHz());
         if (useSpy()) {
             spy->setIqFrequency(hz);
@@ -2058,7 +2186,21 @@ struct LocalSdrShim::Impl {
         else if (useTcp()) sendTcpCmd(0x01, hz);
         else if (useSdrplay()) sdrp->setFrequency((double)hz);
         else if (useAirspyHf()) ahf->setFrequency((double)hz);
-        else if (dev) rtlsdr_set_center_freq(dev, hz);
+        // ★★★ HANDED OFF, NOT PERFORMED. This runs under modeMtx (see above, and
+        //     flushPendingDongle() which calls it from the DSP loop itself), so doing the control
+        //     transfer here blocked demodulation for its whole duration. Everything the rest of
+        //     the server believes about where the radio is — rtlCenter, viewCenter, the waterfall
+        //     labels — is still stored synchronously by the callers; only the transfer is deferred.
+        else if (dev) {
+            {
+                std::lock_guard<std::mutex> lk(hwWrMtx);
+                // ★ Drop the OLDEST when flooded: the stale positions are the ones nobody is
+                //   listening for any more, and an unbounded queue would make the dial lag.
+                if (pendingFreq.size() >= HW_FREQ_MAX) pendingFreq.pop_front();
+                pendingFreq.push_back(hz);
+            }
+            hwWrCv.notify_one();
+        }
     }
 
     // audio chain config (the engine itself lives in `rx`). buildAudio() maps the
@@ -4039,6 +4181,7 @@ struct LocalSdrShim::Impl {
         ob->cv.notify_one();
     }
 
+    unsigned adcBufN_ = 0;      // ★ buffer counter for the 1-in-4 ADC sampling (see wantAdc)
     double specAuditMs = 0.0; long long specAuditFrames = 0;   // see onSpectrum's rate audit
 
     // ── Spectrum callback (Stage 3) ────────────────────────────────────────
@@ -6597,8 +6740,32 @@ struct LocalSdrShim::Impl {
                 //     listener's idle-saver slowed every other listener's waterfall and left it
                 //     slow after that listener had gone. See clientFps for the measurements.
                 const double mr = g_vsMaxFftRate.load();     // the owner's ceiling, per client
+                const double wantFps = (mr > 0 && v > mr) ? mr : v;
+                // ★★★ THE SAME RATE IS NOT A CHANGE, AND ACTING ON IT COST US TWO DAYS. Below,
+                //     clientRetuneView() REBUILDS this listener's pipeline — which resets the
+                //     stereo decoder and the RDS acquisition and dips the audio for about 40 ms.
+                //     Harmless when the rate really changed; ruinous when the message is just a
+                //     restatement of the rate already in force.
+                //  ★★★ AND THE CLIENT RESTATES IT ON EVERY hwinfo. Once the AGC began announcing
+                //      each gain move (so the slider would follow), every gain change became a
+                //      pipeline rebuild: AGC fires → hwinfo → client re-sends fftRate → rebuild.
+                //      Stuart's recording shows it exactly — a 40 ms event where the stereo side
+                //      channel collapses and the level dips, repeating every 5.88 s, which is the
+                //      AGC's own dwell. "RDS is reloading every time the AGC fires off."
+                //  ★★ IT IS INVISIBLE TO EVERY COUNTER, which is why it survived so long. No IQ is
+                //     dropped, no lock is contended, no frame is lost, the sink never runs dry and
+                //     never trims — the audio is CONTINUOUS and briefly WRONG. We spent two days
+                //     looking for missing samples that were never missing.
+                //  ★ Guarded HERE as well as in the client because the server must not be
+                //    rebuildable by a message that asks for nothing, whatever build is talking to
+                //    it — including every client already out there.
+                {
+                    std::lock_guard<std::mutex> lk(clientMtx);
+                    auto it = clientFps.find(sock.get());
+                    if (it != clientFps.end() && std::fabs(it->second - wantFps) < 0.01) return;
+                }
                 { std::lock_guard<std::mutex> lk(clientMtx);
-                  clientFps[sock.get()] = (mr > 0 && v > mr) ? mr : v;
+                  clientFps[sock.get()] = wantFps;
                   clientFpsAcc[sock.get()] = 0.0; }
                 // The engine follows the FASTEST listener — this may raise it (a client asking
                 // for more than anyone else) as well as lower it (the last slow one leaving).
@@ -8030,6 +8197,9 @@ struct LocalSdrShim::Impl {
                              //   was. Cheap, always present, and the only way to see the IQ path
                              //   from outside on a phone whose log is unreadable.
                              + ",\"iqDrops\":" + std::to_string(g_iqDrops.load(std::memory_order_relaxed))
+                             + ",\"dspCpu\":" + std::to_string((int)(dspLoadPct + 0.5))
+                             + ",\"dspLockMs\":" + std::to_string((int)(g_dspLockMaxMs.load(std::memory_order_relaxed) + 0.5))
+                             + ",\"dspWorkMs\":" + std::to_string((int)(g_dspWorkMaxMs.load(std::memory_order_relaxed) + 0.5))
                              + ",\"iqDropAgo\":" + std::to_string((int)llround(
                                    g_iqLastDropAt.load(std::memory_order_relaxed) > 0
                                        ? (double)vsNowEpoch() - g_iqLastDropAt.load(std::memory_order_relaxed)
@@ -9853,7 +10023,26 @@ struct LocalSdrShim::Impl {
             const float nxt = (std::fabs(tgt - cur) < 1e-4f) ? tgt : cur + (tgt - cur) * 0.2f;
             g_digGain.store(nxt, std::memory_order_relaxed);
         }
-        convU8ToF32(buf, reinterpret_cast<float*>(v.data()), sampCount * 2, &st);  // NEON
+        // ★★★ NOT MEASURED WHEN NOBODY IS ASKING. The ADC statistics exist to drive the gain
+        //     automation; with both switches off they were still computed on every single sample,
+        //     for a number nothing would ever read. An owner who wants their gain left exactly
+        //     where they put it should not pay for a control loop they turned off.
+        // ★★★ MEASURED ON ONE BUFFER IN FOUR, AND ON THE CAPTURE THREAD THAT IS THE WHOLE POINT.
+        //     These statistics are read ONCE A SECOND by the AGC, but they were computed on every
+        //     sample of every buffer — inside the libusb callback, which must return fast or the
+        //     USB stream itself suffers. Stuart found it by the only test that could: with the AGC
+        //     on and the gain NOT MOVING AT ALL it still stuttered, while manual (where none of
+        //     this runs) was clean. That rules the gain WRITES out entirely — the measurement is
+        //     the only other thing AGC mode switches on.
+        //  ★★ Every 4th buffer is still ~5 readings a second into a 1 s window, which is far more
+        //     than a loop that acts every 1.85 s can use. Rails are counted as a PERCENTAGE of
+        //     samples actually examined, so sampling changes the confidence, not the answer.
+        //  ★ A real overload is not a single sample: it rails continuously for as long as the
+        //    front end is overdriven, so it cannot hide in the three buffers we skip.
+        const bool wantAdc = g_rtlAgc.load(std::memory_order_relaxed)
+                          && ((++adcBufN_ & 3u) == 0u);
+        convU8ToF32(buf, reinterpret_cast<float*>(v.data()), sampCount * 2,
+                    wantAdc ? &st : nullptr);  // NEON
         {
             adcRails_ += st.rails; adcTotal_ += st.total;
             if (st.maxV > adcMax_) adcMax_ = st.maxV;
@@ -9879,11 +10068,18 @@ struct LocalSdrShim::Impl {
                 // ★★ TWO CONSECUTIVE SECONDS, because one is a spark plug. An impulse rails the
                 //    ADC for a handful of samples and means nothing; a front end being overdriven
                 //    keeps doing it. The dwell is what separates them.
-                clipRun_ = (clipPct > 0.0) ? clipRun_ + 1 : 0;
+                // ★ See kAdcRailNoise: a few railed samples in 4.8 million is an impulse.
+                const bool clipping = adcRails_ > kAdcRailNoise;
+                clipRun_ = clipping ? clipRun_ + 1 : 0;
+                {   // ★ The peak's own dwell — two consecutive hot seconds before it counts.
+                    const double pk = frac > 0 ? 20.0 * std::log10(frac) : -99.0;
+                    g_adcHotRun.store(pk > -6.0 ? g_adcHotRun.load(std::memory_order_relaxed) + 1 : 0,
+                                      std::memory_order_relaxed);
+                }
                 // ★ Published for the overload protection, which runs on the DSP thread — this is
                 //   the libusb callback and may not touch the radio (see the header note).
                 g_adcClipRun.store(clipRun_, std::memory_order_relaxed);
-                g_adcCleanRun.store(clipPct > 0.0 ? 0 : g_adcCleanRun.load(std::memory_order_relaxed) + 1,
+                g_adcCleanRun.store(clipping ? 0 : g_adcCleanRun.load(std::memory_order_relaxed) + 1,
                                     std::memory_order_relaxed);
                 if (clipRun_ >= 2)
                     LOGI("ADC OVERLOAD: %.3f%% of samples on the rail, peak %.1f dBFS "
@@ -10403,7 +10599,26 @@ struct LocalSdrShim::Impl {
                 iqQueuedSamples -= buf.size();
             }
             iqSpaceCv.notify_one();
-            std::lock_guard<std::recursive_mutex> mlk(modeMtx);
+            // ★ The wait for the lock is measured SEPARATELY from the work done under it. Same
+            //   scope as the lock_guard this replaces; unique_lock only so the acquisition can be
+            //   timed either side.
+            const auto tLock0 = std::chrono::steady_clock::now();
+            std::unique_lock<std::recursive_mutex> mlk(modeMtx);
+            const auto tLock1 = std::chrono::steady_clock::now();
+            {
+                const double nowS = Impl::nowSecs();
+                // ★ Rolling window: peaks that are ten seconds old describe a stall the listener
+                //   has already forgotten, and a max that never resets only ever ratchets up.
+                if (nowS - g_dspStatAt.load(std::memory_order_relaxed) > 10.0) {
+                    g_dspStatAt.store(nowS, std::memory_order_relaxed);
+                    g_dspLockMaxMs.store(0.0, std::memory_order_relaxed);
+                    g_dspWorkMaxMs.store(0.0, std::memory_order_relaxed);
+                }
+                const double lockMs =
+                    std::chrono::duration<double,std::milli>(tLock1 - tLock0).count();
+                if (lockMs > g_dspLockMaxMs.load(std::memory_order_relaxed))
+                    g_dspLockMaxMs.store(lockMs, std::memory_order_relaxed);
+            }
             flushPendingDongle();     // a retune the pan cooldown postponed — never dropped
             // ★★★ IS THE DSP KEEPING REAL TIME? The only measure that matters under load, and the
             //     one nothing was watching: a probe that counts frames cannot tell "smooth" from
@@ -10428,6 +10643,12 @@ struct LocalSdrShim::Impl {
                 const double wideMs = std::chrono::duration<double,std::milli>(tMid - t0).count();
                 const double perMs  = std::chrono::duration<double,std::milli>(t1 - tMid).count();
                 dspWideMs_ += wideMs; dspPerMs_ += perMs; dspRealMs_ += haveSec * 1000.0;
+                // ★ The WHOLE block under the lock, not just the two halves timed above — the
+                //   peak is what overflows the queue, and it must include everything.
+                const double workMs =
+                    std::chrono::duration<double,std::milli>(t1 - tLock1).count();
+                if (workMs > g_dspWorkMaxMs.load(std::memory_order_relaxed))
+                    g_dspWorkMaxMs.store(workMs, std::memory_order_relaxed);
                 if (++dspBlocks_ >= 200) {
                     size_t q; { std::lock_guard<std::mutex> lk(iqMtx); q = iqQueuedSamples; }
                     // ★ >100% means the DSP cannot keep up and the backlog will grow until
@@ -11633,6 +11854,74 @@ struct LocalSdrShim::Impl {
         });
     }
 
+    // ── ★★★ THE HARDWARE WRITER ─────────────────────────────────────────────────────────────
+    // ★★★ A USB CONTROL TRANSFER MUST NEVER HAPPEN ON THE DSP THREAD, and tuning did exactly
+    //     that. tuneHw() runs under modeMtx — its own comment says so — and flushPendingDongle()
+    //     calls it FROM INSIDE THE DSP LOOP, so the demodulator performed the transfer itself and
+    //     blocked on its own hardware write. One retune is a click; a SWEEP is a stream of them,
+    //     which is why Stuart heard it worst "doing a sweep tune by holding the tuning button",
+    //     and why tuning felt delayed at the same time — the thread that must service the queue
+    //     was inside libusb instead.
+    //  ★★★ EVERY FREQUENCY IS WRITTEN, IN ORDER — and an earlier build of this coalesced them to
+    //      the latest, which was wrong. A SWEEP IS MEANT TO BE HEARD: Stuart, immediately, "the
+    //      sweep tuning needed the intermediate frequencies so you could hear it working". Landing
+    //      only on the final position turns tuning across the band into a jump cut, which is a
+    //      different control from the one the button offers. The queue is bounded and drops the
+    //      OLDEST under flood, so a runaway producer costs freshness rather than unbounded lag.
+    //  ★ devMtx, never modeMtx — the whole point. releaseRadio() holds devMtx across its close, so
+    //    the handle cannot be freed underneath a transfer in flight.
+    //  ★ RTL ONLY. The other drivers reach their hardware through their own libraries with their
+    //    own threading, and dragging them through here would be blast radius for no reported fault.
+    void startHwWriter() {
+        if (hwWrRun.exchange(true)) return;
+        hwWrThread = std::thread([this]{
+            vibeThreadName("vibe-hwwr");
+            std::unique_lock<std::mutex> lk(hwWrMtx);
+            while (hwWrRun.load()) {
+                hwWrCv.wait(lk, [this]{
+                    return !hwWrRun.load() || !pendingFreq.empty() || pendingGainTenth >= 0; });
+                if (!hwWrRun.load()) break;
+                uint32_t hz = 0;
+                if (!pendingFreq.empty()) { hz = pendingFreq.front(); pendingFreq.pop_front(); }
+                const int gn = pendingGainTenth; pendingGainTenth = -1;
+                lk.unlock();
+                if (hz) {
+                    std::lock_guard<std::recursive_mutex> dlk(devMtx);
+                    if (dev && !radioReleased.load()) rtlsdr_set_center_freq(dev, hz);
+                }
+                // ── ★★★ ONE WRITE. THREE APPROACHES WERE TESTED BY EAR; THIS ONE WON ────────
+                //  (1) JUMP straight to the target — one disturbance per change, whatever its size.
+                //  (2) WALK the tuner's steps 25 ms apart, imitating a slider (build 127): WORSE —
+                //      "a single drop to 0.9 gain was better than it slowly creeping down".
+                //  (3) SWEEP them at 5 ms, the pace of a hand yanking the slider (build 128), on
+                //      the theory that the whole move would land inside one settling window:
+                //      WORSE STILL — "stuttery mess".
+                // ★★★ SO THE COST IS PER CONTROL TRANSFER, NOT PER dB OF CHANGE. Every write to the
+                //     tuner disturbs the stream by roughly the same amount however far it moves, so
+                //     the cheapest correction is always the one made in the FEWEST writes. That is
+                //     why a big jump sounded better than a gentle ladder, which is the opposite of
+                //     what a slider suggests — and it is worth writing down, because "move it
+                //     gently" is the intuition anyone will arrive at next.
+                //  ★ Which makes the remaining lever the RATE of changes, not their shape: see the
+                //    dwell constants by overloadTick.
+                //  ★ No gain-mode re-assert — the tuner has been in manual mode since start and
+                //    nothing ever takes it out, so that was a second transfer for no effect.
+                if (gn >= 0) {
+                    std::lock_guard<std::recursive_mutex> dlk(devMtx);
+                    if (dev && !radioReleased.load()) rtlsdr_set_tuner_gain(dev, gn);
+                    hwGainNow = gn;
+                }
+                lk.lock();
+            }
+        });
+    }
+
+    void stopHwWriter() {
+        if (!hwWrRun.exchange(false)) return;
+        hwWrCv.notify_all();
+        joinOnce(hwWrThread, "hw writer");
+    }
+
     void stopHotplugWatch() {
         if (!hotplugRun.exchange(false)) return;
         joinOnce(hotplugThread, "hotplug");
@@ -11956,8 +12245,11 @@ void LocalSdrShim::setRestGain(int gain) {
     LOGI("resting gain: %d", gain);
 }
 void LocalSdrShim::setOverloadProtect(bool on) {
-    g_ovlProtect.store(on, std::memory_order_relaxed);
-    LOGI("overload protection: %s", on ? "on — gain comes down when the ADC rails" : "off");
+    // ★ KEPT AS A NO-OP, DELIBERATELY, and only for the wire: older apps and saved configs still
+    //   carry the flag, and this must swallow it rather than let it mean something. Manual is
+    //   manual now — see the note by g_rtlAgc.
+    (void)on;
+    LOGI("overload protection: removed — manual gain is left exactly where it is put");
 }
 /** Turning the AGC on RAISES the ceiling to the tuner's maximum; turning it off puts the ceiling
  *  back to wherever the gain is now, so the receiver does not lurch when the mode changes. */
@@ -13214,6 +13506,7 @@ int LocalSdrShim::start(int fd, int vid, int pid,
         (void)bufLen;
         impl->launchCapture();
         impl->startHotplugWatch();
+        impl->startHwWriter();
     }
 
     p = impl;
@@ -13725,6 +14018,9 @@ void LocalSdrShim::stopLocked() {
     // and close the socket so the blocked recv() returns and the read thread exits.
     impl->stopping.store(true);      // so the capture thread knows this is US, not an unplug
     impl->stopHotplugWatch();
+    // ★ Before any close: the writer touches `dev`. It takes devMtx, but joining it here is what
+    //   guarantees no transfer is even queued by the time the handle goes.
+    impl->stopHwWriter();
     if (impl->dev) rtlsdr_cancel_async(impl->dev);
     if (impl->useSpy()) {
         impl->tcpRunning.store(false);
@@ -13984,8 +14280,23 @@ void LocalSdrShim::setGain(int gainTenthDb) {
     //   other move, because a listener moving the slider deserves no click either.
     g_digGainTarget.store(1.0f, std::memory_order_relaxed);
     g_ovlSteps.store(0, std::memory_order_relaxed);
-    rtlsdr_set_tuner_gain_mode(p->dev, 1);
-    rtlsdr_set_tuner_gain(p->dev, gainTenthDb);
+    // ★★★ OFF THE DSP'S LOCK, AND ONE TRANSFER INSTEAD OF TWO. This ran under VIBE_HW_LOCK —
+    //     modeMtx, which the DSP thread takes ONCE PER BUFFER — across a gain-mode re-assert AND
+    //     the gain write. So every slider move stopped the demodulator for two USB control
+    //     transfers, overflowed the IQ queue and punched a hole in the audio. That is the dropout
+    //     Stuart has had "whenever changing gain on an RTL no matter if in AM or FM", for as long
+    //     as the slider has existed: not a demodulation fault, which is why the mode never
+    //     mattered — the demodulator was simply not running.
+    //  ★★★ AND SDR++ IS THE PROOF IT IS OURS. Its slider is smooth however hard you drag it, and
+    //      all it does is `rtlsdr_set_tuner_gain(dev, gain)` — one call, from the GUI thread, no
+    //      mode re-assert, no flush, no stop. The tuner has been in manual mode since start() and
+    //      nothing takes it out, so our second transfer bought nothing and cost the stream.
+    //  ★ Latest-wins in the writer, so dragging the slider cannot queue a hundred transfers.
+    {
+        std::lock_guard<std::mutex> lk(p->hwWrMtx);
+        p->pendingGainTenth = gainTenthDb;
+    }
+    p->hwWrCv.notify_one();
     LOGI("gain: %.1f dB", gainTenthDb / 10.0);
 }
 /** The gain the radio is ACTUALLY set to, in its own units; -1 = auto/AGC. */
@@ -14008,12 +14319,35 @@ int LocalSdrShim::currentGainTenthDb() const { return p ? p->lastGainTenthDb : -
  * ★ Only the dongle. The HF+ and the RSP have their own AGC and their own lock; this is the radio
  *   that has neither, which is the whole reason it exists.
  */
+// ★★★ THE COST OF A CHANGE IS THE REASON THESE ARE LARGE. See the climb branch below: a step is
+//     about 40 ms of audible break, so climbing back up is worth doing rarely and well rather than
+//     often and precisely. Backing off is unaffected — an overload is escaped at once.
+//  ★ 30 s of continuous cleanliness before the first attempt, and 90 s between attempts. On the
+//    old 3 s / 6 s the loop hunted between two adjacent steps for ever when the ideal gain sat
+//    between them, which is what Stuart's recording caught.
+// ★ Relaxed from 30 s / 90 s once a gain change stopped costing a hole in the audio (the write
+//   moved off the DSP's lock, and the pointless gain-mode re-assert went with it). Those figures
+//   were rationing a cost that no longer exists — and while the clean run could never accumulate,
+//   they meant the loop could not climb AT ALL. Reluctance is still right: a change is cheap now,
+//   not free, and hunting between two adjacent steps helps nobody.
+// ★★★ QUICK AGAIN, BECAUSE A GAIN CHANGE IS CHEAP AGAIN. These were 30 s / 90 s and then 10 s /
+//     20 s while every automatic move cost 40-60 ms of concealed audio — rationing something
+//     expensive. The cost was the client rebuilding its controls on each announce, it is fixed,
+//     and the rationing can go: a listener who tunes to a weak station wants the gain to come up
+//     now, not in half a minute. Stuart, on 106 MHz: "it's holding it at a lower gain rate and
+//     needs a couple of clicks higher".
+//  ★ Still not instant. Climbing is the direction that can overshoot into an overload, so it stays
+//    one step at a time with a few seconds of proven-clean signal behind each one — enough to
+//    reach a couple of steps within about ten seconds of tuning.
+static constexpr int    kAgcClimbAfterSec = 3;
+static constexpr double kAgcClimbDwellSec = 4.0;
+
 void LocalSdrShim::overloadTick() {
     if (!p) return;
     if (p->useSpy() || p->useTcp() || p->useSdrplay()) return;   // they manage themselves
-    // ★ Both off means the owner wants the gain left exactly where it was put.
-    if (!g_ovlProtect.load(std::memory_order_relaxed) && !g_rtlAgc.load(std::memory_order_relaxed))
-        return;
+    // ★★★ AGC OR NOTHING. A gain the owner typed is a decision, and the loop does not second-guess
+    //     it — see the note by g_rtlAgc for what this used to do and what it cost.
+    if (!g_rtlAgc.load(std::memory_order_relaxed)) return;
     const int target = g_gainTarget.load(std::memory_order_relaxed);
     if (target < 0) return;            // nothing set — no ceiling to work against
 
@@ -14032,7 +14366,10 @@ void LocalSdrShim::overloadTick() {
     //     minute to clear — Stuart cranked the gain to maximum and watched 49.6 dB take about that
     //     long to reach 29.7. Every one of those seconds is a ruined signal for everybody
     //     listening, so coming down is never made to wait.
-    if (clipRun < 2 && now - g_ovlLastChangeAt.load(std::memory_order_relaxed) < 6.0) return;
+    // ★ The climb dwell is long BECAUSE a change is expensive (see the note by the climb branch).
+    //   An overload still escapes immediately — clipRun short-circuits this.
+    if (clipRun < 2 && now - g_ovlLastChangeAt.load(std::memory_order_relaxed) < kAgcClimbDwellSec)
+        return;
 
     // ★★★ DID THE LAST CLIMB ACTUALLY HELP? Judged on SNR, a few seconds later, once the meters
     //     have caught up with the new gain.
@@ -14055,10 +14392,26 @@ void LocalSdrShim::overloadTick() {
     }
 
     const double peakNow = g_adcPeakDbfs.load(std::memory_order_relaxed);
+    // ★★★ THE CONTINUOUS INTERMOD CHECK. Track the quietest floor seen here, and treat a sustained
+    //     rise above it as the front end going non-linear — whatever the converter says about
+    //     headroom.
+    const float floorNow = p->iqFloorDb.load();
+    float best = g_bestFloorDb.load(std::memory_order_relaxed);
+    if (best > -1.0f || floorNow < best) {          // unset, or a new quietest
+        g_bestFloorDb.store(floorNow, std::memory_order_relaxed);
+        best = floorNow;
+    }
+    const bool floorLifted = (best < -1.0f) && (floorNow > best + 3.0f);
+
+    bool backoffToFit = false;   // ★ see the clipRun branch: the jump is sized under the lock
     int want = steps;
     if (steps_forceDown) {
         want = steps + 1;                                        // undo the unhelpful climb
-    } else if (clipRun < 2 && peakNow > kAgcBackoffDbfs) {
+    } else if (clipRun < 2 && floorLifted) {
+        // ★ The floor has come up and stayed up: the extra gain is making noise, not finding signal.
+        want = steps + 1;
+    } else if (clipRun < 2 && peakNow > kAgcBackoffDbfs
+               && g_adcHotRun.load(std::memory_order_relaxed) >= 2) {
         // ★★ TOO HOT WITHOUT ACTUALLY RAILING — which is exactly where intermodulation lives. The
         //    rail counter only fires at the very end of the scale, so waiting for it means waiting
         //    until the damage is audible.
@@ -14071,10 +14424,26 @@ void LocalSdrShim::overloadTick() {
         //  ★ The thresholds are measured, not guessed: the first real overload seen on the Pi railed
         //    both ends at 0.0006% of samples, so "light" has to start well below a tenth of a
         //    per cent (see the note by the detector).
-        const int jump = clipPct > 1.0   ? 4
-                       : clipPct > 0.1   ? 3
-                       : clipPct > 0.005 ? 2 : 1;
-        want = steps + jump;                                     // overdriven — back off
+        // ★★★ GO STRAIGHT THERE. ONE CHANGE, NOT SIX.
+        //  ★★★ A GAIN CHANGE COSTS ~40 ms OF BROKEN AUDIO AND THAT COST IS THE HARDWARE'S, NOT
+        //      OURS. Measured against SDR++ on the same dongle and the same drag: it dips on every
+        //      change too (0.37 events/s to our 0.57). So the price per change cannot be
+        //      engineered away — but the NUMBER of changes is entirely our choice, and stepping
+        //      down a notch or two per tick meant six audible dips to reach a level we could have
+        //      computed in one. Stuart's drag recording shows them arriving on a 1.85 s metronome
+        //      — the housekeeping tick — long after he had stopped touching the slider.
+        //  ★★ AND WE ALREADY KNOW THE ANSWER. peakNow says how far above the operating point we
+        //     are, in dB. Shed that much in a single move: find the first step down the tuner's
+        //     list that is at least that far below where we are, and go there. Searching for a
+        //     number you can calculate is what made this audible.
+        //  ★ Still bounded by the list and by `steps`, so this cannot walk off the end; and the
+        //    climb back up stays cautious and one-at-a-time, because going UP can overshoot into
+        //    an overload while coming DOWN cannot.
+        //  ★ The size of the move needs the tuner's gain list, which is only fetched under the
+        //    hardware lock below — so the decision is taken here and the DISTANCE is worked out
+        //    there, against the real steps this tuner offers.
+        backoffToFit = true;
+        want = steps + 1;                                        // overdriven — back off (at least)
         // ★★★ IF THAT OVERLOAD FOLLOWED A CLIMB, THE CLIMB WAS THE MISTAKE. Widen the margin so the
         //     next attempt has to prove more. This is what stops the straddle: one failed try and
         //     the loop stops reaching for a step it cannot hold.
@@ -14084,7 +14453,23 @@ void LocalSdrShim::overloadTick() {
             g_ovlMargin.store(m, std::memory_order_relaxed);
             LOGI("that climb did not hold — a step up now needs %.0f dB of headroom", m);
         }
-    } else if (steps > 0 && cleanRun >= 3) {
+    // ★★★ EVERY GAIN CHANGE COSTS ABOUT 40 ms OF BROKEN AUDIO, AND THAT CHANGES THE ARITHMETIC.
+    //     Stuart's recording of the stutter settles what one costs: the stereo side channel
+    //     collapses to nothing, the level dips, RDS drops lock, for roughly 40 ms — the tuner's
+    //     level shifts and the whole demodulator has to re-converge. No samples are lost, which is
+    //     why nothing in the server or the client could see it. It is not a fault we can remove;
+    //     it is the price of moving an RTL's gain, and he said so on day one: "it always did it
+    //     when you adjusted it".
+    //  ★★★ SO THE LOOP MUST BE RELUCTANT, NOT MERELY CORRECT. The events in that recording are
+    //      5.88 s apart — the dwell below — because the ideal gain for the signal sat BETWEEN two
+    //      steps the hardware offers (3.7 and 7.7 dB, as he watched it alternate). A loop that
+    //      always seeks the best available step will hunt for ever between the two nearest ones,
+    //      and pay 40 ms every time. Being one step low costs a little sensitivity, continuously
+    //      and inaudibly; hunting costs an audible break every six seconds. The first is better,
+    //      and it is only a bad trade if you assume a gain change is free.
+    //  ★ Coming DOWN is unchanged and still immediate — an overload is ruining the signal NOW, and
+    //    40 ms is a bargain to end it. This reluctance applies only to climbing back up.
+    } else if (steps > 0 && cleanRun >= kAgcClimbAfterSec) {
         // ★ Long and quiet: relax again, one dB at a time, never below the 3 dB floor.
         if (cleanRun >= 120 && g_ovlMargin.load(std::memory_order_relaxed) > 3.0)
             g_ovlMargin.store(std::max(3.0, g_ovlMargin.load(std::memory_order_relaxed) - 1.0),
@@ -14106,6 +14491,9 @@ void LocalSdrShim::overloadTick() {
     if (want == steps) return;
 
     int applied = 0;   // ★ declared out here: the announcement below quotes it, outside the lock
+    // ★★★ THE WRITE ITSELF NOW HAPPENS OUTSIDE modeMtx — see the block below. Set where the write
+    //     used to be, so every early return inside the decision still skips it.
+    bool wroteGain = false;
     // ★★★ THE TUNER'S GAIN LIST, FETCHED ONCE. rtlsdr_get_tuner_gains is cheap, but it is called
     //     under the hardware lock — and THE DSP THREAD TAKES THAT SAME LOCK PER BUFFER. Every
     //     microsecond spent holding it is a buffer the demodulator cannot process, which is heard
@@ -14132,7 +14520,7 @@ void LocalSdrShim::overloadTick() {
     for (int i = 0; i < n; i++) if (gains[(size_t)i] <= target) tgtIdx = i;
     if (want > tgtIdx) want = tgtIdx;                 // cannot go below the bottom of the list
     if (want < 0) want = 0;
-    const int idx = tgtIdx - want;
+    int idx = tgtIdx - want;   // ★ not const: backoffToFit re-sizes the move below
     // ★★★ THE PREDICTION. Only for a climb — backing off is never refused.
     if (want < steps) {
         const int from = tgtIdx - steps;               // where we are now
@@ -14150,7 +14538,17 @@ void LocalSdrShim::overloadTick() {
         //     an emergency brake is a terrible cruise control.
         //  ★ The gap between this and the back-off point is the deadband; without one the loop would
         //    sit exactly on its own threshold and toggle.
+        // ★★★ HYSTERESIS: do not climb back into a step that has already failed here. `cleanRun`
+        //     is measured at the gain we are at NOW and says nothing about the one above — that is
+        //     the whole reason the straddle happened. Only a long quiet spell earns another try.
+        {
+            const int bad = g_ovlBadGain.load(std::memory_order_relaxed);
+            if (bad >= 0 && gains[(size_t)idx] >= bad && cleanRun < 120) return;
+        }
         if (peak + stepDb > kAgcTargetDbfs) return;
+        // ★ And never climb while the floor is already lifted — that is the condition a climb
+        //   created, and another step would deepen it.
+        if (floorLifted) return;
         // ★ 3 dB of margin below full scale. Chosen to be audible-signal-safe rather than tight:
         //   the peak we measured is one second old and the band moves.
         if (peak + stepDb > -g_ovlMargin.load(std::memory_order_relaxed)) {
@@ -14159,19 +14557,52 @@ void LocalSdrShim::overloadTick() {
             return;
         }
     }
+    // ── ★★★ ONE STEP PER CORRECTION. THE SIZE OF THE MOVE IS THE ARTEFACT ───────────────────
+    // ★★★ TESTED BY EAR, EACH VARIANT SEPARATELY, AND THIS IS WHAT THE RESULTS SAY:
+    //       • a SINGLE step, by hand, is CLEAN — "manual gain is clean no drops at all";
+    //       • a multi-step JUMP (build 124) stutters once, in proportion to how far it moved;
+    //       • MANY writes close together are worst of all — 25 ms apart (127) was a ladder you
+    //         heard every rung of, 5 ms apart (128) was a "stuttery mess".
+    //     So the tuner settles cleanly through ONE step and audibly through several, and the
+    //     writes must also be spaced. One step per tick satisfies both: each move is the size that
+    //     is known to be inaudible, and they are 1.85 s apart.
+    //  ★★ THE COST IS SPEED, DELIBERATELY. A gross overload from the top of the range now takes
+    //     several ticks to unwind instead of one write. That is the trade being made: a correction
+    //     that takes a few seconds and cannot be heard beats one that arrives at once and can.
+    //     The gain is still capped at the owner's ceiling throughout, so nothing runs away.
+    //  ★ Backing off still ignores the dwell (see the clipRun short-circuit above), so consecutive
+    //    ticks unwind an overload back-to-back rather than waiting on the climb timer.
+    if (backoffToFit) want = steps + 1;
     applied = gains[(size_t)idx];
     // ★★★ GIVE BACK DIGITALLY WHATEVER THE TUNER JUST GAVE UP — see g_digGain. Done in the SAME
     //     critical section as the gain write, so there is never a window in which the RF has moved
     //     and the compensation has not: that window is exactly the audible step.
     {
-        const int ref = g_gainRef.load(std::memory_order_relaxed);
-        float dg = 1.0f;
-        if (ref >= 0) {
-            const double dB = (ref - applied) / 10.0;          // + when the tuner is below the ref
-            const double cl = dB > 20.0 ? 20.0 : (dB < -20.0 ? -20.0 : dB);
-            dg = (float)std::pow(10.0, cl / 20.0);
-        }
-        g_digGainTarget.store(dg, std::memory_order_relaxed);
+        // ★★★ NO DIGITAL COMPENSATION. IT WAS THE ARTEFACT ITSELF.
+        //  ★★★ MEASURED, NOT ARGUED. SDR++ Brown, same dongle, a deliberate 0 → 49 dB sweep:
+        //      ZERO artefacts in 33 seconds. Ours over a comparable drag: THIRTEEN, each 35–75 ms,
+        //      level and stereo collapsing together and recovering. The one thing we did on a gain
+        //      change that SDR++ does not is scale the samples to keep the audio level steady.
+        //  ★★★ AND THE TIMING CANNOT BE MADE TO WORK. The digital scale changes the instant we
+        //      QUEUE the control transfer; the RF does not change until that transfer lands and
+        //      the tuner settles, tens of milliseconds later. In between, full compensation is
+        //      applied to uncompensated signal — a level error of the WHOLE step — which is
+        //      exactly the 40–50 ms event in Stuart's recordings, and why the stereo pilot drops
+        //      out with it. Gliding it (the original) smears the same error over longer; stepping
+        //      it (my "fix" earlier today) sharpens it. Neither can win, because the two halves
+        //      cannot be made simultaneous from this side of a USB bus.
+        //  ★★ AND FM NEVER NEEDED IT. The discriminator measures an ANGLE — amplitude does not
+        //     reach the audio at all. We built a correction for a problem this demodulator does
+        //     not have, and paid for it in the one currency the listener can hear.
+        //  ★ Left as a fixed 1.0 rather than ripped out: the conversion still reads it, and a
+        //    future AM/SSB path may want a level correction — one applied where amplitude actually
+        //    matters, and NOT tied to a hardware write it cannot be synchronised with.
+        g_digGainTarget.store(1.0f, std::memory_order_relaxed);
+    }
+    if (want > steps) {
+        // ★ The gain we are LEAVING is the one that could not hold. Recorded before it is replaced.
+        const int fromIdx = (tgtIdx - steps) < 0 ? 0 : (tgtIdx - steps);
+        g_ovlBadGain.store(gains[(size_t)fromIdx], std::memory_order_relaxed);
     }
     if (want < steps) {                       // this was a climb — put it on trial
         g_floorBeforeClimb.store(p->iqFloorDb.load(), std::memory_order_relaxed);
@@ -14184,7 +14615,7 @@ void LocalSdrShim::overloadTick() {
     // ★ ONLY THE GAIN. The tuner is already in manual mode — the start path put it there and
     //   nothing here ever leaves it — so re-asserting the mode was a second USB control transfer
     //   per change for nothing, and every one of those is time the stream is contended.
-    rtlsdr_set_tuner_gain(p->dev, applied);
+    wroteGain = true;     // ← the transfer itself is below, off modeMtx
     if (want > steps)
         LOGI("ADC overload (%.3f%% on the rail) — gain %.1f dB, %d step%s below %.1f dB",
              clipPct, applied / 10.0, want, want == 1 ? "" : "s", target / 10.0);
@@ -14195,6 +14626,42 @@ void LocalSdrShim::overloadTick() {
     //   bottom in as many seconds as there are steps.
     if (want > steps) g_adcClipRun.store(0, std::memory_order_relaxed);
     else              g_adcCleanRun.store(0, std::memory_order_relaxed);
+    }
+    // ── ★★★ THE CONTROL TRANSFER, OFF THE DSP'S LOCK ────────────────────────────────────────────
+    // ★★★ THIS IS THE AUDIO STUTTER, AND IT WAS NEVER A LEVEL PROBLEM. Writing the tuner gain is
+    //     several I2C control transfers over USB — tens of milliseconds — and it was done holding
+    //     modeMtx, which the DSP thread takes ONCE PER BUFFER. So every gain change blocked the
+    //     demodulator for the whole transfer, the 8-deep IQ queue overflowed, and dropOldestLocked
+    //     punched a hole in the middle of the stream. The server SAYS SO: iqDrops climbed in
+    //     bursts (22 → 35 in seconds, then 35 seconds perfectly clean) while Stuart reported "the
+    //     audio is still dropping" and "tuning and control seems really delayed" — one cause, both
+    //     symptoms, because a blocked DSP thread also queues everything behind it.
+    //  ★★ AND IT IS WHY THE RECORDING LOOKED PERFECT. A dropped IQ buffer removes a slice of TIME
+    //     before demodulation; the decoded samples that survive still run on continuously. The WAV
+    //     showed "0 sample-level discontinuities" and was right — it could not have shown this.
+    //     That is also the tell Stuart already spotted: "the RDS unlocks too", and RDS rides on an
+    //     ANGLE, so no amplitude explanation could ever have touched it.
+    //  ★★ devMtx AT LAST. It was declared and fully documented for exactly this — "nothing
+    //     serialised rtlsdr_set_gain / tuneHw / setFftRate against a close" — and then used
+    //     NOWHERE, so hardware writes fell back on the one lock they must not hold. releaseRadio()
+    //     now takes it around the close, which is what makes writing here safe.
+    //  ★ Lock ORDER is respected by not nesting at all: modeMtx is released above before devMtx is
+    //    taken here, so the documented devMtx-before-modeMtx rule cannot be violated.
+    if (wroteGain) {
+        // ★★★ THE SAME ROAD TO THE HARDWARE AS THE SLIDER, AND THE MEASUREMENT SAYS WHY. On build
+        //     125 a full manual drag measured ZERO artefacts while the AGC's own moves still cost
+        //     ~50 ms each — same build, same dongle, same station, so it was never the gain change
+        //     itself. The only difference left was the PATH: the slider was moved onto the
+        //     hardware-writer thread in build 120 and this was left writing directly from the
+        //     housekeeping thread. Two roads to one radio is one road too many; whatever the
+        //     writer does differently, it does it demonstrably better.
+        //  ★ Latest-wins, as the slider is: if the loop ever asks twice before the writer runs,
+        //    only the destination matters.
+        {
+            std::lock_guard<std::mutex> lk(p->hwWrMtx);
+            p->pendingGainTenth = applied;
+        }
+        p->hwWrCv.notify_one();
     }
     // ★★★ AND TELL THE LISTENERS, or an automatic gain is invisible. hwinfo is otherwise sent once
     //     on connect, so a slider would go on showing the value the radio HAD while the protection
@@ -14215,11 +14682,21 @@ void LocalSdrShim::overloadTick() {
                             + ",\"adcPeak\":" + std::to_string((int)llround(
                                   g_adcPeakDbfs.load(std::memory_order_relaxed)))
                             + "}";
-        for (auto& pr : p->allSpecPeers()) {
-            p->sendHwInfo(pr.sock);
-            // ★ Through the Impl, like sendHwInfo above it: sendWs/sendText are members, and this
-            //   function is on LocalSdrShim rather than inside Impl.
-            if (pr.sock && pr.sock->isOpen()) p->sendText(pr.sock, m);
+        // ★★★ DIAGNOSTIC, BUILD 131 — THE ANNOUNCE IS THE LAST THING A MANUAL CHANGE DOES NOT DO.
+        //     A single gain step made BY HAND is clean; the same single step made by the loop costs
+        //     40-55 ms, one per tick, measured in Stuart's recording. Both now take the identical
+        //     write path, so the write is exonerated and this broadcast is what is left. Suppressed
+        //     here to prove or clear it — if the artefacts go, the cause is in here (sendHwInfo
+        //     calls back into the shim for the gain table and the cap); if they stay, it is
+        //     something the AGC's own context does and the search moves there.
+        //  ★ The cost of leaving it off is only that a listener's slider stops following the loop.
+        if (!g_agcQuietAnnounce) {
+            for (auto& pr : p->allSpecPeers()) {
+                p->sendHwInfo(pr.sock);
+                // ★ Through the Impl, like sendHwInfo above it: sendWs/sendText are members, and
+                //   this function is on LocalSdrShim rather than inside Impl.
+                if (pr.sock && pr.sock->isOpen()) p->sendText(pr.sock, m);
+            }
         }
     }
 }
@@ -14251,6 +14728,11 @@ bool LocalSdrShim::releaseRadio() {
     joinOnce(impl->rtlThread, "reader");
     impl->stopDspThread();
     {
+        // ★★★ devMtx OUTSIDE modeMtx, in the documented order. This is the lock a hardware write
+        //     now holds instead of modeMtx (see overloadTick), so it is what stops a control
+        //     transfer landing on a handle this function is about to free — the use-after-free the
+        //     devMtx comment was written about, and which nothing had ever actually prevented.
+        std::lock_guard<std::recursive_mutex> dlk(impl->devMtx);
         std::lock_guard<std::recursive_mutex> lk(impl->modeMtx);
         // ★★ radioReleased goes up INSIDE the lock and BEFORE the close, so a control call that
         //    is already waiting on modeMtx returns instead of touching a freed handle.

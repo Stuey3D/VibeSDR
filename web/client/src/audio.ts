@@ -95,6 +95,21 @@ class VibeSink extends AudioWorkletProcessor {
     //   tuning, which is the one thing they do constantly.
     this.armedByFlush = false;
     this.drained = 0;            // samples this node has actually put out — see process()
+    // ★★★ COUNT THE STARVATIONS, and say so unconditionally. The jitter report below only fires
+    //     when the target CHANGES, so a node already at max underruns in complete silence — which
+    //     is precisely the case a listener notices and we could not see (Stuart, 2026-08-21: "the
+    //     audio is still dropping"). A stutter caused by starvation and one caused by the decoder
+    //     look identical from the page; this is the single number that separates them.
+    this.underruns = 0;
+    // ★★★ THE OTHER WAY SAMPLES DISAPPEAR, AND NOTHING COUNTED IT. Both discard paths below throw
+    //     audio away WITHOUT an underrun — the overflow guard and the latency trim — so a listener
+    //     hears a hitch while every counter reads clean. Stuart, with the status row showing no
+    //     dry count at all and the audio still breaking up: "cant see a dry measurement". There
+    //     was nothing wrong with the measurement; it was measuring the wrong discard.
+    //  ★ A trim is EXPECTED occasionally (the server's clock and the sound card's differ). A trim
+    //    every few seconds means audio is arriving in bursts, which is what a DSP at 85% of real
+    //    time does.
+    this.skips = 0;
     this.lastReport = 0;
     this.port.onmessage = (e) => {
       // ★★★ FLUSH ON RETUNE. Everything already queued was demodulated at the OLD frequency, so
@@ -113,6 +128,7 @@ class VibeSink extends AudioWorkletProcessor {
       const { l, r } = e.data;
       const n = l.length;
       if (this.filled + n > this.cap) {   // overflow: drop oldest
+        this.skips++; this.port.postMessage({ skips: this.skips });
         const drop = this.filled + n - this.cap;
         this.r = (this.r + drop) % this.cap;
         this.filled -= drop;
@@ -137,6 +153,7 @@ class VibeSink extends AudioWorkletProcessor {
       //       discontinuity is far cheaper than a permanent half-second of lag.
       const ceiling = this.target * 2.5;
       if (this.filled > ceiling) {
+        this.skips++; this.port.postMessage({ skips: this.skips });
         const drop = this.filled - this.target;
         this.r = (this.r + drop) % this.cap;
         this.filled -= drop;
@@ -153,9 +170,16 @@ class VibeSink extends AudioWorkletProcessor {
         this.started = false;
         // ★★ THE LINK HAS JUST PROVED THIS DEPTH TOO SHALLOW. Grow, unless we emptied the buffer
         //    ourselves on a retune — that re-arm is expected and says nothing about the network.
-        if (this.armedByFlush) {
-          this.armedByFlush = false;
-        } else if (this.target < this.max) {
+        // ★ Read and clear ONCE. Both tests below need it, and clearing it inside the first
+        //   would make the second read false and grow the buffer on every retune.
+        const wasFlush = this.armedByFlush;
+        this.armedByFlush = false;
+        if (!wasFlush) {
+          // ★ Counted BEFORE the growth test, so an underrun at max depth is still an underrun.
+          this.underruns++;
+          this.port.postMessage({ underruns: this.underruns });
+        }
+        if (!wasFlush && this.target < this.max) {
           this.target = Math.min(this.max, this.target + this.step);
           this.cleanFor = 0;
           // Tell the page, so a listener's depth is observable rather than inferred — the whole
@@ -343,6 +367,12 @@ export class AudioPlayer {
   /** Current playout cushion in ms — starts at JITTER_SEC and the worklet adapts it to the link.
    *  Read it to explain how far the audio sits behind the waterfall. */
   jitterMs = Math.round(JITTER_SEC * 1000);
+  /** How many times playout has run dry. See the worklet — the one number that tells a starvation
+   *  stutter from a decode one, and it is shown in the status row for exactly that reason. */
+  underruns = 0;
+  /** Samples thrown away because they arrived faster than they could be played — a hitch with no
+   *  underrun. See the worklet: this is the discard nothing was counting. */
+  skips = 0;
   private gain: GainNode | null = null;
 
   // ScriptProcessor fallback — see start(). Only one of `node` / `sp` is live.
@@ -478,8 +508,11 @@ export class AudioPlayer {
         //   behind the waterfall?" has an answer on this side of the port — an adaptive value
         //   nobody can read is indistinguishable from a bug.
         this.node.port.onmessage = (e: MessageEvent) => {
-          const d = e.data as { jitterMs?: number; drained?: number };
+          const d = e.data as { jitterMs?: number; drained?: number; underruns?: number;
+                                skips?: number };
           if (typeof d?.jitterMs === 'number') this.jitterMs = d.jitterMs;
+          if (typeof d?.underruns === 'number') this.underruns = d.underruns;
+          if (typeof d?.skips === 'number') this.skips = d.skips;
           // ★★★ THE ONLY PROOF THAT SOUND IS LEAVING. See the note in the worklet: every other
           //     signal this class has is measured before the node.
           if (typeof d?.drained === 'number') this.lastDrainAt = performance.now();
@@ -1033,8 +1066,11 @@ export class AudioPlayer {
         this.node.disconnect();
         this.node = new AudioWorkletNode(this.ctx, 'vibe-sink', { outputChannelCount: [2] });
         this.node.port.onmessage = (e: MessageEvent) => {
-          const d = e.data as { jitterMs?: number; drained?: number };
+          const d = e.data as { jitterMs?: number; drained?: number; underruns?: number;
+                                skips?: number };
           if (typeof d?.jitterMs === 'number') this.jitterMs = d.jitterMs;
+          if (typeof d?.underruns === 'number') this.underruns = d.underruns;
+          if (typeof d?.skips === 'number') this.skips = d.skips;
           if (typeof d?.drained === 'number') this.lastDrainAt = performance.now();
         };
         this.node.connect(this.gain!);

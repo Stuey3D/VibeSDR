@@ -1423,7 +1423,6 @@ int main(int argc, char** argv) {
                     // ★ Both, together: the AGC raises the ceiling to the tuner's maximum, so it
                     //   must be applied where the gain settings are, not somewhere that could run
                     //   before the radio exists (which is exactly how it failed on Android).
-                    LocalSdrShim::setOverloadProtect(g_runtimeConfig.overloadProtect);
                     LocalSdrShim::instance().setRtlAgc(g_runtimeConfig.rtlAgc);
                     LocalSdrShim::setAgcLock(g_runtimeConfig.agcLock == 1);
                     LocalSdrShim::setVibeServerTuneLimits(

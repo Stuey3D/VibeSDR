@@ -22,6 +22,20 @@ export interface GainSliderProps {
   onAuto: (auto: boolean) => void;
   onGain: (tenthDb: number) => void;
   label?: string;
+  /**
+   * ★★★ WHOSE AGC THE AUTO BUTTON ENGAGES, which is not a detail — it decides whether the button
+   *     should exist at all.
+   *  ★★ On local hardware and on a VibeServer, "auto" is **VibeSDR's own AGC**: the shim watches
+   *     the ADC and steps the tuner itself, and it deliberately never touches
+   *     rtlsdr_set_tuner_gain_mode(dev, 0). It is named on screen because of what people have
+   *     read elsewhere — the dongle's built-in AGC is unreliable and is KNOWN BROKEN on the v4, so
+   *     a bare "AUTO" invites a user to dismiss a control that actually works (Stuart, 2026-08-21).
+   *  ★★★ Over RTL-TCP there is no such thing. The protocol's only automatic mode is command 0x03,
+   *      which turns on the dongle's own broken loop, so the button is NOT DRAWN there rather than
+   *      offered and quietly harmful — the same rule as everywhere else in this app: a control that
+   *      works on one path and misleads on another should not be there.
+   */
+  vibeAgc?: boolean;
 }
 
 function nearestIndex(gains: number[], tenthDb: number): number {
@@ -33,7 +47,8 @@ function nearestIndex(gains: number[], tenthDb: number): number {
   return best;
 }
 
-export default function GainSlider({ gains, gainTenthDb, auto, onAuto, onGain, label = 'RF GAIN' }: GainSliderProps) {
+export default function GainSlider({ gains, gainTenthDb, auto, onAuto, onGain, label = 'RF GAIN',
+                                    vibeAgc = true }: GainSliderProps) {
   const haveGains = gains.length > 0;
   const idx = haveGains ? nearestIndex(gains, gainTenthDb) : 0;
 
@@ -41,20 +56,23 @@ export default function GainSlider({ gains, gainTenthDb, auto, onAuto, onGain, l
     <View style={styles.wrap}>
       <View style={styles.headerRow}>
         <Text style={styles.label}>{label}</Text>
-        <View style={styles.btnRow}>
-          <TouchableOpacity
-            style={[styles.btn, auto && styles.btnActive]}
-            onPress={() => onAuto(true)}
-          >
-            <Text style={[styles.btnTxt, auto && styles.btnTxtActive]}>AUTO</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.btn, !auto && styles.btnActive]}
-            onPress={() => onAuto(false)}
-          >
-            <Text style={[styles.btnTxt, !auto && styles.btnTxtActive]}>MANUAL</Text>
-          </TouchableOpacity>
-        </View>
+        {vibeAgc ? (
+          <View style={styles.btnRow}>
+            <TouchableOpacity
+              style={[styles.btn, auto && styles.btnActive]}
+              onPress={() => onAuto(true)}
+            >
+              {/* ★ "AGC", not "AUTO": it is a gain CONTROL LOOP, and the note below says whose. */}
+              <Text style={[styles.btnTxt, auto && styles.btnTxtActive]}>AGC</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.btn, !auto && styles.btnActive]}
+              onPress={() => onAuto(false)}
+            >
+              <Text style={[styles.btnTxt, !auto && styles.btnTxtActive]}>MANUAL</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
       </View>
       <View style={styles.sliderRow}>
         <Slider
@@ -70,14 +88,32 @@ export default function GainSlider({ gains, gainTenthDb, auto, onAuto, onGain, l
           thumbTintColor={auto ? C.dim : C.gold}
         />
         <Text style={styles.val}>
-          {auto ? 'Auto' : haveGains ? `${(gains[idx] / 10).toFixed(1)} dB` : '—'}
+          {auto ? 'AGC' : haveGains ? `${(gains[idx] / 10).toFixed(1)} dB` : '—'}
         </Text>
       </View>
+      {/* ★★ SAY WHOSE AGC IT IS. Everything written about RTL-SDR AGC online is about the dongle's
+             own loop, which is unreliable and broken on the v4 — so an unnamed "auto" reads as that
+             one, and a listener skips a control that works. */}
+      {vibeAgc ? (
+        <Text style={styles.note}>
+          {auto
+            ? "VibeSDR's own AGC for RTL-SDR: it watches the ADC for overload and steps the tuner "
+              + 'gain to suit. Switch to Manual to set the gain yourself.'
+            : "Manual gain — nothing moves it but you. AGC engages VibeSDR's own loop for "
+              + "RTL-SDR, not the dongle's built-in one, which is never used."}
+        </Text>
+      ) : (
+        <Text style={styles.note}>
+          Manual gain only over RTL-TCP: the protocol's automatic mode is the dongle's own AGC,
+          which is unreliable and is known broken on the v4. VibeSDR's AGC needs a VibeServer.
+        </Text>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  note: { color: C.dim, fontSize: 11, lineHeight: 15, marginTop: 6 },
   wrap: { paddingVertical: 6 },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   label: { fontSize: 12, letterSpacing: 1.5, color: C.dim, fontWeight: '600' },

@@ -1072,6 +1072,21 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
           chip.classList.remove('set', 'easing');
         }
       }
+      // ★★★ THE BUTTON FOLLOWS THE RADIO, NOT ONLY THE MOUSE. Its "on" class was set ONLY by a
+      //     click, so a server that already has the AGC running greeted every listener with the
+      //     button OFF and the gain slider live — and they had to switch on a thing that was
+      //     already on to find out it was. Stuart, 2026-08-21: "when the AGC switch is enabled in
+      //     the GUI I still have to enable it manually in the menu of the client".
+      //  ★★ hwinfo has carried `agc` all along; nothing was reading it. This is the same fault as
+      //     the gain slider before it — a control drawn from local state rather than from what the
+      //     receiver actually reports, which is guaranteed to be wrong for everybody but the person
+      //     who last touched it.
+      //  ★ Only when the server actually says: `agc` is absent from radios that have no such loop,
+      //    and a missing field must not read as "off".
+      if (typeof agc === 'boolean') {
+        $<HTMLButtonElement>('gainAuto').classList.toggle('on', agc);
+        $<HTMLInputElement>('gain').disabled = agc;
+      }
       hwGainCap = typeof gainCap === 'number' ? gainCap : -1;
       hwAgcLocked = agcLocked === true;
       // ★ Say WHY it cannot be turned off, where the hand is already going. Locked is the owner's
@@ -1107,12 +1122,41 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         spec.tune(to, undefined, { recenter: true, retarget: true });
         renderFreq();
       }
+      // ★★★ THE HEAVY HALF RUNS ONLY WHEN SOMETHING STRUCTURAL CHANGED — AND THAT IS THE STUTTER.
+      //     hwinfo now arrives on EVERY AGC gain move, and this handler rebuilt the radio controls
+      //     and the gain list in the DOM each time: `r.innerHTML = ''` and a fresh <option> per
+      //     gain step, on the MAIN THREAD. That is the thread feeding the audio decoder, so each
+      //     rebuild delayed Opus packets and the decoder CONCEALED the gap — and packet-loss
+      //     concealment is precisely what we kept measuring: 40-60 ms (two or three 20 ms frames)
+      //     of attenuated, mono-collapsed audio fading back in. It appears in a RECORDING because
+      //     the recording taps the decoded stream, after concealment.
+      //  ★★★ WHICH IS WHY EVERY SERVER-SIDE COUNTER STAYED CLEAN. No IQ was dropped, no lock was
+      //      contended, no frame was lost, the sink never ran dry. Stuart got there from the
+      //      symptom — "I wonder if simply animating the slider was the issue" — after a build
+      //      that simply stopped sending the announce cut the artefacts from ten in 35 s to three
+      //      in 110 s.
+      //  ★★ A gain MOVE changes no structure: same radio, same gain list, same rates, same caps.
+      //     Only the VALUE moves, and that is a slider position and a chip — cheap, and done
+      //     unconditionally above. The rebuild is for a genuinely different radio.
+      //  ★ Compared by content, not identity: these arrive freshly parsed from JSON every time, so
+      //    a reference check would never match and this would rebuild for ever.
+      const hwSig = JSON.stringify([gains, rates, locked, maxFps, forceIdle, radio ?? null,
+                                    lockedCentre, gainCap, agcLocked]);
+      if (hwSig === lastHwSig) return;
+      lastHwSig = hwSig;
       applyRadioCaps(radio ?? null);
       // THE OWNER'S FRAME-RATE CEILING. Honour it rather than asking for more and being silently
       // clamped: a client that keeps requesting 20 fps and keeps receiving 10 has no way to tell
       // a capped server from a failing link, and the difference matters.
       serverMaxFps = maxFps > 0 ? maxFps : 0;
-      if (serverMaxFps > 0 && spec) spec.setFftRate(wantedFps());
+      // ★★★ ONLY WHEN IT ACTUALLY CHANGES. hwinfo now arrives on every AGC gain move, and this
+      //     line re-sent the rate each time — which made the server rebuild this listener's
+      //     pipeline, resetting stereo and RDS and dipping the audio for ~40 ms. A restatement is
+      //     not a request. (The server refuses a no-op rate too; both ends, deliberately.)
+      if (serverMaxFps > 0 && spec) {
+        const fps = wantedFps();
+        if (fps !== lastSentFps) { lastSentFps = fps; spec.setFftRate(fps); }
+      }
       // ★ The owner REQUIRES idle saving (a solar/cellular host, where power outranks a listener's
       // preference). Force it on and lock the control, saying who set it — the same courtesy as a
       // pinned sample rate. Never leave a switch on screen that we would silently ignore.
@@ -2885,7 +2929,17 @@ function updateStatus() {
   // promised. Shown to one decimal below 10, because the difference between 4.6 and 5 matters at
   // the bottom of the ladder and is invisible when rounded.
   const fps = framesPerSec >= 10 ? framesPerSec.toFixed(0) : framesPerSec.toFixed(1);
-  el.textContent = `${total.toFixed(0)} KB/s · ${fps} fps · ${rtt.toFixed(0)} ms${idle}`;
+  // ★★★ UNDERRUNS ARE SHOWN, and only once there has been one. A stutter is the single most
+  //     reported audio fault and every vantage point the page had — bytes arriving, frames
+  //     decoding, even a clean recording — is measured BEFORE playout, so all causes looked
+  //     alike. This counter says whether the sound card ran dry (starvation: link, main-thread
+  //     stall, or the server pausing) or did not (then the fault is in what we handed it).
+  //  ★ Absent at zero, so a healthy listener never sees a scary-looking counter at 0.
+  const dry = audio && audio.underruns > 0 ? ` · ${audio.underruns} dry` : '';
+  // ★ Shown separately from `dry` because they mean OPPOSITE things: dry is too little audio,
+  //   skip is too much arriving at once. Both are heard as a hitch and only one had a counter.
+  const skip = audio && audio.skips > 0 ? ` · ${audio.skips} skip` : '';
+  el.textContent = `${total.toFixed(0)} KB/s · ${fps} fps · ${rtt.toFixed(0)} ms${dry}${skip}${idle}`;
   el.title = `spectrum ${specKbps.toFixed(0)} KB/s · audio ${audioKbps.toFixed(0)} KB/s`
     + ` · asking for ${wantedFps()} fps`;
 
@@ -4075,6 +4129,10 @@ function refreshDataRateSeg() {
 }
 /** The owner's cap, from hwinfo. 0 = uncapped. */
 let serverMaxFps = 0;
+/** The last fps we actually asked the server for — see onHwInfo. */
+let lastSentFps = -1;
+/** Structure of the last hwinfo, so a gain move does not rebuild the controls. See onHwInfo. */
+let lastHwSig = '';
 /** What we should be asking for right now: our own choice, clamped to the server's ceiling. */
 function wantedFps(): number {
   const want = throttled ? Math.min(IDLE_FPS, activeFps) : activeFps;
