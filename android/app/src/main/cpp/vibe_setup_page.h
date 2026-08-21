@@ -532,6 +532,33 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
              person. Applied when the last listener has gone, not the moment they disconnect, so a
              page reload does not undo somebody's setting.</div></label>
 
+        <!-- ★★★ THE NAME IS DOING REAL WORK HERE. Everything written online says the RTL-SDR's
+             automatic gain is broken — and it is, which is why VibeServer has never used it. A
+             control simply labelled "AGC" would be read as THAT one and switched straight past,
+             so it says whose AGC it is (Stuart, 2026-08-21: "we dont want users to ignore it as
+             they think it is a setting that is broken because of what is online"). -->
+        <label class="hide" id="rtlAgcRow"><span class="lbl">VibeSDR Custom AGC for RTL-SDR</span>
+          <select id="rtlAgc">
+            <option value="0">Off — the gain stays where it is set</option>
+            <option value="1">On — the receiver manages its own gain</option>
+          </select>
+          <div class="note"><b>This is not the dongle's built-in AGC.</b> That one is unreliable
+            across tuners and known broken on the RTL-SDR Blog v4, and this server never uses it.
+            VibeSDR's own loop measures how close the signal is to overloading the converter and
+            moves the tuner a step at a time, the way an SDRplay does in hardware.
+            <br>The gain above becomes the STARTING point; from there it may use the tuner's whole
+            range in either direction. Leave it off and the gain stays exactly where you set it.</div></label>
+
+        <label class="hide" id="ovlProtectRow"><span class="lbl">Overload protection</span>
+          <select id="overloadProtect">
+            <option value="1">On (recommended)</option>
+            <option value="0">Off</option>
+          </select>
+          <div class="note">For a MANUAL gain: winds it down when the front end overloads and puts
+            it back when the signal eases. It can never go above the gain that is set, so there is
+            nothing it can do that you would not have wanted — which is why it is on by default.
+            <br>The AGC above includes this; with the AGC on, this setting does nothing.</div></label>
+
         <label class="hide" id="gainLimitRow"><span class="lbl">Per-band ceilings</span>
           <div class="row" style="gap:8px">
             <select id="gainPick" style="flex:1 1 200px"></select>
@@ -1169,6 +1196,10 @@ function renderGain() {
   $("gainLimitRow").classList.toggle("hide", !(isRtl || isRsp));
   $("gainAgcLock").checked = r.agcLock === 1;
   $("gainRest").value = gainFromRaw(r.restGain);
+  // ★ Absent = the safe defaults: protection on, AGC off. An older config must not read as though
+  //   the owner had asked for automatic gain.
+  $("rtlAgc").value = r.rtlAgc ? "1" : "0";
+  $("overloadProtect").value = (r.overloadProtect === false) ? "0" : "1";
   $("gainRest").placeholder = isRtl ? "e.g. 19.7 dB \u2014 empty to leave it alone"
                                     : "RF gain position \u2014 empty to leave it alone";
   $("gainMax").placeholder = isRtl ? "max, e.g. 25 dB" : "max RF position";
@@ -1900,6 +1931,8 @@ function fill() {
   $("gainAgcLock").addEventListener("change", () => { radio().agcLock = $("gainAgcLock").checked ? 1 : 0; });
   $("gainRest").addEventListener("change", () => {
     const t = ($("gainRest").value || "").trim();
+    radio().rtlAgc = $("rtlAgc").value === "1";
+    radio().overloadProtect = $("overloadProtect").value === "1";
     radio().restGain = t ? gainToRaw(t) : -1;
     $("gainRest").value = gainFromRaw(radio().restGain);   // echo it back in canonical form
   });

@@ -247,7 +247,7 @@ export interface SpectrumCallbacks {
    *  nothing reads as a broken radio rather than as a receiver somebody has parked deliberately. */
   /** The RTL overload protection stepped the gain: `steps` below the owner's ceiling, `dir` -1
    *  when backing off and +1 when recovering. */
-  onOverload?: (steps: number, dir: number) => void;
+  onOverload?: (steps: number, dir: number, gainTenthDb: number, agc: boolean) => void;
   onDialRefused?: () => void;
   /** Somebody said one of the canned phrases. `id` is a phrase id, never text. */
   onSaid?: (from: number, id: string) => void;
@@ -677,7 +677,8 @@ export class SpectrumClient {
       //     overload flag, which reports a HARDWARE condition: this reports an ACTION we took, so
       //     the chip can say which way the gain went rather than only that something is wrong.
       case 'ovl':
-        this.cb.onOverload?.(Number(msg.steps) || 0, Number(msg.dir) || 0);
+        this.cb.onOverload?.(Number(msg.steps) || 0, Number(msg.dir) || 0,
+                            Number(msg.gain) || 0, msg.agc === 1 || msg.agc === true);
         break;
       case 'dial_refused':
         this.cb.onDialRefused?.();

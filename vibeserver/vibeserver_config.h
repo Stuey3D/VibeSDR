@@ -141,6 +141,8 @@ struct Config {
      *  ★ Applied at the IDLE PARK rather than on disconnect — the park is where "everybody has
      *    gone" is actually decided, and a page reload must not reset a listener's own setting. */
     int    restGain = -1;
+    bool   rtlAgc = false;          ///< see RadioConfig::rtlAgc
+    bool   overloadProtect = true;  ///< see RadioConfig::overloadProtect
 
     /** ★★ Force the AGC on and refuse to let a listener turn it off. RSP and Airspy HF+ only —
      *  it is the WHOLE feature for the HF+, which has no variable gain to cap and whose AGC is
@@ -262,6 +264,18 @@ struct RadioConfig {
     //     would make a "limit" mean its own inverse), an HF+ has no variable gain at all.
     std::string gainLimits;   ///< "88-108:250" in MHz, comma separated. Empty = no limit.
     int         restGain = -1;  ///< returned to at the idle park; -1 = leave it where it is.
+    /** ★★★ VIBESDR'S OWN AGC FOR THE DONGLE — not the tuner's, which is unreliable across tuners
+     *  and known broken on the RTL-SDR Blog v4, and which this server has never engaged. Ours
+     *  measures how close the signal is to railing the ADC and walks the tuner's gain list a step
+     *  at a time. `restGain` becomes the STARTING point rather than a fixed value, and the loop may
+     *  then use the whole range. OFF by default: it can raise the gain above what the owner set,
+     *  and that must be asked for. */
+    bool        rtlAgc = false;
+    /** For a MANUAL gain: come down when the front end overloads, and go back up when it eases —
+     *  never above the gain that is set. ON by default, because there is nothing it can do that the
+     *  owner would not have wanted; the only choice it removes is the choice to keep clipping.
+     *  ★ The AGC includes this; with rtlAgc on, this is redundant rather than contradictory. */
+    bool        overloadProtect = true;
     int         agcLock  = -1;  ///< 1 = AGC forced on, listener may not turn it off (RSP, HF+).
     bool   rfNotch = false, dabNotch = false, zoomSpectrum = false;
     /** ★★★ DC ON THE FEEDLINE, REMEMBERED AND ASSERTED. A dongle's bias-T survives whatever set

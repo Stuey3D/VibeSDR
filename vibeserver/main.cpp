@@ -115,6 +115,8 @@ struct Opts {
     //   behaviour before they existed, so an older config simply carries on as it was.
     std::string gainLimits;              // "fm:250, 0-30M:400" — per-band ceilings
     int         restGain = -1;           // returned to when everybody has left
+    bool        rtlAgc = false;          // VibeSDR's own AGC for the dongle — see RadioConfig
+    bool        overloadProtect = true;  // wind the gain down when the front end overloads
     int         agcLock  = -1;           // 1 = AGC forced on (RSP, Airspy HF+)
     int         adminIdleMin = 30;      // admin controls re-lock after this idle; 0 = never
     // ★ Local by default — the mode that behaves exactly as VibeServer always has. A new setting
@@ -414,6 +416,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.pin = c.pin; o.adminPass = c.adminPass; o.trustedProxies = c.trustedProxies;
     o.sessionLimitMin = c.sessionLimitMin;
     o.gainLimits = c.gainLimits; o.restGain = c.restGain; o.agcLock = c.agcLock;
+    o.rtlAgc = c.rtlAgc; o.overloadProtect = c.overloadProtect;
     o.adminIdleMin    = c.adminIdleMin;
     o.publicSharing   = (c.sharing == vsconfig::Sharing::Public);
     o.updateSrvHour = c.updateSrvHour; o.updateSrvDay = c.updateSrvDay;
@@ -447,6 +450,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.pin = o.pin; c.adminPass = o.adminPass; c.trustedProxies = o.trustedProxies;
     c.sessionLimitMin = o.sessionLimitMin;
     c.gainLimits = o.gainLimits; c.restGain = o.restGain; c.agcLock = o.agcLock;
+    c.rtlAgc = o.rtlAgc; c.overloadProtect = o.overloadProtect;
     c.adminIdleMin    = o.adminIdleMin;
     c.sharing         = o.publicSharing ? vsconfig::Sharing::Public : vsconfig::Sharing::Local;
     c.updateSrvHour = o.updateSrvHour; c.updateSrvDay = o.updateSrvDay;
@@ -1416,6 +1420,11 @@ int main(int argc, char** argv) {
                     //   sample rate and ports cannot change under a running capture.
                     LocalSdrShim::setGainLimits(g_runtimeConfig.gainLimits);
                     LocalSdrShim::setRestGain(g_runtimeConfig.restGain);
+                    // ★ Both, together: the AGC raises the ceiling to the tuner's maximum, so it
+                    //   must be applied where the gain settings are, not somewhere that could run
+                    //   before the radio exists (which is exactly how it failed on Android).
+                    LocalSdrShim::setOverloadProtect(g_runtimeConfig.overloadProtect);
+                    LocalSdrShim::instance().setRtlAgc(g_runtimeConfig.rtlAgc);
                     LocalSdrShim::setAgcLock(g_runtimeConfig.agcLock == 1);
                     LocalSdrShim::setVibeServerTuneLimits(
                         g_runtimeConfig.mode == vsconfig::Mode::LockedRange ? "" : g_runtimeConfig.allowRanges,

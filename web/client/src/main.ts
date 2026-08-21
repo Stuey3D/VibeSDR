@@ -1058,6 +1058,16 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       hwGainNow = typeof gainNow === 'number' ? gainNow : -1;
       hwGainCap = typeof gainCap === 'number' ? gainCap : -1;
       hwAgcLocked = agcLocked === true;
+      // ★ Say WHY it cannot be turned off, where the hand is already going. Locked is the owner's
+      //   decision, not a fault, and an unexplained dead control reads as the latter.
+      {
+        const ga = $<HTMLButtonElement>('gainAuto');
+        ga.classList.toggle('locked', hwAgcLocked);
+        ga.title = hwAgcLocked
+          ? "VibeSDR's own AGC for RTL-SDR. The owner has locked it on for this receiver."
+          : "VibeSDR's own AGC for RTL-SDR — it watches the ADC for overload and moves the tuner "
+            + "gain to suit. The dongle's built-in AGC is unreliable and is never used.";
+      }
       // ★ Re-applied on EVERY hwinfo, because the server re-sends it when the ceiling changes —
       //   which is how the slider follows the radio down on tuning into a limited band.
       applyGainCap();
@@ -1102,21 +1112,36 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     //     stayed up would become part of the furniture, and this one is meant to be noticed.
     //  ★ The recovering state is calmer than the fault state on purpose: going up is good news,
     //    and it must not read as a second alarm.
-    onOverload: (steps: number, dir: number) => {
+    onOverload: (steps: number, dir: number, gainTenthDb: number, agc: boolean) => {
       const chip = $('ovlChip');
-      if (steps <= 0 && dir > 0) {          // fully recovered — say so briefly, then go quiet
-        chip.textContent = 'OVERLOAD PASSED: GAIN ↑';
-        chip.classList.add('set', 'easing');
-        window.clearTimeout(ovlClearTimer);
-        ovlClearTimer = window.setTimeout(() => {
-          chip.classList.remove('set', 'easing');
-        }, 4000);
-        return;
-      }
+      const dB = (gainTenthDb / 10).toFixed(1);
+      // ★★★ THE MOVEMENT IS THE NEWS; THE RESTING PLACE IS THE READOUT. While the loop is stepping,
+      //     the chip says WHICH WAY — that is a thing happening, and worth an alarm's colours going
+      //     down. Once it settles it stops shouting and simply says where the gain ended up
+      //     (Stuart, 2026-08-21: "once it is settled then it needs to change ... it can show the
+      //     new gain rate").
+      //  ★★ In AGC mode the settled state is PERMANENT and that is correct: the gain moving is the
+      //     normal condition of an AGC, so a readout is honest where a warning would be a lie you
+      //     learn to ignore. Under manual protection it goes quiet instead, because there the
+      //     normal condition is "the gain is where you put it".
       window.clearTimeout(ovlClearTimer);
-      chip.textContent = dir > 0 ? 'OVERLOAD PASSED: GAIN ↑' : 'OVERLOAD: GAIN ↓';
+      chip.textContent = dir > 0 ? `GAIN ↑ ${dB} dB` : `OVERLOAD: GAIN ↓ ${dB} dB`;
       chip.classList.toggle('easing', dir > 0);
       chip.classList.add('set');
+      ovlClearTimer = window.setTimeout(() => {
+        if (agc) {
+          // Settled, and the AGC owns the gain from here — show it, quietly.
+          chip.textContent = `AGC ${dB} dB`;
+          chip.classList.add('easing');
+        } else if (steps > 0) {
+          // Still holding the gain below what was asked for: say so, or the slider and the radio
+          // appear to disagree with nobody explaining why.
+          chip.textContent = `GAIN HELD ${dB} dB`;
+          chip.classList.add('easing');
+        } else {
+          chip.classList.remove('set', 'easing');   // back where it was told to be
+        }
+      }, 4000);
     },
     onRspStat: (sys, lna, ifgr, overload, settling) => {
       $('initChip').classList.toggle('set', settling);
@@ -2873,11 +2898,12 @@ function updateStatus() {
   $('sigFault').classList.toggle('show', !!fault);
   $('sigFault').classList.remove('info');
 
-  // SQL chip: shown whenever squelch is armed, BREATHING RED only while it is actually muting.
-  const chip = $('sqlChip');
-  const sqlArmed = squelchDb > -100;
-  chip.classList.toggle('set', sqlArmed);
-  chip.classList.toggle('muting', audio?.health === 'squelched');
+  // ★★ THE SQUELCH IS SAID ONCE, in the SNR field beside the frequency, where the eye already is
+  //    when you are wondering why there is no audio. There used to be a second chip down in the
+  //    status row saying the same thing — and because the two were separate elements they BREATHED
+  //    OUT OF STEP, which reads as two different states rather than one said twice (Stuart,
+  //    2026-08-21). Removed rather than synchronised: the fix for saying something twice is to say
+  //    it once.
 }
 
 // ── Controls ─────────────────────────────────────────────────────────────────
@@ -7181,7 +7207,15 @@ function buildMenu() {
 
   const gainAuto = $<HTMLButtonElement>('gainAuto');
   gainAuto.onclick = () => {
+    // ★★ THE OWNER MAY FIX IT ON. Locked means a listener can turn the AGC ON but not OFF — the
+    //    same promise the RSP and Airspy have always kept, and now true on a dongle as well. The
+    //    server refuses it regardless; refusing here too is what stops the button lying about
+    //    having worked.
     const on = !gainAuto.classList.contains('on');
+    // ★ Refused in place rather than with a message of its own: the button carries the reason in
+    //   its title, and the server refuses it regardless. What must NOT happen is the button
+    //   flipping to "off" and the radio ignoring it — a control that lies about having worked.
+    if (!on && hwAgcLocked) return;
     gainAuto.classList.toggle('on', on);
     $<HTMLInputElement>('gain').disabled = on;
     if (on) spec!.setHwGain(0, true);

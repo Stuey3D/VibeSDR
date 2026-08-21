@@ -382,6 +382,8 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     S("demodMode", r.demodMode); N("landingFreq", r.landingFreq);
     S("allowRanges", r.allowRanges); S("blockRanges", r.blockRanges);
     S("gainLimits", r.gainLimits); I("restGain", r.restGain); I("agcLock", r.agcLock);
+    // ★ Absent keeps the safe defaults (AGC off, protection on) — B() only assigns when present.
+    B("rtlAgc", r.rtlAgc); B("overloadProtect", r.overloadProtect);
     I("users", r.users); N("maxBw", r.maxBw); N("maxFps", r.maxFps); N("fftRate", r.fftRate);
     I("uncompressed", r.uncompressed);
     B("forceIdleSaver", r.forceIdleSaver); B("releaseWhenIdle", r.releaseWhenIdle);
@@ -418,6 +420,7 @@ std::string radioToJson(const RadioConfig& r) {
     S("allowRanges", r.allowRanges); S("blockRanges", r.blockRanges);
     // ★ BOTH WRITERS, as the note above insists: the setup page reads the API one.
     S("gainLimits", r.gainLimits); N("restGain", r.restGain); N("agcLock", r.agcLock);
+    B("rtlAgc", r.rtlAgc); B("overloadProtect", r.overloadProtect);
     N("users", r.users); N("maxBw", r.maxBw); N("maxFps", r.maxFps); N("fftRate", r.fftRate);
     N("uncompressed", r.uncompressed);
     B("forceIdleSaver", r.forceIdleSaver); B("releaseWhenIdle", r.releaseWhenIdle);

@@ -954,6 +954,12 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 .sres .f { color: var(--freq); font-variant-numeric: tabular-nums; min-width: 84px; }
 .sres .n { color: var(--btn-text); flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sres .src { color: var(--unit); font-size: 10px; letter-spacing: 1px; }
+/* ★★ A second line under a menu label. Used by VIBE AGC, where the NAME is doing real work:
+   everything written online says the RTL-SDR's automatic gain is broken, and it is — so a control
+   simply called "AGC" would be read as that one and avoided. This says whose it is. */
+.mrow label .sub { display: block; font-size: 9.5px; letter-spacing: 0.04em; opacity: 0.62;
+                   text-transform: none; margin-top: 1px; }
+#gainAuto.locked { opacity: 0.55; }
 /* ★★ A HEADING FOR EACH KIND OF BOOKMARK — see renderBookmarks(). Your own choices, the owner's
    saved entries and what this aerial has actually HEARD are three different claims, and they used
    to run together in one list separated only by a glyph. ★ Quiet by design: these are signposts in
@@ -2580,7 +2586,9 @@ select.btn { padding: 6px 8px; }
               <span id="linkBars" title="Link quality">
                 <i></i><i></i><i></i>
               </span>
-              <span id="sqlChip" title="Squelch">SQL</span>
+              <!-- ★ The squelch indicator lives in the SNR field beside the frequency, and only
+                   there. This second one said the same thing in a different rhythm — see the note
+                   in updateSignalUi(). -->
               <!-- ★ Same chip language as SQL. The radio's gain control settles for a second
                    after it starts, which bounces the waterfall — saying so turns a transient
                    that looks like a fault into one that looks like a radio waking up. -->
@@ -3148,9 +3156,17 @@ select.btn { padding: 6px 8px; }
     <input type="range" id="gain" min="0" max="0" value="0">
     <span class="val" id="gainVal">—</span>
   </div>
+  <!-- ★★★ THIS IS VIBESDR'S OWN AGC, NOT THE TUNER'S. A dongle's hardware automatic gain is
+       unreliable across tuners and known broken on the RTL-SDR Blog v4, so the server has always
+       refused to use it — which left this button engaging something nobody wanted. It now runs the
+       server's own loop: it measures how close the signal is to overloading the ADC and moves the
+       tuner a step at a time, which is the thing an RSP gets from hardware and a dongle never had.
+       ★ Named so it cannot be confused with DIGITAL AGC further down, which is the RTL2832's own
+         and a different thing entirely. -->
   <div class="mrow">
-    <label>AUTO GAIN</label>
-    <div class="seg"><button class="btn" id="gainAuto">AUTO</button></div>
+    <label>VIBE AGC<span class="sub">VibeSDR Custom AGC for RTL-SDR</span></label>
+    <div class="seg"><button class="btn" id="gainAuto"
+      title="VibeSDR's own automatic gain: it watches the ADC for overload and moves the tuner gain to suit. The dongle's built-in one is unreliable and is never used.">AUTO</button></div>
   </div>
   <!-- ★★ SDRplay RSP controls. An RSP is not a dongle: RF gain is an LNA STATE and IF gain is
        a REDUCTION in dB, with separate AGC over the IF stage. Presenting one slider labelled

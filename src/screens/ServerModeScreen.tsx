@@ -1168,15 +1168,18 @@ export default function ServerModeScreen({ navigation, route }: Props) {
 
             <View style={[styles.rowBetween, { marginTop: 12 }]}>
               <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
-                AGC
+                VibeSDR AGC
               </Text>
               <Switch value={rtlAgc} onValueChange={setRtlAgc}
                 trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
             </View>
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-              Lets the radio use its whole gain range, starting from the figure above. The dongle
-              has no working automatic gain of its own, so this is ours: it measures how close the
-              signal is to overloading and moves a step at a time.
+              VibeSDR Custom AGC for RTL-SDR. Lets the radio use its whole gain range, starting
+              from the figure above: it measures how close the signal is to overloading the
+              converter and moves the tuner a step at a time.{'\n\n'}
+              This is NOT the dongle's built-in AGC — that one is unreliable and known broken on
+              the RTL-SDR Blog v4, and VibeServer never uses it. Anything you have read about RTL
+              automatic gain being no good is about the hardware one, not this.
             </Text>
 
             {/* ★★ THE RADIO'S CAPTURE WIDTH, so it sits with the radio rather than with the

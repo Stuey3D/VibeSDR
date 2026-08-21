@@ -167,9 +167,33 @@ struct AdcStats {
     uint8_t  minV  = 255;  // lowest sample seen
 };
 
+/** ★★★ MAKE THE AGC'S GAIN CHANGES INAUDIBLE — the thing that decides whether any of this ships.
+ *
+ *  Dropping the tuner 6 dB drops EVERYTHING 6 dB, instantly: the audio, the meter, the waterfall.
+ *  The audio AGC then spends its attack time climbing back, which is heard as a dip and a swell on
+ *  every step. Stuart named it straight away — *"I wonder if the audio AGC is not keeping up with
+ *  the RF AGC"* — and was blunt about the stakes: *"if we cannot solve the audio hiccups in AGC
+ *  mode then this AGC is DOA"* (2026-08-21).
+ *
+ *  ★★ SO DO NOT LET THE LEVEL MOVE AT ALL. Whatever RF gain the loop takes away is given back
+ *     DIGITALLY, after the converter, in the same breath. Nothing downstream — demod, audio AGC,
+ *     spectrum, S-meter — sees a step, because there isn't one. The only thing that changed is
+ *     where the signal was amplified, which is the entire point: the front end stops clipping and
+ *     the listener hears nothing happen.
+ *  ★★ IT COSTS NOTHING. The conversion already multiplies every sample by 1/128; this folds into
+ *     that constant. No extra pass, no extra instruction.
+ *  ★ It cannot cause the fault it is fixing: this is POST-ADC, so it can never overload the
+ *    converter. It does lift the noise floor with the signal — which is honest, because that noise
+ *    is what the aerial delivered and the RF gain was only ever making it louder too.
+ *  ★ Measured against the gain the USER chose, not the AGC's ceiling — so the level sits where they
+ *    put it, and the loop moves underneath without being noticed. Bounded, because a compensation
+ *    of tens of dB would be amplifying almost nothing. */
+static std::atomic<float> g_digGain{1.0f};
+
 static inline void convU8ToF32(const uint8_t* in, float* out, int nF, AdcStats* st = nullptr) {
+    const float dg = g_digGain.load(std::memory_order_relaxed);
 #if defined(__aarch64__)
-    const float32x4_t bias = vdupq_n_f32(127.4f), inv = vdupq_n_f32(1.0f / 128.0f);
+    const float32x4_t bias = vdupq_n_f32(127.4f), inv = vdupq_n_f32(dg / 128.0f);
     const uint8x16_t hiRail = vdupq_n_u8(254), loRail = vdupq_n_u8(1), one = vdupq_n_u8(1);
     uint32_t rails = 0; uint8_t mx = 0, mn = 255;
     int i = 0;
@@ -196,7 +220,7 @@ static inline void convU8ToF32(const uint8_t* in, float* out, int nF, AdcStats* 
         if (st) { const uint8_t v = in[i];
                   if (v >= 254 || v <= 1) ++rails;
                   if (v > mx) mx = v; if (v < mn) mn = v; }
-        out[i] = ((float)in[i] - 127.4f) * (1.0f / 128.0f);
+        out[i] = ((float)in[i] - 127.4f) * (dg / 128.0f);
     }
     if (st) { st->rails += rails; st->total += (uint32_t)nF;
               if (mx > st->maxV) st->maxV = mx; if (mn < st->minV) st->minV = mn; }
@@ -206,7 +230,7 @@ static inline void convU8ToF32(const uint8_t* in, float* out, int nF, AdcStats* 
         if (st) { const uint8_t v = in[i];
                   if (v >= 254 || v <= 1) ++rails;
                   if (v > mx) mx = v; if (v < mn) mn = v; }
-        out[i] = ((float)in[i] - 127.4f) * (1.0f / 128.0f);
+        out[i] = ((float)in[i] - 127.4f) * (dg / 128.0f);
     }
     if (st) { st->rails += rails; st->total += (uint32_t)nF;
               if (mx > st->maxV) st->maxV = mx; if (mn < st->minV) st->minV = mn; }
@@ -1027,6 +1051,10 @@ static std::atomic<bool>     g_agcLock{false};
  *  ★ An explicit setGain() is a NEW INTENT and resets the backoff: whoever just moved the slider
  *    gets what they asked for, and the protection starts again from there. */
 static std::atomic<int>      g_gainTarget{-1};
+/** The gain the USER asked for — the level they expect to hear. In manual mode it is the same as
+ *  the ceiling; under AGC it is the starting figure while the ceiling is the tuner's maximum. The
+ *  digital compensation is measured against THIS, so the loop can roam without the level moving. */
+static std::atomic<int>      g_gainRef{-1};
 static std::atomic<int>      g_ovlSteps{0};
 /** Consecutive 1-second windows with, and without, samples on the rail. Written by the libusb
  *  callback (cheap: two stores), read by the DSP thread, which is the only one that may touch the
@@ -6273,6 +6301,23 @@ struct LocalSdrShim::Impl {
         // The serving phone exposes no HW UI; a remote client sends these and the
         // server applies them via the same setters the on-device JS path uses.
         if (type == "gain") {
+            // ★★★ THE AGC LOCK NOW MEANS SOMETHING ON A DONGLE TOO. It has always been honoured by
+            //     the RSP (`ifagc`) and the Airspy (`agc`) and there was simply nothing to lock on
+            //     an RTL — no working automatic gain to protect. There is now, so the same promise
+            //     applies to all three radios: the owner may fix the AGC on, and a listener may not
+            //     take it off. Turning it ON is always allowed; that is moving towards what the
+            //     owner asked for.
+            //  ★ Checked exactly as the HF+ and RSP branches check it — no admin exemption here,
+            //    because the way an owner turns it off is the SERVER setting, not a message. That
+            //    keeps one rule across all three radios instead of a third variation.
+            {
+                double gv = 0;
+                const bool wantsManual = jsonNum(msg, "value", gv) && gv >= 0;
+                if (wantsManual && LocalSdrShim::agcLocked()) {
+                    LOGI("manual gain refused — the owner has locked the AGC on");
+                    return;
+                }
+            }
             // Same rule as rsp_control above: the front end is shared, so a locked receiver puts it
             // behind the admin password; a personal one leaves it alone.
             if (!sharedGate("gain")) return;
@@ -12975,14 +13020,34 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     // ★★ A CEILING THAT IS ONLY SET ON THE PATH NOBODY TAKES IS NOT A CEILING. The starting gain is
     //    the owner's intent just as much as a slider move is, and it is the one that is in force
     //    for the whole time nobody has touched anything.
-    // ★ Under AGC the ceiling is the tuner's maximum and we are starting at the bottom, so the
-    //   backoff is "every step" — the loop's climb is what closes that distance.
-    g_gainTarget.store(agcCeiling >= 0 ? agcCeiling : applyGain, std::memory_order_relaxed);
-    g_ovlSteps.store(0, std::memory_order_relaxed);
-    if (agcCeiling >= 0) {
+    // ★★★ THE CEILING, AND WHY THE AGC COULD NOT CLIMB PAST THE STARTING GAIN. setRtlAgc() raises
+    //     the ceiling to the tuner's maximum — but at startup it is called BEFORE the device is
+    //     open, so it returned on its `!p->dev` guard and did nothing. This path then set the
+    //     ceiling to the starting gain, and the loop was free to move only DOWNWARD from it, for
+    //     ever. Stuart, within minutes of switching it on: "AGC doesnt seem to increase past
+    //     14.4db but that could be the antenna". It was not the antenna.
+    //  ★★ So the ceiling is decided HERE, where the tuner's real list is finally readable, and the
+    //     mode is simply consulted. A setting applied before the hardware exists has to be applied
+    //     again once it does — the same shape as restoreVibeHw waiting for `hwinfo`.
+    int ceiling = agcCeiling >= 0 ? agcCeiling : applyGain;
+    int startSteps = 0;
+    if (g_rtlAgc.load(std::memory_order_relaxed)) {
         int n2 = rtlsdr_get_tuner_gains(impl->dev, nullptr);
-        if (n2 > 1) g_ovlSteps.store(n2 - 1, std::memory_order_relaxed);
+        if (n2 > 1) {
+            std::vector<int> gs2((size_t)n2);
+            rtlsdr_get_tuner_gains(impl->dev, gs2.data());
+            ceiling = gs2[(size_t)(n2 - 1)];
+            int startIdx = 0;
+            for (int i = 0; i < n2; i++) if (gs2[(size_t)i] <= applyGain) startIdx = i;
+            startSteps = (n2 - 1) - startIdx;       // "how far below the ceiling we are starting"
+            LOGI("AGC: starting at %.1f dB, free to climb to %.1f dB",
+                 applyGain / 10.0, ceiling / 10.0);
+        }
     }
+    g_gainTarget.store(ceiling, std::memory_order_relaxed);
+    g_gainRef.store(applyGain, std::memory_order_relaxed);   // where the owner put it
+    g_digGain.store(1.0f, std::memory_order_relaxed);
+    g_ovlSteps.store(startSteps, std::memory_order_relaxed);
     rtlsdr_set_tuner_gain_mode(impl->dev, 1);
     if (applyGain >= 0) rtlsdr_set_tuner_gain(impl->dev, applyGain);
     rtlsdr_reset_buffer(impl->dev);
@@ -13772,10 +13837,28 @@ void LocalSdrShim::setGain(int gainTenthDb) {
     //     path had written. It is what gets re-applied after a stream restart (see the replug
     //     handler), and it is now what the client is TOLD the gain is — a shim that cannot say
     //     where its own gain is cannot correct a client that has guessed.
+    // ★★★ "AUTO" ON A DONGLE IS OUR AGC NOW, NOT THE TUNER'S. It used to call
+    //     rtlsdr_set_tuner_gain_mode(dev, 0) — the hardware loop this file has always refused to
+    //     use, unreliable across tuners and KNOWN BROKEN on the v4. The start path already treated
+    //     an unset gain as our own AGC, so leaving this one pointed at the hardware meant the same
+    //     request meant two different things depending on where it came from.
+    //  ★★ There is no third option to offer: a dongle has exactly one automatic gain worth having
+    //     and it is this one. So the client's AUTO button engages it, and a manual gain turns it
+    //     off — which is what both of those words already meant to the person pressing them.
+    if (gainTenthDb < 0) {
+        setRtlAgc(true);                 // raises the ceiling to the tuner max and lets it climb
+        LOGI("gain: AGC");
+        return;
+    }
+    setRtlAgc(false);                    // a number is a decision — the ceiling comes back to it
     p->lastGainTenthDb = gainTenthDb;
-    if (gainTenthDb < 0) { rtlsdr_set_tuner_gain_mode(p->dev, 0); LOGI("gain: auto"); }
-    else { rtlsdr_set_tuner_gain_mode(p->dev, 1); rtlsdr_set_tuner_gain(p->dev, gainTenthDb);
-           LOGI("gain: %.1f dB", gainTenthDb / 10.0); }
+    g_gainTarget.store(gainTenthDb, std::memory_order_relaxed);
+    g_gainRef.store(gainTenthDb, std::memory_order_relaxed);
+    g_digGain.store(1.0f, std::memory_order_relaxed);   // a chosen gain IS the reference level
+    g_ovlSteps.store(0, std::memory_order_relaxed);
+    rtlsdr_set_tuner_gain_mode(p->dev, 1);
+    rtlsdr_set_tuner_gain(p->dev, gainTenthDb);
+    LOGI("gain: %.1f dB", gainTenthDb / 10.0);
 }
 /** The gain the radio is ACTUALLY set to, in its own units; -1 = auto/AGC. */
 int LocalSdrShim::currentGainTenthDb() const { return p ? p->lastGainTenthDb : -1; }
@@ -13814,11 +13897,27 @@ void LocalSdrShim::overloadTick() {
     //   jump on every listener's slider; twice in four seconds is a fault being chased, not a band
     //   being tracked.
     const double now = Impl::nowSecs();
-    if (now - g_ovlLastChangeAt.load(std::memory_order_relaxed) < 6.0) return;
+    const double clipPct = g_adcClipPct.load(std::memory_order_relaxed);
+    // ★★★ THE DWELL IS FOR CLIMBING, NOT FOR ESCAPING. Six seconds between steps is right when the
+    //     loop is feeling its way upward; applied to the way DOWN it meant a gross overload took a
+    //     minute to clear — Stuart cranked the gain to maximum and watched 49.6 dB take about that
+    //     long to reach 29.7. Every one of those seconds is a ruined signal for everybody
+    //     listening, so coming down is never made to wait.
+    if (clipRun < 2 && now - g_ovlLastChangeAt.load(std::memory_order_relaxed) < 6.0) return;
 
     int want = steps;
     if (clipRun >= 2) {
-        want = steps + 1;                                        // overdriven — back off
+        // ★★★ AND IT COMES DOWN BY AS MUCH AS IT IS OVER. One step at a time is a search; the clip
+        //     PERCENTAGE already says how badly the front end is being overdriven, so use it. A few
+        //     samples on the rail is a light overload worth one step; several per cent is gross and
+        //     worth a jump. The loop then fine-tunes upward, where the prediction protects it.
+        //  ★ The thresholds are measured, not guessed: the first real overload seen on the Pi railed
+        //    both ends at 0.0006% of samples, so "light" has to start well below a tenth of a
+        //    per cent (see the note by the detector).
+        const int jump = clipPct > 1.0   ? 4
+                       : clipPct > 0.1   ? 3
+                       : clipPct > 0.005 ? 2 : 1;
+        want = steps + jump;                                     // overdriven — back off
         // ★★★ IF THAT OVERLOAD FOLLOWED A CLIMB, THE CLIMB WAS THE MISTAKE. Widen the margin so the
         //     next attempt has to prove more. This is what stops the straddle: one failed try and
         //     the loop stops reaching for a step it cannot hold.
@@ -13849,16 +13948,28 @@ void LocalSdrShim::overloadTick() {
     }
     if (want == steps) return;
 
+    int applied = 0;   // ★ declared out here: the announcement below quotes it, outside the lock
+    // ★★★ THE TUNER'S GAIN LIST, FETCHED ONCE. rtlsdr_get_tuner_gains is cheap, but it is called
+    //     under the hardware lock — and THE DSP THREAD TAKES THAT SAME LOCK PER BUFFER. Every
+    //     microsecond spent holding it is a buffer the demodulator cannot process, which is heard
+    //     as a hiccup ("the audio hiccups are now seeming to be every gain step" — Stuart,
+    //     2026-08-21). The list never changes for a given tuner, so re-reading it on every tick was
+    //     lock time bought for nothing.
+    static std::vector<int> gainList;
     // ★ Scoped so the hardware lock is RELEASED before we touch sockets. Announcing takes the
     //   client mutex and the outbox; holding modeMtx across that invites an ordering problem for
     //   no benefit — the radio is already set by then.
     {
     VIBE_HW_LOCK();
     if (!p || !p->dev || p->radioReleased.load()) return;
-    int n = rtlsdr_get_tuner_gains(p->dev, nullptr);
-    if (n <= 1) return;
-    std::vector<int> gains((size_t)n);
-    rtlsdr_get_tuner_gains(p->dev, gains.data());
+    if (gainList.empty()) {
+        int n = rtlsdr_get_tuner_gains(p->dev, nullptr);
+        if (n <= 1) return;
+        gainList.resize((size_t)n);
+        rtlsdr_get_tuner_gains(p->dev, gainList.data());
+    }
+    const std::vector<int>& gains = gainList;
+    const int n = (int)gains.size();
     // The tuner's list is ascending; find where the owner's target sits on it.
     int tgtIdx = 0;
     for (int i = 0; i < n; i++) if (gains[(size_t)i] <= target) tgtIdx = i;
@@ -13879,16 +13990,31 @@ void LocalSdrShim::overloadTick() {
             return;
         }
     }
-    const int applied = gains[(size_t)idx];
+    applied = gains[(size_t)idx];
+    // ★★★ GIVE BACK DIGITALLY WHATEVER THE TUNER JUST GAVE UP — see g_digGain. Done in the SAME
+    //     critical section as the gain write, so there is never a window in which the RF has moved
+    //     and the compensation has not: that window is exactly the audible step.
+    {
+        const int ref = g_gainRef.load(std::memory_order_relaxed);
+        float dg = 1.0f;
+        if (ref >= 0) {
+            const double dB = (ref - applied) / 10.0;          // + when the tuner is below the ref
+            const double cl = dB > 20.0 ? 20.0 : (dB < -20.0 ? -20.0 : dB);
+            dg = (float)std::pow(10.0, cl / 20.0);
+        }
+        g_digGain.store(dg, std::memory_order_relaxed);
+    }
     g_ovlSteps.store(want, std::memory_order_relaxed);
     g_ovlLastChangeAt.store(now, std::memory_order_relaxed);
     g_ovlLastDir.store(want > steps ? -1 : 1, std::memory_order_relaxed);
     p->lastGainTenthDb = applied;
-    rtlsdr_set_tuner_gain_mode(p->dev, 1);
+    // ★ ONLY THE GAIN. The tuner is already in manual mode — the start path put it there and
+    //   nothing here ever leaves it — so re-asserting the mode was a second USB control transfer
+    //   per change for nothing, and every one of those is time the stream is contended.
     rtlsdr_set_tuner_gain(p->dev, applied);
     if (want > steps)
-        LOGI("ADC overload — gain %.1f dB (%d step%s below the owner's %.1f dB)",
-             applied / 10.0, want, want == 1 ? "" : "s", target / 10.0);
+        LOGI("ADC overload (%.3f%% on the rail) — gain %.1f dB, %d step%s below %.1f dB",
+             clipPct, applied / 10.0, want, want == 1 ? "" : "s", target / 10.0);
     else
         LOGI("clean for %ds — gain back up to %.1f dB (%d below %.1f dB)",
              cleanRun, applied / 10.0, want, target / 10.0);
@@ -13906,8 +14032,14 @@ void LocalSdrShim::overloadTick() {
     //    `ovl` says what just happened so the status bar can SAY it. A chip driven off the gain
     //    alone could not tell "the protection backed off" from "somebody moved the slider".
     if (p) {
+        // ★ The applied gain and the mode ride along, so the chip can stop being a warning once the
+        //   loop settles and simply SAY where the gain ended up — which in AGC mode is the normal
+        //   state of affairs rather than a fault (Stuart, 2026-08-21).
         const std::string m = std::string("{\"type\":\"ovl\",\"steps\":") + std::to_string(want)
-                            + ",\"dir\":" + (want > steps ? "-1" : "1") + "}";
+                            + ",\"dir\":" + (want > steps ? "-1" : "1")
+                            + ",\"gain\":" + std::to_string(applied)
+                            + ",\"agc\":" + (g_rtlAgc.load(std::memory_order_relaxed) ? "1" : "0")
+                            + "}";
         for (auto& pr : p->allSpecPeers()) {
             p->sendHwInfo(pr.sock);
             // ★ Through the Impl, like sendHwInfo above it: sendWs/sendText are members, and this
