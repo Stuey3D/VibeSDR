@@ -10861,6 +10861,27 @@ struct LocalSdrShim::Impl {
             }
             return;
         }
+        // ★★★ THE PARK MUST NOT SWITCH THE AGC OFF, AND IT DID — every time. setGain() with a
+        //     NUMBER means "go manual", deliberately: a figure typed by a person is a decision.
+        //     But this is not a person, it is the idle park putting the radio back to its resting
+        //     position, and on a receiver with the AGC enabled that turned the AGC off SECONDS
+        //     AFTER BOOT — the first park happens as soon as the (empty) server settles.
+        //  ★★★ So an owner enabled VibeAGC in the setup page, the server logged "RTL AGC: ON" at
+        //      startup exactly as it should, the park quietly undid it, and the first listener to
+        //      arrive found it off and had to switch it on by hand. Stuart chased this through
+        //      four releases: "i then went into the rtl and the agc was not on until i enabled it."
+        //  ★★ With the AGC on, the resting gain is its STARTING POINT rather than a manual value —
+        //     which is exactly what the setup page promises ("the gain above becomes the STARTING
+        //     point"). So set the reference and leave the loop running.
+        //  ★ The lock counts as on: setRtlAgc is fed `rtlAgc || agcLock` at startup, so a locked
+        //    receiver must be treated the same here or the park would defeat the lock as well.
+        if (g_rtlAgc.load(std::memory_order_relaxed)) {
+            LOGI("everybody has left — AGC restarts from the owner's resting gain %d", rest);
+            g_gainRef.store(rest, std::memory_order_relaxed);
+            g_ovlSteps.store(0, std::memory_order_relaxed);
+            g_ovlBadGain.store(-1, std::memory_order_relaxed);   // a fresh start, not the old hunt
+            return;
+        }
         LOGI("everybody has left — gain back to the owner's resting value %d", rest);
         LocalSdrShim::instance().setGain(rest);
     }
@@ -12255,7 +12276,17 @@ void LocalSdrShim::setOverloadProtect(bool on) {
  *  back to wherever the gain is now, so the receiver does not lurch when the mode changes. */
 void LocalSdrShim::setRtlAgc(bool on) {
     const bool was = g_rtlAgc.exchange(on, std::memory_order_relaxed);
-    if (was == on) return;
+    // ★★★ "ALREADY SET" IS NOT "ALREADY APPLIED". This returned whenever the flag did not change,
+    //     which is right for a repeated toggle and WRONG for the case that matters: the servers
+    //     set this from the config BEFORE the radio is open, where the flag lands but the ceiling
+    //     below cannot (there is no gain table to read yet). The natural fix — call it again after
+    //     the open — did nothing, because by then the flag already agreed.
+    //  ★★ So the test is whether the WORK has been done, not whether the flag moved. That is the
+    //     ceiling: with the AGC on it must sit at the tuner's maximum, and while it is unset there
+    //     is nothing for overloadTick to work against, so the loop is inert however true the flag
+    //     is. This is why an owner who enabled the AGC in the setup page still had to toggle it in
+    //     a client for anything to happen (Stuart, 2026-08-21).
+    if (was == on && (!on || g_gainTarget.load(std::memory_order_relaxed) >= 0)) return;
     LOGI("RTL AGC: %s", on ? "ON — free to use the tuner's whole range" : "off");
     if (!p || !p->dev) return;
     // ★ The same recursive mutex VIBE_HW_LOCK wraps — that macro is defined further down the file

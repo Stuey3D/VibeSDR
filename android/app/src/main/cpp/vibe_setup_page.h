@@ -514,30 +514,28 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
         <p class="why">Optional. Leave everything empty and listeners have the full range, which is
            what a receiver does today.</p>
 
-        <label class="hide" id="gainAgcLockRow" class="row">
-          <input type="checkbox" id="gainAgcLock">
-          <span class="lbl">Lock the AGC on</span>
-          <div class="note">Listeners may not switch to manual. The radio's own loop keeps the
-             front end safe — on an Airspy HF+ this is the whole protection available, since it has
-             no variable gain to limit.</div></label>
 
-        <label class="hide" id="gainRestRow"><span class="lbl">Return to this gain when everybody
-             has left</span>
+        <label class="hide" id="gainRestRow"><span class="lbl">Starting gain, and where it returns
+             when everybody has left</span>
           <div class="row" style="gap:8px;align-items:center">
             <input type="range" id="gainRestSlider" class="hide" style="flex:1 1 200px">
             <input type="text" id="gainRest" placeholder="e.g. 19.7 dB — empty to leave it alone"
                    style="flex:1 1 160px">
           </div>
-          <div class="note">A listener who turns the gain up should not leave it up for the next
-             person. Applied when the last listener has gone, not the moment they disconnect, so a
-             page reload does not undo somebody's setting.</div></label>
+          <div class="note">Where the radio sits before anyone connects, and where it goes back to
+             when the last listener leaves \u2014 a listener who turns the gain up should not leave it
+             up for the next person. Applied once they have all gone rather than the moment one
+             disconnects, so a page reload does not undo somebody's setting.
+             <br><span id="gainRestAgcNote" class="hide">With VibeAGC on this is the STARTING gain:
+             the loop begins here and is then free to move in either direction, and it returns here
+             rather than being switched off when the receiver empties.</span></div></label>
 
         <!-- ★★★ THE NAME IS DOING REAL WORK HERE. Everything written online says the RTL-SDR's
              automatic gain is broken — and it is, which is why VibeServer has never used it. A
              control simply labelled "AGC" would be read as THAT one and switched straight past,
              so it says whose AGC it is (Stuart, 2026-08-21: "we dont want users to ignore it as
              they think it is a setting that is broken because of what is online"). -->
-        <label class="hide" id="rtlAgcRow"><span class="lbl">VibeSDR Custom AGC for RTL-SDR</span>
+        <label class="hide" id="rtlAgcRow"><span class="lbl">VibeAGC \u2014 VibeSDR\u2019s own AGC for RTL-SDR</span>
           <select id="rtlAgc">
             <option value="0">Off — the gain stays where it is set</option>
             <option value="1">On — the receiver manages its own gain</option>
@@ -548,6 +546,13 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
             moves the tuner a step at a time, the way an SDRplay does in hardware.
             <br>The gain above becomes the STARTING point; from there it may use the tuner's whole
             range in either direction. Leave it off and the gain stays exactly where you set it.</div></label>
+        <label class="hide" id="gainAgcLockRow" class="row">
+          <input type="checkbox" id="gainAgcLock">
+          <span class="lbl">Lock VibeAGC on</span>
+          <div class="note">Listeners may not switch to manual. On an RTL-SDR this fixes VibeSDR's
+             own AGC on, so one listener cannot set a gain that everybody else then listens through;
+             on an Airspy HF+ it is the whole protection available, since it has no variable gain to
+             limit.</div></label>
 
 
         <label class="hide" id="gainLimitRow"><span class="lbl">Per-band ceilings</span>
@@ -1182,14 +1187,36 @@ function renderGain() {
   // ★★ SHOWN ONLY WHERE THE CONTROL EXISTS. An HF+ has no gain to cap, so offering a ceiling box
   //    for it would be a setting that does nothing — the exact fault AGENTS.md has a rule about.
   $("gainCard").classList.toggle("hide", !(isRtl || isRsp || isHf));
-  $("gainAgcLockRow").classList.toggle("hide", !(isRsp || isHf));
+  // ★★★ THE RTL'S AGC SWITCH WAS NEVER SHOWN AT ALL. The row was added with class="hide" and no
+  //     line was ever written to take it off, so "VibeSDR Custom AGC for RTL-SDR" has been in the
+  //     page, correct and invisible, since the day it was added — Stuart, 2026-08-21, trying to
+  //     enable it on the demo: "the agc button is missing for the RTL on the demo server".
+  //  ★ A hidden-by-default row needs its unhide written in the SAME edit; there is nothing to see
+  //    when it is wrong, which is why this survived a release.
+  $("rtlAgcRow").classList.toggle("hide", !isRtl);
+  // ★★ AND THE LOCK NOW APPLIES TO A DONGLE TOO. It was RSP/HF only because those were the radios
+  //    with an AGC to lock; the RTL has one now — ours — and the lock reaches it by the same
+  //    setGainLimits(..., agcLock) path. Offering the AGC without the means to fix it on is half a
+  //    control on a shared receiver, where any listener could otherwise turn it off for everybody.
+  $("gainAgcLockRow").classList.toggle("hide", !(isRsp || isHf || isRtl));
   $("gainRestRow").classList.toggle("hide", !(isRtl || isRsp));
   $("gainLimitRow").classList.toggle("hide", !(isRtl || isRsp));
   $("gainAgcLock").checked = r.agcLock === 1;
   $("gainRest").value = gainFromRaw(r.restGain);
-  // ★ Absent = the safe defaults: protection on, AGC off. An older config must not read as though
-  //   the owner had asked for automatic gain.
+  // ★ Absent = AGC off. An older config must not read as though the owner had asked for it.
   $("rtlAgc").value = r.rtlAgc ? "1" : "0";
+  // ★★ AFTER the line above, not before it — this OVERRIDES it, and written the other way round it
+  //    was silently undone. Shown as ON and greyed when the lock is on, because that is what the
+  //    receiver will actually do; a page that displays "off" for something it is about to run is
+  //    the fault this pair has already had once tonight.
+  if (r.agcLock === 1) $("rtlAgc").value = "1";
+  $("rtlAgc").disabled = r.agcLock === 1;
+  // ★★★ ONE SLIDER, TWO MEANINGS — and the page says which one is in force, exactly as the phone's
+  //     server screen does. Stuart, 2026-08-21: "that gain slider should be like the android build
+  //     a return to and a starting gain, the agc should start there." The slider never moves; only
+  //     what it MEANS changes, so the note changes with it rather than the control.
+  { const n = $("gainRestAgcNote");
+    if (n) n.classList.toggle("hide", !($("rtlAgc").value === "1")); }
   $("gainRest").placeholder = isRtl ? "e.g. 19.7 dB \u2014 empty to leave it alone"
                                     : "RF gain position \u2014 empty to leave it alone";
   $("gainMax").placeholder = isRtl ? "max, e.g. 25 dB" : "max RF position";
@@ -1918,10 +1945,36 @@ function fill() {
   $("serialDo").addEventListener("click", serialChange);
   for (const id of ["serialA", "serialB"]) $(id).addEventListener("input", serialModalCheck);
   $("gainAdd").addEventListener("click", gainAdd);
-  $("gainAgcLock").addEventListener("change", () => { radio().agcLock = $("gainAgcLock").checked ? 1 : 0; });
+  // ★★★ THE AGC SELECT NOW SAVES ITSELF, AND THAT WAS THE WHOLE BUG. `radio().rtlAgc` was written
+  //     ONLY inside the gainRest handler below — so switching the AGC on and not also editing the
+  //     RESTING GAIN box saved nothing, silently. Stuart set it on, came back, and found it off
+  //     while the lock (which has always had its own listener) had survived: "lock agc was on but
+  //     VibeSDR Custom AGC was off even though I had set it on when I set it up."
+  //  ★ A control whose value is only persisted as a side effect of editing a DIFFERENT control is
+  //    a control that will be lost. Every input on this page needs its own handler.
+  $("rtlAgc").addEventListener("change", () => {
+    radio().rtlAgc = $("rtlAgc").value === "1";
+    const n = $("gainRestAgcNote");
+    if (n) n.classList.toggle("hide", !radio().rtlAgc);
+  });
+  $("gainAgcLock").addEventListener("change", () => {
+    const on = $("gainAgcLock").checked;
+    radio().agcLock = on ? 1 : 0;
+    // ★★ LOCKED ON MEANS ON, and the page says so rather than leaving the owner to also switch the
+    //    AGC on separately. Greyed while locked: the switch above cannot be changed without first
+    //    unlocking, which is exactly what the lock means.
+    if (on) { $("rtlAgc").value = "1"; radio().rtlAgc = true; }
+    $("rtlAgc").disabled = on;
+    { const n = $("gainRestAgcNote");
+      if (n) n.classList.toggle("hide", !($("rtlAgc").value === "1")); }
+  });
   $("gainRest").addEventListener("change", () => {
     const t = ($("gainRest").value || "").trim();
-    radio().rtlAgc = $("rtlAgc").value === "1";
+    // ★★★ THE LOCK IMPLIES THE AGC. "Listeners may not switch to manual" is meaningless with the
+    //     AGC off, and an owner who ticks the lock has said what they want the receiver to do. The
+    //     server enforces this too (see main.cpp) so existing configs come right on their own; here
+    //     it also keeps the PAGE honest, rather than saving a state it would then contradict.
+    radio().rtlAgc = $("rtlAgc").value === "1" || $("gainAgcLock").checked;
     radio().restGain = t ? gainToRaw(t) : -1;
     $("gainRest").value = gainFromRaw(radio().restGain);   // echo it back in canonical form
   });

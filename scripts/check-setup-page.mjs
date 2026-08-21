@@ -159,6 +159,33 @@ for (const page of ['web/client/index.html', 'android/app/src/main/cpp/vibe_setu
   }
 }
 
+// ── ★★★ A ROW THAT STARTS HIDDEN MUST HAVE SOMETHING THAT UNHIDES IT ────────────────────────
+// ★★★ "VibeSDR Custom AGC for RTL-SDR" shipped INVISIBLE. The row was written with class="hide",
+//     as they all are, and the one line that takes the class off for an RTL was never added — so
+//     the control was present, correct, wired to the config, and unreachable, through a release.
+//     Stuart found it trying to enable the AGC on the demo: "the agc button is missing for the RTL
+//     on the demo server". Nothing else could have found it: the id check passes, the JS parses,
+//     the tags balance, and a control nobody can see raises no error anywhere.
+//  ★★ The id-presence check above is the natural place to expect this and it does NOT do it — it
+//     asks whether the element exists, and this element does exist. Being in the page and being
+//     REACHABLE are different properties and only one of them was tested.
+//  ★ Deliberately loose: any mention of the id next to "hide" counts. The point is that SOMETHING
+//    takes responsibility for showing it, not how.
+{
+  const setup = fs.readFileSync(
+    new URL('../android/app/src/main/cpp/vibe_setup_page.h', import.meta.url), 'utf8');
+  for (const m of setup.matchAll(/<[^>]*class="[^"]*\bhide\b[^"]*"[^>]*id="([A-Za-z0-9_]+)"/g)) {
+    const id = m[1];
+    const shown = new RegExp(`["']${id}["']\\s*\\)[^\\n]*(classList|hidden)|` +
+                             `["']${id}["'][^\\n]*\\bhide\\b`).test(setup);
+    if (!shown) {
+      console.error(`✗ setup page: #${id} starts hidden and nothing ever unhides it — `
+                  + `the control is in the page and unreachable`);
+      bad++;
+    }
+  }
+}
+
 if (bad) process.exit(1);
 console.log(`ok   setup page: JS parses, tags balance, ${ids.size} ids all present`);
 console.log('ok   no input under the 16px iOS auto-zoom threshold on either phone-facing page');

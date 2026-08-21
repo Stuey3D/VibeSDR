@@ -1095,8 +1095,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         const ga = $<HTMLButtonElement>('gainAuto');
         ga.classList.toggle('locked', hwAgcLocked);
         ga.title = hwAgcLocked
-          ? "VibeSDR's own AGC for RTL-SDR. The owner has locked it on for this receiver."
-          : "VibeSDR's own AGC for RTL-SDR — it watches the ADC for overload and moves the tuner "
+          ? "VibeAGC \u2014 VibeSDR's own AGC for RTL-SDR. The owner has locked it on for this receiver."
+          : "VibeAGC \u2014 VibeSDR's own AGC for RTL-SDR. It watches the ADC for overload and moves the tuner "
             + "gain to suit. The dongle's built-in AGC is unreliable and is never used.";
       }
       // ★ Re-applied on EVERY hwinfo, because the server re-sends it when the ceiling changes —
@@ -2935,13 +2935,20 @@ function updateStatus() {
   //     alike. This counter says whether the sound card ran dry (starvation: link, main-thread
   //     stall, or the server pausing) or did not (then the fault is in what we handed it).
   //  ★ Absent at zero, so a healthy listener never sees a scary-looking counter at 0.
-  const dry = audio && audio.underruns > 0 ? ` · ${audio.underruns} dry` : '';
-  // ★ Shown separately from `dry` because they mean OPPOSITE things: dry is too little audio,
-  //   skip is too much arriving at once. Both are heard as a hitch and only one had a counter.
-  const skip = audio && audio.skips > 0 ? ` · ${audio.skips} skip` : '';
-  el.textContent = `${total.toFixed(0)} KB/s · ${fps} fps · ${rtt.toFixed(0)} ms${dry}${skip}${idle}`;
+  // ★★★ NOT ON THE STATUS LINE. These were added to chase the AGC stutter (2026-08-21) and went
+  //     out to the public demo, where a listener saw "1 dry" over the waterfall — Stuart: "oh crap
+  //     we've left diagnostics visible in the webclient". A counter that means nothing to the
+  //     person reading it is worse than no counter: it reads as a fault report on a receiver that
+  //     is working.
+  //  ★ Kept, in the TOOLTIP, because they earned their place — `dry` (playout ran out) and `skip`
+  //    (audio arrived faster than it could be played) are opposite faults that sound identical,
+  //    and they are what separated a starved sink from a stalled one. Available on hover when
+  //    somebody is actually diagnosing, invisible when nobody is.
+  el.textContent = `${total.toFixed(0)} KB/s · ${fps} fps · ${rtt.toFixed(0)} ms${idle}`;
   el.title = `spectrum ${specKbps.toFixed(0)} KB/s · audio ${audioKbps.toFixed(0)} KB/s`
-    + ` · asking for ${wantedFps()} fps`;
+    + ` · asking for ${wantedFps()} fps`
+    + (audio && (audio.underruns || audio.skips)
+        ? ` · audio: ${audio.underruns} dry, ${audio.skips} skip` : '');
 
   // Faults go on the METER, not into the status text: a long message there ran
   // off the edge of the screen, and the meter is where you're already looking

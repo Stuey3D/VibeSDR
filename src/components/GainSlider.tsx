@@ -63,7 +63,7 @@ export default function GainSlider({ gains, gainTenthDb, auto, onAuto, onGain, l
               onPress={() => onAuto(true)}
             >
               {/* ★ "AGC", not "AUTO": it is a gain CONTROL LOOP, and the note below says whose. */}
-              <Text style={[styles.btnTxt, auto && styles.btnTxtActive]}>AGC</Text>
+              <Text style={[styles.btnTxt, auto && styles.btnTxtActive]}>VibeAGC</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.btn, !auto && styles.btnActive]}
@@ -88,7 +88,7 @@ export default function GainSlider({ gains, gainTenthDb, auto, onAuto, onGain, l
           thumbTintColor={auto ? C.dim : C.gold}
         />
         <Text style={styles.val}>
-          {auto ? 'AGC' : haveGains ? `${(gains[idx] / 10).toFixed(1)} dB` : '—'}
+          {auto ? 'VibeAGC' : haveGains ? `${(gains[idx] / 10).toFixed(1)} dB` : '—'}
         </Text>
       </View>
       {/* ★★ SAY WHOSE AGC IT IS. Everything written about RTL-SDR AGC online is about the dongle's
@@ -97,15 +97,15 @@ export default function GainSlider({ gains, gainTenthDb, auto, onAuto, onGain, l
       {vibeAgc ? (
         <Text style={styles.note}>
           {auto
-            ? "VibeSDR's own AGC for RTL-SDR: it watches the ADC for overload and steps the tuner "
-              + 'gain to suit. Switch to Manual to set the gain yourself.'
-            : "Manual gain — nothing moves it but you. AGC engages VibeSDR's own loop for "
+            ? "VibeAGC \u2014 VibeSDR's own AGC for RTL-SDR. It watches the ADC for overload and steps "
+              + 'the tuner gain to suit. Switch to Manual to set the gain yourself.'
+            : "Manual gain \u2014 nothing moves it but you. VibeAGC is VibeSDR's own loop for "
               + "RTL-SDR, not the dongle's built-in one, which is never used."}
         </Text>
       ) : (
         <Text style={styles.note}>
           Manual gain only over RTL-TCP: the protocol's automatic mode is the dongle's own AGC,
-          which is unreliable and is known broken on the v4. VibeSDR's AGC needs a VibeServer.
+          which is unreliable and is known broken on the v4. VibeAGC needs a VibeServer.
         </Text>
       )}
     </View>

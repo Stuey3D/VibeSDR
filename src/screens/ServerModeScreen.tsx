@@ -1153,13 +1153,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
 
             <View style={[styles.rowBetween, { marginTop: 12 }]}>
               <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
-                VibeSDR AGC
+                VibeAGC
               </Text>
               <Switch value={rtlAgc} onValueChange={setRtlAgc}
                 trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
             </View>
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-              VibeSDR Custom AGC for RTL-SDR. Lets the radio use its whole gain range, starting
+              VibeAGC \u2014 VibeSDR's own AGC for RTL-SDR. Lets the radio use its whole gain range, starting
               from the figure above: it measures how close the signal is to overloading the
               converter and moves the tuner a step at a time.{'\n\n'}
               This is NOT the dongle's built-in AGC — that one is unreliable and known broken on
@@ -1176,7 +1176,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                    everywhere else here. */}
             <View style={[styles.rowBetween, { marginTop: 12, opacity: rtlAgc ? 1 : 0.4 }]}>
               <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
-                Lock AGC on
+                Lock VibeAGC on
               </Text>
               <Switch value={agcLock && rtlAgc} disabled={!rtlAgc}
                 onValueChange={(v) => { setAgcLock(v); AsyncStorage.setItem(K.agcLock, v ? '1' : '0'); }}

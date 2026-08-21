@@ -153,7 +153,8 @@ object VibeServerBoot {
             // ★ Manual is manual: the first argument is the removed overload-protection flag and
             //   is now ignored by the shim. Passed false so a stored config carrying it cannot
             //   resurrect the behaviour.
-            VibeLocalSDR.setGainAutomation(false, cfg.b("rtlAgc", false))
+            VibeLocalSDR.setGainAutomation(
+                false, cfg.b("rtlAgc", false) || cfg.b("agcLock", false))
             VibeLocalSDR.setGainLimits(
                 if (adv) cfg.s("gainLimits") else "",
                 restGain,
@@ -162,7 +163,26 @@ object VibeServerBoot {
         VibeLocalSDR.setVibeServerLockedRate(cfg.n("lockedRate", 0.0))
         VibeLocalSDR.setServeOnLan(true)
 
-        return VibeLocalSDR.startSpectrum(
+        val port = VibeLocalSDR.startSpectrum(
             fd, vendorId, productId, centerFreq, sampleRate, gain, fftSize, fftRate, mode)
+
+        // ★★★ THE AGC IS APPLIED AGAIN HERE, AFTER THE RADIO IS OPEN, AND THAT IS THE POINT.
+        //     setGainAutomation above runs BEFORE startSpectrum, when there is no device — and
+        //     turning the AGC on has to read the tuner's gain table to raise the CEILING to its
+        //     maximum. With no device it sets the flag and returns, leaving the ceiling unset, and
+        //     the loop does nothing at all without one.
+        //  ★★ So an owner who switched the AGC on in the server screen got a server that came up
+        //     with it inert, and the first listener to toggle it in the client was not enabling a
+        //     feature — they were doing the job this line should have done. Stuart, 2026-08-21:
+        //     "when the AGC switch is enabled in the GUI I still have to enable it manually in the
+        //     menu of the client". The same fault existed on Linux and is fixed the same way.
+        //  ★★ AND setRtlAgc HAD TO CHANGE FOR THIS TO WORK AT ALL: it used to return whenever the
+        //     flag was unchanged, so calling it a second time did nothing — the flag already
+        //     agreed. It now asks whether the CEILING has been applied, not whether the flag moved.
+        // ★ The lock implies the AGC — see the same rule on the server (main.cpp) and in the
+        //   setup page. Locking a loop that is not running locks nothing.
+        if (port > 0) VibeLocalSDR.setGainAutomation(
+            false, cfg.b("rtlAgc", false) || cfg.b("agcLock", false))
+        return port
     }
 }
