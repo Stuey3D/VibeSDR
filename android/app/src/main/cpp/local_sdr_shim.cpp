@@ -12881,6 +12881,16 @@ int LocalSdrShim::start(int fd, int vid, int pid,
         }
     }
     impl->lastGainTenthDb = applyGain;   // re-applied if the dongle is replugged
+    // ★★★ AND IT IS THE OVERLOAD PROTECTION'S CEILING. This path sets the gain DIRECTLY rather than
+    //     through setGain(), so the target the protection measures against was never established on
+    //     a fresh start — it stayed -1 and overloadTick() returned immediately, every time. The
+    //     protection therefore did nothing at all until somebody moved the slider by hand, which is
+    //     exactly what Stuart saw: "not seeing the gain backing off" (2026-08-21).
+    // ★★ A CEILING THAT IS ONLY SET ON THE PATH NOBODY TAKES IS NOT A CEILING. The starting gain is
+    //    the owner's intent just as much as a slider move is, and it is the one that is in force
+    //    for the whole time nobody has touched anything.
+    g_gainTarget.store(applyGain, std::memory_order_relaxed);
+    g_ovlSteps.store(0, std::memory_order_relaxed);
     rtlsdr_set_tuner_gain_mode(impl->dev, 1);
     if (applyGain >= 0) rtlsdr_set_tuner_gain(impl->dev, applyGain);
     rtlsdr_reset_buffer(impl->dev);
@@ -13710,6 +13720,10 @@ void LocalSdrShim::overloadTick() {
     else if (steps > 0 && cleanRun >= 20) want = steps - 1;      // long since clean — creep back
     if (want == steps) return;
 
+    // ★ Scoped so the hardware lock is RELEASED before we touch sockets. Announcing takes the
+    //   client mutex and the outbox; holding modeMtx across that invites an ordering problem for
+    //   no benefit — the radio is already set by then.
+    {
     VIBE_HW_LOCK();
     if (!p || !p->dev || p->radioReleased.load()) return;
     int n = rtlsdr_get_tuner_gains(p->dev, nullptr);
@@ -13737,6 +13751,13 @@ void LocalSdrShim::overloadTick() {
     //   bottom in as many seconds as there are steps.
     if (want > steps) g_adcClipRun.store(0, std::memory_order_relaxed);
     else              g_adcCleanRun.store(0, std::memory_order_relaxed);
+    }
+    // ★★★ AND TELL THE LISTENERS, or an automatic gain is invisible. hwinfo is otherwise sent once
+    //     on connect, so a slider would go on showing the value the radio HAD while the protection
+    //     quietly moved it — the same fault the gain-ceiling broadcast above exists to prevent, and
+    //     worse here because nobody pressed anything. It is also the only way to WATCH this work on
+    //     a phone whose logcat cannot be read.
+    if (p) for (auto& pr : p->allSpecPeers()) p->sendHwInfo(pr.sock);
 }
 /** ★★★ LET THE RADIO GO WITHOUT STOPPING THE SERVER.
  *
