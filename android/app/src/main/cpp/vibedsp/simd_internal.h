@@ -19,7 +19,73 @@
   #define VIBE_NEON 1
 #endif
 
+// ★★★ SSE2 ON x86-64, AND IT NEEDS NO RUNTIME CHECK, NO FLAG AND NO FAT BINARY.
+//     SSE2 is part of the x86-64 ABI — every 64-bit x86 processor ever made has it, back to the
+//     2003 Athlon 64 and including the first-generation Core i-series. That is the whole reason to
+//     target it rather than AVX: one code path, always taken, no dispatch, and it reaches the
+//     "right ancient machines" Stuart wants VibeServer to run on (2026-08-20).
+//
+// ★★ WHY IT IS WORTH DOING AT ALL. x86 shipped on the SCALAR path, which is correct and was fast
+//    enough to measure well (12.8% of a core for WFM stereo at 1.92 MSPS on an i5-11300H). But the
+//    first field report put a number on the other end of the range: ff-mish measured ~40% of a
+//    thread on an i7-10750H with TURBO DISABLED (GitHub #21, 2026-08-21). Four-wide float is the
+//    single biggest lever available, and it costs nothing at runtime.
+//
+// ★★ THE NEON BODIES BELOW ARE NOT TOUCHED. ARM is the shipping platform and its kernels are tuned
+//    and proven; a "tidy" shared abstraction would put every Pi and every phone at risk to save
+//    some duplication in a 200-line header. The SSE branches sit alongside, and the SCALAR path
+//    remains the reference both are checked against (VIBE_FORCE_SCALAR builds it anywhere).
+#if (defined(__x86_64__) || defined(_M_X64)) && !defined(VIBE_FORCE_SCALAR)
+  #include <emmintrin.h>          // SSE2
+  #define VIBE_SSE 1
+#endif
+
 namespace vibedsp {
+
+#if VIBE_SSE
+// ── SSE2 helpers for the three NEON idioms x86 has no single instruction for ──
+// ★ Written once here rather than inline in six kernels: a hand-rolled shuffle is exactly the kind
+//   of thing that is right five times and subtly wrong the sixth.
+
+/** Horizontal sum of the four lanes — NEON's vaddvq_f32. */
+static inline float sseAddv(__m128 v) {
+    // ★ movehl + shuffle, NOT haddps: haddps is SSE3, and the entire point of this file is that
+    //   nothing here may exclude an older machine.
+    __m128 t = _mm_add_ps(v, _mm_movehl_ps(v, v));          // [a0+a2, a1+a3, …]
+    t = _mm_add_ss(t, _mm_shuffle_ps(t, t, _MM_SHUFFLE(1, 1, 1, 1)));
+    return _mm_cvtss_f32(t);
+}
+
+/** De-interleave 8 consecutive floats into even (real) and odd (imag) lanes — NEON's vld2q_f32. */
+static inline void sseLoad2(const float* p, __m128& re, __m128& im) {
+    const __m128 a = _mm_loadu_ps(p);        // r0 i0 r1 i1
+    const __m128 b = _mm_loadu_ps(p + 4);    // r2 i2 r3 i3
+    re = _mm_shuffle_ps(a, b, _MM_SHUFFLE(2, 0, 2, 0));
+    im = _mm_shuffle_ps(a, b, _MM_SHUFFLE(3, 1, 3, 1));
+}
+
+/** Interleave two vectors back into 8 consecutive floats — NEON's vst2q_f32. */
+static inline void sseStore2(float* p, __m128 re, __m128 im) {
+    _mm_storeu_ps(p,     _mm_unpacklo_ps(re, im));   // r0 i0 r1 i1
+    _mm_storeu_ps(p + 4, _mm_unpackhi_ps(re, im));   // r2 i2 r3 i3
+}
+
+/** Lane-wise select — NEON's vbslq_f32(mask, a, b). */
+static inline __m128 sseSel(__m128 mask, __m128 a, __m128 b) {
+    return _mm_or_ps(_mm_and_ps(mask, a), _mm_andnot_ps(mask, b));
+}
+
+/** |x| and -x, by sign-bit masking (no branch, no constant load beyond the mask). */
+static inline __m128 sseAbs(__m128 x) { return _mm_andnot_ps(_mm_set1_ps(-0.0f), x); }
+static inline __m128 sseNeg(__m128 x) { return _mm_xor_ps(x, _mm_set1_ps(-0.0f)); }
+
+/** a + b*c — NEON's vmlaq_f32. ★ SSE2 has no FMA, so this really is two operations; the result is
+ *  the ROUNDED product plus a, which is what the scalar reference does too. (FMA would actually
+ *  differ from scalar by keeping the intermediate at full width.) */
+static inline __m128 sseMla(__m128 a, __m128 b, __m128 c) {
+    return _mm_add_ps(a, _mm_mul_ps(b, c));
+}
+#endif  // VIBE_SSE
 
 // ── Dot products ────────────────────────────────────────────────────────────
 // Real: sum(a[j]*b[j]). Complex: sum(t[j]*z[j]), z interleaved re/im (len 2K).
@@ -30,6 +96,14 @@ static inline float dotReal(const float* a, const float* b, int K) {
     for (; j + 4 <= K; j += 4)
         acc = vmlaq_f32(acc, vld1q_f32(a + j), vld1q_f32(b + j));
     float s = vaddvq_f32(acc);
+    for (; j < K; ++j) s += a[j] * b[j];
+    return s;
+#elif VIBE_SSE
+    __m128 acc = _mm_setzero_ps();
+    int j = 0;
+    for (; j + 4 <= K; j += 4)
+        acc = sseMla(acc, _mm_loadu_ps(a + j), _mm_loadu_ps(b + j));
+    float s = sseAddv(acc);
     for (; j < K; ++j) s += a[j] * b[j];
     return s;
 #else
@@ -52,6 +126,19 @@ static inline cf32 dotCplx(const float* t, const float* z, int K) {
     float re = vaddvq_f32(ar), im = vaddvq_f32(ai);
     for (; j < K; ++j) { re += t[j] * z[2 * j]; im += t[j] * z[2 * j + 1]; }
     return cf32(re, im);
+#elif VIBE_SSE
+    __m128 ar = _mm_setzero_ps(), ai = _mm_setzero_ps();
+    int j = 0;
+    for (; j + 4 <= K; j += 4) {
+        const __m128 tv = _mm_loadu_ps(t + j);
+        __m128 zr, zi;
+        sseLoad2(z + 2 * j, zr, zi);
+        ar = sseMla(ar, tv, zr);
+        ai = sseMla(ai, tv, zi);
+    }
+    float re = sseAddv(ar), im = sseAddv(ai);
+    for (; j < K; ++j) { re += t[j] * z[2 * j]; im += t[j] * z[2 * j + 1]; }
+    return cf32(re, im);
 #else
     float re = 0.0f, im = 0.0f;
     for (int j = 0; j < K; ++j) { re += t[j] * z[2 * j]; im += t[j] * z[2 * j + 1]; }
@@ -71,6 +158,15 @@ static inline void mulComplexReal(const cf32* in, const float* w, cf32* out, int
         z.val[0] = vmulq_f32(z.val[0], wv);
         z.val[1] = vmulq_f32(z.val[1], wv);
         vst2q_f32(zout + 2 * i, z);
+    }
+    for (; i < n; ++i) { zout[2*i] = zin[2*i] * w[i]; zout[2*i+1] = zin[2*i+1] * w[i]; }
+#elif VIBE_SSE
+    int i = 0;
+    for (; i + 4 <= n; i += 4) {
+        const __m128 wv = _mm_loadu_ps(w + i);
+        __m128 zr, zi;
+        sseLoad2(zin + 2 * i, zr, zi);
+        sseStore2(zout + 2 * i, _mm_mul_ps(zr, wv), _mm_mul_ps(zi, wv));
     }
     for (; i < n; ++i) { zout[2*i] = zin[2*i] * w[i]; zout[2*i+1] = zin[2*i+1] * w[i]; }
 #else
@@ -142,6 +238,40 @@ static inline float32x4_t fastAtan2q(float32x4_t y, float32x4_t x) {
 }
 #endif
 
+// ── 4-wide atan2 (SSE2) ─────────────────────────────────────────────────────
+// ★★★ THE SAME MINIMAX CORE AND THE SAME OCTANT RECONSTRUCTION as the scalar and NEON versions,
+//     coefficient for coefficient. This is the hottest transcendental in the engine — WFM runs it
+//     at the channel rate and its output IS the MPX — so any divergence here is not a rounding
+//     detail, it is the stereo difference signal and the RDS subcarrier.
+// ★★ Branch-free by mask select, exactly as NEON is: the folds are data-dependent per lane, and a
+//    branch would serialise four samples that have no reason to wait for each other.
+// ★ The denominator floor is what makes y==x==0 divide to 0 (angle 0) instead of producing NaN —
+//   the same guard, for the same reason, as the other two paths.
+#if VIBE_SSE
+static inline __m128 fastAtan2q(__m128 y, __m128 x) {
+    const __m128 ax = sseAbs(x), ay = sseAbs(y);
+    const __m128 num = _mm_min_ps(ax, ay);
+    const __m128 den = _mm_max_ps(_mm_max_ps(ax, ay), _mm_set1_ps(1e-30f));
+    const __m128 z  = _mm_div_ps(num, den);              // |t| in [0,1]
+    const __m128 z2 = _mm_mul_ps(z, z);
+
+    __m128 p = _mm_set1_ps(-0.01172120f);
+    p = sseMla(_mm_set1_ps( 0.05265332f), z2, p);
+    p = sseMla(_mm_set1_ps(-0.11643287f), z2, p);
+    p = sseMla(_mm_set1_ps( 0.19354346f), z2, p);
+    p = sseMla(_mm_set1_ps(-0.33262347f), z2, p);
+    p = sseMla(_mm_set1_ps( 0.99997726f), z2, p);
+    __m128 a = _mm_mul_ps(z, p);
+
+    const __m128 kHalfPi = _mm_set1_ps(1.57079632679f);
+    const __m128 kPi     = _mm_set1_ps(3.14159265359f);
+    const __m128 zero    = _mm_setzero_ps();
+    a = sseSel(_mm_cmpgt_ps(ay, ax), _mm_sub_ps(kHalfPi, a), a);   // fold
+    a = sseSel(_mm_cmplt_ps(x, zero), _mm_sub_ps(kPi, a), a);
+    return sseSel(_mm_cmplt_ps(y, zero), sseNeg(a), a);
+}
+#endif
+
 // ── WFM stereo matrix + blend ───────────────────────────────────────────────
 // L = 0.5*((L+R) + b*(L-R)), R = 0.5*((L+R) - b*(L-R)), where b is the stereo
 // blend ramping one-pole-style toward `target` (anti-screech: see pipeline.cpp).
@@ -169,6 +299,23 @@ static inline float stereoMatrixBlend(const float* lpr, const float* lmr,
         ev = vmulq_n_f32(ev, g4);
     }
     e = vgetq_lane_f32(ev, 0);
+#elif VIBE_SSE
+    const float g2 = g * g, g4 = g2 * g2;
+    // ★ setr, not set: `_mm_setr_ps` takes its arguments in memory order, which is what the NEON
+    //   initialiser list above means. `_mm_set_ps` would reverse the ramp and blend backwards.
+    const __m128 gpow = _mm_setr_ps(1.0f, g, g2, g2 * g);
+    const __m128 tgt = _mm_set1_ps(target), half = _mm_set1_ps(0.5f);
+    const __m128 g4v = _mm_set1_ps(g4);
+    __m128 ev = _mm_mul_ps(gpow, _mm_set1_ps(e));
+    for (; i + 4 <= n; i += 4) {
+        const __m128 b = _mm_sub_ps(tgt, ev);                 // blend for these 4
+        const __m128 sv = _mm_loadu_ps(lpr + i);              // L+R
+        const __m128 d = _mm_mul_ps(_mm_loadu_ps(lmr + i), b);// blended L-R
+        _mm_storeu_ps(outL + i, _mm_mul_ps(half, _mm_add_ps(sv, d)));
+        _mm_storeu_ps(outR + i, _mm_mul_ps(half, _mm_sub_ps(sv, d)));
+        ev = _mm_mul_ps(ev, g4v);
+    }
+    e = _mm_cvtss_f32(ev);
 #endif
     for (; i < n; ++i) {
         const float b = target - e;
@@ -188,6 +335,11 @@ static inline void interleave2(const float* l, const float* r, float* out, int n
         float32x4x2_t v = { vld1q_f32(l + i), vld1q_f32(r + i) };
         vst2q_f32(out + 2 * i, v);
     }
+    for (; i < n; ++i) { out[2*i] = l[i]; out[2*i+1] = r[i]; }
+#elif VIBE_SSE
+    int i = 0;
+    for (; i + 4 <= n; i += 4)
+        sseStore2(out + 2 * i, _mm_loadu_ps(l + i), _mm_loadu_ps(r + i));
     for (; i < n; ++i) { out[2*i] = l[i]; out[2*i+1] = r[i]; }
 #else
     for (int i = 0; i < n; ++i) { out[2*i] = l[i]; out[2*i+1] = r[i]; }

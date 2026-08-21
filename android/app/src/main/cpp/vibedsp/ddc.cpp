@@ -126,6 +126,20 @@ void FmDemod::process(const cf32* in, float* out, int n) {
         const float32x4_t di = vmlsq_f32(vmulq_f32(a.val[1], b.val[0]), a.val[0], b.val[1]);
         vst1q_f32(out + i, vmulq_n_f32(fastAtan2q(di, dr), gain_));
     }
+#elif VIBE_SSE
+    // ★ Same algebra as the NEON block above, lane for lane: d = a * conj(b), then the 4-wide
+    //   atan2. `b` reads one sample BEHIND `a` — the loop starts at i=1 with prev_ already placed,
+    //   so the unaligned load at 2*(i-1) is always in range.
+    const float* z = reinterpret_cast<const float*>(in);
+    const __m128 gainv = _mm_set1_ps(gain_);
+    for (; i + 4 <= n; i += 4) {
+        __m128 ar, ai, br, bi;
+        sseLoad2(z + 2 * i,       ar, ai);      // z[i..i+3]
+        sseLoad2(z + 2 * (i - 1), br, bi);      // z[i-1..i+2]
+        const __m128 dr = sseMla(_mm_mul_ps(ar, br), ai, bi);   // re: ar*br + ai*bi
+        const __m128 di = _mm_sub_ps(_mm_mul_ps(ai, br), _mm_mul_ps(ar, bi));  // im: ai*br - ar*bi
+        _mm_storeu_ps(out + i, _mm_mul_ps(fastAtan2q(di, dr), gainv));
+    }
 #endif
     for (; i < n; ++i) {
         const cf32 d = in[i] * std::conj(in[i - 1]);
