@@ -1138,6 +1138,13 @@ final class SpikeLink: ObservableObject {
   private var sqlScale: (span: Double, offset: Double) {
     if client is KiwiClient { return (90, -130) }
     if client is OwrxClient { return (100, -110) }
+    // ★★★ A VIBESERVER GATE SPEAKS dBFS, NOT SNR. Its squelch keys off the tuned-channel power
+    //     (pre-AGC, from the FFT) and takes `db` with **-100 = off**; only real UberSDR takes an SNR
+    //     figure. Sharing UberSDR's 0…50 SNR scale here meant the needle's dB value was nonsense on
+    //     the backend Jr is most used with. Same span/offset the PHONE uses for a VibeServer
+    //     (SDRScreen: `(hwSquelch + 130) / 90`), so the wrist and the phone mean the same thing by
+    //     the same needle position.
+    if (client as? UberClient)?.isVibe == true { return (90, -130) }
     return (50, 0)
   }
 

@@ -2478,8 +2478,28 @@ final class UberClient: ObservableObject {
     proc.manualRange = on; proc.manualFloorDb = floor; proc.manualCeilDb = ceil
   }
   /// SNR audio gate → radiod, same wire as the phone: +30 corrects radiod's audio-stream floor offset.
-  func setSquelch(_ minSnr: Double) {
-    audioSock.send(json: ["type": "set_audio_gate", "min_snr": minSnr <= -999 ? -999 : Int((minSnr + 30).rounded())])
+  /// ★★★ TWO BACKENDS, TWO DIFFERENT MESSAGES — and Jr only ever sent UberSDR's.
+  ///
+  /// `set_audio_gate` with `min_snr` is an **UberSDR** message. The VibeServer shim does not
+  /// implement it at all: its squelch is `{"type":"squelch","db":…}` on the SPECTRUM control
+  /// channel, keyed off the tuned-channel power with **db <= -100 meaning off** (see
+  /// local_sdr_shim.cpp, and `setSquelchDb` in the phone's UberSDRClient, which has always sent
+  /// the right one). So on a VibeServer the wrist's squelch did precisely nothing — the needle
+  /// moved, the bar said "Muting", and the audio carried on. Reported from the field by ff-mish
+  /// (GitHub #21, 2026-08-21: *"the squelch looks like not muting on jr version"*).
+  ///
+  /// ★★ A message a server does not implement is DISCARDED IN SILENCE, which is why this survived:
+  ///    nothing failed, nothing logged, and every part of the UI that could be checked locally
+  ///    looked correct.
+  /// ★ The value arrives already in this backend's own unit — dBFS for a VibeServer, SNR dB for
+  ///   UberSDR — because SpikeLink.sqlScale converts the needle per backend.
+  func setSquelch(_ value: Double) {
+    if isVibe {
+      specSock.send(json: ["type": "squelch", "db": value <= -999 ? -100.0 : value])
+    } else {
+      audioSock.send(json: ["type": "set_audio_gate",
+                            "min_snr": value <= -999 ? -999 : Int((value + 30).rounded())])
+    }
   }
 
   /// Crown tuning. The audio socket carries the tune; the spectrum view follows it.
