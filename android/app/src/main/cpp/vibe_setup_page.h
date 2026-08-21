@@ -239,6 +239,21 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           sends, so a server that believed it from anyone would let a stranger claim any address
           they liked and walk straight through the ban list. Nothing is read from it until you
           name the proxy you trust. Addresses or ranges, separated by commas.</div></label>
+
+      <label><span class="lbl">Several radios from one address</span>
+        <select id="oneRadioPerIp">
+          <option value="1">Refuse — one radio per address (recommended)</option>
+          <option value="0">Allow — one address may use several radios at once</option>
+        </select>
+        <div class="hint">By default an address already listening to one of this machine's radios is
+          refused the others, and told which one it is holding. It exists because a single visitor
+          took <em>both</em> radios of a public receiver at once by opening a tab on each.
+          <br><b>Allowing several is reasonable on a private server and unwise on a public one</b> —
+          one person could occupy every radio you own.
+          <br>★ Two legitimate reasons to allow it. An <b>Apple Watch shares its paired iPhone's
+          address</b>, so the pair count as one listener even though they are two devices. And
+          <b>behind a proxy you have not named above</b>, every listener arrives as the proxy — so
+          the rule would refuse everyone after the first. Naming the proxy is the better fix.</div></label>
     </div>
 
       <div class="card">
@@ -1826,6 +1841,9 @@ function fill() {
   $("uncompressed").value = String(cfg.uncompressed || 0);
   $("forceIdle").checked = !!cfg.forceIdleSaver;
   $("trustedProxies").value = cfg.trustedProxies || "";
+  // ★ Absent = "1" (the rule enforced), matching the config's own default — an older server that
+  //   never heard of this must not appear to have it switched off.
+  $("oneRadioPerIp").value = (cfg.oneRadioPerIp === false) ? "0" : "1";
   $("landingMessage").value   = cfg.landingMessage || "";
   $("landingLinkUrl").value   = cfg.landingLinkUrl || "";
   $("landingLinkLabel").value = cfg.landingLinkLabel || "";
@@ -1995,6 +2013,7 @@ function stashServer() {
   cfg.uncompressed = parseInt($("uncompressed").value, 10);
   cfg.forceIdleSaver = $("forceIdle").checked;
   cfg.trustedProxies = $("trustedProxies").value.trim();
+  cfg.oneRadioPerIp = $("oneRadioPerIp").value === "1";
   cfg.landingMessage = $("landingMessage").value.trim();
   cfg.landingLinkUrl = $("landingLinkUrl").value.trim();
   cfg.landingLinkLabel = $("landingLinkLabel").value.trim();
@@ -2020,6 +2039,7 @@ function collect() {
     uncompressed: parseInt($("uncompressed").value, 10),
     forceIdleSaver: $("forceIdle").checked,
     trustedProxies: $("trustedProxies").value.trim(),
+    oneRadioPerIp: $("oneRadioPerIp").value === "1",
     landingMessage:   $("landingMessage").value.trim(),
     // ★ Sent as typed; the SERVER decides whether it survives (vsconfig::safeLinkUrl). The check
     //   below is only so the owner finds out here rather than wondering why it vanished.

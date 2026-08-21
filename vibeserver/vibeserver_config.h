@@ -79,6 +79,7 @@ struct Config {
 
     // Access
     std::string trustedProxies;   ///< see ServerConfig::trustedProxies
+    bool        oneRadioPerIp = true;  ///< see ServerConfig::oneRadioPerIp
     std::string allowRanges, blockRanges;   ///< see RadioConfig::allowRanges
     std::string pin, adminPass;
     int         sessionLimitMin = 0;
@@ -398,6 +399,20 @@ struct ServerConfig {
      *  any address and walk through the ban list. Behind a proxy WITHOUT this, every listener
      *  shares the proxy's address — one ban hits them all. See vibe_proxy.h. */
     std::string trustedProxies;
+    /** ★★★ ONE RADIO PER ADDRESS — may a single address hold several of this machine's radios at
+     *  once? TRUE (the rule enforced) BY DEFAULT, and absent means true, because the default has to
+     *  be the safe one: it exists because a visitor took BOTH single-user radios of the public demo
+     *  by opening a tab on each, which is one person occupying a whole receiver site.
+     *
+     *  ★★ TURNING IT OFF IS REASONABLE ON A PRIVATE SERVER and unwise on a public one — the setup
+     *  page says so. It also has a legitimate FALSE POSITIVE that costs nothing to allow for: an
+     *  Apple Watch tunnels through its paired iPhone, so the pair share ONE address and count as one
+     *  listener even though they are two devices in one hand (found by ff-mish, GitHub #21).
+     *
+     *  ★ IT LIVES BESIDE trustedProxies DELIBERATELY, because the two interact: behind a proxy that
+     *  is not named above, EVERY listener arrives as the proxy — so this rule would refuse everyone
+     *  after the first. If you must run a proxy without naming it, this is the switch to turn off. */
+    bool        oneRadioPerIp = true;
     int         port = 0;      // the ONE port that leaves the machine
     bool        web = true;
     std::vector<RadioConfig> radios;

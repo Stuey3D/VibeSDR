@@ -207,6 +207,7 @@ std::string toJson(const Config& c) {
     B("rfNotch", c.rfNotch); B("dabNotch", c.dabNotch); B("zoomSpectrum", c.zoomSpectrum);
     S("cpuGovernor", c.cpuGovernor);
     S("trustedProxies", c.trustedProxies);
+    B("oneRadioPerIp", c.oneRadioPerIp);
     N("port", c.port);
     j += "  \"web\": " + std::string(c.web ? "true" : "false") + "\n}\n";
     return j;
@@ -280,6 +281,9 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     getBool(s, "zoomSpectrum", c.zoomSpectrum);
     getStr(s, "cpuGovernor", c.cpuGovernor);
     getStr(s, "trustedProxies", c.trustedProxies);
+    // ★ Absent = true (the rule enforced). getBool only writes when the key is present, so an older
+    //   config file keeps the safe behaviour rather than silently opening the server up.
+    getBool(s, "oneRadioPerIp", c.oneRadioPerIp);
     if (getNum(s, "uncompressed", d)) c.uncompressed = (int)d;
     getBool(s, "forceIdleSaver", c.forceIdleSaver);
     if (getNum(s, "port", d))        c.port = (int)d;
@@ -458,6 +462,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     out.adminIdleMin = one.adminIdleMin;
     out.cpuGovernor  = one.cpuGovernor;
     out.trustedProxies = one.trustedProxies;
+    out.oneRadioPerIp = one.oneRadioPerIp;
     out.port         = one.port;
     out.web          = one.web;
 
@@ -503,6 +508,7 @@ std::string toJson(const ServerConfig& c) {
     N("adminIdleMin", c.adminIdleMin);
     S("cpuGovernor", c.cpuGovernor);
     S("trustedProxies", c.trustedProxies);
+    B("oneRadioPerIp", c.oneRadioPerIp);
     // ★ The owner's standing message for the landing screen, and its link. See ServerConfig.
     S("landingMessage", c.landingMessage);
     S("landingLinkUrl", c.landingLinkUrl); S("landingLinkLabel", c.landingLinkLabel);
@@ -552,6 +558,9 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     I("adminIdleMin", c.adminIdleMin);
     S("cpuGovernor", c.cpuGovernor);
     S("trustedProxies", c.trustedProxies);
+    // ★ B() only assigns when the key is PRESENT, so a config written before this existed keeps the
+    //   safe default (the rule enforced) rather than reading as "switched off".
+    B("oneRadioPerIp", c.oneRadioPerIp);
     S("landingMessage", c.landingMessage);
     S("landingLinkUrl", c.landingLinkUrl); S("landingLinkLabel", c.landingLinkLabel);
     // ★★★ WHATEVER THE SOURCE, IT PASSES THROUGH HERE — a hand-edited file, a restored backup or
@@ -728,6 +737,7 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.adminIdleMin = s.adminIdleMin;
     c.cpuGovernor = s.cpuGovernor;
     c.trustedProxies = s.trustedProxies;
+    c.oneRadioPerIp = s.oneRadioPerIp;
     c.web = s.web;
 
     c.mode = r.mode;

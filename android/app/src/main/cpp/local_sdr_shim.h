@@ -178,6 +178,9 @@ public:
      *    wonder whether it was. See vsconfig::safeLinkUrl. */
     /** Is the session limit a GUARANTEE (soft) rather than a deadline? See sessionLimitSoft. */
     void setSessionLimitSoft(bool soft);
+    /** ONE RADIO PER ADDRESS — see ServerConfig::oneRadioPerIp. Default true; the owner may allow
+     *  several, which is reasonable privately and unwise on a public server. */
+    void setOneRadioPerIp(bool on);
     /** Minutes of asking for nothing before a listener is prompted, then released. 0 = off. */
     void setIdleKickMinutes(int minutes);
     /** True when somebody is listening but is past their guarantee, so an arriving listener may

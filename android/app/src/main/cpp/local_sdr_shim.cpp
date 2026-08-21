@@ -11804,6 +11804,15 @@ void LocalSdrShim::setIdleKickMinutes(int minutes) {
     if (m > 0) LOGI("idle disconnect: after %d min with no interaction (asks first)", m);
 }
 
+void LocalSdrShim::setOneRadioPerIp(bool on) {
+    g_vsOneRadioPerIp.store(on);
+    // ★ Say it at both settings, and say WHY the permissive one is a choice rather than a default:
+    //   the log is where an owner looks when a stranger has taken every radio.
+    LOGI("one radio per address: %s", on
+         ? "ON — an address holding one radio is refused the others"
+         : "OFF — a single address may hold several radios at once (owner's choice)");
+}
+
 void LocalSdrShim::setSessionLimitSoft(bool soft) {
     g_vsSessionLimitSoft.store(soft);
     if (g_vsSessionLimitMin.load() > 0)

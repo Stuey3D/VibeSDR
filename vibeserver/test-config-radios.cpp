@@ -382,6 +382,32 @@ int main() {
         ok(back.radios.empty(), "★ and stays empty rather than inventing one");
     }
 
+    // ★★★ ONE RADIO PER ADDRESS — a machine setting whose DEFAULT is the safety property.
+    //     Caught here first time: the toggle SAVED but never LOADED, because the getBool went into
+    //     the legacy single-radio parser and not ServerConfig's. It would have read as "the setting
+    //     will not stick", on multi-radio servers only, with the file on disk looking perfectly
+    //     correct — the worst kind of bug to chase from a screenshot.
+    std::printf("\n★ One radio per address: absent means ENFORCED, and OFF must survive a save\n");
+    {
+        ServerConfig a;
+        ok(fromJson("{\"name\":\"x\",\"radios\":[]}", a, err), "a config predating it loads", err);
+        ok(a.oneRadioPerIp, "★★ absent = ENFORCED — an older file must not read as switched off");
+
+        ServerConfig b;
+        ok(fromJson("{\"name\":\"x\",\"oneRadioPerIp\":false,\"radios\":[]}", b, err),
+           "an explicit OFF loads", err);
+        ok(!b.oneRadioPerIp, "★ ...and is actually off");
+
+        ServerConfig c;
+        ok(fromJson(toJson(b), c, err), "it round-trips through a save", err);
+        ok(!c.oneRadioPerIp, "★★ OFF SURVIVES THE SAVE — this is what was broken");
+
+        // ★ And the per-radio view each running radio is handed must carry it, or the process that
+        //   actually enforces the rule never hears about the owner's choice.
+        RadioConfig r; b.radios.push_back(r);
+        ok(!effectiveFor(b, b.radios[0]).oneRadioPerIp, "★★ it reaches the radio via effectiveFor");
+    }
+
     std::printf("\n%s%d checks\n", failures ? "FAILURES — " : "", checks);
     if (failures) std::printf("%d FAILED\n", failures);
     return failures ? 1 : 0;
