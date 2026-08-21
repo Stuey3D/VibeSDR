@@ -1075,6 +1075,15 @@ static std::atomic<int>      g_ovlSteps{0};
 /** Consecutive 1-second windows with, and without, samples on the rail. Written by the libusb
  *  callback (cheap: two stores), read by the DSP thread, which is the only one that may touch the
  *  radio — see the note on enqueueIq. */
+/** ★★★ HOW MANY IQ BUFFERS HAVE BEEN THROWN AWAY, and when the last one went. A dropped buffer is
+ *  a hole in the sample stream — slipped PLLs, unlocked RDS, a gap in the audio — and until now it
+ *  happened in total silence, which is why an hour went on diagnosing a stutter by ear.
+ *  ★★ PUBLISHED IN /vibeserver.json ON PURPOSE, not just logged: this phone will not surrender its
+ *     logcat, so a number that can be polled over HTTP is the only way to tell "the IQ path is
+ *     dropping samples" from "something further downstream is stuttering". One of those is worth
+ *     chasing in the DSP and the other very much is not. */
+static std::atomic<long long> g_iqDrops{0};
+static std::atomic<double>    g_iqLastDropAt{0.0};
 static std::atomic<int>      g_adcClipRun{0};
 static std::atomic<int>      g_adcCleanRun{0};
 /** ★★★ HOW MUCH HEADROOM A CLIMB MUST PROVE, and why it is not a constant.
@@ -1866,7 +1875,14 @@ struct LocalSdrShim::Impl {
      *    queue empties again the moment it is unblocked: the cost is a few milliseconds of extra
      *    latency during an event that used to be a click, and nothing at all the rest of the time.
      *  ★ The memory is trivial — chunks of cf32 that are allocated and freed either way. */
-    static constexpr size_t IQ_QUEUE_MAX = 24;  // USB: drop oldest beyond this (overrun)
+    // ★★★ REVERTED TO 8, AND THE ATTEMPT IS RECORDED SO IT IS NOT REPEATED. Deepening this to 24 to
+    //     absorb the gain-write stall made things WORSE: Stuart, on the next build, "its stuttering
+    //     when the agc isnt even moving now". A deeper queue does not remove a stall, it lets the
+    //     backlog grow — and the DSP then delivers audio in bursts, which the sink downstream likes
+    //     even less than the occasional hole. The original 8 was not an oversight.
+    //  ★ So the stall itself has to go, rather than being padded around: the gain write must stop
+    //    blocking the DSP thread at all. See overloadTick.
+    static constexpr size_t IQ_QUEUE_MAX = 8;   // USB: drop oldest beyond this (overrun)
 
     // ── Network jitter buffer (TCP path only) ────────────────────────────────
     // USB IQ arrives on a hardware clock and the queue idles near empty, so 8
@@ -8010,6 +8026,14 @@ struct LocalSdrShim::Impl {
                              // the picker say "free in 4 min" instead of a bare "in use", which
                              // is the difference between waiting and giving up.
                              + ",\"freeInSec\":" + std::to_string(vsFreeIn)
+                             // ★ Diagnostics: dropped IQ buffers, and how long ago the last one
+                             //   was. Cheap, always present, and the only way to see the IQ path
+                             //   from outside on a phone whose log is unreadable.
+                             + ",\"iqDrops\":" + std::to_string(g_iqDrops.load(std::memory_order_relaxed))
+                             + ",\"iqDropAgo\":" + std::to_string((int)llround(
+                                   g_iqLastDropAt.load(std::memory_order_relaxed) > 0
+                                       ? (double)vsNowEpoch() - g_iqLastDropAt.load(std::memory_order_relaxed)
+                                       : -1.0))
                              // ★★★ HOW THE LIMIT BEHAVES, or a client cannot describe it honestly.
                              //     Absent means HARD, so every older client and server reads right.
                              + (g_vsSessionLimitSoft.load()
@@ -9895,8 +9919,10 @@ struct LocalSdrShim::Impl {
                 // ★★ SAY IT. A dropped buffer is a discontinuity — slipped PLLs, unlocked RDS, a
                 //    gap in the audio — and it used to happen in silence, which is why it was
                 //    diagnosed by ear instead of from the log.
+                g_iqDrops.fetch_add(1, std::memory_order_relaxed);
                 static double lastDropLog = 0;
                 const double nd = nowSecs();
+                g_iqLastDropAt.store((double)vsNowEpoch(), std::memory_order_relaxed);
                 if (nd - lastDropLog > 2.0) {
                     lastDropLog = nd;
                     LOGI("IQ overrun — dropping a buffer (the DSP thread was blocked)");
