@@ -1053,9 +1053,24 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       }
     },
     onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio, lockedCentre, gainCap, agcLocked,
-               gainNow) => {
+               gainNow, agc, ovlSteps) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
       hwGainNow = typeof gainNow === 'number' ? gainNow : -1;
+      // ★ Paint the chip from STATE, so it is right on arrival and after a reload — not only after
+      //   the loop happens to move while you are watching.
+      {
+        const chip = $('ovlChip');
+        const dB = (hwGainNow / 10).toFixed(1);
+        if (agc && hwGainNow >= 0) {
+          chip.textContent = `AGC ${dB} dB`;
+          chip.classList.add('set', 'easing');
+        } else if ((ovlSteps ?? 0) > 0 && hwGainNow >= 0) {
+          chip.textContent = `GAIN HELD ${dB} dB`;
+          chip.classList.add('set', 'easing');
+        } else if (!agc) {
+          chip.classList.remove('set', 'easing');
+        }
+      }
       hwGainCap = typeof gainCap === 'number' ? gainCap : -1;
       hwAgcLocked = agcLocked === true;
       // ★ Say WHY it cannot be turned off, where the hand is already going. Locked is the owner's

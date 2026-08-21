@@ -6592,6 +6592,14 @@ struct LocalSdrShim::Impl {
                       //    gain; the slider follows it.
                       + ",\"gainNow\":" + std::to_string(
                             LocalSdrShim::instance().currentGainTenthDb())
+                      // ★★★ THE AGC'S STATE BELONGS IN THE STATE MESSAGE. The chip was driven only
+                      //     by the `ovl` EVENT, so a listener who arrived after the gain had settled
+                      //     — or who simply reloaded — saw nothing at all, however hard the loop was
+                      //     working (Stuart: "not seeing the current gain in the status bar").
+                      //     Events say what just happened; hwinfo says what IS, and a readout is a
+                      //     state.
+                      + ",\"agc\":" + (g_rtlAgc.load(std::memory_order_relaxed) ? "1" : "0")
+                      + ",\"ovlSteps\":" + std::to_string(g_ovlSteps.load(std::memory_order_relaxed))
                       + ",\"gains\":[";
         for (size_t i = 0; i < gains.size(); i++) { if (i) j += ','; j += std::to_string(gains[i]); }
         // Capture sample rates this server offers (= the spectrum spans the client

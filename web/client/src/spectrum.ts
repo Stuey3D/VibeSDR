@@ -188,7 +188,9 @@ export interface SpectrumCallbacks {
                *  we may not be the only listener. Restoring a remembered value and pushing it on
                *  connect overrode the owner's resting gain and re-gained a shared receiver for
                *  everyone already on it. */
-              gainNow?: number) => void;
+              gainNow?: number,
+              /** RTL only: is VibeSDR's AGC running, and how many steps below the ceiling is it? */
+              agc?: boolean, ovlSteps?: number) => void;
   /** ★★★ Demodulators/decoders the owner has switched off on this receiver. The server refuses
    *  them anyway; this exists so the client can HIDE them. Per AGENTS.md, a control that is
    *  visible and refused reads as a broken feature, not a blocked one. */
@@ -595,7 +597,9 @@ export class SpectrumClient {
                            Number(msg.lockedCentre) || 0,
                            typeof msg.gainCap === 'number' ? msg.gainCap : -1,
                            msg.agcLocked === true,
-                           typeof msg.gainNow === 'number' ? msg.gainNow : undefined);
+                           typeof msg.gainNow === 'number' ? msg.gainNow : undefined,
+                           msg.agc === 1 || msg.agc === true,
+                           Number(msg.ovlSteps) || 0);
         // ★★ Demodulators the OWNER has switched off. The server also REFUSES them, so this is
         //    not the enforcement — it is what lets us leave them out of the menu entirely.
         //    Offering a mode that will be refused reads as "the feature is broken"; not offering
