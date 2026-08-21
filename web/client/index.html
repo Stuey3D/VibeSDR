@@ -2583,9 +2583,6 @@ select.btn { padding: 6px 8px; }
           <div id="sigLine">
             <span id="sigLabel">—</span>
             <span id="linkStats">
-              <span id="linkBars" title="Link quality">
-                <i></i><i></i><i></i>
-              </span>
               <!-- ★ The squelch indicator lives in the SNR field beside the frequency, and only
                    there. This second one said the same thing in a different rhythm — see the note
                    in updateSignalUi(). -->
@@ -2602,6 +2599,14 @@ select.btn { padding: 6px 8px; }
                 ★ The text is REPLACED at runtime on a dongle, where the server also acts on the
                   overload and the chip reports which way the gain went (see onOverload). On an RSP
                   the hardware raises the flag and we only report it, so it keeps this wording. -->
+              <!-- ★ THE BARS SIT WITH THE NUMBERS THEY DESCRIBE. They were first in the row, so
+                   the AGC chip came between the link quality and the KB/s · fps · ms it is a
+                   summary OF — two readings about the same thing with an unrelated one wedged
+                   between them (Stuart, 2026-08-21: "the connection meter needs to swap places
+                   with the agc info as it should be next to the actual connection info"). -->
+              <span id="linkBars" title="Link quality">
+                <i></i><i></i><i></i>
+              </span>
               <span id="status">—</span>
             </span>
           </div>

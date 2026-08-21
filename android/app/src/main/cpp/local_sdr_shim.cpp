@@ -10876,9 +10876,39 @@ struct LocalSdrShim::Impl {
         //  ★ The lock counts as on: setRtlAgc is fed `rtlAgc || agcLock` at startup, so a locked
         //    receiver must be treated the same here or the park would defeat the lock as well.
         if (g_rtlAgc.load(std::memory_order_relaxed)) {
-            LOGI("everybody has left — AGC restarts from the owner's resting gain %d", rest);
+            // ★★★ ZERO STEPS IS MAXIMUM GAIN, NOT "NEUTRAL", AND WRITING 0 HERE SENT THE RADIO TO
+            //     THE TOP OF ITS RANGE. `g_ovlSteps` counts DOWN from the ceiling, and with the AGC
+            //     on the ceiling is the tuner's maximum — so "reset it to 0" meant 49.6 dB. Stuart
+            //     saw the consequence and described it exactly: tuning from 96.6 (settled at 7.7)
+            //     to 104.2 "for some reason it went to max gain then dropped to 0db", and the log
+            //     confirms it — "gain 48.0 dB, 1 step below 49.6" three seconds after the retune.
+            //     The park had fired, put the position at the ceiling, and the loop then spent
+            //     twenty-five seconds walking back down through every step.
+            //  ★★ The resting gain is a POSITION on the tuner's list, so it must be converted into
+            //     one. Anything else is a number in the wrong units, which is what this was.
+            //  ★ Written to the radio too, not just to the loop's idea of it: the park exists to
+            //    put the receiver back where the owner wants it before the next listener arrives.
+            int steps = 0;
+            if (dev) {
+                const int n = rtlsdr_get_tuner_gains(dev, nullptr);
+                if (n > 1) {
+                    std::vector<int> gl((size_t)n);
+                    rtlsdr_get_tuner_gains(dev, gl.data());
+                    const int ceilTenth = g_gainTarget.load(std::memory_order_relaxed);
+                    int ceilIdx = n - 1, restIdx = 0;
+                    for (int i = 0; i < n; i++) if (gl[(size_t)i] <= ceilTenth) ceilIdx = i;
+                    for (int i = 0; i < n; i++) if (gl[(size_t)i] <= rest)      restIdx = i;
+                    steps = ceilIdx - restIdx;
+                    if (steps < 0) steps = 0;
+                    lastGainTenthDb = gl[(size_t)restIdx];
+                    { std::lock_guard<std::mutex> lk(hwWrMtx); pendingGainTenth = gl[(size_t)restIdx]; }
+                    hwWrCv.notify_one();
+                }
+            }
+            LOGI("everybody has left — AGC restarts from the owner's resting gain %d "
+                 "(%d steps below the ceiling)", rest, steps);
             g_gainRef.store(rest, std::memory_order_relaxed);
-            g_ovlSteps.store(0, std::memory_order_relaxed);
+            g_ovlSteps.store(steps, std::memory_order_relaxed);
             g_ovlBadGain.store(-1, std::memory_order_relaxed);   // a fresh start, not the old hunt
             return;
         }
