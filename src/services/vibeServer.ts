@@ -123,6 +123,8 @@ export type VibeServerConfig = {
   /** Reverse proxies whose X-Forwarded-For we believe — required behind a tunnel, or every
    *  visitor arrives as 127.0.0.1 and the limits and ban list cannot tell anyone apart. */
   trustedProxies?: string;
+  /** ★ False lets one address hold several radios — see the server screen. Default true. */
+  oneRadioPerIp?: boolean;
 };
 
 export type VibeServerInfo = { ip: string; port: number; name: string };
@@ -195,6 +197,8 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     agcLock: cfg.agcLock ?? false,
     rtlAgc: cfg.rtlAgc ?? false,
     trustedProxies: cfg.trustedProxies ?? '',
+    // ★ Absent = true, matching the server's own default: refuse a second radio to one address.
+    oneRadioPerIp: cfg.oneRadioPerIp ?? true,
   });
   // Hand the web client's search its station list. Fire-and-forget: the server is
   // already up and useful without it, and this can involve a network fetch.

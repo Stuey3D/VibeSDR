@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import GainSlider from '../components/GainSlider';
+import BandLimitEditor, { Band } from '../components/BandLimitEditor';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator,
   StyleSheet, Platform, PermissionsAndroid, Switch, Alert, NativeModules,
@@ -98,7 +99,7 @@ const K = {
   allowRanges: 'vs_allow', blockRanges: 'vs_block',
   gainLimits: 'vs_gainlimits', restGain: 'vs_restgain', agcLock: 'vs_agclock',
   rtlAgc: 'vs_rtlagc',
-  proxies: 'vs_proxies', radioUse: 'vs_radiouse',
+  proxies: 'vs_proxies', radioUse: 'vs_radiouse', oneRadioPerIp: 'vs_oneradioperip',
   landingHz: 'vs_landinghz', landingMode: 'vs_landingmode', biasT: 'vs_biast',
 };
 
@@ -134,7 +135,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [idleSaver, setIdleSaver]   = useState(false);
   /** ★ Locked mode only: the captured window everyone shares, and real bins at deep zoom. */
   const [lockedCentre, setLockedCentre] = useState(0);
-  const [zoomSpec, setZoomSpec]     = useState(false);
+  // ★ ON by default, as the browser's setup page has it: a shared receiver that goes blocky the
+  //   moment somebody zooms reads as a poor receiver rather than as a setting nobody switched on.
+  //   The cost is a little CPU, which is the trade the label now states.
+  const [zoomSpec, setZoomSpec]     = useState(true);
   const [spectrogram, setSpectrogram] = useState(false);
   /** Power down the radio when nobody is listening. ON by default; it never releases the dongle. */
   const [idleGrace, setIdleGrace]   = useState(300);
@@ -152,8 +156,20 @@ export default function ServerModeScreen({ navigation, route }: Props) {
    * ★ Simple mode IS 'single' without the restrictions, so this only appears under Advanced.
    */
   const [radioUse, setRadioUse]   = useState<'single' | 'locked'>('single');
+  /** ★ True = refuse a second radio to one address. Default true, as the server's own default. */
+  const [oneRadioPerIp, setOneRadioPerIp] = useState(true);
   // ★ Listeners sharing the radio. 1 = single occupant, which is Simple mode's behaviour.
   const [maxUsers, setMaxUsers]   = useState(1);
+  /** ★ The listener box's raw text — see the note where it is drawn. */
+  const [usersText, setUsersText] = useState('1');
+  /**
+   * ★★★ THE BANDS THE SERVER ITSELF KNOWS, not a copy. vibe_bands.h is what resolves "fm" or
+   *     "airband" when a limit is applied, so a list written again in TypeScript would drift from
+   *     the one being enforced — and the copy that drifts is the one that quietly stops matching.
+   *  ★ Empty until it arrives, and the editors simply show no band chips until then: an owner can
+   *    still type a range, which is the half that never needed the list.
+   */
+  const [bands, setBands] = useState<Band[]>([]);
   const [allowRanges, setAllowRanges] = useState('');
   const [blockRanges, setBlockRanges] = useState('');
   const [gainLimits, setGainLimits]   = useState('');
@@ -184,7 +200,27 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   // ★ Which radio is attached, so the menus match it. VID/PID only — see getConnectedRadio.
   const [radio, setRadio] = useState<{ driver: string; model: string } | null>(null);
   useEffect(() => { void getConnectedRadio().then(setRadio); }, []);
-  const rateOptions = radio?.driver === 'airspyhf' ? RATE_OPTIONS_AHF : RATE_OPTIONS_RTL;
+  const rateOptionsAll = radio?.driver === 'airspyhf' ? RATE_OPTIONS_AHF : RATE_OPTIONS_RTL;
+  // ★★★ "CLIENT-CONTROLLED" CANNOT EXIST IN A LOCKED RANGE. The whole point of a pinned window is
+  //     that the SERVER decides what is captured and everybody pans inside it — a listener who
+  //     could re-rate the radio would move the window out from under every other listener. It was
+  //     offered anyway, so a locked receiver had a control that either did nothing or broke the
+  //     mode (Stuart, 2026-08-21: "the sample rate cannot be client controlled in this mode so
+  //     that option needs removing").
+
+  const rateOptions = radioUse === 'locked'
+    ? rateOptionsAll.filter(o => o.value !== 0)
+    : rateOptionsAll;
+  // ★ And a receiver ALREADY set to client-controlled has to be moved off it when the mode
+  //   changes, or the option is merely hidden while still in force — which is worse than showing
+  //   it, because nothing on screen would say what the radio is actually doing.
+  useEffect(() => {
+    if (radioUse === 'locked' && rate === 0) {
+      const first = rateOptionsAll.find(o => o.value !== 0);
+      if (first) { setRate(first.value); AsyncStorage.setItem(K.rate, String(first.value)); }
+    }
+  }, [radioUse, rate, rateOptionsAll]);
+
   /**
    * ★★★ THE HF+ HAS NOTHING TO SET UP, so do not draw it a panel of dead controls. Android has no
    *     SDRplay support, which leaves two radios and a very short answer: the Airspy HF+ has no
@@ -201,6 +237,54 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const hasHwSetup = !isAhf;
   // The rate ceiling to quote in prose, so the hint cannot drift from the list above it.
   const topRateLabel = radio?.driver === 'airspyhf' ? '912 kHz' : '2.4 MHz';
+
+  // ★★★ THE ORDER AN OWNER SETS A LOCKED RECEIVER IN, which is not the order the page grew in.
+  //     A pinned window is defined by its CENTRE and its WIDTH together — the centre says where
+  //     the window is, the sample rate says how wide, and neither means anything without the
+  //     other. They were pages apart: the centre was the last thing in Advanced (Stuart found it
+  //     "buried underneath everything") and the width sat below the landing frequency.
+  //  ★★ So in Locked Range the five settings that define the receiver come first, in the order
+  //     they depend on each other: centre, sample rate, starting frequency/mode, gain, Bias-T.
+  //     Unlocked keeps the old order, where the width belongs with the hardware because no window
+  //     is being pinned.
+  //  ★ Held as fragments and RENDERED in one place or the other — never both. Two copies of one
+  //    control is the fault this screen already had with the machine form.
+  const centreBlock = (<>
+                {/* ★★★ THE CAPTURED WINDOW — the setting that makes shared listening possible at
+                    all. Everybody gets a slice of ONE window, so the centre must not move; on this
+                    phone the centre has always followed whatever the landing frequency was, which
+                    is right for a single listener retuning the radio themselves and meaningless
+                    the moment several people share it.
+                    ★ Blank/0 = follow the listener, i.e. the old behaviour. */}
+                <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>CENTRE FREQUENCY</Text>
+                <TextInput
+                  value={lockedCentre ? String(Math.round(lockedCentre / 1000)) : ''}
+                  onChangeText={(t) => setLockedCentre(Math.round((Number(t) || 0) * 1000))}
+                  placeholder="kHz — the window everyone shares"
+                  placeholderTextColor={C.textDim} keyboardType="numeric"
+                  style={[styles.input, { color: C.amber, fontFamily: F, borderColor: C.border }]} />
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                  Listeners tune freely INSIDE this window but cannot move the radio for everybody.
+                  The width is the capture rate above, so the window runs half that either side.
+                </Text>
+
+  </>);
+  const rateBlock = (<>
+            {/* ★★ THE RADIO'S CAPTURE WIDTH, so it sits with the radio rather than with the
+                server. On an HF+ there is one usable rate and the list says so; the choice here
+                is really the RTL's. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>CAPTURE WIDTH</Text>
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
+              {rate === 0
+                ? `Listeners choose their own span, up to ${topRateLabel}.`
+                : 'Pinned — listeners cannot change it. Lower it to save processing on a slow phone.'}
+            </Text>
+            {rateOptions.map(o => (
+              <OptRow key={o.value} C={C} F={F} active={rate === o.value} label={o.label} onPress={() => setRate(o.value)} />
+            ))}
+
+  </>);
+
   const [webServer, setWebServer] = useState(true);
   const [locMode, setLocMode]     = useState<LocationMode>('off');
   const [locCity, setLocCity]     = useState('');
@@ -249,6 +333,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         if (fm != null) setAdvanced(fm === '1');
         // ★ Loaded separately from the tuple above: adding thirteen more entries to a positional
         //   destructure of twenty-three is how the wrong value ends up in the wrong setting.
+        // ★ Asked for once, from the shim that enforces them. Failure is silent and harmless —
+        //   see the note by `bands`.
+        void (async () => {
+          try {
+            const raw = await (NativeModules as any).VibeLocalSDR?.getBands?.();
+            if (raw) { const b = JSON.parse(raw); if (Array.isArray(b)) setBands(b); }
+          } catch { /* the band chips simply do not appear */ }
+        })();
         void (async () => {
           const g = async (k: string) => (await AsyncStorage.getItem(k)) ?? '';
           setLandingMsg(await g(K.landingMsg));
@@ -258,7 +350,11 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           setIdleKick(Number(await g(K.idleKick)) || 0);
           setIdleSaver((await g(K.idleSaver)) === '1');
           setLockedCentre(Number(await g(K.lockedCentre)) || 0);
-          setZoomSpec((await g(K.zoomSpectrum)) === '1');
+          // ★ Absent means "never chosen", which must read as the DEFAULT (on) and not as off —
+          //   the same trap as any stored boolean whose default is true.
+          { const v = await g(K.zoomSpectrum); if (v) setZoomSpec(v === '1'); }
+          // ★ Absent = refuse, the server's own default — an older install must not read as "allow".
+          { const v = await g(K.oneRadioPerIp); if (v) setOneRadioPerIp(v === '1'); }
           setSpectrogram((await g(K.spectrogram)) === '1');
           const ig = await g(K.idleGrace);
           // ★ Default ON at 300 s — an absent value means "never set", not "off".
@@ -270,7 +366,11 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         if (lhz != null && Number.isFinite(Number(lhz))) setLandingHz(Number(lhz));
         if (lmd) setLandingMode(lmd);
         if (bt != null) setBiasT(bt === '1');
-        if (mu != null) setMaxUsers(Math.max(1, Number(mu) || 1));
+        if (mu != null) {
+          const n = Math.max(1, Number(mu) || 1);
+          // ★ The box's text follows the stored value — otherwise a saved 10 came back showing "1".
+          setMaxUsers(n); setUsersText(String(n));
+        }
         if (alw != null) setAllowRanges(alw);
         if (blk != null) setBlockRanges(blk);
         if (gl != null) setGainLimits(gl);
@@ -441,8 +541,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         'Allow background usage',
         "This phone restricts VibeSDR when it isn't on screen, which will starve the server — clients drop out or stop connecting.\n\n" +
         "To fix it:\n" +
-        "1. Tap \u201cOpen Settings\u201d.\n" +
-        "2. Open \u201cApp battery usage\u201d (or \u201cBattery\u201d) and turn ON \u201cAllow background usage\u201d (some phones call it \u201cUnrestricted\u201d / \u201cDon't optimise\u201d).\n" +
+        "1. Tap “Open Settings”.\n" +
+        "2. Open “App battery usage” (or “Battery”) and turn ON “Allow background usage” (some phones call it “Unrestricted” / “Don't optimise”).\n" +
         "3. Come back and start the server.",
         [
           { text: 'Open Settings', onPress: () => { Local?.openAppSettings?.(); resolve(false); } },
@@ -452,6 +552,27 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       );
     });
   }, []);
+
+  // ★★★ EVERY VALUE THIS CALLBACK PERSISTS, READ FRESH — because a dependency list is a list you
+  //     must remember to update, and it will be wrong. `start()` writes what it is about to send,
+  //     so anything missing from its deps was captured STALE and written back over the user's
+  //     change: the setting reverted the moment the server started, which looks exactly like a
+  //     save bug. Stuart, 2026-08-21: "the hard/soft limit always reverts back and is not
+  //     remembered" — and TWELVE settings were in that state, not one (limitSoft, idleKick,
+  //     idleSaver, lockedCentre, zoomSpec, spectrogram, idleGrace, antenna, antennaIcon and the
+  //     three landing fields).
+  //  ★★★ THE FILE HAD ALREADY LEARNED THIS AND FORGOTTEN IT. The note by the deps array describes
+  //      the same fault with the admin password — "one stale closure, two symptoms, and an evening
+  //      of looking at the server for a fault that was three lines above it". It came back because
+  //      the fix was "add the name to the list", and the list grew.
+  //  ★ A ref is assigned on every render, so it cannot be stale by construction and a setting added
+  //    later is carried without anyone remembering anything. Same reasoning as VibeServerBoot
+  //    carrying the whole config rather than a hand-maintained subset.
+  const live = useRef<any>({});
+  live.current = {
+    limitSoft, idleKick, idleSaver, lockedCentre, zoomSpec, spectrogram, idleGrace,
+    antenna, antennaIcon, landingMsg, landingUrl, landingLbl,
+  };
 
   const start = useCallback(async () => {
     if (!(await checkBackgroundAllowed())) return;
@@ -466,15 +587,16 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.webServer, webServer ? '1' : '0'],
       [K.adminPw, adminPw], [K.uncomp, String(uncomp)], [K.limitMin, String(limitMin)],
       [K.advanced, advanced ? '1' : '0'], [K.maxUsers, String(maxUsers)],
-      [K.landingMsg, landingMsg], [K.landingUrl, landingUrl], [K.landingLbl, landingLbl],
-      [K.limitSoft, limitSoft ? '1' : '0'], [K.idleKick, String(idleKick)],
-      [K.idleSaver, idleSaver ? '1' : '0'], [K.lockedCentre, String(lockedCentre)],
-      [K.zoomSpectrum, zoomSpec ? '1' : '0'], [K.spectrogram, spectrogram ? '1' : '0'],
-      [K.idleGrace, String(idleGrace)], [K.antenna, antenna], [K.antennaIcon, antennaIcon],
+      [K.landingMsg, live.current.landingMsg], [K.landingUrl, live.current.landingUrl], [K.landingLbl, live.current.landingLbl],
+      [K.limitSoft, live.current.limitSoft ? '1' : '0'], [K.idleKick, String(live.current.idleKick)],
+      [K.idleSaver, live.current.idleSaver ? '1' : '0'], [K.lockedCentre, String(live.current.lockedCentre)],
+      [K.zoomSpectrum, live.current.zoomSpec ? '1' : '0'], [K.spectrogram, live.current.spectrogram ? '1' : '0'],
+      [K.idleGrace, String(live.current.idleGrace)], [K.antenna, live.current.antenna], [K.antennaIcon, live.current.antennaIcon],
       [K.allowRanges, allowRanges], [K.blockRanges, blockRanges],
       [K.gainLimits, gainLimits], [K.restGain, String(restGain)],
       [K.rtlAgc, rtlAgc ? '1' : '0'],
       [K.agcLock, agcLock ? '1' : '0'], [K.proxies, proxies],
+      [K.oneRadioPerIp, oneRadioPerIp ? '1' : '0'],
     ]);
     if (Platform.OS === 'android' && Platform.Version >= 33) {
       try { await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS); } catch {}
@@ -522,18 +644,19 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         maxUsers, allowRanges, blockRanges,
         // ★ The rest of the server's settings — the phone runs the same server, one radio at a
         //   time, so everything the desktop can set is set from here.
-        sessionLimitSoft: limitSoft,
-        idleKickMin: idleKick,
-        forceIdleSaver: idleSaver,
-        idleGraceSec: idleGrace,
-        antenna, antennaIcon,
-        landingMessage: landingMsg, landingLinkUrl: landingUrl, landingLinkLabel: landingLbl,
+        sessionLimitSoft: live.current.limitSoft,
+        idleKickMin: live.current.idleKick,
+        forceIdleSaver: live.current.idleSaver,
+        idleGraceSec: live.current.idleGrace,
+        antenna: live.current.antenna, antennaIcon: live.current.antennaIcon,
+        landingMessage: live.current.landingMsg, landingLinkUrl: live.current.landingUrl, landingLinkLabel: live.current.landingLbl,
         // ★★ Locked mode only. In single-user mode the centre follows the listener, which is what
         //    the phone has always done and is right for one person retuning the radio themselves.
         ...(advanced && radioUse === 'locked'
-          ? { lockedCentre, zoomSpectrum: zoomSpec, spectrogram }
+          ? { lockedCentre: live.current.lockedCentre, zoomSpectrum: live.current.zoomSpec,
+              spectrogram: live.current.spectrogram }
           : {}),
-        gainLimits, restGain, agcLock, trustedProxies: proxies,
+        gainLimits, restGain, agcLock, trustedProxies: proxies, oneRadioPerIp,
         rtlAgc,
       });
       setRunning(info);
@@ -561,7 +684,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   }, [name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
       webServer, locMode, locCity, checkBackgroundAllowed,
       adminPw, uncomp, limitMin, advanced, maxUsers, allowRanges, blockRanges,
-      gainLimits, restGain, agcLock, proxies, rtlAgc]);
+      gainLimits, restGain, agcLock, proxies, rtlAgc, oneRadioPerIp]);
 
   const stopAndBack = useCallback(() => {
     stopAdvertiseRtlTcp();
@@ -659,19 +782,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             for privacy on untrusted networks.
           </Text>
 
-          {/* Live compressed-audio fallback toggle */}
-          <View style={[styles.card, { borderColor: C.border, marginTop: 14 }]}>
-            <View style={styles.rowBetween}>
-              <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
-                Compressed audio
-              </Text>
-              <Switch value={compress} onValueChange={toggleCompress}
-                trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
-            </View>
-            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
-              Turn off only if a client has audio trouble (falls back to raw PCM).
-            </Text>
-          </View>
+          {/* ★ The live compressed-audio toggle went with the one in the settings form — see the
+              note there. Uncompressed audio is the setting that decides this now. */}
 
           <TouchableOpacity style={[styles.stopBtn, { borderColor: C.red }]} onPress={stopAndBack}>
             <Text style={{ color: C.red, fontFamily: F, fontSize: 16 }}>■ Stop server & back to servers</Text>
@@ -856,8 +968,39 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
               Only if you reach this phone through a tunnel (Cloudflare, nginx, Tailscale). List the
-              addresses you trust. Empty otherwise \u2014 without it everyone behind the tunnel looks
+              addresses you trust. Empty otherwise — without it everyone behind the tunnel looks
               like you, so the time limit and the ban list stop working.
+            </Text>
+
+            {/* ★★★ SEVERAL RADIOS FROM ONE ADDRESS. Alongside the proxy setting because they are
+                the same subject — what the server takes an ADDRESS to mean — and an owner thinking
+                about one is thinking about the other.
+                ★★ Default REFUSE, which is what a public receiver needs: a single visitor once
+                   took BOTH radios of one by opening a tab on each. But it is also what makes a
+                   phone and its watch look like one greedy visitor, since they leave by the same
+                   address (GitHub #21), and on a SHARED receiver it is the difference between a
+                   household being one listener and being three — which is why the switch exists
+                   rather than the rule simply being hard-wired.
+                ★ Wired through VibeServerBoot like every other server setting, so it survives a
+                  restart and a crash-restore by construction. */}
+            <View style={[styles.rowBetween, { marginTop: 14 }]}>
+              <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                Allow several connections from one address
+              </Text>
+              <Switch value={!oneRadioPerIp}
+                onValueChange={(v) => { setOneRadioPerIp(!v);
+                                        AsyncStorage.setItem(K.oneRadioPerIp, !v ? '1' : '0'); }}
+                trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
+            </View>
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              {oneRadioPerIp
+                ? 'Off — a second connection from an address that is already listening is refused, '
+                  + 'and told so. Right for a public receiver, where it stops one visitor holding '
+                  + 'more than their share.'
+                : 'On — one address may hold several connections at once. What a household needs: '
+                  + 'a phone and its watch, or two people on one broadband line, leave by the same '
+                  + 'address and would otherwise count as one greedy visitor. Unwise on a public '
+                  + 'receiver, where one person could occupy every slot you have.'}
             </Text>
 
             {/* Bookmarks. The server LEARNS stations from RDS as clients tune, so the
@@ -887,7 +1030,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>UNCOMPRESSED AUDIO</Text>
             {([
               [0, 'Off', 'Never send raw audio. Listeners who cannot decode Opus are turned away with a reason.'],
-              [1, "Listener's choice", 'An UNCOMPRESSED button appears in each listener\u2019s audio menu. Defaults to Opus.'],
+              [1, "Listener's choice", 'An UNCOMPRESSED button appears in each listener’s audio menu. Defaults to Opus.'],
               [2, 'Compatibility only', 'Raw only as a fallback for a client that cannot decode Opus — no user-facing switch.'],
             ] as const).map(([v, label, hint]) => (
               <OptRow key={v} C={C} F={F} active={uncomp === v} label={label} hint={hint}
@@ -915,22 +1058,18 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               <OptRow key={t.key} C={C} F={F} active={fps === t.key} label={t.label} onPress={() => setFps(t.key)} />
             ))}
 
-            {/* Compressed audio. ★ The codec is OPUS now — this said IMA-ADPCM long after
-                Opus replaced it, which is worse than saying nothing: it names the wrong
-                format to anyone deciding whether their client can cope. */}
-            <View style={[styles.card, { borderColor: C.border, marginTop: 14 }]}>
-              <View style={styles.rowBetween}>
-                <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
-                  Compressed audio
-                </Text>
-                <Switch value={compress} onValueChange={setCompress}
-                  trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
-              </View>
-              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
-                Opus — about 20x lighter than raw audio. Turn off only if a listener's
-                client cannot decode it.
-              </Text>
-            </View>
+            {/* ★★★ NO "COMPRESSED AUDIO" SWITCH — UNCOMPRESSED AUDIO above supersedes it. That
+                three-way setting already says what this server sends: Off (Opus only), Listener's
+                choice, or Compatibility. A separate switch for the same decision meant two
+                controls that could contradict each other — "compressed off" plus "uncompressed
+                off" is a receiver that sends nothing anyone asked for — and the browser's setup
+                page has only ever had the three-way (Stuart, 2026-08-21: "the compressed audio
+                switch has been superceded ... which assumes Compressed audio is the default").
+                ★ Opus stays ON at the server, always: it is the default the three-way is written
+                  around, and raw is reached through that setting rather than by turning Opus off.
+                ★ The stored key and the wire field are untouched, so an existing config that
+                  carries `compress:false` still starts — it simply no longer has a control that
+                  can set it. */}
 
             {/* ★★ UNCOMPRESSED AUDIO — the owner's UPLINK policy, three-way.
                 Raw is 48 kHz stereo int16: ~187 KB/s per listener, which is why this is not
@@ -1031,12 +1170,12 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             </View>
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
               {!webServer
-                ? 'Advanced needs the web client: the admin page \u2014 the connection log, '
-                  + 'per-address monitoring and banning \u2014 is served to a browser, so with the '
+                ? 'Advanced needs the web client: the admin page — the connection log, '
+                  + 'per-address monitoring and banning — is served to a browser, so with the '
                   + 'web client off there is no way to reach any of it. Turn it back on to choose '
                   + 'Advanced.'
                 : advanced
-                ? 'Adds shared listening, tuning and gain limits, and the admin page \u2014 '
+                ? 'Adds shared listening, tuning and gain limits, and the admin page — '
                   + 'per-address monitoring, banning and a connection log, reachable from a browser '
                   + 'wherever you are. An admin password is REQUIRED: that page can ban people and '
                   + 'change your radio.'
@@ -1084,6 +1223,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
 
             {/* ★★ WHERE A LISTENER LANDS — not hardware, so it applies to either radio. Same name
                 as the macOS settings window uses, so an owner who runs both meets one idea once. */}
+            {radioUse === 'locked' && centreBlock}
+            {radioUse === 'locked' && rateBlock}
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WHERE LISTENERS START</Text>
             <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
               <TextInput value={landingHz ? String(Math.round(landingHz / 1000)) : ''}
@@ -1134,6 +1275,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               onAuto={(a) => { const v = a ? -1 : 157;
                                setRestGain(v); AsyncStorage.setItem(K.restGain, String(v)); }}
               onGain={(t) => { setRestGain(t); AsyncStorage.setItem(K.restGain, String(t)); }}
+              modeButtons={false}
               label="STARTING GAIN" />
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
               {rtlAgc
@@ -1159,7 +1301,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
             </View>
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-              VibeAGC \u2014 VibeSDR's own AGC for RTL-SDR. Lets the radio use its whole gain range, starting
+              VibeAGC — VibeSDR's own AGC for RTL-SDR. Lets the radio use its whole gain range, starting
               from the figure above: it measures how close the signal is to overloading the
               converter and moves the tuner a step at a time.{'\n\n'}
               This is NOT the dongle's built-in AGC — that one is unreliable and known broken on
@@ -1185,24 +1327,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
               {rtlAgc
                 ? 'Listeners get the AGC already on and can leave it on, but cannot switch it off '
-                  + '\u2014 the same promise the SDRplay and Airspy locks have always kept. Without '
+                  + '— the same promise the SDRplay and Airspy locks have always kept. Without '
                   + 'this, any listener can turn it off and set their own gain, which on a shared '
                   + 'receiver changes it for everybody.'
                 : 'Turn the AGC on above to lock it.'}
             </Text>
 
-            {/* ★★ THE RADIO'S CAPTURE WIDTH, so it sits with the radio rather than with the
-                server. On an HF+ there is one usable rate and the list says so; the choice here
-                is really the RTL's. */}
-            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>CAPTURE WIDTH</Text>
-            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
-              {rate === 0
-                ? `Listeners choose their own span, up to ${topRateLabel}.`
-                : 'Pinned — listeners cannot change it. Lower it to save processing on a slow phone.'}
-            </Text>
-            {rateOptions.map(o => (
-              <OptRow key={o.value} C={C} F={F} active={rate === o.value} label={o.label} onPress={() => setRate(o.value)} />
-            ))}
+            {radioUse !== 'locked' && rateBlock}
 
             {/* ★★★ HARDWARE, AND ONLY WHERE THERE IS ANY. See isAhf: the HF+ has no rate to choose,
                 no bias-T and a locked AGC, so it gets a sentence instead of a panel of dead
@@ -1389,34 +1520,56 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                     shared dial had no switch at all (Stuart, 2026-08-20: "you forgot the most
                     important control"). The browser's setup page had the identical fault. */}
                 <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>HOW MANY LISTENERS</Text>
-                <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-                  {[1, 2, 3, 4, 6, 8].map(n => (
-                    <TouchableOpacity key={n} onPress={() => setMaxUsers(n)}
-                      style={[styles.card, { borderColor: maxUsers === n ? C.green : C.border,
-                                             backgroundColor: maxUsers === n ? C.green + '18' : 'transparent',
-                                             paddingVertical: 10, paddingHorizontal: 14 }]}>
-                      <Text style={{ color: maxUsers === n ? C.green : C.gold, fontFamily: F, fontSize: 14 }}>
-                        {n === 1 ? 'One' : n}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
+                {/* ★★★ A NUMBER THE OWNER TYPES, not six the app happens to offer. The chips were
+                    1/2/3/4/6/8, so a receiver that could serve ten could not be TOLD ten — and the
+                    figure is a judgement about somebody's UPLINK, which no fixed list can guess.
+                    The browser's setup page has always had a box here; this is the same control
+                    (Stuart, 2026-08-21: "User Limit needs to be an actual type box not an
+                    arbitury 2/4/6/8 selection").
+                    ★ Held as TEXT while editing so the field can be empty mid-type — parsing on
+                      every keystroke would turn a cleared box into "1" under the user's fingers. */}
+                <TextInput value={usersText}
+                  onChangeText={(v) => {
+                    const digits = v.replace(/[^0-9]/g, '').slice(0, 3);
+                    setUsersText(digits);
+                    const n = Number(digits);
+                    if (n >= 1) setMaxUsers(Math.min(64, n));
+                  }}
+                  onBlur={() => {
+                    // ★ Empty or 0 is not a receiver anybody can use — settle on 1 when the field
+                    //   is left, rather than refusing the keystroke while they are still typing.
+                    const n = Math.max(1, Math.min(64, Number(usersText) || 1));
+                    setMaxUsers(n); setUsersText(String(n));
+                  }}
+                  keyboardType="number-pad" placeholder="1" placeholderTextColor={C.goldDim}
+                  style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
+                {/* ★★ WHAT IT COSTS, in the units that actually run out. The DSP is nearly free —
+                    listeners share one FFT — and it is the UPLINK that decides how many a phone
+                    can really serve. Same arithmetic as the browser's bwNote(). */}
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                  About {(maxUsers * (uncomp !== 0 ? 2.0 : 0.2)).toFixed(1)} Mb/s of your upload with{' '}
+                  {maxUsers} listener{maxUsers === 1 ? '' : 's'} connected
+                  {uncomp !== 0
+                    ? ', because uncompressed audio is switched on — roughly ten times the '
+                      + 'compressed cost.'
+                    : '.'}
+                </Text>
                 {/* ★★★ WHAT THE NUMBER MEANS DEPENDS ON THE MODE ABOVE, and the difference is the
                     whole feature: pinned centre = everybody tunes independently; unpinned = one
                     dial everybody hears, which is how FM-DX receivers work. Said here because
                     this is where the owner is standing when it matters. */}
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
                   {maxUsers === 1
-                    ? 'One listener at a time, each with the full settings surface \u2014 the second '
+                    ? 'One listener at a time, each with the full settings surface — the second '
                       + 'person sees IN USE and waits. Right for a receiver you mostly use yourself.'
                     : radioUse === 'locked'
                     ? `Up to ${maxUsers} listeners share the radio, each with their own tuning inside `
-                      + 'what the radio is receiving.\n\nThe extra DSP is close to nothing \u2014 they '
+                      + 'what the radio is receiving.\n\nThe extra DSP is close to nothing — they '
                       + 'share one FFT. What actually runs out is UPLINK, so on a phone this is a '
                       + 'question about your connection, not about the handset.'
                     : `ONE DIAL, SHARED. Up to ${maxUsers} listeners hear the same frequency and `
-                      + 'anybody may move it \u2014 the way FM-DX receivers work. They get a small set '
-                      + 'of fixed messages ("Can I tune?", "Please hold \u2014 chasing DX") to agree who '
+                      + 'anybody may move it — the way FM-DX receivers work. They get a small set '
+                      + 'of fixed messages ("Can I tune?", "Please hold — chasing DX") to agree who '
                       + 'goes next; there is no free text and nobody has a name, so there is nothing '
                       + 'to moderate.\n\nOne VFO means the DSP cost barely moves with the number of '
                       + 'listeners. What runs out is UPLINK.'}
@@ -1427,24 +1580,6 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                     An unlocked radio has no window to pin — it retunes — which is why the listener
                     count above now sits outside this block and this does not. */}
                 {radioUse === 'locked' && (<>
-                {/* ★★★ THE CAPTURED WINDOW — the setting that makes shared listening possible at
-                    all. Everybody gets a slice of ONE window, so the centre must not move; on this
-                    phone the centre has always followed whatever the landing frequency was, which
-                    is right for a single listener retuning the radio themselves and meaningless
-                    the moment several people share it.
-                    ★ Blank/0 = follow the listener, i.e. the old behaviour. */}
-                <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>CENTRE FREQUENCY</Text>
-                <TextInput
-                  value={lockedCentre ? String(Math.round(lockedCentre / 1000)) : ''}
-                  onChangeText={(t) => setLockedCentre(Math.round((Number(t) || 0) * 1000))}
-                  placeholder="kHz — the window everyone shares"
-                  placeholderTextColor={C.textDim} keyboardType="numeric"
-                  style={[styles.input, { color: C.amber, fontFamily: F, borderColor: C.border }]} />
-                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-                  Listeners tune freely INSIDE this window but cannot move the radio for everybody.
-                  The width is the capture rate above, so the window runs half that either side.
-                </Text>
-
                 {/* ★★★ REAL BINS AT DEEP ZOOM. Without it a shared receiver interpolates, and the
                     waterfall turns to blocks the moment anybody zooms in — which a listener reads
                     as a poor receiver rather than a setting. */}
@@ -1452,15 +1587,22 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 <View style={[styles.card, { borderColor: C.border }]}>
                   <View style={styles.rowBetween}>
                     <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
-                      Sharp zoom (KA9Q)
+                      {/* ★★★ NOT "KA9Q" — that is OUR internal name for the technique, and it
+                          means nothing to an owner reading this screen. It named the implementation
+                          rather than the effect, which is the one thing a label must not do
+                          (Stuart, 2026-08-21). Worded as the browser's setup page words it. */}
+                      Keep the spectrum sharp when zoomed in
                     </Text>
                     <Switch value={zoomSpec} onValueChange={setZoomSpec}
                       trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
                   </View>
                   <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
                     {zoomSpec
-                      ? 'Zooming shows real detail instead of a stretched picture. Costs CPU, and it is what makes a shared radio worth zooming into.'
-                      : 'Zooming stretches the wide view — quick, but blocky past a point.'}
+                      ? 'Recomputes real detail as listeners zoom, instead of magnifying what is '
+                        + 'already on screen. Uses slightly more CPU, and is what makes a shared '
+                        + 'receiver worth zooming into.'
+                      : 'Without it a close-in view goes blocky — the wide picture is magnified '
+                        + 'rather than recomputed.'}
                   </Text>
                 </View>
 
@@ -1473,38 +1615,54 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                     same way, for the same reason. */}
                 {radioUse === 'single' && (<>
                 <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WHERE LISTENERS MAY TUNE</Text>
-                <TextInput value={allowRanges}
-                  onChangeText={(v) => { setAllowRanges(v); AsyncStorage.setItem(K.allowRanges, v); }}
-                  placeholder="allowed, e.g. 88M-108M  (empty = anywhere)" placeholderTextColor={C.goldDim}
-                  autoCapitalize="none" autoCorrect={false}
-                  style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
-                <TextInput value={blockRanges}
-                  onChangeText={(v) => { setBlockRanges(v); AsyncStorage.setItem(K.blockRanges, v); }}
-                  placeholder="blocked, e.g. 108M-137M  (empty = nothing blocked)" placeholderTextColor={C.goldDim}
-                  autoCapitalize="none" autoCorrect={false}
-                  style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F, marginTop: 8 }]} />
+                {/* ★★ PICK A BAND OR TYPE A RANGE — the browser's shape, and the same string on
+                    the wire. The free-text box asked the owner to remember a syntax and told them
+                    nothing until the server refused it. */}
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 4 }]}>
+                  Allowed — only these, if you list any
+                </Text>
+                <BandLimitEditor C={C} F={F} bands={bands} kind="range"
+                  value={allowRanges}
+                  onChange={(v) => { setAllowRanges(v); AsyncStorage.setItem(K.allowRanges, v); }}
+                  placeholder="or 87.5M-108M"
+                  emptyText="Empty — this radio can tune anywhere it hears." />
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 12 }]}>
+                  Blocked — never these
+                </Text>
+                <BandLimitEditor C={C} F={F} bands={bands} kind="range"
+                  value={blockRanges}
+                  onChange={(v) => { setBlockRanges(v); AsyncStorage.setItem(K.blockRanges, v); }}
+                  placeholder="or 108M-137M"
+                  emptyText="Empty — nothing is blocked." />
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-                  Band names or frequency pairs, comma separated \u2014 &quot;fm&quot;, &quot;airband&quot;,
+                  Band names or frequency pairs, comma separated — &quot;fm&quot;, &quot;airband&quot;,
                   &quot;88M-108M&quot;. Blocked always wins over allowed.{'\n\n'}
                   You are exempt: listening on this phone, and any session unlocked with the admin
                   password, tune anywhere the radio can hear.
                 </Text>
                 </>)}
 
-                <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>GAIN LIMITS</Text>
-                <TextInput value={gainLimits}
-                  onChangeText={(v) => { setGainLimits(v); AsyncStorage.setItem(K.gainLimits, v); }}
-                  placeholder="e.g. all:25dB, fm:15dB  (empty = full range)" placeholderTextColor={C.goldDim}
-                  autoCapitalize="none" autoCorrect={false}
-                  style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
+                {/* ★★★ NOT IN LOCKED-RANGE MODE. A pinned window is ONE band, so a per-band
+                    ceiling has no second band to differ from — the whole receiver takes the one
+                    gain. The web page hides it in this mode for the same reason (Stuart,
+                    2026-08-21: "per band gain isnt needed in this mode as it is a locked range").*/}
+                {radioUse === 'single' && (<>
+                <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>PER-BAND CEILINGS</Text>
+                <BandLimitEditor C={C} F={F} bands={bands} kind="gain" allowAll
+                  gainSteps={RTL_GAINS}
+                  value={gainLimits}
+                  onChange={(v) => { setGainLimits(v); AsyncStorage.setItem(K.gainLimits, v); }}
+                  placeholder="max, e.g. 25 dB"
+                  emptyText="No ceilings — listeners have the full range." />
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-                  Cap the bands that overload and leave the rest open \u2014 a strong local FM
+                  Cap the bands that overload and leave the rest open — a strong local FM
                   transmitter is the usual reason, while HF wants everything the radio has.
                   &quot;all&quot; caps everywhere; a tighter per-band ceiling still wins.{'\n\n'}
                   The return gain is applied when the LAST listener leaves, so somebody who turns it
                   up does not leave it up for the next person. Tuning into a capped band brings the
                   gain down automatically.
                 </Text>
+                </>)}
 
               </>
             )}
@@ -1552,7 +1710,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               Settings are saved as you change them. Starting the server applies them.
             </Text>
             {/* ★★★ FULL MODE WILL NOT START WITHOUT AN ADMIN PASSWORD (Stuart, 2026-08-12). Not a
-                generated one \u2014 issue #19 was a stranger being asked for a password that had been
+                generated one — issue #19 was a stranger being asked for a password that had been
                 minted silently and shown to nobody. The owner types it or Full mode does not run.
                 ★★ The button says WHY it is unavailable. A greyed-out control with no reason reads
                    as a broken app, and the reason is two lines above where nobody rereads. */}
@@ -1574,7 +1732,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               onPress={() => {
                 if (needsAdminPw) {
                   setError('Set an admin password below, then Start. It is what stops a listener '
-                         + 'reaching the admin page and changing your radio \u2014 and it is what '
+                         + 'reaching the admin page and changing your radio — and it is what '
                          + 'makes this server safe to put on the internet.');
                   return;
                 }

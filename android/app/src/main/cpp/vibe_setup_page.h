@@ -240,14 +240,21 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           they liked and walk straight through the ban list. Nothing is read from it until you
           name the proxy you trust. Addresses or ranges, separated by commas.</div></label>
 
-      <label><span class="lbl">Several radios from one address</span>
+      <!-- ★★★ "CONNECTIONS", NOT "RADIOS". The rule is one radio per address, but the phone's
+           server has exactly ONE radio, so "several radios" described nothing an Android owner
+           could do — and even on a multi-radio machine what an owner is really deciding is how
+           many CONNECTIONS one address may hold (Stuart, 2026-08-22). The wire field and the
+           behaviour are unchanged; this is what it is called. -->
+      <label><span class="lbl">Several connections from one address</span>
         <select id="oneRadioPerIp">
-          <option value="1">Refuse — one radio per address (recommended)</option>
-          <option value="0">Allow — one address may use several radios at once</option>
+          <option value="1">Refuse — one connection per address (recommended)</option>
+          <option value="0">Allow — one address may hold several at once</option>
         </select>
-        <div class="hint">By default an address already listening to one of this machine's radios is
-          refused the others, and told which one it is holding. It exists because a single visitor
-          took <em>both</em> radios of a public receiver at once by opening a tab on each.
+        <div class="hint">By default a second connection from an address that is already listening
+          is refused, and told so. It exists because a single visitor took <em>both</em> radios of a
+          public receiver at once by opening a tab on each.
+          <br>Allowing several is what a household needs: a phone and its watch, or two people on
+          one broadband line, leave by the same address and would otherwise count as one visitor.
           <br><b>Allowing several is reasonable on a private server and unwise on a public one</b> —
           one person could occupy every radio you own.
           <br>★ Two legitimate reasons to allow it. An <b>Apple Watch shares its paired iPhone's
@@ -393,7 +400,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
       </div>
 
       <div id="lockedOnly" class="hide">
-      <div class="card">
+      <div class="card" id="rangeCard">
         <h2>Range</h2>
         <p class="why">The window everyone listens inside. The radio stays here; listeners pan and
            zoom within it.</p>
@@ -439,7 +446,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
         <p class="why">Shown to everybody who visits, so keep it about the aerial &mdash; not
            about where you live.</p>
       </div>
-      <div class="card">
+      <div class="card" id="startCard">
         <h2>Where new listeners start</h2>
         <p class="why">What someone sees the moment they connect.</p>
         <div class="row">
@@ -575,7 +582,15 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
         <label><span class="lbl">Allowed — only these, if you list any</span>
           <div class="row" style="gap:8px">
             <select id="allowPick" style="flex:1 1 200px"></select>
-            <input type="text" id="allowType" placeholder="or 87.5MHz - 108MHz" style="flex:1 1 180px">
+            <!-- ★★★ TWO BOXES, BECAUSE A RANGE IS TWO NUMBERS. One field holding
+                 "87.5MHz - 108MHz" asks the owner to know that the separator is a hyphen, that
+                 both halves take a unit, and whether a space is allowed — none of which is on
+                 screen, and none of which they are told until the server refuses the whole
+                 string. A pair with "to" between them cannot be typed wrong that way. The string
+                 SAVED is unchanged, so nothing downstream knows this moved. -->
+            <input type="text" id="allowLo" placeholder="from, e.g. 87.5MHz" style="flex:1 1 120px">
+            <span class="lbl" style="flex:0 0 auto;align-self:center">to</span>
+            <input type="text" id="allowHi" placeholder="to, e.g. 108MHz" style="flex:1 1 120px">
             <button type="button" class="ghost" id="allowAdd" style="flex:0 0 auto">Add</button>
           </div>
           <div id="allowList" class="bandList"></div></label>
@@ -583,7 +598,15 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
         <label style="margin-top:14px"><span class="lbl">Blocked — never these</span>
           <div class="row" style="gap:8px">
             <select id="blockPick" style="flex:1 1 200px"></select>
-            <input type="text" id="blockType" placeholder="or 108MHz - 137MHz" style="flex:1 1 180px">
+            <!-- ★★★ TWO BOXES, BECAUSE A RANGE IS TWO NUMBERS. One field holding
+                 "108MHz - 137MHz" asks the owner to know that the separator is a hyphen, that
+                 both halves take a unit, and whether a space is allowed — none of which is on
+                 screen, and none of which they are told until the server refuses the whole
+                 string. A pair with "to" between them cannot be typed wrong that way. The string
+                 SAVED is unchanged, so nothing downstream knows this moved. -->
+            <input type="text" id="blockLo" placeholder="from, e.g. 108MHz" style="flex:1 1 120px">
+            <span class="lbl" style="flex:0 0 auto;align-self:center">to</span>
+            <input type="text" id="blockHi" placeholder="to, e.g. 137MHz" style="flex:1 1 120px">
             <button type="button" class="ghost" id="blockAdd" style="flex:0 0 auto">Add</button>
           </div>
           <div id="blockList" class="bandList"></div></label>
@@ -606,7 +629,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
       <p class="why">Settings that stay in the radio itself. Listeners never get these.</p>
       <!-- ★ EVERY radio has one, so it is not locked-mode-only. It was, which is why an Airspy
            being set up for FM had no way to choose 768 kSPS. -->
-      <label><span class="lbl">Span (sample rate)</span>
+      <label id="rateRow"><span class="lbl">Span (sample rate)</span>
         <select id="rate"></select></label>
       <div id="hwBiasT" class="hide">
         <label style="display:flex;gap:8px;align-items:center">
@@ -902,12 +925,49 @@ function usersNote() {
   }
 }
 
+// ★★★ IN A LOCKED RANGE THE SETTINGS THAT MATTER COME FIRST, IN THE ORDER AN OWNER SETS THEM.
+//     Everything below is already on the page; what was wrong was where. The centre frequency sat
+//     in Range near the top while the SPAN that decides what that centre covers was three cards
+//     further down under "This radio's hardware", the starting gain was inside "Gain limits" past
+//     a per-band table that a locked receiver cannot use, and the Bias-T was below all of it.
+//     Stuart, 2026-08-21, having found the centre "buried underneath everything": the order wanted
+//     is centre frequency, sample rate, starting frequency/mode, gain, Bias-T, at the top.
+//  ★★ MOVED RATHER THAN DUPLICATED. One control, one id, one save path — a second copy of the
+//     Bias-T checkbox would be two controls that disagree, which is the fault this page has had
+//     before with the machine form. The nodes go back where they came from when the mode changes.
+//  ★ Per-band ceilings are hidden in this mode: the whole receiver is one pinned window, so there
+//    are no other bands to hold a different ceiling. A control whose every use is a no-op is the
+//    thing AGENTS.md tells us to remove rather than leave sitting there.
+function layoutLockedRadio(locked) {
+  const range = $("rangeCard"), start = $("startCard");
+  const rate  = $("rateRow"),   bias  = $("hwBiasT"), rest = $("gainRestRow");
+  if (!range || !start) return;
+  if (locked) {
+    // Order: centre (already in Range) → span → start freq/mode → gain → Bias-T.
+    if (rate) range.appendChild(rate);
+    range.parentNode.insertBefore(start, range.nextSibling);
+    if (rest) start.appendChild(rest);
+    if (bias) start.appendChild(bias);
+  } else {
+    // ★ Home again: the hardware card owns the span and the Bias-T, and the gain card the resting
+    //   gain, whenever the receiver is not a pinned window.
+    const hw = $("hwSerial") ? $("hwSerial").parentNode : null;
+    if (hw && rate)  hw.insertBefore(rate, hw.firstChild);
+    if (hw && bias)  hw.insertBefore(bias, rate ? rate.nextSibling : hw.firstChild);
+    const gc = $("gainCard");
+    if (gc && rest) gc.appendChild(rest);
+  }
+  const lim = $("gainLimitRow");
+  if (lim) lim.classList.toggle("hide", locked || lim.dataset.avail === "0");
+}
+
 function setMode(locked) {
   radio().mode = locked ? "locked" : "single";   // ★ the OPEN tab, not the machine
   $("modeLocked").classList.toggle("sel", locked);
   $("modeSingle").classList.toggle("sel", !locked);
   if (typeof renderBands === "function") renderBands();
   $("lockedOnly").classList.toggle("hide", !locked);
+  layoutLockedRadio(locked);
   // ★★ THE SHARED DIAL IS NOT A MODE — it is this mode with the Listeners box set above one, so
   //    the note explaining it follows the COUNT rather than a switch. See usersNote().
   if (typeof usersNote === "function") usersNote();
@@ -1006,7 +1066,12 @@ function bandChips(which) {
 }
 
 function bandAdd(which) {
-  const typed = ($(which + "Type").value || "").trim();
+  // ★ Joined with the hyphen the server has always parsed — see the note by the inputs. Both
+  //   halves are required: half a range is not a range, and guessing the other end would be us
+  //   inventing a limit the owner did not set.
+  const lo = ($(which + "Lo").value || "").trim();
+  const hi = ($(which + "Hi").value || "").trim();
+  const typed = (lo && hi) ? (lo + "-" + hi) : "";
   const picked = $(which + "Pick").value;
   const entry = typed || picked;
   if (!entry) return;
@@ -1016,7 +1081,7 @@ function bandAdd(which) {
   //   makes an owner doubt which one is in force.
   if (!cur.includes(entry)) cur.push(entry);
   radio()[key] = cur.join(",");
-  $(which + "Type").value = "";
+  $(which + "Lo").value = ""; $(which + "Hi").value = "";
   bandChips(which); bandSummary();
 }
 
@@ -1200,6 +1265,10 @@ function renderGain() {
   //    control on a shared receiver, where any listener could otherwise turn it off for everybody.
   $("gainAgcLockRow").classList.toggle("hide", !(isRsp || isHf || isRtl));
   $("gainRestRow").classList.toggle("hide", !(isRtl || isRsp));
+  // ★ Remembered, because layoutLockedRadio() also hides this row (a pinned window has no other
+  //   bands) and must not UNHIDE it on a radio that never had per-band ceilings to begin with.
+  //   Two independent reasons to hide one row need one place that knows both.
+  $("gainLimitRow").dataset.avail = (isRtl || isRsp) ? "1" : "0";
   $("gainLimitRow").classList.toggle("hide", !(isRtl || isRsp));
   $("gainAgcLock").checked = r.agcLock === 1;
   $("gainRest").value = gainFromRaw(r.restGain);
@@ -1470,7 +1539,13 @@ async function renderHw() {
   }
   // ★ The band names ride along with the hardware description — one fetch, and they are the
   //   server's own list rather than a copy that could drift from it.
-  if (hw && Array.isArray(hw.bands) && hw.bands.length) BANDS = hw.bands;
+  // ★★★ IN FREQUENCY ORDER. The server groups its bands by KIND, which puts medium wave nowhere
+  //     near long wave in a picker — the one order a radio person does not read a band list in.
+  //     Sorted here rather than in the server, because the grouping is right for other callers and
+  //     this is a presentation choice. ★ No edges sorts last: an unknown is not "at DC".
+  if (hw && Array.isArray(hw.bands) && hw.bands.length)
+    BANDS = hw.bands.slice().sort((a, b) =>
+      (a.lo === undefined ? Infinity : a.lo) - (b.lo === undefined ? Infinity : b.lo));
   renderBands();
 
   // ★★★ THE SECOND HALF OF THE SAME BUG. renderGain() runs SYNCHRONOUSLY at page build while this
@@ -1932,10 +2007,15 @@ function fill() {
   $("sessionLimit").value = r.sessionLimitMin || 0;
   $("sessionLimitMode").value = r.sessionLimitSoft ? "soft" : "hard";
   $("idleKick").value = r.idleKickMin || 0;
-  // ★ Hidden on a one-listener radio: there is nobody to reclaim the slot FOR, so the setting
-  //   would be a control whose every use is a no-op — the fault FmdxSettings names.
+  // ★★★ SHOWN ON EVERY RADIO, AND THE OLD REASONING WAS EXACTLY BACKWARDS. It used to hide on a
+  //     one-listener receiver — "there is nobody to reclaim the slot FOR" — which is the opposite
+  //     of the truth: on a ONE-LISTENER radio a forgotten tab blocks EVERYBODY, and on a ten-
+  //     listener one it costs a tenth of the capacity. The case for reclaiming an abandoned
+  //     session is strongest precisely where it was hidden (Stuart, 2026-08-21: "the webgui is
+  //     missing the idle timeout option in unlocked radio mode").
+  //  ★ It is opt-in and defaults to 0, so showing it everywhere adds a choice rather than a rule.
   { const row = $("idleKickRow");
-    if (row) row.classList.toggle("hide", (r.users || 1) <= 1); }
+    if (row) row.classList.remove("hide"); }
   if ($("spectrogram"))     $("spectrogram").checked = !!r.spectrogram;
   setMode((r.mode || "single") === "locked");
   addr(); coverage(); bwNote(); usersNote(); syncUncompressed(); refreshHw(); eibiStatus(); renderGain();

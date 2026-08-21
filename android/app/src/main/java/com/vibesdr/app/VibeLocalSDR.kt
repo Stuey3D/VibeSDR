@@ -172,6 +172,10 @@ object VibeLocalSDR {
     fun setTrustedProxies(csv: String) { ensureLoaded(); nativeSetTrustedProxies(csv) }
     private external fun nativeSetTrustedProxies(csv: String)
 
+    /** ★ One radio per address, or several — see the JNI note. Default true (refuse). */
+    fun setOneRadioPerIp(on: Boolean) { ensureLoaded(); nativeSetOneRadioPerIp(on) }
+    private external fun nativeSetOneRadioPerIp(on: Boolean)
+
     /** How many listeners may share this radio at once. 1 = the single-occupant server. */
     fun setMaxUsers(n: Int) { ensureLoaded(); nativeSetMaxUsers(n) }
     private external fun nativeSetMaxUsers(n: Int)

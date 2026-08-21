@@ -36,6 +36,15 @@ export interface GainSliderProps {
    *      works on one path and misleads on another should not be there.
    */
   vibeAgc?: boolean;
+  /**
+   * ★★★ FALSE WHERE SOMETHING ELSE ALREADY OWNS THE AGC. On the server screen this slider sets the
+   *     STARTING gain and the VibeAGC switch decides whether the loop runs — so an AGC/MANUAL pair
+   *     above it was a second switch for the same thing, and pressing it DISABLED the slider,
+   *     which is the one control that screen needs (Stuart, 2026-08-21: "we have 2 options for AGC
+   *     ... if you used the agc button above the slider it locked the slider out").
+   *  ★ Still true in the CLIENT, where this pair is the only way to engage the AGC.
+   */
+  modeButtons?: boolean;
 }
 
 function nearestIndex(gains: number[], tenthDb: number): number {
@@ -48,7 +57,7 @@ function nearestIndex(gains: number[], tenthDb: number): number {
 }
 
 export default function GainSlider({ gains, gainTenthDb, auto, onAuto, onGain, label = 'RF GAIN',
-                                    vibeAgc = true }: GainSliderProps) {
+                                    vibeAgc = true, modeButtons = true }: GainSliderProps) {
   const haveGains = gains.length > 0;
   const idx = haveGains ? nearestIndex(gains, gainTenthDb) : 0;
 
@@ -56,7 +65,7 @@ export default function GainSlider({ gains, gainTenthDb, auto, onAuto, onGain, l
     <View style={styles.wrap}>
       <View style={styles.headerRow}>
         <Text style={styles.label}>{label}</Text>
-        {vibeAgc ? (
+        {vibeAgc && modeButtons ? (
           <View style={styles.btnRow}>
             <TouchableOpacity
               style={[styles.btn, auto && styles.btnActive]}
@@ -81,20 +90,20 @@ export default function GainSlider({ gains, gainTenthDb, auto, onAuto, onGain, l
           maximumValue={haveGains ? gains.length - 1 : 1}
           step={1}
           value={idx}
-          disabled={auto || !haveGains}
+          disabled={(auto && modeButtons) || !haveGains}
           onValueChange={(v: number) => { if (haveGains) onGain(gains[Math.round(v)]); }}
-          minimumTrackTintColor={auto ? C.dim : C.gold}
+          minimumTrackTintColor={auto && modeButtons ? C.dim : C.gold}
           maximumTrackTintColor="rgba(255,255,255,0.25)"
-          thumbTintColor={auto ? C.dim : C.gold}
+          thumbTintColor={auto && modeButtons ? C.dim : C.gold}
         />
         <Text style={styles.val}>
-          {auto ? 'VibeAGC' : haveGains ? `${(gains[idx] / 10).toFixed(1)} dB` : '—'}
+          {auto && modeButtons ? 'VibeAGC' : haveGains ? `${(gains[idx] / 10).toFixed(1)} dB` : '—'}
         </Text>
       </View>
       {/* ★★ SAY WHOSE AGC IT IS. Everything written about RTL-SDR AGC online is about the dongle's
              own loop, which is unreliable and broken on the v4 — so an unnamed "auto" reads as that
              one, and a listener skips a control that works. */}
-      {vibeAgc ? (
+      {vibeAgc && modeButtons ? (
         <Text style={styles.note}>
           {auto
             ? "VibeAGC \u2014 VibeSDR's own AGC for RTL-SDR. It watches the ADC for overload and steps "
@@ -102,7 +111,7 @@ export default function GainSlider({ gains, gainTenthDb, auto, onAuto, onGain, l
             : "Manual gain \u2014 nothing moves it but you. VibeAGC is VibeSDR's own loop for "
               + "RTL-SDR, not the dongle's built-in one, which is never used."}
         </Text>
-      ) : (
+      ) : !modeButtons ? null : (
         <Text style={styles.note}>
           Manual gain only over RTL-TCP: the protocol's automatic mode is the dongle's own AGC,
           which is unreliable and is known broken on the v4. VibeAGC needs a VibeServer.

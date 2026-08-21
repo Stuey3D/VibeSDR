@@ -123,6 +123,8 @@ object VibeServerBoot {
                                        File(filesDir, "vibe_connlog.json").absolutePath)
             VibeLocalSDR.setPublicSharing(adv)
             VibeLocalSDR.setTrustedProxies(if (adv) cfg.s("trustedProxies") else "")
+            // ★ Absent = true, the safe default: an older config must not read as "allow".
+            VibeLocalSDR.setOneRadioPerIp(cfg.b("oneRadioPerIp", true))
             VibeLocalSDR.setMaxUsers(if (adv) cfg.i("maxUsers", 1).coerceAtLeast(1) else 1)
             VibeLocalSDR.setTuneLimits(
                 if (adv) cfg.s("allowRanges") else "",

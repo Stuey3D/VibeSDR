@@ -138,6 +138,15 @@ export interface MeterValues {
   /** Incoming SPECTRUM data rate (KB/s) and frame rate (fps) — the connection-meter readout. Audio
    *  bytes are decoded natively on the phone, so this is the JS-visible (spectrum) rate. */
   kbps?: number;
+  /**
+   * ★★★ WHAT VIBEAGC IS DOING, SHORT ENOUGH FOR A PHONE. The server says it in full — "OVERLOAD:
+   *     GAIN ↓ 8.7 dB · pk −4 dBFS" — which is right on a browser status line and far too much on
+   *     a handset, where it would push the rate readout off the row. Stuart asked for the short
+   *     form: "GAIN ↑ 8.7 dB" (2026-08-22).
+   *  ★ Empty when the server has no such loop, so nothing appears on an Airspy or an RSP, which
+   *    manage their own gain and have nothing to report here.
+   */
+  agcText?: string;
   fps?:  number;
 }
 export interface MeterBus {
@@ -147,7 +156,8 @@ export interface MeterBus {
 }
 export function createMeterBus(): MeterBus {
   const bus: MeterBus = {
-    value: { level: 0, peak: 0, snr: 0, dbfs: -120, active: false, link: 0, sql: -1, kbps: 0, fps: 0 },
+    value: { level: 0, peak: 0, snr: 0, dbfs: -120, active: false, link: 0, sql: -1, kbps: 0, fps: 0,
+             agcText: '' },
     subs:  new Set(),
     emit(v: MeterValues) { bus.value = v; bus.subs.forEach(f => f(v)); },
   };
@@ -434,6 +444,9 @@ export function LinkIndicator({ bus }: { bus?: MeterBus }) {
           the old server-rack box. */}
       <SectionIcon name="instance" size={13} color={dim} />
       {showRate ? <Text style={pm.linkRate}>{rateTxt}</Text> : null}
+      {/* ★ After the rate, because it changes rarely — a value that moves once a minute beside one
+             that moves every second reads as part of the same reading if it comes first. */}
+      {m?.agcText ? <Text style={pm.linkRate}>{`· ${m.agcText}`}</Text> : null}
     </View>
   );
 }

@@ -719,6 +719,16 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetTrustedProxies(JNIEnv* env, jobject, 
     if (c) env->ReleaseStringUTFChars(csv, c);
 }
 
+/** ★★★ SEVERAL RADIOS FROM ONE ADDRESS. Default is to refuse — a single visitor once took BOTH
+ *  radios of a public receiver by opening a tab on each — but an owner may allow it, and on a
+ *  SHARED receiver it is the difference between a household being one listener and being three.
+ *  ★ It is also what makes a phone and its watch work together: they leave by one address, so the
+ *    default reads them as one visitor holding two radios (GitHub #21). */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetOneRadioPerIp(JNIEnv*, jobject, jboolean on) {
+    vibe::LocalSdrShim::instance().setOneRadioPerIp(on == JNI_TRUE);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetMaxUsers(JNIEnv*, jobject, jint n) {
     vibe::LocalSdrShim::setVibeServerMaxUsers(n < 1 ? 1 : (int)n);

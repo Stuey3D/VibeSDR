@@ -3244,6 +3244,25 @@ export default function SDRScreen({ route, navigation }: Props) {
         setHwAutoGain(false); setHwGain(tenthDb);
       },
       onHwRates: (rates: number[]) => { if (!destroyed.current && rates.length) setHwServerRates(rates); },
+      // ★★★ VIBEAGC ON THE STATUS ROW. The server's own gain loop moves the radio under the
+      //     listener, and until now nothing on the phone said so — a receiver that re-gains itself
+      //     with no explanation reads as a fault. Kept SHORT ("GAIN ↑ 8.7 dB"): the browser has
+      //     room for the full sentence and a handset does not.
+      //  ★ The arrow is the news. Where the gain ENDED UP is also on the slider; which way it just
+      //    went is the part that explains what you are hearing.
+      onHwAgc: (on: boolean) => {
+        if (destroyed.current) return;
+        const b = meterBus.current;
+        if (b) b.emit({ ...b.value, agcText: on ? b.value.agcText || 'AGC' : '' });
+      },
+      onOverload: ({ gainTenthDb, dir, agc }) => {
+        if (destroyed.current) return;
+        const b = meterBus.current;
+        if (!b) return;
+        const arrow = dir > 0 ? '↑' : dir < 0 ? '↓' : '·';
+        b.emit({ ...b.value,
+                 agcText: `GAIN ${arrow} ${(gainTenthDb / 10).toFixed(1)} dB${agc ? '' : ' (held)'}` });
+      },
       // Incoming spectrum data-rate + frame-rate → the connection meter's "NNk/s · NNfps" readout.
       onLinkRate: (rung: number, settling: boolean, fps: number, kbps: number) => {
         if (destroyed.current) return;

@@ -215,6 +215,16 @@ export interface SDRCallbacks {
    *  app showed its own idea of the gain and, on connecting, pushed it — overriding the owner's
    *  resting gain and re-gaining a shared receiver under everyone already listening. */
   onHwGainNow?: (tenthDb: number) => void;
+  /**
+   * ★★★ VIBEAGC, AND WHICH WAY IT JUST MOVED. The server runs its own gain loop for RTL-SDR and
+   *     announces every move (`hwinfo.agc` for the state, a separate `ovl` message for the event).
+   *     Neither reached this client at all, so on the phone an automatic gain was invisible: the
+   *     radio changed under the listener with nothing on screen to say why.
+   *  ★ `dir` is +1 when the gain went UP and −1 when it came down, so the readout can say which
+   *    rather than only where it landed.
+   */
+  onHwAgc?: (on: boolean) => void;
+  onOverload?: (o: { gainTenthDb: number; dir: number; agc: boolean }) => void;
   /** VibeServer: the sample rates (spectrum spans) THIS server offers, so the
    *  client's rate picker aligns with the server rather than a generic list. */
   onHwRates?:   (rates: number[]) => void;
@@ -1942,6 +1952,18 @@ export class UberSDRClient {
       });
       return;
     }
+    // ★★★ THE GAIN LOOP SAID SOMETHING. Sent by the VibeServer shim on every automatic change:
+    //     `steps` below the ceiling, `dir` (+1 up / −1 down), the applied `gain` and whether the
+    //     AGC is what moved it. The client shows a short readout rather than the server's full
+    //     sentence — see the status row.
+    if (msg.type === 'ovl') {
+      this.callbacks.onOverload?.({
+        gainTenthDb: Number(msg.gain) || 0,
+        dir: Number(msg.dir) || 0,
+        agc: msg.agc === 1 || msg.agc === true,
+      });
+      return;
+    }
     if (msg.type === 'hwinfo') {
       // ★★★ RE-ASSERT OUR OWN TUNE WHEN THE RADIO ANNOUNCES ITSELF ON A *RETURNING* SOCKET.
       //     Backgrounding pauses the spectrum, and resuming opens a FRESH socket — a new session
@@ -1996,6 +2018,8 @@ export class UberSDRClient {
       }
       if (Array.isArray(msg.gains)) this.callbacks.onHwGains?.(msg.gains as number[]);
       if (typeof msg.gainNow === 'number') this.callbacks.onHwGainNow?.(msg.gainNow);
+      // ★ Whether the server's own AGC is running — see onHwAgc.
+      if (typeof msg.agc === 'boolean') this.callbacks.onHwAgc?.(msg.agc);
       if (Array.isArray(msg.rates)) this.callbacks.onHwRates?.(msg.rates as number[]);
       // >0 = the host PINNED the capture rate. The server ignores our sampleRate
       // messages outright, so the client hides the picker rather than offer a

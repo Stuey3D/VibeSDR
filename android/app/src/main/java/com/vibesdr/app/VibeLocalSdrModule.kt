@@ -713,6 +713,21 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod fun setNotch(on: Boolean) { VibeLocalSDR.setNotch(on) }
     @ReactMethod fun setStereoEnabled(on: Boolean) { VibeLocalSDR.setStereoEnabled(on) }
     @ReactMethod fun setNrStrength(s: Double) { VibeLocalSDR.setNrStrength(s.toFloat()) }
+    /**
+     * ★★★ THE BAND LIST, FROM THE SERVER THAT ENFORCES IT. The server screen needs the same bands
+     *     the browser's setup page offers, and vibe_bands.h is the only list that matters — it is
+     *     what actually resolves "fm" or "airband" when a limit is applied. A copy in TypeScript
+     *     would drift, and the copy that drifts is the one that quietly stops matching.
+     *  ★★★ AND IT EXISTED ALREADY, UNEXPORTED. VibeLocalSDR.bandsJson() has been there all along
+     *      with no @ReactMethod, so JS could not reach it — the same shape as getVibeServerStatus,
+     *      where `Local?.x?.()` returns UNDEFINED rather than throwing and cost two days of looking
+     *      at a server that was fine (2026-08-20). Exported now, and by name.
+     */
+    @ReactMethod fun getBands(promise: Promise) {
+        try { promise.resolve(VibeLocalSDR.bandsJson()) }
+        catch (t: Throwable) { promise.reject("bands", t) }
+    }
+
     @ReactMethod fun startDecoderService(promise: Promise) { promise.resolve(VibeLocalSDR.startDecoderService()) }
     @ReactMethod fun feedDecoderPcm(b64: String, rate: Double) { VibeLocalSDR.feedDecoderPcm(b64, rate.toInt()) }
     @ReactMethod fun setDecoderFreq(hz: Double) { VibeLocalSDR.setDecoderFreq(hz) }
