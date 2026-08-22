@@ -9677,9 +9677,21 @@ struct LocalSdrShim::Impl {
         LOGI("%s WS disconnected", isAudio ? "audio" : "spectrum");
     }
 
-    void startDecoder(const std::string& msg) {
+    void startDecoder(const std::string& msg, const std::string& bySession = "") {
         std::string ext = jsonStr(msg, "extension_name");
         { std::lock_guard<std::mutex> lk(decoderMtx); currentDecoder = ext; }
+        // ★★★ AND WHO STARTED IT. currentDecoder is the RADIO's — one decoder runs at a time — but
+        //     the admin table has to say WHOSE it is, and this path recorded nothing at all. So
+        //     Advanced RDS opened on a phone was credited to whichever listener the table drew
+        //     first: "rds open on the iPhone is still credited to the mac" (Stuart, 2026-08-22).
+        //  ★★ decoderSession was only ever set by the digital-spots path, so every OTHER decoder —
+        //     including the one people actually use — was anonymous, and anonymous means guessed.
+        //  ★ An older client that sends no id stays anonymous, and the table then credits nobody
+        //    rather than somebody. See adminSessionsJson.
+        if (!bySession.empty()) {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            decoderSession = bySession;
+        }
         // ★★ ADVANCED RDS. Not an audio decoder — it turns on the extended RDS stream (the
         // fields we normally discard, plus the constellation). It attaches through the same
         // path as every other decoder on purpose: SELECTING IT IS THE TOGGLE, so the extra
@@ -9952,6 +9964,8 @@ struct LocalSdrShim::Impl {
         LOGI("decoder attached: sstv");
     }
     void stopDecoder() {
+        // ★ Whoever owned a decoder that is no longer running owns nothing.
+        { std::lock_guard<std::mutex> lk(clientMtx); decoderSession.clear(); }
         rdsxOn.store(false);
         { std::lock_guard<std::mutex> lk(decoderMtx); currentDecoder.clear(); }
         rx.setRdsNoiseCorrection(false);   // nobody looking: stop paying for it
@@ -10008,7 +10022,7 @@ struct LocalSdrShim::Impl {
             if (op != 0x1) continue;
             std::string type = jsonStr(payload, "type");
             if (type == "audio_extension_attach") {
-                startDecoder(payload);
+                startDecoder(payload, session);
                 sendText(sock, "{\"type\":\"audio_extension_attached\"}");
             } else if (type == "audio_extension_detach") {
                 stopDecoder();
@@ -13080,9 +13094,14 @@ std::string LocalSdrShim::adminSessionsJson() {
            //  ★ The per-client path has always got this right — same test, same lock — and this
            //    row simply never learned it. Third field in this row to be fixed today for the
            //    same reason: state that belongs to a SESSION read from the radio.
+           // ★★ AN ANONYMOUS DECODER CREDITS NOBODY ONCE THERE IS MORE THAN ONE LISTENER.
+           //    With a single listener it can only be theirs, so it is still shown; with
+           //    several, naming one is a guess — and a guess here is what put the iPhone's
+           //    RDS on the Mac's row.
            + ",\"decoder\":\"" + vibeadmin::esc(
                  (!curDecoder.empty()
-                  && (p->decoderSession.empty() || p->decoderSession == rowSession))
+                  && (!p->decoderSession.empty() ? p->decoderSession == rowSession
+                                                 : p->specExtra.empty()))
                      ? curDecoder : std::string()) + "\""
            + ",\"occupant\":true"
            // ★★★ AND BADGE IT HERE TOO. The per-client row above has said `admin` since 08-13; this
