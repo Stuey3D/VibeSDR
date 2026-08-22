@@ -1457,6 +1457,17 @@ static std::mutex g_vsVisitorMtx;
  *  an owner whether they are looking at demand or at a forgotten tab. */
 struct VsVisitor { double first = 0, last = 0; };
 static std::map<std::string, VsVisitor> g_vsVisitors;
+/** ★★★ IS THIS THE SERVER LOOKING AT ITSELF? The listing switch polls its own
+ *  /vibeserver/radios over loopback every time it renews the directory entry — and that endpoint
+ *  counts a landing-page visitor, so the owner's admin screen grew a phantom "127.0.0.1 choosing a
+ *  radio" that nobody was doing (Stuart, 2026-08-22: "I'm not doing anything on the phone itself").
+ *  ★★ Matched on the AGENT, not the address: a person genuinely browsing from the phone itself is
+ *     a real visitor and must still be counted. Only our own poll names itself this way.
+ */
+static bool vsIsSelfPoll(const std::string& agent) {
+    return agent.rfind("VibeServer-directory", 0) == 0;
+}
+
 static void vsNoteVisitor(const std::string& ip) {
     if (ip.empty()) return;
     const double now = (double)::time(nullptr);
@@ -8310,7 +8321,8 @@ struct LocalSdrShim::Impl {
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
         } else if (reqLine.rfind("GET /vibeserver/radios", 0) == 0) {
-            vsNoteVisitor(sock->peerAddress());
+            // ★ Not when it is us — see vsIsSelfPoll.
+            if (!vsIsSelfPoll(userAgent)) vsNoteVisitor(sock->peerAddress());
             // ★★ WHAT ELSE IS ON THIS MACHINE. The landing page lists every radio the owner has
             //    enabled and configured, with the port each answers on, so one address is enough
             //    to reach all of them.

@@ -287,7 +287,11 @@ object VibeTunnel {
         // ★ The multi-radio front door. Populated on a machine running several receivers behind
         //   one door; EMPTY on a phone in Simple mode, which holds exactly one radio itself.
         try {
-            val req = Request.Builder().url("http://127.0.0.1:$port/vibeserver/radios").build()
+            // ★★ NAME OURSELVES. /vibeserver/radios counts a landing-page visitor, so an unlabelled
+            //    poll shows up on the owner's admin screen as somebody choosing a radio. See
+            //    vsIsSelfPoll in the shim.
+            val req = Request.Builder().url("http://127.0.0.1:$port/vibeserver/radios")
+                .header("User-Agent", "VibeServer-directory").build()
             val body = http.newCall(req).execute().use { it.body?.string() ?: "" }
             val arr = JSONObject(body).optJSONArray("radios") ?: JSONArray()
             for (i in 0 until arr.length()) {
@@ -333,7 +337,8 @@ object VibeTunnel {
         //    vibesdr.net demo card reads. Same numbers everywhere, rather than a second opinion
         //    assembled from the bridge.
         try {
-            val req = Request.Builder().url("http://127.0.0.1:$port/vibeserver.json").build()
+            val req = Request.Builder().url("http://127.0.0.1:$port/vibeserver.json")
+                .header("User-Agent", "VibeServer-directory").build()
             val body = http.newCall(req).execute().use { it.body?.string() ?: "" }
             val j = JSONObject(body)
             out.put("listeners", j.optInt("listeners", 0))
