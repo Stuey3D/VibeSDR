@@ -8,9 +8,20 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   :root {
-    --bg: #0b0f14; --panel: #131a23; --line: #23303f;
-    --text: #e6edf3; --dim: #8b9bb0; --accent: #4fc3f7;
-    --free: #35d07f; --busy: #ff5c5c; --temp: #ffc14d;
+    /* ★★★ THE ECOSYSTEM'S PALETTE, NOT A SECOND ONE. These are vibesdr.net's own tokens — a
+       visitor arriving from the site should not feel they have left it (Stuart, 2026-08-22: "the
+       directory page needs to keep with our amber theme"). Copied by VALUE because this page ships
+       alone on a Worker and cannot import the site's stylesheet; if the brand moves, it moves
+       here too. */
+    --bg: #060809; --panel: #0E1315; --line: #1E2A2A;
+    --text: #E7EEEA; --dim: #7E8C86; --accent: #FF8C00;
+    --free: #35E08A; --busy: #ff5c5c;
+    /* ★★ THE TEMPORARY SHARE GIVES UP AMBER AND TAKES BLUE. Amber is the brand's accent, so a
+       state wearing it no longer stands out from every heading and link around it — and this
+       marker's whole job is to be spotted on a map (Stuart: "just change the colour of the diamond
+       to blue or something"). It keeps its diamond, so the shape still carries the meaning for
+       anyone who cannot separate the two colours. */
+    --temp: #4fc3f7;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
@@ -19,7 +30,7 @@
   h1 { margin: 0; font-size: 20px; letter-spacing: .2px; }
   h1 span { color: var(--accent); }
   .sub { color: var(--dim); font-size: 13px; margin-top: 4px; }
-  #map { height: 46vh; min-height: 300px; background: #0d1520; }
+  #map { height: 46vh; min-height: 300px; background: var(--panel); }
   main { padding: 16px 20px 60px; max-width: 900px; margin: 0 auto; }
 
   .legend { display: flex; gap: 16px; flex-wrap: wrap; color: var(--dim);
@@ -85,19 +96,19 @@
   .rcSub { margin-top: 3px; font-size: 12px; color: var(--dim); letter-spacing: .03em;
            line-height: 1.5; }
   /* ★ Brighter than the detail around it: an instruction, not another readout. */
-  .rcAsk { margin-top: 4px; font-size: 12px; color: var(--temp); letter-spacing: .06em; }
+  .rcAsk { margin-top: 4px; font-size: 12px; color: var(--accent); letter-spacing: .06em; }
   .rcHost { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
             font-size: 12px; color: var(--dim); letter-spacing: .03em; margin: 2px 0 10px; }
   /* ★ Brighter than the detail around it: it is an instruction, not another readout. */
-  .radio .cap.ask { color: var(--temp); letter-spacing: 0.06em; margin-top: 3px; }
+  .radio .cap.ask { color: var(--accent); letter-spacing: 0.06em; margin-top: 3px; }
   .listen { display: inline-block; margin-top: 10px; padding: 7px 14px; border-radius: 7px;
-            background: var(--accent); color: #06121a; text-decoration: none; font-weight: 600;
+            background: var(--accent); color: #1a0f00; text-decoration: none; font-weight: 600;
             font-size: 13px; }
   .tag { font-size: 11px; padding: 2px 7px; border-radius: 20px; border: 1px solid var(--line);
          color: var(--dim); }
   /* ★ A PIN is a fact about ACCESS, not a fault — amber, not red. */
-  .tag.lock { color: var(--temp); border-color: var(--temp); }
-  /* ★ The same amber as the diamond on the map and in the legend: one colour means one thing. */
+  .tag.lock { color: var(--accent); border-color: var(--accent); }
+  /* ★ The same blue as the diamond on the map and in the legend: one colour means one thing. */
   .tag.temp { color: var(--temp); border-color: var(--temp); }
   .empty { color: var(--dim); text-align: center; padding: 40px 20px; }
   .empty code { background: var(--panel); padding: 2px 6px; border-radius: 4px; color: var(--accent); }
@@ -108,19 +119,19 @@
   /* ★ A chip is a button, and must look pressable and read as pressed — the whole control is
      useless if you cannot see which bands are on. */
   .chip { font-size: 12px; padding: 4px 10px; border-radius: 20px; cursor: pointer;
-          border: 1px solid var(--line); background: none; color: var(--fg); }
+          border: 1px solid var(--line); background: none; color: var(--text); }
   .chip:hover { border-color: var(--accent); }
   .chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent);
                                background: rgba(96,165,250,.12); }
   .chip .n { color: var(--dim); margin-left: 6px; }
   .chip[aria-pressed="true"] .n { color: inherit; }
-  #freq { background: #0d1520; border: 1px solid var(--line); border-radius: 6px;
-          color: var(--fg); padding: 5px 9px; font-size: 13px; width: 170px; }
+  #freq { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+          color: var(--text); padding: 5px 9px; font-size: 13px; width: 170px; }
   #freq:focus { outline: none; border-color: var(--accent); }
   .fNote { color: var(--dim); font-size: 12px; }
   .fClear { font-size: 12px; background: none; border: 1px solid var(--line);
             color: var(--dim); border-radius: 6px; padding: 4px 9px; cursor: pointer; }
-  .fClear:hover { color: var(--fg); border-color: var(--accent); }
+  .fClear:hover { color: var(--text); border-color: var(--accent); }
   a { color: var(--accent); }
   footer { color: var(--dim); font-size: 12px; text-align: center; padding: 0 20px 30px; }
 </style>
