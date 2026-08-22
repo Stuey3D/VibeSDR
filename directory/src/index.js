@@ -434,7 +434,7 @@ async function checkName(url, env) {
  *    restart, so a link shared with a friend would rot. This does not — it resolves to whatever
  *    the server's latest ping said.
  */
-async function redirectBySlug(host, env) {
+async function serveBySlug(host, request, env) {
   const slug = host.slice(0, -(PUBLIC_ZONE.length + 1)).toLowerCase();
   if (!slug || slug.includes('.')) return null;      // only one label deep
 
@@ -448,13 +448,9 @@ async function redirectBySlug(host, env) {
       { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } }
     );
   }
-  // ★★ A server that is merely ASLEEP keeps its name (see migrations/0002-slugs.sql), so this is a
-  //    real and expected case, not an error. Say so plainly rather than bouncing a listener to a
-  //    dead tunnel — the address is right, the receiver is off.
   if (Number(row.expires_at) <= now()) {
-    // ★★ DO NOT PROMISE A RESERVATION THAT HAS LAPSED. Past the hold window this name is up for
-    //    grabs, so telling a visitor "it will work again when it returns" would be a claim we have
-    //    stopped honouring.
+    // ★★ DO NOT PROMISE A RESERVATION THAT HAS LAPSED. Past the hold this name is up for grabs, so
+    //    "it will work again when it returns" would be a claim we have stopped honouring.
     const lifetime = Number(row.updated_at) - Number(row.created_at);
     const hold = Math.min(Math.max(lifetime, ADDRESS_HOLD_MIN), ADDRESS_HOLD_MAX);
     const stillHeld = Number(row.updated_at) > now() - hold;
@@ -466,12 +462,66 @@ async function redirectBySlug(host, env) {
       { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } }
     );
   }
-  // ★ 302 and no-store: the tunnel hostname behind this changes, so a cached redirect would send
-  //   listeners to an address that has already rotated away.
-  return new Response(null, {
-    status: 302,
-    headers: { location: row.url, 'cache-control': 'no-store' },
+
+  const origin = validUrl(row.url);
+  if (!origin) return new Response('This server published an address we cannot use.', { status: 502 });
+
+  const upstream = new URL(request.url);
+  const target = origin + upstream.pathname + upstream.search;
+
+  // ★★★ WE PROXY THE PAGE, NOT THE STREAM — and that distinction is the whole design.
+  //
+  //     This used to be a 302 to the tunnel, which is cheaper still: one request per click and not
+  //     a byte through us. But a Quick Tunnel's hostname ROTATES on every restart, and a browser
+  //     keys localStorage by ORIGIN — so a redirect landed every listener on a brand-new origin
+  //     and their view settings were gone (Stuart, 2026-08-22: "saving the view settings wont be
+  //     remembered"). ★★ The shared-storage cure does not exist: `trycloudflare.com` is on the
+  //     Public Suffix List, so each tunnel hostname is its own SITE and browsers partition
+  //     third-party storage per site — a vibesdr.net iframe would get a different bucket per
+  //     tunnel.
+  //
+  // ★★★ SO THE HTML AND ITS ASSETS COME THROUGH HERE, ON A STABLE ORIGIN WHOSE STORAGE PERSISTS,
+  //     AND THE WEBSOCKET GOES DIRECT. The socket is where the audio and the spectrum live, so the
+  //     expensive bytes still never cross this Worker and we are still not anybody's transit
+  //     provider — the thing this design has refused from the start. What crosses is a page, some
+  //     script, and a few small JSON reads.
+  //
+  // ★★ A WebSocket upgrade must never be proxied here: the page is told to dial the tunnel itself
+  //    (see __VIBE_DIRECT_HOST__ below), so an upgrade arriving at this Worker means something has
+  //    gone wrong upstream. Refuse it loudly rather than quietly becoming the stream's relay.
+  if ((request.headers.get('upgrade') || '').toLowerCase() === 'websocket') {
+    return new Response('This address does not carry the audio stream.', { status: 426 });
+  }
+
+  const res = await fetch(target, {
+    method: request.method,
+    headers: request.headers,
+    body: (request.method === 'GET' || request.method === 'HEAD') ? undefined : request.body,
+    redirect: 'manual',
   });
+
+  const type = res.headers.get('content-type') || '';
+  if (!type.includes('text/html')) {
+    // ★ Everything that is not the document streams through untouched.
+    return new Response(res.body, {
+      status: res.status,
+      headers: res.headers,
+    });
+  }
+
+  // ★★ TELL THE PAGE WHERE THE RECEIVER ACTUALLY IS. Injected rather than built into the client,
+  //    because the tunnel hostname is not knowable at build time and changes under us.
+  const html = await res.text();
+  const inject = `<script>window.__VIBE_DIRECT_HOST__=${JSON.stringify(new URL(origin).host)};</script>`;
+  const out = html.includes('</head>')
+    ? html.replace('</head>', inject + '</head>')
+    : inject + html;
+
+  const headers = new Headers(res.headers);
+  // ★ The document must not be cached: the host it names changes when the tunnel restarts.
+  headers.set('cache-control', 'no-store');
+  headers.delete('content-length');
+  return new Response(out, { status: res.status, headers });
 }
 
 export default {
@@ -482,7 +532,7 @@ export default {
     // ★ Anything under the public zone that is not the directory itself is a shareable address.
     const host = url.hostname.toLowerCase();
     if (host.endsWith('.' + PUBLIC_ZONE)) {
-      const res = await redirectBySlug(host, env);
+      const res = await serveBySlug(host, request, env);
       if (res) return res;
     }
 

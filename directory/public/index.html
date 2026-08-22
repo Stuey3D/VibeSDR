@@ -112,9 +112,12 @@ const countryName = (cc) => {
 
 /** Free / busy / temporary — the three states the legend names. */
 function state(s) {
-  // ★ A temporary share is one that declared a short life. It is a different KIND of entry, not a
-  //   different level of busy, so it wins the shape.
-  const temporary = (s.expiresAt - s.updatedAt) < 3 * 3600;
+  // ★★★ THE SERVER SAYS SO — never inferred from the ping interval. It WAS, and so every ordinary
+  //     listing came out a "temporary share": the default TTL is thirty minutes, well inside the
+  //     window this used to guess with. A product concept must not be invented out of a timing
+  //     value. A temporary share is a different KIND of entry, not a level of busy, so it still
+  //     wins the shape.
+  const temporary = !!s.temporary;
   const full = s.maxListeners > 0 && s.listeners >= s.maxListeners;
   if (full) return { cls: 'sh-busy', colour: getComputedStyle(document.documentElement).getPropertyValue('--busy').trim(), label: 'no free slot' };
   if (temporary) return { cls: 'sh-temp', colour: getComputedStyle(document.documentElement).getPropertyValue('--temp').trim(), label: 'temporary share' };
@@ -133,6 +136,21 @@ try {
   term.addTo(map);
   setInterval(() => { try { term.setTime(new Date()); } catch {} }, 60000);
 } catch { /* terminator plugin unavailable — the map is still useful */ }
+
+/**
+ * ★★★ ALWAYS SEND A LISTENER TO THE STABLE ADDRESS, NEVER THE TUNNEL.
+ *
+ * The tunnel hostname rotates on every restart and a browser keys localStorage by ORIGIN, so a
+ * listener who arrives on the raw tunnel URL loses every view setting the moment the server comes
+ * back. The stable address serves the same page and tells it where the receiver is, so the
+ * settings survive. Linking straight to s.url quietly threw that away for everyone who came
+ * through this page rather than a shared link (Stuart, 2026-08-22).
+ * ★ Falls back to the published URL for an entry with no address — a directly reachable server
+ *   that never needed a tunnel.
+ */
+function listenUrl(s) {
+  return s.address ? `https://${s.address}/` : s.url;
+}
 
 function radioLine(r) {
   const bits = [];
@@ -163,7 +181,7 @@ function serverBlock(s) {
     </summary>
     <div class="body">
       ${radios}
-      <a class="listen" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">Listen</a>
+      <a class="listen" href="${esc(listenUrl(s))}" target="_blank" rel="noopener noreferrer">Listen</a>
     </div>
   </details>`;
 }
@@ -206,7 +224,7 @@ function render(servers) {
       fillColor: st.colour, fillOpacity: st.cls === 'sh-busy' ? 0 : 0.85,
     }).addTo(map).bindPopup(
       `<b>${esc(s.name)}</b><br>${esc(s.grid)} · ${esc(st.label)}<br>` +
-      `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">Listen</a>`
+      `<a href="${esc(listenUrl(s))}" target="_blank" rel="noopener noreferrer">Listen</a>`
     );
   }
 }
