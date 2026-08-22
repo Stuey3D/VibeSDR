@@ -430,6 +430,14 @@ object VibeTunnel {
             })
             if (r != null && r.optInt("_status") == 200) {
                 listed = true
+                // ★★★ A SUCCESS MUST CLEAR THE LAST FAILURE. lastError was only ever SET, so the
+                //     "no tunnel yet" raised while the tunnel was still dialling — which is normal
+                //     during a restore, since publish() runs the moment the switch is restored and
+                //     the hostname arrives seconds later — stayed on screen for ever. The switch
+                //     read ON, with the right address beside it, and a red error underneath
+                //     (Stuart, 2026-08-22). A stale error is worse than none: it says the thing in
+                //     front of you is broken while it plainly works.
+                lastError = ""
                 r.optInt("pingSec", 0).takeIf { it > 0 }?.let { PING_SEC = it.toLong() }
                 // ★★ A returning server may have LOST its address: away longer than the hold, and
                 //    somebody else took the name. The switch must say so rather than keep showing

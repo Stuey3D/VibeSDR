@@ -478,7 +478,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           const j = JSON.parse(st);
           setPublicOn(!!j.running);
           setPublicAddr(j.address || '');
-          if (j.error) setPublicErr(j.error);
+          // ★ CLEARED as well as set — this only ever set it, so one transient failure stuck to
+          //   the switch permanently. The status is the whole truth each time it is read.
+          setPublicErr(j.error || '');
         }
       } catch { /* the switch simply keeps whatever it last knew */ }
     }, 1500);
