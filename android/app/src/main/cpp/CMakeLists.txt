@@ -87,6 +87,9 @@ add_library(vibelocalsdr SHARED
     #   file to drift.
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../vibeserver/geoip.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../vibeserver/asndb.cpp
+    # ★ RadioDNS — the broadcaster's own station logo by PI code. Shared with the daemon; its curl
+    #   transport is replaced here by VibeHttp (Android has no curl). See radiodns.h setFetcher.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../vibeserver/radiodns.cpp
     # ★ SCM_RIGHTS hand-off — how the front-door process gives an accepted socket to the radio.
     #   Full mode does not link without it, and nothing else references it, so its absence is
     #   invisible until the day Full mode is switched on.

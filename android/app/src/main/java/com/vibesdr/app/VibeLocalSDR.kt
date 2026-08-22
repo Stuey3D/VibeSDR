@@ -184,6 +184,20 @@ object VibeLocalSDR {
     private external fun nativeGeoSources(): String
     private external fun nativeGeoIngest(paths: String): String
 
+    // ── RadioDNS ──────────────────────────────────────────────────────────────────────────────
+    /**
+     * Wire up the broadcaster's own station logos, looked up by PI code.
+     *
+     * ★★★ ABSENT ON ANDROID UNTIL NOW, not broken: radiodns.cpp fetches through curl, which this
+     *     platform does not have, so it was compiled into the daemon only and nothing here ever
+     *     registered a logo handler. Every phone answered {} and the client fell back to matching
+     *     the eight-character RDS name — the guessing game the feature exists to replace.
+     * ★ `iso` is the receiver's country as a HINT for stations that transmit no ECC; it is tried
+     *   first and the other candidates follow, so an empty one still works.
+     */
+    fun initRadioDns(dir: String, iso: String) { ensureLoaded(); nativeInitRadioDns(dir, iso) }
+    private external fun nativeInitRadioDns(dir: String, iso: String)
+
     /** ★ The directory's shared secret — see dirProofFor() in the shim. */
     fun setDirectoryKey(key: String) { ensureLoaded(); nativeSetDirectoryKey(key) }
     private external fun nativeSetDirectoryKey(key: String)

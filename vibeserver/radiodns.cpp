@@ -37,7 +37,9 @@ std::string lower(std::string s) {
 
 /** ★ curl, exactly as eibi/geoip/asndb do it — the daemon has no TLS stack of its own and this is
  *  a rare fetch. Quoted destinations and URLs; see the space-in-the-path note in asndb.cpp. */
-std::string run(const std::string& cmd) {
+FetchFn g_fetch;
+
+std::string runCurl(const std::string& cmd) {
     std::string out;
     FILE* p = popen(cmd.c_str(), "r");
     if (!p) return out;
@@ -48,6 +50,18 @@ std::string run(const std::string& cmd) {
 }
 
 /** Extract a JSON string value for `key` — enough for the DoH answer, which is flat and small. */
+/** ★★ ONE PLACE THAT FETCHES. It was three curl command lines with their own timeouts and
+ *  quoting; now the URL and the Accept header are the only things a caller supplies, which is what
+ *  makes the transport swappable at all. */
+std::string httpGet(const std::string& url, const std::string& accept) {
+    if (g_fetch) return g_fetch(url, accept);
+    // ★ Quoted, because these URLs carry & and ? — see the note above.
+    std::string cmd = "curl -fsS --max-time 12 ";
+    if (!accept.empty()) cmd += "-H 'accept: " + accept + "' ";
+    cmd += "'" + url + "' 2>/dev/null";
+    return runCurl(cmd);
+}
+
 std::string jsonStr(const std::string& s, const std::string& key) {
     const std::string k = "\"" + key + "\"";
     size_t i = s.find(k);
@@ -90,9 +104,8 @@ std::string fqdnFor(const std::string& piHex, const std::string& ecc, double fre
  *      gives the real host AND the port, and the port is what says whether to speak http or
  *      https. The BBC answers 443 (https); the spec's older _radioepg._tcp answers 80. */
 std::string resolveSrv(const std::string& name) {
-    const std::string cmd = "curl -fsS --max-time 8 -H 'accept: application/dns-json' "
-                            "'https://cloudflare-dns.com/dns-query?name=" + name + "&type=SRV' 2>/dev/null";
-    const std::string js = run(cmd);
+    const std::string js = httpGet(
+        "https://cloudflare-dns.com/dns-query?name=" + name + "&type=SRV", "application/dns-json");
     const size_t a = js.find("\"Answer\"");
     if (a == std::string::npos) return {};
     // "data":"<prio> <weight> <port> <target>"
@@ -109,9 +122,8 @@ std::string resolveSrv(const std::string& name) {
 /** Resolve a CNAME over DNS-over-HTTPS. ★ A page cannot do this and neither can plain curl, but
  *  the JSON DoH API is an ordinary HTTPS GET — which is why this is a server-side feature. */
 std::string resolveCname(const std::string& fqdn) {
-    const std::string cmd = "curl -fsS --max-time 8 -H 'accept: application/dns-json' "
-                            "'https://cloudflare-dns.com/dns-query?name=" + fqdn + "&type=CNAME' 2>/dev/null";
-    const std::string js = run(cmd);
+    const std::string js = httpGet(
+        "https://cloudflare-dns.com/dns-query?name=" + fqdn + "&type=CNAME", "application/dns-json");
     if (js.empty()) return {};
     // The answer's "data" is the target, with a trailing dot.
     const size_t a = js.find("\"Answer\"");
@@ -264,6 +276,11 @@ std::string eccForIso(const std::string& iso, const std::string& piHex) {
     return found;
 }
 
+void setFetcher(FetchFn fn) {
+    // ★ No lock: set once at startup, before any lookup can run. Same contract as setDir.
+    g_fetch = std::move(fn);
+}
+
 void setDir(const std::string& dir) {
     std::lock_guard<std::mutex> lk(g_mtx);
     if (!dir.empty()) g_dir = dir;
@@ -298,8 +315,7 @@ std::string logoFor(const std::string& piHex, const std::string& ecc, double fre
         const bool tls = hostPort.size() > 4 && hostPort.substr(hostPort.size() - 4) == ":443";
         const std::string base = tls ? "https://" + hostPort.substr(0, hostPort.size() - 4)
                                      : "http://" + hostPort;
-        const std::string xml = run("curl -fsS --max-time 12 '" + base
-                                    + "/radiodns/spi/3.1/SI.xml' 2>/dev/null");
+        const std::string xml = httpGet(base + "/radiodns/spi/3.1/SI.xml", "");
         if (!xml.empty()) {
             // fm:<gcc>.<pi>.<freq> — the same three fields, in the order the SPI uses.
             const std::string pi = lower(piHex);

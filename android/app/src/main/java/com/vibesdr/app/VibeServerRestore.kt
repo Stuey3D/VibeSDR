@@ -110,6 +110,21 @@ object VibeServerRestore {
         // ★ Never allowed to fail the start: restoreIfWanted swallows everything.
         if (port > 0) VibeTunnel.restoreIfWanted(ctx, port)
         if (port > 0) VibeGeoData.start(ctx)
+        // ★★ STATION LOGOS FROM THE BROADCASTER, wired on BOTH start paths. The geo lookup above
+        //    had to learn that lesson too: a headless restore is how this server usually comes
+        //    back, so anything wired only where the UI starts it is missing exactly when nobody
+        //    is watching.
+        //  ★ The country is a hint from the device's own locale — tried first, with the rest of
+        //    the ECC candidates behind it, so a wrong or absent one still resolves.
+        if (port > 0) {
+            try {
+                VibeLocalSDR.initRadioDns(
+                    java.io.File(ctx.filesDir, "radiodns").apply { mkdirs() }.absolutePath,
+                    java.util.Locale.getDefault().country ?: "")
+            } catch (t: Throwable) {
+                android.util.Log.w("VibeSDR", "RadioDNS not started: ${t.message}")
+            }
+        }
         if (port <= 0) {
             VibeLocalSDR.setServeOnLan(false)
             conn.close()

@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -80,5 +81,28 @@ void clearCache();
 
 /** Where the cache lives, for the same reason the other data directories are settable. */
 void setDir(const std::string& dir);
+
+/**
+ * ★★★ HOW THIS FETCHES, so the lookup can run somewhere curl does not exist.
+ *
+ *  Every network call here went through one popen()+curl helper — right for the daemon, which has
+ *  no TLS stack of its own, and IMPOSSIBLE on Android, which has no curl. So RadioDNS was compiled
+ *  into the daemon only, nothing on a phone ever registered a station-logo handler, and
+ *  /vibeserver/stationlogo answered {} for ever: logos still appeared, but from the NAME ladder,
+ *  which is the guessing game RadioDNS exists to replace (Stuart, 2026-08-22: "RadioDNS hasnt been
+ *  working on android again").
+ *
+ * ★★ THE LOGIC MUST NOT BE COPIED TO FIX THAT. The ECC-candidate work — trying each plausible
+ *    country for the stations that never transmit one — is the part that took the effort and the
+ *    part that would silently drift if there were two of it. So the TRANSPORT is injected and
+ *    everything else stays exactly where it is, once.
+ *
+ * ★ Unset = the curl path, unchanged, so the daemon behaves identically to before.
+ *  @param accept  a value for the Accept header, or empty. DoH needs application/dns-json.
+ *  @return the response body, or empty on any failure. Must be SYNCHRONOUS: the lookup already
+ *          runs off the DSP thread and is cached, hits for a day and misses for an hour.
+ */
+using FetchFn = std::function<std::string(const std::string& url, const std::string& accept)>;
+void setFetcher(FetchFn fn);
 
 }  // namespace vsradiodns

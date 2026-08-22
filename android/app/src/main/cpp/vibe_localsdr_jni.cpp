@@ -16,12 +16,91 @@
 // ★ The daemon's own country/network lookup, compiled in here too — see the CMakeLists note.
 #include "../../../../../vibeserver/geoip.h"
 #include "../../../../../vibeserver/asndb.h"
+#include "../../../../../vibeserver/radiodns.h"
 #include "vibe_bands.h"   // the server's own band list, shared with the limiter
 #include "rtl_tcp_server.h"
 
 #define LOG_TAG "VibeLocalSDR"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+// ── RadioDNS: the transport the daemon gets from curl, and Android gets from Kotlin ─────────
+//
+// ★★★ THE WHOLE FEATURE WAS ABSENT HERE, not broken. radiodns.cpp fetches through popen()+curl,
+//     which does not exist on Android, so it was compiled into the DAEMON only — and with nothing
+//     registering a station-logo handler, /vibeserver/stationlogo answered {} on every phone. The
+//     client then fell back to matching on the eight-character RDS name, which is the guessing
+//     game RadioDNS exists to replace (Stuart, 2026-08-22).
+// ★★ Only the TRANSPORT crosses to Kotlin. The ECC-candidate logic — the part that makes this
+//    work for the many stations that never transmit a country — stays in radiodns.cpp, once.
+static JavaVM* g_vm = nullptr;
+
+extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
+    g_vm = vm;
+    return JNI_VERSION_1_6;
+}
+
+/** ★ Called from a NATIVE thread, which the JVM has never seen — so it must attach, and detach
+ *  again or the thread leaks a JNI frame for its lifetime. */
+static std::string jniHttpGet(const std::string& url, const std::string& accept) {
+    if (!g_vm) return {};
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (g_vm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) {
+        if (g_vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return {};
+        attached = true;
+    }
+    std::string out;
+    // ★ Looked up per call rather than cached: this runs a handful of times per station and the
+    //   cache above it means it is rare. A stale global class ref outliving a reload is a worse
+    //   trade than a lookup nobody can measure.
+    if (jclass cls = env->FindClass("com/vibesdr/app/VibeHttp")) {
+        if (jmethodID m = env->GetStaticMethodID(
+                cls, "get", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;")) {
+            jstring ju = env->NewStringUTF(url.c_str());
+            jstring ja = env->NewStringUTF(accept.c_str());
+            if (auto r = (jstring)env->CallStaticObjectMethod(cls, m, ju, ja)) {
+                if (const char* c = env->GetStringUTFChars(r, nullptr)) {
+                    out = c;
+                    env->ReleaseStringUTFChars(r, c);
+                }
+                env->DeleteLocalRef(r);
+            }
+            env->DeleteLocalRef(ju);
+            env->DeleteLocalRef(ja);
+        }
+        env->DeleteLocalRef(cls);
+    }
+    // ★★ An exception left pending here would be thrown into whatever Java frame this native
+    //    thread next touches — miles from the cause. VibeHttp.get catches its own, so this is a
+    //    guard against the next edit rather than a live fault.
+    if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
+    if (attached) g_vm->DetachCurrentThread();
+    return out;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeInitRadioDns(JNIEnv* env, jobject /*thiz*/,
+                                                    jstring jDir, jstring jIso) {
+    const char* d = jDir ? env->GetStringUTFChars(jDir, nullptr) : nullptr;
+    const char* i = jIso ? env->GetStringUTFChars(jIso, nullptr) : nullptr;
+    const std::string dir = d ? d : "";
+    const std::string iso = i ? i : "";
+    if (d) env->ReleaseStringUTFChars(jDir, d);
+    if (i) env->ReleaseStringUTFChars(jIso, i);
+
+    if (!dir.empty()) vsradiodns::setDir(dir);
+    vsradiodns::setFetcher(jniHttpGet);
+    // ★★ THE SAME CALL THE DAEMON MAKES, deliberately — logoForAuto, not logoFor. Depending on a
+    //    configured country outright is what made this silently do nothing on a server that had
+    //    none; the country is a hint, tried first, with the other candidates behind it.
+    vibe::LocalSdrShim::setStationLogoHandler(
+        [iso](const std::string& pi, const std::string& ecc, double hz) -> std::string {
+            return vsradiodns::logoForAuto(pi, ecc, hz, iso);
+        });
+    LOGI("RadioDNS ready (station logos from the broadcaster; country hint '%s')",
+         iso.empty() ? "none" : iso.c_str());
+}
 
 static const char* tunerName(enum rtlsdr_tuner t) {
     switch (t) {
