@@ -100,7 +100,16 @@
 <div class="legend">
   <span><i class="sh-free"></i>Free slot</span>
   <span><i class="sh-busy"></i>No slots</span>
-  <span><i class="sh-temp"></i>Temporary share</span>
+  <!-- ★★★ NO "TEMPORARY SHARE" IN THE LEGEND UNTIL SOMETHING CAN BE ONE. The two flavours are in
+       BRIEF-public-directory.md — a permanent listing, and a share offered for a few hours that
+       expires on its own ("Hans is lending me his laptop for two hours"). Only the first is built,
+       so `temporary` is always false and that marker can never appear: the legend was explaining a
+       state nothing in the system can produce (Stuart, 2026-08-22: "what is temporary share on
+       here?").
+       ★★ Same fault as a control whose every use is a no-op — it teaches a reader that the legend
+          describes something other than what they are looking at.
+       ★ The RENDERING stays (see state() and .sh-temp): the server already sends the flag, so the
+         day a share can declare itself the legend line is all that comes back. -->
   <span style="margin-left:auto" id="count"></span>
 </div>
 
