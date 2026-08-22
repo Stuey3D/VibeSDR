@@ -99,6 +99,9 @@ object VibeTunnel {
         Thread(r, "vibe-directory-ping").apply { isDaemon = true }
     }
     private var pingTask: ScheduledFuture<*>? = null
+    private var expiryTask: ScheduledFuture<*>? = null
+    /** ★ The share's end, mirrored for statusJson so the screen need not read prefs. */
+    @Volatile private var pendingUntil: Long = 0L
     /** What the ping needs to describe this server, kept so the timer can run without the UI. */
     @Volatile private var lastPublish: (() -> Unit)? = null
 
@@ -138,6 +141,9 @@ object VibeTunnel {
         put("tunnelUrl", tunnelUrl)
         put("address", address)
         put("error", lastError)
+        // ★ When this share ends, as an ABSOLUTE epoch — so the screen counts down from the same
+        //   instant the directory does, rather than from a length it would have to track itself.
+        put("until", pendingUntil)
     }.toString()
 
     // ── the tunnel ────────────────────────────────────────────────────────────────────────────
@@ -449,7 +455,47 @@ object VibeTunnel {
                               else prefs(ctx).getLong(K_UNTIL, 0L))
             .apply()
         startPinging()
+        // ★ Read BACK rather than recomputed: a renewal passes 0 and must keep the end it already
+        //   has, and that rule already lives in the line above. Two places deciding when a share
+        //   ends is how they come to disagree.
+        scheduleExpiry(ctx, prefs(ctx).getLong(K_UNTIL, 0L))
         return publishOnce(ctx, name, locator, port, radioModel, radioDriver, antenna, coverage, locked, shareForSec)
+    }
+
+    /**
+     * ★★★ END THE SHARE WHEN IT SAYS IT ENDS. The directory stops LISTING an expired share by
+     *     itself — expiry is evaluated when the list is read — but nothing on the phone was acting
+     *     on it, so the tunnel stayed open and the public address kept working long after the
+     *     offer had run out (Stuart, 2026-08-22: "the temporary time limit was ignored and I still
+     *     had access via the tunnel after expiry"). A listing that disappears while the door it
+     *     advertised stays unlocked is the worst of both: the owner believes it is over.
+     *
+     * ★★ RESTORE ALREADY GOT THIS RIGHT, which is exactly why it was missed. A share that ended
+     *    while the app was closed was refused on the way back up — so the case that was tested
+     *    passed, and the one nobody restarts for ran for ever.
+     *
+     * ★ Unlisted, NOT stopped: "when the temporary server time expires then it simply reverts to
+     *   an unlisted but still active vibeserver" (Stuart). The receiver keeps running for whoever
+     *   is on it locally; only the public door closes.
+     */
+    @Synchronized
+    private fun scheduleExpiry(ctx: Context, untilEpoch: Long) {
+        expiryTask?.cancel(false); expiryTask = null
+        pendingUntil = untilEpoch
+        if (untilEpoch <= 0L) return
+        val secs = untilEpoch - (System.currentTimeMillis() / 1000)
+        // ★ Already gone: end it now rather than scheduling a negative delay, which would fire
+        //   immediately anyway but through a path nobody reading this would expect.
+        val delay = if (secs > 0) secs else 0L
+        Log.i(TAG, "temporary share ends in ${delay}s — the tunnel will close then")
+        expiryTask = pinger.schedule({
+            try {
+                Log.i(TAG, "temporary share has ended — delisting and closing the tunnel")
+                delist(ctx)
+                stopTunnel()
+                applyLoopbackTrust(false, "")
+            } catch (t: Throwable) { Log.w(TAG, "could not end the share cleanly: ${t.message}") }
+        }, delay, TimeUnit.SECONDS)
     }
 
     /** ★ Renew on the advertised interval, and never let one failure end the schedule: a phone that
@@ -673,6 +719,10 @@ object VibeTunnel {
 
     fun delist(ctx: Context) {
         stopPinging()
+        // ★ A share ended by hand has no end left to schedule — and leaving the timer armed would
+        //   close a tunnel the owner had since started again.
+        expiryTask?.cancel(false); expiryTask = null
+        pendingUntil = 0L
         prefs(ctx).edit().putBoolean(K_WANT, false).apply()
         val p = prefs(ctx)
         val id = p.getString(K_ID, null) ?: return

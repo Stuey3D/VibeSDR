@@ -342,7 +342,7 @@ function serverBlock(s) {
   const extra = (s.host || s.platform)
     ? `<div class="rcHost">${s.host ? `Server: ${esc(s.host)}` : ''}`
       + `${s.host && s.platform ? '<br>' : ''}${esc(s.platform || '')}</div>` : '';
-  return `<details class="srv${s.unreachable ? ' down' : ''}">
+  return `<details class="srv${s.unreachable ? ' down' : ''}" data-key="srv:${esc(s.id || s.name)}">
     <summary>
       <i class="dot ${st.cls}" title="${esc(st.label)}"></i>
       <span>${esc(s.name)}</span>
@@ -511,6 +511,12 @@ function render(servers, filtered) {
 
   markers.clearLayers();
   const list = document.getElementById('list');
+  // ★★★ A REFRESH MUST NOT SHUT WHAT THE READER OPENED. The page reloads itself every minute so
+  //     an expired share leaves the screen — but rebuilding the list collapses every <details>,
+  //     so a card somebody was reading would snap shut under them on a timer. The open keys are
+  //     captured and restored, which also keeps the country groups where the visitor put them.
+  const openKeys = new Set(
+    [...document.querySelectorAll('#list details[open]')].map((d) => d.dataset.key));
   if (!servers.length) {
     list.innerHTML = filtered
       ? `<div class="empty">
@@ -535,11 +541,16 @@ function render(servers, filtered) {
     .sort((a, b) => countryName(a[0]).localeCompare(countryName(b[0])));
 
   list.innerHTML = groups.map(([cc, rows], i) => `
-    <details class="country" ${groups.length <= 2 || i === 0 ? 'open' : ''}>
+    <details class="country" data-key="cc:${esc(cc)}" ${
+      openKeys.size ? (openKeys.has(`cc:${cc}`) ? 'open' : '')
+                    : (groups.length <= 2 || i === 0 ? 'open' : '')}>
       <summary>${flag(cc)} ${esc(countryName(cc))}
         <span class="n">${rows.length}</span><span class="chev">›</span></summary>
       ${rows.map(serverBlock).join('')}
     </details>`).join('');
+
+  for (const d of list.querySelectorAll('details.srv'))
+    if (openKeys.has(d.dataset.key)) d.open = true;
 
   for (const s of servers) {
     const st = state(s);
@@ -597,14 +608,32 @@ async function withLiveCounts(servers) {
   return servers;
 }
 
-fetch('/api/directory')
-  .then((r) => r.json())
-  .then((d) => withLiveCounts(Array.isArray(d.servers) ? d.servers : []))
-  .then((servers) => { ALL = servers; renderChips(); applyFilters(); })
-  .catch(() => {
-    document.getElementById('list').innerHTML =
-      '<div class="empty">The directory could not be reached. Try again shortly.</div>';
-  });
+/**
+ * ★★★ THE PAGE MUST REFRESH ITSELF. It fetched ONCE, so a tab left open showed the directory as
+ *     it was when it loaded — for ever. A temporary share that had ended was still on screen with
+ *     a countdown frozen mid-flight, which reads as "the expiry does not work" and is
+ *     indistinguishable from it (Stuart, 2026-08-22: "it was still in the directory"). The server
+ *     had already dropped it; only this page had not asked.
+ * ★★ A minute is well inside the smallest share anybody can set, so an ended share leaves the
+ *    screen while the person watching is still watching.
+ * ★ A failed refresh keeps what is on screen rather than blanking it — a blip on the visitor's
+ *   line is not news about the estate. Only the FIRST load can report a failure, because only then
+ *   is there nothing to show.
+ */
+function load(first) {
+  return fetch('/api/directory')
+    .then((r) => r.json())
+    .then((d) => withLiveCounts(Array.isArray(d.servers) ? d.servers : []))
+    .then((servers) => { ALL = servers; renderChips(); applyFilters(); })
+    .catch(() => {
+      if (!first) return;
+      document.getElementById('list').innerHTML =
+        '<div class="empty">The directory could not be reached. Try again shortly.</div>';
+    });
+}
+
+load(true);
+setInterval(() => load(false), 60000);
 </script>
 </body>
 </html>
