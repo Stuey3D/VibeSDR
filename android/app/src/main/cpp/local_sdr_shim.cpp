@@ -9127,9 +9127,15 @@ struct LocalSdrShim::Impl {
             //     and the session build below was reading exactly that flag, so an ordinary
             //     visitor arriving while the owner was unlocked INHERITED ADMIN. See the note
             //     there. adminSocks is the existing per-socket record; this is the missing entry.
-            if (adminAuthed && sock) {
+            if (sock) {
                 std::lock_guard<std::mutex> al(adminSockMtx);
-                adminSocks.insert(sock.get());
+                // ★ This socket proved the password itself …
+                if (adminAuthed) { adminSocks.insert(sock.get()); adminSessionId = session; }
+                // ★★ … or it is the admin session RECONNECTING. Adopting it here is what stops the
+                //    first hwinfo going out with adminOk:false and closing the owner's panel; the
+                //    client's own re-prove arrives a moment later and agrees.
+                else if (!session.empty() && session == adminSessionId)
+                    adminSocks.insert(sock.get());
             }
             if (adminAuthed) lastAdminTouch.store(Impl::nowSecs());
             if (adminAuthed) LOGI("admin session — controls unlocked, no session limit");
@@ -10331,6 +10337,16 @@ struct LocalSdrShim::Impl {
     /** Sockets that have proved the password, for receivers with no per-client DSP. */
     std::mutex adminSockMtx;
     std::set<const net::Socket*> adminSocks;
+    /** ★★★ AND THE SESSION THEY BELONG TO. A browser opens two sockets and reconnects them on
+     *  every blip; a set of SOCKETS cannot answer "is this listener admin" across that, so the
+     *  first hwinfo on a reconnected socket said adminOk:false. The client closes the admin page
+     *  the moment it believes it is not admin (main.ts: `if (!adminUnlocked) closeAdmin()`), so the
+     *  owner's panel shut itself the instant anything else caused a reconnect — then reopened on a
+     *  tap, because the credential was never lost and the re-prove had since succeeded. Stuart,
+     *  2026-08-22: "the page closed when the 2nd connection happened but i remained logged in and
+     *  only needed to tap the button to open it again."
+     *  ★ Exclusive by design — most recent login wins — so ONE id, not a set. */
+    std::string adminSessionId;
     /** Grant or revoke it for this listener.
      *
      *  ★★★ ADMIN IS EXCLUSIVE, AND THE MOST RECENT LOGIN WINS. Stuart, 2026-08-15: "if only one
@@ -10364,8 +10380,10 @@ struct LocalSdrShim::Impl {
                   if (!sess.empty() && kv.second == sess) mine.push_back(kv.first); }
             if (mine.empty()) mine.push_back(sock.get());
             std::lock_guard<std::mutex> lk(adminSockMtx);
-            if (on) { adminSocks.clear(); for (auto* sk : mine) adminSocks.insert(sk); }
-            else    { for (auto* sk : mine) adminSocks.erase(sk); }
+            if (on) { adminSocks.clear(); for (auto* sk : mine) adminSocks.insert(sk);
+                      adminSessionId = sess; }
+            else    { for (auto* sk : mine) adminSocks.erase(sk);
+                      if (!sess.empty() && sess == adminSessionId) adminSessionId.clear(); }
         }
         // ★★★ REMEMBER WHOSE SESSION IT IS. `adminOk` is radio-wide, and on a receiver with no
         //     per-client DSP — which is what open tuning runs on — there is nothing else to ask.
@@ -13054,7 +13072,18 @@ std::string LocalSdrShim::adminSessionsJson() {
            + ",\"agent\":\"" + vibeadmin::esc(p->occupantAgent.substr(0, 160)) + "\""
            + ",\"cpu\":" + std::to_string((int)(p->dspLoadPct + 0.5))
            + ",\"kbps\":" + std::to_string(kbps)
-           + ",\"decoder\":\"" + vibeadmin::esc(curDecoder) + "\""
+           // ★★★ THE DECODER BELONGS TO A SESSION, NOT TO WHOEVER IS DRAWN FIRST. curDecoder is
+           //     the RADIO's current decoder, so this row wore it regardless of who started it:
+           //     Stuart opened Advanced RDS on the iPhone and the admin table credited it to the
+           //     Mac, with that listener's uplink and CPU beside it (2026-08-22). On a public
+           //     receiver the whole point of this table is knowing who is doing what.
+           //  ★ The per-client path has always got this right — same test, same lock — and this
+           //    row simply never learned it. Third field in this row to be fixed today for the
+           //    same reason: state that belongs to a SESSION read from the radio.
+           + ",\"decoder\":\"" + vibeadmin::esc(
+                 (!curDecoder.empty()
+                  && (p->decoderSession.empty() || p->decoderSession == rowSession))
+                     ? curDecoder : std::string()) + "\""
            + ",\"occupant\":true"
            // ★★★ AND BADGE IT HERE TOO. The per-client row above has said `admin` since 08-13; this
            //     one — the row used by every SINGLE-USER radio, which is the Airspy HF+ and the
@@ -13122,7 +13151,11 @@ std::string LocalSdrShim::adminSessionsJson() {
                + ",\"cc\":\"" + vibeadmin::esc(vsCountry(ip)) + "\""
                + ",\"net\":\"" + vibeadmin::esc(vsAsnLabel(ip)) + "\""
                + ",\"cpu\":-1,\"kbps\":-1"
-               + ",\"decoder\":\"\",\"occupant\":false"
+               // ★ And an extra listener shows the decoder when the session running it is THEIRS.
+               + ",\"decoder\":\"" + vibeadmin::esc(
+                     (!curDecoder.empty() && !p->decoderSession.empty()
+                      && p->decoderSession == sess) ? curDecoder : std::string()) + "\""
+               + ",\"occupant\":false"
                // ★★ NOT ADMIN. Whatever the radio-wide flag says, a listener on the shared dial has
                //    proved nothing — badging them would repeat the inherit bug in the one view an
                //    owner uses to decide who to trust.
