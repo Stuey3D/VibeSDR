@@ -1007,7 +1007,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                                                             //   own VFO in a fixed window; anything
                                                             //   else with room for several is ONE
                                                             //   shared dial.
-                                                            radioUse === 'locked');
+                                                            radioUse === 'locked',
+                                                            // ★★★ HOW LONG THE SHARE IS OFFERED
+                                                            //   FOR, in seconds — 0 = permanent.
+                                                            //   Converted here where the words
+                                                            //   are, so the wire carries one
+                                                            //   number and no vocabulary to keep
+                                                            //   in step at both ends.
+                                                            publicTemp ? shareSeconds() : 0);
                         const j = st ? JSON.parse(st) : {};
                         setPublicOn(!!j.address); setPublicAddr(j.address || ''); setPublicErr(j.error || '');
                       } else {
