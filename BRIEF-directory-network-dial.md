@@ -42,8 +42,20 @@ as chips that is a block of noise, but as a dial it is simply a long green bar.
 *the radio covering 500 kHz* is busy — but the directory records `listeners` and `maxListeners`
 for the SERVER. On a front door holding three receivers that is meaningless for this purpose: the
 Pi can be "2 of 10" while the only radio that reaches HF is the one occupied.
-→ Publish `listeners` and `maxListeners` per radio. The front door already counts `users` per
-radio; the phone in simple mode has exactly one radio and can report its own.
+→ Publish `listeners` and `maxListeners` per radio.
+
+★★★ AND THE FRONT DOOR DOES NOT KNOW THIS EITHER. `/vibeserver/radios` publishes `users` per
+radio, which reads like occupancy and is not — it is `--users`, the CONFIGURED cap
+(`main.cpp:1556`, from `r.users = c.users`). Each radio is a separate PROCESS; the door holds the
+config and hands off connections, so nobody is counting live listeners per receiver in the place
+that publishes the list. That is the real work in step 1, and it is why step 1 is step 1.
+★ The phone in simple mode is the easy half: it has exactly one radio, so the server's own counts
+ARE that radio's, and it can say so truthfully today.
+★★ Until a multi-radio server can answer, its ranges must contribute COVERAGE but not a free/busy
+verdict — drawn as covered-but-unknown rather than guessed green. Inventing an occupancy the
+server never reported is precisely the mistake already written up in
+`client_infers_server_decisions`: Jr ended sessions itself on a countdown only the server could
+judge.
 
 ★★ **THE PAGE HAS NO BAND PLAN, DELIBERATELY.** Every band name on it today comes from a server,
 so the page cannot invent bands for radios nobody told it about. But a dial has to draw the band
@@ -67,9 +79,19 @@ Client side, from `ranges` plus per-radio occupancy. A sweep line over every ran
 network gives elementary intervals; for each, count the radios covering it and how many have a
 free slot.
 
-- **≥1 free** → green
+- **none covering** → not part of the dial at all (the dial's extent IS the union)
+- **≥1 free, at least one of them permanent** → green
+- **≥1 free, but every one of them is a temporary share** → blue (Stuart: *"highlight blue if only
+  a tempory share covers that part of the spectrum"*). Here now, gone in fifteen minutes — a
+  different promise from green, and the listener deserves to know which they are being offered
+  before they plan an evening around it. Blue already means "temporary" everywhere else on this
+  page, so it costs no new vocabulary.
 - **≥1 covering, none free** → red, and clickable: which radio, and the queue
-- **none** → not part of the dial at all (the dial's extent IS the union)
+
+★★ THE PRECEDENCE IS DELIBERATE. "Busy" beats "temporary" because it answers a more urgent
+question — can I have it *now* — while blue answers *how long can I keep it*. And a permanent radio
+beats a temporary one, so green is never weakened by a share that happens to overlap it: green
+means "this will still be here", and it must not be able to mean less than that.
 
 ★ A server that never published a range contributes nothing to the dial and must be listed
 somewhere visible, not silently dropped — the same rule the frequency search already follows.
