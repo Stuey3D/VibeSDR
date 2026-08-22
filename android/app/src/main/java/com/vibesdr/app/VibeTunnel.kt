@@ -200,6 +200,78 @@ object VibeTunnel {
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+    /**
+     * What the directory shows about this receiver: its radios and how busy it is.
+     *
+     * ★★★ ASKED OVER LOCALHOST, NOT REBUILT FROM THE BRIDGE. The shim already publishes exactly
+     *     this at /vibeserver/radios — it is what the vibesdr.net demo card reads — so assembling
+     *     a second version here from getVibeServerStatus() would be a copy that drifts. The first
+     *     attempt did exactly that and every listing said "This server has not published its
+     *     radios yet" (2026-08-22).
+     *
+     * ★★ NO SERIAL NUMBERS. They are hardware identity and have no business on a public page —
+     *    the same line website/worker.js draws, and the server's own landing page before it.
+     */
+    private fun buildStatus(port: Int, radioModel: String, radioDriver: String): JSONObject {
+        val out = JSONObject()
+        val radios = JSONArray()
+
+        // ★ The multi-radio front door. Populated on a machine running several receivers behind
+        //   one door; EMPTY on a phone in Simple mode, which holds exactly one radio itself.
+        try {
+            val req = Request.Builder().url("http://127.0.0.1:$port/vibeserver/radios").build()
+            val body = http.newCall(req).execute().use { it.body?.string() ?: "" }
+            val arr = JSONObject(body).optJSONArray("radios") ?: JSONArray()
+            for (i in 0 until arr.length()) {
+                val r = arr.optJSONObject(i) ?: continue
+                radios.put(JSONObject().apply {
+                    put("name", r.optString("label"))
+                    put("driver", r.optString("driver"))
+                    put("mode", r.optString("mode"))
+                    put("shared", r.optBoolean("locked", false))
+                    put("restricted", r.optBoolean("restricted", false))
+                    put("coverage", r.optJSONArray("coverage") ?: JSONArray())
+                })
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "could not read the radio list: ${t.message}")
+        }
+
+        // ★★★ A PHONE IN SIMPLE MODE PUBLISHES NO RADIO LIST, AND THAT IS NOT AN ERROR.
+        //     /vibeserver/radios describes the radios behind a FRONT DOOR; a phone serving its own
+        //     dongle has no door and returns {"radios":[]}. Reading only that endpoint made every
+        //     phone listing say "This server has not published its radios yet" while working
+        //     perfectly (Stuart, 2026-08-22). So where the door lists nothing, describe the one
+        //     radio this process is holding — which the app already knows the make of.
+        if (radios.length() == 0 && (radioModel.isNotEmpty() || radioDriver.isNotEmpty())) {
+            radios.put(JSONObject().apply {
+                put("name", radioModel.ifEmpty { "Radio" })
+                put("driver", radioDriver)
+                put("shared", false)
+            })
+        }
+        out.put("radios", radios)
+
+        // ★★ COUNTS FROM /vibeserver.json — the server's OWN identity response, which is what the
+        //    vibesdr.net demo card reads. Same numbers everywhere, rather than a second opinion
+        //    assembled from the bridge.
+        try {
+            val req = Request.Builder().url("http://127.0.0.1:$port/vibeserver.json").build()
+            val body = http.newCall(req).execute().use { it.body?.string() ?: "" }
+            val j = JSONObject(body)
+            out.put("listeners", j.optInt("listeners", 0))
+            out.put("maxListeners", j.optInt("maxUsers", 1))
+            out.put("freeInSec", j.optInt("freeInSec", -1))
+        } catch (t: Throwable) {
+            Log.w(TAG, "could not read /vibeserver.json: ${t.message}")
+        }
+
+        // ★★ SAID, NOT INFERRED. The directory drew a "temporary share" from how far the expiry
+        //    sat from the last ping, so an ordinary listing was a yellow diamond on the map.
+        out.put("temporary", false)
+        return out
+    }
+
     private fun post(path: String, body: JSONObject): JSONObject? = try {
         val req = Request.Builder()
             .url("$DIRECTORY$path")
@@ -221,7 +293,9 @@ object VibeTunnel {
      *     directory and cannot be recovered — losing it means re-registering, which is why the
      *     address hold is proportional to how long the listing was actually used.
      */
-    fun publish(ctx: Context, name: String, locator: String, status: JSONObject): String? {
+    fun publish(ctx: Context, name: String, locator: String, port: Int,
+                radioModel: String, radioDriver: String): String? {
+        val status = buildStatus(port, radioModel, radioDriver)
         val url = tunnelUrl
         if (url.isEmpty()) { lastError = "no tunnel yet"; return null }
 

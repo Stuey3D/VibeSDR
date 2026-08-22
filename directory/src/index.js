@@ -373,6 +373,11 @@ async function list(env) {
       address: r.slug ? `${r.slug}.${PUBLIC_ZONE}` : null,
       grid: r.grid, lat: r.lat, lon: r.lon, country: r.country,
       radios: Array.isArray(status.radios) ? status.radios : [],
+      // ★★★ SAID, NOT INFERRED. The page guessed "temporary share" from how far the expiry sat
+      //     from the last ping, so an ordinary listing with a 30-minute TTL was drawn as a yellow
+      //     diamond — a product concept invented out of a timing value. A server says whether it
+      //     is a temporary share; if it says nothing, it is not one.
+      temporary: !!status.temporary,
       listeners: Number(status.listeners || 0),
       maxListeners: Number(status.maxListeners || 0),
       freeInSec: Number.isFinite(Number(status.freeInSec)) ? Number(status.freeInSec) : -1,

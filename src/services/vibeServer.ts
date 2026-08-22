@@ -490,6 +490,43 @@ export async function setServerLocationMode(m: LocationMode): Promise<void> {
  * mode is 'off' (the default) we publish nothing at all, and the client shows a
  * "receiver location not set" warning rather than silently pretending to know.
  */
+/**
+ * The receiver's RESOLVED position — whichever way the owner set it.
+ *
+ * ★★★ THE GRID IS DERIVED, NEVER TYPED. publishLocation() has always done this: a city is
+ *     geocoded, the device fix is coarsened, and latLonToGrid() turns either into a locator. The
+ *     public-listing switch first read the raw location BOX instead, which is empty on the device
+ *     path and holds a town name on the manual one — so listing refused with "a valid Maidenhead
+ *     locator is required" from a server that knew perfectly well where it was (Stuart,
+ *     2026-08-22).
+ * ★★ Which is also the answer to "we should allow city too": we already do. The city becomes
+ *    coordinates HERE, on the server side, so the directory never needs to geocode anything.
+ *
+ * Returns null when the owner has opted out ('off') or the fix is unavailable — the caller must
+ * treat that as "no location", never as a reason to invent one.
+ */
+export async function getResolvedServerLocation():
+    Promise<{ lat: number; lon: number; grid: string; label?: string; country?: string } | null> {
+  try {
+    const mode = await getServerLocationMode();
+    if (mode === 'off') return null;
+    const manual = await getManualServerLocation();
+    const loc = mode === 'manual' ? manual : await getUserLocation();
+    if (!loc) return null;
+    // ★ Coarsened to ~1 km, exactly as publishLocation does — a grid square is a square, not a
+    //   house, and the two must not disagree about where this receiver is.
+    const lat = Math.round(loc.lat * 100) / 100;
+    const lon = Math.round(loc.lon * 100) / 100;
+    const rev = await reverseGeocode(lat, lon);
+    return {
+      lat, lon,
+      grid: latLonToGrid(lat, lon),
+      label: (mode === 'manual' ? manual?.label : undefined) ?? rev?.name ?? undefined,
+      country: rev?.iso ?? undefined,
+    };
+  } catch { return null; }
+}
+
 export async function publishLocation(): Promise<void> {
   if (!Local?.setLocationJson) return;
   // The NAME is always published — it identifies the receiver and is not sensitive

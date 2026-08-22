@@ -217,8 +217,10 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
               )}
             </View>
 
-            {/* Advertised name */}
-            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>ADVERTISED NAME</Text>
+            {/* ★ LOCAL NAME here too, though RTL-TCP has no public listing: one field, one name
+                across both server screens. A user switching protocol must not meet two labels for
+                the same box. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>LOCAL NAME</Text>
             <TextInput
               value={name}
               onChangeText={setName}

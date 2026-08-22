@@ -17,6 +17,7 @@ import {
   setVibeServerBiasT,
   vibeServerSupported, randomPin, fmtRate, FPS_TIERS, fpsForTier,
   getServerLocationMode, setServerLocationMode, getManualServerLocation,
+  getResolvedServerLocation,
   setManualServerLocation, resolveLocation,
   type FpsTier, type VibeServerInfo, type VibeServerStatus, type LocationMode,
 } from '../services/vibeServer';
@@ -29,7 +30,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'ServerMode'>;
 //   • VibeServer (default) — server-side DSP, compressed audio + waterfall,
 //     ~25x lighter than raw IQ, HMAC PIN. Handled inline here.
 //   • RTL-TCP — raw IQ, maximum compatibility. Delegates to RtlTcpServerScreen.
-// The auto-discovery (mDNS) toggle and the advertised name are shared by both.
+// The auto-discovery (mDNS) toggle and the LOCAL name are shared by both.
 
 type Proto = 'vibeserver' | 'rtltcp';
 type PinMode = 'random' | 'custom' | 'off';
@@ -98,7 +99,7 @@ const K = {
   advanced: 'vs_advanced', maxUsers: 'vs_maxusers',
   allowRanges: 'vs_allow', blockRanges: 'vs_block',
   gainLimits: 'vs_gainlimits', restGain: 'vs_restgain', agcLock: 'vs_agclock',
-  rtlAgc: 'vs_rtlagc',
+  rtlAgc: 'vs_rtlagc', publicName: 'vs_publicname',
   proxies: 'vs_proxies', radioUse: 'vs_radiouse', oneRadioPerIp: 'vs_oneradioperip',
   landingHz: 'vs_landinghz', landingMode: 'vs_landingmode', biasT: 'vs_biast',
 };
@@ -170,9 +171,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
    *    still type a range, which is the half that never needed the list.
    */
   // ── ADVERTISE ON VIBESDR.NET ───────────────────────────────────────────────────────────────
-  /** ★ Its own field rather than reusing ADVERTISED NAME: the name a phone answers to on the LAN
-   *  ("Living room Pi") is not necessarily the one its owner wants published to the world. It is
-   *  PREFILLED from the advertised name, so for most people it is still one thing to check. */
+  /** ★ Its own field rather than reusing the LOCAL NAME: what a phone answers to on the LAN
+   *  ("Living room Pi") is not necessarily what its owner wants published to the world. It is
+   *  PREFILLED from the local name, so for most people it is still one thing to check. */
   const [publicName, setPublicName]   = useState('');
   const [publicOn, setPublicOn]       = useState(false);
   const [publicBusy, setPublicBusy]   = useState(false);
@@ -467,6 +468,58 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     return () => clearInterval(t);
   }, [running]);
 
+  /**
+   * ★★★ THE PUBLIC NAME PERSISTS ON ITS OWN, and deliberately NOT via the big Start callback.
+   *     That callback carries a twenty-entry dependency list, and this project has already paid
+   *     for it twice: one stale closure wrote an empty password over a real one AND made the field
+   *     come back blank, and another reverted twelve settings on every start. A list you have to
+   *     remember is a list that will eventually be wrong, so a setting that can look after itself
+   *     should. (Left as component state it was simply LOST on leaving the screen — 2026-08-22.)
+   */
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(K.publicName)
+      .then((v) => { if (!cancelled && v != null) setPublicName(v); })
+      .catch(() => { /* a missing name is not an error; the box just starts empty */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    // ★ Written as typed. There is no Save button on this screen and there should not be one.
+    AsyncStorage.setItem(K.publicName, publicName).catch(() => {});
+  }, [publicName]);
+
+  /**
+   * Can this build tunnel at all, and are we already listed?
+   *
+   * ★★★ ITS OWN EFFECT, AND DELIBERATELY NOT GATED ON `running`. This first lived inside the mDNS
+   *     hostname effect, which begins `if (!running) return` — correct there, because a .local
+   *     name only exists once the responder is up. But a CAPABILITY question has to be answerable
+   *     while the server is still being SET UP, which is exactly when somebody goes looking for
+   *     the switch. Gated that way, publicSupported stayed false and the whole section rendered as
+   *     NOTHING — no error, no log, just an absent control (2026-08-22).
+   * ★ Which is the same shape as the missing-@ReactMethod bug: the failure of an optional call is
+   *   silence, so anything that decides whether a control EXISTS must be checked on its own.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const Local = (NativeModules as any).VibeLocalSDR;
+      try {
+        const ok = !!(await Local?.tunnelSupported?.());
+        if (!cancelled) setPublicSupported(ok);
+      } catch { if (!cancelled) setPublicSupported(false); }
+      try {
+        const st = await Local?.tunnelStatus?.();
+        if (!cancelled && st) {
+          const j = JSON.parse(st);
+          setPublicOn(!!j.running); setPublicAddr(j.address || ''); setPublicErr(j.error || '');
+        }
+      } catch { /* status is a nicety — never let it break the screen */ }
+    })();
+    return () => { cancelled = true; };
+  }, [running]);
+
   // The NAME the mDNS responder took. Asked for once the server is up, and RETRIED for a
   // few seconds: the responder probes the network for a clash before it commits to a
   // name (that's how a second phone ends up as "-2"), so the answer is not ready the
@@ -477,17 +530,6 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     let tries = 0;
     const ask = async () => {
       const Local = (NativeModules as any).VibeLocalSDR;
-      // ★★★ ASK WHETHER THE METHOD EXISTS, DO NOT ASSUME. `Local?.x?.()` yields UNDEFINED for a
-      //     method that was never exported, so a missing @ReactMethod reads as "not supported"
-      //     rather than throwing — which is exactly how two days went missing, twice.
-      try { setPublicSupported(!!(await Local?.tunnelSupported?.())); } catch { setPublicSupported(false); }
-      try {
-        const st = await Local?.tunnelStatus?.();
-        if (st) {
-          const j = JSON.parse(st);
-          setPublicOn(!!j.running); setPublicAddr(j.address || ''); setPublicErr(j.error || '');
-        }
-      } catch { /* status is a nicety — never let it break the screen */ }
       try {
         const h = await Local?.getMdnsHostname?.();
         if (cancelled) return;
@@ -770,6 +812,97 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               <Row C={C} F={F} k="NAME" v={`${mdnsHost}.local:${running.port}`} vc={C.amber} />
             )}
             <Row C={C} F={F} k="ACCESS" v={effectivePin ? `PIN ${effectivePin}` : 'Open (no PIN)'} vc={effectivePin ? C.green : C.amber} />
+          {/* ─── ADVERTISE ON VIBESDR.NET ──────────────────────────────────────────────────
+              ★★★ TWO FIELDS AND NOTHING ELSE (Stuart, 2026-08-22): a public name, and the switch.
+                  Everything else the directory needs — the locator, the place, the radios — the
+                  server already holds, so asking again would be asking twice.
+              ★★ VibeServer only: RTL-TCP has no landing page, no PIN and no session limits, so it
+                 has nothing to put in front of the public. */}
+            {publicSupported && proto === 'vibeserver' ? (
+            <View style={[styles.card, { borderColor: C.border, marginTop: 14 }]}>
+              <Text style={[styles.section, { color: C.textDim, fontFamily: F, marginTop: 0 }]}>
+                ADVERTISE ON VIBESDR.NET
+              </Text>
+              <TextInput value={publicName} onChangeText={setPublicName}
+                editable={!publicOn}
+                placeholder={name || 'My VibeServer'} placeholderTextColor={C.goldDim}
+                style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
+              <View style={[styles.rowBetween, { marginTop: 12 }]}>
+                <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                  {publicBusy ? 'Working\u2026' : 'List this server publicly'}
+                </Text>
+                <Switch value={publicOn} disabled={publicBusy || !running.port}
+                  onValueChange={async (v) => {
+                    const Local = (NativeModules as any).VibeLocalSDR;
+                    setPublicBusy(true); setPublicErr('');
+                    try {
+                      if (v) {
+                        const nm = (publicName || name || '').trim();
+                        // ★★ An unnamed server must not be listed: the directory would have to fall
+                        //    back to "vibeserver", and every unnamed server would collide on it.
+                        if (nm.length < 2) {
+                          setPublicErr('Give this server a public name first.');
+                          setPublicBusy(false); return;
+                        }
+                        // ★★★ ASK FOR THE RESOLVED LOCATION, NEVER THE RAW BOX. This read locCity,
+                        //     which is EMPTY on the device path (there is no locator box at all in
+                        //     that mode) and holds a TOWN on the manual one — so listing was refused
+                        //     with "a valid Maidenhead locator is required" by a server that knew
+                        //     exactly where it was. getResolvedServerLocation() is the same
+                        //     resolution publishLocation() has always done: device fix or city,
+                        //     coarsened, then latLonToGrid(). ★ And it is why a CITY works — it
+                        //     becomes coordinates here, so the directory never geocodes anything.
+                        const where = await getResolvedServerLocation();
+                        if (!where?.grid) {
+                          // ★ Opted out of publishing a location, or no fix yet. Say which thing to
+                          //   go and do — a bare refusal here would be a puzzle.
+                          setPublicErr('Set this receiver\u2019s location first (Where this receiver is, above) \u2014 the directory places servers on a map.');
+                          setPublicBusy(false); return;
+                        }
+                        // ★★★ THE REAL PORT, AND ONLY WHILE THE SERVER IS UP. This passed 0, so
+                        //     cloudflared was told to reach http://127.0.0.1:0 — the tunnel came up
+                        //     perfectly, the listing appeared on the map, and every visitor got a
+                        //     502 from a receiver that was never on the other end (2026-08-22).
+                        //  ★★ A tunnel to a stopped server can ONLY 502, so the switch requires a
+                        //     running one rather than publishing a dead address.
+                        if (!running.port) {
+                          setPublicErr('Start the server first — the listing points at a receiver that has to be running.');
+                          setPublicBusy(false); return;
+                        }
+                        const st = await Local?.tunnelStart?.(nm, where.grid, running.port, '',
+                                                            radio?.model || '', radio?.driver || '');
+                        const j = st ? JSON.parse(st) : {};
+                        setPublicOn(!!j.address); setPublicAddr(j.address || ''); setPublicErr(j.error || '');
+                      } else {
+                        const st = await Local?.tunnelStop?.('');
+                        const j = st ? JSON.parse(st) : {};
+                        setPublicOn(false); setPublicAddr(''); setPublicErr(j.error || '');
+                      }
+                    } catch (e: any) {
+                      setPublicOn(false);
+                      setPublicErr(String(e?.message || e));
+                    } finally { setPublicBusy(false); }
+                  }}
+                  trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
+              </View>
+              {publicOn && publicAddr ? (
+                <Text style={[styles.hint, { color: C.green, fontFamily: F, marginTop: 8 }]}>
+                  Anyone can listen at {publicAddr} — share that address, it stays the same.
+                </Text>
+              ) : (
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                  Publishes this receiver on vibesdr.net so anyone can find it and listen. Your home
+                  address is never published — listeners reach it through a Cloudflare tunnel.
+                </Text>
+              )}
+              {publicErr ? (
+                <Text style={[styles.hint, { color: '#ff5c5c', fontFamily: F, marginTop: 8 }]}>
+                  {publicErr}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
+
             {/* ★★ SAY HOW MANY, not just yes/no — a shared receiver has a number, and this row is
                    the host's whole view of who is on. `listeners` and `client` come from the same
                    count in the shim (specListenerCount), so they cannot disagree with the admin
@@ -835,8 +968,12 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           title="RTL-TCP" tag="Compatible"
           desc="Raw IQ, maximum compatibility. Needs a fast, stable network. No PIN." />
 
-        {/* Shared: advertised name */}
-        <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>ADVERTISED NAME</Text>
+        {/* ★★ "LOCAL NAME", not "advertised name" — it names this server ON THIS NETWORK, and
+            the .local address is derived from it. It was renamed when public listing arrived
+            (Stuart, 2026-08-22): with a PUBLIC name a few rows below, "advertised" no longer said
+            WHICH audience, and two name boxes that both claim to be the advertised one is exactly
+            the ambiguity that makes somebody type their callsign into the wrong one. */}
+        <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>LOCAL NAME</Text>
         <TextInput value={name} onChangeText={setName}
           placeholder="VibeSDR" placeholderTextColor={C.goldDim}
           style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
@@ -857,77 +994,6 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 (proto === 'rtltcp' ? ' (RTL-TCP has no PIN).' : '.')}
           </Text>
         </View>
-
-        {/* ─── ADVERTISE ON VIBESDR.NET ──────────────────────────────────────────────────
-            ★★★ TWO FIELDS AND NOTHING ELSE (Stuart, 2026-08-22): a public name, and the switch.
-                Everything else the directory needs — the locator, the place, the radios — the
-                server already holds, so asking again would be asking twice.
-            ★★ VibeServer only: RTL-TCP has no landing page, no PIN and no session limits, so it
-               has nothing to put in front of the public. */}
-        {proto === 'vibeserver' && publicSupported ? (
-          <View style={[styles.card, { borderColor: C.border, marginTop: 14 }]}>
-            <Text style={[styles.section, { color: C.textDim, fontFamily: F, marginTop: 0 }]}>
-              ADVERTISE ON VIBESDR.NET
-            </Text>
-            <TextInput value={publicName} onChangeText={setPublicName}
-              editable={!publicOn}
-              placeholder={name || 'My VibeServer'} placeholderTextColor={C.goldDim}
-              style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
-            <View style={[styles.rowBetween, { marginTop: 12 }]}>
-              <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
-                {publicBusy ? 'Working\u2026' : 'List this server publicly'}
-              </Text>
-              <Switch value={publicOn} disabled={publicBusy}
-                onValueChange={async (v) => {
-                  const Local = (NativeModules as any).VibeLocalSDR;
-                  setPublicBusy(true); setPublicErr('');
-                  try {
-                    if (v) {
-                      const nm = (publicName || name || '').trim();
-                      // ★★ An unnamed server must not be listed: the directory would have to fall
-                      //    back to "vibeserver", and every unnamed server would collide on it.
-                      if (nm.length < 2) {
-                        setPublicErr('Give this server a public name first.');
-                        setPublicBusy(false); return;
-                      }
-                      // ★★ THE DIRECTORY NEEDS A MAIDENHEAD SQUARE, and this box accepts a TOWN
-                      //    too ("Northampton"). The server resolves a town to a locator when it
-                      //    starts, so a running server has one; a town typed here and not yet
-                      //    resolved is refused by the directory with a message that says so,
-                      //    which surfaces below rather than failing silently.
-                      // ▶ TODO: read the RESOLVED locator from the shim instead of this raw box.
-                      const st = await Local?.tunnelStart?.(nm, (locCity || '').trim(), 0, '');
-                      const j = st ? JSON.parse(st) : {};
-                      setPublicOn(!!j.address); setPublicAddr(j.address || ''); setPublicErr(j.error || '');
-                    } else {
-                      const st = await Local?.tunnelStop?.('');
-                      const j = st ? JSON.parse(st) : {};
-                      setPublicOn(false); setPublicAddr(''); setPublicErr(j.error || '');
-                    }
-                  } catch (e: any) {
-                    setPublicOn(false);
-                    setPublicErr(String(e?.message || e));
-                  } finally { setPublicBusy(false); }
-                }}
-                trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
-            </View>
-            {publicOn && publicAddr ? (
-              <Text style={[styles.hint, { color: C.green, fontFamily: F, marginTop: 8 }]}>
-                Anyone can listen at {publicAddr} — share that address, it stays the same.
-              </Text>
-            ) : (
-              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
-                Publishes this receiver on vibesdr.net so anyone can find it and listen. Your home
-                address is never published — listeners reach it through a Cloudflare tunnel.
-              </Text>
-            )}
-            {publicErr ? (
-              <Text style={[styles.hint, { color: '#ff5c5c', fontFamily: F, marginTop: 8 }]}>
-                {publicErr}
-              </Text>
-            ) : null}
-          </View>
-        ) : null}
 
         {proto === 'vibeserver' ? (
           <>

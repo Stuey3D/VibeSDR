@@ -899,17 +899,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
      *     happened to the demo on 2026-08-09.
      */
     @ReactMethod
-    fun tunnelStart(name: String, locator: String, port: Int, ownerProxies: String, promise: Promise) {
+    fun tunnelStart(name: String, locator: String, port: Int, ownerProxies: String,
+                    radioModel: String, radioDriver: String, promise: Promise) {
         try {
             VibeTunnel.applyLoopbackTrust(true, ownerProxies)
             VibeTunnel.startTunnel(reactApplicationContext, port) { url ->
                 if (url == null) { promise.resolve(VibeTunnel.statusJson()); return@startTunnel }
-                // ★ Status is what the directory page shows about this receiver. Best effort: a
-                //   listing with no radio detail is still a listing.
-                val status = try {
-                    org.json.JSONObject(VibeLocalSDR.getVibeServerStatus())
-                } catch (_: Throwable) { org.json.JSONObject() }
-                VibeTunnel.publish(reactApplicationContext, name, locator, status)
+                VibeTunnel.publish(reactApplicationContext, name, locator, port, radioModel, radioDriver)
                 promise.resolve(VibeTunnel.statusJson())
             }
         } catch (t: Throwable) { promise.reject("tunnel_start", t) }
