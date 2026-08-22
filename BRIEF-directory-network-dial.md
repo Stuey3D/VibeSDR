@@ -104,6 +104,26 @@ along it are not decoration — they are the only thing telling a visitor that t
 looking at is 86 MHz wide and the band beside it is 1 MHz. A non-linear axis without labels is a
 lie; with them it is a schematic, which is what this should be.
 
+## Landing on it
+
+Stuart: *"when landing on the directory for the first time you would see a bar zoomed out showing
+500 kHz – 1.7 GHz, then zoom it in and out."*
+
+Fully zoomed out is the default, and "fully zoomed out" means **the network's own extent** — not a
+fixed 500 kHz – 1.7 GHz written into the page. That figure is simply what the estate happens to
+reach today; with only the Moto listed the whole dial is the FM broadcast band, and the moment
+somebody lists an HF+ with no restriction it runs down to 1 kHz. The first thing a visitor sees is
+therefore an honest statement of what is on offer right now, at a glance, before they have clicked
+anything.
+
+★★★ AND A REFRESH MUST NOT YANK THE DIAL OUT FROM UNDER SOMEBODY. The page reloads every minute,
+so the extent can change while a visitor is zoomed into 40 m: a server leaves, or one arrives that
+reaches further, and a naive implementation would rescale the axis under their hands mid-drag. The
+zoom window belongs to the VIEWER and survives a refresh; only the parts of it that no longer
+exist are re-drawn as uncovered. It is clamped only when the window ends up entirely outside what
+anybody covers, and then it says so rather than silently jumping somewhere else.
+★ Same rule the list already follows: a refresh must not shut a card somebody opened.
+
 ## The band plan is chosen, not assumed
 
 Stuart, 2026-08-22: *"for the bandplan we have a dropdown to choose region the bandplan should
