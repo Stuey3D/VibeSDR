@@ -67,6 +67,11 @@ object VibeTunnel {
     private const val K_ANT = "pubAntenna"
     private const val K_COV = "pubCoverage"
     private const val K_LOCKED = "pubLocked"
+    /** ★★★ WHEN THIS SHARE ENDS, as an ABSOLUTE time — not how long it was offered for.
+     *  A restore that re-sent "15 minutes" would restart the clock on every reboot, so an offer
+     *  meant to end at nine would quietly run for ever, fifteen minutes at a time. Storing the END
+     *  makes a restart carry the share forward instead of renewing it. 0 = permanent. */
+    private const val K_UNTIL = "pubUntilEpoch"
 
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -400,6 +405,8 @@ object VibeTunnel {
             .putBoolean(K_WANT, true).putString(K_NAME, name).putString(K_GRID, locator)
             .putString(K_MODEL, radioModel).putString(K_DRIVER, radioDriver)
             .putString(K_ANT, antenna).putString(K_COV, coverage).putBoolean(K_LOCKED, locked)
+            .putLong(K_UNTIL, if (shareForSec > 0) (System.currentTimeMillis() / 1000) + shareForSec
+                              else prefs(ctx).getLong(K_UNTIL, 0L))
             .apply()
         startPinging()
         return publishOnce(ctx, name, locator, port, radioModel, radioDriver, antenna, coverage, locked, shareForSec)
@@ -599,6 +606,19 @@ object VibeTunnel {
             if (running.get()) return
             val name = p.getString(K_NAME, "") ?: ""
             if (name.length < 2) return
+            // ★★★ A TEMPORARY SHARE THAT HAS ALREADY ENDED MUST NOT COME BACK. The restore exists
+            //     so a listing survives a reboot — but an OFFER that has run out is not something
+            //     to survive, and re-listing it would be the server contradicting what its owner
+            //     said. The receiver still starts; it simply starts unlisted.
+            val until = p.getLong(K_UNTIL, 0L)
+            val nowSec = System.currentTimeMillis() / 1000
+            if (until > 0 && until <= nowSec) {
+                Log.i(TAG, "temporary share ended while we were away — not re-listing")
+                p.edit().putBoolean(K_WANT, false).apply()
+                return
+            }
+            // ★ What is LEFT of it, never the original length — see K_UNTIL.
+            val remaining = if (until > 0) (until - nowSec) else 0L
             Log.i(TAG, "restoring public listing for \"$name\"")
             applyLoopbackTrust(true, "")
             startTunnel(ctx, port) { url ->
@@ -606,7 +626,7 @@ object VibeTunnel {
                 publish(ctx, name, p.getString(K_GRID, "") ?: "", port,
                         p.getString(K_MODEL, "") ?: "", p.getString(K_DRIVER, "") ?: "",
                         p.getString(K_ANT, "") ?: "", p.getString(K_COV, "") ?: "",
-                        p.getBoolean(K_LOCKED, false), 0)
+                        p.getBoolean(K_LOCKED, false), remaining)
             }
         } catch (t: Throwable) { Log.w(TAG, "restoreIfWanted failed", t) }
     }

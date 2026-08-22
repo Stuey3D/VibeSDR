@@ -964,13 +964,16 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     fun tunnelRepublish(name: String, locator: String, port: Int,
                         radioModel: String, radioDriver: String,
                         antenna: String, coverage: String, locked: Boolean,
-                    shareForSec: Double, promise: Promise) {
+                        shareForSec: Double, promise: Promise) {
         try {
             if (!VibeTunnel.isTunnelRunning() || port <= 0 || name.length < 2) {
                 promise.resolve(VibeTunnel.statusJson()); return
             }
+            // ★ 0 means "leave the share window alone" — the periodic refresh sends that, so it can
+            //   never extend an offer by accident. Only a deliberate change carries a number.
             VibeTunnel.publish(reactApplicationContext, name, locator, port,
-                               radioModel, radioDriver, antenna, coverage, locked)
+                               radioModel, radioDriver, antenna, coverage, locked,
+                               shareForSec.toLong())
             promise.resolve(VibeTunnel.statusJson())
         } catch (t: Throwable) { promise.reject("tunnel_republish", t) }
     }

@@ -526,6 +526,41 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   }, [publicName]);
 
   /**
+   * ★★★ CHANGING THE OFFER WHILE LISTED, rather than making somebody delist to do it.
+   *
+   *     These controls were locked once the switch was on, reasoning that altering an offer under
+   *     people already relying on it should be deliberate. That was wrong in practice: the listing
+   *     RESTORES ITSELF on start, so the lock meant the only way to set a share was to turn
+   *     listing off first — which delists, clears the stored id, and loses the listing (Stuart,
+   *     2026-08-22: "by default the public mode automatically enables and I have to disable it
+   *     straight away to be able to flip the temporary toggle").
+   *
+   * ★★ ONLY ON A DELIBERATE CHANGE. The periodic refresh sends "unchanged" for the share window,
+   *    so it can never extend an offer by accident — an offer that renewed itself every couple of
+   *    minutes would never end, which is the one thing a temporary share must not do.
+   * ★ Skips the first run: mounting is not somebody changing their mind.
+   */
+  const shareTouched = useRef(false);
+  useEffect(() => {
+    if (!shareTouched.current) { shareTouched.current = true; return; }
+    if (!publicOn || !running?.port) return;
+    const nm = (publicName || name || '').trim();
+    if (nm.length < 2) return;
+    void (async () => {
+      try {
+        const where = await getResolvedServerLocation();
+        const cov = (allowRanges || '').split(',').map((t) => t.trim()).filter(Boolean)
+                      .map((t) => bands.find((b) => b.id === t)?.label || t).join(', ');
+        await (NativeModules as any).VibeLocalSDR?.tunnelRepublish?.(
+          nm, where?.grid || '', running.port, radio?.model || '', radio?.driver || '',
+          (antenna || '').trim(), cov, radioUse === 'locked',
+          publicTemp ? shareSeconds() : 0);
+      } catch { /* the listing keeps the window it had */ }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publicTemp, publicForN, publicForU]);
+
+  /**
    * ★★★ CORRECT A LISTING THAT RESTORED ITSELF. When the server comes back on its own the tunnel
    *     is re-established from values stored the last time the switch was flicked BY HAND — there
    *     is no UI to ask, which is exactly what makes a headless restore possible. The cost is that
@@ -558,7 +593,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         republished.current = sig;
         await (NativeModules as any).VibeLocalSDR?.tunnelRepublish?.(
           nm, where?.grid || '', running.port, radio?.model || '', radio?.driver || '',
-          (antenna || '').trim(), cov, radioUse === 'locked');
+          // ★ 0 = leave the share window alone. This runs on a timer, and an offer that renewed
+          //   itself every couple of minutes would never end.
+          (antenna || '').trim(), cov, radioUse === 'locked', 0);
       } catch { /* the listing simply keeps what it had */ }
     })();
     // ★★ AND CHECK AGAIN ON A SLOW BEAT. Every other input here changes because somebody typed
@@ -916,13 +953,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
                   Temporary — ends by itself
                 </Text>
-                <Switch value={publicTemp} disabled={publicOn} onValueChange={setPublicTemp}
+                <Switch value={publicTemp} disabled={publicBusy} onValueChange={setPublicTemp}
                   trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
               </View>
               {publicTemp ? (
                 <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, alignItems: 'center' }}>
                   <TextInput value={publicForN} onChangeText={setPublicForN}
-                    editable={!publicOn} keyboardType="number-pad"
+                    editable={!publicBusy} keyboardType="number-pad"
                     placeholder="1" placeholderTextColor={C.goldDim}
                     style={[styles.input, { flex: 1, color: C.amber, borderColor: C.border, fontFamily: F }]} />
                   {/* ★ Pills, not a native picker: five choices, and a picker would be the only one
@@ -930,7 +967,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   <View style={{ flex: 3, flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
                     {(['minutes', 'hours', 'days', 'weeks', 'months'] as const).map((u) => (
                       <Pill key={u} C={C} F={F} active={publicForU === u} label={u}
-                        onPress={() => { if (!publicOn) setPublicForU(u); }} />
+                        onPress={() => { if (!publicBusy) setPublicForU(u); }} />
                     ))}
                   </View>
                 </View>
