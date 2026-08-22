@@ -76,6 +76,17 @@ set(AIRSPYHF_SRC
 add_library(vibelocalsdr SHARED
     vibe_localsdr_jni.cpp local_sdr_shim.cpp net_shim.cpp rtl_tcp_server.cpp
     mdns_responder.cpp
+    # ★★★ COUNTRY AND NETWORK LOOKUP — THE SAME FILES THE DAEMON USES, not a copy. The admin page
+    #     said "No country data yet" on Android for ever, and the Network column read "unknown",
+    #     because these two were only ever compiled into the Linux/macOS daemon (Stuart,
+    #     2026-08-22: "it should be built the same way as the Linux version which works").
+    # ★★ Their DOWNLOAD half cannot work here — both shell out to curl, and asndb to gunzip — so
+    #    the app fetches and calls geoip::ingest / asndb::ingest instead. That is the same division
+    #    of labour as the EiBi schedule, which the app has always downloaded on this platform.
+    # ★ Referenced in place rather than copied: one parser, one band of behaviour, and no second
+    #   file to drift.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../vibeserver/geoip.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../vibeserver/asndb.cpp
     # ★ SCM_RIGHTS hand-off — how the front-door process gives an accepted socket to the radio.
     #   Full mode does not link without it, and nothing else references it, so its absence is
     #   invisible until the day Full mode is switched on.

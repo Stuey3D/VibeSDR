@@ -209,6 +209,35 @@ bool load() {
 int count() { std::lock_guard<std::mutex> lk(g_mtx); return (int)(g_v4.size() + g_v6.size()); }
 long long updated() { std::lock_guard<std::mutex> lk(g_mtx); return g_updated; }
 
+/**
+ * ★★★ PARSE FILES SOMEBODY ELSE DOWNLOADED — see the note on asndb::ingest. curl does not exist
+ *     on Android, so the app fetches the five registry files and hands them over; the daemon
+ *     fetches them itself and calls the same code.
+ * ★ One registry missing must not lose the rest, exactly as in refresh(): a partial set is a
+ *   worse answer than a complete one and a far better answer than none.
+ */
+/** ★ The registries this data comes from — published so a host that must do its own downloading
+ *  (Android, where curl does not exist) fetches exactly what refresh() would have. Two copies of
+ *  a URL list is how one of them quietly goes stale. */
+std::vector<std::string> sources() {
+    std::vector<std::string> v;
+    for (const char* u : kSources) v.push_back(u);
+    return v;
+}
+
+bool ingest(const std::vector<std::string>& files, std::string& err) {
+    if (files.empty()) { err = "no registry files given"; return false; }
+    {
+        std::lock_guard<std::mutex> lk(g_mtx);
+        for (const auto& f : files) parseFile(f);
+        if (g_v4.empty()) { err = "no usable records in those files"; return false; }
+        sortAndMerge();
+        g_updated = (long long)time(nullptr);
+        saveCache();
+    }
+    return true;
+}
+
 bool refresh(std::string& err) {
     std::vector<std::string> got;
     for (const char* url : kSources) {

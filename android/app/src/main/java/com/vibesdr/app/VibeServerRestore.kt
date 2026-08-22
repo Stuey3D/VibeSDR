@@ -109,6 +109,7 @@ object VibeServerRestore {
         //     is re-established here where the port it needs has just been bound.
         // ★ Never allowed to fail the start: restoreIfWanted swallows everything.
         if (port > 0) VibeTunnel.restoreIfWanted(ctx, port)
+        if (port > 0) VibeGeoData.start(ctx)
         if (port <= 0) {
             VibeLocalSDR.setServeOnLan(false)
             conn.close()

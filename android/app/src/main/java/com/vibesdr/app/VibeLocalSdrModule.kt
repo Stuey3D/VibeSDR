@@ -337,6 +337,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         //     not a one-off action, so it is re-established here where the port has just been
         //     bound. ★ Never allowed to fail the start: restoreIfWanted swallows everything.
         if (port > 0) VibeTunnel.restoreIfWanted(reactApplicationContext, port)
+        // ★★ COUNTRY AND NETWORK LOOKUP, wired up and refreshed if stale. Idempotent and cheap
+        //    unless a download is actually needed — see VibeGeoData.
+        if (port > 0) VibeGeoData.start(reactApplicationContext)
         if (port <= 0) {
             VibeLocalSDR.setServeOnLan(false)
             conn.close(); sessionConn = null

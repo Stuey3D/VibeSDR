@@ -170,6 +170,20 @@ object VibeLocalSDR {
      *  EVERY visitor arrives as 127.0.0.1 — which counts as the owner, silently switching off the
      *  session limit and leaving the ban list unable to tell two people apart. */
     fun setTrustedProxies(csv: String) { ensureLoaded(); nativeSetTrustedProxies(csv) }
+    // ── Country and network lookup ────────────────────────────────────────────────────────────
+    /** Point the lookups at the app's files dir, load any cache, and wire them into the shim. */
+    fun geoInit(dir: String) { ensureLoaded(); nativeGeoInit(dir) }
+    /** Is the data missing or older than `days`? */
+    fun geoStale(days: Int): Boolean { ensureLoaded(); return nativeGeoStale(days) }
+    /** The URLs to fetch, newline separated: ASN first (gzipped TSV), then the five registries. */
+    fun geoSources(): String { ensureLoaded(); return nativeGeoSources() }
+    /** Parse downloaded files (newline separated, same order). Returns "" or a problem summary. */
+    fun geoIngest(paths: String): String { ensureLoaded(); return nativeGeoIngest(paths) }
+    private external fun nativeGeoInit(dir: String)
+    private external fun nativeGeoStale(days: Int): Boolean
+    private external fun nativeGeoSources(): String
+    private external fun nativeGeoIngest(paths: String): String
+
     /** ★ The directory's shared secret — see dirProofFor() in the shim. */
     fun setDirectoryKey(key: String) { ensureLoaded(); nativeSetDirectoryKey(key) }
     private external fun nativeSetDirectoryKey(key: String)

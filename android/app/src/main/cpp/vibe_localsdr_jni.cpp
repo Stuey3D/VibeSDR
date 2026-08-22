@@ -13,6 +13,9 @@
 #include <vector>
 #include <rtl-sdr.h>
 #include "local_sdr_shim.h"
+// ★ The daemon's own country/network lookup, compiled in here too — see the CMakeLists note.
+#include "../../../../../vibeserver/geoip.h"
+#include "../../../../../vibeserver/asndb.h"
 #include "vibe_bands.h"   // the server's own band list, shared with the limiter
 #include "rtl_tcp_server.h"
 
@@ -717,6 +720,73 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetTrustedProxies(JNIEnv* env, jobject, 
     const char* c = csv ? env->GetStringUTFChars(csv, nullptr) : nullptr;
     vibe::LocalSdrShim::setTrustedProxies(c ? c : "");
     if (c) env->ReleaseStringUTFChars(csv, c);
+}
+
+/**
+ * ★★★ WHERE THE COUNTRY AND NETWORK DATA LIVES, AND WIRING IT INTO THE SHIM.
+ *
+ * The shim asks a HANDLER for both — it holds no data itself — and on Android nobody ever
+ * registered one, which is the whole reason the admin page said "No country data yet" and every
+ * listener's network read "unknown". The daemon registers exactly these two lambdas
+ * (main.cpp:2392); this is the same wiring on the other platform.
+ *
+ * ★★ Called with the app's files directory, which is the only place an Android process may write.
+ */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeGeoInit(JNIEnv* env, jobject, jstring dir) {
+    const char* d = dir ? env->GetStringUTFChars(dir, nullptr) : nullptr;
+    if (d) {
+        geoip::setDir(d);
+        asndb::setDir(d);
+        geoip::load();          // ★ absent on a fresh install; the app then downloads
+        asndb::load();
+    }
+    if (d) env->ReleaseStringUTFChars(dir, d);
+    vibe::LocalSdrShim::setGeoIpHandler([](const std::string& ip) { return geoip::lookup(ip); });
+    vibe::LocalSdrShim::setAsnHandler([](const std::string& ip, uint32_t& asn, std::string& name) {
+        return asndb::lookup(ip, asn, name);
+    });
+}
+
+/** Is the cache missing or older than `days`? The app uses this to decide whether to download. */
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeGeoStale(JNIEnv*, jobject, jint days) {
+    return (geoip::stale(days) || asndb::stale(days)) ? JNI_TRUE : JNI_FALSE;
+}
+
+/** ★ The URLs the parser expects, newline separated — so the app cannot fetch from somewhere else.
+ *  First line is the ASN source (gzipped); the rest are the five registry files. */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeGeoSources(JNIEnv* env, jobject) {
+    std::string out = asndb::source();
+    for (const auto& u : geoip::sources()) out += "\n" + u;
+    return env->NewStringUTF(out.c_str());
+}
+
+/** Parse what the app downloaded. `files` is newline separated, same order as nativeGeoSources. */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeGeoIngest(JNIEnv* env, jobject, jstring files) {
+    const char* c = files ? env->GetStringUTFChars(files, nullptr) : nullptr;
+    std::string all = c ? c : "";
+    if (c) env->ReleaseStringUTFChars(files, c);
+
+    std::vector<std::string> paths;
+    size_t start = 0;
+    while (start <= all.size()) {
+        const size_t nl = all.find('\n', start);
+        const std::string one = all.substr(start, nl == std::string::npos ? std::string::npos : nl - start);
+        if (!one.empty()) paths.push_back(one);
+        if (nl == std::string::npos) break;
+        start = nl + 1;
+    }
+    if (paths.empty()) return env->NewStringUTF("nothing to ingest");
+
+    std::string err, problems;
+    // ★ ASN first (line one), then the registries — one failing must not lose the other.
+    if (!asndb::ingest(paths[0], err)) problems += "asn: " + err + "; ";
+    std::vector<std::string> rirs(paths.begin() + 1, paths.end());
+    if (!rirs.empty() && !geoip::ingest(rirs, err)) problems += "geoip: " + err;
+    return env->NewStringUTF(problems.c_str());
 }
 
 /** ★ The key the public directory issued us, so /vibeserver.json can answer its challenge and

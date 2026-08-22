@@ -18,6 +18,13 @@ bool load();
 
 /** Download and rebuild. ~9 MB compressed, ~43 MB of text — never call this on a request. */
 bool refresh(std::string& err);
+/** Rebuild from a decompressed TSV already on disk — the app downloads and gunzips it where
+ *  neither curl nor gunzip exists. See asndb.cpp. */
+bool ingest(const std::string& tsvPath, std::string& err);
+
+/** The source URL refresh() uses, for a host that downloads it itself (gzipped TSV). */
+std::string source();
+
 
 bool stale(int maxAgeDays);
 

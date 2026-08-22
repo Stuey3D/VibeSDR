@@ -156,23 +156,19 @@ bool stale(int maxAgeDays) {
     return (time(nullptr) - g_updated) > (long long)maxAgeDays * 86400;
 }
 
-bool refresh(std::string& err) {
-    // ★ Make the directory before writing into it. eibi.cpp already did; these two
-    //   assumed it existed, so a fresh install (or a test pointing at a new path) failed
-    //   with "No such file or directory" wearing a curl download error as its message.
-    ::mkdir(g_dir.c_str(), 0755);
-    const std::string tsv = g_dir + "/asn.tsv.tmp";
-    // ★ curl piped through gunzip: the daemon has no zlib linked and this is a once-a-week fetch.
-    //   Same reasoning as eibi.cpp shelling out to curl rather than growing an HTTP stack.
-// ★★★ QUOTE THE PATH. macOS's data directory is "~/Library/Application Support/VibeServer"
-    //     — it contains a SPACE, so an unquoted path splits and curl read "Support" as a
-    //     HOSTNAME: `curl: (6) Could not resolve host: Support`. The URL was already quoted;
-    //     the destination was not, and only a platform whose standard directory has a space
-    //     in it ever shows the difference (Stuart, 2026-08-11, on macOS).
-    const std::string cmd = "curl -fsSL --max-time 180 '" + std::string(kUrl)
-                          + "' | gunzip -c > '" + tsv + "' 2>/dev/null";
-    if (std::system(cmd.c_str()) != 0) { err = "download failed"; remove(tsv.c_str()); return false; }
+/**
+ * ★★★ PARSE A TSV SOMEBODY ELSE OBTAINED. refresh() below fetches with curl and pipes through
+ *     gunzip, and ANDROID HAS NEITHER — the same reason eibi.cpp's schedule is downloaded by
+ *     the app on the phone and handed to the shim rather than fetched by it. Splitting the
+ *     download from the parse lets one implementation serve both: the daemon fetches for itself,
+ *     the app fetches and calls this.
+ * ★ Either way the argument is the DECOMPRESSED file; where it came from is not this code's
+ *   business, and pretending otherwise is what would need two copies of the parser.
+ */
+/** ★ The one source URL, published for the same reason as geoip::sources(). */
+std::string source() { return kUrl; }
 
+bool ingest(const std::string& tsv, std::string& err) {
     FILE* f = fopen(tsv.c_str(), "r");
     if (!f) { err = "could not read the download"; return false; }
 
@@ -226,6 +222,29 @@ bool refresh(std::string& err) {
     g_updated = (long long)time(nullptr);
     saveCache();
     return true;
+}
+
+bool refresh(std::string& err) {
+    // ★ Make the directory before writing into it. eibi.cpp already did; these two
+    //   assumed it existed, so a fresh install (or a test pointing at a new path) failed
+    //   with "No such file or directory" wearing a curl download error as its message.
+    ::mkdir(g_dir.c_str(), 0755);
+    const std::string tsv = g_dir + "/asn.tsv.tmp";
+    // ★ curl piped through gunzip: the daemon has no zlib linked and this is a once-a-week fetch.
+    //   Same reasoning as eibi.cpp shelling out to curl rather than growing an HTTP stack.
+// ★★★ QUOTE THE PATH. macOS's data directory is "~/Library/Application Support/VibeServer"
+    //     — it contains a SPACE, so an unquoted path splits and curl read "Support" as a
+    //     HOSTNAME: `curl: (6) Could not resolve host: Support`. The URL was already quoted;
+    //     the destination was not, and only a platform whose standard directory has a space
+    //     in it ever shows the difference (Stuart, 2026-08-11, on macOS).
+    const std::string cmd = "curl -fsSL --max-time 180 '" + std::string(kUrl)
+                          + "' | gunzip -c > '" + tsv + "' 2>/dev/null";
+    if (std::system(cmd.c_str()) != 0) { err = "download failed"; remove(tsv.c_str()); return false; }
+
+
+    const bool ok = ingest(tsv, err);
+    remove(tsv.c_str());
+    return ok;
 }
 
 bool lookup(const std::string& ip, uint32_t& asn, std::string& name) {

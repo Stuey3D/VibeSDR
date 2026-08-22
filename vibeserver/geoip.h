@@ -3,6 +3,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace geoip {
 
@@ -15,6 +16,13 @@ bool load();
 /** Download all five registry files and rebuild the cache. Slow (tens of MB) — call it off the
  *  DSP thread and never on a request. */
 bool refresh(std::string& err);
+/** Rebuild from files ALREADY on disk — the app downloads them where curl does not exist.
+ *  See geoip.cpp. */
+bool ingest(const std::vector<std::string>& files, std::string& err);
+
+/** The registry URLs refresh() uses, for a host that downloads them itself. */
+std::vector<std::string> sources();
+
 
 /** Is the cache missing or older than `maxAgeDays`? */
 bool stale(int maxAgeDays);
