@@ -582,6 +582,8 @@ static std::mutex          g_vsTuneLimitMtx;
 static std::string         g_vsAllowCsv, g_vsBlockCsv;
 static vibebands::Ranges   g_vsPermitted;      // empty = no restriction beyond the hardware
 static vibebands::Ranges vsPermittedRanges(const vibebands::Ranges& hardware);   // defined below
+static vibebands::Ranges vsTunableRanges();                                      // defined below
+static std::string vsTunableJson();                                              // defined below
 
 static std::atomic<bool>   g_vsProvidesSpectrogram{false};
 static std::atomic<bool>   g_vsRfNotch{false};
@@ -8243,6 +8245,12 @@ struct LocalSdrShim::Impl {
                              // the visitor to read it off the spectrogram axis (Stuart, 2026-08-06).
                              // ★ 0 when the centre is not locked — a free-running dongle has no
                              //   fixed range to promise, and inventing one would be a lie.
+                             // ★★★ AND WHAT IT CAN BE TUNED TO, so a directory can answer
+                             //     "who can hear 1467 kHz?" without opening a socket to every
+                             //     server on its list. Ranges in Hz, already narrowed by the
+                             //     owner's lists and by a locked window — see vsTunableRanges.
+                             //  ★ Omitted entirely when we cannot say, never guessed.
+                             + vsTunableJson()
                              + ",\"instance\":\"" + vsInstanceId() + "\""
                              // ★ The directory's challenge, answered only when it asks and only
                              //   when we hold a key. Absent otherwise, which is every ordinary
@@ -13456,6 +13464,50 @@ void LocalSdrShim::setVibeServerTuneLimits(const std::string& allowCsv, const st
 
 /** The permitted set for THIS radio, hardware coverage included. Recomputed when the lists change
  *  or the coverage is first known — the driver may not have reported it when the lists arrived. */
+/**
+ * ★★★ WHAT A LISTENER MAY ACTUALLY TUNE ON THIS RECEIVER, as a set of ranges in Hz.
+ *
+ *  This is the question a directory search asks — "which servers can hear 1467 kHz?" — and it is
+ *  NOT the hardware's reach. Three different walls can stand between a listener and a frequency:
+ *  the radio cannot reach it, the owner has blocked it, or the receiver is locked to a window. A
+ *  search that ignored the last two would send people to servers that refuse them (Stuart,
+ *  2026-08-22, asking for "a frequency range to search").
+ *
+ *  ★★ A LOCKED WINDOW WINS OUTRIGHT. A shared receiver IS its window — nobody can retune it, so
+ *     its tunable set is that window and nothing else, whatever the dongle could otherwise hear.
+ *  ★ Empty when the driver is unknown, and empty means "we cannot say" — never "everything". The
+ *    caller must omit the field rather than publish a span nobody promised, the same rule the gain
+ *    readouts follow: if the driver cannot tell us, show nothing.
+ */
+static vibebands::Ranges vsTunableRanges() {
+    const double lockC = g_vsLockedCentre.load(), lockR = g_vsLockedRate.load();
+    if (lockC > 0.0 && lockR > 0.0)
+        return { { lockC - lockR / 2.0, lockC + lockR / 2.0 } };
+
+    auto& shim = LocalSdrShim::instance();
+    const std::string drv = shim.isSdrplay() ? "sdrplay" : shim.isAirspyHf() ? "airspyhf" : "rtl";
+    const vibebands::Ranges hw = vibebands::driverCoverage(drv);
+    if (hw.empty()) return {};
+    // ★ vsPermittedRanges returns EMPTY to mean "the owner set no lists", which is the opposite of
+    //   "nothing is permitted" — so an empty answer falls back to the hardware, never to silence.
+    const vibebands::Ranges perm = vsPermittedRanges(hw);
+    return perm.empty() ? hw : perm;
+}
+
+/** The two directory fields, from ONE evaluation of the set — `tunable` in Hz and `bands` in the
+ *  band plan's own words. Computed together because they are two readings of the same fact, and
+ *  two evaluations of a set that depends on a live lock state can disagree. */
+static std::string vsTunableJson() {
+    const vibebands::Ranges t = vsTunableRanges();
+    if (t.empty()) return {};
+    std::string j = ",\"tunable\":" + vibebands::toJson(t);
+    // ★ The same ranges in WORDS where the plan has words for them — "FM broadcast" is what a
+    //   listener searches for, and the plan that knows the names is region-aware and lives here.
+    const std::string names = vibebands::labelsJson(t, vibebands::defaultRegion());
+    if (names != "[]") j += ",\"bands\":" + names;
+    return j;
+}
+
 static vibebands::Ranges vsPermittedRanges(const vibebands::Ranges& hardware) {
     std::lock_guard<std::mutex> lk(g_vsTuneLimitMtx);
     if (g_vsAllowCsv.empty() && g_vsBlockCsv.empty()) return {};

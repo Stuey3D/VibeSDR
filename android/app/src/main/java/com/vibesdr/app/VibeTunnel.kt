@@ -289,6 +289,18 @@ object VibeTunnel {
         val out = JSONObject()
         val radios = JSONArray()
 
+        // ★★ READ ONCE, USED TWICE. /vibeserver.json carries both the counts and what this
+        //    receiver can be tuned to, and the radio entries below need the second half — so it is
+        //    fetched here rather than after the list is already built.
+        val ident: JSONObject? = try {
+            val req = Request.Builder().url("http://127.0.0.1:$port/vibeserver.json")
+                .header("User-Agent", "VibeServer-directory").build()
+            JSONObject(http.newCall(req).execute().use { it.body?.string() ?: "" })
+        } catch (t: Throwable) {
+            Log.w(TAG, "could not read /vibeserver.json: ${t.message}")
+            null
+        }
+
         // ★ The multi-radio front door. Populated on a machine running several receivers behind
         //   one door; EMPTY on a phone in Simple mode, which holds exactly one radio itself.
         try {
@@ -307,7 +319,19 @@ object VibeTunnel {
                     put("mode", r.optString("mode"))
                     put("shared", r.optBoolean("locked", false))
                     put("restricted", r.optBoolean("restricted", false))
-                    put("coverage", r.optJSONArray("coverage") ?: JSONArray())
+                    // ★★★ THE FRONT DOOR'S `coverage` IS NUMBERS, AND THE DIRECTORY'S IS WORDS.
+                    //     Two different vocabularies behind one key: /vibeserver/radios sends
+                    //     [[500,31000000]] as `coverage` and the band NAMES as `allowedNames`,
+                    //     while the directory page joins `coverage` as text. Passing it straight
+                    //     through would have printed "500,31000000" on the card of every
+                    //     multi-radio server — the Pi and the Mac — the day one first listed. It
+                    //     has never been seen only because the phone takes the branch below.
+                    put("coverage", r.optJSONArray("allowedNames") ?: JSONArray())
+                    // ★★ AND THE NUMBERS TRAVEL SEPARATELY, under a key that means numbers. What
+                    //    the owner PERMITS, falling back to the hardware's reach where no lists
+                    //    are set — a search must not offer a band the operator has blocked.
+                    put("ranges", r.optJSONArray("allowed")
+                        ?: r.optJSONArray("coverage") ?: JSONArray())
                 })
             }
         } catch (t: Throwable) {
@@ -333,7 +357,14 @@ object VibeTunnel {
                 put("shared", locked)
                 // ★ What this radio is actually allowed to tune, when the owner has narrowed it —
                 //   "FM broadcast" is far more use to a listener than a frequency pair.
+                // ★ Prefer the owner's own words for the band; fall back to the names the
+                //   server derived from its band plan, which is what an unrestricted radio has.
+                val bands = ident?.optJSONArray("bands")
                 if (coverage.isNotEmpty()) put("coverage", JSONArray().put(coverage))
+                else if (bands != null && bands.length() > 0) put("coverage", bands)
+                // ★★ WHAT IT CAN BE TUNED TO, in Hz — see vsTunableRanges in the shim. Absent when
+                //    the server could not say, and absent must never be read as "anything".
+                ident?.optJSONArray("tunable")?.let { put("ranges", it) }
             })
         }
         out.put("radios", radios)
@@ -342,10 +373,7 @@ object VibeTunnel {
         //    vibesdr.net demo card reads. Same numbers everywhere, rather than a second opinion
         //    assembled from the bridge.
         try {
-            val req = Request.Builder().url("http://127.0.0.1:$port/vibeserver.json")
-                .header("User-Agent", "VibeServer-directory").build()
-            val body = http.newCall(req).execute().use { it.body?.string() ?: "" }
-            val j = JSONObject(body)
+            val j = ident ?: JSONObject()
             out.put("listeners", j.optInt("listeners", 0))
             out.put("maxListeners", j.optInt("maxUsers", 1))
             out.put("freeInSec", j.optInt("freeInSec", -1))

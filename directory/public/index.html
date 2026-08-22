@@ -101,6 +101,26 @@
   .tag.temp { color: var(--temp); border-color: var(--temp); }
   .empty { color: var(--dim); text-align: center; padding: 40px 20px; }
   .empty code { background: var(--panel); padding: 2px 6px; border-radius: 4px; color: var(--accent); }
+  .filters { padding: 10px 20px; border-bottom: 1px solid var(--line);
+             display: flex; flex-direction: column; gap: 8px; }
+  .fRow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .fRow label { color: var(--dim); font-size: 12px; }
+  /* ★ A chip is a button, and must look pressable and read as pressed — the whole control is
+     useless if you cannot see which bands are on. */
+  .chip { font-size: 12px; padding: 4px 10px; border-radius: 20px; cursor: pointer;
+          border: 1px solid var(--line); background: none; color: var(--fg); }
+  .chip:hover { border-color: var(--accent); }
+  .chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent);
+                               background: rgba(96,165,250,.12); }
+  .chip .n { color: var(--dim); margin-left: 6px; }
+  .chip[aria-pressed="true"] .n { color: inherit; }
+  #freq { background: #0d1520; border: 1px solid var(--line); border-radius: 6px;
+          color: var(--fg); padding: 5px 9px; font-size: 13px; width: 170px; }
+  #freq:focus { outline: none; border-color: var(--accent); }
+  .fNote { color: var(--dim); font-size: 12px; }
+  .fClear { font-size: 12px; background: none; border: 1px solid var(--line);
+            color: var(--dim); border-radius: 6px; padding: 4px 9px; cursor: pointer; }
+  .fClear:hover { color: var(--fg); border-color: var(--accent); }
   a { color: var(--accent); }
   footer { color: var(--dim); font-size: 12px; text-align: center; padding: 0 20px 30px; }
 </style>
@@ -120,6 +140,21 @@
        while nothing could produce the state, which is the only reason a key entry should exist. -->
   <span><i class="sh-temp"></i>Temporary share</span>
   <span style="margin-left:auto" id="count"></span>
+</div>
+
+<!-- ★★ FILTERS ABOVE THE MAP, because they filter the map too. A control that changes what the
+        pins show, placed below them, gets found after the visitor has already decided the
+        directory is small. -->
+<div class="filters" id="filters" hidden>
+  <div class="fRow" id="bandChips"></div>
+  <div class="fRow">
+    <label for="freq">Can hear</label>
+    <input id="freq" type="text" inputmode="decimal" autocomplete="off"
+           placeholder="99.9 MHz, 1467 kHz, 14.2&hellip;">
+    <span class="fNote" id="freqNote"></span>
+    <button class="fClear" id="clear" hidden>Clear</button>
+  </div>
+  <div class="fNote" id="filterSummary"></div>
 </div>
 
 <div id="map"></div>
@@ -327,16 +362,164 @@ function serverBlock(s) {
   </details>`;
 }
 
-function render(servers) {
-  document.getElementById('count').textContent =
-    servers.length ? `${servers.length} server${servers.length === 1 ? '' : 's'} online` : '';
 
+/* ══ FILTERING ═══════════════════════════════════════════════════════════════════════════════
+ * ★★★ EVERY BAND NAME ON THIS PAGE COMES FROM A SERVER. There is no band table here and there
+ *     must never be one: the servers name their bands from their OWN region-aware plan, so medium
+ *     wave ends at 1606.5 kHz in Region 1 and 1705 in Region 2 and the chip says whatever the
+ *     server that owns the receiver called it. A list hardcoded here would drift the moment a plan
+ *     changed, and would invent bands for radios nobody has told us about.
+ * ★★ The chips are therefore DERIVED from what is listed, so a band with nobody on it does not
+ *    appear — the directory never offers a filter that can only return nothing.
+ */
+let ALL = [];                       // every listing, unfiltered — the filters never refetch
+const bandsOn = new Set();
+let freqHz = 0;
+
+/** Bands a server can offer, as words, across all its radios. */
+function bandsOf(s) {
+  const out = new Set();
+  for (const r of (s.radios || []))
+    for (const c of (Array.isArray(r.coverage) ? r.coverage : []))
+      if (typeof c === 'string' && c.trim()) out.add(c.trim());
+  return out;
+}
+
+/** ★ Ranges as published, defended against a server sending nonsense: this is the one place the
+ *    page does arithmetic on something another machine said. */
+function rangesOf(s) {
+  const out = [];
+  for (const r of (s.radios || []))
+    for (const p of (Array.isArray(r.ranges) ? r.ranges : [])) {
+      const lo = Number(Array.isArray(p) ? p[0] : NaN), hi = Number(Array.isArray(p) ? p[1] : NaN);
+      if (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo) out.push([lo, hi]);
+    }
+  return out;
+}
+
+/**
+ * ★★★ A BARE NUMBER IS AMBIGUOUS, SO THE PAGE SAYS WHAT IT DECIDED. "1467" is medium wave in kHz
+ *     to one person and 1467 MHz to another, and silently picking one produces a search that
+ *     returns the wrong servers and looks broken. MHz is the radio convention for a bare figure,
+ *     so that is the assumption — and the interpretation is ECHOED back ("searching 1.467 MHz"),
+ *     which turns a wrong guess into something the visitor can see and correct rather than a
+ *     mystery.
+ * ★ A unit, when given, always wins.
+ */
+function parseFreq(text) {
+  const t = String(text || '').trim().toLowerCase().replace(/,/g, '');
+  if (!t) return 0;
+  const m = t.match(/^([0-9]*\.?[0-9]+)\s*(ghz|mhz|khz|hz|g|m|k)?$/);
+  if (!m) return NaN;                                   // not a frequency — say so, do not ignore
+  const n = parseFloat(m[1]);
+  if (!Number.isFinite(n) || n <= 0) return NaN;
+  const mult = { ghz: 1e9, g: 1e9, mhz: 1e6, m: 1e6, khz: 1e3, k: 1e3, hz: 1 }[m[2] || 'mhz'];
+  return n * mult;
+}
+
+function prettyHz(hz) {
+  if (hz >= 1e9) return `${(hz / 1e9).toFixed(3).replace(/\.?0+$/, '')} GHz`;
+  if (hz >= 1e6) return `${(hz / 1e6).toFixed(3).replace(/\.?0+$/, '')} MHz`;
+  if (hz >= 1e3) return `${(hz / 1e3).toFixed(3).replace(/\.?0+$/, '')} kHz`;
+  return `${Math.round(hz)} Hz`;
+}
+
+/** ★ Bands are OR (an FM-DXer wants FM servers), the frequency box is AND (it narrows further). */
+function matches(s) {
+  if (bandsOn.size) {
+    const have = bandsOf(s);
+    let hit = false;
+    for (const b of bandsOn) if (have.has(b)) { hit = true; break; }
+    if (!hit) return false;
+  }
+  if (freqHz > 0) {
+    const rs = rangesOf(s);
+    if (!rs.length) return false;      // ★ cannot say ⇒ cannot match. Counted and reported below.
+    if (!rs.some(([lo, hi]) => freqHz >= lo && freqHz <= hi)) return false;
+  }
+  return true;
+}
+
+function renderChips() {
+  const counts = new Map();
+  for (const s of ALL) for (const b of bandsOf(s)) counts.set(b, (counts.get(b) || 0) + 1);
+  const box = document.getElementById('bandChips');
+  // ★ Commonest first, then alphabetical — a stable order that needs no knowledge of where a band
+  //   sits in the spectrum, which is knowledge this page deliberately does not have.
+  const bands = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  box.innerHTML = bands.map(([b, n]) =>
+    `<button class="chip" type="button" aria-pressed="${bandsOn.has(b)}" data-band="${esc(b)}">
+       ${esc(b)}<span class="n">${n}</span></button>`).join('');
+  for (const el of box.querySelectorAll('.chip')) {
+    el.addEventListener('click', () => {
+      const b = el.dataset.band;
+      if (bandsOn.has(b)) bandsOn.delete(b); else bandsOn.add(b);
+      renderChips(); applyFilters();
+    });
+  }
+  // ★ Hidden entirely when there is nothing to choose between — one band and one server is a
+  //   control that can only ever be a no-op.
+  document.getElementById('filters').hidden = ALL.length < 2 && bands.length < 2;
+}
+
+function applyFilters() {
+  const shown = ALL.filter(matches);
+  const active = bandsOn.size > 0 || freqHz > 0;
+  document.getElementById('clear').hidden = !active;
+
+  const sum = document.getElementById('filterSummary');
+  if (!active) sum.textContent = '';
+  else {
+    // ★★ A SERVER THAT NEVER PUBLISHED A RANGE IS NOT A SERVER THAT CANNOT HEAR YOU. Older
+    //    servers say nothing about what they can tune, and silently dropping them would make the
+    //    directory look smaller than it is — so they are counted and named, not hidden.
+    const mute = freqHz > 0 ? ALL.filter((s) => !rangesOf(s).length).length : 0;
+    sum.textContent = `Showing ${shown.length} of ${ALL.length} servers.`
+      + (mute ? ` ${mute} ${mute === 1 ? 'has' : 'have'} not published a tuning range and cannot`
+                + ` be matched by frequency.` : '');
+  }
+  render(shown, active);
+}
+
+document.getElementById('freq').addEventListener('input', (e) => {
+  const hz = parseFreq(e.target.value);
+  const note = document.getElementById('freqNote');
+  if (Number.isNaN(hz)) { note.textContent = 'not a frequency'; freqHz = 0; }
+  else if (hz > 0) { note.textContent = `searching ${prettyHz(hz)}`; freqHz = hz; }
+  else { note.textContent = ''; freqHz = 0; }
+  applyFilters();
+});
+
+document.getElementById('clear').addEventListener('click', () => {
+  bandsOn.clear(); freqHz = 0;
+  document.getElementById('freq').value = '';
+  document.getElementById('freqNote').textContent = '';
+  renderChips(); applyFilters();
+});
+
+/** ★ Markers live in a layer of their own so a re-render REPLACES them. Adding straight to the
+ *    map, as this did, leaves every previous pin behind — a filter would have made the map grow
+ *    rather than narrow. */
+const markers = L.layerGroup().addTo(map);
+
+function render(servers, filtered) {
+  // ★ The header counts the ESTATE, not the filtered view — how many servers exist does not
+  //   change because somebody typed a frequency. The filtered figure is in the summary line.
+  const n = ALL.length || servers.length;
+  document.getElementById('count').textContent =
+    n ? `${n} server${n === 1 ? '' : 's'} online` : '';
+
+  markers.clearLayers();
   const list = document.getElementById('list');
   if (!servers.length) {
-    list.innerHTML = `<div class="empty">
-      <p>No servers are listed yet.</p>
-      <p>Running VibeServer? Turn on <code>List on VibeSDR.net</code> in the app
-         and yours will appear here.</p></div>`;
+    list.innerHTML = filtered
+      ? `<div class="empty">
+           <p>No listed server matches that.</p>
+           <p>Try a different band, or clear the filter to see everything.</p></div>`
+      : `<div class="empty">
+           <p>No servers are listed yet.</p>
+           <p>Running VibeServer? Turn on <code>List on VibeSDR.net</code> in the app
+              and yours will appear here.</p></div>`;
     return;
   }
 
@@ -368,7 +551,7 @@ function render(servers) {
         className: 'mkWrap', iconSize: [13, 13], iconAnchor: [7, 7], popupAnchor: [0, -7],
         html: `<i class="mk ${st.cls}" title="${esc(st.label)}"></i>`,
       }),
-    }).addTo(map).bindPopup(
+    }).addTo(markers).bindPopup(
       `<b>${esc(s.name)}</b>${s.pin ? ' \u{1F512}' : ''}<br>${esc(s.grid)} · ${esc(st.label)}<br>` +
       `<a href="${esc(listenUrl(s))}" target="_blank" rel="noopener noreferrer">Listen</a>`
     );
@@ -417,7 +600,7 @@ async function withLiveCounts(servers) {
 fetch('/api/directory')
   .then((r) => r.json())
   .then((d) => withLiveCounts(Array.isArray(d.servers) ? d.servers : []))
-  .then((servers) => render(servers))
+  .then((servers) => { ALL = servers; renderChips(); applyFilters(); })
   .catch(() => {
     document.getElementById('list').innerHTML =
       '<div class="empty">The directory could not be reached. Try again shortly.</div>';
