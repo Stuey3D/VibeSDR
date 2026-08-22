@@ -249,7 +249,10 @@ function ttlSeconds(body) {
  * ★ Failure is not an error to the caller. A server that cannot answer yet keeps its entry and
  *   simply is not listed — it may be mid-restart, and dropping it would punish a blip.
  */
-async function verifyAddress(url, key) {
+/** ★ `why` is filled in on failure so the PING can tell the owner what went wrong — an address
+ *  that silently refuses to list is the worst possible answer. It never carries anything about the
+ *  key itself. */
+async function verifyAddress(url, key, why) {
   const nonce = crypto.randomUUID().replace(/-/g, '');
   const target = `${url}/vibeserver.json?dirNonce=${nonce}`;
   try {
@@ -259,17 +262,21 @@ async function verifyAddress(url, key) {
       // ★ Some receivers refuse a request with no user agent — ours does.
       headers: { 'user-agent': 'vibesdr.net directory verifier' },
     });
-    if (!res.ok) return false;
+    if (why) why.status = res.status;
+    if (!res.ok) { if (why) why.reason = 'http'; return false; }
     const j = await res.json();
     const given = typeof j?.dirProof === 'string' ? j.dirProof.toLowerCase() : '';
-    if (given.length !== 64) return false;
+    if (given.length !== 64) { if (why) why.reason = 'no-proof'; return false; }
 
     const mac = await crypto.subtle.importKey(
       'raw', new TextEncoder().encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
     const sig = await crypto.subtle.sign('HMAC', mac, new TextEncoder().encode(nonce));
     const want = [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
-    return timingSafeEqual(given, want);
-  } catch {
+    const ok = timingSafeEqual(given, want);
+    if (why && !ok) why.reason = 'mismatch';
+    return ok;
+  } catch (e) {
+    if (why) why.reason = 'threw: ' + String((e && e.message) || e).slice(0, 80);
     return false;                      // unreachable, too slow, or not a VibeServer
   }
 }
@@ -377,7 +384,8 @@ async function ping(request, env) {
   //     one request and settles it.
   const moved = url !== row.url;
   let verified = Number(row.verified) === 1 && !moved;
-  if (!verified) verified = await verifyAddress(url, String(body.key || ''));
+  const why = {};
+  if (!verified) verified = await verifyAddress(url, String(body.key || ''), why);
 
   await env.DB.prepare(
     `UPDATE servers SET url = ?, name = ?, status_json = ?, updated_at = ?, expires_at = ?,
@@ -394,6 +402,7 @@ async function ping(request, env) {
     // ★ Say whether the address proved itself, rather than leaving an owner to wonder why a
     //   perfectly live server is not on the map.
     verified,
+    verifyWhy: verified ? undefined : why,
     pingSec: PING_SEC,
     slug: row.slug || null,
     address: row.slug ? `${row.slug}.${PUBLIC_ZONE}` : null,

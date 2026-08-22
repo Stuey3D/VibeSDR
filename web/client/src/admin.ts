@@ -140,15 +140,50 @@ function renderHealth(st: any, perRadio: Array<{ radio: string; data: any }> = [
   //     always shown. That is why the page said "not available" beside an app screen reading 45%
   //     (Stuart, 2026-08-20). Reporting the fallback as if it were the machine would be worse than
   //     the blank it replaces: it is a percentage of ONE core and it counts only us.
+  // ★★★ SHOW IT AGAINST WHAT THE MACHINE HAS, NOT AGAINST ONE CORE. A figure that reads "104%" —
+  //     and peaks at 128% — looks like something is on fire, when on an eight-core phone it is
+  //     about an eighth of the machine and everything is fine. The percentage was never wrong; the
+  //     DENOMINATOR was invisible, and an unbounded number with no ceiling beside it is read as an
+  //     overload (Stuart, 2026-08-22, ten listeners in and not a single stutter: "when I see it go
+  //     to 104% etc it looks weird ... a total % reading would look easier to read").
+  //  ★★ "104% / 800%" states the ceiling in the same breath as the reading, so being over 100 is
+  //     plainly one core's worth rather than the end of the world.
+  //  ★ Only where the core count is known. Without it there is no ceiling to state, and inventing
+  //    one would be worse than the bare figure.
+  const cpuOfMachine = sys.cpuIsProcess && sys.cores
+    ? `${sys.cpuPct?.toFixed(0)}% / ${sys.cores * 100}%` : `${sys.cpuPct?.toFixed(0)}%`;
+  /**
+   * ★★★ COLOURED AGAINST THE MACHINE, NOT AGAINST ONE CORE. The figure is the WHOLE PROCESS from
+   *     /proc/self/stat — every thread summed — so passing 100% means "more than one core busy",
+   *     not "overloaded". The server is several threads whatever mode it is in: the USB reader,
+   *     the DSP engine, a writer per connection, and the accept threads.
+   *  ★★ AND MORE OF THEM ON A LOCKED CENTRE, where each listener gets its own chain on its own
+   *     thread (startClientThread, gated on perClientDsp()). On a SHARED dial there is one engine
+   *     fanned out, and the growth with listeners is the per-connection send rather than more DSP.
+   *  ★★★ MEASURED 2026-08-22: ten listeners on a Moto g35 (shared VFO) held 100–128% with
+   *      1.6 Mbit/s of uplink and not one stutter — about an eighth of an eight-core phone.
+   *      Treating 100% as the danger line would light this card permanently on any server doing
+   *      its job, which is how a warning stops being read.
+   *  ★★ The line that matters is running out of MACHINE. Amber at two thirds — enough warning to
+   *     act before listeners hear it — and red at 90%, where the next arrival is the one that
+   *     starts dropping buffers.
+   *  ★ Unknown core count keeps the old behaviour rather than guessing a ceiling.
+   */
+  const cpuStatus = (() => {
+    if (!sys.cpuIsProcess || !sys.cores || typeof sys.cpuPct !== 'number') return 'ok';
+    const frac = sys.cpuPct / (sys.cores * 100);
+    return frac >= 0.9 ? 'critical' : frac >= 0.66 ? 'warning' : 'ok';
+  })();
   out.push(typeof sys.cpuPct === 'number'
-    ? card(sys.cpuIsProcess ? 'CPU · THIS SERVER' : 'CPU USAGE', `${sys.cpuPct.toFixed(0)}%`,
+    ? card(sys.cpuIsProcess ? 'CPU · THIS SERVER' : 'CPU USAGE', cpuOfMachine,
            sys.cpuIsProcess
-             ? `of one core${sys.cores ? ` · ${sys.cores} cores` : ''} — the machine's total is not readable here`
+             ? `${sys.cores ? `${sys.cores} cores · 100% is one of them` : 'of one core'}`
+               + ` — the machine's total is not readable here`
              : sys.loadStatus === 'unknown'
              ? `${sys.cores ?? '?'} cores`
              : `load ${(sys.load1 ?? 0).toFixed(2)} / ${(sys.load5 ?? 0).toFixed(2)} / `
                + `${(sys.load15 ?? 0).toFixed(2)} · ${sys.cores} cores`,
-           sys.cpuIsProcess ? 'ok' : sys.loadStatus)
+           sys.cpuIsProcess ? cpuStatus : sys.loadStatus)
     : sys.loadStatus === 'unknown'
     ? card('CPU USAGE', 'not available', `${sys.cores ?? '?'} cores`, 'unknown')
     // ★ cpuPct needs two samples, so the very first poll after a restart has none. Fall back to

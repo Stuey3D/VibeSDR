@@ -2724,6 +2724,16 @@ struct LocalSdrShim::Impl {
      *  the landing bug were written against paths that never ran on the radio reporting it
      *  (2026-08-16). This one is populated at the handshake, for all of them. */
     std::map<net::Socket*, std::string> sockSession;
+    /** ★★ WHEN THIS SOCKET ARRIVED. On a SHARED dial there is one DSP fanned out to everybody, so
+     *  an extra listener has no per-client chain and the admin table showed dashes for everything
+     *  about them — including how long they had been there, which is not a DSP fact at all but a
+     *  property of the CONNECTION (Stuart, 2026-08-22, working it out from the blanks: "this is
+     *  one single DSP being fanned out which is why we are having issues").
+     *  ★ CPU genuinely cannot be split — the cost IS the one shared chain — but the time and the
+     *    bytes belong to the socket, and were only missing because nobody had recorded them. */
+    std::map<net::Socket*, double> sockSince;
+    /** Last byte total and when, per socket — an uplink RATE needs two samples. */
+    std::map<net::Socket*, std::pair<unsigned long long, double>> sockLastBytes;
     std::unique_ptr<vibedsp::Channelizer> chan_;
 
     // ── ★★★ THE BAND SPECTROGRAM — a 24-hour record, kept by the SERVER ──────────────────────
@@ -8724,7 +8734,8 @@ struct LocalSdrShim::Impl {
                       "Sec-WebSocket-Accept: " + base64(digest, 20) + "\r\n\r\n");
         // ★ Who this socket belongs to, before anything can ask. See sockSession.
         if (!session.empty())
-            { std::lock_guard<std::mutex> lk(clientMtx); sockSession[sock.get()] = session; }
+            { std::lock_guard<std::mutex> lk(clientMtx); sockSession[sock.get()] = session;
+              sockSince[sock.get()] = Impl::nowSecs(); }
 
         // ★★★ FROM HERE ON, ONE THREAD AND ONLY ONE THREAD WRITES TO THIS SOCKET.
         // Registered immediately after the handshake, because the moment this client is published
@@ -9655,6 +9666,7 @@ struct LocalSdrShim::Impl {
           { auto it = clientDsp.find(sock.get());
             if (it != clientDsp.end()) { goneDsp = it->second; clientDsp.erase(it); } }
           sockSession.erase(sock.get());
+          sockSince.erase(sock.get());
           for (auto it = pendingAudio.begin(); it != pendingAudio.end(); ) {
               if (it->second == sock) it = pendingAudio.erase(it); else ++it;
           }
@@ -13192,6 +13204,18 @@ std::string LocalSdrShim::adminSessionsJson() {
             std::string sess;
             { auto it = p->sockSession.find(sk.get());
               if (it != p->sockSession.end()) sess = it->second; }
+            double extraSince = 0;
+            { auto it = p->sockSince.find(sk.get());
+              if (it != p->sockSince.end()) extraSince = it->second; }
+            // ★ A RATE needs two samples, so the first poll after somebody arrives has nothing to
+            //   report — a dash there is honest, where a 0 would read as "this listener is free".
+            int extraKbps = -1;
+            { auto it = p->sockLastBytes.find(sk.get());
+              if (it != p->sockLastBytes.end() && bytes >= it->second.first) {
+                  const double dt = now - it->second.second;
+                  if (dt > 0.2) extraKbps = (int)(((double)(bytes - it->second.first) * 8.0 / 1000.0) / dt + 0.5);
+              }
+              p->sockLastBytes[sk.get()] = { bytes, now }; }
             if (!first) j += ',';
             first = false;
             j += "{\"session\":\"" + vibeadmin::esc(sess) + "\""
@@ -13204,7 +13228,10 @@ std::string LocalSdrShim::adminSessionsJson() {
                + ",\"dropped\":0,\"zoomed\":false"
                + ",\"cc\":\"" + vibeadmin::esc(vsCountry(ip)) + "\""
                + ",\"net\":\"" + vibeadmin::esc(vsAsnLabel(ip)) + "\""
-               + ",\"cpu\":-1,\"kbps\":-1"
+               // ★★ CPU IS A DASH AND THAT IS THE TRUTH: on a shared dial the cost is the one
+               //    chain everybody is fed from, so a per-listener share would be invented. The
+               //    uplink and the time are theirs, though, and are reported.
+               + ",\"cpu\":-1,\"kbps\":" + std::to_string(extraKbps)
                // ★ And an extra listener shows the decoder when the session running it is THEIRS.
                + ",\"decoder\":\"" + vibeadmin::esc(
                      (!curDecoder.empty() && !p->decoderSession.empty()
@@ -13213,7 +13240,10 @@ std::string LocalSdrShim::adminSessionsJson() {
                // ★★ NOT ADMIN. Whatever the radio-wide flag says, a listener on the shared dial has
                //    proved nothing — badging them would repeat the inherit bug in the one view an
                //    owner uses to decide who to trust.
-               + ",\"admin\":false}";
+               + ",\"admin\":false"
+               + (extraSince > 0 ? ",\"secs\":" + std::to_string((long long)(now - extraSince))
+                                 : std::string())
+               + "}";
         }
     }
 
