@@ -446,13 +446,24 @@ object VibeTunnel {
         //     if every ping pushed the end further away, "up for the week of the contest" would
         //     quietly become "up for ever, one ping at a time". So the RENEWAL sends 0, meaning
         //     "unchanged", and only a deliberate act from the screen moves it.
-        lastPublish = { publishOnce(ctx, name, locator, port, radioModel, radioDriver, antenna, coverage, locked, 0) }
+        // ★ -1, not 0: a renewal must leave the share window exactly as it is, and 0 now means
+        //   "permanent" — see publishOnce.
+        lastPublish = { publishOnce(ctx, name, locator, port, radioModel, radioDriver, antenna, coverage, locked, -1L) }
         prefs(ctx).edit()
             .putBoolean(K_WANT, true).putString(K_NAME, name).putString(K_GRID, locator)
             .putString(K_MODEL, radioModel).putString(K_DRIVER, radioDriver)
             .putString(K_ANT, antenna).putString(K_COV, coverage).putBoolean(K_LOCKED, locked)
-            .putLong(K_UNTIL, if (shareForSec > 0) (System.currentTimeMillis() / 1000) + shareForSec
-                              else prefs(ctx).getLong(K_UNTIL, 0L))
+            .putLong(K_UNTIL, when {
+                shareForSec > 0 -> (System.currentTimeMillis() / 1000) + shareForSec
+                shareForSec == 0L -> 0L        // ★ deliberately permanent — clear any old end
+                // ★★★ AND NEVER CARRY A DEAD ONE FORWARD. A share that had already expired left
+                //     its end in prefs, so the next ORDINARY listing inherited it and the expiry
+                //     timer fired the instant the tunnel came up — "temporary share ends in 0s"
+                //     in the log, a brand-new permanent listing killed within a second of
+                //     starting (seen 2026-08-22 21:11:22). A renewal keeps a LIVE end only.
+                else -> prefs(ctx).getLong(K_UNTIL, 0L)
+                            .takeIf { it > System.currentTimeMillis() / 1000 } ?: 0L
+            })
             .apply()
         startPinging()
         // ★ Read BACK rather than recomputed: a renewal passes 0 and must keep the end it already
@@ -557,7 +568,13 @@ object VibeTunnel {
                 //     because a tunnel hostname rotates; the position deserves the same treatment
                 //     for the same reason — it is a fact that can change while the listing lives.
                 put("grid", locator)
-                if (shareForSec > 0) put("shareForSec", shareForSec)
+                // ★★★ THREE STATES, NOT TWO. `0` used to mean both "make this permanent" and
+                //     "leave it alone", so TURNING THE TEMPORARY TOGGLE OFF could not make a share
+                //     permanent — the value was simply omitted and the old end kept. A renewal now
+                //     says -1 (omit, unchanged) and only a deliberate change sends a number, which
+                //     is the same distinction the directory already draws between an absent field
+                //     and an explicit 0.
+                if (shareForSec >= 0) put("shareForSec", shareForSec)
                 put("name", name); put("status", status)
             })
             if (r != null && r.optInt("_status") == 200) {
@@ -606,6 +623,13 @@ object VibeTunnel {
         val r = post("/api/directory/register", JSONObject().apply {
             put("name", name); put("grid", locator); put("url", url)
             put("kind", "tunnel"); put("locator", locator); put("status", status)
+            // ★★★ THE SHARE LENGTH TRAVELS ON THE REGISTRATION TOO. It was on the PING body only,
+            //     so a temporary share set up from scratch was recorded as PERMANENT and stayed in
+            //     the directory for ever — "I turned on temporary share 15 minutes and its a full
+            //     share" (Stuart, 2026-08-22). It appeared to work exactly once, because flipping
+            //     the toggle on an ALREADY-LISTED server goes through a ping, which carried it.
+            //  ★ The path nobody tests is the first one every new user takes.
+            if (shareForSec >= 0) put("shareForSec", shareForSec)
         })
         if (r == null) { listed = false; lastError = "could not reach the directory"; return null }
         when (r.optInt("_status")) {
@@ -637,6 +661,7 @@ object VibeTunnel {
                     val first = post("/api/directory/ping", JSONObject().apply {
                         put("id", r.optString("id")); put("key", r.optString("key"))
                         put("url", url); put("grid", locator)
+                        if (shareForSec >= 0) put("shareForSec", shareForSec)
                         put("name", name); put("status", status)
                     })
                     // ★★★ AND CHECK WHAT IT SAID. This threw the answer away, so a REGISTRATION

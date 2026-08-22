@@ -969,8 +969,11 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             if (!VibeTunnel.isTunnelRunning() || port <= 0 || name.length < 2) {
                 promise.resolve(VibeTunnel.statusJson()); return
             }
-            // ★ 0 means "leave the share window alone" — the periodic refresh sends that, so it can
-            //   never extend an offer by accident. Only a deliberate change carries a number.
+            // ★★★ -1 means "leave the share window alone", 0 means "permanent", >0 sets a window.
+            //     The periodic refresh sends -1, so it can never extend an offer by accident; only
+            //     a deliberate change from the switch carries 0 or a length. Two states were not
+            //     enough — with 0 doing double duty, turning the temporary toggle OFF could not
+            //     make a share permanent (Stuart, 2026-08-22).
             VibeTunnel.publish(reactApplicationContext, name, locator, port,
                                radioModel, radioDriver, antenna, coverage, locked,
                                shareForSec.toLong())

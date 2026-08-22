@@ -593,9 +593,11 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         republished.current = sig;
         await (NativeModules as any).VibeLocalSDR?.tunnelRepublish?.(
           nm, where?.grid || '', running.port, radio?.model || '', radio?.driver || '',
-          // ★ 0 = leave the share window alone. This runs on a timer, and an offer that renewed
-          //   itself every couple of minutes would never end.
-          (antenna || '').trim(), cov, radioUse === 'locked', 0);
+          // ★★ -1 = leave the share window alone. It was 0, which the server reads as "make this
+          //    PERMANENT" — so this correction, which exists only to refresh the aerial and the
+          //    band names, would have wiped the end off a temporary share every time it ran.
+          //  ★ This runs on a timer: an offer that renewed itself would never end.
+          (antenna || '').trim(), cov, radioUse === 'locked', -1);
       } catch { /* the listing simply keeps what it had */ }
     })();
     // ★★ AND CHECK AGAIN ON A SLOW BEAT. Every other input here changes because somebody typed
