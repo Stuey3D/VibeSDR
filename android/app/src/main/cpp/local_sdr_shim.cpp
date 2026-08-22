@@ -1158,6 +1158,25 @@ static constexpr bool        g_agcQuietAnnounce = false;
 //    is a new signal, see tuneHw) or a long, genuinely clean run at the step below.
 static std::atomic<int>      g_ovlBadGain{-1};    // tenth-dB, -1 = nothing has failed here
 static std::atomic<int>      g_adcHotRun{0};
+/** ★★★ WHEN THE PIPELINE WAS LAST DISTURBED — a dropped IQ buffer, or an engine rate change.
+ *
+ *  The AGC judges a gain climb by whether the NOISE FLOOR got worse a few seconds later. That is
+ *  sound when the only thing that changed was the gain, and worthless when it was not: a listener
+ *  joining raises the engine's FFT rate to the fastest listener's, the chain is rebuilt, the DSP
+ *  thread blocks and a buffer is dropped — and the floor measured across that window rises for
+ *  reasons that have nothing to do with the radio.
+ *
+ *  ★★★ MEASURED, 2026-08-22: a join took the engine from 5 to 20 fps, dropped a buffer, and four
+ *      seconds later the loop concluded "that step raised the noise floor 4.9 dB — the front end is
+ *      compressing" AT 3.7 dB OF GAIN, twenty-four steps below maximum. A front end does not
+ *      compress at near-minimum gain. It then raised the bar for the next climb to 12 dB, so one
+ *      listener arriving left the receiver parked at the bottom of its range and reluctant to come
+ *      back up (Stuart: "the gain increased before overloading and dropping").
+ *
+ *  ★ A verdict reached across a disturbed window is not evidence. It is thrown away and the climb
+ *    is re-judged, rather than being counted against the radio.
+ */
+static std::atomic<double>   g_pipelineDisturbedAt{0.0};
 static std::atomic<int>      g_adcClipRun{0};
 static std::atomic<int>      g_adcCleanRun{0};
 /** ★★★ HOW MUCH HEADROOM A CLIMB MUST PROVE, and why it is not a constant.
@@ -3466,6 +3485,10 @@ struct LocalSdrShim::Impl {
         // ★★ THE ZOOM PATH HAS ITS OWN RATE and only updateZoomView() sets it — a rate change that
         //    reached one path and not the other needed a PAGE REFRESH to take effect.
         updateZoomView();
+        // ★ The rebuild below is the single most disruptive thing that happens to a running
+        //   engine — it is what drops a buffer when somebody joins. Say so, so the AGC does not
+        //   read the consequences as the radio's behaviour. See g_pipelineDisturbedAt.
+        g_pipelineDisturbedAt.store(nowSecs(), std::memory_order_relaxed);
         LOGI("engine fft rate: %.1f fps (engine %.1f) — the fastest listener's rate", fps, fps * FFT_AVG);
     }
 
@@ -10119,6 +10142,9 @@ struct LocalSdrShim::Impl {
                 static double lastDropLog = 0;
                 const double nd = nowSecs();
                 g_iqLastDropAt.store((double)vsNowEpoch(), std::memory_order_relaxed);
+                // ★ See g_pipelineDisturbedAt: a dropped buffer invalidates any gain verdict that
+                //   straddles it.
+                g_pipelineDisturbedAt.store(nd, std::memory_order_relaxed);
                 if (nd - lastDropLog > 2.0) {
                     lastDropLog = nd;
                     LOGI("IQ overrun — dropping a buffer (the DSP thread was blocked)");
@@ -14435,6 +14461,20 @@ void LocalSdrShim::overloadTick() {
     // ★★★ DID THE LAST CLIMB ACTUALLY HELP? Judged on SNR, a few seconds later, once the meters
     //     have caught up with the new gain.
     const double climbAt = g_climbAt.load(std::memory_order_relaxed);
+    // ★★★ DO NOT JUDGE A CLIMB ACROSS A DISTURBED WINDOW. If a buffer was dropped or the engine
+    //     rate changed since the climb, the floor moved for reasons that are not the radio's — and
+    //     concluding "the front end is compressing" from that is how one listener joining left the
+    //     gain parked at the bottom with the bar for climbing raised to 12 dB. See
+    //     g_pipelineDisturbedAt for the measurement.
+    //  ★★ RE-ARMED, NOT ABANDONED. The climb still has to be judged — it just cannot be judged on
+    //     this evidence, so the clock is restarted and the answer comes from a quiet window. An
+    //     unjudged climb would otherwise be a step that never has to prove itself.
+    if (climbAt > 0 && g_pipelineDisturbedAt.load(std::memory_order_relaxed) > climbAt) {
+        g_climbAt.store(now, std::memory_order_relaxed);
+        g_floorBeforeClimb.store(p->iqFloorDb.load(), std::memory_order_relaxed);
+        LOGI("gain climb not judged — the pipeline was disturbed (a listener joined, or a buffer "
+             "was dropped); re-measuring from here");
+    } else
     if (climbAt > 0 && now - climbAt >= 4.0) {
         g_climbAt.store(0.0, std::memory_order_relaxed);
         const float floorNow = p->iqFloorDb.load();
@@ -14677,9 +14717,24 @@ void LocalSdrShim::overloadTick() {
     //   nothing here ever leaves it — so re-asserting the mode was a second USB control transfer
     //   per change for nothing, and every one of those is time the stream is contended.
     wroteGain = true;     // ← the transfer itself is below, off modeMtx
-    if (want > steps)
-        LOGI("ADC overload (%.3f%% on the rail) — gain %.1f dB, %d step%s below %.1f dB",
-             clipPct, applied / 10.0, want, want == 1 ? "" : "s", target / 10.0);
+    // ★★★ SAY WHICH REASON. This printed "ADC overload (0.000% on the rail)" for EVERY downward
+    //     step, including the ones taken because a climb raised the noise floor — a message that
+    //     is self-contradictory (nothing can overload with nothing on the rail) and that sent the
+    //     next person straight to the clipping code, which was innocent (2026-08-22, and it cost
+    //     an hour). A log that misattributes a cause is worse than no log: it is a false lead
+    //     wearing the authority of a measurement.
+    if (want > steps) {
+        if (steps_forceDown)
+            LOGI("stepping back — the last climb did not hold — gain %.1f dB, %d step%s below %.1f dB",
+                 applied / 10.0, want, want == 1 ? "" : "s", target / 10.0);
+        else if (clipPct <= 0.0)
+            LOGI("front end compressing (noise floor lifted, %.3f%% on the rail) — gain %.1f dB, "
+                 "%d step%s below %.1f dB",
+                 clipPct, applied / 10.0, want, want == 1 ? "" : "s", target / 10.0);
+        else
+            LOGI("ADC overload (%.3f%% on the rail) — gain %.1f dB, %d step%s below %.1f dB",
+                 clipPct, applied / 10.0, want, want == 1 ? "" : "s", target / 10.0);
+    }
     else
         LOGI("clean for %ds — gain back up to %.1f dB (%d below %.1f dB)",
              cleanRun, applied / 10.0, want, target / 10.0);
@@ -15110,6 +15165,30 @@ void LocalSdrShim::setSampleRate(double rate) {
     //   the hwinfo rates list, radioCapsJson and resumeCaptureIdle. NAME EVERY SOURCE.
     const bool ahf = impl->useAirspyHf();
     if (!tcp && !rsp && !ahf && !impl->dev) return;
+
+    // ★★★ ASKING FOR THE RATE IT IS ALREADY RUNNING AT MUST DO NOTHING. Everything below stops the
+    //     IQ source, joins the reader AND the DSP thread, rebuilds the engine and the audio chain
+    //     and relaunches capture — the most violent thing that can happen to a running receiver.
+    //
+    // ★★★ AND IT WAS HAPPENING ON EVERY CONNECT. A browser opens two sockets and each runs the
+    //     accept-time control block, which pushes the client's settings including the rate. The
+    //     race that caused (two threads joining one thread, which ABORTED the app) is fixed by
+    //     rateMtx above — but the restart itself still ran, twice, with the value unchanged. On a
+    //     shared receiver that is a full engine rebuild every time somebody ARRIVES, and it is what
+    //     everyone already listening hears: measured 2026-08-22 as an IQ overrun and a dropped
+    //     buffer within a second of a join (Stuart: "I just connected a 2nd device and the audio on
+    //     the first one has a little hiccup").
+    //
+    // ★★ It also fed the AGC a false lesson — see g_pipelineDisturbedAt — so the cost was not only
+    //    the click: the gain was driven to the bottom of its range and kept there.
+    //
+    // ★ Compared against the rate the engine is ACTUALLY running, not the last value requested:
+    //   a device that rounded the request is already running something slightly different, and it
+    //   is that figure a repeat request has to match.
+    if (impl->sampleRate > 0 && std::fabs(impl->sampleRate - rate) < 1.0) {
+        LOGI("sample rate already %.0f — nothing to do", impl->sampleRate);
+        return;
+    }
     // Stop the IQ source + drain the DSP consumer BEFORE taking modeMtx (the
     // dspThread locks modeMtx per buffer, so holding it across the join would
     // deadlock). With both quiesced, the rtlsdr control transfer below runs on an
