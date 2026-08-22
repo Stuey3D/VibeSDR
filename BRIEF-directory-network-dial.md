@@ -73,6 +73,32 @@ band, so it currently produces no band names at all and is invisible to a band f
 hearing everything. The dial reads `ranges` directly and never needs the names for filtering —
 names are labels on the ruler, not the filter itself.
 
+## The axis is NOT to scale, and that is the point
+
+Stuart, 2026-08-22: *"gaps in between coverage dont need to be to scale — so for instance say my
+Airspy was the only one available it would show AM Broadcast, a small gap saying no coverage, and
+then FM broadcast."*
+
+★★★ THE DIAL SPENDS ITS WIDTH ON WHAT YOU CAN ACTUALLY LISTEN TO. A true-to-scale ruler gives the
+dead space between bands the same pixels as the bands themselves — with an Airspy limited to AM and
+FM, the 86 MHz of nothing between them would be 98% of the dial and the two things you came for
+would be slivers at either end. An uncovered stretch becomes a fixed narrow gap, marked as no
+coverage, however many megahertz it really spans.
+
+★★★ AND THE SAME ARGUMENT KILLS A LINEAR SCALE *INSIDE* COVERAGE. Compressing the gaps is not
+enough on its own: one unrestricted RTL covers 500 kHz – 1766 MHz with no gap at all, and on a
+linear axis the entire medium wave band — the whole of AM broadcast — is 1/1600th of the bar.
+Invisible, unclickable, and exactly the band an AM DXer came for.
+→ **Logarithmic within each covered stretch.** Every decade gets equal width, so MW, HF and FM are
+all reachable with a mouse, and the mapping stays monotonic and exact so click-to-frequency is
+still a real frequency and not an approximation. This is how a spectrum overview is normally drawn,
+and it is the only choice that survives both a narrow HF+ and a wideband dongle on the same page.
+
+★★ TICK LABELS DO THE HONEST WORK. Because the axis is neither linear nor continuous, the numbers
+along it are not decoration — they are the only thing telling a visitor that the gap they are
+looking at is 86 MHz wide and the band beside it is 1 MHz. A non-linear axis without labels is a
+lie; with them it is a schematic, which is what this should be.
+
 ## The availability computation
 
 Client side, from `ranges` plus per-radio occupancy. A sweep line over every range boundary in the
