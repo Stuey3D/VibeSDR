@@ -528,7 +528,16 @@ async function serveBySlug(host, request, env) {
       j.directUrl = origin;
       return new Response(JSON.stringify(j), {
         status: res.status,
-        headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'no-store',
+          // ★★ SO THE DIRECTORY PAGE CAN ASK A SERVER HOW BUSY IT IS, RIGHT NOW. The ping is
+          //    liveness on a 15-minute interval — far too slow to answer "is anyone listening",
+          //    and pinging fast enough to be live would burn the D1 write budget for the sake of a
+          //    number that changes nothing. A tunnelled server is real HTTPS, so the page can read
+          //    it straight from the source; this header is the only thing that was in the way.
+          'access-control-allow-origin': '*',
+        },
       });
     } catch {
       // ★ Not the JSON we expected — pass it through rather than swallow the server's own answer.

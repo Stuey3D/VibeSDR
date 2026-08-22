@@ -243,9 +243,41 @@ function render(servers) {
   }
 }
 
+/**
+ * ★★★ THE PING IS LIVENESS, NOT TELEMETRY. A server renews its listing every 15 minutes, so the
+ *     listener count in the directory record is up to 15 minutes old — it showed "0/10 listening"
+ *     while somebody was plainly listening (Stuart, 2026-08-22). Pinging often enough to be live
+ *     would spend the whole D1 write budget on a number that decides nothing.
+ * ★★ A TUNNELLED SERVER IS REAL HTTPS, so this page can simply ASK it — the thing a plain-HTTP
+ *    port-forwarded receiver can never allow from an https page, and the quiet bonus of putting
+ *    everyone behind a tunnel.
+ * ★ Best effort and per server: one that is asleep, restarting or slow just keeps the directory's
+ *   own figure rather than blanking the row or holding up the page.
+ */
+async function withLiveCounts(servers) {
+  await Promise.all(servers.map(async (s) => {
+    if (!s.address) return;
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 4000);
+      const r = await fetch(`https://${s.address}/vibeserver.json`,
+                            { signal: ctrl.signal, cache: 'no-store' });
+      clearTimeout(t);
+      if (!r.ok) return;
+      const j = await r.json();
+      if (Number.isFinite(j.listeners)) s.listeners = Number(j.listeners);
+      if (Number.isFinite(j.maxUsers)) s.maxListeners = Number(j.maxUsers);
+      if (Number.isFinite(j.freeInSec)) s.freeInSec = Number(j.freeInSec);
+      s.live = true;
+    } catch { /* asleep, slow, or gone — the directory's own figure stands */ }
+  }));
+  return servers;
+}
+
 fetch('/api/directory')
   .then((r) => r.json())
-  .then((d) => render(Array.isArray(d.servers) ? d.servers : []))
+  .then((d) => withLiveCounts(Array.isArray(d.servers) ? d.servers : []))
+  .then((servers) => render(servers))
   .catch(() => {
     document.getElementById('list').innerHTML =
       '<div class="empty">The directory could not be reached. Try again shortly.</div>';

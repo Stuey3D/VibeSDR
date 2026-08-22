@@ -1139,6 +1139,25 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               addresses you trust. Empty otherwise — without it everyone behind the tunnel looks
               like you, so the time limit and the ban list stop working.
             </Text>
+            {/* ★★★ SAY THAT THE LISTING ALREADY DID THIS, because otherwise the box reads EMPTY on a
+                server that is publicly listed — which looks exactly like the misconfiguration this
+                setting exists to prevent (Stuart, 2026-08-22: "I thought when public listing was
+                enabled it automatically filled out the reverse proxy box").
+                ★★ It is NOT written INTO the box on purpose. This field is what the OWNER trusts;
+                   the loopback entry is what the tunnel needs, and it lasts exactly as long as the
+                   tunnel does. Merging them would mean guessing, when listing is switched off,
+                   whether 127.0.0.1 was ours to remove or something they typed themselves — and
+                   guessing wrong either strips a real setting or silently leaves loopback trusted
+                   on a directly reachable server.
+                ★ So the effective list is owner + loopback while listed, and this line is the only
+                  honest way to show a value that is real but not stored here. */}
+            {publicOn ? (
+              <Text style={[styles.hint, { color: C.green, fontFamily: F, marginTop: 6 }]}>
+                127.0.0.1 is trusted automatically while this server is listed on VibeSDR.net — the
+                tunnel reaches it from loopback. You do not need to add it, and it goes again when
+                you turn the listing off.
+              </Text>
+            ) : null}
 
             {/* ★★★ SEVERAL RADIOS FROM ONE ADDRESS. Alongside the proxy setting because they are
                 the same subject — what the server takes an ADDRESS to mean — and an owner thinking

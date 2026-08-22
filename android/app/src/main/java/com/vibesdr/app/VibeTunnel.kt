@@ -12,6 +12,8 @@ import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -39,6 +41,12 @@ object VibeTunnel {
     private const val DIRECTORY = "https://vibeserver.vibesdr.net"
     private const val PREFS = "vibe_directory"
 
+    /** ★ How often to renew, in seconds. The directory returns its own `pingSec` on every register
+     *  and ping, and that answer wins — the interval is the SERVER'S to choose, so it can be
+     *  changed centrally without shipping a new app. This is only the value used until it has
+     *  spoken, and matches what the directory currently advertises. */
+    @Volatile private var PING_SEC: Long = 900
+
     /** ★ Identity, kept across app restarts. Lost on uninstall — which is what the "transfer to a
      *  new device" flow exists to cover, and what the usage-proportional address hold softens. */
     private const val K_ID = "id"
@@ -51,6 +59,28 @@ object VibeTunnel {
         .build()
 
     private val JSON = "application/json; charset=utf-8".toMediaType()
+
+    /**
+     * ★★★ THE LISTING HAS TO BE RENEWED OR IT DISAPPEARS. The directory does not detect a dead
+     *     server, it lets one EXPIRE: the list query is `WHERE expires_at > now()`, so a receiver
+     *     that stops pinging simply stops being selected. That is what makes a flat battery or a
+     *     killed app vanish on its own with no probe and no cron — and it is equally what removes a
+     *     perfectly healthy server that never renews.
+     *
+     * ★★ It was registered once and never pinged again (2026-08-22), so the entry was ALWAYS going
+     *    to fall off half an hour later, and the listener count could never change because nothing
+     *    ever told the directory it had.
+     *
+     * ★ 15 minutes, the interval the directory advertises. The listener COUNT is not carried by
+     *   this — see the directory page, which reads live status straight from a tunnelled server.
+     *   This is liveness, not telemetry.
+     */
+    private val pinger = Executors.newSingleThreadScheduledExecutor { r ->
+        Thread(r, "vibe-directory-ping").apply { isDaemon = true }
+    }
+    private var pingTask: ScheduledFuture<*>? = null
+    /** What the ping needs to describe this server, kept so the timer can run without the UI. */
+    @Volatile private var lastPublish: (() -> Unit)? = null
 
     private var proc: Process? = null
     private var reader: Thread? = null
@@ -327,6 +357,33 @@ object VibeTunnel {
     fun publish(ctx: Context, name: String, locator: String, port: Int,
                 radioModel: String, radioDriver: String,
                 antenna: String, coverage: String): String? {
+        // ★ Remember how to say all this again, so the renewal below needs nothing from the UI —
+        //   which may well be gone: the server keeps running with the screen off.
+        lastPublish = { publishOnce(ctx, name, locator, port, radioModel, radioDriver, antenna, coverage) }
+        startPinging()
+        return publishOnce(ctx, name, locator, port, radioModel, radioDriver, antenna, coverage)
+    }
+
+    /** ★ Renew on the advertised interval, and never let one failure end the schedule: a phone that
+     *  loses signal for a minute must come back to a live listing, not a dead one. */
+    @Synchronized
+    private fun startPinging() {
+        pingTask?.cancel(false)
+        pingTask = pinger.scheduleWithFixedDelay({
+            try { if (running.get()) lastPublish?.invoke() } catch (t: Throwable) {
+                Log.w(TAG, "directory renewal failed, will try again: ${t.message}")
+            }
+        }, PING_SEC, PING_SEC, TimeUnit.SECONDS)
+    }
+
+    @Synchronized
+    private fun stopPinging() {
+        pingTask?.cancel(false); pingTask = null; lastPublish = null
+    }
+
+    private fun publishOnce(ctx: Context, name: String, locator: String, port: Int,
+                            radioModel: String, radioDriver: String,
+                            antenna: String, coverage: String): String? {
         val status = buildStatus(port, radioModel, radioDriver, antenna, coverage)
         val url = tunnelUrl
         if (url.isEmpty()) { lastError = "no tunnel yet"; return null }
@@ -342,6 +399,7 @@ object VibeTunnel {
             })
             if (r != null && r.optInt("_status") == 200) {
                 listed = true
+                r.optInt("pingSec", 0).takeIf { it > 0 }?.let { PING_SEC = it.toLong() }
                 // ★★ A returning server may have LOST its address: away longer than the hold, and
                 //    somebody else took the name. The switch must say so rather than keep showing
                 //    an address that now belongs to a stranger.
@@ -373,6 +431,7 @@ object VibeTunnel {
                     .putString(K_SLUG, r.optString("slug"))
                     .apply()
                 listed = true
+                r.optInt("pingSec", 0).takeIf { it > 0 }?.let { PING_SEC = it.toLong() }
                 address = r.optString("address", "")
                 lastError = ""
                 return address
@@ -395,6 +454,7 @@ object VibeTunnel {
 
     /** ★ Turning the switch OFF frees the public address IMMEDIATELY, rather than letting it lapse. */
     fun delist(ctx: Context) {
+        stopPinging()
         val p = prefs(ctx)
         val id = p.getString(K_ID, null) ?: return
         val key = p.getString(K_KEY, null) ?: return
