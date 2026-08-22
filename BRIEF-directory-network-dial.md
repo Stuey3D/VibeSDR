@@ -150,6 +150,37 @@ never asked, and the tell — "medium wave stops in the wrong place" — is far 
 An explicit dropdown that starts somewhere sensible beats a clever guess nobody can see being
 made.
 
+## Converters, and radios we have not met
+
+Stuart: *"some users may be using HAM it Down which brings satcomms down to the RTL tunable range,
+plus we need to prepare for any future radios we will support."*
+
+★★ THE GOOD NEWS IS THE WIRE FORMAT IS ALREADY RIGHT. `ranges` is an arbitrary set of Hz pairs —
+not "driver plus limits" — so a receiver behind an upconverter or a satcom downconverter publishes
+different NUMBERS and the dial needs no change at all. Nothing in the directory, the union
+computation or the axis knows or cares what hardware produced a range. That is worth stating
+because it is the one part that would have been expensive to get wrong.
+
+★★★ BUT `vsTunableRanges()` DERIVES FROM `driverCoverage(driver)`, AND THAT TABLE IS A CEILING
+TODAY. Confirmed with Stuart, 2026-08-22: converters are not supported anywhere in the tree — no
+upconverter, transverter or LO-offset setting exists (`HW_OFFSET_HZ` is DC-spur offset tuning, a
+different thing entirely). So a Ham It Up user today would have their real coverage ERASED on the
+way out, because `permitted()` intersects with the dongle's native span — and worse, the retune
+clamp would refuse frequencies they can genuinely hear, telling them the radio is broken when it
+is our table.
+→ When converter support lands, `driverCoverage()` becomes a DEFAULT rather than a ceiling, and
+the converter's offset has to reach both the published ranges and the clamp. One value, two
+readers — and the clamp is the one that fails loudly, so it must not be forgotten.
+
+★★ AND AN UNKNOWN DRIVER MUST NOT MEAN "NO COVERAGE". `driverCoverage()` returns empty for a
+driver it does not recognise, which is honest for the label ("we cannot say") but on a dial it
+means a brand-new radio SILENTLY DISAPPEARS from the network's extent while working perfectly —
+listed, listenable, and invisible in the one place people will look. A radio we have not met must
+be able to state its own range, and a server that cannot say must be visible as such rather than
+absent.
+★ Same rule the frequency search already follows: a server with no published range is counted and
+named, never silently dropped.
+
 ## The availability computation
 
 Client side, from `ranges` plus per-radio occupancy. A sweep line over every range boundary in the
