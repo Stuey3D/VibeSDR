@@ -347,10 +347,16 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const pickerTour = useCoachmarkTour([
     { id: 'welcome', title: 'Welcome to VibeSDR',
       body: 'Browse public SDR servers below, or set a favourite as your default to skip straight in next time.' },
+    // ★★ THE TOUR HAS TO LEARN ABOUT A SECTION THE MOMENT IT EXISTS. AGENTS.md: a card that
+    //    misdescribes the screen is worse than no card, and it has bitten twice in one afternoon
+    //    before. The directory is now the first thing on this screen, so the tour says so.
+    { id: 'vibedir', title: 'Public VibeServers',
+      body: 'Receivers people have shared, at the top of the list. Running VibeServer yourself? '
+          + 'Turn on List on VibeSDR.net in Server Mode and yours appears here too.' },
     { id: 'custom', title: 'Your own server',
       body: 'Got a private UberSDR, OpenWebRX, KiwiSDR or Web-888? Enter its address here to connect to it directly.',
       target: tourRef('customUrl') },
-  ], { storageKey: 'lsv_tour_picker_v1' });
+  ], { storageKey: 'lsv_tour_picker_v2' });   // ★ bumped: a new card nobody would see otherwise
   useEffect(() => {
     // Wait for the launch splash to fully dismiss before auto-starting the tour —
     // on first launch the splash holds open on the CONTINUE / power-saving notice,
@@ -753,6 +759,25 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       connectVibeServer(host, port, name, saved, base);
     }
   }, [connectVibeServer]);
+
+  /**
+   * ★★★ A VIBESERVER FROM THE DIRECTORY IS STILL A VIBESERVER. The generic `connect` path probes
+   *     an unknown host and speaks the UberSDR wire; ours has its own route with the PIN prompt,
+   *     the saved-PIN store and `resolveVibeAuth`. Sending a directory row down the generic path
+   *     would have met a PIN-protected club receiver with a bare failure and no way to answer.
+   * ★★ The listing's address is HTTPS on our own zone, so `base` carries it whole — host and port
+   *    exist only to key the saved PIN, and 443 is right for every tunnelled listing.
+   */
+  const openDirectoryVibeServer = useCallback((inst: SDRInstance) => {
+    let host = '', port = 443;
+    try {
+      const u = new URL(inst.url);
+      host = u.hostname;
+      port = u.port ? parseInt(u.port, 10) : (u.protocol === 'http:' ? 80 : 443);
+    } catch { host = inst.url; }
+    if (!host) return;
+    openVibeServer(host, port, inst.name, !!inst.needsPin, inst.url);
+  }, [openVibeServer]);
 
   // Route straight into Local Hardware when the app was launched/resumed by
   // plugging in an RTL-SDR (USB_DEVICE_ATTACHED). Returns true if it claimed the
@@ -1433,6 +1458,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       // different path, so it is left to touch rather than mistyping the call.
       const st = it.data.serverType;
       if (st === 'spyserver') return;
+      if (st === 'vibeserver') { openDirectoryVibeServer(it.data); return; }
       connect(it.data.url, it.data.name, undefined, it.data.longitude, st);
     },
     (i) => {
@@ -1708,6 +1734,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               if (m) connectSpy(m[1], parseInt(m[2], 10), inst.name, inst.sessionLimitMins);
               return;
             }
+            if (inst.serverType === 'vibeserver') { openDirectoryVibeServer(inst); return; }
             connect(inst.url, inst.name, undefined, inst.longitude, inst.serverType, blocksApps(inst));
           }}
           disabled={connecting || isFull}
@@ -2170,6 +2197,31 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
             ListHeaderComponent={
               <View style={{ marginBottom: 4 }}>
+                {/* ★★★ OUR OWN DIRECTORY, AT THE TOP. Stuart, 2026-08-22: "Directory goes top since
+                    it is ours and we dont want to be a 2nd class citizen in our own app" — and it
+                    is the listing that rewards somebody for turning their receiver on, so the more
+                    visible it is the more public VibeServers exist to fill it. It sits ABOVE the
+                    USB SDR block deliberately: the dongle in your hand is one receiver, this is
+                    every one that anybody has offered. */}
+                <SectionHeader label="VIBESERVER DIRECTORY" fs={fs} F={F} C={C} />
+                <ChooserRow
+                  style={[styles.row, { borderColor: C.amber, marginBottom: 6 }]}
+                  onPress={() => openDirectory('vibeserver')}
+                >
+                  <View style={styles.rowMain}>
+                    <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber }} numberOfLines={1}>
+                      Public VibeServers
+                    </Text>
+                    <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }}
+                          numberOfLines={2}>
+                      Receivers people have shared — and you can list your own from Server Mode
+                    </Text>
+                  </View>
+                  <View style={styles.rowRight}>
+                    <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim }}>›</Text>
+                  </View>
+                </ChooserRow>
+
                 {/* RTL-SDR — the dongle plugged into THIS phone. Two things you can do
                     with it, so it reads as one heading with two choices rather than a
                     "Local Hardware" row with a share action bolted underneath.
@@ -2301,7 +2353,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   </View>
                 </ChooserRow>
                 <SectionHeader label="DIRECTORIES" fs={fs} F={F} C={C} />
-                {DIRECTORIES.map(d => (
+                {/* ★ Ours is not repeated here — it has its own place at the top, and a row that
+                     appears twice in one screen reads as two different things. */}
+                {DIRECTORIES.filter(d => d.id !== 'vibeserver').map(d => (
                   <ChooserRow zone="footer"
                     key={d.id}
                     style={[styles.row, { borderColor: C.border, marginBottom: 6 }]}

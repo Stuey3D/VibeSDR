@@ -15,7 +15,7 @@ export interface SDRInstance {
   countryCode:   string | null;  // ISO 3166-1 alpha-2 (directory country_code)
   distance:      number | null;   // km, populated when user location is known
   bestSnr:       number | null;   // best band-condition SNR across all bands
-  serverType?:   'ubersdr' | 'owrx' | 'kiwi' | 'web888' | 'fmdx' | 'spyserver';  // directory-tagged backend (skips re-detect)
+  serverType?:   'vibeserver' | 'ubersdr' | 'owrx' | 'kiwi' | 'web888' | 'fmdx' | 'spyserver';  // directory-tagged backend (skips re-detect)
   // SpyServer only: the protocol is host:port, not a URL. `url` carries
   // spyserver://host:port so the rest of the list plumbing (keys, favourites)
   // keeps working unchanged.
@@ -36,6 +36,10 @@ export interface SDRInstance {
    *  "KiwiSDR 2 v1.902", "Web-888 v…". From the directory's `sdr_hw`, which names the product
    *  properly where `sw_version` only carries a version string. Shown as the row's sub-label. */
   hardware?: string;
+  /** ★ VibeServer directory only: this receiver wants a PIN. Said by the listing so the app can
+   *  ask BEFORE connecting — a stranger meeting a PIN box they cannot fill reads it as a broken
+   *  server rather than one that was never for them. */
+  needsPin?: boolean;
 }
 
 const BASE_URL = 'https://instances.ubersdr.org/api/instances?conditions=true';

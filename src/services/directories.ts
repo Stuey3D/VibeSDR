@@ -10,17 +10,23 @@ import { countryForCoord } from './countryLookup';   // Kiwi/Receiverbook carry 
 import { countryFromText } from './countryFromText'; // last resort: parse the name/location text
 import { isoForCallsign } from './callsignIso';       // final resort: map the callsign prefix
 
-export type DirectoryId = 'ubersdr' | 'receiverbook' | 'kiwisdr' | 'fmdx' | 'spyserver';
+export type DirectoryId = 'vibeserver' | 'ubersdr' | 'receiverbook' | 'kiwisdr' | 'fmdx' | 'spyserver';
 
 export interface DirectoryMeta {
   id:    DirectoryId;
   name:  string;
   desc:  string;
   /** which backends this directory yields — drives the footer logo/labels. */
-  kinds: ('ubersdr' | 'owrx' | 'kiwi' | 'web888' | 'fmdx' | 'spyserver')[];
+  kinds: ('vibeserver' | 'ubersdr' | 'owrx' | 'kiwi' | 'web888' | 'fmdx' | 'spyserver')[];
 }
 
 export const DIRECTORIES: DirectoryMeta[] = [
+  // ★★★ OURS FIRST. Stuart, 2026-08-22: "Directory goes top since it is ours and we dont want to
+  //     be a 2nd class citizen in our own app" — and the listing is the thing that rewards
+  //     somebody for turning their own receiver on, so burying it under four other networks would
+  //     be working against the feature.
+  { id: 'vibeserver',  name: 'VibeServer',  desc: 'Public VibeServers — list yours from the app',
+    kinds: ['vibeserver'] },
   { id: 'ubersdr',     name: 'UberSDR',     desc: 'Official UberSDR instances',                 kinds: ['ubersdr'] },
   { id: 'receiverbook', name: 'Receiverbook', desc: 'OpenWebRX + KiwiSDR (receiverbook.de)',     kinds: ['owrx', 'kiwi'] },
   { id: 'kiwisdr',     name: 'KiwiSDR',     desc: 'Public KiwiSDR network (kiwisdr.com)',        kinds: ['kiwi'] },
@@ -44,6 +50,62 @@ export const DIRECTORIES: DirectoryMeta[] = [
 const DIR_TIMEOUT_MS = 12_000;
 const dirFetch = (url: string, init?: RequestInit) =>
   fetch(url, { ...init, signal: AbortSignal.timeout(DIR_TIMEOUT_MS) });
+
+const VIBESERVER_DIR_URL = 'https://vibeserver.vibesdr.net/api/directory';
+
+/**
+ * Public VibeServers, from our own directory.
+ *
+ * ★★★ CONNECT TO THE STABLE ADDRESS, NEVER THE TUNNEL HOSTNAME. A Quick Tunnel's
+ *     *.trycloudflare.com name is reassigned every time the server restarts, so a favourite saved
+ *     from it would be dead by morning — and could later belong to a stranger. `address` is the
+ *     slug on our own zone and does not move; `url` is the fallback for a port-forwarded listing
+ *     that never had one.
+ * ★★ The directory already answers with what a listener needs BEFORE connecting — occupancy, the
+ *    session limit, whether a PIN is required — so none of it has to be probed here. That is the
+ *    whole reason the listing carries a status blob.
+ * ★ Anything the server did not say stays absent rather than being guessed: an unlisted radio
+ *   model shows nothing, not "unknown".
+ */
+async function fetchVibeServers(lat?: number, lon?: number): Promise<SDRInstance[]> {
+  const res = await dirFetch(VIBESERVER_DIR_URL);
+  if (!res.ok) throw new Error(`VibeServer directory: HTTP ${res.status}`);
+  const body: any = await res.json();
+  const rows: any[] = Array.isArray(body?.servers) ? body.servers : [];
+
+  return rows.map((s: any): SDRInstance => {
+    const max = Number(s.maxListeners) || 0;
+    const users = Number(s.listeners) || 0;
+    const radios: any[] = Array.isArray(s.radios) ? s.radios : [];
+    // ★ One radio: name it. Several: say how many rather than picking one to be the face of the
+    //   machine — a front door holding an HF+ and a dongle is not "an HF+".
+    const device = radios.length === 1
+      ? String(radios[0]?.name || radios[0]?.driver || '').trim() || undefined
+      : radios.length > 1 ? `${radios.length} radios` : undefined;
+    const url = String(s.address ? `https://${s.address}` : (s.url || '')).replace(/\/+$/, '');
+    return {
+      uuid: typeof s.id === 'string' ? s.id : null,
+      name: String(s.name || 'VibeServer'),
+      url,
+      location: String(s.grid || ''),
+      callsign: '',
+      users,
+      maxUsers: max || 1,
+      online: !s.unreachable,
+      version: null,
+      latitude: typeof s.lat === 'number' ? s.lat : null,
+      longitude: typeof s.lon === 'number' ? s.lon : null,
+      countryCode: typeof s.country === 'string' && s.country.length === 2 ? s.country : null,
+      distance: null,
+      bestSnr: null,
+      serverType: 'vibeserver',
+      deviceType: device,
+      full: max > 0 && users >= max,
+      sessionLimitMins: Number(s.limitMin) > 0 ? Number(s.limitMin) : undefined,
+      needsPin: !!s.pin,
+    };
+  }).filter((i: SDRInstance) => !!i.url);
+}
 
 const SPYSERVER_DIR_URL = 'https://airspy.com/directory/status.json';
 
@@ -335,7 +397,8 @@ async function fetchSpyServers(lat?: number, lon?: number): Promise<SDRInstance[
 
 export async function fetchDirectory(id: DirectoryId, lat?: number, lon?: number): Promise<SDRInstance[]> {
   let list: SDRInstance[];
-  if (id === 'ubersdr')      list = await fetchInstances(lat, lon);
+  if (id === 'vibeserver')   list = await fetchVibeServers(lat, lon);
+  else if (id === 'ubersdr') list = await fetchInstances(lat, lon);
   else if (id === 'receiverbook') list = await fetchReceiverbook(lat, lon);
   else if (id === 'fmdx')    list = await fetchFmdx(lat, lon);
   else if (id === 'spyserver') list = await fetchSpyServers(lat, lon);
