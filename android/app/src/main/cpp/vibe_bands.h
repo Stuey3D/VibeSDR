@@ -95,13 +95,21 @@ inline const std::vector<NamedBand>& namedBands(int region = 1) {
         { "dab",      "DAB (Band III)",     174000000.0,  240000000.0 },
     };
     // Where the regions differ. Sources: ITU Radio Regulations Article 5 allocations.
+    // ★★★ "FM Broadcast Band", NOT "FM broadcast". A restriction shown as "FM" is ambiguous in a
+    //     way that matters here: it reads as easily as "this receiver is locked to the FM
+    //     DEMODULATOR" as it does "locked to the FM broadcast band", and those are completely
+    //     different limitations (Stuart, 2026-08-22). Naming the BAND removes the reading that is
+    //     not true.
+    //  ★ Changed in the table rather than at either call site, because this is the one vocabulary
+    //    the receiver's landing page and the public directory both draw on — a second copy is how
+    //    they end up disagreeing about what a server offers.
     static const std::vector<NamedBand> kR1 = {
         { "mw",   "AM (medium wave) broadcast", 526500.0, 1606500.0 },
         { "160m", "160 m amateur",   1810000.0,    2000000.0 },
         { "80m",  "80 m amateur",    3500000.0,    3800000.0 },
         { "40m",  "40 m amateur",    7000000.0,    7200000.0 },
         { "6m",   "6 m amateur",    50000000.0,   52000000.0 },
-        { "fm",   "FM broadcast",   87500000.0,  108000000.0 },
+        { "fm",   "FM Broadcast Band",   87500000.0,  108000000.0 },
         { "2m",   "2 m amateur",   144000000.0,  146000000.0 },
         { "70cm", "70 cm amateur", 430000000.0,  440000000.0 },
         { "pmr",  "PMR446",        446000000.0,  446200000.0 },
@@ -112,7 +120,7 @@ inline const std::vector<NamedBand>& namedBands(int region = 1) {
         { "80m",  "80 m amateur",    3500000.0,    4000000.0 },
         { "40m",  "40 m amateur",    7000000.0,    7300000.0 },
         { "6m",   "6 m amateur",    50000000.0,   54000000.0 },
-        { "fm",   "FM broadcast",   88000000.0,  108000000.0 },
+        { "fm",   "FM Broadcast Band",   88000000.0,  108000000.0 },
         { "2m",   "2 m amateur",   144000000.0,  148000000.0 },
         { "70cm", "70 cm amateur", 420000000.0,  450000000.0 },
         { "frs",  "FRS/GMRS",      462550000.0,  467725000.0 },
@@ -123,7 +131,7 @@ inline const std::vector<NamedBand>& namedBands(int region = 1) {
         { "80m",  "80 m amateur",    3500000.0,    3900000.0 },
         { "40m",  "40 m amateur",    7000000.0,    7200000.0 },
         { "6m",   "6 m amateur",    50000000.0,   54000000.0 },
-        { "fm",   "FM broadcast",   87500000.0,  108000000.0 },
+        { "fm",   "FM Broadcast Band",   87500000.0,  108000000.0 },
         { "2m",   "2 m amateur",   144000000.0,  148000000.0 },
         { "70cm", "70 cm amateur", 430000000.0,  450000000.0 },
     };

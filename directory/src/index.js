@@ -500,9 +500,29 @@ async function serveBySlug(host, request, env) {
     return new Response('This address does not carry the audio stream.', { status: 426 });
   }
 
+  // ★★★ SAY WHO THE VISITOR IS, PLAINLY. Proxying the page means the server sees CLOUDFLARE at the
+  //     other end of every HTTP request, not the person — so the landing-page visitor list, the
+  //     country breakdown and the ban list all described us instead of them. Stuart spotted it on
+  //     his own admin screen: "ON THE LANDING PAGE  2a06:98c0:3600::103" — a Cloudflare address,
+  //     sitting there because the directory page polls for live counts (2026-08-22).
+  //
+  // ★★ FORWARDING THE HEADERS WAS NOT ENOUGH. The chain reaching the receiver is
+  //    [browser, cloudflare-edge] -> cloudflared -> loopback, and the shim walks X-Forwarded-For
+  //    from the RIGHT taking the first address it does not trust — which is Cloudflare's edge,
+  //    because the only trusted entry is loopback. It cannot know our edge is also "us".
+  //
+  // ★★★ So the header is REPLACED, not appended: exactly one address, the browser's, which is the
+  //     only one the receiver has any use for. Right-to-left then lands on the visitor whether the
+  //     server trusts one hop or two.
+  //  ★ X-Real-IP too, for the same value — the shim reads it when there is no X-Forwarded-For.
+  const fwd = new Headers(request.headers);
+  const visitor = request.headers.get('cf-connecting-ip');
+  if (visitor) { fwd.set('x-forwarded-for', visitor); fwd.set('x-real-ip', visitor); }
+  else { fwd.delete('x-forwarded-for'); fwd.delete('x-real-ip'); }
+
   const res = await fetch(target, {
     method: request.method,
-    headers: request.headers,
+    headers: fwd,
     body: (request.method === 'GET' || request.method === 'HEAD') ? undefined : request.body,
     redirect: 'manual',
   });

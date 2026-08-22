@@ -877,7 +877,24 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                         const st = await Local?.tunnelStart?.(nm, where.grid, running.port, '',
                                                             radio?.model || '', radio?.driver || '',
                                                             (antenna || '').trim(),
-                                                            (allowRanges || '').trim(),
+                                                            // ★★★ THE BANDS IN WORDS, FROM THE
+                                                            //   SERVER'S OWN PLAN. allowRanges is
+                                                            //   the owner's shorthand — "fm" — and
+                                                            //   publishing that made the directory
+                                                            //   read "fm" where the receiver's own
+                                                            //   landing page says "FM broadcast"
+                                                            //   (Stuart, 2026-08-22). `bands` comes
+                                                            //   from vibe_bands.h via getBands, so
+                                                            //   this is the SAME vocabulary, not a
+                                                            //   second copy that can drift.
+                                                            // ★ An id with no match is passed
+                                                            //   through: an owner's arbitrary range
+                                                            //   is real and unnameable, and its
+                                                            //   figures beat a vague label.
+                                                            (allowRanges || '').split(',')
+                                                              .map((t) => t.trim()).filter(Boolean)
+                                                              .map((t) => bands.find((b) => b.id === t)?.label || t)
+                                                              .join(', '),
                                                             // ★ 'locked' = each listener gets their
                                                             //   own VFO in a fixed window; anything
                                                             //   else with room for several is ONE

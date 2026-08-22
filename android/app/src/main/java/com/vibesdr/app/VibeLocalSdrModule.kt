@@ -75,7 +75,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         //   before anything is opened. Same family as [[else_means_dongle_trap]]: with two radios
         //   supported, "it is a device we know" no longer implies "it is a dongle".
         m.putString("kind", if (isAirspyHf(dev)) "airspyhf" else "rtl")
-        m.putString("label", dev.productName ?: (if (isAirspyHf(dev)) "Airspy HF+" else "RTL-SDR"))
+        m.putString("label", radioModelName(dev))
         m.putBoolean("hasPermission", hasPermission)
         return m
     }
@@ -402,6 +402,23 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
      *  ★ VID/PID only: no USB open, no permission prompt, and nothing for the user to approve
      *  just to draw a menu. The radio's exact rate list still comes from the radio once it is
      *  running — this decides which menu to show, not what the hardware will accept. */
+    /**
+     * What to CALL this radio — maker and model, the way the landing page does.
+     *
+     * ★ A dongle's USB product string is often just "Blog V4"; the maker sits in a separate
+     *   descriptor. Shown alone it identifies nothing, which matters most in a public directory
+     *   where it is what somebody picks between.
+     * ★★ Never doubled: a product string that already names its maker is returned as it is.
+     */
+    private fun radioModelName(dev: android.hardware.usb.UsbDevice): String {
+        val product = (dev.productName ?: "").trim()
+        val maker = (dev.manufacturerName ?: "").trim()
+        val fallback = if (isAirspyHf(dev)) "Airspy HF+" else "RTL-SDR"
+        if (product.isEmpty()) return if (maker.isNotEmpty()) "$maker $fallback" else fallback
+        if (maker.isEmpty() || product.lowercase().startsWith(maker.lowercase())) return product
+        return "$maker $product"
+    }
+
     @ReactMethod
     fun getConnectedRadio(promise: Promise) {
         val mgr = usbManager ?: run { promise.resolve(null); return }
@@ -409,7 +426,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             ?: run { promise.resolve(null); return }
         val res = Arguments.createMap()
         res.putString("driver", if (isAirspyHf(dev)) "airspyhf" else "rtl")
-        res.putString("model", dev.productName ?: (if (isAirspyHf(dev)) "Airspy HF+" else "RTL-SDR"))
+        // ★★★ THE MAKER AND THE MODEL, as the receiver's own landing page names it: "RTLSDRBlog
+        //     Blog V4", not the bare "Blog V4" the dongle reports as its product string. On its own
+        //     that names nothing a buyer would recognise, and in a public directory it is the
+        //     difference between identifying the hardware and hinting at it (Stuart, 2026-08-22).
+        //  ★ Only where it ADDS something: a product string that already begins with the maker is
+        //    left alone, or an Airspy would come out "Airspy Airspy HF+".
+        res.putString("model", radioModelName(dev))
         promise.resolve(res)
     }
 

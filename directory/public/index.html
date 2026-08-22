@@ -55,6 +55,27 @@
   .radio { border-top: 1px dashed var(--line); padding: 9px 0; font-size: 13px; }
   .radio b { font-weight: 600; }
   .radio .cap { color: var(--dim); }
+
+  /* ★★★ THE RECEIVER'S OWN CARD, NOT A LIST ROW. Stuart, 2026-08-22, of the landing page: "this is
+     so much neater and tidier" — and it is the same information, so it should not arrive in a
+     different visual language depending on which page you met it on. Monospace, an amber rule, the
+     name large on the left and the state opposite it. */
+  .rcard {
+    border: 1px solid rgba(255,176,0,.35); border-radius: 8px;
+    padding: 10px 12px; margin: 10px 0;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  .rcTop { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  /* ★ Large, because it is the thing you are choosing between. */
+  .rcName { font-size: 17px; font-weight: 600; color: #ffb833; letter-spacing: .04em; }
+  .rcState { font-size: 11px; color: var(--dim); letter-spacing: .06em;
+             white-space: nowrap; flex: 0 0 auto; }
+  .rcSub { margin-top: 3px; font-size: 12px; color: var(--dim); letter-spacing: .03em;
+           line-height: 1.5; }
+  /* ★ Brighter than the detail around it: an instruction, not another readout. */
+  .rcAsk { margin-top: 4px; font-size: 12px; color: var(--temp); letter-spacing: .06em; }
+  .rcHost { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+            font-size: 12px; color: var(--dim); letter-spacing: .03em; margin: 2px 0 10px; }
   /* ★ Brighter than the detail around it: it is an instruction, not another readout. */
   .radio .cap.ask { color: var(--temp); letter-spacing: 0.06em; margin-top: 3px; }
   .listen { display: inline-block; margin-top: 10px; padding: 7px 14px; border-radius: 7px;
@@ -177,52 +198,71 @@ function listenUrl(s) {
  */
 function radioLine(r, s) {
   const max = (s && s.maxListeners) || 0;
-  // ★ ONE TEST, TWO USES — the wording and the etiquette line are the same fact, read from the
-  //   same expression, exactly as the landing card does it.
+  // ★ ONE TEST, TWO USES — the wording and the etiquette line are the same fact.
   const sharedDial = max > 1 && !r.locked;
   const kind = max <= 1 ? 'one listener at a time'
              : r.locked ? 'individual VFOs · locked RF centre'
                         : 'shared VFO · unlocked RF centre';
 
+  // ★★★ THE BANDS IN WORDS. "fm" is the owner's shorthand in a config box; "FM broadcast" is what
+  //     the receiver is FOR. The server names them from its own region-aware band plan and sends
+  //     them as coverage — this only falls back to the raw mode when it has not.
+  const cov = (Array.isArray(r.coverage) && r.coverage.length)
+    ? r.coverage.map((c) => esc(c)).join(', ')
+    : (r.mode ? esc(r.mode) : '');
+
   const bits = [];
-  if (Array.isArray(r.coverage) && r.coverage.length) {
-    bits.push(r.coverage.map((c) => esc(c)).join(', '));
-  } else if (r.mode) bits.push(esc(r.mode));
+  if (cov) bits.push(cov);
   bits.push(esc(kind));
   if (r.restricted) bits.push('restricted range');
   if (s && s.limitMin > 0) bits.push(`${s.limitMin} minute limit`);
 
-  // ★★★ THE ETIQUETTE, BEFORE THEY CLICK. On a shared dial everyone listens to whatever the last
-  //     person tuned, so moving it takes the station away from the room. "shared VFO · unlocked RF
-  //     centre" names the mechanism; it does not ask for the courtesy.
-  //  ★ Only in that mode — on a locked centre each listener has their own VFO and may tune freely,
-  //    and a rule that is sometimes untrue teaches people to ignore the rest of the entry.
-  const etiquette = sharedDial
-    ? `<div class="cap ask">ASK BEFORE TUNING — everyone here shares one dial</div>` : '';
+  // ★★ THE STATE SITS OPPOSITE THE NAME, as it does on the receiver's own landing page: the name
+  //    tells you what it is, the right-hand end tells you whether you can have it.
+  const isFull = max > 0 && s.listeners >= max;
+  const stateTxt = s.unreachable ? 'NOT RESPONDING'
+                 : isFull ? (s.freeInSec > 0 ? `FULL · FREE IN ${mmss(s.freeInSec)}` : 'FULL')
+                 : `${s.listeners} OF ${max || 1} LISTENING`;
 
-  return `<div class="radio"><b>${esc(r.name || 'Radio')}</b>
-    <div class="cap">${bits.join(' · ') || 'no details published'}</div>${etiquette}</div>`;
+  const etiquette = sharedDial
+    ? `<div class="rcAsk">ASK BEFORE TUNING — everyone here shares one dial</div>` : '';
+  const ant = (s && s.antenna) ? `<div class="rcSub">⚲ ${esc(s.antenna)}</div>` : '';
+
+  return `<div class="rcard">
+      <div class="rcTop"><span class="rcName">${esc(r.name || 'Radio')}</span>
+        <span class="rcState">${esc(stateTxt)}</span></div>
+      <div class="rcSub">${bits.join(' · ') || 'no details published'}</div>
+      ${ant}${etiquette}
+    </div>`;
+}
+
+/** mm:ss, the way the receiver's own card writes a countdown. */
+function mmss(sec) {
+  const m = Math.floor(sec / 60), t = Math.max(0, Math.floor(sec % 60));
+  return `${m}:${String(t).padStart(2, '0')}`;
 }
 
 function serverBlock(s) {
   const st = state(s);
-  const slots = s.maxListeners > 0 ? `${s.listeners}/${s.maxListeners} listening` :
-                (s.listeners ? `${s.listeners} listening` : '');
-  const free = (s.freeInSec > 0) ? ` · free in ${Math.ceil(s.freeInSec / 60)} min` : '';
+
   const radios = (s.radios || []).map((r) => radioLine(r, s)).join('') ||
     '<div class="radio cap">This server has not published its radios yet.</div>';
   // ★ The aerial and the machine, each on its own line and each only when said. An empty label
   //   would be worse than nothing: it implies we asked and got no answer.
-  const extra =
-    (s.antenna ? `<div class="radio cap">Antenna: ${esc(s.antenna)}</div>` : '') +
-    (s.host ? `<div class="radio cap">Server: ${esc(s.host)}</div>` : '');
+  // ★ The aerial now belongs to the RADIO card (as on the landing page, where each radio carries
+  //   its own); only the machine is left to say here, underneath.
+  const extra = s.host
+    ? `<div class="rcHost">Server: ${esc(s.host)}</div>` : '';
   return `<details class="srv${s.unreachable ? ' down' : ''}">
     <summary>
       <i class="dot ${st.cls}" title="${esc(st.label)}"></i>
       <span>${esc(s.name)}</span>
       ${s.kind === 'tunnel' ? '<span class="tag">tunnel</span>' : ''}
-      <span class="meta">${esc(s.grid)}${s.unreachable ? ' · not responding'
-                          : (slots ? ' · ' + esc(slots) : '') + esc(free)}</span>
+      <!-- ★★ THE COUNT BELONGS TO THE RADIO, NOT THE SERVER. A machine can hold several receivers
+           with different occupancy, so "2/10 listening" beside the server NAME is only ever true
+           by accident — and on the receiver's own landing page it has always sat in the radio box
+           (Stuart, 2026-08-22). This line says WHERE the server is; the cards say who is on what. -->
+      <span class="meta">${esc(s.grid)}${s.unreachable ? ' · not responding' : ''}</span>
     </summary>
     <div class="body">
       ${radios}${extra}
