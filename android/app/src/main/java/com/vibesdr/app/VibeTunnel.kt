@@ -53,6 +53,20 @@ object VibeTunnel {
     private const val K_KEY = "key"
     private const val K_SLUG = "slug"
 
+    /** ★★★ WHAT THIS SERVER IS LISTED AS, kept so the listing can COME BACK BY ITSELF. A tunnel
+     *  belongs to the process that spawned it, so anything that restarts the app — an update, a
+     *  low-memory kill, a reboot, or the owner reopening it — takes the tunnel with it while the
+     *  directory goes on advertising the dead address until the entry expires (seen 2026-08-22,
+     *  after an adb install: "it just lost the server"). Re-establishing has to be automatic;
+     *  nobody should have to know to go and flick a switch again. */
+    private const val K_WANT = "wantListed"
+    private const val K_NAME = "pubName"
+    private const val K_GRID = "pubGrid"
+    private const val K_MODEL = "pubModel"
+    private const val K_DRIVER = "pubDriver"
+    private const val K_ANT = "pubAntenna"
+    private const val K_COV = "pubCoverage"
+
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
@@ -360,6 +374,11 @@ object VibeTunnel {
         // ★ Remember how to say all this again, so the renewal below needs nothing from the UI —
         //   which may well be gone: the server keeps running with the screen off.
         lastPublish = { publishOnce(ctx, name, locator, port, radioModel, radioDriver, antenna, coverage) }
+        prefs(ctx).edit()
+            .putBoolean(K_WANT, true).putString(K_NAME, name).putString(K_GRID, locator)
+            .putString(K_MODEL, radioModel).putString(K_DRIVER, radioDriver)
+            .putString(K_ANT, antenna).putString(K_COV, coverage)
+            .apply()
         startPinging()
         return publishOnce(ctx, name, locator, port, radioModel, radioDriver, antenna, coverage)
     }
@@ -453,8 +472,36 @@ object VibeTunnel {
     }
 
     /** ★ Turning the switch OFF frees the public address IMMEDIATELY, rather than letting it lapse. */
+    /**
+     * Put the listing back after a restart, if it was on.
+     *
+     * ★★ The PORT is deliberately not remembered — it is whatever the server has just bound, and
+     *    reusing yesterday's would tunnel to nothing. Everything else describes the SERVER and is
+     *    the same as it was.
+     * ★ Silent when listing was off, and silent when it fails: this runs on the boot path and must
+     *   never be able to stop a receiver coming up.
+     */
+    fun restoreIfWanted(ctx: Context, port: Int) {
+        try {
+            val p = prefs(ctx)
+            if (!p.getBoolean(K_WANT, false) || port <= 0) return
+            if (running.get()) return
+            val name = p.getString(K_NAME, "") ?: ""
+            if (name.length < 2) return
+            Log.i(TAG, "restoring public listing for \"$name\"")
+            applyLoopbackTrust(true, "")
+            startTunnel(ctx, port) { url ->
+                if (url == null) { Log.w(TAG, "listing not restored: $lastError"); return@startTunnel }
+                publish(ctx, name, p.getString(K_GRID, "") ?: "", port,
+                        p.getString(K_MODEL, "") ?: "", p.getString(K_DRIVER, "") ?: "",
+                        p.getString(K_ANT, "") ?: "", p.getString(K_COV, "") ?: "")
+            }
+        } catch (t: Throwable) { Log.w(TAG, "restoreIfWanted failed", t) }
+    }
+
     fun delist(ctx: Context) {
         stopPinging()
+        prefs(ctx).edit().putBoolean(K_WANT, false).apply()
         val p = prefs(ctx)
         val id = p.getString(K_ID, null) ?: return
         val key = p.getString(K_KEY, null) ?: return

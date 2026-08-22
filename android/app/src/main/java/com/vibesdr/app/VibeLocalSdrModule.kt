@@ -330,6 +330,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
 
         val port = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId,
                                                 reactContext.filesDir)
+        // ★★★ PUT THE PUBLIC LISTING BACK IF IT WAS ON. The tunnel dies with the process that
+        //     spawned it, so an update, a low-memory kill or a reboot leaves the directory
+        //     advertising an address that answers 530 until the entry expires — seen 2026-08-22
+        //     after an install: "it just lost the server". The switch is a STANDING INSTRUCTION,
+        //     not a one-off action, so it is re-established here where the port has just been
+        //     bound. ★ Never allowed to fail the start: restoreIfWanted swallows everything.
+        if (port > 0) VibeTunnel.restoreIfWanted(reactApplicationContext, port)
         if (port <= 0) {
             VibeLocalSDR.setServeOnLan(false)
             conn.close(); sessionConn = null

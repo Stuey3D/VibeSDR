@@ -31,6 +31,10 @@
   .sh-free { background: var(--free); border-radius: 50%; }
   .sh-busy { background: transparent; border: 2px solid var(--busy); border-radius: 50%; }
   .sh-temp { background: var(--temp); transform: rotate(45deg); }
+  /* ★ Hollow and grey, and a different SHAPE again — a server that is not answering reads as
+     absent rather than as another flavour of busy. */
+  .sh-down { background: transparent; border: 2px solid #6b7785; }
+  .srv.down > summary { opacity: 0.55; }
 
   .country { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 10px;
              background: var(--panel); overflow: hidden; }
@@ -112,6 +116,11 @@ const countryName = (cc) => {
 
 /** Free / busy / temporary — the three states the legend names. */
 function state(s) {
+  // ★ Checked first: an unreachable server is not free, not busy and not a temporary share — it
+  //   is simply not answering, and that is what a listener needs to know before clicking.
+  if (s.unreachable) {
+    return { cls: 'sh-down', colour: '#6b7785', label: 'not responding' };
+  }
   // ★★★ THE SERVER SAYS SO — never inferred from the ping interval. It WAS, and so every ordinary
   //     listing came out a "temporary share": the default TTL is thirty minutes, well inside the
   //     window this used to guess with. A product concept must not be invented out of a timing
@@ -186,12 +195,13 @@ function serverBlock(s) {
   const extra =
     (s.antenna ? `<div class="radio cap">Antenna: ${esc(s.antenna)}</div>` : '') +
     (s.host ? `<div class="radio cap">Server: ${esc(s.host)}</div>` : '');
-  return `<details class="srv">
+  return `<details class="srv${s.unreachable ? ' down' : ''}">
     <summary>
       <i class="dot ${st.cls}" title="${esc(st.label)}"></i>
       <span>${esc(s.name)}</span>
       ${s.kind === 'tunnel' ? '<span class="tag">tunnel</span>' : ''}
-      <span class="meta">${esc(s.grid)}${slots ? ' · ' + esc(slots) : ''}${esc(free)}</span>
+      <span class="meta">${esc(s.grid)}${s.unreachable ? ' · not responding'
+                          : (slots ? ' · ' + esc(slots) : '') + esc(free)}</span>
     </summary>
     <div class="body">
       ${radios}${extra}
@@ -269,7 +279,15 @@ async function withLiveCounts(servers) {
       if (Number.isFinite(j.maxUsers)) s.maxListeners = Number(j.maxUsers);
       if (Number.isFinite(j.freeInSec)) s.freeInSec = Number(j.freeInSec);
       s.live = true;
-    } catch { /* asleep, slow, or gone — the directory's own figure stands */ }
+    } catch {
+      // ★★★ A SERVER THAT DOES NOT ANSWER MUST NOT LOOK HEALTHY. This used to keep the
+      //     directory's own figures, so a receiver whose tunnel had died went on showing
+      //     "2/10 listening" for the half hour until its listing expired — the listing is
+      //     LIVENESS, and it is up to fifteen minutes stale by design.
+      // ★★ The directory decides who is LISTED; the page decides what is REACHABLE. Saying so is
+      //    the whole difference between a stale entry and a lie.
+      s.unreachable = true;
+    }
   }));
   return servers;
 }

@@ -199,6 +199,8 @@ object VibeServerBoot {
         //   setup page. Locking a loop that is not running locks nothing.
         if (port > 0) VibeLocalSDR.setGainAutomation(
             false, cfg.b("rtlAgc", false) || cfg.b("agcLock", false))
+        // ★ The public listing is put back by the CALLERS, which hold a Context — see
+        //   VibeTunnel.restoreIfWanted. This object only has a File.
         return port
     }
 }
