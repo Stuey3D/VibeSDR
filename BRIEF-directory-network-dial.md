@@ -99,6 +99,32 @@ along it are not decoration — they are the only thing telling a visitor that t
 looking at is 86 MHz wide and the band beside it is 1 MHz. A non-linear axis without labels is a
 lie; with them it is a schematic, which is what this should be.
 
+## The band plan is chosen, not assumed
+
+Stuart, 2026-08-22: *"for the bandplan we have a dropdown to choose region the bandplan should
+show."*
+
+The plan differs by ITU region and the differences are not trivia — medium wave ends at 1606.5 kHz
+in Region 1 and 1705 kHz in Region 2, and FM broadcast is 87.5–108 MHz here and 76–90 MHz in
+Japan. A dial labelled with the wrong plan tells a visitor a band ends where it does not.
+
+★★★ THE REGION CHANGES THE LABELS, NEVER THE COVERAGE. A receiver's `ranges` are frequencies in
+Hz and mean the same thing everywhere on earth; the plan is only how we NAME stretches of them and
+where a band-click lands. Switching region must therefore never change which servers are listed,
+what the dial spans, or what is green — only the words above it. If a region switch ever appears
+to add or remove a server, something has been computed from a label that should have been computed
+from a number.
+
+★★ SO THE GENERATED PLAN CARRIES ALL THREE REGIONS, not just the one the build machine sits in.
+`vibe_bands.h` already keeps a common table plus per-region tables and takes a region argument —
+the generator emits every region and the page picks one.
+
+★ DEFAULT AND MEMORY. Region 1 by default, remembered per visitor. Deliberately NOT guessed from
+the browser's locale or timezone: a guess that is wrong relabels the spectrum for somebody who
+never asked, and the tell — "medium wave stops in the wrong place" — is far too subtle to notice.
+An explicit dropdown that starts somewhere sensible beats a clever guess nobody can see being
+made.
+
 ## The availability computation
 
 Client side, from `ranges` plus per-radio occupancy. A sweep line over every range boundary in the
