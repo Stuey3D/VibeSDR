@@ -7,6 +7,10 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <unistd.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 #include <mutex>
 #include <sstream>
 #include <thread>
@@ -214,6 +218,29 @@ std::string buildStatus(int port) {
                     j += std::string(",\"shared\":") + (jsonBool(r, "locked") ? "true" : "false");
                     j += std::string(",\"restricted\":")
                        + (jsonBool(r, "restricted") ? "true" : "false");
+                    // ★★★ THE FIELDS THE LANDING PAGE ITSELF READS, UNDER THE SAME NAMES. The
+                    //     directory row and the receiver's own landing screen were describing the
+                    //     same radio in different words — "wfm · one listener at a time" against
+                    //     "500 kHz – 1766 MHz · UNRESTRICTED · one listener at a time" (Stuart,
+                    //     2026-08-23: "the directory needs to mirror the landing screen"). Passing
+                    //     the SAME fields through lets the directory run the SAME logic instead of
+                    //     a second approximation of it, which is the only way two pages stay in
+                    //     step about what a receiver is.
+                    //  ★ The aerial is per RADIO here — one machine can hold three, on three
+                    //    different antennas, and the machine-level one cannot say that.
+                    j += ",\"antenna\":\"" + jsonStr(r, "antenna") + "\"";
+                    j += ",\"centreHz\":" + std::to_string(jsonNum(r, "centreHz", 0));
+                    j += ",\"spanHz\":" + std::to_string(jsonNum(r, "spanHz", 0));
+                    // ★★★ AND THE CAP THIS RADIO ACTUALLY HAS. The listing carried the SERVER's
+                    //     maxUsers for every radio, which on a front door is meaningless: the Pi
+                    //     showed "0 OF 1 LISTENING" against receivers configured for ten, so the
+                    //     directory advertised three full-looking radios on a machine with room
+                    //     for twenty. `users` on the front door is the configured cap, per radio.
+                    //  ★★ It is the CAP, not live occupancy — nobody counts listeners per radio in
+                    //     the process that publishes this list, because each radio is a separate
+                    //     process. Publishing the cap is honest; inventing an occupancy would not
+                    //     be. See BRIEF-directory-network-dial.md, step 1.
+                    j += ",\"maxListeners\":" + std::to_string(jsonNum(r, "users", 0));
                     // ★★ WORDS in coverage, NUMBERS in ranges — see the note above.
                     auto arr = [&](const std::string& key) -> std::string {
                         const std::string k2 = "\"" + key + "\":";
@@ -231,7 +258,15 @@ std::string buildStatus(int port) {
                     const std::string names   = arr("allowedNames");
                     const std::string allowed = arr("allowed");
                     const std::string hw      = arr("coverage");
-                    j += ",\"coverage\":" + (names.empty() ? "[]" : names);
+                    // ★★ THREE FIELDS, THREE MEANINGS, THE SAME AS THE FRONT DOOR'S. `coverage` is
+                    //    the hardware's reach in Hz, `allowed` is what the owner permits within
+                    //    it, `allowedNames` is that in words where the band plan has words. The
+                    //    directory used to squash all of it into one word-list called `coverage`,
+                    //    which is why it could say less than the landing page no matter how the
+                    //    page was written.
+                    if (!hw.empty())      j += ",\"coverage\":" + hw;
+                    if (!names.empty())   j += ",\"allowedNames\":" + names;
+                    if (!allowed.empty()) j += ",\"allowed\":" + allowed;
                     // ★ What the owner PERMITS, falling back to the hardware where no list is set:
                     //   a search must never offer a band the operator has blocked.
                     const std::string ranges = !allowed.empty() ? allowed : hw;
@@ -341,13 +376,54 @@ bool publishOnce(const Settings& want, const std::string& url) {
     return publishOnce(again, url);
 }
 
+/**
+ * Where our cloudflared lives.
+ *
+ * ★★★ OURS FIRST, ALWAYS. We ship a pinned build — beside the binary in a .app, in lib/vibeserver
+ *     from the .deb — and that is the one this was tested against. Falling straight to PATH would
+ *     mean an owner's own cloudflared (any age, any config, possibly a managed named tunnel with
+ *     its own credentials) silently became the thing we drive.
+ * ★ PATH remains the LAST resort, so a source build with no fetched binary still works for
+ *   somebody who has one installed.
+ */
+std::string cloudflaredPath() {
+    std::vector<std::string> candidates;
+#if defined(__APPLE__)
+    // ★ Contents/MacOS/cloudflared — beside vibeserver-engine, which is what /proc-less macOS
+    //   gives us via _NSGetExecutablePath.
+    uint32_t n = 0;
+    _NSGetExecutablePath(nullptr, &n);
+    std::string self(n, '\0');
+    if (_NSGetExecutablePath(&self[0], &n) == 0) {
+        self.resize(strlen(self.c_str()));
+        const size_t slash = self.find_last_of('/');
+        if (slash != std::string::npos) candidates.push_back(self.substr(0, slash) + "/cloudflared");
+    }
+#else
+    char buf[4096];
+    const ssize_t len = ::readlink("/proc/self/exe", buf, sizeof buf - 1);
+    if (len > 0) {
+        buf[len] = '\0';
+        std::string self(buf);
+        const size_t slash = self.find_last_of('/');
+        if (slash != std::string::npos) candidates.push_back(self.substr(0, slash) + "/cloudflared");
+    }
+    candidates.push_back("/usr/lib/vibeserver/cloudflared");
+    candidates.push_back("/usr/local/lib/vibeserver/cloudflared");
+#endif
+    for (const auto& c : candidates)
+        if (::access(c.c_str(), X_OK) == 0) return c;
+    return "cloudflared";        // ★ PATH, and it may not be there — startTunnel says so.
+}
+
 /** ★★ A Quick Tunnel's hostname appears ONLY in cloudflared's own output — the edge assigns it —
  *     so the log is parsed rather than merely logged. Same as the Android side. */
 std::string startTunnel(int port) {
     if (g_tunnel) { pclose(g_tunnel); g_tunnel = nullptr; }
-    char cmd[512];
+    const std::string exe = cloudflaredPath();
+    char cmd[1024];
     snprintf(cmd, sizeof cmd,
-             "cloudflared tunnel --no-autoupdate --url http://127.0.0.1:%d 2>&1", port);
+             "'%s' tunnel --no-autoupdate --url http://127.0.0.1:%d 2>&1", exe.c_str(), port);
     g_tunnel = popen(cmd, "r");
     if (!g_tunnel) return {};
     char line[1024];
@@ -369,7 +445,7 @@ void stopTunnel() {
     pclose(g_tunnel);
     g_tunnel = nullptr;
     // ★ pclose waits for the child, but cloudflared ignores the pipe closing — make sure.
-    run("pkill -f 'cloudflared tunnel --no-autoupdate --url http://127.0.0.1' 2>/dev/null");
+    run("pkill -f 'tunnel --no-autoupdate --url http://127.0.0.1' 2>/dev/null");
 }
 
 void worker() {

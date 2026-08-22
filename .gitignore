@@ -100,3 +100,7 @@ vibeserver/linux/sdrplay-inc/
 
 # cloudflared for Android — 27 MB, rebuilt by tools/cloudflared-android/build.sh
 android/app/src/main/cpp/cloudflared/
+
+# ★ cloudflared binaries we SHIP but do not author — fetched by tools/cloudflared-desktop/fetch.sh.
+#   Committing 110 MB of somebody else's release artefacts would bloat every clone for ever.
+tools/cloudflared-desktop/bin/

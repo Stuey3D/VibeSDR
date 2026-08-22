@@ -379,6 +379,33 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   # ★ Run as root from the unit's ExecStartPre — the daemon is unprivileged and cannot write
   #   sysfs. See linux/vibeserver-governor for why a wrong governor costs 25% of the machine.
   install(PROGRAMS linux/vibeserver-governor linux/vibeserver-radios DESTINATION lib/vibeserver)
+
+  # ★★★ SHIP cloudflared, DO NOT ASK FOR IT. The public listing offers to make an address for an
+  #     owner who has no port forward — the only route that works behind CGNAT — and that offer is
+  #     empty if it depends on a binary Debian does not carry. "Install cloudflared first" is a
+  #     dead end on a Pi in a loft (Stuart, 2026-08-23: "I thought we were bundling cloudflare").
+  #  ★★ It cannot be a Depends: line for exactly that reason — there is no such package to depend
+  #     ON — so it travels inside ours, in lib/vibeserver beside the other helpers.
+  #  ★★ APACHE-2.0, so redistribution is permitted WITH THE LICENCE ALONGSIDE. The licence is
+  #     installed with it; a bundled binary without one is how a permitted act becomes an
+  #     infringing one.
+  #  ★ Absent = a package WITHOUT the tunnel rather than a broken build: someone building from a
+  #    fresh clone has not run fetch.sh, and their server should still compile and run.
+  set(_vibe_cf_src "${CMAKE_CURRENT_SOURCE_DIR}/../tools/cloudflared-desktop/bin")
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+    set(_vibe_cf "${_vibe_cf_src}/cloudflared-linux-arm64")
+  else()
+    set(_vibe_cf "${_vibe_cf_src}/cloudflared-linux-amd64")
+  endif()
+  if(EXISTS "${_vibe_cf}")
+    install(PROGRAMS "${_vibe_cf}" DESTINATION lib/vibeserver RENAME cloudflared)
+    install(FILES "${_vibe_cf_src}/LICENSE" DESTINATION share/doc/vibeserver
+            RENAME LICENSE.cloudflared)
+    message(STATUS "bundling cloudflared: ${_vibe_cf}")
+  else()
+    message(WARNING "cloudflared not bundled (run tools/cloudflared-desktop/fetch.sh) — "
+                    "the public listing will need one on PATH")
+  endif()
   # ★★ NOT a plain install() — the config is the one file the user edits, and apt must never
   #   clobber it on upgrade. Staged elsewhere and copied by postinst ONLY if absent.
   install(FILES linux/vibeserver.conf DESTINATION ${CMAKE_INSTALL_DATADIR}/vibeserver)

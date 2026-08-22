@@ -210,9 +210,14 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
             way the <code>.local</code> name is. Shown to strangers, so nothing private.</div></label>
         <label><span class="lbl">Address (optional)</span>
           <input type="url" id="dirPublicUrl" placeholder="https://my-sdr.example.com">
-          <div class="hint">Leave empty and a Cloudflare tunnel is created for you &mdash; needs
-            <code>cloudflared</code> installed, and is the only option that works behind
-            CGNAT. Fill it in if you already have a DDNS name or a port forward.</div></label>
+          <!-- ★★ THE COPY FOLLOWED THE BUILD. This said "needs cloudflared installed", which was
+               true for about an hour and is a dead end on a Pi in a loft: it is not in Debian's
+               repositories, so the instruction really meant "go and find one". We ship it now, so
+               the sentence that sent people looking had to go with it (Stuart, 2026-08-23: "I
+               thought we were bundling cloudflare"). -->
+          <div class="hint">Leave empty and a Cloudflare tunnel is created for you &mdash; nothing
+            to install, and the only option that works behind CGNAT. Fill it in if you already
+            have a DDNS name or a port forward.</div></label>
         <label><span class="lbl">Listing lasts</span>
           <select id="dirShareSec">
             <option value="0">Until I turn it off</option>

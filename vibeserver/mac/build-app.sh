@@ -150,6 +150,26 @@ echo "==> Icons"
 python3 "$MAC/make-icons.py" >/dev/null
 cp "$MAC/Resources/"MenuBar*.png "$APP/Contents/Resources/"
 
+# ★★★ cloudflared TRAVELS INSIDE THE APP. The public listing offers to make an address for an
+#     owner with no port forward, and that offer cannot rest on a binary they have to go and find
+#     — a menu-bar app with a manual prerequisite is not a one-switch feature (Stuart, 2026-08-23).
+#  ★★ Apache-2.0: redistribution is permitted WITH THE LICENCE ALONGSIDE, so it ships beside it.
+#  ★ Missing = an app without the tunnel, not a failed build — a fresh clone has not run fetch.sh.
+CF="$ROOT/tools/cloudflared-desktop/bin/cloudflared-darwin-arm64"
+if [ -s "$CF" ]; then
+  # ★★★ IN MacOS/, NOT Resources/. The notarise script signs every executable in MacOS/ by
+  #     ENUMERATION — precisely so a helper added later cannot be missed — and an unsigned Mach-O
+  #     anywhere in the bundle fails notarisation. It also runs perfectly on the machine that built
+  #     it, so the break would surface only in the artefact somebody downloads. That has happened
+  #     here once already, with vibeserver-engine.
+  cp "$CF" "$APP/Contents/MacOS/cloudflared"
+  chmod +x "$APP/Contents/MacOS/cloudflared"
+  cp "$ROOT/tools/cloudflared-desktop/bin/LICENSE" "$APP/Contents/Resources/LICENSE.cloudflared"
+  echo "==> bundled cloudflared"
+else
+  echo "==> cloudflared NOT bundled (run tools/cloudflared-desktop/fetch.sh)"
+fi
+
 if [ -f "$MAC/AppIcon.icns" ]; then
   cp "$MAC/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 else
