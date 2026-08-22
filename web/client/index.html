@@ -44,8 +44,13 @@
 }
 
 * { box-sizing: border-box; }
+/* ★★★ dvh, NOT 100%. On iOS the URL bar and toolbar grow and shrink as you scroll, and `height:
+   100%` resolves against the LARGE viewport — so the controls at the bottom of the SDR screen sat
+   under Safari's own chrome, and the layout was taller than what you could actually see.
+   `100dvh` tracks the visible area, which is what "fill the screen" has to mean on a phone.
+   ★ `100%` stays as the fallback for anything without dvh; the two agree everywhere else. */
 html, body {
-  margin: 0; height: 100%;
+  margin: 0; height: 100%; height: 100dvh;
   background: var(--bg);
   color: var(--btn-text);
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -231,6 +236,16 @@ html[data-frontdoor] #splashListeners { display: none !important; }
 #splashMsg.info { color: var(--text-dim); }
 
 /* ── App shell ────────────────────────────────────────────────────────────── */
+/* ★★★ NO DOUBLE-TAP ZOOM ON THE RADIO. Tapping a step button twice quickly is ORDINARY USE here
+   — it is how you move two channels — and Safari reads it as a zoom gesture: the page jumps, every
+   hit target moves with it, and the next few taps land on nothing. That is what "some of the
+   controls have been unresponsive" was (Stuart, 2026-08-22).
+   ★★ `manipulation` removes the double-tap gesture and the 300 ms click delay while LEAVING
+      panning and pinch alone, so it costs nothing else. It is on #app rather than the document so
+      the splash — which genuinely scrolls — is untouched.
+   ★ Children that set their own touch-action still win. Do not let this reach the sliders:
+     touch-action:none on those is what stops a drag turning into a page scroll. */
+#app { touch-action: manipulation; }
 #app { display: none; flex-direction: column; height: 100%; }
 #app.live { display: flex; }
 
@@ -788,6 +803,27 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
   #mcard { gap: 0.3em; padding: 0.4em; font-size: clamp(10px, 1.2vw, 13px); }
   #mStatus { font-size: 0.72em; }
 }
+/* ★★★ TWO LINES IN PORTRAIT: TIME ON ONE, WARNINGS ON THE OTHER.
+   The row wraps, which keeps everything visible (see above) but makes WHERE things sit depend on
+   how much there is to say — so the moment OVERLOAD appears the clock and the recording timer jump
+   to make room for it. On a portrait iPhone there is never enough width for both halves, so that
+   is not an edge case, it is the normal state while anything is wrong: the readout you are
+   watching moves exactly when the radio starts misbehaving (Stuart, 2026-08-22).
+   ★★ So in portrait the split is DECIDED rather than discovered — clock and recording timer above,
+      chips, bars and throughput below. Each half still wraps within its own line if it must.
+   ★ Portrait only. There is room for one row in landscape and it is not affected, so it keeps the
+     denser layout rather than spending a line it does not need to. */
+@media (orientation: portrait) {
+  #mStatus {
+    flex-direction: column; align-items: stretch;
+    justify-content: flex-start; flex-wrap: nowrap;
+  }
+  #mLeft, #mNet { width: 100%; min-width: 0; }
+  /* ★ Both halves read from the left edge; `space-between` would push the throughput to the far
+     side of an otherwise empty line. */
+  #mNet { display: flex; justify-content: flex-start; }
+}
+
 /* ★ The demod chip scales WITH the frequency. Only #mFreq was bumped here, so at the narrowest
    width the digits grew and WFM stayed put — which is what made it look shrunken. They are read
    together; they should size together. */

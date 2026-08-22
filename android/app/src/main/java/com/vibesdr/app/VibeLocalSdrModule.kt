@@ -900,12 +900,14 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     fun tunnelStart(name: String, locator: String, port: Int, ownerProxies: String,
-                    radioModel: String, radioDriver: String, promise: Promise) {
+                    radioModel: String, radioDriver: String,
+                    antenna: String, coverage: String, promise: Promise) {
         try {
             VibeTunnel.applyLoopbackTrust(true, ownerProxies)
             VibeTunnel.startTunnel(reactApplicationContext, port) { url ->
                 if (url == null) { promise.resolve(VibeTunnel.statusJson()); return@startTunnel }
-                VibeTunnel.publish(reactApplicationContext, name, locator, port, radioModel, radioDriver)
+                VibeTunnel.publish(reactApplicationContext, name, locator, port, radioModel, radioDriver,
+                                   antenna, coverage)
                 promise.resolve(VibeTunnel.statusJson())
             }
         } catch (t: Throwable) { promise.reject("tunnel_start", t) }

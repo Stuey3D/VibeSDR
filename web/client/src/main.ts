@@ -1628,6 +1628,36 @@ let lastRenderAt = 0;
  *     touching the dozens of call sites. The handful of absolute fetch('/…') calls are prefixed
  *     explicitly below — those are the ones that would silently miss it.
  *  ★ Empty on a single-radio server, where the page is served at the root exactly as before. */
+/**
+ * ★★★ NO PINCH-ZOOM ON THE RADIO SCREEN — and CSS cannot do this on iOS.
+ *
+ * `user-scalable=no` in the viewport meta is the wrong fix twice over: it takes zoom away from
+ * people who need it everywhere, and iOS has IGNORED it since iOS 10 (see the note beside
+ * `#splash input` in index.html). `touch-action: manipulation` removes double-tap zoom but
+ * deliberately leaves pinch alone. WebKit gesture events are the only thing that stops it.
+ *
+ * ★★ WHY IT HAS TO STOP. A pinch here is almost never meant: the surface is a waterfall you drag
+ *    and buttons you tap in quick succession. Once the page is scaled, every hit target has moved
+ *    while the layout still believes otherwise — which reads as controls that have stopped
+ *    working rather than as a page that has been zoomed (Stuart, 2026-08-22).
+ *
+ * ★★★ ONLY WHILE THE RADIO IS SHOWING. The splash is a form: text to read, fields to fill in, and
+ *     it scrolls. Zoom stays available there. This is a scoped removal of a browser affordance,
+ *     not a blanket one.
+ * ★ gesturestart is WebKit-only, so this is inert in other browsers rather than needing a test.
+ */
+(() => {
+  const radioShowing = () => {
+    const splash = document.getElementById('splash');
+    return !!splash && splash.classList.contains('hidden');
+  };
+  for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) {
+    document.addEventListener(ev, (e: Event) => {
+      if (radioShowing()) e.preventDefault();
+    }, { passive: false });
+  }
+})();
+
 const BASE_PATH = (() => {
   const m = location.pathname.match(/^\/r\/[^/]+/);
   return m ? m[0] : '';
@@ -8111,6 +8141,19 @@ function updateRangeGap(centerHz: number, bwHz: number) {
   note.textContent = msg;
   el.classList.add('show');
   el.hidden = false;
+
+  // ★★★ THE NOTE LIVES INSIDE THE DEAD SPACE, SO A NARROW GAP DESTROYS IT. Tune to the very edge
+  //     of a band and the black region is a few percent of the width — the text then wraps to one
+  //     word per line and runs off the side of the screen, which is how "the server operator
+  //     allows no further" rendered as a clipped vertical sliver of syllables (Stuart, 2026-08-22,
+  //     landscape iPhone).
+  // ★★ Below the threshold the SHADING stays — it is the honest picture of what cannot be tuned —
+  //    and only the caption goes. The message is not lost: showTuneGapMsg() puts the same words in
+  //    the centred toast, which is sized for reading rather than for fitting in a gap.
+  // ★ Measured in pixels, not percent: the same 6% is comfortable on a desktop and unusable on a
+  //   phone, and it is the pixels the text has to fit into.
+  const NOTE_MIN_PX = 170;
+  note.hidden = el.getBoundingClientRect().width < NOTE_MIN_PX;
 }
 
 let gapMsgTimer: number | null = null;

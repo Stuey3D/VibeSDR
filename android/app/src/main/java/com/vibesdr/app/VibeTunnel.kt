@@ -1,6 +1,7 @@
 package com.vibesdr.app
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -75,6 +76,10 @@ object VibeTunnel {
         File(ctx.applicationInfo.nativeLibraryDir, "libcloudflared.so")
 
     fun isSupported(ctx: Context): Boolean = binary(ctx).exists()
+
+    /** ★ Is the tunnel up? Asked by the boot path, which must re-apply loopback trust after a
+     *  restart or the session limit silently stops applying — see VibeServerBoot. */
+    fun isTunnelRunning(): Boolean = running.get()
 
     /** What the switch shows: whether we are up, the address to share, and why not if not. */
     fun statusJson(): String = JSONObject().apply {
@@ -212,7 +217,25 @@ object VibeTunnel {
      * ★★ NO SERIAL NUMBERS. They are hardware identity and have no business on a public page —
      *    the same line website/worker.js draws, and the server's own landing page before it.
      */
-    private fun buildStatus(port: Int, radioModel: String, radioDriver: String): JSONObject {
+    /**
+     * ★★★ WHAT THE RECEIVER IS RUNNING ON. A directory entry that says only "RTL-SDR v4" leaves the
+     *     interesting half out: a listener judging whether a stream will hold up wants to know it
+     *     is a phone, and which phone. Stuart, 2026-08-22, wanting his own entry to read
+     *     "Server: Motorola G35 Unisoc T760".
+     * ★ SOC_MODEL is API 31+; below that the chip is simply not named rather than guessed at —
+     *   [[feedback_no_inferred_hardware_readouts]]: if the platform cannot tell us, show nothing.
+     */
+    private fun hostModel(): String {
+        val maker = Build.MANUFACTURER.replaceFirstChar { it.uppercase() }.trim()
+        val model = Build.MODEL.trim()
+        // ★ "Motorola moto g35 5G" reads badly; drop a maker the model already names.
+        val name = if (model.lowercase().startsWith(maker.lowercase())) model else "$maker $model"
+        val soc = if (Build.VERSION.SDK_INT >= 31) Build.SOC_MODEL.trim() else ""
+        return if (soc.isNotEmpty() && !soc.equals("unknown", true)) "$name $soc" else name
+    }
+
+    private fun buildStatus(port: Int, radioModel: String, radioDriver: String,
+                            antenna: String, coverage: String): JSONObject {
         val out = JSONObject()
         val radios = JSONArray()
 
@@ -248,6 +271,9 @@ object VibeTunnel {
                 put("name", radioModel.ifEmpty { "Radio" })
                 put("driver", radioDriver)
                 put("shared", false)
+                // ★ What this radio is actually allowed to tune, when the owner has narrowed it —
+                //   "FM broadcast" is far more use to a listener than a frequency pair.
+                if (coverage.isNotEmpty()) put("coverage", JSONArray().put(coverage))
             })
         }
         out.put("radios", radios)
@@ -262,6 +288,9 @@ object VibeTunnel {
             out.put("listeners", j.optInt("listeners", 0))
             out.put("maxListeners", j.optInt("maxUsers", 1))
             out.put("freeInSec", j.optInt("freeInSec", -1))
+            // ★ The session limit is a fact a listener wants BEFORE clicking, not after being cut
+            //   off — the directory is exactly where "how long do I get" belongs.
+            out.put("limitMin", j.optInt("limitMin", 0))
         } catch (t: Throwable) {
             Log.w(TAG, "could not read /vibeserver.json: ${t.message}")
         }
@@ -269,6 +298,8 @@ object VibeTunnel {
         // ★★ SAID, NOT INFERRED. The directory drew a "temporary share" from how far the expiry
         //    sat from the last ping, so an ordinary listing was a yellow diamond on the map.
         out.put("temporary", false)
+        if (antenna.isNotEmpty()) out.put("antenna", antenna)
+        out.put("host", hostModel())
         return out
     }
 
@@ -294,8 +325,9 @@ object VibeTunnel {
      *     address hold is proportional to how long the listing was actually used.
      */
     fun publish(ctx: Context, name: String, locator: String, port: Int,
-                radioModel: String, radioDriver: String): String? {
-        val status = buildStatus(port, radioModel, radioDriver)
+                radioModel: String, radioDriver: String,
+                antenna: String, coverage: String): String? {
+        val status = buildStatus(port, radioModel, radioDriver, antenna, coverage)
         val url = tunnelUrl
         if (url.isEmpty()) { lastError = "no tunnel yet"; return null }
 

@@ -122,7 +122,21 @@ object VibeServerBoot {
             VibeLocalSDR.setAdminPaths(File(filesDir, "vibe_bans.json").absolutePath,
                                        File(filesDir, "vibe_connlog.json").absolutePath)
             VibeLocalSDR.setPublicSharing(adv)
-            VibeLocalSDR.setTrustedProxies(if (adv) cfg.s("trustedProxies") else "")
+            // ★★★ THE TUNNEL'S LOOPBACK TRUST HAS TO SURVIVE A SERVER RESTART, and this line is
+            //     where it was being lost. cloudflared connects from 127.0.0.1, so the listing
+            //     switch adds loopback to the trusted-proxy list when it starts the tunnel — but
+            //     EVERY SETTINGS SAVE RESTARTS THE SERVER and this ran again with the owner's
+            //     config, silently dropping it while the tunnel was still up. From that moment
+            //     every listener read as 127.0.0.1 again, which is EXEMPT from the session limit:
+            //     the countdown disappeared, and with it the limit it was counting down to
+            //     (Stuart, 2026-08-22 — "the iPhone browser wasnt showing the 30 minute countdown").
+            //     ★★ Exactly the failure local_sdr_shim.cpp already records from 2026-08-09: "the
+            //        demo went behind a Cloudflare tunnel and the countdown vanished ... a receiver
+            //        that had stopped enforcing anything at all."
+            //  ★ So the trust is DERIVED on every start from whether the tunnel is running, not
+            //    set once and hoped for. Loopback only — see VibeTunnel.applyLoopbackTrust.
+            VibeTunnel.applyLoopbackTrust(
+                VibeTunnel.isTunnelRunning(), if (adv) cfg.s("trustedProxies") else "")
             // ★ Absent = true, the safe default: an older config must not read as "allow".
             VibeLocalSDR.setOneRadioPerIp(cfg.b("oneRadioPerIp", true))
             VibeLocalSDR.setMaxUsers(if (adv) cfg.i("maxUsers", 1).coerceAtLeast(1) else 1)

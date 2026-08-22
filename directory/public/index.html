@@ -152,13 +152,22 @@ function listenUrl(s) {
   return s.address ? `https://${s.address}/` : s.url;
 }
 
-function radioLine(r) {
+/**
+ * One radio, as a listener would ask about it: what it is, what it can hear, whether there is room,
+ * and how long they get. Stuart's own entry, 2026-08-22:
+ *   RTL-SDR v4 · FM broadcast · 0/10 slots · 30 minute limit
+ * ★ Anything the server did not say is simply omitted — never guessed, never "unknown".
+ */
+function radioLine(r, s) {
   const bits = [];
   if (r.driver) bits.push(esc(r.driver));
-  if (r.mode) bits.push(esc(r.mode));
   if (Array.isArray(r.coverage) && r.coverage.length) {
     bits.push(r.coverage.map((c) => esc(c)).join(', '));
-  }
+  } else if (r.mode) bits.push(esc(r.mode));
+  // ★★ SLOTS BELONG WITH THE RADIO, not buried in the header — "is there room for me" is the
+  //    question that decides whether a listener clicks at all.
+  if (s && s.maxListeners > 0) bits.push(`${s.listeners}/${s.maxListeners} slots`);
+  if (s && s.limitMin > 0) bits.push(`${s.limitMin} minute limit`);
   if (r.shared) bits.push('shared window');
   if (r.restricted) bits.push('restricted range');
   return `<div class="radio"><b>${esc(r.name || 'Radio')}</b>
@@ -170,8 +179,13 @@ function serverBlock(s) {
   const slots = s.maxListeners > 0 ? `${s.listeners}/${s.maxListeners} listening` :
                 (s.listeners ? `${s.listeners} listening` : '');
   const free = (s.freeInSec > 0) ? ` · free in ${Math.ceil(s.freeInSec / 60)} min` : '';
-  const radios = (s.radios || []).map(radioLine).join('') ||
+  const radios = (s.radios || []).map((r) => radioLine(r, s)).join('') ||
     '<div class="radio cap">This server has not published its radios yet.</div>';
+  // ★ The aerial and the machine, each on its own line and each only when said. An empty label
+  //   would be worse than nothing: it implies we asked and got no answer.
+  const extra =
+    (s.antenna ? `<div class="radio cap">Antenna: ${esc(s.antenna)}</div>` : '') +
+    (s.host ? `<div class="radio cap">Server: ${esc(s.host)}</div>` : '');
   return `<details class="srv">
     <summary>
       <i class="dot ${st.cls}" title="${esc(st.label)}"></i>
@@ -180,7 +194,7 @@ function serverBlock(s) {
       <span class="meta">${esc(s.grid)}${slots ? ' · ' + esc(slots) : ''}${esc(free)}</span>
     </summary>
     <div class="body">
-      ${radios}
+      ${radios}${extra}
       <a class="listen" href="${esc(listenUrl(s))}" target="_blank" rel="noopener noreferrer">Listen</a>
     </div>
   </details>`;

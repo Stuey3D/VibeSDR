@@ -378,6 +378,13 @@ async function list(env) {
       //     diamond — a product concept invented out of a timing value. A server says whether it
       //     is a temporary share; if it says nothing, it is not one.
       temporary: !!status.temporary,
+      // ★★ WHAT THE RECEIVER IS, not just where it is. A listener choosing between servers wants
+      //    the aerial and the machine — "YouLoop into an LNA, on a phone" tells them far more than
+      //    a hostname does. Absent stays absent: a server that has not said is not guessed at.
+      antenna: typeof status.antenna === 'string' ? status.antenna.slice(0, 120) : '',
+      host: typeof status.host === 'string' ? status.host.slice(0, 80) : '',
+      // ★ How long a listener gets, said BEFORE they click rather than when they are cut off.
+      limitMin: Number(status.limitMin) > 0 ? Number(status.limitMin) : 0,
       listeners: Number(status.listeners || 0),
       maxListeners: Number(status.maxListeners || 0),
       freeInSec: Number.isFinite(Number(status.freeInSec)) ? Number(status.freeInSec) : -1,
@@ -501,6 +508,33 @@ async function serveBySlug(host, request, env) {
   });
 
   const type = res.headers.get('content-type') || '';
+
+  // ★★★ TELL A NON-BROWSER CLIENT WHERE THE RECEIVER REALLY IS.
+  //
+  //     The stable address exists to solve a BROWSER problem — localStorage is keyed by origin, and
+  //     a rotating tunnel takes it with it. The apps have no such problem: they key their settings
+  //     on the server's own `instance` id, and they cannot see the __VIBE_DIRECT_HOST__ we inject
+  //     into the HTML because they never load the page. Point one at this address and it proxies
+  //     its HTTP happily and then opens a WebSocket against THIS WORKER, which refuses upgrades —
+  //     so it fails at the last step with everything before it working (Stuart, 2026-08-22).
+  //
+  // ★★ /vibeserver.json is what every client reads before it connects, so the answer rides along
+  //    with a request that already happens: no new endpoint, no extra round trip, and a client that
+  //    does not know the field simply ignores it.
+  if (type.includes('application/json') && upstream.pathname.endsWith('/vibeserver.json')) {
+    try {
+      const j = await res.json();
+      j.directHost = new URL(origin).host;
+      j.directUrl = origin;
+      return new Response(JSON.stringify(j), {
+        status: res.status,
+        headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+      });
+    } catch {
+      // ★ Not the JSON we expected — pass it through rather than swallow the server's own answer.
+    }
+  }
+
   if (!type.includes('text/html')) {
     // ★ Everything that is not the document streams through untouched.
     return new Response(res.body, {

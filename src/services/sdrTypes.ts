@@ -389,6 +389,39 @@ export interface ProbeResult {
   url: string;
 }
 
+/**
+ * ★★★ A VIBESERVER MAY ANSWER AT AN ADDRESS THAT IS NOT WHERE IT LIVES.
+ *
+ * A server behind a Cloudflare Quick Tunnel is published at a STABLE name —
+ * <slug>.vibeserver.vibesdr.net — because the tunnel's own hostname rotates on every restart and a
+ * BROWSER keys localStorage by origin. That stable address serves the web page and proxies HTTP,
+ * but it deliberately does NOT carry the WebSocket: the audio and the spectrum go straight to the
+ * tunnel so they never cross our Worker.
+ *
+ * ★★ The web client is told where to point via an injected global. AN APP NEVER LOADS THAT PAGE,
+ *    so it would proxy its HTTP happily and then open a socket against the Worker, which refuses
+ *    upgrades — failing at the last step with everything before it working (Stuart, 2026-08-22,
+ *    having typed the friendly address into the app).
+ *
+ * So the directory tells any client the real address in the identity response every client already
+ * fetches. Absent on a LAN server, a port-forwarded one, or anything reached directly — then this
+ * returns null and the caller keeps the address it had.
+ */
+async function vibeDirectUrl(base: string): Promise<string | null> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 5000);
+  try {
+    const r = await fetch(base + '/vibeserver.json', { signal: ctrl.signal, cache: 'no-store' });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const direct = typeof j?.directUrl === 'string' ? j.directUrl.trim() : '';
+    // ★ Only ever an http(s) URL, and only when it actually differs — a server that answers for
+    //   itself must not be sent somewhere else on the strength of a stray field.
+    if (!/^https?:\/\//i.test(direct)) return null;
+    return direct.replace(/\/+$/, '') === base.replace(/\/+$/, '') ? null : direct.replace(/\/+$/, '');
+  } catch { return null; } finally { clearTimeout(timer); }
+}
+
 export async function probeServer(
   host: string, port: number, hint?: BackendType | null, baseUrl?: string,
 ): Promise<ProbeResult | null> {
@@ -400,6 +433,9 @@ export async function probeServer(
   // probing `host:port` alone reports "nothing there" for a server that is plainly running.
   if (baseUrl) {
     const t = await detectServerType(baseUrl);
+    // ★★ FOLLOW THE SERVER'S OWN ANSWER ABOUT WHERE IT LIVES — see vibeDirectUrl(). Without this
+    //    a tunnelled receiver connects for everything except the socket.
+    if (t === 'vibeserver') return { type: t, url: (await vibeDirectUrl(baseUrl)) || baseUrl };
     if (t) return { type: t, url: baseUrl };
   }
 
@@ -407,6 +443,7 @@ export async function probeServer(
   for (const scheme of ['https', 'http'] as const) {
     const url = `${scheme}://${authority}`;
     const t = await detectServerType(url);
+    if (t === 'vibeserver') return { type: t, url: (await vibeDirectUrl(url)) || url };
     if (t) return { type: t, url };
   }
 

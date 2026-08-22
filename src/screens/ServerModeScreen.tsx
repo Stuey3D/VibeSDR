@@ -869,8 +869,15 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                           setPublicErr('Start the server first — the listing points at a receiver that has to be running.');
                           setPublicBusy(false); return;
                         }
+                        // ★★ WHAT THE LISTING ACTUALLY SAYS ABOUT THIS RECEIVER. The antenna and the
+                        //    tuning range are the two things a listener judges a server on before
+                        //    clicking, and both are already configured here — the directory should
+                        //    not be the one place they are missing. The machine it runs on is added
+                        //    natively, where Build.MODEL and the SoC live.
                         const st = await Local?.tunnelStart?.(nm, where.grid, running.port, '',
-                                                            radio?.model || '', radio?.driver || '');
+                                                            radio?.model || '', radio?.driver || '',
+                                                            (antenna || '').trim(),
+                                                            (allowRanges || '').trim());
                         const j = st ? JSON.parse(st) : {};
                         setPublicOn(!!j.address); setPublicAddr(j.address || ''); setPublicErr(j.error || '');
                       } else {
