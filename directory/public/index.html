@@ -34,6 +34,15 @@
   /* ★ Hollow and grey, and a different SHAPE again — a server that is not answering reads as
      absent rather than as another flavour of busy. */
   .sh-down { background: transparent; border: 2px solid #6b7785; }
+  /* ★★★ THE MAP WEARS THE SAME SHAPES. It drew a circleMarker for every state, so a temporary
+     share was a DIAMOND in the legend, a DIAMOND in the list and a CIRCLE on the map — the one
+     place the shape has to do real work, because a pin has no label beside it (Stuart,
+     2026-08-22: "it is a circle not a diamond on the map"). Sharing the .sh-* classes means the
+     shape is defined ONCE: a new state cannot be added to the legend and forgotten here. */
+  .mk { width: 13px; height: 13px; box-sizing: border-box;
+        box-shadow: 0 0 0 1.5px rgba(0,0,0,.55); }
+  /* ★ Leaflet's own icon class carries a white background in some builds — ours must not. */
+  .mkWrap { background: none; border: 0; }
   .srv.down > summary { opacity: 0.55; }
 
   .country { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 10px;
@@ -85,6 +94,8 @@
          color: var(--dim); }
   /* ★ A PIN is a fact about ACCESS, not a fault — amber, not red. */
   .tag.lock { color: var(--temp); border-color: var(--temp); }
+  /* ★ The same amber as the diamond on the map and in the legend: one colour means one thing. */
+  .tag.temp { color: var(--temp); border-color: var(--temp); }
   .empty { color: var(--dim); text-align: center; padding: 40px 20px; }
   .empty code { background: var(--panel); padding: 2px 6px; border-radius: 4px; color: var(--accent); }
   a { color: var(--accent); }
@@ -228,12 +239,13 @@ function radioLine(r, s) {
                  : isFull ? (s.freeInSec > 0 ? `FULL · FREE IN ${mmss(s.freeInSec)}` : 'FULL')
                  : `${s.listeners} OF ${max || 1} LISTENING`;
 
-  // ★★ A SHARE THAT ENDS SAYS SO, and says it where the offer is — beside what the receiver is,
-  //    not buried in the header. "Hans — SDRplay RSP1A — available for another 40 minutes" was the
-  //    sentence the original brief wanted; this is it.
-  const left = s.until > 0 ? Math.max(0, s.until - Math.floor(Date.now() / 1000)) : 0;
-  const share = left > 0
-    ? `<div class="rcSub">Temporary share — available for another ${esc(untilText(left))}</div>` : '';
+  // ★★★ THE SHARE'S CLOCK MOVED TO THE TOP ROW (Stuart, 2026-08-22). It sat here, inside the
+  //     radio card, on the reasoning that it belongs "beside what the receiver is" — and Stuart's
+  //     reaction on being shown it was "I never noticed it was there already", which is the whole
+  //     case in five words. The top row is what you read while the card is still COLLAPSED, and a
+  //     listing that ends in eight minutes is worth knowing BEFORE deciding to open it.
+  //  ★★ It is also one fact about the SERVER, not about each receiver: a machine can hold several
+  //     radios, so saying it per radio repeated it and attached it to the wrong thing.
 
   const etiquette = sharedDial
     ? `<div class="rcAsk">ASK BEFORE TUNING — everyone here shares one dial</div>` : '';
@@ -243,7 +255,7 @@ function radioLine(r, s) {
       <div class="rcTop"><span class="rcName">${esc(r.name || 'Radio')}</span>
         <span class="rcState">${esc(stateTxt)}</span></div>
       <div class="rcSub">${bits.join(' · ') || 'no details published'}</div>
-      ${ant}${share}${etiquette}
+      ${ant}${etiquette}
     </div>`;
 }
 
@@ -253,6 +265,10 @@ function radioLine(r, s) {
  * ★ Rounded DOWN, never up: a share that says two days and ends in one is worse than one that
  *   says one and lasts two.
  */
+function shareLeft(s) {
+  return s.until > 0 ? Math.max(0, s.until - Math.floor(Date.now() / 1000)) : 0;
+}
+
 function untilText(sec) {
   if (sec <= 0) return '';
   const m = Math.floor(sec / 60), h = Math.floor(m / 60), d = Math.floor(h / 24);
@@ -294,6 +310,7 @@ function serverBlock(s) {
       <span>${esc(s.name)}</span>
       ${s.pin ? '<span class="tag lock" title="This receiver needs a PIN — it is not open to everyone">\u{1F512} PIN</span>' : ''}
       ${s.kind === 'tunnel' ? '<span class="tag">tunnel</span>' : ''}
+      ${shareLeft(s) > 0 ? `<span class="tag temp" title="This listing ends when the share does — the receiver stays running, it just stops being advertised here">Temporary share \u00b7 ${esc(untilText(shareLeft(s)))} left</span>` : ''}
       <!-- ★★ THE COUNT BELONGS TO THE RADIO, NOT THE SERVER. A machine can hold several receivers
            with different occupancy, so "2/10 listening" beside the server NAME is only ever true
            by accident — and on the receiver's own landing page it has always sat in the radio box
@@ -340,9 +357,14 @@ function render(servers) {
 
   for (const s of servers) {
     const st = state(s);
-    L.circleMarker([s.lat, s.lon], {
-      radius: 7, color: st.colour, weight: 2,
-      fillColor: st.colour, fillOpacity: st.cls === 'sh-busy' ? 0 : 0.85,
+    // ★ A divIcon rather than a circleMarker precisely so the CSS above decides the shape —
+    //   the legend, the list and the map cannot drift apart.
+    L.marker([s.lat, s.lon], {
+      title: `${s.name} \u2014 ${st.label}`,
+      icon: L.divIcon({
+        className: 'mkWrap', iconSize: [13, 13], iconAnchor: [7, 7], popupAnchor: [0, -7],
+        html: `<i class="mk ${st.cls}" title="${esc(st.label)}"></i>`,
+      }),
     }).addTo(map).bindPopup(
       `<b>${esc(s.name)}</b>${s.pin ? ' \u{1F512}' : ''}<br>${esc(s.grid)} · ${esc(st.label)}<br>` +
       `<a href="${esc(listenUrl(s))}" target="_blank" rel="noopener noreferrer">Listen</a>`
