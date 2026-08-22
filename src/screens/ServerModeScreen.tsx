@@ -169,6 +169,19 @@ export default function ServerModeScreen({ navigation, route }: Props) {
    *  ★ Empty until it arrives, and the editors simply show no band chips until then: an owner can
    *    still type a range, which is the half that never needed the list.
    */
+  // ── ADVERTISE ON VIBESDR.NET ───────────────────────────────────────────────────────────────
+  /** ★ Its own field rather than reusing ADVERTISED NAME: the name a phone answers to on the LAN
+   *  ("Living room Pi") is not necessarily the one its owner wants published to the world. It is
+   *  PREFILLED from the advertised name, so for most people it is still one thing to check. */
+  const [publicName, setPublicName]   = useState('');
+  const [publicOn, setPublicOn]       = useState(false);
+  const [publicBusy, setPublicBusy]   = useState(false);
+  const [publicAddr, setPublicAddr]   = useState('');
+  const [publicErr, setPublicErr]     = useState('');
+  /** ★★ arm64 only. Where the tunnel is not in the build the switch is ABSENT, never inert —
+   *  AGENTS.md: a control that works in one scenario and not another should be removed. */
+  const [publicSupported, setPublicSupported] = useState(false);
+
   const [bands, setBands] = useState<Band[]>([]);
   const [allowRanges, setAllowRanges] = useState('');
   const [blockRanges, setBlockRanges] = useState('');
@@ -464,6 +477,17 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     let tries = 0;
     const ask = async () => {
       const Local = (NativeModules as any).VibeLocalSDR;
+      // ★★★ ASK WHETHER THE METHOD EXISTS, DO NOT ASSUME. `Local?.x?.()` yields UNDEFINED for a
+      //     method that was never exported, so a missing @ReactMethod reads as "not supported"
+      //     rather than throwing — which is exactly how two days went missing, twice.
+      try { setPublicSupported(!!(await Local?.tunnelSupported?.())); } catch { setPublicSupported(false); }
+      try {
+        const st = await Local?.tunnelStatus?.();
+        if (st) {
+          const j = JSON.parse(st);
+          setPublicOn(!!j.running); setPublicAddr(j.address || ''); setPublicErr(j.error || '');
+        }
+      } catch { /* status is a nicety — never let it break the screen */ }
       try {
         const h = await Local?.getMdnsHostname?.();
         if (cancelled) return;
@@ -833,6 +857,77 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 (proto === 'rtltcp' ? ' (RTL-TCP has no PIN).' : '.')}
           </Text>
         </View>
+
+        {/* ─── ADVERTISE ON VIBESDR.NET ──────────────────────────────────────────────────
+            ★★★ TWO FIELDS AND NOTHING ELSE (Stuart, 2026-08-22): a public name, and the switch.
+                Everything else the directory needs — the locator, the place, the radios — the
+                server already holds, so asking again would be asking twice.
+            ★★ VibeServer only: RTL-TCP has no landing page, no PIN and no session limits, so it
+               has nothing to put in front of the public. */}
+        {proto === 'vibeserver' && publicSupported ? (
+          <View style={[styles.card, { borderColor: C.border, marginTop: 14 }]}>
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F, marginTop: 0 }]}>
+              ADVERTISE ON VIBESDR.NET
+            </Text>
+            <TextInput value={publicName} onChangeText={setPublicName}
+              editable={!publicOn}
+              placeholder={name || 'My VibeServer'} placeholderTextColor={C.goldDim}
+              style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
+            <View style={[styles.rowBetween, { marginTop: 12 }]}>
+              <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                {publicBusy ? 'Working\u2026' : 'List this server publicly'}
+              </Text>
+              <Switch value={publicOn} disabled={publicBusy}
+                onValueChange={async (v) => {
+                  const Local = (NativeModules as any).VibeLocalSDR;
+                  setPublicBusy(true); setPublicErr('');
+                  try {
+                    if (v) {
+                      const nm = (publicName || name || '').trim();
+                      // ★★ An unnamed server must not be listed: the directory would have to fall
+                      //    back to "vibeserver", and every unnamed server would collide on it.
+                      if (nm.length < 2) {
+                        setPublicErr('Give this server a public name first.');
+                        setPublicBusy(false); return;
+                      }
+                      // ★★ THE DIRECTORY NEEDS A MAIDENHEAD SQUARE, and this box accepts a TOWN
+                      //    too ("Northampton"). The server resolves a town to a locator when it
+                      //    starts, so a running server has one; a town typed here and not yet
+                      //    resolved is refused by the directory with a message that says so,
+                      //    which surfaces below rather than failing silently.
+                      // ▶ TODO: read the RESOLVED locator from the shim instead of this raw box.
+                      const st = await Local?.tunnelStart?.(nm, (locCity || '').trim(), 0, '');
+                      const j = st ? JSON.parse(st) : {};
+                      setPublicOn(!!j.address); setPublicAddr(j.address || ''); setPublicErr(j.error || '');
+                    } else {
+                      const st = await Local?.tunnelStop?.('');
+                      const j = st ? JSON.parse(st) : {};
+                      setPublicOn(false); setPublicAddr(''); setPublicErr(j.error || '');
+                    }
+                  } catch (e: any) {
+                    setPublicOn(false);
+                    setPublicErr(String(e?.message || e));
+                  } finally { setPublicBusy(false); }
+                }}
+                trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
+            </View>
+            {publicOn && publicAddr ? (
+              <Text style={[styles.hint, { color: C.green, fontFamily: F, marginTop: 8 }]}>
+                Anyone can listen at {publicAddr} — share that address, it stays the same.
+              </Text>
+            ) : (
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                Publishes this receiver on vibesdr.net so anyone can find it and listen. Your home
+                address is never published — listeners reach it through a Cloudflare tunnel.
+              </Text>
+            )}
+            {publicErr ? (
+              <Text style={[styles.hint, { color: '#ff5c5c', fontFamily: F, marginTop: 8 }]}>
+                {publicErr}
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
 
         {proto === 'vibeserver' ? (
           <>

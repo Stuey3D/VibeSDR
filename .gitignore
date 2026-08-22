@@ -97,3 +97,6 @@ fr2.mjs
 # so they are copied from the build machine per build and never committed. See
 # scripts/publish-apt-docker.sh and vibeserver/linux/Dockerfile.build.
 vibeserver/linux/sdrplay-inc/
+
+# cloudflared for Android — 27 MB, rebuilt by tools/cloudflared-android/build.sh
+android/app/src/main/cpp/cloudflared/

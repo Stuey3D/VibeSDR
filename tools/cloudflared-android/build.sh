@@ -17,7 +17,12 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# ★★ ABSOLUTE, ALWAYS. The build below runs inside the temp clone, so a RELATIVE -o path resolves
+#    there and the binary is deleted with the scratch directory — leaving an empty destination and
+#    a script that reported success. (Caught 2026-08-22.)
 OUT="${1:-$HERE/libcloudflared.so}"
+case "$OUT" in /*) ;; *) OUT="$PWD/$OUT" ;; esac
+mkdir -p "$(dirname "$OUT")"
 PINNED="$(cat "$HERE/UPSTREAM-COMMIT")"
 
 command -v go >/dev/null || { echo "go is not installed (brew install go)"; exit 1; }

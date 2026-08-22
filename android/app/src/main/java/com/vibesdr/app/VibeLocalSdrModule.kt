@@ -871,6 +871,61 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         super.invalidate()
     }
 
+    // ── ADVERTISE ON VIBESDR.NET ──────────────────────────────────────────────────────────────
+    // ★★★ EVERY ONE OF THESE NEEDS ITS @ReactMethod. See getVibeServerStatus above: without the
+    //     annotation the method simply is not exported, and `Local?.foo?.()` returns UNDEFINED
+    //     rather than throwing — two days were lost to exactly that, twice.
+
+    /** ★ Is the tunnel binary in this build at all? arm64 only — the switch must be ABSENT, not
+     *  inert, where it cannot work (AGENTS.md). */
+    @ReactMethod
+    fun tunnelSupported(promise: Promise) {
+        try { promise.resolve(VibeTunnel.isSupported(reactApplicationContext)) }
+        catch (t: Throwable) { promise.resolve(false) }
+    }
+
+    @ReactMethod
+    fun tunnelStatus(promise: Promise) {
+        try { promise.resolve(VibeTunnel.statusJson()) }
+        catch (t: Throwable) { promise.reject("tunnel_status", t) }
+    }
+
+    /**
+     * Start the tunnel, then list the server.
+     *
+     * ★★★ THE TRUSTED-PROXY WIRING IS PART OF THIS ACTION, NOT A SETTING TO REMEMBER. cloudflared
+     *     dials in from loopback, so without it every listener reads as 127.0.0.1 and the session
+     *     limit, IP cooldown and one-address rule silently stop applying — which is precisely what
+     *     happened to the demo on 2026-08-09.
+     */
+    @ReactMethod
+    fun tunnelStart(name: String, locator: String, port: Int, ownerProxies: String, promise: Promise) {
+        try {
+            VibeTunnel.applyLoopbackTrust(true, ownerProxies)
+            VibeTunnel.startTunnel(reactApplicationContext, port) { url ->
+                if (url == null) { promise.resolve(VibeTunnel.statusJson()); return@startTunnel }
+                // ★ Status is what the directory page shows about this receiver. Best effort: a
+                //   listing with no radio detail is still a listing.
+                val status = try {
+                    org.json.JSONObject(VibeLocalSDR.getVibeServerStatus())
+                } catch (_: Throwable) { org.json.JSONObject() }
+                VibeTunnel.publish(reactApplicationContext, name, locator, status)
+                promise.resolve(VibeTunnel.statusJson())
+            }
+        } catch (t: Throwable) { promise.reject("tunnel_start", t) }
+    }
+
+    /** ★ Off means OFF: delist immediately so the public address is freed now, not at expiry. */
+    @ReactMethod
+    fun tunnelStop(ownerProxies: String, promise: Promise) {
+        try {
+            VibeTunnel.delist(reactApplicationContext)
+            VibeTunnel.stopTunnel()
+            VibeTunnel.applyLoopbackTrust(false, ownerProxies)
+            promise.resolve(VibeTunnel.statusJson())
+        } catch (t: Throwable) { promise.reject("tunnel_stop", t) }
+    }
+
     companion object {
         // RTL-SDR VID/PID allowlist (from SDR++ Brown), packed as (vid<<16)|pid.
         // internal, not private: VibeServerRestore matches on the SAME list — a copy

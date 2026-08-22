@@ -92,7 +92,7 @@ android {
         applicationId 'com.vibesdr.app'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 153
+        versionCode 155
         versionName "10.4"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
@@ -162,7 +162,7 @@ android {
     // and are deliberately NOT packaged. externalNativeBuild only packages libs it
     // builds, so the kit .so are flattened into a jniLibs dir below.
     sourceSets {
-        main { jniLibs.srcDirs += ["${buildDir}/sdrkit-jniLibs"] }
+        main { jniLibs.srcDirs += ["${buildDir}/sdrkit-jniLibs", "${buildDir}/cloudflared-jniLibs"] }
     }
 }
 
@@ -181,6 +181,37 @@ tasks.register('copySdrKitLibs', Copy) {
     }
 }
 tasks.named('preBuild') { dependsOn 'copySdrKitLibs' }
+
+// ── cloudflared: the public-listing tunnel ────────────────────────────────────────────────────
+// ★★★ NOT A LIBRARY — AN EXECUTABLE, and libcloudflared.so is the only name Android will both
+//     ship and let us run. filesDir is noexec (W^X, API 29+), so a binary copied there at runtime
+//     cannot be started; files in nativeLibraryDir can. The .so suffix is what gets it packaged.
+//     ★★ Requires expo.useLegacyPackaging=true, or the libraries are never extracted to disk and
+//        nativeLibraryDir is EMPTY — verified on the Moto, see gradle.properties.
+//
+// ★★ arm64-v8a ONLY. On armeabi-v7a the switch is simply absent, per AGENTS.md: a control that
+//    works on one target and not another should not be there at all.
+//
+// ★ NOT COMMITTED — it is 27 MB. tools/cloudflared-android/build.sh rebuilds it reproducibly from
+//   a pinned upstream commit with our DNS patch (Android has no /etc/resolv.conf).
+def cloudflaredSrc = file("src/main/cpp/cloudflared")
+def cloudflaredJniLibs = file("${buildDir}/cloudflared-jniLibs")
+tasks.register('copyCloudflared', Copy) {
+    into cloudflaredJniLibs
+    from("${cloudflaredSrc}/arm64-v8a") { include 'libcloudflared.so'; into 'arm64-v8a' }
+    doFirst {
+        // ★★★ FAIL LOUDLY. A missing binary would otherwise build a perfectly good APK whose
+        //     "Advertise on VibeSDR.net" switch cannot work, and nothing would say why until a
+        //     user flicked it.
+        if (!file("${cloudflaredSrc}/arm64-v8a/libcloudflared.so").exists()) {
+            throw new GradleException(
+                "cloudflared is missing. Build it first:\n" +
+                "  ./tools/cloudflared-android/build.sh " +
+                "android/app/src/main/cpp/cloudflared/arm64-v8a/libcloudflared.so")
+        }
+    }
+}
+tasks.named('preBuild') { dependsOn 'copyCloudflared' }
 
 // Apply static values from `gradle.properties` to the `android.packagingOptions`
 // Accepts values in comma delimited lists, example:
