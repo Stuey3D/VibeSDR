@@ -9122,6 +9122,15 @@ struct LocalSdrShim::Impl {
             //     from a phone when they have left it unlocked on the Mac.
             if (adminAuthed) adminOk.store(true);
             else if (g_vsMaxUsers.load() <= 1 && newOccupant) adminOk.store(false);
+            // ★★★ REMEMBER WHICH SOCKET PROVED IT, not merely that somebody did. The radio-wide
+            //     flag cannot answer "is THIS listener an admin" once there can be two of them —
+            //     and the session build below was reading exactly that flag, so an ordinary
+            //     visitor arriving while the owner was unlocked INHERITED ADMIN. See the note
+            //     there. adminSocks is the existing per-socket record; this is the missing entry.
+            if (adminAuthed && sock) {
+                std::lock_guard<std::mutex> al(adminSockMtx);
+                adminSocks.insert(sock.get());
+            }
             if (adminAuthed) lastAdminTouch.store(Impl::nowSecs());
             if (adminAuthed) LOGI("admin session — controls unlocked, no session limit");
         }
@@ -9381,7 +9390,28 @@ struct LocalSdrShim::Impl {
                 //   path settled it into the radio-wide flag a few lines earlier (it is still the
                 //   right answer for a receiver with no per-client DSP), so it is read from there
                 //   rather than threading the local through two scopes.
-                c->adminOk.store(adminOk.load());
+                // ★★★ ADMIN IS THIS SESSION'S, NOT THE RADIO'S — AND A STRANGER MUST NOT INHERIT IT.
+                //     This read the radio-wide flag, so any listener arriving while an admin was
+                //     signed in came up ADMIN themselves: on 2026-08-22 Stuart's iPhone connected
+                //     with no password, showed no admin controls of its own, and appeared in the
+                //     owner's own listener table wearing the ADMIN badge — while throwing the Mac
+                //     out of the admin page it was sitting in.
+                //  ★★★ THAT IS A PRIVILEGE ESCALATION, and it matters far more now the directory
+                //      can put this receiver in front of strangers: DISCONNECT, BLOCK IP and the
+                //      settings all hang off this flag.
+                //  ★★ The revoke half of this was fixed on 2026-08-20 (see the note by
+                //     `adminOk.store` above) — an arriving stranger could no longer REVOKE the
+                //     owner. Nobody checked the other direction, and inheriting is the worse of
+                //     the two.
+                //  ★ The single-user fallback is kept deliberately, for the same reason adminNow()
+                //    keeps it: on a receiver that can only ever have one listener the radio-wide
+                //    flag IS this listener's, and removing it would break every such server.
+                if (g_vsMaxUsers.load() > 1) {
+                    std::lock_guard<std::mutex> al(adminSockMtx);
+                    c->adminOk.store(sock && adminSocks.count(sock.get()) > 0);
+                } else {
+                    c->adminOk.store(adminOk.load());
+                }
                 if (c->adminOk.load()) c->lastAdminTouch.store(Impl::nowSecs());
                 c->spec = sock;
                 c->session = session;
