@@ -160,6 +160,9 @@ func detectServerType(_ url: String) async -> ServerType? {
 
 enum Directories {
   static let all: [DirectoryMeta] = [
+    // ★★ OURS FIRST, as on the phone. It is the listing that rewards somebody for turning their
+    //    own receiver on, so burying it under four other networks works against the feature.
+    .init(id: "vibeserver",   name: "VibeServer",   desc: "Public VibeServers"),
     .init(id: "ubersdr",      name: "UberSDR",      desc: "Official UberSDR servers"),
     .init(id: "receiverbook", name: "Receiverbook", desc: "OpenWebRX + KiwiSDR (receiverbook.de)"),
     .init(id: "kiwisdr",      name: "KiwiSDR",      desc: "Public KiwiSDR network"),
@@ -169,6 +172,7 @@ enum Directories {
   static func fetch(_ id: String) async throws -> [SDRServer] {
     var list: [SDRServer]
     switch id {
+    case "vibeserver":   list = try await fetchVibeServers()
     case "ubersdr":      list = try await fetchUberSDR()
     case "fmdx":         list = try await fetchFmdx()
     case "kiwisdr":      list = try await fetchKiwiList()
@@ -262,6 +266,47 @@ enum Directories {
   }
 
   // ── UberSDR — clean JSON API ─────────────────────────────────────────────────
+  // ── VibeServer — our own directory ───────────────────────────────────────────
+  /**
+   ★★★ CONNECT TO THE STABLE ADDRESS, NEVER THE TUNNEL HOSTNAME. A Quick Tunnel's
+       *.trycloudflare.com name is reassigned every time the server restarts, so a favourite saved
+       from one would be dead by morning and could later belong to a stranger. `address` is the
+       slug on our own zone and does not move.
+   ★★ EVERY LISTING IS HTTPS, which matters more here than anywhere: a watch cannot fall back to a
+      web view, and NWConnection cannot reach a plain ws:// on a LAN address at all. A tunnelled
+      VibeServer is the one public receiver kind that is always reachable from a watch.
+   ★ Occupancy, the session limit and whether a PIN is wanted all travel in the listing, so none of
+     it has to be probed before the row can be drawn.
+   */
+  private static func fetchVibeServers() async throws -> [SDRServer] {
+    let url = URL(string: "https://vibeserver.vibesdr.net/api/directory")!
+    let (data, _) = try await URLSession.shared.data(from: url)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    let items = json?["servers"] as? [[String: Any]] ?? []
+    return items.compactMap { it in
+      let address = (it["address"] as? String) ?? ""
+      var publicUrl = address.isEmpty ? ((it["url"] as? String) ?? "") : "https://\(address)"
+      publicUrl = publicUrl.trimmedTrailingSlash
+      guard !publicUrl.isEmpty else { return nil }
+      let maxU = (it["maxListeners"] as? Int) ?? 0
+      let users = (it["listeners"] as? Int) ?? 0
+      let cc = it["country"] as? String
+      return SDRServer(
+        name: (it["name"] as? String) ?? "VibeServer",
+        url: publicUrl,
+        host: URL(string: publicUrl)?.host ?? "",
+        serverType: .vibeserver,
+        location: (it["grid"] as? String) ?? "",
+        countryCode: (cc?.count == 2) ? cc?.uppercased() : nil,
+        latitude: (it["lat"] as? NSNumber)?.doubleValue,
+        longitude: (it["lon"] as? NSNumber)?.doubleValue,
+        users: users,
+        maxUsers: maxU,
+        full: maxU > 0 && users >= maxU
+      )
+    }
+  }
+
   private static func fetchUberSDR() async throws -> [SDRServer] {
     let url = URL(string: "https://instances.ubersdr.org/api/instances?conditions=true")!
     let (data, _) = try await URLSession.shared.data(from: url)
