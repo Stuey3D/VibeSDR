@@ -1,0 +1,45 @@
+{
+  "name": "vibesdr-directory",
+  "compatibility_date": "2026-08-01",
+  "main": "src/index.js",
+
+  // ★ A SEPARATE WORKER from the vibesdr.net site on purpose. The site is static assets plus one
+  //   /api/demo route; this has a database binding and a public write endpoint. Keeping them apart
+  //   means a mistake here cannot take the front page down, and the D1 binding is not attached to
+  //   a Worker that does not need it.
+  // ★★★ run_worker_first IS NOT OPTIONAL HERE. By default Cloudflare serves a matching static
+  //     asset WITHOUT INVOKING THE WORKER — so "/" matched index.html and every shareable address
+  //     (dave.vibeserver.vibesdr.net/) quietly returned the DIRECTORY PAGE instead of redirecting.
+  //     ★★ It failed in the most confusing possible way: /api/directory on the same hostname DID
+  //        reach the Worker and answered correctly, because no asset matches that path. So the
+  //        redirect looked half-implemented rather than never-invoked.
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "vibesdr-directory",
+      "database_id": "879c46a5-01fb-425d-8c5c-c67230ac930e"
+    }
+  ],
+
+  // ★★★ D1, NOT KV — see schema.sql. A 15-minute ping is 96 writes/day per server; KV's free tier
+  //     is 1,000 writes/day in total, so KV would fail at about ten servers.
+
+  "routes": [
+    { "pattern": "vibeserver.vibesdr.net", "custom_domain": true },
+
+    // ★★★ THE SHAREABLE ADDRESSES — <slug>.vibeserver.vibesdr.net.
+    //
+    // ★★ THIS ROUTE NEEDS A PROXIED WILDCARD DNS RECORD TO EXIST, and wrangler cannot create DNS
+    //    records. Add by hand, once:  AAAA  *.vibeserver  ->  100::  PROXIED (orange cloud ON).
+    //    100:: is the IPv6 discard prefix; nothing is ever sent there, because the orange cloud
+    //    means Cloudflare terminates at the edge and this route answers. ★★★ LEFT GREY, requests
+    //    really would try to reach 100:: and every shared link would hang.
+    //
+    // ★ A route, not a custom domain: custom domains cannot be wildcards.
+    { "pattern": "*.vibeserver.vibesdr.net/*", "zone_name": "vibesdr.net" }
+  ],
+
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
+}

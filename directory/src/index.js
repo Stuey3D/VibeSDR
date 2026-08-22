@@ -1,0 +1,508 @@
+/**
+ * vibeserver.vibesdr.net — the public VibeServer directory.
+ *
+ * ★★★ THE ADDRESS IS A FIELD, NOT AN IDENTITY. A Quick Tunnel gets a NEW hostname every time it
+ *     restarts, so nothing here may key on the URL. The listing is keyed on a server-issued id and
+ *     the server re-registers; the human sees the operator's chosen NAME and their locator.
+ *     Stuart, 2026-08-22: "The address doesn't matter at that point as you won't be typing it
+ *     directly as the directory does the hard work."
+ *
+ * ★★★ THE KEY IS THE IDENTITY, SO IT IS STORED HASHED AND NEVER ECHOED. Anyone holding it can
+ *     take over or delist a listing. We issue it once, at registration, and thereafter only ever
+ *     compare hashes.
+ */
+
+const PING_SEC = 900;              // 15 minutes — the sdr.hu interval, arrived at independently.
+const DEFAULT_TTL_MIN = 30;        // ★ Two missed pings, not one: a single lost request is normal.
+const MAX_TTL_MIN = 60 * 24;
+const REG_PER_HOUR = 10;           // per source address
+
+// ★★★ WHERE SHAREABLE ADDRESSES LIVE. Chosen over the apex (dave.vibesdr.net, also free) so that
+//     user-chosen names are identifiable as VibeServer addresses and stay out of the namespace
+//     that holds demo/www/api. Cloudflare's cert for the custom domain already covers one wildcard
+//     level beneath it, so this costs nothing.
+const PUBLIC_ZONE = 'vibeserver.vibesdr.net';
+
+/**
+ * ★★★ HOW LONG AN ADDRESS IS HELD AFTER THE SERVER LAST CHECKED IN. Stuart, 2026-08-22: "we tag
+ *     the address to the ID for a week or so and then if the server hasn't checked in in a week we
+ *     release the address."
+ *
+ * ★★ THIS IS THE MIDDLE GROUND AND BOTH EXTREMES ARE WRONG. Releasing on EXPIRY (30 min) would
+ *    mean a receiver switched off overnight loses the address its owner has already shared.
+ *    Holding FOR EVER would mean a name tried once and abandoned is gone permanently.
+ *
+ * ★★★ AND THE DIRECTION OF FAILURE MATTERS. Releasing a name means somebody else can take it, and
+ *     then links already shared land on A STRANGER'S RECEIVER rather than breaking honestly. That
+ *     is the real cost of reuse, and the week IS the mitigation — long enough that a holiday, a
+ *     house move or a dead SD card does not cost you your address.
+ *
+ * ★ Refreshes itself: every ping sets updated_at, so a live server never approaches this.
+ */
+const ADDRESS_HOLD_MAX = 7 * 86400;   // an established server keeps its name for a week
+const ADDRESS_HOLD_MIN = 3600;        // an experiment keeps it for an hour
+
+/**
+ * ★★★ THE HOLD IS AS LONG AS THE LISTING WAS ACTUALLY USED, CAPPED AT A WEEK.
+ *
+ * A flat week has a nasty failure that Stuart spotted immediately: someone who reinstalls loses
+ * the id and key stored with their config, re-registers, and is BLOCKED FROM THEIR OWN NAME BY
+ * THEIR OWN DEAD ENTRY — offered "dave1" because of a ghost they cannot delete. Punishing a user
+ * for their own abandoned listing is the worst version of this.
+ *
+ * ★★ So: you hold your address for as long as you have been using it. A server that registered,
+ *    pinged twice and vanished — an experiment, or the install being replaced — gives its name up
+ *    within the hour. A receiver that has been listed for weeks keeps it for the full week, which
+ *    is what the hold was FOR: a holiday, a house move, a dead SD card.
+ *
+ * ★ Turning the switch OFF still frees the name immediately, via delist. This only governs the
+ *   case where a server simply stopped talking to us.
+ *
+ * Expressed in SQL so it is evaluated per row: a row holds its slug while
+ *   updated_at > now - clamp(updated_at - created_at, MIN, MAX)
+ */
+const HOLD_SQL = `min(max(updated_at - created_at, ${ADDRESS_HOLD_MIN}), ${ADDRESS_HOLD_MAX})`;
+
+const json = (body, status = 200, extra = {}) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      // ★ The apps fetch this cross-origin. Read-only data, deliberately public.
+      'access-control-allow-origin': '*',
+      ...extra,
+    },
+  });
+
+const now = () => Math.floor(Date.now() / 1000);
+
+async function sha256Hex(s) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** ★ Constant time: a length-independent compare so a wrong key cannot be found a character at a
+ *  time. Both sides are fixed-length hex hashes, so length equality is expected, not secret. */
+function timingSafeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/**
+ * Maidenhead locator to the CENTRE of the square.
+ *
+ * ★★ The centre, not the corner. A 4-character square is ~70 x 110 km; pinning its south-west
+ *    corner would put every marker consistently down-left of where the operator actually is, and
+ *    for a coastal square that can be in the sea.
+ */
+function gridToLatLon(grid) {
+  const g = String(grid || '').trim().toUpperCase();
+  if (!/^[A-R]{2}[0-9]{2}([A-X]{2})?$/.test(g)) return null;
+  let lon = (g.charCodeAt(0) - 65) * 20 - 180;
+  let lat = (g.charCodeAt(1) - 65) * 10 - 90;
+  lon += Number(g[2]) * 2;
+  lat += Number(g[3]) * 1;
+  if (g.length === 6) {
+    lon += (g.charCodeAt(4) - 65) * (2 / 24) + (2 / 24) / 2;
+    lat += (g.charCodeAt(5) - 65) * (1 / 24) + (1 / 24) / 2;
+  } else {
+    lon += 1;        // half of 2 degrees
+    lat += 0.5;      // half of 1 degree
+  }
+  return { lat, lon };
+}
+
+/** ★ Strip control characters and cap the length. Operator-supplied text reaches the page. */
+const clean = (s, max) => String(s ?? '').replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, max);
+
+/**
+ * ★★★ THE SAME SLUG RULE AS THE SERVER'S mdnsLabel(). Do not "improve" it here.
+ *     vibeserver_config.cpp:156 is the original and vibe_setup_page.h:859 already mirrors it in JS
+ *     so the setup page can show the address live as the owner types. This is the THIRD copy of
+ *     one rule; if they ever disagree, the address a user is shown is not the address they get.
+ *     Lowercase, non-alphanumerics collapsed to a single dash, trimmed, 63 max = one DNS label.
+ */
+function slugify(s) {
+  let out = '', dash = false;
+  for (const ch of String(s || '')) {
+    if (/[a-z0-9]/i.test(ch)) { out += ch.toLowerCase(); dash = false; }
+    else if (out && !dash) { out += '-'; dash = true; }
+  }
+  out = out.replace(/-+$/, '');
+  return out.slice(0, 63).replace(/-+$/, '');
+}
+
+/**
+ * ★★★ NAMES WE WILL NOT ISSUE.
+ *
+ * "vibeserver" is the important one and it is a SCAR, not a precaution: mdnsLabel("") falls back
+ * to it, and main.cpp:1290 records an unnamed laptop taking `vibeserver.local` away from the Pi
+ * until SSH to it started failing. Publicly it is worse — the first unnamed server would claim
+ * vibeserver.vibeserver.vibesdr.net and every other unnamed one would collide with it.
+ * ★ So an empty or fallback name is REFUSED, never auto-issued: "no name yet" and "not ready to
+ *   advertise" are one state, exactly as mDNS already treats them.
+ */
+const RESERVED = new Set([
+  'vibeserver', 'vibesdr', 'www', 'api', 'demo', 'mail', 'admin', 'root', 'static',
+  'cdn', 'assets', 'status', 'help', 'support', 'app', 'web', 'test', 'dev', 'staging',
+]);
+
+/**
+ * Is this slug free? Reserved names fail; taken names fail only while their holder still HOLDS it.
+ * ★ A slug on a server that has not checked in for ADDRESS_HOLD_DAYS is available again.
+ */
+async function slugFree(env, slug) {
+  if (!slug || slug.length < 2 || RESERVED.has(slug)) return false;
+  const row = await env.DB.prepare(
+    `SELECT 1 AS x FROM servers WHERE slug = ? AND updated_at > (? - ${HOLD_SQL})`
+  ).bind(slug, now()).first();
+  return !row;
+}
+
+/**
+ * ★★ Release a lapsed hold so the new owner can take the name.
+ *
+ * The unique index means the stale row must give the slug up before anyone else can hold it. We
+ * clear it rather than deleting the row: the old server keeps its id and key, so if it ever
+ * returns it can still ping, still be listed, and simply be told its address has gone.
+ */
+async function releaseLapsedSlug(env, slug) {
+  await env.DB.prepare(
+    `UPDATE servers SET slug = NULL WHERE slug = ? AND updated_at <= (? - ${HOLD_SQL})`
+  ).bind(slug, now()).run();
+}
+
+/**
+ * What to offer when the name is taken. Stuart, 2026-08-22: the second Dave "could be given the
+ * choice of dave1.vibeserver.vibesdr.net or daveio92nh.vibeserver.vibesdr.net".
+ * ★ The locator suffix is the more useful of the two — it says WHERE, which is what actually
+ *   distinguishes two Daves — so it is offered first when we have one.
+ */
+async function suggestions(env, base, locator) {
+  const out = [];
+  const grid = slugify(locator || '');
+  if (grid && await slugFree(env, `${base}${grid}`)) out.push(`${base}${grid}`);
+  for (let i = 1; i <= 9 && out.length < 4; i++) {
+    const s = `${base}${i}`;
+    if (await slugFree(env, s)) out.push(s);
+  }
+  return out;
+}
+
+/**
+ * ★★★ WHAT WE ACCEPT AS AN ADDRESS. It is published and clicked, so it must be a plain http(s)
+ *     URL and nothing else — a `javascript:` or `data:` URL here would be a stored XSS delivered
+ *     to every visitor of the directory.
+ */
+function validUrl(u) {
+  let parsed;
+  try { parsed = new URL(String(u)); } catch { return null; }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
+  if (!parsed.hostname) return null;
+  return parsed.origin;
+}
+
+async function readBody(request) {
+  try { return await request.json(); } catch { return null; }
+}
+
+async function findServer(env, id) {
+  return env.DB.prepare('SELECT * FROM servers WHERE id = ?').bind(String(id || '')).first();
+}
+
+/** Shared by ping and delist: the caller must hold the key. */
+async function authed(env, body) {
+  const row = await findServer(env, body?.id);
+  if (!row) return { error: json({ error: 'unknown server' }, 404) };
+  const given = await sha256Hex(String(body?.key || ''));
+  if (!timingSafeEqual(given, row.key_hash)) {
+    // ★ A distinct 403 is what lets an operator whose config was restored from a backup
+    //   understand why they are not listed.
+    return { error: json({ error: 'bad key' }, 403) };
+  }
+  return { row };
+}
+
+function ttlSeconds(body) {
+  const n = Number(body?.ttlMin);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_TTL_MIN * 60;
+  return Math.min(Math.max(Math.floor(n), 1), MAX_TTL_MIN) * 60;
+}
+
+async function register(request, env) {
+  const body = await readBody(request);
+  if (!body) return json({ error: 'bad json' }, 400);
+
+  const name = clean(body.name, 60);
+  if (name.length < 2) return json({ error: 'a public server name is required' }, 400);
+
+  const grid = clean(body.grid, 6).toUpperCase();
+  const pos = gridToLatLon(grid);
+  if (!pos) return json({ error: 'a valid Maidenhead locator is required (e.g. IO83 or IO83xk)' }, 400);
+
+  const url = validUrl(body.url);
+  if (!url) return json({ error: 'url must be a plain http(s) address' }, 400);
+
+  const kind = body.kind === 'tunnel' ? 'tunnel' : 'direct';
+
+  // ★ Rate limit per source address. Registration is the only write a stranger can drive.
+  const ip = request.headers.get('cf-connecting-ip') || '';
+  const since = now() - 3600;
+  const recent = await env.DB.prepare('SELECT COUNT(*) AS n FROM reg_log WHERE ip = ? AND at > ?')
+    .bind(ip, since).first();
+  if (Number(recent?.n || 0) >= REG_PER_HOUR) {
+    return json({ error: 'too many registrations from this address, try later' }, 429);
+  }
+
+  // ★★★ THE SHAREABLE ADDRESS. Derived from the operator's friendly name the same way the .local
+  //     label is, and then FROZEN — see migrations/0002-slugs.sql. A caller may name the slug it
+  //     wants (having been offered a choice when its first pick was taken); otherwise we derive.
+  const wanted = slugify(body.slug || name);
+  if (!wanted || wanted.length < 2) {
+    return json({ error: 'that name cannot be turned into an address' }, 400);
+  }
+  // ★★★ A RESERVED NAME IS A DEAD END, WITH NO NEAR-MISS OFFERED — see checkName(). Checked
+  //     BEFORE the taken-check so it can never be reported as merely "taken", which would invite
+  //     the caller to retry with vibeserver1.
+  if (RESERVED.has(wanted)) {
+    return json({ error: 'that name is reserved — please choose a different one', slug: wanted }, 409);
+  }
+  if (!await slugFree(env, wanted)) {
+    // ★ 409 with alternatives, so the app can put them straight into its dropdown rather than
+    //   making the owner guess what is free.
+    return json({
+      error: 'that address is taken',
+      slug: wanted,
+      suggestions: await suggestions(env, wanted, body.locator || grid),
+    }, 409);
+  }
+
+  // ★ The name is free, but a LAPSED holder may still be sitting on the unique index.
+  await releaseLapsedSlug(env, wanted);
+
+  const id = crypto.randomUUID();
+  const key = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
+  const t = now();
+
+  // ★ cf.country is the country the SERVER dialled us from — it POSTs to us directly, not through
+  //   its own tunnel — so it is the operator's country, not a Cloudflare edge. Two letters only.
+  const country = clean(request.cf?.country || '', 2).toUpperCase();
+
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO servers (id, key_hash, name, url, kind, grid, lat, lon, country,
+                            status_json, created_at, updated_at, expires_at, slug)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).bind(id, await sha256Hex(key), name, url, kind, grid, pos.lat, pos.lon, country,
+           JSON.stringify(body.status || {}), t, t, t + ttlSeconds(body), wanted),
+    env.DB.prepare('INSERT INTO reg_log (ip, at) VALUES (?,?)').bind(ip, t),
+    // ★ Housekeeping on the write path rather than a cron: free, and cron is one more thing to fail.
+    env.DB.prepare('DELETE FROM reg_log WHERE at < ?').bind(since),
+  ]);
+
+  // ★★★ THE ONLY TIME THE KEY IS EVER SENT. It cannot be recovered; a lost key means re-register.
+  //     `address` is what the switch shows underneath itself — the thing the owner shares.
+  return json({ id, key, pingSec: PING_SEC, slug: wanted, address: `${wanted}.${PUBLIC_ZONE}` });
+}
+
+async function ping(request, env) {
+  const body = await readBody(request);
+  if (!body) return json({ error: 'bad json' }, 400);
+  const { row, error } = await authed(env, body);
+  if (error) return error;
+
+  const t = now();
+  // ★★★ A server may move address between pings — a Quick Tunnel does exactly that on every
+  //     restart — so the URL is REFRESHED here, not frozen at registration.
+  const url = body.url ? validUrl(body.url) : row.url;
+  if (body.url && !url) return json({ error: 'url must be a plain http(s) address' }, 400);
+
+  // ★★ A PING THAT OMITS status MUST NOT WIPE THE RADIO LIST. Status is replaced wholesale when it
+  //    is sent — that is what makes a radio disappearing from the server disappear here too — but
+  //    "said nothing" and "said I have no radios" are different statements, and only the second
+  //    should empty the entry.
+  const status = (body.status && typeof body.status === 'object')
+    ? JSON.stringify(body.status)
+    : row.status_json;
+
+  await env.DB.prepare(
+    `UPDATE servers SET url = ?, name = ?, status_json = ?, updated_at = ?, expires_at = ?
+     WHERE id = ?`
+  ).bind(url, body.name ? clean(body.name, 60) : row.name,
+         status, t, t + ttlSeconds(body), row.id).run();
+
+  // ★★ TELL A RETURNING SERVER THE TRUTH ABOUT ITS ADDRESS. If it was away longer than the hold
+  //    and somebody else took the name, `slug` is now NULL — the switch must be able to say so
+  //    rather than keep showing an address that belongs to a stranger.
+  return json({
+    listed: true,
+    pingSec: PING_SEC,
+    slug: row.slug || null,
+    address: row.slug ? `${row.slug}.${PUBLIC_ZONE}` : null,
+  });
+}
+
+async function delist(request, env) {
+  const body = await readBody(request);
+  if (!body) return json({ error: 'bad json' }, 400);
+  const { row, error } = await authed(env, body);
+  if (error) return error;
+  await env.DB.prepare('DELETE FROM servers WHERE id = ?').bind(row.id).run();
+  // ★ Immediate, per the privacy rule: one-press delist, effective now, not at the next expiry.
+  return json({ delisted: true });
+}
+
+async function list(env) {
+  // ★★★ EXPIRY EVALUATED AT READ TIME. Nothing sweeps; a server that stopped pinging is simply
+  //     not selected. See schema.sql.
+  const { results } = await env.DB.prepare(
+    `SELECT id, name, url, kind, grid, lat, lon, country, status_json, updated_at, expires_at, slug
+       FROM servers WHERE expires_at > ? ORDER BY country, name`
+  ).bind(now()).all();
+
+  const servers = (results || []).map((r) => {
+    let status = {};
+    try { status = JSON.parse(r.status_json) || {}; } catch { status = {}; }
+    return {
+      id: r.id, name: r.name, url: r.url, kind: r.kind,
+      slug: r.slug || null,
+      // ★ The address a listener should be given and a friend should be sent. The tunnel hostname
+      //   rotates; this does not.
+      address: r.slug ? `${r.slug}.${PUBLIC_ZONE}` : null,
+      grid: r.grid, lat: r.lat, lon: r.lon, country: r.country,
+      radios: Array.isArray(status.radios) ? status.radios : [],
+      listeners: Number(status.listeners || 0),
+      maxListeners: Number(status.maxListeners || 0),
+      freeInSec: Number.isFinite(Number(status.freeInSec)) ? Number(status.freeInSec) : -1,
+      updatedAt: r.updated_at,
+      expiresAt: r.expires_at,
+    };
+  });
+  return json({ servers, count: servers.length, pingSec: PING_SEC });
+}
+
+/**
+ * Is this public name available, and if not what else could they have?
+ *
+ * ★★ THIS IS WHAT MAKES THE SWITCH HONEST. The setup page already previews the `.local` label live
+ *    as the owner types (vibe_setup_page.h:2075) — this is the same idea for the public address,
+ *    so nobody flicks the switch and is then told their name was taken.
+ */
+async function checkName(url, env) {
+  const wanted = slugify(url.searchParams.get('name') || '');
+  const locator = url.searchParams.get('locator') || '';
+  if (!wanted || wanted.length < 2) {
+    return json({ ok: false, reason: 'that name cannot be turned into an address' });
+  }
+  if (RESERVED.has(wanted)) {
+    // ★★★ NO SUGGESTIONS FOR A RESERVED NAME — and that is not tidiness, it is the point of
+    //     reserving it. Offering "vibeserver1" to somebody who asked for "vibeserver" hands them
+    //     an address that READS AS OFFICIAL: vibeserver1.vibeserver.vibesdr.net is exactly what a
+    //     visitor would believe is ours. A reserved word must be a dead end, not a nudge toward a
+    //     near-miss of itself.
+    // ★ Say WHY. "vibeserver" is the one people will hit by leaving the name blank.
+    return json({
+      ok: false, slug: wanted,
+      reason: 'that name is reserved — please choose a different one',
+    });
+  }
+  if (await slugFree(env, wanted)) {
+    return json({ ok: true, slug: wanted, address: `${wanted}.${PUBLIC_ZONE}` });
+  }
+  return json({
+    ok: false, slug: wanted, reason: 'that address is already taken',
+    suggestions: (await suggestions(env, wanted, locator)).map((s) => ({ slug: s, address: `${s}.${PUBLIC_ZONE}` })),
+  });
+}
+
+/**
+ * ★★★ <slug>.vibeserver.vibesdr.net — A REDIRECT, NEVER A PROXY.
+ *
+ * Proxying would put every listener's audio through this Worker: straight into the free tier's
+ * 100k requests/day and, worse, it would make us the transit provider for other people's streams —
+ * which this whole design has refused twice over. A 302 costs ONE request per click, and the
+ * listening itself goes directly to the tunnel edge.
+ *
+ * ★★ And this is the point of the friendly name: the Quick Tunnel hostname rotates on every
+ *    restart, so a link shared with a friend would rot. This does not — it resolves to whatever
+ *    the server's latest ping said.
+ */
+async function redirectBySlug(host, env) {
+  const slug = host.slice(0, -(PUBLIC_ZONE.length + 1)).toLowerCase();
+  if (!slug || slug.includes('.')) return null;      // only one label deep
+
+  const row = await env.DB.prepare(
+    'SELECT url, name, expires_at, updated_at, created_at FROM servers WHERE slug = ?'
+  ).bind(slug).first();
+
+  if (!row) {
+    return new Response(
+      `No VibeServer is listed at ${slug}.${PUBLIC_ZONE}.`,
+      { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } }
+    );
+  }
+  // ★★ A server that is merely ASLEEP keeps its name (see migrations/0002-slugs.sql), so this is a
+  //    real and expected case, not an error. Say so plainly rather than bouncing a listener to a
+  //    dead tunnel — the address is right, the receiver is off.
+  if (Number(row.expires_at) <= now()) {
+    // ★★ DO NOT PROMISE A RESERVATION THAT HAS LAPSED. Past the hold window this name is up for
+    //    grabs, so telling a visitor "it will work again when it returns" would be a claim we have
+    //    stopped honouring.
+    const lifetime = Number(row.updated_at) - Number(row.created_at);
+    const hold = Math.min(Math.max(lifetime, ADDRESS_HOLD_MIN), ADDRESS_HOLD_MAX);
+    const stillHeld = Number(row.updated_at) > now() - hold;
+    const tail = stillHeld
+      ? 'Its address stays reserved, so this link will work again when it returns.'
+      : 'It has been away a long time and this address may be reassigned.';
+    return new Response(
+      `${row.name} is not online at the moment.\n${tail}`,
+      { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } }
+    );
+  }
+  // ★ 302 and no-store: the tunnel hostname behind this changes, so a cached redirect would send
+  //   listeners to an address that has already rotated away.
+  return new Response(null, {
+    status: 302,
+    headers: { location: row.url, 'cache-control': 'no-store' },
+  });
+}
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const p = url.pathname;
+
+    // ★ Anything under the public zone that is not the directory itself is a shareable address.
+    const host = url.hostname.toLowerCase();
+    if (host.endsWith('.' + PUBLIC_ZONE)) {
+      const res = await redirectBySlug(host, env);
+      if (res) return res;
+    }
+
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        headers: {
+          'access-control-allow-origin': '*',
+          'access-control-allow-methods': 'GET,POST,OPTIONS',
+          'access-control-allow-headers': 'content-type',
+        },
+      });
+    }
+
+    try {
+      if (p === '/api/directory' && request.method === 'GET') return await list(env);
+      if (p === '/api/directory/name' && request.method === 'GET') return await checkName(url, env);
+      if (p === '/api/directory/register' && request.method === 'POST') return await register(request, env);
+      if (p === '/api/directory/ping' && request.method === 'POST') return await ping(request, env);
+      if (p === '/api/directory/delist' && request.method === 'POST') return await delist(request, env);
+    } catch (err) {
+      // ★ Never leak a D1 error to a caller; it names tables.
+      console.error('directory error', (err && err.stack) || String(err));
+      return json({ error: 'server error' }, 500);
+    }
+
+    return env.ASSETS.fetch(request);
+  },
+};

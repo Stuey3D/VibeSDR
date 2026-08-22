@@ -1,0 +1,144 @@
+diff --git a/cmd/cloudflared/dns_android.go b/cmd/cloudflared/dns_android.go
+new file mode 100644
+index 0000000..6039044
+--- /dev/null
++++ b/cmd/cloudflared/dns_android.go
+@@ -0,0 +1,52 @@
++//go:build android
++
++package main
++
++// ★★★ ANDROID HAS NO /etc/resolv.conf, AND THAT IS WHY cloudflared FAILS ON A PHONE.
++//
++// Go's pure-Go resolver (the only one available with CGO_ENABLED=0) reads /etc/resolv.conf to
++// discover a nameserver. Android does not ship that file, so every lookup of the tunnel edge
++// (region1.v2.argotunnel.com and friends) fails with "connection refused" and the tunnel never
++// dials. See cloudflared issue #425.
++//
++// ★★★ THE CIRCULATING FIX IS TO HEX-PATCH THE SHIPPED BINARY — replacing the "/etc/resolv.conf"
++//     string with a same-length path fed on stdin. We do not do that: cloudflared is Apache-2.0
++//     and we compile it ourselves, so the resolver is fixed HERE, in source, where it can be
++//     reviewed and survives a version bump.
++
++import (
++	"context"
++	"net"
++	"time"
++)
++
++// Public resolvers, tried in order. Cloudflare's own first — we are dialling Cloudflare's edge.
++var androidNameservers = []string{
++	"1.1.1.1:53",
++	"1.0.0.1:53",
++	"8.8.8.8:53",
++}
++
++func init() {
++	net.DefaultResolver = &net.Resolver{
++		// ★ Must be true: this Dial is only consulted by the pure-Go resolver.
++		PreferGo: true,
++		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
++			// ★ Ignore the address Go worked out from resolv.conf — there isn't one. The
++			//   network ("udp"/"tcp") is honoured so TCP retry for truncated replies works.
++			var lastErr error
++			for _, ns := range androidNameservers {
++				d := net.Dialer{Timeout: 5 * time.Second}
++				conn, err := d.DialContext(ctx, network, ns)
++				if err == nil {
++					return conn, nil
++				}
++				lastErr = err
++				if ctx.Err() != nil {
++					break
++				}
++			}
++			return nil, lastErr
++		},
++	}
++}
+diff --git a/ingress/origins/dns.go b/ingress/origins/dns.go
+index c09c581..73c9e71 100644
+--- a/ingress/origins/dns.go
++++ b/ingress/origins/dns.go
+@@ -39,6 +39,11 @@ var (
+ 	VirtualDNSServiceAddr = netip.AddrPortFrom(netip.MustParseAddr("2606:4700:0cf1:2000:0000:0000:0000:0001"), 53)
+ 
+ 	defaultResolverAddr = netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), defaultResolverPort)
++
++	// VIBESDR PATCH: how the peek resolver dials a nameserver. A package-level var so that
++	// platforms without an /etc/resolv.conf (Android) can point it somewhere that exists.
++	// Unchanged on every other platform.
++	resolverDialFunc netDial = net.Dial
+ )
+ 
+ type netDial func(network string, address string) (net.Conn, error)
+@@ -58,7 +63,7 @@ func NewDNSResolverService(dialer ingress.OriginDialer, logger *zerolog.Logger,
+ 	return &DNSResolverService{
+ 		addresses: []netip.AddrPort{defaultResolverAddr},
+ 		dialer:    dialer,
+-		resolver:  &resolver{dialFunc: net.Dial},
++		resolver:  &resolver{dialFunc: resolverDialFunc},
+ 		logger:    logger,
+ 		metrics:   metrics,
+ 	}
+diff --git a/ingress/origins/dns_android.go b/ingress/origins/dns_android.go
+new file mode 100644
+index 0000000..5107a86
+--- /dev/null
++++ b/ingress/origins/dns_android.go
+@@ -0,0 +1,55 @@
++//go:build android
++
++package origins
++
++import (
++	"net"
++	"net/netip"
++)
++
++// ★★★ ANDROID HAS NO LOCAL DNS RESOLVER TO DISCOVER.
++//
++// DNSResolverService exists to find out which nameserver THIS MACHINE uses, by peeking at the
++// address Go's resolver dials, so that DNS queries arriving through the tunnel can be forwarded
++// to it. That whole idea assumes an /etc/resolv.conf naming a local resolver. Android has
++// neither the file nor, usually, a resolver on 127.0.0.1 — so the peek fails with
++// "connection refused", the service logs "Failed to initialize DNS local resolver", and it then
++// falls back to 127.0.0.1:53, which is equally absent.
++//
++// ★★ HARMLESS FOR VIBESERVER, WHICH NEVER SERVES DNS THROUGH THE TUNNEL — the tunnel's own edge
++//    discovery uses net.DefaultResolver and is fixed separately in cmd/cloudflared/dns_android.go.
++//    But it puts a red ERR in front of an operator on every start, and leaves the service pointed
++//    at an address that cannot answer. Both are cheap to fix honestly.
++//
++// So on Android we do not try to discover a local resolver: we name one. The peek then succeeds
++// against a real nameserver, the error disappears, and the service is left pointing somewhere
++// that can actually answer a query.
++
++func init() {
++	// Where the fallback lands when no address has been discovered.
++	defaultResolverAddr = netip.AddrPortFrom(netip.MustParseAddr("1.1.1.1"), defaultResolverPort)
++
++	// ★ And how the peek itself dials. Go hands us the address it worked out from resolv.conf —
++	//   on Android that is the bogus [::1]:53 — so we ignore it and dial a resolver that exists.
++	//   The port is kept from the caller only when it named a real one.
++	resolverDialFunc = func(network, address string) (net.Conn, error) {
++		if isUnusableResolver(address) {
++			address = defaultResolverAddr.String()
++		}
++		return net.Dial(network, address)
++	}
++}
++
++// ★ Loopback is what Go falls back to when it can find no nameserver, and on Android that is
++//   never a real resolver. Anything else the platform genuinely told us about is left alone.
++func isUnusableResolver(address string) bool {
++	host, _, err := net.SplitHostPort(address)
++	if err != nil {
++		return true
++	}
++	addr, err := netip.ParseAddr(host)
++	if err != nil {
++		return true
++	}
++	return addr.IsLoopback() || addr.IsUnspecified()
++}

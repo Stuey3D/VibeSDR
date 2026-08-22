@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VibeServer Directory — VibeSDR</title>
+<meta name="description" content="Public VibeServer receivers you can listen to right now.">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #131a23; --line: #23303f;
+    --text: #e6edf3; --dim: #8b9bb0; --accent: #4fc3f7;
+    --free: #35d07f; --busy: #ff5c5c; --temp: #ffc14d;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 18px 20px 12px; border-bottom: 1px solid var(--line); }
+  h1 { margin: 0; font-size: 20px; letter-spacing: .2px; }
+  h1 span { color: var(--accent); }
+  .sub { color: var(--dim); font-size: 13px; margin-top: 4px; }
+  #map { height: 46vh; min-height: 300px; background: #0d1520; }
+  main { padding: 16px 20px 60px; max-width: 900px; margin: 0 auto; }
+
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; color: var(--dim);
+            font-size: 12px; padding: 10px 20px; border-bottom: 1px solid var(--line); }
+  .legend i { display: inline-block; width: 10px; height: 10px; margin-right: 6px;
+              vertical-align: -1px; }
+  /* ★ SHAPE AS WELL AS COLOUR. Red/green is the commonest form of colour blindness and this
+     legend is entirely red/green/yellow, so the shape carries the same information. */
+  .sh-free { background: var(--free); border-radius: 50%; }
+  .sh-busy { background: transparent; border: 2px solid var(--busy); border-radius: 50%; }
+  .sh-temp { background: var(--temp); transform: rotate(45deg); }
+
+  .country { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 10px;
+             background: var(--panel); overflow: hidden; }
+  .country > summary { cursor: pointer; padding: 12px 14px; font-weight: 600;
+                       display: flex; align-items: center; gap: 10px; list-style: none; }
+  .country > summary::-webkit-details-marker { display: none; }
+  .country > summary .n { color: var(--dim); font-weight: 400; font-size: 13px; }
+  .chev { margin-left: auto; color: var(--dim); transition: transform .15s; }
+  details[open] > summary .chev { transform: rotate(90deg); }
+
+  .srv { border-top: 1px solid var(--line); }
+  .srv > summary { cursor: pointer; padding: 11px 14px 11px 18px; display: flex;
+                   align-items: center; gap: 10px; list-style: none; }
+  .srv > summary::-webkit-details-marker { display: none; }
+  .dot { width: 10px; height: 10px; flex: 0 0 auto; }
+  .srv .meta { color: var(--dim); font-size: 12px; margin-left: auto; text-align: right; }
+  .body { padding: 4px 14px 14px 42px; }
+  .radio { border-top: 1px dashed var(--line); padding: 9px 0; font-size: 13px; }
+  .radio b { font-weight: 600; }
+  .radio .cap { color: var(--dim); }
+  .listen { display: inline-block; margin-top: 10px; padding: 7px 14px; border-radius: 7px;
+            background: var(--accent); color: #06121a; text-decoration: none; font-weight: 600;
+            font-size: 13px; }
+  .tag { font-size: 11px; padding: 2px 7px; border-radius: 20px; border: 1px solid var(--line);
+         color: var(--dim); }
+  .empty { color: var(--dim); text-align: center; padding: 40px 20px; }
+  .empty code { background: var(--panel); padding: 2px 6px; border-radius: 4px; color: var(--accent); }
+  a { color: var(--accent); }
+  footer { color: var(--dim); font-size: 12px; text-align: center; padding: 0 20px 30px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>VibeServer <span>Directory</span></h1>
+  <div class="sub">Public receivers you can listen to right now. Anyone running VibeServer can list
+    theirs from the app — see <a href="https://vibesdr.net">vibesdr.net</a>.</div>
+</header>
+
+<div class="legend">
+  <span><i class="sh-free"></i>Free slot</span>
+  <span><i class="sh-busy"></i>No slots</span>
+  <span><i class="sh-temp"></i>Temporary share</span>
+  <span style="margin-left:auto" id="count"></span>
+</div>
+
+<div id="map"></div>
+
+<main>
+  <div id="list"><div class="empty">Loading…</div></div>
+</main>
+
+<footer>
+  Positions are the operator's Maidenhead square — a grid square, not an address.
+</footer>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/@joergdietrich/leaflet.terminator@1.1.0/L.Terminator.js"></script>
+<script>
+// ★★★ THE GREYLINE IS NOT DECORATION FOR THIS AUDIENCE — IT IS INFORMATION. A DXer can see which
+//     receivers are sitting in enhanced propagation right now, which is a reason to click one
+//     rather than a background texture.
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
+  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/** ★ A two-letter country code to its flag, via regional indicator symbols. No image assets. */
+function flag(cc) {
+  if (!/^[A-Z]{2}$/.test(cc || '')) return '🌐';
+  return String.fromCodePoint(...[...cc].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
+}
+
+let countryNames = null;
+try { countryNames = new Intl.DisplayNames(['en-GB'], { type: 'region' }); } catch { /* older browser */ }
+const countryName = (cc) => {
+  if (!/^[A-Z]{2}$/.test(cc || '')) return 'Elsewhere';
+  try { return countryNames ? countryNames.of(cc) : cc; } catch { return cc; }
+};
+
+/** Free / busy / temporary — the three states the legend names. */
+function state(s) {
+  // ★ A temporary share is one that declared a short life. It is a different KIND of entry, not a
+  //   different level of busy, so it wins the shape.
+  const temporary = (s.expiresAt - s.updatedAt) < 3 * 3600;
+  const full = s.maxListeners > 0 && s.listeners >= s.maxListeners;
+  if (full) return { cls: 'sh-busy', colour: getComputedStyle(document.documentElement).getPropertyValue('--busy').trim(), label: 'no free slot' };
+  if (temporary) return { cls: 'sh-temp', colour: getComputedStyle(document.documentElement).getPropertyValue('--temp').trim(), label: 'temporary share' };
+  return { cls: 'sh-free', colour: getComputedStyle(document.documentElement).getPropertyValue('--free').trim(), label: 'free slot' };
+}
+
+const map = L.map('map', { worldCopyJump: true, scrollWheelZoom: true }).setView([30, 0], 2);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 12,
+}).addTo(map);
+
+// The day/night shadow, refreshed so it stays honest on a page left open.
+let term = null;
+try {
+  term = L.terminator({ fillOpacity: 0.28, color: '#000', weight: 0 });
+  term.addTo(map);
+  setInterval(() => { try { term.setTime(new Date()); } catch {} }, 60000);
+} catch { /* terminator plugin unavailable — the map is still useful */ }
+
+function radioLine(r) {
+  const bits = [];
+  if (r.driver) bits.push(esc(r.driver));
+  if (r.mode) bits.push(esc(r.mode));
+  if (Array.isArray(r.coverage) && r.coverage.length) {
+    bits.push(r.coverage.map((c) => esc(c)).join(', '));
+  }
+  if (r.shared) bits.push('shared window');
+  if (r.restricted) bits.push('restricted range');
+  return `<div class="radio"><b>${esc(r.name || 'Radio')}</b>
+    <div class="cap">${bits.join(' · ') || 'no details published'}</div></div>`;
+}
+
+function serverBlock(s) {
+  const st = state(s);
+  const slots = s.maxListeners > 0 ? `${s.listeners}/${s.maxListeners} listening` :
+                (s.listeners ? `${s.listeners} listening` : '');
+  const free = (s.freeInSec > 0) ? ` · free in ${Math.ceil(s.freeInSec / 60)} min` : '';
+  const radios = (s.radios || []).map(radioLine).join('') ||
+    '<div class="radio cap">This server has not published its radios yet.</div>';
+  return `<details class="srv">
+    <summary>
+      <i class="dot ${st.cls}" title="${esc(st.label)}"></i>
+      <span>${esc(s.name)}</span>
+      ${s.kind === 'tunnel' ? '<span class="tag">tunnel</span>' : ''}
+      <span class="meta">${esc(s.grid)}${slots ? ' · ' + esc(slots) : ''}${esc(free)}</span>
+    </summary>
+    <div class="body">
+      ${radios}
+      <a class="listen" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">Listen</a>
+    </div>
+  </details>`;
+}
+
+function render(servers) {
+  document.getElementById('count').textContent =
+    servers.length ? `${servers.length} server${servers.length === 1 ? '' : 's'} online` : '';
+
+  const list = document.getElementById('list');
+  if (!servers.length) {
+    list.innerHTML = `<div class="empty">
+      <p>No servers are listed yet.</p>
+      <p>Running VibeServer? Turn on <code>List on VibeSDR.net</code> in the app
+         and yours will appear here.</p></div>`;
+    return;
+  }
+
+  // ★ Grouped by country and COLLAPSED, the way the app sorts UberSDR and KiwiSDR — so the site
+  //   and the picker present the same shape.
+  const byCountry = new Map();
+  for (const s of servers) {
+    const cc = s.country || '';
+    if (!byCountry.has(cc)) byCountry.set(cc, []);
+    byCountry.get(cc).push(s);
+  }
+  const groups = [...byCountry.entries()]
+    .sort((a, b) => countryName(a[0]).localeCompare(countryName(b[0])));
+
+  list.innerHTML = groups.map(([cc, rows], i) => `
+    <details class="country" ${groups.length <= 2 || i === 0 ? 'open' : ''}>
+      <summary>${flag(cc)} ${esc(countryName(cc))}
+        <span class="n">${rows.length}</span><span class="chev">›</span></summary>
+      ${rows.map(serverBlock).join('')}
+    </details>`).join('');
+
+  for (const s of servers) {
+    const st = state(s);
+    L.circleMarker([s.lat, s.lon], {
+      radius: 7, color: st.colour, weight: 2,
+      fillColor: st.colour, fillOpacity: st.cls === 'sh-busy' ? 0 : 0.85,
+    }).addTo(map).bindPopup(
+      `<b>${esc(s.name)}</b><br>${esc(s.grid)} · ${esc(st.label)}<br>` +
+      `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">Listen</a>`
+    );
+  }
+}
+
+fetch('/api/directory')
+  .then((r) => r.json())
+  .then((d) => render(Array.isArray(d.servers) ? d.servers : []))
+  .catch(() => {
+    document.getElementById('list').innerHTML =
+      '<div class="empty">The directory could not be reached. Try again shortly.</div>';
+  });
+</script>
+</body>
+</html>
