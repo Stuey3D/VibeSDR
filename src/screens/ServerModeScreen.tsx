@@ -507,6 +507,39 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   }, [publicName]);
 
   /**
+   * ★★★ CORRECT A LISTING THAT RESTORED ITSELF. When the server comes back on its own the tunnel
+   *     is re-established from values stored the last time the switch was flicked BY HAND — there
+   *     is no UI to ask, which is exactly what makes a headless restore possible. The cost is that
+   *     the entry can describe the server as it WAS: Stuart's listing still said "fm" hours after
+   *     the app had learned to say "FM Broadcast Band" (2026-08-22), and a changed aerial or band
+   *     limit would be equally stale.
+   *  ★★ So once there IS a screen, it says the current truth once. It is the ordinary ping with
+   *     fresh arguments — no tunnel restart, so nobody listening is disturbed.
+   *  ★ Deliberately not on every render: it runs when the listing is up and the values it would
+   *    send have actually changed.
+   */
+  const republished = useRef('');
+  useEffect(() => {
+    if (!publicOn || !running?.port) return;
+    const nm = (publicName || name || '').trim();
+    if (nm.length < 2) return;
+    const cov = (allowRanges || '').split(',').map((t) => t.trim()).filter(Boolean)
+                  .map((t) => bands.find((b) => b.id === t)?.label || t).join(', ');
+    const sig = [nm, cov, (antenna || '').trim(), radio?.model, radio?.driver,
+                 radioUse === 'locked'].join('|');
+    if (republished.current === sig) return;
+    republished.current = sig;
+    void (async () => {
+      try {
+        const where = await getResolvedServerLocation();
+        await (NativeModules as any).VibeLocalSDR?.tunnelRepublish?.(
+          nm, where?.grid || '', running.port, radio?.model || '', radio?.driver || '',
+          (antenna || '').trim(), cov, radioUse === 'locked');
+      } catch { /* the listing simply keeps what it had */ }
+    })();
+  }, [publicOn, running, publicName, name, allowRanges, antenna, bands, radio, radioUse]);
+
+  /**
    * Can this build tunnel at all, and are we already listed?
    *
    * ★★★ ITS OWN EFFECT, AND DELIBERATELY NOT GATED ON `running`. This first lived inside the mDNS

@@ -943,6 +943,33 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         } catch (t: Throwable) { promise.reject("tunnel_start", t) }
     }
 
+    /**
+     * Re-publish the listing from the values the app holds RIGHT NOW, without touching the tunnel.
+     *
+     * ★★★ THE HEADLESS RESTORE CAN ONLY REPLAY WHAT IT STORED. When the server comes back on its
+     *     own — after an update, a reboot or a low-memory kill — there is no UI to ask, so
+     *     restoreIfWanted republishes the values captured the last time the switch was flicked BY
+     *     HAND. That keeps a listing alive with nobody present, which is the point, but it also
+     *     means the entry can describe the server as it was rather than as it is: Stuart's listing
+     *     still read "fm" hours after the app had learned to say "FM Broadcast Band", and a
+     *     changed aerial or band limit would be just as stale (2026-08-22).
+     * ★★ So the screen corrects it as soon as there IS a UI. Cheap — it is the ordinary ping, with
+     *    fresh arguments — and it needs no tunnel restart, so nobody listening is disturbed.
+     */
+    @ReactMethod
+    fun tunnelRepublish(name: String, locator: String, port: Int,
+                        radioModel: String, radioDriver: String,
+                        antenna: String, coverage: String, locked: Boolean, promise: Promise) {
+        try {
+            if (!VibeTunnel.isTunnelRunning() || port <= 0 || name.length < 2) {
+                promise.resolve(VibeTunnel.statusJson()); return
+            }
+            VibeTunnel.publish(reactApplicationContext, name, locator, port,
+                               radioModel, radioDriver, antenna, coverage, locked)
+            promise.resolve(VibeTunnel.statusJson())
+        } catch (t: Throwable) { promise.reject("tunnel_republish", t) }
+    }
+
     /** ★ Off means OFF: delist immediately so the public address is freed now, not at expiry. */
     @ReactMethod
     fun tunnelStop(ownerProxies: String, promise: Promise) {

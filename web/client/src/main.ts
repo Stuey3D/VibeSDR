@@ -7535,10 +7535,26 @@ function pushSettingsToServer() {
   const ceq = bool('ceq');          if (ceq !== undefined) spec.setCeq(ceq);
   const nb = bool('nb');            if (nb !== undefined) spec.setNoiseBlanker(nb);
   const deemph = num('deemph');     if (deemph !== undefined) spec.setDeemph(deemph * 1e-6);
-  const ppm = num('ppm');           if (ppm !== undefined) spec.setHwPpm(ppm);
-  const biasT = bool('biasT');      if (biasT !== undefined) spec.setHwBiasT(biasT);
-  const agc = bool('agc');          if (agc !== undefined) spec.setHwAgc(agc);
-  const ds = num('directSampling'); if (ds !== undefined) spec.setHwDirectSampling(ds as 0 | 1 | 2);
+  // ★★★ HARDWARE SETTINGS ARE THE OWNER'S, AND ONLY AN ADMIN MAY SEND THEM. Everything above this
+  //     line is THIS listener's own processing — squelch, noise reduction, de-emphasis — and is
+  //     rightly restored on every connect. PPM, bias-T, the tuner AGC and direct sampling are
+  //     properties of somebody else's RADIO: pushing a value stored in this browser at a receiver
+  //     we have no rights over is asserting a setting we cannot hold.
+  //  ★★ The server refuses them, correctly — "refused bias-T — admin password required" appears
+  //     in the log every time an ordinary listener connects (Stuart, 2026-08-22: "why is the
+  //     iPhone asking for Bias-T though that is odd"). It is harmless and it is still wrong: it
+  //     is a request that should never have been made, and it puts a refusal in the owner's log
+  //     for a listener who did nothing.
+  //  ★★★ AND IT WOULD NOT STAY HARMLESS. The refusal is the only thing standing between a stale
+  //      local preference and a stranger's front end — bias-T feeds DC to an aerial. A client that
+  //      only asks for what it may have does not depend on the server's refusal being perfect.
+  //  ★ An ADMIN still restores them, because on their own receiver these ARE their settings.
+  if (adminUnlocked) {
+    const ppm = num('ppm');           if (ppm !== undefined) spec.setHwPpm(ppm);
+    const biasT = bool('biasT');      if (biasT !== undefined) spec.setHwBiasT(biasT);
+    const agc = bool('agc');          if (agc !== undefined) spec.setHwAgc(agc);
+    const ds = num('directSampling'); if (ds !== undefined) spec.setHwDirectSampling(ds as 0 | 1 | 2);
+  }
 
   // Re-assert the frame rate: the shim keeps whatever it was last set to, so a
   // reconnect could otherwise land in a stuck 5 fps with no way back.
