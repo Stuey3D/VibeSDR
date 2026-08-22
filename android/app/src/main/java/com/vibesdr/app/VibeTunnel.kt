@@ -422,6 +422,11 @@ object VibeTunnel {
         val p = prefs(ctx)
         val id = p.getString(K_ID, null)
         val key = p.getString(K_KEY, null)
+        // ★ Re-supplied on every publish rather than once: the shim holds it only in memory, so a
+        //   server that restarted under us must be given it again before the directory next asks.
+        if (!key.isNullOrEmpty()) {
+            try { VibeLocalSDR.setDirectoryKey(key) } catch (_: Throwable) {}
+        }
 
         if (id != null && key != null) {
             val r = post("/api/directory/ping", JSONObject().apply {
@@ -469,6 +474,11 @@ object VibeTunnel {
                     .putString(K_KEY, r.optString("key"))
                     .putString(K_SLUG, r.optString("slug"))
                     .apply()
+                // ★★★ THE SHIM ANSWERS THE DIRECTORY'S CHALLENGE, so it needs the key the
+                //     directory just issued. Without it the listing can never be VERIFIED and will
+                //     not be shown publicly — registering is a claim, and the challenge is what
+                //     turns it into a fact.
+                try { VibeLocalSDR.setDirectoryKey(r.optString("key")) } catch (_: Throwable) {}
                 listed = true
                 r.optInt("pingSec", 0).takeIf { it > 0 }?.let { PING_SEC = it.toLong() }
                 address = r.optString("address", "")

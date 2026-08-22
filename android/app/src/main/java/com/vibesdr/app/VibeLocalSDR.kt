@@ -170,6 +170,9 @@ object VibeLocalSDR {
      *  EVERY visitor arrives as 127.0.0.1 — which counts as the owner, silently switching off the
      *  session limit and leaving the ban list unable to tell two people apart. */
     fun setTrustedProxies(csv: String) { ensureLoaded(); nativeSetTrustedProxies(csv) }
+    /** ★ The directory's shared secret — see dirProofFor() in the shim. */
+    fun setDirectoryKey(key: String) { ensureLoaded(); nativeSetDirectoryKey(key) }
+    private external fun nativeSetDirectoryKey(key: String)
     private external fun nativeSetTrustedProxies(csv: String)
 
     /** ★ One radio per address, or several — see the JNI note. Default true (refuse). */

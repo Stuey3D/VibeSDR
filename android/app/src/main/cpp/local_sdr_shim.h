@@ -120,6 +120,8 @@ public:
      *  client-supplied, so believing it from any peer lets a stranger forge an address and walk
      *  through the ban list. See vibe_proxy.h. */
     static void setTrustedProxies(const std::string& csv);
+    /** The directory's shared secret, for answering its address challenge. */
+    static void setDirectoryKey(const std::string& key);
     /** ★ Per-listener time limit in MINUTES; 0 = unlimited (default). For a PUBLIC receiver,
      *  where one client per radio makes the server a queue of one. Loopback and admin sessions
      *  are exempt. On expiry the listener is told, disconnected, and their address held on a

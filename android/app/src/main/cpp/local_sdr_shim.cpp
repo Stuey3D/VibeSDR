@@ -1176,6 +1176,22 @@ static std::atomic<int>      g_adcHotRun{0};
  *  ★ A verdict reached across a disturbed window is not evidence. It is thrown away and the climb
  *    is re-judged, rather than being counted against the radio.
  */
+/** ★★★ THE DIRECTORY'S SHARED SECRET — proof that this address really is THIS receiver.
+ *
+ *  Registering says "listen to me at <url>". Nothing in that claim is checked, so anybody could
+ *  list somebody else's receiver under their own name, or point an entry at a site that has never
+ *  heard of us. The directory therefore challenges the address it was given: it sends a nonce to
+ *  /vibeserver.json and expects HMAC-SHA256(key, nonce) back, where the key is the one it issued
+ *  at registration and only this server holds.
+ *
+ * ★★★ THE KEY NEVER CROSSES THE WIRE. The probe may run over plain HTTP to somebody's own port —
+ *     their machine, their choice — so echoing the key would put the identity of the listing in
+ *     the clear on every check. A nonce out, a hash back: a listener on the path gets a
+ *     single-use digest worth nothing.
+ */
+static std::mutex          g_vsDirKeyMtx;
+static std::string         g_vsDirKey;
+
 static std::atomic<double>   g_pipelineDisturbedAt{0.0};
 static std::atomic<int>      g_adcClipRun{0};
 static std::atomic<int>      g_adcCleanRun{0};
@@ -1466,6 +1482,21 @@ static std::map<std::string, VsVisitor> g_vsVisitors;
  */
 static bool vsIsSelfPoll(const std::string& agent) {
     return agent.rfind("VibeServer-directory", 0) == 0;
+}
+
+/** `,"dirProof":"<hex>"` for a directory challenge, or "" when there is nothing to prove. */
+static std::string dirProofFor(const std::string& nonce) {
+    if (nonce.empty() || nonce.size() > 128) return std::string();
+    std::string key;
+    { std::lock_guard<std::mutex> lk(g_vsDirKeyMtx); key = g_vsDirKey; }
+    if (key.empty()) return std::string();
+    uint8_t mac[32];
+    hmacSha256((const uint8_t*)key.data(), key.size(),
+               (const uint8_t*)nonce.data(), nonce.size(), mac);
+    static const char* hexd = "0123456789abcdef";
+    std::string hex; hex.reserve(64);
+    for (int i = 0; i < 32; i++) { hex += hexd[mac[i] >> 4]; hex += hexd[mac[i] & 15]; }
+    return ",\"dirProof\":\"" + hex + "\"";
 }
 
 static void vsNoteVisitor(const std::string& ip) {
@@ -8203,6 +8234,10 @@ struct LocalSdrShim::Impl {
                              // ★ 0 when the centre is not locked — a free-running dongle has no
                              //   fixed range to promise, and inventing one would be a lie.
                              + ",\"instance\":\"" + vsInstanceId() + "\""
+                             // ★ The directory's challenge, answered only when it asks and only
+                             //   when we hold a key. Absent otherwise, which is every ordinary
+                             //   client fetching this file.
+                             + dirProofFor(queryParam(reqLine, "dirNonce"))
                              // ★★★ SAY THAT WE ARE A FRONT DOOR, ON THE ENDPOINT EVERY CLIENT
                              //     ALREADY PROBES. Without this a multi-radio server is
                              //     INDISTINGUISHABLE from an ordinary one here — same shape, same
@@ -13507,6 +13542,14 @@ void LocalSdrShim::setRtlSerialHandler(RtlSerialFn fn) {
 void LocalSdrShim::setRtlSerialStatusHandler(RtlSerialStatusFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsRtlSerialStatusFn = std::move(fn);
+}
+
+/** ★ The secret the directory issued this server. Held only in memory: it is re-supplied by the
+ *  app on every start from where it is actually stored, so a crash cannot leave it lying in the
+ *  shim's own state, and there is one place that owns it. */
+void LocalSdrShim::setDirectoryKey(const std::string& key) {
+    std::lock_guard<std::mutex> lk(g_vsDirKeyMtx);
+    g_vsDirKey = key;
 }
 
 void LocalSdrShim::setTrustedProxies(const std::string& csv) {

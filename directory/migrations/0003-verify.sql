@@ -1,0 +1,16 @@
+-- ★★★ A LISTING IS A CLAIM UNTIL THE ADDRESS PROVES IT IS THIS RECEIVER.
+--
+--     Registering says "listen to me at <url>", and nothing in that claim was checked — so anyone
+--     could list somebody else's receiver under their own name, or point an entry at a site that
+--     has never heard of us. The directory now challenges the address: a nonce to
+--     /vibeserver.json, and back an HMAC-SHA256 of it keyed with the secret we issued at
+--     registration, which only that server holds.
+--
+-- ★★ THE KEY NEVER CROSSES THE WIRE. The probe may run over plain HTTP to somebody's own port, so
+--    echoing the key would put the identity of the listing in the clear on every check. A nonce
+--    out, a hash back: anyone on the path gets a single-use digest worth nothing.
+--
+-- ★ EXISTING ROWS START UNVERIFIED, deliberately. They were listed before there was anything to
+--   prove, so they must prove it now — the first ping after this migration does it, and until then
+--   they are simply not shown.
+ALTER TABLE servers ADD COLUMN verified INTEGER NOT NULL DEFAULT 0;

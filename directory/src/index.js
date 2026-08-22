@@ -231,6 +231,49 @@ function ttlSeconds(body) {
   return Math.min(Math.max(Math.floor(n), 1), MAX_TTL_MIN) * 60;
 }
 
+/**
+ * ★★★ PROVE THE ADDRESS IS THIS RECEIVER, NOT JUST A RECEIVER.
+ *
+ * Registering is a CLAIM: "listen to me at <url>". Nothing in it was checked, so anybody could
+ * list somebody else's server under their own name, or point an entry at a site that has never
+ * heard of us — and the directory's whole job is telling strangers where to go.
+ *
+ * ★★★ THE KEY NEVER CROSSES THE WIRE. The probe may run over plain HTTP to somebody's own port —
+ *     their machine, their choice — so echoing the key would put the identity of the listing in
+ *     the clear on every check, and anyone on the path could take the listing over. A nonce out,
+ *     an HMAC back: what a listener sees is single-use and worth nothing.
+ *
+ * ★★ VERIFIED ON PING, NOT AT REGISTRATION, and that is forced by the order of things: the server
+ *    cannot answer a challenge with a key it has not been given yet, and we issue the key in the
+ *    registration RESPONSE. So a new listing exists immediately and is SHOWN once it answers.
+ * ★ Failure is not an error to the caller. A server that cannot answer yet keeps its entry and
+ *   simply is not listed — it may be mid-restart, and dropping it would punish a blip.
+ */
+async function verifyAddress(url, key) {
+  const nonce = crypto.randomUUID().replace(/-/g, '');
+  const target = `${url}/vibeserver.json?dirNonce=${nonce}`;
+  try {
+    const res = await fetch(target, {
+      signal: AbortSignal.timeout(8000),
+      cache: 'no-store',
+      // ★ Some receivers refuse a request with no user agent — ours does.
+      headers: { 'user-agent': 'vibesdr.net directory verifier' },
+    });
+    if (!res.ok) return false;
+    const j = await res.json();
+    const given = typeof j?.dirProof === 'string' ? j.dirProof.toLowerCase() : '';
+    if (given.length !== 64) return false;
+
+    const mac = await crypto.subtle.importKey(
+      'raw', new TextEncoder().encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const sig = await crypto.subtle.sign('HMAC', mac, new TextEncoder().encode(nonce));
+    const want = [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    return timingSafeEqual(given, want);
+  } catch {
+    return false;                      // unreachable, too slow, or not a VibeServer
+  }
+}
+
 async function register(request, env) {
   const body = await readBody(request);
   if (!body) return json({ error: 'bad json' }, 400);
@@ -327,17 +370,30 @@ async function ping(request, env) {
     ? JSON.stringify(body.status)
     : row.status_json;
 
+  // ★★★ PROVE THE ADDRESS WHILE IT IS UNPROVEN, AND AGAIN WHENEVER IT CHANGES. A Quick Tunnel
+  //     hostname rotates on every restart, so "verified once" would leave a proven server quietly
+  //     carrying an unproven address for the rest of its life — which is exactly the claim the
+  //     challenge exists to check. The key does not change across the move, so re-proving costs
+  //     one request and settles it.
+  const moved = url !== row.url;
+  let verified = Number(row.verified) === 1 && !moved;
+  if (!verified) verified = await verifyAddress(url, String(body.key || ''));
+
   await env.DB.prepare(
-    `UPDATE servers SET url = ?, name = ?, status_json = ?, updated_at = ?, expires_at = ?
+    `UPDATE servers SET url = ?, name = ?, status_json = ?, updated_at = ?, expires_at = ?,
+                        verified = ?
      WHERE id = ?`
   ).bind(url, body.name ? clean(body.name, 60) : row.name,
-         status, t, t + ttlSeconds(body), row.id).run();
+         status, t, t + ttlSeconds(body), verified ? 1 : 0, row.id).run();
 
   // ★★ TELL A RETURNING SERVER THE TRUTH ABOUT ITS ADDRESS. If it was away longer than the hold
   //    and somebody else took the name, `slug` is now NULL — the switch must be able to say so
   //    rather than keep showing an address that belongs to a stranger.
   return json({
     listed: true,
+    // ★ Say whether the address proved itself, rather than leaving an owner to wonder why a
+    //   perfectly live server is not on the map.
+    verified,
     pingSec: PING_SEC,
     slug: row.slug || null,
     address: row.slug ? `${row.slug}.${PUBLIC_ZONE}` : null,
@@ -359,7 +415,7 @@ async function list(env) {
   //     not selected. See schema.sql.
   const { results } = await env.DB.prepare(
     `SELECT id, name, url, kind, grid, lat, lon, country, status_json, updated_at, expires_at, slug
-       FROM servers WHERE expires_at > ? ORDER BY country, name`
+       FROM servers WHERE expires_at > ? AND verified = 1 ORDER BY country, name`
   ).bind(now()).all();
 
   const servers = (results || []).map((r) => {

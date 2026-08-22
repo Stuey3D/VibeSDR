@@ -719,6 +719,15 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetTrustedProxies(JNIEnv* env, jobject, 
     if (c) env->ReleaseStringUTFChars(csv, c);
 }
 
+/** ★ The key the public directory issued us, so /vibeserver.json can answer its challenge and
+ *  prove this address really is this receiver. Never echoed — a nonce in, an HMAC out. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetDirectoryKey(JNIEnv* env, jobject, jstring k) {
+    const char* c = k ? env->GetStringUTFChars(k, nullptr) : nullptr;
+    vibe::LocalSdrShim::setDirectoryKey(c ? c : "");
+    if (c) env->ReleaseStringUTFChars(k, c);
+}
+
 /** ★★★ SEVERAL RADIOS FROM ONE ADDRESS. Default is to refuse — a single visitor once took BOTH
  *  radios of a public receiver by opening a tab on each — but an owner may allow it, and on a
  *  SHARED receiver it is the difference between a household being one listener and being three.
