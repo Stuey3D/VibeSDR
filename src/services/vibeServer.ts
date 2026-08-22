@@ -1,7 +1,7 @@
 import { NativeModules, Platform } from 'react-native';
 import { loadActiveEibi } from './eibi';
 import { getUserLocation } from './instancesApi';
-import { getServerName } from './rtlTcpServer';
+import { getServerName, PUBLIC_NAME_KEY } from './rtlTcpServer';
 import { latLonToGrid, gridToLatLon } from './grid';
 import type { ServerBookmark } from './stations';
 import { parseBookmarksAny } from './userBookmarks';
@@ -533,7 +533,20 @@ export async function publishLocation(): Promise<void> {
   // (the host typed it). The POSITION is published only when opted into. Clients
   // show "Moto G35 / Northampton IO92nh" when both are known, and just the name
   // with a "location not set" note when only the name is.
-  const name = await getServerName('VibeSDR');
+  // ★★★ THE PUBLIC NAME WINS WHERE ONE IS SET. Somebody arriving from the directory was promised
+  //     "Stuey3D XCover4S" and then met a page calling itself "VibeSDR" — the local mDNS name,
+  //     which the owner had never had a reason to change (Stuart, 2026-08-23). The public name IS
+  //     the receiver's public identity: it is what strangers were told, what the shareable address
+  //     is derived from, and the only name most visitors will ever have seen.
+  //  ★★ It does not touch mDNS. The `.local` label still comes from the LOCAL name, because that
+  //     is the one the owner's own network knows it by — two audiences, two names, and only the
+  //     public one belongs on a page reached from the directory.
+  //  ★ Falls back exactly as before when no public name is set, so a private server is unchanged.
+  let name = await getServerName('VibeSDR');
+  try {
+    const pub = (await AsyncStorage.getItem(PUBLIC_NAME_KEY))?.trim();
+    if (pub) name = pub;
+  } catch {}
   const emit = (extra: object = {}) => {
     try { Local.setLocationJson(JSON.stringify({ name, ...extra })); } catch {}
   };

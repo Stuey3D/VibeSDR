@@ -10,7 +10,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { themeFor } from '../constants/theme';
-import { getServerName, saveServerName } from '../services/rtlTcpServer';
+import { getServerName, saveServerName, PUBLIC_NAME_KEY } from '../services/rtlTcpServer';
 import {
   startVibeServer, stopVibeServer, getVibeServerStatus, setVibeServerCompressAudio, getConnectedRadio,
   setVibeServerAdminSecret, setVibeServerUncompressedAudio, setVibeServerSessionLimit,
@@ -18,7 +18,7 @@ import {
   vibeServerSupported, randomPin, fmtRate, FPS_TIERS, fpsForTier,
   getServerLocationMode, setServerLocationMode, getManualServerLocation,
   getResolvedServerLocation,
-  setManualServerLocation, resolveLocation,
+  setManualServerLocation, resolveLocation, publishLocation,
   type FpsTier, type VibeServerInfo, type VibeServerStatus, type LocationMode,
 } from '../services/vibeServer';
 import { loadActiveEibi } from '../services/eibi';
@@ -99,7 +99,7 @@ const K = {
   advanced: 'vs_advanced', maxUsers: 'vs_maxusers',
   allowRanges: 'vs_allow', blockRanges: 'vs_block',
   gainLimits: 'vs_gainlimits', restGain: 'vs_restgain', agcLock: 'vs_agclock',
-  rtlAgc: 'vs_rtlagc', publicName: 'vs_publicname',
+  rtlAgc: 'vs_rtlagc', publicName: PUBLIC_NAME_KEY,
   proxies: 'vs_proxies', radioUse: 'vs_radiouse', oneRadioPerIp: 'vs_oneradioperip',
   landingHz: 'vs_landinghz', landingMode: 'vs_landingmode', biasT: 'vs_biast',
 };
@@ -591,6 +591,11 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                      radioUse === 'locked', where?.grid || ''].join('|');
         if (republished.current === sig) return;
         republished.current = sig;
+        // ★★ AND THE NAME THE RECEIVER ANSWERS TO FOLLOWS THE PUBLIC ONE. publishLocation() runs
+        //    at server start and on a location change, so editing the public name left the page
+        //    calling itself by the old one until a restart — and the whole point of the public
+        //    name is that it is what a stranger arriving from the directory was promised.
+        try { await publishLocation(); } catch {}
         await (NativeModules as any).VibeLocalSDR?.tunnelRepublish?.(
           nm, where?.grid || '', running.port, radio?.model || '', radio?.driver || '',
           // ★★ -1 = leave the share window alone. It was 0, which the server reads as "make this

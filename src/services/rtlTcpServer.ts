@@ -63,6 +63,10 @@ export async function saveServerPersist(on: boolean): Promise<void> {
   try { await AsyncStorage.setItem(PERSIST_KEY, on ? '1' : '0'); } catch {}
 }
 
+/** ★ The PUBLIC name's key, defined once. It is read by the location publisher and written by the
+ *  server screen, and two spellings of the same string is how one of them quietly stops working. */
+export const PUBLIC_NAME_KEY = 'vs_publicname';
+
 export async function getServerName(fallback = 'VibeSDR RTL-SDR'): Promise<string> {
   try { return (await AsyncStorage.getItem(NAME_KEY)) || fallback; } catch { return fallback; }
 }
