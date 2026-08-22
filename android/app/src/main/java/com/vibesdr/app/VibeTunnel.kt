@@ -347,6 +347,11 @@ object VibeTunnel {
             // ★ The session limit is a fact a listener wants BEFORE clicking, not after being cut
             //   off — the directory is exactly where "how long do I get" belongs.
             out.put("limitMin", j.optInt("limitMin", 0))
+            // ★★ WHETHER A PIN IS NEEDED, said BEFORE somebody clicks. A club receiver that only
+            //   its members may use is a perfectly good listing — but a stranger arriving at a PIN
+            //   box they cannot fill reads it as a broken server, and goes away rather than
+            //   understanding it was never for them (Stuart, 2026-08-22).
+            out.put("pin", j.optBoolean("pin", false))
         } catch (t: Throwable) {
             Log.w(TAG, "could not read /vibeserver.json: ${t.message}")
         }
@@ -382,17 +387,22 @@ object VibeTunnel {
      */
     fun publish(ctx: Context, name: String, locator: String, port: Int,
                 radioModel: String, radioDriver: String,
-                antenna: String, coverage: String, locked: Boolean = false): String? {
+                antenna: String, coverage: String, locked: Boolean = false,
+                shareForSec: Long = 0): String? {
         // ★ Remember how to say all this again, so the renewal below needs nothing from the UI —
         //   which may well be gone: the server keeps running with the screen off.
-        lastPublish = { publishOnce(ctx, name, locator, port, radioModel, radioDriver, antenna, coverage, locked) }
+        // ★★★ THE OFFER IS SET ONCE, NOT RENEWED. A temporary share ends when it said it would —
+        //     if every ping pushed the end further away, "up for the week of the contest" would
+        //     quietly become "up for ever, one ping at a time". So the RENEWAL sends 0, meaning
+        //     "unchanged", and only a deliberate act from the screen moves it.
+        lastPublish = { publishOnce(ctx, name, locator, port, radioModel, radioDriver, antenna, coverage, locked, 0) }
         prefs(ctx).edit()
             .putBoolean(K_WANT, true).putString(K_NAME, name).putString(K_GRID, locator)
             .putString(K_MODEL, radioModel).putString(K_DRIVER, radioDriver)
             .putString(K_ANT, antenna).putString(K_COV, coverage).putBoolean(K_LOCKED, locked)
             .apply()
         startPinging()
-        return publishOnce(ctx, name, locator, port, radioModel, radioDriver, antenna, coverage, locked)
+        return publishOnce(ctx, name, locator, port, radioModel, radioDriver, antenna, coverage, locked, shareForSec)
     }
 
     /** ★ Renew on the advertised interval, and never let one failure end the schedule: a phone that
@@ -414,7 +424,8 @@ object VibeTunnel {
 
     private fun publishOnce(ctx: Context, name: String, locator: String, port: Int,
                             radioModel: String, radioDriver: String,
-                            antenna: String, coverage: String, locked: Boolean): String? {
+                            antenna: String, coverage: String, locked: Boolean,
+                            shareForSec: Long): String? {
         val status = buildStatus(port, radioModel, radioDriver, antenna, coverage, locked)
         val url = tunnelUrl
         if (url.isEmpty()) { lastError = "no tunnel yet"; return null }
@@ -438,6 +449,7 @@ object VibeTunnel {
                 //     because a tunnel hostname rotates; the position deserves the same treatment
                 //     for the same reason — it is a fact that can change while the listing lives.
                 put("grid", locator)
+                if (shareForSec > 0) put("shareForSec", shareForSec)
                 put("name", name); put("status", status)
             })
             if (r != null && r.optInt("_status") == 200) {
@@ -532,7 +544,7 @@ object VibeTunnel {
                 publish(ctx, name, p.getString(K_GRID, "") ?: "", port,
                         p.getString(K_MODEL, "") ?: "", p.getString(K_DRIVER, "") ?: "",
                         p.getString(K_ANT, "") ?: "", p.getString(K_COV, "") ?: "",
-                        p.getBoolean(K_LOCKED, false))
+                        p.getBoolean(K_LOCKED, false), 0)
             }
         } catch (t: Throwable) { Log.w(TAG, "restoreIfWanted failed", t) }
     }

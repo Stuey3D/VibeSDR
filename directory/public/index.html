@@ -83,6 +83,8 @@
             font-size: 13px; }
   .tag { font-size: 11px; padding: 2px 7px; border-radius: 20px; border: 1px solid var(--line);
          color: var(--dim); }
+  /* ★ A PIN is a fact about ACCESS, not a fault — amber, not red. */
+  .tag.lock { color: var(--temp); border-color: var(--temp); }
   .empty { color: var(--dim); text-align: center; padding: 40px 20px; }
   .empty code { background: var(--panel); padding: 2px 6px; border-radius: 4px; color: var(--accent); }
   a { color: var(--accent); }
@@ -100,16 +102,9 @@
 <div class="legend">
   <span><i class="sh-free"></i>Free slot</span>
   <span><i class="sh-busy"></i>No slots</span>
-  <!-- ★★★ NO "TEMPORARY SHARE" IN THE LEGEND UNTIL SOMETHING CAN BE ONE. The two flavours are in
-       BRIEF-public-directory.md — a permanent listing, and a share offered for a few hours that
-       expires on its own ("Hans is lending me his laptop for two hours"). Only the first is built,
-       so `temporary` is always false and that marker can never appear: the legend was explaining a
-       state nothing in the system can produce (Stuart, 2026-08-22: "what is temporary share on
-       here?").
-       ★★ Same fault as a control whose every use is a no-op — it teaches a reader that the legend
-          describes something other than what they are looking at.
-       ★ The RENDERING stays (see state() and .sh-temp): the server already sends the flag, so the
-         day a share can declare itself the legend line is all that comes back. -->
+<!-- ★ Back in the legend now that a share can declare itself — see untilText(). It was removed
+       while nothing could produce the state, which is the only reason a key entry should exist. -->
+  <span><i class="sh-temp"></i>Temporary share</span>
   <span style="margin-left:auto" id="count"></span>
 </div>
 
@@ -233,6 +228,13 @@ function radioLine(r, s) {
                  : isFull ? (s.freeInSec > 0 ? `FULL · FREE IN ${mmss(s.freeInSec)}` : 'FULL')
                  : `${s.listeners} OF ${max || 1} LISTENING`;
 
+  // ★★ A SHARE THAT ENDS SAYS SO, and says it where the offer is — beside what the receiver is,
+  //    not buried in the header. "Hans — SDRplay RSP1A — available for another 40 minutes" was the
+  //    sentence the original brief wanted; this is it.
+  const left = s.until > 0 ? Math.max(0, s.until - Math.floor(Date.now() / 1000)) : 0;
+  const share = left > 0
+    ? `<div class="rcSub">Temporary share — available for another ${esc(untilText(left))}</div>` : '';
+
   const etiquette = sharedDial
     ? `<div class="rcAsk">ASK BEFORE TUNING — everyone here shares one dial</div>` : '';
   const ant = (s && s.antenna) ? `<div class="rcSub">⚲ ${esc(s.antenna)}</div>` : '';
@@ -241,8 +243,23 @@ function radioLine(r, s) {
       <div class="rcTop"><span class="rcName">${esc(r.name || 'Radio')}</span>
         <span class="rcState">${esc(stateTxt)}</span></div>
       <div class="rcSub">${bits.join(' · ') || 'no details published'}</div>
-      ${ant}${etiquette}
+      ${ant}${share}${etiquette}
     </div>`;
+}
+
+/**
+ * ★★ HOW LONG A SHARE HAS LEFT, in whatever unit reads naturally. "available for another 6 days"
+ *    is the sentence a listener needs; "for another 8,640 minutes" is the same fact and useless.
+ * ★ Rounded DOWN, never up: a share that says two days and ends in one is worse than one that
+ *   says one and lasts two.
+ */
+function untilText(sec) {
+  if (sec <= 0) return '';
+  const m = Math.floor(sec / 60), h = Math.floor(m / 60), d = Math.floor(h / 24);
+  if (d >= 14) return `${Math.floor(d / 7)} weeks`;
+  if (d >= 1)  return d === 1 ? '1 day' : `${d} days`;
+  if (h >= 1)  return h === 1 ? '1 hour' : `${h} hours`;
+  return m <= 1 ? 'a minute' : `${m} minutes`;
 }
 
 /** mm:ss, the way the receiver's own card writes a countdown. */
@@ -266,6 +283,7 @@ function serverBlock(s) {
     <summary>
       <i class="dot ${st.cls}" title="${esc(st.label)}"></i>
       <span>${esc(s.name)}</span>
+      ${s.pin ? '<span class="tag lock" title="This receiver needs a PIN — it is not open to everyone">\u{1F512} PIN</span>' : ''}
       ${s.kind === 'tunnel' ? '<span class="tag">tunnel</span>' : ''}
       <!-- ★★ THE COUNT BELONGS TO THE RADIO, NOT THE SERVER. A machine can hold several receivers
            with different occupancy, so "2/10 listening" beside the server NAME is only ever true
@@ -317,7 +335,7 @@ function render(servers) {
       radius: 7, color: st.colour, weight: 2,
       fillColor: st.colour, fillOpacity: st.cls === 'sh-busy' ? 0 : 0.85,
     }).addTo(map).bindPopup(
-      `<b>${esc(s.name)}</b><br>${esc(s.grid)} · ${esc(st.label)}<br>` +
+      `<b>${esc(s.name)}</b>${s.pin ? ' \u{1F512}' : ''}<br>${esc(s.grid)} · ${esc(st.label)}<br>` +
       `<a href="${esc(listenUrl(s))}" target="_blank" rel="noopener noreferrer">Listen</a>`
     );
   }

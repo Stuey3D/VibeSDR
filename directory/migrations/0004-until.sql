@@ -1,0 +1,14 @@
+-- ★★★ A TEMPORARY SHARE'S END IS NOT ITS LIVENESS. These are two different clocks and conflating
+--     them would break both:
+--
+--     `expires_at` is LIVENESS — about half an hour, refreshed by every ping. It is what makes a
+--     phone that goes flat vanish on its own with no probe and no cron, and it must stay short or
+--     that stops working.
+--
+--     `until` is the OFFER — "this club receiver is up for the week of the contest". Making the
+--     TTL a week instead would mean a share that died on Monday sat on the map until Sunday,
+--     because nothing would notice it had gone.
+--
+-- ★★ So a listing is shown while BOTH hold: it has pinged recently AND its offer has not run out.
+--    0 = permanent, which is every server that never asked for anything else.
+ALTER TABLE servers ADD COLUMN until INTEGER NOT NULL DEFAULT 0;

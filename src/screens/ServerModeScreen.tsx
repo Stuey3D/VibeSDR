@@ -183,6 +183,23 @@ export default function ServerModeScreen({ navigation, route }: Props) {
    *  AGENTS.md: a control that works in one scenario and not another should be removed. */
   const [publicSupported, setPublicSupported] = useState(false);
 
+  /** ★★ PERMANENT UNLESS THE OWNER SAYS OTHERWISE — the safe default and the common case. A club
+   *  server up for the week of a contest is the exception, and an exception should be chosen.
+   *  ★★★ AND IT ONLY ENDS THE LISTING. When the offer runs out the receiver carries on exactly as
+   *      an unlisted VibeServer does — it is removed from the directory, not switched off
+   *      (Stuart, 2026-08-22: "it simply reverts to an unlisted but still active vibeserver"). */
+  const [publicTemp, setPublicTemp]   = useState(false);
+  const [publicForN, setPublicForN]   = useState('1');
+  const [publicForU, setPublicForU]   = useState<'minutes'|'hours'|'days'|'weeks'|'months'>('days');
+
+  /** ★ A month is 30 days and a week is 7 — this is an OFFER, not a calendar appointment, and
+   *  nobody setting "2 months" means it to the hour. */
+  const shareSeconds = () => {
+    const n = Math.max(1, Math.floor(Number(publicForN) || 1));
+    const mult = { minutes: 60, hours: 3600, days: 86400, weeks: 604800, months: 2592000 }[publicForU];
+    return n * mult;
+  };
+
   const [bands, setBands] = useState<Band[]>([]);
   const [allowRanges, setAllowRanges] = useState('');
   const [blockRanges, setBlockRanges] = useState('');
@@ -889,6 +906,35 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 editable={!publicOn}
                 placeholder={name || 'My VibeServer'} placeholderTextColor={C.goldDim}
                 style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
+              {/* ★★★ A SHARE THAT ENDS. "Hans is lending me his laptop for two hours" and a club
+                  server up for the week of a contest are one idea: an offer with a deadline, which
+                  expires on its own so nobody has to remember to take it down (Stuart, 2026-08-22).
+                  ★★ Permanent stays the default — an exception should have to be chosen — and the
+                     controls lock once listed, because changing the offer under people who are
+                     already relying on it is a different act from making one. */}
+              <View style={[styles.rowBetween, { marginTop: 12 }]}>
+                <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                  Temporary — ends by itself
+                </Text>
+                <Switch value={publicTemp} disabled={publicOn} onValueChange={setPublicTemp}
+                  trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
+              </View>
+              {publicTemp ? (
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, alignItems: 'center' }}>
+                  <TextInput value={publicForN} onChangeText={setPublicForN}
+                    editable={!publicOn} keyboardType="number-pad"
+                    placeholder="1" placeholderTextColor={C.goldDim}
+                    style={[styles.input, { flex: 1, color: C.amber, borderColor: C.border, fontFamily: F }]} />
+                  {/* ★ Pills, not a native picker: five choices, and a picker would be the only one
+                      of its kind on this screen. */}
+                  <View style={{ flex: 3, flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                    {(['minutes', 'hours', 'days', 'weeks', 'months'] as const).map((u) => (
+                      <Pill key={u} C={C} F={F} active={publicForU === u} label={u}
+                        onPress={() => { if (!publicOn) setPublicForU(u); }} />
+                    ))}
+                  </View>
+                </View>
+              ) : null}
               <View style={[styles.rowBetween, { marginTop: 12 }]}>
                 <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
                   {publicBusy ? 'Working\u2026' : 'List this server publicly'}

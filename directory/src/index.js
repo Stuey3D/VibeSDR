@@ -225,6 +225,20 @@ async function authed(env, body) {
   return { row };
 }
 
+/**
+ * ★★★ HOW LONG THIS SHARE IS OFFERED FOR — an ABSOLUTE end, not a lifetime, so a ping cannot keep
+ *     nudging it into the future. "A week" means a week from when it was set, not a week from
+ *     whenever the server last spoke.
+ * ★ 0 / absent = permanent, which is every server that has not asked for anything else. Capped at
+ *   a year: past that it is a permanent server with extra steps.
+ */
+function untilFrom(body, prev) {
+  if (body.shareForSec === 0 || body.shareForSec === null) return 0;   // explicitly permanent
+  const n = Number(body.shareForSec);
+  if (!Number.isFinite(n) || n <= 0) return Number(prev) || 0;         // said nothing: keep
+  return now() + Math.min(Math.floor(n), 365 * 86400);
+}
+
 function ttlSeconds(body) {
   const n = Number(body?.ttlMin);
   if (!Number.isFinite(n) || n <= 0) return DEFAULT_TTL_MIN * 60;
@@ -343,10 +357,11 @@ async function register(request, env) {
   await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO servers (id, key_hash, name, url, kind, grid, lat, lon, country,
-                            status_json, created_at, updated_at, expires_at, slug)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+                            status_json, created_at, updated_at, expires_at, slug, until)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(id, await sha256Hex(key), name, url, kind, grid, pos.lat, pos.lon, country,
-           JSON.stringify(body.status || {}), t, t, t + ttlSeconds(body), wanted),
+           JSON.stringify(body.status || {}), t, t, t + ttlSeconds(body), wanted,
+           untilFrom(body, 0)),
     env.DB.prepare('INSERT INTO reg_log (ip, at) VALUES (?,?)').bind(ip, t),
     // ★ Housekeeping on the write path rather than a cron: free, and cron is one more thing to fail.
     env.DB.prepare('DELETE FROM reg_log WHERE at < ?').bind(since),
@@ -404,13 +419,14 @@ async function ping(request, env) {
 
   await env.DB.prepare(
     `UPDATE servers SET url = ?, name = ?, status_json = ?, updated_at = ?, expires_at = ?,
-                        verified = ?, grid = ?, lat = ?, lon = ?
+                        verified = ?, grid = ?, lat = ?, lon = ?, until = ?
      WHERE id = ?`
   ).bind(url, body.name ? clean(body.name, 60) : row.name,
          status, t, t + ttlSeconds(body), verified ? 1 : 0,
          gridPos ? gridPos.grid : row.grid,
          gridPos ? gridPos.lat : row.lat,
          gridPos ? gridPos.lon : row.lon,
+         untilFrom(body, row.until),
          row.id).run();
 
   // ★★ TELL A RETURNING SERVER THE TRUTH ABOUT ITS ADDRESS. If it was away longer than the hold
@@ -442,9 +458,11 @@ async function list(env) {
   // ★★★ EXPIRY EVALUATED AT READ TIME. Nothing sweeps; a server that stopped pinging is simply
   //     not selected. See schema.sql.
   const { results } = await env.DB.prepare(
-    `SELECT id, name, url, kind, grid, lat, lon, country, status_json, updated_at, expires_at, slug
-       FROM servers WHERE expires_at > ? AND verified = 1 ORDER BY country, name`
-  ).bind(now()).all();
+    `SELECT id, name, url, kind, grid, lat, lon, country, status_json, updated_at, expires_at, slug,
+            until
+       FROM servers WHERE expires_at > ? AND verified = 1
+                      AND (until = 0 OR until > ?) ORDER BY country, name`
+  ).bind(now(), now()).all();
 
   const servers = (results || []).map((r) => {
     let status = {};
@@ -461,10 +479,16 @@ async function list(env) {
       //     from the last ping, so an ordinary listing with a 30-minute TTL was drawn as a yellow
       //     diamond — a product concept invented out of a timing value. A server says whether it
       //     is a temporary share; if it says nothing, it is not one.
-      temporary: !!status.temporary,
+      // ★★ TEMPORARY IS A FACT ABOUT THE OFFER, read from the clock that governs it rather than
+      //    from a flag anybody could forget to clear.
+      temporary: Number(r.until) > 0,
+      until: Number(r.until) || 0,
       // ★★ WHAT THE RECEIVER IS, not just where it is. A listener choosing between servers wants
       //    the aerial and the machine — "YouLoop into an LNA, on a phone" tells them far more than
       //    a hostname does. Absent stays absent: a server that has not said is not guessed at.
+      // ★ A locked receiver is still worth listing — a club's members need to find it — but a
+      //   stranger must be able to see it is not for them before they click.
+      pin: !!status.pin,
       antenna: typeof status.antenna === 'string' ? status.antenna.slice(0, 120) : '',
       host: typeof status.host === 'string' ? status.host.slice(0, 80) : '',
       // ★ How long a listener gets, said BEFORE they click rather than when they are cut off.
