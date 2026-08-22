@@ -55,6 +55,8 @@
   .radio { border-top: 1px dashed var(--line); padding: 9px 0; font-size: 13px; }
   .radio b { font-weight: 600; }
   .radio .cap { color: var(--dim); }
+  /* ★ Brighter than the detail around it: it is an instruction, not another readout. */
+  .radio .cap.ask { color: var(--temp); letter-spacing: 0.06em; margin-top: 3px; }
   .listen { display: inline-block; margin-top: 10px; padding: 7px 14px; border-radius: 7px;
             background: var(--accent); color: #06121a; text-decoration: none; font-weight: 600;
             font-size: 13px; }
@@ -167,20 +169,39 @@ function listenUrl(s) {
  *   RTL-SDR v4 · FM broadcast · 0/10 slots · 30 minute limit
  * ★ Anything the server did not say is simply omitted — never guessed, never "unknown".
  */
+/**
+ * One radio, in the SAME WORDS the server's own landing page uses. A listener who reaches a
+ * receiver from here should recognise what they were promised — a second vocabulary for the same
+ * facts is how "shared" ends up meaning two different things (Stuart, 2026-08-22: it should read
+ * "like the Airspy is now FM Broadcast, shared VFO etc").
+ */
 function radioLine(r, s) {
+  const max = (s && s.maxListeners) || 0;
+  // ★ ONE TEST, TWO USES — the wording and the etiquette line are the same fact, read from the
+  //   same expression, exactly as the landing card does it.
+  const sharedDial = max > 1 && !r.locked;
+  const kind = max <= 1 ? 'one listener at a time'
+             : r.locked ? 'individual VFOs · locked RF centre'
+                        : 'shared VFO · unlocked RF centre';
+
   const bits = [];
-  if (r.driver) bits.push(esc(r.driver));
   if (Array.isArray(r.coverage) && r.coverage.length) {
     bits.push(r.coverage.map((c) => esc(c)).join(', '));
   } else if (r.mode) bits.push(esc(r.mode));
-  // ★★ SLOTS BELONG WITH THE RADIO, not buried in the header — "is there room for me" is the
-  //    question that decides whether a listener clicks at all.
-  if (s && s.maxListeners > 0) bits.push(`${s.listeners}/${s.maxListeners} slots`);
-  if (s && s.limitMin > 0) bits.push(`${s.limitMin} minute limit`);
-  if (r.shared) bits.push('shared window');
+  bits.push(esc(kind));
   if (r.restricted) bits.push('restricted range');
+  if (s && s.limitMin > 0) bits.push(`${s.limitMin} minute limit`);
+
+  // ★★★ THE ETIQUETTE, BEFORE THEY CLICK. On a shared dial everyone listens to whatever the last
+  //     person tuned, so moving it takes the station away from the room. "shared VFO · unlocked RF
+  //     centre" names the mechanism; it does not ask for the courtesy.
+  //  ★ Only in that mode — on a locked centre each listener has their own VFO and may tune freely,
+  //    and a rule that is sometimes untrue teaches people to ignore the rest of the entry.
+  const etiquette = sharedDial
+    ? `<div class="cap ask">ASK BEFORE TUNING — everyone here shares one dial</div>` : '';
+
   return `<div class="radio"><b>${esc(r.name || 'Radio')}</b>
-    <div class="cap">${bits.join(' · ') || 'no details published'}</div></div>`;
+    <div class="cap">${bits.join(' · ') || 'no details published'}</div>${etiquette}</div>`;
 }
 
 function serverBlock(s) {

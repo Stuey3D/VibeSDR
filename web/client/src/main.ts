@@ -3348,6 +3348,9 @@ async function showSplashRadios(): Promise<void> {
     //     neither (Stuart, 2026-08-20: "we need to differentiate the tuning").
     // ★ Read from the DIRECTORY's `locked`, which is the radio's mode — not from whether a centre
     //   happens to be set, so the two can never disagree.
+    // ★ ONE TEST, TWO USES — the wording below and the etiquette line are the same fact, so they
+    //   are read from the same expression rather than each deciding for itself.
+    const sharedDial = max > 1 && !(r as any).locked;
     const kind = max <= 1 ? 'one listener at a time'
                : (r as any).locked ? 'individual VFOs · locked RF centre'
                                    : 'shared VFO · unlocked RF centre';
@@ -3384,6 +3387,18 @@ async function showSplashRadios(): Promise<void> {
          //   was not before: it comes from the same place and had the same hole.
          + (ant ? `<div class="sub" style="margin-top:2px;font-size:11px;opacity:.55">`
                 + `${antIcon((r as any).antennaIcon)}${escapeHtml(ant)}</div>` : '')
+         // ★★★ SAY THE ETIQUETTE BEFORE THEY ARE IN, NOT AFTER THEY HAVE MOVED THE DIAL. On a
+         //     SHARED VFO everyone is on the same dial, so tuning is not a private act — it takes
+         //     the station away from everybody else listening. A newcomer has no way to know that
+         //     from a card that says "shared VFO · unlocked RF centre": that names the mechanism,
+         //     not the courtesy it asks for (Stuart, 2026-08-22).
+         //  ★★ ONLY in that mode. On a locked centre each listener has their own VFO inside the
+         //     window and may tune freely — telling them to ask would be false, and a rule that is
+         //     sometimes untrue teaches people to ignore the rest of the card.
+         //  ★ There is a chat on the receiver, which is what "ask" means in practice.
+         + (sharedDial ? `<div class="sub" style="margin-top:3px;font-size:11px;opacity:.75;`
+                       + `letter-spacing:.06em">ASK BEFORE TUNING &mdash; everyone here shares one dial`
+                       + `</div>` : '')
          + `</${tag}>`;
   }).join('');
 

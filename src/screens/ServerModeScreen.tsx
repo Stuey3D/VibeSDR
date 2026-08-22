@@ -877,7 +877,12 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                         const st = await Local?.tunnelStart?.(nm, where.grid, running.port, '',
                                                             radio?.model || '', radio?.driver || '',
                                                             (antenna || '').trim(),
-                                                            (allowRanges || '').trim());
+                                                            (allowRanges || '').trim(),
+                                                            // ★ 'locked' = each listener gets their
+                                                            //   own VFO in a fixed window; anything
+                                                            //   else with room for several is ONE
+                                                            //   shared dial.
+                                                            radioUse === 'locked');
                         const j = st ? JSON.parse(st) : {};
                         setPublicOn(!!j.address); setPublicAddr(j.address || ''); setPublicErr(j.error || '');
                       } else {

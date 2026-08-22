@@ -66,6 +66,7 @@ object VibeTunnel {
     private const val K_DRIVER = "pubDriver"
     private const val K_ANT = "pubAntenna"
     private const val K_COV = "pubCoverage"
+    private const val K_LOCKED = "pubLocked"
 
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -279,7 +280,7 @@ object VibeTunnel {
     }
 
     private fun buildStatus(port: Int, radioModel: String, radioDriver: String,
-                            antenna: String, coverage: String): JSONObject {
+                            antenna: String, coverage: String, locked: Boolean): JSONObject {
         val out = JSONObject()
         val radios = JSONArray()
 
@@ -314,7 +315,13 @@ object VibeTunnel {
             radios.put(JSONObject().apply {
                 put("name", radioModel.ifEmpty { "Radio" })
                 put("driver", radioDriver)
-                put("shared", false)
+                // ★★★ THE RADIO'S MODE, NOT A GUESS. `locked` means each listener gets their own
+                //     VFO inside a fixed window; unlocked with room for several means ONE dial that
+                //     everyone shares — which is the difference between tuning freely and taking
+                //     the station away from other people. Hardcoding false here said "shared dial"
+                //     about every radio, including ones where it was untrue.
+                put("locked", locked)
+                put("shared", locked)
                 // ★ What this radio is actually allowed to tune, when the owner has narrowed it —
                 //   "FM broadcast" is far more use to a listener than a frequency pair.
                 if (coverage.isNotEmpty()) put("coverage", JSONArray().put(coverage))
@@ -370,17 +377,17 @@ object VibeTunnel {
      */
     fun publish(ctx: Context, name: String, locator: String, port: Int,
                 radioModel: String, radioDriver: String,
-                antenna: String, coverage: String): String? {
+                antenna: String, coverage: String, locked: Boolean = false): String? {
         // ★ Remember how to say all this again, so the renewal below needs nothing from the UI —
         //   which may well be gone: the server keeps running with the screen off.
-        lastPublish = { publishOnce(ctx, name, locator, port, radioModel, radioDriver, antenna, coverage) }
+        lastPublish = { publishOnce(ctx, name, locator, port, radioModel, radioDriver, antenna, coverage, locked) }
         prefs(ctx).edit()
             .putBoolean(K_WANT, true).putString(K_NAME, name).putString(K_GRID, locator)
             .putString(K_MODEL, radioModel).putString(K_DRIVER, radioDriver)
-            .putString(K_ANT, antenna).putString(K_COV, coverage)
+            .putString(K_ANT, antenna).putString(K_COV, coverage).putBoolean(K_LOCKED, locked)
             .apply()
         startPinging()
-        return publishOnce(ctx, name, locator, port, radioModel, radioDriver, antenna, coverage)
+        return publishOnce(ctx, name, locator, port, radioModel, radioDriver, antenna, coverage, locked)
     }
 
     /** ★ Renew on the advertised interval, and never let one failure end the schedule: a phone that
@@ -402,8 +409,8 @@ object VibeTunnel {
 
     private fun publishOnce(ctx: Context, name: String, locator: String, port: Int,
                             radioModel: String, radioDriver: String,
-                            antenna: String, coverage: String): String? {
-        val status = buildStatus(port, radioModel, radioDriver, antenna, coverage)
+                            antenna: String, coverage: String, locked: Boolean): String? {
+        val status = buildStatus(port, radioModel, radioDriver, antenna, coverage, locked)
         val url = tunnelUrl
         if (url.isEmpty()) { lastError = "no tunnel yet"; return null }
 
@@ -494,7 +501,8 @@ object VibeTunnel {
                 if (url == null) { Log.w(TAG, "listing not restored: $lastError"); return@startTunnel }
                 publish(ctx, name, p.getString(K_GRID, "") ?: "", port,
                         p.getString(K_MODEL, "") ?: "", p.getString(K_DRIVER, "") ?: "",
-                        p.getString(K_ANT, "") ?: "", p.getString(K_COV, "") ?: "")
+                        p.getString(K_ANT, "") ?: "", p.getString(K_COV, "") ?: "",
+                        p.getBoolean(K_LOCKED, false))
             }
         } catch (t: Throwable) { Log.w(TAG, "restoreIfWanted failed", t) }
     }
