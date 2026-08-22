@@ -12853,6 +12853,16 @@ std::string LocalSdrShim::adminSessionsJson() {
         for (auto& kv : p->outboxes)
             if (kv.second) sentBySock[kv.first] = kv.second->sentTotal.load(std::memory_order_relaxed);
     }
+    // ★★★ SNAPSHOT WHO PROVED THE PASSWORD, BEFORE clientMtx — the same rule this function states
+    //     for every other lookup it needs. Taking adminSockMtx while holding clientMtx would
+    //     invent a nesting order nothing else here uses, and this file has already lost an
+    //     afternoon to exactly that.
+    std::set<const net::Socket*> adminSnapshot;
+    { std::lock_guard<std::mutex> al(p->adminSockMtx); adminSnapshot = p->adminSocks; }
+    const auto isAdminSock = [&adminSnapshot](net::Socket* sk) {
+        return sk && adminSnapshot.count(sk) > 0;
+    };
+
     std::lock_guard<std::mutex> lk(p->clientMtx);
     const double now = Impl::nowSecs();
     for (auto& kv : p->clientDsp) {
@@ -13002,14 +13012,37 @@ std::string LocalSdrShim::adminSessionsJson() {
             }
         } else { p->soleLastBytes = bytes; p->soleLastAt = now; }
 
-        // ★ occupantAddr first, then whichever socket is actually open — specClient may be gone.
-        const std::string ip = !p->occupantAddr.empty() ? p->occupantAddr
-                             : soleSpec  ? p->specClient->peerAddress()
+        // ★★★ THIS ROW'S OWN SOCKET FIRST — occupantAddr IS A DIFFERENT QUESTION. It is the address
+        //     of whoever holds the DIAL, which on a shared receiver is not necessarily the listener
+        //     this row describes: the moment a second person arrives and takes the dial, every row
+        //     preferring occupantAddr shows THEIR address. Stuart saw two listeners both labelled
+        //     with the iPhone's cellular IP while one of them was plainly the Mac (2026-08-22).
+        //  ★★ It was right when a receiver could only have one listener — then the occupant WAS
+        //     this row — and it survived into a mode where that no longer holds. The same shape as
+        //     the table itself: state that belongs to A SESSION being read from the radio.
+        //  ★ occupantAddr stays as the fallback for the case the original note names: specClient
+        //    may be gone, and an audio-only listener still has an address worth showing.
+        const std::string ip = soleSpec  ? p->specClient->peerAddress()
                              : soleAudio ? p->audioClient->peerAddress()
-                                         : std::string();
+                             : p->occupantAddr;
         if (!first) j += ',';
         first = false;
-        j += "{\"session\":\"" + vibeadmin::esc(p->occupantSession) + "\""
+        // ★★★ THIS ROW'S OWN SESSION, for the same reason as its own address just above.
+        //     occupantSession is whoever holds the DIAL — so with two listeners BOTH rows reported
+        //     the newcomer's id, which is what makes admin look like it moved: the row carries the
+        //     radio-wide ADMIN badge while wearing somebody else's identity. Measured 2026-08-22
+        //     with two controlled listeners: neither was disconnected, and both rows still said
+        //     "22222222".
+        //  ★ sockSession is the per-socket record written when the socket was accepted; the
+        //    occupant is the fallback for an audio-only listener whose spectrum socket has gone.
+        std::string rowSession = p->occupantSession;
+        {
+            net::Socket* rk = soleSpec ? p->specClient.get()
+                            : soleAudio ? p->audioClient.get() : nullptr;
+            auto it = rk ? p->sockSession.find(rk) : p->sockSession.end();
+            if (it != p->sockSession.end() && !it->second.empty()) rowSession = it->second;
+        }
+        j += "{\"session\":\"" + vibeadmin::esc(rowSession) + "\""
            + ",\"ip\":\"" + vibeadmin::esc(ip) + "\""
            + ",\"vfoHz\":" + std::to_string((long long)p->audioFreq.load())
            + ",\"mode\":\"" + vibeadmin::esc(p->mode) + "\""
@@ -13029,7 +13062,14 @@ std::string LocalSdrShim::adminSessionsJson() {
            //     `admin`. So on those radios the badge could NEVER appear, for the owner or for a
            //     stranger holding a compromised password. A protection that is absent on two of the
            //     three radios is the same shape as a control that only works on one of them.
-           + ",\"admin\":" + (p->adminOk.load() ? "true" : "false");
+           // ★★★ AND THE BADGE FOLLOWS THIS SESSION, NOT THE RADIO. p->adminOk is radio-wide, so
+           //     with two listeners it badged whichever row was drawn — including a stranger's.
+           //     That is the same shape as the inherit bug fixed this morning, in the one view an
+           //     owner uses to decide whom to trust. A socket that proved the password is in
+           //     adminSocks; nothing else is an admin.
+           + ",\"admin\":" + (isAdminSock(soleSpec ? p->specClient.get()
+                                          : soleAudio ? p->audioClient.get() : nullptr)
+                               ? "true" : "false");
         if (p->occupantSince > 0)
             j += ",\"secs\":" + std::to_string((long long)(now - p->occupantSince));
         j += "}";
