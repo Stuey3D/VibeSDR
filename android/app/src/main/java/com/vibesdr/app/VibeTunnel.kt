@@ -366,6 +366,18 @@ object VibeTunnel {
         out.put("temporary", false)
         if (antenna.isNotEmpty()) out.put("antenna", antenna)
         out.put("host", hostModel())
+        // ★★ WHAT IT RUNS ON, WITH ITS VERSION — "Android 16", the way the daemon will say
+        //   "Debian 13" or "Ubuntu 24.04" from /etc/os-release. A family name alone ("Linux")
+        //   answers less than the question deserves: a Pi 500 on Debian 13 and an old box on
+        //   Ubuntu 20.04 are different propositions to somebody choosing a server (Stuart,
+        //   2026-08-22).
+        //  ★ Composed HERE rather than assembled by the page: the platform knows how it likes to
+        //    be named, and a page that built the string would need a rule per platform.
+        //  ★★ And never inferred — if the version is missing, the family alone is the honest
+        //     answer rather than a guessed number.
+        out.put("platform",
+                android.os.Build.VERSION.RELEASE?.trim()?.takeIf { it.isNotEmpty() }
+                    ?.let { "Android $it" } ?: "Android")
         return out
     }
 

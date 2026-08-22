@@ -277,8 +277,17 @@ function serverBlock(s) {
   //   would be worse than nothing: it implies we asked and got no answer.
   // ★ The aerial now belongs to the RADIO card (as on the landing page, where each radio carries
   //   its own); only the machine is left to say here, underneath.
-  const extra = s.host
-    ? `<div class="rcHost">Server: ${esc(s.host)}</div>` : '';
+  /**
+   * ★★ THE PLATFORM AS A WORD. Real OS logos are trademarks — Apple's Finder icon and the Windows
+   *    logo are not ours to redistribute, and Google's robot has brand guidelines — and glyphs
+   *    render differently on every platform reading the page. A word says the same thing
+   *    everywhere and needs no licence (Stuart, 2026-08-22: "just list the OS as text").
+   * ★ An unknown platform shows nothing rather than a guess.
+   */
+  // ★ Printed as the server said it — no table to keep in step with platforms we have not met.
+  const extra = (s.host || s.platform)
+    ? `<div class="rcHost">${s.host ? `Server: ${esc(s.host)}` : ''}`
+      + `${s.host && s.platform ? '<br>' : ''}${esc(s.platform || '')}</div>` : '';
   return `<details class="srv${s.unreachable ? ' down' : ''}">
     <summary>
       <i class="dot ${st.cls}" title="${esc(st.label)}"></i>

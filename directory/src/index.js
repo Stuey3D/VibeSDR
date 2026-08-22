@@ -495,6 +495,10 @@ async function list(env) {
       pin: !!status.pin,
       antenna: typeof status.antenna === 'string' ? status.antenna.slice(0, 120) : '',
       host: typeof status.host === 'string' ? status.host.slice(0, 80) : '',
+      // ★ How the server names its own OS — "Android 16", "Debian 13". Text only, never a logo
+      //   or an icon URL: what a server says about itself must stay text, or one day a listing
+      //   carries an image. Not lowercased — it is a NAME, and "macOS" is not "macos".
+      platform: typeof status.platform === 'string' ? status.platform.slice(0, 40) : '',
       // ★ How long a listener gets, said BEFORE they click rather than when they are cut off.
       limitMin: Number(status.limitMin) > 0 ? Number(status.limitMin) : 0,
       listeners: Number(status.listeners || 0),
