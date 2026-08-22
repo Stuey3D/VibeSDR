@@ -464,6 +464,23 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     const t = setInterval(async () => {
       const s = await getVibeServerStatus();
       if (s) setStatus(s);
+      // ★★★ THE LISTING CAN COME BACK WITHOUT THE SCREEN ASKING IT TO. Turning the server on
+      //     re-establishes a listing that was left on, and that happens on its own, seconds later,
+      //     down in the service — so the switch showed ON with NO ADDRESS under it, which reads as
+      //     a listing that half-worked (Stuart, 2026-08-22: "with this auto toggle it is not
+      //     showing the friendly address anymore like it did when i toggled it manually").
+      //  ★★ Read on the same beat as everything else rather than at one moment on mount: the
+      //     tunnel takes several seconds to be given a hostname, and there is no event to wait
+      //     for from here. The address simply appears when it exists.
+      try {
+        const st = await (NativeModules as any).VibeLocalSDR?.tunnelStatus?.();
+        if (st) {
+          const j = JSON.parse(st);
+          setPublicOn(!!j.running);
+          setPublicAddr(j.address || '');
+          if (j.error) setPublicErr(j.error);
+        }
+      } catch { /* the switch simply keeps whatever it last knew */ }
     }, 1500);
     return () => clearInterval(t);
   }, [running]);
