@@ -362,6 +362,28 @@ struct ServerConfig {
     Sharing sharing = Sharing::Local;
     std::string place, country, locator, lat, lon;   // ★ the SITE — one machine, one location
     std::string name;                                // the machine's name, shown above the list
+
+    // ── ★★★ LISTING THIS MACHINE PUBLICLY, at vibeserver.vibesdr.net ───────────────────────
+    //
+    // ★★★ MACHINE-LEVEL, NOT PER RADIO, and that is not a detail. A front door holding three
+    //     receivers is ONE entry in the directory — it has one address, one location and one
+    //     owner — and the listing carries the radios inside it. Putting this on RadioConfig would
+    //     have produced three competing entries for one machine, each claiming the same address.
+    // ★★ OFF unless the owner says otherwise. Publishing somebody's receiver to the internet is
+    //    not a default anyone should arrive at by upgrading.
+    bool        dirList = false;
+    /** The public name. The shareable address is DERIVED from it, exactly as the .local label is
+     *  derived from `mdnsName` — one name to think about, not two. */
+    std::string dirName;
+    /** >0 = a temporary share of that many seconds; 0 = permanent. Stored as the LENGTH the owner
+     *  asked for; the absolute end lives in the directory, which is the only clock both sides
+     *  can agree on. */
+    long long   dirShareSec = 0;
+    /** ★★ An address the owner already has — DDNS, a port forward, a reverse proxy. Empty means
+     *  "make one for me", which is the Cloudflare Quick Tunnel path and needs cloudflared on the
+     *  machine. Offering both matters: a tunnel is the only option that works behind CGNAT, and a
+     *  DDNS owner should not be forced through somebody else's edge. */
+    std::string dirPublicUrl;
     /** ★★★ THE OWNER'S STANDING MESSAGE ON THE LANDING SCREEN — house rules, a donation link, or
      *  an explanation of behaviour that looks wrong and is not. Stuart's own case: the demo drops
      *  to 5 fps when idle, which is deliberate and reversible in the menu, but to a first-time

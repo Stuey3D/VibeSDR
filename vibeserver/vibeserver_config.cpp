@@ -504,6 +504,8 @@ std::string toJson(const ServerConfig& c) {
     S("name", c.name); S("place", c.place); S("country", c.country);
     S("locator", c.locator); S("lat", c.lat); S("lon", c.lon);
     B("mdnsAdvertise", c.mdnsAdvertise); S("mdnsName", c.mdnsName);
+    B("dirList", c.dirList); S("dirName", c.dirName);
+    N("dirShareSec", (double)c.dirShareSec); S("dirPublicUrl", c.dirPublicUrl);
     S("pin", c.pin); S("adminPass", c.adminPass);
     N("sessionLimitMin", c.sessionLimitMin);
     N("updateSrvHour", c.updateSrvHour); N("updateSrvDay", c.updateSrvDay);
@@ -554,6 +556,8 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     S("name", c.name); S("place", c.place); S("country", c.country);
     S("locator", c.locator); S("lat", c.lat); S("lon", c.lon);
     B("mdnsAdvertise", c.mdnsAdvertise); S("mdnsName", c.mdnsName);
+    B("dirList", c.dirList); S("dirName", c.dirName); S("dirPublicUrl", c.dirPublicUrl);
+    { double d2; if (getNum(j, "dirShareSec", d2)) c.dirShareSec = (long long)d2; }
     S("pin", c.pin); S("adminPass", c.adminPass);
     I("sessionLimitMin", c.sessionLimitMin);
     I("updateSrvHour", c.updateSrvHour); I("updateSrvDay", c.updateSrvDay);

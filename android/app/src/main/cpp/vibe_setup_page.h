@@ -196,6 +196,38 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
     </div>
 
       <div class="card">
+        <h2>Advertise on VibeSDR.net</h2>
+        <p class="why">List this receiver in the public VibeServer directory so anyone can find it
+          and listen. Off by default &mdash; nothing is published until you switch it on, and
+          switching it off removes the entry straight away.</p>
+        <label style="display:flex;align-items:center;gap:10px;margin:0">
+          <input type="checkbox" id="dirList" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>List this server publicly</span>
+        </label>
+        <label><span class="lbl">Public name</span>
+          <input type="text" id="dirName" maxlength="48" placeholder="e.g. Moulton RSP1B">
+          <div class="hint" id="dirNameHint">The shareable address is made from this name, the same
+            way the <code>.local</code> name is. Shown to strangers, so nothing private.</div></label>
+        <label><span class="lbl">Address (optional)</span>
+          <input type="url" id="dirPublicUrl" placeholder="https://my-sdr.example.com">
+          <div class="hint">Leave empty and a Cloudflare tunnel is created for you &mdash; needs
+            <code>cloudflared</code> installed, and is the only option that works behind
+            CGNAT. Fill it in if you already have a DDNS name or a port forward.</div></label>
+        <label><span class="lbl">Listing lasts</span>
+          <select id="dirShareSec">
+            <option value="0">Until I turn it off</option>
+            <option value="3600">1 hour</option>
+            <option value="21600">6 hours</option>
+            <option value="86400">1 day</option>
+            <option value="604800">1 week</option>
+            <option value="2592000">30 days</option>
+          </select>
+          <div class="hint">A temporary listing is for a contest or a club night. When it ends the
+            receiver keeps running &mdash; it simply stops being advertised.</div></label>
+        <div class="hint" id="dirStatus"></div>
+      </div>
+
+      <div class="card">
         <h2>Message on the landing screen</h2>
         <p class="why">Something you want every visitor to read before they connect &mdash; house
           rules, a note about how this server behaves, or a link if people can help pay for it.
@@ -1967,6 +1999,13 @@ function fill() {
   // ★ Absent = "1" (the rule enforced), matching the config's own default — an older server that
   //   never heard of this must not appear to have it switched off.
   $("oneRadioPerIp").value = (cfg.oneRadioPerIp === false) ? "0" : "1";
+  // ★★ FILLED IN THE SAME EDIT THAT ADDED THE FIELDS. A control the page never populates shows
+  //    the owner an empty box over a setting that is actually on, and the next save writes the
+  //    blank back — which is how twelve settings reverted on every start once already.
+  $("dirList").checked        = !!cfg.dirList;
+  $("dirName").value          = cfg.dirName || "";
+  $("dirPublicUrl").value     = cfg.dirPublicUrl || "";
+  $("dirShareSec").value      = String(cfg.dirShareSec || 0);
   $("landingMessage").value   = cfg.landingMessage || "";
   $("landingLinkUrl").value   = cfg.landingLinkUrl || "";
   $("landingLinkLabel").value = cfg.landingLinkLabel || "";
@@ -2169,6 +2208,10 @@ function stashServer() {
   cfg.forceIdleSaver = $("forceIdle").checked;
   cfg.trustedProxies = $("trustedProxies").value.trim();
   cfg.oneRadioPerIp = $("oneRadioPerIp").value === "1";
+  cfg.dirList       = $("dirList").checked;
+  cfg.dirName       = $("dirName").value.trim();
+  cfg.dirPublicUrl  = $("dirPublicUrl").value.trim();
+  cfg.dirShareSec   = parseInt($("dirShareSec").value, 10) || 0;
   cfg.landingMessage = $("landingMessage").value.trim();
   cfg.landingLinkUrl = $("landingLinkUrl").value.trim();
   cfg.landingLinkLabel = $("landingLinkLabel").value.trim();
@@ -2195,6 +2238,10 @@ function collect() {
     forceIdleSaver: $("forceIdle").checked,
     trustedProxies: $("trustedProxies").value.trim(),
     oneRadioPerIp: $("oneRadioPerIp").value === "1",
+    dirList:          $("dirList").checked,
+    dirName:          $("dirName").value.trim(),
+    dirPublicUrl:     $("dirPublicUrl").value.trim(),
+    dirShareSec:      parseInt($("dirShareSec").value, 10) || 0,
     landingMessage:   $("landingMessage").value.trim(),
     // ★ Sent as typed; the SERVER decides whether it survives (vsconfig::safeLinkUrl). The check
     //   below is only so the owner finds out here rather than wondering why it vanished.

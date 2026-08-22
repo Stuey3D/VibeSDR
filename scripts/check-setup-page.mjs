@@ -91,8 +91,10 @@ let bad = 0;
   //   unclosed <div> pulling the radio settings inside the server pane. Raise it when a card is
   //   legitimately added, and say which one: 9 since the machine-wide Waterfall rate joined
   //   (2026-08-11), which Simple mode had and Full mode was missing entirely; 10 since the
-  //   owner's standing "Message on the landing screen" joined it (2026-08-19).
-  else if (sp > 10) { console.error(`✗ the server pane holds ${sp} cards — it has swallowed the radio pane`); bad++; }
+  //   owner's standing "Message on the landing screen" joined it (2026-08-19); 11 since
+  //   "Advertise on VibeSDR.net" joined it (2026-08-22) — the public directory listing, which is
+  //   machine-wide because a front door with three receivers is ONE entry.
+  else if (sp > 11) { console.error(`✗ the server pane holds ${sp} cards — it has swallowed the radio pane`); bad++; }
 }
 
 // 3. Every element the script reaches for by id must exist in the markup. This is the mistake

@@ -19,6 +19,8 @@
 // around this same core later; nothing here should grow Mac-specific behaviour.
 
 #include "local_sdr_shim.h"
+#include "directory.h"
+#include <functional>
 #include <cctype>
 #include <fstream>
 #include <unistd.h>
@@ -749,6 +751,9 @@ namespace { std::string g_configPath; vsconfig::Config g_runtimeConfig;
             /** ★ The front door's mDNS advert, held until startFrontDoor() reports the port it
              *  actually bound — see the deferral where it is set. */
             std::string g_mdnsPendingLabel, g_mdnsPendingIp;
+            /** ★ The port the directory should publish — set once it is genuinely known. */
+            int g_dirPort = 0;
+            std::function<void(const vsconfig::ServerConfig&, bool)> g_applyDirectory;
             bool        g_mdnsPendingPin = false; }
 
 
@@ -1299,6 +1304,35 @@ int main(int argc, char** argv) {
     //       becomes worth finding — so "no name yet" and "not ready to advertise" are one state.
     const std::string wantName = g_runtimeConfig.mdnsName.empty()
                                ? g_runtimeConfig.name : g_runtimeConfig.mdnsName;
+    // ★★★ ONE FUNCTION TURNS THE CONFIG INTO THE LISTING'S WISHES, and it is called from BOTH
+    //     startup and every save. Two copies of this mapping is how a switch ends up working on
+    //     one path and not the other — which is exactly what happened on Android, where flipping
+    //     temporary on an already-listed server worked and setting it up from scratch did not.
+    //  ★★ Only the FRONT DOOR lists. On a multi-radio machine the radios are separate processes
+    //     behind one address; if each listed itself the directory would carry three entries all
+    //     claiming the same door. A single-radio server IS its own front door, so it still lists.
+    //  ★ The share length is sent as a CHANGE only when the owner has just made one; a renewal
+    //    sends -1 so it can never nudge a temporary share into the future one ping at a time.
+    g_applyDirectory = [](const vsconfig::ServerConfig& srv, bool ownerChanged) {
+        if (!g_amFrontDoor.load() && srv.radios.size() > 1) return;
+        vibedir::Settings d;
+        d.listed  = srv.configured && srv.dirList;
+        d.name    = srv.dirName.empty() ? srv.name : srv.dirName;
+        d.locator = srv.locator;
+        // ★ The port the DOOR bound, not the one the radio-selection left in `o.port`.
+        d.port    = g_dirPort;
+        d.publicUrl = srv.dirPublicUrl;
+        d.shareForSec = ownerChanged ? srv.dirShareSec : -1;
+        vibedir::apply(d);
+    };
+    vibedir::setStateDir(vsDataDir());
+    // ★★★ NOT CALLED HERE. `o.port` is not the door's port at this point in main() — the door
+    //     binds later and startFrontDoor() RETURNS what it got — and advertising the wrong port
+    //     is a mistake this file has already made once, loudly, with mDNS: it advertised a RADIO's
+    //     port as the front door's, which WORKS well enough to look healthy while being the one
+    //     port an owner cannot forward. A directory listing pointed at the wrong port would be the
+    //     same bug with a public audience. So the listing is deferred to where the port is real.
+
     if (g_runtimeConfig.configured && g_runtimeConfig.mdnsAdvertise && !wantName.empty()) {
         const std::string label = vsconfig::mdnsLabel(wantName);
         const std::string ip = primaryIpv4();
@@ -1401,6 +1435,11 @@ int main(int argc, char** argv) {
 
             if (!vsconfig::saveServer(g_configPath, next, err)) return false;
             g_serverConfig = next;
+            // ★★ THE LISTING FOLLOWS THE SAVE. Without this the switch wrote the file and changed
+            //    nothing until a restart — the same trap the gain settings fell into above, and
+            //    an owner turning public listing OFF would have stayed listed for as long as the
+            //    server kept running.
+            if (g_applyDirectory) g_applyDirectory(next, true);
 
             // Keep this process's own view in step, so the page does not show stale values back.
             for (const auto& r : next.radios)
@@ -2060,6 +2099,9 @@ int main(int argc, char** argv) {
         }
         frontDoorOnly = true;
         g_amFrontDoor.store(true);
+        // ★ NOW the port is real — same deferral as the mDNS advert above.
+        g_dirPort = port;
+        if (g_applyDirectory) g_applyDirectory(g_serverConfig, false);
         // ★★★ THE FRONT DOOR IS NOBODY'S RADIO. The config loader falls back to "the first radio
         //     that is ready" when none was named — which is right for a single-radio server and
         //     exactly wrong here: this process then wore the RSP's identity, so the router saw a
@@ -2265,6 +2307,15 @@ int main(int argc, char** argv) {
                 });
             }
         }
+    }
+
+    // ★★ THE SINGLE-RADIO CASE LISTS TOO, and this is the first point where its port is real —
+    //    `o.port` may have been 0, meaning "scan for a free one". A single-radio server IS its own
+    //    front door: there is nothing in front of it, so the address a listener needs is this one.
+    //  ★ Harmless on the front-door path, which has already applied and returns early above.
+    if (!g_amFrontDoor.load()) {
+        g_dirPort = port;
+        if (g_applyDirectory) g_applyDirectory(g_serverConfig, false);
     }
 
     if (o.useUsb) std::printf("VibeServer listening on port %d\n", port);

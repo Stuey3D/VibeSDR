@@ -90,6 +90,9 @@ add_library(vibeserver_core STATIC
     # ★ Station logos from RadioDNS, looked up by PI code. Server-side because a browser can make
     #   neither the DNS SRV query nor the cross-origin fetch. Credit: radiodns.org
     "${CMAKE_CURRENT_SOURCE_DIR}/radiodns.cpp"
+    # ★ Listing this machine in the public directory at vibeserver.vibesdr.net. In the CORE, not
+    #   the CLI, for the same reason radios.cpp is: the .app needs it too.
+    "${CMAKE_CURRENT_SOURCE_DIR}/directory.cpp"
     "${CPP_DIR}/local_sdr_shim.cpp"
     "${CPP_DIR}/net_shim.cpp"
     # ★ Hands a live connection to another process, so several radios can share one
