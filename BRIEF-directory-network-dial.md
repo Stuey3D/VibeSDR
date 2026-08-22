@@ -1,0 +1,88 @@
+# The network dial — a directory organised by frequency, not by radio
+
+Stuart, 2026-08-22: *"This method puts the frequency first not the radio."*
+
+## The idea
+
+Along the top of the directory, an interactive tuning dial in the vintage style of the FM-DX
+screen, with the band plan above it. It is not decoration and it is not a second view of the list —
+**it is the filter**.
+
+- **Zoomable**, like the dial it is modelled on.
+- **Click a band** in the plan to select it; click more to widen the selection.
+- **Click or drag the dial itself** to set a lower and upper frequency by hand.
+- **The dial only spans what the network can actually hear.** With only the Moto listed, the dial
+  is the FM broadcast band and nothing else. Add the demo Pi and it becomes 500 kHz – 1.7 GHz. Lift
+  the Airspy's AM/FM restriction and it extends down to 1 kHz. Remove a server and it shrinks
+  again.
+- **Green where something free covers it. Red where every radio covering it is in use.** Click a
+  red stretch to see which radio owns it and join the queue.
+- **Then the same bar per country**, so "who can hear this, near here" is one glance.
+
+## Why this is the right shape
+
+The band-chip filter I built first asks "which radio do you want?" and then makes you work out
+whether it can hear the thing you came for. This asks the question the listener actually has: *I
+want 1467 kHz — who has it, and is it free?* Every other SDR directory is a list of receivers. This
+is a map of the spectrum with receivers attached to it.
+
+★★ It also kills the chip wall on its own. 28 named bands and one wideband RTL covers 26 of them;
+as chips that is a block of noise, but as a dial it is simply a long green bar.
+
+## What is already true
+
+- Every server publishes `ranges` — what a listener may **actually tune**, already narrowed by the
+  owner's allow/block lists and by a locked window (`vsTunableRanges`, shipped 2026-08-22).
+- `/vibeserver/radios` publishes `allowed` per radio on a multi-radio front door.
+- The directory passes `radios` through whole, so new per-radio fields need no Worker change.
+
+## What is MISSING, and must be built first
+
+★★★ **OCCUPANCY IS PER SERVER, NOT PER RADIO.** The whole red/green idea rests on knowing that
+*the radio covering 500 kHz* is busy — but the directory records `listeners` and `maxListeners`
+for the SERVER. On a front door holding three receivers that is meaningless for this purpose: the
+Pi can be "2 of 10" while the only radio that reaches HF is the one occupied.
+→ Publish `listeners` and `maxListeners` per radio. The front door already counts `users` per
+radio; the phone in simple mode has exactly one radio and can report its own.
+
+★★ **THE PAGE HAS NO BAND PLAN, DELIBERATELY.** Every band name on it today comes from a server,
+so the page cannot invent bands for radios nobody told it about. But a dial has to draw the band
+plan whether or not a server happens to mention a band — the plan is a property of the SPECTRUM,
+not of any receiver.
+→ The plan is generated from `vibe_bands.h` into a JSON the page loads, at deploy time, with a
+check that fails if the two disagree. ONE definition, region-aware, no hand-kept copy. A second
+band table is exactly how the landing page and the directory would come to disagree about what a
+server offers.
+
+★ **A NAMED BAND IS NOT A COVERED BAND.** `bandLabel` names a range only when the range *matches*
+a band — it was written to describe a RESTRICTION ("locked to FM broadcast"). Capability is a
+different question: an unrestricted RTL publishes one range, 500 kHz – 1766 MHz, which matches no
+band, so it currently produces no band names at all and is invisible to a band filter despite
+hearing everything. The dial reads `ranges` directly and never needs the names for filtering —
+names are labels on the ruler, not the filter itself.
+
+## The availability computation
+
+Client side, from `ranges` plus per-radio occupancy. A sweep line over every range boundary in the
+network gives elementary intervals; for each, count the radios covering it and how many have a
+free slot.
+
+- **≥1 free** → green
+- **≥1 covering, none free** → red, and clickable: which radio, and the queue
+- **none** → not part of the dial at all (the dial's extent IS the union)
+
+★ A server that never published a range contributes nothing to the dial and must be listed
+somewhere visible, not silently dropped — the same rule the frequency search already follows.
+
+## Order of work
+
+1. Per-radio `listeners` / `maxListeners` on the wire. *(Nothing above works without it.)*
+2. Band plan generated from `vibe_bands.h`, with a drift check.
+3. The union bar for the whole network — extent, green/red, no interaction.
+4. Click and drag to filter; the list below reacts.
+5. Band plan labels above the dial; click to select bands.
+6. Zoom.
+7. Per-country bars.
+8. The queue, on a red stretch.
+
+★ 3 is the first thing worth looking at, and 1–3 are enough to prove the idea.

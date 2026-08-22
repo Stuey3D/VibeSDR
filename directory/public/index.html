@@ -221,10 +221,13 @@
 <div class="filters" id="filters" hidden>
   <div class="fRow" id="bandChips"></div>
   <div class="fRow">
+    <!-- ★ The label carries the hint, not the placeholder. A placeholder listing three examples was
+         wider than any sensible box and arrived CLIPPED mid-word — an example nobody can read is
+         worse than none, and it vanishes the moment you type anyway. -->
     <label for="freq">Can hear</label>
     <input id="freq" type="text" inputmode="decimal" autocomplete="off"
-           placeholder="99.9 MHz, 1467 kHz, 14.2&hellip;">
-    <span class="fNote" id="freqNote"></span>
+           placeholder="99.9 MHz">
+    <span class="fNote" id="freqNote">MHz unless you say kHz</span>
     <button class="fClear" id="clear" hidden>Clear</button>
   </div>
   <div class="fNote" id="filterSummary"></div>
@@ -560,7 +563,7 @@ document.getElementById('freq').addEventListener('input', (e) => {
   const note = document.getElementById('freqNote');
   if (Number.isNaN(hz)) { note.textContent = 'not a frequency'; freqHz = 0; }
   else if (hz > 0) { note.textContent = `searching ${prettyHz(hz)}`; freqHz = hz; }
-  else { note.textContent = ''; freqHz = 0; }
+  else { note.textContent = 'MHz unless you say kHz'; freqHz = 0; }
   applyFilters();
 });
 
