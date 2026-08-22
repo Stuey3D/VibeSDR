@@ -419,7 +419,8 @@ async function ping(request, env) {
 
   await env.DB.prepare(
     `UPDATE servers SET url = ?, name = ?, status_json = ?, updated_at = ?, expires_at = ?,
-                        verified = ?, grid = ?, lat = ?, lon = ?, until = ?
+                        verified = ?, grid = ?, lat = ?, lon = ?, until = ?,
+                        verify_note = ?
      WHERE id = ?`
   ).bind(url, body.name ? clean(body.name, 60) : row.name,
          status, t, t + ttlSeconds(body), verified ? 1 : 0,
@@ -427,6 +428,9 @@ async function ping(request, env) {
          gridPos ? gridPos.lat : row.lat,
          gridPos ? gridPos.lon : row.lon,
          untilFrom(body, row.until),
+         // ★ Why it failed, kept on the row so an owner (and whoever is debugging) can see it
+         //   without a log pipeline. Cleared the moment it succeeds.
+         verified ? '' : JSON.stringify(why).slice(0, 200),
          row.id).run();
 
   // ★★ TELL A RETURNING SERVER THE TRUTH ABOUT ITS ADDRESS. If it was away longer than the hold

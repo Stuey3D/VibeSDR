@@ -417,6 +417,21 @@ object VibeTunnel {
         }, PING_SEC, PING_SEC, TimeUnit.SECONDS)
     }
 
+    /**
+     * ★ A quick attempt, without disturbing the steady interval behind it.
+     * ★★ It re-enters publishOnce, whose ping branch checks the answer again — so this keeps
+     *    trying while the address is unproven and stops of its own accord once it is. No counter
+     *    to get wrong, and no way to leave a listing stuck unverified for a quarter of an hour.
+     */
+    @Synchronized
+    private fun retrySoon() {
+        pinger.schedule({
+            try { if (running.get()) lastPublish?.invoke() } catch (t: Throwable) {
+                Log.w(TAG, "verification retry failed: ${t.message}")
+            }
+        }, 30, TimeUnit.SECONDS)
+    }
+
     @Synchronized
     private fun stopPinging() {
         pingTask?.cancel(false); pingTask = null; lastPublish = null
@@ -454,6 +469,20 @@ object VibeTunnel {
             })
             if (r != null && r.optInt("_status") == 200) {
                 listed = true
+                // ★★★ RETRY SOON WHILE THE ADDRESS IS UNPROVEN. The directory challenges the
+                //     address on a PING, and the first ping happens the instant the tunnel comes
+                //     up — the worst possible moment, when cloudflared has a hostname but the edge
+                //     may not yet route to it. That one attempt failing meant nothing tried again
+                //     for FIFTEEN MINUTES, with a working tunnel and a switch reading ON while the
+                //     directory showed nothing (Stuart, 2026-08-22: "tunnel is working directory
+                //     is not listing").
+                //  ★★ So the interval follows the STATE, not the clock: a minute while there is
+                //     something to prove, the full interval once proved. A listing that cannot
+                //     verify is retried until it can, rather than punished for being new.
+                if (!r.optBoolean("verified", true)) {
+                    Log.i(TAG, "address not verified yet — retrying shortly")
+                    retrySoon()
+                }
                 // ★★★ A SUCCESS MUST CLEAR THE LAST FAILURE. lastError was only ever SET, so the
                 //     "no tunnel yet" raised while the tunnel was still dialling — which is normal
                 //     during a restore, since publish() runs the moment the switch is restored and
@@ -502,6 +531,39 @@ object VibeTunnel {
                 r.optInt("pingSec", 0).takeIf { it > 0 }?.let { PING_SEC = it.toLong() }
                 address = r.optString("address", "")
                 lastError = ""
+                // ★★★ PING ONCE, IMMEDIATELY, OR A NEW LISTING IS INVISIBLE FOR FIFTEEN MINUTES.
+                //     The directory cannot verify an address at REGISTRATION — the server has no
+                //     key until it reads the response — so proving it happens on a ping, and the
+                //     next one is a quarter of an hour away. A brand-new server would sit
+                //     unverified and unlisted for all of it, which reads as "the switch does not
+                //     work" (Stuart, 2026-08-22, asking how long it should take).
+                //  ★★ Now that the key is stored AND handed to the shim, one extra request settles
+                //     it in a second. It is the ordinary ping — no special path to keep in step.
+                //  ★ Failure here costs nothing: the scheduled ping will try again.
+                try {
+                    val first = post("/api/directory/ping", JSONObject().apply {
+                        put("id", r.optString("id")); put("key", r.optString("key"))
+                        put("url", url); put("grid", locator)
+                        put("name", name); put("status", status)
+                    })
+                    // ★★★ AND CHECK WHAT IT SAID. This threw the answer away, so a REGISTRATION
+                    //     whose first challenge failed scheduled nothing and sat unlisted until
+                    //     the next interval — which is exactly what happens every time, because
+                    //     Cloudflare answers 530 for a hostname that is seconds old and not yet
+                    //     routed. Measured 2026-08-22: {"status":530,"reason":"http"} on a tunnel
+                    //     that answered 200 a minute later.
+                    //  ★★ The retry branch was wired into PING only, and a fresh listing never
+                    //     goes through it — turning the switch off clears the stored id, so the
+                    //     next enable is a registration. The path a user takes most often was the
+                    //     one path that could not recover.
+                    if (first == null || !first.optBoolean("verified", false)) {
+                        Log.i(TAG, "address not verified yet — retrying shortly")
+                        retrySoon()
+                    }
+                } catch (t: Throwable) {
+                    Log.w(TAG, "first ping failed: ${t.message}")
+                    retrySoon()
+                }
                 return address
             }
             409 -> {
