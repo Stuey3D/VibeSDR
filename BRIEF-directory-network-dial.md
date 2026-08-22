@@ -85,14 +85,19 @@ FM, the 86 MHz of nothing between them would be 98% of the dial and the two thin
 would be slivers at either end. An uncovered stretch becomes a fixed narrow gap, marked as no
 coverage, however many megahertz it really spans.
 
-★★★ AND THE SAME ARGUMENT KILLS A LINEAR SCALE *INSIDE* COVERAGE. Compressing the gaps is not
-enough on its own: one unrestricted RTL covers 500 kHz – 1766 MHz with no gap at all, and on a
-linear axis the entire medium wave band — the whole of AM broadcast — is 1/1600th of the bar.
-Invisible, unclickable, and exactly the band an AM DXer came for.
-→ **Logarithmic within each covered stretch.** Every decade gets equal width, so MW, HF and FM are
-all reachable with a mouse, and the mapping stays monotonic and exact so click-to-frequency is
-still a real frequency and not an approximation. This is how a spectrum overview is normally drawn,
-and it is the only choice that survives both a narrow HF+ and a wideband dongle on the same page.
+★★ WITHIN A COVERED STRETCH THE AXIS IS LINEAR, AND **ZOOM** IS WHAT MAKES SMALL BANDS REACHABLE.
+I argued first for a logarithmic axis, on the grounds that one unrestricted RTL covers 500 kHz –
+1766 MHz with no gap at all, so medium wave would be 1/1600th of the bar — invisible and
+unclickable. Stuart: *"but that is where the bar can be zoomed in and out."* That is the better
+answer and it was in the design from the first sentence: this is a DIAL, and a dial zooms. A log
+axis would have bought reachability at the cost of the one property a tuning dial must have — that
+equal distances are equal frequency steps, so dragging across it behaves the way every radio the
+visitor has ever used behaves.
+
+★ WHICH LEAVES ONE RESIDUAL, AND THE BAND PLAN ALREADY SOLVES IT: at full zoom-out a narrow band
+is too small to hit with a mouse. The plan along the top is the click target — click "AM (medium
+wave) broadcast" and the dial zooms to it. So the labels are not only labels; they are the
+navigation, which is also what makes the region dropdown matter.
 
 ★★ TICK LABELS DO THE HONEST WORK. Because the axis is neither linear nor continuous, the numbers
 along it are not decoration — they are the only thing telling a visitor that the gap they are
