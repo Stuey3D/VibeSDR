@@ -24,8 +24,12 @@
 
   .legend { display: flex; gap: 16px; flex-wrap: wrap; color: var(--dim);
             font-size: 12px; padding: 10px 20px; border-bottom: 1px solid var(--line); }
-  .legend i { display: inline-block; width: 10px; height: 10px; margin-right: 6px;
-              vertical-align: -1px; }
+  /* ★★★ THE SHAPES CARRY THEIR OWN BOX. display:inline-block lived HERE, on `.legend i`, so the
+     .sh-* classes were only ever shapes by borrowing it — and the map's marker, a bare <i>, was
+     an inline element whose width and height did nothing at all: no mark on the map (Stuart,
+     2026-08-22). A class that draws a shape must not depend on where it is used. */
+  .sh-free, .sh-busy, .sh-temp, .sh-down { display: inline-block; box-sizing: border-box; }
+  .legend i { width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; }
   /* ★ SHAPE AS WELL AS COLOUR. Red/green is the commonest form of colour blindness and this
      legend is entirely red/green/yellow, so the shape carries the same information. */
   .sh-free { background: var(--free); border-radius: 50%; }
@@ -39,8 +43,7 @@
      place the shape has to do real work, because a pin has no label beside it (Stuart,
      2026-08-22: "it is a circle not a diamond on the map"). Sharing the .sh-* classes means the
      shape is defined ONCE: a new state cannot be added to the legend and forgotten here. */
-  .mk { width: 13px; height: 13px; box-sizing: border-box;
-        box-shadow: 0 0 0 1.5px rgba(0,0,0,.55); }
+  .mk { width: 13px; height: 13px; box-shadow: 0 0 0 1.5px rgba(0,0,0,.55); }
   /* ★ Leaflet's own icon class carries a white background in some builds — ours must not. */
   .mkWrap { background: none; border: 0; }
   .srv.down > summary { opacity: 0.55; }
