@@ -366,7 +366,21 @@ object VibeTunnel {
                 // ★ Prefer the owner's own words for the band; fall back to the names the
                 //   server derived from its band plan, which is what an unrestricted radio has.
                 val bands = ident?.optJSONArray("bands")
-                if (coverage.isNotEmpty()) put("coverage", JSONArray().put(coverage))
+                // ★★★ ONE BAND PER ENTRY, NOT ONE STRING OF ALL OF THEM. The screen joins the
+                //     owner's bands into "AM (medium wave) broadcast, FM Broadcast Band" for
+                //     display, and that whole sentence was being published as a SINGLE coverage
+                //     entry — so the directory drew one chip carrying both names, and filtering
+                //     for FM alone could never match it. Seen live on the Xcover 4S the moment it
+                //     listed itself (2026-08-22), which is precisely what a second real server was
+                //     going to reveal: with one locked-to-FM phone in the estate, a list of one
+                //     and a string of one are indistinguishable.
+                //  ★ Split here rather than at the screen, because the screen's join is what the
+                //    SETUP page shows a human and is right for that.
+                if (coverage.isNotEmpty())
+                    put("coverage", JSONArray().apply {
+                        coverage.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                                .forEach { put(it) }
+                    })
                 else if (bands != null && bands.length() > 0) put("coverage", bands)
                 // ★★ WHAT IT CAN BE TUNED TO, in Hz — see vsTunableRanges in the shim. Absent when
                 //    the server could not say, and absent must never be read as "anything".
