@@ -13035,6 +13035,61 @@ std::string LocalSdrShim::adminSessionsJson() {
         j += "}";
     }
 
+    // ★★★ EVERY LISTENER ON A SHARED DIAL, NOT JUST THE OCCUPANT — THE FOURTH PLACE THAT HAD TO
+    //     LEARN "WHO IS ON MY RADIO".
+    //
+    //     perClientDsp() is TRUE only for a LOCKED CENTRE, because that is the mode where each
+    //     listener has their own VFO and therefore their own chain. On a SHARED VFO everyone is on
+    //     one dial and one DSP, so clientDsp is empty BY DESIGN — and this table, which enumerates
+    //     exactly that map, could never show more than the single sole-occupant row above it.
+    //
+    // ★★★ SO A SHARED RECEIVER REPORTED ONE LISTENER NO MATTER HOW MANY WERE ON IT. Stuart, with
+    //     two devices connected: "it is only showing one listeners ip at a time ... its now showing
+    //     my cellular IP but not my mac one which is also connected" — and the row appearing to
+    //     change address is simply the OCCUPANT changing, not a session mutating. Measured
+    //     2026-08-22: the server logged "spectrum WS connected — listener 2 of 10" while
+    //     /admin/sessions returned one row.
+    //
+    // ★★ IT READ AS AN EVICTION AND IS NOT ONE. Nobody is thrown off the radio; the view simply
+    //    cannot represent them — which is worse than a missing feature, because an owner watching
+    //    a public receiver concludes their listeners are being dropped.
+    //
+    // ★ The extras are the spectrum peers the broadcast loops already serve (specExtra). They pay
+    //   no per-listener DSP — on a shared dial the cost is the one shared chain — so `cpu` is -1
+    //   here rather than a share invented for the column: the table already renders -1 as a dash.
+    // ★ Only where there are no per-client rows — a locked-centre receiver already
+    //   enumerates each listener above, and would otherwise list them twice.
+    if (p->clientDsp.empty()) {
+        for (const auto& sk : p->specExtra) {
+            if (!sk || !sk->isOpen()) continue;
+            const std::string ip = sk->peerAddress();
+            unsigned long long bytes = 0;
+            { auto it = sentBySock.find(sk.get());
+              if (it != sentBySock.end()) bytes = it->second; }
+            std::string sess;
+            { auto it = p->sockSession.find(sk.get());
+              if (it != p->sockSession.end()) sess = it->second; }
+            if (!first) j += ',';
+            first = false;
+            j += "{\"session\":\"" + vibeadmin::esc(sess) + "\""
+               + ",\"ip\":\"" + vibeadmin::esc(ip) + "\""
+               // ★ One dial: the frequency and mode ARE the shared ones, and saying so is the point
+               //   of the mode rather than a gap in the row.
+               + ",\"vfoHz\":" + std::to_string((long long)p->audioFreq.load())
+               + ",\"mode\":\"" + vibeadmin::esc(p->mode) + "\""
+               + ",\"audio\":false,\"spectrum\":true"
+               + ",\"dropped\":0,\"zoomed\":false"
+               + ",\"cc\":\"" + vibeadmin::esc(vsCountry(ip)) + "\""
+               + ",\"net\":\"" + vibeadmin::esc(vsAsnLabel(ip)) + "\""
+               + ",\"cpu\":-1,\"kbps\":-1"
+               + ",\"decoder\":\"\",\"occupant\":false"
+               // ★★ NOT ADMIN. Whatever the radio-wide flag says, a listener on the shared dial has
+               //    proved nothing — badging them would repeat the inherit bug in the one view an
+               //    owner uses to decide who to trust.
+               + ",\"admin\":false}";
+        }
+    }
+
     // ★★ THE PEOPLE WHO ARE NOT ON YET. A queue is invisible in a listener list by definition, and
     //    "nobody is listening" reads very differently from "nobody is listening and four are
     //    waiting". Position is 1-based and is the order that will actually be honoured.
