@@ -21,10 +21,11 @@ export interface DirectoryMeta {
 }
 
 export const DIRECTORIES: DirectoryMeta[] = [
-  // ★★★ OURS FIRST. Stuart, 2026-08-22: "Directory goes top since it is ours and we dont want to
-  //     be a 2nd class citizen in our own app" — and the listing is the thing that rewards
-  //     somebody for turning their own receiver on, so burying it under four other networks would
-  //     be working against the feature.
+  // ★★ FIRST AMONG THE DIRECTORIES — which is where it belongs, and where Stuart put it back
+  //    after seeing it given a section of its own at the top of the whole screen (2026-08-22:
+  //    "it can be with the rest of the directories at the bottom, just at the top of the list
+  //    above UberSDR"). It is a directory; it reads as one alongside the others, and being first
+  //    is enough to say it is ours without inventing a second place for it to live.
   { id: 'vibeserver',  name: 'VibeServer',  desc: 'Public VibeServers — list yours from the app',
     kinds: ['vibeserver'] },
   { id: 'ubersdr',     name: 'UberSDR',     desc: 'Official UberSDR instances',                 kinds: ['ubersdr'] },

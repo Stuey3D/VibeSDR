@@ -351,8 +351,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     //    misdescribes the screen is worse than no card, and it has bitten twice in one afternoon
     //    before. The directory is now the first thing on this screen, so the tour says so.
     { id: 'vibedir', title: 'Public VibeServers',
-      body: 'Receivers people have shared, at the top of the list. Running VibeServer yourself? '
-          + 'Turn on List on VibeSDR.net in Server Mode and yours appears here too.' },
+      body: 'Under Directories at the bottom, first in the list. Running VibeServer yourself? '
+          + 'Turn on List on VibeSDR.net in Server Mode and yours appears there too.' },
     { id: 'custom', title: 'Your own server',
       body: 'Got a private UberSDR, OpenWebRX, KiwiSDR or Web-888? Enter its address here to connect to it directly.',
       target: tourRef('customUrl') },
@@ -2197,31 +2197,6 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
             ListHeaderComponent={
               <View style={{ marginBottom: 4 }}>
-                {/* ★★★ OUR OWN DIRECTORY, AT THE TOP. Stuart, 2026-08-22: "Directory goes top since
-                    it is ours and we dont want to be a 2nd class citizen in our own app" — and it
-                    is the listing that rewards somebody for turning their receiver on, so the more
-                    visible it is the more public VibeServers exist to fill it. It sits ABOVE the
-                    USB SDR block deliberately: the dongle in your hand is one receiver, this is
-                    every one that anybody has offered. */}
-                <SectionHeader label="VIBESERVER DIRECTORY" fs={fs} F={F} C={C} />
-                <ChooserRow
-                  style={[styles.row, { borderColor: C.amber, marginBottom: 6 }]}
-                  onPress={() => openDirectory('vibeserver')}
-                >
-                  <View style={styles.rowMain}>
-                    <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber }} numberOfLines={1}>
-                      Public VibeServers
-                    </Text>
-                    <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }}
-                          numberOfLines={2}>
-                      Receivers people have shared — and you can list your own from Server Mode
-                    </Text>
-                  </View>
-                  <View style={styles.rowRight}>
-                    <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim }}>›</Text>
-                  </View>
-                </ChooserRow>
-
                 {/* RTL-SDR — the dongle plugged into THIS phone. Two things you can do
                     with it, so it reads as one heading with two choices rather than a
                     "Local Hardware" row with a share action bolted underneath.
@@ -2353,9 +2328,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   </View>
                 </ChooserRow>
                 <SectionHeader label="DIRECTORIES" fs={fs} F={F} C={C} />
-                {/* ★ Ours is not repeated here — it has its own place at the top, and a row that
-                     appears twice in one screen reads as two different things. */}
-                {DIRECTORIES.filter(d => d.id !== 'vibeserver').map(d => (
+                {DIRECTORIES.map(d => (
                   <ChooserRow zone="footer"
                     key={d.id}
                     style={[styles.row, { borderColor: C.border, marginBottom: 6 }]}
