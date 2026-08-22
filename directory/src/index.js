@@ -271,7 +271,18 @@ async function verifyAddress(url, key, why) {
   const target = `${url}/vibeserver.json?dirNonce=${nonce}`;
   try {
     const res = await fetch(target, {
-      signal: AbortSignal.timeout(8000),
+      // ★★★ GENEROUS ON PURPOSE — A BUSY SERVER IS NOT AN ABSENT ONE. Eight seconds is fine for a
+      //     Pi with nobody on it and tight for a low-end phone serving listeners: the Xcover 4S
+      //     answered this challenge in 0.65 s idle and could not answer it at all while streaming,
+      //     so every app restart (which rotates the tunnel hostname and forces a re-proof) dropped
+      //     a working, reachable receiver out of the directory until the next retry (2026-08-23).
+      //  ★★ The failure is silent to the owner — the switch still reads ON and the server still
+      //     works — which makes it the worst kind of wrong. The retry ladder does recover it, but
+      //     punishing the exact machines this feature is meant to show off is a poor trade for
+      //     seven seconds of a Worker's time.
+      //  ★ It does NOT weaken the check: a wrong or missing HMAC still fails, however long it
+      //    takes to arrive. Only patience changed.
+      signal: AbortSignal.timeout(15000),
       cache: 'no-store',
       // ★ Some receivers refuse a request with no user agent — ours does.
       headers: { 'user-agent': 'vibesdr.net directory verifier' },
