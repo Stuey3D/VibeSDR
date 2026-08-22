@@ -527,18 +527,28 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     if (nm.length < 2) return;
     const cov = (allowRanges || '').split(',').map((t) => t.trim()).filter(Boolean)
                   .map((t) => bands.find((b) => b.id === t)?.label || t).join(', ');
-    const sig = [nm, cov, (antenna || '').trim(), radio?.model, radio?.driver,
-                 radioUse === 'locked'].join('|');
-    if (republished.current === sig) return;
-    republished.current = sig;
     void (async () => {
       try {
         const where = await getResolvedServerLocation();
+        // ★★★ THE LOCATOR IS PART OF WHAT MIGHT HAVE CHANGED. A receiver can be CARRIED — take the
+        //     phone away for a week and the map should follow it, which it cannot do if the
+        //     position is only read when some other setting is edited (Stuart, 2026-08-22: "if I
+        //     were to take my moto and say set it up from a holiday destination would the map move
+        //     with it"). Resolved first, then compared, so a move is a change like any other.
+        const sig = [nm, cov, (antenna || '').trim(), radio?.model, radio?.driver,
+                     radioUse === 'locked', where?.grid || ''].join('|');
+        if (republished.current === sig) return;
+        republished.current = sig;
         await (NativeModules as any).VibeLocalSDR?.tunnelRepublish?.(
           nm, where?.grid || '', running.port, radio?.model || '', radio?.driver || '',
           (antenna || '').trim(), cov, radioUse === 'locked');
       } catch { /* the listing simply keeps what it had */ }
     })();
+    // ★★ AND CHECK AGAIN ON A SLOW BEAT. Every other input here changes because somebody typed
+    //    something, so a render tells us to look; a phone being carried changes NOTHING on screen.
+    //    Two minutes is far below the 15-minute ping and costs one location read.
+    const t = setInterval(() => { republished.current = ''; }, 120_000);
+    return () => clearInterval(t);
   }, [publicOn, running, publicName, name, allowRanges, antenna, bands, radio, radioUse]);
 
   /**

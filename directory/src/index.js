@@ -382,6 +382,21 @@ async function ping(request, env) {
   //     carrying an unproven address for the rest of its life — which is exactly the claim the
   //     challenge exists to check. The key does not change across the move, so re-proving costs
   //     one request and settles it.
+  // ★★★ A RECEIVER CAN MOVE. The locator was only ever read at registration, so a server that
+  //     was carried somewhere else kept its original pin — and the map is the directory's front
+  //     page. Accepted on every ping, validated exactly as at registration, and IGNORED when it is
+  //     absent or malformed rather than blanking a good position with a bad one.
+  //  ★ The country follows the position, not the request: cf.country is where the server DIALLED
+  //    FROM, which is the same thing while it is at home and wrong the moment it travels — a phone
+  //    on a foreign SIM would file itself under the wrong flag. The grid the owner's own device
+  //    resolved is the better answer, and the one the map already uses.
+  let gridPos = null;
+  if (typeof body.grid === 'string' && body.grid.trim()) {
+    const g = clean(body.grid, 6).toUpperCase();
+    const p2 = gridToLatLon(g);
+    if (p2) gridPos = { grid: g, lat: p2.lat, lon: p2.lon };
+  }
+
   const moved = url !== row.url;
   let verified = Number(row.verified) === 1 && !moved;
   const why = {};
@@ -389,10 +404,14 @@ async function ping(request, env) {
 
   await env.DB.prepare(
     `UPDATE servers SET url = ?, name = ?, status_json = ?, updated_at = ?, expires_at = ?,
-                        verified = ?
+                        verified = ?, grid = ?, lat = ?, lon = ?
      WHERE id = ?`
   ).bind(url, body.name ? clean(body.name, 60) : row.name,
-         status, t, t + ttlSeconds(body), verified ? 1 : 0, row.id).run();
+         status, t, t + ttlSeconds(body), verified ? 1 : 0,
+         gridPos ? gridPos.grid : row.grid,
+         gridPos ? gridPos.lat : row.lat,
+         gridPos ? gridPos.lon : row.lon,
+         row.id).run();
 
   // ★★ TELL A RETURNING SERVER THE TRUTH ABOUT ITS ADDRESS. If it was away longer than the hold
   //    and somebody else took the name, `slug` is now NULL — the switch must be able to say so

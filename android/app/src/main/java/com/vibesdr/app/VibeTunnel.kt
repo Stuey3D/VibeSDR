@@ -431,6 +431,13 @@ object VibeTunnel {
         if (id != null && key != null) {
             val r = post("/api/directory/ping", JSONObject().apply {
                 put("id", id); put("key", key); put("url", url)
+                // ★★★ WHERE IT IS NOW, NOT WHERE IT WAS REGISTERED. The locator was sent ONCE, at
+                //     registration, so a receiver that moved kept its original pin for ever — take
+                //     the phone on holiday and the map would still show it at home (Stuart,
+                //     2026-08-22, asking exactly that). The address is refreshed on every ping
+                //     because a tunnel hostname rotates; the position deserves the same treatment
+                //     for the same reason — it is a fact that can change while the listing lives.
+                put("grid", locator)
                 put("name", name); put("status", status)
             })
             if (r != null && r.optInt("_status") == 200) {
