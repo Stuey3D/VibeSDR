@@ -1006,9 +1006,15 @@ function hzToXIn(axis, hz) {
   return null;
 }
 
-/** ★ A 1-2-5 ladder, so the numerals land on figures a radio person reads without thinking. */
+/**
+ * ★ A 1-2-5 ladder, so the numerals land on figures a radio person reads without thinking.
+ * ★★ THE CEILING WAS THE BUG: capped at 9 numerals, a 1900px dial showed 50/100/150/200 and
+ *    nothing between — "zoomed dial needs more numbers" (Stuart, 2026-08-23). What should be
+ *    constant is the SPACING, not the count, so the figure is derived from the width and the cap
+ *    is only a runaway guard.
+ */
 function tickStep(spanHz, px) {
-  const want = Math.max(2, Math.min(9, Math.floor(px / 90)));   // ~90px of room per numeral
+  const want = Math.max(2, Math.min(40, Math.floor(px / 85)));  // ~85px of room per numeral
   const raw = spanHz / want;
   const mag = Math.pow(10, Math.floor(Math.log10(raw)));
   for (const m of [1, 2, 5, 10]) if (raw <= m * mag) return m * mag;
@@ -1152,7 +1158,7 @@ function drawRow(segsIn, y0, W, opt) {
     }
     const span = a.hi - a.lo, px = a.x1 - a.x0;
     p.push(`<line class="dBase" x1="${a.x0.toFixed(1)}" y1="${TICK_Y}" x2="${a.x1.toFixed(1)}" y2="${TICK_Y}"/>`);
-    const step = tickStep(span, opt.kind === 'over' ? px * 0.7 : px);
+    const step = tickStep(span, opt.kind === 'over' ? px * 0.62 : px);
     for (let f = Math.ceil(a.lo / step) * step; f <= a.hi + 1; f += step) {
       const x = a.x0 + px * ((f - a.lo) / span);
       // ★★★ THE NUMERAL CARRIES THE VERDICT — green where something free covers it, red where every
