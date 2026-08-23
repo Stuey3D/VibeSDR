@@ -195,6 +195,7 @@
   .dialTitle b { color: var(--phosphor); font-weight: 400; letter-spacing: .06em;
                  text-transform: none; font-size: 13px;
                  text-shadow: 0 0 8px rgba(53,224,138,.45); }
+  .dialHint { color: var(--dim); font-size: 10.5px; letter-spacing: .06em; text-transform: none; }
   .dialCtl { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
              text-transform: none; letter-spacing: .04em; }
   .dialCtl label { color: var(--dim); font-size: 11px; letter-spacing: .1em;
@@ -269,6 +270,14 @@
   .dNeedle { stroke: #ff3b30; stroke-width: 1.5; }
   .dNeedleHd { fill: #ff3b30; }
   .dSpan   { fill: rgba(255,59,48,.14); }
+  /* ★ The viewport on the whole-network dial: what the dial above is showing, and the handle for
+       moving it. Amber rather than phosphor, so it reads as a control and not as coverage. */
+  .dPort      { cursor: grab; }
+  .dialGlass.drag .dPort { cursor: grabbing; }
+  .dPortBox   { fill: rgba(255,184,51,.13); stroke: var(--accent); stroke-width: 1.2; }
+  .dPortGrip  { fill: var(--accent); opacity: .75; }
+  .dPort:hover .dPortBox { fill: rgba(255,184,51,.22); }
+  .dNum.over  { font-size: 10px; opacity: .8; }
   #freq { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
           color: var(--accent); padding: 5px 9px; font-size: 13px; width: 190px;
           font-family: inherit; letter-spacing: .04em; }
@@ -313,6 +322,7 @@
        zoom are steps 4-6 and are not here yet. -->
 <section class="dialWrap" id="dialWrap" hidden>
   <div class="dialTitle"><span>What the network can hear</span><b id="dialExtent"></b>
+    <span class="dialHint">click the top dial to place a VFO · drag the box below to travel</span>
     <span class="dialCtl">
       <!-- ★ WHERE, not who: the country a receiver sits in is the question a listener asks when
            they want signals from somewhere, and it is the one filter the map cannot express in a
@@ -1006,43 +1016,33 @@ function tickStep(spanHz, px) {
 }
 
 /**
- * ★★★ THE DIAL WRAPS, LIKE A REAL SET'S SCALE. One line across 500 kHz – 1.766 GHz gives medium
- *     wave a third of a pixel; the vintage answer was never a longer dial but a SECOND LINE, and
- *     that is what Stuart asked for: "the full dial and bandplan wrapping onto 2 rows so
- *     500k - 850M and 850m - 1.7G on the second" (2026-08-23).
- *  ★★ The split is by COVERED spectrum, not by frequency — each line carries the same amount of
- *     listenable Hz, so neither ends up mostly empty. With gaps in the network that is not the
- *     same as halving the range, and it is the half that matters.
- *  ★ One line when there is little enough to say: wrapping 20 kHz of zoom onto two rows would be
- *    ceremony, not clarity.
+ * ══ TWO DIALS: THE DETAIL AND THE WHOLE NETWORK ═════════════════════════════════════════════
+ * ★★★ Stuart, 2026-08-23: "Top dial is the zoomed in section and the bottom dial shows the zoomed
+ *     out full range ... the bottom dial shows a highlighted range, and if I want to say look for
+ *     radios that pick up 2m and 70cm band I place a VFO at 2m then drag the zoomed area on the
+ *     full dial across then place the 2nd vfo on the 70cm band in the zoomed in dial."
+ * ★★★ THAT IS WHAT MAKES A SEARCH ACROSS DISTANT BANDS POSSIBLE AT ALL. Two needles 300 MHz apart
+ *     cannot both be placed on one dial at a zoom where either is hittable — so the bottom dial
+ *     carries the position and the top one carries the precision. It also answers the crowding
+ *     that wrapping onto two lines only halved: the detail dial spends its whole width on the
+ *     stretch you are actually in.
+ * ★★ The needles are the SEARCH and they persist while you travel: place one at 145 MHz, drag the
+ *    viewport to 70 cm, place the second, and the pair is the query. Nothing is lost by moving.
  */
-const DIAL_ROW_H = 92, DIAL_ROW_GAP = 10;
+const DETAIL_H = 96, OVER_H = 62, DIAL_GAP = 14;
 
-function splitForRows(segs, rows) {
-  const total = segs.filter((g) => g.state !== 'gap').reduce((n, g) => n + (g.hi - g.lo), 0);
-  if (rows < 2 || total <= 0) return [segs];
-  const per = total / rows;
-  const out = [[]]; let acc = 0;
-  for (const g of segs) {
-    let seg = g;
-    while (out.length < rows && g.state !== 'gap' && acc + (seg.hi - seg.lo) > per) {
-      // ★ A segment that straddles the break is CUT, so the line ends on a round-ish frequency
-      //   rather than wherever a radio's range happened to stop.
-      const take = per - acc;
-      if (take > 0) out[out.length - 1].push({ ...seg, hi: seg.lo + take });
-      seg = { ...seg, lo: seg.lo + take };
-      out.push([]); acc = 0;
-    }
-    if (seg.hi > seg.lo) { out[out.length - 1].push(seg); if (seg.state !== 'gap') acc += seg.hi - seg.lo; }
-  }
-  return out.filter((r) => r.length);
+/** ★ The window a first-time visitor lands on: DC to the top of 2 m, where the plan really shows.
+ *   Region-aware, because the plan is — and clamped to what the network can actually hear. */
+function defaultWindow() {
+  const twoM = planBandList().find((b) => /\b2 m\b/.test(b.label));
+  const hi = twoM ? twoM.hi : 150e6;
+  return [DIAL_EXTENT[0], Math.min(DIAL_EXTENT[1], Math.max(hi, DIAL_EXTENT[0] + 1e6))];
 }
 
 function renderDial() {
   const wrap = document.getElementById('dialWrap');
   const items = dialItems();
-  // ★ Nothing to draw is not an empty dial, it is no dial. An axis with no spectrum on it is a
-  //   control that can only mislead.
+  // ★ Nothing to draw is not an empty dial, it is no dial.
   if (!items.length) { wrap.hidden = true; return; }
   wrap.hidden = false;
 
@@ -1051,49 +1051,58 @@ function renderDial() {
   if (!fullCov.length) { wrap.hidden = true; return; }
   DIAL_EXTENT = [fullCov[0].lo, fullCov[fullCov.length - 1].hi];
 
-  // ★★★ THE ZOOM WINDOW BELONGS TO THE VIEWER AND SURVIVES THE REFRESH — the page reloads every
-  //     minute, and rescaling the axis under the hands of somebody zoomed into 40 m because a
-  //     server joined is its own bug. Clamped only when it ends up entirely outside coverage.
-  const view = dialView ? [dialView[0], Math.min(dialView[1], DIAL_EXTENT[1])] : DIAL_EXTENT.slice();
-  const segs = all.map((g) => ({ ...g, lo: Math.max(g.lo, view[0]), hi: Math.min(g.hi, view[1]) }))
-                  .filter((g) => g.hi > g.lo);
-  const covered = segs.filter((g) => g.state !== 'gap');
+  // ★★★ THE WINDOW BELONGS TO THE VIEWER AND SURVIVES THE MINUTE REFRESH. Only the first paint
+  //     chooses it; after that a server joining or leaving must not move somebody's dial.
+  if (!dialView) dialView = defaultWindow();
+  const view = [Math.max(dialView[0], DIAL_EXTENT[0]), Math.min(dialView[1], DIAL_EXTENT[1])];
+
   const host = document.getElementById('dial');
-  if (!covered.length) {
-    host.innerHTML = `<div class="empty" style="padding:22px">Nothing in the network covers `
-      + `${esc(prettyHz(view[0]))} – ${esc(prettyHz(view[1]))}.</div>`;
-    document.getElementById('dialExtent').textContent = `${prettyHz(view[0])} – ${prettyHz(view[1])}`;
-    document.getElementById('edgeL').hidden = !(view[0] > DIAL_EXTENT[0] + 1);
-    document.getElementById('edgeR').hidden = !(view[1] < DIAL_EXTENT[1] - 1);
-    return;
+  const W = Math.round(Math.max(320, host.clientWidth || wrap.clientWidth - 40));
+  DIAL_ROWS = [];
+  const parts = [];
+
+  // ── the DETAIL dial ───────────────────────────────────────────────────────────────────────
+  const det = all.map((g) => ({ ...g, lo: Math.max(g.lo, view[0]), hi: Math.min(g.hi, view[1]) }))
+                 .filter((g) => g.hi > g.lo);
+  if (det.some((g) => g.state !== 'gap')) {
+    parts.push(drawRow(det, 0, W, { kind: 'detail', h: DETAIL_H, bandH: 20, labels: true }));
+  } else {
+    // ★ Nobody covers the window. Say so on the glass — do not jump them somewhere else.
+    parts.push(`<text class="dGapTx" x="${W / 2}" y="${DETAIL_H / 2}">nothing in the network covers `
+      + `${esc(prettyHz(view[0]))} – ${esc(prettyHz(view[1]))}</text>`);
   }
 
-  const W = Math.round(Math.max(320, host.clientWidth || wrap.clientWidth - 40));
-  // ★ Two lines only when there is enough spectrum for the second one to earn its height.
-  const rowCount = (covered[covered.length - 1].hi / Math.max(1, covered[0].lo) > 50) ? 2 : 1;
-  const chunks = splitForRows(segs, rowCount);
+  // ── the WHOLE NETWORK, underneath, with the viewport on it ─────────────────────────────────
+  const oy = DETAIL_H + DIAL_GAP;
+  parts.push(drawRow(all, oy, W, { kind: 'over', h: OVER_H, bandH: 11, labels: false }));
+  const orow = DIAL_ROWS[DIAL_ROWS.length - 1];
+  if (orow) {
+    const xa = hzToXIn(orow.axis, view[0]), xb = hzToXIn(orow.axis, view[1]);
+    if (xa !== null && xb !== null) {
+      const w = Math.max(6, xb - xa);
+      // ★ The handle is the whole box: grabbing a 6px edge on a 1.7 GHz dial is a dexterity test.
+      parts.push(`<g class="dPort"><rect class="dPortBox" x="${xa.toFixed(1)}" y="${oy + 1}" `
+        + `width="${w.toFixed(1)}" height="${OVER_H - 2}" rx="2"/>`
+        + `<rect class="dPortGrip" x="${xa.toFixed(1)}" y="${oy + 1}" width="${w.toFixed(1)}" height="6"/>`
+        + `<title>${esc(prettyHz(view[0]))} – ${esc(prettyHz(view[1]))} — drag to move the dial above</title></g>`);
+    }
+  }
 
-  const parts = [];
-  DIAL_ROWS = [];
-  chunks.forEach((chunk, ri) => {
-    const y0 = ri * (DIAL_ROW_H + DIAL_ROW_GAP);
-    parts.push(drawRow(chunk, y0, W, view));
-  });
-
-  const H = chunks.length * DIAL_ROW_H + (chunks.length - 1) * DIAL_ROW_GAP;
+  const H = oy + OVER_H;
   host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"
                          role="img" aria-label="What the network can hear">${parts.join('')}</svg>`;
 
+  const zoomed = (view[1] - view[0]) < (DIAL_EXTENT[1] - DIAL_EXTENT[0]) * 0.999;
   document.getElementById('dialExtent').textContent =
-    `${prettyHz(covered[0].lo)} – ${prettyHz(covered[covered.length - 1].hi)}${dialView ? ' · zoomed' : ''}`;
-  document.getElementById('zAll').disabled = !dialView && !needleA && !bandsOn.size;
-  // ★ Offered only where there is spectrum beyond the edge.
+    `${prettyHz(view[0])} – ${prettyHz(view[1])}`
+    + `  of  ${prettyHz(DIAL_EXTENT[0])} – ${prettyHz(DIAL_EXTENT[1])}`;
+  document.getElementById('zAll').disabled = !zoomed && !needleA && !bandsOn.size;
   document.getElementById('edgeL').hidden = !(view[0] > DIAL_EXTENT[0] + 1);
   document.getElementById('edgeR').hidden = !(view[1] < DIAL_EXTENT[1] - 1);
 }
 
-/** One line of the dial: its own band plan strip over its own ticker. */
-function drawRow(segsIn, y0, W, view) {
+/** One dial: a band plan strip over a ticker. `opt.kind` decides what the pointer does to it. */
+function drawRow(segsIn, y0, W, opt) {
   const covered = segsIn.filter((g) => g.state !== 'gap');
   if (!covered.length) return '';
   const totalHz = covered.reduce((n, g) => n + (g.hi - g.lo), 0) || 1;
@@ -1106,33 +1115,32 @@ function drawRow(segsIn, y0, W, view) {
     else runs.push({ gap: false, segs: [g] });
   }
   const axis = dialAxis(runs, W, totalHz);
-  DIAL_ROWS.push({ axis, y0, y1: y0 + DIAL_ROW_H, lo: covered[0].lo, hi: covered[covered.length - 1].hi });
+  DIAL_ROWS.push({ axis, y0, y1: y0 + opt.h, kind: opt.kind,
+                   lo: covered[0].lo, hi: covered[covered.length - 1].hi });
 
-  /* ★★ The app's own order: solid band blocks, then the ticker beneath — rule, ticks hanging
-   *    below it, numerals under those. Two staggered band rows, so a name that will not fit
-   *    beside its neighbour fits below it. */
-  const BAND_Y = y0 + 5, BAND_H = 18, BAND_GAP = 3;
-  const TICK_Y = y0 + 54, TICK_H = 12, NUM_Y = y0 + 78, BOT = y0 + DIAL_ROW_H - 4;
+  const BAND_Y = y0 + 4, BAND_H = opt.bandH;
+  const TICK_Y = y0 + BAND_H + 22, TICK_H = opt.kind === 'over' ? 7 : 12;
+  const NUM_Y = TICK_Y + (opt.kind === 'over' ? 20 : 24), BOT = y0 + opt.h - 2;
   const TYPE_HEX = { ham: '#CF0000', broadcast: '#0900FF', utility: '#07BD00', cb: '#FF7700' };
   const p = [];
-  const rowEnd = [-1e9, -1e9];
 
+  // ★★ ONE ROW OF BLOCKS, NOT TWO. Staggering them read as two different KINDS of band — it was
+  //    solving a crowding problem the detail dial does not have (Stuart: "bandplan is still
+  //    staggered"). A block too narrow for its name simply goes unlabelled and keeps its colour.
   for (const b of planBandList()) {
     const lo = Math.max(b.lo, covered[0].lo), hi = Math.min(b.hi, covered[covered.length - 1].hi);
     if (!(hi > lo)) continue;
     const a = hzToXIn(axis, lo), c = hzToXIn(axis, hi);
-    if (a === null || c === null || c - a < 1.5) continue;
-    const w = Math.max(1.5, c - a);
+    if (a === null || c === null || c - a < 1) continue;
+    const w = Math.max(1, c - a);
     const on = bandsOn.has(b.label);
-    const r = rowEnd[0] <= a - 1 ? 0 : rowEnd[1] <= a - 1 ? 1 : (rowEnd[0] <= rowEnd[1] ? 0 : 1);
-    rowEnd[r] = a + w;
-    const by = BAND_Y + r * (BAND_H + BAND_GAP);
     p.push(`<g class="dBand${on ? ' on' : ''}" data-band="${esc(b.label)}">`
-      + `<rect x="${a.toFixed(1)}" y="${by}" width="${w.toFixed(1)}" height="${BAND_H}"`
+      + `<rect x="${a.toFixed(1)}" y="${BAND_Y}" width="${w.toFixed(1)}" height="${BAND_H}"`
       + ` fill="${TYPE_HEX[b.type] || TYPE_HEX.utility}" fill-opacity="${on ? 1 : 0.82}"/>`
-      + (on ? `<rect x="${a.toFixed(1)}" y="${by}" width="${w.toFixed(1)}" height="${BAND_H}"`
+      + (on ? `<rect x="${a.toFixed(1)}" y="${BAND_Y}" width="${w.toFixed(1)}" height="${BAND_H}"`
               + ` fill="none" stroke="#fff" stroke-width="1.5"/>` : '')
-      + (w > 30 ? `<text class="dBandTx" x="${(a + w / 2).toFixed(1)}" y="${by + 13}">${esc(bandShort(b.label, w))}</text>` : '')
+      + (opt.labels && w > 30
+          ? `<text class="dBandTx" x="${(a + w / 2).toFixed(1)}" y="${BAND_Y + BAND_H - 6}">${esc(bandShort(b.label, w))}</text>` : '')
       + `<title>${esc(b.label)} · ${esc(prettyHz(b.lo))} – ${esc(prettyHz(b.hi))}`
       + `\n${on ? 'selected — click to remove' : 'click to search for receivers covering it'}</title></g>`);
   }
@@ -1140,30 +1148,31 @@ function drawRow(segsIn, y0, W, view) {
   for (const a of axis) {
     if (a.gap) {
       p.push(`<rect class="dGap" x="${a.x0.toFixed(1)}" y="${BAND_Y}" width="${(a.x1 - a.x0).toFixed(1)}" height="${BOT - BAND_Y}"/>`);
-      p.push(`<text class="dGapTx" x="${((a.x0 + a.x1) / 2).toFixed(1)}" y="${TICK_Y - 10}" transform="rotate(-90 ${((a.x0 + a.x1) / 2).toFixed(1)} ${TICK_Y - 10})">no coverage</text>`);
       continue;
     }
     const span = a.hi - a.lo, px = a.x1 - a.x0;
     p.push(`<line class="dBase" x1="${a.x0.toFixed(1)}" y1="${TICK_Y}" x2="${a.x1.toFixed(1)}" y2="${TICK_Y}"/>`);
-    const step = tickStep(span, px);
+    const step = tickStep(span, opt.kind === 'over' ? px * 0.7 : px);
     for (let f = Math.ceil(a.lo / step) * step; f <= a.hi + 1; f += step) {
       const x = a.x0 + px * ((f - a.lo) / span);
       // ★★★ THE NUMERAL CARRIES THE VERDICT — green where something free covers it, red where every
       //     radio covering it is in use, blue for a temporary share, DIM where nobody has said.
       const st = stateAtHz(segsIn, f);
       p.push(`<line class="dTickMaj ${st}" x1="${x.toFixed(1)}" y1="${TICK_Y}" x2="${x.toFixed(1)}" y2="${TICK_Y + TICK_H}"/>`);
-      p.push(`<text class="dNum ${st}" x="${x.toFixed(1)}" y="${NUM_Y}">${esc(prettyHz(f))}</text>`);
-      for (let k = 1; k < 5; k++) {
-        const mf = f + (step * k) / 5;
-        if (mf > a.hi) break;
-        const mx = a.x0 + px * ((mf - a.lo) / span);
-        p.push(`<line class="dTick ${stateAtHz(segsIn, mf)}" x1="${mx.toFixed(1)}" y1="${TICK_Y}" x2="${mx.toFixed(1)}" y2="${(TICK_Y + TICK_H * 0.55).toFixed(1)}"/>`);
+      p.push(`<text class="dNum ${st} ${opt.kind}" x="${x.toFixed(1)}" y="${NUM_Y}">${esc(prettyHz(f))}</text>`);
+      if (opt.kind !== 'over') {
+        for (let k = 1; k < 5; k++) {
+          const mf = f + (step * k) / 5;
+          if (mf > a.hi) break;
+          const mx = a.x0 + px * ((mf - a.lo) / span);
+          p.push(`<line class="dTick ${stateAtHz(segsIn, mf)}" x1="${mx.toFixed(1)}" y1="${TICK_Y}" x2="${mx.toFixed(1)}" y2="${(TICK_Y + TICK_H * 0.55).toFixed(1)}"/>`);
+        }
       }
     }
   }
 
-  // ★ The needles are drawn on whichever LINE holds them — a needle at 92 MHz belongs on the row
-  //   that shows 92 MHz, and nowhere else.
+  // ★ The needles show on BOTH dials — on the detail one to be placed and read, on the overview to
+  //   say where the other one is while you travel to it. That pair IS the search.
   if (needleA > 0 && needleB > 0) {
     const xa = hzToXIn(axis, Math.max(Math.min(needleA, needleB), covered[0].lo));
     const xb = hzToXIn(axis, Math.min(Math.max(needleA, needleB), covered[covered.length - 1].hi));
@@ -1221,16 +1230,30 @@ let needleA = 0, needleB = 0;
  *   the needle. ★★ IT NEEDS THE Y NOW: with the dial wrapped onto two lines the same x means two
  *   different frequencies, and reading the wrong one would put the needle a gigahertz away.
  */
+function rowAt(y) {
+  return DIAL_ROWS.find((r) => y >= r.y0 && y <= r.y1) || DIAL_ROWS[0] || null;
+}
+
 function xToHz(x, y) {
-  const rows = (typeof y === 'number')
-    ? DIAL_ROWS.filter((r) => y >= r.y0 && y <= r.y1) : DIAL_ROWS;
-  for (const r of (rows.length ? rows : DIAL_ROWS)) {
-    for (const a of r.axis) {
-      if (a.gap || x < a.x0 || x > a.x1) continue;
+  const r = (typeof y === 'number') ? rowAt(y) : DIAL_ROWS[0];
+  if (!r) return null;
+  for (const a of r.axis) {
+    if (a.gap) continue;
+    if (x >= a.x0 && x <= a.x1)
       return a.lo + (a.hi - a.lo) * ((x - a.x0) / Math.max(1, a.x1 - a.x0));
-    }
   }
-  return null;
+  // ★ Past the end of the drawn axis — clamp rather than refuse, so a drag that overshoots the
+  //   glass still tracks instead of freezing.
+  return x < r.axis[0]?.x0 ? r.lo : r.hi;
+}
+
+/** ★ Pointer position in the SVG's own units, which is what every handler below works in. */
+function svgPoint(glass, e) {
+  const svg = glass.querySelector('svg');
+  if (!svg) return null;
+  const rect = svg.getBoundingClientRect();
+  return { x: ((e.clientX - rect.left) / rect.width) * svg.viewBox.baseVal.width,
+           y: ((e.clientY - rect.top) / rect.height) * svg.viewBox.baseVal.height };
 }
 
 function setView(lo, hi) {
@@ -1241,7 +1264,7 @@ function setView(lo, hi) {
   let a = lo, b = lo + span;
   if (b > eHi) { b = eHi; a = eHi - span; }
   if (a < eLo) { a = eLo; b = Math.min(eHi, eLo + span); }
-  dialView = (b - a >= (eHi - eLo) * 0.999) ? null : [a, b];
+  dialView = [a, b];
   renderDial();
 }
 
@@ -1339,33 +1362,68 @@ function wireDial() {
   document.getElementById('zAll').addEventListener('click', () => {
     // ★ One key back to "the whole network" — the zoom, the needles and the band picks together.
     //   Three separate ways to undo a search is three things to remember.
-    dialView = null; needleA = 0; needleB = 0; bandsOn.clear();
+    dialView = DIAL_EXTENT.slice(); needleA = 0; needleB = 0; bandsOn.clear();
     renderDial(); applyFilters();
   });
 
   const glass = document.querySelector('.dialGlass');
-  // ★ Zoom about the POINTER, the way every map does — zooming about the centre makes you chase
-  //   the thing you are aiming at.
+
+  // ★ Zoom about the POINTER on the detail dial; on the overview, zoom about where you point too —
+  //   both mean "make this bit bigger".
   glass.addEventListener('wheel', (e) => {
-    const svg = glass.querySelector('svg');
-    if (!svg) return;
+    const pt = svgPoint(glass, e);
+    if (!pt) return;
     e.preventDefault();
-    const rect = svg.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * svg.viewBox.baseVal.width;
-    const y = ((e.clientY - rect.top) / rect.height) * svg.viewBox.baseVal.height;
-    zoomBy(e.deltaY > 0 ? 1.25 : 0.8, xToHz(x, y));
+    zoomBy(e.deltaY > 0 ? 1.25 : 0.8, xToHz(pt.x, pt.y));
   }, { passive: false });
 
-  /* ★★★ ONE SURFACE, TWO WAYS TO ASK. Click a BAND BLOCK to search by band — several of them
-   *     narrows to receivers that can do ALL of what you picked, which is the question a listener
-   *     actually has ("if I want say the 40m band and the 20m band ... only the RTL on the Pi
-   *     would show as its the only one that can do both bands", Stuart, 2026-08-23). Click the
-   *     GLASS to place the VFO needle; click again for the upper needle and the pair is a manual
-   *     range. A third click starts over.
-   *  ★ AND IT IS PER RADIO, not per server: a machine holding an HF receiver and a VHF one has no
-   *    single radio that can do both, so it is not an answer to "40 m and 2 m".
+  /* ══ THE POINTER, AND IT MEANS DIFFERENT THINGS ON THE TWO DIALS ═════════════════════════════
+   * ★★★ THE BOTTOM DIAL IS NAVIGATION: press it and the window above jumps there, drag it and the
+   *     window follows — the viewport box is the thing you are moving. THE TOP DIAL IS THE QUERY:
+   *     click the glass to place a needle, click a band block to add that band.
+   * ★★ Which is exactly what makes a 2 m + 70 cm search possible: place the first needle on the
+   *    detail dial, drag the viewport 300 MHz along the overview, place the second. Neither could
+   *    be done on one dial at a zoom where either needle is hittable.
    */
+  let drag = null;
+  glass.addEventListener('pointerdown', (e) => {
+    const pt = svgPoint(glass, e); if (!pt) return;
+    const row = rowAt(pt.y); if (!row) return;
+    if (row.kind !== 'over') return;                 // the detail dial acts on CLICK, not on press
+    const hz = xToHz(pt.x, pt.y); if (hz === null) return;
+    const span = dialView[1] - dialView[0];
+    const inside = hz >= dialView[0] && hz <= dialView[1];
+    // ★ Press outside the viewport: go there, centred. Press inside: pick it up where you took
+    //   hold of it, so the box does not jump under the cursor.
+    const off = inside ? hz - dialView[0] : span / 2;
+    drag = { off, span };
+    setView(hz - off, hz - off + span);
+    glass.classList.add('drag');
+    glass.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  glass.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const pt = svgPoint(glass, e); if (!pt) return;
+    // ★ Read against the OVERVIEW whatever the pointer has wandered over — a drag that strays onto
+    //   the detail dial must not start reading its scale.
+    const over = DIAL_ROWS.find((r) => r.kind === 'over');
+    const hz = xToHz(pt.x, over ? (over.y0 + 2) : pt.y);
+    if (hz === null) return;
+    setView(hz - drag.off, hz - drag.off + drag.span);
+  });
+  const endDrag = (e) => {
+    if (!drag) return;
+    drag = null; glass.classList.remove('drag');
+    try { glass.releasePointerCapture(e.pointerId); } catch { /* already gone */ }
+    applyFilters();
+  };
+  glass.addEventListener('pointerup', endDrag);
+  glass.addEventListener('pointercancel', endDrag);
+
   glass.addEventListener('click', (e) => {
+    const pt = svgPoint(glass, e); if (!pt) return;
+    const row = rowAt(pt.y); if (!row) return;
     const band = e.target.closest ? e.target.closest('.dBand') : null;
     if (band) {
       const label = band.dataset.band;
@@ -1373,51 +1431,15 @@ function wireDial() {
       renderDial(); applyFilters();
       return;
     }
-    const svg = glass.querySelector('svg'); if (!svg) return;
-    const rect = svg.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * svg.viewBox.baseVal.width;
-    const y = ((e.clientY - rect.top) / rect.height) * svg.viewBox.baseVal.height;
-    const hz = xToHz(x, y);
+    if (row.kind === 'over') return;                 // handled by the drag above
+    const hz = xToHz(pt.x, pt.y);
     if (hz === null) return;
+    // ★ One needle is "can anybody hear this"; a second makes it a range; a third starts over.
     if (needleA > 0 && needleB > 0) { needleA = hz; needleB = 0; }
     else if (needleA > 0) { needleB = hz; }
     else { needleA = hz; }
     renderDial(); applyFilters();
   });
-
-  // ★ Drag to pan, in FREQUENCY not pixels, so it tracks the cursor across a piecewise axis.
-  let dragging = null;
-  glass.addEventListener('pointerdown', (e) => {
-    if (!dialView) return;                       // nothing to pan when the whole network is shown
-    const svg = glass.querySelector('svg'); if (!svg) return;
-    const rect = svg.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * svg.viewBox.baseVal.width;
-    const y = ((e.clientY - rect.top) / rect.height) * svg.viewBox.baseVal.height;
-    const hz = xToHz(x, y);
-    if (hz === null) return;
-    dragging = { hz, y, view: dialView.slice() };
-    glass.classList.add('drag');
-    glass.setPointerCapture(e.pointerId);
-  });
-  glass.addEventListener('pointermove', (e) => {
-    if (!dragging) return;
-    const svg = glass.querySelector('svg'); if (!svg) return;
-    const rect = svg.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * svg.viewBox.baseVal.width;
-    // ★ Pan along the line the drag STARTED on, so crossing into the other row mid-drag does not
-    //   fling the view a gigahertz sideways.
-    const hz = xToHz(x, dragging.y);
-    if (hz === null) return;
-    const d = dragging.hz - hz;
-    setView(dragging.view[0] + d, dragging.view[1] + d);
-  });
-  const endDrag = (e) => {
-    if (!dragging) return;
-    dragging = null; glass.classList.remove('drag');
-    try { glass.releasePointerCapture(e.pointerId); } catch { /* already gone */ }
-  };
-  glass.addEventListener('pointerup', endDrag);
-  glass.addEventListener('pointercancel', endDrag);
 
   document.getElementById('cty').addEventListener('change', (e) => {
     countryOn = e.target.value;
