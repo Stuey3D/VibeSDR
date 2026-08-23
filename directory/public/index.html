@@ -357,14 +357,10 @@
     <div id="dial"></div>
     <button type="button" class="dialEdge right" id="edgeR" hidden aria-label="Jump up the band">&#10095;</button>
   </div>
-  <div class="legend">
-    <span><i class="sh sh-free"></i> free now</span>
-    <span><i class="sh sh-temp"></i> only a temporary share</span>
-    <span><i class="sh sh-busy"></i> every radio here is in use</span>
-    <span><i class="sh sh-unknown"></i> covered · occupancy not reported</span>
-    <span id="dialGapNote"></span>
-  </div>
-  <div class="fNote" id="filterSummary"></div>
+  <!-- ★ NO SECOND LEGEND. The one above says FREE SLOT / NO SLOTS / TEMPORARY SHARE already, and
+          it is just as true of the dial's numerals as of the pins (Stuart, 2026-08-23). Two
+          legends saying the same thing in different words is two things to keep in step. -->
+  <div class="fNote"><span id="dialGapNote"></span> <span id="filterSummary"></span></div>
 </section>
 
 <!-- ★★★ THE OLD FILTER BLOCK IS GONE — THE DIAL IS ITS REPLACEMENT (Stuart, 2026-08-23: "that
@@ -991,8 +987,8 @@ function dialAxis(runs, width, totalHz) {
   return out;
 }
 
-/** ★ Where one frequency lands on that axis, or null when nobody covers it. */
-function hzToX(axis, hz) {
+/** ★ Where one frequency lands on ONE line's axis, or null when that line does not show it. */
+function hzToXIn(axis, hz) {
   for (const a of axis) {
     if (a.gap) continue;
     if (hz >= a.lo && hz <= a.hi) return a.x0 + (a.x1 - a.x0) * ((hz - a.lo) / (a.hi - a.lo));
@@ -1009,6 +1005,39 @@ function tickStep(spanHz, px) {
   return 10 * mag;
 }
 
+/**
+ * ★★★ THE DIAL WRAPS, LIKE A REAL SET'S SCALE. One line across 500 kHz – 1.766 GHz gives medium
+ *     wave a third of a pixel; the vintage answer was never a longer dial but a SECOND LINE, and
+ *     that is what Stuart asked for: "the full dial and bandplan wrapping onto 2 rows so
+ *     500k - 850M and 850m - 1.7G on the second" (2026-08-23).
+ *  ★★ The split is by COVERED spectrum, not by frequency — each line carries the same amount of
+ *     listenable Hz, so neither ends up mostly empty. With gaps in the network that is not the
+ *     same as halving the range, and it is the half that matters.
+ *  ★ One line when there is little enough to say: wrapping 20 kHz of zoom onto two rows would be
+ *    ceremony, not clarity.
+ */
+const DIAL_ROW_H = 92, DIAL_ROW_GAP = 10;
+
+function splitForRows(segs, rows) {
+  const total = segs.filter((g) => g.state !== 'gap').reduce((n, g) => n + (g.hi - g.lo), 0);
+  if (rows < 2 || total <= 0) return [segs];
+  const per = total / rows;
+  const out = [[]]; let acc = 0;
+  for (const g of segs) {
+    let seg = g;
+    while (out.length < rows && g.state !== 'gap' && acc + (seg.hi - seg.lo) > per) {
+      // ★ A segment that straddles the break is CUT, so the line ends on a round-ish frequency
+      //   rather than wherever a radio's range happened to stop.
+      const take = per - acc;
+      if (take > 0) out[out.length - 1].push({ ...seg, hi: seg.lo + take });
+      seg = { ...seg, lo: seg.lo + take };
+      out.push([]); acc = 0;
+    }
+    if (seg.hi > seg.lo) { out[out.length - 1].push(seg); if (seg.state !== 'gap') acc += seg.hi - seg.lo; }
+  }
+  return out.filter((r) => r.length);
+}
+
 function renderDial() {
   const wrap = document.getElementById('dialWrap');
   const items = dialItems();
@@ -1022,146 +1051,133 @@ function renderDial() {
   if (!fullCov.length) { wrap.hidden = true; return; }
   DIAL_EXTENT = [fullCov[0].lo, fullCov[fullCov.length - 1].hi];
 
-  // ★★★ THE ZOOM WINDOW BELONGS TO THE VIEWER AND SURVIVES THE REFRESH. The page reloads every
-  //     minute, so a naive redraw would rescale the axis under the hands of somebody zoomed into
-  //     40 m the moment a server joins or leaves. Clamped only when it ends up entirely outside
-  //     what anybody covers — and then it says so rather than silently jumping.
+  // ★★★ THE ZOOM WINDOW BELONGS TO THE VIEWER AND SURVIVES THE REFRESH — the page reloads every
+  //     minute, and rescaling the axis under the hands of somebody zoomed into 40 m because a
+  //     server joined is its own bug. Clamped only when it ends up entirely outside coverage.
   const view = dialView ? [dialView[0], Math.min(dialView[1], DIAL_EXTENT[1])] : DIAL_EXTENT.slice();
   const segs = all.map((g) => ({ ...g, lo: Math.max(g.lo, view[0]), hi: Math.min(g.hi, view[1]) }))
                   .filter((g) => g.hi > g.lo);
   const covered = segs.filter((g) => g.state !== 'gap');
+  const host = document.getElementById('dial');
   if (!covered.length) {
-    document.getElementById('dial').innerHTML =
-      `<div class="empty" style="padding:22px">Nothing in the network covers `
+    host.innerHTML = `<div class="empty" style="padding:22px">Nothing in the network covers `
       + `${esc(prettyHz(view[0]))} – ${esc(prettyHz(view[1]))}.</div>`;
     document.getElementById('dialExtent').textContent = `${prettyHz(view[0])} – ${prettyHz(view[1])}`;
     document.getElementById('edgeL').hidden = !(view[0] > DIAL_EXTENT[0] + 1);
     document.getElementById('edgeR').hidden = !(view[1] < DIAL_EXTENT[1] - 1);
     return;
   }
+
+  const W = Math.round(Math.max(320, host.clientWidth || wrap.clientWidth - 40));
+  // ★ Two lines only when there is enough spectrum for the second one to earn its height.
+  const rowCount = (covered[covered.length - 1].hi / Math.max(1, covered[0].lo) > 50) ? 2 : 1;
+  const chunks = splitForRows(segs, rowCount);
+
+  const parts = [];
+  DIAL_ROWS = [];
+  chunks.forEach((chunk, ri) => {
+    const y0 = ri * (DIAL_ROW_H + DIAL_ROW_GAP);
+    parts.push(drawRow(chunk, y0, W, view));
+  });
+
+  const H = chunks.length * DIAL_ROW_H + (chunks.length - 1) * DIAL_ROW_GAP;
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"
+                         role="img" aria-label="What the network can hear">${parts.join('')}</svg>`;
+
+  document.getElementById('dialExtent').textContent =
+    `${prettyHz(covered[0].lo)} – ${prettyHz(covered[covered.length - 1].hi)}${dialView ? ' · zoomed' : ''}`;
+  document.getElementById('zAll').disabled = !dialView && !needleA && !bandsOn.size;
+  // ★ Offered only where there is spectrum beyond the edge.
+  document.getElementById('edgeL').hidden = !(view[0] > DIAL_EXTENT[0] + 1);
+  document.getElementById('edgeR').hidden = !(view[1] < DIAL_EXTENT[1] - 1);
+}
+
+/** One line of the dial: its own band plan strip over its own ticker. */
+function drawRow(segsIn, y0, W, view) {
+  const covered = segsIn.filter((g) => g.state !== 'gap');
+  if (!covered.length) return '';
   const totalHz = covered.reduce((n, g) => n + (g.hi - g.lo), 0) || 1;
 
   const runs = [];
-  for (const g of segs) {
+  for (const g of segsIn) {
     if (g.state === 'gap') { runs.push({ gap: true, lo: g.lo, hi: g.hi }); continue; }
     const last = runs[runs.length - 1];
     if (last && !last.gap) last.segs.push(g);
     else runs.push({ gap: false, segs: [g] });
   }
-
-  const host = document.getElementById('dial');
-  const W = Math.round(Math.max(320, host.clientWidth || wrap.clientWidth - 40));
   const axis = dialAxis(runs, W, totalHz);
-  DIAL_AXIS = axis;
+  DIAL_ROWS.push({ axis, y0, y1: y0 + DIAL_ROW_H, lo: covered[0].lo, hi: covered[covered.length - 1].hi });
 
-  /* ══ THE LAYOUT IS THE APP'S OWN ═════════════════════════════════════════════════════════
-   * ★★★ SOLID BAND BLOCKS DIRECTLY OVER THE FREQUENCY TICKER, coloured by band TYPE — the
-   *     waterfall's band strip, which is where a VibeSDR user has already learned to read this
-   *     (Stuart, 2026-08-23, with the screenshot: "the band plan needs to have solid backgrounds
-   *     and coloured by band type like the app does ... over the frequency ticker").
-   * ★★★ AND THE AVAILABILITY IS IN THE NUMERALS, not a bar of its own: "the solid green bar is
-   *     not needed as we will colour the numbers instead". The dial then carries one row of
-   *     meaning per row of pixels — what band this is, and whether anybody free can hear it.
-   */
-  /* ★★ TWO LINES FOR THE BAND PLAN, so it is not squeezed into a strip at the top of the glass
-   *    (Stuart, 2026-08-23). Blocks are staggered onto the second row when they would collide on
-   *    the first, which is also what buys the LABELS room: a band whose name would not fit beside
-   *    its neighbour usually fits perfectly well below it.
-   *  ★ The ticker's own order beneath, from his reference: the rule, ticks hanging BELOW it, then
-   *    the numerals under those. */
-  const BAND_Y = 5, BAND_H = 19, BAND_GAP = 3, TICK_Y = 56, TICK_H = 12, NUM_Y = 80, H = 90;
-  const parts = [];
-
-  // ★ Type → colour, the app's own values (BAND_HEX, src/constants/bandPlan.ts). The generator
-  //   assigns the type from the label so there is one rule, not one per reader.
+  /* ★★ The app's own order: solid band blocks, then the ticker beneath — rule, ticks hanging
+   *    below it, numerals under those. Two staggered band rows, so a name that will not fit
+   *    beside its neighbour fits below it. */
+  const BAND_Y = y0 + 5, BAND_H = 18, BAND_GAP = 3;
+  const TICK_Y = y0 + 54, TICK_H = 12, NUM_Y = y0 + 78, BOT = y0 + DIAL_ROW_H - 4;
   const TYPE_HEX = { ham: '#CF0000', broadcast: '#0900FF', utility: '#07BD00', cb: '#FF7700' };
-
-  // ★ Greedy two-row packing: the first row that has cleared this block's left edge takes it, so a
-  //   run of narrow bands alternates and each gets its name shown.
+  const p = [];
   const rowEnd = [-1e9, -1e9];
+
   for (const b of planBandList()) {
-    const lo = Math.max(b.lo, view[0]), hi = Math.min(b.hi, view[1]);
+    const lo = Math.max(b.lo, covered[0].lo), hi = Math.min(b.hi, covered[covered.length - 1].hi);
     if (!(hi > lo)) continue;
-    const a = hzToX(axis, lo), c = hzToX(axis, hi);
+    const a = hzToXIn(axis, lo), c = hzToXIn(axis, hi);
     if (a === null || c === null || c - a < 1.5) continue;
     const w = Math.max(1.5, c - a);
     const on = bandsOn.has(b.label);
-    const row = rowEnd[0] <= a - 1 ? 0 : rowEnd[1] <= a - 1 ? 1 : (rowEnd[0] <= rowEnd[1] ? 0 : 1);
-    rowEnd[row] = a + w;
-    const by = BAND_Y + row * (BAND_H + BAND_GAP);
-    parts.push(`<g class="dBand${on ? ' on' : ''}" data-band="${esc(b.label)}">`
+    const r = rowEnd[0] <= a - 1 ? 0 : rowEnd[1] <= a - 1 ? 1 : (rowEnd[0] <= rowEnd[1] ? 0 : 1);
+    rowEnd[r] = a + w;
+    const by = BAND_Y + r * (BAND_H + BAND_GAP);
+    p.push(`<g class="dBand${on ? ' on' : ''}" data-band="${esc(b.label)}">`
       + `<rect x="${a.toFixed(1)}" y="${by}" width="${w.toFixed(1)}" height="${BAND_H}"`
       + ` fill="${TYPE_HEX[b.type] || TYPE_HEX.utility}" fill-opacity="${on ? 1 : 0.82}"/>`
       + (on ? `<rect x="${a.toFixed(1)}" y="${by}" width="${w.toFixed(1)}" height="${BAND_H}"`
               + ` fill="none" stroke="#fff" stroke-width="1.5"/>` : '')
-      + (w > 30 ? `<text class="dBandTx" x="${(a + w / 2).toFixed(1)}" y="${by + 13.5}"`
-                  + ` clip-path="inset(0)">${esc(bandShort(b.label, w))}</text>` : '')
+      + (w > 30 ? `<text class="dBandTx" x="${(a + w / 2).toFixed(1)}" y="${by + 13}">${esc(bandShort(b.label, w))}</text>` : '')
       + `<title>${esc(b.label)} · ${esc(prettyHz(b.lo))} – ${esc(prettyHz(b.hi))}`
       + `\n${on ? 'selected — click to remove' : 'click to search for receivers covering it'}</title></g>`);
   }
 
   for (const a of axis) {
     if (a.gap) {
-      parts.push(`<rect class="dGap" x="${a.x0.toFixed(1)}" y="${BAND_Y}" width="${(a.x1 - a.x0).toFixed(1)}" height="${H - BAND_Y - 2}"/>`);
-      parts.push(`<text class="dGapTx" x="${((a.x0 + a.x1) / 2).toFixed(1)}" y="${TICK_Y - 12}" transform="rotate(-90 ${((a.x0 + a.x1) / 2).toFixed(1)} ${TICK_Y - 12})">no coverage</text>`);
+      p.push(`<rect class="dGap" x="${a.x0.toFixed(1)}" y="${BAND_Y}" width="${(a.x1 - a.x0).toFixed(1)}" height="${BOT - BAND_Y}"/>`);
+      p.push(`<text class="dGapTx" x="${((a.x0 + a.x1) / 2).toFixed(1)}" y="${TICK_Y - 10}" transform="rotate(-90 ${((a.x0 + a.x1) / 2).toFixed(1)} ${TICK_Y - 10})">no coverage</text>`);
       continue;
     }
     const span = a.hi - a.lo, px = a.x1 - a.x0;
-    parts.push(`<line class="dBase" x1="${a.x0.toFixed(1)}" y1="${TICK_Y}" x2="${a.x1.toFixed(1)}" y2="${TICK_Y}"/>`);
+    p.push(`<line class="dBase" x1="${a.x0.toFixed(1)}" y1="${TICK_Y}" x2="${a.x1.toFixed(1)}" y2="${TICK_Y}"/>`);
     const step = tickStep(span, px);
-    const first = Math.ceil(a.lo / step) * step;
-    for (let f = first; f <= a.hi + 1; f += step) {
+    for (let f = Math.ceil(a.lo / step) * step; f <= a.hi + 1; f += step) {
       const x = a.x0 + px * ((f - a.lo) / span);
-      // ★★★ THE NUMERAL CARRIES THE VERDICT. Green where something free covers it, red where every
-      //     radio covering it is in use, blue where only a temporary share does, dim where the
-      //     server has not said. A colour is never invented for a figure nobody reported.
-      const st = stateAtHz(segs, f);
-      parts.push(`<line class="dTickMaj ${st}" x1="${x.toFixed(1)}" y1="${TICK_Y}" x2="${x.toFixed(1)}" y2="${TICK_Y + TICK_H}"/>`);
-      parts.push(`<text class="dNum ${st}" x="${x.toFixed(1)}" y="${NUM_Y}">${esc(prettyHz(f))}</text>`);
+      // ★★★ THE NUMERAL CARRIES THE VERDICT — green where something free covers it, red where every
+      //     radio covering it is in use, blue for a temporary share, DIM where nobody has said.
+      const st = stateAtHz(segsIn, f);
+      p.push(`<line class="dTickMaj ${st}" x1="${x.toFixed(1)}" y1="${TICK_Y}" x2="${x.toFixed(1)}" y2="${TICK_Y + TICK_H}"/>`);
+      p.push(`<text class="dNum ${st}" x="${x.toFixed(1)}" y="${NUM_Y}">${esc(prettyHz(f))}</text>`);
       for (let k = 1; k < 5; k++) {
         const mf = f + (step * k) / 5;
         if (mf > a.hi) break;
         const mx = a.x0 + px * ((mf - a.lo) / span);
-        parts.push(`<line class="dTick ${stateAtHz(segs, mf)}" x1="${mx.toFixed(1)}" y1="${TICK_Y}" x2="${mx.toFixed(1)}" y2="${TICK_Y + TICK_H * 0.55}"/>`);
+        p.push(`<line class="dTick ${stateAtHz(segsIn, mf)}" x1="${mx.toFixed(1)}" y1="${TICK_Y}" x2="${mx.toFixed(1)}" y2="${(TICK_Y + TICK_H * 0.55).toFixed(1)}"/>`);
       }
     }
   }
 
-  // ★★★ THE VFO NEEDLE, AND IT IS THE CONTROL. Click the dial to place it; the zoom buttons work
-  //     about it, so zooming goes where you are pointing rather than to the middle of whatever
-  //     happens to be listed. A second click places the UPPER needle and the pair becomes a manual
-  //     range search (Stuart, 2026-08-23).
-  for (const [k, hz] of [['a', needleA], ['b', needleB]]) {
-    if (!(hz > 0)) continue;
-    const nx = hzToX(axis, hz);
-    if (nx === null) continue;
-    parts.push(`<line class="dNeedle" x1="${nx.toFixed(1)}" y1="${BAND_Y}" x2="${nx.toFixed(1)}" y2="${H - 1}"/>`);
-    parts.push(`<polygon class="dNeedleHd" points="${(nx - 4).toFixed(1)},${BAND_Y} ${(nx + 4).toFixed(1)},${BAND_Y} ${nx.toFixed(1)},${BAND_Y + 7}"/>`);
-  }
-  // ★ The span between two needles is the search, so it is shaded — a range you cannot see is a
-  //   filter you will forget you set.
+  // ★ The needles are drawn on whichever LINE holds them — a needle at 92 MHz belongs on the row
+  //   that shows 92 MHz, and nowhere else.
   if (needleA > 0 && needleB > 0) {
-    const xa = hzToX(axis, Math.min(needleA, needleB)), xb = hzToX(axis, Math.max(needleA, needleB));
-    if (xa !== null && xb !== null)
-      parts.unshift(`<rect class="dSpan" x="${xa.toFixed(1)}" y="${BAND_Y}" width="${Math.max(1, xb - xa).toFixed(1)}" height="${H - BAND_Y - 1}"/>`);
+    const xa = hzToXIn(axis, Math.max(Math.min(needleA, needleB), covered[0].lo));
+    const xb = hzToXIn(axis, Math.min(Math.max(needleA, needleB), covered[covered.length - 1].hi));
+    if (xa !== null && xb !== null && xb > xa)
+      p.unshift(`<rect class="dSpan" x="${xa.toFixed(1)}" y="${BAND_Y}" width="${(xb - xa).toFixed(1)}" height="${BOT - BAND_Y}"/>`);
   }
-
-  // ★★★ NO preserveAspectRatio="none", AND THE VIEWBOX IS THE PIXELS. Stretching the viewBox to
-  //     the container smeared every numeral sideways — unreadable, and the reason they looked
-  //     nothing like the app's crisp ticker (Stuart, 2026-08-23: "the numbers are really difficult
-  //     to read"). The SVG is drawn at the width it is shown at, one unit per pixel, so the type
-  //     is type rather than a scaled picture of type.
-  host.innerHTML = `<svg viewBox="0 0 ${W.toFixed(0)} ${H}" width="${W.toFixed(0)}" height="${H}"
-                         role="img" aria-label="What the network can hear">${parts.join('')}</svg>`;
-
-  const lo = covered[0] ? covered[0].lo : 0;
-  const hi = covered.length ? covered[covered.length - 1].hi : 0;
-  document.getElementById('dialExtent').textContent = lo
-    ? `${prettyHz(lo)} – ${prettyHz(hi)}${dialView ? ' · zoomed' : ''}` : '';
-  document.getElementById('zAll').disabled = !dialView && !needleA && !bandsOn.size;
-  // ★ Offered only where there is spectrum beyond the edge.
-  document.getElementById('edgeL').hidden = !(view[0] > DIAL_EXTENT[0] + 1);
-  document.getElementById('edgeR').hidden = !(view[1] < DIAL_EXTENT[1] - 1);
+  for (const hz of [needleA, needleB]) {
+    if (!(hz > 0)) continue;
+    const nx = hzToXIn(axis, hz);
+    if (nx === null) continue;
+    p.push(`<line class="dNeedle" x1="${nx.toFixed(1)}" y1="${BAND_Y}" x2="${nx.toFixed(1)}" y2="${BOT}"/>`);
+    p.push(`<polygon class="dNeedleHd" points="${(nx - 4).toFixed(1)},${BAND_Y} ${(nx + 4).toFixed(1)},${BAND_Y} ${nx.toFixed(1)},${BAND_Y + 7}"/>`);
+  }
+  return p.join('');
 }
 
 /** ★ Every band of the active plan, whole objects — the ruler needs the type as well as the span. */
@@ -1194,16 +1210,25 @@ function stateAtHz(segs, hz) {
  *     equal frequency (Stuart, 2026-08-22: "but that is where the bar can be zoomed in and out").
  */
 let DIAL_EXTENT = [0, 0];
-let DIAL_AXIS = [];
+/** ★ One entry per LINE of the dial: its axis, the pixels it owns, and the span it shows. */
+let DIAL_ROWS = [];
 /** ★★★ THE NEEDLES ARE THE CONTROL AND THE SEARCH BOTH. One is the VFO the zoom works about; two
  *      are a manual range, and the list below narrows to receivers that can tune the whole of it. */
 let needleA = 0, needleB = 0;
 
-/** ★ The inverse of the piecewise axis: a pixel back to a frequency, for the wheel and the drag. */
-function xToHz(x) {
-  for (const a of DIAL_AXIS) {
-    if (a.gap || x < a.x0 || x > a.x1) continue;
-    return a.lo + (a.hi - a.lo) * ((x - a.x0) / Math.max(1, a.x1 - a.x0));
+/**
+ * ★ The inverse of the piecewise axis: a pixel back to a frequency, for the wheel, the drag and
+ *   the needle. ★★ IT NEEDS THE Y NOW: with the dial wrapped onto two lines the same x means two
+ *   different frequencies, and reading the wrong one would put the needle a gigahertz away.
+ */
+function xToHz(x, y) {
+  const rows = (typeof y === 'number')
+    ? DIAL_ROWS.filter((r) => y >= r.y0 && y <= r.y1) : DIAL_ROWS;
+  for (const r of (rows.length ? rows : DIAL_ROWS)) {
+    for (const a of r.axis) {
+      if (a.gap || x < a.x0 || x > a.x1) continue;
+      return a.lo + (a.hi - a.lo) * ((x - a.x0) / Math.max(1, a.x1 - a.x0));
+    }
   }
   return null;
 }
@@ -1327,7 +1352,8 @@ function wireDial() {
     e.preventDefault();
     const rect = svg.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * svg.viewBox.baseVal.width;
-    zoomBy(e.deltaY > 0 ? 1.25 : 0.8, xToHz(x));
+    const y = ((e.clientY - rect.top) / rect.height) * svg.viewBox.baseVal.height;
+    zoomBy(e.deltaY > 0 ? 1.25 : 0.8, xToHz(x, y));
   }, { passive: false });
 
   /* ★★★ ONE SURFACE, TWO WAYS TO ASK. Click a BAND BLOCK to search by band — several of them
@@ -1350,7 +1376,8 @@ function wireDial() {
     const svg = glass.querySelector('svg'); if (!svg) return;
     const rect = svg.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * svg.viewBox.baseVal.width;
-    const hz = xToHz(x);
+    const y = ((e.clientY - rect.top) / rect.height) * svg.viewBox.baseVal.height;
+    const hz = xToHz(x, y);
     if (hz === null) return;
     if (needleA > 0 && needleB > 0) { needleA = hz; needleB = 0; }
     else if (needleA > 0) { needleB = hz; }
@@ -1365,9 +1392,10 @@ function wireDial() {
     const svg = glass.querySelector('svg'); if (!svg) return;
     const rect = svg.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * svg.viewBox.baseVal.width;
-    const hz = xToHz(x);
+    const y = ((e.clientY - rect.top) / rect.height) * svg.viewBox.baseVal.height;
+    const hz = xToHz(x, y);
     if (hz === null) return;
-    dragging = { hz, view: dialView.slice() };
+    dragging = { hz, y, view: dialView.slice() };
     glass.classList.add('drag');
     glass.setPointerCapture(e.pointerId);
   });
@@ -1376,7 +1404,9 @@ function wireDial() {
     const svg = glass.querySelector('svg'); if (!svg) return;
     const rect = svg.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * svg.viewBox.baseVal.width;
-    const hz = xToHz(x);
+    // ★ Pan along the line the drag STARTED on, so crossing into the other row mid-drag does not
+    //   fling the view a gigahertz sideways.
+    const hz = xToHz(x, dragging.y);
     if (hz === null) return;
     const d = dragging.hz - hz;
     setView(dragging.view[0] + d, dragging.view[1] + d);
