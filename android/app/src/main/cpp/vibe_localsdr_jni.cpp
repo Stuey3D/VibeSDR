@@ -33,15 +33,31 @@
 //     game RadioDNS exists to replace (Stuart, 2026-08-22).
 // ★★ Only the TRANSPORT crosses to Kotlin. The ECC-candidate logic — the part that makes this
 //    work for the many stations that never transmit a country — stays in radiodns.cpp, once.
-static JavaVM* g_vm = nullptr;
+static JavaVM*   g_vm = nullptr;
+/** ★★★ CACHED FROM A JAVA THREAD, AND THAT IS THE WHOLE POINT — see jniHttpGet. */
+static jclass    g_httpCls = nullptr;
+static jmethodID g_httpGet = nullptr;
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     g_vm = vm;
     return JNI_VERSION_1_6;
 }
 
-/** ★ Called from a NATIVE thread, which the JVM has never seen — so it must attach, and detach
- *  again or the thread leaks a JNI frame for its lifetime. */
+/**
+ * ★ Called from a NATIVE thread, which the JVM has never seen — so it must attach, and detach
+ *   again or the thread leaks a JNI frame for its lifetime.
+ *
+ * ★★★ AND IT MUST NOT CALL FindClass. A thread attached from native code gets the SYSTEM class
+ *     loader, which can see java.* and nothing of ours — so FindClass("com/vibesdr/app/VibeHttp")
+ *     threw ClassNotFoundException on every lookup, silently, and RadioDNS returned {} on Android
+ *     exactly as it had before the feature was added. Caught by putting the phone on adb and
+ *     reading the log during a live query (2026-08-23); nothing about the symptom distinguished it
+ *     from "this station is not in RadioDNS".
+ *  ★★ THE CODE ARGUED FOR THE BUG IN A COMMENT. The old note here reasoned that looking the class
+ *     up per call was better than caching a global ref that might go stale. That trade does not
+ *     exist: the class must be resolved on a thread that HAS the app's loader — which is the Java
+ *     call into nativeInitRadioDns — and held as a global ref for the native threads that follow.
+ */
 static std::string jniHttpGet(const std::string& url, const std::string& accept) {
     if (!g_vm) return {};
     JNIEnv* env = nullptr;
@@ -51,25 +67,18 @@ static std::string jniHttpGet(const std::string& url, const std::string& accept)
         attached = true;
     }
     std::string out;
-    // ★ Looked up per call rather than cached: this runs a handful of times per station and the
-    //   cache above it means it is rare. A stale global class ref outliving a reload is a worse
-    //   trade than a lookup nobody can measure.
-    if (jclass cls = env->FindClass("com/vibesdr/app/VibeHttp")) {
-        if (jmethodID m = env->GetStaticMethodID(
-                cls, "get", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;")) {
-            jstring ju = env->NewStringUTF(url.c_str());
-            jstring ja = env->NewStringUTF(accept.c_str());
-            if (auto r = (jstring)env->CallStaticObjectMethod(cls, m, ju, ja)) {
-                if (const char* c = env->GetStringUTFChars(r, nullptr)) {
-                    out = c;
-                    env->ReleaseStringUTFChars(r, c);
-                }
-                env->DeleteLocalRef(r);
+    if (g_httpCls && g_httpGet) {
+        jstring ju = env->NewStringUTF(url.c_str());
+        jstring ja = env->NewStringUTF(accept.c_str());
+        if (auto r = (jstring)env->CallStaticObjectMethod(g_httpCls, g_httpGet, ju, ja)) {
+            if (const char* c = env->GetStringUTFChars(r, nullptr)) {
+                out = c;
+                env->ReleaseStringUTFChars(r, c);
             }
-            env->DeleteLocalRef(ju);
-            env->DeleteLocalRef(ja);
+            env->DeleteLocalRef(r);
         }
-        env->DeleteLocalRef(cls);
+        env->DeleteLocalRef(ju);
+        env->DeleteLocalRef(ja);
     }
     // ★★ An exception left pending here would be thrown into whatever Java frame this native
     //    thread next touches — miles from the cause. VibeHttp.get catches its own, so this is a
@@ -90,6 +99,25 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeInitRadioDns(JNIEnv* env, jobject /*thiz
     if (i) env->ReleaseStringUTFChars(jIso, i);
 
     if (!dir.empty()) vsradiodns::setDir(dir);
+
+    // ★★★ RESOLVE THE TRANSPORT CLASS HERE, ON A JAVA THREAD. This call came FROM Kotlin, so the
+    //     app's class loader is on the stack and FindClass can see our classes. Held as a global
+    //     ref for the native threads that do the actual lookups, which cannot resolve it at all.
+    //  ★ A failure is reported rather than swallowed: without this the lookup silently returns
+    //    nothing for ever, and "no logo" is indistinguishable from "not in RadioDNS".
+    if (!g_httpCls) {
+        if (jclass cls = env->FindClass("com/vibesdr/app/VibeHttp")) {
+            g_httpCls = (jclass)env->NewGlobalRef(cls);
+            g_httpGet = env->GetStaticMethodID(
+                cls, "get", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+            env->DeleteLocalRef(cls);
+        }
+        if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
+    }
+    if (!g_httpCls || !g_httpGet) {
+        LOGE("RadioDNS NOT started — VibeHttp could not be resolved; station logos stay off");
+        return;
+    }
     vsradiodns::setFetcher(jniHttpGet);
     // ★★ THE SAME CALL THE DAEMON MAKES, deliberately — logoForAuto, not logoFor. Depending on a
     //    configured country outright is what made this silently do nothing on a server that had

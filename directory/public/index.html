@@ -326,60 +326,93 @@ function listenUrl(s) {
  * "like the Airspy is now FM Broadcast, shared VFO etc").
  */
 function radioLine(r, s) {
-  const max = (s && s.maxListeners) || 0;
+  /* ══ MIRROR OF THE RECEIVER'S OWN LANDING PAGE ═══════════════════════════════════════════════
+   * ★★★ THE SAME FIELDS, READ THE SAME WAY. This page had its own, simpler idea of a radio and so
+   *     described the same receiver differently from the page it links to: "wfm · one listener at
+   *     a time" here against "500 kHz – 1766 MHz · UNRESTRICTED · one listener at a time" there,
+   *     and once the server started publishing the real fields it degenerated into printing an
+   *     array — "500000,1766000000" (Stuart, 2026-08-23: "the directory needs to mirror the
+   *     landing screen"). The logic below is web/client/src/main.ts's, deliberately.
+   * ★★ TWO PUBLISHERS, ONE SHAPE. A daemon sends the front door's fields (`coverage` in Hz,
+   *    `allowed`, `allowedNames`); a phone sends band NAMES in `coverage` and its tunable set in
+   *    `ranges`. Both are normalised here rather than either being asked to change — an older
+   *    server in the field cannot be edited, and a listing that only works for the newest build is
+   *    not a directory.
+   */
+  const pair = (v) => Array.isArray(v) && v.length === 2
+                   && Number.isFinite(+v[0]) && Number.isFinite(+v[1]);
+  const nums = (v) => (Array.isArray(v) ? v : []).filter(pair).map((p) => [+p[0], +p[1]]);
+  const words = (v) => (Array.isArray(v) ? v : [])
+                        .filter((c) => typeof c === 'string' && c.trim()).map((c) => c.trim());
+
+  const cov     = nums(r.coverage);                       // hardware reach, in Hz
+  const allowed = nums(r.allowed).length ? nums(r.allowed) : nums(r.ranges);
+  const named   = words(r.allowedNames).length ? words(r.allowedNames) : words(r.coverage);
+  const restricted = !!r.restricted;
+
+  // ★ A LOCKED RADIO IS ITS WINDOW and needs no qualifier: "1 kHz – 2000 MHz, restrictions in
+  //   place" about a receiver fixed to 2.8–10.8 MHz is true and useless. State the window.
+  const centre = Number(r.centreHz) || 0, span = Number(r.spanHz) || 0;
+  const lo = (r.locked && centre > 0 && span > 0) ? centre - span / 2 : 0;
+  const hi = (r.locked && centre > 0 && span > 0) ? centre + span / 2 : 0;
+
+  const mhz   = (h) => `${(h / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')}`;
+  const hzTxt = (h) => h >= 1e6 ? `${mhz(h)} MHz` : `${Math.round(h / 1e3)} kHz`;
+
+  let range;
+  if (lo > 0 && hi > lo)             range = `${mhz(lo)} – ${mhz(hi)} MHz`;
+  else if (restricted && named.length)   range = named.join(', ');
+  else if (restricted && allowed.length) range = allowed.map(([a, b]) => `${hzTxt(a)} – ${hzTxt(b)}`).join(', ');
+  else if (cov.length)                   range = cov.map(([a, b]) => `${hzTxt(a)} – ${hzTxt(b)}`).join(', ')
+                                                + (restricted ? ' · RESTRICTIONS IN PLACE' : ' · UNRESTRICTED');
+  // ★ A phone publishes names without the hardware numbers — say the words rather than nothing.
+  else if (named.length)                 range = named.join(', ');
+  else if (allowed.length)               range = allowed.map(([a, b]) => `${hzTxt(a)} – ${hzTxt(b)}`).join(', ');
+  else if (centre > 0)                   range = `${mhz(centre)} MHz`;
+  else                                   range = esc(r.mode || '');
+
+  // ★★★ THE CAP IS THE RADIO'S, NOT THE MACHINE'S. Every row read the SERVER's maxListeners, so a
+  //     front door holding three ten-listener receivers advertised "0 OF 1 LISTENING" three times
+  //     — three full-looking radios on a machine with room for thirty.
+  const max = Number(r.maxListeners) || (s && s.maxListeners) || 0;
   // ★ ONE TEST, TWO USES — the wording and the etiquette line are the same fact.
   const sharedDial = max > 1 && !r.locked;
   const kind = max <= 1 ? 'one listener at a time'
              : r.locked ? 'individual VFOs · locked RF centre'
                         : 'shared VFO · unlocked RF centre';
 
-  // ★★★ THE BANDS IN WORDS. "fm" is the owner's shorthand in a config box; "FM broadcast" is what
-  //     the receiver is FOR. The server names them from its own region-aware band plan and sends
-  //     them as coverage — this only falls back to the raw mode when it has not.
-  const cov = (Array.isArray(r.coverage) && r.coverage.length)
-    ? r.coverage.map((c) => esc(c)).join(', ')
-    : (r.mode ? esc(r.mode) : '');
-
-  const bits = [];
-  if (cov) bits.push(cov);
-  bits.push(esc(kind));
-  if (r.restricted) bits.push('restricted range');
+  const bits = [esc(range), esc(kind)];
+  if (restricted && !(lo > 0) && !named.length) bits.push('restricted range');
   if (s && s.limitMin > 0) bits.push(`${s.limitMin} minute limit`);
 
-  // ★★ THE STATE SITS OPPOSITE THE NAME, as it does on the receiver's own landing page: the name
-  //    tells you what it is, the right-hand end tells you whether you can have it.
-  const isFull = max > 0 && s.listeners >= max;
-  const stateTxt = s.unreachable ? 'NOT RESPONDING'
-                 : isFull ? (s.freeInSec > 0 ? `FULL · FREE IN ${mmss(s.freeInSec)}` : 'FULL')
-                 : `${s.listeners} OF ${max || 1} LISTENING`;
+  // ★★ ONE LISTENER AT A TIME READS "FREE", not "0 of 1" — the landing page's own wording, and it
+  //    answers the question a visitor actually has.
+  const listeners = Number(r.listeners) || (s && s.radios && s.radios.length === 1
+                                              ? Number(s.listeners) || 0 : 0);
+  const isFull = max > 0 && listeners >= max;
+  const stateTxt = s && s.unreachable ? 'NOT RESPONDING'
+                 : isFull ? (s && s.freeInSec > 0 ? `FULL · FREE IN ${mmss(s.freeInSec)}` : 'FULL')
+                 : max <= 1 ? 'FREE'
+                 : `${listeners} OF ${max} LISTENING`;
 
-  // ★★★ THE SHARE'S CLOCK MOVED TO THE TOP ROW (Stuart, 2026-08-22). It sat here, inside the
-  //     radio card, on the reasoning that it belongs "beside what the receiver is" — and Stuart's
-  //     reaction on being shown it was "I never noticed it was there already", which is the whole
-  //     case in five words. The top row is what you read while the card is still COLLAPSED, and a
-  //     listing that ends in eight minutes is worth knowing BEFORE deciding to open it.
-  //  ★★ It is also one fact about the SERVER, not about each receiver: a machine can hold several
-  //     radios, so saying it per radio repeated it and attached it to the wrong thing.
+  // ★★ THE AERIAL, UNDER THE RANGE IT QUALIFIES — and PER RADIO, because one machine can hold
+  //    three receivers on three different antennas. A dongle advertising 1 kHz – 1.7 GHz above
+  //    "YouLoop into an LNA" tells a visitor something neither line says alone.
+  const ant = String(r.antenna || (s && s.radios && s.radios.length === 1 ? s.antenna : '') || '').trim();
 
   const etiquette = sharedDial
     ? `<div class="rcAsk">ASK BEFORE TUNING — everyone here shares one dial</div>` : '';
-  const ant = (s && s.antenna) ? `<div class="rcSub">⚲ ${esc(s.antenna)}</div>` : '';
 
   return `<div class="rcard">
-      <div class="rcTop"><span class="rcName">${esc(r.name || 'Radio')}</span>
-        <span class="rcState ${isFull ? 'full' : ''}${s.unreachable ? ' down' : ''}"
+      <div class="rcTop"><span class="rcName">${esc(r.name || r.driver || 'Radio')}</span>
+        <span class="rcState ${isFull ? 'full' : ''}${s && s.unreachable ? ' down' : ''}"
               >${esc(stateTxt)}</span></div>
-      <div class="rcSub">${bits.join(' · ') || 'no details published'}</div>
-      ${ant}${etiquette}
+      <div class="rcSub">${bits.join(' · ')}</div>
+      ${ant ? `<div class="rcSub">⚲ ${esc(ant)}</div>` : ''}
+      ${etiquette}
     </div>`;
 }
 
-/**
- * ★★ HOW LONG A SHARE HAS LEFT, in whatever unit reads naturally. "available for another 6 days"
- *    is the sentence a listener needs; "for another 8,640 minutes" is the same fact and useless.
- * ★ Rounded DOWN, never up: a share that says two days and ends in one is worse than one that
- *   says one and lasts two.
- */
 function shareLeft(s) {
   return s.until > 0 ? Math.max(0, s.until - Math.floor(Date.now() / 1000)) : 0;
 }
