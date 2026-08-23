@@ -567,7 +567,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
                    style="flex:1 1 160px">
           </div>
           <div class="note">Where the radio sits before anyone connects, and where it goes back to
-             when the last listener leaves \u2014 a listener who turns the gain up should not leave it
+             when the last listener leaves &mdash; a listener who turns the gain up should not leave it
              up for the next person. Applied once they have all gone rather than the moment one
              disconnects, so a page reload does not undo somebody's setting.
              <br><span id="gainRestAgcNote" class="hide">With VibeAGC on this is the STARTING gain:
@@ -579,7 +579,13 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
              control simply labelled "AGC" would be read as THAT one and switched straight past,
              so it says whose AGC it is (Stuart, 2026-08-21: "we dont want users to ignore it as
              they think it is a setting that is broken because of what is online"). -->
-        <label class="hide" id="rtlAgcRow"><span class="lbl">VibeAGC \u2014 VibeSDR\u2019s own AGC for RTL-SDR</span>
+        <label class="hide" id="rtlAgcRow"><!-- ★★ HTML DOES NOT PROCESS \uXXXX — ENTITIES DO. These two lines are markup, not JavaScript,
+                 so the escapes were served to the reader verbatim: "VibeAGC \u2014 VibeSDR\u2019s own
+                 AGC" (Stuart, 2026-08-23, with the screenshot). The same escapes further down this
+                 file are inside JS string literals, where they are correct and must be left alone —
+                 which is exactly why this was easy to miss. Sister to the JSX trap in
+                 memory/android_server_gui_parity: the language decides whether an escape is text. -->
+            <span class="lbl">VibeAGC &mdash; VibeSDR&rsquo;s own AGC for RTL-SDR</span>
           <select id="rtlAgc">
             <option value="0">Off — the gain stays where it is set</option>
             <option value="1">On — the receiver manages its own gain</option>

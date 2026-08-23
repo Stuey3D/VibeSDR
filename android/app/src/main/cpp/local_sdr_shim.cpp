@@ -1308,8 +1308,20 @@ static std::atomic<float>    g_snrBeforeClimb{0.0f};
  *  station came up on its own (signal). See the shoulder test. */
 static std::atomic<float>    g_chanBeforeClimb{-200.0f};
 static std::atomic<float>    g_shoulderBeforeClimb{-200.0f};
-/** ★ The band's contrast when the climb was taken — see the contrast test. 99 = not measured. */
+/** ★ The band's contrast when the climb was taken — kept for the log, no longer a verdict. */
 static std::atomic<float>    g_contrastBeforeClimb{99.0f};
+/* ══ THE HILL-CLIMB'S STATE ═════════════════════════════════════════════════════════════════════
+ * ★ Separation as it was before the move on trial, which way that move went, and whether the loop
+ *   has decided it is at the top. `wantUp`/`wantDown` are a one-shot request from the verdict to
+ *   the decision below — "having seen that, go this way next" — and `triedDown` remembers that we
+ *   have already checked the other side of the peak once, so a settled radio does not oscillate.
+ */
+static std::atomic<float>    g_sepBeforeMove{0.0f};
+static std::atomic<int>      g_moveDir{0};
+static std::atomic<bool>     g_settled{false};
+static std::atomic<bool>     g_wantUp{false};
+static std::atomic<bool>     g_wantDown{false};
+static std::atomic<bool>     g_triedDown{false};
 /** ★ The quietest the shoulders have been FOR THE GAIN THEY WERE MEASURED AT — the continuous
  *  version of the climb's shoulder test. 0 = unset. See `shoulderLifted`. */
 static std::atomic<float>    g_bestShoulderDb{0.0f};
@@ -2449,6 +2461,13 @@ struct LocalSdrShim::Impl {
     /** ★ Top of the stations against the floor between them, in dB. Collapses when the front end
      *  starts filling the gaps in — see the contrast test in the AGC. */
     std::atomic<float> bandContrastDb{99.0f};
+    /** ★ channel − shoulders, in dB. The AGC's objective — see the note where it is computed. */
+    std::atomic<float> sepDb{0.0f};
+    /** ★ False when the signal is too wide for its own shoulders to be seen and the objective has
+     *  fallen back to channel-minus-floor. Reported so a log line cannot mislead about which
+     *  question was asked. */
+    std::atomic<bool>  sepFromShoulders{true};
+    float chanPeakHold_ = -200.0f;   // ★ see the peak-hold note in the measurement
     std::vector<float> shoulderBins_;
     std::vector<float> contrastBins_;
 
@@ -4764,19 +4783,83 @@ struct LocalSdrShim::Impl {
              *  ★ Median, for the reason the floor uses one — an adjacent station must not become
              *    "the shoulder".
              */
+            /* ★★★ THE WINDOWS FOLLOW THE DEMODULATOR, because the AGC has to work in every mode.
+             *     Stuart: "the AGC being universal band independant it needs to work in AM
+             *     Broadcast, SSB, FM, DAB, ADSB all of which have different signal widths and wont
+             *     have the MPX signal to measure." A fixed ±100 kHz channel and a fixed 120–400 kHz
+             *     shoulder are FM's numbers; at 3 kHz for SSB they are nonsense in one direction
+             *     and at 1.5 MHz for DAB in the other. Both are now derived from the mode's own
+             *     bandwidth: the channel is what we are listening to, the shoulders start just
+             *     outside it and run to a few times its width.
+             */
+            const double demodBw = std::max(2500.0, std::min(2.0e6, paramsFor(mode).bandwidth));
             shoulderBins_.clear();
             {
-                const int inner = std::max(1, (int)std::lround(120000.0 / binHz));
-                const int outer = std::min(bins / 2 - 1, (int)std::lround(400000.0 / binHz));
+                const int inner = std::max(1, (int)std::lround((demodBw * 0.60) / binHz));
+                const int outer = std::min(bins / 2 - 1,
+                                           (int)std::lround((demodBw * 2.50) / binHz));
                 for (int i = inner; i <= outer; i++) {
                     shoulderBins_.push_back((float)dbAt(i));
                     shoulderBins_.push_back((float)dbAt(-i));
                 }
             }
+            {
+                // ★ …and the channel over the demodulator's own passband, not a fixed ±100 kHz.
+                const int cHalf = std::max(1, (int)std::lround((demodBw * 0.5) / binHz));
+                double cs = 0; int cnum = 0;
+                for (int i = -cHalf; i <= cHalf; i++) { cs += dbAt(i); cnum++; }
+                const float chanNow = cnum ? (float)(cs / cnum) : -200.0f;
+                /* ★★★ PEAK-HELD, BECAUSE SPEECH HAS GAPS. On FM this changes nothing — the carrier
+                 *     is always there — but on SSB, CW and AM the wanted signal is INTERMITTENT, and
+                 *     a two-and-a-half-second average taken across a pause is a measurement of the
+                 *     pause. The loop would then judge a perfectly good step by whether the operator
+                 *     happened to draw breath during the trial. Holding the loudest recent moment
+                 *     and letting it fall slowly measures the SIGNAL rather than the duty cycle.
+                 *  ★ Half a decibel a second: fast enough to follow a station fading or a retune,
+                 *    slow enough to bridge a gap between words or between CW characters.
+                 */
+                const float decay = 0.5f / std::max(1.0f, (float)fftRate);
+                float held = chanPeakHold_ - decay;
+                if (chanNow > held) held = chanNow;
+                if (held < -199.0f || chanNow > held) held = chanNow;
+                chanPeakHold_ = held;
+                channelDbWide.store(held);
+            }
             if (!shoulderBins_.empty()) {
                 const size_t k = shoulderBins_.size() / 2;
                 std::nth_element(shoulderBins_.begin(), shoulderBins_.begin() + k, shoulderBins_.end());
                 shoulderDb.store(shoulderBins_[k]);
+                /* ★★★ SEPARATION — HOW FAR THE WANTED SIGNAL STANDS ABOVE ITS OWN NEIGHBOURHOOD.
+                 *     This is the number the AGC steers by, and it was chosen by MEASUREMENT rather
+                 *     than argument: scripts/agc-sweep.mjs stepped four stations across the tuner's
+                 *     whole range at two sample rates, and on the clean ones every candidate agreed
+                 *     (96.1 → 14.4 dB, 106.0 → 15.7 dB) while on 105.4, where a local blowtorch
+                 *     folds in, SNR said 32.8 dB and band contrast said 25.4 dB and BOTH WERE WRONG
+                 *     — separation said 8.7 dB, which is what Stuart's ear said (2026-08-23).
+                 *  ★★ It is also rate-agnostic without knowing the rate: the same measurement gives
+                 *     14.4 dB at both 1.2 and 2.4 MSPS on 96.1, and 36.4 vs 8.7 dB on 105.4 —
+                 *     because the IF filter's effect is IN the numbers.
+                 *  ★ And it cannot be fooled by a real neighbour: a station next door rises exactly
+                 *    with the gain, so it changes the level and not the SEPARATION. Only something
+                 *    the front end is manufacturing grows faster than the gain that makes it.
+                 */
+                /* ★★★ AND WHEN THE SHOULDERS DO NOT FIT, ASK A DIFFERENT QUESTION. A signal that
+                 *     fills the window has no neighbourhood inside it to be measured against — a
+                 *     DAB ensemble is 1.536 MHz wide, so its shoulders would sit 3.8 MHz out and
+                 *     clamp to the anti-alias skirt, which is not a measurement of anything.
+                 *     Stuart's rule for that case: "most of the DAB signal will be flat across the
+                 *     entire sample rate so a simple peak detection and SNR detection would suffice
+                 *     — increase gain until the SNR doesnt increase anymore, if peak is too high and
+                 *     overloading bring it back" (2026-08-23). That is exactly what falling back to
+                 *     channel-minus-FLOOR gives, with the clip guard underneath doing the rest.
+                 *  ★★ Decided by ARITHMETIC, not by a list of mode names: if the shoulder window
+                 *     would run past the usable span, it cannot be used, whatever the mode is
+                 *     called. A wide mode nobody has written yet gets the right treatment for free.
+                 */
+                const bool shouldersFit = (demodBw * 2.5) < (sampleRate * 0.45);
+                sepDb.store(channelDbWide.load()
+                            - (shouldersFit ? shoulderBins_[k] : (float)floorDbNow));
+                sepFromShoulders.store(shouldersFit);
             }
             /* ══ HOW MUCH CONTRAST IS LEFT IN THE BAND ══════════════════════════════════════
              * ★★★ THE ONE THING THAT IS TRUE OF INTERMODULATION AND OF NOTHING ELSE: it FILLS IN
@@ -14967,230 +15050,57 @@ void LocalSdrShim::overloadTick() {
     } else
     if (climbAt > 0 && now - climbAt >= kAgcVerdictSec) {
         g_climbAt.store(0.0, std::memory_order_relaxed);
-        const float floorNow = p->iqFloorDb.load();
-        const float floorWas = g_floorBeforeClimb.load(std::memory_order_relaxed);
-        const double climbStep = g_climbStepDb.load(std::memory_order_relaxed);
-        /* ★★★ MORE GAIN RAISES THE NOISE FLOOR. THAT IS NOT COMPRESSION, IT IS THE GAIN.
-         *     `iqFloorDb` is an ABSOLUTE level, so adding 6.7 dB of gain lifts the floor by about
-         *     6.7 dB along with everything else and the SNR is unchanged. This test fired on any
-         *     rise over 2 dB — and the tuner's steps are 4.0 and 6.7 — so EVERY HEALTHY CLIMB was
-         *     judged a failure, given back, and the bar raised 3 dB each time until it hit its 12 dB
-         *     ceiling and no climb could ever be taken again. Caught on the XCover at 1.2 MSPS:
-         *         that step raised the noise floor 2.7 dB — compressing (a climb now needs 6 dB)
-         *         that step raised the noise floor 2.2 dB — compressing (a climb now needs 9 dB)
-         *         adc: peak −32.6 dBFS, clip 0.0000%
-         *     Thirty-two decibels of headroom and it was refusing to reach for any of it —
-         *     "overly cautious and doesnt want to boost the gain where needed" (Stuart,
-         *     2026-08-23). The 2.7 and the 2.2 ARE the steps.
-         * ★★★ SO THE QUESTION IS "DID THE FLOOR RISE BY MORE THAN I ADDED?" Real compression gives
-         *     back more than the step — intermodulation products grow faster than the gain that
-         *     makes them. A rise of about the step is a radio behaving exactly as it should.
-         *  ★★ The cut path was fixed this way first and this is its mirror image: both now measure
-         *     the floor's move AGAINST the gain's move, which is the only comparison that means
-         *     anything. The commit that fixed the cut claimed to be "symmetric with the climb
-         *     verdict above" — it was not, and that is precisely the half that stayed broken.
-         *  ★ 2 dB of slack over the step: measurement noise on a 4-second window, not a judgement.
+        /* ══ ONE QUESTION, ASKED OF EVERY MOVE ═══════════════════════════════════════════════════
+         * ★★★ DID THAT MOVE LEAVE THE WANTED SIGNAL STANDING FURTHER ABOVE ITS NEIGHBOURHOOD?
+         *     That is the whole loop now. It replaces four detectors that each explained one
+         *     screenshot and disagreed with each other on the fifth: an SNR arm, a noise-floor
+         *     test, a band-contrast test and a shoulders-versus-step test. On 105.4 with a local
+         *     blowtorch folding in, SNR said climb to 32.8 dB and contrast said 25.4 dB and both
+         *     were wrong; separation said 8.7 dB, which is where Stuart's ear had it all along.
+         * ★★★ AND IT WORKS IN EVERY MODE, which the alternatives did not: the windows come from the
+         *     demodulator's own bandwidth, so it is 3 kHz wide on SSB and 1.5 MHz on DAB, and it
+         *     needs no pilot — "wont have the MPX signal to measure" rules the FM-only measures out
+         *     as the primary.
+         *  ★★ IT IS DIFFERENTIAL, WHICH IS WHY A REAL NEIGHBOUR CANNOT FOOL IT. An adjacent station
+         *     rises exactly with the gain, so it moves the LEVEL and leaves the SEPARATION alone.
+         *     Only something the front end is manufacturing grows faster than the gain that makes
+         *     it. That was Stuart's own requirement: "make sure that our measurements are not
+         *     detecting real stations too."
+         *  ★ Half a decibel is the threshold in both directions: smaller than that is the band
+         *    breathing, and a four-second window on a live signal cannot resolve it anyway.
          */
-        /* ★★★ AN IMPOSSIBLE READING IS NOT EVIDENCE. A few decibels of floor for a few decibels of
-         *     gain is the physics; thirty-four is a measurement taken across a moment when the
-         *     pipeline was not the same pipeline. Acting on it is worse than doing nothing —
-         *     "105.4 went up and got a stereo lock just to drop again" (Stuart, 2026-08-23) is a
-         *     good step handed back on the strength of a number that cannot happen.
-         *  ★ Re-armed rather than discarded, exactly as the disturbed-pipeline case is: the climb
-         *    still has to prove itself, it just cannot be convicted on this. */
-        if (floorWas < -1.0f && std::fabs((double)(floorNow - floorWas)) > 15.0) {
-            g_climbAt.store(now, std::memory_order_relaxed);
-            g_floorBeforeClimb.store(floorNow, std::memory_order_relaxed);
-            g_snrBeforeClimb.store(p->spectrumSnr.load(), std::memory_order_relaxed);
-            g_shoulderBeforeClimb.store(p->shoulderDb.load(), std::memory_order_relaxed);
-        g_contrastBeforeClimb.store(p->bandContrastDb.load(), std::memory_order_relaxed);
-            LOGI("gain climb not judged — the floor moved %.1f dB, which is not something gain can "
-                 "do; re-measuring from here", floorNow - floorWas);
-            return;
-        }
-        const double allowed = (climbStep > 0.1 ? climbStep : 0.0) + 2.0;
-        /* ★★★ AND THE ONE MEASUREMENT THAT KNOWS WHETHER THE GAIN HELPED: THE CHANNEL'S SNR.
-         *     A front end driven into intermodulation by a signal OUTSIDE the window produces
-         *     rubbish INSIDE it — so the ADC never rails, the noise floor may barely move, and the
-         *     loop happily climbs while the station it is tuned to gets worse. Measured on the Pi
-         *     at 2.4 MSPS, tuned to 105.8 with a monster local on 104.2:
-         *         AGC 15.7 dB · pk −21 dBFS · SNR 12 dB
-         *     Twenty-one decibels of headroom and nothing on the rail, so neither the clip test nor
-         *     the floor test had anything to say — and 104.2 was audibly on top of 105.8.
-         * ★★★ THE RATE IS NOT THE FIX, THOUGH IT IS THE CAUSE. An RTL's IF filter follows its
-         *     sample rate, so at 1.2 MSPS 104.2 is filtered out before the mixer and everything
-         *     "cleans right up" (Stuart, 2026-08-23); at 2.4 it reaches the front end. Stuart
-         *     suggested keeping the old loop for 2.4 and the new one for 1.2 — but a loop that
-         *     behaves differently per rate is two loops to reason about, and the OLD one was not
-         *     careful, it was BROKEN in a way that happened to end at a low gain. SNR gets there
-         *     honestly: it goes down when the extra gain is buying noise, whatever the rate.
-         *  ★★ ONLY WHERE SNR MEANS SOMETHING. On a dead channel it is a couple of dB of nothing
-         *     against nothing, and reading a fall there would stop the loop climbing on exactly the
-         *     weak signals it exists to lift. 6 dB is "there is a station here".
-         *  ★ 2 dB, so a fade or a passing lorry is not read as a verdict.
-         */
-        const float snrWas = g_snrBeforeClimb.load(std::memory_order_relaxed);
-        const float snrNow = p->spectrumSnr.load();
-        const bool  snrWorse = snrWas > 6.0f && snrNow < snrWas - 2.0f;
-
-        /* ══ DID THE STATION COME UP, OR DID THE WHOLE NEIGHBOURHOOD? ══════════════════════════
-         * ★★★ STUART'S TEST, AND IT IS THE BEST ONE IN THIS LOOP (2026-08-23): "if the whole thing
-         *     goes up in a sorta uniform block then its likely intermodulation from 104.2; if the
-         *     105.4 signal goes up alone and the immediate below and above stays clean, that is
-         *     what we are after."
-         * ★★★ WHY IT SUCCEEDS WHERE THE OTHERS FAIL. More gain lifts a real station and leaves the
-         *     quiet spectrum beside it roughly where it was, because that spectrum is the receiver's
-         *     own floor and is not what the extra gain is amplifying. Intermodulation is
-         *     manufactured INSIDE the front end from a signal we cannot see, and it lands across
-         *     the neighbourhood — so channel and shoulders rise TOGETHER. The ADC peak is blind to
-         *     it (nothing rails) and the window-edge SNR is fooled by it (the edges rise too);
-         *     these two numbers are 30–130 kHz apart and cannot be fooled the same way.
-         *  ★★ THE COMPARISON IS OF MOVEMENTS, NOT LEVELS. Both are absolute dBFS and both rise with
-         *     gain — it is the DIFFERENCE between their rises that separates signal from mush.
-         *  ★ Only when there is a station to speak of: a channel no louder than its own shoulders
-         *    is a quiet patch of band, and "the block came up together" is then just the gain doing
-         *    its job on noise, which is exactly what a listener on a dead frequency wants.
-         */
-        const float shldWas = g_shoulderBeforeClimb.load(std::memory_order_relaxed);
-        const float shldNow = p->shoulderDb.load();
-        const float shldRose = shldNow - shldWas;
-        /* ★★★ AGAINST THE STEP, NOT AGAINST THE STATION — MY FIRST VERSION HAD THE PHYSICS WRONG.
-         *     RF gain lifts the wanted signal AND the receiver's own noise by the same number of
-         *     decibels, so "the channel and its shoulders came up together" is the NORMAL, healthy
-         *     climb; comparing the two against each other tests nothing. What marks
-         *     intermodulation is that it grows FASTER than the gain — third-order products rise
-         *     about 3 dB for every 1 dB — so the question is whether the neighbourhood rose by
-         *     MORE THAN THE STEP JUST ADDED.
-         * ★★★ AND THE "IS THERE A STATION HERE?" GATE DISABLED IT WHERE IT WAS MOST NEEDED. Stuart
-         *     was on 103.0 — an empty gap beside the blowtorch on 103.3 — at 25.4 dB with the band
-         *     turned to mush: "nope overgained here at 103" (2026-08-23). A quiet frequency next to
-         *     a monster is exactly where a listener needs the front end kept linear, because that
-         *     is where the weak thing they are hunting for would be. The gate is gone.
-         *  ★ The shoulders are the right PLACE to ask (30–130 kHz out, where the products land, and
-         *    close enough to share this part of the spectrum); the step is the right THING to
-         *    compare against. The floor test does the same arithmetic against the window edges,
-         *    which are far away and often occupied — this is that test, put where it can see.
-         */
-        const double shoulderAllowed = (climbStep > 0.1 ? climbStep : 0.0) + 2.0;
-        const bool  shouldersRose = shldWas > -190.0f && (double)shldRose > shoulderAllowed;
-        /* ★ …or the band simply lost its shape. Intermodulation fills the gaps between stations,
-         *   so the distance from the tops to the floor collapses — see bandContrastDb. Two dB of
-         *   it in one step is a lot: the band does not change shape on its own. */
-        const float contrastWas = g_contrastBeforeClimb.load(std::memory_order_relaxed);
-        const float contrastNow = p->bandContrastDb.load();
-        const bool  bandFlattened = contrastWas < 90.0f && contrastNow < contrastWas - 2.0f;
-        const bool  cameUpAsABlock = shouldersRose || bandFlattened;
-        /* ══ THE PANEL, AND ITS ORDER IS THE POINT ══════════════════════════════════════════════
-         * ★★★ Stuart: "the agc needs multiple checks so SNR to make sure the peak is growing, but
-         *     also the SNR may increase with intermodulation so we need to watch for that at the
-         *     same time." Precisely — and it is why INTERMOD IS ASKED FIRST. When the products land
-         *     on the station itself the SNR can IMPROVE while the band turns to mush, so an SNR
-         *     rise on its own is not evidence of anything. The shoulders are consulted before the
-         *     SNR is allowed to approve the step, and a step that fails them is handed back
-         *     whatever the SNR says.
-         *  ★ The order below is therefore load-bearing, not stylistic:
-         *      1. did the neighbourhood rise faster than the gain?  → intermodulation, give it back
-         *      2. did the station gain a decibel of SNR?            → real, keep climbing
-         *      3. did it LOSE SNR?                                  → give it back
-         *      4. neither, and we are past the operating point?     → the plateau; keep it, stop
-         *    Anyone reorganising this must keep 1 above 2, or the loop can be talked into
-         *    intermodulation by its own SNR meter.
-         */
-        if (cameUpAsABlock) {
-            const double m = std::min(12.0, g_ovlMargin.load(std::memory_order_relaxed) + 3.0);
-            g_ovlMargin.store(m, std::memory_order_relaxed);
-            if (bandFlattened && !shouldersRose)
-                LOGI("the band lost %.1f dB of contrast on that step (%.1f -> %.1f dB) — the gaps "
-                     "between stations are filling in, which is intermodulation; giving it back "
-                     "(a climb now needs %.0f dB)", contrastWas - contrastNow, contrastWas,
-                     contrastNow, m);
-            else
-                LOGI("either side of the station came up %.1f dB for %.1f dB of gain — more than "
-                     "the step, so that is intermodulation, not signal; giving it back (a climb "
-                     "now needs %.0f dB)", shldRose, climbStep, m);
+        const float sepWas = g_sepBeforeMove.load(std::memory_order_relaxed);
+        const float sepNow = p->sepDb.load();
+        const float d = sepNow - sepWas;
+        const int   dir = g_moveDir.load(std::memory_order_relaxed);   // +1 climbed, -1 cut
+        if (d < -0.5f) {
+            // ★ Worse. Put it back, and do not try that direction again until something changes.
+            LOGI("that %s cost %.1f dB of separation (%.1f -> %.1f) — putting it back",
+                 dir > 0 ? "step up" : "step down", -d, sepWas, sepNow);
+            steps_forceDown = (dir > 0);
+            if (dir < 0) g_wantUp.store(true, std::memory_order_relaxed);
+            g_settled.store(true, std::memory_order_relaxed);
             g_adcCleanRun.store(0, std::memory_order_relaxed);
-            steps_forceDown = true;
-        } else if (snrWas > 6.0f && snrNow > snrWas + 1.0f) {
-            // ★ It bought SNR: keep going, and forget any earlier decision that there was none.
-            g_snrPlateau.store(false, std::memory_order_relaxed);
-        } else if (snrWorse) {
-            const double m = std::min(12.0, g_ovlMargin.load(std::memory_order_relaxed) + 3.0);
-            g_ovlMargin.store(m, std::memory_order_relaxed);
-            LOGI("that step cost %.1f dB of SNR (%.1f -> %.1f) — the gain is buying noise, not "
-                 "signal; giving it back (a climb now needs %.0f dB)",
-                 snrWas - snrNow, snrWas, snrNow, m);
-            g_adcCleanRun.store(0, std::memory_order_relaxed);
-            steps_forceDown = true;
-        } else if (snrWas > 6.0f && snrNow < snrWas + 1.0f
-                   && g_adcPeakDbfs.load(std::memory_order_relaxed) > kAgcTargetDbfs) {
-            /* ★★★ THE PLATEAU. Past the operating point, a step that buys less than a decibel of
-             *     SNR has bought nothing — the station is as far out of the noise as this receiver
-             *     can put it, and more gain from here is only more level. The step is KEPT (it did
-             *     no harm), and the loop simply stops reaching. */
-            g_snrPlateau.store(true, std::memory_order_relaxed);
-            g_snrPlateauPeak.store(g_adcPeakDbfs.load(std::memory_order_relaxed),
-                                   std::memory_order_relaxed);
-            LOGI("that step bought %.1f dB of SNR (%.1f -> %.1f) — no more to be had here, "
-                 "holding at this gain", snrNow - snrWas, snrWas, snrNow);
-        } else if (floorWas < -1.0f && (double)(floorNow - floorWas) > allowed) {
-            // ★ Give it back, and make the next attempt prove more. This is the same "learn from a
-            //   failed climb" the clipping path uses — the two failures differ in what they measure,
-            //   not in what they mean: this step was not worth taking.
-            const double m = std::min(12.0, g_ovlMargin.load(std::memory_order_relaxed) + 3.0);
-            g_ovlMargin.store(m, std::memory_order_relaxed);
-            LOGI("that step raised the noise floor %.1f dB for %.1f dB of gain — more than the step, "
-                 "so the front end is compressing; giving it back (a climb now needs %.0f dB)",
-                 floorNow - floorWas, climbStep, m);
-            g_adcCleanRun.store(0, std::memory_order_relaxed);
-            steps_forceDown = true;
-        }
-    }
-
-    // ★★★ DID THE LAST CUT ACTUALLY LOWER THE FLOOR? If the front end really was compressing,
-    //     taking gain away must bring the noise floor down with it — roughly step for step. When
-    //     it does not, whatever is lifting the floor is NOT the tuner, and reducing gain cannot
-    //     cure it: everything scales down together and the ratio never improves. The loop then
-    //     keeps cutting, because its own remedy leaves the symptom exactly as true as it found it.
-    //
-    //  ★★★ THAT IS THE RUNAWAY, AND IT HAS A REAL CAUSE. Measured on the Pi, 2026-08-23, same
-    //      aerial and station, sample rate the only variable: at 2.4 MSPS gain 7.7 dB, peak
-    //      −5 dBFS, SNR 32 dB; at 1.2 MSPS gain 1.4 dB, peak −11 dBFS, SNR 23 dB. At the lower
-    //      rate a huge neighbour 500 kHz away sits on the anti-alias filter's SKIRT rather than
-    //      inside its flat passband, and what folds back lifts the floor. Gain cannot touch it.
-    //  ★★ LOW-END HARDWARE NEEDS THE LOW RATES, so "use 2.4" is not an answer (Stuart,
-    //     2026-08-23: "do the proper software fix because low end hardware is going to need the
-    //     lower sample rates for the CPU").
-    //
-    //  ★ Symmetric with the climb verdict above, and that symmetry is the point: every step this
-    //    loop takes now has to show it helped. A control loop that never checks its own remedy is
-    //    not a control loop.
-    {
-        const double dropAt = g_dropAt.load(std::memory_order_relaxed);
-        if (dropAt > 0 && now - dropAt >= kAgcVerdictSec) {
-            g_dropAt.store(0.0, std::memory_order_relaxed);
-            const float fNow = p->iqFloorDb.load();
-            const float fWas = g_floorBeforeDrop.load(std::memory_order_relaxed);
-            const double stepDb = g_dropStepDb.load(std::memory_order_relaxed);
-            // ★ Half the step is a generous bar: real compression gives back the whole step and
-            //   more, while an unresponsive floor barely moves.
-            // ★ Same guard as the climb's: a floor that has moved further than gain can move it is
-            //   a measurement, not a diagnosis. Say nothing and let the next one decide.
-            if (fWas < -1.0f && std::fabs((double)(fWas - fNow)) > 15.0) {
-                LOGI("cut not judged — the floor moved %.1f dB, which is not something gain can do",
-                     fWas - fNow);
-            } else if (fWas < -1.0f && stepDb > 0.1 && (fWas - fNow) < stepDb * 0.5) {
-                const double until = now + 120.0;
-                g_floorTestMutedUntil.store(until, std::memory_order_relaxed);
-                // ★★ AND UNDO THE CUT. It was taken on a diagnosis just shown to be wrong, and
-                //    leaving it in place would keep the receiver deaf for the muted window.
-                g_ovlSteps.store(std::max(0, g_ovlSteps.load(std::memory_order_relaxed) - 1),
-                                 std::memory_order_relaxed);
-                // ★ The bar this raised was raised for the same wrong reason.
-                g_ovlMargin.store(3.0, std::memory_order_relaxed);
-                g_bestFloorDb.store(0.0f, std::memory_order_relaxed);   // re-learn from here
-                LOGI("that cut did not lower the floor (%.1f dB for %.1f dB of gain) — the lift is "
-                     "not the front end, so gain cannot cure it; putting it back and ignoring the "
-                     "floor for 120s", fWas - fNow, stepDb);
+        } else if (d > 0.5f) {
+            // ★ Better. Keep it and keep going the same way — this is a hill and we are climbing it.
+            LOGI("that %s bought %.1f dB of separation (%.1f -> %.1f) — going on",
+                 dir > 0 ? "step up" : "step down", d, sepWas, sepNow);
+            g_settled.store(false, std::memory_order_relaxed);
+        } else {
+            /* ★★ Flat: the move neither helped nor hurt, so we are at the top of the hill. KEEP it
+             *    (it did no harm) and stop reaching — the plateau Stuart described on 96.1, where
+             *    "after a certain gain level you cannot get anymore SNR". If we have only ever gone
+             *    up, try ONE step down before settling: the peak may be behind us. */
+            if (dir > 0 && !g_triedDown.load(std::memory_order_relaxed)) {
+                g_triedDown.store(true, std::memory_order_relaxed);
+                g_wantDown.store(true, std::memory_order_relaxed);
+                LOGI("no change from that step (%.1f dB) — trying one down to see which side of the "
+                     "peak we are on", sepNow);
+            } else {
+                g_settled.store(true, std::memory_order_relaxed);
+                LOGI("settled: %.1f dB %s, gain holding", sepNow,
+                     p->sepFromShoulders.load() ? "above the neighbouring spectrum"
+                                                : "above the noise floor (signal fills the window)");
             }
         }
     }
@@ -15267,7 +15177,17 @@ void LocalSdrShim::overloadTick() {
     int want = steps;
     if (steps_forceDown) {
         want = steps + 1;                                        // undo the unhelpful climb
-    } else if (clipRun < 2 && (floorLifted || shoulderLifted || bandIsMush)
+    } else if (clipRun < 2 && g_wantDown.exchange(false, std::memory_order_relaxed)) {
+        /* ★★★ PROBE DOWNWARD. The verdict asked for this: either a step up cost separation and has
+         *     to be given back, or the loop wants to know whether the peak is BELOW where it is
+         *     sitting. It is the same experiment as a climb, in the other direction, and it is
+         *     judged the same way — which is what makes this a hill-climb rather than a ratchet.
+         *  ★ This replaces the floor, shoulder and contrast tests entirely. Those were continuous
+         *    and absolute, and an absolute test cannot tell a receiver making mush from a listener
+         *    sitting in a quiet gap beside a strong station. */
+        want = steps + 1;
+        downForFloor = true;
+    } else if (clipRun < 2 && false
                && !(g_dropAt.load(std::memory_order_relaxed) > 0
                     && now - g_dropAt.load(std::memory_order_relaxed) < kClimbTrialMaxSec)) {
         /* ★★★ ONE CUT ON TRIAL AT A TIME — THE SAME RULE THE CLIMB GOT, AND FOR A WORSE REASON.
@@ -15353,7 +15273,8 @@ void LocalSdrShim::overloadTick() {
     //      and it is only a bad trade if you assume a gain change is free.
     //  ★ Coming DOWN is unchanged and still immediate — an overload is ruining the signal NOW, and
     //    40 ms is a bargain to end it. This reluctance applies only to climbing back up.
-    } else if (steps > 0 && cleanRun >= (hurry ? 1 : kAgcClimbAfterSec)
+    } else if (steps > 0 && !g_settled.load(std::memory_order_relaxed)
+               && cleanRun >= (hurry ? 1 : kAgcClimbAfterSec)
                && !(g_climbAt.load(std::memory_order_relaxed) > 0
                     && now - g_climbAt.load(std::memory_order_relaxed) < kClimbTrialMaxSec)) {
         /* ★★★ ONE CLIMB ON TRIAL AT A TIME. Every step is supposed to prove itself before the next
@@ -15602,7 +15523,12 @@ void LocalSdrShim::overloadTick() {
             g_dropAt.store(now, std::memory_order_relaxed);
         }
     }
-    if (want < steps) {                       // this was a climb — put it on trial
+    if (want != steps) {                      // ★ every move goes on trial, up or down alike
+        g_sepBeforeMove.store(p->sepDb.load(), std::memory_order_relaxed);
+        g_moveDir.store(want < steps ? +1 : -1, std::memory_order_relaxed);
+        g_climbAt.store(now, std::memory_order_relaxed);
+    }
+    if (want < steps) {                       // a climb: the old floor/SNR figures, kept for the log
         g_floorBeforeClimb.store(p->iqFloorDb.load(), std::memory_order_relaxed);
         g_snrBeforeClimb.store(p->spectrumSnr.load(), std::memory_order_relaxed);
         g_chanBeforeClimb.store(p->channelDbWide.load(), std::memory_order_relaxed);   // ★ for diagnosis
@@ -16061,6 +15987,12 @@ static void agcForget(const char* why) {
     g_bestFloorDb.store(0.0f, std::memory_order_relaxed);      // 0 = unset, see the floor test
     g_bestShoulderDb.store(0.0f, std::memory_order_relaxed);   // ★ likewise — it is a level HERE
     g_snrPlateau.store(false, std::memory_order_relaxed);      // ★ a different station, a new answer
+    // ★ …and a new hill to climb: nothing learned about the last one's shape applies here.
+    g_settled.store(false, std::memory_order_relaxed);
+    g_triedDown.store(false, std::memory_order_relaxed);
+    g_wantUp.store(false, std::memory_order_relaxed);
+    g_wantDown.store(false, std::memory_order_relaxed);
+    g_moveDir.store(0, std::memory_order_relaxed);
     g_floorTestMutedUntil.store(0.0, std::memory_order_relaxed);
     g_climbAt.store(0.0, std::memory_order_relaxed);
     g_dropAt.store(0.0, std::memory_order_relaxed);
