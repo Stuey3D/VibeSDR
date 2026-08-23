@@ -210,7 +210,11 @@
             color: var(--accent); font-family: inherit; font-size: 12px; padding: 4px 9px;
             cursor: pointer; letter-spacing: .04em; }
   .ctyBtn:hover, .ctyBtn[aria-expanded="true"] { border-color: var(--accent); }
-  .ctyPop { position: absolute; z-index: 60; margin-top: 4px; max-height: 62vh; overflow-y: auto;
+  /* ★★ FIXED AND ABOVE LEAFLET. It was absolutely positioned at z-index 60 and the map — whose
+        panes and controls sit in the hundreds — covered everything below its own top edge, so
+        half the countries could not be reached (Stuart, 2026-08-23, with the screenshot). Fixed
+        positioning also keeps it with the button if the page scrolls under it. */
+  .ctyPop { position: fixed; z-index: 2000; margin-top: 4px; overflow-y: auto;
             min-width: 260px; max-width: 340px; background: var(--panel); border-radius: 10px;
             border: 1px solid var(--accent); padding: 8px; text-align: left;
             box-shadow: 0 14px 40px rgba(0,0,0,.6); }
@@ -378,7 +382,7 @@
        zoom are steps 4-6 and are not here yet. -->
 <section class="dialWrap" id="dialWrap" hidden>
   <div class="dialTitle"><span>What the network can hear</span><b id="dialExtent"></b>
-    <span class="dialHint">click the top dial to place a VFO · drag the box below to travel</span>
+    <span class="dialHint">click the dial to place the VFO · drag the box below to travel · ⌘-scroll to zoom</span>
     <span class="dialCtl">
       <!-- ★ WHERE, not who: the country a receiver sits in is the question a listener asks when
            they want signals from somewhere, and it is the one filter the map cannot express in a
@@ -502,7 +506,21 @@ function state(s) {
   return { cls: 'sh-free', colour: getComputedStyle(document.documentElement).getPropertyValue('--free').trim(), label: 'free slot' };
 }
 
-const map = L.map('map', { worldCopyJump: true, scrollWheelZoom: true }).setView([30, 0], 2);
+/**
+ * ★★★ THE WHEEL SCROLLS THE PAGE. Both the map and the dial were swallowing it, so a visitor
+ *     trying to reach the server list below found the map zooming out from under them instead —
+ *     "it either zooms the dial or the map rather than moving the page to get to the servers"
+ *     (Stuart, 2026-08-23). Scrolling is the browser's gesture and taking it costs far more than
+ *     the zoom it buys: the +/− keys, double-click and pinch all still zoom, and holding ⌘/Ctrl
+ *     while scrolling zooms for anyone who wants that.
+ */
+const map = L.map('map', { worldCopyJump: true, scrollWheelZoom: false }).setView([30, 0], 2);
+document.getElementById('map').addEventListener('wheel', (e) => {
+  // ★ Modifier held = zoom, and only then is the page's own scroll taken away.
+  if (!e.ctrlKey && !e.metaKey) return;
+  e.preventDefault();
+  if (e.deltaY > 0) map.zoomOut(1); else map.zoomIn(1);
+}, { passive: false });
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
   attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 12,
 }).addTo(map);
@@ -1124,7 +1142,10 @@ function wireCountryPicker() {
       // ★ Under the button, and never off the right-hand edge of a narrow window.
       const r = btn.getBoundingClientRect();
       pop.style.left = `${Math.max(8, Math.min(window.innerWidth - 348, r.left))}px`;
-      pop.style.top = `${r.bottom + window.scrollY}px`;
+      pop.style.top = `${r.bottom + 4}px`;
+      // ★ Never taller than the window has room for — a list you cannot scroll to the end of is
+      //   the same bug in a different costume.
+      pop.style.maxHeight = `${Math.max(160, window.innerHeight - r.bottom - 24)}px`;
       renderCountries();
     }
   });
@@ -1732,6 +1753,8 @@ function wireDial() {
   // ★ Zoom about the POINTER on the detail dial; on the overview, zoom about where you point too —
   //   both mean "make this bit bigger".
   glass.addEventListener('wheel', (e) => {
+    // ★ Same rule as the map: the page keeps its scroll unless ⌘/Ctrl says otherwise.
+    if (!e.ctrlKey && !e.metaKey) return;
     const pt = svgPoint(glass, e);
     if (!pt) return;
     e.preventDefault();
