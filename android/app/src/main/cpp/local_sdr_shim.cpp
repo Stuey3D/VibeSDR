@@ -1299,6 +1299,15 @@ static std::atomic<double>   g_floorTestMutedUntil{0.0};
 static std::atomic<double>   g_gainSettleUntil{0.0};
 /** ★ The frequency the AGC's learning belongs to — see agcForget() and its caller in retune(). */
 static std::atomic<double>   g_agcLearnedAtHz{0.0};
+/**
+ * ★★★ HURRY, JUST AFTER A TUNE. "just needs to respond quicker especially whilst tuning" (Stuart,
+ *  2026-08-23) — and tuning is exactly where the loop's caution buys nothing: the gain that was
+ *  right for the last station says nothing about this one, so there is no reason to creep up to
+ *  the new answer through a dwell and a clean-run count designed to protect a SETTLED radio from
+ *  hunting. While this deadline stands the dwell is waived and one clean second is enough; the
+ *  prediction, the ceiling, the failed-gain hysteresis and the trial afterwards are all untouched.
+ */
+static std::atomic<double>   g_agcHurryUntil{0.0};
 // Defined further down, beside setSampleRate(); declared here because retune() and the loop both
 // run above them.
 static void agcForget(const char* why);
@@ -14781,8 +14790,23 @@ int LocalSdrShim::currentGainTenthDb() const { return p ? p->lastGainTenthDb : -
 //  ★ Still not instant. Climbing is the direction that can overshoot into an overload, so it stays
 //    one step at a time with a few seconds of proven-clean signal behind each one — enough to
 //    reach a couple of steps within about ten seconds of tuning.
-static constexpr int    kAgcClimbAfterSec = 3;
-static constexpr double kAgcClimbDwellSec = 4.0;
+/* ★★★ FASTER, WITHOUT MOVING FURTHER. Stuart: "can we make the AGC respond faster like the
+ *     SDRPlay one?" The tempting answer is bigger steps, and this file already knows better — the
+ *     note by the write says the SIZE of the move is the artefact, tested by ear: one step is
+ *     clean, a multi-step jump stutters in proportion to the distance. So the move stays one step
+ *     and the WAITING is what goes.
+ * ★★ The gates used to stack: 3 clean seconds, a 4-second dwell, and a 4-second verdict before the
+ *    next step could even be considered — six to eight seconds a step, so climbing from 0.9 dB to
+ *    30 took a minute and a half. Halved, they come to about one step per housekeeping tick (~2 s),
+ *    which is as fast as this loop can act at all: roughly three times quicker to settle, with
+ *    every check still in place.
+ *  ★ The verdict cannot go below the settle window plus a measurement — 1.3s of stale samples are
+ *    discarded after each write, so 2.5s leaves a little over a second of fresh evidence. */
+static constexpr int    kAgcClimbAfterSec = 2;
+static constexpr double kAgcClimbDwellSec = 2.0;
+/** ★ How long a climb or a cut is left on trial before it is judged. One constant, because the two
+ *  verdicts must not drift apart — they are the same question asked in opposite directions. */
+static constexpr double kAgcVerdictSec    = 2.5;
 /** ★ How long a climb may sit unjudged before the loop gives up waiting and climbs anyway — see
  *  the climb branch. Long enough for the 4s verdict plus a couple of re-arms, short enough that a
  *  permanently disturbed receiver is merely slow rather than stuck. */
@@ -14818,7 +14842,9 @@ void LocalSdrShim::overloadTick() {
     //     listening, so coming down is never made to wait.
     // ★ The climb dwell is long BECAUSE a change is expensive (see the note by the climb branch).
     //   An overload still escapes immediately — clipRun short-circuits this.
-    if (clipRun < 2 && now - g_ovlLastChangeAt.load(std::memory_order_relaxed) < kAgcClimbDwellSec)
+    const bool hurry = now < g_agcHurryUntil.load(std::memory_order_relaxed);
+    if (!hurry && clipRun < 2
+        && now - g_ovlLastChangeAt.load(std::memory_order_relaxed) < kAgcClimbDwellSec)
         return;
 
     // ★★★ DID THE LAST CLIMB ACTUALLY HELP? Judged on SNR, a few seconds later, once the meters
@@ -14838,7 +14864,7 @@ void LocalSdrShim::overloadTick() {
         LOGI("gain climb not judged — the pipeline was disturbed (a listener joined, or a buffer "
              "was dropped); re-measuring from here");
     } else
-    if (climbAt > 0 && now - climbAt >= 4.0) {
+    if (climbAt > 0 && now - climbAt >= kAgcVerdictSec) {
         g_climbAt.store(0.0, std::memory_order_relaxed);
         const float floorNow = p->iqFloorDb.load();
         const float floorWas = g_floorBeforeClimb.load(std::memory_order_relaxed);
@@ -14930,7 +14956,7 @@ void LocalSdrShim::overloadTick() {
     //    not a control loop.
     {
         const double dropAt = g_dropAt.load(std::memory_order_relaxed);
-        if (dropAt > 0 && now - dropAt >= 4.0) {
+        if (dropAt > 0 && now - dropAt >= kAgcVerdictSec) {
             g_dropAt.store(0.0, std::memory_order_relaxed);
             const float fNow = p->iqFloorDb.load();
             const float fWas = g_floorBeforeDrop.load(std::memory_order_relaxed);
@@ -15053,7 +15079,7 @@ void LocalSdrShim::overloadTick() {
     //      and it is only a bad trade if you assume a gain change is free.
     //  ★ Coming DOWN is unchanged and still immediate — an overload is ruining the signal NOW, and
     //    40 ms is a bargain to end it. This reluctance applies only to climbing back up.
-    } else if (steps > 0 && cleanRun >= kAgcClimbAfterSec
+    } else if (steps > 0 && cleanRun >= (hurry ? 1 : kAgcClimbAfterSec)
                && !(g_climbAt.load(std::memory_order_relaxed) > 0
                     && now - g_climbAt.load(std::memory_order_relaxed) < kClimbTrialMaxSec)) {
         /* ★★★ ONE CLIMB ON TRIAL AT A TIME. Every step is supposed to prove itself before the next
@@ -15155,8 +15181,58 @@ void LocalSdrShim::overloadTick() {
             //   nothing happened — the one thing guaranteed to make the useful lines unreadable.
             return;
         }
+        /* ══ GO STRAIGHT THERE, AS THE CUT ALREADY DOES ═════════════════════════════════════════
+         * ★★★ THE "ONE STEP ONLY" RULE WAS CALIBRATED AGAINST AN ARTEFACT THAT NO LONGER EXISTS.
+         *     It was set by ear when a multi-step jump "stuttered in proportion to how far it
+         *     moved" — but the stutter was later found to be the CLIENT rebuilding its gain list
+         *     in the DOM on the main thread (Opus concealment, 40–60 ms of attenuated mono), plus
+         *     the gain write holding the DSP's lock. Both are fixed. Stuart, when I quoted the old
+         *     finding back at him: "but that was before you fixed the stutter" — and he is right.
+         *     A measurement is only as good as the conditions it was taken in, and repeating it as
+         *     a rule after those conditions changed is how a fix becomes folklore.
+         * ★★★ SO CLIMB THE WHOLE PREDICTED DISTANCE IN ONE WRITE. The cut path has done this since
+         *     the day it was written — "the clip percentage already says how badly the front end is
+         *     being overdriven, so use it… searching for a number you can calculate is what made
+         *     this audible". The same argument applies upward: the peak says how far below the
+         *     operating point we are, and stepping there one rung at a time is six audible events
+         *     and a minute and a half instead of one and two seconds.
+         *  ★★ EVERY GUARD STILL APPLIES TO THE LANDING PLACE, not merely to the first rung: the
+         *     predicted peak must clear the target and the margin, and it must not re-enter a gain
+         *     that has already failed here. The step is then put on trial exactly as before — if
+         *     the floor or the SNR says it was a mistake, it is handed straight back.
+         *  ★ Bounded by the owner's ceiling (tgtIdx) like everything else.
+         */
+        {
+            const int bad = g_ovlBadGain.load(std::memory_order_relaxed);
+            const double mgn = g_ovlMargin.load(std::memory_order_relaxed);
+            int best = idx;
+            for (int j = idx + 1; j <= tgtIdx; j++) {
+                const double add = (gains[(size_t)j] - gains[(size_t)from]) / 10.0;
+                if (peak + add > kAgcTargetDbfs) break;
+                if (peak + add > -mgn) break;
+                if (bad >= 0 && gains[(size_t)j] >= bad && cleanRun < 120) break;
+                best = j;
+            }
+            if (best != idx) {
+                idx  = best;
+                want = tgtIdx - best;
+                LOGI("clear by %.1f dB — climbing straight to %.1f dB in one step",
+                     kAgcTargetDbfs - peak, gains[(size_t)idx] / 10.0);
+            }
+        }
     }
-    // ── ★★★ ONE STEP PER CORRECTION. THE SIZE OF THE MOVE IS THE ARTEFACT ───────────────────
+    // ── ★★★ THE SIZE OF THE MOVE WAS THE ARTEFACT — AND IS NOT ANY MORE (2026-08-23) ────────
+    // ★★★ READ THE NEXT PARAGRAPH AS HISTORY, NOT AS A RULE. Everything below was measured while
+    //     the CLIENT was rebuilding its gain list in the DOM on every hwinfo — which produced
+    //     40–60 ms of Opus concealment on any gain change — and while the gain write still held
+    //     the DSP's lock. Both causes were found and fixed afterwards (see
+    //     memory/rtl_agc_stutter_solved), so "a jump stutters in proportion to how far it moved"
+    //     describes a machine that no longer exists. The climb above now moves the whole predicted
+    //     distance in one write, as the back-off always has.
+    //  ★ Kept rather than deleted because the EXPERIMENT is still worth its place: it is the
+    //    reason anyone knows the writes must be spaced, and it is a standing reminder to re-take a
+    //    measurement before quoting it at somebody.
+    // ── ★ (historic) ONE STEP PER CORRECTION. THE SIZE OF THE MOVE IS THE ARTEFACT ───────────
     // ★★★ TESTED BY EAR, EACH VARIANT SEPARATELY, AND THIS IS WHAT THE RESULTS SAY:
     //       • a SINGLE step, by hand, is CLEAN — "manual gain is clean no drops at all";
     //       • a multi-step JUMP (build 124) stutters once, in proportion to how far it moved;
@@ -15649,6 +15725,15 @@ bool LocalSdrShim::isAirspyHf() const { return p && p->useAirspyHf(); }
  *    carried across a retune it is a memory of somewhere else.
  */
 static void agcForget(const char* why) {
+    // ★ Fresh meters first (the old station's samples are still in the one-second window), then
+    //   permission to move at once rather than creeping.
+    // ★ The same clock Impl::nowSecs() reads — spelled out here because this is a free function and
+    //   Impl is not in scope. Steady, not wall: a clock that can step backwards would strand these
+    //   deadlines in the future.
+    const double now = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    g_gainSettleUntil.store(now + 1.0, std::memory_order_relaxed);
+    g_agcHurryUntil.store(now + 8.0, std::memory_order_relaxed);
     g_ovlMargin.store(3.0, std::memory_order_relaxed);
     g_bestFloorDb.store(0.0f, std::memory_order_relaxed);      // 0 = unset, see the floor test
     g_floorTestMutedUntil.store(0.0, std::memory_order_relaxed);
