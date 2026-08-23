@@ -1237,11 +1237,7 @@ static std::atomic<bool>     g_rtlAgc{false};
  *  intermodulation long before it rails, so a loop that aims at the rail arrives somewhere the
  *  radio cannot do its job. Backing off begins at kAgcBackoffDbfs, and the gap between the two is
  *  the deadband that stops it toggling on its own threshold. */
-static constexpr double      kAgcTargetDbfs  = -9.0;
-/** ★★★ BELOW THIS, A LIFTED NOISE FLOOR CANNOT BE THE FRONT END. Intermodulation needs SIGNAL:
- *  nothing in an R820T goes non-linear thirty decibels below full scale. Without this floor the
- *  test ran at any level and became a RUNAWAY — see the note where it is used. */
-static constexpr double      kAgcFloorTestMinDbfs = -20.0;
+static constexpr double      kAgcTargetDbfs  = -12.0;
 static constexpr double      kAgcBackoffDbfs = -6.0;
 static std::atomic<double>   g_ovlMargin{3.0};
 static std::atomic<double>   g_ovlLastChangeAt{0.0};
@@ -1274,8 +1270,6 @@ static std::atomic<double>   g_climbAt{0.0};
  *     precisely what ruins weak signals. In that second screenshot it rose about 20 dB.
  *  ★ Which is also why this is measured AFTER the compensation is applied, not before. */
 static std::atomic<float>    g_floorBeforeClimb{0.0f};
-/** ★ How big the step on trial actually was, in dB — see the verdict in the AGC. */
-static std::atomic<double>   g_climbStepDb{0.0};
 /** ★★★ THE BEST (LOWEST) NOISE FLOOR SEEN AT THIS DIAL, and the continuous intermod detector built
  *  on it.
  *
@@ -2228,18 +2222,6 @@ struct LocalSdrShim::Impl {
         g_bestFloorDb.store(0.0f, std::memory_order_relaxed);
         // ★ And the failed step belongs to the OLD frequency — see g_ovlBadGain.
         g_ovlBadGain.store(-1, std::memory_order_relaxed);
-        // ★★★ AND SO DOES THE RAISED BAR. g_ovlMargin climbs 3 dB every time a step is judged
-        //     unhelpful and was reset only on a MODE change — so a single bad verdict on one
-        //     station left "a climb now needs 12 dB" in force on every station tuned afterwards.
-        //     That is the shape Stuart reported: 90.1 "would start off fine but the AGC would
-        //     lower to near 0 and then the RDS would drop off", while 88.6 "didnt have an issue
-        //     and bumped itself back up again" — the difference being which frequency inherited a
-        //     poisoned margin (2026-08-23).
-        //  ★★ The two neighbours in this function are reset for exactly this reason: a floor and a
-        //     failed gain belong to the dial position that produced them. A CAUTION LEARNED
-        //     SOMEWHERE ELSE IS NOT EVIDENCE ABOUT HERE.
-        //  ★ Back to 3.0, the same clean slate a mode change gets.
-        g_ovlMargin.store(3.0, std::memory_order_relaxed);
         uint32_t hz = (uint32_t)llround(logicalCenter + hwOffsetHz());
         if (useSpy()) {
             spy->setIqFrequency(hz);
@@ -14811,70 +14793,30 @@ void LocalSdrShim::overloadTick() {
         g_climbAt.store(0.0, std::memory_order_relaxed);
         const float floorNow = p->iqFloorDb.load();
         const float floorWas = g_floorBeforeClimb.load(std::memory_order_relaxed);
-        // ★★★ A NOISE FLOOR THAT RISES BY THE GAIN YOU ADDED IS NOT COMPRESSION — IT IS GAIN.
-        //     This compared the rise against a FIXED 2 dB, and an RTL's steps are commonly 2-4 dB,
-        //     so a perfectly good climb on a quiet frequency raised the floor by about its own
-        //     size, was ruled "the front end is compressing", was given back, AND raised the bar
-        //     for the next attempt. Repeat twice and the loop is pinned near the bottom with a
-        //     12 dB bar it can never clear — which is a receiver that refuses to hear a weak
-        //     station, exactly the complaint (Stuart, 2026-08-23: "the agc is being too cautious
-        //     here, this station needs a lot more gain to get the RDS working").
-        //  ★★ Compression is when the floor rises MORE than the gain added: that surplus is
-        //     intermodulation appearing, and it is the only part that is evidence of anything.
-        //     Judged against the step, with 1.5 dB of slack for measurement noise.
-        //  ★ A missing or absurd step size falls back to the old fixed bar rather than trusting a
-        //    number nobody set.
-        const double stepDb = g_climbStepDb.load(std::memory_order_relaxed);
-        const double allowed = (stepDb > 0.1 && stepDb < 20.0) ? stepDb + 1.5 : 2.0;
-        if (floorWas < -1.0f && floorNow > floorWas + allowed) {
+        if (floorWas < -1.0f && floorNow > floorWas + 2.0f) {
             // ★ Give it back, and make the next attempt prove more. This is the same "learn from a
             //   failed climb" the clipping path uses — the two failures differ in what they measure,
             //   not in what they mean: this step was not worth taking.
             const double m = std::min(12.0, g_ovlMargin.load(std::memory_order_relaxed) + 3.0);
             g_ovlMargin.store(m, std::memory_order_relaxed);
-            LOGI("that step raised the noise floor %.1f dB for %.1f dB of gain — the front end is "
-                 "compressing, giving it back (a climb now needs %.0f dB)",
-                 floorNow - floorWas, stepDb, m);
+            LOGI("that step raised the noise floor %.1f dB — the front end is compressing, "
+                 "giving it back (a climb now needs %.0f dB)", floorNow - floorWas, m);
             g_adcCleanRun.store(0, std::memory_order_relaxed);
             steps_forceDown = true;
         }
     }
 
     const double peakNow = g_adcPeakDbfs.load(std::memory_order_relaxed);
-    // ★★★ THE CONTINUOUS INTERMOD CHECK, MEASURED AGAINST THE GAIN THAT PRODUCED IT.
-    //
-    //  ★★★ IT COMPARED THE RAW FLOOR WITH THE QUIETEST RAW FLOOR EVER SEEN — and the quietest
-    //      floor is by definition the one at the LOWEST gain. So every honest climb pushed the
-    //      floor above that mark and tripped this test, forcing the gain straight back down: the
-    //      loop could never settle more than about 3 dB above wherever it happened to start. On
-    //      96.1 that meant parking at pk -14 dBFS where the receiver used to reach -5 and hold
-    //      RDS (Stuart, 2026-08-23: "the agc is still a little low on 96.1 ... previously it was
-    //      going to pk -5 dBFS which gave a gain of around 8.7").
-    //  ★★ SAME MISTAKE AS THE CLIMB VERDICT ABOVE, in the other measurement: a floor that rises
-    //     with the gain is the gain. Intermodulation is the floor rising FASTER than the gain, so
-    //     the quantity to remember is floor MINUS gain — a gain-normalised floor, which stays put
-    //     while the front end is linear and climbs only when it stops being.
-    //  ★ The sentinel still works: a normalised floor is around -80 to -130 dB, nowhere near 0.
+    // ★★★ THE CONTINUOUS INTERMOD CHECK. Track the quietest floor seen here, and treat a sustained
+    //     rise above it as the front end going non-linear — whatever the converter says about
+    //     headroom.
     const float floorNow = p->iqFloorDb.load();
-    const float normNow = floorNow - (float)(p->lastGainTenthDb / 10.0);
     float best = g_bestFloorDb.load(std::memory_order_relaxed);
-    if (best > -1.0f || normNow < best) {           // unset, or a new quietest
-        g_bestFloorDb.store(normNow, std::memory_order_relaxed);
-        best = normNow;
+    if (best > -1.0f || floorNow < best) {          // unset, or a new quietest
+        g_bestFloorDb.store(floorNow, std::memory_order_relaxed);
+        best = floorNow;
     }
-    // ★★★ AND IT ONLY MEANS ANYTHING WHERE COMPRESSION IS POSSIBLE. At low gain the measured floor
-    //     is the ADC's OWN quantisation floor, which does not fall when tuner gain does — so every
-    //     step down RAISES (floor − gain) and makes this test MORE true. The loop then walks
-    //     itself to the bottom of the gain list one step at a time, which is exactly what the log
-    //     shows: 7.7 → 3.7 → 2.7 → 1.4 → 0.9 → 0.0 dB, each labelled "front end compressing", at
-    //     pk −33 dBFS where nothing can be compressing at all (Stuart, 2026-08-23: "90.1 was
-    //     actually at 7.7 then dropped").
-    //  ★★ A TEST THAT ITS OWN REMEDY MAKES TRUER IS A RUNAWAY, not a control loop. Both the raw
-    //     and the gain-normalised forms have this shape; what stops it is refusing to draw the
-    //     conclusion where it is physically impossible.
-    //  ★ Intermodulation needs signal. Below −20 dBFS there is none to speak of.
-    const bool floorLifted = (best < -1.0f) && (normNow > best + 3.0f)
-                          && (peakNow > kAgcFloorTestMinDbfs);
+    const bool floorLifted = (best < -1.0f) && (floorNow > best + 3.0f);
 
     bool backoffToFit = false;   // ★ see the clipRun branch: the jump is sized under the lock
     int want = steps;
@@ -15080,10 +15022,6 @@ void LocalSdrShim::overloadTick() {
     if (want < steps) {                       // this was a climb — put it on trial
         g_floorBeforeClimb.store(p->iqFloorDb.load(), std::memory_order_relaxed);
         g_climbAt.store(now, std::memory_order_relaxed);
-        // ★★ HOW MUCH GAIN THIS STEP ADDED. The verdict needs it: a floor that rises BY the step
-        //    is the step working, not the front end failing. lastGainTenthDb still holds the gain
-        //    we are leaving — it is assigned below.
-        g_climbStepDb.store((applied - p->lastGainTenthDb) / 10.0, std::memory_order_relaxed);
     }
     g_ovlSteps.store(want, std::memory_order_relaxed);
     g_ovlLastChangeAt.store(now, std::memory_order_relaxed);

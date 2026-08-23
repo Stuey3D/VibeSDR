@@ -2964,7 +2964,11 @@ function updateStatus() {
   //     2026-08-23). A readout that changes width is a readout that moves its neighbours.
   //  ★ Fixed digits are only half of it: tabular-nums in the CSS stops 1 being narrower than 8,
   //    which is the same wobble one decimal place further down.
-  const fps = framesPerSec.toFixed(1);
+  //  ★★ AND PADDED TO A FIXED WIDTH, which one decimal place alone does NOT give: "9.7" is three
+  //     characters and "10.6" is four, so the line still changed length every time the rate
+  //     crossed ten — which is precisely where it was hovering. U+2007 is a FIGURE SPACE, the
+  //     width of a digit, so the padding lines up exactly with tabular figures beside it.
+  const fps = framesPerSec.toFixed(1).padStart(4, '\u2007');
   // ★★★ UNDERRUNS ARE SHOWN, and only once there has been one. A stutter is the single most
   //     reported audio fault and every vantage point the page had — bytes arriving, frames
   //     decoding, even a clean recording — is measured BEFORE playout, so all causes looked
