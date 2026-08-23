@@ -1241,8 +1241,14 @@ function drawRow(segsIn, y0, W, opt) {
     for (const run of freeRuns) {
       for (const hz of [run.lo, run.hi]) {
         const x = hzToXIn(axis, hz);
-        if (x === null || placedX.some((p2) => Math.abs(p2 - x) < 30)) continue;
-        placedX.push(x);
+        // ★★ THE GUARD HAS TO BE THE LABEL'S OWN WIDTH. 30px was narrower than the text it was
+        //    protecting — "526.5 kHz" is nearer 55 — so figures printed THROUGH one another and
+        //    the result read as a smudge rather than as two numbers ("not sure why some numbers
+        //    are blurry", Stuart, 2026-08-23). Measured from the string, since "1.6 GHz" and
+        //    "526.5 kHz" are not the same size.
+        const wNeed = labelPx(prettyHz(hz));
+        if (x === null || placedX.some((q) => Math.abs(q.x - x) < (wNeed + q.w) / 2 + 4)) continue;
+        placedX.push({ x, w: wNeed });
         p.push(`<line class="dTickMaj free" x1="${x.toFixed(1)}" y1="${TICK_Y}" x2="${x.toFixed(1)}" y2="${TICK_Y + TICK_H}"/>`);
         p.push(`<text class="dNum free edge ${opt.kind}" x="${x.toFixed(1)}" y="${NUM_Y}">${esc(prettyHz(hz))}</text>`);
       }
@@ -1264,9 +1270,10 @@ function drawRow(segsIn, y0, W, opt) {
       p.push(`<line class="dTickMaj ${st}" x1="${x.toFixed(1)}" y1="${TICK_Y}" x2="${x.toFixed(1)}" y2="${TICK_Y + TICK_H}"/>`);
       // ★ Give way to a free-edge figure already there — two numerals in one place is worse than
       //   the one it was meant to add, and the free one is the one worth having.
-      if (!placedX.some((p2) => Math.abs(p2 - x) < 30)) {
+      const wNeed = labelPx(prettyHz(f));
+      if (!placedX.some((q) => Math.abs(q.x - x) < (wNeed + q.w) / 2 + 4)) {
         p.push(`<text class="dNum ${st} ${opt.kind}" x="${x.toFixed(1)}" y="${NUM_Y}">${esc(prettyHz(f))}</text>`);
-        placedX.push(x);
+        placedX.push({ x, w: wNeed });
       }
       if (!over) {
         for (let k = 1; k < 5; k++) {
@@ -1315,6 +1322,11 @@ function planBandList() {
     .map((b) => ({ label: b.label, lo: Number(b.lo), hi: Number(b.hi), type: b.type || 'utility' }))
     .filter((b) => b.hi > b.lo);
 }
+
+/** ★ How wide a numeral will draw, near enough to keep two of them apart. The ticker is a
+ *  monospace face at 11.5px, so a character is about 6.9px — no measuring pass needed, and a
+ *  measuring pass per figure per redraw would cost more than the four pixels of slack it saves. */
+function labelPx(text) { return String(text).length * 6.9; }
 
 /** ★ A label that will not spill out of its block — the app truncates the same way ("LW Broadca…"). */
 function bandShort(label, px) {
