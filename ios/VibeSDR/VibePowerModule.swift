@@ -1710,7 +1710,24 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     stopLocalAudioConn()
     laGen &+= 1
     let gen = laGen
-    let params = NWParameters.tcp
+    // ★★★ TLS WHEN THE URL SAYS wss, AND THIS WAS HARDCODED `.tcp`. A VibeServer reached through
+    //     its Cloudflare tunnel is wss on 443, so a plain-TCP NWConnection opened the socket and
+    //     then spoke unencrypted WebSocket at a TLS endpoint: no handshake ever completed, the
+    //     connection sat in `.waiting`, and NOTHING reached the server's log because nothing
+    //     arrived. To the listener that is "no audio" — and no TUNING either, because tuning and
+    //     every control ride this same socket — while the waterfall plays perfectly, since the
+    //     spectrum socket is opened in JavaScript by React Native, which has always done TLS.
+    //     Exactly the report: "still playing audio but not tuning", and on a fresh connect no
+    //     audio at all (Stuart, 2026-08-23, on TestFlight against the XCover).
+    //  ★★ THE OTHER TWO NWConnection SITES IN THIS FILE ALREADY DO THIS — line ~646 (FM-DX) and
+    //     ~1558 (UberSDR audio), both `secure ? .tls : .tcp`. This one was written for the LOCAL
+    //     shim on loopback, where plain ws is all there is, and never revisited when the same call
+    //     started being pointed at a public tunnelled server. One place updated, the others quietly
+    //     left behind — the same shape as the audio-socket bug this pump was built to fix.
+    //  ★ Android was unaffected throughout: OkHttp reads the scheme from the URL, so there was
+    //    never a decision to forget.
+    let secure = (url.scheme == "wss")
+    let params: NWParameters = secure ? .tls : .tcp
     let wsOpts = NWProtocolWebSocket.Options()
     wsOpts.autoReplyPing = true
     params.defaultProtocolStack.applicationProtocols.insert(wsOpts, at: 0)

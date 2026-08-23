@@ -328,6 +328,25 @@ export class SpectrumClient {
   private reconnectTimer: number | null = null;
   /** Set when the server told us it is busy — suppresses the auto-reconnect. */
   private refused = false;
+  /**
+   * ★★★ WHEN DID ANYTHING LAST ARRIVE? A WebSocket that has gone dead WITHOUT CLOSING is the
+   *     failure this exists for: `onclose` never fires, so the 3-second reconnect below never
+   *     runs, and the client sits there believing it is connected. Stuart, 2026-08-23, on the
+   *     XCover through its tunnel: "I've been connected to the xcover listening to a station and
+   *     I wanted to change the station but now its still playing audio but not tuning or showing
+   *     the spectrum properly" — 0.0 fps in the status bar, and a page refresh cured it, which is
+   *     what says client rather than server.
+   * ★★★ AND IT EXPLAINS BOTH HALVES AT ONCE. **Every control rides this socket** — tune, mode,
+   *     bandwidth, gain, squelch, the lot — while audio has one of its own. So a spectrum socket
+   *     that dies quietly takes the waterfall AND the dial with it and leaves the music playing,
+   *     which reads as "the server has half broken" and is nothing of the kind. The rule from
+   *     memory/spectrum_socket_is_not_the_listener applies in reverse here: ask of anything that
+   *     looks server-side, would it still be true with only the AUDIO socket alive?
+   * ★★ The 5-second ping was never a watchdog. It measures round-trip time for the readout and
+   *    nothing ever checked that an answer came back, so it could not notice silence.
+   */
+  private lastRxAt = 0;
+  private aliveTimer: number | null = null;
 
   // Scratch buffers, resized on bin-count change.
   private bins: Float32Array | null = null;
@@ -350,13 +369,29 @@ export class SpectrumClient {
       if (this.view.centerHz && this.view.binBandwidth) {
         this._flushView();
       }
+      this.lastRxAt = performance.now();
       this.pingTimer = window.setInterval(() => {
         this.lastPingAt = performance.now();
         this._send({ type: 'ping' });
       }, 5000);
+      // ★★ THE WATCHDOG. A ping every 5s and a frame rate of at least a few per second mean a
+      //    silence of RX_DEAD_MS cannot be normal — so treat it as dead and close, which drops
+      //    into the reconnect path that already exists and is already careful about refusals.
+      //  ★ Closing rather than reconnecting directly keeps ONE recovery path: everything that
+      //    happens after a drop (status, timers, the busy check) is written once, in onclose.
+      this.aliveTimer = window.setInterval(() => {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+        if (performance.now() - this.lastRxAt < SpectrumClient.RX_DEAD_MS) return;
+        this.cb.onStatus?.('error', 'no data — reconnecting');
+        try { this.ws.close(); } catch { /* already going */ }
+      }, 2000);
     };
 
     ws.onmessage = (e) => {
+      // ★ ANY inbound traffic counts as life, not just spectrum frames: a paused or squelched
+      //   radio still answers pings and still sends state, and calling that dead would reconnect
+      //   a perfectly good socket every fifteen seconds.
+      this.lastRxAt = performance.now();
       if (typeof e.data === 'string') {
         this.cb.onBytes?.(e.data.length);
         this._handleText(e.data);
@@ -373,7 +408,9 @@ export class SpectrumClient {
       this._stopTimers();
       this.cb.onStatus?.('closed', e.code === 1006 ? 'connection lost' : `closed (${e.code})`);
       if (!this.closedByUs && !this.refused) {
-        this.reconnectTimer = window.setTimeout(() => this.connect(), 3000);
+        // ★ Clear the handle as it fires: it is now also read as "a reconnect is already pending"
+        //   by _send, and a stale handle there would suppress the immediate retry for ever.
+        this.reconnectTimer = window.setTimeout(() => { this.reconnectTimer = null; this.connect(); }, 3000);
       }
     };
   }
@@ -388,8 +425,14 @@ export class SpectrumClient {
 
   private _stopTimers() {
     if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
+    if (this.aliveTimer) { clearInterval(this.aliveTimer); this.aliveTimer = null; }
     if (this.sendTimer) { clearTimeout(this.sendTimer); this.sendTimer = null; }
   }
+
+  /** ★ Fifteen seconds of nothing at all. Long enough that a stalled radio or a slow uplink is
+   *  not mistaken for a dead socket, short enough that a listener who reaches for the dial gets
+   *  it back before they give up and refresh the page — which is what they did instead. */
+  private static readonly RX_DEAD_MS = 15000;
 
   /** Send an arbitrary control message. Used for radio-specific controls (RSP gain, notches)
    *  that have no place in the shared tune/gain vocabulary. */
@@ -397,7 +440,25 @@ export class SpectrumClient {
 
   private _send(obj: Record<string, unknown>) {
     const ws = this.ws;
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+    if (ws && ws.readyState === WebSocket.OPEN) { ws.send(JSON.stringify(obj)); return; }
+    // ★★★ A CONTROL THAT GOES NOWHERE MUST NOT GO QUIETLY. This dropped every tune, mode and gain
+    //     on the floor whenever the socket was not open, so the dial moved on screen and the radio
+    //     ignored it with nothing said — the exact experience that ended in a page refresh. A ping
+    //     is exempt: it is our own heartbeat and saying "connection lost" because a heartbeat could
+    //     not be sent, when the watchdog is already about to say it, is noise.
+    if (obj && (obj as { type?: string }).type !== 'ping') {
+      this.cb.onStatus?.('error', 'not connected — reconnecting');
+      // ★ And ASK FOR IT BACK NOW. Somebody reaching for the dial is the best possible signal that
+      //   the socket is wanted; waiting out the watchdog's remaining seconds serves nobody.
+      if (!this.closedByUs && !this.refused && !this.reconnectTimer
+          && (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING)) {
+        this.reconnectTimer = window.setTimeout(() => { this.reconnectTimer = null; this.connect(); }, 250);
+      } else if (ws && ws.readyState === WebSocket.OPEN) {
+        /* unreachable — kept for the reader: OPEN is handled above */
+      } else if (ws && ws.readyState === WebSocket.CONNECTING) {
+        /* ★ Already on its way back; the caller's control is lost but the socket is not. */
+      }
+    }
   }
 
   // ── Inbound ────────────────────────────────────────────────────────────────
