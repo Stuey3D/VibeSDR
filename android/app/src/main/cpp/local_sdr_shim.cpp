@@ -15213,10 +15213,25 @@ void LocalSdrShim::overloadTick() {
                 if (bad >= 0 && gains[(size_t)j] >= bad && cleanRun < 120) break;
                 best = j;
             }
+            /* ★★★ LAND TWO RUNGS SHORT AND WALK THE LAST BIT. Stuart: "or even jump to a couple
+             *     of clicks below then slowly increase or decrease the last couple to check its
+             *     safe" — and that is the better instrument, for a reason the 2.4 MSPS case makes
+             *     concrete: the prediction reads the ADC PEAK, and the peak cannot see
+             *     intermodulation from a signal outside the sampled window. So the arithmetic is
+             *     honest about headroom and blind to harm, and landing exactly on its answer bets
+             *     the whole distance on the half it cannot measure.
+             *  ★★ Two rungs short costs about a second — the remaining steps are taken at the
+             *     normal cadence WITH their trials, so the floor and the SNR get their say before
+             *     the last of the gain goes on. The speed comes from the jump; the safety comes
+             *     from not finishing it.
+             *  ★ Only when there is a real distance to cover: a two-rung move is already the creep,
+             *     and shortening it would leave the loop unable to climb at all.
+             */
+            if (best > idx + 2) best -= 2;
             if (best != idx) {
                 idx  = best;
                 want = tgtIdx - best;
-                LOGI("clear by %.1f dB — climbing straight to %.1f dB in one step",
+                LOGI("clear by %.1f dB — jumping to %.1f dB, then stepping the last couple",
                      kAgcTargetDbfs - peak, gains[(size_t)idx] / 10.0);
             }
         }
