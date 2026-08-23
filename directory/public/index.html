@@ -385,15 +385,25 @@ function radioLine(r, s) {
   if (restricted && !(lo > 0) && !named.length) bits.push('restricted range');
   if (s && s.limitMin > 0) bits.push(`${s.limitMin} minute limit`);
 
-  // ★★ ONE LISTENER AT A TIME READS "FREE", not "0 of 1" — the landing page's own wording, and it
-  //    answers the question a visitor actually has.
-  const listeners = Number(r.listeners) || (s && s.radios && s.radios.length === 1
-                                              ? Number(s.listeners) || 0 : 0);
-  const isFull = max > 0 && listeners >= max;
+  // ★★★ OCCUPANCY IS SAID OR IT IS NOT SHOWN. This filled a missing count with ZERO, so the
+  //     directory announced FREE about a receiver whose own landing page read "FULL · FREE IN
+  //     25:46" (Stuart, 2026-08-23: "the website lies about occupancy"). A wrong FREE is worse
+  //     than a blank: it sends somebody to a radio that will refuse them, and it is the same
+  //     mistake as a client deciding what only the server knows.
+  //  ★★ A single-radio server IS its radio, so the machine's own figures are that radio's — the
+  //     one case where borrowing them states a fact rather than assuming one.
+  const solo = !!(s && Array.isArray(s.radios) && s.radios.length === 1);
+  const said = Number.isFinite(Number(r.listeners)) ? Number(r.listeners)
+             : solo && Number.isFinite(Number(s.listeners)) ? Number(s.listeners) : null;
+  const freeIn = Number.isFinite(Number(r.freeInSec)) ? Number(r.freeInSec)
+               : solo ? Number(s.freeInSec) : -1;
+  const isFull = said !== null && max > 0 && said >= max;
+  // ★ ONE LISTENER AT A TIME READS "FREE", not "0 of 1" — the landing page's own wording.
   const stateTxt = s && s.unreachable ? 'NOT RESPONDING'
-                 : isFull ? (s && s.freeInSec > 0 ? `FULL · FREE IN ${mmss(s.freeInSec)}` : 'FULL')
+                 : said === null ? ''
+                 : isFull ? (freeIn > 0 ? `FULL · FREE IN ${mmss(freeIn)}` : 'FULL')
                  : max <= 1 ? 'FREE'
-                 : `${listeners} OF ${max} LISTENING`;
+                 : `${said} OF ${max} LISTENING`;
 
   // ★★ THE AERIAL, UNDER THE RANGE IT QUALIFIES — and PER RADIO, because one machine can hold
   //    three receivers on three different antennas. A dongle advertising 1 kHz – 1.7 GHz above

@@ -1237,7 +1237,11 @@ static std::atomic<bool>     g_rtlAgc{false};
  *  intermodulation long before it rails, so a loop that aims at the rail arrives somewhere the
  *  radio cannot do its job. Backing off begins at kAgcBackoffDbfs, and the gap between the two is
  *  the deadband that stops it toggling on its own threshold. */
-static constexpr double      kAgcTargetDbfs  = -12.0;
+static constexpr double      kAgcTargetDbfs  = -9.0;
+/** ★★★ BELOW THIS, A LIFTED NOISE FLOOR CANNOT BE THE FRONT END. Intermodulation needs SIGNAL:
+ *  nothing in an R820T goes non-linear thirty decibels below full scale. Without this floor the
+ *  test ran at any level and became a RUNAWAY — see the note where it is used. */
+static constexpr double      kAgcFloorTestMinDbfs = -20.0;
 static constexpr double      kAgcBackoffDbfs = -6.0;
 static std::atomic<double>   g_ovlMargin{3.0};
 static std::atomic<double>   g_ovlLastChangeAt{0.0};
@@ -14858,7 +14862,19 @@ void LocalSdrShim::overloadTick() {
         g_bestFloorDb.store(normNow, std::memory_order_relaxed);
         best = normNow;
     }
-    const bool floorLifted = (best < -1.0f) && (normNow > best + 3.0f);
+    // ★★★ AND IT ONLY MEANS ANYTHING WHERE COMPRESSION IS POSSIBLE. At low gain the measured floor
+    //     is the ADC's OWN quantisation floor, which does not fall when tuner gain does — so every
+    //     step down RAISES (floor − gain) and makes this test MORE true. The loop then walks
+    //     itself to the bottom of the gain list one step at a time, which is exactly what the log
+    //     shows: 7.7 → 3.7 → 2.7 → 1.4 → 0.9 → 0.0 dB, each labelled "front end compressing", at
+    //     pk −33 dBFS where nothing can be compressing at all (Stuart, 2026-08-23: "90.1 was
+    //     actually at 7.7 then dropped").
+    //  ★★ A TEST THAT ITS OWN REMEDY MAKES TRUER IS A RUNAWAY, not a control loop. Both the raw
+    //     and the gain-normalised forms have this shape; what stops it is refusing to draw the
+    //     conclusion where it is physically impossible.
+    //  ★ Intermodulation needs signal. Below −20 dBFS there is none to speak of.
+    const bool floorLifted = (best < -1.0f) && (normNow > best + 3.0f)
+                          && (peakNow > kAgcFloorTestMinDbfs);
 
     bool backoffToFit = false;   // ★ see the clipRun branch: the jump is sized under the lock
     int want = steps;

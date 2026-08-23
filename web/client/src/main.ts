@@ -2958,7 +2958,13 @@ function updateStatus() {
   // previously nothing to confirm it had happened — nor to show a link failing to deliver what it
   // promised. Shown to one decimal below 10, because the difference between 4.6 and 5 matters at
   // the bottom of the ladder and is invisible when rounded.
-  const fps = framesPerSec >= 10 ? framesPerSec.toFixed(0) : framesPerSec.toFixed(1);
+  // ★★★ ONE FORMAT, ALWAYS. This dropped the decimal above 10 fps, so a rate hovering around ten
+  //     alternated between "9.7" and "11" — the string changed LENGTH twice a second, the stats
+  //     line grew and shrank, and the signal and AGC meters beside it wobbled with it (Stuart,
+  //     2026-08-23). A readout that changes width is a readout that moves its neighbours.
+  //  ★ Fixed digits are only half of it: tabular-nums in the CSS stops 1 being narrower than 8,
+  //    which is the same wobble one decimal place further down.
+  const fps = framesPerSec.toFixed(1);
   // ★★★ UNDERRUNS ARE SHOWN, and only once there has been one. A stutter is the single most
   //     reported audio fault and every vantage point the page had — bytes arriving, frames
   //     decoding, even a clean recording — is measured BEFORE playout, so all causes looked
@@ -5580,6 +5586,15 @@ function initDecoders(host: string, auth: AuthState) {
         if (!el) continue;
         el.textContent = String(n);
         (el as HTMLElement).hidden = n <= 0;
+      }
+      // ★★ AND THE BUTTON ITSELF BREATHES — see .chatBreathing. The count says how many; the
+      //    pulse is what makes somebody LOOK, which on a shared dial is the whole point: a
+      //    message is usually a question waiting on an answer.
+      //  ★ Both buttons, because the compact layout has its own and a message must not announce
+      //    itself on one screen size and stay silent on another.
+      for (const id of ['chatBtn', 'mChat']) {
+        const b = document.getElementById(id);
+        if (b) b.classList.toggle('chatBreathing', n > 0);
       }
     },
   });

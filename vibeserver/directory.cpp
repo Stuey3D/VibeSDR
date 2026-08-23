@@ -240,7 +240,33 @@ std::string buildStatus(int port) {
                     //     the process that publishes this list, because each radio is a separate
                     //     process. Publishing the cap is honest; inventing an occupancy would not
                     //     be. See BRIEF-directory-network-dial.md, step 1.
-                    j += ",\"maxListeners\":" + std::to_string(jsonNum(r, "users", 0));
+                    // ★★★ AND WHO IS ACTUALLY ON IT — ASKED, NOT GUESSED. The cap alone made the
+                    //     directory say FREE about a receiver its own landing page was calling
+                    //     "FULL · FREE IN 25:46" (Stuart, 2026-08-23: "the website lies about
+                    //     occupancy"). That is worse than saying nothing: it sends somebody to a
+                    //     radio that will refuse them, and it is exactly the mistake this project
+                    //     already wrote up as "a client must not decide what only the server
+                    //     knows".
+                    //  ★★ EACH RADIO IS A SEPARATE PROCESS ON ITS OWN PORT, which is why the front
+                    //     door cannot count listeners for them — but it can ASK, over loopback,
+                    //     the same way this function already asks for the machine's own figures.
+                    //     The landing page does exactly this from the browser; doing it here gets
+                    //     the same truth to people who have not clicked yet.
+                    //  ★ Once per ping — every fifteen minutes — so the cost is nothing, and a
+                    //    radio that does not answer publishes NO occupancy rather than a zero.
+                    const long long rport = jsonNum(r, "port", 0);
+                    long long rmax = jsonNum(r, "users", 0);
+                    if (rport > 0) {
+                        const std::string ri = httpGetLocal((int)rport, "/vibeserver.json");
+                        if (!ri.empty()) {
+                            j += ",\"listeners\":" + std::to_string(jsonNum(ri, "listeners", 0));
+                            const long long rm = jsonNum(ri, "maxUsers", 0);
+                            if (rm > 0) rmax = rm;
+                            const long long fi = jsonNum(ri, "freeInSec", -1);
+                            if (fi >= 0) j += ",\"freeInSec\":" + std::to_string(fi);
+                        }
+                    }
+                    j += ",\"maxListeners\":" + std::to_string(rmax);
                     // ★★ WORDS in coverage, NUMBERS in ranges — see the note above.
                     auto arr = [&](const std::string& key) -> std::string {
                         const std::string k2 = "\"" + key + "\":";

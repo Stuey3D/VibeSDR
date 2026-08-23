@@ -784,7 +784,11 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 #mStatus #status { color: #c9922e; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 #mStatus #linkBars, #mStatus #sqlChip,
 #mStatus #initChip, #mStatus #ovlChip { flex: 0 0 auto; }
-#mStatus #linkStats { min-width: 0; flex-wrap: wrap; }
+/* ★★ TABULAR FIGURES, so a digit changing does not change the WIDTH. Proportional numerals make
+   1 narrower than 8, so a counter ticking over reflows the row and nudges everything after it —
+   the signal and AGC meters wobbled twice a second beside a bouncing fps figure (Stuart,
+   2026-08-23). The readout's own format was the other half; both had to go. */
+#mStatus #linkStats { min-width: 0; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
 
 /* ── Short windows: TIGHTEN, NEVER HIDE ──────────────────────────────────────── */
 /* ★★★ THIS BLOCK USED TO DO `#mStatus { display: none }`. It was written when the card was a
@@ -1279,6 +1283,26 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   #chatPhrases .btn { flex: 1 1 100%; }
   #chatLog { max-height: 30vh; }
 }
+/* ★★★ THE BUTTON BREATHES WHILE SOMETHING IS UNREAD, because a small amber count in a row of
+   controls is easy to miss entirely — on a shared dial the whole point of a message is that
+   somebody is waiting on an answer (Stuart, 2026-08-23: "the button needs to breathe for a little
+   bit like the app does to draw your eye to it").
+   ★★ THE APP'S OWN TIMING AND COLOUR, not an approximation: ControlsBar animates a blue border
+      from opacity 0 to 1 over 2500 ms and back, for ever. Two clients pulsing at different rates
+      would read as two different states.
+   ★★ AN INSET box-shadow, NOT a border. A real border changes the button's size, which nudges
+      every control beside it twice every five seconds — the same wobble the fps readout had, and
+      a worse cure than the disease.
+   ★ Motion is a preference: somebody who has asked for less of it still gets the count. */
+@keyframes chatBreathe {
+  from { box-shadow: inset 0 0 0 1px rgba(100,180,255,0); }
+  to   { box-shadow: inset 0 0 0 1px rgba(100,180,255,1); }
+}
+.chatBreathing { animation: chatBreathe 2.5s ease-in-out infinite alternate; }
+@media (prefers-reduced-motion: reduce) {
+  .chatBreathing { animation: none; box-shadow: inset 0 0 0 1px rgba(100,180,255,.8); }
+}
+
 /* ★ The unread mark: a count, not a dot. "3" says whether it is worth opening; a dot does not. */
 .unread {
   display: inline-block; min-width: 1.1em; margin-left: 0.4em; padding: 0 0.25em;
