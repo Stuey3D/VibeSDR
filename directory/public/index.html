@@ -206,6 +206,34 @@
   .dialCtl select { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
                     color: var(--accent); font-family: inherit; font-size: 12px; padding: 4px 7px; }
   .dialCtl select:focus { outline: none; border-color: var(--accent); }
+  .ctyBtn { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+            color: var(--accent); font-family: inherit; font-size: 12px; padding: 4px 9px;
+            cursor: pointer; letter-spacing: .04em; }
+  .ctyBtn:hover, .ctyBtn[aria-expanded="true"] { border-color: var(--accent); }
+  .ctyPop { position: absolute; z-index: 60; margin-top: 4px; max-height: 62vh; overflow-y: auto;
+            min-width: 260px; max-width: 340px; background: var(--panel); border-radius: 10px;
+            border: 1px solid var(--accent); padding: 8px; text-align: left;
+            box-shadow: 0 14px 40px rgba(0,0,0,.6); }
+  .ctyCont { margin: 6px 0 2px; }
+  .ctyRow { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 5px;
+            cursor: pointer; font-size: 12.5px; color: var(--text); letter-spacing: .02em; }
+  .ctyRow:hover { background: rgba(255,184,51,.10); }
+  .ctyRow.head { color: var(--accent); text-transform: uppercase; font-size: 11px;
+                 letter-spacing: .12em; border-top: 1px solid var(--line); margin-top: 6px;
+                 padding-top: 7px; }
+  .ctyRow .n { margin-left: auto; color: var(--dim); font-size: 11px; }
+  .ctyBox { width: 13px; height: 13px; border: 1px solid var(--line); border-radius: 3px;
+            display: inline-block; flex: 0 0 13px; position: relative; }
+  .ctyRow.on .ctyBox { background: var(--accent); border-color: var(--accent); }
+  .ctyRow.some .ctyBox { border-color: var(--accent); }
+  .ctyRow.some .ctyBox::after { content: ''; position: absolute; inset: 3px;
+                                background: var(--accent); border-radius: 1px; }
+  .ctyFoot { display: flex; gap: 8px; padding: 8px 6px 2px; border-top: 1px solid var(--line);
+             margin-top: 6px; }
+  .ctyFoot button { flex: 1; background: none; border: 1px solid var(--line); border-radius: 6px;
+                    color: var(--dim); font-family: inherit; font-size: 11px; padding: 5px;
+                    cursor: pointer; letter-spacing: .1em; text-transform: uppercase; }
+  .ctyFoot button:hover { border-color: var(--accent); color: var(--accent); }
   /* ★★ THE ZOOM KEYS ARE THE APP'S — recessed dark plates with a lit green glyph and the
         magnifier between them, the same control a VibeSDR user already knows (Stuart, with the
         screenshot). Not a pair of web buttons in a radio's clothing. */
@@ -355,8 +383,13 @@
       <!-- ★ WHERE, not who: the country a receiver sits in is the question a listener asks when
            they want signals from somewhere, and it is the one filter the map cannot express in a
            click. It narrows the dial, the list and the pins together. -->
-      <label for="cty">Country</label>
-      <select id="cty"><option value="">anywhere</option></select>
+      <label>Where</label>
+      <button type="button" id="ctyBtn" class="ctyBtn" aria-haspopup="dialog" aria-expanded="false">anywhere</button>
+      <!-- ★★ A LIST, NOT A DROPDOWN. "a user looking for a signal in the US may choose US/Canadian/
+              Mexican receivers" — one at a time is the wrong shape for that, and a native select
+              cannot express it. Continents roll several up at once, because clicking Europe is what
+              somebody means when they click Europe. -->
+      <div class="ctyPop" id="ctyPop" role="dialog" aria-label="Choose countries" hidden></div>
       <!-- ★★★ THE REGION CHANGES THE LABELS, NEVER THE COVERAGE. Medium wave ends at 1606.5 kHz in
            Region 1 and 1705 in Region 2; a dial labelled with the wrong plan tells a visitor a band
            ends where it does not. If switching region ever appears to add or remove a server,
@@ -846,7 +879,7 @@ function searchRanges() {
 }
 
 function matches(s) {
-  if (countryOn && s.country !== countryOn) return false;
+  if (countriesOn.size && !countriesOn.has(s.country)) return false;
   const wants = searchRanges();
   // ★ A band this plan cannot name is not a band we can match by frequency — say no rather than
   //   quietly returning everything.
@@ -888,7 +921,7 @@ function dialItems() {
     if (s.unreachable) continue;      // ★ not responding is not coverage
     // ★ The dial answers "what can the network hear" for the network the visitor is LOOKING at —
     //   filter to Germany and the dial must be Germany's reach, not Europe's.
-    if (countryOn && s.country !== countryOn) continue;
+    if (countriesOn.size && !countriesOn.has(s.country)) continue;
     for (const r of (s.radios || [])) {
       const free = radioFree(r, s);
       for (const [lo, hi] of reachOf(r))
@@ -946,7 +979,32 @@ function segTitle(g) {
  */
 let PLAN = null;                    // { regions: {1,2,3}, regionByLon, highLatMin }
 let regionSel = 'auto';             // the dropdown; 'auto' follows the receivers on screen
-let countryOn = '';                 // '' = anywhere
+/** The countries ticked in the picker. Empty = anywhere. */
+const countriesOn = new Set();
+
+/**
+ * ★★★ ISO2 → CONTINENT, AND THIS IS THE ONE TABLE THE PAGE KEEPS. The band-plan rule above bans a
+ *     table because a band plan DRIFTS — it is region-aware, it changes, and a copy here would
+ *     come to disagree with the servers. Which continent a country sits on does none of that.
+ *  ★★ Country NAMES are not typed at all: Intl.DisplayNames gives them, localised, from the
+ *     browser — so this table carries no text that could go stale or read oddly to a visitor.
+ *  ★ WHERE A COUNTRY STRADDLES, IT IS FILED WHERE A LISTENER WOULD LOOK FOR IT. Russia and Turkey
+ *    are under Europe here for that reason and no other; this is a finding aid, not an atlas.
+ */
+const CONTINENTS = [
+  ['Europe', 'AD AL AT AX BA BE BG BY CH CY CZ DE DK EE ES FI FO FR GB GG GI GR HR HU IE IM IS IT JE LI LT LU LV MC MD ME MK MT NL NO PL PT RO RS RU SE SI SJ SK SM TR UA VA XK'],
+  ['North America', 'AG AI AW BB BL BM BQ BS BZ CA CR CU CW DM DO GD GL GP GT HN HT JM KN KY LC MF MQ MS MX NI PA PM PR SV SX TC TT US VC VG VI'],
+  ['South America', 'AR BO BR CL CO EC FK GF GS GY PE PY SR UY VE'],
+  ['Asia', 'AE AF AM AZ BD BH BN BT CC CN CX GE HK ID IL IN IQ IR JO JP KG KH KP KR KW KZ LA LB LK MM MN MO MV MY NP OM PH PK PS QA SA SG SY TH TJ TL TM TW UZ VN YE'],
+  ['Africa', 'AO BF BI BJ BW CD CF CG CI CM CV DJ DZ EG EH ER ET GA GH GM GN GQ GW KE KM LR LS LY MA MG ML MR MU MW MZ NA NE NG RE RW SC SD SH SL SN SO SS ST SZ TD TG TN TZ UG YT ZA ZM ZW'],
+  ['Oceania', 'AS AU CK FJ FM GU KI MH MP NC NF NR NU NZ PF PG PN PW SB TK TO TV UM VU WF WS'],
+  ['Antarctica', 'AQ BV HM TF'],
+].map(([name, codes]) => ({ name, codes: codes.split(' ') }));
+
+// ★ Country names come from `countryName` above — the page already asks Intl.DisplayNames for
+//   them, so there is no list of names here to go stale or read oddly to a visitor. One helper,
+//   not two: the second one I wrote here was caught by the parser, which is the only reason it is
+//   not still sitting in the file doing the same job slightly differently.
 let dialView = null;                // the viewer's zoom window in Hz, or null for the whole network
 
 try { regionSel = localStorage.getItem('vsRegion') || 'auto'; } catch { /* private mode */ }
@@ -980,7 +1038,7 @@ function activeRegion() {
   if (regionSel !== 'auto') return Number(regionSel) || 1;
   const votes = new Map();
   for (const s of ALL) {
-    if (countryOn && s.country !== countryOn) continue;
+    if (countriesOn.size && !countriesOn.has(s.country)) continue;
     const r = ituRegionAt(Number(s.lat), Number(s.lon));
     votes.set(r, (votes.get(r) || 0) + 1);
   }
@@ -996,18 +1054,111 @@ function planBands() {
   return list.map((b) => [b.label, Number(b.lo), Number(b.hi)]).filter(([, lo, hi]) => hi > lo);
 }
 
-/** ★ The country list is DERIVED from what is listed — never a filter that can only return none. */
-function renderCountries() {
-  const sel = document.getElementById('cty');
+/**
+ * ★ The list is DERIVED from what is listed — never a filter that can only return none, and never
+ *   a continent with nothing under it.
+ */
+function countryCounts() {
   const seen = new Map();
   for (const s of ALL) if (s.country) seen.set(s.country, (seen.get(s.country) || 0) + 1);
-  const opts = [...seen.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  const keep = countryOn;
-  sel.innerHTML = `<option value="">anywhere</option>`
-    + opts.map(([c, n]) => `<option value="${esc(c)}">${esc(c)} · ${n}</option>`).join('');
-  sel.value = opts.some(([c]) => c === keep) ? keep : '';
-  countryOn = sel.value;
-  document.getElementById('rgn').value = regionSel;
+  return seen;
+}
+
+function renderCountries() {
+  const counts = countryCounts();
+  // ★ Drop ticks for countries that have gone off the directory since the last refresh, or the
+  //   button would count places nobody is serving from any more.
+  for (const c of [...countriesOn]) if (!counts.has(c)) countriesOn.delete(c);
+
+  const btn = document.getElementById('ctyBtn');
+  const picked = [...countriesOn];
+  btn.textContent = !picked.length ? 'anywhere'
+    : picked.length === 1 ? countryName(picked[0])
+    : `${picked.length} countries`;
+  btn.classList.toggle('on', picked.length > 0);
+
+  const pop = document.getElementById('ctyPop');
+  if (pop.hidden) return;                       // only build the list while it is open
+
+  const rows = [];
+  for (const cont of CONTINENTS) {
+    const here = cont.codes.filter((c) => counts.has(c));
+    if (!here.length) continue;
+    const on = here.filter((c) => countriesOn.has(c)).length;
+    const cls = on === 0 ? '' : on === here.length ? 'on' : 'some';
+    const total = here.reduce((n, c) => n + counts.get(c), 0);
+    rows.push(`<div class="ctyRow head ${cls}" data-cont="${esc(cont.name)}" role="button" tabindex="0">`
+      + `<span class="ctyBox"></span>${esc(cont.name)}<span class="n">${total}</span></div>`);
+    // ★ Alphabetical by the NAME the visitor is reading, not by the code behind it.
+    here.sort((a, b) => countryName(a).localeCompare(countryName(b)));
+    for (const c of here) {
+      rows.push(`<div class="ctyRow ${countriesOn.has(c) ? 'on' : ''}" data-cty="${esc(c)}" role="button" tabindex="0">`
+        + `<span class="ctyBox"></span>${esc(countryName(c))}<span class="n">${counts.get(c)}</span></div>`);
+    }
+  }
+  // ★ A country whose code this table has never heard of still has to be reachable — a receiver
+  //   must never be unfindable because a lookup table is out of date.
+  const known = new Set(CONTINENTS.flatMap((c) => c.codes));
+  const orphans = [...counts.keys()].filter((c) => !known.has(c));
+  if (orphans.length) {
+    rows.push(`<div class="ctyRow head">Elsewhere</div>`);
+    for (const c of orphans.sort())
+      rows.push(`<div class="ctyRow ${countriesOn.has(c) ? 'on' : ''}" data-cty="${esc(c)}" role="button" tabindex="0">`
+        + `<span class="ctyBox"></span>${esc(countryName(c))}<span class="n">${counts.get(c)}</span></div>`);
+  }
+  pop.innerHTML = (rows.join('') || '<div class="ctyRow">No servers listed yet.</div>')
+    + `<div class="ctyFoot"><button type="button" data-all="1">Anywhere</button>`
+    + `<button type="button" data-close="1">Done</button></div>`;
+}
+
+function wireCountryPicker() {
+  const btn = document.getElementById('ctyBtn');
+  const pop = document.getElementById('ctyPop');
+  const close = () => { pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    pop.hidden = !pop.hidden;
+    btn.setAttribute('aria-expanded', String(!pop.hidden));
+    if (!pop.hidden) {
+      // ★ Under the button, and never off the right-hand edge of a narrow window.
+      const r = btn.getBoundingClientRect();
+      pop.style.left = `${Math.max(8, Math.min(window.innerWidth - 348, r.left))}px`;
+      pop.style.top = `${r.bottom + window.scrollY}px`;
+      renderCountries();
+    }
+  });
+  pop.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const row = e.target.closest ? e.target.closest('.ctyRow') : null;
+    const foot = e.target.closest ? e.target.closest('.ctyFoot button') : null;
+    if (foot) {
+      if (foot.dataset.all) { countriesOn.clear(); dialView = null;
+                               renderCountries(); renderDial(); applyFilters(); drawCountryHighlight(); }
+      else close();
+      return;
+    }
+    if (!row) return;
+    if (row.dataset.cont) {
+      // ★★ A CONTINENT IS A SHORTCUT, NOT A THING OF ITS OWN. Ticking it ticks the countries under
+      //    it that actually have servers; untick clears exactly those. Nothing remembers "Europe"
+      //    afterwards, so a new server appearing in Spain does not silently join a selection made
+      //    yesterday — the filter is always the countries you can see ticked.
+      const cont = CONTINENTS.find((c) => c.name === row.dataset.cont);
+      const counts = countryCounts();
+      const here = cont ? cont.codes.filter((c) => counts.has(c)) : [];
+      const all = here.every((c) => countriesOn.has(c));
+      for (const c of here) { if (all) countriesOn.delete(c); else countriesOn.add(c); }
+    } else if (row.dataset.cty) {
+      const c = row.dataset.cty;
+      if (countriesOn.has(c)) countriesOn.delete(c); else countriesOn.add(c);
+    } else return;
+    // ★ A new set of countries is a new network: its extent is different, so the old zoom window
+    //   is not about anything any more.
+    dialView = null;
+    renderCountries(); renderDial(); applyFilters(); drawCountryHighlight();
+  });
+  document.addEventListener('click', () => { if (!pop.hidden) close(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !pop.hidden) close(); });
 }
 
 /**
@@ -1646,13 +1797,7 @@ function wireDial() {
     renderDial(); applyFilters();
   });
 
-  document.getElementById('cty').addEventListener('change', (e) => {
-    countryOn = e.target.value;
-    // ★ A new country is a new network — its extent is different, so the old zoom window is not
-    //   about anything any more.
-    dialView = null;
-    renderDial(); applyFilters();
-  });
+  wireCountryPicker();
   document.getElementById('rgn').addEventListener('change', (e) => {
     regionSel = e.target.value;
     try { localStorage.setItem('vsRegion', regionSel); } catch { /* private mode */ }
@@ -1693,6 +1838,49 @@ function applyFilters() {
                 + ` be matched by frequency.` : '');
   }
   render(shown, active);
+}
+
+/* ══ THE SELECTED COUNTRIES, ON THE MAP ══════════════════════════════════════════════════════
+ * ★★ Stuart, 2026-08-23: "when a country is selected is it possible for the map to highlight them
+ *    in the translucent amber like in the app and webclient". Same amber, and the same OUTLINES —
+ *    country-shapes.json is generated from src/services/countryBounds.ts, which is what the app
+ *    highlights from. One set of borders in the tree, not two that could come to disagree.
+ * ★ Fetched only when somebody actually picks a country: 150 KB is nothing to a page that has
+ *   already loaded a map, but it is 150 KB that most visitors never need.
+ */
+let COUNTRY_SHAPES = null, shapesPending = null;
+function loadCountryShapes() {
+  if (COUNTRY_SHAPES) return Promise.resolve(COUNTRY_SHAPES);
+  if (!shapesPending) {
+    shapesPending = fetch('/country-shapes.json')
+      .then((r) => r.json())
+      .then((j) => (COUNTRY_SHAPES = j))
+      // ★ A highlight that cannot be drawn is not worth an error: the filter still works, the map
+      //   simply does not shade. Never let decoration break the page.
+      .catch(() => (COUNTRY_SHAPES = {}));
+  }
+  return shapesPending;
+}
+
+const countryLayer = L.layerGroup();
+function drawCountryHighlight() {
+  countryLayer.clearLayers();
+  if (!countriesOn.size) { if (map.hasLayer(countryLayer)) map.removeLayer(countryLayer); return; }
+  loadCountryShapes().then((shapes) => {
+    countryLayer.clearLayers();
+    if (!countriesOn.size) return;
+    for (const cc of countriesOn) {
+      const rings = shapes[cc];
+      if (!rings) continue;                 // a country the outline set has never heard of
+      // ★ Leaflet wants [lat, lon]; the source is [lon, lat], as GeoJSON is.
+      const latlngs = rings.map((ring) => ring.map(([lon, lat]) => [lat, lon]));
+      L.polygon(latlngs, {
+        color: '#ffb833', weight: 1, opacity: 0.75,
+        fillColor: '#ffb833', fillOpacity: 0.18, interactive: false,
+      }).addTo(countryLayer);
+    }
+    if (!map.hasLayer(countryLayer)) countryLayer.addTo(map);
+  });
 }
 
 /** ★ Markers live in a layer of their own so a re-render REPLACES them. Adding straight to the
@@ -1855,7 +2043,8 @@ function load(first) {
   return fetch('/api/directory')
     .then((r) => r.json())
     .then((d) => withLiveCounts(Array.isArray(d.servers) ? d.servers : []))
-    .then((servers) => { ALL = servers; learnBands(ALL); renderCountries(); renderDial(); applyFilters(); })
+    .then((servers) => { ALL = servers; learnBands(ALL); renderCountries(); renderDial();
+                         applyFilters(); drawCountryHighlight(); })
     .catch(() => {
       if (!first) return;
       document.getElementById('list').innerHTML =
