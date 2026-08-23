@@ -1286,6 +1286,8 @@ static std::atomic<float>    g_floorBeforeClimb{0.0f};
 static std::atomic<double>   g_dropAt{0.0};
 static std::atomic<float>    g_floorBeforeDrop{0.0f};
 static std::atomic<double>   g_dropStepDb{0.0};
+/** ★ How many dB the climb on trial actually added — see the climb verdict in overloadTick(). */
+static std::atomic<double>   g_climbStepDb{0.0};
 /** ★ While this stands, the floor test is muted: it has been shown, by experiment, to be
  *  diagnosing something gain cannot fix. */
 static std::atomic<double>   g_floorTestMutedUntil{0.0};
@@ -14812,14 +14814,38 @@ void LocalSdrShim::overloadTick() {
         g_climbAt.store(0.0, std::memory_order_relaxed);
         const float floorNow = p->iqFloorDb.load();
         const float floorWas = g_floorBeforeClimb.load(std::memory_order_relaxed);
-        if (floorWas < -1.0f && floorNow > floorWas + 2.0f) {
+        const double climbStep = g_climbStepDb.load(std::memory_order_relaxed);
+        /* ★★★ MORE GAIN RAISES THE NOISE FLOOR. THAT IS NOT COMPRESSION, IT IS THE GAIN.
+         *     `iqFloorDb` is an ABSOLUTE level, so adding 6.7 dB of gain lifts the floor by about
+         *     6.7 dB along with everything else and the SNR is unchanged. This test fired on any
+         *     rise over 2 dB — and the tuner's steps are 4.0 and 6.7 — so EVERY HEALTHY CLIMB was
+         *     judged a failure, given back, and the bar raised 3 dB each time until it hit its 12 dB
+         *     ceiling and no climb could ever be taken again. Caught on the XCover at 1.2 MSPS:
+         *         that step raised the noise floor 2.7 dB — compressing (a climb now needs 6 dB)
+         *         that step raised the noise floor 2.2 dB — compressing (a climb now needs 9 dB)
+         *         adc: peak −32.6 dBFS, clip 0.0000%
+         *     Thirty-two decibels of headroom and it was refusing to reach for any of it —
+         *     "overly cautious and doesnt want to boost the gain where needed" (Stuart,
+         *     2026-08-23). The 2.7 and the 2.2 ARE the steps.
+         * ★★★ SO THE QUESTION IS "DID THE FLOOR RISE BY MORE THAN I ADDED?" Real compression gives
+         *     back more than the step — intermodulation products grow faster than the gain that
+         *     makes them. A rise of about the step is a radio behaving exactly as it should.
+         *  ★★ The cut path was fixed this way first and this is its mirror image: both now measure
+         *     the floor's move AGAINST the gain's move, which is the only comparison that means
+         *     anything. The commit that fixed the cut claimed to be "symmetric with the climb
+         *     verdict above" — it was not, and that is precisely the half that stayed broken.
+         *  ★ 2 dB of slack over the step: measurement noise on a 4-second window, not a judgement.
+         */
+        const double allowed = (climbStep > 0.1 ? climbStep : 0.0) + 2.0;
+        if (floorWas < -1.0f && (double)(floorNow - floorWas) > allowed) {
             // ★ Give it back, and make the next attempt prove more. This is the same "learn from a
             //   failed climb" the clipping path uses — the two failures differ in what they measure,
             //   not in what they mean: this step was not worth taking.
             const double m = std::min(12.0, g_ovlMargin.load(std::memory_order_relaxed) + 3.0);
             g_ovlMargin.store(m, std::memory_order_relaxed);
-            LOGI("that step raised the noise floor %.1f dB — the front end is compressing, "
-                 "giving it back (a climb now needs %.0f dB)", floorNow - floorWas, m);
+            LOGI("that step raised the noise floor %.1f dB for %.1f dB of gain — more than the step, "
+                 "so the front end is compressing; giving it back (a climb now needs %.0f dB)",
+                 floorNow - floorWas, climbStep, m);
             g_adcCleanRun.store(0, std::memory_order_relaxed);
             steps_forceDown = true;
         }
@@ -14873,16 +14899,30 @@ void LocalSdrShim::overloadTick() {
     // ★★★ THE CONTINUOUS INTERMOD CHECK. Track the quietest floor seen here, and treat a sustained
     //     rise above it as the front end going non-linear — whatever the converter says about
     //     headroom.
+    /* ★★★ AND THE SAME ERROR RAN THE OTHER WAY HERE. `bestFloorDb` tracked the quietest ABSOLUTE
+     *     floor ever seen — which is learned at LOW gain, right after a cut. Every legitimate climb
+     *     afterwards then read as "the floor has lifted" against a figure measured with less gain
+     *     applied, so the loop cut again, learned an even quieter floor, and ratcheted itself to
+     *     the bottom. Together with the climb verdict above, that is how a receiver at −32 dBFS
+     *     ends up sitting at 0.0 dB of gain.
+     *  ★★ NORMALISED BY THE GAIN, so "quietest" means quietest FOR THE GAIN IT WAS MEASURED AT and
+     *     a rise means the floor moved for a reason the gain does not explain — which is what
+     *     front-end compression actually is.
+     *  ★ Unset is still 0.0 (no receiver has a 0 dBFS noise floor), and an unknown gain simply
+     *    normalises by zero — the old behaviour, for a tuner that has not told us where it is.
+     */
+    const double gainNowDb = p->lastGainTenthDb >= 0 ? p->lastGainTenthDb / 10.0 : 0.0;
     const float floorNow = p->iqFloorDb.load();
+    const float floorNorm = (float)((double)floorNow - gainNowDb);
     float best = g_bestFloorDb.load(std::memory_order_relaxed);
-    if (best > -1.0f || floorNow < best) {          // unset, or a new quietest
-        g_bestFloorDb.store(floorNow, std::memory_order_relaxed);
-        best = floorNow;
+    if (best > -1.0f || floorNorm < best) {         // unset, or a new quietest FOR ITS GAIN
+        g_bestFloorDb.store(floorNorm, std::memory_order_relaxed);
+        best = floorNorm;
     }
     // ★ Muted while the last cut has been shown not to work — see the verdict above. Clipping is
     //   measured separately and is never muted: a rail is a fact, not an inference.
     const bool floorMuted = now < g_floorTestMutedUntil.load(std::memory_order_relaxed);
-    const bool floorLifted = (best < -1.0f) && (floorNow > best + 3.0f) && !floorMuted;
+    const bool floorLifted = (best < -1.0f) && (floorNorm > best + 3.0f) && !floorMuted;
 
     bool backoffToFit = false;   // ★ see the clipRun branch: the jump is sized under the lock
     // ★ Which reason took gain away, so the cut can be JUDGED — see the verdict above. Only the
@@ -15099,6 +15139,13 @@ void LocalSdrShim::overloadTick() {
     }
     if (want < steps) {                       // this was a climb — put it on trial
         g_floorBeforeClimb.store(p->iqFloorDb.load(), std::memory_order_relaxed);
+        // ★★★ AND HOW BIG THE STEP WAS, WHICH IS THE WHOLE FIX. The verdict compares the floor
+        //     before and after; without knowing what we ADDED, "the floor went up 2.7 dB" cannot
+        //     be told apart from "we added 2.7 dB of gain". The cut path has recorded its own step
+        //     since 2026-08-23 and is right for the same reason.
+        const int fromIdx2 = (tgtIdx - steps) < 0 ? 0 : (tgtIdx - steps);
+        g_climbStepDb.store((gains[(size_t)idx] - gains[(size_t)fromIdx2]) / 10.0,
+                            std::memory_order_relaxed);
         g_climbAt.store(now, std::memory_order_relaxed);
     }
     g_ovlSteps.store(want, std::memory_order_relaxed);

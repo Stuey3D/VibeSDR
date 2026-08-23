@@ -131,6 +131,18 @@ final class UberClient: ObservableObject {
   @Published var takeoverPossible = false
   private var scheme: String { secure ? "wss" : "ws" }
   private var vibeAdopted = false      // adopted the server's tune on the first config yet?
+  /// ★ What the server said about listener capacity, from /vibeserver.json before connecting.
+  private var vibeMaxUsers = 0
+  /**
+   * ★★★ IS THIS A DIAL OTHER PEOPLE ARE LISTENING TO? `dialMode` answers it properly, but it only
+   *     arrives in the `dial` message AFTER the sockets are open — far too late to decide whether
+   *     to assert a saved tune. `maxUsers` is known BEFORE connecting, and on one radio more than
+   *     one listener can only mean they share a VFO.
+   *  ★ A locked radio (individual VFOs in a fixed window) is caught by this too and loses its
+   *    saved tune to the server's own spot. Small and recoverable; moving a room full of people
+   *    off their station is not.
+   */
+  private var vibeSharedByCount: Bool { isVibe && (sharedDial || vibeMaxUsers > 1) }
   private var vibeRestored = false     // did we restore + assert a SAVED tune for this host?
 
   /// Per-host tune memory (VibeServer only) — so it reopens where you left it, not the 648 kHz/AM default.
@@ -472,6 +484,11 @@ final class UberClient: ObservableObject {
       return false      // ★ Can't tell ⇒ carry on. A failed probe must not block a connect.
     }
     takeoverPossible = (j["admin"] as? Bool) ?? false
+    // ★★★ HOW MANY MAY LISTEN AT ONCE — and therefore whether this dial is SHARED. See
+    //     `vibeSharedByCount` and the assert in openVibeSockets: on a receiver several people hear
+    //     at once, arriving must not move the frequency. The URL already carries `radioPath`, so on
+    //     a multi-radio server this is THAT radio's figure rather than the machine's.
+    vibeMaxUsers = (j["maxUsers"] as? Int) ?? 0
     // ★★★ HOW THE LIMIT BEHAVES, not just how long it is. On a SOFT limit the clock is a GUARANTEE,
     //     not a deadline: when it runs out you keep the radio until somebody else actually wants
     //     it. A client that cannot tell the two apart has to assume the worst, and Jr did — it
@@ -1151,10 +1168,24 @@ final class UberClient: ObservableObject {
       // socket, and a client that just retries hammers a receiver somebody else is
       // using — while showing its own user nothing but "reconnecting". /vibeserver.json
       // says both whether it is busy AND whether a takeover is even possible.
-      if adminSuffix.isEmpty, await vibeIsBusy() {
+      // ★★ ASKED EVERY TIME NOW, not only when we have no credential. It is also where we learn
+      //    `maxUsers`, and the OWNER of a shared receiver must not hijack the room either — being
+      //    the operator is not a reason to move everybody's frequency by arriving.
+      let busy = await vibeIsBusy()
+      if adminSuffix.isEmpty, busy {
         serverBusy = true
         status = "in use"
         return
+      }
+      // ★★★ ON A SHARED DIAL, ARRIVING IS NOT TUNING — the same rule the phone follows, and Jr was
+      //     breaking it in the same way: it restored its per-host tune and ASSERTED it half a second
+      //     after connecting, dragging every other listener to the station it remembered (Stuart,
+      //     2026-08-23). Dropping `vibeRestored` here does both halves at once: nothing is asserted,
+      //     and the first config is ADOPTED instead, so Jr shows the frequency the room is actually
+      //     on rather than the one it wanted.
+      if vibeSharedByCount, vibeRestored {
+        vibeRestored = false
+        NSLog("[UberClient] shared dial (%d listeners allowed) — not asserting the saved tune", vibeMaxUsers)
       }
       openVibeSockets()
       return
