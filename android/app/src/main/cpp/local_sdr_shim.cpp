@@ -1294,6 +1294,15 @@ static std::atomic<float>    g_snrBeforeClimb{0.0f};
 /** ★ While this stands, the floor test is muted: it has been shown, by experiment, to be
  *  diagnosing something gain cannot fix. */
 static std::atomic<double>   g_floorTestMutedUntil{0.0};
+/** ★ Set on every gain write; the loop ignores its own measurements until it passes. See
+ *  agcSettleAfterGain(). */
+static std::atomic<double>   g_gainSettleUntil{0.0};
+/** ★ The frequency the AGC's learning belongs to — see agcForget() and its caller in retune(). */
+static std::atomic<double>   g_agcLearnedAtHz{0.0};
+// Defined further down, beside setSampleRate(); declared here because retune() and the loop both
+// run above them.
+static void agcForget(const char* why);
+static void agcSettleAfterGain(double now);
 /** ★★★ THE BEST (LOWEST) NOISE FLOOR SEEN AT THIS DIAL, and the continuous intermod detector built
  *  on it.
  *
@@ -5802,6 +5811,14 @@ struct LocalSdrShim::Impl {
         //    they need opposite fixes.
         LOGI("retune -> %.3f kHz (was %.3f, centre %.3f)",
              freq / 1e3, audioFreq.load() / 1e3, rtlCenter.load() / 1e3);
+        // ★★★ A DIFFERENT STATION IS A DIFFERENT WORLD, and what the AGC learned about the last one
+        //     is worse than nothing there — see agcForget(). Only for a real move: a nudge across a
+        //     station's own passband is still the same signal and the same neighbours, and forgetting
+        //     on every 100 Hz of a drag would leave the loop permanently ignorant.
+        if (std::fabs(freq - g_agcLearnedAtHz.load(std::memory_order_relaxed)) > 150e3) {
+            g_agcLearnedAtHz.store(freq, std::memory_order_relaxed);
+            agcForget("retuned");
+        }
         // Hold modeMtx across the WHOLE placement (rtlCenter/viewCenter store +
         // tuneHw + rx.setTune), not just rx.setTune. retune() runs on the audio-WS
         // thread while the "zoom" handler runs on the spectrum-WS thread, and BOTH
@@ -14781,6 +14798,10 @@ void LocalSdrShim::overloadTick() {
     if (target < 0) return;            // nothing set — no ceiling to work against
 
     bool steps_forceDown = false;
+    // ★ Nothing measured before the last gain write has anything to say about the gain now — see
+    //   agcSettleAfterGain(). Cheap and blunt on purpose: waiting one second beats cutting three
+    //   times for one overload.
+    if (Impl::nowSecs() < g_gainSettleUntil.load(std::memory_order_relaxed)) return;
     const int clipRun  = g_adcClipRun.load(std::memory_order_relaxed);
     const int cleanRun = g_adcCleanRun.load(std::memory_order_relaxed);
     const int steps    = g_ovlSteps.load(std::memory_order_relaxed);
@@ -15204,6 +15225,8 @@ void LocalSdrShim::overloadTick() {
     }
     g_ovlSteps.store(want, std::memory_order_relaxed);
     g_ovlLastChangeAt.store(now, std::memory_order_relaxed);
+    agcSettleAfterGain(now);          // ★ do not read the old gain's samples as news
+
     g_ovlLastDir.store(want > steps ? -1 : 1, std::memory_order_relaxed);
     p->lastGainTenthDb = applied;
     // ★ ONLY THE GAIN. The tuner is already in manual mode — the start path put it there and
@@ -15610,7 +15633,49 @@ void LocalSdrShim::setFftRate(double fps) {
 }
 bool LocalSdrShim::isAirspyHf() const { return p && p->useAirspyHf(); }
 
+/**
+ * ★★★ EVERYTHING THIS LOOP HAS LEARNED IS ABOUT ONE SIGNAL AT ONE FREQUENCY AT ONE SAMPLE RATE.
+ *     Change any of those and it knows nothing — but it went on acting as though it did. The
+ *     margin ratchets +3 dB per failed climb and decays 1 dB per two clean MINUTES, so a genuine
+ *     overload on 105.4 left the bar at 12 dB, and 106 — a different station, a different
+ *     neighbour — then could not climb past 1.4 dB for the next twenty minutes. Stuart, minutes
+ *     apart: "the AGC on 105.4 went to 15.7 then back down to 3.7 so its much worse than it was
+ *     before", then "now 106 doesnt get higher than 1.4 it was higher gain before" (2026-08-23).
+ * ★★★ AND THE SAMPLE RATE IS THE SAME ARGUMENT, WHICH IS WHY HE ASKED FOR IT: "changing the
+ *     sample rate should retrigger the AGC rather than the wait to increase the gain again". An
+ *     RTL's IF filter follows its rate, so the front end is looking at a different world — the
+ *     one where 104.2 either reaches the mixer or does not.
+ *  ★ The quietest floor goes too. It is a level measured through THAT filter at THAT frequency;
+ *    carried across a retune it is a memory of somewhere else.
+ */
+static void agcForget(const char* why) {
+    g_ovlMargin.store(3.0, std::memory_order_relaxed);
+    g_bestFloorDb.store(0.0f, std::memory_order_relaxed);      // 0 = unset, see the floor test
+    g_floorTestMutedUntil.store(0.0, std::memory_order_relaxed);
+    g_climbAt.store(0.0, std::memory_order_relaxed);
+    g_dropAt.store(0.0, std::memory_order_relaxed);
+    g_ovlBadGain.store(-1, std::memory_order_relaxed);
+    g_adcCleanRun.store(0, std::memory_order_relaxed);
+    LOGI("AGC: forgetting what it learned (%s) — margin back to 3 dB", why);
+}
+
+/** ★★ A GAIN WRITE IS NOT INSTANT AND THE MEASUREMENTS ARE A SECOND WIDE. The clip statistics are
+ *  computed over roughly a second, so for a second after a change they still contain samples taken
+ *  at the OLD gain — and the loop read them as fresh evidence and cut again. Measured on the Pi,
+ *  one overload at 14.4 dB becoming four cuts in six seconds:
+ *      8.402% on the rail → 12.5 dB · 8.060% → 8.7 · 5.606% → 7.7 · 0.853% → 3.7
+ *  The station was clean at 8.7 and it ended at 3.7 — "the signal went quite clean and in stereo
+ *  then went back to fuzz". Each of those cuts was answering the previous cut's question. */
+static void agcSettleAfterGain(double now) {
+    g_gainSettleUntil.store(now + 1.3, std::memory_order_relaxed);
+}
+
 void LocalSdrShim::setSampleRate(double rate) {
+    // ★★★ "changing the sample rate should retrigger the AGC rather than the wait to increase the
+    //     gain again" (Stuart, 2026-08-23). He is right, and the reason is the IF filter: it follows
+    //     the rate, so the front end is now looking at a different set of signals — every failed
+    //     climb the loop remembers was learned through the other filter.
+    agcForget("sample rate changed");
     if (!p || rate <= 0) return;
     /**
      * ★★★ ONE RATE CHANGE AT A TIME, OR THE APP DIES. This function stops the IQ source, JOINS the
