@@ -229,9 +229,12 @@
                              text-shadow: 0 0 8px rgba(224,80,80,.5); }
   .tunePanel button { min-width: 40px; }
   .vfoKey { font-size: 10px; letter-spacing: .08em; min-width: 42px; }
-  /* ★ Red once one is down: the key belongs to the needle, and the needle is red. */
+  /* ★ The key wears the colour of the needle it will place next, so the control and the mark on
+       the glass are obviously the same thing. */
   .vfoKey.armed { color: #ff3b30; border-color: rgba(255,59,48,.45);
                   text-shadow: 0 0 8px rgba(255,59,48,.6); }
+  .vfoKey.first { color: var(--accent); border-color: rgba(255,184,51,.45);
+                  text-shadow: 0 0 8px rgba(255,184,51,.6); }
   /* ★★ A DIAL IS NOT TEXT. Dragging it was selecting the legend and half the page underneath
         (Stuart, 2026-08-23) — the same rule as the app's sliders, where touch-action must never
         be given back. */
@@ -267,6 +270,7 @@
   .dNum.unknown, .dTick.unknown, .dTickMaj.unknown { fill: var(--dim); stroke: var(--dim); }
   .dNum.none, .dTick.none, .dTickMaj.none { fill: var(--dim); stroke: var(--dim); opacity: .35; }
   .dBase   { stroke: var(--line); stroke-width: 1; }
+  .dSplit  { stroke: var(--line); stroke-width: 1; opacity: .5; }
   /* ★ Solid blocks, the app's own band strip. White on the block, as in the waterfall. */
   .dBandTx { fill: #fff; font-size: 9.5px; text-anchor: middle; letter-spacing: .02em;
              pointer-events: none; paint-order: stroke; stroke: rgba(0,0,0,.55); stroke-width: 2px; }
@@ -279,10 +283,14 @@
   .dBand:hover rect:first-child { fill-opacity: 1; }
   .dGap    { fill: rgba(255,176,0,.05); }
   .dGapTx  { fill: var(--dim); font-size: 9px; text-anchor: middle; letter-spacing: .08em; }
-  /* ★ The VFO needle, as red as the app's. */
-  .dNeedle { stroke: #ff3b30; stroke-width: 1.5; }
-  .dNeedleHd { fill: #ff3b30; }
-  .dSpan   { fill: rgba(255,59,48,.14); }
+  /* ★ The VFO needles: amber for the first, red for the one that closes the range. Both heavier
+       than a hairline — this is a needle on a dial, not a gridline. */
+  .dNeedle { stroke-width: 2; }
+  .dNeedle.a, .dNeedleHd.a { stroke: var(--accent); fill: var(--accent); }
+  .dNeedle.b, .dNeedleHd.b { stroke: #ff3b30; fill: #ff3b30; }
+  .dNeedleHd { stroke: none; }
+  /* ★ The span belongs to the PAIR, so it only exists once both needles are down. */
+  .dSpan   { fill: rgba(255,59,48,.15); }
   /* ★ The viewport on the whole-network dial: what the dial above is showing, and the handle for
        moving it. Amber rather than phosphor, so it reads as a control and not as coverage. */
   .dPort      { cursor: grab; }
@@ -1057,7 +1065,7 @@ function tickStep(spanHz, px) {
  * ★★ The needles are the SEARCH and they persist while you travel: place one at 145 MHz, drag the
  *    viewport to 70 cm, place the second, and the pair is the query. Nothing is lost by moving.
  */
-const DETAIL_H = 96, OVER_H = 62, DIAL_GAP = 14;
+const DETAIL_H = 96, OVER_H = 62, DIAL_GAP = 18;
 
 /** ★ The window a first-time visitor lands on: DC to the top of 2 m, where the plan really shows.
  *   Region-aware, because the plan is — and clamped to what the network can actually hear. */
@@ -1102,6 +1110,8 @@ function renderDial() {
 
   // ── the WHOLE NETWORK, underneath, with the viewport on it ─────────────────────────────────
   const oy = DETAIL_H + DIAL_GAP;
+  // ★ A hairline between them: two instruments, not one tall one.
+  parts.push(`<line class="dSplit" x1="0" y1="${DETAIL_H + DIAL_GAP / 2}" x2="${W}" y2="${DETAIL_H + DIAL_GAP / 2}"/>`);
   parts.push(drawRow(all, oy, W, { kind: 'over', h: OVER_H, bandH: 11, labels: false }));
   const orow = DIAL_ROWS[DIAL_ROWS.length - 1];
   if (orow) {
@@ -1124,7 +1134,8 @@ function renderDial() {
   // ★ A key that can only be a no-op is worse than no key.
   document.getElementById('clearSel').disabled = !(needleA > 0 || bandsOn.size);
   const vfoKey = document.getElementById('setVfo');
-  vfoKey.classList.toggle('armed', needleA > 0);
+  vfoKey.classList.toggle('armed', needleA > 0 && !needleB);
+  vfoKey.classList.toggle('first', !(needleA > 0));
   vfoKey.textContent = (needleA > 0 && needleB > 0) ? 'VFO' : needleA > 0 ? 'VFO 2' : 'VFO';
   vfoKey.title = (needleA > 0 && needleB > 0)
     ? 'Start again — place a single VFO at the centre of the dial'
@@ -1155,9 +1166,19 @@ function drawRow(segsIn, y0, W, opt) {
   DIAL_ROWS.push({ axis, y0, y1: y0 + opt.h, kind: opt.kind,
                    lo: covered[0].lo, hi: covered[covered.length - 1].hi });
 
-  const BAND_Y = y0 + 4, BAND_H = opt.bandH;
-  const TICK_Y = y0 + BAND_H + 22, TICK_H = opt.kind === 'over' ? 7 : 12;
-  const NUM_Y = TICK_Y + (opt.kind === 'over' ? 20 : 24), BOT = y0 + opt.h - 2;
+  /* ★★★ THE STRIP GOES WHERE IT BELONGS TO WHAT IS ABOVE IT. On the detail dial the band plan sits
+   *     ON TOP, as it does in the app — it labels the ticker beneath. On the whole-network dial the
+   *     wavelength strip must sit BELOW its ticker, because at the top of that row it reads as the
+   *     bottom of the dial ABOVE it: "the wavelength needs to go underneath the full range as right
+   *     now it looks like it is part of the zoomed in" (Stuart, 2026-08-23). Proximity is the only
+   *     grouping cue a reader gets, and it was pointing at the wrong instrument.
+   */
+  const over = opt.kind === 'over';
+  const BAND_H = opt.bandH;
+  const BAND_Y = over ? y0 + opt.h - BAND_H - 2 : y0 + 4;
+  const TICK_Y = over ? y0 + 13 : y0 + BAND_H + 22;
+  const TICK_H = over ? 7 : 12;
+  const NUM_Y = TICK_Y + (over ? 19 : 24), BOT = y0 + opt.h - 2;
   const TYPE_HEX = { ham: '#CF0000', broadcast: '#0900FF', utility: '#07BD00', cb: '#FF7700' };
   const p = [];
 
@@ -1168,7 +1189,7 @@ function drawRow(segsIn, y0, W, opt) {
    *     carry its own name.
    *  ★ Generated from the same file, as a formula: each decade is 3x10^n to 3x10^(n+1) Hz.
    */
-  const strip = opt.kind === 'over'
+  const strip = over
     ? (PLAN && Array.isArray(PLAN.decades) ? PLAN.decades.map((d) => ({ label: d.name, lo: +d.lo, hi: +d.hi, decade: true })) : [])
     : planBandList();
 
@@ -1193,7 +1214,7 @@ function drawRow(segsIn, y0, W, opt) {
               + ` fill="none" stroke="#fff" stroke-width="1.5"/>` : '')
       + ((b.decade ? w > 16 : (opt.labels && w > 30))
           ? `<text class="${b.decade ? 'dDecadeTx' : 'dBandTx'}" x="${(a + w / 2).toFixed(1)}"`
-            + ` y="${BAND_Y + BAND_H - (b.decade ? 3 : 6)}">${esc(b.decade ? b.label : bandShort(b.label, w))}</text>` : '')
+            + ` y="${BAND_Y + BAND_H - (b.decade ? 3.5 : 6)}">${esc(b.decade ? b.label : bandShort(b.label, w))}</text>` : '')
       + `<title>${esc(b.label)} · ${esc(prettyHz(b.lo))} – ${esc(prettyHz(b.hi))}`
       + `${b.decade ? '' : `\n${on ? 'selected — click to remove' : 'click to search for receivers covering it'}`}</title></g>`);
   }
@@ -1205,7 +1226,7 @@ function drawRow(segsIn, y0, W, opt) {
     }
     const span = a.hi - a.lo, px = a.x1 - a.x0;
     p.push(`<line class="dBase" x1="${a.x0.toFixed(1)}" y1="${TICK_Y}" x2="${a.x1.toFixed(1)}" y2="${TICK_Y}"/>`);
-    const step = tickStep(span, opt.kind === 'over' ? px * 0.62 : px);
+    const step = tickStep(span, over ? px * 0.62 : px);
     for (let f = Math.ceil(a.lo / step) * step; f <= a.hi + 1; f += step) {
       const x = a.x0 + px * ((f - a.lo) / span);
       // ★★★ THE NUMERAL CARRIES THE VERDICT — green where something free covers it, red where every
@@ -1213,7 +1234,7 @@ function drawRow(segsIn, y0, W, opt) {
       const st = stateAtHz(segsIn, f);
       p.push(`<line class="dTickMaj ${st}" x1="${x.toFixed(1)}" y1="${TICK_Y}" x2="${x.toFixed(1)}" y2="${TICK_Y + TICK_H}"/>`);
       p.push(`<text class="dNum ${st} ${opt.kind}" x="${x.toFixed(1)}" y="${NUM_Y}">${esc(prettyHz(f))}</text>`);
-      if (opt.kind !== 'over') {
+      if (!over) {
         for (let k = 1; k < 5; k++) {
           const mf = f + (step * k) / 5;
           if (mf > a.hi) break;
@@ -1232,12 +1253,21 @@ function drawRow(segsIn, y0, W, opt) {
     if (xa !== null && xb !== null && xb > xa)
       p.unshift(`<rect class="dSpan" x="${xa.toFixed(1)}" y="${BAND_Y}" width="${(xb - xa).toFixed(1)}" height="${BOT - BAND_Y}"/>`);
   }
-  for (const hz of [needleA, needleB]) {
+  /* ★★★ THE FIRST VFO IS AMBER, THE SECOND RED. A thin red line was being lost among the red ham
+   *     blocks and the red busy numerals on the same dial — "when you click the button to add the
+   *     first vfo it doesnt show until the 2nd one is added" (Stuart, 2026-08-23). It was always
+   *     drawn; it simply could not be picked out, which is the same thing to the person looking.
+   *  ★★ And the two colours now MEAN something: amber is the mark you are placing, red is the one
+   *     that closes the range, and the shaded span between them is the search you have built. A
+   *     lone amber needle reads as unfinished, which is exactly what it is.
+   */
+  for (const [hz, cls] of [[needleA, 'a'], [needleB, 'b']]) {
     if (!(hz > 0)) continue;
     const nx = hzToXIn(axis, hz);
     if (nx === null) continue;
-    p.push(`<line class="dNeedle" x1="${nx.toFixed(1)}" y1="${BAND_Y}" x2="${nx.toFixed(1)}" y2="${BOT}"/>`);
-    p.push(`<polygon class="dNeedleHd" points="${(nx - 4).toFixed(1)},${BAND_Y} ${(nx + 4).toFixed(1)},${BAND_Y} ${nx.toFixed(1)},${BAND_Y + 7}"/>`);
+    p.push(`<line class="dNeedle ${cls}" x1="${nx.toFixed(1)}" y1="${BAND_Y}" x2="${nx.toFixed(1)}" y2="${BOT}"/>`);
+    p.push(`<polygon class="dNeedleHd ${cls}" points="${(nx - 5).toFixed(1)},${BAND_Y - 1} ${(nx + 5).toFixed(1)},${BAND_Y - 1} ${nx.toFixed(1)},${BAND_Y + 8}"/>`);
+    p.push(`<title>VFO ${cls === 'a' ? '1' : '2'} · ${esc(prettyHz(hz))}</title>`);
   }
   return p.join('');
 }
