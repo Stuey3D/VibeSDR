@@ -245,7 +245,23 @@ html[data-frontdoor] #splashListeners { display: none !important; }
       the splash — which genuinely scrolls — is untouched.
    ★ Children that set their own touch-action still win. Do not let this reach the sliders:
      touch-action:none on those is what stops a drag turning into a page scroll. */
-#app { touch-action: manipulation; }
+/* ★★★ THE RECEIVER PAGE DOES NOT ZOOM, BECAUSE THE APP DOES NOT — "the sdr page needs no
+   zooming in and out the sdr client needs to act as close to the main app as possibly"
+   (Stuart, 2026-08-23). A waterfall you can pinch is a waterfall you WILL pinch by accident
+   while dragging the dial, and then every control sits somewhere new: the frequency readout
+   half off the screen, the pill under your thumb, and no obvious way back. The app has no such
+   state to get into, so neither should this.
+   ★★ `pan-x pan-y` NOT `none`: scrolling must survive — the panels, the decoder text and the
+      landing list all scroll — it is only the PINCH that goes. `manipulation` (what this was)
+      allows pinch, which is the whole difference.
+   ★ The SPLASH still zooms: it is a page of text and links where somebody may genuinely want a
+     closer look, and it is not the instrument. This is scoped to #app for that reason.
+   ★★★ AND THIS IS THE HALF THAT WAS MISSING. main.ts already refuses `gesturestart` while the
+       radio is showing — but those events are WEBKIT-ONLY, so on Android Chrome the receiver
+       page could still be pinched and nothing in the tree stopped it. CSS is the only lever
+       there, and gesture events are the only lever on iOS: it takes both, and each was written
+       as if it were the whole answer. */
+#app { touch-action: pan-x pan-y; }
 #app { display: none; flex-direction: column; height: 100%; }
 #app.live { display: flex; }
 
