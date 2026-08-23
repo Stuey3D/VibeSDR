@@ -1288,9 +1288,13 @@ static std::atomic<float>    g_floorBeforeDrop{0.0f};
 static std::atomic<double>   g_dropStepDb{0.0};
 /** ★ How many dB the climb on trial actually added — see the climb verdict in overloadTick(). */
 static std::atomic<double>   g_climbStepDb{0.0};
-/** ★ The tuned channel's SNR when that climb was taken — the only measurement that knows whether
- *  more gain HELPED. See the SNR arm of the climb verdict. */
+/** ★ The tuned channel's SNR when that climb was taken — see the SNR arm of the climb verdict. */
 static std::atomic<float>    g_snrBeforeClimb{0.0f};
+/** ★ The channel and its shoulders as they were when the climb was taken. The verdict compares how
+ *  the two MOVED: together means the band came up as a block (intermodulation), apart means the
+ *  station came up on its own (signal). See the shoulder test. */
+static std::atomic<float>    g_chanBeforeClimb{-200.0f};
+static std::atomic<float>    g_shoulderBeforeClimb{-200.0f};
 /** ★ While this stands, the floor test is muted: it has been shown, by experiment, to be
  *  diagnosing something gain cannot fix. */
 static std::atomic<double>   g_floorTestMutedUntil{0.0};
@@ -2415,6 +2419,11 @@ struct LocalSdrShim::Impl {
     uint64_t vsRateLastSpec = 0, vsRateLastAudio = 0;
     int64_t  vsRateLastMs = 0;
     std::atomic<float> spectrumSnr{0.0f};   // peak−floor (dB), centre vs edges
+    /** ★ The median level 30–130 kHz either side of the tuned channel, and the channel's own level.
+     *  The AGC compares how the two MOVE — see the shoulder test in the climb verdict. */
+    std::atomic<float> shoulderDb{-200.0f};
+    std::atomic<float> channelDbWide{-200.0f};
+    std::vector<float> shoulderBins_;
 
     // Audio-extension decoder (RTTY etc.) on /ws/dxcluster — fed the demod audio.
     /** ★ What is attached, for the admin view — "RTTY" reads better than a null pointer check,
@@ -4705,6 +4714,37 @@ struct LocalSdrShim::Impl {
                 std::nth_element(edgeBins_.begin(), edgeBins_.begin() + k, edgeBins_.end());
                 floorDbNow = edgeBins_[k];
             }
+            /* ══ THE SHOULDERS: WHAT IS IMMEDIATELY BESIDE THE STATION ═════════════════════
+             * ★★★ THE TEST THE AGC ACTUALLY NEEDED, and it is Stuart's (2026-08-23): "watch the
+             *     signal level immediately to the left and right of the desired signal — if the
+             *     whole thing goes up in a sorta uniform block then its likely intermodulation
+             *     from 104.2; if the 105.4 signal goes up alone and the immediate below and above
+             *     stays clean, that is what we are after."
+             * ★★★ IT BEATS EVERY OTHER MEASUREMENT WE HAVE. The ADC peak cannot see intermod from
+             *     outside the window at all. `spectrumSnr` compares the channel against the WINDOW
+             *     EDGES, hundreds of kHz away — and at 2.4 MSPS those edges are polluted by the
+             *     same spill, so the ratio holds while the band turns to mush. The shoulders are
+             *     close enough to share whatever the front end is doing to this part of the
+             *     spectrum, and far enough out to contain no wanted signal.
+             *  ★ 30–130 kHz either side of centre: outside a WFM channel's own skirts, inside the
+             *    neighbourhood the interference lives in. Median again, for the reason the floor
+             *    uses one — an adjacent station must not become "the shoulder".
+             */
+            shoulderBins_.clear();
+            {
+                const int inner = std::max(1, (int)std::lround(30000.0 / binHz));
+                const int outer = std::min(bins / 2 - 1, (int)std::lround(130000.0 / binHz));
+                for (int i = inner; i <= outer; i++) {
+                    shoulderBins_.push_back((float)dbAt(i));
+                    shoulderBins_.push_back((float)dbAt(-i));
+                }
+            }
+            if (!shoulderBins_.empty()) {
+                const size_t k = shoulderBins_.size() / 2;
+                std::nth_element(shoulderBins_.begin(), shoulderBins_.begin() + k, shoulderBins_.end());
+                shoulderDb.store(shoulderBins_[k]);
+            }
+            if (cN) channelDbWide.store((float)(cSum / cN));
             spectrumSnr.store((cN && eN) ? (float)(cSum/cN - floorDbNow) : 0.0f);
             // Band-edge average = our own noise floor, in the engine's dBFS. emitServerFft()
             // aligns the server's differently-scaled dB onto this, so the two waterfall sources
@@ -14914,7 +14954,42 @@ void LocalSdrShim::overloadTick() {
         const float snrWas = g_snrBeforeClimb.load(std::memory_order_relaxed);
         const float snrNow = p->spectrumSnr.load();
         const bool  snrWorse = snrWas > 6.0f && snrNow < snrWas - 2.0f;
-        if (snrWorse) {
+
+        /* ══ DID THE STATION COME UP, OR DID THE WHOLE NEIGHBOURHOOD? ══════════════════════════
+         * ★★★ STUART'S TEST, AND IT IS THE BEST ONE IN THIS LOOP (2026-08-23): "if the whole thing
+         *     goes up in a sorta uniform block then its likely intermodulation from 104.2; if the
+         *     105.4 signal goes up alone and the immediate below and above stays clean, that is
+         *     what we are after."
+         * ★★★ WHY IT SUCCEEDS WHERE THE OTHERS FAIL. More gain lifts a real station and leaves the
+         *     quiet spectrum beside it roughly where it was, because that spectrum is the receiver's
+         *     own floor and is not what the extra gain is amplifying. Intermodulation is
+         *     manufactured INSIDE the front end from a signal we cannot see, and it lands across
+         *     the neighbourhood — so channel and shoulders rise TOGETHER. The ADC peak is blind to
+         *     it (nothing rails) and the window-edge SNR is fooled by it (the edges rise too);
+         *     these two numbers are 30–130 kHz apart and cannot be fooled the same way.
+         *  ★★ THE COMPARISON IS OF MOVEMENTS, NOT LEVELS. Both are absolute dBFS and both rise with
+         *     gain — it is the DIFFERENCE between their rises that separates signal from mush.
+         *  ★ Only when there is a station to speak of: a channel no louder than its own shoulders
+         *    is a quiet patch of band, and "the block came up together" is then just the gain doing
+         *    its job on noise, which is exactly what a listener on a dead frequency wants.
+         */
+        const float chanWas = g_chanBeforeClimb.load(std::memory_order_relaxed);
+        const float shldWas = g_shoulderBeforeClimb.load(std::memory_order_relaxed);
+        const float chanNow = p->channelDbWide.load();
+        const float shldNow = p->shoulderDb.load();
+        const bool  haveStation = chanWas > shldWas + 6.0f;
+        const float chanRose = chanNow - chanWas, shldRose = shldNow - shldWas;
+        const bool  cameUpAsABlock = haveStation && chanWas > -190.0f && shldWas > -190.0f
+                                     && shldRose > chanRose - 1.0f && shldRose > 1.0f;
+        if (cameUpAsABlock) {
+            const double m = std::min(12.0, g_ovlMargin.load(std::memory_order_relaxed) + 3.0);
+            g_ovlMargin.store(m, std::memory_order_relaxed);
+            LOGI("the band came up as a block (station +%.1f dB, either side +%.1f dB) — that is "
+                 "intermodulation, not signal; giving it back (a climb now needs %.0f dB)",
+                 chanRose, shldRose, m);
+            g_adcCleanRun.store(0, std::memory_order_relaxed);
+            steps_forceDown = true;
+        } else if (snrWorse) {
             const double m = std::min(12.0, g_ovlMargin.load(std::memory_order_relaxed) + 3.0);
             g_ovlMargin.store(m, std::memory_order_relaxed);
             LOGI("that step cost %.1f dB of SNR (%.1f -> %.1f) — the gain is buying noise, not "
@@ -15016,8 +15091,25 @@ void LocalSdrShim::overloadTick() {
     int want = steps;
     if (steps_forceDown) {
         want = steps + 1;                                        // undo the unhelpful climb
-    } else if (clipRun < 2 && floorLifted) {
-        // ★ The floor has come up and stayed up: the extra gain is making noise, not finding signal.
+    } else if (clipRun < 2 && floorLifted
+               && !(g_dropAt.load(std::memory_order_relaxed) > 0
+                    && now - g_dropAt.load(std::memory_order_relaxed) < kClimbTrialMaxSec)) {
+        /* ★★★ ONE CUT ON TRIAL AT A TIME — THE SAME RULE THE CLIMB GOT, AND FOR A WORSE REASON.
+         *     A floor-lift cut is put on trial and judged kAgcVerdictSec later: if the floor did
+         *     not come down with the gain, the diagnosis was wrong and the cut is handed back. But
+         *     the loop ticks every 2s and the verdict needs 2.5s — so each new cut RE-ARMED the
+         *     trial before the previous one could mature, and the verdict never ran at all. It
+         *     walked 8.7 → 7.7 → 3.7 → 2.7 → 1.4 → 0.9 → 0.0 dB in twelve seconds on 105.4 and
+         *     left the receiver deaf (Stuart, 2026-08-23: "the xcover got the gain pretty spot on
+         *     then it bumped it back down to nothing again").
+         * ★★★ AND THE CADENCE THAT STARVED IT WAS MINE. Halving the timings an hour earlier made
+         *     the loop faster than its own evidence — a control loop must never act more often
+         *     than it can learn. The climb had this guard already; the cut needed it just as much
+         *     and did not get it, because I added the guard where the last bug had been rather
+         *     than to both directions of the same mechanism.
+         *  ★ CLIPPING IS EXEMPT, as it always is: a rail is a measured fact, not an inference, and
+         *    an overload is an emergency worth acting on immediately (see the clipRun branch).
+         */
         want = steps + 1;
         downForFloor = true;
     } else if (clipRun < 2 && peakNow > kAgcBackoffDbfs
@@ -15264,6 +15356,20 @@ void LocalSdrShim::overloadTick() {
     //    ticks unwind an overload back-to-back rather than waiting on the climb timer.
     if (backoffToFit) want = steps + 1;
     applied = gains[(size_t)idx];
+    /* ★★★ A WRITE THAT CHANGES NOTHING IS NOT A CORRECTION, AND IT MUST NOT BE ANNOUNCED. Once the
+     *     loop is at the bottom of the tuner's list, `steps` can exceed the number of rungs that
+     *     actually exist below the owner's ceiling — so every tick decided to move, clamped to the
+     *     same index, wrote the same gain and logged it. Stuart's log filled with
+     *         clean for 2s — gain back up to 0.0 dB (28 below 49.6 dB)
+     *     every two seconds, which reads as a loop working hard and is a loop standing still: a
+     *     USB control transfer and a line of log for nothing, twice a second-and-a-half, and the
+     *     real events buried under it.
+     *  ★ The clamped position is still RECORDED below, which is what lets `steps` come back into
+     *    range instead of drifting further out on every tick. */
+    if (applied == p->lastGainTenthDb) {
+        g_ovlSteps.store(want, std::memory_order_relaxed);   // ★ re-anchor, do not re-write
+        return;
+    }
     // ★★★ GIVE BACK DIGITALLY WHATEVER THE TUNER JUST GAVE UP — see g_digGain. Done in the SAME
     //     critical section as the gain write, so there is never a window in which the RF has moved
     //     and the compensation has not: that window is exactly the audible step.
@@ -15305,6 +15411,8 @@ void LocalSdrShim::overloadTick() {
     if (want < steps) {                       // this was a climb — put it on trial
         g_floorBeforeClimb.store(p->iqFloorDb.load(), std::memory_order_relaxed);
         g_snrBeforeClimb.store(p->spectrumSnr.load(), std::memory_order_relaxed);
+        g_chanBeforeClimb.store(p->channelDbWide.load(), std::memory_order_relaxed);
+        g_shoulderBeforeClimb.store(p->shoulderDb.load(), std::memory_order_relaxed);
         // ★★★ AND HOW BIG THE STEP WAS, WHICH IS THE WHOLE FIX. The verdict compares the floor
         //     before and after; without knowing what we ADDED, "the floor went up 2.7 dB" cannot
         //     be told apart from "we added 2.7 dB of gain". The cut path has recorded its own step
