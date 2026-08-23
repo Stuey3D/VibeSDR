@@ -113,6 +113,18 @@ export interface LocalAudioPlayerProps {
    *     all and the native engine's credential support, added the same night, was never reached.
    *     The same branch hid the server-bookmark fix a few hours earlier. */
   adminAuth?:    string;
+  /**
+   * ★★★ MAY WE ASSERT OUR OWN TUNE? False on a SHARED DIAL, where the frequency belongs to
+   *  everybody listening. This socket sends a `tune` the instant it opens — and the frequency it
+   *  sends is whatever the screen happens to hold, which before the server's own state has been
+   *  adopted is the app's DEFAULT. So connecting to somebody else's shared receiver yanked the
+   *  room to 14.074 MHz, a frequency that server does not even allow, before settling: "156 still
+   *  Hijacks the dial and even takes the radio for a second outside of the allowed range" (Stuart,
+   *  2026-08-23).
+   * ★★ SUPPRESSING THE SAVED TUNE WAS NOT ENOUGH, and that is the lesson: the restore was only one
+   *  of two ways a frequency leaves this app. The other is the audio socket saying hello.
+   */
+  assertTune?:   boolean;
   /** Every inbound audio byte, so the connection readout can show the TRUE total.
    *  ★★ Without this the meter reported SPECTRUM ONLY — it showed 12 KB/s while
    *  the link was actually carrying 198, because uncompressed audio was 186 of
@@ -133,7 +145,7 @@ function tuneJson(frequency: number, mode: string, bandwidthLow: number, bandwid
 export default function LocalAudioPlayer(
   { port, frequency, mode, bandwidthLow, bandwidthHigh, instanceName,
     host = '127.0.0.1', authSuffix = '', sessionId = '', onBytes, raw = false,
-    wsBase = '', adminAuth = '' }: LocalAudioPlayerProps,
+    wsBase = '', adminAuth = '', assertTune = true }: LocalAudioPlayerProps,
 ) {
   const started = useRef(false);
   const ws      = useRef<WebSocket | null>(null);
@@ -141,6 +153,10 @@ export default function LocalAudioPlayer(
 
   // Latest tune, so start can send it immediately without a stale closure.
   const tune = useRef({ frequency, mode, bandwidthLow, bandwidthHigh });
+  /** What we opened with, and whether the next forward is still that same hello — see the
+   *  forwarding effect below. */
+  const startTune = useRef<string>('');
+  const suppressFirst = useRef(!assertTune);
   tune.current = { frequency, mode, bandwidthLow, bandwidthHigh };
 
   useEffect(() => {
@@ -149,6 +165,8 @@ export default function LocalAudioPlayer(
     //   silence is what four separate diagnoses were built on top of.
     if (port == null) { noteAudioEvent('NOT STARTED — port gate closed (refusal or tune not loaded)'); return; }
     const { frequency: f, mode: m, bandwidthLow: bl, bandwidthHigh: bh } = tune.current;
+    startTune.current = tuneJson(f, m, bl, bh);
+    suppressFirst.current = !assertTune;
     Vibe?.setInstanceName?.(instanceName ?? 'Local Hardware');
 
     // Carry the session id on the audio socket so VibeServer matches it to the spectrum socket and
@@ -191,7 +209,10 @@ export default function LocalAudioPlayer(
       //   whether it was well formed — which is precisely what was wrong with it.
       noteAudioEvent(`native pump start → ${(wsBase || `ws://${host}:${port}`)}/ws/audio`
                      + (adminQ ? ` [admin ${adminQ.slice(0, 18)}…]` : ' [no admin]'));
-      Vibe?.startLocalAudio?.(host, port, tuneJson(f, m, bl, bh), combinedSuffix, wsBase ?? '');
+      // ★ An EMPTY initial tune is the contract on both platforms for "say nothing": Swift keeps
+      //   `laTune` empty and skips the send on ready, Kotlin stores null and never sends.
+      Vibe?.startLocalAudio?.(host, port, assertTune ? tuneJson(f, m, bl, bh) : '',
+                              combinedSuffix, wsBase ?? '');
       started.current = true;
       // ★★ THE LINK METER MUST STILL SEE THE AUDIO. The JS reader below counted every byte as it
       //    arrived; with the socket native, only native can count it — so the pump reports a tally
@@ -237,7 +258,10 @@ export default function LocalAudioPlayer(
     sock.binaryType = 'arraybuffer';
     ws.current = sock;
     started.current = true;
-    sock.onopen = () => { noteAudioEvent('js socket OPEN'); if (!closed) sock.send(tuneJson(f, m, bl, bh)); };
+    sock.onopen = () => {
+      noteAudioEvent('js socket OPEN');
+      if (!closed && assertTune) sock.send(tuneJson(f, m, bl, bh));
+    };
     sock.onmessage = (e) => {
       if (closed || !(e.data instanceof ArrayBuffer)) return;
       const buf = e.data as ArrayBuffer;
@@ -291,12 +315,23 @@ export default function LocalAudioPlayer(
   // ★★ host/authSuffix/sessionId for the same reason — all three are resolved asynchronously, and
   //    a dep list is a list you must remember, so it WILL be wrong. Name everything the URL is
   //    built from.
-  }, [port, raw, adminAuth, wsBase, host, authSuffix, sessionId]);
+  }, [port, raw, adminAuth, wsBase, host, authSuffix, sessionId, assertTune]);
 
-  // Forward tune/mode/bandwidth changes — native sends on its own WS on BOTH platforms now; the
-  // JS branch remains for the fallback reader.
+  /* Forward tune/mode/bandwidth changes — native sends on its own WS on BOTH platforms now; the
+   * JS branch remains for the fallback reader.
+   * ★★★ AND ITS FIRST RUN IS A HELLO, NOT A TUNE. Effects run on mount as well as on change, and
+   *     this one is declared after the start effect — so with `assertTune` false the socket would
+   *     open saying nothing and this would immediately say it anyway, one tick later. Suppressing
+   *     the initial tune in ONE of the two places is the same as not suppressing it at all.
+   *  ★ Only while the values are still the ones we started with. The moment any of them differs, a
+   *    person has moved something — and a person tuning a shared dial is exactly what it is for.
+   */
   useEffect(() => {
     if (!started.current) return;
+    if (suppressFirst.current) {
+      if (tuneJson(frequency, mode, bandwidthLow, bandwidthHigh) === startTune.current) return;
+      suppressFirst.current = false;      // something moved: this is a real tune now
+    }
     if (USE_NATIVE_PUMP) {
       Vibe?.sendLocalTune?.(tuneJson(frequency, mode, bandwidthLow, bandwidthHigh));
     } else {

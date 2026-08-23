@@ -3944,6 +3944,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       } else {
         sharedNoDoorRef.current = false;
       }
+      if (!destroyed.current) setSharedDialNow(sharedNoDoorRef.current || isSharedDial(chosenRadio));
       let j = await AsyncStorage.getItem(tuneKey).catch(() => null);
       // Migrate the pre-per-device global local key on first per-device connect.
       if (j == null && isLocal) j = await AsyncStorage.getItem('lsv_last_tune:local').catch(() => null);
@@ -4064,6 +4065,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   const lastTuneLoaded = useRef(false);
   /** ★ "This server shares one dial, and has no door to say so" — see the connect path. */
   const sharedNoDoorRef = useRef(false);
+  /**
+   * ★★★ THE SAME FACT, AS STATE, BECAUSE THE AUDIO SOCKET NEEDS IT AS A PROP. The ref decides at
+   *  connect time; this is what stops `LocalAudioPlayer` asserting a tune the moment it opens —
+   *  which was the OTHER way a frequency escaped this app and the one that actually moved Stuart's
+   *  dial (2026-08-23). Suppressing the saved tune alone left the hijack in place.
+   */
+  const [sharedDialNow, setSharedDialNow] = useState(false);
   // One-shot: a deep-link initial tune is applied on the first connect only.
   const deepLinkTuneApplied = useRef(false);
   // Start the session countdown once we're actually connected.
@@ -8093,6 +8101,11 @@ export default function SDRScreen({ route, navigation }: Props) {
           authSuffix={route.params.authSuffix}
           adminAuth={adminAuthWire}
           sessionId={sessionUuid}
+          // ★★★ NOT ON A SHARED DIAL. This socket says `tune` as it opens, with whatever the screen
+          //     is holding — and before the server's own state is adopted that is the app's DEFAULT,
+          //     so joining somebody's shared receiver threw the room to 14.074 MHz, outside what
+          //     that server even allows, before settling. The dial belongs to the room.
+          assertTune={!sharedDialNow}
           onBytes={(n: number) => { audioBytes.current += n; }}
           raw={rawAudio && rawAudioPolicy === 'choice'}
         />
