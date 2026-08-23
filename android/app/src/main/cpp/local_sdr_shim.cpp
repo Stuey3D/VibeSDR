@@ -1308,6 +1308,8 @@ static std::atomic<float>    g_snrBeforeClimb{0.0f};
  *  station came up on its own (signal). See the shoulder test. */
 static std::atomic<float>    g_chanBeforeClimb{-200.0f};
 static std::atomic<float>    g_shoulderBeforeClimb{-200.0f};
+/** ★ The band's contrast when the climb was taken — see the contrast test. 99 = not measured. */
+static std::atomic<float>    g_contrastBeforeClimb{99.0f};
 /** ★ The quietest the shoulders have been FOR THE GAIN THEY WERE MEASURED AT — the continuous
  *  version of the climb's shoulder test. 0 = unset. See `shoulderLifted`. */
 static std::atomic<float>    g_bestShoulderDb{0.0f};
@@ -2444,7 +2446,11 @@ struct LocalSdrShim::Impl {
      *  The AGC compares how the two MOVE — see the shoulder test in the climb verdict. */
     std::atomic<float> shoulderDb{-200.0f};
     std::atomic<float> channelDbWide{-200.0f};
+    /** ★ Top of the stations against the floor between them, in dB. Collapses when the front end
+     *  starts filling the gaps in — see the contrast test in the AGC. */
+    std::atomic<float> bandContrastDb{99.0f};
     std::vector<float> shoulderBins_;
+    std::vector<float> contrastBins_;
 
     // Audio-extension decoder (RTTY etc.) on /ws/dxcluster — fed the demod audio.
     /** ★ What is attached, for the admin view — "RTTY" reads better than a null pointer check,
@@ -4747,14 +4753,21 @@ struct LocalSdrShim::Impl {
              *     same spill, so the ratio holds while the band turns to mush. The shoulders are
              *     close enough to share whatever the front end is doing to this part of the
              *     spectrum, and far enough out to contain no wanted signal.
-             *  ★ 30–130 kHz either side of centre: outside a WFM channel's own skirts, inside the
-             *    neighbourhood the interference lives in. Median again, for the reason the floor
-             *    uses one — an adjacent station must not become "the shoulder".
+             *  ★★★ 120–400 kHz, AND THE FIRST VERSION HAD IT WRONG. I put the window at 30–130 kHz
+             *      — which is INSIDE a WFM channel, since the wanted signal is 200 kHz wide. So
+             *      "the shoulders" were largely the station itself, and the test was asking whether
+             *      the signal had risen with the signal. Stuart, pointing at his own screenshot:
+             *      "that was what i meant by the shoulders — in WFM the signal we want is 200KHz
+             *      wide, in that screenshot 200KHz signal and all the surround was around the same
+             *      level" (2026-08-23). The channel measurement above is ±100 kHz; the shoulders
+             *      must start OUTSIDE that.
+             *  ★ Median, for the reason the floor uses one — an adjacent station must not become
+             *    "the shoulder".
              */
             shoulderBins_.clear();
             {
-                const int inner = std::max(1, (int)std::lround(30000.0 / binHz));
-                const int outer = std::min(bins / 2 - 1, (int)std::lround(130000.0 / binHz));
+                const int inner = std::max(1, (int)std::lround(120000.0 / binHz));
+                const int outer = std::min(bins / 2 - 1, (int)std::lround(400000.0 / binHz));
                 for (int i = inner; i <= outer; i++) {
                     shoulderBins_.push_back((float)dbAt(i));
                     shoulderBins_.push_back((float)dbAt(-i));
@@ -4764,6 +4777,33 @@ struct LocalSdrShim::Impl {
                 const size_t k = shoulderBins_.size() / 2;
                 std::nth_element(shoulderBins_.begin(), shoulderBins_.begin() + k, shoulderBins_.end());
                 shoulderDb.store(shoulderBins_[k]);
+            }
+            /* ══ HOW MUCH CONTRAST IS LEFT IN THE BAND ══════════════════════════════════════
+             * ★★★ THE ONE THING THAT IS TRUE OF INTERMODULATION AND OF NOTHING ELSE: it FILLS IN
+             *     the gaps. A clean FM band is stations at −60 and quiet at −90 — thirty decibels
+             *     of contrast. Stuart's 105.8 at 29.7 dB with 104.2 folding in is everything
+             *     squeezed into about thirteen, and the SNR meter read 24 dB throughout because
+             *     the mush lifts the wanted channel too ("105.8 still intermodulating with 104.2",
+             *     2026-08-23).
+             * ★★★ AND IT IS ABSOLUTE, WHICH IS WHY IT IS WORTH HAVING. Every other test here is
+             *     differential — before against after, or against a "quietest seen" that is itself
+             *     learned from whatever state the receiver happens to be in. Arrive already
+             *     overgained and stay there, and they all agree that nothing is changing. Contrast
+             *     does not care how we got here: both terms scale with gain, so the ratio is the
+             *     shape of the band and nothing else.
+             *  ★ 90th percentile against 25th, over the usable window: the top of the stations
+             *    against the floor between them.
+             */
+            contrastBins_.clear();
+            for (int i = -(bins/2) + deadBins; i < bins/2 - deadBins; i++)
+                contrastBins_.push_back((float)dbAt(i));
+            if (contrastBins_.size() > 16) {
+                const size_t hi9 = (contrastBins_.size() * 9) / 10;
+                const size_t lo2 = contrastBins_.size() / 4;
+                std::nth_element(contrastBins_.begin(), contrastBins_.begin() + hi9, contrastBins_.end());
+                const float top = contrastBins_[hi9];
+                std::nth_element(contrastBins_.begin(), contrastBins_.begin() + lo2, contrastBins_.end());
+                bandContrastDb.store(top - contrastBins_[lo2]);
             }
             if (cN) channelDbWide.store((float)(cSum / cN));
             spectrumSnr.store((cN && eN) ? (float)(cSum/cN - floorDbNow) : 0.0f);
@@ -14951,6 +14991,23 @@ void LocalSdrShim::overloadTick() {
          *     verdict above" — it was not, and that is precisely the half that stayed broken.
          *  ★ 2 dB of slack over the step: measurement noise on a 4-second window, not a judgement.
          */
+        /* ★★★ AN IMPOSSIBLE READING IS NOT EVIDENCE. A few decibels of floor for a few decibels of
+         *     gain is the physics; thirty-four is a measurement taken across a moment when the
+         *     pipeline was not the same pipeline. Acting on it is worse than doing nothing —
+         *     "105.4 went up and got a stereo lock just to drop again" (Stuart, 2026-08-23) is a
+         *     good step handed back on the strength of a number that cannot happen.
+         *  ★ Re-armed rather than discarded, exactly as the disturbed-pipeline case is: the climb
+         *    still has to prove itself, it just cannot be convicted on this. */
+        if (floorWas < -1.0f && std::fabs((double)(floorNow - floorWas)) > 15.0) {
+            g_climbAt.store(now, std::memory_order_relaxed);
+            g_floorBeforeClimb.store(floorNow, std::memory_order_relaxed);
+            g_snrBeforeClimb.store(p->spectrumSnr.load(), std::memory_order_relaxed);
+            g_shoulderBeforeClimb.store(p->shoulderDb.load(), std::memory_order_relaxed);
+        g_contrastBeforeClimb.store(p->bandContrastDb.load(), std::memory_order_relaxed);
+            LOGI("gain climb not judged — the floor moved %.1f dB, which is not something gain can "
+                 "do; re-measuring from here", floorNow - floorWas);
+            return;
+        }
         const double allowed = (climbStep > 0.1 ? climbStep : 0.0) + 2.0;
         /* ★★★ AND THE ONE MEASUREMENT THAT KNOWS WHETHER THE GAIN HELPED: THE CHANNEL'S SNR.
          *     A front end driven into intermodulation by a signal OUTSIDE the window produces
@@ -15015,7 +15072,14 @@ void LocalSdrShim::overloadTick() {
          *    which are far away and often occupied — this is that test, put where it can see.
          */
         const double shoulderAllowed = (climbStep > 0.1 ? climbStep : 0.0) + 2.0;
-        const bool  cameUpAsABlock = shldWas > -190.0f && (double)shldRose > shoulderAllowed;
+        const bool  shouldersRose = shldWas > -190.0f && (double)shldRose > shoulderAllowed;
+        /* ★ …or the band simply lost its shape. Intermodulation fills the gaps between stations,
+         *   so the distance from the tops to the floor collapses — see bandContrastDb. Two dB of
+         *   it in one step is a lot: the band does not change shape on its own. */
+        const float contrastWas = g_contrastBeforeClimb.load(std::memory_order_relaxed);
+        const float contrastNow = p->bandContrastDb.load();
+        const bool  bandFlattened = contrastWas < 90.0f && contrastNow < contrastWas - 2.0f;
+        const bool  cameUpAsABlock = shouldersRose || bandFlattened;
         /* ══ THE PANEL, AND ITS ORDER IS THE POINT ══════════════════════════════════════════════
          * ★★★ Stuart: "the agc needs multiple checks so SNR to make sure the peak is growing, but
          *     also the SNR may increase with intermodulation so we need to watch for that at the
@@ -15035,9 +15099,15 @@ void LocalSdrShim::overloadTick() {
         if (cameUpAsABlock) {
             const double m = std::min(12.0, g_ovlMargin.load(std::memory_order_relaxed) + 3.0);
             g_ovlMargin.store(m, std::memory_order_relaxed);
-            LOGI("either side of the station came up %.1f dB for %.1f dB of gain — more than the "
-                 "step, so that is intermodulation, not signal; giving it back (a climb now needs "
-                 "%.0f dB)", shldRose, climbStep, m);
+            if (bandFlattened && !shouldersRose)
+                LOGI("the band lost %.1f dB of contrast on that step (%.1f -> %.1f dB) — the gaps "
+                     "between stations are filling in, which is intermodulation; giving it back "
+                     "(a climb now needs %.0f dB)", contrastWas - contrastNow, contrastWas,
+                     contrastNow, m);
+            else
+                LOGI("either side of the station came up %.1f dB for %.1f dB of gain — more than "
+                     "the step, so that is intermodulation, not signal; giving it back (a climb "
+                     "now needs %.0f dB)", shldRose, climbStep, m);
             g_adcCleanRun.store(0, std::memory_order_relaxed);
             steps_forceDown = true;
         } else if (snrWas > 6.0f && snrNow > snrWas + 1.0f) {
@@ -15103,7 +15173,12 @@ void LocalSdrShim::overloadTick() {
             const double stepDb = g_dropStepDb.load(std::memory_order_relaxed);
             // ★ Half the step is a generous bar: real compression gives back the whole step and
             //   more, while an unresponsive floor barely moves.
-            if (fWas < -1.0f && stepDb > 0.1 && (fWas - fNow) < stepDb * 0.5) {
+            // ★ Same guard as the climb's: a floor that has moved further than gain can move it is
+            //   a measurement, not a diagnosis. Say nothing and let the next one decide.
+            if (fWas < -1.0f && std::fabs((double)(fWas - fNow)) > 15.0) {
+                LOGI("cut not judged — the floor moved %.1f dB, which is not something gain can do",
+                     fWas - fNow);
+            } else if (fWas < -1.0f && stepDb > 0.1 && (fWas - fNow) < stepDb * 0.5) {
                 const double until = now + 120.0;
                 g_floorTestMutedUntil.store(until, std::memory_order_relaxed);
                 // ★★ AND UNDO THE CUT. It was taken on a diagnosis just shown to be wrong, and
@@ -15172,6 +15247,19 @@ void LocalSdrShim::overloadTick() {
     const bool shoulderLifted = (bestShoulder < -1.0f) && (shoulderNorm > bestShoulder + 3.0f)
                                 && !floorMuted;
 
+    /* ★★★ AND AN ABSOLUTE ONE, BECAUSE EVERY OTHER TEST HERE CAN BE ARRIVED AT. If the loop lands
+     *     in the mush and stays, the differentials all report calm: nothing is changing, the
+     *     "quietest seen" was itself learned there, and the SNR is flattered by products landing
+     *     on the wanted channel. A band whose stations stand less than 15 dB above the gaps
+     *     between them is not a band this receiver is hearing properly, however it got there.
+     *  ★★ 15 dB is well below anything clean — Stuart's own screenshots are 30 dB clean and about
+     *     13 dB in the mush — so this fires on the failure and not on a merely busy band.
+     *  ★ And it is put on trial like every other cut: if coming down does NOT restore the shape,
+     *    the diagnosis was wrong, the gain goes back, and the test is muted for two minutes.
+     */
+    const float contrast = p->bandContrastDb.load();
+    const bool bandIsMush = contrast < 15.0f && !floorMuted && steps < 20;
+
     bool backoffToFit = false;   // ★ see the clipRun branch: the jump is sized under the lock
     // ★ Which reason took gain away, so the cut can be JUDGED — see the verdict above. Only the
     //   floor's cut needs it: clipping is a measured fact, and the climb verdict has its own.
@@ -15179,7 +15267,7 @@ void LocalSdrShim::overloadTick() {
     int want = steps;
     if (steps_forceDown) {
         want = steps + 1;                                        // undo the unhelpful climb
-    } else if (clipRun < 2 && (floorLifted || shoulderLifted)
+    } else if (clipRun < 2 && (floorLifted || shoulderLifted || bandIsMush)
                && !(g_dropAt.load(std::memory_order_relaxed) > 0
                     && now - g_dropAt.load(std::memory_order_relaxed) < kClimbTrialMaxSec)) {
         /* ★★★ ONE CUT ON TRIAL AT A TIME — THE SAME RULE THE CLIMB GOT, AND FOR A WORSE REASON.
@@ -15200,7 +15288,10 @@ void LocalSdrShim::overloadTick() {
          */
         want = steps + 1;
         downForFloor = true;
-        if (shoulderLifted && !floorLifted)
+        if (bandIsMush && !floorLifted && !shoulderLifted)
+            LOGI("only %.1f dB between the stations and the gaps — the front end is filling the "
+                 "band in; coming down", contrast);
+        else if (shoulderLifted && !floorLifted)
             LOGI("either side of the station is %.1f dB above its quietest for this gain — the "
                  "front end is making noise here", shoulderNorm - bestShoulder);
     } else if (clipRun < 2 && peakNow > kAgcBackoffDbfs
@@ -15958,7 +16049,13 @@ static void agcForget(const char* why) {
     //   deadlines in the future.
     const double now = std::chrono::duration<double>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
-    g_gainSettleUntil.store(now + 1.0, std::memory_order_relaxed);
+    /* ★★★ 2.5s, NOT 1. A retune is not a gain write: the whole chain re-converges — the tuner
+     *     relocks, the crop moves, the FFT refills, the demodulator re-acquires — and a floor read
+     *     during that is not a floor. One second was not enough and the loop believed what it saw:
+     *         that step raised the noise floor 34.4 dB for 3.7 dB of gain
+     *         that cut did not lower the floor (-18.1 dB for 0.5 dB of gain)
+     *     Neither number is physics. Both were acted on. */
+    g_gainSettleUntil.store(now + 2.5, std::memory_order_relaxed);
     g_agcHurryUntil.store(now + 8.0, std::memory_order_relaxed);
     g_ovlMargin.store(3.0, std::memory_order_relaxed);
     g_bestFloorDb.store(0.0f, std::memory_order_relaxed);      // 0 = unset, see the floor test
