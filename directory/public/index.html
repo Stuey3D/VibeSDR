@@ -228,7 +228,10 @@
   #clearSel:not(:disabled) { color: var(--busy); border-color: rgba(224,80,80,.4);
                              text-shadow: 0 0 8px rgba(224,80,80,.5); }
   .tunePanel button { min-width: 40px; }
-  .dialGlyph { font-size: 11px; opacity: .6; }
+  .vfoKey { font-size: 10px; letter-spacing: .08em; min-width: 42px; }
+  /* ★ Red once one is down: the key belongs to the needle, and the needle is red. */
+  .vfoKey.armed { color: #ff3b30; border-color: rgba(255,59,48,.45);
+                  text-shadow: 0 0 8px rgba(255,59,48,.6); }
   /* ★★ A DIAL IS NOT TEXT. Dragging it was selecting the legend and half the page underneath
         (Stuart, 2026-08-23) — the same rule as the app's sliders, where touch-action must never
         be given back. */
@@ -351,7 +354,12 @@
               2026-08-23: "the tune and zoom controls need to be separate like the app"). -->
       <span class="keyPanel tunePanel">
         <button type="button" id="tPrev" title="Tune down">&#10094;</button>
-        <span class="lens dialGlyph" aria-hidden="true">&#9673;</span>
+        <!-- ★★ PLACE THE VFO FROM THE KEYS, not only by clicking the glass. The arrows already walk
+                a needle once it exists; without this you had to reach for the dial to START one,
+                and on a narrow window the exact spot you want can be a pixel wide. Dead centre of
+                what is on the dial, then tune it with the arrows either side — which is how you
+                would do it on the set. -->
+        <button type="button" id="setVfo" class="vfoKey" title="Place a VFO at the centre of the dial">VFO</button>
         <button type="button" id="tNext" title="Tune up">&#10095;</button>
       </span>
       <span class="keyPanel zoomPanel">
@@ -1110,6 +1118,13 @@ function renderDial() {
   const zoomed = (view[1] - view[0]) < (DIAL_EXTENT[1] - DIAL_EXTENT[0]) * 0.999;
   // ★ A key that can only be a no-op is worse than no key.
   document.getElementById('clearSel').disabled = !(needleA > 0 || bandsOn.size);
+  const vfoKey = document.getElementById('setVfo');
+  vfoKey.classList.toggle('armed', needleA > 0);
+  vfoKey.textContent = (needleA > 0 && needleB > 0) ? 'VFO' : needleA > 0 ? 'VFO 2' : 'VFO';
+  vfoKey.title = (needleA > 0 && needleB > 0)
+    ? 'Start again — place a single VFO at the centre of the dial'
+    : needleA > 0 ? 'Place the second VFO at the centre, making a range'
+                  : 'Place a VFO at the centre of the dial';
   document.getElementById('dialExtent').textContent =
     `${prettyHz(view[0])} – ${prettyHz(view[1])}`
     + `  of  ${prettyHz(DIAL_EXTENT[0])} – ${prettyHz(DIAL_EXTENT[1])}`;
@@ -1366,6 +1381,16 @@ function wireDial() {
       sweep.raf = requestAnimationFrame(frame);
     }, HOLD_MS);
   };
+  document.getElementById('setVfo').addEventListener('click', () => {
+    const cur = dialView || DIAL_EXTENT;
+    const mid = (cur[0] + cur[1]) / 2;
+    // ★ The same ladder as clicking the glass: first press places the VFO, a second makes it a
+    //   range, a third starts over. One rule wherever a needle comes from.
+    if (needleA > 0 && needleB > 0) { needleA = mid; needleB = 0; }
+    else if (needleA > 0) { needleB = mid; }
+    else { needleA = mid; }
+    renderDial(); applyFilters();
+  });
   for (const [id, dir] of [['tPrev', -1], ['tNext', 1]]) {
     const b = document.getElementById(id);
     b.addEventListener('pointerdown', (e) => { e.preventDefault(); startSweep(dir); });
