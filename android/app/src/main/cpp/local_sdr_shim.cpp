@@ -1237,7 +1237,16 @@ static std::atomic<bool>     g_rtlAgc{false};
  *  intermodulation long before it rails, so a loop that aims at the rail arrives somewhere the
  *  radio cannot do its job. Backing off begins at kAgcBackoffDbfs, and the gap between the two is
  *  the deadband that stops it toggling on its own threshold. */
-static constexpr double      kAgcTargetDbfs  = -12.0;
+// ★★★ −6, NOT −12, NOW THAT A CUT HAS TO PROVE ITSELF. The old target was chosen when the loop
+//     could reduce gain on a bad diagnosis and never find out — so it was set low enough that the
+//     bad diagnosis rarely arose, at the cost of starving weak stations: 96.1 held RDS at pk −5
+//     dBFS and −12 is what stopped it getting near (Stuart, 2026-08-23).
+//  ★★ The down-step verdict changes the trade. Real compression now proves itself — the floor
+//     follows the gain down — and a cut that does not lower the floor is undone. Aiming higher is
+//     no longer betting that the loop will not misdiagnose; it is letting it find out.
+//  ★ Still six decibels back from the rail: the peak we measured is a second old and the band
+//     moves, so this is an operating point, not the loudest level that avoids clipping.
+static constexpr double      kAgcTargetDbfs  = -6.0;
 static constexpr double      kAgcBackoffDbfs = -6.0;
 static std::atomic<double>   g_ovlMargin{3.0};
 static std::atomic<double>   g_ovlLastChangeAt{0.0};
