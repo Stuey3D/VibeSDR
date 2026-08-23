@@ -37,7 +37,10 @@ const el = new Proxy({}, {
     : k === 'querySelector' ? (() => el) : k === 'querySelectorAll' ? (() => [])
     : k === 'closest' ? (() => null) : k === 'dataset' ? {}
     : k === 'classList' ? { add() {}, remove() {}, toggle() {} }
-    : k === 'clientWidth' ? 1900 : k === 'getBoundingClientRect' ? (() => ({ left: 0, top: 0, width: 1900, height: 200 }))
+    : k === 'clientWidth' ? (globalThis.CHECK_WIDTH || 1900)
+    : k === 'offsetWidth' ? Math.min(340, (globalThis.CHECK_WIDTH || 1900) - 16)
+    : k === 'getBoundingClientRect' ? (() => ({ left: 0, top: 40, right: 120, bottom: 62,
+                                                width: globalThis.CHECK_WIDTH || 1900, height: 200 }))
     : (t[k] !== undefined ? t[k] : ''),
   set: (t, k, v) => { if (k === 'innerHTML') globalThis.DIALHTML = String(v); t[k] = v; return true; },
 });
@@ -111,6 +114,20 @@ api.ALLv = dir.servers.concat(demo);
 api.learnBands(api.ALLv ?? []);
 api.renderDial();
 ok(api.ROWS.length === 2, 'the dial still draws with the demo estate');
+
+// ★★ A PHONE-WIDTH PASS. The dial is drawn in pixels, so a narrow window is a different drawing,
+//    not the same one scaled — and the numerals, the band labels and the tick ladder all have to
+//    survive it. 360 is the width of the narrowest phone anybody still carries.
+globalThis.CHECK_WIDTH = 360;
+globalThis.window.innerWidth = 360; globalThis.window.innerHeight = 640;
+api.renderDial();
+const narrow = globalThis.DIALHTML || '';
+ok(/class="dNum/.test(narrow), 'narrow (360px): the ticker still has numerals');
+ok(api.ROWS.length === 2, 'narrow (360px): both dials still drawn');
+ok(/class="dNeedle b"/.test(narrow), 'narrow (360px): the needle is still drawn');
+const nums = (narrow.match(/class="dNum[^"]*"/g) || []).length;
+ok(nums >= 4 && nums <= 40, `narrow (360px): a sensible number of figures (${nums})`);
+globalThis.CHECK_WIDTH = 1900;
 
 console.log(fail.length ? `\n${fail.length} check(s) FAILED` : '\nthe directory page runs');
 process.exit(fail.length ? 1 : 0);

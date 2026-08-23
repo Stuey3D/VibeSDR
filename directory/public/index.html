@@ -169,6 +169,27 @@
   /* ★ The same blue as the diamond on the map and in the legend: one colour means one thing. */
   .tag.temp { color: var(--temp); border-color: var(--temp); }
   .empty { color: var(--dim); text-align: center; padding: 40px 20px; }
+  /* ══ NARROW SCREENS ═══════════════════════════════════════════════════════════════════════
+     ★★ There were no media queries in this page at all, which is fine while everything is a
+        flex row that wraps — and not fine for the things that assume room: the control strip
+        pushed right by `margin-left:auto`, the keys sized for a mouse, and a header that ate
+        half a phone screen before the dial began. */
+  @media (max-width: 700px) {
+    header { padding: 16px 14px 12px; }
+    h1 { font-size: 30px; letter-spacing: 6px; }
+    .blurb { font-size: 12px; }
+    .dialWrap { padding: 12px 12px 10px; }
+    .dialTitle { gap: 8px; }
+    .dialHint { display: none; }          /* ★ the gestures are discoverable; the room is not */
+    .dialCtl { margin-left: 0; width: 100%; justify-content: flex-start; }
+    .keyPanel button { min-width: 38px; height: 30px; }   /* ★ taller: a thumb, not a pointer */
+    .tunePanel button { min-width: 34px; }
+    .legend { gap: 10px; padding: 8px 12px; font-size: 10px; }
+    #map { height: 38vh; min-height: 220px; }
+    main { padding: 12px; }
+    .ctyRow { padding: 7px 6px; }         /* ★ a checkbox row has to be tappable, not just visible */
+  }
+
   .empty code { background: var(--panel); padding: 2px 6px; border-radius: 4px; color: var(--accent); }
   .filters { padding: 10px 20px; border-bottom: 1px solid var(--line);
              display: flex; flex-direction: column; gap: 8px; }
@@ -214,8 +235,13 @@
         panes and controls sit in the hundreds — covered everything below its own top edge, so
         half the countries could not be reached (Stuart, 2026-08-23, with the screenshot). Fixed
         positioning also keeps it with the button if the page scrolls under it. */
+  /* ★★ NARROW SCREENS: the width is whatever the WINDOW can spare, not a fixed 340. At 320px the
+        old rule overflowed the right edge by the difference and the last countries in each
+        continent were unreachable — the same fault as being under the map, arrived at from the
+        other side. `-webkit-overflow-scrolling` keeps the list flickable on iOS. */
   .ctyPop { position: fixed; z-index: 2000; margin-top: 4px; overflow-y: auto;
-            min-width: 260px; max-width: 340px; background: var(--panel); border-radius: 10px;
+            -webkit-overflow-scrolling: touch;
+            width: min(340px, calc(100vw - 16px)); background: var(--panel); border-radius: 10px;
             border: 1px solid var(--accent); padding: 8px; text-align: left;
             box-shadow: 0 14px 40px rgba(0,0,0,.6); }
   .ctyCont { margin: 6px 0 2px; }
@@ -1130,6 +1156,37 @@ function renderCountries() {
     + `<button type="button" data-close="1">Done</button></div>`;
 }
 
+/**
+ * ★★★ PUT IT WHERE THERE IS ROOM, AND LET IT SCROLL. A popup pinned below its button falls off
+ *     the bottom of a short window, and one at a fixed width falls off the side of a narrow one —
+ *     and in both cases the countries you cannot see are simply unreachable. So: measure the space
+ *     below, flip above the button when there is more room there, and cap the height to whichever
+ *     side it landed on. The list scrolls inside that cap.
+ *  ★ Re-run on resize and on rotation, because a window that changes size after the popup opened
+ *    is exactly when it ends up in the wrong place.
+ */
+function placePicker(btn, pop) {
+  if (pop.hidden) return;
+  const r = btn.getBoundingClientRect();
+  const GAP = 6, EDGE = 8;
+  const w = pop.offsetWidth || Math.min(340, window.innerWidth - 16);
+  pop.style.left = `${Math.max(EDGE, Math.min(window.innerWidth - w - EDGE, r.left))}px`;
+
+  const below = window.innerHeight - r.bottom - GAP - EDGE;
+  const above = r.top - GAP - EDGE;
+  // ★ Below unless above is genuinely roomier — a menu that jumps above its button for the sake
+  //   of twenty pixels is more disconcerting than a slightly shorter list.
+  if (below >= 200 || below >= above) {
+    pop.style.top = `${r.bottom + GAP}px`;
+    pop.style.bottom = 'auto';
+    pop.style.maxHeight = `${Math.max(120, below)}px`;
+  } else {
+    pop.style.top = 'auto';
+    pop.style.bottom = `${window.innerHeight - r.top + GAP}px`;
+    pop.style.maxHeight = `${Math.max(120, above)}px`;
+  }
+}
+
 function wireCountryPicker() {
   const btn = document.getElementById('ctyBtn');
   const pop = document.getElementById('ctyPop');
@@ -1140,13 +1197,8 @@ function wireCountryPicker() {
     btn.setAttribute('aria-expanded', String(!pop.hidden));
     if (!pop.hidden) {
       // ★ Under the button, and never off the right-hand edge of a narrow window.
-      const r = btn.getBoundingClientRect();
-      pop.style.left = `${Math.max(8, Math.min(window.innerWidth - 348, r.left))}px`;
-      pop.style.top = `${r.bottom + 4}px`;
-      // ★ Never taller than the window has room for — a list you cannot scroll to the end of is
-      //   the same bug in a different costume.
-      pop.style.maxHeight = `${Math.max(160, window.innerHeight - r.bottom - 24)}px`;
-      renderCountries();
+      renderCountries();                       // ★ build it first, so it can be measured
+      placePicker(btn, pop);
     }
   });
   pop.addEventListener('click', (e) => {
@@ -1180,6 +1232,9 @@ function wireCountryPicker() {
     renderCountries(); renderDial(); applyFilters(); drawCountryHighlight();
   });
   document.addEventListener('click', () => { if (!pop.hidden) close(); });
+  // ★ A window that changes size while the picker is open must not leave it hanging off an edge.
+  window.addEventListener('resize', () => placePicker(btn, pop));
+  window.addEventListener('orientationchange', () => setTimeout(() => placePicker(btn, pop), 150));
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !pop.hidden) close(); });
 }
 
@@ -1226,7 +1281,12 @@ function hzToXIn(axis, hz) {
  *    is only a runaway guard.
  */
 function tickStep(spanHz, px) {
-  const want = Math.max(2, Math.min(40, Math.floor(px / 85)));  // ~85px of room per numeral
+  // ★★ THE ALLOWANCE HAS TO SHRINK WITH THE GLASS. 85px per figure is right on a desktop and
+  //    absurd on a phone: at 360px it asked for four and the free-edge suppression left THREE
+  //    numerals on the whole dial — a ruler with no numbers on it. A label is about 48px, so 58
+  //    still leaves air between them where there is little to spare.
+  const per = px < 700 ? 58 : 85;
+  const want = Math.max(2, Math.min(40, Math.floor(px / per)));
   const raw = spanHz / want;
   const mag = Math.pow(10, Math.floor(Math.log10(raw)));
   for (const m of [1, 2, 5, 10]) if (raw <= m * mag) return m * mag;
