@@ -280,7 +280,18 @@ export default function LocalAudioPlayer(
   // ★ adminAuth is a dependency: it arrives AFTER the connection, because the password is typed on
   //   a receiver you are already looking at. Without it here the socket keeps the empty credential
   //   it opened with, which is the whole fault.
-  }, [port, raw, adminAuth]);
+  // ★★★ AND SO IS wsBase — THE ADDRESS THIS SOCKET GOES TO ARRIVES LATE TOO. `connectBase` starts
+  //     as the FRONT DOOR and only becomes `/r/<id>` when the door's radio list comes back, which
+  //     is a round trip. With only [port, raw, adminAuth] here, a socket opened before that answer
+  //     kept the door's address for ever: the door owns no radio, so there is no audio and — since
+  //     TUNING RIDES THIS SAME SOCKET — no tuning either, while the spectrum (which re-subscribes
+  //     on the resolved address) plays perfectly. Exactly the 2026-08-12 failure, back through a
+  //     different door: on a LAN the port differed per server and re-ran the effect by accident,
+  //     but every DIRECTORY listing is port 443, so nothing in the old dep list ever changed.
+  // ★★ host/authSuffix/sessionId for the same reason — all three are resolved asynchronously, and
+  //    a dep list is a list you must remember, so it WILL be wrong. Name everything the URL is
+  //    built from.
+  }, [port, raw, adminAuth, wsBase, host, authSuffix, sessionId]);
 
   // Forward tune/mode/bandwidth changes — native sends on its own WS on BOTH platforms now; the
   // JS branch remains for the fallback reader.
