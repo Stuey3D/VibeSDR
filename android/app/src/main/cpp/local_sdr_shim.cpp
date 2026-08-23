@@ -14837,16 +14837,28 @@ void LocalSdrShim::overloadTick() {
     }
 
     const double peakNow = g_adcPeakDbfs.load(std::memory_order_relaxed);
-    // ★★★ THE CONTINUOUS INTERMOD CHECK. Track the quietest floor seen here, and treat a sustained
-    //     rise above it as the front end going non-linear — whatever the converter says about
-    //     headroom.
+    // ★★★ THE CONTINUOUS INTERMOD CHECK, MEASURED AGAINST THE GAIN THAT PRODUCED IT.
+    //
+    //  ★★★ IT COMPARED THE RAW FLOOR WITH THE QUIETEST RAW FLOOR EVER SEEN — and the quietest
+    //      floor is by definition the one at the LOWEST gain. So every honest climb pushed the
+    //      floor above that mark and tripped this test, forcing the gain straight back down: the
+    //      loop could never settle more than about 3 dB above wherever it happened to start. On
+    //      96.1 that meant parking at pk -14 dBFS where the receiver used to reach -5 and hold
+    //      RDS (Stuart, 2026-08-23: "the agc is still a little low on 96.1 ... previously it was
+    //      going to pk -5 dBFS which gave a gain of around 8.7").
+    //  ★★ SAME MISTAKE AS THE CLIMB VERDICT ABOVE, in the other measurement: a floor that rises
+    //     with the gain is the gain. Intermodulation is the floor rising FASTER than the gain, so
+    //     the quantity to remember is floor MINUS gain — a gain-normalised floor, which stays put
+    //     while the front end is linear and climbs only when it stops being.
+    //  ★ The sentinel still works: a normalised floor is around -80 to -130 dB, nowhere near 0.
     const float floorNow = p->iqFloorDb.load();
+    const float normNow = floorNow - (float)(p->lastGainTenthDb / 10.0);
     float best = g_bestFloorDb.load(std::memory_order_relaxed);
-    if (best > -1.0f || floorNow < best) {          // unset, or a new quietest
-        g_bestFloorDb.store(floorNow, std::memory_order_relaxed);
-        best = floorNow;
+    if (best > -1.0f || normNow < best) {           // unset, or a new quietest
+        g_bestFloorDb.store(normNow, std::memory_order_relaxed);
+        best = normNow;
     }
-    const bool floorLifted = (best < -1.0f) && (floorNow > best + 3.0f);
+    const bool floorLifted = (best < -1.0f) && (normNow > best + 3.0f);
 
     bool backoffToFit = false;   // ★ see the clipRun branch: the jump is sized under the lock
     int want = steps;
