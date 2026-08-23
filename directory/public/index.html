@@ -20,7 +20,10 @@
        between them rather than being amber with one green dot: AMBER is identity and action —
        headings, names, the Listen button — and GREEN is life, everything that says this receiver
        is up and has room for you. */
-    --free: #35E08A; --phosphor: #35E08A; --busy: #e05050;
+    /* ★★ THE APP'S OWN GREEN (#28A745, theme.ts) — the mint we had read as a web accent rather than
+        a radio's phosphor, and this page is meant to look like the instrument (Stuart,
+        2026-08-23). --busy is already the app's #E05050. */
+  --free: #28A745; --phosphor: #28A745; --busy: #e05050;
     /* ★★ THE TEMPORARY SHARE GIVES UP AMBER AND TAKES BLUE. On a page that is amber throughout, a
        STATE wearing amber cannot be picked out from the furniture — and this marker's whole job is
        to be spotted on a map (Stuart: "just change the colour of the diamond to blue or
@@ -194,7 +197,7 @@
                text-transform: uppercase; margin-bottom: 8px; }
   .dialTitle b { color: var(--phosphor); font-weight: 400; letter-spacing: .06em;
                  text-transform: none; font-size: 13px;
-                 text-shadow: 0 0 8px rgba(53,224,138,.45); }
+                 text-shadow: 0 0 8px rgba(40,167,69,.45); }
   .dialHint { color: var(--dim); font-size: 10.5px; letter-spacing: .06em; text-transform: none; }
   .dialCtl { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
              text-transform: none; letter-spacing: .04em; }
@@ -208,19 +211,19 @@
         screenshot). Not a pair of web buttons in a radio's clothing. */
   .keyPanel { display: inline-flex; align-items: center; gap: 7px;
               background: linear-gradient(#0b0f0b, #060806);
-              border: 1px solid rgba(53,224,138,.22); border-radius: 10px; padding: 4px 8px; }
+              border: 1px solid rgba(40,167,69,.22); border-radius: 10px; padding: 4px 8px; }
   .keyPanel button { min-width: 46px; height: 26px; cursor: pointer; font-family: inherit;
                      font-size: 15px; line-height: 1; color: var(--phosphor);
                      background: linear-gradient(#141a14, #0a0d0a);
-                     border: 1px solid rgba(53,224,138,.25); border-radius: 6px;
+                     border: 1px solid rgba(40,167,69,.25); border-radius: 6px;
                      box-shadow: inset 0 1px 0 rgba(255,255,255,.05),
                                  inset 0 -6px 10px rgba(0,0,0,.5);
-                     text-shadow: 0 0 8px rgba(53,224,138,.7); }
-  .keyPanel button:hover { border-color: rgba(53,224,138,.6); }
+                     text-shadow: 0 0 8px rgba(40,167,69,.7); }
+  .keyPanel button:hover { border-color: rgba(40,167,69,.6); }
   .keyPanel button:active { background: linear-gradient(#0a0d0a, #141a14); }
   .keyPanel button:disabled { opacity: .3; cursor: default; }
   .keyPanel .lens { color: var(--phosphor); opacity: .85; font-size: 14px;
-                    text-shadow: 0 0 8px rgba(53,224,138,.6); }
+                    text-shadow: 0 0 8px rgba(40,167,69,.6); }
   #zAll, #clearSel { font-size: 10px; letter-spacing: .1em; min-width: 46px; }
   #clearSel:not(:disabled) { color: var(--busy); border-color: rgba(224,80,80,.4);
                              text-shadow: 0 0 8px rgba(224,80,80,.5); }
@@ -233,18 +236,18 @@
   .dialGlass { cursor: crosshair; touch-action: none; position: relative; }
   .dialEdge { position: absolute; top: 0; bottom: 0; width: 34px; border: 0; cursor: pointer;
               color: var(--phosphor); font-family: inherit; font-size: 15px; line-height: 1;
-              text-shadow: 0 0 8px rgba(53,224,138,.8); opacity: .55; z-index: 2;
+              text-shadow: 0 0 8px rgba(40,167,69,.8); opacity: .55; z-index: 2;
               transition: opacity .12s; }
   .dialEdge:hover { opacity: 1; }
-  .dialEdge.left  { left: 0;  background: linear-gradient(90deg, rgba(53,224,138,.20), transparent); }
-  .dialEdge.right { right: 0; background: linear-gradient(270deg, rgba(53,224,138,.20), transparent); }
+  .dialEdge.left  { left: 0;  background: linear-gradient(90deg, rgba(40,167,69,.20), transparent); }
+  .dialEdge.right { right: 0; background: linear-gradient(270deg, rgba(40,167,69,.20), transparent); }
   .dialGlass.drag { cursor: grabbing; }
   .dialWrap .legend { user-select: none; -webkit-user-select: none; }
   .dBandHit { fill: transparent; cursor: pointer; }
   .dBandHit:hover + .dBandBx, .dBandBx:hover { fill: rgba(255,184,51,.22); }
   .dialGlass { border: 1px solid var(--line); border-radius: 8px; background: #050705;
                padding: 0; overflow: hidden;
-               box-shadow: inset 0 0 40px rgba(53,224,138,.06); }
+               box-shadow: inset 0 0 40px rgba(40,167,69,.06); }
   .dialGlass svg { display: block; }
   /* ★ The phosphor glow is the whole look — ticks and numerals lit, not printed. */
   /* ★ The ticker: phosphor by default, and the VERDICT in the colour of the numeral. */
