@@ -221,7 +221,9 @@
   .keyPanel button:disabled { opacity: .3; cursor: default; }
   .keyPanel .lens { color: var(--phosphor); opacity: .85; font-size: 14px;
                     text-shadow: 0 0 8px rgba(53,224,138,.6); }
-  #zAll { font-size: 10px; letter-spacing: .1em; min-width: 44px; }
+  #zAll, #clearSel { font-size: 10px; letter-spacing: .1em; min-width: 46px; }
+  #clearSel:not(:disabled) { color: var(--busy); border-color: rgba(224,80,80,.4);
+                             text-shadow: 0 0 8px rgba(224,80,80,.5); }
   .tunePanel button { min-width: 40px; }
   .dialGlyph { font-size: 11px; opacity: .6; }
   /* ★★ A DIAL IS NOT TEXT. Dragging it was selecting the legend and half the page underneath
@@ -355,7 +357,11 @@
         <button type="button" id="zIn" title="Zoom in — about the needle">+</button>
       </span>
       <span class="keyPanel allPanel">
-        <button type="button" id="zAll" title="The whole network, and clear the search">ALL</button>
+        <!-- ★ TWO DIFFERENT UNDOS, because they are two different regrets: ALL is "show me
+                everything again", CLEAR is "forget what I asked for". Making one key do both meant
+                you could not widen the view without losing the needles you had just placed. -->
+        <button type="button" id="zAll" title="Show the whole network on the dial above">ALL</button>
+        <button type="button" id="clearSel" title="Clear the needles and the bands you picked">CLEAR</button>
       </span>
     </span>
   </div>
@@ -1099,10 +1105,12 @@ function renderDial() {
                          role="img" aria-label="What the network can hear">${parts.join('')}</svg>`;
 
   const zoomed = (view[1] - view[0]) < (DIAL_EXTENT[1] - DIAL_EXTENT[0]) * 0.999;
+  // ★ A key that can only be a no-op is worse than no key.
+  document.getElementById('clearSel').disabled = !(needleA > 0 || bandsOn.size);
   document.getElementById('dialExtent').textContent =
     `${prettyHz(view[0])} – ${prettyHz(view[1])}`
     + `  of  ${prettyHz(DIAL_EXTENT[0])} – ${prettyHz(DIAL_EXTENT[1])}`;
-  document.getElementById('zAll').disabled = !zoomed && !needleA && !bandsOn.size;
+  document.getElementById('zAll').disabled = !zoomed;
   document.getElementById('edgeL').hidden = !(view[0] > DIAL_EXTENT[0] + 1);
   document.getElementById('edgeR').hidden = !(view[1] < DIAL_EXTENT[1] - 1);
 }
@@ -1366,9 +1374,12 @@ function wireDial() {
   document.getElementById('zIn').addEventListener('click', () => zoomBy(0.5));
   document.getElementById('zOut').addEventListener('click', () => zoomBy(2));
   document.getElementById('zAll').addEventListener('click', () => {
-    // ★ One key back to "the whole network" — the zoom, the needles and the band picks together.
-    //   Three separate ways to undo a search is three things to remember.
-    dialView = DIAL_EXTENT.slice(); needleA = 0; needleB = 0; bandsOn.clear();
+    dialView = DIAL_EXTENT.slice();
+    renderDial(); applyFilters();
+  });
+  document.getElementById('clearSel').addEventListener('click', () => {
+    // ★ The query, not the view: where you are looking is not something you asked for.
+    needleA = 0; needleB = 0; bandsOn.clear();
     renderDial(); applyFilters();
   });
 
