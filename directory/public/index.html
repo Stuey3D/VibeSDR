@@ -299,6 +299,8 @@
   .dPortGrip  { fill: var(--accent); opacity: .75; }
   .dPort:hover .dPortBox { fill: rgba(255,184,51,.22); }
   .dNum.over  { font-size: 10px; opacity: .8; }
+  /* ★ A free-edge figure is not on the ladder, so it says so — lit, to be found in a wall of red. */
+  .dNum.edge  { font-weight: 600; text-shadow: 0 0 7px rgba(40,167,69,.8); opacity: 1; }
   #freq { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
           color: var(--accent); padding: 5px 9px; font-size: 13px; width: 190px;
           font-family: inherit; letter-spacing: .04em; }
@@ -1219,6 +1221,33 @@ function drawRow(segsIn, y0, W, opt) {
       + `${b.decade ? '' : `\n${on ? 'selected — click to remove' : 'click to search for receivers covering it'}`}</title></g>`);
   }
 
+  /* ★★★ THE FREE EDGES ARE DRAWN FIRST AND THE LADDER GIVES WAY TO THEM. Done the other way round
+   *     the ladder won every collision — 87.5 MHz lost to a 90 MHz that told the reader nothing
+   *     they needed — and the whole point of the extra figures is to say where the usable gaps
+   *     BEGIN. Priority is the fix, not a smaller collision radius.
+   *  ★ Only when the dial is mostly busy: a mostly-green dial does not need every boundary called
+   *    out, and doing it then is the same clutter in the other colour.
+   */
+  const placedX = [];
+  const busyHz0 = covered.filter((g) => g.state === 'busy').reduce((n, g) => n + (g.hi - g.lo), 0);
+  if (busyHz0 > totalHz * 0.5) {
+    const freeRuns = [];
+    for (const g of segsIn) {
+      if (g.state !== 'free' && g.state !== 'temp') continue;
+      const last = freeRuns[freeRuns.length - 1];
+      if (last && Math.abs(last.hi - g.lo) < 1) last.hi = g.hi;
+      else freeRuns.push({ lo: g.lo, hi: g.hi });
+    }
+    for (const run of freeRuns) {
+      for (const hz of [run.lo, run.hi]) {
+        const x = hzToXIn(axis, hz);
+        if (x === null || placedX.some((p2) => Math.abs(p2 - x) < 30)) continue;
+        placedX.push(x);
+        p.push(`<line class="dTickMaj free" x1="${x.toFixed(1)}" y1="${TICK_Y}" x2="${x.toFixed(1)}" y2="${TICK_Y + TICK_H}"/>`);
+        p.push(`<text class="dNum free edge ${opt.kind}" x="${x.toFixed(1)}" y="${NUM_Y}">${esc(prettyHz(hz))}</text>`);
+      }
+    }
+  }
   for (const a of axis) {
     if (a.gap) {
       p.push(`<rect class="dGap" x="${a.x0.toFixed(1)}" y="${BAND_Y}" width="${(a.x1 - a.x0).toFixed(1)}" height="${BOT - BAND_Y}"/>`);
@@ -1226,14 +1255,19 @@ function drawRow(segsIn, y0, W, opt) {
     }
     const span = a.hi - a.lo, px = a.x1 - a.x0;
     p.push(`<line class="dBase" x1="${a.x0.toFixed(1)}" y1="${TICK_Y}" x2="${a.x1.toFixed(1)}" y2="${TICK_Y}"/>`);
-    const step = tickStep(span, over ? px * 0.62 : px);
+    const step = tickStep(span, over ? px * 0.85 : px);
     for (let f = Math.ceil(a.lo / step) * step; f <= a.hi + 1; f += step) {
       const x = a.x0 + px * ((f - a.lo) / span);
       // ★★★ THE NUMERAL CARRIES THE VERDICT — green where something free covers it, red where every
       //     radio covering it is in use, blue for a temporary share, DIM where nobody has said.
       const st = stateAtHz(segsIn, f);
       p.push(`<line class="dTickMaj ${st}" x1="${x.toFixed(1)}" y1="${TICK_Y}" x2="${x.toFixed(1)}" y2="${TICK_Y + TICK_H}"/>`);
-      p.push(`<text class="dNum ${st} ${opt.kind}" x="${x.toFixed(1)}" y="${NUM_Y}">${esc(prettyHz(f))}</text>`);
+      // ★ Give way to a free-edge figure already there — two numerals in one place is worse than
+      //   the one it was meant to add, and the free one is the one worth having.
+      if (!placedX.some((p2) => Math.abs(p2 - x) < 30)) {
+        p.push(`<text class="dNum ${st} ${opt.kind}" x="${x.toFixed(1)}" y="${NUM_Y}">${esc(prettyHz(f))}</text>`);
+        placedX.push(x);
+      }
       if (!over) {
         for (let k = 1; k < 5; k++) {
           const mf = f + (step * k) / 5;
@@ -1364,19 +1398,21 @@ function zoomBy(factor, aboutHz) {
 }
 
 function wireDial() {
-  /* ★ The arrows move the NEEDLE when there is one and pan the view when there is not — which is
-   *   what "tune" means in each case. A tenth of the window per press: small enough to place a
-   *   needle exactly, big enough to cross the dial without wearing the key out. */
+  /* ★★★ THE ARROWS TUNE THE DIAL — ALWAYS THE ZOOMED ROW, NEVER THE NEEDLE. They used to move a
+   *     needle when one existed and pan the window when one did not, so the same key did two
+   *     different things depending on state you could not see at a glance: "the tuning arrows need
+   *     to control the zoomed in row only as right now unless i click it which places a vfo then
+   *     it defaults to moving the whole range" (Stuart, 2026-08-23).
+   *  ★★ ONE KEY, ONE MEANING. Tuning moves the dial; the VFO key and a click on the glass place a
+   *     mark. A needle stays at the frequency it was put on while the dial travels underneath it,
+   *     which is what a needle on a dial does.
+   *  ★ A tenth of the window per press — small enough to creep, big enough to cross the glass
+   *    without wearing the key out. Hold it and it sweeps (see below).
+   */
   const tune = (dir) => {
     const cur = dialView || DIAL_EXTENT;
     const stepHz = (cur[1] - cur[0]) * 0.1 * dir;
-    if (needleA > 0) {
-      needleA = Math.max(DIAL_EXTENT[0], Math.min(DIAL_EXTENT[1], needleA + stepHz));
-      // ★ Follow it off the edge of the glass rather than losing it.
-      if (dialView && (needleA < cur[0] || needleA > cur[1])) setView(cur[0] + stepHz, cur[1] + stepHz);
-      else renderDial();
-      applyFilters();
-    } else if (dialView) setView(cur[0] + stepHz, cur[1] + stepHz);
+    setView(cur[0] + stepHz, cur[1] + stepHz);
   };
   /* ★ A PAGE, NOT A NUDGE — 80% of the window, so a press moves you somewhere new while leaving a
    *   sliver of what you were looking at to keep your bearings. The needle rides along, because it
@@ -1384,7 +1420,6 @@ function wireDial() {
   const page = (dir) => {
     const cur = dialView || DIAL_EXTENT;
     const d = (cur[1] - cur[0]) * 0.8 * dir;
-    if (needleA > 0) needleA = Math.max(DIAL_EXTENT[0], Math.min(DIAL_EXTENT[1], needleA + d));
     setView(cur[0] + d, cur[1] + d);
     applyFilters();
   };
@@ -1422,11 +1457,7 @@ function wireDial() {
         const rate = (span / SWEEP_SPAN_SECS) * (START_FRAC + (1 - START_FRAC) * ramp);
         const d = rate * ((now - sweep.last) / 1000) * sweep.dir;
         sweep.last = now;
-        if (needleA > 0) {
-          needleA = Math.max(DIAL_EXTENT[0], Math.min(DIAL_EXTENT[1], needleA + d));
-          if (dialView && (needleA <= cur[0] || needleA >= cur[1])) setView(cur[0] + d, cur[1] + d);
-          else renderDial();
-        } else if (dialView) setView(cur[0] + d, cur[1] + d);
+        setView(cur[0] + d, cur[1] + d);      // ★ same rule as a tap: the dial moves, not the mark
         sweep.raf = requestAnimationFrame(frame);
       };
       sweep.raf = requestAnimationFrame(frame);
