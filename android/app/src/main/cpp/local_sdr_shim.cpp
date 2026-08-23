@@ -1247,7 +1247,23 @@ static std::atomic<bool>     g_rtlAgc{false};
 //  ★ Still six decibels back from the rail: the peak we measured is a second old and the band
 //     moves, so this is an operating point, not the loudest level that avoids clipping.
 static constexpr double      kAgcTargetDbfs  = -6.0;
-static constexpr double      kAgcBackoffDbfs = -6.0;
+/* ★★★ THE BACKOFF GUARDS THE CEILING, NOT THE OPERATING POINT — AND THAT IS THE 96.1 BUG.
+ *     This was -6.0, the same figure as the target, so the loop CUT on any peak above its own
+ *     operating point while kAgcHardCeilDbfs (-2.0) and the note beneath it said the opposite:
+ *     "above the operating point the loop keeps climbing only while each step BUYS SNR". Two rules
+ *     in one loop disagreeing, and the cutter runs first in the chain, so the climber never got a
+ *     word in. On the Pi, 96.1: 12.5 -> 8.7 -> 7.7 dB, twice, before a single probe was taken —
+ *     logged as "front end compressing" and it was nothing of the kind, the converter was simply
+ *     above -6 dBFS with 6 dB still to go.
+ *  ★★ FOUR DECIBELS IS TWO RUNGS on the RTL's list, which is exactly the gap Stuart measured:
+ *     "really that needs around 12.5 - 14.4db gain to get 30db snr but the AGC only ever goes up
+ *     to around 7.7 or 8.7". The sweep agrees — 14.4 dB is the optimum there.
+ *  ★★ A PEAK BELOW THE RAIL IS NOT HARM, and harm is measurable: the separation verdict judges
+ *     every step differentially, and real clipping is counted separately by clipRun and is never
+ *     muted. This branch is the last-resort headroom guard, so it belongs at the ceiling.
+ *  ★ One decibel ABOVE the ceiling, not on it, or the climb's own limit and the backoff would sit
+ *    on the same number and toggle against each other. */
+static constexpr double      kAgcBackoffDbfs = -1.0;
 /**
  * ★★★ THE PEAK IS THE LIMIT; THE SNR IS THE GOAL. Aiming at a fixed converter level answers the
  *  wrong question — Stuart, on 96.1: "after a certain gain level you cannot get anymore SNR … that
@@ -1319,7 +1335,6 @@ static std::atomic<float>    g_contrastBeforeClimb{99.0f};
 static std::atomic<float>    g_sepBeforeMove{0.0f};
 static std::atomic<int>      g_moveDir{0};
 static std::atomic<bool>     g_settled{false};
-static std::atomic<bool>     g_wantUp{false};
 static std::atomic<bool>     g_wantDown{false};
 static std::atomic<bool>     g_triedDown{false};
 /** ★ The quietest the shoulders have been FOR THE GAIN THEY WERE MEASURED AT — the continuous
@@ -10486,7 +10501,10 @@ struct LocalSdrShim::Impl {
                 clipRun_ = clipping ? clipRun_ + 1 : 0;
                 {   // ★ The peak's own dwell — two consecutive hot seconds before it counts.
                     const double pk = frac > 0 ? 20.0 * std::log10(frac) : -99.0;
-                    g_adcHotRun.store(pk > -6.0 ? g_adcHotRun.load(std::memory_order_relaxed) + 1 : 0,
+                    // ★ The SAME threshold the backoff branch tests, by name — this was a second
+                    //   hard-coded -6.0 that would have stayed behind when that constant moved.
+                    g_adcHotRun.store(pk > kAgcBackoffDbfs
+                                          ? g_adcHotRun.load(std::memory_order_relaxed) + 1 : 0,
                                       std::memory_order_relaxed);
                 }
                 // ★ Published for the overload protection, which runs on the DSP thread — this is
@@ -15045,6 +15063,7 @@ void LocalSdrShim::overloadTick() {
     if (target < 0) return;            // nothing set — no ceiling to work against
 
     bool steps_forceDown = false;
+    bool steps_forceUp   = false;   // ★ the mirror — undo a cut the verdict judged worse
     // ★ Nothing measured before the last gain write has anything to say about the gain now — see
     //   agcSettleAfterGain(). Cheap and blunt on purpose: waiting one second beats cutting three
     //   times for one overload.
@@ -15116,8 +15135,17 @@ void LocalSdrShim::overloadTick() {
             // ★ Worse. Put it back, and do not try that direction again until something changes.
             LOGI("that %s cost %.1f dB of separation (%.1f -> %.1f) — putting it back",
                  dir > 0 ? "step up" : "step down", -d, sepWas, sepNow);
+            /* ★★★ AND IT HAS TO GO BACK IN BOTH DIRECTIONS. This read `steps_forceDown = (dir > 0)`
+             *     and, for a failed CUT, set `g_wantUp` — a flag NOTHING EVER READ. So a downward
+             *     probe that was judged worse was announced as "putting it back" and then simply
+             *     kept: the loop settled one rung below where its own measurement said it should
+             *     be, every time it looked down. That is 96.1 refusing to climb — 12.5 -> 8.7 ->
+             *     7.7 on the Pi, against a swept optimum of 14.4 dB. The probe was working; the
+             *     undo was missing.
+             *  ★ A "put it back" that does not put it back is worse than no trial at all: it spends
+             *    a step to learn something and then acts on the opposite of what it learned. */
             steps_forceDown = (dir > 0);
-            if (dir < 0) g_wantUp.store(true, std::memory_order_relaxed);
+            steps_forceUp   = (dir < 0);
             g_settled.store(true, std::memory_order_relaxed);
             g_adcCleanRun.store(0, std::memory_order_relaxed);
         } else if (d > 0.5f) {
@@ -15216,6 +15244,8 @@ void LocalSdrShim::overloadTick() {
     int want = steps;
     if (steps_forceDown) {
         want = steps + 1;                                        // undo the unhelpful climb
+    } else if (steps_forceUp) {
+        want = steps - 1;                                        // undo the unhelpful cut
     } else if (clipRun < 2 && g_wantDown.exchange(false, std::memory_order_relaxed)) {
         /* ★★★ PROBE DOWNWARD. The verdict asked for this: either a step up cost separation and has
          *     to be given back, or the loop wants to know whether the peak is BELOW where it is
@@ -15602,13 +15632,22 @@ void LocalSdrShim::overloadTick() {
             LOGI("stepping back — the last climb did not hold — gain %.1f dB, %d step%s below %.1f dB",
                  applied / 10.0, want, want == 1 ? "" : "s", target / 10.0);
         else if (clipPct <= 0.0)
-            LOGI("front end compressing (noise floor lifted, %.3f%% on the rail) — gain %.1f dB, "
+            // ★ Was "front end compressing (noise floor lifted)" — which this branch cannot know
+            //   and, on 96.1, was flatly untrue: the peak was hot, the floor had not moved, and
+            //   the message sent me to the floor test twice. Say what was actually measured.
+            LOGI("converter hot (peak %.1f dBFS, backoff at %.1f) — gain %.1f dB, "
                  "%d step%s below %.1f dB",
-                 clipPct, applied / 10.0, want, want == 1 ? "" : "s", target / 10.0);
+                 peakNow, kAgcBackoffDbfs, applied / 10.0, want,
+                 want == 1 ? "" : "s", target / 10.0);
         else
             LOGI("ADC overload (%.3f%% on the rail) — gain %.1f dB, %d step%s below %.1f dB",
                  clipPct, applied / 10.0, want, want == 1 ? "" : "s", target / 10.0);
     }
+    else if (steps_forceUp)
+        // ★ Same rule as the cut above: say WHICH reason. This is not "clean for N seconds", it is
+        //   a probe downward that the separation verdict rejected, being handed back.
+        LOGI("stepping back up — that cut did not hold — gain %.1f dB, %d step%s below %.1f dB",
+             applied / 10.0, want, want == 1 ? "" : "s", target / 10.0);
     else
         LOGI("clean for %ds — gain back up to %.1f dB (%d below %.1f dB)",
              cleanRun, applied / 10.0, want, target / 10.0);
@@ -16029,7 +16068,6 @@ static void agcForget(const char* why) {
     // ★ …and a new hill to climb: nothing learned about the last one's shape applies here.
     g_settled.store(false, std::memory_order_relaxed);
     g_triedDown.store(false, std::memory_order_relaxed);
-    g_wantUp.store(false, std::memory_order_relaxed);
     g_wantDown.store(false, std::memory_order_relaxed);
     g_moveDir.store(0, std::memory_order_relaxed);
     g_floorTestMutedUntil.store(0.0, std::memory_order_relaxed);
