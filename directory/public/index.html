@@ -270,6 +270,13 @@
   .keyPanel { display: inline-flex; align-items: center; gap: 7px;
               background: linear-gradient(#0b0f0b, #060806);
               border: 1px solid rgba(40,167,69,.22); border-radius: 10px; padding: 4px 8px; }
+  /* ★★ touch-action: manipulation — WITHOUT IT, TWO QUICK TAPS ARE A DOUBLE-TAP ZOOM. iOS reads
+        rapid taps on any element as "zoom the page", so tapping the tune keys twice in a second —
+        which is exactly how you tune — zoomed the whole directory in and out under the visitor's
+        thumb (Stuart, 2026-08-23, on an iPhone). It also drops the 300ms tap delay, so the keys
+        answer immediately. Every control that is TAPPED gets it, not just these. */
+  .keyPanel button, .dialEdge, .ctyBtn, .ctyRow, .ctyFoot button, .chip
+    { touch-action: manipulation; }
   .keyPanel button { min-width: 46px; height: 26px; cursor: pointer; font-family: inherit;
                      font-size: 15px; line-height: 1; color: var(--phosphor);
                      background: linear-gradient(#141a14, #0a0d0a);

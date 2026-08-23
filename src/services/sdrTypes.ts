@@ -282,6 +282,15 @@ export function parseServerAddress(
  *  and the user's conclusion is that our software does not work (Stuart, 2026-07-27). */
 export interface ServerOccupancy {
   busy: boolean;
+  /**
+   * ★★★ HOW MANY MAY LISTEN AT ONCE — and on a single-radio server that is also the only thing a
+   *  client can read to tell a SHARED DIAL from a private one before it connects. More than one
+   *  listener on one receiver means they are all hearing the same VFO, and arriving must therefore
+   *  not restore a saved tune (see SDRScreen's connect path). A front door says this per radio;
+   *  a server without one says it only here.
+   * ★ 0/absent = the server did not say, which is not the same as 1.
+   */
+  maxUsers: number;
   /** Seconds until the current listener's time limit expires. -1 = no limit set, so the
    *  honest answer to "how long?" is "no idea", NOT "any moment now". */
   freeInSec: number;
@@ -345,6 +354,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
     if (!j || j.server !== 'vibeserver') return null;
     return {
       busy:      j.busy === true,
+      maxUsers:  typeof j.maxUsers === 'number' ? j.maxUsers : 0,
       // ★ Older servers predate these fields. Defaulting freeInSec to -1 keeps "unknown"
       // distinct from "free now", which are very different things to show someone.
       freeInSec: typeof j.freeInSec === 'number' ? j.freeInSec : -1,

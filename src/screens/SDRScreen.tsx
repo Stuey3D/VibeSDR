@@ -3919,6 +3919,31 @@ export default function SDRScreen({ route, navigation }: Props) {
     const tuneKey = (isLocal ? `lsv_last_tune:${localDeviceKey}` : 'lsv_last_tune:' + baseUrl)
                   + radioKeySuffix;
     (async () => {
+      /**
+       * ★★★ A SERVER WITH NO FRONT DOOR STILL HAS A SHARED DIAL, AND WE WERE NOT ASKING. The guard
+       *     below reads the RADIO's user count, which comes from /vibeserver/radios — and a
+       *     single-radio VibeServer answers that with `{"radios":[]}`, no door at all. So
+       *     `chosenRadio` was null, `isSharedDial(null)` was false, and the app restored its saved
+       *     tune on connect and dragged the room from 96.1 to 94 (Stuart, 2026-08-23, on the
+       *     XCover). The rule was written and correct; it simply could not see the case.
+       *  ★★ /vibeserver.json says `maxUsers`, and on a ONE-RADIO server more than one listener can
+       *     only mean they share a dial. That is the whole test, and it is available before the
+       *     first socket opens, which is when the decision has to be made.
+       *  ★ A LOCKED single-radio server (individual VFOs in a fixed window) would also be caught
+       *    here and lose its saved tune to the server's own landing spot. That is a small,
+       *    recoverable loss on a configuration nobody runs yet — where the cost the other way is
+       *    moving a room full of listeners off their station without being asked.
+       */
+      if (isVibeServer && !chosenRadio) {
+        // ★ 1.5s, not the 2.5 default: this now sits IN FRONT of the first socket, and a server
+        //   that is slow to answer a status probe must not delay somebody's audio. Unknown means
+        //   "behave as before" — the saved tune is restored — because a receiver that says nothing
+        //   about listener counts is almost certainly a private one.
+        const occ = await fetchOccupancy(connectBase, 1500).catch(() => null);
+        sharedNoDoorRef.current = !!occ && occ.maxUsers > 1;
+      } else {
+        sharedNoDoorRef.current = false;
+      }
       let j = await AsyncStorage.getItem(tuneKey).catch(() => null);
       // Migrate the pre-per-device global local key on first per-device connect.
       if (j == null && isLocal) j = await AsyncStorage.getItem('lsv_last_tune:local').catch(() => null);
@@ -3952,7 +3977,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       //    happens without you doing anything.
       //  ★★ A DEEP LINK IS DIFFERENT and is left alone below: somebody followed a link to hear a
       //     specific thing, which is a deliberate act and reads as one in the room's strip.
-      if (j && isSharedDial(chosenRadio)) j = null;
+      if (j && (isSharedDial(chosenRadio) || sharedNoDoorRef.current)) j = null;
       if (j) {
         try {
           const p = JSON.parse(j) as { frequency?: unknown; mode?: unknown };
@@ -4037,6 +4062,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Persist the tune (debounced — the drum changes frequency rapidly) so the
   // next visit to this instance resumes where you left off.
   const lastTuneLoaded = useRef(false);
+  /** ★ "This server shares one dial, and has no door to say so" — see the connect path. */
+  const sharedNoDoorRef = useRef(false);
   // One-shot: a deep-link initial tune is applied on the first connect only.
   const deepLinkTuneApplied = useRef(false);
   // Start the session countdown once we're actually connected.
