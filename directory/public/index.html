@@ -80,6 +80,8 @@
   .sh-free { background: var(--free); border-radius: 50%; }
   .sh-busy { background: transparent; border: 2px solid var(--busy); border-radius: 50%; }
   .sh-temp { background: var(--temp); transform: rotate(45deg); }
+  .sh-unknown { background: repeating-linear-gradient(45deg,
+                  rgba(255,176,0,.45) 0 3px, rgba(255,176,0,.12) 3px 6px); }
   /* ★ Hollow and grey, and a different SHAPE again — a server that is not answering reads as
      absent rather than as another flavour of busy. */
   .sh-down { background: transparent; border: 2px solid #6b7785; }
@@ -180,6 +182,59 @@
                                background: rgba(255,184,51,.12); }
   .chip .n { color: var(--dim); margin-left: 6px; }
   .chip[aria-pressed="true"] .n { color: inherit; }
+  /* ══ THE NETWORK DIAL ═════════════════════════════════════════════════════════════════
+     ★★★ A VINTAGE TUNING DIAL, not a progress bar. Phosphor on black, ticks and numerals along a
+         ruler, the band plan printed above it — the FM-DX screen's own idiom, because this is the
+         same instrument doing the same job for the whole network instead of one receiver
+         (Stuart, 2026-08-23, with the screenshot: "that is how it is meant to look").
+     ★★ The axis is NOT to scale across gaps and the numerals are what make that honest. */
+  .dialWrap { padding: 14px 20px 12px; border-bottom: 1px solid var(--line); }
+  .dialTitle { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+               color: var(--dim); font-size: 11px; letter-spacing: .12em;
+               text-transform: uppercase; margin-bottom: 8px; }
+  .dialTitle b { color: var(--phosphor); font-weight: 400; letter-spacing: .06em;
+                 text-transform: none; font-size: 13px;
+                 text-shadow: 0 0 8px rgba(53,224,138,.45); }
+  .dialCtl { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+             text-transform: none; letter-spacing: .04em; }
+  .dialCtl label { color: var(--dim); font-size: 11px; letter-spacing: .1em;
+                   text-transform: uppercase; }
+  .dialCtl select { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+                    color: var(--accent); font-family: inherit; font-size: 12px; padding: 4px 7px; }
+  .dialCtl select:focus { outline: none; border-color: var(--accent); }
+  .zoomBtns { display: inline-flex; gap: 4px; }
+  .zoomBtns button { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+                     color: var(--phosphor); font-family: inherit; font-size: 12px; min-width: 30px;
+                     padding: 3px 8px; cursor: pointer; letter-spacing: .08em; }
+  .zoomBtns button:hover { border-color: var(--phosphor); }
+  .zoomBtns button:disabled { opacity: .35; cursor: default; border-color: var(--line); }
+  .dialGlass { cursor: grab; }
+  .dialGlass.drag { cursor: grabbing; }
+  .dBandHit { fill: transparent; cursor: pointer; }
+  .dBandHit:hover + .dBandBx, .dBandBx:hover { fill: rgba(255,184,51,.22); }
+  .dialGlass { border: 1px solid var(--line); border-radius: 8px; background: #050705;
+               padding: 0; overflow: hidden;
+               box-shadow: inset 0 0 40px rgba(53,224,138,.06); }
+  .dialGlass svg { display: block; width: 100%; }
+  /* ★ The phosphor glow is the whole look — ticks and numerals lit, not printed. */
+  .dTick   { stroke: var(--phosphor); stroke-width: 1; opacity: .55; }
+  .dTickMaj{ stroke: var(--phosphor); stroke-width: 1.4; opacity: .95; }
+  .dNum    { fill: var(--phosphor); font-size: 10px; letter-spacing: .06em;
+             text-anchor: middle; opacity: .9; }
+  .dBase   { stroke: var(--line); stroke-width: 1; }
+  .dBandTx { fill: var(--accent); font-size: 10.5px; letter-spacing: .04em; text-anchor: middle; }
+  .dBandBx { fill: rgba(255,184,51,.10); stroke: rgba(255,184,51,.45); stroke-width: 1; }
+  .dSeg.free    { fill: var(--free); }
+  .dSeg.temp    { fill: var(--temp); }
+  .dSeg.busy    { fill: var(--busy); }
+  /* ★ COVERED BUT UNSAID — a server that cannot report occupancy has not promised anything, so it
+       must not be drawn green. Hatched: present, verdict unknown. */
+  .dSeg.unknown { fill: url(#hatch); }
+  .dGap    { fill: rgba(255,176,0,.05); }
+  .dGapTx  { fill: var(--dim); font-size: 9px; text-anchor: middle; letter-spacing: .08em; }
+  /* ★ The needle from the FM-DX dial: where the frequency you typed lands on the network. */
+  .dNeedle { stroke: var(--busy); stroke-width: 1.5; }
+  .dNeedleHd { fill: var(--busy); }
   #freq { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
           color: var(--accent); padding: 5px 9px; font-size: 13px; width: 190px;
           font-family: inherit; letter-spacing: .04em; }
@@ -214,6 +269,49 @@
   <span><i class="sh-temp"></i>Temporary share</span>
   <span style="margin-left:auto" id="count"></span>
 </div>
+
+<!-- ══ THE NETWORK DIAL ═══════════════════════════════════════════════════════════════════
+     ★★★ FREQUENCY FIRST, NOT RADIO FIRST (Stuart, 2026-08-22). Every other SDR directory is a
+         list of receivers; this is a map of the spectrum with receivers attached to it. The
+         extent is the NETWORK's own — not a figure written in here — so it shrinks when a server
+         leaves and runs down to 1 kHz the moment somebody lists an unrestricted HF+.
+     ★ Step 3 of BRIEF-directory-network-dial.md: the union bar. Click, drag, band labels and
+       zoom are steps 4-6 and are not here yet. -->
+<section class="dialWrap" id="dialWrap" hidden>
+  <div class="dialTitle"><span>What the network can hear</span><b id="dialExtent"></b>
+    <span class="dialCtl">
+      <!-- ★ WHERE, not who: the country a receiver sits in is the question a listener asks when
+           they want signals from somewhere, and it is the one filter the map cannot express in a
+           click. It narrows the dial, the list and the pins together. -->
+      <label for="cty">Country</label>
+      <select id="cty"><option value="">anywhere</option></select>
+      <!-- ★★★ THE REGION CHANGES THE LABELS, NEVER THE COVERAGE. Medium wave ends at 1606.5 kHz in
+           Region 1 and 1705 in Region 2; a dial labelled with the wrong plan tells a visitor a band
+           ends where it does not. If switching region ever appears to add or remove a server,
+           something has been computed from a label that should have been computed from a number. -->
+      <label for="rgn">Band plan</label>
+      <select id="rgn">
+        <option value="auto">follow the receivers</option>
+        <option value="1">ITU Region 1 · Europe, Africa</option>
+        <option value="2">ITU Region 2 · the Americas</option>
+        <option value="3">ITU Region 3 · Asia-Pacific</option>
+      </select>
+      <span class="zoomBtns">
+        <button type="button" id="zOut" title="Zoom out">−</button>
+        <button type="button" id="zIn" title="Zoom in">+</button>
+        <button type="button" id="zAll" title="The whole network">ALL</button>
+      </span>
+    </span>
+  </div>
+  <div class="dialGlass"><div id="dial"></div></div>
+  <div class="legend">
+    <span><i class="sh sh-free"></i> free now</span>
+    <span><i class="sh sh-temp"></i> only a temporary share</span>
+    <span><i class="sh sh-busy"></i> every radio here is in use</span>
+    <span><i class="sh sh-unknown"></i> covered · occupancy not reported</span>
+    <span id="dialGapNote"></span>
+  </div>
+</section>
 
 <!-- ★★ FILTERS ABOVE THE MAP, because they filter the map too. A control that changes what the
         pins show, placed below them, gets found after the visitor has already decided the
@@ -496,12 +594,82 @@ let ALL = [];                       // every listing, unfiltered — the filters
 const bandsOn = new Set();
 let freqHz = 0;
 
-/** Bands a server can offer, as words, across all its radios. */
+/**
+ * ★★★ WHAT A BAND NAME MEANS IN HERTZ, LEARNED FROM THE SERVERS THAT NAME IT — never from a table
+ *     in this page. Both publishers emit the words and the numbers PAIRWISE: a daemon sends
+ *     `allowedNames[i]` beside `allowed[i]`, a phone sends `coverage[i]` beside `ranges[i]`. So the
+ *     page can know that this estate calls 87.5–108 MHz "FM Broadcast Band" because a server said
+ *     so, and the region-aware plan stays the servers' business exactly as the note above demands.
+ * ★★★ THIS IS WHAT MAKES A WIDEBAND RECEIVER FINDABLE. An UNRESTRICTED radio is never named — the
+ *     Pi's dongle says "500 kHz – 1766 MHz" and no words at all — so a name-only filter hid a
+ *     receiver that covers every band on the bar. Both chips read "1" with two servers listed and
+ *     four receivers between them, three of which can hear FM (Stuart, 2026-08-23, with the
+ *     screenshot). Anything fed from these numbers — the dial above all — would have pointed at
+ *     one phone and called it the estate.
+ * ★★ Learned, not assumed: a name nobody published has no span and matches nothing.
+ */
+const BAND_SPAN = new Map();
+function learnBands(servers) {
+  BAND_SPAN.clear();
+  const add = (names, ranges) => {
+    // ★ Pairwise or not at all. A server whose two lists disagree in length is telling us nothing
+    //   we can align, and guessing the pairing would invent a band edge.
+    if (!names.length || names.length !== ranges.length) return;
+    names.forEach((n, i) => {
+      const [lo, hi] = ranges[i];
+      if (!(hi > lo)) return;
+      const prev = BAND_SPAN.get(n);
+      // ★ Widest wins: two servers in different regions may name the same band differently sized,
+      //   and the filter should not exclude a receiver on the edge of somebody else's plan.
+      BAND_SPAN.set(n, prev ? [Math.min(prev[0], lo), Math.max(prev[1], hi)] : [lo, hi]);
+    });
+  };
+  for (const s of servers) for (const r of (s.radios || [])) {
+    add(bandWords(r.allowedNames), bandNums(r.allowed));   // daemon
+    add(bandWords(r.coverage),     bandNums(r.ranges));    // phone
+  }
+}
+
+const bandPair = (v) => Array.isArray(v) && v.length === 2
+                     && Number.isFinite(+v[0]) && Number.isFinite(+v[1]);
+const bandNums = (v) => (Array.isArray(v) ? v : []).filter(bandPair).map((p) => [+p[0], +p[1]]);
+const bandWords = (v) => (Array.isArray(v) ? v : [])
+                          .filter((c) => typeof c === 'string' && c.trim()).map((c) => c.trim());
+
+/**
+ * What one radio can ACTUALLY tune, in Hz.
+ *
+ * ★★★ A LOCKED RADIO IS ITS WINDOW, and it publishes its hardware reach regardless. The Pi's
+ *     RSP1B says `ranges: [[1000, 2000000000]]` while it is locked to 2.8–10.8 MHz — so a search
+ *     for 145 MHz matched it, and the card beside the match said "2.8 – 10.8 MHz" in the same
+ *     breath. radioLine has always drawn the true window from centreHz ± spanHz/2; the filter
+ *     believed the label instead. A dial that sends somebody to a receiver which cannot go there
+ *     is worse than one that finds nothing.
+ */
+function reachOf(r) {
+  const centre = Number(r.centreHz) || 0, span = Number(r.spanHz) || 0;
+  if (r.locked && centre > 0 && span > 0) return [[centre - span / 2, centre + span / 2]];
+  // ★ `allowed` is what a listener may tune, `ranges` what the hardware reaches — the narrower,
+  //   truer answer first. A restricted receiver must not be offered for a band it will refuse.
+  const allowed = bandNums(r.allowed);
+  if (allowed.length) return allowed;
+  const ranges = bandNums(r.ranges);
+  if (ranges.length) return ranges;
+  return bandNums(r.coverage);
+}
+
+/** Bands a server can offer, across all its radios — said in words, or covered in Hz. */
 function bandsOf(s) {
   const out = new Set();
-  for (const r of (s.radios || []))
-    for (const c of (Array.isArray(r.coverage) ? r.coverage : []))
-      if (typeof c === 'string' && c.trim()) out.add(c.trim());
+  for (const r of (s.radios || [])) {
+    for (const n of bandWords(r.allowedNames)) out.add(n);
+    for (const n of bandWords(r.coverage)) out.add(n);
+    // ★ A radio that can tune the whole of a band this estate has named OFFERS that band, whether
+    //   or not its own server bothered to say the words.
+    const reach = reachOf(r);
+    for (const [name, [lo, hi]] of BAND_SPAN)
+      if (reach.some(([a, b]) => a <= lo && b >= hi)) out.add(name);
+  }
   return out;
 }
 
@@ -509,11 +677,7 @@ function bandsOf(s) {
  *    page does arithmetic on something another machine said. */
 function rangesOf(s) {
   const out = [];
-  for (const r of (s.radios || []))
-    for (const p of (Array.isArray(r.ranges) ? r.ranges : [])) {
-      const lo = Number(Array.isArray(p) ? p[0] : NaN), hi = Number(Array.isArray(p) ? p[1] : NaN);
-      if (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo) out.push([lo, hi]);
-    }
+  for (const r of (s.radios || [])) out.push(...reachOf(r));
   return out;
 }
 
@@ -546,6 +710,7 @@ function prettyHz(hz) {
 
 /** ★ Bands are OR (an FM-DXer wants FM servers), the frequency box is AND (it narrows further). */
 function matches(s) {
+  if (countryOn && s.country !== countryOn) return false;
   if (bandsOn.size) {
     const have = bandsOf(s);
     let hit = false;
@@ -559,6 +724,445 @@ function matches(s) {
   }
   return true;
 }
+
+/* ══ THE NETWORK DIAL ════════════════════════════════════════════════════════════════════════
+ * ★★★ A SWEEP LINE OVER EVERY RANGE BOUNDARY IN THE NETWORK. Each elementary interval knows which
+ *     radios cover it and how many of those have a free slot, so the bar answers the question a
+ *     listener actually has — "I want 1467 kHz, who has it and is it free?" — rather than the
+ *     question a list of receivers answers.
+ * ★★★ OCCUPANCY IS SAID OR IT IS HATCHED. The one thing this must never do is invent a verdict:
+ *     a green stretch is a promise that somebody can listen there NOW, and a server that cannot
+ *     report per-radio counts has not made that promise. Same rule as the FULL/FREE line in the
+ *     cards, and the same rule as client_infers_server_decisions.
+ */
+
+/** One radio's slot state: true free, false busy, null nobody said. */
+function radioFree(r, s) {
+  // ★ A SINGLE-RADIO SERVER IS ITS RADIO — the one case where the machine's figures state a fact
+  //   about the receiver rather than assume one. Anything else must have said it per radio.
+  const solo = !!(s && Array.isArray(s.radios) && s.radios.length === 1);
+  const said = Number.isFinite(Number(r.listeners)) ? Number(r.listeners)
+             : solo && Number.isFinite(Number(s.listeners)) ? Number(s.listeners) : null;
+  const max = Number(r.maxListeners) || (solo ? Number(s.maxListeners) : 0) || 0;
+  if (said === null || max <= 0) return null;
+  return said < max;
+}
+
+/** Every tunable stretch in the network, with who is on it. */
+function dialItems() {
+  const out = [];
+  for (const s of ALL) {
+    if (s.unreachable) continue;      // ★ not responding is not coverage
+    // ★ The dial answers "what can the network hear" for the network the visitor is LOOKING at —
+    //   filter to Germany and the dial must be Germany's reach, not Europe's.
+    if (countryOn && s.country !== countryOn) continue;
+    for (const r of (s.radios || [])) {
+      const free = radioFree(r, s);
+      for (const [lo, hi] of reachOf(r))
+        out.push({ lo, hi, free, temporary: !!s.temporary, server: s, radio: r });
+    }
+  }
+  return out;
+}
+
+/**
+ * Elementary intervals, each with a verdict.
+ * ★★ PRECEDENCE, from the brief: free-and-permanent beats free-and-temporary beats unknown beats
+ *    busy. Green must never be able to mean less than "this will still be here".
+ */
+function dialSegments(items) {
+  const edges = [...new Set(items.flatMap((i) => [i.lo, i.hi]))].sort((a, b) => a - b);
+  const segs = [];
+  for (let k = 0; k < edges.length - 1; k++) {
+    const lo = edges[k], hi = edges[k + 1];
+    if (!(hi > lo)) continue;
+    const on = items.filter((i) => i.lo <= lo && i.hi >= hi);
+    if (!on.length) { segs.push({ lo, hi, state: 'gap', on }); continue; }
+    const freePerm = on.some((i) => i.free === true && !i.temporary);
+    const freeTemp = on.some((i) => i.free === true && i.temporary);
+    const unsaid   = on.some((i) => i.free === null);
+    const state = freePerm ? 'free' : freeTemp ? 'temp' : unsaid ? 'unknown' : 'busy';
+    segs.push({ lo, hi, state, on });
+  }
+  // ★ Merge neighbours that say the same thing — a boundary nobody can see is a boundary that
+  //   only makes the DOM bigger. Kept apart when the verdict changes, which is the whole point.
+  const merged = [];
+  for (const g of segs) {
+    const prev = merged[merged.length - 1];
+    if (prev && prev.state === g.state && prev.hi === g.lo) { prev.hi = g.hi; prev.on = [...new Set([...prev.on, ...g.on])]; }
+    else merged.push({ ...g });
+  }
+  return merged;
+}
+
+/** ★ What a stretch is worth saying about, on hover: which radio, on which server, and its state. */
+function segTitle(g) {
+  const who = g.on.map((i) => {
+    const f = i.free === null ? 'occupancy not reported' : i.free ? 'free' : 'in use';
+    return `${i.radio.name || i.radio.driver || 'Radio'} · ${i.server.name} — ${f}`;
+  });
+  return `${prettyHz(g.lo)} – ${prettyHz(g.hi)}\n` + who.join('\n');
+}
+
+/* ══ THE BAND PLAN, THE REGION AND THE COUNTRY ═══════════════════════════════════════════════
+ * ★★★ GENERATED FROM vibe_bands.h, NEVER TYPED HERE. bandplan.json carries all three ITU regions
+ *     and the region-from-position rule SAMPLED from the header's own ituRegion(), so the page
+ *     cannot drift from the server's idea of where a band ends. scripts/gen-bandplan.sh --check
+ *     fails the moment they disagree. A second band table is how the landing page and the
+ *     directory would come to describe the same receiver differently.
+ */
+let PLAN = null;                    // { regions: {1,2,3}, regionByLon, highLatMin }
+let regionSel = 'auto';             // the dropdown; 'auto' follows the receivers on screen
+let countryOn = '';                 // '' = anywhere
+let dialView = null;                // the viewer's zoom window in Hz, or null for the whole network
+
+try { regionSel = localStorage.getItem('vsRegion') || 'auto'; } catch { /* private mode */ }
+
+function loadPlan() {
+  return fetch('/bandplan.json', { cache: 'no-store' })
+    .then((r) => r.json())
+    .then((j) => { PLAN = j; })
+    // ★ A missing plan is not a broken dial. The ruler and the availability are computed from
+    //   frequencies; only the NAMES above it come from here.
+    .catch(() => { PLAN = null; });
+}
+
+/** ★ The header's own rule, as sampled at generation time — not a copy of its source. */
+function ituRegionAt(lat, lon) {
+  if (!PLAN || !PLAN.regionByLon || !Number.isFinite(lat) || !Number.isFinite(lon)) return 1;
+  const table = (Math.abs(lat) >= (PLAN.highLatMin || 41) && lat > 0)
+              ? PLAN.regionByLon.high : PLAN.regionByLon.low;
+  let region = 1;
+  for (const row of table) { if (lon >= row.from) region = row.region; else break; }
+  return region;
+}
+
+/**
+ * ★★ THE PLAN FOLLOWS THE RECEIVERS ON SCREEN. Filter to US servers and the dial should label
+ *    itself with Region 2's plan without anybody being asked (Stuart, 2026-08-23) — the country
+ *    filter is an explicit act, so following it is not the silent locale guess the brief rules out.
+ *  ★ An explicit choice in the dropdown always wins and is remembered.
+ */
+function activeRegion() {
+  if (regionSel !== 'auto') return Number(regionSel) || 1;
+  const votes = new Map();
+  for (const s of ALL) {
+    if (countryOn && s.country !== countryOn) continue;
+    const r = ituRegionAt(Number(s.lat), Number(s.lon));
+    votes.set(r, (votes.get(r) || 0) + 1);
+  }
+  let best = 1, n = -1;
+  for (const [r, c] of votes) if (c > n) { best = r; n = c; }
+  return best;
+}
+
+/** Bands of the active plan, as [name, lo, hi] — the ruler's labels. */
+function planBands() {
+  if (!PLAN || !PLAN.regions) return [];
+  const list = PLAN.regions[String(activeRegion())] || [];
+  return list.map((b) => [b.label, Number(b.lo), Number(b.hi)]).filter(([, lo, hi]) => hi > lo);
+}
+
+/** ★ The country list is DERIVED from what is listed — never a filter that can only return none. */
+function renderCountries() {
+  const sel = document.getElementById('cty');
+  const seen = new Map();
+  for (const s of ALL) if (s.country) seen.set(s.country, (seen.get(s.country) || 0) + 1);
+  const opts = [...seen.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const keep = countryOn;
+  sel.innerHTML = `<option value="">anywhere</option>`
+    + opts.map(([c, n]) => `<option value="${esc(c)}">${esc(c)} · ${n}</option>`).join('');
+  sel.value = opts.some(([c]) => c === keep) ? keep : '';
+  countryOn = sel.value;
+  document.getElementById('rgn').value = regionSel;
+}
+
+/**
+ * ★★★ THE AXIS IS PIECEWISE, AND THAT IS DELIBERATE. Within a covered run the scale is LINEAR —
+ *     equal distance is equal frequency, the one property a tuning dial must have — while an
+ *     uncovered stretch collapses to a fixed narrow gap however many megahertz it really spans.
+ *     True to scale, an Airspy restricted to AM and FM would spend 98% of the dial on the 86 MHz
+ *     of nothing in between (Stuart, 2026-08-22).
+ * ★★ Which is exactly why the NUMERALS are not decoration: they are the only thing telling a
+ *    reader that the gap is 86 MHz and the band beside it is 1 MHz.
+ */
+function dialAxis(runs, width, totalHz) {
+  const GAP_PX = 26;
+  const gapCount = runs.filter((r) => r.gap).length;
+  const usable = Math.max(60, width - gapCount * GAP_PX);
+  let x = 0;
+  const out = [];
+  for (const run of runs) {
+    if (run.gap) { out.push({ ...run, x0: x, x1: x + GAP_PX }); x += GAP_PX; continue; }
+    const span = run.segs.reduce((n, g) => n + (g.hi - g.lo), 0);
+    const w = usable * (span / totalHz);
+    out.push({ ...run, x0: x, x1: x + w, lo: run.segs[0].lo,
+               hi: run.segs[run.segs.length - 1].hi });
+    x += w;
+  }
+  return out;
+}
+
+/** ★ Where one frequency lands on that axis, or null when nobody covers it. */
+function hzToX(axis, hz) {
+  for (const a of axis) {
+    if (a.gap) continue;
+    if (hz >= a.lo && hz <= a.hi) return a.x0 + (a.x1 - a.x0) * ((hz - a.lo) / (a.hi - a.lo));
+  }
+  return null;
+}
+
+/** ★ A 1-2-5 ladder, so the numerals land on figures a radio person reads without thinking. */
+function tickStep(spanHz, px) {
+  const want = Math.max(2, Math.min(9, Math.floor(px / 90)));   // ~90px of room per numeral
+  const raw = spanHz / want;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const m of [1, 2, 5, 10]) if (raw <= m * mag) return m * mag;
+  return 10 * mag;
+}
+
+function renderDial() {
+  const wrap = document.getElementById('dialWrap');
+  const items = dialItems();
+  // ★ Nothing to draw is not an empty dial, it is no dial. An axis with no spectrum on it is a
+  //   control that can only mislead.
+  if (!items.length) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+
+  const all = dialSegments(items);
+  const fullCov = all.filter((g) => g.state !== 'gap');
+  if (!fullCov.length) { wrap.hidden = true; return; }
+  DIAL_EXTENT = [fullCov[0].lo, fullCov[fullCov.length - 1].hi];
+
+  // ★★★ THE ZOOM WINDOW BELONGS TO THE VIEWER AND SURVIVES THE REFRESH. The page reloads every
+  //     minute, so a naive redraw would rescale the axis under the hands of somebody zoomed into
+  //     40 m the moment a server joins or leaves. It is clamped only when it ends up entirely
+  //     outside what anybody covers — and then it says so rather than silently jumping.
+  const view = dialView
+    ? [Math.max(dialView[0], DIAL_EXTENT[0] - 0), Math.min(dialView[1], DIAL_EXTENT[1])]
+    : DIAL_EXTENT.slice();
+  const segs = all.map((g) => ({ ...g, lo: Math.max(g.lo, view[0]), hi: Math.min(g.hi, view[1]) }))
+                  .filter((g) => g.hi > g.lo);
+  const covered = segs.filter((g) => g.state !== 'gap');
+  if (!covered.length) {
+    // ★ Nobody covers the window the viewer is in. Say it, do not jump them somewhere else.
+    document.getElementById('dial').innerHTML =
+      `<div class="empty" style="padding:22px">Nothing in the network covers `
+      + `${esc(prettyHz(view[0]))} – ${esc(prettyHz(view[1]))}.</div>`;
+    document.getElementById('dialExtent').textContent = `${prettyHz(view[0])} – ${prettyHz(view[1])}`;
+    return;
+  }
+  const totalHz = covered.reduce((n, g) => n + (g.hi - g.lo), 0) || 1;
+
+  const runs = [];
+  for (const g of segs) {
+    if (g.state === 'gap') { runs.push({ gap: true, lo: g.lo, hi: g.hi }); continue; }
+    const last = runs[runs.length - 1];
+    if (last && !last.gap) last.segs.push(g);
+    else runs.push({ gap: false, segs: [g] });
+  }
+
+  const host = document.getElementById('dial');
+  const W = Math.max(320, host.clientWidth || wrap.clientWidth - 40);
+  const axis = dialAxis(runs, W, totalHz);
+
+  // ★★ THE PLAN ALONG THE TOP is the band plan row of the FM-DX dial. Today it can only show the
+  //    bands SERVERS have named (see BAND_SPAN) — the full region-aware plan generated from
+  //    vibe_bands.h is step 2 of the brief and is not here yet.
+  const BAND_Y = 14, RULE_Y = 52, AVAIL_Y = 60, H = 84;
+  const parts = [];
+
+  parts.push(`<defs><pattern id="hatch" width="6" height="6" patternTransform="rotate(45)"
+      patternUnits="userSpaceOnUse">
+      <rect width="6" height="6" fill="rgba(255,176,0,.10)"/>
+      <line x1="0" y1="0" x2="0" y2="6" stroke="rgba(255,176,0,.45)" stroke-width="3"/>
+    </pattern></defs>`);
+
+  // ★★★ AND THE PLAN IS THE NAVIGATION, not just a label. At full zoom-out a narrow band is too
+  //     small to hit with a mouse — so clicking its name zooms the dial to it, which is what makes
+  //     medium wave reachable on a dial that also has to hold 1.7 GHz.
+  const bands = planBands().length ? planBands() : [...BAND_SPAN].map(([n, [lo, hi]]) => [n, lo, hi]);
+  for (const [name, lo, hi] of bands) {
+    const a = hzToX(axis, Math.max(lo, view[0])), b = hzToX(axis, Math.min(hi, view[1]));
+    if (a === null || b === null || b - a < 2) continue;
+    parts.push(`<rect class="dBandBx" x="${a.toFixed(1)}" y="${BAND_Y - 10}" width="${Math.max(2, b - a).toFixed(1)}" height="16" rx="3"/>`);
+    parts.push(`<rect class="dBandHit" data-lo="${lo}" data-hi="${hi}" x="${a.toFixed(1)}" y="${BAND_Y - 10}" width="${Math.max(6, b - a).toFixed(1)}" height="16"><title>${esc(name)} · ${esc(prettyHz(lo))} – ${esc(prettyHz(hi))} — click to zoom</title></rect>`);
+    if (b - a > 54) parts.push(`<text class="dBandTx" x="${((a + b) / 2).toFixed(1)}" y="${BAND_Y + 2}">${esc(name)}</text>`);
+  }
+
+  // Availability, under the ruler — the reason the dial exists.
+  for (const a of axis) {
+    if (a.gap) {
+      parts.push(`<rect class="dGap" x="${a.x0.toFixed(1)}" y="${BAND_Y + 8}" width="${(a.x1 - a.x0).toFixed(1)}" height="${H - BAND_Y - 12}"/>`);
+      parts.push(`<text class="dGapTx" x="${((a.x0 + a.x1) / 2).toFixed(1)}" y="${RULE_Y - 6}" transform="rotate(-90 ${((a.x0 + a.x1) / 2).toFixed(1)} ${RULE_Y - 6})">no coverage</text>`);
+      continue;
+    }
+    const span = a.hi - a.lo, px = a.x1 - a.x0;
+    for (const g of a.segs) {
+      const gx0 = a.x0 + px * ((g.lo - a.lo) / span), gx1 = a.x0 + px * ((g.hi - a.lo) / span);
+      parts.push(`<rect class="dSeg ${g.state}" x="${gx0.toFixed(1)}" y="${AVAIL_Y}" width="${Math.max(1, gx1 - gx0).toFixed(1)}" height="12" rx="1"><title>${esc(segTitle(g))}</title></rect>`);
+    }
+    // The ruler itself: minor ticks at a fifth, numerals on the majors.
+    const step = tickStep(span, px);
+    const first = Math.ceil(a.lo / step) * step;
+    parts.push(`<line class="dBase" x1="${a.x0.toFixed(1)}" y1="${RULE_Y}" x2="${a.x1.toFixed(1)}" y2="${RULE_Y}"/>`);
+    for (let f = first; f <= a.hi + 1; f += step) {
+      const x = a.x0 + px * ((f - a.lo) / span);
+      parts.push(`<line class="dTickMaj" x1="${x.toFixed(1)}" y1="${RULE_Y - 12}" x2="${x.toFixed(1)}" y2="${RULE_Y}"/>`);
+      parts.push(`<text class="dNum" x="${x.toFixed(1)}" y="${RULE_Y - 16}">${esc(prettyHz(f))}</text>`);
+      for (let k = 1; k < 5; k++) {
+        const mf = f + (step * k) / 5;
+        if (mf > a.hi) break;
+        const mx = a.x0 + px * ((mf - a.lo) / span);
+        parts.push(`<line class="dTick" x1="${mx.toFixed(1)}" y1="${RULE_Y - 6}" x2="${mx.toFixed(1)}" y2="${RULE_Y}"/>`);
+      }
+    }
+  }
+
+  // ★★ THE NEEDLE, from the dial this is modelled on: where the frequency in the box lands on the
+  //    network. It is also the honest answer to "can anybody hear this" — no needle, nobody can.
+  if (freqHz > 0) {
+    const nx = hzToX(axis, freqHz);
+    if (nx !== null) {
+      parts.push(`<line class="dNeedle" x1="${nx.toFixed(1)}" y1="${BAND_Y + 8}" x2="${nx.toFixed(1)}" y2="${H - 4}"/>`);
+      parts.push(`<polygon class="dNeedleHd" points="${(nx - 4).toFixed(1)},${BAND_Y + 8} ${(nx + 4).toFixed(1)},${BAND_Y + 8} ${nx.toFixed(1)},${BAND_Y + 15}"/>`);
+    }
+  }
+
+  host.innerHTML = `<svg viewBox="0 0 ${W.toFixed(0)} ${H}" width="${W.toFixed(0)}" height="${H}"
+                         preserveAspectRatio="none" role="img"
+                         aria-label="What the network can hear">${parts.join('')}</svg>`;
+
+  DIAL_AXIS = axis;
+  const lo = covered[0] ? covered[0].lo : 0;
+  const hi = covered.length ? covered[covered.length - 1].hi : 0;
+  document.getElementById('dialExtent').textContent = lo
+    ? `${prettyHz(lo)} – ${prettyHz(hi)}${dialView ? ' · zoomed' : ''}` : '';
+  document.getElementById('zAll').disabled = !dialView;
+  const gaps = axis.filter((a) => a.gap).length;
+  document.getElementById('dialGapNote').textContent = gaps
+    ? `${gaps} gap${gaps === 1 ? '' : 's'} — not to scale` : '';
+}
+
+/* ══ ZOOM, PAN AND THE CONTROLS ══════════════════════════════════════════════════════════════
+ * ★★★ IT IS A DIAL, AND A DIAL ZOOMS. That is what makes a linear axis survivable across a network
+ *     reaching 500 kHz to 1.766 GHz: medium wave is 1/1600th of the bar zoomed out, so the band
+ *     plan is the click target and the wheel does the rest. A log axis would have bought
+ *     reachability at the cost of the one property a tuning dial must have — equal distance is
+ *     equal frequency (Stuart, 2026-08-22: "but that is where the bar can be zoomed in and out").
+ */
+let DIAL_EXTENT = [0, 0];
+let DIAL_AXIS = [];
+
+/** ★ The inverse of the piecewise axis: a pixel back to a frequency, for the wheel and the drag. */
+function xToHz(x) {
+  for (const a of DIAL_AXIS) {
+    if (a.gap || x < a.x0 || x > a.x1) continue;
+    return a.lo + (a.hi - a.lo) * ((x - a.x0) / Math.max(1, a.x1 - a.x0));
+  }
+  return null;
+}
+
+function setView(lo, hi) {
+  const [eLo, eHi] = DIAL_EXTENT;
+  if (!(hi > lo) || !(eHi > eLo)) return;
+  // ★ A floor on the span, so a runaway wheel cannot zoom into a window narrower than a channel.
+  const span = Math.max(2000, Math.min(hi - lo, eHi - eLo));
+  let a = lo, b = lo + span;
+  if (b > eHi) { b = eHi; a = eHi - span; }
+  if (a < eLo) { a = eLo; b = Math.min(eHi, eLo + span); }
+  dialView = (b - a >= (eHi - eLo) * 0.999) ? null : [a, b];
+  renderDial();
+}
+
+function zoomBy(factor, aboutHz) {
+  const cur = dialView || DIAL_EXTENT;
+  const centre = Number.isFinite(aboutHz) ? aboutHz : (cur[0] + cur[1]) / 2;
+  const span = (cur[1] - cur[0]) * factor;
+  const frac = (centre - cur[0]) / Math.max(1, cur[1] - cur[0]);
+  setView(centre - span * frac, centre - span * frac + span);
+}
+
+function wireDial() {
+  document.getElementById('zIn').addEventListener('click', () => zoomBy(0.5));
+  document.getElementById('zOut').addEventListener('click', () => zoomBy(2));
+  document.getElementById('zAll').addEventListener('click', () => { dialView = null; renderDial(); });
+
+  const glass = document.querySelector('.dialGlass');
+  // ★ Zoom about the POINTER, the way every map does — zooming about the centre makes you chase
+  //   the thing you are aiming at.
+  glass.addEventListener('wheel', (e) => {
+    const svg = glass.querySelector('svg');
+    if (!svg) return;
+    e.preventDefault();
+    const rect = svg.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * svg.viewBox.baseVal.width;
+    zoomBy(e.deltaY > 0 ? 1.25 : 0.8, xToHz(x));
+  }, { passive: false });
+
+  // ★ Click a band name to zoom to it — the brief's answer to "a narrow band cannot be hit with a
+  //   mouse at full zoom-out". A little air either side so the band is not flush to the glass.
+  glass.addEventListener('click', (e) => {
+    const hit = e.target.closest ? e.target.closest('.dBandHit') : null;
+    if (!hit) return;
+    const lo = Number(hit.dataset.lo), hi = Number(hit.dataset.hi);
+    if (hi > lo) setView(lo - (hi - lo) * 0.15, hi + (hi - lo) * 0.15);
+  });
+
+  // ★ Drag to pan, in FREQUENCY not pixels, so it tracks the cursor across a piecewise axis.
+  let dragging = null;
+  glass.addEventListener('pointerdown', (e) => {
+    if (!dialView) return;                       // nothing to pan when the whole network is shown
+    const svg = glass.querySelector('svg'); if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * svg.viewBox.baseVal.width;
+    const hz = xToHz(x);
+    if (hz === null) return;
+    dragging = { hz, view: dialView.slice() };
+    glass.classList.add('drag');
+    glass.setPointerCapture(e.pointerId);
+  });
+  glass.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const svg = glass.querySelector('svg'); if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * svg.viewBox.baseVal.width;
+    const hz = xToHz(x);
+    if (hz === null) return;
+    const d = dragging.hz - hz;
+    setView(dragging.view[0] + d, dragging.view[1] + d);
+  });
+  const endDrag = (e) => {
+    if (!dragging) return;
+    dragging = null; glass.classList.remove('drag');
+    try { glass.releasePointerCapture(e.pointerId); } catch { /* already gone */ }
+  };
+  glass.addEventListener('pointerup', endDrag);
+  glass.addEventListener('pointercancel', endDrag);
+
+  document.getElementById('cty').addEventListener('change', (e) => {
+    countryOn = e.target.value;
+    // ★ A new country is a new network — its extent is different, so the old zoom window is not
+    //   about anything any more.
+    dialView = null;
+    renderDial(); renderChips(); applyFilters();
+  });
+  document.getElementById('rgn').addEventListener('change', (e) => {
+    regionSel = e.target.value;
+    try { localStorage.setItem('vsRegion', regionSel); } catch { /* private mode */ }
+    // ★★★ LABELS ONLY. Nothing here touches which servers are listed or what is green — if a
+    //     region switch ever changes those, something was computed from a label.
+    renderDial();
+  });
+}
+
+// ★ A dial drawn in pixels has to be redrawn when the pixels change. Debounced: a drag of the
+//   window edge is one redraw, not sixty.
+let dialResizeT = 0;
+window.addEventListener('resize', () => {
+  clearTimeout(dialResizeT);
+  dialResizeT = setTimeout(() => { if (ALL.length) renderDial(); }, 150);
+});
 
 function renderChips() {
   const counts = new Map();
@@ -607,6 +1211,7 @@ document.getElementById('freq').addEventListener('input', (e) => {
   if (Number.isNaN(hz)) { note.textContent = 'not a frequency'; freqHz = 0; }
   else if (hz > 0) { note.textContent = `searching ${prettyHz(hz)}`; freqHz = hz; }
   else { note.textContent = 'MHz unless you say kHz'; freqHz = 0; }
+  renderDial();          // ★ the needle is part of the answer — see the needle in renderDial
   applyFilters();
 });
 
@@ -777,7 +1382,7 @@ function load(first) {
   return fetch('/api/directory')
     .then((r) => r.json())
     .then((d) => withLiveCounts(Array.isArray(d.servers) ? d.servers : []))
-    .then((servers) => { ALL = servers; renderChips(); applyFilters(); })
+    .then((servers) => { ALL = servers; learnBands(ALL); renderCountries(); renderDial(); renderChips(); applyFilters(); })
     .catch(() => {
       if (!first) return;
       document.getElementById('list').innerHTML =
@@ -785,6 +1390,10 @@ function load(first) {
     });
 }
 
+// ★ The plan first, so the very first paint has its band names — but never blocking: a dial with
+//   no labels is still a dial, and load() draws again when it arrives.
+wireDial();
+loadPlan().then(() => { if (ALL.length) renderDial(); });
 load(true);
 setInterval(() => load(false), 60000);
 </script>
