@@ -1956,16 +1956,26 @@ final class UberClient: ObservableObject {
     // that audio. So on the FIRST config we must MATCH the server, not force our 648 kHz/AM default onto
     // it (which left the spectrum viewing off-band as a bouncing line while the audio played 96.6 FM).
     // If we have a saved tune for this host we've already restored + asserted it in openVibeSockets, so
-    // skip. (Mode isn't in the shim config — it's restored from per-host memory when we have it.)
+    // skip.
     if isVibe, !vibeAdopted {
       vibeAdopted = true
       if !vibeRestored, centerHz > 0 {
         frequency = centerHz
         viewCenterHz = centerHz
-        // The shim doesn't send the current MODE, so infer it: a centre in the FM broadcast band is
-        // almost certainly WFM (the common VibeServer case), so the UI matches the audio without the
-        // user having to pick FM. Other bands keep the default until they choose.
-        if centerHz >= 87_000_000, centerHz <= 108_500_000 {
+        /* ★★★ TAKE THE MODE THE SERVER SENDS. The comment here said "the shim doesn't send the
+         *     current MODE, so infer it" — and it DOES: every config carries `mode`, which the
+         *     follow-the-dial branch below has been reading since 2026-08-20. So this guessed at
+         *     something it was being told, and the guess only covers FM: join a room listening on
+         *     6.8 MHz USB and Jr showed its own default instead.
+         * ★★★ WHICH IS NOT A COSMETIC ERROR ON A SHARED DIAL. Jr's mode rides every tune it sends,
+         *     so the first time the wearer moves the crown the room is switched to whatever Jr
+         *     happened to be showing — the same fault the phone shipped twice today, arriving one
+         *     step later (Stuart, on the phone: "still changed WFM into USB").
+         *  ★ The FM inference stays as a FALLBACK, for a server old enough not to say. */
+        if let m = j["mode"] as? String, !m.isEmpty {
+          mode = m
+          if let d = Self.modeBW[m] { bwLow = d.low; bwHigh = d.high }
+        } else if centerHz >= 87_000_000, centerHz <= 108_500_000 {
           mode = "wfm"
           if let d = Self.modeBW["wfm"] { bwLow = d.low; bwHigh = d.high }
         }
