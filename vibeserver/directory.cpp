@@ -254,10 +254,20 @@ std::string buildStatus(int port) {
                     //     the same truth to people who have not clicked yet.
                     //  ★ Once per ping — every fifteen minutes — so the cost is nothing, and a
                     //    radio that does not answer publishes NO occupancy rather than a zero.
-                    const long long rport = jsonNum(r, "port", 0);
+                    // ★★★ THROUGH THE FRONT DOOR'S OWN PROXY, NOT THE RADIO'S PORT. `port` in the
+                    //     radio list is the LOGICAL port a client is told to use — the radios do
+                    //     not listen on it. The door reaches them over unix sockets with
+                    //     file-descriptor passing (see fd_passing.h), so probing
+                    //     127.0.0.1:<port> connected to nothing and every radio published NO
+                    //     occupancy at all: the directory went quiet about counts it could have
+                    //     had, on a server that was answering them perfectly well through /r/<id>.
+                    //  ★★ /r/<id>/vibeserver.json is exactly what the landing page asks in a
+                    //     browser, so it is a route that is PROVEN to work rather than one that
+                    //     looks like it should. Over loopback to ourselves it costs nothing.
+                    const std::string rid = jsonStr(r, "id");
                     long long rmax = jsonNum(r, "users", 0);
-                    if (rport > 0) {
-                        const std::string ri = httpGetLocal((int)rport, "/vibeserver.json");
+                    if (!rid.empty()) {
+                        const std::string ri = httpGetLocal(port, "/r/" + rid + "/vibeserver.json");
                         if (!ri.empty()) {
                             j += ",\"listeners\":" + std::to_string(jsonNum(ri, "listeners", 0));
                             const long long rm = jsonNum(ri, "maxUsers", 0);
