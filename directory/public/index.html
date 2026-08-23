@@ -205,22 +205,24 @@
   /* ★★ THE ZOOM KEYS ARE THE APP'S — recessed dark plates with a lit green glyph and the
         magnifier between them, the same control a VibeSDR user already knows (Stuart, with the
         screenshot). Not a pair of web buttons in a radio's clothing. */
-  .zoomBtns { display: inline-flex; align-items: center; gap: 7px;
+  .keyPanel { display: inline-flex; align-items: center; gap: 7px;
               background: linear-gradient(#0b0f0b, #060806);
               border: 1px solid rgba(53,224,138,.22); border-radius: 10px; padding: 4px 8px; }
-  .zoomBtns button { min-width: 46px; height: 26px; cursor: pointer; font-family: inherit;
+  .keyPanel button { min-width: 46px; height: 26px; cursor: pointer; font-family: inherit;
                      font-size: 15px; line-height: 1; color: var(--phosphor);
                      background: linear-gradient(#141a14, #0a0d0a);
                      border: 1px solid rgba(53,224,138,.25); border-radius: 6px;
                      box-shadow: inset 0 1px 0 rgba(255,255,255,.05),
                                  inset 0 -6px 10px rgba(0,0,0,.5);
                      text-shadow: 0 0 8px rgba(53,224,138,.7); }
-  .zoomBtns button:hover { border-color: rgba(53,224,138,.6); }
-  .zoomBtns button:active { background: linear-gradient(#0a0d0a, #141a14); }
-  .zoomBtns button:disabled { opacity: .3; cursor: default; }
-  .zoomBtns .lens { color: var(--phosphor); opacity: .85; font-size: 14px;
+  .keyPanel button:hover { border-color: rgba(53,224,138,.6); }
+  .keyPanel button:active { background: linear-gradient(#0a0d0a, #141a14); }
+  .keyPanel button:disabled { opacity: .3; cursor: default; }
+  .keyPanel .lens { color: var(--phosphor); opacity: .85; font-size: 14px;
                     text-shadow: 0 0 8px rgba(53,224,138,.6); }
-  #zAll { font-size: 10px; letter-spacing: .1em; min-width: 38px; }
+  #zAll { font-size: 10px; letter-spacing: .1em; min-width: 44px; }
+  .tunePanel button { min-width: 40px; }
+  .dialGlyph { font-size: 11px; opacity: .6; }
   /* ★★ A DIAL IS NOT TEXT. Dragging it was selecting the legend and half the page underneath
         (Stuart, 2026-08-23) — the same rule as the app's sliders, where touch-action must never
         be given back. */
@@ -240,13 +242,14 @@
   .dialGlass { border: 1px solid var(--line); border-radius: 8px; background: #050705;
                padding: 0; overflow: hidden;
                box-shadow: inset 0 0 40px rgba(53,224,138,.06); }
-  .dialGlass svg { display: block; width: 100%; }
+  .dialGlass svg { display: block; }
   /* ★ The phosphor glow is the whole look — ticks and numerals lit, not printed. */
   /* ★ The ticker: phosphor by default, and the VERDICT in the colour of the numeral. */
   .dTick    { stroke: var(--phosphor); stroke-width: 1; opacity: .45; }
   .dTickMaj { stroke: var(--phosphor); stroke-width: 1.3; opacity: .9; }
-  .dNum     { fill: var(--phosphor); font-size: 10px; letter-spacing: .04em;
-              text-anchor: middle; }
+  /* ★ Plain, not lit. The glow smeared them at this size and his reference has none — the type
+       carries the reading, the colour carries the verdict. */
+  .dNum     { fill: var(--phosphor); font-size: 11.5px; letter-spacing: 0; text-anchor: middle; }
   .dNum.free, .dTick.free, .dTickMaj.free { fill: var(--free); stroke: var(--free); }
   .dNum.busy, .dTick.busy, .dTickMaj.busy { fill: var(--busy); stroke: var(--busy); }
   .dNum.temp, .dTick.temp, .dTickMaj.temp { fill: var(--temp); stroke: var(--temp); }
@@ -254,7 +257,6 @@
        nothing, and inventing a verdict is the one thing this dial must not do. */
   .dNum.unknown, .dTick.unknown, .dTickMaj.unknown { fill: var(--dim); stroke: var(--dim); }
   .dNum.none, .dTick.none, .dTickMaj.none { fill: var(--dim); stroke: var(--dim); opacity: .35; }
-  .dNum.free, .dNum.busy, .dNum.temp { text-shadow: 0 0 6px currentColor; }
   .dBase   { stroke: var(--line); stroke-width: 1; }
   /* ★ Solid blocks, the app's own band strip. White on the block, as in the waterfall. */
   .dBandTx { fill: #fff; font-size: 9.5px; text-anchor: middle; letter-spacing: .02em;
@@ -328,15 +330,21 @@
         <option value="2">ITU Region 2 · the Americas</option>
         <option value="3">ITU Region 3 · Asia-Pacific</option>
       </select>
-      <span class="zoomBtns">
-        <!-- ★ TUNE ARROWS, as on the app's own control strip. Dragging the glass works, but the
-                arrows are the precise way to walk along the dial — and they were what a listener
-                reached for first. -->
+      <!-- ★★ TWO PANELS, NOT ONE ROW OF KEYS. The app keeps tuning and zoom on separate plates
+              because they are different acts — one moves you along the dial, the other changes how
+              much of it you can see — and muscle memory is built on that separation (Stuart,
+              2026-08-23: "the tune and zoom controls need to be separate like the app"). -->
+      <span class="keyPanel tunePanel">
         <button type="button" id="tPrev" title="Tune down">&#10094;</button>
+        <span class="lens dialGlyph" aria-hidden="true">&#9673;</span>
+        <button type="button" id="tNext" title="Tune up">&#10095;</button>
+      </span>
+      <span class="keyPanel zoomPanel">
         <button type="button" id="zOut" title="Zoom out — about the needle">−</button>
         <span class="lens" aria-hidden="true">&#9906;</span>
         <button type="button" id="zIn" title="Zoom in — about the needle">+</button>
-        <button type="button" id="tNext" title="Tune up">&#10095;</button>
+      </span>
+      <span class="keyPanel allPanel">
         <button type="button" id="zAll" title="The whole network, and clear the search">ALL</button>
       </span>
     </span>
@@ -356,25 +364,15 @@
     <span><i class="sh sh-unknown"></i> covered · occupancy not reported</span>
     <span id="dialGapNote"></span>
   </div>
+  <div class="fNote" id="filterSummary"></div>
 </section>
 
-<!-- ★★ FILTERS ABOVE THE MAP, because they filter the map too. A control that changes what the
-        pins show, placed below them, gets found after the visitor has already decided the
-        directory is small. -->
-<div class="filters" id="filters" hidden>
-  <div class="fRow" id="bandChips"></div>
-  <div class="fRow">
-    <!-- ★ The label carries the hint, not the placeholder. A placeholder listing three examples was
-         wider than any sensible box and arrived CLIPPED mid-word — an example nobody can read is
-         worse than none, and it vanishes the moment you type anyway. -->
-    <label for="freq">Can hear</label>
-    <input id="freq" type="text" inputmode="decimal" autocomplete="off"
-           placeholder="99.9 MHz">
-    <span class="fNote" id="freqNote">MHz unless you say kHz</span>
-    <button class="fClear" id="clear" hidden>Clear</button>
-  </div>
-  <div class="fNote" id="filterSummary"></div>
-</div>
+<!-- ★★★ THE OLD FILTER BLOCK IS GONE — THE DIAL IS ITS REPLACEMENT (Stuart, 2026-08-23: "that
+        section below it the old search section can be removed, this is the replacement"). The band
+        chips asked "which radio do you want?" and then made you work out whether it could hear the
+        thing you came for; the dial asks the listener's real question. Its own note predicted this:
+        "it also kills the chip wall on its own — 28 named bands and one wideband RTL covers 26 of
+        them; as chips that is a block of noise, but as a dial it is simply a long green bar." -->
 
 <div id="map"></div>
 
@@ -649,8 +647,7 @@ function serverBlock(s) {
  *    appear — the directory never offers a filter that can only return nothing.
  */
 let ALL = [];                       // every listing, unfiltered — the filters never refetch
-const bandsOn = new Set();
-let freqHz = 0;
+const bandsOn = new Set();   // ★ driven by the dial's band blocks now — see the click handler
 
 /**
  * ★★★ WHAT A BAND NAME MEANS IN HERTZ, LEARNED FROM THE SERVERS THAT NAME IT — never from a table
@@ -795,8 +792,11 @@ function searchRanges() {
       wants.push([b.lo, b.hi]);
     }
   }
-  // ★ Two needles are a manual range and join the same test — one radio must cover all of it.
+  // ★★★ ONE NEEDLE IS "CAN ANYBODY HEAR THIS", which is the question the whole design was built
+  //     around — "I want 1467 kHz: who has it, and is it free?" Two needles are a manual range.
+  //     Both are the same test in the end: one radio must cover all of what was asked for.
   if (needleA > 0 && needleB > 0) wants.push([Math.min(needleA, needleB), Math.max(needleA, needleB)]);
+  else if (needleA > 0) wants.push([needleA, needleA]);
   return wants;
 }
 
@@ -809,11 +809,6 @@ function matches(s) {
   if (wants.length) {
     const ok = (s.radios || []).some((r) => wants.every(([lo, hi]) => radioCovers(r, lo, hi)));
     if (!ok) return false;
-  }
-  if (freqHz > 0) {
-    const rs = rangesOf(s);
-    if (!rs.length) return false;      // ★ cannot say ⇒ cannot match. Counted and reported below.
-    if (!rs.some(([lo, hi]) => freqHz >= lo && freqHz <= hi)) return false;
   }
   return true;
 }
@@ -1055,7 +1050,7 @@ function renderDial() {
   }
 
   const host = document.getElementById('dial');
-  const W = Math.max(320, host.clientWidth || wrap.clientWidth - 40);
+  const W = Math.round(Math.max(320, host.clientWidth || wrap.clientWidth - 40));
   const axis = dialAxis(runs, W, totalHz);
   DIAL_AXIS = axis;
 
@@ -1068,13 +1063,22 @@ function renderDial() {
    *     not needed as we will colour the numbers instead". The dial then carries one row of
    *     meaning per row of pixels — what band this is, and whether anybody free can hear it.
    */
-  const BAND_Y = 4, BAND_H = 20, NUM_Y = 40, TICK_Y = 44, TICK_H = 13, H = 62;
+  /* ★★ TWO LINES FOR THE BAND PLAN, so it is not squeezed into a strip at the top of the glass
+   *    (Stuart, 2026-08-23). Blocks are staggered onto the second row when they would collide on
+   *    the first, which is also what buys the LABELS room: a band whose name would not fit beside
+   *    its neighbour usually fits perfectly well below it.
+   *  ★ The ticker's own order beneath, from his reference: the rule, ticks hanging BELOW it, then
+   *    the numerals under those. */
+  const BAND_Y = 5, BAND_H = 19, BAND_GAP = 3, TICK_Y = 56, TICK_H = 12, NUM_Y = 80, H = 90;
   const parts = [];
 
   // ★ Type → colour, the app's own values (BAND_HEX, src/constants/bandPlan.ts). The generator
   //   assigns the type from the label so there is one rule, not one per reader.
   const TYPE_HEX = { ham: '#CF0000', broadcast: '#0900FF', utility: '#07BD00', cb: '#FF7700' };
 
+  // ★ Greedy two-row packing: the first row that has cleared this block's left edge takes it, so a
+  //   run of narrow bands alternates and each gets its name shown.
+  const rowEnd = [-1e9, -1e9];
   for (const b of planBandList()) {
     const lo = Math.max(b.lo, view[0]), hi = Math.min(b.hi, view[1]);
     if (!(hi > lo)) continue;
@@ -1082,12 +1086,15 @@ function renderDial() {
     if (a === null || c === null || c - a < 1.5) continue;
     const w = Math.max(1.5, c - a);
     const on = bandsOn.has(b.label);
+    const row = rowEnd[0] <= a - 1 ? 0 : rowEnd[1] <= a - 1 ? 1 : (rowEnd[0] <= rowEnd[1] ? 0 : 1);
+    rowEnd[row] = a + w;
+    const by = BAND_Y + row * (BAND_H + BAND_GAP);
     parts.push(`<g class="dBand${on ? ' on' : ''}" data-band="${esc(b.label)}">`
-      + `<rect x="${a.toFixed(1)}" y="${BAND_Y}" width="${w.toFixed(1)}" height="${BAND_H}"`
+      + `<rect x="${a.toFixed(1)}" y="${by}" width="${w.toFixed(1)}" height="${BAND_H}"`
       + ` fill="${TYPE_HEX[b.type] || TYPE_HEX.utility}" fill-opacity="${on ? 1 : 0.82}"/>`
-      + (on ? `<rect x="${a.toFixed(1)}" y="${BAND_Y}" width="${w.toFixed(1)}" height="${BAND_H}"`
+      + (on ? `<rect x="${a.toFixed(1)}" y="${by}" width="${w.toFixed(1)}" height="${BAND_H}"`
               + ` fill="none" stroke="#fff" stroke-width="1.5"/>` : '')
-      + (w > 34 ? `<text class="dBandTx" x="${(a + w / 2).toFixed(1)}" y="${BAND_Y + 14}"`
+      + (w > 30 ? `<text class="dBandTx" x="${(a + w / 2).toFixed(1)}" y="${by + 13.5}"`
                   + ` clip-path="inset(0)">${esc(bandShort(b.label, w))}</text>` : '')
       + `<title>${esc(b.label)} · ${esc(prettyHz(b.lo))} – ${esc(prettyHz(b.hi))}`
       + `\n${on ? 'selected — click to remove' : 'click to search for receivers covering it'}</title></g>`);
@@ -1096,7 +1103,7 @@ function renderDial() {
   for (const a of axis) {
     if (a.gap) {
       parts.push(`<rect class="dGap" x="${a.x0.toFixed(1)}" y="${BAND_Y}" width="${(a.x1 - a.x0).toFixed(1)}" height="${H - BAND_Y - 2}"/>`);
-      parts.push(`<text class="dGapTx" x="${((a.x0 + a.x1) / 2).toFixed(1)}" y="${NUM_Y}" transform="rotate(-90 ${((a.x0 + a.x1) / 2).toFixed(1)} ${NUM_Y})">no coverage</text>`);
+      parts.push(`<text class="dGapTx" x="${((a.x0 + a.x1) / 2).toFixed(1)}" y="${TICK_Y - 12}" transform="rotate(-90 ${((a.x0 + a.x1) / 2).toFixed(1)} ${TICK_Y - 12})">no coverage</text>`);
       continue;
     }
     const span = a.hi - a.lo, px = a.x1 - a.x0;
@@ -1139,9 +1146,13 @@ function renderDial() {
       parts.unshift(`<rect class="dSpan" x="${xa.toFixed(1)}" y="${BAND_Y}" width="${Math.max(1, xb - xa).toFixed(1)}" height="${H - BAND_Y - 1}"/>`);
   }
 
+  // ★★★ NO preserveAspectRatio="none", AND THE VIEWBOX IS THE PIXELS. Stretching the viewBox to
+  //     the container smeared every numeral sideways — unreadable, and the reason they looked
+  //     nothing like the app's crisp ticker (Stuart, 2026-08-23: "the numbers are really difficult
+  //     to read"). The SVG is drawn at the width it is shown at, one unit per pixel, so the type
+  //     is type rather than a scaled picture of type.
   host.innerHTML = `<svg viewBox="0 0 ${W.toFixed(0)} ${H}" width="${W.toFixed(0)}" height="${H}"
-                         preserveAspectRatio="none" role="img"
-                         aria-label="What the network can hear">${parts.join('')}</svg>`;
+                         role="img" aria-label="What the network can hear">${parts.join('')}</svg>`;
 
   const lo = covered[0] ? covered[0].lo : 0;
   const hi = covered.length ? covered[covered.length - 1].hi : 0;
@@ -1249,15 +1260,62 @@ function wireDial() {
   for (const [id, dir] of [['edgeL', -1], ['edgeR', 1]]) {
     document.getElementById(id).addEventListener('click', (e) => { e.stopPropagation(); page(dir); });
   }
-  document.getElementById('tPrev').addEventListener('click', () => tune(-1));
-  document.getElementById('tNext').addEventListener('click', () => tune(1));
+  /* ══ HOLD TO SWEEP ══════════════════════════════════════════════════════════════════════════
+   * ★★★ THE APP'S OWN LAW, NOT A NEW FEEL (TunerKeys.tsx): a TAP is one step fired immediately,
+   *     and after 350 ms of UNBROKEN contact the key sweeps, ramping smoothly to a target rate.
+   *     The target is a constant SCREEN-CROSSING TIME — cross the visible span in ~4 seconds —
+   *     because a fixed rate means something different at every zoom level: the same key would
+   *     crawl across 1.7 GHz and fly across 20 kHz.
+   * ★★ Fast taps must never be read as a hold, and that is structural: the timer is armed on press
+   *    and cancelled on EVERY release, so a burst of taps physically cannot reach the threshold.
+   *    Nothing here looks across clicks — do not add debouncing, it is what would break it.
+   */
+  const HOLD_MS = 350, SWEEP_SPAN_SECS = 4, RAMP_MS = 2500, START_FRAC = 0.12;
+  let sweep = null;
+  const stopSweep = () => {
+    if (!sweep) return;
+    clearTimeout(sweep.arm); cancelAnimationFrame(sweep.raf || 0); sweep = null;
+  };
+  const startSweep = (dir) => {
+    stopSweep();
+    tune(dir);                                   // ★ the tap's own step, immediately
+    sweep = { dir, arm: 0, raf: 0, t0: 0, last: 0 };
+    sweep.arm = setTimeout(() => {
+      if (!sweep) return;
+      sweep.t0 = performance.now(); sweep.last = sweep.t0;
+      const frame = (now) => {
+        if (!sweep) return;
+        const cur = dialView || DIAL_EXTENT;
+        const span = cur[1] - cur[0];
+        const ramp = Math.min(1, (now - sweep.t0) / RAMP_MS);
+        const rate = (span / SWEEP_SPAN_SECS) * (START_FRAC + (1 - START_FRAC) * ramp);
+        const d = rate * ((now - sweep.last) / 1000) * sweep.dir;
+        sweep.last = now;
+        if (needleA > 0) {
+          needleA = Math.max(DIAL_EXTENT[0], Math.min(DIAL_EXTENT[1], needleA + d));
+          if (dialView && (needleA <= cur[0] || needleA >= cur[1])) setView(cur[0] + d, cur[1] + d);
+          else renderDial();
+        } else if (dialView) setView(cur[0] + d, cur[1] + d);
+        sweep.raf = requestAnimationFrame(frame);
+      };
+      sweep.raf = requestAnimationFrame(frame);
+    }, HOLD_MS);
+  };
+  for (const [id, dir] of [['tPrev', -1], ['tNext', 1]]) {
+    const b = document.getElementById(id);
+    b.addEventListener('pointerdown', (e) => { e.preventDefault(); startSweep(dir); });
+    // ★ Release stops it dead — and so does the pointer leaving the key, or the window losing it.
+    for (const ev of ['pointerup', 'pointerleave', 'pointercancel'])
+      b.addEventListener(ev, () => { const had = !!sweep; stopSweep(); if (had) applyFilters(); });
+  }
+  window.addEventListener('blur', stopSweep);
   document.getElementById('zIn').addEventListener('click', () => zoomBy(0.5));
   document.getElementById('zOut').addEventListener('click', () => zoomBy(2));
   document.getElementById('zAll').addEventListener('click', () => {
     // ★ One key back to "the whole network" — the zoom, the needles and the band picks together.
     //   Three separate ways to undo a search is three things to remember.
     dialView = null; needleA = 0; needleB = 0; bandsOn.clear();
-    renderDial(); renderChips(); applyFilters();
+    renderDial(); applyFilters();
   });
 
   const glass = document.querySelector('.dialGlass');
@@ -1286,7 +1344,7 @@ function wireDial() {
     if (band) {
       const label = band.dataset.band;
       if (bandsOn.has(label)) bandsOn.delete(label); else bandsOn.add(label);
-      renderDial(); renderChips(); applyFilters();
+      renderDial(); applyFilters();
       return;
     }
     const svg = glass.querySelector('svg'); if (!svg) return;
@@ -1336,7 +1394,7 @@ function wireDial() {
     // ★ A new country is a new network — its extent is different, so the old zoom window is not
     //   about anything any more.
     dialView = null;
-    renderDial(); renderChips(); applyFilters();
+    renderDial(); applyFilters();
   });
   document.getElementById('rgn').addEventListener('change', (e) => {
     regionSel = e.target.value;
@@ -1355,32 +1413,9 @@ window.addEventListener('resize', () => {
   dialResizeT = setTimeout(() => { if (ALL.length) renderDial(); }, 150);
 });
 
-function renderChips() {
-  const counts = new Map();
-  for (const s of ALL) for (const b of bandsOf(s)) counts.set(b, (counts.get(b) || 0) + 1);
-  const box = document.getElementById('bandChips');
-  // ★ Commonest first, then alphabetical — a stable order that needs no knowledge of where a band
-  //   sits in the spectrum, which is knowledge this page deliberately does not have.
-  const bands = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  box.innerHTML = bands.map(([b, n]) =>
-    `<button class="chip" type="button" aria-pressed="${bandsOn.has(b)}" data-band="${esc(b)}">
-       ${esc(b)}<span class="n">${n}</span></button>`).join('');
-  for (const el of box.querySelectorAll('.chip')) {
-    el.addEventListener('click', () => {
-      const b = el.dataset.band;
-      if (bandsOn.has(b)) bandsOn.delete(b); else bandsOn.add(b);
-      renderChips(); applyFilters();
-    });
-  }
-  // ★ Hidden entirely when there is nothing to choose between — one band and one server is a
-  //   control that can only ever be a no-op.
-  document.getElementById('filters').hidden = ALL.length < 2 && bands.length < 2;
-}
-
 function applyFilters() {
   const shown = ALL.filter(matches);
-  const active = bandsOn.size > 0 || freqHz > 0 || (needleA > 0 && needleB > 0);
-  document.getElementById('clear').hidden = !active;
+  const active = bandsOn.size > 0 || needleA > 0;
 
   const sum = document.getElementById('filterSummary');
   if (!active) sum.textContent = '';
@@ -1388,9 +1423,12 @@ function applyFilters() {
     // ★★ A SERVER THAT NEVER PUBLISHED A RANGE IS NOT A SERVER THAT CANNOT HEAR YOU. Older
     //    servers say nothing about what they can tune, and silently dropping them would make the
     //    directory look smaller than it is — so they are counted and named, not hidden.
-    const mute = freqHz > 0 ? ALL.filter((s) => !rangesOf(s).length).length : 0;
+    // ★★ A SERVER THAT NEVER PUBLISHED A RANGE IS NOT A SERVER THAT CANNOT HEAR YOU — counted and
+    //    named, never silently dropped.
+    const mute = ALL.filter((s) => !rangesOf(s).length).length;
     const rangeTxt = (needleA > 0 && needleB > 0)
-      ? ` · ${prettyHz(Math.min(needleA, needleB))} – ${prettyHz(Math.max(needleA, needleB))}` : '';
+      ? ` · ${prettyHz(Math.min(needleA, needleB))} – ${prettyHz(Math.max(needleA, needleB))}`
+      : needleA > 0 ? ` · can hear ${prettyHz(needleA)}` : '';
     const bandTxt = bandsOn.size ? ` · ${[...bandsOn].join(' + ')}` : '';
     sum.textContent = `Showing ${shown.length} of ${ALL.length} servers${bandTxt}${rangeTxt}`
       + (bandsOn.size > 1 ? ' — one radio must cover all of them.' : '.')
@@ -1399,23 +1437,6 @@ function applyFilters() {
   }
   render(shown, active);
 }
-
-document.getElementById('freq').addEventListener('input', (e) => {
-  const hz = parseFreq(e.target.value);
-  const note = document.getElementById('freqNote');
-  if (Number.isNaN(hz)) { note.textContent = 'not a frequency'; freqHz = 0; }
-  else if (hz > 0) { note.textContent = `searching ${prettyHz(hz)}`; freqHz = hz; }
-  else { note.textContent = 'MHz unless you say kHz'; freqHz = 0; }
-  renderDial();          // ★ the needle is part of the answer — see the needle in renderDial
-  applyFilters();
-});
-
-document.getElementById('clear').addEventListener('click', () => {
-  bandsOn.clear(); freqHz = 0; needleA = 0; needleB = 0;
-  document.getElementById('freq').value = '';
-  document.getElementById('freqNote').textContent = '';
-  renderChips(); renderDial(); applyFilters();
-});
 
 /** ★ Markers live in a layer of their own so a re-render REPLACES them. Adding straight to the
  *    map, as this did, leaves every previous pin behind — a filter would have made the map grow
@@ -1577,7 +1598,7 @@ function load(first) {
   return fetch('/api/directory')
     .then((r) => r.json())
     .then((d) => withLiveCounts(Array.isArray(d.servers) ? d.servers : []))
-    .then((servers) => { ALL = servers; learnBands(ALL); renderCountries(); renderDial(); renderChips(); applyFilters(); })
+    .then((servers) => { ALL = servers; learnBands(ALL); renderCountries(); renderDial(); applyFilters(); })
     .catch(() => {
       if (!first) return;
       document.getElementById('list').innerHTML =
