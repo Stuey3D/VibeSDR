@@ -271,6 +271,11 @@
   .dBandTx { fill: #fff; font-size: 9.5px; text-anchor: middle; letter-spacing: .02em;
              pointer-events: none; paint-order: stroke; stroke: rgba(0,0,0,.55); stroke-width: 2px; }
   .dBand   { cursor: pointer; }
+  /* ★ The decades are furniture: a signpost on the whole-network dial, not a control. Dividers
+       between them rather than colour, so the row reads as a scale and not as allocations. */
+  .dDecade rect { stroke: var(--bg); stroke-width: 1; }
+  .dDecadeTx { fill: var(--accent); font-size: 9px; text-anchor: middle; letter-spacing: .14em;
+               pointer-events: none; }
   .dBand:hover rect:first-child { fill-opacity: 1; }
   .dGap    { fill: rgba(255,176,0,.05); }
   .dGapTx  { fill: var(--dim); font-size: 9px; text-anchor: middle; letter-spacing: .08em; }
@@ -1156,25 +1161,41 @@ function drawRow(segsIn, y0, W, opt) {
   const TYPE_HEX = { ham: '#CF0000', broadcast: '#0900FF', utility: '#07BD00', cb: '#FF7700' };
   const p = [];
 
+  /* ★★★ THE WHOLE-NETWORK DIAL SHOWS THE ITU DECADES, NOT THE BAND PLAN. At 1.7 GHz across, every
+   *     allocation is a coloured splinter and the strip becomes confetti — where you actually are
+   *     is the only thing that row can usefully say, and "VLF | LF | MF | HF | VHF | UHF" says it
+   *     (Stuart, 2026-08-23). The plan belongs on the detail dial, where a block is wide enough to
+   *     carry its own name.
+   *  ★ Generated from the same file, as a formula: each decade is 3x10^n to 3x10^(n+1) Hz.
+   */
+  const strip = opt.kind === 'over'
+    ? (PLAN && Array.isArray(PLAN.decades) ? PLAN.decades.map((d) => ({ label: d.name, lo: +d.lo, hi: +d.hi, decade: true })) : [])
+    : planBandList();
+
   // ★★ ONE ROW OF BLOCKS, NOT TWO. Staggering them read as two different KINDS of band — it was
   //    solving a crowding problem the detail dial does not have (Stuart: "bandplan is still
   //    staggered"). A block too narrow for its name simply goes unlabelled and keeps its colour.
-  for (const b of planBandList()) {
+  for (const b of strip) {
     const lo = Math.max(b.lo, covered[0].lo), hi = Math.min(b.hi, covered[covered.length - 1].hi);
     if (!(hi > lo)) continue;
     const a = hzToXIn(axis, lo), c = hzToXIn(axis, hi);
     if (a === null || c === null || c - a < 1) continue;
     const w = Math.max(1, c - a);
-    const on = bandsOn.has(b.label);
-    p.push(`<g class="dBand${on ? ' on' : ''}" data-band="${esc(b.label)}">`
+    const on = !b.decade && bandsOn.has(b.label);
+    // ★ A decade is a SIGNPOST, not a filter: it says where you are, and clicking it selects
+    //   nothing — "receivers that cover the whole of UHF" is not a question anybody has.
+    const fill = b.decade ? 'var(--line)' : (TYPE_HEX[b.type] || TYPE_HEX.utility);
+    p.push(`<g class="${b.decade ? 'dDecade' : 'dBand'}${on ? ' on' : ''}"`
+      + `${b.decade ? '' : ` data-band="${esc(b.label)}"`}>`
       + `<rect x="${a.toFixed(1)}" y="${BAND_Y}" width="${w.toFixed(1)}" height="${BAND_H}"`
-      + ` fill="${TYPE_HEX[b.type] || TYPE_HEX.utility}" fill-opacity="${on ? 1 : 0.82}"/>`
+      + ` fill="${fill}" fill-opacity="${b.decade ? 1 : (on ? 1 : 0.82)}"/>`
       + (on ? `<rect x="${a.toFixed(1)}" y="${BAND_Y}" width="${w.toFixed(1)}" height="${BAND_H}"`
               + ` fill="none" stroke="#fff" stroke-width="1.5"/>` : '')
-      + (opt.labels && w > 30
-          ? `<text class="dBandTx" x="${(a + w / 2).toFixed(1)}" y="${BAND_Y + BAND_H - 6}">${esc(bandShort(b.label, w))}</text>` : '')
+      + ((b.decade ? w > 16 : (opt.labels && w > 30))
+          ? `<text class="${b.decade ? 'dDecadeTx' : 'dBandTx'}" x="${(a + w / 2).toFixed(1)}"`
+            + ` y="${BAND_Y + BAND_H - (b.decade ? 3 : 6)}">${esc(b.decade ? b.label : bandShort(b.label, w))}</text>` : '')
       + `<title>${esc(b.label)} · ${esc(prettyHz(b.lo))} – ${esc(prettyHz(b.hi))}`
-      + `\n${on ? 'selected — click to remove' : 'click to search for receivers covering it'}</title></g>`);
+      + `${b.decade ? '' : `\n${on ? 'selected — click to remove' : 'click to search for receivers covering it'}`}</title></g>`);
   }
 
   for (const a of axis) {

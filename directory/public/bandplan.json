@@ -110,5 +110,15 @@
     "low": [{"from":-180.0,"region":3},{"from":-170.0,"region":2},{"from":-20.0,"region":1},{"from":40.0,"region":3}],
     "high": [{"from":-180.0,"region":3},{"from":-170.0,"region":2},{"from":-20.0,"region":1},{"from":180.0,"region":3}]
   },
-  "highLatMin": 41
+  "highLatMin": 41,
+  "decades": [
+    {"name":"VLF","lo":3000,"hi":30000},
+    {"name":"LF","lo":30000,"hi":300000},
+    {"name":"MF","lo":300000,"hi":3000000},
+    {"name":"HF","lo":3000000,"hi":30000000},
+    {"name":"VHF","lo":30000000,"hi":300000000},
+    {"name":"UHF","lo":300000000,"hi":1000000000},
+    {"name":"Microwave","lo":1000000000,"hi":30000000000},
+    {"name":"Millimetre","lo":30000000000,"hi":300000000000}
+  ]
 }

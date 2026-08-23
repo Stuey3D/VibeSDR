@@ -58,7 +58,32 @@ int main() {
         }
         printf("]%s\n", band ? "" : ",");
     }
-    printf("  },\n  \"highLatMin\": 41\n");
+    printf("  },\n  \"highLatMin\": 41,\n");
+    /* ★★ THE ITU DECADES — VLF … EHF — for the whole-network dial, where band-plan colours are
+     *    noise but "you are in HF / VHF" is exactly what a reader needs. It is a FORMULA, not a
+     *    transcription: each decade runs 3x10^n to 3x10^(n+1) Hz, so only the eight names are
+     *    typed and the numbers cannot be got wrong. Fixed worldwide since 1947 and region-blind,
+     *    unlike everything else in this file. */
+    printf("  \"decades\": [");
+    // ★ The ITU decades proper, up to the top of UHF: 3x10^n to 3x10^(n+1) Hz. Only the names are
+    //   typed, so the numbers cannot be got wrong.
+    const char* kDecades[] = { "VLF", "LF", "MF", "HF", "VHF" };
+    double lo = 3000.0;
+    for (int i = 0; i < 5; i++) {
+        printf("%s\n    {\"name\":\"%s\",\"lo\":%.0f,\"hi\":%.0f}",
+               i ? "," : "", kDecades[i], lo, lo * 10.0);
+        lo *= 10.0;
+    }
+    // ★★ AND THEN MICROWAVE, which the letter ladder has no room for — UHF runs 300 MHz to 3 GHz
+    //    and a listener at 1.4 GHz is plainly in microwave territory, whatever the letters say
+    //    (Stuart, 2026-08-23: "the wavelength catagory would be good. Include Microwave etc too").
+    //  ★ 1 GHz is the conventional start of microwave and the one most readers carry; UHF is cut
+    //    there rather than overlapped, because two blocks claiming the same megahertz on a signpost
+    //    row is exactly the confetti this row exists to avoid.
+    printf(",\n    {\"name\":\"UHF\",\"lo\":300000000,\"hi\":1000000000}");
+    printf(",\n    {\"name\":\"Microwave\",\"lo\":1000000000,\"hi\":30000000000}");
+    printf(",\n    {\"name\":\"Millimetre\",\"lo\":30000000000,\"hi\":300000000000}");
+    printf("\n  ]\n");
     printf("}\n");
     return 0;
 }
