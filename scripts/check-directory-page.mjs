@@ -44,6 +44,8 @@ const el = new Proxy({}, {
 globalThis.document = { getElementById: () => el, querySelector: () => el, querySelectorAll: () => [], addEventListener() {} };
 globalThis.window = { addEventListener() {}, innerWidth: 1900, scrollY: 0, setTimeout: () => 0, setInterval: () => 0, clearTimeout() {}, clearInterval() {} };
 globalThis.localStorage = { getItem: () => null, setItem() {} };
+// ★ The page reads location.search for its ?demo switch. Default: the real directory.
+globalThis.location = { search: process.env.CHECK_DEMO ? '?demo' : '', href: 'https://vibeserver.vibesdr.net/' };
 globalThis.performance = globalThis.performance || { now: () => 0 };
 const layer = { addTo: () => layer, clearLayers() {}, addLayer() {} };
 globalThis.L = {
@@ -51,7 +53,12 @@ globalThis.L = {
   tileLayer: () => ({ addTo() {} }), layerGroup: () => layer, polygon: () => ({ addTo() {} }),
   marker: () => ({ addTo() {}, bindPopup: () => ({}) }), divIcon: () => ({}),
 };
-globalThis.fetch = async (u) => ({ ok: true, json: async () => String(u).includes('bandplan') ? PLAN : {} });
+// ★ Serve the page's OWN assets from disk. A stub that answers {} to everything checks the page
+//   against data it will never see — country-shapes.json in particular, without which the demo
+//   estate silently lands every receiver at 0°N 0°E and the check passes on a lie.
+const SHAPES = JSON.parse(fs.readFileSync(path.join(root, 'directory/public/country-shapes.json'), 'utf8'));
+globalThis.fetch = async (u) => ({ ok: true, json: async () =>
+  String(u).includes('bandplan') ? PLAN : String(u).includes('country-shapes') ? SHAPES : {} });
 globalThis.setInterval = () => 0; globalThis.setTimeout = (f) => 0; globalThis.clearTimeout = () => {};
 
 const api = new Function(src + `
@@ -59,6 +66,7 @@ const api = new Function(src + `
            set NEEDLE(v){ needleV = v; vfoLive = true; }, set ANCHOR(v){ needleA = v; },
            set RANGE(v){ rangeSet = v; }, bandsOn, countriesOn,
            learnBands, renderDial, renderCountries, matches, activeRegion, planBandList,
+           demoServers, DEMO_PLACES,
            get ROWS(){ return DIAL_ROWS; } };`)();
 
 api.PLANv = PLAN;
@@ -89,6 +97,20 @@ api.bandsOn.clear();
 
 const r1 = api.activeRegion();
 ok(r1 >= 1 && r1 <= 3, `region resolves (${r1})`);
+
+// ★ The simulated estate is a test aid, so it gets tested too — an aid that lies is worse than
+//   none (the same rule as the blunt AGC detector that cleared a stuttering file twice).
+const demo = await api.demoServers();
+ok(demo.length === api.DEMO_PLACES.length, `demo estate builds (${demo.length} servers)`);
+ok(demo.every((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon) && (s.lat || s.lon)),
+   'every simulated server has a position');
+ok(new Set(demo.map((s) => s.country)).size > 15,
+   `spread across countries (${new Set(demo.map((s) => s.country)).size})`);
+ok(demo.every((s) => s.demo === true), 'every simulated server is marked as such');
+api.ALLv = dir.servers.concat(demo);
+api.learnBands(api.ALLv ?? []);
+api.renderDial();
+ok(api.ROWS.length === 2, 'the dial still draws with the demo estate');
 
 console.log(fail.length ? `\n${fail.length} check(s) FAILED` : '\nthe directory page runs');
 process.exit(fail.length ? 1 : 0);

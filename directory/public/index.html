@@ -707,7 +707,8 @@ function serverBlock(s) {
     </summary>
     <div class="body">
       ${radios}${extra}
-      <a class="listen" href="${esc(listenUrl(s))}" target="_blank" rel="noopener noreferrer">Listen</a>
+      ${s.demo ? '<div class="radio cap">Simulated receiver — nothing to listen to.</div>'
+               : `<a class="listen" href="${esc(listenUrl(s))}" target="_blank" rel="noopener noreferrer">Listen</a>`}
     </div>
   </details>`;
 }
@@ -1294,6 +1295,9 @@ function renderDial() {
   host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"
                          role="img" aria-label="What the network can hear">${parts.join('')}</svg>`;
 
+  // ★ Never let a simulation be mistaken for the estate.
+  const hint = document.querySelector('.dialHint');
+  if (hint && DEMO_ON) hint.textContent = 'SIMULATED RECEIVERS — remove ?demo from the URL for the real directory';
   const zoomed = (view[1] - view[0]) < (DIAL_EXTENT[1] - DIAL_EXTENT[0]) * 0.999;
   // ★ A key that can only be a no-op is worse than no key.
   document.getElementById('clearSel').disabled = !(vfoLive || needleA > 0 || bandsOn.size);
@@ -2039,10 +2043,90 @@ async function withLiveCounts(servers) {
  *   line is not news about the estate. Only the FIRST load can report a failure, because only then
  *   is there nothing to show.
  */
+/* ══ SIMULATED RECEIVERS, FOR TESTING ════════════════════════════════════════════════════════
+ * ★★★ ADD ?demo TO THE URL and the page draws an invented estate spread across the world, so the
+ *     country picker, the continents, the map shading and the dial's extent can all be exercised
+ *     against something bigger than two servers in Northamptonshire (Stuart, 2026-08-23: "can you
+ *     simulate receivers in countries all over the world so i can test it fully").
+ * ★★★ IT IS CLIENT-SIDE AND NOWHERE ELSE. Nothing is written to the directory, no stranger sees a
+ *     receiver that does not exist, and the moment you drop the parameter it is gone. Putting test
+ *     rows in the real database would have been the easy version and would have advertised
+ *     imaginary receivers to real listeners.
+ * ★★ The positions come from country-shapes.json — the outlines the map already loads — so a
+ *    simulated server sits inside its own country rather than at a made-up coordinate.
+ * ★ Deliberately VARIED: wideband and HF-only, free and full, locked and shared, a temporary
+ *   share, and one server that reports no occupancy at all — the case the dial must draw as
+ *   "covered, not said" rather than green.
+ */
+const DEMO_PLACES = [
+  ['GB', 'Northants Loop'], ['DE', 'Bayern Kiwi'], ['FR', 'Bretagne HF'], ['ES', 'Madrid Wideband'],
+  ['IT', 'Roma Airspy'], ['NL', 'Randstad RTL'], ['SE', 'Norrland HF'], ['PL', 'Kraków SDR'],
+  ['FI', 'Lapland Loop'], ['RU', 'Moscow Region'],
+  ['US', 'Seattle Wideband'], ['US', 'Texas HF'], ['CA', 'Ontario Kiwi'], ['MX', 'Baja Airspy'],
+  ['BR', 'São Paulo HF'], ['AR', 'Patagonia Loop'], ['CL', 'Atacama SDR'],
+  ['JP', 'Kanto RTL'], ['IN', 'Kerala HF'], ['CN', 'Shandong SDR'], ['TH', 'Bangkok Airband'],
+  ['ZA', 'Cape Loop'], ['KE', 'Nairobi HF'], ['MA', 'Atlas SDR'],
+  ['AU', 'Queensland Wideband'], ['NZ', 'South Island HF'], ['ID', 'Java Loop'],
+];
+
+function demoRadio(i, kind) {
+  const base = { name: '', driver: '', locked: false, shared: false, restricted: false };
+  if (kind === 'wide') return { ...base, id: `w${i}`, name: 'RTLSDRBlog Blog V4', driver: 'rtlsdr',
+    mode: 'wfm', centreHz: 96600000, spanHz: 2400000, coverage: [[500000, 1766000000]],
+    allowed: [[500000, 1766000000]], ranges: [[500000, 1766000000]],
+    listeners: i % 4 === 0 ? 1 : 0, maxListeners: 1 };
+  if (kind === 'hf') return { ...base, id: `h${i}`, name: 'Airspy HF+', driver: 'airspyhf',
+    mode: 'usb', centreHz: 7100000, spanHz: 768000, coverage: [[9000, 31000000]],
+    allowed: [[9000, 31000000]], ranges: [[9000, 31000000]],
+    listeners: i % 3, maxListeners: 10 };
+  if (kind === 'locked') return { ...base, id: `l${i}`, name: 'SDRplay RSP1B', driver: 'sdrplay',
+    mode: 'usb', locked: true, centreHz: 6800000, spanHz: 8000000,
+    coverage: [[1000, 2000000000]], allowed: [[1000, 2000000000]], ranges: [[1000, 2000000000]],
+    listeners: 0, maxListeners: 10 };
+  // ★ The honest awkward case: a server that says nothing about occupancy.
+  return { ...base, id: `q${i}`, name: 'Unknown receiver', driver: 'rtl',
+    coverage: ['FM Broadcast Band'], ranges: [[87500000, 108000000]] };
+}
+
+async function demoServers() {
+  const shapes = await loadCountryShapes();
+  const out = [];
+  DEMO_PLACES.forEach(([cc, name], i) => {
+    const rings = shapes[cc];
+    let lat = 0, lon = 0;
+    if (rings && rings[0] && rings[0].length) {
+      // ★ The middle of the country's own outline — a simulated receiver in the sea would make
+      //   the map look broken for a reason that has nothing to do with the map.
+      const pts = rings[0];
+      lon = pts.reduce((n, p) => n + p[0], 0) / pts.length;
+      lat = pts.reduce((n, p) => n + p[1], 0) / pts.length;
+    }
+    const kinds = i % 5 === 0 ? ['wide', 'hf', 'locked'] : i % 3 === 0 ? ['hf'] : i % 4 === 0 ? ['unknown'] : ['wide', 'hf'];
+    const radios = kinds.map((k) => demoRadio(i, k));
+    const listeners = radios.reduce((n, r) => n + (Number(r.listeners) || 0), 0);
+    out.push({
+      id: `demo-${i}`, name: `${name} (demo)`, url: 'https://example.invalid',
+      kind: i % 7 === 0 ? 'tunnel' : 'direct', slug: null, address: null,
+      grid: '', lat, lon, country: cc, radios,
+      temporary: i % 9 === 0, until: i % 9 === 0 ? Math.floor(Date.now() / 1000) + 900 : 0,
+      pin: i % 8 === 0, antenna: 'Simulated aerial', host: 'Simulated host', platform: 'demo',
+      limitMin: 30, listeners, maxListeners: radios.reduce((n, r) => n + (Number(r.maxListeners) || 0), 0),
+      freeInSec: -1, updatedAt: Math.floor(Date.now() / 1000), expiresAt: Math.floor(Date.now() / 1000) + 1800,
+      demo: true,
+    });
+  });
+  return out;
+}
+
+const DEMO_ON = new URLSearchParams(location.search).has('demo');
+
 function load(first) {
   return fetch('/api/directory')
     .then((r) => r.json())
     .then((d) => withLiveCounts(Array.isArray(d.servers) ? d.servers : []))
+    // ★ Real servers first, then the invented ones — so a demo run still shows the estate as it
+    //   actually is, with the simulation around it.
+    .then(async (servers) => DEMO_ON ? servers.concat(await demoServers()) : servers)
     .then((servers) => { ALL = servers; learnBands(ALL); renderCountries(); renderDial();
                          applyFilters(); drawCountryHighlight(); })
     .catch(() => {
