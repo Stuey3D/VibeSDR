@@ -75,8 +75,9 @@ ws.on('open', () => {
   send({ type: 'zoom', frequency: FREQ, binBandwidth: 1200 });
   send({ type: 'rdsx', on: true });
   send({ type: 'tune', frequency: FREQ, mode: 'wfm' });
-  // ★ The whole point is to drive the gain by hand: the loop must not be steering at the same time.
-  send({ type: 'agc', on: false });
+  // ★ The whole point is to drive the gain by hand. A `gain` with a VALUE is itself the switch to
+  //   manual on an RTL — `{type:'agc'}` is the RSP's IF AGC and does nothing here, which is how an
+  //   earlier run "turned the AGC off" and left it on.
   if (RATE > 0) send({ type: 'sampleRate', value: RATE });
 });
 
@@ -202,6 +203,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const st = rows.filter((r) => r.stereo);
   if (st.length) console.log(`  stereo locked     ${(st[0].g / 10).toFixed(1)} – ${(st[st.length-1].g / 10).toFixed(1)} dB`);
   else console.log('  stereo locked     —  (never locked)');
+  /* ★★★ PUT THE AGC BACK. The sweep switches it off to take control of the gain, and an earlier
+   *     run left it off — so a later "where does the AGC settle?" test recorded four stations all
+   *     sitting at the resting gain and looked like a loop that had stopped working. A tool that
+   *     changes a receiver's configuration has to hand it back as it found it. */
+  send({ type: 'gain', auto: true });     // ★ VibeAGC back on — `gain:auto`, not `agc:on`
+  await sleep(500);
   ws.close(); audio.close();
   process.exit(0);
 })();

@@ -1347,6 +1347,8 @@ static std::atomic<double>   g_agcLearnedAtHz{0.0};
  *  prediction, the ceiling, the failed-gain hysteresis and the trial afterwards are all untouched.
  */
 static std::atomic<double>   g_agcHurryUntil{0.0};
+/** ★ Set on every gain write: the channel peak-hold must forget the old gain's level. */
+static std::atomic<bool>     g_resetPeakHold{false};
 // Defined further down, beside setSampleRate(); declared here because retune() and the loop both
 // run above them.
 static void agcForget(const char* why);
@@ -2467,6 +2469,8 @@ struct LocalSdrShim::Impl {
      *  fallen back to channel-minus-floor. Reported so a log line cannot mislead about which
      *  question was asked. */
     std::atomic<bool>  sepFromShoulders{true};
+    /** ★ Separation, averaged over about a second — what the AGC actually judges by. */
+    std::atomic<float> sepAvgDb{-200.0f};
     float chanPeakHold_ = -200.0f;   // ★ see the peak-hold note in the measurement
     std::vector<float> shoulderBins_;
     std::vector<float> contrastBins_;
@@ -4818,12 +4822,32 @@ struct LocalSdrShim::Impl {
                  *  ★ Half a decibel a second: fast enough to follow a station fading or a retune,
                  *    slow enough to bridge a gap between words or between CW characters.
                  */
-                const float decay = 0.5f / std::max(1.0f, (float)fftRate);
-                float held = chanPeakHold_ - decay;
-                if (chanNow > held) held = chanNow;
-                if (held < -199.0f || chanNow > held) held = chanNow;
-                chanPeakHold_ = held;
-                channelDbWide.store(held);
+                if (g_resetPeakHold.exchange(false, std::memory_order_relaxed))
+                    { chanPeakHold_ = -200.0f; sepAvgDb.store(-200.0f); }   // ★ the gain moved: re-acquire both
+                /* ★★★ PEAK-HOLD ONLY WHERE THE SIGNAL IS INTERMITTENT, AND THIS IS A REGRESSION I
+                 *     CAUSED. Holding the loudest recent moment is right for SSB and CW, where the
+                 *     wanted signal stops between words; on FM it is actively harmful, because the
+                 *     shoulders are a MEDIAN and the channel would be a MAX, and the gap between
+                 *     those two statistics grows with how much the channel fluctuates — which is
+                 *     itself worse at LOW gain. So separation looked better the further down the
+                 *     loop went, and it walked down: 90.1 went 15.7 → 14.4 → 12.5 → 8.7 → 7.7 →
+                 *     3.7 → 2.7 dB when the sweep puts the peak at 20.7 (2026-08-23).
+                 *  ★★ Same statistic on both sides, or the difference between them measures the
+                 *     statistic rather than the radio. Wide modes take the mean; narrow ones keep
+                 *     the hold, where the alternative is measuring somebody's pauses.
+                 *  ★ 20 kHz is the divide: AM broadcast and everything narrower is bursty in
+                 *    practice, NFM and wider is a continuous carrier.
+                 */
+                const bool bursty = demodBw <= 20000.0;
+                float use = chanNow;
+                if (bursty) {
+                    const float decay = 0.5f / std::max(1.0f, (float)fftRate);
+                    float held = chanPeakHold_ - decay;
+                    if (chanNow > held || held < -199.0f) held = chanNow;
+                    chanPeakHold_ = held;
+                    use = held;
+                }
+                channelDbWide.store(use);
             }
             if (!shoulderBins_.empty()) {
                 const size_t k = shoulderBins_.size() / 2;
@@ -4857,9 +4881,24 @@ struct LocalSdrShim::Impl {
                  *     called. A wide mode nobody has written yet gets the right treatment for free.
                  */
                 const bool shouldersFit = (demodBw * 2.5) < (sampleRate * 0.45);
-                sepDb.store(channelDbWide.load()
-                            - (shouldersFit ? shoulderBins_[k] : (float)floorDbNow));
+                const float sepNow = channelDbWide.load()
+                                   - (shouldersFit ? shoulderBins_[k] : (float)floorDbNow);
+                sepDb.store(sepNow);
                 sepFromShoulders.store(shouldersFit);
+                /* ★★★ AVERAGED, BECAUSE ONE FRAME IS NOT A MEASUREMENT. The verdict compares
+                 *     separation before and against after with a half-decibel threshold — and a
+                 *     single FFT frame of a live FM signal moves by more than that on its own. The
+                 *     sweep tool averages forty frames per point, which is exactly why its answers
+                 *     are stable and repeatable; the loop was reading the latest frame and then
+                 *     believing the difference. Measured on the XCover at 96.1: it settled at
+                 *     7.7 dB having judged 8.7 "worse", where the sweep puts the peak at 12.5–14.4
+                 *     and the gap between them is over 3 dB (2026-08-23).
+                 *  ★ A one-second time constant: long enough to average the flutter, short enough
+                 *    that the 2.5s verdict is not reading mostly pre-move data. */
+                const float a = 1.0f / std::max(1.0f, (float)fftRate);
+                float avg = sepAvgDb.load();
+                if (avg < -190.0f) avg = sepNow;
+                sepAvgDb.store(avg + (sepNow - avg) * a);
             }
             /* ══ HOW MUCH CONTRAST IS LEFT IN THE BAND ══════════════════════════════════════
              * ★★★ THE ONE THING THAT IS TRUE OF INTERMODULATION AND OF NOTHING ELSE: it FILLS IN
@@ -15070,7 +15109,7 @@ void LocalSdrShim::overloadTick() {
          *    breathing, and a four-second window on a live signal cannot resolve it anyway.
          */
         const float sepWas = g_sepBeforeMove.load(std::memory_order_relaxed);
-        const float sepNow = p->sepDb.load();
+        const float sepNow = p->sepAvgDb.load();
         const float d = sepNow - sepWas;
         const int   dir = g_moveDir.load(std::memory_order_relaxed);   // +1 climbed, -1 cut
         if (d < -0.5f) {
@@ -15524,7 +15563,7 @@ void LocalSdrShim::overloadTick() {
         }
     }
     if (want != steps) {                      // ★ every move goes on trial, up or down alike
-        g_sepBeforeMove.store(p->sepDb.load(), std::memory_order_relaxed);
+        g_sepBeforeMove.store(p->sepAvgDb.load(), std::memory_order_relaxed);
         g_moveDir.store(want < steps ? +1 : -1, std::memory_order_relaxed);
         g_climbAt.store(now, std::memory_order_relaxed);
     }
@@ -16010,6 +16049,15 @@ static void agcForget(const char* why) {
  *  then went back to fuzz". Each of those cuts was answering the previous cut's question. */
 static void agcSettleAfterGain(double now) {
     g_gainSettleUntil.store(now + 1.3, std::memory_order_relaxed);
+    /* ★★★ AND DROP THE PEAK-HOLD, OR IT REMEMBERS THE GAIN WE JUST LEFT. The held channel level
+     *     decays at half a decibel a second — which is what lets it bridge a pause in speech — so
+     *     for the first seconds after a CUT it still carries the louder pre-cut level, and the
+     *     verdict then reads a separation that has not happened yet. The loop prefers cutting on
+     *     the strength of it: measured on the XCover at 96.1, it went 7.7 → 12.5 → 8.7 → 7.7,
+     *     retreating from a gain the sweep says is 3 dB better (2026-08-23).
+     *  ★ Re-acquiring is safe because nothing is judged for 1.3s after a write anyway: by the time
+     *    anybody asks, the hold has been rebuilt from the level that actually exists now. */
+    g_resetPeakHold.store(true, std::memory_order_relaxed);
 }
 
 void LocalSdrShim::setSampleRate(double rate) {
