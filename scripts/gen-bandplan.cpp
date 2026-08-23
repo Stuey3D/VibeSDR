@@ -19,8 +19,20 @@ int main() {
         printf("    \"%d\": [", r);
         const auto& bands = vibebands::namedBands(r);
         for (size_t i = 0; i < bands.size(); i++) {
-            printf("%s\n      {\"id\":\"%s\",\"label\":\"%s\",\"lo\":%.0f,\"hi\":%.0f}",
-                   i ? "," : "", esc(bands[i].id).c_str(), esc(bands[i].label).c_str(),
+            // ★★ THE TYPE COMES FROM THE LABEL, and it is derived HERE rather than in the page so
+            //    there is one rule rather than one per reader. vibe_bands.h does not carry a type
+            //    — it does not need one to allocate spectrum — but the dial colours by type the
+            //    way the app's own band plan does (BAND_HEX in src/constants/bandPlan.ts:
+            //    ham red, broadcast blue, utility green, CB orange).
+            const std::string lab = bands[i].label;
+            const char* type = lab.find("amateur") != std::string::npos ? "ham"
+                             : lab.find("CB") != std::string::npos ? "cb"
+                             : (lab.find("broadcast") != std::string::npos ||
+                                lab.find("Broadcast") != std::string::npos ||
+                                lab.find("DAB") != std::string::npos) ? "broadcast"
+                             : "utility";
+            printf("%s\n      {\"id\":\"%s\",\"label\":\"%s\",\"type\":\"%s\",\"lo\":%.0f,\"hi\":%.0f}",
+                   i ? "," : "", esc(bands[i].id).c_str(), esc(bands[i].label).c_str(), type,
                    bands[i].lo, bands[i].hi);
         }
         printf("\n    ]%s\n", r == 3 ? "" : ",");
