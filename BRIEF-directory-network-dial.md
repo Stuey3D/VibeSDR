@@ -216,3 +216,35 @@ somewhere visible, not silently dropped — the same rule the frequency search a
 8. The queue, on a red stretch.
 
 ★ 3 is the first thing worth looking at, and 1–3 are enough to prove the idea.
+
+## What it actually became (2026-08-23, shipped)
+
+Steps 1–6 are live on vibeserver.vibesdr.net. Where the build departs from the plan above, it is
+because Stuart looked at it and said so:
+
+- **The availability is in the NUMERALS, not a bar.** *"the solid green bar is not needed as we
+  will colour the numbers instead."* Green/red/blue/dim on the ticker's own figures.
+- **The band plan is the app's strip** — solid blocks butted together, coloured by TYPE from
+  `BAND_HEX` (ham red, broadcast blue, utility green, CB orange), *"over the frequency ticker"*.
+  The type is derived in the generator from the label, so there is one rule and not one per reader.
+- **Bands are AND, and per RADIO.** *"if I want say the 40m band and the 20m band I would click
+  those and ... only the RTL on the Pi would show as its the only one that can do both bands."*
+  The chip filter's OR was right for "show me FM servers" and wrong for a dial you compose a query
+  on. The server card then shows only the receivers that answer, and counts the ones it left out.
+- **The needle is the control.** Click the glass to place the red VFO; the zoom keys work about it.
+  A second click places the upper needle and the pair is the manual range search.
+- **Edge plates page the dial** by 80% when there is spectrum beyond the glass — *"kinda like
+  tapping the edges of the spectrum on a real SDR"* — and the tune arrows walk it a tenth at a
+  time. Dragging works too, but it had to stop selecting the page to do it.
+- **The band plan is generated** by `scripts/gen-bandplan.sh` from `vibe_bands.h`, all three ITU
+  regions, with `--check` to fail on drift. The region-from-position rule is SAMPLED from the
+  header's own `ituRegion()` rather than ported, so the page cannot disagree with the server about
+  where a band ends. Filtering to US receivers moves the plan to Region 2 on its own.
+
+### Still to do
+- **7. Per-country bars** and **8. the queue on a red stretch** — untouched.
+- ★★ **EiBi ON THE DIAL.** Stuart: *"we could even integrate Eibi and stagger the stations like a
+  real vintage radio with the stations written on the dial itself, but that we will look at later
+  as it may become crowded."* Both sides already carry an EiBi service (`eibi.cpp`, `eibi.ts`), so
+  the data is in reach; the open question is density, and it is a LOOK-AT-LATER, not a next step.
+- ★ The dial has no per-radio *queue* yet: a red stretch says who owns it, not how long.
