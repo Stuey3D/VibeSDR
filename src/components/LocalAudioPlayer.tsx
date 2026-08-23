@@ -125,6 +125,12 @@ export interface LocalAudioPlayerProps {
    *  of two ways a frequency leaves this app. The other is the audio socket saying hello.
    */
   assertTune?:   boolean;
+  /** ★★★ A COUNTER THE SCREEN BUMPS WHEN A PERSON TUNES. With `assertTune` false this is the ONLY
+   *  thing that unseals the socket's tongue. The first version released on "the values changed",
+   *  and the screen's own state settles after connect — bandwidth defaults arriving, the server's
+   *  dial being adopted — so the app announced its untouched default MODE to a room that had not
+   *  asked for it. Values changing is not the same question as somebody asking. */
+  userTuneSeq?:  number;
   /** Every inbound audio byte, so the connection readout can show the TRUE total.
    *  ★★ Without this the meter reported SPECTRUM ONLY — it showed 12 KB/s while
    *  the link was actually carrying 198, because uncompressed audio was 186 of
@@ -145,7 +151,7 @@ function tuneJson(frequency: number, mode: string, bandwidthLow: number, bandwid
 export default function LocalAudioPlayer(
   { port, frequency, mode, bandwidthLow, bandwidthHigh, instanceName,
     host = '127.0.0.1', authSuffix = '', sessionId = '', onBytes, raw = false,
-    wsBase = '', adminAuth = '', assertTune = true }: LocalAudioPlayerProps,
+    wsBase = '', adminAuth = '', assertTune = true, userTuneSeq = 0 }: LocalAudioPlayerProps,
 ) {
   const started = useRef(false);
   const ws      = useRef<WebSocket | null>(null);
@@ -156,6 +162,7 @@ export default function LocalAudioPlayer(
   /** What we opened with, and whether the next forward is still that same hello — see the
    *  forwarding effect below. */
   const startTune = useRef<string>('');
+  const startSeq = useRef(userTuneSeq);
   const suppressFirst = useRef(!assertTune);
   tune.current = { frequency, mode, bandwidthLow, bandwidthHigh };
 
@@ -166,6 +173,7 @@ export default function LocalAudioPlayer(
     if (port == null) { noteAudioEvent('NOT STARTED — port gate closed (refusal or tune not loaded)'); return; }
     const { frequency: f, mode: m, bandwidthLow: bl, bandwidthHigh: bh } = tune.current;
     startTune.current = tuneJson(f, m, bl, bh);
+    startSeq.current = userTuneSeq;
     suppressFirst.current = !assertTune;
     Vibe?.setInstanceName?.(instanceName ?? 'Local Hardware');
 
@@ -328,9 +336,11 @@ export default function LocalAudioPlayer(
    */
   useEffect(() => {
     if (!started.current) return;
+    // ★ Sealed until a person asks. `startSeq` is the count at the moment the socket opened, so a
+    //   later bump means somebody reached for the dial or the mode — not that the screen settled.
     if (suppressFirst.current) {
-      if (tuneJson(frequency, mode, bandwidthLow, bandwidthHigh) === startTune.current) return;
-      suppressFirst.current = false;      // something moved: this is a real tune now
+      if (userTuneSeq === startSeq.current) return;
+      suppressFirst.current = false;      // a person asked: this and everything after it is real
     }
     if (USE_NATIVE_PUMP) {
       Vibe?.sendLocalTune?.(tuneJson(frequency, mode, bandwidthLow, bandwidthHigh));
@@ -340,7 +350,7 @@ export default function LocalAudioPlayer(
         sock.send(tuneJson(frequency, mode, bandwidthLow, bandwidthHigh));
       }
     }
-  }, [frequency, mode, bandwidthLow, bandwidthHigh]);
+  }, [frequency, mode, bandwidthLow, bandwidthHigh, userTuneSeq]);
 
   useEffect(() => {
     Vibe?.setInstanceName?.(instanceName ?? 'Local Hardware');

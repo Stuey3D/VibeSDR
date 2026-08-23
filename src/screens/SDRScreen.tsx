@@ -2379,8 +2379,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     const newHz = Math.max(loHz, Math.min(hiHz, snapped));
     if (newHz === cur) return;
     // Discrete jump → centre it. Sweep → travel across the span like the drum.
+    userTuneSeq.current++;   // ★ a PERSON asked (drag/step) — see the note on userTuneSeq
     if (recenter) c.tune(newHz, undefined, { recenter: true });
-    else          c.tune(newHz);
+    else          userTuneSeq.current++;   // ★ a PERSON asked (step) — see the note on userTuneSeq
+    c.tune(newHz);
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: newHz }));
   };
   useEffect(() => {
@@ -4066,6 +4068,18 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★ "This server shares one dial, and has no door to say so" — see the connect path. */
   const sharedNoDoorRef = useRef(false);
   /**
+   * ★★★ DID A PERSON ASK FOR THIS? On a shared dial the audio socket must stay silent until the
+   *  listener actually reaches for something — and "the values changed" is NOT that test. The
+   *  screen's own state settles after connect (the mode's bandwidth defaults arrive, the server's
+   *  dial is adopted), and treating any of that as a user action sent the app's UNTOUCHED DEFAULT
+   *  mode to the server: Stuart, on build 157, "it no longer hijacks the frequency but still
+   *  changed WFM into USB" (2026-08-23). The frequency half was fixed and the mode half rode in on
+   *  the same message.
+   *  ★ Bumped ONLY where a person tunes or picks a mode. Nothing that merely reacts to the server
+   *    touches it — which is the whole point.
+   */
+  const userTuneSeq = useRef(0);
+  /**
    * ★★★ THE SAME FACT, AS STATE, BECAUSE THE AUDIO SOCKET NEEDS IT AS A PROP. The ref decides at
    *  connect time; this is what stops `LocalAudioPlayer` asserting a tune the moment it opens —
    *  which was the OTHER way a frequency escaped this app and the one that actually moved Stuart's
@@ -5023,6 +5037,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     markInteract();
     const [loHz, hiHz] = c.caps.freqRange;
     const clamped = Math.max(loHz, Math.min(hiHz, hz));
+    userTuneSeq.current++;   // ★ a PERSON asked (entry) — see the note on userTuneSeq
     c.tune(clamped);
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: clamped }));
   }, []);
@@ -5031,6 +5046,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onMode = useCallback((m: SDRMode) => {
     const c = client.current; if (!c) return;
+    userTuneSeq.current++;   // ★ a PERSON asked (mode) — see the note on userTuneSeq
     c.setMode(m); // client mirrors the server's per-mode bandwidth defaults
     setStatus({ ...c.getStatus() });
     if (m !== 'wfm') setFmStereo(false);  // stereo icon only applies to WFM
@@ -5223,6 +5239,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const clamped = Math.max(loHz, Math.min(hiHz, hz));
     // Discrete jump (freq modal, bookmark/VTS, Siri, search) → always land
     // centred, regardless of the VFO lock.
+    userTuneSeq.current++;   // ★ a PERSON asked (entry/recentre) — see the note on userTuneSeq
     c.tune(clamped, undefined, { recenter: true });
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: clamped }));
   }, []);
@@ -8106,6 +8123,13 @@ export default function SDRScreen({ route, navigation }: Props) {
           //     so joining somebody's shared receiver threw the room to 14.074 MHz, outside what
           //     that server even allows, before settling. The dial belongs to the room.
           assertTune={!sharedDialNow}
+          // ★ …and on a shared dial, stay silent until a person actually asks for something.
+          //  ★★ A REF READ DURING RENDER, WHICH IS SAFE ONLY BECAUSE OF WHAT BUMPS IT: every site
+          //     that increments this also changes `status`, so the screen re-renders and the new
+          //     count travels with the new frequency or mode in the SAME render. If a future
+          //     caller ever bumps it without touching status, the prop will not update and the
+          //     tune will be silently dropped — bump state, not just the ref, if that day comes.
+          userTuneSeq={userTuneSeq.current}
           onBytes={(n: number) => { audioBytes.current += n; }}
           raw={rawAudio && rawAudioPolicy === 'choice'}
         />
