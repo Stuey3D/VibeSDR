@@ -1288,6 +1288,9 @@ static std::atomic<float>    g_floorBeforeDrop{0.0f};
 static std::atomic<double>   g_dropStepDb{0.0};
 /** ★ How many dB the climb on trial actually added — see the climb verdict in overloadTick(). */
 static std::atomic<double>   g_climbStepDb{0.0};
+/** ★ The tuned channel's SNR when that climb was taken — the only measurement that knows whether
+ *  more gain HELPED. See the SNR arm of the climb verdict. */
+static std::atomic<float>    g_snrBeforeClimb{0.0f};
 /** ★ While this stands, the floor test is muted: it has been shown, by experiment, to be
  *  diagnosing something gain cannot fix. */
 static std::atomic<double>   g_floorTestMutedUntil{0.0};
@@ -14763,6 +14766,10 @@ int LocalSdrShim::currentGainTenthDb() const { return p ? p->lastGainTenthDb : -
 //    reach a couple of steps within about ten seconds of tuning.
 static constexpr int    kAgcClimbAfterSec = 3;
 static constexpr double kAgcClimbDwellSec = 4.0;
+/** ★ How long a climb may sit unjudged before the loop gives up waiting and climbs anyway — see
+ *  the climb branch. Long enough for the 4s verdict plus a couple of re-arms, short enough that a
+ *  permanently disturbed receiver is merely slow rather than stuck. */
+static constexpr double kClimbTrialMaxSec = 20.0;
 
 void LocalSdrShim::overloadTick() {
     if (!p) return;
@@ -14837,7 +14844,38 @@ void LocalSdrShim::overloadTick() {
          *  ★ 2 dB of slack over the step: measurement noise on a 4-second window, not a judgement.
          */
         const double allowed = (climbStep > 0.1 ? climbStep : 0.0) + 2.0;
-        if (floorWas < -1.0f && (double)(floorNow - floorWas) > allowed) {
+        /* ★★★ AND THE ONE MEASUREMENT THAT KNOWS WHETHER THE GAIN HELPED: THE CHANNEL'S SNR.
+         *     A front end driven into intermodulation by a signal OUTSIDE the window produces
+         *     rubbish INSIDE it — so the ADC never rails, the noise floor may barely move, and the
+         *     loop happily climbs while the station it is tuned to gets worse. Measured on the Pi
+         *     at 2.4 MSPS, tuned to 105.8 with a monster local on 104.2:
+         *         AGC 15.7 dB · pk −21 dBFS · SNR 12 dB
+         *     Twenty-one decibels of headroom and nothing on the rail, so neither the clip test nor
+         *     the floor test had anything to say — and 104.2 was audibly on top of 105.8.
+         * ★★★ THE RATE IS NOT THE FIX, THOUGH IT IS THE CAUSE. An RTL's IF filter follows its
+         *     sample rate, so at 1.2 MSPS 104.2 is filtered out before the mixer and everything
+         *     "cleans right up" (Stuart, 2026-08-23); at 2.4 it reaches the front end. Stuart
+         *     suggested keeping the old loop for 2.4 and the new one for 1.2 — but a loop that
+         *     behaves differently per rate is two loops to reason about, and the OLD one was not
+         *     careful, it was BROKEN in a way that happened to end at a low gain. SNR gets there
+         *     honestly: it goes down when the extra gain is buying noise, whatever the rate.
+         *  ★★ ONLY WHERE SNR MEANS SOMETHING. On a dead channel it is a couple of dB of nothing
+         *     against nothing, and reading a fall there would stop the loop climbing on exactly the
+         *     weak signals it exists to lift. 6 dB is "there is a station here".
+         *  ★ 2 dB, so a fade or a passing lorry is not read as a verdict.
+         */
+        const float snrWas = g_snrBeforeClimb.load(std::memory_order_relaxed);
+        const float snrNow = p->spectrumSnr.load();
+        const bool  snrWorse = snrWas > 6.0f && snrNow < snrWas - 2.0f;
+        if (snrWorse) {
+            const double m = std::min(12.0, g_ovlMargin.load(std::memory_order_relaxed) + 3.0);
+            g_ovlMargin.store(m, std::memory_order_relaxed);
+            LOGI("that step cost %.1f dB of SNR (%.1f -> %.1f) — the gain is buying noise, not "
+                 "signal; giving it back (a climb now needs %.0f dB)",
+                 snrWas - snrNow, snrWas, snrNow, m);
+            g_adcCleanRun.store(0, std::memory_order_relaxed);
+            steps_forceDown = true;
+        } else if (floorWas < -1.0f && (double)(floorNow - floorWas) > allowed) {
             // ★ Give it back, and make the next attempt prove more. This is the same "learn from a
             //   failed climb" the clipping path uses — the two failures differ in what they measure,
             //   not in what they mean: this step was not worth taking.
@@ -14994,7 +15032,22 @@ void LocalSdrShim::overloadTick() {
     //      and it is only a bad trade if you assume a gain change is free.
     //  ★ Coming DOWN is unchanged and still immediate — an overload is ruining the signal NOW, and
     //    40 ms is a bargain to end it. This reluctance applies only to climbing back up.
-    } else if (steps > 0 && cleanRun >= kAgcClimbAfterSec) {
+    } else if (steps > 0 && cleanRun >= kAgcClimbAfterSec
+               && !(g_climbAt.load(std::memory_order_relaxed) > 0
+                    && now - g_climbAt.load(std::memory_order_relaxed) < kClimbTrialMaxSec)) {
+        /* ★★★ ONE CLIMB ON TRIAL AT A TIME. Every step is supposed to prove itself before the next
+         *     is attempted — and it was not: the trial takes 4 seconds, the climb branch fires
+         *     every 4 seconds, and a trial that gets RE-ARMED (a listener joins, a buffer drops)
+         *     put no brake on anything at all. Measured on the Pi at 105.4:
+         *         8.7 → 12.5 → 14.4 → [not judged] 15.7 → [not judged] 16.6
+         *         then 5.5 dB of floor for 0.9 dB of gain — and 21 seconds walking back down.
+         *     Four steps taken before one of them was judged, which is exactly Stuart's "it went
+         *     about 2 clicks too high" (2026-08-23). A control loop that acts again before reading
+         *     the result of its last action is not a control loop, it is an open-loop ramp.
+         *  ★★ BOUNDED, so a receiver that is disturbed constantly still climbs. If a verdict has
+         *     not arrived in kClimbTrialMaxSec the trial is abandoned rather than allowed to freeze
+         *     the gain where it is — a busy shared server must not become a deaf one.
+         */
         // ★ Long and quiet: relax again, one dB at a time, never below the 3 dB floor.
         if (cleanRun >= 120 && g_ovlMargin.load(std::memory_order_relaxed) > 3.0)
             g_ovlMargin.store(std::max(3.0, g_ovlMargin.load(std::memory_order_relaxed) - 1.0),
@@ -15139,6 +15192,7 @@ void LocalSdrShim::overloadTick() {
     }
     if (want < steps) {                       // this was a climb — put it on trial
         g_floorBeforeClimb.store(p->iqFloorDb.load(), std::memory_order_relaxed);
+        g_snrBeforeClimb.store(p->spectrumSnr.load(), std::memory_order_relaxed);
         // ★★★ AND HOW BIG THE STEP WAS, WHICH IS THE WHOLE FIX. The verdict compares the floor
         //     before and after; without knowing what we ADDED, "the floor went up 2.7 dB" cannot
         //     be told apart from "we added 2.7 dB of gain". The cut path has recorded its own step
