@@ -290,7 +290,12 @@
   .dNeedle.b, .dNeedleHd.b { stroke: #ff3b30; fill: #ff3b30; }
   .dNeedleHd { stroke: none; }
   /* ★ The span belongs to the PAIR, so it only exists once both needles are down. */
+  /* ★ The span belongs to the PAIR, so it only exists once both ends are chosen. */
   .dSpan   { fill: rgba(255,59,48,.15); }
+  .dVfoBox.b { fill: #ff3b30; }
+  .dVfoBox.a { fill: var(--accent); }
+  .dVfoTx  { fill: #0b0b0b; font-size: 10px; text-anchor: middle; font-weight: 600;
+             pointer-events: none; }
   /* ★ The viewport on the whole-network dial: what the dial above is showing, and the handle for
        moving it. Amber rather than phosphor, so it reads as a control and not as coverage. */
   .dPort      { cursor: grab; }
@@ -830,11 +835,13 @@ function searchRanges() {
       wants.push([b.lo, b.hi]);
     }
   }
-  // ★★★ ONE NEEDLE IS "CAN ANYBODY HEAR THIS", which is the question the whole design was built
-  //     around — "I want 1467 kHz: who has it, and is it free?" Two needles are a manual range.
-  //     Both are the same test in the end: one radio must cover all of what was asked for.
-  if (needleA > 0 && needleB > 0) wants.push([Math.min(needleA, needleB), Math.max(needleA, needleB)]);
-  else if (needleA > 0) wants.push([needleA, needleA]);
+  // ★★★ A CLOSED RANGE IS THE RANGE; A LONE VFO IS "CAN ANYBODY HEAR THIS", which is the question
+  //     the whole design was built around — "I want 1467 kHz: who has it, and is it free?" Both
+  //     are the same test in the end: ONE radio must cover all of what was asked for.
+  //  ★ And neither counts until the visitor has actually used the needle — see vfoLive.
+  if (vfoLive && rangeSet && needleA > 0 && needleV > 0)
+    wants.push([Math.min(needleA, needleV), Math.max(needleA, needleV)]);
+  else if (vfoLive && needleV > 0) wants.push([needleV, needleV]);
   return wants;
 }
 
@@ -1093,6 +1100,10 @@ function renderDial() {
   //     chooses it; after that a server joining or leaving must not move somebody's dial.
   if (!dialView) dialView = defaultWindow();
   const view = [Math.max(dialView[0], DIAL_EXTENT[0]), Math.min(dialView[1], DIAL_EXTENT[1])];
+  // ★ A dial without a needle is not a dial: seed it in the middle of the first view, and keep it
+  //   inside the network's reach if a server leaving shrinks the extent under it.
+  if (!(needleV > 0)) needleV = (view[0] + view[1]) / 2;
+  needleV = Math.max(DIAL_EXTENT[0], Math.min(DIAL_EXTENT[1], needleV));
 
   const host = document.getElementById('dial');
   const W = Math.round(Math.max(320, host.clientWidth || wrap.clientWidth - 40));
@@ -1134,15 +1145,16 @@ function renderDial() {
 
   const zoomed = (view[1] - view[0]) < (DIAL_EXTENT[1] - DIAL_EXTENT[0]) * 0.999;
   // ★ A key that can only be a no-op is worse than no key.
-  document.getElementById('clearSel').disabled = !(needleA > 0 || bandsOn.size);
+  document.getElementById('clearSel').disabled = !(vfoLive || needleA > 0 || bandsOn.size);
   const vfoKey = document.getElementById('setVfo');
-  vfoKey.classList.toggle('armed', needleA > 0 && !needleB);
+  // ★ The key wears the colour of what it will leave behind: amber once an anchor is down.
+  vfoKey.classList.toggle('armed', needleA > 0 && !rangeSet);
   vfoKey.classList.toggle('first', !(needleA > 0));
-  vfoKey.textContent = (needleA > 0 && needleB > 0) ? 'VFO' : needleA > 0 ? 'VFO 2' : 'VFO';
-  vfoKey.title = (needleA > 0 && needleB > 0)
-    ? 'Start again — place a single VFO at the centre of the dial'
-    : needleA > 0 ? 'Place the second VFO at the centre, making a range'
-                  : 'Place a VFO at the centre of the dial';
+  vfoKey.textContent = rangeSet ? 'CLR' : needleA > 0 ? 'SET' : 'VFO';
+  vfoKey.title = rangeSet
+    ? 'Drop the range and go back to one VFO'
+    : needleA > 0 ? 'Close the range between the anchor and the VFO'
+                  : 'Drop an anchor here, then tune to the other end';
   document.getElementById('dialExtent').textContent =
     `${prettyHz(view[0])} – ${prettyHz(view[1])}`
     + `  of  ${prettyHz(DIAL_EXTENT[0])} – ${prettyHz(DIAL_EXTENT[1])}`;
@@ -1288,9 +1300,10 @@ function drawRow(segsIn, y0, W, opt) {
 
   // ★ The needles show on BOTH dials — on the detail one to be placed and read, on the overview to
   //   say where the other one is while you travel to it. That pair IS the search.
-  if (needleA > 0 && needleB > 0) {
-    const xa = hzToXIn(axis, Math.max(Math.min(needleA, needleB), covered[0].lo));
-    const xb = hzToXIn(axis, Math.min(Math.max(needleA, needleB), covered[covered.length - 1].hi));
+  // ★ The shading is the CLOSED range, not a preview: it appears when the second press says so.
+  if (rangeSet && needleA > 0 && needleV > 0) {
+    const xa = hzToXIn(axis, Math.max(Math.min(needleA, needleV), covered[0].lo));
+    const xb = hzToXIn(axis, Math.min(Math.max(needleA, needleV), covered[covered.length - 1].hi));
     if (xa !== null && xb !== null && xb > xa)
       p.unshift(`<rect class="dSpan" x="${xa.toFixed(1)}" y="${BAND_Y}" width="${(xb - xa).toFixed(1)}" height="${BOT - BAND_Y}"/>`);
   }
@@ -1302,13 +1315,22 @@ function drawRow(segsIn, y0, W, opt) {
    *     that closes the range, and the shaded span between them is the search you have built. A
    *     lone amber needle reads as unfinished, which is exactly what it is.
    */
-  for (const [hz, cls] of [[needleA, 'a'], [needleB, 'b']]) {
+  for (const [hz, cls] of [[needleA, 'a'], [needleV, 'b']]) {
     if (!(hz > 0)) continue;
     const nx = hzToXIn(axis, hz);
     if (nx === null) continue;
     p.push(`<line class="dNeedle ${cls}" x1="${nx.toFixed(1)}" y1="${BAND_Y}" x2="${nx.toFixed(1)}" y2="${BOT}"/>`);
     p.push(`<polygon class="dNeedleHd ${cls}" points="${(nx - 5).toFixed(1)},${BAND_Y - 1} ${(nx + 5).toFixed(1)},${BAND_Y - 1} ${nx.toFixed(1)},${BAND_Y + 8}"/>`);
-    p.push(`<title>VFO ${cls === 'a' ? '1' : '2'} · ${esc(prettyHz(hz))}</title>`);
+    // ★★★ AND ITS FREQUENCY, ON THE POINTER ITSELF. Without it the dial says where you are only
+    //     if you can read it off the nearest numeral — and the whole point of a fixed pointer is
+    //     that you never have to.
+    if (!over) {
+      const w = labelPx(prettyHz(hz)) + 8;
+      const lx = Math.max(1, Math.min(W - w - 1, nx - w / 2));
+      p.push(`<rect class="dVfoBox ${cls}" x="${lx.toFixed(1)}" y="${BOT - 15}" width="${w.toFixed(1)}" height="14" rx="2"/>`);
+      p.push(`<text class="dVfoTx" x="${(lx + w / 2).toFixed(1)}" y="${BOT - 4.5}">${esc(prettyHz(hz))}</text>`);
+    }
+    p.push(`<title>${cls === 'a' ? 'Anchor' : 'VFO'} · ${esc(prettyHz(hz))}</title>`);
   }
   return p.join('');
 }
@@ -1350,9 +1372,36 @@ function stateAtHz(segs, hz) {
 let DIAL_EXTENT = [0, 0];
 /** ★ One entry per LINE of the dial: its axis, the pixels it owns, and the span it shows. */
 let DIAL_ROWS = [];
-/** ★★★ THE NEEDLES ARE THE CONTROL AND THE SEARCH BOTH. One is the VFO the zoom works about; two
- *      are a manual range, and the list below narrows to receivers that can tune the whole of it. */
-let needleA = 0, needleB = 0;
+/**
+ * ★★★ ONE LIVE VFO, AND AN ANCHOR YOU DROP BESIDE IT. The dial opens with a RED VFO in the middle
+ *     of the zoomed range — a dial without a needle is not a dial — and clicking the glass moves
+ *     that needle rather than accumulating new ones. Press VFO and it leaves an ORANGE anchor
+ *     where it stands; move the red one on and press again, and the two of them are the range you
+ *     are searching (Stuart, 2026-08-23).
+ * ★★ WHY THIS BEATS "FIRST CLICK, SECOND CLICK": in the old ladder you could not see which needle
+ *    you were about to move, and there was no needle at all until you made one. Here there is
+ *    always exactly one thing under your hand, and the anchor is a deliberate act.
+ * ★ The landing VFO does not FILTER anything until it is used — arriving at a directory that has
+ *   already hidden servers, because a needle you did not place sits somewhere, would be a poor
+ *   welcome. `vfoLive` is what makes the mark real.
+ */
+/**
+ * ★★★ THE NEEDLE MOVES, AND THE DIAL FOLLOWS IT AT THE EDGE. Stuart, 2026-08-23: "the vfo needle
+ *     moves about and when it hits the edge the dial then moves." That is the answer to "the
+ *     arrows move the dial with no visual guide as to where the vfo will drop" — you are watching
+ *     the needle travel across the band plan, so where the anchor will land is never in doubt, and
+ *     the scale only shifts when it has to.
+ *  ★★ I built it pinned to the centre first, on the reasoning that a real set moves the scale
+ *     under a fixed pointer. That is true of the HARDWARE and wrong for this: on a dial you cannot
+ *     see the whole of, a pointer that never moves tells you nothing about where you are going —
+ *     the movement IS the feedback.
+ *  ★ Kept inside the glass with a margin, so the needle never sits ON the edge with nothing
+ *    visible ahead of it.
+ */
+let needleV = 0;        // the live VFO — red, moved by the arrows and by a click
+let needleA = 0;        // the anchor — amber, 0 when none has been dropped
+let rangeSet = false;   // both ends chosen: the pair is now the search
+let vfoLive = false;    // the visitor has actually used the needle
 
 /**
  * ★ The inverse of the piecewise axis: a pixel back to a frequency, for the wheel, the drag and
@@ -1399,11 +1448,10 @@ function setView(lo, hi) {
 
 function zoomBy(factor, aboutHz) {
   const cur = dialView || DIAL_EXTENT;
-  // ★★ ABOUT THE NEEDLE. Zooming to the middle of whatever happens to be listed moves the thing
-  //    you were looking at off the glass; the needle is where the visitor said they were.
+  // ★★ ABOUT THE NEEDLE, so the frequency you are on stays put while the scale opens out around
+  //    it — which is what a zoom on a dial should do. Only the wheel names its own centre.
   const centre = Number.isFinite(aboutHz) ? aboutHz
-               : (needleA > 0 && needleB > 0) ? (needleA + needleB) / 2
-               : needleA > 0 ? needleA : (cur[0] + cur[1]) / 2;
+               : (needleV > 0 ? needleV : (cur[0] + cur[1]) / 2);
   const span = (cur[1] - cur[0]) * factor;
   const frac = (centre - cur[0]) / Math.max(1, cur[1] - cur[0]);
   setView(centre - span * frac, centre - span * frac + span);
@@ -1421,10 +1469,26 @@ function wireDial() {
    *  ★ A tenth of the window per press — small enough to creep, big enough to cross the glass
    *    without wearing the key out. Hold it and it sweeps (see below).
    */
+  /**
+   * ★★★ MOVE THE NEEDLE; SHOVE THE DIAL ONLY WHEN IT REACHES THE EDGE. A margin of a tenth keeps
+   *     some band ahead of the needle, so you can see what you are tuning INTO rather than
+   *     discovering it as it appears under the pointer.
+   *  ★ A fortieth of the window per press: fine enough to place the anchor on a band edge, and the
+   *    hold-sweep below is what crosses the dial.
+   */
+  const moveNeedle = (dHz) => {
+    vfoLive = true;
+    const cur = dialView || DIAL_EXTENT;
+    const span = cur[1] - cur[0], margin = span * 0.1;
+    needleV = Math.max(DIAL_EXTENT[0], Math.min(DIAL_EXTENT[1], needleV + dHz));
+    if (needleV < cur[0] + margin)      setView(needleV - margin, needleV - margin + span);
+    else if (needleV > cur[1] - margin) setView(needleV + margin - span, needleV + margin);
+    else renderDial();
+    applyFilters();
+  };
   const tune = (dir) => {
     const cur = dialView || DIAL_EXTENT;
-    const stepHz = (cur[1] - cur[0]) * 0.1 * dir;
-    setView(cur[0] + stepHz, cur[1] + stepHz);
+    moveNeedle((cur[1] - cur[0]) * 0.025 * dir);
   };
   /* ★ A PAGE, NOT A NUDGE — 80% of the window, so a press moves you somewhere new while leaving a
    *   sliver of what you were looking at to keep your bearings. The needle rides along, because it
@@ -1432,6 +1496,9 @@ function wireDial() {
   const page = (dir) => {
     const cur = dialView || DIAL_EXTENT;
     const d = (cur[1] - cur[0]) * 0.8 * dir;
+    // ★ The needle travels with the page — leaving it behind would put the guide off the glass,
+    //   which is the very thing these plates are meant to help with.
+    needleV = Math.max(DIAL_EXTENT[0], Math.min(DIAL_EXTENT[1], needleV + d));
     setView(cur[0] + d, cur[1] + d);
     applyFilters();
   };
@@ -1469,20 +1536,20 @@ function wireDial() {
         const rate = (span / SWEEP_SPAN_SECS) * (START_FRAC + (1 - START_FRAC) * ramp);
         const d = rate * ((now - sweep.last) / 1000) * sweep.dir;
         sweep.last = now;
-        setView(cur[0] + d, cur[1] + d);      // ★ same rule as a tap: the dial moves, not the mark
+        moveNeedle(d);                        // ★ same rule as a tap: the needle leads, the dial follows
         sweep.raf = requestAnimationFrame(frame);
       };
       sweep.raf = requestAnimationFrame(frame);
     }, HOLD_MS);
   };
   document.getElementById('setVfo').addEventListener('click', () => {
-    const cur = dialView || DIAL_EXTENT;
-    const mid = (cur[0] + cur[1]) / 2;
-    // ★ The same ladder as clicking the glass: first press places the VFO, a second makes it a
-    //   range, a third starts over. One rule wherever a needle comes from.
-    if (needleA > 0 && needleB > 0) { needleA = mid; needleB = 0; }
-    else if (needleA > 0) { needleB = mid; }
-    else { needleA = mid; }
+    vfoLive = true;
+    // ★★ PRESS ONCE: leave an amber anchor where the pointer stands, and tune on. PRESS AGAIN: the
+    //    anchor and the pointer are now the range you are searching. PRESS A THIRD TIME: let the
+    //    anchor go and you are back to a single VFO asking "who can hear this".
+    if (rangeSet) { rangeSet = false; needleA = 0; }
+    else if (needleA > 0) { rangeSet = true; }
+    else { needleA = needleV; }
     renderDial(); applyFilters();
   });
   for (const [id, dir] of [['tPrev', -1], ['tNext', 1]]) {
@@ -1501,7 +1568,7 @@ function wireDial() {
   });
   document.getElementById('clearSel').addEventListener('click', () => {
     // ★ The query, not the view: where you are looking is not something you asked for.
-    needleA = 0; needleB = 0; bandsOn.clear();
+    needleA = 0; rangeSet = false; vfoLive = false; bandsOn.clear();
     renderDial(); applyFilters();
   });
 
@@ -1573,10 +1640,9 @@ function wireDial() {
     if (row.kind === 'over') return;                 // handled by the drag above
     const hz = xToHz(pt.x, pt.y);
     if (hz === null) return;
-    // ★ One needle is "can anybody hear this"; a second makes it a range; a third starts over.
-    if (needleA > 0 && needleB > 0) { needleA = hz; needleB = 0; }
-    else if (needleA > 0) { needleB = hz; }
-    else { needleA = hz; }
+    // ★ Click to put the needle there — the same act as tuning to it, just faster.
+    vfoLive = true;
+    needleV = hz;
     renderDial(); applyFilters();
   });
 
@@ -1617,9 +1683,9 @@ function applyFilters() {
     // ★★ A SERVER THAT NEVER PUBLISHED A RANGE IS NOT A SERVER THAT CANNOT HEAR YOU — counted and
     //    named, never silently dropped.
     const mute = ALL.filter((s) => !rangesOf(s).length).length;
-    const rangeTxt = (needleA > 0 && needleB > 0)
-      ? ` · ${prettyHz(Math.min(needleA, needleB))} – ${prettyHz(Math.max(needleA, needleB))}`
-      : needleA > 0 ? ` · can hear ${prettyHz(needleA)}` : '';
+    const rangeTxt = (rangeSet && needleA > 0)
+      ? ` · ${prettyHz(Math.min(needleA, needleV))} – ${prettyHz(Math.max(needleA, needleV))}`
+      : vfoLive ? ` · can hear ${prettyHz(needleV)}` : '';
     const bandTxt = bandsOn.size ? ` · ${[...bandsOn].join(' + ')}` : '';
     sum.textContent = `Showing ${shown.length} of ${ALL.length} servers${bandTxt}${rangeTxt}`
       + (bandsOn.size > 1 ? ' — one radio must cover all of them.' : '.')
