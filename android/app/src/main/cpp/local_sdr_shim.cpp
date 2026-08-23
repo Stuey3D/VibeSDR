@@ -1270,6 +1270,16 @@ static std::atomic<double>   g_climbAt{0.0};
  *     precisely what ruins weak signals. In that second screenshot it rose about 20 dB.
  *  ★ Which is also why this is measured AFTER the compensation is applied, not before. */
 static std::atomic<float>    g_floorBeforeClimb{0.0f};
+/** ★★★ THE MISSING HALF OF THE LOOP: a verdict on the steps DOWN.
+ *  A climb has always had to prove itself. A reduction never did — so when the loop cut gain to
+ *  cure a lifted noise floor, nothing ever checked whether the floor actually came down. Where it
+ *  does not, the lift was never the front end and the cure cannot work; see the verdict below. */
+static std::atomic<double>   g_dropAt{0.0};
+static std::atomic<float>    g_floorBeforeDrop{0.0f};
+static std::atomic<double>   g_dropStepDb{0.0};
+/** ★ While this stands, the floor test is muted: it has been shown, by experiment, to be
+ *  diagnosing something gain cannot fix. */
+static std::atomic<double>   g_floorTestMutedUntil{0.0};
 /** ★★★ THE BEST (LOWEST) NOISE FLOOR SEEN AT THIS DIAL, and the continuous intermod detector built
  *  on it.
  *
@@ -14806,6 +14816,50 @@ void LocalSdrShim::overloadTick() {
         }
     }
 
+    // ★★★ DID THE LAST CUT ACTUALLY LOWER THE FLOOR? If the front end really was compressing,
+    //     taking gain away must bring the noise floor down with it — roughly step for step. When
+    //     it does not, whatever is lifting the floor is NOT the tuner, and reducing gain cannot
+    //     cure it: everything scales down together and the ratio never improves. The loop then
+    //     keeps cutting, because its own remedy leaves the symptom exactly as true as it found it.
+    //
+    //  ★★★ THAT IS THE RUNAWAY, AND IT HAS A REAL CAUSE. Measured on the Pi, 2026-08-23, same
+    //      aerial and station, sample rate the only variable: at 2.4 MSPS gain 7.7 dB, peak
+    //      −5 dBFS, SNR 32 dB; at 1.2 MSPS gain 1.4 dB, peak −11 dBFS, SNR 23 dB. At the lower
+    //      rate a huge neighbour 500 kHz away sits on the anti-alias filter's SKIRT rather than
+    //      inside its flat passband, and what folds back lifts the floor. Gain cannot touch it.
+    //  ★★ LOW-END HARDWARE NEEDS THE LOW RATES, so "use 2.4" is not an answer (Stuart,
+    //     2026-08-23: "do the proper software fix because low end hardware is going to need the
+    //     lower sample rates for the CPU").
+    //
+    //  ★ Symmetric with the climb verdict above, and that symmetry is the point: every step this
+    //    loop takes now has to show it helped. A control loop that never checks its own remedy is
+    //    not a control loop.
+    {
+        const double dropAt = g_dropAt.load(std::memory_order_relaxed);
+        if (dropAt > 0 && now - dropAt >= 4.0) {
+            g_dropAt.store(0.0, std::memory_order_relaxed);
+            const float fNow = p->iqFloorDb.load();
+            const float fWas = g_floorBeforeDrop.load(std::memory_order_relaxed);
+            const double stepDb = g_dropStepDb.load(std::memory_order_relaxed);
+            // ★ Half the step is a generous bar: real compression gives back the whole step and
+            //   more, while an unresponsive floor barely moves.
+            if (fWas < -1.0f && stepDb > 0.1 && (fWas - fNow) < stepDb * 0.5) {
+                const double until = now + 120.0;
+                g_floorTestMutedUntil.store(until, std::memory_order_relaxed);
+                // ★★ AND UNDO THE CUT. It was taken on a diagnosis just shown to be wrong, and
+                //    leaving it in place would keep the receiver deaf for the muted window.
+                g_ovlSteps.store(std::max(0, g_ovlSteps.load(std::memory_order_relaxed) - 1),
+                                 std::memory_order_relaxed);
+                // ★ The bar this raised was raised for the same wrong reason.
+                g_ovlMargin.store(3.0, std::memory_order_relaxed);
+                g_bestFloorDb.store(0.0f, std::memory_order_relaxed);   // re-learn from here
+                LOGI("that cut did not lower the floor (%.1f dB for %.1f dB of gain) — the lift is "
+                     "not the front end, so gain cannot cure it; putting it back and ignoring the "
+                     "floor for 120s", fWas - fNow, stepDb);
+            }
+        }
+    }
+
     const double peakNow = g_adcPeakDbfs.load(std::memory_order_relaxed);
     // ★★★ THE CONTINUOUS INTERMOD CHECK. Track the quietest floor seen here, and treat a sustained
     //     rise above it as the front end going non-linear — whatever the converter says about
@@ -14816,15 +14870,22 @@ void LocalSdrShim::overloadTick() {
         g_bestFloorDb.store(floorNow, std::memory_order_relaxed);
         best = floorNow;
     }
-    const bool floorLifted = (best < -1.0f) && (floorNow > best + 3.0f);
+    // ★ Muted while the last cut has been shown not to work — see the verdict above. Clipping is
+    //   measured separately and is never muted: a rail is a fact, not an inference.
+    const bool floorMuted = now < g_floorTestMutedUntil.load(std::memory_order_relaxed);
+    const bool floorLifted = (best < -1.0f) && (floorNow > best + 3.0f) && !floorMuted;
 
     bool backoffToFit = false;   // ★ see the clipRun branch: the jump is sized under the lock
+    // ★ Which reason took gain away, so the cut can be JUDGED — see the verdict above. Only the
+    //   floor's cut needs it: clipping is a measured fact, and the climb verdict has its own.
+    bool downForFloor = false;
     int want = steps;
     if (steps_forceDown) {
         want = steps + 1;                                        // undo the unhelpful climb
     } else if (clipRun < 2 && floorLifted) {
         // ★ The floor has come up and stayed up: the extra gain is making noise, not finding signal.
         want = steps + 1;
+        downForFloor = true;
     } else if (clipRun < 2 && peakNow > kAgcBackoffDbfs
                && g_adcHotRun.load(std::memory_order_relaxed) >= 2) {
         // ★★ TOO HOT WITHOUT ACTUALLY RAILING — which is exactly where intermodulation lives. The
@@ -15018,6 +15079,14 @@ void LocalSdrShim::overloadTick() {
         // ★ The gain we are LEAVING is the one that could not hold. Recorded before it is replaced.
         const int fromIdx = (tgtIdx - steps) < 0 ? 0 : (tgtIdx - steps);
         g_ovlBadGain.store(gains[(size_t)fromIdx], std::memory_order_relaxed);
+        // ★★ PUT THIS CUT ON TRIAL. If the floor really was the front end, it must come down with
+        //    the gain; the verdict a few seconds from now decides whether the diagnosis held.
+        if (downForFloor) {
+            g_floorBeforeDrop.store(p->iqFloorDb.load(), std::memory_order_relaxed);
+            g_dropStepDb.store((gains[(size_t)fromIdx] - gains[(size_t)idx]) / 10.0,
+                               std::memory_order_relaxed);
+            g_dropAt.store(now, std::memory_order_relaxed);
+        }
     }
     if (want < steps) {                       // this was a climb — put it on trial
         g_floorBeforeClimb.store(p->iqFloorDb.load(), std::memory_order_relaxed);

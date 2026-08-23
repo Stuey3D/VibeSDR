@@ -211,7 +211,13 @@ std::string buildStatus(int port) {
                     const std::string r = radios.substr(start, k - start + 1);
                     if (!first) j += ',';
                     first = false;
-                    j += "{\"name\":\"" + jsonStr(r, "label") + "\"";
+                    // ★★ THE RADIO'S OWN ID, so a listener's page can ask THIS receiver how
+                    //    busy it is rather than waiting on our next ping. The listing's counts are
+                    //    up to fifteen minutes old, and a stale FULL turns people away from a
+                    //    radio that is free. Already public — it is the /r/<id>/ route the
+                    //    landing page links to — so nothing new is disclosed.
+                    j += "{\"id\":\"" + jsonStr(r, "id") + "\"";
+                    j += ",\"name\":\"" + jsonStr(r, "label") + "\"";
                     j += ",\"driver\":\"" + jsonStr(r, "driver") + "\"";
                     j += ",\"mode\":\"" + jsonStr(r, "mode") + "\"";
                     j += std::string(",\"locked\":") + (jsonBool(r, "locked") ? "true" : "false");

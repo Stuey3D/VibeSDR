@@ -715,6 +715,39 @@ async function withLiveCounts(servers) {
       if (Number.isFinite(j.maxUsers)) s.maxListeners = Number(j.maxUsers);
       if (Number.isFinite(j.freeInSec)) s.freeInSec = Number(j.freeInSec);
       s.live = true;
+
+      // ★★★ AND EACH RADIO SEPARATELY ON A MULTI-RADIO SERVER, because the answer above is the
+      //     MACHINE's and says nothing about which receiver is busy. The listing's per-radio
+      //     counts come from the ping and are up to fifteen minutes old, so a radio someone had
+      //     just left went on reading FULL — and a stale FULL is the bad direction: it turns
+      //     people away from a receiver that is free, where a stale FREE costs only a wasted
+      //     click (Stuart, 2026-08-23: "I closed the tab from the Pi and its still saying full").
+      //  ★★ BOUNDED ON PURPOSE. One request per radio, only where there is more than one radio —
+      //     a single-radio server IS its machine, so the answer above already covers it — and
+      //     only for the first few, so a directory of two hundred servers cannot turn one refresh
+      //     into a flood. What is not refreshed keeps the listing's figure, which is what it did
+      //     before.
+      //  ★ /r/<id>/vibeserver.json is the route the receiver's own landing page uses, so it is
+      //    proven rather than assumed — the same lesson as the loopback probe that was pointed at
+      //    a port nothing listened on.
+      const radios = Array.isArray(s.radios) ? s.radios : [];
+      if (radios.length > 1) {
+        await Promise.all(radios.slice(0, 6).map(async (rad) => {
+          if (!rad || !rad.id) return;
+          try {
+            const c2 = new AbortController();
+            const t2 = setTimeout(() => c2.abort(), 4000);
+            const rr = await fetch(`https://${s.address}/r/${encodeURIComponent(rad.id)}/vibeserver.json`,
+                                   { signal: c2.signal, cache: 'no-store' });
+            clearTimeout(t2);
+            if (!rr.ok) return;
+            const rj = await rr.json();
+            if (Number.isFinite(rj.listeners))  rad.listeners = Number(rj.listeners);
+            if (Number.isFinite(rj.maxUsers))   rad.maxListeners = Number(rj.maxUsers);
+            if (Number.isFinite(rj.freeInSec))  rad.freeInSec = Number(rj.freeInSec);
+          } catch { /* ★ keep the listing's figure — one slow radio is not news about the rest */ }
+        }));
+      }
     } catch {
       // ★★★ A SERVER THAT DOES NOT ANSWER MUST NOT LOOK HEALTHY. This used to keep the
       //     directory's own figures, so a receiver whose tunnel had died went on showing

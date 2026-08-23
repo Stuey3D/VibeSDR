@@ -489,6 +489,8 @@ async function list(env) {
       //   rotates; this does not.
       address: r.slug ? `${r.slug}.${PUBLIC_ZONE}` : null,
       grid: r.grid, lat: r.lat, lon: r.lon, country: r.country,
+      // ★ Passed through whole, `id` included — the page addresses each radio's own
+      //   /r/<id>/vibeserver.json to refresh a count the ping cannot keep current.
       radios: Array.isArray(status.radios) ? status.radios : [],
       // ★★★ SAID, NOT INFERRED. The page guessed "temporary share" from how far the expiry sat
       //     from the last ping, so an ordinary listing with a 30-minute TTL was drawn as a yellow
