@@ -891,7 +891,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (isRemoteShim && route.params.localHost) {
         // A remote VibeServer publishes its own location, including the country.
         try {
-          const r = await fetch(`http://${route.params.localHost}:${route.params.localPort}/location`);
+          // ★★ THE SCHEME COMES FROM THE ADDRESS WE CONNECTED ON, not from an assumption. This
+          //    was hardcoded http:// back when "remote shim" meant a LAN address — a tunnelled
+          //    server is https on 443, so it asked http://host:443 and got nothing.
+          const r = await fetch(`${connectBase.replace(/\/+$/, '')}/location`);
           const j = await r.json();
           // ★★★ A LOCATOR IS A POSITION, AND A POSITION HAS A COUNTRY. Without a country there is
           //     no ECC, and without an ECC the RadioDNS lookup is SKIPPED ENTIRELY — so a server
@@ -1598,8 +1601,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     let dead = false;
     setRawAudioPolicy(null);
     if (!route.params.localPort && !route.params.localHost) return;
-    const h = route.params.localHost ?? '127.0.0.1';
-    fetchOccupancy(`http://${h}:${route.params.localPort}`)
+    // ★ Same fix as /location above: a tunnelled server is https, and http://host:443 answers
+    //   nothing. Silent when it fails, so it hid rather than complained.
+    fetchOccupancy(connectBase.replace(/\/+$/, ''))
       .then((o) => {
         if (dead) return;
         setRawAudioPolicy(o?.uncompressed ?? null);

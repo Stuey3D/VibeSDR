@@ -57,11 +57,19 @@ const VIBESERVER_DIR_URL = 'https://vibeserver.vibesdr.net/api/directory';
 /**
  * Public VibeServers, from our own directory.
  *
- * ★★★ CONNECT TO THE STABLE ADDRESS, NEVER THE TUNNEL HOSTNAME. A Quick Tunnel's
- *     *.trycloudflare.com name is reassigned every time the server restarts, so a favourite saved
- *     from it would be dead by morning — and could later belong to a stranger. `address` is the
- *     slug on our own zone and does not move; `url` is the fallback for a port-forwarded listing
- *     that never had one.
+ * ★★★ CONNECT TO THE TUNNEL DIRECTLY. THE STABLE ADDRESS CANNOT CARRY A SOCKET.
+ *     `address` — the slug on our own zone — is served by our WORKER, which proxies the landing
+ *     page and injects the direct host so the BROWSER can then open its sockets straight to the
+ *     receiver. A Worker does not proxy WebSockets: pointed at the slug, every upgrade came back
+ *     "426 Upgrade Required" from Cloudflare and the app simply would not connect (measured
+ *     2026-08-23 — the slug 426, the tunnel 101, same server, same second).
+ *  ★★ AND IT WOULD HAVE BEEN WRONG EVEN IF IT WORKED. Audio and waterfall through our Worker is
+ *     precisely what the whole design exists to avoid: "the tunnel only being for discovery and
+ *     the data being handled directly so that we dont hammer our cloudflare free limit" (Stuart,
+ *     at the very start of this). The stable address is for FINDING and SHARING; the data goes
+ *     direct.
+ *  ★ The cost is that a favourite saved from a listing goes stale when the tunnel rotates — the
+ *    directory is the way back, and that is a far smaller price than not connecting at all.
  * ★★ The directory already answers with what a listener needs BEFORE connecting — occupancy, the
  *    session limit, whether a PIN is required — so none of it has to be probed here. That is the
  *    whole reason the listing carries a status blob.
@@ -83,7 +91,8 @@ async function fetchVibeServers(lat?: number, lon?: number): Promise<SDRInstance
     const device = radios.length === 1
       ? String(radios[0]?.name || radios[0]?.driver || '').trim() || undefined
       : radios.length > 1 ? `${radios.length} radios` : undefined;
-    const url = String(s.address ? `https://${s.address}` : (s.url || '')).replace(/\/+$/, '');
+    // ★ The tunnel first; `address` only where a listing has no direct URL at all.
+    const url = String(s.url || (s.address ? `https://${s.address}` : '')).replace(/\/+$/, '');
     return {
       uuid: typeof s.id === 'string' ? s.id : null,
       name: String(s.name || 'VibeServer'),

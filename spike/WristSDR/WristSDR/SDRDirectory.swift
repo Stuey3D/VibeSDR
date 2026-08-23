@@ -268,10 +268,13 @@ enum Directories {
   // ── UberSDR — clean JSON API ─────────────────────────────────────────────────
   // ── VibeServer — our own directory ───────────────────────────────────────────
   /**
-   ★★★ CONNECT TO THE STABLE ADDRESS, NEVER THE TUNNEL HOSTNAME. A Quick Tunnel's
-       *.trycloudflare.com name is reassigned every time the server restarts, so a favourite saved
-       from one would be dead by morning and could later belong to a stranger. `address` is the
-       slug on our own zone and does not move.
+   ★★★ CONNECT TO THE TUNNEL DIRECTLY — THE STABLE ADDRESS CANNOT CARRY A SOCKET. The slug on
+       our own zone is served by our WORKER, and a Worker does not proxy WebSockets: every upgrade
+       against it returns 426 while the tunnel returns 101 (measured 2026-08-23). It would also
+       push audio and waterfall through our own edge, which is the one thing this design exists to
+       avoid — the tunnel is for DISCOVERY, the data goes direct.
+    ★ A favourite saved from a listing goes stale when the tunnel rotates; the directory is the way
+      back, and that is a smaller price than not connecting.
    ★★ EVERY LISTING IS HTTPS, which matters more here than anywhere: a watch cannot fall back to a
       web view, and NWConnection cannot reach a plain ws:// on a LAN address at all. A tunnelled
       VibeServer is the one public receiver kind that is always reachable from a watch.
@@ -285,7 +288,7 @@ enum Directories {
     let items = json?["servers"] as? [[String: Any]] ?? []
     return items.compactMap { it in
       let address = (it["address"] as? String) ?? ""
-      var publicUrl = address.isEmpty ? ((it["url"] as? String) ?? "") : "https://\(address)"
+      var publicUrl = (it["url"] as? String) ?? (address.isEmpty ? "" : "https://\(address)")
       publicUrl = publicUrl.trimmedTrailingSlash
       guard !publicUrl.isEmpty else { return nil }
       let maxU = (it["maxListeners"] as? Int) ?? 0
