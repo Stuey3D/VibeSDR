@@ -38,6 +38,20 @@
      a terminal font reads as two pages stapled together — which is what this was.
      ★ The `font` SHORTHAND had to go, not just change: it was set after font-family and silently
        reset it, so the first attempt at this looked exactly as before. */
+  /* ★★★ touch-action: manipulation, ON THE WHOLE PAGE — the fix the WEB CLIENT already carries
+        (web/client/index.html, `#app { touch-action: manipulation }`) and the directory did not.
+        iOS reads two quick taps on anything as "zoom the page", so tapping the tune keys twice in
+        a second — which is exactly how you tune — zoomed the directory in and out under the
+        visitor's thumb (Stuart, 2026-08-23, on an iPhone). `manipulation` removes the double-tap
+        gesture and the 300ms click delay while LEAVING scrolling and pinch alone, so it costs
+        nothing else.
+     ★★ ON THE BODY, not on each control, because the gesture is not the control's — it is the
+        page's, and a per-button list is a list somebody has to remember to add to. Children that
+        set their own value still win, which is what keeps the dial's `touch-action: none` (the
+        thing that stops a drag turning into a page scroll).
+     ★ NOT user-scalable=no: that takes pinch-zoom from people who need it, and iOS has ignored it
+       since iOS 10 anyway — the same note the web client leaves beside its own fix. */
+  body { touch-action: manipulation; }
   body { margin: 0; background: var(--bg); color: var(--text);
          font-size: 15px; line-height: 1.5;
          font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
@@ -270,13 +284,6 @@
   .keyPanel { display: inline-flex; align-items: center; gap: 7px;
               background: linear-gradient(#0b0f0b, #060806);
               border: 1px solid rgba(40,167,69,.22); border-radius: 10px; padding: 4px 8px; }
-  /* ★★ touch-action: manipulation — WITHOUT IT, TWO QUICK TAPS ARE A DOUBLE-TAP ZOOM. iOS reads
-        rapid taps on any element as "zoom the page", so tapping the tune keys twice in a second —
-        which is exactly how you tune — zoomed the whole directory in and out under the visitor's
-        thumb (Stuart, 2026-08-23, on an iPhone). It also drops the 300ms tap delay, so the keys
-        answer immediately. Every control that is TAPPED gets it, not just these. */
-  .keyPanel button, .dialEdge, .ctyBtn, .ctyRow, .ctyFoot button, .chip
-    { touch-action: manipulation; }
   .keyPanel button { min-width: 46px; height: 26px; cursor: pointer; font-family: inherit;
                      font-size: 15px; line-height: 1; color: var(--phosphor);
                      background: linear-gradient(#141a14, #0a0d0a);
@@ -303,7 +310,20 @@
   /* ★★ A DIAL IS NOT TEXT. Dragging it was selecting the legend and half the page underneath
         (Stuart, 2026-08-23) — the same rule as the app's sliders, where touch-action must never
         be given back. */
-  .dialGlass, .dialCtl, .dialTitle { user-select: none; -webkit-user-select: none; }
+  /* ★★★ A TUNING KEY IS HELD DOWN ON PURPOSE — that is the sweep — AND TAPPED RAPIDLY, and iOS
+        reads both as something else: a hold becomes "select this text" and raises the callout
+        (on iOS 18 the writing-tools/AI menu), while quick taps become a double-tap zoom. The
+        press that raised the callout never completes, so the key stays lit and the dial keeps
+        moving. `user-select: none` ALONE IS NOT ENOUGH — Safari needs the -webkit- pair and the
+        callout suppressed explicitly, which is exactly what the web client's own tune card does
+        (web/client/index.html: "A TUNING BUTTON IS HELD DOWN ON PURPOSE").
+     ★ PINCH-ZOOM IS UNTOUCHED. `touch-action: manipulation` removes the double-tap gesture and
+       the 300ms delay and leaves panning and pinch alone — the page still zooms on a phone,
+       which it must (Stuart, 2026-08-23). */
+  .dialGlass, .dialCtl, .dialTitle, .keyPanel button, .dialEdge, .ctyBtn, .ctyRow {
+    user-select: none; -webkit-user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+  }
   .dialGlass { cursor: crosshair; touch-action: none; position: relative; }
   .dialEdge { position: absolute; top: 0; bottom: 0; width: 34px; border: 0; cursor: pointer;
               color: var(--phosphor); font-family: inherit; font-size: 15px; line-height: 1;
