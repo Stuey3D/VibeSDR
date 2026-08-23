@@ -1248,6 +1248,19 @@ static std::atomic<bool>     g_rtlAgc{false};
 //     moves, so this is an operating point, not the loudest level that avoids clipping.
 static constexpr double      kAgcTargetDbfs  = -6.0;
 static constexpr double      kAgcBackoffDbfs = -6.0;
+/**
+ * ★★★ THE PEAK IS THE LIMIT; THE SNR IS THE GOAL. Aiming at a fixed converter level answers the
+ *  wrong question — Stuart, on 96.1: "after a certain gain level you cannot get anymore SNR … that
+ *  needs around 12.5–14.4 dB to get 30 dB snr but the AGC only ever goes up to around 7.7 or 8.7"
+ *  (2026-08-23). Of course it did: −6 dBFS is reached at 8.7 dB there, so the loop stopped while
+ *  the STATION was still improving. A receiver is not for filling a converter, it is for hearing
+ *  something.
+ * ★★ So above the operating point the loop keeps climbing only while each step BUYS SNR, and stops
+ *  the moment a step buys none — the plateau he describes. The converter still gets the last word
+ *  through this hard ceiling, which is 4 dB tighter than clipping so a fade or a passing lorry
+ *  cannot rail it between measurements.
+ */
+static constexpr double      kAgcHardCeilDbfs = -2.0;
 static std::atomic<double>   g_ovlMargin{3.0};
 static std::atomic<double>   g_ovlLastChangeAt{0.0};
 /** ★★★ MORE GAIN IS NOT MORE SIGNAL, AND THIS IS WHERE A HEADROOM-ONLY AGC GOES WRONG.
@@ -1298,6 +1311,11 @@ static std::atomic<float>    g_shoulderBeforeClimb{-200.0f};
 /** ★ The quietest the shoulders have been FOR THE GAIN THEY WERE MEASURED AT — the continuous
  *  version of the climb's shoulder test. 0 = unset. See `shoulderLifted`. */
 static std::atomic<float>    g_bestShoulderDb{0.0f};
+/** ★★ "There is no more SNR to be had here." Set when a climb past the operating point bought
+ *  nothing, cleared when the signal fades away from where that was decided (or by agcForget). It
+ *  is what stops the loop reaching for gain it has just proved is useless. */
+static std::atomic<bool>     g_snrPlateau{false};
+static std::atomic<double>   g_snrPlateauPeak{-200.0};
 /** ★ While this stands, the floor test is muted: it has been shown, by experiment, to be
  *  diagnosing something gain cannot fix. */
 static std::atomic<double>   g_floorTestMutedUntil{0.0};
@@ -14998,6 +15016,22 @@ void LocalSdrShim::overloadTick() {
          */
         const double shoulderAllowed = (climbStep > 0.1 ? climbStep : 0.0) + 2.0;
         const bool  cameUpAsABlock = shldWas > -190.0f && (double)shldRose > shoulderAllowed;
+        /* ══ THE PANEL, AND ITS ORDER IS THE POINT ══════════════════════════════════════════════
+         * ★★★ Stuart: "the agc needs multiple checks so SNR to make sure the peak is growing, but
+         *     also the SNR may increase with intermodulation so we need to watch for that at the
+         *     same time." Precisely — and it is why INTERMOD IS ASKED FIRST. When the products land
+         *     on the station itself the SNR can IMPROVE while the band turns to mush, so an SNR
+         *     rise on its own is not evidence of anything. The shoulders are consulted before the
+         *     SNR is allowed to approve the step, and a step that fails them is handed back
+         *     whatever the SNR says.
+         *  ★ The order below is therefore load-bearing, not stylistic:
+         *      1. did the neighbourhood rise faster than the gain?  → intermodulation, give it back
+         *      2. did the station gain a decibel of SNR?            → real, keep climbing
+         *      3. did it LOSE SNR?                                  → give it back
+         *      4. neither, and we are past the operating point?     → the plateau; keep it, stop
+         *    Anyone reorganising this must keep 1 above 2, or the loop can be talked into
+         *    intermodulation by its own SNR meter.
+         */
         if (cameUpAsABlock) {
             const double m = std::min(12.0, g_ovlMargin.load(std::memory_order_relaxed) + 3.0);
             g_ovlMargin.store(m, std::memory_order_relaxed);
@@ -15006,6 +15040,9 @@ void LocalSdrShim::overloadTick() {
                  "%.0f dB)", shldRose, climbStep, m);
             g_adcCleanRun.store(0, std::memory_order_relaxed);
             steps_forceDown = true;
+        } else if (snrWas > 6.0f && snrNow > snrWas + 1.0f) {
+            // ★ It bought SNR: keep going, and forget any earlier decision that there was none.
+            g_snrPlateau.store(false, std::memory_order_relaxed);
         } else if (snrWorse) {
             const double m = std::min(12.0, g_ovlMargin.load(std::memory_order_relaxed) + 3.0);
             g_ovlMargin.store(m, std::memory_order_relaxed);
@@ -15014,6 +15051,17 @@ void LocalSdrShim::overloadTick() {
                  snrWas - snrNow, snrWas, snrNow, m);
             g_adcCleanRun.store(0, std::memory_order_relaxed);
             steps_forceDown = true;
+        } else if (snrWas > 6.0f && snrNow < snrWas + 1.0f
+                   && g_adcPeakDbfs.load(std::memory_order_relaxed) > kAgcTargetDbfs) {
+            /* ★★★ THE PLATEAU. Past the operating point, a step that buys less than a decibel of
+             *     SNR has bought nothing — the station is as far out of the noise as this receiver
+             *     can put it, and more gain from here is only more level. The step is KEPT (it did
+             *     no harm), and the loop simply stops reaching. */
+            g_snrPlateau.store(true, std::memory_order_relaxed);
+            g_snrPlateauPeak.store(g_adcPeakDbfs.load(std::memory_order_relaxed),
+                                   std::memory_order_relaxed);
+            LOGI("that step bought %.1f dB of SNR (%.1f -> %.1f) — no more to be had here, "
+                 "holding at this gain", snrNow - snrWas, snrWas, snrNow);
         } else if (floorWas < -1.0f && (double)(floorNow - floorWas) > allowed) {
             // ★ Give it back, and make the next attempt prove more. This is the same "learn from a
             //   failed climb" the clipping path uses — the two failures differ in what they measure,
@@ -15305,7 +15353,16 @@ void LocalSdrShim::overloadTick() {
             const int bad = g_ovlBadGain.load(std::memory_order_relaxed);
             if (bad >= 0 && gains[(size_t)idx] >= bad && cleanRun < 120) return;
         }
-        if (peak + stepDb > kAgcTargetDbfs) return;
+        /* ★★★ CLIMB PAST THE OPERATING POINT WHILE THE STATION IS STILL IMPROVING. Below −6 dBFS
+         *     the loop climbs freely; above it, only until a step stops buying SNR (see the
+         *     plateau). The converter's own limit is what finally stops it.
+         *  ★ And the plateau lapses if the signal fades well away from where it was decided — that
+         *    was an answer about a particular signal at a particular strength. */
+        if (g_snrPlateau.load(std::memory_order_relaxed)) {
+            if (peak > g_snrPlateauPeak.load(std::memory_order_relaxed) - 6.0) return;
+            g_snrPlateau.store(false, std::memory_order_relaxed);
+        }
+        if (peak + stepDb > kAgcHardCeilDbfs) return;
         // ★ And never climb while the floor is already lifted — that is the condition a climb
         //   created, and another step would deepen it.
         if (floorLifted) return;
@@ -15343,7 +15400,10 @@ void LocalSdrShim::overloadTick() {
             int best = idx;
             for (int j = idx + 1; j <= tgtIdx; j++) {
                 const double add = (gains[(size_t)j] - gains[(size_t)from]) / 10.0;
-                if (peak + add > kAgcTargetDbfs) break;
+                // ★ The same ceiling the single step now uses, or the jump would stop at the old
+                //   operating point and the loop would creep the rest of the way — the exact
+                //   slowness the jump exists to remove.
+                if (peak + add > kAgcHardCeilDbfs) break;
                 if (peak + add > -mgn) break;
                 if (bad >= 0 && gains[(size_t)j] >= bad && cleanRun < 120) break;
                 best = j;
@@ -15903,6 +15963,7 @@ static void agcForget(const char* why) {
     g_ovlMargin.store(3.0, std::memory_order_relaxed);
     g_bestFloorDb.store(0.0f, std::memory_order_relaxed);      // 0 = unset, see the floor test
     g_bestShoulderDb.store(0.0f, std::memory_order_relaxed);   // ★ likewise — it is a level HERE
+    g_snrPlateau.store(false, std::memory_order_relaxed);      // ★ a different station, a new answer
     g_floorTestMutedUntil.store(0.0, std::memory_order_relaxed);
     g_climbAt.store(0.0, std::memory_order_relaxed);
     g_dropAt.store(0.0, std::memory_order_relaxed);
