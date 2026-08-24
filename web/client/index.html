@@ -972,6 +972,23 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
             line-height: 1.2; animation: sqlBreathe 1.5s ease-in-out infinite; }
 #initChip.set { display: inline-block; }
 /* Louder than SQL or SETTLING on purpose: those are states, this is a fault. */
+/* ★ Greyed, not hidden: the listener should still be able to SEE what the receiver has chosen —
+   "You can still see what they are set to", the same courtesy the admin lock already gives. */
+#rfCentreMark {
+  position: absolute; top: 0; bottom: 0; width: 0; z-index: 21; pointer-events: none;
+  /* ★ Dashed, so it never reads as a signal or as the VFO — it is where the RADIO is pointed,
+     not where anyone is listening. */
+  border-left: 1px dashed rgba(120,200,255,0.75);
+}
+#rfCentreMark[hidden] { display: none; }
+#rfCentreLabel {
+  position: absolute; white-space: nowrap; transform: translate(6px, 0);
+  color: #7bc6ff; font-size: 10px; letter-spacing: 0.5px;
+  font-family: var(--mono, monospace); text-shadow: 0 1px 3px #000, 0 0 6px #000;
+}
+.mrow.clarityHeld { opacity: 0.45; }
+.mrow.clarityHeld select, .mrow.clarityHeld input, .mrow.clarityHeld button { pointer-events: none; }
+#rowClarity label small { display: block; opacity: 0.65; font-size: 0.75em; letter-spacing: 0; }
 #ovlChip { display: none; font-size: 0.62em; letter-spacing: 0.14em; padding: 1px 4px;
            border-radius: 3px; border: 1px solid rgba(255,120,60,0.8); color: #ff8a3d;
            line-height: 1.2; animation: sqlBreathe 1.2s ease-in-out infinite; }
@@ -2333,6 +2350,13 @@ select.btn { padding: 6px 8px; }
        line of it was written: "we will need a display to show what parts are working".
        ★ Two of them, unlike #rangeGap's one: the passband sits inside the view, so both sides can
        be showing at once. -->
+  <!-- ★★★ WHERE THE TUNER ACTUALLY SITS. VibeClarity moves the RF centre away from a blowtorch —
+       worth +2.3 dB of separation, measured — but it moves the CAPTURE underneath a view that has
+       not moved, and nothing on screen would say so. Drawn in the second-VFO idiom because that is
+       exactly what it is: a second thing with a frequency, which the listener is used to seeing
+       marked. Stuart: "maybe for the RF centre you bring back the 2nd VFO ... a little title
+       Controlled with VibeClarity". -->
+  <div id="rfCentreMark" hidden><span id="rfCentreLabel"></span></div>
   <div id="ifGapLo" class="ifGap"><span></span></div>
   <div id="ifGapHi" class="ifGap"><span></span></div>
   <!-- ★ The BOUNCE toast. The blacked-out region above explains the dead space permanently;
@@ -3274,7 +3298,7 @@ select.btn { padding: 6px 8px; }
     <label>RECEIVER</label>
     <span class="val" id="radioName" style="flex:1">—</span>
   </div>
-  <div class="mrow">
+  <div class="mrow" id="rowGain">
     <label for="gain">GAIN</label>
     <input type="range" id="gain" min="0" max="0" value="0">
     <span class="val" id="gainVal">—</span>
@@ -3286,7 +3310,7 @@ select.btn { padding: 6px 8px; }
        tuner a step at a time, which is the thing an RSP gets from hardware and a dongle never had.
        ★ Named so it cannot be confused with DIGITAL AGC further down, which is the RTL2832's own
          and a different thing entirely. -->
-  <div class="mrow">
+  <div class="mrow" id="rowAgc">
     <label>VIBE AGC<span class="sub">VibeSDR Custom AGC for RTL-SDR</span></label>
     <div class="seg"><button class="btn" id="gainAuto"
       title="VibeSDR's own automatic gain: it watches the ADC for overload and moves the tuner gain to suit. The dongle's built-in one is unreliable and is never used.">AUTO</button></div>
@@ -3406,6 +3430,16 @@ select.btn { padding: 6px 8px; }
       <input type="range" id="ahfPpb" min="-5000" max="5000" step="5" value="0">
       <span class="val" id="ahfPpbVal">0 ppb</span>
     </div>
+  </div>
+  <!-- ★★★ VibeClarity — ONE SWITCH THAT OWNS THE FRONT END. Above the individual controls because
+       it SUPERSEDES them: with it on, the gain, the IF filter and where the tuner sits are all
+       chosen by the receiver, and those controls grey out to say so rather than sitting there
+       looking live. A control that appears operable and is being overridden is the same fault as
+       one that does nothing (AGENTS.md). -->
+  <div class="mrow rtlOnly" id="rowClarity">
+    <label for="clarity">VIBE CLARITY
+      <small>Gain, IF filter and RF centre, chosen automatically</small></label>
+    <button id="clarity" class="btn">OFF</button>
   </div>
   <div class="mrow" id="rowRate">
     <label for="rate">SAMPLE RATE</label>

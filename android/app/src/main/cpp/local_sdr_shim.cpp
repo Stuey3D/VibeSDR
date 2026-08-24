@@ -1373,6 +1373,40 @@ static std::atomic<double>   g_demodBwHz{200000.0};
  *  set it last is a register that must be asserted every time, not set once and trusted.
  *  0 = librtlsdr's automatic choice, which is what every build before this one did. */
 static std::atomic<int>      g_tunerBwHz{0};
+/* ══ VibeClarity ═══════════════════════════════════════════════════════════════════════════════
+ * ★★★ ONE SWITCH THAT OWNS THE FRONT END: the gain (VibeAGC), the tuner's IF filter, and WHERE THE
+ *     TUNER SITS. Stuart's aim, in his words: "eventually if we can I'd like AGC and IF filtering
+ *     to be fully automatic based on situation ... easiest to use for a non radio techy".
+ * ★★★ THE RF CENTRE IS THE BIG ONE, AND IT ONLY WORKS IF EVERY MOVE IS VERIFIED. Measured across
+ *     seven stations at a pinned gain, pushing the centre 960 kHz away from the loudest offender:
+ *       96.1 +2.7   97.2 +2.7   103.6 -9.9   104.7 +1.7   105.4 +5.0   105.7 +2.0   106.0 -6.9
+ *     Applied BLINDLY that averages -0.4 dB — nothing at all. Keeping only the moves that helped:
+ *     +2.3 dB and never negative. The verification IS the feature.
+ * ★★★ AND IT CANNOT BE COMPUTED IN ADVANCE. The spectrum only shows what is INSIDE the current
+ *     capture, so any rule is blind to what it is moving TOWARDS — 105.7's loudest neighbour read
+ *     106.36, so "maximise the distance" pushed the centre down into 104.2. No better sum fixes
+ *     that; the information is not there. Try, measure, revert.
+ *  ★ Verified on SEPARATION, not headroom: 105.7's ADC peak got worse while its separation
+ *    improved, so a move judged on converter headroom would have thrown away a good one. */
+static std::atomic<bool>     g_clarityOn{false};
+/** ★ How far from the VFO the tuner is being asked to sit, in Hz. 0 = wherever panning left it,
+ *  which is the behaviour every build before this one had. */
+static std::atomic<double>   g_clarityBiasHz{0.0};
+/** ★ The bias currently on trial, the separation before it, and when it was applied. */
+static std::atomic<double>   g_clarityTrialBias{0.0};
+static std::atomic<float>    g_claritySepBefore{-200.0f};
+static std::atomic<double>   g_clarityTrialAt{0.0};
+static std::atomic<double>   g_clarityNextAt{0.0};
+/** ★ Which directions have been tried at this dial, so a refused one is not offered twice. */
+static std::atomic<int>      g_clarityTried{0};      // bit 0 = up, bit 1 = down
+static void clarityForget() {
+    g_clarityBiasHz.store(0.0, std::memory_order_relaxed);
+    g_clarityTrialBias.store(0.0, std::memory_order_relaxed);
+    g_claritySepBefore.store(-200.0f, std::memory_order_relaxed);
+    g_clarityTrialAt.store(0.0, std::memory_order_relaxed);
+    g_clarityNextAt.store(0.0, std::memory_order_relaxed);
+    g_clarityTried.store(0, std::memory_order_relaxed);
+}
 static std::atomic<double>   g_ovlMargin{3.0};
 static std::atomic<double>   g_ovlLastChangeAt{0.0};
 /** ★★★ MORE GAIN IS NOT MORE SIGNAL, AND THIS IS WHERE A HEADROOM-ONLY AGC GOES WRONG.
@@ -2420,6 +2454,110 @@ struct LocalSdrShim::Impl {
     // felt like dragging through treacle, and the RF centre chased the pan.
     //
     // `viewSpan` is the width of the crop being displayed; pass 0 when unknown.
+    /** ★★★ FRAMING: try a centre, measure it, hand it back if it did not help.
+     *
+     *  ★★★ THE STATE MACHINE IS THE FEATURE. Measured across seven stations at a pinned gain,
+     *  pushing the centre 960 kHz away from the loudest offender helped five (+1.7 to +5.0 dB of
+     *  separation) and hurt two (-6.9, -9.9). Applied BLINDLY that averages -0.4 dB — nothing.
+     *  Keeping only what measured better: +2.3 dB, never negative.
+     *
+     *  ★★★ THE DIRECTION IS FOUND BY TRIAL, NOT ARITHMETIC. The capture shows only what is INSIDE
+     *  it, so choosing from the spectrum is choosing blind — on 105.7 the loudest neighbour sat
+     *  above, so "move away from it" went down into 104.2 and made things worse. Try one way; if
+     *  it did not help, hand it back and try the other; if neither helps, stay put and do not ask
+     *  again for a minute.
+     *
+     *  ★★ JUDGED ON SEPARATION, like every other verdict here — not on converter headroom. On
+     *  105.7 the ADC peak got WORSE on a move that improved separation by 2 dB, so a headroom test
+     *  would have thrown away a move the listener wanted.
+     *  ★ Only while the AGC is settled: a centre move changes the level, and judging one while the
+     *  gain is still hunting measures the gain instead of the framing.
+     */
+    void clarityTick(double now) {
+        if (!g_clarityOn.load(std::memory_order_relaxed)) return;
+        if (g_vsLockedCentre.load() > 0.0) return;      // the owner pinned the window
+        const double step = std::max(240e3, sampleRate * 0.40);
+
+        const double trialAt = g_clarityTrialAt.load(std::memory_order_relaxed);
+        if (trialAt > 0.0) {
+            if (now - trialAt < 5.0) return;            // still settling; nothing to judge yet
+            const float before = g_claritySepBefore.load(std::memory_order_relaxed);
+            const float after  = sepAvgDb.load();
+            const double tried = g_clarityTrialBias.load(std::memory_order_relaxed);
+            g_clarityTrialAt.store(0.0, std::memory_order_relaxed);
+            if (after > before + 1.0f) {
+                LOGI("VibeClarity: centre %+.0f kHz bought %.1f dB of separation (%.1f -> %.1f) "
+                     "— keeping it", tried / 1e3, after - before, before, after);
+                g_clarityNextAt.store(now + 60.0, std::memory_order_relaxed);
+                return;                                  // keep the bias where it is
+            }
+            // ★ Say what actually happened. This printed "cost -0.4 dB" when separation had
+            //   IMPROVED by 0.4 and merely missed the keep-threshold — a double negative that
+            //   reads as a loss.
+            if (after >= before)
+                LOGI("VibeClarity: centre %+.0f kHz gained only %.1f dB (%.1f -> %.1f) "
+                     "— not worth the move, putting it back",
+                     tried / 1e3, after - before, before, after);
+            else
+                LOGI("VibeClarity: centre %+.0f kHz cost %.1f dB of separation (%.1f -> %.1f) "
+                     "— putting it back", tried / 1e3, before - after, before, after);
+            g_clarityBiasHz.store(0.0, std::memory_order_relaxed);
+            applyCentreNow();
+            const int done = g_clarityTried.load(std::memory_order_relaxed);
+            if (done == 3) g_clarityNextAt.store(now + 60.0, std::memory_order_relaxed);
+            return;
+        }
+
+        if (now < g_clarityNextAt.load(std::memory_order_relaxed)) return;
+        if (!g_settled.load(std::memory_order_relaxed)) return;
+        if (now < g_gainSettleUntil.load(std::memory_order_relaxed)) return;
+        const float sep = sepAvgDb.load();
+        if (sep < -190.0f) return;                       // no measurement to compare against
+
+        // ★ Up first, then down; both refused means stay put and stop asking for a minute.
+        int done = g_clarityTried.load(std::memory_order_relaxed);
+        double bias = 0.0;
+        if (!(done & 1))      { bias = +step; done |= 1; }
+        else if (!(done & 2)) { bias = -step; done |= 2; }
+        else { g_clarityNextAt.store(now + 60.0, std::memory_order_relaxed); return; }
+        g_clarityTried.store(done, std::memory_order_relaxed);
+        g_claritySepBefore.store(sep, std::memory_order_relaxed);
+        g_clarityTrialBias.store(bias, std::memory_order_relaxed);
+        g_clarityTrialAt.store(now, std::memory_order_relaxed);
+        g_clarityBiasHz.store(bias, std::memory_order_relaxed);
+        /* ★★★ FRAMING NEEDS ROOM, AND ZOOMING OUT TAKES IT AWAY. dongleForView keeps the WHOLE
+         *     VISIBLE WINDOW inside the capture, so the room to move the tuner is exactly
+         *     capture/2 - view/2: at full zoom-out it is ZERO and the centre is nailed to the view.
+         *     That is correct — asking to see the whole capture means the capture must be centred
+         *     on what you are seeing — but it means framing is a ZOOMED-IN capability, and a
+         *     silent no-op here looked like a broken feature for two runs. */
+        const double before = rtlCenter.load();
+        applyCentreNow();
+        if (std::fabs(rtlCenter.load() - before) <= 1.0) {
+            LOGI("VibeClarity: no room to move the tuner — the view fills the capture. "
+                 "Zoom in and framing has %.0f kHz to work with per 100 kHz of zoom.",
+                 100.0);
+            g_clarityBiasHz.store(0.0, std::memory_order_relaxed);
+            g_clarityTrialAt.store(0.0, std::memory_order_relaxed);
+            g_clarityNextAt.store(now + 30.0, std::memory_order_relaxed);
+        }
+    }
+
+    /** ★ Re-decide where the tuner should sit and move it if the answer changed. Same lock, same
+     *  function and same hardware call the pan path uses — VibeClarity must not become a second
+     *  way to tune, or the two will disagree about the PLL. */
+    void applyCentreNow() {
+        std::lock_guard<std::recursive_mutex> lk(modeMtx);
+        const double v    = viewCenter.load();
+        const double span = displaySpan() / zoomFactor.load();
+        const double want = dongleForView(v, span);
+        if (std::fabs(want - rtlCenter.load()) <= 1.0) return;
+        rtlCenter.store(want);
+        tuneHw(want);
+        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        LOGI("VibeClarity: tuner centre -> %.3f MHz (VFO %.3f)",
+             want / 1e6, audioFreq.load() / 1e6);
+    }
     double dongleForView(double view, double viewSpan) {
         // ★★★ THE VFO IS NOT A POINT — IT HAS A BANDWIDTH, AND THE EDGES ARE WHERE IT DIES.
         //     This margin used to protect the VFO's CENTRE only, so a WFM signal could sit within
@@ -2470,6 +2608,18 @@ struct LocalSdrShim::Impl {
         // A span wider than the capture can't satisfy both — keep the VFO captured.
         if (lo > hi) return std::min(vfo + lim, std::max(vfo - lim, view));
 
+        /* ★★★ VibeClarity ASKS FOR A PARTICULAR CENTRE, inside every constraint above. Framing is
+         *     the whole point of the suite — putting a blowtorch outside the capture is worth more
+         *     than anything downstream can do about it — but it must not become a second way to
+         *     break panning. So it expresses a PREFERENCE and this function still decides: the
+         *     lock, the VFO's margin and the view's own room all outrank it, exactly as before.
+         *  ★ Ignored while the owner has locked the centre — that is handled above and returns
+         *    early, which is the point of putting this after it. */
+        const double bias = g_clarityBiasHz.load(std::memory_order_relaxed);
+        if (bias != 0.0) {
+            const double want = std::max(lo, std::min(hi, vfo + bias));
+            return want;
+        }
         // Still legal where we are? Then DON'T MOVE: no retune, no PLL relock, and
         // the pan is a pure crop of spectrum we already have.
         if (cur >= lo && cur <= hi) return cur;
@@ -7209,6 +7359,41 @@ struct LocalSdrShim::Impl {
          *     outside sharedGate(): a listener reading a meter is not taking the dial off anybody.
          *  ★ Reference-counted and released with the socket (see the close path), so a tool that
          *    is killed mid-sweep cannot leave the measurement running for ever. */
+        if (type == "clarity") {
+            /* ★★★ ONE SWITCH THAT TAKES THE FRONT END. It owns the gain, the tuner's IF filter and
+             *     where the tuner sits — so it is gated exactly like the gain: on a shared radio
+             *     it changes what EVERY listener hears and belongs behind the admin password with
+             *     the rest of the protected set. */
+            if (!sharedGate("clarity")) return;
+            bool on = true; { double v; if (jsonNum(msg, "value", v)) on = v != 0.0; }
+            const bool was = g_clarityOn.exchange(on, std::memory_order_relaxed);
+            if (was != on) {
+                clarityForget();
+                if (on) {
+                    /* ★ Turning it on hands the gain to VibeAGC. The client greys the manual
+                     *   controls out to match, but the SERVER must be the one that decides —
+                     *   a client that merely stopped drawing the control would leave a radio
+                     *   answering to whoever sent the last message. */
+                    /* ★★★ setRtlAgc(), NOT g_rtlAgc.store(). Storing the flag leaves the loop
+                     *     INERT — the note on setRtlAgc says so in as many words: the ceiling
+                     *     (g_gainTarget) has to be raised to the tuner's maximum or overloadTick
+                     *     has nothing to work against, "however true the flag is". Measured: with
+                     *     the flag set by hand, VibeClarity ran for 80 seconds and the gain never
+                     *     left 12.5 dB. It is the same fault that once made an owner enable the
+                     *     AGC in the setup page and still have to toggle it in a client. */
+                    LocalSdrShim::instance().setRtlAgc(true);
+                    LOGI("VibeClarity: ON — gain, IF filter and tuner centre are ours now");
+                } else {
+                    // ★ Give everything back as we found it: the bias undone and the filter wide.
+                    LocalSdrShim::instance().setTunerBandwidth(0);
+                    LocalSdrShim::instance().applyCentreNow();
+                    LOGI("VibeClarity: OFF — gain, IF filter and centre handed back");
+                }
+                LocalSdrShim::instance().broadcastHwInfo();
+            }
+            broadcastConfig();
+            return;
+        }
         if (type == "tunerbw") {
             /* ★★★ THE FRONT END IS SHARED, SO THIS IS GATED LIKE THE GAIN. It was outside the gate
              *     while it was being measured; it is a control now. Narrowing the tuner's IF filter
@@ -7617,7 +7802,8 @@ struct LocalSdrShim::Impl {
          *     can be looking anywhere inside the capture — which is the whole point of moving the
          *     centre away from a blowtorch — so a client that assumed the view centre would draw
          *     the passband wrong by exactly the offset that makes it worth having. */
-        j += ",\"tunerBw\":"
+        j += ",\"clarity\":" + std::string(g_clarityOn.load() ? "true" : "false")
+           + ",\"tunerBw\":"
            + std::to_string(g_tunerBwHz.load(std::memory_order_relaxed))
            + ",\"rfCentre\":"
            + std::to_string((long long)llround(
@@ -15341,6 +15527,7 @@ void LocalSdrShim::setDecoderFreq(double hz) {
 //   setters that were its only callers. The RTL setters above needed it too.
 #define VIBE_HW_LOCK() std::lock_guard<std::recursive_mutex> _hwlk(p->modeMtx)
 
+void LocalSdrShim::applyCentreNow() { if (p) p->applyCentreNow(); }
 double LocalSdrShim::rfCentreHz() const {
     // ★ The TUNER's centre — rtlCenter plus the fixed hardware offset that keeps the DC spike off
     //   the VFO. Not the view centre, and not the VFO. See the hwinfo note.
@@ -15544,6 +15731,9 @@ void LocalSdrShim::overloadTick() {
     /* ★ The profile's cadence, not one figure for the whole radio. FM is dense and a wrong gain is
      *   audible at once; MW's ghosts last "a few seconds at a time due to MW/HF signal fade"
      *   (Stuart), so chasing them fast would cut for nothing. */
+    // ★ Framing rides the same tick as the gain: it needs a SETTLED loop to judge against, and
+    //   this is the one place that knows when that is true.
+    p->clarityTick(now);
     const AgcProfile& tickProf = *g_profile.load(std::memory_order_relaxed);
     if (!hurry && clipRun < 2
         && now - g_ovlLastChangeAt.load(std::memory_order_relaxed) < tickProf.climbDwellSec)
@@ -15728,7 +15918,12 @@ void LocalSdrShim::overloadTick() {
             steps_forceDown = (dir > 0);
             steps_forceUp   = (dir < 0);
             g_sameDirRun.store(0, std::memory_order_relaxed);
-    g_nextStride.store(0, std::memory_order_relaxed);   // ★ wrong once: back to one rung
+    g_nextStride.store(0, std::memory_order_relaxed);
+    /* ★★★ AND FORGET THE FRAMING TOO. Where the tuner should sit is a fact about THIS dial and its
+     *     neighbours; carrying a bias learned at 105.4 to a station in a quiet part of the band
+     *     would move the capture for no reason and, worse, would look like the suite doing
+     *     something clever when it is repeating an old answer. */
+    clarityForget();   // ★ wrong once: back to one rung
             g_settled.store(true, std::memory_order_relaxed);
             g_adcCleanRun.store(0, std::memory_order_relaxed);
         } else if (d > 0.5f) {
@@ -16728,6 +16923,20 @@ bool LocalSdrShim::isAirspyHf() const { return p && p->useAirspyHf(); }
  *     one where 104.2 either reaches the mixer or does not.
  *  ★ The quietest floor goes too. It is a level measured through THAT filter at THAT frequency;
  *    carried across a retune it is a memory of somewhere else.
+ */
+/* ══ VibeClarity: FRAMING — try a centre, measure it, hand it back if it did not help ══════════
+ * ★★★ THE STATE MACHINE IS THE FEATURE. Measured across seven stations, pushing the centre away
+ *     from the loudest offender helps five and hurts two, averaging NOTHING when applied blindly.
+ *     Only keeping what measured better turns it into +2.3 dB that is never negative.
+ * ★★★ THE DIRECTION IS FOUND BY TRIAL, NOT BY ARITHMETIC. The capture shows only what is inside
+ *     it, so choosing a direction from the spectrum is choosing blind: on 105.7 the loudest
+ *     neighbour sat above, so "move away from it" went down into 104.2 and made things worse. Try
+ *     one way; if it did not help, hand it back and try the other; if neither helps, stay put and
+ *     do not ask again for a while.
+ *  ★★ Judged on SEPARATION, like every other verdict here — not on converter headroom. 105.7's
+ *     ADC peak got WORSE on a move that improved its separation by 2 dB.
+ *  ★ Waits for a settled AGC: a centre move changes the level, and judging it while the gain is
+ *    still hunting measures the gain rather than the framing.
  */
 static void agcForget(const char* why) {
     // ★ Fresh meters first (the old station's samples are still in the one-second window), then

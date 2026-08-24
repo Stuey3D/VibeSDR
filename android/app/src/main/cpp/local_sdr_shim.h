@@ -577,6 +577,8 @@ public:
     double rfCentreHz() const;
     /** ★ Re-send the hardware description to every spectrum listener. */
     void broadcastHwInfo();
+    /** ★ Re-decide the tuner's centre and move it if the answer changed (VibeClarity). */
+    void applyCentreNow();
     void setPpm(int ppm);
     void setBiasTee(bool on);
     void setAgc(bool on);                 // RTL2832 digital AGC

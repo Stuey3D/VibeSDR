@@ -244,7 +244,7 @@ export interface SpectrumCallbacks {
   /** ★ The tuner's IF filter in Hz, 0 = automatic. Its own callback rather than a fourteenth
    *  argument on onHwInfo — that signature is already at the length where a caller gets one
    *  positional wrong and nothing complains. */
-  onTunerBw?: (hz: number, rfCentreHz: number) => void;
+  onTunerBw?: (hz: number, rfCentreHz: number, clarityOn: boolean) => void;
   onRspStat?: (systemGainDb: number, lna: number, ifgr: number, overload: boolean,
                settling: boolean) => void;
   onStatus?: (s: 'connecting' | 'open' | 'closed' | 'error', detail?: string) => void;
@@ -664,7 +664,8 @@ export class SpectrumClient {
         break;
       case 'hwinfo':
         if (msg.tunerBw !== undefined)
-          this.cb.onTunerBw?.(Number(msg.tunerBw) || 0, Number(msg.rfCentre) || 0);
+          this.cb.onTunerBw?.(Number(msg.tunerBw) || 0, Number(msg.rfCentre) || 0,
+                              msg.clarity === true);
         this.cb.onHwInfo?.(msg.gains ?? [], msg.rates ?? [], Number(msg.lockedRate) || 0,
                            Number(msg.maxFftRate) || 0, Number(msg.forceIdleSaver) === 1,
                            (msg.radio ?? null) as RadioCaps | null,
@@ -1103,6 +1104,8 @@ export class SpectrumClient {
   setHwSampleRate(r: number) { this._send({ type: 'sampleRate', value: Math.round(r) }); }
   /** ★ The tuner's IF filter in Hz; 0 = librtlsdr's automatic choice. RTL only. */
   setTunerBandwidth(hz: number) { this._send({ type: 'tunerbw', value: Math.round(hz) }); }
+  /** ★ VibeClarity: gain, IF filter and RF centre chosen by the receiver. RTL only. */
+  setClarity(on: boolean) { this._send({ type: 'clarity', value: on ? 1 : 0 }); }
   setHwDirectSampling(v: 0 | 1 | 2) { this._send({ type: 'directSampling', value: v }); }
 
   // Audio DSP — runs server-side in the shim (the client stays a thin renderer).

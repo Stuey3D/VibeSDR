@@ -789,6 +789,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       mobileUi?.paintSignal();
       updateRangeGap(centerHz, bwHz);
       updateIfGap(centerHz, bwHz);
+      updateRfCentreMark(centerHz, bwHz);
     },
     onConfig: (cfg) => {
       // ★★ ALSO HERE, not only in onHwInfo. lockedWindow() needs the capture bandwidth, which
@@ -1065,7 +1066,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         const dB = (hwGainNow / 10).toFixed(1);
         const pk = pkText();
         if (agc && hwGainNow >= 0) {
-          chip.textContent = `AGC ${dB} dB${pk}`;
+          chip.textContent = `AGC ${dB} dB${ifText()}${pk}`;
           chip.classList.add('set', 'easing');
         } else if ((ovlSteps ?? 0) > 0 && hwGainNow >= 0) {
           chip.textContent = `GAIN HELD ${dB} dB${pk}`;
@@ -1199,7 +1200,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         // ★ hwAgcOn, NOT the captured `agc` — see its declaration.
         if (hwAgcOn) {
           // Settled, and the AGC owns the gain from here — show it, quietly.
-          chip.textContent = `AGC ${dB} dB${pk}`;
+          chip.textContent = `AGC ${dB} dB${ifText()}${pk}`;
           chip.classList.add('easing');
         } else if (steps > 0) {
           // Still holding the gain below what was asked for: say so, or the slider and the radio
@@ -1244,8 +1245,20 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         renderRspVals();
       }
     },
-    onTunerBw: (hz: number, rfCentreHz: number) => {
+    onTunerBw: (hz: number, rfCentreHz: number, clarityOn: boolean) => {
       hwTunerBw = hz;
+      hwClarity = clarityOn;
+      /* ★★★ WITH VibeClarity ON, THE CONTROLS IT OWNS GO GREY — gain, VibeAGC, the IF filter.
+       *     Greyed and still READABLE rather than hidden: the listener should be able to see what
+       *     the receiver has chosen, which is the same courtesy the admin lock already gives
+       *     ("You can still see what they are set to"). Hiding them would answer "where did my
+       *     gain control go?" with silence. */
+      {
+        const btn = document.getElementById('clarity');
+        if (btn) { btn.textContent = clarityOn ? 'ON' : 'OFF'; btn.classList.toggle('on', clarityOn); }
+        for (const id of ['rowGain', 'rowAgc', 'rowTunerBw'])
+          document.getElementById(id)?.classList.toggle('clarityHeld', clarityOn);
+      }
       // ★ The filter is centred on the TUNER, which is not where the listener is looking — see
       //   updateIfGap. Without this the shading would be drawn from the view centre and be wrong
       //   by exactly the offset that makes the filter worth having.
@@ -1280,7 +1293,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       if (!hwAgcOn || hwGainNow < 0) return;
       const chip = $('ovlChip');
       if (!chip.classList.contains('easing')) return;   // a move is being announced; leave it
-      chip.textContent = `AGC ${(hwGainNow / 10).toFixed(1)} dB${pkText()}`;
+      chip.textContent = `AGC ${(hwGainNow / 10).toFixed(1)} dB${ifText()}${pkText()}`;
       chip.classList.toggle('fault', adcClipPct >= 0.01);
     },
     onSigStat: (chan, floor) => {
@@ -1612,6 +1625,7 @@ let hwGainNow = -1;
 let hwAgcOn = false;
 let hwTunerBw = 0;
 let hwRfCentre = 0;
+let hwClarity = false;
 /* ★★★ THE CONVERTER'S OWN FIGURES, AND THE CHIP SHOWS THE ONE THAT MATTERS. It reported `pk` and
  *     nothing else — a PEAK, which we established on 2026-08-24 is not the harm: 96.1 sounds its
  *     best at -1.2 dBFS with nothing on the rail, while 104.2 at 7.7 dB reads 0.0 dBFS with 28% of
@@ -1626,6 +1640,10 @@ const pkText = () => {
   if (adcClipPct >= 0.01) return ` · ${adcClipPct.toFixed(1)}% RAILED`;
   return adcPeakDbfs === null ? '' : ` · pk ${adcPeakDbfs.toFixed(1)} dBFS`;
 };
+/** ★ The IF width beside the gain, because with VibeClarity running they are two halves of one
+ *  decision and a gain figure alone does not explain what the receiver did. Silent when the filter
+ *  is wide, which is the case that needs no explanation. */
+const ifText = () => (hwTunerBw > 0 ? ` · IF ${(hwTunerBw / 1e3).toFixed(0)} kHz` : '');
 /** Clears the "overload passed" chip once the gain is home — see onOverload. */
 let ovlClearTimer = 0;
 let hwAgcLocked = false;
@@ -7805,6 +7823,10 @@ function populateHw() {
     {
       const bw = document.getElementById('tunerBw') as HTMLSelectElement | null;
       if (bw) bw.onchange = () => spec!.setTunerBandwidth(Number(bw.value));
+      // ★ VibeClarity. The server owns the state — this only asks, and the greying-out follows
+      //   from what comes BACK on hwinfo, so the screen can never claim a mode the radio is not in.
+      const cl = document.getElementById('clarity');
+      if (cl) cl.onclick = () => spec!.setClarity(!hwClarity);
     }
 
     // THE DEFAULT, and it MUST be sent, not merely displayed.
@@ -8247,6 +8269,39 @@ function clampTune(hz: number): number {
  *  filter shows a shaded region at each end. Hidden entirely when the filter is wide enough to
  *  cover everything on screen, which is the case that needs no explanation.
  */
+/** ★★★ MARK WHERE THE TUNER IS POINTED, whenever that is not where the listener is looking.
+ *
+ *  VibeClarity moves the RF centre away from a blowtorch — measured at +2.3 dB of separation
+ *  across the band when each move is verified — but it moves the CAPTURE underneath a view that
+ *  has not moved. Without this, the one visible consequence of the suite's most valuable trick is
+ *  nothing at all, and a listener who noticed the band edges behaving oddly would have no way to
+ *  connect it to anything.
+ *
+ *  ★ Dashed and in the recovering-blue rather than the VFO's orange: it is where the RADIO is
+ *  pointed, not where anyone is listening, and the two must never be confused. Hidden entirely
+ *  while the tuner sits on the VFO, which is the ordinary case and needs no explanation.
+ */
+function updateRfCentreMark(centerHz: number, bwHz: number) {
+  const el = document.getElementById('rfCentreMark');
+  const lbl = document.getElementById('rfCentreLabel');
+  if (!el || !lbl) return;
+  const vfo = wf?.vfoHz ?? NaN;   // ★ a field on the waterfall, not a method
+  // ★ Only worth drawing once it is meaningfully off the dial — below that it is the fixed DC
+  //   offset the tuner always carries, which is not news.
+  if (!hwRfCentre || bwHz <= 0 || (Number.isFinite(vfo) && Math.abs(hwRfCentre - vfo) < 50e3)) {
+    el.hidden = true; return;
+  }
+  const x = (hwRfCentre - (centerHz - bwHz / 2)) / bwHz;
+  if (x < 0 || x > 1) { el.hidden = true; return; }
+  el.hidden = false;
+  el.style.left = `${x * 100}%`;
+  lbl.style.top = `${(wf?.specJoinFrac?.() ?? 0.25) * 100}%`;
+  lbl.style.transform = x > 0.75 ? 'translate(-100%, 0) translateX(-6px)' : 'translate(6px, 0)';
+  lbl.textContent = hwClarity
+    ? `RF centre ${(hwRfCentre / 1e6).toFixed(3)} \u2014 controlled by VibeClarity`
+    : `RF centre ${(hwRfCentre / 1e6).toFixed(3)}`;
+}
+
 function updateIfGap(centerHz: number, bwHz: number) {
   const lo = document.getElementById('ifGapLo');
   const hi = document.getElementById('ifGapHi');
