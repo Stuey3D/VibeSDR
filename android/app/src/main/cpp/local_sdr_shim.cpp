@@ -1406,6 +1406,10 @@ static std::atomic<int>      g_clarityIfBefore{0};
 /** ★ Offset of the loudest bin OUTSIDE the tuned channel, from the tuned frequency, in Hz.
  *  Negative = the offender is below us. Only decides which direction framing TRIES FIRST. */
 static std::atomic<double>   g_loudestOffHz{0.0};
+/** ★ Was this trial started because the CONVERTER was hot rather than because separation was poor?
+ *  It decides how the trial is judged — see the note in clarityTick. */
+static std::atomic<bool>     g_clarityHeatTrial{false};
+static std::atomic<double>   g_clarityPkBefore{0.0};
 static void clarityForget() {
     g_clarityBiasHz.store(0.0, std::memory_order_relaxed);
     g_clarityTrialBias.store(0.0, std::memory_order_relaxed);
@@ -1415,6 +1419,7 @@ static void clarityForget() {
     g_clarityTried.store(0, std::memory_order_relaxed);
     g_clarityTrialKind.store(0, std::memory_order_relaxed);
     g_clarityIfBefore.store(0, std::memory_order_relaxed);
+    g_clarityHeatTrial.store(false, std::memory_order_relaxed);
 }
 static std::atomic<double>   g_ovlMargin{3.0};
 static std::atomic<double>   g_ovlLastChangeAt{0.0};
@@ -2495,7 +2500,8 @@ struct LocalSdrShim::Impl {
              *     A move that has cost 6 dB after two seconds is not going to redeem itself. */
             const float sepNow = sepAvgDb.load();
             const float sepWas = g_claritySepBefore.load(std::memory_order_relaxed);
-            if (now - trialAt >= 2.0 && sepNow < sepWas - 6.0) {
+            if (now - trialAt >= 2.0 && sepNow < sepWas - 6.0
+                && !g_clarityHeatTrial.load(std::memory_order_relaxed)) {
                 LOGI("VibeClarity: that move cost %.1f dB straight away (%.1f -> %.1f) "
                      "— abandoning it", sepWas - sepNow, sepWas, sepNow);
                 if (g_clarityTrialKind.load(std::memory_order_relaxed) == 2) {
@@ -2524,6 +2530,33 @@ struct LocalSdrShim::Impl {
              *     the separation, keep it only if it actually helped. */
             if (kind == 2) {
                 const int wasIf = g_clarityIfBefore.load(std::memory_order_relaxed);
+                /* ★★★ JUDGE IT BY WHAT STARTED IT. A trial begun because the converter was HOT
+                 *     cannot be judged on separation — separation is the very measure that is
+                 *     blind to cross-modulation, so a filter that cured Stuart's ruined audio
+                 *     would show no separation gain and be handed straight back. Same blindness
+                 *     one level down from the gate it was just added to.
+                 *  ★★ So: did the heat go? A narrower filter that removes the offender drops the
+                 *     ADC peak; one that removes nothing merely costs ~11 dB of wanted signal.
+                 *     Kept only if the peak fell AND the separation did not collapse with it. */
+                if (g_clarityHeatTrial.load(std::memory_order_relaxed)) {
+                    const double pkNow = g_adcPeakDbfs.load(std::memory_order_relaxed);
+                    const double pkWas = g_clarityPkBefore.load(std::memory_order_relaxed);
+                    if (pkWas - pkNow >= 3.0 && after > before - 3.0f) {
+                        LOGI("VibeClarity: IF %d kHz took %.1f dB off the converter "
+                             "(%.1f -> %.1f dBFS) — keeping it",
+                             (int)(g_tunerBwHz.load() / 1000), pkWas - pkNow, pkWas, pkNow);
+                        g_clarityNextAt.store(now + 60.0, std::memory_order_relaxed);
+                        return;
+                    }
+                    LOGI("VibeClarity: IF %d kHz did not cool the converter "
+                         "(%.1f -> %.1f dBFS, separation %.1f -> %.1f) — back to wide",
+                         (int)(g_tunerBwHz.load() / 1000), pkWas, pkNow, before, after);
+                    LocalSdrShim::instance().setTunerBandwidth(wasIf);
+                    LocalSdrShim::instance().broadcastHwInfo();
+                    if ((g_clarityTried.load(std::memory_order_relaxed) & 0xF) == 0xF)
+                        g_clarityNextAt.store(now + 60.0, std::memory_order_relaxed);
+                    return;
+                }
                 if (after > before + 1.0f) {
                     LOGI("VibeClarity: IF %d kHz bought %.1f dB of separation (%.1f -> %.1f) "
                          "— keeping it", (int)(g_tunerBwHz.load() / 1000), after - before,
@@ -2581,7 +2614,25 @@ struct LocalSdrShim::Impl {
          *     were at 0-5 (105.4 at -1.6, 97.2 at 0.7). Nothing near the line is being judged.
          *  ★ The right instinct for the whole suite: it may only act where the receiver is
          *    demonstrably struggling, and must sit on its hands everywhere else. */
-        if (sep > 12.0f) {
+        /* ★★★ SEPARATION CANNOT SEE CROSS-MODULATION, AND THAT IS THE CASE THIS SUITE EXISTS FOR.
+         *     Stuart at 102.8, beside the 104.2 blowtorch: "You can see as its talking and the
+         *     gaps in the talking line up on every signal in this range." That is the beacon's
+         *     AUDIO riding on every other carrier — the front end compressed and re-modulating the
+         *     whole band. The wanted carrier still stands well clear of its own shoulders, so
+         *     separation reads a healthy 23 dB while the sound is ruined, and a gate on separation
+         *     alone sat there doing nothing: "The IF filtering never kicked in".
+         * ★★★ THE CONVERTER IS THE WITNESS. Cross-modulation needs the front end in compression,
+         *     and his readout said so plainly: pk -1.9 dBFS at 22.9 dB of gain. So heat is a
+         *     trigger in its own right, whatever the separation says.
+         *  ★★ AND WHEN IT IS HEAT, REACH FOR FOCUS FIRST. Framing only moves the window; the
+         *     filter actually removes the offender before the mixer. Measured by Stuart at this
+         *     very frequency: a manual 600 kHz took 102.8 from SNR 20 to 43 and turned a wall of
+         *     mush into three separate stations.
+         *  ★ -6 dBFS: comfortably below the -1.0 backoff (so this fires while the AGC is still
+         *    content) and well above where a quiet band sits. */
+        const double pk = g_adcPeakDbfs.load(std::memory_order_relaxed);
+        const bool hot  = pk > -6.0;
+        if (sep > 12.0f && !hot) {
             g_clarityNextAt.store(now + 30.0, std::memory_order_relaxed);
             return;
         }
@@ -2605,7 +2656,12 @@ struct LocalSdrShim::Impl {
         const bool upFirst = (loud <= 0.0);   // loudest is BELOW us, so move up, away from it
         const int firstBit = upFirst ? 1 : 2, secondBit = upFirst ? 2 : 1;
         const double firstBias = upFirst ? +step : -step;
-        if (!(done & firstBit))       { bias = firstBias;  done |= firstBit; }
+        // ★ Heat means the front end is being overloaded — the filter is the lever that removes
+        //   the cause, so it goes first. Poor separation with a cool converter is a framing
+        //   problem, and there the cheap lever leads.
+        if (hot && !(done & 4))      { ifWant = 450000; done |= 4; }
+        else if (hot && !(done & 8)) { ifWant = 350000; done |= 8; }
+        else if (!(done & firstBit))  { bias = firstBias;  done |= firstBit; }
         else if (!(done & secondBit)) { bias = -firstBias; done |= secondBit; }
         else if (!(done & 4)) { ifWant = 450000; done |= 4; }
         else if (!(done & 8)) { ifWant = 350000; done |= 8; }
@@ -2616,6 +2672,8 @@ struct LocalSdrShim::Impl {
             g_clarityIfBefore.store(g_tunerBwHz.load(std::memory_order_relaxed),
                                     std::memory_order_relaxed);
             g_clarityTrialKind.store(2, std::memory_order_relaxed);
+            g_clarityHeatTrial.store(hot, std::memory_order_relaxed);
+            g_clarityPkBefore.store(pk, std::memory_order_relaxed);
             g_claritySepBefore.store(sep, std::memory_order_relaxed);
             g_clarityTrialAt.store(now, std::memory_order_relaxed);
             LOGI("VibeClarity: trying the IF filter at %d kHz (separation now %.1f dB)",
