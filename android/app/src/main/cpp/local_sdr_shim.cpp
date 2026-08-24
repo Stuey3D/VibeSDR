@@ -1365,9 +1365,6 @@ static inline const AgcProfile& profileFor(double demodBw, double sampleRate) {
 static std::atomic<const AgcProfile*> g_profile{&kProfileFm};
 /* ★ The demodulator's width, published so the RETUNE test can scale by it — see the note there. */
 static std::atomic<double>   g_demodBwHz{200000.0};
-/** ★ The last measured -10 dB width of the tuned channel, mirrored out of the DSP so the periodic
- *  converter log can show it. See Impl::chanWidthHz for what it means and why it matters. */
-static std::atomic<float>    g_lastChanWidthHz{-1.0f};
 /* ★★★ THE TUNER IF FILTER WE WANT, RE-ASSERTED — SETTING IT ONCE IS NOT ENOUGH. librtlsdr's
  *  rtlsdr_set_center_freq() goes through r82xx_set_freq(), which reconfigures the tuner's filters
  *  and throws our bandwidth away: measured on the Pi, the ADC peak went -7.0 -> -30.1 dBFS when it
@@ -1376,54 +1373,27 @@ static std::atomic<float>    g_lastChanWidthHz{-1.0f};
  *  set it last is a register that must be asserted every time, not set once and trusted.
  *  0 = librtlsdr's automatic choice, which is what every build before this one did. */
 static std::atomic<int>      g_tunerBwHz{0};
-/* ══ VibeClarity ═══════════════════════════════════════════════════════════════════════════════
- * ★★★ ONE SWITCH THAT OWNS THE FRONT END: the gain (VibeAGC), the tuner's IF filter, and WHERE THE
- *     TUNER SITS. Stuart's aim, in his words: "eventually if we can I'd like AGC and IF filtering
- *     to be fully automatic based on situation ... easiest to use for a non radio techy".
- * ★★★ THE RF CENTRE IS THE BIG ONE, AND IT ONLY WORKS IF EVERY MOVE IS VERIFIED. Measured across
- *     seven stations at a pinned gain, pushing the centre 960 kHz away from the loudest offender:
- *       96.1 +2.7   97.2 +2.7   103.6 -9.9   104.7 +1.7   105.4 +5.0   105.7 +2.0   106.0 -6.9
- *     Applied BLINDLY that averages -0.4 dB — nothing at all. Keeping only the moves that helped:
- *     +2.3 dB and never negative. The verification IS the feature.
- * ★★★ AND IT CANNOT BE COMPUTED IN ADVANCE. The spectrum only shows what is INSIDE the current
- *     capture, so any rule is blind to what it is moving TOWARDS — 105.7's loudest neighbour read
- *     106.36, so "maximise the distance" pushed the centre down into 104.2. No better sum fixes
- *     that; the information is not there. Try, measure, revert.
- *  ★ Verified on SEPARATION, not headroom: 105.7's ADC peak got worse while its separation
- *    improved, so a move judged on converter headroom would have thrown away a good one. */
-static std::atomic<bool>     g_clarityOn{false};
-/** ★ How far from the VFO the tuner is being asked to sit, in Hz. 0 = wherever panning left it,
- *  which is the behaviour every build before this one had. */
-static std::atomic<double>   g_clarityBiasHz{0.0};
-/** ★ The bias currently on trial, the separation before it, and when it was applied. */
-static std::atomic<double>   g_clarityTrialBias{0.0};
-static std::atomic<float>    g_claritySepBefore{-200.0f};
-static std::atomic<double>   g_clarityTrialAt{0.0};
-static std::atomic<double>   g_clarityNextAt{0.0};
-/** ★ Which moves have been tried at this dial, so a refused one is not offered twice.
- *  bit 0 = centre up, bit 1 = centre down, bit 2 = IF 450 kHz, bit 3 = IF 350 kHz. */
-static std::atomic<int>      g_clarityTried{0};
-/** ★ What kind of thing is on trial, so the right one gets handed back. 1 = centre, 2 = IF. */
-static std::atomic<int>      g_clarityTrialKind{0};
-static std::atomic<int>      g_clarityIfBefore{0};
-/** ★ Offset of the loudest bin OUTSIDE the tuned channel, from the tuned frequency, in Hz.
- *  Negative = the offender is below us. Only decides which direction framing TRIES FIRST. */
-static std::atomic<double>   g_loudestOffHz{0.0};
-/** ★ Was this trial started because the CONVERTER was hot rather than because separation was poor?
- *  It decides how the trial is judged — see the note in clarityTick. */
-static std::atomic<bool>     g_clarityHeatTrial{false};
-static std::atomic<double>   g_clarityPkBefore{0.0};
-static void clarityForget() {
-    g_clarityBiasHz.store(0.0, std::memory_order_relaxed);
-    g_clarityTrialBias.store(0.0, std::memory_order_relaxed);
-    g_claritySepBefore.store(-200.0f, std::memory_order_relaxed);
-    g_clarityTrialAt.store(0.0, std::memory_order_relaxed);
-    g_clarityNextAt.store(0.0, std::memory_order_relaxed);
-    g_clarityTried.store(0, std::memory_order_relaxed);
-    g_clarityTrialKind.store(0, std::memory_order_relaxed);
-    g_clarityIfBefore.store(0, std::memory_order_relaxed);
-    g_clarityHeatTrial.store(false, std::memory_order_relaxed);
-}
+/** ★★★ AUTO: THE IF FILTER FOLLOWS THE ZOOM, and that is the whole of it.
+ *
+ *  ★★★ WHY THIS AND NOT AN AUTOMATIC ONE THAT CHOOSES. A previous attempt measured the band and
+ *  picked a width; it could not be made to work, because every verification was confounded by the
+ *  lever it was measuring — narrowing cools the converter, the AGC climbs into the headroom, and
+ *  the trial concludes the filter did nothing. Stuart, after an evening of it: "I think there is a
+ *  reason this hasnt been done before." A filter the LISTENER causes by zooming needs no
+ *  verification at all: it is never narrower than what they are looking at, so it cannot hide a
+ *  signal from them and there is nothing to draw on the spectrum to explain it.
+ *
+ *  ★★★ IT NEEDS THE TUNER TO FOLLOW THE VFO, and that is the part that is easy to miss. The filter
+ *  is centred on the TUNER, not on the listener, and dongleForView deliberately leaves the centre
+ *  wherever it was unless forced to move. Stuart on medium wave: "the RF centre has stayed down at
+ *  663 and I'm up at 1467 ... I am in the cutoff of the filter." So in Auto the centre PREFERS to
+ *  sit just off the VFO — the same small offset that keeps the VFO off the DC spike — and only
+ *  moves away when the view genuinely needs it elsewhere.
+ *
+ *  ★★ AND IT WIDENS WHEN THE VIEW LEAVES THE VFO. Unlock the view and pan across the band and the
+ *  filter opens to cover wherever you are looking: "the zoom aware IF filter needs to automatically
+ *  widen when a user unlocks the view from the VFO and pans the spectrum across." */
+static std::atomic<bool>     g_tunerBwAuto{false};
 static std::atomic<double>   g_ovlMargin{3.0};
 static std::atomic<double>   g_ovlLastChangeAt{0.0};
 /** ★★★ MORE GAIN IS NOT MORE SIGNAL, AND THIS IS WHERE A HEADROOM-ONLY AGC GOES WRONG.
@@ -2471,271 +2441,43 @@ struct LocalSdrShim::Impl {
     // felt like dragging through treacle, and the RF centre chased the pan.
     //
     // `viewSpan` is the width of the crop being displayed; pass 0 when unknown.
-    /** ★★★ FRAMING: try a centre, measure it, hand it back if it did not help.
+    /** ★★★ THE WIDTH THAT COVERS WHAT THE LISTENER IS LOOKING AT, and nothing narrower.
      *
-     *  ★★★ THE STATE MACHINE IS THE FEATURE. Measured across seven stations at a pinned gain,
-     *  pushing the centre 960 kHz away from the loudest offender helped five (+1.7 to +5.0 dB of
-     *  separation) and hurt two (-6.9, -9.9). Applied BLINDLY that averages -0.4 dB — nothing.
-     *  Keeping only what measured better: +2.3 dB, never negative.
-     *
-     *  ★★★ THE DIRECTION IS FOUND BY TRIAL, NOT ARITHMETIC. The capture shows only what is INSIDE
-     *  it, so choosing from the spectrum is choosing blind — on 105.7 the loudest neighbour sat
-     *  above, so "move away from it" went down into 104.2 and made things worse. Try one way; if
-     *  it did not help, hand it back and try the other; if neither helps, stay put and do not ask
-     *  again for a minute.
-     *
-     *  ★★ JUDGED ON SEPARATION, like every other verdict here — not on converter headroom. On
-     *  105.7 the ADC peak got WORSE on a move that improved separation by 2 dB, so a headroom test
-     *  would have thrown away a move the listener wanted.
-     *  ★ Only while the AGC is settled: a centre move changes the level, and judging one while the
-     *  gain is still hunting measures the gain instead of the framing.
-     */
-    void clarityTick(double now) {
-        if (!g_clarityOn.load(std::memory_order_relaxed)) return;
-        if (g_vsLockedCentre.load() > 0.0) return;      // the owner pinned the window
-        const double step = std::max(240e3, sampleRate * 0.40);
-
-        const double trialAt = g_clarityTrialAt.load(std::memory_order_relaxed);
-        if (trialAt > 0.0) {
-            /* ★★★ BAIL OUT EARLY IF IT IS PLAINLY WORSE. Riding a bad move for the full window is
-             *     five seconds of ruined audio, and Stuart heard exactly that: "I had a clear
-             *     signal at 106 and then for some reason it did something which obliterated it".
-             *     A move that has cost 6 dB after two seconds is not going to redeem itself. */
-            const float sepNow = sepAvgDb.load();
-            const float sepWas = g_claritySepBefore.load(std::memory_order_relaxed);
-            if (now - trialAt >= 2.0 && sepNow < sepWas - 6.0
-                && !g_clarityHeatTrial.load(std::memory_order_relaxed)) {
-                LOGI("VibeClarity: that move cost %.1f dB straight away (%.1f -> %.1f) "
-                     "— abandoning it", sepWas - sepNow, sepWas, sepNow);
-                if (g_clarityTrialKind.load(std::memory_order_relaxed) == 2) {
-                    LocalSdrShim::instance().setTunerBandwidth(
-                        g_clarityIfBefore.load(std::memory_order_relaxed));
-                    LocalSdrShim::instance().broadcastHwInfo();
-                } else {
-                    g_clarityBiasHz.store(0.0, std::memory_order_relaxed);
-                    applyCentreNow();
-                }
-                g_clarityTrialAt.store(0.0, std::memory_order_relaxed);
-                return;
+     *  Measured from the TUNER's centre out to whichever edge of the view is further, because the
+     *  filter is centred on the tuner and the view need not be. Plus the demodulator's own channel,
+     *  so a station at the edge of the view still passes whole.
+     *  ★ Clamped to the tuner's real floor (350 kHz — below that librtlsdr clamps and the setting
+     *    does nothing) and released to WIDE once the view is bigger than the filter could usefully
+     *    be, which is the zoomed-out case that wants no filtering at all. */
+    void applyAutoIf() {
+        if (!g_tunerBwAuto.load(std::memory_order_relaxed)) return;
+        const double rf = rtlCenter.load() + hwOffsetHz();
+        /* ★★★ EVERY LISTENER'S VIEW, NOT JUST ONE. On a shared receiver the filter is the RADIO's,
+         *     so one person zooming into a station would leave everyone else staring at dead band.
+         *     Stuart: "we cap it so that user 2 seeing a full 2.4MHz isnt left with large dead
+         *     areas." The widest view wins, which means a shared radio opens up automatically and
+         *     a single listener still gets the full selectivity — no policy switch needed for
+         *     either case. */
+        double half = rxBwHz * 0.5;
+        {
+            const double span = displaySpan() / zoomFactor.load();
+            half = std::max(half, std::fabs(viewCenter.load() - rf) + span * 0.5 + rxBwHz * 0.5);
+            for (auto& pr : allSpecPeers()) {
+                auto c = dspFor(pr.sock);
+                if (!c || c->viewSpanHz <= 0) continue;
+                half = std::max(half,
+                    std::fabs(c->viewCentreHz - rf) + c->viewSpanHz * 0.5 + rxBwHz * 0.5);
             }
-            if (now - trialAt < 5.0) return;            // still settling; nothing to judge yet
-            const float before = g_claritySepBefore.load(std::memory_order_relaxed);
-            const float after  = sepAvgDb.load();
-            const double tried = g_clarityTrialBias.load(std::memory_order_relaxed);
-            const int    kind  = g_clarityTrialKind.load(std::memory_order_relaxed);
-            g_clarityTrialAt.store(0.0, std::memory_order_relaxed);
-
-            /* ★★★ THE IF FILTER IS A TRADE, WHICH IS WHY IT IS TRIALLED AND NOT SIMPLY SET.
-             *     Measured differentially on this radio, narrowing to 450 kHz costs about 11 dB on
-             *     the WANTED station while taking 24 dB off something 800 kHz away and 33 dB at
-             *     1 MHz. That is a large win beside a blowtorch and a pure loss on a quiet band —
-             *     so the only honest rule is the one everything else here uses: try it, measure
-             *     the separation, keep it only if it actually helped. */
-            if (kind == 2) {
-                const int wasIf = g_clarityIfBefore.load(std::memory_order_relaxed);
-                /* ★★★ JUDGE IT BY WHAT STARTED IT. A trial begun because the converter was HOT
-                 *     cannot be judged on separation — separation is the very measure that is
-                 *     blind to cross-modulation, so a filter that cured Stuart's ruined audio
-                 *     would show no separation gain and be handed straight back. Same blindness
-                 *     one level down from the gate it was just added to.
-                 *  ★★ So: did the heat go? A narrower filter that removes the offender drops the
-                 *     ADC peak; one that removes nothing merely costs ~11 dB of wanted signal.
-                 *     Kept only if the peak fell AND the separation did not collapse with it. */
-                if (g_clarityHeatTrial.load(std::memory_order_relaxed)) {
-                    const double pkNow = g_adcPeakDbfs.load(std::memory_order_relaxed);
-                    const double pkWas = g_clarityPkBefore.load(std::memory_order_relaxed);
-                    if (pkWas - pkNow >= 3.0 && after > before - 3.0f) {
-                        LOGI("VibeClarity: IF %d kHz took %.1f dB off the converter "
-                             "(%.1f -> %.1f dBFS) — keeping it",
-                             (int)(g_tunerBwHz.load() / 1000), pkWas - pkNow, pkWas, pkNow);
-                        g_clarityNextAt.store(now + 60.0, std::memory_order_relaxed);
-                        return;
-                    }
-                    LOGI("VibeClarity: IF %d kHz did not cool the converter "
-                         "(%.1f -> %.1f dBFS, separation %.1f -> %.1f) — back to wide",
-                         (int)(g_tunerBwHz.load() / 1000), pkWas, pkNow, before, after);
-                    LocalSdrShim::instance().setTunerBandwidth(wasIf);
-                    LocalSdrShim::instance().broadcastHwInfo();
-                    if ((g_clarityTried.load(std::memory_order_relaxed) & 0xF) == 0xF)
-                        g_clarityNextAt.store(now + 60.0, std::memory_order_relaxed);
-                    return;
-                }
-                if (after > before + 1.0f) {
-                    LOGI("VibeClarity: IF %d kHz bought %.1f dB of separation (%.1f -> %.1f) "
-                         "— keeping it", (int)(g_tunerBwHz.load() / 1000), after - before,
-                         before, after);
-                    g_clarityNextAt.store(now + 60.0, std::memory_order_relaxed);
-                    return;
-                }
-                LOGI("VibeClarity: IF %d kHz %s %.1f dB (%.1f -> %.1f) — back to wide",
-                     (int)(g_tunerBwHz.load() / 1000),
-                     after >= before ? "gained only" : "cost",
-                     after >= before ? after - before : before - after, before, after);
-                LocalSdrShim::instance().setTunerBandwidth(wasIf);
-                LocalSdrShim::instance().broadcastHwInfo();
-                if ((g_clarityTried.load(std::memory_order_relaxed) & 0xF) == 0xF)
-                    g_clarityNextAt.store(now + 60.0, std::memory_order_relaxed);
-                return;
-            }
-            if (after > before + 1.0f) {
-                LOGI("VibeClarity: centre %+.0f kHz bought %.1f dB of separation (%.1f -> %.1f) "
-                     "— keeping it", tried / 1e3, after - before, before, after);
-                g_clarityNextAt.store(now + 60.0, std::memory_order_relaxed);
-                return;                                  // keep the bias where it is
-            }
-            // ★ Say what actually happened. This printed "cost -0.4 dB" when separation had
-            //   IMPROVED by 0.4 and merely missed the keep-threshold — a double negative that
-            //   reads as a loss.
-            if (after >= before)
-                LOGI("VibeClarity: centre %+.0f kHz gained only %.1f dB (%.1f -> %.1f) "
-                     "— not worth the move, putting it back",
-                     tried / 1e3, after - before, before, after);
-            else
-                LOGI("VibeClarity: centre %+.0f kHz cost %.1f dB of separation (%.1f -> %.1f) "
-                     "— putting it back", tried / 1e3, before - after, before, after);
-            g_clarityBiasHz.store(0.0, std::memory_order_relaxed);
-            applyCentreNow();
-            const int done = g_clarityTried.load(std::memory_order_relaxed);
-            if (done == 3) g_clarityNextAt.store(now + 60.0, std::memory_order_relaxed);
-            return;
         }
-
-        if (now < g_clarityNextAt.load(std::memory_order_relaxed)) return;
-        if (now < g_gainSettleUntil.load(std::memory_order_relaxed)) return;
-        const float sep = sepAvgDb.load();
-        const double pk0 = g_adcPeakDbfs.load(std::memory_order_relaxed);
-        /* ★★★ WAITING FOR A SETTLED LOOP DEADLOCKS THE CASE THAT MOST NEEDS HELP. Framing judges
-         *     on separation, so it wants a stable baseline — but an OVERLOADED receiver never
-         *     settles: it hunts in the mush, g_settled stays false, and VibeClarity waits for ever
-         *     for a condition the overload itself prevents. Stuart at 102.8, VibeClarity ON, the
-         *     converter at -2.3 dBFS and NOT ONE trial line in the log: "the IF is not narrowing
-         *     and therefore corss modulation still a real big issue".
-         *  ★★ Heat needs no settled loop. The ADC peak is read straight off the converter and says
-         *     nothing about the gain loop's internal state, so a heat-triggered trial can run while
-         *     the AGC is still hunting — and that is exactly when it should. Only the
-         *     separation-judged trials still wait.
-         *  ★ gainSettleUntil is still respected: that is about not reading samples from the old
-         *    gain, which applies to any measurement. */
-        const bool hotNow = pk0 > -6.0;
-        if (!hotNow && !g_settled.load(std::memory_order_relaxed)) return;
-        if (sep < -190.0f && !hotNow) return;            // no measurement to compare against
-
-        /* ★★★ DO NOT EXPERIMENT ON A STATION THAT IS ALREADY FINE. This is the whole of Stuart's
-         *     complaint — "this thing has a mind of its own, I had a clear signal at 106 and then
-         *     for some reason it did something which obliterated it" — and it was my design error,
-         *     not a threshold that wanted tuning: the brief said framing should fire when the loop
-         *     is BOXED IN, and I built it to trial unconditionally. On a clean signal there is
-         *     nothing to win and a working station to lose.
-         *  ★★ 12 dB is well clear of both populations measured today: a healthy station sits at
-         *     20-40 dB of separation (104.2 at 40.1, 96.6 at 39.6) while the ones that needed help
-         *     were at 0-5 (105.4 at -1.6, 97.2 at 0.7). Nothing near the line is being judged.
-         *  ★ The right instinct for the whole suite: it may only act where the receiver is
-         *    demonstrably struggling, and must sit on its hands everywhere else. */
-        /* ★★★ SEPARATION CANNOT SEE CROSS-MODULATION, AND THAT IS THE CASE THIS SUITE EXISTS FOR.
-         *     Stuart at 102.8, beside the 104.2 blowtorch: "You can see as its talking and the
-         *     gaps in the talking line up on every signal in this range." That is the beacon's
-         *     AUDIO riding on every other carrier — the front end compressed and re-modulating the
-         *     whole band. The wanted carrier still stands well clear of its own shoulders, so
-         *     separation reads a healthy 23 dB while the sound is ruined, and a gate on separation
-         *     alone sat there doing nothing: "The IF filtering never kicked in".
-         * ★★★ THE CONVERTER IS THE WITNESS. Cross-modulation needs the front end in compression,
-         *     and his readout said so plainly: pk -1.9 dBFS at 22.9 dB of gain. So heat is a
-         *     trigger in its own right, whatever the separation says.
-         *  ★★ AND WHEN IT IS HEAT, REACH FOR FOCUS FIRST. Framing only moves the window; the
-         *     filter actually removes the offender before the mixer. Measured by Stuart at this
-         *     very frequency: a manual 600 kHz took 102.8 from SNR 20 to 43 and turned a wall of
-         *     mush into three separate stations.
-         *  ★ -6 dBFS: comfortably below the -1.0 backoff (so this fires while the AGC is still
-         *    content) and well above where a quiet band sits. */
-        const double pk = pk0;
-        const bool hot  = hotNow;
-        if (sep > 12.0f && !hot) {
-            g_clarityNextAt.store(now + 30.0, std::memory_order_relaxed);
-            return;
-        }
-
-        // ★ Up first, then down; both refused means stay put and stop asking for a minute.
-        int done = g_clarityTried.load(std::memory_order_relaxed);
-        double bias = 0.0;
-        int    ifWant = 0;
-        /* ★ Framing first, focus second, and the order is deliberate: moving the tuner costs the
-         *   listener nothing, while narrowing the filter costs ~11 dB of wanted signal. Reach for
-         *   the free lever before the one with a price. */
-        /* ★★★ AWAY FROM THE LOUDEST THING FIRST — Stuart: "Try the RF centre away from the
-         *     strongest signal, its killing it in this case". It is only the ORDER, not the
-         *     decision: the trial still measures both ways and keeps whichever actually helped,
-         *     because on 105.4 the winning direction was TOWARDS the blowtorch by 15 dB and no
-         *     rule about loudness would ever have found that. But trying the likely one first
-         *     means the common case is fixed in one move instead of two.
-         *  ★ g_loudestOffHz is the offset of the strongest bin outside the tuned channel; 0 when
-         *    nothing has been measured, in which case up-then-down as before. */
-        const double loud = g_loudestOffHz.load(std::memory_order_relaxed);
-        const bool upFirst = (loud <= 0.0);   // loudest is BELOW us, so move up, away from it
-        const int firstBit = upFirst ? 1 : 2, secondBit = upFirst ? 2 : 1;
-        const double firstBias = upFirst ? +step : -step;
-        // ★ Heat means the front end is being overloaded — the filter is the lever that removes
-        //   the cause, so it goes first. Poor separation with a cool converter is a framing
-        //   problem, and there the cheap lever leads.
-        if (hot && !(done & 4))      { ifWant = 450000; done |= 4; }
-        else if (hot && !(done & 8)) { ifWant = 350000; done |= 8; }
-        else if (!(done & firstBit))  { bias = firstBias;  done |= firstBit; }
-        else if (!(done & secondBit)) { bias = -firstBias; done |= secondBit; }
-        else if (!(done & 4)) { ifWant = 450000; done |= 4; }
-        else if (!(done & 8)) { ifWant = 350000; done |= 8; }
-        else { g_clarityNextAt.store(now + 60.0, std::memory_order_relaxed); return; }
-        g_clarityTried.store(done, std::memory_order_relaxed);
-
-        if (ifWant > 0) {
-            g_clarityIfBefore.store(g_tunerBwHz.load(std::memory_order_relaxed),
-                                    std::memory_order_relaxed);
-            g_clarityTrialKind.store(2, std::memory_order_relaxed);
-            g_clarityHeatTrial.store(hot, std::memory_order_relaxed);
-            g_clarityPkBefore.store(pk, std::memory_order_relaxed);
-            g_claritySepBefore.store(sep, std::memory_order_relaxed);
-            g_clarityTrialAt.store(now, std::memory_order_relaxed);
-            LOGI("VibeClarity: trying the IF filter at %d kHz (separation now %.1f dB)",
-                 ifWant / 1000, sep);
-            LocalSdrShim::instance().setTunerBandwidth(ifWant);
+        int want = (int)std::lround(half * 2.0);
+        if (want < 350000) want = 350000;
+        // ★ Wider than the capture is the same as no filter at all — say so plainly rather than
+        //   commanding a number the tuner will ignore.
+        if (want >= (int)(sampleRate * 0.95)) want = 0;
+        if (want != g_tunerBwHz.load(std::memory_order_relaxed)) {
+            LocalSdrShim::instance().setTunerBandwidth(want);
             LocalSdrShim::instance().broadcastHwInfo();
-            return;
         }
-        g_clarityTrialKind.store(1, std::memory_order_relaxed);
-        g_claritySepBefore.store(sep, std::memory_order_relaxed);
-        g_clarityTrialBias.store(bias, std::memory_order_relaxed);
-        g_clarityTrialAt.store(now, std::memory_order_relaxed);
-        g_clarityBiasHz.store(bias, std::memory_order_relaxed);
-        /* ★★★ FRAMING NEEDS ROOM, AND ZOOMING OUT TAKES IT AWAY. dongleForView keeps the WHOLE
-         *     VISIBLE WINDOW inside the capture, so the room to move the tuner is exactly
-         *     capture/2 - view/2: at full zoom-out it is ZERO and the centre is nailed to the view.
-         *     That is correct — asking to see the whole capture means the capture must be centred
-         *     on what you are seeing — but it means framing is a ZOOMED-IN capability, and a
-         *     silent no-op here looked like a broken feature for two runs. */
-        const double before = rtlCenter.load();
-        applyCentreNow();
-        if (std::fabs(rtlCenter.load() - before) <= 1.0) {
-            LOGI("VibeClarity: no room to move the tuner — the view fills the capture. "
-                 "Zoom in and framing has %.0f kHz to work with per 100 kHz of zoom.",
-                 100.0);
-            g_clarityBiasHz.store(0.0, std::memory_order_relaxed);
-            g_clarityTrialAt.store(0.0, std::memory_order_relaxed);
-            g_clarityNextAt.store(now + 30.0, std::memory_order_relaxed);
-        }
-    }
-
-    /** ★ Re-decide where the tuner should sit and move it if the answer changed. Same lock, same
-     *  function and same hardware call the pan path uses — VibeClarity must not become a second
-     *  way to tune, or the two will disagree about the PLL. */
-    void applyCentreNow() {
-        std::lock_guard<std::recursive_mutex> lk(modeMtx);
-        const double v    = viewCenter.load();
-        const double span = displaySpan() / zoomFactor.load();
-        const double want = dongleForView(v, span);
-        if (std::fabs(want - rtlCenter.load()) <= 1.0) return;
-        rtlCenter.store(want);
-        tuneHw(want);
-        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
-        LOGI("VibeClarity: tuner centre -> %.3f MHz (VFO %.3f)",
-             want / 1e6, audioFreq.load() / 1e6);
     }
     double dongleForView(double view, double viewSpan) {
         // ★★★ THE VFO IS NOT A POINT — IT HAS A BANDWIDTH, AND THE EDGES ARE WHERE IT DIES.
@@ -2787,36 +2529,14 @@ struct LocalSdrShim::Impl {
         // A span wider than the capture can't satisfy both — keep the VFO captured.
         if (lo > hi) return std::min(vfo + lim, std::max(vfo - lim, view));
 
-        /* ★★★ VibeClarity ASKS FOR A PARTICULAR CENTRE, inside every constraint above. Framing is
-         *     the whole point of the suite — putting a blowtorch outside the capture is worth more
-         *     than anything downstream can do about it — but it must not become a second way to
-         *     break panning. So it expresses a PREFERENCE and this function still decides: the
-         *     lock, the VFO's margin and the view's own room all outrank it, exactly as before.
-         *  ★ Ignored while the owner has locked the centre — that is handled above and returns
-         *    early, which is the point of putting this after it. */
-        double bias = g_clarityBiasHz.load(std::memory_order_relaxed);
-        if (bias != 0.0) {
-            /* ★★★ FRAMING AND FOCUS PULL AGAINST EACH OTHER, AND THIS IS THE CONSTRAINT THAT KEEPS
-             *     THEM HONEST. The IF filter is centred on the TUNER, not on the listener — so
-             *     every kHz framing moves the centre away from the VFO is a kHz further into that
-             *     filter's skirt. Stuart, with a manual 600 kHz set and the centre pushed to
-             *     103.295 while listening on 102.8: "I'm now in the filter part" — the left half of
-             *     his band went dead and the SNR fell from 43 to 22. Framing had not gone wrong;
-             *     it had simply never been told that focus was standing behind it.
-             *  ★★ Measured response: at 600 kHz commanded the passband is flat to about 400 kHz
-             *     and falling beyond, so the VFO has to stay inside that. Clamped to the flat part,
-             *     less half the demodulator's own width, so the STATION fits and not merely its
-             *     centre. Wide filter, no clamp — framing gets its full range back.
-             *  ★ This is the "focus may never narrow inside the channel" rule from the brief,
-             *    enforced from the other end: if focus cannot come to the station, the station is
-             *    not allowed to be moved away from focus. */
-            const int ifHz = g_tunerBwHz.load(std::memory_order_relaxed);
-            if (ifHz > 0) {
-                const double flat = std::max(0.0, ifHz * 0.66 - rxBwHz * 0.5);
-                if (std::fabs(bias) > flat) bias = (bias < 0 ? -flat : flat);
-            }
-            if (bias == 0.0) return std::max(lo, std::min(hi, vfo));
-            return std::max(lo, std::min(hi, vfo + bias));
+        /* ★★★ IN AUTO, THE TUNER FOLLOWS THE LISTENER. The IF filter is centred here, so a centre
+         *     left behind by "minimal movement" puts the VFO in the filter's skirt — 663 kHz with
+         *     the listener on 1467. Preferred, not forced: lo/hi above still guarantee the whole
+         *     VIEW stays inside the capture, so panning is unaffected and this simply loses when
+         *     the two disagree. */
+        if (g_tunerBwAuto.load(std::memory_order_relaxed)) {
+            const double want = std::max(lo, std::min(hi, vfo));
+            if (std::fabs(want - cur) > 1000.0) return want;
         }
         // Still legal where we are? Then DON'T MOVE: no retune, no PLL relock, and
         // the pan is a pure crop of spectrum we already have.
@@ -2996,26 +2716,6 @@ struct LocalSdrShim::Impl {
     /** ★ The median level 30–130 kHz either side of the tuned channel, and the channel's own level.
      *  The AGC compares how the two MOVE — see the shoulder test in the climb verdict. */
     std::atomic<float> shoulderDb{-200.0f};
-    /** ★★★ THE TUNED STATION'S -10 dB WIDTH, in Hz — the one measurement here that is NOT a ratio.
-     *
-     *  ★★★ EVERY OTHER METRIC THIS LOOP STEERS BY DIVIDES ONE THING THAT GROWS BY ANOTHER THING
-     *  THAT GROWS WITH IT. Channel over shoulders, peak over floor, p90 over p25: when the front
-     *  end compresses they all rise TOGETHER and the ratio holds while the band turns to porridge.
-     *  That is why separation reported a healthy 20 dB on a screenshot showing stations three times
-     *  too wide, and why the loop climbed to 28 dB and called it good.
-     *
-     *  ★★★ A BROADCAST CHANNEL IS 200 kHz WIDE AND STAYS 200 kHz WIDE however the gain moves.
-     *  Nothing about the band, the aerial or propagation can make a station wider. If it grows,
-     *  that growth is OURS. It is the only quantity here whose correct answer is known BEFORE it
-     *  is measured — from the demodulator, not learned from whatever the receiver is doing.
-     *
-     *  ★★ Measured at 103.3, gain by gain: 121-128 kHz from 0 to 3.7 dB, then 1225 kHz — the whole
-     *  window — from 8.7 dB up. A tenfold step at exactly the gain where the receiver breaks.
-     *  ★ -10 dB rather than -3: the -3 dB point was still reporting 97 kHz at 8.7 dB, where the
-     *  -10 dB point had already blown out to the window edge. The damage shows in the SKIRTS
-     *  filling in long before it reaches the peak.
-     */
-    std::atomic<float> chanWidthHz{-1.0f};
     std::atomic<float> chanWobble{-1.0f};   // ★ how much the channel moves frame to frame (dB)
     std::atomic<float> chanSkew{-1.0f};     // ★ how lopsided it is about its own centre (dB)
     std::atomic<float> channelDbWide{-200.0f};
@@ -5575,77 +5275,6 @@ struct LocalSdrShim::Impl {
              *  ★ 90th percentile against 25th, over the usable window: the top of the stations
              *    against the floor between them.
              */
-            /* ★★★ HOW WIDE IS THE STATION WE ARE LISTENING TO? See chanWidthHz. Walk out from the
-             *     channel's own peak until the trace has fallen 10 dB; if the skirts have filled
-             *     in, that never happens and the walk runs to the edge of the usable window, which
-             *     is the 1225 kHz signature of a smeared band.
-             *  ★ Smoothed, because one frame of a modulated carrier breathes: this is compared
-             *    against a fixed expectation, so it must not chatter across it. */
-            {
-                const int cH = std::max(1, (int)std::lround((demodBw * 0.5) / binHz));
-                const int lim = bins / 2 - deadBins - 1;
-                /* ★★★ WALK FROM WHERE THE PEAK IS, NOT FROM BIN ZERO. The centre bin carries the
-                 *     receiver's DC notch, so dbAt(0) sits far below the station's real peak and a
-                 *     walk starting there stops on its first step: the width read a constant
-                 *     1 kHz against an expected 200, and the test never once fired. */
-                /* ★★★ AND SMOOTH IT, BECAUSE ONE FRAME IS NOT A SPECTRUM. Adjacent bins of an FM
-                 *     carrier differ by more than 10 dB routinely, so a walk across a single frame
-                 *     stops on the first spike — it read a constant 1-2 kHz against an expected
-                 *     200. The sweep tool that produced the good numbers averaged a hundred frames;
-                 *     I did not carry that across. A short box car plus a sustained crossing gives
-                 *     the same robustness without keeping a history.
-                 *  ★ Nine bins is about 20 kHz at this resolution — far finer than the 200 kHz
-                 *    being measured, so it smooths the grass without rounding off the hill. */
-                auto smAt = [&](int i) {
-                    double a = 0; int n2 = 0;
-                    for (int k = i - 4; k <= i + 4; k++) {
-                        if (k <= -lim || k >= lim) continue;
-                        a += dbAt(k); n2++;
-                    }
-                    return n2 ? a / n2 : -300.0;
-                };
-                double top = -300.0; int topI = 0;
-                for (int i = -cH; i <= cH; i++) {
-                    const double v = smAt(i);
-                    if (v > top) { top = v; topI = i; }
-                }
-                // ★ Must STAY down for a run, or a single dip between two humps ends the walk.
-                const int RUN = 6;
-                int lo = topI, hi = topI;
-                while (lo > -lim + RUN) {
-                    bool down = true;
-                    for (int k = 0; k < RUN; k++) if (smAt(lo - k) > top - 10.0) { down = false; break; }
-                    if (down) break;
-                    lo--;
-                }
-                while (hi < lim - RUN) {
-                    bool down = true;
-                    for (int k = 0; k < RUN; k++) if (smAt(hi + k) > top - 10.0) { down = false; break; }
-                    if (down) break;
-                    hi++;
-                }
-                const float w = (float)((hi - lo) * binHz);
-                float prev = chanWidthHz.load();
-                if (prev < 0.0f) prev = w;
-                const float sm = prev + (w - prev) * (1.0f / std::max(1.0f, (float)fftRate));
-                chanWidthHz.store(sm);
-                g_lastChanWidthHz.store(sm, std::memory_order_relaxed);
-            }
-            /* ★ WHERE THE LOUDEST OFFENDER IS — the strongest bin outside the tuned channel, as an
-             *   offset from the VFO. Only used to decide which way framing TRIES FIRST (see
-             *   clarityTick); the trial still measures both and keeps what helped, because on
-             *   105.4 the winning direction was towards the blowtorch. Taken here because this is
-             *   the loop that already walks every bin. */
-            {
-                const int skip = std::max(1, (int)std::lround((demodBw * 0.75) / binHz));
-                double best = -1e9; int bestI = 0;
-                for (int i = -(bins/2) + deadBins; i < bins/2 - deadBins; i++) {
-                    if (i > -skip && i < skip) continue;
-                    const double v = dbAt(i);
-                    if (v > best) { best = v; bestI = i; }
-                }
-                if (best > -1e8) g_loudestOffHz.store(bestI * binHz, std::memory_order_relaxed);
-            }
             contrastBins_.clear();
             for (int i = -(bins/2) + deadBins; i < bins/2 - deadBins; i++)
                 contrastBins_.push_back((float)dbAt(i));
@@ -6820,6 +6449,8 @@ struct LocalSdrShim::Impl {
             g_agcLearnedAtHz.store(freq, std::memory_order_relaxed);
             agcForget("retuned");
         }
+        // ★ …and the dial moving changes where the filter should sit, in Auto.
+        applyAutoIf();
         // Hold modeMtx across the WHOLE placement (rtlCenter/viewCenter store +
         // tuneHw + rx.setTune), not just rx.setTune. retune() runs on the audio-WS
         // thread while the "zoom" handler runs on the spectrum-WS thread, and BOTH
@@ -7545,6 +7176,8 @@ struct LocalSdrShim::Impl {
             // A PAN with no span change never reaches setSpan(), but it moves the view centre —
             // and the zoom channel is tuned to that centre, so it has to follow.
             else updateZoomView();
+            // ★ Auto IF follows the zoom, so every zoom and every pan is a reason to re-derive it.
+            applyAutoIf();
             sendConfig(sock);
             return;
         }
@@ -7648,41 +7281,6 @@ struct LocalSdrShim::Impl {
          *     outside sharedGate(): a listener reading a meter is not taking the dial off anybody.
          *  ★ Reference-counted and released with the socket (see the close path), so a tool that
          *    is killed mid-sweep cannot leave the measurement running for ever. */
-        if (type == "clarity") {
-            /* ★★★ ONE SWITCH THAT TAKES THE FRONT END. It owns the gain, the tuner's IF filter and
-             *     where the tuner sits — so it is gated exactly like the gain: on a shared radio
-             *     it changes what EVERY listener hears and belongs behind the admin password with
-             *     the rest of the protected set. */
-            if (!sharedGate("clarity")) return;
-            bool on = true; { double v; if (jsonNum(msg, "value", v)) on = v != 0.0; }
-            const bool was = g_clarityOn.exchange(on, std::memory_order_relaxed);
-            if (was != on) {
-                clarityForget();
-                if (on) {
-                    /* ★ Turning it on hands the gain to VibeAGC. The client greys the manual
-                     *   controls out to match, but the SERVER must be the one that decides —
-                     *   a client that merely stopped drawing the control would leave a radio
-                     *   answering to whoever sent the last message. */
-                    /* ★★★ setRtlAgc(), NOT g_rtlAgc.store(). Storing the flag leaves the loop
-                     *     INERT — the note on setRtlAgc says so in as many words: the ceiling
-                     *     (g_gainTarget) has to be raised to the tuner's maximum or overloadTick
-                     *     has nothing to work against, "however true the flag is". Measured: with
-                     *     the flag set by hand, VibeClarity ran for 80 seconds and the gain never
-                     *     left 12.5 dB. It is the same fault that once made an owner enable the
-                     *     AGC in the setup page and still have to toggle it in a client. */
-                    LocalSdrShim::instance().setRtlAgc(true);
-                    LOGI("VibeClarity: ON — gain, IF filter and tuner centre are ours now");
-                } else {
-                    // ★ Give everything back as we found it: the bias undone and the filter wide.
-                    LocalSdrShim::instance().setTunerBandwidth(0);
-                    LocalSdrShim::instance().applyCentreNow();
-                    LOGI("VibeClarity: OFF — gain, IF filter and centre handed back");
-                }
-                LocalSdrShim::instance().broadcastHwInfo();
-            }
-            broadcastConfig();
-            return;
-        }
         if (type == "tunerbw") {
             /* ★★★ THE FRONT END IS SHARED, SO THIS IS GATED LIKE THE GAIN. It was outside the gate
              *     while it was being measured; it is a control now. Narrowing the tuner's IF filter
@@ -7692,9 +7290,16 @@ struct LocalSdrShim::Impl {
              *  ★ 0 = back to librtlsdr's automatic choice, which is what every build before this
              *    one did and is still the default. */
             if (!sharedGate("tunerbw")) return;
-            double v = -1;
-            if (jsonNum(msg, "value", v) && v >= 0) {
-                LocalSdrShim::instance().setTunerBandwidth((int)v);
+            double v = 0;
+            if (jsonNum(msg, "value", v)) {
+                /* ★★★ -1 MEANS FOLLOW THE ZOOM. This read `v >= 0` and silently DISCARDED the
+                 *     sentinel, so selecting Auto did nothing at all and the picker sat on a mode
+                 *     the radio was not in. See g_tunerBwAuto for what Auto is and why it replaced
+                 *     an automatic mode that tried to choose a width from measurements. */
+                const bool autoOn = v < 0;
+                g_tunerBwAuto.store(autoOn, std::memory_order_relaxed);
+                if (autoOn) LocalSdrShim::instance().applyAutoIf();
+                else        LocalSdrShim::instance().setTunerBandwidth((int)v);
                 // ★ Tell every listener at once. Waiting for the next retune would leave the
                 //   passband shading describing the previous setting — which is worse than no
                 //   shading, because it looks authoritative.
@@ -8091,7 +7696,8 @@ struct LocalSdrShim::Impl {
          *     can be looking anywhere inside the capture — which is the whole point of moving the
          *     centre away from a blowtorch — so a client that assumed the view centre would draw
          *     the passband wrong by exactly the offset that makes it worth having. */
-        j += ",\"clarity\":" + std::string(g_clarityOn.load() ? "true" : "false")
+        j += ",\"tunerBwAuto\":"
+           + std::string(g_tunerBwAuto.load(std::memory_order_relaxed) ? "true" : "false")
            + ",\"tunerBw\":"
            + std::to_string(g_tunerBwHz.load(std::memory_order_relaxed))
            + ",\"rfCentre\":"
@@ -11399,15 +11005,9 @@ struct LocalSdrShim::Impl {
                 static double lastHb = 0;
                 if (now - lastHb >= 10.0) {
                     lastHb = now;
-                    // ★ The station's -10 dB width rides along: it is the one number here with a
-                    //   known right answer, so seeing it beside the converter's makes a wrong one
-                    //   obvious at a glance.
-                    LOGI("adc: peak %.1f dBFS, clip %.4f%%, max=%u min=%u, station %.0f kHz wide "
-                         "(expect ~%.0f) (0 dBFS = on the rail)",
+                    LOGI("adc: peak %.1f dBFS, clip %.4f%%, max=%u min=%u (0 dBFS = on the rail)",
                          g_adcPeakDbfs.load(std::memory_order_relaxed), clipPct,
-                         (unsigned)adcMax_, (unsigned)adcMin_,
-                         g_lastChanWidthHz.load(std::memory_order_relaxed) / 1e3,
-                         g_demodBwHz.load(std::memory_order_relaxed) / 1e3);
+                         (unsigned)adcMax_, (unsigned)adcMin_);
                 }
                 adcRails_ = adcTotal_ = 0; adcMax_ = 0; adcMin_ = 255; adcAt_ = now;
             }
@@ -15822,7 +15422,6 @@ void LocalSdrShim::setDecoderFreq(double hz) {
 //   setters that were its only callers. The RTL setters above needed it too.
 #define VIBE_HW_LOCK() std::lock_guard<std::recursive_mutex> _hwlk(p->modeMtx)
 
-void LocalSdrShim::applyCentreNow() { if (p) p->applyCentreNow(); }
 double LocalSdrShim::rfCentreHz() const {
     // ★ The TUNER's centre — rtlCenter plus the fixed hardware offset that keeps the DC spike off
     //   the VFO. Not the view centre, and not the VFO. See the hwinfo note.
@@ -15832,6 +15431,7 @@ void LocalSdrShim::broadcastHwInfo() {
     if (!p) return;
     for (auto& pr : p->allSpecPeers()) p->sendHwInfo(pr.sock);
 }
+void LocalSdrShim::applyAutoIf() { if (p) p->applyAutoIf(); }
 void LocalSdrShim::setTunerBandwidth(int hz) {
     if (!p) return;
     /* ★★★ RECORD THE INTENT HERE, NOT WHEN THE TRANSFER LANDS. This was stored on the writer
@@ -16026,9 +15626,6 @@ void LocalSdrShim::overloadTick() {
     /* ★ The profile's cadence, not one figure for the whole radio. FM is dense and a wrong gain is
      *   audible at once; MW's ghosts last "a few seconds at a time due to MW/HF signal fade"
      *   (Stuart), so chasing them fast would cut for nothing. */
-    // ★ Framing rides the same tick as the gain: it needs a SETTLED loop to judge against, and
-    //   this is the one place that knows when that is true.
-    p->clarityTick(now);
     const AgcProfile& tickProf = *g_profile.load(std::memory_order_relaxed);
     if (!hurry && clipRun < 2
         && now - g_ovlLastChangeAt.load(std::memory_order_relaxed) < tickProf.climbDwellSec)
@@ -16213,12 +15810,7 @@ void LocalSdrShim::overloadTick() {
             steps_forceDown = (dir > 0);
             steps_forceUp   = (dir < 0);
             g_sameDirRun.store(0, std::memory_order_relaxed);
-    g_nextStride.store(0, std::memory_order_relaxed);
-    /* ★★★ AND FORGET THE FRAMING TOO. Where the tuner should sit is a fact about THIS dial and its
-     *     neighbours; carrying a bias learned at 105.4 to a station in a quiet part of the band
-     *     would move the capture for no reason and, worse, would look like the suite doing
-     *     something clever when it is repeating an old answer. */
-    clarityForget();   // ★ wrong once: back to one rung
+    g_nextStride.store(0, std::memory_order_relaxed);   // ★ wrong once: back to one rung
             g_settled.store(true, std::memory_order_relaxed);
             g_adcCleanRun.store(0, std::memory_order_relaxed);
         } else if (d > 0.5f) {
@@ -16370,30 +15962,9 @@ void LocalSdrShim::overloadTick() {
     //   the line contradicted itself. I fixed one misattribution in this same chain tonight and
     //   introduced another within the hour; the rule is that every reason names itself.
     bool downForRunaway = false;
-    bool downForWidth   = false;
     bool downForGhost   = false;
-    /* ★★★ IS THE STATION WIDER THAN IT CAN POSSIBLY BE? The one test here that cannot be fooled by
-     *     both halves of a ratio moving together — see chanWidthHz. A WFM channel is 200 kHz wide
-     *     and stays 200 kHz wide; measured clean it reads 121-128 kHz at -10 dB, and the moment
-     *     the front end starts smearing it runs to the edge of the window (1225 kHz at 2.4 MS/s).
-     *  ★★ Twice the demodulator's own width is the line, and it is nowhere near either population:
-     *     clean sits at about 0.6x and broken at 6x. Nothing is being judged near the threshold.
-     *  ★ Needs a real measurement and a mode with a meaningful width — negative means the spectrum
-     *    thread has not produced one yet. */
-    const float chW = p->chanWidthHz.load();
-    const double dBw = g_demodBwHz.load(std::memory_order_relaxed);
-    const bool  tooWide = chW > 0.0f && dBw > 0.0
-                          && chW > (float)(dBw * 2.0);
     int want = steps;
-    if (tooWide && clipRun < 2) {
-        /* ★★★ FIRST IN THE CHAIN, AND ABOVE EVERY RATIO. If the station is twice as wide as its
-         *     own modulation allows, the receiver is manufacturing that width and no amount of
-         *     separation looking healthy changes it. This is the test that would have stopped the
-         *     climb to 28 dB that Stuart kept finding, where every other measure reported the band
-         *     was fine. Comes down like an overload, because that is what it is. */
-        want = steps + agcStride();
-        downForWidth = true;
-    } else if (steps_forceDown) {
+    if (steps_forceDown) {
         want = steps + 1;                                        // undo the unhelpful climb
     } else if (steps_forceUp) {
         want = steps - 1;                                        // undo the unhelpful cut
@@ -16604,9 +16175,6 @@ void LocalSdrShim::overloadTick() {
             g_snrPlateau.store(false, std::memory_order_relaxed);
         }
         if (peak + stepDb > kAgcClimbCeilDbfs) return;
-        // ★ And never climb while the station is already wider than it can be: more gain is
-        //   exactly what is making it wide.
-        if (tooWide) return;
         // ★ Not consulted while kGhostMayCut is false — an unproven detector must not block a
         //   climb either, or it starves the gain by the back door instead of the front.
         // ★ And never climb while the floor is already lifted — that is the condition a climb
@@ -16819,11 +16387,6 @@ void LocalSdrShim::overloadTick() {
         if (steps_forceDown)
             LOGI("stepping back — the last climb did not hold — gain %.1f dB, %d step%s below %.1f dB",
                  applied / 10.0, want, want == 1 ? "" : "s", target / 10.0);
-        else if (downForWidth)
-            LOGI("the station is %.0f kHz wide and cannot be (%.0f kHz of modulation) — the front "
-                 "end is smearing it — gain %.1f dB, %d step%s below %.1f dB",
-                 chW / 1e3, dBw / 1e3, applied / 10.0, want,
-                 want == 1 ? "" : "s", target / 10.0);
         else if (downForRunaway)
             LOGI("still chasing what the front end is making — gain %.1f dB, %d step%s below %.1f dB",
                  applied / 10.0, want, want == 1 ? "" : "s", target / 10.0);
@@ -17247,20 +16810,6 @@ bool LocalSdrShim::isAirspyHf() const { return p && p->useAirspyHf(); }
  *     one where 104.2 either reaches the mixer or does not.
  *  ★ The quietest floor goes too. It is a level measured through THAT filter at THAT frequency;
  *    carried across a retune it is a memory of somewhere else.
- */
-/* ══ VibeClarity: FRAMING — try a centre, measure it, hand it back if it did not help ══════════
- * ★★★ THE STATE MACHINE IS THE FEATURE. Measured across seven stations, pushing the centre away
- *     from the loudest offender helps five and hurts two, averaging NOTHING when applied blindly.
- *     Only keeping what measured better turns it into +2.3 dB that is never negative.
- * ★★★ THE DIRECTION IS FOUND BY TRIAL, NOT BY ARITHMETIC. The capture shows only what is inside
- *     it, so choosing a direction from the spectrum is choosing blind: on 105.7 the loudest
- *     neighbour sat above, so "move away from it" went down into 104.2 and made things worse. Try
- *     one way; if it did not help, hand it back and try the other; if neither helps, stay put and
- *     do not ask again for a while.
- *  ★★ Judged on SEPARATION, like every other verdict here — not on converter headroom. 105.7's
- *     ADC peak got WORSE on a move that improved its separation by 2 dB.
- *  ★ Waits for a settled AGC: a centre move changes the level, and judging it while the gain is
- *    still hunting measures the gain rather than the framing.
  */
 static void agcForget(const char* why) {
     // ★ Fresh meters first (the old station's samples are still in the one-second window), then

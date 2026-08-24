@@ -788,7 +788,6 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       //    stepping four times a second cannot look smooth however well it is smoothed.
       mobileUi?.paintSignal();
       updateRangeGap(centerHz, bwHz);
-      updateIfGap(centerHz, bwHz);
     },
     onConfig: (cfg) => {
       // ★★ ALSO HERE, not only in onHwInfo. lockedWindow() needs the capture bandwidth, which
@@ -1244,30 +1243,16 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         renderRspVals();
       }
     },
-    onTunerBw: (hz: number, rfCentreHz: number, clarityOn: boolean) => {
+    onTunerBw: (hz: number, rfCentreHz: number, auto: boolean) => {
       hwTunerBw = hz;
-      hwClarity = clarityOn;
-      /* ★★★ WITH VibeClarity ON, THE CONTROLS IT OWNS GO GREY — gain, VibeAGC, the IF filter.
-       *     Greyed and still READABLE rather than hidden: the listener should be able to see what
-       *     the receiver has chosen, which is the same courtesy the admin lock already gives
-       *     ("You can still see what they are set to"). Hiding them would answer "where did my
-       *     gain control go?" with silence. */
-      {
-        const btn = document.getElementById('clarity');
-        if (btn) { btn.textContent = clarityOn ? 'ON' : 'OFF'; btn.classList.toggle('on', clarityOn); }
-        for (const id of ['rowGain', 'rowAgc', 'rowTunerBw'])
-          document.getElementById(id)?.classList.toggle('clarityHeld', clarityOn);
-      }
-      // ★ The filter is centred on the TUNER, which is not where the listener is looking — see
-      //   updateIfGap. Without this the shading would be drawn from the view centre and be wrong
-      //   by exactly the offset that makes the filter worth having.
-      hwRfCentre = rfCentreHz;
-      // ★ Visibility is the .rtlOnly class's job (see applyRadioCaps) — the same mechanism bias-T
-      //   and direct sampling use. This handler only reports what is SET; the first version also
-      //   hid the row when the centre was locked, which is the automatic policy's rule and not
-      //   this control's: the IF filter does not change the span.
+            hwTunerAuto = auto;
       const sel = document.getElementById('tunerBw') as HTMLSelectElement | null;
-      if (sel && String(hz) !== sel.value) {
+      /* ★ In Auto the picker stays on "Auto" while the WIDTH underneath moves with the zoom —
+       *   showing the derived number would make the control look as though it were being changed
+       *   by someone else every time the listener zoomed. The width is on the status chip, which
+       *   is a readout and not a control. */
+      if (sel && auto) sel.value = '-1';
+      else if (sel && String(hz) !== sel.value) {
         // ★ If the server reports a width the list does not offer (an owner set it in the config),
         //   show it rather than silently snapping the picker to something else.
         if (![...sel.options].some(o => o.value === String(hz))) {
@@ -1623,8 +1608,8 @@ let hwGainNow = -1;
  *  ★ A readout that names a mode the radio is not in is worse than a blank one. */
 let hwAgcOn = false;
 let hwTunerBw = 0;
+let hwTunerAuto = false;
 let hwRfCentre = 0;
-let hwClarity = false;
 /* ★★★ THE CONVERTER'S OWN FIGURES, AND THE CHIP SHOWS THE ONE THAT MATTERS. It reported `pk` and
  *     nothing else — a PEAK, which we established on 2026-08-24 is not the harm: 96.1 sounds its
  *     best at -1.2 dBFS with nothing on the rail, while 104.2 at 7.7 dB reads 0.0 dBFS with 28% of
@@ -1642,7 +1627,13 @@ const pkText = () => {
 /** ★ The IF width beside the gain, because with VibeClarity running they are two halves of one
  *  decision and a gain figure alone does not explain what the receiver did. Silent when the filter
  *  is wide, which is the case that needs no explanation. */
-const ifText = () => (hwTunerBw > 0 ? ` · IF ${(hwTunerBw / 1e3).toFixed(0)} kHz` : '');
+const ifText = () => (hwTunerBw > 0
+  ? ` · IF ${(hwTunerBw / 1e3).toFixed(0)} kHz${hwTunerAuto ? ' auto' : ''}`
+  : '');
+/* ★ The readout says the WIDTH and nothing else. An earlier version claimed the filter "costs
+ *   ~11 dB on the wanted signal", from a differential measurement whose normalisation window
+ *   (+/-96 kHz) overlapped the point being read — so the figure described the method, not the
+ *   radio, and it never made physical sense for a 450 kHz filter 100 kHz from its centre. */
 /** Clears the "overload passed" chip once the gain is home — see onOverload. */
 let ovlClearTimer = 0;
 let hwAgcLocked = false;
@@ -4094,7 +4085,6 @@ function updateViewOverlays() {
    *    They disagreed because one of them was guessing. */
   const rf = hwLockedCentre > 0 ? hwLockedCentre
            : (hwRfCentre > 0 ? hwRfCentre : spec.rfCenterHz());
-  wf.rfCenterNote = hwClarity ? ' \u2014 controlled by VibeClarity' : '';
   const fs = spec.captureBandwidth();
   wf.rfCenterHz = rf;
 
@@ -7835,8 +7825,6 @@ function populateHw() {
       if (bw) bw.onchange = () => spec!.setTunerBandwidth(Number(bw.value));
       // ★ VibeClarity. The server owns the state — this only asks, and the greying-out follows
       //   from what comes BACK on hwinfo, so the screen can never claim a mode the radio is not in.
-      const cl = document.getElementById('clarity');
-      if (cl) cl.onclick = () => spec!.setClarity(!hwClarity);
     }
 
     // THE DEFAULT, and it MUST be sent, not merely displayed.
@@ -8257,95 +8245,6 @@ function clampTune(hz: number): number {
     ? `${(edge / 1e6).toFixed(3)} MHz — ${why}. Tune ${dir > 0 ? 'up' : 'down'} again to jump to ${(other / 1e6).toFixed(3)} MHz`
     : `${(edge / 1e6).toFixed(3)} MHz — ${why}`);
   return edge;
-}
-
-/** ★★★ SHADE WHAT OUR OWN IF FILTER IS SUPPRESSING, and say how wide it is.
- *
- *  ★★★ WHY THIS EXISTS AT ALL. The tuner's IF filter is the only selectivity this receiver has
- *  ahead of its mixer, and narrowing it is worth 17.8 dB against a transmitter two miles away —
- *  it is the difference between hearing 105.7 and not hearing it. But it is centred on the TUNER,
- *  not on the view, and its skirts are soft: measured at a 400 kHz setting, the roll-off reaches
- *  -3 dB some 31% of the span in from each edge and never reaches -20 dB at all. That is visually
- *  indistinguishable from a quiet band. A listener panning across it concludes the BAND is dead
- *  when the answer is that WE are attenuating it — the receiver misdescribing itself to the one
- *  person who cannot tell, which is the fault AGENTS.md is built around.
- *
- *  ★★ NOT #rangeGap's SOLID BLACK, and the difference is the whole point. That region contains
- *  nothing and never could; this one is genuinely on air and merely suppressed. A wash keeps the
- *  spectrum readable underneath, so what you see is "there is something there and we are the
- *  reason it is faint" rather than "there is nothing there".
- *
- *  ★ Both sides at once, unlike the range gap: the passband sits INSIDE the view, so a narrow
- *  filter shows a shaded region at each end. Hidden entirely when the filter is wide enough to
- *  cover everything on screen, which is the case that needs no explanation.
- */
-function updateIfGap(centerHz: number, bwHz: number) {
-  const lo = document.getElementById('ifGapLo');
-  const hi = document.getElementById('ifGapHi');
-  if (!lo || !hi) return;
-  const hide = () => { lo.classList.remove('show'); hi.classList.remove('show'); };
-  if (!hwTunerBw || hwTunerBw <= 0 || !hwRfCentre || bwHz <= 0) { hide(); return; }
-
-  /* ★★★ MEASURED, NOT MODELLED — AND THE FIRST TWO ATTEMPTS AT THIS WERE BOTH WRONG. Drawn from
-   *     the tuner's ACTUAL response, taken differentially (same frequency, same gain, wide against
-   *     narrow, subtracted so the band cancels — scripts/agc-iffilter.mjs). Attenuation in dB
-   *     against WIDE, by offset from the tuner's centre:
-   *         IF kHz    100   200   300   400   500   600   800  1000
-   *          1200   -1.5  -0.9  -0.1   0.2   0.3   0.4  -0.7   0.6
-   *           800   -3.6  -4.1  -3.7  -2.8  -0.2  -4.4  -3.8   0.5
-   *           450  -11.4 -11.5 -11.1  -7.4 -13.4 -16.5 -24.2 -33.5
-   *           350  -11.2 -11.5 -11.3  -8.4 -14.4 -16.0 -23.3 -30.6
-   *
-   * ★★★ THERE IS NO PASSBAND EDGE. The response is a shallow BOWL, and the first version drew a
-   *     hatched block with a border — an edge the hardware does not have. Same cliff-versus-slope
-   *     error as the HF+ crop, in a new place. It is a gradient now, and it has no border.
-   * ★★★ AND NOTHING IS DRAWN AT 600 kHz AND ABOVE. Those settings are 3-5 dB of BROADBAND
-   *     insertion loss with no selectivity across +/-1 MHz — there is no region to mark, and
-   *     marking one would invent the boundary all over again.
-   *  ★★ The wanted station is attenuated too — about 11 dB at these settings — which is why the
-   *     label says what it costs. It is a TRADE (24 dB off something 800 kHz away, 33 dB at
-   *     1 MHz), not a free improvement, and a display that only showed the benefit would be the
-   *     same half-truth as the old "Automatic" label.
-   */
-  /* ★★★ DRAW IT AT EVERY SETTING. This used to bail out at 600 kHz and above, because the filter
-   *     SHAPE measured at 96.1 showed only 3-5 dB of broadband loss there — so I concluded those
-   *     settings do nothing and marking them would invent a boundary. Wrong inference from a right
-   *     measurement: 96.1 has no blowtorch beside it. At 102.8, next door to 104.2, that same
-   *     600 kHz took the SNR from 20 dB to 43 and turned a wall of mush into three separate
-   *     stations. What a width is WORTH depends on where the interference is, not on the filter
-   *     alone — so the overlay hid itself at exactly the setting that was doing the most good. */
-  const KNEE_HZ = 500e3;      // where the curve leaves the flat bottom of the bowl
-  const DEEP_HZ = 1000e3;     // where it is ~20 dB below the centre and plainly gone
-
-  const viewLo = centerHz - bwHz / 2;
-  const frac = (f: number) => (f - viewLo) / bwHz;
-  const label = `IF ${(hwTunerBw / 1e3).toFixed(0)} kHz`;
-  let any = false;
-  for (const [el, sign] of [[lo, -1], [hi, +1]] as [HTMLElement, number][]) {
-    const knee = frac(hwRfCentre + sign * KNEE_HZ);
-    const deep = frac(hwRfCentre + sign * DEEP_HZ);
-    // The stretch of THIS side of the view that is past the knee.
-    const x0 = sign < 0 ? 0 : Math.max(0, Math.min(1, knee));
-    const x1 = sign < 0 ? Math.max(0, Math.min(1, knee)) : 1;
-    if (x1 - x0 < 0.02) { el.classList.remove('show'); continue; }
-    el.style.left  = `${x0 * 100}%`;
-    el.style.width = `${(x1 - x0) * 100}%`;
-    // ★ The wash deepens from nothing at the knee to full where the response is ~20 dB down, so
-    //   the picture on screen follows the curve rather than announcing a boundary.
-    const dFrac = Math.max(0, Math.min(1,
-      (Math.abs(deep - knee) * bwHz) > 0 ? (Math.abs(deep - x0) / Math.max(1e-6, x1 - x0)) : 1));
-    const stop = `${Math.max(0, Math.min(100, dFrac * 100))}%`;
-    el.style.background = sign < 0
-      ? `linear-gradient(to left,  rgba(255,138,61,0) 0%, rgba(255,138,61,0.20) ${stop}, rgba(255,138,61,0.28) 100%)`
-      : `linear-gradient(to right, rgba(255,138,61,0) 0%, rgba(255,138,61,0.20) ${stop}, rgba(255,138,61,0.28) 100%)`;
-    const lbl = el.firstElementChild as HTMLElement;
-    lbl.style.top = `${(wf?.specJoinFrac?.() ?? 0.25) * 100}%`;
-    lbl.textContent = (x1 - x0) > 0.14
-      ? `${label} \u2014 rolling off (costs ~11 dB on the wanted signal too)` : label;
-    el.classList.add('show');
-    any = true;
-  }
-  if (!any) hide();
 }
 
 /** ★ Black out the part of the window the radio cannot tune, and say what it is.
