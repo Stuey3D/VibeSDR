@@ -1410,6 +1410,21 @@ static std::atomic<float>    g_contrastBeforeClimb{99.0f};
  */
 static std::atomic<float>    g_sepBeforeMove{0.0f};
 static std::atomic<float>    g_chanBeforeMove{0.0f};
+/* ★★★ WHERE THIS CLIMB STARTED, because judging only the LAST STEP cannot see a slow slide.
+ *     Measured on 105.4 at 1.2 MS/s: separation falls -0.1 -> -2.7 dB across the climb, steadily
+ *     worse with every rung — but in steps of 0.1-0.3 dB, ALL of them under the verdict's 0.5 dB
+ *     threshold. So every single step reads "flat, no change", and the loop walks eight rungs into
+ *     intermodulation without ever seeing a move it could object to. Stuart: "105.4 in agc in
+ *     1.2MHz mode was 37db gain which was introduing intermodulation, it really wanted 29.7".
+ * ★★★ AND AT 1.2 MS/s THERE IS NOTHING ELSE TO STOP IT. 104.2 falls outside the sampled window, so
+ *     the converter never sees the beacon: clip 0.0000% and peak only -6.7 dBFS at 37.2 dB of
+ *     gain. Every headroom guard is silent, the mixer makes the intermodulation anyway, and
+ *     separation is the only witness left — which is exactly the one the per-step threshold blinds.
+ *  ★ A run, not a step: the baseline is taken when a climb begins from settled and held until the
+ *    loop settles again, so the question becomes "am I better off than before I started?" — which
+ *    no amount of individually-innocent steps can answer wrongly. */
+static std::atomic<float>    g_sepAtRunStart{-200.0f};
+static std::atomic<int>      g_stepsAtRunStart{-1};
 static std::atomic<float>    g_shoulderBeforeMove{0.0f};
 static std::atomic<bool>     g_lastCutWasRunaway{false};
 static std::atomic<double>   g_moveStepDb{0.0};
@@ -4902,8 +4917,22 @@ struct LocalSdrShim::Impl {
             shoulderBins_.clear();
             {
                 const int inner = std::max(1, (int)std::lround((demodBw * 0.60) / binHz));
-                const int outer = std::min(bins / 2 - 1,
-                                           (int)std::lround((demodBw * 2.50) / binHz));
+                /* ★★★ AND KEEP THE OUTER SHOULDER OUT OF THE ANTI-ALIAS SKIRT. At 200 kHz of WFM
+                 *     the shoulders run 120-500 kHz out. Against the usable half-span that is 46%
+                 *     at 2.4 MS/s — comfortably in the flat passband — but 93% at 1.2 MS/s, where
+                 *     the outermost bins are sitting on the decimation filter's roll-off. Those
+                 *     bins read low because the FILTER is rolling off, not because the band is
+                 *     quiet, so they drag the shoulder median down and flatter the separation
+                 *     exactly where FM most needs an honest reading.
+                 *  ★★ Clamped rather than switched off: `shouldersFit` still passes at 1.2 MS/s, so
+                 *     failing it would throw the test away at the very rate Stuart uses to escape
+                 *     104.2. Narrowing the window keeps the measurement and drops only the part of
+                 *     it that was measuring our own filter.
+                 *  ★ 0.35 of the sample rate is inside the flat region on an RTL at both rates:
+                 *    500 kHz is untouched at 2.4 MS/s, and 1.2 MS/s comes back to 420 kHz. */
+                const int outer = std::min({ bins / 2 - 1,
+                                             (int)std::lround((demodBw * 2.50) / binHz),
+                                             (int)std::lround((sampleRate * 0.35) / binHz) });
                 for (int i = inner; i <= outer; i++) {
                     shoulderBins_.push_back((float)dbAt(i));
                     shoulderBins_.push_back((float)dbAt(-i));
@@ -15386,6 +15415,32 @@ void LocalSdrShim::overloadTick() {
          *  ★ 1.8x sits between the two populations with room on both sides: real signals measured
          *    0.88x (96.1, a 9.8 dB move), images 2.9x-21x (103.0, every step below 8.7 dB). */
         const AgcProfile& prof = *g_profile.load(std::memory_order_relaxed);
+        /* ★★★ THE WHOLE-RUN VERDICT — see g_sepAtRunStart. Checked before the per-step one, because
+         *     a run that has gone backwards overall is not made acceptable by its last step having
+         *     been harmless. */
+        {
+            const float runSep = g_sepAtRunStart.load(std::memory_order_relaxed);
+            const int   runAt  = g_stepsAtRunStart.load(std::memory_order_relaxed);
+            /* ★★★ 2.0 dB, NOT 1.0 — AND THE FIRST FIGURE WAS SMALLER THAN THE NOISE IT JUDGED.
+             *     Swept on 105.4 at 1.2 MS/s with Capital actually on air, separation wanders
+             *     1.2-2.1 dB across the whole upper half of the gain range on a signal that weak.
+             *     A 1.0 dB abort would fire on the wander, not on the slide — aborting legitimate
+             *     climbs at random on exactly the marginal stations that need the gain. Stuart:
+             *     "105.4 is very weak and needs a lot of tinkering with the gain to get it in."
+             *  ★ Calibrated on the two cases seen: the genuine catch cost 3.8 dB overall and still
+             *    fires; the doubtful one cost 1.7 dB and no longer does. */
+            if (runSep > -190.0f && runAt >= 0 && dir > 0 && sepNow < runSep - 2.0f) {
+                LOGI("this climb has cost %.1f dB of separation overall (%.1f -> %.1f) — every step "
+                     "looked harmless, the run did not — back to %d steps below the ceiling",
+                     runSep - sepNow, runSep, sepNow, runAt);
+                g_ovlSteps.store(runAt, std::memory_order_relaxed);   // ★ re-anchor; the write follows
+                steps_forceDown = true;
+                g_settled.store(true, std::memory_order_relaxed);
+                g_sepAtRunStart.store(-200.0f, std::memory_order_relaxed);
+                g_stepsAtRunStart.store(-1, std::memory_order_relaxed);
+                g_agcHurryUntil.store(now + 20.0, std::memory_order_relaxed);
+            }
+        }
         const float moved   = dir < 0 ? chFell : -chFell;
         const bool  runaway = stepDb > 0.5f && moved > 2.0f && moved > stepDb * prof.runawayRatio;
 
@@ -15974,6 +16029,15 @@ void LocalSdrShim::overloadTick() {
             g_dropAt.store(now, std::memory_order_relaxed);
         }
     }
+    /* ★ Open a run the first time the gain moves UP after being settled, and remember where it
+     *   began. Closed by agcForget, by a downward move, and by the whole-run verdict itself. */
+    if (want < steps && g_stepsAtRunStart.load(std::memory_order_relaxed) < 0) {
+        g_sepAtRunStart.store(p->sepAvgDb.load(), std::memory_order_relaxed);
+        g_stepsAtRunStart.store(steps, std::memory_order_relaxed);
+    } else if (want > steps) {
+        g_sepAtRunStart.store(-200.0f, std::memory_order_relaxed);
+        g_stepsAtRunStart.store(-1, std::memory_order_relaxed);
+    }
     if (want != steps) {                      // ★ every move goes on trial, up or down alike
         g_sepBeforeMove.store(p->sepAvgDb.load(), std::memory_order_relaxed);
         // ★ The channel and the size of the move, for the "are we making this?" verdict.
@@ -16467,6 +16531,8 @@ static void agcForget(const char* why) {
     g_triedDown.store(false, std::memory_order_relaxed);
     g_wantDown.store(false, std::memory_order_relaxed);
     g_moveDir.store(0, std::memory_order_relaxed);
+    g_sepAtRunStart.store(-200.0f, std::memory_order_relaxed);   // ★ a new station, a new run
+    g_stepsAtRunStart.store(-1, std::memory_order_relaxed);
     g_floorTestMutedUntil.store(0.0, std::memory_order_relaxed);
     g_climbAt.store(0.0, std::memory_order_relaxed);
     g_dropAt.store(0.0, std::memory_order_relaxed);
