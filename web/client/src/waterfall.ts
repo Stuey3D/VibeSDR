@@ -200,6 +200,9 @@ export class Waterfall {
   }
   /** The split actually used for layout — zero while the trace is hidden. */
   private effectiveRatio(): number { return this._showSpec ? this.specRatio : 0; }
+  /** ★ Where the spectrum ends and the waterfall begins, as a fraction of the wrapper's height.
+   *  Published because the IF-passband overlay hangs its label on that join — see updateIfGap. */
+  specJoinFrac(): number { return this.effectiveRatio(); }
   /** Fill opacity of the trace (the app's bgOpacity). */
   specAlpha = 0.85;
 

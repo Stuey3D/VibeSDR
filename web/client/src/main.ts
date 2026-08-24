@@ -8255,10 +8255,28 @@ function updateIfGap(centerHz: number, bwHz: number) {
   // ★ 0 = "wide, set by the sample rate", i.e. nothing of ours to declare.
   if (!hwTunerBw || hwTunerBw <= 0 || !hwRfCentre || bwHz <= 0) { hide(); return; }
 
+  /* ★★★ THE COMMANDED WIDTH IS NOT THE REAL ONE, AND DRAWING IT AS IF IT WERE WAS A LIE OF
+   *     EXACTLY THE KIND THIS OVERLAY EXISTS TO PREVENT. Stuart, looking at a strong station
+   *     sitting inside the shading: "if it is attenuated how is it so strong?" It was not
+   *     attenuated. The R820T's bandwidth setting is NOMINAL — measured on the Pi at 2.4 MS/s,
+   *     the actual -3 dB width runs about 540 kHz WIDER than whatever is asked for:
+   *         commanded 800 kHz -> 1332 measured   (+532)
+   *         commanded 600 kHz -> 1163            (+563)
+   *         commanded 400 kHz ->  923            (+523)
+   *     At his 450 kHz setting that is a real half-width of ~495 kHz, and the station he was
+   *     pointing at sat 485 kHz out — INSIDE the passband, untouched, while wearing our hatching.
+   *  ★ Measured at 2.4 MS/s only. If this turns out to vary with sample rate the fix is another
+   *    sweep, not a fudge — the figure is here to be re-measured, not trusted for ever. */
+  const IF_EXCESS_HZ = 540e3;
+  const realBw = hwTunerBw + IF_EXCESS_HZ;
   const viewLo = centerHz - bwHz / 2;
-  const pbLo = hwRfCentre - hwTunerBw / 2;
-  const pbHi = hwRfCentre + hwTunerBw / 2;
+  const pbLo = hwRfCentre - realBw / 2;
+  const pbHi = hwRfCentre + realBw / 2;
+  // ★ Nothing to declare once the real passband already covers everything on screen.
+  if (pbLo <= viewLo && pbHi >= viewLo + bwHz) { hide(); return; }
   const frac = (f: number) => Math.max(0, Math.min(1, (f - viewLo) / bwHz));
+  // ★ Name the setting, not the measured width: it is what the listener chose and what the
+  //   dropdown says. The shading's POSITION carries the real width.
   const label = `IF ${hwTunerBw >= 1e6 ? (hwTunerBw / 1e6).toFixed(1) + ' MHz'
                                        : (hwTunerBw / 1e3).toFixed(0) + ' kHz'}`;
   let any = false;
@@ -8269,7 +8287,14 @@ function updateIfGap(centerHz: number, bwHz: number) {
     if (x1 - x0 < 0.02) { el.classList.remove('show'); continue; }
     el.style.left  = `${x0 * 100}%`;
     el.style.width = `${(x1 - x0) * 100}%`;
-    (el.firstElementChild as HTMLElement).textContent =
+    /* ★ SIT THE LABEL ON THE SPECTRUM/WATERFALL JOIN. It was bottom-aligned and the control bar
+     *   covered it — Stuart: "right now it is covered by the controls". The join is the one
+     *   horizontal line in this view that is always visible whatever the split is set to, and it
+     *   moves with the SPECTRUM/WATERFALL slider, so it has to be read from the waterfall rather
+     *   than guessed at in CSS. */
+    const lbl = el.firstElementChild as HTMLElement;
+    lbl.style.top = `${(wf?.specJoinFrac?.() ?? 0.25) * 100}%`;
+    lbl.textContent =
       (x1 - x0) > 0.10 ? `${label} \u2014 attenuated by this receiver` : label;
     el.classList.add('show');
     any = true;
