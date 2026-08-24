@@ -205,6 +205,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     { hz: 104.7e6, real: true,  note: 'Horizon' },
     { hz: 104.9e6, real: true,  note: 'BBC R Leicester — barely clinging on' },
     { hz: 105.4e6, real: true,  note: 'Capital — faint, stereo lock just about obtainable' },
+    /* ★★★ ADDED 2026-08-25, AND IT IS THE POINT OF THE WHOLE EXERCISE. Stuart, on the XCover with
+     *     the band-aware AGC running: "I can hear smooth at 105.7 and captical at 105.4 which
+     *     normally get destroyed by 104.2". 105.7 was not in the original labelling because it was
+     *     not audible to label — it only exists once the front end stops manufacturing over it.
+     *  ★ A station that appears when the gain comes down is the strongest possible evidence that
+     *    the intermodulation was ours and not the band's. */
+    { hz: 105.7e6, real: true,  note: 'Smooth — buried by 104.2 intermod until the AGC came down' },
     { hz: 106.0e6, real: true,  note: 'Greatest Hits — very strong with enough gain' },
   ];
   const GAIN = Number(opt('gain', '125'));
