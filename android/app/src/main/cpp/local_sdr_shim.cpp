@@ -2598,10 +2598,24 @@ struct LocalSdrShim::Impl {
         }
 
         if (now < g_clarityNextAt.load(std::memory_order_relaxed)) return;
-        if (!g_settled.load(std::memory_order_relaxed)) return;
         if (now < g_gainSettleUntil.load(std::memory_order_relaxed)) return;
         const float sep = sepAvgDb.load();
-        if (sep < -190.0f) return;                       // no measurement to compare against
+        const double pk0 = g_adcPeakDbfs.load(std::memory_order_relaxed);
+        /* ★★★ WAITING FOR A SETTLED LOOP DEADLOCKS THE CASE THAT MOST NEEDS HELP. Framing judges
+         *     on separation, so it wants a stable baseline — but an OVERLOADED receiver never
+         *     settles: it hunts in the mush, g_settled stays false, and VibeClarity waits for ever
+         *     for a condition the overload itself prevents. Stuart at 102.8, VibeClarity ON, the
+         *     converter at -2.3 dBFS and NOT ONE trial line in the log: "the IF is not narrowing
+         *     and therefore corss modulation still a real big issue".
+         *  ★★ Heat needs no settled loop. The ADC peak is read straight off the converter and says
+         *     nothing about the gain loop's internal state, so a heat-triggered trial can run while
+         *     the AGC is still hunting — and that is exactly when it should. Only the
+         *     separation-judged trials still wait.
+         *  ★ gainSettleUntil is still respected: that is about not reading samples from the old
+         *    gain, which applies to any measurement. */
+        const bool hotNow = pk0 > -6.0;
+        if (!hotNow && !g_settled.load(std::memory_order_relaxed)) return;
+        if (sep < -190.0f && !hotNow) return;            // no measurement to compare against
 
         /* ★★★ DO NOT EXPERIMENT ON A STATION THAT IS ALREADY FINE. This is the whole of Stuart's
          *     complaint — "this thing has a mind of its own, I had a clear signal at 106 and then
@@ -2630,8 +2644,8 @@ struct LocalSdrShim::Impl {
          *     mush into three separate stations.
          *  ★ -6 dBFS: comfortably below the -1.0 backoff (so this fires while the AGC is still
          *    content) and well above where a quiet band sits. */
-        const double pk = g_adcPeakDbfs.load(std::memory_order_relaxed);
-        const bool hot  = pk > -6.0;
+        const double pk = pk0;
+        const bool hot  = hotNow;
         if (sep > 12.0f && !hot) {
             g_clarityNextAt.store(now + 30.0, std::memory_order_relaxed);
             return;
