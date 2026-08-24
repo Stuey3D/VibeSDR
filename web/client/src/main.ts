@@ -8252,50 +8252,58 @@ function updateIfGap(centerHz: number, bwHz: number) {
   const hi = document.getElementById('ifGapHi');
   if (!lo || !hi) return;
   const hide = () => { lo.classList.remove('show'); hi.classList.remove('show'); };
-  // ★ 0 = "wide, set by the sample rate", i.e. nothing of ours to declare.
   if (!hwTunerBw || hwTunerBw <= 0 || !hwRfCentre || bwHz <= 0) { hide(); return; }
 
-  /* ★★★ THE COMMANDED WIDTH IS NOT THE REAL ONE, AND DRAWING IT AS IF IT WERE WAS A LIE OF
-   *     EXACTLY THE KIND THIS OVERLAY EXISTS TO PREVENT. Stuart, looking at a strong station
-   *     sitting inside the shading: "if it is attenuated how is it so strong?" It was not
-   *     attenuated. The R820T's bandwidth setting is NOMINAL — measured on the Pi at 2.4 MS/s,
-   *     the actual -3 dB width runs about 540 kHz WIDER than whatever is asked for:
-   *         commanded 800 kHz -> 1332 measured   (+532)
-   *         commanded 600 kHz -> 1163            (+563)
-   *         commanded 400 kHz ->  923            (+523)
-   *     At his 450 kHz setting that is a real half-width of ~495 kHz, and the station he was
-   *     pointing at sat 485 kHz out — INSIDE the passband, untouched, while wearing our hatching.
-   *  ★ Measured at 2.4 MS/s only. If this turns out to vary with sample rate the fix is another
-   *    sweep, not a fudge — the figure is here to be re-measured, not trusted for ever. */
-  const IF_EXCESS_HZ = 540e3;
-  const realBw = hwTunerBw + IF_EXCESS_HZ;
+  /* ★★★ MEASURED, NOT MODELLED — AND THE FIRST TWO ATTEMPTS AT THIS WERE BOTH WRONG. Drawn from
+   *     the tuner's ACTUAL response, taken differentially (same frequency, same gain, wide against
+   *     narrow, subtracted so the band cancels — scripts/agc-iffilter.mjs). Attenuation in dB
+   *     against WIDE, by offset from the tuner's centre:
+   *         IF kHz    100   200   300   400   500   600   800  1000
+   *          1200   -1.5  -0.9  -0.1   0.2   0.3   0.4  -0.7   0.6
+   *           800   -3.6  -4.1  -3.7  -2.8  -0.2  -4.4  -3.8   0.5
+   *           450  -11.4 -11.5 -11.1  -7.4 -13.4 -16.5 -24.2 -33.5
+   *           350  -11.2 -11.5 -11.3  -8.4 -14.4 -16.0 -23.3 -30.6
+   *
+   * ★★★ THERE IS NO PASSBAND EDGE. The response is a shallow BOWL, and the first version drew a
+   *     hatched block with a border — an edge the hardware does not have. Same cliff-versus-slope
+   *     error as the HF+ crop, in a new place. It is a gradient now, and it has no border.
+   * ★★★ AND NOTHING IS DRAWN AT 600 kHz AND ABOVE. Those settings are 3-5 dB of BROADBAND
+   *     insertion loss with no selectivity across +/-1 MHz — there is no region to mark, and
+   *     marking one would invent the boundary all over again.
+   *  ★★ The wanted station is attenuated too — about 11 dB at these settings — which is why the
+   *     label says what it costs. It is a TRADE (24 dB off something 800 kHz away, 33 dB at
+   *     1 MHz), not a free improvement, and a display that only showed the benefit would be the
+   *     same half-truth as the old "Automatic" label.
+   */
+  if (hwTunerBw >= 600e3) { hide(); return; }
+  const KNEE_HZ = 500e3;      // where the curve leaves the flat bottom of the bowl
+  const DEEP_HZ = 1000e3;     // where it is ~20 dB below the centre and plainly gone
+
   const viewLo = centerHz - bwHz / 2;
-  const pbLo = hwRfCentre - realBw / 2;
-  const pbHi = hwRfCentre + realBw / 2;
-  // ★ Nothing to declare once the real passband already covers everything on screen.
-  if (pbLo <= viewLo && pbHi >= viewLo + bwHz) { hide(); return; }
-  const frac = (f: number) => Math.max(0, Math.min(1, (f - viewLo) / bwHz));
-  // ★ Name the setting, not the measured width: it is what the listener chose and what the
-  //   dropdown says. The shading's POSITION carries the real width.
-  const label = `IF ${hwTunerBw >= 1e6 ? (hwTunerBw / 1e6).toFixed(1) + ' MHz'
-                                       : (hwTunerBw / 1e3).toFixed(0) + ' kHz'}`;
+  const frac = (f: number) => (f - viewLo) / bwHz;
+  const label = `IF ${(hwTunerBw / 1e3).toFixed(0)} kHz`;
   let any = false;
-  for (const [el, x0, x1] of [[lo, 0, frac(pbLo)], [hi, frac(pbHi), 1]] as
-                             [HTMLElement, number, number][]) {
-    // ★ A sliver is noise on the screen rather than information — and at exactly one pixel the
-    //   label cannot be read anyway, so there is nothing to lose by staying quiet.
+  for (const [el, sign] of [[lo, -1], [hi, +1]] as [HTMLElement, number][]) {
+    const knee = frac(hwRfCentre + sign * KNEE_HZ);
+    const deep = frac(hwRfCentre + sign * DEEP_HZ);
+    // The stretch of THIS side of the view that is past the knee.
+    const x0 = sign < 0 ? 0 : Math.max(0, Math.min(1, knee));
+    const x1 = sign < 0 ? Math.max(0, Math.min(1, knee)) : 1;
     if (x1 - x0 < 0.02) { el.classList.remove('show'); continue; }
     el.style.left  = `${x0 * 100}%`;
     el.style.width = `${(x1 - x0) * 100}%`;
-    /* ★ SIT THE LABEL ON THE SPECTRUM/WATERFALL JOIN. It was bottom-aligned and the control bar
-     *   covered it — Stuart: "right now it is covered by the controls". The join is the one
-     *   horizontal line in this view that is always visible whatever the split is set to, and it
-     *   moves with the SPECTRUM/WATERFALL slider, so it has to be read from the waterfall rather
-     *   than guessed at in CSS. */
+    // ★ The wash deepens from nothing at the knee to full where the response is ~20 dB down, so
+    //   the picture on screen follows the curve rather than announcing a boundary.
+    const dFrac = Math.max(0, Math.min(1,
+      (Math.abs(deep - knee) * bwHz) > 0 ? (Math.abs(deep - x0) / Math.max(1e-6, x1 - x0)) : 1));
+    const stop = `${Math.max(0, Math.min(100, dFrac * 100))}%`;
+    el.style.background = sign < 0
+      ? `linear-gradient(to left,  rgba(255,138,61,0) 0%, rgba(255,138,61,0.20) ${stop}, rgba(255,138,61,0.28) 100%)`
+      : `linear-gradient(to right, rgba(255,138,61,0) 0%, rgba(255,138,61,0.20) ${stop}, rgba(255,138,61,0.28) 100%)`;
     const lbl = el.firstElementChild as HTMLElement;
     lbl.style.top = `${(wf?.specJoinFrac?.() ?? 0.25) * 100}%`;
-    lbl.textContent =
-      (x1 - x0) > 0.10 ? `${label} \u2014 attenuated by this receiver` : label;
+    lbl.textContent = (x1 - x0) > 0.14
+      ? `${label} \u2014 rolling off (costs ~11 dB on the wanted signal too)` : label;
     el.classList.add('show');
     any = true;
   }

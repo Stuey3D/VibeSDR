@@ -1394,13 +1394,9 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    reason it is faint. The hatch reads as "masked" rather than "empty". */
 .ifGap {
   position: absolute; top: 0; bottom: 0; z-index: 19; pointer-events: none; display: none;
-  /* ★★ IT DEEPENS OUTWARD, because the roll-off is SOFT — measured, nothing reaches -20 dB even
-     at the span edges. A flat wash with a hard border drew a cliff where the radio has a slope,
-     which is how a station 3 dB down ended up looking like one we had removed. The hatch stays
-     (it reads as "masked") but its weight now follows the attenuation. */
-  background:
-    repeating-linear-gradient(135deg,
-      rgba(255,138,61,0.10) 0 6px, rgba(255,138,61,0.04) 6px 12px);
+  /* ★ The gradient itself is built in updateIfGap from the MEASURED response — see the table
+     there. Nothing static here, and deliberately NO hatch and NO border: the tuner's response is
+     a shallow bowl, and every version of this that drew an edge drew one the hardware lacks. */
   align-items: flex-start; justify-content: center;
 }
 .ifGap.show { display: flex; }
@@ -1412,14 +1408,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   font-family: var(--mono, monospace); opacity: 0.9; white-space: nowrap;
   text-shadow: 0 1px 3px #000, 0 0 6px #000;
 }
-/* ★ The -3 dB point, drawn as a soft edge rather than a wall: it is where the roll-off REACHES
-   half power, not where reception stops. A hard rule there would restate the cliff mistake. */
-#ifGapLo { border-right: 1px solid rgba(255,138,61,0.40);
-           -webkit-mask-image: linear-gradient(to left,  rgba(0,0,0,0.25), #000);
-                   mask-image: linear-gradient(to left,  rgba(0,0,0,0.25), #000); }
-#ifGapHi { border-left:  1px solid rgba(255,138,61,0.40);
-           -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,0.25), #000);
-                   mask-image: linear-gradient(to right, rgba(0,0,0,0.25), #000); }
+
 #rangeGapNote {
   color: var(--text-dim); font-size: 11px; letter-spacing: 0.5px; text-align: center;
   padding: 0 10px; max-width: 260px; line-height: 1.4;
