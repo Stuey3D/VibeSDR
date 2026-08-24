@@ -1012,6 +1012,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       // ★ Sticky, so it must be RESTORED from the server's own report — the button has to say
       //   what the radio is doing, not what this tab last asked for.
       setToggleTo('wsp', s.wsp, 'wsp');
+      if (s.autobw !== undefined) setToggleTo('abwBtn', s.autobw, 'autobw');
       $('wspBtn').textContent = s.wsp ? 'NR ON' : 'NR OFF';
       setToggleTo('ims', s.ims, 'ims');
       $('imsBtn').textContent = s.ims ? 'IMS ON' : 'IMS OFF';
@@ -6030,6 +6031,15 @@ function renderRds() {
   // signal is weak, when it is the normal injection ratio for a healthy station.
   // ★ Deviations in kHz, each said against its own spec band so the number explains itself
   // — "6.8 kHz" means nothing without knowing 6.0–7.5 is nominal (Stuart: "make it clear").
+  /* ★ AUTO BW's answer, next to the figure that drove it. Silent (a dash) whenever it is not
+   *   acting — off, no pilot, or not FM — because a number there would imply it had chosen one. */
+  {
+    const el = document.getElementById('rxAutoBw');
+    if (el) {
+      const hz = Number(rdsExt?.autobwHz ?? 0);
+      el.textContent = (rdsExt?.autobw && hz > 0) ? `${(hz / 1e3).toFixed(0)} kHz` : '\u2014';
+    }
+  }
   // ★★ MPX S/N, and WHAT IT DID. A number on its own invites "is 22 good?"; showing the corner
   //    the receiver chose because of it answers the question the listener actually has, which is
   //    "why does this sound the way it does". Only mentioned when it is actually acting — on a
@@ -7488,6 +7498,13 @@ function buildMenu() {
     $('imsBtn').textContent = on ? 'IMS ON' : 'IMS OFF';
     spec!.setIms(on);
   }, 'ims', true);
+  /* ★ Defaults OFF, unlike the other four. They correct a fault; this one TRADES — it throws away
+   *   audio bandwidth to buy noise rejection, which is the right call on a weak station and a
+   *   pointless loss on a strong one. A trade should be opted into. */
+  toggle('abwBtn', (on) => {
+    $('abwBtn').textContent = on ? 'AUTO BW ON' : 'AUTO BW OFF';
+    spec!.setAutoBw(on);
+  }, 'autobw', false);
   toggle('ceqBtn', (on) => {
     $('ceqBtn').textContent = on ? 'CEQ ON' : 'CEQ OFF';
     spec!.setCeq(on);
@@ -7641,6 +7658,7 @@ function pushSettingsToServer() {
   const notch = bool('notch');      if (notch !== undefined) spec.setNotch(notch);
   const stereo = bool('stereo');    if (stereo !== undefined) spec.setStereo(stereo);
   const wsp = bool('wsp');          if (wsp !== undefined) spec.setWeakProc(wsp);
+  const abw = bool('autobw');       if (abw !== undefined) spec.setAutoBw(abw);
   const ims = bool('ims');          if (ims !== undefined) spec.setIms(ims);
   const ceq = bool('ceq');          if (ceq !== undefined) spec.setCeq(ceq);
   const nb = bool('nb');            if (nb !== undefined) spec.setNoiseBlanker(nb);

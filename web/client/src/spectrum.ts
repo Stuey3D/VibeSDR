@@ -69,6 +69,10 @@ export interface RdsMeta {
 
 /** The fields the normal RDS path discards, plus the constellation. */
 export interface RdsExt {
+  /** ★ TEF-style automatic demodulator bandwidth: whether it is on, and the width it settled on
+   *  (Hz). Carried beside mpxSnr because that is the figure that decides it. */
+  autobw?: boolean;
+  autobwHz?: number;
   pty: number; tp: number; ta: number; ms: number; di: number;
   // ★ The same five UNCONFIRMED — what is arriving right now, whether or not it passed
   // confirmation. Always sent; the RAW/CONFIRMED choice is entirely the client's.
@@ -216,6 +220,9 @@ export interface SpectrumCallbacks {
     ceq: boolean;
     /** Noise blanker — impulses, the fourth fault and the fourth switch. */
     nb: boolean;
+    /** ★ TEF-style automatic demodulator bandwidth, and the width it has settled on (Hz). */
+    autobw?: boolean;
+    autobwHz?: number;
     nrStrength?: number;      // 0..1, absent = never set
     rfNotch?: boolean; dabNotch?: boolean;
     /** ★ TWO SEPARATE BIAS-TEES: `biasT` is the dongle's, `rspBiasT` the RSP's. Different
@@ -1103,6 +1110,8 @@ export class SpectrumClient {
   setHwPpm(ppm: number)    { this._send({ type: 'ppm', value: Math.round(ppm) }); }
   setHwSampleRate(r: number) { this._send({ type: 'sampleRate', value: Math.round(r) }); }
   /** ★ The tuner's IF filter in Hz; 0 = librtlsdr's automatic choice. RTL only. */
+  /** ★ TEF6686-style automatic demodulator bandwidth. FM broadcast only; server-wide. */
+  setAutoBw(on: boolean) { this._send({ type: 'autobw', on }); }
   setTunerBandwidth(hz: number) { this._send({ type: 'tunerbw', value: Math.round(hz) }); }
   setHwDirectSampling(v: 0 | 1 | 2) { this._send({ type: 'directSampling', value: v }); }
 

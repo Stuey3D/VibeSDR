@@ -575,6 +575,8 @@ public:
     void setTunerBandwidth(int hz);
     /** ★ Recompute the IF filter from the current view (Auto mode only). */
     void applyAutoIf();
+    /** ★ TEF6686-style automatic demodulator bandwidth, FM broadcast only. See g_autoBwOn. */
+    void autoBandwidthTick();
     /** ★ Where the tuner is centred (NOT the view, NOT the VFO) — the IF filter is centred here. */
     double rfCentreHz() const;
     /** ★ Re-send the hardware description to every spectrum listener. */

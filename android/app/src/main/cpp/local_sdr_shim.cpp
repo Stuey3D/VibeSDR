@@ -1394,6 +1394,31 @@ static std::atomic<int>      g_tunerBwHz{0};
  *  filter opens to cover wherever you are looking: "the zoom aware IF filter needs to automatically
  *  widen when a user unlocks the view from the VFO and pans the spectrum across." */
 static std::atomic<bool>     g_tunerBwAuto{false};
+/* ══ AUTO BANDWIDTH — the TEF6686's trick, in the DEMODULATOR ═══════════════════════════════════
+ * ★★★ STUART FOUND THIS ON A REAL TEF6686 (2026-08-24): "If you disable auto bandwidth it becomes
+ *     really messy and noisy, but with it on the bandwidth is always adjusting dynamically with
+ *     200KHz on heart but 184KHz on Flex and 97.2 Smooth which is super weak it was dropping it to
+ *     134KHz." It narrows BELOW the channel width for weak signals, trading audio bandwidth for
+ *     noise rejection — the opposite of the assumption that a 200 kHz channel needs 200 kHz.
+ * ★★★ THIS IS THE DEMODULATOR, NOT THE TUNER, AND THE DISTINCTION IS THE WHOLE REASON IT CAN
+ *     WORK. The tuner's IF clamps at ~350 kHz, so 134 kHz is unreachable in analogue; in DSP it is
+ *     free. It is also PER LISTENER where per-client DSP exists, so unlike the IF filter it cannot
+ *     affect anybody else — and on a shared VFO there is one pipeline, so it applies to everyone,
+ *     which is exactly what Stuart asked for: "a toggle like the rest of the FM enhancements as it
+ *     will apply to everybody".
+ * ★★★ AND IT ADDRESSES A DIFFERENT FAULT FROM THE IF FILTER. Bandwidth helps a WEAK signal in a
+ *     clean front end, by throwing away noise the station is not using. The IF filter helps a
+ *     CLEAN signal behind a strong neighbour. Neither substitutes for the other.
+ *  ★★ Steered by MPX S/N — the pilot against the transmitted-silence gap — because that is what
+ *     Stuart nominated as the honest measure of a station's strength ("that is a good measure of
+ *     the stations actual strength"), and because it is a property of the STATION rather than of
+ *     the receiver's gain. No pilot, no measurement, no adjustment.
+ *  ★ FM BROADCAST ONLY. On AM or SSB the passband is the user's own choice of selectivity and
+ *    moving it under them would be taking a control away, not adding one. */
+static std::atomic<bool>     g_autoBwOn{false};
+/** ★ Where the controller has settled, in Hz — published for the Advanced RDS readout so it is
+ *  visible that something is working. 0 = not adjusting. */
+static std::atomic<double>   g_autoBwNowHz{0.0};
 static std::atomic<double>   g_ovlMargin{3.0};
 static std::atomic<double>   g_ovlLastChangeAt{0.0};
 /** ★★★ MORE GAIN IS NOT MORE SIGNAL, AND THIS IS WHERE A HEADROOM-ONLY AGC GOES WRONG.
@@ -7504,6 +7529,21 @@ struct LocalSdrShim::Impl {
             perListener(&vibedsp::RxPipeline::setCeq, &ClientDsp::ceqOn, &ceqOn, msg.find("\"on\":true") != std::string::npos);
             return;
         }
+        if (type == "autobw") {
+            /* ★★★ TEF6686-style automatic demodulator bandwidth — see g_autoBwOn.
+             *  ★★ NOT perListener(), and the reason is worth stating: the other four are PIPELINE
+             *     switches, while this one drives the shim's rxBwHz. It therefore acts on the ONE
+             *     shared pipeline — which is exactly right for a single listener and for a shared
+             *     VFO ("a toggle like the rest of the FM enhancements as it will apply to
+             *     everybody"), and is why the client hides it on a locked-centre receiver, where
+             *     each listener has their own DSP and this would move a pipeline nobody hears. */
+            const bool on = msg.find("\"on\":true") != std::string::npos;
+            g_autoBwOn.store(on, std::memory_order_relaxed);
+            LOGI("auto bandwidth: %s", on ? "on" : "off");
+            if (!on) g_autoBwNowHz.store(0.0, std::memory_order_relaxed);
+            LocalSdrShim::instance().broadcastHwInfo();
+            return;
+        }
         if (type == "ims") {
             perListener(&vibedsp::RxPipeline::setIms, &ClientDsp::imsOn, &imsOn, msg.find("\"on\":true") != std::string::npos);
             return;
@@ -7853,6 +7893,10 @@ struct LocalSdrShim::Impl {
             return myDsp ? ((*myDsp).*slot).load() : shared.load();
         };
         j += std::string(",\"wsp\":") + (mine(&ClientDsp::wspOn, weakProcOn) ? "true" : "false");
+        // ★ Auto bandwidth is server-wide (see the autobw handler), so it is reported as it is
+        //   rather than through mine() — there is no per-listener value to disagree with.
+        j += std::string(",\"autobw\":") + (g_autoBwOn.load() ? "true" : "false")
+           + ",\"autobwHz\":" + std::to_string(g_autoBwNowHz.load());
         j += std::string(",\"ims\":") + (mine(&ClientDsp::imsOn, imsOn)      ? "true" : "false");
         j += std::string(",\"ceq\":") + (mine(&ClientDsp::ceqOn, ceqOn)      ? "true" : "false");
         j += std::string(",\"nb\":")  + (mine(&ClientDsp::nbOn,  nbOn)       ? "true" : "false");
@@ -12025,6 +12069,11 @@ struct LocalSdrShim::Impl {
                       //      this sound dull?" have an ANSWER rather than a suspicion — the same
                       //      rule as every other sticky control reporting its state.
                       + ",\"mpxSnr\":"    + std::to_string(P_ ? P_->blendSnrDb() : 0.0f)
+                      /* ★ AUTO BW's answer travels WITH the MPX S/N that drove it — the panel
+                       *   shows them side by side, and a reading split across two messages would
+                       *   let them disagree by a tick. */
+                      + ",\"autobw\":"   + std::string(g_autoBwOn.load() ? "true" : "false")
+                      + ",\"autobwHz\":" + std::to_string(g_autoBwNowHz.load())
                       // ★ The CORRECTED figure — the noise contribution has been measured and
                       //   subtracted — plus whether it means anything at this S/N. Sending the
                       //   raw number would repeat the mistake that labelled a 6 dB signal's noise
@@ -12600,6 +12649,7 @@ struct LocalSdrShim::Impl {
                 //     work that is allowed to take milliseconds. 2 s also matches the detector's
                 //     own two-second dwell — there is nothing to react to faster than that.
                 LocalSdrShim::instance().overloadTick();
+                LocalSdrShim::instance().autoBandwidthTick();
 
                 // ── Deferred idle park (see armIdlePark / g_vsIdleGraceSec) ──────────────
                 // ★ THE PARK IS RE-JUSTIFIED HERE, NOT MERELY REMEMBERED. Anything could have
@@ -15446,6 +15496,41 @@ double LocalSdrShim::rfCentreHz() const {
 void LocalSdrShim::broadcastHwInfo() {
     if (!p) return;
     for (auto& pr : p->allSpecPeers()) p->sendHwInfo(pr.sock);
+}
+/** ★★★ THE TEF'S AUTO BANDWIDTH — see g_autoBwOn for what it is and why it is the demodulator.
+ *
+ *  Maps MPX S/N onto a width between the mode's own bandwidth and a floor, so a strong station
+ *  gets everything it transmitted and a weak one gets the part worth having. Stuart's TEF, for
+ *  calibration: 200 kHz on Heart (strong), 184 on Flex, 134 on 97.2 Smooth (very weak).
+ *  ★★ 134 kHz is the floor deliberately: it passes +/-67 kHz, so the pilot (19), the stereo
+ *  difference (23-53) and RDS (57) all survive. Narrower would start taking RDS off exactly the
+ *  weak stations where it is hardest won.
+ *  ★ Moves only when the answer differs by more than 8 kHz. A bandwidth change rebuilds the audio
+ *  chain, and a controller that nudges it every two seconds would be audible in a way the
+ *  improvement never is.
+ */
+void LocalSdrShim::autoBandwidthTick() {
+    if (!p || !g_autoBwOn.load(std::memory_order_relaxed)) { g_autoBwNowHz.store(0.0); return; }
+    std::lock_guard<std::recursive_mutex> lk(p->modeMtx);
+    // ★ FM broadcast only — see the note by g_autoBwOn.
+    if (p->rxMode != vibedsp::RxPipeline::Mode::WFM) { g_autoBwNowHz.store(0.0); return; }
+    if (!p->rx.snrValid()) { g_autoBwNowHz.store(0.0); return; }   // no pilot, nothing to judge on
+
+    // ★ paramsFor takes the mode NAME, not the pipeline's enum — the two live either side of
+    //   rxModeFor(). WFM's own bandwidth is the ceiling, so a mode whose width is retuned later
+    //   carries this with it instead of meeting a hard-coded 200 kHz.
+    const double full  = std::max(120000.0, paramsFor("wfm").bandwidth);
+    const double floorB = 134000.0;
+    const double snr   = p->rx.blendSnrDb();
+    // ★ 8 dB and below is "very weak" (Stuart's 97.2 Smooth); 25 dB and above is a station in good
+    //   health. Between them, straight-line — the TEF's own numbers sit on this line.
+    const double t = std::max(0.0, std::min(1.0, (snr - 8.0) / (25.0 - 8.0)));
+    const double want = floorB + (full - floorB) * t;
+    g_autoBwNowHz.store(want, std::memory_order_relaxed);
+    if (std::fabs(want - p->rxBwHz) < 8000.0) return;
+    LOGI("auto bandwidth: MPX S/N %.1f dB -> %.0f kHz (was %.0f)",
+         snr, want / 1e3, p->rxBwHz / 1e3);
+    p->setBandwidth(want);
 }
 void LocalSdrShim::applyAutoIf() { if (p) p->applyAutoIf(); }
 void LocalSdrShim::setTunerBandwidth(int hz) {
