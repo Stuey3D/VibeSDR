@@ -1,95 +1,69 @@
-# VibeClarity — automatic front-end management
+# The IF filter, the AGC, and what VibeClarity taught us
 
-> Combines VibeAGC with automatic RF centre offsetting and IF filtering to remove strong signal
-> interference from where you are wanting to listen. — Stuart, 2026-08-25
+★ Renamed in spirit: VibeClarity as an automatic *decision-making* suite is **abandoned**. What
+survives is a band-aware AGC and an IF filter tied to the zoom. This brief is kept because the
+reasons matter more than the code did.
 
-Three levers against one failure: a signal strong enough to make the receiver misbehave somewhere
-you are not listening. All three are measured, on air, on the Pi's RTL-SDR Blog V4.
+## Why the automatic version could not be made to work
+Every part measured well alone — framing found **+15 dB** on 105.4 by trial where the arithmetic
+said the opposite; focus took **10.8 dB** off the converter. Together they were worse than nothing.
 
-| stage | lever | what it does | measured |
+★★★ **THE LEVERS INTERACT, AND EVERY VERIFICATION IS CONFOUNDED BY THE LEVER IT MEASURES.**
+- Narrowing the IF cools the converter → the AGC reads headroom and climbs → straight back into the
+  overload the filter just cured. *"because of the 350KHz width its overcooking the AGC."*
+- So a filter trial judged on the converter measures the **AGC**, not the filter: *"IF 450 kHz did
+  not cool the converter (−2.7 → −1.7 dBFS)"* while it was doing its job.
+- Moving the RF centre off a blowtorch pushes the **listener** into that same filter's skirt,
+  because the filter is centred on the **tuner**: *"I'm now in the filter part."*
+- Separation — which everything was judged on — is blind to **cross-modulation** and to
+  **compression**: both terms of the ratio rise together. See [[cross_modulation_not_intermod]].
+
+★★ **And one part actively broke HF**: the width test compared against 2× the demodulator
+bandwidth — 18 kHz on AM, narrower than any real signal — so it fired permanently and walked the
+gain to zero. *"trying it on HF and its set the gain to 0."*
+
+Stuart's verdict: *"annoyingly on some signals it works well and others it ruins them ... I think
+there is a reason this hasnt been done before."*
+
+## The three modes (Stuart's spec, 2026-08-25)
+| mode | IF filter | view | RF centre |
 |---|---|---|---|
-| **Framing** | RF centre | moves the offender away from the centre of the capture | **7.2 dB** off the ADC peak at 105.4 |
-| **Focus** | tuner IF filter | attenuates what is left, ahead of the mixer | **17.8 dB**, automatic → the 350 kHz floor |
-| **Exposure** | VibeAGC | spends the recovered headroom on the wanted station | 0.9 → 25.4 dB of usable range |
+| **Single user, unlocked** | zoom-tied, full range | free pan + zoom | follows VFO + small offset (DC spike) |
+| **Shared VFO, unlocked** | zoom-tied, full range | **shared zoom, NO panning** — pinned to the VFO | follows VFO |
+| **Locked frequency, independent VFOs** | **none** — untouched | per-listener as today | pinned by the owner |
 
-★★★ **THEY COMPOSE, AND ON HF NEITHER IS SUFFICIENT ALONE.** On FM the beacon is 1.2 MHz away and
-framing alone pushes it clean out of the window. On 40m, Radio Romania at 7250 is **150 kHz** from
-a 7100 centre — *inside* the narrowest IF the hardware has (±175 kHz), so focus cannot touch it.
-Move the centre to ~6.95 and it is 300 kHz out, comfortably rejected. A single-lever design would
-have looked fine on FM and quietly failed on 40m.
+★★★ Mode 3 gets no filtering **by design**: *"Cant have a 2.4MHz sample rate and promise a
+3-5.4MHz spectrum only to then IF filter half or 3/4 of it. Server owner if they need higher
+selectivity will simply select a lower sample rate."*
 
-## The measured facts it must be built on
-- **The IF floor is ~350 kHz.** Commanding 300/250/200 kHz produces an identical ADC peak — the
-  tuner or librtlsdr clamps. Useful range is 800 → 350 kHz; above 1 MHz nothing happens at FM
-  spacings. ★ 350 kHz is WIDER than a 200 kHz WFM channel, so focus physically cannot eat a
-  broadcast station.
-- **`rtlsdr_set_tuner_bandwidth()` must be RE-ASSERTED** after every `set_center_freq` and every
-  `set_sample_rate` — both silently undo it. See [[agc_if_filter_selectivity]].
-- **The RTL has no anti-alias skirt worth cropping** at 2.4 MS/s — flat to both edges, measured
-  (`scripts/agc-edge.mjs`). The HF+'s `edgeCutoffHz()` crop must NOT be extended to it.
-- **The V4 reaches HF through a built-in upconverter**, so the R820T and its IF filter are in
-  circuit on HF too — the whole mechanism transfers. (It would NOT with direct sampling.)
+## ✅ Built (vibeserver 4.1.0-34)
+- **Auto — follows zoom** in the IF FILTER dropdown. Never narrower than the view, so it cannot
+  hide a signal and needs **no overlay** (the overlay is gone). Verified: 2.4 MHz view → wide;
+  1.2 MHz → 1458 kHz; 614 kHz → 844 kHz; 154 kHz → 384 kHz; view panned off the VFO → wide again.
+- **The tuner follows the VFO** in Auto, at the usual +15 kHz DC-spike offset. Without it the
+  centre gets left behind — *"the RF centre has stayed down at 663 and I'm up at 1467 ... I am in
+  the cutoff of the filter."*
+- **Locked-frequency receivers are excluded** entirely.
+- **Shared radios take the widest listener's view**, so nobody gets dead band from someone else's
+  zoom. (Superseded once mode 2 shares the zoom.)
+- The width is on the status chip beside the gain, marked `auto`, so it is visible it is working.
 
-## ★★★ THE RULE THAT KEEPS IT HONEST: FOCUS MAY NEVER NARROW INSIDE THE VIEW
-Stuart's concern, and it is the one that would sink this: *"when the locked VFO centre is disabled
-and someone zooms out and pans about, we will need a display to show what parts are working."*
+## ▶ NOT built — next, and specified
+1. **Mode 2: shared zoom + no panning.** The view is pinned to the VFO and the zoom is shared, so
+   shared VFO becomes "our version of FM-DX where everything is shared". ★★ The safe shape is
+   SERVER-SIDE ONLY: refuse a pan (force the view centre to the VFO) and apply a zoom to every
+   client — exactly how the dial already works, with no client pushing state at another client.
+   ★★★ **CAUTION:** the per-client view code carries the comment *"the hardware centre still never
+   moves — it is locked"* — it is mode 3's path. Mode 3 must stay untouched.
+2. **TEF6686-style AUTO BANDWIDTH for the DEMODULATOR.** FM only. A button beside IMS/CEQ/NR and a
+   readout in the Advanced RDS window. Stuart measured the TEF doing 200 kHz on Heart, 184 on Flex,
+   **134 on weak Smooth** — it narrows *below* the channel for weak signals, trading audio
+   bandwidth for noise rejection. ★★ This is **DSP**, not the tuner: our IF floor is ~350 kHz, so
+   134 kHz is unreachable in analogue. It is per-listener, so it cannot fight framing or affect
+   anyone else. ★ Different failure from the IF filter: bandwidth helps a WEAK signal in a clean
+   front end; the IF filter helps a clean signal behind a strong neighbour.
 
-A listener panning across a region **we** are attenuating sees nothing there and concludes the BAND
-is dead. That is the AGENTS.md fault in its purest form — the receiver misdescribing itself to the
-one person who cannot tell. So:
-
-### The first version of this rule was WRONG, and Stuart's own listening disproved it
-It read: *"the view always wins — focus may only ever cut OUTSIDE what is currently on screen."*
-Principled, and it would have thrown away the entire benefit. ★★★ What Stuart actually does by
-hand is set **600 kHz while looking at a much wider span**, deliberately accepting attenuated view
-edges because the audio is worth it — and he is right: *"the IF filter is great, really cleans up
-105.4 and even allows 105.7 smooth to come in with stereo"*. Zoom-following focus would have
-re-opened the filter to his view width and undone it.
-
-**The rule is about the CHANNEL, not the view:**
-
-> Focus may never narrow inside the channel being DEMODULATED. It may narrow inside the VIEW — but
-> when it does, the spectrum must say so.
-
-★★★ **THAT MAKES THE DISPLAY LOAD-BEARING, NOT DECORATIVE.** It is the thing that makes aggressive
-filtering honest, and without it automatic focus is a receiver quietly lying about the band. Mark
-where the IF passband ends; everything beyond it reads as "attenuated by the receiver" rather than
-"dead band", and focus is then free to narrow as hard as it usefully can.
-
-## The display
-- **A state line, not a justification.** Zoom-driven focus is caused by the user, so it states a
-  fact: `focus 450 kHz · following zoom`. On a shared radio: `focus 1.2 MHz · widest listener`.
-- **Framing must be visible on the spectrum**, because it moves the capture underneath the view —
-  mark where the RF centre is and where the capture ends, in the manner of the existing band bar.
-- **Anything outside the capture must read as "not received", never as "empty band".** Same
-  principle as the HF+ crop: stop where the radio does, leave the roll-off visible so it reads as
-  a receiver rather than a cliff.
-
-## Sharing
-`c->viewSpanHz` / `c->viewCentreHz` are already per-client, so the IF is the **union of every
-listener's view** — a single listener gets the full benefit, a shared radio opens up automatically,
-and no policy switch is needed for the common case. Framing moves the capture for everyone, so on a
-shared dial it needs the owner's consent (Stuart: locked RF centre keeps the span; single-user and
-shared-VFO may auto-select; the owner can lock it on; a status must be shown).
-
-## Build order
-1. **The passband marker on the spectrum.** Small, no behaviour change, and it makes everything
-   after it safe. Without it, automatic focus is a receiver quietly lying about the band.
-2. **Automatic focus**, driven by the DEMODULATED CHANNEL plus a margin — NOT by the zoom (see the
-   corrected rule above). That is what reproduces by itself what Stuart gets by hand.
-3. **Framing** — automatic RF centre. Biggest blast radius: it moves the capture for every listener
-   and interacts with the pan logic in `dongleForView()`. Wants the marker in place first, and
-   tonight's 7250 test to prove the rule on a second band. Needs the interference detection (the
-   spraying test already firing while the gain is low) and the same "prove it worked" verification
-   everything else uses: the move must drop the interference while leaving the CHANNEL level alone,
-   or it is handed back.
-4. Exposure is already shipped (VibeAGC, band-aware since 4.1.0).
-
-▶ **OPEN, and it needs an EAR not an instrument:** at 600 kHz, does a strong clean station (96.6,
-104.2) sound duller than at automatic? The 350 kHz floor is wider than a 200 kHz WFM channel so it
-should not be able to touch the audio — but that is a calculation and the skirts are real. If a
-strong station is unchanged, automatic focus can be aggressive by default; if it dulls, it must
-stay well back and the gain is smaller than today's numbers suggest.
-
-★ Verify tonight: 7250 on 40m, which is a night-time path. FM alone would overfit the framing rule
-to a 1.2 MHz spacing HF never sees.
+## The tools are the durable part
+`scripts/agc-sweep` (hold the station, move the gain) · `agc-band-scan` (hold the gain, walk a
+LABELLED band — this is what caught the false positives) · `agc-width` · `agc-iffilter`
+(differential, the only way to see the filter's real shape) · `agc-framing` · `agc-settle`.

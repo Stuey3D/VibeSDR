@@ -2451,6 +2451,21 @@ struct LocalSdrShim::Impl {
      *    be, which is the zoomed-out case that wants no filtering at all. */
     void applyAutoIf() {
         if (!g_tunerBwAuto.load(std::memory_order_relaxed)) return;
+        /* ★★★ NOT ON A LOCKED-FREQUENCY RECEIVER, AND THAT IS THE RIGHT ANSWER RATHER THAN A
+         *     LIMITATION. Stuart: "Cant have a 2.4MHz sample rate and promise a 3-5.4MHz spectrum
+         *     only to then IF filter half or 3/4 of it. Server owner if they need higher
+         *     selectivity will simply select a lower sample rate."
+         *  ★ An owner who pins the window has advertised that span and chosen it deliberately;
+         *    the sample rate gives them the same selectivity, decided once at setup instead of
+         *    moving under their listeners. This mode is left exactly as it was. */
+        if (g_vsLockedCentre.load() > 0.0) return;
+        /* ★★★ NOT ON A LOCKED CENTRE, AND THAT IS NOT A LIMITATION — IT IS THE RIGHT ANSWER.
+         *     Stuart: "the IF filter ... would only be for free tuning so Unlocked radio mode
+         *     otherwise you'd just set it to a lower sample rate when setting up the locked
+         *     frequency." An owner who pins the window has already chosen the span deliberately;
+         *     a narrower SAMPLE RATE gives them the same selectivity with none of this machinery,
+         *     and it is decided once at setup rather than moving under their listeners. */
+        if (g_vsLockedCentre.load() > 0.0) return;
         const double rf = rtlCenter.load() + hwOffsetHz();
         /* ★★★ EVERY LISTENER'S VIEW, NOT JUST ONE. On a shared receiver the filter is the RADIO's,
          *     so one person zooming into a station would leave everyone else staring at dead band.
@@ -2534,7 +2549,8 @@ struct LocalSdrShim::Impl {
          *     the listener on 1467. Preferred, not forced: lo/hi above still guarantee the whole
          *     VIEW stays inside the capture, so panning is unaffected and this simply loses when
          *     the two disagree. */
-        if (g_tunerBwAuto.load(std::memory_order_relaxed)) {
+        if (g_tunerBwAuto.load(std::memory_order_relaxed)
+            && g_vsLockedCentre.load() <= 0.0) {
             const double want = std::max(lo, std::min(hi, vfo));
             if (std::fabs(want - cur) > 1000.0) return want;
         }
