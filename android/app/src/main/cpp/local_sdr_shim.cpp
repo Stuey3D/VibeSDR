@@ -1397,8 +1397,15 @@ static std::atomic<double>   g_clarityTrialBias{0.0};
 static std::atomic<float>    g_claritySepBefore{-200.0f};
 static std::atomic<double>   g_clarityTrialAt{0.0};
 static std::atomic<double>   g_clarityNextAt{0.0};
-/** ★ Which directions have been tried at this dial, so a refused one is not offered twice. */
-static std::atomic<int>      g_clarityTried{0};      // bit 0 = up, bit 1 = down
+/** ★ Which moves have been tried at this dial, so a refused one is not offered twice.
+ *  bit 0 = centre up, bit 1 = centre down, bit 2 = IF 450 kHz, bit 3 = IF 350 kHz. */
+static std::atomic<int>      g_clarityTried{0};
+/** ★ What kind of thing is on trial, so the right one gets handed back. 1 = centre, 2 = IF. */
+static std::atomic<int>      g_clarityTrialKind{0};
+static std::atomic<int>      g_clarityIfBefore{0};
+/** ★ Offset of the loudest bin OUTSIDE the tuned channel, from the tuned frequency, in Hz.
+ *  Negative = the offender is below us. Only decides which direction framing TRIES FIRST. */
+static std::atomic<double>   g_loudestOffHz{0.0};
 static void clarityForget() {
     g_clarityBiasHz.store(0.0, std::memory_order_relaxed);
     g_clarityTrialBias.store(0.0, std::memory_order_relaxed);
@@ -1406,6 +1413,8 @@ static void clarityForget() {
     g_clarityTrialAt.store(0.0, std::memory_order_relaxed);
     g_clarityNextAt.store(0.0, std::memory_order_relaxed);
     g_clarityTried.store(0, std::memory_order_relaxed);
+    g_clarityTrialKind.store(0, std::memory_order_relaxed);
+    g_clarityIfBefore.store(0, std::memory_order_relaxed);
 }
 static std::atomic<double>   g_ovlMargin{3.0};
 static std::atomic<double>   g_ovlLastChangeAt{0.0};
@@ -2480,11 +2489,58 @@ struct LocalSdrShim::Impl {
 
         const double trialAt = g_clarityTrialAt.load(std::memory_order_relaxed);
         if (trialAt > 0.0) {
+            /* ★★★ BAIL OUT EARLY IF IT IS PLAINLY WORSE. Riding a bad move for the full window is
+             *     five seconds of ruined audio, and Stuart heard exactly that: "I had a clear
+             *     signal at 106 and then for some reason it did something which obliterated it".
+             *     A move that has cost 6 dB after two seconds is not going to redeem itself. */
+            const float sepNow = sepAvgDb.load();
+            const float sepWas = g_claritySepBefore.load(std::memory_order_relaxed);
+            if (now - trialAt >= 2.0 && sepNow < sepWas - 6.0) {
+                LOGI("VibeClarity: that move cost %.1f dB straight away (%.1f -> %.1f) "
+                     "— abandoning it", sepWas - sepNow, sepWas, sepNow);
+                if (g_clarityTrialKind.load(std::memory_order_relaxed) == 2) {
+                    LocalSdrShim::instance().setTunerBandwidth(
+                        g_clarityIfBefore.load(std::memory_order_relaxed));
+                    LocalSdrShim::instance().broadcastHwInfo();
+                } else {
+                    g_clarityBiasHz.store(0.0, std::memory_order_relaxed);
+                    applyCentreNow();
+                }
+                g_clarityTrialAt.store(0.0, std::memory_order_relaxed);
+                return;
+            }
             if (now - trialAt < 5.0) return;            // still settling; nothing to judge yet
             const float before = g_claritySepBefore.load(std::memory_order_relaxed);
             const float after  = sepAvgDb.load();
             const double tried = g_clarityTrialBias.load(std::memory_order_relaxed);
+            const int    kind  = g_clarityTrialKind.load(std::memory_order_relaxed);
             g_clarityTrialAt.store(0.0, std::memory_order_relaxed);
+
+            /* ★★★ THE IF FILTER IS A TRADE, WHICH IS WHY IT IS TRIALLED AND NOT SIMPLY SET.
+             *     Measured differentially on this radio, narrowing to 450 kHz costs about 11 dB on
+             *     the WANTED station while taking 24 dB off something 800 kHz away and 33 dB at
+             *     1 MHz. That is a large win beside a blowtorch and a pure loss on a quiet band —
+             *     so the only honest rule is the one everything else here uses: try it, measure
+             *     the separation, keep it only if it actually helped. */
+            if (kind == 2) {
+                const int wasIf = g_clarityIfBefore.load(std::memory_order_relaxed);
+                if (after > before + 1.0f) {
+                    LOGI("VibeClarity: IF %d kHz bought %.1f dB of separation (%.1f -> %.1f) "
+                         "— keeping it", (int)(g_tunerBwHz.load() / 1000), after - before,
+                         before, after);
+                    g_clarityNextAt.store(now + 60.0, std::memory_order_relaxed);
+                    return;
+                }
+                LOGI("VibeClarity: IF %d kHz %s %.1f dB (%.1f -> %.1f) — back to wide",
+                     (int)(g_tunerBwHz.load() / 1000),
+                     after >= before ? "gained only" : "cost",
+                     after >= before ? after - before : before - after, before, after);
+                LocalSdrShim::instance().setTunerBandwidth(wasIf);
+                LocalSdrShim::instance().broadcastHwInfo();
+                if ((g_clarityTried.load(std::memory_order_relaxed) & 0xF) == 0xF)
+                    g_clarityNextAt.store(now + 60.0, std::memory_order_relaxed);
+                return;
+            }
             if (after > before + 1.0f) {
                 LOGI("VibeClarity: centre %+.0f kHz bought %.1f dB of separation (%.1f -> %.1f) "
                      "— keeping it", tried / 1e3, after - before, before, after);
@@ -2514,13 +2570,61 @@ struct LocalSdrShim::Impl {
         const float sep = sepAvgDb.load();
         if (sep < -190.0f) return;                       // no measurement to compare against
 
+        /* ★★★ DO NOT EXPERIMENT ON A STATION THAT IS ALREADY FINE. This is the whole of Stuart's
+         *     complaint — "this thing has a mind of its own, I had a clear signal at 106 and then
+         *     for some reason it did something which obliterated it" — and it was my design error,
+         *     not a threshold that wanted tuning: the brief said framing should fire when the loop
+         *     is BOXED IN, and I built it to trial unconditionally. On a clean signal there is
+         *     nothing to win and a working station to lose.
+         *  ★★ 12 dB is well clear of both populations measured today: a healthy station sits at
+         *     20-40 dB of separation (104.2 at 40.1, 96.6 at 39.6) while the ones that needed help
+         *     were at 0-5 (105.4 at -1.6, 97.2 at 0.7). Nothing near the line is being judged.
+         *  ★ The right instinct for the whole suite: it may only act where the receiver is
+         *    demonstrably struggling, and must sit on its hands everywhere else. */
+        if (sep > 12.0f) {
+            g_clarityNextAt.store(now + 30.0, std::memory_order_relaxed);
+            return;
+        }
+
         // ★ Up first, then down; both refused means stay put and stop asking for a minute.
         int done = g_clarityTried.load(std::memory_order_relaxed);
         double bias = 0.0;
-        if (!(done & 1))      { bias = +step; done |= 1; }
-        else if (!(done & 2)) { bias = -step; done |= 2; }
+        int    ifWant = 0;
+        /* ★ Framing first, focus second, and the order is deliberate: moving the tuner costs the
+         *   listener nothing, while narrowing the filter costs ~11 dB of wanted signal. Reach for
+         *   the free lever before the one with a price. */
+        /* ★★★ AWAY FROM THE LOUDEST THING FIRST — Stuart: "Try the RF centre away from the
+         *     strongest signal, its killing it in this case". It is only the ORDER, not the
+         *     decision: the trial still measures both ways and keeps whichever actually helped,
+         *     because on 105.4 the winning direction was TOWARDS the blowtorch by 15 dB and no
+         *     rule about loudness would ever have found that. But trying the likely one first
+         *     means the common case is fixed in one move instead of two.
+         *  ★ g_loudestOffHz is the offset of the strongest bin outside the tuned channel; 0 when
+         *    nothing has been measured, in which case up-then-down as before. */
+        const double loud = g_loudestOffHz.load(std::memory_order_relaxed);
+        const bool upFirst = (loud <= 0.0);   // loudest is BELOW us, so move up, away from it
+        const int firstBit = upFirst ? 1 : 2, secondBit = upFirst ? 2 : 1;
+        const double firstBias = upFirst ? +step : -step;
+        if (!(done & firstBit))       { bias = firstBias;  done |= firstBit; }
+        else if (!(done & secondBit)) { bias = -firstBias; done |= secondBit; }
+        else if (!(done & 4)) { ifWant = 450000; done |= 4; }
+        else if (!(done & 8)) { ifWant = 350000; done |= 8; }
         else { g_clarityNextAt.store(now + 60.0, std::memory_order_relaxed); return; }
         g_clarityTried.store(done, std::memory_order_relaxed);
+
+        if (ifWant > 0) {
+            g_clarityIfBefore.store(g_tunerBwHz.load(std::memory_order_relaxed),
+                                    std::memory_order_relaxed);
+            g_clarityTrialKind.store(2, std::memory_order_relaxed);
+            g_claritySepBefore.store(sep, std::memory_order_relaxed);
+            g_clarityTrialAt.store(now, std::memory_order_relaxed);
+            LOGI("VibeClarity: trying the IF filter at %d kHz (separation now %.1f dB)",
+                 ifWant / 1000, sep);
+            LocalSdrShim::instance().setTunerBandwidth(ifWant);
+            LocalSdrShim::instance().broadcastHwInfo();
+            return;
+        }
+        g_clarityTrialKind.store(1, std::memory_order_relaxed);
         g_claritySepBefore.store(sep, std::memory_order_relaxed);
         g_clarityTrialBias.store(bias, std::memory_order_relaxed);
         g_clarityTrialAt.store(now, std::memory_order_relaxed);
@@ -2615,10 +2719,29 @@ struct LocalSdrShim::Impl {
          *     lock, the VFO's margin and the view's own room all outrank it, exactly as before.
          *  ★ Ignored while the owner has locked the centre — that is handled above and returns
          *    early, which is the point of putting this after it. */
-        const double bias = g_clarityBiasHz.load(std::memory_order_relaxed);
+        double bias = g_clarityBiasHz.load(std::memory_order_relaxed);
         if (bias != 0.0) {
-            const double want = std::max(lo, std::min(hi, vfo + bias));
-            return want;
+            /* ★★★ FRAMING AND FOCUS PULL AGAINST EACH OTHER, AND THIS IS THE CONSTRAINT THAT KEEPS
+             *     THEM HONEST. The IF filter is centred on the TUNER, not on the listener — so
+             *     every kHz framing moves the centre away from the VFO is a kHz further into that
+             *     filter's skirt. Stuart, with a manual 600 kHz set and the centre pushed to
+             *     103.295 while listening on 102.8: "I'm now in the filter part" — the left half of
+             *     his band went dead and the SNR fell from 43 to 22. Framing had not gone wrong;
+             *     it had simply never been told that focus was standing behind it.
+             *  ★★ Measured response: at 600 kHz commanded the passband is flat to about 400 kHz
+             *     and falling beyond, so the VFO has to stay inside that. Clamped to the flat part,
+             *     less half the demodulator's own width, so the STATION fits and not merely its
+             *     centre. Wide filter, no clamp — framing gets its full range back.
+             *  ★ This is the "focus may never narrow inside the channel" rule from the brief,
+             *    enforced from the other end: if focus cannot come to the station, the station is
+             *    not allowed to be moved away from focus. */
+            const int ifHz = g_tunerBwHz.load(std::memory_order_relaxed);
+            if (ifHz > 0) {
+                const double flat = std::max(0.0, ifHz * 0.66 - rxBwHz * 0.5);
+                if (std::fabs(bias) > flat) bias = (bias < 0 ? -flat : flat);
+            }
+            if (bias == 0.0) return std::max(lo, std::min(hi, vfo));
+            return std::max(lo, std::min(hi, vfo + bias));
         }
         // Still legal where we are? Then DON'T MOVE: no retune, no PLL relock, and
         // the pan is a pure crop of spectrum we already have.
@@ -5357,6 +5480,21 @@ struct LocalSdrShim::Impl {
              *  ★ 90th percentile against 25th, over the usable window: the top of the stations
              *    against the floor between them.
              */
+            /* ★ WHERE THE LOUDEST OFFENDER IS — the strongest bin outside the tuned channel, as an
+             *   offset from the VFO. Only used to decide which way framing TRIES FIRST (see
+             *   clarityTick); the trial still measures both and keeps what helped, because on
+             *   105.4 the winning direction was towards the blowtorch. Taken here because this is
+             *   the loop that already walks every bin. */
+            {
+                const int skip = std::max(1, (int)std::lround((demodBw * 0.75) / binHz));
+                double best = -1e9; int bestI = 0;
+                for (int i = -(bins/2) + deadBins; i < bins/2 - deadBins; i++) {
+                    if (i > -skip && i < skip) continue;
+                    const double v = dbAt(i);
+                    if (v > best) { best = v; bestI = i; }
+                }
+                if (best > -1e8) g_loudestOffHz.store(bestI * binHz, std::memory_order_relaxed);
+            }
             contrastBins_.clear();
             for (int i = -(bins/2) + deadBins; i < bins/2 - deadBins; i++)
                 contrastBins_.push_back((float)dbAt(i));

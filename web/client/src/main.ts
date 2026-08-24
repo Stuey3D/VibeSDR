@@ -8330,7 +8330,13 @@ function updateIfGap(centerHz: number, bwHz: number) {
    *     1 MHz), not a free improvement, and a display that only showed the benefit would be the
    *     same half-truth as the old "Automatic" label.
    */
-  if (hwTunerBw >= 600e3) { hide(); return; }
+  /* ★★★ DRAW IT AT EVERY SETTING. This used to bail out at 600 kHz and above, because the filter
+   *     SHAPE measured at 96.1 showed only 3-5 dB of broadband loss there — so I concluded those
+   *     settings do nothing and marking them would invent a boundary. Wrong inference from a right
+   *     measurement: 96.1 has no blowtorch beside it. At 102.8, next door to 104.2, that same
+   *     600 kHz took the SNR from 20 dB to 43 and turned a wall of mush into three separate
+   *     stations. What a width is WORTH depends on where the interference is, not on the filter
+   *     alone — so the overlay hid itself at exactly the setting that was doing the most good. */
   const KNEE_HZ = 500e3;      // where the curve leaves the flat bottom of the bowl
   const DEEP_HZ = 1000e3;     // where it is ~20 dB below the centre and plainly gone
 
