@@ -14,7 +14,7 @@ const [base, ...freqs] = process.argv.slice(2);
 if (!base || !freqs.length) { console.error('usage: node scripts/agc-settle.mjs ws://host:port 96.1M [more…]'); process.exit(1); }
 const hz = (t) => { const m = String(t).match(/^([\d.]+)\s*([kKmMgG])?$/); return m ? parseFloat(m[1]) * ({k:1e3,m:1e6,g:1e9}[(m[2]||'').toLowerCase()]||1) : NaN; };
 const SID = 'agcsettle-' + Math.floor(Date.now()/1000);
-const SETTLE_MS = 45000;
+const SETTLE_MS = Number(process.env.SETTLE_S || 45) * 1000;
 
 const ws = new WebSocket(`${base}/ws/user-spectrum?user_session_id=${SID}&mode=binary8&bins=1024`);
 const audio = new WebSocket(`${base}/ws/audio?user_session_id=${SID}&codec=opus`);

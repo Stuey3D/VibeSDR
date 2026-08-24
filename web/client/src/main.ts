@@ -1056,6 +1056,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
                gainNow, agc, ovlSteps, adcPeak) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
       hwGainNow = typeof gainNow === 'number' ? gainNow : -1;
+      hwAgcOn = agc === true;                       // ★ the live flag the chip reads through
       // ★ Paint the chip from STATE, so it is right on arrival and after a reload — not only after
       //   the loop happens to move while you are watching.
       {
@@ -1069,6 +1070,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
           chip.textContent = `GAIN HELD ${dB} dB${pk}`;
           chip.classList.add('set', 'easing');
         } else if (!agc) {
+          // ★ CLEAR THE TEXT, not just the styling. Removing the classes left the previous
+          //   "AGC … dB" sitting on screen — the readout Stuart saw with the AGC switched off.
+          chip.textContent = '';
           chip.classList.remove('set', 'easing');
         }
       }
@@ -1191,7 +1195,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       chip.classList.toggle('easing', dir > 0);
       chip.classList.add('set');
       ovlClearTimer = window.setTimeout(() => {
-        if (agc) {
+        // ★ hwAgcOn, NOT the captured `agc` — see its declaration.
+        if (hwAgcOn) {
           // Settled, and the AGC owns the gain from here — show it, quietly.
           chip.textContent = `AGC ${dB} dB${pk}`;
           chip.classList.add('easing');
@@ -1201,6 +1206,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
           chip.textContent = `GAIN HELD ${dB} dB${pk}`;
           chip.classList.add('easing');
         } else {
+          chip.textContent = '';                    // ★ text too, or the old state lingers
           chip.classList.remove('set', 'easing');   // back where it was told to be
         }
       }, 4000);
@@ -1553,6 +1559,17 @@ let hwGains: number[] = [];
 let hwGainCap = -1;
 /** ★ The radio's ACTUAL gain, from hwinfo. -1 = auto, or a server too old to send it. */
 let hwGainNow = -1;
+/* ★★★ WHETHER THE AGC IS ON, READ LIVE — NOT CAPTURED. onOverload takes `agc` as a PARAMETER and
+ *     then reads it inside a setTimeout, so switching VibeAGC off between the event and the timer
+ *     left the chip writing "AGC 8.7 dB" over a gain the listener had set by hand. Stuart, on
+ *     2026-08-24, with the slider at 14.4: "no the agc wasnt enabled but the readout was still on
+ *     screen ... I had manually set it" — and I spent the next twenty minutes reading an ADC
+ *     overload log looking for a fault in the loop, because the screen told me the loop was
+ *     driving.
+ *  ★★ Same shape as the settings that reverted on every start (2026-08-22): a value captured in a
+ *     closure is a value that WILL be stale, so it is held here and read through, never passed in.
+ *  ★ A readout that names a mode the radio is not in is worse than a blank one. */
+let hwAgcOn = false;
 /** Clears the "overload passed" chip once the gain is home — see onOverload. */
 let ovlClearTimer = 0;
 let hwAgcLocked = false;

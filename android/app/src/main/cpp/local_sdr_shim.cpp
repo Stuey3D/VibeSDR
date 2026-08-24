@@ -1333,6 +1333,9 @@ static std::atomic<float>    g_contrastBeforeClimb{99.0f};
  *   have already checked the other side of the peak once, so a settled radio does not oscillate.
  */
 static std::atomic<float>    g_sepBeforeMove{0.0f};
+static std::atomic<float>    g_chanBeforeMove{0.0f};
+static std::atomic<bool>     g_lastCutWasRunaway{false};
+static std::atomic<double>   g_moveStepDb{0.0};
 static std::atomic<int>      g_moveDir{0};
 static std::atomic<bool>     g_settled{false};
 static std::atomic<bool>     g_wantDown{false};
@@ -15131,7 +15134,68 @@ void LocalSdrShim::overloadTick() {
         const float sepNow = p->sepAvgDb.load();
         const float d = sepNow - sepWas;
         const int   dir = g_moveDir.load(std::memory_order_relaxed);   // +1 climbed, -1 cut
-        if (d < -0.5f) {
+
+        /* ══ IS THE THING IN THE CHANNEL REAL, OR ARE WE MAKING IT? ════════════════════════════
+         * ★★★ SEPARATION CANNOT ANSWER THIS, AND 103.0 IS WHY. There is no transmitter on 103.0.
+         *     What is there is 104.2 — two miles away over clear fields — folded on top of itself
+         *     by our own front end. It stands 25 dB above its shoulders, locks stereo and decodes
+         *     104.2's RDS at 100%, so every test that asks "is something standing proud here?"
+         *     says yes and settles into the mess. My first attempt gated this test on NOTHING
+         *     standing proud, which is exactly backwards: an image IS a station's waveform, and it
+         *     looks like one in every measure except the one below.
+         * ★★★ THE ANSWER IS HOW THE CHANNEL ANSWERS THE GAIN, and it is not subtle. Swept on the
+         *     Pi at 2.4 MSPS:
+         *       103.0, an image     2.7 -> 3.7 dB of gain (1.0 dB) moved the channel 21.4 dB;
+         *                           3.7 -> 7.7 dB (4.0 dB) moved it 11.5 dB — about 2.9 dB per dB,
+         *                           which is third-order intermodulation doing exactly what the
+         *                           textbook says it does
+         *       96.1, a station     2.7 -> 12.5 dB of gain (9.8 dB) moved the channel 8.6 dB —
+         *                           one for one, which is what amplifying something real does
+         *     A real signal cannot outrun the gain that amplifies it. Only something being
+         *     manufactured can, and it grows THREE times as fast, so the two do not overlap.
+         *  ★★ THIS IS STUART'S DESCRIPTION, MEASURED: "if the gain is too high when you tune to 103
+         *     it is a distorted broken mess but as the agc drops the gain at around 2.7db it goes
+         *     away revealing the real stations."
+         *  ★ Twice the step plus 3 dB: real is 1x, manufactured is ~3x, and the slack covers a band
+         *    that breathes between two measurements seconds apart.
+         */
+        const float chWas   = g_chanBeforeMove.load(std::memory_order_relaxed);
+        const float chNow   = p->channelDbWide.load();
+        const float stepDb  = (float)g_moveStepDb.load(std::memory_order_relaxed);
+        const float chFell  = chWas - chNow;              // +ve: the channel got quieter
+        /* ★★★ A RATIO WITH A FLOOR, NOT step*2+3 — WHICH MISSED THE CASE IT WAS WRITTEN FOR. That
+         *     form demands 5 dB of movement from a 1 dB step, so on 103.0 the 8.7 -> 7.7 dB cut,
+         *     which moved the channel 3.2 dB (3.2x the gain, and nothing real does that), scored
+         *     as normal and the loop settled in the image. The runaway is a RATIO — third order is
+         *     3 dB per dB wherever you stand on it — so test the ratio and use an absolute floor
+         *     only to keep noise out of it.
+         *  ★ 1.8x sits between the two populations with room on both sides: real signals measured
+         *    0.88x (96.1, a 9.8 dB move), images 2.9x-21x (103.0, every step below 8.7 dB). */
+        const float moved   = dir < 0 ? chFell : -chFell;
+        const bool  runaway = stepDb > 0.5f && moved > 2.0f && moved > stepDb * 1.8f;
+        if (runaway && dir < 0) {
+            LOGI("that %.1f dB cut took %.1f dB out of the channel — nothing real falls that fast, "
+                 "the front end was making it, going down again", stepDb, chFell);
+            g_wantDown.store(true, std::memory_order_relaxed);
+            g_settled.store(false, std::memory_order_relaxed);
+            /* ★★★ AND GET OUT AT SPEED. The climb dwell exists to protect a SETTLED radio from
+             *     hunting; a channel moving three times as fast as its own gain is not a settled
+             *     radio, it is a front end in trouble, and every second spent there is a ruined
+             *     signal for everyone listening. Walking 103.0 down from 12.5 to 1.4 dB took about
+             *     150 seconds at the normal cadence — inside Stuart's 45-second window it only
+             *     reached 7.7 and was still deep in the image.
+             *  ★ The same waiver clipping already gets ("coming down is never made to wait"), and
+             *    the evidence here is no weaker: 18.8 dB out of the channel for a 1.0 dB cut. */
+            g_agcHurryUntil.store(now + 20.0, std::memory_order_relaxed);
+            g_lastCutWasRunaway.store(true, std::memory_order_relaxed);
+        } else if (runaway) {
+            LOGI("that %.1f dB climb added %.1f dB to the channel — that is not amplification, "
+                 "putting it back", stepDb, -chFell);
+            steps_forceDown = true;
+            g_settled.store(true, std::memory_order_relaxed);
+            g_adcCleanRun.store(0, std::memory_order_relaxed);
+            g_agcHurryUntil.store(now + 20.0, std::memory_order_relaxed);
+        } else if (d < -0.5f) {
             // ★ Worse. Put it back, and do not try that direction again until something changes.
             LOGI("that %s cost %.1f dB of separation (%.1f -> %.1f) — putting it back",
                  dir > 0 ? "step up" : "step down", -d, sepWas, sepNow);
@@ -15241,12 +15305,18 @@ void LocalSdrShim::overloadTick() {
     // ★ Which reason took gain away, so the cut can be JUDGED — see the verdict above. Only the
     //   floor's cut needs it: clipping is a measured fact, and the climb verdict has its own.
     bool downForFloor = false;
+    // ★ ...and whether it was the runaway test. Without this the runaway's own cuts printed
+    //   "converter hot (peak -6.0 dBFS, backoff at -1.0)" — a peak NOWHERE NEAR the backoff, so
+    //   the line contradicted itself. I fixed one misattribution in this same chain tonight and
+    //   introduced another within the hour; the rule is that every reason names itself.
+    bool downForRunaway = false;
     int want = steps;
     if (steps_forceDown) {
         want = steps + 1;                                        // undo the unhelpful climb
     } else if (steps_forceUp) {
         want = steps - 1;                                        // undo the unhelpful cut
     } else if (clipRun < 2 && g_wantDown.exchange(false, std::memory_order_relaxed)) {
+        downForRunaway = g_lastCutWasRunaway.exchange(false, std::memory_order_relaxed);
         /* ★★★ PROBE DOWNWARD. The verdict asked for this: either a step up cost separation and has
          *     to be given back, or the loop wants to know whether the peak is BELOW where it is
          *     sitting. It is the same experiment as a climb, in the other direction, and it is
@@ -15594,6 +15664,13 @@ void LocalSdrShim::overloadTick() {
     }
     if (want != steps) {                      // ★ every move goes on trial, up or down alike
         g_sepBeforeMove.store(p->sepAvgDb.load(), std::memory_order_relaxed);
+        // ★ The channel and the size of the move, for the "are we making this?" verdict.
+        g_chanBeforeMove.store(p->channelDbWide.load(), std::memory_order_relaxed);
+        {
+            const int fromS = (tgtIdx - steps) < 0 ? 0 : (tgtIdx - steps);
+            g_moveStepDb.store(std::fabs((gains[(size_t)idx] - gains[(size_t)fromS]) / 10.0),
+                               std::memory_order_relaxed);
+        }
         g_moveDir.store(want < steps ? +1 : -1, std::memory_order_relaxed);
         g_climbAt.store(now, std::memory_order_relaxed);
     }
@@ -15630,6 +15707,9 @@ void LocalSdrShim::overloadTick() {
     if (want > steps) {
         if (steps_forceDown)
             LOGI("stepping back — the last climb did not hold — gain %.1f dB, %d step%s below %.1f dB",
+                 applied / 10.0, want, want == 1 ? "" : "s", target / 10.0);
+        else if (downForRunaway)
+            LOGI("still chasing what the front end is making — gain %.1f dB, %d step%s below %.1f dB",
                  applied / 10.0, want, want == 1 ? "" : "s", target / 10.0);
         else if (clipPct <= 0.0)
             // ★ Was "front end compressing (noise floor lifted)" — which this branch cannot know

@@ -27,7 +27,7 @@ import WebSocket from 'ws';
 const args = process.argv.slice(2);
 const base = args[0];
 if (!base || base.startsWith('--')) {
-  console.error('usage: node scripts/agc-sweep.mjs ws://host:port [--freq 96.1M] [--rate 2400000]'
+  console.error('usage: node scripts/agc-sweep.mjs ws://host:port <96.1M|--freq 96.1M> [--rate 2400000]'
               + ' [--dwell 4] [--auth "&vs_nonce=…&vs_auth=…"]');
   process.exit(1);
 }
@@ -40,7 +40,22 @@ const hz = (t) => {
   if (!m) return NaN;
   return parseFloat(m[1]) * ({ k: 1e3, m: 1e6, g: 1e9 }[(m[2] || '').toLowerCase()] || 1);
 };
-const FREQ  = hz(opt('freq', '96.1M'));
+/* ★★★ NO SILENT DEFAULT FREQUENCY, AND TAKE IT POSITIONALLY LIKE agc-settle DOES. This defaulted
+ *     to '96.1M' — a REAL station — so `agc-sweep.mjs ws://... 105.4M` swept 96.1 and printed a
+ *     full, plausible, entirely wrong table for it. Twice. I read the numbers and not the header
+ *     line that says which frequency they came from, and reported "105.4 has no signal at any
+ *     gain" to Stuart on the strength of it.
+ *  ★★ The two tools disagreeing about how to name a station is what made it possible: settle takes
+ *     positionals, sweep took --freq. Both now take either.
+ *  ★ A default that happens to be valid is worse than no default: it cannot be distinguished from
+ *    the answer you asked for. */
+const positional = args.slice(1).filter((a, i) => !a.startsWith('--')
+                                                 && !(args[i] || '').startsWith('--'));
+const FREQ  = hz(opt('freq', positional[0] || ''));
+if (!Number.isFinite(FREQ) || FREQ <= 0) {
+  console.error('agc-sweep: which frequency? e.g. `105.4M` or `--freq 105.4M` — there is no default.');
+  process.exit(1);
+}
 const RATE  = Number(opt('rate', '0'));
 const DWELL = Number(opt('dwell', '4')) * 1000;
 const AUTH  = opt('auth', '');
