@@ -38,15 +38,23 @@ A listener panning across a region **we** are attenuating sees nothing there and
 is dead. That is the AGENTS.md fault in its purest form — the receiver misdescribing itself to the
 one person who cannot tell. So:
 
-**The view always wins.** Focus may only ever cut OUTSIDE what is currently on screen. Zoom out and
-it widens to match; pan and it follows. If that means letting the interference back in, it lets the
-interference back in — a receiver that lies about the band is worse than a noisy one.
+### The first version of this rule was WRONG, and Stuart's own listening disproved it
+It read: *"the view always wins — focus may only ever cut OUTSIDE what is currently on screen."*
+Principled, and it would have thrown away the entire benefit. ★★★ What Stuart actually does by
+hand is set **600 kHz while looking at a much wider span**, deliberately accepting attenuated view
+edges because the audio is worth it — and he is right: *"the IF filter is great, really cleans up
+105.4 and even allows 105.7 smooth to come in with stereo"*. Zoom-following focus would have
+re-opened the filter to his view width and undone it.
 
-That rule removes the conflict entirely for zoom-driven focus (the filter tracks the view by
-construction, so nothing on screen is ever ours). It survives only for **interference-driven
-framing**, where the RF centre moves while the view stays put: zoom out far enough and part of what
-you asked to see falls outside the CAPTURE, which no filter choice can fix. There, and only there,
-it must back off and say so.
+**The rule is about the CHANNEL, not the view:**
+
+> Focus may never narrow inside the channel being DEMODULATED. It may narrow inside the VIEW — but
+> when it does, the spectrum must say so.
+
+★★★ **THAT MAKES THE DISPLAY LOAD-BEARING, NOT DECORATIVE.** It is the thing that makes aggressive
+filtering honest, and without it automatic focus is a receiver quietly lying about the band. Mark
+where the IF passband ends; everything beyond it reads as "attenuated by the receiver" rather than
+"dead band", and focus is then free to narrow as hard as it usefully can.
 
 ## The display
 - **A state line, not a justification.** Zoom-driven focus is caused by the user, so it states a
@@ -65,11 +73,23 @@ shared dial it needs the owner's consent (Stuart: locked RF centre keeps the spa
 shared-VFO may auto-select; the owner can lock it on; a status must be shown).
 
 ## Build order
-1. **Focus** — zoom-following IF. Deterministic, explicable, no detection, cannot surprise anyone.
-2. **Framing** — automatic RF centre. Needs the interference detection (the spraying test already
-   firing while the gain is low) and the same "prove it worked" verification everything else uses:
-   the move must drop the interference while leaving the CHANNEL level alone, or it is handed back.
-3. Exposure is already shipped (VibeAGC, band-aware since 4.1.0).
+1. **The passband marker on the spectrum.** Small, no behaviour change, and it makes everything
+   after it safe. Without it, automatic focus is a receiver quietly lying about the band.
+2. **Automatic focus**, driven by the DEMODULATED CHANNEL plus a margin — NOT by the zoom (see the
+   corrected rule above). That is what reproduces by itself what Stuart gets by hand.
+3. **Framing** — automatic RF centre. Biggest blast radius: it moves the capture for every listener
+   and interacts with the pan logic in `dongleForView()`. Wants the marker in place first, and
+   tonight's 7250 test to prove the rule on a second band. Needs the interference detection (the
+   spraying test already firing while the gain is low) and the same "prove it worked" verification
+   everything else uses: the move must drop the interference while leaving the CHANNEL level alone,
+   or it is handed back.
+4. Exposure is already shipped (VibeAGC, band-aware since 4.1.0).
+
+▶ **OPEN, and it needs an EAR not an instrument:** at 600 kHz, does a strong clean station (96.6,
+104.2) sound duller than at automatic? The 350 kHz floor is wider than a 200 kHz WFM channel so it
+should not be able to touch the audio — but that is a calculation and the skirts are real. If a
+strong station is unchanged, automatic focus can be aggressive by default; if it dulls, it must
+stay well back and the gain is smaller than today's numbers suggest.
 
 ★ Verify tonight: 7250 on 40m, which is a night-time path. FM alone would overfit the framing rule
 to a 1.2 MHz spacing HF never sees.
