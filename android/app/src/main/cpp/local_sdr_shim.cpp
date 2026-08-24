@@ -2492,6 +2492,8 @@ struct LocalSdrShim::Impl {
     /** ★ The median level 30–130 kHz either side of the tuned channel, and the channel's own level.
      *  The AGC compares how the two MOVE — see the shoulder test in the climb verdict. */
     std::atomic<float> shoulderDb{-200.0f};
+    std::atomic<float> chanWobble{-1.0f};   // ★ how much the channel moves frame to frame (dB)
+    std::atomic<float> chanSkew{-1.0f};     // ★ how lopsided it is about its own centre (dB)
     std::atomic<float> channelDbWide{-200.0f};
     /** ★ Top of the stations against the floor between them, in dB. Collapses when the front end
      *  starts filling the gaps in — see the contrast test in the AGC. */
@@ -2505,6 +2507,9 @@ struct LocalSdrShim::Impl {
     /** ★ Separation, averaged over about a second — what the AGC actually judges by. */
     std::atomic<float> sepAvgDb{-200.0f};
     float chanPeakHold_ = -200.0f;   // ★ see the peak-hold note in the measurement
+    float chanSlowMean_  = -200.0f;  // ★ the wobble/skew detector — see the note at chanNow
+    float chanWobbleDb_  = -1.0f;
+    float chanSkewDb_    = -1.0f;
     std::vector<float> shoulderBins_;
     std::vector<float> contrastBins_;
 
@@ -4846,6 +4851,67 @@ struct LocalSdrShim::Impl {
                 double cs = 0; int cnum = 0;
                 for (int i = -cHalf; i <= cHalf; i++) { cs += dbAt(i); cnum++; }
                 const float chanNow = cnum ? (float)(cs / cnum) : -200.0f;
+                /* ══ IS IT SITTING STILL, AND IS IT SYMMETRICAL? ════════════════════════════════
+                 * ★★★ STUART'S EYE, AND IT IS THE BEST DETECTOR IN THE LOOP. 2026-08-24: at 103.0
+                 *     "rather than a clean peak of a station you notice it wobbling about and being
+                 *     enlarged to one side ... you can also see it form as you tune towards it. Its
+                 *     not there when 103 is at the upper edge of the tuning range ... as you tune
+                 *     around near 104.2 all the ghost images of 104.2 move about and wobble a lot."
+                 * ★★★ WHY IT MATTERS MORE THAN THE RATIO TEST: the channel-versus-gain ratio can
+                 *     only judge AT A MOVE, so a loop that arrives already sitting in an image and
+                 *     stops never asks the question again. This is measurable while standing still.
+                 * ★★★ MEASURED BEFORE IT WAS BUILT, both stations swept end to end on the Pi:
+                 *       103.0, image present (3.7-15.7 dB)   wobble 3.12-11.52   skew 14.2-23.1
+                 *       103.0, image absent  (0.0-2.7 dB)    wobble 0.12-0.18    skew  0.1-0.3
+                 *       96.1, a real station, EVERY gain     wobble 0.38-1.76    skew  0.2-1.1
+                 *     Two clean populations with a wide gap either side of the thresholds, which is
+                 *     why both are required together rather than either alone.
+                 *  ★★ The AVERAGES HIDE THIS BY CONSTRUCTION — channelDbWide is a mean over the
+                 *     dwell and sepAvgDb is a one-second EMA, so the very smoothing that makes the
+                 *     verdict stable is what made the wobble invisible to it. It has to be measured
+                 *     per frame, here, before anything averages it away.
+                 *  ★ Deviation about a slow mean rather than a true variance: one multiply per
+                 *    frame, and a station fading slowly moves the mean with it instead of reading
+                 *    as wobble. */
+                /* ★★★ AND NOT ACROSS A DISTURBED WINDOW. This reset on every gain write and then
+                 *     re-seeded from the FIRST frame afterwards — which is inside the settling
+                 *     window, where the tuner is relocking and one frame is lopsided for reasons
+                 *     that are not the band. With a 2 s time constant that seed stayed in the
+                 *     average, and 104.2 — a real station whose true skew is 0.0-1.8 dB at every
+                 *     gain on the sweep — read 12.5-14.8 dB and was driven to 0.0 dB of gain.
+                 *  ★ Skipping the frames is right where resetting was wrong: the measurement simply
+                 *    pauses and resumes, instead of throwing away a good average and rebuilding it
+                 *    out of the worst frames available. */
+                if (nowSecs() >= g_gainSettleUntil.load(std::memory_order_relaxed))
+                {
+                    const float aSlow = 0.5f / std::max(1.0f, (float)fftRate);
+                    float mean = chanSlowMean_;
+                    if (mean < -190.0f) mean = chanNow;
+                    mean += (chanNow - mean) * aSlow;
+                    chanSlowMean_ = mean;
+                    const float dev = std::fabs(chanNow - mean);
+                    float w = chanWobbleDb_;
+                    if (w < 0.0f) w = dev;
+                    // ★ A ~2s window: long enough that one noisy frame cannot trip it, short
+                    //   enough to notice the ghost appearing as the dial moves towards it.
+                    chanWobbleDb_ = w + (dev - w) * (0.5f / std::max(1.0f, (float)fftRate));
+                    chanWobble.store(chanWobbleDb_);
+
+                    // ★★ "Enlarged to one side": a broadcast carrier is symmetrical about its
+                    //    centre, a mixing product need not be. Measured over the same passband,
+                    //    skipping the middle so the centre bin sits in neither half.
+                    const int cSkip = std::max(1, (int)std::lround(10000.0 / binHz));
+                    double loS = 0, hiS = 0; int loN = 0, hiN = 0;
+                    for (int i = cSkip; i <= cHalf; i++) { hiS += dbAt(i);  hiN++;
+                                                           loS += dbAt(-i); loN++; }
+                    if (loN && hiN) {
+                        const float sk = (float)std::fabs(loS / loN - hiS / hiN);
+                        float sm = chanSkewDb_;
+                        if (sm < 0.0f) sm = sk;
+                        chanSkewDb_ = sm + (sk - sm) * (0.5f / std::max(1.0f, (float)fftRate));
+                        chanSkew.store(chanSkewDb_);
+                    }
+                }
                 /* ★★★ PEAK-HELD, BECAUSE SPEECH HAS GAPS. On FM this changes nothing — the carrier
                  *     is always there — but on SSB, CW and AM the wanted signal is INTERMITTENT, and
                  *     a two-and-a-half-second average taken across a pause is a measurement of the
@@ -4856,7 +4922,10 @@ struct LocalSdrShim::Impl {
                  *    slow enough to bridge a gap between words or between CW characters.
                  */
                 if (g_resetPeakHold.exchange(false, std::memory_order_relaxed))
-                    { chanPeakHold_ = -200.0f; sepAvgDb.store(-200.0f); }   // ★ the gain moved: re-acquire both
+                    { chanPeakHold_ = -200.0f; sepAvgDb.store(-200.0f); }
+                      // ★ NOT the wobble/skew: they are paused through the settling window
+                      //   instead (see below), because re-seeding them from a disturbed frame is
+                      //   what made 104.2 look like a ghost.
                 /* ★★★ PEAK-HOLD ONLY WHERE THE SIGNAL IS INTERMITTENT, AND THIS IS A REGRESSION I
                  *     CAUSED. Holding the loudest recent moment is right for SSB and CW, where the
                  *     wanted signal stops between words; on FM it is actively harmful, because the
@@ -15316,6 +15385,55 @@ void LocalSdrShim::overloadTick() {
     const float contrast = p->bandContrastDb.load();
     const bool bandIsMush = contrast < 15.0f && !floorMuted && steps < 20;
 
+    /* ══ ARE WE LISTENING TO SOMETHING THE FRONT END IS INVENTING? ══════════════════════════════
+     * ★★★ THE ONLY TEST HERE THAT WORKS WHILE THE LOOP IS STANDING STILL. Everything else judges a
+     *     MOVE — before against after — so a receiver that arrives already sitting in an image and
+     *     settles never asks the question again. That is 103.0 in three runs out of four.
+     * ★★★ Thresholds set from the sweep, not from argument (see the note where these are measured):
+     *     a real station never exceeded 1.76 dB of wobble or 1.1 dB of skew at ANY gain from 0 to
+     *     49.6; the image ran 3.12-11.52 and 14.2-23.1. 2.5 and 5.0 sit in the gap with room on
+     *     both sides.
+     *  ★★ BOTH, NOT EITHER. A genuinely fading station can wobble; a station with a strong close
+     *     neighbour can look lopsided. Neither does both at once, and requiring both is what keeps
+     *     this off real signals — the same requirement Stuart set for the separation test: "make
+     *     sure that our measurements are not detecting real stations too."
+     *  ★ -1 means not yet measured (a retune or a gain write just reset it), which is not evidence
+     *    of anything and must not read as zero.
+     */
+    const float wob = p->chanWobble.load();
+    const float skw = p->chanSkew.load();
+    /* ★★★ THE SKEW ALONE, AND THE WOBBLE WAS A RED HERRING — measured, after it misfired. Swept
+     *     end to end, wobble does NOT separate the two populations:
+     *       104.2, a real station   wobble 4.67-10.45 at EVERY gain, skew 0.0-1.8
+     *     A powerful local's channel power swings that much on its own modulation. Requiring the
+     *     wobble as well protected nothing and would only ever cause a MISS. Skew is decisive:
+     *       real       96.1  0.2-1.1 · 104.2  0.0-1.8 · 106.0  0.3-4.2
+     *       the image  103.0  14.2-23.1
+     *  ★ 8.0 sits between 4.2 and 14.2 with room on both sides. The wobble is still measured and
+     *    still printed, because it is the thing Stuart can SEE and it makes the log line make sense
+     *    to a human — it just does not get a vote. */
+    const bool  ghost = skw > 8.0f
+                        && now >= g_gainSettleUntil.load(std::memory_order_relaxed);
+    /* ★★★ MEASURED AND LOGGED, BUT IT DOES NOT DRIVE THE GAIN YET — AND THIS IS DELIBERATE.
+     *     The discriminator is real: swept with the AGC OFF, skew separates the two populations
+     *     with an eightfold gap (real 0.0-4.2 across 96.1, 104.2 and 106.0; the 103.0 image
+     *     14.2-23.1). But measured LIVE while the loop is moving, 104.2 — whose static skew is
+     *     0.0-1.8 at every gain — reads 13-14 dB and gets driven to 0.0 dB of gain. Twice.
+     * ★★★ THE STATIC SWEEP AND THE LIVE READING DISAGREE ABOUT THE SAME STATION AT THE SAME GAIN,
+     *     and until that is explained the reading is not evidence, whatever its thresholds say. A
+     *     detector that is right about 103.0 and wrong about the strongest real station on the band
+     *     is not ready to hold the gain: the cost of the miss is a ghost nobody wanted to hear, the
+     *     cost of the false positive is the best station on the dial at 0.0 dB.
+     *  ★★ So it runs, and it logs what it would have done, and the log is the thing to read next —
+     *     the suspects are the settling gate (this clock against the one that sets
+     *     g_gainSettleUntil) and the 2 s EMA still carrying frames from inside the disturbed
+     *     window. Flip this to true when a live reading matches the swept one on 104.2.
+     *  ★ The ratio test (channel against gain) is unaffected and still walks 103.0 down on its own;
+     *    this was to be the faster path, not the only one. */
+    static constexpr bool kGhostMayCut = false;
+    if (ghost) LOGI("would call this manufactured — wobbles %.1f dB, %.1f dB lopsided "
+                    "(observing only, see kGhostMayCut)", wob, skw);
+
     bool backoffToFit = false;   // ★ see the clipRun branch: the jump is sized under the lock
     // ★ Which reason took gain away, so the cut can be JUDGED — see the verdict above. Only the
     //   floor's cut needs it: clipping is a measured fact, and the climb verdict has its own.
@@ -15325,11 +15443,20 @@ void LocalSdrShim::overloadTick() {
     //   the line contradicted itself. I fixed one misattribution in this same chain tonight and
     //   introduced another within the hour; the rule is that every reason names itself.
     bool downForRunaway = false;
+    bool downForGhost   = false;
     int want = steps;
     if (steps_forceDown) {
         want = steps + 1;                                        // undo the unhelpful climb
     } else if (steps_forceUp) {
         want = steps - 1;                                        // undo the unhelpful cut
+    } else if (clipRun < 2 && ghost && kGhostMayCut) {
+        /* ★★★ SITTING IN ONE. Come down — and keep coming down, because the thing does not fade
+         *     out gradually: on 103.0 it is gone between 3.7 and 2.7 dB. The hurry is the same
+         *     waiver clipping gets; there is no case for strolling out of a signal we are making. */
+        want = steps + 1;
+        downForGhost = true;
+        g_settled.store(false, std::memory_order_relaxed);
+        g_agcHurryUntil.store(now + 20.0, std::memory_order_relaxed);
     } else if (clipRun < 2 && g_wantDown.exchange(false, std::memory_order_relaxed)) {
         downForRunaway = g_lastCutWasRunaway.exchange(false, std::memory_order_relaxed);
         /* ★★★ PROBE DOWNWARD. The verdict asked for this: either a step up cost separation and has
@@ -15529,6 +15656,8 @@ void LocalSdrShim::overloadTick() {
             g_snrPlateau.store(false, std::memory_order_relaxed);
         }
         if (peak + stepDb > kAgcClimbCeilDbfs) return;
+        // ★ Not consulted while kGhostMayCut is false — an unproven detector must not block a
+        //   climb either, or it starves the gain by the back door instead of the front.
         // ★ And never climb while the floor is already lifted — that is the condition a climb
         //   created, and another step would deepen it.
         if (floorLifted) return;
@@ -15732,6 +15861,10 @@ void LocalSdrShim::overloadTick() {
         else if (downForRunaway)
             LOGI("still chasing what the front end is making — gain %.1f dB, %d step%s below %.1f dB",
                  applied / 10.0, want, want == 1 ? "" : "s", target / 10.0);
+        else if (downForGhost)
+            LOGI("this is not a station — it wobbles %.1f dB and is %.1f dB lopsided — gain %.1f dB, "
+                 "%d step%s below %.1f dB",
+                 wob, skw, applied / 10.0, want, want == 1 ? "" : "s", target / 10.0);
         else if (clipPct <= 0.0)
             // ★ Was "front end compressing (noise floor lifted)" — which this branch cannot know
             //   and, on 96.1, was flatly untrue: the peak was hot, the floor had not moved, and

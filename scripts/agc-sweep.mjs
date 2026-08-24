@@ -162,7 +162,24 @@ function measure() {
   const shoulderDb = pct(shoulders, 0.5);
   const contrast   = pct(all, 0.9) - pct(all, 0.25);
   const floorDb    = pct(all, 0.25);
-  return { channelDb, shoulderDb, contrast, snr: channelDb - floorDb };
+  /* ★★★ THE WOBBLE. Stuart's eye, 2026-08-24: an image "wobbles about", is "enlarged to one side",
+   *     and near 104.2 "all the ghost images move about and wobble a lot" — where a real station
+   *     sits still. The averaged figures above HIDE that by construction, so measure the channel
+   *     in each frame separately and report how much it moves. Unlike the channel-vs-gain ratio
+   *     this needs no gain step, so it can judge a loop that is sitting still. */
+  const perFrame = frames.map((f) => {
+    let sum = 0, cnt = 0;
+    for (let k = Math.max(0, at(-100e3)); k <= Math.min(n - 1, at(100e3)); k++) { sum += f[k]; cnt++; }
+    return cnt ? sum / cnt : 0;
+  });
+  const pfMean = perFrame.reduce((a, b) => a + b, 0) / perFrame.length;
+  const wobble = Math.sqrt(perFrame.reduce((a, b) => a + (b - pfMean) ** 2, 0) / perFrame.length);
+  /* ★ AND THE ASYMMETRY — "enlarged to one side". A broadcast FM carrier is symmetrical about its
+   *   centre; a mixing product need not be, and his screenshots show it lopsided. */
+  const lo = band(-100e3, -10e3), hi = band(10e3, 100e3);
+  const skew = Math.abs(lo.reduce((a, b) => a + b, 0) / lo.length
+                      - hi.reduce((a, b) => a + b, 0) / hi.length);
+  return { channelDb, shoulderDb, contrast, snr: channelDb - floorDb, wobble, skew, frames: frames.length };
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -172,7 +189,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   if (!gains.length) { console.error('no gain list from hwinfo — is this an RTL radio?'); process.exit(1); }
   console.log(`sweeping ${gains.length} gain steps at ${(FREQ / 1e6).toFixed(3)} MHz`
             + (RATE ? ` @ ${(RATE / 1e6).toFixed(1)} MS/s` : '') + `, ${DWELL / 1000}s per step\n`);
-  console.log('  gain    chan   shoulder  chan−shldr  contrast   SNR   MPX S/N  RDS   ST  station');
+  console.log('  gain    chan   shoulder  chan−shldr  contrast   SNR  wobble  skew  RDS   ST  station');
   console.log('  ──────────────────────────────────────────────────────────────────────────────');
   const rows = [];
   for (const g of gains) {
@@ -190,7 +207,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     console.log(`  ${(g/10).toFixed(1).padStart(5)}  `
       + `${m.channelDb.toFixed(1).padStart(6)}  ${m.shoulderDb.toFixed(1).padStart(7)}  `
       + `${(m.channelDb - m.shoulderDb).toFixed(1).padStart(9)}  ${m.contrast.toFixed(1).padStart(7)}  `
-      + `${m.snr.toFixed(1).padStart(5)}  ${(mpxDb === null ? '—' : mpxDb.toFixed(1)).padStart(7)}  `
+      + `${m.snr.toFixed(1).padStart(5)}  ${m.wobble.toFixed(2).padStart(6)}  ${m.skew.toFixed(1).padStart(4)}  `
       + `${(ber < 0 ? '—' : ber + '%').padStart(5)}  ${(stereo === null ? '—' : stereo ? 'ST' : '·').padStart(2)}  ${ps}`);
   }
   // ★ The point of the exercise: where do the candidate objectives actually peak?
