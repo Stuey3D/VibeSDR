@@ -570,6 +570,9 @@ public:
     bool radioIsReleased() const;
 
     void setGain(int gainTenthDb);
+    /** ★ The R820T's own IF filter, in Hz. 0 = librtlsdr's automatic choice (today's behaviour).
+     *  See pendingTunerBw — the only selectivity we have AHEAD of the mixer. */
+    void setTunerBandwidth(int hz);
     void setPpm(int ppm);
     void setBiasTee(bool on);
     void setAgc(bool on);                 // RTL2832 digital AGC

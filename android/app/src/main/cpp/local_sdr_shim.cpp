@@ -2260,6 +2260,15 @@ struct LocalSdrShim::Impl {
     //   drag is not — only the value you release on matters, and every superseded one is a control
     //   transfer contending with the stream for nothing.
     int pendingGainTenth = -1;          // -1 = nothing to write
+    /** ★★★ THE R820T'S OWN IF FILTER, WHICH WE HAVE NEVER ONCE SET. rtlsdr_set_tuner_bandwidth()
+     *  has always been there and nothing in this tree calls it, so the analogue filter sits at
+     *  whatever librtlsdr derives from the sample rate.
+     *  ★★★ THAT MATTERS BECAUSE IT IS THE ONLY SELECTIVITY WE HAVE AHEAD OF THE MIXER. Measured at
+     *  105.4 with 104.2 two miles away: channel-minus-shoulder 1.9 dB at 2.4 MS/s against 7.5 dB
+     *  at 1.2 MS/s. If that 5.6 dB is the narrower IF rather than the narrower span, it can be had
+     *  WITHOUT changing the sample rate at all — no stream teardown, no span change, one control
+     *  transfer. Being tested; -1 means "leave it alone", which is today's behaviour. */
+    int pendingTunerBw = -1;
     // ★ The tuner's own gain steps, cached for the writer so it can WALK to a target rather than
     //   jump. Filled the first time anything needs it; a tuner's list never changes.
     std::vector<int> hwGainList;
@@ -7189,6 +7198,14 @@ struct LocalSdrShim::Impl {
          *     outside sharedGate(): a listener reading a meter is not taking the dial off anybody.
          *  ★ Reference-counted and released with the socket (see the close path), so a tool that
          *    is killed mid-sweep cannot leave the measurement running for ever. */
+        if (type == "tunerbw") {
+            // ★ EXPERIMENTAL, and deliberately outside sharedGate for now: it is being measured,
+            //   not offered. 0 = back to librtlsdr's automatic choice.
+            double v = -1;
+            if (jsonNum(msg, "value", v) && v >= 0)
+                LocalSdrShim::instance().setTunerBandwidth((int)v);
+            return;
+        }
         if (type == "adcstats") {
             /* ★ A SELF-EXPIRING LATCH, not a reference count. Counting holders means a tool that
              *   is killed mid-sweep leaves a receiver measuring for ever, and every socket needs
@@ -12701,12 +12718,22 @@ struct LocalSdrShim::Impl {
             std::unique_lock<std::mutex> lk(hwWrMtx);
             while (hwWrRun.load()) {
                 hwWrCv.wait(lk, [this]{
-                    return !hwWrRun.load() || !pendingFreq.empty() || pendingGainTenth >= 0; });
+                    return !hwWrRun.load() || !pendingFreq.empty() || pendingGainTenth >= 0
+                        || pendingTunerBw >= 0; });
                 if (!hwWrRun.load()) break;
                 uint32_t hz = 0;
                 if (!pendingFreq.empty()) { hz = pendingFreq.front(); pendingFreq.pop_front(); }
                 const int gn = pendingGainTenth; pendingGainTenth = -1;
+                const int bw = pendingTunerBw;   pendingTunerBw   = -1;
                 lk.unlock();
+                if (bw >= 0) {
+                    std::lock_guard<std::recursive_mutex> dlk(devMtx);
+                    if (dev && !radioReleased.load()) {
+                        const int rc = rtlsdr_set_tuner_bandwidth(dev, (uint32_t)bw);
+                        LOGI("tuner IF bandwidth -> %d Hz (rc=%d)%s", bw, rc,
+                             bw == 0 ? " [0 = automatic, librtlsdr's own choice]" : "");
+                    }
+                }
                 if (hz) {
                     std::lock_guard<std::recursive_mutex> dlk(devMtx);
                     if (dev && !radioReleased.load()) rtlsdr_set_center_freq(dev, hz);
@@ -15232,6 +15259,11 @@ void LocalSdrShim::setDecoderFreq(double hz) {
 //   setters that were its only callers. The RTL setters above needed it too.
 #define VIBE_HW_LOCK() std::lock_guard<std::recursive_mutex> _hwlk(p->modeMtx)
 
+void LocalSdrShim::setTunerBandwidth(int hz) {
+    if (!p) return;
+    { std::lock_guard<std::mutex> lk(p->hwWrMtx); p->pendingTunerBw = hz; }
+    p->hwWrCv.notify_one();
+}
 void LocalSdrShim::setGain(int gainTenthDb) {
     if (!p) return;
     // ★★ WHOEVER MOVED THE SLIDER GETS WHAT THEY ASKED FOR. An explicit gain is a new intent, so

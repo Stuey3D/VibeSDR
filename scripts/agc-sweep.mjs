@@ -203,6 +203,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     // ★ Keep the converter's figures coming: the server only measures them when the automation is
   //   on OR somebody has asked, and this tool has to switch the automation off to take the gain.
   send({ type: 'adcstats', seconds: 60 });
+  if (opt('tunerbw', '')) send({ type: 'tunerbw', value: Number(opt('tunerbw', '0')) });
   send({ type: 'gain', value: g });
     await sleep(600);                 // the write, then a clean measurement window
     frames = []; rds = null; mpx = null;
