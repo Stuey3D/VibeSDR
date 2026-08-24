@@ -237,6 +237,10 @@ export interface SpectrumCallbacks {
    *  independent of zoom, view and bin width. The meter must prefer these over anything it
    *  derives from a spectrum frame — a frame's resolution is whatever the user zoomed to. */
   onSigStat?: (chanDb: number, floorDb: number) => void;
+  /** ★ The CONVERTER, once a second — see the 'adc' message. `clip` is the percentage of samples
+   *  ON THE RAIL, which is the figure that decides harm; the peak can read a comfortable -1 dBFS
+   *  a moment before the front end is 7% railed. */
+  onAdcStat?: (peakDbfs: number, clipPct: number) => void;
   onRspStat?: (systemGainDb: number, lna: number, ifgr: number, overload: boolean,
                settling: boolean) => void;
   onStatus?: (s: 'connecting' | 'open' | 'closed' | 'error', detail?: string) => void;
@@ -837,6 +841,9 @@ export class SpectrumClient {
         // Channel power and noise floor, both measured server-side on the full-rate FFT so
         // they do NOT move with the view. See onSpectrum's signal-meter note.
         this.cb.onSigStat?.(Number(msg.chan), Number(msg.floor));
+        break;
+      case 'adc':
+        this.cb.onAdcStat?.(Number(msg.peak), Number(msg.clip));
         break;
       case 'rspstat':
         this.cb.onRspStat?.(Number(msg.sysGain) || 0, Number(msg.lna) || 0, Number(msg.ifgr) || 0,

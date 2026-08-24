@@ -1062,7 +1062,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       {
         const chip = $('ovlChip');
         const dB = (hwGainNow / 10).toFixed(1);
-        const pk = typeof adcPeak === 'number' ? ` · pk ${adcPeak} dBFS` : '';
+        const pk = pkText();
         if (agc && hwGainNow >= 0) {
           chip.textContent = `AGC ${dB} dB${pk}`;
           chip.classList.add('set', 'easing');
@@ -1073,7 +1073,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
           // ★ CLEAR THE TEXT, not just the styling. Removing the classes left the previous
           //   "AGC … dB" sitting on screen — the readout Stuart saw with the AGC switched off.
           chip.textContent = '';
-          chip.classList.remove('set', 'easing');
+          chip.classList.remove('set', 'easing', 'fault');
         }
       }
       // ★★★ THE BUTTON FOLLOWS THE RADIO, NOT ONLY THE MOUSE. Its "on" class was set ONLY by a
@@ -1180,7 +1180,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
                  adcPeak?: number) => {
       const chip = $('ovlChip');
       const dB = (gainTenthDb / 10).toFixed(1);
-      const pk = typeof adcPeak === 'number' ? ` · pk ${adcPeak} dBFS` : '';
+      const pk = pkText();
       // ★★★ THE MOVEMENT IS THE NEWS; THE RESTING PLACE IS THE READOUT. While the loop is stepping,
       //     the chip says WHICH WAY — that is a thing happening, and worth an alarm's colours going
       //     down. Once it settles it stops shouting and simply says where the gain ended up
@@ -1207,7 +1207,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
           chip.classList.add('easing');
         } else {
           chip.textContent = '';                    // ★ text too, or the old state lingers
-          chip.classList.remove('set', 'easing');   // back where it was told to be
+          chip.classList.remove('set', 'easing', 'fault');
         }
       }, 4000);
     },
@@ -1242,6 +1242,22 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         el.value = String(lnaMax - lna);
         renderRspVals();
       }
+    },
+    onAdcStat: (peak: number, clip: number) => {
+      adcPeakDbfs = Number.isFinite(peak) && peak > -90 ? peak : null;
+      adcClipPct  = Number.isFinite(clip) ? clip : 0;
+      /* ★★★ AND REPAINT, or the warning waits for news it is not part of. The chip is written on
+       *     hwinfo and on `ovl` — both of which arrive when the GAIN MOVES — so a converter that
+       *     starts railing at a gain nobody is changing would say nothing until the loop happened
+       *     to act. That is precisely backwards: the moment worth showing is the one BEFORE the
+       *     correction, which is the moment Stuart screenshotted.
+       *  ★ Only while the loop owns the gain and is settled — mid-move the chip is saying which
+       *    way it is going, and that is the more urgent message. */
+      if (!hwAgcOn || hwGainNow < 0) return;
+      const chip = $('ovlChip');
+      if (!chip.classList.contains('easing')) return;   // a move is being announced; leave it
+      chip.textContent = `AGC ${(hwGainNow / 10).toFixed(1)} dB${pkText()}`;
+      chip.classList.toggle('fault', adcClipPct >= 0.01);
     },
     onSigStat: (chan, floor) => {
       if (!Number.isFinite(chan) || !Number.isFinite(floor)) return;
@@ -1570,6 +1586,20 @@ let hwGainNow = -1;
  *     closure is a value that WILL be stale, so it is held here and read through, never passed in.
  *  ★ A readout that names a mode the radio is not in is worse than a blank one. */
 let hwAgcOn = false;
+/* ★★★ THE CONVERTER'S OWN FIGURES, AND THE CHIP SHOWS THE ONE THAT MATTERS. It reported `pk` and
+ *     nothing else — a PEAK, which we established on 2026-08-24 is not the harm: 96.1 sounds its
+ *     best at -1.2 dBFS with nothing on the rail, while 104.2 at 7.7 dB reads 0.0 dBFS with 28% of
+ *     samples railed and the band in ruins. Both used to print as a reassuring "pk -1".
+ *  ★★ Stuart caught exactly that (2026-08-25): "25.4db gain but no massive overload at 103" —
+ *     from a chip reading pk -1 while the loop was at the top of a climb it was about to be driven
+ *     down from. His own follow-up was the diagnosis: "indication issue i think".
+ *  ★ Only meaningful while the automation is on: the server does not measure these otherwise, on
+ *    purpose, so nothing here asks for them and the chip already goes quiet with the AGC off. */
+let adcClipPct = 0, adcPeakDbfs: number | null = null;
+const pkText = () => {
+  if (adcClipPct >= 0.01) return ` · ${adcClipPct.toFixed(1)}% RAILED`;
+  return adcPeakDbfs === null ? '' : ` · pk ${adcPeakDbfs.toFixed(1)} dBFS`;
+};
 /** Clears the "overload passed" chip once the gain is home — see onOverload. */
 let ovlClearTimer = 0;
 let hwAgcLocked = false;

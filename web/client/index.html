@@ -980,6 +980,14 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
    going back UP because the band calmed down. Same chip, quieter voice — and it stops breathing,
    because nothing needs attention any more. */
 #ovlChip.easing { border-color: rgba(120,200,255,0.7); color: #7bc6ff; animation: none; }
+/* ★★★ RAILING OUTRANKS "SETTLED", AND IT IS THE ONLY THING HERE THAT IS A FAULT. `.easing` is the
+   calm voice for a settled AGC; if the converter is actually clipping while it sits there, the
+   calm voice is a lie. Samples ON the rail are the harm — a peak of -1 dBFS with nothing railed is
+   a receiver being used properly, which is why the chip stopped reporting the peak alone. */
+#ovlChip.easing.fault, #ovlChip.fault {
+  border-color: rgba(255,80,80,0.85); color: #ff6b6b;
+  animation: sqlBreathe 1.2s ease-in-out infinite;
+}
 #sqlChip.muting { color: #ff6b6b; border-color: rgba(255,80,80,0.75);
                   animation: sqlBreathe 1.5s ease-in-out infinite; }
 @keyframes sqlBreathe { 0%,100% { opacity: 0.45; } 50% { opacity: 1; } }
