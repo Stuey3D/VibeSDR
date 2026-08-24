@@ -162,6 +162,9 @@ export class Waterfall {
 
   /** VFO marker position, Hz (the needle). */
   vfoHz = 0;
+  /** ★ Appended to the RF CENTRE label — e.g. " — controlled by VibeClarity" when the suite is
+   *  choosing where the tuner sits, so a centre that moves on its own explains itself. */
+  rfCenterNote = '';
   /** Demod passband relative to the VFO, Hz — drives the acrylic sidebands.
    *  Negative low = below the carrier (SSB sits entirely on one side). */
   filterLow = 0;
@@ -1082,7 +1085,8 @@ export class Waterfall {
     ctx.setLineDash([]);
 
     this.markerLabel(ctx, x, W, this.markerLabelY(H, 1),
-      `RF CENTRE ${(this.rfCenterHz / 1e6).toFixed(3)}M`, 'rgba(120,200,255,0.95)');
+      `RF CENTRE ${(this.rfCenterHz / 1e6).toFixed(3)}M${this.rfCenterNote}`,
+      'rgba(120,200,255,0.95)');
     ctx.restore();
   }
 

@@ -974,18 +974,6 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 /* Louder than SQL or SETTLING on purpose: those are states, this is a fault. */
 /* ★ Greyed, not hidden: the listener should still be able to SEE what the receiver has chosen —
    "You can still see what they are set to", the same courtesy the admin lock already gives. */
-#rfCentreMark {
-  position: absolute; top: 0; bottom: 0; width: 0; z-index: 21; pointer-events: none;
-  /* ★ Dashed, so it never reads as a signal or as the VFO — it is where the RADIO is pointed,
-     not where anyone is listening. */
-  border-left: 1px dashed rgba(120,200,255,0.75);
-}
-#rfCentreMark[hidden] { display: none; }
-#rfCentreLabel {
-  position: absolute; white-space: nowrap; transform: translate(6px, 0);
-  color: #7bc6ff; font-size: 10px; letter-spacing: 0.5px;
-  font-family: var(--mono, monospace); text-shadow: 0 1px 3px #000, 0 0 6px #000;
-}
 .mrow.clarityHeld { opacity: 0.45; }
 .mrow.clarityHeld select, .mrow.clarityHeld input, .mrow.clarityHeld button { pointer-events: none; }
 #rowClarity label small { display: block; opacity: 0.65; font-size: 0.75em; letter-spacing: 0; }
@@ -2350,13 +2338,6 @@ select.btn { padding: 6px 8px; }
        line of it was written: "we will need a display to show what parts are working".
        ★ Two of them, unlike #rangeGap's one: the passband sits inside the view, so both sides can
        be showing at once. -->
-  <!-- ★★★ WHERE THE TUNER ACTUALLY SITS. VibeClarity moves the RF centre away from a blowtorch —
-       worth +2.3 dB of separation, measured — but it moves the CAPTURE underneath a view that has
-       not moved, and nothing on screen would say so. Drawn in the second-VFO idiom because that is
-       exactly what it is: a second thing with a frequency, which the listener is used to seeing
-       marked. Stuart: "maybe for the RF centre you bring back the 2nd VFO ... a little title
-       Controlled with VibeClarity". -->
-  <div id="rfCentreMark" hidden><span id="rfCentreLabel"></span></div>
   <div id="ifGapLo" class="ifGap"><span></span></div>
   <div id="ifGapHi" class="ifGap"><span></span></div>
   <!-- ★ The BOUNCE toast. The blacked-out region above explains the dead space permanently;

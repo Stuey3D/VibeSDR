@@ -789,7 +789,6 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       mobileUi?.paintSignal();
       updateRangeGap(centerHz, bwHz);
       updateIfGap(centerHz, bwHz);
-      updateRfCentreMark(centerHz, bwHz);
     },
     onConfig: (cfg) => {
       // ★★ ALSO HERE, not only in onHwInfo. lockedWindow() needs the capture bandwidth, which
@@ -4084,7 +4083,18 @@ function updateViewOverlays() {
   //     invisible while the dongle followed the VFO, because the two were the same number. Once
   //     the operator pins the window they are different things, and the fixed one is the whole
   //     point of showing it: this is the window you are inside.
-  const rf = hwLockedCentre > 0 ? hwLockedCentre : spec.rfCenterHz();
+  /* ★★★ THE TUNER'S OWN FIGURE WHEN WE HAVE IT. spec.rfCenterHz() is DERIVED from the config's
+   *     centre — the note above says it "tracked the dial and read 4.625 MHz on a receiver actually
+   *     centred on 6.5" — and with VibeClarity moving the tuner underneath a stationary view, that
+   *     derivation is wrong exactly when the marker matters most. hwinfo carries the real thing
+   *     (rtlCenter plus the hardware offset), so prefer it and keep the derived one as the
+   *     fallback for a server too old to send it.
+   *  ★ Stuart saw the consequence directly: "in unlocked RF centre mode there are 2 RF centre
+   *    VFO's that disagree with each other" — 106.360 from the derivation, 106.306 from the radio.
+   *    They disagreed because one of them was guessing. */
+  const rf = hwLockedCentre > 0 ? hwLockedCentre
+           : (hwRfCentre > 0 ? hwRfCentre : spec.rfCenterHz());
+  wf.rfCenterNote = hwClarity ? ' \u2014 controlled by VibeClarity' : '';
   const fs = spec.captureBandwidth();
   wf.rfCenterHz = rf;
 
@@ -8269,39 +8279,6 @@ function clampTune(hz: number): number {
  *  filter shows a shaded region at each end. Hidden entirely when the filter is wide enough to
  *  cover everything on screen, which is the case that needs no explanation.
  */
-/** ★★★ MARK WHERE THE TUNER IS POINTED, whenever that is not where the listener is looking.
- *
- *  VibeClarity moves the RF centre away from a blowtorch — measured at +2.3 dB of separation
- *  across the band when each move is verified — but it moves the CAPTURE underneath a view that
- *  has not moved. Without this, the one visible consequence of the suite's most valuable trick is
- *  nothing at all, and a listener who noticed the band edges behaving oddly would have no way to
- *  connect it to anything.
- *
- *  ★ Dashed and in the recovering-blue rather than the VFO's orange: it is where the RADIO is
- *  pointed, not where anyone is listening, and the two must never be confused. Hidden entirely
- *  while the tuner sits on the VFO, which is the ordinary case and needs no explanation.
- */
-function updateRfCentreMark(centerHz: number, bwHz: number) {
-  const el = document.getElementById('rfCentreMark');
-  const lbl = document.getElementById('rfCentreLabel');
-  if (!el || !lbl) return;
-  const vfo = wf?.vfoHz ?? NaN;   // ★ a field on the waterfall, not a method
-  // ★ Only worth drawing once it is meaningfully off the dial — below that it is the fixed DC
-  //   offset the tuner always carries, which is not news.
-  if (!hwRfCentre || bwHz <= 0 || (Number.isFinite(vfo) && Math.abs(hwRfCentre - vfo) < 50e3)) {
-    el.hidden = true; return;
-  }
-  const x = (hwRfCentre - (centerHz - bwHz / 2)) / bwHz;
-  if (x < 0 || x > 1) { el.hidden = true; return; }
-  el.hidden = false;
-  el.style.left = `${x * 100}%`;
-  lbl.style.top = `${(wf?.specJoinFrac?.() ?? 0.25) * 100}%`;
-  lbl.style.transform = x > 0.75 ? 'translate(-100%, 0) translateX(-6px)' : 'translate(6px, 0)';
-  lbl.textContent = hwClarity
-    ? `RF centre ${(hwRfCentre / 1e6).toFixed(3)} \u2014 controlled by VibeClarity`
-    : `RF centre ${(hwRfCentre / 1e6).toFixed(3)}`;
-}
-
 function updateIfGap(centerHz: number, bwHz: number) {
   const lo = document.getElementById('ifGapLo');
   const hi = document.getElementById('ifGapHi');

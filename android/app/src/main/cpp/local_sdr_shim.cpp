@@ -1365,6 +1365,9 @@ static inline const AgcProfile& profileFor(double demodBw, double sampleRate) {
 static std::atomic<const AgcProfile*> g_profile{&kProfileFm};
 /* ★ The demodulator's width, published so the RETUNE test can scale by it — see the note there. */
 static std::atomic<double>   g_demodBwHz{200000.0};
+/** ★ The last measured -10 dB width of the tuned channel, mirrored out of the DSP so the periodic
+ *  converter log can show it. See Impl::chanWidthHz for what it means and why it matters. */
+static std::atomic<float>    g_lastChanWidthHz{-1.0f};
 /* ★★★ THE TUNER IF FILTER WE WANT, RE-ASSERTED — SETTING IT ONCE IS NOT ENOUGH. librtlsdr's
  *  rtlsdr_set_center_freq() goes through r82xx_set_freq(), which reconfigures the tuner's filters
  *  and throws our bandwidth away: measured on the Pi, the ADC peak went -7.0 -> -30.1 dBFS when it
@@ -2993,6 +2996,26 @@ struct LocalSdrShim::Impl {
     /** ★ The median level 30–130 kHz either side of the tuned channel, and the channel's own level.
      *  The AGC compares how the two MOVE — see the shoulder test in the climb verdict. */
     std::atomic<float> shoulderDb{-200.0f};
+    /** ★★★ THE TUNED STATION'S -10 dB WIDTH, in Hz — the one measurement here that is NOT a ratio.
+     *
+     *  ★★★ EVERY OTHER METRIC THIS LOOP STEERS BY DIVIDES ONE THING THAT GROWS BY ANOTHER THING
+     *  THAT GROWS WITH IT. Channel over shoulders, peak over floor, p90 over p25: when the front
+     *  end compresses they all rise TOGETHER and the ratio holds while the band turns to porridge.
+     *  That is why separation reported a healthy 20 dB on a screenshot showing stations three times
+     *  too wide, and why the loop climbed to 28 dB and called it good.
+     *
+     *  ★★★ A BROADCAST CHANNEL IS 200 kHz WIDE AND STAYS 200 kHz WIDE however the gain moves.
+     *  Nothing about the band, the aerial or propagation can make a station wider. If it grows,
+     *  that growth is OURS. It is the only quantity here whose correct answer is known BEFORE it
+     *  is measured — from the demodulator, not learned from whatever the receiver is doing.
+     *
+     *  ★★ Measured at 103.3, gain by gain: 121-128 kHz from 0 to 3.7 dB, then 1225 kHz — the whole
+     *  window — from 8.7 dB up. A tenfold step at exactly the gain where the receiver breaks.
+     *  ★ -10 dB rather than -3: the -3 dB point was still reporting 97 kHz at 8.7 dB, where the
+     *  -10 dB point had already blown out to the window edge. The damage shows in the SKIRTS
+     *  filling in long before it reaches the peak.
+     */
+    std::atomic<float> chanWidthHz{-1.0f};
     std::atomic<float> chanWobble{-1.0f};   // ★ how much the channel moves frame to frame (dB)
     std::atomic<float> chanSkew{-1.0f};     // ★ how lopsided it is about its own centre (dB)
     std::atomic<float> channelDbWide{-200.0f};
@@ -5552,6 +5575,62 @@ struct LocalSdrShim::Impl {
              *  ★ 90th percentile against 25th, over the usable window: the top of the stations
              *    against the floor between them.
              */
+            /* ★★★ HOW WIDE IS THE STATION WE ARE LISTENING TO? See chanWidthHz. Walk out from the
+             *     channel's own peak until the trace has fallen 10 dB; if the skirts have filled
+             *     in, that never happens and the walk runs to the edge of the usable window, which
+             *     is the 1225 kHz signature of a smeared band.
+             *  ★ Smoothed, because one frame of a modulated carrier breathes: this is compared
+             *    against a fixed expectation, so it must not chatter across it. */
+            {
+                const int cH = std::max(1, (int)std::lround((demodBw * 0.5) / binHz));
+                const int lim = bins / 2 - deadBins - 1;
+                /* ★★★ WALK FROM WHERE THE PEAK IS, NOT FROM BIN ZERO. The centre bin carries the
+                 *     receiver's DC notch, so dbAt(0) sits far below the station's real peak and a
+                 *     walk starting there stops on its first step: the width read a constant
+                 *     1 kHz against an expected 200, and the test never once fired. */
+                /* ★★★ AND SMOOTH IT, BECAUSE ONE FRAME IS NOT A SPECTRUM. Adjacent bins of an FM
+                 *     carrier differ by more than 10 dB routinely, so a walk across a single frame
+                 *     stops on the first spike — it read a constant 1-2 kHz against an expected
+                 *     200. The sweep tool that produced the good numbers averaged a hundred frames;
+                 *     I did not carry that across. A short box car plus a sustained crossing gives
+                 *     the same robustness without keeping a history.
+                 *  ★ Nine bins is about 20 kHz at this resolution — far finer than the 200 kHz
+                 *    being measured, so it smooths the grass without rounding off the hill. */
+                auto smAt = [&](int i) {
+                    double a = 0; int n2 = 0;
+                    for (int k = i - 4; k <= i + 4; k++) {
+                        if (k <= -lim || k >= lim) continue;
+                        a += dbAt(k); n2++;
+                    }
+                    return n2 ? a / n2 : -300.0;
+                };
+                double top = -300.0; int topI = 0;
+                for (int i = -cH; i <= cH; i++) {
+                    const double v = smAt(i);
+                    if (v > top) { top = v; topI = i; }
+                }
+                // ★ Must STAY down for a run, or a single dip between two humps ends the walk.
+                const int RUN = 6;
+                int lo = topI, hi = topI;
+                while (lo > -lim + RUN) {
+                    bool down = true;
+                    for (int k = 0; k < RUN; k++) if (smAt(lo - k) > top - 10.0) { down = false; break; }
+                    if (down) break;
+                    lo--;
+                }
+                while (hi < lim - RUN) {
+                    bool down = true;
+                    for (int k = 0; k < RUN; k++) if (smAt(hi + k) > top - 10.0) { down = false; break; }
+                    if (down) break;
+                    hi++;
+                }
+                const float w = (float)((hi - lo) * binHz);
+                float prev = chanWidthHz.load();
+                if (prev < 0.0f) prev = w;
+                const float sm = prev + (w - prev) * (1.0f / std::max(1.0f, (float)fftRate));
+                chanWidthHz.store(sm);
+                g_lastChanWidthHz.store(sm, std::memory_order_relaxed);
+            }
             /* ★ WHERE THE LOUDEST OFFENDER IS — the strongest bin outside the tuned channel, as an
              *   offset from the VFO. Only used to decide which way framing TRIES FIRST (see
              *   clarityTick); the trial still measures both and keeps what helped, because on
@@ -11320,9 +11399,15 @@ struct LocalSdrShim::Impl {
                 static double lastHb = 0;
                 if (now - lastHb >= 10.0) {
                     lastHb = now;
-                    LOGI("adc: peak %.1f dBFS, clip %.4f%%, max=%u min=%u (0 dBFS = on the rail)",
+                    // ★ The station's -10 dB width rides along: it is the one number here with a
+                    //   known right answer, so seeing it beside the converter's makes a wrong one
+                    //   obvious at a glance.
+                    LOGI("adc: peak %.1f dBFS, clip %.4f%%, max=%u min=%u, station %.0f kHz wide "
+                         "(expect ~%.0f) (0 dBFS = on the rail)",
                          g_adcPeakDbfs.load(std::memory_order_relaxed), clipPct,
-                         (unsigned)adcMax_, (unsigned)adcMin_);
+                         (unsigned)adcMax_, (unsigned)adcMin_,
+                         g_lastChanWidthHz.load(std::memory_order_relaxed) / 1e3,
+                         g_demodBwHz.load(std::memory_order_relaxed) / 1e3);
                 }
                 adcRails_ = adcTotal_ = 0; adcMax_ = 0; adcMin_ = 255; adcAt_ = now;
             }
@@ -16285,9 +16370,30 @@ void LocalSdrShim::overloadTick() {
     //   the line contradicted itself. I fixed one misattribution in this same chain tonight and
     //   introduced another within the hour; the rule is that every reason names itself.
     bool downForRunaway = false;
+    bool downForWidth   = false;
     bool downForGhost   = false;
+    /* ★★★ IS THE STATION WIDER THAN IT CAN POSSIBLY BE? The one test here that cannot be fooled by
+     *     both halves of a ratio moving together — see chanWidthHz. A WFM channel is 200 kHz wide
+     *     and stays 200 kHz wide; measured clean it reads 121-128 kHz at -10 dB, and the moment
+     *     the front end starts smearing it runs to the edge of the window (1225 kHz at 2.4 MS/s).
+     *  ★★ Twice the demodulator's own width is the line, and it is nowhere near either population:
+     *     clean sits at about 0.6x and broken at 6x. Nothing is being judged near the threshold.
+     *  ★ Needs a real measurement and a mode with a meaningful width — negative means the spectrum
+     *    thread has not produced one yet. */
+    const float chW = p->chanWidthHz.load();
+    const double dBw = g_demodBwHz.load(std::memory_order_relaxed);
+    const bool  tooWide = chW > 0.0f && dBw > 0.0
+                          && chW > (float)(dBw * 2.0);
     int want = steps;
-    if (steps_forceDown) {
+    if (tooWide && clipRun < 2) {
+        /* ★★★ FIRST IN THE CHAIN, AND ABOVE EVERY RATIO. If the station is twice as wide as its
+         *     own modulation allows, the receiver is manufacturing that width and no amount of
+         *     separation looking healthy changes it. This is the test that would have stopped the
+         *     climb to 28 dB that Stuart kept finding, where every other measure reported the band
+         *     was fine. Comes down like an overload, because that is what it is. */
+        want = steps + agcStride();
+        downForWidth = true;
+    } else if (steps_forceDown) {
         want = steps + 1;                                        // undo the unhelpful climb
     } else if (steps_forceUp) {
         want = steps - 1;                                        // undo the unhelpful cut
@@ -16498,6 +16604,9 @@ void LocalSdrShim::overloadTick() {
             g_snrPlateau.store(false, std::memory_order_relaxed);
         }
         if (peak + stepDb > kAgcClimbCeilDbfs) return;
+        // ★ And never climb while the station is already wider than it can be: more gain is
+        //   exactly what is making it wide.
+        if (tooWide) return;
         // ★ Not consulted while kGhostMayCut is false — an unproven detector must not block a
         //   climb either, or it starves the gain by the back door instead of the front.
         // ★ And never climb while the floor is already lifted — that is the condition a climb
@@ -16710,6 +16819,11 @@ void LocalSdrShim::overloadTick() {
         if (steps_forceDown)
             LOGI("stepping back — the last climb did not hold — gain %.1f dB, %d step%s below %.1f dB",
                  applied / 10.0, want, want == 1 ? "" : "s", target / 10.0);
+        else if (downForWidth)
+            LOGI("the station is %.0f kHz wide and cannot be (%.0f kHz of modulation) — the front "
+                 "end is smearing it — gain %.1f dB, %d step%s below %.1f dB",
+                 chW / 1e3, dBw / 1e3, applied / 10.0, want,
+                 want == 1 ? "" : "s", target / 10.0);
         else if (downForRunaway)
             LOGI("still chasing what the front end is making — gain %.1f dB, %d step%s below %.1f dB",
                  applied / 10.0, want, want == 1 ? "" : "s", target / 10.0);
