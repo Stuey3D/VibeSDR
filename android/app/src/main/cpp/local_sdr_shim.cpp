@@ -1336,7 +1336,17 @@ struct AgcProfile {
  *     same figure and the same shape of test as the channel runaway.
  *  ★ 1.5s/1.5s on FM: the band is dense, a wrong gain is audible immediately, and every move is
  *    judged and handed back if it was a mistake. */
-static constexpr AgcProfile kProfileFm     = { "FM broadcast", true,  1.8f, 1.5, 1.5 };
+/* ★★★ 2.0s, AND 1.5 WAS A SPEED-UP PAST THE POINT WHERE IT WORKS. agcSettleAfterGain() ignores
+ *     every measurement for 1.3s after a gain write, so a verdict at 1.5s had 0.2s of averaging
+ *     against a one-second EMA time constant — i.e. it was judging a SINGLE FRAME, which is the
+ *     exact fault the EMA was added to cure ("one frame is not a measurement"). That is almost
+ *     certainly why FM results would not repeat: 103.0 landing at 8.7 dB in one run and 2.7 in the
+ *     next.
+ *  ★★ The response time comes from the STRIDE instead — see agcStride(). Seventeen judged rungs at
+ *     2.0s is far slower than four at 2.0s, and the four are each judged on real data. Fewer,
+ *     better-founded moves beat more, hastier ones; making the measurement shorter than the
+ *     measurement takes is not speed, it is guessing. */
+static constexpr AgcProfile kProfileFm     = { "FM broadcast", true,  1.8f, 2.0, 1.5 };
 /* ★ Narrow keeps the timings that were already working, and a LONGER verdict than FM so a
  *   few-second MW fade cannot be mistaken for the front end. */
 static constexpr AgcProfile kProfileNarrow = { "narrow",       true,  2.5f, 4.0, 3.0 };
@@ -1425,6 +1435,51 @@ static std::atomic<float>    g_chanBeforeMove{0.0f};
  *    no amount of individually-innocent steps can answer wrongly. */
 static std::atomic<float>    g_sepAtRunStart{-200.0f};
 static std::atomic<int>      g_stepsAtRunStart{-1};
+/* ★★★ HOW MANY MOVES IN A ROW THIS DIRECTION HAS BEEN PROVED RIGHT — the accelerator. Stuart:
+ *     "I think it seems to pick a decent gain but it takes a while to get there."
+ * ★★★ THE COST IS THE NUMBER OF STEPS, NOT THE TIME PER STEP. Measured on the Pi: 96.6 arriving
+ *     at 42.1 dB (left there by 106.0) walked to 12.5 in SEVENTEEN single rungs, each one settled,
+ *     measured and judged. Climbs could already jump; cuts could only creep, so every descent paid
+ *     the full linear price.
+ *  ★★ So once a direction has been CONFIRMED twice, double the stride, and keep doubling — a
+ *     geometric search converges in log time where a walk is linear, and seventeen rungs becomes
+ *     about four moves. It is safe precisely because it is earned: every jump is still settled,
+ *     measured and judged like any other move, and the first verdict that disagrees resets the
+ *     stride to one and hands the move back.
+ *  ★ Capped at 6 rungs. Beyond that the prediction cannot see far enough ahead to be trusted and a
+ *    wrong jump costs more to undo than the walk saved. */
+static std::atomic<int>      g_sameDirRun{0};
+/* ★★★ AND A STRIDE ASKED FOR OUTRIGHT, BECAUSE COMING DOWN SHOULD JUMP LIKE GOING UP DOES.
+ *     Stuart: "the walking down rather than jumping like the upwards is the big perception that
+ *     agc is slow. So have down jump like up."
+ * ★★★ UP HAS ALWAYS JUMPED BECAUSE IT COULD PREDICT: the ADC peak says exactly how many rungs fit
+ *     under the ceiling, so it computes the answer and takes it in one write. Down had no such
+ *     arithmetic and could only creep — but it does have a prediction, and it has been printing it
+ *     in the log all along. When a cut of `stepDb` moves the neighbourhood by `shMoved`, the RATIO
+ *     is how many decibels of harm each decibel of gain is making:
+ *         that 3.8 dB cut took 9.2 dB off the neighbourhood   -> 2.4x
+ *         that 4.0 dB cut took 12.8 dB off the neighbourhood  -> 3.2x
+ *     Third order is ~3 dB per dB, so a ratio near 3 means we are deep in the manufactured region
+ *     and there is a long way to fall. Use the ratio itself as the stride: the deeper in, the
+ *     bigger the jump, and it shrinks by itself as the evidence weakens — which is exactly what
+ *     "jump, then step the last couple" does on the way up.
+ *  ★ Still judged like any other move. A jump that was wrong is handed straight back and the
+ *    stride resets to one rung. */
+static std::atomic<int>      g_nextStride{0};
+static inline int agcStride() {
+    int st = 1;
+    const int n = g_sameDirRun.load(std::memory_order_relaxed);
+    if (n >= 2) st = 1 << (n - 1);                       // earned by repetition: 2, 4, 8...
+    const int asked = g_nextStride.exchange(0, std::memory_order_relaxed);
+    if (asked > st) st = asked;                          // ...or asked for by the evidence
+    return st > 6 ? 6 : st;
+}
+/** ★ The observed ratio, as a stride — see the note above. */
+static inline void agcAskStride(float moved, float stepDb) {
+    if (stepDb <= 0.1f) return;
+    const int st = (int)std::lround(moved / stepDb);
+    if (st > 1) g_nextStride.store(st, std::memory_order_relaxed);
+}
 static std::atomic<float>    g_shoulderBeforeMove{0.0f};
 static std::atomic<bool>     g_lastCutWasRunaway{false};
 static std::atomic<double>   g_moveStepDb{0.0};
@@ -4334,7 +4389,16 @@ struct LocalSdrShim::Impl {
     //     radio (Stuart, 2026-08-05: "the whole signal meter is lagging now").
     //     ★ The lesson is that a rate rise is only safe on a channel that can DISCARD. Speeding up
     //       a never-drop stream converts spare bandwidth into latency.
-    enum class Out { Control, Spectrum, Audio, Sig, RspStat };
+    /* ★★★ Adc IS ITS OWN CLASS, AND THE NOTE BY THE NEWEST-WINS RULE SAYS WHY — I BROKE IT ANYWAY.
+     *     "Each newest-wins class supersedes only ITS OWN kind — a fresh signal reading must not
+     *     discard the pending gain telemetry." I sent the converter's figures tagged Out::Sig,
+     *     immediately after the sig message, so every tick the ADC reading DELETED the signal
+     *     reading queued a microsecond earlier. The meter then only updated when the writer thread
+     *     happened to drain between the two sends. Stuart: "all this agc work has caused the SNR
+     *     meter to lag a bit though" — it was not lag, it was most of the readings never arriving.
+     *  ★ Two quantities, two classes. Reusing a class is not a shortcut, it is a claim that the
+     *    older message is worthless, and that claim was false. */
+    enum class Out { Control, Spectrum, Audio, Sig, Adc, RspStat };
 
     /** ★ Backlog ceiling per client. Reached = THIS listener cannot keep up, so THIS listener is
      *  dropped — which is the honest outcome and, crucially, a local one. The old code punished
@@ -4450,7 +4514,8 @@ struct LocalSdrShim::Impl {
         // stay connected and merely run at a lower effective frame rate.
         // ★ Each newest-wins class supersedes only ITS OWN kind — a fresh signal reading must not
         //   discard the pending gain telemetry, which is a different quantity that has not changed.
-        if (cls == Out::Spectrum || cls == Out::Sig || cls == Out::RspStat) {
+        if (cls == Out::Spectrum || cls == Out::Sig || cls == Out::Adc
+            || cls == Out::RspStat) {
             for (auto it = ob->q.begin(); it != ob->q.end(); ) {
                 if (it->first == cls) { ob->bytes -= it->second.size(); it = ob->q.erase(it); }
                 else ++it;
@@ -5414,7 +5479,7 @@ struct LocalSdrShim::Impl {
                              "{\"type\":\"adc\",\"peak\":%.1f,\"clip\":%.4f}",
                              g_adcPeakDbfs.load(std::memory_order_relaxed),
                              g_adcClipPct.load(std::memory_order_relaxed));
-                    sendText(p.sock, sb, Out::Sig);
+                    sendText(p.sock, sb, Out::Adc);   // ★ NOT Out::Sig — see the enum's note
                 }
             }
         }
@@ -15474,11 +15539,13 @@ void LocalSdrShim::overloadTick() {
             g_lastCutWasRunaway.store(true, std::memory_order_relaxed);
             g_settled.store(false, std::memory_order_relaxed);
             g_agcHurryUntil.store(now + 20.0, std::memory_order_relaxed);
+            agcAskStride(shMoved, stepDb);      // ★ the deeper in, the bigger the next jump
         } else if (runaway && dir < 0) {
             LOGI("that %.1f dB cut took %.1f dB out of the channel — nothing real falls that fast, "
                  "the front end was making it, going down again", stepDb, chFell);
             g_wantDown.store(true, std::memory_order_relaxed);
             g_settled.store(false, std::memory_order_relaxed);
+            agcAskStride(chFell, stepDb);       // ★ likewise for the channel runaway
             /* ★★★ AND GET OUT AT SPEED. The climb dwell exists to protect a SETTLED radio from
              *     hunting; a channel moving three times as fast as its own gain is not a settled
              *     radio, it is a front end in trouble, and every second spent there is a ruined
@@ -15511,6 +15578,8 @@ void LocalSdrShim::overloadTick() {
              *    a step to learn something and then acts on the opposite of what it learned. */
             steps_forceDown = (dir > 0);
             steps_forceUp   = (dir < 0);
+            g_sameDirRun.store(0, std::memory_order_relaxed);
+    g_nextStride.store(0, std::memory_order_relaxed);   // ★ wrong once: back to one rung
             g_settled.store(true, std::memory_order_relaxed);
             g_adcCleanRun.store(0, std::memory_order_relaxed);
         } else if (d > 0.5f) {
@@ -15518,6 +15587,8 @@ void LocalSdrShim::overloadTick() {
             LOGI("that %s bought %.1f dB of separation (%.1f -> %.1f) — going on",
                  dir > 0 ? "step up" : "step down", d, sepWas, sepNow);
             g_settled.store(false, std::memory_order_relaxed);
+            // ★ Proved right again: earn a longer stride — see agcStride().
+            g_sameDirRun.fetch_add(1, std::memory_order_relaxed);
         } else {
             /* ★★ Flat: the move neither helped nor hurt, so we are at the top of the hill. KEEP it
              *    (it did no harm) and stop reaching — the plateau Stuart described on 96.1, where
@@ -15683,7 +15754,7 @@ void LocalSdrShim::overloadTick() {
          *  ★ This replaces the floor, shoulder and contrast tests entirely. Those were continuous
          *    and absolute, and an absolute test cannot tell a receiver making mush from a listener
          *    sitting in a quiet gap beside a strong station. */
-        want = steps + 1;
+        want = steps + agcStride();
         downForFloor = true;
     } else if (clipRun < 2 && false
                && !(g_dropAt.load(std::memory_order_relaxed) > 0
@@ -15804,7 +15875,7 @@ void LocalSdrShim::overloadTick() {
         //    loop settles one step below the overload instead of straddling it.
         // ★ The margin is what stops it settling exactly ON the edge, where any fade or a passing
         //   lorry would start the cycle again.
-        want = steps - 1;   // provisional; the prediction below may refuse it
+        want = steps - agcStride();   // provisional; the prediction below may refuse it
     }
     if (want == steps) return;
 
@@ -16533,6 +16604,7 @@ static void agcForget(const char* why) {
     g_moveDir.store(0, std::memory_order_relaxed);
     g_sepAtRunStart.store(-200.0f, std::memory_order_relaxed);   // ★ a new station, a new run
     g_stepsAtRunStart.store(-1, std::memory_order_relaxed);
+    g_sameDirRun.store(0, std::memory_order_relaxed);
     g_floorTestMutedUntil.store(0.0, std::memory_order_relaxed);
     g_climbAt.store(0.0, std::memory_order_relaxed);
     g_dropAt.store(0.0, std::memory_order_relaxed);
