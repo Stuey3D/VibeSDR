@@ -189,7 +189,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   if (!gains.length) { console.error('no gain list from hwinfo — is this an RTL radio?'); process.exit(1); }
   console.log(`sweeping ${gains.length} gain steps at ${(FREQ / 1e6).toFixed(3)} MHz`
             + (RATE ? ` @ ${(RATE / 1e6).toFixed(1)} MS/s` : '') + `, ${DWELL / 1000}s per step\n`);
-  console.log('  gain    chan   shoulder  chan−shldr  contrast   SNR  wobble  skew  RDS   ST  station');
+  console.log('  gain    chan   shoulder  chan−shldr  contrast   SNR   pk  wobble  skew  RDS   ST  station');
   console.log('  ──────────────────────────────────────────────────────────────────────────────');
   const rows = [];
   for (const g of gains) {
@@ -207,7 +207,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     console.log(`  ${(g/10).toFixed(1).padStart(5)}  `
       + `${m.channelDb.toFixed(1).padStart(6)}  ${m.shoulderDb.toFixed(1).padStart(7)}  `
       + `${(m.channelDb - m.shoulderDb).toFixed(1).padStart(9)}  ${m.contrast.toFixed(1).padStart(7)}  `
-      + `${m.snr.toFixed(1).padStart(5)}  ${m.wobble.toFixed(2).padStart(6)}  ${m.skew.toFixed(1).padStart(4)}  `
+      + `${m.snr.toFixed(1).padStart(5)}  ${(typeof adcPeak === 'number' ? adcPeak.toFixed(1) : '—').padStart(5)}  ${m.wobble.toFixed(2).padStart(6)}  ${m.skew.toFixed(1).padStart(4)}  `
       + `${(ber < 0 ? '—' : ber + '%').padStart(5)}  ${(stereo === null ? '—' : stereo ? 'ST' : '·').padStart(2)}  ${ps}`);
   }
   // ★ The point of the exercise: where do the candidate objectives actually peak?

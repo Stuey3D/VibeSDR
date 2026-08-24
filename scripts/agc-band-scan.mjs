@@ -204,7 +204,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   send({ type: 'gain', value: GAIN });
   await sleep(800);
   console.log(`  scanning the band at a FIXED gain of ${(GAIN/10).toFixed(1)} dB\n`);
-  console.log('   freq     chan   shoulder  sep    SNR  wobble  skew  RDS  ST  truth');
+  console.log('   freq     chan   shoulder  sep    SNR   pk  wobble  skew  RDS  ST  truth');
   console.log('  ' + '─'.repeat(94));
   const scored = [];
   for (const b of BAND) {
@@ -220,7 +220,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     scored.push({ ...b, ...m });
     console.log(`  ${(b.hz/1e6).toFixed(1).padStart(6)}  ${m.channelDb.toFixed(1).padStart(6)}  `
       + `${m.shoulderDb.toFixed(1).padStart(7)}  ${(m.channelDb-m.shoulderDb).toFixed(1).padStart(5)}  `
-      + `${m.snr.toFixed(1).padStart(5)}  ${m.wobble.toFixed(2).padStart(6)}  ${m.skew.toFixed(1).padStart(4)}  `
+      + `${m.snr.toFixed(1).padStart(5)}  ${(typeof adcPeak === 'number' ? adcPeak.toFixed(1) : '—').padStart(5)}  ${m.wobble.toFixed(2).padStart(6)}  ${m.skew.toFixed(1).padStart(4)}  `
       + `${(ber<0?'—':ber+'%').padStart(4)}  ${(stereo===null?'—':stereo?'ST':'·').padStart(2)}  `
       + `${b.real ? '' : 'GHOST · '}${b.note}`);
   }

@@ -1292,6 +1292,67 @@ static constexpr double      kAgcHardCeilDbfs = -2.0;
  *    the backoff's two-second hot dwell, and a climb that was a mistake is handed straight back by
  *    the verdict — this loop already makes every move prove itself. */
 static constexpr double      kAgcClimbCeilDbfs = kAgcBackoffDbfs;
+
+/* ══ ONE LOOP, THREE TEMPERAMENTS ═══════════════════════════════════════════════════════════════
+ * ★★★ STUART, 2026-08-25: "should we have different AGC algorithyms per band ... All invisible to
+ *     the user just enabled under the VibeAGC toggle but secretly under the hood it is doing
+ *     clever band aware AGC application." He is right, and his own evidence is why: "Broadcast FM
+ *     was the difficult one due to 104.2's transmitter being so close ... AM actually seems quite
+ *     well behaved by comparison."
+ * ★★★ CHOSEN BY ARITHMETIC, NOT BY A LIST OF MODE NAMES — the same rule `shouldersFit` and
+ *     `bursty` already follow, and for the same reason: a wide mode nobody has written yet gets
+ *     the right treatment for free. Bandwidth IS the band, for every purpose this loop has.
+ *  ★★ WHAT ACTUALLY DIFFERS, measured rather than assumed:
+ *     • FM BROADCAST has 40 dB of dynamic range inside one window (104.2 at -50 dBFS with its
+ *       neighbours at -90) and a transmitter two miles away. Its harm shows in the SHOULDERS, not
+ *       the channel — see watchShoulders below.
+ *     • NARROW (AM/MW/SSB/NFM) is already good and must not be "improved". Stuart: "the AGC seemed
+ *       to nail it before". Its ghosts are BRIEF: "in MW ... BBC Radio 5 can cause ghosts but they
+ *       are odd as you only get them for a few seconds at a time due to MW/HF signal fade." A fast
+ *       detector would chase a fade and cut for nothing, so narrow gets a LONGER verdict, not a
+ *       shorter one — the opposite of what "make it more responsive" would suggest.
+ *     • WIDE/DAB has no neighbourhood inside the window to be measured against, so the shoulder
+ *       tests are meaningless there and it falls back to channel-minus-floor, which is Stuart's
+ *       own prescription: "increase gain until the SNR doesnt increase anymore, if peak is too
+ *       high and overloading bring it back."
+ *  ★ Nothing here is exposed. It is one toggle to the listener, exactly as asked. */
+struct AgcProfile {
+    const char* name;
+    bool   watchShoulders;   // ★ does harm show up OUTSIDE the channel here?
+    float  runawayRatio;     // ★ dB of movement per dB of gain that means "manufactured"
+    double verdictSec;       // ★ how long before a move is judged
+    double climbDwellSec;    // ★ how long between moves
+};
+/* ★★★ THE FM PROFILE'S NUMBER IS MEASURED ON THE WORST CASE IN THE COUNTY. Swept on 104.2 itself,
+ *     2.4 MSPS, with the beacon two miles away:
+ *         2.7 dB   channel -50.9   shoulders -91.8   separation 40.9
+ *         7.7 dB   channel -47.2   shoulders -77.0   separation 29.8
+ *     A 5.0 dB step lifted the SHOULDERS 14.8 dB — 2.96x the gain that made them — while the
+ *     CHANNEL rose 3.7 dB, honestly, because 104.2 is a real station. That is the whole FM problem
+ *     in two rows: tuned to the blowtorch the channel test sees nothing wrong, and the front end is
+ *     spraying over everything else on the band.
+ *  ★★ And it does not fire on a clean neighbourhood: over comparable moves the shoulders rose
+ *     0.44x on 96.1 and 0.59x on 103.0. Real 0.44-0.59, spraying 2.96 — 1.8 sits in the gap, the
+ *     same figure and the same shape of test as the channel runaway.
+ *  ★ 1.5s/1.5s on FM: the band is dense, a wrong gain is audible immediately, and every move is
+ *    judged and handed back if it was a mistake. */
+static constexpr AgcProfile kProfileFm     = { "FM broadcast", true,  1.8f, 1.5, 1.5 };
+/* ★ Narrow keeps the timings that were already working, and a LONGER verdict than FM so a
+ *   few-second MW fade cannot be mistaken for the front end. */
+static constexpr AgcProfile kProfileNarrow = { "narrow",       true,  2.5f, 4.0, 3.0 };
+/* ★ Wide: no usable neighbourhood, so no shoulder test — peak and SNR, per Stuart's rule. */
+static constexpr AgcProfile kProfileWide   = { "wide",         false, 2.5f, 2.5, 2.0 };
+
+static inline const AgcProfile& profileFor(double demodBw, double sampleRate) {
+    // ★ Wide FIRST: it is the one defined by the window not fitting, so it must be asked before
+    //   anything that assumes a neighbourhood exists.
+    if ((demodBw * 2.5) >= (sampleRate * 0.45)) return kProfileWide;
+    // ★ Broadcast FM is the only thing in this range — 200 kHz of deviation-plus-guard. NFM tops
+    //   out around 25 kHz and DAB starts at 1.5 MHz, so there is nothing to collide with.
+    if (demodBw >= 100000.0) return kProfileFm;
+    return kProfileNarrow;
+}
+static std::atomic<const AgcProfile*> g_profile{&kProfileFm};
 static std::atomic<double>   g_ovlMargin{3.0};
 static std::atomic<double>   g_ovlLastChangeAt{0.0};
 /** ★★★ MORE GAIN IS NOT MORE SIGNAL, AND THIS IS WHERE A HEADROOM-ONLY AGC GOES WRONG.
@@ -1349,6 +1410,7 @@ static std::atomic<float>    g_contrastBeforeClimb{99.0f};
  */
 static std::atomic<float>    g_sepBeforeMove{0.0f};
 static std::atomic<float>    g_chanBeforeMove{0.0f};
+static std::atomic<float>    g_shoulderBeforeMove{0.0f};
 static std::atomic<bool>     g_lastCutWasRunaway{false};
 static std::atomic<double>   g_moveStepDb{0.0};
 static std::atomic<int>      g_moveDir{0};
@@ -4983,6 +5045,14 @@ struct LocalSdrShim::Impl {
                  *     called. A wide mode nobody has written yet gets the right treatment for free.
                  */
                 const bool shouldersFit = (demodBw * 2.5) < (sampleRate * 0.45);
+                /* ★ The profile picks itself from the same two numbers — see AgcProfile. Announced
+                 *   only when it CHANGES, or a per-frame log would bury everything else. */
+                {
+                    const AgcProfile* want = &profileFor(demodBw, sampleRate);
+                    if (g_profile.exchange(want, std::memory_order_relaxed) != want)
+                        LOGI("AGC profile: %s (%.1f kHz in %.2f MS/s)",
+                             want->name, demodBw / 1000.0, sampleRate / 1e6);
+                }
                 const float sepNow = channelDbWide.load()
                                    - (shouldersFit ? shoulderBins_[k] : (float)floorDbNow);
                 sepDb.store(sepNow);
@@ -15172,8 +15242,12 @@ void LocalSdrShim::overloadTick() {
     // ★ The climb dwell is long BECAUSE a change is expensive (see the note by the climb branch).
     //   An overload still escapes immediately — clipRun short-circuits this.
     const bool hurry = now < g_agcHurryUntil.load(std::memory_order_relaxed);
+    /* ★ The profile's cadence, not one figure for the whole radio. FM is dense and a wrong gain is
+     *   audible at once; MW's ghosts last "a few seconds at a time due to MW/HF signal fade"
+     *   (Stuart), so chasing them fast would cut for nothing. */
+    const AgcProfile& tickProf = *g_profile.load(std::memory_order_relaxed);
     if (!hurry && clipRun < 2
-        && now - g_ovlLastChangeAt.load(std::memory_order_relaxed) < kAgcClimbDwellSec)
+        && now - g_ovlLastChangeAt.load(std::memory_order_relaxed) < tickProf.climbDwellSec)
         return;
 
     // ★★★ DID THE LAST CLIMB ACTUALLY HELP? Judged on SNR, a few seconds later, once the meters
@@ -15193,7 +15267,7 @@ void LocalSdrShim::overloadTick() {
         LOGI("gain climb not judged — the pipeline was disturbed (a listener joined, or a buffer "
              "was dropped); re-measuring from here");
     } else
-    if (climbAt > 0 && now - climbAt >= kAgcVerdictSec) {
+    if (climbAt > 0 && now - climbAt >= tickProf.verdictSec) {
         g_climbAt.store(0.0, std::memory_order_relaxed);
         /* ══ ONE QUESTION, ASKED OF EVERY MOVE ═══════════════════════════════════════════════════
          * ★★★ DID THAT MOVE LEAVE THE WANTED SIGNAL STANDING FURTHER ABOVE ITS NEIGHBOURHOOD?
@@ -15255,9 +15329,41 @@ void LocalSdrShim::overloadTick() {
          *     only to keep noise out of it.
          *  ★ 1.8x sits between the two populations with room on both sides: real signals measured
          *    0.88x (96.1, a 9.8 dB move), images 2.9x-21x (103.0, every step below 8.7 dB). */
+        const AgcProfile& prof = *g_profile.load(std::memory_order_relaxed);
         const float moved   = dir < 0 ? chFell : -chFell;
-        const bool  runaway = stepDb > 0.5f && moved > 2.0f && moved > stepDb * 1.8f;
-        if (runaway && dir < 0) {
+        const bool  runaway = stepDb > 0.5f && moved > 2.0f && moved > stepDb * prof.runawayRatio;
+
+        /* ★★★ AND ON FM THE HARM IS NOT IN THE CHANNEL — IT IS ALL AROUND IT. Tuned to 104.2
+         *     itself, the channel rises one-for-one with the gain because the station is REAL, so
+         *     the runaway test above sees nothing wrong; meanwhile the front end sprays over the
+         *     whole band. Measured on that very station, a 5.0 dB step:
+         *         channel   -50.9 -> -47.2   (3.7 dB — honest)
+         *         shoulders -91.8 -> -77.0   (14.8 dB — 2.96x the gain that made it)
+         *     Separation fell 40.9 -> 29.8 as a result, which is the listener's loss written down.
+         *  ★★ Same shape and same threshold as the channel test, and it does not fire on a clean
+         *     neighbourhood: 0.44x on 96.1, 0.59x on 103.0 over comparable moves.
+         *  ★ Only where a neighbourhood exists and is worth defending — off for wide/DAB, where
+         *    the shoulders are the anti-alias skirt rather than the band. */
+        const float shWas   = g_shoulderBeforeMove.load(std::memory_order_relaxed);
+        const float shNow   = p->shoulderDb.load();
+        const float shMoved = dir < 0 ? (shWas - shNow) : (shNow - shWas);
+        const bool  spraying = prof.watchShoulders && p->sepFromShoulders.load()
+                               && stepDb > 0.5f && shMoved > 2.0f
+                               && shMoved > stepDb * prof.runawayRatio;
+        if (spraying && dir > 0) {
+            LOGI("that %.1f dB climb lifted the whole neighbourhood %.1f dB — the front end is "
+                 "spraying, not hearing — putting it back", stepDb, shMoved);
+            steps_forceDown = true;
+            g_settled.store(true, std::memory_order_relaxed);
+            g_agcHurryUntil.store(now + 20.0, std::memory_order_relaxed);
+        } else if (spraying && dir < 0) {
+            LOGI("that %.1f dB cut took %.1f dB off the neighbourhood — still spraying, going "
+                 "down again", stepDb, shMoved);
+            g_wantDown.store(true, std::memory_order_relaxed);
+            g_lastCutWasRunaway.store(true, std::memory_order_relaxed);
+            g_settled.store(false, std::memory_order_relaxed);
+            g_agcHurryUntil.store(now + 20.0, std::memory_order_relaxed);
+        } else if (runaway && dir < 0) {
             LOGI("that %.1f dB cut took %.1f dB out of the channel — nothing real falls that fast, "
                  "the front end was making it, going down again", stepDb, chFell);
             g_wantDown.store(true, std::memory_order_relaxed);
@@ -15816,6 +15922,7 @@ void LocalSdrShim::overloadTick() {
         g_sepBeforeMove.store(p->sepAvgDb.load(), std::memory_order_relaxed);
         // ★ The channel and the size of the move, for the "are we making this?" verdict.
         g_chanBeforeMove.store(p->channelDbWide.load(), std::memory_order_relaxed);
+        g_shoulderBeforeMove.store(p->shoulderDb.load(), std::memory_order_relaxed);
         {
             const int fromS = (tgtIdx - steps) < 0 ? 0 : (tgtIdx - steps);
             g_moveStepDb.store(std::fabs((gains[(size_t)idx] - gains[(size_t)fromS]) / 10.0),
