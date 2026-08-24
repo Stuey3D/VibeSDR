@@ -3405,15 +3405,25 @@ select.btn { padding: 6px 8px; }
        tuned near the edges of the span and have no way to see why. -->
   <div class="mrow rtlOnly" id="rowTunerBw">
     <label for="tunerBw">IF FILTER</label>
+    <!-- ★★★ "WIDE", NOT "AUTOMATIC". Zero means "librtlsdr, pick a width from the sample rate",
+         which in practice is as wide as the capture — the DO-NOTHING option. Calling it Automatic
+         claimed something clever was happening and Stuart read it exactly that way: "the automatic
+         mode does nothing for the IF filter though". It would also have collided head-on with
+         VibeClarity, where Automatic must come to mean "the receiver is choosing".
+         ★★ 300/250/200 kHz are GONE: measured on the Pi, they produce an identical ADC peak to
+         350 kHz because the tuner clamps there, so every use of them is a no-op — the fault
+         FmdxSettings names. 350 kHz is the floor, and it is comfortably wider than a 200 kHz WFM
+         channel, so this control cannot cut into a broadcast station. -->
     <select id="tunerBw" class="btn">
-      <option value="0">Automatic</option>
+      <option value="0">Wide &mdash; set by sample rate</option>
       <option value="1500000">1.5 MHz</option>
       <option value="1200000">1.2 MHz</option>
       <option value="1000000">1.0 MHz</option>
       <option value="800000">800 kHz</option>
       <option value="600000">600 kHz</option>
+      <option value="500000">500 kHz</option>
       <option value="450000">450 kHz</option>
-      <option value="300000">300 kHz</option>
+      <option value="350000">350 kHz &mdash; narrowest</option>
     </select>
   </div>
   <!-- ★★ DONGLE-ONLY CONTROLS. Bias-T, the RTL2832U's digital AGC and direct sampling are

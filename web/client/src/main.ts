@@ -1256,7 +1256,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         if (![...sel.options].some(o => o.value === String(hz))) {
           const o = document.createElement('option');
           o.value = String(hz);
-          o.textContent = hz > 0 ? `${(hz / 1e3).toFixed(0)} kHz` : 'Automatic';
+          o.textContent = hz > 0 ? `${(hz / 1e3).toFixed(0)} kHz` : 'Wide — set by sample rate';
           sel.appendChild(o);
         }
         sel.value = String(hz);
