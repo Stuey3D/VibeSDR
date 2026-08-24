@@ -23,7 +23,7 @@
 //     "VibeSDR/10.0.2" by a 10.2 app. Seen in the owner's own connection log on 2026-08-14, which
 //     is exactly how the last one was caught. A version string that lies misroutes the next
 //     investigation: the dump names a SHIPPING build for a bug that is in the one under test.
-export const APP_VERSION = '10.4';
+export const APP_VERSION = '10.5';
 
 /**
  * How we introduce ourselves to SOMEBODY ELSE'S receiver.

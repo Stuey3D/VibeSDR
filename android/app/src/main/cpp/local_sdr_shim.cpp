@@ -1363,6 +1363,8 @@ static inline const AgcProfile& profileFor(double demodBw, double sampleRate) {
     return kProfileNarrow;
 }
 static std::atomic<const AgcProfile*> g_profile{&kProfileFm};
+/* ★ The demodulator's width, published so the RETUNE test can scale by it — see the note there. */
+static std::atomic<double>   g_demodBwHz{200000.0};
 static std::atomic<double>   g_ovlMargin{3.0};
 static std::atomic<double>   g_ovlLastChangeAt{0.0};
 /** ★★★ MORE GAIN IS NOT MORE SIGNAL, AND THIS IS WHERE A HEADROOM-ONLY AGC GOES WRONG.
@@ -5144,6 +5146,7 @@ struct LocalSdrShim::Impl {
                 /* ★ The profile picks itself from the same two numbers — see AgcProfile. Announced
                  *   only when it CHANGES, or a per-frame log would bury everything else. */
                 {
+                    g_demodBwHz.store(demodBw, std::memory_order_relaxed);
                     const AgcProfile* want = &profileFor(demodBw, sampleRate);
                     if (g_profile.exchange(want, std::memory_order_relaxed) != want)
                         LOGI("AGC profile: %s (%.1f kHz in %.2f MS/s)",
@@ -6339,7 +6342,22 @@ struct LocalSdrShim::Impl {
         //     is worse than nothing there — see agcForget(). Only for a real move: a nudge across a
         //     station's own passband is still the same signal and the same neighbours, and forgetting
         //     on every 100 Hz of a drag would leave the loop permanently ignorant.
-        if (std::fabs(freq - g_agcLearnedAtHz.load(std::memory_order_relaxed)) > 150e3) {
+        /* ★★★ AND HOW FAR IS "A REAL MOVE" DEPENDS ENTIRELY ON THE MODE. This was a flat 150 kHz,
+         *     which is most of the FM band's channel spacing and roughly SEVENTEEN medium-wave
+         *     channels — so on AM you could tune clean across a dozen stations and the loop would
+         *     still be reasoning about the first one. Stuart, 2026-08-25: "I'd suggest 100KHz move
+         *     of the vfo it cycles ... 100KHz is a good step rate for FM broadcast but obviosuly in
+         *     AM mode it needs to be less."
+         *  ★★ HALF THE DEMODULATOR'S OWN BANDWIDTH, which makes his FM figure fall out of the rule
+         *     rather than be a constant: WFM is 200 kHz wide, so this is exactly 100 kHz. AM at
+         *     9 kHz gets 4.5, SSB at 2.8 gets 1.4, NFM at 12.5 gets 6.25 — one channel over, in
+         *     every mode, without a table of them. Same principle as `shouldersFit` and `bursty`:
+         *     bandwidth IS the band.
+         *  ★ Floored at 1 kHz so CW (500 Hz wide) does not re-learn on every touch of the drum, and
+         *    a nudge across a station's own passband is still the same signal either way. */
+        const double reHz = std::max(1000.0,
+                                     0.5 * g_demodBwHz.load(std::memory_order_relaxed));
+        if (std::fabs(freq - g_agcLearnedAtHz.load(std::memory_order_relaxed)) > reHz) {
             g_agcLearnedAtHz.store(freq, std::memory_order_relaxed);
             agcForget("retuned");
         }
