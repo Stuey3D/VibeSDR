@@ -1561,6 +1561,8 @@ static std::string         g_occDir, g_occSerial, g_occLabel, g_occHeldIp;
 static std::string occHeldElsewhere(const std::string& ip);
 static void        occWrite(const std::string& ip);
 static std::atomic<double> g_adcPeakDbfs{-99.0};
+// ★ Until when somebody has asked for ADC statistics with the automation off — see enqueueIq.
+static std::atomic<double> g_adcStatsUntil{0.0};
 static std::atomic<double> g_adcClipPct{0.0};
 /** The scheduled-update settings, mirrored here purely so the admin page can DISPLAY them. The
  *  daemon owns the actual firing (its 1 Hz loop) — this is a readout, not a second scheduler. */
@@ -5356,9 +5358,33 @@ struct LocalSdrShim::Impl {
                         }
                         mine = pk;
                     }
-                    char sb[128];
+                    /* ★★★ THE CONVERTER'S OWN FIGURES RIDE WITH THE SIGNAL ONES, AND THEY HAVE TO
+                     *     BE SENT PERIODICALLY OR THEY ARE NOT A MEASUREMENT. `adcPeak` already
+                     *     existed on hwinfo and on `ovl` — but hwinfo is sent once at connect and
+                     *     `ovl` only when the AGC MOVES THE GAIN. So a tool sweeping with VibeAGC
+                     *     switched off (which is the only way to sweep) received the value from
+                     *     connect time and never another: agc-sweep printed a constant "-1.0" for
+                     *     all 29 gain steps, on every station, and I read a whole column of it
+                     *     before noticing it never changed.
+                     * ★★★ AND IT WAS ROUNDED TO A WHOLE DECIBEL — `(int)llround` — which throws
+                     *     away exactly the part that matters: the difference between -1.2 dBFS
+                     *     with nothing on the rail (96.1 at its best) and 0.0 dBFS with 12% of
+                     *     samples railed is the whole question, and both print as "-1".
+                     *  ★★ CLIP PERCENTAGE IS THE ONE THAT ACTUALLY MATTERS and was not on this
+                     *     socket at all — only in adminStatusJson(), behind admin auth. A peak
+                     *     near full scale is not harm; samples ON the rail are. That is the
+                     *     distinction the whole FM profile turns on.
+                     *  ★ A separate `adc` message rather than more fields on `sig`: `sig` is the
+                     *    tuned signal, this is the receiver. Unknown types are ignored by every
+                     *    client, so nothing has to change to keep working. */
+                    char sb[192];
                     snprintf(sb, sizeof sb, "{\"type\":\"sig\",\"chan\":%.1f,\"floor\":%.1f}",
                              mine, floorDb);
+                    sendText(p.sock, sb, Out::Sig);
+                    snprintf(sb, sizeof sb,
+                             "{\"type\":\"adc\",\"peak\":%.1f,\"clip\":%.4f}",
+                             g_adcPeakDbfs.load(std::memory_order_relaxed),
+                             g_adcClipPct.load(std::memory_order_relaxed));
                     sendText(p.sock, sb, Out::Sig);
                 }
             }
@@ -7044,6 +7070,23 @@ struct LocalSdrShim::Impl {
             if (jsonNum(msg,"bandwidthLow",lo) && jsonNum(msg,"bandwidthHigh",hi)) setBandwidth(hi - lo);
             else if (jsonNum(msg,"bandwidth",bw)) setBandwidth(bw);
             broadcastConfig();
+            return;
+        }
+        /* ★★★ ASK FOR THE CONVERTER'S FIGURES WITH THE AUTOMATION OFF. Diagnostic only, and it
+         *     changes NOTHING about the radio — no gain, no mode, no filter — so it is deliberately
+         *     outside sharedGate(): a listener reading a meter is not taking the dial off anybody.
+         *  ★ Reference-counted and released with the socket (see the close path), so a tool that
+         *    is killed mid-sweep cannot leave the measurement running for ever. */
+        if (type == "adcstats") {
+            /* ★ A SELF-EXPIRING LATCH, not a reference count. Counting holders means a tool that
+             *   is killed mid-sweep leaves a receiver measuring for ever, and every socket needs
+             *   its own flag plus a release on the close path — three places to get wrong for a
+             *   diagnostic. A deadline needs none of that: the asker refreshes it while it wants
+             *   the numbers, and it lapses on its own if the asker goes away. */
+            double secs = 30;
+            jsonNum(msg, "seconds", secs);
+            if (secs < 0) secs = 0; else if (secs > 300) secs = 300;
+            g_adcStatsUntil.store(Impl::nowSecs() + secs, std::memory_order_relaxed);
             return;
         }
         // ── Hardware controls (VibeServer: the client drives the radio) ──────
@@ -10624,7 +10667,20 @@ struct LocalSdrShim::Impl {
         //     samples actually examined, so sampling changes the confidence, not the answer.
         //  ★ A real overload is not a single sample: it rails continuously for as long as the
         //    front end is overdriven, so it cannot hide in the three buffers we skip.
-        const bool wantAdc = g_rtlAgc.load(std::memory_order_relaxed)
+        /* ★★★ OR BECAUSE SOMEBODY ASKED. The gate above is right and stays — an owner who turned
+         *     the automation off should not pay for it, and computing this in the libusb callback
+         *     is what caused the stutter Stuart found. But a measurement TOOL has to switch
+         *     VibeAGC off to take control of the gain, which meant it could never see the two
+         *     numbers that matter most: agc-sweep printed "-99.0" (the no-measurement sentinel)
+         *     and "0.000" for every step of every station.
+         *  ★★ Opt-in rather than always-on, and it costs exactly what AGC mode already costs —
+         *     the same one-buffer-in-four, on the same thread, with the same 1 s window. Nothing
+         *     new is being risked; it is the existing price, paid by whoever asked for it.
+         *  ★ Latched by the `adcstats` command and cleared when the asking socket goes away, so a
+         *    tool that crashes cannot leave a receiver measuring for ever. */
+        const bool wantAdc = (g_rtlAgc.load(std::memory_order_relaxed)
+                              || Impl::nowSecs()
+                                     < g_adcStatsUntil.load(std::memory_order_relaxed))
                           && ((++adcBufN_ & 3u) == 0u);
         convU8ToF32(buf, reinterpret_cast<float*>(v.data()), sampCount * 2,
                     wantAdc ? &st : nullptr);  // NEON

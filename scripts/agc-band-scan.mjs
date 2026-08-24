@@ -60,7 +60,7 @@ const SPEC_MAGIC = 0x43455053, FLAG_FULL_U8 = 0x03, U8_OFF = -256;
 // ── what we collect during one dwell ────────────────────────────────────────────────────────
 let frames = [];            // Float32Array of dBFS, low→high
 let binHz = 0, centreHz = 0;
-let adcPeak = null, rds = null, sigMsg = null, gains = [], gainNow = null, mpx = null;
+let adcPeak = null, adcClip = null, rds = null, sigMsg = null, gains = [], gainNow = null, mpx = null;
 
 const url = `${base.replace(/\/+$/, '')}/ws/user-spectrum?user_session_id=${SID}&mode=binary8&bins=1024${AUTH}`;
 const ws = new WebSocket(url);
@@ -114,7 +114,14 @@ ws.on('message', (d, isBin) => {
     if (Number.isFinite(j.gainNow)) gainNow = j.gainNow;
     if (Number.isFinite(j.adcPeak)) adcPeak = j.adcPeak;
   }
-  if (j.type === 'adc' && Number.isFinite(j.peak)) adcPeak = j.peak;
+  /* ★ The server sends this ~once a second now (it used to send nothing of the sort, so this
+   *   handler sat here waiting for a message that did not exist and the column read a stale
+   *   connect-time value). `clip` is the figure that decides harm — a peak near full scale is
+   *   fine, samples ON the rail are not. */
+  if (j.type === 'adc') {
+    if (Number.isFinite(j.peak)) adcPeak = j.peak;
+    if (Number.isFinite(j.clip)) adcClip = j.clip;
+  }
   if (j.type === 'rds') rds = j;
   // ★★★ THE MPX S/N — pilot against the transmitted-silence gap at 15–19 kHz, the same figure the
   //     noise reduction steers by. Stuart: "that is a good measure of the stations actual
@@ -201,10 +208,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     { hz: 106.0e6, real: true,  note: 'Greatest Hits — very strong with enough gain' },
   ];
   const GAIN = Number(opt('gain', '125'));
+  send({ type: 'adcstats', seconds: 300 });
   send({ type: 'gain', value: GAIN });
   await sleep(800);
   console.log(`  scanning the band at a FIXED gain of ${(GAIN/10).toFixed(1)} dB\n`);
-  console.log('   freq     chan   shoulder  sep    SNR   pk  wobble  skew  RDS  ST  truth');
+  console.log('   freq     chan   shoulder  sep    SNR   pk    clip%  wobble  skew  RDS  ST  truth');
   console.log('  ' + '─'.repeat(94));
   const scored = [];
   for (const b of BAND) {
@@ -220,7 +228,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     scored.push({ ...b, ...m });
     console.log(`  ${(b.hz/1e6).toFixed(1).padStart(6)}  ${m.channelDb.toFixed(1).padStart(6)}  `
       + `${m.shoulderDb.toFixed(1).padStart(7)}  ${(m.channelDb-m.shoulderDb).toFixed(1).padStart(5)}  `
-      + `${m.snr.toFixed(1).padStart(5)}  ${(typeof adcPeak === 'number' ? adcPeak.toFixed(1) : '—').padStart(5)}  ${m.wobble.toFixed(2).padStart(6)}  ${m.skew.toFixed(1).padStart(4)}  `
+      + `${m.snr.toFixed(1).padStart(5)}  ${(typeof adcPeak === 'number' ? adcPeak.toFixed(1) : '—').padStart(5)}  ${(typeof adcClip === 'number' ? adcClip.toFixed(3) : '—').padStart(6)}  ${m.wobble.toFixed(2).padStart(6)}  ${m.skew.toFixed(1).padStart(4)}  `
       + `${(ber<0?'—':ber+'%').padStart(4)}  ${(stereo===null?'—':stereo?'ST':'·').padStart(2)}  `
       + `${b.real ? '' : 'GHOST · '}${b.note}`);
   }

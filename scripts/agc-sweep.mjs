@@ -66,7 +66,7 @@ const SPEC_MAGIC = 0x43455053, FLAG_FULL_U8 = 0x03, U8_OFF = -256;
 // ── what we collect during one dwell ────────────────────────────────────────────────────────
 let frames = [];            // Float32Array of dBFS, low→high
 let binHz = 0, centreHz = 0;
-let adcPeak = null, rds = null, sigMsg = null, gains = [], gainNow = null, mpx = null;
+let adcPeak = null, adcClip = null, rds = null, sigMsg = null, gains = [], gainNow = null, mpx = null;
 
 const url = `${base.replace(/\/+$/, '')}/ws/user-spectrum?user_session_id=${SID}&mode=binary8&bins=1024${AUTH}`;
 const ws = new WebSocket(url);
@@ -120,7 +120,14 @@ ws.on('message', (d, isBin) => {
     if (Number.isFinite(j.gainNow)) gainNow = j.gainNow;
     if (Number.isFinite(j.adcPeak)) adcPeak = j.adcPeak;
   }
-  if (j.type === 'adc' && Number.isFinite(j.peak)) adcPeak = j.peak;
+  /* ★ The server sends this ~once a second now (it used to send nothing of the sort, so this
+   *   handler sat here waiting for a message that did not exist and the column read a stale
+   *   connect-time value). `clip` is the figure that decides harm — a peak near full scale is
+   *   fine, samples ON the rail are not. */
+  if (j.type === 'adc') {
+    if (Number.isFinite(j.peak)) adcPeak = j.peak;
+    if (Number.isFinite(j.clip)) adcClip = j.clip;
+  }
   if (j.type === 'rds') rds = j;
   // ★★★ THE MPX S/N — pilot against the transmitted-silence gap at 15–19 kHz, the same figure the
   //     noise reduction steers by. Stuart: "that is a good measure of the stations actual
@@ -189,11 +196,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   if (!gains.length) { console.error('no gain list from hwinfo — is this an RTL radio?'); process.exit(1); }
   console.log(`sweeping ${gains.length} gain steps at ${(FREQ / 1e6).toFixed(3)} MHz`
             + (RATE ? ` @ ${(RATE / 1e6).toFixed(1)} MS/s` : '') + `, ${DWELL / 1000}s per step\n`);
-  console.log('  gain    chan   shoulder  chan−shldr  contrast   SNR   pk  wobble  skew  RDS   ST  station');
+  console.log('  gain    chan   shoulder  chan−shldr  contrast   SNR   pk    clip%  wobble  skew  RDS   ST  station');
   console.log('  ──────────────────────────────────────────────────────────────────────────────');
   const rows = [];
   for (const g of gains) {
-    send({ type: 'gain', value: g });
+    // ★ Keep the converter's figures coming: the server only measures them when the automation is
+  //   on OR somebody has asked, and this tool has to switch the automation off to take the gain.
+  send({ type: 'adcstats', seconds: 60 });
+  send({ type: 'gain', value: g });
     await sleep(600);                 // the write, then a clean measurement window
     frames = []; rds = null; mpx = null;
     await sleep(DWELL);
@@ -207,7 +217,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     console.log(`  ${(g/10).toFixed(1).padStart(5)}  `
       + `${m.channelDb.toFixed(1).padStart(6)}  ${m.shoulderDb.toFixed(1).padStart(7)}  `
       + `${(m.channelDb - m.shoulderDb).toFixed(1).padStart(9)}  ${m.contrast.toFixed(1).padStart(7)}  `
-      + `${m.snr.toFixed(1).padStart(5)}  ${(typeof adcPeak === 'number' ? adcPeak.toFixed(1) : '—').padStart(5)}  ${m.wobble.toFixed(2).padStart(6)}  ${m.skew.toFixed(1).padStart(4)}  `
+      + `${m.snr.toFixed(1).padStart(5)}  ${(typeof adcPeak === 'number' ? adcPeak.toFixed(1) : '—').padStart(5)}  ${(typeof adcClip === 'number' ? adcClip.toFixed(3) : '—').padStart(6)}  ${m.wobble.toFixed(2).padStart(6)}  ${m.skew.toFixed(1).padStart(4)}  `
       + `${(ber < 0 ? '—' : ber + '%').padStart(5)}  ${(stereo === null ? '—' : stereo ? 'ST' : '·').padStart(2)}  ${ps}`);
   }
   // ★ The point of the exercise: where do the candidate objectives actually peak?
