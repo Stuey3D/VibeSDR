@@ -3382,6 +3382,35 @@ select.btn { padding: 6px 8px; }
     <label>SAMPLE RATE</label>
     <span class="val"></span>
   </div>
+  <!-- ★★★ THE TUNER'S OWN IF FILTER — the only selectivity this receiver has AHEAD of the mixer,
+       and until 4.1.0 nothing ever set it. Measured at 105.4 with a transmitter two miles away at
+       104.2: narrowing it to 600 kHz took 23 dB off the ADC (peak -7.0 -> -30.1 dBFS) and turned a
+       channel that read BELOW its own shoulders into one that locks stereo. The sample rate is
+       unchanged, so the span and the waterfall stay exactly as they were.
+       ★★ RTL ONLY, and hidden otherwise: an RSP and an HF+ have no equivalent knob, and drawing a
+       control that cannot act is the fault AGENTS.md names — the user concludes the FEATURE is
+       broken rather than the control. Sits under SAMPLE RATE because it is the same kind of
+       decision and the two interact (setting a rate re-derives this filter). -->
+  <!-- ★★ DIAGNOSTIC FOR NOW, and deliberately manual. Stuart, 2026-08-25: "the dropdown is for
+       diagnostics only, at some point we will look at it again." Nothing drives this automatically:
+       the AGC does not touch it, there is no owner policy and no status line yet. Those were
+       specified (locked centre keeps the span; single-user and shared-VFO could auto-select; the
+       owner can lock it on; a status must be shown) and are NOT built. Do not wire the loop to it
+       without that policy, or a shared receiver will narrow its front end under listeners who are
+       tuned near the edges of the span and have no way to see why. -->
+  <div class="mrow" id="rowTunerBw" hidden>
+    <label for="tunerBw">IF FILTER</label>
+    <select id="tunerBw" class="btn">
+      <option value="0">Automatic</option>
+      <option value="1500000">1.5 MHz</option>
+      <option value="1200000">1.2 MHz</option>
+      <option value="1000000">1.0 MHz</option>
+      <option value="800000">800 kHz</option>
+      <option value="600000">600 kHz</option>
+      <option value="450000">450 kHz</option>
+      <option value="300000">300 kHz</option>
+    </select>
+  </div>
   <!-- ★★ DONGLE-ONLY CONTROLS. Bias-T, the RTL2832U's digital AGC and direct sampling are
        all librtlsdr calls that do nothing on an RSP — and an RSP has its OWN bias-T in the
        panel above, so leaving these visible put TWO bias-T switches on one screen, one of

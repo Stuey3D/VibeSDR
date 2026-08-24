@@ -1365,6 +1365,14 @@ static inline const AgcProfile& profileFor(double demodBw, double sampleRate) {
 static std::atomic<const AgcProfile*> g_profile{&kProfileFm};
 /* ★ The demodulator's width, published so the RETUNE test can scale by it — see the note there. */
 static std::atomic<double>   g_demodBwHz{200000.0};
+/* ★★★ THE TUNER IF FILTER WE WANT, RE-ASSERTED — SETTING IT ONCE IS NOT ENOUGH. librtlsdr's
+ *  rtlsdr_set_center_freq() goes through r82xx_set_freq(), which reconfigures the tuner's filters
+ *  and throws our bandwidth away: measured on the Pi, the ADC peak went -7.0 -> -30.1 dBFS when it
+ *  was set, and straight back to -5.9 on the next retune. Stuart: "its not staying applied for me".
+ *  ★ Exactly the bias-T lesson from the config, one layer down: a register that survives whatever
+ *  set it last is a register that must be asserted every time, not set once and trusted.
+ *  0 = librtlsdr's automatic choice, which is what every build before this one did. */
+static std::atomic<int>      g_tunerBwHz{0};
 static std::atomic<double>   g_ovlMargin{3.0};
 static std::atomic<double>   g_ovlLastChangeAt{0.0};
 /** ★★★ MORE GAIN IS NOT MORE SIGNAL, AND THIS IS WHERE A HEADROOM-ONLY AGC GOES WRONG.
@@ -7199,11 +7207,18 @@ struct LocalSdrShim::Impl {
          *  ★ Reference-counted and released with the socket (see the close path), so a tool that
          *    is killed mid-sweep cannot leave the measurement running for ever. */
         if (type == "tunerbw") {
-            // ★ EXPERIMENTAL, and deliberately outside sharedGate for now: it is being measured,
-            //   not offered. 0 = back to librtlsdr's automatic choice.
+            /* ★★★ THE FRONT END IS SHARED, SO THIS IS GATED LIKE THE GAIN. It was outside the gate
+             *     while it was being measured; it is a control now. Narrowing the tuner's IF filter
+             *     changes what EVERY listener on this radio can hear — someone tuned near the edge
+             *     of the span would simply lose their station — so on a shared receiver it belongs
+             *     behind the admin password with the rest of the protected set.
+             *  ★ 0 = back to librtlsdr's automatic choice, which is what every build before this
+             *    one did and is still the default. */
+            if (!sharedGate("tunerbw")) return;
             double v = -1;
             if (jsonNum(msg, "value", v) && v >= 0)
                 LocalSdrShim::instance().setTunerBandwidth((int)v);
+            broadcastConfig();
             return;
         }
         if (type == "adcstats") {
@@ -8406,7 +8421,14 @@ struct LocalSdrShim::Impl {
             std::string j = std::string("{\"driver\":\"")
                           + (lost ? "none" : rsp ? "sdrplay" : hf ? "airspyhf" : "rtl")
                           + "\",\"present\":" + (lost ? "false" : "true")
-                          + ",\"rates\":[" + supportedRates() + "],\"gains\":[";
+                          + ",\"rates\":[" + supportedRates() + "]"
+                          // ★ The tuner's IF filter, so the page can show what is set.
+                          //   0 = librtlsdr's automatic choice. RTL only; the RSP and the
+                          //   HF+ have no equivalent knob, and drawing one that cannot act
+                          //   is the "control that only works on one radio" fault.
+                          + ",\"tunerBw\":"
+                          + std::to_string(g_tunerBwHz.load(std::memory_order_relaxed))
+                          + ",\"gains\":[";
             // ★★ THE BAND NAMES COME FROM THE SERVER, not from a copy in the page. Only the id and
             //    the label travel: the page never learns an edge, so the two cannot drift into
             //    disagreeing about where "VHF airband" ends — which is the kind of difference
@@ -12394,6 +12416,9 @@ struct LocalSdrShim::Impl {
 
         // Re-apply everything the device forgot by being unplugged. Same order as start().
         rtlsdr_set_sample_rate(dev, (uint32_t)sampleRate);
+        // ★ Setting the rate re-derives the tuner's IF filter, so ours has to go back on.
+        { const int bw_ = g_tunerBwHz.load(std::memory_order_relaxed);
+          if (bw_ > 0) rtlsdr_set_tuner_bandwidth(dev, (uint32_t)bw_); }
         tuneHw(rtlCenter.load());
         if (lastGainTenthDb < 0) rtlsdr_set_tuner_gain_mode(dev, 0);
         else { rtlsdr_set_tuner_gain_mode(dev, 1); rtlsdr_set_tuner_gain(dev, lastGainTenthDb); }
@@ -12727,6 +12752,7 @@ struct LocalSdrShim::Impl {
                 const int bw = pendingTunerBw;   pendingTunerBw   = -1;
                 lk.unlock();
                 if (bw >= 0) {
+                    g_tunerBwHz.store(bw, std::memory_order_relaxed);   // ★ remembered, see above
                     std::lock_guard<std::recursive_mutex> dlk(devMtx);
                     if (dev && !radioReleased.load()) {
                         const int rc = rtlsdr_set_tuner_bandwidth(dev, (uint32_t)bw);
@@ -12736,7 +12762,13 @@ struct LocalSdrShim::Impl {
                 }
                 if (hz) {
                     std::lock_guard<std::recursive_mutex> dlk(devMtx);
-                    if (dev && !radioReleased.load()) rtlsdr_set_center_freq(dev, hz);
+                    if (dev && !radioReleased.load()) {
+                        rtlsdr_set_center_freq(dev, hz);
+                        // ★ …and put our IF filter back, because that call just undid it.
+                        //   Silent: one line per retune would bury everything else.
+                        const int want = g_tunerBwHz.load(std::memory_order_relaxed);
+                        if (want > 0) rtlsdr_set_tuner_bandwidth(dev, (uint32_t)want);
+                    }
                 }
                 // ── ★★★ ONE WRITE. THREE APPROACHES WERE TESTED BY EAR; THIS ONE WON ────────
                 //  (1) JUMP straight to the target — one disturbance per change, whatever its size.
@@ -14437,6 +14469,9 @@ int LocalSdrShim::start(int fd, int vid, int pid,
           if (rtlsdr_get_device_usb_strings((uint32_t)index, mfr, prd, ser) == 0) impl->usbSerial = ser; }
     }
     rtlsdr_set_sample_rate(impl->dev, (uint32_t)sampleRate);
+    // ★ Setting the rate re-derives the tuner's IF filter, so ours has to go back on.
+    { const int bw_ = g_tunerBwHz.load(std::memory_order_relaxed);
+      if (bw_ > 0) rtlsdr_set_tuner_bandwidth(impl->dev, (uint32_t)bw_); }
     // Offset tuning: physically tune HW_OFFSET_HZ above the logical centre.
     impl->tuneHw(centerFreq);
     // ★★★ NEVER THE TUNER'S OWN AUTOMATIC GAIN. `gain < 0` used to mean "hardware AGC", and on an
@@ -16424,6 +16459,9 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
             err = "the radio is in use by another program on this machine";
         } else {
             rtlsdr_set_sample_rate(impl->dev, (uint32_t)impl->sampleRate);
+            // ★ Setting the rate re-derives the tuner's IF filter, so ours has to go back on.
+            { const int bw_ = g_tunerBwHz.load(std::memory_order_relaxed);
+              if (bw_ > 0) rtlsdr_set_tuner_bandwidth(impl->dev, (uint32_t)bw_); }
             impl->tuneHw(impl->rtlCenter.load());
             if (impl->lastGainTenthDb < 0) rtlsdr_set_tuner_gain_mode(impl->dev, 0);
             else { rtlsdr_set_tuner_gain_mode(impl->dev, 1);

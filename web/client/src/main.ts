@@ -1243,6 +1243,25 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         renderRspVals();
       }
     },
+    onTunerBw: (hz: number) => {
+      hwTunerBw = hz;
+      const row = document.getElementById('rowTunerBw');
+      // ★ RTL only — see the markup. An RSP/HF+ has no equivalent, and a control that cannot act
+      //   reads as a broken feature rather than a missing one.
+      if (row) row.hidden = (radioCaps?.driver !== 'rtl') || hwLockedCentre > 0;
+      const sel = document.getElementById('tunerBw') as HTMLSelectElement | null;
+      if (sel && String(hz) !== sel.value) {
+        // ★ If the server reports a width the list does not offer (an owner set it in the config),
+        //   show it rather than silently snapping the picker to something else.
+        if (![...sel.options].some(o => o.value === String(hz))) {
+          const o = document.createElement('option');
+          o.value = String(hz);
+          o.textContent = hz > 0 ? `${(hz / 1e3).toFixed(0)} kHz` : 'Automatic';
+          sel.appendChild(o);
+        }
+        sel.value = String(hz);
+      }
+    },
     onAdcStat: (peak: number, clip: number) => {
       adcPeakDbfs = Number.isFinite(peak) && peak > -90 ? peak : null;
       adcClipPct  = Number.isFinite(clip) ? clip : 0;
@@ -1586,6 +1605,7 @@ let hwGainNow = -1;
  *     closure is a value that WILL be stale, so it is held here and read through, never passed in.
  *  ★ A readout that names a mode the radio is not in is worse than a blank one. */
 let hwAgcOn = false;
+let hwTunerBw = 0;
 /* ★★★ THE CONVERTER'S OWN FIGURES, AND THE CHIP SHOWS THE ONE THAT MATTERS. It reported `pk` and
  *     nothing else — a PEAK, which we established on 2026-08-24 is not the harm: 96.1 sounds its
  *     best at -1.2 dBFS with nothing on the rail, while 104.2 at 7.7 dB reads 0.0 dBFS with 28% of
@@ -7772,6 +7792,14 @@ function populateHw() {
       spec!.setHwSampleRate(Number(r.value));
       savePref('sampleRate', Number(r.value));
     };
+    /* ★ THE IF FILTER, beside the rate because they are the same decision twice over: setting a
+     *   sample rate re-derives this filter in librtlsdr, so the server re-asserts ours afterwards.
+     *   NOT remembered in prefs — it is a property of the RADIO and it is shared, so a listener's
+     *   saved preference must not silently re-narrow somebody else's front end on connect. */
+    {
+      const bw = document.getElementById('tunerBw') as HTMLSelectElement | null;
+      if (bw) bw.onchange = () => spec!.setTunerBandwidth(Number(bw.value));
+    }
 
     // THE DEFAULT, and it MUST be sent, not merely displayed.
     //
