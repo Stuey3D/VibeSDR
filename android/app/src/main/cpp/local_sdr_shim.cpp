@@ -1277,6 +1277,21 @@ static constexpr double      kAgcBackoffDbfs = -1.0;
  *  cannot rail it between measurements.
  */
 static constexpr double      kAgcHardCeilDbfs = -2.0;
+/* ★★★ ONE CEILING, OR THE LOOP GETS A DEAD ZONE IT CANNOT CLIMB INTO. The climb refused any step
+ *     landing above -3.0 dBFS (g_ovlMargin) or -2.0 (the hard ceiling); the backoff only cut above
+ *     -1.0. Between those the loop would neither go up nor come down — so 96.1 HELD 12.5 dB when it
+ *     arrived from above and could never REACH 12.5 dB from below, and which one you got depended
+ *     entirely on the station you tuned from. Stuart, 2026-08-24: "just have the agc increase or
+ *     decrease from the point it was at previously when tuning" — which only works if up and down
+ *     can reach the same places.
+ * ★★★ AND THE PEAK WAS NEVER THE HARM ANYWAY. At 96.1/12.5 dB the peak sits at about -1.2 dBFS
+ *     with clip 0.0000% and 35.3 dB of SNR — the best the sweep found. Rail HITS are counted
+ *     separately, continuously, and are what actually damage the signal; a peak a decibel from
+ *     full scale with nothing on the rail is a receiver being used properly.
+ *  ★ So the climb aims at the same figure the backoff defends and no further. The hysteresis is
+ *    the backoff's two-second hot dwell, and a climb that was a mistake is handed straight back by
+ *    the verdict — this loop already makes every move prove itself. */
+static constexpr double      kAgcClimbCeilDbfs = kAgcBackoffDbfs;
 static std::atomic<double>   g_ovlMargin{3.0};
 static std::atomic<double>   g_ovlLastChangeAt{0.0};
 /** ★★★ MORE GAIN IS NOT MORE SIGNAL, AND THIS IS WHERE A HEADROOM-ONLY AGC GOES WRONG.
@@ -15513,13 +15528,16 @@ void LocalSdrShim::overloadTick() {
             if (peak > g_snrPlateauPeak.load(std::memory_order_relaxed) - 6.0) return;
             g_snrPlateau.store(false, std::memory_order_relaxed);
         }
-        if (peak + stepDb > kAgcHardCeilDbfs) return;
+        if (peak + stepDb > kAgcClimbCeilDbfs) return;
         // ★ And never climb while the floor is already lifted — that is the condition a climb
         //   created, and another step would deepen it.
         if (floorLifted) return;
-        // ★ 3 dB of margin below full scale. Chosen to be audible-signal-safe rather than tight:
-        //   the peak we measured is one second old and the band moves.
-        if (peak + stepDb > -g_ovlMargin.load(std::memory_order_relaxed)) {
+        // ★ The learned margin, clamped to the one ceiling — see kAgcClimbCeilDbfs. Unclamped it
+        //   sat at 3 dB and refused every step landing above -3.0 dBFS, which is the dead zone the
+        //   jump path was just fixed for; this is the SINGLE-step copy of the same check and it
+        //   would have quietly reinstated it (silently, at that — the branch does not log).
+        if (peak + stepDb > -std::min(g_ovlMargin.load(std::memory_order_relaxed),
+                                      -kAgcClimbCeilDbfs)) {
             // ★ Silent. This runs every 2 s and would otherwise fill the log with a line saying
             //   nothing happened — the one thing guaranteed to make the useful lines unreadable.
             return;
@@ -15547,14 +15565,17 @@ void LocalSdrShim::overloadTick() {
          */
         {
             const int bad = g_ovlBadGain.load(std::memory_order_relaxed);
-            const double mgn = g_ovlMargin.load(std::memory_order_relaxed);
+            // ★ Clamped so the learned margin can never be stricter than the one ceiling above —
+            //   it was 3.0 (aim at -3.0 dBFS) and that IS the dead zone, by another name.
+            const double mgn = std::min(g_ovlMargin.load(std::memory_order_relaxed),
+                                        -kAgcClimbCeilDbfs);
             int best = idx;
             for (int j = idx + 1; j <= tgtIdx; j++) {
                 const double add = (gains[(size_t)j] - gains[(size_t)from]) / 10.0;
                 // ★ The same ceiling the single step now uses, or the jump would stop at the old
                 //   operating point and the loop would creep the rest of the way — the exact
                 //   slowness the jump exists to remove.
-                if (peak + add > kAgcHardCeilDbfs) break;
+                if (peak + add > kAgcClimbCeilDbfs) break;
                 if (peak + add > -mgn) break;
                 if (bad >= 0 && gains[(size_t)j] >= bad && cleanRun < 120) break;
                 best = j;
