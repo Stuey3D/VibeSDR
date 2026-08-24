@@ -3387,10 +3387,15 @@ select.btn { padding: 6px 8px; }
        104.2: narrowing it to 600 kHz took 23 dB off the ADC (peak -7.0 -> -30.1 dBFS) and turned a
        channel that read BELOW its own shoulders into one that locks stereo. The sample rate is
        unchanged, so the span and the waterfall stay exactly as they were.
-       ★★ RTL ONLY, and hidden otherwise: an RSP and an HF+ have no equivalent knob, and drawing a
-       control that cannot act is the fault AGENTS.md names — the user concludes the FEATURE is
-       broken rather than the control. Sits under SAMPLE RATE because it is the same kind of
-       decision and the two interact (setting a rate re-derives this filter). -->
+       ★★ RTL ONLY via the .rtlOnly class, the same mechanism bias-T and direct sampling use: an
+       RSP and an HF+ have no equivalent knob, and drawing a control that cannot act is the fault
+       AGENTS.md names — the user concludes the FEATURE is broken rather than the control.
+       ★★★ AND IT IS *NOT* HIDDEN ON A LOCKED CENTRE, though the first version was. That rule
+       ("locked RF centre, so the span is fixed") belongs to the AUTOMATIC policy, which would
+       change the sample rate; this filter leaves the rate and the span exactly alone, so the rule
+       does not apply to it. A locked-centre server is precisely where an OWNER most wants this —
+       and it is admin-gated, so only they can reach it. Sits under SAMPLE RATE because it is the
+       same kind of decision and the two interact (setting a rate re-derives this filter). -->
   <!-- ★★ DIAGNOSTIC FOR NOW, and deliberately manual. Stuart, 2026-08-25: "the dropdown is for
        diagnostics only, at some point we will look at it again." Nothing drives this automatically:
        the AGC does not touch it, there is no owner policy and no status line yet. Those were
@@ -3398,7 +3403,7 @@ select.btn { padding: 6px 8px; }
        owner can lock it on; a status must be shown) and are NOT built. Do not wire the loop to it
        without that policy, or a shared receiver will narrow its front end under listeners who are
        tuned near the edges of the span and have no way to see why. -->
-  <div class="mrow" id="rowTunerBw" hidden>
+  <div class="mrow rtlOnly" id="rowTunerBw">
     <label for="tunerBw">IF FILTER</label>
     <select id="tunerBw" class="btn">
       <option value="0">Automatic</option>

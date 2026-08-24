@@ -1245,10 +1245,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     },
     onTunerBw: (hz: number) => {
       hwTunerBw = hz;
-      const row = document.getElementById('rowTunerBw');
-      // ★ RTL only — see the markup. An RSP/HF+ has no equivalent, and a control that cannot act
-      //   reads as a broken feature rather than a missing one.
-      if (row) row.hidden = (radioCaps?.driver !== 'rtl') || hwLockedCentre > 0;
+      // ★ Visibility is the .rtlOnly class's job (see applyRadioCaps) — the same mechanism bias-T
+      //   and direct sampling use. This handler only reports what is SET; the first version also
+      //   hid the row when the centre was locked, which is the automatic policy's rule and not
+      //   this control's: the IF filter does not change the span.
       const sel = document.getElementById('tunerBw') as HTMLSelectElement | null;
       if (sel && String(hz) !== sel.value) {
         // ★ If the server reports a width the list does not offer (an owner set it in the config),
