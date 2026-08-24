@@ -573,6 +573,10 @@ public:
     /** ★ The R820T's own IF filter, in Hz. 0 = librtlsdr's automatic choice (today's behaviour).
      *  See pendingTunerBw — the only selectivity we have AHEAD of the mixer. */
     void setTunerBandwidth(int hz);
+    /** ★ Where the tuner is centred (NOT the view, NOT the VFO) — the IF filter is centred here. */
+    double rfCentreHz() const;
+    /** ★ Re-send the hardware description to every spectrum listener. */
+    void broadcastHwInfo();
     void setPpm(int ppm);
     void setBiasTee(bool on);
     void setAgc(bool on);                 // RTL2832 digital AGC

@@ -244,7 +244,7 @@ export interface SpectrumCallbacks {
   /** ★ The tuner's IF filter in Hz, 0 = automatic. Its own callback rather than a fourteenth
    *  argument on onHwInfo — that signature is already at the length where a caller gets one
    *  positional wrong and nothing complains. */
-  onTunerBw?: (hz: number) => void;
+  onTunerBw?: (hz: number, rfCentreHz: number) => void;
   onRspStat?: (systemGainDb: number, lna: number, ifgr: number, overload: boolean,
                settling: boolean) => void;
   onStatus?: (s: 'connecting' | 'open' | 'closed' | 'error', detail?: string) => void;
@@ -663,7 +663,8 @@ export class SpectrumClient {
         this.cb.onSummon?.();
         break;
       case 'hwinfo':
-        if (msg.tunerBw !== undefined) this.cb.onTunerBw?.(Number(msg.tunerBw) || 0);
+        if (msg.tunerBw !== undefined)
+          this.cb.onTunerBw?.(Number(msg.tunerBw) || 0, Number(msg.rfCentre) || 0);
         this.cb.onHwInfo?.(msg.gains ?? [], msg.rates ?? [], Number(msg.lockedRate) || 0,
                            Number(msg.maxFftRate) || 0, Number(msg.forceIdleSaver) === 1,
                            (msg.radio ?? null) as RadioCaps | null,

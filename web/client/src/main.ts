@@ -788,6 +788,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       //    stepping four times a second cannot look smooth however well it is smoothed.
       mobileUi?.paintSignal();
       updateRangeGap(centerHz, bwHz);
+      updateIfGap(centerHz, bwHz);
     },
     onConfig: (cfg) => {
       // ★★ ALSO HERE, not only in onHwInfo. lockedWindow() needs the capture bandwidth, which
@@ -1243,8 +1244,12 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         renderRspVals();
       }
     },
-    onTunerBw: (hz: number) => {
+    onTunerBw: (hz: number, rfCentreHz: number) => {
       hwTunerBw = hz;
+      // ★ The filter is centred on the TUNER, which is not where the listener is looking — see
+      //   updateIfGap. Without this the shading would be drawn from the view centre and be wrong
+      //   by exactly the offset that makes the filter worth having.
+      hwRfCentre = rfCentreHz;
       // ★ Visibility is the .rtlOnly class's job (see applyRadioCaps) — the same mechanism bias-T
       //   and direct sampling use. This handler only reports what is SET; the first version also
       //   hid the row when the centre was locked, which is the automatic policy's rule and not
@@ -1606,6 +1611,7 @@ let hwGainNow = -1;
  *  ★ A readout that names a mode the radio is not in is worse than a blank one. */
 let hwAgcOn = false;
 let hwTunerBw = 0;
+let hwRfCentre = 0;
 /* ★★★ THE CONVERTER'S OWN FIGURES, AND THE CHIP SHOWS THE ONE THAT MATTERS. It reported `pk` and
  *     nothing else — a PEAK, which we established on 2026-08-24 is not the harm: 96.1 sounds its
  *     best at -1.2 dBFS with nothing on the rail, while 104.2 at 7.7 dB reads 0.0 dBFS with 28% of
@@ -8219,6 +8225,56 @@ function clampTune(hz: number): number {
     ? `${(edge / 1e6).toFixed(3)} MHz — ${why}. Tune ${dir > 0 ? 'up' : 'down'} again to jump to ${(other / 1e6).toFixed(3)} MHz`
     : `${(edge / 1e6).toFixed(3)} MHz — ${why}`);
   return edge;
+}
+
+/** ★★★ SHADE WHAT OUR OWN IF FILTER IS SUPPRESSING, and say how wide it is.
+ *
+ *  ★★★ WHY THIS EXISTS AT ALL. The tuner's IF filter is the only selectivity this receiver has
+ *  ahead of its mixer, and narrowing it is worth 17.8 dB against a transmitter two miles away —
+ *  it is the difference between hearing 105.7 and not hearing it. But it is centred on the TUNER,
+ *  not on the view, and its skirts are soft: measured at a 400 kHz setting, the roll-off reaches
+ *  -3 dB some 31% of the span in from each edge and never reaches -20 dB at all. That is visually
+ *  indistinguishable from a quiet band. A listener panning across it concludes the BAND is dead
+ *  when the answer is that WE are attenuating it — the receiver misdescribing itself to the one
+ *  person who cannot tell, which is the fault AGENTS.md is built around.
+ *
+ *  ★★ NOT #rangeGap's SOLID BLACK, and the difference is the whole point. That region contains
+ *  nothing and never could; this one is genuinely on air and merely suppressed. A wash keeps the
+ *  spectrum readable underneath, so what you see is "there is something there and we are the
+ *  reason it is faint" rather than "there is nothing there".
+ *
+ *  ★ Both sides at once, unlike the range gap: the passband sits INSIDE the view, so a narrow
+ *  filter shows a shaded region at each end. Hidden entirely when the filter is wide enough to
+ *  cover everything on screen, which is the case that needs no explanation.
+ */
+function updateIfGap(centerHz: number, bwHz: number) {
+  const lo = document.getElementById('ifGapLo');
+  const hi = document.getElementById('ifGapHi');
+  if (!lo || !hi) return;
+  const hide = () => { lo.classList.remove('show'); hi.classList.remove('show'); };
+  // ★ 0 = "wide, set by the sample rate", i.e. nothing of ours to declare.
+  if (!hwTunerBw || hwTunerBw <= 0 || !hwRfCentre || bwHz <= 0) { hide(); return; }
+
+  const viewLo = centerHz - bwHz / 2;
+  const pbLo = hwRfCentre - hwTunerBw / 2;
+  const pbHi = hwRfCentre + hwTunerBw / 2;
+  const frac = (f: number) => Math.max(0, Math.min(1, (f - viewLo) / bwHz));
+  const label = `IF ${hwTunerBw >= 1e6 ? (hwTunerBw / 1e6).toFixed(1) + ' MHz'
+                                       : (hwTunerBw / 1e3).toFixed(0) + ' kHz'}`;
+  let any = false;
+  for (const [el, x0, x1] of [[lo, 0, frac(pbLo)], [hi, frac(pbHi), 1]] as
+                             [HTMLElement, number, number][]) {
+    // ★ A sliver is noise on the screen rather than information — and at exactly one pixel the
+    //   label cannot be read anyway, so there is nothing to lose by staying quiet.
+    if (x1 - x0 < 0.02) { el.classList.remove('show'); continue; }
+    el.style.left  = `${x0 * 100}%`;
+    el.style.width = `${(x1 - x0) * 100}%`;
+    (el.firstElementChild as HTMLElement).textContent =
+      (x1 - x0) > 0.10 ? `${label} \u2014 attenuated by this receiver` : label;
+    el.classList.add('show');
+    any = true;
+  }
+  if (!any) hide();
 }
 
 /** ★ Black out the part of the window the radio cannot tune, and say what it is.

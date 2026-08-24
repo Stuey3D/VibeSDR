@@ -222,6 +222,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
    *  ★ The crop figure has to be a number taken off this radio, not a percentage somebody liked.
    *    Measured against the floor in the middle third, which is flat by construction. */
   send({ type: 'gain', value: 250 });
+  if (opt('tunerbw', '')) { send({ type: 'tunerbw', value: Number(opt('tunerbw', '0')) }); }
   // ★ --vfo lets the VFO and the VIEW differ, which is the whole point: the artefact only appears
   //   once the RF centre is pushed away from the station being listened to.
   const VFO = opt('vfo', '') ? hz(opt('vfo', '')) : FREQ;

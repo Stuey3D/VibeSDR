@@ -1389,6 +1389,23 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   display: none; align-items: center; justify-content: center;
 }
 #rangeGap.show { display: flex; }
+/* ★ Deliberately NOT #rangeGap's solid black — see the markup. A wash, so the spectrum under it
+   stays readable: the listener should be able to see that something IS there and that we are the
+   reason it is faint. The hatch reads as "masked" rather than "empty". */
+.ifGap {
+  position: absolute; top: 0; bottom: 0; z-index: 19; pointer-events: none; display: none;
+  background: repeating-linear-gradient(135deg,
+              rgba(255,138,61,0.13) 0 6px, rgba(255,138,61,0.05) 6px 12px);
+  align-items: flex-end; justify-content: center;
+}
+.ifGap.show { display: flex; }
+.ifGap > span {
+  color: var(--btn-text); font-size: 10px; letter-spacing: 0.6px; text-align: center;
+  font-family: var(--mono, monospace); padding-bottom: 6px; opacity: 0.85;
+  text-shadow: 0 1px 3px #000;
+}
+#ifGapLo { border-right: 1px solid rgba(255,138,61,0.55); }
+#ifGapHi { border-left: 1px solid rgba(255,138,61,0.55); }
 #rangeGapNote {
   color: var(--text-dim); font-size: 11px; letter-spacing: 0.5px; text-align: center;
   padding: 0 10px; max-width: 260px; line-height: 1.4;
@@ -2301,6 +2318,20 @@ select.btn { padding: 6px 8px; }
        labelled, and the label doubles as the instruction for getting across the gap
        (Stuart's design, 2026-07-27). -->
   <div id="rangeGap" hidden><span id="rangeGapNote"></span></div>
+  <!-- ★★★ WHAT OUR OWN IF FILTER IS SUPPRESSING. Sibling of #rangeGap above and the same
+       principle — "drawing it as spectrum would be a lie: it looks like a quiet band" — but a
+       DIFFERENT FACT, so it must not look the same. #rangeGap is solid black because nothing is
+       there at all; this region really is on air and we are attenuating it, so it is a translucent
+       wash. Blacking it out would be a second lie in the other direction.
+       ★★★ IT IS NOT OPTIONAL DECORATION. Measured on the Pi: at a 400 kHz IF the roll-off reaches
+       -3 dB some 31% of the span in from EACH edge, and the skirts are SOFT — nothing reaches
+       -20 dB even at the extremes. So it is visually identical to a quiet band, and a listener
+       panning across it concludes the BAND is dead when it is us. Stuart asked for this before a
+       line of it was written: "we will need a display to show what parts are working".
+       ★ Two of them, unlike #rangeGap's one: the passband sits inside the view, so both sides can
+       be showing at once. -->
+  <div id="ifGapLo" class="ifGap"><span></span></div>
+  <div id="ifGapHi" class="ifGap"><span></span></div>
   <!-- ★ The BOUNCE toast. The blacked-out region above explains the dead space permanently;
        this confirms the ACTION — that your tune was caught by the edge and a second one in the
        same direction will cross. Two messages because they answer two different questions:

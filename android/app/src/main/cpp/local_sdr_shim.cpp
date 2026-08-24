@@ -2277,6 +2277,9 @@ struct LocalSdrShim::Impl {
      *  WITHOUT changing the sample rate at all — no stream teardown, no span change, one control
      *  transfer. Being tested; -1 means "leave it alone", which is today's behaviour. */
     int pendingTunerBw = -1;
+    // ★ Last values published on hwinfo, so it is re-sent only when they actually move.
+    std::atomic<long long> lastSentRfCentre{-1};
+    std::atomic<int>       lastSentTunerBw{-1};
     // ★ The tuner's own gain steps, cached for the writer so it can WALK to a target rather than
     //   jump. Filled the first time anything needs it; a tuner's list never changes.
     std::vector<int> hwGainList;
@@ -7216,8 +7219,13 @@ struct LocalSdrShim::Impl {
              *    one did and is still the default. */
             if (!sharedGate("tunerbw")) return;
             double v = -1;
-            if (jsonNum(msg, "value", v) && v >= 0)
+            if (jsonNum(msg, "value", v) && v >= 0) {
                 LocalSdrShim::instance().setTunerBandwidth((int)v);
+                // ★ Tell every listener at once. Waiting for the next retune would leave the
+                //   passband shading describing the previous setting — which is worse than no
+                //   shading, because it looks authoritative.
+                LocalSdrShim::instance().broadcastHwInfo();
+            }
             broadcastConfig();
             return;
         }
@@ -7600,6 +7608,20 @@ struct LocalSdrShim::Impl {
         }
         else
             j += "],\"rates\":[2560000,2400000,1800000,1200000,960000]";
+        /* ★★★ THE TUNER'S IF FILTER AND WHERE IT SITS — ON THE SOCKET THE CLIENT ACTUALLY READS.
+         *     These first went onto GET /vibeserver/hardware, which is the SETUP PAGE's endpoint,
+         *     so the web client received nothing and the passband shading never drew. That is the
+         *     "one list, two consumers" trap this file warns about a few hundred lines up: two
+         *     places describe the radio and only one of them is the one in front of you.
+         *  ★★ rfCentre is NOT the view centre. The filter is centred on the TUNER and the listener
+         *     can be looking anywhere inside the capture — which is the whole point of moving the
+         *     centre away from a blowtorch — so a client that assumed the view centre would draw
+         *     the passband wrong by exactly the offset that makes it worth having. */
+        j += ",\"tunerBw\":"
+           + std::to_string(g_tunerBwHz.load(std::memory_order_relaxed))
+           + ",\"rfCentre\":"
+           + std::to_string((long long)llround(
+                 LocalSdrShim::instance().rfCentreHz()));
         // ★ And WHICH radio, plus the controls it really has. A single gain slider is a lie
         // on an RSP: RF gain is an LNA STATE and IF gain is a separate REDUCTION, and it is
         // the LNA that decides whether the front end overloads — the very thing that has been
@@ -8428,6 +8450,20 @@ struct LocalSdrShim::Impl {
                           //   is the "control that only works on one radio" fault.
                           + ",\"tunerBw\":"
                           + std::to_string(g_tunerBwHz.load(std::memory_order_relaxed))
+                          /* ★★★ AND WHERE THAT FILTER SITS, WHICH IS NOT WHERE THE LISTENER IS
+                           *     LOOKING. The IF filter is centred on the TUNER, and the view can
+                           *     be anywhere inside the capture — so a client cannot draw the
+                           *     passband from anything it already has. Without this it would guess
+                           *     from the view centre and be wrong by exactly the offset that makes
+                           *     the filter worth having.
+                           *  ★ Measured on the Pi: at a 400 kHz IF the roll-off reaches -3 dB some
+                           *    31% of the span in from EACH edge, and the skirts are soft — nothing
+                           *    reaches -20 dB even at the extremes. So it is visually identical to
+                           *    a quiet band, which is why the passband has to be DRAWN rather than
+                           *    left for the eye to infer. */
+                          + ",\"rfCentre\":"
+                          + std::to_string((long long)llround(
+                                rtlCenter.load() + hwOffsetHz()))
                           + ",\"gains\":[";
             // ★★ THE BAND NAMES COME FROM THE SERVER, not from a copy in the page. Only the id and
             //    the label travel: the page never learns an edge, so the two cannot drift into
@@ -11621,7 +11657,19 @@ struct LocalSdrShim::Impl {
         //     offering gain that is about to be clamped. Both read as a broken control.
         //     ★ Only on a CHANGE. This runs on every retune, and re-sending the whole hardware
         //       description on each dial movement would be a message per pan.
-        if (lastSentGainCap.exchange(cap) != cap)
+        /* ★★★ AND THE SAME FOR THE IF FILTER AND WHERE THE TUNER SITS. Both ride on hwinfo, which
+         *     was otherwise sent once at connect — so a client drew the passband shading from a
+         *     snapshot taken before the listener had tuned anywhere, and it never moved again.
+         *     Measured: rfCentre reported 97.475 MHz while the radio was on 105.4.
+         *  ★ Same "only on a CHANGE" rule the gain cap uses, and for the same reason: this runs on
+         *    every retune, and the RF centre deliberately STAYS PUT unless it has to move
+         *    (dongleForView), so in practice this is a message when the hardware really moved
+         *    rather than one per pan. */
+        const long long rfNow = (long long)llround(rtlCenter.load() + hwOffsetHz());
+        const int       bwNow = g_tunerBwHz.load(std::memory_order_relaxed);
+        const bool hwMoved = (lastSentRfCentre.exchange(rfNow) != rfNow)
+                           | (lastSentTunerBw.exchange(bwNow) != bwNow);
+        if (lastSentGainCap.exchange(cap) != cap || hwMoved)
             for (auto& pr : allSpecPeers()) sendHwInfo(pr.sock);
         if (cap < 0) return;
         if (useSdrplay() && sdrp) {
@@ -12752,7 +12800,6 @@ struct LocalSdrShim::Impl {
                 const int bw = pendingTunerBw;   pendingTunerBw   = -1;
                 lk.unlock();
                 if (bw >= 0) {
-                    g_tunerBwHz.store(bw, std::memory_order_relaxed);   // ★ remembered, see above
                     std::lock_guard<std::recursive_mutex> dlk(devMtx);
                     if (dev && !radioReleased.load()) {
                         const int rc = rtlsdr_set_tuner_bandwidth(dev, (uint32_t)bw);
@@ -15294,8 +15341,25 @@ void LocalSdrShim::setDecoderFreq(double hz) {
 //   setters that were its only callers. The RTL setters above needed it too.
 #define VIBE_HW_LOCK() std::lock_guard<std::recursive_mutex> _hwlk(p->modeMtx)
 
+double LocalSdrShim::rfCentreHz() const {
+    // ★ The TUNER's centre — rtlCenter plus the fixed hardware offset that keeps the DC spike off
+    //   the VFO. Not the view centre, and not the VFO. See the hwinfo note.
+    return p ? (p->rtlCenter.load() + p->hwOffsetHz()) : 0.0;
+}
+void LocalSdrShim::broadcastHwInfo() {
+    if (!p) return;
+    for (auto& pr : p->allSpecPeers()) p->sendHwInfo(pr.sock);
+}
 void LocalSdrShim::setTunerBandwidth(int hz) {
     if (!p) return;
+    /* ★★★ RECORD THE INTENT HERE, NOT WHEN THE TRANSFER LANDS. This was stored on the writer
+     *     thread as the control transfer went out, but hwinfo is broadcast the moment the command
+     *     arrives — so the published figure was always ONE CHANGE BEHIND: ask for 600 kHz and the
+     *     client is told 0; ask for 400 and it is told 600. A passband drawn from that describes
+     *     the previous setting while looking authoritative, which is worse than drawing nothing.
+     *  ★ It is also the right home for it on its own terms: this global is "the filter we want",
+     *    and it is what the re-assertion after every retune and rate change reads. */
+    g_tunerBwHz.store(hz, std::memory_order_relaxed);
     { std::lock_guard<std::mutex> lk(p->hwWrMtx); p->pendingTunerBw = hz; }
     p->hwWrCv.notify_one();
 }
