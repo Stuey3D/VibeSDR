@@ -63,6 +63,19 @@ selectivity will simply select a lower sample rate."*
    anyone else. ★ Different failure from the IF filter: bandwidth helps a WEAK signal in a clean
    front end; the IF filter helps a clean signal behind a strong neighbour.
 
+   ★★★ **WIRE IT WITH `perListener()`, LIKE WSP/CEQ/IMS, AND EVERY MODE IS CORRECT FOR FREE.**
+   Checked against the code rather than assumed — that lambda's own note says `perClientDsp()` is
+   true *only* on a receiver with a LOCKED CENTRE and room for more than one listener. So:
+   | mode | pipeline | who the toggle affects |
+   |---|---|---|
+   | 1 · single user | the shared one, which is theirs | just them |
+   | 2 · shared VFO, unlocked | **one pipeline for everybody** | **everyone** — Stuart: *"a toggle like the rest of the FM enhancements as it will apply to everybody"* |
+   | 3 · locked centre, many listeners | per-client DSP | each listener separately |
+   No mode check is needed anywhere; the DSP model already gives the right answer. ★ And it must
+   fall back to the single pipeline when there is no per-client DSP — the note warns that looking
+   one up and doing nothing when absent "silently killed all four switches on the common setup
+   while working perfectly on the one being tested".
+
 ## The tools are the durable part
 `scripts/agc-sweep` (hold the station, move the gain) · `agc-band-scan` (hold the gain, walk a
 LABELLED band — this is what caught the false positives) · `agc-width` · `agc-iffilter`
