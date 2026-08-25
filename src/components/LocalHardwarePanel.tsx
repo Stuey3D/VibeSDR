@@ -76,6 +76,8 @@ export interface LocalHardwarePanelProps {
    *  calibration are all refused without it. What was missing was any sign of it here: the
    *  controls drew as normal and the user found out only when one silently did nothing
    *  (Stuart, 2026-07-27). A protection nobody can see is not obviously protecting anything. */
+  /** ★ The owner has FORCED the AGC on — a listener may not set a gain at all. From hwinfo. */
+  agcLocked?: boolean;
   adminSet?: boolean;
   adminOk?: boolean;
   /** Password entered by the user. Resolving it to a nonce+HMAC is the screen's job. */
@@ -147,6 +149,23 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   const isRsp = p.radio?.driver === 'sdrplay';
   // ★ Locked = the server has a password and this session has not cleared it.
   const locked = !!p.adminSet && !p.adminOk;
+  /* ★★★ WHAT THIS LISTENER CAN ACTUALLY CHANGE — and the panel now shows ONLY that.
+   *  ★★★ IT USED TO SHOW EVERYTHING AND MEAN NOTHING. Bias-T, PPM, the digital AGC and direct
+   *      sampling were drawn for every listener on a protected receiver, so the switches moved,
+   *      the panel showed bias-T ON, and the server ignored every one of them. Stuart: "a user
+   *      could turn on the Bias-T in their app although it is not going to the server but it
+   *      still shows as being on ... they say locked out by admin but still look like they do
+   *      stuff." A control that reports a state the radio is not in is worse than a missing one:
+   *      the user believes it, and on bias-T they may believe they are powering an aerial.
+   *  ★★ THIS IS THE HOUSE RULE, not a new idea — AGENTS.md: never offer a control whose every use
+   *     is a no-op, and the same reasoning already hides the gain slider while the AGC owns it
+   *     ("a disabled slider still reads as an offer"). Hidden, not greyed. */
+  const canProtected = !locked;                      // bias-T, PPM, digital AGC, direct sampling
+  const canGain      = !p.agcLocked;                 // the owner may have forced the AGC on
+  const canRate      = !(p.lockedRate && p.lockedRate > 0);
+  /* ★ Nothing left but the password box. Then the panel does not pretend to be a control panel:
+   *  it says what it is and puts the cursor where the only useful action is. */
+  const nothingForUser = !canProtected && !canGain && !canRate;
   const isRtl = !p.radio || p.radio.driver === 'rtl';
 
   // ★ One flat focus order over everything on the panel, claimed during render in JSX order —
@@ -212,8 +231,18 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               <Text style={styles.note}>
                 {p.adminOk
                   ? 'Full settings are unlocked for this session.'
-                  : 'Bias-T, frequency correction and direct sampling are locked on this '
-                    + 'receiver. Gain, sample rate and tuning stay open.'}
+                  /* ★★ SAY WHAT IS LEFT, TRUTHFULLY. The old line always promised "Gain, sample
+                     rate and tuning stay open" — which is a lie on a receiver whose owner has
+                     also fixed the AGC and pinned the rate, and that is exactly the receiver
+                     where a listener finds nothing to do and no explanation. */
+                  : nothingForUser
+                    ? 'Every hardware control on this receiver is set by its owner. There is '
+                      + 'nothing here for a listener to change — enter the password to take it over.'
+                    : 'Bias-T, frequency correction and direct sampling are locked on this receiver.'
+                      + (canGain ? (canRate ? ' Gain, sample rate and tuning stay open.'
+                                            : ' Gain and tuning stay open.')
+                                 : (canRate ? ' Sample rate and tuning stay open.'
+                                            : ' Tuning stays open.'))}
               </Text>
               {!p.adminOk && (
                 <View style={styles.adminRow}>
@@ -221,6 +250,13 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                     value={adminPw} onChangeText={setAdminPw}
                     placeholder="Admin password" placeholderTextColor="rgba(200,210,225,0.45)"
                     secureTextEntry autoCapitalize="none" autoCorrect={false}
+                    /* ★ When the password is the ONLY thing on the panel, put the cursor in it.
+                       Stuart: "it should immediately ask for the admin password". Never focus it
+                       otherwise — a keyboard covering a panel somebody opened to move the gain is
+                       an obstacle, not a shortcut. */
+                    autoFocus={nothingForUser}
+                    onSubmitEditing={() => { p.onAdminUnlock?.(adminPw); setAdminPw(''); }}
+                    returnKeyType="go"
                     style={styles.adminInput} />
                   <TouchableOpacity style={styles.adminBtn}
                     onPress={() => { p.onAdminUnlock?.(adminPw); setAdminPw(''); }}>
@@ -239,7 +275,17 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               HF+ has an AGC, an attenuator in 6 dB steps and a preamp, and no table at all —
               so the slider was drawing an empty/meaningless scale while the controls that do
               work were missing entirely. */}
-          {isAhf ? (
+          {/* ★★ AND THE GAIN GOES WITH THEM when the owner has FORCED the AGC on. The server
+                 refuses a gain from a listener then — the same "every use is a no-op" test — so
+                 the slider is hidden rather than left to move and snap back. The line below says
+                 why, because a missing gain control with no explanation reads as a fault. */}
+          {!canGain && (
+            <Text style={[styles.note, { marginTop: 12 }]}>
+              The gain is managed by this receiver: its owner has fixed the automatic gain
+              control on, so it is the same for everybody listening.
+            </Text>
+          )}
+          {canGain && (isAhf ? (
             <>
               <Text style={styles.section}>GAIN — {p.radio?.model || 'Airspy HF+'}</Text>
               <View style={styles.toggleRow}>
@@ -426,7 +472,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               <GainSlider gains={p.gains} gainTenthDb={p.gainTenthDb} auto={p.autoGain}
                           onAuto={p.onAuto} onGain={p.onGain} vibeAgc={!p.isTcp} />
             </>
-          )}
+          ))}
           {p.isSpy && <Text style={styles.note}>
             The SpyServer protocol sends a gain step, not a dB value — the labels are
             this receiver's nearest published gains. There is no auto-gain over the wire.
@@ -488,7 +534,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               control is admin-gated), bias-T, the RTL2832's digital AGC and direct sampling
               are all properties of an RTL dongle. Showing them for another radio is how the
               panel became a hybrid of two receivers. */}
-          {!p.isSpy && isRtl && <>
+          {!p.isSpy && isRtl && canProtected && <>
           <Text style={styles.section}>FREQUENCY CORRECTION (PPM)</Text>
           <View style={styles.stepperRow}>
             <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm(p.ppm - 1)) && kbNav && { borderColor: NAV_FOCUS, borderWidth: 2 }]} onPress={() => p.onPpm(p.ppm - 1)}><Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>

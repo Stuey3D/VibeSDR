@@ -234,6 +234,9 @@ export interface SDRCallbacks {
   onHwRates?:   (rates: number[]) => void;
   /** >0 = the serving host PINNED the capture rate; the client hides its picker. */
   onHwLockedRate?: (rate: number) => void;
+  /** ★ The owner has FORCED the AGC on: a listener may not set a gain at all. The web client has
+   *  always read this; the app never did, which is why its panel offered a gain the server refuses. */
+  onHwAgcLocked?: (locked: boolean) => void;
   /** Advanced RDS analyser frame (~5 Hz), only while setAdvRds(true). */
   onRdsExt?:    (x: RdsExt) => void;
   /** What the serving radio is and what it can do (hwinfo.radio). */
@@ -2032,6 +2035,9 @@ export class UberSDRClient {
       // messages outright, so the client hides the picker rather than offer a
       // control that silently does nothing.
       this.callbacks.onHwLockedRate?.(Number(msg.lockedRate) || 0);
+      // ★ Same rule as lockedRate above: the server ENFORCES this, so a client that cannot see it
+      //   offers a control whose every use is refused.
+      this.callbacks.onHwAgcLocked?.(msg.agcLocked === true);
       // ★ Only the VibeServer shim sends hwinfo, and it carries the owner's FRAME-RATE CEILING.
       // Feed it to the controller: without it we would ask for the ladder's top rate, receive the
       // permitted one, and read the difference as a failing link — stepping down forever chasing a

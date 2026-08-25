@@ -1566,6 +1566,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [wfSharpness,   setWfSharpness]   = useState(5);
   // UberSDR auto-range symmetric contrast (0–20). Web client calibration = 10.
   const [hwLockedRate, setHwLockedRate] = useState(0);   // >0 = server pinned the rate
+  const [hwAgcLocked, setHwAgcLocked] = useState(false);
   const [autoContrast,  setAutoContrast]  = useState(5);  // production default (10 too dark)
   // M9PSY 5-tap spatial waterfall smooth
   const [spatialSmooth, setSpatialSmooth] = useState(true);
@@ -3298,6 +3299,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         b.emit({ ...b.value, fps, kbps: kbps + audioKb, link: effLink() });
       },
       onHwLockedRate: (r: number) => { if (!destroyed.current) setHwLockedRate(r); },
+      onHwAgcLocked: (v: boolean) => { if (!destroyed.current) setHwAgcLocked(v); },
       onServerLost: () => {
         // OWRX server crashed/restarted. Keep the app alive, free the dead audio
         // engine, and surface the wait-and-reconnect prompt (no auto-reconnect —
@@ -7886,6 +7888,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         <LocalHardwarePanel
           isSpy={isSpy}
           radio={radioCaps}
+          agcLocked={hwAgcLocked}
           adminSet={adminSet}
           adminOk={adminOk}
           adminRefused={adminRefused}
@@ -8194,10 +8197,16 @@ const styles = StyleSheet.create({
   radioPickName:   { color: '#ffe566', fontSize: 16 },
   // ★ The owner's standing message and its link, above the radio list. Left-aligned and allowed
   //   to run to several lines: it is prose, not a label, and centring prose makes it harder to read.
-  radioPickMsg:  { color: 'rgba(255,212,121,0.92)', fontFamily: 'Nixie One', fontSize: 13,
-                   lineHeight: 18, marginTop: 10, marginBottom: 2, paddingHorizontal: 18 },
-  radioPickLink: { color: '#ffb833', fontFamily: 'Nixie One', fontSize: 13, lineHeight: 18,
-                   textDecorationLine: 'underline', marginBottom: 6, paddingHorizontal: 18 },
+  /* ★★ THE ONE PARAGRAPH ON THIS PAGE ANYONE HAS TO READ, so it is sized to be read. It sat at
+   *    13px in Nixie One — a CONDENSED face, so 13 here is nearer 11 in a normal one — and the
+   *    owner's standing message and their link were the hardest things on the page to make out.
+   *    Stuart: "the landing screen message text and link is a little small and hard to read."
+   *  ★ Line height moved with it (1.45x). Raising the size alone crowds the lines and reads worse
+   *    than the small text did — the usual way this "fix" makes things marginally worse. */
+  radioPickMsg:  { color: 'rgba(255,222,150,0.96)', fontFamily: 'Nixie One', fontSize: 16,
+                   lineHeight: 23, marginTop: 10, marginBottom: 4, paddingHorizontal: 18 },
+  radioPickLink: { color: '#ffc04d', fontFamily: 'Nixie One', fontSize: 16, lineHeight: 23,
+                   textDecorationLine: 'underline', marginBottom: 8, paddingHorizontal: 18 },
   // ★ Dimmer than the description above it: the aerial qualifies the range, it does not compete
   //   with it.
   radioPickAnt:  { color: 'rgba(255,200,120,0.6)', fontFamily: 'Nixie One', fontSize: 12,
