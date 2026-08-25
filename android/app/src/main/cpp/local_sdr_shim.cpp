@@ -1151,6 +1151,10 @@ static std::atomic<int>      g_agcWideSteps{-1};
  *  frequency with different neighbours. Stuart's rule, and it is the right one: "we must never
  *  limit permanently". A limit has to be re-earned wherever it is applied — same reasoning as
  *  agcForget() and g_agcWideSteps immediately above. */
+/** ★★★ AUTO BANDWIDTH'S SMOOTHED S/N, and a flag to forget it. File scope for the same reason
+ *  as g_adjNarrow below: a retune is a NEW STATION and its average must not be inherited. */
+static std::atomic<double>   g_autoBwSnrEma{0.0};
+static std::atomic<bool>     g_autoBwSnrOn{false};
 static std::atomic<bool>     g_adjNarrow{false};
 static std::atomic<bool>     g_adjRdsWasOn{false};
 /** Consecutive 1-second windows with, and without, samples on the rail. Written by the libusb
@@ -6583,6 +6587,7 @@ struct LocalSdrShim::Impl {
             g_agcWideSteps.store(-1, std::memory_order_relaxed);   // ★ see g_agcWideSteps
             // ★★ A NEW STATION HAS NEW NEIGHBOURS, so the narrowing decision does not travel
             //    with the dial. Re-earned from the measurement at the new frequency, or not at all.
+            g_autoBwSnrOn.store(false, std::memory_order_relaxed);   // ★ new station, new average
             g_adjNarrow.store(false, std::memory_order_relaxed);
             g_adjRdsWasOn.store(false, std::memory_order_relaxed);
         }
@@ -15745,12 +15750,29 @@ void LocalSdrShim::autoBandwidthTick() {
      *  ★ Weak stations are UNAFFECTED by all of this: the floor is 134 kHz and the slope below
      *    ~24 dB is untouched, so the narrowing that makes a weak station listenable still happens
      *    exactly as before — it simply stops flickering once the station is healthy. */
-    static double s_snrEma = 0.0;
-    static bool   s_snrEmaOn = false;
+    /* ★★★ AND NO "BIG JUMPS ARE REAL" ESCAPE HATCH — THAT HOLE WAS THE SIZE OF THE PROBLEM. The
+     *     first version of this adopted any change over 6 dB whole, reasoning that such a step must
+     *     be a real one (a retune, a fade lifting) and should not be crawled towards. On air at
+     *     103.8 the RAW reading swings 4.3 -> 10.4 -> 7.9 -> 19.1 -> 5.8 -> 15.4 -> 23.5 -> 6.8 dB
+     *     between two-second ticks, so that branch fired on virtually EVERY tick and the average
+     *     never averaged anything: a smoother with a bypass for exactly the noise it was built to
+     *     remove (2026-08-25, found in the server's own log while the panel said 3.5 dB).
+     *  ★★ THE CASE IT WAS PROTECTING IS A RETUNE, AND A RETUNE CAN SAY SO ITSELF. retune() clears
+     *     g_autoBwSnrOn, so a new station starts from its own first reading instead of walking
+     *     there from the old one — the same treatment agcForget() and the narrowing latch get, and
+     *     the only event that is honestly a new situation rather than a noisy sample.
+     *  ★ Everything else converges at ~0.3 per 2 s tick: about six seconds, which is slower than a
+     *    wobble and faster than a fade. */
     const double snrRaw = p->rx.blendSnrDb();
-    if (!s_snrEmaOn || std::fabs(snrRaw - s_snrEma) > 6.0) { s_snrEma = snrRaw; s_snrEmaOn = true; }
-    else                                                    s_snrEma += 0.30 * (snrRaw - s_snrEma);
-    const double snr   = s_snrEma;
+    double snr;
+    if (!g_autoBwSnrOn.load(std::memory_order_relaxed)) {
+        snr = snrRaw;
+        g_autoBwSnrOn.store(true, std::memory_order_relaxed);
+    } else {
+        snr = g_autoBwSnrEma.load(std::memory_order_relaxed);
+        snr += 0.30 * (snrRaw - snr);
+    }
+    g_autoBwSnrEma.store(snr, std::memory_order_relaxed);
     // ★ 8 dB and below is "very weak" (Stuart's 97.2 Smooth); 25 dB and above is a station in good
     //   health. Between them, straight-line — the TEF's own numbers sit on this line.
     const double t = std::max(0.0, std::min(1.0, (snr - 8.0) / (25.0 - 8.0)));
