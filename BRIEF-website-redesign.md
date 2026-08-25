@@ -262,6 +262,26 @@ noise, and the DIRECTORY page is where the dial is a control.
   the network bar replaces it and absorbs the on-air state (a live receiver of his is just a green
   block), but that is his call, not an assumption to make quietly.
 
+**The wording carries a live count.** Stuart: *"right now we have 4 radios on 2 servers so give a
+live update of the server count too… hopefully we can recruit a few more into the network."* The
+directory already computes all of it — radios, servers and the combined range.
+
+★★★ **AND THE COUNT IS SMALL, WHICH IS A RISK AND AN OPPORTUNITY, SO FRAME IT.** "2 servers" read
+flatly can say *nobody uses this*; the same number as an invitation says *there is room, and you
+would be early*. Since recruitment is the whole reason the strip exists, it should read as an
+invitation and not as a scoreboard:
+
+> **VibeServer Network · 4 radios on 2 servers · 500 kHz – 1.766 GHz — add yours →**
+
+★★ **AND IT MUST NOT LOOK BROKEN AT ZERO OR ONE.** A strip that says "0 radios on 0 servers"
+because the fetch failed is worse than no strip: the honest fallback is the wording without the
+figures, never a zero. Same rule as everywhere else in this product — "nobody said" and "none" are
+different answers.
+
+★ The number growing is its own reward, and it is the one metric on the page that improves by
+itself if the pitch works. Worth watching after launch: if it does not move, the call to arms is
+not landing, and that is useful to know quickly.
+
 ### Craft notes
 - **Square the corners.** 14–20px radii with soft borders is the single strongest tell.
   Instrument panels have hairlines and screen-printed labels.
