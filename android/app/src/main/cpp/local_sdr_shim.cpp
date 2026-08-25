@@ -1230,6 +1230,25 @@ static constexpr bool        g_agcQuietAnnounce = false;
 //  ★ It expires two ways, both meaning "the world is different now": a RETUNE (a new dial position
 //    is a new signal, see tuneHw) or a long, genuinely clean run at the step below.
 static std::atomic<int>      g_ovlBadGain{-1};    // tenth-dB, -1 = nothing has failed here
+/** ★★★ WAS THAT GAIN JUDGED AGAINST A SETTLED SIGNAL, OR AGAINST A RECONFIGURATION?
+ *      g_ovlBadGain earns a LONG lockout (kOvlBadHold) because hysteresis exists to stop the loop
+ *      hunting between two settled states. A cut taken seconds after the IF filter moved is
+ *      neither: the front end was being resized underneath it, so the rung it condemned was never
+ *      really tried. Recorded 2026-08-25 — zooming out widened the tuner filter 640 -> 1240 kHz,
+ *      the converter railed, the loop cut to 7.7 dB and then refused to climb for minutes; a
+ *      retune cleared the latch and it went straight to 16.6 dB AT THE SAME WIDTH. The right
+ *      answer had been 16.6 the whole time, and only the lockout stood in the way.
+ *  ★★ So such a cut still happens — it must, the converter really was railing — but its verdict is
+ *     PROVISIONAL and expires after a short quiet spell instead of a long one. This is the same
+ *     reasoning as clearing the latch on retune: the failed step belonged to the old conditions.
+ *  ★ Not a licence to climb blindly: every other guard (margin, plateau, ceiling, floorLifted)
+ *    still applies, and if the rung really is too hot the next cut re-latches it — this time
+ *    against a settled front end, so it earns the full hold. */
+static std::atomic<bool>     g_ovlBadProvisional{false};
+static std::atomic<double>   g_agcForgetAt{0.0};  // when the AGC last forgot (IF filter/retune)
+static constexpr int kOvlBadHold       = 120;     // clean ticks before retrying a settled verdict
+static constexpr int kOvlBadHoldProvis = 15;      // ... and after a reconfiguration
+static constexpr double kAgcReconfigSec = 10.0;   // a cut this soon after a forget is provisional
 static std::atomic<int>      g_adcHotRun{0};
 /** ★★★ WHEN THE PIPELINE WAS LAST DISTURBED — a dropped IQ buffer, or an engine rate change.
  *
@@ -16731,7 +16750,9 @@ void LocalSdrShim::overloadTick() {
         //     the whole reason the straddle happened. Only a long quiet spell earns another try.
         {
             const int bad = g_ovlBadGain.load(std::memory_order_relaxed);
-            if (bad >= 0 && gains[(size_t)idx] >= bad && cleanRun < 120) return;
+            const int hold = g_ovlBadProvisional.load(std::memory_order_relaxed)
+                           ? kOvlBadHoldProvis : kOvlBadHold;
+            if (bad >= 0 && gains[(size_t)idx] >= bad && cleanRun < hold) return;
         }
         /* ★★★ CLIMB PAST THE OPERATING POINT WHILE THE STATION IS STILL IMPROVING. Below −6 dBFS
          *     the loop climbs freely; above it, only until a step stops buying SNR (see the
@@ -16781,6 +16802,8 @@ void LocalSdrShim::overloadTick() {
          */
         {
             const int bad = g_ovlBadGain.load(std::memory_order_relaxed);
+            const int holdJ = g_ovlBadProvisional.load(std::memory_order_relaxed)
+                            ? kOvlBadHoldProvis : kOvlBadHold;
             // ★ Clamped so the learned margin can never be stricter than the one ceiling above —
             //   it was 3.0 (aim at -3.0 dBFS) and that IS the dead zone, by another name.
             const double mgn = std::min(g_ovlMargin.load(std::memory_order_relaxed),
@@ -16793,7 +16816,7 @@ void LocalSdrShim::overloadTick() {
                 //   slowness the jump exists to remove.
                 if (peak + add > kAgcClimbCeilDbfs) break;
                 if (peak + add > -mgn) break;
-                if (bad >= 0 && gains[(size_t)j] >= bad && cleanRun < 120) break;
+                if (bad >= 0 && gains[(size_t)j] >= bad && cleanRun < holdJ) break;
                 best = j;
             }
             /* ★★★ LAND TWO RUNGS SHORT AND WALK THE LAST BIT. Stuart: "or even jump to a couple
@@ -16926,6 +16949,14 @@ void LocalSdrShim::overloadTick() {
         // ★ The gain we are LEAVING is the one that could not hold. Recorded before it is replaced.
         const int fromIdx = (tgtIdx - steps) < 0 ? 0 : (tgtIdx - steps);
         g_ovlBadGain.store(gains[(size_t)fromIdx], std::memory_order_relaxed);
+        // ★ A cut this soon after the filter moved is judging a front end mid-resize, not a
+        //   settled one — hold it briefly rather than for the full lockout.
+        const bool provis = (now - g_agcForgetAt.load(std::memory_order_relaxed)) < kAgcReconfigSec;
+        g_ovlBadProvisional.store(provis, std::memory_order_relaxed);
+        if (provis)
+            LOGI("...and that verdict is PROVISIONAL — the IF filter moved %.1f s ago, so this "
+                 "rung gets a short hold (%d ticks), not the usual %d",
+                 now - g_agcForgetAt.load(std::memory_order_relaxed), kOvlBadHoldProvis, kOvlBadHold);
         // ★★ PUT THIS CUT ON TRIAL. If the floor really was the front end, it must come down with
         //    the gain; the verdict a few seconds from now decides whether the diagnosis held.
         if (downForFloor) {
@@ -17448,7 +17479,15 @@ static void agcForget(const char* why) {
     g_climbAt.store(0.0, std::memory_order_relaxed);
     g_dropAt.store(0.0, std::memory_order_relaxed);
     g_ovlBadGain.store(-1, std::memory_order_relaxed);
+    g_ovlBadProvisional.store(false, std::memory_order_relaxed);
     g_adcCleanRun.store(0, std::memory_order_relaxed);
+    // ★ Stamped so a cut arriving in the next few seconds can be recognised as a verdict on a
+    //   front end that was still being reconfigured — see g_ovlBadProvisional.
+    // ★ Same clock as Impl::nowSecs() (steady_clock, seconds) so it is comparable with the `now`
+    //   the cut path stamps — Impl is not in scope here, but the clock must be identical or the
+    //   comparison is meaningless rather than merely wrong.
+    g_agcForgetAt.store(std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
     LOGI("AGC: forgetting what it learned (%s) — margin back to 3 dB", why);
 }
 
