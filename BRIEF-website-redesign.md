@@ -141,6 +141,31 @@ disclaimer — so **do not soften the host-side claim on account of it.**
 and is the selling point; the other would be a privacy claim that quietly overreaches, which is
 worse than making none.
 
+### Assets to re-shoot — the current ones misrepresent the product
+
+- ★★ **`assets/web-client.jpg` is from 25 JULY and no longer looks like the web client.** Since
+  then it has gained the Advanced RDS analyser, the IF filter picker, the AGC/IF status chip, the
+  band-plan bar and the station logos. Stuart: *"we need a new screenshot for the web client too as
+  it no longer looks like it did on the site."* A stale screenshot is not a cosmetic problem — it
+  sells a weaker product than the one that exists.
+- ★★★ **AND A SCREEN RECORDING OF THE WEB CLIENT, MOVING.** Stuart: *"a second screen recording
+  showing the web client behaving dynamically like the app is another amazing selling point."* He
+  is right, and it is the single most persuasive asset available: the whole doubt about a
+  browser-based receiver is that it will be a static, laggy toy. A waterfall scrolling, a dial
+  spinning and RDS filling in — in a BROWSER, with nothing installed — refutes that in two seconds
+  and cannot be refuted back. It also proves the "no app required at the other end" claim the
+  caption already makes and the still image cannot.
+  ▶ Shoot it tuned to a strong FM station with the Advanced RDS panel open, so the constellation
+  and MPX plots are alive too.
+
+### The version label rots — stop hand-writing it
+
+`website/index.html` carried **v3.1.18 while 4.1.1 was shipping**, and the comment beside it
+already recorded the SAME failure from 2026-08-16. A warning that a hand-maintained version will
+rot is not a fix for it — it did not prevent the second time and will not prevent the third.
+The apt repo publishes the current version, and the GitHub API names the latest release; either can
+fill the label AND the download href at load. Patched to 4.1.1 for now; do it properly here.
+
 ### Craft notes
 - **Square the corners.** 14–20px radii with soft borders is the single strongest tell.
   Instrument panels have hairlines and screen-printed labels.
