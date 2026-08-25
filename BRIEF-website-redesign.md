@@ -230,6 +230,38 @@ rot is not a fix for it — it did not prevent the second time and will not prev
 The apt repo publishes the current version, and the GitHub API names the latest release; either can
 fill the label AND the download href at load. Patched to 4.1.1 for now; do it properly here.
 
+### The network dial as the top strip — Stuart's idea, and the best structural one yet
+
+*"I think this dial along the top strip where the current ON AIR strip is now, to advertise the
+VibeServer Network and have it follow the scroll like the on air does now… doesnt need to be as
+thick, just a single bar, but make it follow the same design style. So that bar is the background
+with a little red VFO and the text over it talks about the VibeServer network and is a link to go
+to the page."*
+
+★★★ **THIS IS THE "STOP HAVING TWO DESIGN LANGUAGES" FIX, MADE CONCRETE.** It puts the instrument
+at the top of the marketing site instead of describing it further down — and it is live data, so
+it is the one banner on the page that cannot be mistaken for decoration. It also advertises the
+network in the one place every visitor looks.
+
+**What it is:** a single thin bar — the coverage blocks (green free / red no-slots / blue temporary)
+across the network's range, a small red VFO needle, and the wording over the top as a link to
+`vibeserver.vibesdr.net`. No numerals, no ticks, no interaction: at strip height they would be
+noise, and the DIRECTORY page is where the dial is a control.
+
+**How:**
+- The renderer exists in `directory/public/index.html` (`dialSegments`, `.dTick*`, `.dNum`,
+  `.dBand`, the free/busy/temp/unknown classes). Reduce, do not rewrite — and the palette must be
+  the SAME variables, or the two pages will drift apart, which is the fault this whole brief is
+  about.
+- The sticky treatment is already written: `#onAirBar { position: sticky; top: 0; z-index: 60 }`.
+- ▶ **DATA IS THE ONE REAL PROBLEM.** vibesdr.net and the directory are SEPARATE Workers, so the
+  site needs `/api/directory` cross-origin — either CORS on that endpoint or a tiny proxy on the
+  site's own Worker. Decide this first; everything else is presentation.
+- ▶ **AND DECIDE WHAT HAPPENS TO "ON AIR".** It advertises Stuart's own receivers; the new bar
+  advertises the network, which INCLUDES them. Two sticky strips would be one too many. Probably
+  the network bar replaces it and absorbs the on-air state (a live receiver of his is just a green
+  block), but that is his call, not an assumption to make quietly.
+
 ### Craft notes
 - **Square the corners.** 14–20px radii with soft borders is the single strongest tell.
   Instrument panels have hairlines and screen-printed labels.
