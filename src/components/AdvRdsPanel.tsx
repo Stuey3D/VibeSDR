@@ -22,7 +22,7 @@
 import React, { useMemo, useRef } from 'react';
 import { Platform, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { BlurView } from 'expo-blur';
-import { Canvas, Circle, Path, Rect, Skia, Text as SkText, matchFont } from '@shopify/react-native-skia';
+import { Canvas, Path, Points, Rect, Skia, Text as SkText, matchFont } from '@shopify/react-native-skia';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RdsExt } from '../services/UberSDRClient';
 import StationLogo from './StationLogo';
@@ -145,6 +145,42 @@ export interface AdvRdsPanelProps {
  *  which does not cover the spectrum at all (Stuart, 2026-08-02) — and removing the panel's blur
  *  changed nothing. Overlap is not the variable; the size of the React tree being re-rendered is.
  *  ★ Props are all primitives, so the default shallow compare is exactly right here. */
+/** ★★★ ONE SHARED EMPTY ARRAY. `xy={x?.xy ?? []}` built a FRESH literal on every render, so the
+ *  three plot canvases below failed their React.memo compare EVEN WITH NO DATA AT ALL — a new
+ *  reference every time is a changed prop. On a station with no constellation to draw, three Skia
+ *  canvases were re-rendering six times a second to draw nothing. */
+const NO_POINTS: number[] = [];
+
+/** ★★★ THE PLOTS DO NOT NEED THE FULL rdsx RATE, AND PAYING IT IS WHAT COSTS.
+ *  ★★★ The note by Row explains why this panel starves the JS thread: ~25 rows plus three Skia
+ *      canvases re-rendering on every rdsx. The ROWS were fixed with React.memo — their props are
+ *      primitives, so the shallow compare works. The CANVASES take ARRAYS, and a fresh array
+ *      arrives with every message, so memo can never help them: all three redraw six times a
+ *      second, each plotting hundreds of points.
+ *  ★★ AND IT SHOWS UP AS SOMETHING ELSE ENTIRELY. Stuart hit it twice without either looking like
+ *     a rendering cost: the SNR box needing several presses "only when the advanced RDS box is on
+ *     screen", and audio stutter with the link meter dropping to yellow and red — which is the JS
+ *     thread stalling, since that meter times frame arrivals AS OBSERVED BY JS.
+ *  ★ 3 Hz is indistinguishable by eye on a scatter plot and halves the work. The TEXT rows keep
+ *    the full rate: they are cheap (memoised primitives) and a laggy readout is a different
+ *    annoyance. */
+function useThrottledPoints(src: number[] | undefined, ms = 320): number[] {
+  const [held, setHeld] = React.useState<number[]>(NO_POINTS);
+  const lastRef = React.useRef(0);
+  const pending = React.useRef<number[] | null>(null);
+  pending.current = src && src.length ? src : null;
+  React.useEffect(() => {
+    const now = Date.now();
+    const wait = Math.max(0, ms - (now - lastRef.current));
+    const t = setTimeout(() => {
+      lastRef.current = Date.now();
+      setHeld(pending.current ?? NO_POINTS);
+    }, wait);
+    return () => clearTimeout(t);
+  });
+  return held;
+}
+
 const Row = React.memo(function Row({ label, value, colour, conf, raw, reserve }: {
   label: string; value: string; colour?: string; conf?: boolean; raw: boolean;
   /** ★ The LONGEST string this row can ever show. Rendered invisibly underneath to
@@ -265,9 +301,18 @@ const Constellation = React.memo(function Constellation({ xy, size }: { xy: numb
       <Rect x={0} y={0} width={size} height={size} color="rgba(255,160,0,0.05)" />
       <Rect x={size / 2 - 0.5} y={0} width={1} height={size} color="rgba(255,160,0,0.18)" />
       <Rect x={0} y={size / 2 - 0.5} width={size} height={1} color="rgba(255,160,0,0.18)" />
-      {pts.map((p, i) => (
-        <Circle key={i} cx={p.x} cy={p.y} r={1.2} color="rgba(125,255,154,0.75)" />
-      ))}
+      {/* ★★★ ONE NODE FOR THE WHOLE SCATTER, NOT ONE PER POINT. This was `pts.map(... <Circle/>)`
+          — a React ELEMENT for every point, several hundred of them, created, reconciled and
+          turned into Skia scene-graph nodes SIX TIMES A SECOND, across two plots.
+          ★★★ AND THAT IS THE WHOLE DIFFERENCE FROM THE BROWSER, which draws the identical picture
+          with a few hundred imperative arc() calls into a canvas and allocates nothing. Stuart:
+          "the browser doesnt stutter with advanced RDS open, or nowhere near as much as the app
+          did", and Safari sits at 6% CPU with the full panel running. The cost was never
+          JavaScript — the web client IS JavaScript. It was declarative-per-point drawing.
+          ★ `Points` takes the array and draws it in one primitive; round caps make each a dot, so
+          it is the same picture. */}
+      <Points points={pts} mode="points" style="stroke" strokeWidth={2.4}
+              strokeCap="round" color="rgba(125,255,154,0.75)" />
     </Canvas>
   );
 });
@@ -297,9 +342,9 @@ const SymbolTrace = React.memo(function SymbolTrace({ xy, width, height }: { xy:
       <Rect x={0} y={0} width={width} height={height} color="rgba(255,160,0,0.05)" />
       {/* The decision threshold — the line a symbol must not stray across. */}
       <Rect x={0} y={height / 2 - 0.5} width={width} height={1} color="rgba(255,160,60,0.35)" />
-      {pts.map((p, i) => (
-        <Circle key={i} cx={p.x} cy={p.y} r={0.9} color="rgba(120,255,140,0.85)" />
-      ))}
+      {/* ★ Same fix as the constellation above — one node, not one per symbol. */}
+      <Points points={pts} mode="points" style="stroke" strokeWidth={1.8}
+              strokeCap="round" color="rgba(120,255,140,0.85)" />
     </Canvas>
   );
 });
@@ -353,6 +398,9 @@ const Mpx = React.memo(function Mpx({ mpx, width, height }: { mpx: number[]; wid
 
 export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   const { x, raw } = p;
+  // ★ The three Skia plots, at 3 Hz rather than the full rdsx rate — see useThrottledPoints.
+  const plotXy  = useThrottledPoints(x?.xy);
+  const plotMpx = useThrottledPoints(x?.mpx);
   const piNum = p.pi ? parseInt(p.pi, 16) : 0;
   /** Last real RDS deviation reading, so a momentary dropout does not blank the row. */
   const rdsHold = useRef<{ txt: string; col: string; at: number } | null>(null);
@@ -819,12 +867,12 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
           <View style={s.plots}>
             <View>
               <Text style={s.plotLbl}>CONSTELLATION</Text>
-              <Constellation xy={x?.xy ?? []} size={120} />
+              <Constellation xy={plotXy} size={120} />
               <Text style={[s.verdict, { color: verdict.colour }]}>{verdict.text}</Text>
             </View>
             <View style={{ flex: 1 }}>
               <Text style={s.plotLbl}>MPX</Text>
-              <Mpx mpx={x?.mpx ?? []} width={180} height={120} />
+              <Mpx mpx={plotMpx} width={180} height={120} />
             </View>
           </View>
           {/* ★ THE SYMBOL TRACE, full width — the "two lines" read, and the one most people
@@ -833,7 +881,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
               two clean bands = every bit decided with margin, a filled gap = bits landing on
               the threshold and the block errors that follow. */}
           <Text style={s.plotLbl}>SYMBOL TRACE</Text>
-          <SymbolTrace xy={x?.xy ?? []} width={310} height={80} />
+          <SymbolTrace xy={plotXy} width={310} height={80} />
           <Text style={s.plotNote}>
             Two clear bands = every bit decided with margin. A filled gap means symbols are
             landing on the decision line, and the errors follow.
