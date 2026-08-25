@@ -234,6 +234,9 @@
                  text-transform: none; font-size: 13px;
                  text-shadow: 0 0 8px rgba(40,167,69,.45); }
   .dialHint { color: var(--dim); font-size: 10.5px; letter-spacing: .06em; text-transform: none; }
+  /* ★ The second line sits under the first rather than running on — the row is centred, and a
+       single long string re-centres the whole header every time the text changes. */
+  .dialHint2 { display: block; }
   .dialCtl { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
              text-transform: none; letter-spacing: .04em; }
   .dialCtl label { color: var(--dim); font-size: 11px; letter-spacing: .1em;
@@ -435,7 +438,14 @@
        zoom are steps 4-6 and are not here yet. -->
 <section class="dialWrap" id="dialWrap" hidden>
   <div class="dialTitle"><span>What the network can hear</span><b id="dialExtent"></b>
-    <span class="dialHint">click the dial to place the VFO · drag the box below to travel · ⌘-scroll to zoom</span>
+    <!-- ★★★ THE DIAL IS DISCOVERABLE; THE VFO KEY IS NOT. Clicking a dial to tune is obvious, and
+             the hint said only that. Nothing said that VFO PRESSES CYCLE — anchor, then range,
+             then clear — so the one feature that answers "who can hear this whole range" was
+             reachable only by pressing a button twice on a hunch. Stuart asked for a line; this is
+             it, written from the handler rather than from the screen (see setVfo's listener).
+         ★ Two lines, because one was already at the edge of readable and this doubles it. -->
+    <span class="dialHint">click the dial or ‹ › to move the VFO · press VFO to drop an anchor, again to search the range between, again to clear</span>
+    <span class="dialHint dialHint2">click a band name to add it — several at once is fine · drag the box below to travel · ⌘-scroll to zoom</span>
     <span class="dialCtl">
       <!-- ★ WHERE, not who: the country a receiver sits in is the question a listener asks when
            they want signals from somewhere, and it is the one filter the map cannot express in a
@@ -1522,7 +1532,7 @@ function drawRow(segsIn, y0, W, opt) {
         //    are blurry", Stuart, 2026-08-23). Measured from the string, since "1.6 GHz" and
         //    "526.5 kHz" are not the same size.
         const wNeed = labelPx(prettyHz(hz));
-        if (x === null || placedX.some((q) => Math.abs(q.x - x) < (wNeed + q.w) / 2 + 4)) continue;
+        if (x === null || placedX.some((q) => Math.abs(q.x - x) < (wNeed + q.w) / 2 + 8)) continue;
         placedX.push({ x, w: wNeed });
         p.push(`<line class="dTickMaj free" x1="${x.toFixed(1)}" y1="${TICK_Y}" x2="${x.toFixed(1)}" y2="${TICK_Y + TICK_H}"/>`);
         p.push(`<text class="dNum free edge ${opt.kind}" x="${x.toFixed(1)}" y="${NUM_Y}">${esc(prettyHz(hz))}</text>`);
@@ -1546,7 +1556,7 @@ function drawRow(segsIn, y0, W, opt) {
       // ★ Give way to a free-edge figure already there — two numerals in one place is worse than
       //   the one it was meant to add, and the free one is the one worth having.
       const wNeed = labelPx(prettyHz(f));
-      if (!placedX.some((q) => Math.abs(q.x - x) < (wNeed + q.w) / 2 + 4)) {
+      if (!placedX.some((q) => Math.abs(q.x - x) < (wNeed + q.w) / 2 + 8)) {
         p.push(`<text class="dNum ${st} ${opt.kind}" x="${x.toFixed(1)}" y="${NUM_Y}">${esc(prettyHz(f))}</text>`);
         placedX.push({ x, w: wNeed });
       }
@@ -1611,7 +1621,15 @@ function planBandList() {
 /** ★ How wide a numeral will draw, near enough to keep two of them apart. The ticker is a
  *  monospace face at 11.5px, so a character is about 6.9px — no measuring pass needed, and a
  *  measuring pass per figure per redraw would cost more than the four pixels of slack it saves. */
-function labelPx(text) { return String(text).length * 6.9; }
+/* ★★★ MEASURED WIDE, DELIBERATELY. This drives the only thing stopping two numerals printing
+ *     through one another, and being a few pixels UNDER is what produces the smudge Stuart has now
+ *     reported twice ("not sure why some numbers are blurry", then "the dial blurring"). Being a
+ *     few pixels OVER costs one numeral on a crowded stretch, which nobody notices.
+ *  ★★ 6.9 was the em-width of the digits and ignored the SPACE and the unit — "526.5 kHz" is nine
+ *     characters of which three are wider than a digit. The glyphs are not all one width, so the
+ *     estimate has to lean generous rather than average.
+ *  ★ The +4 px separation at the call sites went with it: 4 px between two numerals is touching. */
+function labelPx(text) { return String(text).length * 7.6 + 6; }
 
 /** ★ A label that will not spill out of its block — the app truncates the same way ("LW Broadca…"). */
 function bandShort(label, px) {
