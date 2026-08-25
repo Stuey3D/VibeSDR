@@ -50,6 +50,25 @@ chain is ours.*
 ★★ **THE WATCH CLOSES THE ARGUMENT.** A standalone SDR client on a 1" screen cannot be bolted on;
 it exists *because* the DSP is ours. If anyone doubts the ecosystem claim, that is what settles it.
 
+### New, and saying so
+
+Stuart: *"we are a new network trying to establish ourselves so we need to position it that way."*
+This governs more than the strip's wording.
+
+★★★ **DO NOT WRITE COPY THAT IMPLIES A NETWORK THAT DOES NOT EXIST YET.** "Receivers all over the
+world" would be a lie a visitor disproves in one click, and the click is the directory — which is
+on the same site. A product caught overstating its size on its own evidence loses the reader for
+everything else it says, including the things that ARE true and are remarkable.
+
+★★ **AND BEING EARLY IS GENUINELY ATTRACTIVE TO THE PEOPLE WE WANT.** The audience for "plug an SDR
+into a spare phone" is exactly the audience that likes being third rather than three-thousandth.
+Say it plainly — *a new network, run by the people listening to it* — and the small number stops
+being an apology and becomes the reason to join.
+
+★ The rule for every claim on the page: **describe the CAPABILITY at full strength and the SCALE
+honestly.** "500 kHz to 1.766 GHz, from a phone on a windowsill" is true today and impressive
+today. "The world's receivers" is neither.
+
 ### Simple yet powerful — the ethos, not a bullet
 
 Stuart: *"the whole ethos of the Vibe ecosystem has been designed around making it as easy as
