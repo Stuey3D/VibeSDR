@@ -15818,10 +15818,34 @@ void LocalSdrShim::autoBandwidthTick() {
     const double ifGain = (double)p->rx.ifGainDb();
     const int    ber    = p->rdsS.rdsBer;            // -1 = unknown
     const bool   rdsOn  = (ber >= 0 && ber < 20);
-    if (!g_adjNarrow.load(std::memory_order_relaxed)) {
+    /* ★★ ONE LINE WHEN THIS ARM CHANGES ITS MIND, AND ITS INPUTS WITH IT. Exactly the reasoning
+     *    behind retune()'s "one line per tune, kept": from outside, "it is not narrowing" is
+     *    consistent with a low measured gain, with RDS being judged alive, and with the arm never
+     *    being reached at all — and those need different fixes. Stuart watched 103.8 sit at 134k
+     *    with the panel reporting 2.7 dB of gain, and nothing in the log could say which it was
+     *    (2026-08-25). A state CHANGE is rare, so this costs nothing. */
+    /* ★★★ AND THE MEASUREMENT ONLY MEANS "110 kHz" WHILE THE PATH IS WIDE. The shadow evaluates
+     *     THE OTHER OPTION (pipeline.cpp): wide open while the audio path is narrowed, and
+     *     shadowBwHz_ — which IS 110 kHz — while the audio path is wide. So ifGainDb answers
+     *     "110k vs wide" only in the second case; once auto bandwidth has narrowed to, say, 134k
+     *     it answers "134k vs wide", which is the benefit ALREADY BANKED and says nothing about
+     *     going further. Reading it as evidence for a further cut is double-counting, and it is
+     *     what this arm did until now.
+     *  ★★★ WHICH IS ALSO WHY THE OLD +10.7 dB DOES NOT TRANSFER. That figure was measured at
+     *      110 kHz against WIDE, in a world where 110 kHz was the only narrow option there was.
+     *      With a variable auto bandwidth already at 134 kHz most of it is banked and the
+     *      remaining step is small — exactly what Stuart heard: "it still went to 134 which made
+     *      it audible and still as fuzzy as it was before in the old 110k mode, maybe it genuinely
+     *      didnt need 110k?" (2026-08-25). He was right, and the measurement agrees with him.
+     *  ★ So the arm acts only from WIDE, which is precisely the case it exists for: a healthy
+     *    station (S/N high, auto bandwidth standing off) being spoiled by a strong neighbour. A
+     *    weak station narrows on S/N first and needs no second opinion. */
+    if (!g_adjNarrow.load(std::memory_order_relaxed) && p->rx.ifBandwidth() <= 0.0) {
         const double engageDb = rdsOn ? 3.0 : 1.0;
         if (ifGain > engageDb) { g_adjNarrow.store(true, std::memory_order_relaxed);
-                                 g_adjRdsWasOn.store(rdsOn, std::memory_order_relaxed); }
+                                 g_adjRdsWasOn.store(rdsOn, std::memory_order_relaxed);
+                                 LOGI("adjacent narrow: ON — gain %.1f dB > %.1f (ber %d, rds %s)",
+                                      ifGain, engageDb, ber, rdsOn ? "alive" : "dead"); }
     } else {
         /* ★★★ AND IT MUST BE ABLE TO WIDEN AGAIN WHEN THE STATION RECOVERS. The latch above stops
          *     the cut justifying itself, but on its own it sets the opposite trap: engaged with
@@ -15841,7 +15865,24 @@ void LocalSdrShim::autoBandwidthTick() {
         const bool   rdsPlausible = snr >= 14.0;
         const double releaseDb    = (g_adjRdsWasOn.load(std::memory_order_relaxed) || rdsPlausible)
                                     ? 1.5 : 0.3;
-        if (ifGain < releaseDb) g_adjNarrow.store(false, std::memory_order_relaxed);
+        if (ifGain < releaseDb) { g_adjNarrow.store(false, std::memory_order_relaxed);
+                                  LOGI("adjacent narrow: OFF — gain %.1f dB < %.1f (snr %.1f dB)",
+                                       ifGain, releaseDb, snr); }
+    }
+    /* ★ …and while it is NOT engaged, say so periodically with the numbers. "Nothing in the log"
+     *   is the state that wasted the time; a control that declines must be able to say why. */
+    {
+        static int s_quiet = 0;
+        if (!g_adjNarrow.load(std::memory_order_relaxed) && ++s_quiet >= 15) {   // ~30 s at 2 s/tick
+            s_quiet = 0;
+            if (p->rx.ifBandwidth() > 0.0)
+                LOGI("adjacent narrow: standing by — auto bandwidth already at %.0f kHz, so the "
+                     "shadow is measuring THAT against wide, not 110 kHz",
+                     p->rx.ifBandwidth() / 1e3);
+            else
+                LOGI("adjacent narrow: standing by — 110k would gain %.1f dB, need %.1f "
+                     "(ber %d, rds %s)", ifGain, rdsOn ? 3.0 : 1.0, ber, rdsOn ? "alive" : "dead");
+        }
     }
     if (g_adjNarrow.load(std::memory_order_relaxed)) want = 110000.0;
     else if (want >= full - 4000.0)      want = 0.0;
