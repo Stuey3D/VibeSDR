@@ -1,0 +1,157 @@
+# BRIEF — the website, rebuilt around the ecosystem
+
+**Status:** agreed with Stuart 2026-08-25, not started. The apps ship first.
+**Origin:** *"we need a real redesign of the website… ours looks identical [to the others] and as
+users are pointing out its a hallmark of AI website design and looks lazy."*
+
+---
+
+## What is actually wrong
+
+Not the colours. Compared with echosdr.com, foxsdr.com and radiosilencesdr.com, what people are
+recognising is the **skeleton**, and ours has every bone of it:
+
+| The tell | Ours today |
+|---|---|
+| Centred hero: headline + subtitle + two CTAs | yes |
+| Feature blocks in rounded cards | 11 sections, radii 14/16/18/20px |
+| Soft gradients + backdrop blur | 4 gradients, 1 backdrop-filter |
+| Airy, symmetrical, everything centred | yes |
+| Em-dashes throughout the copy | yes |
+
+★★★ **AND THE DEEPER PROBLEM: THE SITE IGNORES THE PRODUCT'S OWN IDENTITY.** The app has a strong,
+unusual look — phosphor on black, Nixie One numerals, instrument panels, hairline ticks, real
+dials. The directory page has more character than the marketing site, because it is built like an
+instrument rather than a landing page. **The website looks like every SDR site because it looks
+like a website. The app looks like nothing else out there.** The fix is not "make it less AI"; it
+is *stop having two design languages*.
+
+---
+
+## Positioning
+
+Stuart: *"the app needs to be first and foremost but we need to highlight we are not a simple app
+like the others and due to us controlling the DSP we are a full eco system."*
+
+Echo and Radio Silence are **viewers for other people's receivers** — Kiwi, OpenWebRX, WebSDR.
+They do not own a demodulator, so what a listener hears is whatever somebody else's server decided
+to send. **We write the DSP**, and every other claim is a consequence of that one fact:
+
+> Because we write the demodulator, the same signal path runs everywhere: on your phone, on the
+> server you host, on your wrist.
+
+That is what buys Advanced RDS on a watch, VibeAGC on a £30 dongle, and a server that runs on a
+phone. State it in that order — the features are consequences, not a list.
+
+★★ **IT IS "AND", NOT "OR".** VibeSDR is also a first-class client for Kiwi, OpenWebRX, WebSDR,
+FM-DX, SpyServer and RTL-TCP. The pitch is not a walled garden: *everything they do, plus the whole
+chain is ours.*
+
+★★ **THE WATCH CLOSES THE ARGUMENT.** A standalone SDR client on a 1" screen cannot be bolted on;
+it exists *because* the DSP is ours. If anyone doubts the ecosystem claim, that is what settles it.
+
+### Simple yet powerful — the ethos, not a bullet
+
+Stuart: *"the whole ethos of the Vibe ecosystem has been designed around making it as easy as
+possible."* The ecosystem claim RISKS SOUNDING LIKE COMPLEXITY — servers, watches, decoders, DSP —
+which is exactly how a competitor would read it. The counter is to state every powerful thing as
+the easy thing it actually is:
+
+> **Plug an SDR into a spare phone. It's a receiver anyone can listen to.**
+
+No config file, no Docker, no reverse proxy, no port forwarding. The reader supplies the
+astonishment themselves. Not "server-side DSP with adaptive AGC" but *"it sorts the gain out
+itself"*. Not "distributed multi-client architecture" but *"share it by sending a link"*.
+**Describe the moment, not the machinery.**
+
+---
+
+## Page shape
+
+1. **Hero — the app.** Live spectrogram background (below). One line, App Store / Play. The
+   product, not the philosophy.
+2. **The on-air bar** — real numbers from the directory: *"4 radios on 2 servers · 500 kHz –
+   1.766 GHz"*. Nobody else can copy it, because nobody else has the network.
+3. **One line that reframes everything**, under the fold:
+   *"Most SDR apps are a window onto somebody else's receiver. VibeSDR is the receiver too."*
+4. **Three doors, equal weight:** **Listen** (any receiver, yours or the world's) · **Host** (turn a
+   spare phone into one) · **Wear** (a real receiver on your wrist, not a remote).
+5. **The call to arms** — now earned:
+   > **Got a spare Android phone?** Plug in an SDR and in a few minutes it's a VibeServer anyone
+   > can listen to — Advanced RDS and the decoders included. We run one on a rugged Android
+   > handset to prove the point: if it can do it, your old phone can.
+
+   ★ Beside it, `website/assets/shots/xcover-server-live.png` — the REAL screen, captured from the
+   XCover **while a listener was actually connected** (Stuart connected so the shot would not say
+   "Waiting for a client…"). Measured, not claimed:
+
+   | | |
+   |---|---|
+   | Waterfall | **5 KB/s** |
+   | Audio | **8 KB/s** |
+   | Sample rate | 1.2 MS/s |
+   | CPU | **91% of 1 core (of 8)** — idle it sits at 12% |
+
+   ★★ **13 KB/s TOTAL IS THE HEADLINE, NOT THE CPU.** "Sharing your radio costs about as much
+   bandwidth as a podcast" is the claim that lands, and it is measured. The CPU figure is honest
+   but wants framing: 91% of ONE core of EIGHT is roughly a tenth of the phone, and saying "one
+   core of eight" is more truthful than a percentage of the whole.
+
+   ★ **IP ADDRESSES REDACTED, FRIENDLY URL KEPT** (Stuart's call — the hostname is in the public
+   directory anyway). The listener's PUBLIC IP was on screen, which is a real person's connection
+   and must not go on a marketing page or into a public repo. Substituted text is Menlo rather than
+   the app's Nixie One, so a re-shoot is worth it if this becomes prominent.
+
+### Craft notes
+- **Square the corners.** 14–20px radii with soft borders is the single strongest tell.
+  Instrument panels have hairlines and screen-printed labels.
+- **Left-align, increase density.** The house style is centred and airy; radio gear is dense,
+  panelled and full of numbers.
+- **Use Nixie One and the phosphor palette**, so the site and the product are visibly one thing.
+
+---
+
+## The live background: push-and-cache
+
+Stuart's own design, and the bandwidth instinct behind it is right: *"my idea was to feed live
+waterfall data from the PI but the fanout would hammer my bandwidth or cost me [my] cloudflare
+account. We could put the spectrogram in the background from the Pi as that is live data just
+timelapsed."*
+
+**Most of this already exists.** `/vibeserver/spectrogram` serves a `VSPG` binary — 2048 bins per
+row, `rows=` to limit it. The landing page already refreshes it every 15 s, so the render path is
+written; reuse it rather than inventing one.
+
+★★★ **VISITORS MUST NEVER FETCH IT FROM THE PI.** The Pi already POSTs to `/api/directory/ping`;
+add a small rendered image on the same authenticated channel every few minutes. The Worker stores
+it and serves it from edge cache. That gives all three things at once:
+
+- **Pi bandwidth is constant** — one upload every few minutes whether 5 or 5,000 people visit
+- **Cloudflare cost is trivial** — one ~30 KB image, served from the edge
+- **A power cut does not blank the page** — the last good image persists, which was the point of
+  caching it (Stuart)
+
+★★ **IT IS THE RSP's WINDOW (2.8–10.8 MHz), NOT THE NETWORK'S.** The spectrogram only builds on a
+**locked-frequency** radio, because a readable one needs every row to share a profile — a
+free-tuning dial gives 40m for an hour, then FM, then wherever someone left it at 2am. So the hero
+background is honestly *"live HF from a receiver in England"*, and the on-air bar carries the
+network-wide claim. Two different truths; the page reads better for not blurring them.
+
+★ **SHOW THE REAL SPAN, NEVER A FIXED CLAIM** — as the landing page already does ("BAND ACTIVITY ·
+9.8 H"). Stuart's call. A hard-coded "24 hours" would have hidden the cadence bug below
+indefinitely.
+
+---
+
+## Open questions
+- Does the pushed image go to R2 or KV? (Size and retention decide it.)
+- Rendered PNG/WebP on the Pi, or raw rows rendered by the Worker? Rendering on the Pi is simpler
+  and keeps the palette identical to the app's.
+- Does the hero degrade to a still image on mobile, or is a 30 KB WebP fine everywhere?
+
+## Done on the way (2026-08-25)
+- **Every restart ate five hours of spectrogram history.** `spectroTaken` reset to zero while the
+  rows were restored, so each start re-ran the 300-row fast fill — five minutes of data in 300 of
+  the 1440 slots. This is why Stuart had never seen more than ~13.5 hours. Fixed in 4.1.1-6.
+- Directory: numerals unstroked (the "blur"), `claimable` honoured so a soft-limited radio reads
+  **FREE · TAKE OVER** instead of FULL, VFO instructions added, lens icon redrawn.
