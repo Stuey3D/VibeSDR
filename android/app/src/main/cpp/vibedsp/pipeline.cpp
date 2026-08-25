@@ -88,19 +88,33 @@ static bool pickBand(const double* e, int n, double bwHz, double& lo, double& hi
 //   finely that every step crossed an edge and rebuilt anyway.
 static bool chainBand(RxPipeline::Mode mode, double bwHz, double& lo, double& hi) {
     using M = RxPipeline::Mode;
+    // ★★★ THE TOP OF EACH LADDER MUST CLEAR WHAT THE UI CAN ASK FOR, or the widest settings fall
+    //     off the end and silently get the old rebuild — which is precisely how the first version
+    //     of this shipped: AM stopped at 24 kHz while the client offers 40, so the top of the
+    //     range still popped and stuttered on every step (Stuart, on air, 2026-08-25). The client's
+    //     BW_EDGE_MAX is per EDGE, so the total width is twice it: SSB 12 k, AM 40 k, NFM 60 k,
+    //     WFM 500 k. These ladders clear all four with a band to spare.
     switch (mode) {
-        case M::AM:  { static const double e[] = { 1000.0, 6000.0, 12000.0, 24000.0 };
-                       return pickBand(e, 4, bwHz, lo, hi); }
-        case M::NFM: { static const double e[] = { 4000.0, 8000.0, 16000.0, 32000.0 };
-                       return pickBand(e, 4, bwHz, lo, hi); }
+        case M::AM:  { static const double e[] = { 1000.0, 6000.0, 12000.0, 24000.0, 48000.0 };
+                       return pickBand(e, 5, bwHz, lo, hi); }
+        case M::NFM: { static const double e[] = { 4000.0, 8000.0, 16000.0, 32000.0, 64000.0 };
+                       return pickBand(e, 5, bwHz, lo, hi); }
         case M::SSB_USB: case M::SSB_LSB: case M::CW:
-                     { static const double e[] = { 200.0, 1500.0, 3000.0, 6000.0 };
-                       return pickBand(e, 4, bwHz, lo, hi); }
-        // ★★★ WFM IS NOT ON THIS PATH AND MUST NOT BE. Its width changes go to AdaptiveIf, which
-        //     already changes its corner without touching the chain — and its chain carries the
-        //     MPX, the pilot PLL and RDS, none of which survive being rebuilt casually.
-        default: return false;
+                     { static const double e[] = { 200.0, 1500.0, 3000.0, 6000.0, 12000.0 };
+                       return pickBand(e, 5, bwHz, lo, hi); }
+        // ★★★ WFM IS ON THIS PATH TOO, AND EXCLUDING IT WAS A MISREADING OF AdaptiveIf. That
+        //     filter serves the AUTOMATIC narrowing (IMS and auto-bandwidth, via ifBwReq_/
+        //     autoBwReq_) and never sees the listener's MANUAL width — which went through
+        //     setTune, failed sameChain, and rebuilt the chain like every other mode. So dragging
+        //     the WFM filter tore down the pilot PLL and RDS on every step, which is the same
+        //     "tune away and RDS never comes back" family this file keeps fighting.
+        // ★★ Its channel rate is floored at 150 kHz, so every width below ~100 kHz already shares
+        //    one chain — the bottom band is deliberately huge because nothing there moves chFs_,
+        //    and only the wide end needs banding at all.
+        case M::WFM: { static const double e[] = { 1000.0, 100000.0, 200000.0, 400000.0, 800000.0 };
+                       return pickBand(e, 5, bwHz, lo, hi); }
     }
+    return false;
 }
 
 void RxPipeline::setTune(double offsetHz, Mode mode, double bwHz) {

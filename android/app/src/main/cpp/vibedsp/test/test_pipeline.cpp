@@ -561,6 +561,132 @@ static void testSsbNfmWidthSmooth() {
     }
 }
 
+// ── A width change must not CLICK either ─────────────────────────────────────
+// ★★★ THE REGRESSION THIS EXISTS TO CATCH, and it was shipped. Retuning the channel filter in
+//     place removed the DIP (no cleared buffers) but introduced a POP: the delay line still holds
+//     samples filtered by the OLD response, so swapping coefficients steps the output. Preserving
+//     history prevents the startup-from-zeros transient; it does NOT prevent the coefficient step.
+//     Measured on air at 6.130 MHz AM — bursts with up to 98% of their energy above 6 kHz against
+//     a file median of 0.9%. Broadband energy is what tells a click apart from speech.
+// ★★ SO THE TEST MEASURES BROADBAND ENERGY, not level. A level check passes straight through a
+//    click (it is 1 ms long and barely moves an RMS window), which is why the on-air report of a
+//    "pop" survived a test suite that was entirely green.
+static void testAmWidthNoClick() {
+    std::printf("-- RxPipeline (a width change must not CLICK) --\n");
+    const double fs = 1200000.0, fc = 200000.0, fm = 1000.0, m = 0.6;
+    const int Ni = 1 << 20, blk = 4096, half = Ni / 2;
+
+    // A CLEAN single-tone AM carrier: anything broadband in the output is ours, not the signal.
+    std::vector<cf32> iq(Ni);
+    for (int i = 0; i < Ni; ++i) {
+        const double t   = i / fs;
+        const double env = 0.2 * (1.0 + m * std::cos(2.0 * M_PI * fm * t));
+        const double ph  = 2.0 * M_PI * fc * t;
+        iq[i] = cf32((float)(env * std::cos(ph)), (float)(env * std::sin(ph)));
+    }
+    Cap cap; RxPipeline pipe;
+    RxPipeline::Callbacks cb; cb.ctx = &cap; cb.spectrum = onSpec; cb.audio = onAud;
+    pipe.start(fs, 1024, 20.0, 48000, cb);
+    pipe.setTune(fc, RxPipeline::Mode::AM, 16000.0);
+    for (int o = 0; o < half; o += blk) pipe.feed(iq.data() + o, std::min(blk, half - o));
+
+    const size_t mark = cap.audio.size();
+    pipe.setTune(fc, RxPipeline::Mode::AM, 13000.0);          // same band (12000, 24000]
+    for (int o = half; o < Ni; o += blk) pipe.feed(iq.data() + o, std::min(blk, Ni - o));
+
+    // First-difference energy is a cheap, honest broadband detector on a 1 kHz tone: a smooth
+    // sine has almost none, a step has a lot. Compare the window straddling the change with a
+    // quiet reference window well before it.
+    auto roughness = [&](size_t from, size_t to) {
+        double worst = 0.0;
+        if (to > cap.audio.size()) to = cap.audio.size();
+        for (size_t i = from + 1; i + 1 < to; ++i) {
+            const double d2 = std::fabs((double)cap.audio[i+1] - 2.0*cap.audio[i] + cap.audio[i-1]);
+            if (d2 > worst) worst = d2;
+        }
+        return worst;
+    };
+    const double ref  = roughness(mark > 20000 ? mark - 20000 : 0, mark - 200);
+    const double at   = roughness(mark > 200 ? mark - 200 : 0, mark + 6000);
+    std::printf("  peak 2nd-difference: %.5f steady vs %.5f across the width change\n", ref, at);
+    check(at < ref * 3.0, "a width change introduces no broadband step (no click)");
+}
+
+// ── The ladder must reach the TOP of every mode's range ──────────────────────
+// ★★★ THE GAP THAT SHIPPED. The first ladder stopped at 24 kHz for AM while the client offers 40,
+//     at 32 kHz for NFM against 60, at 6 kHz for SSB against 12 — and excluded WFM entirely. So
+//     the WIDEST settings, which is exactly where a listener drags, fell off the end and silently
+//     got the old rebuild: "each time the IF filter width changes it has an audio stutter/pop/
+//     pause; once zoomed in far enough that the width stops changing, any further zoom is clean"
+//     (Stuart, on air, 2026-08-25). A ladder that does not cover the control is not a fix.
+static void testWidthLadderCoversFullRange() {
+    std::printf("-- RxPipeline (the ladder must cover each mode's whole range) --\n");
+    const double fs = 1920000.0, fc = 300000.0;
+    const int Ni = 1 << 19, blk = 65536;
+    std::vector<cf32> iq(Ni);
+    double ph = 0.0;
+    for (int i = 0; i < Ni; ++i) {           // a wideband-ish FM carrier serves every mode here
+        ph += 2.0 * M_PI * (fc + 30000.0 * std::cos(2.0 * M_PI * 800.0 * i / fs)) / fs;
+        iq[i] = cf32((float)(0.3 * std::cos(ph)), (float)(0.3 * std::sin(ph)));
+    }
+    struct Case { const char* name; RxPipeline::Mode mode; double w1, w2; };
+    // Pairs taken at the TOP of what BW_EDGE_MAX allows (edge x2), inside one band.
+    const Case cases[] = {
+        { "SSB 8k -> 10k",       RxPipeline::Mode::SSB_USB,   8000.0,  10000.0 },
+        { "AM  26k -> 38k",      RxPipeline::Mode::AM,       26000.0,  38000.0 },
+        { "NFM 40k -> 58k",      RxPipeline::Mode::NFM,      40000.0,  58000.0 },
+        { "WFM 250k -> 380k",    RxPipeline::Mode::WFM,     250000.0, 380000.0 },
+    };
+    for (const auto& c : cases) {
+        Cap cap; RxPipeline pipe;
+        RxPipeline::Callbacks cb; cb.ctx = &cap; cb.spectrum = onSpec; cb.audio = onAud;
+        pipe.start(fs, 1024, 20.0, 48000, cb);
+        pipe.setTune(fc, c.mode, c.w1);
+        for (int o = 0; o < Ni; o += blk) pipe.feed(iq.data() + o, std::min(blk, Ni - o));
+        const unsigned before = pipe.rebuildCount();
+        pipe.setTune(fc, c.mode, c.w2);
+        for (int o = 0; o < Ni; o += blk) pipe.feed(iq.data() + o, std::min(blk, Ni - o));
+        std::printf("  %-20s rebuilds %u -> %u\n", c.name, before, pipe.rebuildCount());
+        check(pipe.rebuildCount() == before, c.name);
+    }
+}
+
+// ★★★ AND WFM'S WIDTH MUST NOT COST THE PILOT. A rebuild re-locks the pilot PLL and resyncs RDS,
+//     which is the "tuned away and RDS never came back" family this file has fought repeatedly.
+//     Manual width changes went through setTune and rebuilt like any other mode — AdaptiveIf only
+//     ever served the AUTOMATIC narrowing, so it never protected this.
+static void testWfmWidthKeepsPilot() {
+    std::printf("-- RxPipeline (a WFM width change must not drop the pilot) --\n");
+    const double fs = 1920000.0, fc = 300000.0, Lf = 1000.0, Rf = 4000.0;
+    const int Ni = 1 << 21, blk = 65536;
+    std::vector<cf32> iq(Ni);
+    double ph = 0.0;
+    for (int i = 0; i < Ni; ++i) {
+        const double t = i / fs;
+        const double L = 0.3 * std::cos(2.0 * M_PI * Lf * t), R = 0.3 * std::cos(2.0 * M_PI * Rf * t);
+        const double mpx = (L + R) + 0.1 * std::sin(2.0 * M_PI * 19000.0 * t)
+                         + (L - R) * std::sin(2.0 * M_PI * 38000.0 * t);
+        ph += 2.0 * M_PI * (fc + 50000.0 * mpx) / fs;
+        iq[i] = cf32((float)std::cos(ph), (float)std::sin(ph));
+    }
+    Cap cap; RxPipeline pipe;
+    RxPipeline::Callbacks cb; cb.ctx = &cap;
+    cb.spectrum = onSpec; cb.audio = onAud; cb.stereo = onStereo;
+    pipe.start(fs, 1024, 20.0, 48000, cb);
+    pipe.setTune(fc, RxPipeline::Mode::WFM, 220000.0);
+    const int half = Ni / 2;
+    for (int o = 0; o < half; o += blk) pipe.feed(iq.data() + o, std::min(blk, half - o));
+    check(cap.stereoLocked, "pilot locked before the width change");
+    const unsigned before = pipe.rebuildCount();
+
+    pipe.setTune(fc, RxPipeline::Mode::WFM, 300000.0);       // same band (200k, 400k]
+    for (int o = half; o < Ni; o += blk) pipe.feed(iq.data() + o, std::min(blk, Ni - o));
+    std::printf("  rebuilds %u -> %u, stereo still locked: %s\n",
+                before, pipe.rebuildCount(), cap.stereoLocked ? "yes" : "NO");
+    check(pipe.rebuildCount() == before, "a WFM width change inside the band rebuilds NOTHING");
+    check(cap.stereoLocked, "and the pilot lock SURVIVES it");
+}
+
 int main() {
     std::printf("== vibedsp resampler + pipeline host test ==\n");
     testResampler();
@@ -573,6 +699,9 @@ int main() {
     testRetuneLevel();
     testAmWidthSmooth();
     testSsbNfmWidthSmooth();
+    testAmWidthNoClick();
+    testWidthLadderCoversFullRange();
+    testWfmWidthKeepsPilot();
     std::printf(failures ? "\n%d FAILURE(S)\n" : "\nALL PASS\n", failures);
     return failures ? 1 : 0;
 }
