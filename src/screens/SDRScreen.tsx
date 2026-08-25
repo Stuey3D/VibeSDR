@@ -4311,9 +4311,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   // a "couldn't connect" card with an escape back to the instance list.
   useEffect(() => {
     if (connected) { setConnTimedOut(false); return; }
+    /* ★★★ NOT WHILE THE LISTENER IS STILL CHOOSING. `awaitingRadio` means the door is open and no
+     *     radio has been picked — so nothing has been dialled, nothing has failed, and there is
+     *     nothing to time out. This fired anyway: sit on the picker for fifteen seconds, reading
+     *     the owner's message or deciding between three receivers, and "Couldn't connect — no
+     *     response" appeared over the top of it (Stuart: "still getting this message if i sit on
+     *     this screen too long"). It accuses the SERVER of failing while the user is simply
+     *     reading, which is the worst possible moment to undermine confidence in a receiver.
+     *  ★ The timer starts the moment a radio IS chosen, because awaitingRadio flips and this
+     *    effect re-runs — so the escape hatch it exists for is unaffected. */
+    if (awaitingRadio) { setConnTimedOut(false); return; }
     const t = setTimeout(() => { if (!destroyed.current && !connected) setConnTimedOut(true); }, 15000);
     return () => clearTimeout(t);
-  }, [connected]);
+  }, [connected, awaitingRadio]);
 
   // The tune not yet written, held so it can be flushed WITHOUT waiting out the debounce.
   const pendingTune = useRef<{ key: string; frequency: number; mode: SDRMode } | null>(null);
@@ -8351,10 +8361,23 @@ const styles = StyleSheet.create({
    *    Stuart: "the landing screen message text and link is a little small and hard to read."
    *  ★ Line height moved with it (1.45x). Raising the size alone crowds the lines and reads worse
    *    than the small text did — the usual way this "fix" makes things marginally worse. */
-  radioPickMsg:  { color: 'rgba(255,222,150,0.96)', fontFamily: 'Nixie One', fontSize: 16,
-                   lineHeight: 23, marginTop: 10, marginBottom: 4, paddingHorizontal: 18 },
-  radioPickLink: { color: '#ffc04d', fontFamily: 'Nixie One', fontSize: 16, lineHeight: 23,
-                   textDecorationLine: 'underline', marginBottom: 8, paddingHorizontal: 18 },
+  /* ★★★ ATKINSON, NOT NIXIE — AND THE REASON IS THE JOB, NOT THE TASTE. Nixie One is a display
+   *     face: it belongs on numerals, labels and the furniture of an instrument, which is
+   *     everything else on this screen. This is the one place a stranger writes PROSE — an owner's
+   *     standing message, several lines of it, that a visitor must actually read — and a condensed
+   *     display face set as a paragraph reads as decoration and is genuinely harder to take in.
+   *     Stuart: "the font in this server message needs to be atkinson not nixie one as it looks
+   *     out of place." Atkinson Hyperlegible is the app's own accessibility face and is drawn for
+   *     exactly this.
+   *  ★★ WHITE FOR THE PROSE, AMBER FOR THE LINK. The colour then carries one meaning only —
+   *     amber is the thing you can press — instead of the whole block glowing and the link having
+   *     to shout over it. */
+  radioPickMsg:  { color: 'rgba(255,255,255,0.94)', fontFamily: 'Atkinson Hyperlegible',
+                   fontSize: 15, lineHeight: 23, marginTop: 10, marginBottom: 4,
+                   paddingHorizontal: 18 },
+  radioPickLink: { color: '#ffb833', fontFamily: 'Atkinson Hyperlegible', fontSize: 15,
+                   lineHeight: 23, textDecorationLine: 'underline', marginBottom: 8,
+                   paddingHorizontal: 18 },
   // ★ Dimmer than the description above it: the aerial qualifies the range, it does not compete
   //   with it.
   radioPickAnt:  { color: 'rgba(255,200,120,0.6)', fontFamily: 'Nixie One', fontSize: 12,

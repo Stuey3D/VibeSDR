@@ -575,7 +575,7 @@ export class UberSDRClient {
   tune(frequency: number, mode?: SDRMode, opts?: { recenter?: boolean }) {
     this.lastLocalTuneAt = Date.now();   // ★ so the server's echo is not read as somebody else
     if (frequency) this.status.frequency = frequency;
-    if (mode)      this.status.mode = mode;
+    if (mode)      this._adoptMode(mode);      // ★ the passband travels with it — see _adoptMode
     VibePowerModule?.sendTuneCommand(frequency, mode ?? this.status.mode);
     // Re-centre spectrum on new frequency so waterfall follows the VFO — only
     // when locked (followVfo) or a discrete jump forces it (opts.recenter).
@@ -642,7 +642,23 @@ export class UberSDRClient {
   /** Update internal state only — used when native already sent the tune (e.g. lock screen skip). */
   syncFrequency(frequency: number, mode?: SDRMode) {
     if (frequency) this.status.frequency = frequency;
-    if (mode)      this.status.mode = mode;
+    if (mode)      this._adoptMode(mode);      // ★ see _adoptMode
+  }
+
+  /* ★★★ A MODE IS NEVER JUST A MODE — IT CARRIES ITS PASSBAND. setMode() has always mirrored
+   *     MODE_BANDWIDTHS because the server applies that table on every mode change and never
+   *     reports the result back. Every OTHER place that changed `status.mode` set the mode ALONE,
+   *     so the edges stayed at whatever the last mode used.
+   *  ★★★ WHAT THAT LOOKED LIKE: connect to a WFM receiver while the app is restoring a remembered
+   *     USB session, the server lands us on 96.6 WFM, we adopt its mode — and the VFO stays drawn
+   *     at USB's few kHz while the audio plays broadcast FM perfectly. Stuart: "it shows and is
+   *     decoding WFM but the VFO itself is super narrow as if it was in AM mode or NFM until I
+   *     click WFM again." Clicking the mode button worked because THAT path went through setMode.
+   *  ★ One helper, used by every path that can change the mode, so a future one cannot forget. */
+  private _adoptMode(mode: SDRMode) {
+    this.status.mode = mode;
+    const bw = MODE_BANDWIDTHS[mode];
+    if (bw) { this.status.bandwidthLow = bw[0]; this.status.bandwidthHigh = bw[1]; }
   }
 
   setMode(mode: SDRMode) {
@@ -2141,7 +2157,7 @@ export class UberSDRClient {
           this.dbg(`another listener moved the dial to ${sv}`);
           this.callbacks.onDialMoved?.(sv, typeof msg.mode === 'string' ? msg.mode : undefined);
           this.status.frequency = sv;
-          if (typeof msg.mode === 'string' && msg.mode) this.status.mode = msg.mode as SDRMode;
+          if (typeof msg.mode === 'string' && msg.mode) this._adoptMode(msg.mode as SDRMode);
           // ★★★ AND BRING THE VIEW WITH IT. Adopting the frequency alone leaves the waterfall
           //     pointed where the radio ISN'T — the server is capturing around the new dial, so
           //     the old view has no data behind it and goes BLACK. Stuart hit exactly that from
@@ -2182,7 +2198,7 @@ export class UberSDRClient {
           // Adopt what the server actually did, so the readout stops claiming otherwise.
           this.dbg(`remembered ${want.frequency} is outside the locked window — keeping the landing`);
           if (Number.isFinite(serverVfo) && serverVfo > 0) this.status.frequency = serverVfo;
-          if (typeof msg.mode === 'string' && msg.mode) this.status.mode = msg.mode as SDRMode;
+          if (typeof msg.mode === 'string' && msg.mode) this._adoptMode(msg.mode as SDRMode);
           this.callbacks.onStatus({ ...this.status });
         } else if (Number.isFinite(serverVfo) && Math.abs(serverVfo - want.frequency) > 500) {
           this.dbg(`landing put us on ${serverVfo}; re-asserting remembered ${want.frequency}`);
