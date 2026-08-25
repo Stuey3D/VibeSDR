@@ -260,7 +260,7 @@ export interface SDRCallbacks {
    *  ignored both messages entirely, so a listener whose time ran out just
    *  dropped and started retrying (2026-07-28).
    *  `cooldownSec` is the server's own number — when they may come back. */
-  onSessionEnded?: (cooldownSec: number) => void;
+  onSessionEnded?: (cooldownSec: number, freshSec?: number) => void;
   /** Refused because we returned inside our cooldown. */
   onCooldown?: (secs: number) => void;
   /** ★★ PARITY GAP CLOSED 2026-07-28. The web client and Jr have handled all three of these
@@ -1849,7 +1849,9 @@ export class UberSDRClient {
     }
     if (msg.type === 'session_expired') {
       this.refused = true;                    // never auto-retry a deliberate refusal
-      this.callbacks.onSessionEnded?.(Number(msg.cooldown) || 0);
+      // ★ `fresh` = when a FULL turn returns, which is a different (and much longer) window than
+      //   the cooldown — see the server's note. 0 when an older server did not say.
+      this.callbacks.onSessionEnded?.(Number(msg.cooldown) || 0, Number(msg.fresh) || 0);
       return;
     }
     if (msg.type === 'cooldown') {

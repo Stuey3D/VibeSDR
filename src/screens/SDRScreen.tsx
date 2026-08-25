@@ -3350,14 +3350,25 @@ export default function SDRScreen({ route, navigation }: Props) {
       // ★ The part that matters is WHEN THEY MAY RETURN. A public receiver that
       // just goes quiet reads as our bug; one that says "someone else can have a
       // turn, come back in 2 minutes" reads as a shared radio working.
-      onSessionEnded: (cooldownSec: number) => {
+      onSessionEnded: (cooldownSec: number, freshSec?: number) => {
         if (destroyed.current) return;
         const m = Math.max(1, Math.round(cooldownSec / 60));
+        const f = Math.round((freshSec ?? 0) / 60);
         terminalRefusal.current = true;
+        /* ★★★ SAY THE RULE THAT ACTUALLY GOVERNS. There are two windows and we were quoting the
+         *     short one: `cooldown` is how long this address is refused, `fresh` is when a full
+         *     turn returns — and coming back between them lets you in with NO TIME LEFT. Stuart
+         *     hit exactly that: "The app has been closed for a good 10 mins or so and as soon as I
+         *     connected to the Pi again it said my time was over."
+         *  ★ Only when the server said it and it is genuinely longer; otherwise the old sentence,
+         *    which is right for a server that has no such rule. */
         setRefusal({
           title: 'TIME UP',
           body: 'Your session on this shared receiver has ended, so someone else can have a turn.',
-          note: `You can reconnect in about ${m} minute${m === 1 ? '' : 's'}.`,
+          note: f > m
+            ? `You can reconnect in about ${m} minute${m === 1 ? '' : 's'} — but a full turn `
+              + `starts again ${f} minutes after your last one.`
+            : `You can reconnect in about ${m} minute${m === 1 ? '' : 's'}.`,
         });
       },
       onCooldown: (secs: number) => {

@@ -12443,8 +12443,20 @@ struct LocalSdrShim::Impl {
         }
 
         // ── End this listener's session ────────────────────────────────────────────────────
+        /* ★★★ TWO DIFFERENT WINDOWS, AND WE WERE ONLY SENDING ONE. `cooldown` is how long this
+         *     address is REFUSED (so somebody else can actually get in) — two minutes. It is NOT
+         *     when a full turn comes back: turnStartForLocked resumes the SAME turn for anyone
+         *     returning within the limit itself, so on a 30-minute receiver you must stay away
+         *     thirty minutes to start a fresh one.
+         *  ★★★ SO "You can reconnect in about 2 minutes" WAS TRUE AND MISLEADING. Reconnect then
+         *      and you are let in with NO TIME LEFT — which is exactly what happened to Stuart:
+         *      "The app has been closed for a good 10 mins or so and as soon as I connected to the
+         *      Pi again it said my time was over." The rule is a good one; it was invisible.
+         *  ★ `fresh` is the turn-reset window in seconds. Absent on an older server, and a client
+         *    that does not understand it simply says what it always said. */
         const std::string m = "{\"type\":\"session_expired\",\"cooldown\":"
-                            + std::to_string(kSessionCooldownSec) + "}";
+                            + std::to_string(kSessionCooldownSec)
+                            + ",\"fresh\":" + std::to_string(limitMin * 60) + "}";
         std::shared_ptr<net::Socket> sp, au; std::string addr;
         { std::lock_guard<std::mutex> lk(clientMtx);
           sp = victim->spec; au = victim->audio; victim->handoverAt = 0; victim->since = 0;
@@ -12662,7 +12674,8 @@ struct LocalSdrShim::Impl {
 
         LOGI("session limit reached (%d min) — ending %s", limitMin, addr.c_str());
         const std::string m = "{\"type\":\"session_expired\",\"cooldown\":"
-                            + std::to_string(kSessionCooldownSec) + "}";
+                            + std::to_string(kSessionCooldownSec)
+                            + ",\"fresh\":" + std::to_string(g_vsSessionLimitMin.load() * 60) + "}";
         // ★ TELL THEM FIRST, THEN CLOSE. The message is what stops the client treating this as
         // a dropped link and retry-storming a server that is deliberately turning it away.
         // ★★★ outboxClose, not closeAfterFlush — the third site with this fault, and the one that

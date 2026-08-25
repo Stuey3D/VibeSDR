@@ -901,7 +901,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onHandover: (secs) => showPill(
       `Someone is waiting for this radio — you have about ${Math.max(1, secs)} seconds`, 12000),
     onHandoverOff: () => showPill('They stopped waiting — the radio is still yours', 6000),
-    onSessionEnded: (cd) => showSessionEnded(cd),
+    onSessionEnded: (cd, fresh) => showSessionEnded(cd, fresh),
     onCooldown: (secs) => showCooldown(secs),
     // ★ Shown to EVERYONE, not only the admin. "3 of 30 listening" answers the question a
     //   visitor actually has — is there room, and is anyone else here — and it is the number the
@@ -4677,11 +4677,19 @@ function showEvicted() { showRefusal('TAKEN OVER',
 /** ★★ The session limit. Say WHY it ended and WHEN they may return — a bare disconnect on a
  *  public receiver reads as a crash, and the listener blames us rather than understanding they
  *  had a share of a shared radio. */
-function showSessionEnded(cooldownSec: number) {
+function showSessionEnded(cooldownSec: number, freshSec = 0) {
   const m = Math.max(1, Math.round(cooldownSec / 60));
+  const f = Math.round(freshSec / 60);
+  /* ★★★ TWO WINDOWS, AND WE QUOTED THE SHORT ONE. `cooldown` is how long this address is refused;
+   *     a FULL turn only returns after the limit itself has passed. Come back between them and you
+   *     are let in with no time left — which reads as a fault rather than as the rule it is.
+   *  ★ Only said when the server stated it and it is genuinely longer. */
   showRefusal('TIME UP',
     'Your session on this shared receiver has ended, so someone else can have a turn.' +
-    `<br><br>You can reconnect in about ${m} minute${m === 1 ? '' : 's'}.`);
+    (f > m
+      ? `<br><br>You can reconnect in about ${m} minute${m === 1 ? '' : 's'} — but a full turn `
+        + `starts again ${f} minutes after your last one.`
+      : `<br><br>You can reconnect in about ${m} minute${m === 1 ? '' : 's'}.`));
 }
 
 /** Refused because we came back before our cooldown finished. */

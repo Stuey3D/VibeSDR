@@ -281,7 +281,7 @@ export interface SpectrumCallbacks {
   /** Session limit: seconds remaining (fires at 2 min and 30 s). Still connected. */
   onSessionWarning?: (secs: number) => void;
   /** The limit expired; we have been disconnected. `cooldown` = seconds before we may return. */
-  onSessionEnded?: (cooldown: number) => void;
+  onSessionEnded?: (cooldown: number, fresh?: number) => void;
   /** Refused because we are still inside our cooldown. */
   onCooldown?: (secs: number) => void;
   /** The owner took the radio back using the admin password. */
@@ -607,7 +607,9 @@ export class SpectrumClient {
       case 'session_expired':
         // Our time was up. Say so plainly, with how long before we may try again.
         this.refused = true;
-        this.cb.onSessionEnded?.(Number(msg.cooldown) || 0);
+        // ★ `fresh` = when a FULL turn returns — a different, longer window than the
+        //   cooldown. See the server's note; 0 on a server that does not say.
+        this.cb.onSessionEnded?.(Number(msg.cooldown) || 0, Number(msg.fresh) || 0);
         break;
       case 'cooldown':
         // We came back too soon after a timeout.
