@@ -245,6 +245,12 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // playback ran seconds behind live FOREVER — tuning sounded delayed because
   // you kept hearing the backlog. queuedSeconds is mutated on audioQ only.
   private var queuedSeconds: Double = 0
+  /** ★ The cushion that absorbs a source gap — see scheduleOut. An RTL gain change costs ~40 ms of
+   *  broken audio at the hardware, so this has to be several times that to be worth having, and
+   *  small enough that the dial still feels immediate. */
+  private let kPreRollSeconds: Double = 0.22
+  private var preRoll: Double = 0
+  private var preRollBufs: [AVAudioPCMBuffer] = []
   // Now-playing overrides — JS computes a VTS-aware title/artist (station or
   // band name, user's frequency unit, tune step) and pushes them here. A
   // native lock-screen skip clears them until JS catches up (VibeTuned →
@@ -1022,8 +1028,24 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     // frequency — fine-tuning SSB through a stale backlog is impossible.
     audioQ.async { [weak self] in
       guard let self else { return }
-      if self.queuedSeconds > 0.15 {
+      /* ★★★ ONLY FLUSH A BACKLOG THAT IS ACTUALLY STALE. This fired at 0.15 s, and the queue sits
+       *     comfortably above that in normal running (the upper bound is 0.4 s) — so a stop/play,
+       *     which DISCARDS SCHEDULED BUFFERS and is audible, happened on essentially EVERY TUNE,
+       *     and on every step of a sweep. Stuart: "the stutter seems to happen around a tuning
+       *     event", and "the app sweep tunes slower than the web browser too".
+       *  ★★ THE FLUSH ITSELF IS RIGHT and stays — "fine-tuning SSB through a stale backlog is
+       *     impossible" is exactly true, and it is why this exists. What was wrong is the
+       *     threshold: it has to mean "you would hear the OLD frequency for a noticeable moment",
+       *     not "there is a normal amount of audio queued".
+       *  ★ 0.35 s is under the 0.4 s bound, so a genuine pile-up after a delivery burst is still
+       *    cut, while an ordinary queue is left alone and the tune stays seamless. */
+      if self.queuedSeconds > 0.35 {
         self.queuedSeconds = 0
+        // ★ Re-arm the cushion. A flush leaves playback hard against the live edge, which is
+        //   exactly the state the pre-roll exists to avoid — without this, the first gap after
+        //   any tune would underrun again. See scheduleOut.
+        self.preRoll = 0
+        self.preRollBufs.removeAll(keepingCapacity: true)
         let player = self.playerNode
         DispatchQueue.main.async {
           player?.stop()  // discards scheduled buffers
@@ -1769,6 +1791,12 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   }
 
   @objc func stopLocalAudio() {
+    // ★ A fresh session starts with a fresh cushion — see scheduleOut's pre-roll.
+    audioQ.async { [weak self] in
+      self?.preRoll = 0
+      self?.preRollBufs.removeAll(keepingCapacity: true)
+      self?.queuedSeconds = 0
+    }
     stopLocalAudioConn()
     stopExternalAudio()
   }
@@ -2329,6 +2357,38 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     // accumulating forever (runs on audioQ; queuedSeconds audioQ-only).
     let dur = Double(buf.frameLength) / fmt.sampleRate
     if queuedSeconds > 0.4 { return }
+    /* ★★★ A PRE-ROLL, BECAUSE THERE WAS A CEILING ON LATENCY AND NO FLOOR. Buffers were scheduled
+     *     the instant they arrived, so playback sat hard against the live edge with nothing
+     *     queued — and the FIRST source gap became an underrun.
+     *  ★★★ AND THE SOURCE GAPS ARE REAL, EXPECTED, AND NOT OURS. An RTL gain change costs about
+     *      40 ms of broken audio at the HARDWARE (measured here, and SDR++ dips on every change
+     *      too), so the AGC produces one every time it moves. Stuart, with his hands off the
+     *      controls entirely: "the audio is stuttering on agc action it seems. So must be the
+     *      buffer." It is.
+     *  ★★★ THIS IS WHY THE BROWSER DOES NOT STUTTER ON THE SAME STREAM. WebAudio buffers far more
+     *      deeply and rides straight through a 40 ms hole; we had no cushion at all to ride on.
+     *      The stream is identical — the difference was entirely on this side.
+     *  ★★ 220 ms COSTS 220 ms OF LATENCY, DELIBERATELY. That is the trade a jitter buffer IS, and
+     *     it is well under the 0.4 s ceiling above, so the live-edge bound still does its job.
+     *     Once playback starts this depth persists: playback runs a fixed distance behind arrival,
+     *     so the cushion is there for every later gap, not just the first.
+     *  ★ Held on audioQ like everything else here, and released in arrival order. */
+    if preRoll < kPreRollSeconds {
+      preRoll += dur
+      preRollBufs.append(buf)
+      guard preRoll >= kPreRollSeconds else { return }
+      let held = preRollBufs
+      preRollBufs.removeAll(keepingCapacity: true)
+      for b in held {
+        let d = Double(b.frameLength) / fmt.sampleRate
+        queuedSeconds += d
+        player.scheduleBuffer(b) { [weak self] in
+          guard let self else { return }
+          self.audioQ.async { self.queuedSeconds = max(0, self.queuedSeconds - d) }
+        }
+      }
+      return
+    }
     queuedSeconds += dur
     player.scheduleBuffer(buf) { [weak self] in
       guard let self else { return }

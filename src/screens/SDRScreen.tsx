@@ -7480,15 +7480,29 @@ export default function SDRScreen({ route, navigation }: Props) {
         <View pointerEvents="none" style={[styles.rxClock, {
           top: insets.top + 46 + (stationIdH > 0 ? stationIdH + 8 : 0),
           right: Math.max(12, insets.right + 8),
-          borderColor: sessionLeftMs < 120_000 ? 'rgba(255,90,90,0.75)' : 'rgba(255,160,0,0.45)',
+          /* ★★★ A SOFT LIMIT IS A GUARANTEE, NOT A SENTENCE — SO IT MUST NOT COUNT DOWN LIKE ONE.
+                 "YOUR TURN ENDS IN 0:00" sat there on a soft server while nothing whatever
+                 happened, which is worse than saying nothing: it tells the listener they have been
+                 cut off while they are plainly still listening, and it turns good news (you keep
+                 the radio) into an apparent fault. Stuart, looking at exactly that: "we need to
+                 change the wording of the timer for soft limit."
+              ★★ AND NO RED. The urgent colouring says "something is about to be taken from you",
+                 which is true on a hard limit and false on a soft one — there, zero is the moment
+                 a guarantee expires, not the moment anything stops. */
+          borderColor: (!limitSoft && sessionLeftMs < 120_000) ? 'rgba(255,90,90,0.75)'
+                                                              : 'rgba(255,160,0,0.45)',
         }]}>
           <Text style={[styles.rxClockCap, {
-            color: sessionLeftMs < 120_000 ? 'rgba(255,140,140,0.95)' : 'rgba(255,160,0,0.65)' }]}>
-            YOUR TURN ENDS IN
+            color: (!limitSoft && sessionLeftMs < 120_000) ? 'rgba(255,140,140,0.95)'
+                                                          : 'rgba(255,160,0,0.65)' }]}>
+            {limitSoft ? (sessionLeftMs <= 0 ? 'GUARANTEED TIME OVER' : 'GUARANTEED TIME ENDS IN')
+                       : 'YOUR TURN ENDS IN'}
           </Text>
-          <Text style={[styles.rxClockNum, {
-            color: sessionLeftMs < 120_000 ? '#ff6b6b' : '#ffb833' }]}>
-            {`${Math.floor(sessionLeftMs / 60000)}:${String(Math.floor((sessionLeftMs % 60000) / 1000)).padStart(2, '0')}`}
+          <Text style={[limitSoft && sessionLeftMs <= 0 ? styles.rxClockSoft : styles.rxClockNum, {
+            color: (!limitSoft && sessionLeftMs < 120_000) ? '#ff6b6b' : '#ffb833' }]}>
+            {limitSoft && sessionLeftMs <= 0
+              ? 'yours until someone else wants it'
+              : `${Math.floor(sessionLeftMs / 60000)}:${String(Math.floor((sessionLeftMs % 60000) / 1000)).padStart(2, '0')}`}
           </Text>
         </View>
       )}
@@ -8227,6 +8241,8 @@ const styles = StyleSheet.create({
                  borderWidth: 1, backgroundColor: 'rgba(8,6,2,0.72)', alignItems: 'flex-end' },
   rxClockCap:  { fontFamily: 'Nixie One', fontSize: 9, letterSpacing: 1.5 },
   rxClockNum:  { fontFamily: 'Nixie One', fontSize: 22, lineHeight: 26 },
+  // ★ The soft-limit "expired" line is a sentence, not a number — it cannot use the 22pt face.
+  rxClockSoft: { fontFamily: 'Nixie One', fontSize: 11, lineHeight: 15, maxWidth: 150 },
   adminNote: {
     position: 'absolute', zIndex: 40, alignItems: 'center',
     paddingVertical: 7, paddingHorizontal: 12, borderRadius: 8,

@@ -11650,6 +11650,9 @@ struct LocalSdrShim::Impl {
     }
 
     int dspBlocks_ = 0;
+    /** ★ When the dsp-load line was last printed. The block counter alone is not a rate — see the
+     *  note at the log site. Starts at the epoch so the first window prints promptly. */
+    std::chrono::steady_clock::time_point dspLastLogAt_{};
     double dspWideMs_ = 0, dspPerMs_ = 0, dspRealMs_ = 0;
 
     void dspLoop() {
@@ -11736,7 +11739,24 @@ struct LocalSdrShim::Impl {
                     std::chrono::duration<double,std::milli>(t1 - tLock1).count();
                 if (workMs > g_dspWorkMaxMs.load(std::memory_order_relaxed))
                     g_dspWorkMaxMs.store(workMs, std::memory_order_relaxed);
-                if (++dspBlocks_ >= 200) {
+                /* ★★★ RATE-LIMIT BY TIME, NOT BY BLOCK COUNT — "every 200 blocks" is not a
+                 *     rate at all, because a block is not a fixed amount of time. Measured on
+                 *     Stuart's Pi: ONE radio produced 44,680 of these lines in 25 minutes — THIRTY
+                 *     JOURNALD WRITES A SECOND, from the DSP thread, on a Raspberry Pi. Whatever
+                 *     that costs, it is spent on the one thread that must never be late, and it is
+                 *     spent for a diagnostic nobody can read at that rate.
+                 *  ★★ THE BLOCK SIZE IS THE VARIABLE THAT BIT. At a big block this is a line every
+                 *     few seconds and looks perfectly sensible, which is why it has survived; at a
+                 *     small one — a per-client channel fan-out, a lower sample rate — 200 blocks
+                 *     can pass in twenty milliseconds. The counter stays as the cheap gate (no
+                 *     clock read per block), but the CLOCK decides.
+                 *  ★ Context: this was found while chasing audio stutter that was worse on the Pi
+                 *    than on a phone acting as server — "its certainly not the server hardware as
+                 *    the PI is significantly more powerful than the xcover". It is not proven to
+                 *    be the cause; it is unambiguous waste on the critical thread either way. */
+                if (++dspBlocks_ >= 200 &&
+                    std::chrono::duration<double>(t1 - dspLastLogAt_).count() >= 5.0) {
+                    dspLastLogAt_ = t1;
                     size_t q; { std::lock_guard<std::mutex> lk(iqMtx); q = iqQueuedSamples; }
                     // ★ >100% means the DSP cannot keep up and the backlog will grow until
                     //   something drops — the audible symptom is everyone stuttering at once.
