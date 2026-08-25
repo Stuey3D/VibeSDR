@@ -132,10 +132,14 @@ What can be claimed, all of it true:
   crosses in clear. ★★ **The tunnel is the more secure option for the listener, not a compromise
   for the host.** That is the opposite of what a reader will assume, so say it plainly.
 
-★★★ **AND DO NOT OVERSTATE THE OTHER DIRECTION.** The host DOES see a listener's IP — the server
-prints it (`Connected: 81.159.47.137`), and it is what session limits, cooldowns and bans are keyed
-on. So: "your home address stays private" is true; "nobody sees anybody" is NOT, and must never be
-implied. A privacy claim that quietly overreaches is worse than none.
+★★ **THE OTHER DIRECTION IS FINE — JUST DO NOT CLAIM IT.** The host DOES see a listener's IP: the
+server prints it, and session limits, cooldowns and bans are keyed on it. Stuart: *"listeners
+already know their IPs are being logged by servers as they all do it, that is how they manage block
+lists."* That is the norm across every SDR receiver on the internet and needs no apology or
+disclaimer — so **do not soften the host-side claim on account of it.**
+★ The only rule: say "your home address stays private", never "nobody sees anybody". One is true
+and is the selling point; the other would be a privacy claim that quietly overreaches, which is
+worse than making none.
 
 ### Craft notes
 - **Square the corners.** 14–20px radii with soft borders is the single strongest tell.
