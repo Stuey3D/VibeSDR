@@ -2149,6 +2149,12 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  explanation reads as the radio glitching, which is the one thing a shared dial must not look
    *  like — and the chat may well be closed when it happens. */
   const [dialHint,     setDialHint]     = useState('');
+  /** ★ Said once per connection — see where it is set. A ref, not state: it must not re-render, and
+   *  it must survive the occupancy fetch running again. */
+  const limitToldRef = useRef(false);
+  // ★ ...but a DIFFERENT receiver is a different promise, so the once-per-connection flag is per
+  //   server. Without this, moving from a soft server to a hard one would say nothing at all.
+  useEffect(() => { limitToldRef.current = false; }, [connectBase]);
   /** This receiver shares ONE tuner between its listeners — the only state in which the chat
    *  means anything, and the only one in which anybody but the owner may turn the dial. */
   const sharedDial = !!dialState && dialState.mode !== 'exclusive';
@@ -2515,7 +2521,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   //   way. Keyed on the text so a second move restarts the clock rather than inheriting the first.
   useEffect(() => {
     if (!dialHint) return;
-    const t = setTimeout(() => setDialHint(''), 5000);
+    /* ★★ LONG ENOUGH TO READ. A flat 5 s suited what this was built for — "User 2 tuned to 96.6
+     *    MHz", read at a glance — and is not enough for the session-limit sentence, which is two
+     *    lines and the one message a listener actually has to take in. Scaled by length, floored
+     *    at the original 5 s so every existing hint behaves exactly as before, and capped at 12 s
+     *    (the web client gives its version 11). */
+    const ms = Math.min(12000, Math.max(5000, dialHint.length * 55));
+    const t = setTimeout(() => setDialHint(''), ms);
     return () => clearTimeout(t);
   }, [dialHint]);
   useEffect(() => {
@@ -4141,10 +4153,31 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (cancelled || !o) return;
         setLimitSoft(!!o.limitSoft);
         setServerInstance(o.instance ?? null);
+        /* ★★★ TELL THE LISTENER WHAT THE LIMIT MEANS, ONCE, BEFORE IT MATTERS. The web client has
+         *     said this since soft limits existed and the app never did — so on the same receiver
+         *     a browser explained itself and the app did not (Stuart: "this message about the soft
+         *     time limit is not showing in the app, nor is the one about a hard limit either").
+         *  ★★★ IT IS NOT DECORATION ON A SOFT SERVER. The countdown reaches zero, NOTHING HAPPENS,
+         *      and the listener is left deciding for themselves whether the receiver is broken or
+         *      the rule is. That is the whole reason the web client says it.
+         *  ★★ AND THE HARD CASE NEEDS IT MORE, not less: there the countdown ends in an actual
+         *     disconnection, and being told at the start is the difference between a rule and an
+         *     ambush. The web client says nothing here — this is the app going first.
+         *  ★ `limitMin` was already being parsed by fetchOccupancy and simply thrown away.
+         *  ★ Said once per session, and never to an admin — their session is not limited. */
+        const mins = Number(o.limitMin) || 0;
+        if (mins > 0 && !limitToldRef.current && !adminOk) {
+          limitToldRef.current = true;
+          setDialHint(o.limitSoft
+            ? `This receiver is shared. It is yours for ${mins} minutes — after that you keep it `
+              + `until somebody else wants it.`
+            : `This receiver is shared. You have ${mins} minutes, then it passes to whoever is `
+              + `waiting.`);
+        }
       })
       .catch(() => {});   // ★ Silent: a Kiwi/OWRX/older VibeServer answers nothing useful here.
     return () => { cancelled = true; };
-  }, [connected, connectBase]);
+  }, [connected, connectBase, adminOk]);
 
   useEffect(() => {
     if (!sessionEndsAt) return;
