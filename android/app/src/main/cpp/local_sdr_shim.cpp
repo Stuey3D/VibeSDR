@@ -1155,6 +1155,21 @@ static std::atomic<int>      g_agcWideSteps{-1};
  *  as g_adjNarrow below: a retune is a NEW STATION and its average must not be inherited. */
 static std::atomic<double>   g_autoBwSnrEma{0.0};
 static std::atomic<bool>     g_autoBwSnrOn{false};
+/** ★★★ THE DONGLE'S OWN DIGITAL AGC (rtlsdr_set_agc_mode) — DEFAULT OFF, AND ASSERTED AT OPEN.
+ *  Nothing ever set this: it was only touched when a listener pressed DIGITAL AGC, so a radio
+ *  came up with whatever the dongle happened to power up holding. That is not a default, it is
+ *  an accident — and it differs between dongles, which is exactly how it surfaced: a newly
+ *  added RTL-SDR Blog V4L arrived with it ON while the V4 beside it was off (Stuart,
+ *  2026-08-25: "the digital AGC on RTL-SDR's needs to default to disabled, adding the V4L
+ *  enabled it by default").
+ *  ★★ AND OFF IS THE RIGHT DEFAULT ON ITS OWN MERITS. The setup page already tells owners this
+ *  AGC "is unreliable across tuners and known broken on the RTL-SDR Blog v4, and this server
+ *  never uses it" — while the server was in fact leaving it wherever it landed. VibeAGC is the
+ *  loop we actually steer with, and a hardware AGC underneath it is fighting the same gain.
+ *  ★ Deliberately NOT persisted to the config: it is a listener's momentary A/B, not a setting
+ *  an owner chooses once. A replug or a rate change re-asserts whatever the listener last chose
+ *  in this session, which is why the two open paths read it rather than hard-coding 0. */
+static std::atomic<bool>     g_rtlDigitalAgc{false};
 static std::atomic<bool>     g_adjNarrow{false};
 static std::atomic<bool>     g_adjRdsWasOn{false};
 /** Consecutive 1-second windows with, and without, samples on the rail. Written by the libusb
@@ -12798,6 +12813,9 @@ struct LocalSdrShim::Impl {
         tuneHw(rtlCenter.load());
         if (lastGainTenthDb < 0) rtlsdr_set_tuner_gain_mode(dev, 0);
         else { rtlsdr_set_tuner_gain_mode(dev, 1); rtlsdr_set_tuner_gain(dev, lastGainTenthDb); }
+        // ★ The digital AGC is one of the things the device forgot, and it was missing from this
+        //   list — so a replug silently handed control back to the dongle. See g_rtlDigitalAgc.
+        rtlsdr_set_agc_mode(dev, g_rtlDigitalAgc.load(std::memory_order_relaxed) ? 1 : 0);
         rtlsdr_reset_buffer(dev);
 
         launchCapture();
@@ -14950,6 +14968,8 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     g_digGainTarget.store(1.0f, std::memory_order_relaxed);
     g_ovlSteps.store(startSteps, std::memory_order_relaxed);
     rtlsdr_set_tuner_gain_mode(impl->dev, 1);
+    // ★ SAY IT, do not inherit it — see g_rtlDigitalAgc. Off unless a listener asked otherwise.
+    rtlsdr_set_agc_mode(impl->dev, g_rtlDigitalAgc.load(std::memory_order_relaxed) ? 1 : 0);
     if (applyGain >= 0) rtlsdr_set_tuner_gain(impl->dev, applyGain);
     rtlsdr_reset_buffer(impl->dev);
     // Use the ACTUAL rate the RTL rounded to (keeps the waterfall calibrated).
@@ -17260,6 +17280,7 @@ void LocalSdrShim::setAgc(bool on) {
     if (p->radioReleased.load()) return;   // the radio is lent to another program
     if (p->useTcp()) { p->sendTcpCmd(0x08, on ? 1 : 0); return; }
     if (!p->dev) return;
+    g_rtlDigitalAgc.store(on, std::memory_order_relaxed);   // ★ so a replug re-asserts it
     rtlsdr_set_agc_mode(p->dev, on ? 1 : 0); LOGI("agc: %d", on);
 }
 void LocalSdrShim::setDirectSampling(int mode) {
