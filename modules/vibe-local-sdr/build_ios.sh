@@ -68,6 +68,12 @@ cxx "$CPP/local_sdr_shim.cpp"
 cxx "$CPP/sdrplay_source.cpp"
 cxx "$CPP/airspyhf_source.cpp"
 cxx "$CPP/net_shim.cpp"
+# ★★★ fd_passing joined 2026-08-25, and its absence was a LINK error, not a compile one — the
+#     shim calls vibe::sendFdTo() so the reference is emitted whether or not iOS ever passes an
+#     fd. It only surfaced once the archive was rebuilt at all: the stale .a predated the CALL
+#     as well as the definition, so it linked cleanly and hid the gap. Same lesson as the
+#     decoders below — three build lists, one source tree.
+cxx "$CPP/fd_passing.cpp"
 cxx "$CPP/mdns_responder.cpp"   # hostname responder; iOS compiles it but never serves
 cxx "$CPP/spyserver/spyserver_messages.cpp"
 cxx "$CPP/spyserver/spyserver_client.cpp"
