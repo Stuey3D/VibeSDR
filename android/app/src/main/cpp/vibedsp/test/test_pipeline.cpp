@@ -385,6 +385,182 @@ static void testRetuneLevel() {
     check(pipe.rebuildCount() > rebuildsAfter, "a mode change still rebuilds the chain");
 }
 
+// ── AM width changes must not tear the chain down ────────────────────────────
+// ★★★ THE BUG THIS GUARDS. setTune()'s sameChain test is (mode && bw), so moving the IF filter
+//     rebuilt everything: buffers cleared, cascade redesigned and reallocated on the DSP thread.
+//     Heard in AM as a dip on every step, and seen on every client as a waterfall freeze — the
+//     spectrum comes off the same block loop, so it is ONE stall with two symptoms. Wherever the
+//     jitter buffer was deep enough it hid the audio half and only the waterfall showed it.
+// ★★ TWO ASSERTIONS, AND BOTH ARE NEEDED. "Rebuilds nothing" alone is satisfied by ignoring the
+//    request entirely, so the selectivity must be shown to have ACTUALLY moved. And selectivity
+//    alone is satisfied by the old rebuild, which was never wrong — only expensive.
+static void testAmWidthSmooth() {
+    std::printf("-- RxPipeline (an AM width change must not rebuild) --\n");
+    const double fs = 1200000.0;
+    const double fc = 200000.0;          // carrier
+    const double fm = 1200.0, m = 0.6;   // its modulation — the wanted audio
+    const double fj = 10500.0;           // a neighbour, well inside 24 kHz and well outside 12
+    const int    Ni = 1 << 20;
+
+    // Carrier (modulated) + an unmodulated neighbour. AM demod beats the neighbour against the
+    // carrier at exactly fj, so the channel filter's effect on it is directly measurable.
+    std::vector<cf32> iq(Ni);
+    for (int i = 0; i < Ni; ++i) {
+        const double t   = i / fs;
+        const double env = 0.2 * (1.0 + m * std::cos(2.0 * M_PI * fm * t));
+        const double pc  = 2.0 * M_PI * fc * t;
+        const double pj  = 2.0 * M_PI * (fc + fj) * t;
+        iq[i] = cf32((float)(env * std::cos(pc) + 0.05 * std::cos(pj)),
+                     (float)(env * std::sin(pc) + 0.05 * std::sin(pj)));
+    }
+
+    Cap cap;
+    RxPipeline pipe;
+    RxPipeline::Callbacks cb; cb.ctx = &cap; cb.spectrum = onSpec; cb.audio = onAud;
+    pipe.start(fs, 1024, 20.0, 48000, cb);
+    // Both widths live in the same ladder band, which is the case a listener drags through.
+    pipe.setTune(fc, RxPipeline::Mode::AM, 24000.0);
+
+    const int blk = 65536, half = Ni / 2;
+    for (int o = 0; o < half; o += blk) pipe.feed(iq.data() + o, std::min(blk, half - o));
+
+    const size_t mark = cap.audio.size();
+    const int    N    = 1 << 13;
+    auto levelAt = [&](size_t from, double hz) {
+        if (from + N > cap.audio.size()) return -200.0f;
+        RealFFT fft(N);
+        std::vector<float> win(N), buf(N), db(fft.bins());
+        nuttallWindow(win.data(), N);
+        for (int i = 0; i < N; ++i) buf[i] = win[i] * cap.audio[from + i];
+        fft.powerDb(buf.data(), db.data(), 1.0f);
+        const int bin = (int)std::lround(hz * N / 48000.0);
+        float best = -200.0f;                       // a couple of bins of leakage slack
+        for (int b = bin - 2; b <= bin + 2; ++b)
+            if (b > 0 && b < fft.bins() && db[b] > best) best = db[b];
+        return best;
+    };
+    const float jamWide = levelAt(mark - (size_t)N, fj);
+
+    // ── THE WIDTH CHANGE ── same mode, same frequency, narrower filter.
+    const unsigned before = pipe.rebuildCount();
+    pipe.setTune(fc, RxPipeline::Mode::AM, 12001.0);
+    for (int o = half; o < Ni; o += blk) pipe.feed(iq.data() + o, std::min(blk, Ni - o));
+    const unsigned after = pipe.rebuildCount();
+
+    std::printf("  rebuilds: %u before the width change, %u after\n", before, after);
+    check(after == before, "an AM width change inside the band rebuilds NOTHING");
+
+    const float jamNarrow = levelAt(cap.audio.size() - (size_t)N - 1, fj);
+    std::printf("  neighbour at %.0f Hz: %.1f dB wide -> %.1f dB narrow\n", fj, jamWide, jamNarrow);
+    check(jamWide - jamNarrow > 20.0f,
+          "and the filter REALLY narrowed (the neighbour is pushed down)");
+
+    // Still listening to the station itself — a filter that rejected everything would pass the
+    // assertion above and be useless.
+    checkTone(cap.audio, fm, "wanted audio survives the narrower filter");
+
+    // ★ The ladder is a promise about a BAND, not about all widths. Crossing an edge is a genuinely
+    //   different chain (a new channel rate), and it must still rebuild rather than run on a filter
+    //   designed for the rate it no longer has.
+    const unsigned edgeBefore = pipe.rebuildCount();
+    pipe.setTune(fc, RxPipeline::Mode::AM, 8000.0);
+    pipe.feed(iq.data(), blk);
+    std::printf("  rebuilds after crossing a band edge = %u\n", pipe.rebuildCount());
+    check(pipe.rebuildCount() > edgeBefore, "crossing a ladder edge still rebuilds the chain");
+}
+
+// ── SSB and NFM width changes must not tear the chain down either ────────────
+// ★★★ SAME DEFECT, DIFFERENT COST. SSB was the WORST of the three: Weaver rebuilds two ~2000-tap
+//     FIRs on the DSP thread on every step. NFM is cheaper but has its own trap — its
+//     discriminator gain is derived from the width, so a chain that keeps running must be TOLD
+//     the new width or it plays at the wrong level.
+static void testSsbNfmWidthSmooth() {
+    std::printf("-- RxPipeline (SSB/NFM width changes must not rebuild) --\n");
+    const double fs = 1200000.0;
+    const int    Ni = 1 << 20, blk = 65536, half = Ni / 2;
+
+    // ── SSB ── a wanted upper-sideband tone plus a lower-sideband tone that must stay rejected.
+    {
+        const double fc = 80000.0, fa = 900.0, fimg = 2100.0;
+        std::vector<cf32> iq(Ni);
+        for (int i = 0; i < Ni; ++i) {
+            const double t  = i / fs;
+            const double pu = 2.0 * M_PI * (fc + fa)   * t;   // wanted (upper)
+            const double pl = 2.0 * M_PI * (fc - fimg) * t;   // wrong sideband
+            iq[i] = cf32((float)(std::cos(pu) + std::cos(pl)),
+                         (float)(std::sin(pu) + std::sin(pl)));
+        }
+        Cap cap; RxPipeline pipe;
+        RxPipeline::Callbacks cb; cb.ctx = &cap; cb.spectrum = onSpec; cb.audio = onAud;
+        pipe.start(fs, 1024, 20.0, 48000, cb);
+        pipe.setTune(fc, RxPipeline::Mode::SSB_USB, 3000.0);
+        for (int o = 0; o < half; o += blk) pipe.feed(iq.data() + o, std::min(blk, half - o));
+
+        const unsigned before = pipe.rebuildCount();
+        pipe.setTune(fc, RxPipeline::Mode::SSB_USB, 2400.0);      // same band (1500, 3000]
+        for (int o = half; o < Ni; o += blk) pipe.feed(iq.data() + o, std::min(blk, Ni - o));
+        std::printf("  SSB rebuilds: %u before, %u after\n", before, pipe.rebuildCount());
+        check(pipe.rebuildCount() == before, "an SSB width change inside the band rebuilds NOTHING");
+
+        // ★★★ THE ONE THAT COULD BREAK SILENTLY. The Weaver sub-carrier sits at bw/2, so a
+        //     retune that moved the filters but not the mixer (or vice versa) still produces
+        //     audio — at the wrong pitch, with the wrong sideband leaking back in. Both are
+        //     checked: the wanted tone must be at its ORIGINAL frequency (the mixer moved
+        //     correctly) and the image must still be down.
+        checkTone(cap.audio, fa, "SSB tone still at the right pitch after the width change");
+        const int N = 1 << 13;
+        RealFFT fft(N);
+        std::vector<float> win(N), buf(N), db(fft.bins());
+        nuttallWindow(win.data(), N);
+        const size_t off = cap.audio.size() - (size_t)N - 1;
+        for (int i = 0; i < N; ++i) buf[i] = win[i] * cap.audio[off + i];
+        fft.powerDb(buf.data(), db.data(), 1.0f);
+        auto at = [&](double hz) {
+            const int b0 = (int)std::lround(hz * N / 48000.0);
+            float best = -200.0f;
+            for (int b = b0 - 2; b <= b0 + 2; ++b)
+                if (b > 0 && b < fft.bins() && db[b] > best) best = db[b];
+            return best;
+        };
+        std::printf("  SSB wanted %.1f dB vs wrong sideband %.1f dB\n", at(fa), at(fimg));
+        check(at(fa) - at(fimg) > 30.0f, "and the image is STILL rejected after the retune");
+    }
+
+    // ── NFM ── the gain follows the width, so a stale one shows up as a level error.
+    {
+        const double fc = 150000.0, fm = 1000.0, dev = 3000.0;
+        std::vector<cf32> iq(Ni);
+        double ph = 0.0;
+        for (int i = 0; i < Ni; ++i) {
+            const double t = i / fs;
+            ph += 2.0 * M_PI * (fc + dev * std::cos(2.0 * M_PI * fm * t)) / fs;
+            iq[i] = cf32((float)std::cos(ph), (float)std::sin(ph));
+        }
+        Cap cap; RxPipeline pipe;
+        RxPipeline::Callbacks cb; cb.ctx = &cap; cb.spectrum = onSpec; cb.audio = onAud;
+        pipe.start(fs, 1024, 20.0, 48000, cb);
+        pipe.setTune(fc, RxPipeline::Mode::NFM, 16000.0);
+        for (int o = 0; o < half; o += blk) pipe.feed(iq.data() + o, std::min(blk, half - o));
+
+        const unsigned before = pipe.rebuildCount();
+        pipe.setTune(fc, RxPipeline::Mode::NFM, 10000.0);          // same band (8000, 16000]
+        for (int o = half; o < Ni; o += blk) pipe.feed(iq.data() + o, std::min(blk, Ni - o));
+        std::printf("  NFM rebuilds: %u before, %u after\n", before, pipe.rebuildCount());
+        check(pipe.rebuildCount() == before, "an NFM width change inside the band rebuilds NOTHING");
+        checkTone(cap.audio, fm, "NFM tone survives the width change");
+
+        // The narrower width raises the discriminator gain, so the recovered audio must get
+        // LOUDER. If setGain() were skipped the level would simply not move — which is exactly
+        // the stale-gain bug, and it is invisible to a frequency-only check.
+        double s = 0.0; size_t n = 0;
+        for (size_t i = cap.audio.size() > 4800 ? cap.audio.size() - 4800 : 0;
+             i < cap.audio.size(); ++i, ++n) s += (double)cap.audio[i] * cap.audio[i];
+        const double rmsNarrow = n ? std::sqrt(s / (double)n) : 0.0;
+        std::printf("  NFM rms after narrowing = %.4f\n", rmsNarrow);
+        check(rmsNarrow > 1e-4, "NFM audio still present at a sane level");
+    }
+}
+
 int main() {
     std::printf("== vibedsp resampler + pipeline host test ==\n");
     testResampler();
@@ -395,6 +571,8 @@ int main() {
     testWFMStereo();
     testWFMOffTune();
     testRetuneLevel();
+    testAmWidthSmooth();
+    testSsbNfmWidthSmooth();
     std::printf(failures ? "\n%d FAILURE(S)\n" : "\nALL PASS\n", failures);
     return failures ? 1 : 0;
 }

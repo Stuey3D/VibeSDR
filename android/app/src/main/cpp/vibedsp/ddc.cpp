@@ -64,6 +64,17 @@ FirDecimator::FirDecimator(std::vector<float> taps, int decim)
     buf_.assign(K_ - 1, cf32(0.0f, 0.0f));        // K-1 sample history
 }
 
+bool FirDecimator::retune(const std::vector<float>& taps) {
+    // ★ The length is the contract, not a detail — see the header. Refuse rather than resize:
+    //   growing buf_ here would leave the extra history zeroed, which is the very transient
+    //   this function exists to avoid, and silently produce a click instead of preventing one.
+    if ((int)taps.size() != K_) return false;
+    // buf_ and phase_ are deliberately untouched: the delay line carries the signal across the
+    // change and the decimation phase keeps the output sample grid aligned.
+    rtaps_.assign(taps.rbegin(), taps.rend());
+    return true;
+}
+
 void FirDecimator::reset() {
     std::fill(buf_.begin(), buf_.end(), cf32(0.0f, 0.0f));
     buf_.resize(K_ - 1);
@@ -149,8 +160,9 @@ void FmDemod::process(const cf32* in, float* out, int n) {
 }
 
 // ── SSB / CW demod (Weaver / third method) ───────────────────────────────--
-void SsbDemod::configure(Side side, double bwHz, double rate) {
+void SsbDemod::configure(Side side, double bwHz, double rate, double designBwHz) {
     side_ = side;
+    rate_ = rate;
     const double fc = bwHz * 0.5;              // sub-carrier = half the SSB bandwidth
     // SIGNED: USB centres the upper sideband (mix down by +fc), LSB centres the
     // lower (mix down by -fc = up). Both mix stages must flip together or the
@@ -166,10 +178,36 @@ void SsbDemod::configure(Side side, double bwHz, double rate) {
     // so only sub-~80 Hz of the wrong sideband leaks (inaudible); the FIRs are
     // NEON-accelerated so the longer filter is cheap.
     const double cutoff = fc / rate;
-    const double trans  = std::max(cutoff * 0.06, 80.0 / rate);
-    std::vector<float> taps = designLowpass(cutoff, trans);
+    // ★★★ THE TRANSITION FIXES THE TAP COUNT, and the tap count is what retune() must preserve.
+    //     Designing it from the NARROWEST width in the band (designBwHz) instead of this one
+    //     means every width in the band produces the same length, so the corner can be moved in
+    //     place. Narrowest is also the safe direction: wider widths get a filter that is if
+    //     anything sharper than they needed, never sloppier — and the ~80 Hz floor that protects
+    //     the wrong sideband still applies.
+    const double designFc = (designBwHz > 0.0 ? designBwHz : bwHz) * 0.5;
+    trans_ = std::max((designFc / rate) * 0.06, 80.0 / rate);
+    std::vector<float> taps = designLowpass(cutoff, trans_);
     lpfI_ = std::make_unique<RealFir>(taps);
     lpfQ_ = std::make_unique<RealFir>(taps);
+}
+
+bool SsbDemod::retune(Side side, double bwHz) {
+    if (!lpfI_ || !lpfQ_ || rate_ <= 0.0 || trans_ <= 0.0) return false;
+    const double fc = bwHz * 0.5;
+    const double w  = (side == Side::LSB ? -1.0 : 1.0) * 2.0 * M_PI * fc / rate_;
+    // cur_ is deliberately NOT reset: the rotator carries its phase across the change, so the
+    // sub-carrier steps in frequency without a discontinuity in the mixed signal.
+    std::vector<float> taps = designLowpass(fc / rate_, trans_);
+    if (!lpfI_->retune(taps)) return false;
+    // ★ Both arms are checked, though they cannot realistically disagree: they are handed the
+    //   SAME taps and were built from the same design, so their K matches by construction. The
+    //   check is here because a half-applied Weaver pair would mismatch I and Q and collapse the
+    //   image rejection — a far worse failure than the rebuild being avoided — and that risk
+    //   should be refused explicitly rather than left resting on an invariant elsewhere.
+    if (!lpfQ_->retune(taps)) return false;
+    side_ = side;
+    rot_  = cf32((float)std::cos(w), (float)std::sin(w));
+    return true;
 }
 
 void SsbDemod::reset() {
@@ -209,6 +247,12 @@ RealFir::RealFir(std::vector<float> taps, int decim)
     : decim_(decim), phase_(decim), K_((int)taps.size()) {
     rtaps_.assign(taps.rbegin(), taps.rend());   // reversed for contiguous dot
     buf_.assign(K_ - 1, 0.0f);                     // K-1 sample history
+}
+
+bool RealFir::retune(const std::vector<float>& taps) {
+    if ((int)taps.size() != K_) return false;   // see FirDecimator::retune
+    rtaps_.assign(taps.rbegin(), taps.rend());
+    return true;
 }
 
 void RealFir::reset() {

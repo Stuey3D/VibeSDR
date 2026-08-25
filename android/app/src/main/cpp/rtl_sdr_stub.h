@@ -21,6 +21,14 @@ static inline int      rtlsdr_set_center_freq(rtlsdr_dev_t*, uint32_t) { return 
 static inline int      rtlsdr_set_freq_correction(rtlsdr_dev_t*, int)  { return 0; }
 static inline int      rtlsdr_set_tuner_gain_mode(rtlsdr_dev_t*, int)  { return 0; }
 static inline int      rtlsdr_set_tuner_gain(rtlsdr_dev_t*, int)       { return 0; }
+// ★★★ ADDED 2026-08-25, AND ITS ABSENCE HAD TEETH. The shim gained rtlsdr_set_tuner_bandwidth()
+//     calls without this stub gaining the declaration, so build_ios.sh had been FAILING — and
+//     because it fails without a non-zero exit (see mac_only_compile_is_not_a_build), the failure
+//     was silent and iOS simply kept linking the stale prebuilt .a. Every native DSP fix since
+//     then reached Android and the server and stopped at the iOS boundary.
+// ★ Keep this file in step with every rtlsdr_* the shim calls: iOS has no USB host SDR, so these
+//   exist purely so the shared shim COMPILES for it.
+static inline int      rtlsdr_set_tuner_bandwidth(rtlsdr_dev_t*, uint32_t) { return 0; }
 static inline int      rtlsdr_get_tuner_gains(rtlsdr_dev_t*, int*)     { return 0; }
 static inline int      rtlsdr_set_bias_tee(rtlsdr_dev_t*, int)         { return 0; }
 static inline int      rtlsdr_set_agc_mode(rtlsdr_dev_t*, int)         { return 0; }

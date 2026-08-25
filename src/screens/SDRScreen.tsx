@@ -5187,14 +5187,53 @@ export default function SDRScreen({ route, navigation }: Props) {
     }
   }, [route.params.serverType]);
 
-  // Atomic both-edges setter — single setBandwidth, no stale-closure edge
-  const onFilterBoth = useCallback((low: number, high: number) => {
-    client.current?.setBandwidth(low, high);
-    setStatus((prev: SDRStatus) => ({ ...prev, bandwidthLow: low, bandwidthHigh: high }));
+  // ── COALESCE THE FILTER SENDS ────────────────────────────────────────────────────────────
+  // ★★★ A DRAG IS NOT ONE EDIT, IT IS SIXTY A SECOND. Every tick used to be its own
+  //     setBandwidth on the wire, and on the server every width change rebuilt the whole audio
+  //     chain — cleared buffers and a redesigned filter cascade, on the DSP thread. That is the
+  //     AM dip and the waterfall freeze (2026-08-25): one stall per tick, for the whole drag.
+  // ★★ THE SERVER SIDE IS FIXED TOO (RxPipeline now retunes the channel filter in place rather
+  //    than rebuilding), and this is deliberately kept ANYWAY. They fix different halves: that
+  //    stops a width change being expensive, this stops us sending sixty of them a second. The
+  //    same pairing the zoom drum and the tune debounce already use.
+  // ★ THE LOCAL STATE IS NOT THROTTLED — only the send is. The slider must track the finger at
+  //   full rate or it feels broken; it is the network message that can wait 80 ms.
+  const bwPending = useRef<{ low: number; high: number } | null>(null);
+  const bwTimer   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bwLastAt  = useRef(0);
+
+  const flushBandwidth = useCallback(() => {
+    if (bwTimer.current) { clearTimeout(bwTimer.current); bwTimer.current = null; }
+    const p = bwPending.current;
+    bwPending.current = null;
+    if (p) { bwLastAt.current = Date.now(); client.current?.setBandwidth(p.low, p.high); }
   }, []);
 
-  const onFilterLow  = useCallback((v: number) => { client.current?.setBandwidth(v, status.bandwidthHigh); setStatus((prev: SDRStatus) => ({ ...prev, bandwidthLow: v })); }, [status.bandwidthHigh]);
-  const onFilterHigh = useCallback((v: number) => { client.current?.setBandwidth(status.bandwidthLow, v);  setStatus((prev: SDRStatus) => ({ ...prev, bandwidthHigh: v })); }, [status.bandwidthLow]);
+  // Leading edge fires at once so a single tap is never delayed; the rest of a drag coalesces
+  // and the TRAILING send guarantees the final width is the one the server ends up on.
+  const sendBandwidth = useCallback((low: number, high: number) => {
+    bwPending.current = { low, high };
+    const wait = 80 - (Date.now() - bwLastAt.current);
+    if (wait <= 0) { flushBandwidth(); return; }
+    if (!bwTimer.current) bwTimer.current = setTimeout(flushBandwidth, wait);
+  }, [flushBandwidth]);
+
+  // ★ FLUSH ON THE WAY OUT — the same trap the tune debounce documents above. Leaving the screen
+  //   mid-drag would otherwise strand the trailing send and leave the server on a width the UI is
+  //   no longer showing, which reads as "the filter control does nothing".
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s: string) => { if (s !== 'active') flushBandwidth(); });
+    return () => { sub.remove(); flushBandwidth(); };
+  }, [flushBandwidth]);
+
+  // Atomic both-edges setter — single setBandwidth, no stale-closure edge
+  const onFilterBoth = useCallback((low: number, high: number) => {
+    sendBandwidth(low, high);
+    setStatus((prev: SDRStatus) => ({ ...prev, bandwidthLow: low, bandwidthHigh: high }));
+  }, [sendBandwidth]);
+
+  const onFilterLow  = useCallback((v: number) => { sendBandwidth(v, status.bandwidthHigh); setStatus((prev: SDRStatus) => ({ ...prev, bandwidthLow: v })); }, [status.bandwidthHigh, sendBandwidth]);
+  const onFilterHigh = useCallback((v: number) => { sendBandwidth(status.bandwidthLow, v);  setStatus((prev: SDRStatus) => ({ ...prev, bandwidthHigh: v })); }, [status.bandwidthLow, sendBandwidth]);
 
   // ── Audio-WS commands (set_dsp / squelch / gate are AUDIO-WS message types;
   //    the spectrum WS doesn't know them — the old client.setNRMode/setDsp

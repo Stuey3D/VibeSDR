@@ -61,6 +61,48 @@ void RxPipeline::start(double sampleRate, int fftSize, double fftRate,
     rebuildAudio();
 }
 
+// ── The AM chain-width ladder ────────────────────────────────────────────────
+// ★★★ WHY A BAND AND NOT THE EXACT WIDTH. chFs_ is derived from the width (max(bw*3, 12000)), so
+//     letting the chain follow the width exactly means chDecim_ moves on most steps — and a new
+//     chDecim_ is a new cascade: redesigned, reallocated and cleared, on the DSP thread. Building
+//     for a BAND pins chFs_ across the whole range a listener drags through, so the only thing
+//     left to change is the final filter's cutoff, which can be swapped in place.
+// ★★ AND THE BENEFIT IS KEPT, WHICH IS THE WHOLE POINT. Pinning one channel rate across all of AM
+//    would have been simpler and would have thrown away the reason the rate is derived at all: a
+//    narrow AM channel is cheap, and the low rate IS the saving (see the pi-bench figures above).
+//    A ladder keeps a narrow signal on a narrow chain — it only stops the rate twitching per step.
+// ★ Edges, not centres: the chain is built for the TOP of the band so the filter can always
+//   narrow to the user's exact width, never widen past what the chain physically carries.
+static bool pickBand(const double* e, int n, double bwHz, double& lo, double& hi) {
+    // Outside the ladder there is no band to hold on to, so the caller keeps the old exact
+    // behaviour — a rebuild per step. Those are widths nobody drags through.
+    if (bwHz < e[0] || bwHz > e[n - 1]) return false;
+    for (int i = 1; i < n; ++i)
+        if (bwHz <= e[i]) { lo = e[i - 1]; hi = e[i]; return true; }
+    return false;
+}
+
+// ★ Per mode, because the widths a listener actually drags through are nothing like each other:
+//   SSB lives in hundreds of Hz, AM in single-digit kHz, NFM in tens. One shared ladder would
+//   put the whole of SSB inside a single band (no selectivity control left) or split AM so
+//   finely that every step crossed an edge and rebuilt anyway.
+static bool chainBand(RxPipeline::Mode mode, double bwHz, double& lo, double& hi) {
+    using M = RxPipeline::Mode;
+    switch (mode) {
+        case M::AM:  { static const double e[] = { 1000.0, 6000.0, 12000.0, 24000.0 };
+                       return pickBand(e, 4, bwHz, lo, hi); }
+        case M::NFM: { static const double e[] = { 4000.0, 8000.0, 16000.0, 32000.0 };
+                       return pickBand(e, 4, bwHz, lo, hi); }
+        case M::SSB_USB: case M::SSB_LSB: case M::CW:
+                     { static const double e[] = { 200.0, 1500.0, 3000.0, 6000.0 };
+                       return pickBand(e, 4, bwHz, lo, hi); }
+        // ★★★ WFM IS NOT ON THIS PATH AND MUST NOT BE. Its width changes go to AdaptiveIf, which
+        //     already changes its corner without touching the chain — and its chain carries the
+        //     MPX, the pilot PLL and RDS, none of which survive being rebuilt casually.
+        default: return false;
+    }
+}
+
 void RxPipeline::setTune(double offsetHz, Mode mode, double bwHz) {
     // ★★★ A RETUNE INSIDE THE SAME MODE AND BANDWIDTH MOVES ONE THING: THE NCO.
     // Everything rebuildAudio() does is a function of mode/bw/sampleRate — filter
@@ -79,11 +121,52 @@ void RxPipeline::setTune(double offsetHz, Mode mode, double bwHz) {
     // ★ A REQUEST, not a retune: this is called from a socket/control thread and the
     // NCO is owned by the DSP thread. Same discipline as `dirty_` and `resetReq_`.
     const bool sameChain = (mode == mode_ && bwHz == bwHz_);
+    // ★★★ A WIDTH CHANGE IS NOT A NEW CHAIN, and treating it as one is the dip. When the chain was
+    //     built for a band that still contains the new width, the selectivity filter can simply be
+    //     retuned — so this is a request to the DSP thread, exactly like tuneReq_, not a teardown.
+    //     The NCO still has to move, so tuneReq_ is set alongside it rather than instead of it.
+    // ★ Reads smoothBw_/chainBw*, which the DSP thread owns. Same discipline (and same accepted
+    //   race) as the mode_/bwHz_ reads on the line above: the worst case is a needless rebuild or
+    //   a refused retune, and applySmoothBandwidth() re-checks the band before it acts.
+    const bool sameBand = !sameChain && mode == mode_ && smoothBw_ &&
+                          bwHz >= chainBwLo_ && bwHz <= chainBwHi_;
     offsetHz_ = offsetHz;
     mode_     = mode;
     bwHz_     = bwHz;
-    if (sameChain) tuneReq_.store(true, std::memory_order_relaxed);
-    else           dirty_ = true;
+    if (sameChain)     tuneReq_.store(true, std::memory_order_relaxed);
+    else if (sameBand) { bwReq_.store(true, std::memory_order_relaxed);
+                         tuneReq_.store(true, std::memory_order_relaxed); }
+    else               dirty_ = true;
+}
+
+bool RxPipeline::applySmoothBandwidth() {
+    // Re-checked on the DSP thread: setTune's test read state this thread owns, and the band may
+    // have moved under it between the request and this block.
+    if (!smoothBw_ || decs_.empty() || lastFs_ <= 0.0) return false;
+    if (bwHz_ < chainBwLo_ || bwHz_ > chainBwHi_)       return false;
+    const bool ssbLike = (mode_ == Mode::SSB_USB || mode_ == Mode::SSB_LSB || mode_ == Mode::CW);
+    const double chHalf = std::max(1.0, ssbLike ? bwHz_ : bwHz_ * 0.5);
+    const double cutoff = std::min(0.45 / lastDecim_, chHalf / lastFs_);
+    // Same transition the chain was built with, so the design comes out the same length and the
+    // swap is accepted; deepStop matches the last stage — this IS the adjacent-channel rejection.
+    if (!decs_.back()->retune(designLowpass(cutoff, lastTrans_, /*deepStop=*/true))) return false;
+
+    // ★★★ THE CHANNEL FILTER IS NOT THE WHOLE WIDTH. Each mode has its own thing derived from
+    //     bwHz_, and leaving it stale is worse than the rebuild: SSB's Weaver sub-carrier sits at
+    //     bw/2, so a stale one puts the sideband in the wrong place and the image comes back;
+    //     NFM's discriminator gain scales the audio, so a stale one is a level error. If either
+    //     refuses, say so and let the caller rebuild — the channel filter above has already
+    //     moved, and a rebuild is what puts the whole chain back in agreement.
+    if (ssbLike) {
+        if (!ssb_) return false;
+        return ssb_->retune(mode_ == Mode::SSB_LSB ? SsbDemod::Side::LSB : SsbDemod::Side::USB,
+                            bwHz_);
+    }
+    if (mode_ == Mode::NFM) {
+        if (!fm_) return false;
+        fm_->setGain((float)(chFs_ / (2.0 * M_PI * std::max(1.0, bwHz_ * 0.5))));
+    }
+    return true;
 }
 
 void RxPipeline::rebuildAudio() {
@@ -114,7 +197,14 @@ void RxPipeline::rebuildAudio() {
     //
     // 12 kHz floor: enough for the widest narrow mode's audio plus filter transition
     // room, and enough for CW's beat note. 3x bandwidth keeps AM/NFM comfortable.
-    double targetCh = std::max(bwHz_ * 3.0, 12000.0);
+    // ★★★ THE CHAIN IS BUILT FOR A BAND so a width change inside it costs nothing — see
+    //     chainBand(). AM, SSB/CW and NFM all take this path; each has its own follow-up work
+    //     inside applySmoothBandwidth() (SSB's Weaver pair, NFM's demod gain), and WFM is
+    //     excluded because AdaptiveIf already does this job better for it.
+    smoothBw_ = chainBand(mode_, bwHz_, chainBwLo_, chainBwHi_);
+    if (!smoothBw_) { chainBwLo_ = chainBwHi_ = 0.0; }
+    const double chainBw = smoothBw_ ? chainBwHi_ : bwHz_;
+    double targetCh = std::max(chainBw * 3.0, 12000.0);
     // WFM is the exception: its MPX runs to 57 kHz (RDS) + sidebands, so it needs a
     // real channel regardless of the RF bandwidth the user picked.
     // ★★★ FM-DX NO LONGER WIDENS THE CHANNEL — the premise was wrong, and measurement killed
@@ -213,6 +303,21 @@ void RxPipeline::rebuildAudio() {
             // The real channel filter: defines selectivity. Cheap here because fs is low.
             cutoff = std::min(0.45 / D, chHalf / fs);
             trans  = std::max(cutoff * 0.5, transHz / fs);
+            if (smoothBw_) {
+                // ★★★ FIX THE TRANSITION ACROSS THE BAND, BECAUSE THE TAP COUNT IS THE CONTRACT.
+                //     designLowpass takes its length from the transition alone (3.3 or 5.5 over
+                //     it), so a transition that tracks the cutoff gives a different length at
+                //     every width — and a different length cannot be swapped into a running
+                //     filter. Designing for the NARROWEST width in the band fixes the length and
+                //     is the safe direction: every wider width in the band then gets a filter
+                //     that is, if anything, sharper than it strictly needed.
+                // The band bottom expressed the SAME way chHalf is — full width for SSB/CW,
+                // half for AM/FM — or the length would be designed for the wrong filter.
+                const double chHalfLo = ssbLike ? chainBwLo_ : chainBwLo_ * 0.5;
+                trans = (chHalfLo * 0.5) / fs;
+            }
+            // Remembered so applySmoothBandwidth() can redesign against exactly this geometry.
+            lastFs_ = fs; lastDecim_ = D; lastTrans_ = std::max(trans, 1e-3);
         } else {
             // Anti-alias only: protect the final channel from what folds at fsOut.
             // Everything between chHalf and (fsOut - chHalf) is allowed to be ugly —
@@ -260,7 +365,7 @@ void RxPipeline::rebuildAudio() {
         case Mode::CW:
             ssb_ = std::make_unique<SsbDemod>();
             ssb_->configure(mode_ == Mode::SSB_LSB ? SsbDemod::Side::LSB : SsbDemod::Side::USB,
-                            bwHz_, chFs_);
+                            bwHz_, chFs_, smoothBw_ ? chainBwLo_ : 0.0);
             useAgc_ = true; agc_.configure(chFs_);
             if (!hadAgc) agc_.reset();
             agc_.guard(); break;
@@ -407,10 +512,25 @@ void RxPipeline::feed(const cf32* iq, int n) {
         rdsDemod_.reset();
         pll_.resyncBitClock();
     }
-    if (dirty_) rebuildAudio();          // rebuildAudio() re-points the NCO itself
+    bool rebuilt = false;
+    if (dirty_) {
+        rebuildAudio();                  // rebuildAudio() re-points the NCO itself
+        rebuilt = true;
+        // The rebuild designed for the exact current width, so a queued smooth request is
+        // already satisfied; leaving it set would retune on the next block for nothing.
+        bwReq_.store(false, std::memory_order_relaxed);
+    }
+    // ★ A width change the chain was built to absorb: swap the selectivity filter's taps and
+    //   leave everything else running — no cleared buffers, so no gap in the audio and no stalled
+    //   spectrum frame. If the chain cannot take it after all, fall back to the honest rebuild
+    //   rather than run a block on a filter that no longer matches the requested width.
+    else if (bwReq_.exchange(false, std::memory_order_relaxed) && !applySmoothBandwidth()) {
+        rebuildAudio();
+        rebuilt = true;
+    }
     // A same-chain retune: nothing to rebuild, just move the oscillator. Skipped when a
     // rebuild already ran this block, since that has applied the newer offset anyway.
-    else if (tuneReq_.exchange(false, std::memory_order_relaxed)) {
+    if (!rebuilt && tuneReq_.exchange(false, std::memory_order_relaxed)) {
         nco_.setFreq(offsetHz_ / sampleRate_);
         // ★★★ AND RE-ACQUIRE THE PILOT, BECAUSE THIS IS A DIFFERENT STATION. Moving the NCO puts a
         //     step through the whole chain, and the pilot PLL is second-order with a deliberately

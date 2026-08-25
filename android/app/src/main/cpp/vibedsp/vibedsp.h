@@ -220,6 +220,17 @@ public:
     int decim() const { return decim_; }
     int maxOut(int n) const { return n / decim_ + 1; }
     void reset();
+    /** ★★★ MOVE THE CORNER WITHOUT LOSING THE HISTORY. Replacing a FirDecimator to change its
+     *  cutoff throws buf_ away, and a filter that restarts from zeros emits its own startup
+     *  transient — a CLICK in an audio path, and a bogus reading in a measurement one (see
+     *  AdaptiveIf::setBandwidth, where exactly that made the narrowing decision chatter).
+     *  Swapping only the coefficients keeps the delay line AND the decimation phase, so the
+     *  output stays continuous across the change and nothing downstream desynchronises.
+     *  ★★ SAME LENGTH ONLY. buf_ is sized against K-1 and phase_ counts against decim_, so a
+     *  different tap count is a different filter, not a retune. Returns false and changes
+     *  NOTHING in that case — a caller that cannot guarantee the length must handle the
+     *  refusal rather than assume it worked. */
+    bool retune(const std::vector<float>& taps);
 private:
     // Block-contiguous convolution: buf_ holds the K-1 history followed by the
     // current block, so each output is a forward dot product over contiguous
@@ -901,6 +912,9 @@ public:
     int process(const float* in, int n, float* out);  // returns #outputs
     int maxOut(int n) const { return n / decim_ + 1; }
     void reset();
+    /** Swap the coefficients, keep the history — see FirDecimator::retune for why that matters
+     *  and why a different tap count is refused rather than accommodated. */
+    bool retune(const std::vector<float>& taps);
 private:
     // Same block-contiguous + NEON scheme as FirDecimator, real samples.
     std::vector<float> rtaps_;   // reversed taps
@@ -1038,11 +1052,21 @@ private:
 class SsbDemod {
 public:
     enum class Side { USB, LSB };
-    void configure(Side side, double bwHz, double rate);
+    /** @param designBwHz when >0, the width the Weaver filters' LENGTH is designed for, so that
+     *  retune() can move the corner in place across a whole band. Pass the NARROWEST width in
+     *  that band; 0 means "design for bwHz" (the old exact behaviour). */
+    void configure(Side side, double bwHz, double rate, double designBwHz = 0.0);
+    /** ★★★ CHANGE THE WIDTH WITHOUT REBUILDING. Weaver is the expensive mode to rebuild — two
+     *  ~2000-tap FIRs designed on the DSP thread — so a width change here was the worst stall of
+     *  the three. Moves the sub-carrier and redesigns the two filters in place; the rotator keeps
+     *  cur_, so its PHASE is continuous across the change and only its frequency steps.
+     *  False = the design came out a different length; the caller must rebuild. */
+    bool retune(Side side, double bwHz);
     void process(const cf32* in, float* out, int n);
     void reset();
 private:
     Side side_ = Side::USB;
+    double rate_ = 0.0, trans_ = 0.0;   // remembered so retune() can hold the tap count
     // Fixed-frequency bw/2 mix via a recursive rotator (no per-sample trig).
     cf32 rot_ = cf32(1.0f, 0.0f), cur_ = cf32(1.0f, 0.0f);
     int  sinceNorm_ = 0;
@@ -1931,6 +1955,10 @@ public:
 
 private:
     void rebuildAudio();
+    /** Apply bwHz_ by retuning the final (selectivity) filter in place — no rebuild, no
+     *  reallocation, no cleared buffers. False means the chain cannot absorb this width and
+     *  the caller must fall back to rebuildAudio(). */
+    bool applySmoothBandwidth();
     // config
     double sampleRate_ = 0.0, fftRate_ = 20.0, offsetHz_ = 0.0, bwHz_ = 10000.0;
     int fftSize_ = 1024, outRate_ = 48000;
@@ -2132,6 +2160,26 @@ private:
     std::atomic<bool> resetReq_{false};      // see requestReset()
     std::atomic<bool> rdsResyncReq_{false};  // see requestRdsResync()
     std::atomic<bool> tuneReq_{false};       // same-chain retune: move the NCO, rebuild nothing
+    // ── Smooth AM width ────────────────────────────────────────────────────────────────────
+    // ★★★ A WIDTH CHANGE USED TO COST A FULL REBUILD, IN EVERY MODE. setTune()'s sameChain test
+    //     is (mode && bw), so moving the IF filter tore the chain down: buffers cleared, cascade
+    //     redesigned and reallocated ON THE DSP THREAD. Audible in AM as a dip, and visible on
+    //     every client as a waterfall freeze, because the spectrum comes off the same block loop
+    //     — one stall, two symptoms, and the audio one is hidden wherever a jitter buffer is deep
+    //     enough to cover it. WFM never showed it only because it routes width changes to
+    //     AdaptiveIf instead (vibedsp.h:452 says exactly why).
+    // ★★ SO THE CHAIN IS BUILT FOR A BAND, NOT FOR THE EXACT WIDTH, and the exact width is set by
+    //    retuning the final filter's coefficients in place. Within a band nothing is rebuilt,
+    //    reallocated or cleared, so there is no stall to hear or see.
+    // ★ AM ONLY, and deliberately. AM's width touches just the channel rate and the final cutoff.
+    //   SSB also rebuilds its Weaver filters from bwHz_ and NFM its demod gain, so neither can
+    //   take this path without more work — see applySmoothBandwidth().
+    std::atomic<bool> bwReq_{false};         // control thread asked for an absorbable width
+    double chainBwLo_ = 0.0, chainBwHi_ = 0.0;   // the band the chain was BUILT for
+    double lastTrans_ = 0.0;                 // normalised transition of the selectivity filter
+    double lastFs_    = 0.0;                 // the rate that filter runs at
+    int    lastDecim_ = 1;                   // and its decimation factor
+    bool   smoothBw_  = false;               // chain can absorb width changes in place
     std::atomic<double> deempTau_{50e-6};    // FM de-emphasis tau (0=off / 50us / 75us)
     // WFM RDS
     RdsDemod rdsDemod_;
