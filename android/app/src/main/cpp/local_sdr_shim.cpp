@@ -15705,7 +15705,27 @@ void LocalSdrShim::autoBandwidthTick() {
     //   carries this with it instead of meeting a hard-coded 200 kHz.
     const double full  = std::max(120000.0, paramsFor("wfm").bandwidth);
     const double floorB = 134000.0;
-    const double snr   = p->rx.blendSnrDb();
+    /* ★★★ SMOOTH THE DECISION VARIABLE, BECAUSE THE MAP MAGNIFIES ITS NOISE. This controller
+     *     spreads 66 kHz of width across 17 dB of S/N — about 3.9 kHz PER dB — so a reading that
+     *     wobbles 4 dB between ticks demands 15 kHz of filter change from measurement noise alone,
+     *     and no deadband below ~4 dB's worth can absorb it. Stuart's Airspy sat at 20.6↔24.2 dB
+     *     and redesigned the filter every two seconds, all day (2026-08-25).
+     *  ★★ THE DEADBAND WAS NOT THE THING THAT WAS MISSING, and reaching for a bigger one first was
+     *     my mistake: widening it enough to cover 4 dB of noise would also refuse the genuine
+     *     15 kHz moves this control exists to make. Filter the INPUT and the deadband can stay
+     *     small enough to stay responsive — smooth what is noisy, do not desensitise what is not.
+     *  ★ A jump over 6 dB is a new situation, not noise (a retune, a fade lifting), so it is
+     *    adopted whole rather than crawled towards: this must not lag a station that really has
+     *    changed. Otherwise ~0.3 per 2 s tick settles in about 6 s.
+     *  ★ Weak stations are UNAFFECTED by all of this: the floor is 134 kHz and the slope below
+     *    ~24 dB is untouched, so the narrowing that makes a weak station listenable still happens
+     *    exactly as before — it simply stops flickering once the station is healthy. */
+    static double s_snrEma = 0.0;
+    static bool   s_snrEmaOn = false;
+    const double snrRaw = p->rx.blendSnrDb();
+    if (!s_snrEmaOn || std::fabs(snrRaw - s_snrEma) > 6.0) { s_snrEma = snrRaw; s_snrEmaOn = true; }
+    else                                                    s_snrEma += 0.30 * (snrRaw - s_snrEma);
+    const double snr   = s_snrEma;
     // ★ 8 dB and below is "very weak" (Stuart's 97.2 Smooth); 25 dB and above is a station in good
     //   health. Between them, straight-line — the TEF's own numbers sit on this line.
     const double t = std::max(0.0, std::min(1.0, (snr - 8.0) / (25.0 - 8.0)));
@@ -15714,7 +15734,33 @@ void LocalSdrShim::autoBandwidthTick() {
     //    own width and nothing else in the path; leaving a 200 kHz FIR running on a 200 kHz signal
     //    costs CPU and a little group delay to accomplish nothing. AdaptiveIf bypasses at
     //    rate*0.8, which at a 300 kHz channel is 240 kHz — too high to catch this, so say it here.
-    if (want >= full - 4000.0) want = 0.0;
+    /* ★★★ THE ADJACENT-CHANNEL ARM, STEERED BY THE MEASURED BENEFIT — NOT BY S/N. Narrowing to
+     *     110 kHz was measured (see the policy note in pipeline.cpp) at: alone and clean -9.8 dB,
+     *     alone and hissy -1.0 dB, weak neighbour -1.1 dB, STRONG neighbour +10.7 dB. So it is
+     *     worthless against noise and worth ten decibels against an adjacent CHANNEL — which is
+     *     why it must never hang off MPX S/N, the quantity this whole function is steered by.
+     *     That note says so in as many words: steering it from S/N "would have narrowed on exactly
+     *     the signals it cannot help".
+     *  ★★★ AND IT WENT MISSING TODAY. This was old IMS's one real job, and when IMS moved to
+     *      blending L-R nothing inherited it — `ifGainDb()` was left measured, exposed to the
+     *      readout, and consumed by NOTHING, so the shadow filter kept paying CPU to answer a
+     *      question we had stopped asking. Stuart found it from the outside, again: "the old
+     *      narrowing to 110K would that still be good to keep" (2026-08-25).
+     *  ★★ ifGainDb_ IS the cut proving it works — narrow pilot S/N minus wide, a 0.05 EMA that
+     *     needs ~5 s to mean anything. That is the same standard the AGC is held to, and it is why
+     *     this cannot misfire on a weak or a clean station: there the measurement is NEGATIVE.
+     *  ★ Schmitt, not a threshold: engage over +3 dB, release under +1 dB. The pipeline's own note
+     *    asks for "the SAME margin in both directions so it cannot sit on the boundary chattering"
+     *    — and switching this filter is audible, so a late move beats a wrong one.
+     *  ★ Deliberately BELOW floorB: 110 kHz cuts the 57 kHz RDS subcarrier and the top of the
+     *    stereo subcarrier, which is a real price. It is only ever paid when the measurement says
+     *    the neighbour is costing more. */
+    static bool s_adjNarrow = false;
+    const double ifGain = (double)p->rx.ifGainDb();
+    if      (!s_adjNarrow && ifGain >  3.0) s_adjNarrow = true;
+    else if ( s_adjNarrow && ifGain <  1.0) s_adjNarrow = false;
+    if (s_adjNarrow)                     want = 110000.0;
+    else if (want >= full - 4000.0)      want = 0.0;
     g_autoBwNowHz.store(want > 0.0 ? want : full, std::memory_order_relaxed);
     // ★ Hysteresis against the width ACTUALLY APPLIED, not against the mode's bandwidth (which no
     //   longer moves — that was the bug). Each real change designs a filter and allocates on the
@@ -15725,7 +15771,24 @@ void LocalSdrShim::autoBandwidthTick() {
     //     holding the filter the applied width never matched what auto bandwidth had asked for,
     //     and every tick re-issued the same request for ever ('was 0 kHz' on every line).
     const double cur = p->rx.autoBandwidth();
-    if (std::fabs(want - cur) < 8000.0) return;
+    /* ★★★ COMPARE THE WIDTHS THE TWO STATES ACTUALLY MEAN, NOT THE SENTINEL. `0` here is not a
+     *     width, it is the word "wide" — and just above, a `want` within 4 kHz of `full` is
+     *     collapsed to it. So at the top of the range the request alternates between ~191 kHz and
+     *     0, two states that are FIVE kHz apart, while this test saw 191000 against 0 and let
+     *     every flip through. The result was a filter redesigned every two seconds for ever:
+     *     "MPX S/N 20.6 dB -> 183 kHz (was 0)" then "24.2 dB -> 0 kHz (was 183)", all day, on a
+     *     station whose S/N was simply wobbling across the collapse threshold (Stuart's Airspy,
+     *     2026-08-25).
+     *  ★★ THE HYSTERESIS WAS NEVER ABSENT — IT WAS UNREACHABLE. Widening the band would not have
+     *     helped: no threshold on that subtraction can separate a real 190→0 move from a
+     *     5 kHz one, because the quantity being subtracted is not a length. This is the same
+     *     mistake the ★★★ note directly above records ("its own request, not the applied width")
+     *     one layer further in — twice now, the comparison has been made against the wrong thing.
+     *  ★ Resolve the sentinel FIRST, then the existing 8 kHz step means what it says, and the
+     *    collapse to wide costs nothing because it is only ever taken when it is a small move. */
+    const double wantEff = want > 0.0 ? want : full;
+    const double curEff  = cur  > 0.0 ? cur  : full;
+    if (std::fabs(wantEff - curEff) < 8000.0) return;
     LOGI("auto bandwidth: MPX S/N %.1f dB -> %.0f kHz (was %.0f kHz; 0 = wide)",
          snr, want / 1e3, cur / 1e3);
     p->rx.setAutoBandwidth(want);

@@ -920,7 +920,10 @@ struct HardwareSheet: View {
 
         // ══ BROADCAST FM — the four weak-signal treatments ═══════════════════
         // ★★★ FOUR FAULTS, FOUR SWITCHES, and they are NOT interchangeable: NR answers continuous
-        //     NOISE, IMS a strong NEIGHBOUR, CEQ a REFLECTION, NB IMPULSES. Measured on the server
+        //     NOISE, IMS a REFLECTION too weak for CEQ, CEQ a REFLECTION, NB IMPULSES.
+        // ★★ IMS STOPPED BEING THE NEIGHBOUR CONTROL on 2026-08-25: it blends L-R by measured
+        //    multipath depth now, and the IF narrowing it used to do belongs to auto bandwidth's
+        //    adjacent-channel arm. The dB figures below describe THAT arm, not this switch. Measured on the server
         //     they want OPPOSITE actions — narrowing the IF costs up to 10 dB against noise and
         //     gains 10 dB against a close neighbour — so one combined control would be wrong as
         //     well as unhelpful.

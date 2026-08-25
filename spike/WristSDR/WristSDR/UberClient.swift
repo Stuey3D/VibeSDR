@@ -289,8 +289,9 @@ final class UberClient: ObservableObject {
   @Published var sampleRate = 0                // current capture rate (= spectrum span)
   @Published var deemph = 50                   // FM de-emphasis µs (50 EU / 75 Americas / 0 off)
   // ★★★ THE BROADCAST-FM TREATMENTS (VibeServer 3.1). FOUR FAULTS, FOUR SWITCHES, and they are not
-  //     interchangeable: NR answers continuous NOISE, IMS a strong NEIGHBOUR, CEQ a REFLECTION, NB
-  //     IMPULSES. Measured on the server they want OPPOSITE actions — narrowing the IF costs up to
+  //     interchangeable: NR answers continuous NOISE, IMS a REFLECTION too weak for CEQ, CEQ a REFLECTION,
+  //     NB IMPULSES. (IMS blends L-R by measured multipath depth as of 2026-08-25; the IF
+  //     narrowing it once did is auto bandwidth's adjacent-channel arm, and the dB below is its.) Measured on the server they want OPPOSITE actions — narrowing the IF costs up to
   //     10 dB against noise and gains 10 dB against a close neighbour — so one combined control
   //     would be actively wrong.
   // ★★ Default TRUE, matching the server: each only acts when its own measurements say it will
