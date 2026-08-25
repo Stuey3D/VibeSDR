@@ -353,6 +353,14 @@
   .dNum.free, .dTick.free, .dTickMaj.free { fill: var(--free); stroke: var(--free); }
   .dNum.busy, .dTick.busy, .dTickMaj.busy { fill: var(--busy); stroke: var(--busy); }
   .dNum.temp, .dTick.temp, .dTickMaj.temp { fill: var(--temp); stroke: var(--temp); }
+  /* ★★★ AND THE NUMERALS ARE NOT STROKED — THIS IS THE "BLUR", FOUND AT THE THIRD ATTEMPT.
+       The rules above exist for the TICKS, which are lines and need a stroke. The numerals share
+       the selector and were getting a stroke too — an 11.5px glyph both filled AND outlined in the
+       same colour is a fattened, smeared letter. It is why only the COLOURED figures looked wrong
+       while the plain ones stayed crisp, which is the detail that finally gave it away: I twice
+       assumed overlap and adjusted spacing, and the spacing was never the problem.
+     ★ Last, so it wins over the three rules above whatever order they are in. */
+  .dNum, .dNum.free, .dNum.busy, .dNum.temp, .dNum.unknown, .dNum.none { stroke: none; }
   /* ★ COVERED BUT UNSAID — dim, never green. A server that cannot report occupancy has promised
        nothing, and inventing a verdict is the one thing this dial must not do. */
   .dNum.unknown, .dTick.unknown, .dTickMaj.unknown { fill: var(--dim); stroke: var(--dim); }
@@ -695,11 +703,16 @@ function radioLine(r, s) {
              : solo && Number.isFinite(Number(s.listeners)) ? Number(s.listeners) : null;
   const freeIn = Number.isFinite(Number(r.freeInSec)) ? Number(r.freeInSec)
                : solo ? Number(s.freeInSec) : -1;
-  const isFull = said !== null && max > 0 && said >= max;
+  const claimable = r.claimable === true || (solo && s && s.claimable === true);
+  // ★ Occupied, but the current listener is past their guaranteed time — a newcomer displaces
+  //   them. Said plainly rather than as "FREE": it IS available, and the reader should know they
+  //   are taking a turn rather than finding an idle radio.
+  const isFull = said !== null && max > 0 && said >= max && !claimable;
   // ★ ONE LISTENER AT A TIME READS "FREE", not "0 of 1" — the landing page's own wording.
   const stateTxt = s && s.unreachable ? 'NOT RESPONDING'
                  : said === null ? ''
                  : isFull ? (freeIn > 0 ? `FULL · FREE IN ${mmss(freeIn)}` : 'FULL')
+                 : claimable && said >= max ? 'FREE · TAKE OVER'
                  : max <= 1 ? 'FREE'
                  : `${said} OF ${max} LISTENING`;
 
@@ -993,7 +1006,10 @@ function radioFree(r, s) {
              : solo && Number.isFinite(Number(s.listeners)) ? Number(s.listeners) : null;
   const max = Number(r.maxListeners) || (solo ? Number(s.maxListeners) : 0) || 0;
   if (said === null || max <= 0) return null;
-  return said < max;
+  // ★ Occupied but CLAIMABLE is available to the person reading this — see the note where it is
+  //   captured. Green on the dial for the same reason the landing page says FREE.
+  const claim = r.claimable === true || (solo && s && s.claimable === true);
+  return said < max || claim;
 }
 
 /** Every tunable stretch in the network, with who is on it. */
@@ -2112,6 +2128,7 @@ async function withLiveCounts(servers) {
       if (Number.isFinite(j.listeners)) s.listeners = Number(j.listeners);
       if (Number.isFinite(j.maxUsers)) s.maxListeners = Number(j.maxUsers);
       if (Number.isFinite(j.freeInSec)) s.freeInSec = Number(j.freeInSec);
+      if (typeof j.claimable === "boolean") s.claimable = j.claimable;
       s.live = true;
 
       // ★★★ AND EACH RADIO SEPARATELY ON A MULTI-RADIO SERVER, because the answer above is the
@@ -2143,6 +2160,14 @@ async function withLiveCounts(servers) {
             if (Number.isFinite(rj.listeners))  rad.listeners = Number(rj.listeners);
             if (Number.isFinite(rj.maxUsers))   rad.maxListeners = Number(rj.maxUsers);
             if (Number.isFinite(rj.freeInSec))  rad.freeInSec = Number(rj.freeInSec);
+            // ★★★ CLAIMABLE IS NOT THE SAME QUESTION AS FREE, and the directory was only asking
+            //     the second one. On a SOFT limit an occupied receiver is still available: the
+            //     listener's guaranteed time has run out, so a newcomer takes it. The server has
+            //     always published this — the landing page reads it and says FREE — while the
+            //     directory said FULL about the very same radio (Stuart: "I am connected but I am
+            //     soft limit and a new user can connect and displace me but the website doesnt
+            //     show that"). A wrong FULL turns people away from a radio they could have had.
+            if (typeof rj.claimable === 'boolean') rad.claimable = rj.claimable;
           } catch { /* ★ keep the listing's figure — one slow radio is not news about the rest */ }
         }));
       }
