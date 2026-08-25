@@ -7278,6 +7278,30 @@ struct LocalSdrShim::Impl {
                         rtlCenter.store(dongle);
                         tuneHw(dongle);
                         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+                        /* ★★★ AND ASK FOR THE STEREO REPORT BACK — retune() has done this for a
+                         *     year and THIS PATH NEVER DID, though it moves the radio just as
+                         *     physically. Two ways to retune, one of them mute about it.
+                         *  ★★★ WHY IT MATTERS HERE ESPECIALLY: this is the path a SWEEP takes. The
+                         *      audio tune goes out per step (natively, per event) while the view
+                         *      re-centre is COALESCED, so on a sweep the hardware move lands LAST,
+                         *      after retune() has already done its clear-and-re-ask. The stereo
+                         *      report is edge-triggered, so if the pilot does not happen to
+                         *      produce an edge across that move, nothing refills what was cleared
+                         *      and the listener sits in mono on a plainly stereo station — until a
+                         *      single fresh tune fixes it. Stuart: "its when i sweep tune to it
+                         *      that causes the lock to not establish until after i tune away and
+                         *      back, maybe sweep tuning is causing something not to fire."
+                         *  ★★ NOT reproduced — he could not make it happen again while I was
+                         *     looking, and the live probe in pipeline.cpp is still there to catch
+                         *     it. But this asymmetry is real and wrong on its own terms: it is
+                         *     exactly "whoever clears a state must be able to re-ask", which this
+                         *     codebase has now learned three times.
+                         *  ★ A REPORT, NOT A RESET — it costs one message and cannot make anything
+                         *    worse. Deliberately NOT requestRdsResync(): that DROPS the decoder's
+                         *    learned timing, and the station has not changed here (only the
+                         *    capture centre moved), so throwing it away on every pan would cost
+                         *    RDS on exactly the weak signals that need it most. */
+                        rx.requestStereoReport();
                     } else {
                         pendingDongle = dongle;   // the newest request wins; applied shortly
                     }
