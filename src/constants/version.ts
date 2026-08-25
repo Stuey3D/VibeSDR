@@ -23,6 +23,20 @@
 //     "VibeSDR/10.0.2" by a 10.2 app. Seen in the owner's own connection log on 2026-08-14, which
 //     is exactly how the last one was caught. A version string that lies misroutes the next
 //     investigation: the dump names a SHIPPING build for a bug that is in the one under test.
+// ★★★ FOUR PLACES, NOT THREE — AND THE FOURTH IS THE ONE THAT DRIFTED THIS TIME. The 10.5 release
+//     commit set out to fix this for good and said so in its own message: "VERSIONS, ALL THREE
+//     PLACES THAT HAVE DRIFTED BEFORE: app.json, src/constants/version and android/app/build.gradle".
+//     It listed three and there are four. ios/VibeSDR.xcodeproj's MARKETING_VERSION stayed at 10.4,
+//     so the next iOS build would have announced 10.4 while the same release on Android announced
+//     10.5 — the exact fault the paragraphs above are about, in the one place the checklist did not
+//     name. Stuart caught it by simply remembering the number: "I thought we were on 10.4".
+//  ★★ THE LIST, IN FULL. Bump ALL of these together:
+//       1. app.json                          expo.version
+//       2. src/constants/version.ts          APP_VERSION (this line)
+//       3. android/app/build.gradle          versionName (and versionCode)
+//       4. ios/VibeSDR.xcodeproj             MARKETING_VERSION x4 — the app AND the embedded
+//                                            Buddy watch app, which Apple requires to match
+//  ★ NOT spike/WristSDR: Jr is a SEPARATE APP on its own version train (1.4) and must not follow.
 export const APP_VERSION = '10.5';
 
 /**
