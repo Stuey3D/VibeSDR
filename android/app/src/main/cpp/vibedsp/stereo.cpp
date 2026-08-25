@@ -51,6 +51,38 @@ void StereoPLL::advance(float mpx) {
     // pilot, so the error is mpx * (-sin) averaged.
     const double err = (double)mpx * (double)(-s);
     df_ += beta_ * err;
+    /* ★★★ BOUND THE FREQUENCY INTEGRATOR — CORRECT ON ITS OWN TERMS, AND AN UNPROVEN FIX FOR THE
+     *     BUG THAT PROMPTED IT. Say both plainly, because half of this comment is evidence and
+     *     half is a hypothesis and the next reader must be able to tell which.
+     *  ★★★ WHAT IS CERTAIN: an unbounded frequency integrator in a PLL is a latent fault by
+     *      construction. df_ accumulates beta_*err every sample with nothing stopping it, so any
+     *      sustained bias — noise on a weak signal, a transient through the demodulator — walks it
+     *      away, and past the loop's pull-in range the 19 kHz pilot is simply unreachable. A real
+     *      pilot never needs more than a few tens of Hz (both crystals are specified far tighter),
+     *      so bounding it can only prevent a state that was never legitimate.
+     *  ★★ WHAT IS NOT PROVEN: that this is the cause of "no stereo or RDS until tuning off and on
+     *     again" after the gain moves on a weak station (Stuart, for months). It FITS — a retune
+     *     calls reset(), which zeroes df_, so the one action that cures it is the one action that
+     *     clears this state, which is the shape of the rest of this family (see
+     *     memory/vibeserver_retune_resurrects_stall). But I could not reproduce the runaway: a
+     *     test that ran 12 s of synthetic static and then a clean pilot re-locked WITH THE CLAMP
+     *     REMOVED, so it discriminated nothing and was deleted rather than left looking like
+     *     proof. Synthetic Gaussian noise is evidently not what walks df_ away; the real trigger
+     *     is more likely the gain-change transient, which that harness cannot produce.
+     *  ★ So: keep this, it is right — but if the fault survives, DO NOT assume this ruled the PLL
+     *    out. Instrument df_ on a live weak station across a gain change and watch it.
+     *  ★★ ±200 Hz IS PHYSICALLY GENEROUS, not a guess. Both crystals are specified far tighter
+     *     than that, so no real pilot ever needs this much pull — while an integrator allowed to
+     *     wander further is not tracking a pilot, it is lost. Scaled from w0_ so it follows the
+     *     sample rate with no second constant to keep in step.
+     *  ★ A clamp, not a reset: inside the range the loop behaves exactly as before, and at the
+     *    edge it simply stops running away — so a signal that returns is re-acquired normally
+     *    instead of being unreachable. */
+    {
+        const double dfMax = w0_ * (200.0 / 19000.0);
+        if      (df_ >  dfMax) df_ =  dfMax;
+        else if (df_ < -dfMax) df_ = -dfMax;
+    }
     const double d = df_ + alpha_ * err;     // this sample's deviation from w0_
 
     // Bookkeeping phase, integrated from the SAME increments as the rotator, so

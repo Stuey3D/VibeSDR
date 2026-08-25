@@ -1567,6 +1567,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   // UberSDR auto-range symmetric contrast (0–20). Web client calibration = 10.
   const [hwLockedRate, setHwLockedRate] = useState(0);   // >0 = server pinned the rate
   const [hwAgcLocked, setHwAgcLocked] = useState(false);
+  const [hwTunerBw, setHwTunerBw] = useState(0);
+  const [hwTunerBwAuto, setHwTunerBwAuto] = useState(false);
+  /** ★ Absent on a server that has no such filter — then the picker is not drawn at all, rather
+   *  than offering a control for hardware we have not been told about. */
+  const [hwHasTunerBw, setHwHasTunerBw] = useState(false);
   const [autoContrast,  setAutoContrast]  = useState(5);  // production default (10 too dark)
   // M9PSY 5-tap spatial waterfall smooth
   const [spatialSmooth, setSpatialSmooth] = useState(true);
@@ -3300,6 +3305,17 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onHwLockedRate: (r: number) => { if (!destroyed.current) setHwLockedRate(r); },
       onHwAgcLocked: (v: boolean) => { if (!destroyed.current) setHwAgcLocked(v); },
+      onHwTunerBw: (hz: number, auto: boolean) => {
+        if (destroyed.current) return;
+        setHwHasTunerBw(true); setHwTunerBw(hz); setHwTunerBwAuto(auto);
+        // ★ Onto the connection readout beside the gain — see MeterValues.ifText. "Wide" is worth
+        //   saying out loud on a receiver that HAS a filter: it means the filter is open, which is
+        //   different from having none, and it is what changes when somebody zooms out.
+        const b = meterBus.current;
+        if (b) b.emit({ ...b.value,
+          ifText: hz > 0 ? `IF ${Math.round(hz / 1000)}k${auto ? ' auto' : ''}`
+                         : (auto ? 'IF wide auto' : 'IF wide') });
+      },
       onServerLost: () => {
         // OWRX server crashed/restarted. Keep the app alive, free the dead audio
         // engine, and surface the wait-and-reconnect prompt (no auto-reconnect —
@@ -7889,6 +7905,15 @@ export default function SDRScreen({ route, navigation }: Props) {
           isSpy={isSpy}
           radio={radioCaps}
           agcLocked={hwAgcLocked}
+          hasTunerBw={hwHasTunerBw}
+          tunerBw={hwTunerBw}
+          tunerBwAuto={hwTunerBwAuto}
+          onTunerBw={(hz) => {
+            // ★ Optimistic, like every other control here: the server echoes hwinfo back and the
+            //   picker settles on what the RADIO says, so a refusal corrects it within a frame.
+            if (hz < 0) { setHwTunerBwAuto(true); } else { setHwTunerBwAuto(false); setHwTunerBw(hz); }
+            (client.current as any)?.setTunerBandwidth?.(hz);
+          }}
           adminSet={adminSet}
           adminOk={adminOk}
           adminRefused={adminRefused}

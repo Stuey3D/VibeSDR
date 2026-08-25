@@ -237,6 +237,9 @@ export interface SDRCallbacks {
   /** ★ The owner has FORCED the AGC on: a listener may not set a gain at all. The web client has
    *  always read this; the app never did, which is why its panel offered a gain the server refuses. */
   onHwAgcLocked?: (locked: boolean) => void;
+  /** ★ The tuner's IF filter: the width in Hz (0 = wide open) and whether it is FOLLOWING THE
+   *  ZOOM. The web client has had this picker since the filter existed; the app never had one. */
+  onHwTunerBw?: (hz: number, auto: boolean) => void;
   /** Advanced RDS analyser frame (~5 Hz), only while setAdvRds(true). */
   onRdsExt?:    (x: RdsExt) => void;
   /** What the serving radio is and what it can do (hwinfo.radio). */
@@ -757,6 +760,8 @@ export class UberSDRClient {
   /** IMS — multipath suppression (blends L-R by measured multipath depth); see the shim. */
   setIms(on: boolean)      { this._sendCtl({ type: 'ims', on }); }
   setAutoBw(on: boolean)   { this._sendCtl({ type: 'autobw', on }); }
+  /** ★ The tuner's IF filter. -1 = AUTO (follows the zoom); 0 = wide open; else a width in Hz. */
+  setTunerBandwidth(hz: number) { this._sendCtl({ type: 'tunerbw', value: Math.round(hz) }); }
   /** CEQ — blind channel equaliser, for a reflection. */
   setCeq(on: boolean)      { this._sendCtl({ type: 'ceq', on }); }
   /** Noise blanker — impulse noise only. */
@@ -2038,6 +2043,10 @@ export class UberSDRClient {
       // ★ Same rule as lockedRate above: the server ENFORCES this, so a client that cannot see it
       //   offers a control whose every use is refused.
       this.callbacks.onHwAgcLocked?.(msg.agcLocked === true);
+      // ★ Only when the server actually states it — an older server has no such filter and must
+      //   not be read as "wide open", which is a claim about hardware we have not been told about.
+      if (msg.tunerBw !== undefined)
+        this.callbacks.onHwTunerBw?.(Number(msg.tunerBw) || 0, msg.tunerBwAuto === true);
       // ★ Only the VibeServer shim sends hwinfo, and it carries the owner's FRAME-RATE CEILING.
       // Feed it to the controller: without it we would ask for the ladder's top rate, receive the
       // permitted one, and read the difference as a failing link — stepping down forever chasing a

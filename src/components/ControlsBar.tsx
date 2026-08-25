@@ -147,6 +147,11 @@ export interface MeterValues {
    *    manage their own gain and have nothing to report here.
    */
   agcText?: string;
+  /** ★ THE TUNER'S IF FILTER, in the same short form as the gain — "IF 1430k auto" or "IF 700k".
+   *  ★★ It matters BECAUSE IT IS INVISIBLE: zoomed in, a narrowed filter is doing the most useful
+   *     thing on the receiver and nothing on screen would otherwise say so. Stuart, of the web
+   *     client's version: "so a user knows its working". Empty on a radio that has no such filter. */
+  ifText?: string;
   fps?:  number;
 }
 export interface MeterBus {
@@ -447,6 +452,8 @@ export function LinkIndicator({ bus }: { bus?: MeterBus }) {
       {/* ★ After the rate, because it changes rarely — a value that moves once a minute beside one
              that moves every second reads as part of the same reading if it comes first. */}
       {m?.agcText ? <Text style={pm.linkRate}>{`· ${m.agcText}`}</Text> : null}
+      {/* ★ Last: it moves least of all — it changes only when somebody zooms. */}
+      {m?.ifText ? <Text style={pm.linkRate}>{`· ${m.ifText}`}</Text> : null}
     </View>
   );
 }
@@ -1010,18 +1017,6 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
         {vfoKeys
           ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} style={{ flex: 1 }} />
           : <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={vfoNoInertia} />}
-        <Text style={[lnd.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
-          {clock}
-        </Text>
-        <View style={{ alignItems: 'center', marginTop: 2 }}>
-          <LinkIndicator bus={bus} />
-        </View>
-        {isRecording && (
-          <View style={lnd.recRow}>
-            <View style={lnd.recDot} />
-            <Text style={[lnd.recTime, { fontFamily: t.font, fontSize: CLOCK_FONT }]}>{recTime}</Text>
-          </View>
-        )}
       </View>
 
       {/* STEP + MENU column */}
@@ -1086,6 +1081,28 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
           {zoomKeys
             ? <TunerKeys type="zoom" height={DRUM_H} onStep={onZoomStep ?? noStep} onSweepStep={onZoomSweep} style={{ flex: 1 }} />
             : <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} style={{ flex: 1 }} />}
+          {/* ★★★ THE READOUTS LIVE UNDER THE ZOOM KEYS, NOT UNDER THE VFO — and the reason is not
+              tidiness. They were in the VFO column, so the recording row APPEARED AND DISAPPEARED
+              inside the group that holds the tuning keys, and the keys resized under the thumb
+              while you were using them. Stuart: "also means the controls dont have to grow and
+              shrink when recording is happening."
+              ★★ The zoom column is the right home on its own terms too: it is the one group whose
+                 height nothing else depends on, and these are STATUS, not controls — so they sit
+                 with the control you are least likely to be holding.
+              ★ Portrait is untouched: it has a full-width row of its own (por.clockRow) and never
+                had the problem. */}
+          <Text style={[lnd.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
+            {clock}
+          </Text>
+          <View style={{ alignItems: 'center', marginTop: 2 }}>
+            <LinkIndicator bus={bus} />
+          </View>
+          {isRecording && (
+            <View style={lnd.recRow}>
+              <View style={lnd.recDot} />
+              <Text style={[lnd.recTime, { fontFamily: t.font, fontSize: CLOCK_FONT }]}>{recTime}</Text>
+            </View>
+          )}
         </View>
       )}
 

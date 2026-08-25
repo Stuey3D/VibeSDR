@@ -31,6 +31,12 @@ const C = {
 // it. Offering it only invited people to pick the biggest number and then blame the
 // receiver for the gaps. 2.56 is the real ceiling.
 const SAMPLE_RATES = [250000, 1024000, 1536000, 1800000, 2048000, 2400000, 2560000];
+/** ★ The tuner IF widths the picker offers. -1 = AUTO (follows the zoom), 0 = wide open.
+ *  ★★ The same list the web client offers, minus the ones that were no-ops there: below about
+ *     350 kHz the R820T stops honouring the request, so offering 300/250/200 was three choices
+ *     that all did the same thing. */
+const TUNER_BWS = [-1, 0, 1_500_000, 1_000_000, 700_000, 500_000, 350_000];
+
 const DS_MODES: { label: string; value: number }[] = [
   { label: 'Off', value: 0 }, { label: 'I', value: 1 }, { label: 'Q', value: 2 },
 ];
@@ -78,6 +84,14 @@ export interface LocalHardwarePanelProps {
    *  (Stuart, 2026-07-27). A protection nobody can see is not obviously protecting anything. */
   /** ★ The owner has FORCED the AGC on — a listener may not set a gain at all. From hwinfo. */
   agcLocked?: boolean;
+  /** ★★ THE TUNER'S IF FILTER — the only selectivity ahead of the mixer, and the app never had a
+   *  picker for it while the web client always has. `hasTunerBw` is false on a server that never
+   *  mentioned it, and then nothing is drawn: an absent field is not "wide open", it is a receiver
+   *  we have not been told about. -1 = auto (follows the zoom), 0 = wide, else Hz. */
+  hasTunerBw?: boolean;
+  tunerBw?: number;
+  tunerBwAuto?: boolean;
+  onTunerBw?: (hz: number) => void;
   adminSet?: boolean;
   adminOk?: boolean;
   /** Password entered by the user. Resolving it to a nonce+HMAC is the screen's job. */
@@ -516,6 +530,29 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                value={p.sampleRate} onChange={p.onSampleRate}
                fmt={(r) => `${(r / 1e6).toFixed(r % 1e6 === 0 ? 1 : 3).replace(/0+$/, '').replace(/\.$/, '.0')}M`} />
           </>}
+          </>}
+          {/* ★★★ THE TUNER'S IF FILTER — beside the sample rate, because they are the same
+              decision twice over: setting a rate re-derives this filter in librtlsdr and the
+              server re-asserts ours afterwards. The web client has had this picker for as long as
+              the filter has existed; the app had NOTHING, so the one control that keeps a strong
+              neighbour out of the front end was reachable only from a browser.
+              ★★ AUTO IS THE ONE WORTH HAVING: it narrows as the listener zooms in and widens again
+                 when they zoom out, so the selectivity follows what they are actually looking at
+                 and nobody has to know what an IF filter is. It is also the only setting that
+                 cannot be got wrong by leaving it alone.
+              ★ Drawn only when the server has actually told us it has one — see hasTunerBw. */}
+          {p.hasTunerBw && !p.isSpy && isRtl && p.onTunerBw && <>
+          <Text style={styles.section}>IF FILTER</Text>
+          <Seg slot={slot} options={TUNER_BWS}
+               value={p.tunerBwAuto ? -1 : (p.tunerBw ?? 0)}
+               onChange={(v) => p.onTunerBw?.(v)}
+               fmt={(v) => v < 0 ? 'Auto' : v === 0 ? 'Wide' : `${Math.round(v / 1000)}k`} />
+          <Text style={styles.note}>
+            {p.tunerBwAuto
+              ? 'Following the zoom — narrower as you zoom in, wide again as you zoom out.'
+              : 'Auto follows the zoom, which keeps strong neighbours out of the front end '
+                + 'without you having to think about it.'}
+          </Text>
           </>}
           {p.isSpy && <Text style={styles.note}>
             Sample rate is chosen automatically from the mode: the server decimates

@@ -237,6 +237,8 @@ export interface SDRBackend {
   /** ★ TEF-style automatic demodulator bandwidth (FM broadcast only). SERVER-WIDE, unlike the four
    *  above: it changes the demodulator rather than one listener's processing. */
   setAutoBw?(on: boolean): void;
+  /** ★ The tuner's IF filter: -1 = auto (follows zoom), 0 = wide, else Hz. RTL only. */
+  setTunerBandwidth?(hz: number): void;
   setCeq?(on: boolean): void;
   setNoiseBlanker?(on: boolean): void;
 
