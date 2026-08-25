@@ -141,6 +141,19 @@ disclaimer — so **do not soften the host-side claim on account of it.**
 and is the selling point; the other would be a privacy claim that quietly overreaches, which is
 worse than making none.
 
+### ★★★ THE THREE ORIGINAL CLIPS STAY — THE NEW ONE IS AN ADDITION
+
+`assets/phone-demo.mp4`, `assets/watch-demo.mp4` and `assets/scaling-demo.mp4` (the APP scaling on
+the Mac) are keepers and must survive the redesign. Stuart, unprompted and rightly: *"we still want
+the original phone and apple watch clips and the original app scaling on the mac."* Nothing in this
+brief replaces them — `web-client-live.mp4` is a FOURTH clip that proves a different claim.
+
+★★ **AND THE PAIR IS THE POINT.** `scaling-demo.mp4` shows the APP scaling; `web-client-live.mp4`
+shows the BROWSER doing the same. Shown together they say something neither says alone: it is not
+that the app is well built, it is that *every* way in behaves this way. The watch clip closes it at
+the other end of the range. Do not let a tidier layout thin this set to one "hero video" — the
+breadth IS the argument.
+
 ### Assets to re-shoot — the current ones misrepresent the product
 
 - ✅ **`web-client-2026-08.webp`** replaces the July shot (below). Heart on 96.6, Advanced RDS
