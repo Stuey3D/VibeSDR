@@ -21,6 +21,7 @@
 
 import React, { useMemo, useRef } from 'react';
 import { Platform, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import type { LayoutChangeEvent } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Canvas, Path, Points, Rect, Skia, Text as SkText, matchFont } from '@shopify/react-native-skia';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -188,8 +189,27 @@ const Row = React.memo(function Row({ label, value, colour, conf, raw, reserve }
   reserve?: string;
 }) {
   const lblCol = raw && conf !== undefined ? (conf ? C.good : C.bad) : C.muted;
+  /* ★★★ AND EVERY ROW REMEMBERS THE TALLEST IT HAS EVER BEEN. `reserve` above is the right idea
+   *     but it has to be told the longest string by hand, and most of these values are ASSEMBLED
+   *     from optional clauses — "3.6% · slight · held · IMS standing by · multipath not measurable
+   *     at this S/N" is four independent decisions — so a hand-written worst case would be wrong
+   *     now and would rot the next time a message changes. Stuart: "lock the fields in the advanced
+   *     RDS box to the maximum text size they will show as there is a lot of jitter when the info
+   *     changes".
+   *  ★★ GROW ONLY, NEVER SHRINK, so a value that gets shorter cannot pull the panel up under the
+   *     reader's eye. It converges: minHeight is only ever set to a height the row actually had,
+   *     so it can never demand more space than its own content once needed.
+   *  ★ NOT truncation. The web panel's CSS records why in capitals — an ellipsis once ate exactly
+   *    the half of "5.5 kHz · nominal" that was worth reading. Reserve space; never remove text. */
+  const [minH, setMinH] = React.useState(0);
+  const onRowLayout = React.useCallback((e: LayoutChangeEvent) => {
+    const h = e.nativeEvent.layout.height;
+    // ★ Half a pixel of slack: layout returns fractional heights, and firing setState on every
+    //   sub-pixel difference would re-render this row several times a second for no visible gain.
+    setMinH(prev => (h > prev + 0.5 ? h : prev));
+  }, []);
   return (
-    <View style={s.row}>
+    <View style={[s.row, minH ? { minHeight: minH } : null]} onLayout={onRowLayout}>
       <Text style={[s.lbl, { color: lblCol }]} numberOfLines={1}>{label}</Text>
       {reserve ? (
         // ★★ RDS↔PILOT ALTERNATES BETWEEN A SHORT AND A VERY LONG VALUE — "27° ·
@@ -263,9 +283,9 @@ function constellationVerdict(xy: number[], phaseCoh: number, ber: number):
     rx.push(x); ry.push(y);
     n++; sumAbsX += Math.abs(x); sumY2 += y * y;
   }
-  if (n < 8) return { text: 'no lock', colour: C.bad };
+  if (n < 8) return { text: 'RDS no lock', colour: C.bad };
   const meanAbsX = sumAbsX / n;
-  if (meanAbsX < 1) return { text: 'no lock', colour: C.bad };
+  if (meanAbsX < 1) return { text: 'RDS no lock', colour: C.bad };
   for (let i = 0; i < rx.length; i++) { const dx = Math.abs(rx[i]) - meanAbsX; sumXErr2 += dx * dx; }
   const evm = (Math.sqrt((sumY2 + sumXErr2) / n) / meanAbsX) * 100;
   // ★ EVM assumes two lobes. A ROTATING constellation defeats that — the points are ordered,
@@ -499,8 +519,14 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   let pilotTxt = DASH, pilotCol: string | undefined;
   if (pdev > 0.2) {
     const ok = pdev >= 6.0 && pdev <= 7.5;
-    pilotTxt = `${pdev.toFixed(1)} kHz · ${ok ? 'nominal' : pdev < 6 ? 'low' : 'high'}`;
-    pilotCol = ok ? C.good : C.warn;
+    /* ★★ AND WHETHER THE PLL IS LOCKED. Deviation alone does not say it: 5.2 kHz reads "low"
+     *    against the 6.0-7.5 spec while the loop is locked and stereo is playing. The panel's
+     *    only other "lock" is the RDS constellation's, so one word covered two independent
+     *    failures until now — it misled this panel's own author on air (2026-08-25). */
+    const plk = x?.pilotLock;
+    const lockTxt = plk === undefined ? '' : plk ? ' · locked' : ' · NOT locked';
+    pilotTxt = `${pdev.toFixed(1)} kHz · ${ok ? 'nominal' : pdev < 6 ? 'low' : 'high'}${lockTxt}`;
+    pilotCol = plk === false ? C.warn : ok ? C.good : C.warn;
   }
   // ★★ NEVER FALL BACK TO A DASH HERE. The measurement drops below the 0.2 kHz floor for a frame
   // or two on a marginal signal, so the row flipped value→dash→value several times a second:

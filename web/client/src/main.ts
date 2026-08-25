@@ -5952,6 +5952,32 @@ function rdsPanelOpen(): boolean {
 }
 
 /** Fill the Advanced RDS fields. Everything here is data we already received. */
+/* ★★★ THE PANEL JOLTS WHILE YOU ARE READING IT, and the cure must not be truncation. These rows
+ *     update several times a second and their verdicts change LENGTH — "IMS standing by · multipath
+ *     not measurable at this S/N" is five lines where "clean" is one — so every change re-wraps the
+ *     row and shoves everything below it. Stuart: "there is a lot of jitter when the info changes".
+ *  ★★★ CLIPPING IS THE ONE FIX THAT IS FORBIDDEN HERE. `rdsFix` already tried it and the ellipsis
+ *      landed exactly on the useful half — "5.5 kHz · …" instead of the verdict — which is recorded
+ *      in the CSS above as TRUNCATION ATE THE VERDICT. So: reserve space, never remove text.
+ *  ★★ A HIGH-WATER MARK, NOT A TABLE OF GUESSED HEIGHTS. The worst case per row depends on the
+ *     string, the font, the container width and the reader's zoom, so any constant I wrote here
+ *     would be wrong on somebody's screen. Each row simply remembers the tallest it has ever been
+ *     and never returns below it: self-measuring, correct at any width, and it cannot hide a
+ *     verdict because nothing is ever constrained smaller than its own content.
+ *  ★ It costs one jump the first time a row hits a new longest value, and none afterwards. Reset
+ *    on disconnect would only re-introduce the jump, so the mark is kept for the session. */
+function lockRdsRowHeights() {
+  if (!rdsPanelOpen()) return;          // never measure a hidden panel — it reads back 0
+  const rows = document.querySelectorAll<HTMLElement>('.rdsF');
+  for (let i = 0; i < rows.length; i++) {
+    const el = rows[i];
+    const h = el.offsetHeight;
+    if (!h) continue;
+    const prev = Number(el.dataset.maxH || 0);
+    if (h > prev) { el.dataset.maxH = String(h); el.style.minHeight = h + 'px'; }
+  }
+}
+
 function renderRds() {
   const dash = '—';
   // ★ The flag and logo move into the header while the bar is hidden, so the station keeps
@@ -6224,8 +6250,14 @@ function renderRds() {
   const pEl = $('rxPilotDev'), rEl = $('rxRdsDev');
   if (pdev > 0.2) {
     const ok = pdev >= 6.0 && pdev <= 7.5;
-    pEl.textContent = `${pdev.toFixed(1)} kHz · ${ok ? 'nominal' : pdev < 6 ? 'low' : 'high'}`;
-    pEl.style.color = ok ? '#7dff9a' : '#ffd479';
+    /* ★★ AND WHETHER THE PLL IS ACTUALLY LOCKED, which the deviation alone does not say: 5.2 kHz
+     *    reads "low" against the 6.0-7.5 spec while the loop is locked and stereo is playing. The
+     *    only other "lock" in this panel belongs to the RDS constellation, so without this the
+     *    reader has one word covering two independent failures. */
+    const plk = rdsExt?.pilotLock;
+    const lockTxt = plk === undefined ? '' : plk ? ' · locked' : ' · NOT locked';
+    pEl.textContent = `${pdev.toFixed(1)} kHz · ${ok ? 'nominal' : pdev < 6 ? 'low' : 'high'}${lockTxt}`;
+    pEl.style.color = plk === false ? '#ffd479' : ok ? '#7dff9a' : '#ffd479';
   } else { pEl.textContent = dash; pEl.style.color = ''; }
   if (rdev > 0.2) {
     // ★★ THE SCALE HAS A CEILING, SO THE LABELS MUST TOO. 7.5% of 75 kHz = 5.6 kHz is the spec
@@ -6471,6 +6503,7 @@ function renderRds() {
       };
     }
   }
+  lockRdsRowHeights();
 }
 
 /** Pixels per unit, chosen so the mean lobe distance lands at a comfortable fraction of the
@@ -6525,7 +6558,7 @@ function constellationVerdict(xy: number[]): { text: string; cls: string } {
     rx.push(x); ry.push(y);
     n++; sumAbsX += Math.abs(x); sumY2 += y * y;
   }
-  if (n < 8) return { text: 'no lock', cls: 'bad' };
+  if (n < 8) return { text: 'RDS no lock', cls: 'bad' };
   const meanAbsX = sumAbsX / n;
   for (let i = 0; i < rx.length; i++) {
     const dx = Math.abs(rx[i]) - meanAbsX;
@@ -6533,7 +6566,7 @@ function constellationVerdict(xy: number[]): { text: string; cls: string } {
   }
   // Error energy is the scatter off the two ideal points; signal energy is the lobe offset.
   const err = Math.sqrt((sumY2 + sumXErr2) / n);
-  if (meanAbsX < 1) return { text: 'no lock', cls: 'bad' };
+  if (meanAbsX < 1) return { text: 'RDS no lock', cls: 'bad' };
   const evm = (err / meanAbsX) * 100;
   // ★ EVM assumes two lobes after de-rotation. A ROTATING constellation defeats that — the
   // points are ordered, not scattered — so it reports a huge figure for a signal that is

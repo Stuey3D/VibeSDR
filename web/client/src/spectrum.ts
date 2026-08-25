@@ -106,6 +106,9 @@ export interface RdsExt {
    *  to its own pilot — a transmitter fault, not a reception one. */
   phaseDrift: number;      // 0..1 — how steady that phase is; below ~0.35 it is meaningless
   pilotDev: number;      // pilot injection, kHz deviation (spec 6.0–7.5)
+  /** ★ Is the stereo PLL locked. Distinct from the constellation's lock, which is RDS —
+   *  one word for two different failures misled the panel's own author. */
+  pilotLock: boolean;
   rdsDev: number;        // RDS injection, kHz deviation (typical 2–4, max 5.6)
   /** Pilot against the transmitted-silence gap at 15–19 kHz, dB. NOT a textbook SNR — the
    *  measuring filter's own leakage caps it near 34 dB — but a real figure of merit, and the
@@ -849,6 +852,7 @@ export class SpectrumClient {
           phaseCoh: Number(msg.phaseCoh ?? 0),
           phaseDrift: Number(msg.phaseDrift ?? 0),
           pilotDev: Number(msg.pilotDev ?? 0),
+          pilotLock: Boolean(msg.pilotLock),
           rdsDev: Number(msg.rdsDev ?? 0),
           mpxSnr: Number(msg.mpxSnr ?? 0),
           multipath: Number(msg.multipath ?? 0),

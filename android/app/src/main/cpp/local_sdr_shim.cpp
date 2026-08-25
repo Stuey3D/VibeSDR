@@ -12131,6 +12131,18 @@ struct LocalSdrShim::Impl {
         auto c_ = dspFor(sock);
         auto src_ = rdsSourceFor(c_);
         RdsState& R = src_ ? src_->rdsS : (c_ ? c_->rdsS : rdsS);
+        /* ★★★ THE PILOT'S LOCK, AS ITS OWN FIELD — because the panel had exactly ONE thing
+         *     labelled "lock" and it was the RDS constellation's. Reading that as the PILOT is
+         *     a mistake this file's own author made while holding the source open, on 103.8 with
+         *     stereo plainly lit (2026-08-25): "no lock" beside a locked pilot and a dead RDS
+         *     decoder describes two different failures with one word. Stuart: "we need to add a
+         *     2nd lock status, Pilot lock and RDS lock".
+         *  ★★ FROM THE SAME PIPELINE THE RDS CAME FROM. In per-client mode the panel is already
+         *     careful not to show somebody else's station (see the note above); a pilot lock read
+         *     off the SHARED pipeline would be exactly that bug wearing a new field name. */
+        const bool pilotLk = (src_ && src_->rx) ? src_->rx->pilotLocked()
+                           : (c_   && c_->rx)   ? c_->rx->pilotLocked()
+                                                : rx.pilotLocked();
         int pty, tp, ta, ms, di, ctMin, ctOff, gTot, afSeen;
         int ptyR, tpR, taR, msR, diR;
         int lang, pinD, pinH, pinM; float phase, phaseCoh, pilotDev, rdsDev_, phaseDrift;
@@ -12183,6 +12195,7 @@ struct LocalSdrShim::Impl {
                       + ",\"phaseDrift\":" + std::to_string(phaseDrift)
                       + ",\"phaseCoh\":" + std::to_string(phaseCoh)
                       + ",\"pilotDev\":" + std::to_string(pilotDev)
+                      + ",\"pilotLock\":" + std::string(pilotLk ? "true" : "false")
                       // ★★★ "rdsDev", NOT "R.rdsDev". A stray "R." prefix — almost certainly a
                       //     half-finished edit from when these were read off a struct called R —
                       //     meant the client looked up msg.rdsDev, found undefined, and drew a

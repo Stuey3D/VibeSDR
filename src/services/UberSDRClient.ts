@@ -101,6 +101,8 @@ export interface RdsExt {
   phase: number;         // RDS-to-pilot phase, degrees, folded to [0,90]
   phaseDrift: number; phaseCoh: number;
   pilotDev: number; rdsDev: number;   // kHz; rdsDev < 0 = not measurable
+  /** ★ Stereo PLL locked. NOT the constellation's lock, which is RDS — see AdvRdsPanel. */
+  pilotLock: boolean;
   ber: number;           // block error rate %, -1 = unknown
   grp: number[];         // per-group-type counts, 32 entries (0A,0B,1A...)
   af: number[];          // alternative frequencies, kHz
@@ -1948,6 +1950,7 @@ export class UberSDRClient {
         lang: num(msg.lang), pinDay: num(msg.pinDay), pinHour: num(msg.pinHour), pinMin: num(msg.pinMin),
         phase: num(msg.phase), phaseDrift: num(msg.phaseDrift), phaseCoh: num(msg.phaseCoh, 0),
         pilotDev: num(msg.pilotDev), rdsDev: num(msg.rdsDev), ber: num(msg.ber),
+        pilotLock: Boolean(msg.pilotLock),
         grp: arr(msg.grp), af: arr(msg.af), xy: arr(msg.xy), mpx: arr(msg.mpx),
         eon: Array.isArray(msg.eon) ? msg.eon.map((e: any) => ({
           pi: str(e?.pi), ps: str(e?.ps), af: num(e?.af, 0), ta: num(e?.ta, 0) })) : [],
