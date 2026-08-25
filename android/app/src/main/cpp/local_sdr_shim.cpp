@@ -1229,10 +1229,6 @@ static constexpr bool        g_agcQuietAnnounce = false;
 //     when the overload hit, and a refusal to return to it or above.
 //  ★ It expires two ways, both meaning "the world is different now": a RETUNE (a new dial position
 //    is a new signal, see tuneHw) or a long, genuinely clean run at the step below.
-/** When the tuner's IF filter was last actually written, and how close together two writes may
- *  be. Each write is a USB control transfer on the IQ bus — see applyAutoIf(). */
-static std::atomic<double>   g_tunerBwWroteAt{0.0};
-static constexpr double      kTunerBwMinSec = 0.50;
 static std::atomic<int>      g_ovlBadGain{-1};    // tenth-dB, -1 = nothing has failed here
 /** ★★★ WAS THAT GAIN JUDGED AGAINST A SETTLED SIGNAL, OR AGAINST A RECONFIGURATION?
  *      g_ovlBadGain earns a LONG lockout (kOvlBadHold) because hysteresis exists to stop the loop
@@ -2607,39 +2603,7 @@ struct LocalSdrShim::Impl {
         if (want >= (int)(sampleRate * 0.95)) want = 0;
         {
             const int cur = g_tunerBwHz.load(std::memory_order_relaxed);
-            /* ★★★ EVERY WRITE HERE IS A SYNCHRONOUS USB CONTROL TRANSFER ON THE BUS CARRYING THE
-             *     IQ, and this runs on EVERY TUNE. `want` is derived from |viewCentre - rf|, a
-             *     CONTINUOUS quantity, so a sweep changed it on nearly every step — up to 22 a
-             *     second from the web client's hold-sweep, each one elbowing the sample flow
-             *     aside. The IQ hiccups, spectrum frames stall, and the waterfall trails the dial
-             *     by half a second to two seconds, still catching up after the button is released
-             *     (Stuart, 2026-08-25, 9 kHz step on medium wave).
-             *  ★★★ THE DIFFERENTIAL THAT PROVED IT: the Airspy HF+ on the SAME server, same client,
-             *      same sweep, is clean — because it has no variable IF filter and therefore never
-             *      makes this call. A fault that follows the RADIO and not the server or the client
-             *      is a fault in what only that radio does.
-             *  ★★ SO RATE-LIMIT IT, exactly as setHwGain does for the same reason on the same bus.
-             *     Two guards, because either alone leaks: a DEADBAND (a few per cent of movement is
-             *     not worth a transfer) and a MINIMUM INTERVAL (a fast drag crosses any deadband
-             *     eventually). Both compare against what is actually SET, so the filter still
-             *     tracks — it just stops chasing every intermediate value on the way.
-             *  ★ Deliberately NOT trailing-edge. The last write of a sweep can be up to the
-             *    deadband away from ideal, which costs a few per cent of filter width nobody can
-             *    hear; a trailing flush would need a timer on the hardware path, which is the sort
-             *    of thing that goes wrong quietly. Widening past the deadband on the next tune, or
-             *    on the next zoom, puts it right.
-             *  ★ A release to WIDE (want == 0) and the first write from an unset filter are NEVER
-             *    deferred: those are the cases where deferring shows as dead band edges. */
-            bool skip = false;
-            if (want != cur && want != 0 && cur != 0) {
-                const int    band = std::max(100000, (int)(cur * 0.20));
-                const double now  = nowSecs();
-                const double last = g_tunerBwWroteAt.load(std::memory_order_relaxed);
-                if (std::abs(want - cur) < band)      skip = true;   // not worth a transfer
-                else if (now - last < kTunerBwMinSec) skip = true;   // too soon after the last
-            }
-            if (want != cur && !skip) {
-                g_tunerBwWroteAt.store(nowSecs(), std::memory_order_relaxed);
+            if (want != cur) {
                 // ★★★ ONLY WIDENING ARMS THE CUT. Narrowing takes energy AWAY, which can never
                 //     overload anything — the AGC's ordinary climb handles it, and arming here
                 //     too would cut the gain every time somebody zoomed IN, which is the one
