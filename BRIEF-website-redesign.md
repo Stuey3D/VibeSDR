@@ -143,6 +143,9 @@ worse than making none.
 
 ### Assets to re-shoot — the current ones misrepresent the product
 
+- ✅ **`web-client-2026-08.webp`** replaces the July shot (below). Heart on 96.6, Advanced RDS
+  open — and it happens to show the same day's work live: `MULTIPATH 6.0% · slight · IMS standing
+  by · CEQ has it`, with CEQ reporting its own before→after.
 - ★★ **`assets/web-client.jpg` is from 25 JULY and no longer looks like the web client.** Since
   then it has gained the Advanced RDS analyser, the IF filter picker, the AGC/IF status chip, the
   band-plan bar and the station logos. Stuart: *"we need a new screenshot for the web client too as
@@ -155,8 +158,21 @@ worse than making none.
   spinning and RDS filling in — in a BROWSER, with nothing installed — refutes that in two seconds
   and cannot be refuted back. It also proves the "no app required at the other end" claim the
   caption already makes and the still image cannot.
-  ▶ Shoot it tuned to a strong FM station with the Advanced RDS panel open, so the constellation
-  and MPX plots are alive too.
+  ✅ **SHOT** — `web-client-live.mp4` (16.5 s, silent, 3.4 MB, poster beside it). Tuned to Heart on
+  96.6 with Advanced RDS open, so the waterfall scrolls and the constellation and MPX plots move.
+  ★ Trimmed at 16.5 s: the original ran on to the operator opening Control Centre to stop the
+  recording, which showed the Wi-Fi panel and was a weaker ending anyway.
+
+  ★★★ **AND IT SHOWS SOMETHING BETTER THAN WE ASKED FOR — THE WINDOW BEING RESIZED.** Stuart:
+  *"the web client also scaling perfectly like the app does… so we can say you dont even need the
+  app to listen to VibeServers as the built in web client scales from a tiny phone up to a desktop
+  monitor — everyone regardless of device is equal in the VibeSDR ecosystem."*
+
+  That last clause is the best framing of the ecosystem produced so far and should probably be ON
+  the page, close to those words. It reframes "mobile-first · scalable" from a specification into a
+  PROMISE, and the recording proves it in one gesture rather than asserting it in a bullet. It also
+  removes the reader's obvious objection — "another app to install" — before they raise it: there
+  is a way in with nothing installed at all, and it is not a cut-down one.
 
 ### The version label rots — stop hand-writing it
 
