@@ -814,6 +814,24 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetAdminPaths(JNIEnv* env, jobject,
     const char* l = log  ? env->GetStringUTFChars(log,  nullptr) : nullptr;
     if (b) vibe::LocalSdrShim::instance().setBanListPath(b);
     if (l) vibe::LocalSdrShim::instance().setConnLogPath(l);
+    /* ★★★ AND THE NOTICE, WHICH WAS WIRED AT ONE END ONLY. vibeserver/main.cpp sets three paths —
+     *     bans, connection log and notice — and this, the Android server's equivalent, set two.
+     *     Notice::set() refuses without a path ("this server has no data directory to store a
+     *     notice in"), so posting a notice on the Android VibeServer silently did nothing and the
+     *     admin page honestly reported "Nothing showing." Stuart, 2026-08-25: "maintenance message
+     *     not working on android vibeserver". Same family as the missing @ReactMethod bugs and as
+     *     effectiveFor()'s uncopied fields: a value plumbed correctly at one end and never at the
+     *     other, invisible from either side alone.
+     *  ★★ DERIVED FROM THE BANS PATH RATHER THAN PASSED IN. A third JNI parameter would mean a
+     *     matching change in Kotlin and one more pair of ends that can disagree — which is the
+     *     bug being fixed. Sharing the directory makes it structurally impossible to wire one and
+     *     forget the other: if bans persist, so does the notice. */
+    if (b) {
+        std::string bp(b);
+        const size_t slash = bp.find_last_of('/');
+        if (slash != std::string::npos)
+            vibe::LocalSdrShim::instance().setNoticePath(bp.substr(0, slash) + "/notice.json");
+    }
     LOGI("admin state persisted to %s / %s", b ? b : "(none)", l ? l : "(none)");
     if (b) env->ReleaseStringUTFChars(bans, b);
     if (l) env->ReleaseStringUTFChars(log, l);
