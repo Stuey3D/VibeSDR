@@ -99,7 +99,7 @@ const K = {
   advanced: 'vs_advanced', maxUsers: 'vs_maxusers',
   allowRanges: 'vs_allow', blockRanges: 'vs_block',
   gainLimits: 'vs_gainlimits', restGain: 'vs_restgain', agcLock: 'vs_agclock',
-  rtlAgc: 'vs_rtlagc', publicName: PUBLIC_NAME_KEY,
+  rtlAgc: 'vs_rtlagc', tunerBwAuto: 'vs_tunerbwauto', publicName: PUBLIC_NAME_KEY,
   proxies: 'vs_proxies', radioUse: 'vs_radiouse', oneRadioPerIp: 'vs_oneradioperip',
   landingHz: 'vs_landinghz', landingMode: 'vs_landingmode', biasT: 'vs_biast',
 };
@@ -209,6 +209,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
    *  can only ever prevent clipping); the AGC is OFF, because it may raise the gain above what the
    *  owner set and that has to be asked for. */
   const [rtlAgc, setRtlAgc]           = useState(false);
+  const [tunerBwAuto, setTunerBwAuto] = useState(false);
   /** ★★ WHERE A LISTENER LANDS. The macOS settings window calls these "Listener's starting
    *  frequency / mode"; same setting, same words, so an owner who runs both meets one idea once.
    *  ★ 0 = leave it to the server's own default rather than assert a frequency nobody chose. */
@@ -371,6 +372,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             const raw = await (NativeModules as any).VibeLocalSDR?.getBands?.();
             if (raw) { const b = JSON.parse(raw); if (Array.isArray(b)) setBands(b); }
           } catch { /* the band chips simply do not appear */ }
+        })();
+        /* ★★★ LOADED SEPARATELY, NOT ADDED TO THE POSITIONAL TUPLE ABOVE — see the note there.
+         *     Inserting one more getItem() into a destructure of twenty-odd shifts EVERY value
+         *     after it into the wrong setting, silently. I did exactly that while adding this and
+         *     caught it only on re-reading; the comment warning against it is three lines away. */
+        void (async () => {
+          const v = await AsyncStorage.getItem(K.tunerBwAuto);
+          if (v != null) setTunerBwAuto(v === '1');
         })();
         void (async () => {
           const g = async (k: string) => (await AsyncStorage.getItem(k)) ?? '';
@@ -784,6 +793,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.allowRanges, allowRanges], [K.blockRanges, blockRanges],
       [K.gainLimits, gainLimits], [K.restGain, String(restGain)],
       [K.rtlAgc, rtlAgc ? '1' : '0'],
+      [K.tunerBwAuto, tunerBwAuto ? '1' : '0'],
       [K.agcLock, agcLock ? '1' : '0'], [K.proxies, proxies],
       [K.oneRadioPerIp, oneRadioPerIp ? '1' : '0'],
     ]);
@@ -847,6 +857,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           : {}),
         gainLimits, restGain, agcLock, trustedProxies: proxies, oneRadioPerIp,
         rtlAgc,
+        tunerBwAuto,
       });
       setRunning(info);
       runningRef.current = true;
@@ -873,7 +884,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   }, [name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
       webServer, locMode, locCity, checkBackgroundAllowed,
       adminPw, uncomp, limitMin, advanced, maxUsers, allowRanges, blockRanges,
-      gainLimits, restGain, agcLock, proxies, rtlAgc, oneRadioPerIp]);
+      gainLimits, restGain, agcLock, proxies, rtlAgc, tunerBwAuto, oneRadioPerIp]);
 
   const stopAndBack = useCallback(() => {
     stopAdvertiseRtlTcp();
@@ -1692,6 +1703,25 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 onValueChange={(v) => { setAgcLock(v); AsyncStorage.setItem(K.agcLock, v ? '1' : '0'); }}
                 trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
             </View>
+            {/* ★★ THE OTHER SETTING AN OWNER SETS ONCE AND EXPECTS TO STAY SET, and the phone's
+                   half of the web setup page's "IF filter follows the zoom" — the two GUIs are
+                   meant to offer the same things (see memory/android_server_gui_parity). RTL only:
+                   the R820T has a real IF filter and the other radios have nothing like it. */}
+            <View style={[styles.rowBetween, { marginTop: 12 }]}>
+              <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                IF filter follows the zoom
+              </Text>
+              <Switch value={tunerBwAuto}
+                onValueChange={(v) => { setTunerBwAuto(v); AsyncStorage.setItem(K.tunerBwAuto, v ? '1' : '0'); }}
+                trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
+            </View>
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              The tuner has a real IF filter, and it is the only selectivity ahead of the mixer.
+              Narrowing it as somebody zooms into a station keeps strong neighbours out of the
+              front end, where cross-modulation is made — it widens again automatically when they
+              zoom out. Only for a free-tuning receiver: on a locked-frequency one you choose
+              selectivity with the sample rate instead, once, at setup.
+            </Text>
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
               {rtlAgc
                 ? 'Listeners get the AGC already on and can leave it on, but cannot switch it off '

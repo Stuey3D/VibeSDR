@@ -756,6 +756,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [vibeFmDsp, setVibeFmDsp] = useState(false);
   const [fmNr,  setFmNr]  = useState(true);
   const [fmIms, setFmIms] = useState(true);
+  // ★ Server-wide and DEFAULTS ON, matching the server's own default and the web client's button.
+  const [fmAutoBw, setFmAutoBw] = useState(true);
   const [fmCeq, setFmCeq] = useState(true);
   const [fmNb,  setFmNb]  = useState(true);
   const [hwSquelch,     setHwSquelch]     = useState(-100);   // audio squelch dBFS (-100 = off)
@@ -948,6 +950,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         //   weeks, and every method added here has to be a real one.
         setWeakProc?: (on: boolean) => void; setIms?: (on: boolean) => void;
         setCeq?: (on: boolean) => void; setNoiseBlanker?: (on: boolean) => void;
+        setAutoBw?: (on: boolean) => void;
       } | null)
     : null), [isRemoteShim]);
 
@@ -1035,6 +1038,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [hwClient]);
   const onFmNb = useCallback((on: boolean) => {
     setFmNb(on); hwClient()?.setNoiseBlanker?.(on);
+  }, [hwClient]);
+  const onFmAutoBw = useCallback((on: boolean) => {
+    setFmAutoBw(on); hwClient()?.setAutoBw?.(on);
   }, [hwClient]);
   // Mirrored into a ref so the per-frame meter emit can decide whether the gate is closed without
   // re-subscribing the whole audio callback every time the threshold moves.
@@ -3559,6 +3565,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         setVibeFmDsp(true);
         setFmNr(st.wsp); setFmIms(st.ims); setFmCeq(st.ceq); setFmNb(st.nb);
+        // ★ Only when the server actually stated it — see the note on onFmDsp. A server that says
+        //   nothing leaves the button where it is rather than being read as "off".
+        if (typeof st.autobw === 'boolean') setFmAutoBw(st.autobw);
       },
       onRadioCaps:  (caps) => {
         if (destroyed.current) return;
@@ -7852,6 +7861,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         stereo={hwStereo}   onStereo={onHwStereo}
         fmNr={fmNr}   onFmNr={vibeFmDsp ? onFmNr : undefined}
         fmIms={fmIms} onFmIms={vibeFmDsp ? onFmIms : undefined}
+        fmAutoBw={fmAutoBw} onFmAutoBw={vibeFmDsp ? onFmAutoBw : undefined}
         fmCeq={fmCeq} onFmCeq={vibeFmDsp ? onFmCeq : undefined}
         fmNb={fmNb}   onFmNb={vibeFmDsp ? onFmNb : undefined}
         rawAudio={rawAudio}

@@ -99,6 +99,9 @@ public:
      *  becoming the starting point. See the notes by g_ovlProtect. */
     static void setOverloadProtect(bool on);
     void        setRtlAgc(bool on);
+    /** ★ The tuner's IF filter follows the zoom (RTL only). Persisted in the server's config —
+     *  see RadioConfig::tunerBwAuto — so it survives a restart and is not re-asserted by a client. */
+    void        setTunerBwAuto(bool on);
     /** The ceiling in force at a frequency, or -1 for none. Public so the client can be told. */
     static int  gainCapAt(double hz);
     /** Where the listener actually is — the VFO, falling back to the capture centre. This is the

@@ -118,7 +118,7 @@ struct Opts {
     std::string gainLimits;              // "fm:250, 0-30M:400" — per-band ceilings
     int         restGain = -1;           // returned to when everybody has left
     bool        rtlAgc = false;          // VibeSDR's own AGC for the dongle — see RadioConfig
-    bool        overloadProtect = true;  // wind the gain down when the front end overloads
+    bool        tunerBwAuto = false;     // tuner IF filter follows the zoom — see RadioConfig
     int         agcLock  = -1;           // 1 = AGC forced on (RSP, Airspy HF+)
     int         adminIdleMin = 30;      // admin controls re-lock after this idle; 0 = never
     // ★ Local by default — the mode that behaves exactly as VibeServer always has. A new setting
@@ -418,7 +418,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.pin = c.pin; o.adminPass = c.adminPass; o.trustedProxies = c.trustedProxies;
     o.sessionLimitMin = c.sessionLimitMin;
     o.gainLimits = c.gainLimits; o.restGain = c.restGain; o.agcLock = c.agcLock;
-    o.rtlAgc = c.rtlAgc; o.overloadProtect = c.overloadProtect;
+    o.rtlAgc = c.rtlAgc; o.tunerBwAuto = c.tunerBwAuto;
     o.adminIdleMin    = c.adminIdleMin;
     o.publicSharing   = (c.sharing == vsconfig::Sharing::Public);
     o.updateSrvHour = c.updateSrvHour; o.updateSrvDay = c.updateSrvDay;
@@ -452,7 +452,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.pin = o.pin; c.adminPass = o.adminPass; c.trustedProxies = o.trustedProxies;
     c.sessionLimitMin = o.sessionLimitMin;
     c.gainLimits = o.gainLimits; c.restGain = o.restGain; c.agcLock = o.agcLock;
-    c.rtlAgc = o.rtlAgc; c.overloadProtect = o.overloadProtect;
+    c.rtlAgc = o.rtlAgc; c.tunerBwAuto = o.tunerBwAuto;
     c.adminIdleMin    = o.adminIdleMin;
     c.sharing         = o.publicSharing ? vsconfig::Sharing::Public : vsconfig::Sharing::Local;
     c.updateSrvHour = o.updateSrvHour; c.updateSrvDay = o.updateSrvDay;
@@ -1463,6 +1463,7 @@ int main(int argc, char** argv) {
                     //   must be applied where the gain settings are, not somewhere that could run
                     //   before the radio exists (which is exactly how it failed on Android).
                     LocalSdrShim::instance().setRtlAgc(g_runtimeConfig.rtlAgc || g_runtimeConfig.agcLock == 1);
+                    LocalSdrShim::instance().setTunerBwAuto(g_runtimeConfig.tunerBwAuto);
                     LocalSdrShim::setAgcLock(g_runtimeConfig.agcLock == 1);
                     LocalSdrShim::setVibeServerTuneLimits(
                         g_runtimeConfig.mode == vsconfig::Mode::LockedRange ? "" : g_runtimeConfig.allowRanges,
@@ -1912,6 +1913,15 @@ int main(int argc, char** argv) {
     LocalSdrShim::setGainLimits(o.gainLimits);
     LocalSdrShim::setRestGain(o.restGain);
     LocalSdrShim::setAgcLock(o.agcLock == 1);
+    /* ★★★ APPLIED WHERE THE RADIO ACTUALLY IS. The other two calls to this setter are in main()'s
+     *     startup path and the live-reload path — and on a multi-radio server BOTH of those run in
+     *     the FRONT DOOR process, which owns no radio and therefore reads the server-level default
+     *     (false). The per-radio worker never applied it at all, so `"tunerBwAuto":true` sat
+     *     correctly in the config while the tuner stayed manual and the client's IF FILTER picker
+     *     showed "Wide" — the owner having saved it twice. This function is the one that runs with
+     *     the radio's OWN Options (gainLimits, restGain and agcLock are all per-radio), so it is
+     *     where a per-radio setting belongs. */
+    LocalSdrShim::instance().setTunerBwAuto(o.tunerBwAuto);
     LocalSdrShim::setAdminIdleMinutes(o.adminIdleMin);
     // ★★★ THE BAND PLAN FOLLOWS THE RECEIVER, not the author. A server in the US is in ITU Region
     //     2, where 40 m runs to 7.300 and 2 m to 148 — shipping Europe's edges everywhere would
@@ -2241,6 +2251,11 @@ int main(int argc, char** argv) {
     //  ★ The live-apply path (a setup-page save) keeps its own call, so a change still takes effect
     //    without a restart; this is the half that was missing.
     LocalSdrShim::instance().setRtlAgc(g_runtimeConfig.rtlAgc || g_runtimeConfig.agcLock == 1);
+    // ★★ THE SAME PLACE, FOR THE SAME REASON — after the radio is open. This call was MISSING from
+    //    the startup path (it existed only in the live-reload path), so `tunerBwAuto` in the config
+    //    applied when the setup page was saved and was then silently LOST on every restart — the
+    //    exact "I have to set it again on every load" symptom the config field was added to cure.
+    LocalSdrShim::instance().setTunerBwAuto(g_runtimeConfig.tunerBwAuto);
     // ★ The rest of the protected set, asserted for the same reason: these all persist in the
     //   RADIO, so a value left by another program (or by this owner on a different radio) would
     //   otherwise be inherited silently. 0 / -1 mean "leave the radio's default alone".

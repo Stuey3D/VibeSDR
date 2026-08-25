@@ -296,7 +296,7 @@ export interface AudioSheetProps {
   stereo?: boolean;            // WFM stereo on, vs forced mono
   onStereo?: (on: boolean) => void;
   // ── The broadcast-FM treatments (VibeServer 3.1) ────────────────────────────────────────────
-  // ★★★ FOUR FAULTS, FOUR SWITCHES. NR answers continuous NOISE, IMS a strong NEIGHBOUR, CEQ a
+  // ★★★ FOUR FAULTS, FOUR SWITCHES. NR answers continuous NOISE, IMS a REFLECTION too weak for CEQ, CEQ a
   //     REFLECTION, NB IMPULSES — and measured on the server they want OPPOSITE actions, so one
   //     combined control would be wrong as well as unhelpful. All four default ON and each declines
   //     to act unless its own evidence says it will help, so the switches exist for A/B rather than
@@ -305,6 +305,7 @@ export interface AudioSheetProps {
   //   rather than offering controls that cannot work.
   fmNr?: boolean;   onFmNr?: (on: boolean) => void;
   fmIms?: boolean;  onFmIms?: (on: boolean) => void;
+  fmAutoBw?: boolean;  onFmAutoBw?: (on: boolean) => void;
   fmCeq?: boolean;  onFmCeq?: (on: boolean) => void;
   fmNb?: boolean;   onFmNb?: (on: boolean) => void;
 
@@ -335,7 +336,7 @@ export default function AudioSheet({
   fmSquelch = -999, onFmSquelch, isFmMode = false,
   notchOn = false, onNotch,
   deemph = 50e-6, onDeemph, stereo = true, onStereo,
-  fmNr, onFmNr, fmIms, onFmIms, fmCeq, onFmCeq, fmNb, onFmNb,
+  fmNr, onFmNr, fmIms, onFmIms, fmCeq, onFmCeq, fmNb, onFmNb, fmAutoBw, onFmAutoBw,
   rawAudio = false, onRawAudio,
   onOwrxSquelch, onOwrxNr, owrxDspDefaults,
   serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
@@ -583,7 +584,7 @@ export default function AudioSheet({
               for four full-width rows, and a DXer reading them knows the initials.
               ★ NR works in MONO too: the audio high-cut treats baseband hiss, which is there
                 whether you are in stereo or not; only the stereo half needs L-R. */}
-          {(onFmNr || onFmIms || onFmCeq || onFmNb) && (
+          {(onFmNr || onFmIms || onFmCeq || onFmNb || onFmAutoBw) && (
             <View style={st.bwRow}>
               {/* ★★ "BROADCAST FM", not "FM DSP" — and the row label is load-bearing. This sheet
                   ALREADY has NR and NB buttons a few rows up, and those are the app's OWN
@@ -599,6 +600,10 @@ export default function AudioSheet({
                 { l: 'IMS', on: fmIms !== false, cb: onFmIms },
                 { l: 'CEQ', on: fmCeq !== false, cb: onFmCeq },
                 { l: 'NB',  on: fmNb !== false,  cb: onFmNb },
+                /* ★ AUTO BW is SERVER-WIDE — it changes the demodulator for everybody, not this
+                 *   listener's own processing like the four above. Same row because it is the same
+                 *   family of FM treatments and the same words the web client uses. */
+                { l: 'A-BW', on: fmAutoBw === true, cb: onFmAutoBw },
               ] as const).filter((o) => !!o.cb).map((o) => (
                 <TouchableOpacity key={o.l} onPress={() => o.cb?.(!o.on)} hitSlop={6}
                   style={{ paddingHorizontal: 9, paddingVertical: 4, borderRadius: 6, marginLeft: 6,

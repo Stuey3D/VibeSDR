@@ -171,6 +171,9 @@ object VibeServerBoot {
             //   resurrect the behaviour.
             VibeLocalSDR.setGainAutomation(
                 false, cfg.b("rtlAgc", false) || cfg.b("agcLock", false))
+            // ★ The IF filter following the zoom, applied beside the AGC because they are the pair
+            //   an owner sets once and expects to stay set — see RadioConfig::tunerBwAuto.
+            VibeLocalSDR.setTunerBwAuto(cfg.b("tunerBwAuto", false))
             VibeLocalSDR.setGainLimits(
                 if (adv) cfg.s("gainLimits") else "",
                 restGain,
@@ -199,6 +202,7 @@ object VibeServerBoot {
         //   setup page. Locking a loop that is not running locks nothing.
         if (port > 0) VibeLocalSDR.setGainAutomation(
             false, cfg.b("rtlAgc", false) || cfg.b("agcLock", false))
+        if (port > 0) VibeLocalSDR.setTunerBwAuto(cfg.b("tunerBwAuto", false))
         // ★ The public listing is put back by the CALLERS, which hold a Context — see
         //   VibeTunnel.restoreIfWanted. This object only has a File.
         return port

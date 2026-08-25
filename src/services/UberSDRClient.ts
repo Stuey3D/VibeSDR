@@ -208,7 +208,11 @@ export interface SDRCallbacks {
    *  remote client can populate its gain slider (it can't query the HW natively). */
   /** The broadcast-FM treatments as the RADIO reports them — sticky and shared, so this is the
    *  only authority on what they are actually set to. */
-  onFmDsp?:     (s: { wsp: boolean; ims: boolean; ceq: boolean; nb: boolean }) => void;
+  /** ★★ `autobw` is OPTIONAL and forwarded as undefined when the server did not state it — "no
+   *  opinion" is not "off". The web client learned that the hard way: `!!msg.autobw` turned a
+   *  missing field into a false one and pinned its AUTO BW button off for ever. */
+  onFmDsp?:     (s: { wsp: boolean; ims: boolean; ceq: boolean; nb: boolean;
+                      autobw?: boolean }) => void;
   onHwGains?:   (gains: number[]) => void;
   /** ★★★ WHERE THE GAIN ACTUALLY IS on the serving radio, in its own units; -1 = auto/AGC. The
    *  slider FOLLOWS this. A client cannot query a remote dongle, so before the server sent it the
@@ -739,7 +743,7 @@ export class UberSDRClient {
   setNotch(on: boolean)    { this._sendCtl({ type: 'notch', on }); }
   // ── The broadcast-FM treatments (VibeServer 3.1) ────────────────────────────────────────────
   // ★★★ FOUR FAULTS, FOUR SWITCHES, and they are NOT interchangeable: NR answers continuous NOISE,
-  //     IMS answers a strong NEIGHBOUR, CEQ answers a REFLECTION, NB answers IMPULSES. Measured on
+  //     IMS answers a REFLECTION too weak for CEQ, CEQ answers a REFLECTION, NB answers IMPULSES. Measured on
   //     the server, they want opposite actions — narrowing the IF costs up to 10 dB against noise
   //     and gains 10 dB against a close neighbour — so one combined control would be actively
   //     wrong as well as unhelpful.
@@ -747,8 +751,9 @@ export class UberSDRClient {
   //    what every listener on that receiver hears. The server gates them accordingly.
   /** Weak-signal noise treatment: stereo high-blend + audio high-cut. Works in mono too. */
   setWeakProc(on: boolean) { this._sendCtl({ type: 'wsp', on }); }
-  /** IMS — adaptive IF against an adjacent channel. */
+  /** IMS — multipath suppression (blends L-R by measured multipath depth); see the shim. */
   setIms(on: boolean)      { this._sendCtl({ type: 'ims', on }); }
+  setAutoBw(on: boolean)   { this._sendCtl({ type: 'autobw', on }); }
   /** CEQ — blind channel equaliser, for a reflection. */
   setCeq(on: boolean)      { this._sendCtl({ type: 'ceq', on }); }
   /** Noise blanker — impulse noise only. */
@@ -2010,10 +2015,12 @@ export class UberSDRClient {
       //     worse than a missing one because nothing tells you to look. Absent = an older server
       //     that HAS the treatment but does not talk about it, so default ON rather than OFF.
       if (typeof msg.wsp === 'boolean' || typeof msg.ims === 'boolean'
-          || typeof msg.ceq === 'boolean' || typeof msg.nb === 'boolean') {
+          || typeof msg.ceq === 'boolean' || typeof msg.nb === 'boolean'
+          || typeof msg.autobw === 'boolean') {
         this.callbacks.onFmDsp?.({
           wsp: msg.wsp !== false, ims: msg.ims !== false,
           ceq: msg.ceq !== false, nb: msg.nb !== false,
+          autobw: typeof msg.autobw === 'boolean' ? msg.autobw : undefined,
         });
       }
       if (Array.isArray(msg.gains)) this.callbacks.onHwGains?.(msg.gains as number[]);

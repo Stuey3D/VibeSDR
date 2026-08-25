@@ -383,7 +383,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     S("allowRanges", r.allowRanges); S("blockRanges", r.blockRanges);
     S("gainLimits", r.gainLimits); I("restGain", r.restGain); I("agcLock", r.agcLock);
     // ★ Absent keeps the safe defaults (AGC off, protection on) — B() only assigns when present.
-    B("rtlAgc", r.rtlAgc); B("overloadProtect", r.overloadProtect);
+    B("rtlAgc", r.rtlAgc); B("tunerBwAuto", r.tunerBwAuto);
     I("users", r.users); N("maxBw", r.maxBw); N("maxFps", r.maxFps); N("fftRate", r.fftRate);
     I("uncompressed", r.uncompressed);
     B("forceIdleSaver", r.forceIdleSaver); B("releaseWhenIdle", r.releaseWhenIdle);
@@ -420,7 +420,7 @@ std::string radioToJson(const RadioConfig& r) {
     S("allowRanges", r.allowRanges); S("blockRanges", r.blockRanges);
     // ★ BOTH WRITERS, as the note above insists: the setup page reads the API one.
     S("gainLimits", r.gainLimits); N("restGain", r.restGain); N("agcLock", r.agcLock);
-    B("rtlAgc", r.rtlAgc); B("overloadProtect", r.overloadProtect);
+    B("rtlAgc", r.rtlAgc); B("tunerBwAuto", r.tunerBwAuto);
     N("users", r.users); N("maxBw", r.maxBw); N("maxFps", r.maxFps); N("fftRate", r.fftRate);
     N("uncompressed", r.uncompressed);
     B("forceIdleSaver", r.forceIdleSaver); B("releaseWhenIdle", r.releaseWhenIdle);
@@ -770,6 +770,23 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.rfNotch = r.rfNotch; c.dabNotch = r.dabNotch; c.zoomSpectrum = r.zoomSpectrum;
     c.allowRanges = r.allowRanges; c.blockRanges = r.blockRanges;
     c.gainLimits = r.gainLimits; c.restGain = r.restGain; c.agcLock = r.agcLock;
+    /* ★★★ THE LAST LINK IN THE CHAIN, AND THE ONE THAT WAS MISSING. This function flattens a
+     *     RADIO's settings into the server-level Config that the worker process actually reads, so
+     *     a per-radio field that is not copied here simply never arrives — however correctly it is
+     *     saved. `tunerBwAuto` was written by the setup page, stored in config.json against the
+     *     right radio, parsed back by radioFromJson, and read at startup by main() — and every one
+     *     of those five hops worked while the tuner stayed manual, because the value never crossed
+     *     from RadioConfig into Config. The owner saved it three times.
+     *  ★★ AND `rtlAgc`, WHICH HAD THE SAME HOLE WITH A DIFFERENT SYMPTOM. Only `agcLock` was
+     *     copied across, and the worker computes `rtlAgc || agcLock == 1` — so switching the AGC
+     *     ON in the setup page did nothing and only LOCKING it worked, which is exactly what
+     *     Stuart reported: "its only when I lock the agc in the setup". Checked before changing
+     *     it: the server-level copy is absent from config.json entirely (so it reads false), which
+     *     is why nothing currently on can be switched off by honouring the radio's own value.
+     *  ★ `overloadProtect` USED to be the next one in this position; it is gone now — see the note
+     *    where its field was. An old config that still carries the key is simply ignored. */
+    c.tunerBwAuto = r.tunerBwAuto;
+    c.rtlAgc      = r.rtlAgc;
     c.biasT = r.biasT;
     c.ppm = r.ppm; c.ppb = r.ppb; c.directSampling = r.directSampling;
     c.port = r.port;

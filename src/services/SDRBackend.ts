@@ -234,6 +234,9 @@ export interface SDRBackend {
   //   DSP, and the UI hides the controls rather than offering ones that cannot work.
   setWeakProc?(on: boolean): void;
   setIms?(on: boolean): void;
+  /** ★ TEF-style automatic demodulator bandwidth (FM broadcast only). SERVER-WIDE, unlike the four
+   *  above: it changes the demodulator rather than one listener's processing. */
+  setAutoBw?(on: boolean): void;
   setCeq?(on: boolean): void;
   setNoiseBlanker?(on: boolean): void;
 

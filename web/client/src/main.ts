@@ -1011,15 +1011,26 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       setToggleTo('notch', s.notch, 'notch');
       // ★ Sticky, so it must be RESTORED from the server's own report — the button has to say
       //   what the radio is doing, not what this tab last asked for.
-      setToggleTo('wsp', s.wsp, 'wsp');
-      if (s.autobw !== undefined) setToggleTo('abwBtn', s.autobw, 'autobw');
-      $('wspBtn').textContent = s.wsp ? 'NR ON' : 'NR OFF';
-      setToggleTo('ims', s.ims, 'ims');
-      $('imsBtn').textContent = s.ims ? 'IMS ON' : 'IMS OFF';
-      setToggleTo('ceq', s.ceq, 'ceq');
-      $('ceqBtn').textContent = s.ceq ? 'CEQ ON' : 'CEQ OFF';
-      setToggleTo('nb', s.nb, 'nb');
-      $('nbBtn').textContent = s.nb ? 'NB ON' : 'NB OFF';
+      /* ★★★ THE LABEL GOES THROUGH setToggleTo TOO — IT MUST OBEY THE SAME PRESS GUARD. These
+       *      were two statements: setToggleTo set the HIGHLIGHT and the next line set the TEXT.
+       *      The guard that protects a just-pressed button from a stale report only covered the
+       *      first, so inside that window the highlight froze while the label followed the old
+       *      server value — a button lit up reading OFF. Stuart: "its lit up like its on but it
+       *      says its off, i suspect a typo." Not a typo: two writers, one guarded.
+       *  ★ One call per control now, so the pair cannot come apart again. */
+      setToggleTo('wspBtn', s.wsp, 'wsp', (on) => on ? 'NR ON'  : 'NR OFF');
+      setToggleTo('imsBtn', s.ims, 'ims', (on) => on ? 'IMS ON' : 'IMS OFF');
+      setToggleTo('ceqBtn', s.ceq, 'ceq', (on) => on ? 'CEQ ON' : 'CEQ OFF');
+      setToggleTo('nbBtn',  s.nb,  'nb',  (on) => on ? 'NB ON'  : 'NB OFF');
+      // ★ AUTO BW is decided once for the whole receiver (it changes the demodulator, not a
+      //   per-listener effect), so the server's word is the only truth here.
+      // ★ ONLY WHEN THE SERVER ACTUALLY STATED IT. `!!s.autobw` turned "not reported" into "off"
+      //   — see the note in onDspState. An older server that says nothing leaves the button alone.
+      if (typeof s.autobw === 'boolean') {
+        srvAutoBw = s.autobw;
+        setToggleTo('autoBwBtn', s.autobw, 'autobw',
+                    (on) => on ? 'AUTO BW ON' : 'AUTO BW OFF');
+      }
       // ★ The RSP front-end notches, which are sticky in exactly the same way and were the
       //   other half of the same report. Absent = the server has no opinion; leave the
       //   control alone rather than inventing an "off" it never said.
@@ -1058,6 +1069,14 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
       hwGainNow = typeof gainNow === 'number' ? gainNow : -1;
       hwAgcOn = agc === true;                       // ★ the live flag the chip reads through
+      /* ★★★ AND RENDER IT INTO THE BUTTON. Removing the client's push (see pushOnInit) stopped it
+       *     overriding the owner's saved config — but without this half the button then showed
+       *     whatever this browser last stored, which after a reload was OFF on a radio whose AGC
+       *     was ON. Stuart pressed it to "turn it on" and thereby turned it off, every time:
+       *     "all those settings that were meant to be on still had to be set manually after a
+       *     page refresh." A control that must not COMMAND from storage has to READ from the
+       *     radio, or it just lies more quietly than before. Both halves or neither. */
+      setToggleTo('agc', hwAgcOn, 'agc');
       // ★ Paint the chip from STATE, so it is right on arrival and after a reload — not only after
       //   the loop happens to move while you are watching.
       {
@@ -6031,15 +6050,6 @@ function renderRds() {
   // signal is weak, when it is the normal injection ratio for a healthy station.
   // ★ Deviations in kHz, each said against its own spec band so the number explains itself
   // — "6.8 kHz" means nothing without knowing 6.0–7.5 is nominal (Stuart: "make it clear").
-  /* ★ AUTO BW's answer, next to the figure that drove it. Silent (a dash) whenever it is not
-   *   acting — off, no pilot, or not FM — because a number there would imply it had chosen one. */
-  {
-    const el = document.getElementById('rxAutoBw');
-    if (el) {
-      const hz = Number(rdsExt?.autobwHz ?? 0);
-      el.textContent = (rdsExt?.autobw && hz > 0) ? `${(hz / 1e3).toFixed(0)} kHz` : '\u2014';
-    }
-  }
   // ★★ MPX S/N, and WHAT IT DID. A number on its own invites "is 22 good?"; showing the corner
   //    the receiver chose because of it answers the question the listener actually has, which is
   //    "why does this sound the way it does". Only mentioned when it is actually acting — on a
@@ -6089,7 +6099,21 @@ function renderRds() {
     const pct = mp * 100;
     const label = pct < 0.5 ? 'none detected'
                 : mp < 0.03 ? 'clean' : mp < 0.10 ? 'slight' : mp < 0.20 ? 'moderate' : 'severe';
-    mpEl.textContent = pct < 0.5 ? label : `${pct.toFixed(1)}% · ${label}`;
+    /* ★★ AND WHETHER IMS IS ACTING ON IT. Multipath is the fault IMS answers, so its action
+     *    belongs beside the measurement that triggered it — the same measurement-and-action
+     *    pairing IF NARROW and CEQ already use. Silent when IMS is not the reason for the blend,
+     *    which is most of the time: CEQ takes strong signals, and below ~14 dB the noise curve
+     *    has already blended further than IMS would ask for. */
+    /* ★★★ AND WHY IT IS NOT, WHENEVER IT IS NOT — INCLUDING "nothing to suppress". I first left
+     *      that case silent as clutter, reasoning that the percentage beside it already says so.
+     *      That was wrong twice over: CEQ prints "standing by · nothing to correct" in the very
+     *      same panel for the very same situation, so the silence read as a BROKEN readout rather
+     *      than a calm one — Stuart went looking for it twice ("not seeing the IMS status", "still
+     *      no IMS standby status"). A reader cannot tell "this control has nothing to say" from
+     *      "this control is not reporting"; only the control can, and it must say which.
+     *  ★ Silent only when the listener has switched IMS OFF, where the button already says it. */
+    const base = pct < 0.5 ? label : `${pct.toFixed(1)}% · ${label}`;
+    mpEl.textContent = base;
     mpEl.style.color = mp < 0.03 ? '#7dff9a' : mp < 0.10 ? '' : mp < 0.20 ? '#ffd479' : '#ff9a9a';
     mpHeld = mpEl.textContent;
   } else if (rdsExt && mpHeld) {
@@ -6101,6 +6125,29 @@ function renderRds() {
     mpEl.textContent = 'too noisy to judge';
     mpEl.style.color = '';
   } else { mpEl.textContent = dash; mpEl.style.color = ''; }
+
+  /* ★★★ APPENDED AFTER THE WHOLE CHAIN, NOT INSIDE ONE BRANCH — and that placement was the bug.
+   *      The note lived in the "multipath reading is VALID" arm, so on the one station where the
+   *      question is most pressing — 46.1% severe, tagged `held` because the meter cannot judge at
+   *      6 dB — the row took the `held` arm instead and IMS said nothing at all. Stuart looked for
+   *      it three times and then reasonably suspected the deploy: "still not seeing any of the IMS
+   *      status ... which makes me think stale packages are being pushed". The package was right;
+   *      the branch was wrong. (Verified by decoding the served bundle before changing anything —
+   *      see memory/hermes_bundle_grep_utf16 for why guessing at that costs an hour.)
+   *  ★ A control's status must not depend on whether SOME OTHER reading happened to be valid.
+   *  ★ mpHeld deliberately does NOT carry this: it stores the last good MULTIPATH figure, and
+   *    freezing a stale IMS verdict into it would outlive the state it describes. */
+  {
+    const imsHz = Number(rdsExt?.imsBlend ?? 0);
+    const imsWhy = Number(rdsExt?.imsWhy ?? 1);
+    const imsNote = imsHz > 0 ? `IMS blending L−R to ${(imsHz / 1000).toFixed(1)}k`
+                  : imsWhy === 2 ? 'IMS standing by · CEQ has it'
+                  : imsWhy === 3 ? 'IMS standing by · nothing to suppress'
+                  : imsWhy === 4 ? 'IMS standing by · NR already blending further'
+                  : imsWhy === 5 ? 'IMS standing by · multipath not measurable at this S/N'
+                  : '';
+    if (rdsExt && imsNote) mpEl.textContent = `${mpEl.textContent} · ${imsNote}`;
+  }
 
   // ★★ THE BLANKER'S RATE, a DIAGNOSTIC before it is a control: it answers "is that crackle me or
   //    the station?", which an owner otherwise has no way to settle.
@@ -6142,17 +6189,26 @@ function renderRds() {
   const ifG = rdsExt?.ifGain ?? 0;
   const ifC = rdsExt?.ifCand ?? 0;
   const ifBw = rdsExt?.ifBw ?? 0;
-  if (rdsExt && ifC > 0 && (rdsExt.mpxSnr ?? 0) > 0.5) {
-    if (ifBw > 0) {
-      ifEl.textContent = `${Math.round(ifBw / 1000)}k narrow · wide would ` +
-        (ifG > 1.5 ? `gain ${ifG.toFixed(1)} dB` : `cost ${Math.abs(ifG).toFixed(1)} dB`);
-      ifEl.style.color = '#7dff9a';
-    } else {
-      const kHz = Math.round(ifC / 1000);
-      const verdict = ifG > 1.5 ? 'would help' : ifG < -1.5 ? 'would cost' : 'no real gain';
-      ifEl.textContent = `wide · ${kHz}k ${verdict} (${ifG >= 0 ? '+' : ''}${ifG.toFixed(1)} dB)`;
-      ifEl.style.color = ifG > 1.5 ? '#7dff9a' : '';
-    }
+  /* ★★★ AN APPLIED WIDTH IS REPORTED WHATEVER ASKED FOR IT. This row used to be gated ENTIRELY on
+   *      `ifC` — IMS's shadow candidate — so with IMS switched off it fell to a dash even while
+   *      the filter was genuinely narrowed, which since auto bandwidth exists is a lie about the
+   *      receiver. Stuart: "if i toggle off the IMS the auto bw readout ... is not showing any
+   *      narrowing." Two requesters share this filter (see RxPipeline::setAutoBandwidth); the row
+   *      reports the RESULT, so it cannot belong to either one of them.
+   *  ★★ The "wide would gain/cost" half is IMS's measurement and is still only shown when IMS has
+   *     actually measured it. Without it the width is stated plainly rather than dressed up with a
+   *     benefit figure nobody computed. */
+  const ifShadow = ifC > 0 && (rdsExt?.mpxSnr ?? 0) > 0.5;
+  if (rdsExt && ifBw > 0) {
+    ifEl.textContent = `${Math.round(ifBw / 1000)}k narrow` + (ifShadow
+      ? ` · wide would ${ifG > 1.5 ? `gain ${ifG.toFixed(1)} dB` : `cost ${Math.abs(ifG).toFixed(1)} dB`}`
+      : '');
+    ifEl.style.color = '#7dff9a';
+  } else if (rdsExt && ifShadow) {
+    const kHz = Math.round(ifC / 1000);
+    const verdict = ifG > 1.5 ? 'would help' : ifG < -1.5 ? 'would cost' : 'no real gain';
+    ifEl.textContent = `wide · ${kHz}k ${verdict} (${ifG >= 0 ? '+' : ''}${ifG.toFixed(1)} dB)`;
+    ifEl.style.color = ifG > 1.5 ? '#7dff9a' : '';
   } else { ifEl.textContent = dash; ifEl.style.color = ''; }
 
   const pdev = rdsExt?.pilotDev ?? 0;
@@ -7339,17 +7395,43 @@ function slider(
 }
 
 /** Wire a toggle button: ON/OFF text, live effect, persisted. */
-function toggle(id: string, apply: (on: boolean) => void, prefKey?: string, initial = false) {
+/** @param pushOnInit send the stored value to the server at wiring time. TRUE for a listener's own
+ *  processing, which the server cannot know. **FALSE for anything SERVER-WIDE**: see below.
+ *  ★★★ A CLIENT MUST NOT COMMAND A SHARED SETTING FROM ITS OWN STORAGE. For a control that belongs
+ *      to the RADIO rather than to this listener, only the radio knows the truth — so a fresh page
+ *      must READ it, never assert it. Pushing at wiring time makes a reload change the receiver
+ *      instead of reading it, and on a shared server it does that to everyone else too.
+ *  ★★★ IT HAPPENED, AND IT SURVIVED THE FIX THAT CAUSED IT. AUTO BW defaults ON at the server, yet
+ *      Stuart's browser turned it off on every load: an earlier bug (setToggleTo overwriting the
+ *      pref from a stale report) had written `autobw:false` into his storage, and this line then
+ *      dutifully sent it. Fixing the writer did nothing for the value already written — "auto BW
+ *      is not default on". A stale pref outlives the bug that made it, so the cure has to be that
+ *      the stale pref is never authoritative in the first place. */
+function toggle(id: string, apply: (on: boolean) => void, prefKey?: string, initial = false,
+                pushOnInit = true) {
   const el = $<HTMLButtonElement>(id);
   const saved = prefKey ? prefs()[prefKey] : undefined;
-  let on = typeof saved === 'boolean' ? saved : initial;
-  const run = () => {
+  /* ★★★ A SERVER-AUTHORITATIVE CONTROL MUST NOT READ ITS STATE FROM STORAGE AT ALL — not even as a
+   *      first guess. pushOnInit=false already stopped this browser COMMANDING the radio; this
+   *      stops it DISPLAYING a value the radio never reported. The two are the same mistake seen
+   *      from opposite ends, and fixing only the first left AUTO BW reading OFF for ever: the
+   *      stored `autobw:false` (written by an earlier bug, long since fixed) still won the line
+   *      below, so seeding `initial` from the server's report never got a look-in. Three separate
+   *      fixes bounced off this one expression.
+   *  ★ For those controls `initial` IS the server's last word (or the documented default), and a
+   *    state report overwrites it moments later anyway. The pref is still SAVED on click, so a
+   *    server that reports nothing keeps the listener's choice. */
+  let on = (pushOnInit && typeof saved === 'boolean') ? saved : initial;
+  const run = (push: boolean) => {
     el.classList.toggle('on', on);
     el.textContent = on ? 'ON' : 'OFF';
-    apply(on);
+    if (push) apply(on);
   };
-  el.onclick = () => { on = !on; run(); if (prefKey) savePref(prefKey, on); };
-  run();
+  el.onclick = () => {
+    on = !on; recentPress.set(id, Date.now()); run(true);
+    if (prefKey) savePref(prefKey, on);
+  };
+  run(pushOnInit);
 }
 
 /** ★★★ RENDER A TOGGLE TO THE STATE THE SERVER REPORTS — without firing its handler.
@@ -7364,9 +7446,38 @@ function toggle(id: string, apply: (on: boolean) => void, prefKey?: string, init
  *     that IS an ON/OFF word.
  *  ★ The saved pref is updated too, or the next reconnect's pushSettingsToServer() would send
  *    the stale value and undo what we have just learned. */
-function setToggleTo(id: string, on: boolean, prefKey?: string) {
+/** ★★★ WHAT THE USER JUST PRESSED OUTRANKS A REPORT THAT LEFT BEFORE THEY PRESSED IT.
+ *  A state report is a snapshot of the radio at the moment it was BUILT. Press a button and one is
+ *  usually already in flight carrying the old value, so rendering it unconditionally flips the
+ *  control straight back — and, far worse, setToggleTo also SAVES THE PREF, so the stale value is
+ *  written to storage and pushed at the server on the next reconnect. The switch then turns itself
+ *  off for real. Stuart: "the button wont stay active", and the Pi's log shows auto bandwidth
+ *  running for forty seconds and then stopping on its own.
+ *  ★★ THIS RACE IS AS OLD AS THE FUNCTION AND HAS ONLY JUST BECOME REACHABLE. Every caller passed
+ *     an element id that does not exist ('wsp' for 'wspBtn'), so setToggleTo returned at the first
+ *     line and did nothing at all — for NR, IMS, CEQ and NB alike. Fixing those ids switched on a
+ *     path that had never run. A dead code path is not a tested one.
+ *  ★ Four seconds covers a round trip on a slow tunnel and is far shorter than any interval at
+ *    which somebody toggles a switch deliberately. */
+const recentPress = new Map<string, number>();
+
+/** ★★★ THE SERVER'S LAST WORD ON A SERVER-WIDE TOGGLE, KEPT FOR WHEN THE CONTROL IS WIRED LATER.
+ *      The PROCESSING buttons are built when the audio menu is first opened — which is AFTER the
+ *      state report has arrived and been rendered. So `toggle()` painted the button from this
+ *      browser's stored value, and no further state report ever came to correct it: the server had
+ *      AUTO BW on and adjusting (52 changes in four minutes in the log) while the button sat there
+ *      reading OFF. Stuart, three rounds in: "the damned auto BW is not defaulting to the on
+ *      position like it should." It WAS on; only the button disagreed.
+ *  ★★ Not-yet-known stays `undefined` rather than `false`, so "no report seen" and "reported off"
+ *     cannot be confused — that conflation is what made the stale pref look authoritative. */
+let srvAutoBw: boolean | undefined;
+
+function setToggleTo(id: string, on: boolean, prefKey?: string,
+                     label?: (on: boolean) => string) {
   const el = document.getElementById(id);
   if (!el) return;
+  if (Date.now() - (recentPress.get(id) || 0) < 4000) return;
+  if (label) el.textContent = label(on);
   el.classList.toggle('on', on);
   const t = (el.textContent || '').trim();
   if (t === 'ON' || t === 'OFF') el.textContent = on ? 'ON' : 'OFF';
@@ -7450,7 +7561,10 @@ function buildMenu() {
   }, 'idleSaver', true);
 
   toggle('biasT', (on) => spec!.setHwBiasT(on), 'biasT');
-  toggle('agc',   (on) => spec!.setHwAgc(on),   'agc');
+  // ★ READ, DO NOT ASSERT — see the pushOnInit note on toggle(). The AGC belongs to the radio and
+  //   is persisted in its config; this button reports it and changes it, but must not command it
+  //   from stale storage the moment a page loads.
+  toggle('agc',   (on) => spec!.setHwAgc(on),   'agc', false, /*pushOnInit=*/false);
   segment('dsSeg', 'ds', (v) => spec!.setHwDirectSampling(v as 0 | 1 | 2), 'directSampling');
 
   const gainAuto = $<HTMLButtonElement>('gainAuto');
@@ -7498,13 +7612,6 @@ function buildMenu() {
     $('imsBtn').textContent = on ? 'IMS ON' : 'IMS OFF';
     spec!.setIms(on);
   }, 'ims', true);
-  /* ★ Defaults OFF, unlike the other four. They correct a fault; this one TRADES — it throws away
-   *   audio bandwidth to buy noise rejection, which is the right call on a weak station and a
-   *   pointless loss on a strong one. A trade should be opted into. */
-  toggle('abwBtn', (on) => {
-    $('abwBtn').textContent = on ? 'AUTO BW ON' : 'AUTO BW OFF';
-    spec!.setAutoBw(on);
-  }, 'autobw', false);
   toggle('ceqBtn', (on) => {
     $('ceqBtn').textContent = on ? 'CEQ ON' : 'CEQ OFF';
     spec!.setCeq(on);
@@ -7513,6 +7620,16 @@ function buildMenu() {
     $('nbBtn').textContent = on ? 'NB ON' : 'NB OFF';
     spec!.setNoiseBlanker(on);
   }, 'nb', true);
+  // ★★ DEFAULTS ON, like the other four. It is the TEF6686's own behaviour and the reason Stuart
+  //    went looking for it: "if you disable auto bandwidth it becomes really messy and noisy". It
+  //    declines to act on anything that is not FM broadcast and on anything with no pilot, so it
+  //    costs a listener nothing where it cannot help.
+  // ★ SERVER-WIDE, so it is READ from the state report and never asserted from storage — see the
+  //   pushOnInit note on toggle(). The button below is only its first paint.
+  toggle('autoBwBtn', (on) => {
+    $('autoBwBtn').textContent = on ? 'AUTO BW ON' : 'AUTO BW OFF';
+    spec!.setAutoBw(on);
+  }, 'autobw', srvAutoBw ?? true, /*pushOnInit=*/false);
   segment('deemphSeg', 'tau', (us) => spec!.setDeemph(us * 1e-6), 'deemph');
 
   // ★★ UNCOMPRESSED AUDIO — the one control in this panel that is NOT a live setter. Every
@@ -7658,7 +7775,6 @@ function pushSettingsToServer() {
   const notch = bool('notch');      if (notch !== undefined) spec.setNotch(notch);
   const stereo = bool('stereo');    if (stereo !== undefined) spec.setStereo(stereo);
   const wsp = bool('wsp');          if (wsp !== undefined) spec.setWeakProc(wsp);
-  const abw = bool('autobw');       if (abw !== undefined) spec.setAutoBw(abw);
   const ims = bool('ims');          if (ims !== undefined) spec.setIms(ims);
   const ceq = bool('ceq');          if (ceq !== undefined) spec.setCeq(ceq);
   const nb = bool('nb');            if (nb !== undefined) spec.setNoiseBlanker(nb);
@@ -7680,7 +7796,13 @@ function pushSettingsToServer() {
   if (adminUnlocked) {
     const ppm = num('ppm');           if (ppm !== undefined) spec.setHwPpm(ppm);
     const biasT = bool('biasT');      if (biasT !== undefined) spec.setHwBiasT(biasT);
-    const agc = bool('agc');          if (agc !== undefined) spec.setHwAgc(agc);
+    /* ★★★ NOT THE AGC — THE SERVER PERSISTS THAT ONE ITSELF. `rtlAgc` is a config field, applied
+     *     at startup (main.cpp), so it is the RADIO's setting and survives a restart. Re-asserting
+     *     a value out of browser storage on every admin connect therefore does not restore a
+     *     preference, it OVERRIDES the owner's saved configuration with whatever this tab last saw
+     *     — which is why Stuart had to switch it back on "every time i connect". ppm, bias-T and
+     *     direct sampling stay because they have no server-side home; the moment one of them gains
+     *     a config field it should leave this list too. */
     const ds = num('directSampling'); if (ds !== undefined) spec.setHwDirectSampling(ds as 0 | 1 | 2);
   }
 

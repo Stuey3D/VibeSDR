@@ -335,6 +335,7 @@ void RxPipeline::rebuildAudio() {
             ifBwReq_.store(0.0, std::memory_order_relaxed);
             ifGainDb_ = 0.0f; shadowTick_ = 0; ifWarm_ = 0; ifDwell_ = 0;
             lmrHiCutHz_ = 15000.0f; lmrHiCutY_ = 0.0f; blendSnrDb_ = 99.0f;
+            imsBlendHz_ = 0.0f; imsWhy_ = 1;
             audioHiCutHz_ = 15000.0f; hiCutYL_ = hiCutYR_ = hiCutYM_ = 0.0f;
             const int rch = (int)std::llround(audFs_);
             resampR_ = std::make_unique<RationalResampler>(rch, outRate_);
@@ -547,7 +548,13 @@ void RxPipeline::feed(const cf32* iq, int n) {
             shadowBuf_.assign(chBuf_.begin(), chBuf_.begin() + nc);
         }
         if (mode_ == Mode::WFM) {
-            const double want = ifBwReq_.load(std::memory_order_relaxed);
+            // ★★★ THE NARROWER OF THE TWO REQUESTS — see setAutoBandwidth for why there are two.
+            //     0 means "no request from me", not "open the filter", so it must never win a
+            //     comparison; only a real width can.
+            const double imsWant  = ifBwReq_.load(std::memory_order_relaxed);
+            const double autoWant = autoBwReq_.load(std::memory_order_relaxed);
+            const double want = (imsWant > 0.0 && autoWant > 0.0) ? std::min(imsWant, autoWant)
+                              : (imsWant > 0.0 ? imsWant : autoWant);
             if (want != ifBwHz_) { ifBwHz_ = want; adaptIf_.setBandwidth(want); }
             adaptIf_.process(chBuf_.data(), nc);
         }
@@ -591,6 +598,21 @@ void RxPipeline::feed(const cf32* iq, int n) {
             //    something. The S/N gate is the one that surprises people, because a signal being
             //    FOUGHT OVER reads as severe multipath while sitting well under 18 dB.
             ceqWhy_ = !ceqAllowed ? 1 : (!strongEnough ? 2 : (!worthIt ? 3 : 0));
+            /* ★★★ IMS'S VERDICT BELONGS HERE TOO — NOT INSIDE THE BLEND BRANCH. It was assigned
+             *     only where the L-R corner is computed, and that branch needs a LOCKED PILOT. So
+             *     on exactly the signals worth asking about — Stuart's 105.4, 46% multipath,
+             *     constellation reading "no lock" — the branch never ran, imsWhy_ kept its initial
+             *     value of 1 ("switched off"), and the readout stayed silent however many times
+             *     the message was fixed. Three rounds of "still not seeing any IMS status" came
+             *     from this one line's position.
+             *  ★★ THE LESSON IS THE ONE ceqWhy_ ALREADY LEARNED: a status must be produced on the
+             *     same schedule as the thing it describes, not as a side effect of the code that
+             *     happens to act. CEQ computes its verdict here, unconditionally, and has never
+             *     had this problem.
+             *  ★ The acting case (0) is set later, where the corner is actually taken. */
+            imsBlendHz_ = 0.0f;
+            imsWhy_ = !imsOn_.load(std::memory_order_relaxed) ? 1 : ceqEngaged_ ? 2
+                    : !multipathValid_ ? 5 : multipathCorr_ <= 0.06f ? 3 : 4;
             if (want && !ceqEngaged_) {
                 if (++ceqDwell_ > 20) { ceqEngaged_ = true; ceqDwell_ = 0; ceq_.reset(); }
             } else if (!want && ceqEngaged_) {
@@ -649,19 +671,21 @@ void RxPipeline::feed(const cf32* iq, int n) {
             // ★★★ NOTHING IS DECIDED UNTIL THE MEASUREMENT HAS SETTLED. ~5 s at one evaluation
             //     per 4 blocks; the averages behind it use a 0.05 coefficient, so they need
             //     roughly that long to mean anything at all.
+            /* ★★★ IMS NO LONGER COMMANDS THE IF FILTER — AUTO BANDWIDTH OWNS IT NOW.
+             *  ★★★ THE TWO WERE THE SAME FEATURE WEARING DIFFERENT NAMES, and Stuart saw it from
+             *      the outside before the code admitted it: "auto bw and IMS seem to be the same
+             *      thing", "IMS just seems to be an auto narrowing of the passband". Both narrowed
+             *      this one filter; they differed only in what steered them, so they fought over
+             *      the slot and whichever wrote last won.
+             *  ★★★ AND OUR "IMS" WAS MISNAMED AGAINST THE PART WE COPIED IT FROM. On a TEF6686,
+             *      iMS is Intelligent Multipath Suppression — a treatment for REFLECTIONS. Its
+             *      bandwidth control is a separate feature, which is our auto bandwidth. So the
+             *      name goes back to the job it describes (see the L-R corner below) and the
+             *      bandwidth logic goes to the control that was already doing it.
+             *  ★★ THE SHADOW MEASUREMENT STAYS AND STILL RUNS. It is what puts "wide would cost
+             *     2.1 dB" in the IF NARROW readout, and it remains the only honest answer to
+             *     "would narrowing actually help here?" — it just no longer commands anything. */
             if (ifWarm_ < 64) ++ifWarm_;
-            if (imsOn_.load(std::memory_order_relaxed) && ifWarm_ >= 64) {
-                if (ifGainDb_ > 3.0f) {
-                    if (++ifDwell_ > 40) {            // ~3 s at one evaluation per 4 blocks
-                        ifDwell_ = 0;
-                        ifBwReq_.store(ifBwHz_ > 0.0 ? 0.0 : shadowBwHz_,
-                                       std::memory_order_relaxed);
-                    }
-                } else ifDwell_ = 0;
-            } else if (ifBwHz_ > 0.0) {
-                ifBwReq_.store(0.0, std::memory_order_relaxed);   // IMS off = wide open
-                ifDwell_ = 0;
-            }
         }
         // ★★★ TAKE THE NOISE BACK OUT, OR THIS METER LIES WHERE IT MATTERS MOST. Noise shakes the
         //     envelope exactly as a reflection does, and the first version reported the sum. On
@@ -945,8 +969,14 @@ void RxPipeline::feed(const cf32* iq, int n) {
             //   mono high-cut needs the same figure. Smoothing it in two places would have made
             //   the time constant depend on which path was running, which is the sort of thing
             //   that is invisible until a station sounds different in mono for no stated reason.
-            if (mpxNoise_.ready() && wantStereo && pll_.locked()
-                && weakProcOn_.load(std::memory_order_relaxed)) {
+            /* ★★★ EITHER SWITCH EARNS THIS BRANCH, NOT NR ALONE. NR treats noise and IMS treats
+             *     a reflection; requiring weakProcOn_ here would have made IMS invisible whenever
+             *     NR was off, which is precisely the A/B a listener reaches for when deciding
+             *     what each control does. Each contributes its own target below and neither is
+             *     allowed to act on the other's behalf. */
+            const bool wspOn_ = weakProcOn_.load(std::memory_order_relaxed);
+            const bool imsNow_ = imsOn_.load(std::memory_order_relaxed);
+            if (mpxNoise_.ready() && wantStereo && pll_.locked() && (wspOn_ || imsNow_)) {
                 // ★★ THE CURVE. Above kClean the signal is good and nothing is touched — a strong
                 //    station must be bit-for-bit what it was before this existed, or the feature
                 //    is a tone control that fires on everybody. Below kRough the image is held at
@@ -976,14 +1006,63 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 constexpr float kWide  = 15000.0f, kNarrow = 2000.0f;
                 float t = (blendSnrDb_ - kRough) / (kClean - kRough);
                 t = std::min(1.0f, std::max(0.0f, t));
-                const float want = kNarrow + t * (kWide - kNarrow);
+                float want = wspOn_ ? (kNarrow + t * (kWide - kNarrow)) : kWide;
+                /* ★★★ IMS: SUPPRESS THE MULTIPATH THAT CEQ CANNOT CORRECT. CEQ undoes a reflection
+                 *      properly, but only above 18 dB MPX S/N — below that a CMA equaliser
+                 *      contorts itself around noise and makes things worse, so it correctly
+                 *      declines. That left a real hole: between "too weak for CEQ" and "clean",
+                 *      NOTHING treated multipath AS multipath. The blend above is steered purely
+                 *      by MPX S/N — by NOISE — so a station being fought over by two transmitters
+                 *      got the wrong medicine entirely.
+                 *  ★★★ WHY THE L-R CORNER IS THE RIGHT LEVER. Multipath is phase distortion, and
+                 *      the stereo subcarrier at 38 kHz suffers it far worse than the mono sum:
+                 *      L-R is recovered by multiplying against a pilot-derived reference, so a
+                 *      phase error there lands directly in the difference signal. Blending toward
+                 *      mono therefore SUPPRESSES multipath distortion specifically — it is not a
+                 *      general-purpose retreat, it is the treatment that matches the fault.
+                 *  ★★ SUPPRESSION IS THE SECOND CHOICE, ALWAYS. When CEQ is engaged it is actually
+                 *     CORRECTING the reflection, and throwing stereo away on top of that would be
+                 *     paying twice for one fault — so this stands down while CEQ has the job.
+                 *  ★ The narrower of the two wants wins, the same rule the IF filter uses: noise
+                 *    and multipath are different faults and either is reason enough to blend. */
+                /* ★★★ WHERE THIS CAN ACTUALLY BE HEARD, STATED HONESTLY. Below about 14 dB the
+                 *      NOISE curve above has already taken L-R to its floor, so on a signal that
+                 *      is both weak and reflected this adds nothing measurable — the blend is
+                 *      already as far as it goes. The window where IMS is the only thing acting
+                 *      is roughly 14-18 dB MPX S/N: above the point where noise-blend backs off,
+                 *      below the point where CEQ will take the job. It also acts at ANY S/N when
+                 *      NR is switched off, because then nothing else is blending at all.
+                 *  ★★ That window is narrow, and it is the truthful description of the feature.
+                 *     Do not widen kMpSevere to make the control feel busier: a blend that fires
+                 *     on a station that does not need it is a tone control, which is the exact
+                 *     mistake the NR curve above was calibrated by ear to avoid. */
+                /* ★★★ SAY WHICH CONDITION FAILED, exactly as ceqWhy_ does — and for the same
+                 *     reason. "Not acting" is honest but useless on its own: the listener cannot
+                 *     tell whether IMS declined, is waiting, or is broken. Stuart, looking at a
+                 *     station with 9.5% multipath: "not seeing the IMS status".
+                 *  ★ 0 acting · 1 switched off · 2 CEQ has the job · 3 no multipath worth treating
+                 *    · 4 the noise blend is already narrower, so IMS would change nothing. */
+                if (imsNow_ && multipathValid_ && !ceqEngaged_ && multipathCorr_ > 0.06f) {
+                    constexpr float kMpLight = 0.06f, kMpSevere = 0.30f;
+                    float m = (multipathCorr_ - kMpLight) / (kMpSevere - kMpLight);
+                    m = std::min(1.0f, std::max(0.0f, m));
+                    const float mpWant = kWide + m * (kNarrow - kWide);
+                    /* ★★★ REPORT ONLY WHAT IMS IS THE REASON FOR. If the noise curve had already
+                     *     asked for something narrower, IMS changed nothing — and a readout that
+                     *     claimed otherwise would be crediting this control with the blend NR was
+                     *     already doing. That is the whole reason it is hard to tell these two
+                     *     apart by ear, so the panel must not add to the confusion. */
+                    if (mpWant < want) { imsBlendHz_ = mpWant; imsWhy_ = 0; }
+                    want = std::min(want, mpWant);
+                }
                 // ★★★ MOVE SLOWLY. A corner that chases the signal sample-by-sample turns fading
                 //     into PUMPING, which listeners notice far more readily than the hiss it is
                 //     removing — the same lesson as the audio jitter buffer. Roughly a second.
                 lmrHiCutHz_ = glideCorner(lmrHiCutHz_, want);
                 if (!std::isfinite(lmrHiCutHz_)) lmrHiCutHz_ = kWide;
-            } else if (!weakProcOn_.load(std::memory_order_relaxed)) {
-                // Switched off by the listener — glide open, because that IS the instruction.
+            } else if (!weakProcOn_.load(std::memory_order_relaxed)
+                       && !imsOn_.load(std::memory_order_relaxed)) {
+                // Both switched off by the listener — glide open, because that IS the instruction.
                 lmrHiCutHz_ = glideCorner(lmrHiCutHz_, 15000.0f);
             } else {
                 // ★★★ HOLD. DO NOT OPEN. This branch used to rush the corner to 15 kHz at full

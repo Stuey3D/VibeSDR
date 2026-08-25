@@ -120,6 +120,8 @@ export type VibeServerConfig = {
   /** ★ RTL gain automation. Protection defaults ON (it can only prevent clipping); the AGC defaults
    *  OFF, because it may raise the gain above the owner's figure. See VibeServerBoot. */
   rtlAgc?: boolean;
+  /** ★ RTL only: the tuner IF filter narrows as a listener zooms in. */
+  tunerBwAuto?: boolean;
   /** Reverse proxies whose X-Forwarded-For we believe — required behind a tunnel, or every
    *  visitor arrives as 127.0.0.1 and the limits and ban list cannot tell anyone apart. */
   trustedProxies?: string;
@@ -196,6 +198,7 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     restGain: cfg.restGain ?? -1,
     agcLock: cfg.agcLock ?? false,
     rtlAgc: cfg.rtlAgc ?? false,
+    tunerBwAuto: cfg.tunerBwAuto ?? false,
     trustedProxies: cfg.trustedProxies ?? '',
     // ★ Absent = true, matching the server's own default: refuse a second radio to one address.
     oneRadioPerIp: cfg.oneRadioPerIp ?? true,

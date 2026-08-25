@@ -1101,6 +1101,39 @@ static std::atomic<int>      g_gainTarget{-1};
  *  digital compensation is measured against THIS, so the loop can roam without the level moving. */
 static std::atomic<int>      g_gainRef{-1};
 static std::atomic<int>      g_ovlSteps{0};
+/** ★★★ ZOOMING OUT INVALIDATES THE GAIN, AND THAT IS THE ZOOM IF FILTER'S ONE SHARP EDGE.
+ *      Narrowing the tuner's IF removes real energy from the converter, so the AGC correctly
+ *      climbs into headroom that EXISTS ONLY WHILE THE FILTER IS NARROW. Widen it again — zoom
+ *      out to the full sample rate — and every signal the filter had been removing comes back at
+ *      that raised gain. Stuart, watching it: "when the IF filter is narrowed the gain can
+ *      increase which makes the station come in strong, but when you back out so the full sample
+ *      rate is seen that zoomed in gain in some cases can be too high and cause the cross
+ *      modulation."
+ *  ★★ SO THE CUT HAS TO BE FAST, AND THE ORDINARY LOOP IS DELIBERATELY SLOW. The "hot without
+ *     railing" branch waits for two consecutive hot ticks and then takes ONE step — about six
+ *     seconds to unwind a zoom-out, all of it spent cross-modulating. Cross-modulation does not
+ *     rail the ADC, so the clip path (which already computes the whole move at once) never fires.
+ *  ★ Armed as a countdown of ticks rather than a level, so it expires by itself: this is a
+ *    reaction to an EVENT, and nothing about the steady state should be different afterwards. */
+static std::atomic<int>      g_agcFastCut{0};
+/** ★★★ THE GAIN THAT WAS HOLDING WHILE THE FILTER WAS WIDE — the deterministic half of the
+ *      zoom-out cut, and the half that actually works.
+ *  ★★★ REACTING IS NOT ENOUGH, MEASURED TWICE. First the cut waited for the ADC to read hot,
+ *      which cross-modulation never makes it do. Then it aimed at the -6 dBFS operating point,
+ *      which fired but shed only a couple of dB — "gain still too high on 105.4 when zooming out".
+ *      Every reactive threshold is a guess at how much damage is happening, and the damage is
+ *      invisible to the converter by its nature.
+ *  ★★★ BUT WE ALREADY KNOW THE ANSWER AND DO NOT HAVE TO INFER IT. There WAS a gain that ran
+ *      cleanly at this frequency with the filter wide — it was holding a moment ago, before the
+ *      zoom-in let the loop climb into headroom the filter had manufactured. Zoom back out and
+ *      that number is simply correct again. Restore it and let the ordinary climb re-earn
+ *      anything extra, one cautious step at a time, the way it earns every other dB.
+ *  ★★ STORED AS STEPS-BELOW-THE-CEILING, NOT AS dB, because that is the unit the loop actually
+ *     works in: `g_ovlSteps` maps to an index in the tuner's own gain list, so putting it back
+ *     needs no lookup and no access to gains[] outside the lock. Writing it is the whole fix —
+ *     the next tick computes its index from it and moves there in one write.
+ *  ★ -1 = nothing recorded (cleared on retune: a gain learned at 105.4 says nothing about 89.7). */
+static std::atomic<int>      g_agcWideSteps{-1};
 /** Consecutive 1-second windows with, and without, samples on the rail. Written by the libusb
  *  callback (cheap: two stores), read by the DSP thread, which is the only one that may touch the
  *  radio — see the note on enqueueIq. */
@@ -1415,7 +1448,11 @@ static std::atomic<bool>     g_tunerBwAuto{false};
  *     the receiver's gain. No pilot, no measurement, no adjustment.
  *  ★ FM BROADCAST ONLY. On AM or SSB the passband is the user's own choice of selectivity and
  *    moving it under them would be taking a control away, not adding one. */
-static std::atomic<bool>     g_autoBwOn{false};
+/* ★★★ ON BY DEFAULT (Stuart, 2026-08-25: "make the auto BW default on"). It is the TEF6686's
+ *     behaviour and the reason he went looking for it — "if you disable auto bandwidth it becomes
+ *     really messy and noisy". It declines to act on anything that is not FM broadcast and on
+ *     anything with no pilot to measure, so the default costs a non-FM listener nothing. */
+static std::atomic<bool>     g_autoBwOn{true};
 /** ★ Where the controller has settled, in Hz — published for the Advanced RDS readout so it is
  *  visible that something is working. 0 = not adjusting. */
 static std::atomic<double>   g_autoBwNowHz{0.0};
@@ -2484,13 +2521,6 @@ struct LocalSdrShim::Impl {
          *    the sample rate gives them the same selectivity, decided once at setup instead of
          *    moving under their listeners. This mode is left exactly as it was. */
         if (g_vsLockedCentre.load() > 0.0) return;
-        /* ★★★ NOT ON A LOCKED CENTRE, AND THAT IS NOT A LIMITATION — IT IS THE RIGHT ANSWER.
-         *     Stuart: "the IF filter ... would only be for free tuning so Unlocked radio mode
-         *     otherwise you'd just set it to a lower sample rate when setting up the locked
-         *     frequency." An owner who pins the window has already chosen the span deliberately;
-         *     a narrower SAMPLE RATE gives them the same selectivity with none of this machinery,
-         *     and it is decided once at setup rather than moving under their listeners. */
-        if (g_vsLockedCentre.load() > 0.0) return;
         const double rf = rtlCenter.load() + hwOffsetHz();
         /* ★★★ EVERY LISTENER'S VIEW, NOT JUST ONE. On a shared receiver the filter is the RADIO's,
          *     so one person zooming into a station would leave everyone else staring at dead band.
@@ -2514,9 +2544,38 @@ struct LocalSdrShim::Impl {
         // ★ Wider than the capture is the same as no filter at all — say so plainly rather than
         //   commanding a number the tuner will ignore.
         if (want >= (int)(sampleRate * 0.95)) want = 0;
-        if (want != g_tunerBwHz.load(std::memory_order_relaxed)) {
-            LocalSdrShim::instance().setTunerBandwidth(want);
-            LocalSdrShim::instance().broadcastHwInfo();
+        {
+            const int cur = g_tunerBwHz.load(std::memory_order_relaxed);
+            if (want != cur) {
+                // ★★★ ONLY WIDENING ARMS THE CUT. Narrowing takes energy AWAY, which can never
+                //     overload anything — the AGC's ordinary climb handles it, and arming here
+                //     too would cut the gain every time somebody zoomed IN, which is the one
+                //     case where the filter is doing its best work. `want == 0` means "wider
+                //     than the capture", i.e. the widest setting there is, so it counts as a
+                //     widening from any real number.
+                const bool widened = (want == 0 && cur != 0) || (cur != 0 && want > cur);
+                if (widened) {
+                    // ★★ FORGET THE LEARNED MARGIN TOO. That margin was learned against a
+                    //    filtered converter; keeping it would let the loop climb straight back
+                    //    into the level we are about to leave.
+                    agcForget("IF filter widened");
+                    g_agcFastCut.store(3, std::memory_order_relaxed);
+                    /* ★★★ GO STRAIGHT BACK TO THE GAIN THAT COPED AT FULL SPAN. More steps below
+                     *     the ceiling means less gain, so only ever restore DOWNWARD — zooming
+                     *     out must never hand the front end more gain than it already has. */
+                    { const int ws = g_agcWideSteps.load(std::memory_order_relaxed);
+                      const int now = g_ovlSteps.load(std::memory_order_relaxed);
+                      if (ws >= 0 && ws > now) {
+                          g_ovlSteps.store(ws, std::memory_order_relaxed);
+                          LOGI("putting the gain back where it held at full span "
+                               "(%d steps below the ceiling, was %d)", ws, now);
+                      } }
+                    LOGI("IF filter widened %d -> %d kHz — the gain was set behind a narrower "
+                         "filter, so cut fast if it is now too hot", cur / 1000, want / 1000);
+                }
+                LocalSdrShim::instance().setTunerBandwidth(want);
+                LocalSdrShim::instance().broadcastHwInfo();
+            }
         }
     }
     double dongleForView(double view, double viewSpan) {
@@ -6489,6 +6548,7 @@ struct LocalSdrShim::Impl {
         if (std::fabs(freq - g_agcLearnedAtHz.load(std::memory_order_relaxed)) > reHz) {
             g_agcLearnedAtHz.store(freq, std::memory_order_relaxed);
             agcForget("retuned");
+            g_agcWideSteps.store(-1, std::memory_order_relaxed);   // ★ see g_agcWideSteps
         }
         // ★ …and the dial moving changes where the filter should sit, in Auto.
         applyAutoIf();
@@ -12096,6 +12156,12 @@ struct LocalSdrShim::Impl {
                       //   while we are narrowed. The sign flips on engagement, and a reader with
                       //   no state would misread "-11 dB" as bad news when it means the opposite.
                       + ",\"ifBw\":" + std::to_string(P_ ? P_->ifBandwidth() : 0.0)
+                      // ★ WHAT IMS ITSELF IS DOING. Its whole action is on the L-R corner, which
+                      //   until now was reported only as part of the MPX S/N row's "blend" figure
+                      //   — indistinguishable from NR's. Stuart, reasonably: "where in that
+                      //   advanced RDS box do I look to see if IMS is doing anything?"
+                      + ",\"imsBlend\":" + std::to_string(P_ ? P_->imsBlendHz() : 0.0f)
+                      + ",\"imsWhy\":" + std::to_string(P_ ? P_->imsWhy() : 1)
                       // ★ CEQ, with its OWN SCORE. `ceqAfter` is the multipath depth measured on
                       //   the equaliser's output, against `multipath` measured on what arrived —
                       //   so the panel shows what it achieved rather than merely that it ran.
@@ -13328,6 +13394,15 @@ void LocalSdrShim::setOverloadProtect(bool on) {
 }
 /** Turning the AGC on RAISES the ceiling to the tuner's maximum; turning it off puts the ceiling
  *  back to wherever the gain is now, so the receiver does not lurch when the mode changes. */
+void LocalSdrShim::setTunerBwAuto(bool on) {
+    g_tunerBwAuto.store(on, std::memory_order_relaxed);
+    LOGI("tuner IF filter: %s", on ? "auto (follows zoom)" : "manual");
+    // ★ Apply it NOW rather than waiting for the next zoom — a setting restored at startup must
+    //   take effect at startup, or the first listener gets the width the last one happened to
+    //   leave behind and the config appears not to work.
+    if (p) p->applyAutoIf();
+    broadcastHwInfo();
+}
 void LocalSdrShim::setRtlAgc(bool on) {
     const bool was = g_rtlAgc.exchange(on, std::memory_order_relaxed);
     // ★★★ "ALREADY SET" IS NOT "ALREADY APPLIED". This returned whenever the flag did not change,
@@ -15510,11 +15585,30 @@ void LocalSdrShim::broadcastHwInfo() {
  *  improvement never is.
  */
 void LocalSdrShim::autoBandwidthTick() {
-    if (!p || !g_autoBwOn.load(std::memory_order_relaxed)) { g_autoBwNowHz.store(0.0); return; }
+    // ★★★ THIS DRIVES adaptIf_, NOT setBandwidth(). The first version called p->setBandwidth(),
+    //     which changes bwHz_ — and that is rebuildAudio(): every buffer cleared, every filter
+    //     redesigned, the audio AGC re-acquiring and the pilot re-locking. Stuart heard exactly
+    //     that: "everytime the bandwidth adjusts it causes the audio to stutter" and "everytime it
+    //     adjusts its tearing down the RDS with it too". A control that ADAPTS must not cost what
+    //     a retune costs, which is the whole reason AdaptiveIf exists — read its header comment,
+    //     it predicted this failure in writing before the failure happened.
+    // ★★ THE SAME LESSON AS THE GAIN WRITE, which is what Stuart pointed at ("can you not do the
+    //    same as you did with the gain?"). There the cure was to stop doing the expensive thing on
+    //    the path that had to stay smooth; here it is the same cure with a filter instead of a
+    //    control transfer. setAutoBandwidth() is an atomic store picked up by the DSP thread, and
+    //    AdaptiveIf::setBandwidth() returns immediately when the width has not moved.
+    auto bypass = [&]{ g_autoBwNowHz.store(0.0, std::memory_order_relaxed);
+                       if (p) p->rx.setAutoBandwidth(0.0); };
+    if (!p || !g_autoBwOn.load(std::memory_order_relaxed)) { bypass(); return; }
     std::lock_guard<std::recursive_mutex> lk(p->modeMtx);
     // ★ FM broadcast only — see the note by g_autoBwOn.
-    if (p->rxMode != vibedsp::RxPipeline::Mode::WFM) { g_autoBwNowHz.store(0.0); return; }
-    if (!p->rx.snrValid()) { g_autoBwNowHz.store(0.0); return; }   // no pilot, nothing to judge on
+    if (p->rxMode != vibedsp::RxPipeline::Mode::WFM) { bypass(); return; }
+    // ★★ HOLD, DO NOT ZERO. Zeroing here is what put a DASH in the readout: the old code's own
+    //    setBandwidth() tore down the pilot lock, snrValid() went false on the very next tick, and
+    //    the readout blanked — the control was erasing the measurement it steers by. Even with
+    //    that fixed, a momentary fade must not blank a working display or yank the filter open;
+    //    keep the last decision until there is a new one worth making.
+    if (!p->rx.snrValid()) return;   // no pilot, nothing to judge on — hold
 
     // ★ paramsFor takes the mode NAME, not the pipeline's enum — the two live either side of
     //   rxModeFor(). WFM's own bandwidth is the ceiling, so a mode whose width is retuned later
@@ -15525,12 +15619,26 @@ void LocalSdrShim::autoBandwidthTick() {
     // ★ 8 dB and below is "very weak" (Stuart's 97.2 Smooth); 25 dB and above is a station in good
     //   health. Between them, straight-line — the TEF's own numbers sit on this line.
     const double t = std::max(0.0, std::min(1.0, (snr - 8.0) / (25.0 - 8.0)));
-    const double want = floorB + (full - floorB) * t;
-    g_autoBwNowHz.store(want, std::memory_order_relaxed);
-    if (std::fabs(want - p->rxBwHz) < 8000.0) return;
-    LOGI("auto bandwidth: MPX S/N %.1f dB -> %.0f kHz (was %.0f)",
-         snr, want / 1e3, p->rxBwHz / 1e3);
-    p->setBandwidth(want);
+    double want = floorB + (full - floorB) * t;
+    // ★★ AT THE TOP OF THE RANGE, GET OUT OF THE WAY ENTIRELY. A healthy station wants the mode's
+    //    own width and nothing else in the path; leaving a 200 kHz FIR running on a 200 kHz signal
+    //    costs CPU and a little group delay to accomplish nothing. AdaptiveIf bypasses at
+    //    rate*0.8, which at a 300 kHz channel is 240 kHz — too high to catch this, so say it here.
+    if (want >= full - 4000.0) want = 0.0;
+    g_autoBwNowHz.store(want > 0.0 ? want : full, std::memory_order_relaxed);
+    // ★ Hysteresis against the width ACTUALLY APPLIED, not against the mode's bandwidth (which no
+    //   longer moves — that was the bug). Each real change designs a filter and allocates on the
+    //   DSP thread, so a wobbling S/N must not be allowed to redesign fifteen times a second; the
+    //   step is about what the TEF uses.
+    // ★★★ ITS OWN REQUEST, NOT THE APPLIED WIDTH. ifBandwidth() is the COMBINED result of this
+    //     controller and IMS, so comparing against it made the hysteresis meaningless: with IMS
+    //     holding the filter the applied width never matched what auto bandwidth had asked for,
+    //     and every tick re-issued the same request for ever ('was 0 kHz' on every line).
+    const double cur = p->rx.autoBandwidth();
+    if (std::fabs(want - cur) < 8000.0) return;
+    LOGI("auto bandwidth: MPX S/N %.1f dB -> %.0f kHz (was %.0f kHz; 0 = wide)",
+         snr, want / 1e3, cur / 1e3);
+    p->rx.setAutoBandwidth(want);
 }
 void LocalSdrShim::applyAutoIf() { if (p) p->applyAutoIf(); }
 void LocalSdrShim::setTunerBandwidth(int hz) {
@@ -15700,6 +15808,14 @@ void LocalSdrShim::overloadTick() {
     if (!g_rtlAgc.load(std::memory_order_relaxed)) return;
     const int target = g_gainTarget.load(std::memory_order_relaxed);
     if (target < 0) return;            // nothing set — no ceiling to work against
+
+    // ★★ REMEMBER WHAT SURVIVES AT FULL SPAN. While the tuner filter is wide open (0 = wider than
+    //    the capture), whatever the loop is holding is a gain that copes with the WHOLE band —
+    //    every neighbour included, nothing filtered away. That is precisely the number to come
+    //    back to when the filter opens again, so record it continuously and for free.
+    if (g_tunerBwHz.load(std::memory_order_relaxed) == 0)
+        g_agcWideSteps.store(g_ovlSteps.load(std::memory_order_relaxed),
+                             std::memory_order_relaxed);
 
     bool steps_forceDown = false;
     bool steps_forceUp   = false;   // ★ the mirror — undo a cut the verdict judged worse
@@ -16054,6 +16170,12 @@ void LocalSdrShim::overloadTick() {
     if (ghost) LOGI("would call this manufactured — wobbles %.1f dB, %.1f dB lopsided "
                     "(observing only, see kGhostMayCut)", wob, skw);
 
+    // ★ EXPIRE THE ARM. If the widening did not actually make anything hot, there is nothing to
+    //   cut and the window must close on its own — otherwise the next unrelated hot tick, minutes
+    //   later, would be treated as a zoom-out and take a jump it did not earn.
+    { int fc = g_agcFastCut.load(std::memory_order_relaxed);
+      if (fc > 0) g_agcFastCut.store(fc - 1, std::memory_order_relaxed); }
+
     bool backoffToFit = false;   // ★ see the clipRun branch: the jump is sized under the lock
     // ★ Which reason took gain away, so the cut can be JUDGED — see the verdict above. Only the
     //   floor's cut needs it: clipping is a measured fact, and the climb verdict has its own.
@@ -16115,12 +16237,44 @@ void LocalSdrShim::overloadTick() {
         else if (shoulderLifted && !floorLifted)
             LOGI("either side of the station is %.1f dB above its quietest for this gain — the "
                  "front end is making noise here", shoulderNorm - bestShoulder);
-    } else if (clipRun < 2 && peakNow > kAgcBackoffDbfs
-               && g_adcHotRun.load(std::memory_order_relaxed) >= 2) {
+    } else if (clipRun < 2 &&
+               ((g_agcFastCut.load(std::memory_order_relaxed) > 0 && peakNow > kAgcTargetDbfs)
+                || (peakNow > kAgcBackoffDbfs
+                    && g_adcHotRun.load(std::memory_order_relaxed) >= 2))) {
         // ★★ TOO HOT WITHOUT ACTUALLY RAILING — which is exactly where intermodulation lives. The
         //    rail counter only fires at the very end of the scale, so waiting for it means waiting
         //    until the damage is audible.
         want = steps + 1;
+        // ★★★ JUST AFTER THE IF FILTER OPENED UP, TAKE THE WHOLE MOVE AT ONCE. See g_agcFastCut:
+        //     the gain was set behind a narrower filter, so the level we are seeing now is the
+        //     honest one and peakNow already says how far over we are. One step per tick spends
+        //     six seconds cross-modulating to reach a number we can compute immediately — and
+        //     this is the same arithmetic the clip branch below uses, for the same reason.
+        //  ★ Normal running is untouched: without the arm this stays the cautious one-step
+        //    branch it has always been, because a slow drift into "hot" is not an event.
+        /* ★★★ AFTER A WIDENING, AIM AT THE OPERATING POINT — NOT AT THE RAIL. This branch used
+         *     to require `peakNow > kAgcBackoffDbfs` (-1 dBFS) AND two ticks of `g_adcHotRun`,
+         *     and NEITHER can fire on the fault we are here to fix. Stuart's 105.4 at full span:
+         *     peak -3.7 dBFS, the whole band washed out with cross-modulation, and the loop
+         *     holding 16.6 dB perfectly happily — "agc is not ramping down when zoomed out, if i
+         *     zoom in one click to activate the IF filter this cleans right up".
+         *  ★★★ THE REASON IS THE ONE ALREADY WRITTEN DOWN (see memory/cross_modulation_not_intermod
+         *      and Stuart's correction): CROSS-MODULATION ADDS NO NEW ENERGY. It ruins the audio by
+         *      transferring one carrier's modulation onto another, so the converter's PEAK stays
+         *      healthy and every rail-watching test reads clean. A detector that waits for the ADC
+         *      to complain will never see it.
+         *  ★★ So for this window only, "too hot" means "above the operating point" (-6 dBFS, what
+         *     an RTL is set to by hand) rather than "about to clip", and `g_adcHotRun` is not
+         *     consulted at all — that counter is itself incremented against the backoff
+         *     threshold, so waiting on it made the condition unsatisfiable by construction.
+         *  ★ Ordinary running is untouched: without the arm this is still the cautious
+         *    two-ticks-above-the-backoff-point branch it has always been. */
+        if (g_agcFastCut.load(std::memory_order_relaxed) > 0) {
+            backoffToFit = true;
+            g_agcFastCut.store(0, std::memory_order_relaxed);   // one cut, not a mode
+            LOGI("%.1f dBFS is above the %.1f dBFS operating point just after the IF filter "
+                 "opened — taking the whole cut now", peakNow, kAgcTargetDbfs);
+        }
     } else if (clipRun >= 2) {
         // ★★★ AND IT COMES DOWN BY AS MUCH AS IT IS OVER. One step at a time is a search; the clip
         //     PERCENTAGE already says how badly the front end is being overdriven, so use it. A few
@@ -16378,7 +16532,43 @@ void LocalSdrShim::overloadTick() {
     //     The gain is still capped at the owner's ceiling throughout, so nothing runs away.
     //  ★ Backing off still ignores the dwell (see the clipRun short-circuit above), so consecutive
     //    ticks unwind an overload back-to-back rather than waiting on the climb timer.
-    if (backoffToFit) want = steps + 1;
+    /* ★★★ SIZE THE BACK-OFF, DO NOT STEP IT — AND THIS LINE USED TO SAY `want = steps + 1`, which
+     *     silently threw the sizing away. Two comments in this function (the clipRun branch's
+     *     "GO STRAIGHT THERE. ONE CHANGE, NOT SIX" and `backoffToFit`'s own declaration, "the jump
+     *     is sized under the lock") describe a calculation that was NOT IN THE CODE: `idx` had
+     *     already been fixed at one rung down, so every overload unwound a step at a time however
+     *     gross it was. Stuart: "the AGC is stepping down again rather than jumping down like it
+     *     did at one point." It was not a regression in behaviour so much as the behaviour never
+     *     existing — the comments were the only place it lived.
+     *  ★★★ THE ARITHMETIC IS ALREADY KNOWN. `peak` says how far above the operating point the
+     *      converter is; shed that much in ONE write by walking down the tuner's own list to the
+     *      first rung that is at least that far below where we are. Searching for a number you can
+     *      calculate is what made this audible in the first place.
+     *  ★★ SELF-SIZING, SO IT CANNOT OVER-CUT. A peak barely over the line gives `shed` near zero
+     *     and the loop takes a single rung, exactly as before; only a gross overload takes a big
+     *     jump. There is no threshold to tune.
+     *  ★ Never refuses to move: at minimum one rung, and never past the bottom of the list. */
+    if (backoffToFit) {
+        const int from = tgtIdx - steps;                       // the rung we are on now
+        if (from > 0) {
+            const double peak = g_adcPeakDbfs.load(std::memory_order_relaxed);
+            const double shed = std::max(0.0, peak - kAgcTargetDbfs);
+            int best = from - 1;                               // always at least one rung
+            for (int i = from - 1; i >= 0; --i) {
+                best = i;
+                if ((gains[(size_t)from] - gains[(size_t)i]) / 10.0 >= shed) break;
+            }
+            idx  = best;
+            want = tgtIdx - best;
+            if (best < from - 1)
+                LOGI("%.1f dBFS is %.1f dB over the operating point — dropping %.1f dB in one "
+                     "move (%.1f -> %.1f dB)", peak, shed,
+                     (gains[(size_t)from] - gains[(size_t)best]) / 10.0,
+                     gains[(size_t)from] / 10.0, gains[(size_t)best] / 10.0);
+        } else {
+            want = steps + 1;                                  // already at the bottom
+        }
+    }
     applied = gains[(size_t)idx];
     /* ★★★ A WRITE THAT CHANGES NOTHING IS NOT A CORRECTION, AND IT MUST NOT BE ANNOUNCED. Once the
      *     loop is at the bottom of the tuner's list, `steps` can exceed the number of rungs that

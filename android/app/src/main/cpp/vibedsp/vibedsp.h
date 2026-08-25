@@ -1880,6 +1880,12 @@ public:
     float ceqEffort() const { return ceqEffort_; }
     int   ceqWhy() const { return ceqWhy_; }
     float multipathAfterCeq() const { return ceqOut_.depth(); }
+    /** ★ What IMS's multipath suppression is asking of the L-R corner, in Hz — 0 when it is not
+     *    acting, or when the noise curve had already asked for something narrower (in which case
+     *    IMS is not the reason for the blend and must not be credited with it). */
+    float imsBlendHz() const { return imsBlendHz_; }
+    /** Why IMS is not acting — see the note by imsWhy_'s assignment. 0 = it IS acting. */
+    int   imsWhy() const { return imsWhy_; }
     /** The audio high-cut corner now in use (Hz; 15000 = untouched). */
     float audioHiCutHz() const { return audioHiCutHz_; }
     /** Weak-signal processing (high-blend + audio high-cut). ON by default: it only ever acts on
@@ -1894,6 +1900,19 @@ public:
      *  narrowing actually BUYS anything before any policy is built on top of it. */
     void setIfBandwidth(double hz) { ifBwReq_.store(hz, std::memory_order_relaxed); }
     double ifBandwidth() const { return ifBwHz_; }
+    /** ★★★ AUTO BANDWIDTH IS A SECOND REQUESTER OF THE SAME FILTER, AND IT MUST NOT SHARE THE
+     *      SAME SLOT. Both IMS and the TEF-style auto bandwidth narrow the adaptive IF, and both
+     *      used to write ifBwReq_ — so IMS overwrote every auto request on the very next pass.
+     *      With IMS OFF it is worse still: that branch stores 0.0 ("wide open") continuously, so
+     *      auto bandwidth was cancelled about fifteen times a second and the applied width read
+     *      back as 0 for ever. Stuart spotted it from the outside: "i see what youve done, its in
+     *      with the IMS narrowing."
+     *  ★★ THEY ANSWER DIFFERENT QUESTIONS AND BOTH ANSWERS ARE VALID. IMS narrows against a strong
+     *     NEIGHBOUR; auto bandwidth narrows a WEAK SIGNAL toward its own occupied width. So they
+     *     are combined rather than arbitrated — the narrower request wins, which is the only
+     *     answer that satisfies both. */
+    void setAutoBandwidth(double hz) { autoBwReq_.store(hz, std::memory_order_relaxed); }
+    double autoBandwidth() const { return autoBwReq_.load(std::memory_order_relaxed); }
     /** How much better (dB) the signal would measure with the IF narrowed to ifCandidateHz().
      *  Positive = narrowing helps. Measured continuously on a shadow copy of the real signal. */
     float  ifGainDb() const { return ifGainDb_; }
@@ -2020,6 +2039,7 @@ private:
     //     AGENTS.md forbids — but A/B is a real use, not a hypothetical one.
     std::atomic<bool> weakProcOn_{true};
     std::atomic<double> ifBwReq_{0.0};       // requested adaptive IF width, 0 = wide
+    std::atomic<double> autoBwReq_{0.0};     // ★ the OTHER requester — see setAutoBandwidth
     // ★★★ IMS IS ITS OWN SWITCH, SEPARATE FROM THE NOISE TREATMENT. They answer different faults:
     //     NR (high-blend + high-cut) works on NOISE; this works on a NEIGHBOUR. Measured, they
     //     even want opposite actions — narrowing costs up to 10 dB against noise and gains 10 dB
@@ -2092,6 +2112,8 @@ private:
     float lmrHiCutHz_ = 15000.0f;            // current L-R corner, smoothed toward the target
     float lmrHiCutY_  = 0.0f;                // one-pole state for the L-R high-cut
     float blendSnrDb_ = 99.0f;               // smoothed pilot-to-guard-band ratio, dB
+    float imsBlendHz_ = 0.0f;                // ★ IMS's own contribution — see imsBlendHz()
+    int   imsWhy_ = 1;                       // ★ and why not, when it is not
     // ★ The audio (L+R and mono) high-cut — the cure for hiss that survives a switch to mono,
     //   which high-blend cannot touch because it only ever acts on L-R.
     float audioHiCutHz_ = 15000.0f;

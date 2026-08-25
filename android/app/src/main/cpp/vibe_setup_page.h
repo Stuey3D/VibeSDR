@@ -596,6 +596,22 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
             moves the tuner a step at a time, the way an SDRplay does in hardware.
             <br>The gain above becomes the STARTING point; from there it may use the tuner's whole
             range in either direction. Leave it off and the gain stays exactly where you set it.</div></label>
+        <!-- ★★ THE TUNER'S IF FILTER, beside VibeAGC because they are the pair an owner sets once
+             and expects to STAY set. Stuart had to re-enable both on every connect (2026-08-25) —
+             the AGC because a client re-asserted its stored value, this one because it had no
+             config field at all and lived only in the running process. -->
+        <label class="hide" id="tunerBwAutoRow">
+          <span class="lbl">IF filter follows the zoom &mdash; RTL-SDR</span>
+          <select id="tunerBwAuto">
+            <option value="0">Off &mdash; the filter stays as wide as the sample rate</option>
+            <option value="1">On &mdash; narrows as a listener zooms in</option>
+          </select>
+          <div class="note">The R820T tuner has a real IF filter, and it is the only selectivity
+            ahead of the mixer. Narrowing it as someone zooms into a station keeps strong
+            neighbours out of the front end, which is where cross-modulation is made &mdash; it
+            widens again automatically when they zoom out. Only for a FREE-TUNING receiver: on a
+            locked-frequency one you choose selectivity with the SAMPLE RATE instead, once, at
+            setup.</div></label>
         <label class="hide" id="gainAgcLockRow" class="row">
           <input type="checkbox" id="gainAgcLock">
           <span class="lbl">Lock VibeAGC on</span>
@@ -1302,6 +1318,7 @@ function renderGain() {
   //  ★ A hidden-by-default row needs its unhide written in the SAME edit; there is nothing to see
   //    when it is wrong, which is why this survived a release.
   $("rtlAgcRow").classList.toggle("hide", !isRtl);
+  $("tunerBwAutoRow").classList.toggle("hide", !isRtl);   // ★ RTL only — the others have no such filter
   // ★★ AND THE LOCK NOW APPLIES TO A DONGLE TOO. It was RSP/HF only because those were the radios
   //    with an AGC to lock; the RTL has one now — ours — and the lock reaches it by the same
   //    setGainLimits(..., agcLock) path. Offering the AGC without the means to fix it on is half a
@@ -1317,6 +1334,7 @@ function renderGain() {
   $("gainRest").value = gainFromRaw(r.restGain);
   // ★ Absent = AGC off. An older config must not read as though the owner had asked for it.
   $("rtlAgc").value = r.rtlAgc ? "1" : "0";
+  $("tunerBwAuto").value = r.tunerBwAuto ? "1" : "0";
   // ★★ AFTER the line above, not before it — this OVERRIDES it, and written the other way round it
   //    was silently undone. Shown as ON and greyed when the lock is on, because that is what the
   //    receiver will actually do; a page that displays "off" for something it is about to run is
@@ -2082,6 +2100,14 @@ function fill() {
   //     VibeSDR Custom AGC was off even though I had set it on when I set it up."
   //  ★ A control whose value is only persisted as a side effect of editing a DIFFERENT control is
   //    a control that will be lost. Every input on this page needs its own handler.
+  /* ★★★ ITS OWN LISTENER. This was first appended inside the gainRest handler, so the value was
+   *      only ever recorded if the owner happened to edit the REST GAIN field afterwards —
+   *      choosing it and saving stored false, and the config read back `"tunerBwAuto":false` with
+   *      the owner insisting they had set it. A control that is collected by somebody else's
+   *      handler is not wired up; it is wired up by accident, on a condition nobody stated. */
+  $("tunerBwAuto").addEventListener("change", () => {
+    radio().tunerBwAuto = $("tunerBwAuto").value === "1";
+  });
   $("rtlAgc").addEventListener("change", () => {
     radio().rtlAgc = $("rtlAgc").value === "1";
     const n = $("gainRestAgcNote");

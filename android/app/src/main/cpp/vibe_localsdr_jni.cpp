@@ -948,6 +948,13 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetGainAutomation(JNIEnv*, jobject,
     vibe::LocalSdrShim::instance().setRtlAgc(agc == JNI_TRUE);
 }
 
+/** The tuner's IF filter follows the zoom (RTL only) — the phone's half of the web setup page's
+ *  "IF filter follows the zoom". See LocalSdrShim::setTunerBwAuto. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetTunerBwAuto(JNIEnv*, jobject, jboolean on) {
+    vibe::LocalSdrShim::instance().setTunerBwAuto(on == JNI_TRUE);
+}
+
 /** ★★ THE RADIO'S REAL GAIN LADDER, so the phone's limiter slider is over steps the hardware
  *  actually has rather than a scale invented in the GUI — the same rule the setup page follows.
  *  `lnaStates` is the RSP's RF POSITION count (0 otherwise): its limit is a position, not dB. */

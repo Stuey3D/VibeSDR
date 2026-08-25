@@ -142,7 +142,16 @@ struct Config {
      *    gone" is actually decided, and a page reload must not reset a listener's own setting. */
     int    restGain = -1;
     bool   rtlAgc = false;          ///< see RadioConfig::rtlAgc
-    bool   overloadProtect = true;  ///< see RadioConfig::overloadProtect
+    /* ★★★ overloadProtect IS GONE — IT IS THE AGC OR NOTHING. Stuart, 2026-08-25: "overload
+     *     protection shouldnt exist anymore, its agc or nothing." The DSP stopped acting on it
+     *     when the RTL AGC work landed (setOverloadProtect is a deliberate no-op: "manual gain is
+     *     left exactly where it is put"), so all that was left was a config field and a wire flag
+     *     that LOOKED like a setting and could not do anything — worse than absent, because an
+     *     owner sets it and concludes the FEATURE is broken. Same rule as AGENTS.md's "a control
+     *     that only works on one radio should not be there".
+     *  ★ The shim/JNI setter stays as a no-op so an older app still sending the flag is swallowed.
+     *    An old config file keeps the key; it is simply never read. */
+    bool   tunerBwAuto = false;     ///< see RadioConfig::tunerBwAuto
 
     /** ★★ Force the AGC on and refuse to let a listener turn it off. RSP and Airspy HF+ only —
      *  it is the WHOLE feature for the HF+, which has no variable gain to cap and whose AGC is
@@ -271,11 +280,15 @@ struct RadioConfig {
      *  then use the whole range. OFF by default: it can raise the gain above what the owner set,
      *  and that must be asked for. */
     bool        rtlAgc = false;
+    /** ★★ THE TUNER'S IF FILTER FOLLOWS THE ZOOM — an RTL-only setting, and only meaningful on a
+     *  free-tuning receiver (a locked-centre owner chooses selectivity with the SAMPLE RATE
+     *  instead, decided once at setup). Persisted for the same reason rtlAgc is: it is the
+     *  RADIO's setting, and Stuart had to re-enable it "every time i connect". */
+    bool        tunerBwAuto = false;
     /** For a MANUAL gain: come down when the front end overloads, and go back up when it eases —
      *  never above the gain that is set. ON by default, because there is nothing it can do that the
      *  owner would not have wanted; the only choice it removes is the choice to keep clipping.
      *  ★ The AGC includes this; with rtlAgc on, this is redundant rather than contradictory. */
-    bool        overloadProtect = true;
     int         agcLock  = -1;  ///< 1 = AGC forced on, listener may not turn it off (RSP, HF+).
     bool   rfNotch = false, dabNotch = false, zoomSpectrum = false;
     /** ★★★ DC ON THE FEEDLINE, REMEMBERED AND ASSERTED. A dongle's bias-T survives whatever set

@@ -73,6 +73,11 @@ export interface RdsExt {
    *  (Hz). Carried beside mpxSnr because that is the figure that decides it. */
   autobw?: boolean;
   autobwHz?: number;
+  /** ★ What IMS's multipath suppression is asking of the L-R corner (Hz); 0 = not acting, or the
+   *  noise curve had already asked for narrower, in which case IMS is not the reason for it. */
+  imsBlend?: number;
+  /** Why IMS is not acting: 1 off · 2 CEQ has the job · 3 nothing to treat · 4 NR already narrower. */
+  imsWhy?: number;
   pty: number; tp: number; ta: number; ms: number; di: number;
   // ★ The same five UNCONFIRMED — what is arriving right now, whether or not it passed
   // confirmation. Always sent; the RAW/CONFIRMED choice is entirely the client's.
@@ -214,7 +219,7 @@ export interface SpectrumCallbacks {
     /** FM weak-signal processing: stereo high-blend + audio high-cut, one switch. Reported so a
      *  reconnecting client restores the button rather than showing a state the radio is not in. */
     wsp: boolean;
-    /** IMS — the adaptive IF. Separate from wsp: noise and a neighbour want opposite actions. */
+    /** IMS — multipath suppression. Separate from wsp: noise and a reflection want opposite cures. */
     ims: boolean;
     /** CEQ — the blind channel equaliser. Separate again: it corrects a REFLECTION. */
     ceq: boolean;
@@ -223,6 +228,7 @@ export interface SpectrumCallbacks {
     /** ★ TEF-style automatic demodulator bandwidth, and the width it has settled on (Hz). */
     autobw?: boolean;
     autobwHz?: number;
+    imsBlend?: number;
     nrStrength?: number;      // 0..1, absent = never set
     rfNotch?: boolean; dabNotch?: boolean;
     /** ★ TWO SEPARATE BIAS-TEES: `biasT` is the dongle's, `rspBiasT` the RSP's. Different
@@ -699,6 +705,17 @@ export class SpectrumClient {
             nb: msg.nb !== false,
             // ★ Only forward what the server actually stated. `undefined` travels through as
             //   "no opinion" and the renderer leaves that control alone.
+            /* ★★★ DECLARED IN THE TYPE IS NOT COPIED ON THE WIRE. `autobw` sat in this callback's
+             *     parameter type for hours while never being copied here, so `s.autobw` was
+             *     ALWAYS undefined — and `!!undefined` is false, which pinned AUTO BW's button OFF
+             *     no matter what the radio reported or how many times the default was changed.
+             *     The identical omission in onRdsX kept the IMS status blank. Both are the same
+             *     trap: an object literal builds the payload, TypeScript checks only the fields
+             *     you DID write, and a missing one is indistinguishable from a false one.
+             *  ★ Forwarded as undefined when absent — "no opinion" is not "off", exactly as the
+             *    comment above this callback says, and the renderer leaves the control alone. */
+            autobw:   typeof msg.autobw === 'boolean' ? msg.autobw : undefined,
+            autobwHz: typeof msg.autobwHz === 'number' ? msg.autobwHz : undefined,
             nrStrength: typeof msg.nrStrength === 'number' ? msg.nrStrength : undefined,
             rfNotch:  typeof msg.rfNotch  === 'boolean' ? msg.rfNotch  : undefined,
             dabNotch: typeof msg.dabNotch === 'boolean' ? msg.dabNotch : undefined,
@@ -843,6 +860,16 @@ export class SpectrumClient {
           ifGain: Number(msg.ifGain ?? 0),
           ifCand: Number(msg.ifCand ?? 0),
           ifBw: Number(msg.ifBw ?? 0),
+          /* ★★★ EVERY FIELD MUST BE COPIED HERE — THE INTERFACE DOES NOT DO IT. This builds an
+           *     explicit object literal, so a field added to the server's message AND to the
+           *     RdsExt type still arrives as `undefined` until it is named on this line. Nothing
+           *     warns: the type says it exists, the wire carries it, the panel reads it, and it is
+           *     silently absent. Three rounds of "still no IMS status" — after the message, the
+           *     placement and the computation had each been fixed — came down to this. The old
+           *     AUTO BW readout's permanent dash was the same omission.
+           *  ★ If you add a field to RdsExt, add it here in the same edit. */
+          imsBlend: Number(msg.imsBlend ?? 0),
+          imsWhy: Number(msg.imsWhy ?? 1),
           ceqOn: Number(msg.ceqOn ?? 0) === 1,
           ceqAfter: Number(msg.ceqAfter ?? 0),
           nbRate: Number(msg.nbRate ?? 0),
@@ -1126,7 +1153,7 @@ export class SpectrumClient {
   /** FM weak-signal processing — high-blend + audio high-cut together. One switch because it is
    *  one treatment: A/B-ing half of it would not answer the question a DXer is asking. */
   setWeakProc(on: boolean) { this._send({ type: 'wsp', on }); }
-  /** IMS — adaptive IF against an adjacent channel. NOT the same control as the noise treatment. */
+  /** IMS — multipath suppression, TEF6686-style. NOT the same control as the noise treatment. */
   setIms(on: boolean) { this._send({ type: 'ims', on }); }
   /** CEQ — blind channel equaliser. Corrects a REFLECTION; cannot help noise and is gated so it
    *  does not try. */
