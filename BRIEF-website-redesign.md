@@ -141,6 +141,31 @@ disclaimer — so **do not soften the host-side claim on account of it.**
 and is the selling point; the other would be a privacy claim that quietly overreaches, which is
 worse than making none.
 
+### "Nobody is left out" — and how to say it without lying
+
+Stuart wants: *"Old or new, low end or high end, small or big screen, nobody is left out with
+VibeSDR"* — and flagged the problem himself: *"we dont currently have a windows app yet even though
+it is planned."* He is right to flag it, and the fix is not to weaken the line.
+
+**The web client already covers Windows.** A Windows user is not waiting for anything in order to
+LISTEN: they open a browser and get the full client — scaling, Advanced RDS, decoders — which the
+recording now proves rather than asserts. So:
+
+> **Old or new. Low end or high end. Big screen or small. Nobody is left out.**
+>
+> Apps for iOS, Android, Mac and Apple Watch. Everywhere else — Windows, Linux, a smart TV — the
+> built-in web client, with nothing to install.
+
+★★ **THAT TURNS THE GAP INTO A FEATURE.** Windows users are not on a waiting list; they are already
+served, and by something that is not a cut-down version. Said this way the line is TRUE, and it is
+stronger than the version that needed the caveat.
+
+★★★ **THE LIMIT IS HOSTING, NOT LISTENING — AND THAT IS THE ONE TO KEEP HONEST.** VibeServer runs
+on macOS, Linux, a Pi and Android; **not Windows**. So "anyone can listen" is unconditional, while
+"anyone can host" is not yet. Do not let the call-to-arms copy blur the two: *"got a spare Android
+phone or a Mac or a Pi"* is accurate and still sounds generous. A Windows owner told they can host,
+who then cannot, is the one reader we lose permanently.
+
 ### ★★★ THE THREE ORIGINAL CLIPS STAY — THE NEW ONE IS AN ADDITION
 
 `assets/phone-demo.mp4`, `assets/watch-demo.mp4` and `assets/scaling-demo.mp4` (the APP scaling on
