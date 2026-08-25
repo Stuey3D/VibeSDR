@@ -126,6 +126,24 @@ if (NOT EXISTS "${OPUS_A}")
     message(FATAL_ERROR "libopus missing for ABI '${ANDROID_ABI}' at ${OPUS_A} — run cpp/tools/build_opus_android.sh")
 endif()
 target_include_directories(vibelocalsdr PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/opus/include")
+# ★★★ THE SERVER VERSION, DERIVED — NOT DUPLICATED. A phone hosting VibeServer runs the SAME
+#     shared core as the Pi and the Mac, but this build never defined VIBESERVER_VERSION_STR, so
+#     the phone advertised no version at all and the directory could not say what it was running.
+#  ★★ READ OUT OF vibeserver/CMakeLists.txt rather than written again here. That file's project()
+#     line is where everyone already bumps the version (and where forgetting to makes the install a
+#     silent no-op), so deriving it means the two CANNOT disagree — a second literal would sit
+#     wrong for months and nothing would complain.
+#   ★ Hard failure if the pattern ever stops matching: an EMPTY version string is worse than none,
+#     because a client is told "" instead of being told nothing and correctly saying "unknown".
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../vibeserver/CMakeLists.txt" _vs_cmakelists)
+string(REGEX MATCH "project\\(vibeserver VERSION ([0-9]+\\.[0-9]+\\.[0-9]+)" _vs_unused "${_vs_cmakelists}")
+set(VIBESERVER_VERSION "${CMAKE_MATCH_1}")
+if(NOT VIBESERVER_VERSION)
+  message(FATAL_ERROR "could not read the version from vibeserver/CMakeLists.txt — see the note above")
+endif()
+target_compile_definitions(vibelocalsdr PRIVATE VIBESERVER_VERSION_STR="${VIBESERVER_VERSION}")
+message(STATUS "VibeServer core version: ${VIBESERVER_VERSION}")
+
 target_compile_definitions(vibelocalsdr PRIVATE VIBE_HAVE_OPUS)
 
 # ★ VIBE_AIRSPYHF_HAS_FD says this libairspyhf is the patched one. AirspyHfSource::openFd()

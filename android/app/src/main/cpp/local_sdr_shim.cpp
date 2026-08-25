@@ -1038,6 +1038,17 @@ static std::atomic<int>    g_vsUncompressedAudio{0};   // VsUncompressedAudio
 // for this should not find controls mysteriously refusing to work.
 static std::mutex          g_vsAdminMtx;
 static std::string         g_vsAdminSecret;
+/** ★★★ WHAT IS HOSTING THIS SERVER, kept SEPARATE from what version it is — and the separation is
+ *      the whole point. A phone runs the same shared core as the Pi and the Mac, so its `version`
+ *      is the ENGINE's (4.1.1) and is directly comparable with theirs. What differs is the
+ *      wrapper, and that belongs in its own field.
+ *  ★★★ PUTTING THE APP'S VERSION IN `version` WOULD BE A LIE THAT LOOKS LIKE A FACT. VibeSDR is at
+ *      10.5 while VibeServer is at 4.1.1, so a phone reporting "10.5" reads as six major versions
+ *      AHEAD of every other server — Stuart, 2026-08-25: "we need to make it clear that it isnt 6
+ *      major versions ahead of the Pi and Mac". One field, one meaning: never encode two
+ *      independent numbers in a string clients compare.
+ *  ★ Empty on the Pi and the Mac, where the server IS the program and there is nothing to add. */
+static std::string         g_srvHost;
 /** ★★ SESSION TIME LIMIT, minutes. 0 = unlimited (the default, and what every private
  *  receiver wants). Exists because one client per radio plus one radio per server means a
  *  PUBLIC VibeServer is a queue of one, and without a limit the first listener holds it all
@@ -9066,6 +9077,11 @@ struct LocalSdrShim::Impl {
 #else
             const std::string verField;
 #endif
+            // ★ Only when something is hosting it — see g_srvHost. Absent means "the server is the
+            //   program", which is what the Pi and the Mac are.
+            std::string hostField;
+            { std::lock_guard<std::mutex> lk(g_vsAdminMtx);
+              if (!g_srvHost.empty()) hostField = ",\"host\":\"" + jsonEscape(g_srvHost) + "\""; }
             // ★★★ ONE READING OF THE STATE, USED BY BOTH FIELDS. `claimable` and `freeInSec` are
             //     two answers to the same question — is this listener still inside their
             //     guarantee — and a client that reads them as one sentence gets a contradiction
@@ -9089,7 +9105,7 @@ struct LocalSdrShim::Impl {
                              + (vsSharedDial() ? "off"
                                 : um == 1 ? "choice" : um == 2 ? "compat" : "off")
                              + "\",\"local\":" + (loop ? "true" : "false")
-                             + ",\"admin\":" + (adminSet ? "true" : "false") + verField
+                             + ",\"admin\":" + (adminSet ? "true" : "false") + verField + hostField
                              // ★ The owner's notice, so a client can say WHY the receiver is odd
                              //   before anybody concludes the radio is rubbish.
                              + ",\"notice\":\"" + vibeadmin::esc(g_vsNotice.current()) + "\""
@@ -13394,6 +13410,10 @@ void LocalSdrShim::setOverloadProtect(bool on) {
 }
 /** Turning the AGC on RAISES the ceiling to the tuner's maximum; turning it off puts the ceiling
  *  back to wherever the gain is now, so the receiver does not lurch when the mode changes. */
+void LocalSdrShim::setServerHost(const std::string& label) {
+    std::lock_guard<std::mutex> lk(g_vsAdminMtx);
+    g_srvHost = label;
+}
 void LocalSdrShim::setTunerBwAuto(bool on) {
     g_tunerBwAuto.store(on, std::memory_order_relaxed);
     LOGI("tuner IF filter: %s", on ? "auto (follows zoom)" : "manual");

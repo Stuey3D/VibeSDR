@@ -948,6 +948,14 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetGainAutomation(JNIEnv*, jobject,
     vibe::LocalSdrShim::instance().setRtlAgc(agc == JNI_TRUE);
 }
 
+/** What is hosting this server — see LocalSdrShim::setServerHost. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetServerHost(JNIEnv* env, jobject, jstring label) {
+    const char* c = label ? env->GetStringUTFChars(label, nullptr) : nullptr;
+    vibe::LocalSdrShim::setServerHost(c ? std::string(c) : std::string());
+    if (c) env->ReleaseStringUTFChars(label, c);
+}
+
 /** The tuner's IF filter follows the zoom (RTL only) — the phone's half of the web setup page's
  *  "IF filter follows the zoom". See LocalSdrShim::setTunerBwAuto. */
 extern "C" JNIEXPORT void JNICALL

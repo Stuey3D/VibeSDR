@@ -174,6 +174,11 @@ object VibeServerBoot {
             // ★ The IF filter following the zoom, applied beside the AGC because they are the pair
             //   an owner sets once and expects to stay set — see RadioConfig::tunerBwAuto.
             VibeLocalSDR.setTunerBwAuto(cfg.b("tunerBwAuto", false))
+            // ★★ SAY WHAT IS HOSTING THIS SERVER. The engine's own version travels in `version`
+            //    and is comparable with the Pi and the Mac; this names the wrapper, so a phone is
+            //    not read as being six major versions ahead of them. Taken from BuildConfig so it
+            //    cannot drift from the app that is actually running.
+            VibeLocalSDR.setServerHost("VibeSDR " + BuildConfig.VERSION_NAME + " for Android")
             VibeLocalSDR.setGainLimits(
                 if (adv) cfg.s("gainLimits") else "",
                 restGain,

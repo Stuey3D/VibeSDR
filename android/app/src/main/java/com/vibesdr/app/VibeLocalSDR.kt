@@ -223,9 +223,12 @@ object VibeLocalSDR {
     fun setGainAutomation(overloadProtect: Boolean, agc: Boolean) { ensureLoaded(); nativeSetGainAutomation(overloadProtect, agc) }
     /** ★ The tuner IF filter following the zoom — RTL only, and only meaningful free-tuning. */
     fun setTunerBwAuto(on: Boolean) { ensureLoaded(); nativeSetTunerBwAuto(on) }
+    /** ★ "VibeSDR 10.5 for Android" — the WRAPPER, reported beside the engine's own version. */
+    fun setServerHost(label: String) { ensureLoaded(); nativeSetServerHost(label) }
     private external fun nativeSetGainLimits(csv: String, restGain: Int, agcLock: Boolean)
     private external fun nativeSetGainAutomation(overloadProtect: Boolean, agc: Boolean)
     private external fun nativeSetTunerBwAuto(on: Boolean)
+    private external fun nativeSetServerHost(label: String)
 
     /** The radio's REAL gain ladder + the RSP's RF position count, for the limiter's slider. */
     fun gainStepsJson(): String { ensureLoaded(); return nativeGainStepsJson() }

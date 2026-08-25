@@ -102,6 +102,9 @@ public:
     /** ★ The tuner's IF filter follows the zoom (RTL only). Persisted in the server's config —
      *  see RadioConfig::tunerBwAuto — so it survives a restart and is not re-asserted by a client. */
     void        setTunerBwAuto(bool on);
+    /** ★ What is HOSTING this server ("VibeSDR 10.5 for Android"), reported beside — never instead
+     *  of — the engine version. See g_srvHost for why the two must not share a field. */
+    static void setServerHost(const std::string& label);
     /** The ceiling in force at a frequency, or -1 for none. Public so the client can be told. */
     static int  gainCapAt(double hz);
     /** Where the listener actually is — the VFO, falling back to the capture centre. This is the
