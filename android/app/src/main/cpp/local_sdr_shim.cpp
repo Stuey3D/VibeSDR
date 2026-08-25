@@ -1229,6 +1229,10 @@ static constexpr bool        g_agcQuietAnnounce = false;
 //     when the overload hit, and a refusal to return to it or above.
 //  ★ It expires two ways, both meaning "the world is different now": a RETUNE (a new dial position
 //    is a new signal, see tuneHw) or a long, genuinely clean run at the step below.
+/** When the tuner's IF filter was last actually written. Each write is a USB control transfer on
+ *  the bus carrying the IQ — see applyAutoIf(), which rate-limits WIDENING only. */
+static std::atomic<double>   g_tunerBwWroteAt{0.0};
+static constexpr double      kTunerBwMinSec = 0.50;
 static std::atomic<int>      g_ovlBadGain{-1};    // tenth-dB, -1 = nothing has failed here
 /** ★★★ WAS THAT GAIN JUDGED AGAINST A SETTLED SIGNAL, OR AGAINST A RECONFIGURATION?
  *      g_ovlBadGain earns a LONG lockout (kOvlBadHold) because hysteresis exists to stop the loop
@@ -2603,7 +2607,42 @@ struct LocalSdrShim::Impl {
         if (want >= (int)(sampleRate * 0.95)) want = 0;
         {
             const int cur = g_tunerBwHz.load(std::memory_order_relaxed);
-            if (want != cur) {
+            /* ★★★ EVERY WRITE HERE IS A SYNCHRONOUS USB CONTROL TRANSFER ON THE BUS CARRYING THE
+             *     IQ, and this runs on EVERY TUNE. `want` comes from |viewCentre - rf|, a
+             *     CONTINUOUS quantity, so a hold-sweep changed it on nearly every step — up to 22
+             *     transfers a second, each elbowing the sample flow aside. The IQ hiccups, spectrum
+             *     frames stall, and the waterfall trails the dial and keeps catching up after the
+             *     button is released. Same reason setHwGain is coalesced, same bus.
+             *  ★★★ THE DIFFERENTIAL: the Airspy HF+ on the SAME server, same client, same sweep is
+             *      clean — it has no variable IF filter and never makes this call.
+             *
+             * ★★★ RATE-LIMIT WIDENING ONLY, AND THE ASYMMETRY IS THE WHOLE FIX. My first attempt
+             *     deferred BOTH directions and broke the receiver on air (4.1.1-22): a deferred
+             *     write is never retried — applyAutoIf only runs on a tune — so when a sweep
+             *     STOPPED, the last write was dropped and the filter stayed where it was. Left too
+             *     WIDE it passes content beyond Nyquist, which FOLDS: a wall of spurious spikes and
+             *     "none of the signals are where they are meant to be" (Stuart, on air, 2026-08-25,
+             *     while listening to Caroline). I had written that the deferred error was "a few
+             *     per cent nobody can hear". It was not — the last write of a sweep is not a small
+             *     correction, it is the whole one.
+             *  ★★ The two directions are NOT equally safe and must not be treated as one rule:
+             *       - too NARROW  → a dead band edge in the view. Visible, harmless, self-corrects.
+             *       - too WIDE    → ALIASING. Signals appear where they are not. Unrecoverable
+             *                       from the picture, and it looks like a broken radio.
+             *     So a narrowing is ALWAYS applied. Only widening may wait, and the worst it can
+             *     cost is the harmless direction.
+             *  ★ A release to WIDE (want == 0) and the first write from an unset filter are never
+             *    deferred either — those are the cases where waiting shows as dead band edges. */
+            bool defer = false;
+            if (want != cur && want != 0 && cur != 0 && want > cur) {   // widening only
+                const int    band = std::max(100000, (int)(cur * 0.20));
+                const double now  = nowSecs();
+                if (want - cur < band)                                    defer = true;
+                else if (now - g_tunerBwWroteAt.load(std::memory_order_relaxed)
+                         < kTunerBwMinSec)                                defer = true;
+            }
+            if (want != cur && !defer) {
+                g_tunerBwWroteAt.store(nowSecs(), std::memory_order_relaxed);
                 // ★★★ ONLY WIDENING ARMS THE CUT. Narrowing takes energy AWAY, which can never
                 //     overload anything — the AGC's ordinary climb handles it, and arming here
                 //     too would cut the gain every time somebody zoomed IN, which is the one
