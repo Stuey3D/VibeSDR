@@ -3324,7 +3324,20 @@ struct LocalSdrShim::Impl {
         fclose(f);
         if (in.empty()) return;
         { std::lock_guard<std::mutex> lk(spectroMtx); spectro = std::move(in); }
-        LOGI("spectrogram restored — %zu rows", spectro.size());
+        /* ★★★ AND THE CADENCE COUNTER WITH THEM, OR EVERY RESTART EATS FIVE HOURS OF HISTORY.
+         *     `spectroTaken` decides fast-fill (1 row/second) versus steady (1 row/minute), and it
+         *     restarted at ZERO while the ROWS were restored. So every start took another 300
+         *     rows at one a second: five minutes of data occupying 300 of the 1440 slots, and
+         *     evicting 300 MINUTES of real history from the front. Restart a few times in a day —
+         *     an upgrade, a config save, a power blip — and the 24-hour record is hours long.
+         *  ★★★ THAT IS WHY THE SPAN NEVER REACHED 24 HOURS. Stuart: "I have never seen a full 24
+         *      hours in the spectrogram I've only seen around 13.5 hours tops" — and the buffer
+         *      was FULL at 1440 rows the whole time, which is what made it look like a display
+         *      question rather than a data one. The rows were there; most of them were seconds
+         *      apart because the fast fill had run over and over.
+         *  ★ The fast fill is for a receiver with NOTHING to show. A restored one has plenty. */
+        spectroTaken = (int)spectro.size();
+        LOGI("spectrogram restored — %zu rows (cadence resumed, not refilled)", spectro.size());
     }
     double  spectroAcc[kSpectroBins] = {0};
     /** ★ Set under spectroMtx by the DSP path, ACTED ON elsewhere: a 3 MB write must never
