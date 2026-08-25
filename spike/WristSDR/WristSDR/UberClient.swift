@@ -209,6 +209,10 @@ final class UberClient: ObservableObject {
   @Published var offeredRates: [Int] = []
   @Published var offeredGains: [Int] = []      // tuner gain steps (tenths of dB) from hwinfo
   @Published var lockedRate = 0                // >0 = the host pinned the capture rate; hide the picker
+  /// ★ The owner has FORCED the AGC on: a listener may not set a gain at all. The server has
+  ///   always sent this and the web client has always read it — Jr and the phone never did, so
+  ///   both offered a gain the server refuses. Same rule as `lockedRate` above.
+  @Published var agcLocked = false
   // ── Owner policy: session limit + admin lock ────────────────────────────────
   /// ★ The server ENFORCES both of these; the client's job is to SAY SO. A limit
   /// nobody is told about reads as a crash, and controls that are locked but drawn
@@ -350,6 +354,7 @@ final class UberClient: ObservableObject {
     if let g = j["gains"] as? [Int] { offeredGains = g }
     if let r = j["rates"] as? [Int] { offeredRates = r }
     lockedRate = (j["lockedRate"] as? NSNumber)?.intValue ?? 0
+    agcLocked  = (j["agcLocked"] as? NSNumber)?.boolValue ?? ((j["agcLocked"] as? Bool) ?? false)
     maxFftRate = (j["maxFftRate"] as? NSNumber)?.intValue ?? 0   // owner ceiling (needs a Moto update to appear)
     restoreVibeHw()          // the server has now declared what it offers — put the radio back
     pushAllRadioSettings()   // …including the per-radio gain path, see below

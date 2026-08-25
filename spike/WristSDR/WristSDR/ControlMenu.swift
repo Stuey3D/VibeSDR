@@ -726,6 +726,24 @@ struct HardwareSheet: View {
   /// The owner has locked the radio and we are not through it. Everything the
   /// server's adminGate refuses is drawn dim and inert while this holds.
   private var ownerLocked: Bool { radio.adminSet && !radio.adminOk }
+  /* ★★★ SHOW ONLY WHAT THIS LISTENER CAN ACTUALLY USE. Jr dimmed-and-disabled the owner's
+   *     controls, which is better than the phone did (its switches MOVED and then lied), but it
+   *     is still an offer: a row on a watch is precious, and one that cannot be pressed is a row
+   *     spent saying "no". Stuart, of the phone and then of Jr: "the controls section should only
+   *     show the available controls not all of them".
+   *  ★★ THE FILE ALREADY ARGUES THIS TWICE — "a control that silently does nothing is the exact
+   *     fault this menu has been cleaned of twice already", and SPAN is "HIDDEN WHEN THERE IS
+   *     NOTHING TO CHOOSE". This just applies the same rule to the owner-locked set.
+   *  ★ The gain goes when the owner has FORCED the AGC on: the server refuses a gain then, so
+   *    both the GAIN cell and the VIBE AGC switch are theirs, not this listener's. */
+  private var canGain: Bool { !radio.agcLocked }
+  private var canSpan: Bool { radio.lockedRate == 0 && radio.offeredRates.count > 1 }
+  /// Nothing on this menu is usable — then the password IS the menu, and it says so.
+  /// ★ Mirrors the four conditions above exactly: gain, span, digital AGC and bias-T are the
+  ///   whole menu, and the last two are hidden together with `ownerLocked`.
+  private var nothingForUser: Bool {
+    ownerLocked && !(radio.radioHasSimpleGain && canGain) && !canSpan
+  }
 
   var body: some View {
     ScrollView {
@@ -778,7 +796,7 @@ struct HardwareSheet: View {
         // ★ Hidden entirely on an RSP (its gain is LNA state + IF gain reduction, not one
         // slider) and on an HF+ (no variable gain stage AT ALL). A slider that cannot
         // move the radio is worse than no slider.
-        if radio.radioHasSimpleGain {
+        if radio.radioHasSimpleGain && canGain {
         HStack(spacing: 7) {
           Button {
             if !radio.gainAuto { gainArmed.toggle(); crownFocused = gainArmed; if gainArmed { attArmed = false } }
@@ -811,7 +829,9 @@ struct HardwareSheet: View {
         // ★ Tested on the DRIVER NAME, not on "not an RSP and not an HF+" — that "else means
         //   dongle" shape has produced a bug every single time a third radio appeared
         //   ([[else_means_dongle_trap]]).
-        if radio.radioDriver == "rtl" {
+        // ★ ...and NOT while the owner holds the lock: setAgc reaches the server's protected set
+        //   and is refused, exactly like bias-T below.
+        if radio.radioDriver == "rtl" && !ownerLocked {
           HStack(spacing: 7) {
             Button { radio.setAgc(!radio.agc) } label: { cell(title: "DIGITAL AGC", value: radio.agc ? "ON" : "OFF", lit: radio.agc) }.buttonStyle(.plain)
           }
@@ -822,12 +842,12 @@ struct HardwareSheet: View {
         // list of one, which is a control in name only. Decided from the LIST rather than from
         // the driver, so an HF+ that does offer several keeps a working control and any future
         // radio needs no special case.
-        if radio.offeredRates.count > 1 {
+        if canSpan {
           HStack(spacing: 7) {
-            Button { if radio.lockedRate == 0 { showSpan = true } } label: {
+            Button { showSpan = true } label: {
               cell(title: "SPAN", value: radio.sampleRate > 0 ? String(format: "%.1f MHz", Double(radio.sampleRate) / 1_000_000) : "—",
-                   lit: false, dim: radio.lockedRate != 0)
-            }.buttonStyle(.plain).disabled(radio.lockedRate != 0)
+                   lit: false, dim: false)
+            }.buttonStyle(.plain)
           }
         }
         // ★ CALIBRATION IS NOT A WRIST CONTROL. ppm (and the HF+'s parts-per-BILLION
@@ -943,7 +963,11 @@ struct HardwareSheet: View {
               Image(systemName: "lock.fill").font(.system(size: 11, weight: .bold))
               Text("Owner-locked").font(.system(size: 12, weight: .semibold))
             }.foregroundColor(.orange)
-            Text("These controls belong to the owner. Enter the admin password to unlock them.")
+            // ★ Say which of the two situations this is. "Most of this is yours" and "none of
+            //   this is yours" want different sentences, and the second one is the whole screen.
+            Text(nothingForUser
+                 ? "Every control on this receiver is set by its owner. There is nothing here for a listener to change."
+                 : "These controls belong to the owner. Enter the admin password to unlock them.")
               .font(.system(size: 10)).foregroundColor(.white.opacity(0.6))
             SecureField("Admin password", text: $adminPass)
               .font(.system(size: 14, design: .rounded))
@@ -960,15 +984,12 @@ struct HardwareSheet: View {
           .padding(10)
           .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.10)))
         }
-        if radio.adminSet || radio.radioHasBiasT {
-          if radio.radioHasBiasT {
-            HStack(spacing: 7) {
-              Button { radio.setBiasT(!radio.biasT) } label: {
-                cell(title: "BIAS-T", value: radio.biasT ? "ON" : "OFF",
-                     lit: radio.biasT && !ownerLocked, dim: ownerLocked)
-              }.buttonStyle(.plain).disabled(ownerLocked)
-              Spacer(minLength: 0)
-            }
+        if radio.radioHasBiasT && !ownerLocked {
+          HStack(spacing: 7) {
+            Button { radio.setBiasT(!radio.biasT) } label: {
+              cell(title: "BIAS-T", value: radio.biasT ? "ON" : "OFF", lit: radio.biasT, dim: false)
+            }.buttonStyle(.plain)
+            Spacer(minLength: 0)
           }
         }
       }
