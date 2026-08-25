@@ -102,6 +102,14 @@ itself"*. Not "distributed multi-client architecture" but *"share it by sending 
    and must not go on a marketing page or into a public repo. Substituted text is Menlo rather than
    the app's Nixie One, so a re-shoot is worth it if this becomes prominent.
 
+   ★★★ **AND ITS COMPANION — THE OTHER HALF OF THE ARGUMENT.** Stuart also took the receiving
+   end: the Mac app listening to that phone, with Advanced RDS fully decoded — station name,
+   RadioText, the AF list, MPX S/N 29 dB, constellation and MPX plots, group share. **The two
+   shots side by side ARE the pitch**: a rugged Android handset on the left serving 13 KB/s, and
+   on the right a full DX-grade analyser reading the signal it sent. No competitor can show the
+   second picture, because they do not own the demodulator that produced it.
+   ▶ TO DO: the file is not in the repo yet — Stuart to drop it beside the XCover shot.
+
 ### Craft notes
 - **Square the corners.** 14–20px radii with soft borders is the single strongest tell.
   Instrument panels have hairlines and screen-printed labels.
