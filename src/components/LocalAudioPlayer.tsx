@@ -339,7 +339,27 @@ export default function LocalAudioPlayer(
     // ★ Sealed until a person asks. `startSeq` is the count at the moment the socket opened, so a
     //   later bump means somebody reached for the dial or the mode — not that the screen settled.
     if (suppressFirst.current) {
-      if (userTuneSeq === startSeq.current) return;
+      /* ★★★ UNSEAL ON THE VALUES, NOT ONLY ON THE COUNTER. `userTuneSeq` has to be bumped by hand
+       *     at every site that tunes, and the note beside the prop in SDRScreen predicted exactly
+       *     what happens when one is missed: "the prop will not update and the tune will be
+       *     silently dropped". It was missed — there are five bump sites and many more ways to
+       *     move the dial (spectrum drag, the step buttons, a sweep), so on a SHARED dial those
+       *     gestures reached the screen and never reached the wire. Audio kept playing, the VFO
+       *     moved on screen, the radio never budged, and a reconnect did not clear it because the
+       *     seal is re-armed on every socket open (Stuart, 2026-08-25: "I'm on the airspy and can
+       *     still hear flex but have lost all my tuning" — while the RTL, which is not a shared
+       *     dial and so is never sealed, tuned perfectly from the same app).
+       *  ★★ `startTune` already held the answer: it is the hello this socket opened with, and it
+       *     has been computed and stored since the seal was written but NEVER READ. Comparing
+       *     against it is what the comment above this effect always described — "only while the
+       *     values are still the ones we started with; the moment any of them differs, a person
+       *     has moved something". A changed frequency, mode or passband IS somebody asking,
+       *     whoever forgot to bump the counter.
+       *  ★ The counter is kept as the second arm, because it is the only thing that can tell a
+       *    deliberate re-assert of the SAME values (tapping WFM when it is already WFM) from the
+       *    socket merely restating its opening position — which is the case the seal exists for. */
+      const asked = tuneJson(frequency, mode, bandwidthLow, bandwidthHigh);
+      if (userTuneSeq === startSeq.current && asked === startTune.current) return;
       suppressFirst.current = false;      // a person asked: this and everything after it is real
     }
     if (USE_NATIVE_PUMP) {
