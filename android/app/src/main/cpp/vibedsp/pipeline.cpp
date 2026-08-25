@@ -775,6 +775,30 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 // ★ lockAmp is deviation/75 kHz, so 2 kHz is ~0.027.
                 const bool pilotUsable = (pilot > 0.027f);
                 snrValid_ = pilotUsable;
+                /* ★★★ A PROBE FOR THE FAULT NOBODY HAS PINNED DOWN: no stereo and no RDS on a
+                 *     station that is plainly audible, cured only by tuning one click away and
+                 *     back (Stuart, for months — 105.4, 97.2, and 104.7 beside the beacons).
+                 *  ★★★ WHY A LIVE PROBE AND NOT A TEST. I hypothesised a runaway in the PLL's
+                 *      frequency integrator and bounded it — then ran the controlled experiment
+                 *      (same signal, fresh pipeline vs after 12 s of static) and it made NO
+                 *      DIFFERENCE. The harness cannot produce whatever the real fault needs, and
+                 *      the cure rules the integrator out anyway: a one-click retune keeps the mode
+                 *      and bandwidth, so it takes setTune's same-chain path and never resets the
+                 *      PLL at all. So the next move is to watch the real thing.
+                 *  ★★ FIRES ONLY IN THE FAULT'S OWN SHAPE — a pilot present and usable by the
+                 *     deviation meter, while the lock says otherwise. On a healthy station or a
+                 *     dead one it says nothing, so this is not a log that has to be read past.
+                 *  ★ Once a second at most. Delete when the cause is found. */
+                if (pilotUsable && !pll_.locked()) {
+                    if (++pilotOddTicks_ >= 40) {
+                        pilotOddTicks_ = 0;
+                        std::fprintf(stderr,
+                            "[pilot] present but NOT LOCKED — dev %.1f kHz, lockAmp %.4f, "
+                            "trackable %d, mpxS/N %.1f dB, lmrCut %.0f Hz\n",
+                            pll_.pilotDeviationKHz(), pll_.lockAmp(), (int)pll_.trackable(),
+                            blendSnrDb_, lmrHiCutHz_);
+                    }
+                } else pilotOddTicks_ = 0;
                 if (pilotUsable) {
                     const float snr = (noise > 1e-9f) ? (pilot / noise) : 1e6f;
                     const float db  = 20.0f * std::log10(std::max(snr, 1e-6f));

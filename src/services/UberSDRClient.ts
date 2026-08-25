@@ -2270,6 +2270,17 @@ export class UberSDRClient {
     // in-app debug surface on a release build where the real reports come from. Truncated because
     // an unknown message may be large, and the TYPE is the part that matters.
     if (typeof msg.type === 'string') {
+      /* ★★★ BUILD THE LINE ONCE PER TYPE. `sig` and `adc` arrive twenty times a second EACH, and
+       *     this ran JSON.stringify on every one of them — on the JS thread, for ever, to produce
+       *     a line identical to the last forty thousand. The buffer already tallies repeats (see
+       *     noteUnhandled), so the only thing left to save is the stringify itself, and it is the
+       *     expensive half.
+       *  ★★ THE COUNT STILL RISES, so "this arrives constantly" is still visible — that fact is
+       *     diagnostic and the old design destroyed it by drowning in it.
+       *  ★ Per socket generation: cleared on reconnect, so a type that appears only after a
+       *    reconnect is still caught the first time it does. */
+      if (this._loggedUnhandled.has(msg.type)) { noteUnhandled('ubersdr', `unhandled "${msg.type}"`); return; }
+      this._loggedUnhandled.add(msg.type);
       const line = `unhandled "${msg.type}": ${JSON.stringify(msg).slice(0, 140)}`;
       this.dbg(line);
       // ★ ALSO into the ring buffer — dbg() reaches nothing on a release build, and release builds
@@ -2285,6 +2296,9 @@ export class UberSDRClient {
    *  session is Hole 2. No rate limit here (a close is self-limiting), but the
    *  reconnecting flag is raised so the watch shows a recovery rather than a
    *  black screen. */
+  /** ★ Types already written to the protocol log — see the note where it is used. */
+  private _loggedUnhandled = new Set<string>();
+
   private _scheduleReconnect() {
     if (this.destroyed || this.pausedByApp) return;
     if (this.refused) return;        // a refusal is final until the user acts

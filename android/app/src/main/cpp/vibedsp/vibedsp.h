@@ -2113,6 +2113,7 @@ private:
     float lmrHiCutY_  = 0.0f;                // one-pole state for the L-R high-cut
     float blendSnrDb_ = 99.0f;               // smoothed pilot-to-guard-band ratio, dB
     float imsBlendHz_ = 0.0f;                // ★ IMS's own contribution — see imsBlendHz()
+    int   pilotOddTicks_ = 0;                // ★ live probe — see the note in pipeline.cpp
     int   imsWhy_ = 1;                       // ★ and why not, when it is not
     // ★ The audio (L+R and mono) high-cut — the cure for hiss that survives a switch to mono,
     //   which high-blend cannot touch because it only ever acts on L-R.
