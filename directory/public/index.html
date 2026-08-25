@@ -299,6 +299,9 @@
   .keyPanel button:disabled { opacity: .3; cursor: default; }
   .keyPanel .lens { color: var(--phosphor); opacity: .85; font-size: 14px;
                     text-shadow: 0 0 8px rgba(40,167,69,.6); }
+  /* ★ The glow moves from text-shadow to a drop-shadow filter now that it is a drawing — same
+       phosphor look, but text-shadow does nothing to an SVG's strokes. */
+  .keyPanel svg.lens { display: block; filter: drop-shadow(0 0 5px rgba(40,167,69,.55)); }
   #zAll, #clearSel { font-size: 10px; letter-spacing: .1em; min-width: 46px; }
   #clearSel:not(:disabled) { color: var(--busy); border-color: rgba(224,80,80,.4);
                              text-shadow: 0 0 8px rgba(224,80,80,.5); }
@@ -492,7 +495,18 @@
       </span>
       <span class="keyPanel zoomPanel">
         <button type="button" id="zOut" title="Zoom out — about the needle">−</button>
-        <span class="lens" aria-hidden="true">&#9906;</span>
+        <!-- ★★ A DRAWN LENS, NOT A GLYPH. This was &#9906; — U+26B2, the NEUTER symbol: a circle
+             with a straight vertical stalk. At 14px that reads as a lollipop, not a magnifying
+             glass, because the handle of a real one comes off the rim at an angle (Stuart: "can
+             you tilt the handle ... it doesnt look very maginifying glass like").
+             ★ Six lines of SVG rather than hunting for a better codepoint: the tilt, the handle
+             length and the stroke weight are then ours, and it inherits currentColor so the
+             phosphor and the glow still come from .lens. -->
+        <svg class="lens" aria-hidden="true" viewBox="0 0 16 16" width="15" height="15">
+          <circle cx="6.6" cy="6.6" r="4.1" fill="none" stroke="currentColor" stroke-width="1.5"/>
+          <line x1="9.7" y1="9.7" x2="13.6" y2="13.6" stroke="currentColor"
+                stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
         <button type="button" id="zIn" title="Zoom in — about the needle">+</button>
       </span>
       <span class="keyPanel allPanel">
