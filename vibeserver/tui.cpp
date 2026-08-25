@@ -500,6 +500,7 @@ void statusScreen(vsconfig::Config& cfg) {
         mvprintw(row++, 4, "p   reset the admin password");
         mvprintw(row++, 4, "n   reset or clear the PIN");
         mvprintw(row++, 4, "z   reset to not-set-up  (the browser will ask you to set it up again)");
+        mvprintw(row++, 4, "d   look for a newly plugged radio");
         mvprintw(row++, 4, "r   restart the server");
         mvprintw(row++, 4, "q   quit");
 
@@ -525,6 +526,56 @@ void statusScreen(vsconfig::Config& cfg) {
                 else msg = std::string(r.label.empty() ? r.driver : r.label)
                          + (r.enabled ? " will be served — restart to apply."
                                       : " will not be served — restart to apply.");
+            }
+        }
+        /* ★★★ ADOPT A RADIO PLUGGED IN AFTER SETUP. This screen lists the CONFIG, deliberately —
+         *     see the note above about a running server holding its device — but the consequence
+         *     was that a NEW radio could never appear here at all, and the only list built from
+         *     enumeration lives in the first-run wizard. So plugging a second dongle into a
+         *     working server left the owner with nowhere to go (Stuart, 2026-08-25: "I've received
+         *     the rtl-sdr v4l and it isnt showing in the TUI to serve it ... we are lacking a
+         *     refresh button in the TUI").
+         *  ★★ AND ENUMERATION IS EXACTLY RIGHT FOR THIS ONE JOB, for the same reason it is wrong
+         *     for the list: it finds only what nothing is holding, and a radio that is not yet in
+         *     the config is by definition not being served. The devices it cannot see are the ones
+         *     already working, which are also the ones we must not touch.
+         *  ★★ ADD ONLY. A radio missing from this scan may simply be in use, or unplugged for a
+         *     minute; removing it because it did not answer would throw away an owner's settings
+         *     for a temporary condition. Untick with space, delete in the browser.
+         *  ★ Matched on driver+serial. RTL dongles ship with duplicate default serials, which is
+         *    what usbPath exists to break — so two identical unconfigured dongles will still read
+         *    as one here. Rare, recoverable, and better than refusing to adopt anything. */
+        else if (c == 'd') {
+            vsconfig::ServerConfig fresh; std::string e;
+            if (loadServerViaSudo(fresh, e) <= 0) {
+                msg = "Could not read the configuration.";
+            } else {
+                const auto found = vibe::detectRadios();
+                int added = 0;
+                for (const auto& det : found) {
+                    bool known = false;
+                    for (const auto& r : fresh.radios)
+                        if (r.driver == det.driver && r.serial == det.serial) { known = true; break; }
+                    if (known) continue;
+                    vsconfig::RadioConfig nr;
+                    nr.driver     = det.driver;
+                    nr.serial     = det.serial;
+                    nr.label      = det.name;
+                    nr.enabled    = true;    // ★ they plugged it in; that is the answer to "serve it?"
+                    nr.configured = false;   // ★ …but it still goes on air only once its tab is saved
+                    fresh.radios.push_back(nr);
+                    added++;
+                }
+                if (added == 0) {
+                    msg = up ? "Nothing new. A radio already being served cannot be seen while the "
+                               "server holds it — press x to stop first if you are swapping one."
+                             : "Nothing new found.";
+                } else if (!saveServerConfig(fresh, e)) {
+                    msg = "Save failed: " + e;
+                } else {
+                    msg = std::to_string(added) + (added == 1 ? " radio added" : " radios added")
+                        + " — set it up in the browser, then restart to put it on air.";
+                }
             }
         }
         else if (c == 'x' && up) {
