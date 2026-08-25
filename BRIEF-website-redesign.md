@@ -108,7 +108,34 @@ itself"*. Not "distributed multi-client architecture" but *"share it by sending 
    shots side by side ARE the pitch**: a rugged Android handset on the left serving 13 KB/s, and
    on the right a full DX-grade analyser reading the signal it sent. No competitor can show the
    second picture, because they do not own the demodulator that produced it.
-   ▶ TO DO: the file is not in the repo yet — Stuart to drop it beside the XCover shot.
+   `website/assets/shots/mac-advanced-rds.webp` — 2440px, 549 KB (the original was an 8 MB
+   Retina PNG; the XCover shot is 60 KB beside it). Checked for personal data before committing:
+   no addresses of any kind in frame.
+
+### The tunnel — say this, it is a genuine differentiator
+
+Stuart: *"we make it clear that the connection is handled via the Cloudflare tunnel and no home or
+personal DDNS is required and home IP is not shared."* Verified against
+`BRIEF-vibeserver-tunnel-directory.md`, which already states it: **"The home address is never
+published at all. Not the IP, not a DDNS name."**
+
+What can be claimed, all of it true:
+
+- **No port forwarding.** cloudflared is an ordinary OUTBOUND process — nothing is opened on the
+  router. It therefore works behind **CGNAT**, where port forwarding is not merely awkward but
+  impossible, and that is a large share of mobile and modern broadband users.
+- **No DDNS, no dynamic address to chase.** The hostname is stable and handed out for you.
+- **Your home IP is never published.** Listeners connect to Cloudflare; they never see, and never
+  connect to, the machine in your house.
+- **Real HTTPS with a real certificate** — which a port-forwarded home server CANNOT have, because
+  no CA issues for a bare address. So its listeners get "Not Secure" and its admin password
+  crosses in clear. ★★ **The tunnel is the more secure option for the listener, not a compromise
+  for the host.** That is the opposite of what a reader will assume, so say it plainly.
+
+★★★ **AND DO NOT OVERSTATE THE OTHER DIRECTION.** The host DOES see a listener's IP — the server
+prints it (`Connected: 81.159.47.137`), and it is what session limits, cooldowns and bans are keyed
+on. So: "your home address stays private" is true; "nobody sees anybody" is NOT, and must never be
+implied. A privacy claim that quietly overreaches is worse than none.
 
 ### Craft notes
 - **Square the corners.** 14–20px radii with soft borders is the single strongest tell.
