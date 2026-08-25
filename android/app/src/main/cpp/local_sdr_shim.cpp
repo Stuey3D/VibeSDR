@@ -1145,6 +1145,14 @@ static std::atomic<int>      g_agcFastCut{0};
  *     the next tick computes its index from it and moves there in one write.
  *  ★ -1 = nothing recorded (cleared on retune: a gain learned at 105.4 says nothing about 89.7). */
 static std::atomic<int>      g_agcWideSteps{-1};
+/** ★★★ AUTO BANDWIDTH'S ADJACENT-CHANNEL ARM — ENGAGED, AND THE RDS VERDICT IT WAS ENGAGED ON.
+ *  File scope, NOT a static inside autoBandwidthTick(), because a function-local would SURVIVE A
+ *  RETUNE: the next station would inherit a 110 kHz cut decided for the last one, on a different
+ *  frequency with different neighbours. Stuart's rule, and it is the right one: "we must never
+ *  limit permanently". A limit has to be re-earned wherever it is applied — same reasoning as
+ *  agcForget() and g_agcWideSteps immediately above. */
+static std::atomic<bool>     g_adjNarrow{false};
+static std::atomic<bool>     g_adjRdsWasOn{false};
 /** Consecutive 1-second windows with, and without, samples on the rail. Written by the libusb
  *  callback (cheap: two stores), read by the DSP thread, which is the only one that may touch the
  *  radio — see the note on enqueueIq. */
@@ -6573,6 +6581,10 @@ struct LocalSdrShim::Impl {
             g_agcLearnedAtHz.store(freq, std::memory_order_relaxed);
             agcForget("retuned");
             g_agcWideSteps.store(-1, std::memory_order_relaxed);   // ★ see g_agcWideSteps
+            // ★★ A NEW STATION HAS NEW NEIGHBOURS, so the narrowing decision does not travel
+            //    with the dial. Re-earned from the measurement at the new frequency, or not at all.
+            g_adjNarrow.store(false, std::memory_order_relaxed);
+            g_adjRdsWasOn.store(false, std::memory_order_relaxed);
         }
         // ★ …and the dial moving changes where the filter should sit, in Auto.
         applyAutoIf();
@@ -15755,11 +15767,48 @@ void LocalSdrShim::autoBandwidthTick() {
      *  ★ Deliberately BELOW floorB: 110 kHz cuts the 57 kHz RDS subcarrier and the top of the
      *    stereo subcarrier, which is a real price. It is only ever paid when the measurement says
      *    the neighbour is costing more. */
-    static bool s_adjNarrow = false;
+    /* ★★★ PRICE THE CUT AGAINST WHAT IT ACTUALLY COSTS HERE, WHICH IS RDS AND NOTHING ELSE.
+     *     At 110 kHz (+/-55 kHz) the stereo difference subcarrier tops out at 53 kHz and SURVIVES
+     *     — Stuart, from the air: "I think 110K still kept stereo before" — but the RDS subcarrier
+     *     at 57 kHz does not fit and is lost. So a flat threshold prices every station the same
+     *     when the bill differs enormously: on 103.8 (S/N 8 dB, stereo locked, RDS already dead
+     *     and unmeasurable) the cut is nearly FREE and it sat blocked at 2.4 dB of measured gain;
+     *     on a clean station with RDS decoding, 2.4 dB is not worth losing it.
+     *  ★★★ AND THE RDS VERDICT MUST BE TAKEN WHILE STILL WIDE, THEN LATCHED — otherwise the cut
+     *      JUSTIFIES ITSELF. Narrowing kills RDS; re-reading "is RDS decoding?" afterwards would
+     *      answer no BECAUSE we narrowed, lowering the bar to stay narrow for ever. That is the
+     *      self-confirming detector this codebase has already been bitten by ("a blunt detector
+     *      that says clean is worse than none"), so the engaged state never re-judges the price.
+     *  ★ Still Schmitt in both directions, and still the measured benefit doing the steering. */
     const double ifGain = (double)p->rx.ifGainDb();
-    if      (!s_adjNarrow && ifGain >  3.0) s_adjNarrow = true;
-    else if ( s_adjNarrow && ifGain <  1.0) s_adjNarrow = false;
-    if (s_adjNarrow)                     want = 110000.0;
+    const int    ber    = p->rdsS.rdsBer;            // -1 = unknown
+    const bool   rdsOn  = (ber >= 0 && ber < 20);
+    if (!g_adjNarrow.load(std::memory_order_relaxed)) {
+        const double engageDb = rdsOn ? 3.0 : 1.0;
+        if (ifGain > engageDb) { g_adjNarrow.store(true, std::memory_order_relaxed);
+                                 g_adjRdsWasOn.store(rdsOn, std::memory_order_relaxed); }
+    } else {
+        /* ★★★ AND IT MUST BE ABLE TO WIDEN AGAIN WHEN THE STATION RECOVERS. The latch above stops
+         *     the cut justifying itself, but on its own it sets the opposite trap: engaged with
+         *     RDS dead, the bar to stay narrow is 0.3 dB, and RDS can never come back to raise it
+         *     BECAUSE WE ARE NARROW. A station lifted by the AGC or by Sporadic E would then be
+         *     held at 110 kHz for ever, denied its RDS by a verdict taken when it was weak.
+         *     Stuart: "we need to be able to auto widen again if say the AGC kicks in and boosts
+         *     the signal or sporadic E makes it stronger".
+         *  ★★ SO LET THE STATION'S OWN RECOVERY RAISE THE BAR, using the one measurement that is
+         *     still honest while narrow: MPX S/N (already smoothed above). Once it is back to a
+         *     level where RDS would plausibly decode, staying narrow has to be worth the same
+         *     1.5 dB it would have to be worth on any RDS-carrying station — and if it is not, we
+         *     widen and the RDS returns on its own. No timed re-test, no dropping the filter
+         *     periodically to look.
+         *  ★ 14 dB is where RDS starts being decodable in practice; it is deliberately the same
+         *    side of the auto-bandwidth ramp (8-25 dB) that this controller already reasons on. */
+        const bool   rdsPlausible = snr >= 14.0;
+        const double releaseDb    = (g_adjRdsWasOn.load(std::memory_order_relaxed) || rdsPlausible)
+                                    ? 1.5 : 0.3;
+        if (ifGain < releaseDb) g_adjNarrow.store(false, std::memory_order_relaxed);
+    }
+    if (g_adjNarrow.load(std::memory_order_relaxed)) want = 110000.0;
     else if (want >= full - 4000.0)      want = 0.0;
     g_autoBwNowHz.store(want > 0.0 ? want : full, std::memory_order_relaxed);
     // ★ Hysteresis against the width ACTUALLY APPLIED, not against the mode's bandwidth (which no

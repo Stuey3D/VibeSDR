@@ -1846,6 +1846,11 @@ public:
     unsigned rebuildCount() const { return rebuilds_; }
     // Diagnostics: smoothed 19 kHz pilot lock amplitude + current blend (0..1).
     float pilotLockAmp() const { return pll_.lockAmp(); }
+    /** ★ Is the stereo pilot actually LOCKED — i.e. is there stereo (and realistically RDS)
+     *  to lose? Auto bandwidth's adjacent-channel arm prices its cut against this: at 110 kHz
+     *  the 57 kHz RDS subcarrier does not fit and the top of the L-R subcarrier is clipped,
+     *  which is expensive on a locked station and FREE on one that has neither. */
+    bool  pilotLocked()  const { return pll_.locked(); }
     float stereoBlend()  const { return stereoBlend_; }
     /** High-blend diagnostics: the L-R corner now in use (Hz, 15000 = untouched) and the
      *  pilot-to-guard-band ratio driving it (dB). Reported so "why is this station not in full
