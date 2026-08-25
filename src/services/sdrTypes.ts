@@ -296,6 +296,10 @@ export interface ServerOccupancy {
   freeInSec: number;
   /** The owner's per-listener limit in minutes, 0 = unlimited. */
   limitMin: number;
+  /** ★ How many people are on this receiver right now, or absent if it did not say. NEVER default
+   *  it to 0 — "nobody said" and "nobody is listening" are different answers, and filling the gap
+   *  with a zero is how the directory once announced FREE about a receiver that was full. */
+  listeners?: number;
   /** ★★★ HOW THAT LIMIT BEHAVES. 'soft' means it is a GUARANTEE, not a deadline: when it runs out
    *  you keep the radio until somebody else actually wants it, and only then does the server give
    *  60 seconds' notice. ★ ABSENT MEANS HARD — every older server implies that, and a client which
@@ -359,6 +363,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       // distinct from "free now", which are very different things to show someone.
       freeInSec: typeof j.freeInSec === 'number' ? j.freeInSec : -1,
       limitMin:  typeof j.limitMin === 'number' ? j.limitMin : 0,
+      listeners: typeof j.listeners === 'number' ? j.listeners : undefined,
       limitSoft: j.limitMode === 'soft',
       admin:     j.admin === true,
       uncompressed: j.uncompressed === 'choice' || j.uncompressed === 'compat'

@@ -369,6 +369,12 @@ const LOCAL_MODES: { id: string; label: string }[] = [
   { id: 'lsb', label: 'LSB' }, { id: 'usb', label: 'USB' },
 ];
 
+/** ★ Said to every newcomer on a shared-VFO receiver, appended to the session-limit sentence when
+ *  both are known. Leading separator so it joins the sentence before it cleanly. */
+const SHARED_VFO_LINE =
+  ' This receiver has a shared VFO — everyone hears the same dial, so please use the chat to ask '
+  + 'before tuning.';
+
 export default function SDRScreen({ route, navigation }: Props) {
   const { baseUrl, instanceName, password } = route.params;
   useKeepAwake();
@@ -716,6 +722,9 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  ★ Declared HERE, above `bookmarkScope`, which reads the identity — putting them beside the
    *    effect that fills them left them in the temporal dead zone and tsc said so plainly. */
   const [limitSoft, setLimitSoft] = useState(false);
+  /** ★ How many people are on this receiver. From the dial state where there is one (it is live
+   *  and per-message), otherwise from the occupancy poll. */
+  const [occListeners, setOccListeners] = useState<number | null>(null);
   const [serverInstance, setServerInstance] = useState<string | null>(null);
 
   const urlScope = (isLocal && !isVibeServer) ? `local:${localDeviceKey}` : baseUrl;
@@ -2154,7 +2163,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const limitToldRef = useRef(false);
   // ★ ...but a DIFFERENT receiver is a different promise, so the once-per-connection flag is per
   //   server. Without this, moving from a soft server to a hard one would say nothing at all.
-  useEffect(() => { limitToldRef.current = false; }, [connectBase]);
+  useEffect(() => { limitToldRef.current = false; vfoToldRef.current = false; }, [connectBase]);
+  /** ★ Said once per server, like the limit — see where SHARED_VFO_LINE is used. */
+  const vfoToldRef = useRef(false);
   /** This receiver shares ONE tuner between its listeners — the only state in which the chat
    *  means anything, and the only one in which anybody but the owner may turn the dial. */
   const sharedDial = !!dialState && dialState.mode !== 'exclusive';
@@ -2517,6 +2528,16 @@ export default function SDRScreen({ route, navigation }: Props) {
   const chatOpenRef = useRef(false);
   useEffect(() => { chatOpenRef.current = chatOpen; }, [chatOpen]);
   useEffect(() => { sharedDialRef.current = sharedDial; }, [sharedDial]);
+  /* ★★ THE DIAL STATE ARRIVES ON ITS OWN SOCKET, so it can land AFTER the limit message has
+   *    already been shown. When it does, say the shared-VFO half on its own rather than losing it.
+   *  ★ Once per server, and never to a spectator receiver — there the owner tunes and asking would
+   *    be pointless advice. */
+  useEffect(() => {
+    if (!sharedDial || vfoToldRef.current || !dialState) return;
+    if (dialState.mode === 'spectator') return;
+    vfoToldRef.current = true;
+    setDialHint((h) => (h ? h + SHARED_VFO_LINE : SHARED_VFO_LINE.trim()));
+  }, [sharedDial, dialState]);
   // ★ The hint is a sentence, not a state — it says what just happened and then gets out of the
   //   way. Keyed on the text so a second move restarts the clock rather than inheriting the first.
   useEffect(() => {
@@ -4164,6 +4185,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (cancelled || !o) return;
         setLimitSoft(!!o.limitSoft);
         setServerInstance(o.instance ?? null);
+        // ★ The count the web client has always shown top-right and the app never did — see
+        //   listenerCount below. From occupancy, so it works on an EXCLUSIVE receiver too, where
+        //   there is no dial state to read it from.
+        if (Number.isFinite(Number(o.listeners))) setOccListeners(Number(o.listeners));
         /* ★★★ TELL THE LISTENER WHAT THE LIMIT MEANS, ONCE, BEFORE IT MATTERS. The web client has
          *     said this since soft limits existed and the app never did — so on the same receiver
          *     a browser explained itself and the app did not (Stuart: "this message about the soft
@@ -4179,11 +4204,21 @@ export default function SDRScreen({ route, navigation }: Props) {
         const mins = Number(o.limitMin) || 0;
         if (mins > 0 && !limitToldRef.current && !adminOk) {
           limitToldRef.current = true;
-          setDialHint(o.limitSoft
+          /* ★★ AND SAY THE DIAL IS SHARED, IN THE SAME BREATH. A time limit and a shared VFO are
+           *    the two house rules of this receiver, and a newcomer needs both before they touch
+           *    anything — being told about the clock but not that their tuning moves everybody
+           *    else's radio is the worse half to omit. Stuart: "can this message on shared VFO
+           *    screen please say as well this receiver has a shared VFO so please use the chat to
+           *    ask before tuning."
+           *  ★ If the dial state has not arrived yet it is said on its own the moment it does —
+           *    see the effect below. Whichever order they turn up in, both get said once. */
+          const vfo = sharedDialRef.current ? SHARED_VFO_LINE : '';
+          if (vfo) vfoToldRef.current = true;
+          setDialHint((o.limitSoft
             ? `This receiver is shared. It is yours for ${mins} minutes — after that you keep it `
               + `until somebody else wants it.`
             : `This receiver is shared. You have ${mins} minutes, then it passes to whoever is `
-              + `waiting.`);
+              + `waiting.`) + vfo);
         }
       })
       .catch(() => {});   // ★ Silent: a Kiwi/OWRX/older VibeServer answers nothing useful here.
@@ -7487,6 +7522,29 @@ export default function SDRScreen({ route, navigation }: Props) {
             adminMode over the countdown (ControlsBar), and this full-size badge — the one the owner
             actually sees over the waterfall — did not. Two places drawing the same fact from
             different state is how one of them ends up wrong. */}
+      {/* ★★★ HOW MANY PEOPLE ARE ON THIS RECEIVER — the web client has shown this top-right since
+             it existed and the APP never did (Stuart: "the app is missing the user count currently
+             on the server"). On a SHARED receiver it is not trivia: it is the difference between
+             "the dial is mine" and "four other people are listening to whatever I do next", and it
+             is the fact that makes the chat make sense.
+          ★ Live dial state first — it is per-message; the occupancy poll is the fallback and is
+            what an EXCLUSIVE receiver has instead. Hidden when nobody has said, never guessed. */}
+      {(() => {
+        const n = dialState?.listeners ?? occListeners;
+        if (n == null || n <= 0) return null;
+        return (
+          <View pointerEvents="none" style={[styles.rxListeners, {
+            top: insets.top + 46 + (stationIdH > 0 ? stationIdH + 8 : 0)
+                 + (sessionLeftMs != null && !adminOk ? 52 : 0),
+            right: Math.max(12, insets.right + 8),
+          }]}>
+            <Text style={styles.rxListenersTxt}>
+              {n === 1 ? '1 listening' : `${n} listening`}
+            </Text>
+          </View>
+        );
+      })()}
+
       {sessionLeftMs != null && !adminOk && (
         <View pointerEvents="none" style={[styles.rxClock, {
           top: insets.top + 46 + (stationIdH > 0 ? stationIdH + 8 : 0),
@@ -8254,6 +8312,11 @@ const styles = StyleSheet.create({
   rxClockNum:  { fontFamily: 'Nixie One', fontSize: 22, lineHeight: 26 },
   // ★ The soft-limit "expired" line is a sentence, not a number — it cannot use the 22pt face.
   rxClockSoft: { fontFamily: 'Nixie One', fontSize: 11, lineHeight: 15, maxWidth: 150 },
+  // ★ Quieter than the countdown beneath it: the clock is about YOU, this is about the room.
+  rxListeners: { position: 'absolute', paddingHorizontal: 8, paddingVertical: 3,
+                 borderWidth: 1, borderColor: 'rgba(255,160,0,0.30)', borderRadius: 4 },
+  rxListenersTxt: { color: 'rgba(255,190,90,0.85)', fontFamily: 'Nixie One', fontSize: 11,
+                    letterSpacing: 1 },
   adminNote: {
     position: 'absolute', zIndex: 40, alignItems: 'center',
     paddingVertical: 7, paddingHorizontal: 12, borderRadius: 8,

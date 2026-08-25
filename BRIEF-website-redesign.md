@@ -160,6 +160,16 @@ recording now proves rather than asserts. So:
 served, and by something that is not a cut-down version. Said this way the line is TRUE, and it is
 stronger than the version that needed the caveat.
 
+★★ **AND IT IS NOT "A PI" ANY MORE — SAY LINUX.** Stuart: *"its not limited to Pi anymore as we
+support X86 linux now."* apt carries **arm64 AND amd64**, so any ordinary Intel/AMD Linux box is a
+host — an old laptop, a NUC, a home server. "A Raspberry Pi" undersells it and, worse, reads as a
+hobby-only product.
+★ **BUT SAY WHAT HAS ACTUALLY BEEN TESTED.** Stuart, unprompted: *"tested on debian and ubuntu
+though so not sure what mint or steam os will do… or other linux distros."* So: **Debian and Ubuntu
+tested; other distributions likely but unverified.** That is a normal, credible thing to print, and
+it is the difference between a claim and a promise — a Mint user who fails after being told it
+works is a bug report AND a disappointed reader.
+
 ★★★ **THE LIMIT IS HOSTING, NOT LISTENING — AND THAT IS THE ONE TO KEEP HONEST.** VibeServer runs
 on macOS, Linux, a Pi and Android; **not Windows**. So "anyone can listen" is unconditional, while
 "anyone can host" is not yet. Do not let the call-to-arms copy blur the two: *"got a spare Android
