@@ -1017,6 +1017,21 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
         {vfoKeys
           ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} style={{ flex: 1 }} />
           : <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={vfoNoInertia} />}
+        <Text style={[lnd.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
+          {clock}
+        </Text>
+        {/* ★★ THE SLOT IS ALWAYS THERE, EMPTY OR NOT — and that is the whole point of putting it
+            back deliberately rather than just reverting. The recording row used to APPEAR, which
+            grew this column and resized the tuning keys under the user's thumb mid-gesture
+            (Stuart: "the controls dont have to grow and shrink when recording is happening"). A
+            reserved row keeps the timer beside the dial where he wants it AND keeps the keys
+            still: the height is identical whether it is recording or not. */}
+        <View style={[lnd.recRow, !isRecording && { opacity: 0 }]} pointerEvents="none">
+          <View style={lnd.recDot} />
+          <Text style={[lnd.recTime, { fontFamily: t.font, fontSize: CLOCK_FONT }]}>
+            {isRecording ? recTime : '0:00'}
+          </Text>
+        </View>
       </View>
 
       {/* STEP + MENU column */}
@@ -1091,18 +1106,14 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
                  with the control you are least likely to be holding.
               ★ Portrait is untouched: it has a full-width row of its own (por.clockRow) and never
                 had the problem. */}
-          <Text style={[lnd.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
-            {clock}
-          </Text>
+          {/* ★ ONLY THE CONNECTION STATS live here. The clock and the recording timer belong with
+              the tuning keys on the left, where they have always been — Stuart asked for the
+              STATS to move ("the connection stats can move under the zoom buttons"), and I moved
+              the clock with them, which is not what he asked for and reads worse: the time is
+              something you glance at beside the dial, not a property of the zoom. */}
           <View style={{ alignItems: 'center', marginTop: 2 }}>
             <LinkIndicator bus={bus} />
           </View>
-          {isRecording && (
-            <View style={lnd.recRow}>
-              <View style={lnd.recDot} />
-              <Text style={[lnd.recTime, { fontFamily: t.font, fontSize: CLOCK_FONT }]}>{recTime}</Text>
-            </View>
-          )}
         </View>
       )}
 
