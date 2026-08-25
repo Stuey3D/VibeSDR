@@ -12832,6 +12832,21 @@ struct LocalSdrShim::Impl {
                 //     own two-second dwell — there is nothing to react to faster than that.
                 LocalSdrShim::instance().overloadTick();
                 LocalSdrShim::instance().autoBandwidthTick();
+                /* ★★★ AND FLUSH THE CONNECTION LOG HERE, WHERE EVERY HOST RUNS. It is written
+                 *     lazily — open()/close() only mark it dirty — and the only thing calling
+                 *     saveIfDue() was the LINUX DAEMON'S loop (vibeserver/main.cpp). On the
+                 *     Android server nothing did, so the log lived in memory, was never written,
+                 *     and load() on the next start read a file that had never been created:
+                 *     "the android vibeserver seems to forget its IP log when updated or
+                 *     restarted" (Stuart, 2026-08-25). The second one-end-wiring bug in this
+                 *     subsystem inside ten minutes — see setNoticePath in the JNI.
+                 *  ★★ PUT IN THE SHIM'S OWN TICK RATHER THAN IN EACH HOST, because that is what
+                 *     made it possible to forget. This thread already exists on every platform
+                 *     and already runs the slow housekeeping; a host that embeds the shim now
+                 *     gets a durable log without having to know it must ask. The daemon's own
+                 *     call is left in place and is harmless — saveIfDue() is guarded by both a
+                 *     dirty flag and its own interval, so a second caller costs nothing. */
+                g_vsConnLog.saveIfDue();
 
                 // ── Deferred idle park (see armIdlePark / g_vsIdleGraceSec) ──────────────
                 // ★ THE PARK IS RE-JUSTIFIED HERE, NOT MERELY REMEMBERED. Anything could have
