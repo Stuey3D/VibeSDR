@@ -4381,6 +4381,28 @@ struct LocalSdrShim::Impl {
             }
             return "";
         }
+        /* ★★★ AND THE HACKRF, WHICH WAS FALLING INTO THE DONGLE LIST BELOW. Three of those five
+         *     rates (1.8 M, 1.2 M, 960 k) are BELOW this radio's 2 MSPS floor, so the setup page
+         *     was offering an owner rates the hardware cannot do — and the runtime setter was
+         *     silently discarding whatever they picked anyway (see setSampleRate). Two independent
+         *     faults with one symptom: "hackrf not changing sample rates" (2026-08-26).
+         *  ★★ THIS IS THE SECOND LIST. The one in hwinfo is the other, and the note in the HF+
+         *     branch above names all the places that must agree: the hwinfo rates list,
+         *     radioCapsJson and resumeCaptureIdle. Fixing one of them is how the HF+ stayed broken
+         *     through 3.0.0-5.
+         *  ★ Descending, like every other list here — the picker shows the widest span first. */
+        if (useHackRf()) {
+            if (auto* h = hrf.get()) {
+                const auto& rl = h->sampleRates();
+                std::string out;
+                for (size_t i = rl.size(); i-- > 0; ) {
+                    if (!out.empty()) out += ",";
+                    out += std::to_string(rl[i]);
+                }
+                if (!out.empty()) return out;
+            }
+            return "";
+        }
         return "2560000,2400000,1800000,1200000,960000";
     }
 
@@ -13147,6 +13169,13 @@ struct LocalSdrShim::Impl {
                 // parked Airspy look exactly like an unplugged one. The source knows when the
                 // hardware last delivered, whatever we then did with it.
                 if (useAirspyHf()) last = std::max(last, ahf->lastRxSecs());
+                // ★ And the HackRF, for the same reason: the SOURCE knows when the hardware last
+                //   delivered, whatever we then did with the buffer. Without this a paused or
+                //   idle-parked HackRF looks exactly like an unplugged one to the watchdog.
+                if (useHackRf() && hrf) {
+                    const double age = hrf->secondsSinceLastRx();
+                    if (age < 1e8) last = std::max(last, nowSecs() - age);
+                }
                 const bool silent = last > 0 && (nowSecs() - last) > 3.0;
 
                 // ★★★ AN RSP STALL IS RECOVERABLE IN PLACE — and unlike a dongle, nothing has
@@ -13174,7 +13203,11 @@ struct LocalSdrShim::Impl {
                 // ★ And do not "recover" a radio we have deliberately lent out: reopening it would
                 //   take it back from the program we just handed it to.
                 const bool recoverable = silent && !captureIdle.load() && !radioReleased.load() &&
-                                         ((useSdrplay() && sdrp) || (useAirspyHf() && ahf));
+                                         ((useSdrplay() && sdrp) || (useAirspyHf() && ahf)
+                                          // ★ A HackRF stall is recoverable in place too — it has
+                                          //   its own source object to stop and start, and nothing
+                                          //   about it needs the librtlsdr reopen path below.
+                                          || (useHackRf() && hrf));
                 if (recoverable) {
                     const double waitS = std::min(30.0, 2.0 * (double)(srcRestarts + 1));
                     if (nowSecs() - lastRestartAt >= waitS) {
@@ -13289,8 +13322,12 @@ struct LocalSdrShim::Impl {
                 // because Close() tears down this process's API handle. The honest signal for "is
                 // it back" on a source we still hold is IQ ARRIVING, which the branch above now
                 // acts on; probe only when there is no source object left to ask.
+                // ★ EVERY DRIVER ASKS ITS OWN LIBRARY. findOurDevice() is librtlsdr, so leaving a
+                //   HackRF to the final branch would have it probing for a dongle that is not
+                //   there and concluding the radio is gone for ever.
                 const bool back = useAirspyHf() ? (ahf  ? true : vibe::AirspyHfSource::deviceCount() > 0)
                                 : useSdrplay()  ? (sdrp ? true : vibe::SdrplaySource::deviceCount() > 0)
+                                : useHackRf()   ? (hrf  ? true : vibe::HackRfSource::deviceCount() > 0)
                                                 : (findOurDevice() >= 0);
                 if (back == deviceLost.load()) {      // state changed
                     deviceLost.store(!back);
@@ -13313,7 +13350,10 @@ struct LocalSdrShim::Impl {
                 //
                 // ★ DONGLES ONLY. An RSP or an Airspy that has stopped is handled by its own
                 //   source object; reopenDevice() is librtlsdr all the way down.
-                if (back && !useTcp() && !useSpy() && !useSdrplay() && !useAirspyHf()
+                // ★★★ AND NOT A HACKRF EITHER. reopenDevice() is librtlsdr all the way down, as
+                //     the note above says — running a HackRF through it would reopen whatever
+                //     dongle happened to be at that index, or nothing at all.
+                if (back && !useTcp() && !useSpy() && !useSdrplay() && !useAirspyHf() && !useHackRf()
                          && !radioReleased.load() && !captureIdle.load()) {
                     // ★ Backed off, not hammered. A dongle that cannot hold a stream would
                     //   otherwise be reopened every two seconds for ever, and each attempt is USB
@@ -15866,6 +15906,9 @@ void LocalSdrShim::stopLocked() {
     // are stopped explicitly now, in the same place every other source is.
     if (impl->useAirspyHf()) { impl->ahf->stop(); impl->ahf->close(); }
     if (impl->useSdrplay())  { impl->sdrp->close(); }
+    // ★ Stopped and closed explicitly, in the same place every other source is — the note above
+    //   records what leaving it to member-destruction order cost the Airspy.
+    if (impl->useHackRf())   { impl->hrf->stop(); impl->hrf->close(); }
     // ★★★ CANCEL, KEEP CANCELLING, AND NEVER WAIT FOR EVER.
     //
     //  ★★★ THE HANG THIS FIXES, measured on the Moto (2026-08-20): the accept thread had gone,
@@ -17447,10 +17490,14 @@ bool LocalSdrShim::releaseRadio() {
     if (impl->radioReleased.load()) return true;
     // ★ A network source owns nothing local, so there is nothing to hand over.
     if (impl->useTcp() || impl->useSpy()) return false;
-    const bool rsp = impl->useSdrplay(), ahf = impl->useAirspyHf();
+    // ★ NAME EVERY SOURCE — a driver missing from here cannot be lent to another program at all:
+    //   it would fall into the dongle branch, find no `dev`, and quietly do nothing while the
+    //   server reported the radio as released.
+    const bool rsp = impl->useSdrplay(), ahf = impl->useAirspyHf(), hrf = impl->useHackRf();
 
     if (rsp)      impl->sdrp->setPaused(true);
     else if (ahf) impl->ahf->setPaused(true);
+    else if (hrf) impl->hrf->setPaused(true);
     else if (impl->dev) { impl->restarting.store(true); rtlsdr_cancel_async(impl->dev); }
     joinOnce(impl->rtlThread, "reader");
     impl->stopDspThread();
@@ -17466,6 +17513,7 @@ bool LocalSdrShim::releaseRadio() {
         impl->radioReleased.store(true);
         if (rsp)      impl->sdrp->close();
         else if (ahf) { impl->ahf->stop(); impl->ahf->close(); }
+        else if (hrf) { impl->hrf->stop(); impl->hrf->close(); }
         else if (impl->dev) { rtlsdr_close(impl->dev); impl->dev = nullptr; }
         impl->restarting.store(false);
     }
@@ -17485,7 +17533,7 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
     if (!p) { err = "server not running"; return false; }
     Impl* impl = p;
     if (!impl->radioReleased.load()) return true;
-    const bool rsp = impl->useSdrplay(), ahf = impl->useAirspyHf();
+    const bool rsp = impl->useSdrplay(), ahf = impl->useAirspyHf(), hrf = impl->useHackRf();
     std::lock_guard<std::recursive_mutex> lk(impl->modeMtx);
     // ★★★ ASK AGAIN, NOW THAT WE HOLD THE LOCK. The check above is outside it, and a browser opens
     //     its spectrum and audio sockets together: both arrive, both see the radio released, the
@@ -17530,6 +17578,11 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
     } else if (ahf) {
         ok = impl->ahf->open(impl->ahfIndex, impl->sampleRate, impl->rtlCenter.load(),
                              impl->lastGainTenthDb, err);
+    } else if (hrf) {
+        // ★ -1 for the gain: open() then leaves the three stages where the owner put them rather
+        //   than driving them from a single number. Taking the radio BACK must not silently move
+        //   the RF amp or reset the LNA — see the zero-start note in hackrf_source.h.
+        ok = impl->hrf->open(impl->hrfIndex, impl->sampleRate, impl->rtlCenter.load(), -1, err);
     } else {
         // ★ BY SERIAL, NOT BY INDEX — findOurDevice refuses to grab a DIFFERENT dongle that has
         //   taken our slot while we were away. With three radios on one machine that matters.
@@ -17564,6 +17617,9 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
     impl->startDspThread();
     if (rsp)      impl->sdrp->setPaused(false);
     else if (ahf) { std::string e2; impl->ahf->start(e2); impl->ahf->setPaused(false); }
+    // ★ Same shape as the HF+: the device was CLOSED on release, so streaming has to be started
+    //   again, not merely unpaused. The sink was set at open time and survives.
+    else if (hrf) { std::string e2; impl->hrf->start(e2); impl->hrf->setPaused(false); }
     else          impl->launchCapture();
     LOGI("radio REACQUIRED");
     impl->notifyDeviceState();
@@ -17864,7 +17920,18 @@ void LocalSdrShim::setSampleRate(double rate) {
     // ★ FIFTH time this exact shape has bitten: `tcp / rsp / else-means-dongle`. See the note in
     //   the hwinfo rates list, radioCapsJson and resumeCaptureIdle. NAME EVERY SOURCE.
     const bool ahf = impl->useAirspyHf();
-    if (!tcp && !rsp && !ahf && !impl->dev) return;
+    /* ★★★ SIXTH TIME. The note directly above says "FIFTH time this exact shape has bitten" and
+     *     names the cure — NAME EVERY SOURCE — and a HackRF was then added without being named
+     *     here, so it fell into exactly the failure that note describes: `impl->dev` is the
+     *     LIBRTLSDR handle, a HackRF has none, so this function returned at the first line and did
+     *     nothing at all. The picker offered the radio's own rates, the user chose one, and the
+     *     server silently discarded it — word for word the 2026-07-29 Airspy symptom, reported
+     *     again on 2026-08-26: "hackrf not changing sample rates but it is working".
+     *  ★★ A guard written as "none of the ones I know about, and no dongle handle" is a guard that
+     *     BREAKS EVERY TIME A DRIVER IS ADDED, silently, and always in the direction of doing
+     *     nothing. That is why the same sentence keeps being written above it. */
+    const bool hrf = impl->useHackRf();
+    if (!tcp && !rsp && !ahf && !hrf && !impl->dev) return;
 
     // ★★★ ASKING FOR THE RATE IT IS ALREADY RUNNING AT MUST DO NOTHING. Everything below stops the
     //     IQ source, joins the reader AND the DSP thread, rebuilds the engine and the audio chain
@@ -17901,6 +17968,9 @@ void LocalSdrShim::setSampleRate(double rate) {
     // ★ Same treatment as the RSP: the HF+ reconfigures in place, so pause the consumer rather
     //   than tearing the device down — tearing down is what crashed the RSP earlier.
     else if (ahf) { impl->ahf->setPaused(true); }
+    // ★ Same again for the HackRF: libhackrf reconfigures a running device in place, so stop
+    //   CONSUMING while the engine is rebuilt rather than tearing the radio down.
+    else if (hrf) { impl->hrf->setPaused(true); }
     else          { impl->restarting.store(true); rtlsdr_cancel_async(impl->dev); }
     // ★★ AND A NET UNDER BOTH JOINS. The lock above removes the race we know about; this keeps a
     //    future one from killing the APP rather than the operation. It logs, because a swallowed
@@ -17949,6 +18019,19 @@ void LocalSdrShim::setSampleRate(double rate) {
         //   that order for exactly this reason; the runtime path did the first and not the
         //   second.
         impl->ahf->setFrequency(impl->rtlCenter.load());
+    } else if (hrf) {
+        /* ★★★ THE DEVICE **HERE**, BEFORE THE ENGINE IS BUILT — the same ordering the HF+ branch
+         *     above spells out at length. Setting it after startEngine()/buildAudio() would leave
+         *     the radio delivering at the OLD rate into a chain built for the NEW one, which is
+         *     heard as a pitch shift, not as an error.
+         *  ★ setSampleRate moves the BASEBAND FILTER with the rate (libhackrf does not do it for
+         *    you) — see HackRfSource::setSampleRate. Without that a narrower filter silently crops
+         *    the wider span, which reads as "the radio only hears the middle". */
+        impl->hrf->setSampleRate(rate);
+        // ★ ASK THE SOURCE WHAT IT LANDED ON. The list is ours, not the radio's, so a request
+        //   between two rungs is rounded — and the DSP must be built for the figure in force, not
+        //   the one that was asked for.
+        actual = impl->hrf->nearestRate(rate);
     } else {
         rtlsdr_set_sample_rate(impl->dev, (uint32_t)rate);
         rtlsdr_reset_buffer(impl->dev);
@@ -17987,6 +18070,7 @@ void LocalSdrShim::setSampleRate(double rate) {
         //   every runtime change took this broken ordering.
         impl->ahf->setPaused(false);
     }
+    else if (impl->useHackRf()) { impl->hrf->setPaused(false); }
     else {
         impl->launchCapture();
         impl->restarting.store(false);   // back to normal: a stop now really is an unplug
