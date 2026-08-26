@@ -31,7 +31,24 @@ std::atomic<bool>   g_thread{false};
 std::string         g_address, g_error, g_tunnelUrl;
 bool                g_listed = false;
 long long           g_pingSec = 900;
-FILE*               g_tunnel = nullptr;
+
+/** ★★★ IS THE TUNNEL STILL THERE? A HOSTNAME IS NOT AN ANSWER TO THAT.
+ *
+ *  `g_tunnelUrl` was the only thing the worker consulted, and a std::string does not stop being
+ *  non-empty when the process behind it exits. After Stuart's internet dropped (2026-08-25) the
+ *  Pi kept re-publishing a *.trycloudflare.com name with nothing behind it — worse than being
+ *  absent, because the directory went on advertising it as reachable.
+ *
+ *  ★★ `g_tunnelAlive` is owned by the drain thread and is the honest answer. The generation
+ *     counter lets a stale drain thread know it has been superseded, so a tunnel replaced while
+ *     its predecessor is still winding down cannot have its liveness cleared by the old one.
+ */
+std::atomic<bool>     g_tunnelAlive{false};
+std::atomic<unsigned> g_tunnelGen{0};
+/** ★★ The port is remembered ONLY so the kill can name it. `pkill -f` on the bare
+ *     `--url http://127.0.0.1` pattern matched EVERY quick tunnel on the machine, so one radio
+ *     process shutting its tunnel down would have taken every other radio's tunnel with it. */
+std::atomic<int>      g_tunnelPort{0};
 
 std::string trim(std::string s) {
     while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
@@ -56,11 +73,33 @@ std::string run(const std::string& cmd) {
 
 /** ★ curl, for the same reason eibi.cpp and geoip.cpp use it: the daemon has no TLS stack of its
  *  own, and the one certainty on both a Pi and a Mac is that curl is there. */
-std::string httpPost(const std::string& path, const std::string& json) {
+/** ★★★ THE STATUS MATTERS, NOT JUST THE BODY — AND CONFLATING THE TWO COST US THE LISTING.
+ *
+ *  This ran `curl -f` and returned stdout alone, so "the network is down" and "your row is gone"
+ *  were the SAME empty string. publishOnce read that empty string as a dead row, called
+ *  clearState() — and the key is sent exactly ONCE and cannot be recovered — then registered
+ *  afresh and was refused by the server's own ghost entry: "that address is taken". A thirty
+ *  second blip on a 5G or Starlink link therefore destroyed the friendly name permanently.
+ *
+ *  ★★ So `-f` is gone (an error BODY names its reason, and we want it) and curl appends the status
+ *     for us. **0 means we never reached the directory at all** — the one case that must change
+ *     nothing, because on a flaky link it is a weather report rather than a verdict.
+ */
+std::string httpPost(const std::string& path, const std::string& json, int* outStatus = nullptr) {
+    if (outStatus) *outStatus = 0;
     const std::string cmd =
-        "curl -fsS --max-time 20 -X POST -H 'Content-Type: application/json' -d "
-        + shellQuote(json) + " " + shellQuote(std::string(kBase) + path) + " 2>/dev/null";
-    return run(cmd);
+        "curl -sS --max-time 20 -X POST -H 'Content-Type: application/json' -d "
+        + shellQuote(json) + " -w '\\n%{http_code}' "
+        + shellQuote(std::string(kBase) + path) + " 2>/dev/null";
+    const std::string out = run(cmd);
+    // ★ curl writes the -w line even when the transfer failed (as 000), so a missing one means
+    //   curl itself never ran. Both are a transport failure; both leave the status at 0.
+    const size_t nl = out.find_last_of('\n');
+    if (nl == std::string::npos) return {};
+    const std::string code = trim(out.substr(nl + 1));
+    if (code.size() != 3) return {};
+    if (outStatus) *outStatus = atoi(code.c_str());
+    return out.substr(0, nl);
 }
 
 std::string httpGetLocal(int port, const std::string& path) {
@@ -366,8 +405,9 @@ bool publishOnce(const Settings& want, const std::string& url) {
         if (want.shareForSec >= 0)
             body += ",\"shareForSec\":" + std::to_string(want.shareForSec);
         body += "}";
-        const std::string r = httpPost("/api/directory/ping", body);
-        if (!r.empty()) {
+        int st = 0;
+        const std::string r = httpPost("/api/directory/ping", body, &st);
+        if (st == 200 && !r.empty()) {
             std::lock_guard<std::mutex> lk(g_mtx);
             const long long ps = jsonNum(r, "pingSec", 0);
             if (ps > 0) g_pingSec = ps;
@@ -378,8 +418,25 @@ bool publishOnce(const Settings& want, const std::string& url) {
             saveState(id, key, jsonStr(state, "slug"), jsonNum(r, "until", 0));
             return true;
         }
-        // ★ A ping that fails outright may mean the row is gone. Fall through and register afresh
-        //   rather than retrying a dead id for ever.
+        /** ★★★ ONLY A DIRECTORY THAT ACTUALLY ANSWERED MAY COST US OUR IDENTITY.
+         *
+         *  This cleared the state on ANY empty reply, and an empty reply was also what an
+         *  unreachable network produced — so a blip threw away an id and a key that are issued
+         *  once and cannot be recovered, and the re-registration that followed was refused by the
+         *  server's own ghost entry. That is the friendly name lost to a dropped connection, which
+         *  is exactly what a receiver on 5G or Starlink lives with.
+         *
+         *  ★★ 404 (unknown server) and 403 (bad key) are the only two answers that mean this id
+         *     will never work again. A transport failure (0), a rate limit, a 5xx — none of those
+         *     are a verdict on our row, so we keep the identity and try again shortly.
+         */
+        if (st != 404 && st != 403) {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            g_error = st == 0 ? "could not reach the directory"
+                              : "the directory could not be updated just now";
+            g_listed = false;
+            return false;
+        }
         clearState();
     }
 
@@ -460,46 +517,105 @@ std::string cloudflaredPath() {
 
 /** ★★ A Quick Tunnel's hostname appears ONLY in cloudflared's own output — the edge assigns it —
  *     so the log is parsed rather than merely logged. Same as the Android side. */
+void stopTunnel();   // ★ startTunnel retires the previous one first
+
 std::string startTunnel(int port) {
-    if (g_tunnel) { pclose(g_tunnel); g_tunnel = nullptr; }
+    stopTunnel();
     const std::string exe = cloudflaredPath();
     char cmd[1024];
     snprintf(cmd, sizeof cmd,
              "'%s' tunnel --no-autoupdate --url http://127.0.0.1:%d 2>&1", exe.c_str(), port);
-    g_tunnel = popen(cmd, "r");
-    if (!g_tunnel) return {};
+    FILE* f = popen(cmd, "r");
+    if (!f) return {};
+    const unsigned gen = ++g_tunnelGen;
+    g_tunnelPort = port;
+    g_tunnelAlive = true;
+
+    std::string found;
     char line[1024];
-    for (int i = 0; i < 400 && fgets(line, sizeof line, g_tunnel); i++) {
+    for (int i = 0; i < 400 && fgets(line, sizeof line, f); i++) {
         const char* p = strstr(line, "https://");
         if (p && strstr(p, ".trycloudflare.com")) {
             std::string u(p);
             size_t e = u.find(".trycloudflare.com");
             u = u.substr(0, e + strlen(".trycloudflare.com"));
-            while (!u.empty() && (u.back() == '\n' || u.back() == '\r' || u.back() == ' ')) u.pop_back();
-            return u;
+            found = trim(u);
+            break;
         }
     }
-    return {};
+
+    /** ★★★ KEEP READING FOR THE PROCESS'S WHOLE LIFE. NOBODY DID, AND THAT ALONE WEDGED IT.
+     *
+     *  The scrape above stopped at the hostname and the pipe was never read again. cloudflared
+     *  went on logging into a 64 KB pipe buffer that nothing emptied, filled it, and blocked for
+     *  ever inside write() — so it stopped forwarding. An outage is PRECISELY when it emits a
+     *  retry storm, which is why the outage itself wedged the tunnel and why it stayed wedged
+     *  long after the link came back.
+     *
+     *  ★★ This thread also OWNS the pipe and is the only thing that closes it: calling pclose()
+     *     while another thread sits in fgets() on the same FILE* is undefined. Reaching EOF here
+     *     is therefore the one true report that the child has gone.
+     */
+    std::thread([f, gen]() {
+        char buf[1024];
+        while (fgets(buf, sizeof buf, f)) { /* discarded on purpose — see the note above */ }
+        pclose(f);
+        // ★ Only if we are still the current tunnel. A newer one has its own drain thread and its
+        //   own liveness, and must not be marked dead by its predecessor finishing.
+        if (g_tunnelGen.load() == gen) g_tunnelAlive = false;
+    }).detach();
+
+    if (found.empty()) { stopTunnel(); return {}; }
+    return found;
 }
 
 void stopTunnel() {
-    if (!g_tunnel) return;
-    pclose(g_tunnel);
-    g_tunnel = nullptr;
-    // ★ pclose waits for the child, but cloudflared ignores the pipe closing — make sure.
-    run("pkill -f 'tunnel --no-autoupdate --url http://127.0.0.1' 2>/dev/null");
+    // ★★ Bumping the generation first retires any drain thread still running, so its EOF cannot
+    //    clear the liveness of whatever replaces this tunnel.
+    g_tunnelGen++;
+    g_tunnelAlive = false;
+    const int port = g_tunnelPort.exchange(0);
+    if (port <= 0) return;
+    // ★★★ NAME THE PORT. This killed on the bare `--url http://127.0.0.1` pattern, which matches
+    //     EVERY quick tunnel on the box — so one radio process stopping its tunnel would have
+    //     taken down every other radio's tunnel too. The drain thread then closes the pipe.
+    char pat[192];
+    snprintf(pat, sizeof pat,
+             "pkill -f 'tunnel --no-autoupdate --url http://127.0.0.1:%d' 2>/dev/null", port);
+    run(pat);
 }
 
 void worker() {
     g_thread = true;
+    int tunnelFails = 0;      // ★ consecutive failures to bring a tunnel up, for the backoff below
     while (g_running) {
         Settings want;
         { std::lock_guard<std::mutex> lk(g_mtx); want = g_want; }
         if (!want.listed || want.port <= 0 || want.name.size() < 2) break;
 
         std::string url = want.publicUrl;
-        if (url.empty()) {
-            if (g_tunnelUrl.empty()) g_tunnelUrl = startTunnel(want.port);
+        const bool usingTunnel = url.empty();
+        if (usingTunnel) {
+            /** ★★★ A DEAD TUNNEL MUST BE REPLACED, NOT REMEMBERED.
+             *
+             *  This asked only whether we had ever HAD a hostname. g_tunnelUrl is a string, and a
+             *  string does not stop being non-empty when the process behind it exits — so after an
+             *  outage the condition was false for ever and the tunnel was never restarted. The
+             *  worker simply went on re-publishing a name with nothing behind it.
+             *
+             *  ★★ THE REPLACEMENT HOSTNAME IS A DIFFERENT ONE, AND THAT IS FINE. The edge assigns
+             *     it, so a restart always yields a new *.trycloudflare.com. publishOnce PINGS with
+             *     whatever url it is given and the directory refreshes it in place — its own note
+             *     says "a server may move address between pings — a Quick Tunnel does exactly that
+             *     on every restart". The listing and the friendly name are keyed on id+key, so
+             *     they survive the cycle untouched. The random name is disposable; the identity is
+             *     not.
+             */
+            if (!g_tunnelAlive || g_tunnelUrl.empty()) {
+                g_tunnelUrl = startTunnel(want.port);
+                if (g_tunnelUrl.empty()) tunnelFails++;
+                else                     tunnelFails = 0;
+            }
             url = g_tunnelUrl;
         }
         if (url.empty()) {
@@ -521,9 +637,21 @@ void worker() {
         // ★★ A NEW TUNNEL IS UNREACHABLE FOR ABOUT NINETY SECONDS — Cloudflare answers 530 for a
         //    hostname the edge has not yet routed. So an unverified listing is retried soon rather
         //    than punished for being new, and only a proven one waits the full interval.
-        const long long wait = g_listed ? g_pingSec : 30;
-        for (long long t = 0; t < wait && g_running; t++)
+        long long wait = g_listed ? g_pingSec : 30;
+        // ★★ Back off a tunnel that will not start, so a cloudflared that is missing or broken is
+        //    not respawned every thirty seconds for ever. Capped at five minutes so a link that
+        //    does come back is still picked up promptly.
+        if (usingTunnel && tunnelFails > 0) {
+            wait = 15LL * tunnelFails;
+            if (wait > 300) wait = 300;
+        }
+        for (long long t = 0; t < wait && g_running; t++) {
+            // ★★★ REACT TO A TUNNEL DYING IN ABOUT A SECOND, not in up to a quarter of an hour.
+            //     The whole point is that a receiver on a flaky link restores itself unattended;
+            //     sleeping out a 900 s ping interval with a dead tunnel is most of an outage.
+            if (usingTunnel && !g_tunnelAlive && !g_tunnelUrl.empty()) break;
             std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
     }
     g_thread = false;
 }

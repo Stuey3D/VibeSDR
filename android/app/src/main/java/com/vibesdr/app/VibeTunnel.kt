@@ -110,6 +110,26 @@ object VibeTunnel {
     private val running = AtomicBoolean(false)
 
     @Volatile private var tunnelUrl: String = ""
+
+    /** ★★★ NOBODY WAS WATCHING THE TUNNEL DIE.
+     *
+     *  The reader thread below already noticed — it sets `running` false and its comment says
+     *  "Reflect that rather than continuing to claim we are up". It reflected it perfectly and
+     *  NOTHING ACTED ON IT: no supervisor turned `running == false` back into a startTunnel. So
+     *  when Stuart's internet dropped (2026-08-25) the phone server went off the directory and
+     *  stayed off, and `statusJson()` went on reporting the dead hostname with no error at all.
+     *
+     *  ★★ `wantTunnel` is what separates a DROP from a deliberate stopTunnel(): only a drop is
+     *     worth reconnecting from. `tunnelGen` retires a reader whose tunnel has already been
+     *     replaced, so a slow old reader cannot schedule a restart over a healthy new tunnel.
+     */
+    @Volatile private var wantTunnel = false
+    private val tunnelGen = java.util.concurrent.atomic.AtomicInteger(0)
+    @Volatile private var tunnelFails = 0
+    /** ★ The application context and port, remembered so a reconnect needs nothing from the UI —
+     *  which is very likely gone: the server keeps running with the screen off. */
+    @Volatile private var appCtx: Context? = null
+    @Volatile private var lastPort: Int = 0
     @Volatile private var address: String = ""
     @Volatile private var lastError: String = ""
     @Volatile private var listed: Boolean = false
@@ -181,6 +201,10 @@ object VibeTunnel {
             val p = pb.start()
             proc = p
             running.set(true)
+            wantTunnel = true
+            appCtx = ctx.applicationContext
+            lastPort = localPort
+            val gen = tunnelGen.incrementAndGet()
 
             reader = Thread {
                 try {
@@ -208,6 +232,21 @@ object VibeTunnel {
                     if (tunnelUrl.isEmpty()) {
                         lastError = "the tunnel stopped before it was given an address"
                         onReady(null)
+                        // ★ Never got an address: the retry ladder below still applies, otherwise a
+                        //   tunnel that fails to come up during an outage is never tried again.
+                        if (wantTunnel && tunnelGen.get() == gen) {
+                            tunnelFails++
+                            scheduleTunnelRestart()
+                        }
+                    } else if (wantTunnel && tunnelGen.get() == gen) {
+                        // ★★★ IT CAME UP AND THEN DIED — the outage case, and the one that was
+                        //     completely silent: no error was set, no callback fired, and
+                        //     `tunnelUrl` kept a hostname with nothing behind it for statusJson()
+                        //     to keep reporting. Say so, stop claiming the dead address, reconnect.
+                        tunnelUrl = ""
+                        lastError = "the tunnel dropped — reconnecting"
+                        tunnelFails = 0
+                        scheduleTunnelRestart()
                     }
                 }
             }.also { it.isDaemon = true; it.start() }
@@ -251,6 +290,12 @@ object VibeTunnel {
 
     @Synchronized
     fun stopTunnel() {
+        // ★★★ SAY THIS WAS DELIBERATE FIRST. Destroying the process trips the reader's finally,
+        //     which now reconnects — so without this an owner turning the switch OFF would be
+        //     read as a drop and the tunnel would dutifully come back.
+        wantTunnel = false
+        tunnelGen.incrementAndGet()
+        tunnelFails = 0
         try { proc?.destroy() } catch (_: Throwable) {}
         proc = null
         running.set(false)
@@ -542,6 +587,55 @@ object VibeTunnel {
      *    to get wrong, and no way to leave a listing stuck unverified for a quarter of an hour.
      */
     @Synchronized
+    /**
+     * ★★★ BRING THE TUNNEL BACK, AND TELL THE DIRECTORY WHERE IT WENT.
+     *
+     *  ★★ THE NEW HOSTNAME IS A DIFFERENT ONE AND THAT IS FINE. The Cloudflare edge assigns a
+     *     quick tunnel's name, so every restart yields a fresh *.trycloudflare.com. The directory
+     *     expects exactly this — "a server may move address between pings — a Quick Tunnel does
+     *     exactly that on every restart" — and refreshes the url in place against our id and key.
+     *     So the random name cycles while the FRIENDLY name and the listing carry straight on.
+     *     That is the whole point: what has to survive a blip is the identity, not the address.
+     *
+     *  ★ Backing off matters on a link that is down rather than merely blipping: a phone on 5G
+     *    with no signal would otherwise respawn cloudflared every few seconds for the whole
+     *    outage, on a battery.
+     */
+    private fun scheduleTunnelRestart() {
+        val ctx = appCtx ?: return
+        val port = lastPort
+        if (port <= 0) return
+        val delay = (15L * (tunnelFails + 1)).coerceAtMost(300L)
+        Log.i(TAG, "tunnel down — reconnecting in ${delay}s (attempt ${tunnelFails + 1})")
+        try {
+            pinger.schedule({
+                if (!wantTunnel) return@schedule
+                startTunnel(ctx, port) { url ->
+                    if (url != null) {
+                        tunnelFails = 0
+                        Log.i(TAG, "tunnel restored: $url — re-publishing")
+                        // ★★ NOT on this thread: onReady runs on the reader, and the reader must
+                        //    go straight back to draining the pipe. A publish blocks on the
+                        //    network for as long as twenty seconds, and a pipe nobody drains is
+                        //    what wedged the Linux tunnel in the first place.
+                        try {
+                            pinger.execute {
+                                try { lastPublish?.invoke() } catch (t: Throwable) {
+                                    Log.w(TAG, "re-publish after reconnect failed: ${t.message}")
+                                }
+                            }
+                        } catch (_: Throwable) {}
+                    } else {
+                        tunnelFails++
+                        scheduleTunnelRestart()
+                    }
+                }
+            }, delay, TimeUnit.SECONDS)
+        } catch (t: Throwable) {
+            Log.w(TAG, "could not schedule a tunnel restart: ${t.message}")
+        }
+    }
+
     private fun retrySoon() {
         pinger.schedule({
             try { if (running.get()) lastPublish?.invoke() } catch (t: Throwable) {
@@ -623,9 +717,13 @@ object VibeTunnel {
                 if (address.isEmpty()) lastError = "this server's public address was released"
                 return address.ifEmpty { null }
             }
-            // ★ 404 = the directory has never heard of this id (its row was removed). Fall through
-            //   and register afresh rather than sulking for ever.
-            if (r != null && r.optInt("_status") == 404) {
+            // ★ 404 = the directory has never heard of this id (its row was removed); 403 = it
+            //   knows the id but our key is wrong, which is the config-restored-from-a-backup case
+            //   the directory raises a DISTINCT 403 for. Both mean this identity will never work
+            //   again, so register afresh rather than sulking for ever. Everything else — a
+            //   transport failure (r == null), a rate limit, a 5xx — leaves the identity ALONE:
+            //   the key is issued once and cannot be recovered, so a blip must never cost it.
+            if (r != null && (r.optInt("_status") == 404 || r.optInt("_status") == 403)) {
                 p.edit().clear().apply()
             } else {
                 listed = false
