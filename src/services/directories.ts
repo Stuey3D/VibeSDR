@@ -106,7 +106,17 @@ async function fetchVibeServers(lat?: number, lon?: number): Promise<SDRInstance
       latitude: typeof s.lat === 'number' ? s.lat : null,
       longitude: typeof s.lon === 'number' ? s.lon : null,
       countryCode: typeof s.country === 'string' && s.country.length === 2 ? s.country : null,
-      distance: null,
+      // ★★★ OUR OWN DIRECTORY WAS THE ONE THAT COULD NOT SORT BY DISTANCE. This function is HANDED
+      //     the listener's lat/lon — the parameters were declared and never read — and every other
+      //     adapter here computes the same thing on the line with the same name. So VibeServers
+      //     came back with distance null, and Nearest silently could not order the one directory
+      //     that is ours (Stuart, 2026-08-26).
+      //  ★★ The data was never missing: the listing carries `lat` and `lon`, mapped two lines above
+      //     and then not used. A null here does not read as broken, it reads as "no location" —
+      //     which is exactly why it survived.
+      distance: (lat != null && lon != null
+                 && typeof s.lat === 'number' && typeof s.lon === 'number')
+        ? haversineKm(lat, lon, s.lat, s.lon) : null,
       bestSnr: null,
       serverType: 'vibeserver',
       deviceType: device,

@@ -345,13 +345,44 @@ async function register(request, env) {
     return json({ error: 'that name is reserved — please choose a different one', slug: wanted }, 409);
   }
   if (!await slugFree(env, wanted)) {
-    // ★ 409 with alternatives, so the app can put them straight into its dropdown rather than
-    //   making the owner guess what is free.
-    return json({
-      error: 'that address is taken',
-      slug: wanted,
-      suggestions: await suggestions(env, wanted, body.locator || grid),
-    }, 409);
+    /**
+     * ★★★ A SERVER MUST BE ABLE TO RECLAIM ITS OWN NAME. AN OUTAGE MUST NOT COST IT.
+     *
+     * Stuart's Pi, 2026-08-26: a dropped internet connection made its client mistake "cannot
+     * reach the directory" for "your row is gone", and it deleted the id and key it is issued
+     * ONCE. It then re-registered and was refused BY ITS OWN ENTRY — "that address is taken" —
+     * and the hold is proportional to how long it had been listed, so a working, reachable
+     * receiver was locked out of its own address for the better part of a week, with nothing
+     * said to its owner. The client half of that is fixed; this is the half that matters even
+     * when a client loses its key for some other reason entirely (a wiped SD card, a reinstall,
+     * a restore from backup).
+     *
+     * ★★ SAME ADDRESS ⇒ SAME SERVER. The hold exists to stop a STRANGER taking a name while its
+     *    owner is away — it was never meant to stop the owner coming back. Matching on `url` is
+     *    what separates those two cases, and it cannot be abused: to claim a held name this way
+     *    you must already be serving at the exact address the holder published, and control of
+     *    that address is precisely what the listing asserts. The verification challenge still
+     *    has to pass afterwards, so a wrong claim is listed by nobody.
+     *
+     * ★ The old row keeps its id and key and only gives up the slug — the same choice
+     *   releaseLapsedSlug makes, and for the same reason: if it ever returns it can still ping
+     *   and simply be told its address has gone.
+     */
+    const holder = await env.DB.prepare(
+      'SELECT id, url FROM servers WHERE slug = ?'
+    ).bind(wanted).first();
+
+    if (holder && holder.url === url) {
+      await env.DB.prepare('UPDATE servers SET slug = NULL WHERE id = ?').bind(holder.id).run();
+    } else {
+      // ★ 409 with alternatives, so the app can put them straight into its dropdown rather than
+      //   making the owner guess what is free.
+      return json({
+        error: 'that address is taken',
+        slug: wanted,
+        suggestions: await suggestions(env, wanted, body.locator || grid),
+      }, 409);
+    }
   }
 
   // ★ The name is free, but a LAPSED holder may still be sitting on the unique index.
