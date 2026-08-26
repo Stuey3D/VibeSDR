@@ -1,4 +1,5 @@
 #include "directory.h"
+#include "solar.h"   // ★ gridToLatLon — the locator is validated HERE, see worker()
 
 #include <atomic>
 #include <chrono>
@@ -607,11 +608,37 @@ void worker() {
     while (g_running) {
         Settings want;
         { std::lock_guard<std::mutex> lk(g_mtx); want = g_want; }
-        if (!want.listed || want.port <= 0 || want.name.size() < 2) {
+        /* ★★★ AND THE LOCATOR, BECAUSE THE DIRECTORY REQUIRES IT AND WE DID NOT CHECK. Without one
+         *     this worker started a tunnel, published, was refused — "a valid Maidenhead locator is
+         *     required" — waited thirty seconds and did the whole thing again, for ever. An owner
+         *     saw an endless wall of `publish FAILED` and no way to tell it was his own setting
+         *     (a second owner's server, 2026-08-26).
+         * ★★★ THE COST WAS NOT ONLY NOISE. The tunnel is started BEFORE the publish, so every lap
+         *     burned a fresh *.trycloudflare.com and hammered the directory with a request that
+         *     could never succeed. A permanent, owner-fixable refusal must not be retried on a
+         *     timer — it must stop and SAY SO.
+         * ★★ VALIDATED WITH THE SAME PARSER THE REST OF THE PRODUCT USES, so "valid here" and
+         *    "valid there" cannot drift apart. Empty counts as invalid: the directory rejects it.
+         * ★ Exiting is the right shape, not a giveup: apply() restarts this worker whenever the
+         *   settings change, so typing a locator on the setup page picks straight back up. */
+        double vlat = 0.0, vlon = 0.0;
+        const bool gridOk = !want.locator.empty()
+                         && vssolar::gridToLatLon(want.locator, vlat, vlon);
+        if (!want.listed || want.port <= 0 || want.name.size() < 2 || !gridOk) {
             // ★★★ THE SILENT EXIT. Three ways to be unpublishable and no way to tell them apart
             //     from outside; a server simply never appeared and nobody could say why.
-            std::fprintf(stderr, "[directory] worker exiting: listed=%d port=%d nameLen=%zu\n",
-                         want.listed ? 1 : 0, want.port, want.name.size());
+            std::fprintf(stderr, "[directory] worker exiting: listed=%d port=%d nameLen=%zu grid='%s' ok=%d\n",
+                         want.listed ? 1 : 0, want.port, want.name.size(),
+                         want.locator.c_str(), gridOk ? 1 : 0);
+            // ★★ AND SAY IT WHERE THE OWNER LOOKS. statusJson() feeds the setup page; leaving
+            //    g_error untouched here is what made this invisible from the browser.
+            if (want.listed && !gridOk) {
+                std::lock_guard<std::mutex> lk(g_mtx);
+                g_error = want.locator.empty()
+                        ? "a Maidenhead locator is required to list this server (e.g. IO83 or IO83xk)"
+                        : "'" + want.locator + "' is not a Maidenhead locator (e.g. IO83 or IO83xk)";
+                g_listed = false;
+            }
             break;
         }
 
