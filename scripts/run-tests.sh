@@ -97,6 +97,11 @@ if node scripts/test-visit-grouping.mjs; then pass=$((pass+1)); else fail=$((fai
 #    to the server's own identity. The failure modes are somebody's bookmarks going invisible on
 #    upgrade, or one server adopting another's — neither of which looks wrong in a screenshot.
 if node scripts/test-bookmark-scope.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ THE NR SLIDER'S TWO CONVERSIONS MUST BE EXACT INVERSES. The server echoes the strength it is
+#     using and the client renders it back onto the slider, then dispatches `input` — which sends
+#     it again. In that loop a units mismatch is not an off-by-a-bit, it is a RATCHET: the setting
+#     climbed 30 -> 100% on its own, on air (2026-08-26). Neither half looks wrong on its own.
+if node scripts/test-nr-roundtrip.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★ The two ends of the advanced-RDS message must agree on field NAMES. A stray "R." prefix meant
 #   the deviation readout never populated at all, and neither half looked wrong on its own.
 if node scripts/check-rdsx-wire.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi

@@ -5240,8 +5240,27 @@ struct LocalSdrShim::Impl {
             //    fault was always there; only the HF+'s unusually wide skirts made it obvious.
             // ★ edgeCutoffHz() already knows where the usable band ends — the display crop uses it.
             //   Start the window just inside that, and clamp so a narrow capture cannot invert it.
+            /* ★★★ edgeCutoffHz() IS ZERO ON EVERY RADIO BUT ONE, AND THIS RELIED ON IT. Its first
+             *     line is `if (!ahf) return 0.0;` — it describes the Airspy HF+'s filter skirts and
+             *     nothing else. So on an RTL dongle `deadBins` came out ZERO and the noise window
+             *     sat on the ABSOLUTE outermost bins of the capture: at 1.2 MSPS that is ±600 kHz,
+             *     precisely the anti-alias roll-off and fold-back, the one place on the span where
+             *     the dongle's output means nothing at all.
+             *     Measured on the Xcover (2026-08-26), 16384 bins, dead=0:
+             *        edge min/p25/med/max = -67.8/-55.2/-52.4/-45.2   while chanWide = -89.9
+             *     Every bin in the window — the MINIMUM included — was 20-45 dB above the real
+             *     noise, so the reported SNR was ~35 dB pessimistic and the meter read 0 dB on a
+             *     station with a locked pilot and 12 dB on bare noise. Inverted, not merely wrong.
+             * ★★ THIS IS WHY THE 2026-08-15 MEAN->PERCENTILE FIX DID NOT HOLD. A percentile
+             *    defends against PART of the window being occupied. It cannot help when ALL of it
+             *    is, and a comment that says "edgeCutoffHz() already knows where the usable band
+             *    ends" is true for exactly one of the three radios this product supports.
+             * ★ So: a floor under the dead zone. An eighth of the span per side is excluded on any
+             *   radio that does not declare something wider — no capture's outermost eighth is a
+             *   noise reference. Still clamped to bins/4 so a narrow span cannot invert it. */
             const int deadBins = std::min(bins / 4,
-                                          (int)std::lround(edgeCutoffHz() / binHz));
+                                          std::max(bins / 8,
+                                                   (int)std::lround(edgeCutoffHz() / binHz)));
             // ★★★ A MEDIAN, NOT A MEAN — BECAUSE ONE EDGE IS OFTEN A TRANSMITTER. This averaged
             //     both band edges, so a strong station sitting near the edge of the span WAS the
             //     noise floor: the figure rose to meet the signal and the meter read SNR 0 dB on a
@@ -5251,16 +5270,24 @@ struct LocalSdrShim::Impl {
             //    "not the mean: a strong carrier drags a mean upward and the SNR reads low exactly
             //    when the signal is strongest" — and the mean was kept here while being rejected
             //    there. A percentile does not care that a quarter of the window is occupied.
-            // ★ 25th percentile of the edge bins, via nth_element: O(n), no sort, and the vector is
-            //   reused so this allocates nothing per frame.
+            /* ★★★ THE WHOLE USABLE SPAN, NOT A WINDOW AT EACH END — because a window can be
+             *     entirely occupied and this one was. The band edges were never the point; the
+             *     point is a level most of the span sits at, and the widest possible sample is the
+             *     one hardest to fool. On a busy FM band a couple of blowtorches move a 25th
+             *     percentile of 16000 bins not at all, while they ARE the whole of a 1366-bin
+             *     window at the edges.
+             * ★★★ THE CLIENT HAS BEEN DOING EXACTLY THIS, AND CORRECTLY, THE WHOLE TIME. main.ts
+             *     takes a low percentile of the WHOLE frame ("Noise floor = a low percentile of the
+             *     WHOLE frame. Not the mean...") and returns -91 dB, stable to a decibel, on the
+             *     same signal where this returned -55. The server has the better FFT — 16384 bins
+             *     against 1024, at a fixed resolution that does not move with the zoom — and was
+             *     using it with the worse method. Two implementations of one quantity, and the
+             *     lesser one won because it was the one on the wire.
+             * ★ Every 4th bin: 4000 samples is far more than a percentile needs, and it keeps this
+             *   O(n) with the vector reused, allocating nothing per frame. */
             edgeBins_.clear();
-            for (int i = 0; i <= half / 2; i++) {
-                const int lo = -(bins/2) + deadBins + i;
-                const int hi = (bins/2 - 1) - deadBins - i;
-                if (lo >= hi) break;
-                edgeBins_.push_back((float)dbAt(lo));
-                edgeBins_.push_back((float)dbAt(hi));
-            }
+            for (int i = -(bins/2) + deadBins; i <= (bins/2 - 1) - deadBins; i += 4)
+                edgeBins_.push_back((float)dbAt(i));
             double floorDbNow = 0.0; const int eN = (int)edgeBins_.size();
             if (eN) {
                 const size_t k = edgeBins_.size() / 4;
