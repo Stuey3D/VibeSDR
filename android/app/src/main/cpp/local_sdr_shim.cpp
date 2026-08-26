@@ -7332,8 +7332,49 @@ struct LocalSdrShim::Impl {
             if (jsonNum(msg, "biast", v) && adminGate("bias-T"))
                 LocalSdrShim::instance().setHackRfBiasTee(v != 0);
             if (!sharedGate("HackRF gain")) return;
-            if (jsonNum(msg, "lna", v)) LocalSdrShim::instance().setHackRfLna((int)v);
-            if (jsonNum(msg, "vga", v)) LocalSdrShim::instance().setHackRfVga((int)v);
+            /* ★★★ THE OWNER'S GAIN LIMIT, AND IT MATTERS MORE HERE THAN ON ANY OTHER RADIO.
+             *     Stuart: "the hack RF needs gain locks more than the others it seems." He is
+             *     right, and the reason is the hardware: an RSP has ~14 bits and its own AGC to
+             *     back off with, an HF+ is effectively 18-bit. A HackRF is EIGHT BITS WITH NO AGC
+             *     AT ALL — nothing in the radio catches an overload, so the only thing between a
+             *     visitor and a clipped converter is this.
+             *  ★★★ THE CAP IS ON THE TOTAL, NOT PER STAGE. Both of these sit AFTER the mixer (the
+             *     only pre-mixer stage is the amp, and that is already owner-only), so what drives
+             *     the converter is LNA + VGA together. Capping each at 20 dB would still permit 40.
+             *     That is the difference from the RSP, whose cap is on an RF POSITION because on
+             *     that radio the capped stage genuinely is the one ahead of the mixer.
+             *  ★★ CLAMP THE STAGE BEING SET; NEVER MOVE THE OTHER ONE. Silently pulling down a
+             *     control the listener did not touch is how a panel starts lying about the radio.
+             *     If the VGA is using the whole budget, the LNA simply cannot go up until the VGA
+             *     comes down — which is visible, explicable, and the listener's to resolve.
+             *  ★ Units are the radio's own, as GainRule documents: tenths of a dB, so "fm:200" is
+             *    20 dB of total gain. The same spelling an owner already uses for a dongle. */
+            const int capT = LocalSdrShim::gainCapAt(LocalSdrShim::instance().listenFrequency());
+            const int capDb = capT >= 0 ? capT / 10 : -1;
+            if (jsonNum(msg, "lna", v)) {
+                int want = (int)v;
+                if (capDb >= 0) {
+                    const int room = std::max(0, capDb - LocalSdrShim::instance().hackRfVga());
+                    if (want > room) {
+                        LOGI("HackRF LNA %d dB held to %d by the owner's limit (%d dB total, VGA %d)",
+                             want, room, capDb, LocalSdrShim::instance().hackRfVga());
+                        want = room;
+                    }
+                }
+                LocalSdrShim::instance().setHackRfLna(want);
+            }
+            if (jsonNum(msg, "vga", v)) {
+                int want = (int)v;
+                if (capDb >= 0) {
+                    const int room = std::max(0, capDb - LocalSdrShim::instance().hackRfLna());
+                    if (want > room) {
+                        LOGI("HackRF VGA %d dB held to %d by the owner's limit (%d dB total, LNA %d)",
+                             want, room, capDb, LocalSdrShim::instance().hackRfLna());
+                        want = room;
+                    }
+                }
+                LocalSdrShim::instance().setHackRfVga(want);
+            }
             return;
         }
         if (type == "ahf_control") {
@@ -12241,6 +12282,34 @@ struct LocalSdrShim::Impl {
                     LOGI("retune into a capped band — RF gain state %d -> %d",
                          sdrp->currentLnaState(), minState);
                     LocalSdrShim::instance().setLnaState(minState);
+                }
+            }
+            return;
+        }
+        /* ★★★ HACKRF: THE TOTAL, AND THE VGA COMES DOWN FIRST. LNA + VGA together drive the
+         *     converter (both are after the mixer), so the cap is on the sum — see the note in the
+         *     hackrf_control handler, which must not drift from this.
+         *  ★★ VGA FIRST because it is the cheaper decibel to lose: the LNA is nearer the front and
+         *     gain taken there costs the least noise figure, so shedding baseband gain damages the
+         *     signal less than shedding IF gain. Only if the LNA alone still exceeds the cap does
+         *     it come down too.
+         *  ★ ONLY LOWERS, like every other branch here — nothing is ever raised on a retune. */
+        if (useHackRf() && hrf) {
+            const int capDb = cap / 10;
+            int lna = hrf->lnaGainDb(), vga = hrf->vgaGainDb();
+            if (lna + vga > capDb) {
+                const int newVga = std::max(0, capDb - lna);
+                if (newVga != vga) {
+                    LOGI("retune into a capped band — HackRF VGA %d -> %d dB (%d dB total)",
+                         vga, newVga, capDb);
+                    LocalSdrShim::instance().setHackRfVga(newVga);
+                    vga = hrf->vgaGainDb();
+                }
+                if (lna + vga > capDb) {
+                    const int newLna = std::max(0, capDb - vga);
+                    LOGI("retune into a capped band — HackRF LNA %d -> %d dB (%d dB total)",
+                         lna, newLna, capDb);
+                    LocalSdrShim::instance().setHackRfLna(newLna);
                 }
             }
             return;
@@ -18382,6 +18451,8 @@ void LocalSdrShim::setHackRfBiasTee(bool on) {
     if (!p || !p->useHackRf()) return;
     VIBE_HW_LOCK(); p->hrf->setBiasTee(on);
 }
+int LocalSdrShim::hackRfLna() const { return (p && p->useHackRf()) ? p->hrf->lnaGainDb() : 0; }
+int LocalSdrShim::hackRfVga() const { return (p && p->useHackRf()) ? p->hrf->vgaGainDb() : 0; }
 void LocalSdrShim::setAhfCalibrationPpb(int ppb) {
     g_dsp.ahfPpb.store(ppb);
     if (!p || !p->useAirspyHf()) return;

@@ -547,6 +547,10 @@ public:
     void setHackRfLna(int db);
     void setHackRfVga(int db);
     void setHackRfBiasTee(bool on);
+    /** ★ What the stages are set to now. Read by the owner's gain limit, which caps LNA + VGA
+     *  TOGETHER — both sit after the mixer, so the total is what drives the 8-bit converter. */
+    int  hackRfLna() const;
+    int  hackRfVga() const;
     void setAhfCalibrationPpb(int ppb);
 
     /** Start on an SDRplay RSP (14-bit). Returns the port, or -1 with err set. */

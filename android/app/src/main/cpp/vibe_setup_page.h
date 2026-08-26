@@ -639,9 +639,13 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
             <button type="button" class="ghost" id="gainAdd" style="flex:0 0 auto">Add</button>
           </div>
           <div id="gainList" class="bandList"></div>
-          <div class="note">Cap the bands that overload and leave the rest open — a strong local FM
+          <div class="note">Cap the bands that overload and leave the rest open &mdash; a strong local FM
              transmitter is the usual reason, while HF wants everything the radio has. Tuning into
-             a capped band brings the gain down automatically.</div></label>
+             a capped band brings the gain down automatically.
+             <br><b>On a HackRF this is the TOTAL of the two gain stages</b> (LNA + VGA): both sit
+             after the mixer, so it is the sum that drives the converter. With a ceiling set, each
+             slider stops at whatever the other one leaves &mdash; lower one to raise the other. The
+             RF amp is not counted here because it is owner-only in its own right.</div></label>
       </div>
 
       <div class="card hide" id="bandCard">
@@ -1339,8 +1343,17 @@ function renderGain() {
   // ★ Remembered, because layoutLockedRadio() also hides this row (a pinned window has no other
   //   bands) and must not UNHIDE it on a radio that never had per-band ceilings to begin with.
   //   Two independent reasons to hide one row need one place that knows both.
-  $("gainLimitRow").dataset.avail = (isRtl || isRsp) ? "1" : "0";
-  $("gainLimitRow").classList.toggle("hide", !(isRtl || isRsp));
+  /* ★★★ AND THE HACKRF, WHICH NEEDS THIS MORE THAN EITHER OF THEM. Stuart: "the hack RF needs
+   *     gain locks more than the others it seems." An RSP has its own AGC to back off with and an
+   *     HF+ is effectively 18-bit; a HackRF is EIGHT BITS WITH NO AGC AT ALL, so nothing in the
+   *     radio catches an overload and this ceiling is the only thing between a visitor and a
+   *     clipped converter. It was hidden here purely because the row predates the driver.
+   *  ★★ On a HackRF the number is the TOTAL of the two stages (LNA + VGA). Both sit after the
+   *     mixer — the only pre-mixer stage is the RF amp, which is owner-only already — so the sum
+   *     is what drives the converter, and capping them separately would allow twice what was
+   *     asked for. The server enforces the same sum in hackrf_control. */
+  $("gainLimitRow").dataset.avail = (isRtl || isRsp || isHrf) ? "1" : "0";
+  $("gainLimitRow").classList.toggle("hide", !(isRtl || isRsp || isHrf));
   $("gainAgcLock").checked = r.agcLock === 1;
   $("gainRest").value = gainFromRaw(r.restGain);
   // ★ Absent = AGC off. An older config must not read as though the owner had asked for it.

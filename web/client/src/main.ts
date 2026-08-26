@@ -1131,6 +1131,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       // ★ Re-applied on EVERY hwinfo, because the server re-sends it when the ceiling changes —
       //   which is how the slider follows the radio down on tuning into a limited band.
       applyGainCap();
+      applyHrfGainCap();   // ★ hwinfo carries the cap, and it CHANGES as the listener tunes bands
       hwLockedCentre = lockedCentre ?? 0;
       // ★ Search is narrowed to what this receiver can actually reach — see setTunableWindow().
       //   Set from here because this is where the lock becomes known, and re-set on every hwinfo
@@ -8964,6 +8965,54 @@ function pushAllHrfSettings() {
   });
 }
 
+/** ★★★ THE OWNER'S GAIN LIMIT ON A RADIO THAT NEEDS IT MOST. Stuart: "the hack RF needs gain
+ *  locks more than the others it seems." An RSP has its own AGC to back off with and an HF+ is
+ *  effectively 18-bit; a HackRF is 8 bits with no automatic gain at all, so nothing in the radio
+ *  catches an overload.
+ *
+ *  ★★★ THE CAP IS ON THE TOTAL, so the two sliders share one budget: each one's ceiling is the cap
+ *  MINUS whatever the other is using. Both stages sit after the mixer (the only pre-mixer stage is
+ *  the amp, which is owner-only anyway), so LNA + VGA together is what drives the converter —
+ *  capping them separately would permit twice the limit the owner wrote.
+ *
+ *  ★★ THE SERVER ENFORCES THIS TOO, in the hackrf_control handler, and the two must agree: if they
+ *  drift the panel either refuses gain the server would allow or offers gain it will silently
+ *  clamp. Both read as a broken control. This is the same contract rspRestricted() has. */
+function applyHrfGainCap() {
+  if (radioCaps?.driver !== 'hackrf') return;
+  const lna = document.getElementById('hrfLna') as HTMLInputElement | null;
+  const vga = document.getElementById('hrfVga') as HTMLInputElement | null;
+  if (!lna || !vga) return;
+  const capDb = hwGainCap >= 0 ? Math.floor(hwGainCap / 10) : -1;
+  const HW_LNA_MAX = 40, HW_VGA_MAX = 62;
+  if (capDb < 0) {
+    lna.max = String(HW_LNA_MAX);
+    vga.max = String(HW_VGA_MAX);
+    lna.title = ''; vga.title = '';
+    return;
+  }
+  // ★ Clamp the VALUES first, then derive each ceiling from the other — otherwise a pair that is
+  //   already over the limit (a saved setting, or a retune into a tighter band) would each be
+  //   measured against the other's illegal value and neither would come down.
+  let l = Number(lna.value), g = Number(vga.value);
+  if (l + g > capDb) {
+    // ★ VGA first: it is the cheaper decibel to lose. The LNA is nearer the front end, so gain
+    //   taken there costs the least noise figure — the same order the server uses on a retune.
+    g = Math.max(0, capDb - l);
+    if (l + g > capDb) l = Math.max(0, capDb - g);
+    if (String(l) !== lna.value) { lna.value = String(l); hrfSend({ lna: l }); savePref('hrf_lna', l); }
+    if (String(g) !== vga.value) { vga.value = String(g); hrfSend({ vga: g }); savePref('hrf_vga', g); }
+    renderHrfVals();
+  }
+  lna.max = String(Math.min(HW_LNA_MAX, Math.max(0, capDb - g)));
+  vga.max = String(Math.min(HW_VGA_MAX, Math.max(0, capDb - l)));
+  // ★ Say WHY it stops there — a slider that simply will not move further is indistinguishable
+  //   from a broken one. Same rule as the dongle's cap note.
+  const why = `The owner has limited this receiver to ${capDb} dB of total gain on this band `
+            + `(LNA + VGA). Lower one to raise the other.`;
+  lna.title = why; vga.title = why;
+}
+
 function renderHrfVals() {
   const lna = Number($<HTMLInputElement>('hrfLna').value);
   const vga = Number($<HTMLInputElement>('hrfVga').value);
@@ -8998,6 +9047,7 @@ function applyHrfCaps(caps: import('./spectrum').RadioCaps | null) {
   if (typeof caps.vga === 'number') vga.value = String(caps.vga);
   renderHrfVals();
   applyHrfLock();
+  applyHrfGainCap();   // ★ before the push, so a saved pair above the ceiling is never sent
   if (!rspRestricted()) pushAllHrfSettings();
 }
 
@@ -9034,11 +9084,13 @@ function initHrfControls() {
     renderHrfVals();
     const v = Number($<HTMLInputElement>('hrfLna').value);
     hrfSend({ lna: v }); savePref('hrf_lna', v);
+    applyHrfGainCap();   // ★ the OTHER slider's ceiling just moved — they share one budget
   };
   $<HTMLInputElement>('hrfVga').oninput = () => {
     renderHrfVals();
     const v = Number($<HTMLInputElement>('hrfVga').value);
     hrfSend({ vga: v }); savePref('hrf_vga', v);
+    applyHrfGainCap();
   };
 }
 
