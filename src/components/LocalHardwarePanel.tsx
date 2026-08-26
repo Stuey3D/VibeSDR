@@ -120,6 +120,18 @@ export interface LocalHardwarePanelProps {
   rspRfNotch?: boolean;  onRspRfNotch?: (on: boolean) => void;
   rspDabNotch?: boolean; onRspDabNotch?: (on: boolean) => void;
   rspBiasT?: boolean;    onRspBiasT?: (on: boolean) => void;
+  /** ★★★ HackRF One live state + setters (only when radio.driver === 'hackrf'). EXPERIMENTAL —
+   *  nobody on the VibeSDR side owns one, and the panel says so on screen for the same reason the
+   *  web client's does: a user meeting a control that has never been tested deserves to be told.
+   *  ★★★ THREE STAGES AND NO AGC. libhackrf exposes no automatic mode, so there is deliberately
+   *  no auto switch here — an AGC toggle that did nothing is the fault AGENTS.md names outright,
+   *  and it is why this radio cannot reuse the dongle's GainSlider (which offers exactly that).
+   *  ★★★ amp and bias-T are OWNER-ONLY. The server refuses them too (adminGate), so `locked`
+   *  here makes the lock visible rather than being the only thing standing in the way. */
+  hrfAmp?: boolean;      onHrfAmp?: (on: boolean) => void;
+  hrfLna?: number;       onHrfLna?: (db: number) => void;
+  hrfVga?: number;       onHrfVga?: (db: number) => void;
+  hrfBiasT?: boolean;    onHrfBiasT?: (on: boolean) => void;
 }
 
 function Seg<T>({ options, value, onChange, fmt, slot }: {
@@ -161,6 +173,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   // ★ Decide from what the RADIO SAID, never from what else happens to be set.
   const isAhf = p.radio?.driver === 'airspyhf';
   const isRsp = p.radio?.driver === 'sdrplay';
+  const isHrf = p.radio?.driver === 'hackrf';
   // ★ Locked = the server has a password and this session has not cleared it.
   const locked = !!p.adminSet && !p.adminOk;
   /* ★★★ WHAT THIS LISTENER CAN ACTUALLY CHANGE — and the panel now shows ONLY that.
@@ -478,6 +491,83 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   </Text>
                 </>
               )}
+            </>
+          ) : isHrf ? (
+            <>
+              <Text style={styles.section}>GAIN — {p.radio?.model || 'HackRF One'}</Text>
+              <Text style={styles.note}>
+                Experimental, and manual: this radio has three gain stages and no automatic gain
+                of any kind. Bring the LNA up until signals are clear of the noise and no further
+                — eight bits clip where other radios cope.
+              </Text>
+
+              {/* ★★★ RF AMP — OWNER-ONLY, AND THE HARDEST-EARNED LOCK IN THE APP. Stuart: "the
+                  preamp control MUST be treated with the same caution as the Bias-T and password
+                  protected so a stranger cannot enable the preamp and blow it up." It is the U14
+                  MGA-81563, a real 14 dB amplifier in FRONT of everything on a radio with no AGC
+                  and an unprotected front end — max safe RX is -5 dBm and static while swapping
+                  an aerial can kill it. ★★ AND THE TELL IS BACKWARDS: a blown amp acts as an
+                  ATTENUATOR, so switching it ON makes the band go quieter. */}
+              <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>RF amp (+14 dB){locked ? ' — owner only' : ''}</Text>
+                <Switch value={!!p.hrfAmp} onValueChange={(v) => p.onHrfAmp?.(v)}
+                  disabled={locked}
+                  trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.hrfAmp ? C.gold : '#ccc'} />
+              </View>
+              <Text style={styles.note}>
+                A 0 or +14 dB amplifier ahead of everything, and the part of a HackRF that most
+                commonly dies. Leave it off unless you know what is on the end of the coax. If
+                switching it on makes signals get QUIETER, the amp is already blown.
+              </Text>
+
+              {/* 0-40 dB in 8 dB steps — the hardware's own granularity, not a scale we invented.
+                  ★ A slider, like every other gain control here, because it is swept while
+                  watching the noise floor rather than stepped to a known number. */}
+              <Text style={styles.section}>LNA GAIN</Text>
+              <View style={styles.sliderRow}>
+                <Text style={styles.sliderEnd}>0</Text>
+                <Slider style={{ flex: 1, height: 40 }}
+                  minimumValue={0} maximumValue={40} step={8}
+                  value={p.hrfLna ?? 0}
+                  onValueChange={(v) => p.onHrfLna?.(Math.round(v))}
+                  minimumTrackTintColor={C.abtn} maximumTrackTintColor="#444" thumbTintColor={C.gold} />
+                <Text style={styles.sliderEnd}>40</Text>
+              </View>
+              <Text style={styles.stepVal}>{p.hrfLna ?? 0} dB</Text>
+              <Text style={styles.note}>
+                The front-end stage. Raise this BEFORE the VGA — gain taken here costs the least
+                noise. Back it off if you see images or the audio breaks up on peaks.
+              </Text>
+
+              {/* 0-62 dB in 2 dB steps, baseband, after the mixer. */}
+              <Text style={styles.section}>VGA GAIN</Text>
+              <View style={styles.sliderRow}>
+                <Text style={styles.sliderEnd}>0</Text>
+                <Slider style={{ flex: 1, height: 40 }}
+                  minimumValue={0} maximumValue={62} step={2}
+                  value={p.hrfVga ?? 0}
+                  onValueChange={(v) => p.onHrfVga?.(Math.round(v))}
+                  minimumTrackTintColor={C.abtn} maximumTrackTintColor="#444" thumbTintColor={C.gold} />
+                <Text style={styles.sliderEnd}>62</Text>
+              </View>
+              <Text style={styles.stepVal}>{p.hrfVga ?? 0} dB</Text>
+              <Text style={styles.note}>
+                The baseband stage, after the mixer — it lifts noise along with signal. Use it to
+                top up once the LNA is set, not as the main control.
+              </Text>
+
+              {/* ★ Bias-T, owner-only for the reason it is everywhere else: feeding voltage into
+                  somebody else's feedline is not a listener's decision. */}
+              <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>Bias-T (3.3 V){locked ? ' — owner only' : ''}</Text>
+                <Switch value={!!p.hrfBiasT} onValueChange={(v) => p.onHrfBiasT?.(v)}
+                  disabled={locked}
+                  trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.hrfBiasT ? C.gold : '#ccc'} />
+              </View>
+              <Text style={styles.note}>
+                Puts 3.3 V at 50 mA on the antenna port to power a mast-head amplifier. Off unless
+                you know what is on the end of the coax.
+              </Text>
             </>
           ) : (
             <>

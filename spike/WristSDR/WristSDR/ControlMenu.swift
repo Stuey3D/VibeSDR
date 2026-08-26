@@ -741,8 +741,22 @@ struct HardwareSheet: View {
   /// Nothing on this menu is usable — then the password IS the menu, and it says so.
   /// ★ Mirrors the four conditions above exactly: gain, span, digital AGC and bias-T are the
   ///   whole menu, and the last two are hidden together with `ownerLocked`.
+  /// ★★★ "NOTHING FOR YOU" MUST MEAN NOTHING, and radioHasSimpleGain is not that test. It asks
+  /// "does this radio have the DONGLE'S single slider", which is false for the RSP, the HF+ and
+  /// the HackRF — all three of which nonetheless draw gain controls a listener may use, because
+  /// the server puts ordinary gain on sharedGate and only DAMAGING controls behind adminGate.
+  /// So an owner-locked RSP or HackRF with one rate was told "there is nothing here for a
+  /// listener to change" while its LNA and VGA sat right there working. Ask instead whether ANY
+  /// gain control is drawn.
+  /// ★ The amp and the bias-T are deliberately NOT counted: those really are the owner's.
+  private var hasAnyGainControl: Bool {
+    if radio.radioDriver == "sdrplay" { return radio.lnaStates > 0 }
+    if radio.radioDriver == "hackrf"  { return true }          // LNA + VGA, both shared
+    if radio.radioDriver == "airspyhf" { return radio.attSteps > 0 || radio.hasRadioAgc }
+    return radio.radioHasSimpleGain
+  }
   private var nothingForUser: Bool {
-    ownerLocked && !(radio.radioHasSimpleGain && canGain) && !canSpan
+    ownerLocked && !(hasAnyGainControl && canGain) && !canSpan
   }
 
   var body: some View {
@@ -877,6 +891,32 @@ struct HardwareSheet: View {
           }
           if radio.radioHasDabNotch {
             onOff("DAB NOTCH", on: radio.rspDabNotch) { radio.setRspDabNotch(!radio.rspDabNotch) }
+          }
+        }
+        /* ★★★ HACKRF ONE — THREE MANUAL STAGES, NO AGC, AND THE PANEL SAYS EXPERIMENTAL nowhere
+         *     because a watch has no room for prose. What it DOES do is offer only the controls
+         *     that act: there is no AGC switch (libhackrf has no automatic mode, so one would do
+         *     nothing) and no PPM (radioHasPpm excludes it — the server's setPpm returns early
+         *     without a librtlsdr handle).
+         * ★★★ THE AMP AND THE BIAS-T ARE OWNER-ONLY, hidden behind !ownerLocked exactly as bias-T
+         *     is below. The amp is the U14 MGA-81563: +14 dB in front of everything on a radio
+         *     with no AGC and an unprotected front end, max safe RX -5 dBm, and the part of a
+         *     HackRF that most commonly dies. ★★ A dead one acts as an ATTENUATOR, so switching
+         *     it ON makes the band go quieter — the diagnosis reads backwards. A stranger on
+         *     somebody's public receiver must not be able to reach it, and the server refuses it
+         *     too (adminGate); this hides the lock rather than being the whole of it. */
+        if radio.radioDriver == "hackrf" {
+          // ± rather than the crown: both stages step in the HARDWARE'S own increments (LNA 8 dB,
+          // VGA 2 dB), so there are few enough positions that tapping lands exactly on one.
+          stepCell(title: "LNA GAIN", value: "\(radio.hrfLna) dB",
+                   dec: { radio.setHrfLna(radio.hrfLna - 8) },
+                   inc: { radio.setHrfLna(radio.hrfLna + 8) })
+          stepCell(title: "VGA GAIN", value: "\(radio.hrfVga) dB",
+                   dec: { radio.setHrfVga(radio.hrfVga - 2) },
+                   inc: { radio.setHrfVga(radio.hrfVga + 2) })
+          if !ownerLocked {
+            onOff("RF AMP +14dB", on: radio.hrfAmp) { radio.setHrfAmp(!radio.hrfAmp) }
+            onOff("BIAS-T", on: radio.hrfBiasT) { radio.setHrfBiasT(!radio.hrfBiasT) }
           }
         }
         if radio.radioDriver == "airspyhf" {

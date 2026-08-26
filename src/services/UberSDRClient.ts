@@ -868,6 +868,23 @@ export class UberSDRClient {
     this._sendCtl(m);
   }
 
+  /** ★★★ HackRF One controls. Same shape — only the keys present are applied.
+   *  ★★ amp and biast are OWNER-ONLY and the SERVER enforces that (adminGate in the
+   *  hackrf_control handler), not this method: sending them without the admin unlock is refused
+   *  and logged server-side. lna and vga are ordinary gain on sharedGate. The distinction the
+   *  server draws is DAMAGE, not gain — a +14 dB amp in front of an unprotected 8-bit front end
+   *  can destroy somebody else's radio, and a baseband stage cannot.
+   *  ★ dB here, not tenths: these are the radio's own stage units (LNA 0-40 in 8s, VGA 0-62 in
+   *  2s), unlike the single `gain` field which is tenths everywhere. */
+  hackrfControl(o: { amp?: boolean; lna?: number; vga?: number; biast?: boolean }) {
+    const m: Record<string, unknown> = { type: 'hackrf_control' };
+    if (o.amp   !== undefined) m.amp   = o.amp ? 1 : 0;
+    if (o.lna   !== undefined) m.lna   = o.lna;
+    if (o.vga   !== undefined) m.vga   = o.vga;
+    if (o.biast !== undefined) m.biast = o.biast ? 1 : 0;
+    this._sendCtl(m);
+  }
+
   /** SDRplay RSP controls. Same shape — only the keys present are applied. */
   rspControl(o: { lna?: number; ifgr?: number; ifagc?: boolean; agcset?: number;
                   rfNotch?: boolean; dabNotch?: boolean }) {

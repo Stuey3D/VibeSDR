@@ -237,6 +237,15 @@ final class UberClient: ObservableObject {
   @Published var hasRadioAgc = false           // HF+ own AGC
   // Current per-radio gain state (what we last sent — the server does not echo these back).
   @Published var rspLna = 0
+  /* ★★★ HackRF stages — and every one opens at ZERO with the amp and bias-T OFF. Stuart: "the
+   *   hackrf MUST DEFAULT TO 0 GAIN AND PREAMP, those things have a bad habit of blowing up
+   *   their preamps." The server opens the same way and restores NO saved preference into the
+   *   amp or the bias-T, because safe on one aerial is not safe on the next — so these must not
+   *   be persisted by saveVibeHw() either. */
+  @Published var hrfAmp = false
+  @Published var hrfLna = 0
+  @Published var hrfVga = 0
+  @Published var hrfBiasT = false
   @Published var rspIfGr = 40
   @Published var rspIfAgc = true
   /// The RSP's broadcast notches, and whether this model actually has them.
@@ -273,11 +282,23 @@ final class UberClient: ObservableObject {
   }
   /// ★ A dongle's single gain slider is meaningless on an RSP, and an HF+ has NO
   /// variable gain stage. Hide, rather than offer a control whose label lies.
-  var radioHasSimpleGain: Bool { radioDriver != "sdrplay" && radioDriver != "airspyhf" }
+  /// ★★ hackrf joins the exclusion for a THIRD distinct reason: it has three manual stages and
+  /// no single gain at all, so a dongle's one slider would be driving nothing. Named drivers
+  /// rather than "not an RSP and not an HF+" — the else-means-dongle shape has produced a bug
+  /// every single time a new radio appeared.
+  var radioHasSimpleGain: Bool {
+    radioDriver != "sdrplay" && radioDriver != "airspyhf" && radioDriver != "hackrf"
+  }
   /// PPM is an RTL trim. The HF+ calibrates in parts per BILLION and the RSP has its
   /// own scheme — two correction controls disagreeing about units is exactly the
   /// "which one is real?" confusion to avoid.
-  var radioHasPpm: Bool { radioDriver != "sdrplay" && radioDriver != "airspyhf" }
+  /// ★★ hackrf excluded too, and this one is measurable rather than a matter of taste: the
+  /// server's setPpm() returns early on `!p->dev` — the LIBRTLSDR handle — so on a HackRF it
+  /// does nothing at all. Offering the trim would be offering a control whose every use is a
+  /// no-op, which is the fault AGENTS.md names outright.
+  var radioHasPpm: Bool {
+    radioDriver != "sdrplay" && radioDriver != "airspyhf" && radioDriver != "hackrf"
+  }
   @Published var maxFftRate = 0
 
   // ── VibeServer hardware controls (the client drives the radio over the spectrum WS) ──
@@ -441,6 +462,38 @@ final class UberClient: ObservableObject {
   // it because of what you are hearing right now.
   private func rspSend(_ m: [String: Any]) { guard isVibe else { return }; specSock.send(json: m.merging(["type": "rsp_control"]) { a, _ in a }) }
   private func ahfSend(_ m: [String: Any]) { guard isVibe else { return }; specSock.send(json: m.merging(["type": "ahf_control"]) { a, _ in a }) }
+  private func hrfSend(_ m: [String: Any]) { guard isVibe else { return }; specSock.send(json: m.merging(["type": "hackrf_control"]) { a, _ in a }) }
+
+  /// ★★★ HackRF One — THREE MANUAL STAGES AND NO AGC AT ALL. libhackrf exposes no automatic
+  /// mode, so there is no AGC switch to offer here; one would be a control that does nothing.
+  /// ★★★ THE STAGES ARE IN dB, THE HARDWARE'S OWN STEPS: LNA 0-40 in 8s, VGA 0-62 in 2s. The
+  /// server rounds DOWN anything off-step, because rounding up is how you clip a radio with no
+  /// headroom to spare — so the steps here match the hardware rather than being a scale we chose.
+  func setHrfLna(_ db: Int) {
+    radioDirty = true
+    hrfLna = max(0, min(40, (db / 8) * 8))
+    hrfSend(["lna": hrfLna])
+  }
+  func setHrfVga(_ db: Int) {
+    radioDirty = true
+    hrfVga = max(0, min(62, (db / 2) * 2))
+    hrfSend(["vga": hrfVga])
+  }
+  /// ★★★ OWNER-ONLY, AND THE SERVER IS WHAT ENFORCES IT (adminGate). The RF amp is the U14
+  /// MGA-81563 — a real +14 dB amplifier in FRONT of everything on a radio with no AGC and an
+  /// unprotected front end. Max safe RX is -5 dBm and static while swapping an aerial can kill
+  /// it. ★★ A dead one acts as an ATTENUATOR, so switching it ON makes the band go QUIETER and
+  /// the diagnosis reads backwards. A stranger must not be able to do that to somebody's radio.
+  func setHrfAmp(_ on: Bool) {
+    radioDirty = true
+    hrfAmp = on
+    hrfSend(["amp": on ? 1 : 0])
+  }
+  func setHrfBiasT(_ on: Bool) {
+    radioDirty = true
+    hrfBiasT = on
+    hrfSend(["biast": on ? 1 : 0])
+  }
 
   /// SDRplay LNA. ★ The UI speaks GAIN (higher = more), the hardware wants a STATE
   /// (higher = less), so it is inverted on the way out — same as the web client.

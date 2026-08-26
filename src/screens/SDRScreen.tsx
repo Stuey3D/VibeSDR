@@ -2626,6 +2626,17 @@ export default function SDRScreen({ route, navigation }: Props) {
   const rspIfAgcRef = useRef(true); rspIfAgcRef.current = rspIfAgc;
   const [rspRfNotch, setRspRfNotch] = useState(false);
   const [rspDabNotch, setRspDabNotch] = useState(false);
+  /* ★★★ HackRF One live state. Mirrors what we last SENT, like the HF+ above — the shim has no
+   *   read-back for these and the radio is single-occupant, so our own last write is the truth.
+   * ★★★ AND EVERY ONE OF THEM STARTS AT ZERO/OFF, DELIBERATELY. Stuart: "the hackrf MUST DEFAULT
+   *   TO 0 GAIN AND PREAMP, those things have a bad habit of blowing up their preamps." The
+   *   server opens the radio the same way and restores NO saved preference into the amp or the
+   *   bias-T, because safe on one aerial is not safe on the next. Do not "improve" this by
+   *   persisting them. */
+  const [hrfAmp,     setHrfAmp]     = useState(false);
+  const [hrfLna,     setHrfLna]     = useState(0);
+  const [hrfVga,     setHrfVga]     = useState(0);
+  const [hrfBiasT,   setHrfBiasT]   = useState(false);
   const [ahfAgc,     setAhfAgc]     = useState(true);
   const [ahfAgcHigh, setAhfAgcHigh] = useState(false);
   const [ahfAtt,     setAhfAtt]     = useState(0);
@@ -8111,6 +8122,14 @@ export default function SDRScreen({ route, navigation }: Props) {
           onRspRfNotch={(v) => { setRspRfNotch(v); (client.current as any)?.rspControl?.({ rfNotch: v }); }}
           rspDabNotch={rspDabNotch}
           onRspDabNotch={(v) => { setRspDabNotch(v); (client.current as any)?.rspControl?.({ dabNotch: v }); }}
+          hrfAmp={hrfAmp}
+          onHrfAmp={(v) => { setHrfAmp(v); (client.current as any)?.hackrfControl?.({ amp: v }); }}
+          hrfLna={hrfLna}
+          onHrfLna={(v) => { setHrfLna(v); (client.current as any)?.hackrfControl?.({ lna: v }); }}
+          hrfVga={hrfVga}
+          onHrfVga={(v) => { setHrfVga(v); (client.current as any)?.hackrfControl?.({ vga: v }); }}
+          hrfBiasT={hrfBiasT}
+          onHrfBiasT={(v) => { setHrfBiasT(v); (client.current as any)?.hackrfControl?.({ biast: v }); }}
           ahfAgc={ahfAgc}
           onAhfAgc={(v) => { setAhfAgc(v); (client.current as any)?.ahfControl?.({ agc: v }); }}
           ahfAgcHigh={ahfAgcHigh}
