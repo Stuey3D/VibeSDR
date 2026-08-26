@@ -1101,9 +1101,22 @@ int main(int argc, char** argv) {
         //     this pre-scan every process fell back to "the first ready radio" and therefore to
         //     the PRIMARY's port, so radios two and three both tried to bind 48040 and died with
         //     "port already in use" (measured 2026-08-08).
+        /* ★★★ BOTH SPELLINGS, BECAUSE THIS IS THE SECOND PLACE THAT PARSES THEM. The real parser
+         *     is hundreds of lines below; this pre-scan exists only to answer "which radio am I?"
+         *     before the config is read. Adding --radio-serial to the parser and not to THIS made
+         *     every instance fall back to "the first ready radio" — so vibeserver@240513CA60 and
+         *     vibeserver@DD52B980BE4946DA both decided they were 00000003, and the second and
+         *     third radios died in a restart loop claiming a lock that was not theirs. Shipped in
+         *     4.1.21 and caught on the Pi within ten minutes (2026-08-26).
+         *  ★★ The note directly above records the SAME class of failure from 2026-08-08, and the
+         *     file says it elsewhere in as many words: NAME EVERY SOURCE. Two readers of one
+         *     argument is two chances to disagree, and the one that is not updated fails silently
+         *     by falling back to something plausible. */
         std::string wantSerial;
-        for (int k = 1; k + 1 < argc; k++)
-            if (std::string(argv[k]) == "--radio") { wantSerial = argv[k + 1]; break; }
+        for (int k = 1; k + 1 < argc; k++) {
+            const std::string a = argv[k];
+            if (a == "--radio" || a == "--radio-serial") { wantSerial = argv[k + 1]; break; }
+        }
 
         vsconfig::ServerConfig srv;
         if (vsconfig::loadServer(g_configPath, srv, err)) {
@@ -2103,7 +2116,16 @@ int main(int argc, char** argv) {
     //     leaves a window in which we hold an SDR with nobody supervising us. No-op on Linux,
     //     where PR_SET_PDEATHSIG was already set before exec and survived it.
     if (o.supervised && o.radioGiven) vibe::dieWithParent();
-    if (!willBeFrontDoor && !claimRadioLock(g_myRadioSerial)) return 0;
+    /* ★★★ AND SHUT THE RESPONDER DOWN BEFORE RETURNING. The note at the failure path below says
+     *     it in full: returning from main with a joinable std::thread runs ~thread(), which calls
+     *     std::terminate — so this POLITE REFUSAL exited with SIGABRT, systemd read a crash rather
+     *     than a decision, and restarted it every few seconds for ever. Measured on the Pi
+     *     (2026-08-26): "leaving it to that one" immediately followed by "terminate called without
+     *     an active exception" and a unit in auto-restart, which is exactly the "the radio is
+     *     broken and rebooting does not fix it" diagnosis that note warns about.
+     *  ★ The comment at claimRadioLock says "Refusing is not an error... a failure code here would
+     *    put a red line in a journal for a non-event." It was putting a CRASH there instead. */
+    if (!willBeFrontDoor && !claimRadioLock(g_myRadioSerial)) { LocalSdrShim::stopMdns(); return 0; }
 
     if (willBeFrontDoor) {
         port = LocalSdrShim::startFrontDoor(g_serverConfig.port, err);
