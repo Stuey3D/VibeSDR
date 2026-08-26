@@ -319,7 +319,16 @@ function ensureDec(ch) {
       const pcm = new Int16Array(n * nc);
       const plane = new Float32Array(n);
       for (let c = 0; c < nc; c++) {
-        ad.copyTo(plane, { planeIndex: c, frameCount: n });
+        /* ★★★ format:'f32-planar' IS NOT OPTIONAL, AND LEAVING IT OFF COST THE WHOLE FEATURE.
+         *     Firefox's decoder hands back INTERLEAVED f32, so copyTo with a planeIndex and no
+         *     format wants room for every channel — "destination buffer of length 3840 too small
+         *     for copying 7680 elements", which threw, which tripped the Worker's own error path,
+         *     which fell back to the main thread on EVERY session. The fallback worked perfectly;
+         *     that is why it looked like the Worker had been tried and had not helped.
+         * ★★★ AND THE WORKING LINE WAS TWENTY LINES AWAY. _onOpusData has always passed this
+         *     option. I rewrote the copy loop from memory instead of copying the one that was
+         *     already right — in a Worker, where the only symptom is a fallback that hides it. */
+        ad.copyTo(plane, { planeIndex: c, format: 'f32-planar' });
         for (let i = 0; i < n; i++) {
           let v = Math.round(plane[i] * 32767);
           pcm[i*nc + c] = v < -32768 ? -32768 : (v > 32767 ? 32767 : v);

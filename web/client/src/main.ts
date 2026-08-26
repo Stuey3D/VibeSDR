@@ -3097,9 +3097,18 @@ function updateStatus() {
    *  ★ A depth is a statistic, not a fault — unlike the dry/skip counters above, which read as an
    *    error report to a listener and are deliberately kept in the tooltip. */
   const buf = audio ? ` · buf ${audio.jitterMs.toFixed(0).padStart(3, '\u2007')} ms` : '';
-  el.textContent = `${total.toFixed(0)} KB/s · ${fps} fps · ${rtt.toFixed(0)} ms${buf}${idle}`;
+  /* ★★ LABEL THE MILLISECONDS, BECAUSE THERE ARE NOW TWO OF THEM AND THEY MEAN OPPOSITE THINGS.
+   *  A bare "29 ms" beside "buf 150 ms" reads as a second buffer figure — Stuart misread his own
+   *  readout that way (2026-08-26) while we were using it to tell a bursty link from a slow box,
+   *  which is exactly the moment ambiguity costs something. "ping" rather than "rtt": it is the
+   *  word a listener already knows, and this row is read by listeners, not only by us. */
+  el.textContent = `${total.toFixed(0)} KB/s · ${fps} fps · ping ${rtt.toFixed(0)} ms${buf}${idle}`;
+  // ★ And say what they MEAN on hover — the row has room for a label, not for a sentence.
   el.title = `spectrum ${specKbps.toFixed(0)} KB/s · audio ${audioKbps.toFixed(0)} KB/s`
     + ` · asking for ${wantedFps()} fps`
+    + ` · ping = round trip to the receiver`
+    + (audio ? ` · buf = audio buffered ahead (grows on a bursty link; the waterfall is held`
+             + ` back to match, so a big buffer feels laggy to tune)` : '')
     + (audio && (audio.underruns || audio.skips)
         ? ` · audio: ${audio.underruns} dry, ${audio.skips} skip` : '');
 
