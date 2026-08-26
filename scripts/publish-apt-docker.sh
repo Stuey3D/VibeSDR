@@ -127,11 +127,20 @@ for A in $ARCHES; do
   # ★★ --dry-run still BUILDS and SIGNS and commits locally; it only withholds the push. That is
   #    what makes it worth running: the failures worth catching are in the build and the index.
   echo "==> [$A] build + index + sign (in bookworm)"
+  # ★★★ ONE JOB WHEN THE ARCH IS EMULATED. qemu-translated compilers running four-up segfault on
+  #     files this size — three separate failures on 2026-08-26, each on a different file, which is
+  #     the signature of the environment rather than the code. Raising the VM from 4 to 8 to 12 GiB
+  #     did not fix it, because the constraint is concurrency under emulation, not total memory.
+  # ★ The native architecture keeps nproc: it is not emulated and it is not the one that breaks.
+  HOSTARCH=$(uname -m); case "$HOSTARCH" in arm64|aarch64) HOSTARCH=arm64;; x86_64) HOSTARCH=amd64;; esac
+  JOBS_FOR_ARCH=""; [ "$A" != "$HOSTARCH" ] && JOBS_FOR_ARCH=1
+  [ -n "$JOBS_FOR_ARCH" ] && echo "==> [$A] emulated — building with JOBS=$JOBS_FOR_ARCH"
   docker run --rm --platform "linux/$A" \
     -v "$SRC_DIR":/work/VibeSDR \
     -v "$APT_DIR":/work/VibeServer \
     -v "$KEY_FILE":/tmp/signing-key.asc:ro \
     -e APT_DIR=/work/VibeServer \
+    -e JOBS="$JOBS_FOR_ARCH" \
     "$IMAGE" /bin/bash -euo pipefail -c '
     export GNUPGHOME=$(mktemp -d)
     gpg --batch --quiet --import /tmp/signing-key.asc

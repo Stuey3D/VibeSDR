@@ -194,7 +194,13 @@ runbuild "
   cd $BUILD_SRC/vibeserver
   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVIBESERVER_DEB_REV=$REV \
         -DVIBESERVER_STRICT_RADIOS=ON >/dev/null
-  cmake --build build -j$(nproc) | tail -1
+  # ★★★ JOBS IS SETTABLE BECAUSE AN EMULATED BUILD CANNOT TAKE nproc. Under qemu, four concurrent
+  #     compilers on translation units this size segfault the compiler outright — three failures in
+  #     one evening (2026-08-26), on a DIFFERENT FILE each time, which is exactly how you tell it
+  #     from a code bug. More VM memory did not help (4 -> 8 -> 12 GiB); it is not the total, it is
+  #     what several qemu-translated compilers do at once. publish-apt-docker.sh passes JOBS=1 for
+  #     the non-native architecture and leaves the native one at full speed.
+  cmake --build build -j"${JOBS:-$(nproc)}" | tail -1
   cd build && cpack >/dev/null"
 DEB="$(ls -t "$BUILD_ROOT$BUILD_SRC/vibeserver/build"/vibeserver_*.deb | head -1)"
 
