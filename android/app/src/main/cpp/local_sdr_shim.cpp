@@ -2531,6 +2531,22 @@ struct LocalSdrShim::Impl {
     // protocol (rtlCenter as the display centre) is unchanged; we compensate in
     // the VFO offset and shift the displayed FFT crop back by the same amount.
     static constexpr double HW_OFFSET_HZ = 15000.0;
+    /* ★★★ AND A MUCH BIGGER ONE FOR THE HACKRF, BECAUSE 15 kHz DOES NOT CLEAR A BROADCAST FM
+     *     CHANNEL. The dongle's 15 kHz is enough for AM, SSB and NFM — the modes whose channel is
+     *     a few kHz wide — and the note above says so: "the DC spike then draws HW_OFFSET_HZ
+     *     off-centre, harmlessly outside the channel". A WFM channel is 200 kHz wide, so 15 kHz
+     *     leaves the spike INSIDE it, and on a HackRF that is not a cosmetic line on the
+     *     waterfall: the LO leakage of a direct-conversion front end with no DC servo is big
+     *     enough to take the audio with it (Saber, 2026-08-26, on 87.0 WFM: "it has a large dc
+     *     spike in the centre which kills the audio").
+     * ★★ 250 kHz clears ±100 kHz of WFM with room to spare, and costs nothing that matters: this
+     *    radio's SLOWEST rate is 2 MSPS, so the narrowest span it can produce is 2 MHz and the
+     *    offset eats an eighth of one side. There is no rate at which 250 kHz does not fit.
+     * ★ REASONED, NOT MEASURED — nobody here owns one. The number is chosen to clear the widest
+     *   channel we demodulate; if the spike turns out to be wider than the guard, this constant is
+     *   the one thing to change and everything else follows it (every consumer goes through
+     *   hwOffsetHz(), which is why the value can differ per driver at all). */
+    static constexpr double HW_OFFSET_HACKRF_HZ = 250000.0;
 
     // ★★★ AND IT IS A DONGLE WORKAROUND, SO ONLY THE DONGLE GETS IT. tuneHw() applied the offset
     //     to EVERY driver, and the compensations below subtracted it again — which cancels only if
@@ -2546,7 +2562,13 @@ struct LocalSdrShim::Impl {
     // ★★ An RSP is zero-IF too and has its own DC handling; a network source has no DC spike of
     //    ours to dodge. Only the R820T needs this.
     double hwOffsetHz() const {
-        return (useSdrplay() || useAirspyHf() || useHackRf() || useTcp() || useSpy()) ? 0.0 : HW_OFFSET_HZ;
+        /* ★★★ THE HACKRF IS ZERO-IF WITH NOTHING CLEANING UP AFTER IT, so it belongs with the
+         *     DONGLE here, not with the RSP and the HF+. I originally listed it among the radios
+         *     that need no offset, which is only true of radios that handle their own DC: an RSP
+         *     has its own DC correction and libairspyhf applies a 5 kHz IF shift and rotates the
+         *     remainder away. A HackRF does neither — it hands you the LO leakage at DC. */
+        if (useHackRf()) return HW_OFFSET_HACKRF_HZ;
+        return (useSdrplay() || useAirspyHf() || useTcp() || useSpy()) ? 0.0 : HW_OFFSET_HZ;
     }
 
     // Physical DC of the FFT = rtlCenter + HW_OFFSET_HZ, so the VFO (at audioFreq)
@@ -15370,7 +15392,15 @@ int LocalSdrShim::startHackRf(int index,
         self->lastIqAt.store(Impl::nowSecs(), std::memory_order_relaxed);
         self->enqueueIqFloat(iq, n, /*blockIfFull=*/false);
     });
-    if (!impl->hrf->open(index, sampleRate, centerFreq, gainTenthDb, err)) {
+    /* ★★★ TUNE THE RADIO TO (LOGICAL CENTRE + OFFSET), exactly as the dongle's open path does —
+     *     `rtlCenter` above is the LOGICAL centre and everything else derives the physical DC from
+     *     it by adding hwOffsetHz(). Opening at the raw centre leaves the DC spike on the channel
+     *     until the first retune moves it, and it also puts the radio 250 kHz away from where the
+     *     rest of the server believes it is: the crop, the VFO offset and the waterfall labels all
+     *     assume the offset was applied at tune time.
+     *  ★★ Two tune paths again — this one and setFrequency() — and only one of them applying the
+     *     offset is the same "two readers, one updated" fault that has cost most of tonight. */
+    if (!impl->hrf->open(index, sampleRate, centerFreq + impl->hwOffsetHz(), gainTenthDb, err)) {
         delete impl; return -1;
     }
     impl->hrfIndex = index;   // ★ remembered so releaseRadio can reopen the same one
@@ -17582,7 +17612,11 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
         // ★ -1 for the gain: open() then leaves the three stages where the owner put them rather
         //   than driving them from a single number. Taking the radio BACK must not silently move
         //   the RF amp or reset the LNA — see the zero-start note in hackrf_source.h.
-        ok = impl->hrf->open(impl->hrfIndex, impl->sampleRate, impl->rtlCenter.load(), -1, err);
+        // ★ + hwOffsetHz(), like every other tune of this radio. The dongle branch below gets it
+        //   for free because it goes through tuneHw(); an open() call has to add it itself, and
+        //   the RSP/HF+ calls above do not need to only because their offset is zero.
+        ok = impl->hrf->open(impl->hrfIndex, impl->sampleRate,
+                             impl->rtlCenter.load() + impl->hwOffsetHz(), -1, err);
     } else {
         // ★ BY SERIAL, NOT BY INDEX — findOurDevice refuses to grab a DIFFERENT dongle that has
         //   taken our slot while we were away. With three radios on one machine that matters.
