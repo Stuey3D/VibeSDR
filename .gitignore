@@ -104,3 +104,7 @@ android/app/src/main/cpp/cloudflared/
 # ★ cloudflared binaries we SHIP but do not author — fetched by tools/cloudflared-desktop/fetch.sh.
 #   Committing 110 MB of somebody else's release artefacts would bloat every clone for ever.
 tools/cloudflared-desktop/bin/
+
+# Tunnel-drop debugging harness — a scratch probe, not release material. It was swept into a
+# release commit by `git add -A` on 2026-08-26 and taken back out before it reached GitHub.
+.ws-hold.mjs
