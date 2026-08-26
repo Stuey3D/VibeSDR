@@ -8248,6 +8248,24 @@ const HOLD_MS = 350;
 const SWEEP_LO = 3;          // steps/sec when the sweep starts
 const SWEEP_HI = 22;         // steps/sec ceiling
 const SWEEP_RAMP_MS = 2500;  // LO -> HI, a continuous ramp rather than gears
+/* ★★★ AND A CEILING SET BY THE RECEIVER, NOT BY US. Every sweep tick is a tune command on the
+ *     spectrum socket and the server answers each one. At the 22/s ceiling that is a step every
+ *     45 ms — so against a receiver answering in 1159 ms (a phone under a chroot, over a tunnel,
+ *     2026-08-26) roughly twenty-five commands are in flight before the first is acknowledged.
+ *     The dial then runs away from the radio and the whole receiver feels broken, while a SINGLE
+ *     tap on the same server feels fine, because one round trip nobody notices. Stuart: "clicking
+ *     to tune or tapping the buttons hides the lag lots."
+ * ★★★ PACE, DO NOT SKIP. Waiting longer between steps keeps every step — the sweep simply runs at
+ *     the speed the receiver can answer. Dropping intermediate steps instead would be the
+ *     debouncing the note above rightly forbids, and would break what a sweep IS: a sweep that
+ *     skips is not a faster sweep, it is a broken one.
+ * ★★ ONE ROUND TRIP IN FLIGHT is the target, so the gap is the measured RTT. Capped, because a
+ *    receiver having a genuinely terrible moment must still sweep at a usable rate rather than
+ *    appear frozen — 400 ms is 2.5 steps/s, slow but plainly alive.
+ * ★ TAPS ARE UNTOUCHED. This governs the auto-repeat tick only; ten fast taps are still ten
+ *   steps, which is the structural guarantee the note above insists on. */
+const SWEEP_MAX_GAP_MS = 400;   // never crawl slower than this, however bad the link
+const SWEEP_RTT_FLOOR_MS = 60;  // below this the link is not the constraint — ignore it
 
 /**
  * @param tap   what one press does — the decisive, familiar amount.
@@ -8277,7 +8295,11 @@ function attachHoldSweep(el: HTMLElement, tap: () => void, sweep: () => void = t
         sweep();
         // Rate recomputed per tick, so the acceleration is smooth.
         const t = Math.min(1, (Date.now() - started) / SWEEP_RAMP_MS);
-        tickT = window.setTimeout(tick, 1000 / (SWEEP_LO + (SWEEP_HI - SWEEP_LO) * t));
+        const ideal = 1000 / (SWEEP_LO + (SWEEP_HI - SWEEP_LO) * t);
+        // ★ Read live: a link that degrades mid-sweep slows the sweep with it, and one that
+        //   recovers speeds back up. See SWEEP_MAX_GAP_MS above for why this is paced, not skipped.
+        const paced = rtt > SWEEP_RTT_FLOOR_MS ? Math.min(rtt, SWEEP_MAX_GAP_MS) : 0;
+        tickT = window.setTimeout(tick, Math.max(ideal, paced));
       };
       tickT = window.setTimeout(tick, 1000 / SWEEP_LO);
     }, HOLD_MS);
