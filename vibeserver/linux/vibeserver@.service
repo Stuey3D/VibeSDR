@@ -13,7 +13,11 @@ PartOf=vibeserver.service
 [Service]
 Type=simple
 ExecStartPre=+/usr/lib/vibeserver/vibeserver-governor
-ExecStart=/usr/bin/vibeserver --config /etc/vibeserver/vibeserver.conf --radio %i
+# ★★★ --radio-serial, NOT --radio. The instance name %i IS a serial, always, and `--radio` has to
+#     guess between a serial and an index by asking what is attached right now — so a radio that is
+#     briefly absent at boot, or one whose serial is all digits, is read as a POSITION and starts
+#     the wrong radio or none. Measured 2026-08-26 on a HackRF whose serial is "4".
+ExecStart=/usr/bin/vibeserver --config /etc/vibeserver/vibeserver.conf --radio-serial %i
 Restart=always
 RestartSec=5
 User=vibeserver

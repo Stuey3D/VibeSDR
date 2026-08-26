@@ -1,5 +1,6 @@
 // HackRF One capture source — EXPERIMENTAL, Linux only. See hackrf_source.h for why.
 #include "hackrf_source.h"
+#include <string>
 
 #include <algorithm>
 #include <atomic>
@@ -136,8 +137,19 @@ bool HackRfSource::open(int index, double sampleRateHz, double centreHz,
 
     hackrf_device_list_t* l = hackrf_device_list();
     if (!l || index < 0 || index >= l->devicecount) {
+        /* ★★★ SAY WHICH OF THE TWO IT IS. "no HackRF at that index" is true of an empty bus and of
+         *     a bad index alike, and those need completely different fixes — plug the radio in, or
+         *     stop asking for radio 4 on a machine with one. It cost a round trip with the only
+         *     person who owns one of these (2026-08-26: "using HackRF 4 (experimental)" followed
+         *     by this line, on a box with a single radio). An error that does not separate the
+         *     causes it is reporting is a question, not an answer. */
+        const int n = l ? l->devicecount : 0;
         if (l) hackrf_device_list_free(l);
-        err = "no HackRF at that index";
+        if (n == 0) err = "no HackRF is attached (libhackrf sees none — on Android/chroot check "
+                          "USB permissions: libhackrf needs access to the device node)";
+        else        err = "no HackRF at index " + std::to_string(index) + " — "
+                        + std::to_string(n) + " attached, so the valid range is 0.."
+                        + std::to_string(n - 1);
         return false;
     }
     impl_->serial = l->serial_numbers[index] ? l->serial_numbers[index] : "";

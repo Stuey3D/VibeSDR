@@ -314,6 +314,23 @@ bool parse(int argc, char** argv, Opts& o) {
                     o.radioSerial = v;   // a serial we cannot see yet; fail with a clear reason later
             }
         }
+        /* ★★★ THE PARENT'S OWN FLAG, AND IT CANNOT BE READ AS A POSITION. `--radio` has to guess
+         *     between a serial and an index, and it guesses by asking what is attached RIGHT NOW —
+         *     so a radio that is momentarily absent, or one whose serial happens to be all digits,
+         *     falls through to "index N" and starts something else or nothing at all. That is not a
+         *     risk worth carrying on the path the front door uses for EVERY child it spawns, where
+         *     the value is always a serial and never a position.
+         *  ★★ Measured 2026-08-26 on the only HackRF anyone testing this owns: the front door
+         *     spawned `--radio 4` for a radio whose serial is "4", the child could not match it
+         *     against the attached list, read it as index 4 on a machine with one radio, and died
+         *     with "no HackRF at that index". The serial was right; the ARGUMENT was ambiguous.
+         *  ★ `--radio` keeps its guessing for humans typing it, where "the third radio" is a
+         *    reasonable thing to mean. */
+        else if (a == "--radio-serial") {
+            o.useUsb = true; o.radioGiven = true;
+            o.radio = -1;
+            o.radioSerial = need(i);
+        }
         else if (a == "--tcp") {
             o.useUsb = false;
             std::string v = need(i);
@@ -714,9 +731,9 @@ static void superviseRadios(const char* self, const vsconfig::ServerConfig& srv)
             //   falling through to the argv[0] path this was fixed not to trust.
             const std::string me = selfExePath();
             if (!me.empty())
-                ::execl(me.c_str(), "vibeserver", "--radio", serial.c_str(), "--serve",
+                ::execl(me.c_str(), "vibeserver", "--radio-serial", serial.c_str(), "--serve",
                         (char*)nullptr);
-            ::execlp(self, self, "--radio", serial.c_str(), "--serve", (char*)nullptr);
+            ::execlp(self, self, "--radio-serial", serial.c_str(), "--serve", (char*)nullptr);
             std::fprintf(stderr, "VibeServer: could not start the process for %s: %s\n",
                          serial.c_str(), strerror(errno));
             ::_exit(127);
@@ -2140,8 +2157,24 @@ int main(int argc, char** argv) {
             for (const auto& r : vibe::detectRadios())
                 if (r.serial == o.radioSerial) { drv = r.driver; drvIdx = r.driverIndex; break; }
             if (drvIdx < 0) {
+                /* ★★ AND SAY WHAT *IS* THERE. "no radio with serial X" leaves the owner comparing
+                 *    a string against hardware they cannot see, when we have just enumerated it.
+                 *    On a machine where the radio is present but reporting a different serial —
+                 *    or absent because a chroot cannot see the USB device at all — this line is
+                 *    the difference between a diagnosis and a guess. */
                 std::fprintf(stderr, "VibeServer: no radio with serial %s is attached\n",
                              o.radioSerial.c_str());
+                const auto all = vibe::detectRadios();
+                if (all.empty()) {
+                    std::fprintf(stderr, "VibeServer: no radios are detected at all — check the "
+                                         "USB connection and permissions\n");
+                } else {
+                    std::fprintf(stderr, "VibeServer: detected instead:\n");
+                    for (const auto& r : all)
+                        std::fprintf(stderr, "  %s  driver=%s  serial=%s\n",
+                                     r.name.c_str(), r.driver.c_str(),
+                                     r.serial.empty() ? "(none)" : r.serial.c_str());
+                }
                 return 1;
             }
             /* ★ NAME EVERY SOURCE. The comment in local_sdr_shim's rate branch records that a
