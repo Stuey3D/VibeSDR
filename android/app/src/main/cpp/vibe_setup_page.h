@@ -1182,7 +1182,14 @@ function bandSummary() {
 //     receiver at a position it does not have.
 function gainIsDb() {
   const d = (radio().driver || "");
-  return d === "rtl" || d === "rtlsdr";
+  /* ★★★ THE HACKRF IS IN dB TOO, AND THE SERVER ALREADY ASSUMES IT. gainCapAt() hands the shim a
+   *     number "in the radio's units" and the hackrf_control handler reads it as TENTHS OF A dB
+   *     (capT / 10) — the dongle's spelling — so leaving this false stored the owner's "20" as a
+   *     raw 20 and the server read it as 2 dB. A ceiling an eighth of what was asked for, with
+   *     nothing on screen to say so.
+   *  ★ Only the RSP is not in dB: its limit is an RF POSITION, which is why this function exists
+   *    at all. */
+  return d === "rtl" || d === "rtlsdr" || d === "hackrf";
 }
 /** Owner's text -> the stored integer. "19.7 dB" -> 197 on an RTL, "5" -> 5 on an RSP. */
 function gainToRaw(txt) {
@@ -1293,6 +1300,20 @@ function gainSteps() {
   if (!gainIsDb()) {
     const n = (HW && Number(HW.lnaStates)) || 0;
     return n > 1 ? Array.from({length: n}, (_, i) => i) : [];
+  }
+  /* ★★★ THE HACKRF'S LADDER IS ITS OWN, AND FALLING THROUGH TO R820T_GAINS WOULD BE A SLIDER OVER
+   *     A DONGLE'S GAIN TABLE — the same "authoritative slider over the wrong quantity" the RSP
+   *     note above warns about. HW.gains is empty for this radio by design (hwinfo publishes the
+   *     dongle's tuner steps only), so without this it would have taken the fallback silently.
+   *  ★★ 0 to 102 dB, which is LNA 40 + VGA 62 — the TOTAL, because that is what the cap means on
+   *     this radio (both stages sit after the mixer; see the note by the ceilings row). In 2 dB
+   *     steps, the VGA's own granularity, so every position on the slider is a total the hardware
+   *     can actually be set to.
+   *  ★ Tenths of a dB, like every other dB radio here — gainFromRaw divides by ten. */
+  if ((radio().driver || "") === "hackrf") {
+    const out = [];
+    for (let db = 0; db <= 102; db += 2) out.push(db * 10);
+    return out;
   }
   if (HW && Array.isArray(HW.gains) && HW.gains.length) return HW.gains;
   return R820T_GAINS;
