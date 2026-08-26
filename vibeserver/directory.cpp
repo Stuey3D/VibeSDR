@@ -591,7 +591,13 @@ void worker() {
     while (g_running) {
         Settings want;
         { std::lock_guard<std::mutex> lk(g_mtx); want = g_want; }
-        if (!want.listed || want.port <= 0 || want.name.size() < 2) break;
+        if (!want.listed || want.port <= 0 || want.name.size() < 2) {
+            // ★★★ THE SILENT EXIT. Three ways to be unpublishable and no way to tell them apart
+            //     from outside; a server simply never appeared and nobody could say why.
+            std::fprintf(stderr, "[directory] worker exiting: listed=%d port=%d nameLen=%zu\n",
+                         want.listed ? 1 : 0, want.port, want.name.size());
+            break;
+        }
 
         std::string url = want.publicUrl;
         const bool usingTunnel = url.empty();
@@ -627,7 +633,15 @@ void worker() {
             //    and the setup page reads statusJson() on every poll — holding it here would hang
             //    the page for as long as the directory was slow, which reads as the SERVER being
             //    stuck rather than the request.
-            publishOnce(want, url);
+            const bool ok = publishOnce(want, url);
+            // ★★ THE OUTCOME, EVERY TIME. "listed" and the reason are the two things an owner
+            //    actually needs, and until now neither left the process.
+            {
+                std::lock_guard<std::mutex> lk2(g_mtx);
+                std::fprintf(stderr, "[directory] publish %s url='%s' listed=%d addr='%s' err='%s'\n",
+                             ok ? "ok" : "FAILED", url.c_str(), g_listed ? 1 : 0,
+                             g_address.c_str(), g_error.c_str());
+            }
             std::lock_guard<std::mutex> lk(g_mtx);
             // ★ A renewal must never move the share window — only a deliberate change from the
             //   setup page carries a number, and it has been sent by now.
@@ -653,7 +667,14 @@ void worker() {
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
     }
-    g_thread = false;
+    // ★★★ RELEASE THE CLAIM. `apply()` starts a worker only if it can flip g_running false→true,
+    //     so a worker that exits while leaving it TRUE makes every subsequent apply() a no-op —
+    //     the listing is then dead for the life of the process and nothing says so. The exit paths
+    //     above (an unset port during startup, a name not yet chosen) are exactly the ordinary
+    //     early-startup states, so this is not a rare corner: it is the normal boot sequence.
+    g_running = false;
+    g_thread  = false;
+    std::fprintf(stderr, "[directory] worker stopped\n");
 }
 
 }  // namespace
@@ -668,8 +689,23 @@ void apply(const Settings& s) {
         std::lock_guard<std::mutex> lk(g_mtx);
         g_want = s;
     }
+    // ★★★ SAY WHAT WAS ASKED FOR. This whole subsystem was SILENT — not one log line — and
+    //     `statusJson()` (the thing the comment above claims the setup page polls) is called by
+    //     NOTHING in the tree, so a server that was refused by the directory, or never asked at
+    //     all, looked identical to one that was listed. Two nights were spent guessing at state
+    //     that the process knew all along and never said.
+    std::fprintf(stderr, "[directory] apply: listed=%d port=%d name='%s' publicUrl='%s'\n",
+                 s.listed ? 1 : 0, s.port, s.name.c_str(), s.publicUrl.c_str());
     if (!s.listed) { stop(); return; }
-    if (g_running.exchange(true)) return;      // already up; the worker will pick the new wishes up
+    if (g_running.exchange(true)) {
+        // ★★ AND WHETHER IT ACTUALLY STARTED ONE. A worker that exits leaves g_running TRUE, so
+        //    every later apply() returns here and the listing is dead for the life of the process
+        //    with nothing said. g_thread tells us which of the two this is.
+        std::fprintf(stderr, "[directory] apply: worker already claimed (thread alive=%d)\n",
+                     g_thread.load() ? 1 : 0);
+        return;
+    }
+    std::fprintf(stderr, "[directory] apply: starting worker\n");
     std::thread(worker).detach();
 }
 
