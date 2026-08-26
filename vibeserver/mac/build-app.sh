@@ -111,6 +111,13 @@ OPUSLIB=$(grep -m1 '^OPUS_LIB:'  "$BUILD/CMakeCache.txt" | cut -d= -f2)
 # plug-and-play with nothing for the user to install. Optional: a machine without it still
 # builds, and simply reports no HF+ devices.
 AHFLIB=$(grep -m1 '^AIRSPYHF_LIB:' "$BUILD/CMakeCache.txt" | cut -d= -f2)
+# ★★★ AND libhackrf — THE SECOND READER OF THE RADIO LIST. CMakeLists.txt links this into
+# vibeserver_core, but the Swift app is linked BY HAND right here, so a driver added there is not a
+# driver added here: the CLI `vibeserver` target linked fine while the .app failed with 14
+# undefined _hackrf_* symbols. That is the "one rule, two readers" fault that caused nearly every
+# HackRF bug on 2026-08-26, and this line is the sixth site of it. Any future driver needs adding
+# in BOTH places.
+HRFLIB=$(grep -m1 '^HACKRF_LIB:' "$BUILD/CMakeCache.txt" | cut -d= -f2)
 # ★ FORCE THE STATIC ARCHIVE for EVERY Homebrew lib, next to whatever find_library cached. A notarised
 # hardened-runtime app that links a Homebrew DYLIB crashes on launch for everyone: absent on machines
 # without Homebrew, and even on the dev box the hardened runtime rejects it for a Team-ID mismatch
@@ -123,6 +130,9 @@ _opusdir=$(dirname "$OPUSLIB"); [ -f "$_opusdir/libopus.a" ] && OPUSLIB="$_opusd
 if [ -n "$AHFLIB" ]; then
   _ahfdir=$(dirname "$AHFLIB"); [ -f "$_ahfdir/libairspyhf.a" ] && AHFLIB="$_ahfdir/libairspyhf.a"
 fi
+if [ -n "$HRFLIB" ]; then
+  _hrfdir=$(dirname "$HRFLIB"); [ -f "$_hrfdir/libhackrf.a" ] && HRFLIB="$_hrfdir/libhackrf.a"
+fi
 
 swiftc \
   -O -target arm64-apple-macos14.0 \
@@ -132,7 +142,7 @@ swiftc \
   "$MAC/VibeServerApp.swift" \
   "$MAC/EibiStations.swift" \
   "$MAC/FullMode.swift" \
-  $LIBS "$RTLSDR" "$USBLIB" "$OPUSLIB" ${AHFLIB:+"$AHFLIB"} \
+  $LIBS "$RTLSDR" "$USBLIB" "$OPUSLIB" ${AHFLIB:+"$AHFLIB"} ${HRFLIB:+"$HRFLIB"} \
   -lc++ \
   -framework IOKit -framework CoreFoundation -framework Security -framework AppKit -framework SwiftUI \
   -framework CoreLocation \
