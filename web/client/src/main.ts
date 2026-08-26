@@ -3085,7 +3085,19 @@ function updateStatus() {
   //    (audio arrived faster than it could be played) are opposite faults that sound identical,
   //    and they are what separated a starved sink from a stalled one. Available on hover when
   //    somebody is actually diagnosing, invisible when nobody is.
-  el.textContent = `${total.toFixed(0)} KB/s · ${fps} fps · ${rtt.toFixed(0)} ms${idle}`;
+  /* ★★★ THE BUFFER DEPTH, BECAUSE IT EXPLAINS THE ONE COMPLAINT NOTHING ELSE DOES. It is
+   *     adaptive — 150 ms to start, +60 ms per underrun, ceiling 400 — and `wf.setHoldMs` holds the
+   *     WATERFALL back by exactly this much so picture and sound stay together. So a link that has
+   *     driven it up does not merely delay the audio, it delays the whole display, and the receiver
+   *     feels sluggish to tune while sounding perfectly clean. That is "really laggy for tuning,
+   *     but no audio drops" (Stuart, 2026-08-26, on another owner's server).
+   *  ★★ IT WAS COMPUTED, USED, AND SHOWN TO NOBODY. The single number that distinguishes "this
+   *     link is bursty" from "this receiver is slow" was already in hand and unreadable, so the
+   *     question could only be argued rather than looked up.
+   *  ★ A depth is a statistic, not a fault — unlike the dry/skip counters above, which read as an
+   *    error report to a listener and are deliberately kept in the tooltip. */
+  const buf = audio ? ` · buf ${audio.jitterMs.toFixed(0).padStart(3, '\u2007')} ms` : '';
+  el.textContent = `${total.toFixed(0)} KB/s · ${fps} fps · ${rtt.toFixed(0)} ms${buf}${idle}`;
   el.title = `spectrum ${specKbps.toFixed(0)} KB/s · audio ${audioKbps.toFixed(0)} KB/s`
     + ` · asking for ${wantedFps()} fps`
     + (audio && (audio.underruns || audio.skips)
