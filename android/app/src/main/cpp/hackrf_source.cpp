@@ -35,12 +35,26 @@ void ensureInit() {
  *  is chosen for what the DSP can carry, not what the radio can emit. */
 const uint32_t kRates[] = { 2000000u, 2400000u, 4000000u, 5000000u, 8000000u, 10000000u };
 
+/* ★★★ HOW FAST THE DC ESTIMATE FOLLOWS. A leaky integrator per channel: dc += (x - dc) * ALPHA,
+ *     which is a one-pole high-pass at fs*ALPHA/2pi. At 1/4096 that is 78 Hz at 2 MSPS and 389 Hz
+ *     at 10 MSPS — narrow enough that it can only ever remove DC itself, never anything a listener
+ *     is tuned to, because the offset tuning already guarantees nobody is listening AT DC.
+ *  ★★ DELIBERATELY SLOW. A faster estimate tracks the signal instead of the offset and starts
+ *     eating real modulation at the centre of the span; the thing being removed here is LO leakage
+ *     and converter bias, which drift with temperature over seconds, not milliseconds. */
+constexpr float kDcAlpha = 1.0f / 4096.0f;
+
 struct CbCtx {
     HackRfSource::IqSink* sink   = nullptr;
     std::atomic<bool>*    paused = nullptr;
     std::atomic<double>*  lastRx = nullptr;
     std::vector<float>*   scratch = nullptr;
     std::mutex*           scratchMtx = nullptr;
+    /* ★ The running DC estimate, one per channel. It lives in the context rather than in a local
+     *   because it must survive between callbacks — a per-buffer estimate would be a mean, not a
+     *   tracker, and would change with the signal in the buffer. */
+    float*                dcI = nullptr;
+    float*                dcQ = nullptr;
 };
 
 }  // namespace
@@ -54,6 +68,8 @@ struct HackRfSource::Impl {
     std::atomic<double>  lastRx{0.0};
     std::vector<float>   scratch;
     std::mutex           scratchMtx;
+    // ★ Zeroed on every open() so a fresh session never inherits the last radio's bias.
+    float                dcI = 0.0f, dcQ = 0.0f;
     CbCtx                ctx;
 };
 
@@ -80,7 +96,35 @@ static int rxCallback(hackrf_transfer* t) {
     auto& out = *c->scratch;
     if ((int)out.size() < n * 2) out.resize((size_t)n * 2);
     const int8_t* in = reinterpret_cast<const int8_t*>(t->buffer);
-    for (int i = 0; i < n * 2; i++) out[(size_t)i] = (float)in[i] * (1.0f / 128.0f);
+    /* ★★★ AND TAKE THE DC OUT WHILE WE ARE ALREADY TOUCHING EVERY SAMPLE. A HackRF is direct
+     *     conversion with no DC servo, so LO leakage and converter bias arrive as a constant
+     *     offset — which is a carrier at 0 Hz, i.e. a permanent spike in the middle of the span.
+     *
+     * ★★★ WHY THIS AND NOT JUST THE OFFSET TUNING. hwOffsetHz() moves the spike 250 kHz away from
+     *     the LOGICAL CENTRE, which protects the channel only while the VFO sits near that centre.
+     *     It does not stay there: the shim lets the VFO roam +/-lim before it retunes the hardware,
+     *     and lim is `usableSpan/2 - margin - rxBw/2` — 700 kHz at 2 MSPS and 3.1 MHz at 8, because
+     *     edgeCutoffHz() is HF+-only and usableSpan is the whole rate here. So ordinary tuning
+     *     across the waterfall walks the VFO straight over a spike that is pinned at +250 kHz.
+     *     The offset fixes the centre case; this fixes the general one. Both are kept — the notch
+     *     has finite width and the offset guarantees nothing is ever listening at DC.
+     *
+     * ★★ ONE PASS, NO EXTRA COST WORTH NAMING: the conversion loop already reads and writes every
+     *    sample, and this adds two multiply-adds to each. Doing it here rather than in the shared
+     *    engine also means it cannot affect any other radio — the RSP and the HF+ have their own DC
+     *    handling and must not get a second one. */
+    float dcI = c->dcI ? *c->dcI : 0.0f;
+    float dcQ = c->dcQ ? *c->dcQ : 0.0f;
+    for (int i = 0; i < n; i++) {
+        const float xi = (float)in[i * 2]     * (1.0f / 128.0f);
+        const float xq = (float)in[i * 2 + 1] * (1.0f / 128.0f);
+        dcI += (xi - dcI) * kDcAlpha;
+        dcQ += (xq - dcQ) * kDcAlpha;
+        out[(size_t)(i * 2)]     = xi - dcI;
+        out[(size_t)(i * 2 + 1)] = xq - dcQ;
+    }
+    if (c->dcI) *c->dcI = dcI;
+    if (c->dcQ) *c->dcQ = dcQ;
     (*c->sink)(out.data(), n);
     return 0;   // non-zero asks libhackrf to STOP streaming
 }
@@ -162,6 +206,10 @@ bool HackRfSource::open(int index, double sampleRateHz, double centreHz,
     }
 
     open_ = true;
+    // ★ Start the DC tracker from nothing: a value learned before a retune, a rate change or a
+    //   hand-over to another program describes a different front-end state, and 4096 samples is
+    //   a couple of milliseconds to relearn it.
+    impl_->dcI = impl_->dcQ = 0.0f;
     if (!setSampleRate(sampleRateHz)) {
         // ★ Not fatal: the radio is open and a rate it did accept is better than no radio. The
         //   picker will show what it actually ended up at.
@@ -194,7 +242,8 @@ bool HackRfSource::start(std::string& err) {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     if (!impl_->dev) { err = "the HackRF is not open"; return false; }
     impl_->ctx = CbCtx{ &sink_, &impl_->paused, &impl_->lastRx,
-                        &impl_->scratch, &impl_->scratchMtx };
+                        &impl_->scratch, &impl_->scratchMtx,
+                        &impl_->dcI, &impl_->dcQ };
     const int rc = hackrf_start_rx(impl_->dev, rxCallback, &impl_->ctx);
     if (rc != HACKRF_SUCCESS) { err = "the HackRF refused to start receiving"; return false; }
     impl_->lastRx.store(nowSecsMono(), std::memory_order_relaxed);
