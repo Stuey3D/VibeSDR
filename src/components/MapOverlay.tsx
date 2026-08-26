@@ -311,7 +311,12 @@ function gridLL(g){
 }
 var CABBR=${JSON.stringify(CABBR)};
 function abbr(c){if(!c)return'';var s=String(c).trim();if(CABBR[s])return CABBR[s];return s.length>10?s.substring(0,9)+'\\u2026':s;}
-var map=L.map('lmap',{zoomControl:false,attributionControl:true,fadeAnimation:true,zoomAnimation:true,markerZoomAnimation:true})
+// preferCanvas: the SPOT layer is circleMarkers, one SVG node each, all repositioned on every
+// pan frame — and unlike the browser this WebView is on the phone doing the viewing, which is
+// the device least able to afford it. Canvas draws them into one element for the same picture.
+// ★ It changes VECTOR layers only: the aircraft and ground-station divIcons stay DOM, which is
+//   what they must be — they carry the CSS glide and pulse animations.
+var map=L.map('lmap',{zoomControl:false,attributionControl:true,fadeAnimation:true,zoomAnimation:true,markerZoomAnimation:true,preferCanvas:true})
   .setView([30,0],2);
 L.control.zoom({position:'bottomright'}).addTo(map);
 // keepBuffer holds a wider skirt of tiles so an ordinary drag never reaches bare canvas;

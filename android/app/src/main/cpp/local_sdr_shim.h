@@ -605,7 +605,7 @@ public:
     void setDeemphasis(double tau);       // FM de-emphasis time constant (0=off, 50e-6, 75e-6)
     void setSquelch(bool on, float db);   // power-based audio squelch (dBFS)
     void setNR(bool on);                  // audio noise reduction on/off
-    void setNrStrength(float s);          // NR aggressiveness 0..1
+    void setNrStrength(float s);          // NR aggressiveness 0..1.4 (>1 = over-subtraction)
     void setNotch(bool on);               // automatic notch (adaptive line enhancer)
     // ★ Weak-signal processing: FM stereo high-blend + the audio high-cut, together. One switch,
     //   because they are one treatment — and a DXer A/B-ing a marginal catch wants BOTH out of the

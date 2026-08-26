@@ -7082,10 +7082,24 @@ let spots = ${JSON.stringify(pts)};
 const me = ${JSON.stringify(me)};
 const COL = ${JSON.stringify(BAND_COLOUR)};
 
-const map = L.map('m', { worldCopyJump: true })
+/* ★★★ preferCanvas IS AN AUDIO FIX, WHICH IS NOT WHERE ANYONE WOULD LOOK FOR ONE. This map is a
+ *     SAME-ORIGIN window.open, so it shares its main thread with the page that is playing the
+ *     radio — the audio WebSocket is received and Opus is decoded on that same event loop. Leaflet
+ *     defaults circleMarker to SVG, one DOM node per spot, every one of them repositioned on every
+ *     pan frame; on a busy band that is hundreds of nodes churning while the audio ring drains.
+ *     The playout worklet has its own thread and keeps pulling, so what the listener hears is not
+ *     the map stuttering, it is the AUDIO cutting in and out while they drag (Stuart, 2026-08-26,
+ *     zooming in on an odd spot location).
+ *  ★★ Canvas draws every spot into ONE element instead, which is the same picture for a fraction
+ *     of the main-thread work. It does not make the window stop sharing the thread — that would
+ *     mean moving audio receive and decode into a Worker — it makes the work small enough to fit
+ *     between frames.
+ *  ★ updateWhenZooming:false for the same reason and not for the tiles' sake: it stops Leaflet
+ *    issuing tile work mid-animation that it is only going to throw away. */
+const map = L.map('m', { worldCopyJump: true, preferCanvas: true })
   .setView(me ? [me.lat, me.lon] : [25, 5], me ? 4 : 3);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-  { attribution: '&copy; OpenStreetMap', maxZoom: 14 }).addTo(map);
+  { attribution: '&copy; OpenStreetMap', maxZoom: 14, updateWhenZooming: false }).addTo(map);
 
 function radius(snr) {
   const s = Math.max(-24, Math.min(12, snr));
@@ -7544,6 +7558,27 @@ function segment(id: string, attr: string, apply: (v: number) => void, prefKey?:
   pick(typeof saved === 'number' ? saved : Number(btns[0].dataset[attr]), false);
 }
 
+/** ★★★ THE SLIDER'S WHOLE TRAVEL SAT IN THE HALF OF THE RANGE THAT BARELY DOES ANYTHING, so it
+ *  behaved like an on/off switch: "not changing in sound from 5% - 100%" (Stuart, 2026-08-26).
+ *
+ *  AudioNR has TWO controls and they are not side by side. `gmin` — the residual-noise floor —
+ *  moves across strength 0..1, and it only decides how far bins that are ALREADY being suppressed
+ *  get pushed down (-14 dB … -60 dB), which is a subtle change once the noise is gone. The control
+ *  that alters how MUCH gets suppressed is the over-subtraction factor, and audio_nr.cpp guards it
+ *  with `max(0, strength - 1)` — so it does nothing at all until strength passes 1.0.
+ *
+ *  ★★ The engine says who it was built for, right beside that line: "Strength >1 (slider 16..20)".
+ *     It expects a TWENTY-STEP slider whose top quarter crosses into over-subtraction. This client
+ *     sends a percentage as `pct/100`, which tops out at exactly 1.0 — the boundary — so the entire
+ *     aggressive half was unreachable from the web client no matter where the slider was dragged.
+ *  ★ So map the percentage onto the range the DSP was actually written for, keeping the same shape:
+ *    0..80% covers the floor (0..1.0), and the last fifth crosses into over-subtraction (1.0..1.4,
+ *    where setStrength() clamps). Same wire field, same units, nothing else has to know. */
+function nrStrength(pct: number): number {
+  const p = Math.max(0, Math.min(100, pct));
+  return p <= 80 ? p / 80 : 1 + ((p - 80) / 20) * 0.4;
+}
+
 function buildMenu() {
   $('menuBtn').onclick   = () => togglePanel('menu');
   $('menuClose').onclick = () => $('menu').classList.remove('open');
@@ -7630,7 +7665,7 @@ function buildMenu() {
 
   slider('nr', 'nrVal',
     (v) => (v === 0 ? 'OFF' : `${v}%`),
-    (v) => spec!.setNr(v > 0, v / 100),
+    (v) => spec!.setNr(v > 0, nrStrength(v)),
     'nr');
 
   toggle('notch', (on) => spec!.setNotch(on), 'notch');
@@ -7812,7 +7847,7 @@ function pushSettingsToServer() {
   // "IS THE TAB MUTED?" warning comes straight back.
   const sql = num('squelch');
   if (sql !== undefined) applySquelch(sql, false);
-  const nr = num('nr');             if (nr !== undefined) spec.setNr(nr > 0, nr / 100);
+  const nr = num('nr');             if (nr !== undefined) spec.setNr(nr > 0, nrStrength(nr));
   const notch = bool('notch');      if (notch !== undefined) spec.setNotch(notch);
   const stereo = bool('stereo');    if (stereo !== undefined) spec.setStereo(stereo);
   const wsp = bool('wsp');          if (wsp !== undefined) spec.setWeakProc(wsp);

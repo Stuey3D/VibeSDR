@@ -7078,7 +7078,14 @@ struct LocalSdrShim::Impl {
                 me->nrOn.store(msg.find("\"on\":true") != std::string::npos);
                 double st;
                 if (jsonNum(msg, "strength", st)) {
-                    me->nrStrength = (float)std::max(0.0, std::min(1.0, st));
+                    /* ★★★ 1.4, NOT 1.0 — CLAMPING HERE IS WHAT MADE THE SLIDER AN ON/OFF SWITCH.
+                     *     AudioNR's over-subtraction is guarded by `max(0, strength - 1)`, so every
+                     *     value this let through left it switched off; only the residual floor moved,
+                     *     and that is a subtle change once the noise is already gone. A clamp one
+                     *     notch below where the effect begins is indistinguishable from not having
+                     *     built the effect. AudioNR::setStrength already clamps at 1.4 — its own
+                     *     limit — so this second, tighter clamp was pure loss. */
+                    me->nrStrength = (float)std::max(0.0, std::min(1.4, st));
                     std::lock_guard<std::mutex> lk(me->fxMtx);
                     if (me->nrEng) me->nrEng->setStrength(me->nrStrength);
                 }
@@ -7697,8 +7704,11 @@ struct LocalSdrShim::Impl {
         if (type == "nr") {
             if (!sharedGate("noise reduction")) return;
             LocalSdrShim::instance().setNR(msg.find("\"on\":true") != std::string::npos);
+            // ★ Same 1.4 ceiling as the per-listener path above, and for the same reason —
+            //   two copies of one clamp, so they must move together or the shared radio keeps
+            //   the bug the per-client path just lost.
             if (jsonNum(msg, "strength", v))
-                LocalSdrShim::instance().setNrStrength((float)std::max(0.0, std::min(1.0, v)));
+                LocalSdrShim::instance().setNrStrength((float)std::max(0.0, std::min(1.4, v)));
             return;
         }
         // ★★★ THE FOUR BROADCAST-FM TREATMENTS ARE PER LISTENER, and the premise that made them

@@ -816,7 +816,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       LocalHw?.setDeemphasis?.(deemph);
       LocalHw?.setStereoEnabled?.(stereo);
       LocalHw?.setSquelch?.(sql > -100, sql);
-      LocalHw?.setNrStrength?.(nrLvl / 15);
+      // ★ Same curve as onLocalNR — this is the RESTORE path, and a restore that disagrees with
+      //   the control puts the radio somewhere the slider never says it is.
+      LocalHw?.setNrStrength?.(nrLvl <= 12 ? nrLvl / 12 : 1 + ((nrLvl - 12) / 3) * 0.4);
       LocalHw?.setNR?.(nrLvl > 0);
       LocalHw?.setNotch?.(notch);
       if (rate !== 2_400_000) LocalHw?.setSampleRate?.(rate);
@@ -1071,9 +1073,24 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onLocalNR = useCallback((level: number) => {
     setHwNrLevel(level);
     const rc = hwClient();
-    // The server takes strength 0..1 and its own on/off, in one message.
-    if (rc) { rc.setNrEnabled?.(level > 0, level / 15); return; }
-    LocalHw?.setNrStrength?.(level / 15);
+    /* ★★★ THE SLIDER TOPPED OUT EXACTLY AT THE BOUNDARY, so its whole travel sat in the half of the
+     *     range that barely changes the sound — it behaved like an on/off switch (Stuart,
+     *     2026-08-26, on the web client's copy of the same mistake).
+     *  AudioNR has two controls and they are not side by side. Strength 0..1 moves `gmin`, the
+     *  residual-noise FLOOR, which only decides how far already-suppressed bins are pushed down.
+     *  What alters how MUCH is suppressed is over-subtraction, and audio_nr.cpp guards it with
+     *  `max(0, strength - 1)` — dead until strength passes 1.0. `level / 15` reaches 1.0 and stops
+     *  there, so the aggressive half was unreachable at every setting.
+     *  ★★ The comment that used to sit here said "the server takes strength 0..1", and that belief
+     *     is what capped it. setStrength() clamps at 1.4, and the engine's own note names the
+     *     shape it expects: "Strength >1 (slider 16..20)" — a slider whose TOP FIFTH crosses over.
+     *  ★ Same curve as the web client's nrStrength(), so one dial does not mean two things: the
+     *    first four fifths work the floor, the last fifth over-subtracts.
+     *  ★ BOTH PATHS. The on-device dongle runs this very same AudioNR, so capping it there was the
+     *    same bug wearing local clothes. */
+    const strength = level <= 12 ? level / 12 : 1 + ((level - 12) / 3) * 0.4;
+    if (rc) { rc.setNrEnabled?.(level > 0, strength); return; }
+    LocalHw?.setNrStrength?.(strength);
     LocalHw?.setNR?.(level > 0);
   }, [LocalHw, hwClient]);
   const onLocalNotch = useCallback((on: boolean) => {
