@@ -2633,6 +2633,11 @@ export default function SDRScreen({ route, navigation }: Props) {
    *   server opens the radio the same way and restores NO saved preference into the amp or the
    *   bias-T, because safe on one aerial is not safe on the next. Do not "improve" this by
    *   persisting them. */
+  /* ★★★ THE OWNER'S GAIN CEILING, tenths of a dB, -1 = none. Frequency-dependent, so it moves on
+   *   a retune. Held here rather than in RadioCaps because it is LIVE STATE, not a property of
+   *   the hardware. Feeds every gain control in the panel — the dongle's slider as well as the
+   *   HackRF's two stages, because a client that offers gain the server clamps is lying. */
+  const [hwGainCap,  setHwGainCap]  = useState(-1);
   const [hrfAmp,     setHrfAmp]     = useState(false);
   const [hrfLna,     setHrfLna]     = useState(0);
   const [hrfVga,     setHrfVga]     = useState(0);
@@ -3366,6 +3371,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onHwLockedRate: (r: number) => { if (!destroyed.current) setHwLockedRate(r); },
       onHwAgcLocked: (v: boolean) => { if (!destroyed.current) setHwAgcLocked(v); },
+      onHwGainCap: (v: number) => { if (!destroyed.current) setHwGainCap(v); },
       onHwTunerBw: (hz: number, auto: boolean) => {
         if (destroyed.current) return;
         setHwHasTunerBw(true); setHwTunerBw(hz); setHwTunerBwAuto(auto);
@@ -8122,6 +8128,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onRspRfNotch={(v) => { setRspRfNotch(v); (client.current as any)?.rspControl?.({ rfNotch: v }); }}
           rspDabNotch={rspDabNotch}
           onRspDabNotch={(v) => { setRspDabNotch(v); (client.current as any)?.rspControl?.({ dabNotch: v }); }}
+          gainCapTenthDb={hwGainCap}
           hrfAmp={hrfAmp}
           onHrfAmp={(v) => { setHrfAmp(v); (client.current as any)?.hackrfControl?.({ amp: v }); }}
           hrfLna={hrfLna}

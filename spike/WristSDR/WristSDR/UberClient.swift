@@ -197,7 +197,10 @@ final class UberClient: ObservableObject {
     if let auto = s["auto"] as? Bool, auto {
       if !gainAuto { setGainAuto(true) }
     } else if let g = s["gain"] as? Double,
-              let step = offeredGains.min(by: { abs(Double($0) - g) < abs(Double($1) - g) }) {
+              let step = permittedGains.min(by: { abs(Double($0) - g) < abs(Double($1) - g) }) {
+      // ★ permittedGains: a SAVED setting is exactly how a value from before the owner tightened
+      //   the limit gets pushed back at a capped server — restored, refused, and then shown as
+      //   though it took.
       setGainValue(Double(step))   // snap to a step this tuner actually has
     }
   }
@@ -208,11 +211,38 @@ final class UberClient: ObservableObject {
   /// ceiling). The adaptive-quality loop clamps to `maxFftRate`.
   @Published var offeredRates: [Int] = []
   @Published var offeredGains: [Int] = []      // tuner gain steps (tenths of dB) from hwinfo
+  /// ★★★ THE GAINS THE SERVER WILL ACTUALLY ACCEPT — offeredGains minus everything above the
+  /// owner's ceiling. This was wrong before the HackRF existed: the crown ran the whole tuner
+  /// table while the server clamped every step above the limit, so the cell read the hardware's
+  /// maximum and the radio sat at the cap. Anything that drives a gain control must use THIS,
+  /// not offeredGains.
+  /// ★ Never returns empty while there are gains: a very low cap must leave a working control
+  /// rather than a dead one, and the lowest step is always permitted.
+  var permittedGains: [Int] {
+    guard gainCap >= 0, !offeredGains.isEmpty else { return offeredGains }
+    let ok = offeredGains.filter { $0 <= gainCap }
+    return ok.isEmpty ? [offeredGains[0]] : ok
+  }
   @Published var lockedRate = 0                // >0 = the host pinned the capture rate; hide the picker
   /// ★ The owner has FORCED the AGC on: a listener may not set a gain at all. The server has
   ///   always sent this and the web client has always read it — Jr and the phone never did, so
   ///   both offered a gain the server refuses. Same rule as `lockedRate` above.
   @Published var agcLocked = false
+  /// ★★★ THE OWNER'S GAIN CEILING for the frequency in use, TENTHS of a dB, -1 = none.
+  /// ★★★ The server clamps whatever arrives (the hackrf_control and gain handlers), so this is
+  /// not the enforcement — it is what stops the WATCH LYING. Without it the crown runs to the
+  /// hardware maximum, the cell reads 40 dB and the radio is at 20. Stuart: "cant have a client
+  /// saying they are max gain when the server is limiting them." Same contract as agcLocked.
+  /// ★ Frequency-dependent, so it moves on a retune — live state, not a property of the radio.
+  @Published var gainCap = -1
+  /// The ceiling in WHOLE dB, floored — never rounded up, which would offer a decibel the
+  /// server then refuses. -1 = no limit.
+  var gainCapDb: Int { gainCap >= 0 ? gainCap / 10 : -1 }
+  /// ★★★ ONE SHARED BUDGET. Both HackRF stages sit AFTER the mixer, so LNA + VGA together is what
+  /// drives the 8-bit converter; capping them separately would permit twice the owner's limit.
+  /// Each ceiling is the cap minus what the other stage is using.
+  var hrfLnaMax: Int { gainCapDb < 0 ? 40 : max(0, min(40, gainCapDb - hrfVga)) }
+  var hrfVgaMax: Int { gainCapDb < 0 ? 62 : max(0, min(62, gainCapDb - hrfLna)) }
   // ── Owner policy: session limit + admin lock ────────────────────────────────
   /// ★ The server ENFORCES both of these; the client's job is to SAY SO. A limit
   /// nobody is told about reads as a crash, and controls that are locked but drawn
@@ -377,6 +407,9 @@ final class UberClient: ObservableObject {
     if let r = j["rates"] as? [Int] { offeredRates = r }
     lockedRate = (j["lockedRate"] as? NSNumber)?.intValue ?? 0
     agcLocked  = (j["agcLocked"] as? NSNumber)?.boolValue ?? ((j["agcLocked"] as? Bool) ?? false)
+    // ★ -1 when absent, never 0 — an older server that never sends it must read as "no limit",
+    //   and 0 would read as "no gain allowed at all".
+    gainCap    = (j["gainCap"] as? NSNumber)?.intValue ?? -1
     maxFftRate = (j["maxFftRate"] as? NSNumber)?.intValue ?? 0   // owner ceiling (needs a Moto update to appear)
     restoreVibeHw()          // the server has now declared what it offers — put the radio back
     pushAllRadioSettings()   // …including the per-radio gain path, see below
@@ -385,7 +418,17 @@ final class UberClient: ObservableObject {
   /// All hardware controls ride the SPECTRUM WS as JSON (matches UberSDRClient._sendCtl / the shim).
   /// Guarded to VibeServer — a public UberSDR server would reject them.
   func setGainAuto(_ auto: Bool) { guard isVibe else { return }; gainAuto = auto; specSock.send(json: ["type": "gain", "auto": auto]); saveVibeHw() }
-  func setGainValue(_ tenthDb: Double) { guard isVibe else { return }; gainAuto = false; gainValue = tenthDb; specSock.send(json: ["type": "gain", "value": Int(tenthDb)]); saveVibeHw() }
+  /// ★★ CLAMPED TO THE OWNER'S CEILING before it is mirrored. The server clamps anyway — this
+  /// stops `gainValue` from holding a number the radio never reached, which is what made the
+  /// readout claim maximum gain on a limited receiver.
+  func setGainValue(_ tenthDb: Double) {
+    guard isVibe else { return }
+    gainAuto = false
+    let v = gainCap >= 0 ? min(tenthDb, Double(gainCap)) : tenthDb
+    gainValue = v
+    specSock.send(json: ["type": "gain", "value": Int(v)])
+    saveVibeHw()
+  }
   func setBiasT(_ on: Bool) { guard isVibe else { return }; biasT = on; specSock.send(json: ["type": "biasT", "on": on]); saveVibeHw() }
 
   // ── ★★★ THE SHARED DIAL, AND THE CANNED CHAT THAT GOES WITH IT ──────────────────
@@ -469,14 +512,17 @@ final class UberClient: ObservableObject {
   /// ★★★ THE STAGES ARE IN dB, THE HARDWARE'S OWN STEPS: LNA 0-40 in 8s, VGA 0-62 in 2s. The
   /// server rounds DOWN anything off-step, because rounding up is how you clip a radio with no
   /// headroom to spare — so the steps here match the hardware rather than being a scale we chose.
+  /// ★★ CLAMPED TO THE SHARED BUDGET HERE TOO, not only in the view. The server clamps anyway,
+  /// but if the client sent a value it then held, our mirrored state would disagree with the
+  /// radio and the cell would show gain that is not there — the exact lie this is here to stop.
   func setHrfLna(_ db: Int) {
     radioDirty = true
-    hrfLna = max(0, min(40, (db / 8) * 8))
+    hrfLna = max(0, min(hrfLnaMax, (db / 8) * 8))
     hrfSend(["lna": hrfLna])
   }
   func setHrfVga(_ db: Int) {
     radioDirty = true
-    hrfVga = max(0, min(62, (db / 2) * 2))
+    hrfVga = max(0, min(hrfVgaMax, (db / 2) * 2))
     hrfSend(["vga": hrfVga])
   }
   /// ★★★ OWNER-ONLY, AND THE SERVER IS WHAT ENFORCES IT (adminGate). The RF amp is the U14

@@ -239,6 +239,14 @@ export interface SDRCallbacks {
   /** ★ The owner has FORCED the AGC on: a listener may not set a gain at all. The web client has
    *  always read this; the app never did, which is why its panel offered a gain the server refuses. */
   onHwAgcLocked?: (locked: boolean) => void;
+  /** ★★★ THE OWNER'S GAIN CEILING FOR THE FREQUENCY WE ARE ON, in TENTHS of a dB, or -1 for none.
+   *  ★★★ THE SERVER ENFORCES IT AND THE CLIENT MUST SHOW IT. A panel that offers gain the server
+   *  will silently clamp is a panel that LIES — the listener drags to maximum, the readout says
+   *  40 dB and the radio is at 20. Stuart has seen exactly that. This is the same contract
+   *  lockedRate and agcLocked already have: the server enforces, the client must not offer.
+   *  ★ Frequency-dependent (per-band rules), so it can CHANGE ON A RETUNE — treat it as live
+   *  state, not as a property of the radio. */
+  onHwGainCap?: (capTenthDb: number) => void;
   /** ★ The tuner's IF filter: the width in Hz (0 = wide open) and whether it is FOLLOWING THE
    *  ZOOM. The web client has had this picker since the filter existed; the app never had one. */
   onHwTunerBw?: (hz: number, auto: boolean) => void;
@@ -2081,6 +2089,10 @@ export class UberSDRClient {
       // ★ Same rule as lockedRate above: the server ENFORCES this, so a client that cannot see it
       //   offers a control whose every use is refused.
       this.callbacks.onHwAgcLocked?.(msg.agcLocked === true);
+      // ★ -1 when absent, never 0 — an older server that does not send the field must read as
+      //   "no limit", and 0 would read as "no gain allowed at all".
+      this.callbacks.onHwGainCap?.(
+        typeof msg.gainCap === 'number' ? (msg.gainCap as number) : -1);
       // ★ Only when the server actually states it — an older server has no such filter and must
       //   not be read as "wide open", which is a claim about hardware we have not been told about.
       if (msg.tunerBw !== undefined)

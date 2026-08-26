@@ -908,10 +908,18 @@ struct HardwareSheet: View {
         if radio.radioDriver == "hackrf" {
           // ± rather than the crown: both stages step in the HARDWARE'S own increments (LNA 8 dB,
           // VGA 2 dB), so there are few enough positions that tapping lands exactly on one.
-          stepCell(title: "LNA GAIN", value: "\(radio.hrfLna) dB",
+          // ★★★ SHOW THE CEILING WHEN THERE IS ONE. A cell that will not step further is
+          //     indistinguishable from a broken one, and the two stages moving each OTHER's
+          //     ceilings is genuinely surprising until you know it is one shared budget. Same
+          //     value/max form the RSP's LNA cell uses.
+          stepCell(title: "LNA GAIN",
+                   value: radio.gainCapDb < 0 ? "\(radio.hrfLna) dB"
+                                              : "\(radio.hrfLna)/\(radio.hrfLnaMax) dB",
                    dec: { radio.setHrfLna(radio.hrfLna - 8) },
                    inc: { radio.setHrfLna(radio.hrfLna + 8) })
-          stepCell(title: "VGA GAIN", value: "\(radio.hrfVga) dB",
+          stepCell(title: "VGA GAIN",
+                   value: radio.gainCapDb < 0 ? "\(radio.hrfVga) dB"
+                                              : "\(radio.hrfVga)/\(radio.hrfVgaMax) dB",
                    dec: { radio.setHrfVga(radio.hrfVga - 2) },
                    inc: { radio.setHrfVga(radio.hrfVga + 2) })
           if !ownerLocked {
@@ -1069,8 +1077,10 @@ struct HardwareSheet: View {
         radio.setAhfAtt(radio.ahfAtt + delta)
         return
       }
-      guard gainArmed, !radio.gainAuto, !radio.offeredGains.isEmpty else { return }
-      let gains = radio.offeredGains
+      // ★ permittedGains, NOT offeredGains — the owner's ceiling is part of what this radio will
+      //   accept, and a crown that turns past it moves a number the server then holds back.
+      guard gainArmed, !radio.gainAuto, !radio.permittedGains.isEmpty else { return }
+      let gains = radio.permittedGains
       let cur = gains.firstIndex(where: { abs(radio.gainValue - Double($0)) < 0.5 }) ?? gains.count / 2
       let ni = min(gains.count - 1, max(0, cur + delta))
       radio.setGainValue(Double(gains[ni]))

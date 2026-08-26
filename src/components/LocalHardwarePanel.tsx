@@ -128,6 +128,15 @@ export interface LocalHardwarePanelProps {
    *  and it is why this radio cannot reuse the dongle's GainSlider (which offers exactly that).
    *  ★★★ amp and bias-T are OWNER-ONLY. The server refuses them too (adminGate), so `locked`
    *  here makes the lock visible rather than being the only thing standing in the way. */
+  /** ★★★ THE OWNER'S GAIN CEILING for the frequency in use, TENTHS of a dB, -1 = none.
+   *  ★★★ THE SERVER ENFORCES IT ANYWAY — see the hackrf_control and gain handlers, which clamp
+   *  whatever arrives, so a hand-rolled client cannot get past it. This is here so the PANEL does
+   *  not lie: without it a listener drags to maximum, the readout says 40 dB and the radio is at
+   *  20. Stuart: "cant have a client saying they are max gain when the server is limiting them
+   *  which I have seen before." Same contract as lockedRate and agcLocked.
+   *  ★ It is frequency-dependent, so it can change on a RETUNE — it is live state, not a
+   *  property of the radio, which is why it is not in RadioCaps. */
+  gainCapTenthDb?: number;
   hrfAmp?: boolean;      onHrfAmp?: (on: boolean) => void;
   hrfLna?: number;       onHrfLna?: (db: number) => void;
   hrfVga?: number;       onHrfVga?: (db: number) => void;
@@ -174,6 +183,29 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   const isAhf = p.radio?.driver === 'airspyhf';
   const isRsp = p.radio?.driver === 'sdrplay';
   const isHrf = p.radio?.driver === 'hackrf';
+  /* ★★★ THE CEILING, IN WHOLE dB, or -1 for none. The wire carries tenths (the dongle's spelling,
+   *   which every radio's limit reuses); the HackRF's stages are whole dB, so it is floored —
+   *   NEVER rounded, because rounding up would offer a decibel the server then refuses. */
+  const capT = p.gainCapTenthDb ?? -1;
+  const capDb = capT >= 0 ? Math.floor(capT / 10) : -1;
+  /* ★★★ THE CAP IS ON THE TOTAL, SO THE TWO STAGES SHARE ONE BUDGET — each one's ceiling is the
+   *   cap MINUS what the other is using. Both sit AFTER the mixer (the only pre-mixer stage is the
+   *   amp, which is owner-only), so LNA + VGA together is what drives the 8-bit converter;
+   *   capping them separately would permit twice what the owner wrote. Mirrors applyHrfGainCap()
+   *   in the web client and the clamp in the server's hackrf_control handler — all three must
+   *   agree or the panel misdescribes the radio. */
+  const hrfLnaNow = p.hrfLna ?? 0, hrfVgaNow = p.hrfVga ?? 0;
+  const hrfLnaMax = capDb < 0 ? 40 : Math.min(40, Math.max(0, capDb - hrfVgaNow));
+  const hrfVgaMax = capDb < 0 ? 62 : Math.min(62, Math.max(0, capDb - hrfLnaNow));
+  /* ★★★ AND THE DONGLE'S SLIDER TOO — this was wrong before the HackRF existed. The gain LIST
+   *   came straight from the radio with the owner's ceiling never applied, so the slider ran to
+   *   the hardware's maximum while the server clamped every value above the limit. Drop the
+   *   entries the server would refuse rather than let the readout claim them. ★ Keep at least
+   *   one, so a very low cap leaves a working control rather than an empty slider. */
+  const cappedGains = capT >= 0 && p.gains.length
+    ? (p.gains.filter((g) => g <= capT).length ? p.gains.filter((g) => g <= capT)
+                                               : [p.gains[0]])
+    : p.gains;
   // ★ Locked = the server has a password and this session has not cleared it.
   const locked = !!p.adminSet && !p.adminOk;
   /* ★★★ WHAT THIS LISTENER CAN ACTUALLY CHANGE — and the panel now shows ONLY that.
@@ -527,13 +559,13 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               <View style={styles.sliderRow}>
                 <Text style={styles.sliderEnd}>0</Text>
                 <Slider style={{ flex: 1, height: 40 }}
-                  minimumValue={0} maximumValue={40} step={8}
-                  value={p.hrfLna ?? 0}
-                  onValueChange={(v) => p.onHrfLna?.(Math.round(v))}
+                  minimumValue={0} maximumValue={Math.max(8, hrfLnaMax)} step={8}
+                  value={Math.min(hrfLnaNow, hrfLnaMax)}
+                  onValueChange={(v) => p.onHrfLna?.(Math.min(hrfLnaMax, Math.round(v)))}
                   minimumTrackTintColor={C.abtn} maximumTrackTintColor="#444" thumbTintColor={C.gold} />
-                <Text style={styles.sliderEnd}>40</Text>
+                <Text style={styles.sliderEnd}>{hrfLnaMax}</Text>
               </View>
-              <Text style={styles.stepVal}>{p.hrfLna ?? 0} dB</Text>
+              <Text style={styles.stepVal}>{Math.min(hrfLnaNow, hrfLnaMax)} dB</Text>
               <Text style={styles.note}>
                 The front-end stage. Raise this BEFORE the VGA — gain taken here costs the least
                 noise. Back it off if you see images or the audio breaks up on peaks.
@@ -544,17 +576,27 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               <View style={styles.sliderRow}>
                 <Text style={styles.sliderEnd}>0</Text>
                 <Slider style={{ flex: 1, height: 40 }}
-                  minimumValue={0} maximumValue={62} step={2}
-                  value={p.hrfVga ?? 0}
-                  onValueChange={(v) => p.onHrfVga?.(Math.round(v))}
+                  minimumValue={0} maximumValue={Math.max(2, hrfVgaMax)} step={2}
+                  value={Math.min(hrfVgaNow, hrfVgaMax)}
+                  onValueChange={(v) => p.onHrfVga?.(Math.min(hrfVgaMax, Math.round(v)))}
                   minimumTrackTintColor={C.abtn} maximumTrackTintColor="#444" thumbTintColor={C.gold} />
-                <Text style={styles.sliderEnd}>62</Text>
+                <Text style={styles.sliderEnd}>{hrfVgaMax}</Text>
               </View>
-              <Text style={styles.stepVal}>{p.hrfVga ?? 0} dB</Text>
+              <Text style={styles.stepVal}>{Math.min(hrfVgaNow, hrfVgaMax)} dB</Text>
               <Text style={styles.note}>
                 The baseband stage, after the mixer — it lifts noise along with signal. Use it to
                 top up once the LNA is set, not as the main control.
               </Text>
+              {/* ★ SAY WHY IT STOPS THERE. A slider that simply will not go further is
+                  indistinguishable from a broken one, and the two stages moving each other's
+                  ceilings is genuinely surprising until you know it is one shared budget. */}
+              {capDb >= 0 && (
+                <Text style={styles.note}>
+                  This receiver's owner has limited the total gain to {capDb} dB, so the two
+                  stages share one budget — raising one lowers what the other can reach. You are
+                  using {Math.min(hrfLnaNow, hrfLnaMax) + Math.min(hrfVgaNow, hrfVgaMax)} dB of it.
+                </Text>
+              )}
 
               {/* ★ Bias-T, owner-only for the reason it is everywhere else: feeding voltage into
                   somebody else's feedline is not a listener's decision. */}
@@ -573,7 +615,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
             <>
               <Text style={styles.section}>GAIN</Text>
               {/* ★ Over RTL-TCP "auto" is the dongle's own broken AGC — see GainSlider.vibeAgc. */}
-              <GainSlider gains={p.gains} gainTenthDb={p.gainTenthDb} auto={p.autoGain}
+              <GainSlider gains={cappedGains} gainTenthDb={p.gainTenthDb} auto={p.autoGain}
                           onAuto={p.onAuto} onGain={p.onGain} vibeAgc={!p.isTcp} />
             </>
           ))}
