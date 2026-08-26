@@ -52,4 +52,10 @@
     <!-- Airspy HF+ (Discovery / Dual Port). One VID/PID for the whole family — the models
          are told apart by their serial, not by USB id. -->
     <usb-device vendor-id="1003" product-id="32780" />  <!-- 0x03eb:0x800c -->
+
+    <!-- HackRF One — EXPERIMENTAL. Only the One: the Jawbreaker (0x604b) and rad1o (0xcc15)
+         prototypes have their own ids and are deliberately NOT listed, because the driver has
+         never been tested against them and offering the app for a device it then refuses is
+         worse than not offering at all. Mirrors VibeLocalSdrModule.HACKRF_VID/PID. -->
+    <usb-device vendor-id="7504" product-id="24713" />  <!-- 0x1d50:0x6089 -->
 </resources>

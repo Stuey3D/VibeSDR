@@ -1,4 +1,4 @@
-// HackRF One capture source for VibeServer — EXPERIMENTAL, Linux + macOS (not Android).
+// HackRF One capture source for VibeServer — EXPERIMENTAL. Linux, macOS and Android.
 //
 // ★★★ NOBODY HERE HAS ONE. This driver was written against libhackrf's API and the published
 // hardware description, and has never been run against a radio by its author. Exactly one person
@@ -62,6 +62,10 @@ public:
     static bool tuneRangeContains(double hz);
 
     bool open(int index, double sampleRateHz, double centreHz, int gainTenthDb, std::string& err);
+    /** ★ Open from a USB descriptor Android already opened. The ONLY way in on Android, where
+     *  enumeration is forbidden and open() above has no device list to index. libusb takes
+     *  ownership of the fd on success — the caller must NOT close it. */
+    bool openFd(int fd, double sampleRateHz, double centreHz, int gainTenthDb, std::string& err);
     void close();
     bool isOpen() const { return open_; }
 
@@ -116,6 +120,9 @@ public:
     void setPaused(bool paused);
 
 private:
+    /** Everything after the handle exists — shared by open() and openFd(). */
+    bool finishOpen(double sampleRateHz, double centreHz, int gainTenthDb, std::string& err);
+
     struct Impl;
     Impl*   impl_ = nullptr;
     IqSink  sink_;

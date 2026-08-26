@@ -50,6 +50,23 @@ const RATE_OPTIONS_RTL = [
   { label: '1.2 MHz',         value: 1_200_000 },
   { label: '960 kHz (light)', value: 960_000 },
 ];
+// ★★★ HackRF One — EXPERIMENTAL, and the ONLY radio here whose FLOOR is above the dongle
+// menu's CEILING. A HackRF cannot go below 2 MSPS, so the RTL list (2.4 / 1.2 / 960 kHz) would
+// have offered it two impossible options out of three and the shim would have snapped them
+// silently upward — the 2026-07-27 Airspy fault exactly, in reverse and quieter, because the
+// TOP entry happens to be legal so the menu looks like it works.
+// ★★ These mirror kRates[] in cpp/hackrf_source.cpp. That list is authoritative; this one only
+// decides which menu to draw. 10 MS/s is offered but flagged — it is far more than the phone's
+// DSP can carry, and the server-side comment says the ceiling is what the DSP can plausibly
+// process, not what the radio can emit.
+const RATE_OPTIONS_HRF = [
+  { label: 'Client-controlled', value: 0 },
+  { label: '2 MS/s (lightest)', value: 2_000_000 },
+  { label: '2.4 MS/s',          value: 2_400_000 },
+  { label: '4 MS/s',            value: 4_000_000 },
+  { label: '5 MS/s',            value: 5_000_000 },
+  { label: '8 MS/s (heavy)',    value: 8_000_000 },
+];
 // Airspy HF+ Discovery / Dual Port. ★ The radio's own list still wins once it is running —
 // this is which menu to draw, not a claim about the hardware.
 const RATE_OPTIONS_AHF = [
@@ -232,7 +249,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   // ★ Which radio is attached, so the menus match it. VID/PID only — see getConnectedRadio.
   const [radio, setRadio] = useState<{ driver: string; model: string } | null>(null);
   useEffect(() => { void getConnectedRadio().then(setRadio); }, []);
-  const rateOptionsAll = radio?.driver === 'airspyhf' ? RATE_OPTIONS_AHF : RATE_OPTIONS_RTL;
+  // ★ THREE RADIOS, THREE MENUS — not a two-way choice with a default any more.
+  const rateOptionsAll = radio?.driver === 'airspyhf' ? RATE_OPTIONS_AHF
+                       : radio?.driver === 'hackrf'   ? RATE_OPTIONS_HRF
+                       : RATE_OPTIONS_RTL;
   // ★★★ "CLIENT-CONTROLLED" CANNOT EXIST IN A LOCKED RANGE. The whole point of a pinned window is
   //     that the SERVER decides what is captured and everybody pans inside it — a listener who
   //     could re-rate the radio would move the window out from under every other listener. It was
@@ -268,7 +288,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const isAhf = radio?.driver === 'airspyhf';
   const hasHwSetup = !isAhf;
   // The rate ceiling to quote in prose, so the hint cannot drift from the list above it.
-  const topRateLabel = radio?.driver === 'airspyhf' ? '912 kHz' : '2.4 MHz';
+  const topRateLabel = radio?.driver === 'airspyhf' ? '912 kHz'
+                     : radio?.driver === 'hackrf'   ? '8 MS/s'
+                     : '2.4 MHz';
 
   // ★★★ THE ORDER AN OWNER SETS A LOCKED RECEIVER IN, which is not the order the page grew in.
   //     A pinned window is defined by its CENTRE and its WIDTH together — the centre says where

@@ -188,6 +188,8 @@ const CREDITS: { name: string; detail: string }[] = [
     detail: 'Compression used inside the bundled DSP core.' },
   { name: 'libairspyhf — Airspy (BSD-3)',
     detail: 'The Airspy HF+ Discovery driver. BSD-licensed and shipping as a static library, so the radio works the moment it is plugged in with nothing to install.' },
+  { name: 'libhackrf — Great Scott Gadgets (GPL-2.0-or-later)',
+    detail: 'The HackRF One driver, for the experimental HackRF support in VibeServer. Bundled as a patched copy: upstream has no way to open a radio from a USB file descriptor, which is the only way an Android app is allowed to open one at all. VibeSDR is GPL-3, which those terms permit.' },
   { name: 'SDRplay — SDRplay Ltd',
     detail: 'The RSP API used by VibeServer on macOS. Its headers only — the closed-source library is never bundled, and is loaded at runtime if you have installed it. No SDRplay software, no SDRplay support, and nothing breaks.' },
   { name: 'libusb',

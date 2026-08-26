@@ -53,8 +53,18 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     private fun isAirspyHf(dev: UsbDevice): Boolean =
         dev.vendorId == AIRSPYHF_VID && dev.productId == AIRSPYHF_PID
 
+    /** ★ A HackRF One — EXPERIMENTAL. Only the One: the Jawbreaker and rad1o prototypes have
+     *  their own USB ids and are deliberately NOT claimed, because nothing here has been tested
+     *  against them and claiming a device we then mishandle is worse than not offering.
+     *  ★★ THIS IS THE THIRD OF FOUR COPIES of the same fact — the others are device_filter.xml,
+     *  the dispatch in local_sdr_shim.cpp's start(), and describe()'s `kind` below. They must
+     *  agree or the app is offered for a device it then refuses. */
+    private fun isHackRf(dev: UsbDevice): Boolean =
+        dev.vendorId == HACKRF_VID && dev.productId == HACKRF_PID
+
     /** Any radio we can open directly over USB. */
-    private fun isSupportedRadio(dev: UsbDevice): Boolean = isRtlSdr(dev) || isAirspyHf(dev)
+    private fun isSupportedRadio(dev: UsbDevice): Boolean =
+        isRtlSdr(dev) || isAirspyHf(dev) || isHackRf(dev)
 
     private fun describe(dev: UsbDevice, hasPermission: Boolean): WritableMap {
         val m = Arguments.createMap()
@@ -74,7 +84,16 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         //   this puts the same two facts on the LISTING, where the UI decides what to call it
         //   before anything is opened. Same family as [[else_means_dongle_trap]]: with two radios
         //   supported, "it is a device we know" no longer implies "it is a dongle".
-        m.putString("kind", if (isAirspyHf(dev)) "airspyhf" else "rtl")
+        /* ★★★ A THREE-WAY FACT, NOT A TWO-WAY ONE. This was `if (isAirspyHf) "airspyhf" else
+         * "rtl"`, which does not fail — it silently calls a HackRF a dongle, and everything
+         * downstream that switches on `kind` then draws a dongle's gain list for a radio that
+         * has three stages and no AGC. Adding a driver means revisiting every else-branch that
+         * assumed there were only two. */
+        m.putString("kind", when {
+            isAirspyHf(dev) -> "airspyhf"
+            isHackRf(dev)   -> "hackrf"
+            else            -> "rtl"
+        })
         m.putString("label", radioModelName(dev))
         m.putBoolean("hasPermission", hasPermission)
         return m
@@ -431,7 +450,11 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     private fun radioModelName(dev: android.hardware.usb.UsbDevice): String {
         val product = (dev.productName ?: "").trim()
         val maker = (dev.manufacturerName ?: "").trim()
-        val fallback = if (isAirspyHf(dev)) "Airspy HF+" else "RTL-SDR"
+        val fallback = when {
+            isAirspyHf(dev) -> "Airspy HF+"
+            isHackRf(dev)   -> "HackRF One"
+            else            -> "RTL-SDR"
+        }
         if (product.isEmpty()) return if (maker.isNotEmpty()) "$maker $fallback" else fallback
         if (maker.isEmpty() || product.lowercase().startsWith(maker.lowercase())) return product
         return "$maker $product"
@@ -443,7 +466,11 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
             ?: run { promise.resolve(null); return }
         val res = Arguments.createMap()
-        res.putString("driver", if (isAirspyHf(dev)) "airspyhf" else "rtl")
+        res.putString("driver", when {
+            isAirspyHf(dev) -> "airspyhf"
+            isHackRf(dev)   -> "hackrf"
+            else            -> "rtl"
+        })
         // ★★★ THE MAKER AND THE MODEL, as the receiver's own landing page names it: "RTLSDRBlog
         //     Blog V4", not the bare "Blog V4" the dongle reports as its product string. On its own
         //     that names nothing a buyer would recognise, and in a public directory it is the
@@ -1028,5 +1055,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         /** Airspy HF+ — see isAirspyHf(). Mirrored in res/xml/device_filter.xml (DECIMAL there). */
         internal const val AIRSPYHF_VID = 0x03eb
         internal const val AIRSPYHF_PID = 0x800c
+
+        /** HackRF One — see isHackRf(). Mirrored in res/xml/device_filter.xml (DECIMAL there). */
+        internal const val HACKRF_VID = 0x1d50
+        internal const val HACKRF_PID = 0x6089
     }
 }

@@ -73,6 +73,14 @@ set(AIRSPYHF_SRC
     "${CMAKE_CURRENT_SOURCE_DIR}/libairspyhf/airspyhf.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/libairspyhf/iqbalancer.c")
 
+# ★★ libhackrf, VENDORED AND PATCHED, for exactly the same reason as libairspyhf above: upstream
+# (GPL-2-or-later, compatible with this repo's GPL-3) has no file-descriptor entry point, and on
+# Android there is no other way in — UsbManager hands the app an already-open fd and forbids
+# enumeration, so hackrf_device_list_open() has no list to index. cpp/libhackrf/ adds
+# hackrf_open_fd() on libusb_wrap_sys_device(), and skips the configuration/kernel-detach step
+# that a wrapped fd cannot do. See the VIBESDR PATCH notes in hackrf.c.
+set(HACKRF_SRC "${CMAKE_CURRENT_SOURCE_DIR}/libhackrf/hackrf.c")
+
 add_library(vibelocalsdr SHARED
     vibe_localsdr_jni.cpp local_sdr_shim.cpp net_shim.cpp rtl_tcp_server.cpp
     mdns_responder.cpp
@@ -98,8 +106,9 @@ add_library(vibelocalsdr SHARED
     # "real implementation #ifdef <SDK> #else no-op stubs", and the shim references their
     # methods unconditionally — a runtime branch still emits a link-time symbol, so leaving
     # one out does not save anything, it just fails to link (found on iOS, 2026-07-27).
-    sdrplay_source.cpp airspyhf_source.cpp
+    sdrplay_source.cpp airspyhf_source.cpp hackrf_source.cpp
     ${AIRSPYHF_SRC}
+    ${HACKRF_SRC}
     spyserver/spyserver_messages.cpp spyserver/spyserver_client.cpp
     decoders/fsk_decoder.cpp
     decoders/wefax_decoder.cpp
@@ -151,6 +160,12 @@ target_compile_definitions(vibelocalsdr PRIVATE VIBE_HAVE_OPUS)
 # genuinely has no such entry point.
 target_include_directories(vibelocalsdr PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/libairspyhf")
 target_compile_definitions(vibelocalsdr PRIVATE VIBE_HAVE_AIRSPYHF VIBE_AIRSPYHF_HAS_FD)
+# ★ hackrf.c includes <libusb.h> unqualified and the NDK's libusb lives in libusb-1.0/, the same
+#   wrinkle libairspyhf has. VIBE_HAS_HACKRF is what compiles hackrf_source.cpp's real body.
+target_include_directories(vibelocalsdr PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/libhackrf")
+# ★ VIBE_HACKRF_HAS_FD says this libhackrf is the PATCHED one, so HackRfSource::openFd() can call
+#   hackrf_open_fd(). A desktop build links a stock libhackrf and must not — see the #ifndef there.
+target_compile_definitions(vibelocalsdr PRIVATE VIBE_HAS_HACKRF VIBE_HACKRF_HAS_FD)
 
 target_link_libraries(vibelocalsdr PRIVATE
     vibedsp

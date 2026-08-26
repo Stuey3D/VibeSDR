@@ -2158,8 +2158,7 @@ struct LocalSdrShim::Impl {
     // END, not by our decoder, so this is how that gets tested rather than argued about.
     std::unique_ptr<vibe::SdrplaySource> sdrp;
     std::unique_ptr<vibe::AirspyHfSource> ahf;   // Airspy HF+ (Discovery / Dual Port)
-    /* ★ A FOURTH SOURCE, EXPERIMENTAL, DESKTOP-ONLY (Linux + macOS; not Android, which needs an
-     *   NDK build of libhackrf and the UsbManager fd dance). Nobody here owns a HackRF — see
+    /* ★ A FOURTH SOURCE, EXPERIMENTAL, on all three servers. Nobody here owns a HackRF — see
      *   hackrf_source.h. It follows the same shape as the three above so the branches below stay
      *   a list rather than becoming a special case, and it is deliberately LAST everywhere for
      *   the same reason it is last in detectRadios(). */
@@ -15181,6 +15180,15 @@ int LocalSdrShim::start(int fd, int vid, int pid,
         return startAirspyHfFd(fd, centerFreq, sampleRate, gainTenthDb,
                                fftSize, fftRate, mode, err);
     }
+    /* ★ AND A HACKRF, down the same pipe for the same reason. 0x1d50:0x6089 is the HackRF One;
+     *   the Jawbreaker and rad1o prototypes have their own ids and are NOT claimed here, because
+     *   nothing about this driver has been tested against them. Mirrored in Kotlin
+     *   (VibeLocalSdrModule.isHackRf) and in res/xml/device_filter.xml — three copies that must
+     *   agree, or the app is offered for a device it then refuses. */
+    if (vid == 0x1d50 && pid == 0x6089) {
+        return startHackRfFd(fd, centerFreq, sampleRate, gainTenthDb,
+                             fftSize, fftRate, mode, err);
+    }
     std::lock_guard<std::mutex> life(g_lifecycle);
     // ★★★ A RADIO WE ORPHANED IS NOT A RADIO THAT IS MISSING. If a previous stop left a reader
     //     thread we could not kill, this process still holds the dongle — libusb will refuse to
@@ -15410,6 +15418,22 @@ static const int kR820tGains[] = {
 // enumerated from the device, and a tuning range with a hole in it.
 // ★ Same as startAirspyHf() but from a USB descriptor. Only the acquisition differs, so the
 // two share everything through a common tail rather than drifting apart.
+int LocalSdrShim::startHackRf(int index,
+                              double centerFreq, double sampleRate, int gainTenthDb,
+                              int fftSize, double fftRate, const std::string& mode,
+                              std::string& err) {
+    return startHackRfCommon(index, -1, centerFreq, sampleRate, gainTenthDb,
+                             fftSize, fftRate, mode, err);
+}
+
+int LocalSdrShim::startHackRfFd(int fd,
+                                double centerFreq, double sampleRate, int gainTenthDb,
+                                int fftSize, double fftRate, const std::string& mode,
+                                std::string& err) {
+    return startHackRfCommon(-1, fd, centerFreq, sampleRate, gainTenthDb,
+                             fftSize, fftRate, mode, err);
+}
+
 int LocalSdrShim::startAirspyHfFd(int fd,
                                   double centerFreq, double sampleRate, int gainTenthDb,
                                   int fftSize, double fftRate, const std::string& mode,
@@ -15436,10 +15460,15 @@ int LocalSdrShim::startAirspyHf(int index,
  *    neither problem — it takes a continuous rate and has no measured crop table to invalidate.
  *    What it DOES have is a 2 MSPS floor, so nearestRate() will snap anything lower UP, and
  *    everything downstream is built from what the radio actually got.
- * ★ No openFd() twin: that exists for Android, where UsbManager hands you a descriptor and
- *   forbids enumeration. This driver is not offered on Android, so there is no second entry
- *   point to keep in step. */
-int LocalSdrShim::startHackRf(int index,
+ * ★★★ TWO WAYS IN, ONE BODY — and that is deliberate. `index` is the desktop path (enumerate,
+ *     then open the index); `fd` is Android, where UsbManager hands the app an already-open
+ *     descriptor and forbids enumeration entirely. Exactly one of them is valid: index >= 0 OR
+ *     fd >= 0. They share this function rather than getting one each, because the ONE thing that
+ *     went wrong six times over on 2026-08-26 was a rule with two readers and only one of them
+ *     updated. An earlier comment here said "this driver is not offered on Android, so there is
+ *     no second entry point to keep in step" — that stopped being true, and the way to keep it
+ *     from costing anything is to have no second body to forget. */
+int LocalSdrShim::startHackRfCommon(int index, int fd,
                               double centerFreq, double sampleRate, int gainTenthDb,
                               int fftSize, double fftRate, const std::string& mode,
                               std::string& err) {
@@ -15470,10 +15499,16 @@ int LocalSdrShim::startHackRf(int index,
      *     assume the offset was applied at tune time.
      *  ★★ Two tune paths again — this one and setFrequency() — and only one of them applying the
      *     offset is the same "two readers, one updated" fault that has cost most of tonight. */
-    if (!impl->hrf->open(index, sampleRate, centerFreq + impl->hwOffsetHz(), gainTenthDb, err)) {
-        delete impl; return -1;
-    }
-    impl->hrfIndex = index;   // ★ remembered so releaseRadio can reopen the same one
+    const double physCentre = centerFreq + impl->hwOffsetHz();
+    const bool opened = (fd >= 0)
+        ? impl->hrf->openFd(fd, sampleRate, physCentre, gainTenthDb, err)
+        : impl->hrf->open(index, sampleRate, physCentre, gainTenthDb, err);
+    if (!opened) { delete impl; return -1; }
+    /* ★ remembered so releaseRadio can reopen the same one. ★★ ON THE fd PATH THERE IS NOTHING
+     *   TO REMEMBER: the descriptor is single-use and libusb owns it now, so a reopen must come
+     *   back through Android with a fresh one. -1 records "not reopenable from here" rather than
+     *   leaving a stale index that would reopen the WRONG radio on a multi-radio host. */
+    impl->hrfIndex = (fd >= 0) ? -1 : index;
 
     // ★ THE RADIO DECIDES THE RATE. A saved preference from a different radio can easily be
     //   below this one's 2 MSPS floor; open() has already snapped it, and the FFT size and
@@ -17685,6 +17720,19 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
         // ★ + hwOffsetHz(), like every other tune of this radio. The dongle branch below gets it
         //   for free because it goes through tuneHw(); an open() call has to add it itself, and
         //   the RSP/HF+ calls above do not need to only because their offset is zero.
+        /* ★★★ AND A RADIO OPENED FROM AN ANDROID DESCRIPTOR CANNOT BE REACQUIRED AT ALL.
+         *     hrfIndex is -1 there because a USB fd is single-use and libusb owns it the moment
+         *     it is wrapped — there is no index to reopen and no way to ask for a fresh
+         *     descriptor from down here; it has to come back through UsbManager.
+         * ★★ SAY THAT, AND SAY IT ONCE. Falling through to open(-1) does not crash, but it spends
+         *    three seconds retrying and then reports "no HackRF is attached — check USB
+         *    permissions", which describes a completely different fault and sends the owner
+         *    looking at their cable and their permissions for a limit of the platform. */
+        if (impl->hrfIndex < 0) {
+            err = "this HackRF was opened from an Android USB descriptor, which cannot be "
+                  "reopened — unplug it and plug it back in to hand it back";
+            break;
+        }
         ok = impl->hrf->open(impl->hrfIndex, impl->sampleRate,
                              impl->rtlCenter.load() + impl->hwOffsetHz(), -1, err);
     } else {

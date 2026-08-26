@@ -286,7 +286,7 @@ if(EXISTS "${AHF_VENDOR}/airspyhf.c")
   set(AIRSPYHF_VENDORED TRUE)
 endif()
 
-# ── libhackrf: HackRF One (EXPERIMENTAL, Linux + macOS) ───────────────────────
+# ── libhackrf: HackRF One (EXPERIMENTAL — this is the DESKTOP half) ───────────
 # ★★★ NOBODY HERE OWNS ONE. The driver is written against libhackrf's API and has never been run
 #     against a radio — exactly one listener can test it. That is why it is Experimental, why it is
 #     mentioned only in the README and release notes, and why no VibeAGC is wired to it.
@@ -296,9 +296,12 @@ endif()
 #     that is precisely how 3.0.0-2 shipped with the setup wizard compiled out: a rebuilt build root
 #     lost a -dev package and the only trace was a cmake STATUS line nobody read. So on a release
 #     build its absence is an error, not a shrug. See the ncurses block above for the original.
-# ★ Desktop only. The Android path needs libhackrf cross-compiled for the NDK *and* the
-#   UsbManager fd dance the other sources carry; neither is written, so it is simply not offered
-#   there rather than half-offered.
+# ★★★ ANDROID DOES NOT COME THROUGH HERE. It builds its own copy from
+#     cpp/libhackrf/ — a VENDORED, PATCHED libhackrf with an fd entry point, because UsbManager
+#     hands the app an already-open descriptor and forbids enumeration. See
+#     android/app/src/main/cpp/CMakeLists.txt. This block is the desktop's system/Homebrew
+#     libhackrf, which is stock and has NO hackrf_open_fd — hence VIBE_HACKRF_HAS_FD, which is
+#     set there and deliberately not here.
 find_library(HACKRF_LIB NAMES hackrf HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
 find_path(HACKRF_INC libhackrf/hackrf.h HINTS /opt/homebrew/include /usr/local/include /usr/include)
 # ★★★ PREFER THE STATIC ARCHIVE ON macOS, exactly as the librtlsdr and libairspyhf blocks do — a

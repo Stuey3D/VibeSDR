@@ -205,6 +205,49 @@ bool HackRfSource::open(int index, double sampleRateHz, double centreHz,
         return false;
     }
 
+    return finishOpen(sampleRateHz, centreHz, gainTenthDb, err);
+}
+
+/** ★★★ ANDROID ONLY IN PRACTICE. UsbManager hands the app an ALREADY-OPEN descriptor and forbids
+ *  enumeration, so hackrf_device_list_open() above cannot run there at all — there is no device
+ *  list to index into. hackrf_open_fd() is our patch to the vendored libhackrf; see
+ *  cpp/libhackrf/hackrf.c.
+ *
+ *  ★ OWNERSHIP OF THE DESCRIPTOR PASSES TO libusb on success. Do not close it here or in the
+ *  caller: the UsbDeviceConnection must outlive the stream, and closing it twice takes the radio
+ *  down mid-capture. Same rule as AirspyHfSource::openFd(). */
+bool HackRfSource::openFd(int fd, double sampleRateHz, double centreHz,
+                          int gainTenthDb, std::string& err) {
+#ifndef VIBE_HACKRF_HAS_FD
+    /* ★★★ ONLY THE VENDORED COPY HAS THIS ENTRY POINT. A desktop build links the system or
+     *     Homebrew libhackrf, which is stock and has no hackrf_open_fd — so this must compile
+     *     to an honest refusal rather than an undefined symbol at link time. Exactly the shape
+     *     AirspyHfSource::openFd() uses for the same reason. */
+    (void)fd; (void)sampleRateHz; (void)centreHz; (void)gainTenthDb;
+    err = "this build's libhackrf has no file-descriptor entry point";
+    return false;
+#else
+    if (open_) return true;
+    ensureInit();
+    if (!g_initOk) { err = "libhackrf could not start"; return false; }
+    std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
+    if (fd < 0) { err = "invalid USB file descriptor"; return false; }
+    if (hackrf_open_fd(&impl_->dev, fd) != HACKRF_SUCCESS || !impl_->dev) {
+        impl_->dev = nullptr;
+        err = "could not open the HackRF from the USB descriptor";
+        return false;
+    }
+    // ★ Enumeration is what carries the serial, and there is none here. Left empty rather than
+    //   invented: a made-up serial would flow into the radio list and the directory.
+    impl_->serial = "";
+    return finishOpen(sampleRateHz, centreHz, gainTenthDb, err);
+#endif
+}
+
+/** Everything after the handle exists — identical whichever way it was obtained. */
+bool HackRfSource::finishOpen(double sampleRateHz, double centreHz,
+                              int gainTenthDb, std::string& err) {
+    (void)err;
     open_ = true;
     // ★ Start the DC tracker from nothing: a value learned before a retune, a rate change or a
     //   hand-over to another program describes a different front-end state, and 4096 samples is
@@ -362,6 +405,12 @@ HackRfSource::~HackRfSource() = default;
 int  HackRfSource::deviceCount() { return 0; }
 std::string HackRfSource::deviceName(int) { return ""; }
 bool HackRfSource::tuneRangeContains(double) { return true; }
+bool HackRfSource::openFd(int, double, double, int, std::string& err) {
+    err = "no HackRF support"; return false;
+}
+bool HackRfSource::finishOpen(double, double, int, std::string& err) {
+    err = "no HackRF support"; return false;
+}
 bool HackRfSource::open(int, double, double, int, std::string& err) {
     err = "this build has no HackRF support"; return false;
 }
