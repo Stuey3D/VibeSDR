@@ -212,9 +212,21 @@ class VibeSink extends AudioWorkletProcessor {
     //     So a stalled output looks identical to a healthy stream from every vantage point the
     //     page had, which is exactly how a listener sat in silence while his own recording of the
     //     same stream came out perfect (Stuart, 2026-08-20, shared VFO, another user tuning).
-    //  ★ Once a second, not per block: this is a heartbeat, not telemetry.
+    /* ★ FOUR TIMES A SECOND, NOT ONCE — AND THE RATIO IS THE WHOLE POINT. This is a heartbeat,
+     *   not telemetry, and the watchdog on the far side calls the node dead after 2 s. A 1 s
+     *   heartbeat against a 2 s deadline is only TWO MISSES of margin, and 'lastDrainAt' is
+     *   stamped when the MAIN THREAD receives the message — so a main thread busy for a second
+     *   (GC, a heavy render) made a perfectly healthy node look stalled and got it REBUILT.
+     * ★★★ THAT IS AUDIBLE, AND IT IS THE BUG IT WAS MEANT TO FIX WEARING THE OTHER MASK: rebuilding
+     *     the playout node interrupts playback, so a false positive does not merely waste work, it
+     *     IS a stutter. Reported by a second owner on Firefox (2026-08-26) — 23 rebuilds, every one
+     *     logged "attempt 1", while Edge and Safari on the same server were clean. He could HEAR
+     *     the audio: a node that had truly stopped draining would have been SILENT.
+     * ★★ 12000 samples = 250 ms of output, so the deadline is now eight misses rather than two.
+     *    A genuine stall still shows nothing for 2 s and is still caught; only the false positives
+     *    go. Four postMessages a second is nothing next to the audio it carries. */
     this.drained += n;
-    if (this.drained - this.lastReport >= 48000) {
+    if (this.drained - this.lastReport >= 12000) {
       this.lastReport = this.drained;
       this.port.postMessage({ drained: this.drained });
     }
