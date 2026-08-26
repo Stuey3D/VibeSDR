@@ -64,8 +64,29 @@ void AudioNR::reset() {
 void AudioNR::process(const float* in, int count, std::vector<float>& out) {
     inBuf.insert(inBuf.end(), in, in + count);
     const float invN = 1.0f / (float)N;
-    // Strength 0..1 → residual-noise floor: gentle (-14 dB) … deep (-60 dB).
-    const float gmin = std::max(0.001f, 0.2f - 0.199f * strength);
+    /* ★★★ HOW MUCH, NOT JUST HOW DEEP. `strength` used to set only the FLOOR, so the suppression
+     *     RULE below ran at full force at every setting and the bottom of the slider was already
+     *     hard NR — "even setting 1 is very aggressive" (Stuart, 2026-08-26). There was never a
+     *     gentler end, only a shallower one, which is why the control never felt granular.
+     *  ★★ `mix` is a dry/wet blend applied to the GAIN (step 4), not to the audio: the wet path is
+     *     an STFT with overlap-add and therefore DELAYED, so blending dry audio into it would need
+     *     a matched delay line and would comb-filter the moment it drifted. Blending toward unity
+     *     gain instead — `1 - mix*(1 - g)` — is the same thing done where both signals are already
+     *     aligned by construction, on the same frame, before the inverse FFT. mix=0 is a literal
+     *     passthrough (every gain becomes exactly 1.0); mix=1 is the full suppressor as before.
+     *  ★ The ESTIMATOR never sees the blend. `hkOld` keeps taking the raw `g` below, so the
+     *    decision-directed SNR recursion stays consistent no matter where the slider sits —
+     *    otherwise a low setting would corrupt the noise tracking and the high end with it. */
+    // ★ Full wet by 0.7, not 1.0. If the blend only completed at the top, the floor became
+    //   unconstrained in a single step and the last-but-one notch jumped ~27 dB. Finishing the
+    //   blend early hands the top third over to the floor sweep, so the travel stays monotone.
+    const float mix  = std::min(1.0f, strength / 0.7f);
+    /* Strength 0..1 → residual-noise floor: gentle (-14 dB) … deep (-60 dB).
+     * ★★ SWEPT IN dB, NOT IN AMPLITUDE. Linear amplitude (`0.2 - 0.199*s`) is nearly flat for most
+     *    of the travel and then falls off a cliff at the very top — -14, -16, -20, -29, then -60.
+     *    Hearing works in dB, so a control that does not is not granular however many steps it has.
+     *    The exponential gives an even ~9 dB per fifth of the slider across the whole range. */
+    const float gmin = std::max(0.001f, 0.2f * std::exp(strength * -3.912f));   // ln(0.005)
     // Strength >1 (slider 16..20) → over-subtraction: scale the noise PSD used for
     // the gain SNR (not the tracker) so weak-SNR bins are suppressed harder.
     const float osf = 1.0f + 1.5f * std::max(0.0f, strength - 1.0f);
@@ -125,8 +146,11 @@ void AudioNR::process(const float* in, int count, std::vector<float>& out) {
                 for (int k = lo; k <= hi; k++) gain[k] = gtmp[k];
             }
             gain[0] = gain[lo];
-            // 4) Apply the spectral weighting.
-            for (int k = 0; k < K; k++) { spec[k].r *= gain[k]; spec[k].i *= gain[k]; }
+            // 4) Apply the spectral weighting, blended toward unity by `mix` — see the note above.
+            for (int k = 0; k < K; k++) {
+                const float ge = 1.0f - mix * (1.0f - gain[k]);
+                spec[k].r *= ge; spec[k].i *= ge;
+            }
         }
 
         kiss_fftri(inv, spec.data(), frame.data());
