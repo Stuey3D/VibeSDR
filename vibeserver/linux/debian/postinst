@@ -121,6 +121,13 @@ case "$1" in
     #   an unconfigured server that starts itself and fails is a worse first impression than one
     #   that waits to be asked. `vibeserver` with no arguments opens the TUI to set that up.
     if [ -d /run/systemd/system ]; then
+      # ★★★ ASK BEFORE ANYTHING TOUCHES IT. Every line below can change whether the server is
+      #     running, and two of them do so INDIRECTLY, so a state read taken later describes what
+      #     this script did rather than what the owner had. Measured 2026-08-26: with the primary
+      #     deliberately stopped, it was active again by the end of the block and the closing
+      #     message said "restarted".
+      WAS_ACTIVE=""
+      systemctl is-active --quiet vibeserver.service && WAS_ACTIVE="yes"
       systemctl daemon-reload >/dev/null 2>&1 || true
       systemctl enable vibeserver.service >/dev/null 2>&1 || true
       # ★★ THE WATCHER MUST BE ENABLED OR THE MAINTENANCE BUTTONS DO NOTHING. The daemon writes
@@ -132,7 +139,16 @@ case "$1" in
       #    would quietly stay down until the next reboot and the owner would have no idea why.
       #    On a fresh install it finds nothing configured and exits, which is correct.
       systemctl enable vibeserver-radios.service >/dev/null 2>&1 || true
-      systemctl start  vibeserver-radios.service >/dev/null 2>&1 || true
+      # ★★★ ONLY IF THE SERVER WAS ALREADY RUNNING — because this unit declares
+      #     `Wants=vibeserver.service`, so starting it STARTS THE PRIMARY as a side effect. On a
+      #     machine the owner had deliberately stopped (maintenance, a borrowed dongle, a radio
+      #     unplugged on purpose) an upgrade therefore switched the receiver back on and put it on
+      #     the air. Measured on the Pi, 2026-08-26 — and it is not what "enabled but NOT started"
+      #     four lines up promises. Restarting what was running is the intent; starting what was
+      #     stopped is not.
+      if [ -n "$WAS_ACTIVE" ]; then
+        systemctl start vibeserver-radios.service >/dev/null 2>&1 || true
+      fi
       # ★ The wizard enables and starts the service itself (tui.cpp), so telling people to run
       #   systemctl afterwards is wrong — and it is the sort of wrong that makes someone think a
       #   step failed when it simply was not needed (Stuart hit exactly this, 2026-08-06).
@@ -165,13 +181,12 @@ case "$1" in
       #    only the primary would leave the second and third radios on the old build, which is the
       #    same fault one layer down. `systemctl start vibeserver-radios.service` above does NOT
       #    cover this: starting a unit that is already active does nothing at all.
-      if [ -n "${2:-}" ]; then
-        RESTARTED=""
-        if systemctl is-active --quiet vibeserver.service; then
-          systemctl try-restart vibeserver.service >/dev/null 2>&1 && RESTARTED="yes"
-        fi
+      # ★ WAS_ACTIVE, not a fresh is-active: see the note at the top of this block. By the time
+      #   we reach here the lines above may have started the very thing we are asking about.
+      if [ -n "${2:-}" ] && [ -n "$WAS_ACTIVE" ]; then
+        systemctl try-restart vibeserver.service >/dev/null 2>&1 || true
         for U in $(systemctl list-units --plain --no-legend --state=active 'vibeserver@*.service' 2>/dev/null | awk '{print $1}'); do
-          systemctl try-restart "$U" >/dev/null 2>&1 && RESTARTED="yes"
+          systemctl try-restart "$U" >/dev/null 2>&1 || true
         done
       fi
       if [ -z "${2:-}" ]; then
@@ -180,11 +195,11 @@ case "$1" in
         # ★ SAY WHICH OF THE TWO HAPPENED. "Upgraded to X" on a machine still running the old
         #   build is the misdescription this whole block exists to end, so the sentence now
         #   reports the RESTART, not just the package version.
-        if [ -n "${RESTARTED:-}" ]; then
+        if [ -n "$WAS_ACTIVE" ]; then
           echo "VibeServer: upgraded to $(dpkg-query -W -f='${Version}' vibeserver 2>/dev/null) and restarted. Your settings are unchanged."
         else
           echo "VibeServer: upgraded to $(dpkg-query -W -f='${Version}' vibeserver 2>/dev/null). Your settings are unchanged."
-          echo "VibeServer: it was not running, so nothing was restarted."
+          echo "VibeServer: it was not running, so it has been left stopped."
         fi
       else
         echo "VibeServer: upgraded. Run 'vibeserver' to set it up."
