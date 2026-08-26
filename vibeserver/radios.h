@@ -18,7 +18,7 @@
 namespace vibe {
 
 struct DetectedRadio {
-    std::string driver;    // "rtlsdr" | "sdrplay" | "airspyhf"
+    std::string driver;    // "rtlsdr" | "sdrplay" | "airspyhf" | "hackrf" (experimental)
     std::string name;      // human-readable, as the driver describes it
     std::string serial;    // as the DRIVER reports it; may be empty, and may not be unique
     int         index = 0; // position in this flat list — what `--radio N` takes

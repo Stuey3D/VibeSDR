@@ -33,6 +33,7 @@
 #include "radiodns.h"
 #include "parent_watch.h"   // die-with-the-front-door; a no-op on Linux
 #include "airspyhf_source.h"
+#include "hackrf_source.h"
 #include "sdrplay_source.h"
 
 #include <atomic>
@@ -2143,7 +2144,14 @@ int main(int argc, char** argv) {
                              o.radioSerial.c_str());
                 return 1;
             }
-            if (drv == "airspyhf")
+            /* ★ NAME EVERY SOURCE. The comment in local_sdr_shim's rate branch records that a
+             *   two-source world written as "the other one" mis-handles the third every time;
+             *   this is the fourth, and it gets its own branch rather than falling into the
+             *   dongle's `else`, which would start an RTL capture against a HackRF index. */
+            if (drv == "hackrf")
+                port = shim.startHackRf(drvIdx, o.freq, o.rate, o.gain,
+                                        o.fftSize, o.fftRate, o.mode, err);
+            else if (drv == "airspyhf")
                 port = shim.startAirspyHf(drvIdx, o.freq, o.rate, o.gain,
                                           o.fftSize, o.fftRate, o.mode, err);
             else if (drv == "sdrplay")
@@ -2163,7 +2171,18 @@ int main(int argc, char** argv) {
         //     With three radios on one machine that is not a preference, it is a lottery.
         const int nRtl = (int)rtlsdr_get_device_count();
         const int nRsp = vibe::SdrplaySource::deviceCount();
-        if (o.radio >= nRtl + nRsp) {
+        const int nAhf = vibe::AirspyHfSource::deviceCount();
+        /* ★★★ AND THE HACKRF, WHICH THIS CHAIN WOULD OTHERWISE MISROUTE. The order here MUST
+         *     match detectRadios(), because the whole point of this block is that "the third
+         *     radio" means the same thing everywhere — the setup screen, the config API and this.
+         *     detectRadios() appends HackRF LAST, so it is last here too, and adding it anywhere
+         *     else would silently renumber every existing radio on a machine that has one. */
+        if (o.radio >= nRtl + nRsp + nAhf) {
+            std::printf("VibeServer: using HackRF %d (experimental)\n",
+                        o.radio - nRtl - nRsp - nAhf);
+            port = shim.startHackRf(o.radio - nRtl - nRsp - nAhf, o.freq, o.rate, o.gain,
+                                    o.fftSize, o.fftRate, o.mode, err);
+        } else if (o.radio >= nRtl + nRsp) {
             std::printf("VibeServer: using Airspy HF+ %d\n", o.radio - nRtl - nRsp);
             port = shim.startAirspyHf(o.radio - nRtl - nRsp, o.freq, o.rate, o.gain,
                                       o.fftSize, o.fftRate, o.mode, err);
@@ -2181,6 +2200,21 @@ int main(int argc, char** argv) {
         std::printf("VibeServer: Airspy HF+ detected\n");
         port = shim.startAirspyHf(0, o.freq, o.rate, o.gain,
                                   o.fftSize, o.fftRate, o.mode, err);
+    } else if (!o.deviceGiven && vibe::HackRfSource::deviceCount() > 0
+                              && vibe::SdrplaySource::deviceCount() == 0
+                              && rtlsdr_get_device_count() == 0) {
+        /* ★★★ LAST IN THE DISCOVERY CHAIN TOO, AND THE RTL COUNT IS PART OF THAT. An experimental
+         *     driver nobody here can test must never be picked ahead of a radio that works, so it
+         *     is reached only when no RTL, no RSP and no HF+ is attached — i.e. when the HackRF is
+         *     the only radio on the machine.
+         *  ★★ The RTL check has to be EXPLICIT, because the dongle is not a branch above this one:
+         *     it is the final `else`. Testing only for the drivers with their own `else if` above
+         *     reads as "nothing else is here" and is not — a machine with a dongle AND a HackRF
+         *     would have silently switched to the untested radio. That is the "else means dongle"
+         *     trap this file has already fixed twice, arriving from the other direction. */
+        std::printf("VibeServer: HackRF detected (experimental)\n");
+        port = shim.startHackRf(0, o.freq, o.rate, o.gain,
+                                o.fftSize, o.fftRate, o.mode, err);
     } else if (!o.deviceGiven && vibe::SdrplaySource::deviceCount() > 0) {
         // ★★★ AND THE RSP, WHICH THIS CHAIN STILL DID NOT ASK FOR. Exactly the fault the note
         // above describes for the Airspy, one radio later: an RSP1B on the bus — named correctly

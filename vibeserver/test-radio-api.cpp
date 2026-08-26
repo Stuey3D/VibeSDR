@@ -30,7 +30,11 @@ int main() {
         // ★ The driver is what decides which start path a radio takes, so an unknown one is a
         //   radio that cannot be served at all.
         const bool known = !std::strcmp(drv, "rtlsdr") || !std::strcmp(drv, "sdrplay")
-                        || !std::strcmp(drv, "airspyhf");
+                        || !std::strcmp(drv, "airspyhf")
+                        // ★ HackRF is EXPERIMENTAL but it is not exempt from this: an unknown
+                        //   driver is a radio the start path cannot dispatch, and "experimental"
+                        //   must not mean "detected and then silently unservable".
+                        || !std::strcmp(drv, "hackrf");
         ok(known, "every radio reports a driver we can actually start");
         ok(std::strlen(vs_radio_name(i)) > 0, "every radio has a display name");
     }

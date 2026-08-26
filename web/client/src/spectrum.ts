@@ -160,6 +160,11 @@ export interface RadioCaps {
   biasT?: boolean;
   // ── Airspy HF+ ────────────────────────────────────────────────────────────
   attSteps?: number;      // count of attenuator positions (9 = 0..8)
+  // ★ HackRF (EXPERIMENTAL): three MANUAL stages and no AGC. `amp`/`lna`/`vga`/`biast` are the
+  //   radio's CURRENT state, sent because the two switches are set from the hardware and never
+  //   from a saved preference — the amp is the part of a HackRF that most commonly dies.
+  hrfAmp?: boolean; hrfLna?: boolean; hrfVga?: boolean; hrfBiasT?: boolean;
+  amp?: number; lna?: number; vga?: number; biast?: number;
   attStepDb?: number;     // dB per step (6)
   hfLna?: boolean;        // has the +6 dB preamp
   hfAgc?: boolean;        // has its own AGC

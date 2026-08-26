@@ -3823,6 +3823,59 @@ select.btn { padding: 6px 8px; }
       <span class="val" id="ahfPpbVal">0 ppb</span>
     </div>
   </div>
+  <!-- ★★★ HACKRF ONE — EXPERIMENTAL, and the panel says so on screen. Nobody here owns one; the
+       driver is written from libhackrf's API and the published hardware description and has never
+       been heard. A user meeting a control that has never been tested deserves to be told.
+       ★★★ THREE STAGES, NO AGC. libhackrf exposes no automatic mode, so there is deliberately no
+       AUTO button here — an "AGC" that did nothing is the fault AGENTS.md names outright. VibeAGC
+       is absent for the same honesty: it has been shaped against three radios that behave nothing
+       like an 8-bit front end, and Stuart's rule is that it does not drive a radio unheard.
+       ★★★ AND EVERY STAGE OPENS AT ZERO WITH THE AMP AND BIAS-T OFF. Stuart: "the hackrf MUST
+       DEFAULT TO 0 GAIN AND PREAMP, those things have a bad habit of blowing up their preamps."
+       Coming up from nothing costs a quiet waterfall; coming up hot on an unknown aerial can cost
+       the radio. -->
+  <div id="hrfCtls" hidden>
+    <div class="mrow">
+      <label>HACKRF</label>
+      <span class="val" style="opacity:.7">EXPERIMENTAL · manual gain</span>
+    </div>
+    <!-- ★★★ THE RF AMP IS PASSWORD-PROTECTED, LIKE BIAS-T AND FOR A HARDER REASON. Stuart: "the
+         preamp control MUST be treated with the same caution as the Bias-T and password protected
+         so a stranger cannot enable the preamp and blow it up... Unlike the Airspy the HackRF
+         preamp is extremely sensitive." The HF+'s "preamp" is really a postamp and the worst it
+         costs is dynamic range; this one is a real 14 dB amplifier in FRONT of everything, on a
+         radio with no AGC and no protection worth the name. It is the owner's to switch, nobody
+         else's — the server refuses it too (adminGate), so this is the lock made visible rather
+         than the only thing standing in the way.
+         ★★ AND THE HARDWARE AGREES: the amp is the U14 MGA-81563, the most commonly destroyed
+         part of a HackRF. The front end is largely unprotected, max safe RX power is -5 dBm, and
+         it can be killed by static while swapping an aerial. The tell that it has happened is
+         cruel — a blown amp acts as an ATTENUATOR, so switching it ON makes the band go quieter.
+         A stranger must not be able to do that to somebody else's radio. -->
+    <div class="mrow">
+      <label title="A 0 or +14 dB amplifier ahead of everything (the U14 MGA-81563). It is the part of a HackRF that most commonly dies: the front end is largely unprotected, maximum safe RX power is -5 dBm, and static or a nearby transmitter can destroy it. A blown one goes DEAF — switching the amp on makes signals drop instead of rise. Owner-only, and off unless you know the aerial.">RF AMP <span style="opacity:.6">(owner)</span></label>
+      <div class="seg"><button class="btn" id="hrfAmp">OFF</button></div>
+    </div>
+    <!-- 0-40 dB in 8 dB steps — the hardware's own granularity, not a scale we invented. -->
+    <div class="mrow" id="rowHrfLna">
+      <label for="hrfLna" title="The front-end (IF) gain stage, 0-40 dB in 8 dB steps. Raise this BEFORE the VGA: gain taken here costs the least noise figure. Back it off if the waterfall shows images or the audio breaks up on peaks — an 8-bit radio clips where others cope.">LNA GAIN</label>
+      <input type="range" id="hrfLna" min="0" max="40" step="8" value="0">
+      <span class="val" id="hrfLnaVal">0 dB</span>
+    </div>
+    <!-- 0-62 dB in 2 dB steps. Baseband, after the mixer — cheap to move, and the right place
+         to make up the last few dB once the LNA is where it should be. -->
+    <div class="mrow" id="rowHrfVga">
+      <label for="hrfVga" title="The baseband (VGA) gain stage, 0-62 dB in 2 dB steps. It comes AFTER the mixer, so it amplifies noise along with signal — use it to top up once the LNA is set, not as the main control.">VGA GAIN</label>
+      <input type="range" id="hrfVga" min="0" max="62" step="2" value="0">
+      <span class="val" id="hrfVgaVal">0 dB</span>
+    </div>
+    <!-- ★ 3.3 V up the coax. Owner-only for the same reason it is everywhere else in this app:
+         feeding voltage into somebody else's feedline is not a listener's decision. -->
+    <div class="mrow">
+      <label title="Puts 3.3 V at 50 mA on the antenna port to power a mast-head amplifier. Leave it OFF unless you know what is on the end of the coax — owner-only.">BIAS-T <span style="opacity:.6">(owner)</span></label>
+      <div class="seg"><button class="btn" id="hrfBiasT">OFF</button></div>
+    </div>
+  </div>
   <div class="mrow" id="rowRate">
     <label for="rate">SAMPLE RATE</label>
     <select id="rate" class="btn"></select>

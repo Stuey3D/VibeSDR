@@ -29,6 +29,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential cmake pkg-config file ca-certificates curl \
       librtlsdr-dev libusb-1.0-0-dev libopus-dev libfftw3-dev libncursesw5-dev \
+      libhackrf-dev \
       dpkg-dev apt-utils gnupg git rsync xz-utils \
     && rm -rf /var/lib/apt/lists/*
 

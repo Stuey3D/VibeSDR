@@ -16,6 +16,7 @@
 #include "local_sdr_shim.h"
 #include "sdrplay_source.h"
 #include "airspyhf_source.h"
+#include "hackrf_source.h"
 
 // Android builds the USB/librtlsdr local-hardware path; iOS builds only the
 // RTL-TCP path (no USB host SDR on iOS). The USB code stays compiled on iOS via a
@@ -2157,8 +2158,14 @@ struct LocalSdrShim::Impl {
     // END, not by our decoder, so this is how that gets tested rather than argued about.
     std::unique_ptr<vibe::SdrplaySource> sdrp;
     std::unique_ptr<vibe::AirspyHfSource> ahf;   // Airspy HF+ (Discovery / Dual Port)
+    /* ★ A FOURTH SOURCE, EXPERIMENTAL AND LINUX-ONLY. Nobody here owns a HackRF — see
+     *   hackrf_source.h. It follows the same shape as the three above so the branches below stay
+     *   a list rather than becoming a special case, and it is deliberately LAST everywhere for
+     *   the same reason it is last in detectRadios(). */
+    std::unique_ptr<vibe::HackRfSource> hrf;
     int  sdrpIndex = 0;
     int  ahfIndex  = 0;
+    int  hrfIndex  = 0;
     // ★★ One-shot AGC kick, once the stream is genuinely running. Cycling it inside open()
     // — immediately after Init, before any samples have flowed — still left it inert, so
     // the transition evidently has to happen against a LIVE stream rather than a device
@@ -2179,6 +2186,7 @@ struct LocalSdrShim::Impl {
     static constexpr int kRspInitRfGainPos = 7;
     bool useSdrplay() const { return (bool)sdrp; }
     bool useAirspyHf() const { return (bool)ahf; }
+    bool useHackRf()   const { return (bool)hrf; }
     std::vector<int> spyGains;             // device gain table (tenths dB)
     int lastGainTenthDb = -1;              // re-applied across a stream restart
 
@@ -2538,7 +2546,7 @@ struct LocalSdrShim::Impl {
     // ★★ An RSP is zero-IF too and has its own DC handling; a network source has no DC spike of
     //    ours to dodge. Only the R820T needs this.
     double hwOffsetHz() const {
-        return (useSdrplay() || useAirspyHf() || useTcp() || useSpy()) ? 0.0 : HW_OFFSET_HZ;
+        return (useSdrplay() || useAirspyHf() || useHackRf() || useTcp() || useSpy()) ? 0.0 : HW_OFFSET_HZ;
     }
 
     // Physical DC of the FFT = rtlCenter + HW_OFFSET_HZ, so the VFO (at audioFreq)
@@ -2807,6 +2815,7 @@ struct LocalSdrShim::Impl {
         else if (useTcp()) sendTcpCmd(0x01, hz);
         else if (useSdrplay()) sdrp->setFrequency((double)hz);
         else if (useAirspyHf()) ahf->setFrequency((double)hz);
+        else if (useHackRf())   hrf->setFrequency((double)hz);
         // ★★★ HANDED OFF, NOT PERFORMED. This runs under modeMtx (see above, and
         //     flushPendingDongle() which calls it from the DSP loop itself), so doing the control
         //     transfer here blocked demodulation for its whole duration. Everything the rest of
@@ -7260,6 +7269,29 @@ struct LocalSdrShim::Impl {
         auto sharedGate = [&](const char* what) -> bool {
             return g_vsLockedCentre.load() <= 0.0 || adminGate(what);
         };
+        if (type == "hackrf_control") {
+            /* ★★★ THE RF AMP IS BEHIND adminGate, NOT sharedGate, AND THAT IS THE WHOLE POINT OF
+             *     THIS BRANCH. Every other gain control on every other radio is a listening
+             *     choice a visitor may make. This one is +14 dB in front of an 8-bit converter on
+             *     a radio whose preamp is known for not surviving being driven hard — so on a
+             *     PUBLIC receiver a stranger could destroy the owner's hardware from a browser.
+             *     Stuart: "treated with the same caution as the Bias-T and password protected".
+             *     ★ The bias-T is gated the same way for the same reason one line down: both put
+             *       something into the world rather than merely changing what we hear.
+             * ★★ LNA AND VGA STAY ON sharedGate — they are ordinary gain, they cannot damage
+             *    anything, and locking them away would make the radio unusable for a visitor
+             *    while protecting nothing. The distinction is DAMAGE, not gain. */
+            if (jsonNum(msg, "amp", v)) {
+                if (adminGate("the HackRF preamp")) LocalSdrShim::instance().setHackRfAmp(v != 0);
+                else LOGI("HackRF preamp refused — it is owner-only, and it can destroy the radio");
+            }
+            if (jsonNum(msg, "biast", v) && adminGate("bias-T"))
+                LocalSdrShim::instance().setHackRfBiasTee(v != 0);
+            if (!sharedGate("HackRF gain")) return;
+            if (jsonNum(msg, "lna", v)) LocalSdrShim::instance().setHackRfLna((int)v);
+            if (jsonNum(msg, "vga", v)) LocalSdrShim::instance().setHackRfVga((int)v);
+            return;
+        }
         if (type == "ahf_control") {
             if (!sharedGate("Airspy HF+ controls")) return;
             // ★★★ AGC LOCKED MEANS THE MANUAL PATH IS CLOSED TOO. The attenuator and the preamp
@@ -7487,7 +7519,8 @@ struct LocalSdrShim::Impl {
         {
             const bool movesTheRadio =
                    type == "tune" || type == "mode" || type == "bandwidth"
-                || type == "gain" || type == "rsp_control" || type == "ahf_control";
+                || type == "gain" || type == "rsp_control" || type == "ahf_control"
+                || type == "hackrf_control";
             if (movesTheRadio && vsSharedDial()) {
                 bool changed = false;
                 {
@@ -7981,6 +8014,21 @@ struct LocalSdrShim::Impl {
             // reaches for, so the dropped samples read as a bad receiver rather than a bad
             // setting. Offer the real ceiling instead.
             j += "],\"rates\":[8000000,6000000,5000000,4000000,3000000,2048000,2000000]";
+        else if (useHackRf()) {
+            /* ★★ A CHOSEN LIST, NOT THE RADIO'S. libhackrf takes a continuous rate, so unlike
+             *    the HF+ there is nothing to read back — hackrf_source.h picks the ones worth
+             *    offering. The floor is the hardware's own 2 MSPS, which is ABOVE where an RTL
+             *    dongle is usually run here: a HackRF costs more DSP than any other supported
+             *    radio before it has done anything useful, and the picker should not pretend
+             *    otherwise by offering a rate it cannot do. */
+            j += "],\"rates\":[";
+            const auto& rl = hrf->sampleRates();
+            for (size_t i = rl.size(); i-- > 0; ) {
+                j += std::to_string(rl[i]);
+                if (i) j += ",";
+            }
+            j += "]";
+        }
         else if (useAirspyHf()) {
             // ★★★ THE RADIO'S OWN LIST, not ours. An HF+ Discovery tops out near 912 kHz where
             // the dongle list starts at 960 kHz — so EVERY rate we were offering was impossible,
@@ -8839,9 +8887,10 @@ struct LocalSdrShim::Impl {
             const bool noRadio = frontDoorOnly;
             const bool rsp = !noRadio && LocalSdrShim::instance().isSdrplay();
             const bool hf  = !noRadio && LocalSdrShim::instance().isAirspyHf();
+            const bool hrf = !noRadio && LocalSdrShim::instance().isHackRf();
             const bool lost = noRadio || deviceLost.load();
             std::string j = std::string("{\"driver\":\"")
-                          + (lost ? "none" : rsp ? "sdrplay" : hf ? "airspyhf" : "rtl")
+                          + (lost ? "none" : rsp ? "sdrplay" : hf ? "airspyhf" : hrf ? "hackrf" : "rtl")
                           + "\",\"present\":" + (lost ? "false" : "true")
                           + ",\"rates\":[" + supportedRates() + "]"
                           // ★ The tuner's IF filter, so the page can show what is set.
@@ -8869,7 +8918,7 @@ struct LocalSdrShim::Impl {
             //    the label travel: the page never learns an edge, so the two cannot drift into
             //    disagreeing about where "VHF airband" ends — which is the kind of difference
             //    nobody notices until a listener is somewhere the owner thought they had blocked.
-            if (!rsp && !hf && !lost) {
+            if (!rsp && !hf && !hrf && !lost) {
                 std::vector<int> g = LocalSdrShim::instance().getTunerGains();
                 for (size_t i = 0; i < g.size(); i++) { if (i) j += ','; j += std::to_string(g[i]); }
             }
@@ -12069,6 +12118,9 @@ struct LocalSdrShim::Impl {
         if (useTcp()) { tcpRunning.store(false); joinOnce(rtlThread, "tcp reader"); }
         else if (useSdrplay()) { sdrp->setPaused(true); }
         else if (useAirspyHf()) { ahf->setPaused(true); }
+        // ★ Same treatment as the HF+: a HackRF is far more disruptive to stop and restart than
+        //   simply to ignore, and the idle saver only wants it quiet, not gone.
+        else if (useHackRf())   { hrf->setPaused(true); }
         else {
             // ★★★ THE DONGLE IS NO LONGER STOPPED — IT IS IGNORED. Cancelling the async
             // stream and restarting it is what crashed the server, and the "fix" below was
@@ -12286,6 +12338,7 @@ struct LocalSdrShim::Impl {
         }
         else if (useSdrplay()) { sdrp->setPaused(false); }
         else if (useAirspyHf()) { ahf->setPaused(false); }
+        else if (useHackRf())   { hrf->setPaused(false); }
         else          { idleDiscard.store(false); }   // never stopped; just start wanting it again
         // ★★ AND RESET THE DSP. Restarting the capture alone leaves every recursive
         // state holding values from before the pause — filters, the pilot PLL, and the
@@ -14062,7 +14115,8 @@ std::string LocalSdrShim::adminStatusJson() {
         const bool lost = p && p->deviceLost.load();
         j += std::string(",\"radio\":{\"present\":") + (lost ? "false" : "true")
            + ",\"driver\":\"" + (lost ? "none" : isSdrplay() ? "sdrplay"
-                                              : isAirspyHf() ? "airspyhf" : "rtl") + "\"";
+                                              : isAirspyHf() ? "airspyhf"
+                                              : isHackRf()   ? "hackrf" : "rtl") + "\"";
         j += ",\"centreHz\":" + std::to_string((long long)(g_vsLockedCentre.load() > 0
                                     ? g_vsLockedCentre.load() : (p ? p->rtlCenter.load() : 0)));
         j += ",\"spanHz\":" + std::to_string((long long)captureSpanHz());
@@ -14762,7 +14816,8 @@ static vibebands::Ranges vsTunableRanges() {
         return { { lockC - lockR / 2.0, lockC + lockR / 2.0 } };
 
     auto& shim = LocalSdrShim::instance();
-    const std::string drv = shim.isSdrplay() ? "sdrplay" : shim.isAirspyHf() ? "airspyhf" : "rtl";
+    const std::string drv = shim.isSdrplay() ? "sdrplay" : shim.isAirspyHf() ? "airspyhf"
+                          : shim.isHackRf() ? "hackrf" : "rtl";
     const vibebands::Ranges hw = vibebands::driverCoverage(drv);
     if (hw.empty()) return {};
     // ★ vsPermittedRanges returns EMPTY to mean "the owner set no lists", which is the opposite of
@@ -15237,6 +15292,90 @@ int LocalSdrShim::startAirspyHf(int index,
                                 std::string& err) {
     return startAirspyHfCommon(index, -1, centerFreq, sampleRate, gainTenthDb,
                                fftSize, fftRate, mode, err);
+}
+
+/* ★★★ HackRF START — EXPERIMENTAL, LINUX ONLY, AND NEVER RUN AGAINST A RADIO BY ITS AUTHOR.
+ *     Modelled line for line on startAirspyHfCommon below rather than paraphrased: everything
+ *     that path does in a particular order (sink before open, engine before start, listener
+ *     before the accept thread) it does for a reason that was learned the hard way, and none of
+ *     those reasons stop applying because the radio is different.
+ * ★★ THE RATE IS THE CALLER'S HERE, unlike the HF+. An HF+ is forced to its own default because
+ *    re-rating a live one wedges it and the dead-lobe crop is a per-rate table; a HackRF has
+ *    neither problem — it takes a continuous rate and has no measured crop table to invalidate.
+ *    What it DOES have is a 2 MSPS floor, so nearestRate() will snap anything lower UP, and
+ *    everything downstream is built from what the radio actually got.
+ * ★ No openFd() twin: that exists for Android, where UsbManager hands you a descriptor and
+ *   forbids enumeration. This driver is not offered on Android, so there is no second entry
+ *   point to keep in step. */
+int LocalSdrShim::startHackRf(int index,
+                              double centerFreq, double sampleRate, int gainTenthDb,
+                              int fftSize, double fftRate, const std::string& mode,
+                              std::string& err) {
+    std::lock_guard<std::mutex> life(g_lifecycle);
+    if (p) { LOGI("stale shim found on HackRF start — tearing down"); stopLocked(); }
+    auto* impl = new Impl();
+    impl->fftRate = fftRate;
+    impl->baseFftRate = fftRate;
+    impl->rtlCenter.store(centerFreq);
+    impl->viewCenter.store(centerFreq);
+    impl->audioFreq.store(centerFreq);
+    impl->mode = mode.empty() ? "wfm" : mode;
+    impl->lastGainTenthDb = gainTenthDb;
+
+    impl->hrf = std::make_unique<vibe::HackRfSource>();
+    Impl* self = impl;
+    // ★ Samples arrive as cf32 from the source (it converts the radio's int8 once), so this is
+    //   the same float path the HF+ uses — no int16 round trip.
+    impl->hrf->setSink([self](const float* iq, int n) {
+        self->lastIqAt.store(Impl::nowSecs(), std::memory_order_relaxed);
+        self->enqueueIqFloat(iq, n, /*blockIfFull=*/false);
+    });
+    if (!impl->hrf->open(index, sampleRate, centerFreq, gainTenthDb, err)) {
+        delete impl; return -1;
+    }
+    impl->hrfIndex = index;   // ★ remembered so releaseRadio can reopen the same one
+
+    // ★ THE RADIO DECIDES THE RATE. A saved preference from a different radio can easily be
+    //   below this one's 2 MSPS floor; open() has already snapped it, and the FFT size and
+    //   channel decimation must be built from what it actually got.
+    impl->sampleRate = (double)impl->hrf->nearestRate(sampleRate);
+    impl->fftSize = fftSizeForRate(impl->sampleRate);
+    impl->startEngine();
+    impl->buildAudio();
+
+    if (!impl->hrf->start(err)) {
+        impl->teardownAudio(); impl->rx.stop();
+        impl->hrf->close(); delete impl; return -1;
+    }
+
+    int chosen = -1;
+    if (int want = g_vsPort.load(); want > 0) {
+        try { impl->listener = net::listen(bindHost(), want); chosen = want; }
+        catch (...) { impl->listener = nullptr; }
+    } else {
+        for (int p2 = 48000; p2 < 48050; p2++) {
+            try { impl->listener = net::listen(bindHost(), p2); chosen = p2; break; }
+            catch (...) { impl->listener = nullptr; }
+        }
+    }
+    if (!impl->listener) {
+        err = g_vsPort.load() > 0
+            ? "port " + std::to_string(g_vsPort.load()) + " is already in use — choose another"
+            : "no free port in 48000-48049";
+        impl->teardownAudio(); impl->rx.stop();
+        impl->hrf->close(); delete impl; return -1;
+    }
+    impl->port = chosen;
+    impl->serverRunning.store(true);
+    impl->acceptThread = std::thread([impl]{ impl->acceptLoop(); });
+    impl->startDspThread();
+
+    p = impl;
+    LocalSdrShim::applyDesiredDsp(impl);
+    impl->startHotplugWatch();   // same silence watchdog as every other source
+    LOGI("HackRF started (EXPERIMENTAL): index=%d center=%.0f rate=%.0f port=%d",
+         index, centerFreq, impl->sampleRate, chosen);
+    return chosen;
 }
 
 int LocalSdrShim::startAirspyHfCommon(int index, int fd,
@@ -17592,6 +17731,7 @@ void LocalSdrShim::setFftRate(double fps) {
     LOGI("fft rate: %.1f fps (engine %.1f) — server default", fps, fps * FFT_AVG);
 }
 bool LocalSdrShim::isAirspyHf() const { return p && p->useAirspyHf(); }
+bool LocalSdrShim::isHackRf()   const { return p && p->useHackRf(); }
 
 /**
  * ★★★ EVERYTHING THIS LOOP HAS LEARNED IS ABOUT ONE SIGNAL AT ONE FREQUENCY AT ONE SAMPLE RATE.
@@ -18003,6 +18143,32 @@ std::string LocalSdrShim::radioCapsJson() const {
         j += "]}";
         return j;
     }
+    // ★★★ AND HACKRF BEFORE THE DONGLE BRANCH, FOR THE REASON WRITTEN DIRECTLY ABOVE. The RTL
+    //     branch is an `if (!useSdrplay())`, so a fourth driver added without a branch here is
+    //     announced as a dongle and drawn with dongle controls — the exact fault the HF+ hit in
+    //     July. Adding the driver without adding this would have shipped that bug a second time.
+    if (p->useHackRf()) {
+        auto& h = *p->hrf;
+        std::string j = ",\"radio\":{\"driver\":\"hackrf\",\"model\":\"HackRF One\"";
+        /* ★★★ THREE STAGES, AND NO AGC — the caps say so explicitly rather than by omission, so
+         *     the client draws three sliders and NO auto button. libhackrf has no automatic mode
+         *     at all: an AGC control here would be a button that does nothing, which AGENTS.md
+         *     names outright. ★ And VibeAGC is deliberately absent too (hackrf_source.h says why:
+         *     nobody here can hear the loop work yet). */
+        j += ",\"hrfAmp\":true,\"hrfLna\":true,\"hrfVga\":true,\"hrfBiasT\":true,\"hwAgc\":false";
+        j += ",\"amp\":"  + std::to_string(h.ampEnabled());
+        j += ",\"lna\":"  + std::to_string(h.lnaGainDb());
+        j += ",\"vga\":"  + std::to_string(h.vgaGainDb());
+        j += ",\"biast\":" + std::string(h.biasTee() ? "1" : "0");
+        // ★ 1 MHz - 6 GHz, published for the same reason as the HF+'s hole: a dial that offers
+        //   medium wave on this radio is offering silence.
+        j += ",\"ranges\":[[1000000,6000000000]]";
+        j += ",\"rates\":[";
+        { const auto& rl = h.sampleRates();
+          for (size_t i = 0; i < rl.size(); ++i) { if (i) j += ','; j += std::to_string(rl[i]); } }
+        j += "]}";
+        return j;
+    }
     if (!p->useSdrplay()) {
         // ★ Name the dongle too. The client had nothing to show for a receiver, which is an
         // odd thing for a radio application to be coy about — and the USB descriptor carries
@@ -18075,6 +18241,28 @@ void LocalSdrShim::setAhfLna(bool on) {
     g_dsp.ahfLna.store(on ? 1 : 0);
     if (!p || !p->useAirspyHf()) return;
     VIBE_HW_LOCK(); p->ahf->setLna(on);
+}
+/* ★★★ THE HACKRF STAGES. LNA and VGA are ordinary gain; the RF AMP IS NOT, and is gated like the
+ *     bias-T rather than like gain — see the control handler. Stuart: "the preamp control MUST be
+ *     treated with the same caution as the Bias-T and password protected so a stranger cannot
+ *     enable the preamp and blow it up. Unlike the Airspy the HackRF preamp is extremely
+ *     sensitive." An HF+ preamp is a listening choice; this one is a way to destroy somebody
+ *     else's radio from a browser. */
+void LocalSdrShim::setHackRfAmp(bool on) {
+    if (!p || !p->useHackRf()) return;
+    VIBE_HW_LOCK(); p->hrf->setAmpEnable(on);
+}
+void LocalSdrShim::setHackRfLna(int db) {
+    if (!p || !p->useHackRf()) return;
+    VIBE_HW_LOCK(); p->hrf->setLnaGainDb(db);
+}
+void LocalSdrShim::setHackRfVga(int db) {
+    if (!p || !p->useHackRf()) return;
+    VIBE_HW_LOCK(); p->hrf->setVgaGainDb(db);
+}
+void LocalSdrShim::setHackRfBiasTee(bool on) {
+    if (!p || !p->useHackRf()) return;
+    VIBE_HW_LOCK(); p->hrf->setBiasTee(on);
 }
 void LocalSdrShim::setAhfCalibrationPpb(int ppb) {
     g_dsp.ahfPpb.store(ppb);

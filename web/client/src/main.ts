@@ -503,7 +503,11 @@ function refreshAdminRow() {
   const locked = show && !adminUnlocked;
   // ★ Buttons AND range inputs. bias-T is a .btn on the RSP panel and an <input> on the
   // dongle one, so both shapes have to be handled or one radio's control stays live.
-  for (const id of ['ppm', 'biasT', 'directSampling', 'ahfPpb', 'rspBiasT']) {
+  // ★★★ hrfAmp AND hrfBiasT ARE IN HERE DELIBERATELY. Stuart: "the preamp control MUST be
+  //     treated with the same caution as the Bias-T and password protected so a stranger cannot
+  //     enable the preamp and blow it up... Unlike the Airspy the HackRF preamp is extremely
+  //     sensitive." It is the U14 amp, the part of a HackRF that most commonly dies.
+  for (const id of ['ppm', 'biasT', 'directSampling', 'ahfPpb', 'rspBiasT', 'hrfAmp', 'hrfBiasT']) {
     const el = document.getElementById(id) as HTMLInputElement | null;
     if (!el) continue;
     el.disabled = locked;
@@ -514,6 +518,7 @@ function refreshAdminRow() {
   //   receiver being LOCKED (shared front end), not merely on a password existing. Unlocking is
   //   the moment they should appear, so re-apply it here.
   if (radioCaps?.driver === 'sdrplay') applyRspLock();
+  if (radioCaps?.driver === 'hackrf')  applyHrfLock();
   // ★★ The SERVER ADMIN door. Present only for an unlocked owner — a listener has no use for
   //    it, and a button whose only job is to refuse you is worse than no button.
   //    ★ It also has to DISAPPEAR on the idle re-lock, which is why this lives here rather than
@@ -5716,6 +5721,7 @@ function initDecoders(host: string, auth: AuthState) {
   initRdsResize();
   initRspControls();
   initAhfControls();
+  initHrfControls();
   $('decodersBtn').onclick = () => togglePanel('decodersPanel');
   $('decClose').onclick = () => closePanels();
   // ★ The panel owns the unread count only while it is OPEN — chatOpened(false) on close is what
@@ -8928,12 +8934,123 @@ function initAhfControls() {
 }
 
 
+// ── HackRF One (EXPERIMENTAL) ────────────────────────────────────────────────
+// ★★★ THREE STAGES AND NO AGC. libhackrf exposes no automatic mode at all, so there is no AUTO
+//     button here and no VibeAGC either — see hackrf_source.h for why the loop stays away from a
+//     radio nobody here can hear.
+// ★★★ THE AMP AND THE BIAS-T ARE OWNER-ONLY, AND THAT MIRRORS THE SERVER (`adminGate` in the
+//     hackrf_control handler). If these two rules drift apart the panel lies: it offers something
+//     the server will silently refuse. The gain stages themselves follow `sharedGate`, the same
+//     rule the RSP's gains follow — one listener moving them moves them for everyone.
+const HRF_PREFS = { hrfLna: 'hrf_lna', hrfVga: 'hrf_vga' } as const;
+
+function hrfSend(msg: Record<string, unknown>) { spec?.send({ type: 'hackrf_control', ...msg }); }
+
+/** ★★★ THE STAGES ONLY. The amp and the bias-T are NEVER pushed from a saved preference — not on
+ *  reconnect, not on a server restart, not on a fresh page.
+ *  Stuart: "the hackrf MUST DEFAULT TO 0 GAIN AND PREAMP, those things have a bad habit of
+ *  blowing up their preamps." A restored preference is exactly how a switch that was safe on one
+ *  aerial gets re-applied on a different one, and on this radio the amp is the U14 MGA-81563 —
+ *  the part that most commonly dies, unprotected, with -5 dBm between it and a repair. It is a
+ *  deliberate act every time, or it is not switched at all.
+ *  ★ The gains are pushed, because the server rebuilds its state on a restart and would otherwise
+ *    open at zero while the panel still showed what the owner chose — the same contract
+ *    pushAllRspSettings has. Zero is the safe end, so re-asserting them cannot surprise anyone. */
+function pushAllHrfSettings() {
+  if (radioCaps?.driver !== 'hackrf') return;
+  hrfSend({
+    lna: Number($<HTMLInputElement>('hrfLna').value),
+    vga: Number($<HTMLInputElement>('hrfVga').value),
+  });
+}
+
+function renderHrfVals() {
+  const lna = Number($<HTMLInputElement>('hrfLna').value);
+  const vga = Number($<HTMLInputElement>('hrfVga').value);
+  $('hrfLnaVal').textContent = `${lna} dB${lna === 0 ? ' · none' : ''}`;
+  $('hrfVgaVal').textContent = `${vga} dB${vga === 0 ? ' · none' : ''}`;
+}
+
+/** Gain is shared hardware, so it follows the SAME rule as the RSP's: free on a personal
+ *  receiver, admin-only on one with a locked centre. Disabled rather than hidden — they are
+ *  still the right controls, just not yours to set at that moment. */
+function applyHrfLock() {
+  const restricted = rspRestricted();
+  for (const id of ['hrfLna', 'hrfVga']) {
+    const el = $<HTMLInputElement>(id);
+    el.disabled = restricted;
+    const row = el.closest('.mrow') as HTMLElement | null;
+    if (row) row.style.opacity = restricted ? '0.45' : '1';
+  }
+}
+
+function applyHrfCaps(caps: import('./spectrum').RadioCaps | null) {
+  if (caps?.driver !== 'hackrf') return;
+  /* ★★★ THE RADIO'S OWN STATE WINS OVER THE PANEL'S, for the two switches. The server opens
+   *     every HackRF with the amp and the bias-T OFF and reports what they actually are, so the
+   *     buttons are set from the CAPS, never from a preference. A button that said ON because a
+   *     previous session left the class there — on a radio that came up off — is the "you cannot
+   *     tell by looking" failure the HF+ preamp had, and here it points at the dangerous end. */
+  setHrfToggle('hrfAmp',   !!caps.amp);
+  setHrfToggle('hrfBiasT', !!caps.biast);
+  const lna = $<HTMLInputElement>('hrfLna'), vga = $<HTMLInputElement>('hrfVga');
+  if (typeof caps.lna === 'number') lna.value = String(caps.lna);
+  if (typeof caps.vga === 'number') vga.value = String(caps.vga);
+  renderHrfVals();
+  applyHrfLock();
+  if (!rspRestricted()) pushAllHrfSettings();
+}
+
+function setHrfToggle(id: string, on: boolean) {
+  const el = $(id);
+  el.classList.toggle('on', on);
+  el.textContent = on ? 'ON' : 'OFF';   // ★ label AND class, or the button lies
+}
+
+function initHrfControls() {
+  const p = prefs();
+  for (const [id, key] of Object.entries(HRF_PREFS)) {
+    const v = p[key];
+    if (typeof v === 'number') $<HTMLInputElement>(id).value = String(v);
+  }
+  // ★ No preference is read for the amp or the bias-T, and none is written. See pushAllHrfSettings.
+  $('hrfAmp').onclick = () => {
+    const on = !$('hrfAmp').classList.contains('on');
+    // ★★ ASK BEFORE THE DANGEROUS DIRECTION ONLY. Turning it OFF is always safe and never
+    //    interrupted; turning it ON is the click that can cost somebody a radio.
+    if (on && !confirm('Switch the HackRF RF amp ON?\n\n+14 dB in front of everything, on a radio '
+                     + 'whose front end is unprotected. Maximum safe input is -5 dBm — a strong '
+                     + 'signal or a static discharge can destroy the amplifier.\n\nOnly do this if '
+                     + 'you know what is on the aerial.')) return;
+    setHrfToggle('hrfAmp', on);
+    hrfSend({ amp: on ? 1 : 0 });
+  };
+  $('hrfBiasT').onclick = () => {
+    const on = !$('hrfBiasT').classList.contains('on');
+    setHrfToggle('hrfBiasT', on);
+    hrfSend({ biast: on ? 1 : 0 });
+  };
+  $<HTMLInputElement>('hrfLna').oninput = () => {
+    renderHrfVals();
+    const v = Number($<HTMLInputElement>('hrfLna').value);
+    hrfSend({ lna: v }); savePref('hrf_lna', v);
+  };
+  $<HTMLInputElement>('hrfVga').oninput = () => {
+    renderHrfVals();
+    const v = Number($<HTMLInputElement>('hrfVga').value);
+    hrfSend({ vga: v }); savePref('hrf_vga', v);
+  };
+}
+
+
 function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   radioCaps = caps;
   const isRsp = caps?.driver === 'sdrplay';
   const isAhf = caps?.driver === 'airspyhf';
+  const isHrf = caps?.driver === 'hackrf';
   $<HTMLElement>('rspCtls').hidden = !isRsp;
   $<HTMLElement>('ahfCtls').hidden = !isAhf;
+  $<HTMLElement>('hrfCtls').hidden = !isHrf;
   // ★★★ NO SAMPLE-RATE PICKER ON AN HF+. Its rate is fixed at open, because changing it on a
   //     LIVE radio is a path no other SDR client takes: SDR++ (mainline and Brown) grey the
   //     control out while running, gr-osmosdr sets it once at construction, and OpenWebRX is
@@ -8952,22 +9069,26 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   // PER BILLION, and two frequency-correction controls disagreeing about units is exactly the
   // "which one is real?" confusion the RSP bias-T duplication caused.
   for (const el of Array.from(document.querySelectorAll('.rtlOnly')) as HTMLElement[])
-    el.hidden = isRsp || isAhf;
+    el.hidden = isRsp || isAhf || isHrf;
   $('radioName').textContent = caps?.model
     ? (isRsp ? `SDRplay ${caps.model}` : caps.model)
     : (caps?.driver === 'rtl' ? 'RTL-SDR' : '—');
   // The dongle's single gain slider is meaningless on an RSP, and on an HF+ there is no
   // variable gain stage at all — hide it rather than leave a control whose label lies.
+  // ★ A HackRF hides it too, and for the opposite reason: it has THREE gain stages and no single
+  //   "gain" at all. One slider standing for three is a control whose label lies just as surely
+  //   as one standing for none — the panel above draws the stages the radio actually has.
   const gainRow = $('gain').closest('.mrow') as HTMLElement | null;
-  if (gainRow) gainRow.hidden = isRsp || isAhf;
+  if (gainRow) gainRow.hidden = isRsp || isAhf || isHrf;
   const autoRow = $('gainAuto').closest('.mrow') as HTMLElement | null;
-  if (autoRow) autoRow.hidden = isRsp || isAhf;
+  if (autoRow) autoRow.hidden = isRsp || isAhf || isHrf;
   // ★ THE PROTECTED CONTROLS ARE BUILT HERE, so the lock has to be re-applied here. The
   // Airspy and RSP panels only exist once the radio has announced itself, which happens AFTER
   // the admin state is first resolved — so applying it only at connect left the per-radio
   // controls (calibration especially) enabled on a protected server (Stuart, 2026-07-27).
   refreshAdminRow();
   if (isAhf) { applyAhfCaps(caps); refreshAdminRow(); return; }
+  if (isHrf) { applyHrfCaps(caps); refreshAdminRow(); return; }
   if (!isRsp) return;
 
   const n = caps?.lnaStates ?? 10;

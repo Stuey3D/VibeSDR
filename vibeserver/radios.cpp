@@ -2,6 +2,7 @@
 #include <rtl-sdr.h>
 #include "airspyhf_source.h"
 #include "sdrplay_source.h"
+#include "hackrf_source.h"
 #include <algorithm>
 
 namespace vibe {
@@ -47,6 +48,24 @@ std::vector<DetectedRadio> detectRadios() {
         r.driver = "airspyhf";
         r.name   = AirspyHfSource::deviceName(i);
         // Named like "Airspy HF+ (DD52B980BE4946DA)".
+        const size_t open = r.name.find('('), close = r.name.find(')');
+        if (open != std::string::npos && close != std::string::npos && close > open + 1)
+            r.serial = r.name.substr(open + 1, close - open - 1);
+        r.driverIndex = i;
+        out.push_back(r);
+    }
+
+    /* ★★ HackRF LAST, AND THAT ORDER IS DELIBERATE. detectRadios() decides the order radios
+     *    appear in, and an EXPERIMENTAL driver nobody here can test should not push a working
+     *    radio down the list on a machine that has both. It is also the only one that can be
+     *    absent from the build entirely — deviceCount() returns 0 in that case, so this loop
+     *    simply does not run and nothing else has to know. */
+    const int nHrf = HackRfSource::deviceCount();
+    for (int i = 0; i < nHrf; i++) {
+        DetectedRadio r;
+        r.driver = "hackrf";
+        r.name   = HackRfSource::deviceName(i);
+        // Named like "HackRF One (a1b2c3d4)" — the tail of the serial, see deviceName().
         const size_t open = r.name.find('('), close = r.name.find(')');
         if (open != std::string::npos && close != std::string::npos && close > open + 1)
             r.serial = r.name.substr(open + 1, close - open - 1);

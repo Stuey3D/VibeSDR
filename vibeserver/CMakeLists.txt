@@ -101,6 +101,7 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/mdns_responder.cpp"
     "${CPP_DIR}/sdrplay_source.cpp"
     "${CPP_DIR}/airspyhf_source.cpp"
+    "${CPP_DIR}/hackrf_source.cpp"
     "${CPP_DIR}/spyserver/spyserver_client.cpp"
     "${CPP_DIR}/spyserver/spyserver_messages.cpp"
     "${CPP_DIR}/decoders/fsk_decoder.cpp"
@@ -280,6 +281,37 @@ if(EXISTS "${AHF_VENDOR}/airspyhf.c")
   endif()
   target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_AIRSPYHF VIBE_AIRSPYHF_HAS_FD)
   set(AIRSPYHF_VENDORED TRUE)
+endif()
+
+# ── libhackrf: HackRF One (EXPERIMENTAL, Linux) ───────────────────────────────
+# ★★★ NOBODY HERE OWNS ONE. The driver is written against libhackrf's API and has never been run
+#     against a radio — exactly one listener can test it. That is why it is Experimental, why it is
+#     mentioned only in the README and release notes, and why no VibeAGC is wired to it.
+# ★★★ AND WHY IT IS STRICT ANYWAY. Normally an experimental extra would be "build it if the library
+#     happens to be there" — but the person who would notice it missing is the ONE person who can
+#     test it, and they would be testing a binary without the feature while reporting on it. Worse,
+#     that is precisely how 3.0.0-2 shipped with the setup wizard compiled out: a rebuilt build root
+#     lost a -dev package and the only trace was a cmake STATUS line nobody read. So on a release
+#     build its absence is an error, not a shrug. See the ncurses block above for the original.
+# ★ Linux only for now. The Android path needs libhackrf cross-compiled for the NDK *and* the
+#   UsbManager fd dance the other sources carry; neither is written, so it is simply not offered
+#   there rather than half-offered.
+find_library(HACKRF_LIB NAMES hackrf HINTS /usr/lib /usr/local/lib)
+find_path(HACKRF_INC libhackrf/hackrf.h HINTS /usr/include /usr/local/include)
+if(HACKRF_LIB AND HACKRF_INC)
+  message(STATUS "libhackrf: ${HACKRF_LIB} (HackRF support: EXPERIMENTAL)")
+  target_include_directories(vibeserver_core PUBLIC "${HACKRF_INC}")
+  target_link_libraries(vibeserver_core PUBLIC "${HACKRF_LIB}")
+  target_compile_definitions(vibeserver_core PUBLIC VIBE_HAS_HACKRF)
+elseif(VIBESERVER_STRICT_RADIOS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  message(FATAL_ERROR
+          "libhackrf not found, and VIBESERVER_STRICT_RADIOS is on.\n"
+          "  A release build must contain every radio a release claims to contain — and the one\n"
+          "  person who can test this radio cannot tell a missing driver from a broken one.\n"
+          "  Install libhackrf-dev (it is in vibeserver/linux/Dockerfile.build), or build with\n"
+          "  -DVIBESERVER_STRICT_RADIOS=OFF for a local build that does not need it.")
+else()
+  message(STATUS "libhackrf: not found — building without HackRF support")
 endif()
 
 find_library(AIRSPYHF_LIB NAMES airspyhf libairspyhf.a HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)

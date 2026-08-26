@@ -172,7 +172,7 @@ const char* vs_device_name(int index);
 void        vs_radios_refresh(void);
 int         vs_radio_count(void);
 const char* vs_radio_serial(int index);   ///< driver-reported; may be empty, may collide
-const char* vs_radio_driver(int index);   ///< "rtlsdr" | "sdrplay" | "airspyhf"
+const char* vs_radio_driver(int index);   ///< "rtlsdr" | "sdrplay" | "airspyhf" | "hackrf" (experimental)
 const char* vs_radio_name(int index);     ///< human-readable, as the driver describes it
 /** Non-zero when two attached radios report the SAME serial, so they cannot be told apart and
  *  settings would follow the wrong one. The TUI warns about this; a GUI must too. */

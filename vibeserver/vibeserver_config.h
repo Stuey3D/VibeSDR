@@ -212,7 +212,7 @@ struct Config {
  *    is for and why `vibeserver --set-rtl-serial` exists. */
 struct RadioConfig {
     std::string serial;      // as the DRIVER reports it — empty until the radio is first seen
-    std::string driver;      // "rtlsdr" | "sdrplay" | "airspyhf"
+    std::string driver;      // "rtlsdr" | "sdrplay" | "airspyhf" | "hackrf" (experimental)
     std::string usbPath;     // physical socket, e.g. "1-2" — the tie-break when serials collide
     std::string label;       // what the owner calls it; shown to listeners
     /** ★★★ WHAT IS ACTUALLY BOLTED TO THIS RADIO. A receiver publishes what the TUNER can do and

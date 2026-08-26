@@ -339,6 +339,10 @@ inline Ranges driverCoverage(const std::string& driver) {
     if (driver == "airspyhf") return { {500.0, 31.0e6}, {60.0e6, 260.0e6} };
     if (driver == "sdrplay")  return { {1000.0, 2.0e9} };
     if (driver == "rtl" || driver == "rtlsdr") return { {500.0e3, 1.766e9} };
+    // ★ HackRF One: 1 MHz - 6 GHz. The bottom end is a REAL limit, not a rounding — it cannot
+    //   hear medium or long wave at all without an upconverter, and a directory entry claiming
+    //   it could would send listeners to silence. (Experimental driver; see hackrf_source.h.)
+    if (driver == "hackrf")   return { {1.0e6, 6.0e9} };
     return {};                                   // unknown: say nothing rather than guess
 }
 

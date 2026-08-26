@@ -1318,9 +1318,10 @@ function renderGain() {
   const isRtl = drv === "rtl" || drv === "rtlsdr";
   const isRsp = drv === "sdrplay";
   const isHf  = drv === "airspyhf";
+  const isHrf = drv === "hackrf";
   // ★★ SHOWN ONLY WHERE THE CONTROL EXISTS. An HF+ has no gain to cap, so offering a ceiling box
   //    for it would be a setting that does nothing — the exact fault AGENTS.md has a rule about.
-  $("gainCard").classList.toggle("hide", !(isRtl || isRsp || isHf));
+  $("gainCard").classList.toggle("hide", !(isRtl || isRsp || isHf || isHrf));
   // ★★★ THE RTL'S AGC SWITCH WAS NEVER SHOWN AT ALL. The row was added with class="hide" and no
   //     line was ever written to take it off, so "VibeSDR Custom AGC for RTL-SDR" has been in the
   //     page, correct and invisible, since the day it was added — Stuart, 2026-08-21, trying to
@@ -1567,6 +1568,13 @@ const DRIVER_HW = {
               biasT: false, rfNotch: false, lnaState: false },
   sdrplay:  { rates: [2000000, 3000000, 4000000, 5000000, 6000000, 8000000, 10000000],
               biasT: true,  rfNotch: true,  lnaState: true },
+  /* ★★ HackRF — EXPERIMENTAL. The floor is the hardware's own 2 MSPS, which is ABOVE where an
+   *    RTL dongle is usually run here, so a HackRF costs more DSP than any other supported radio
+   *    before it has done anything useful. The ceiling offered is what the DSP can plausibly
+   *    carry, not what the radio can emit (it will do 20 MSPS; nothing here could process it).
+   *    ★ biasT true: it has one, and it is 3.3 V on the antenna port. */
+  hackrf:   { rates: [2000000, 2400000, 4000000, 5000000, 8000000, 10000000],
+              biasT: true,  rfNotch: false, lnaState: false },
 };
 
 async function renderHw() {
@@ -1729,6 +1737,25 @@ async function renderHw() {
   } else if (drv === "airspyhf") {
     el.innerHTML = `<p class="hint">The Airspy HF+ has no variable gain &mdash; it manages its own
       attenuator and preamp &mdash; so there is nothing to set here.</p>`;
+  } else if (drv === "hackrf") {
+    /* ★★★ THREE STAGES, AND NO AGC TO OFFER. A HackRF has an RF amp (a 0/+14 dB switch), an LNA
+     *     in 8 dB steps to 40, and a VGA in 2 dB steps to 62 — and libhackrf exposes no automatic
+     *     mode at all. Drawing an "Automatic" option here would be a control that does nothing,
+     *     which is the fault AGENTS.md names outright. The stages themselves live where the
+     *     waterfall is, for the reason the note below this block gives.
+     * ★ EXPERIMENTAL is said HERE, not only in the release notes: the person reading this page is
+     *   the person who will conclude the radio is broken when something misbehaves. */
+    el.innerHTML = `
+      <p class="hint"><b>HackRF support is experimental.</b> Nobody on the VibeSDR side owns one,
+        so this driver has been written from the documentation and tested by exactly one listener.
+        Please report what it does.</p>
+      <div class="hint">This radio has <b>three</b> gain stages &mdash; an RF amp (a 0/+14&nbsp;dB
+        switch), an LNA and a baseband VGA &mdash; and <b>no automatic gain of any kind</b>. They
+        are set on the receiver page, where you can watch the waterfall while you move them.
+        <br><b>Everything starts at zero with the RF amp off</b>, deliberately: a HackRF has no
+        automatic gain, very little headroom at 8 bits, and a preamp with a reputation for not
+        surviving being driven hard. Bring the LNA up until signals are clear of the noise and no
+        further.</div>`;
   } else {
     const opts = (hw.gains || []).map(g =>
       `<option value="${g}">${(g/10).toFixed(1)} dB</option>`).join("");
@@ -1765,6 +1792,14 @@ async function renderHw() {
     : drv === "airspyhf"
     ? `The HF+ has no variable gain to set &mdash; it manages its own attenuator and preamp &mdash;
        so there is nothing to protect here and nothing to adjust.`
+    : drv === "hackrf"
+    ? `<b>Signals will look weak until you set the gain.</b> A HackRF has no automatic gain at all,
+       so it starts with <b>every gain stage at zero and the RF amp off</b>, and stays exactly
+       where it is put. That is deliberate and it is a hardware protection: a HackRF has no
+       automatic gain and very little tolerance for being driven hard, and its preamp is the part
+       that pays for it. Bring the LNA up until the signal is clear of the noise and no further,
+       and leave the RF amp off unless the band is genuinely quiet. It is also 8-bit, so it has far
+       less headroom than the other radios here.`
     : `<b>Signals will look weak until you do.</b> This receiver starts at the tuner's
        <b>lowest gain</b>, deliberately, and never uses the tuner's own automatic gain &mdash; that
        mode is unreliable across RTL tuners and is known to misbehave on the v4. We know nothing
