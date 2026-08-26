@@ -453,11 +453,24 @@ struct InstancePickerView: View {
     }
   }
 
+  /// ★★★ COMPUTE THE DISTANCE HERE TOO, from the user's own coordinates.
+  ///
+  ///  `sortedServers` above already says why — "the server-reported `distance` was unreliable
+  ///  (IP-geolocated, wildly off), so we compute it ourselves" — and then computes it. This did
+  ///  not, so it took whatever the directory happened to publish. **Our own VibeServer directory
+  ///  publishes `lat`/`lon` but no `distance` at all**, so every VibeServer favourite read
+  ///  "distance unknown" and sorted to the far end under NEAREST, while the same server ordered
+  ///  correctly one screen away in the main list (Stuart, 2026-08-26).
+  ///  ★★ Same rule, applied in both places: derive it from coordinates we trust, and fall back to
+  ///     the published figure only when we have no location of our own.
   private func ingestMeta(_ servers: [SDRServer]) {
     for s in servers {
       let k = s.url.trimmedTrailingSlash.lowercased()
       let cur = meta[k]
-      meta[k] = (dist: s.distance ?? cur?.dist, snr: s.bestSnr ?? cur?.snr)
+      let computed: Double? = loc.coord.flatMap { c in
+        s.latitude.flatMap { la in s.longitude.map { haversineKm(c, la, $0) } }
+      }
+      meta[k] = (dist: computed ?? s.distance ?? cur?.dist, snr: s.bestSnr ?? cur?.snr)
     }
   }
 }
