@@ -111,7 +111,29 @@ class VibeSink extends AudioWorkletProcessor {
     //    time does.
     this.skips = 0;
     this.lastReport = 0;
+    /* ★★★ A SECOND WAY IN, SO THE MAIN THREAD NEED NOT BE ON THE AUDIO PATH AT ALL. An
+     *     AudioWorkletNode's own port belongs to the page, so decoding in a Worker and posting
+     *     through it would still hop through the very thread we are trying to get out of. Instead
+     *     the page transfers us one end of a MessageChannel ({sinkPort}) and hands the other to
+     *     the Worker, which then feeds this node DIRECTLY. Rendering can jank as much as it likes.
+     * ★★ TELEMETRY STILL GOES OUT ON this.port, never on the feed: skips, underruns, jitter and
+     *    the drained heartbeat are all read by the PAGE, and the Worker is not where they are
+     *    wanted. One way in, two ways out, and they are deliberately not the same channel.
+     * ★ Same handler for both, so a flush from the page and PCM from the Worker cannot drift
+     *   apart — there is one implementation of what a message means. */
+    this.feed = null;
     this.port.onmessage = (e) => {
+      if (e.data && e.data.sinkPort) {
+        this.feed = e.data.sinkPort;
+        this.feed.onmessage = (ev) => this.onAudioMsg(ev);
+        return;
+      }
+      this.onAudioMsg(e);
+    };
+  }
+
+  onAudioMsg(e) {
+    {
       // ★★★ FLUSH ON RETUNE. Everything already queued was demodulated at the OLD frequency, so
       //     playing it out after the dial has moved is just the previous station arriving late —
       //     which is exactly what "the audio is a second behind the waterfall when I tune" is
@@ -237,6 +259,129 @@ registerProcessor('vibe-sink', VibeSink);
 `;
 
 /** Wrap int16 PCM in a 44-byte canonical WAV header. */
+/** ★★★ THE AUDIO PATH, OFF THE PAGE'S THREAD ENTIRELY.
+ *
+ *  Everything the sound needs — receiving the socket, decoding Opus, converting to float — used to
+ *  run on the main thread, and every one of those steps competes with drawing. That is survivable
+ *  until the browser is busy: on Firefox, with the tab VISIBLE, the waterfall starved this path and
+ *  the jitter buffer ran dry; the same session with the tab hidden (no rendering) was clean, on the
+ *  same server, over the same tunnel. Safari and Edge coped, which is why it read as a Firefox bug
+ *  rather than as an architectural one (a second owner, 2026-08-26).
+ *  ★★★ MOVING THE DECODE ALONE WOULD ACHIEVE NOTHING. An AudioWorkletNode's port belongs to the
+ *      page, so PCM would still hop through the main thread on its way to the speaker. The Worker
+ *      is handed one end of a MessageChannel whose other end has been TRANSFERRED INTO THE WORKLET,
+ *      so it feeds the node directly and the page is not involved at all.
+ *  ★★ WebCodecs ONLY, deliberately. It exists wherever an AudioWorklet does (both want a secure
+ *     context) and Firefox has it — its own console says "requesting Opus (WebCodecs decoder)".
+ *     The WASM decoder stays on the main thread for browsers without it, which are the same
+ *     plain-http LAN origins that have no AudioWorklet either and were never on this path.
+ *  ★ No imports: this is a blob-URL Worker, exactly like the worklet above, so it cannot pull in
+ *    a module. That constraint is what keeps it out of the build system.
+ *  ★ NOTE: this block lives inside a template literal — no backticks in here. */
+const WORKER_SRC = `
+let sink = null;         // MessagePort straight to the worklet
+let ws = null;
+let dec = null;
+let decCh = 0;
+let ts = 0;
+let recording = false;
+let closedByUs = false;
+let url = '';
+
+function toFloat(pcm, ch, frames) {
+  const l = new Float32Array(frames);
+  const r = new Float32Array(frames);
+  if (ch === 2) {
+    for (let i = 0; i < frames; i++) { l[i] = pcm[i*2] / 32768; r[i] = pcm[i*2+1] / 32768; }
+  } else {
+    for (let i = 0; i < frames; i++) { const v = pcm[i] / 32768; l[i] = v; r[i] = v; }
+  }
+  return [l, r];
+}
+
+function emit(pcm, ch) {
+  const frames = Math.floor(pcm.length / Math.max(1, ch));
+  if (frames <= 0 || !sink) return;
+  // ★ The recorder lives on the page and taps PCM BEFORE the node, so a recording stays perfect
+  //   even when playout is not. Forward it ONLY while recording, so the ordinary case never pays.
+  if (recording) self.postMessage({ type: 'pcm', pcm, ch }, [pcm.buffer.slice(0)]);
+  const [l, r] = toFloat(pcm, ch, frames);
+  sink.postMessage({ l, r }, [l.buffer, r.buffer]);
+}
+
+function ensureDec(ch) {
+  if (dec && decCh === ch) return;
+  if (dec) { try { dec.close(); } catch (e) {} }
+  decCh = ch;
+  dec = new AudioDecoder({
+    output: (ad) => {
+      const n = ad.numberOfFrames, nc = ad.numberOfChannels;
+      const pcm = new Int16Array(n * nc);
+      const plane = new Float32Array(n);
+      for (let c = 0; c < nc; c++) {
+        ad.copyTo(plane, { planeIndex: c, frameCount: n });
+        for (let i = 0; i < n; i++) {
+          let v = Math.round(plane[i] * 32767);
+          pcm[i*nc + c] = v < -32768 ? -32768 : (v > 32767 ? 32767 : v);
+        }
+      }
+      ad.close();
+      emit(pcm, nc);
+    },
+    error: (e) => self.postMessage({ type: 'decoderFailed', why: String(e && e.message || e) }),
+  });
+  dec.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: ch });
+}
+
+function onFrame(buf) {
+  if (buf.byteLength < 6) return;
+  const dv = new DataView(buf);
+  const channels = dv.getUint8(0);
+  const format = dv.getUint8(1);
+  self.postMessage({ type: 'bytes', n: buf.byteLength });
+  if (format === 3) {
+    const ch = channels || 1;
+    try {
+      ensureDec(ch);
+      dec.decode(new EncodedAudioChunk({ type: 'key', timestamp: ts, duration: 20000, data: buf.slice(6) }));
+      ts += 20000;
+    } catch (e) { self.postMessage({ type: 'decoderFailed', why: String(e && e.message || e) }); }
+    return;
+  }
+  if (format === 0) { emit(new Int16Array(buf, 6, (buf.byteLength - 6) >> 1), channels); return; }
+  // ★ Legacy IMA-ADPCM is retired server-side. Hand anything else back rather than guess.
+  self.postMessage({ type: 'unhandled', format });
+}
+
+function open() {
+  closedByUs = false;
+  ws = new WebSocket(url);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen  = () => self.postMessage({ type: 'status', s: 'open' });
+  ws.onerror = () => self.postMessage({ type: 'status', s: 'error', msg: 'audio websocket error' });
+  ws.onclose = () => {
+    self.postMessage({ type: 'status', s: 'closed' });
+    // ★ Same three seconds as the page used to use — one reconnect policy, moved, not rewritten.
+    if (!closedByUs) setTimeout(open, 3000);
+  };
+  ws.onmessage = (e) => {
+    if (typeof e.data === 'string') {
+      try { if (JSON.parse(e.data).type === 'needs_codec') self.postMessage({ type: 'needsCodec' }); } catch (err) {}
+      return;
+    }
+    if (e.data instanceof ArrayBuffer) onFrame(e.data);
+  };
+}
+
+self.onmessage = (e) => {
+  const d = e.data || {};
+  if (d.type === 'init')      { sink = d.sinkPort; url = d.url; open(); }
+  else if (d.type === 'url')  { url = d.url; closedByUs = true; try { ws && ws.close(); } catch (err) {} closedByUs = false; open(); }
+  else if (d.type === 'rec')  { recording = !!d.on; }
+  else if (d.type === 'close'){ closedByUs = true; try { ws && ws.close(); } catch (err) {} }
+};
+`;
+
 function wavBlob(pcm: Int16Array, channels: number, rate: number): Blob {
   const dataBytes = pcm.length * 2;
   const header = new ArrayBuffer(44);
@@ -429,6 +574,13 @@ export class AudioPlayer {
   /** Fallback path only: suppresses buffer growth for the re-arm that a retune flush causes. */
   private armedByFlush = false;
   private url: string;
+  /** The Worker that owns the socket and the decoder when this browser can support it — see
+   *  WORKER_SRC. Null means the legacy main-thread path is running instead. */
+  private worker: Worker | null = null;
+  /** ★★ The Worker's socket state, mirrored. `streaming` used to read this.ws directly, which is
+   *  null once the Worker owns the socket — health() would then have reported 'no-stream' on a
+   *  perfectly good stream, which is the sort of thing that gets chased as a server fault. */
+  private workerOpen = false;
   private cb: AudioCallbacks;
   private closedByUs = false;
 
@@ -538,7 +690,21 @@ export class AudioPlayer {
       }
     }
     if (this.ctx.state === 'suspended') await this.ctx.resume();
-    this._openWs();
+    /* ★★★ WHO OWNS THE SOCKET. If we have a worklet AND WebCodecs, the Worker takes the whole
+     *     audio path — receive, decode, convert — and feeds the node through a transferred port,
+     *     so drawing cannot starve it. Otherwise nothing changes and the page keeps doing it.
+     * ★★ THE TWO CONDITIONS ARE NOT ARBITRARY. Without a worklet there is no port to transfer
+     *    (plain-http LAN origins, which fall back to ScriptProcessor); without WebCodecs the
+     *    Worker has no decoder, and the WASM one lives on this side. Either way the old path is
+     *    still there, whole, and is what runs.
+     * ★ #legacyaudio forces the old path at run time, so a bad night needs a reload rather than a
+     *   release. The same escape hatch as #webcodecs below it. */
+    const canWorker = !!this.node
+                   && typeof Worker !== 'undefined'
+                   && typeof AudioDecoder !== 'undefined'
+                   && !location.hash.includes('legacyaudio');
+    if (canWorker) this._startWorker();
+    else           this._openWs();
   }
 
   /** Same ring buffer as the worklet, drained on the main thread instead. */
@@ -630,6 +796,71 @@ export class AudioPlayer {
     // exactly the setups that cannot use a worklet (a page served over plain HTTP to a LAN IP),
     // and leaving it pinned at 150 ms would give the fallback the old bug back.
     if (!this.playing && this.filled >= 48 * this.jitterMs) this.playing = true;
+  }
+
+  /** Hand the socket and the decoder to a Worker, wired straight into the worklet. */
+  private _startWorker() {
+    try {
+      const blob = new Blob([WORKER_SRC], { type: 'application/javascript' });
+      const wurl = URL.createObjectURL(blob);
+      const w = new Worker(wurl);
+      URL.revokeObjectURL(wurl);
+      this.worker = w;
+
+      /* ★★★ THE TRANSFER IS THE WHOLE POINT. port2 goes INTO the worklet, port1 to the Worker, and
+       *     from then on PCM never touches this thread. Transferring detaches the port here, which
+       *     is exactly what we want: there is no second owner to get confused about. */
+      const ch = new MessageChannel();
+      this.node!.port.postMessage({ sinkPort: ch.port2 }, [ch.port2]);
+      w.postMessage({ type: 'init', url: this.url, sinkPort: ch.port1 }, [ch.port1]);
+      if (this.rec) w.postMessage({ type: 'rec', on: true });
+
+      w.onmessage = (e: MessageEvent) => {
+        const d = e.data as { type?: string; s?: string; msg?: string; n?: number;
+                              pcm?: Int16Array; ch?: number; why?: string; format?: number };
+        switch (d?.type) {
+          case 'status':
+            this.workerOpen = d.s === 'open';
+            this.cb.onStatus?.(d.s as any, d.msg);
+            break;
+          case 'bytes':  this.cb.onBytes?.(d.n || 0); break;
+          case 'needsCodec':
+            console.error('[audio] server requires Opus and refused this socket');
+            this.needsCodec = true;
+            break;
+          // ★ Recording taps PCM on THIS side, so the Worker forwards it — but only while a
+          //   recording is running. See emit() in WORKER_SRC.
+          case 'pcm':    if (d.pcm && this.rec) this._recordPcm(d.pcm, d.ch || 1); break;
+          /* ★★★ A DECODER THAT WILL NOT WORK IN THE WORKER MUST NOT MEAN SILENCE. Fall the whole
+           *     path back to the page, which still has the WASM decoder and every fallback this
+           *     class has always had. Better a busy main thread than no audio. */
+          case 'decoderFailed':
+          case 'unhandled':
+            console.warn('[audio] worker path failed (' + (d.why || ('format ' + d.format)) +
+                         ') — falling back to the main thread');
+            this._stopWorker();
+            this._openWs();
+            break;
+        }
+      };
+      w.onerror = () => {
+        console.warn('[audio] audio worker error — falling back to the main thread');
+        this._stopWorker();
+        this._openWs();
+      };
+    } catch (e) {
+      console.warn('[audio] could not start the audio worker — using the main thread', e);
+      this._stopWorker();
+      this._openWs();
+    }
+  }
+
+  private _stopWorker() {
+    if (!this.worker) return;
+    try { this.worker.postMessage({ type: 'close' }); } catch { /* going anyway */ }
+    try { this.worker.terminate(); } catch { /* already gone */ }
+    this.worker = null;
+    this.workerOpen = false;
   }
 
   private _openWs() {
@@ -918,25 +1149,33 @@ export class AudioPlayer {
 
   /** Common tail: record tap + int16 → float L/R + push to the worklet. Fed by PCM/ADPCM (sync)
    *  and by the Opus decoder (async). `pcm` is interleaved for stereo, sequential for mono. */
+  /** ★★ THE RECORD TAP, ONCE. Both paths reach it: the page's own decode calls it from _playPcm,
+   *  and the Worker forwards PCM here while a recording is running. Two copies of this would drift,
+   *  and the one that drifted would be discovered in somebody's saved file rather than on air.
+   *  ★ Always stereo. A WFM stream silently drops from 2ch to 1ch when the pilot unlocks, and a WAV
+   *    header cannot change channel count midway — so duplicate mono rather than write a file that
+   *    desyncs halfway through. */
+  private _recordPcm(pcm: Int16Array, ch: number) {
+    if (!this.rec) return;
+    const frames = Math.floor(pcm.length / Math.max(1, ch));
+    if (frames <= 0) return;
+    let out: Int16Array;
+    if (ch === 2) {
+      out = pcm.slice(0, frames * 2);
+    } else {
+      out = new Int16Array(frames * 2);
+      for (let i = 0; i < frames; i++) { out[i * 2] = pcm[i]; out[i * 2 + 1] = pcm[i]; }
+    }
+    this.rec.chunks.push(out);
+    this.rec.frames += frames;
+    this.rec.ch = 2;
+  }
+
   private _playPcm(pcm: Int16Array, ch: number) {
     const frames = Math.floor(pcm.length / Math.max(1, ch));
     if (frames <= 0) return;
 
-    if (this.rec) {
-      // Always store stereo. A WFM stream silently drops from 2ch to 1ch when
-      // the pilot unlocks, and a WAV header can't change channel count midway —
-      // so duplicate mono rather than write a file that desyncs halfway through.
-      let out: Int16Array;
-      if (ch === 2) {
-        out = pcm.slice(0, frames * 2);
-      } else {
-        out = new Int16Array(frames * 2);
-        for (let i = 0; i < frames; i++) { out[i * 2] = pcm[i]; out[i * 2 + 1] = pcm[i]; }
-      }
-      this.rec.chunks.push(out);
-      this.rec.frames += frames;
-      this.rec.ch = 2;
-    }
+    if (this.rec) this._recordPcm(pcm, ch);
 
     const l = new Float32Array(frames);
     const r = new Float32Array(frames);
@@ -971,6 +1210,8 @@ export class AudioPlayer {
 
   startRecording() {
     this.rec = { chunks: [], frames: 0, ch: 1, startedAt: Date.now() };
+    // ★ The Worker does not forward PCM unless someone is recording — see emit() in WORKER_SRC.
+    this.worker?.postMessage({ type: 'rec', on: true });
   }
 
   get recording(): boolean { return this.rec !== null; }
@@ -982,6 +1223,7 @@ export class AudioPlayer {
 
   /** Stop and return a WAV blob (null if nothing was captured). */
   stopRecording(): Blob | null {
+    this.worker?.postMessage({ type: 'rec', on: false });
     const r = this.rec;
     this.rec = null;
     if (!r || !r.frames) return null;
@@ -998,7 +1240,7 @@ export class AudioPlayer {
   get suspended(): boolean { return !!this.ctx && this.ctx.state === 'suspended'; }
 
   /** True while audio frames are actually arriving. */
-  get streaming(): boolean { return this.ws?.readyState === WebSocket.OPEN; }
+  get streaming(): boolean { return this.workerOpen || this.ws?.readyState === WebSocket.OPEN; }
 
   /**
    * What's actually wrong with the audio, for the status line. Silence has
@@ -1127,6 +1369,9 @@ export class AudioPlayer {
     //   AudioContext is a timer firing against a dead node for the life of the page.
     if (this.stallWatch !== null) { clearInterval(this.stallWatch); this.stallWatch = null; }
     this.closedByUs = true;
+    // ★★ THE WORKER HOLDS A SOCKET AND A RECONNECT TIMER OF ITS OWN. Closing only `this.ws` would
+    //    leave it reconnecting to a receiver nobody is listening to, for the life of the page.
+    this._stopWorker();
     this.ws?.close();
     this.ws = null;
     if (this.mediaEl) { this.mediaEl.pause(); this.mediaEl.srcObject = null; this.mediaEl = null; }
