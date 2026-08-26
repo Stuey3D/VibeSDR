@@ -191,6 +191,17 @@ if [ "$NATIVE_BUILD" = "1" ]; then
   runbuild() { /bin/bash -c "$1"; }   # ★ BUILD_SRC stays /build/VibeSDR — the copy, not the mount
 fi
 runbuild "
+  # ★★★ THE INNER SHELL NEEDS ITS OWN -e AND pipefail, AND THE ABSENCE OF THEM ALMOST SHIPPED A
+  #     PACKAGE BUILT FROM STALE OBJECTS. This whole block is a STRING handed to bash -c, so the
+  #     outer script's \`set -euo pipefail\` does not reach it — and \`cmake --build … | tail -1\`
+  #     reports TAIL's status, not the compiler's. On 2026-08-26 the compiler segfaulted, make
+  #     printed 'Error 2', and the script sailed on into cpack, which packaged whatever object
+  #     files happened to be lying about. It got away with it because cpack re-ran the compile and
+  #     the retry worked; nothing about that was guaranteed.
+  # ★★★ This is the SAME trap memory/mac_only_compile_is_not_a_build already records — 'cmd | tail
+  #     hides the exit status, and a fix that does nothing may simply not be in the binary'. It was
+  #     written down, and the release script still had it.
+  set -euo pipefail
   cd $BUILD_SRC/vibeserver
   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVIBESERVER_DEB_REV=$REV \
         -DVIBESERVER_STRICT_RADIOS=ON >/dev/null
