@@ -22,7 +22,7 @@ cmake_minimum_required(VERSION 3.20)
 #     package takes its upstream version from here, and the macOS app's plist is bumped alongside
 #     it. They must not drift: a Pi reporting 3.1.0 while the Mac says 3.0.2 makes every "which
 #     version are you on?" answer ambiguous, which is the question every fault report starts with.
-project(vibeserver VERSION 4.1.27 LANGUAGES CXX C)
+project(vibeserver VERSION 4.1.28 LANGUAGES CXX C)
 # ★ The single source of truth for the version. macOS shipped as VibeServer 1.0.0 (notarised),
 #   so Linux starts level with it rather than inventing a separate number for the same server.
 set(VIBESERVER_VERSION "${PROJECT_VERSION}")
@@ -138,7 +138,10 @@ if(CURSES_FOUND)
   target_include_directories(vibeserver PRIVATE ${CURSES_INCLUDE_DIRS})
   target_link_libraries(vibeserver PRIVATE ${CURSES_LIBRARIES})
   message(STATUS "TUI: enabled (ncurses)")
-elseif(VIBESERVER_STRICT_RADIOS)
+elseif(VIBESERVER_STRICT_RADIOS AND NOT APPLE)
+  # ★ NOT ON macOS. The wizard is the LINUX front door — the Mac ships a GUI app (VibeServerApp)
+  #   and has never had ncurses, so failing a strict Mac build here would only block the strict
+  #   flag from being switched on for the thing it IS needed for: the radio list.
   # ★★★ A RELEASE WITHOUT THE WIZARD IS NOT A RELEASE. Losing ncurses does not fail the build, it
   #     quietly removes the ONE command the setup instructions tell a new owner to type: `vibeserver`
   #     then falls through to daemon mode, prints a wall of server startup lines, and fights the
@@ -283,7 +286,7 @@ if(EXISTS "${AHF_VENDOR}/airspyhf.c")
   set(AIRSPYHF_VENDORED TRUE)
 endif()
 
-# ── libhackrf: HackRF One (EXPERIMENTAL, Linux) ───────────────────────────────
+# ── libhackrf: HackRF One (EXPERIMENTAL, Linux + macOS) ───────────────────────
 # ★★★ NOBODY HERE OWNS ONE. The driver is written against libhackrf's API and has never been run
 #     against a radio — exactly one listener can test it. That is why it is Experimental, why it is
 #     mentioned only in the README and release notes, and why no VibeAGC is wired to it.
@@ -293,23 +296,33 @@ endif()
 #     that is precisely how 3.0.0-2 shipped with the setup wizard compiled out: a rebuilt build root
 #     lost a -dev package and the only trace was a cmake STATUS line nobody read. So on a release
 #     build its absence is an error, not a shrug. See the ncurses block above for the original.
-# ★ Linux only for now. The Android path needs libhackrf cross-compiled for the NDK *and* the
+# ★ Desktop only. The Android path needs libhackrf cross-compiled for the NDK *and* the
 #   UsbManager fd dance the other sources carry; neither is written, so it is simply not offered
 #   there rather than half-offered.
-find_library(HACKRF_LIB NAMES hackrf HINTS /usr/lib /usr/local/lib)
-find_path(HACKRF_INC libhackrf/hackrf.h HINTS /usr/include /usr/local/include)
+find_library(HACKRF_LIB NAMES hackrf HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
+find_path(HACKRF_INC libhackrf/hackrf.h HINTS /opt/homebrew/include /usr/local/include /usr/include)
+# ★★★ PREFER THE STATIC ARCHIVE ON macOS, exactly as the librtlsdr and libairspyhf blocks do — a
+#     cached dylib path is how a notarised build ships broken. Homebrew's libhackrf.a needs only
+#     libusb, which this target already links, so nothing new has to be bundled or re-signed.
+if(APPLE AND HACKRF_LIB)
+  get_filename_component(_hrf_dir "${HACKRF_LIB}" DIRECTORY)
+  if(EXISTS "${_hrf_dir}/libhackrf.a")
+    set(HACKRF_LIB "${_hrf_dir}/libhackrf.a")
+  endif()
+endif()
 if(HACKRF_LIB AND HACKRF_INC)
   message(STATUS "libhackrf: ${HACKRF_LIB} (HackRF support: EXPERIMENTAL)")
   target_include_directories(vibeserver_core PUBLIC "${HACKRF_INC}")
   target_link_libraries(vibeserver_core PUBLIC "${HACKRF_LIB}")
   target_compile_definitions(vibeserver_core PUBLIC VIBE_HAS_HACKRF)
-elseif(VIBESERVER_STRICT_RADIOS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+elseif(VIBESERVER_STRICT_RADIOS AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE))
   message(FATAL_ERROR
           "libhackrf not found, and VIBESERVER_STRICT_RADIOS is on.\n"
           "  A release build must contain every radio a release claims to contain — and the one\n"
           "  person who can test this radio cannot tell a missing driver from a broken one.\n"
-          "  Install libhackrf-dev (it is in vibeserver/linux/Dockerfile.build), or build with\n"
-          "  -DVIBESERVER_STRICT_RADIOS=OFF for a local build that does not need it.")
+          "  Linux: install libhackrf-dev (it is in vibeserver/linux/Dockerfile.build).\n"
+          "  macOS: brew install hackrf.\n"
+          "  Or build with -DVIBESERVER_STRICT_RADIOS=OFF for a local build that does not need it.")
 else()
   message(STATUS "libhackrf: not found — building without HackRF support")
 endif()

@@ -2158,7 +2158,8 @@ struct LocalSdrShim::Impl {
     // END, not by our decoder, so this is how that gets tested rather than argued about.
     std::unique_ptr<vibe::SdrplaySource> sdrp;
     std::unique_ptr<vibe::AirspyHfSource> ahf;   // Airspy HF+ (Discovery / Dual Port)
-    /* ★ A FOURTH SOURCE, EXPERIMENTAL AND LINUX-ONLY. Nobody here owns a HackRF — see
+    /* ★ A FOURTH SOURCE, EXPERIMENTAL, DESKTOP-ONLY (Linux + macOS; not Android, which needs an
+     *   NDK build of libhackrf and the UsbManager fd dance). Nobody here owns a HackRF — see
      *   hackrf_source.h. It follows the same shape as the three above so the branches below stay
      *   a list rather than becoming a special case, and it is deliberately LAST everywhere for
      *   the same reason it is last in detectRadios(). */

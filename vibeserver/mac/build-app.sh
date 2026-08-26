@@ -15,7 +15,13 @@ BUILD="$ROOT/vibeserver/build"
 APP="$BUILD/VibeServer.app"
 
 echo "==> Building the C++ core"
-cmake -S "$ROOT/vibeserver" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release >/dev/null
+# ★★★ STRICT: a release build must contain every radio the release claims to contain. Without
+#     this flag a missing brew formula removes a driver silently, leaving one cmake STATUS line as
+#     the only trace — which is how 3.0.0-2 shipped with the setup wizard compiled out. It matters
+#     most for the HackRF: the one person who can test it cannot tell a missing driver from a
+#     broken one. Needs `brew install hackrf librtlsdr libusb`.
+cmake -S "$ROOT/vibeserver" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release \
+      -DVIBESERVER_STRICT_RADIOS=ON >/dev/null
 cmake --build "$BUILD" --target vibeserver_core -j >/dev/null
 # ★★★ AND THE FRONT-DOOR BINARY, WHICH FULL MODE SPAWNS. Simple mode runs the server IN-PROCESS
 #     (vs_start) and needs none of this; Full mode is multi-process by design — a front door that

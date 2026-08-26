@@ -1,4 +1,4 @@
-// HackRF One capture source for VibeServer — EXPERIMENTAL, Linux only.
+// HackRF One capture source for VibeServer — EXPERIMENTAL, Linux + macOS (not Android).
 //
 // ★★★ NOBODY HERE HAS ONE. This driver was written against libhackrf's API and the published
 // hardware description, and has never been run against a radio by its author. Exactly one person

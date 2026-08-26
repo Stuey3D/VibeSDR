@@ -521,7 +521,7 @@ public:
     /** Start on an Airspy HF+ (Discovery / Dual Port). Returns the port, or -1 with err set.
      *  ★ The requested sample rate is a HINT — the radio's own list wins, so read back
      *  getVibeServerStatus().sampleRate rather than assuming what you asked for. */
-    /** ★ HackRF One — EXPERIMENTAL, Linux only, never run against a radio by its author.
+    /** ★ HackRF One — EXPERIMENTAL, Linux + macOS, never run against a radio by its author.
      *  See hackrf_source.h. No Fd twin: this driver is not offered on Android. */
     int startHackRf(int index, double centerFreq, double sampleRate, int gainTenthDb,
                     int fftSize, double fftRate, const std::string& mode, std::string& err);
@@ -615,7 +615,7 @@ public:
      *  changing it on a live stream is a path no other SDR client takes and ours could leave the
      *  device needing a power cycle. See the lockedRate note in hwinfo. */
     bool isAirspyHf() const;      // cancels + restarts the IQ stream (auto FFT size)
-    bool isHackRf() const;        // EXPERIMENTAL, Linux only — three manual gain stages, no AGC
+    bool isHackRf() const;        // EXPERIMENTAL, Linux+macOS — three manual gain stages, no AGC
     void setFftRate(double fps);          // LIVE spectrum frame rate (power saving); audio unaffected
     void setDeemphasis(double tau);       // FM de-emphasis time constant (0=off, 50e-6, 75e-6)
     void setSquelch(bool on, float db);   // power-based audio squelch (dBFS)
