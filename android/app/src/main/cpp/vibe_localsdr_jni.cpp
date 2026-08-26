@@ -933,6 +933,13 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetOneRadioPerIp(JNIEnv*, jobject, jbool
     vibe::LocalSdrShim::instance().setOneRadioPerIp(on == JNI_TRUE);
 }
 
+/** ★★★ THE CAP, which the switch above is now a wrapper for. 1 = the old rule, 0 = no limit, 2 =
+ *  hear one radio against another without being able to take the whole site. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetMaxRadiosPerIp(JNIEnv*, jobject, jint cap) {
+    vibe::LocalSdrShim::instance().setMaxRadiosPerIp(cap < 0 ? 0 : (int)cap);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetMaxUsers(JNIEnv*, jobject, jint n) {
     vibe::LocalSdrShim::setVibeServerMaxUsers(n < 1 ? 1 : (int)n);

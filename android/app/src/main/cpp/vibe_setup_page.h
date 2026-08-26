@@ -282,17 +282,27 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
            could do — and even on a multi-radio machine what an owner is really deciding is how
            many CONNECTIONS one address may hold (Stuart, 2026-08-22). The wire field and the
            behaviour are unchanged; this is what it is called. -->
-      <label><span class="lbl">Several connections from one address</span>
-        <select id="oneRadioPerIp">
-          <option value="1">Refuse — one connection per address (recommended)</option>
-          <option value="0">Allow — one address may hold several at once</option>
+      <!-- ★★★ A NUMBER, NOT A SWITCH. "One" and "as many as you like" were the only two answers a
+           boolean could give, and neither suits a comparison site: a V4 and a V4L on the same
+           aerial exist so a visitor can hear one against the other, which needs TWO — while still
+           not letting one address take every radio (Stuart, 2026-08-26). -->
+      <label><span class="lbl">Connections from one address</span>
+        <select id="maxRadiosPerIp">
+          <option value="1">1 — refuse a second connection (recommended)</option>
+          <option value="2">2 — allow a pair, for comparing two radios</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="0">No limit — one address may hold every radio</option>
         </select>
-        <div class="hint">By default a second connection from an address that is already listening
-          is refused, and told so. It exists because a single visitor took <em>both</em> radios of a
-          public receiver at once by opening a tab on each.
-          <br>Allowing several is what a household needs: a phone and its watch, or two people on
-          one broadband line, leave by the same address and would otherwise count as one visitor.
-          <br><b>Allowing several is reasonable on a private server and unwise on a public one</b> —
+        <div class="hint">How many of this machine's radios one address may listen to at the same
+          time. Beyond the number you set, the next connection is refused and told which radio it is
+          already on. It exists because a single visitor took <em>both</em> radios of a public
+          receiver at once by opening a tab on each.
+          <br><b>2 is the setting for a comparison site</b> — two radios on one aerial, so a visitor
+          can hear one against the other in two tabs, and still cannot occupy the rest.
+          <br>Raising it also suits a household: a phone and its watch, or two people on one
+          broadband line, leave by the same address and would otherwise count as one visitor.
+          <br><b>No limit is reasonable on a private server and unwise on a public one</b> —
           one person could occupy every radio you own.
           <br>★ Two legitimate reasons to allow it. An <b>Apple Watch shares its paired iPhone's
           address</b>, so the pair count as one listener even though they are two devices. And
@@ -2027,7 +2037,11 @@ function fill() {
   $("trustedProxies").value = cfg.trustedProxies || "";
   // ★ Absent = "1" (the rule enforced), matching the config's own default — an older server that
   //   never heard of this must not appear to have it switched off.
-  $("oneRadioPerIp").value = (cfg.oneRadioPerIp === false) ? "0" : "1";
+  // ★ The cap when the server sends one; otherwise derive it from the old switch, so a server
+  //   that predates the number still lands on the right option instead of a blank select.
+  $("maxRadiosPerIp").value = String(
+    (cfg.maxRadiosPerIp !== undefined && cfg.maxRadiosPerIp !== null) ? cfg.maxRadiosPerIp
+      : (cfg.oneRadioPerIp === false ? 0 : 1));
   // ★★ FILLED IN THE SAME EDIT THAT ADDED THE FIELDS. A control the page never populates shows
   //    the owner an empty box over a setting that is actually on, and the next save writes the
   //    blank back — which is how twelve settings reverted on every start once already.
@@ -2244,7 +2258,10 @@ function stashServer() {
   cfg.uncompressed = parseInt($("uncompressed").value, 10);
   cfg.forceIdleSaver = $("forceIdle").checked;
   cfg.trustedProxies = $("trustedProxies").value.trim();
-  cfg.oneRadioPerIp = $("oneRadioPerIp").value === "1";
+  cfg.maxRadiosPerIp = parseInt($("maxRadiosPerIp").value, 10) || 0;
+  // ★ Sent alongside for a server that predates the cap: "enforced" unless the owner chose no
+  //   limit, which is the safer of the two answers an older build can hold.
+  cfg.oneRadioPerIp  = cfg.maxRadiosPerIp !== 0;
   cfg.dirList       = $("dirList").checked;
   cfg.dirName       = $("dirName").value.trim();
   cfg.dirPublicUrl  = $("dirPublicUrl").value.trim();
@@ -2274,7 +2291,8 @@ function collect() {
     uncompressed: parseInt($("uncompressed").value, 10),
     forceIdleSaver: $("forceIdle").checked,
     trustedProxies: $("trustedProxies").value.trim(),
-    oneRadioPerIp: $("oneRadioPerIp").value === "1",
+    maxRadiosPerIp: parseInt($("maxRadiosPerIp").value, 10) || 0,
+    oneRadioPerIp: (parseInt($("maxRadiosPerIp").value, 10) || 0) !== 0,
     dirList:          $("dirList").checked,
     dirName:          $("dirName").value.trim(),
     dirPublicUrl:     $("dirPublicUrl").value.trim(),

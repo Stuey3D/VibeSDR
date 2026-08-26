@@ -126,6 +126,8 @@ object VibeTunnel {
     @Volatile private var wantTunnel = false
     private val tunnelGen = java.util.concurrent.atomic.AtomicInteger(0)
     @Volatile private var tunnelFails = 0
+    /** Consecutive failed publishes — the only honest liveness test for a tunnel. */
+    @Volatile private var publishFails = 0
     /** ★ The application context and port, remembered so a reconnect needs nothing from the UI —
      *  which is very likely gone: the server keeps running with the screen off. */
     @Volatile private var appCtx: Context? = null
@@ -507,7 +509,13 @@ object VibeTunnel {
         //     "unchanged", and only a deliberate act from the screen moves it.
         // ★ -1, not 0: a renewal must leave the share window exactly as it is, and 0 now means
         //   "permanent" — see publishOnce.
-        lastPublish = { publishOnce(ctx, name, locator, port, radioModel, radioDriver, antenna, coverage, locked, -1L) }
+        // ★ Every renewal, retry and reconnect goes through this one lambda, which is why the
+        //   health check below lives here rather than at each call site.
+        lastPublish = {
+            val ok = publishOnce(ctx, name, locator, port, radioModel, radioDriver,
+                                 antenna, coverage, locked, -1L) != null
+            if (ok) publishFails = 0 else notePublishFailed()
+        }
         prefs(ctx).edit()
             .putBoolean(K_WANT, true).putString(K_NAME, name).putString(K_GRID, locator)
             .putString(K_MODEL, radioModel).putString(K_DRIVER, radioDriver)
@@ -601,6 +609,39 @@ object VibeTunnel {
      *    with no signal would otherwise respawn cloudflared every few seconds for the whole
      *    outage, on a battery.
      */
+    /**
+     * ★★★ A TUNNEL CAN DIE WITHOUT ITS PROCESS DYING, AND THAT IS THE ORDINARY CASE ON A PHONE.
+     *
+     *  The reconnect below is driven by the reader hitting EOF — i.e. by cloudflared EXITING. Tested
+     *  on the Xcover with aeroplane mode (2026-08-26): the network went away for half an hour and
+     *  **cloudflared stayed running the whole time**. The reader never saw EOF, so nothing fired;
+     *  the process was alive, the hostname was dead, and the server sat off the directory
+     *  indefinitely with nobody retrying. That is exactly the outage Stuart lost his listing to.
+     *
+     *  ★★ So liveness cannot be inferred from the process. The honest test of a tunnel is whether
+     *     anything can still be published through it, and we already do that on a timer. Two
+     *     consecutive failures and the tunnel is recycled whatever its process is doing.
+     *
+     *  ★ Recycling is a plain destroy(): the reader then sees EOF and takes the SAME reconnect path
+     *    that a genuine crash takes — one route back, already exercised, rather than a second
+     *    implementation that only runs in this case.
+     *  ★ Two, not one: a single failure is as likely to be the directory being slow or our own link
+     *    blipping, and rebuilding the tunnel costs a new hostname every time.
+     */
+    private fun notePublishFailed() {
+        publishFails++
+        Log.w(TAG, "publish failed ($publishFails in a row): $lastError")
+        if (publishFails >= 2 && wantTunnel && running.get()) {
+            publishFails = 0
+            Log.w(TAG, "tunnel is not carrying traffic though its process lives — recycling it")
+            try { proc?.destroy() } catch (_: Throwable) {}
+            // ★ Deliberately nothing else: wantTunnel stays true and the generation is unchanged,
+            //   so the reader's finally reconnects with backoff and re-publishes the new hostname.
+        } else {
+            retrySoon()
+        }
+    }
+
     private fun scheduleTunnelRestart() {
         val ctx = appCtx ?: return
         val port = lastPort

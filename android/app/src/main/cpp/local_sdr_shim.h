@@ -198,6 +198,9 @@ public:
     /** ONE RADIO PER ADDRESS — see ServerConfig::oneRadioPerIp. Default true; the owner may allow
      *  several, which is reasonable privately and unwise on a public server. */
     void setOneRadioPerIp(bool on);
+    /** How many of this machine's radios one address may hold at once. 1 = the old rule (default),
+     *  0 = no limit, 2 = the A/B case. setOneRadioPerIp() is now a wrapper for 1/0. */
+    void setMaxRadiosPerIp(int cap);
     /** Minutes of asking for nothing before a listener is prompted, then released. 0 = off. */
     void setIdleKickMinutes(int minutes);
     /** True when somebody is listening but is past their guarantee, so an arriving listener may

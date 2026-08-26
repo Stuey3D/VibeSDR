@@ -206,6 +206,8 @@ object VibeLocalSDR {
     /** ★ One radio per address, or several — see the JNI note. Default true (refuse). */
     fun setOneRadioPerIp(on: Boolean) { ensureLoaded(); nativeSetOneRadioPerIp(on) }
     private external fun nativeSetOneRadioPerIp(on: Boolean)
+    fun setMaxRadiosPerIp(cap: Int) { ensureLoaded(); nativeSetMaxRadiosPerIp(cap) }
+    private external fun nativeSetMaxRadiosPerIp(cap: Int)
 
     /** How many listeners may share this radio at once. 1 = the single-occupant server. */
     fun setMaxUsers(n: Int) { ensureLoaded(); nativeSetMaxUsers(n) }

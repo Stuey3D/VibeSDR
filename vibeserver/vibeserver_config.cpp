@@ -208,6 +208,7 @@ std::string toJson(const Config& c) {
     S("cpuGovernor", c.cpuGovernor);
     S("trustedProxies", c.trustedProxies);
     B("oneRadioPerIp", c.oneRadioPerIp);
+    N("maxRadiosPerIp", c.maxRadiosPerIp);
     N("port", c.port);
     j += "  \"web\": " + std::string(c.web ? "true" : "false") + "\n}\n";
     return j;
@@ -284,6 +285,13 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     // ★ Absent = true (the rule enforced). getBool only writes when the key is present, so an older
     //   config file keeps the safe behaviour rather than silently opening the server up.
     getBool(s, "oneRadioPerIp", c.oneRadioPerIp);
+    // ★★★ THE OLD SWITCH CARRIES FORWARD, IT IS NOT REPLACED. Read the bool first so a config that
+    //     predates the cap means exactly what it always did (true = 1, false = no limit), then let
+    //     an explicit `maxRadiosPerIp` win. The bool is re-derived last so the two can never
+    //     disagree in memory or in the next save.
+    c.maxRadiosPerIp = c.oneRadioPerIp ? 1 : 0;
+    if (getNum(s, "maxRadiosPerIp", d)) c.maxRadiosPerIp = (int)(d < 0 ? 0 : d);
+    c.oneRadioPerIp = (c.maxRadiosPerIp != 0);
     if (getNum(s, "uncompressed", d)) c.uncompressed = (int)d;
     getBool(s, "forceIdleSaver", c.forceIdleSaver);
     if (getNum(s, "port", d))        c.port = (int)d;
@@ -466,6 +474,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     out.cpuGovernor  = one.cpuGovernor;
     out.trustedProxies = one.trustedProxies;
     out.oneRadioPerIp = one.oneRadioPerIp;
+    out.maxRadiosPerIp = one.maxRadiosPerIp;
     out.port         = one.port;
     out.web          = one.web;
 
@@ -514,6 +523,7 @@ std::string toJson(const ServerConfig& c) {
     S("cpuGovernor", c.cpuGovernor);
     S("trustedProxies", c.trustedProxies);
     B("oneRadioPerIp", c.oneRadioPerIp);
+    N("maxRadiosPerIp", c.maxRadiosPerIp);
     // ★ The owner's standing message for the landing screen, and its link. See ServerConfig.
     S("landingMessage", c.landingMessage);
     S("landingLinkUrl", c.landingLinkUrl); S("landingLinkLabel", c.landingLinkLabel);
@@ -568,6 +578,13 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     // ★ B() only assigns when the key is PRESENT, so a config written before this existed keeps the
     //   safe default (the rule enforced) rather than reading as "switched off".
     B("oneRadioPerIp", c.oneRadioPerIp);
+    // ★★★ SAME ORDER AS THE OTHER READER, AND FOR THE SAME REASON: legacy bool first so an older
+    //     file keeps its meaning, explicit cap second, bool re-derived last so the pair cannot
+    //     drift apart. Two readers of one setting is exactly the shape that ends up disagreeing.
+    c.maxRadiosPerIp = c.oneRadioPerIp ? 1 : 0;
+    I("maxRadiosPerIp", c.maxRadiosPerIp);
+    if (c.maxRadiosPerIp < 0) c.maxRadiosPerIp = 0;
+    c.oneRadioPerIp = (c.maxRadiosPerIp != 0);
     S("landingMessage", c.landingMessage);
     S("landingLinkUrl", c.landingLinkUrl); S("landingLinkLabel", c.landingLinkLabel);
     // ★★★ WHATEVER THE SOURCE, IT PASSES THROUGH HERE — a hand-edited file, a restored backup or
@@ -745,6 +762,7 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.cpuGovernor = s.cpuGovernor;
     c.trustedProxies = s.trustedProxies;
     c.oneRadioPerIp = s.oneRadioPerIp;
+    c.maxRadiosPerIp = s.maxRadiosPerIp;
     c.web = s.web;
 
     c.mode = r.mode;

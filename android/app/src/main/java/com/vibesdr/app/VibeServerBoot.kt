@@ -137,8 +137,11 @@ object VibeServerBoot {
             //    set once and hoped for. Loopback only — see VibeTunnel.applyLoopbackTrust.
             VibeTunnel.applyLoopbackTrust(
                 VibeTunnel.isTunnelRunning(), if (adv) cfg.s("trustedProxies") else "")
-            // ★ Absent = true, the safe default: an older config must not read as "allow".
-            VibeLocalSDR.setOneRadioPerIp(cfg.b("oneRadioPerIp", true))
+            // ★★★ THE CAP WINS WHERE IT IS SET, and where it is not we derive it from the old
+            //     switch — absent = 1, the safe default, because an older config must not read as
+            //     "allow everything". 0 = no limit; 2 is the A/B case (see maxRadiosPerIp).
+            VibeLocalSDR.setMaxRadiosPerIp(
+                cfg.i("maxRadiosPerIp", if (cfg.b("oneRadioPerIp", true)) 1 else 0).coerceAtLeast(0))
             VibeLocalSDR.setMaxUsers(if (adv) cfg.i("maxUsers", 1).coerceAtLeast(1) else 1)
             VibeLocalSDR.setTuneLimits(
                 if (adv) cfg.s("allowRanges") else "",

@@ -80,6 +80,7 @@ struct Config {
     // Access
     std::string trustedProxies;   ///< see ServerConfig::trustedProxies
     bool        oneRadioPerIp = true;  ///< see ServerConfig::oneRadioPerIp
+    int         maxRadiosPerIp = 1;    ///< see ServerConfig::maxRadiosPerIp
     std::string allowRanges, blockRanges;   ///< see RadioConfig::allowRanges
     std::string pin, adminPass;
     int         sessionLimitMin = 0;
@@ -460,8 +461,26 @@ struct ServerConfig {
      *
      *  ★ IT LIVES BESIDE trustedProxies DELIBERATELY, because the two interact: behind a proxy that
      *  is not named above, EVERY listener arrives as the proxy — so this rule would refuse everyone
-     *  after the first. If you must run a proxy without naming it, this is the switch to turn off. */
+     *  after the first. If you must run a proxy without naming it, this is the switch to turn off.
+     *
+     *  ★★★ SUPERSEDED BY maxRadiosPerIp, and kept because older builds read it. A switch could only
+     *  say "one" or "as many as you like", and both are wrong for a comparison site: Stuart put a
+     *  V4 and a V4L on the same antenna precisely so a visitor could hear one against the other,
+     *  which needs TWO — while still not letting one address take all four (2026-08-26). */
     bool        oneRadioPerIp = true;
+    /** ★★★ HOW MANY OF THIS MACHINE'S RADIOS ONE ADDRESS MAY HOLD AT ONCE. 1 = the old rule, and
+     *  the default. 0 = no limit. 2 is the A/B case: hear this dongle against that one, on the
+     *  same aerial, without being able to occupy the whole site.
+     *
+     *  ★★ It carries the old switch forward rather than replacing it: absent `maxRadiosPerIp` with
+     *  `oneRadioPerIp` true reads as 1, false as 0, so no existing config changes meaning. On save
+     *  BOTH are written — the bool as `cap != 0` — so a downgrade lands on the enforced rule rather
+     *  than silently opening the server up. An older build cannot express "2", and 1 is the safer
+     *  of the two answers it can give.
+     *
+     *  ★ The false positive from the note above still applies and still costs nothing: a watch
+     *  tunnelling through its paired phone shares one address. */
+    int         maxRadiosPerIp = 1;
     int         port = 0;      // the ONE port that leaves the machine
     bool        web = true;
     std::vector<RadioConfig> radios;

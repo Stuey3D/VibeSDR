@@ -2408,7 +2408,9 @@ int main(int argc, char** argv) {
         LocalSdrShim::instance().setSessionLimitSoft(mine ? mine->sessionLimitSoft : false);
         // ★ MACHINE-level, not per radio: the rule is about one visitor holding SEVERAL of this
         //   machine's radios, so it cannot be a property of any one of them.
-        LocalSdrShim::instance().setOneRadioPerIp(g_serverConfig.oneRadioPerIp);
+        // ★ The CAP, not the switch — the switch is derived from it in the config reader so the
+        //   two can never disagree. See ServerConfig::maxRadiosPerIp.
+        LocalSdrShim::instance().setMaxRadiosPerIp(g_serverConfig.maxRadiosPerIp);
         // ★ Per radio, like everything else here: one machine may run a shared FM-DX dial and a
         //   private HF receiver at the same time, and they want opposite answers.
         // ★ Nothing to set for the shared dial: it IS "unlocked centre + more than one listener",

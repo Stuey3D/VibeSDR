@@ -1736,6 +1736,9 @@ static std::atomic<bool>   g_radioOrphaned{false};
  *     trap that once switched the session limit off for everybody.
  *  ★ Admin is exempt: the owner reaching several of their own radios at once is the normal case. */
 static std::atomic<bool>   g_vsOneRadioPerIp{true};
+/** ★★★ HOW MANY RADIOS ONE ADDRESS MAY HOLD. 1 = the old rule; 0 = no limit; 2 lets a visitor hear
+ *  one dongle against another on the same aerial without taking the whole site. */
+static std::atomic<int>    g_vsMaxRadiosPerIp{1};
 
 // ★★ THE AERIAL (per radio) AND THE OWNER'S STANDING LANDING MESSAGE (per machine). Set once at
 //    start-up from the config — see LocalSdrShim::setLandingInfo — and only ever read from here.
@@ -8018,7 +8021,9 @@ struct LocalSdrShim::Impl {
         // limit had not taken (Stuart, 2026-07-27, connected from his Mac). The warnings are
         // the nudge; this is the clock.
         // -1 = no limit, or this listener is exempt (loopback / admin).
-        { const int left = LocalSdrShim::instance().occupantSecsLeft(adminNow(sock) ? 1 : 0);
+        // ★ secsLeftFor, not occupantSecsLeft: on a shared dial the answer belongs to the LISTENER
+        //   asking, and the radio-wide clock is re-stamped by every new arrival.
+        { const int left = secsLeftFor(sock);
           j += ",\"sessionLimitMin\":" + std::to_string(g_vsSessionLimitMin.load());
           j += ",\"sessionSecsLeft\":" + std::to_string(left); }
         // A pinned rate is advertised so the client can HIDE its rate picker and say
@@ -11436,6 +11441,44 @@ struct LocalSdrShim::Impl {
         }
         return adminOk.load();
     }
+
+    /**
+     * ★★★ THE COUNTDOWN IS THIS LISTENER'S, NOT THE RADIO'S — AND ON A SHARED DIAL IT WAS THE
+     *     RADIO'S, SO EVERY ARRIVAL RESET EVERYBODY'S CLOCK.
+     *
+     *  ENFORCEMENT already knew better: enforceSessionLimit() branches at `maxUsers > 1` into
+     *  enforceSharedSessionLimit(), which walks the clients and uses each `c->since`. The DISPLAY
+     *  had no such branch — occupantSecsLeft() reads the single `occupantSince`, which is set
+     *  whenever `occupantSession != me`, and on a shared radio every new listener IS a different
+     *  session. So a second person connecting re-stamped that one clock and everyone's remaining
+     *  time jumped back to the full limit (Stuart, on the Airspy: "I was down to around 15 minutes
+     *  left, someone connected and my time reset back to 30 minutes").
+     *
+     *  ★★ THE DEADLINE NEVER MOVED — ONLY THE NUMBER DID, which is the worse failure of the two.
+     *     Enforcement kept counting from this listener's own `since`, so the screen promised half
+     *     an hour that the server had no intention of honouring. A display that disagrees with the
+     *     enforcement tells someone they are safe right up until they are cut off — the same
+     *     complaint the note beside enforceSessionLimit() already makes about the admin exemption.
+     *
+     *  ★ One-at-a-time receivers are unchanged: there `occupantSince` IS this listener's clock,
+     *    so the old path is still exactly right and still used.
+     */
+    int secsLeftFor(const std::shared_ptr<net::Socket>& sock) {
+        const int limitMin = g_vsSessionLimitMin.load();
+        if (limitMin <= 0) return -1;
+        const bool exempt = adminNow(sock);
+        if (exempt) return -1;                        // the owner is exempt, so no countdown
+        if (g_vsMaxUsers.load() <= 1)
+            return LocalSdrShim::instance().occupantSecsLeft(0);
+
+        const std::string a = sock ? sock->peerAddress() : std::string();
+        if (a.empty() || isLoopback(a)) return -1;    // the host's own listening
+        double since = 0;
+        if (auto c = dspFor(sock)) since = c->since;
+        if (since <= 0) return -1;                    // not counted yet; say nothing rather than 0
+        const double left = (double)limitMin * 60.0 - (nowSecs() - since);
+        return left > 0 ? (int)(left + 0.5) : 0;
+    }
     /** Sockets that have proved the password, for receivers with no per-client DSP. */
     std::mutex adminSockMtx;
     std::set<const net::Socket*> adminSocks;
@@ -13740,13 +13783,17 @@ void LocalSdrShim::setIdleKickMinutes(int minutes) {
     if (m > 0) LOGI("idle disconnect: after %d min with no interaction (asks first)", m);
 }
 
-void LocalSdrShim::setOneRadioPerIp(bool on) {
-    g_vsOneRadioPerIp.store(on);
-    // ★ Say it at both settings, and say WHY the permissive one is a choice rather than a default:
-    //   the log is where an owner looks when a stranger has taken every radio.
-    LOGI("one radio per address: %s", on
-         ? "ON — an address holding one radio is refused the others"
-         : "OFF — a single address may hold several radios at once (owner's choice)");
+void LocalSdrShim::setOneRadioPerIp(bool on) { setMaxRadiosPerIp(on ? 1 : 0); }
+
+void LocalSdrShim::setMaxRadiosPerIp(int cap) {
+    if (cap < 0) cap = 0;
+    g_vsMaxRadiosPerIp.store(cap);
+    g_vsOneRadioPerIp.store(cap != 0);
+    // ★ Say the NUMBER, and say why anything but 1 is a choice rather than a default: the log is
+    //   where an owner looks when a stranger has taken every radio.
+    if (cap == 0)      LOGI("radios per address: NO LIMIT — one address may hold every radio (owner's choice)");
+    else if (cap == 1) LOGI("radios per address: 1 — an address holding one radio is refused the others");
+    else               LOGI("radios per address: %d — an address may hold %d at once, and is refused the rest", cap, cap);
 }
 
 void LocalSdrShim::setSessionLimitSoft(bool soft) {
@@ -13841,8 +13888,22 @@ void LocalSdrShim::refreshOccupancy() {
 /** Is this address already listening on ANOTHER radio on this machine? Returns that radio's label.
  *  ★★ Entries older than 15 s are ignored: they belong to a process that has stopped refreshing,
  *     which means it is gone. Without that a crash would lock a visitor out until a reboot. */
+/**
+ * ★★★ COUNT THEM, DO NOT STOP AT THE FIRST. This returned as soon as it found ONE other radio held
+ *     by this address, which is the only answer a boolean could give — and it is the wrong one for
+ *     a comparison site. Stuart put a V4 and a V4L on the same aerial precisely so a visitor could
+ *     hear one against the other, and the natural way to do that is a tab on each: refused, every
+ *     time, by a rule meant to stop somebody taking the whole receiver (2026-08-26).
+ *  ★★ So the question is now "how many are already held", answered against a cap. 1 reproduces the
+ *     old behaviour exactly (refuse once one is held) and stays the default; 2 allows the A/B and
+ *     still refuses the third and fourth; 0 is no limit.
+ *  ★ The label returned is the FIRST one found, because it is only ever used to tell the caller
+ *    which radio they are already on — with a cap above 1 that is "one of the ones you are on",
+ *    which is what a person needs to hear to know what to close.
+ */
 static std::string occHeldElsewhere(const std::string& ip) {
-    if (ip.empty() || !g_vsOneRadioPerIp.load()) return "";
+    const int cap = g_vsMaxRadiosPerIp.load();
+    if (ip.empty() || cap <= 0) return "";
     if (isLoopback(ip)) return "";
     std::string dir, serial;
     { std::lock_guard<std::mutex> lk(g_occMtx); dir = g_occDir; serial = g_occSerial; }
@@ -13851,6 +13912,7 @@ static std::string occHeldElsewhere(const std::string& ip) {
     DIR* d = opendir(base.c_str());
     if (!d) return "";
     std::string found;
+    int held = 0;                       // how many OTHER radios this address is on right now
     while (dirent* e = readdir(d)) {
         if (e->d_name[0] == '.' || e->d_name == serial) continue;
         FILE* f = fopen((base + "/" + e->d_name).c_str(), "r");
@@ -13862,13 +13924,17 @@ static std::string occHeldElsewhere(const std::string& ip) {
             while (!sip.empty() && (sip.back()=='\n'||sip.back()=='\r')) sip.pop_back();
             while (!slabel.empty() && (slabel.back()=='\n'||slabel.back()=='\r')) slabel.pop_back();
             const long long ts = atoll(sts.c_str());
-            if (sip == ip && (vsNowEpoch() - ts) <= 15) found = slabel.empty() ? std::string("another radio") : slabel;
+            if (sip == ip && (vsNowEpoch() - ts) <= 15) {
+                ++held;
+                if (found.empty()) found = slabel.empty() ? std::string("another radio") : slabel;
+            }
         }
         fclose(f);
-        if (!found.empty()) break;
+        if (held >= cap) break;         // ★ already enough to refuse; no need to read the rest
     }
     closedir(d);
-    return found;
+    // ★ Taking THIS radio would make it held+1. Refuse only once the cap is already met.
+    return held >= cap ? found : std::string();
 }
 
 void LocalSdrShim::setConnLogPath(const std::string& path) {
