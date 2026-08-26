@@ -523,8 +523,24 @@ std::string startTunnel(int port) {
     stopTunnel();
     const std::string exe = cloudflaredPath();
     char cmd[1024];
+    /* ★★★ --protocol http2, AND IT IS A MEASURED CHOICE, NOT A PREFERENCE. cloudflared defaults
+     *     to QUIC, and QUIC made the waterfall STICKY — not slower, burstier. Measured on spectrum
+     *     frame arrivals, 80 frames per run ([[demo_server_live_on_website]]):
+     *         QUIC   jitter 97.6 ms   worst stall 773 ms   mean 48.9 ms
+     *         http2  jitter 34-44 ms  worst stall 151-324  mean 48.5 ms
+     *         LAN    jitter  5.5 ms   worst stall  64 ms   mean 49.2 ms
+     *     The mean is identical on every path: this was never latency, it was frames arriving in
+     *     clumps. A 773 ms stall is what an audio stutter sounds like.
+     * ★★★ AND IT HAD ONLY EVER BEEN APPLIED TO ONE MACHINE. Stuart's Pi carried it in a local
+     *     systemd drop-in, so every OTHER VibeServer ever installed ran the transport the
+     *     measurement rejected — and a second owner independently reported audio stutters on
+     *     Cloudflare (2026-08-26). A fix that lives on the author's own box is not shipped.
+     * ★★ APPENDED, NOT INSERTED. stopTunnel() below kills by matching this command line; putting a
+     *    flag between `--no-autoupdate` and `--url` would break that match and orphan the tunnel.
+     *    If these args are ever reordered, that pattern must move with them. */
     snprintf(cmd, sizeof cmd,
-             "'%s' tunnel --no-autoupdate --url http://127.0.0.1:%d 2>&1", exe.c_str(), port);
+             "'%s' tunnel --no-autoupdate --url http://127.0.0.1:%d --protocol http2 2>&1",
+             exe.c_str(), port);
     FILE* f = popen(cmd, "r");
     if (!f) return {};
     const unsigned gen = ++g_tunnelGen;

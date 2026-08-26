@@ -197,6 +197,16 @@ object VibeTunnel {
                 // ★ We ship a pinned build; letting it replace itself would both defeat that and
                 //   try to write to a directory it cannot write to.
                 "--no-autoupdate",
+                /* ★★★ --protocol http2 — MEASURED, not preferred. cloudflared defaults to QUIC,
+                 *     which delivered spectrum frames in clumps: 97.6 ms jitter and a 773 ms worst
+                 *     stall against http2's 34-44 ms and 151-324 ms, over 80 frames a run, with an
+                 *     IDENTICAL mean on both. That is not latency, it is burstiness, and 773 ms of
+                 *     it is an audible audio stutter.
+                 * ★★ It had only ever been set on ONE machine (a systemd drop-in on Stuart's Pi),
+                 *    so every phone and every apt install ran the transport the measurement
+                 *    rejected. Shipped everywhere on 2026-08-26 after a second owner reported
+                 *    stutters on Cloudflare. */
+                "--protocol", "http2",
                 // ★ Quieter than the default, and we only need the line carrying the hostname.
                 "--loglevel", "info"
             ).redirectErrorStream(true)
