@@ -1001,7 +1001,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         //    lied, which is harder to spot than the switch being wrong (Stuart, 2026-08-10).
         //    Falls back to the saved strength only when the server never had one.
         const want = !s.nr ? 0
-          : s.nrStrength !== undefined ? Math.max(1, Math.round(s.nrStrength * 100))
+          : s.nrStrength !== undefined ? Math.max(1, Math.round(nrPercent(s.nrStrength)))
           : Math.max(1, Number(prefs()['nr']) || 50);
         if (Number(nrEl.value) !== want) {
           nrEl.value = String(want);
@@ -7577,6 +7577,21 @@ function segment(id: string, attr: string, apply: (v: number) => void, prefKey?:
 function nrStrength(pct: number): number {
   const p = Math.max(0, Math.min(100, pct));
   return p <= 80 ? p / 80 : 1 + ((p - 80) / 20) * 0.4;
+}
+
+/** ★★★ THE EXACT INVERSE OF nrStrength(), AND IT MUST STAY EXACT. The server echoes the strength
+ *  it is using and onDspState renders it back onto the slider — then DISPATCHES an `input` event,
+ *  which sends the value again. That round trip is a feedback loop, so any disagreement between
+ *  the two directions is not a small display error, it is a RATCHET: this read `strength * 100`
+ *  against a forward map that divides by 80, so every echo multiplied the setting by 1.25 and it
+ *  climbed on its own until it stuck at 100% (Stuart, 2026-08-26: "I set noise reduction to 30%
+ *  but it has a mind of its own and increased to 100% by itself").
+ *  ★★ I introduced this the same day by changing the forward map alone. **A wire value converted
+ *     in two places must be changed in both, in the same edit** — the loop is what turns a units
+ *     mismatch into a runaway instead of an off-by-a-bit. */
+function nrPercent(strength: number): number {
+  const s = Math.max(0, Math.min(1.4, strength));
+  return s <= 1 ? s * 80 : 80 + ((s - 1) / 0.4) * 20;
 }
 
 function buildMenu() {

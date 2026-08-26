@@ -232,7 +232,7 @@ export interface SpectrumCallbacks {
     autobw?: boolean;
     autobwHz?: number;
     imsBlend?: number;
-    nrStrength?: number;      // 0..1, absent = never set
+    nrStrength?: number;      // 0..1.4 (>1 = over-subtraction), absent = never set
     rfNotch?: boolean; dabNotch?: boolean;
     /** ★ TWO SEPARATE BIAS-TEES: `biasT` is the dongle's, `rspBiasT` the RSP's. Different
      *  hardware, different setter, different button — never fold them into one field. */
