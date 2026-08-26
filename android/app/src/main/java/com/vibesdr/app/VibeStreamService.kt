@@ -308,11 +308,23 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 startAudioEngine(base, freq, mode, uuid, pw)
             }
             ACTION_START_EXTERNAL -> startExternalAudio(intent.getIntExtra(EXTRA_RATE, 48000), intent.getStringExtra(EXTRA_PAUSE_MODE) ?: "release")
+            // ★★★ EXTRA_WSBASE MUST BE READ HERE. It was put on the Intent by VibeStreamModule and
+            //     never taken off it — declared at one end, written at one end, read NOWHERE — so
+            //     the fifth argument fell to its default "" and the audio socket was rebuilt as
+            //     ws://host:port. On a multi-radio VibeServer that is the FRONT DOOR, which owns no
+            //     radio: it answers 503 and there is no sound, while the spectrum (which resolves
+            //     `/r/<id>` for itself) draws perfectly. Measured on the Pi, 2026-08-26:
+            //     "startLocalAudio 192.168.86.88:48000 base=''" then "503 Service Unavailable".
+            //  ★★ iOS was never affected because it hands wsBase straight down the ObjC bridge to
+            //     Swift. Android is the only platform that marshals through an Intent, and that
+            //     extra hop is the one end nobody wired — the same shape as the notice and the
+            //     connection log, both found the night before.
             ACTION_START_LOCAL -> startLocalAudio(
                 intent.getStringExtra(EXTRA_HOST) ?: "127.0.0.1",
                 intent.getIntExtra(EXTRA_PORT, 0),
                 intent.getStringExtra(EXTRA_TUNE) ?: "",
-                intent.getStringExtra(EXTRA_AUTH) ?: "")
+                intent.getStringExtra(EXTRA_AUTH) ?: "",
+                intent.getStringExtra(EXTRA_WSBASE) ?: "")
             ACTION_START_FMDX -> startFmdxAudio(intent.getStringExtra(EXTRA_BASE_URL) ?: return START_STICKY)
             ACTION_PLAY -> setMutedNative(false)
             ACTION_PAUSE -> setMutedNative(true)
@@ -689,8 +701,14 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private var laBytes = 0            // bytes since the last report (see onMessage)
     private var laBytesAt = 0L
 
+    /** ★★★ NO DEFAULT ON wsBase. It had one, and the default is precisely why a caller that never
+     *      passed it compiled cleanly and shipped: onStartCommand dropped the value and Kotlin
+     *      quietly supplied "". An empty base is still MEANINGFUL — local hardware on loopback has
+     *      no `/r/<id>` prefix and no TLS — so the empty string must be passed DELIBERATELY by
+     *      every caller rather than arrived at by omission. Required here, the compiler is the
+     *      thing that notices next time. */
     fun startLocalAudio(host: String, port: Int, initialTune: String, authSuffix: String,
-                        wsBase: String = "") {
+                        wsBase: String) {
         // ★ Trailing slash removed once, here: the caller may hand us either form and
         //   "$base//ws/audio" is a 404 that reads as "the server has no audio".
         localWsBase = wsBase.trimEnd('/')
