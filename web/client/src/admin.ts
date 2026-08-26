@@ -525,6 +525,12 @@ function loadLeaflet(): Promise<boolean> {
     css.rel = 'stylesheet';
     css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
     document.head.appendChild(css);
+    /* ★★ THE DARK BASEMAP, MADE RATHER THAN BOUGHT — see the tileLayer below for why we no longer
+     *    use CARTO. Inverting hue as well as luminance keeps water blue instead of orange. */
+    const dark = document.createElement('style');
+    dark.textContent =
+      '.vsDarkTiles{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.9) saturate(.7)}';
+    document.head.appendChild(dark);
     const js = document.createElement('script');
     js.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
     js.onload = () => resolve(true);
@@ -552,11 +558,20 @@ async function renderCountryMap(list: any[]): Promise<boolean> {
       //   the page's scroll wheel on the way past it, which is the classic embedded-map annoyance.
       scrollWheelZoom: false,
     }).setView([25, 5], 1);
-    // ★★ CARTO DARK MATTER — the dark basemap, so the panel matches the rest of the page rather
-    //    than punching a bright white hole in it. Same dependency class as the spots map's OSM
-    //    tiles, which this product has shipped for months.
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; OpenStreetMap, &copy; CARTO', subdomains: 'abcd', maxZoom: 6, minZoom: 1,
+    /* ★★★ PLAIN OSM TILES, DARKENED IN CSS — NOT CARTO. This used to point at CARTO's
+     *     `dark_all` basemap, and the comment here claimed that was "the same dependency class as
+     *     the spots map's OSM tiles". It was not, and that is exactly the distinction that bit us:
+     *     Leaflet needs no key, but the TILE PROVIDER is a separate service with its own terms.
+     *     CARTO now requires an API key and stamps unauthenticated tiles "API KEY REQUIRED" right
+     *     across the map — still HTTP 200, still a valid PNG, so nothing errored and nothing was
+     *     deployed; their terms simply changed underneath us (2026-08-26). A key is not the answer
+     *     either: VibeSDR sells on the App Store, so CARTO would price us as commercial.
+     * ★★ tile.openstreetmap.org needs no key and no account, and this product has served it from
+     *    the spots map for months — so it is a dependency we already carry rather than a new one.
+     * ★ The dark look is kept with a CSS filter on the TILE PANE only. Scoping it to that pane is
+     *   what stops it inverting the flag markers, which live in the marker pane. */
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap', maxZoom: 6, minZoom: 1, className: 'vsDarkTiles',
     }).addTo(ccMap);
   }
 

@@ -2643,6 +2643,27 @@ struct LocalSdrShim::Impl {
                 for (int r : kRungs) if (want <= r) { want = r; break; }
                 if (want >= (int)(sampleRate * 0.95)) want = 0;   // re-check after rounding UP
             }
+            /* ★★★ AND A DEADBAND ON THE WAY DOWN, because quantising alone does not stop a
+             *     flip-flop that straddles ONE rung boundary. Measured on the Xcover during an FM
+             *     broadcast sweep (2026-08-26): 23 transfers, EVERY ONE of them 0 <-> 1000000,
+             *     nine in a single second. `want` was crossing the top usable rung on alternate
+             *     steps, and at that sample rate the rung ABOVE it clamps to "no filter" — so each
+             *     crossing threw the whole filter in and out. A step function still steps on every
+             *     crossing; what the ladder was missing is that the boundary itself has no width.
+             * ★★ NARROWING IS THE LAZY DIRECTION, AND THAT ASYMMETRY IS THE SAFETY PROPERTY.
+             *    Too wide is a little more noise and nothing hidden; too narrow erases the band —
+             *    that is the 4.1.1-24 failure, and it is why this holds the CURRENT value rather
+             *    than deferring a new one. Nothing is queued, so nothing can be dropped: the next
+             *    call re-decides from scratch, and the moment `want` is genuinely a rung lower the
+             *    write happens. Widening stays immediate, exactly as before.
+             * ★ `cur == 0` means "wider than the capture", so its effective width IS the capture.
+             *   The ladder is ~1.4x per rung, so one rung-step is the smallest move worth a
+             *   synchronous transfer on the bus carrying the IQ. */
+            if (want != cur) {
+                const double curEff  = (cur  == 0) ? (double)sampleRate : (double)cur;
+                const double wantEff = (want == 0) ? (double)sampleRate : (double)want;
+                if (wantEff < curEff && wantEff > curEff / 1.4) want = cur;
+            }
             if (want != cur) {
                 // ★★★ ONLY WIDENING ARMS THE CUT. Narrowing takes energy AWAY, which can never
                 //     overload anything — the AGC's ordinary climb handles it, and arming here

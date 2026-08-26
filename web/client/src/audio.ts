@@ -1057,7 +1057,19 @@ export class AudioPlayer {
         return;
       }
       const draining = this.lastDrainAt > 0 && now - this.lastDrainAt < 2000;
-      if (!feeding || draining) return;
+      if (!feeding || draining) {
+        /* ★★★ A NODE THAT IS DRAINING IS A HEALTHY NODE — FORGET THE FAILED ATTEMPTS. This is the
+         *     SAME reset `_onOpusData` already does for `opusFails`, and for the same reason: the
+         *     counter below is a limit on CONSECUTIVE failures, but without this it was a limit on
+         *     failures for the LIFE OF THE PAGE. Three unrelated stalls spread over a long session
+         *     left the watchdog permanently disarmed, so the next stall — the one it exists for —
+         *     was never repaired and the only cure was reloading the page (Stuart, 2026-08-26,
+         *     after a socket drop: "the spectrum has resumed but no audio... I had to refresh the
+         *     page to restore the audio"). The lesson had already been learned one function up and
+         *     was not carried down here. */
+        if (feeding && draining) this.stallRebuilds = 0;
+        return;
+      }
       if (this.stallRebuilds >= 3) return;
       this.stallRebuilds++;
       console.warn('[audio] frames are arriving but the output has stopped draining — '

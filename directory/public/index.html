@@ -74,6 +74,9 @@
          border-bottom: 1px solid var(--line); }
   /* ★ Leaflet paints its own controls and popups in its default light theme — on this page they
      arrived as two white boxes over a black map. */
+  /* ★★ The dark basemap, made rather than bought — see the tileLayer call for why. Inverting hue
+   *    as well as luminance is what keeps water blue instead of orange. */
+  .vsDarkTiles { filter: invert(1) hue-rotate(180deg) brightness(.92) contrast(.9) saturate(.7); }
   .leaflet-control-zoom a { background: var(--panel) !important; color: var(--accent) !important;
                             border-color: var(--line) !important; }
   .leaflet-popup-content-wrapper, .leaflet-popup-tip {
@@ -606,8 +609,19 @@ document.getElementById('map').addEventListener('wheel', (e) => {
   e.preventDefault();
   if (e.deltaY > 0) map.zoomOut(1); else map.zoomIn(1);
 }, { passive: false });
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-  attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 12,
+/* ★★★ PLAIN OSM TILES, DARKENED IN CSS — NOT CARTO. Leaflet itself needs no API key; the TILE
+ *     PROVIDER is a separate service with its own terms, and that is the distinction that caught
+ *     us. CARTO now requires a key and stamps unauthenticated tiles "API KEY REQUIRED" across the
+ *     whole map — still HTTP 200, still a valid PNG, so nothing errored and no deploy was involved
+ *     (2026-08-26). Buying a key is not the answer: VibeSDR sells on the App Store, so CARTO would
+ *     price this as commercial use.
+ * ★★ THIS PAGE IS THE PUBLIC ONE, so it wore the watermark in front of everybody. The same line
+ *    exists in web/client/src/admin.ts and had to change in the SAME edit — two copies of one
+ *    decision, and the one left behind is the one that quietly stays broken.
+ * ★ The filter is scoped to the tile pane so it darkens the map WITHOUT inverting the markers or
+ *   the day/night terminator, which live in the marker and overlay panes. */
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap', maxZoom: 12, className: 'vsDarkTiles',
 }).addTo(map);
 
 // The day/night shadow, refreshed so it stays honest on a page left open.

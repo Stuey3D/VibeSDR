@@ -314,7 +314,10 @@ function abbr(c){if(!c)return'';var s=String(c).trim();if(CABBR[s])return CABBR[
 var map=L.map('lmap',{zoomControl:false,attributionControl:true,fadeAnimation:true,zoomAnimation:true,markerZoomAnimation:true})
   .setView([30,0],2);
 L.control.zoom({position:'bottomright'}).addTo(map);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OSM',maxZoom:14}).addTo(map);
+// keepBuffer holds a wider skirt of tiles so an ordinary drag never reaches bare canvas;
+// updateWhenZooming stops Leaflet firing requests it will throw away mid-animation.
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  {attribution:'&copy; OSM',maxZoom:14,keepBuffer:4,updateWhenZooming:false}).addTo(map);
 var cnt=document.getElementById('cnt');
 var toast=document.getElementById('toast');
 
@@ -463,6 +466,45 @@ if(KIND==='hfdl'){
   }
   function removeRing(el){if(!el)return;clearTimeout(el._tid);if(el.parentNode)el.parentNode.removeChild(el);}
 
+  /* ★★★ WARM THE DESTINATION TILES BEFORE THE FLIGHT, NOT AFTER IT. Leaflet asks for tiles when
+   *     it ARRIVES, so a flyTo lands on bare canvas and fills in square by square — the animation
+   *     is smooth and the map underneath it is not. Nothing here changes the animation; it just
+   *     makes sure the pictures are already in the browser cache when it gets there.
+   * ★★ IT MUST NEVER BLOCK THE FLIGHT. The wait is capped, and the fly starts on whichever comes
+   *    first — tiles ready, or the cap. A slow or absent network therefore costs the old behaviour
+   *    and nothing worse; it can delay the animation, never prevent it. 'fired' guards the cap and
+   *    the last image racing each other.
+   * ★ flyTo arcs OUT and back IN, so the lower zooms are on the path too — they are a handful of
+   *   tiles each (a whole level up is 4x the ground per tile) and cheap to fetch. */
+  function preloadTiles(centre,zoom,done){
+    zoom=Math.max(0,Math.min(14,Math.round(zoom)));
+    var size=map.getSize(),pending=0,fired=false;
+    function fin(){if(fired)return;fired=true;clearTimeout(cap);done();}
+    var cap=setTimeout(fin,600);
+    function grab(c,z){
+      z=Math.max(0,Math.round(z));
+      var n=Math.pow(2,z),la=c.lat*Math.PI/180;
+      var cx=(c.lng+180)/360*n;
+      var cy=(1-Math.log(Math.tan(la)+1/Math.cos(la))/Math.PI)/2*n;
+      var cols=Math.min(6,Math.ceil(size.x/256)+2),rows=Math.min(6,Math.ceil(size.y/256)+2);
+      for(var dx=-Math.floor(cols/2);dx<=Math.floor(cols/2);dx++){
+        for(var dy=-Math.floor(rows/2);dy<=Math.floor(rows/2);dy++){
+          var y=Math.floor(cy)+dy;if(y<0||y>=n)continue;
+          var x=Math.floor(cx)+dx;x=((x%n)+n)%n;
+          pending++;
+          var im=new Image();
+          im.onload=im.onerror=function(){if(--pending<=0)fin();};
+          im.src='https://'+'abc'.charAt((x+y)%3)+'.tile.openstreetmap.org/'+z+'/'+x+'/'+y+'.png';
+        }
+      }
+    }
+    var here=map.getCenter();
+    grab(centre,zoom);grab(centre,zoom-1);grab(centre,zoom-2);
+    // the wide part of the arc, over whatever sits between here and there
+    grab(L.latLng((here.lat+centre.lat)/2,(here.lng+centre.lng)/2),Math.max(0,zoom-3));
+    if(pending===0)fin();
+  }
+
   // skin _fitToLatest: flyToBounds AC+GS with 30% padding, rings on arrival
   function fitToLatest(acKey,gsid){
     var acLL=acKey&&acM[acKey]?acM[acKey].getLatLng():null;
@@ -477,10 +519,16 @@ if(KIND==='hfdl'){
       var b=L.latLngBounds([acLL,gsLL]);
       var sw=b.getSouthWest(),ne=b.getNorthEast();
       var latPad=Math.max((ne.lat-sw.lat)*0.3,4),lngPad=Math.max((ne.lng-sw.lng)*0.3,4);
-      map.flyToBounds(L.latLngBounds([sw.lat-latPad,sw.lng-lngPad],[ne.lat+latPad,ne.lng+lngPad]),
-        {maxZoom:6,animate:true,duration:0.9,paddingTopLeft:L.point(60,60),paddingBottomRight:L.point(60,60)});
+      var fb=L.latLngBounds([sw.lat-latPad,sw.lng-lngPad],[ne.lat+latPad,ne.lng+lngPad]);
+      var fo={maxZoom:6,animate:true,duration:0.9,paddingTopLeft:L.point(60,60),paddingBottomRight:L.point(60,60)};
+      // ★ Public API on purpose: getBoundsZoom/getCenter rather than the private _getBoundsCenterZoom
+      //   flyToBounds uses internally. Being a tile out only means one tile arrives late, which is
+      //   the very thing this is already tolerating — not worth depending on Leaflet's internals.
+      preloadTiles(fb.getCenter(),Math.min(6,map.getBoundsZoom(fb,false,L.point(60,60))),function(){
+        map.flyToBounds(fb,fo);
+      });
     }else{
-      map.flyTo(acLL,5,{animate:true,duration:0.8});
+      preloadTiles(acLL,5,function(){map.flyTo(acLL,5,{animate:true,duration:0.8});});
     }
   }
 
