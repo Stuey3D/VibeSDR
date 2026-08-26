@@ -823,6 +823,13 @@ export class AudioPlayer {
       this.node!.port.postMessage({ sinkPort: ch.port2 }, [ch.port2]);
       w.postMessage({ type: 'init', url: this.url, sinkPort: ch.port1 }, [ch.port1]);
       if (this.rec) w.postMessage({ type: 'rec', on: true });
+      /* ★★★ SAY SO, BECAUSE OTHERWISE NOBODY CAN TELL. Every failure path here logs loudly, but
+       *     SUCCESS said nothing — so a console with no warnings was indistinguishable from a
+       *     console where the Worker had never been attempted, and the one line people DID see
+       *     ("requesting Opus…") comes from main.ts before any of this and appears either way.
+       *     An owner testing on a browser we cannot run had no way to answer "is it even on?" —
+       *     which is the first question any test of this needs (2026-08-26). */
+      console.info('[audio] decoding in a Worker — off the main thread');
 
       w.onmessage = (e: MessageEvent) => {
         const d = e.data as { type?: string; s?: string; msg?: string; n?: number;
