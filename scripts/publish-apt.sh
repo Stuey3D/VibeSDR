@@ -113,6 +113,29 @@ echo "==> publishing vibeserver $FULLVER ($ARCH)"
 COPY_EXCLUDES="--exclude build --exclude .git --exclude node_modules --exclude Pods
                --exclude tvos --exclude ios --exclude spike --exclude web/dist"
 
+# ★★★ A .deb BUILT SOMEWHERE ELSE — VIBE_PREBUILT_DEB.
+#
+#     The emulated architecture is the problem this exists for. Building amd64 under qemu on an
+#     Apple Silicon Mac segfaults the compiler outright, on a DIFFERENT FILE each run, which is
+#     how you tell it from a code fault — five separate failures on 2026-08-27 alone, before and
+#     after JOBS=1. Retrying works often enough to be tempting and wastes a quarter of an hour
+#     each time it does not.
+#
+# ★★ SO BUILD IT ON A REAL MACHINE OF THAT ARCHITECTURE and hand the file to this script. It is
+#    still built in the bookworm container over there, so the Depends: line is derived the same
+#    way — that is the whole reason the build root exists and it is not being bypassed.
+#
+# ★★★ EVERY CHECK BELOW STILL RUNS ON IT: the settings-wizard probe, the glibc baseline assert
+#     and the version match. Those are the valuable part of this script, and a package that
+#     arrived from another box deserves them MORE than one built here, not less. The only thing
+#     skipped is the compile.
+#
+# ★ The signing key never travels. Indexing and signing happen here, on the machine that has it.
+if [ -n "${VIBE_PREBUILT_DEB:-}" ]; then
+  [ -f "$VIBE_PREBUILT_DEB" ] || { echo "!! VIBE_PREBUILT_DEB does not exist: $VIBE_PREBUILT_DEB"; exit 1; }
+  DEB="$VIBE_PREBUILT_DEB"
+  echo "==> using a pre-built package: $(basename "$DEB")"
+else
 # ── Build, INSIDE A DEBIAN BOOKWORM ROOT ─────────────────────────────────────
 # ★★★ NOT ON THE HOST. CPack derives Depends: from whatever the build machine links against, so
 #     building on this Pi (trixie) stamped the package `libc6 (>= 2.38), libstdc++6 (>= 14)` and
@@ -214,6 +237,7 @@ runbuild "
   cmake --build build -j"${JOBS:-$(nproc)}" | tail -1
   cd build && cpack >/dev/null"
 DEB="$(ls -t "$BUILD_ROOT$BUILD_SRC/vibeserver/build"/vibeserver_*.deb | head -1)"
+fi   # end of the local build — see VIBE_PREBUILT_DEB
 
 # ★★★ AND THE BUILD MUST CONTAIN WHAT A RELEASE CONTAINS. CMake now refuses outright when a
 #     release feature is missing, but only for the ones anybody thought to guard — so check the

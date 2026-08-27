@@ -118,6 +118,24 @@ echo "==> staged $(ls "$STAGE" | wc -l | tr -d ' ') SDRplay headers from $SDRPLA
 # ★ The image is tagged per architecture. One shared tag meant the second run reused the FIRST
 #   architecture's image, and docker would not have complained: it is a valid image, for the wrong
 #   machine, and the .deb it produces is stamped with the wrong Architecture:.
+# ★★★ A PACKAGE BUILT ON A REAL MACHINE OF THAT ARCHITECTURE — see VIBE_PREBUILT_DEB in
+#     publish-apt.sh. Set it on the host and the compile is skipped for that arch; every check
+#     still runs, and the signing key stays here. Built for the emulated arch, which segfaults
+#     the compiler under qemu on a different file every run.
+# ★ STAGED INSIDE THE SOURCE MOUNT rather than bind-mounted on its own. A second -v for the file
+#   is the obvious way and it silently does not work: Docker Desktop shares a fixed set of host
+#   paths, so a mount outside them yields no file and the container reports the package "does not
+#   exist" — which reads as a missing build rather than a missing mount. $SRC_DIR is already
+#   mounted and already proven, so the file travels the way everything else does.
+PREBUILT_ENV=""; PREBUILT_STAGED=""
+if [ -n "${VIBE_PREBUILT_DEB:-}" ]; then
+  [ -f "$VIBE_PREBUILT_DEB" ] || { echo "!! no such file: $VIBE_PREBUILT_DEB"; exit 1; }
+  PREBUILT_STAGED="$SRC_DIR/.prebuilt-$(basename "$VIBE_PREBUILT_DEB")"
+  cp "$VIBE_PREBUILT_DEB" "$PREBUILT_STAGED"
+  trap 'rm -f "$PREBUILT_STAGED"' EXIT
+  PREBUILT_ENV="-e VIBE_PREBUILT_DEB=/work/VibeSDR/$(basename "$PREBUILT_STAGED")"
+fi
+
 for A in $ARCHES; do
   IMAGE="vibeserver-build:bookworm-$A"
   echo "==> [$A] build image"
@@ -140,6 +158,7 @@ for A in $ARCHES; do
     -v "$APT_DIR":/work/VibeServer \
     -v "$KEY_FILE":/tmp/signing-key.asc:ro \
     -e APT_DIR=/work/VibeServer \
+    ${PREBUILT_ENV} \
     -e JOBS="$JOBS_FOR_ARCH" \
     "$IMAGE" /bin/bash -euo pipefail -c '
     export GNUPGHOME=$(mktemp -d)
