@@ -5955,15 +5955,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     rtlAutoExplainedRef.current = true;
     showVtsNotice(
       hwTunerBwAuto && hwAgc
-        ? 'Automatic gain and automatic IF filtering are enabled. Zooming in narrows the '
-          + 'tuner\u2019s filter and the gain will adjust to suit; zooming out may overload the '
-          + 'receiver briefly until the AGC brings the gain back down. If strong signals surround '
-          + 'the one you want, try zooming in \u2014 the filter may clean it up.'
+        ? 'Automatic gain and IF filtering are on. Zoom in to narrow the tuner\u2019s filter \u2014 it can clean up a signal crowded by strong neighbours. Zoom out and the receiver may overload briefly until the AGC settles.'
         : hwTunerBwAuto
-        ? 'Automatic IF filtering is active \u2014 zooming in narrows the tuner\u2019s filter and '
-          + 'increases signal filtering, so adjust the gain accordingly.'
-        : 'Automatic gain is enabled \u2014 the receiver will set its own gain, and may take a '
-          + 'moment to settle after a large change in signal.',
+        ? 'Automatic IF filtering is on \u2014 zooming in narrows the tuner\u2019s filter, so adjust the gain to suit.'
+        : 'Automatic gain is on \u2014 the receiver sets its own gain and takes a moment to settle after a big change.',
       20000);
   }, [radioCaps?.driver, hwTunerBwAuto, hwAgc, showVtsNotice]);
 

@@ -1495,7 +1495,14 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     let el = document.getElementById('audioGate');
     // ★ Never mid-gesture — see gateGestureActive. The pointerup that follows is swallowed by the
     //   overlay's own handler, which then takes it down.
-    if (!need) { if (el && !gateGestureActive) el.remove(); return; }
+    if (!need) {
+      if (el && !gateGestureActive) {
+        el.remove();
+        // ★ Anything held back while the gate covered the screen can be said now.
+        vtsPumpNotices();
+      }
+      return;
+    }
     if (el) return;
 
     // ★★ A GATE, NOT A HINT. A small badge left the receiver looking live while it was silent, and
@@ -1705,15 +1712,10 @@ function maybeExplainRtlAutomation() {
   if (!hwTunerAuto && !hwAgcOn) return;
   rtlAutoExplained = true;
   const msg = hwTunerAuto && hwAgcOn
-    ? 'Automatic gain and automatic IF filtering are enabled. Zooming in narrows the tuner\u2019s '
-      + 'filter and the gain will adjust to suit; zooming out may overload the receiver briefly '
-      + 'until the AGC brings the gain back down. If strong signals surround the one you want, '
-      + 'try zooming in \u2014 the filter may clean it up.'
+    ? 'Automatic gain and IF filtering are on. Zoom in to narrow the tuner\u2019s filter \u2014 it can clean up a signal crowded by strong neighbours. Zoom out and the receiver may overload briefly until the AGC settles.'
     : hwTunerAuto
-    ? 'Automatic IF filtering is active \u2014 zooming in narrows the tuner\u2019s filter and '
-      + 'increases signal filtering, so adjust the gain accordingly.'
-    : 'Automatic gain is enabled \u2014 the receiver will set its own gain, and may take a moment '
-      + 'to settle after a large change in signal.';
+    ? 'Automatic IF filtering is on \u2014 zooming in narrows the tuner\u2019s filter, so adjust the gain to suit.'
+    : 'Automatic gain is on \u2014 the receiver sets its own gain and takes a moment to settle after a big change.';
   vtsNotice('rtlauto', msg, '', 20000);
 }
 
@@ -2438,6 +2440,15 @@ let vtsNoticeSized = false;
 
 function vtsPumpNotices() {
   if (vtsNoticeKey || !vtsQueue.length) return;    // one is still on screen
+  /* ★★★ NOT WHILE THE AUDIO GATE IS UP. The gate is a full-screen overlay, so a notice shown
+   *   underneath it scrolls, times out and is gone before the listener has clicked START —
+   *   Stuart, 2026-08-27: "I noticed it scrolling behind the overlay". Which is the worst case
+   *   for THIS message in particular: it explains the receiver's behaviour to somebody who has
+   *   just arrived, and they are the only person who cannot see it.
+   * ★★ HELD, NOT DROPPED. The queue keeps it and the gate's own teardown pumps it, so the
+   *   explanation arrives when there is somebody able to read it. That is the whole reason the
+   *   slot is a queue rather than a variable. */
+  if (document.getElementById('audioGate')) return;
   const n = vtsQueue.shift()!;
   vtsNoticeKey = n.key;
   vtsNoticeSized = false;
