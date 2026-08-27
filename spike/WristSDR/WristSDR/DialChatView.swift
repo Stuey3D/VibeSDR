@@ -36,16 +36,33 @@ struct DialChatView: View {
           .font(.system(size: 11)).foregroundColor(.orange.opacity(0.85))
           .multilineTextAlignment(.center).frame(maxWidth: .infinity)
 
-        // ── The arm switch ──────────────────────────────────────────────────────
-        Button { radio.dialArmed.toggle() } label: {
-          HStack(spacing: 6) {
-            Image(systemName: radio.dialArmed ? "lock.open.fill" : "lock.fill")
-              .font(.system(size: 13))
+        // ── The arm switch ─────────────────────────────────────────────────────
+        // ★★★ FM-DX's CONTROL, NOT A SECOND ONE. Same shape (the tune scale), same marks (green
+        //   tick / red cross), same meaning — "may this watch move a dial other people are
+        //   listening to". FM-DX got here first and taught it; a different-looking switch for the
+        //   identical question would be two lessons where one will do.
+        // ★★ It stays HERE, on the chat page, deliberately. Stuart: "keep it as it is now with the
+        //   chat being the place to unlock the tuner as that prompts a user to ask." Reaching for
+        //   the tuner walks you past the place you would ask for it.
+        Button {
+          radio.dialArmed.toggle()
+          WKInterfaceDevice.current().play(radio.dialArmed ? .start : .stop)
+        } label: {
+          HStack(spacing: 8) {
+            TuneScaleGlyph().stroke(.white, style: StrokeStyle(lineWidth: 1.1, lineCap: .round))
+              .frame(width: 18, height: 11)
+              .overlay(alignment: .bottomTrailing) {
+                Image(systemName: radio.dialArmed ? "checkmark.circle.fill" : "xmark.circle.fill")
+                  .font(.system(size: 8, weight: .bold))
+                  .foregroundStyle(radio.dialArmed ? .green : .red)
+                  .background(Circle().fill(.black)).offset(x: 5, y: 4)
+              }
+              .frame(width: 36, height: 30)
             VStack(alignment: .leading, spacing: 1) {
-              Text(radio.dialArmed ? "DIAL ARMED" : "DIAL LOCKED")
+              Text(radio.dialArmed ? "TUNING ARMED" : "TUNING LOCKED")
                 .font(.system(size: 11, weight: .bold))
               Text(radio.dialArmed
-                   ? "You can tune · unlocks off after \(Int(UberClient.armMinutes)) min"
+                   ? "You can tune · disarms after \(Int(UberClient.armMinutes)) min"
                    : "Tap to allow tuning")
                 .font(.system(size: 9)).opacity(0.75).lineLimit(2)
             }
@@ -55,7 +72,7 @@ struct DialChatView: View {
           .padding(.horizontal, 8).padding(.vertical, 6)
           .frame(maxWidth: .infinity)
           .background(RoundedRectangle(cornerRadius: 8)
-            .fill((radio.dialArmed ? Color.green : Color.white).opacity(0.12)))
+            .fill((radio.dialArmed ? Color.green : Color.white).opacity(0.14)))
         }
         .buttonStyle(.plain)
 

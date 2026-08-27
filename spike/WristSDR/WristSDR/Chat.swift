@@ -113,6 +113,14 @@ enum Canned {
 struct ChatGlyph: View {
   let clients: Int
   let activity: Int          // bumps on each inbound message — drives the breathe
+  /* ★★★ THE DIAL'S ARM STATE RIDES ON THE SAME BUTTON, because it is the same journey. Tapping
+   *   here opens the chat AND the arm switch, and that ordering is deliberate: on a shared dial
+   *   the polite move is to ASK before you take the tuner, so the control that lets you take it
+   *   sits behind the screen where you would ask. Stuart: "keep it as it is now with the chat
+   *   being the place to unlock the tuner as that prompts a user to ask."
+   * ★★ nil = there is no shared dial here, so there is nothing to arm and no padlock is drawn —
+   *   an exclusive receiver is always yours. */
+  var dialArmed: Bool? = nil
   var tap: () -> Void
 
   @State private var pulse = false      // the in/out scale oscillation
@@ -121,6 +129,21 @@ struct ChatGlyph: View {
   var body: some View {
     Button(action: tap) {
       HStack(spacing: 3) {
+        /* ★★★ THE SAME MARK FM-DX ALREADY USES — a green tick when the tuner is yours to move, a
+         *   red cross when it is not (FmdxView.armButton). Not a padlock: FM-DX has taught this
+         *   watch's users one shape for "may I tune on a shared receiver", and inventing a second
+         *   one for the same question on a different screen is how two screens end up disagreeing
+         *   about what a symbol means. Stuart: "use the tuning arm/disarm from the FM-DX page,
+         *   we've already built it."
+         * ★★ ORDER IS state · person · count. The state leads because it is what you are deciding
+         *   about, and because a count reaching two digits would otherwise shove it along the row
+         *   each time somebody joined — leading it keeps it in the same place on every glance.
+         * ★ nil = no shared dial, so there is nothing to arm and no mark is drawn. */
+        if let armed = dialArmed {
+          Image(systemName: armed ? "checkmark.circle.fill" : "xmark.circle.fill")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(armed ? .green : .red)
+        }
         Image(systemName: "person.2.fill").font(.system(size: 11, weight: .semibold))
         if clients > 0 {
           Text("\(clients)").font(.system(size: 11, weight: .semibold, design: .rounded)).monospacedDigit()

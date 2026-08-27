@@ -381,49 +381,50 @@ link.setAutoContrast(wfAutoContrast)
         .allowsHitTesting(false)
       }
 
-      // Shared chat + client-count glyph — top-left, exactly where the dev CPU badge sits and where the
-      // companion's FM-DX screen carries the same icon. Passive until a message lands, then it breathes;
-      // tap opens the chat sheet with the canned replies. Only on chat-capable backends (OWRX today).
-      if link.supportsChat {
-        VStack {
-          HStack {
-            // ★ The glyph breathes for EITHER chat — a canned "Can I tune?" is exactly the kind of
-            //   message it exists to announce, and it arrives on a different path from the
-            //   free-text backends' `chatActivity`.
-            ChatGlyph(clients: link.sharedDialChat ? (link.vibe?.dialListeners ?? 0) : link.clients,
-                      activity: link.chatActivity + (link.vibe?.chatUnread ?? 0)) {
-              if !locked { showChat = true }
+      /* ★★★ ONE TOP-LEFT COLUMN, USERS ABOVE HARDWARE — they used to be two overlays at the SAME
+       *   coordinates (both `.leading 6 .top 19`) and they drew on top of each other. The hardware
+       *   button's own comment recorded the assumption that broke it: "(This corner is free on
+       *   VibeServer — no chat glyph.)" That was true until VibeServer grew a shared dial, which
+       *   brought the chat glyph to a screen that already had the antenna — and then the two sat
+       *   in the same 30 points, reading as one smudged icon with a stray listener count beside it.
+       * ★★ Users FIRST because it is the one that changes: a listener arriving, a message landing,
+       *   the dial being armed. The hardware button is a door that is always in the same place.
+       * ★ One VStack rather than two overlays, so a third thing added to this corner collides at
+       *   COMPILE time (a new row) instead of at RUN time (another silent overlap). */
+      VStack {
+        HStack {
+          VStack(alignment: .leading, spacing: 4) {
+            if link.supportsChat {
+              // ★ The glyph breathes for EITHER chat — a canned "Can I tune?" is exactly the kind of
+              //   message it exists to announce, and it arrives on a different path from the
+              //   free-text backends' `chatActivity`.
+              // ★★ It also carries the DIAL'S ARM STATE and is the way in to changing it: the arm
+              //   switch lives on the chat page on purpose, so reaching for the tuner walks you
+              //   past the place you would ask for it.
+              ChatGlyph(clients: link.sharedDialChat ? (link.vibe?.dialListeners ?? 0) : link.clients,
+                        activity: link.chatActivity + (link.vibe?.chatUnread ?? 0),
+                        dialArmed: link.vibe?.sharedDial == true ? (link.vibe?.dialArmed ?? false) : nil) {
+                if !locked { showChat = true }
+              }
             }
-            .padding(.leading, 6).padding(.top, 19)
-            Spacer()
+            if link.hasHardwareControls {
+              Button { if !locked { showHardware = true } } label: {
+                // Vertical antenna + radio waves — reads as "the radio", and stays right if we support
+                // other SDRs beyond RTL later (not an RTL-specific glyph).
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                  .font(.system(size: 14, weight: .semibold)).foregroundStyle(.cyan)
+                  .padding(.horizontal, 6).padding(.vertical, 3)
+                  .background(Capsule().fill(.black.opacity(0.35)))
+                  .contentShape(Capsule())
+              }.buttonStyle(.plain)
+            }
           }
+          .padding(.leading, 6).padding(.top, 19)
           Spacer()
         }
-        .ignoresSafeArea()
+        Spacer()
       }
-
-      // RTL-SDR hardware button — top-left (opposite the clock), VibeServer only. The client drives the
-      // physical dongle (gain/bias-T/AGC/PPM/sample-rate); its own button keeps the hold-menu uncluttered
-      // for the remote backends that have no hardware. (This corner is free on VibeServer — no chat glyph.)
-      if link.hasHardwareControls {
-        VStack {
-          HStack {
-            Button { if !locked { showHardware = true } } label: {
-              // Vertical antenna + radio waves — reads as "the radio", and stays right if we support other
-              // SDRs beyond RTL later (not an RTL-specific glyph).
-              Image(systemName: "antenna.radiowaves.left.and.right")
-                .font(.system(size: 14, weight: .semibold)).foregroundStyle(.cyan)
-                .padding(.horizontal, 6).padding(.vertical, 3)
-                .background(Capsule().fill(.black.opacity(0.35)))
-                .contentShape(Capsule())
-            }.buttonStyle(.plain)
-            .padding(.leading, 6).padding(.top, 19)
-            Spacer()
-          }
-          Spacer()
-        }
-        .ignoresSafeArea()
-      }
+      .ignoresSafeArea()
 
       // DEGRADE, DON'T BLOCK.
       //
