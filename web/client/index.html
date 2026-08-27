@@ -124,8 +124,16 @@ input, textarea, [contenteditable],
    (Stuart, 2026-08-06). A darker backdrop would hide the very picture the page exists to show.
    ★ So: a dark HALO on the text itself. It costs nothing when the background is quiet and
      guarantees the text stays readable when it is not — contrast that does not depend on luck. */
-#splash h1, #splash .sub, #splashSpectroTip, #splashConditions {
+#splash .sub, #splashSpectroTip, #splashConditions {
   text-shadow: 0 0 6px rgba(0,0,0,0.95), 0 0 14px rgba(0,0,0,0.85), 0 1px 2px rgba(0,0,0,0.95);
+}
+/* ★★★ THE TITLE TAKES BOTH SHADOWS IN ONE DECLARATION. It was in the list above AND had its own
+   amber bloom rule below, and a second text-shadow REPLACES rather than adds — so whichever won
+   the cascade, the other was silently gone. Written together, it keeps the dark halo that makes
+   it legible over the picture and the bloom that makes it the title. */
+#splash h1 {
+  text-shadow: 0 0 6px rgba(0,0,0,0.95), 0 0 14px rgba(0,0,0,0.85), 0 1px 2px rgba(0,0,0,0.95),
+               0 0 24px rgba(255,170,0,0.35);
 }
 /* Stamps drawn INTO the canvas, so they scroll with the image rather than floating over it. */
 /* ★★★ NO left/bottom. These are left over from when this sat absolutely positioned in the
@@ -154,7 +162,7 @@ input, textarea, [contenteditable],
 }
 #splash h1 {
   margin: 0; font-size: 34px; letter-spacing: 6px; text-indent: 6px; font-weight: 600;
-  color: var(--amber); text-shadow: 0 0 24px rgba(255,170,0,0.35);
+  color: var(--amber);   /* text-shadow lives in the combined rule above — see the note there */
 }
 /* ★★ text-indent MATCHES letter-spacing ON EVERY CENTRED LINE. Tracking adds a trailing space
    AFTER the last character which still counts in the box, so centred text sits half a letter-space
@@ -163,26 +171,58 @@ input, textarea, [contenteditable],
    than uniformly off (Stuart, 2026-08-05). Indenting by the same amount cancels it. */
 #splash .sub { color: var(--amber); opacity: 0.85; font-size: 12px; letter-spacing: 2px; text-indent: 2px; margin-top: -10px; }
 
-/* ★★★ THE SMALL PRINT IS WHITE; THE TITLES AND LINKS STAY AMBER. Once the spectrogram went green
-   the amber body text was readable but still the weakest thing on the page — amber on green is a
-   low-contrast pair at small sizes, and this is the text that has to be READ rather than merely
+/* ★★★ THE SMALL PRINT IS WHITE; THE TITLES, NAMES AND LINKS STAY AMBER. Once the spectrogram went
+   green the amber body text was legible but still the weakest thing on the page — amber on green
+   is a low-contrast pair at 11px, and this is the text that has to be READ rather than merely
    noticed (Stuart, 2026-08-27: "keep the titles amber and the links, but the smaller text should
-   be white").
+   be white" — and, on seeing it, "softer white not warm white").
    ★★ It also restores the hierarchy the amber-on-black page had by accident: when EVERYTHING is
-   the accent colour, nothing is emphasised. Amber now marks what you act on — the receiver names,
+   the accent colour, nothing is emphasised. Amber now marks what you ACT on — the receiver names,
    the link, the buttons — and white carries what you read.
-   ★ Scoped to the descriptive lines only. The listener count and the aerial keep their own
-   opacities, set inline, which is why these set colour and nothing else. */
+   ★ 0.78 rather than full white: at full strength it out-shouted the amber names above it and the
+   card read upside-down, the detail louder than the thing you are choosing. */
 #splash .radioCard .sub,
 #splash #splashOwnerMsg,
 #splash #splashConditions,
 #splash #splashAntenna,
-#splash #splashListeners { color: #fff; }
+#splash #splashListeners { color: #fff; opacity: .78; }
 /* ★ The card's title row inherits `color:inherit` from the card, so it must be said explicitly
    now that the lines under it are not amber — otherwise the receiver NAME goes white with them
    and the one thing you are choosing between stops standing out. */
 #splash .radioCard strong,
 #splash .radioCard .rcState { color: var(--amber); }
+
+/* ★★★ AND ALL OF IT GETS THE HALO. The page shadowed its TITLE and its band conditions and left
+   the card lines and the owner's message — the text you actually have to read — with none at all,
+   which is why they were the hardest thing on the screen over a busy band. Heavier than the
+   original recipe because it now has to survive carriers, not a black background. */
+#splash .radioCard .sub,
+#splash .radioCard strong,
+#splash .radioCard .rcState,
+#splash #splashOwnerMsg,
+#splash #splashAntenna,
+#splash #splashListeners {
+  text-shadow: 0 0 4px rgba(0,0,0,1), 0 0 10px rgba(0,0,0,.98),
+               0 0 22px rgba(0,0,0,.9), 0 1px 2px rgba(0,0,0,1);
+}
+
+/* ★★★ A PLATE BEHIND EVERYTHING THAT IS READ, AND NO OUTLINE ON IT. The receiver cards are
+   outlined in amber because they are BUTTONS — you press one to choose a radio. The owner's
+   standing message, its link and the band conditions are read, not pressed, so they get the same
+   dark ground and deliberately NOT the border. Stuart: "a square box... but unlike the buttons
+   above no amber outline around it as they arent buttons."
+   ★★ A plate beats a per-glyph shadow for a BLOCK of text: a shadow fights the background letter
+   by letter, while a plate simply removes it. Both are here because the shadow still does the
+   work at the edges, where the plate ends.
+   ★ Rounded to match the cards, not squared. Square plates sitting directly under rounded cards
+   read as two systems on one page. */
+#splash #splashOwnerMsg,
+#splash #splashConditions {
+  background: rgba(8,6,1,.85); border-radius: 8px; padding: 12px 16px;
+}
+/* ★ The cards get the same ground. They had none — only a border — so over a strong band the text
+   inside them sat directly on the picture. */
+#splash .radioCard { background: rgba(8,6,1,.85); }
 .connPager { margin: 6px 0; display: flex; align-items: center; gap: 10px; font-size: 12px; }
 .adminQueue { margin: 8px 0 4px; font-size: 12px; }
 .adminQueue .qHead { letter-spacing: .18em; opacity: .7; margin-bottom: 4px; }
