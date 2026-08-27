@@ -90,7 +90,7 @@ const EXT: Record<Exclude<DecoderMode, null>, string> = {
   rtty: 'fsk',
   // ★ Not an audio decoder — attaching 'rds' turns on the extended RDS stream. It goes
   // through the decoder path deliberately: selecting it IS the toggle, so the cost is paid
-  // only while it is open (see BRIEF-rds-receiver.md).
+  // only while it is open (see briefs/BRIEF-rds-receiver.md).
   rds: 'rds',
   navtex: 'navtex',
   wefax: 'wefax',

@@ -2,7 +2,7 @@
  * DeepLinkHandler — parse / validate / resolve `vibesdr://` deep links.
  *
  * URL grammar (contract agreed with UberSDR host-side, see
- * BRIEF-deep-linking-uri-scheme.md §2):
+ * briefs/BRIEF-deep-linking-uri-scheme.md §2):
  *
  *   vibesdr://connect?uuid=<collector id>[&freq=&mode=&zoom=]
  *   vibesdr://connect?url=<pct-encoded https/wss>&backend=<id>[&freq=&mode=&zoom=]

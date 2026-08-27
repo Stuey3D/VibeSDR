@@ -3360,7 +3360,7 @@ struct LocalSdrShim::Impl {
     // nobody is connected and survive a reload — a landing page whose history starts empty on
     // every visit is a landing page with nothing to show. One buffer, shared by everyone.
     //
-    // ★★★ LOCKED MODE MAKES IT FREE AND MAKES IT HONEST. `BRIEF-band-spectrogram.md` spends its
+    // ★★★ LOCKED MODE MAKES IT FREE AND MAKES IT HONEST. `briefs/BRIEF-band-spectrogram.md` spends its
     // length on one problem: a spectrogram is only readable if every row shares a profile, and
     // inheriting the live dial gives you 40m for an hour then FM then wherever someone left it at
     // 2am. Here the centre CANNOT move — the owner locked it — so the profile is fixed by
@@ -7465,7 +7465,7 @@ struct LocalSdrShim::Impl {
             // ★★★ THE OWNER'S RF CEILING — AND THE NUMBER ON THE WIRE COUNTS THE OTHER WAY.
             //     `lna` is the RAW LNA STATE, where HIGHER means MORE attenuation and therefore
             //     LESS gain; the owner's cap is a GAIN POSITION, where higher means more gain (see
-            //     BRIEF-admin-gain-limits.md). Converted once, here, against the LIVE ladder — an
+            //     briefs/BRIEF-admin-gain-limits.md). Converted once, here, against the LIVE ladder — an
             //     RSP1 has 4 states and an RSPdx 28, so the arithmetic cannot be hard-coded.
             //     ★★★ GET THIS BACKWARDS AND THE FEATURE DOES THE OPPOSITE OF WHAT WAS ASKED: an
             //         owner capping FM would be FORCING the radio to maximum RF gain on exactly

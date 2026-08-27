@@ -1,6 +1,6 @@
 /**
  * TunerKeys — the HiFi separates tuner keys. The alternative control mode to
- * DrumWheel (BRIEF-inputs-shack-mode-mac.md §2), and deliberately NOT the app's
+ * DrumWheel (briefs/BRIEF-inputs-shack-mode-mac.md §2), and deliberately NOT the app's
  * standard buttons.
  *
  *   ┌───────────────────────────────────┐  ← same machined panel + green LED

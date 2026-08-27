@@ -271,7 +271,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
    *  any route: showing them would list servers that connect, stream for ten seconds and die with
    *  nothing on screen to explain it. That is 120 of 847 public Kiwis.
    *  ★ Same conclusion Jr reached for the same reason (no webview on a watch). See
-   *    BRIEF-tvos-app.md §5b and AGENTS.md: never offer a control whose every use is a no-op. */
+   *    briefs/BRIEF-tvos-app.md §5b and AGENTS.md: never offer a control whose every use is a no-op. */
   const [showRestricted, setShowRestricted] = useState(!IS_TV);
   const [defaultInst, setDefaultInst]   = useState<DefaultInstance | null>(null);
   // Tell native the default-instance name (or '' = none) so the Siri "open and

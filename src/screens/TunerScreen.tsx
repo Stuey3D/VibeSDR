@@ -817,7 +817,7 @@ export default function TunerScreen({ route, navigation }: Props) {
   //
   // ★ FM-DX runs on THIS screen rather than SDRScreen, which is why it had no keyboard
   // support at all: every capability added to the main screen has to be added here again,
-  // deliberately (see BRIEF-fmdx-backend-adapter.md). Stuart scoped what it actually needs —
+  // deliberately (see briefs/BRIEF-fmdx-backend-adapter.md). Stuart scoped what it actually needs —
   // Enter, C, Esc, D, S, R — rather than the whole SDRScreen scheme, because there is no
   // waterfall to pan and no zoom to drive here.
   //

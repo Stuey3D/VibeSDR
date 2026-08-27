@@ -21,7 +21,7 @@
  *
  * ★ Ordered by WHERE it applies rather than alphabetically — the question is "how does this
  * work here", not "what does K do". Content audited from the source in
- * BRIEF-keyboard-shortcut-list.md; re-audit rather than recall when it changes, because a stale
+ * briefs/BRIEF-keyboard-shortcut-list.md; re-audit rather than recall when it changes, because a stale
  * list is worse than none. A user who tries something listed and gets nothing concludes the
  * KEYBOARD is broken, not the documentation.
  */

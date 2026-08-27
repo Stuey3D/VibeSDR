@@ -79,7 +79,7 @@ vibeserver/mac/Resources/
 # Notarised VibeServer release artefacts (attached to GitHub releases, not tracked)
 VibeServer-*.zip
 
-# tvOS native project (generated once by EXPO_TV=1 prebuild, then hand-maintained — see BRIEF-tvos-app.md)
+# tvOS native project (generated once by EXPO_TV=1 prebuild, then hand-maintained — see briefs/BRIEF-tvos-app.md)
 /tvos/Pods/
 /tvos/build/
 tvos/.xcode.env.local

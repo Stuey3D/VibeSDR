@@ -285,7 +285,7 @@ std::string buildStatus(int port) {
                     //  ★★ It is the CAP, not live occupancy — nobody counts listeners per radio in
                     //     the process that publishes this list, because each radio is a separate
                     //     process. Publishing the cap is honest; inventing an occupancy would not
-                    //     be. See BRIEF-directory-network-dial.md, step 1.
+                    //     be. See briefs/BRIEF-directory-network-dial.md, step 1.
                     // ★★★ AND WHO IS ACTUALLY ON IT — ASKED, NOT GUESSED. The cap alone made the
                     //     directory say FREE about a receiver its own landing page was calling
                     //     "FULL · FREE IN 25:46" (Stuart, 2026-08-23: "the website lies about

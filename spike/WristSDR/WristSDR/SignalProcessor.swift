@@ -21,7 +21,7 @@ final class SignalProcessor {
 
   /// ★★ MANUAL RANGE. Auto-contrast guesses wrong exactly when a strong signal dominates the
   /// span — which is when you most want to fix it, and until now Jr had no way to
-  /// (BRIEF-jr-display-manual-range.md §2: "the one real gap is RANGE").
+  /// (briefs/BRIEF-jr-display-manual-range.md §2: "the one real gap is RANGE").
   /// ★ The histogram still runs while manual: the noise floor it derives feeds the SNR readout,
   ///   which must stay honest regardless of how the waterfall is being coloured.
   var manualRange = false

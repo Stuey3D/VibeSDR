@@ -129,7 +129,7 @@ struct Config {
     //    gain model and must not pretend to: an RTL tuner gain is tenths of a dB, an RSP's is an RF
     //    slider POSITION (higher = more gain, unlike the raw LNA state which counts the other way),
     //    and an Airspy HF+ has no variable gain at all. The config is per radio and a radio has one
-    //    driver, so no common unit has to be invented. See BRIEF-admin-gain-limits.md.
+    //    driver, so no common unit has to be invented. See briefs/BRIEF-admin-gain-limits.md.
 
     /** Per-band gain ceilings: "lo-hi:max" in MHz, comma separated, e.g. "88-108:250".
      *  Empty = no limit anywhere, which is the behaviour before this existed. */
@@ -268,7 +268,7 @@ struct RadioConfig {
      *  needed in shared mode as the locked nature of it is the block/allow"). */
     std::string allowRanges, blockRanges;
 
-    // ★★★ GAIN LIMITS — see the long note on Config, and BRIEF-admin-gain-limits.md. In the
+    // ★★★ GAIN LIMITS — see the long note on Config, and briefs/BRIEF-admin-gain-limits.md. In the
     //     RADIO'S OWN UNITS: an RTL tuner gain is tenths of a dB, an RSP's is an RF slider
     //     POSITION (higher = more gain — the raw LNA state counts the other way, and storing THAT
     //     would make a "limit" mean its own inverse), an HF+ has no variable gain at all.

@@ -11,7 +11,7 @@
 #
 # librtlsdr is NOT linked. `rtl_sdr_stub.h` supplies no-op declarations so the USB code paths
 # compile but are never entered — exactly how iOS already builds this shim. IQ arrives over
-# rtl_tcp. Adding real USB later (BRIEF-vibeserver-macos.md §2, vendored libusb) is additive.
+# rtl_tcp. Adding real USB later (briefs/BRIEF-vibeserver-macos.md §2, vendored libusb) is additive.
 #
 #   cmake -S vibeserver -B vibeserver/build -DCMAKE_BUILD_TYPE=Release
 #   cmake --build vibeserver/build -j

@@ -3,7 +3,7 @@
 #       scripts/gen-bandplan.sh          # regenerate
 #       scripts/gen-bandplan.sh --check  # fail if the checked-in JSON has drifted from the header
 #  ★ A second band table is how the landing page and the directory would come to disagree about
-#    what a server offers — see BRIEF-directory-network-dial.md, step 2.
+#    what a server offers — see briefs/BRIEF-directory-network-dial.md, step 2.
 set -e
 cd "$(dirname "$0")/.."
 OUT=directory/public/bandplan.json

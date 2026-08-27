@@ -9,7 +9,7 @@ import SwiftUI
 //   so the types they name have to exist here too. WatchLinkCompat maps the phone's own wire
 //   structs onto these, which is the only translation layer in the app.
 //
-// Kept as a copy rather than a shared package: BRIEF-watch-app-split.md §Phase 1 is explicit that
+// Kept as a copy rather than a shared package: briefs/BRIEF-watch-app-split.md §Phase 1 is explicit that
 // one shared file is not worth re-coupling two apps that have already diverged.
 
 /// A grouped profile entry for the picker (SDR device → its profiles). `sdrName` is the device the

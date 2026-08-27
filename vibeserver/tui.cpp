@@ -262,7 +262,7 @@ bool runWizard(vsconfig::Config& cfg, std::vector<vibe::DetectedRadio>& radios,
     //     another program, or the one they have not decided about yet.
     // ★★ AND THIS IS ONLY HALF THE GATE. Ticking a radio here says "serve this"; it still has to be
     //    configured in its own tab in the browser before it goes on air. The two are separate on
-    //    purpose — see BRIEF-multi-radio.md.
+    //    purpose — see briefs/BRIEF-multi-radio.md.
     int cursor = 0;
     while (true) {
         header("First-time setup  ·  step 1 of 3");

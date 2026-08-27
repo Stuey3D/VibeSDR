@@ -84,7 +84,7 @@ public:
     // ★★★ A CEILING, NOT A LOCK. The admin gate takes the gain away entirely on a shared receiver;
     //     these leave the control in the listener's hands and simply stop it going too far. An
     //     owner capping FM wants the front end protected and the listener left alone, not to field
-    //     gain requests all evening (Stuart, 2026-08-12). See BRIEF-admin-gain-limits.md.
+    //     gain requests all evening (Stuart, 2026-08-12). See briefs/BRIEF-admin-gain-limits.md.
     // ★★ VALUES ARE IN THE RADIO'S OWN UNITS — tenths of a dB on an RTL, an RF slider POSITION on
     //    an RSP. The three radios do not share a gain model and nothing here pretends they do.
 

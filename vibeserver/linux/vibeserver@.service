@@ -1,7 +1,7 @@
 [Unit]
 # ★★★ ONE RADIO, ONE PROCESS. %i is the radio's SERIAL, not its position: enumeration order changes
 # when a radio is busy or unplugged, and a unit named after a position would silently point at
-# different hardware after a reboot. See BRIEF-multi-radio.md.
+# different hardware after a reboot. See briefs/BRIEF-multi-radio.md.
 # ★ The PRIMARY radio is vibeserver.service, not an instance of this — so a single-radio machine
 #   never gains a unit and nothing about it changes.
 Description=VibeServer — radio %i

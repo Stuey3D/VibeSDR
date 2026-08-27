@@ -6488,7 +6488,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onModeOpen  = useCallback(() => setModeSelOpen(true), []);
   const onAudioOpen = useCallback(() => setAudioSheetOpen(true), []);
 
-  // ── Pointer scroll (BRIEF-inputs-shack-mode-mac.md §3) ──────────────────────
+  // ── Pointer scroll (briefs/BRIEF-inputs-shack-mode-mac.md §3) ──────────────────────
   //
   // ★ ONE question, not a layout matrix: "what should the scroll wheel do?" —
   // Zoom (default) or Tune. The vertical wheel is the only input EVERY pointing
@@ -6526,7 +6526,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (r.zoom) ctrlRects.current.zoom = r.zoom;
   }, []);
 
-  // ── Hardware keyboard, global layer (BRIEF-inputs-shack-mode-mac.md §6) ──────
+  // ── Hardware keyboard, global layer (briefs/BRIEF-inputs-shack-mode-mac.md §6) ──────
   //
   // Arrows tune and zoom; letters open panels; Esc closes. Key events arrive from
   // VibeKeyWindow (AppDelegate.swift), which reports them from the WINDOW so that
@@ -8266,7 +8266,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* Server map overlay (HFDL / Digital / CW — full-screen WebView Leaflet) */}
       {/* ★ NOT ON tvOS — MapOverlay is Leaflet in a WebView and there is no WKWebView on the
           platform. Gated at the RENDER so the component (and react-native-webview with it) is
-          never mounted there. See src/utils/tv.ts and BRIEF-tvos-app.md §5b. */}
+          never mounted there. See src/utils/tv.ts and briefs/BRIEF-tvos-app.md §5b. */}
       {!IS_TV && <MapOverlay
         visible={mapKind !== null}
         kind={mapKind}

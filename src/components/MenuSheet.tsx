@@ -437,7 +437,7 @@ function SectionLabel({ label, icon, first }: { label: string; icon?: SectionIco
 // moves between rows, left/right within one.
 // ★ The machinery itself now lives in PanelNav.tsx — it is shared with StepPicker,
 // AudioSheet and ModeSelector, and is what a game controller's D-pad will drive
-// (BRIEF-controls-keyboard-and-gamepad.md). MenuSheet keeps only the wiring.
+// (briefs/BRIEF-controls-keyboard-and-gamepad.md). MenuSheet keeps only the wiring.
 function BtnRow({ children, col }: { children: React.ReactNode; col?: boolean }) {
   return (
     <NavRow>

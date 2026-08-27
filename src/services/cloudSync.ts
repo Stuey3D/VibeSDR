@@ -15,7 +15,7 @@
  * remembered to instrument. Deletion is the case that always breaks naive
  * merges, so it must not depend on being called.
  *
- * See BRIEF-icloud-sync.md.
+ * See briefs/BRIEF-icloud-sync.md.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState } from 'react-native';

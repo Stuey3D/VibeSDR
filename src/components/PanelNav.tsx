@@ -3,7 +3,7 @@
 // Extracted from MenuSheet, which grew this first. It is shared because four panels
 // need it (MenuSheet, StepPicker, AudioSheet, ModeSelector) and because the SAME
 // machinery is what a game controller's D-pad will drive — see
-// BRIEF-controls-keyboard-and-gamepad.md. Copying it four times would have meant
+// briefs/BRIEF-controls-keyboard-and-gamepad.md. Copying it four times would have meant
 // fixing every bug four times, and the controller work would have made it eight.
 //
 // Two shapes, one core:

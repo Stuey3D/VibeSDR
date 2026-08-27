@@ -1,6 +1,6 @@
 /**
  * FmdxAdapter — FM-DX Webserver (TEF668x / XDR-F1HD hardware tuners) behind the
- * SDRBackend contract. v7. Protocol per BRIEF-fmdx-backend-adapter.md, verified
+ * SDRBackend contract. v7. Protocol per briefs/BRIEF-fmdx-backend-adapter.md, verified
  * against NoobishSVK/fm-dx-webserver.
  *
  * Model: a SINGLE SHARED hardware tuner — every user hears the same frequency,

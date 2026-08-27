@@ -233,7 +233,7 @@ inline Ranges parseList(const std::string& csv) {
 //     discrete list, an RSP's is an RF slider POSITION, an Airspy HF+ has no variable gain at all
 //     — so nothing here converts or validates the number beyond "it is a number". The config is
 //     per radio, a radio has one driver, and the admin sets it while looking at that radio's own
-//     control. See BRIEF-admin-gain-limits.md.
+//     control. See briefs/BRIEF-admin-gain-limits.md.
 //
 // ★★ The BAND half reuses parseEntry, so an owner may write a named band — "fm:250" — as well as
 //    "88-108:250". Named bands are already ITU-region aware, which a hand-typed pair is not.

@@ -37,7 +37,7 @@ const MODE = process.env.MODE || 'am';
 const SID = 'jit' + crypto.randomBytes(4).toString('hex');
 
 // ★★ Behind the multi-radio front door the RADIO IS A PATH PREFIX — `/r/<id>/ws/user-spectrum`.
-//    Note this is NOT what BRIEF-vibeserver-multiradio-gui.md proposed (a `?radio=` query param
+//    Note this is NOT what briefs/BRIEF-vibeserver-multiradio-gui.md proposed (a `?radio=` query param
 //    or a cookie); the shipped door routes on the prefix and the radio strips it
 //    (local_sdr_shim.cpp ~5560). Get it wrong and you get a 503 front-door page, which as a
 //    WebSocket handshake surfaces as a bare 1006 with no clue in it. Ask /vibeserver/radios for

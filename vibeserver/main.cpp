@@ -7,7 +7,7 @@
 //   1. A DEV LOOP MEASURED IN SECONDS. Every server-side change previously cost an APK build, an
 //      install, and a device dance. Here it is `cmake --build` and run. That is the whole reason
 //      link management gets built here FIRST and back-ported to Android after — see
-//      BRIEF-vibeserver-macos.md, which already calls the Mac app "the shim's native test harness".
+//      briefs/BRIEF-vibeserver-macos.md, which already calls the Mac app "the shim's native test harness".
 //   2. The headless Pi daemon, nearly for free — same core, same config, systemd instead of a GUI.
 //
 // NO USB, DELIBERATELY. The IQ comes from an rtl_tcp server (`--tcp host:port`), which is the
@@ -15,7 +15,7 @@
 // compiles but is never entered. That defers libusb/librtlsdr vendoring (BRIEF §2) without blocking
 // any of the protocol or link-management work, which is what we actually want to iterate on.
 //
-// This is the CLI harness only. The menu-bar app of BRIEF-vibeserver-macos.md is a GUI wrapped
+// This is the CLI harness only. The menu-bar app of briefs/BRIEF-vibeserver-macos.md is a GUI wrapped
 // around this same core later; nothing here should grow Mac-specific behaviour.
 
 #include "local_sdr_shim.h"
@@ -114,7 +114,7 @@ struct Opts {
     std::string adminPass;
     std::string trustedProxies;   // see LocalSdrShim::setTrustedProxies
     int         sessionLimitMin = 0;     // per-listener minutes; 0 = unlimited
-    // ★ Gain limits, in the RADIO'S OWN units — see BRIEF-admin-gain-limits.md. Empty/-1 is the
+    // ★ Gain limits, in the RADIO'S OWN units — see briefs/BRIEF-admin-gain-limits.md. Empty/-1 is the
     //   behaviour before they existed, so an older config simply carries on as it was.
     std::string gainLimits;              // "fm:250, 0-30M:400" — per-band ceilings
     int         restGain = -1;           // returned to when everybody has left
@@ -1772,7 +1772,7 @@ int main(int argc, char** argv) {
     });
 
     // ★ RadioDNS station logos. Free and unlicensed to USE (radiodns.org) — but the DATA belongs
-    //   to each broadcaster and carries their terms; see BRIEF-radiodns-logos.md.
+    //   to each broadcaster and carries their terms; see briefs/BRIEF-radiodns-logos.md.
     vsradiodns::setDir(vsDataDir());
     LocalSdrShim::setStationLogoHandler([](const std::string& pi, const std::string& ecc,
                                            double hz) -> std::string {
@@ -1938,7 +1938,7 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerAdminSecret(o.adminPass);
     LocalSdrShim::setTrustedProxies(o.trustedProxies);
     LocalSdrShim::setVibeServerSessionLimit(o.sessionLimitMin);
-    // ★★★ WHAT A LISTENER MAY DO TO THE FRONT END — see BRIEF-admin-gain-limits.md. A ceiling
+    // ★★★ WHAT A LISTENER MAY DO TO THE FRONT END — see briefs/BRIEF-admin-gain-limits.md. A ceiling
     //     rather than a lock: the control stays theirs, it simply cannot go past what the owner
     //     allows in that band. Empty limits and -1s are exactly the behaviour before this existed.
     LocalSdrShim::setGainLimits(o.gainLimits);

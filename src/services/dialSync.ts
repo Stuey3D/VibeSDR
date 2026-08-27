@@ -10,7 +10,7 @@
  * because every device is learning the identical thing about the identical
  * transmitters.
  *
- * See BRIEF-dial-and-station-sync.md.
+ * See briefs/BRIEF-dial-and-station-sync.md.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DIAL_EXPIRY_MS, DIAL_MAX, type DialStation } from '../components/FmdxDial';

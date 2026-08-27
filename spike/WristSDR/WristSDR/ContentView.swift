@@ -183,7 +183,7 @@ struct ContentView: View {
   /// ★★ When the user last left the menu to adjust a Display setting. Hold-menu then returns to
   /// the Display sheet instead of the root — but only for a WHILE. A display tweak made an hour
   /// ago silently changing what the menu button does is worse than the navigation it saves
-  /// (BRIEF-jr-display-manual-range.md §4).
+  /// (briefs/BRIEF-jr-display-manual-range.md §4).
   @State private var displayTweakAt: Date?
   private var displayShortcutLive: Bool {
     guard let t = displayTweakAt else { return false }
@@ -889,7 +889,7 @@ link.setAutoContrast(wfAutoContrast)
       case .autoContrast:
         // ★★ ONE DETENT BELOW 0 IS MANUAL. Auto strength reads 0…20; turning down past 0 hands
         // you MAN, and turning back up leaves it. Same gesture, no new menu to find
-        // (BRIEF-jr-display-manual-range.md §3).
+        // (briefs/BRIEF-jr-display-manual-range.md §3).
         if wfManualRange {
           if delta > 0 {                       // back up out of manual
             wfManualRange = false

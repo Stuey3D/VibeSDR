@@ -1272,7 +1272,7 @@ function ControlsBar({
           the frequency left and right, which turns a single directional move into horizontal
           hunting. It also puts the clock and status rows where they already belong, so this is a
           row DELETION (see PortraitBar) rather than a hand-built hybrid of the two layouts.
-          See BRIEF-tvos-app.md §2. */}
+          See briefs/BRIEF-tvos-app.md §2. */}
       {s.isLandscape && !IS_TV
         ? <LandscapeBar {...shared} />
         : <PortraitBar  {...shared} />

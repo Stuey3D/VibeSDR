@@ -4,7 +4,7 @@
  * ★★★ WHY A CONSTANT AND NOT A `Platform.OS === 'tvos'` CHECK SCATTERED AROUND.
  *     tvOS is the same JS bundle as iOS — `Platform.OS` is still `'ios'` there — so the only
  *     honest test is `Platform.isTV`. Putting it behind one name means the REASON each surface is
- *     cut is written down once, in `BRIEF-tvos-app.md`, instead of being re-derived (or guessed at)
+ *     cut is written down once, in `briefs/BRIEF-tvos-app.md`, instead of being re-derived (or guessed at)
  *     every time somebody touches a screen.
  *
  * ★★ WHAT IS CUT ON tvOS, AND WHY — the rule is: IF IT NEEDS A WEBVIEW OR LOCAL STORAGE, IT IS OUT.

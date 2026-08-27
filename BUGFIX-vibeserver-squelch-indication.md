@@ -197,7 +197,7 @@ immediately.
 **`// TODO` — the proper fix is a protocol event.** If VibeServer gains a server→client
 `squelch-open` / `squelch-closed` message, the 5-second timeout can be dropped entirely and the
 indication becomes instant. **Worth designing now rather than later:** the airband scanner
-(see `BRIEF-airband-geo-frequencies-v2.md` §8) needs carrier-open events anyway, so this is one
+(see `briefs/BRIEF-airband-geo-frequencies-v2.md` §8) needs carrier-open events anyway, so this is one
 protocol addition serving two features. Coordinate with the VibeServer protocol brief.
 
 **Check the native RN client for the same bug.** If this "no audio" health logic was ported

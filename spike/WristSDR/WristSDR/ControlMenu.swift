@@ -309,7 +309,7 @@ struct ControlMenu: View {
   /// ★★ Open straight into the Display sheet. Manual range is inherently a PAIR — set the floor,
   /// look, set the ceiling, look — and every adjustment dismisses to the waterfall, so without
   /// this each tweak costs a full menu → Display → row walk, on a watch, outdoors
-  /// (BRIEF-jr-display-manual-range.md §4). The caller decides when this applies and expires it.
+  /// (briefs/BRIEF-jr-display-manual-range.md §4). The caller decides when this applies and expires it.
   var openDisplay = false
 
   @State private var showModes = false
@@ -1404,7 +1404,7 @@ struct DisplaySheet: View {
   @AppStorage("wfVfoColour")    private var wfVfoColour    = "orange"
   @AppStorage("wfPeakHold")     private var wfPeakHold     = true
   // ★ MANUAL RANGE — watch-GLOBAL, like brightness and contrast, because it is a readability
-  //   setting rather than a property of the aerial (BRIEF-jr-display-manual-range.md, open Q3).
+  //   setting rather than a property of the aerial (briefs/BRIEF-jr-display-manual-range.md, open Q3).
   @AppStorage("wfManualRange")  private var wfManualRange  = false
   @AppStorage("wfFloorDb")      private var wfFloorDb      = -110.0
   @AppStorage("wfCeilDb")       private var wfCeilDb       = -30.0
