@@ -1750,14 +1750,14 @@ struct SettingsView: View {
                 }
                 Text("A CEILING, not a lock: a listener can still pick a LOWER rate (a narrower span, less server CPU) — they just cannot go above this. Single radio per user, so their choice affects only them.")
                     .font(.caption).foregroundStyle(.secondary)
-                Picker("Demod bandwidth", selection: $server.maxBwHz) {
-                    Text("Uncapped").tag(0.0)
-                    Text("Up to 200 kHz").tag(200_000.0)
-                    Text("Up to 50 kHz").tag(50_000.0)
-                    Text("Up to 16 kHz").tag(16_000.0)
-                }
-                Text("Caps what each listener may ask for. The server tells them the limit, so they settle at it instead of mistaking it for a bad connection.")
-                    .font(.caption).foregroundStyle(.secondary)
+                /* ★ NO DEMOD BANDWIDTH CEILING. It existed only here — no other platform offers
+                 *   it, the web setup page does not, and it caps a quantity a listener sets for
+                 *   themselves on their own audio. Stuart: "that seems like a weird button with no
+                 *   use and the mac app is the only one with it anyway."
+                 * ★★ The SAMPLE RATE ceiling above is a different thing and stays: that one really
+                 *    is shared — it decides how much the server captures and how much CPU and
+                 *    bandwidth every listener costs. maxBandwidthHz remains in VsConfig for the
+                 *    daemon's config file; what goes is the control nobody else has. */
                 Toggle("Require idle power saving", isOn: $server.forceIdleSaver)
                 Text("The waterfall slows when nobody is touching it, which cuts CPU and data. Listeners "
                        + "can normally switch that off — turn this on to make it compulsory, for a metered "
