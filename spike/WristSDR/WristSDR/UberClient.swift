@@ -218,6 +218,22 @@ final class UberClient: ObservableObject {
   /// not offeredGains.
   /// ★ Never returns empty while there are gains: a very low cap must leave a working control
   /// rather than a dead one, and the lowest step is always permitted.
+  /// ★★★ IS THIS RADIO SITTING DEAF? A receiver at minimum gain looks EXACTLY like a broken one —
+  /// flat waterfall, nothing on it — and the HackRF makes that ordinary rather than rare: every
+  /// stage opens at ZERO by design, so a fresh server is deaf until somebody raises it and the
+  /// previous listener can leave it that way. Stuart: "dont want people connecting to a server
+  /// seeing a flat spectrum thinking this is fucked and then leaving."
+  /// ★★ ONLY WHERE THE GAIN IS MANUAL. A radio whose AGC is running is not deaf, it is being
+  /// driven, and saying otherwise would be crying wolf on every ordinary connection.
+  /// ★ The RSP and HF+ are deliberately out: both normally run their own AGC, and "minimum gain"
+  /// on them means a max IF gain REDUCTION or a max attenuator — different quantities, worth
+  /// measuring on hardware before claiming.
+  var gainIsAtMinimum: Bool {
+    if radioDriver == "hackrf" { return hrfLna == 0 && hrfVga == 0 }
+    guard !gainAuto, let lowest = offeredGains.min() else { return false }
+    return gainValue <= Double(lowest)
+  }
+
   var permittedGains: [Int] {
     guard gainCap >= 0, !offeredGains.isEmpty else { return offeredGains }
     let ok = offeredGains.filter { $0 <= gainCap }
@@ -401,6 +417,20 @@ final class UberClient: ObservableObject {
       //   rather than assume, the same rule as everything else in this block.
       radioHasRfNotch  = (r["rfNotch"] as? Bool) ?? false
       radioHasDabNotch = (r["dabNotch"] as? Bool) ?? false
+      /* ★★★ THE HACKRF'S STAGES AS THE RADIO HAS THEM, not as this client last set them. The
+       *   server reports amp/lna/vga/biast live (radioCapsJson) and the radio is SHARED — another
+       *   listener may have raised the gain, and a reconnect inherits whatever the last session
+       *   left. Mirroring only our own writes would show 0 dB on a radio sitting at 24.
+       * ★★ It matters more here than on any other radio because 0 is BOTH the safe default AND a
+       *   real value, so a stale mirror is indistinguishable from a freshly opened radio — and
+       *   gainIsAtMinimum reads these, so a wrong mirror would put "GAIN AT MINIMUM" on the band
+       *   pill of a receiver that is hearing perfectly well. */
+      if radioDriver == "hackrf" {
+        if let v = (r["lna"] as? NSNumber)?.intValue   { hrfLna = v }
+        if let v = (r["vga"] as? NSNumber)?.intValue   { hrfVga = v }
+        if let v = (r["amp"] as? NSNumber)?.intValue   { hrfAmp = v != 0 }
+        if let v = (r["biast"] as? NSNumber)?.intValue { hrfBiasT = v != 0 }
+      }
       if rspIfGr < ifGrMin || rspIfGr > ifGrMax { rspIfGr = min(max(40, ifGrMin), ifGrMax) }
     }
     if let g = j["gains"] as? [Int] { offeredGains = g }

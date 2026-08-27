@@ -2087,7 +2087,20 @@ link.setAutoContrast(wfAutoContrast)
     // Prefer a LIVE station name (RDS ps on FM broadcast) over the static band name — "BBC R2"
     // beats "FM Broadcast Band" when we know it. Falls back to the band name off-station.
     let station = link.stationName.trimmingCharacters(in: .whitespaces)
-    let label = station.isEmpty ? link.bandName : station
+    /* ★★★ AND "GAIN AT MINIMUM" HERE, RATHER THAN AS A SECOND WARNING. Stuart's call: the watch
+     *   already has the session-timeout notice, and "2 warnings may be too much" on a 41 mm
+     *   screen — so this goes in a pill that is on screen anyway instead of competing for the
+     *   same space or making anyone tap through a queue.
+     * ★★★ AND A LIVE STATION NAME OUTRANKS IT, which is what keeps it honest. Minimum gain is
+     *   sometimes CORRECT — 104.2 with a transmitter two miles away wants 0 dB — and on such a
+     *   receiver RDS is decoding, so there IS a station name and this never appears. It shows up
+     *   only when the radio is at minimum AND has nothing to show for it, which is exactly the
+     *   case worth explaining. No timer needed: it goes when the gain comes up, or when a signal
+     *   turns up to prove it was never deaf.
+     * ★ Band name is what it displaces, and that is the right trade — knowing WHY the waterfall
+     *   is empty beats being told which band it is empty on. */
+    let deaf = (link.vibe?.gainIsAtMinimum ?? false) && station.isEmpty
+    let label = deaf ? "GAIN AT MINIMUM" : (station.isEmpty ? link.bandName : station)
     return Group {
       if !label.isEmpty {
         Text(label)
@@ -2097,7 +2110,10 @@ link.setAutoContrast(wfAutoContrast)
           // belongs on the boundary MARK, which is a shape and can carry it, not on the
           // text, which cannot.
           .font(.system(size: 10, weight: .semibold, design: .rounded))
-          .foregroundStyle(.white)
+          // ★ Amber only for the deaf case. The house rule is that legibility comes from
+          //   darkening and never from the accent — but this one IS the message rather than a
+          //   decoration on it, and it has the whole pill to itself.
+          .foregroundStyle(deaf ? Color.orange : Color.white)
           .lineLimit(1)
           .minimumScaleFactor(0.7)
           .padding(.horizontal, 7)
