@@ -86,6 +86,10 @@ unzip, drag to Applications. Notarised, so it opens without a Gatekeeper warning
 
 **Android** — install the app, plug in the radio, tap **Use as server**.
 
+| ![VibeServer running on an Android phone](screenshots/25-vibeserver-android.png) |
+|:---:|
+| *A £100 rugged Android phone with a £30 dongle, serving to the world. 57% of one core of eight, and a public address that stays the same.* |
+
 Supported hardware — four radios, though not all of them on every host:
 
 | Radio | Linux · macOS | Android |
