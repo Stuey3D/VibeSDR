@@ -4619,6 +4619,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           idleActiveRef.current = false;
           (client.current as unknown as { setLinkPaused?: (p: boolean) => void })?.setLinkPaused?.(false);
           client.current?.setRate(linkModeRef.current === 'lowData' ? 2 : 1);
+          // ★ setRate() is a no-op on a VibeServer (one lever). Ask the controller to re-send.
+          (client.current as unknown as { resumeRate?: () => void })?.resumeRate?.();
         }, 1200);
       }
     });
@@ -4683,6 +4685,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       // owning the rate (adaptive re-evaluates, Low Data re-pins). setRate(1) seeds full while it does.
       (client.current as unknown as { setLinkPaused?: (p: boolean) => void })?.setLinkPaused?.(false);
       client.current?.setRate(linkModeRef.current === 'lowData' ? 2 : 1); // wake: user's rate immediately
+      // ★ setRate() is a no-op on a VibeServer (one lever). Ask the controller to re-send.
+      (client.current as unknown as { resumeRate?: () => void })?.resumeRate?.();
       watchProvider.setPowersave(false);
       setPowersaveUi(false);
     }
@@ -4694,6 +4698,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         idleActiveRef.current = false;
         (client.current as unknown as { setLinkPaused?: (p: boolean) => void })?.setLinkPaused?.(false);
         client.current?.setRate(linkModeRef.current === 'lowData' ? 2 : 1);
+        (client.current as unknown as { resumeRate?: () => void })?.resumeRate?.();
         watchProvider.setPowersave(false);
         setPowersaveUi(false);
       }
@@ -5912,7 +5917,21 @@ export default function SDRScreen({ route, navigation }: Props) {
    *   to the VTS too so we arent inventing new popups."
    * ★★ DECLARED HERE rather than beside the gain state that drives it, because setVtsNotif does
    *   not exist yet up there. The gain effect keeps owning WHEN to say it; this owns WHERE. */
+  /* ★★★ A NOTICE OWNS THE BAR FOR ITS LIFE. The web client gets this for free — its notice slot
+   *   returns early while the deadline is in the future, so a station name cannot displace it.
+   *   The app had no such rule and is last-writer-wins, so the first RDS update after connecting
+   *   wiped the explanation: "the server IF filter message flashes up for a split second in the
+   *   app then the RDS takes over" (Stuart, 2026-08-27). On the client "the message plays fully
+   *   then the rds takes over", which is the behaviour both should have.
+   * ★★ AND RDS IS THE WORST POSSIBLE COMPETITOR for this particular message, because it arrives
+   *    within a second or two of connecting — exactly when the notice is explaining what the
+   *    receiver is doing to somebody who has just arrived. The one moment it must survive is the
+   *    one moment something is guaranteed to overwrite it.
+   * ★ Nothing is lost by waiting: RDS updates continuously, so the station name lands on the next
+   *   change once the notice has had its turn. */
+  const vtsNoticeUntil = useRef(0);
   const showVtsNotice = useCallback((msg: string, ms: number) => {
+    vtsNoticeUntil.current = Date.now() + ms;
     vtsKey.current++;
     setVtsNotif({ key: vtsKey.current, name: msg, kind: 'notice', ms });
     return vtsKey.current;      // ★ so a caller can withdraw exactly its own notice later
@@ -6319,6 +6338,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     // variant is the skin's tuning guide, which was erratic on the popup
     // bar and is intentionally not ported. Off-tune resets the latch so
     // re-landing on the same station pops again.
+    // ★ The bookmark popup defers to a notice too — same rule, same reason (see vtsNoticeUntil).
+    //   Left un-latched so it pops normally once the notice has had its turn.
+    if (Date.now() < vtsNoticeUntil.current) return;
     const onTune = Math.abs(nearest.offset) <= VTS_ON_HZ;
     if (!onTune) {
       vtsLastStation.current = '';
@@ -6380,6 +6402,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     const flag = wfm && validIso(liveStation.countryIso) ? isoToFlag(liveStation.countryIso) : undefined;
     const logoUrl = wfm ? (liveLogo ?? undefined) : undefined;
     const composite = `${display}|${flag ?? ''}|${logoUrl ?? ''}`;
+    // ★ Deferred, not dropped — see vtsNoticeUntil. vtsLastStation is deliberately NOT updated
+    //   here, so the next RDS tick after the notice ends still counts as a change and the station
+    //   name appears then.
+    if (Date.now() < vtsNoticeUntil.current) return;
     if (composite !== vtsLastStation.current) {
       vtsLastStation.current = composite;
       vtsKey.current++;

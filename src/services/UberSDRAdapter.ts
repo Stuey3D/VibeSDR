@@ -160,6 +160,8 @@ export class UberSDRAdapter implements SDRBackend {
   adminUnlock(nonce: string, token: string) { this.client.adminUnlock(nonce, token); }
   /** Freeze/unfreeze the link controller during idle powersave so it doesn't fight the saver's rate. */
   setLinkPaused(p: boolean) { this.client.setLinkPaused(p); }
+  /** ★ See UberSDRClient.resumeRate — waking from powersave must re-ask for the rate. */
+  resumeRate() { this.client.resumeRate(); }
   /** ★★★ THE MISSING HALF OF POWERSAVE, and its absence made the saver SPEED THE SPECTRUM UP.
    *  Idle powersave does two things: pause the link controller so it stops re-asserting its rung,
    *  then drop to an absolute 5 fps. Only the FIRST was forwarded. So the controller let go of

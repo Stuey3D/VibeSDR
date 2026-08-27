@@ -1573,6 +1573,23 @@ export class UberSDRClient {
   private linkPaused = false;
   setLinkPaused(p: boolean) { this.linkPaused = p; }
 
+  /** ★★★ COMING OUT OF POWERSAVE, THE RATE HAS TO BE ASKED FOR AGAIN.
+   *
+   *  Powersave goes DOWN with an absolute `fftRate: 5` (setPowersaveRate) and the wake path came
+   *  back UP with setRate() — which on a VibeServer returns without sending anything, by design:
+   *  "one lever per server, never two". So the pill disappeared, the controller was un-paused, and
+   *  the server sat at 5 fps with nothing left to tell it otherwise. Stuart: "any interaction which
+   *  got rid of the powersave message didnt restore 10fps only opening the advanced rds box did" —
+   *  and that box only worked by accident, because it provokes an hwinfo that rebuilds the ladder
+   *  and calls forceApply() on the way past.
+   *
+   *  ★★ forceApply, NOT reassert. reassert() deliberately does nothing on rung 1, which is exactly
+   *     where a healthy link sits — so the one state that most needed restoring was the one state
+   *     it skipped.
+   *  ★ The controller is the rate's single owner (see setRate's note); this hands it back rather
+   *    than introducing a second way to set the rate, which is what caused every bug in that list. */
+  resumeRate() { this.link?.forceApply(); }
+
   /** When the view last changed — frames pause across a re-subscription. */
   private lastResubAt = 0;
   /** User preference, set by the app (Auto / Full rate / Low data). A setter so changing it LIVE also
