@@ -7,6 +7,8 @@
 // recvline/isOpen/close}, Listener {accept/stop}, net::listen, net::connect —
 // keeping the same signatures so the shim's call sites are unchanged.
 #pragma once
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstddef>
 #include <memory>
@@ -23,7 +25,13 @@ struct Address;
 
 class Socket {
 public:
-    explicit Socket(int fd) : fd_(fd) {}
+    explicit Socket(int fd) : fd_(fd) {
+        // ★ Stamped at construction so ageSecs() is the socket's WHOLE life, including the time
+        //   before it was promoted to a websocket — a connection that never got that far is
+        //   exactly the case worth being able to see.
+        openedAt_ = (double)std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count() / 1000.0;
+    }
     ~Socket();
     Socket(const Socket&) = delete;
     Socket& operator=(const Socket&) = delete;
@@ -98,8 +106,29 @@ public:
     int recvline(std::string& str, int maxLen = 0, int timeout = NO_TIMEOUT,
                  Address* dest = nullptr);
 
+    /* ★★★ WHAT THIS SOCKET ACTUALLY DELIVERED, and how long it lived.
+     *
+     * The server counted bytes only SERVER-WIDE (vsSpecBytes / vsAudioBytes), which cannot answer
+     * the question anyone actually asks about a visitor: did THEY get anything? A nine-second
+     * connection is completely ordinary if 40 KB of waterfall went down it, and a fault if zero
+     * did — and until now those two logged identically.
+     *
+     * ★★ send() is the ONE choke point every byte passes through, whatever the socket carries, so
+     * counting here needs no bookkeeping at the call sites and cannot miss a path someone adds
+     * later. Relaxed: it is a diagnostic total, never read for control flow.
+     *
+     * ★ Counting AUDIO and SPECTRUM separately is the point rather than a nicety. A listener who
+     * minimises the page does not close the spectrum socket — it stays open and simply stops
+     * receiving frames — so "audio 47 MB, spectrum 3 KB over the same 90 minutes" is a
+     * fingerprint that duration alone cannot show (Stuart, 2026-08-27). Each socket carries one
+     * kind, so per-socket totals give that for free. */
+    uint64_t txBytes()   const { return tx_.load(std::memory_order_relaxed); }
+    double   ageSecs()   const;
+
 private:
     int  recvRaw(uint8_t* data, size_t maxLen, int timeout);
+    std::atomic<uint64_t> tx_{0};
+    double openedAt_ = 0.0;
     int  fd_;
     bool open_ = true;
     std::string effAddr_;   // set only for connections arriving via a trusted proxy

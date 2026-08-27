@@ -116,7 +116,16 @@ int Socket::send(const uint8_t* data, size_t len, const Address*) {
         if (w == 0) { open_ = false; return -1; }
         off += (size_t)w;
     }
+    tx_.fetch_add(len, std::memory_order_relaxed);   // see txBytes() in the header
     return (int)len;
+}
+
+/** Seconds since this socket was constructed. 0 if the clock was never taken. */
+double Socket::ageSecs() const {
+    if (openedAt_ <= 0.0) return 0.0;
+    const double now = (double)std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count() / 1000.0;
+    return now - openedAt_;
 }
 
 int Socket::sendstr(const std::string& str, const Address* dest) {

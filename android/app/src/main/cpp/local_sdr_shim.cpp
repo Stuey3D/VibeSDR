@@ -10995,7 +10995,31 @@ struct LocalSdrShim::Impl {
             if (stillEmpty) armIdlePark();
             else LOGI("not parking — a new listener arrived while this socket was closing");
         }
-        LOGI("%s WS disconnected", isAudio ? "audio" : "spectrum");
+        /* ★★★ SAY WHAT THEY ACTUALLY GOT. "spectrum WS disconnected" after nine seconds is
+         *   indistinguishable from a fault and from somebody having a quick look — and those want
+         *   opposite responses. Bytes separate them: 9s with 40 KB delivered is a visitor, 9s with
+         *   ZERO is a connection that never worked.
+         * ★★ DELIBERATELY NOT AN ERROR, and worded as a fact. Normal churn is constant on a public
+         *   receiver, and a line that reads like a complaint would have people opening issues about
+         *   healthy traffic (Stuart, 2026-08-27: "I dont want a load of problems being opened for
+         *   normal connection churn"). If this is ever alerted on, the honest trigger is ZERO BYTES,
+         *   not short duration — short is normal, empty is not.
+         * ★ Audio and spectrum report separately because the RATIO is the diagnostic: a minimised
+         *   client keeps its spectrum socket open and stops receiving frames, so a long life with
+         *   almost no bytes is a backgrounded listener rather than a broken one. */
+        {
+            const double secs  = sock ? sock->ageSecs() : 0.0;
+            const uint64_t txb = sock ? sock->txBytes() : 0;
+            char human[32];
+            if (txb >= 1024ull * 1024ull) snprintf(human, sizeof human, "%.1f MB", txb / 1048576.0);
+            else if (txb >= 1024ull)      snprintf(human, sizeof human, "%.0f KB", txb / 1024.0);
+            else                          snprintf(human, sizeof human, "%llu B", (unsigned long long)txb);
+            char dur[32];
+            if (secs >= 3600) snprintf(dur, sizeof dur, "%dh%02dm", (int)(secs/3600), ((int)secs%3600)/60);
+            else if (secs >= 60) snprintf(dur, sizeof dur, "%dm%02ds", (int)(secs/60), (int)secs%60);
+            else snprintf(dur, sizeof dur, "%.0fs", secs);
+            LOGI("%s WS disconnected — %s, %s delivered", isAudio ? "audio" : "spectrum", dur, human);
+        }
     }
 
     void startDecoder(const std::string& msg, const std::string& bySession = "") {
