@@ -70,7 +70,7 @@ struct DialChatView: View {
             //   never grows without bound on a receiver that has been busy all day.
             ForEach(radio.chatLines) { line in
               HStack(alignment: .top, spacing: 4) {
-                Text(CannedDial.speaker(line.from, you: radio.dialYou))
+                Text(CannedDial.speaker(line.from, you: radio.dialYou, admin: line.admin))
                   .font(.system(size: 9, weight: .bold))
                   .foregroundColor(line.from == radio.dialYou ? .green : .orange)
                 Text(CannedDial.text(line.phrase) ?? "")

@@ -940,7 +940,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       }
     },
     onDialRefused: () => { chatRefused(); togglePanel('chatPanel'); },
-    onSaid: (from, id) => chatSaid(from, id),
+    onSaid: (from, id, admin) => chatSaid(from, id, admin),
     // ★★★ SOMEBODY ELSE MOVED THE DIAL — REDRAW WHAT THEY MOVED. The readout, the mode and the
     //     VFO marker are all drawn from values this client chose, and on a shared receiver it
     //     chose none of them. Without this the audio followed and the screen did not.

@@ -4608,7 +4608,13 @@ struct LocalSdrShim::Impl {
     }
     /** The last few lines, so somebody arriving mid-conversation is not dropped into silence —
      *  and so "why did the frequency move" has an answer on screen. Guarded by clientMtx. */
-    struct ChatLine { int from; std::string id; double at; };
+    /* ★★★ `admin` IS RECORDED AS IT WAS WHEN THE LINE WAS SAID, never recomputed from who holds
+     *   the password now. Admin follows the SESSION, not the person — Stuart: "could be on the
+     *   browser then move to the app as admin" — so the same human can be User 3 (admin) in one
+     *   session and User 7 without it in the next, and the lock can change hands mid-conversation.
+     *   Deriving it later would rewrite history: lines said by an ordinary listener would sprout
+     *   an "(admin)" the moment somebody else signed in. */
+    struct ChatLine { int from; std::string id; double at; bool admin; };
     std::vector<ChatLine> chatLog;
     /** ★★ NOT MODERATION — FLOOD CONTROL. Nothing in the vocabulary can be offensive, but anything
      *  can be repeated, and twenty "Thanks!" a second is a denial of service on everyone's
@@ -7635,6 +7641,10 @@ struct LocalSdrShim::Impl {
             const std::string id = jsonStr(msg, "id");
             const auto& tbl = chatPhrases();
             if (std::find(tbl.begin(), tbl.end(), id) == tbl.end()) return;
+            /* ★ Read BEFORE clientMtx is taken. adminNow() reaches the admin state behind its own
+             *   lock, and taking a second lock while holding this one is how the two orders meet
+             *   in the middle. Nothing about the answer changes in the microsecond between. */
+            const bool isAdmin = adminNow(sock);
             std::string line;
             {
                 std::lock_guard<std::mutex> lk(clientMtx);
@@ -7647,9 +7657,14 @@ struct LocalSdrShim::Impl {
                 last = now;
                 if (chatLast.size() > 512) chatLast.clear();
                 const int from = handleForLocked(me);
-                chatLog.push_back({from, id, now});
+                chatLog.push_back({from, id, now, isAdmin});
                 while (chatLog.size() > 30) chatLog.erase(chatLog.begin());
+                /* ★★ THE HANDLE STAYS, AND THE MARK IS ADDED TO IT — "User 3 (admin)", not
+                 *    "Admin". Stuart's call: on a club receiver with several operators, replacing
+                 *    the number would make two admins indistinguishable, and following who said
+                 *    what is the whole point of having handles at all. */
                 line = "{\"type\":\"said\",\"from\":" + std::to_string(from)
+                     + (isAdmin ? ",\"admin\":true" : "")
                      + ",\"id\":\"" + id + "\"}";
             }
             for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, line);

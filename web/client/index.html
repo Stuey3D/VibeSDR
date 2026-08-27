@@ -1300,6 +1300,10 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 }
 .chatLine { font-size: 13px; line-height: 1.35; }
 .chatWho  { color: var(--unit); margin-right: 0.5em; }
+/* ★ The owner's voice, marked but not shouted. It carries authority in a room where somebody may
+   be asked to stop tuning, so it should be distinguishable at a glance — and no louder than that,
+   because it is still a handle rather than a banner. */
+.chatWho.chatAdmin { color: var(--phosphor); font-weight: 600; }
 /* ★★ THE STRIP IS NOT A CHAT LINE. It is the state of the room — who is tuning, how many are
    here, whether somebody is mid-decode — and it stays put at the top while the log scrolls. */
 #dialStrip {
@@ -1720,6 +1724,10 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 }
 .chatLine { font-size: 13px; line-height: 1.35; }
 .chatWho  { color: var(--unit); margin-right: 0.5em; }
+/* ★ The owner's voice, marked but not shouted. It carries authority in a room where somebody may
+   be asked to stop tuning, so it should be distinguishable at a glance — and no louder than that,
+   because it is still a handle rather than a banner. */
+.chatWho.chatAdmin { color: var(--phosphor); font-weight: 600; }
 /* ★★ THE STRIP IS NOT A CHAT LINE. It is the state of the room — who is tuning, how many are
    here, whether somebody is mid-decode — and it stays put at the top while the log scrolls. */
 #dialStrip {

@@ -483,7 +483,11 @@ final class UberClient: ObservableObject {
   /// True when this receiver shares one tuner between its listeners.
   var sharedDial: Bool { isVibe && dialMode != "exclusive" }
 
-  struct ChatLine: Identifiable, Equatable { let id = UUID(); let from: Int; let phrase: String }
+  /// ★ `admin` is what the sender WAS when the line was said — the server records it per line, so
+  /// it does not change when the lock changes hands mid-conversation.
+  struct ChatLine: Identifiable, Equatable {
+    let id = UUID(); let from: Int; let phrase: String; var admin = false
+  }
   @Published var chatLines: [ChatLine] = []
   /// Unread count for the menu badge. Cleared by the chat view when it appears.
   @Published var chatUnread = 0
@@ -2034,11 +2038,12 @@ final class UberClient: ObservableObject {
     if type == "said" {
       let from = (j["from"] as? NSNumber)?.intValue ?? 0
       let id   = (j["id"] as? String) ?? ""
+      let isAdmin = (j["admin"] as? NSNumber)?.boolValue ?? ((j["admin"] as? Bool) ?? false)
       // ★ AN ID WE CANNOT DRAW IS DROPPED, not shown raw: a newer server may know a phrase this
       //   build does not, and showing `decode_done` on the wrist would be worse than silence.
       guard !id.isEmpty, CannedDial.text(id) != nil else { return }
       Task { @MainActor in
-        self.chatLines.append(ChatLine(from: from, phrase: id))
+        self.chatLines.append(ChatLine(from: from, phrase: id, admin: isAdmin))
         if self.chatLines.count > 40 { self.chatLines.removeFirst(self.chatLines.count - 40) }
         // ★ Your own phrase echoing back as an unread badge would be absurd.
         if from != self.dialYou { self.chatUnread += 1 }

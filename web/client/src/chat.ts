@@ -93,7 +93,7 @@ export function chatOpened(open: boolean) {
 }
 
 /** A line arrived. */
-export function onSaid(from: number, id: string) {
+export function onSaid(from: number, id: string, admin = false) {
   const text = TEXT[id];
   if (!text) return;                       // an id this build cannot draw — see the header note
   const log = $('chatLog');
@@ -104,7 +104,16 @@ export function onSaid(from: number, id: string) {
     who.className = 'chatWho';
     // ★ "You" rather than your own number: everybody else sees an ordinal, and you know which is
     //   yours, but reading your own words back as a stranger's is oddly cold.
-    who.textContent = (dial && from === dial.you) ? 'You' : `User ${from}`;
+    /* ★★★ THE HANDLE STAYS AND "(admin)" IS ADDED TO IT — Saber's suggestion, Stuart's shape:
+     *   "User 3 (admin)", not "Admin". On a club receiver with several operators, replacing the
+     *   number would make two admins indistinguishable, and following who said what is the whole
+     *   point of having handles. ★ It also survives the lock changing hands: the server records
+     *   what the sender WAS when the line was said, so history does not rewrite itself.
+     * ★ Marked on your OWN lines too. "You (admin)" is worth knowing — it is the difference
+     *   between a request and an instruction, and you may not remember you are still signed in. */
+    const base = (dial && from === dial.you) ? 'You' : `User ${from}`;
+    who.textContent = admin ? `${base} (admin)` : base;
+    if (admin) who.classList.add('chatAdmin');
     const what = document.createElement('span');
     what.textContent = text;               // textContent, never innerHTML — see the header note
     row.append(who, what);

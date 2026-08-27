@@ -67,7 +67,15 @@ enum CannedDial {
   static func text(_ id: String) -> String? { map[id] }
   /// ★ "You" rather than your own ordinal: everybody else sees a number and you know which is
   ///   yours, but reading your own words back as a stranger's is oddly cold.
-  static func speaker(_ from: Int, you: Int) -> String { from == you ? "You" : "User \(from)" }
+  /// ★★★ THE HANDLE STAYS AND "(admin)" IS ADDED — "User 3 (admin)", never "Admin". On a club
+  /// receiver with several operators, replacing the number would make two admins
+  /// indistinguishable, and following who said what is the whole point of having handles.
+  /// ★ Marked on your OWN lines too: "You (admin)" is the difference between a request and an
+  /// instruction, and you may not remember you are still signed in.
+  static func speaker(_ from: Int, you: Int, admin: Bool = false) -> String {
+    let base = from == you ? "You" : "User \(from)"
+    return admin ? "\(base) (admin)" : base
+  }
 }
 
 enum Canned {
