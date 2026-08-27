@@ -232,6 +232,31 @@ export function initMobileControls(deps: MobileDeps) {
   const statsHost = document.getElementById('mLinkHost');
   if (stats && statsHost && stats.parentElement !== statsHost) statsHost.appendChild(stats);
 
+  // ★★★ THE WARNING CHIPS GO ON THE CLOCK LINE, NOT THE NETWORK LINE.
+  //     Portrait already splits the status row in two (clock above, link cluster below), which
+  //     was enough while the throughput read "33 KB/s · 9.7 fps". Then ping and buf were added
+  //     to it, and the bottom line no longer had room for the chips as well — so OVERLOAD took
+  //     a THIRD line of its own, with the throughput pushed below it and the bars stranded
+  //     beside the chip (Stuart, iPhone 17 Pro Max portrait). The row had gone from two decided
+  //     lines back to three discovered ones.
+  // ★★ The clock line is the one with width to spare: it says "14:59 UTC · 15:59" and nothing
+  //    else, and it does not grow. The network line is the one that grows every time we add a
+  //    figure to it. So the split is by WHAT GROWS, not by what reads alike — chips with the
+  //    clock, and #mNet left as network readouts only.
+  // ★ Moved, never copied — same rule as #linkStats itself. These chips are driven by
+  //   updateSignalUi() and onOverload() by id; relocating the node keeps one of each, so their
+  //   logic never learns there are two places to write to.
+  const chipHost = document.getElementById('mChipHost');
+  if (chipHost) {
+    // ★ NO 'sqlChip'. It has no element — the squelch state lives in the SNR field beside the
+    //   frequency and only there. Its CSS outlived the markup, and that leftover is what made a
+    //   dead id look live enough to list here (Stuart spotted it, 2026-08-27).
+    for (const id of ['initChip', 'ovlChip']) {
+      const chip = document.getElementById(id);
+      if (chip && chip.parentElement !== chipHost) chipHost.appendChild(chip);
+    }
+  }
+
   // ★★★ MOVE THE SEARCH BOX, DO NOT COPY IT. #searchWrap lives in the desktop bar, and that
   //     bar is hidden at EVERY width now — an input inside it cannot be focused or typed into,
   //     so anything pointing at it is dead. Relocating the NODE keeps every listener (they bind

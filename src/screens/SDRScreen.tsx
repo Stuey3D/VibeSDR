@@ -3732,6 +3732,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         setRadioCaps(caps);
         // ★ A new radio is a new question: whatever was shown was about the last one.
         gainMinShownRef.current = false;
+        // ★ Same arming, same reason: a new radio has its own automation to explain, and the
+        //   explanation is about THIS receiver's behaviour rather than about the app.
+        rtlAutoExplainedRef.current = false;
         /* ★★★ SEED THE HACKRF STAGES FROM THE RADIO, not from what we last sent. The server
          *   reports amp/lna/vga/biast live in radioCaps (see radioCapsJson), and this radio is
          *   shared — another listener may have raised the gain, and a reconnect inherits whatever
@@ -5901,6 +5904,69 @@ export default function SDRScreen({ route, navigation }: Props) {
   //   a bar that is not on screen. Clear it here rather than relying on the child to say goodbye.
   useEffect(() => { if (advRdsOpen) setVtsBarH(0); }, [advRdsOpen]);
   const vtsKey            = useRef(0);
+
+  /* ★★★ OUR OWN EXPLANATIONS GO THROUGH THE VTS, not through overlays of their own.
+   *   The bar already scrolls a line longer than the screen and already takes itself away, which
+   *   is exactly what an explanation needs — and the top toast is full (session timeouts, the
+   *   owner's maintenance note). Stuart: "we can also move the 0 Gain message we added last night
+   *   to the VTS too so we arent inventing new popups."
+   * ★★ DECLARED HERE rather than beside the gain state that drives it, because setVtsNotif does
+   *   not exist yet up there. The gain effect keeps owning WHEN to say it; this owns WHERE. */
+  const showVtsNotice = useCallback((msg: string, ms: number) => {
+    vtsKey.current++;
+    setVtsNotif({ key: vtsKey.current, name: msg, kind: 'notice', ms });
+    return vtsKey.current;      // ★ so a caller can withdraw exactly its own notice later
+  }, []);
+
+  /* ★ The gain-at-minimum warning, in the bar. `showGainMinWarning` already encodes the whole
+   *  policy — once per connection, and gone the instant the gain moves — so this only forwards
+   *  it. Clearing on the way down matters: the notice must not outlive the condition. */
+  const gainMinNotifKey = useRef(0);
+  useEffect(() => {
+    if (showGainMinWarning) {
+      gainMinNotifKey.current = showVtsNotice(
+        "This receiver's gain is at minimum — on a strong local signal that may be deliberate, "
+        + 'but if the spectrum looks empty, raise the gain before deciding the receiver is dead.',
+        30000);
+      return;
+    }
+    // ★★ WITHDRAWN WHEN THE GAIN MOVES, rather than left to run its 30 s — by then it has been
+    //   acted on and it would be describing a state the radio is no longer in.
+    // ★ ONLY IF IT IS STILL OURS. A blanket setVtsNotif(null) would wipe whatever had replaced
+    //   it — a station name, a band announcement — so the key is checked first.
+    setVtsNotif((n) => (n && n.key === gainMinNotifKey.current ? null : n));
+  }, [showGainMinWarning, showVtsNotice]);
+
+  /* ★★★ EXPLAIN THE ZOOM-FOLLOWING IF FILTER — nothing else behaves this way.
+   *   A tuner whose real selectivity moves when you zoom is, as far as we know, ours alone, so a
+   *   listener has no prior experience to fall back on and the behaviour reads as a fault:
+   *   signals "vanish" when you zoom in, the radio "overloads for no reason" when you zoom out.
+   *   Stuart: "we are probably the first SDR to change IF filter width upon zooming in and out so
+   *   a message to explain the behaviour would be good."
+   * ★ RTL ONLY and only when the automation is really on — describing a mode the radio is not in
+   *   is worse than silence (AGENTS.md: a control that only works on one radio should not be
+   *   there; the same goes for an explanation).
+   * ★ Once per connection, armed again when a new radio's capabilities arrive. */
+  const rtlAutoExplainedRef = useRef(false);
+  useEffect(() => {
+    if (rtlAutoExplainedRef.current) return;
+    if (radioCaps?.driver !== 'rtl') return;
+    if (!hwTunerBwAuto && !hwAgc) return;    // nothing to explain, or not known yet
+    rtlAutoExplainedRef.current = true;
+    showVtsNotice(
+      hwTunerBwAuto && hwAgc
+        ? 'Automatic gain and automatic IF filtering are enabled. Zooming in narrows the '
+          + 'tuner\u2019s filter and the gain will adjust to suit; zooming out may overload the '
+          + 'receiver briefly until the AGC brings the gain back down. If strong signals surround '
+          + 'the one you want, try zooming in \u2014 the filter may clean it up.'
+        : hwTunerBwAuto
+        ? 'Automatic IF filtering is active \u2014 zooming in narrows the tuner\u2019s filter and '
+          + 'increases signal filtering, so adjust the gain accordingly.'
+        : 'Automatic gain is enabled \u2014 the receiver will set its own gain, and may take a '
+          + 'moment to settle after a large change in signal.',
+      20000);
+  }, [radioCaps?.driver, hwTunerBwAuto, hwAgc, showVtsNotice]);
+
   const vtsLastStation    = useRef('');
   const vtsBandKey        = useRef<string | null>(null);
   const vtsBandInit       = useRef(false);
@@ -7736,31 +7802,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         </View>
       )}
 
-      {showGainMinWarning && (
-        <TouchableOpacity activeOpacity={0.8} onPress={() => setShowGainMinWarning(false)}
-          /* ★★★ BOTTOM, BY THE TUNING CONTROLS — NOT THE TOP. Stuart: the top toast already
-           *   carries the server TIMEOUT warnings and the server MAINTENANCE messages, and a
-           *   third thing competing for that spot means two of them are missed. Down here it also
-           *   sits next to the control the reader needs, which is where an instruction belongs.
-           * ★ Stacked ABOVE the power-save pill and the VTS bar rather than at the same offset:
-           *   both already sat at exactly pillBottom + 8 once, and the pill's only explanation
-           *   spent a debugging session invisible underneath the other. */
-          style={[styles.gainMinNote, {
-            bottom: pillBottom + 8
-                  + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0)
-                  + (powersaveUi ? 46 : 0),
-            left: Math.max(12, insets.left + 8),
-            right: Math.max(12, insets.right + 8),
-          }]}>
-          <Text style={styles.gainMinTxt}>
-            This receiver's gain is at minimum{'\n'}
-            <Text style={styles.gainMinSub}>
-              On a strong local signal that may be deliberate. But if the spectrum looks empty,
-              raise the gain before deciding the receiver is dead — tap to dismiss.
-            </Text>
-          </Text>
-        </TouchableOpacity>
-      )}
+      {/* ★ NO GAIN-MIN OVERLAY HERE ANY MORE. It became a VTS notice — see the effect that
+           pushes it into setVtsNotif. Stuart: "we can also move the 0 Gain message we added last
+           night to the VTS too so we arent inventing new popups." It still lands at the bottom by
+           the tuning controls, because that is where the VTS bar already is. */}
       {!!adminNote && (
         <View pointerEvents="none" style={[styles.adminNote, {
           top: insets.top + 46 + (stationIdH > 0 ? stationIdH + 8 : 0),
@@ -8511,15 +8556,10 @@ const styles = StyleSheet.create({
                  borderWidth: 1, borderColor: 'rgba(255,160,0,0.30)', borderRadius: 4 },
   rxListenersTxt: { color: 'rgba(255,190,90,0.85)', fontFamily: 'Nixie One', fontSize: 11,
                     letterSpacing: 1 },
-  /* ★ Louder than adminNote on purpose: this one competes with a flat waterfall for attention,
-   *  and losing that competition is somebody closing the tab. */
-  gainMinNote: {
-    position: 'absolute', zIndex: 41, alignItems: 'center',
-    paddingVertical: 9, paddingHorizontal: 12, borderRadius: 8,
-    backgroundColor: 'rgba(28,18,0,0.96)', borderWidth: 1, borderColor: 'rgba(255,176,0,0.75)',
-  },
-  gainMinTxt: { color: '#ffc04d', fontSize: 13, textAlign: 'center', fontWeight: '600' },
-  gainMinSub: { color: '#e0a94d', fontSize: 11, fontWeight: '400' },
+  /* ★ NO gainMinNote/Txt/Sub HERE ANY MORE — the warning became a VTS notice. Left-behind styles
+   *  for a deleted element are how a dead reference keeps looking alive: they cost nothing and
+   *  read as evidence the thing still exists. (#sqlChip in the web client sat like that for
+   *  rounds and got itself written into new code before it was spotted.) */
   adminNote: {
     position: 'absolute', zIndex: 40, alignItems: 'center',
     paddingVertical: 7, paddingHorizontal: 12, borderRadius: 8,

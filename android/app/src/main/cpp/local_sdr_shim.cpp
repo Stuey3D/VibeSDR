@@ -6988,15 +6988,28 @@ struct LocalSdrShim::Impl {
             //     ★★ It matters most on a SHARED receiver, where there is one VFO and a joiner
             //        must adopt it rather than impose one — otherwise the last person to connect
             //        silently retunes the radio for everybody already listening.
+            //     ★★★ `shared` — THE SAME ARGUMENT AS `vfo`, FOR THE ZOOM. A shared dial has one
+            //        view for everybody: one zoom and one centring mode, identical for all
+            //        listeners. So a joiner that restores its OWN remembered span does to the
+            //        ZOOM precisely what `vfo` was added to stop it doing to the FREQUENCY —
+            //        the last person to connect silently re-scales the waterfall for everybody
+            //        already watching. On an RTL with the zoom-following IF filter it is worse
+            //        than cosmetic: it moves the tuner's real selectivity under them.
+            //     ★★ IT HAD TO BE IN `config`, NOT INFERRED FROM THE `dial` MESSAGE. `dialMode`
+            //        arrives in a SEPARATE message, so at the moment a client is deciding what
+            //        view to ask for it still reads the default "exclusive" — a gate that says
+            //        "not shared" on a shared receiver at exactly the moment it matters. The
+            //        decision and the fact that governs it must arrive together.
             "{\"type\":\"config\",\"centerFreq\":%lld,\"binCount\":%d,"
             "\"binBandwidth\":%.6f,\"totalBandwidth\":%.1f,\"maxBandwidth\":%.1f,"
-            "\"mode\":\"%s\",\"vfo\":%lld,\"locked\":%s}",
+            "\"mode\":\"%s\",\"vfo\":%lld,\"locked\":%s,\"shared\":%s}",
             (long long)llround(myCentre), cfgBins, binBw, myEffective, span,
             // ★★ THIS listener's mode and VFO, not the server's. In shared mode they are
             //    genuinely different per listener, and telling a client someone else's dial is
             //    how it ends up tuned somewhere it never asked for.
             myMode.c_str(), (long long)llround(myVfo),
-            g_vsLockedCentre.load() > 0.0 ? "true" : "false");
+            g_vsLockedCentre.load() > 0.0 ? "true" : "false",
+            vsSharedDial() ? "true" : "false");
         sendText(sock, buf);
     }
 

@@ -33,7 +33,12 @@ export interface VtsNotifData {
   secondary?: string;   // overlap band names (band notifs only)
   offset?:    string;   // "-1.2kHz" distance to the station
   tuneDir?:   'left' | 'right';  // which way to tune to reach it
-  kind:       'station-on' | 'station-off' | 'band';
+  kind:       'station-on' | 'station-off' | 'band' | 'notice';
+  /** ★ How long to hold it, ms. Omitted = NOTIF_MS. An EXPLANATION is not a band announcement:
+   *  it is several sentences the reader has to get through, and 8 s is not enough to read one
+   *  and watch it scroll. Per-notif rather than per-kind so the caller that knows how much it
+   *  wrote decides. */
+  ms?:        number;
   color?:     string;   // band-condition override for the primary text
   hold?:      boolean;  // stay up (no auto-dismiss) — digital-voice caller display
   badge?:     string;   // live-data tag (e.g. 'RDS', 'DMR') — shown before the name
@@ -91,7 +96,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight }:
       hideRef.current = setTimeout(() => {
         Animated.timing(fade, { toValue: 0, duration: 300, useNativeDriver: true })
           .start(() => { setShown(null); shownRef.current = null; });
-      }, NOTIF_MS);
+      }, notif.ms ?? NOTIF_MS);
     }
     return () => { if (hideRef.current) clearTimeout(hideRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -116,7 +121,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight }:
     }
     Animated.timing(slide, {
       toValue: -dist,
-      duration: NOTIF_MS - 2500,
+      duration: Math.max(1500, (shown.ms ?? NOTIF_MS) - 2500),
       delay: 900,
       easing: Easing.linear,
       useNativeDriver: true,
@@ -127,7 +132,9 @@ export default function VTSBar({ notif, bottom, serverType, onHeight }:
   if (!shown) return null;
 
   const onTune  = shown.kind === 'station-on';
-  const isBand  = shown.kind === 'band';
+  // ★ A notice reads as a band announcement — same amber, same static treatment. It is our own
+  //   words either way, and giving it a fourth colour would imply a distinction that is not there.
+  const isBand  = shown.kind === 'band' || shown.kind === 'notice';
   const nameCol = shown.color ?? (isBand ? COL.band : onTune ? COL.onTune : COL.offTune);
   // Arrows: green pair when on tune; otherwise the side you need to tune
   // toward lights amber, the other dims (skin vts-arrow-active/dim)

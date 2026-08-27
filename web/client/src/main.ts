@@ -1074,6 +1074,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
       hwGainNow = typeof gainNow === 'number' ? gainNow : -1;
       hwAgcOn = agc === true;                       // ★ the live flag the chip reads through
+      maybeExplainRtlAutomation();   // ★ we may only now know the radio is running its own gain
       maybeShowGainMinNotice();
       /* ★★★ AND RENDER IT INTO THE BUTTON. Removing the client's push (see pushOnInit) stopped it
        *     overriding the owner's saved config — but without this half the button then showed
@@ -1272,7 +1273,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     },
     onTunerBw: (hz: number, rfCentreHz: number, auto: boolean) => {
       hwTunerBw = hz;
-            hwTunerAuto = auto;
+      hwTunerAuto = auto;
+      // ★ The IF-filter mode arrives separately from caps, so this is often the moment the
+      //   explanation becomes possible to write correctly.
+      maybeExplainRtlAutomation();
       const sel = document.getElementById('tunerBw') as HTMLSelectElement | null;
       /* ★ In Auto the picker stays on "Auto" while the WIDTH underneath moves with the zoom —
        *   showing the derived number would make the control look as though it were being changed
@@ -1656,36 +1660,63 @@ function gainIsAtMinimum(): boolean {
   return false;
 }
 
+/** ★ IN THE VTS NOW, not an overlay of its own — see vtsNotice(). The wording is the overlay's,
+ *  which was Stuart's: the fear is somebody meeting a flat spectrum and concluding the receiver
+ *  is broken rather than turned down. */
+const GAIN_MIN_MSG =
+  "This receiver's gain is at minimum — on a strong local signal that may be deliberate, "
+  + 'but if the spectrum looks empty, raise the gain before deciding the receiver is dead.';
+
 function hideGainMinNotice() {
-  const el = document.getElementById('gainMinNote');
-  if (!el || el.hidden) return;
-  el.classList.add('fading');
-  window.setTimeout(() => { el.hidden = true; el.classList.remove('fading'); }, 600);
+  vtsClearNotice('gainmin');
   if (gainMinTimer) { clearTimeout(gainMinTimer); gainMinTimer = undefined; }
 }
 
-// ★ Dismissable by hand as well as by the timer: somebody who knows their receiver is meant to
-//   sit at minimum should be able to get rid of it at once rather than wait.
-document.addEventListener('DOMContentLoaded', () => {
-  const b = document.getElementById('gainMinDismiss');
-  if (b) b.addEventListener('click', hideGainMinNotice);
-}, { once: true });
-
 function maybeShowGainMinNotice() {
-  const el = document.getElementById('gainMinNote');
-  if (!el) return;
   // ★ THE MOMENT THE GAIN MOVES IT GOES. By then it has been acted on, and leaving it up would
   //   describe a state the radio is no longer in.
   if (!gainIsAtMinimum()) { hideGainMinNotice(); return; }
   if (gainMinShown) return;
   gainMinShown = true;
-  el.hidden = false;
-  el.classList.remove('fading');
   /* ★★ 30 SECONDS. Long enough to survive a page still settling — waterfall filling, audio
    *    starting — and to be read by somebody who has not decided where to look yet. A notice gone
    *    before the thing it explains has finished appearing has told nobody anything. */
-  gainMinTimer = window.setTimeout(hideGainMinNotice, 30000);
+  vtsNotice('gainmin', GAIN_MIN_MSG, '', 30000);
 }
+
+/* ★★★ EXPLAIN THE ZOOM-FOLLOWING IF FILTER, BECAUSE NOTHING ELSE DOES IT THIS WAY.
+ *   A tuner whose real selectivity moves when you zoom is, as far as we know, ours alone — so a
+ *   listener has no prior experience to fall back on, and the behaviour reads as a fault: signals
+ *   "disappear" when you zoom in and the radio "overloads for no reason" when you zoom out.
+ *   Stuart: "I am thinking we are probably the first SDR to change IF filter width upon zooming
+ *   in and out so a message to explain the behaviour would be good."
+ * ★★ THE VTS BECAUSE IT SCROLLS. This is two sentences, not a chip — the bar is the one surface
+ *    that can carry a long line and get rid of it again by itself.
+ * ★ RTL ONLY, and only when the automation is actually ON. Explaining a mode the radio is not in
+ *   is worse than silence: it describes behaviour the listener will never see and then they
+ *   distrust the next thing we tell them. Same rule as the controls — see AGENTS.md. */
+let rtlAutoExplained = false;
+
+function maybeExplainRtlAutomation() {
+  if (rtlAutoExplained) return;
+  if (radioCaps?.driver !== 'rtl') return;
+  // ★ Wait until we actually know. hwinfo and the tuner-bandwidth message arrive separately from
+  //   caps, so firing on caps alone would announce "no automation" on a radio that has both.
+  if (!hwTunerAuto && !hwAgcOn) return;
+  rtlAutoExplained = true;
+  const msg = hwTunerAuto && hwAgcOn
+    ? 'Automatic gain and automatic IF filtering are enabled. Zooming in narrows the tuner\u2019s '
+      + 'filter and the gain will adjust to suit; zooming out may overload the receiver briefly '
+      + 'until the AGC brings the gain back down. If strong signals surround the one you want, '
+      + 'try zooming in \u2014 the filter may clean it up.'
+    : hwTunerAuto
+    ? 'Automatic IF filtering is active \u2014 zooming in narrows the tuner\u2019s filter and '
+      + 'increases signal filtering, so adjust the gain accordingly.'
+    : 'Automatic gain is enabled \u2014 the receiver will set its own gain, and may take a moment '
+      + 'to settle after a large change in signal.';
+  vtsNotice('rtlauto', msg, '', 20000);
+}
+
 let hwTunerBw = 0;
 let hwTunerAuto = false;
 let hwRfCentre = 0;
@@ -2325,6 +2356,66 @@ function fmtBandFreq(hz: number): string {
   return Math.round(hz / 1000) + ' kHz';
 }
 
+/** ★★★ ONE TRANSIENT SLOT IN THE VTS, not a new popup per thing we want to say.
+ *
+ *  The band announcement already owned the bar for a few seconds and already scrolls a line
+ *  longer than the window, which is exactly what an explanation needs — so anything else worth
+ *  explaining goes through the same door. Stuart: "we can also move the 0 Gain message we added
+ *  last night to the VTS too so we arent inventing new popups."
+ *  ★★ WHY THAT MATTERS BEYOND TIDINESS: every separate overlay has to decide where it sits, what
+ *     it covers and when it leaves, and they collide as a matter of course — the top toast is
+ *     already carrying session timeouts, the owner's maintenance notice and the VTS itself.
+ *     A single slot has one answer to all three questions.
+ *  ★★★ AND THEY QUEUE RATHER THAN CLOBBER. Two of these can become true in the same instant —
+ *     connecting to an RTL that is BOTH running the zoom-following IF filter AND parked at
+ *     minimum gain is one connection, two things worth knowing — and last-writer-wins would show
+ *     the first for a few milliseconds before the second wiped it. Stuart asked for exactly this
+ *     on Jr: "it needs to cycle with the timeout message so once one is dismissed the next is
+ *     there ready."
+ *  ★ KEYED, so a notice can be WITHDRAWN when it stops being true (the gain notice goes the
+ *    moment the gain moves) whether it is showing or still waiting its turn. A queue you cannot
+ *    retract from shows stale news, which is the fault we deleted the chat replay for.
+ */
+type VtsNotice = { key: string; msg: string; sub: string; ms: number };
+let vtsQueue: VtsNotice[] = [];
+let vtsNoticeKey = '';
+
+function vtsPumpNotices() {
+  if (vtsNoticeKey || !vtsQueue.length) return;    // one is still on screen
+  const n = vtsQueue.shift()!;
+  vtsNoticeKey = n.key;
+  vtsBandMsg = n.msg;
+  vtsBandSub = n.sub;
+  vtsBandUntil = Date.now() + n.ms;
+  // ★ The hold timer is what ends this notice AND starts the next: without pumping here a queued
+  //   message would sit until the next band crossing happened to redraw the bar.
+  if (vtsHideTimer) clearTimeout(vtsHideTimer);
+  vtsHideTimer = window.setTimeout(() => {
+    vtsHideTimer = null;
+    vtsNoticeKey = '';
+    updateVts();
+    vtsPumpNotices();
+  }, n.ms + 60);
+  updateVts();
+}
+
+function vtsNotice(key: string, msg: string, sub: string, ms: number) {
+  if (vtsNoticeKey === key || vtsQueue.some(n => n.key === key)) return;   // already said
+  vtsQueue.push({ key, msg, sub, ms });
+  vtsPumpNotices();
+}
+
+/** Withdraw a notice by key — showing or merely queued. */
+function vtsClearNotice(key: string) {
+  vtsQueue = vtsQueue.filter(n => n.key !== key);
+  if (vtsNoticeKey !== key) return;
+  vtsNoticeKey = '';
+  vtsBandUntil = 0;
+  if (vtsHideTimer) { clearTimeout(vtsHideTimer); vtsHideTimer = null; }
+  updateVts();
+  vtsPumpNotices();
+}
+
 function checkBandCrossing(hz: number) {
   const order: Record<string, number> = { ham: 0, broadcast: 1, utility: 2 };
   const bands = getBandsAtRegion(hz, ituRegion())
@@ -2439,6 +2530,16 @@ function updateVts() {
       ($(id) as HTMLElement).style.display = 'none';
     vts.classList.add('show');
     vts.classList.remove('on');
+    // ★★★ AND SCROLL IT. This branch set the text and returned, so applyVtsScroll() — called
+    //     only on the station path below — never ran for a band announcement: the longest
+    //     messages the bar ever carries were the ONE kind that could not scroll, and anything
+    //     past the width was simply unreadable (Stuart, 2026-08-27: "the band message never
+    //     scrolled"). It is also why the text had to be re-measured rather than left alone:
+    //     applyVtsScroll wraps the line in a <span> and animates THAT, and assigning
+    //     textContent above destroys it, so the wrapper has to be rebuilt after every write.
+    //  ★ `false` = not live RDS. This is our own announcement, not something the station is
+    //    still transmitting, so it gets the static treatment and a finite life.
+    applyVtsScroll(false);
     setDecBoxOffset();
     return;
   }
@@ -9176,6 +9277,14 @@ function initHrfControls() {
 
 function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   radioCaps = caps;
+  // ★★★ A NEW RADIO IS A NEW CONNECTION, so the once-per-connection notices are armed again.
+  //     The comment on gainMinShown said this already happened; it did not — the flag was set
+  //     once and never cleared, so the notice was really once per PAGE LOAD and a listener who
+  //     switched receivers was told nothing about the second one. ("WRITTEN AND NEVER READ", the
+  //     other way round: a reset that was described but never implemented.)
+  gainMinShown = false;
+  rtlAutoExplained = false;
+  maybeExplainRtlAutomation();
   const isRsp = caps?.driver === 'sdrplay';
   const isAhf = caps?.driver === 'airspyhf';
   const isHrf = caps?.driver === 'hackrf';

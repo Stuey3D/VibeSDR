@@ -474,6 +474,17 @@ final class UberClient: ObservableObject {
   //     buttons is a conversation the wrist can hold — and it removes moderation, abuse,
   //     translation and injection in the same stroke.
   /// 'exclusive' on an ordinary receiver — the state in which none of this should be shown.
+  /** ★★★ ONE VIEW FOR EVERYBODY — from `config`, and deliberately NOT derived from `dialMode`.
+   *  A shared dial has a single zoom and a single centring mode: what one listener sees, all of
+   *  them see. So anything this client does to the view it does to strangers, and the rule is the
+   *  same one `vfo` already encodes for the frequency — a joiner ADOPTS, it never imposes.
+   *  ★★ WHY NOT `sharedDial`. That reads `dialMode`, which arrives in a SEPARATE `dial` message,
+   *     so during the first `config` — the exact moment we decide what view to ask for — it is
+   *     still the default "exclusive". A gate that answers "not shared" on a shared receiver
+   *     precisely when it matters is worse than no gate: it looks correct in the source and never
+   *     fires. The fact has to travel WITH the decision, so the shim now sends it in `config`.
+   *  ★ Defaults false, so an older shim (no such field) behaves exactly as it does today. */
+  @Published var sharedView = false
   @Published var dialMode = "exclusive"
   @Published var dialTuner = 0          // whose ordinal moved it last (0 = nobody yet)
   @Published var dialMine = false       // ...and was that us
@@ -2138,6 +2149,9 @@ final class UberClient: ObservableObject {
     //
     // ★ Never inside our own echo: `lastLocalTuneAt` is stamped by tune()/tuneTo(), and the server
     //   answers each of those with a config carrying the frequency we just asked for.
+    // ★ Read before any decision below uses it — see `sharedView`.
+    if isVibe, let sh = j["shared"] as? Bool { sharedView = sh }
+
     if isVibe, vibeAdopted,
        let sv = (j["vfo"] as? NSNumber)?.doubleValue, sv > 0,
        ProcessInfo.processInfo.systemUptime - lastLocalTuneAt > 1.5 {
@@ -2185,13 +2199,20 @@ final class UberClient: ObservableObject {
     //    per subscription, then adopt what the server says and PAINT — a view slightly off-centre
     //    is a cosmetic complaint; a frozen waterfall is a broken app.
     if abs(centerHz - frequency) > max(binBandwidth, 1) {
-      if centreAsserts < 2 {
-        centreAsserts += 1
-        sendView(frequency, viewBinBw > 0 ? viewBinBw : binBandwidth)
-        return
+      // ★★★ ON A SHARED VIEW, THE SERVER'S CENTRE IS NOT A DRIFT TO BE CORRECTED — it is where
+      //     the other listeners are looking. Correcting it drags their waterfall to our VFO.
+      //     Adopt it, exactly as we already adopt their `vfo`.
+      if sharedView {
+        viewCenterHz = centerHz          // adopt in silence — this is normal, not a clamp
+      } else {
+        if centreAsserts < 2 {
+          centreAsserts += 1
+          sendView(frequency, viewBinBw > 0 ? viewBinBw : binBandwidth)
+          return
+        }
+        Vitals.crumb("UBER centre clamped by server (\(Int(centerHz)) vs \(Int(frequency))) — adopting it")
+        viewCenterHz = centerHz
       }
-      Vitals.crumb("UBER centre clamped by server (\(Int(centerHz)) vs \(Int(frequency))) — adopting it")
-      viewCenterHz = centerHz
     } else {
       centreAsserts = 0                 // it agreed — the next disagreement starts fresh
     }
@@ -2217,6 +2238,16 @@ final class UberClient: ObservableObject {
       //     handles a server that answers with something else — bounded to two tries, then it
       //     adopts what the server will actually give. A remembered zoom must never be able to
       //     start the freeze loop that machinery exists to prevent.
+      // ★★★ NEVER RESTORE A REMEMBERED SPAN ONTO A SHARED VIEW. ViewMemory is right on a
+      //     receiver that is yours — you reopen at the scale you left. On a shared dial there is
+      //     ONE zoom for everybody, so restoring ours re-scales the waterfall of every listener
+      //     already watching, and on an RTL with the zoom-following IF filter it moves the
+      //     tuner's real selectivity under them too. Exactly what `vfo` exists to stop us doing
+      //     to the frequency (Stuart, 2026-08-27: "they must not effect the current view when
+      //     connecting the same as the app and web client").
+      //  ★ DROPPED, not deferred: adopt what the server is showing and leave the memory on disk
+      //    for the next time this receiver is opened exclusively.
+      if sharedView { pendingRestoreSpanHz = nil }
       if let want = pendingRestoreSpanHz, bins.count > 0 {
         pendingRestoreSpanHz = nil
         let wantBinBw = want / Double(bins.count)
@@ -2241,14 +2272,26 @@ final class UberClient: ObservableObject {
       // (sendView bumps the subscribe seq, so the gate won't draw the wide frame).
       // ★ Bounded for the same reason as the centre above: if the server will not give us this
       //   span it never will, and repeating the request is how a waterfall freezes for ever.
-      if spanAsserts < 2 {
+      // ★★★ ON A SHARED VIEW AN UNSOLICITED SPAN CHANGE IS ANOTHER PERSON ZOOMING, NOT A BLIP.
+      //     This block cannot tell the two apart — and its guess was "session reset", so Jr
+      //     forced its own zoom back and FOUGHT a live user mid-session, twice, before giving in.
+      //     Worse than imposing on arrival, because it happens while they are using the dial.
+      //     Where the view is shared, a change we did not request is simply the news.
+      if sharedView {
+        // ★ ADOPTED BUT NOT REMEMBERED. This span is somebody else's choice; writing it to
+        //   ViewMemory would have a stranger's zoom decide where THIS receiver opens the next
+        //   time you have it to yourself. Only our own acked zoom (the branch above) is saved.
+        viewBinBw = binBandwidth
+        viewCenterHz = centerHz
+      } else if spanAsserts < 2 {
         spanAsserts += 1
         sendView(viewCenterHz > 0 ? viewCenterHz : frequency, viewBinBw)
         return
+      } else {
+        Vitals.crumb("UBER span not honoured (\(Int(binBandwidth)) vs \(Int(viewBinBw))) — adopting it")
+        viewBinBw = binBandwidth
+        viewCenterHz = centerHz
       }
-      Vitals.crumb("UBER span not honoured (\(Int(binBandwidth)) vs \(Int(viewBinBw))) — adopting it")
-      viewBinBw = binBandwidth
-      viewCenterHz = centerHz
     } else {
       spanAsserts = 0
     }

@@ -819,7 +819,12 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 
 /* ★ Clock and recording timer share the LEFT end (Stuart) — with three children in a
    space-between row the timer floated to the middle, unattached to either side. */
-#mLeft { display: inline-flex; align-items: center; gap: 0.6em; }
+#mLeft { display: inline-flex; align-items: center; gap: 0.6em; flex-wrap: wrap; row-gap: 0.15em; }
+/* ★ Empty until mobile.ts moves the chips in, and empty again whenever nothing is wrong — so it
+   must not reserve a gap. `display: contents` would drop it from the flex flow entirely, but the
+   chips need a box to wrap as a group, so an inline-flex that collapses to zero width is right. */
+#mChipHost { display: inline-flex; align-items: center; gap: 0.6em; }
+#mChipHost:empty { display: none; }
 #mRecTime { display: none; align-items: center; gap: 0.35em; color: #ff3b30;
             font-variant-numeric: tabular-nums; }
 #mRecTime.on { display: inline-flex; }
@@ -859,8 +864,7 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 /* ★ The throughput is the one thing here that may shrink and truncate — it is a nice-to-know.
    The bars and chips never shrink: they are the whole point of the row. */
 #mStatus #status { color: #c9922e; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-#mStatus #linkBars, #mStatus #sqlChip,
-#mStatus #initChip, #mStatus #ovlChip { flex: 0 0 auto; }
+#mStatus #linkBars, #mStatus #initChip, #mStatus #ovlChip { flex: 0 0 auto; }
 /* ★★ TABULAR FIGURES, so a digit changing does not change the WIDTH. Proportional numerals make
    1 narrower than 8, so a counter ticking over reflows the row and nudges everything after it —
    the signal and AGC meters wobbled twice a second beside a bouncing fps figure (Stuart,
@@ -890,8 +894,16 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
    to make room for it. On a portrait iPhone there is never enough width for both halves, so that
    is not an edge case, it is the normal state while anything is wrong: the readout you are
    watching moves exactly when the radio starts misbehaving (Stuart, 2026-08-22).
-   ★★ So in portrait the split is DECIDED rather than discovered — clock and recording timer above,
-      chips, bars and throughput below. Each half still wraps within its own line if it must.
+   ★★ So in portrait the split is DECIDED rather than discovered — clock, WARNING CHIPS and
+      recording timer above; bars and throughput below. Each half still wraps within its own line
+      if it must.
+   ★★ THE CHIPS MOVED UP HERE LATER (mobile.ts), and the reason is worth keeping: two decided
+      lines had quietly become three discovered ones. The bottom line grew `ping` and `buf`, and
+      an OVERLOAD chip — which is the SAME chip that reads a compact "AGC 14.4 dB · pk -2.1 dBFS"
+      when all is well — expands to "OVERLOAD: GAIN 8.7 dB · 2.9% RAILED" exactly when it fires.
+      A growing readout beside a growing readout wrapped, so the split is now by WHAT GROWS: the
+      clock line is fixed-width and has room, the network line gains a figure every time we add
+      one.
    ★ Portrait only. There is room for one row in landscape and it is not affected, so it keeps the
      denser layout rather than spending a line it does not need to. */
 @media (orientation: portrait) {
@@ -910,18 +922,9 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
    together; they should size together. */
 @media (max-width: 620px) { #mFreq { font-size: 2.1em; } #mMode { font-size: 1.2em; } }
 
-#gainMinNote {
-  flex: 0 0 auto; display: flex; align-items: baseline; gap: 0.7em;
-  background: rgba(28, 18, 0, 0.96); border-top: 1px solid rgba(255, 176, 0, 0.75);
-  color: #ffc04d; padding: 0.6em 1.1em; font-size: clamp(9px, 0.7vw, 14px);
-  /* ★ Fades rather than vanishing: an element that disappears between two glances reads as a
-     glitch, and this one leaves while the reader may still be looking at it. */
-  transition: opacity 0.6s ease;
-}
-#gainMinNote[hidden] { display: none; }
-#gainMinNote.fading { opacity: 0; }
-#gainMinNote span { color: #e0a94d; }
-#gainMinNote button { margin-left: auto; flex: 0 0 auto; }
+/* ★ NO #gainMinNote HERE ANY MORE. The "gain is at minimum" warning became a VTS notice
+   (vtsNotice in main.ts): it is transient, it needs to scroll when it is longer than the bar, and
+   it must not invent a third overlay to collide with the top toast and the VTS itself. */
 #bar {
   flex: 0 0 auto; background: var(--bar-bg); border-top: 1px solid var(--bar-border);
   font-size: clamp(8px, 0.65vw, 13px);
@@ -1033,13 +1036,11 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 #linkBars.q3 i { background: #33cc44; }
 #linkBars.q0::before { content: '✕'; color: #e04040; font-weight: 900; font-size: 11px; line-height: 11px; }
 #linkBars.q0 i { display: none; }
-/* SQL chip beside the link bars — steady dim when squelch is set, BREATHING RED while the gate is
-   actually muting (signal below the threshold), so an unexpected silence has a visible cause right
-   next to the connection quality rather than a text overlay that clipped inside the meter. */
-#sqlChip { display: none; font-size: 0.62em; letter-spacing: 0.14em; padding: 1px 4px;
-           border-radius: 3px; border: 1px solid rgba(255,180,50,0.5); color: var(--amber);
-           line-height: 1.2; }
-#sqlChip.set { display: inline-block; }
+/* ★ NO SQL CHIP HERE. The squelch state is shown in the SNR field beside the frequency, and only
+   there — this chip said the same thing in a different rhythm and its element was deleted. The
+   RULES outlived it and styled nothing for several rounds, which is exactly how a dead selector
+   survives: it costs nothing and looks like evidence the thing still exists. It is not — a fresh
+   reference to `sqlChip` was written against these leftovers before they were spotted. */
 #initChip { display: none; font-size: 0.62em; letter-spacing: 0.14em; padding: 1px 4px;
             border-radius: 3px; border: 1px solid rgba(120,200,255,0.5); color: #7fc4ff;
             line-height: 1.2; animation: sqlBreathe 1.5s ease-in-out infinite; }
@@ -1063,8 +1064,6 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
   border-color: rgba(255,80,80,0.85); color: #ff6b6b;
   animation: sqlBreathe 1.2s ease-in-out infinite;
 }
-#sqlChip.muting { color: #ff6b6b; border-color: rgba(255,80,80,0.75);
-                  animation: sqlBreathe 1.5s ease-in-out infinite; }
 @keyframes sqlBreathe { 0%,100% { opacity: 0.45; } 50% { opacity: 1; } }
 
 /* Search: bookmarks + band plan. */
@@ -1491,8 +1490,6 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   border-color: rgba(255,80,80,0.85); color: #ff6b6b;
   animation: sqlBreathe 1.2s ease-in-out infinite;
 }
-#sqlChip.muting { color: #ff6b6b; border-color: rgba(255,80,80,0.75);
-                  animation: sqlBreathe 1.5s ease-in-out infinite; }
 @keyframes sqlBreathe { 0%,100% { opacity: 0.45; } 50% { opacity: 1; } }
 
 /* Search: bookmarks + band plan. */
@@ -3093,6 +3090,14 @@ select.btn { padding: 6px 8px; }
     <div id="mStatus">
       <span id="mLeft">
         <span id="mClock">—</span>
+        <!-- ★★★ THE WARNING CHIPS SIT HERE, NOT WITH THE NETWORK READOUTS. They start life
+             inside #linkStats (the desktop bar) and mobile.ts moves them in — see the note
+             there for why the chips and the bars had to be separated at all.
+             ★ BEFORE the recording timer: the timer is absent unless you are recording, so
+               putting the chips after it would leave them jumping sideways the moment REC
+               starts — the same "it moves exactly when something is happening" fault this
+               split exists to remove. -->
+        <span id="mChipHost"></span>
         <!-- ★ A breathing dot beside the time. Recording is a state you can forget you are in,
              and a number alone reads as just another readout — motion is what catches an eye
              that is on the waterfall, not on the status line. -->
@@ -3124,12 +3129,6 @@ select.btn { padding: 6px 8px; }
        ★★★ AND IT FADES. Minimum gain is sometimes CORRECT — 104.2 with a transmitter two miles
        away wants 0 dB — so a standing warning would be wrong on a working receiver and would
        train people to ignore it. Once per connection, then gone. -->
-  <div id="gainMinNote" hidden>
-    <b>This receiver's gain is at minimum.</b>
-    <span>On a strong local signal that may be deliberate &mdash; but if the spectrum looks empty,
-      raise the gain before deciding the receiver is dead.</span>
-    <button class="btn" id="gainMinDismiss" title="Dismiss">&times;</button>
-  </div>
   <div id="bar">
     <div class="barRow">
       <!-- LEFT TRACK. The demodulators are part of the tuning block and travel with
