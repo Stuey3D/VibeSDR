@@ -6045,10 +6045,21 @@ struct LocalSdrShim::Impl {
                      *   as one. */
                     const double lxT = std::chrono::duration<double>(
                         std::chrono::steady_clock::now().time_since_epoch()).count();
-                    // ★ Re-fetched: the `c` above is scoped to the block that computed the
-                    //   channel peak, and this needs the same listener's VFO.
+                    /* ★ Re-fetched: the `c` above is scoped to the block that computed the
+                     *   channel peak, and this needs the same listener's VFO.
+                     * ★★★ AND IT FALLS BACK TO THE RADIO'S OWN VFO, because dspFor() is NULL on a
+                     *     receiver with no per-client DSP — which is the ordinary case, not an
+                     *     edge one: a non-shared radio has a single pipeline and no per-listener
+                     *     object to find. Without the fallback the gate read "not in band" for
+                     *     every listener on every unshared receiver, so the badge could never
+                     *     appear — the detector was finding strikes (hits=13 in the log) while
+                     *     every client was told rate 0. The line above it already handles the
+                     *     same null by falling back to the shared peak; this one did not, and
+                     *     that asymmetry is the whole bug. */
                     const auto lxC = dspFor(p.sock);
-                    const bool lxBand = lxC && lxC->vfoHz > 0 && lxC->vfoHz < 10e6;
+                    const double lxVfo = lxC ? lxC->vfoHz
+                                             : LocalSdrShim::instance().listenFrequency();
+                    const bool lxBand = lxVfo > 0 && lxVfo < 10e6;
                     const double lxRate = lxBand ? g_sferic.ratePerMin(lxT) : 0.0;
                     snprintf(sb, sizeof sb, "{\"type\":\"lx\",\"rate\":%.1f,\"ago\":%.0f}",
                              lxRate, lxBand ? g_sferic.agoSecs(lxT) : -1.0);
