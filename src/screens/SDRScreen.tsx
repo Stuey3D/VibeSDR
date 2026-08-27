@@ -6255,6 +6255,18 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const showBandNotif = useCallback((bands: Band[]) => {
     if (!bands.length) return;
+    /* ★★★ AND THE BAND ANNOUNCEMENT DEFERS TOO. Guarding the station and bookmark paths was not
+     *   enough: CONNECTING crosses into a band, so the announcement fires within a second of
+     *   arrival and overwrote the explanation — "VTS not showing the message at all now", with
+     *   "BAND: 87.5 MHz–108 MHz" sitting in the bar where the notice had been (Stuart,
+     *   2026-08-28, on the Xcover V4).
+     * ★★ THIS ONE IS DROPPED RATHER THAN DEFERRED, unlike the station paths: the caller has
+     *    already latched vtsBandKey, so there is no re-fire to wait for. That is the right trade
+     *    at this moment — the band is written along the top of the spectrum either way, while the
+     *    explanation has one chance and is aimed at somebody who has just arrived.
+     * ★ Three writers to one bar, and each was found only when the one before it was fixed. The
+     *   lesson is the bar needs ONE owner, not three guards; this is the guard until it has one. */
+    if (Date.now() < vtsNoticeUntil.current) return;
     const primary = bands[0];
     const range = `${fmtBandFreq(primary.lo)}–${fmtBandFreq(primary.hi)}`;
     let cond: string | null = null;

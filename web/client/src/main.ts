@@ -2540,6 +2540,14 @@ function checkBandCrossing(hz: number) {
   // ★ Name first, then the range: the NAME is what a band change IS, and the range is the useful
   //   detail that follows (Stuart asked for the range back, 2026-08-06 — it belongs, just not
   //   leading).
+  /* ★★★ A NOTICE OUTRANKS A BAND ANNOUNCEMENT, and they share this slot — vtsBandMsg and
+   *   vtsBandUntil are the same two variables — so a crossing would simply overwrite an
+   *   explanation that is mid-sentence. Connecting crosses into a band, which is exactly when a
+   *   notice is up; the app had the identical collision and showed "BAND: 87.5 MHz–108 MHz"
+   *   where the explanation had been (Stuart, 2026-08-28).
+   * ★ Dropped rather than queued: vtsBandKey is already latched above, and the band is written
+   *   along the top of the spectrum anyway. The explanation has one chance; the band does not. */
+  if (vtsNoticeKey) return;
   vtsBandMsg = `${p.name} · ${fmtBandFreq(p.lo)}–${fmtBandFreq(p.hi)}`
              + (bands.length > 1 && region ? ` (ITU R${region})` : '');
   // ★★★ AND WHAT THE BAND IS DOING, when this receiver has something to say about it. The
