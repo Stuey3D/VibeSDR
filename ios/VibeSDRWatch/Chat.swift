@@ -94,15 +94,18 @@ enum Canned {
 /// one visual language. Passive by default; when a chat message lands it BREATHES (a gentle pulse), and a
 /// tap opens the chat sheet. Sits where the dev CPU badge used to — top-left, clear of the clock/battery.
 struct ChatGlyph: View {
+  let clients: Int
+  let activity: Int          // bumps on each inbound message — drives the breathe
   /* ★★★ THE DIAL'S ARM STATE RIDES ON THE SAME BUTTON — tapping opens the chat AND the arm switch.
    *   On a shared dial the polite move is to ASK before taking the tuner, so the control that lets
    *   you take it sits behind the screen where you would ask.
    * ★★ Marked with FM-DX's tick/cross, not a padlock of its own: that screen already taught this
    *   watch's users one symbol for "may I tune on a shared receiver".
-   * ★ nil = no shared dial, nothing to arm, no mark drawn. Mirrors Jr — keep the two in step. */
+   * ★ nil = no shared dial, nothing to arm, no mark drawn. Mirrors Jr — keep the two in step.
+   * ★★ DECLARED AFTER `activity`, and that is not cosmetic: a struct's memberwise initialiser
+   *   takes its arguments in DECLARATION order, so putting this first made every existing
+   *   `ChatGlyph(clients:activity:)` call site a compile error. It cost a Cloud build. */
   var dialArmed: Bool? = nil
-  let clients: Int
-  let activity: Int          // bumps on each inbound message — drives the breathe
   var tap: () -> Void
 
   @State private var pulse = false      // the in/out scale oscillation
