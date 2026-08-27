@@ -432,6 +432,13 @@ struct ConnRec {
     std::string cc;               ///< ISO-3166 country, or empty when unknown. See geoip.cpp.
     std::string endReason;        ///< "closed" | "kicked" | "banned" | "queue-full" | "busy" | "timeout"
     uint64_t    bytes = 0;
+    /** ★★★ IQ BUFFERS THIS VISIT LOST. The live monitor has always shown a drop count, but it
+     *  lives on the per-listener channel and dies with them — so the number was visible only
+     *  while you happened to be watching, and the history, which is what you read afterwards,
+     *  had nothing. A session that delivered plenty of bytes AND dropped steadily is a different
+     *  story from one that delivered plenty and dropped none: the first is a link that could not
+     *  keep up, the second is a listener who simply left. */
+    uint64_t    drops = 0;
     /** ★★★ DID THIS SESSION USE THE ADMIN PASSWORD?
      *
      *  An owner who can see WHO held an admin session, and from where, can spot a compromised
@@ -508,11 +515,12 @@ public:
         if (!f) return;
         for (const auto& r : pending_) {
             fprintf(f, "{\"at\":%lld,\"end\":%lld,\"ip\":\"%s\",\"session\":\"%s\","
-                       "\"agent\":\"%s\",\"cc\":\"%s\",\"reason\":\"%s\",\"bytes\":%llu,"
+                       "\"agent\":\"%s\",\"cc\":\"%s\",\"reason\":\"%s\",\"bytes\":%llu,\"drops\":%llu,"
                        "\"admin\":%s}\n",
                     r.atEpoch, r.endEpoch, esc(r.ip).c_str(), esc(r.session).c_str(),
                     esc(r.agent).c_str(), esc(r.cc).c_str(), esc(r.endReason).c_str(),
-                    (unsigned long long)r.bytes, r.admin ? "true" : "false");
+                    (unsigned long long)r.bytes, (unsigned long long)r.drops,
+                    r.admin ? "true" : "false");
             ++written_;
         }
         pending_.clear();
@@ -620,7 +628,7 @@ public:
     }
 
     void close(const std::string& ip, const std::string& session,
-               const char* reason, uint64_t bytes = 0) {
+               const char* reason, uint64_t bytes = 0, uint64_t drops = 0) {
         std::lock_guard<std::mutex> lk(mtx_);
         for (auto it = recs_.rbegin(); it != recs_.rend(); ++it) {
             if (it->endEpoch) continue;
@@ -630,6 +638,7 @@ public:
             //     figure seen is the true one — taking whatever the last caller passed let a
             //     socket that carried almost nothing overwrite a megabyte count.
             if (bytes > it->bytes) it->bytes = bytes;
+            if (drops > it->drops) it->drops = drops;
             // ★★★ CLOSE ON THE LAST SOCKET, NOT THE FIRST. A visit holds two; ending the row when
             //     the first one goes stamped the visit with the length of whichever socket died
             //     soonest, which on a reconnect is zero. A record restored from disk has live 0
@@ -695,6 +704,7 @@ public:
                + ",\"net\":\"" + esc(liveNet(it->ip)) + "\""
                + ",\"reason\":\"" + esc(it->endReason) + "\""
                + ",\"bytes\":" + std::to_string(it->bytes)
+               + ",\"drops\":" + std::to_string(it->drops)
                + ",\"admin\":" + (it->admin ? "true" : "false") + "}";
         }
         return j + "]";
@@ -820,6 +830,7 @@ private:
             r.atEpoch   = numField(line, "\"at\":");
             r.endEpoch  = numField(line, "\"end\":");
             r.bytes     = (uint64_t)numField(line, "\"bytes\":");
+            r.drops     = (uint64_t)numField(line, "\"drops\":");
             r.ip        = field(line, "\"ip\":\"");
             r.session   = field(line, "\"session\":\"");
             r.agent     = field(line, "\"agent\":\"");
@@ -844,11 +855,12 @@ private:
         for (const auto& r : recs_) {
             if (!r.endEpoch) continue;          // still open — it will be written when it closes
             fprintf(f, "{\"at\":%lld,\"end\":%lld,\"ip\":\"%s\",\"session\":\"%s\","
-                       "\"agent\":\"%s\",\"cc\":\"%s\",\"reason\":\"%s\",\"bytes\":%llu,"
+                       "\"agent\":\"%s\",\"cc\":\"%s\",\"reason\":\"%s\",\"bytes\":%llu,\"drops\":%llu,"
                        "\"admin\":%s}\n",
                     r.atEpoch, r.endEpoch, esc(r.ip).c_str(), esc(r.session).c_str(),
                     esc(r.agent).c_str(), esc(r.cc).c_str(), esc(r.endReason).c_str(),
-                    (unsigned long long)r.bytes, r.admin ? "true" : "false");
+                    (unsigned long long)r.bytes, (unsigned long long)r.drops,
+                    r.admin ? "true" : "false");
         }
         fclose(f);
         rename(tmp.c_str(), path_.c_str());

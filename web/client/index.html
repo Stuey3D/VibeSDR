@@ -1360,6 +1360,10 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   display: flex; flex-direction: column; gap: 4px;
 }
 .chatLine { font-size: 13px; line-height: 1.35; }
+/* ★ A session that carried NOTHING is the one row in this table worth catching the eye — it is
+   the only value here that indicates a fault rather than a person leaving. Marked, not shouted. */
+#adminConns .zeroData { color: var(--red); opacity: .85; }
+#adminConns .cData, #adminConns .cDrops { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .chatWho  { color: var(--unit); margin-right: 0.5em; }
 /* ★ The owner's voice, marked but not shouted. It carries authority in a room where somebody may
    be asked to stop tuning, so it should be distinguishable at a glance — and no louder than that,
@@ -3346,7 +3350,10 @@ select.btn { padding: 6px 8px; }
     <div id="adminClientMix" class="clientMix"></div>
     <div id="adminConnsPager" class="connPager" hidden></div>
     <div class="aTblWrap"><table id="adminConns">
-      <thead><tr><th>When</th><th>Address</th><th class="cRadio">Radio</th><th>Lasted</th><th>Ended</th><th>Client</th><th></th></tr></thead>
+      <!-- ★ Data and Drops sit beside Lasted because they answer the question Lasted raises: a short
+           visit that carried plenty is somebody looking; a short visit that carried NOTHING is a
+           connection that never worked, and duration alone reads the same for both. -->
+      <thead><tr><th>When</th><th>Address</th><th class="cRadio">Radio</th><th>Lasted</th><th>Data</th><th>Drops</th><th>Ended</th><th>Client</th><th></th></tr></thead>
       <tbody></tbody>
     </table></div>
     <p class="dim" id="adminNoConns" hidden>Nothing yet.</p>

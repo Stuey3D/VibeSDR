@@ -247,7 +247,7 @@ public:
     static void noteConnectionOpened(const std::string& ip, const std::string& session,
                                      const std::string& agent, const std::string& cc = "");
     static void noteConnectionClosed(const std::string& ip, const std::string& session,
-                                     const char* reason, uint64_t bytes = 0);
+                                     const char* reason, uint64_t bytes = 0, uint64_t drops = 0);
 
     /** One consistent snapshot of the whole machine: load, temperature, memory, uptime, the
      *  radio, listeners, uplink rate, and the ban list. One request rather than five, so the

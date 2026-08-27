@@ -959,6 +959,11 @@ function groupVisits(list: any[]): any[] {
 function renderConns(raw: any[]) {
   const list = groupVisits(raw);
   renderClientMix(list);
+  const bytesHuman = (n: number): string =>
+    n >= 1024 * 1024 * 1024 ? (n / 1073741824).toFixed(1) + ' GB'
+  : n >= 1024 * 1024        ? (n / 1048576).toFixed(1) + ' MB'
+  : n >= 1024               ? Math.round(n / 1024) + ' KB'
+  :                           n + ' B';
   const tb = $('adminConns').querySelector('tbody')!;
   $('adminNoConns').hidden = list.length > 0;
   ($('adminConns').parentElement as HTMLElement).hidden = list.length === 0;
@@ -1015,6 +1020,10 @@ function renderConns(raw: any[]) {
               .map((x: any) => x.radio).join(' \u2192 ')
           : c.radio) || '—')}</td>
       <td>${live ? '<span class="dim">now</span>' : esc(dur(c.end - c.at))}</td>
+      <!-- ★ ZERO IS THE INTERESTING VALUE, so it is not dimmed away like an absent one: a session
+           that delivered nothing is the only row here that means something went wrong. -->
+      <td class="cData">${c.bytes ? esc(bytesHuman(c.bytes)) : '<span class="zeroData" title="Nothing was delivered to this connection — it opened and carried no data at all.">0</span>'}</td>
+      <td class="cDrops">${c.drops ? esc(String(c.drops)) : '<span class="dim">—</span>'}</td>
       <td class="why-${esc(c.reason || '')}">${live ? '<span class="dim">connected</span>'
                                                     : esc(c.reason || '—')}</td>
       <td class="agent">${esc((c.agent || '').slice(0, 60) || '—')}</td>

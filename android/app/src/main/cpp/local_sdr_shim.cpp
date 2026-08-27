@@ -4831,6 +4831,13 @@ struct LocalSdrShim::Impl {
      *     went first — which is the common case, and the socket carrying almost all the volume. */
     std::mutex sessionBytesMtx;
     std::map<std::string, unsigned long long> sessionBytes;
+    /** ★★★ AND THE DROPS, BANKED THE SAME WAY AND FOR THE SAME REASON. `dropped` lives on the
+     *  ClientDsp, which is destroyed when the listener leaves — so the live monitor could show it
+     *  while it was happening and the history, read afterwards, could not. Stuart, 2026-08-27:
+     *  "can we save the total bytes and drops to the history lines too, would be useful to see
+     *  afterwards." That is the whole point of a history: the interesting sessions are the ones
+     *  you were not watching. */
+    std::map<std::string, unsigned long long> sessionDrops;
 
     /** The ONLY thread that ever writes to this client's socket. Blocking sends are fine HERE —
      *  blocking is exactly what this thread is for, and it holds no lock any other client wants. */
@@ -10907,6 +10914,14 @@ struct LocalSdrShim::Impl {
                         sent = ob->second->sentTotal.load(std::memory_order_relaxed); }
                   if (sent) { std::lock_guard<std::mutex> bl(sessionBytesMtx);
                               sessionBytes[bsess] += sent; }
+                  // ★ Same rescue for the drop count: clientDsp is keyed by SOCKET and is about to
+                  //   go, so read it here or lose it.
+                  { unsigned long long dr = 0;
+                    auto ci = clientDsp.find(sock.get());
+                    if (ci != clientDsp.end() && ci->second)
+                        dr = ci->second->dropped.load(std::memory_order_relaxed);
+                    if (dr) { std::lock_guard<std::mutex> bl(sessionBytesMtx);
+                              sessionDrops[bsess] += dr; } }
               }
           }
           if (!isAudio) {
@@ -10927,13 +10942,15 @@ struct LocalSdrShim::Impl {
             //   own bytes, banked just above, plus the audio socket's if that went first. Taken
             //   and ERASED: a session id is not reused, and a map fed by unauthenticated traffic
             //   must not grow for ever.
-            unsigned long long total = 0;
+            unsigned long long total = 0, drops = 0;
             if (!sess.empty()) {
                 std::lock_guard<std::mutex> bl(sessionBytesMtx);
                 auto b = sessionBytes.find(sess);
                 if (b != sessionBytes.end()) { total = b->second; sessionBytes.erase(b); }
+                auto d = sessionDrops.find(sess);
+                if (d != sessionDrops.end()) { drops = d->second; sessionDrops.erase(d); }
             }
-            LocalSdrShim::noteConnectionClosed(sock->peerAddress(), sess, "closed", total);
+            LocalSdrShim::noteConnectionClosed(sock->peerAddress(), sess, "closed", total, drops);
           }
           // ★ The channel goes with the listener: its pipeline, its slice, its encoder.
           // ★ Lift it out under the lock, stop its thread OUTSIDE — joining a thread while
@@ -14307,8 +14324,8 @@ void LocalSdrShim::noteConnectionOpened(const std::string& ip, const std::string
     g_vsConnLog.open(ip, session, agent, cc);
 }
 void LocalSdrShim::noteConnectionClosed(const std::string& ip, const std::string& session,
-                                        const char* reason, uint64_t bytes) {
-    g_vsConnLog.close(ip, session, reason, bytes);
+                                        const char* reason, uint64_t bytes, uint64_t drops) {
+    g_vsConnLog.close(ip, session, reason, bytes, drops);
 }
 
 /** ★★ EVERYTHING THE MONITOR PAGE DRAWS, IN ONE REQUEST. A page that polls five endpoints once a
