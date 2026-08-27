@@ -189,6 +189,35 @@ int         vs_radio_serials_collide(void);
  */
 void vs_set_stations(const char* json);
 
+/* ── The public directory at vibesdr.net ──────────────────────────────────────────────────────
+ * ★★★ THE HOST APP MUST BE ABLE TO REACH THIS, or only the daemon can list a receiver. The Linux
+ *     build drives vibedir from its config file and the Android app drives it over its own JNI
+ *     bridge; the Mac app had NEITHER, so a Mac could serve publicly only by switching to Full
+ *     mode and doing it in a browser (Stuart, 2026-08-27). These three calls are the same door,
+ *     opened to every host that embeds the core.
+ * ★★ NOT THE SAME THING AS BONJOUR. The host's own "advertise" switch is mDNS on the local
+ *     network; this is a public listing on the internet. Two switches, deliberately, because they
+ *     answer two different questions and a single one would conflate "my house can find it" with
+ *     "the world can". */
+
+/** Where the listing's id and key live between restarts. Call once, before vs_directory_apply. */
+void vs_directory_state_dir(const char* dir);
+
+/** Apply the owner's wishes; returns immediately and works on its own thread.
+ *  @param listed      false withdraws the entry straight away.
+ *  @param name        public name; the shareable address is derived from it.
+ *  @param locator     Maidenhead, for the map pin. May be empty.
+ *  @param publicUrl   an address the owner already has; empty = make a Cloudflare tunnel.
+ *  @param shareForSec >0 temporary, 0 permanent, -1 leave unchanged (a renewal).
+ *  ★ The port is NOT a parameter: it is the one vs_start actually bound. main.cpp learned the
+ *    hard way that advertising a port nobody bound looks healthy and cannot be reached. */
+void vs_directory_apply(bool listed, const char* name, const char* locator,
+                        const char* publicUrl, long long shareForSec);
+
+/** What to show the owner: listed, the address to share, and why not if not. JSON; the returned
+ *  pointer is valid until the next call. */
+const char* vs_directory_status(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -242,6 +242,22 @@ final class Server: ObservableObject {
     /// Advertise on the LAN via Bonjour so clients auto-discover us. Off = reachable only by typing
     /// the address (a privacy choice — don't announce the radio to everyone on the network).
     @AppStorage("advertise") var advertise = true
+
+    /* ── The public directory at vibesdr.net ──────────────────────────────────────────────────
+     * ★★★ A SECOND, SEPARATE SWITCH — Stuart: "the mac needs 2: advertise on local network (the
+     *     existing bonjour switch) and the new Make Public (advertise on VibeSDR.net)". They are
+     *     not degrees of the same thing: Bonjour says "the machines in this house can find it",
+     *     this says "anyone on the internet can". Folding them into one control would make the
+     *     privacy-minded choice above silently publish a receiver to the world.
+     * ★★ IT DID NOT EXIST ON THE MAC AT ALL. Linux drives vibedir from its config file, Android
+     *    over its JNI bridge, and Full mode delegates to the browser setup page — so a Mac in
+     *    Simple mode was the one host that could not list a receiver publicly (2026-08-27). */
+    @AppStorage("dirListed")   var dirListed   = false
+    @AppStorage("dirName")     var dirName     = ""
+    /** >0 temporary, 0 = until switched off. Mirrors dirShareSec on the web setup page. */
+    @AppStorage("dirShareSec") var dirShareSec = 0
+    /** What vibedir says about the listing — the address to share, or why there is not one. */
+    @Published var dirStatus = ""
     // ── Link management ceilings ─────────────────────────────────────────────
     // What the OPERATOR is willing to spend on each listener. The server enforces these, and —
     // crucially — publishes them so an adaptive client can see the ceiling instead of reading it
@@ -744,6 +760,11 @@ final class Server: ObservableObject {
                 if port2 > 0 {
                     self.port = port2; self.running = true; self.refreshEibi()
                     self.startPolling(); self.startAdvertising()
+                    /* ★ AFTER the port is real. vs_directory_apply reads the port vs_start
+                     *   actually bound — publishing before this point would advertise a door
+                     *   that is not open yet, which is the failure main.cpp warns about. */
+                    self.vsStateDir()
+                    self.applyDirectory(ownerChanged: true)
                 } else {
                     self.lastError = errStr.isEmpty ? "could not start" : errStr
                     self.running = false
@@ -754,6 +775,45 @@ final class Server: ObservableObject {
     }
 
     /// The operator flipped the Bonjour toggle — apply it live.
+    /* ★★★ APPLY THE PUBLIC LISTING. Called when the owner flips the switch, edits the name or
+     *     changes the duration, and once after a successful start.
+     * ★★ SHARE LENGTH IS SENT AS A CHANGE ONLY. main.cpp makes the same distinction and says why:
+     *    a renewal that re-sent the duration would nudge a temporary share further into the future
+     *    on every ping, so a "1 hour" listing would never actually end. `ownerChanged` is the only
+     *    time the number is real; otherwise -1 means "leave the window alone".
+     * ★ Nothing is published while the server is stopped — there would be no port to point at,
+     *   and vibedir would be advertising a door that is not open. */
+    func applyDirectory(ownerChanged: Bool) {
+        guard running else { return }
+        let nm = dirName.trimmingCharacters(in: .whitespaces)
+        // ★ A listing with no name has no address: vibedir derives the shareable hostname from it.
+        //   Fall back to the receiver's own name rather than refusing, which is what the daemon
+        //   does (dirName.empty() ? srv.name : srv.dirName).
+        let use = nm.isEmpty ? rxName.trimmingCharacters(in: .whitespaces) : nm
+        vs_directory_apply(dirListed && !use.isEmpty, use,
+                           rxGrid.trimmingCharacters(in: .whitespaces), "",
+                           ownerChanged ? Int64(dirShareSec) : -1)
+        refreshDirStatus()
+    }
+
+    /** ★ Where vibedir keeps the listing's id and key. Without a writable directory a Mac would
+     *   be issued a NEW identity on every launch — a fresh address each time, and the one anybody
+     *   had saved would go dead. Application Support is the Mac's answer to /var/lib. */
+    func vsStateDir() {
+        let fm = FileManager.default
+        guard let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        else { return }
+        let dir = base.appendingPathComponent("VibeServer", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        vs_directory_state_dir(dir.path)
+    }
+
+    func refreshDirStatus() {
+        // ★ statusJson() is what the setup page reads; showing it here means the Mac and the
+        //   browser cannot disagree about whether a receiver is listed.
+        dirStatus = String(cString: vs_directory_status())
+    }
+
     func applyAdvertise() {
         if advertise, running, listeners == 0 { startAdvertising() } else { stopAdvertising() }
         onChange?()
@@ -761,6 +821,13 @@ final class Server: ObservableObject {
 
     private func stopSimple() {
         stopAdvertising()
+        /* ★★★ WITHDRAW THE LISTING BEFORE THE PORT GOES. A public entry outlives the process that
+         *   made it — that is the point of a directory — so stopping the server without saying so
+         *   leaves an advertised receiver that refuses every visitor. It is worse than never
+         *   listing: the map pin, the name and the address all look right, and only connecting
+         *   tells you otherwise. Withdrawn EAGERLY rather than left to the share window expiring.
+         * ★ The owner's switch is untouched, so pressing Start again re-lists exactly as before. */
+        if dirListed { vs_directory_apply(false, "", "", "", -1) }
         vs_stop()
         running = false
         port = 0
@@ -1700,11 +1767,58 @@ struct SettingsView: View {
                    + "LISTENER'S CHOICE offers it, COMPATIBILITY ONLY gives it only to clients "
                    + "that cannot decode the compressed stream.")
                     .font(.caption).foregroundStyle(.secondary)
-                Toggle("Advertise on the network", isOn: Binding(
+                Toggle("Advertise on local network", isOn: Binding(
                     get: { server.advertise },
                     set: { server.advertise = $0; server.applyAdvertise() }))
                 Text("On, clients auto-discover this server (Bonjour). Off, it's reachable only by typing its address — a privacy choice if you'd rather not announce the radio to everyone on the network.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+            /* ★★★ THE PUBLIC LISTING — A SEPARATE SECTION FROM BONJOUR ON PURPOSE. Stuart: "the mac
+             *     needs 2: advertise on local network (the existing bonjour switch) and the new
+             *     Make Public (advertise on VibeSDR.net)." One says the machines in this house can
+             *     find it; the other says anyone on the internet can. Putting them side by side as
+             *     two settings of one switch is how somebody who wanted the first gets the second.
+             * ★★ SIMPLE MODE NEEDED IT because it was the only place that could not do it: Linux
+             *    lists from its config file, Android from its own screen, and Full mode hands you
+             *    to the browser setup page. A Mac in Simple mode could not share a receiver at all
+             *    without switching modes, which is not what Simple should mean. */
+            Section("Make public") {
+                Toggle("List on VibeSDR.net", isOn: Binding(
+                    get: { server.dirListed },
+                    set: { server.dirListed = $0; server.applyDirectory(ownerChanged: true) }))
+                Text("Off by default. Nothing is published until you switch it on, and switching it "
+                   + "off removes the entry straight away. The receiver keeps running either way.")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("Public name", text: Binding(
+                    get: { server.dirName },
+                    set: { server.dirName = $0 }),
+                    prompt: Text(server.rxName.isEmpty ? "e.g. Moulton RSP1B" : server.rxName))
+                    .onSubmit { server.applyDirectory(ownerChanged: false) }
+                Text("The shareable address is made from this name. Shown to strangers, so nothing "
+                   + "private. Left empty, the receiver's own name is used.")
+                    .font(.caption).foregroundStyle(.secondary)
+                /* ★ THE SAME CHOICES AS THE WEB SETUP PAGE's dirShareSec, in the same order and
+                 *   with the same meanings — two GUIs onto one setting that disagreed about what
+                 *   "temporary" offered would be worse than only one of them having it. */
+                Picker("Listing lasts", selection: Binding(
+                    get: { server.dirShareSec },
+                    set: { server.dirShareSec = $0; server.applyDirectory(ownerChanged: true) })) {
+                    Text("Until I turn it off").tag(0)
+                    Text("1 hour").tag(3600)
+                    Text("6 hours").tag(21600)
+                    Text("1 day").tag(86400)
+                    Text("1 week").tag(604800)
+                    Text("30 days").tag(2592000)
+                }
+                Text("A temporary listing is for a contest or a club night. When it ends the "
+                   + "receiver keeps running — it simply stops being advertised.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if !server.dirStatus.isEmpty {
+                    // ★ Straight from vibedir's own statusJson, which is what the browser setup
+                    //   page reads too — so the two cannot tell the owner different things.
+                    Text(server.dirStatus).font(.caption).foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
             }
             Section("Station search") {
                 // Off by default: it is a network fetch, and a headless/offline server should not

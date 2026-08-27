@@ -9,6 +9,7 @@
 #include "sdrplay_source.h"
 #include "airspyhf_source.h"
 #include "radios.h"
+#include "directory.h"
 
 #ifdef VIBE_HAVE_LIBRTLSDR
 #include <rtl-sdr.h>
@@ -214,6 +215,39 @@ void vs_summon(void) { LocalSdrShim::instance().summonClient(); }
 
 void vs_set_stations(const char* json) {
     LocalSdrShim::instance().setStationsJson(json ? json : "");
+}
+
+/* ── The public directory ─────────────────────────────────────────────────────────────────────
+ * ★ A translation layer and nothing more, as the note at the top of this file requires: every
+ *   decision about WHEN to list, for how long, and what to call it belongs to the host's UI, and
+ *   every decision about HOW to list belongs to vibedir. */
+void vs_directory_state_dir(const char* dir) {
+    vibedir::setStateDir(dir ? dir : "");
+}
+
+void vs_directory_apply(bool listed, const char* name, const char* locator,
+                        const char* publicUrl, long long shareForSec) {
+    vibedir::Settings d;
+    d.listed      = listed;
+    d.name        = name ? name : "";
+    d.locator     = locator ? locator : "";
+    d.publicUrl   = publicUrl ? publicUrl : "";
+    d.shareForSec = shareForSec;
+    // ★★★ THE PORT WE ACTUALLY BOUND. Not the one that was asked for — vs_start falls through to
+    //     the next free port in the range, so the requested number and the real one differ often
+    //     enough to matter. A listing that names a port nobody is listening on is the one failure
+    //     that looks completely healthy from this side: the entry appears, the map pin lands, and
+    //     every visitor gets a connection refused. main.cpp carries the same warning about mDNS.
+    d.port        = g_port;
+    vibedir::apply(d);
+}
+
+const char* vs_directory_status(void) {
+    // ★ Held in a static so the caller has something with a lifetime; overwritten on each call,
+    //   which is what the header promises.
+    static std::string s_status;
+    s_status = vibedir::statusJson();
+    return s_status.c_str();
 }
 
 void vs_sdrplay_retry(void) { vibe::SdrplaySource::retryApi(); }
