@@ -11941,6 +11941,27 @@ struct LocalSdrShim::Impl {
         if (a.empty() || isLoopback(a)) return -1;    // the host's own listening
         double since = 0;
         if (auto c = dspFor(sock)) since = c->since;
+        /* ★★★ AND A SHARED VFO HAS NO PER-CLIENT DSP, so dspFor() is NULL and `since` stayed 0 —
+         *   and 0 returned -1, which means "no limit". So on a shared receiver every listener was
+         *   told there was no countdown, while the landing banner (which reads the limit directly)
+         *   told the same person "yours for 30 minutes". Two answers to one question, from one
+         *   server, in the same breath. Stuart, 2026-08-28: "it is coming up on the Pi server but
+         *   only on single user radio, the shared VFO Airspy doesnt show the timer even though it
+         *   warns of a 30 minute limit" — and it affected the web client and the app alike, which
+         *   is what placed it here rather than in either of them.
+         * ★★ sockSince IS THE RIGHT FALLBACK: it is stamped at the websocket handshake for EVERY
+         *    socket, per listener, before anything can ask — so it exists precisely where the DSP
+         *    object does not. adminStatusJson() already reads it this way for the extra viewers.
+         * ★★★ THE SAME dspFor() NULL HAS NOW BITTEN THREE TIMES TODAY: the lightning badge could
+         *     never reach a client on an unshared radio, the HackRF's bias-T reached nothing, and
+         *     this. dspFor() returning null is NORMAL — it means "this receiver has one pipeline",
+         *     not "something is wrong" — and every caller that treats null as a dead end is
+         *     silently wrong on an entire class of receiver. */
+        if (since <= 0) {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            auto it = sockSince.find(sock.get());
+            if (it != sockSince.end()) since = it->second;
+        }
         if (since <= 0) return -1;                    // not counted yet; say nothing rather than 0
         const double left = (double)limitMin * 60.0 - (nowSecs() - since);
         return left > 0 ? (int)(left + 0.5) : 0;
