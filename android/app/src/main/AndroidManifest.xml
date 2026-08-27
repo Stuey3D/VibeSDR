@@ -15,9 +15,18 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
   <!-- RTL-TCP server: connectedDevice FGS + wake lock (keep USB/TCP stream alive screen-off) -->
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
-  <!-- ★ The FRONT DOOR is deliberately the process with NO device, so it cannot claim
-       connectedDevice: it binds a port and routes. dataSync is what that is. -->
-  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+  <!-- ★★★ NO FOREGROUND_SERVICE_DATA_SYNC. It was declared here for a front-door service that
+       would bind a port and route with no device to claim connectedDevice — and that service was
+       never built. NOTHING calls startForeground with FOREGROUND_SERVICE_TYPE_DATA_SYNC: the only
+       two foreground services are RtlTcpServerService (connectedDevice) and VibeStreamService
+       (mediaPlayback), and no dependency asks for it either (checked against the MERGED manifest,
+       not just this one).
+       ★★ It is not free to leave in. Google Play makes you DECLARE and JUSTIFY every foreground
+       service permission — a video for each, and a review question per task type. Declaring one
+       the app cannot use means answering for a capability it does not have, on every submission,
+       for ever. Same shape as ACCESS_FINE_LOCATION, which was declared here and never requested.
+       ★ If a real dataSync service is ever built, add this back WITH the service in the same
+       edit — the permission and the foregroundServiceType belong together. -->
   <uses-permission android:name="android.permission.WAKE_LOCK"/>
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
   <uses-permission android:name="android.permission.INTERNET"/>
