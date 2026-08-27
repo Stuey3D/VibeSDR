@@ -322,6 +322,11 @@ struct InstancePickerView: View {
   private static let logoName: [ServerType: String] = [
     .ubersdr: "logo_ubersdr", .kiwi: "logo_kiwi", .owrx: "logo_owrx",
     .fmdx: "logo_fmdx", .spyserver: "rtltcp", .rtltcp: "rtltcp",
+    // ★ OURS WAS THE ONE MISSING, and it fell back to a "V" monogram rather than failing visibly
+    //   — so the entry that leads the list was the only one without its mark. Same root as the
+    //   comment in SDRDirectory: this file was forked from Jr's before the VibeServer directory
+    //   existed, and each thing it needs has had to be carried across one at a time.
+    .vibeserver: "logo_vibeserver",
   ]
   @ViewBuilder private func typeBadge(_ t: ServerType) -> some View {
     if let name = Self.logoName[t], let img = UIImage(named: name) {

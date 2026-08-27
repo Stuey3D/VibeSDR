@@ -120,6 +120,13 @@ async function fetchVibeServers(lat?: number, lon?: number): Promise<SDRInstance
       bestSnr: null,
       serverType: 'vibeserver',
       deviceType: device,
+      // ★ Kept rather than discarded — see SDRInstance.radios. The watch expands these into one
+      //   row per radio because it has no second screen to choose on.
+      radios: radios.map((r: any) => ({
+        id: typeof r?.id === 'string' ? r.id : undefined,
+        name: typeof r?.name === 'string' ? r.name : undefined,
+        driver: typeof r?.driver === 'string' ? r.driver : undefined,
+      })),
       full: max > 0 && users >= max,
       sessionLimitMins: Number(s.limitMin) > 0 ? Number(s.limitMin) : undefined,
       needsPin: !!s.pin,
