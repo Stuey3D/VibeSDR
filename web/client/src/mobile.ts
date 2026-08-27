@@ -251,7 +251,7 @@ export function initMobileControls(deps: MobileDeps) {
     // ★ NO 'sqlChip'. It has no element — the squelch state lives in the SNR field beside the
     //   frequency and only there. Its CSS outlived the markup, and that leftover is what made a
     //   dead id look live enough to list here (Stuart spotted it, 2026-08-27).
-    for (const id of ['initChip', 'ovlChip']) {
+    for (const id of ['initChip', 'ovlChip', 'lxChip']) {
       const chip = document.getElementById(id);
       if (chip && chip.parentElement !== chipHost) chipHost.appendChild(chip);
     }

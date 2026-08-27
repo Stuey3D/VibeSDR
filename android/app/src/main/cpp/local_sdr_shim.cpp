@@ -1250,6 +1250,107 @@ static std::atomic<double>   g_agcForgetAt{0.0};  // when the AGC last forgot (I
 static constexpr int kOvlBadHold       = 120;     // clean ticks before retrying a settled verdict
 static constexpr int kOvlBadHoldProvis = 15;      // ... and after a reconfiguration
 static constexpr double kAgcReconfigSec = 10.0;   // a cut this soon after a forget is provisional
+
+/* ══ LIGHTNING (SFERICS) — a badge, not an instrument ═══════════════════════════════════════════
+ * ★★★ MEASURED BEFORE IT WAS WRITTEN, on Stuart's V4L at Northampton on 2026-08-27 while a storm
+ *     sat 25-40 km west. Three runs over the MW window (2.1 MHz centred 648 kHz): 28-33 strikes
+ *     per minute, against LightningMaps reporting 44/min across a map area far wider than this
+ *     aerial hears. The same probe on FM at 96.1 found 1/min — the negative control.
+ *
+ * ★★★ THE DISCRIMINATOR IS BREADTH, and that is the whole design. A sferic lifts the ENTIRE
+ *     window at once: a typical frame has 0.3% of its bins more than 6 dB above their own
+ *     baseline, a strike has 25-90% of them, up to +25 dB. Two orders of magnitude apart, so the
+ *     threshold is not delicate. Note it is PER BIN against that bin's own slow baseline — a
+ *     whole-frame median would call every MW carrier a candidate, since the band is full of
+ *     signals 40 dB over the floor that are simply always there.
+ *
+ * ★★★ AND IT LIVES HERE, ON THE WIDE FFT, NOT IN A CLIENT. "What fraction of the band lifted"
+ *     means nothing in the 20 kHz window somebody has zoomed to. This FFT is full-span whatever
+ *     any listener is looking at, it already runs with nobody listening, and computing it once
+ *     serves every client — web, app and watch — instead of each of them guessing separately.
+ *
+ * ★★ WHAT THIS IS NOT. m9psy's ubersdr_lightning detects on the 48 kHz VLF IQ ENVELOPE and gates
+ *    on DURATION (max 10 ms), which at 48 kHz he can measure and we cannot: by the time a frame
+ *    reaches here it is an averaged FFT at ~15 fps, so duration is unavailable in principle.
+ *    Breadth across 2 MHz is the substitute, and it is a discriminator his single narrow channel
+ *    does not have. Different instrument, same question. His also does TDOA off GPS timestamps;
+ *    this counts flashes so a badge can say "storms about", and nothing more.
+ *
+ * ★★ IT ALSO EXPLAINS WHY MW RATHER THAN VLF HERE: Stuart's MLA30+ is noisy down at VLF, where
+ *    the classic detectors live, and quiet at MW where the sferics are still +10-25 dB over the
+ *    floor. The band that works is the band the aerial is good at.
+ *
+ * ★ A GAIN STEP LIFTS THE WHOLE BAND TOO — it is the one false positive that would look exactly
+ *   like a strike. Measured zero coincidences in 49 strikes, BUT the AGC never moved during that
+ *   test, so that is untested rather than cleared; hence the explicit suppression below. */
+struct SfericDetect {
+    std::vector<float> base;          // per-bin slow baseline, dB
+    std::deque<double> hits;          // strike times, newest last
+    double lastStrikeAt = 0.0;
+    double armedAt      = 0.0;        // baseline needs to settle before we may trigger
+
+    static constexpr float  kOverDb   = 6.0f;   // a bin counts as lifted at +6 dB over its own base
+    static constexpr float  kFrac     = 0.25f;  // ...and a quarter of the band at once is a strike
+    static constexpr double kRefracS  = 0.40;   // one flash smears over ~3.5 frames at 15 fps
+    static constexpr double kWindowS  = 300.0;  // rate is measured over five minutes
+    static constexpr float  kAlpha    = 0.02f;  // ≈3 s at 15 fps: follows the band, not the strike
+    static constexpr double kWarmupS  = 5.0;    // same reason m9psy warms up: no triggers on connect
+
+    /** @return true if this frame WAS a strike. */
+    bool feed(const float* accum, float inv, int bins, double now, bool suppress) {
+        // ★ The AVERAGED accumulator, scaled here rather than copied into a temporary: this runs
+        //   on every FFT frame and a per-frame allocation of a few thousand floats is a cost the
+        //   badge has not earned.
+        if ((int)base.size() != bins) {                 // first frame, or the FFT resized
+            base.resize(bins);
+            for (int i = 0; i < bins; i++) base[i] = accum[i] * inv;
+            armedAt = now + kWarmupS;
+            return false;
+        }
+        int over = 0;
+        for (int i = 0; i < bins; i++) if (accum[i] * inv - base[i] > kOverDb) over++;
+        const float frac = (float)over / (float)bins;
+        // ★ Baseline updated even while suppressed — it must keep following the band, or the
+        //   first frame after a gain change reads as one enormous strike.
+        for (int i = 0; i < bins; i++) base[i] += kAlpha * (accum[i] * inv - base[i]);
+
+        while (!hits.empty() && now - hits.front() > kWindowS) hits.pop_front();
+        if (suppress || now < armedAt) return false;
+        if (frac < kFrac) return false;
+        if (now - lastStrikeAt < kRefracS) return false;
+        lastStrikeAt = now;
+        hits.push_back(now);
+        return true;
+    }
+    /* ★★★ A BADGE MEANS "THERE IS A STORM ABOUT", NOT "A SFERIC HAPPENED". Stuart: "one or 2
+     *     little ones dont fire it off but lots in rapid succession." A single distant flash is
+     *     not something a listener needs explaining, and a badge that blinks on for one event is
+     *     noise — worse, it teaches people to ignore it, so it would not be there when a real
+     *     storm rakes the waterfall and they want to know why.
+     * ★★ THREE CONDITIONS, and they are not the same question:
+     *      - ENOUGH events, so a lone tick cannot qualify;
+     *      - a RATE that means activity, well clear of the 1/min the quiet-band control measured
+     *        against 28-33/min during the storm — an order of magnitude of headroom;
+     *      - and something RECENT, so the badge clears itself a couple of minutes after the storm
+     *        passes rather than lingering for the whole five-minute window.
+     * ★ Silent (0) unless all three hold: the caller reports what it is given, so the decision
+     *   lives here where the evidence is, not in three separate clients. */
+    static constexpr size_t kMinHits  = 5;      // a handful, not one or two
+    static constexpr double kMinRate  = 6.0;    // per minute; the FM control measured 1
+    static constexpr double kStaleS   = 120.0;  // nothing for two minutes = it has moved on
+
+    /** Flashes per minute, or 0 when it does not amount to a storm. */
+    double ratePerMin(double now) {
+        while (!hits.empty() && now - hits.front() > kWindowS) hits.pop_front();
+        if (hits.size() < kMinHits) return 0.0;
+        if (now - lastStrikeAt > kStaleS) return 0.0;
+        const double span = std::max(30.0, now - hits.front());   // don't over-read a short run
+        const double rate = (double)hits.size() * 60.0 / span;
+        return rate >= kMinRate ? rate : 0.0;
+    }
+    double agoSecs(double now) const { return lastStrikeAt > 0 ? now - lastStrikeAt : -1.0; }
+};
+static SfericDetect g_sferic;
 static std::atomic<int>      g_adcHotRun{0};
 /** ★★★ WHEN THE PIPELINE WAS LAST DISTURBED — a dropped IQ buffer, or an engine rate change.
  *
@@ -5082,6 +5183,24 @@ struct LocalSdrShim::Impl {
             return fftAccum[idx] * inv;
         };
 
+        /* ── Lightning, from the same averaged frame (see SfericDetect) ─────────────────────
+         * ★★ SUPPRESSED AROUND A GAIN CHANGE. A gain step lifts every bin at once and is the one
+         *    thing that looks exactly like a sferic. g_agcForgetAt already marks a retune or an
+         *    IF-filter move; a gain step marks itself through g_ovlLastChangeAt.
+         * ★ ABOVE ~30 MHz THIS MEANS NOTHING and is not offered: measured on FM at 96.1 it found
+         *   1 event/min against 28-33 on MW. Reporting a rate the band cannot support would be
+         *   inventing a reading, which is the one thing a badge must never do. */
+        {
+            const double lxNow = std::chrono::duration<double>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            const double sinceGain = lxNow - g_ovlLastChangeAt.load(std::memory_order_relaxed);
+            const double sinceCfg  = lxNow - g_agcForgetAt.load(std::memory_order_relaxed);
+            const bool   hfBand    = rtlCenter.load() < 32e6;
+            if (hfBand) g_sferic.feed(fftAccum.data(), inv, bins, lxNow,
+                                      sinceGain < 1.5 || sinceCfg < 1.5);
+            else        g_sferic.hits.clear();
+        }
+
         // ── Spectrum rate audit (passive) ──────────────────────────────────
         // ★ 20 fps is requested and ~14 arrives, on BOTH clients. The request is correct
         // (the engine is set to 20*FFT_AVG) and the emit path has no throttle, so the loss
@@ -5907,6 +6026,33 @@ struct LocalSdrShim::Impl {
                              g_adcPeakDbfs.load(std::memory_order_relaxed),
                              g_adcClipPct.load(std::memory_order_relaxed));
                     sendText(p.sock, sb, Out::Adc);   // ★ NOT Out::Sig — see the enum's note
+
+                    /* ★★★ LIGHTNING, PER LISTENER — because the badge exists to explain what is
+                     *     ON THIS PERSON'S SCREEN. Stuart: "it was more to show what those lines
+                     *     and spectrum jumps are." Somebody watching sferics rake across the
+                     *     waterfall reads them as a fault in the receiver; the badge says what
+                     *     they are. Detected once for the radio (see SfericDetect), but only
+                     *     REPORTED to a listener whose own VFO sits where those lines appear.
+                     * ★★ SO THE GATE IS c->vfoHz, NOT the radio's centre. On a wide capture one
+                     *    listener can be down at 648 kHz among the sferics while another is up
+                     *    where the band is clean, and telling the second one about lightning they
+                     *    cannot see is exactly the "readout that describes something else"
+                     *    problem. Move to FM and the rate goes to zero, so the badge clears
+                     *    itself with no client-side rule.
+                     * ★ 10 MHz: measured 28-33/min at MW (0-2.1 MHz) and 1/min at FM, and Stuart
+                     *   sees the lines "up to around 6-7MHz". The ceiling is his observation, not
+                     *   my measurement — above 2.1 MHz this is a judgement and should be treated
+                     *   as one. */
+                    const double lxT = std::chrono::duration<double>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count();
+                    // ★ Re-fetched: the `c` above is scoped to the block that computed the
+                    //   channel peak, and this needs the same listener's VFO.
+                    const auto lxC = dspFor(p.sock);
+                    const bool lxBand = lxC && lxC->vfoHz > 0 && lxC->vfoHz < 10e6;
+                    const double lxRate = lxBand ? g_sferic.ratePerMin(lxT) : 0.0;
+                    snprintf(sb, sizeof sb, "{\"type\":\"lx\",\"rate\":%.1f,\"ago\":%.0f}",
+                             lxRate, lxBand ? g_sferic.agoSecs(lxT) : -1.0);
+                    sendText(p.sock, sb, Out::Adc);
                 }
             }
         }

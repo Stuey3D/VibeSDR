@@ -179,6 +179,8 @@ export interface RadioCaps {
 export interface SpectrumCallbacks {
   onBins?:   (bins: Float32Array, centerHz: number, bwHz: number) => void;
   onConfig?: (cfg: Config) => void;
+  /** Lightning for THIS listener: flashes/min (0 = nothing to say), and how long ago. */
+  onLightning?: (ratePerMin: number, agoSecs: number) => void;
   /** The server's radio was unplugged (false) or came back (true). */
   onDevice?: (present: boolean) => void;
   /** The owner's notice to listeners, pushed when it is posted or cleared ('' = nothing). */
@@ -688,6 +690,8 @@ export class SpectrumClient {
         this.cb.onSummon?.();
         break;
       case 'hwinfo':
+        if (msg.type === 'lx')
+          this.cb.onLightning?.(Number(msg.rate) || 0, Number(msg.ago));
         if (msg.tunerBw !== undefined)
           this.cb.onTunerBw?.(Number(msg.tunerBw) || 0, Number(msg.rfCentre) || 0,
                               msg.tunerBwAuto === true);

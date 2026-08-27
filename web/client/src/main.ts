@@ -1271,6 +1271,24 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         renderRspVals();
       }
     },
+    /* ★★★ LIGHTNING. The server sends this for THIS listener — it is already gated on the band
+     *   their own VFO sits in and on whether the activity amounts to a storm, so a non-zero rate
+     *   is the whole decision and there is nothing to re-judge here. Anything else would be a
+     *   client deciding something only the server can know.
+     * ★ The rate rides in the TOOLTIP rather than the chip. The chip answers "what are those
+     *   lines?", which is the question somebody actually has; the number is for whoever looks. */
+    onLightning: (ratePerMin: number, agoSecs: number) => {
+      const el = document.getElementById('lxChip');
+      if (!el) return;
+      const on = ratePerMin > 0;
+      el.classList.toggle('set', on);
+      if (on) {
+        const ago = agoSecs >= 0 && agoSecs < 90 ? `, last ${Math.round(agoSecs)}s ago` : '';
+        el.title = 'Lightning nearby — the broadband lines across the spectrum and the jumps in '
+                 + 'the noise floor are sferics, not a fault with the receiver '
+                 + `(about ${Math.round(ratePerMin)}/min${ago})`;
+      }
+    },
     onTunerBw: (hz: number, rfCentreHz: number, auto: boolean) => {
       hwTunerBw = hz;
       hwTunerAuto = auto;
