@@ -5,7 +5,8 @@
 # Prerequisites (one-time):
 #   1. A "Developer ID Application" certificate in the login keychain. Create it in
 #      Xcode ▸ Settings ▸ Accounts ▸ Manage Certificates ▸ + ▸ Developer ID Application.
-#   2. The App Store Connect API key at ~/.appstoreconnect/private_keys/AuthKey_NG46B3P48N.p8
+#   2. The App Store Connect API key at ~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8
+#      plus ~/.appstoreconnect/config carrying KEY_ID and ISSUER (both outside this repo).
 #      (already present). Key id + issuer are passed to notarytool below.
 #
 # Usage:  vibeserver/mac/notarise-and-release.sh [path/to/VibeServer.app]
@@ -16,8 +17,15 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # ★ The BUILD OUTPUT, not the Desktop — build-app.sh installs to /Applications now, and there is
 #   no Desktop copy to notarise (Stuart, 2026-08-12: two copies "gets confusing otherwise").
 APP="${1:-$ROOT/vibeserver/build/VibeServer.app}"
-KEY_ID="NG46B3P48N"
-ISSUER="340c3b5f-a208-4c2f-a68b-4ca12851b769"
+# ★★★ THE IDENTITY LIVES OUTSIDE THE REPO — this repo is PUBLIC. ~/.appstoreconnect/config holds
+#     KEY_ID and ISSUER, next to the private key that was always outside. The .p8 is the secret;
+#     these two are account identifiers, and there is no reason to publish them either.
+ASC_CFG="$HOME/.appstoreconnect/config"
+[ -f "$ASC_CFG" ] || { echo "!! No App Store Connect identity at $ASC_CFG"; \
+  echo "   Write KEY_ID=<key id> and ISSUER=<issuer uuid> into it."; exit 1; }
+# shellcheck source=/dev/null
+. "$ASC_CFG"
+[ -n "${KEY_ID:-}" ] && [ -n "${ISSUER:-}" ] || { echo "!! $ASC_CFG is missing KEY_ID or ISSUER"; exit 1; }
 KEY_FILE="$HOME/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8"
 
 [ -d "$APP" ] || { echo "!! No app at $APP"; exit 1; }

@@ -8,11 +8,38 @@
 
 Needs `pyjwt`. Key/issuer per memory: testflight_setup.md.
 """
-import json, time, sys, urllib.request, urllib.error
+import json, os, time, sys, urllib.request, urllib.error
 
-KEY = "NG46B3P48N"
-ISS = "340c3b5f-a208-4c2f-a68b-4ca12851b769"
-P8  = "/Users/stuey3d/.appstoreconnect/private_keys/AuthKey_NG46B3P48N.p8"
+# ★★★ THE IDENTITY LIVES OUTSIDE THE REPO. This is a PUBLIC repo, and the key id and issuer are
+#     account identifiers — not secrets on their own (the .p8 is the secret, and that has never
+#     been committed) but there is no reason to publish them. ~/.appstoreconnect/config holds them,
+#     next to the private key that was always there.
+# ★ Fail LOUDLY and say what to write. A missing identity used to be impossible; now it is a
+#   first-run step, and "401 Unauthorized" would be a terrible way to discover it.
+_CFG = os.path.expanduser("~/.appstoreconnect/config")
+
+def _identity():
+    vals = {}
+    try:
+        with open(_CFG) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                vals[k.strip()] = v.strip().strip('"').strip("'")
+    except FileNotFoundError:
+        sys.exit(f"!! No App Store Connect identity at {_CFG}\n"
+                 f"   Create it with:\n"
+                 f"     KEY_ID=<your key id>\n"
+                 f"     ISSUER=<your issuer uuid>\n"
+                 f"   The .p8 stays at ~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8")
+    if not vals.get("KEY_ID") or not vals.get("ISSUER"):
+        sys.exit(f"!! {_CFG} is missing KEY_ID or ISSUER")
+    return vals["KEY_ID"], vals["ISSUER"]
+
+KEY, ISS = _identity()
+P8  = os.path.expanduser(f"~/.appstoreconnect/private_keys/AuthKey_{KEY}.p8")
 
 APPS = {"vibesdr": "6786344049", "jr": "6795507029"}
 WORKFLOWS = {
