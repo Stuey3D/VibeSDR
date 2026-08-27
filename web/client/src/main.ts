@@ -2319,6 +2319,19 @@ let vtsLastHz = -1;
 function applyVtsScroll(isLive: boolean) {
   const vts = $('vts');
   vts.classList.toggle('live', isLive);
+  /* ★★★ MEASURE UNDER THE CONSTRAINED LAYOUT, or nothing ever scrolls.
+   *   The `max-width` and `overflow: hidden` that make the text clip live on `#vts.scroll`, and
+   *   this function decides whether to ADD that class — so it was measuring the element at its
+   *   full natural width, where scrollWidth == clientWidth and `over` is always 0. The class was
+   *   therefore never added, and the check that would have added it could never pass: a
+   *   chicken-and-egg that silently disabled the whole feature. Stuart, 2026-08-27: "its not
+   *   scrolling."
+   * ★★ RDS was unaffected, which is exactly why this hid for so long — RadioText has its OWN
+   *    scroller (#vtsRtInner, see fitRadioText), so the one long line people watch every day
+   *    scrolled fine while this path never did.
+   * ★ Add first, measure, then toggle off if nothing actually overflows. Reading scrollWidth
+   *   forces the layout, so the measurement below sees the clamp already applied. */
+  vts.classList.add('scroll');
   let any = false;
   for (const id of ['vtsName', 'vtsText']) {
     const el = document.getElementById(id);
@@ -2539,7 +2552,13 @@ function updateVts() {
     //     textContent above destroys it, so the wrapper has to be rebuilt after every write.
     //  ★ `false` = not live RDS. This is our own announcement, not something the station is
     //    still transmitting, so it gets the static treatment and a finite life.
-    applyVtsScroll(false);
+    /* ★ A NOTICE LOOPS; A BAND ANNOUNCEMENT DOES NOT. Static content getting one pass is the
+     *   right call for a band name — "a bookmark name that kept sliding after you had read it
+     *   would be movement for its own sake". An EXPLANATION is different: it is several
+     *   sentences with a 20-30 s life, and one pass at this speed can take LONGER than the life,
+     *   so the reader would be shown a sentence that is cut off mid-slide and then removed.
+     *   Looping means whenever you look, another pass is coming. */
+    applyVtsScroll(!!vtsNoticeKey);
     setDecBoxOffset();
     return;
   }
