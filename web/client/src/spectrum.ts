@@ -689,9 +689,18 @@ export class SpectrumClient {
         // The host machine is looking for this tab. Handled by main.ts (flash + focus attempt).
         this.cb.onSummon?.();
         break;
+      /* ★★★ ITS OWN CASE. This began life as an `if (msg.type === 'lx')` INSIDE case 'hwinfo:',
+       *   which cannot ever be true — inside that case msg.type is 'hwinfo' by construction. It
+       *   compiled, it type-checked, and it was dead on arrival: the server sent the message ~15
+       *   times a second and nothing on this side ever read one (Stuart: "nothing showing").
+       * ★★ The lesson is the anchor, not the typo. I placed it next to the line that reads
+       *   msg.tunerBw because that was the nearest RELATED code, without checking what enclosed
+       *   it — the second time in this feature that a correct-looking line sat in a scope where
+       *   it could not run. Adding a message type means adding a CASE. */
+      case 'lx':
+        this.cb.onLightning?.(Number(msg.rate) || 0, Number(msg.ago));
+        break;
       case 'hwinfo':
-        if (msg.type === 'lx')
-          this.cb.onLightning?.(Number(msg.rate) || 0, Number(msg.ago));
         if (msg.tunerBw !== undefined)
           this.cb.onTunerBw?.(Number(msg.tunerBw) || 0, Number(msg.rfCentre) || 0,
                               msg.tunerBwAuto === true);

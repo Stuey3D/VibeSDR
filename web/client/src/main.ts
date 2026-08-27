@@ -1278,10 +1278,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
      * ★ The rate rides in the TOOLTIP rather than the chip. The chip answers "what are those
      *   lines?", which is the question somebody actually has; the number is for whoever looks. */
     onLightning: (ratePerMin: number, agoSecs: number) => {
-      const el = document.getElementById('lxChip');
+      const el = document.getElementById('rxLightning');
       if (!el) return;
       const on = ratePerMin > 0;
-      el.classList.toggle('set', on);
+      el.hidden = !on;
       if (on) {
         const ago = agoSecs >= 0 && agoSecs < 90 ? `, last ${Math.round(agoSecs)}s ago` : '';
         el.title = 'Lightning nearby — the broadband lines across the spectrum and the jumps in '
@@ -2338,6 +2338,14 @@ let vtsLastHz = -1;
  *     bookmark, EiBi, band conditions — gets it without having to remember. */
 /** How far #vtsName overflowed at the last measurement, px. 0 = it fits. */
 let vtsNameOver = 0;
+/** The scroll duration actually applied to #vtsName, seconds — the notice's life is derived
+ *  from THIS rather than recomputed, so the two cannot disagree. */
+let vtsNameDurS = 0;
+/** Reading pace for a notice, px/s. Slower than the band line's implicit 33 px/s because a
+ *  notice is prose to be read once, not a label to be recognised. */
+const VTS_NOTICE_PX_PER_S = 42;
+/** A beat at the end so the last words can be read before it leaves. */
+const VTS_NOTICE_TAIL_MS = 2500;
 
 function applyVtsScroll(isLive: boolean) {
   const vts = $('vts');
@@ -2375,10 +2383,19 @@ function applyVtsScroll(isLive: boolean) {
     if (over > 4) {
       any = true;
       el.style.setProperty('--vts-slide-dist', `${-over}px`);
-      // ★ Speed scales with LENGTH, like the app's `Math.max(2200, dist * 16)`: a long RadioText
-      //   and a short band line should read at the same pace, not take the same time.
-      el.style.setProperty('--vts-slide-dur', `${Math.max(4, over * 0.03).toFixed(1)}s`);
-      if (id === 'vtsName') vtsNameOver = over;
+      /* ★★★ ONE PLACE SETS THE DURATION. It used to be set here for every element and then
+       *   OVERWRITTEN afterwards for a notice — two writers for one value, and the second wrote
+       *   it after the animation had already started with the first, which a browser is not
+       *   obliged to honour. That is why a notice still ran out mid-sentence after the life was
+       *   supposedly matched to it (Stuart: "still isnt showing fully before the scroll times
+       *   out"). The notice's own pace is decided HERE and nothing rewrites it.
+       * ★ Speed scales with LENGTH, like the app's `Math.max(2200, dist * 16)`: a long RadioText
+       *   and a short band line should read at the same pace, not take the same time. */
+      const isNotice = !!vtsNoticeKey && id === 'vtsName';
+      const durS = isNotice ? Math.max(4, over / VTS_NOTICE_PX_PER_S)
+                            : Math.max(4, over * 0.03);
+      el.style.setProperty('--vts-slide-dur', `${durS.toFixed(1)}s`);
+      if (id === 'vtsName') { vtsNameOver = over; vtsNameDurS = durS; }
     } else {
       el.style.removeProperty('--vts-slide-dist');
     }
@@ -2388,23 +2405,20 @@ function applyVtsScroll(isLive: boolean) {
   /* ★★★ A NOTICE STAYS UP LONG ENOUGH TO BE READ TO THE END.
    *   The life was a fixed 20-30 s while the scroll duration scaled with LENGTH, so the two had
    *   no reason to agree — and on a long explanation they did not: the message was removed
-   *   mid-sentence, having spent its first seconds motionless. Stuart: "doesnt scroll long enough
-   *   to see the full message."
-   * ★★ SO THE LENGTH DECIDES THE LIFE, not the other way round. A notice we chose to write is
-   *   worth however long it takes to read once at a steady pace, plus a beat at each end. That is
-   *   the honest direction of the dependency: we control the words, so the words control the time.
+   *   mid-sentence. So the LENGTH decides the LIFE, not the other way round. We control the
+   *   words, so the words control the time.
+   * ★★ DERIVED FROM THE DURATION ACTUALLY APPLIED ABOVE (vtsNameDurS), not recomputed here from
+   *   the same inputs. Two derivations of one number is how they drift apart, which is exactly
+   *   the fault this is fixing.
    * ★ Once per notice (vtsNoticeSized). updateVts() runs on every spectrum frame and on the hold
-   *   timer, so extending on each pass would push the deadline for ever and the notice would
-   *   never leave. */
-  if (vtsNoticeKey && !vtsNoticeSized && vtsNameOver > 4) {
+   *   timer, so extending on each pass would push the deadline for ever and it would never go. */
+  if (vtsNoticeKey && !vtsNoticeSized && vtsNameOver > 4 && vtsNameDurS > 0) {
     vtsNoticeSized = true;
-    const SPEED = 46;                                  // px/s — a comfortable reading pace
-    const travelMs = (vtsNameOver / SPEED) * 1000;
-    const needed = 350 + travelMs / 0.94 + 2200;       // delay + travel (94% of the run) + a tail
+    // The travel occupies 94% of the run (keyframes 3%..97%), after a 0.35 s delay, and then a
+    // beat to read the tail before it leaves.
+    const needed = 350 + vtsNameDurS * 1000 + VTS_NOTICE_TAIL_MS;
     if (needed > vtsBandUntil - Date.now()) {
       vtsBandUntil = Date.now() + needed;
-      const el = document.getElementById('vtsName');
-      if (el) el.style.setProperty('--vts-slide-dur', `${(needed / 1000).toFixed(1)}s`);
       if (vtsHideTimer) clearTimeout(vtsHideTimer);
       vtsHideTimer = window.setTimeout(() => {
         vtsHideTimer = null;
@@ -2632,7 +2646,11 @@ function updateVts() {
      *   sentences with a 20-30 s life, and one pass at this speed can take LONGER than the life,
      *   so the reader would be shown a sentence that is cut off mid-slide and then removed.
      *   Looping means whenever you look, another pass is coming. */
-    applyVtsScroll(!!vtsNoticeKey);
+    /* ★ ONE PASS, not a loop. Notices looped while their life was a fixed 20-30 s that could cut
+     *  a long pass short — looping at least guaranteed another go. Now the life is DERIVED from
+     *  the pass, so one pass always completes and a loop would only start a second one and have
+     *  it chopped off at the deadline, which reads as a glitch rather than as a repeat. */
+    applyVtsScroll(false);
     setDecBoxOffset();
     return;
   }

@@ -349,6 +349,15 @@ html[data-frontdoor] #splashListeners { display: none !important; }
 #rxTimeLeft { font-size: 0.78em; color: var(--text-dim); margin-top: 1px; }
 #rxTimeLeft.warn { color: #ffd479; }
 #rxTimeLeft.crit { color: #ff8a7d; }
+/* ★ Its own colour, and deliberately NOT the amber of a fault or the red of the countdown: this
+   is weather, not something wrong with the receiver, and the entire purpose is to stop a
+   listener reading the lines across their waterfall as a fault. Pale blue reads as information.
+   ★★ pointer-events re-enabled just for this line — #rxBadge disables them so the badge never
+      eats a drag on the waterfall underneath, but the explanation lives in the tooltip and a
+      tooltip you cannot hover is not there at all. */
+#rxLightning { font-size: 0.78em; color: #9fd0ff; letter-spacing: 0.1em; margin-top: 2px;
+               pointer-events: auto; cursor: help; }
+#rxLightning[hidden] { display: none; }
 /* ★ Admin mode sits in the countdown's slot. Deliberately NOT a warning colour: it is a statement
    of fact about this session, not something going wrong. */
 #rxTimeLeft.adminMode { color: var(--accent, #ffb833); opacity: 0.85; letter-spacing: 0.02em; }
@@ -864,7 +873,7 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 /* ★ The throughput is the one thing here that may shrink and truncate — it is a nice-to-know.
    The bars and chips never shrink: they are the whole point of the row. */
 #mStatus #status { color: #c9922e; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-#mStatus #linkBars, #mStatus #initChip, #mStatus #ovlChip, #mStatus #lxChip { flex: 0 0 auto; }
+#mStatus #linkBars, #mStatus #initChip, #mStatus #ovlChip { flex: 0 0 auto; }
 /* ★★ TABULAR FIGURES, so a digit changing does not change the WIDTH. Proportional numerals make
    1 narrower than 8, so a counter ticking over reflows the row and nudges everything after it —
    the signal and AGC meters wobbled twice a second beside a bouncing fps figure (Stuart,
@@ -1056,13 +1065,6 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
    RULES outlived it and styled nothing for several rounds, which is exactly how a dead selector
    survives: it costs nothing and looks like evidence the thing still exists. It is not — a fresh
    reference to `sqlChip` was written against these leftovers before they were spotted. */
-/* ★ Its own colour, and deliberately not the amber of a fault or the blue of the AGC: this is
-   WEATHER, not something wrong with the receiver, and the whole point is to stop a listener
-   reading the lines as a fault. */
-#lxChip { display: none; font-size: 0.62em; letter-spacing: 0.14em; padding: 1px 4px;
-          border-radius: 3px; border: 1px solid rgba(150,200,255,0.55); color: #9fd0ff;
-          line-height: 1.2; }
-#lxChip.set { display: inline-block; }
 #initChip { display: none; font-size: 0.62em; letter-spacing: 0.14em; padding: 1px 4px;
             border-radius: 3px; border: 1px solid rgba(120,200,255,0.5); color: #7fc4ff;
             line-height: 1.2; animation: sqlBreathe 1.5s ease-in-out infinite; }
@@ -2879,6 +2881,20 @@ select.btn { padding: 6px 8px; }
          that is where "whose radio is this" already lives. Hidden entirely when the server sets
          no limit, which is every private receiver. -->
     <div id="rxTimeLeft" hidden></div>
+    <!-- ★★★ LIGHTNING — IT EXPLAINS THE WATERFALL, it does not measure the weather. Sferics rake
+         broadband lines right across the spectrum and jump the noise floor, and to somebody who
+         has not seen that before it reads as a fault in the RECEIVER. Stuart: "it was more to
+         show what those lines and spectrum jumps are."
+         ★★ HERE, NOT ON THE CLOCK LINE. That row already carries the clock, the recording timer,
+            the gain chip and the link stats, and this is the second thing today to be squeezed
+            onto it (Stuart: "clock line is getting crowded, I'd say just under the time in the
+            spectrum"). It also belongs here on meaning: this block answers "what am I looking
+            at" — whose radio, where, how long for — and the lines across the waterfall are the
+            same kind of question.
+         ★ Only on MW and lower HF, and only during real activity: the server decides both (see
+           SfericDetect) and sends rate 0 otherwise, so there is no second opinion here to drift
+           out of step with it. -->
+    <div id="rxLightning" hidden title="Lightning">&#9889; STORMS</div>
   </div>
 <!-- Decoder output box. Floats bottom-left above the control bar and PERSISTS
      until dismissed (OpenWebRX behaviour) — you keep listening and tuning while
@@ -3269,16 +3285,6 @@ select.btn { padding: 6px 8px; }
                    warning nobody sees is not a warning. Overload is the one condition that
                    silently ruins reception (it is what has been destroying RDS all evening),
                    so it belongs where the user is already looking (Stuart, 2026-07-26). -->
-              <!-- ★★★ LIGHTNING — IT EXPLAINS THE WATERFALL, it does not measure the weather.
-                   Sferics rake broadband lines right across the spectrum and jump the noise
-                   floor, and to somebody who has not seen it before that reads as a fault in the
-                   receiver. Stuart: "it was more to show what those lines and spectrum jumps
-                   are." So the chip's TITLE carries the explanation and the chip itself is just
-                   the flag; the rate is secondary and lives in the tooltip.
-                   ★★ Only on MW and lower HF, and only during real activity — the server decides
-                      both (see SfericDetect) and simply sends rate 0 otherwise, so there is no
-                      second opinion here to drift out of step. -->
-              <span id="lxChip" title="Lightning">&#9889; STORMS</span>
               <span id="ovlChip" title="The receiver's front end is overloading — reduce RF gain, or switch a notch in">OVERLOAD</span><!--
                 ★ The text is REPLACED at runtime on a dongle, where the server also acts on the
                   overload and the chip reports which way the gain went (see onOverload). On an RSP
