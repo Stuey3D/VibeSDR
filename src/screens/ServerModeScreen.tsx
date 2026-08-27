@@ -1195,10 +1195,25 @@ export default function ServerModeScreen({ navigation, route }: Props) {
 
         {/* Protocol picker */}
         <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>PROTOCOL</Text>
-        <ProtoCard C={C} F={F} active={proto === 'vibeserver'} onPress={() => setProto('vibeserver')}
+        {/* ★★★ PERSISTED THE MOMENT IT IS CHOSEN, not only when the server starts.
+             Every other setting on this screen is written by start()'s multiSet, which means a
+             choice you make and do not start is simply lost — and the hint two hundred lines
+             below says "Settings are saved as you change them", which was not true of any of
+             them. It matters most for the PROTOCOL because that is the one the owner rarely
+             revisits: a public receiver that comes back on the wrong protocol is off the air in
+             a way nothing on the phone reports (Stuart, 2026-08-27: "it should remember it
+             always did").
+             ★★ It also removes a dependence on surviving the start handoff. start() writes and
+                then hands over to the foreground service; a write that has resolved but not yet
+                been committed by AsyncStorage's SQLite when the process churns is lost, which
+                fits the one start tonight that did not stick while the next one did. Writing on
+                selection means the value is already on disk long before any of that. */}
+        <ProtoCard C={C} F={F} active={proto === 'vibeserver'}
+          onPress={() => { setProto('vibeserver'); void AsyncStorage.setItem(K.proto, 'vibeserver'); }}
           title="VibeServer" tag="Recommended"
           desc="More secure, less data. Server-side DSP, compressed audio + waterfall, PIN protected." />
-        <ProtoCard C={C} F={F} active={proto === 'rtltcp'} onPress={() => setProto('rtltcp')}
+        <ProtoCard C={C} F={F} active={proto === 'rtltcp'}
+          onPress={() => { setProto('rtltcp'); void AsyncStorage.setItem(K.proto, 'rtltcp'); }}
           title="RTL-TCP" tag="Compatible"
           desc="Raw IQ, maximum compatibility. Needs a fast, stable network. No PIN." />
 

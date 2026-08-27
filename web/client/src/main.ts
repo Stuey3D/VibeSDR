@@ -2341,6 +2341,10 @@ let vtsNameOver = 0;
 /** The scroll duration actually applied to #vtsName, seconds — the notice's life is derived
  *  from THIS rather than recomputed, so the two cannot disagree. */
 let vtsNameDurS = 0;
+/** What the notice slot last actually WROTE to the bar. Null = nothing of ours is on screen.
+ *  Guarding on this is what lets the scroll animation survive from one frame to the next. */
+let vtsRenderedMsg: string | null = null;
+let vtsRenderedSub: string | null = null;
 /** Reading pace for a notice, px/s. Slower than the band line's implicit 33 px/s because a
  *  notice is prose to be read once, not a label to be recognised. */
 const VTS_NOTICE_PX_PER_S = 42;
@@ -2625,35 +2629,42 @@ function updateVts() {
   // ★★ THE BAND ANNOUNCEMENT OWNS THE BAR WHILE IT IS LIVE, station or not. It is transient and
   //    it is about where you have just ARRIVED, which is exactly the moment it is worth reading.
   if (Date.now() < vtsBandUntil) {
-    $('vtsName').textContent = vtsBandMsg;
-    $('vtsBand').textContent = vtsBandSub;
+    /* ★★★ ONLY WRITE THE TEXT WHEN IT CHANGES, or nothing can ever scroll.
+     *   updateVts() runs on EVERY spectrum frame — about fifteen times a second — and this branch
+     *   assigned textContent every time. That destroys the <span> the slide animation lives on,
+     *   applyVtsScroll dutifully rebuilds it, and rebuilding restarts the animation from zero. So
+     *   the line twitched at the start and never advanced: "it attempted to scroll the message but
+     *   then stopped" (Stuart, 2026-08-27). Every earlier fix — the missing applyVtsScroll call,
+     *   the chicken-and-egg measurement, the duration, the life — was correct and made no
+     *   difference, because the animation was being killed and restarted before it could move.
+     * ★★ RDS was never affected, which is why this survived three rounds of looking at it:
+     *    RadioText scrolls through its own element (#vtsRtInner) and never comes through here.
+     * ★ The classes and the hidden siblings are idempotent, so they can be set every frame. It is
+     *   textContent that is destructive, and it is the only thing now guarded. */
+    if (vtsRenderedMsg !== vtsBandMsg || vtsRenderedSub !== vtsBandSub) {
+      vtsRenderedMsg = vtsBandMsg;
+      vtsRenderedSub = vtsBandSub;
+      $('vtsName').textContent = vtsBandMsg;
+      $('vtsBand').textContent = vtsBandSub;
+      vts.classList.add('show');
+      vts.classList.remove('on');
+      // ★ Measured and started ONCE, on the render that actually changed the words.
+      applyVtsScroll(false);
+      setDecBoxOffset();
+    }
     for (const id of ['vtsRds', 'vtsSrc', 'vtsLogo', 'vtsFlag', 'vtsPi'])
       ($(id) as HTMLElement).style.display = 'none';
     vts.classList.add('show');
     vts.classList.remove('on');
-    // ★★★ AND SCROLL IT. This branch set the text and returned, so applyVtsScroll() — called
-    //     only on the station path below — never ran for a band announcement: the longest
-    //     messages the bar ever carries were the ONE kind that could not scroll, and anything
-    //     past the width was simply unreadable (Stuart, 2026-08-27: "the band message never
-    //     scrolled"). It is also why the text had to be re-measured rather than left alone:
-    //     applyVtsScroll wraps the line in a <span> and animates THAT, and assigning
-    //     textContent above destroys it, so the wrapper has to be rebuilt after every write.
-    //  ★ `false` = not live RDS. This is our own announcement, not something the station is
-    //    still transmitting, so it gets the static treatment and a finite life.
-    /* ★ A NOTICE LOOPS; A BAND ANNOUNCEMENT DOES NOT. Static content getting one pass is the
-     *   right call for a band name — "a bookmark name that kept sliding after you had read it
-     *   would be movement for its own sake". An EXPLANATION is different: it is several
-     *   sentences with a 20-30 s life, and one pass at this speed can take LONGER than the life,
-     *   so the reader would be shown a sentence that is cut off mid-slide and then removed.
-     *   Looping means whenever you look, another pass is coming. */
-    /* ★ ONE PASS, not a loop. Notices looped while their life was a fixed 20-30 s that could cut
-     *  a long pass short — looping at least guaranteed another go. Now the life is DERIVED from
-     *  the pass, so one pass always completes and a loop would only start a second one and have
-     *  it chopped off at the deadline, which reads as a glitch rather than as a repeat. */
-    applyVtsScroll(false);
-    setDecBoxOffset();
     return;
   }
+  /* ★★★ RETIRE AN EXPIRED NOTICE HERE, not only on its timer. vtsHideTimer is shared with
+   *   vtsHoldFor(), which a band crossing calls — so a band change during a notice replaces the
+   *   very timer that was meant to clear vtsNoticeKey, and the key then sticks for ever: the
+   *   queue stops pumping and no later notice is ever shown. The render path knows the deadline
+   *   has passed, so it can say so without depending on which timer survived. */
+  if (vtsNoticeKey) { vtsNoticeKey = ''; vtsNoticeSized = false; vtsPumpNotices(); }
+  vtsRenderedMsg = null;
   for (const id of ['vtsRds', 'vtsSrc', 'vtsLogo', 'vtsFlag', 'vtsPi'])
     ($(id) as HTMLElement).style.removeProperty('display');
 
