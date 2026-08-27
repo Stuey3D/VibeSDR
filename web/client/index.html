@@ -162,6 +162,27 @@ input, textarea, [contenteditable],
    each drifts by a different amount, which is why they looked misaligned with each other rather
    than uniformly off (Stuart, 2026-08-05). Indenting by the same amount cancels it. */
 #splash .sub { color: var(--amber); opacity: 0.85; font-size: 12px; letter-spacing: 2px; text-indent: 2px; margin-top: -10px; }
+
+/* ★★★ THE SMALL PRINT IS WHITE; THE TITLES AND LINKS STAY AMBER. Once the spectrogram went green
+   the amber body text was readable but still the weakest thing on the page — amber on green is a
+   low-contrast pair at small sizes, and this is the text that has to be READ rather than merely
+   noticed (Stuart, 2026-08-27: "keep the titles amber and the links, but the smaller text should
+   be white").
+   ★★ It also restores the hierarchy the amber-on-black page had by accident: when EVERYTHING is
+   the accent colour, nothing is emphasised. Amber now marks what you act on — the receiver names,
+   the link, the buttons — and white carries what you read.
+   ★ Scoped to the descriptive lines only. The listener count and the aerial keep their own
+   opacities, set inline, which is why these set colour and nothing else. */
+#splash .radioCard .sub,
+#splash #splashOwnerMsg,
+#splash #splashConditions,
+#splash #splashAntenna,
+#splash #splashListeners { color: #fff; }
+/* ★ The card's title row inherits `color:inherit` from the card, so it must be said explicitly
+   now that the lines under it are not amber — otherwise the receiver NAME goes white with them
+   and the one thing you are choosing between stops standing out. */
+#splash .radioCard strong,
+#splash .radioCard .rcState { color: var(--amber); }
 .connPager { margin: 6px 0; display: flex; align-items: center; gap: 10px; font-size: 12px; }
 .adminQueue { margin: 8px 0 4px; font-size: 12px; }
 .adminQueue .qHead { letter-spacing: .18em; opacity: .7; margin-bottom: 4px; }
