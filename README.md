@@ -86,10 +86,24 @@ unzip, drag to Applications. Notarised, so it opens without a Gatekeeper warning
 
 **Android** — install the app, plug in the radio, tap **Use as server**.
 
-Supported hardware: **RTL-SDR** (all the usual dongles, including Blog V4), **Airspy HF+
-Discovery / Dual Port**, and **SDRplay RSP**. Optionally publish your receiver to the
-[public directory](https://vibeserver.vibesdr.net) through a Cloudflare tunnel — your home address
-is never exposed.
+Supported hardware — four radios, though not all of them on every host:
+
+| Radio | Linux · macOS | Android |
+|---|:---:|:---:|
+| **RTL-SDR** — all the usual dongles, including the Blog V4 | ✅ | ✅ |
+| **Airspy HF+** — Discovery and Dual Port | ✅ | ✅ |
+| **SDRplay RSP** — needs SDRplay's own API installed | ✅ | ✕ |
+| **HackRF One** — ⚠️ experimental, see below | ✅ | ✅ |
+
+**SDRplay is desktop-only** because the RSP API is SDRplay's own closed-source library and there is
+no Android build of it — nothing we can fix at this end. On a phone, use one of the other three.
+
+**The HackRF is experimental**: nobody on the VibeSDR side owns one, so the driver was written from
+the documentation and has been tested by a single listener. It works — FM stereo with RDS, the lot
+— it just has not had the miles the other three have. Reports very welcome.
+
+Optionally publish your receiver to the [public directory](https://vibeserver.vibesdr.net) through
+a Cloudflare tunnel — your home address is never exposed.
 
 ## On AI, honestly
 
