@@ -376,6 +376,17 @@ struct ControlMenu: View {
             .buttonStyle(.plain).padding(.bottom, 5)
           }
           LazyVGrid(columns: cols, spacing: 5) {
+          // ★★★ DEMOD AND STEP FIRST — the two controls you reach for most, and they were EIGHTH
+          //     and SEVENTH here, below Bright and Contrast. Stuart: "the 2 most important controls
+          //     are buried under the display settings." Jr has had them at the top since it was
+          //     built ("ORDER (Stuart): Demod, Step first"); Buddy kept the older arrangement and
+          //     nothing brought the decision across. Same order as Jr now, deliberately: the two
+          //     watch apps should not disagree about where the common controls live.
+          // ★ NAME the control, then show its VALUE — a tile reading just "USB" or "9k" shows the
+          //   setting while leaving you to guess what it is the setting FOR. The name makes it a
+          //   control; the value makes the menu double as a readout.
+          tile(name: "DEMOD", value: link.mode.uppercased(), h: h) { showModes = true }
+          tile(name: "STEP",  value: stepLabel(link.step), h: h) { showSteps = true }
           tile(icon: "magnifyingglass", label: "Zoom", h: h) {
             dismiss(); onPickCrown(.zoom)
           }
@@ -394,10 +405,6 @@ struct ControlMenu: View {
                label: link.muted ? "Unmute" : "Mute", h: h) {
             dismiss(); link.setMuted(!link.muted)
           }
-          // NAME the control, then show its VALUE. A tile reading just "Fine" (or
-          // "9k", or "USB") shows you the setting while leaving you to guess what
-          // it's the setting FOR. The name makes the tile a control; the value makes
-          // the menu double as a status readout. You need both.
           // The WATCH's own brightness/contrast — the phone's settings are mirrored
           // as the base, but the same numbers don't serve both screens: a waterfall
           // that reads fine on a big bright phone can be near-black on a wrist held
@@ -409,8 +416,6 @@ struct ControlMenu: View {
             dismiss(); onPickCrown(.contrast)
           }
           tile(name: "CROWN", value: crownLabel, h: h) { showCrown = true }
-          tile(name: "STEP",  value: stepLabel(link.step), h: h) { showSteps = true }
-          tile(name: "DEMOD", value: link.mode.uppercased(), h: h) { showModes = true }
           // Passband: tap → LSB/USB crown editor. Value = total width in kHz.
           tile(name: "BW", value: bwLabel, h: h) { showBw = true }
           tile(name: "SQL", value: link.squelchSet <= -999 ? "Off" : "≥\(Int(link.squelchSet))", h: h) { showSquelch = true }

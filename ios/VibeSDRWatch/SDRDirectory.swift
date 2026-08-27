@@ -102,6 +102,13 @@ func detectServerType(_ url: String) async -> ServerType? {
 
 enum Directories {
   static let all: [DirectoryMeta] = [
+    // ★★★ OURS FIRST, as on the phone and in Jr. Buddy MIRRORS THE PHONE, and the phone leads with
+    //     this listing — it is the one that rewards somebody for switching their own receiver on,
+    //     so burying it under four other networks works against the feature. Buddy simply never
+    //     had it: the VibeServer directory arrived after this file was forked from Jr's, and
+    //     nothing carried it across, so the watch that is meant to mirror the phone was missing
+    //     the phone's first entry entirely.
+    .init(id: "vibeserver",   name: "VibeServer",   desc: "Public VibeServers"),
     .init(id: "ubersdr",      name: "UberSDR",      desc: "Official UberSDR servers"),
     .init(id: "receiverbook", name: "Receiverbook", desc: "OpenWebRX + KiwiSDR (receiverbook.de)"),
     .init(id: "kiwisdr",      name: "KiwiSDR",      desc: "Public KiwiSDR network"),
@@ -110,11 +117,47 @@ enum Directories {
 
   static func fetch(_ id: String) async throws -> [SDRServer] {
     switch id {
+    case "vibeserver":   return try await fetchVibeServers()
     case "ubersdr":      return try await fetchUberSDR()
     case "fmdx":         return try await fetchFmdx()
     case "kiwisdr":      return try await fetchKiwiList()
     case "receiverbook": return try await fetchReceiverbook()
     default:             return []
+    }
+  }
+
+  // ── VibeServer — our own public directory ────────────────────────────────────
+  /// ★ Ported from Jr verbatim in behaviour: same endpoint, same field names, same shape, so the
+  ///   two watch apps cannot drift into disagreeing about what a VibeServer row is.
+  /// ★★ NOTE THE FIELD NAMES ARE OURS, not UberSDR's — `url`/`address`, `listeners`/`maxListeners`,
+  ///   `grid`, `lat`/`lon`. Copying UberSDR's parser and renaming would have silently produced
+  ///   rows with no location and no occupancy.
+  private static func fetchVibeServers() async throws -> [SDRServer] {
+    let url = URL(string: "https://vibeserver.vibesdr.net/api/directory")!
+    let (data, _) = try await URLSession.shared.data(from: url)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    let items = json?["servers"] as? [[String: Any]] ?? []
+    return items.compactMap { it in
+      let address = (it["address"] as? String) ?? ""
+      var publicUrl = (it["url"] as? String) ?? (address.isEmpty ? "" : "https://\(address)")
+      publicUrl = publicUrl.trimmedTrailingSlash
+      guard !publicUrl.isEmpty else { return nil }
+      let maxU = (it["maxListeners"] as? Int) ?? 0
+      let users = (it["listeners"] as? Int) ?? 0
+      let cc = it["country"] as? String
+      return SDRServer(
+        name: (it["name"] as? String) ?? "VibeServer",
+        url: publicUrl,
+        host: URL(string: publicUrl)?.host ?? "",
+        serverType: .vibeserver,
+        location: (it["grid"] as? String) ?? "",
+        countryCode: (cc?.count == 2) ? cc?.uppercased() : nil,
+        latitude: (it["lat"] as? NSNumber)?.doubleValue,
+        longitude: (it["lon"] as? NSNumber)?.doubleValue,
+        users: users,
+        maxUsers: maxU,
+        full: maxU > 0 && users >= maxU
+      )
     }
   }
 
