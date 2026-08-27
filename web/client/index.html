@@ -912,9 +912,24 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
     justify-content: flex-start; flex-wrap: nowrap;
   }
   #mLeft, #mNet { width: 100%; min-width: 0; }
-  /* ★ Both halves read from the left edge; `space-between` would push the throughput to the far
-     side of an otherwise empty line. */
-  #mNet { display: flex; justify-content: flex-start; }
+  /* ★★★ THREE POSITIONS, NOT THREE ITEMS IN A ROW — clock left, gain centre, recording timer
+     right (Stuart, 2026-08-27). A flex row with a gap cannot do this: the recording timer is
+     ABSENT unless you are recording, so anything centred by flex would sit centred-in-what-is-
+     left and shift sideways the moment REC started. A grid's tracks are declared, not derived,
+     so the middle column is the middle of the ROW whether or not the third item exists.
+     ★ `auto` in the middle so a long OVERLOAD chip takes the width it needs and the two 1fr
+       tracks give way, rather than the chip being squeezed to a third of the row. */
+  #mLeft {
+    display: grid; grid-template-columns: 1fr auto 1fr;
+    align-items: center; gap: 0.6em; width: 100%;
+  }
+  #mClock    { justify-self: start; }
+  #mChipHost { justify-self: center; }
+  #mRecTime  { justify-self: end; }
+  /* ★ Centred, to sit under the gain chip above it (Stuart). It read from the left edge when the
+     row above it did; now that the top row is three-up, a left-aligned bottom row looks like a
+     mistake rather than a decision. */
+  #mNet { display: flex; justify-content: center; }
 }
 
 /* ★ The demod chip scales WITH the frequency. Only #mFreq was bumped here, so at the narrowest
