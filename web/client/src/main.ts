@@ -2316,8 +2316,18 @@ let vtsLastHz = -1;
  *  ★★ The text is wrapped in a span because the ELEMENT must stay put (it is the clip) while its
  *     CONTENT moves. Wrapping is done here rather than in the markup so every caller — RDS,
  *     bookmark, EiBi, band conditions — gets it without having to remember. */
+/** How far #vtsName overflowed at the last measurement, px. 0 = it fits. */
+let vtsNameOver = 0;
+
 function applyVtsScroll(isLive: boolean) {
   const vts = $('vts');
+  vtsNameOver = 0;
+  /* ★ `notice` selects the near-instant lead-in keyframes; a band announcement keeps the original
+   *  ones, where a pause before moving is fine at its short duration.
+   *  ★★ SET HERE rather than in the notice branch, because it must also be REMOVED — a station
+   *     name rendering after a notice would otherwise inherit the notice's timing. Every render
+   *     path calls this function; only one of them is the notice. */
+  vts.classList.toggle('notice', !!vtsNoticeKey);
   vts.classList.toggle('live', isLive);
   /* ★★★ MEASURE UNDER THE CONSTRAINED LAYOUT, or nothing ever scrolls.
    *   The `max-width` and `overflow: hidden` that make the text clip live on `#vts.scroll`, and
@@ -2348,11 +2358,42 @@ function applyVtsScroll(isLive: boolean) {
       // ★ Speed scales with LENGTH, like the app's `Math.max(2200, dist * 16)`: a long RadioText
       //   and a short band line should read at the same pace, not take the same time.
       el.style.setProperty('--vts-slide-dur', `${Math.max(4, over * 0.03).toFixed(1)}s`);
+      if (id === 'vtsName') vtsNameOver = over;
     } else {
       el.style.removeProperty('--vts-slide-dist');
     }
   }
   vts.classList.toggle('scroll', any);
+
+  /* ★★★ A NOTICE STAYS UP LONG ENOUGH TO BE READ TO THE END.
+   *   The life was a fixed 20-30 s while the scroll duration scaled with LENGTH, so the two had
+   *   no reason to agree — and on a long explanation they did not: the message was removed
+   *   mid-sentence, having spent its first seconds motionless. Stuart: "doesnt scroll long enough
+   *   to see the full message."
+   * ★★ SO THE LENGTH DECIDES THE LIFE, not the other way round. A notice we chose to write is
+   *   worth however long it takes to read once at a steady pace, plus a beat at each end. That is
+   *   the honest direction of the dependency: we control the words, so the words control the time.
+   * ★ Once per notice (vtsNoticeSized). updateVts() runs on every spectrum frame and on the hold
+   *   timer, so extending on each pass would push the deadline for ever and the notice would
+   *   never leave. */
+  if (vtsNoticeKey && !vtsNoticeSized && vtsNameOver > 4) {
+    vtsNoticeSized = true;
+    const SPEED = 46;                                  // px/s — a comfortable reading pace
+    const travelMs = (vtsNameOver / SPEED) * 1000;
+    const needed = 350 + travelMs / 0.94 + 2200;       // delay + travel (94% of the run) + a tail
+    if (needed > vtsBandUntil - Date.now()) {
+      vtsBandUntil = Date.now() + needed;
+      const el = document.getElementById('vtsName');
+      if (el) el.style.setProperty('--vts-slide-dur', `${(needed / 1000).toFixed(1)}s`);
+      if (vtsHideTimer) clearTimeout(vtsHideTimer);
+      vtsHideTimer = window.setTimeout(() => {
+        vtsHideTimer = null;
+        vtsNoticeKey = '';
+        updateVts();
+        vtsPumpNotices();
+      }, needed + 60);
+    }
+  }
 }
 
 
@@ -2392,11 +2433,14 @@ function fmtBandFreq(hz: number): string {
 type VtsNotice = { key: string; msg: string; sub: string; ms: number };
 let vtsQueue: VtsNotice[] = [];
 let vtsNoticeKey = '';
+/** Whether the showing notice has already had its life sized to its length (see applyVtsScroll). */
+let vtsNoticeSized = false;
 
 function vtsPumpNotices() {
   if (vtsNoticeKey || !vtsQueue.length) return;    // one is still on screen
   const n = vtsQueue.shift()!;
   vtsNoticeKey = n.key;
+  vtsNoticeSized = false;
   vtsBandMsg = n.msg;
   vtsBandSub = n.sub;
   vtsBandUntil = Date.now() + n.ms;
@@ -2423,6 +2467,7 @@ function vtsClearNotice(key: string) {
   vtsQueue = vtsQueue.filter(n => n.key !== key);
   if (vtsNoticeKey !== key) return;
   vtsNoticeKey = '';
+  vtsNoticeSized = false;
   vtsBandUntil = 0;
   if (vtsHideTimer) { clearTimeout(vtsHideTimer); vtsHideTimer = null; }
   updateVts();
