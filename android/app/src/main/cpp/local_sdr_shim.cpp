@@ -17926,6 +17926,24 @@ void LocalSdrShim::setBiasTee(bool on) {
     VIBE_HW_LOCK();
     if (p->radioReleased.load()) return;   // the radio is lent to another program
     if (p->useTcp()) { p->sendTcpCmd(0x0e, on ? 1 : 0); return; }
+    /* ★★★ THE HACKRF HAS A BIAS-T TOO, AND THIS SETTER SILENTLY DROPPED IT ON THE FLOOR.
+     *   Everything below is librtlsdr, and `p->dev` is null on a HackRF — so the owner's BIAS-T
+     *   switch in the phone's server screen returned here without touching anything. The switch
+     *   moved, the setting saved, and no DC ever reached the feedline: a control that is drawn,
+     *   accepted and inert, which teaches the owner the FEATURE is broken rather than that it
+     *   was never wired (AGENTS.md, and the "never offer a control whose every use is a no-op"
+     *   rule in FmdxSettings).
+     * ★★ ROUTED, NOT REMOVED. The control is genuinely meaningful on a HackRF — setHackRfBiasTee
+     *   has existed all along beside the LNA/VGA setters — so the honest fix is to send it there.
+     *   This is "ELSE MEANS DONGLE" once more: the body assumed the only radio with a bias-T was
+     *   the dongle, which was true when it was written and stopped being true when the HackRF
+     *   landed. */
+    if (p->useHackRf()) {
+        p->hrf->setBiasTee(on);
+        g_biasTeeOn.store(on);
+        LOGI("bias-tee (HackRF): %s", on ? "ON — DC on the feedline" : "off");
+        return;
+    }
     if (!p->dev) return;
     rtlsdr_set_bias_tee(p->dev, on ? 1 : 0);
     g_biasTeeOn.store(on);

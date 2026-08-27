@@ -287,6 +287,19 @@ export default function ServerModeScreen({ navigation, route }: Props) {
    */
   const isAhf = radio?.driver === 'airspyhf';
   const hasHwSetup = !isAhf;
+  /* ★★★ THE GAIN + AGC + IF-FILTER BLOCK IS THE DONGLE'S, AND ONLY THE DONGLE'S.
+   *   Every control in it is an R820T fact: a 29-step gain TABLE (RTL_GAINS, hardcoded),
+   *   VibeAGC — which does not exist for any other radio — its lock, and the IF filter, whose
+   *   own comment already says "RTL only: the R820T has a real IF filter and the other radios
+   *   have nothing like it". None of it was gated on the driver, so an Airspy HF+ and a HackRF
+   *   both got the lot: a gain table their radio does not have, and an AGC switch that writes a
+   *   setting nothing will ever read.
+   * ★★ THIS IS THE RULE FROM AGENTS.md, which is in the repo because of exactly this shape:
+   *   "I would rather a control be removed if it only works in one scenario than keep it there
+   *   dead." A switch that is drawn, accepted and inert teaches the owner the FEATURE is broken.
+   * ★ `!radio` COUNTS AS RTL — with nothing plugged in the screen still has to draw something,
+   *   and the dongle is the overwhelmingly common case. Same convention as LocalHardwarePanel. */
+  const isRtl = !radio || radio.driver === 'rtl';
   // The rate ceiling to quote in prose, so the hint cannot drift from the list above it.
   const topRateLabel = radio?.driver === 'airspyhf' ? '912 kHz'
                      : radio?.driver === 'hackrf'   ? '8 MS/s'
@@ -1653,6 +1666,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               they were after that, so this mostly affects first-time visitors.
             </Text>
 
+            {isRtl ? (<>
             {/* ★★★ THE GAIN THE RADIO STARTS AT, and returns to when the last listener leaves.
                 It was buried in Advanced beside the gain LIMITS, which is a different idea —
                 limits are what a listener may not exceed, this is where the radio sits by default.
@@ -1752,6 +1766,17 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   + 'receiver changes it for everybody.'
                 : 'Turn the AGC on above to lock it.'}
             </Text>
+            </>) : (
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 12 }]}>
+                {isAhf
+                  ? 'The Airspy HF+ sets its own gain and its AGC stays on, so there is no starting '
+                    + 'gain to choose and nothing to lock. It has no tuner IF filter either — '
+                    + 'selectivity comes from the sample rate.'
+                  : 'The HackRF has no AGC at all — its gain is two manual stages (LNA and VGA) that '
+                    + 'a listener sets from the hardware panel, so there is no starting gain, no '
+                    + 'AGC to lock, and no tuner IF filter to follow the zoom.'}
+              </Text>
+            )}
 
             {radioUse !== 'locked' && rateBlock}
 
