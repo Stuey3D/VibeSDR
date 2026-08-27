@@ -384,7 +384,24 @@ export default function App() {
            * ★ Filtered HERE, not on the watch: Buddy's list comes from this handler, not from its
            *   own Directories.fetch, so the watch never sees what it is not sent. Jr does the same
            *   filtering in its own fetch because Jr fetches for itself. */
-          const list = all.filter((s) => s.extApi !== 0);
+          const filtered = all.filter((s) => s.extApi !== 0);
+
+          /* ★★★ CAP THE LIST — `sendMessage` HAS A ~65 KB CEILING and drops the message whole.
+           *   A row is ~139 bytes, so KiwiSDR and Receiverbook (~800-850 servers, ~115 KB) sail
+           *   past it: the send fails, the watch never gets a payload, and it spins to its 20s
+           *   timeout — the SAME symptom as the dropped `dir` field, from a different cause.
+           *   That is why this is capped here and not left to be discovered later.
+           * ★★ NEAREST-FIRST, because a cap has to drop something and on a wrist the useful
+           *   receivers are the local ones. Unknown distance sorts LAST rather than being
+           *   filtered — missing data must not delete a server (same rule as `extApi` above).
+           * ★ Cached BEFORE the cap? No — deliberately AFTER, so the cache holds exactly what
+           *   the watch was shown. Caching a server the wrist cannot see just grows the map. */
+          const CAP = 300;   // ~42 KB, comfortably inside the ceiling
+          const near = (s: { distance?: number | null }) =>
+            s.distance == null ? Number.POSITIVE_INFINITY : s.distance;
+          const list = filtered.length > CAP
+            ? [...filtered].sort((a, b) => near(a) - near(b)).slice(0, CAP)
+            : filtered;
           list.forEach((s) => { if (s.url) watchServerCache.set(s.url, s); });
           watchProvider.sendDirectory(dirId, list.map((s) => ({
             id: s.url,

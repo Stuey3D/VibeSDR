@@ -402,7 +402,14 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   @objc(sendDirectory:)
   func sendDirectory(_ json: String) {
     guard let s = session, linkAlive else { return }
-    s.sendMessage(["k": "dir", "j": json], replyHandler: nil, errorHandler: nil)
+    // ★★ AN ERROR HANDLER, because this send is ONE-SHOT. The row path can afford to discard
+    //   failures (it sends ~16/s, so the next one covers you); a directory is sent once and a
+    //   dropped one shows up on the wrist as an indefinite spinner with nothing logged anywhere.
+    //   Deliberately NOT fed into noteSendFailure() — that counter's decay is calibrated for the
+    //   row rate, and a lone one-shot failure must not pollute the revive heuristic.
+    s.sendMessage(["k": "dir", "j": json], replyHandler: nil, errorHandler: { err in
+      NSLog("[VibeWatch] sendDirectory failed (%d bytes): %@", json.utf8.count, err.localizedDescription)
+    })
   }
 
   /// The DAB multiplex — ensemble, services, and which one is playing. DAB is a
@@ -504,14 +511,23 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
       UserDefaults.standard.set(false, forKey: Self.closedKey)
     }
     guard hasListeners, let cmd = message["cmd"] as? String else { return }
-    var body: [String: Any] = ["cmd": cmd]
-    if let d = message["delta"] { body["delta"] = d }
-    if let v = message["val"]   { body["val"] = v }
-    // `armed` is the FM-DX shared-tuner assertion. It was NOT forwarded, so every
-    // armed tune arrived at the phone looking unarmed and was refused — the crown
-    // did nothing even after you armed it. A whitelist that silently drops fields is
-    // exactly the kind of thing that looks like a logic bug three layers away.
-    if let a = message["armed"] { body["armed"] = a }
+    // ★★★ FORWARD THE WHOLE MESSAGE — DO NOT WHITELIST FIELDS.
+    //   This was a hand-maintained list of keys to copy, and it has now silently eaten a
+    //   field THREE times. `armed` was dropped, so every armed tune arrived looking unarmed
+    //   and the crown did nothing. Then `dir` was dropped, so every `browse` reached
+    //   browseForWatch() as the EMPTY STRING: the phone fetched nothing, replied keyed
+    //   `dir: ""`, and the watch — waiting on directories["ubersdr"] — spun until its 20s
+    //   timeout. EVERY directory, which is exactly how it presented. `type` and `name`
+    //   (read by `inst`) were being dropped too, unnoticed.
+    // ★★ The failure mode is what makes a whitelist wrong here, not the effort of keeping
+    //   it: a dropped field is INVISIBLE at the boundary and surfaces as a logic bug three
+    //   layers away, in code that is reading a value it was simply never given. Adding a
+    //   field on the watch must not require an edit in a file the author never opens.
+    // ★ WCSession messages carry plist types only, and every key the watch sends is a
+    //   scalar, so a blanket copy is bridge-safe. `cmd` is re-asserted as a String below
+    //   because the JS side types it as one.
+    var body: [String: Any] = message
+    body["cmd"] = cmd
     sendEvent(withName: "VibeWatchCommand", body: body)
   }
 
