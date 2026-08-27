@@ -849,6 +849,18 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
    together; they should size together. */
 @media (max-width: 620px) { #mFreq { font-size: 2.1em; } #mMode { font-size: 1.2em; } }
 
+#gainMinNote {
+  flex: 0 0 auto; display: flex; align-items: baseline; gap: 0.7em;
+  background: rgba(28, 18, 0, 0.96); border-top: 1px solid rgba(255, 176, 0, 0.75);
+  color: #ffc04d; padding: 0.6em 1.1em; font-size: clamp(9px, 0.7vw, 14px);
+  /* ★ Fades rather than vanishing: an element that disappears between two glances reads as a
+     glitch, and this one leaves while the reader may still be looking at it. */
+  transition: opacity 0.6s ease;
+}
+#gainMinNote[hidden] { display: none; }
+#gainMinNote.fading { opacity: 0; }
+#gainMinNote span { color: #e0a94d; }
+#gainMinNote button { margin-left: auto; flex: 0 0 auto; }
 #bar {
   flex: 0 0 auto; background: var(--bar-bg); border-top: 1px solid var(--bar-border);
   font-size: clamp(8px, 0.65vw, 13px);
@@ -3026,6 +3038,25 @@ select.btn { padding: 6px 8px; }
     </div>
   </div>
 
+  <!-- ★★★ "THE GAIN IS AT MINIMUM" — the notice that stops somebody leaving. Stuart: "dont want
+       people connecting to a server seeing a flat spectrum thinking this is fucked and then
+       leaving." A receiver at minimum gain looks EXACTLY like a broken one, and the HackRF makes
+       that ordinary rather than rare: every stage opens at ZERO by design, so a fresh server is
+       deaf until somebody raises it and the previous listener can leave it that way.
+       ★★★ ABOVE #bar, NOT IN THE TOP TOAST. That toast already carries the session TIMEOUT
+       warnings and the server MAINTENANCE messages; a third thing there means two get missed.
+       Here it sits directly above the tuning controls — next to the control it is talking about,
+       which is where an instruction belongs. A flex sibling rather than a fixed overlay, so it
+       cannot cover the VTS bar or anything else that shares the bottom of the screen.
+       ★★★ AND IT FADES. Minimum gain is sometimes CORRECT — 104.2 with a transmitter two miles
+       away wants 0 dB — so a standing warning would be wrong on a working receiver and would
+       train people to ignore it. Once per connection, then gone. -->
+  <div id="gainMinNote" hidden>
+    <b>This receiver's gain is at minimum.</b>
+    <span>On a strong local signal that may be deliberate &mdash; but if the spectrum looks empty,
+      raise the gain before deciding the receiver is dead.</span>
+    <button class="btn" id="gainMinDismiss" title="Dismiss">&times;</button>
+  </div>
   <div id="bar">
     <div class="barRow">
       <!-- LEFT TRACK. The demodulators are part of the tuning block and travel with

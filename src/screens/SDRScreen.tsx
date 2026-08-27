@@ -2638,6 +2638,58 @@ export default function SDRScreen({ route, navigation }: Props) {
    *   the hardware. Feeds every gain control in the panel — the dongle's slider as well as the
    *   HackRF's two stages, because a client that offers gain the server clamps is lying. */
   const [hwGainCap,  setHwGainCap]  = useState(-1);
+  /* ★★★ "THE RADIO IS DEAF AND THAT IS WHY YOU SEE NOTHING." Stuart: "dont want people connecting
+   *   to a server seeing a flat spectrum thinking this is fucked and then leaving."
+   *   A receiver sitting at minimum gain looks EXACTLY like a broken one — flat waterfall, no
+   *   signals, nothing to suggest a control rather than a fault. The HackRF makes this ordinary
+   *   rather than rare: every stage opens at ZERO by design (its preamp does not survive being
+   *   driven hard), so a fresh server is deaf until somebody raises it, and the last listener can
+   *   leave it that way too.
+   * ★★ Dismissed by the user OR by the gain coming up — never on a timer, because the thing it
+   *   explains is still on screen. A note that fades while the flat waterfall remains has told
+   *   nobody anything. */
+  const [showGainMinWarning, setShowGainMinWarning] = useState(false);
+  /** Once per connection. A radio legitimately parked at minimum must not re-announce itself. */
+  const gainMinShownRef = useRef(false);
+  /* ★★★ WHAT "MINIMUM" MEANS PER RADIO, and only where the gain is actually MANUAL — a radio whose
+   *   AGC is running is not deaf, it is being driven, and warning about it would be crying wolf on
+   *   every ordinary connection.
+   *   · HackRF — no AGC exists, so it is simply LNA + VGA both at zero. This is the case that
+   *     prompted the warning and the one that will actually fire.
+   *   · Dongle — the lowest step of its own gain table, and only with VibeAGC off.
+   *   ★ The RSP and HF+ are deliberately left out for now: both have their own AGC running by
+   *     default, and "minimum gain" on them means a max IF gain REDUCTION or a max attenuator,
+   *     which are different quantities and worth measuring on hardware before claiming. */
+  const gainIsAtMinimum = (() => {
+    if (radioCaps?.driver === 'hackrf') {
+      return (radioCaps.lna ?? 0) === 0 && (radioCaps.vga ?? 0) === 0;
+    }
+    if (!hwAgc && hwGains.length > 0) return hwGain <= hwGains[0];
+    return false;
+  })();
+  /* ★★★ ON CONNECT, THEN IT FADES — NEVER A STANDING WARNING. Stuart: "cannot have a permanent
+   *   warning on a condition that is normal." Minimum gain IS sometimes right: his own RTL on
+   *   104.2 has a transmitter two miles away, where 0 dB is correct and anything more overloads
+   *   the front end. A banner that sat there for ever would be wrong on that receiver, and a
+   *   warning people learn to ignore protects nobody.
+   * ★★ ONCE PER CONNECTION, at the moment somebody arrives and is looking at a flat waterfall
+   *   deciding whether the thing is broken — which is the whole point: "dont want people
+   *   connecting to a server seeing a flat spectrum thinking this is fucked and then leaving."
+   *   It says what the gain IS and allows that it may be deliberate. Information, not a diagnosis.
+   * ★★ 30 SECONDS, not the 9 adminNote uses. This one has to survive a page still settling — the
+   *   waterfall filling, the audio starting — and be read by somebody who has not decided where
+   *   to look yet. A notice that has gone before the thing it explains has finished appearing has
+   *   told nobody anything.
+   * ★ AND IT GOES THE INSTANT THE GAIN MOVES. By then it has been acted on, and leaving it up
+   *   would be describing a state the radio is no longer in. */
+  useEffect(() => {
+    if (!gainIsAtMinimum) { setShowGainMinWarning(false); return; }
+    if (gainMinShownRef.current) return;
+    gainMinShownRef.current = true;
+    setShowGainMinWarning(true);
+    const t = setTimeout(() => setShowGainMinWarning(false), 30000);
+    return () => clearTimeout(t);
+  }, [gainIsAtMinimum]);
   const [hrfAmp,     setHrfAmp]     = useState(false);
   const [hrfLna,     setHrfLna]     = useState(0);
   const [hrfVga,     setHrfVga]     = useState(0);
@@ -3668,6 +3720,21 @@ export default function SDRScreen({ route, navigation }: Props) {
       onRadioCaps:  (caps) => {
         if (destroyed.current) return;
         setRadioCaps(caps);
+        // ★ A new radio is a new question: whatever was shown was about the last one.
+        gainMinShownRef.current = false;
+        /* ★★★ SEED THE HACKRF STAGES FROM THE RADIO, not from what we last sent. The server
+         *   reports amp/lna/vga/biast live in radioCaps (see radioCapsJson), and this radio is
+         *   shared — another listener may have raised the gain, and a reconnect inherits whatever
+         *   the last session left. Without this the panel opens at 0 dB on a radio sitting at 24.
+         * ★★ AND 0 IS A REAL VALUE HERE, which is what makes a stale mirror undetectable: every
+         *   stage opens at zero by design, so "0" is exactly what both a fresh radio and a wrong
+         *   guess look like. Take the radio's word for it. */
+        if (caps?.driver === 'hackrf') {
+          if (typeof caps.lna === 'number')   setHrfLna(caps.lna);
+          if (typeof caps.vga === 'number')   setHrfVga(caps.vga);
+          if (typeof caps.amp === 'number')   setHrfAmp(caps.amp !== 0);
+          if (typeof caps.biast === 'number') setHrfBiasT(caps.biast !== 0);
+        }
         // ★★★ THE RADIO'S OWN TUNING RANGE WINS OVER THE ADAPTER'S CONSTANT. LOCAL_CAPS pins
         //     freqRange to [100 kHz, 1766 MHz] — written for an RTL-SDR Blog V4, whose direct
         //     sampling starts near 0.1 MHz — and a VibeServer session takes that same "local"
@@ -7659,6 +7726,31 @@ export default function SDRScreen({ route, navigation }: Props) {
         </View>
       )}
 
+      {showGainMinWarning && (
+        <TouchableOpacity activeOpacity={0.8} onPress={() => setShowGainMinWarning(false)}
+          /* ★★★ BOTTOM, BY THE TUNING CONTROLS — NOT THE TOP. Stuart: the top toast already
+           *   carries the server TIMEOUT warnings and the server MAINTENANCE messages, and a
+           *   third thing competing for that spot means two of them are missed. Down here it also
+           *   sits next to the control the reader needs, which is where an instruction belongs.
+           * ★ Stacked ABOVE the power-save pill and the VTS bar rather than at the same offset:
+           *   both already sat at exactly pillBottom + 8 once, and the pill's only explanation
+           *   spent a debugging session invisible underneath the other. */
+          style={[styles.gainMinNote, {
+            bottom: pillBottom + 8
+                  + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0)
+                  + (powersaveUi ? 46 : 0),
+            left: Math.max(12, insets.left + 8),
+            right: Math.max(12, insets.right + 8),
+          }]}>
+          <Text style={styles.gainMinTxt}>
+            This receiver's gain is at minimum{'\n'}
+            <Text style={styles.gainMinSub}>
+              On a strong local signal that may be deliberate. But if the spectrum looks empty,
+              raise the gain before deciding the receiver is dead — tap to dismiss.
+            </Text>
+          </Text>
+        </TouchableOpacity>
+      )}
       {!!adminNote && (
         <View pointerEvents="none" style={[styles.adminNote, {
           top: insets.top + 46 + (stationIdH > 0 ? stationIdH + 8 : 0),
@@ -8409,6 +8501,15 @@ const styles = StyleSheet.create({
                  borderWidth: 1, borderColor: 'rgba(255,160,0,0.30)', borderRadius: 4 },
   rxListenersTxt: { color: 'rgba(255,190,90,0.85)', fontFamily: 'Nixie One', fontSize: 11,
                     letterSpacing: 1 },
+  /* ★ Louder than adminNote on purpose: this one competes with a flat waterfall for attention,
+   *  and losing that competition is somebody closing the tab. */
+  gainMinNote: {
+    position: 'absolute', zIndex: 41, alignItems: 'center',
+    paddingVertical: 9, paddingHorizontal: 12, borderRadius: 8,
+    backgroundColor: 'rgba(28,18,0,0.96)', borderWidth: 1, borderColor: 'rgba(255,176,0,0.75)',
+  },
+  gainMinTxt: { color: '#ffc04d', fontSize: 13, textAlign: 'center', fontWeight: '600' },
+  gainMinSub: { color: '#e0a94d', fontSize: 11, fontWeight: '400' },
   adminNote: {
     position: 'absolute', zIndex: 40, alignItems: 'center',
     paddingVertical: 7, paddingHorizontal: 12, borderRadius: 8,

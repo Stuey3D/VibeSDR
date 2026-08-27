@@ -1074,6 +1074,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
       hwGainNow = typeof gainNow === 'number' ? gainNow : -1;
       hwAgcOn = agc === true;                       // ★ the live flag the chip reads through
+      maybeShowGainMinNotice();
       /* ★★★ AND RENDER IT INTO THE BUTTON. Removing the client's push (see pushOnInit) stopped it
        *     overriding the owner's saved config — but without this half the button then showed
        *     whatever this browser last stored, which after a reload was OFF on a radio whose AGC
@@ -1633,6 +1634,58 @@ let hwGainNow = -1;
  *     closure is a value that WILL be stale, so it is held here and read through, never passed in.
  *  ★ A readout that names a mode the radio is not in is worse than a blank one. */
 let hwAgcOn = false;
+
+/* ★★★ THE "GAIN IS AT MINIMUM" NOTICE. See the markup note above #gainMinNote for why it exists,
+ *   why it lives above the bar rather than in the top toast, and why it fades.
+ * ★ Once per CONNECTION: a receiver deliberately parked at minimum must not keep announcing
+ *   itself. Reset when a new radio's capabilities arrive. */
+let gainMinShown = false;
+let gainMinTimer: number | undefined;
+
+/** What "minimum" means per radio, and only where the gain is actually MANUAL — a radio whose AGC
+ *  is running is not deaf, it is being driven, and warning about that is crying wolf.
+ *  ★ The RSP and HF+ are deliberately absent: both normally run their own AGC, and "minimum gain"
+ *    on them is a max IF gain REDUCTION or a max attenuator — different quantities, worth
+ *    measuring on hardware before claiming. */
+function gainIsAtMinimum(): boolean {
+  if (radioCaps?.driver === 'hackrf') {
+    const lna = Number((radioCaps as any).lna ?? 0), vga = Number((radioCaps as any).vga ?? 0);
+    return lna === 0 && vga === 0;
+  }
+  if (!hwAgcOn && hwGains.length > 0 && hwGainNow >= 0) return hwGainNow <= hwGains[0];
+  return false;
+}
+
+function hideGainMinNotice() {
+  const el = document.getElementById('gainMinNote');
+  if (!el || el.hidden) return;
+  el.classList.add('fading');
+  window.setTimeout(() => { el.hidden = true; el.classList.remove('fading'); }, 600);
+  if (gainMinTimer) { clearTimeout(gainMinTimer); gainMinTimer = undefined; }
+}
+
+// ★ Dismissable by hand as well as by the timer: somebody who knows their receiver is meant to
+//   sit at minimum should be able to get rid of it at once rather than wait.
+document.addEventListener('DOMContentLoaded', () => {
+  const b = document.getElementById('gainMinDismiss');
+  if (b) b.addEventListener('click', hideGainMinNotice);
+}, { once: true });
+
+function maybeShowGainMinNotice() {
+  const el = document.getElementById('gainMinNote');
+  if (!el) return;
+  // ★ THE MOMENT THE GAIN MOVES IT GOES. By then it has been acted on, and leaving it up would
+  //   describe a state the radio is no longer in.
+  if (!gainIsAtMinimum()) { hideGainMinNotice(); return; }
+  if (gainMinShown) return;
+  gainMinShown = true;
+  el.hidden = false;
+  el.classList.remove('fading');
+  /* ★★ 30 SECONDS. Long enough to survive a page still settling — waterfall filling, audio
+   *    starting — and to be read by somebody who has not decided where to look yet. A notice gone
+   *    before the thing it explains has finished appearing has told nobody anything. */
+  gainMinTimer = window.setTimeout(hideGainMinNotice, 30000);
+}
 let hwTunerBw = 0;
 let hwTunerAuto = false;
 let hwRfCentre = 0;

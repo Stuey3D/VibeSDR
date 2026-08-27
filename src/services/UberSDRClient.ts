@@ -157,6 +157,18 @@ export interface RadioCaps {
   ranges?: [number, number][];
   rates?: number[];
   // ── SDRplay RSP ──
+  // ── HackRF One ──
+  /** ★★★ THE STAGES AS THE RADIO ACTUALLY HAS THEM, not as this client last set them. A HackRF is
+   *  shared like every other radio here: another listener may have raised the gain, and a
+   *  reconnect finds whatever the previous session left. Mirroring only our own writes would show
+   *  0 dB on a radio sitting at 24 — the same class of lie as claiming maximum gain under a cap.
+   *  ★ It matters MORE on this radio than any other, because it opens every stage at ZERO by
+   *  design: 0 is both the safe default and a real value, so "0" is exactly what a stale mirror
+   *  looks like and there is nothing to tell them apart. */
+  amp?: number; lna?: number; vga?: number; biast?: number;
+  hrfAmp?: boolean; hrfLna?: boolean; hrfVga?: boolean; hrfBiasT?: boolean;
+  hwAgc?: boolean;
+  // ── SDRplay RSP ──
   lnaStates?: number;
   ifGrMin?: number; ifGrMax?: number;
   agcSetPoint?: boolean;
