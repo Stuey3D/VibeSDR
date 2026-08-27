@@ -86,9 +86,9 @@ unzip, drag to Applications. Notarised, so it opens without a Gatekeeper warning
 
 **Android** — install the app, plug in the radio, tap **Use as server**.
 
-| ![VibeServer running on an Android phone](screenshots/25-vibeserver-android.png) |
+| ![VibeServer running on an Android phone](website/assets/shots/xcover-server-live.webp) |
 |:---:|
-| *A £100 rugged Android phone with a £30 dongle, serving to the world. 57% of one core of eight, and a public address that stays the same.* |
+| *A rugged Android phone and a £30 dongle, serving to the world — a listener connected, 8 KB/s of audio, and a public address that stays the same.* |
 
 Supported hardware — four radios, though not all of them on every host:
 
@@ -108,6 +108,12 @@ the documentation and has been tested by a single listener. It works — FM ster
 
 Optionally publish your receiver to the [public directory](https://vibeserver.vibesdr.net) through
 a Cloudflare tunnel — your home address is never exposed.
+
+…and this is what the listener gets, in a browser, with nothing installed:
+
+| ![The VibeServer web client](website/assets/shots/web-client-2026-08.webp) |
+|:---:|
+| *The web client on a Mac, on a Raspberry Pi's dongle: server-side DSP, the waterfall drawn from raw bins, and the Advanced RDS analyser reading a station's pilot deviation and constellation.* |
 
 ## On AI, honestly
 
