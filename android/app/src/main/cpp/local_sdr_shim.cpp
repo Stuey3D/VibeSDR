@@ -4606,16 +4606,28 @@ struct LocalSdrShim::Impl {
         };
         return v;
     }
-    /** The last few lines, so somebody arriving mid-conversation is not dropped into silence —
-     *  and so "why did the frequency move" has an answer on screen. Guarded by clientMtx. */
-    /* ★★★ `admin` IS RECORDED AS IT WAS WHEN THE LINE WAS SAID, never recomputed from who holds
-     *   the password now. Admin follows the SESSION, not the person — Stuart: "could be on the
-     *   browser then move to the app as admin" — so the same human can be User 3 (admin) in one
-     *   session and User 7 without it in the next, and the lock can change hands mid-conversation.
-     *   Deriving it later would rewrite history: lines said by an ordinary listener would sprout
-     *   an "(admin)" the moment somebody else signed in. */
-    struct ChatLine { int from; std::string id; double at; bool admin; };
-    std::vector<ChatLine> chatLog;
+    /* ★★★ THERE IS DELIBERATELY NO CHAT HISTORY. DO NOT ADD ONE.
+     *
+     *  A `chatLog` used to be kept here, with a comment claiming it was "the last few lines, so
+     *  somebody arriving mid-conversation is not dropped into silence". Nothing ever sent it, and
+     *  that was correct — the comment described a feature that must NOT exist. It has been removed
+     *  rather than wired up, because a comment promising it is an invitation to implement it.
+     *
+     *  ★★★ REPLAYED CHAT IS A BUG WE HAVE ALREADY SHIPPED ONCE. Stuart, 2026-08-27: it "caused us
+     *  loads of issues with UberSDR as it kept sending notifications for old chat messages from
+     *  the server". Every arriving client re-announced history as if it were new — unread badges,
+     *  alerts, the lot.
+     *
+     *  ★★★ AND THE VOCABULARY IS WHY IT CAN NEVER BE RIGHT HERE. These twelve phrases are not
+     *  conversation, they are FLOW CONTROL FOR THE DIAL: "Can I tune?", "Go ahead", "Please hold
+     *  — chasing DX". Stuart: "its not as if they can have full conversations." A replayed
+     *  "Can I tune?" is not context, it is a STALE REQUEST presented as a live one — and the
+     *  listener it was aimed at may have left twenty minutes ago. The only line worth anything is
+     *  one said while you are here to answer it.
+     *
+     *  ★ "Why did the frequency move" is answered by the DIAL STATE (sendDialState — who holds it,
+     *  whether a decode is running), which is current by construction. That is the right channel
+     *  for it; a transcript is not. */
     /** ★★ NOT MODERATION — FLOOD CONTROL. Nothing in the vocabulary can be offensive, but anything
      *  can be repeated, and twenty "Thanks!" a second is a denial of service on everyone's
      *  attention. One phrase every few seconds per session is more than a real conversation needs. */
@@ -7657,8 +7669,8 @@ struct LocalSdrShim::Impl {
                 last = now;
                 if (chatLast.size() > 512) chatLast.clear();
                 const int from = handleForLocked(me);
-                chatLog.push_back({from, id, now, isAdmin});
-                while (chatLog.size() > 30) chatLog.erase(chatLog.begin());
+                // ★ Nothing is stored. See the note where chatLog used to live: a canned phrase
+                //   is only ever meaningful to somebody present to answer it.
                 /* ★★ THE HANDLE STAYS, AND THE MARK IS ADDED TO IT — "User 3 (admin)", not
                  *    "Admin". Stuart's call: on a club receiver with several operators, replacing
                  *    the number would make two admins indistinguishable, and following who said
