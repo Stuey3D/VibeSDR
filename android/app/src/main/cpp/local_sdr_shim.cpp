@@ -10990,9 +10990,8 @@ struct LocalSdrShim::Impl {
         //     next disconnect will park it if this one should not.
         if (bothGone) {
             bool stillEmpty;
-            { std::lock_guard<std::mutex> lk(clientMtx);
-              stillEmpty = (!specClient  || !specClient->isOpen())
-                        && (!audioClient || !audioClient->isOpen()); }
+            // ★ specExtra included here too — this site armed parks while extra viewers watched.
+            { std::lock_guard<std::mutex> lk(clientMtx); stillEmpty = nobodyWatchingLocked(); }
             if (stillEmpty) armIdlePark();
             else LOGI("not parking — a new listener arrived while this socket was closing");
         }
@@ -12455,6 +12454,31 @@ struct LocalSdrShim::Impl {
         LocalSdrShim::instance().setGain(rest);
     }
 
+    /* ★★★ IS ANYBODY WATCHING? ONE ANSWER, FOR EVERY PLACE THAT ASKS.
+     *
+     * This existed three times, written out by hand, and they did not agree. The ARMING site
+     * counted `specExtra` — the second and subsequent spectrum viewers — and carried a comment
+     * saying exactly why: "on a multi-listener radio a second viewer was invisible to the idle
+     * decision entirely — it could park or release a radio that somebody was still watching."
+     * The FIRING site and the DISCONNECT site did not. So the fix went in once and the two
+     * copies that needed it kept the bug.
+     *
+     * ★★★ MEASURED, NOT THEORISED: on the Pi, 25 times in 36 hours the dongle was paused with a
+     * spectrum client still connected — frames stop, the waterfall freezes, and the client
+     * reconnects into a radio that has been switched off underneath it. It shows up most on
+     * MULTI-LISTENER servers, because that is where extra viewers exist at all, and most when a
+     * client is idle or backgrounded, because that is when it is holding only a spectrum socket
+     * (Stuart, 2026-08-27: "i noticed the spectrum freezing most on sabers when it had been idle
+     * or backgrounded").
+     *
+     * ★ Caller must hold clientMtx. */
+    bool nobodyWatchingLocked() const {
+        if (specClient  && specClient->isOpen())  return false;
+        if (audioClient && audioClient->isOpen()) return false;
+        for (const auto& e : specExtra) if (e && e->isOpen()) return false;
+        return true;
+    }
+
     void armIdlePark() {
         // ★ Applied here rather than when the park FIRES: the radio may be released or paused by
         //   then, and a gain written to a stopped device is a gain nobody applied. The grace
@@ -13267,24 +13291,16 @@ struct LocalSdrShim::Impl {
                 if (idleParkDueAt.load() == 0.0 && !captureIdle.load() && !radioReleased.load()
                     && !(g_vsProvidesSpectrogram.load() && !g_vsReleaseWhenIdle.load())) {
                     bool empty;
-                    { std::lock_guard<std::mutex> lk(clientMtx);
-                      empty = (!specClient  || !specClient->isOpen())
-                           && (!audioClient || !audioClient->isOpen())
-                           // ★ AND THE EXTRA SPECTRUM LISTENERS. This asked only about the primary
-                           //   pair, so on a multi-listener radio a second viewer was invisible to
-                           //   the idle decision entirely — it could park or release a radio that
-                           //   somebody was still watching.
-                           && std::none_of(specExtra.begin(), specExtra.end(),
-                                           [](const std::shared_ptr<net::Socket>& e){
-                                               return e && e->isOpen(); }); }
+                    { std::lock_guard<std::mutex> lk(clientMtx); empty = nobodyWatchingLocked(); }
                     if (empty) armIdlePark();
                 }
 
                 if (const double due = idleParkDueAt.load(); due > 0.0 && nowSecs() >= due) {
                     bool empty;
-                    { std::lock_guard<std::mutex> lk(clientMtx);
-                      empty = (!specClient  || !specClient->isOpen())
-                           && (!audioClient || !audioClient->isOpen()); }
+                    // ★★★ THIS IS WHERE THE RADIO ACTUALLY STOPS, so it must ask the same question
+                    //     the arming site asks. It did not: it omitted specExtra, so a viewer who
+                    //     arrived during the grace period was parked on top of.
+                    { std::lock_guard<std::mutex> lk(clientMtx); empty = nobodyWatchingLocked(); }
                     // ★★ NEVER PARK MID-SETTLE. Parking costs the AGC its convergence, so cutting
                     //    the kick short would hand the next listener exactly the stuck AGC this
                     //    whole sequence exists to prevent. Wait for it; it takes ~6 s.
