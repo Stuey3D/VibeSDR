@@ -3777,18 +3777,44 @@ async function drawSplashSpectrogram(): Promise<void> {
   //   enough to read band structure while carriers stay bright.
   const loV = pct(0.30), hiV = Math.max(loV + 6, pct(0.998));
 
+  /* ★★★ SONAR GREEN, NOT AMBER — because the page's TEXT is amber. The spectrogram is the
+   *   backdrop to the whole landing screen, and an amber ramp behind amber type is the one
+   *   combination that cannot work: at the levels a busy band produces, the carriers sat at
+   *   exactly the brightness of the words in front of them and the text disappeared into the
+   *   picture (Stuart, 2026-08-27: "the amber text is not that clear over the spectrogram").
+   * ★★ Green puts the backdrop on the OTHER side of the colour wheel from the type, so the two
+   *   separate at every level rather than only at the extremes — and it is a palette this app
+   *   already ships and Stuart already uses, so the page still looks like the instrument.
+   * ★ THE REAL STOPS, interpolated — not a green approximated by eye. Copied from
+   *   src/assets/colormaps.ts 'Sonar Green', which is what the waterfall draws, so the landing
+   *   page and the receiver agree about what a signal of a given strength looks like. */
+  const SONAR_GREEN: [number, number, number][] = [
+    [0x00, 0x00, 0x00], [0x00, 0x08, 0x00], [0x00, 0x1a, 0x00], [0x00, 0x33, 0x00],
+    [0x00, 0x50, 0x00], [0x00, 0x78, 0x00], [0x00, 0xaa, 0x00], [0x00, 0xcc, 0x00],
+    [0x00, 0xff, 0x00], [0x80, 0xff, 0x80], [0xcc, 0xff, 0xcc], [0xef, 0xff, 0xff],
+  ];
+  const sonarGreen = (t: number): [number, number, number] => {
+    const x = Math.max(0, Math.min(1, t)) * (SONAR_GREEN.length - 1);
+    const i = Math.min(SONAR_GREEN.length - 2, Math.floor(x));
+    const f = x - i;
+    const a = SONAR_GREEN[i], b = SONAR_GREEN[i + 1];
+    return [Math.round(a[0] + (b[0] - a[0]) * f),
+            Math.round(a[1] + (b[1] - a[1]) * f),
+            Math.round(a[2] + (b[2] - a[2]) * f)];
+  };
+
   const img = g.createImageData(bins, rows);
   for (let r = 0; r < rows; r++) {
     const off = 25 + r * (8 + bins) + 8;
     for (let i = 0; i < bins; i++) {
       const v = bytes[off + i];
-      // Same amber ramp as the waterfall, so the two read as one instrument.
       // Gamma lifts the mid-levels: linear, almost everything sat at the bottom of the ramp.
       const t = Math.pow(Math.max(0, Math.min(1, (v - loV) / (hiV - loV))), 0.80);
       const p = ((rows - 1 - r) * bins + i) * 4;
-      img.data[p]     = Math.min(255, 30 + t * 225);
-      img.data[p + 1] = Math.min(255, Math.pow(t, 1.5) * 230);
-      img.data[p + 2] = Math.min(255, Math.pow(t, 2.6) * 130);
+      const [cr, cg, cb] = sonarGreen(t);
+      img.data[p]     = cr;
+      img.data[p + 1] = cg;
+      img.data[p + 2] = cb;
       img.data[p + 3] = 255;
     }
   }
