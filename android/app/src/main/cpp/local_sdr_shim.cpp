@@ -4956,6 +4956,9 @@ struct LocalSdrShim::Impl {
             }
             if (!ob->sock->isOpen()) return;
             if (ob->sock->send(msg.second.data(), msg.second.size()) < 0) {
+                // ★ A write that failed is NOT the same as a peer that hung up, and the disconnect
+                //   line could not tell them apart. This is the network breaking under us.
+                ob->sock->noteWhy(net::Socket::Why::SendFailed);
                 ob->sock->close();                          // peer gone — its read loop unwinds
                 return;
             }
@@ -4973,6 +4976,11 @@ struct LocalSdrShim::Impl {
      *  ★ THE DRAIN MATTERS: several paths say their piece and hang up in the next line —
      *  "cooldown", "needs_codec", the eviction notice. Closing without draining turns a server
      *  that EXPLAINS itself into one that hangs up silently, which reads to a user as a crash. */
+    /* ★ NOT MARKED "closed by server" HERE, although it was tempting. The ORDINARY teardown
+     *   calls this too — the peer hung up, the reader unwound, and this drains what is left. A
+     *   blanket mark would therefore label every healthy disconnect as our doing, which is worse
+     *   than no attribution at all: it would answer "was it us?" with a confident yes, every time.
+     *   The genuine server decisions mark themselves where the decision is made. */
     void outboxClose(const std::shared_ptr<net::Socket>& sock, int drainMs = 250) {
         std::shared_ptr<Outbox> ob;
         { std::lock_guard<std::mutex> lk(outboxMtx);
@@ -5032,6 +5040,7 @@ struct LocalSdrShim::Impl {
             }
             ob->closing = true;
             ob->cv.notify_all();
+            ob->sock->noteWhy(net::Socket::Why::Local);   // ★ we dropped them, and we say so
             ob->sock->close();
             return;
         }
@@ -11205,7 +11214,9 @@ struct LocalSdrShim::Impl {
             if (secs >= 3600) snprintf(dur, sizeof dur, "%dh%02dm", (int)(secs/3600), ((int)secs%3600)/60);
             else if (secs >= 60) snprintf(dur, sizeof dur, "%dm%02ds", (int)(secs/60), (int)secs%60);
             else snprintf(dur, sizeof dur, "%.0fs", secs);
-            LOGI("%s WS disconnected — %s, %s delivered", isAudio ? "audio" : "spectrum", dur, human);
+            LOGI("%s WS disconnected — %s, %s delivered, %s",
+                 isAudio ? "audio" : "spectrum", dur, human,
+                 sock ? sock->whyText() : "unknown");
         }
     }
 

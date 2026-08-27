@@ -125,9 +125,34 @@ public:
     uint64_t txBytes()   const { return tx_.load(std::memory_order_relaxed); }
     double   ageSecs()   const;
 
+    /* ★★★ WHY A CONNECTION ENDED — the one thing the disconnect line never said.
+     *
+     *   "spectrum WS disconnected — 1s, 18 KB delivered" is the same sentence whether the peer
+     *   hung up, the network broke mid-send, or we dropped them ourselves. On 2026-08-27 a
+     *   spectrum socket flapped six times in twenty-five seconds while the audio socket beside it
+     *   ran for twelve minutes, and the log could not say which end let go — so the question
+     *   "is it us or the tunnel?" stayed open, as it has before (see the tunnel-drops note).
+     *
+     * ★★ ATTRIBUTION IS THE WHOLE POINT. A server that cannot say who closed a connection cannot
+     *    be cleared of closing it, and every future report of this shape starts from zero again.
+     * ★ Set at the moment it happens, read at teardown. Defaults to "peer" because that is what an
+     *   ordinary, healthy disconnect is: the reader hit EOF and unwound. */
+    enum class Why : uint8_t { Peer, SendFailed, Local, Timeout };
+    void     noteWhy(Why w) { why_ = w; }
+    Why      why() const { return why_; }
+    const char* whyText() const {
+        switch (why_) {
+            case Why::SendFailed: return "send failed";
+            case Why::Local:      return "closed by server";
+            case Why::Timeout:    return "timed out";
+            default:              return "closed by peer";
+        }
+    }
+
 private:
     int  recvRaw(uint8_t* data, size_t maxLen, int timeout);
     std::atomic<uint64_t> tx_{0};
+    Why why_ = Why::Peer;
     double openedAt_ = 0.0;
     int  fd_;
     bool open_ = true;
