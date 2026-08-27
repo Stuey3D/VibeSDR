@@ -220,7 +220,20 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
    *     is a no-op, and the same reasoning already hides the gain slider while the AGC owns it
    *     ("a disabled slider still reads as an offer"). Hidden, not greyed. */
   const canProtected = !locked;                      // bias-T, PPM, digital AGC, direct sampling
-  const canGain      = !p.agcLocked;                 // the owner may have forced the AGC on
+  /* ★★★ "AGC LOCKED" CANNOT LOCK AN AGC THAT DOES NOT EXIST. agcLocked is a flat server-wide flag
+   *   with no notion of driver, and this gate wraps the WHOLE gain branch — so on a HackRF it hid
+   *   all three manual stages and printed "the gain is managed by this receiver: its owner has
+   *   fixed the automatic gain control on" to the owner of a radio that has no automatic gain of
+   *   any kind. Every word of that sentence is false there.
+   * ★★ The web client is unaffected only by accident of structure: agcLocked touches #gainAuto and
+   *   #gain, and a HackRF uses neither — it has its own hrfLna/hrfVga and no AUTO button at all.
+   *   This brings the panel to the same place deliberately.
+   * ★ NOT extended to the HF+ or the RSP, which DO have an AGC: the server closes their manual
+   *   path when locked (see ahf_control — "a lock in name only" otherwise), so hiding is right
+   *   there. ★★ AND WHEN VibeAGC FOR THE HACKRF ARRIVES, this must come back: at that point the
+   *   lock means something and should close LNA and VGA too, exactly as the HF+ does. Stuart,
+   *   2026-08-27: "there is no hackrf agc yet." */
+  const canGain      = !p.agcLocked || p.radio?.driver === 'hackrf';
   const canRate      = !(p.lockedRate && p.lockedRate > 0);
   /* ★ Nothing left but the password box. Then the panel does not pretend to be a control panel:
    *  it says what it is and puts the cursor where the only useful action is. */
