@@ -94,6 +94,13 @@ enum Canned {
 /// one visual language. Passive by default; when a chat message lands it BREATHES (a gentle pulse), and a
 /// tap opens the chat sheet. Sits where the dev CPU badge used to — top-left, clear of the clock/battery.
 struct ChatGlyph: View {
+  /* ★★★ THE DIAL'S ARM STATE RIDES ON THE SAME BUTTON — tapping opens the chat AND the arm switch.
+   *   On a shared dial the polite move is to ASK before taking the tuner, so the control that lets
+   *   you take it sits behind the screen where you would ask.
+   * ★★ Marked with FM-DX's tick/cross, not a padlock of its own: that screen already taught this
+   *   watch's users one symbol for "may I tune on a shared receiver".
+   * ★ nil = no shared dial, nothing to arm, no mark drawn. Mirrors Jr — keep the two in step. */
+  var dialArmed: Bool? = nil
   let clients: Int
   let activity: Int          // bumps on each inbound message — drives the breathe
   var tap: () -> Void
@@ -104,6 +111,13 @@ struct ChatGlyph: View {
   var body: some View {
     Button(action: tap) {
       HStack(spacing: 3) {
+        // ★★ Order is state · person · count: the state leads because it is what you are deciding
+        //    about, and a count reaching two digits would otherwise shove it along the row.
+        if let armed = dialArmed {
+          Image(systemName: armed ? "checkmark.circle.fill" : "xmark.circle.fill")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(armed ? .green : .red)
+        }
         Image(systemName: "person.2.fill").font(.system(size: 11, weight: .semibold))
         if clients > 0 {
           Text("\(clients)").font(.system(size: 11, weight: .semibold, design: .rounded)).monospacedDigit()
