@@ -380,7 +380,17 @@ object VibeTunnel {
                     put("name", r.optString("label"))
                     put("driver", r.optString("driver"))
                     put("mode", r.optString("mode"))
-                    put("shared", r.optBoolean("locked", false))
+                    put("locked", r.optBoolean("locked", false))
+                    /* ★★★ SHARED IS NOT LOCKED. This read `r.optBoolean("locked")` — the line above
+                     *   it, copied — so `shared` could never be anything but `locked`, in BOTH
+                     *   branches of this function and in the desktop publisher too. It is the
+                     *   opposite of the truth on the commonest case: an UNLOCKED radio with room
+                     *   for several is precisely the one dial everybody shares.
+                     * ★★ Same rule as the app's isSharedDial(): not locked, and room for more than
+                     *   one. Keep the three in step — the directory card, the landing page and the
+                     *   app's picker are all describing one radio. */
+                    put("users", r.optInt("users", 1))
+                    put("shared", !r.optBoolean("locked", false) && r.optInt("users", 1) > 1)
                     put("restricted", r.optBoolean("restricted", false))
                     // ★★★ THE FRONT DOOR'S `coverage` IS NUMBERS, AND THE DIRECTORY'S IS WORDS.
                     //     Two different vocabularies behind one key: /vibeserver/radios sends
@@ -417,7 +427,16 @@ object VibeTunnel {
                 //     the station away from other people. Hardcoding false here said "shared dial"
                 //     about every radio, including ones where it was untrue.
                 put("locked", locked)
-                put("shared", locked)
+                /* ★★★ AND THE SAME HERE — the comment directly above already says what shared
+                 *   MEANS ("unlocked with room for several means ONE dial that everyone shares")
+                 *   and then the code published `locked`. The Xcover listed itself as "one
+                 *   listener at a time" in the app while its own landing page said "1 OF 10
+                 *   LISTENING · shared VFO", because this is where the app's card gets its facts.
+                 * ★★ `users` was not published at all, so the app defaulted it to 1 — which is
+                 *   what produced "one listener at a time" for a radio configured for ten. */
+                val cap = ident?.optInt("maxUsers", 1) ?: 1
+                put("users", cap)
+                put("shared", !locked && cap > 1)
                 // ★ What this radio is actually allowed to tune, when the owner has narrowed it —
                 //   "FM broadcast" is far more use to a listener than a frequency pair.
                 // ★ Prefer the owner's own words for the band; fall back to the names the

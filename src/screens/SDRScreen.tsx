@@ -425,8 +425,18 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (occ && (occ.antenna || occ.landingMessage)) {
           setDoor({
             name: instanceName || 'VibeServer',
+            /* ★★★ THE SERVER'S OWN FIGURES, NOT `users: 1`. This invented a radio with a cap of
+             *   ONE, so a single-radio VibeServer was described as "one listener at a time" no
+             *   matter what it was configured for. Seen live on the Xcover: its own landing page
+             *   said "1 OF 10 LISTENING · shared VFO" while the app's picker said "one listener at
+             *   a time" about the same radio, in the same minute.
+             * ★★ `occ` has carried maxUsers and listeners the whole time — the synthetic door
+             *   simply did not read them. An invented default that CONTRADICTS data already in
+             *   hand is worse than no card at all: the number looks authoritative and is wrong.
+             * ★ maxUsers 0 means the server did not say; fall back to 1 rather than claim room. */
             radios: [{
-              id: '', label: instanceName || 'Receiver', driver: '', users: 1,
+              id: '', label: instanceName || 'Receiver', driver: '',
+              users: occ.maxUsers && occ.maxUsers > 0 ? occ.maxUsers : 1,
               locked: false, restricted: false,
               antenna: occ.antenna, antennaIcon: occ.antennaIcon,
             }],

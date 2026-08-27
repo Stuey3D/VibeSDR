@@ -371,7 +371,20 @@ export default function App() {
     // server objects (so a later connect resolves to them), and sends the watch a light display list.
     const browseForWatch = (dirId: string) => {
       fetchDirectory(dirId as DirectoryId)
-        .then((list) => {
+        .then((all) => {
+          /* ★★★ HIDE RECEIVERS THAT REFUSE THIRD-PARTY APPS — the watch has no way to recover from
+           *   one. On the phone an `extApi === 0` receiver is drawn in red and can still be opened
+           *   in compatibility mode, so showing it is a choice the user can act on. On the WRIST
+           *   there is no such screen: tapping it hands the phone a receiver that will refuse, and
+           *   what the user sees is our app failing. Stuart: "dont want to have users attempting
+           *   to connect to Kiwi's directly from buddy and failing."
+           * ★★ `0` is the OWNER'S PUBLISHED POLICY, not a guess — and `undefined` (unknown) is
+           *   deliberately NOT treated as blocked, so an un-joined receiver still appears rather
+           *   than vanishing on missing data.
+           * ★ Filtered HERE, not on the watch: Buddy's list comes from this handler, not from its
+           *   own Directories.fetch, so the watch never sees what it is not sent. Jr does the same
+           *   filtering in its own fetch because Jr fetches for itself. */
+          const list = all.filter((s) => s.extApi !== 0);
           list.forEach((s) => { if (s.url) watchServerCache.set(s.url, s); });
           watchProvider.sendDirectory(dirId, list.map((s) => ({
             id: s.url,

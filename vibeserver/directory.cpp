@@ -261,7 +261,14 @@ std::string buildStatus(int port) {
                     j += ",\"driver\":\"" + jsonStr(r, "driver") + "\"";
                     j += ",\"mode\":\"" + jsonStr(r, "mode") + "\"";
                     j += std::string(",\"locked\":") + (jsonBool(r, "locked") ? "true" : "false");
-                    j += std::string(",\"shared\":") + (jsonBool(r, "locked") ? "true" : "false");
+                    /* ★★★ SHARED IS NOT LOCKED — this was the line above it, copied, so `shared`
+                     *   could never differ from `locked`. An UNLOCKED radio with room for several
+                     *   is exactly the one-dial-everybody-shares case, and it was published as the
+                     *   opposite. Same bug lived in Android's publisher (VibeTunnel.kt).
+                     * ★ Same rule as the app's isSharedDial(): not locked, and a cap above one.
+                     *   `users` is read just below; compute it there and emit in order. */
+                    j += std::string(",\"shared\":")
+                       + ((!jsonBool(r, "locked") && jsonNum(r, "users", 0) > 1) ? "true" : "false");
                     j += std::string(",\"restricted\":")
                        + (jsonBool(r, "restricted") ? "true" : "false");
                     // ★★★ THE FIELDS THE LANDING PAGE ITSELF READS, UNDER THE SAME NAMES. The

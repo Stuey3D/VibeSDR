@@ -10662,7 +10662,33 @@ struct LocalSdrShim::Impl {
             if (preTuned)
                 LOGI("session [%s] already tuned to %.3f kHz %s — landing skipped",
                      session.c_str(), audioFreq.load() / 1e3, mode.c_str());
-            if (firstOfSession && landedSession != session && !adminOk.load() && !preTuned) {
+            /* ★★★ AND NEVER LAND A SHARED DIAL — NOT EVEN WHEN NOBODY IS LISTENING.
+             *
+             * On a shared VFO the dial belongs to the RADIO, not to a session: it is where the
+             * last person left it, and arriving is not tuning. Landing an empty shared receiver
+             * moved it back to the owner's default the moment anybody looked at it, so a station
+             * somebody had tuned and walked away from was gone by the time the next listener
+             * arrived — and the arrival, who had said nothing, appeared to have retuned it.
+             *
+             * ★★ IT ALSO MADE THE TWO CLIENTS DISAGREE ABOUT THE SAME RADIO. The app pre-tunes on
+             *    the audio socket, so `preTuned` suppressed the landing and it connected where the
+             *    radio was left; the web client does not, so it was landed and reset. One
+             *    receiver, two answers, depending only on which client you opened
+             *    (Stuart, 2026-08-27).
+             *
+             * ★★ THIS IS HOW A REAL SHARED TUNER BEHAVES, which is the standard this feature is
+             *    measured against: an FM-DX Webserver stays where it was left. Stuart: "the app
+             *    connects at the frequency the radio was left on which is more like how the real
+             *    FM-DX servers run."
+             *
+             * ★ The landing keeps its full meaning on every OTHER receiver — where each listener
+             *   has their own VFO, a new session genuinely starts somewhere, and the owner's
+             *   answer to "where should a stranger begin" is the right one. */
+            const bool sharedDialNow = vsSharedDial();
+            if (sharedDialNow && firstOfSession && landedSession != session)
+                LOGI("shared dial — landing skipped, the radio keeps the dial it was left on");
+            if (firstOfSession && landedSession != session && !adminOk.load() && !preTuned
+                && !sharedDialNow) {
                 landedSession = session;
                 // ★ See the loopback warning in the watchdog: a proxy or tunnel connects from
                 //   127.0.0.1, and loopback is exempt from the session limit.
