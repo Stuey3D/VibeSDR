@@ -58,6 +58,21 @@ type Deps = {
 let deps: Deps | null = null;
 let dial: DialState | null = null;
 let unread = 0;
+
+/* ★★★ THE TAB TITLE, so a chat reaches somebody who is not looking at the page. The unread badge on
+ *   the chat button is useless in a BACKGROUND TAB — and a background tab is exactly where a
+ *   listener sits while somebody else is trying to ask them for the dial. Stuart: "if someone chats
+ *   whilst the tab is in the background a (Chat) should appear in the tab bar."
+ * ★★ Captured ONCE at load rather than assumed: the title is "VibeSDR" today, but reading it back
+ *   means a rename never leaves this file stamping a stale name over it. And restoring means
+ *   restoring THAT, not writing a constant.
+ * ★ Driven off `unread`, so it clears exactly when the chat is read — chatOpened(true) zeroes the
+ *   count, which is the same moment the badge clears. One source of truth for "seen it". */
+const BASE_TITLE = typeof document !== 'undefined' ? document.title : 'VibeSDR';
+function syncTitle() {
+  if (typeof document === 'undefined') return;
+  document.title = unread > 0 ? `${BASE_TITLE}: (Chat)` : BASE_TITLE;
+}
 /** ★ Own the "is it open" question here rather than reading a class off the DOM: the panel is
  *  shared machinery (see the panel helpers in main.ts) and this file must not care how it opens. */
 let isOpen = false;
@@ -89,7 +104,7 @@ export function initChat(d: Deps) {
 /** Called when the panel opens or closes, so the unread count can be cleared and stop counting. */
 export function chatOpened(open: boolean) {
   isOpen = open;
-  if (open) { unread = 0; deps?.onUnread(0); }
+  if (open) { unread = 0; deps?.onUnread(0); syncTitle(); }
 }
 
 /** A line arrived. */
@@ -121,7 +136,7 @@ export function onSaid(from: number, id: string, admin = false) {
     while (log.children.length > 40) log.removeChild(log.firstChild!);
     log.scrollTop = log.scrollHeight;
   }
-  if (!isOpen && !(dial && from === dial.you)) { unread++; deps?.onUnread(unread); }
+  if (!isOpen && !(dial && from === dial.you)) { unread++; deps?.onUnread(unread); syncTitle(); }
 }
 
 /** The occupancy strip: who is here, who moved the dial, and why it is not moving. */
