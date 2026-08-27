@@ -18,7 +18,7 @@ VibeServer needs** — there is no list of libraries to chase, and nothing to bu
 # 1. Trust the signing key and add the repository (once, ever)
 curl -fsSL https://apt.vibesdr.net/KEY.gpg \
   | sudo gpg --dearmor -o /usr/share/keyrings/vibesdr.gpg
-echo "deb [arch=arm64 signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net stable main" \
+echo "deb [arch=arm64,amd64 signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net stable main" \
   | sudo tee /etc/apt/sources.list.d/vibesdr.list
 
 # 2. Install
@@ -26,10 +26,14 @@ sudo apt update
 sudo apt install vibeserver
 ```
 
-> **`arch=arm64` is deliberate.** 64-bit Raspberry Pi OS enables multi-arch, so apt asks every
-> repository for `armhf` as well — and ours is arm64 only, which produces a harmless but alarming
-> `Skipping acquire of configured file 'main/binary-armhf/Packages'` on every update. Naming the
-> architecture stops apt asking for one we do not publish.
+> **Naming the architectures is deliberate.** 64-bit Raspberry Pi OS enables multi-arch, so apt
+> asks every repository for `armhf` as well — which we do not publish, producing a harmless but
+> alarming `Skipping acquire of configured file 'main/binary-armhf/Packages'` on every update.
+> Listing what we DO publish stops apt asking for what we do not.
+>
+> ★ It says `arm64,amd64`, not `arm64`. It was `arm64` alone from before x86 was supported, and
+> that is not merely untidy on an Intel or AMD box — it tells apt to look for arm64 packages only,
+> so `apt install vibeserver` reports no installation candidate on a machine we DO ship for.
 
 
 That is the whole installation. Every runtime dependency — libusb, librtlsdr, libopus, ncurses,
