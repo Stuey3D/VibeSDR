@@ -38,6 +38,25 @@ echo "==> Signing identity: $IDENT"
 
 VER=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist" 2>/dev/null || echo "0.1.0")
 
+# ★★★ THIS SCRIPT DOES NOT BUILD, AND THAT IS EXACTLY HOW IT SHIPS THE WRONG THING.
+#   It notarises whatever already sits in vibeserver/build/. Run it without build-app.sh first and
+#   it will happily sign, notarise, staple, zip and install to /Applications an app from a PREVIOUS
+#   release — every step reporting success, exit 0 throughout. That happened on 2026-08-27: 4.1.38
+#   was tagged, apt and Android shipped it, and the Mac quietly re-released 4.1.37. The ONLY thing
+#   that gave it away was the version in this script's own output line.
+# ★★ So refuse. The source of truth is CMakeLists.txt — the same file build-app.sh derives
+#   CFBundleShortVersionString from — and if the built app disagrees with it, the app is stale.
+#   A guard is worth more than a comment telling the reader to remember something: the comment was
+#   already there ("build-app.sh installs BEFORE this script runs") and it did not help.
+# ★ Override with ALLOW_STALE=1 for the rare case of re-notarising an unchanged build.
+SRC_VER=$(sed -n 's/^project(vibeserver VERSION \([0-9.]*\).*/\1/p' "$ROOT/vibeserver/CMakeLists.txt")
+if [ -n "$SRC_VER" ] && [ "$SRC_VER" != "$VER" ] && [ "${ALLOW_STALE:-0}" != "1" ]; then
+  echo "!! STALE BUILD — the app in vibeserver/build is $VER but CMakeLists.txt says $SRC_VER."
+  echo "   This script does NOT compile. Run:  ./vibeserver/mac/build-app.sh"
+  echo "   (then re-run this). Set ALLOW_STALE=1 to notarise the existing build anyway."
+  exit 1
+fi
+
 # ── Sign ────────────────────────────────────────────────────────────────────
 # Hardened runtime is REQUIRED for notarisation. Sign inside-out: nested code first, then the app.
 # --options runtime enables the hardened runtime; --timestamp gets a secure timestamp.
