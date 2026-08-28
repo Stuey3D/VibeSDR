@@ -17,6 +17,25 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
 
   private var hasListeners = false
 
+  /* ★★★ COMMANDS THAT ARRIVE BEFORE JAVASCRIPT IS AWAKE MUST WAIT, NOT VANISH.
+   *
+   *  A message from the watch WAKES the iOS app in the background — that is what makes Buddy work
+   *  with the phone in a pocket. But the wake and the React Native bridge are not the same event:
+   *  didReceiveMessage fires immediately, while startObserving() happens whenever JS finishes
+   *  mounting. In that window `hasListeners` is false and the command was simply dropped.
+   *
+   *  ★★ IT LOOKED LIKE A DIRECTORY BUG BECAUSE OF WHAT SURVIVES THE RACE. Connecting works cold:
+   *     the app's own boot decides what to connect to once JS is up, so the watch's command being
+   *     lost costs nothing. A `browse` has no such second chance — nothing else asks for a
+   *     directory — so it disappeared, the watch spun to its timeout and fell back to "open
+   *     VibeSDR". Stuart, 2026-08-28: "I was only able to view the directories when another server
+   *     was playing", i.e. only when the bridge happened to be up already.
+   *
+   *  ★ BOUNDED, OLDEST DROPPED FIRST. A handful covers a wake; keeping more would replay stale
+   *    intent minutes later, which is the fault the chat replay was deleted for. */
+  private var pendingCmds: [[String: Any]] = []
+  private static let kMaxPendingCmds = 8
+
   /// When the watch last sent us anything.
   ///
   /// `WCSession.isReachable` on the PHONE goes stale — most reliably after the app
@@ -204,7 +223,17 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
 
   override static func requiresMainQueueSetup() -> Bool { return false }
   override func supportedEvents() -> [String]! { return ["VibeWatchCommand", "VibeWatchState"] }
-  override func startObserving() { hasListeners = true }
+  override func startObserving() {
+    hasListeners = true
+    // ★ Flush what arrived while we were waking. Taken and cleared first, so a failure delivering
+    //   one cannot leave the rest queued to replay later.
+    let queued = pendingCmds
+    pendingCmds.removeAll()
+    for body in queued { sendEvent(withName: "VibeWatchCommand", body: body) }
+    if !queued.isEmpty {
+      NSLog("[VibeWatch] delivered %d command(s) queued before JS was ready", queued.count)
+    }
+  }
   override func stopObserving() { hasListeners = false }
 
   // MARK: - Phone -> Watch
@@ -514,13 +543,17 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
 
   func session(_ s: WCSession, didReceiveMessage message: [String: Any]) {
     sawWatch()
-    // Clear the deliberate-close flag NATIVELY the moment a reopen arrives — before the
-    // hasListeners guard — so a headless boot reads it as false even if JS hasn't mounted
-    // its command listener yet. Otherwise a dropped 'reopen' would strand us on 'closed'.
+    // Clear the deliberate-close flag NATIVELY the moment a reopen arrives — before anything
+    // that depends on JS being up, so a headless boot reads it as false even if the bridge has
+    // not mounted. Otherwise a lost 'reopen' would strand us on 'closed'.
+    // ★ Commands are QUEUED now rather than dropped (see pendingCmds), so this is no longer the
+    //   only thing that survives a cold wake. It stays anyway: this is a fact the app needs
+    //   BEFORE it boots, and reading it from a UserDefault is not the same as replaying an
+    //   event afterwards.
     if (message["cmd"] as? String) == "reopen" {
       UserDefaults.standard.set(false, forKey: Self.closedKey)
     }
-    guard hasListeners, let cmd = message["cmd"] as? String else { return }
+    guard let cmd = message["cmd"] as? String else { return }
     // ★★★ FORWARD THE WHOLE MESSAGE — DO NOT WHITELIST FIELDS.
     //   This was a hand-maintained list of keys to copy, and it has now silently eaten a
     //   field THREE times. `armed` was dropped, so every armed tune arrived looking unarmed
@@ -538,6 +571,12 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     //   because the JS side types it as one.
     var body: [String: Any] = message
     body["cmd"] = cmd
+    // ★★ QUEUED, NOT DROPPED, when JS has not mounted yet — see pendingCmds.
+    guard hasListeners else {
+      pendingCmds.append(body)
+      if pendingCmds.count > Self.kMaxPendingCmds { pendingCmds.removeFirst() }
+      return
+    }
     sendEvent(withName: "VibeWatchCommand", body: body)
   }
 
