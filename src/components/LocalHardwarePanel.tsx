@@ -84,6 +84,11 @@ export interface LocalHardwarePanelProps {
    *  (Stuart, 2026-07-27). A protection nobody can see is not obviously protecting anything. */
   /** ★ The owner has FORCED the AGC on — a listener may not set a gain at all. From hwinfo. */
   agcLocked?: boolean;
+  /** ★★★ The owner has FIXED the gain on this band: the ceiling IS the setting, and the server
+   *  refuses every gain message from anybody. Unlike agcLocked this applies to EVERY driver —
+   *  including the HackRF, where there is no AGC to reason about and the lock still closes both
+   *  stages. Per band, so it comes and goes as the listener tunes. */
+  gainLocked?: boolean;
   /** ★★ THE TUNER'S IF FILTER — the only selectivity ahead of the mixer, and the app never had a
    *  picker for it while the web client always has. `hasTunerBw` is false on a server that never
    *  mentioned it, and then nothing is drawn: an absent field is not "wide open", it is a receiver
@@ -137,6 +142,11 @@ export interface LocalHardwarePanelProps {
    *  ★ It is frequency-dependent, so it can change on a RETUNE — it is live state, not a
    *  property of the radio, which is why it is not in RadioCaps. */
   gainCapTenthDb?: number;
+  /** ★★ The owner's IF ceiling for this band, as a GAIN position; -1 = none. The slider below is
+   *  in REDUCTION dB, which counts the OTHER WAY — converted once, where it is used, exactly as
+   *  the server does it. Clamped rather than refused server-side, so without this the slider
+   *  visibly springs back and reads as a broken control. */
+  ifGainCapPos?: number;
   hrfAmp?: boolean;      onHrfAmp?: (on: boolean) => void;
   hrfLna?: number;       onHrfLna?: (db: number) => void;
   hrfVga?: number;       onHrfVga?: (db: number) => void;
@@ -187,6 +197,12 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
    *   which every radio's limit reuses); the HackRF's stages are whole dB, so it is floored —
    *   NEVER rounded, because rounding up would offer a decibel the server then refuses. */
   const capT = p.gainCapTenthDb ?? -1;
+  /* ★ The owner's IF ceiling as this slider's FLOOR — a gain position on the wire, reduction dB on
+   *  the slider, so the two count opposite ways. Same arithmetic as the server's ifgr handler and
+   *  the web client's applyIfGainCap; if these three ever drift the control lies. */
+  const ifGrFloor = (p.ifGainCapPos ?? -1) >= 0
+    ? Math.max(p.radio?.ifGrMin ?? 20, Math.min(p.radio?.ifGrMax ?? 59, 59 - (p.ifGainCapPos ?? 0)))
+    : (p.radio?.ifGrMin ?? 20);
   const capDb = capT >= 0 ? Math.floor(capT / 10) : -1;
   /* ★★★ THE CAP IS ON THE TOTAL, SO THE TWO STAGES SHARE ONE BUDGET — each one's ceiling is the
    *   cap MINUS what the other is using. Both sit AFTER the mixer (the only pre-mixer stage is the
@@ -233,7 +249,11 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
    *   there. ★★ AND WHEN VibeAGC FOR THE HACKRF ARRIVES, this must come back: at that point the
    *   lock means something and should close LNA and VGA too, exactly as the HF+ does. Stuart,
    *   2026-08-27: "there is no hackrf agc yet." */
-  const canGain      = !p.agcLocked || p.radio?.driver === 'hackrf';
+  /* ★★★ AND THE GAIN LOCK CLOSES IT ON EVERY RADIO, HackRF included. The HackRF exception above is
+   *   about an AGC it does not have; this is about a figure the owner has fixed, which is a claim
+   *   about the RADIO and true of all three. The server refuses the message, so an offered control
+   *   would spring back — the same house rule, reached from the other direction. */
+  const canGain      = !p.gainLocked && (!p.agcLocked || p.radio?.driver === 'hackrf');
   const canRate      = !(p.lockedRate && p.lockedRate > 0);
   /* ★ Nothing left but the password box. Then the panel does not pretend to be a control panel:
    *  it says what it is and puts the cursor where the only useful action is. */
@@ -351,10 +371,19 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                  refuses a gain from a listener then — the same "every use is a no-op" test — so
                  the slider is hidden rather than left to move and snap back. The line below says
                  why, because a missing gain control with no explanation reads as a fault. */}
+          {/* ★★ AND SAY WHICH OF THE TWO IT IS. A fixed gain and a locked AGC are different facts
+                 about the radio — one is a figure the owner chose, the other is a loop they trust
+                 — and telling a listener "the automatic gain control is on" about a receiver whose
+                 gain is simply pinned is the same class of wrong sentence as printing it on a
+                 HackRF, which is the note this branch already carries. */}
           {!canGain && (
             <Text style={[styles.note, { marginTop: 12 }]}>
-              The gain is managed by this receiver: its owner has fixed the automatic gain
-              control on, so it is the same for everybody listening.
+              {p.gainLocked
+                ? 'The gain is fixed on this band: its owner has set it and it is the same for '
+                  + 'everybody listening. Tune elsewhere and the controls come back if they are '
+                  + 'free there.'
+                : 'The gain is managed by this receiver: its owner has fixed the automatic gain '
+                  + 'control on, so it is the same for everybody listening.'}
             </Text>
           )}
           {canGain && (isAhf ? (
@@ -499,13 +528,16 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   <Text style={styles.section}>IF GAIN REDUCTION</Text>
                   <View style={styles.stepperRow}>
                     <Slider style={{ flex: 1 }}
-                            minimumValue={p.radio?.ifGrMin ?? 20} maximumValue={p.radio?.ifGrMax ?? 59}
-                            step={1} value={p.rspIfGr ?? 40}
+                            minimumValue={ifGrFloor} maximumValue={p.radio?.ifGrMax ?? 59}
+                            step={1} value={Math.max(ifGrFloor, p.rspIfGr ?? 40)}
                             onSlidingComplete={(v: number) => p.onRspIfGr?.(Math.round(v))}
                             minimumTrackTintColor={C.gold} maximumTrackTintColor="#555" thumbTintColor={C.gold} />
                     <Text style={styles.stepVal}>{p.rspIfGr ?? 40} dB</Text>
                   </View>
-                  <Text style={styles.note}>More reduction = less gain.</Text>
+                  <Text style={styles.note}>
+                    More reduction = less gain.
+                    {(p.ifGainCapPos ?? -1) >= 0 ? ' The owner has limited the IF gain on this band.' : ''}
+                  </Text>
                 </>
               )}
 

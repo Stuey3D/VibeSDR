@@ -390,6 +390,9 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     S("demodMode", r.demodMode); N("landingFreq", r.landingFreq);
     S("allowRanges", r.allowRanges); S("blockRanges", r.blockRanges);
     S("gainLimits", r.gainLimits); I("restGain", r.restGain); I("agcLock", r.agcLock);
+    // ★ The three that turn a ceiling into a setting — added to BOTH writers, see the note below.
+    B("gainLock", r.gainLock); S("ifGainLimits", r.ifGainLimits); S("gainSplits", r.gainSplits);
+    B("rateLock", r.rateLock);
     // ★ Absent keeps the safe defaults (AGC off, protection on) — B() only assigns when present.
     B("rtlAgc", r.rtlAgc); B("tunerBwAuto", r.tunerBwAuto);
     I("users", r.users); N("maxBw", r.maxBw); N("maxFps", r.maxFps); N("fftRate", r.fftRate);
@@ -428,6 +431,8 @@ std::string radioToJson(const RadioConfig& r) {
     S("allowRanges", r.allowRanges); S("blockRanges", r.blockRanges);
     // ★ BOTH WRITERS, as the note above insists: the setup page reads the API one.
     S("gainLimits", r.gainLimits); N("restGain", r.restGain); N("agcLock", r.agcLock);
+    B("gainLock", r.gainLock); S("ifGainLimits", r.ifGainLimits); S("gainSplits", r.gainSplits);
+    B("rateLock", r.rateLock);
     B("rtlAgc", r.rtlAgc); B("tunerBwAuto", r.tunerBwAuto);
     N("users", r.users); N("maxBw", r.maxBw); N("maxFps", r.maxFps); N("fftRate", r.fftRate);
     N("uncompressed", r.uncompressed);
@@ -493,6 +498,8 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.rfNotch = one.rfNotch; r.dabNotch = one.dabNotch; r.zoomSpectrum = one.zoomSpectrum;
     r.allowRanges = one.allowRanges; r.blockRanges = one.blockRanges;
     r.gainLimits = one.gainLimits; r.restGain = one.restGain; r.agcLock = one.agcLock;
+    r.gainLock = one.gainLock; r.ifGainLimits = one.ifGainLimits; r.gainSplits = one.gainSplits;
+    r.rateLock = one.rateLock;
     r.sessionLimitMin = one.sessionLimitMin;
     r.biasT = one.biasT;
     r.ppm = one.ppm; r.ppb = one.ppb; r.directSampling = one.directSampling;
@@ -788,6 +795,8 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.rfNotch = r.rfNotch; c.dabNotch = r.dabNotch; c.zoomSpectrum = r.zoomSpectrum;
     c.allowRanges = r.allowRanges; c.blockRanges = r.blockRanges;
     c.gainLimits = r.gainLimits; c.restGain = r.restGain; c.agcLock = r.agcLock;
+    c.gainLock = r.gainLock; c.ifGainLimits = r.ifGainLimits; c.gainSplits = r.gainSplits;
+    c.rateLock = r.rateLock;
     /* ★★★ THE LAST LINK IN THE CHAIN, AND THE ONE THAT WAS MISSING. This function flattens a
      *     RADIO's settings into the server-level Config that the worker process actually reads, so
      *     a per-radio field that is not copied here simply never arrives — however correctly it is

@@ -282,6 +282,21 @@ inline int gainCapAt(const GainRules& rules, double hz) {
     return cap;
 }
 
+/**
+ * The value written for a frequency, FIRST match wins, or -1 for none.
+ *
+ * ★★ NOT gainCapAt's "lowest wins" rule, and deliberately. That rule is about SAFETY: where two
+ *    ceilings overlap the tighter one is the one the owner meant. A HackRF LNA/VGA split is not a
+ *    limit at all — it is a preference, and "the lowest share of LNA" is not a safer answer, just
+ *    an arbitrary one. The owner's own order is the least surprising tie-break, and overlapping
+ *    split rules are a thing nobody sensible writes.
+ */
+inline int valueAt(const GainRules& rules, double hz) {
+    for (const auto& g : rules)
+        if (hz >= g.band.lo && hz <= g.band.hi) return g.max;
+    return -1;
+}
+
 /** Sort and merge touching/overlapping ranges into a canonical set. */
 inline Ranges normalise(Ranges in) {
     if (in.empty()) return in;

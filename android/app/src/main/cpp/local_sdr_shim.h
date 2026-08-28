@@ -113,6 +113,22 @@ public:
      *  what the owner means by "when I tune into FM". */
     double listenFrequency() const;
     static bool agcLocked();
+    /* ★★★ THE CEILING AS A SETTING, NOT ONLY AS A LIMIT (Stuart, 2026-08-28). With the lock on, a
+     *   band that HAS a ceiling is fixed there and no listener may move the gain — the same
+     *   figures, read a different way. A band with no ceiling is untouched: the lock changes what
+     *   a rule MEANS, it never invents one.
+     * ★★ ifGainCapAt is the SDRplay's second stage (Saber's RSP1 clone: the RF stage alone does
+     *   not do it), and gainSplitAt is the HackRF's LNA share of the total, 0-100 — a total does
+     *   not determine two stages, so a ceiling is enough to limit with and not enough to SET
+     *   with. Both are read only where they mean something; see the setters. */
+    /** The sample rate is PINNED rather than capped — see the definition. */
+    static void setVibeServerRateLock(bool on);
+    static void setGainLock(bool on);
+    static bool gainLocked();
+    static void setIfGainLimits(const std::string& csv);
+    static int  ifGainCapAt(double hz);
+    static void setGainSplits(const std::string& csv);
+    static int  gainSplitAt(double hz);
     /** ★★★ RTL OVERLOAD PROTECTION — one call per second, FROM THE DSP THREAD ONLY. It takes the
      *  hardware lock and touches the tuner, so the libusb callback must never call it (see the
      *  note on enqueueIq). Non-static: it works on the live device. */

@@ -1603,6 +1603,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   // UberSDR auto-range symmetric contrast (0–20). Web client calibration = 10.
   const [hwLockedRate, setHwLockedRate] = useState(0);   // >0 = server pinned the rate
   const [hwAgcLocked, setHwAgcLocked] = useState(false);
+  /** The owner has FIXED the gain on this band — no gain controls at all. See onHwGainLocked. */
+  const [hwGainLocked, setHwGainLocked] = useState(false);
+  /** The owner's IF ceiling for this band, as a gain position; -1 = none. */
+  const [hwIfGainCap, setHwIfGainCap] = useState(-1);
   const [hwTunerBw, setHwTunerBw] = useState(0);
   const [hwTunerBwAuto, setHwTunerBwAuto] = useState(false);
   /** ★ Absent on a server that has no such filter — then the picker is not drawn at all, rather
@@ -3433,6 +3437,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onHwLockedRate: (r: number) => { if (!destroyed.current) setHwLockedRate(r); },
       onHwAgcLocked: (v: boolean) => { if (!destroyed.current) setHwAgcLocked(v); },
+      onHwGainLocked: (v: boolean) => { if (!destroyed.current) setHwGainLocked(v); },
+      onHwIfGainCap: (v: number) => { if (!destroyed.current) setHwIfGainCap(v); },
       onHwGainCap: (v: number) => { if (!destroyed.current) setHwGainCap(v); },
       onHwTunerBw: (hz: number, auto: boolean) => {
         if (destroyed.current) return;
@@ -8284,6 +8290,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           isSpy={isSpy}
           radio={radioCaps}
           agcLocked={hwAgcLocked}
+          gainLocked={hwGainLocked}
+          ifGainCapPos={hwIfGainCap}
           hasTunerBw={hwHasTunerBw}
           tunerBw={hwTunerBw}
           tunerBwAuto={hwTunerBwAuto}

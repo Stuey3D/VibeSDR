@@ -631,12 +631,49 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
              limit.</div></label>
 
 
+        <!-- ★★★ THE SAME FIGURES, READ A DIFFERENT WAY. Stuart, 2026-08-28: "the gain sliders serve
+             dual purpose either as a limiter or a fixed setting." Nothing about the rows below
+             changes; this one tick decides whether they are a ceiling a listener may sit under or
+             the value the radio is held at. -->
+        <label class="hide" id="gainLockRow" class="row">
+          <input type="checkbox" id="gainLock">
+          <span class="lbl">Lock the gain to these ceilings</span>
+          <div class="note">The ceilings below stop being a limit and become the SETTING: tuning
+             into one of these bands puts the gain exactly there, and listeners get no gain
+             controls at all.
+             <br><b>Only the bands you list.</b> Anywhere you have not set a ceiling, listeners
+             keep the full range exactly as they do today &mdash; this changes what a ceiling
+             means, it does not invent one.</div></label>
+
         <label class="hide" id="gainLimitRow"><span class="lbl">Per-band ceilings</span>
           <div class="row" style="gap:8px">
             <select id="gainPick" style="flex:1 1 200px"></select>
             <input type="range" id="gainMaxSlider" class="hide" style="flex:1 1 160px">
             <input type="text" id="gainMax" placeholder="max, e.g. 25 dB" style="flex:1 1 120px">
             <button type="button" class="ghost" id="gainAdd" style="flex:0 0 auto">Add</button>
+          </div>
+          <!-- ★★ THE SDRPLAY'S SECOND STAGE. The RF position above is the right primary control —
+               it is ahead of the mixer, so it decides whether the front end overloads at all, and
+               capping it leaves the IF AGC its full range to work in. That reasoning assumes
+               working hardware: on a damaged RSP1 clone the gain stages misbehave and the owner
+               needs the IF too (Saber, via Stuart, 2026-08-28). Hidden while the AGC is locked on,
+               because there the loop owns this control and a ceiling would be a figure nothing
+               reads. -->
+          <div class="row hide" id="gainIfRow" style="gap:8px;margin-top:6px">
+            <span class="dim" style="flex:0 0 auto">IF gain ceiling</span>
+            <input type="range" id="gainIfSlider" min="0" max="39" style="flex:1 1 160px">
+            <input type="text" id="gainIfMax" placeholder="max IF position (optional)" style="flex:1 1 140px">
+          </div>
+          <!-- ★★★ A TOTAL IS ENOUGH TO LIMIT WITH AND NOT ENOUGH TO SET WITH. LNA + VGA = 30 dB
+               describes a whole family of radios: all of it in the LNA is a different receiver from
+               all of it in the VGA. So a LOCKED HackRF band needs a second figure — where between
+               the two stages that total sits. Only shown when the lock is on: as a limiter the
+               listener still chooses the split for themselves, which is today's behaviour and
+               stands. -->
+          <div class="row hide" id="gainSplitRow" style="gap:8px;margin-top:6px">
+            <span class="dim" style="flex:0 0 auto">Split</span>
+            <input type="range" id="gainSplitSlider" min="0" max="100" step="5" value="50" style="flex:1 1 200px">
+            <span class="dim" id="gainSplitVal" style="flex:0 0 auto">50% LNA / 50% VGA</span>
           </div>
           <div id="gainList" class="bandList"></div>
           <div class="note">Cap the bands that overload and leave the rest open &mdash; a strong local FM
@@ -703,7 +740,20 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
       <!-- ★ EVERY radio has one, so it is not locked-mode-only. It was, which is why an Airspy
            being set up for FM had no way to choose 768 kSPS. -->
       <label id="rateRow"><span class="lbl">Span (sample rate)</span>
-        <select id="rate"></select></label>
+        <select id="rate"></select>
+        <!-- ★★★ A CEILING AND A PIN ARE DIFFERENT PROMISES. The dropdown keeps its present meaning
+             — the widest window this radio offers, and a listener may choose narrower. This makes
+             it the ONLY window: on a shared dial one listener dropping 8 MHz to 2 MHz changes what
+             everybody sees, and on a damaged radio some rates do not work at all (Stuart,
+             2026-08-28). Ticked, the listener's rate picker disappears exactly as it does on a
+             locked-centre receiver — same wire field, same client behaviour. -->
+        <label class="row" style="gap:8px;margin-top:6px">
+          <input type="checkbox" id="rateLock" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Lock it &mdash; listeners cannot change the sample rate</span></label>
+        <div class="note">Leave it unticked and this is the widest span on offer; a listener may
+           still choose a narrower one for themselves. Ticked, everybody gets this span and the
+           choice disappears from their screen &mdash; which is what you want on a shared dial,
+           where one person narrowing the window narrows it for the room.</div></label>
       <div id="hwBiasT" class="hide">
         <label style="display:flex;gap:8px;align-items:center">
           <input type="checkbox" id="biasT" style="width:16px;height:16px;accent-color:var(--amber)">
@@ -1222,21 +1272,54 @@ function fillGainBands() {
   if (keep) sel.value = keep;
 }
 
+/** ★★ THREE LISTS, ONE BAND SET. The IF ceiling and the HackRF split are stored in their own CSVs
+ *   rather than as extra fields on each ceiling entry: the band syntax and its parser are shared
+ *   with the allow/block lists and the server's, and a third column in the value would have been a
+ *   format only this feature speaks. Read and written BY BAND, so they cannot drift apart. */
+function gainSideList(key) {
+  const out = {};
+  for (const e of (radio()[key] || "").split(",").map(t => t.trim()).filter(Boolean)) {
+    const c = e.lastIndexOf(":");
+    if (c >= 0) out[e.slice(0, c)] = parseInt(e.slice(c + 1), 10);
+  }
+  return out;
+}
+function gainSideSet(key, band, val) {
+  const m = gainSideList(key);
+  if (val === null || val === undefined || !isFinite(val) || val < 0) delete m[band];
+  else m[band] = Math.round(val);
+  radio()[key] = Object.keys(m).map(b => b + ":" + m[b]).join(",");
+}
+
 function gainChips() {
   const list = (radio().gainLimits || "").split(",").map(t => t.trim()).filter(Boolean);
+  const ifs = gainSideList("ifGainLimits"), sp = gainSideList("gainSplits");
+  const locked = !!radio().gainLock, isHrf = (radio().driver || "") === "hackrf";
   const host = $("gainList");
   host.innerHTML = list.map((e, i) => {
     const colon = e.lastIndexOf(":");
     const band = colon >= 0 ? e.slice(0, colon) : e;
     const val  = colon >= 0 ? parseInt(e.slice(colon + 1), 10) : -1;
-    return `<span class="bandChip">${esc(bandLabel(band))} \u2264 ${esc(gainFromRaw(val))}` +
+    // ★ "= x" when the ceiling IS the setting, "\u2264 x" when it is a limit. The chip is where an
+    //   owner checks their work, so it must not read the same in two states that behave differently.
+    let extra = "";
+    if (ifs[band] >= 0 && ifs[band] !== undefined) extra += " \u00b7 IF " + ifs[band];
+    if (locked && isHrf) extra += " \u00b7 " + (sp[band] >= 0 && sp[band] !== undefined ? sp[band] : 50)
+                                 + "% LNA";
+    return `<span class="bandChip">${esc(bandLabel(band))} ${locked ? "=" : "\u2264"} ` +
+           `${esc(gainFromRaw(val))}${esc(extra)}` +
            `<button type="button" data-g="${i}" aria-label="Remove">\u00d7</button></span>`;
   }).join("") || '<span class="dim">No ceilings \u2014 listeners have the full range.</span>';
   for (const b of host.querySelectorAll("button[data-g]"))
     b.addEventListener("click", () => {
       const arr = (radio().gainLimits || "").split(",").map(t => t.trim()).filter(Boolean);
-      arr.splice(parseInt(b.getAttribute("data-g"), 10), 1);
+      const gone = arr.splice(parseInt(b.getAttribute("data-g"), 10), 1)[0] || "";
       radio().gainLimits = arr.join(",");
+      // ★★ AND TAKE ITS COMPANIONS WITH IT. An IF ceiling or a split for a band that no longer has
+      //    a ceiling is a figure nothing reads — invisible here and still in the config file, which
+      //    is exactly how a setting comes back from the dead when the band is added again later.
+      const band = gone.lastIndexOf(":") >= 0 ? gone.slice(0, gone.lastIndexOf(":")) : gone;
+      if (band) { gainSideSet("ifGainLimits", band, null); gainSideSet("gainSplits", band, null); }
       gainChips();
     });
 }
@@ -1251,7 +1334,15 @@ function gainAdd() {
                 .filter(e => e.slice(0, e.lastIndexOf(":")) !== band);   // replace, don't duplicate
   cur.push(band + ":" + raw);
   radio().gainLimits = cur.join(",");
+  // ★ The two companion figures are OPTIONAL and are written for the same band in the same breath —
+  //   an IF box left empty simply means "no IF ceiling on this band", which is the behaviour before
+  //   this existed. The split is only meaningful on a locked HackRF, so it is stored only there.
+  const ifRaw = parseFloat(String($("gainIfMax").value).replace(/[^0-9.\-]/g, ""));
+  gainSideSet("ifGainLimits", band, isFinite(ifRaw) && ifRaw >= 0 ? ifRaw : null);
+  if (radio().gainLock && (radio().driver || "") === "hackrf")
+    gainSideSet("gainSplits", band, parseInt($("gainSplitSlider").value, 10));
   $("gainMax").value = "";
+  $("gainIfMax").value = "";
   gainChips();
 }
 
@@ -1376,6 +1467,38 @@ function renderGain() {
   $("gainLimitRow").dataset.avail = (isRtl || isRsp || isHrf) ? "1" : "0";
   $("gainLimitRow").classList.toggle("hide", !(isRtl || isRsp || isHrf));
   $("gainAgcLock").checked = r.agcLock === 1;
+  /* ★★★ NAME THE AGC THAT IS ACTUALLY BEING LOCKED. This said "Lock VibeAGC on" for every radio,
+   *   and on an SDRplay that is simply the wrong AGC: VibeAGC is OUR loop walking an RTL's tuner
+   *   gain list, while the RSP has its own IF AGC in hardware and the HF+ has its own too. An
+   *   owner reading "VibeAGC" on an RSP is being told the server will run a loop it does not run
+   *   (Stuart, 2026-08-28). The control is the same; the thing it locks is not.
+   * ★ The note goes with the label — a per-driver title over a paragraph describing a different
+   *   radio is the half-corrected copy AGENTS.md warns about. */
+  { const lbl = $("gainAgcLockRow").querySelector(".lbl");
+    const note = $("gainAgcLockRow").querySelector(".note");
+    if (lbl) lbl.textContent = isRsp ? "Lock the SDRplay's AGC on"
+                             : isHf  ? "Lock the Airspy HF+'s AGC on"
+                                     : "Lock VibeAGC on";
+    if (note) note.innerHTML = isRsp
+      ? "Listeners may not switch to manual. This is the RSP's OWN IF AGC, in the tuner \u2014 not "
+        + "VibeSDR's loop, which is only used on an RTL-SDR. With it locked on, the IF ceiling "
+        + "below is hidden: the AGC owns that control."
+      : isHf
+      ? "Listeners may not switch to manual. This is the Airspy HF+'s OWN AGC, and on this radio it "
+        + "is the whole protection available \u2014 there is no variable gain to limit, only an "
+        + "attenuator and a preamp, and the lock closes those too."
+      : "Listeners may not switch to manual. This fixes VibeSDR's own AGC on \u2014 our loop, which "
+        + "walks the tuner's gain list a step at a time \u2014 so one listener cannot set a gain "
+        + "that everybody else then listens through."; }
+  // ★ The lock is offered wherever a ceiling is, because it is the same figures read differently.
+  $("gainLockRow").classList.toggle("hide", !(isRtl || isRsp || isHrf));
+  $("gainLock").checked = !!r.gainLock;
+  // ★★ IF ceiling: RSP only, and only while its AGC is NOT locked on — see the note above.
+  $("gainIfRow").classList.toggle("hide", !(isRsp && r.agcLock !== 1));
+  // ★★ The split is a HackRF question and only when the ceiling is a SETTING; as a limiter the
+  //    listener still chooses their own split, which is today's behaviour and stays.
+  $("gainSplitRow").classList.toggle("hide", !(isHrf && r.gainLock));
+  $("rateLock").checked = !!r.rateLock;
   $("gainRest").value = gainFromRaw(r.restGain);
   // ★ Absent = AGC off. An older config must not read as though the owner had asked for it.
   $("rtlAgc").value = r.rtlAgc ? "1" : "0";
@@ -2206,7 +2329,25 @@ function fill() {
     $("rtlAgc").disabled = on;
     { const n = $("gainRestAgcNote");
       if (n) n.classList.toggle("hide", !($("rtlAgc").value === "1")); }
+    // ★ And the IF ceiling appears or goes with it on an RSP: locked, the AGC owns that control,
+    //   so the row must not sit there taking a figure nothing will read.
+    renderGain();
   });
+  $("gainLock").addEventListener("change", () => {
+    radio().gainLock = $("gainLock").checked;
+    // ★ Re-render rather than toggle by hand: the chips read "=" instead of "\u2264", and the
+    //   HackRF split row appears or goes — three things that follow from one flag, and doing them
+    //   in three places is how they come apart.
+    renderGain();
+  });
+  $("rateLock").addEventListener("change", () => { radio().rateLock = $("rateLock").checked; });
+  $("gainSplitSlider").addEventListener("input", () => {
+    const v = parseInt($("gainSplitSlider").value, 10);
+    $("gainSplitVal").textContent = v + "% LNA / " + (100 - v) + "% VGA";
+  });
+  // ★ The IF slider writes the box, and the box is the source of truth on Add — the same one
+  //   value/one place rule wireGainSlider already follows for the RF figure.
+  $("gainIfSlider").addEventListener("input", () => { $("gainIfMax").value = $("gainIfSlider").value; });
   $("gainRest").addEventListener("change", () => {
     const t = ($("gainRest").value || "").trim();
     // ★★★ THE LOCK IMPLIES THE AGC. "Listeners may not switch to manual" is meaningless with the

@@ -1069,7 +1069,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         if (first) setMode(first, true);
       }
     },
-    onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio, lockedCentre, gainCap, agcLocked,
+    onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio, lockedCentre, gainCap, agcLocked, gainLocked, ifGainCap,
                gainNow, agc, ovlSteps, adcPeak) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
       hwGainNow = typeof gainNow === 'number' ? gainNow : -1;
@@ -1120,6 +1120,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       }
       hwGainCap = typeof gainCap === 'number' ? gainCap : -1;
       hwAgcLocked = agcLocked === true;
+      hwGainLocked = gainLocked === true;
+      hwIfGainCap = typeof ifGainCap === 'number' ? ifGainCap : -1;
+      applyIfGainCap();
       // ★ Say WHY it cannot be turned off, where the hand is already going. Locked is the owner's
       //   decision, not a fault, and an unexplained dead control reads as the latter.
       {
@@ -1134,6 +1137,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       //   which is how the slider follows the radio down on tuning into a limited band.
       applyGainCap();
       applyHrfGainCap();   // ★ hwinfo carries the cap, and it CHANGES as the listener tunes bands
+      applyGainLocked();   // ★ ...and so does the LOCK, which is per band for the same reason
       hwLockedCentre = lockedCentre ?? 0;
       // ★ Search is narrowed to what this receiver can actually reach — see setTunableWindow().
       //   Set from here because this is where the lock becomes known, and re-set on every hwinfo
@@ -1767,6 +1771,11 @@ const ifText = () => (hwTunerBw > 0
 /** Clears the "overload passed" chip once the gain is home — see onOverload. */
 let ovlClearTimer = 0;
 let hwAgcLocked = false;
+/** The owner has FIXED the gain on this band — see the hwinfo field. Per band, so it changes as
+ *  the listener tunes; every control it governs is re-applied on each hwinfo. */
+let hwGainLocked = false;
+/** The RSP's IF ceiling at this frequency, as a GAIN position; -1 = none. */
+let hwIfGainCap = -1;
 let hwRates: number[] = [];
 /** >0 = the SERVER pinned the capture rate; the picker is hidden. */
 let hwLockedRate = 0;
@@ -8292,6 +8301,50 @@ function applyGainCap() {
     : '';
 }
 
+/** ★★★ A FIXED GAIN HAS NO CONTROLS AT ALL. Stuart, 2026-08-28: "on a gain locked server all the
+ *  listener sees is no controls at all."
+ *
+ *  ★★ HIDDEN, NOT DISABLED, and that is the same rule applyRspLock already follows: a greyed
+ *     slider still reads as an offer, and there is nothing here the listener can do to earn it.
+ *     A cap leaves a working control with a lower ceiling; a lock leaves no control.
+ *  ★ Called on every hwinfo, because the lock is reported PER BAND — it arrives and departs with
+ *    the ceiling as the listener tunes, exactly as applyGainCap does. And called again from
+ *    applyCaps, which rebuilds these rows when the radio announces itself and would otherwise
+ *    un-hide them.
+ *  ★ The RSP is not listed here: rspRestricted() already reads the flag, so applyRspLock does that
+ *    radio's half. One rule, one reader. */
+/** ★★ THE IF SLIDER'S CEILING. A GAIN position on the wire, and this slider is in REDUCTION dB —
+ *  the two count opposite ways, exactly as the RF cap and the LNA state do, so the conversion
+ *  happens once, here, and matches the server's (see the ifgr handler in local_sdr_shim.cpp).
+ *  ★ Re-applied on every hwinfo because the ceiling is per band and changes as the listener tunes. */
+function applyIfGainCap() {
+  const gr = document.getElementById('rspIfGr') as HTMLInputElement | null;
+  if (!gr) return;
+  const floor = hwIfGainCap >= 0
+    ? Math.max(radioCaps?.ifGrMin ?? 20, Math.min(radioCaps?.ifGrMax ?? 59, 59 - hwIfGainCap))
+    : (radioCaps?.ifGrMin ?? 20);
+  gr.min = String(floor);
+  if (Number(gr.value) < floor) gr.value = String(floor);
+  gr.title = hwIfGainCap >= 0 ? 'The owner has limited the IF gain on this band' : '';
+}
+
+function applyGainLocked() {
+  const rowOf = (id: string) => document.getElementById(id)?.closest('.mrow') as HTMLElement | null;
+  for (const id of ['gain', 'gainAuto']) {
+    const r = rowOf(id);
+    // ★ Only ever ADDS a reason to hide: applyCaps has already hidden these on the radios that
+    //   have no single gain slider, and this must not un-hide them there.
+    if (r && hwGainLocked) r.hidden = true;
+  }
+  // The HackRF's stages live in one block, which is the whole of its gain UI.
+  const hrf = document.getElementById('hrfCtls') as HTMLElement | null;
+  if (hrf && hwGainLocked) hrf.hidden = true;
+  // ★ Guarded: applyRspLock reaches for the RSP panel's controls with `$`, which casts a missing
+  //   element to non-null and would throw on a dongle. This function runs on EVERY hwinfo, so it
+  //   cannot assume the panel the RSP paths can.
+  if (document.getElementById('rspIfAgc')) applyRspLock();
+}
+
 /** The server tells us its real gain steps and sample rates (hwinfo) — the
  *  client can't query a remote dongle, so the controls are built from that. */
 function populateHw() {
@@ -9457,9 +9510,11 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   // the admin state is first resolved — so applying it only at connect left the per-radio
   // controls (calibration especially) enabled on a protected server (Stuart, 2026-07-27).
   refreshAdminRow();
-  if (isAhf) { applyAhfCaps(caps); refreshAdminRow(); return; }
-  if (isHrf) { applyHrfCaps(caps); refreshAdminRow(); return; }
-  if (!isRsp) return;
+  // ★ The rows above have just been rebuilt from the radio's capabilities, which un-hides anything
+  //   the LOCK had hidden — so the lock is re-applied here, on every path out of this function.
+  if (isAhf) { applyAhfCaps(caps); refreshAdminRow(); applyGainLocked(); return; }
+  if (isHrf) { applyHrfCaps(caps); refreshAdminRow(); applyGainLocked(); return; }
+  if (!isRsp) { applyGainLocked(); return; }
 
   const n = caps?.lnaStates ?? 10;
   const lna = $<HTMLInputElement>('rspLna');
@@ -9480,6 +9535,10 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   //   gains would be refused by the server anyway, and on a SHARED one it would be rude —
   //   every other listener's front end moved to suit whoever reconnected last.
   if (!rspRestricted()) pushAllRspSettings();
+  applyGainLocked();
+  // ★ AFTER the gr.min above, which has just been reset to the radio's own floor — the OWNER's
+  //   ceiling is a second, tighter floor and must be re-applied or the panel rebuild loses it.
+  applyIfGainCap();
 }
 
 function rspSend(msg: Record<string, unknown>) {
@@ -9493,7 +9552,12 @@ function rspSend(msg: Record<string, unknown>) {
  *  ★ If these two rules ever drift apart the controls lie: either they refuse something the
  *    server would have allowed, or they offer something it will silently reject. */
 function rspRestricted(): boolean {
-  return hwLockedCentre > 0 && srvAdminProtected && !adminUnlocked;
+  // ★★ TWO INDEPENDENT REASONS, ONE ANSWER. The first is WHO you are (a shared front end behind
+  //    the admin password); the second is that the owner has fixed the gain on this band, where
+  //    there is nothing to unlock — the password would not help, because the server refuses the
+  //    message from anybody. Both end in the same place: hide the controls rather than offer a
+  //    control whose every use is a no-op.
+  return (hwLockedCentre > 0 && srvAdminProtected && !adminUnlocked) || hwGainLocked;
 }
 
 /** ★★★ THE IF SLIDER'S READ-ONLY STATE, IN ONE PLACE, CALLED FROM EVERYWHERE THAT CHANGES IT.

@@ -134,6 +134,14 @@ struct Config {
     /** Per-band gain ceilings: "lo-hi:max" in MHz, comma separated, e.g. "88-108:250".
      *  Empty = no limit anywhere, which is the behaviour before this existed. */
     std::string gainLimits;
+    /** The ceiling becomes a fixed setting — see RadioConfig::gainLock. */
+    bool gainLock = false;
+    /** The SDRplay's IF ceiling, and the HackRF's per-band LNA/VGA split. See RadioConfig. */
+    std::string ifGainLimits;
+    std::string gainSplits;
+
+    /** The sample rate is PINNED — see RadioConfig::rateLock. */
+    bool rateLock = false;
 
     /** ★★ The gain the radio returns to when everybody has left — in the radio's own units, -1 for
      *  none. Independent of the limits and useful on its own: without it, the next listener and
@@ -273,6 +281,30 @@ struct RadioConfig {
     //     POSITION (higher = more gain — the raw LNA state counts the other way, and storing THAT
     //     would make a "limit" mean its own inverse), an HF+ has no variable gain at all.
     std::string gainLimits;   ///< "88-108:250" in MHz, comma separated. Empty = no limit.
+    /** ★★★ THE CEILING BECOMES A SETTING. Same figures, different meaning: with this on, a band
+     *  that has a ceiling is FIXED there and no listener may move the gain at all — the sliders
+     *  serve as a limiter or as a fixed value depending on this one flag (Stuart, 2026-08-28).
+     *  ★★ ONLY CAPPED BANDS LOCK. A band with no rule keeps the full range exactly as today: the
+     *     lock changes what a ceiling MEANS, it does not invent one where the owner wrote none. */
+    bool        gainLock = false;
+    /** ★★ THE SDRPLAY'S SECOND STAGE. `gainLimits` caps the RF (LNA) position because that is what
+     *  decides whether the front end overloads; the IF reduction is a separate control and on a
+     *  damaged RSP1 clone the RF stage alone is not enough (Saber, via Stuart, 2026-08-28).
+     *  ★ Only meaningful with the AGC lock OFF — a locked IF AGC owns this control, so a ceiling
+     *    on it would be a number nothing reads. Same band syntax, same parser. */
+    std::string ifGainLimits;
+    /** ★★ THE HACKRF'S SPLIT, PER BAND. A TOTAL does not determine the two stages, so a ceiling is
+     *  enough to LIMIT with and not enough to SET with. This is the LNA's share of that total, 0-100
+     *  (the VGA takes the rest), and it is read only when gainLock is on. Per band, because the
+     *  right split on FM is not the right split on HF. Same band syntax, same parser. */
+    std::string gainSplits;
+    /** ★★★ THE RATE IS PINNED, NOT MERELY CAPPED. `lockRate` is a CEILING — a listener may still
+     *  choose anything below it — and on a shared dial that is not enough: dropping from 8 MHz to
+     *  2 MHz changes the window for EVERYBODY, and on a damaged radio some rates do not work at
+     *  all (Stuart, 2026-08-28). With this on, the dropdown keeps its present meaning for the
+     *  OWNER and the listener simply has no choice to make — the same shape a locked centre
+     *  already produces, and it reuses the same wire field so the picker hides itself. */
+    bool        rateLock = false;
     int         restGain = -1;  ///< returned to at the idle park; -1 = leave it where it is.
     /** ★★★ VIBESDR'S OWN AGC FOR THE DONGLE — not the tuner's, which is unreliable across tuners
      *  and known broken on the RTL-SDR Blog v4, and which this server has never engaged. Ours

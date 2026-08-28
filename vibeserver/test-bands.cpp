@@ -169,6 +169,18 @@ int main() {
         //   means no limit and 0 means the tightest possible one.
         const auto zero = parseGainList("fm:0");
         ok(zero.size() == 1 && gainCapAt(zero, 96'600'000) == 0, "★★ a ceiling of 0 is a ceiling");
+
+        /* valueAt: the SAME parser read as a preference rather than a limit — the HackRF's LNA
+         * share of a locked band's total, and the SDRplay's IF ceiling both ride on this list. */
+        ok(valueAt(rules, 96'600'000) == 250, "★ valueAt reads the rule that covers the frequency");
+        ok(valueAt(rules, 450'000'000) == -1, "★ and -1 where no rule covers it");
+        // ★★ FIRST match wins here, where gainCapAt takes the LOWEST. A split is a preference, not
+        //    a limit: "the smallest share of LNA" is not a safer answer, merely an arbitrary one,
+        //    so the owner's own order is the tie-break. Same list, two deliberate readings.
+        // Written broad-first, so "first" and "tightest" are genuinely different answers.
+        const auto broadFirst = parseGainList("0-2000M:400, fm:250");
+        ok(gainCapAt(broadFirst, 96'600'000) == 250 && valueAt(broadFirst, 96'600'000) == 400,
+           "★★ overlapping rules: gainCapAt takes the tightest, valueAt takes the owner's first");
     }
 
     std::printf("\n%s%d checks\n", failures ? "FAILURES — " : "", checks);

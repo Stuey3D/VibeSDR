@@ -251,6 +251,13 @@ export interface SDRCallbacks {
   /** ★ The owner has FORCED the AGC on: a listener may not set a gain at all. The web client has
    *  always read this; the app never did, which is why its panel offered a gain the server refuses. */
   onHwAgcLocked?: (locked: boolean) => void;
+  /** ★★★ The owner has FIXED the gain on the band being listened to — every gain message is
+   *  refused, so the panel must show no gain controls at all rather than ones that spring back.
+   *  Distinct from onHwGainCap, which is a working control with a lower ceiling. Per band: it
+   *  arrives and departs with the ceiling as the listener tunes. */
+  onHwGainLocked?: (locked: boolean) => void;
+  /** The owner's IF ceiling for this band, as a GAIN position; -1 = none. RSP only. */
+  onHwIfGainCap?: (pos: number) => void;
   /** ★★★ THE OWNER'S GAIN CEILING FOR THE FREQUENCY WE ARE ON, in TENTHS of a dB, or -1 for none.
    *  ★★★ THE SERVER ENFORCES IT AND THE CLIENT MUST SHOW IT. A panel that offers gain the server
    *  will silently clamp is a panel that LIES — the listener drags to maximum, the readout says
@@ -2118,6 +2125,11 @@ export class UberSDRClient {
       // ★ Same rule as lockedRate above: the server ENFORCES this, so a client that cannot see it
       //   offers a control whose every use is refused.
       this.callbacks.onHwAgcLocked?.(msg.agcLocked === true);
+      // ★ Same rule again: the server refuses, so the client must not offer. Absent = not locked,
+      //   which is what every server before this one meant.
+      this.callbacks.onHwGainLocked?.(msg.gainLocked === true);
+      this.callbacks.onHwIfGainCap?.(
+        typeof msg.ifGainCap === 'number' ? (msg.ifGainCap as number) : -1);
       // ★ -1 when absent, never 0 — an older server that does not send the field must read as
       //   "no limit", and 0 would read as "no gain allowed at all".
       this.callbacks.onHwGainCap?.(

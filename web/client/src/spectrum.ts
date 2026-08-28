@@ -202,6 +202,16 @@ export interface SpectrumCallbacks {
               /** The owner has locked the AGC on: the switch must show as locked rather than
                *  appear to ignore the tap. */
               agcLocked?: boolean,
+              /** ★★★ THE CEILING IS THE SETTING, so there is nothing to offer. `gainCap` says "no
+               *  higher than this" and leaves a working control below it; this says the gain is
+               *  FIXED on this band and every gain message will be refused. Stuart, 2026-08-28:
+               *  "on a gain locked server all the listener sees is no controls at all." Sent per
+               *  band, so it arrives and departs with the ceiling as the listener tunes. */
+              gainLocked?: boolean,
+              /** The SDRplay's IF ceiling at this frequency, as a GAIN position; -1 = none. Unlike
+               *  the gain lock this one is CLAMPED by the server, so a client that cannot see it
+               *  lets the slider spring back. */
+              ifGainCap?: number,
               /** ★★★ WHERE THE GAIN ACTUALLY IS, in the radio's own units; -1 = auto/AGC. The
                *  slider follows the RADIO, because the radio is the authority on its own gain and
                *  we may not be the only listener. Restoring a remembered value and pushing it on
@@ -710,6 +720,8 @@ export class SpectrumClient {
                            Number(msg.lockedCentre) || 0,
                            typeof msg.gainCap === 'number' ? msg.gainCap : -1,
                            msg.agcLocked === true,
+                           msg.gainLocked === true,
+                           typeof msg.ifGainCap === 'number' ? msg.ifGainCap : -1,
                            typeof msg.gainNow === 'number' ? msg.gainNow : undefined,
                            msg.agc === 1 || msg.agc === true,
                            Number(msg.ovlSteps) || 0,

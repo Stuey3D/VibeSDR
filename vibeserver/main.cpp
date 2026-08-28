@@ -121,6 +121,10 @@ struct Opts {
     bool        rtlAgc = false;          // VibeSDR's own AGC for the dongle — see RadioConfig
     bool        tunerBwAuto = false;     // tuner IF filter follows the zoom — see RadioConfig
     int         agcLock  = -1;           // 1 = AGC forced on (RSP, Airspy HF+)
+    bool        gainLock = false;        // a capped band is FIXED at its ceiling — see RadioConfig
+    std::string ifGainLimits;            // SDRplay IF ceiling, per band
+    std::string gainSplits;              // HackRF LNA share of the total, 0-100, per band
+    bool        rateLock = false;        // the sample rate is PINNED, not merely capped
     int         adminIdleMin = 30;      // admin controls re-lock after this idle; 0 = never
     // ★ Local by default — the mode that behaves exactly as VibeServer always has. A new setting
     //   must never change what an existing install does.
@@ -436,6 +440,8 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.pin = c.pin; o.adminPass = c.adminPass; o.trustedProxies = c.trustedProxies;
     o.sessionLimitMin = c.sessionLimitMin;
     o.gainLimits = c.gainLimits; o.restGain = c.restGain; o.agcLock = c.agcLock;
+    o.gainLock = c.gainLock; o.ifGainLimits = c.ifGainLimits; o.gainSplits = c.gainSplits;
+    o.rateLock = c.rateLock;
     o.rtlAgc = c.rtlAgc; o.tunerBwAuto = c.tunerBwAuto;
     o.adminIdleMin    = c.adminIdleMin;
     o.publicSharing   = (c.sharing == vsconfig::Sharing::Public);
@@ -470,6 +476,8 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.pin = o.pin; c.adminPass = o.adminPass; c.trustedProxies = o.trustedProxies;
     c.sessionLimitMin = o.sessionLimitMin;
     c.gainLimits = o.gainLimits; c.restGain = o.restGain; c.agcLock = o.agcLock;
+    c.gainLock = o.gainLock; c.ifGainLimits = o.ifGainLimits; c.gainSplits = o.gainSplits;
+    c.rateLock = o.rateLock;
     c.rtlAgc = o.rtlAgc; c.tunerBwAuto = o.tunerBwAuto;
     c.adminIdleMin    = o.adminIdleMin;
     c.sharing         = o.publicSharing ? vsconfig::Sharing::Public : vsconfig::Sharing::Local;
@@ -1251,6 +1259,7 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerAuth(o.pin);     // empty = open; loopback is always exempt
     LocalSdrShim::setVibeServerLimits(o.maxBw, o.maxFps);
     LocalSdrShim::setVibeServerLockedRate(o.lockRate);
+    LocalSdrShim::setVibeServerRateLock(o.rateLock);
 
     // ── Channel method: decided ONCE, here, and never again while the process runs ──────────
     // Stuart, 2026-08-02: "never switch methods live, it is in the setup". Switching mid-stream
@@ -1489,6 +1498,13 @@ int main(int argc, char** argv) {
                     // ★ Everything else here still needs a restart, and the page still says so —
                     //   sample rate and ports cannot change under a running capture.
                     LocalSdrShim::setGainLimits(g_runtimeConfig.gainLimits);
+                    // ★ The lock and its two companions ride with the ceilings — they are the same
+                    //   setting read a different way, so they must land in the same breath or a
+                    //   live save leaves the server enforcing half of what the page shows.
+                    LocalSdrShim::setGainLock(g_runtimeConfig.gainLock);
+                    LocalSdrShim::setIfGainLimits(g_runtimeConfig.ifGainLimits);
+                    LocalSdrShim::setGainSplits(g_runtimeConfig.gainSplits);
+                    LocalSdrShim::setVibeServerRateLock(g_runtimeConfig.rateLock);
                     LocalSdrShim::setRestGain(g_runtimeConfig.restGain);
                     // ★ Both, together: the AGC raises the ceiling to the tuner's maximum, so it
                     //   must be applied where the gain settings are, not somewhere that could run
@@ -1942,6 +1958,9 @@ int main(int argc, char** argv) {
     //     rather than a lock: the control stays theirs, it simply cannot go past what the owner
     //     allows in that band. Empty limits and -1s are exactly the behaviour before this existed.
     LocalSdrShim::setGainLimits(o.gainLimits);
+    LocalSdrShim::setGainLock(o.gainLock);
+    LocalSdrShim::setIfGainLimits(o.ifGainLimits);
+    LocalSdrShim::setGainSplits(o.gainSplits);
     LocalSdrShim::setRestGain(o.restGain);
     LocalSdrShim::setAgcLock(o.agcLock == 1);
     /* ★★★ APPLIED WHERE THE RADIO ACTUALLY IS. The other two calls to this setter are in main()'s
