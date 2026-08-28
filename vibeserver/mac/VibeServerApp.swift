@@ -15,6 +15,127 @@ import AppKit
 import ServiceManagement
 import CoreLocation
 
+/* ── ★★★ THE ONLY PLATFORM WITH NO WAY TO LEARN IT IS OUT OF DATE ──────────────────────────────
+ *
+ *  Stuart, 2026-08-28: "we need a check for updates thing for MacOS as it is the only one without
+ *  an update mechanism, Linux has APT Android will have the Play Store MacOS has nothing." He is
+ *  right, and it matters more here than anywhere: a Mac running a public receiver is unattended for
+ *  months, and the one thing a stale server cannot do is tell you it is stale. Every fix shipped
+ *  this year reached a Pi within a day and a Mac only if its owner happened to look.
+ *
+ *  ★★ IT CHECKS AND SAYS. It does NOT download, install or restart anything. An auto-updater that
+ *     replaces a running receiver mid-broadcast is a much larger promise — signing, staging, a
+ *     restart that drops listeners — and every part of it can go wrong while nobody is watching.
+ *     Telling the owner, with a button that opens the download, is the whole of what was missing.
+ *  ★★ AGAINST THE RELEASE TAGS WE ALREADY PUBLISH — `vibeserver-mac-v<version>` — rather than a new
+ *     endpoint to keep alive. Listed and filtered by that prefix, NOT /releases/latest: the same
+ *     repository publishes Android APKs, and "latest" means the newest release of ANY kind, so one
+ *     non-prerelease app build would have every Mac announcing an update to a version that does not
+ *     exist for it.
+ *  ★ Quietly on a timer, loudly only when there is something to say: a check that interrupts to
+ *    report "you are up to date" trains people to dismiss it without reading. */
+@MainActor
+final class UpdateChecker: ObservableObject {
+    @Published var status = ""
+    @Published var newer: String? = nil          // the version available, when there is one
+    @Published var busy = false
+    /* ★★★ AND TELL SOMEBODY, or the badge is written and never read. render() paints the red arrow
+     *  — but it runs on server state changes, and the whole point of this check is the machine
+     *  nobody is touching: a receiver with no listeners and no clicks might not repaint for days,
+     *  so the answer would arrive and simply not be drawn. The one thing this feature does is
+     *  change something on screen; it has to say when it has. */
+    var onChange: (() -> Void)?
+    private var lastCheck = Date.distantPast
+    /* ★★ ON BY DEFAULT, AND SWITCHABLE OFF. A receiver that never learns it is out of date is the
+     *  fault this exists to fix, so the useful default is on — but it is an outbound request on
+     *  somebody else's machine, made without them asking, and that must always be refusable. Off,
+     *  the manual "Check for Updates…" still works: unticking means "do not check BY YOURSELF",
+     *  not "never tell me". */
+    @Published var autoCheck: Bool = UserDefaults.standard.object(forKey: "vsAutoUpdateCheck") == nil
+        ? true : UserDefaults.standard.bool(forKey: "vsAutoUpdateCheck") {
+        didSet { UserDefaults.standard.set(autoCheck, forKey: "vsAutoUpdateCheck") }
+    }
+
+    static func version(_ s: String) -> [Int] {
+        s.split(separator: ".").map { Int($0.filter(\.isNumber)) ?? 0 }
+    }
+    /// Numeric, component by component — "4.1.50" is newer than "4.1.9", which a string compare
+    /// gets backwards and a release eventually trips over.
+    static func isNewer(_ a: [Int], than b: [Int]) -> Bool {
+        for i in 0..<max(a.count, b.count) {
+            let x = i < a.count ? a[i] : 0, y = i < b.count ? b[i] : 0
+            if x != y { return x > y }
+        }
+        return false
+    }
+
+    var running: String {
+        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0"
+    }
+
+    /// `quiet` is the launch/daily path: it stays silent unless there is genuinely a newer build.
+    func check(quiet: Bool = false) {
+        if busy { return }
+        // ★ The opt-out binds the AUTOMATIC path only — an owner who presses the button has asked.
+        if quiet && !autoCheck { return }
+        // ★ Once a day is plenty for a server that is updated every few weeks, and it keeps a
+        //   long-running Mac from making a request every time the Settings pane is opened.
+        if quiet && Date().timeIntervalSince(lastCheck) < 24 * 3600 { return }
+        busy = true; lastCheck = Date()
+        if !quiet { status = "Checking…" }
+        guard let url = URL(string: "https://api.github.com/repos/Stuey3D/VibeSDR/releases?per_page=30") else {
+            busy = false; return
+        }
+        var req = URLRequest(url: url)
+        req.setValue("VibeServer-mac", forHTTPHeaderField: "User-Agent")
+        req.timeoutInterval = 15
+        URLSession.shared.dataTask(with: req) { [weak self] data, _, err in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.busy = false
+                guard let d = data, err == nil,
+                      let arr = try? JSONSerialization.jsonObject(with: d) as? [[String: Any]] else {
+                    // ★ Silent when it was not asked for: a receiver with no internet must not
+                    //   accumulate warnings about a check nobody requested.
+                    if !quiet { self.status = "Couldn't check just now — no answer from GitHub." }
+                    self.onChange?()
+                    return
+                }
+                let mine = Self.version(self.running)
+                var best: (v: [Int], tag: String)? = nil
+                for r in arr {
+                    guard let tag = r["tag_name"] as? String,
+                          tag.hasPrefix("vibeserver-mac-v") else { continue }
+                    let v = Self.version(String(tag.dropFirst("vibeserver-mac-v".count)))
+                    if best == nil || Self.isNewer(v, than: best!.v) { best = (v, tag) }
+                }
+                guard let b = best else {
+                    if !quiet { self.status = "Couldn't find a published Mac release to compare with." }
+                    self.onChange?()
+                    return
+                }
+                if Self.isNewer(b.v, than: mine) {
+                    let s = b.v.map(String.init).joined(separator: ".")
+                    self.newer = s
+                    self.status = "VibeServer \(s) is available — you have \(self.running)."
+                } else {
+                    self.newer = nil
+                    if !quiet { self.status = "You have the latest version (\(self.running))." }
+                }
+                self.onChange?()
+            }
+        }.resume()
+    }
+
+    /// The page the owner downloads from — the release we just found, not a generic list.
+    func openDownload() {
+        let tag = newer.map { "vibeserver-mac-v\($0)" } ?? ""
+        let u = tag.isEmpty ? "https://github.com/Stuey3D/VibeSDR/releases"
+                            : "https://github.com/Stuey3D/VibeSDR/releases/tag/\(tag)"
+        if let url = URL(string: u) { NSWorkspace.shared.open(url) }
+    }
+}
+
 // ── Coarse location from the Mac itself ──────────────────────────────────────
 // ★★ DELIBERATELY COARSE, and it fills the LOCATOR rather than the coordinate fields.
 // The operator is publishing where their ANTENNA is to anyone who connects, and a 6-character
@@ -1137,11 +1258,25 @@ enum Main {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let server = Server()
+    /// ★ Shared with the Settings pane so both read one answer — see UpdateChecker.
+    let updates = UpdateChecker()
     private var item: NSStatusItem!
     private var settingsWindow: NSWindow?
+    private var updateTimer: Timer?
 
     func applicationDidFinishLaunching(_ note: Notification) {
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        /* ★★ QUIETLY, ON LAUNCH AND ONCE A DAY. A receiver left running for months is the case this
+         *  exists for, so a check that only happens at launch would never fire on the machine that
+         *  needs it most. Quiet: it says nothing at all unless there is a newer build, and the
+         *  checker's own daily floor keeps the timer from turning into traffic. */
+        // ★ See UpdateChecker.onChange — the badge is painted in render(), which nothing else
+        //   would call on an idle server.
+        updates.onChange = { [weak self] in self?.render() }
+        updates.check(quiet: true)
+        updateTimer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.updates.check(quiet: true) }
+        }
 
         if let button = item.button {
             button.image = Self.templateIcon()
@@ -1166,11 +1301,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func render() {
         guard let button = item.button else { return }
         button.appearsDisabled = !server.running
+        /* ★★★ A RED ARROW BESIDE THE ICON, AND NOTHING ELSE. Stuart, 2026-08-28: "no popup box on
+         *  boot just a red update arrow next to the menubar icon to show an update is available."
+         *  A dialog at launch is the wrong shape for this: it arrives while somebody is doing
+         *  something else, it has to be dismissed before the app can be used, and being dismissed
+         *  is exactly what it teaches. A mark on the icon waits for the glance instead — and this
+         *  app is ALREADY read by glancing, which is what the listener count beside it is for.
+         * ★★ Drawn in render() rather than at the moment the check returns, because every other
+         *  thing that changes this button is drawn here; a badge painted from its own callback
+         *  would be wiped by the next state change and reappear only after the following one. */
+        let updateMark = updates.newer != nil ? "\u{2191}" : ""   // ↑
         if server.radioLost {
             // Serving, but with nothing to serve. Say so in the menu bar rather than showing a
             // healthy icon over a dead radio.
             button.appearsDisabled = true
-            button.title = " !"
+            button.title = " !" + updateMark
             button.toolTip = "VibeServer — radio disconnected"
         } else if server.running {
             // ★★★ THE COUNT HAS TWO SOURCES AND THE BADGE ONLY KNEW ONE. `listeners` reads the core
@@ -1183,15 +1328,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             //       two cannot drift: whoever adds a third mode has to answer this question twice
             //       in one file, not once here and once somewhere they never looked.
             let n = server.fullMode ? server.fullListeners : server.listeners
-            button.title = n > 0 ? " \(n)" : ""
+            button.title = (n > 0 ? " \(n)" : "") + updateMark
             button.toolTip = n > 0
                 ? "VibeServer — \(n) listening · \(server.address)"
                 : "VibeServer — serving, nobody listening · \(server.address)"
         } else {
-            button.title = ""
+            button.title = updateMark
             button.toolTip = server.deviceCount == 0
                 ? "VibeServer — no SDR connected"
                 : "VibeServer — stopped"
+        }
+        /* ★ RED, or it is not a signal — the title is otherwise the listener count in the menu
+         *  bar's own colour, and an arrow in that colour reads as part of the count. Attributed
+         *  because a status item's title takes no tint of its own.
+         * ★★ The tooltip carries the version: the arrow says "something", the hover says what. */
+        if updates.newer != nil {
+            button.attributedTitle = NSAttributedString(
+                string: button.title,
+                attributes: [.foregroundColor: NSColor.systemRed])
+            button.toolTip = (button.toolTip ?? "") + " · update available"
         }
     }
 
@@ -1287,6 +1442,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        /* ★★ IN THE MENU, NOT ONLY IN SETTINGS. This app is a menu-bar icon: an owner who has it
+         *  running and working may not open Settings for months, which is exactly the person the
+         *  check exists for. The title carries the answer when there is one, so the news arrives
+         *  without anything being opened at all. */
+        do {
+            let t = updates.newer.map { "Update to VibeServer \($0)…" } ?? "Check for Updates…"
+            let mi = menu.addItem(withTitle: t, action: #selector(checkForUpdates), keyEquivalent: "")
+            mi.target = self
+        }
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit VibeServer", action: #selector(quit), keyEquivalent: "q")
 
@@ -1336,9 +1500,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleServing() { server.running ? server.stop() : server.start(); render() }
     @objc private func quit() { server.stop(); NSApp.terminate(nil) }
 
+    /// ★ If we already know about a newer build, go straight to it — the second press of a button
+    ///   that has already answered should act on the answer, not repeat the question.
+    @objc private func checkForUpdates() {
+        if updates.newer != nil { updates.openDownload(); return }
+        updates.check()
+        openSettings()          // where the result appears
+    }
+
     @objc private func openSettings() {
         if settingsWindow == nil {
-            let host = NSHostingController(rootView: SettingsView(server: server))
+            let host = NSHostingController(rootView: SettingsView(server: server, updates: updates))
             // Don't let the hosting controller drive the window size back to the Form's full ideal
             // height — that is exactly what pushed the lower sections off-screen. We size the
             // window ourselves below and let the Form scroll inside it.
@@ -1382,6 +1554,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct SettingsView: View {
     @ObservedObject var server: Server
     @StateObject private var finder = LocationFinder()
+    /// ★ "Work it out for me" is in flight — see the button. Its own flag rather than finder.busy:
+    ///   they are two different lookups and either one may be running while the other is not.
+    @State private var geoBusy = false
+    /// ★ The delegate's checker, not a second one — two would disagree about what is available.
+    @ObservedObject var updates: UpdateChecker
 
     // ★★★ TWO MODES, TWO VIEWS — NOT ONE FORM FULL OF `if`s.
     //
@@ -1532,6 +1709,31 @@ struct SettingsView: View {
                     set: { server.openAtLogin = $0 }))
                 Toggle("Start serving when VibeServer opens", isOn: $server.autoStart)
             }
+
+            /* ★★★ THE ONLY PLATFORM THAT COULD NOT TELL YOU IT WAS OLD — see UpdateChecker. A Pi
+             *   has apt and Android will have Play; a Mac had nothing at all, and a receiver left
+             *   running for months is exactly the one that needs telling.
+             * ★ The pane is where the ANSWER lives; the menu bar is where the NEWS arrives (a red
+             *   arrow beside the icon, never a dialog at launch). */
+            Section("Updates") {
+                Toggle("Check for updates automatically", isOn: $updates.autoCheck)
+                Text("Once a day, quietly. A red arrow appears beside the menu-bar icon when there "
+                     + "is a newer version — nothing interrupts you, and nothing installs itself.")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Button(updates.busy ? "Checking…" : "Check now") { updates.check() }
+                        .disabled(updates.busy)
+                    if updates.newer != nil {
+                        Button("Download \(updates.newer ?? "")…") { updates.openDownload() }
+                    }
+                    Spacer()
+                    Text("You have \(updates.running)").font(.caption).foregroundStyle(.secondary)
+                }
+                if !updates.status.isEmpty {
+                    Text(updates.status).font(.caption)
+                        .foregroundStyle(updates.newer != nil ? Color.orange : .secondary)
+                }
+            }
         }
         .formStyle(.grouped)
         .frame(minWidth: 380)
@@ -1664,6 +1866,60 @@ struct SettingsView: View {
                     // delivers a SQUARE — Hans pressed it expecting coordinates, got "JO32bl", and had
                     // to search the web to learn it was his own town (2026-07-27). Naming the output
                     // costs nothing and removes the surprise before it happens.
+                    /* ★★★ THE ROUTE FOR SOMEBODY WHO WILL NOT GIVE LOCATION PERMISSION — and for
+                     *   every Linux owner, who has no such button at all. Until now the answer to a
+                     *   refusal was "type a locator instead", which asks the one question a newcomer
+                     *   cannot answer: Stuart, 2026-08-28, "there are going to be a lot of people who
+                     *   may not know what a maidenhead locator is, I didnt until recently."
+                     * ★★ SAME WORDS AS THE SETUP PAGE. An owner who runs a Mac and a Pi meets this
+                     *   idea twice, and it should be the same idea both times — "Work it out for me",
+                     *   from the Place field, resolved to a square and named back to them.
+                     * ★ Geocoded here rather than in the server: the SERVER never calls out for this
+                     *   on any platform, and a receiver with no internet is no worse off than it was. */
+                    Button(geoBusy ? "Looking up…" : "Work it out for me") {
+                        let town = server.rxPlace.trimmingCharacters(in: .whitespaces)
+                        guard !town.isEmpty else {
+                            finder.statusIsError = true
+                            finder.status = "Type your town in Place first, then press this."
+                            return
+                        }
+                        geoBusy = true
+                        let iso = server.rxIso.trimmingCharacters(in: .whitespaces)
+                        let q = (town + (iso.isEmpty ? "" : ", " + iso))
+                            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? town
+                        guard let url = URL(string:
+                            "https://nominatim.openstreetmap.org/search?format=json&limit=1&q=\(q)") else {
+                            geoBusy = false; return
+                        }
+                        var req = URLRequest(url: url)
+                        // ★ Nominatim's usage policy asks for an identifying UA — the same one the
+                        //   phone app sends, so one service sees one application.
+                        req.setValue("VibeSDR/8 (https://github.com/stuey3d/VibeSDR)",
+                                     forHTTPHeaderField: "User-Agent")
+                        URLSession.shared.dataTask(with: req) { data, _, _ in
+                            DispatchQueue.main.async {
+                                geoBusy = false
+                                guard let d = data,
+                                      let arr = try? JSONSerialization.jsonObject(with: d) as? [[String: Any]],
+                                      let first = arr.first,
+                                      let latS = first["lat"] as? String, let lonS = first["lon"] as? String,
+                                      let la = Double(latS), let lo = Double(lonS) else {
+                                    finder.statusIsError = true
+                                    finder.status = "Couldn't look that up. Check the town, or type "
+                                                  + "latitude and longitude — those need no internet."
+                                    return
+                                }
+                                let sq = server.maidenhead(la, lo)
+                                server.rxGrid = sq
+                                // ★ Named back, with the size of the square: six letters the owner
+                                //   cannot check are worse than a field they had to look up.
+                                finder.statusIsError = false
+                                finder.status = "Filled in locator \(sq) — a square a few km across "
+                                              + "near \(town). Your exact position is not published."
+                            }
+                        }.resume()
+                    }
+                    .disabled(geoBusy)
                     Button(finder.busy ? "Locating…" : "Fill in locator from this Mac") {
                         finder.find { lat, lon, town, iso in
                             // ★ Fill the LOCATOR, not the coordinates. See LocationFinder:
