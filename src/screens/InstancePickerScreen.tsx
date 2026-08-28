@@ -975,8 +975,22 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     if (!autoVibe) { autoVibeFired.current = false; return; }
     if (autoVibeFired.current || connecting) return;
     autoVibeFired.current = true;
+    /* ★★★ THIS EFFECT USED TO CANCEL ITSELF, EVERY TIME. It cleared its own trigger param here and
+     *   guarded the async work with a `cancelled` flag set from the cleanup — but clearing the
+     *   param CHANGES route.params, which re-runs the effect, which runs the previous run's
+     *   cleanup, which set cancelled BEFORE the first await had returned. So the probe completed,
+     *   the guard tripped, and openVibeServer was never called: Stuart, 2026-08-28, "phone never
+     *   starts the connection either."
+     * ★★ THE PARAM IS CLEARED AFTER THE WORK, and there is no cleanup flag at all — the fired ref
+     *   is the whole guard, which is what autoSpy has always relied on. autoSpy never met this
+     *   because it calls connectSpy SYNCHRONOUSLY; the moment there is an await between clearing
+     *   the trigger and using it, the two mechanisms fight and the quiet one wins.
+     * ★★ CLEARED IMMEDIATELY, and that is safe ONLY because there is no cleanup flag any more —
+     *   the values this needs are already captured in the closure. It has to happen on EVERY exit
+     *   path, including the failures below: leaving the param set leaves `fired` latched, and the
+     *   next attempt from the wrist would be swallowed by the guard at the top. A retry that is
+     *   silently ignored is indistinguishable from a phone that has stopped listening. */
     navigation.setParams({ autoVibe: undefined });
-    let cancelled = false;
     (async () => {
       const door = autoVibe.url.replace(/\/r\/[^/]+\/?$/, '');
       let host = '', port = 443;
@@ -998,17 +1012,15 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
          *   true (that is where this phone now is) and the one place the wearer can act. */
         watchProvider.setPhoneStatus('pick');
         watchTargetPending.claimed = false;
-        if (!cancelled) Alert.alert('VibeServer', `Could not reach ${door}. Is it still up?`);
+        Alert.alert('VibeServer', `Could not reach ${door}. Is it still up?`);
         return;
       }
-      if (cancelled) return;
       /* ★★ A PIN PROMPT IS A DEAD END FOR THE WRIST. openVibeServer puts an Alert on the PHONE and
        *  waits for typing; the watch cannot help and must not sit on "Starting…" while it happens.
        *  Say where the phone actually is — the wearer picks the phone up, or chooses again. */
       if (needsPin) { watchProvider.setPhoneStatus('pick'); watchTargetPending.claimed = false; }
       openVibeServer(host, port, autoVibe.name, needsPin, autoVibe.url);
     })();
-    return () => { cancelled = true; };
   }, [autoVibe, connecting, navigation, openVibeServer]);
 
   // Parse the add-RTL-TCP modal: accept "host", "host:port", separate fields, or a
