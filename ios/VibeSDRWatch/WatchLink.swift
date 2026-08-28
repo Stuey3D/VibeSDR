@@ -489,6 +489,23 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     send(["cmd": "reopen"])
   }
 
+  /* ★★★ USER OPENED THE SERVER LIST FROM THE START SCREEN — the second door out of the latch.
+   *
+   *  NOT a reopen(): reopen tells the phone to come back and connect, which lands on whatever its
+   *  default is. This says only "show me the list". We therefore do NOT start the heartbeat and do
+   *  NOT send anything here — the wake, if one is needed, is the durable `browse` the picker sends
+   *  when the wearer opens a directory, and the connect is the ordinary `inst` when they pick a row.
+   *  Buddy still never pokes the phone of its own accord.
+   *
+   *  ★★ `deliberatelyClosed` IS released, because the user has just asked for the phone. Without
+   *     that, apply()'s one-place latch-clear would ignore the phone's reply and Buddy would sit on
+   *     the picker with a live phone behind it. `phoneClosed` is left alone and simply outranked by
+   *     showServers — it clears itself the moment the phone says anything back. */
+  func openServers() {
+    deliberatelyClosed = false
+    showServers = true
+  }
+
   /// User pressed "Close Buddy". We cannot terminate a watchOS app from code, so go dormant:
   /// heartbeat off (nothing relaunches the phone), and the closed screen stays up with no
   /// Reopen pressure. The user can swipe Buddy away, or reopen the phone app to resume.

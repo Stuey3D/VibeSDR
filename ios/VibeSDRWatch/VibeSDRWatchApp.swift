@@ -10,8 +10,22 @@ struct VibeSDRWatchApp: App {
   /// no live session to latch onto and is waiting for a choice. Never while a waterfall is up
   /// unless explicitly requested — an already-connected phone means "show me what it's showing".
   private var showPicker: Bool {
-    if link.phoneClosed { return false }
+    /* ★★★ A USER-OPENED SERVER LIST OUTRANKS THE START SCREEN, and this order is the whole fix.
+     *
+     *  `phoneClosed` used to veto the picker outright, so a cold Buddy open — which ALWAYS latches
+     *  it (activate(): no rows yet ⇒ Start screen, no ping, no boot) — left no route to a directory
+     *  at all. The phone was supposed to break that latch by volunteering its status every 4 s, but
+     *  that tick is a JS timer: with nothing playing and VibeSDR off screen, iOS suspends the app
+     *  and the tick stops. Watch silent by design, phone suspended — nobody speaks. Stuart,
+     *  2026-08-28: the directory only ever worked while the servers button kept audio (and so the
+     *  JS runtime) alive in the background.
+     *
+     *  ★★ SO LET THE WEARER ASK. Opening the list is a deliberate act, exactly like tapping
+     *     ▶ Start — and `browse()` is durable (transferUserInfo), which wakes a suspended phone.
+     *     Nothing is sent until the user acts, so the anti-hijack rule is untouched: Buddy still
+     *     never pokes the phone on its own. */
     if link.showServers { return true }
+    if link.phoneClosed { return false }
     // phoneStatus is authoritative: 'pick'/'setup' means the phone has NO live session and
     // wants a choice. A connected phone sends 'ready' (+ rows), so this stays false and Buddy
     // latches onto whatever the phone is showing. (everGotRow is sticky, so it can't gate this.)
@@ -25,17 +39,9 @@ struct VibeSDRWatchApp: App {
       // bottom row off; that chrome cannot be removed from a sheet.
       NavigationStack {
         Group {
-          if link.phoneClosed {
-            // Two very different reasons the rows stopped, two different screens:
-            //  • the phone is HERE (reachable) or we KNOW you closed it (goodbye) → offer to Start it.
-            //  • the phone is OUT OF BLUETOOTH REACH (on Wi-Fi away from it) → Start would do nothing;
-            //    Buddy can't work without the phone, so ask you to get back to it.
-            if link.reachable || link.deliberatelyClosed {
-              PhoneClosedView()          // "Start VibeSDR"
-            } else {
-              ConnectToIPhoneView()      // "Connect to iPhone"
-            }
-          } else if showPicker {
+          // showPicker FIRST: a deliberately-opened server list must win over the Start screen
+          // (see showPicker — it is the only way to reach a directory with no live session).
+          if showPicker {
             // Reuses Jr's picker verbatim (same page, same words) — the ONLY difference is
             // that the PHONE connects, not the watch: onConnect sends cmd:inst.
             // On-the-fly switch (opened from the menu while a session is live): a "Close Server List"
@@ -46,9 +52,23 @@ struct VibeSDRWatchApp: App {
                 link.selectInstance(server.url, type: server.serverType.rawValue, name: server.name)
                 link.showServers = false
               },
-              onClose: (link.everGotRow && link.showServers) ? { link.showServers = false } : nil
+              // ★ ALSO closable with NO session behind it. Opened from the Start screen there is no
+              //   waterfall to go back to — but there must still be a way BACK, or choosing Servers
+              //   on a phone that never answers is a dead end with only the crown out of it.
+              onClose: ((link.everGotRow || link.phoneClosed) && link.showServers)
+                ? { link.showServers = false } : nil
             )
             .environmentObject(favs)
+          } else if link.phoneClosed {
+            // Two very different reasons the rows stopped, two different screens:
+            //  • the phone is HERE (reachable) or we KNOW you closed it (goodbye) → offer to Start it.
+            //  • the phone is OUT OF BLUETOOTH REACH (on Wi-Fi away from it) → Start would do nothing;
+            //    Buddy can't work without the phone, so ask you to get back to it.
+            if link.reachable || link.deliberatelyClosed {
+              PhoneClosedView()          // "Start VibeSDR"
+            } else {
+              ConnectToIPhoneView()      // "Connect to iPhone"
+            }
           } else {
             // Routed by BACKEND, not by a strip swap: FM-DX has no spectrum at all, so it
             // gets its own screen. The phone never tells us which screen to be — what it
@@ -89,7 +109,21 @@ struct PhoneClosedView: View {
         }.frame(maxWidth: .infinity).padding(.vertical, 8)
       }
       .buttonStyle(.plain).foregroundStyle(.orange)
-      Text("VibeSDR isn't running on your iPhone. Start it to connect.")
+      /* ★★★ THE OTHER DOOR. "Start" connects — to the phone's DEFAULT, wherever that points. This
+       *   one goes to the server list instead, and it is the only way to reach a directory when
+       *   there is no live session: a cold open latches phoneClosed, Buddy then sends nothing, and
+       *   a suspended phone has no JS timer left to speak up with. Stuart, 2026-08-28: opening a
+       *   directory with nothing playing landed here, on the orange play button, every time.
+       * ★★ Browsing is DURABLE (transferUserInfo), so choosing this wakes the phone — a wake the
+       *    WEARER asked for, which is the same licence ▶ Start has always had. Buddy still never
+       *    does it unprompted. */
+      Button { link.openServers() } label: {
+        Label("Servers", systemImage: "antenna.radiowaves.left.and.right")
+          .font(.system(size: 14, weight: .semibold))
+          .frame(maxWidth: .infinity).padding(.vertical, 6)
+      }
+      .buttonStyle(.plain).foregroundStyle(.white.opacity(0.85))
+      Text("VibeSDR isn't running on your iPhone. Start it to connect, or pick a server to open.")
         .font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
         .multilineTextAlignment(.center)
       Text("Press the crown to leave Buddy.")

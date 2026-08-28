@@ -51,6 +51,8 @@ struct InstancePickerView: View {
   let onConnect: (SDRServer) -> Void
   /// Non-nil ONLY when there's a live session to go back to (opened from the menu while connected).
   /// Shows a "Close Server List" row at the top; nil on a cold boot where there's nowhere to return.
+  /// ★ "Nowhere to return" now includes the START screen: the list can be opened from there with no
+  ///   session at all, and that route must be closable too or it is a dead end (see VibeSDRWatchApp).
   var onClose: (() -> Void)? = nil
 
   private static let amber = Color(red: 0xff/255, green: 0xaa/255, blue: 0x00/255)

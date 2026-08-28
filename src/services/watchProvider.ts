@@ -829,7 +829,12 @@ class WatchProvider {
     id: string; name: string; type: string; country: string | null;
     users: number; full: boolean; dist: number | null;
   }[]) {
-    if (!this.available || !this.reachable) return;
+    /* NOT gated on `reachable` — same reasoning as flushPhone(). A browse that WOKE us headless is
+     * answered before the isReachable poll has settled, so this flag was still false and the reply
+     * was dropped on the floor: the wrist span for 20 s and then said the phone was silent, about a
+     * phone that had just fetched the whole directory for it. The native side gates on `linkAlive`
+     * (reachable OR we heard from the watch < 10 s ago) — and we demonstrably just did. */
+    if (!this.available) return;
     Native?.sendDirectory?.(JSON.stringify({ dir: dirId, servers }));
   }
 

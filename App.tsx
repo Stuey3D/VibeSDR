@@ -403,6 +403,13 @@ export default function App() {
     // The watch asked to browse a directory. The PHONE fetches it (its own service), caches the full
     // server objects (so a later connect resolves to them), and sends the watch a light display list.
     const browseForWatch = (dirId: string) => {
+      /* ★★★ A BROWSE CAN BE WHAT WOKE US, and a woken picker must not connect past the wearer.
+       *   The watch's browse is durable (transferUserInfo), so it launches this app headless when
+       *   it has been suspended — and InstancePicker's mount effect then auto-connects to the
+       *   DEFAULT instance, i.e. audio pours out of a phone whose owner only asked to see a list.
+       *   `claimed` is exactly the "the watch is deciding where we go, stand down" flag; a browse
+       *   is that decision beginning. Cleared by applyInstance when the choice actually lands. */
+      watchTargetPending.claimed = true;
       fetchDirectory(dirId as DirectoryId)
         .then((all) => {
           /* ★★★ HIDE RECEIVERS THAT REFUSE THIRD-PARTY APPS — the watch has no way to recover from
