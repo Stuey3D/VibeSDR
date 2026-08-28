@@ -116,6 +116,7 @@ const K = {
   advanced: 'vs_advanced', maxUsers: 'vs_maxusers',
   allowRanges: 'vs_allow', blockRanges: 'vs_block',
   gainLimits: 'vs_gainlimits', restGain: 'vs_restgain', agcLock: 'vs_agclock',
+  gainLocks: 'vs_gainlocks', gainSplits: 'vs_gainsplits',
   rtlAgc: 'vs_rtlagc', tunerBwAuto: 'vs_tunerbwauto', publicName: PUBLIC_NAME_KEY,
   proxies: 'vs_proxies', radioUse: 'vs_radiouse', oneRadioPerIp: 'vs_oneradioperip',
   landingHz: 'vs_landinghz', landingMode: 'vs_landingmode', biasT: 'vs_biast',
@@ -221,6 +222,11 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [allowRanges, setAllowRanges] = useState('');
   const [blockRanges, setBlockRanges] = useState('');
   const [gainLimits, setGainLimits]   = useState('');
+  /** ★★ WHICH BANDS ARE FIXED at their ceiling rather than limited by it, and — on a HackRF — where
+   *  between LNA and VGA a fixed band's total sits. Per band, both of them: an owner can hold FM at
+   *  one figure and leave HF adjustable under a ceiling (Stuart, 2026-08-28). */
+  const [gainLocks, setGainLocks]     = useState('');
+  const [gainSplits, setGainSplits]   = useState('');
   const [restGain, setRestGain]       = useState(-1);
   /** ★★★ ONE SLIDER, TWO MEANINGS — see the note by the toggles. Protection is ON by default (it
    *  can only ever prevent clipping); the AGC is OFF, because it may raise the gain above what the
@@ -372,8 +378,12 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       const n = await getServerName(route.params?.name ?? 'VibeSDR');
       setName(n);
       try {
+        /* ★★ POSITIONAL, so a name added here must land in the SAME place as its getItem below.
+         *   glk/gsp sit immediately after gl because that is where their reads were inserted —
+         *   put them anywhere else and every variable after them silently takes its neighbour's
+         *   value, which type-checks perfectly and is wrong at run time. */
         const [p, a, pm, sp, r, fp, cp, ws, apw, unc, lim, fm,
-               mu, alw, blk, gl, rg, agl, ragc, px, ru, lhz, lmd, bt] = await Promise.all([
+               mu, alw, blk, gl, glk, gsp, rg, agl, ragc, px, ru, lhz, lmd, bt] = await Promise.all([
           AsyncStorage.getItem(K.proto), AsyncStorage.getItem(K.advertise),
           AsyncStorage.getItem(K.pinMode), AsyncStorage.getItem(K.pin),
           AsyncStorage.getItem(K.rate), AsyncStorage.getItem(K.fps),
@@ -382,6 +392,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           AsyncStorage.getItem(K.limitMin), AsyncStorage.getItem(K.advanced),
           AsyncStorage.getItem(K.maxUsers), AsyncStorage.getItem(K.allowRanges),
           AsyncStorage.getItem(K.blockRanges), AsyncStorage.getItem(K.gainLimits),
+          AsyncStorage.getItem(K.gainLocks), AsyncStorage.getItem(K.gainSplits),
           AsyncStorage.getItem(K.restGain), AsyncStorage.getItem(K.agcLock),
           AsyncStorage.getItem(K.rtlAgc),
           AsyncStorage.getItem(K.proxies), AsyncStorage.getItem(K.radioUse),
@@ -396,6 +407,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         // ★ Absent = AGC OFF. An existing server must not come back with the AGC quietly enabled
         //   by an upgrade — it may raise the gain above what the owner set.
         if (ragc != null) setRtlAgc(ragc === '1');
+        if (glk != null) setGainLocks(glk);
+        if (gsp != null) setGainSplits(gsp);
         if (lim != null) setLimitMin(Number(lim) || 0);
         if (fm != null) setAdvanced(fm === '1');
         // ★ Loaded separately from the tuple above: adding thirteen more entries to a positional
@@ -826,7 +839,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.zoomSpectrum, live.current.zoomSpec ? '1' : '0'], [K.spectrogram, live.current.spectrogram ? '1' : '0'],
       [K.idleGrace, String(live.current.idleGrace)], [K.antenna, live.current.antenna], [K.antennaIcon, live.current.antennaIcon],
       [K.allowRanges, allowRanges], [K.blockRanges, blockRanges],
-      [K.gainLimits, gainLimits], [K.restGain, String(restGain)],
+      [K.gainLimits, gainLimits], [K.gainLocks, gainLocks], [K.gainSplits, gainSplits],
+      [K.restGain, String(restGain)],
       [K.rtlAgc, rtlAgc ? '1' : '0'],
       [K.tunerBwAuto, tunerBwAuto ? '1' : '0'],
       [K.agcLock, agcLock ? '1' : '0'], [K.proxies, proxies],
@@ -890,7 +904,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           ? { lockedCentre: live.current.lockedCentre, zoomSpectrum: live.current.zoomSpec,
               spectrogram: live.current.spectrogram }
           : {}),
-        gainLimits, restGain, agcLock, trustedProxies: proxies, oneRadioPerIp,
+        gainLimits, gainLocks, gainSplits, restGain, agcLock,
+        /* ★★★ THE SCREEN ALREADY SAID "PINNED — listeners cannot change it" whenever a rate was
+         *   chosen, and the server only ever treated `lockedRate` as a CEILING: anything narrower
+         *   was allowed. So the words on this screen have been ahead of the behaviour. rateLock
+         *   makes the claim true, and it is derived rather than a second switch — the app's model
+         *   is already "0 = listener's choice, anything else = pinned". */
+        rateLock: rate > 0,
+        trustedProxies: proxies, oneRadioPerIp,
         rtlAgc,
         tunerBwAuto,
       });
@@ -919,7 +940,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   }, [name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
       webServer, locMode, locCity, checkBackgroundAllowed,
       adminPw, uncomp, limitMin, advanced, maxUsers, allowRanges, blockRanges,
-      gainLimits, restGain, agcLock, proxies, rtlAgc, tunerBwAuto, oneRadioPerIp]);
+      gainLimits, gainLocks, gainSplits, restGain, agcLock, proxies, rtlAgc, tunerBwAuto,
+      oneRadioPerIp]);
 
   const stopAndBack = useCallback(() => {
     stopAdvertiseRtlTcp();
@@ -2112,12 +2134,32 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   gainSteps={RTL_GAINS}
                   value={gainLimits}
                   onChange={(v) => { setGainLimits(v); AsyncStorage.setItem(K.gainLimits, v); }}
+                  /* ★★ THE LOCK, PER BAND — the phone's half of the setup page's "Lock this band".
+                       Pick "All bands" and lock that and the whole radio is fixed, which is how a
+                       radio-wide lock is spelled: "all bands" was always just another band. */
+                  lockable
+                  locks={gainLocks}
+                  onLocksChange={(v) => { setGainLocks(v); AsyncStorage.setItem(K.gainLocks, v); }}
+                  /* ★★★ THE HACKRF NEEDS A SECOND NUMBER TO BE SET WITH. LNA + VGA = 30 dB describes
+                       a family of radios, not one — so a FIXED HackRF band carries where between the
+                       two stages that total sits. Only on a HackRF, and only when the band is being
+                       locked: as a limiter the listener still chooses their own split, which is
+                       today's behaviour and stays. The SDRplay's IF ceiling has no equivalent here
+                       on purpose — there is no SDRplay on Android, and a control with no radio to
+                       act on is one to leave out rather than ship inert (AGENTS.md). */
+                  splittable={radio?.driver === 'hackrf'}
+                  splits={gainSplits}
+                  onSplitsChange={(v) => { setGainSplits(v); AsyncStorage.setItem(K.gainSplits, v); }}
                   placeholder="max, e.g. 25 dB"
                   emptyText="No ceilings — listeners have the full range." />
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
                   Cap the bands that overload and leave the rest open — a strong local FM
                   transmitter is the usual reason, while HF wants everything the radio has.
                   &quot;all&quot; caps everywhere; a tighter per-band ceiling still wins.{'\n\n'}
+                  Lock a band and its ceiling becomes the SETTING: the gain sits exactly there and
+                  listeners get no gain controls at all on it. Leave it unlocked and they keep the
+                  controls and simply cannot go past it — so FM can be held at one figure while HF
+                  stays adjustable underneath a ceiling.{'\n\n'}
                   The return gain is applied when the LAST listener leaves, so somebody who turns it
                   up does not leave it up for the next person. Tuning into a capped band brings the
                   gain down automatically.

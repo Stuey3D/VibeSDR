@@ -186,6 +186,13 @@ object VibeServerBoot {
                 if (adv) cfg.s("gainLimits") else "",
                 restGain,
                 adv && cfg.b("agcLock", false))
+            // ★ In the same breath as the ceilings they reinterpret: the lock decides whether those
+            //   figures are a limit or the setting, so a path that applies one without the other
+            //   enforces half of what the screen shows.
+            VibeLocalSDR.setGainLock(
+                if (adv) cfg.s("gainLocks") else "",
+                if (adv) cfg.s("gainSplits") else "",
+                adv && cfg.b("rateLock", false))
         }
         VibeLocalSDR.setVibeServerLockedRate(cfg.n("lockedRate", 0.0))
         VibeLocalSDR.setServeOnLan(true)

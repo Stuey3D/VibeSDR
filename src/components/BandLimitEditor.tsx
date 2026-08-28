@@ -50,7 +50,35 @@ type Props = {
    *     the gain").
    */
   gainSteps?: number[];
+  /* ★★★ THE LOCK IS PER BAND — the phone's half of the setup page's "Lock this band". A ceiling can
+   *   be a limit (the listener keeps the control and cannot go past it) or the SETTING (the gain
+   *   sits there and there are no controls at all), and which of the two is a question about the
+   *   BAND: Stuart, 2026-08-28 — "I can lock the gain on FM but allow it to be unlocked but limited
+   *   for HF." Stored in its own parallel list, keyed by band, exactly as the server stores it.
+   * ★ Absent props = no lock UI at all, which is what the allow/block lists want. */
+  lockable?: boolean;
+  locks?: string;
+  onLocksChange?: (next: string) => void;
+  /** HackRF only: when a band is LOCKED, the LNA's share of that band's total, 0-100. A total does
+   *  not determine two stages, so a ceiling is enough to limit with and not enough to set with. */
+  splittable?: boolean;
+  splits?: string;
+  onSplitsChange?: (next: string) => void;
 };
+
+/** A parallel per-band list ("fm:1, hf:0") as a map. The band syntax and the parser are the
+ *  server's own, so nothing here has to know what a band is. */
+function sideMap(value?: string): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const e of parse(value ?? '')) {
+    const c = e.lastIndexOf(':');
+    if (c >= 0) out[e.slice(0, c).trim().toLowerCase()] = parseInt(e.slice(c + 1), 10);
+  }
+  return out;
+}
+function sideWrite(m: Record<string, number>): string {
+  return Object.keys(m).map(k => `${k}:${m[k]}`).join(', ');
+}
 
 /** Split the server string into entries, tolerating the spacing a person actually types. */
 function parse(value: string): string[] {
@@ -77,6 +105,11 @@ export default function BandLimitEditor(p: Props) {
    *  moved should not quietly be the lowest one on the list. */
   const steps = p.gainSteps && p.gainSteps.length ? p.gainSteps : [];
   const [gainIdx, setGainIdx] = useState(Math.max(0, steps.length - 1));
+  /** ★ Belongs to the ENTRY being added, not to the radio — so it starts clear each time rather
+   *  than inheriting whatever the last band was given. */
+  const [lockNext, setLockNext] = useState(false);
+  const [splitNext, setSplitNext] = useState(50);
+  const locks = useMemo(() => sideMap(p.locks), [p.locks]);
 
   const label = (entry: string) => {
     // ★ Show the band's real NAME, not its id — "FM broadcast" rather than "fm". The id is what
@@ -84,7 +117,13 @@ export default function BandLimitEditor(p: Props) {
     const [head, tail] = entry.split(':');
     const b = bands.find(x => x.id === head.trim().toLowerCase());
     const name = b ? b.label : head.trim();
-    return tail ? `${name} · ${tail.trim()}` : name;
+    if (!tail) return name;
+    /* ★★★ TWO STATES THAT BEHAVE DIFFERENTLY MUST NOT READ THE SAME. A locked band shows the figure
+     *   and a padlock; an unlocked one says "up to" in words, rather than being the absence of a
+     *   symbol. Same wording as the setup page's chips, so an owner who runs both meets one idea. */
+    if (!p.lockable) return `${name} · ${tail.trim()}`;
+    const locked = locks[head.trim().toLowerCase()] > 0;
+    return `${name} · ${locked ? '' : 'up to '}${tail.trim()}${locked ? ' \u{1F512}' : ''}`;
   };
 
   const add = () => {
@@ -109,11 +148,30 @@ export default function BandLimitEditor(p: Props) {
     const head = entry.split(':')[0].trim().toLowerCase();
     const kept = entries.filter(e => e.split(':')[0].trim().toLowerCase() !== head);
     p.onChange([...kept, entry].join(', '));
-    setBand(''); setText(''); setLoText(''); setHiText('');
+    if (p.lockable && p.onLocksChange) {
+      const m = sideMap(p.locks);
+      if (lockNext) m[head] = 1; else delete m[head];
+      p.onLocksChange(sideWrite(m));
+    }
+    if (p.splittable && p.onSplitsChange) {
+      const m = sideMap(p.splits);
+      // ★ Only a LOCKED band has a split to keep: as a limiter the listener still chooses it, so
+      //   storing one would be a figure nothing reads.
+      if (lockNext) m[head] = splitNext; else delete m[head];
+      p.onSplitsChange(sideWrite(m));
+    }
+    setBand(''); setText(''); setLoText(''); setHiText(''); setLockNext(false);
   };
 
-  const remove = (entry: string) =>
+  const remove = (entry: string) => {
     p.onChange(entries.filter(e => e !== entry).join(', '));
+    // ★★ AND ITS COMPANIONS. A lock or a split for a band with no ceiling is a figure nothing
+    //    reads — invisible here and still in the config, which is how a setting comes back from
+    //    the dead when the band is added again later.
+    const head = entry.split(':')[0].trim().toLowerCase();
+    if (p.onLocksChange)  { const m = sideMap(p.locks);  delete m[head]; p.onLocksChange(sideWrite(m)); }
+    if (p.onSplitsChange) { const m = sideMap(p.splits); delete m[head]; p.onSplitsChange(sideWrite(m)); }
+  };
 
   const chip = (active: boolean) => ({
     borderWidth: 1, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12,
@@ -198,6 +256,33 @@ export default function BandLimitEditor(p: Props) {
           <Text style={{ color: p.C.gold, fontFamily: p.F, fontSize: 13 }}>Add</Text>
         </TouchableOpacity>
       </View>
+
+      {/* ★★ THE LOCK, AND THE SPLIT IT IMPLIES ON A HACKRF — both belong to the entry being added,
+             which is why they sit between the value and the list rather than over the section. */}
+      {p.lockable && (
+        <TouchableOpacity onPress={() => setLockNext(v => !v)}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 }}>
+          <View style={{ width: 18, height: 18, borderRadius: 4, borderWidth: 1,
+                         borderColor: lockNext ? p.C.green : p.C.border,
+                         backgroundColor: lockNext ? `${p.C.green}55` : 'transparent' }} />
+          <Text style={{ color: p.C.gold, fontFamily: p.F, fontSize: 12, flex: 1 }}>
+            Lock this band — the ceiling is the SETTING, not a limit
+          </Text>
+        </TouchableOpacity>
+      )}
+      {p.lockable && p.splittable && lockNext && (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 }}>
+          <Text style={{ color: p.C.textDim, fontFamily: p.F, fontSize: 12 }}>Split</Text>
+          <Slider style={{ flex: 1 }} minimumValue={0} maximumValue={100} step={5}
+            value={splitNext} onValueChange={(v: number) => setSplitNext(Math.round(v))}
+            minimumTrackTintColor={p.C.gold} maximumTrackTintColor="rgba(255,255,255,0.25)"
+            thumbTintColor={p.C.gold} />
+          <Text style={{ color: p.C.amber, fontFamily: p.F, fontSize: 12, minWidth: 96,
+                         textAlign: 'right' }}>
+            {splitNext}% LNA / {100 - splitNext}% VGA
+          </Text>
+        </View>
+      )}
 
       {/* ── what is set ─────────────────────────────────────────────────── */}
       {entries.length === 0 ? (

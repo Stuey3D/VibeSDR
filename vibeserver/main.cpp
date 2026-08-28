@@ -121,7 +121,8 @@ struct Opts {
     bool        rtlAgc = false;          // VibeSDR's own AGC for the dongle — see RadioConfig
     bool        tunerBwAuto = false;     // tuner IF filter follows the zoom — see RadioConfig
     int         agcLock  = -1;           // 1 = AGC forced on (RSP, Airspy HF+)
-    bool        gainLock = false;        // a capped band is FIXED at its ceiling — see RadioConfig
+    bool        gainLock = false;        // LEGACY radio-wide lock; fallback while gainLocks is empty
+    std::string gainLocks;               // which bands are FIXED at their ceiling — see RadioConfig
     std::string ifGainLimits;            // SDRplay IF ceiling, per band
     std::string gainSplits;              // HackRF LNA share of the total, 0-100, per band
     bool        rateLock = false;        // the sample rate is PINNED, not merely capped
@@ -440,7 +441,8 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.pin = c.pin; o.adminPass = c.adminPass; o.trustedProxies = c.trustedProxies;
     o.sessionLimitMin = c.sessionLimitMin;
     o.gainLimits = c.gainLimits; o.restGain = c.restGain; o.agcLock = c.agcLock;
-    o.gainLock = c.gainLock; o.ifGainLimits = c.ifGainLimits; o.gainSplits = c.gainSplits;
+    o.gainLock = c.gainLock; o.gainLocks = c.gainLocks;
+    o.ifGainLimits = c.ifGainLimits; o.gainSplits = c.gainSplits;
     o.rateLock = c.rateLock;
     o.rtlAgc = c.rtlAgc; o.tunerBwAuto = c.tunerBwAuto;
     o.adminIdleMin    = c.adminIdleMin;
@@ -476,7 +478,8 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.pin = o.pin; c.adminPass = o.adminPass; c.trustedProxies = o.trustedProxies;
     c.sessionLimitMin = o.sessionLimitMin;
     c.gainLimits = o.gainLimits; c.restGain = o.restGain; c.agcLock = o.agcLock;
-    c.gainLock = o.gainLock; c.ifGainLimits = o.ifGainLimits; c.gainSplits = o.gainSplits;
+    c.gainLock = o.gainLock; c.gainLocks = o.gainLocks;
+    c.ifGainLimits = o.ifGainLimits; c.gainSplits = o.gainSplits;
     c.rateLock = o.rateLock;
     c.rtlAgc = o.rtlAgc; c.tunerBwAuto = o.tunerBwAuto;
     c.adminIdleMin    = o.adminIdleMin;
@@ -1502,6 +1505,7 @@ int main(int argc, char** argv) {
                     //   setting read a different way, so they must land in the same breath or a
                     //   live save leaves the server enforcing half of what the page shows.
                     LocalSdrShim::setGainLock(g_runtimeConfig.gainLock);
+                    LocalSdrShim::setGainLocks(g_runtimeConfig.gainLocks);
                     LocalSdrShim::setIfGainLimits(g_runtimeConfig.ifGainLimits);
                     LocalSdrShim::setGainSplits(g_runtimeConfig.gainSplits);
                     LocalSdrShim::setVibeServerRateLock(g_runtimeConfig.rateLock);
@@ -1959,6 +1963,7 @@ int main(int argc, char** argv) {
     //     allows in that band. Empty limits and -1s are exactly the behaviour before this existed.
     LocalSdrShim::setGainLimits(o.gainLimits);
     LocalSdrShim::setGainLock(o.gainLock);
+    LocalSdrShim::setGainLocks(o.gainLocks);
     LocalSdrShim::setIfGainLimits(o.ifGainLimits);
     LocalSdrShim::setGainSplits(o.gainSplits);
     LocalSdrShim::setRestGain(o.restGain);

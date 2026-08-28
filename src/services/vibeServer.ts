@@ -117,6 +117,15 @@ export type VibeServerConfig = {
   gainLimits?: string;
   restGain?: number;
   agcLock?: boolean;
+  /** ★★ WHICH BANDS ARE FIXED at their ceiling rather than limited by it — per band, so FM can be
+   *  held at one figure while HF stays adjustable under a ceiling. An "all" rule locks the radio. */
+  gainLocks?: string;
+  /** ★★ HackRF only, and only while locked: the LNA's share of that band's total, 0-100. A total
+   *  does not determine two stages, so a ceiling is enough to limit with and not to SET with. */
+  gainSplits?: string;
+  /** ★★ The sample rate is PINNED rather than capped — listeners get no rate picker at all. On a
+   *  shared dial one listener narrowing the window narrows it for everybody. */
+  rateLock?: boolean;
   /** ★ RTL gain automation. Protection defaults ON (it can only prevent clipping); the AGC defaults
    *  OFF, because it may raise the gain above the owner's figure. See VibeServerBoot. */
   rtlAgc?: boolean;
@@ -197,6 +206,9 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     gainLimits: cfg.gainLimits ?? '',
     restGain: cfg.restGain ?? -1,
     agcLock: cfg.agcLock ?? false,
+    gainLocks: cfg.gainLocks ?? '',
+    gainSplits: cfg.gainSplits ?? '',
+    rateLock: cfg.rateLock ?? false,
     rtlAgc: cfg.rtlAgc ?? false,
     tunerBwAuto: cfg.tunerBwAuto ?? false,
     trustedProxies: cfg.trustedProxies ?? '',

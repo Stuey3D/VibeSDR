@@ -221,6 +221,9 @@ object VibeLocalSDR {
      *  an AGC lock. ★ Ceilings are enforced on SET, on RETUNE INTO a capped band, at START and at
      *  the idle park — a cap applied at only one of those is one a listener can walk around. */
     fun setGainLimits(csv: String, restGain: Int, agcLock: Boolean) { ensureLoaded(); nativeSetGainLimits(csv, restGain, agcLock) }
+    /** The ceilings become the SETTING, the HackRF's per-band LNA/VGA split, and a PINNED sample
+     *  rate. See the JNI note — kept apart from setGainLimits deliberately. */
+    fun setGainLock(locks: String, splits: String, rateLock: Boolean) { ensureLoaded(); nativeSetGainLock(locks, splits, rateLock) }
     /** RTL only: overload protection (for a manual gain) and the AGC (the whole tuner range). */
     fun setGainAutomation(overloadProtect: Boolean, agc: Boolean) { ensureLoaded(); nativeSetGainAutomation(overloadProtect, agc) }
     /** ★ The tuner IF filter following the zoom — RTL only, and only meaningful free-tuning. */
@@ -228,6 +231,7 @@ object VibeLocalSDR {
     /** ★ "VibeSDR 10.5 for Android" — the WRAPPER, reported beside the engine's own version. */
     fun setServerHost(label: String) { ensureLoaded(); nativeSetServerHost(label) }
     private external fun nativeSetGainLimits(csv: String, restGain: Int, agcLock: Boolean)
+    private external fun nativeSetGainLock(locks: String, splits: String, rateLock: Boolean)
     private external fun nativeSetGainAutomation(overloadProtect: Boolean, agc: Boolean)
     private external fun nativeSetTunerBwAuto(on: Boolean)
     private external fun nativeSetServerHost(label: String)

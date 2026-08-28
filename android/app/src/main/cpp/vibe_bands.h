@@ -259,7 +259,28 @@ inline GainRules parseGainList(const std::string& csv) {
                 GainRule g;
                 g.band = parseEntry(cur.substr(0, colon));
                 const std::string v = detail::trim(cur.substr(colon + 1));
-                if (!v.empty()) g.max = atoi(v.c_str());
+                /* ★★★ "25dB" IS TENTHS, AND IT WAS BEING READ AS 25 — a tenth of what was asked.
+                 *
+                 *  Two writers, one rule. The web setup page converts before storing and writes
+                 *  "fm:250"; the APP's BandLimitEditor writes what it shows the owner, "fm:25.0dB",
+                 *  and `atoi` stopped at the 5. So every per-band ceiling ever set from the phone
+                 *  has been TEN TIMES TIGHTER than the figure on screen — and it looked like it was
+                 *  working, because a number went in and a ceiling came out (Stuart, 2026-08-28,
+                 *  found while wiring the HackRF limiters into the app).
+                 *  ★★ FIXED HERE RATHER THAN IN THE APP, because a config file is hand-edited too:
+                 *     an owner who reads "max, e.g. 25 dB" on one screen and types that into
+                 *     vibeserver.conf deserves the same answer. A bare number keeps its exact
+                 *     meaning, so every existing config — and everything the setup page has ever
+                 *     written — is untouched.
+                 *  ★ dB means tenths of a dB on the radios whose ceiling IS a dB (RTL, HackRF).
+                 *    On an RSP the ceiling is an RF POSITION and carries no unit; a suffix there
+                 *    would be the owner describing the wrong quantity, and the page's placeholder
+                 *    says "max RF position" for exactly that reason. */
+                if (!v.empty()) {
+                    const bool isDb = v.find('d') != std::string::npos
+                                   || v.find('D') != std::string::npos;
+                    g.max = isDb ? (int)llround(atof(v.c_str()) * 10.0) : atoi(v.c_str());
+                }
                 if (g.valid()) out.push_back(g);
             }
             cur.clear();

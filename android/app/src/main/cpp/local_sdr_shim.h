@@ -124,7 +124,14 @@ public:
     /** The sample rate is PINNED rather than capped — see the definition. */
     static void setVibeServerRateLock(bool on);
     static void setGainLock(bool on);
-    static bool gainLocked();
+    /** ★★★ WHICH BANDS ARE FIXED — per band, because a receiver can want FM held at one figure
+     *  while HF stays adjustable under a ceiling (Stuart, 2026-08-28). Same band syntax as the
+     *  ceilings; an "all" rule covers the whole radio, which is how a radio-wide lock is spelled.
+     *  ★ setGainLock is the LEGACY radio-wide flag from 4.1.47/48 and applies only while this list
+     *    is empty, so an owner who has since locked one band is not locked on all of them. */
+    static void setGainLocks(const std::string& csv);
+    /** Is the gain FIXED at this frequency? Always false where there is no ceiling to be fixed at. */
+    static bool gainLockedAt(double hz);
     static void setIfGainLimits(const std::string& csv);
     static int  ifGainCapAt(double hz);
     static void setGainSplits(const std::string& csv);

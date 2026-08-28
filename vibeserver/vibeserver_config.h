@@ -134,7 +134,9 @@ struct Config {
     /** Per-band gain ceilings: "lo-hi:max" in MHz, comma separated, e.g. "88-108:250".
      *  Empty = no limit anywhere, which is the behaviour before this existed. */
     std::string gainLimits;
-    /** The ceiling becomes a fixed setting — see RadioConfig::gainLock. */
+    /** Which bands are FIXED at their ceiling rather than limited by it — see RadioConfig. */
+    std::string gainLocks;
+    /** Legacy radio-wide lock (4.1.47/48); a fallback while gainLocks is empty. */
     bool gainLock = false;
     /** The SDRplay's IF ceiling, and the HackRF's per-band LNA/VGA split. See RadioConfig. */
     std::string ifGainLimits;
@@ -286,6 +288,15 @@ struct RadioConfig {
      *  serve as a limiter or as a fixed value depending on this one flag (Stuart, 2026-08-28).
      *  ★★ ONLY CAPPED BANDS LOCK. A band with no rule keeps the full range exactly as today: the
      *     lock changes what a ceiling MEANS, it does not invent one where the owner wrote none. */
+    /** ★★★ PER BAND, NOT PER RADIO. This started as one flag for the whole receiver and that was
+     *  wrong the moment anyone had two bands worth treating differently — Stuart, 2026-08-28: "I
+     *  can lock the gain on FM but allow it to be unlocked but limited for HF." So the lock lives
+     *  in its own band list beside the ceilings, and each band answers for itself: FM reads
+     *  "RF 7 · IF 25 🔒", HF reads "up to RF 7 · IF 20".
+     *  ★★ `gainLock` (the old radio-wide bool) is KEPT as a fallback for configs written by 4.1.47
+     *  and 4.1.48, where it meant "every capped band". It applies only while this list is empty,
+     *  so an owner who has since set one band is not silently locked on all of them. */
+    std::string gainLocks;
     bool        gainLock = false;
     /** ★★ THE SDRPLAY'S SECOND STAGE. `gainLimits` caps the RF (LNA) position because that is what
      *  decides whether the front end overloads; the IF reduction is a separate control and on a

@@ -177,6 +177,18 @@ int main() {
         // ★★ FIRST match wins here, where gainCapAt takes the LOWEST. A split is a preference, not
         //    a limit: "the smallest share of LNA" is not a safer answer, merely an arbitrary one,
         //    so the owner's own order is the tie-break. Same list, two deliberate readings.
+        /* ★★★ A dB SUFFIX MEANS TENTHS. The app's editor writes what it SHOWS the owner —
+         * "fm:25.0dB" — and atoi stopped at the 5, so every ceiling set from the phone was a
+         * tenth of the figure on screen. A bare number is unchanged, which is what the setup page
+         * has always written and what every existing config holds. */
+        ok(gainCapAt(parseGainList("fm:25.0dB"), 96'600'000) == 250, "★★★ \"25.0dB\" is 250 tenths");
+        ok(gainCapAt(parseGainList("fm:25dB"),   96'600'000) == 250, "★★ and so is \"25dB\"");
+        ok(gainCapAt(parseGainList("fm:20 dB"),  96'600'000) == 200, "★ a space before the unit too");
+        ok(gainCapAt(parseGainList("fm:250"),    96'600'000) == 250,
+           "★★★ a BARE number is untouched — every config written before this still means what it said");
+        ok(gainCapAt(parseGainList("fm:5"),      96'600'000) == 5,
+           "★★ including an RSP's RF POSITION, which carries no unit and must not be scaled");
+
         // Written broad-first, so "first" and "tightest" are genuinely different answers.
         const auto broadFirst = parseGainList("0-2000M:400, fm:250");
         ok(gainCapAt(broadFirst, 96'600'000) == 250 && valueAt(broadFirst, 96'600'000) == 400,

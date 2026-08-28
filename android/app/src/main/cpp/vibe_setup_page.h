@@ -631,20 +631,6 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
              limit.</div></label>
 
 
-        <!-- ★★★ THE SAME FIGURES, READ A DIFFERENT WAY. Stuart, 2026-08-28: "the gain sliders serve
-             dual purpose either as a limiter or a fixed setting." Nothing about the rows below
-             changes; this one tick decides whether they are a ceiling a listener may sit under or
-             the value the radio is held at. -->
-        <label class="hide" id="gainLockRow" class="row">
-          <input type="checkbox" id="gainLock">
-          <span class="lbl">Lock the gain to these ceilings</span>
-          <div class="note">The ceilings below stop being a limit and become the SETTING: tuning
-             into one of these bands puts the gain exactly there, and listeners get no gain
-             controls at all.
-             <br><b>Only the bands you list.</b> Anywhere you have not set a ceiling, listeners
-             keep the full range exactly as they do today &mdash; this changes what a ceiling
-             means, it does not invent one.</div></label>
-
         <label class="hide" id="gainLimitRow"><span class="lbl">Per-band ceilings</span>
           <!-- ★★★ ONE BAND'S ENTRY, DRAWN AS ONE THING. The IF ceiling and the HackRF split are
                stored PER BAND, but they were laid out on their own lines BELOW the Add button —
@@ -688,12 +674,26 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
               <input type="range" id="gainSplitSlider" min="0" max="100" step="5" value="50" style="flex:1 1 200px">
               <span class="dim" id="gainSplitVal" style="flex:0 0 auto">50% LNA / 50% VGA</span>
             </div>
+            <!-- ★★★ THE LOCK IS PER BAND, and it belongs in the entry rather than over the card.
+                 As one switch for the whole radio it could not express the thing an owner actually
+                 wants: Stuart, 2026-08-28 — "I can lock the gain on FM but allow it to be unlocked
+                 but limited for HF." Ticked here it applies to THIS band; pick "All bands" and it
+                 is the whole radio, because "all bands" was always just another band. -->
+            <label class="row hide" id="gainLockRow" style="gap:8px;margin-top:10px">
+              <input type="checkbox" id="gainLock">
+              <span>Lock this band &mdash; the ceiling above is the SETTING, not a limit</span>
+            </label>
             <div class="row" style="gap:8px;margin-top:10px">
               <button type="button" class="ghost" id="gainAdd" style="flex:0 0 auto">Add this band</button>
             </div>
           </div>
           <div id="gainList" class="bandList"></div>
-          <div class="note">Cap the bands that overload and leave the rest open &mdash; a strong local FM
+          <div class="note"><b>Locked or limited, band by band.</b> A band you lock reads
+             <b>RF&nbsp;7 &middot; IF&nbsp;25 &#128274;</b> &mdash; the gain sits exactly there and
+             listeners get no gain controls at all. A band you do not lock reads
+             <b>up to RF&nbsp;7 &middot; IF&nbsp;20</b> &mdash; they keep the controls and simply
+             cannot go past it. Lock <b>All bands</b> and the whole radio is fixed.
+             <br>Cap the bands that overload and leave the rest open &mdash; a strong local FM
              transmitter is the usual reason, while HF wants everything the radio has. Tuning into
              a capped band brings the gain down automatically.
              <br><b>On a HackRF this is the TOTAL of the two gain stages</b> (LNA + VGA): both sit
@@ -1311,20 +1311,25 @@ function gainSideSet(key, band, val) {
 function gainChips() {
   const list = (radio().gainLimits || "").split(",").map(t => t.trim()).filter(Boolean);
   const ifs = gainSideList("ifGainLimits"), sp = gainSideList("gainSplits");
-  const locked = !!radio().gainLock, isHrf = (radio().driver || "") === "hackrf";
+  const locks = gainSideList("gainLocks");
+  const isHrf = (radio().driver || "") === "hackrf";
   const host = $("gainList");
   host.innerHTML = list.map((e, i) => {
     const colon = e.lastIndexOf(":");
     const band = colon >= 0 ? e.slice(0, colon) : e;
     const val  = colon >= 0 ? parseInt(e.slice(colon + 1), 10) : -1;
-    // ★ "= x" when the ceiling IS the setting, "\u2264 x" when it is a limit. The chip is where an
-    //   owner checks their work, so it must not read the same in two states that behave differently.
-    let extra = "";
-    if (ifs[band] >= 0 && ifs[band] !== undefined) extra += " \u00b7 IF " + ifs[band];
-    if (locked && isHrf) extra += " \u00b7 " + (sp[band] >= 0 && sp[band] !== undefined ? sp[band] : 50)
-                                 + "% LNA";
-    return `<span class="bandChip">${esc(bandLabel(band))} ${locked ? "=" : "\u2264"} ` +
-           `${esc(gainFromRaw(val))}${esc(extra)}` +
+    /* ★★★ THE CHIP IS WHERE AN OWNER CHECKS THEIR WORK, so two states that BEHAVE differently must
+     *   not READ the same. Stuart's own wording, 2026-08-28: a locked band says "RF 7 IF 25" with a
+     *   padlock, an unlocked one says "up to RF 7 IF 20".
+     * ★ The padlock is the thing the eye finds first in a list of ten bands; "up to" carries the
+     *   other case in words rather than leaving it as the absence of a symbol. */
+    const lock = locks[band] > 0;
+    let txt = (lock ? "" : "up to ") + "RF " + gainFromRaw(val);
+    if (ifs[band] !== undefined && ifs[band] >= 0) txt += " \u00b7 IF " + ifs[band];
+    if (lock && isHrf) txt += " \u00b7 " + (sp[band] !== undefined && sp[band] >= 0 ? sp[band] : 50)
+                             + "% LNA";
+    if (lock) txt += " \uD83D\uDD12";
+    return `<span class="bandChip">${esc(bandLabel(band))} ${esc(txt)}` +
            `<button type="button" data-g="${i}" aria-label="Remove">\u00d7</button></span>`;
   }).join("") || '<span class="dim">No ceilings \u2014 listeners have the full range.</span>';
   for (const b of host.querySelectorAll("button[data-g]"))
@@ -1336,7 +1341,8 @@ function gainChips() {
       //    a ceiling is a figure nothing reads — invisible here and still in the config file, which
       //    is exactly how a setting comes back from the dead when the band is added again later.
       const band = gone.lastIndexOf(":") >= 0 ? gone.slice(0, gone.lastIndexOf(":")) : gone;
-      if (band) { gainSideSet("ifGainLimits", band, null); gainSideSet("gainSplits", band, null); }
+      if (band) { gainSideSet("ifGainLimits", band, null); gainSideSet("gainSplits", band, null);
+                  gainSideSet("gainLocks", band, null); }
       gainChips();
     });
 }
@@ -1356,8 +1362,12 @@ function gainAdd() {
   //   this existed. The split is only meaningful on a locked HackRF, so it is stored only there.
   const ifRaw = parseFloat(String($("gainIfMax").value).replace(/[^0-9.\-]/g, ""));
   gainSideSet("ifGainLimits", band, isFinite(ifRaw) && ifRaw >= 0 ? ifRaw : null);
-  if (radio().gainLock && (radio().driver || "") === "hackrf")
+  const lock = $("gainLock").checked;
+  gainSideSet("gainLocks", band, lock ? 1 : null);
+  // ★ The split is only read on a LOCKED HackRF band — as a limiter the listener still chooses it.
+  if (lock && (radio().driver || "") === "hackrf")
     gainSideSet("gainSplits", band, parseInt($("gainSplitSlider").value, 10));
+  else gainSideSet("gainSplits", band, null);
   $("gainMax").value = "";
   $("gainIfMax").value = "";
   gainChips();
@@ -1508,13 +1518,14 @@ function renderGain() {
         + "walks the tuner's gain list a step at a time \u2014 so one listener cannot set a gain "
         + "that everybody else then listens through."; }
   // ★ The lock is offered wherever a ceiling is, because it is the same figures read differently.
+  //   ★★ NOT loaded from the radio: it belongs to the ENTRY being added, not to the receiver, so
+  //      it starts clear each time rather than inheriting the last band's answer.
   $("gainLockRow").classList.toggle("hide", !(isRtl || isRsp || isHrf));
-  $("gainLock").checked = !!r.gainLock;
   // ★★ IF ceiling: RSP only, and only while its AGC is NOT locked on — see the note above.
   $("gainIfRow").classList.toggle("hide", !(isRsp && r.agcLock !== 1));
-  // ★★ The split is a HackRF question and only when the ceiling is a SETTING; as a limiter the
+  // ★★ The split is a HackRF question and only when THIS band is being fixed; as a limiter the
   //    listener still chooses their own split, which is today's behaviour and stays.
-  $("gainSplitRow").classList.toggle("hide", !(isHrf && r.gainLock));
+  $("gainSplitRow").classList.toggle("hide", !(isHrf && $("gainLock").checked));
   $("rateLock").checked = !!r.rateLock;
   $("gainRest").value = gainFromRaw(r.restGain);
   // ★ Absent = AGC off. An older config must not read as though the owner had asked for it.
@@ -2350,12 +2361,11 @@ function fill() {
     //   so the row must not sit there taking a figure nothing will read.
     renderGain();
   });
+  // ★ The tick governs THIS entry, so the only thing that follows from it here is whether the
+  //   HackRF needs to be asked for a split. The chips are written when the band is added.
   $("gainLock").addEventListener("change", () => {
-    radio().gainLock = $("gainLock").checked;
-    // ★ Re-render rather than toggle by hand: the chips read "=" instead of "\u2264", and the
-    //   HackRF split row appears or goes — three things that follow from one flag, and doing them
-    //   in three places is how they come apart.
-    renderGain();
+    $("gainSplitRow").classList.toggle("hide",
+      !((radio().driver || "") === "hackrf" && $("gainLock").checked));
   });
   $("rateLock").addEventListener("change", () => { radio().rateLock = $("rateLock").checked; });
   $("gainSplitSlider").addEventListener("input", () => {
