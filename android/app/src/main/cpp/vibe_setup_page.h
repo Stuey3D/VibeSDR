@@ -1684,7 +1684,7 @@ function paintSaveButton() {
     b.textContent = "Save and reboot";
     b.title = "A dongle's serial has been changed. Only a reboot puts it into effect.";
   } else if (b.textContent === "Save and reboot") {
-    b.textContent = cfg && cfg.configured ? "Save changes" : "Save and start";
+    b.textContent = cfg && cfg.configured ? "Apply Changes and Restart VibeServer" : "Save and start";
     b.title = "";
   }
 }
@@ -2605,7 +2605,13 @@ async function signIn(fromTicket) {
     if (cfg.configured) {
       document.querySelector("#setup .sub").textContent =
         "Change how this receiver is set up. Saving restarts it, so listeners will reconnect.";
-      $("saveBtn").textContent = "Save changes";
+      /* ★★ SAY WHAT IT DOES, because two save buttons side by side said neither. "Save radio
+       *  settings" writes THIS radio's own settings and leaves it running; this one applies the
+       *  whole configuration and RESTARTS the server, which drops listeners for a moment — a
+       *  difference nobody could read off "Save changes" (Stuart, 2026-08-28: "it is not clear
+       *  what the 2nd save button does"). The sentence above it says the same thing; the button
+       *  now says it where the hand is. */
+      $("saveBtn").textContent = "Apply Changes and Restart VibeServer";
     }
     $("signin").classList.add("hide");
     $("setup").classList.remove("hide");
