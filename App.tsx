@@ -420,7 +420,18 @@ export default function App() {
            *   with the phone still unconnected. See RootStackParamList.autoVibe. */
           if (type === 'vibeserver') {
             if (!(await whenNavReady())) { watchTargetPending.claimed = false; watchProvider.holdAwake(false); return; }
+            /* ★★★ `index` IS NOT OPTIONAL, and leaving it out is why the phone went BLACK. goTo()
+             *   three hundred lines up passes `index: 1` with its two routes; this reset shipped
+             *   with a routes array and no index at all. A navigation state React Navigation
+             *   cannot resolve renders NOTHING — no screen mounts, so the picker's autoVibe effect
+             *   never runs, so a VibeServer never connects. Stuart, 2026-08-28: "i can start an
+             *   UberSDR session but vibeserver will not connect", and "when opening the app the
+             *   screen comes on black even though i can see the spectrum on the watch" — one fault,
+             *   both symptoms, and the black screen was the one that named it.
+             * ★★ UberSDR was unaffected because it goes through goTo, which has always passed an
+             *   index. The two paths differed by one line and I copied the wrong half. */
             navigationRef.reset({
+              index: 0,
               routes: [{ name: 'InstancePicker',
                          params: { noAutoConnect: true,
                                    autoVibe: { url, name: f?.name ?? cached?.name ?? wname ?? url } } }],
@@ -560,7 +571,12 @@ export default function App() {
     watchProvider.setStopHandler(() => {
       watchTargetPending.claimed = true;
       whenNavReady().then((ready) => {
-        if (ready) navigationRef.reset({ routes: [{ name: 'InstancePicker', params: { noAutoConnect: true } }] } as never);
+        // ★★★ index: 0 — THE SAME OMISSION AS THE VIBESERVER PATH ABOVE, and the same consequence:
+        //     a state React Navigation cannot resolve renders NOTHING, so the watch's Stop would
+        //     leave the phone on a black screen. crashGuard.ts writes this reset correctly; these
+        //     two did not. Found while fixing the other one — one rule, three writers, two wrong.
+        if (ready) navigationRef.reset({ index: 0,
+          routes: [{ name: 'InstancePicker', params: { noAutoConnect: true } }] } as never);
         watchProvider.setPhoneStatus('pick');
       });
     });
