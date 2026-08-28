@@ -829,12 +829,40 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       // Give a wrist-up (resumedAt) or a fresh row/state a few seconds to reconnect before concluding
       // the phone is gone — the ContentView shows a "Reconnecting to VibeSDR" pill over the held
       // waterfall meanwhile. Only past the grace do we raise the Start / Connect-to-iPhone screen.
-      let lastHeard = max(lastRowAt ?? .distantPast, lastStateAt ?? .distantPast, resumedAt)
+      /* ★★★ EVERY MESSAGE KIND COUNTS — lastAnyAt EXISTED FOR THIS AND WAS NEVER READ. It is
+       *   stamped at the top of apply() with a comment saying exactly that, and this line looked
+       *   only at rows and state. So a phone that was plainly TALKING — sending a directory, a
+       *   radio list, its own status — but not yet sending ROWS was declared gone after five
+       *   seconds, and Buddy threw up the Start screen mid-task.
+       * ★★★ WHICH IS PRECISELY WHEN IT HURTS. Choosing a server means a front-door fetch over the
+       *   phone's network: several seconds during which there is nothing to send but progress.
+       *   Stuart, 2026-08-28: "open the vibeserver directory and select the Pi it goes back to the
+       *   start screen, open it again select the pi again and then it shows the radio picker" — the
+       *   second attempt worked because the answer had arrived while the watch was sulking.
+       * ★ The watchdog's question is "is the phone still there", and any message answers it. Rows
+       *   answer a different question — "is a session running" — and conflating the two is what
+       *   made a working phone look dead. */
+      let lastHeard = max(lastRowAt ?? .distantPast, lastStateAt ?? .distantPast,
+                          lastAnyAt ?? .distantPast, resumedAt)
       if Date().timeIntervalSince(lastHeard) > 5 {
         phoneClosed = true
         stopHeartbeat()
         return
       }
+    }
+
+    /* ★★★ AND IF A SESSION IS SUPPOSED TO BE LIVE, ASK FOR THE ROWS. A phone that says "ready" and
+     *   sends no waterfall leaves the wrist on "Waiting for signal" indefinitely — there is nothing
+     *   wrong to report and nothing arriving, which is the one state that cannot resolve itself.
+     *   Stuart, 2026-08-28: choosing a radio ended "stuck waiting for signal".
+     * ★★ `need` IS THE RIGHT ASK, not another ping: the phone's handler answers it by waking the
+     *   spectrum source AND re-flushing everything ("I have nothing, send me everything" has to
+     *   include waking the source — its own note). A ping only proves we are here.
+     * ★ Rate-limited inside requestMissing (3 s), and gated on the phone claiming a session, so a
+     *   receiver that is legitimately idle is never nagged. */
+    if !isBackground, phoneStatus == "ready" || phoneStatus == "live" {
+      let quiet = Date().timeIntervalSince(lastRowAt ?? .distantPast)
+      if quiet > 6 { requestMissing() }
     }
 
     // Mid-reopen: keep asking to reopen (a single reopen can be dropped during relaunch).
