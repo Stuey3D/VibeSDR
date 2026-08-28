@@ -277,6 +277,9 @@ class WatchProvider {
   private reopenHandler: (() => void) | null = null;
   private stopHandler: (() => void) | null = null;
   private instanceSub: { remove(): void } | null = null;
+  /** The last watch command and when — see the de-duplication note in setInstanceHandler. */
+  private lastCmdKey = '';
+  private lastCmdAt = 0;
   private lastLogo = '';   // what we WANT the watch to have
   private sentLogo = '\u0000';  // what it actually has (sentinel: never sent)
   private out = new Uint8Array(WATCH_BINS);
@@ -855,6 +858,17 @@ class WatchProvider {
       (e: { cmd: string; val?: unknown; type?: unknown; name?: unknown; dir?: unknown }) => {
         // Connect by URL — the phone resolves it against its OWN objects (favourites + browsed
         // directory cache), so it always connects a server it actually holds (fixes OWRX etc.).
+        /* ★★★ THE SAME COMMAND MAY ARRIVE TWICE, ON PURPOSE. From cold the watch cannot reach a
+         *   terminated app, so it QUEUES the command (which is what wakes us) and re-sends it the
+         *   instant the link comes up — whichever lands first wins. That makes a duplicate the
+         *   normal case rather than an error, and acting on both would connect twice: two clients,
+         *   two sockets, and the second one displacing the first on a single-user receiver.
+         * ★ Keyed on the command AND its target, so choosing the SAME server again after five
+         *   seconds still works — a listener who wants to reconnect must always be able to. */
+        const key = `${e.cmd}:${String(e.val ?? e.dir ?? '')}`;
+        const now = Date.now();
+        if (this.lastCmdKey === key && now - this.lastCmdAt < 5000) return;
+        this.lastCmdKey = key; this.lastCmdAt = now;
         if (e.cmd === 'inst') this.instanceHandler?.(String(e.val ?? ''),
                                                      e.type ? String(e.type) : undefined,
                                                      e.name ? String(e.name) : undefined);

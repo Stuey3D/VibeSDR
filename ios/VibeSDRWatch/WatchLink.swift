@@ -986,13 +986,42 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   }
 
   /// Send something that is still worth doing if the phone has to be woken for it.
+  /* ★★★ A QUEUED MESSAGE IS GUARANTEED TO ARRIVE AND PROMISES NOTHING ABOUT WHEN.
+   *
+   *  From cold — nothing playing, the phone app not running — `isReachable` is FALSE, because on
+   *  watchOS it reports whether the counterpart app can be reached right now and a terminated app
+   *  cannot. So every deliberate command took the transferUserInfo path, which the system delivers
+   *  at its own discretion: usually seconds, sometimes far longer. Stuart, 2026-08-28: "its almost
+   *  like VibeSDR on the phone isnt waking up when Buddy is trying to connect to it." That is
+   *  exactly what is happening, and it is the transport's timing rather than a lost message —
+   *  which is why a second attempt a minute later always seemed to work.
+   *
+   *  ★★ SO REMEMBER IT AND DELIVER IT THE INSTANT THE LINK COMES UP. The queued copy still goes
+   *     (it is the guarantee, and it is what wakes the app at all), but the moment reachability
+   *     flips — which the wake itself causes — the same command goes again by sendMessage, which
+   *     is immediate. Whichever arrives first wins; the phone ignores the duplicate.
+   *  ★ Cleared as soon as the phone says anything, because by then it is plainly awake and acting. */
+  private var pendingWake: [String: Any]?
+
   private func sendDurable(_ msg: [String: Any]) {
     guard let s = session else { return }
-    guard s.isReachable else { s.transferUserInfo(msg); return }
-    s.sendMessage(msg, replyHandler: nil, errorHandler: { _ in
+    guard s.isReachable else {
+      s.transferUserInfo(msg)      // the guarantee, and what wakes a terminated app at all
+      pendingWake = msg            // …and the moment we CAN talk, say it properly
+      return
+    }
+    s.sendMessage(msg, replyHandler: nil, errorHandler: { [weak self] _ in
       // ★ Reachable said yes and the send failed anyway — queue it rather than lose it.
       s.transferUserInfo(msg)
+      DispatchQueue.main.async { self?.pendingWake = msg }
     })
+  }
+
+  /// The link came up while a command was sitting in the queue — send it now. See sendDurable.
+  private func flushPendingWake() {
+    guard let msg = pendingWake, let s = session, s.isReachable else { return }
+    pendingWake = nil
+    s.sendMessage(msg, replyHandler: nil, errorHandler: { _ in })
   }
 
   /// Wrist dropped. Buddy has no socket of its own to suspend, but it MUST mark itself backgrounded
@@ -1182,6 +1211,8 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
      *  ★ THE ANTI-HIJACK RULE IS UNTOUCHED. deliberatelyClosed still wins: a phone the user swiped
      *    away stays closed until they reopen it, and Buddy still never pings a phone it believes is
      *    shut. This only says that a phone which HAS spoken is, self-evidently, not shut. */
+    // ★ The phone is plainly awake and acting, so a command still waiting to be re-sent is spent.
+    pendingWake = nil
     if !deliberatelyClosed, phoneClosed {
       phoneClosed = false
       if heartbeat == nil { startHeartbeat() }
@@ -1433,7 +1464,11 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   }
 
   func sessionReachabilityDidChange(_ s: WCSession) {
-    DispatchQueue.main.async { self.reachable = s.isReachable }
+    DispatchQueue.main.async {
+      self.reachable = s.isReachable
+      // ★ The wake we asked for has landed — deliver the command properly now. See sendDurable.
+      if s.isReachable { self.flushPendingWake() }
+    }
   }
 }
 
