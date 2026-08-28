@@ -19,7 +19,22 @@
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>170</string>
+	<!-- ★★★ FROM THE PROJECT SETTING, exactly as the phone's plist is — and for the reason written
+	     there. This was a LITERAL, and it had not moved since build 170: the phone went to 209
+	     today and the watch app claimed 170 every single time. Two sources of truth for one
+	     number, and the one that mattered was the one nobody edited.
+	     ★★★ THE COST IS WORSE HERE THAN ON THE PHONE. watchOS decides whether to replace an
+	     installed app by its build number, so an unchanged one means the install has nothing to
+	     do — sometimes it lands anyway, sometimes it sits and spins (Stuart, 2026-08-28: "buddy not
+	     installing to the watch it is just spinning ... every other attempt buddy install worked
+	     straight away"). Flaky in exactly the way a no-op dressed as an action is flaky.
+	     ★★ AND WHEN IT "WORKED", IT MAY HAVE INSTALLED THE SAME BINARY AGAIN — which is the far
+	     more expensive half: a whole evening of Buddy fixes tested against a watch app that had no
+	     reason to change. The phone's own note says it: "you test yesterday's code believing it is
+	     today's."
+	     ★ CURRENT_PROJECT_VERSION is set on BOTH targets (four build configurations), so the watch
+	     now moves with the phone and Xcode Cloud's increment reaches it. -->
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<!-- The FM-DX (servers.fmdx.org) and KiwiSDR (rx.linkfanel.net) directory APIs are http-only,
