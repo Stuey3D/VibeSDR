@@ -182,9 +182,26 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           <input type="text" id="country" maxlength="2" placeholder="GB"></label>
       </div>
       <label><span class="lbl">Maidenhead locator</span>
-        <input type="text" id="locator" maxlength="8" placeholder="e.g. IO81jm">
-        <div class="hint">Deliberately coarse — about 4 km. A receiver's position is published, so
-          this is usually the right amount to give away.</div></label>
+        <div class="row" style="gap:8px">
+          <input type="text" id="locator" maxlength="8" placeholder="e.g. IO81jm" style="flex:1 1 160px">
+          <!-- ★★★ NOBODY SHOULD HAVE TO KNOW WHAT A MAIDENHEAD LOCATOR IS TO LIST A RECEIVER. The
+               directory REQUIRES one — no locator, no listing — and this page asked for it as a
+               bare six-character code with an example and no way to arrive at it. Stuart,
+               2026-08-28: "there are going to be a lot of people who may not know what a maidenhead
+               locator is, I didnt until recently."
+               ★★ THE APP HAS ALWAYS BEEN ABLE TO DO THIS and Linux could not — Android and macOS
+               can take a device fix or geocode a typed city and call latLonToGrid(); a Pi owner
+               setting up in a browser had neither. Same product, two answers, and the harder one
+               fell to the people least likely to cope with it.
+               ★ The lookup happens in the OWNER'S BROWSER, against the same Nominatim endpoint the
+               app already uses — the server gains no dependency, makes no outbound call of its own,
+               and a machine with no internet is no worse off than it was. -->
+          <button type="button" class="ghost" id="locFind" style="flex:0 0 auto">Work it out for me</button>
+        </div>
+        <div class="hint" id="locHint">Deliberately coarse — about 4 km. A receiver's position is
+          published, so this is usually the right amount to give away.
+          <br>Don't know yours? Type your town above and press <b>Work it out for me</b>, or enter
+          latitude and longitude below and it will be filled in.</div></label>
       <div class="row">
         <label><span class="lbl">Latitude (optional)</span>
           <input type="text" id="lat" placeholder="52.24"></label>
@@ -2384,6 +2401,61 @@ function fill() {
     radio().rtlAgc = $("rtlAgc").value === "1" || $("gainAgcLock").checked;
     radio().restGain = t ? gainToRaw(t) : -1;
     $("gainRest").value = gainFromRaw(radio().restGain);   // echo it back in canonical form
+  });
+  /* ★★★ A LOCATOR FROM A TOWN NAME, OR FROM COORDINATES — see the note by the button.
+   *
+   *  ★★ latLonToGrid is PORTED FROM src/services/grid.ts, character for character, because it is
+   *     the same answer to the same question and the app has computed it this way since the
+   *     beginning. If the two ever disagree, one of them publishes a receiver in the wrong square.
+   *  ★ Six characters, which is what the field asks for and what the directory wants: about 4 km,
+   *    deliberately coarse, and the same precision the app publishes. */
+  function latLonToGrid(lat, lon) {
+    const A = "ABCDEFGHIJKLMNOPQR", a = "abcdefghijklmnopqrstuvwx";
+    const x = Math.min(359.99999, Math.max(0, lon + 180));
+    const y = Math.min(179.99999, Math.max(0, lat + 90));
+    const f1 = Math.floor(x / 20), f2 = Math.floor(y / 10);
+    const s1 = Math.floor((x % 20) / 2), s2 = Math.floor(y % 10);
+    const u1 = Math.floor(((x % 2) / 2) * 24), u2 = Math.floor((y % 1) * 24);
+    return A[f1] + A[f2] + s1 + s2 + a[u1] + a[u2];
+  }
+  /** Coordinates already on the form win — they need no network and no guessing at a place name. */
+  function gridFromLatLonFields() {
+    const la = parseFloat($("lat").value), lo = parseFloat($("lon").value);
+    if (!isFinite(la) || !isFinite(lo)) return false;
+    $("locator").value = latLonToGrid(la, lo);
+    return true;
+  }
+  for (const id of ["lat", "lon"])
+    $(id).addEventListener("change", () => {
+      // ★ Only FILL an empty box — never overwrite a locator the owner typed themselves. They may
+      //   have a good reason to publish a different square from their exact position.
+      if (!$("locator").value.trim()) gridFromLatLonFields();
+    });
+  $("locFind").addEventListener("click", async () => {
+    const hint = $("locHint");
+    if (gridFromLatLonFields()) { hint.innerHTML = "Worked out from the latitude and longitude below."; return; }
+    const town = $("place").value.trim();
+    if (!town) { hint.innerHTML = "Type your town or area in the box above first."; return; }
+    hint.innerHTML = "Looking up " + esc(town) + "\u2026";
+    try {
+      const q = encodeURIComponent(town + ($("country").value.trim() ? ", " + $("country").value.trim() : ""));
+      const r = await fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" + q);
+      const j = await r.json();
+      if (!j || !j.length) throw new Error("not found");
+      const la = parseFloat(j[0].lat), lo = parseFloat(j[0].lon);
+      if (!isFinite(la) || !isFinite(lo)) throw new Error("not found");
+      $("locator").value = latLonToGrid(la, lo);
+      /* ★★ SAY WHAT IT DECIDED, and how coarse it is. A field that fills itself with six letters
+       *    the owner cannot check is worse than one they had to look up: they cannot tell a right
+       *    answer from a plausible one. The square is ~4 km, so naming the town it resolved to is
+       *    the check a person can actually make. */
+      hint.innerHTML = "Found <b>" + esc(town) + "</b> \u2014 locator <b>" + esc($("locator").value)
+                     + "</b> (about 4 km across). Change it if that is not where the aerial is.";
+    } catch (e) {
+      // ★ The honest fallback, and it names the one route that needs no internet at all.
+      hint.innerHTML = "Couldn't look that up. Check the town name, or enter latitude and longitude "
+                     + "below and it will be worked out from those \u2014 that needs no internet.";
+    }
   });
   $("allowAdd").addEventListener("click", () => bandAdd("allow"));
   $("blockAdd").addEventListener("click", () => bandAdd("block"));
