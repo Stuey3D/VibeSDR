@@ -304,6 +304,8 @@ export default function App() {
       splashBridge.dismiss();
 
       watchProvider.setPhoneStatus('ready');
+      // ★ The session is up: real audio takes over from here, so put the keep-alive down.
+      watchProvider.holdAwake(false);
       // We got where we were going — the picker is free to behave normally again.
       watchTargetPending.claimed = false;
     };
@@ -337,6 +339,10 @@ export default function App() {
       if (!url) return;
       watchTargetPending.claimed = true;   // stop the picker auto-connecting past us
       watchProvider.setPhoneStatus('starting');
+      // ★★★ AND KEEP US ALIVE LONG ENOUGH TO FINISH — see watchProvider.holdAwake. From cold this
+      //   whole function runs inside the few seconds iOS grants a watch-woken app; without this it
+      //   is suspended part-way and the wrist waits on a phone that has stopped running.
+      watchProvider.holdAwake(true);
       Promise.all([getFavourites(), getTcpFavs(), getViewMode()])
         .then(async ([favs, tcpFavs, viewMode]) => {
           const f = favs.find((x) => x.url === url);
@@ -383,7 +389,10 @@ export default function App() {
                 })));
               // ★ Let go of the picker: we are not connecting, we are asking. Without this the
               //   phone would sit "starting" behind a question nobody had answered yet.
+              // ★ We are asking a question, not connecting — the wearer's answer may be a while,
+              //   and holding the audio focus across it would be holding it for nothing.
               watchTargetPending.claimed = false;
+              watchProvider.holdAwake(false);
               watchProvider.setPhoneStatus('idle');
               return;
             }
@@ -419,7 +428,7 @@ export default function App() {
           if (type) return goTo({ name: wname || url, url, serverType: type }, viewMode);
           watchTargetPending.claimed = false;   // unknown URL, no type — don't hold the picker
         })
-        .catch(() => { watchTargetPending.claimed = false; });
+        .catch(() => { watchTargetPending.claimed = false; watchProvider.holdAwake(false); });
     };
     watchProvider.setInstanceHandler(applyInstance);
 

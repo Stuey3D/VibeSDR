@@ -726,6 +726,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       //   not leave a watch drawing "Starting VibeSDR…" for a session that will never begin.
       watchProvider.setPhoneStatus('pick');
       watchTargetPending.claimed = false;
+      watchProvider.holdAwake(false);
       Alert.alert('VibeServer', `Could not reach ${host}:${port}. Is it on the same network?`);
       return;
     }
@@ -1012,13 +1013,17 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
          *   true (that is where this phone now is) and the one place the wearer can act. */
         watchProvider.setPhoneStatus('pick');
         watchTargetPending.claimed = false;
+        watchProvider.holdAwake(false);   // the attempt is over — see watchProvider.holdAwake
         Alert.alert('VibeServer', `Could not reach ${door}. Is it still up?`);
         return;
       }
       /* ★★ A PIN PROMPT IS A DEAD END FOR THE WRIST. openVibeServer puts an Alert on the PHONE and
        *  waits for typing; the watch cannot help and must not sit on "Starting…" while it happens.
        *  Say where the phone actually is — the wearer picks the phone up, or chooses again. */
-      if (needsPin) { watchProvider.setPhoneStatus('pick'); watchTargetPending.claimed = false; }
+      // ★ A PIN prompt hands this to the person holding the phone, so the connect is no longer
+      //   ours to keep alive — and it may sit unanswered for minutes.
+      if (needsPin) { watchProvider.setPhoneStatus('pick'); watchTargetPending.claimed = false;
+                      watchProvider.holdAwake(false); }
       openVibeServer(host, port, autoVibe.name, needsPin, autoVibe.url);
     })();
   }, [autoVibe, connecting, navigation, openVibeServer]);

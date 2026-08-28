@@ -5601,6 +5601,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     // while a waterfall drew and the crown tuned underneath the message. The status has
     // to be owned by the thing that KNOWS, and that is the screen that is running.
     watchProvider.setPhoneStatus('ready');
+    /* ★ THE SESSION IS UP, SO THE KEEP-ALIVE GOES DOWN. Real audio holds the app in the background
+     *  from here; the inaudible loop was only ever a bridge across the gap between a watch-woken
+     *  launch and a playing stream. Harmless if it was never started. */
+    watchProvider.holdAwake(false);
     // The watch knows when ITS rows dried up. That was only ever drawn on screen;
     // make it act. Last line of defence behind the client's own watchdog, and
     // rate-limited there — so a wedged link can't turn this into a reopen storm.

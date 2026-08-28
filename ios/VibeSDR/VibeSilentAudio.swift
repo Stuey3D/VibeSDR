@@ -37,6 +37,20 @@ private func _startEngine() {
   }
 }
 
+/* ★★★ AND A WAY TO PUT IT DOWN. This file only ever had a start — which is half a lifecycle, and
+ *   the wrong half to be missing: an inaudible loop held for ever keeps the audio focus, parks
+ *   VibeSDR in Now Playing over whatever the user was actually listening to, and costs battery for
+ *   a job that finished minutes ago. The caller starts it for the length of a connect and stops it
+ *   the moment the real audio takes over (or the connect fails).
+ * ★ The session is NOT deactivated: AppDelegate makes it active at launch so we appear in Now
+ *   Playing at all, and tearing that down here would be reaching outside this file's business. */
+func vibeStopSilentAudio() {
+  _playerNode?.stop()
+  _audioEngine?.stop()
+  _playerNode  = nil
+  _audioEngine = nil
+}
+
 private var _observersAdded = false
 private func _setupObservers() {
   guard !_observersAdded else { return }

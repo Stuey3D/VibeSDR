@@ -7,6 +7,8 @@ RCT_EXTERN_METHOD(startAudioEngine:(NSString *)baseUrl frequency:(NSInteger)freq
 //   the phone was the only client that could not take a busy receiver back: its spectrum socket
 //   evicted the occupant and its audio socket was refused for having no credential.
 RCT_EXTERN_METHOD(setAdminAuth:(NSString *)q)
+// ★ Hold the app awake while a watch-driven connect completes — see keepAliveForConnect.
+RCT_EXTERN_METHOD(keepAliveForConnect:(BOOL)on)
 RCT_EXTERN_METHOD(stopAudioEngine)
 RCT_EXTERN_METHOD(startExternalAudio:(nonnull NSNumber *)sampleRate pauseMode:(NSString *)pauseMode)
 RCT_EXTERN_METHOD(pushExternalPcm:(NSString *)base64 sampleRate:(nonnull NSNumber *)sampleRate channels:(nonnull NSNumber *)channels)

@@ -903,6 +903,23 @@ class WatchProvider {
   /** No longer closed — the user foregrounded us, or pressed Reopen. */
   clearClosedByUser() { Native?.clearClosedByUser?.(); }
 
+  /* ★★★ HOLD THE PHONE AWAKE FOR THE LENGTH OF A WATCH-DRIVEN CONNECT (iOS).
+   *
+   *  iOS wakes us for a WatchConnectivity message and suspends us again within seconds. A connect
+   *  is not seconds' work — resolve, probe, mount, two sockets, decode — so from COLD the app was
+   *  routinely suspended part-way and the phone appeared never to wake at all. It woke, started,
+   *  and died. UIBackgroundModes=audio does not help by itself: iOS keeps an audio app alive while
+   *  it is PRODUCING audio, and until the session is up we are producing none (Stuart's Now Playing
+   *  widget showed TOOL, not VibeSDR — nothing of ours playing, so nothing of ours running).
+   *  ★ Released the moment the session is up or has failed, so we never hold the audio focus for
+   *    longer than the job needs. Android needs none of this — its foreground service already
+   *    keeps the process alive — so the native method simply does not exist there. */
+  holdAwake(on: boolean) {
+    const P = (NativeModules as { VibePowerModule?: { keepAliveForConnect?: (on: boolean) => void } })
+      .VibePowerModule;
+    P?.keepAliveForConnect?.(on);
+  }
+
   /** Re-send everything the watch could be missing. Public so the always-on command listener can
    *  answer `need` from the picker, where no screen has attached. */
   flushAll() {

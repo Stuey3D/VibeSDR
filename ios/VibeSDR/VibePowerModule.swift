@@ -276,6 +276,27 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   // MARK: - Exported methods
 
+  /* ★★★ KEEP THE APP ALIVE LONG ENOUGH TO FINISH A CONNECT THE WATCH ASKED FOR.
+   *
+   *  iOS wakes us for a WatchConnectivity message and then suspends us again within seconds. A
+   *  watch-driven connect is not a few seconds' work: resolve the address, probe the auth, mount a
+   *  screen, open two sockets, start decoding. From COLD — nothing playing — the app was routinely
+   *  suspended part-way, which is why the phone "never woke up": it woke, started, and died.
+   *  ★★★ UIBackgroundModes=audio IS NOT ENOUGH ON ITS OWN. AppDelegate makes the session active at
+   *     launch so we appear in Now Playing, and an ACTIVE SESSION WITH NO AUDIO PLAYING GRANTS
+   *     NOTHING — iOS keeps an audio app alive while it is actually producing audio. Stuart's own
+   *     Now Playing widget showed TOOL, not VibeSDR: nothing of ours was playing, so nothing of
+   *     ours was running.
+   *  ★★ vibeStartSilentAudio() has existed for this the whole time and NOTHING EVER CALLED IT —
+   *     written and never read. It plays an inaudible loop at 1% so the system counts us as an
+   *     audio app; the real audio replaces it moments later.
+   *  ★ Stopped by the caller once the session is up (or has failed), so we never hold the audio
+   *    focus longer than the job needs — holding it indefinitely would be a battery cost and would
+   *    park us in Now Playing over whatever the user was actually listening to. */
+  @objc func keepAliveForConnect(_ on: Bool) {
+    if on { vibeStartSilentAudio() } else { vibeStopSilentAudio() }
+  }
+
   /// Set (or clear) the admin credential carried on the audio socket. Takes effect on the NEXT
   /// connection, so callers set it before starting the engine — or set it and reconnect.
   @objc func setAdminAuth(_ q: String) {
