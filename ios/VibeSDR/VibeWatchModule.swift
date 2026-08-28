@@ -580,6 +580,17 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     sendEvent(withName: "VibeWatchCommand", body: body)
   }
 
+  /* ★★★ A QUEUED COMMAND ARRIVES SOMEWHERE ELSE ENTIRELY. transferUserInfo does NOT call
+   *   didReceiveMessage — it calls this. Without it the watch's durable sends (browse, inst,
+   *   the ones that wake us) would be delivered by the system to a delegate method nobody
+   *   implemented, and vanish exactly as silently as the reachability guard they were added to
+   *   get past.
+   * ★ Routed into the SAME handler rather than duplicating the forwarding, the queueing and the
+   *   reopen flag — one path, two doors. */
+  func session(_ s: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+    session(s, didReceiveMessage: userInfo)
+  }
+
   // MARK: - WCSessionDelegate
 
   func session(_ s: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {}

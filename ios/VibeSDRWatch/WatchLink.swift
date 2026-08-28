@@ -693,7 +693,9 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     var msg: [String: Any] = ["cmd": "inst", "val": url]
     if !type.isEmpty { msg["type"] = type }
     if !name.isEmpty { msg["name"] = name }
-    send(msg)
+    // ★ Durable for the same reason as browse: choosing a server is an intention, and it is the
+    //   one command most likely to be given while the phone is asleep in a pocket.
+    sendDurable(msg)
   }
 
   /// ★ Choosing a radio is an ORDINARY connect. `r.id` is already the full address the phone
@@ -724,7 +726,8 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// ★ 20 s > the phone's own 12 s directory timeout, so a slow-but-working fetch is never cut off
   /// by us; this only fires when the phone genuinely is not going to answer.
   func browse(_ dir: String) {
-    send(["cmd": "browse", "dir": dir])
+    // ★ Durable: a directory request is worth waking the phone for — see sendDurable.
+    sendDurable(["cmd": "browse", "dir": dir])
     browseTimers[dir]?.invalidate()
     browseTimers[dir] = Timer.scheduledTimer(withTimeInterval: 20.0, repeats: false) { [weak self] _ in
       guard let self else { return }
@@ -835,9 +838,37 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     armTuneSettle()
   }
 
+  /* ★★★ sendMessage NEEDS A REACHABLE COUNTERPART, AND "NOT RUNNING" IS NOT REACHABLE.
+   *
+   *  This guard dropped the message on the WATCH, before it was ever sent — so with VibeSDR not
+   *  open on the phone, nothing left the wrist at all. It is why directories worked only while
+   *  something was playing: that is exactly when the iOS app is up and isReachable is true.
+   *  Stuart, 2026-08-28: "if nothing is playing it keeps dropping back to the play button to start
+   *  vibesdr", cold start, app not on screen.
+   *
+   *  ★★ TRANSIENT AND DURABLE ARE DIFFERENT QUESTIONS. A crown tick, a wrist-down, a volume nudge
+   *     are worthless late — delivering a tune delta ten minutes afterwards would move somebody's
+   *     dial for no reason, which is the same fault as replaying old chat. Those keep the old
+   *     behaviour and are dropped when there is nobody to hear them.
+   *  ★★ A BROWSE OR A CONNECT IS AN INTENTION, and it survives being late by a second or two:
+   *     transferUserInfo QUEUES it and WAKES the iOS app, which is the whole mechanism Buddy
+   *     relies on to work with the phone in a pocket.
+   *  ★ The errorHandler matters as much as the fallback: isReachable can be stale (this file
+   *    already carries that lesson for the phone→watch direction), so a send that fails despite a
+   *    true flag is retried the durable way rather than vanishing. */
   private func send(_ msg: [String: Any]) {
     guard let s = session, s.isReachable else { return }
     s.sendMessage(msg, replyHandler: nil, errorHandler: nil)
+  }
+
+  /// Send something that is still worth doing if the phone has to be woken for it.
+  private func sendDurable(_ msg: [String: Any]) {
+    guard let s = session else { return }
+    guard s.isReachable else { s.transferUserInfo(msg); return }
+    s.sendMessage(msg, replyHandler: nil, errorHandler: { _ in
+      // ★ Reachable said yes and the send failed anyway — queue it rather than lose it.
+      s.transferUserInfo(msg)
+    })
   }
 
   /// Wrist dropped. Buddy has no socket of its own to suspend, but it MUST mark itself backgrounded
