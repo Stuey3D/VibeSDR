@@ -953,6 +953,47 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     connectSpy(autoSpy.host, autoSpy.port, `${autoSpy.host}:${autoSpy.port}`);
   }, [autoSpy, connecting, connectSpy, navigation]);
 
+  /* ★★★ THE WATCH CHOSE A VIBESERVER (or one of its radios) — connect it the ONE way this app
+   *   connects a VibeServer. App.tsx resolves the address (favourite, browsed-directory cache, or
+   *   the /r/<id> Buddy sends back after picking a radio) and hands it here, because the PIN probe,
+   *   the saved-PIN store and resolveVibeAuth all live on this screen. Before this it went through
+   *   the generic goTo → SDR with serverType 'vibeserver', a screen that does not speak the
+   *   protocol: the phone never connected and the wrist waited for rows that were never coming.
+   * ★★ THE PIN BELONGS TO THE SERVER, NOT THE RADIO — so the auth probe goes to the DOOR while the
+   *   connection goes to the radio. `/vibeserver/auth` does not exist under `/r/<id>`, so probing
+   *   the address we are connecting to would throw and report "could not reach" about a server that
+   *   is plainly up. (host:port already keys the saved PIN by the door, which is the same rule.)
+   * ★ Same one-shot shape as autoSpy — fire once, clear the param, so a failed connect leaves the
+   *   user on the picker rather than in a retry loop. */
+  const autoVibeFired = useRef(false);
+  const autoVibe = route.params?.autoVibe;
+  useEffect(() => {
+    if (!autoVibe) { autoVibeFired.current = false; return; }
+    if (autoVibeFired.current || connecting) return;
+    autoVibeFired.current = true;
+    navigation.setParams({ autoVibe: undefined });
+    let cancelled = false;
+    (async () => {
+      const door = autoVibe.url.replace(/\/r\/[^/]+\/?$/, '');
+      let host = '', port = 443;
+      try {
+        const u = new URL(door);
+        host = u.hostname;
+        port = u.port ? parseInt(u.port, 10) : (u.protocol === 'http:' ? 80 : 443);
+      } catch { host = door; }
+      if (!host) return;
+      let needsPin = true;
+      try { needsPin = await vibeServerNeedsPin(door); }
+      catch {
+        if (!cancelled) Alert.alert('VibeServer', `Could not reach ${door}. Is it still up?`);
+        return;
+      }
+      if (cancelled) return;
+      openVibeServer(host, port, autoVibe.name, needsPin, autoVibe.url);
+    })();
+    return () => { cancelled = true; };
+  }, [autoVibe, connecting, navigation, openVibeServer]);
+
   // Parse the add-RTL-TCP modal: accept "host", "host:port", separate fields, or a
   // pasted "sdr://host:port" / "spyserver://host:port" (strips the scheme + flips
   // to the SpyServer proto — Airspy's map hands out copy-text, so paste must work

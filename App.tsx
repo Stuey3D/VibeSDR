@@ -47,6 +47,13 @@ export type RootStackParamList = {
   // connectSpy() once, then clears the param (see InstancePickerScreen).
   InstancePicker: {
     autoSpy?: { host: string; port: number };
+    /** ★★★ A VIBESERVER THE WATCH CHOSE. A VibeServer is NOT connected by navigating to SDR with
+     *  serverType 'vibeserver' — it has its own route (PIN probe, saved-PIN store, resolveVibeAuth)
+     *  and that route lives in the PICKER, as openDirectoryVibeServer. applyInstance was sending it
+     *  down the generic goTo instead, so Buddy's radio choice landed on a screen that never
+     *  connected: the wrist waited for rows for ever and the phone sat there doing nothing
+     *  (Stuart, 2026-08-28). Same hand-off shape as autoSpy: the picker owns the connect. */
+    autoVibe?: { url: string; name: string };
     /** Sit in the stack WITHOUT auto-connecting to the default.
      *
      *  A watch-driven boot resets to [InstancePicker, target] so that BACK still has
@@ -388,6 +395,22 @@ export default function App() {
             const host = m?.[1] ?? tcp?.host ?? '';
             const port = m ? Number(m[2]) : (tcp?.port ?? 0);
             if (host && port) return connectLocal(type, host, port, f?.name ?? wname ?? tcp?.name ?? '', viewMode);
+          }
+          /* ★★★ HAND A VIBESERVER TO THE PICKER — it owns that connect (PIN probe, saved PIN,
+           *   resolveVibeAuth). Everything above has already resolved the address, including the
+           *   /r/<id> the wrist sends back after choosing a radio; all that is left is to connect
+           *   it the ONE way this app connects a VibeServer. Going through goTo instead reached a
+           *   screen that does not speak the protocol, which is why choosing a radio on Buddy hung
+           *   with the phone still unconnected. See RootStackParamList.autoVibe. */
+          if (type === 'vibeserver') {
+            if (!(await whenNavReady())) { watchTargetPending.claimed = false; return; }
+            navigationRef.reset({
+              routes: [{ name: 'InstancePicker',
+                         params: { noAutoConnect: true,
+                                   autoVibe: { url, name: f?.name ?? cached?.name ?? wname ?? url } } }],
+            } as never);
+            splashBridge.dismiss();
+            return;
           }
           if (f) return goTo({ ...f, serverType: (type ?? f.serverType) as typeof f.serverType }, viewMode);
           // A browsed directory server the phone holds — connect it with its real name/type/longitude.
