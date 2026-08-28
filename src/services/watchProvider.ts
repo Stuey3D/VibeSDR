@@ -410,8 +410,22 @@ class WatchProvider {
     // no React/Skia work, so it is safe while the phone is locked (which is exactly
     // when we need it: the watch app is usually opened AFTER the phone is pocketed).
     void Native!.isReachable().then((r) => this.setReachable(r)).catch(() => {});
+    /* ★★★ AND SAY WE ARE STILL HERE. setPhoneStatus only sends on CHANGE, so a phone that is
+     *   running but idle says nothing at all — and silence is exactly what the watch reads as
+     *   "the phone is gone". Buddy's watchdog concludes that after five seconds, latches its
+     *   Start screen, and then goes deliberately silent (it must not ping, or it would boot a
+     *   phone that really was closed) — so it can never find out it was wrong.
+     * ★★ THE PHONE IS THE ONLY ONE THAT CAN BREAK THAT DEADLOCK. It knows it is alive; the watch
+     *   can only guess, and guessing costs either a false Start screen or an accidental boot.
+     *   Stuart, 2026-08-28: after pressing stop, the directories fell back to the play button
+     *   while the phone sat there awake.
+     * ★ Every other tick — 4 s, comfortably inside the 5 s watchdog — and only the status string
+     *   we would have sent anyway. The native side refuses to send on a dead link, so a phone
+     *   with no watch listening costs nothing. */
+    let aliveTick = 0;
     this.pollTimer = setInterval(() => {
       Native!.isReachable().then((r) => this.setReachable(r)).catch(() => {});
+      if (++aliveTick % 2 === 0) Native!.sendPhone(this.phoneStatus);
     }, 2000);
   }
 

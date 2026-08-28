@@ -1040,6 +1040,28 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
   private func apply(_ m: [String: Any]) {
     lastAnyAt = Date()      // stamped before the switch, so every message kind counts
+    /* ★★★ ANY MESSAGE IS PROOF THE PHONE IS ALIVE, and that has to be read in ONE place.
+     *
+     *  phoneClosed is a LATCH: once set, ping() returns early and the heartbeat stops, so Buddy
+     *  goes deliberately silent and can no longer ask. Nothing can then clear it except the phone
+     *  speaking unprompted — which makes "did we notice?" the whole question, and it was being
+     *  answered per-message-kind. The FM-DX case a few hundred lines down says what that costs:
+     *  it had to be fixed there separately, and until it was, Buddy sat on "Start VibeSDR" for a
+     *  whole class of server.
+     *
+     *  ★★ IT IS NOT THE SAME QUESTION AS "IS THERE A SESSION". Stuart, 2026-08-28: after pressing
+     *     stop, the rows cease, the silence watchdog concludes the phone is gone, and the
+     *     directories fall back to the play button — while the phone is sitting right there,
+     *     awake, having just been told to stop. "Buddy needs to know what the phone is actually
+     *     doing and respond to it."
+     *
+     *  ★ THE ANTI-HIJACK RULE IS UNTOUCHED. deliberatelyClosed still wins: a phone the user swiped
+     *    away stays closed until they reopen it, and Buddy still never pings a phone it believes is
+     *    shut. This only says that a phone which HAS spoken is, self-evidently, not shut. */
+    if !deliberatelyClosed, phoneClosed {
+      phoneClosed = false
+      if heartbeat == nil { startHeartbeat() }
+    }
     switch m[WK.kind] as? String {
     case "row":
       if let d = m[WK.row] as? Data {
