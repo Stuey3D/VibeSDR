@@ -917,8 +917,21 @@ class WatchProvider {
   holdAwake(on: boolean) {
     const P = (NativeModules as { VibePowerModule?: { keepAliveForConnect?: (on: boolean) => void } })
       .VibePowerModule;
+    if (this.holdTimer) { clearTimeout(this.holdTimer); this.holdTimer = null; }
+    /* ★★★ AND IT CANNOT BE LEFT ON. Every release below is a code path, and a code path can be
+     *   abandoned: the wearer picks a server and quits Buddy before it connects, the phone stalls
+     *   on a network that never answers, an early return is added later by someone who has not read
+     *   this. Any of those would hold the audio focus for ever — battery, and VibeSDR parked in Now
+     *   Playing over whatever the user was actually listening to (Stuart asked for exactly this
+     *   guarantee: "just as long as it stops if the user quits buddy without connecting").
+     * ★★ A DEADLINE NEEDS NOBODY TO REMEMBER IT. 60 s is far longer than any connect that is going
+     *   to succeed — a cold launch plus a front-door fetch plus two sockets is a handful of seconds
+     *   — so this never cuts a real one short; it only catches the ones that stopped.
+     * ★ Refreshed on each hold, cleared on release: the timer never outlives the thing it bounds. */
+    if (on) this.holdTimer = setTimeout(() => { this.holdTimer = null; P?.keepAliveForConnect?.(false); }, 60000);
     P?.keepAliveForConnect?.(on);
   }
+  private holdTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Re-send everything the watch could be missing. Public so the always-on command listener can
    *  answer `need` from the picker, where no screen has attached. */

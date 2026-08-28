@@ -274,7 +274,7 @@ export default function App() {
       viewMode: ViewMode,
       extra?: Record<string, unknown>,   // local-shim params (RTL-TCP / SpyServer)
     ) => {
-      if (!(await whenNavReady())) { watchTargetPending.claimed = false; return; }
+      if (!(await whenNavReady())) { watchTargetPending.claimed = false; watchProvider.holdAwake(false); return; }
       const target = f.serverType === 'fmdx'
         ? { name: 'Tuner', params: { baseUrl: f.url, instanceName: f.name, viewMode } }
         : { name: 'SDR', params: {
@@ -321,7 +321,8 @@ export default function App() {
         startSpyServer?: (o: object) => Promise<{ port: number; wsBaseUrl: string }>;
       } }).VibeLocalSDR;
       const start = type === 'rtltcp' ? Local?.startTcp : Local?.startSpyServer;
-      if (!start) { watchTargetPending.claimed = false; watchProvider.setPhoneStatus('setup'); return; }
+      if (!start) { watchTargetPending.claimed = false; watchProvider.holdAwake(false);
+                    watchProvider.setPhoneStatus('setup'); return; }
       const opts = type === 'rtltcp'
         ? { host, port, centerFreq: 14_100_000, sampleRate: 2_400_000, fftSize: 8192, fftRate: 10, mode: 'usb' }
         : { host, port, centerFreq: 100_000_000, fftSize: 8192, fftRate: 10, mode: 'wfm' };
@@ -412,7 +413,7 @@ export default function App() {
            *   screen that does not speak the protocol, which is why choosing a radio on Buddy hung
            *   with the phone still unconnected. See RootStackParamList.autoVibe. */
           if (type === 'vibeserver') {
-            if (!(await whenNavReady())) { watchTargetPending.claimed = false; return; }
+            if (!(await whenNavReady())) { watchTargetPending.claimed = false; watchProvider.holdAwake(false); return; }
             navigationRef.reset({
               routes: [{ name: 'InstancePicker',
                          params: { noAutoConnect: true,
@@ -426,7 +427,9 @@ export default function App() {
           if (cached) return goTo({ name: cached.name, url: cached.url, serverType: (type ?? cached.serverType) },
                                   viewMode, { serverLongitude: cached.longitude ?? null });
           if (type) return goTo({ name: wname || url, url, serverType: type }, viewMode);
+          // ★ Nothing to connect to: end the attempt AND put the keep-alive down with it.
           watchTargetPending.claimed = false;   // unknown URL, no type — don't hold the picker
+          watchProvider.holdAwake(false);
         })
         .catch(() => { watchTargetPending.claimed = false; watchProvider.holdAwake(false); });
     };
