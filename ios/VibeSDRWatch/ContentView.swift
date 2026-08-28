@@ -190,9 +190,8 @@ struct ContentView: View {
   @State private var showSdrTut = false
   @State private var showChat = false
   @State private var showHardware = false
-  /// User-selectable wrist-down spectrum timeout (seconds; 0 = Off, keep it running). Set in
-  /// the ControlMenu; the same @AppStorage key drives both.
-  @AppStorage("jrWristTimeout") private var wristTimeout = 30.0
+  // wristTimeout moved OUT: the wrist grace is read where the lifecycle now lives
+  // (VibeSDRWatchApp's root scenePhase handler). ControlMenu still writes the same key.
 
   // ── Control lock (Walkman-style hold) ─────────────────────────────────────────
   /// When locked, the app ignores its OWN inputs — crown (tune/zoom), the long-press menu,
@@ -718,39 +717,15 @@ struct ContentView: View {
     // exactly the moment it has to work. No timer of its own.
     .onChange(of: link.lastRowAt)   { _, _ in syncHint() }
     .onChange(of: link.lastStateAt) { _, _ in syncHint() }
+    /* ★★ VIEW-LOCAL ONLY. The LINK half of this (suspend/resume, the wrist message, the buffer
+     *  reset, the ping) moved to VibeSDRWatchApp's root handler — it must run on EVERY screen, and
+     *  living here meant the phone's row feed stayed paused whenever Buddy came back to anything
+     *  other than the waterfall. One rule, one reader: what is left here is the crown and the tone,
+     *  which genuinely belong to this view. */
     .onChange(of: scenePhase) { _, phase in
-      // YOU LEFT — the mode ends, and the spike drops its spectrum socket (audio keeps
-      // playing in the background, which is the whole point of WKBackgroundModes=[audio]).
-      guard phase == .active else {
-        crownMode = .tune
-        // Buddy has no background audio, so watchOS suspends us right after the wrist falls and the
-        // row feed stops regardless — a LOCAL grace timer would just freeze mid-count. So mark
-        // background NOW (kills the false 'reconnecting' glyph the row-gap would otherwise trigger)
-        // and hand the grace period to the PHONE: it keeps forwarding for `wristTimeout` seconds (a
-        // quick glance-back stays instant), then stops sending the waterfall we can't see — battery
-        // on both ends. Off (0) tells the phone never to pause.
-        link.suspend(graceSeconds: wristTimeout)
-        return
-      }
-      // Back up.
+      guard phase == .active else { crownMode = .tune; return }
       crownUsedAt = Date()
       applyTone()          // re-assert our settings (harmless if nothing was torn down)
-      if link.isBackground {
-        // We dropped ONLY the spectrum socket for wrist-down; the AUDIO socket kept the server
-        // session warm. So reopen JUST the spectrum — fast (no /connection re-POST), and the
-        // last frames stay on screen through the ~one-RTT reopen, so it reads as INSTANT like
-        // the phone. Crucially we do NOT also call reconnectIfNeeded() here: its guards
-        // (status=="live" + lastFrameAt>3s) are both true right after a suspend, so it would
-        // cancel BOTH sockets and do a full re-handshake — tearing down the socket we just
-        // reopened and blipping the audio. That redundant full reconnect WAS the slow resume.
-        link.waterfall.reset()   // clear the stale queue/scroll clock; KEEPS the pixels on screen
-        link.resume()
-      } else {
-        // No explicit suspend (a long park that may have killed the sockets) — only then is a
-        // full reconnect warranted, and it's guarded to a genuine death.
-        link.reconnectIfNeeded()
-      }
-      link.ping()
     }
     // Row draining runs on the ALWAYS-MOUNTED root, NOT the waterfall Canvas. The Canvas
     // only mounts once everGotRow is true — but everGotRow only flips when a row drains, so

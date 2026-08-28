@@ -506,6 +506,27 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     showServers = true
   }
 
+  /* ★★★ WRIST LIFECYCLE IS THE APP'S, NOT THE WATERFALL SCREEN'S — the same lesson startLink()
+   *   already carries on the phone ("the link is a property of the APP, not of a screen").
+   *
+   *  suspend()/resume() were called from ContentView's scenePhase handler alone. Every other screen
+   *  — Start, the picker, FM-DX, DAB, ADS-B — therefore left the wrist state wherever the last
+   *  waterfall put it. Drop the wrist on the waterfall, come back to a latched Start screen, and
+   *  nobody was left to say "wrist up": the phone kept its row feed paused for ever, which reads on
+   *  the wrist as a phone that is gone. Relaunching Buddy did not help either — a fresh process has
+   *  isBackground false and never sends the wrist-up the PHONE is still waiting for.
+   *
+   *  ★ ALWAYS sends the wrist-up, even when we did not think we were backgrounded: the pause lives
+   *    on the PHONE and can outlive this process, so our own flag is not evidence about it. */
+  func becameActive() {
+    if isBackground { waterfall.reset() }   // stale queue/scroll clock; KEEPS the pixels on screen
+    resume()                                // isBackground/resumedAt + wrist-up + requestMissing
+    ping()                                  // no-op while phoneClosed — the anti-hijack still holds
+  }
+
+  /// Wrist dropped, from whichever screen is up. See becameActive().
+  func wentBackground(graceSeconds: Double) { suspend(graceSeconds: graceSeconds) }
+
   /// User pressed "Close Buddy". We cannot terminate a watchOS app from code, so go dormant:
   /// heartbeat off (nothing relaunches the phone), and the closed screen stays up with no
   /// Reopen pressure. The user can swipe Buddy away, or reopen the phone app to resume.
@@ -1078,6 +1099,23 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     if !deliberatelyClosed, phoneClosed {
       phoneClosed = false
       if heartbeat == nil { startHeartbeat() }
+      /* ★★★ AND ASK FOR THE ROWS BACK, or the Start screen returns in five seconds.
+       *
+       *  Clearing the latch is only half of coming back. The phone stops forwarding the waterfall
+       *  on wrist-down (suspend → cmd:wrist down + grace) and stays stopped until it is told the
+       *  wrist is up again — and that message was sent from ContentView's scenePhase handler ONLY,
+       *  i.e. from the waterfall screen, which is NOT on screen while the latch is up.
+       *
+       *  So: the phone's 4 s status arrives, this clears the latch, ContentView appears over a
+       *  stale buffer, no rows follow because nothing ever un-paused them, and the silence watchdog
+       *  latches again five seconds later. Stuart, 2026-08-28: "it flashes up the old not connected
+       *  spectrum for a split second then goes back to start button again" — while the phone sat
+       *  there connected to his default server the whole time. The flash IS that loop.
+       *
+       *  ★ Safe to send here and nowhere near a hijack: the phone has just SPOKEN. We are answering
+       *    a phone we know is awake, not poking one we hope is. */
+      send(["cmd": "wrist", "down": false])
+      requestMissing()
     }
     switch m[WK.kind] as? String {
     case "row":

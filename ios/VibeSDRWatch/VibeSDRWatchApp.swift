@@ -5,6 +5,10 @@ import Darwin
 struct VibeSDRWatchApp: App {
   @StateObject private var link = WatchLink.shared
   @StateObject private var favs = FavStore()
+  @Environment(\.scenePhase) private var scenePhase
+  /// The wrist-down grace the PHONE honours before it stops forwarding. Same @AppStorage key the
+  /// ControlMenu writes and ContentView reads — one setting, read where the lifecycle now lives.
+  @AppStorage("jrWristTimeout") private var wristTimeout = 30.0
 
   /// Show the SERVER PICKER when the user asked for it (menu → Servers) OR when the phone has
   /// no live session to latch onto and is waiting for a choice. Never while a waterfall is up
@@ -85,6 +89,15 @@ struct VibeSDRWatchApp: App {
         .navigationBarHidden(true)   // full-bleed screens; no bar
       }
       .onAppear { link.activate() }
+      /* ★★★ THE WRIST LIFECYCLE, OWNED ONCE, AT THE ROOT. It used to live in ContentView's own
+       *   scenePhase handler — so it ran only while the WATERFALL was on screen, and the Start
+       *   screen, the picker and FM-DX/DAB/ADS-B all left the phone's row feed paused with nobody
+       *   left to un-pause it. ContentView keeps its view-local work (crown mode, tone); the LINK
+       *   is the app's, not a screen's. */
+      .onChange(of: scenePhase) { _, phase in
+        if phase == .active { link.becameActive() }
+        else { link.wentBackground(graceSeconds: wristTimeout) }
+      }
       // The picker mirrors the PHONE's server list — the phone owns the connection, so its
       // favourites (incl. RTL-TCP / SpyServer it can reach) are the truth, not a watch-local copy.
       .onChange(of: link.favourites, initial: true) { _, new in favs.setFromPhone(new) }
