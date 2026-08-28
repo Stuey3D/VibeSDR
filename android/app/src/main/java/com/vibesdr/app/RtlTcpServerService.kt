@@ -36,6 +36,10 @@ class RtlTcpServerService : Service() {
         const val EXTRA_IP   = "ip"
         const val EXTRA_PORT = "port"
         const val EXTRA_MODE = "mode"          // "rtltcp" (default) | "vibeserver"
+        /** ★ Started to REBUILD a server the app update took down — see VibeUpdateReceiver. The
+         *  crash path signals the same thing with a null intent; this one cannot, because it is
+         *  started deliberately and therefore always has one. */
+        const val EXTRA_RESTORE = "restore"
         private const val CHANNEL_ID = "vibesdr_rtltcp_server"
         private const val NOTIF_ID = 4711
         private const val TAG = "RtlTcpServerService"
@@ -83,7 +87,7 @@ class RtlTcpServerService : Service() {
         // Don't test `mode` here: this is a FRESH process, so the field is back to its
         // default and would never match. VibeServerRestore's armed flag is the only
         // thing that survived, and it is the actual source of truth.
-        if (intent == null) {
+        if (intent == null || intent.getBooleanExtra(EXTRA_RESTORE, false)) {
             Thread {
                 val err = VibeServerRestore.restore(applicationContext)
                 if (err != null) Log.w(TAG, "could not rebuild VibeServer: $err")

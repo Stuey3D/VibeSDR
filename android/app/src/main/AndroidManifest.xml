@@ -79,6 +79,14 @@
                  android:resource="@xml/device_filter"/>
     </activity>
     <service android:name=".RtlTcpServerService" android:foregroundServiceType="connectedDevice" android:exported="false"/>
+    <!-- ★★★ PUT A RUNNING SERVER BACK AFTER AN UPDATE — see VibeUpdateReceiver. A package replace
+         stops the app and Android does not recreate the service, so an unattended receiver went
+         dark and stayed dark; MY_PACKAGE_REPLACED is the one signal that says it happened. -->
+    <receiver android:name=".VibeUpdateReceiver" android:exported="false">
+      <intent-filter>
+        <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+      </intent-filter>
+    </receiver>
         <service android:name=".VibeStreamService" android:foregroundServiceType="mediaPlayback" android:exported="true">
       <intent-filter>
         <action android:name="android.media.browse.MediaBrowserService"/>

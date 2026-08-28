@@ -54,6 +54,10 @@ object VibeServerRestore {
     }
 
     /** The user stopped the server ON PURPOSE — do not resurrect it. */
+    /** ★ Was this phone serving when it stopped? The update path asks before it acts — see
+     *  VibeUpdateReceiver. Read-only; arming stays the business of the JS that started the server. */
+    fun isArmed(ctx: Context): Boolean = prefs(ctx).getBoolean(K_ARMED, false)
+
     fun disarm(ctx: Context) {
         prefs(ctx).edit().putBoolean(K_ARMED, false).apply()
     }
