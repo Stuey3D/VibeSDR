@@ -422,6 +422,22 @@ export default function SDRScreen({ route, navigation }: Props) {
         //    answer nothing useful here and connect as they always have.
         const occ = await fetchOccupancy(baseUrl).catch(() => null);
         if (cancelled) return;
+        /* ★★★ AN ADDRESS THAT NAMES A RADIO IS A CHOICE ALREADY MADE — and this held the connect
+         *   for it. Arriving at /r/<id> there is no front door to fetch (the radio answers
+         *   frontDoor:false), so the branch below invents a door of one to carry the owner's
+         *   landing text — and an invented door with no radioBase makes `awaitingRadio` true, which
+         *   is what stops the socket opening until somebody taps the card.
+         * ★★★ NOBODY IS THERE TO TAP. This is the path a WATCH uses: the wearer picked the radio on
+         *   the wrist, the phone is in a pocket, and the card waits for ever. Stuart, 2026-08-28:
+         *   "it looks like it works then gets stuck on connecting."
+         * ★★ Stuart's rule is untouched — "if antenna or landing screen text is present then show
+         *   the landing screen" is about entering a SERVER, and /r/<id> is past that door. Someone
+         *   opening the server itself still gets the real door, the radio list and the notice; only
+         *   an address that has already answered the question connects straight through.
+         * ★ Setting radioBase to the address we are already on is the honest statement of that: the
+         *   radio is chosen, and it is this one. connectBase was going to use it regardless. */
+        const namesRadio = /\/r\/[^/]+$/.test(baseUrl);
+        if (namesRadio) setRadioBase(baseUrl);
         if (occ && (occ.antenna || occ.landingMessage)) {
           setDoor({
             name: instanceName || 'VibeServer',
