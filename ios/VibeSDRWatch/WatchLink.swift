@@ -744,6 +744,24 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     var msg: [String: Any] = ["cmd": "inst", "val": url]
     if !type.isEmpty { msg["type"] = type }
     if !name.isEmpty { msg["name"] = name }
+    /* ★★★ AND COME OFF THE START SCREEN, BECAUSE WE HAVE JUST ASKED FOR A SESSION.
+     *
+     *  The picker now outranks `phoneClosed` so the list is reachable from the Start screen — but
+     *  choosing a server sets showServers = false, and with the latch still up the root fell
+     *  straight back to PhoneClosedView. Stuart, 2026-08-28: "select the Pi it goes back to the
+     *  start screen, open it again select the pi again and then it shows the radio picker." The
+     *  second attempt worked because by then the phone's reply had cleared the latch — so this
+     *  read as a lost message and was a VIEW falling back to a state nobody had left.
+     *  ★★ MY BUG, from making showPicker outrank the latch without asking what happens the moment
+     *     the picker closes. Reaching the list was half the journey.
+     *  ★★★ THE ANTI-HIJACK RULE IS INTACT AND THIS IS NOT AN EXCEPTION TO IT. Tapping a server IS
+     *     the deliberate act the latch exists to wait for — the same licence ▶ Start has always
+     *     had, and we are sending a connect command in the same breath. Buddy still never does
+     *     this on its own; nothing here fires without a finger on a row.
+     *  ★ The heartbeat comes back with it: from now on we expect answers and must be able to ask. */
+    phoneClosed = false
+    deliberatelyClosed = false
+    if heartbeat == nil { startHeartbeat() }
     // ★ Durable for the same reason as browse: choosing a server is an intention, and it is the
     //   one command most likely to be given while the phone is asleep in a pocket.
     sendDurable(msg)
@@ -860,7 +878,12 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
      *   include waking the source — its own note). A ping only proves we are here.
      * ★ Rate-limited inside requestMissing (3 s), and gated on the phone claiming a session, so a
      *   receiver that is legitimately idle is never nagged. */
-    if !isBackground, phoneStatus == "ready" || phoneStatus == "live" {
+    /* ★ GATED ON THE PHONE NOT DENYING A SESSION, rather than on it confirming one. "ready" and
+     *  "live" are not the only states a running receiver reports — the radio question leaves it on
+     *  "idle", and a status message can simply be missed — so listing the good ones meant a session
+     *  that began from any other state was never asked for its rows. The states that genuinely mean
+     *  "there is nothing to send" are few, known, and are the ones to exclude. */
+    if !isBackground, !["pick", "setup", "closed"].contains(phoneStatus) {
       let quiet = Date().timeIntervalSince(lastRowAt ?? .distantPast)
       if quiet > 6 { requestMissing() }
     }
