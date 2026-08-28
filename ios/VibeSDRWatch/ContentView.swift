@@ -1531,6 +1531,20 @@ struct ContentView: View {
     if !rowsFlowing {
       switch link.phoneStatus {
       case "starting":
+        /* ★★★ "STARTING" IS ONLY TRUE FOR A WHILE, and this said it for ever. The phone sets it
+         *   before a watch-driven connect and clears it when the session lands — so anything that
+         *   stops it in between (a PIN prompt the wrist cannot answer, a server that has gone away,
+         *   an app swiped shut mid-connect) left Buddy drawing an hourglass at a phone that had
+         *   given up minutes earlier. Stuart, 2026-08-28: "it gets stuck waiting for VibeSDR and
+         *   never recovers."
+         * ★★ THE PHONE ALSO SAYS SO NOW (it drops back to 'pick' on those paths), and this is the
+         *   belt to that pair of braces: it covers the cases where the phone cannot tell us at all
+         *   — killed, out of range, or wedged — which is exactly when a wrist is most stranded.
+         * ★ 25 s: a cold launch plus a front-door fetch is comfortably inside it, so a real boot is
+         *   never interrupted by this; anything slower has stopped being a boot. */
+        if Date().timeIntervalSince(link.phoneStatusAt) > 25 {
+          return ("iphone", "VibeSDR isn't answering\nCheck your iPhone")
+        }
         return ("hourglass", "Starting VibeSDR…")
       case "pick":
         // No default instance — but there ARE favourites. The wrist can choose.

@@ -722,6 +722,10 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       authSuffix = await resolveVibeAuth(baseUrl, pin);
     } catch {
       setConnecting(false);
+      // ★ Same rule as the autoVibe probe above: a connect that ends in an alert on the phone must
+      //   not leave a watch drawing "Starting VibeSDR…" for a session that will never begin.
+      watchProvider.setPhoneStatus('pick');
+      watchTargetPending.claimed = false;
       Alert.alert('VibeServer', `Could not reach ${host}:${port}. Is it on the same network?`);
       return;
     }
@@ -985,10 +989,23 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       let needsPin = true;
       try { needsPin = await vibeServerNeedsPin(door); }
       catch {
+        /* ★★★ AND TELL THE WATCH, or it waits for ever. applyInstance set the phone to "starting"
+         *   before handing over, and Buddy draws "Starting VibeSDR…" for exactly as long as that
+         *   lasts — so a connect that dies HERE, in an alert on the phone, leaves the wrist saying
+         *   the phone is busy starting something it gave up on minutes ago. Stuart, 2026-08-28:
+         *   "it gets stuck waiting for VibeSDR and never recovers."
+         * ★★ 'pick' rather than a bare stop: it puts Buddy back on the server list, which is both
+         *   true (that is where this phone now is) and the one place the wearer can act. */
+        watchProvider.setPhoneStatus('pick');
+        watchTargetPending.claimed = false;
         if (!cancelled) Alert.alert('VibeServer', `Could not reach ${door}. Is it still up?`);
         return;
       }
       if (cancelled) return;
+      /* ★★ A PIN PROMPT IS A DEAD END FOR THE WRIST. openVibeServer puts an Alert on the PHONE and
+       *  waits for typing; the watch cannot help and must not sit on "Starting…" while it happens.
+       *  Say where the phone actually is — the wearer picks the phone up, or chooses again. */
+      if (needsPin) { watchProvider.setPhoneStatus('pick'); watchTargetPending.claimed = false; }
       openVibeServer(host, port, autoVibe.name, needsPin, autoVibe.url);
     })();
     return () => { cancelled = true; };

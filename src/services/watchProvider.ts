@@ -860,6 +860,14 @@ class WatchProvider {
                                                      e.name ? String(e.name) : undefined);
         else if (e.cmd === 'browse') this.browseHandler?.(String(e.dir ?? ''));
         else if (e.cmd === 'reopen') this.reopenHandler?.();
+        /* ★★★ AND ANSWER "I HAVE NOTHING" FROM HERE TOO. attach() handles `need`, and attach() only
+         *   runs when an SDR or Tuner screen is mounted — so on the PICKER, which is exactly where
+         *   a watch asks for the favourites it has not got, nothing was listening. The listener
+         *   here is the one that outlives every screen, which is why the instance and browse
+         *   commands already live in it; this belongs beside them for the same reason.
+         * ★ A second flush when a screen IS attached costs one round of small messages and cannot
+         *   be wrong; a missing one leaves the wrist showing an empty list. */
+        else if (e.cmd === 'need') this.flushAll();
       },
     );
   }
@@ -881,7 +889,9 @@ class WatchProvider {
   /** No longer closed — the user foregrounded us, or pressed Reopen. */
   clearClosedByUser() { Native?.clearClosedByUser?.(); }
 
-  private flushAll() {
+  /** Re-send everything the watch could be missing. Public so the always-on command listener can
+   *  answer `need` from the picker, where no screen has attached. */
+  flushAll() {
     this.lastPalette = '';    // forces the settings/LUT resend on the next row
     this.sentLogo = '\u0000';
     this.sentStations = '\u0000';

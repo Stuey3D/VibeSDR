@@ -444,10 +444,23 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   /// ★ The radios behind a VibeServer front door, for the watch to choose from. See
   ///   watchProvider.sendRadios: the phone stops short of connecting and asks instead.
   @objc(sendRadios:)
+  /* ★★★ DURABLE, BECAUSE THIS IS A QUESTION AND THE ANSWER STOPS WITHOUT IT. sendDirectory's note
+   *   says a one-shot send needs an error handler; this one HAD the handler and still dropped the
+   *   message, because logging a failure is not delivering it. The radio chooser is the phone
+   *   asking "which of these?" and then STOPPING — applyInstance releases the picker and reports
+   *   idle — so a lost question is a wrist that waits for ever on a phone that is waiting back.
+   * ★★ Stuart, 2026-08-28: "entering a multi radio vibe server seems to get stuck at first but then
+   *   entering it again the radio selection comes up." The second attempt worked because by then
+   *   the link had settled — the classic shape of a message lost while it had not.
+   * ★ transferUserInfo is QUEUED and delivered when it can be, and the watch already routes
+   *   didReceiveUserInfo into the same apply() as a live message, so nothing else has to change. */
   func sendRadios(_ json: String) {
-    guard let s = session, linkAlive else { return }
+    guard let s = session else { return }
+    guard linkAlive else { s.transferUserInfo(["k": "radios", "j": json]); return }
     s.sendMessage(["k": "radios", "j": json], replyHandler: nil, errorHandler: { err in
-      NSLog("[VibeWatch] sendRadios failed (%d bytes): %@", json.utf8.count, err.localizedDescription)
+      NSLog("[VibeWatch] sendRadios failed (%d bytes): %@ — queued instead",
+            json.utf8.count, err.localizedDescription)
+      s.transferUserInfo(["k": "radios", "j": json])
     })
   }
 

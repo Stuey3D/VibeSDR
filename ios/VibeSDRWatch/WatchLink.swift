@@ -83,6 +83,9 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// Servers screen requested from the menu. NAVIGATION only — the phone keeps playing while you
   /// browse, so this must never tear the link down (see WatchLinkCompat.backToPicker).
   @Published var showServers = false
+  /// When phoneStatus last CHANGED — see the note where it is set, and the stall message in
+  /// ContentView. Published so a view that draws the status re-draws when it ages.
+  @Published var phoneStatusAt = Date()
   /// When ANY message last arrived from the phone — the evidence that the watch↔phone hop is
   /// alive. Rows are the strongest signal, but the phone legitimately goes quiet on rows (paused
   /// for power, or a screen with no spectrum), while still sending state and favourites. So the
@@ -504,6 +507,16 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   func openServers() {
     deliberatelyClosed = false
     showServers = true
+    /* ★★★ AND ASK FOR THE FAVOURITES. The phone sends them when it starts and when the link comes
+     *   up — and this screen can be opened long after both, with nothing having passed in either
+     *   direction since. Stuart, 2026-08-28: "the favourties dont populate until you open a
+     *   directory then they appear in front of you." Browsing sends a message, the phone sees the
+     *   watch, and everything it had been holding arrives at once — so the list was never missing,
+     *   only unasked for.
+     * ★★ SAFE HERE, AND ONLY BECAUSE send() REQUIRES isReachable: a phone that is asleep is not
+     *   poked, so the anti-hijack rule this screen was built around still holds. It costs one
+     *   message on a link that is demonstrably already up. */
+    requestMissing()
   }
 
   /* ★★★ WRIST LIFECYCLE IS THE APP'S, NOT THE WATERFALL SCREEN'S — the same lesson startLink()
@@ -1252,6 +1265,10 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       if let st = m["st"] as? String {
         // 'starting' EDGE = a NEW session is beginning (connect / reopen / instance switch).
         let newSession = st == "starting" && phoneStatus != "starting"
+        /* ★ WHEN it started saying this. "Starting…" is a normal, brief state and a fine thing to
+         *  show — but only while it is still plausible. Without a clock there is no way to tell a
+         *  boot from a phone that gave up minutes ago behind a dialog nobody on the wrist can see. */
+        if st != phoneStatus { phoneStatusAt = Date() }
         phoneStatus = st
         if st == "closed" {
           // A heartbeat relaunched the phone headless but it refused to auto-connect and told
