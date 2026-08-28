@@ -67,6 +67,14 @@ cxx "$CPP/local_sdr_shim.cpp"
 # landed). Compiling the stub side costs a few bytes and keeps the shim's one source of truth.
 cxx "$CPP/sdrplay_source.cpp"
 cxx "$CPP/airspyhf_source.cpp"
+# ★★★ AND THE HACKRF, for the THIRD outing of the note above. The shim references
+#     HackRfSource::* unconditionally (the gain ceiling reads lnaGainDb/vgaGainDb, and a fixed
+#     band sets them), so the reference is emitted whether or not iOS ever sees a HackRF. It was
+#     invisible until the archive was rebuilt on 2026-08-28: the committed .a predated the CALLS
+#     as well as the definitions, linked cleanly, and hid the gap — exactly as fd_passing did.
+#     FIVE Xcode Cloud builds failed on a wall of undefined HackRfSource:: symbols before anyone
+#     looked, because a trigger that returns a run id is not a build that finished.
+cxx "$CPP/hackrf_source.cpp"
 cxx "$CPP/net_shim.cpp"
 # ★★★ fd_passing joined 2026-08-25, and its absence was a LINK error, not a compile one — the
 #     shim calls vibe::sendFdTo() so the reference is emitted whether or not iOS ever passes an
@@ -89,4 +97,28 @@ echo "== archive -> $OUT =="
 mkdir -p "$HERE/libs"
 "$LIBTOOL" -static -o "$OUT" "${objs[@]}"
 echo "done: $(ls -la "$OUT" | awk '{print $5}') bytes"
+
+# ★★★ AND CHECK THAT IT WILL LINK, HERE, RATHER THAN IN XCODE CLOUD SEVEN MINUTES LATER.
+#
+#  This list has now been short three times — SdrplaySource (2026-07-27), fd_passing (2026-08-25),
+#  HackRfSource (2026-08-28) — and every time the symptom was the same: the archive builds
+#  perfectly, the marker you grep for is present, and the LINK fails in a place that costs a whole
+#  cloud build to reach. Checking the file was rebuilt proves it was rebuilt; it proves nothing
+#  about whether anything can link against it.
+#
+#  ★★ So: every `vibe::` symbol this archive REFERENCES must also be DEFINED in it. Nothing else
+#     supplies them — the pod compiles one .mm bridge and links this — so an undefined one here is
+#     a failed archive with certainty, not a guess. Foreign symbols (libc++, Apple frameworks,
+#     opus, kissfft) are left alone: they come from elsewhere by design.
+echo "== link check =="
+und=$(nm -guj "$OUT" 2>/dev/null | c++filt | grep '^vibe::' | sort -u || true)
+def=$(nm -gUj "$OUT" 2>/dev/null | c++filt | grep '^vibe::' | sort -u || true)
+missing=$(comm -23 <(printf '%s\n' "$und") <(printf '%s\n' "$def") | grep -v '^$' || true)
+if [ -n "$missing" ]; then
+  echo "!! this archive references vibe:: symbols it does not define — Xcode WILL fail to link:"
+  printf '   %s\n' $missing | head -20
+  echo "   (add the missing .cpp to the list above — see the SdrplaySource/fd_passing notes)"
+  exit 1
+fi
+echo "link check: every vibe:: symbol referenced is also defined"
 rm -rf "$WORK"
