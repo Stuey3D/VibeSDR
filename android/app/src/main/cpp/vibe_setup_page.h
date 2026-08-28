@@ -646,12 +646,25 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
              means, it does not invent one.</div></label>
 
         <label class="hide" id="gainLimitRow"><span class="lbl">Per-band ceilings</span>
-          <div class="row" style="gap:8px">
-            <select id="gainPick" style="flex:1 1 200px"></select>
-            <input type="range" id="gainMaxSlider" class="hide" style="flex:1 1 160px">
-            <input type="text" id="gainMax" placeholder="max, e.g. 25 dB" style="flex:1 1 120px">
-            <button type="button" class="ghost" id="gainAdd" style="flex:0 0 auto">Add</button>
-          </div>
+          <!-- ★★★ ONE BAND'S ENTRY, DRAWN AS ONE THING. The IF ceiling and the HackRF split are
+               stored PER BAND, but they were laid out on their own lines BELOW the Add button —
+               outside the row they belong to — and so read as a single setting for the whole radio
+               (Stuart, 2026-08-28: "that IF gain limit looks like it is one gain limit and not per
+               band"). The data was right and the layout said otherwise, which is the worse of the
+               two: nothing on screen contradicted it.
+               ★★ So everything that goes into ONE entry now sits inside one bordered block with
+               Add at the BOTTOM of it. The button being last is what makes the block read as a
+               form you fill in and then submit, rather than a row followed by some other controls. -->
+          <div style="border-left:3px solid var(--amber);padding:10px 0 10px 12px;margin:10px 0">
+            <div class="dim" style="font-size:12px;margin-bottom:8px">
+              Everything here applies to the ONE band you pick. Add it, then pick another band to
+              set a different ceiling &mdash; each row below is its own band.
+            </div>
+            <div class="row" style="gap:8px">
+              <select id="gainPick" style="flex:1 1 200px"></select>
+              <input type="range" id="gainMaxSlider" class="hide" style="flex:1 1 160px">
+              <input type="text" id="gainMax" placeholder="max, e.g. 25 dB" style="flex:1 1 120px">
+            </div>
           <!-- ★★ THE SDRPLAY'S SECOND STAGE. The RF position above is the right primary control —
                it is ahead of the mixer, so it decides whether the front end overloads at all, and
                capping it leaves the IF AGC its full range to work in. That reasoning assumes
@@ -659,21 +672,25 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
                needs the IF too (Saber, via Stuart, 2026-08-28). Hidden while the AGC is locked on,
                because there the loop owns this control and a ceiling would be a figure nothing
                reads. -->
-          <div class="row hide" id="gainIfRow" style="gap:8px;margin-top:6px">
-            <span class="dim" style="flex:0 0 auto">IF gain ceiling</span>
-            <input type="range" id="gainIfSlider" min="0" max="39" style="flex:1 1 160px">
-            <input type="text" id="gainIfMax" placeholder="max IF position (optional)" style="flex:1 1 140px">
-          </div>
+            <div class="row hide" id="gainIfRow" style="gap:8px;margin-top:6px">
+              <span class="dim" style="flex:0 0 auto">IF ceiling for this band</span>
+              <input type="range" id="gainIfSlider" min="0" max="39" style="flex:1 1 160px">
+              <input type="text" id="gainIfMax" placeholder="max IF position (optional)" style="flex:1 1 140px">
+            </div>
           <!-- ★★★ A TOTAL IS ENOUGH TO LIMIT WITH AND NOT ENOUGH TO SET WITH. LNA + VGA = 30 dB
                describes a whole family of radios: all of it in the LNA is a different receiver from
                all of it in the VGA. So a LOCKED HackRF band needs a second figure — where between
                the two stages that total sits. Only shown when the lock is on: as a limiter the
                listener still chooses the split for themselves, which is today's behaviour and
                stands. -->
-          <div class="row hide" id="gainSplitRow" style="gap:8px;margin-top:6px">
-            <span class="dim" style="flex:0 0 auto">Split</span>
-            <input type="range" id="gainSplitSlider" min="0" max="100" step="5" value="50" style="flex:1 1 200px">
-            <span class="dim" id="gainSplitVal" style="flex:0 0 auto">50% LNA / 50% VGA</span>
+            <div class="row hide" id="gainSplitRow" style="gap:8px;margin-top:6px">
+              <span class="dim" style="flex:0 0 auto">Split for this band</span>
+              <input type="range" id="gainSplitSlider" min="0" max="100" step="5" value="50" style="flex:1 1 200px">
+              <span class="dim" id="gainSplitVal" style="flex:0 0 auto">50% LNA / 50% VGA</span>
+            </div>
+            <div class="row" style="gap:8px;margin-top:10px">
+              <button type="button" class="ghost" id="gainAdd" style="flex:0 0 auto">Add this band</button>
+            </div>
           </div>
           <div id="gainList" class="bandList"></div>
           <div class="note">Cap the bands that overload and leave the rest open &mdash; a strong local FM
