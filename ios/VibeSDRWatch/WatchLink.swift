@@ -740,6 +740,25 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// Pick a server for the PHONE to connect to. Send the TYPE (and name) too — a directory server the
   /// user hasn't favourited isn't in the phone's list, so without the type the phone can't tell an
   /// OWRX/Kiwi from an UberSDR and the connect fails.
+  /* ★★★ EVERYTHING BETWEEN SESSIONS GETS TORN DOWN (Stuart's rule) — in ONE place, so the two
+   *   callers cannot drift. Without it an old RDS name, a DAB ensemble, an aircraft list or, worst,
+   *   the previous receiver's WATERFALL bleeds into the next session.
+   * ★★★ AND THE WATCH DOES IT FOR ITSELF WHEN IT IS THE ONE SWITCHING. This ran only on the phone's
+   *   status going to "starting" — one message, and if it is missed or coalesced there is no
+   *   teardown at all. Stuart, 2026-08-28, switching from a running UberSDR to the Pi: "it even
+   *   connects to one and then freezes showing the pi spectrum mixed in with the UberSDR one." Two
+   *   receivers' rows in one buffer, and a jitter queue whose slot clock belongs to neither.
+   * ★★ We do not have to be TOLD about a switch we initiated. Same lesson as the latch: the wrist
+   *   knows what it just asked for, and hanging that on a single inbound message makes a clean
+   *   switch depend on the least reliable part of the link. */
+  private func beginNewSession() {
+    fmdx = nil; isFmdx = false; dab = nil; aircraft = []
+    everGotRow = false; meter = ""
+    bandName = ""; bandColor = nil; bandLo = 0; bandHi = 0
+    waterfall.reset(); waterfall.setExpectedRowRate(Self.rowFps)  // fresh buffer, seeded rate
+    pendingRows.removeAll(); lastSlot = 0                          // and a fresh jitter queue
+  }
+
   func selectInstance(_ url: String, type: String = "", name: String = "") {
     var msg: [String: Any] = ["cmd": "inst", "val": url]
     if !type.isEmpty { msg["type"] = type }
@@ -762,6 +781,9 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     phoneClosed = false
     deliberatelyClosed = false
     if heartbeat == nil { startHeartbeat() }
+    // ★★ AND THE OLD SESSION GOES NOW — see beginNewSession. We asked for this switch, so we do not
+    //    wait to be told about it; the previous receiver's waterfall must not survive into the next.
+    beginNewSession()
     // ★ Durable for the same reason as browse: choosing a server is an intention, and it is the
     //   one command most likely to be given while the phone is asleep in a pocket.
     sendDurable(msg)
@@ -1343,13 +1365,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
           // TEAR DOWN the previous session (Stuart: "everything between sessions needs tearing
           // down"). Otherwise an old FM-DX RDS name (fmdx.ps) / DAB ensemble / aircraft list /
           // band bleeds into a different backend — e.g. "PRIDE" showing on a shortwave session.
-          if newSession {
-            fmdx = nil; isFmdx = false; dab = nil; aircraft = []
-            everGotRow = false; meter = ""
-            bandName = ""; bandColor = nil; bandLo = 0; bandHi = 0
-            waterfall.reset(); waterfall.setExpectedRowRate(Self.rowFps)  // fresh buffer, seeded rate
-            pendingRows.removeAll(); lastSlot = 0                          // and a fresh jitter queue
-          }
+          if newSession { beginNewSession() }
         }
       }
 
