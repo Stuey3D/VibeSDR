@@ -10,6 +10,7 @@ import { useFonts } from 'expo-font';
 LogBox.ignoreAllLogs();
 
 import { watchProvider } from './src/services/watchProvider';
+import { fetchFrontDoor, radioBaseUrl, isSharedDial } from './src/services/vibeserverRadios';
 import { favouritesCollection, getFavourites, getTcpFavs, setFavouriteServerType } from './src/services/favourites';
 import { bookmarksCollection } from './src/services/bookmarksSync';
 import { registerCollection, registerSyncHook, startCloudSync } from './src/services/cloudSync';
@@ -324,7 +325,8 @@ export default function App() {
       );
     };
 
-    const applyInstance = (url: string, wtype?: string, wname?: string) => {
+    const applyInstance = (urlIn: string, wtype?: string, wname?: string) => {
+      let url = urlIn;
       if (!url) return;
       watchTargetPending.claimed = true;   // stop the picker auto-connecting past us
       watchProvider.setPhoneStatus('starting');
@@ -348,6 +350,37 @@ export default function App() {
               if (f && detected !== f.serverType) setFavouriteServerType(url, detected).catch(() => {});
               type = detected as typeof type;
             }
+          }
+          /* ★★★ A VIBESERVER FRONT DOOR IS NOT A RECEIVER, and this is the one place that can
+           *   know it. Jr resolves the door where the connection is MADE rather than in its
+           *   picker, and says why: a server is reached from several directions — a favourite,
+           *   the last one on launch, a directory row — and a check on one path silently misses
+           *   the rest. Buddy's connection is made HERE, on the phone, so here is the equivalent
+           *   spot; putting it in browseForWatch covered the directory and nothing else.
+           * ★★ ONE RADIO IS NOT A CHOICE — prefixed silently, and the watch sees what it always
+           *    did. SEVERAL is a question only the wearer can answer, so the list goes to the
+           *    wrist and this connect stops here; picking one comes back as an ordinary `inst`
+           *    with the radio's own address, and lands in this same function with nothing left
+           *    to resolve.
+           * ★ Skipped when the address already names a radio (…/r/<id>), which is exactly what
+           *   the wrist sends back — otherwise choosing would ask the question again. */
+          if (type === 'vibeserver' && /^https?:\/\//i.test(url) && !/\/r\/[^/]+$/.test(url)) {
+            const door = await fetchFrontDoor(url).catch(() => null);
+            if (door && door.radios.length > 1) {
+              watchProvider.sendRadios(url, door.name || wname || 'VibeServer',
+                door.radios.map((r) => ({
+                  id: radioBaseUrl(url, r.id),
+                  name: r.label || r.driver || 'radio',
+                  users: r.users ?? 0,
+                  shared: isSharedDial(r),
+                })));
+              // ★ Let go of the picker: we are not connecting, we are asking. Without this the
+              //   phone would sit "starting" behind a question nobody had answered yet.
+              watchTargetPending.claimed = false;
+              watchProvider.setPhoneStatus('idle');
+              return;
+            }
+            if (door && door.radios.length === 1) url = radioBaseUrl(url, door.radios[0].id);
           }
           if (type === 'rtltcp' || type === 'spyserver') {
             // Parse host:port off the url (rtltcp://h:p or spyserver://h:p).

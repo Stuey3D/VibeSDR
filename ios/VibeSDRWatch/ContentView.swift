@@ -567,6 +567,37 @@ struct ContentView: View {
     // Refusal / timeout card — a connection that will never happen (Kiwi full / password /
     // blocked / unreachable). Covers the screen so nobody sits waiting; one tap back to servers.
     .overlay { if let err = link.connectError { refusalCard(err) } }
+    /* ★★★ ONE SERVER LISTING, THEN ITS RADIOS — the shape Jr and the phone both use, and the one
+     *   Buddy was missing entirely. A multi-radio machine publishes ONE directory entry (the
+     *   door), so tapping it used to hand the phone an address that is not a receiver: it tried
+     *   to connect anyway and reported "iPhone lost the server" (Stuart, 2026-08-28).
+     * ★★ THE PHONE ASKS THE QUESTION, because the phone is where the connection is made — from a
+     *    directory row, a favourite, or a hand-over alike. The wrist only shows the list and
+     *    sends back the address it was given.
+     * ★ Dismissible, unlike Jr's. Jr is the receiver, so backing out would leave it connected to
+     *   nothing; here the phone has simply not connected yet, so there is nothing stranded and
+     *   refusing to let go would be the ruder choice. */
+    .sheet(isPresented: Binding(get: { !link.radioChoices.isEmpty },
+                                set: { if !$0 { link.dismissRadioChoice() } })) {
+      NavigationStack {
+        List {
+          Section(link.radioChoiceName.isEmpty ? "Choose a receiver" : link.radioChoiceName) {
+            ForEach(link.radioChoices) { r in
+              Button { link.chooseRadio(r) } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(r.name).font(.system(size: 15, weight: .medium))
+                  // ★ Says what a radio IS before you take a seat on it — the same reason Jr
+                  //   shows a summary rather than a bare name.
+                  Text(r.shared ? "Shared dial · everyone hears the same"
+                                : (r.users > 1 ? "Up to \(r.users) listeners" : "Single listener"))
+                    .font(.system(size: 11)).foregroundColor(.gray)
+                }
+              }.buttonStyle(.plain)
+            }
+          }
+        }
+      }
+    }
     // PUSHED, not presented as a sheet. A watchOS sheet comes with a big header —
     // the X, the clock and a grab handle — which ate ~100pt off the top before the
     // pad's own content began, pushing the bottom row clean off the screen (and

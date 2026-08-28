@@ -412,6 +412,16 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     })
   }
 
+  /// ★ The radios behind a VibeServer front door, for the watch to choose from. See
+  ///   watchProvider.sendRadios: the phone stops short of connecting and asks instead.
+  @objc(sendRadios:)
+  func sendRadios(_ json: String) {
+    guard let s = session, linkAlive else { return }
+    s.sendMessage(["k": "radios", "j": json], replyHandler: nil, errorHandler: { err in
+      NSLog("[VibeWatch] sendRadios failed (%d bytes): %@", json.utf8.count, err.localizedDescription)
+    })
+  }
+
   /// The DAB multiplex — ensemble, services, and which one is playing. DAB is a
   /// LIST, not a continuum: you switch service, you never tune.
   @objc(sendDab:)

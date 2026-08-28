@@ -44,6 +44,10 @@ RCT_EXTERN_METHOD(sendDab : (NSString *)json)
 RCT_EXTERN_METHOD(sendFavourites : (NSString *)json)
 
 RCT_EXTERN_METHOD(sendDirectory : (NSString *)json)
+// ★★★ AND DECLARED HERE TOO. A Swift @objc method the bridge header does not list is not a
+//     missing method — it is a SILENT one: the JS side calls it, gets undefined, and nothing
+//     anywhere says so. This file has cost us that twice already.
+RCT_EXTERN_METHOD(sendRadios : (NSString *)json)
 
 RCT_EXTERN_METHOD(sendPhone : (NSString *)status)
 

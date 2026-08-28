@@ -253,6 +253,22 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// are different problems with different user actions — retrying achieves nothing if the phone
   /// app simply is not running. Keyed by directory id; cleared when a real reply arrives.
   @Published var directoryPhoneSilent: Set<String> = []
+  /* ★★★ THE RADIOS BEHIND A FRONT DOOR. Sent when the phone finds that the address the wrist
+   *   asked for is a MACHINE rather than a receiver — one server listing, then its radios, which
+   *   is the shape Jr already uses and the phone's own picker uses.
+   * ★ Each row's `id` is a complete address the phone has already prefixed with /r/<id>, so
+   *   choosing one is an ordinary connect: the watch never learns how a radio is addressed. */
+  struct RadioChoice: Codable, Identifiable, Equatable {
+    let id: String; let name: String; let users: Int; let shared: Bool
+  }
+  private struct RadiosMsg: Codable {
+    let door: String; let name: String; let radios: [RadioChoice]
+  }
+  /// Non-empty while the wrist is being asked which radio it wants. Cleared by choosing, or by
+  /// backing out of the list.
+  @Published var radioChoices: [RadioChoice] = []
+  @Published var radioChoiceName = ""
+
   private struct DirMsg: Codable {
     let dir: String; let servers: [DirRow]
     struct DirRow: Codable { let id: String; let name: String; let type: String
@@ -679,6 +695,19 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     if !name.isEmpty { msg["name"] = name }
     send(msg)
   }
+
+  /// ★ Choosing a radio is an ORDINARY connect. `r.id` is already the full address the phone
+  ///   prefixed with /r/<id>, so this needs no new command and no new handling at the far end —
+  ///   applyInstance sees an address that names a radio and has nothing left to resolve.
+  func chooseRadio(_ r: RadioChoice) {
+    radioChoices = []
+    radioChoiceName = ""
+    selectInstance(r.id, type: "vibeserver", name: r.name)
+  }
+
+  /// Back out of the question without choosing. The phone is not connecting, so there is nothing
+  /// to cancel — only the list to put away.
+  func dismissRadioChoice() { radioChoices = []; radioChoiceName = "" }
 
   func setMode(_ m: String) { send(["cmd": "mode", "val": m]) }
   func setStep(_ hz: Double) { send(["cmd": "step", "val": hz]) }
@@ -1153,6 +1182,14 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
          let d = j.data(using: .utf8),
          let list = try? JSONDecoder().decode([Favourite].self, from: d) {
         favourites = list
+      }
+
+    case "radios":
+      // ★ A question, not a state: the phone has stopped short of connecting and is waiting.
+      if let j = m[WK.json] as? String, let d = j.data(using: .utf8),
+         let msg = try? JSONDecoder().decode(RadiosMsg.self, from: d) {
+        radioChoiceName = msg.name
+        radioChoices = msg.radios
       }
 
     case "dir":

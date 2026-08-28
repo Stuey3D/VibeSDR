@@ -45,6 +45,7 @@ const Native = NativeModules.VibeWatchModule as
       sendReceiver(lat: number, lon: number): void;
       sendFavourites(json: string): void;
       sendDirectory(json: string): void;
+      sendRadios(json: string): void;
       sendPhone(status: string): void;
       isClosedByUser(): Promise<boolean>;
       clearClosedByUser(): void;
@@ -796,6 +797,20 @@ class WatchProvider {
 
   /** A directory's servers, for the watch to MIRROR (it keeps no server list of its own). Fetched by
    *  the phone on a `browse` request; the watch displays these and connects by referencing them. */
+  /** ★★★ THE RADIOS BEHIND A FRONT DOOR, for the wrist to choose from.
+   *  Sent instead of connecting: applyInstance stops when it finds a door with more than one
+   *  radio, because which receiver you want is a question only the wearer can answer. Picking one
+   *  comes back as an ordinary `inst` carrying that radio's own address, so the reply needs no
+   *  new path — it lands where every other connection does.
+   *  ★ `id` is the full address, already prefixed with /r/<id> by the phone. The watch never
+   *    learns how a radio is addressed; it is handed the address, which is the same rule the
+   *    directory rows follow. */
+  sendRadios(doorUrl: string, name: string, radios: {
+    id: string; name: string; users: number; shared: boolean;
+  }[]): void {
+    Native?.sendRadios?.(JSON.stringify({ door: doorUrl, name, radios }));
+  }
+
   sendDirectory(dirId: string, servers: {
     id: string; name: string; type: string; country: string | null;
     users: number; full: boolean; dist: number | null;
