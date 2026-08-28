@@ -88,7 +88,16 @@ struct FmdxView: View {
       }
     }
     .ignoresSafeArea()
-    .focusable(!volumeMode)              // release the crown to the VolumeControl in volume mode
+    /* ★★★ THE CROWN STAYS OURS, ALWAYS — this released it to a VolumeControl that DOES NOT EXIST
+     *   in Buddy. The comment fifteen lines up says so itself ("No native VolumeControl in Buddy")
+     *   and renders EmptyView() in its place, but the focus rule was carried over from Jr, where a
+     *   real WKInterfaceVolumeControl takes the crown. So in volume mode Buddy handed the crown to
+     *   nothing: the wrist could not change the volume at all, and the phone had to be dug out to
+     *   do it. Stuart, 2026-08-28: "the volume control in FM-DX mode isnt working ... turning up
+     *   the volume on the phone i hear it."
+     * ★★ Buddy's volume is the PHONE's system volume, relayed as cmd:vol — there is nothing local
+     *   for the crown to be given to, which is exactly why keeping it is the whole mechanism. */
+    .focusable()
     .focused($crownFocused)
     .digitalCrownRotation($crown, from: 0, through: Self.detents, by: 1,
                           sensitivity: .low, isContinuous: true, isHapticFeedbackEnabled: true)
@@ -100,13 +109,20 @@ struct FmdxView: View {
       if delta >  range / 2 { delta -= range }
       if delta < -range / 2 { delta += range }
       lastDetent = detent
-      if volumeMode { return }           // the native VolumeControl owns the crown here
+      // ★★ IN VOLUME MODE THE CROWN IS THE VOLUME. It used to return here and leave the delta on
+      //    the floor, because Jr's VolumeControl would have consumed it; Buddy has none, so this is
+      //    the only thing that can act on it. Not gated on `armed`: the arm switch protects a
+      //    SHARED TUNER from being moved, and the loudness in your own ear is nobody else's
+      //    business — the same rule the phone's own handler states.
+      if volumeMode { link.volume(delta: delta); return }
       guard armed else { return }        // DISARMED = the crown does nothing on a shared receiver
       disarmAt = Date().addingTimeInterval(Self.armSeconds)
       link.tune(delta: delta)
     }
     .onChange(of: volumeMode) { _, v in
-      if v { crownFocused = false; armed = false; disarmAt = nil; armVolTimeout() }
+      // ★ Keep the focus in BOTH directions — the crown is ours either way now, it just means
+      //   something different. Dropping focus here is what left volume mode with a dead crown.
+      if v { crownFocused = true; armed = false; disarmAt = nil; armVolTimeout() }
       else { volTimer?.cancel(); crownFocused = true }
     }
     .onReceive(driver) { _ in

@@ -61,11 +61,14 @@ struct DabView: View {
         .buttonStyle(.plain)
         .handGestureShortcut(.primaryAction)
     }
-    // Volume uses the NATIVE WKInterfaceVolumeControl (Apple's HUD) — it drives the real output/speaker
-    // and reaches full volume; our own gain couldn't. In volume mode the list releases the crown so the
-    // native control owns it. The idle timeout is a generous FIXED window (native crown ticks aren't
-    // visible to us to reset on, same as the main screen).
-    .focusable(!volumeMode)
+    /* ★★★ THE CROWN STAYS OURS — the same leftover FM-DX had, found by looking for it. This
+     *   released the crown "so the native control owns it", and Buddy HAS no native control: the
+     *   overlay below is an EmptyView and says so. In volume mode the crown went to nothing and DAB
+     *   volume could not be changed from the wrist at all.
+     * ★★ On Buddy the volume IS the phone's system volume, relayed as cmd:vol — there is nothing
+     *   local to hand the crown to, which is precisely why keeping it is the mechanism. (Jr keeps
+     *   the old rule: it has a real WKInterfaceVolumeControl, because Jr plays the audio itself.) */
+    .focusable()
     .focused($crownFocused)
     .digitalCrownRotation($crown, from: 0, through: Self.detents, by: 1,
                           sensitivity: .low, isContinuous: true, isHapticFeedbackEnabled: true)
@@ -79,8 +82,10 @@ struct DabView: View {
       EmptyView()
     }
     .onChange(of: volumeMode) { _, v in
-      if v { crownFocused = false; armVolTimeout() }               // release list crown → VolumeControl
-      else { volTimeout?.cancel(); DispatchQueue.main.async { crownFocused = true } }   // re-grab for the cursor
+      // ★ Focus is kept in BOTH directions now — the crown is ours either way, it just means volume
+      //   instead of the list cursor. Dropping it is what left volume mode dead.
+      if v { armVolTimeout(); DispatchQueue.main.async { crownFocused = true } }
+      else { volTimeout?.cancel(); DispatchQueue.main.async { crownFocused = true } }
     }
     .onChange(of: crown) { _, new in
       let detent = Int(new.rounded())
@@ -90,6 +95,9 @@ struct DabView: View {
       if delta >  range / 2 { delta -= range }
       if delta < -range / 2 { delta += range }
       lastDetent = detent
+      // ★★ VOLUME MODE MEANS THE CROWN IS THE VOLUME. Without this the delta fell through to the
+      //    list cursor — or, with focus released, was never delivered at all.
+      if volumeMode { link.volume(delta: delta); return }
       let n = link.dabProgrammes.count
       guard n > 0 else { return }
       cursor = min(n - 1, max(0, cursor - delta))   // clamp, don't wrap — a list has ends (crown up = up)
