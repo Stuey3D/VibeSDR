@@ -22,7 +22,7 @@ cmake_minimum_required(VERSION 3.20)
 #     package takes its upstream version from here, and the macOS app's plist is bumped alongside
 #     it. They must not drift: a Pi reporting 3.1.0 while the Mac says 3.0.2 makes every "which
 #     version are you on?" answer ambiguous, which is the question every fault report starts with.
-project(vibeserver VERSION 4.1.49 LANGUAGES CXX C)
+project(vibeserver VERSION 4.1.50 LANGUAGES CXX C)
 # ★ The single source of truth for the version. macOS shipped as VibeServer 1.0.0 (notarised),
 #   so Linux starts level with it rather than inventing a separate number for the same server.
 set(VIBESERVER_VERSION "${PROJECT_VERSION}")
@@ -376,6 +376,12 @@ target_link_libraries(vibeserver PRIVATE vibeserver_core)
 #      wrong hardware, not a crash.
 add_executable(test-radio-api "${CMAKE_CURRENT_SOURCE_DIR}/test-radio-api.cpp")
 target_link_libraries(test-radio-api PRIVATE vibeserver_core)
+
+# ★ Header-only and dependency-free on purpose: the rule it guards (never emit a byte a browser
+#   will hang up over) belongs to the wire, not to any one radio, so its test must be runnable
+#   without a device, a socket or the rest of the core.
+add_executable(test-utf8 "${CMAKE_CURRENT_SOURCE_DIR}/test-utf8.cpp")
+target_include_directories(test-utf8 PRIVATE "${CPP_DIR}")
 if(APPLE)
   # libusb on macOS talks to IOKit; these are system frameworks, nothing to ship.
   target_link_libraries(vibeserver_core PUBLIC

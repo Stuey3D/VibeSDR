@@ -48,7 +48,61 @@ namespace vibeadmin {
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /** JSON string escaping. Local copy so this header stands alone. */
-inline std::string esc(const std::string& s) {
+/**
+ * ★★★ A TEXT FRAME THAT IS NOT VALID UTF-8 KILLS THE SOCKET — the browser does it, not us.
+ *
+ *  RFC 6455 §8.1 requires a client to FAIL THE WEBSOCKET CONNECTION on a text frame whose payload
+ *  is not well-formed UTF-8. So one bad byte anywhere in a JSON message takes down the whole
+ *  spectrum/control socket, and everything that rides on it — the waterfall AND tuning — while the
+ *  AUDIO socket, being a different socket, plays on perfectly. That is the exact shape of the fault
+ *  Stuart chased across two different servers (2026-08-28): "the audio is perfect not missed a beat
+ *  but the spectrum is not connected and seems to be receiving the odd frame here or there."
+ *
+ * ★★★ AND THE BAD BYTE COMES OFF THE AIR. RDS text is in the EBU character set and arrives over a
+ *  noisy link: with block errors at 87-93% a corrupted group put 0x81 into the PTYN field, which
+ *  went into the JSON verbatim. It is INTERMITTENT and it follows the STATION, not the machine —
+ *  which is why it looked like a network fault on one receiver and a tunnel fault on another.
+ *  Caught live: PTYN "    \x81.DS" killed every reconnect; minutes later the same corrupted field
+ *  decoded as "\MXF" — all ASCII — and the page recovered on its own with no refresh.
+ *
+ * ★★ SO THE WIRE MUST NOT BE ABLE TO CARRY IT. Not "the RDS decoder should transcode properly" —
+ *  it should, and that is worth doing — but a JSON writer that CAN emit an invalid byte is one bit
+ *  error away from this every time, from any field, on any radio. One choke point, and the class of
+ *  fault is gone: PTYN, PS, RadioText, LongPS, RT+ and the owner's own free text all pass here.
+ * ★ DROPPED rather than replaced with U+FFFD: this is corruption, not a character we failed to
+ *   render, and a station name should not sprout a black diamond because one group was misread.
+ *   The same choice the control-character rule below already makes.
+ */
+inline std::string utf8Clean(const std::string& s) {
+    std::string o; o.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ) {
+        const unsigned char c = (unsigned char)s[i];
+        if (c < 0x80) { o.push_back((char)c); ++i; continue; }
+        // How many continuation bytes should follow, and the smallest code point that is not an
+        // overlong encoding of something shorter.
+        int need; unsigned cp; unsigned lo;
+        if      ((c & 0xE0) == 0xC0) { need = 1; cp = c & 0x1Fu; lo = 0x80u; }
+        else if ((c & 0xF0) == 0xE0) { need = 2; cp = c & 0x0Fu; lo = 0x800u; }
+        else if ((c & 0xF8) == 0xF0) { need = 3; cp = c & 0x07u; lo = 0x10000u; }
+        else { ++i; continue; }                       // 0x80-0xBF or 0xF8+ : never a lead byte
+        if (i + (size_t)need >= s.size()) { ++i; continue; }   // truncated at the end of the string
+        bool ok = true;
+        for (int k = 1; k <= need; k++) {
+            const unsigned char cc = (unsigned char)s[i + (size_t)k];
+            if ((cc & 0xC0) != 0x80) { ok = false; break; }
+            cp = (cp << 6) | (cc & 0x3Fu);
+        }
+        // Overlongs, surrogates and anything past U+10FFFF are ill-formed even when the shape fits.
+        if (!ok || cp < lo || cp > 0x10FFFFu || (cp >= 0xD800u && cp <= 0xDFFFu)) { ++i; continue; }
+        o.append(s, i, (size_t)need + 1);
+        i += (size_t)need + 1;
+    }
+    return o;
+}
+
+inline std::string esc(const std::string& s_raw) {
+    // ★ Cleaned FIRST — see utf8Clean. Everything below then only has to worry about JSON syntax.
+    const std::string s = utf8Clean(s_raw);
     std::string o;
     o.reserve(s.size() + 8);
     for (unsigned char c : s) {

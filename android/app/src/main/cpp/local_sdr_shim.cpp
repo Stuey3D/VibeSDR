@@ -6815,7 +6815,13 @@ struct LocalSdrShim::Impl {
     }
 
     // FM RDS + stereo status → client (reuses the OWRX metadata display).
-    static std::string jsonEscape(const std::string& s) {
+    /** ★★★ THE SECOND WRITER OF THE SAME RULE — and it had the same hole. See vibeadmin::utf8Clean:
+     *  a text frame that is not valid UTF-8 makes the BROWSER fail the socket, taking the waterfall
+     *  and tuning with it while audio (its own socket) plays on. This escaper is the one the RDS
+     *  fields go through — ptyn, longPs, rtpTitle, rtpArtist — so it is the one that shipped the
+     *  0x81 that started this. Cleaned first; the loop below is then only about JSON syntax. */
+    static std::string jsonEscape(const std::string& s_raw) {
+        const std::string s = vibeadmin::utf8Clean(s_raw);
         std::string o;
         for (char c : s) {
             if (c == '"' || c == '\\') { o.push_back('\\'); o.push_back(c); }
