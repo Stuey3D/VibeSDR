@@ -138,8 +138,8 @@ struct Config {
     std::string gainLocks;
     /** Legacy radio-wide lock (4.1.47/48); a fallback while gainLocks is empty. */
     bool gainLock = false;
-    /** The SDRplay's IF ceiling, and the HackRF's per-band LNA/VGA split. See RadioConfig. */
-    std::string ifGainLimits;
+    /** The SDRplay's IF gain-reduction floor, and the HackRF's per-band split. See RadioConfig. */
+    std::string ifGrLimits;
     std::string gainSplits;
 
     /** The sample rate is PINNED — see RadioConfig::rateLock. */
@@ -302,8 +302,18 @@ struct RadioConfig {
      *  decides whether the front end overloads; the IF reduction is a separate control and on a
      *  damaged RSP1 clone the RF stage alone is not enough (Saber, via Stuart, 2026-08-28).
      *  ★ Only meaningful with the AGC lock OFF — a locked IF AGC owns this control, so a ceiling
-     *    on it would be a number nothing reads. Same band syntax, same parser. */
-    std::string ifGainLimits;
+     *    on it would be a number nothing reads. Same band syntax, same parser.
+     *  ★★★ THIS IS A GAIN REDUCTION IN dB — 20 is maximum gain, 59 is minimum — which is what the
+     *  listener's own slider says ("IF GAIN REDUCTION ... more reduction = less gain") and what the
+     *  wire field `ifgr` carries. It was briefly stored as a GAIN POSITION to match the RF ceiling
+     *  beside it, and Saber said what that cost: the owner's figure and the listener's figure
+     *  described the same stage and could not be compared. The value is the LEAST reduction a
+     *  listener may use, so a BIGGER number is a TIGHTER limit — the opposite of every other
+     *  ceiling here, which is exactly why it must be labelled as a reduction and not as a ceiling.
+     *  ★ NEW KEY, deliberately: `ifGainLimits` held the old meaning, and silently reinterpreting a
+     *    number is how a limit comes to do the opposite of what was asked. An old value is ignored
+     *    and the owner sets it again, against a slider that now reads in the client's own dB. */
+    std::string ifGrLimits;
     /** ★★ THE HACKRF'S SPLIT, PER BAND. A TOTAL does not determine the two stages, so a ceiling is
      *  enough to LIMIT with and not enough to SET with. This is the LNA's share of that total, 0-100
      *  (the VGA takes the rest), and it is read only when gainLock is on. Per band, because the

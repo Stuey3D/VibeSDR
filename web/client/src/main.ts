@@ -1069,7 +1069,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         if (first) setMode(first, true);
       }
     },
-    onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio, lockedCentre, gainCap, agcLocked, gainLocked, ifGainCap,
+    onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio, lockedCentre, gainCap, agcLocked, gainLocked, ifGrFloor,
                gainNow, agc, ovlSteps, adcPeak) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
       hwGainNow = typeof gainNow === 'number' ? gainNow : -1;
@@ -1121,7 +1121,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       hwGainCap = typeof gainCap === 'number' ? gainCap : -1;
       hwAgcLocked = agcLocked === true;
       hwGainLocked = gainLocked === true;
-      hwIfGainCap = typeof ifGainCap === 'number' ? ifGainCap : -1;
+      hwIfGrFloor = typeof ifGrFloor === 'number' ? ifGrFloor : -1;
       applyIfGainCap();
       // ★ Say WHY it cannot be turned off, where the hand is already going. Locked is the owner's
       //   decision, not a fault, and an unexplained dead control reads as the latter.
@@ -1774,8 +1774,8 @@ let hwAgcLocked = false;
 /** The owner has FIXED the gain on this band — see the hwinfo field. Per band, so it changes as
  *  the listener tunes; every control it governs is re-applied on each hwinfo. */
 let hwGainLocked = false;
-/** The RSP's IF ceiling at this frequency, as a GAIN position; -1 = none. */
-let hwIfGainCap = -1;
+/** The least IF gain reduction the owner allows here, in dB — the slider's own units; -1 = none. */
+let hwIfGrFloor = -1;
 let hwRates: number[] = [];
 /** >0 = the SERVER pinned the capture rate; the picker is hidden. */
 let hwLockedRate = 0;
@@ -8320,12 +8320,16 @@ function applyGainCap() {
 function applyIfGainCap() {
   const gr = document.getElementById('rspIfGr') as HTMLInputElement | null;
   if (!gr) return;
-  const floor = hwIfGainCap >= 0
-    ? Math.max(radioCaps?.ifGrMin ?? 20, Math.min(radioCaps?.ifGrMax ?? 59, 59 - hwIfGainCap))
+  // ★ No conversion any more: the owner's figure and this slider are both a REDUCTION in dB, which
+  //   is what Saber asked for — the number he sets is the number a listener sees the slider stop at.
+  const floor = hwIfGrFloor >= 0
+    ? Math.max(radioCaps?.ifGrMin ?? 20, Math.min(radioCaps?.ifGrMax ?? 59, hwIfGrFloor))
     : (radioCaps?.ifGrMin ?? 20);
   gr.min = String(floor);
   if (Number(gr.value) < floor) gr.value = String(floor);
-  gr.title = hwIfGainCap >= 0 ? 'The owner has limited the IF gain on this band' : '';
+  gr.title = hwIfGrFloor >= 0
+    ? `The owner requires at least ${floor} dB of IF gain reduction on this band`
+    : '';
 }
 
 function applyGainLocked() {

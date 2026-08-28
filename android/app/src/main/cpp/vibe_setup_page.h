@@ -675,10 +675,23 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
                needs the IF too (Saber, via Stuart, 2026-08-28). Hidden while the AGC is locked on,
                because there the loop owns this control and a ceiling would be a figure nothing
                reads. -->
+            <!-- ★★★ THE NAME AND THE UNITS THE LISTENER'S OWN CONTROL USES. This asked for a "max
+                 IF position" — a gain position, to match the RF ceiling beside it — and Saber, who
+                 owns the RSP this exists for, reported that it should read as GAIN REDUCTION "as
+                 per the control in the client". He is right: the listener's slider says IF GAIN
+                 REDUCTION in dB and the wire field carries a reduction, so an owner's figure in
+                 any other unit describes the same stage in a way nobody can compare.
+                 ★★ 20 to 59 dB, WHICH IS THE RANGE THE RADIO ACTUALLY HAS — the slider was 0-39,
+                 the span of the old position scale, so it could not express the ends of the
+                 control it was limiting ("the slider isnt giving the full range").
+                 ★ A BIGGER NUMBER IS A TIGHTER LIMIT here, the opposite of every other figure on
+                 this page, because more reduction is less gain. That is exactly why it is labelled
+                 as a reduction and not dressed up as a ceiling. -->
             <div class="row hide" id="gainIfRow" style="gap:8px;margin-top:6px">
-              <span class="dim" style="flex:0 0 auto">IF ceiling for this band</span>
-              <input type="range" id="gainIfSlider" min="0" max="39" style="flex:1 1 160px">
-              <input type="text" id="gainIfMax" placeholder="max IF position (optional)" style="flex:1 1 140px">
+              <span class="dim" style="flex:0 0 auto">Least IF gain reduction</span>
+              <input type="range" id="gainIfSlider" min="20" max="59" style="flex:1 1 160px">
+              <input type="text" id="gainIfMax" placeholder="e.g. 25 dB (optional)" style="flex:1 1 140px">
+              <span class="dim" id="gainIfVal" style="flex:0 0 auto"></span>
             </div>
           <!-- ★★★ A TOTAL IS ENOUGH TO LIMIT WITH AND NOT ENOUGH TO SET WITH. LNA + VGA = 30 dB
                describes a whole family of radios: all of it in the LNA is a different receiver from
@@ -1327,7 +1340,7 @@ function gainSideSet(key, band, val) {
 
 function gainChips() {
   const list = (radio().gainLimits || "").split(",").map(t => t.trim()).filter(Boolean);
-  const ifs = gainSideList("ifGainLimits"), sp = gainSideList("gainSplits");
+  const ifs = gainSideList("ifGrLimits"), sp = gainSideList("gainSplits");
   const locks = gainSideList("gainLocks");
   const isHrf = (radio().driver || "") === "hackrf";
   const host = $("gainList");
@@ -1342,7 +1355,9 @@ function gainChips() {
      *   other case in words rather than leaving it as the absence of a symbol. */
     const lock = locks[band] > 0;
     let txt = (lock ? "" : "up to ") + "RF " + gainFromRaw(val);
-    if (ifs[band] !== undefined && ifs[band] >= 0) txt += " \u00b7 IF " + ifs[band];
+    // ★ "IF ≥ 25 dB" — a FLOOR on the reduction, so the ≥ is the right way round and the unit is
+    //   the client's. Written the other way it would read as a ceiling and mean its own opposite.
+    if (ifs[band] !== undefined && ifs[band] >= 0) txt += " \u00b7 IF \u2265 " + ifs[band] + " dB";
     if (lock && isHrf) txt += " \u00b7 " + (sp[band] !== undefined && sp[band] >= 0 ? sp[band] : 50)
                              + "% LNA";
     if (lock) txt += " \uD83D\uDD12";
@@ -1358,7 +1373,7 @@ function gainChips() {
       //    a ceiling is a figure nothing reads — invisible here and still in the config file, which
       //    is exactly how a setting comes back from the dead when the band is added again later.
       const band = gone.lastIndexOf(":") >= 0 ? gone.slice(0, gone.lastIndexOf(":")) : gone;
-      if (band) { gainSideSet("ifGainLimits", band, null); gainSideSet("gainSplits", band, null);
+      if (band) { gainSideSet("ifGrLimits", band, null); gainSideSet("gainSplits", band, null);
                   gainSideSet("gainLocks", band, null); }
       gainChips();
     });
@@ -1378,7 +1393,9 @@ function gainAdd() {
   //   an IF box left empty simply means "no IF ceiling on this band", which is the behaviour before
   //   this existed. The split is only meaningful on a locked HackRF, so it is stored only there.
   const ifRaw = parseFloat(String($("gainIfMax").value).replace(/[^0-9.\-]/g, ""));
-  gainSideSet("ifGainLimits", band, isFinite(ifRaw) && ifRaw >= 0 ? ifRaw : null);
+  // ★ Held to what the radio has: a figure outside 20-59 dB is not a reduction it can be set to.
+  gainSideSet("ifGrLimits", band,
+              isFinite(ifRaw) && ifRaw >= 20 ? Math.min(59, Math.round(ifRaw)) : null);
   const lock = $("gainLock").checked;
   gainSideSet("gainLocks", band, lock ? 1 : null);
   // ★ The split is only read on a LOCKED HackRF band — as a limiter the listener still chooses it.
@@ -1540,6 +1557,9 @@ function renderGain() {
   $("gainLockRow").classList.toggle("hide", !(isRtl || isRsp || isHrf));
   // ★★ IF ceiling: RSP only, and only while its AGC is NOT locked on — see the note above.
   $("gainIfRow").classList.toggle("hide", !(isRsp && r.agcLock !== 1));
+  { const v = parseInt($("gainIfSlider").value, 10);
+    $("gainIfVal").textContent = isFinite(v)
+      ? v + " dB" + (v <= 20 ? " \u00b7 max gain" : v >= 59 ? " \u00b7 min gain" : "") : ""; }
   // ★★ The split is a HackRF question and only when THIS band is being fixed; as a limiter the
   //    listener still chooses their own split, which is today's behaviour and stays.
   $("gainSplitRow").classList.toggle("hide", !(isHrf && $("gainLock").checked));
@@ -2391,7 +2411,12 @@ function fill() {
   });
   // ★ The IF slider writes the box, and the box is the source of truth on Add — the same one
   //   value/one place rule wireGainSlider already follows for the RF figure.
-  $("gainIfSlider").addEventListener("input", () => { $("gainIfMax").value = $("gainIfSlider").value; });
+  $("gainIfSlider").addEventListener("input", () => {
+    const v = parseInt($("gainIfSlider").value, 10);
+    $("gainIfMax").value = v;
+    // ★ Name the ends, because "more is less" needs saying every time it is read.
+    $("gainIfVal").textContent = v + " dB" + (v <= 20 ? " · max gain" : v >= 59 ? " · min gain" : "");
+  });
   $("gainRest").addEventListener("change", () => {
     const t = ($("gainRest").value || "").trim();
     // ★★★ THE LOCK IMPLIES THE AGC. "Listeners may not switch to manual" is meaningless with the

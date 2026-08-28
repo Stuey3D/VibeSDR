@@ -123,7 +123,7 @@ struct Opts {
     int         agcLock  = -1;           // 1 = AGC forced on (RSP, Airspy HF+)
     bool        gainLock = false;        // LEGACY radio-wide lock; fallback while gainLocks is empty
     std::string gainLocks;               // which bands are FIXED at their ceiling — see RadioConfig
-    std::string ifGainLimits;            // SDRplay IF ceiling, per band
+    std::string ifGrLimits;            // SDRplay IF ceiling, per band
     std::string gainSplits;              // HackRF LNA share of the total, 0-100, per band
     bool        rateLock = false;        // the sample rate is PINNED, not merely capped
     int         adminIdleMin = 30;      // admin controls re-lock after this idle; 0 = never
@@ -442,7 +442,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.sessionLimitMin = c.sessionLimitMin;
     o.gainLimits = c.gainLimits; o.restGain = c.restGain; o.agcLock = c.agcLock;
     o.gainLock = c.gainLock; o.gainLocks = c.gainLocks;
-    o.ifGainLimits = c.ifGainLimits; o.gainSplits = c.gainSplits;
+    o.ifGrLimits = c.ifGrLimits; o.gainSplits = c.gainSplits;
     o.rateLock = c.rateLock;
     o.rtlAgc = c.rtlAgc; o.tunerBwAuto = c.tunerBwAuto;
     o.adminIdleMin    = c.adminIdleMin;
@@ -479,7 +479,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.sessionLimitMin = o.sessionLimitMin;
     c.gainLimits = o.gainLimits; c.restGain = o.restGain; c.agcLock = o.agcLock;
     c.gainLock = o.gainLock; c.gainLocks = o.gainLocks;
-    c.ifGainLimits = o.ifGainLimits; c.gainSplits = o.gainSplits;
+    c.ifGrLimits = o.ifGrLimits; c.gainSplits = o.gainSplits;
     c.rateLock = o.rateLock;
     c.rtlAgc = o.rtlAgc; c.tunerBwAuto = o.tunerBwAuto;
     c.adminIdleMin    = o.adminIdleMin;
@@ -1506,7 +1506,7 @@ int main(int argc, char** argv) {
                     //   live save leaves the server enforcing half of what the page shows.
                     LocalSdrShim::setGainLock(g_runtimeConfig.gainLock);
                     LocalSdrShim::setGainLocks(g_runtimeConfig.gainLocks);
-                    LocalSdrShim::setIfGainLimits(g_runtimeConfig.ifGainLimits);
+                    LocalSdrShim::setIfGrFloors(g_runtimeConfig.ifGrLimits);
                     LocalSdrShim::setGainSplits(g_runtimeConfig.gainSplits);
                     LocalSdrShim::setVibeServerRateLock(g_runtimeConfig.rateLock);
                     LocalSdrShim::setRestGain(g_runtimeConfig.restGain);
@@ -1964,7 +1964,7 @@ int main(int argc, char** argv) {
     LocalSdrShim::setGainLimits(o.gainLimits);
     LocalSdrShim::setGainLock(o.gainLock);
     LocalSdrShim::setGainLocks(o.gainLocks);
-    LocalSdrShim::setIfGainLimits(o.ifGainLimits);
+    LocalSdrShim::setIfGrFloors(o.ifGrLimits);
     LocalSdrShim::setGainSplits(o.gainSplits);
     LocalSdrShim::setRestGain(o.restGain);
     LocalSdrShim::setAgcLock(o.agcLock == 1);

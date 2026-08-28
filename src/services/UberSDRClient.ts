@@ -256,8 +256,8 @@ export interface SDRCallbacks {
    *  Distinct from onHwGainCap, which is a working control with a lower ceiling. Per band: it
    *  arrives and departs with the ceiling as the listener tunes. */
   onHwGainLocked?: (locked: boolean) => void;
-  /** The owner's IF ceiling for this band, as a GAIN position; -1 = none. RSP only. */
-  onHwIfGainCap?: (pos: number) => void;
+  /** The least IF gain reduction the owner allows on this band, in dB; -1 = none. RSP only. */
+  onHwIfGrFloor?: (db: number) => void;
   /** ★★★ THE OWNER'S GAIN CEILING FOR THE FREQUENCY WE ARE ON, in TENTHS of a dB, or -1 for none.
    *  ★★★ THE SERVER ENFORCES IT AND THE CLIENT MUST SHOW IT. A panel that offers gain the server
    *  will silently clamp is a panel that LIES — the listener drags to maximum, the readout says
@@ -2128,8 +2128,8 @@ export class UberSDRClient {
       // ★ Same rule again: the server refuses, so the client must not offer. Absent = not locked,
       //   which is what every server before this one meant.
       this.callbacks.onHwGainLocked?.(msg.gainLocked === true);
-      this.callbacks.onHwIfGainCap?.(
-        typeof msg.ifGainCap === 'number' ? (msg.ifGainCap as number) : -1);
+      this.callbacks.onHwIfGrFloor?.(
+        typeof msg.ifGrFloor === 'number' ? (msg.ifGrFloor as number) : -1);
       // ★ -1 when absent, never 0 — an older server that does not send the field must read as
       //   "no limit", and 0 would read as "no gain allowed at all".
       this.callbacks.onHwGainCap?.(

@@ -132,8 +132,12 @@ public:
     static void setGainLocks(const std::string& csv);
     /** Is the gain FIXED at this frequency? Always false where there is no ceiling to be fixed at. */
     static bool gainLockedAt(double hz);
-    static void setIfGainLimits(const std::string& csv);
-    static int  ifGainCapAt(double hz);
+    /** ★★★ THE LEAST IF GAIN REDUCTION A LISTENER MAY USE, in dB — the units the client's own
+     *  slider shows and the wire field `ifgr` carries (20 = maximum gain, 59 = minimum). A BIGGER
+     *  number is a TIGHTER limit, which is why it is named for the reduction rather than dressed up
+     *  as a ceiling. -1 = none. */
+    static void setIfGrFloors(const std::string& csv);
+    static int  ifGrFloorAt(double hz);
     static void setGainSplits(const std::string& csv);
     static int  gainSplitAt(double hz);
     /** ★★★ RTL OVERLOAD PROTECTION — one call per second, FROM THE DSP THREAD ONLY. It takes the

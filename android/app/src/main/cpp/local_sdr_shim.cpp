@@ -1098,7 +1098,7 @@ static std::atomic<bool>     g_agcLock{false};
 // ★ The lock and its two companions share g_gainLimMtx with the ceilings — they are read together
 //   on every retune, and one lock over one idea is easier to reason about than three.
 static std::atomic<bool>     g_gainLock{false};
-static vibebands::GainRules  g_ifGainLimits;   // SDRplay IF ceiling, per band
+static vibebands::GainRules  g_ifGrFloors;     // SDRplay: least IF gain REDUCTION in dB, per band
 static vibebands::GainRules  g_gainSplits;     // HackRF LNA share of the total, 0-100, per band
 static vibebands::GainRules  g_gainLocks;      // which bands are FIXED at their ceiling
 /** ★★★ RTL OVERLOAD PROTECTION — the RSP gets a hardware flag, the dongle gets this.
@@ -7729,14 +7729,12 @@ struct LocalSdrShim::Impl {
              * ★ Not offered while the AGC is locked on — the loop owns this control there, so a
              *   ceiling on it would be a figure nothing reads. The setup page hides it to match. */
             if (jsonNum(msg, "ifgr", v)) {
-                const int ifCap = LocalSdrShim::ifGainCapAt(LocalSdrShim::instance().listenFrequency());
-                if (ifCap >= 0) {
-                    const int minGr = std::max(20, std::min(59, 59 - ifCap));
-                    if ((int)v < minGr) {
-                        LOGI("IF gain reduction %d raised to %d by the owner's limit (cap position %d)",
-                             (int)v, minGr, ifCap);
-                        v = minGr;
-                    }
+                // ★ No conversion left to get backwards: the owner's figure and the wire figure are
+                //   both a gain REDUCTION in dB. Clamped UP, because more reduction is less gain.
+                const int floor = LocalSdrShim::ifGrFloorAt(LocalSdrShim::instance().listenFrequency());
+                if (floor >= 0 && (int)v < floor) {
+                    LOGI("IF gain reduction %d raised to the owner's floor of %d dB", (int)v, floor);
+                    v = floor;
                 }
             }
             if (jsonNum(msg, "ifgr", v))   { LocalSdrShim::instance().setIfGainReduction((int)v);
@@ -8353,8 +8351,8 @@ struct LocalSdrShim::Impl {
                        *   see it lets the listener drag the IF slider and watch it spring back —
                        *   which reads as a broken receiver rather than as somebody's rule. A GAIN
                        *   position, like every other limit here; -1 = none. */
-                      + ",\"ifGainCap\":"
-                      + std::to_string(LocalSdrShim::ifGainCapAt(
+                      + ",\"ifGrFloor\":"
+                      + std::to_string(LocalSdrShim::ifGrFloorAt(
                             LocalSdrShim::instance().listenFrequency()))
                       // ★★★ WHERE THE GAIN ACTUALLY IS. Without it a remote client cannot know,
                       //     so both clients restored their OWN remembered gain on connect and
@@ -12691,13 +12689,12 @@ struct LocalSdrShim::Impl {
             /* ★ THE SECOND STAGE, WHEN THE OWNER HAS CAPPED IT. Same conversion as the ifgr
              *   handler: the cap is a gain position, the wire figure is a REDUCTION. Only lowers
              *   the gain (raises the reduction) unless the lock says to fix it. */
-            const int ifCap = LocalSdrShim::ifGainCapAt(hz);
-            if (ifCap >= 0) {
-                const int minGr = std::max(20, std::min(59, 59 - ifCap));
-                if (fix ? (sdrp->currentIfGr() != minGr) : (sdrp->currentIfGr() < minGr)) {
-                    LOGI("retune into a %s band — IF gain reduction %d -> %d",
-                         fix ? "fixed" : "capped", sdrp->currentIfGr(), minGr);
-                    LocalSdrShim::instance().setIfGainReduction(minGr);
+            const int ifFloor = LocalSdrShim::ifGrFloorAt(hz);
+            if (ifFloor >= 0) {
+                if (fix ? (sdrp->currentIfGr() != ifFloor) : (sdrp->currentIfGr() < ifFloor)) {
+                    LOGI("retune into a %s band — IF gain reduction %d -> %d dB",
+                         fix ? "fixed" : "capped", sdrp->currentIfGr(), ifFloor);
+                    LocalSdrShim::instance().setIfGainReduction(ifFloor);
                 }
             }
             return;
@@ -14429,15 +14426,26 @@ bool LocalSdrShim::gainLockedAt(double hz) {
     return vibebands::valueAt(g_gainLocks, hz) > 0;
 }
 
-void LocalSdrShim::setIfGainLimits(const std::string& csv) {
+void LocalSdrShim::setIfGrFloors(const std::string& csv) {
     std::lock_guard<std::mutex> lk(g_gainLimMtx);
-    g_ifGainLimits = vibebands::parseGainList(csv);
-    LOGI("IF gain limits: %zu rule(s) from \"%s\"", g_ifGainLimits.size(), csv.c_str());
+    g_ifGrFloors = vibebands::parseGainList(csv);
+    LOGI("IF gain reduction floors: %zu rule(s) from \"%s\"", g_ifGrFloors.size(), csv.c_str());
 }
-int LocalSdrShim::ifGainCapAt(double hz) {
+/* ★★★ IN dB OF REDUCTION, THE WAY THE LISTENER'S CONTROL READS IT. This was briefly a gain
+ *   POSITION, converted here to a reduction — and Saber, who owns the RSP this exists for, said
+ *   what that cost: the owner's number and the number on the listener's slider described the same
+ *   stage and could not be compared. Now they are the same number.
+ * ★★ AND THE TIGHTER RULE IS THE BIGGER ONE. Everywhere else on this page the lowest figure wins,
+ *   because everywhere else a smaller number means less gain; here MORE reduction means less gain,
+ *   so the overlap rule inverts with it. Reading it the other way would let a broad rule quietly
+ *   loosen the specific one an owner wrote for the band that was overloading — the exact failure
+ *   gainCapAt's own note warns about, in a mirror. */
+int LocalSdrShim::ifGrFloorAt(double hz) {
     std::lock_guard<std::mutex> lk(g_gainLimMtx);
-    if (g_ifGainLimits.empty()) return -1;
-    return vibebands::gainCapAt(g_ifGainLimits, hz);   // tighter of two overlapping rules wins
+    int floor = -1;
+    for (const auto& g : g_ifGrFloors)
+        if (hz >= g.band.lo && hz <= g.band.hi && g.max > floor) floor = g.max;
+    return floor;
 }
 
 void LocalSdrShim::setGainSplits(const std::string& csv) {

@@ -142,11 +142,11 @@ export interface LocalHardwarePanelProps {
    *  ★ It is frequency-dependent, so it can change on a RETUNE — it is live state, not a
    *  property of the radio, which is why it is not in RadioCaps. */
   gainCapTenthDb?: number;
-  /** ★★ The owner's IF ceiling for this band, as a GAIN position; -1 = none. The slider below is
-   *  in REDUCTION dB, which counts the OTHER WAY — converted once, where it is used, exactly as
-   *  the server does it. Clamped rather than refused server-side, so without this the slider
-   *  visibly springs back and reads as a broken control. */
-  ifGainCapPos?: number;
+  /** ★★ The LEAST IF gain reduction the owner allows on this band, in dB — the same units as the
+   *  slider below, so there is no conversion to get backwards (Saber, 2026-08-28: it should read
+   *  as gain reduction "as per the control in the client"). -1 = none. Clamped rather than refused
+   *  server-side, so without this the slider visibly springs back and reads as broken. */
+  ifGrFloorDb?: number;
   hrfAmp?: boolean;      onHrfAmp?: (on: boolean) => void;
   hrfLna?: number;       onHrfLna?: (db: number) => void;
   hrfVga?: number;       onHrfVga?: (db: number) => void;
@@ -197,11 +197,10 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
    *   which every radio's limit reuses); the HackRF's stages are whole dB, so it is floored —
    *   NEVER rounded, because rounding up would offer a decibel the server then refuses. */
   const capT = p.gainCapTenthDb ?? -1;
-  /* ★ The owner's IF ceiling as this slider's FLOOR — a gain position on the wire, reduction dB on
-   *  the slider, so the two count opposite ways. Same arithmetic as the server's ifgr handler and
-   *  the web client's applyIfGainCap; if these three ever drift the control lies. */
-  const ifGrFloor = (p.ifGainCapPos ?? -1) >= 0
-    ? Math.max(p.radio?.ifGrMin ?? 20, Math.min(p.radio?.ifGrMax ?? 59, 59 - (p.ifGainCapPos ?? 0)))
+  /* ★ The owner's figure IS this slider's floor — both are a reduction in dB. Held inside what the
+   *  radio reports it can do, so a stale or silly figure cannot push the control off its own scale. */
+  const ifGrFloor = (p.ifGrFloorDb ?? -1) >= 0
+    ? Math.max(p.radio?.ifGrMin ?? 20, Math.min(p.radio?.ifGrMax ?? 59, p.ifGrFloorDb ?? 20))
     : (p.radio?.ifGrMin ?? 20);
   const capDb = capT >= 0 ? Math.floor(capT / 10) : -1;
   /* ★★★ THE CAP IS ON THE TOTAL, SO THE TWO STAGES SHARE ONE BUDGET — each one's ceiling is the
@@ -536,7 +535,8 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   </View>
                   <Text style={styles.note}>
                     More reduction = less gain.
-                    {(p.ifGainCapPos ?? -1) >= 0 ? ' The owner has limited the IF gain on this band.' : ''}
+                    {(p.ifGrFloorDb ?? -1) >= 0
+                      ? ` The owner requires at least ${ifGrFloor} dB of reduction on this band.` : ''}
                   </Text>
                 </>
               )}
