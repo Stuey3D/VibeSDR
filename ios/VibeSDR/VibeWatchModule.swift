@@ -409,6 +409,36 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
                   replyHandler: nil, errorHandler: nil)
   }
 
+  /* ★★★ THE SESSION CLOCK, ON THE WRIST. A time-limited receiver counts down and then cuts, and
+   *   the phone has known how long for months while the watch did not. Stuart, 2026-08-28: someone
+   *   "could theoretically cold start connect tune about whilst using headphones and never
+   *   realistically take the iPhone out of the pocket" — for that person the countdown is not a
+   *   nicety, it is the only warning they will get before the audio stops.
+   * ★★ SECONDS, RE-BASED, NOT TICKED. The server's own figure is authoritative; the watch counts
+   *   down locally between updates rather than us sending one message a second, which is the same
+   *   rule the phone follows and the fix for a timer that drifts. -1 means the server is not timing
+   *   this session at all (admin, loopback, unlimited) and MUST NOT read as "zero seconds left". */
+  /* ★★★ ASK THE WRIST FOR THE PIN. The phone owns the PIN store and the connect; what it lacked was
+   *   any way to ask when the person is not holding it. Stuart, 2026-08-28: "i think we need to be
+   *   able to enter the pin without having to pull the iPhone out." An Alert.prompt on a phone in a
+   *   pocket is not a prompt, it is a stall — and it is exactly where a watch-driven connect died.
+   * ★★ DURABLE, because it is a QUESTION and everything stops until it is answered — the same
+   *   lesson sendRadios learned tonight: logging a failed one-shot is not delivering it. */
+  @objc(sendPinRequest:)
+  func sendPinRequest(_ name: String) {
+    guard let s = session else { return }
+    let msg: [String: Any] = ["k": "pinreq", "name": name]
+    guard linkAlive else { s.transferUserInfo(msg); return }
+    s.sendMessage(msg, replyHandler: nil, errorHandler: { _ in s.transferUserInfo(msg) })
+  }
+
+  @objc(sendSession:limitMin:)
+  func sendSession(_ secsLeft: NSNumber, limitMin: NSNumber) {
+    guard let s = session, linkAlive else { return }
+    s.sendMessage(["k": "sess", "left": secsLeft.intValue, "lim": limitMin.intValue],
+                  replyHandler: nil, errorHandler: nil)
+  }
+
   /// What the PHONE is doing — a boot is not a fault, and the watch should say which.
   @objc(sendPhone:)
   func sendPhone(_ status: String) {

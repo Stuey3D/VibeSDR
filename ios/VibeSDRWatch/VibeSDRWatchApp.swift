@@ -87,6 +87,18 @@ struct VibeSDRWatchApp: App {
         }
         .environmentObject(link)
         .navigationBarHidden(true)   // full-bleed screens; no bar
+        /* ★★★ THE PIN QUESTION OUTRANKS WHATEVER IS ON SCREEN, because the connect is stopped until
+         *   it is answered. A sheet at the ROOT rather than inside the picker: the phone can ask at
+         *   any point in a watch-driven connect, including after the picker has closed itself, and
+         *   a question that can only be seen from one screen is one the wearer will miss.
+         * ★ Cancelling sends an empty PIN — a deliberate answer, which the phone ends the attempt
+         *   on rather than connecting with nothing and failing where nobody can see it. */
+        .sheet(isPresented: Binding(get: { link.pinRequest != nil },
+                                    set: { if !$0 { link.pinRequest = nil } })) {
+          PinSheet(serverName: link.pinRequest ?? "",
+                   onSubmit: { link.sendPin($0) },
+                   onCancel: { link.sendPin("") })
+        }
       }
       .onAppear { link.activate() }
       /* ★★★ THE WRIST LIFECYCLE, OWNED ONCE, AT THE ROOT. It used to live in ContentView's own

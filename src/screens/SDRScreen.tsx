@@ -3606,6 +3606,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       //     nothing behind it. Either way the owner sees a countdown the server is not keeping.
       onSessionWarning: (secs: number) => {
         if (destroyed.current) return;
+        // ★ AND TO THE WRIST, which until now had no idea a session was timed at all. Someone
+        //   listening on headphones with the phone in a pocket gets no other warning.
+        watchProvider.sendSession(secs, sessionLimitMins);
         if (secs < 0) { setSessionEndsAt(null); setSessionLeftMs(null); return; }
         setSessionEndsAt(Date.now() + secs * 1000);
       },

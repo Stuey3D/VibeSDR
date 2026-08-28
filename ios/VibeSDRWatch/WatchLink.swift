@@ -83,6 +83,20 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// Servers screen requested from the menu. NAVIGATION only — the phone keeps playing while you
   /// browse, so this must never tear the link down (see WatchLinkCompat.backToPicker).
   @Published var showServers = false
+  /* ★★★ THE SESSION CLOCK. A time-limited receiver counts down and then cuts; for someone
+   *  listening on headphones with the phone in a pocket this is the only warning they get.
+   *  ★★ RE-BASED, NOT TICKED FROM THE PHONE: `sessionEndsAt` is computed from the server's own
+   *   figure each time one arrives, and the view counts down against it. One message every few
+   *   seconds instead of one a second, and no drift — the same rule the phone follows.
+   *  ★ nil = this session is NOT timed (admin, loopback, an unlimited server). Distinct from zero,
+   *   which would read as "your time is up". */
+  /* ★★★ THE PHONE IS ASKING FOR A PIN. Non-nil = a server name we owe an answer for. The phone
+   *  owns the PIN store and the connect; the wrist only types the digits, which is why there is no
+   *  saved-PIN list here — one source of truth, on the device that uses it. (Jr keeps its own
+   *  because Jr connects itself.) */
+  @Published var pinRequest: String? = nil
+  @Published var sessionEndsAt: Date? = nil
+  @Published var sessionLimitMin = 0
   /// When phoneStatus last CHANGED — see the note where it is set, and the stall message in
   /// ContentView. Published so a view that draws the status re-draws when it ages.
   @Published var phoneStatusAt = Date()
@@ -752,6 +766,10 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
    *   knows what it just asked for, and hanging that on a single inbound message makes a clean
    *   switch depend on the least reliable part of the link. */
   private func beginNewSession() {
+    // ★ The previous receiver's countdown must not be shown against the new one — a limit is a
+    //   property of the SERVER, and we have just changed servers.
+    sessionEndsAt = nil; sessionLimitMin = 0
+    pinRequest = nil
     fmdx = nil; isFmdx = false; dab = nil; aircraft = []
     everGotRow = false; meter = ""
     bandName = ""; bandColor = nil; bandLo = 0; bandHi = 0
@@ -801,6 +819,13 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// Back out of the question without choosing. The phone is not connecting, so there is nothing
   /// to cancel — only the list to put away.
   func dismissRadioChoice() { radioChoices = []; radioChoiceName = "" }
+
+  /* ★ THE ANSWER. An empty string is a deliberate cancel and the phone treats it as one — ending
+   *  the attempt rather than connecting with nothing, which would just fail a second later. */
+  func sendPin(_ pin: String) {
+    pinRequest = nil
+    sendDurable(["cmd": "pin", "val": pin])
+  }
 
   func setMode(_ m: String) { send(["cmd": "mode", "val": m]) }
   func setStep(_ hz: Double) { send(["cmd": "step", "val": hz]) }
@@ -1363,6 +1388,19 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
           if heartbeat == nil { startHeartbeat() }
         }
       }
+
+    case "pinreq":
+      // ★ Whatever else was on screen, this is now the question — the connect is stopped until it
+      //   is answered, and a prompt nobody can see is what a pocketed phone already gave us.
+      if let n = m["name"] as? String { pinRequest = n.isEmpty ? "this server" : n }
+
+    case "sess":
+      // ★ A NEGATIVE figure is the server saying it is not timing this session — it must clear the
+      //   clock, not set a deadline in the past.
+      if let left = m["left"] as? Int {
+        sessionEndsAt = left < 0 ? nil : Date().addingTimeInterval(TimeInterval(left))
+      }
+      if let lim = m["lim"] as? Int { sessionLimitMin = lim }
 
     case "rx":
       if let la = m["la"] as? Double, let lo = m["lo"] as? Double { rxLat = la; rxLon = lo }

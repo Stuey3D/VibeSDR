@@ -47,6 +47,8 @@ const Native = NativeModules.VibeWatchModule as
       sendDirectory(json: string): void;
       sendRadios(json: string): void;
       sendPhone(status: string): void;
+      sendSession(secsLeft: number, limitMin: number): void;
+      sendPinRequest(name: string): void;
       isClosedByUser(): Promise<boolean>;
       clearClosedByUser(): void;
       sendLogo(b64: string): void;
@@ -750,6 +752,30 @@ class WatchProvider {
   private staleHandler: (() => void) | null = null;
   private idleSince = 0;
 
+  /* ★★ ONLY WHEN IT MOVES MEANINGFULLY. The countdown runs on the WATCH between updates — the
+   *  server's figure re-bases it — so sending one a second would be paying continuously for
+   *  something the wrist can work out for itself. A five-second step is finer than anyone reads a
+   *  clock and rare enough to be free.
+   * ★ -1 is a REAL VALUE meaning "not timed" and must always get through, or a session that stops
+   *   being limited leaves a countdown running with nothing behind it. */
+  /** Ask the watch for a server's PIN — see the native sendPinRequest. The answer arrives as the
+   *  `pin` command and goes to whoever registered setPinHandler. */
+  requestPin(name: string) { if (this.available) Native?.sendPinRequest?.(name); }
+  /** ★ OUTSIDE attach(), like inst/browse/reopen: the question is asked from the PICKER, where no
+   *  SDR screen exists to have attached anything. */
+  setPinHandler(fn: ((pin: string) => void) | null) { this.pinHandler = fn; }
+  private pinHandler: ((pin: string) => void) | null = null;
+
+  sendSession(secsLeft: number, limitMin: number) {
+    if (!this.available) return;
+    const s = Math.round(secsLeft);
+    if (s >= 0 && Math.abs(s - this.lastSessLeft) < 5 && limitMin === this.lastSessLimit) return;
+    this.lastSessLeft = s; this.lastSessLimit = limitMin;
+    Native?.sendSession?.(s, limitMin);
+  }
+  private lastSessLeft = -999;
+  private lastSessLimit = -999;
+
   setPhoneStatus(st: string) {
     if (st === this.phoneStatus) return;
     this.phoneStatus = st;
@@ -885,6 +911,10 @@ class WatchProvider {
          * ★ A second flush when a screen IS attached costs one round of small messages and cannot
          *   be wrong; a missing one leaves the wrist showing an empty list. */
         else if (e.cmd === 'need') this.flushAll();
+        // ★ The wearer typed a PIN on the watch. One-shot: the handler clears itself, so a stale
+        //   answer to a question we are no longer asking cannot connect us to something.
+        else if (e.cmd === 'pin') { const h = this.pinHandler; this.pinHandler = null;
+                                    h?.(String(e.val ?? '')); }
       },
     );
   }

@@ -1020,10 +1020,33 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       /* ★★ A PIN PROMPT IS A DEAD END FOR THE WRIST. openVibeServer puts an Alert on the PHONE and
        *  waits for typing; the watch cannot help and must not sit on "Starting…" while it happens.
        *  Say where the phone actually is — the wearer picks the phone up, or chooses again. */
-      // ★ A PIN prompt hands this to the person holding the phone, so the connect is no longer
-      //   ours to keep alive — and it may sit unanswered for minutes.
-      if (needsPin) { watchProvider.setPhoneStatus('pick'); watchTargetPending.claimed = false;
-                      watchProvider.holdAwake(false); }
+      /* ★★★ ASK THE WRIST FOR THE PIN RATHER THAN THE POCKET. openVibeServer's Alert.prompt is the
+       *   right thing when somebody is holding the phone and a dead end when they are not — which
+       *   is every watch-driven connect. Stuart, 2026-08-28: "we need to be able to enter the pin
+       *   without having to pull the iPhone out."
+       * ★★ THE SAVED PIN STILL WINS, silently, exactly as it does on the phone: we only ask when
+       *   there is nothing stored. A receiver you have used before should never ask twice.
+       * ★ And what the wearer types is SAVED, because they went to the trouble on a watch keypad;
+       *   asking again next time would waste that. Same store, same key, as the phone's own prompt. */
+      if (needsPin) {
+        const key = `vs_pin:${host}:${port}`;
+        let saved = '';
+        try { saved = (await AsyncStorage.getItem(key)) ?? ''; } catch {}
+        if (saved) { connectVibeServer(host, port, autoVibe.name, saved, autoVibe.url); return; }
+        watchProvider.setPinHandler((pin) => {
+          const p = (pin || '').trim();
+          if (!p) {                       // cancelled on the wrist — end the attempt cleanly
+            watchProvider.setPhoneStatus('pick');
+            watchTargetPending.claimed = false;
+            watchProvider.holdAwake(false);
+            return;
+          }
+          AsyncStorage.setItem(key, p).catch(() => {});
+          connectVibeServer(host, port, autoVibe.name, p, autoVibe.url);
+        });
+        watchProvider.requestPin(autoVibe.name);
+        return;
+      }
       openVibeServer(host, port, autoVibe.name, needsPin, autoVibe.url);
     })();
   }, [autoVibe, connecting, navigation, openVibeServer]);

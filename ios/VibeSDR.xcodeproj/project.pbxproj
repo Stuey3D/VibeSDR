@@ -35,6 +35,7 @@
 		D2B26E0B45666A165E75FD16 /* DialChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 244EDDFD0995EF5720BD3034 /* DialChatView.swift */; };
 		AA000002000000000000F4BE4 /* BandPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D4BE4 /* BandPlan.swift */; };
 		AA000002000000000000F4E67 /* DabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D4E67 /* DabView.swift */; };
+		AA000002000000000000F5A11 /* PinSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D5A11 /* PinSheet.swift */; };
 		AA000002000000000000F5E4F /* ControlMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D5E4F /* ControlMenu.swift */; };
 		AA000002000000000000F736D /* VibeSDRWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D736D /* VibeSDRWatchApp.swift */; };
 		AA000002000000000000F8437 /* InstancePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D8437 /* InstancePickerView.swift */; };
@@ -95,6 +96,7 @@
 		244EDDFD0995EF5720BD3034 /* DialChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DialChatView.swift; sourceTree = "<group>"; };
 		AA000002000000000000D4BE4 /* BandPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BandPlan.swift; sourceTree = "<group>"; };
 		AA000002000000000000D4E67 /* DabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DabView.swift; sourceTree = "<group>"; };
+		AA000002000000000000D5A11 /* PinSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinSheet.swift; sourceTree = "<group>"; };
 		AA000002000000000000D5E4F /* ControlMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlMenu.swift; sourceTree = "<group>"; };
 		AA000002000000000000D736D /* VibeSDRWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VibeSDRWatchApp.swift; sourceTree = "<group>"; };
 		AA000002000000000000D7B59 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -229,6 +231,7 @@
 				AA000002000000000000D5E4F /* ControlMenu.swift */,
 				AA000002000000000000D4849 /* CpuMeter.swift */,
 				AA000002000000000000D4E67 /* DabView.swift */,
+				AA000002000000000000D5A11 /* PinSheet.swift */,
 				AA000002000000000000D24A0 /* FmdxView.swift */,
 				AA000002000000000000D8437 /* InstancePickerView.swift */,
 				AA000002000000000000D2380 /* NumpadView.swift */,
@@ -533,6 +536,7 @@
 				AA000002000000000000F5E4F /* ControlMenu.swift in Sources */,
 				AA000002000000000000F4849 /* CpuMeter.swift in Sources */,
 				AA000002000000000000F4E67 /* DabView.swift in Sources */,
+				AA000002000000000000F5A11 /* PinSheet.swift in Sources */,
 				AA000002000000000000F24A0 /* FmdxView.swift in Sources */,
 				AA000002000000000000F8437 /* InstancePickerView.swift in Sources */,
 				AA000002000000000000F2380 /* NumpadView.swift in Sources */,

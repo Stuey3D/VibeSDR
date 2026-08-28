@@ -50,6 +50,8 @@ RCT_EXTERN_METHOD(sendDirectory : (NSString *)json)
 RCT_EXTERN_METHOD(sendRadios : (NSString *)json)
 
 RCT_EXTERN_METHOD(sendPhone : (NSString *)status)
+RCT_EXTERN_METHOD(sendSession : (nonnull NSNumber *)secsLeft limitMin : (nonnull NSNumber *)limitMin)
+RCT_EXTERN_METHOD(sendPinRequest : (NSString *)name)
 
 RCT_EXTERN_METHOD(isClosedByUser
                   : (RCTPromiseResolveBlock)resolve rejecter

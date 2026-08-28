@@ -359,6 +359,29 @@ struct ContentView: View {
                 if !locked { showChat = true }
               }
             }
+            /* ★★★ THE SESSION COUNTDOWN, where the eye already goes for things that CHANGE. This
+             *   column is "users above hardware" precisely because the top items are the ones that
+             *   move; a clock that is running out belongs with them, not tucked beside a control.
+             * ★★★ AND IT IS THE ONLY WARNING SOME PEOPLE GET. Stuart, 2026-08-28: someone can "cold
+             *   start connect tune about whilst using headphones and never realistically take the
+             *   iPhone out of the pocket" — for them a time-limited server simply stops, with no
+             *   explanation, unless this is here.
+             * ★★ AMBER UNDER TWO MINUTES, RED UNDER THIRTY SECONDS. A countdown that looks the same
+             *   at nine minutes and at nine seconds is a clock, not a warning; the colour is what
+             *   makes it readable at a glance, which is the only way a wrist is read.
+             * ★ TimelineView, not a Timer: it redraws with the rest of the screen and stops dead
+             *   when the app suspends, so a wrist that is down costs nothing. */
+            if let ends = link.sessionEndsAt {
+              TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                let left = max(0, Int(ends.timeIntervalSince(ctx.date)))
+                Text(String(format: "%d:%02d", left / 60, left % 60))
+                  .font(.system(size: 13, weight: .semibold, design: .rounded))
+                  .monospacedDigit()
+                  .foregroundStyle(left <= 30 ? .red : (left <= 120 ? .orange : .white.opacity(0.85)))
+                  .padding(.horizontal, 6).padding(.vertical, 3)
+                  .background(Capsule().fill(.black.opacity(0.35)))
+              }
+            }
             if link.hasHardwareControls {
               Button { if !locked { showHardware = true } } label: {
                 // Vertical antenna + radio waves — reads as "the radio", and stays right if we support
