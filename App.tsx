@@ -390,10 +390,16 @@ export default function App() {
                 })));
               // ★ Let go of the picker: we are not connecting, we are asking. Without this the
               //   phone would sit "starting" behind a question nobody had answered yet.
-              // ★ We are asking a question, not connecting — the wearer's answer may be a while,
-              //   and holding the audio focus across it would be holding it for nothing.
+              /* ★★★ HELD, NOT RELEASED — the wearer is choosing RIGHT NOW. Letting go here was
+               *   the obvious reading ("we are only asking a question") and it was wrong: it put
+               *   the phone to sleep while they read the list, so their answer landed on a cold
+               *   phone and took the slow queued-wake path all over again. Stuart: "as long as it
+               *   accounts for someone slowly browsing the list too."
+               * ★ Bounded by holdAwake's own 60 s deadline and refreshed by each further tap, so
+               *   somebody actively using Buddy keeps a live phone under them, and somebody who
+               *   walks away mid-list is let go of within the minute. */
               watchTargetPending.claimed = false;
-              watchProvider.holdAwake(false);
+              watchProvider.holdAwake(true);
               watchProvider.setPhoneStatus('idle');
               return;
             }
@@ -445,6 +451,12 @@ export default function App() {
        *   `claimed` is exactly the "the watch is deciding where we go, stand down" flag; a browse
        *   is that decision beginning. Cleared by applyInstance when the choice actually lands. */
       watchTargetPending.claimed = true;
+      /* ★★ AND STAY AWAKE WHILE THEY BROWSE. Fetching a directory means the wearer is mid-task and
+       *  their next tap is seconds away — but nothing was playing, so iOS would suspend us between
+       *  the list arriving and them choosing from it, making every choice a cold start. Same 60 s
+       *  deadline, refreshed by each browse, so reading a long list keeps the phone under them and
+       *  putting the watch down lets it go. */
+      watchProvider.holdAwake(true);
       fetchDirectory(dirId as DirectoryId)
         .then((all) => {
           /* ★★★ HIDE RECEIVERS THAT REFUSE THIRD-PARTY APPS — the watch has no way to recover from

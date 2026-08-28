@@ -865,6 +865,9 @@ class WatchProvider {
          *   two sockets, and the second one displacing the first on a single-user receiver.
          * ★ Keyed on the command AND its target, so choosing the SAME server again after five
          *   seconds still works — a listener who wants to reconnect must always be able to. */
+        // ★ ANY message from the watch means it is up and on screen — see noteWatchAwake. Before
+        //   the de-duplication below, which returns early and would swallow the liveness with it.
+        this.noteWatchAwake();
         const key = `${e.cmd}:${String(e.val ?? e.dir ?? '')}`;
         const now = Date.now();
         if (this.lastCmdKey === key && now - this.lastCmdAt < 5000) return;
@@ -914,9 +917,34 @@ class WatchProvider {
    *  ★ Released the moment the session is up or has failed, so we never hold the audio focus for
    *    longer than the job needs. Android needs none of this — its foreground service already
    *    keeps the process alive — so the native method simply does not exist there. */
-  holdAwake(on: boolean) {
+  /* ★★★ THE WATCH'S OWN HEARTBEAT IS THE LIVENESS SIGNAL — Stuart's design, and better than the
+   *   one it replaces: "if buddy is pinging vibesdr to let it know its awake and on screen then the
+   *   silent audio plays, soon as buddy stops telling the phone its awake it drops the silent
+   *   audio." Buddy already pings every 4 s while it is up, and stops the moment watchOS suspends
+   *   it, the wrist drops, or the user quits. Nothing else has to be guessed: not "is the wearer
+   *   still browsing", not "was that question ever answered".
+   * ★★ 12 s is three missed pings — long enough to ride a dropped one, short enough that putting
+   *   your wrist down releases the audio focus almost at once.
+   * ★ Kept SEPARATE from the connect hold rather than merged: a connect must survive the wrist
+   *   dropping mid-way (the pings stop and the work must not), and a browse must survive a connect
+   *   never being started. Two independent reasons, one native call — whichever is true wins. */
+  private noteWatchAwake() {
+    if (this.awakeTimer) clearTimeout(this.awakeTimer);
+    this.awakeTimer = setTimeout(() => { this.awakeTimer = null; this.holdReason('watch', false); }, 12000);
+    this.holdReason('watch', true);
+  }
+  private awakeTimer: ReturnType<typeof setTimeout> | null = null;
+  private holds = { watch: false, connect: false };
+  private holdReason(which: 'watch' | 'connect', on: boolean) {
+    if (this.holds[which] === on) return;
+    this.holds[which] = on;
+    const want = this.holds.watch || this.holds.connect;
     const P = (NativeModules as { VibePowerModule?: { keepAliveForConnect?: (on: boolean) => void } })
       .VibePowerModule;
+    P?.keepAliveForConnect?.(want);
+  }
+
+  holdAwake(on: boolean) {
     if (this.holdTimer) { clearTimeout(this.holdTimer); this.holdTimer = null; }
     /* ★★★ AND IT CANNOT BE LEFT ON. Every release below is a code path, and a code path can be
      *   abandoned: the wearer picks a server and quits Buddy before it connects, the phone stalls
@@ -927,9 +955,13 @@ class WatchProvider {
      * ★★ A DEADLINE NEEDS NOBODY TO REMEMBER IT. 60 s is far longer than any connect that is going
      *   to succeed — a cold launch plus a front-door fetch plus two sockets is a handful of seconds
      *   — so this never cuts a real one short; it only catches the ones that stopped.
-     * ★ Refreshed on each hold, cleared on release: the timer never outlives the thing it bounds. */
-    if (on) this.holdTimer = setTimeout(() => { this.holdTimer = null; P?.keepAliveForConnect?.(false); }, 60000);
-    P?.keepAliveForConnect?.(on);
+     * ★★ REFRESHED ON EACH HOLD, which is what makes "browsing slowly" work: every browse and every
+     *   question the wearer answers pushes the deadline out, so an active session keeps a live
+     *   phone underneath it and an abandoned one lapses within the minute. The deadline bounds
+     *   INACTIVITY, not the task.
+     * ★ Cleared on release: the timer never outlives the thing it bounds. */
+    if (on) this.holdTimer = setTimeout(() => { this.holdTimer = null; this.holdReason('connect', false); }, 60000);
+    this.holdReason('connect', on);
   }
   private holdTimer: ReturnType<typeof setTimeout> | null = null;
 
