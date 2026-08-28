@@ -905,6 +905,12 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
      *  "idle", and a status message can simply be missed — so listing the good ones meant a session
      *  that began from any other state was never asked for its rows. The states that genuinely mean
      *  "there is nothing to send" are few, known, and are the ones to exclude. */
+    /* ★ AND STOP SAYING "WAKING" IF IT PLAINLY IS NOT. A queued transfer is delivered at the
+     *  system's discretion, and 30 s is well past the usual few seconds — past that the honest
+     *  thing is to fall back to whatever the ordinary messages say rather than keep a reassurance
+     *  running that has stopped being true. A message from the phone clears it far sooner. */
+    if wakingPhone, Date().timeIntervalSince(wakeAskedAt) > 30 { wakingPhone = false }
+
     if !isBackground, !["pick", "setup", "closed"].contains(phoneStatus) {
       let quiet = Date().timeIntervalSince(lastRowAt ?? .distantPast)
       if quiet > 6 { requestMissing() }
@@ -1002,12 +1008,25 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
    *     is immediate. Whichever arrives first wins; the phone ignores the duplicate.
    *  ★ Cleared as soon as the phone says anything, because by then it is plainly awake and acting. */
   private var pendingWake: [String: Any]?
+  /** ★★ WE ASKED A SLEEPING PHONE TO DO SOMETHING AND ARE WAITING FOR IT TO WAKE. Published so the
+   *  wrist can SAY so: from cold the command can only be queued, and the system delivers it when it
+   *  chooses — usually seconds. Without a word for it that pause is indistinguishable from a broken
+   *  link, which is what it has been read as all evening. Cleared the moment the phone says
+   *  anything, and bounded below so it can never become its own kind of lie. */
+  @Published var wakingPhone = false
+  private var wakeAskedAt = Date.distantPast
 
   private func sendDurable(_ msg: [String: Any]) {
     guard let s = session else { return }
     guard s.isReachable else {
       s.transferUserInfo(msg)      // the guarantee, and what wakes a terminated app at all
       pendingWake = msg            // …and the moment we CAN talk, say it properly
+      // ★ Only for the commands that START something. A wrist-down or a squelch nudge queued
+      //   against a sleeping phone is housekeeping, not an errand the wearer is waiting on.
+      if let c = msg["cmd"] as? String, c == "inst" || c == "browse" || c == "reopen" {
+        wakingPhone = true
+        wakeAskedAt = Date()
+      }
       return
     }
     s.sendMessage(msg, replyHandler: nil, errorHandler: { [weak self] _ in
@@ -1211,8 +1230,10 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
      *  ★ THE ANTI-HIJACK RULE IS UNTOUCHED. deliberatelyClosed still wins: a phone the user swiped
      *    away stays closed until they reopen it, and Buddy still never pings a phone it believes is
      *    shut. This only says that a phone which HAS spoken is, self-evidently, not shut. */
-    // ★ The phone is plainly awake and acting, so a command still waiting to be re-sent is spent.
+    // ★ The phone is plainly awake and acting, so a command still waiting to be re-sent is spent —
+    //   and so is the "waking" message, whatever else this message turns out to say.
     pendingWake = nil
+    if wakingPhone { wakingPhone = false }
     if !deliberatelyClosed, phoneClosed {
       phoneClosed = false
       if heartbeat == nil { startHeartbeat() }

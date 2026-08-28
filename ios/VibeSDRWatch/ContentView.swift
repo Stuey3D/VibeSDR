@@ -1529,6 +1529,18 @@ struct ContentView: View {
     // a missing waterfall was both wrong and useless. The watch WAKES the phone (iOS
     // launches it straight into the background), so this state is normal, not an error.
     if !rowsFlowing {
+      /* ★★★ SAY THAT WE ARE WAITING FOR THE PHONE TO WAKE, because from cold that is exactly what
+       *   is happening and nothing on screen said so. A terminated phone app cannot be reached, so
+       *   the command can only be QUEUED, and the system delivers it when it chooses — usually a
+       *   few seconds. Unnamed, that pause is indistinguishable from a broken link: Stuart,
+       *   2026-08-28, "its almost like VibeSDR on the phone isnt waking up when Buddy is trying to
+       *   connect to it." It was waking; there was just no word for the wait.
+       * ★★ ABOVE the status switch, because phoneStatus is STALE at this moment by definition —
+       *   it is whatever the phone last said before it went away, and reporting that instead is
+       *   how "Choose a server" ends up on screen while a connect is in flight.
+       * ★ WatchLink bounds it (30 s) and clears it the instant the phone says anything, so this
+       *   cannot become its own kind of lie. */
+      if link.wakingPhone { return ("hourglass", "Waking VibeSDR…") }
       switch link.phoneStatus {
       case "starting":
         /* ★★★ "STARTING" IS ONLY TRUE FOR A WHILE, and this said it for ever. The phone sets it
