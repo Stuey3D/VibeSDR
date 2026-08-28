@@ -20,18 +20,6 @@ export interface SDRInstance {
   // spyserver://host:port so the rest of the list plumbing (keys, favourites)
   // keeps working unchanged.
   deviceType?:   string;   // 'RTL-SDR' | 'AirspyHF+' | 'AirspyOne'
-  /** ★★★ THE RADIOS BEHIND A VIBESERVER FRONT DOOR, straight from the directory listing.
-   *
-   *  A multi-radio machine publishes ONE entry — the door — and the phone's picker opens a second
-   *  screen to choose a radio behind it. The watch has no such screen, so it was handed the door's
-   *  address, tried to connect to it as if it were a receiver, and got "iPhone lost the server"
-   *  (Stuart, 2026-08-28).
-   *  ★★ CARRIED, NOT RE-FETCHED. The listing already contains this array — the adapter read it,
-   *     used it to write "3 radios" into deviceType, and threw the rest away. Asking the server
-   *     again for something we have just been told is how a directory of fifty entries becomes
-   *     fifty requests.
-   *  ★ Optional and VibeServer-only: no other directory has the concept. */
-  radios?: { id?: string; name?: string; driver?: string }[];
   full?:         boolean;  // every client slot taken right now
   sessionLimitMins?: number;  // 0/undefined = no limit; else the server kicks you after this
   /** ★★★ KiwiSDR only: the OWNER'S ALLOWANCE FOR THIRD-PARTY CLIENTS, straight from the

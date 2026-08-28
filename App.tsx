@@ -399,38 +399,11 @@ export default function App() {
           const CAP = 300;   // ~42 KB, comfortably inside the ceiling
           const near = (s: { distance?: number | null }) =>
             s.distance == null ? Number.POSITIVE_INFINITY : s.distance;
-          const list = filtered;
-          /* ★★★ EXPAND A FRONT DOOR INTO ITS RADIOS. A multi-radio VibeServer publishes ONE
-           *   directory entry — the door — and the phone opens a second screen to pick a radio
-           *   behind it. Buddy has no such screen, so it was handed the door's address, tried to
-           *   connect to it as though it were a receiver, and reported "iPhone lost the server"
-           *   (Stuart, 2026-08-28).
-           * ★★ DONE HERE, ON THE PHONE, and only for the watch: the phone's own picker still wants
-           *   one row per MACHINE, because it has somewhere to put the choice. Expanding globally
-           *   would replace one tidy entry with four on a screen that did not ask for them.
-           * ★ FREE — no extra requests. The listing already carried the radios; the adapter used
-           *   them to write "3 radios" and dropped the rest.
-           * ★ A radio with no id is the whole machine (a single-radio server publishes itself),
-           *   so it keeps the door's own address — which is the right one. */
-          const expanded = list.flatMap((s) => {
-            const rs = (s.radios ?? []).filter((r) => r.id);
-            if (rs.length < 2) return [s];
-            return rs.map((r) => ({
-              ...s,
-              url: `${(s.url || '').replace(/\/+$/, '')}/r/${encodeURIComponent(r.id!)}`,
-              name: `${s.name} · ${r.name || r.driver || 'radio'}`,
-            }));
-          });
-          /* ★★★ CAPPED AFTER EXPANDING, NOT BEFORE. Expansion MULTIPLIES rows — one machine with
-           *   four radios becomes four — so a cap applied first is not a cap at all: 300 entries
-           *   could leave here as 600 and blow the same ~65 KB sendMessage ceiling this exists to
-           *   stay under, which is the fault that made every big directory spin to its timeout.
-           *   A limit has to be applied to the thing that is actually sent. */
-          const capped = expanded.length > CAP
-            ? [...expanded].sort((a, b) => near(a) - near(b)).slice(0, CAP)
-            : expanded;
-          capped.forEach((s) => { if (s.url) watchServerCache.set(s.url, s); });
-          watchProvider.sendDirectory(dirId, capped.map((s) => ({
+          const list = filtered.length > CAP
+            ? [...filtered].sort((a, b) => near(a) - near(b)).slice(0, CAP)
+            : filtered;
+          list.forEach((s) => { if (s.url) watchServerCache.set(s.url, s); });
+          watchProvider.sendDirectory(dirId, list.map((s) => ({
             id: s.url,
             name: s.name,
             type: s.serverType ?? 'ubersdr',
