@@ -294,7 +294,20 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
    *    focus longer than the job needs — holding it indefinitely would be a battery cost and would
    *    park us in Now Playing over whatever the user was actually listening to. */
   @objc func keepAliveForConnect(_ on: Bool) {
-    if on { vibeStartSilentAudio() } else { vibeStopSilentAudio() }
+    /* ★★★ ON MAIN, because this starts an AVAudioEngine and a bridge method does not run there.
+     *   `requiresMainQueueSetup` is false, so React Native hands this module its own serial
+     *   background queue — the hazard the long note below already describes for the engine
+     *   lifecycle, and I walked straight into it. Started off-main the engine simply does not come
+     *   up: no exception reaches JS, no audio session is taken, and Now Playing never changes.
+     *   Stuart, 2026-08-29: "your background audio keep alive isnt working as ... the now playing
+     *   still shows my music not VibeSDR." That is what a silent failure looks like from outside.
+     * ★★ AND IT EXPLAINS THE REST OF WHAT HE SAW. With no keep-alive the phone is suspended
+     *   mid-connect exactly as before, so the first attempt dies and the second works because the
+     *   app is warm by then — "back out to the servers, repeat, and it connects".
+     * ★ Inline when already on main, like the engine sequence below, so a caller that is already
+     *   there is not deferred behind whatever else is queued. */
+    let work = { if on { vibeStartSilentAudio() } else { vibeStopSilentAudio() } }
+    if Thread.isMainThread { work() } else { DispatchQueue.main.async(execute: work) }
   }
 
   /// Set (or clear) the admin credential carried on the audio socket. Takes effect on the NEXT
