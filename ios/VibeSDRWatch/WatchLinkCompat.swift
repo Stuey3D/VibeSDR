@@ -140,7 +140,19 @@ extension WatchLink {
 
   /// Show the servers screen. NAVIGATION in Buddy, never teardown: the phone keeps playing while
   /// you browse, and choosing a server simply redirects it.
-  func backToPicker() { showServers = true }
+  /* ★★★ ONE DOOR TO THIS SCREEN, NOT TWO. This set the flag and sent NOTHING, while
+   *   openServers() — the button on the start screen — asks the phone for the favourites it is
+   *   holding. Same destination, two ways in, and only one of them worked: the three call sites
+   *   that come through HERE (the waterfall screen, the control menu, FM-DX settings) reached the
+   *   server list with no request made, so the list was empty and the phone was never woken.
+   *   Stuart, 2026-09-01: "soon as I tap the servers button the airpods do not get pulled and the
+   *   favourites do not populate."
+   * ★★★ AND IT SURVIVED A FIX AIMED STRAIGHT AT IT. The durable-`need` change went into
+   *   openServers(), was shipped, tested and reported as doing nothing — because the button being
+   *   pressed did not go through openServers() at all. I then spent a round blaming the watch
+   *   install for it. ONE RULE, TWO READERS: the fault this project keeps meeting, and the reason
+   *   the fix is to DELETE the second reader rather than to teach it the same trick. */
+  func backToPicker() { openServers() }
 
   func reconnectIfNeeded() { ping() }
 

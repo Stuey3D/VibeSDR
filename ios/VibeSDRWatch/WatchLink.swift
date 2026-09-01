@@ -518,6 +518,9 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
    *     that, apply()'s one-place latch-clear would ignore the phone's reply and Buddy would sit on
    *     the picker with a live phone behind it. `phoneClosed` is left alone and simply outranked by
    *     showServers — it clears itself the moment the phone says anything back. */
+  /// ★★★ EVERY WAY INTO THE SERVER LIST COMES THROUGH HERE. It used to be only the start
+  /// screen's button; the waterfall screen, the control menu and FM-DX went via
+  /// backToPicker(), which set the flag and asked for nothing. See the note there.
   func openServers() {
     deliberatelyClosed = false
     showServers = true
