@@ -586,6 +586,24 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
 
   func session(_ s: WCSession, didReceiveMessage message: [String: Any]) {
     sawWatch()
+    /* ★★★ PRODUCE AUDIO BEFORE DOING ANYTHING ELSE — THIS LINE IS THE COLD-START FIX.
+     *
+     *  This callback IS the wake: iOS has started the process for us and will suspend it again
+     *  within seconds unless we are an audio app that is actually playing. Everything that used
+     *  to start the silent loop ran downstream of the RN bridge — the command below is QUEUED
+     *  until `hasListeners`, JS routes it to watchProvider.noteWatchAwake(), and only then does
+     *  the phone make a sound. The whole cold launch therefore ran unprotected, and the phone was
+     *  killed part-way through the connect: pick a server on Buddy from cold and it hangs, go
+     *  back and pick it again and it works, because the second attempt is on a warm app.
+     *  Stuart, 2026-09-01: "using buddy to wake the app up isnt unlocking the background audio
+     *  mode until you actually start playing something".
+     *  ★★ BEFORE THE `cmd` GUARD, deliberately. Any message from the watch means Buddy is up and
+     *     about to ask for something; waiting to see WHICH command it is spends the very seconds
+     *     we are trying to buy, and a message we do not route is still proof we are needed.
+     *  ★ Self-releasing after 45 s of silence from the watch, so a wake that leads nowhere does
+     *    not hold the audio focus for ever. Buddy's 4 s ping keeps renewing it, and JS takes its
+     *    own hold as soon as the bridge is up. */
+    vibeWakeHoldSilentAudio()
     // Clear the deliberate-close flag NATIVELY the moment a reopen arrives — before anything
     // that depends on JS being up, so a headless boot reads it as false even if the bridge has
     // not mounted. Otherwise a lost 'reopen' would strand us on 'closed'.

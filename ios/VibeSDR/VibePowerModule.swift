@@ -306,8 +306,12 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
      *   app is warm by then — "back out to the servers, repeat, and it connects".
      * ★ Inline when already on main, like the engine sequence below, so a caller that is already
      *   there is not deferred behind whatever else is queued. */
-    let work = { if on { vibeStartSilentAudio() } else { vibeStopSilentAudio() } }
-    if Thread.isMainThread { work() } else { DispatchQueue.main.async(execute: work) }
+    /* ★★★ A REASON, NOT THE RAW START/STOP. The wake in VibeWatchModule now holds this loop too
+     *   (it has to — see vibeHoldSilentAudio), and calling vibeStopSilentAudio() here would tear
+     *   down a loop the wake is still holding: JS releases at the END of a connect, which is
+     *   inside the window the wake exists to protect. vibeHoldSilentAudio does the main-thread
+     *   hop itself, so the hop that used to live here is gone with it. */
+    vibeHoldSilentAudio("js", on)
   }
 
   /// Set (or clear) the admin credential carried on the audio socket. Takes effect on the NEXT
