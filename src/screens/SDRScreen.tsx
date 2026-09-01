@@ -4169,6 +4169,21 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
     }, password, !!route.params.isLocal), () => converterRef.current);
     client.current = c;
+    /* ★★★ TELL THE WATCH THIS RECEIVER IS EXCLUSIVE UNTIL IT SAYS OTHERWISE. Buddy learns about a
+     *   shared dial ONLY from a `dial` message, and it keeps what it was last told for the life of
+     *   the app — nothing resets it. So arriving on a receiver that has no shared dial left the
+     *   wrist still believing the LAST one's arrangement: on UberSDR the crown refused to tune
+     *   until you armed it, against a receiver where arming means nothing, and it drew a listener
+     *   count and a chat glyph belonging to a server you had left (Stuart, 2026-09-01: "ubersdr is
+     *   sharing the VibeServer window in buddy ... right now it doesnt tune until you arm it").
+     * ★★★ THE PHONE IS THE ONE THAT KNOWS, so the phone states it on every connect rather than the
+     *   watch guessing when to forget. A real onDial arrives moments later on the receivers that
+     *   have one and simply overwrites this — default to the safe answer, upgrade when told, which
+     *   is the same ordering the rest of this screen uses.
+     * ★ Session-scoped by construction: this runs per connection, so it cannot go stale. */
+    setDialState(null);
+    watchProvider.sendDial({ mode: 'exclusive', tuner: 0, mine: false, you: 0,
+                             listeners: 0, decoding: false });
     // Apply the persisted VFO-lock follow mode to the fresh connection.
     c.setFollowMode(vfoLockedRef.current);
     // Apply the persisted link mode too — the [linkMode] effect only fires on a CHANGE, so a mode

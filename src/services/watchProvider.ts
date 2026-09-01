@@ -573,11 +573,14 @@ class WatchProvider {
     const j = JSON.stringify(state);
     // ★ A `said` is an EVENT and must always go; the rest is state and only goes when it changes.
     if (!state.said && j === this.lastDial) return;
-    if (!state.said) this.lastDial = j;
+    if (!state.said) { this.lastDial = j; this.lastDialState = state; }
     if (!this.isActive) return;
     Native!.sendDial(j);
   }
   private lastDial = '';
+  /** ★ The last STATE (not the event), so `need` can answer with it — see flushAll. */
+  private lastDialState: { mode: string; tuner: number; mine: boolean; you: number;
+                           listeners: number; decoding: boolean } | null = null;
 
   private flushFmdx() {
     const j = this.pendingFmdx;
@@ -1003,6 +1006,15 @@ class WatchProvider {
     this.sentStations = '\u0000';
     this.sentDab = '\u0000';
     this.sentFavs = '\u0000';
+    /* ★★★ AND THE DIAL, which `need` was not answering. Buddy asks for everything it might be
+     *   missing, and the shared-dial arrangement is exactly the sort of thing it can be missing —
+     *   it is told once per connection and keeps it for the life of the app. Left out of this
+     *   flush, a watch that restarted mid-session went on using whatever it last heard, which on a
+     *   receiver with no shared dial means demanding you ARM a crown that needs no arming.
+     * ★ The dedupe is cleared first or this would be a no-op: lastDial exists to stop the same
+     *   state going twice, and "send me everything" is the one caller that means it. */
+    this.lastDial = '';
+    if (this.lastDialState) this.sendDial(this.lastDialState);
     this.flushPhone();
     this.flushLogo();
     this.flushStations();

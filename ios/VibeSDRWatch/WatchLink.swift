@@ -799,6 +799,26 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   }
 
   func selectInstance(_ url: String, type: String = "", name: String = "") {
+    /* ★★★ FORGET THE LAST RECEIVER'S DIAL ARRANGEMENT THE MOMENT WE ASK FOR ANOTHER ONE. The
+     *   shared dial is told to us ONCE per connection and kept for the life of the app, so moving
+     *   from a shared VibeServer to an exclusive receiver left the wrist still enforcing the old
+     *   one: the crown refused to tune until armed, on a radio where arming means nothing, beside
+     *   a listener count and a chat glyph belonging to a server we had left.
+     * ★★ The phone now states this on every connect and is the authority — but it cannot say so
+     *   until it has connected, and the wrist is looking at the old numbers the whole time in
+     *   between. Clearing on the ASK closes that window: we know we are leaving, so we stop
+     *   claiming to know anything about where we are going.
+     * ★ Exclusive is the safe default in both directions — it lets the crown work. A receiver that
+     *   really does share its dial says so within moments and the arming comes back. */
+    dialMode      = "exclusive"
+    dialArmed     = false
+    dialListeners = 0
+    dialTuner     = 0
+    dialMine      = false
+    dialDecoding  = false
+    chatLines.removeAll()
+    chatUnread    = 0
+
     var msg: [String: Any] = ["cmd": "inst", "val": url]
     if !type.isEmpty { msg["type"] = type }
     if !name.isEmpty { msg["name"] = name }
