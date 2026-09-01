@@ -202,6 +202,33 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   /// trust, and marks the deliberate close. transferUserInfo (NOT sendMessage) because the
   /// process is dying: it is queued to the WCSession daemon and delivered even after we're gone,
   /// where a fire-and-forget sendMessage would be dropped mid-flight.
+  /* ★★★ A SCENE DISCONNECT IS NOT NECESSARILY A USER SWIPE, AND WE WERE TREATING IT AS ONE.
+   *
+   *  This is called from sceneDidDisconnect, whose comment says "the user swiped the app out of
+   *  the switcher" — but iOS ALSO disconnects a scene on its own account, to reclaim UI resources
+   *  from an app that is still running in the background. Ours is exactly such an app: while Buddy
+   *  drives it, audio keeps the process alive with no UI on screen, which is the textbook case for
+   *  the system taking the scene away.
+   *  ★★ AND THE FLAG IT SETS IS LOAD-BEARING. `phoneClosedByUser` makes the next headless boot
+   *     refuse to auto-connect and report "closed" to the wrist — deliberately, so a stray
+   *     heartbeat cannot pour SDR audio out mid-call. Set it wrongly and Buddy is told the phone
+   *     is shut when it is sitting there working, which is a candidate for "it takes two goes".
+   *  ★★★ SO ASK THE ONE QUESTION THAT CANNOT LIE: ARE WE STILL HERE? A user swipe kills the
+   *     process — nothing of ours runs a moment later. A system scene release does not. So set
+   *     the flag now (the process may be about to die, and that write must land), then check back
+   *     shortly: if this block runs at all, we were not killed, and the flag was wrong.
+   *  ★ Two seconds is far longer than a termination takes and short enough to be corrected before
+   *    any wake could read it. A suspended app would not run the timer either — but a suspended
+   *    app is not serving audio, and the case this protects is precisely the one where we are. */
+  @objc static func sceneDisconnected() {
+    appWillTerminate()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+      guard UserDefaults.standard.bool(forKey: closedKey) else { return }
+      UserDefaults.standard.set(false, forKey: closedKey)
+      NSLog("[VibeWatch] scene disconnected but we are still running — not a user close")
+    }
+  }
+
   @objc static func appWillTerminate() {
     UserDefaults.standard.set(true, forKey: closedKey)
     let s = WCSession.default

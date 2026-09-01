@@ -278,6 +278,29 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     guard let appDelegate = UIApplication.shared.delegate as? AppDelegate,
           let factory = appDelegate.reactNativeFactory else { return }
 
+    /* ★★★ NEVER START REACT NATIVE TWICE. scene(willConnectTo:) runs on every scene connection,
+     *   and a scene can connect a SECOND time in one process: the system releases the scene from
+     *   an app that is still running in the background (ours is, whenever Buddy is driving it and
+     *   audio is holding the process up), and reconnects it when the user opens the app again.
+     *   This method then built a second window and called startReactNative over a JavaScript
+     *   runtime that was already mounted — a second surface for the same "main" module on top of
+     *   a live one. A prime suspect for the PURE BLACK SCREEN on opening the app after Buddy has
+     *   been using it, which is exactly and only when this can happen.
+     * ★★★ AND IT IS NOT THE CRASH BOUNDARY, which is what makes this the lead worth taking: since
+     *   build 222 that boundary renders the error and the component stack, and Stuart reports the
+     *   screen is still PURE black with no text on 224. Something is drawing over everything, or
+     *   nothing is being drawn at all — not a React error being caught and reported.
+     * ★ Logged either way, so the next test says which of those it is instead of us guessing
+     *   again. If this line appears twice in one launch, that is the bug. */
+    if let existing = self.window {
+      NSLog("[VibeSDR] scene reconnect — reusing the existing RN window, NOT restarting React")
+      existing.makeKeyAndVisible()
+      windowScene.windows.first?.isHidden = false
+      appDelegate.window = existing
+      return
+    }
+    NSLog("[VibeSDR] scene connect — starting React Native")
+
     let window = VibeKeyWindow(windowScene: windowScene)
 
     // Cold-start deep link (vibesdr://). Under the scene lifecycle the launch URL
@@ -306,11 +329,14 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
   }
 
-  // The user swiped the app out of the switcher (or the system is releasing the scene).
-  // Fire the goodbye so the watch shows "Phone app closed" and STOPS pinging us — otherwise
-  // its heartbeat relaunches us headless and SDR audio pours out the speaker mid-call.
+  /// The scene went away — EITHER the user swiped the app out of the switcher OR the system
+  /// reclaimed the UI from an app that is still running. Those need opposite responses, and
+  /// sceneDisconnected() tells them apart by checking whether we are still alive afterwards.
+  /// See the note on VibeWatchModule.sceneDisconnected.
   func sceneDidDisconnect(_ scene: UIScene) {
-    VibeWatchModule.appWillTerminate()
+    NSLog("[VibeSDR] scene disconnected (state=%ld)", UIApplication.shared.applicationState.rawValue)
+    window = nil
+    VibeWatchModule.sceneDisconnected()
   }
 
   // Warm deep link (app already running).

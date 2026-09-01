@@ -87,6 +87,38 @@ export const BAND_PLAN: Band[] = [
   { lo: 446100000, hi: 446200000,  name: 'PMR446 (digital)',            type: 'utility', regions: [1], mode: 'nfm', step: 6250 },
   { lo: 462000000, hi: 468000000,  name: 'FRS / GMRS',                 type: 'utility', regions: [2], mode: 'nfm', step: 12500 },
   { lo: 1240000000, hi: 1300000000, name: '23cm Ham Band',            type: 'ham',  bandLabel: '23cm', mode: 'nfm', step: 25000 },
+
+  /* ── MICROWAVE, above 23cm ─────────────────────────────────────────────────────────────────
+   * ★★★ ADDED FOR THE CONVERTERS. This plan stopped at 1300 MHz, which was fine while nothing
+   *   could tune higher — and a down-converter changes that: a 9750 MHz LNB puts a listener at
+   *   10489.5 MHz, where every band-keyed feature returned nothing and the label was simply
+   *   blank. Nothing was BROKEN by that (getBandsAtRegion returns an empty list and callers leave
+   *   the mode alone), but a dial that can reach a band and cannot name it is a dial that looks
+   *   like it does not know where it is.
+   *
+   * ★★★ LABELS ONLY, NO mode/step, FOR THE WIDE ONES — and that is the honest choice rather than
+   *   a lazy one. 3cm is 500 MHz wide and carries narrowband SSB, FM, ATV and beacons; picking a
+   *   demodulator for the whole span would be inventing a convention and would fire on every
+   *   boundary crossing in a car. `mode`/`step` undefined means "don't touch", which is exactly
+   *   right for a band whose contents vary by where in it you are.
+   *   ★ QO-100's narrowband transponder is the exception, because there the convention is real
+   *     and universal: USB, and it is why most people own an LNB at all.
+   *
+   * ★★ REGIONS WHERE THEY GENUINELY DIFFER. 9cm is the big one — R1 has a narrow 3400-3475
+   *   allocation while R2/R3 have 3300-3500 — so it is split rather than averaged into a span
+   *   that is wrong in both places. */
+  { lo: 2300000000,  hi: 2450000000,  name: '13cm Ham Band',           type: 'ham',  bandLabel: '13cm' },
+  { lo: 3400000000,  hi: 3475000000,  name: '9cm Ham Band',            type: 'ham',  bandLabel: '9cm', regions: [1] },
+  { lo: 3300000000,  hi: 3500000000,  name: '9cm Ham Band',            type: 'ham',  bandLabel: '9cm', regions: [2, 3] },
+  { lo: 5650000000,  hi: 5850000000,  name: '6cm Ham Band',            type: 'ham',  bandLabel: '6cm' },
+  { lo: 10000000000, hi: 10500000000, name: '3cm Ham Band',            type: 'ham',  bandLabel: '3cm' },
+  /* ★★★ THE ONE MOST PEOPLE POINT A DISH AT. The QO-100 (Es'hail-2) narrowband transponder — SSB,
+   *   CW and the beacons — sits inside 3cm and is what a 9750 MHz LNB is bought for. Listed
+   *   separately so it gets a name of its own and the USB convention that genuinely applies here,
+   *   and it sorts ahead of 3cm because ham beats ham by order of appearance in getBandsAtRegion.
+   * ★ 500 Hz is a member of STEPS_VHF, which is the ladder in force above 30 MHz. */
+  { lo: 10489500000, hi: 10490000000, name: 'QO-100 Narrowband',       type: 'ham',  bandLabel: 'QO-100', mode: 'usb', step: 500 },
+  { lo: 24000000000, hi: 24250000000, name: '1.2cm Ham Band',          type: 'ham',  bandLabel: '1.2cm' },
 ];
 
 /** Band type → colour, as HEX and in ONE place.

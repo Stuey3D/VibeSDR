@@ -9,14 +9,18 @@ import GainSlider from './GainSlider';
 import Slider from '@react-native-community/slider';
 import type { RadioCaps } from '../services/UberSDRClient';
 import {
-  CONVERTER_PRESETS, type ConverterProfile, HF_CEILING_HZ, V4_WARNING,
-  fromPreset, isIdentity, presetById,
+  CONVERTER_PRESETS, type ConverterProfile, V4_WARNING,
+  fromPreset, isIdentity, outputRange, presetById,
 } from '../services/converter';
 
 // VibeSDR V4 — RTL-SDR hardware controls submenu (Android, local hardware only).
 // Gain (also mirrored in the demodulators popup), PPM, sample rate, bias-T,
 // RTL2832 digital AGC, and direct sampling. Direct sampling is not needed on the
 // Blog V4 (it covers HF directly) — kept for V3/other dongles.
+
+/** Which way the manual converter goes. Typed here rather than inline so Seg infers the union
+ *  instead of widening to string. */
+const CONV_DIRS: ('up' | 'down')[] = ['up', 'down'];
 
 const C = {
   bg:     'rgba(6,4,2,0.99)',
@@ -293,6 +297,44 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
     if (k === 'ArrowDown' || k === 'ArrowRight') { setIdx(Math.min(n - 1, i + 1)); return; }
     if (k === 'Enter' || k === 'Space') slots.current[i]?.();
   }, NAV_REPEAT_KEYS);
+
+  /* ★★ THE MANUAL FIELDS ARE HELD AS TEXT, not parsed on every keystroke. A half-typed "1" is
+   *   not 1 MHz, and committing it would retune the radio on the way to 125. Committed on blur /
+   *   submit, and on the up/down toggle, which is also where the sign is applied.
+   * ★ Re-seeded whenever the stored profile changes underneath (choosing a preset, reopening the
+   *   panel), so the boxes always show what is actually set. */
+  const conv0 = p.converter;
+  const mhzTxt = (hz: number) => hz ? String(+(hz / 1e6).toFixed(6)) : '';
+  const [loTxt,   setLoTxt]   = React.useState(() => mhzTxt(Math.abs(conv0?.offsetHz ?? 0)));
+  const [inLoTxt, setInLoTxt] = React.useState(() => mhzTxt(conv0?.inputLoHz ?? 0));
+  const [inHiTxt, setInHiTxt] = React.useState(() => mhzTxt(conv0?.inputHiHz ?? 0));
+  const convSig = conv0 ? `${conv0.id}|${conv0.offsetHz}|${conv0.inputLoHz}|${conv0.inputHiHz}` : '';
+  const lastSig = React.useRef(convSig);
+  React.useEffect(() => {
+    if (lastSig.current === convSig) return;
+    lastSig.current = convSig;
+    setLoTxt(mhzTxt(Math.abs(conv0?.offsetHz ?? 0)));
+    setInLoTxt(mhzTxt(conv0?.inputLoHz ?? 0));
+    setInHiTxt(mhzTxt(conv0?.inputHiHz ?? 0));
+  }, [convSig]);
+
+  /** Fold the three typed boxes into the stored profile. `dir` overrides the current direction
+   *  (the up/down control commits through here so one function owns the sign). */
+  const commitConv = (dir?: 'up' | 'down') => {
+    const c = p.converter; if (!c || !p.onConverter) return;
+    const mhz = (t: string) => { const v = parseFloat(t); return isFinite(v) ? Math.abs(v) : 0; };
+    const down = dir ? dir === 'down' : c.offsetHz > 0;
+    const lo = Math.round(mhz(inLoTxt) * 1e6);
+    const hi = Math.round(mhz(inHiTxt) * 1e6);
+    p.onConverter({
+      ...c, id: 'custom', label: 'Manual',
+      offsetHz: (down ? 1 : -1) * Math.round(mhz(loTxt) * 1e6),
+      // ★ hi <= lo means "declares nothing", which displayRange takes at its word and only
+      //   shifts. So clearing the boxes is a real answer, not an error to reject.
+      inputLoHz: hi > lo ? lo : 0,
+      inputHiHz: hi > lo ? hi : 0,
+    });
+  };
 
   const slot = (run: () => void) => {
     const i = slots.current.length;
@@ -792,49 +834,59 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               <Text style={styles.note}>{presetById(conv.id)?.hint ?? 'Custom converter'}</Text>
 
               {conv.id === 'custom' && (<>
-                {/* ★★ A POSITIVE LO AND A DIRECTION, never a signed number. It is STORED signed —
-                    an up-converter is a down-converter with a negative LO, which is what makes
-                    this one transform instead of two features — but the box in the user's hands
-                    is labelled 125 MHz, and asking anyone to type a minus sign is a sign error
-                    waiting to happen. */}
-                {/* ★★ ONE nudge() FOR BOTH BUTTONS AND BOTH INPUT PATHS. Written out twice, the
-                    minus button's KEYBOARD action was a copy of the plus button's and stepped the
-                    wrong way — a fault invisible to touch and only reachable with a keyboard, so
-                    it would have shipped. The step is in MAGNITUDE (the LO the user typed), and
-                    the sign stays wherever the direction control put it. */}
-                {(() => {
-                  const nudge = (deltaMhz: number) => () => setConv({
-                    ...conv, label: 'Custom',
-                    offsetHz: Math.sign(conv.offsetHz || -1)
-                              * Math.max(0, Math.abs(conv.offsetHz) + deltaMhz * 1e6),
-                  });
-                  const down = nudge(-1), up = nudge(1);
-                  return (
-                    <View style={styles.stepperRow}>
-                      <TouchableOpacity
-                        style={[styles.stepBtn, slot(down) && kbNav
-                                && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
-                        onPress={down}><Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
-                      <Text style={styles.stepVal}>{loMhz} MHz</Text>
-                      <TouchableOpacity
-                        style={[styles.stepBtn, slot(up) && kbNav
-                                && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
-                        onPress={up}><Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
-                    </View>
-                  );
-                })()}
+                {/* ★★★ THREE NUMBERS, AND THE THIRD IS THE ONE THAT WAS MISSING. An LO alone says
+                    how far the band moves; it does not say WHICH band moves, and without that the
+                    dial offers hundreds of MHz the converter cannot reach. Stuart, 2026-09-01:
+                    "for a Ham it up it would be 100KHz - 30MHz mapped to 125MHz."
+                  ★★ THE LO IS WHAT IS PRINTED ON THE BOX, so that is what is asked for — for an
+                    up-converter AND an LNB alike (9750 is on the LNB's label). It is NOT "where
+                    the bottom of the band comes out": a Ham It Up's 100 kHz appears at 125.1 MHz,
+                    not 125, and asking the question that way would put every entry 100 kHz out.
+                  ★ The resulting output band is DERIVED and shown below, so the numbers can be
+                    checked against the hardware rather than trusted. */}
+                <Text style={styles.fieldLbl}>LO frequency (MHz)</Text>
+                <TextInput
+                  style={styles.convInput}
+                  value={loTxt}
+                  onChangeText={setLoTxt}
+                  onEndEditing={() => commitConv()}
+                  onSubmitEditing={() => commitConv()}
+                  keyboardType="decimal-pad"
+                  placeholder="125"
+                  placeholderTextColor="rgba(255,255,255,0.35)"
+                />
                 <Seg slot={slot}
-                     options={['up', 'down']}
-                     value={conv.offsetHz > 0 ? 'down' : 'up'}
-                     onChange={(d) => setConv({ ...conv, label: 'Custom',
-                       offsetHz: (d === 'down' ? 1 : -1) * Math.abs(conv.offsetHz),
-                       // ★★ The direction also sets what the converter PASSES, because that is
-                       //   the half that decides how far the dial may go. An up-converter takes
-                       //   HF in and filters the rest out, so the app's HF ceiling is the honest
-                       //   default; a down-converter's input is its own high band and we cannot
-                       //   guess it, so it declares none and the range is merely shifted.
-                       inputLoHz: 0, inputHiHz: d === 'down' ? 0 : HF_CEILING_HZ })}
+                     options={CONV_DIRS}
+                     value={(conv.offsetHz > 0 ? 'down' : 'up') as 'up' | 'down'}
+                     onChange={(d) => commitConv(d)}
                      fmt={(d) => d === 'down' ? 'Converts down' : 'Converts up'} />
+
+                <Text style={styles.fieldLbl}>It converts (MHz)</Text>
+                <View style={styles.convRow}>
+                  <TextInput
+                    style={[styles.convInput, styles.convHalf]}
+                    value={inLoTxt} onChangeText={setInLoTxt}
+                    onEndEditing={() => commitConv()} onSubmitEditing={() => commitConv()}
+                    keyboardType="decimal-pad" placeholder="0.1"
+                    placeholderTextColor="rgba(255,255,255,0.35)" />
+                  <Text style={styles.convDash}>to</Text>
+                  <TextInput
+                    style={[styles.convInput, styles.convHalf]}
+                    value={inHiTxt} onChangeText={setInHiTxt}
+                    onEndEditing={() => commitConv()} onSubmitEditing={() => commitConv()}
+                    keyboardType="decimal-pad" placeholder="30"
+                    placeholderTextColor="rgba(255,255,255,0.35)" />
+                </View>
+                <Text style={styles.note}>
+                  {(() => {
+                    const out = outputRange(conv);
+                    if (!out) return 'Leave the range blank and the dial is shifted but not '
+                      + 'narrowed \u2014 useful when you are not sure what your converter passes.';
+                    const mhz = (h: number) => (h / 1e6).toFixed(3).replace(/\.?0+$/, '');
+                    return `Your radio must cover ${mhz(out[0])}\u2013${mhz(out[1])} MHz. `
+                      + 'The dial will be limited to the range above.';
+                  })()}
+                </Text>
                 <Text style={styles.note}>{V4_WARNING}</Text>
               </>)}
 
@@ -919,6 +971,12 @@ const styles = StyleSheet.create({
   adminCardOk: { borderColor: 'rgba(120,220,140,0.5)', backgroundColor: 'rgba(120,220,140,0.08)' },
   adminTitle: { color: C.gold, fontSize: 11, letterSpacing: 2, marginBottom: 6 },
   adminRow:  { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
+  fieldLbl:  { fontSize: 12, color: C.dim, marginTop: 10, marginBottom: 4 },
+  convInput: { borderWidth: 1, borderColor: C.border, borderRadius: 6,
+               paddingHorizontal: 10, paddingVertical: 8, color: C.muted, fontSize: 15 },
+  convRow:   { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  convHalf:  { flex: 1 },
+  convDash:  { fontSize: 13, color: C.dim },
   adminInput: { flex: 1, borderWidth: 1, borderColor: C.border, borderRadius: 6,
                 paddingHorizontal: 10, paddingVertical: 8, color: C.gold, fontSize: 14 },
   adminBtn:  { borderWidth: 1, borderColor: C.abtn, borderRadius: 6,

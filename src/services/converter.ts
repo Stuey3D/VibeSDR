@@ -156,34 +156,67 @@ export interface ConverterPreset {
 }
 
 export const CONVERTER_PRESETS: ConverterPreset[] = [
-  { id: 'none',       label: 'None',      hint: 'No converter',
+  { id: 'none',       label: 'None',        hint: 'No converter',
     offsetHz: 0, inverted: false, inputLoHz: 0, inputHiHz: 0 },
-  { id: 'up-100',     label: '100 MHz up', hint: 'Ham It Up v1.1 and earlier',
-    offsetHz: -100_000_000, inverted: false, inputLoHz: 0, inputHiHz: HF_CEILING_HZ },
-  { id: 'up-120',     label: '120 MHz up', hint: 'SpyVerter, SpyVerter R2',
-    offsetHz: -120_000_000, inverted: false, inputLoHz: 0, inputHiHz: HF_CEILING_HZ },
-  { id: 'up-125',     label: '125 MHz up', hint: 'Ham It Up v1.2+, Ham It Up Plus, most clones',
-    offsetHz: -125_000_000, inverted: false, inputLoHz: 0, inputHiHz: HF_CEILING_HZ },
-  { id: 'custom',     label: 'Custom…',    hint: 'Enter the LO frequency yourself',
+
+  // ── Up-converters: HF in, VHF out. The input range is what the low-pass filter passes. ──
+  { id: 'up-100',     label: '100 MHz up',  hint: 'Ham It Up v1.1 and earlier · 100 kHz\u201330 MHz',
+    offsetHz: -100_000_000, inverted: false, inputLoHz: 100_000, inputHiHz: 30_000_000 },
+  { id: 'up-120',     label: '120 MHz up',  hint: 'SpyVerter, SpyVerter R2 · 100 kHz\u201360 MHz',
+    offsetHz: -120_000_000, inverted: false, inputLoHz: 100_000, inputHiHz: 60_000_000 },
+  { id: 'up-125',     label: '125 MHz up',  hint: 'Ham It Up v1.2+, Ham It Up Plus, most clones \u00b7 100 kHz\u201330 MHz',
+    offsetHz: -125_000_000, inverted: false, inputLoHz: 100_000, inputHiHz: 30_000_000 },
+
+  /* ── Down-converters: satellite in, UHF out. ──
+   * ★★★ THESE DECLARE NO INPUT RANGE, AND THAT IS DELIBERATE — the advertised one would lock out
+   *   the very thing most people buy them for. A "universal" Ku LNB is specified as 10.7-11.7 GHz
+   *   on its low band, and QO-100's narrowband transponder sits at 10489.5 MHz, BELOW that: the
+   *   published figure excludes the most popular use of the hardware. It works anyway, which is
+   *   why QO-100 listeners use these LNBs. Clamping to the datasheet would have offered a dial
+   *   that refuses the one frequency the user came for.
+   * ★★ So the range is merely SHIFTED for these, and anyone who wants it narrowed sets it by hand
+   *   in Custom, where they can enter what their own dish actually reaches.
+   * ★ NO C-BAND (5150 MHz) AND NO OTHER HIGH-SIDE BLOCK, because those INVERT: the output is
+   *   LO minus RF and the spectrum comes out mirrored. `inverted` exists in the model but nothing
+   *   implements it, and shipping a preset that needs it would mis-tune and break every decoder.
+   *   See the note below. */
+  { id: 'dn-9750',    label: '9750 MHz down', hint: 'Ku LNB low band \u00b7 QO-100 narrowband',
+    offsetHz: 9_750_000_000, inverted: false, inputLoHz: 0, inputHiHz: 0 },
+  { id: 'dn-10600',   label: '10600 MHz down', hint: 'Ku LNB high band',
+    offsetHz: 10_600_000_000, inverted: false, inputLoHz: 0, inputHiHz: 0 },
+  { id: 'dn-10750',   label: '10750 MHz down', hint: 'Single-band Ku LNB',
+    offsetHz: 10_750_000_000, inverted: false, inputLoHz: 0, inputHiHz: 0 },
+
+  { id: 'custom',     label: 'Manual\u2026',  hint: 'Enter the LO and the range it converts',
     offsetHz: 0, inverted: false, inputLoHz: 0, inputHiHz: HF_CEILING_HZ },
 ];
 
-/* ★★★ NO LNB / DOWN-CONVERTER PRESETS YET, AND THAT IS DELIBERATE.
- *   The model above carries them (a 9750 MHz LNB is offsetHz +9_750_000_000, and a high-side
- *   block is the same with inverted:true) so nothing has to be migrated when one is wanted. What
- *   is NOT built is the half of the feature they need, and shipping the presets without it would
- *   be a control that looks supported and mis-tunes:
- *     · INVERSION IS NOT A DISPLAY FLIP. The signal really is spectrally mirrored, and the fix is
- *       to conjugate the IQ stream (negate Q) at the front-end mixer. Flip only the display and
- *       USB/LSB swap, CW lands the wrong side of the carrier, FM de-rotation runs backwards so
- *       RDS never locks, and every decoder — RTTY, NAVTEX, WEFAX, SSTV, FT8 — fails.
- *     · A DISPLAY FREQUENCY ABOVE 4.29 GHz DOES NOT FIT IN A uint32. The native bridge is uint32
- *       throughout (vibe_localsdr_jni.cpp, RtlTcpServer::start, all of spyserver_protocol.h), so
- *       a 10.489 GHz display frequency that ever crossed it would silently WRAP. The one-place
- *       rule below is what keeps display Hz on this side of the bridge, but it wants testing on
- *       air before anyone is invited to tune there.
- *   Both are real work and nobody has asked for either: the request this was built for is a
- *   Ham It Up on rtl_tcp. Add the presets when the inversion path is done, not before. */
+/** The output band a converter produces from its input range — what the TUNER has to cover.
+ *  Shown in the manual editor so the numbers can be checked against the hardware: enter a Ham It
+ *  Up (100 kHz-30 MHz, LO 125) and it reads 125.1-155.0 MHz, which is what the dongle must reach.
+ *  ★ Empty when no input range is declared, because then there is nothing to say. */
+export function outputRange(c: ConverterProfile): [number, number] | null {
+  if (c.inputHiHz <= c.inputLoHz) return null;
+  const a = toHardware(c.inputLoHz, c), b = toHardware(c.inputHiHz, c);
+  return a <= b ? [a, b] : [b, a];
+}
+
+/* ★★★ WHAT IS STILL NOT SHIPPED, AND WHY — INVERTING CONVERTERS.
+ *   A high-side block (C-band's 5150 MHz LO, some transverters) produces LO minus RF, so the
+ *   spectrum comes out MIRRORED. `inverted` exists in the model and the maths above honours it,
+ *   but nothing conjugates the IQ stream, and that is the half that matters: flip only the display
+ *   and USB/LSB swap, CW lands the wrong side of the carrier, FM de-rotation runs backwards so RDS
+ *   never locks, and every decoder — RTTY, NAVTEX, WEFAX, SSTV, FT8 — fails. So no preset sets it,
+ *   and the manual editor does not offer it. A control that mis-tunes is worse than a missing one.
+ *
+ * ★★ THE uint32 CONCERN THAT ONCE BLOCKED THE LNB PRESETS IS CLOSED. The native bridge is uint32
+ *   throughout (vibe_localsdr_jni.cpp, RtlTcpServer::start, all of spyserver_protocol.h) and a
+ *   10.489 GHz DISPLAY frequency would silently wrap if it ever reached one. It cannot: every
+ *   frequency crossing to native is converted to HARDWARE Hz first — which is always under 2 GHz
+ *   — and the one path that broke that rule (WatchSpectrumForwarder, which opens its own socket)
+ *   was found and fixed. The remaining native call that carries a raw display frequency,
+ *   startRecording, takes a Double on both platforms. ★ CHECK THIS AGAIN before adding any new
+ *   native call that takes a frequency. */
 
 /** ★★ THE V4 MUST NOT BE GIVEN AN OFFSET — the likeliest support ticket this feature generates.
  *  The RTL-SDR Blog V4 replaced the V3's direct-sampling circuit with an INTERNAL up-converter

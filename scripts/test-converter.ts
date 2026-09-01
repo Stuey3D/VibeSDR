@@ -9,7 +9,7 @@
  */
 import {
   CONVERTER_PRESETS, NO_CONVERTER, type ConverterProfile,
-  active, displayRange, fromPreset, isIdentity, presetById, toDisplay, toHardware,
+  active, displayRange, fromPreset, isIdentity, outputRange, presetById, toDisplay, toHardware,
 } from '../src/services/converter';
 import { wrapWithConverter } from '../src/services/ConverterBackend';
 
@@ -70,7 +70,7 @@ console.log('\nThe passband clamp — what the converter actually converts');
   //   dongle alone the VFO would range to 1641 MHz, all of it silent. It must not go there.
   const hamItUp = fromPreset(presetById('up-125')!, undefined);
   const [lo, hi] = displayRange([24_000_000, 1_766_000_000], hamItUp);
-  eq('range is clamped to what the converter passes', [lo, hi], [0, 30_000_000]);
+  eq('range is clamped to what the converter passes', [lo, hi], [100_000, 30_000_000]);
   eq('the VFO cannot reach 125 MHz while engaged', hi < 125_000_000, true);
   eq('and cannot go negative', lo >= 0, true);
 
@@ -165,11 +165,48 @@ console.log('\nThe decorator — one place in each direction');
   eq('forceResubscribe present when inner has one', !!w2.forceResubscribe, true);
 }
 
-console.log('\nPresets are keyed on LO, and no LNB ships until inversion does');
+console.log('\nThe manual editor derives the band the tuner must cover');
+{
+  // ★ Stuart's own example: "for a Ham it up it would be 100KHz - 30MHz mapped to 125MHz".
+  const hamItUp = fromPreset(presetById('up-125')!, undefined);
+  const out = outputRange(hamItUp)!;
+  eq('a Ham It Up needs the radio to cover 125.1-155 MHz', out, [125_100_000, 155_000_000]);
+  // ★★ AND THE BOTTOM IS 125.1, NOT 125 — the LO is what is printed on the box, not where the
+  //    bottom of the band comes out. Asking the question the other way puts every entry 100 kHz
+  //    out, which is the trap in "0.1-30 MHz mapped to 125".
+  eq('the LO is not the output start', out[0] !== 125_000_000, true);
+  eq('a profile with no declared range has no output range',
+     outputRange({ ...hamItUp, inputLoHz: 0, inputHiHz: 0 }), null);
+}
+
+console.log('\nPresets are keyed on LO, and nothing inverting ships');
 {
   eq('Ham It Up is 125 MHz and negative', presetById('up-125')?.offsetHz, -125_000_000);
-  eq('no preset is inverted yet', CONVERTER_PRESETS.every(p => !p.inverted), true);
-  eq('no preset needs more than a uint32 of hardware', CONVERTER_PRESETS.every(p => Math.abs(p.offsetHz) < 2 ** 32), true);
+  /* ★★★ NOTHING SHIPS INVERTED until the IQ stream is conjugated — a preset that needed it would
+   *   mis-tune and break every decoder. This is the gate on that, not a description of today. */
+  eq('no preset is inverted', CONVERTER_PRESETS.every(p => !p.inverted), true);
+  eq('a down-converter preset exists now', !!presetById('dn-9750'), true);
+  eq('QO-100 through a 9750 LNB lands at 739.5 MHz',
+     toHardware(10_489_500_000, fromPreset(presetById('dn-9750')!, undefined)), 739_500_000);
+  /* ★★★ AND THE LNB PRESETS DECLARE NO INPUT RANGE ON PURPOSE. A universal Ku LNB is specified
+   *   as 10.7-11.7 GHz on its low band; QO-100 sits at 10489.5, BELOW that. Clamping to the
+   *   datasheet would refuse the one frequency people buy the hardware for. */
+  eq('the 9750 LNB does not clamp QO-100 out',
+     displayRange([24_000_000, 1_766_000_000],
+                  fromPreset(presetById('dn-9750')!, undefined))[0] <= 10_489_500_000, true);
+  /* ★★★ THE uint32 RULE IS ABOUT WHAT REACHES THE RADIO, NOT ABOUT THE PRESET. An LNB's LO is
+   *   9.75 GHz and its display frequencies are above 10 GHz — both far past 2^32 — and that is
+   *   FINE, because neither ever crosses the native bridge: what crosses is the HARDWARE
+   *   frequency, and this asserts that every preset leaves one inside a uint32 for a receiver
+   *   covering up to 2 GHz. That is the property the bridge actually depends on. */
+  for (const pr of CONVERTER_PRESETS) {
+    if (pr.id === 'none' || pr.id === 'custom') continue;
+    const c = fromPreset(pr, undefined);
+    const [dlo, dhi] = displayRange([0, 2_000_000_000], { ...c, engaged: true });
+    const hwLo = toHardware(dlo, c), hwHi = toHardware(dhi, c);
+    eq(`${pr.label}: hardware stays inside a uint32`,
+       Math.abs(hwLo) < 2 ** 32 && Math.abs(hwHi) < 2 ** 32, true);
+  }
   eq('choosing None disengages', fromPreset(presetById('none')!, prof({ engaged: true })).engaged, false);
   eq('choosing a real preset engages it', fromPreset(presetById('up-125')!, undefined).engaged, true);
   eq('changing preset keeps the trim', fromPreset(presetById('up-120')!, prof({ trimHz: 500 })).trimHz, 500);
