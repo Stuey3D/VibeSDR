@@ -2095,6 +2095,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private func stopEngine() {
     if !Thread.isMainThread { DispatchQueue.main.async { self.stopEngine() }; return }
     isRunning = false
+    // ★ The real audio has gone — whatever was holding the keep-alive may need it again.
+    //   See vibeSetRealAudioPlaying: two AVAudioEngines on one session is the fault this avoids.
+    vibeSetRealAudioPlaying(false)
     // Reset external mode so switching OWRX→UberSDR doesn't leave us in external
     // mode (which made UberSDR pause take the external release path).
     // startExternalAudio re-sets it true right after its stopEngine() call.
@@ -2190,6 +2193,12 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private func startEngine() {
     // ★ Same rule as stopEngine — attaching a node touches the same lock that stopping one does.
     if !Thread.isMainThread { DispatchQueue.main.async { self.startEngine() }; return }
+    /* ★★★ AND THE SILENT KEEP-ALIVE LOOP STANDS DOWN. It exists only to make iOS count us as an
+     *   audio app in the seconds before this engine exists; from here on THIS engine does that.
+     *   Left running it is a SECOND AVAudioEngine on the same session — see the note in
+     *   VibeSilentAudio — which is exactly the sort of contention that produces stutter and
+     *   dropouts, and it never stopped while Buddy was on the wrist. */
+    vibeSetRealAudioPlaying(true)
     let engine = AVAudioEngine()
     let player = AVAudioPlayerNode()
     engine.attach(player)

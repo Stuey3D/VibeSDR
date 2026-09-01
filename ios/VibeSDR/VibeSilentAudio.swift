@@ -26,13 +26,58 @@ func vibeStartSilentAudio() {
  *    _startEngine() refuses to build a second engine over a running one (it used to leak one). */
 private var _holds = Set<String>()
 
+/* ★★★ REAL AUDIO OUTRANKS EVERY HOLD, and this is not an optimisation — two AVAudioEngines is a
+ *   fault. The silent loop exists for ONE reason: to make iOS count us as an audio app during the
+ *   seconds between being woken and the real audio starting. Once the real engine is playing, it
+ *   does that job by itself and this one has nothing left to do.
+ *  ★★★ BUT IT WAS NEVER STOPPING. watchProvider takes a `watch` hold on ANY message from the
+ *   wrist and Buddy pings every 4 s, so with Buddy on the wrist the hold never lapsed — and the
+ *   silent engine ran CONTINUOUSLY alongside the real one: two AVAudioEngines on one
+ *   AVAudioSession, a 44.1 kHz loop beside a 48 kHz decode. This file's own opening comment says
+ *   "the real audio replaces it moments later"; it did not, and nothing noticed because silence
+ *   is not something you hear.
+ *  ★★ AVAudioEngine IS THE ONE THING IN THIS APP THAT PUNISHES THAT — the crash notes say it is
+ *   single-threaded and its faults are uncatchable. Stuttering, dropouts and silence are exactly
+ *   what a contended session produces, and they would follow the SIGNAL rather than the code,
+ *   which is what makes such a bug read as "this frequency is broken".
+ *  ★ The holds are kept, not cleared: when the real audio stops, whatever was holding still is. */
+private var _realAudioPlaying = false
+
+func vibeSetRealAudioPlaying(_ on: Bool) {
+  let work = {
+    guard _realAudioPlaying != on else { return }
+    _realAudioPlaying = on
+    _applyHolds()
+  }
+  if Thread.isMainThread { work() } else { DispatchQueue.main.async(execute: work) }
+}
+
+/// The one place that decides whether the loop should be running: something wants it, and the
+/// real audio is not already doing the job.
+private func _applyHolds() {
+  let want = !_holds.isEmpty && !_realAudioPlaying
+  let running = _audioEngine?.isRunning == true
+  if want && !running { vibeStartSilentAudio() }
+  else if !want && running { vibeStopSilentAudioEngineOnly() }
+}
+
+/// Stop the engine WITHOUT forgetting who was holding — see vibeStopSilentAudio for the full stop.
+private func vibeStopSilentAudioEngineOnly() {
+  _playerNode?.stop()
+  _audioEngine?.stop()
+  _playerNode  = nil
+  _audioEngine = nil
+}
+
 func vibeHoldSilentAudio(_ reason: String, _ on: Bool) {
   let work = {
-    let had = !_holds.isEmpty
     if on { _holds.insert(reason) } else { _holds.remove(reason) }
-    let want = !_holds.isEmpty
-    guard want != had else { return }
-    if want { vibeStartSilentAudio() } else { vibeStopSilentAudio() }
+    if _holds.isEmpty {
+      // ★ Nothing holds it any more — full stop, including the wake deadline.
+      vibeStopSilentAudio()
+    } else {
+      _applyHolds()
+    }
   }
   if Thread.isMainThread { work() } else { DispatchQueue.main.async(execute: work) }
 }
