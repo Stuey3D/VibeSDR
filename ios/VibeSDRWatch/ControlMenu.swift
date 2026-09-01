@@ -456,6 +456,28 @@ struct ControlMenu: View {
         //   keep a poor link flowing — Buddy has no socket, because the phone holds the server
         //   connection and runs its own ladder. A second one here would change nothing.
 
+        /* ★★★ WHICH BUDDY IS ACTUALLY ON THIS WRIST. Buddy displayed its version NOWHERE, and
+         *   that has cost real days: installing the iPhone app does NOT update the watch app, so
+         *   a watch-side fix can be built, shipped and tested against — while the wrist quietly
+         *   runs the previous one and reports "exactly the same as before".
+         * ★★★ IT HAPPENED AGAIN ON 2026-09-01 AND WAS ONLY CAUGHT BY A SPLIT RESULT: build 226
+         *   carried two fixes, one phone-side and one watch-side, and Stuart saw the phone-side
+         *   one work ("spectrum on the watch is now working") while the watch-side one did
+         *   nothing. Without those two landing in the same build the obvious reading would have
+         *   been that the fix was wrong, and the next hours would have gone into re-fixing
+         *   something that was already correct.
+         * ★★ SO THE WRIST SAYS WHAT IT IS RUNNING. One line, at the bottom of a menu nobody
+         *   scrolls to by accident, costing nothing and turning "did the watch update?" from an
+         *   assumption into something anyone can read out loud. The same lesson the AirPods
+         *   taught about the phone waking: make the invisible state visible and the bug names
+         *   itself.
+         * ★ Read from the bundle rather than a constant, so it cannot drift from the build. */
+        Text(buddyBuildLabel)
+          .font(.system(size: 10, weight: .medium, design: .rounded))
+          .foregroundStyle(.white.opacity(0.30))
+          .frame(maxWidth: .infinity)
+          .padding(.top, 8)
+
         // Room to scroll the LAST row clear of the rounded corner — as content,
         // not as a bar. Control Centre lets its tiles run off the bottom edge and
         // simply keeps scrolling; a fixed bottom padding on the outer stack instead
@@ -616,6 +638,16 @@ struct ControlMenu: View {
     }
     .buttonStyle(.plain)
     .disabled(!dirty)
+  }
+
+  /// "Buddy 10.5 (226)" — the version and BUILD of the app on this wrist. The build number is the
+  /// half that matters: the version rarely moves between TestFlight builds and the build always
+  /// does, so it is the only thing that answers "did the watch app actually update?".
+  private var buddyBuildLabel: String {
+    let info = Bundle.main.infoDictionary
+    let v = info?["CFBundleShortVersionString"] as? String ?? "?"
+    let b = info?["CFBundleVersion"] as? String ?? "?"
+    return "Buddy \(v) (\(b))"
   }
 
   private var crownLabel: String {
