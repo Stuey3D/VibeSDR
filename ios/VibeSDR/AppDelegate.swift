@@ -341,6 +341,30 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
   }
 
+  /* ★★★ A ROOT VIEW BUILT IN A BACKGROUND SCENE DOES NOT START DRAWING BY ITSELF.
+   *
+   *  Measured from the device log, 2026-09-01, on a Buddy-driven cold boot: the app is launched
+   *  HEADLESS, scene(willConnectTo:) runs THEN — while we are in the background — and
+   *  startReactNative builds the window and root view there. When the user later opens the app,
+   *  UIKit only re-lays-out the scene it already has: there is no second willConnectTo, no
+   *  "starting React Native" line, and — the point — no first frame. iOS therefore goes on showing
+   *  its own launch image, which is systemBackgroundColor: PURE BLACK in dark mode, with nothing
+   *  on it and a perfectly healthy app behind it. That is the black screen, and it is why there was
+   *  never any text: nothing was failing to render, nothing was rendering at all.
+   *  ★★ WHICH IS WHY IT ONLY EVER HAPPENED AFTER BUDDY. A normal launch creates the scene in the
+   *     foreground and draws immediately; only a watch-woken one creates it in the background.
+   *  ★ So nudge it when we come forward: make the window key and visible again and force a layout
+   *    pass. Cheap, idempotent, and a no-op on a normal launch where the frame already exists. */
+  func sceneWillEnterForeground(_ scene: UIScene) {
+    guard let w = window else { return }
+    NSLog("[VibeSDR] scene entering foreground — nudging the root view to draw")
+    w.isHidden = false
+    w.makeKeyAndVisible()
+    w.rootViewController?.view.setNeedsLayout()
+    w.rootViewController?.view.layoutIfNeeded()
+    w.setNeedsLayout()
+  }
+
   /// The scene went away — EITHER the user swiped the app out of the switcher OR the system
   /// reclaimed the UI from an app that is still running. Those need opposite responses, and
   /// sceneDisconnected() tells them apart by checking whether we are still alive afterwards.
