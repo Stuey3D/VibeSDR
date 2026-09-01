@@ -88,6 +88,36 @@ export const BAND_PLAN: Band[] = [
   { lo: 462000000, hi: 468000000,  name: 'FRS / GMRS',                 type: 'utility', regions: [2], mode: 'nfm', step: 12500 },
   { lo: 1240000000, hi: 1300000000, name: '23cm Ham Band',            type: 'ham',  bandLabel: '23cm', mode: 'nfm', step: 25000 },
 
+  /* ── SPACE AND SATELLITE ───────────────────────────────────────────────────────────────────
+   * ★★★ WHAT IS UP THERE, IN THE PART OF THE SPECTRUM PEOPLE CAN ACTUALLY REACH. Stuart,
+   *   2026-09-01: "would've been cool to see the satellite frequencies and military satcoms etc."
+   *   Every entry here was previously BLANK — a dial that goes there and names nothing.
+   * ★★★ SERVICE ALLOCATIONS, NOT THE IEEE LETTER BANDS (L/S/C/X/Ku). The letters are radar
+   *   nomenclature rather than allocations, they overlap everything, and they disagree with the
+   *   hardware: 10489.5 MHz is X band by IEEE while the LNB you point at it is sold as Ku. A
+   *   label that argues with the box in the user's hand is worse than no label. These say what is
+   *   THERE instead, which is the useful half.
+   * ★★ Most of it is below 2 GHz and needs no converter at all — an ordinary dongle reaches every
+   *   one of these, which is what makes them worth labelling.
+   * ★ MODE ONLY WHERE THE CONVENTION IS REAL. ADS-B, Iridium and Inmarsat are digital formats no
+   *   analogue demodulator here can resolve, so they name the band and touch nothing. */
+  { lo: 137000000,  hi: 138000000,  name: 'Weather Satellites (APT / LRPT)', type: 'utility' },
+  /* ★★ THE ONE MOST PEOPLE MEAN BY "MILSATCOM". The UHF SATCOM downlink is where the
+   *   well-documented unauthorised traffic on the old FLTSATCOM/UFO birds turns up, on a 25 kHz
+   *   raster in narrow FM — a convention solid enough to set the mode from. The uplink is listed
+   *   too so the band is not a mystery when a dial lands in it. */
+  { lo: 240000000,  hi: 270000000,  name: 'UHF Military Satcom (downlink)', type: 'utility', mode: 'nfm', step: 25000 },
+  { lo: 292000000,  hi: 318000000,  name: 'UHF Military Satcom (uplink)',   type: 'utility', mode: 'nfm', step: 25000 },
+  { lo: 400150000,  hi: 406000000,  name: 'Radiosondes / Met Satellites',   type: 'utility', mode: 'nfm', step: 12500 },
+  { lo: 406000000,  hi: 406100000,  name: 'Distress Beacons (COSPAS-SARSAT)', type: 'utility' },
+  { lo: 977000000,  hi: 979000000,  name: 'ADS-B UAT',                      type: 'utility', regions: [2] },
+  /* ★★★ 1090 WAS NOT IN THIS PLAN AT ALL, which is odd for an app that decodes it — the aircraft
+   *   panel has existed for months and the dial that feeds it named the frequency nothing. */
+  { lo: 1089000000, hi: 1091000000, name: 'ADS-B (Mode S, 1090 MHz)',       type: 'utility' },
+  { lo: 1525000000, hi: 1559000000, name: 'Inmarsat (AERO / STD-C)',        type: 'utility' },
+  { lo: 1574000000, hi: 1577000000, name: 'GPS L1',                         type: 'utility' },
+  { lo: 1616000000, hi: 1626500000, name: 'Iridium',                        type: 'utility' },
+
   /* ── MICROWAVE, above 23cm ─────────────────────────────────────────────────────────────────
    * ★★★ ADDED FOR THE CONVERTERS. This plan stopped at 1300 MHz, which was fine while nothing
    *   could tune higher — and a down-converter changes that: a 9750 MHz LNB puts a listener at
@@ -111,13 +141,15 @@ export const BAND_PLAN: Band[] = [
   { lo: 3400000000,  hi: 3475000000,  name: '9cm Ham Band',            type: 'ham',  bandLabel: '9cm', regions: [1] },
   { lo: 3300000000,  hi: 3500000000,  name: '9cm Ham Band',            type: 'ham',  bandLabel: '9cm', regions: [2, 3] },
   { lo: 5650000000,  hi: 5850000000,  name: '6cm Ham Band',            type: 'ham',  bandLabel: '6cm' },
-  { lo: 10000000000, hi: 10500000000, name: '3cm Ham Band',            type: 'ham',  bandLabel: '3cm' },
-  /* ★★★ THE ONE MOST PEOPLE POINT A DISH AT. The QO-100 (Es'hail-2) narrowband transponder — SSB,
-   *   CW and the beacons — sits inside 3cm and is what a 9750 MHz LNB is bought for. Listed
-   *   separately so it gets a name of its own and the USB convention that genuinely applies here,
-   *   and it sorts ahead of 3cm because ham beats ham by order of appearance in getBandsAtRegion.
-   * ★ 500 Hz is a member of STEPS_VHF, which is the ladder in force above 30 MHz. */
+  /* ★★★ THE ONE MOST PEOPLE POINT A DISH AT, AND IT MUST COME FIRST. The QO-100 (Es'hail-2)
+   *   narrowband transponder — SSB, CW and the beacons — sits INSIDE 3cm, and bandTuneDefaults
+   *   sorts by band TYPE and then takes the first: both of these are 'ham', so a stable sort
+   *   leaves them in array order and whichever is written first wins. With 3cm above, the wide
+   *   band won and QO-100's USB convention never fired — the specific allocation losing to the
+   *   general one purely because of where it sat in a list.
+   * ★ 500 Hz is a member of STEPS_VHF, the ladder in force above 30 MHz. */
   { lo: 10489500000, hi: 10490000000, name: 'QO-100 Narrowband',       type: 'ham',  bandLabel: 'QO-100', mode: 'usb', step: 500 },
+  { lo: 10000000000, hi: 10500000000, name: '3cm Ham Band',            type: 'ham',  bandLabel: '3cm' },
   { lo: 24000000000, hi: 24250000000, name: '1.2cm Ham Band',          type: 'ham',  bandLabel: '1.2cm' },
 ];
 
