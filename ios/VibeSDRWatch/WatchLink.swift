@@ -527,10 +527,28 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
      *   directory then they appear in front of you." Browsing sends a message, the phone sees the
      *   watch, and everything it had been holding arrives at once — so the list was never missing,
      *   only unasked for.
-     * ★★ SAFE HERE, AND ONLY BECAUSE send() REQUIRES isReachable: a phone that is asleep is not
-     *   poked, so the anti-hijack rule this screen was built around still holds. It costs one
-     *   message on a link that is demonstrably already up. */
-    requestMissing()
+     * ★★★ AND IT MUST WAKE A SLEEPING PHONE, which is where the first version stopped. It went by
+     *   send(), which DROPS the message when isReachable is false — so this worked only when the
+     *   phone happened to be awake already, and did nothing at all in the case people actually hit:
+     *   picking up the watch from cold. Stuart reported the same sentence again on 2026-09-01,
+     *   with the detail that finally located it — "soon as I tap the servers button the airpods do
+     *   not get pulled and the favourites do not populate, only when I have tapped to open a
+     *   directory does the airpods get pulled across and the favourites populate". Opening a
+     *   directory sends `browse`, which is DURABLE and therefore wakes the phone; this sent `need`,
+     *   which is not, and was thrown away. The asymmetry was invisible from the wrist and is
+     *   arbitrary from the user's side: both are a deliberate tap on a list of things to connect to.
+     * ★★★ AND THE AIRPODS ARE WHY WE CAN SEE IT AT ALL. The keep-alive taking the audio route is a
+     *   VISIBLE indicator of whether the phone woke — an accident of the background-audio work that
+     *   turned "did it wake?" from a guess into something observable from across the room.
+     * ★★ THE ANTI-HIJACK RULE IS UNTOUCHED, and it never was this guard's job. What must not happen
+     *   is the watch's AUTOMATIC heartbeat relaunching a phone the user deliberately closed and
+     *   pouring audio out mid-call. This is not automatic — it is a tap — and it starts no audio:
+     *   the phone's own phoneClosedByUser latch still refuses to auto-connect. `deliberatelyClosed`
+     *   is checked anyway, so a phone the user shut stays shut until Reopen.
+     * ★ The heartbeat's own requestMissing() calls are UNCHANGED and stay non-waking — those are
+     *   housekeeping, and making them durable would have the wrist poking a sleeping phone every
+     *   few seconds, which is the hijack this rule exists to prevent. */
+    requestMissing(wake: !deliberatelyClosed)
   }
 
   /* ★★★ WRIST LIFECYCLE IS THE APP'S, NOT THE WATERFALL SCREEN'S — the same lesson startLink()
@@ -973,10 +991,13 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// The watch KNOWS it has no palette. So it should say so rather than wait to be
   /// noticed. Same principle as the heartbeat: recency beats hope.
   private var lastNeedAt = Date.distantPast
-  func requestMissing() {
+  /// `wake` — this is a DELIBERATE tap and is worth waking a sleeping phone for, so it goes by the
+  /// durable path like `browse` and `inst`. Default false: every automatic caller (the heartbeat,
+  /// a wrist-raise, a missing LUT) is housekeeping and must never poke a phone that is not there.
+  func requestMissing(wake: Bool = false) {
     guard Date().timeIntervalSince(lastNeedAt) > 3 else { return }
     lastNeedAt = Date()
-    send(["cmd": "need"])
+    if wake { sendDurable(["cmd": "need"]) } else { send(["cmd": "need"]) }
   }
 
 
@@ -1048,7 +1069,10 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       pendingWake = msg            // …and the moment we CAN talk, say it properly
       // ★ Only for the commands that START something. A wrist-down or a squelch nudge queued
       //   against a sleeping phone is housekeeping, not an errand the wearer is waiting on.
-      if let c = msg["cmd"] as? String, c == "inst" || c == "browse" || c == "reopen" {
+      // ★ `need` joins these: opening the servers list is an errand the wearer is waiting on, and
+      //   without the indicator the wake looks like a dead link for the seconds it takes.
+      if let c = msg["cmd"] as? String,
+         c == "inst" || c == "browse" || c == "reopen" || c == "need" {
         wakingPhone = true
         wakeAskedAt = Date()
       }

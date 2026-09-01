@@ -48,6 +48,30 @@ func vibeHoldSilentAudio(_ reason: String, _ on: Bool) {
  *   (renewed by Buddy's 4 s ping) takes over long before it expires. */
 private var _wakeTimer: Timer?
 
+/* ★★★ A PING MUST NOT START A HOLD, BUT IT SHOULD KEEP ONE ALIVE.
+ *   Excluding pings from the wake hold stopped VibeSDR stealing the audio route every time the
+ *   wrist came up — but it also took away the thing that kept a COLD start alive: the wake hold
+ *   runs on a 45 s deadline from the last real command, and Buddy's 4 s heartbeat was what used
+ *   to keep pushing that out while the JS bundle loaded. Stuart, 2026-09-01: the spectrum "has
+ *   reverted back to only working for a couple of frames then stopping" — the app being let go
+ *   mid-start, exactly as before.
+ * ★★ SO THE RULE SPLITS ON WHETHER WE ARE ALREADY HOLDING. A ping arriving with no hold in force
+ *   means nothing is happening and we take nothing — no route stolen, which is the whole point of
+ *   the exclusion. A ping arriving DURING a hold is the wearer still there while work we already
+ *   agreed to is in flight, and it pushes the deadline out.
+ * ★ Refresh only: it can never create a hold, so it cannot reintroduce the fault it sits beside. */
+func vibeRefreshWakeHoldSilentAudio() {
+  let work = {
+    guard _holds.contains("wake") else { return }
+    _wakeTimer?.invalidate()
+    _wakeTimer = Timer.scheduledTimer(withTimeInterval: 45, repeats: false) { _ in
+      _wakeTimer = nil
+      vibeHoldSilentAudio("wake", false)
+    }
+  }
+  if Thread.isMainThread { work() } else { DispatchQueue.main.async(execute: work) }
+}
+
 func vibeWakeHoldSilentAudio() {
   let work = {
     _wakeTimer?.invalidate()

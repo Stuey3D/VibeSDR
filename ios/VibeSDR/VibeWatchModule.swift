@@ -646,7 +646,12 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
      * ★ Still ahead of the `cmd` guard's return for everything else: by the time we know it is an
      *   `inst` we have spent nothing, and a message with no cmd at all is not work either. */
     if (message["cmd"] as? String) != "ping" {
-        vibeWakeHoldSilentAudio()
+      vibeWakeHoldSilentAudio()
+    } else {
+      // ★ A ping never STARTS a hold (that stole the audio route on every wrist-raise) but it does
+      //   keep one alive — see vibeRefreshWakeHoldSilentAudio. Buddy's 4 s heartbeat is what
+      //   carries a cold start through the bundle load.
+      vibeRefreshWakeHoldSilentAudio()
     }
     // Clear the deliberate-close flag NATIVELY the moment a reopen arrives — before anything
     // that depends on JS being up, so a headless boot reads it as false even if the bridge has
