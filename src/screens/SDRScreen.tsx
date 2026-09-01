@@ -4624,12 +4624,26 @@ export default function SDRScreen({ route, navigation }: Props) {
    *   the watch is listening — the exact state a Buddy-driven cold connect lands in and which
    *   nothing else was covering. In every other case the AppState listener has already done it and
    *   this is a no-op, because specPausedByBg is already set. */
-  const handedOffRef = useRef(false);
+  /* ★★★ KEYED ON THE CONNECTION, NOT ON "HAVE WE EVER DONE IT". The first version latched a
+   *   single boolean, cleared only when the app came forward or the watch went away — so choosing
+   *   a SECOND server without the phone ever being unlocked handed off nothing. Both guards said
+   *   no: the latch was still set, and specPausedByBg was still true from the FIRST handoff. The
+   *   native forwarder therefore stayed pointed at the previous server's socket, which had just
+   *   been torn down, and the wrist sat on "Waiting for signal" — with the phone awake, connected
+   *   and playing audio perfectly. Stuart, 2026-09-01: "selecting a vibeserver and radio on that
+   *   server gets stuck waiting for signal still", reached by way of a directory that had already
+   *   woken the phone.
+   * ★★ Which is the same shape as the bug it was written to fix: something that must be true for
+   *   THIS session, decided once for the process. A new client is a new question. */
+  const handedOffForRef = useRef<string>('');
   useEffect(() => {
-    if (appActiveRef.current || !watchProvider.isActive) { handedOffRef.current = false; return; }
-    if (handedOffRef.current || specPausedByBgRef.current) return;
+    if (appActiveRef.current || !watchProvider.isActive) { handedOffForRef.current = ''; return; }
     if (!(status.frequency > 0) || !client.current) return;
-    handedOffRef.current = true;
+    // ★ The connection's own identity — a new backend means a new uuid, and that is what makes
+    //   "already handed off" a question about THIS session rather than about the app.
+    const key = client.current.uuid;
+    if (handedOffForRef.current === key) return;
+    handedOffForRef.current = key;
     handOffSpectrumToNative();
   }, [status.frequency, handOffSpectrumToNative]);
 

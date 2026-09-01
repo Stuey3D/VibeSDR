@@ -292,10 +292,22 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
      *   nothing is being drawn at all — not a React error being caught and reported.
      * ★ Logged either way, so the next test says which of those it is instead of us guessing
      *   again. If this line appears twice in one launch, that is the bug. */
+    /* ★★★ AND A REUSED WINDOW MUST BE RE-PARENTED TO THE SCENE THAT IS SHOWING IT. A UIWindow
+     *   belongs to a windowScene; showing one that still points at a different (or dead) scene
+     *   puts it nowhere, no frame is ever drawn, and iOS goes on displaying the LAUNCH SCREEN —
+     *   which is systemBackgroundColor, i.e. PURE BLACK in dark mode, with nothing on it.
+     *   That is the black screen's shape exactly: no text, no crash-boundary message, nothing to
+     *   read, because what is on screen is not our UI failing to render — it is the launch image
+     *   that was never replaced.
+     * ★★★ WHICH MEANS MY OWN GUARD FROM BUILD 225 COULD HAVE BEEN CAUSING IT. Stuart saw a black
+     *   screen before that, so it is not the origin — but a reuse branch that hands a stale window
+     *   to a fresh scene would make it deterministic rather than occasional, and I added it while
+     *   trying to fix this. Re-parenting first is the correction. */
     if let existing = self.window {
-      NSLog("[VibeSDR] scene reconnect — reusing the existing RN window, NOT restarting React")
+      NSLog("[VibeSDR] scene reconnect — re-parenting the existing RN window to the new scene")
+      existing.windowScene = windowScene
+      existing.isHidden = false
       existing.makeKeyAndVisible()
-      windowScene.windows.first?.isHidden = false
       appDelegate.window = existing
       return
     }

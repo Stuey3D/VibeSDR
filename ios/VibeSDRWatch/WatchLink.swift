@@ -998,9 +998,30 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// durable path like `browse` and `inst`. Default false: every automatic caller (the heartbeat,
   /// a wrist-raise, a missing LUT) is housekeeping and must never poke a phone that is not there.
   func requestMissing(wake: Bool = false) {
-    guard Date().timeIntervalSince(lastNeedAt) > 3 else { return }
+    /* ★★★ A DELIBERATE TAP IS NOT RATE-LIMITED BY THE AUTOMATIC CALLERS, and this is why the
+     *   Servers button still did nothing in build 227 after two commits aimed at it.
+     *
+     *   Raising your wrist calls resume(), which calls requestMissing() — automatic, non-waking,
+     *   and against a sleeping phone it sends NOTHING because send() drops when unreachable. But
+     *   it stamped lastNeedAt on the way past. Tap Servers within the next three seconds — which
+     *   is what everybody does, because you raise your wrist in order to tap it — and the
+     *   deliberate, waking request is swallowed by a limiter that a message which was never sent
+     *   had just armed. `browse` was unaffected only because it does not come through here, which
+     *   is precisely why opening a directory worked and Servers did not.
+     * ★★★ TWO FAULTS, AND BOTH ARE FIXED HERE: an automatic call must not block a user's, and a
+     *   request that SENT NOTHING must not consume the budget. The limiter exists to stop the
+     *   heartbeat spamming a busy link; it was never meant to police a tap.
+     * ★ Still stamped on a real send, so genuine flooding is still bounded. */
+    if !wake, Date().timeIntervalSince(lastNeedAt) <= 3 { return }
+    if wake {
+      lastNeedAt = Date()
+      sendDurable(["cmd": "need"])
+      return
+    }
+    // ★ Nothing to send it over — do not stamp a send that did not happen.
+    guard let s = session, s.isReachable else { return }
     lastNeedAt = Date()
-    if wake { sendDurable(["cmd": "need"]) } else { send(["cmd": "need"]) }
+    s.sendMessage(["cmd": "need"], replyHandler: nil, errorHandler: nil)
   }
 
 
