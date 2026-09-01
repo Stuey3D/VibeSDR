@@ -600,10 +600,23 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
      *  ★★ BEFORE THE `cmd` GUARD, deliberately. Any message from the watch means Buddy is up and
      *     about to ask for something; waiting to see WHICH command it is spends the very seconds
      *     we are trying to buy, and a message we do not route is still proof we are needed.
-     *  ★ Self-releasing after 45 s of silence from the watch, so a wake that leads nowhere does
-     *    not hold the audio focus for ever. Buddy's 4 s ping keeps renewing it, and JS takes its
-     *    own hold as soon as the bridge is up. */
-    vibeWakeHoldSilentAudio()
+     *  ★ Self-releasing after 45 s, so a wake that leads nowhere does not hold the audio focus for
+     *    ever, and JS takes its own hold as soon as the bridge is up. */
+    /* ★★★ BUT NOT ON THE HEARTBEAT — taking the focus for a ping STEALS THE USER'S AUDIO.
+     *   Buddy pings every 4 s while it is on the wrist, and holding for those meant that merely
+     *   raising your wrist made VibeSDR an audio app: Stuart, 2026-09-01, cold-booting from the
+     *   watch — "the airpods got pulled from my mac to the iPhone" before a radio had even been
+     *   chosen. That is precisely the harm vibeStopSilentAudio() was written to prevent, arriving
+     *   through a door I opened.
+     * ★★ A ping is also the ONE command that needs nothing: it asks "are you there", the reply is
+     *   free, and nothing follows it. Every other command means work is coming — picking a server,
+     *   opening a directory, reopening after a close — and work is what needs the app kept alive.
+     *   So the hold follows the WORK, not the wrist.
+     * ★ Still ahead of the `cmd` guard's return for everything else: by the time we know it is an
+     *   `inst` we have spent nothing, and a message with no cmd at all is not work either. */
+    if (message["cmd"] as? String) != "ping" {
+        vibeWakeHoldSilentAudio()
+    }
     // Clear the deliberate-close flag NATIVELY the moment a reopen arrives — before anything
     // that depends on JS being up, so a headless boot reads it as false even if the bridge has
     // not mounted. Otherwise a lost 'reopen' would strand us on 'closed'.

@@ -4563,6 +4563,66 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => { sub.remove(); flushTune(); };   // cleanup order: this runs after the debounce's
   }, [flushTune]);
 
+  /* ★★★ HAND THE SPECTRUM OVER TO NATIVE — and it must be callable from somewhere other than an
+   *   AppState TRANSITION, which is the whole reason it lives out here.
+   *
+   *   The JS spectrum WS is throttled the instant the phone locks (iOS throttles the RN JS
+   *   thread), which is why the wrist waterfall went ragged in a pocket while native audio played
+   *   fine. So we close the JS WS and let VibeWatchModule's native forwarder read the spectrum
+   *   off the JS thread and feed the watch. Only ONE subscription ever (battery).
+   *
+   * ★★★ THIS USED TO LIVE INSIDE THE AppState 'change' LISTENER, WHICH A COLD WATCH WAKE NEVER
+   *   FIRES. WatchConnectivity launches us STRAIGHT INTO THE BACKGROUND: there is no active →
+   *   background transition, because we were never active. So on the first Buddy connect after a
+   *   cold boot the handoff simply did not happen — the JS WS stayed throttled and the wrist sat
+   *   on "Waiting for signal", or drew a few frames and stopped. Connect a second time, with the
+   *   app now warm and having genuinely passed through a transition, and it worked.
+   * ★★ EXACTLY THE SHAPE OF THE BUG BESIDE IT: code that assumed the app starts in the foreground
+   *   and arrives at the background through a door. A watch-woken process starts on the far side
+   *   of that door. Anything that must be true "while backgrounded" has to be reachable on mount,
+   *   not only on the way in.
+   * ★ Safe to call twice — startWatchSpectrum replaces its own connection, and pauseSpectrum on an
+   *   already-paused client is a no-op. */
+  const handOffSpectrumToNative = useCallback(() => {
+    const c = client.current;
+    const url = (route.params.serverType ?? 'ubersdr') === 'ubersdr'
+      ? c?.watchSpectrumUrl?.() : undefined;
+    if (url) {
+      const view = c?.getView?.();
+      const st = c?.getStatus?.();
+      (NativeModules.VibeWatchModule as {
+        startWatchSpectrum?: (u: string, bb: number, f: number, lo: number, hi: number, br: number, co: number) => void;
+      })?.startWatchSpectrum?.(
+        url,
+        view?.binBandwidth || st?.binBandwidth || 100,
+        st?.frequency || 0,
+        st?.bandwidthLow || 0,
+        st?.bandwidthHigh || 0,
+        0, 0);       // brightness/contrast 0 — the watch applies its own offsets
+      specPausedByBgRef.current = true;
+      c?.pauseSpectrum();          // native owns the feed now — close the JS WS
+    } else {
+      // non-UberSDR backends: keep the old JS-at-full-rate path.
+      specPausedByBgRef.current = false;
+      c?.setRate(WATCH_BG_DIVISOR);
+    }
+    watchProvider.setSpecPaused(specPausedByBgRef.current);
+  }, []);
+
+  /* ★★★ AND RUN IT ON A COLD WATCH WAKE, where no transition will. Fires once a session is
+   *   actually up (a frequency means the backend answered) while the app is in the background and
+   *   the watch is listening — the exact state a Buddy-driven cold connect lands in and which
+   *   nothing else was covering. In every other case the AppState listener has already done it and
+   *   this is a no-op, because specPausedByBg is already set. */
+  const handedOffRef = useRef(false);
+  useEffect(() => {
+    if (appActiveRef.current || !watchProvider.isActive) { handedOffRef.current = false; return; }
+    if (handedOffRef.current || specPausedByBgRef.current) return;
+    if (!(status.frequency > 0) || !client.current) return;
+    handedOffRef.current = true;
+    handOffSpectrumToNative();
+  }, [status.frequency, handOffSpectrumToNative]);
+
   useEffect(() => {
     let resumeTimer: ReturnType<typeof setTimeout> | null = null;
     const sub = AppState.addEventListener('change', (state: string) => {
@@ -4586,34 +4646,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // unmounted and every animation driver still cancelled — only the plain
         // JS path stays alive.
         if (watchProvider.isActive) {
-          // HAND OFF THE SPECTRUM TO NATIVE. The JS spectrum WS is throttled the instant
-          // the phone locks (iOS throttles the RN JS thread), which is why the wrist
-          // waterfall went ragged in a pocket while native audio played fine. So on lock we
-          // close the JS WS and let VibeWatchModule's native forwarder read the spectrum off
-          // the JS thread and feed the watch. Only ONE subscription ever (battery), and only
-          // in this exact locked+watch window.
-          const c = client.current;
-          const url = (route.params.serverType ?? 'ubersdr') === 'ubersdr'
-            ? c?.watchSpectrumUrl?.() : undefined;
-          if (url) {
-            const view = c?.getView?.();
-            const st = c?.getStatus?.();
-            (NativeModules.VibeWatchModule as {
-              startWatchSpectrum?: (u: string, bb: number, f: number, lo: number, hi: number, br: number, co: number) => void;
-            })?.startWatchSpectrum?.(
-              url,
-              view?.binBandwidth || st?.binBandwidth || 100,
-              st?.frequency || 0,
-              st?.bandwidthLow || 0,
-              st?.bandwidthHigh || 0,
-              0, 0);       // brightness/contrast 0 — the watch applies its own offsets
-            specPausedByBgRef.current = true;
-            c?.pauseSpectrum();          // native owns the feed now — close the JS WS
-          } else {
-            // non-UberSDR backends: keep the old JS-at-full-rate path.
-            specPausedByBgRef.current = false;
-            c?.setRate(WATCH_BG_DIVISOR);
-          }
+          handOffSpectrumToNative();
         } else {
           specPausedByBgRef.current = true;
           client.current?.pauseSpectrum();
