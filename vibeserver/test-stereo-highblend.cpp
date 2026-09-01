@@ -183,16 +183,30 @@ int main() {
     //     control that fires on the wrong evidence is worse than no control, since it degrades the
     //     signals it was meant to rescue.
     {
-        const Result quiet = measure(0.80, 12.0, 0.0);   // hissy, but ALONE — must stay wide
-        const Result crowd = measure(0.20, 12.0, 1.4);   // strong neighbour — must narrow
-        std::printf("   .. adaptive IF: hissy-but-alone %.0f Hz   strong-neighbour %.0f Hz\n",
-                    quiet.ifBw, crowd.ifBw);
-        ok(quiet.ifBw == 0.0,
-           "★★★ NOISE ALONE does NOT narrow the IF — narrowing cannot help it and would cost",
-           "engaged at " + std::to_string((int)quiet.ifBw) + " Hz");
-        ok(crowd.ifBw > 0.0,
-           "★ a STRONG NEIGHBOUR does narrow it — the case narrowing exists for",
-           "stayed wide");
+        const Result quiet = measure(0.80, 12.0, 0.0);   // hissy, but ALONE
+        const Result crowd = measure(0.20, 12.0, 1.4);   // strong neighbour
+        std::printf("   .. benefit: hissy-but-alone %+.1f dB   strong-neighbour %+.1f dB"
+                    "   (IF %.0f / %.0f Hz)\n",
+                    quiet.ifGain, crowd.ifGain, quiet.ifBw, crowd.ifBw);
+        /* ★★★ THIS PAIR ASSERTED THAT IMS NARROWS THE FILTER, AND IT NO LONGER DOES — the
+         *   bandwidth logic moved to auto bandwidth, which owns that filter and is driven from
+         *   OUTSIDE the DSP via setAutoBandwidth(); a unit test that only drives the pipeline
+         *   never calls it, so ifBw is correctly 0 in both cases here. See the note in
+         *   pipeline.cpp: IMS and auto bandwidth were the same feature under two names and fought
+         *   over the one slot.
+         * ★★★ THE EVIDENCE TEST IS THE PART THAT MATTERED AND IT SURVIVES INTACT. The obvious
+         *   wiring — narrow when noisy — is WRONG and measured so: narrowing costs 1-10 dB
+         *   against noise and gains 10 dB against a strong neighbour. Whatever commands the
+         *   filter, it must steer from THIS, and this is where that is pinned. */
+        ok(quiet.ifGain < 0.0f,
+           "★★★ NOISE ALONE measures as a LOSS — narrowing cannot help it and would cost",
+           "read " + std::to_string(quiet.ifGain) + " dB");
+        ok(crowd.ifGain > 3.0f,
+           "★ a STRONG NEIGHBOUR measures as a large GAIN — the case narrowing exists for",
+           "read only " + std::to_string(crowd.ifGain) + " dB");
+        ok(quiet.ifBw == 0.0 && crowd.ifBw == 0.0,
+           "★★ and IMS commands the filter in NEITHER case — auto bandwidth owns it",
+           "IMS narrowed to " + std::to_string((int)crowd.ifBw) + " Hz");
     }
 
     // ★★★ A PILOT-LOCK FLICKER MUST NOT REOPEN THE FILTER. On a marginal signal the lock drops in

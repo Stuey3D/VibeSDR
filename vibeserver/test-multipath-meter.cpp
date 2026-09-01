@@ -368,10 +368,29 @@ int main() {
                                    /*nbrAmp=*/1.4, /*retuneAt=*/-1.0, /*off=*/150000.0);
         std::printf("   .. strong neighbour:  benefit %+.1f dB -> IF %.0fk\n",
                     nbr.ifGain, nbr.ifBw / 1000.0f);
-        ok(nbr.ifBw > 0.0f,
-           "★★★ IMS ENGAGES against an adjacent station — what it is FOR",
-           "IF still " + std::to_string(nbr.ifBw / 1000.0f) + " kHz, benefit "
-                       + std::to_string(nbr.ifGain));
+        /* ★★★ THIS ASSERTED A CONTRACT THAT WAS DELIBERATELY RETIRED, and stayed red for it.
+         *   It used to read `nbr.ifBw > 0` — "IMS engages" — and that was right when IMS
+         *   commanded the IF filter. It no longer does: auto bandwidth owns that filter now,
+         *   because the two were the same feature wearing different names and fought over the
+         *   slot (see the long note in pipeline.cpp beside ifWarm_). The shadow measurement
+         *   stayed, and it is the only honest answer to "would narrowing help here?" — it simply
+         *   commands nothing.
+         * ★★★ SO THE TEST FOLLOWS THE BEHAVIOUR TO ITS NEW ADDRESS, rather than being deleted.
+         *   The MEASUREMENT is the part worth pinning and it is still exactly as valuable: a
+         *   strong neighbour must read as a large positive benefit, where a lone station reads
+         *   negative. That is what the IF NARROW readout shows the listener, and it is what any
+         *   future narrowing logic would steer from.
+         * ★★ AND THE SEPARATION IS ASSERTED TOO, not assumed. If someone re-wires IMS to the
+         *   filter, ifBwReq_ starts winning the min() in pipeline.cpp again and the two features
+         *   are back to fighting — this catches that the moment it happens.
+         * ★ A stale test that cries wolf is worse than no test: a suite with a permanent red in
+         *   it trains everyone to stop reading it. */
+        ok(nbr.ifGain > 3.0f,
+           "★★★ THE BENEFIT IS MEASURED against an adjacent station — what the meter is FOR",
+           "benefit only " + std::to_string(nbr.ifGain) + " dB");
+        ok(nbr.ifBw <= 0.0f,
+           "★★★ ...and IMS does NOT command the filter — auto bandwidth owns it",
+           "IMS narrowed to " + std::to_string(nbr.ifBw / 1000.0f) + " kHz");
 
         // ★★★ AND IT LETS GO ON A RETUNE. The engage rule needs 3 dB in EITHER direction so it
         //     cannot chatter — which makes BOTH states stable, so a filter earned on one station
@@ -381,9 +400,19 @@ int main() {
         //     different receivers — and narrowing is supposed to be EARNED per station.
         const Result after = measure(0.02, 0.0, 3, 20.0, 0.0, true, true,
                                      /*nbrAmp=*/1.4, /*retuneAt=*/10.0, /*off=*/150000.0);
-        std::printf("   .. then retuned away: IF %.0fk\n", after.ifBw / 1000.0f);
+        std::printf("   .. then retuned away: benefit %+.1f dB, IF %.0fk\n",
+                    after.ifGain, after.ifBw / 1000.0f);
+        /* ★ THE MEASUREMENT LETS GO TOO, which is the half that still exists. Retuning away from
+         *   the neighbour must collapse the measured benefit — otherwise the readout would carry
+         *   one station's verdict onto the next, which is the fault Stuart described on air even
+         *   when it was the FILTER being carried: "tune from 103.8 which needs the IMS up to
+         *   104.2 and the IMS stays on". Same fault, now visible in the meter rather than the
+         *   audio, and still worth catching. */
+        ok(after.ifGain < 3.0f,
+           "★★★ AND THE MEASUREMENT LETS GO ON A RETUNE — the next station has not earned it",
+           "benefit still " + std::to_string(after.ifGain) + " dB");
         ok(after.ifBw <= 0.0f,
-           "★★★ AND LETS GO ON A RETUNE — the next station has not earned it",
+           "★★ and still nothing is commanded",
            "IF still " + std::to_string(after.ifBw / 1000.0f) + " kHz");
     }
 
