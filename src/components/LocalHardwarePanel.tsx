@@ -8,6 +8,10 @@ import { useRepeatingKeys, NAV_REPEAT_KEYS, NAV_FOCUS, useKeyboardMode } from '.
 import GainSlider from './GainSlider';
 import Slider from '@react-native-community/slider';
 import type { RadioCaps } from '../services/UberSDRClient';
+import {
+  CONVERTER_PRESETS, type ConverterProfile, HF_CEILING_HZ, V4_WARNING,
+  fromPreset, isIdentity, presetById,
+} from '../services/converter';
 
 // VibeSDR V4 — RTL-SDR hardware controls submenu (Android, local hardware only).
 // Gain (also mirrored in the demodulators popup), PPM, sample rate, bias-T,
@@ -67,6 +71,12 @@ export interface LocalHardwarePanelProps {
    *  stayed on a SpyServer. They now live in the AUDIO sheet, which is where being "ours"
    *  always pointed. */
   isSpy?: boolean;
+  /** ★★★ THE CONVERTER IN FRONT OF THIS RADIO — absent (and the section undrawn) wherever it
+   *  cannot apply. The PARENT decides that: local USB, rtl_tcp and SpyServer get one; a
+   *  VibeServer does not, because its owner sets a converter on the radio's own setup page and
+   *  the server then publishes true RF to every client. See converter.ts. */
+  converter?:   ConverterProfile;
+  onConverter?: (c: ConverterProfile) => void;
   biasTee: boolean;
   onBiasTee: (on: boolean) => void;
   agc: boolean;
@@ -743,6 +753,113 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               exception for them while the rest of this panel did not apply. The web client has
               always grouped them with volume, NR and the auto-notch; the app is now the same.
               ★ If you are looking for them here, that is the point: this panel is the hardware. */}
+
+          {/* ── CONVERTER ────────────────────────────────────────────────────────────────
+              ★★★ THE HARDWARE PANEL IS WHERE THIS BELONGS, because that is what it is: a box
+                bolted between the aerial and the tuner, sitting with the sample rate, the IF
+                filter and the frequency correction rather than with the app's own display
+                preferences. It began life in the settings menu and moved here.
+              ★★★ AND IT SITS OUTSIDE THE DONGLE GATE BELOW — deliberately, and this is the trap
+                in moving it. PPM, bias-T, digital AGC and direct sampling are all properties of
+                an RTL dongle and are hidden for anything else; a converter is a property of the
+                AERIAL, so an Airspy, an RSP or a HackRF can sit behind one exactly as a dongle
+                can. Dropping this inside `isRtl` would have made it vanish on three of the four
+                radios we support — the "a control that only works on one radio" fault from
+                AGENTS.md, reached from the other side.
+              ★★ NOR IS IT GATED ON isSpy. The note below says frequency correction and bias-T
+                "belong to whoever runs this receiver", and that is right for those — but a
+                SpyServer carries no notion of an LO in its protocol at all, so a listener with a
+                converter on their own aerial has NOWHERE ELSE to correct it. It is ours.
+              ★ The VibeServer case is gated by the PARENT, which simply passes no `converter` —
+                there the owner sets one on the radio's setup page and the server publishes true
+                RF, so correcting again here would double it. One gate, in one place. */}
+          {p.converter && p.onConverter && (() => {
+            const conv = p.converter, setConv = p.onConverter;
+            const loMhz = conv.offsetHz ? Math.abs(conv.offsetHz) / 1e6 : 0;
+            return (<>
+              <Text style={styles.section}>CONVERTER</Text>
+              <Seg slot={slot}
+                   options={CONVERTER_PRESETS.map(c => c.id)}
+                   value={conv.id}
+                   onChange={(id) => {
+                     const pr = presetById(id);
+                     if (!pr) return;
+                     setConv(id === 'custom'
+                       ? { ...conv, id: 'custom', label: 'Custom' }
+                       : fromPreset(pr, conv));
+                   }}
+                   fmt={(id) => presetById(id)?.label ?? id} />
+              <Text style={styles.note}>{presetById(conv.id)?.hint ?? 'Custom converter'}</Text>
+
+              {conv.id === 'custom' && (<>
+                {/* ★★ A POSITIVE LO AND A DIRECTION, never a signed number. It is STORED signed —
+                    an up-converter is a down-converter with a negative LO, which is what makes
+                    this one transform instead of two features — but the box in the user's hands
+                    is labelled 125 MHz, and asking anyone to type a minus sign is a sign error
+                    waiting to happen. */}
+                {/* ★★ ONE nudge() FOR BOTH BUTTONS AND BOTH INPUT PATHS. Written out twice, the
+                    minus button's KEYBOARD action was a copy of the plus button's and stepped the
+                    wrong way — a fault invisible to touch and only reachable with a keyboard, so
+                    it would have shipped. The step is in MAGNITUDE (the LO the user typed), and
+                    the sign stays wherever the direction control put it. */}
+                {(() => {
+                  const nudge = (deltaMhz: number) => () => setConv({
+                    ...conv, label: 'Custom',
+                    offsetHz: Math.sign(conv.offsetHz || -1)
+                              * Math.max(0, Math.abs(conv.offsetHz) + deltaMhz * 1e6),
+                  });
+                  const down = nudge(-1), up = nudge(1);
+                  return (
+                    <View style={styles.stepperRow}>
+                      <TouchableOpacity
+                        style={[styles.stepBtn, slot(down) && kbNav
+                                && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+                        onPress={down}><Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
+                      <Text style={styles.stepVal}>{loMhz} MHz</Text>
+                      <TouchableOpacity
+                        style={[styles.stepBtn, slot(up) && kbNav
+                                && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+                        onPress={up}><Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
+                    </View>
+                  );
+                })()}
+                <Seg slot={slot}
+                     options={['up', 'down']}
+                     value={conv.offsetHz > 0 ? 'down' : 'up'}
+                     onChange={(d) => setConv({ ...conv, label: 'Custom',
+                       offsetHz: (d === 'down' ? 1 : -1) * Math.abs(conv.offsetHz),
+                       // ★★ The direction also sets what the converter PASSES, because that is
+                       //   the half that decides how far the dial may go. An up-converter takes
+                       //   HF in and filters the rest out, so the app's HF ceiling is the honest
+                       //   default; a down-converter's input is its own high band and we cannot
+                       //   guess it, so it declares none and the range is merely shifted.
+                       inputLoHz: 0, inputHiHz: d === 'down' ? 0 : HF_CEILING_HZ })}
+                     fmt={(d) => d === 'down' ? 'Converts down' : 'Converts up'} />
+                <Text style={styles.note}>{V4_WARNING}</Text>
+              </>)}
+
+              {/* ★★★ CONFIGURATION ABOVE, STATE HERE, and they are kept apart on purpose. The
+                  preset is set once per radio; this is flipped whenever the lead moves — an
+                  up-converter is inline, and you unplug it to get VHF back. A switch, not a
+                  button, because it mirrors something physical that is either true or not. */}
+              {!isIdentity(conv) && (<>
+                <View style={styles.toggleRow}>
+                  <Text style={styles.toggleLabel}>Converter fitted</Text>
+                  <Switch value={conv.engaged}
+                          onValueChange={(v) => setConv({ ...conv, engaged: v })}
+                          trackColor={{ true: C.abtn, false: '#444' }}
+                          thumbColor={conv.engaged ? C.gold : '#ccc'} />
+                </View>
+                <Text style={styles.note}>
+                  {conv.engaged
+                    ? `Tuning is offset by ${loMhz} MHz, and the dial is limited to what the `
+                      + 'converter passes. Turn this off when you unplug it.'
+                    : 'Off — the app tunes the radio directly. Turn this on when the converter '
+                      + 'is plugged in.'}
+                </Text>
+              </>)}
+            </>);
+          })()}
 
           {/* ★ DONGLE-ONLY from here: PPM (the HF+ calibrates in parts per BILLION, and that
               control is admin-gated), bias-T, the RTL2832's digital AGC and direct sampling

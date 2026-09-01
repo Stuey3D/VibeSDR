@@ -8043,8 +8043,6 @@ export default function SDRScreen({ route, navigation }: Props) {
         serverName={instanceName ?? ''}
         serverUrl={baseUrl}
         onClose={() => setMenuOpen(false)}
-        converter={canConvert ? converter : undefined}
-        onConverter={canConvert ? setConverter : undefined}
         onLocalHardware={isLocal ? () => { setMenuOpen(false); setHwOpen(true); } : undefined}
         radioModel={radioCaps?.model}
         isTcp={!!route.params.isTcp}
@@ -8372,6 +8370,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       {isLocal ? (
         <LocalHardwarePanel
           isSpy={isSpy}
+          // ★ The ONE gate for the whole feature — see canConvert. A VibeServer reaches this
+          //   panel too (it is `isLocal`), and there the owner's own setup page owns the
+          //   converter, so it must get none.
+          converter={canConvert ? converter : undefined}
+          onConverter={canConvert ? setConverter : undefined}
           radio={radioCaps}
           agcLocked={hwAgcLocked}
           gainLocked={hwGainLocked}
