@@ -629,7 +629,21 @@ export default function App() {
   const [fontWaitOver, setFontWaitOver] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setFontWaitOver(true), 3000);
-    return () => clearTimeout(t);
+    /* ★★★ A TIMER IS NOT A GUARANTEE IN THE BACKGROUND, which is how the escape hatch above came
+     *   to have a hole in it. iOS throttles and suspends JS timers in a backgrounded app — and
+     *   this app is now routinely LAUNCHED backgrounded, headless, by a watch message. So on a
+     *   Buddy-driven cold start the 3 s never elapses in any useful sense: fonts may not resolve
+     *   either, the guard below renders null, no frame is ever drawn, and iOS goes on showing its
+     *   own launch image. Which is systemBackgroundColor — PURE BLACK in dark mode, with nothing
+     *   on it and nothing in the log, exactly as the note above predicted.
+     * ★★ SO ALSO GIVE UP WAITING THE MOMENT THE APP COMES FORWARD. Foregrounding is the only
+     *   instant that matters here: it is when somebody is actually looking, and it cannot be
+     *   throttled away. Whatever the fonts are doing, they have had all the time they are getting.
+     * ★ Both paths lead to the same flag, so this can only ever shorten the wait. */
+    const sub = AppState.addEventListener('change', (st) => {
+      if (st === 'active') setFontWaitOver(true);
+    });
+    return () => { clearTimeout(t); sub.remove(); };
   }, []);
   useEffect(() => {
     if (fontError) console.warn('[fonts] failed to load, continuing with system fonts:', fontError);
@@ -679,8 +693,22 @@ export default function App() {
   // has resolved (so we don't navigate before the nav container is mounted).
   useDeepLinks(fontsLoaded && firstOpen !== undefined);
 
-  // Hold splash until fonts are ready — prevents flash of Courier New fallback
-  if (!fontsLoaded && !fontError && !fontWaitOver) return null;
+  /* ★★★ NEVER RENDER NOTHING. `return null` here was the last place in the app that could draw
+   *   NO FRAME AT ALL, and a frame is what tells iOS to take its launch image down. Until one is
+   *   drawn the user is looking at the system's black launch screen with a perfectly healthy app
+   *   behind it — running, responsive, playing audio, feeding the watch, and showing nothing.
+   *   That is the black screen Stuart has been reporting for weeks, and it is why there was never
+   *   any text on it: CrashBoundary lives INSIDE the tree below, so returning early means even a
+   *   real error has nowhere to be displayed.
+   * ★★ THE FRAME COSTS US NOTHING. It is the app's own background colour — the same one the tree
+   *   below paints — so a viewer sees no difference, but the launch image goes and we own the
+   *   screen from the first moment. The font wait keeps its purpose (no flash of fallback type)
+   *   and loses only its ability to leave the app invisible.
+   * ★ Deliberately NOT the splash: this must not depend on state, fonts, or anything that can
+   *   itself fail to resolve. A plain View is the one thing that cannot. */
+  if (!fontsLoaded && !fontError && !fontWaitOver) {
+    return <View style={{ flex: 1, backgroundColor: '#080601' }} />;
+  }
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
