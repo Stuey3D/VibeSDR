@@ -345,10 +345,14 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   // spectrum subscription (battery: this runs ONLY in the broken locked+watch window).
   private let specForwarder = WatchSpectrumForwarder()
 
-  @objc(startWatchSpectrum:binBandwidth:tuneHz:filterLow:filterHigh:brightness:contrast:)
+  /// `convOffsetHz` — the converter's signed LO, 0 when there is none. `tuneHz` is HARDWARE Hz:
+  /// this forwarder talks to the server directly and reads the server's own SPEC headers, so it
+  /// lives below the converter boundary. See WatchSpectrumForwarder.start().
+  @objc(startWatchSpectrum:binBandwidth:tuneHz:filterLow:filterHigh:brightness:contrast:convOffsetHz:)
   func startWatchSpectrum(_ url: String, binBandwidth: NSNumber, tuneHz: NSNumber,
                           filterLow: NSNumber, filterHigh: NSNumber,
-                          brightness: NSNumber, contrast: NSNumber) {
+                          brightness: NSNumber, contrast: NSNumber,
+                          convOffsetHz: NSNumber) {
     specForwarder.onRow = { [weak self] row, freq, span, snr, level, lo, hi, meter in
       self?.pushWatchRow(row, freq: freq, span: span, snr: snr, level: level,
                          lo: lo, hi: hi, meter: meter)
@@ -356,7 +360,7 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     specForwarder.start(url: url, binBandwidth: binBandwidth.doubleValue,
                         tuneHz: tuneHz.doubleValue, filterLow: filterLow.doubleValue,
                         filterHigh: filterHigh.doubleValue, brightness: brightness.doubleValue,
-                        contrast: contrast.doubleValue)
+                        contrast: contrast.doubleValue, convOffsetHz: convOffsetHz.doubleValue)
   }
 
   @objc(retuneWatchSpectrum:)

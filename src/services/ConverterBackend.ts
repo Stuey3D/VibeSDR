@@ -27,10 +27,20 @@
  *  the LNB presets are not shipped yet.
  *
  * ★★ A DECORATOR, NOT A HUNDRED EDITS. Wrapping SDRBackend means SDRScreen (8,800 lines) and
- *  WaterfallView are untouched, and — more to the point — a frequency cannot reach the radio
- *  without passing through here, so a call site added later is transformed by construction
- *  rather than by whoever adds it remembering. The alternative was to teach every call site,
- *  which is the "one rule, two readers" fault waiting to happen.
+ *  WaterfallView are untouched, and a call site added later is transformed by construction
+ *  rather than by whoever adds it remembering.
+ *
+ * ★★★ BUT IT IS NOT THE ONLY DOOR TO THE RADIO, AND SAYING SO HERE ONCE WAS NOT ENOUGH. This
+ *  file claimed a frequency could not reach the radio without passing through it. That was
+ *  false: WatchSpectrumForwarder (iOS, native) opens its OWN socket to the server and sends its
+ *  own `zoom` while the phone is locked and the watch is showing the waterfall. Handed display
+ *  Hz it asked the radio for 3 MHz when the tuner needed 128, and its bin crop subtracted a
+ *  HARDWARE centre (from the server's SPEC header) from a DISPLAY VFO and picked bins 125 MHz
+ *  away. It now takes hardware Hz and the offset separately — the "one rule, two readers" fault
+ *  this comment was congratulating itself on avoiding.
+ * ★ SO: ANYTHING THAT TALKS TO THE RADIO WITHOUT GOING THROUGH SDRBackend MUST BE GIVEN THE
+ *   OFFSET EXPLICITLY. Today that is the watch forwarder alone. Check for others before assuming
+ *   a new native path is covered.
  *
  * ★★ THE PROFILE IS READ LIVE, never captured. The engage toggle has to take effect on a running
  *  session without rebuilding the backend — and when it flips, the TUNER HAS NOT MOVED, only the

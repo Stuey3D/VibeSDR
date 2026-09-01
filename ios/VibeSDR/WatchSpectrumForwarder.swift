@@ -33,6 +33,8 @@ final class WatchSpectrumForwarder {
   private var binBandwidth: Double = 0     // Hz per raw bin
   private var tuneHz: Double = 0           // VFO centre — the row is cropped around this
   private var centerHz: Double = 0         // spectrum centre; updated from each SPEC header
+  /// The converter's signed LO, or 0. See start() — added back ONLY when reporting to the watch.
+  private var convOffsetHz: Double = 0
   private var filterLow: Double = 0        // passband edges (Hz offsets), for the watch VFO lines
   private var filterHigh: Double = 0
   private var brightness: Double = 0       // dB offset (watch mirrors the phone's wf brightness)
@@ -60,10 +62,25 @@ final class WatchSpectrumForwarder {
   /// Start forwarding. `url` is the FULL spectrum WS URL JS would have used (incl. the
   /// PIN `authSuffix`/password), so we never re-implement the handshake. The geometry is
   /// whatever JS last had — good enough while locked.
+  /* ★★★ THIS FORWARDER SPEAKS HARDWARE Hz, and `convOffsetHz` is the only reason it needs to
+   *   know a converter exists at all.
+   *
+   *   It is a SECOND DOOR TO THE RADIO. The JS side routes every frequency through
+   *   ConverterBackend, whose whole claim is that a frequency cannot reach the radio without
+   *   being converted — and that claim was false, because this class opens its own socket to the
+   *   server and sends its own `zoom`. Fed display Hz it asked the radio to tune 3 MHz when the
+   *   tuner needed 128, and worse: `centerHz` comes from the server's own SPEC header in hardware
+   *   Hz, so the crop maths at the bottom of this file subtracted one scale from the other and
+   *   picked bins 125 MHz away from the signal.
+   * ★★ SO THE RULE IS THE SAME AS EVERYWHERE ELSE — everything below the boundary is hardware Hz
+   *   — and the offset is added back at exactly ONE point: the row handed to the watch, which is
+   *   a display. One place in, one place out.
+   * ★ 0 when there is no converter, which is every case but one and is the identity. */
   func start(url: String, binBandwidth: Double, tuneHz: Double,
              filterLow: Double, filterHigh: Double,
-             brightness: Double, contrast: Double) {
+             brightness: Double, contrast: Double, convOffsetHz: Double = 0) {
     stop()
+    self.convOffsetHz = convOffsetHz
     self.binBandwidth = binBandwidth
     self.tuneHz = tuneHz
     self.centerHz = tuneHz
@@ -351,6 +368,9 @@ final class WatchSpectrumForwarder {
     let level = max(0, min(1, (peakDb - floorDb) / range))
     let meter = String(format: "%.0fdB", peakDb - floorDb)
 
-    onRow?(Data(row), tuneHz, span, peakDb - floorDb, level, filterLow, filterHigh, meter)
+    // ★ THE ONE PLACE THE OFFSET GOES BACK ON. Everything above is hardware Hz, matching the
+    //   server's own SPEC headers; the wrist shows what the listener tuned to. See start().
+    onRow?(Data(row), tuneHz + convOffsetHz, span, peakDb - floorDb, level,
+           filterLow, filterHigh, meter)
   }
 }

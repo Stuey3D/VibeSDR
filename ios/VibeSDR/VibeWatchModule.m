@@ -25,7 +25,8 @@ RCT_EXTERN_METHOD(startWatchSpectrum
                   : (nonnull NSNumber *)filterLow filterHigh
                   : (nonnull NSNumber *)filterHigh brightness
                   : (nonnull NSNumber *)brightness contrast
-                  : (nonnull NSNumber *)contrast)
+                  : (nonnull NSNumber *)contrast convOffsetHz
+                  : (nonnull NSNumber *)convOffsetHz)
 
 RCT_EXTERN_METHOD(retuneWatchSpectrum : (nonnull NSNumber *)tuneHz)
 

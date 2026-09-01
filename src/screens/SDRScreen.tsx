@@ -53,7 +53,7 @@ import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
 import {
   type ConverterProfile, NO_CONVERTER, active as convActive, isIdentity as convIsIdentity,
-  toDisplay as convToDisplay,
+  toDisplay as convToDisplay, toHardware as convToHardware,
 } from '../services/converter';
 import { wrapWithConverter } from '../services/ConverterBackend';
 import { KiwiAdapter } from '../services/KiwiAdapter';
@@ -4590,15 +4590,25 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (url) {
       const view = c?.getView?.();
       const st = c?.getStatus?.();
+      /* ★★★ THE FORWARDER GETS HARDWARE Hz, because it is a SECOND DOOR TO THE RADIO — it opens
+       *   its own socket, sends its own `zoom`, and reads the server's SPEC headers, all of which
+       *   are below the converter boundary. ConverterBackend's claim that a frequency cannot
+       *   reach the radio unconverted was false for exactly this path: fed display Hz it asked
+       *   for 3 MHz when the tuner needed 128, and its bin crop subtracted a hardware centre from
+       *   a display VFO and landed 125 MHz away. The offset is handed over with it and goes back
+       *   on at the one place the wrist is drawn. */
+      const conv = convActive(converterRef.current);
+      const hwTune = Math.round(convToHardware(st?.frequency || 0, conv));
       (NativeModules.VibeWatchModule as {
-        startWatchSpectrum?: (u: string, bb: number, f: number, lo: number, hi: number, br: number, co: number) => void;
+        startWatchSpectrum?: (u: string, bb: number, f: number, lo: number, hi: number, br: number, co: number, off: number) => void;
       })?.startWatchSpectrum?.(
         url,
         view?.binBandwidth || st?.binBandwidth || 100,
-        st?.frequency || 0,
+        hwTune,
         st?.bandwidthLow || 0,
         st?.bandwidthHigh || 0,
-        0, 0);       // brightness/contrast 0 — the watch applies its own offsets
+        0, 0,        // brightness/contrast 0 — the watch applies its own offsets
+        conv.offsetHz + conv.trimHz)
       specPausedByBgRef.current = true;
       c?.pauseSpectrum();          // native owns the feed now — close the JS WS
     } else {
@@ -5664,8 +5674,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     const now = Date.now();
     if (now - lastLockedRetuneRef.current < 250) return;
     lastLockedRetuneRef.current = now;
+    // ★ HARDWARE Hz, for the same reason as startWatchSpectrum above — this reaches the same
+    //   forwarder, which lives below the converter boundary.
     (NativeModules.VibeWatchModule as { retuneWatchSpectrum?: (f: number) => void })
-      ?.retuneWatchSpectrum?.(status.frequency);
+      ?.retuneWatchSpectrum?.(
+        Math.round(convToHardware(status.frequency, convActive(converterRef.current))));
   }, [status.frequency]);
 
   // Late-bound handler refs for the chat-sync engine (declared above the
