@@ -187,6 +187,9 @@ struct Config {
     /** See RadioConfig::biasT — asserted at every start so it is never inherited. */
     bool biasT = false;
     int  ppm = 0, ppb = 0, directSampling = -1;   // see RadioConfig
+    /** See RadioConfig::converterOffsetHz — the up/down-converter in front of the aerial. The
+     *  server corrects for it and publishes TRUE RF, so no client ever learns it is there. */
+    double converterOffsetHz = 0, converterInputLoHz = 0, converterInputHiHz = 0;
 
     /** ★★★ CPU GOVERNOR — a SETTING, because the wrong one costs 25% of the machine silently.
      *  Raspberry Pi OS defaults to `ondemand`, which decides how hard to run from how busy each
@@ -358,6 +361,37 @@ struct RadioConfig {
      *  running. -1 / 0 mean "not set": leave the radio's own default alone.
      *  ★ Which of them a radio HAS differs by driver, and offering one that can never apply is
      *    the "control that only works on one radio" fault. The page draws them per driver. */
+    /** ★★★ AN UP- OR DOWN-CONVERTER BOLTED IN FRONT OF THIS RADIO, and the reason it is a SERVER
+     *  setting rather than a client one.
+     *
+     *  A converter is physical hardware between the aerial and the tuner: an owner fits one once
+     *  and never touches it again, and EVERY listener on this radio is behind it. So the server
+     *  corrects for it and publishes true frequencies, and no client — the phone, the watch, the
+     *  web client, or anyone else's — ever learns that a converter exists. Correcting in the
+     *  client instead would be right for exactly one listener and 125 MHz wrong for every other,
+     *  and would put two people on a shared dial in different parts of the spectrum.
+     *
+     *  ★★★ SIGNED, and one field covers both directions: an up-converter is a down-converter with
+     *   a negative LO. A Ham It Up is −125 MHz; an LNB is positive. hardware = wanted − offset, so
+     *   a listener asking for 3 MHz sets the tuner to 128 MHz. Applied in ONE place, tuneHw().
+     *  ★★ 0 = no converter, which is what every existing radio has and what the parser defaults to.
+     *  ★ Deliberately NOT the same control as `ppm`: ppm scales the TUNER's crystal error, while a
+     *    converter's LO error is independent of it and does not scale with the tuner. Correcting
+     *    one with the other leaves both wrong. */
+    double converterOffsetHz = 0;
+    /** ★★★ WHAT THE CONVERTER ACTUALLY PASSES, in true RF Hz — the half that decides how far a
+     *  listener may tune, and without which the published range is nonsense.
+     *
+     *  An up-converter is not a bare mixer: it carries a low-pass filter on its input, so only HF
+     *  reaches the mixer — which is what stops the whole of VHF folding in on top of it. While the
+     *  converter is inline, HF is ALL this radio can hear, because the aerial is behind it. Derived
+     *  from the tuner alone a 125 MHz converter on a dongle would publish a range up to 1641 MHz,
+     *  every bit of it silent, and a listener who tuned there would conclude the RECEIVER was
+     *  broken. So the published range is intersected with this.
+     *  ★ hi <= lo means "declares nothing" — the range is shifted but not clamped. That is the
+     *    default, and it is what a config written before this existed reads as. */
+    double converterInputLoHz = 0, converterInputHiHz = 0;
+
     int    ppm = 0;             // RTL frequency correction, parts per million
     int    ppb = 0;             // Airspy HF+ calibration, parts per billion
     int    directSampling = -1; // RTL: 0 off, 1 I, 2 Q; -1 = leave alone (not needed on a V4)

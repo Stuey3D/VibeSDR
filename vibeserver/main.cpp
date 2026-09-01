@@ -1891,6 +1891,12 @@ int main(int argc, char** argv) {
             r.rfNotch = next.rfNotch; r.dabNotch = next.dabNotch; r.zoomSpectrum = next.zoomSpectrum;
             r.biasT = next.biasT; r.ppm = next.ppm; r.ppb = next.ppb;
             r.directSampling = next.directSampling;
+            // ★ The converter travels with the rest of the per-radio set — it describes what is
+            //   bolted to THIS radio's aerial, so it is saved exactly where the gain and the ppm
+            //   are. Left out, the setup page would appear to accept it and lose it on save.
+            r.converterOffsetHz  = next.converterOffsetHz;
+            r.converterInputLoHz = next.converterInputLoHz;
+            r.converterInputHiHz = next.converterInputHiHz;
             break;
         }
         // ★★★ AND THE MACHINE'S OWN SETTINGS BELONG TO THE MACHINE. The loop above folds this
@@ -2373,6 +2379,16 @@ int main(int argc, char** argv) {
     //   RADIO, so a value left by another program (or by this owner on a different radio) would
     //   otherwise be inherited silently. 0 / -1 mean "leave the radio's default alone".
     if (g_runtimeConfig.ppm != 0) LocalSdrShim::instance().setPpm(g_runtimeConfig.ppm);
+    /* ★★★ THE CONVERTER, ASSERTED AT START LIKE THE REST — and unconditionally, unlike the values
+     *   above it. Those are "leave the radio's own default alone" settings, where 0 means "say
+     *   nothing"; this one describes what is BOLTED TO THE AERIAL, and 0 is a real answer meaning
+     *   "there is no converter". Setting it every time is what makes removing one take effect. */
+    LocalSdrShim::instance().setConverter(g_runtimeConfig.converterOffsetHz,
+                                          g_runtimeConfig.converterInputLoHz,
+                                          g_runtimeConfig.converterInputHiHz);
+    if (g_runtimeConfig.converterOffsetHz != 0)
+        std::printf("  converter: LO %.3f MHz — listeners see true RF, the tuner is offset\n",
+                    g_runtimeConfig.converterOffsetHz / 1e6);
     if (g_runtimeConfig.ppb != 0) LocalSdrShim::instance().setAhfCalibrationPpb(g_runtimeConfig.ppb);
     if (g_runtimeConfig.directSampling >= 0)
         LocalSdrShim::instance().setDirectSampling(g_runtimeConfig.directSampling);

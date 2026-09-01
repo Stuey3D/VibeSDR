@@ -2670,6 +2670,13 @@ struct LocalSdrShim::Impl {
     //     mode on Android and Mac" is what finally pointed at the server rather than the radio.
     // ★★ An RSP is zero-IF too and has its own DC handling; a network source has no DC spike of
     //    ours to dodge. Only the R820T needs this.
+    /* ★★★ THE CONVERTER'S LO, AND WHAT IT PASSES — see LocalSdrShim::setConverter.
+     *   Atomics because tuneHw() runs on the audio-WS and control threads while the setup page
+     *   may be writing this from the HTTP thread; a torn double here would tune the radio to a
+     *   number nobody asked for. */
+    std::atomic<double> convOffsetHz{0.0};
+    std::atomic<double> convInLoHz{0.0}, convInHiHz{0.0};
+
     double hwOffsetHz() const {
         /* ★★★ THE HACKRF IS ZERO-IF WITH NOTHING CLEANING UP AFTER IT, so it belongs with the
          *     DONGLE here, not with the RSP and the HF+. I originally listed it among the radios
@@ -2919,7 +2926,20 @@ struct LocalSdrShim::Impl {
         g_bestFloorDb.store(0.0f, std::memory_order_relaxed);
         // ★ And the failed step belongs to the OLD frequency — see g_ovlBadGain.
         g_ovlBadGain.store(-1, std::memory_order_relaxed);
-        uint32_t hz = (uint32_t)llround(logicalCenter + hwOffsetHz());
+        /* ★★★ THE CONVERTER IS APPLIED HERE AND NOWHERE ELSE. `logicalCenter` is TRUE RF — what
+         *   the listener asked for and what every other part of this server believes — and this is
+         *   the single line where a frequency stops being that and becomes a number the tuner is
+         *   set to. A listener asking for 3 MHz through a Ham It Up (offset −125 MHz) puts the
+         *   dongle on 128 MHz.
+         * ★★ ONE PLACE, because tuneHw() is the ONE device boundary every driver branch below
+         *   goes through. Applying it anywhere further out would leak the IF into the directory
+         *   listing, the band conditions, the spectrogram and the owner's allowed bands — all of
+         *   which reason about frequency and are correct today only because they never see it.
+         * ★ Sits alongside hwOffsetHz(), which is a different correction for a different reason
+         *   (the R820T's DC spike) and composes with it cleanly: both describe the gap between
+         *   where we want to listen and where the tuner must be parked. */
+        uint32_t hz = (uint32_t)llround(logicalCenter - convOffsetHz.load(std::memory_order_relaxed)
+                                        + hwOffsetHz());
         if (useSpy()) {
             spy->setIqFrequency(hz);
             // The centres are independent, but not UNBOUNDED: the device only covers
@@ -8493,6 +8513,52 @@ struct LocalSdrShim::Impl {
                 }
             }
             if (hw.empty()) hw.push_back({ 0.0, 2.0e9 });
+            /* ★★★ AND IF THERE IS A CONVERTER, WHAT THE LISTENER CAN REACH IS NOT WHAT THE TUNER
+             *   COVERS. The driver publishes the tuner's own span; with a converter in front, the
+             *   listener reaches that span SHIFTED by the LO and narrowed to what the converter
+             *   passes. Publishing the raw span through a 125 MHz up-converter would offer a dial
+             *   up to 1641 MHz where the converter's input filter guarantees silence — and a
+             *   listener who tuned there would conclude the RECEIVER was broken, which is the worse
+             *   of the two wrong messages (see the note below on policy vs hardware).
+             * ★★★ DONE HERE, ONCE, rather than in radioCapsJson's per-driver branches. Each driver
+             *   emits its own "ranges" and a fifth added later would silently miss this — the
+             *   "ELSE MEANS DONGLE" fault this file has already been bitten by twice. This is the
+             *   single place the set is parsed back out and republished, so it is the single place
+             *   it can be transformed for everyone.
+             * ★★ BEFORE the owner's allow/block list is applied, because that list is written in
+             *   TRUE RF — the frequencies the owner and the listener both see. Intersecting policy
+             *   against an un-shifted hardware span would compare two different scales. */
+            {
+                const double lo   = convInLoHz.load(std::memory_order_relaxed);
+                const double hi   = convInHiHz.load(std::memory_order_relaxed);
+                const double offs = convOffsetHz.load(std::memory_order_relaxed);
+                if (offs != 0.0 || hi > lo) {
+                    vibebands::Ranges out;
+                    for (auto& r : hw) {
+                        double a = r.lo + offs, b = r.hi + offs;
+                        if (a > b) std::swap(a, b);
+                        if (hi > lo) { a = std::max(a, lo); b = std::min(b, hi); }
+                        // ★ Negative frequencies are not a range. An up-converter's LO is bigger
+                        //   than the bottom of most tuners' spans, so this is the ordinary case,
+                        //   not an edge one.
+                        a = std::max(a, 0.0);
+                        if (b > a) out.push_back({ a, b });
+                    }
+                    /* ★ An EMPTY result means the converter and the tuner do not overlap at all —
+                     *   a pairing that cannot work. Keep the un-narrowed set rather than
+                     *   publishing nothing, so the dial stays usable and the owner can see the
+                     *   mistake instead of meeting a receiver that refuses every frequency. */
+                    if (!out.empty()) {
+                        hw = out;
+                        const size_t k = caps.find("\"ranges\":[");
+                        if (k != std::string::npos) {
+                            const size_t e = caps.find("]]", k);
+                            if (e != std::string::npos)
+                                caps.replace(k, e + 2 - k, "\"ranges\":" + vibebands::toJson(hw));
+                        }
+                    }
+                }
+            }
             const vibebands::Ranges perm = vsPermittedRanges(hw);
             // ★★★ BOTH SETS TRAVEL, and that is the point. `ranges` stays the HARDWARE's coverage
             //     and `allowed` carries the owner's limit, so the client can say WHICH wall a
@@ -18312,6 +18378,23 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
     LOGI("radio REACQUIRED");
     impl->notifyDeviceState();
     return true;
+}
+
+void LocalSdrShim::setConverter(double offsetHz, double inputLoHz, double inputHiHz) {
+    if (!p) return;
+    p->convOffsetHz.store(offsetHz, std::memory_order_relaxed);
+    p->convInLoHz.store(inputLoHz, std::memory_order_relaxed);
+    p->convInHiHz.store(inputHiHz, std::memory_order_relaxed);
+    LOGI("converter: LO %.0f Hz, passes %.0f-%.0f Hz", offsetHz, inputLoHz, inputHiHz);
+    /* ★★ AND RE-TUNE, because the radio is already parked somewhere. Changing the LO changes what
+     *   the CURRENT dial position means, so leaving the tuner where it is would put every listener
+     *   125 MHz from where their screen says they are until the next time somebody tuned. Cheap:
+     *   one control transfer, and only when an owner actually edits the setting. */
+    if (p->rtlCenter.load() > 0) p->tuneHw(p->rtlCenter.load());
+}
+
+double LocalSdrShim::converterOffsetHz() const {
+    return p ? p->convOffsetHz.load(std::memory_order_relaxed) : 0.0;
 }
 
 void LocalSdrShim::setPpm(int ppm) {

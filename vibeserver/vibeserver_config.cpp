@@ -404,6 +404,8 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     B("dabNotch", r.dabNotch); B("zoomSpectrum", r.zoomSpectrum);
     B("biasT", r.biasT);
     I("ppm", r.ppm); I("ppb", r.ppb); I("directSampling", r.directSampling);
+    N("converterOffsetHz", r.converterOffsetHz);
+    N("converterInputLoHz", r.converterInputLoHz); N("converterInputHiHz", r.converterInputHiHz);
     B("spectrogram", r.spectrogram);
     I("sessionLimitMin", r.sessionLimitMin); B("sessionLimitSoft", r.sessionLimitSoft);
     I("idleKickMin", r.idleKickMin);
@@ -443,6 +445,8 @@ std::string radioToJson(const RadioConfig& r) {
     B("rfNotch", r.rfNotch); B("dabNotch", r.dabNotch); B("zoomSpectrum", r.zoomSpectrum);
     B("biasT", r.biasT);
     N("ppm", r.ppm); N("ppb", r.ppb); N("directSampling", r.directSampling);
+    N("converterOffsetHz", r.converterOffsetHz);
+    N("converterInputLoHz", r.converterInputLoHz); N("converterInputHiHz", r.converterInputHiHz);
     B("spectrogram", r.spectrogram);
     N("sessionLimitMin", r.sessionLimitMin); B("sessionLimitSoft", r.sessionLimitSoft);
     N("idleKickMin", r.idleKickMin);
@@ -506,6 +510,8 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.sessionLimitMin = one.sessionLimitMin;
     r.biasT = one.biasT;
     r.ppm = one.ppm; r.ppb = one.ppb; r.directSampling = one.directSampling;
+    r.converterOffsetHz = one.converterOffsetHz;
+    r.converterInputLoHz = one.converterInputLoHz; r.converterInputHiHz = one.converterInputHiHz;
     r.port = one.port;
     out.radios.push_back(r);
 }
@@ -820,6 +826,8 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.rtlAgc      = r.rtlAgc;
     c.biasT = r.biasT;
     c.ppm = r.ppm; c.ppb = r.ppb; c.directSampling = r.directSampling;
+    c.converterOffsetHz = r.converterOffsetHz;
+    c.converterInputLoHz = r.converterInputLoHz; c.converterInputHiHz = r.converterInputHiHz;
     c.port = r.port;
     return c;
 }

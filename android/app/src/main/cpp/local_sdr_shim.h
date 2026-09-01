@@ -640,6 +640,16 @@ public:
     /** ★ Re-decide the tuner's centre and move it if the answer changed (VibeClarity). */
     void applyCentreNow();
     void setPpm(int ppm);
+    /** ★★★ AN UP/DOWN-CONVERTER IN FRONT OF THIS RADIO — see RadioConfig::converterOffsetHz.
+     *  Signed LO in Hz (a Ham It Up is −125e6, an LNB positive), plus the input passband the
+     *  converter actually passes; hi <= lo means it declares none. The whole server keeps working
+     *  in TRUE RF — the config, the directory, band conditions, the spectrogram, the bands the
+     *  owner allows — and this is applied in exactly one place, tuneHw(), on the way to the
+     *  tuner. Every listener is behind the same converter, so nothing above the driver, and no
+     *  client of any kind, needs to know it is there. */
+    void setConverter(double offsetHz, double inputLoHz, double inputHiHz);
+    /** The converter's LO, for the one other place that must know: the published tuning range. */
+    double converterOffsetHz() const;
     void setBiasTee(bool on);
     void setAgc(bool on);                 // RTL2832 digital AGC
     void setDirectSampling(int mode);     // 0=off, 1=I, 2=Q (not needed on Blog V4)

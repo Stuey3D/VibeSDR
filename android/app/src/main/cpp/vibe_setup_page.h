@@ -845,6 +845,33 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           <input type="number" id="ppm" step="1" placeholder="0"></label>
         <p class="why">Corrects a dongle whose crystal is slightly off. 0 unless you have measured it.</p>
       </div>
+      <!-- ★★★ AN UP/DOWN-CONVERTER IN FRONT OF THE AERIAL, and it is a SERVER setting for the
+           reason the hint spells out: every listener on this radio is behind the same box, so the
+           server corrects for it once and publishes true frequencies. No client — the app, the
+           watch, the web client, anyone else's — ever learns a converter is there. Offered on
+           every driver: a converter is bolted to the aerial, not to a tuner, and any of them can
+           be behind one. -->
+      <div id="hwConverter" style="margin-top:10px">
+        <label><span class="lbl">Converter LO (MHz)</span>
+          <input type="number" id="convLo" step="0.001" placeholder="0"></label>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:6px">
+          <input type="checkbox" id="convDown" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>This is a down-converter (an LNB or transverter block)</span></label>
+        <label style="margin-top:6px"><span class="lbl">Highest frequency it passes (MHz)</span>
+          <input type="number" id="convHi" step="0.001" placeholder="30"></label>
+        <p class="why">Leave the LO at 0 unless there is a converter between your aerial and this
+           radio. An up-converter — a Ham It Up is 125, a SpyVerter 120 — mixes HF up so a dongle
+           can hear it; enter 125 and tick nothing. For a down-converter, enter its LO and tick the
+           box.
+           <br><strong>Listeners never see this.</strong> They tune to the real frequency and the
+           server offsets the tuner, so bookmarks, the band plan and the directory all stay true.
+           <br>The last box is what the converter <em>passes</em> — an up-converter has a low-pass
+           filter on its input, so while it is fitted this radio can only hear HF. It stops the
+           dial offering hundreds of MHz that the converter guarantees are silent. 30 is the usual
+           answer for an up-converter; 0 means "do not narrow the range".
+           <br><strong>An RTL-SDR Blog V4 needs none of this</strong> — its up-converter is
+           internal and it already reports true frequencies.</p>
+      </div>
       <!-- ★★★ WHAT THE LANDING PAGE MEASURES FROM. Offered only to a radio with a FIXED window:
            a receiver a listener can retune contributes a smear with a hole in it every time
            somebody uses it, and a radio that releases when idle is letting go of the device at
@@ -2338,6 +2365,16 @@ function fill() {
 
   if ($("biasT")) $("biasT").checked = !!r.biasT;
   if ($("ppm"))   $("ppm").value = r.ppm != null ? r.ppm : 0;
+  // ★ Stored SIGNED in Hz (an up-converter is negative — see RadioConfig::converterOffsetHz), but
+  //   shown as a positive LO in MHz plus a direction: the box in the owner's hands is labelled
+  //   "125 MHz", and asking them to type a minus sign is a mistake waiting to be made.
+  if ($("convLo")) {
+    var co = r.converterOffsetHz != null ? r.converterOffsetHz : 0;
+    $("convLo").value = co ? Math.abs(co) / 1e6 : 0;
+    if ($("convDown")) $("convDown").checked = co > 0;
+    var chi = r.converterInputHiHz != null ? r.converterInputHiHz : 0;
+    if ($("convHi")) $("convHi").value = chi ? chi / 1e6 : 0;
+  }
   if ($("ppb"))   $("ppb").value = r.ppb != null ? r.ppb : 0;
   if ($("releaseWhenIdle")) $("releaseWhenIdle").checked = !!r.releaseWhenIdle;
   // ★ 300 s is the historical default, so a radio saved before this control existed
@@ -2538,6 +2575,21 @@ function collectRadio() {
     //     what turns an unlocked receiver into an FM-DX one.
     users: parseInt($("users").value || "1", 10),
 
+
+    /* ★★★ THE CONVERTER, SENT FOR EVERY RADIO — it describes the AERIAL, not the tuner, so unlike
+     *   ppm/ppb below there is no driver to gate it on. Positive LO plus a direction on screen,
+     *   signed Hz on the wire: an up-converter is stored NEGATIVE, which is what makes one field
+     *   cover both directions (hardware = wanted − offset).
+     * ★ Sent even when zero, because 0 is a real answer meaning "there is no converter" — gating
+     *   it out would make REMOVING one impossible: the field would simply never be written and
+     *   the old LO would stand. */
+    converterOffsetHz: (function () {
+      var mhz = Math.abs(parseFloat($("convLo") ? $("convLo").value || "0" : "0"));
+      if (!mhz) return 0;
+      return ($("convDown") && $("convDown").checked ? 1 : -1) * Math.round(mhz * 1e6);
+    })(),
+    converterInputLoHz: 0,
+    converterInputHiHz: Math.round(parseFloat($("convHi") ? $("convHi").value || "0" : "0") * 1e6),
 
     // ★ Only send what this radio actually has a control for. Posting rfNotch for an Airspy would
     //   be storing a setting that can never apply — the config would describe a radio we are not.

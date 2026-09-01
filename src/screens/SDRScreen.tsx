@@ -51,6 +51,11 @@ import AdvRdsPanel from '../components/AdvRdsPanel';
 import { resolveVibeAdminAuth } from '../services/vibeAuth';
 import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
+import {
+  type ConverterProfile, NO_CONVERTER, active as convActive, isIdentity as convIsIdentity,
+  toDisplay as convToDisplay,
+} from '../services/converter';
+import { wrapWithConverter } from '../services/ConverterBackend';
 import { KiwiAdapter } from '../services/KiwiAdapter';
 import { localSessionGen } from '../services/localSession';
 import { startBookmarkAutosave, stopBookmarkAutosave,
@@ -803,6 +808,24 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Load saved RTL-SDR hardware settings and apply them to the running session,
   // so gain/bias-T/PPM/etc. persist across connections.
   const hwLoaded = useRef(false);
+
+  /** ★★★ THE CONVERTER IN FRONT OF A LOCAL DONGLE — and note the gate is NOT bare `isLocal`.
+   *   A VibeServer session arrives with isLocal true because it reuses the local protocol path
+   *   (see isVibeServer above), and a VibeServer's owner sets a converter ONCE on the radio's own
+   *   setup page, after which the server publishes true frequencies to every client. Correcting
+   *   again here would double it — and would only be right for THIS client, while the web client,
+   *   the watch and every other listener read 125 MHz off. Same reason the setting is not offered
+   *   on UberSDR/Kiwi/OWRX/FM-DX at all. This is the same guard `urlScope` already uses.
+   *  ★ rtl_tcp and SpyServer DO get it: they are bare IQ sources with no notion of an LO in
+   *    either wire protocol, one listener each, and the converter is the listener's own. */
+  const canConvert = isLocal && !isVibeServer;
+  const [converter, setConverter] = useState<ConverterProfile>(NO_CONVERTER);
+  /** Read LIVE by the backend decorator, so engaging or bypassing takes effect on a running
+   *  session without rebuilding the client. A ref, not the state, because the decorator outlives
+   *  any single render and a captured value would freeze at whatever was set when it was built. */
+  const converterRef = useRef<ConverterProfile>(NO_CONVERTER);
+  useEffect(() => { converterRef.current = canConvert ? converter : NO_CONVERTER; },
+            [converter, canConvert]);
   useEffect(() => {
     if (!isLocal) return;
     let cancelled = false;
@@ -834,6 +857,24 @@ export default function SDRScreen({ route, navigation }: Props) {
       setHwAutoGain(auto); setHwPpm(ppm); setHwSampleRate(rate);
       setHwBiasTee(bias); setHwAgc(agc); setHwDirectSamp(ds); setHwDeemph(deemph); setHwStereo(stereo); setHwSquelch(sql); setHwNrLevel(nrLvl); setHwNotch(notch);
       if (typeof prefs.gain === 'number') setHwGain(prefs.gain);
+      /* ★★ THE ENGAGED FLAG PERSISTS WITH THE PROFILE, not just the profile. A converter left
+       *   switched on is almost certainly still plugged in, and making the user re-engage it on
+       *   every connect would be a worse default than remembering. Restored only where it can
+       *   apply — a stale blob from a dongle that later moved behind a VibeServer must not
+       *   silently start shifting. */
+      if (canConvert && prefs.converter && typeof prefs.converter.offsetHz === 'number') {
+        const c = prefs.converter;
+        setConverter({
+          id: String(c.id ?? 'custom'), label: String(c.label ?? 'Custom'),
+          offsetHz: c.offsetHz, inverted: !!c.inverted,
+          trimHz: typeof c.trimHz === 'number' ? c.trimHz : 0,
+          // ★ A blob written before the passband existed has none; 0/0 means "declares nothing",
+          //   which displayRange takes at its word and only shifts. The profile keeps working.
+          inputLoHz: typeof c.inputLoHz === 'number' ? c.inputLoHz : 0,
+          inputHiHz: typeof c.inputHiHz === 'number' ? c.inputHiHz : 0,
+          engaged: !!c.engaged,
+        });
+      }
       // Re-apply to the native session (already running from startSpectrum).
       LocalHw?.setPpm?.(ppm);
       LocalHw?.setBiasTee?.(bias);
@@ -859,7 +900,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       hwLoaded.current = true;
     })();
     return () => { cancelled = true; };
-  }, [isLocal, LocalHw, localHwKey]);
+  }, [isLocal, LocalHw, localHwKey, canConvert]);
 
   // Background-restriction nudge (local hardware only). Aggressive OEMs
   // (Motorola/Lenovo, some others) ship apps "Restricted" by default, which makes
@@ -911,9 +952,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.setItem(localHwKey, JSON.stringify({
       autoGain: hwAutoGain, gain: hwGain, ppm: hwPpm, sampleRate: hwSampleRate,
       biasTee: hwBiasTee, agc: hwAgc, directSampling: hwDirectSamp, deemph: hwDeemph, stereo: hwStereo,
+      // ★ Scoped to the DEVICE (`tcp:host:port` or `usb`) like everything else in this blob — a
+      //   converter is a property of one physical dongle-plus-front-end, and that is exactly what
+      //   localDeviceKey identifies. Nothing new to sync or migrate.
+      converter: canConvert && !convIsIdentity(converter) ? converter : undefined,
     })).catch(() => {});
     // NB: squelch / nrLevel / notch are intentionally NOT saved (session-scoped).
-  }, [isLocal, localHwKey, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwStereo]);
+  }, [isLocal, localHwKey, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwStereo, canConvert, converter]);
 
   // VibeServer (remote shim): hardware controls ride the WS to the serving device
   // instead of the (non-existent) local dongle. localHost set = remote session.
@@ -3167,8 +3212,16 @@ export default function SDRScreen({ route, navigation }: Props) {
     const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
     const sub = emitter.addListener('VibeTuned', (e: { frequency: number; mode: string }) => {
       const c = client.current;
-      c?.syncFrequency(e.frequency, e.mode as SDRMode);
-      setStatus((prev: SDRStatus) => ({ ...prev, frequency: e.frequency, ...(e.mode ? { mode: e.mode as SDRMode } : {}) }));
+      /* ★★★ THE NATIVE ECHO ARRIVES IN HARDWARE Hz — convert it HERE, at the boundary it crosses.
+       *   The lock-screen/CarPlay skip is applied by the native audio engine, which talks to the
+       *   radio directly and knows nothing of a converter, so `e.frequency` is what the TUNER is
+       *   on (128 MHz), not what the user is listening to (3 MHz). Both lines below want the
+       *   display value: syncFrequency takes display Hz like tune() does, and setStatus IS the
+       *   display. Missing this is the classic converter bug — the VFO snaps back to the hardware
+       *   frequency after every lock-screen skip. */
+      const fDisp = convToDisplay(e.frequency, convActive(converterRef.current));
+      c?.syncFrequency(fDisp, e.mode as SDRMode);
+      setStatus((prev: SDRStatus) => ({ ...prev, frequency: fDisp, ...(e.mode ? { mode: e.mode as SDRMode } : {}) }));
       // Media-control skips tune blind from the lock screen / car stereo —
       // recentre the view on EVERY skip so the VFO stays centred and the
       // waterfall moves around it (drum-style; Stuart's design). Skips made
@@ -3342,7 +3395,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★ A fresh attempt has not got in yet — so an expired credential on a LATER connection can
     //   still take the one-shot retry above.
     connectedOnceRef.current = false;
-    const c = createBackend(route.params.serverType ?? 'ubersdr', connectBase, sessionUuid, {
+    /* ★★★ WRAPPED SO A FREQUENCY CANNOT REACH THE RADIO WITHOUT BEING CONVERTED. Everything above
+     *   this line — the VFO, bookmarks, EIBI, the band plan, the shared dial, the watch, CarPlay —
+     *   speaks TRUE RF; the converter's LO is added only inside the wrapper, on the way to the
+     *   tuner. See ConverterBackend.ts for why this is a boundary transform and not a display one.
+     *  ★ The profile is passed as a live getter, so the ENGAGE toggle works on a running session
+     *    without rebuilding the client. */
+    const c = wrapWithConverter(createBackend(route.params.serverType ?? 'ubersdr', connectBase, sessionUuid, {
       // (callbacks below; bypass password rides every WS URL)
       // ★★★ A CONNECTION THAT SUCCEEDED TAKES THE REFUSAL CARD DOWN WITH IT. Every other notice
       //     was cleared here and this one was not, so after a successful admin takeover the
@@ -4108,7 +4167,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           ]);
         }
       },
-    }, password, !!route.params.isLocal);
+    }, password, !!route.params.isLocal), () => converterRef.current);
     client.current = c;
     // Apply the persisted VFO-lock follow mode to the fresh connection.
     c.setFollowMode(vfoLockedRef.current);
@@ -7984,6 +8043,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         serverName={instanceName ?? ''}
         serverUrl={baseUrl}
         onClose={() => setMenuOpen(false)}
+        converter={canConvert ? converter : undefined}
+        onConverter={canConvert ? setConverter : undefined}
         onLocalHardware={isLocal ? () => { setMenuOpen(false); setHwOpen(true); } : undefined}
         radioModel={radioCaps?.model}
         isTcp={!!route.params.isTcp}

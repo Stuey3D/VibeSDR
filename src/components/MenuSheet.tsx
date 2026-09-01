@@ -46,6 +46,10 @@ import { linkDebug } from '../services/linkManager';
 import { APP_VERSION } from '../constants/version';
 import UsbSdrIcon from './UsbSdrIcon';
 import VfoLockIcon from './VfoLockIcon';
+import {
+  CONVERTER_PRESETS, ConverterProfile, HF_CEILING_HZ, V4_WARNING, fromPreset, isIdentity,
+  presetById,
+} from '../services/converter';
 import SectionIcon, { type SectionIconName } from './SectionIcon';
 import { isKiwiProtocol, kiwiFamilyLabel } from '../services/sdrTypes';
 
@@ -228,6 +232,13 @@ export interface MenuSheetProps {
   radioModel?: string;
   /** V4 local hardware: opens the radio's controls submenu (Android only). */
   onLocalHardware?: () => void;
+  /** ★★★ THE CONVERTER IN FRONT OF THE DONGLE — configuration AND its on/off, both here.
+   *  Present only on the paths where the listener owns the converter (local USB, rtl_tcp,
+   *  SpyServer); absent on VibeServer, whose owner sets one once on the radio's setup page and
+   *  whose server then publishes true frequencies, and absent on every other backend for the same
+   *  reason. See converter.ts — correcting a second time is the failure mode. */
+  converter?:   ConverterProfile;
+  onConverter?: (c: ConverterProfile) => void;
   /** RTL-TCP session — footer shows the RTL-TCP icon + label (vs USB for direct). */
   isTcp?:          boolean;
   onAdminLink?:     (path: string, title: string) => void;
@@ -708,7 +719,7 @@ export default function MenuSheet({
   searchBookmarks = [], searchBands = [], onSearchTune,
   userBookmarks = [], currentFreq = 0, currentMode = '',
   onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks, onPickImportFile,
-  onClose, onBack, onLocalHardware, radioModel, isTcp, onAdminLink,
+  onClose, onBack, onLocalHardware, converter, onConverter, radioModel, isTcp, onAdminLink,
   adminSet = false, adminOk = false, adminRefused = false, onAdminUnlock,
   onResetSettings, onReplayTour, onDisplaySettings,
   serverVersion = null, isVibeServer = false, onAbout, onRecordings,
@@ -744,6 +755,11 @@ export default function MenuSheet({
   /** ★ Cleared the moment it is submitted — this gets typed at a club night with people behind
    *  you, the same reason the server screen's box is dots by default. */
   const [menuAdminPw, setMenuAdminPw] = useState('');
+  /** Custom converter LO, as TYPED (MHz). Kept as text so a half-entered "1" is not read as
+   *  1 MHz and applied on every keystroke; committed by the UP/DOWN buttons, which is also where
+   *  the sign is decided. Seeded from the stored profile so reopening the menu shows what is set. */
+  const [convLo, setConvLo] = useState(
+    () => converter && converter.offsetHz ? String(Math.abs(converter.offsetHz) / 1e6) : '');
 
   // Responsive sheet geometry — SHEET_H is a module constant measured in
   // PORTRAIT, so in landscape a bottom-anchored 700pt sheet pokes past the top
@@ -984,6 +1000,78 @@ export default function MenuSheet({
                   header was fixed and this was not, so the menu still announced an RTL-SDR
                   while the panel behind it said Airspy (Stuart, 2026-07-27). */}
               <Btn label={`${radioModel || 'Local SDR'} Controls  \u203a`} full onPress={onLocalHardware} />
+            </>)}
+
+            {/* ── CONVERTER (up/down-converter in front of a LOCAL dongle) ────────────────
+                ★★★ CONFIGURATION AND STATE IN ONE PLACE, but not collapsed into one control.
+                  The preset is set once per dongle and the ENGAGE toggle is flipped whenever the
+                  lead moves — an up-converter is inline and people genuinely swap between HF
+                  through it and direct VHF by unplugging it. The row always NAMES the profile so
+                  that "Converter: on" is never a mystery to someone who set it up weeks ago.
+                ★★ Only rendered on the paths where the listener owns the converter — the parent
+                  gates it, see converter.ts on why correcting twice is the failure mode. */}
+            {converter && onConverter && (<>
+              <SectionLabel label="CONVERTER" icon="hardware" />
+              <BtnRow>
+                {CONVERTER_PRESETS.map(pr => (
+                  <Btn key={pr.id} label={pr.label} active={converter.id === pr.id}
+                       onPress={() => onConverter(pr.id === 'custom'
+                         ? { ...converter, id: 'custom', label: 'Custom' }
+                         : fromPreset(pr, converter))} />
+                ))}
+              </BtnRow>
+              <Text style={styles.kbSkipNote}>{presetById(converter.id)?.hint ?? 'Custom converter'}</Text>
+
+              {converter.id === 'custom' && (<>
+                {/* ★★ ASK FOR A POSITIVE LO AND A DIRECTION, never for a signed number. The stored
+                    field is signed (an up-converter is a down-converter with a negative LO, which
+                    is what makes this one transform instead of two features) — but "enter
+                    −125000000" is a sign error waiting to happen, and the box in the user's hands
+                    is labelled 125 MHz. The sign is applied here, once. */}
+                <View style={styles.adminUnlockRow}>
+                  <TextInput
+                    value={convLo}
+                    onChangeText={setConvLo}
+                    placeholder="LO frequency in MHz, e.g. 125"
+                    placeholderTextColor={C.muted}
+                    keyboardType="decimal-pad"
+                    style={styles.adminUnlockInput}
+                  />
+                </View>
+                <BtnRow>
+                  {/* ★★ THE DIRECTION ALSO SETS WHAT THE CONVERTER PASSES, because that is the
+                      half that decides how far the VFO may go. An up-converter takes HF in and
+                      carries a low-pass filter to keep everything else out, so the app's own HF
+                      ceiling is the honest default. A DOWN-converter's input is its own high band
+                      and we cannot guess it — so it declares none, and the range is merely
+                      shifted rather than clamped to something invented. */}
+                  <Btn label="CONVERTS UP" active={converter.offsetHz <= 0}
+                       onPress={() => onConverter({ ...converter,
+                         offsetHz: -Math.abs(parseFloat(convLo) || 0) * 1e6, label: 'Custom',
+                         inputLoHz: 0, inputHiHz: HF_CEILING_HZ })} />
+                  <Btn label="CONVERTS DOWN" active={converter.offsetHz > 0}
+                       onPress={() => onConverter({ ...converter,
+                         offsetHz: Math.abs(parseFloat(convLo) || 0) * 1e6, label: 'Custom',
+                         inputLoHz: 0, inputHiHz: 0 })} />
+                </BtnRow>
+                <Text style={styles.kbSkipNote}>{V4_WARNING}</Text>
+              </>)}
+
+              {/* ★★★ THE ENGAGE TOGGLE, and it is disabled with no profile set rather than hidden:
+                  a switch that does nothing is confusing, a missing one reads as a missing
+                  feature. `active` shows the CURRENT state, not the action. */}
+              {!isIdentity(converter) && (<>
+                <BtnRow>
+                  <Btn label={converter.engaged ? 'ENGAGED' : 'BYPASSED'} full
+                       active={converter.engaged}
+                       onPress={() => onConverter({ ...converter, engaged: !converter.engaged })} />
+                </BtnRow>
+                <Text style={styles.kbSkipNote}>
+                  {converter.engaged
+                    ? `Tuning is offset by ${(Math.abs(converter.offsetHz) / 1e6)} MHz. Bypass this when you unplug the converter.`
+                    : 'Bypassed — the app tunes the dongle directly. Engage this when the converter is plugged in.'}
+                </Text>
+              </>)}
             </>)}
 
             {/* PROFILE moved to the FREQUENCY popup: on OWRX a profile IS a frequency

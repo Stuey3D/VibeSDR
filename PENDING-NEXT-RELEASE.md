@@ -159,3 +159,30 @@ that could be done — there is nothing else to serve.
 ## 7. Jr
 1.3.1 carries the `.waiting` connect deadline, the IPv4 escalation and the
 `stop()` serialisation. Awaiting Stuart's test before submission.
+
+## Converter support (up/down-converters) — 2026-09-01, IN THE TREE, NOT ON AIR
+Asked for by Sebastian Schmidt by email: a Ham It Up (125 MHz) in front of an
+rtl_tcp receiver. Built in two independent halves that share only the idea.
+
+**Client** (`src/services/converter.ts`, `ConverterBackend.ts`, the CONVERTER
+section in `MenuSheet`): local USB, rtl_tcp and SpyServer only — gated on
+`isLocal && !isVibeServer`. **Server** (`RadioConfig::converterOffsetHz`,
+`tuneHw()`, the setup page): the owner sets it once and the server publishes true
+RF, so no client learns a converter exists.
+
+★★★ NOTHING HAS BEEN TESTED ON A RADIO. Typecheck, `scripts/test-converter.ts`
+(47 checks) and `vibeserver/test-converter.cpp` (20 checks) only. The bench test
+that needs no converter, from BRIEF-converter-support.md §8: set the LO to
+1000 MHz, tune the VFO to 1100 MHz, and broadcast FM must come out of the dongle
+at 100 MHz. Do that before anyone is told the feature exists.
+
+★★ NOT BUILT, deliberately, and the reasons are recorded in `converter.ts` so
+that nobody adds half of it: **inversion** (high-side LNBs) needs the IQ stream
+conjugated in the DSP or every decoder fails, and **LNB presets** would put
+display frequencies above 2^32 across a native bridge that is `uint32_t`
+throughout. No preset ships that needs either.
+
+★ `vibeserver` CMake `project(... VERSION …)` is NOT bumped — do that before any
+apt release or the install is a silent no-op.
+
+★ Reply to Sebastian: he owns the one thing that cannot be tested here.
