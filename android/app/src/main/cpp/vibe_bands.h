@@ -93,6 +93,40 @@ inline const std::vector<NamedBand>& namedBands(int region = 1) {
         { "air",      "VHF airband",        108000000.0,  137000000.0 },
         { "marine",   "Marine VHF",         156000000.0,  162050000.0 },
         { "dab",      "DAB (Band III)",     174000000.0,  240000000.0 },
+        /* ── ABOVE 70cm: WHAT IS UP THERE ─────────────────────────────────────────────────────
+         * ★★★ THIS TABLE STOPPED AT DAB, AND THE DIRECTORY'S DIAL SHOWED IT — everything past
+         *   70 cm was bare, so a receiver advertising 1.7 GHz of coverage drew a ruler with no
+         *   marks on the top two thirds of it (Stuart, 2026-09-01: "that looks pretty bare above
+         *   70cm band at the moment").
+         * ★★★ MIRRORS src/constants/bandPlan.ts, BUT IT IS NOT A COPY OF IT AND MUST NOT BECOME
+         *   ONE. These two tables answer different questions: the app's plan drives TUNING (it
+         *   carries mode and step and splits bands wherever those differ), while this one is a
+         *   NAMED VOCABULARY — the ids are what an owner writes in allowRanges/blockRanges and
+         *   what the directory dial labels. So this list is the coarser of the two on purpose:
+         *   one entry per thing worth naming, no mode, no step, no sub-splits.
+         * ★★ THE TYPE IS DERIVED FROM THE LABEL by gen-bandplan.cpp — "amateur" gives ham,
+         *   "broadcast"/"DAB" gives broadcast, everything else utility. So the word "amateur" in
+         *   these labels is load-bearing, not decoration: drop it and the dial colours the band
+         *   as a utility allocation.
+         * ★ Most of this needs no converter — an ordinary dongle reaches everything up to
+         *   Iridium, which is what makes it worth drawing. */
+        { "wxsat",    "Weather satellites",  137000000.0,  138000000.0 },
+        { "milsat",   "UHF military satcom", 240000000.0,  270000000.0 },
+        { "milsatup", "UHF military satcom uplink", 292000000.0, 318000000.0 },
+        { "sonde",    "Radiosondes",        400150000.0,  406000000.0 },
+        { "adsb",     "ADS-B (Mode S)",    1089000000.0, 1091000000.0 },
+        { "inmarsat", "Inmarsat",          1525000000.0, 1559000000.0 },
+        { "gps",      "GPS L1",            1574000000.0, 1577000000.0 },
+        { "iridium",  "Iridium",           1616000000.0, 1626500000.0 },
+        { "23cm",     "23 cm amateur",     1240000000.0, 1300000000.0 },
+        { "13cm",     "13 cm amateur",     2300000000.0, 2450000000.0 },
+        { "6cm",      "6 cm amateur",      5650000000.0, 5850000000.0 },
+        { "3cm",      "3 cm amateur",     10000000000.0, 10500000000.0 },
+        /* ★ "amateur" IS LOAD-BEARING HERE, not phrasing. gen-bandplan.cpp derives the band's
+         *   TYPE from this label, so "QO-100 narrowband" alone came out coloured as a utility
+         *   allocation on the directory dial when it is an amateur satellite transponder. */
+        { "qo100",    "QO-100 amateur satellite", 10489500000.0, 10490000000.0 },
+        { "1.2cm",    "1.2 cm amateur",   24000000000.0, 24250000000.0 },
     };
     // Where the regions differ. Sources: ITU Radio Regulations Article 5 allocations.
     // ★★★ "FM Broadcast Band", NOT "FM broadcast". A restriction shown as "FM" is ambiguous in a
@@ -113,6 +147,9 @@ inline const std::vector<NamedBand>& namedBands(int region = 1) {
         { "2m",   "2 m amateur",   144000000.0,  146000000.0 },
         { "70cm", "70 cm amateur", 430000000.0,  440000000.0 },
         { "pmr",  "PMR446",        446000000.0,  446200000.0 },
+        // ★ 9cm is the one microwave band the regions genuinely disagree about, so it sits here
+        //   with 2m and 70cm rather than being averaged into a span wrong in every region.
+        { "9cm",  "9 cm amateur", 3400000000.0, 3475000000.0 },
     };
     static const std::vector<NamedBand> kR2 = {
         { "mw",   "AM (medium wave) broadcast", 525000.0, 1705000.0 },
@@ -124,6 +161,8 @@ inline const std::vector<NamedBand>& namedBands(int region = 1) {
         { "2m",   "2 m amateur",   144000000.0,  148000000.0 },
         { "70cm", "70 cm amateur", 420000000.0,  450000000.0 },
         { "frs",  "FRS/GMRS",      462550000.0,  467725000.0 },
+        { "uat",  "ADS-B UAT",      978000000.0,  978000000.0 + 2000000.0 },
+        { "9cm",  "9 cm amateur", 3300000000.0, 3500000000.0 },
     };
     static const std::vector<NamedBand> kR3 = {
         { "mw",   "AM (medium wave) broadcast", 526500.0, 1606500.0 },
@@ -134,6 +173,7 @@ inline const std::vector<NamedBand>& namedBands(int region = 1) {
         { "fm",   "FM Broadcast Band",   87500000.0,  108000000.0 },
         { "2m",   "2 m amateur",   144000000.0,  148000000.0 },
         { "70cm", "70 cm amateur", 430000000.0,  450000000.0 },
+        { "9cm",  "9 cm amateur", 3300000000.0, 3500000000.0 },
     };
     static std::vector<NamedBand> built[4];
     static bool done[4] = { false, false, false, false };
