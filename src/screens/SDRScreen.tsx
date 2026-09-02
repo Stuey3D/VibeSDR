@@ -1958,6 +1958,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!pw) return;
     setAdminRefused(false);
     setAdminFailReason(null);
+    adminAskedAt.current = Date.now();
     // ★★★ THE NONCE MUST COME FROM THE PROCESS THAT WILL CHECK IT. `/vibeserver/auth` hands out a
     //     nonce from the process you ASK, and every radio behind a front door is a SEPARATE
     //     process with its own nonce store — so a challenge proved at the DOOR is meaningless at a
@@ -2725,6 +2726,21 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  fetch is a network problem, and telling somebody their password is wrong when the receiver is
    *  unreachable sends them to change a password that was fine. */
   const [adminFailReason, setAdminFailReason] = useState<null | 'wrong' | 'unreachable'>(null);
+  /* ★★★ WHEN WE LAST ASKED, because the server does not say "refused" and never has. A wrong
+   *   password is answered with {"type":"admin","ok":false} — the same shape as an ordinary state
+   *   broadcast saying we are simply not admin — while the client only raised a refusal on a
+   *   `refused` flag that nothing sends. So a rejected password was indistinguishable from silence,
+   *   which is precisely what Stuart met: "There is no warning if a password is entered
+   *   incorrectly."
+   * ★★ FIXED HERE RATHER THAN IN THE SERVER, deliberately. Adding a field to the reply would only
+   *   help receivers whose owners had upgraded — and a server upgrades when its owner decides to,
+   *   which is the same reasoning the directory's two publisher shapes already forced on us. This
+   *   works against every VibeServer in the field today, including 4.1.x on somebody's Pi.
+   * ★ Time-boxed, because `admin` messages also arrive UNSOLICITED as state. Only an ok:false that
+   *   lands shortly after WE asked is a refusal; otherwise every routine broadcast would flash a
+   *   warning at a listener who never typed anything. Cleared once consumed so one attempt cannot
+   *   colour a second, later message. */
+  const adminAskedAt = useRef(0);
   /** ★★ A transient line for something that happened TO the admin session, as opposed to something
    *  the user did. Losing admin to a more recent login is not a fault and not a refusal, so it
    *  gets neither the refusal card (which is terminal and offers a retry) nor silence (which is
@@ -3977,8 +3993,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         //     with the countdown carrying on unchanged from where it was). Whoever stops a clock
         //     has to stop the thing that WINDS it.
         if (st.ok) { setSessionEndsAt(null); setSessionLeftMs(null); }
-        if (st.refused) { setAdminRefused(true); setAdminFailReason('wrong'); }
-        if (st.ok) { setAdminRefused(false); setAdminFailReason(null); }
+        if (st.refused) { setAdminRefused(true); setAdminFailReason('wrong'); adminAskedAt.current = 0; }
+        else if (!st.ok && adminAskedAt.current && Date.now() - adminAskedAt.current < 10000) {
+          // ★ We asked, and the answer is "not admin". On every server that ships today that IS
+          //   the refusal — see the note on adminAskedAt.
+          setAdminRefused(true); setAdminFailReason('wrong'); adminAskedAt.current = 0;
+        }
+        if (st.ok) { setAdminRefused(false); setAdminFailReason(null); adminAskedAt.current = 0; }
         // ★★★ SUPERSEDED — an owner unlocked more recently somewhere else. Let the credential go,
         //     for the same reason as onEvicted: a ticket we keep is one the next reconnect
         //     replays, and replaying it takes the radio back off the person who just claimed it.
