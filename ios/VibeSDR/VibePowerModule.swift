@@ -85,6 +85,16 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   /// Weak: the bridge owns the module's lifetime and may recreate it on reload.
   static weak var shared: VibePowerModule?
 
+  /* ★★★ IS ANY *REAL* AUDIO RUNNING? Asked by the silent keep-alive before it hands the audio
+   *   session back — see vibeStopSilentAudio. Releasing the session while a receiver is playing
+   *   would cut the listener off mid-station, and holding it when nothing is playing is what
+   *   parked VibeSDR in CarPlay's Now Playing over somebody's music.
+   * ★ All four paths, because "playing" is true of any of them: the UberSDR engine, the external
+   *   PCM path (OWRX/Kiwi), FM-DX, and the engine itself still running. */
+  var audioIsLive: Bool {
+    isRunning || externalAudio || fmdxAudio || (audioEngine?.isRunning ?? false)
+  }
+
   /// Called from VibeKeyWindow. No-ops harmlessly before JS has subscribed.
   /// ★ `plain` is false when the name was SYNTHESISED — an arrow that came from the `< > - +`
   /// aliases, or one that only arrived because a modifier was held. The Full Keyboard Access

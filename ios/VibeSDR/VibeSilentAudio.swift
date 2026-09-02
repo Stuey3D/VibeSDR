@@ -167,8 +167,19 @@ private func _startEngine() {
  *   VibeSDR in Now Playing over whatever the user was actually listening to, and costs battery for
  *   a job that finished minutes ago. The caller starts it for the length of a connect and stops it
  *   the moment the real audio takes over (or the connect fails).
- * ★ The session is NOT deactivated: AppDelegate makes it active at launch so we appear in Now
- *   Playing at all, and tearing that down here would be reaching outside this file's business. */
+ * ★★★ AND IT NOW HANDS THE SESSION BACK, which is the other half of not stealing somebody's music.
+ *   This used to say the session is deliberately left active "because AppDelegate makes it active
+ *   at launch" — and that launch activation has been REMOVED, precisely because activating a
+ *   non-mixing .playback session before we have anything to play interrupts whatever the phone was
+ *   doing. With it gone, nothing else would ever release the session, so the file that takes it
+ *   must be the file that returns it. Activation and deactivation now live together.
+ * ★★ `.notifyOthersOnDeactivation` is the part the user actually feels: it is what tells Apple
+ *    Music it may resume. Without it the other app stays paused and CarPlay keeps showing a
+ *    receiver that stopped playing minutes ago. Stuart, 2026-09-02, on a drive: "the now playing
+ *    keeps trying to default to VibeSDR even though I had been playing my Apple Music."
+ * ★★★ ONLY WHEN NOTHING REAL IS PLAYING. The caller stops this the moment real audio takes over,
+ *     so an unconditional deactivate here would cut the listener off at the exact moment their
+ *     station started. audioIsLive covers all four paths. */
 func vibeStopSilentAudio() {
   _wakeTimer?.invalidate()
   _wakeTimer = nil
@@ -177,6 +188,9 @@ func vibeStopSilentAudio() {
   _audioEngine?.stop()
   _playerNode  = nil
   _audioEngine = nil
+  if VibePowerModule.shared?.audioIsLive != true {
+    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+  }
 }
 
 private var _observersAdded = false

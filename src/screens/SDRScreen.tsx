@@ -159,6 +159,7 @@ import { markServerPrefsReset, setActiveSyncServer } from '../services/perServer
 import * as DocumentPicker from 'expo-document-picker';
 // SDK 56 moved readAsStringAsync to the legacy entry (new File API otherwise).
 import * as FileSystem from 'expo-file-system/legacy';
+import { crumb } from '../services/crumbs';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -1411,6 +1412,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   // watch waking the phone) fires no `change` event, so assuming foreground here made
   // the app behave as though someone were looking at it.
   const appActiveRef  = useRef(AppState.currentState === 'active');
+  /* ★ DID THIS SCREEN EVEN MOUNT? The black screen after a VibeServer connect shows a screen stack
+   *  holding ~6 views where a healthy SDR screen is hundreds, and nothing so far distinguishes
+   *  "SDRScreen mounted and rendered nothing" from "SDRScreen never mounted". One crumb does. */
+  useEffect(() => {
+    crumb(`SDRScreen mounted (type=${route.params?.serverType ?? '?'} local=${!!route.params?.isLocal})`);
+    return () => crumb('SDRScreen UNMOUNTED');
+  }, []);
   // Returning from the background: the spectrum was deliberately paused, so the
   // link reads 0 for a moment while the waterfall re-subscribes. Show a calm
   // "reinitialising" notice instead of the alarming "connection lost" one, and

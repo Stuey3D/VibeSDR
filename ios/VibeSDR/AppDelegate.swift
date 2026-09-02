@@ -15,10 +15,24 @@ class AppDelegate: ExpoAppDelegate {
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
-    // Register as audio app at launch so iOS tracks us for Now Playing / lock screen controls.
-    // Must be done before any audio starts — omitting this was preventing media controls from appearing.
+    /* Register as an audio app at launch so iOS tracks us for Now Playing / lock screen controls.
+     * Must be done before any audio starts — omitting this was preventing media controls appearing.
+     *
+     * ★★★ BUT DO NOT ACTIVATE THE SESSION HERE, AND THIS IS WHY CARPLAY KEPT SWITCHING TO US.
+     *     `.playback` does not mix, so `setActive(true)` INTERRUPTS whatever is playing and takes
+     *     Now Playing with it. Doing that at launch would be rude in any app; in this one it is
+     *     much worse, because we are launched HEADLESS every time Buddy pokes the phone — so a
+     *     drive with Apple Music on became: wrist wakes the phone, VibeSDR silently seizes the
+     *     audio session, and CarPlay swaps to a receiver that is not playing anything.
+     *     Stuart, 2026-09-02: "the now playing keeps trying to default to VibeSDR even though I
+     *     had been playing my Apple Music on the drive previously."
+     * ★★ NOTHING IS LOST. setCategory alone is what declares how we behave; ACTIVATION is what
+     *    claims the route, and the six paths that actually start audio each activate their own
+     *    session already (VibePowerModule x5, VibeSilentAudio x2). So controls still appear the
+     *    moment there is something to control — which is the only moment they should.
+     * ★ The rule this belongs to: never take a shared resource before you have a use for it. A
+     *   headless launch must be inaudible and invisible to the rest of the phone. */
     try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-    try? AVAudioSession.sharedInstance().setActive(true)
 
     /* ★★★ THE FIRST CRUMB, AND THE MOST IMPORTANT ONE. A watch-woken launch is HEADLESS: the
      *   state here is `B`, and every theory about the black screen turns on whether that is so.
@@ -272,6 +286,10 @@ class VibeKeyWindow: UIWindow {
   }
 }
 
+private extension Optional where Wrapped == String {
+  var isNilOrEmpty: Bool { self?.isEmpty ?? true }
+}
+
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
   var window: UIWindow?
 
@@ -426,16 +444,30 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
    *    identity in the class name, so this distinguishes them in one line — and alpha/hidden catch
    *    the case where the real tree IS mounted but something opaque sits on top of it.
    * ★ Depth-capped and count-capped: this is a diagnostic on a hot path, not a dump. */
-  private func hierarchy(_ w: UIWindow, limit: Int = 18) -> String {
+  /* ★★ THE CAPS WERE TOO TIGHT AND THE DUMP LIED. At depth 4 sat RNSScreenStackView — exactly the
+   *  node whose CHILDREN are the question — so the walk stopped there and the output read as "the
+   *  navigator is rendering no screens at all". It was rendering some; I simply refused to look.
+   *  (`viewsTotal` in describe() has no cap and was right all along: 12 views against a healthy
+   *  441-565, so ~6 of them are below this line and unaccounted for.)
+   * ★ Deep enough to reach a screen's actual content, and still bounded — a diagnostic, not a dump. */
+  private func hierarchy(_ w: UIWindow, limit: Int = 60) -> String {
     var out: [String] = []
     func walk(_ v: UIView, _ depth: Int) {
-      if out.count >= limit || depth > 4 { return }
+      if out.count >= limit || depth > 12 { return }
       let f = v.frame
+      /* ★ Any TEXT the view carries, because that is what names the screen. A picker mid-load, a
+       *  crash message and an empty SDR screen are three different bugs with the same shape, and
+       *  one label tells them apart instantly. */
+      var label = ""
+      if let l = v as? UILabel, let t = l.text, !t.isEmpty { label = "|\"\(t.prefix(24))\"" }
+      else if !v.accessibilityIdentifier.isNilOrEmpty { label = "|#\(v.accessibilityIdentifier!)" }
+      else if let a = v.accessibilityLabel, !a.isEmpty { label = "|@\(a.prefix(24))" }
       out.append("\(String(repeating: ".", count: depth))\(type(of: v))"
                  + "[\(Int(f.width))x\(Int(f.height))]"
                  + (v.isHidden ? "|HID" : "")
                  + (v.alpha < 0.99 ? "|a\(String(format: "%.2f", v.alpha))" : "")
-                 + (v.backgroundColor == nil ? "" : "|bg"))
+                 + (v.backgroundColor == nil ? "" : "|bg")
+                 + label)
       for s in v.subviews { walk(s, depth + 1) }
     }
     if let rv = w.rootViewController?.view { walk(rv, 0) }

@@ -784,7 +784,21 @@ export default function App() {
       <ThemeProvider>
       <View style={{ flex: 1, backgroundColor: '#080601' }}>
         <CrashBoundary>
-        <NavigationContainer ref={navigationRef}>
+        <NavigationContainer
+          ref={navigationRef}
+          /* ★★★ WHAT THE NAVIGATOR ACTUALLY THINKS IT IS SHOWING, on every change.
+           *   The native tree dump says the screen stack holds a screen with ~6 views in it where a
+           *   healthy one has hundreds, and SDRScreen has no early return that could produce that —
+           *   so the question is no longer "what is drawn" but "what route is mounted at all".
+           *   This answers it in one line and costs nothing: navigation state changes are rare.
+           * ★ Route NAMES only. Params carry a PIN on the VibeServer path and must never reach a
+           *   log file the user may send us. */
+          onStateChange={(st) => {
+            try {
+              const names = (st?.routes ?? []).map((r: { name: string }) => r.name).join(' > ');
+              crumb(`nav: [${names}] index=${st?.index ?? '?'}`);
+            } catch {}
+          }}>
           <StatusBar style="light" />
           <Stack.Navigator
             initialRouteName="InstancePicker"
