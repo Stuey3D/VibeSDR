@@ -2419,7 +2419,20 @@ struct LocalSdrShim::Impl {
     double sampleRate = 2400000.0;
     int    fftSize    = 1024;
     double fftRate    = 20.0;
-    std::atomic<double> rtlCenter{100000000.0}; // RTL tuned (dongle) centre — the DC of the capture
+    /* ★★★ TRUE RF, NOT THE DONGLE'S FREQUENCY — and the old comment here said the opposite.
+     *   It read "RTL tuned (dongle) centre — the DC of the capture", which was true for years
+     *   because the two were the same number. With a converter fitted they are 125 MHz apart, and
+     *   this holds the LOGICAL one: every caller stores the same value it hands to tuneHw(), and
+     *   tuneHw's argument is documented as TRUE RF ("the single line where a frequency stops being
+     *   that"). See flushPendingDongle: `rtlCenter.store(dongle); tuneHw(dongle);`.
+     * ★★ WHICH IS WHY setConverterOffset's re-tune is right to pass it: tuneHw(rtlCenter) parks the
+     *   hardware at the new IF while every listener stays on the frequency they were reading.
+     * ★★★ SAID OUT LOUD BECAUSE A VARIABLE WHOSE DOMAIN IS UNOBVIOUS IS HOW THE CLIENT SIDE BROKE
+     *   THE SAME NIGHT THIS WAS CHECKED (2026-09-02): `status.frequency` changed from hardware Hz
+     *   to display Hz and a prop that fed the audio socket silently started tuning the dongle
+     *   100 MHz low. The name is kept — it is used in dozens of places — so the comment has to
+     *   carry the meaning. */
+    std::atomic<double> rtlCenter{100000000.0};
     // Last hardware retune caused by a view move (ms). See the zoom handler: a
     // PLL relock per pan message breaks the audio.
     long long lastDongleMoveMs = 0;
