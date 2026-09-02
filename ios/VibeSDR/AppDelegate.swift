@@ -409,10 +409,60 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     guard let w = window else { VibeCrumbs.log("scene didBecomeActive — NO WINDOW"); return }
     VibeCrumbs.log("scene didBecomeActive — \(describe(w))")
     VibeCrumbs.log("tree: \(hierarchy(w))")
+    kickScreenStack(w)
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
       guard let self, let w = self.window else { return }
       VibeCrumbs.log("scene +600ms — \(self.describe(w))")
     }
+  }
+
+  /* ★★★ RE-RUN react-native-screens' DEFERRED PUSH, WHICH IS THE BLACK SCREEN.
+   *
+   *  Measured, build 237: on a watch-driven VibeServer connect React does everything correctly —
+   *  "SDRScreen mounted", "nav: [InstancePicker > SDR] index=1" — and the native tree shows
+   *  RNSScreenStackView > UILayoutContainerView > UINavigationTransitionView >
+   *  UIViewControllerWrapperView with NOTHING INSIDE IT. 12 views where a healthy screen is 441+.
+   *  The JS stack is right and the UIKit stack is empty.
+   *
+   *  RNSScreenStack.mm:599 `updateContainer` returns early when the view has no window, and defers
+   *  again while a transitionCoordinator is running; RNSScreenStack.mm:298
+   *  `maybeAddToParentAndUpdateContainer` is its ONLY retry, and it is driven by `didMoveToWindow`.
+   *  A push that happens while we are HEADLESS — which is every Buddy-driven connect — is deferred,
+   *  and because the window never changes afterwards, didMoveToWindow never fires again and the
+   *  push is simply never applied. The session runs (audio and spectrum are native, which is why
+   *  the wrist works perfectly) and the phone shows an empty navigation controller.
+   *
+   * ★★ SO CALL THAT HOOK OURSELVES, once, when we come forward. didMoveToWindow is public API and
+   *    the path behind it is idempotent: updateContainer's first act is to compare the controller
+   *    list and return if it already matches, so on a healthy launch this costs one comparison.
+   * ★★★ AND IT DOES NOT REMOUNT REACT. That is the whole reason to do it here rather than
+   *     re-dispatching navigation state from JS: resetRoot with the same state would tear down and
+   *     rebuild SDRScreen, killing the live session and the audio with it — fixing the picture by
+   *     dropping the listener. This touches only UIKit containment.
+   *  ★ This is what commit fb3deac2 was reaching for and could not find. Its conclusion — "the root
+   *    view is built in a background scene and never draws" — was wrong about the WINDOW (scene,
+   *    key window and rootVC are healthy in every capture) and right about the shape one layer
+   *    down, at the screen stack. */
+  private func kickScreenStack(_ w: UIWindow) {
+    guard let root = w.rootViewController?.view else { return }
+    var kicked = 0
+    func walk(_ v: UIView) {
+      if String(describing: type(of: v)) == "RNSScreenStackView" {
+        v.didMoveToWindow()
+        kicked += 1
+      }
+      for s in v.subviews { walk(s) }
+    }
+    walk(root)
+    guard kicked > 0 else { VibeCrumbs.log("kick: no RNSScreenStackView found"); return }
+    // ★ Say whether it WORKED, with the same number the fault was diagnosed by. A fix that cannot
+    //   be seen in the next capture is a fix nobody can confirm.
+    let after = { () -> Int in
+      var n = 0
+      func c(_ v: UIView) { n += 1; for s in v.subviews { c(s) } }
+      c(root); return n
+    }()
+    VibeCrumbs.log("kick: nudged \(kicked) screen stack(s), viewsTotal now \(after)")
   }
 
   /// One line describing whether this window can possibly be showing anything: is it in a scene,
