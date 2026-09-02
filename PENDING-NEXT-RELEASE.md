@@ -170,6 +170,12 @@ section in `MenuSheet`): local USB, rtl_tcp and SpyServer only — gated on
 `tuneHw()`, the setup page): the owner sets it once and the server publishes true
 RF, so no client learns a converter exists.
 
+★★★ SHIPPING IN 10.5 — Stuart, 2026-09-02: "the converter dialogue needs to ship in this build."
+So this is no longer a "before anyone is told it exists" item; it is a RELEASE GATE. The server
+half is already on air in 4.1.55 (all three servers), including the setup page's model
+quick-picks. The client half ships with the store build.
+▶ THE BENCH TEST BELOW IS THE OUTSTANDING GATE, and it needs no converter hardware.
+
 ★★★ NOTHING HAS BEEN TESTED ON A RADIO. Typecheck, `scripts/test-converter.ts`
 (47 checks) and `vibeserver/test-converter.cpp` (20 checks) only. The bench test
 that needs no converter, from BRIEF-converter-support.md §8: set the LO to
