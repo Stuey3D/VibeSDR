@@ -116,6 +116,7 @@ import { APP_VERSION } from '../constants/version';
 import { DIRECTORIES, fetchDirectory, type DirectoryId } from '../services/directories';
 import { startMdnsDiscovery, type DiscoveredServer } from '../services/mdns';
 import { resolveVibeAuth } from '../services/vibeAuth';
+import { crumb } from '../services/crumbs';
 import { rtlTcpServerSupported } from '../services/rtlTcpServer';
 
 // Per-backend logo for the directory cards + per-instance type icon (receiverbook
@@ -250,6 +251,11 @@ type ListItem =
   | { kind: 'header';   groupKey: string; label: string; count: number; collapsible: boolean; collapsed: boolean };
 
 export default function InstancePickerScreen({ navigation, route }: Props) {
+  /* ★★ MOUNT, not render — this tells "the screen never appeared" apart from "it appeared and did
+   *  nothing", which is the difference between a broken navigation reset and a broken connect.
+   *  It also records whether autoVibe arrived WITH the mount, which is the watch-boot ordering. */
+  useEffect(() => { crumb(`picker mounted (autoVibe=${route.params?.autoVibe ? 'yes' : 'no'})`); }, []);
+
   // Bottom safe-area inset, so the lists can clear the home indicator. A flat paddingBottom:40 left
   // the KiwiSDR-warning footer (and the FM-DX directory toggle) clipped under it on both the 17PM and
   // the SE — see the list contentContainerStyles below.
@@ -718,9 +724,14 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     //   fallback for the paths that never probed (mDNS discovery on a LAN).
     const baseUrl = base || `http://${host}:${port}`;
     let authSuffix = '';
+    /* ★★ resolveVibeAuth is a LAN fetch, and it is the one step UberSDR's path does not have —
+     *  named in the open-issue notes as part of what makes this route different. Bracketed by
+     *  crumbs so a slow or failing auth is visible as a DURATION, not inferred. */
+    crumb(`connectVibeServer ${baseUrl} — resolving auth`);
     try {
       authSuffix = await resolveVibeAuth(baseUrl, pin);
     } catch {
+      crumb('connectVibeServer: AUTH FAILED');
       setConnecting(false);
       // ★ Same rule as the autoVibe probe above: a connect that ends in an alert on the phone must
       //   not leave a watch drawing "Starting VibeSDR…" for a session that will never begin.
@@ -730,6 +741,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       Alert.alert('VibeServer', `Could not reach ${host}:${port}. Is it on the same network?`);
       return;
     }
+    crumb('connectVibeServer: auth resolved, navigating to SDR');
     setConnecting(false);
     navigation.navigate('SDR', {
       baseUrl, instanceName: name, viewMode,
@@ -974,7 +986,15 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const autoVibe = route.params?.autoVibe;
   useEffect(() => {
     if (!autoVibe) { autoVibeFired.current = false; return; }
-    if (autoVibeFired.current || connecting) return;
+    /* ★★★ THE TWO SILENT SWALLOWS. `connecting` being true bounces the trigger and — because the
+     *   param is cleared below only on the paths that RUN — a bounced autoVibe is simply gone: the
+     *   wrist waits on a phone that has forgotten it was asked. Both are prime candidates for
+     *   "VibeServer needs several attempts", so both get a crumb naming WHICH guard ate it. */
+    if (autoVibeFired.current || connecting) {
+      crumb(`autoVibe SWALLOWED (fired=${autoVibeFired.current} connecting=${connecting})`);
+      return;
+    }
+    crumb(`autoVibe start url=${autoVibe.url}`);
     autoVibeFired.current = true;
     /* ★★★ THIS EFFECT USED TO CANCEL ITSELF, EVERY TIME. It cleared its own trigger param here and
      *   guarded the async work with a `cancelled` flag set from the cleanup — but clearing the
@@ -1000,8 +1020,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         host = u.hostname;
         port = u.port ? parseInt(u.port, 10) : (u.protocol === 'http:' ? 80 : 443);
       } catch { host = door; }
-      if (!host) return;
+      if (!host) { crumb('autoVibe: NO HOST parsed, giving up'); return; }
       let needsPin = true;
+      crumb(`autoVibe: probing PIN at ${door}`);
       try { needsPin = await vibeServerNeedsPin(door); }
       catch {
         /* ★★★ AND TELL THE WATCH, or it waits for ever. applyInstance set the phone to "starting"
@@ -1011,6 +1032,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
          *   "it gets stuck waiting for VibeSDR and never recovers."
          * ★★ 'pick' rather than a bare stop: it puts Buddy back on the server list, which is both
          *   true (that is where this phone now is) and the one place the wearer can act. */
+        crumb(`autoVibe: PIN PROBE FAILED for ${door} — attempt over`);
         watchProvider.setPhoneStatus('pick');
         watchTargetPending.claimed = false;
         watchProvider.holdAwake(false);   // the attempt is over — see watchProvider.holdAwake
@@ -1032,7 +1054,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         const key = `vs_pin:${host}:${port}`;
         let saved = '';
         try { saved = (await AsyncStorage.getItem(key)) ?? ''; } catch {}
-        if (saved) { connectVibeServer(host, port, autoVibe.name, saved, autoVibe.url); return; }
+        if (saved) { crumb('autoVibe: saved PIN, connecting'); connectVibeServer(host, port, autoVibe.name, saved, autoVibe.url); return; }
+        crumb('autoVibe: PIN needed, asking the wrist');
         watchProvider.setPinHandler((pin) => {
           const p = (pin || '').trim();
           if (!p) {                       // cancelled on the wrist — end the attempt cleanly
@@ -1047,6 +1070,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         watchProvider.requestPin(autoVibe.name);
         return;
       }
+      crumb('autoVibe: no PIN needed, opening');
       openVibeServer(host, port, autoVibe.name, needsPin, autoVibe.url);
     })();
   }, [autoVibe, connecting, navigation, openVibeServer]);

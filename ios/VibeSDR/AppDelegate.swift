@@ -20,6 +20,12 @@ class AppDelegate: ExpoAppDelegate {
     try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
     try? AVAudioSession.sharedInstance().setActive(true)
 
+    /* ★★★ THE FIRST CRUMB, AND THE MOST IMPORTANT ONE. A watch-woken launch is HEADLESS: the
+     *   state here is `B`, and every theory about the black screen turns on whether that is so.
+     *   See VibeCrumbs — this goes to Documents/boot-crumbs.log, because our NSLog is not
+     *   readable off Stuart's device and the unified-log archive is too short to catch a launch. */
+    VibeCrumbs.session(launchOptions?.isEmpty == false ? "with options" : "plain")
+
     let delegate = ReactNativeDelegate()
     let factory = ExpoReactNativeFactory(delegate: delegate)
     delegate.dependencyProvider = RCTAppDependencyProvider()
@@ -304,6 +310,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
      *   to a fresh scene would make it deterministic rather than occasional, and I added it while
      *   trying to fix this. Re-parenting first is the correction. */
     if let existing = self.window {
+      VibeCrumbs.log("scene willConnect — REUSE, re-parenting existing RN window")
       NSLog("[VibeSDR] scene reconnect — re-parenting the existing RN window to the new scene")
       existing.windowScene = windowScene
       existing.isHidden = false
@@ -311,6 +318,10 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
       appDelegate.window = existing
       return
     }
+    /* ★★ `activationState` rather than UIApplication.applicationState: a scene knows its OWN
+     *  state, and on a headless launch the two can disagree. If this says background, the root
+     *  view is being built where nothing draws — which is the theory on trial. */
+    VibeCrumbs.log("scene willConnect — FRESH, sceneState=\(windowScene.activationState.rawValue)")
     NSLog("[VibeSDR] scene connect — starting React Native")
 
     let window = VibeKeyWindow(windowScene: windowScene)
@@ -334,6 +345,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     window.installScrollRecognizer()
     self.window = window
     appDelegate.window = window
+    VibeCrumbs.log("startReactNative returned — \(describe(window))")
 
     // Universal links (https) still arrive as user activities.
     for activity in connectionOptions.userActivities {
@@ -357,12 +369,46 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
    *    pass. Cheap, idempotent, and a no-op on a normal launch where the frame already exists. */
   func sceneWillEnterForeground(_ scene: UIScene) {
     guard let w = window else { return }
+    VibeCrumbs.log("scene willEnterForeground — before nudge: \(describe(w))")
     NSLog("[VibeSDR] scene entering foreground — nudging the root view to draw")
     w.isHidden = false
     w.makeKeyAndVisible()
     w.rootViewController?.view.setNeedsLayout()
     w.rootViewController?.view.layoutIfNeeded()
     w.setNeedsLayout()
+    VibeCrumbs.log("scene willEnterForeground — after nudge:  \(describe(w))")
+  }
+
+  /* ★★★ THE CRUMB THAT ANSWERS THE QUESTION. `didBecomeActive` is the moment the user is LOOKING
+   *   at the screen, so what this records is literally what they are seeing. If the black screen is
+   *   "the root view never drew", this line says so out loud: a zero frame, a missing
+   *   rootViewController, or a root view with NO SUBVIEWS while the app is plainly alive and
+   *   feeding the watch. If instead everything here reads healthy, the launch-image theory in
+   *   commit fb3deac2 is dead and the fault is above us in React.
+   * ★ Deferred one runloop turn as well as sampled immediately: a frame that arrives late is a
+   *   different fault from one that never arrives, and only two readings can tell them apart. */
+  func sceneDidBecomeActive(_ scene: UIScene) {
+    guard let w = window else { VibeCrumbs.log("scene didBecomeActive — NO WINDOW"); return }
+    VibeCrumbs.log("scene didBecomeActive — \(describe(w))")
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+      guard let w = self?.window else { return }
+      VibeCrumbs.log("scene +600ms — \(describe(w))")
+    }
+  }
+
+  /// One line describing whether this window can possibly be showing anything: is it in a scene,
+  /// is it key, is it hidden, what size is it, and does the React root view have any content yet.
+  private func describe(_ w: UIWindow) -> String {
+    let rv = w.rootViewController?.view
+    let kids = rv?.subviews.count ?? -1
+    let deepest = rv.map { v -> Int in
+      var n = 0
+      func walk(_ v: UIView) { n += 1; for s in v.subviews { walk(s) } }
+      walk(v); return n
+    } ?? -1
+    return "scene=\(w.windowScene == nil ? "NIL" : "set") key=\(w.isKeyWindow) hidden=\(w.isHidden) "
+         + "alpha=\(w.alpha) size=\(Int(w.bounds.width))x\(Int(w.bounds.height)) "
+         + "rootVC=\(w.rootViewController == nil ? "NIL" : "yes") rootSubviews=\(kids) viewsTotal=\(deepest)"
   }
 
   /// The scene went away — EITHER the user swiped the app out of the switcher OR the system
@@ -370,6 +416,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
   /// sceneDisconnected() tells them apart by checking whether we are still alive afterwards.
   /// See the note on VibeWatchModule.sceneDisconnected.
   func sceneDidDisconnect(_ scene: UIScene) {
+    VibeCrumbs.log("scene didDisconnect")
     NSLog("[VibeSDR] scene disconnected (state=%ld)", UIApplication.shared.applicationState.rawValue)
     window = nil
     VibeWatchModule.sceneDisconnected()

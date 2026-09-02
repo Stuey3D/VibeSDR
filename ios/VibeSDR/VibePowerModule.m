@@ -55,6 +55,12 @@ RCT_EXTERN_METHOD(getLocation:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromi
 RCT_EXTERN_METHOD(setArtwork:(NSString *)serverType)
 RCT_EXTERN_METHOD(setStationLogo:(NSString *)url)
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(getDebugInfoSync)
+// ★★★ BOOT BREADCRUMBS. Exported here as well as declared in Swift — a Swift @objc func that is
+//     not listed in this file is simply NOT THERE as far as JS is concerned, and calling it gets
+//     `undefined`, silently. That has cost us twice.
+RCT_EXTERN_METHOD(breadcrumb:(NSString *)line)
+RCT_EXTERN_METHOD(getCrumbs:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(clearCrumbs)
 RCT_EXTERN_METHOD(startDiscovery)
 RCT_EXTERN_METHOD(stopDiscovery)
 @end

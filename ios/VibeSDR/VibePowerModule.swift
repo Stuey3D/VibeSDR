@@ -1351,6 +1351,31 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     playerNode?.volume = Float(max(0, min(1, volume)))
   }
 
+  // MARK: - Breadcrumbs (see VibeCrumbs at the foot of this file)
+
+  /// JS writes a boot breadcrumb. Same file, same format, same clock as the native ones, so the
+  /// scene lifecycle and the React/connect sequence interleave in ONE readable timeline — which is
+  /// the entire point: the open question is what happens between the scene connecting and a frame
+  /// being drawn, and that gap has native on one side of it and JS on the other.
+  @objc func breadcrumb(_ line: String) {
+    VibeCrumbs.log("js: \(line)")
+  }
+
+  /// Read the crumbs back INSIDE the app, so Diagnostics can show them without a cable. The file
+  /// is the primary route (devicectl, off a TestFlight build, no signing); this is the fallback
+  /// for when Stuart has the phone and not the Mac.
+  @objc func getCrumbs(_ resolve: @escaping RCTPromiseResolveBlock,
+                       rejecter reject: @escaping RCTPromiseRejectBlock) {
+    guard let url = VibeCrumbs.fileURL, let s = try? String(contentsOf: url, encoding: .utf8) else {
+      resolve(""); return
+    }
+    resolve(s)
+  }
+
+  @objc func clearCrumbs() {
+    if let url = VibeCrumbs.fileURL { try? FileManager.default.removeItem(at: url) }
+  }
+
   @objc func getDebugInfoSync() -> String {
     let eng = audioEngine != nil ? "yes" : "no"
     let dec = opusDecoder != nil ? "yes" : "no"
@@ -3276,4 +3301,98 @@ enum VibeCrashLog {
   }
 
   static func clear() { UserDefaults.standard.removeObject(forKey: key) }
+}
+
+// MARK: - Boot breadcrumbs
+
+/* ★★★ NSLog IS NOT READABLE OFF THIS DEVICE. THE Documents FOLDER IS.
+ *
+ *  Every piece of instrumentation added on 2026-09-01 to chase the Buddy-driven black screen was
+ *  invisible: three separate log captures contained not one of our NSLog lines (Apple's own
+ *  subsystems come through fine, Expo's come through as `<private>`), and the unified-log archive
+ *  is only a ~20–45 second live buffer whatever --age-limit you ask for, so a LAUNCH is exactly
+ *  the thing you cannot catch. Six theories about the black screen were built on no measurement
+ *  at all, and one of them was drawn from the ABSENCE of a line that could never have appeared.
+ *
+ *  `UIFileSharingEnabled` is already true in our Info.plist, so Documents is listable and copyable
+ *  off a TestFlight build with no dev signing at all:
+ *
+ *    xcrun devicectl device info files --device <UUID> \
+ *      --domain-type appDataContainer --domain-identifier com.vibesdr.app --username mobile
+ *
+ *  So breadcrumbs go in a FILE. No buffer, no redaction, no timing race, and readable minutes or
+ *  hours after the reproduce instead of within seconds of it.
+ *
+ * ★★ EVERY LINE CARRIES THE APPLICATION STATE, because that is the whole question: the theory on
+ *    trial is that a watch-woken launch builds the root view in a BACKGROUND scene and never draws.
+ *    A crumb that does not say which state it was written in cannot answer it.
+ * ★ Appends, with a bounded size — a log that grows without limit on a user's phone is a bug of
+ *    its own, and a log that is truncated at the START loses the launch, which is the part we came
+ *    for. So it trims the OLDEST half when it gets big.
+ * ★ Serialised on its own queue: crumbs come from the main thread, the watch queue and JS. */
+@objc class VibeCrumbs: NSObject {
+
+  private static let q = DispatchQueue(label: "com.vibesdr.crumbs")
+  private static let maxBytes = 256 * 1024
+
+  static var fileURL: URL? {
+    FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
+      .appendingPathComponent("boot-crumbs.log")
+  }
+
+  /// UIApplication.applicationState is main-thread-only, so it is sampled by whoever is on the
+  /// main thread and passed in — never read from the writer queue.
+  private static func stateLetter() -> String {
+    guard Thread.isMainThread else { return "?" }
+    switch UIApplication.shared.applicationState {
+    case .active:     return "A"     // foreground, receiving events
+    case .inactive:   return "I"     // foreground, not receiving (mid-transition)
+    case .background: return "B"     // ★ the one that matters — a headless, watch-woken launch
+    @unknown default: return "?"
+    }
+  }
+
+  private static let stamp: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "HH:mm:ss.SSS"
+    return f
+  }()
+
+  @objc static func log(_ line: String) {
+    let s = stateLetter()
+    let t = stamp.string(from: Date())
+    // Also NSLog it: useless on Stuart's device, but free, and it is what a simulator run reads.
+    NSLog("[crumb] %@ %@", s, line)
+    q.async {
+      guard let url = fileURL else { return }
+      let text = "\(t) [\(s)] \(line)\n"
+      guard let data = text.data(using: .utf8) else { return }
+      if let h = try? FileHandle(forWritingTo: url) {
+        defer { try? h.close() }
+        _ = try? h.seekToEnd()
+        try? h.write(contentsOf: data)
+      } else {
+        try? data.write(to: url)
+      }
+      trimIfHuge(url)
+    }
+  }
+
+  /// ★ Trims the OLDEST half, never the newest — the launch we are chasing is at the top of a
+  ///   session but a session boundary is the thing worth keeping, so half a file is the compromise.
+  private static func trimIfHuge(_ url: URL) {
+    guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+          let size = attrs[.size] as? UInt64, size > maxBytes else { return }
+    guard let data = try? Data(contentsOf: url) else { return }
+    let keep = data.suffix(maxBytes / 2)
+    // Start at a line boundary so the first surviving crumb is not half a line.
+    let start = keep.firstIndex(of: UInt8(ascii: "\n")).map { keep.index(after: $0) } ?? keep.startIndex
+    try? Data(keep[start...]).write(to: url)
+  }
+
+  /// A visible separator, so a reproduce can be told apart from the run before it. This is the
+  /// FIRST thing written on a launch and it records how we were launched.
+  @objc static func session(_ why: String) {
+    log("──────── LAUNCH (\(why)) build \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?") ────────")
+  }
 }

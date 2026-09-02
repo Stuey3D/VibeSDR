@@ -23,6 +23,7 @@ import { APP_VERSION } from '../constants/version';
 import { getLastCrash } from './crashGuard';
 import { audioPathDump } from './audioPathLog';
 import { unhandledLog } from './protocolLog';
+import { readCrumbs } from './crumbs';
 
 const Vibe = (NativeModules as {
   VibePowerModule?: {
@@ -96,6 +97,20 @@ export async function buildDiagnostics(extra?: Record<string, string | number | 
       if (n.stack) lines.push('stack  :', String(n.stack).slice(0, 3000));
     }
   } catch { lines.push('unavailable (Android, or module missing)'); }
+
+  /* ★★ BOOT BREADCRUMBS — the launch timeline, native and JS interleaved. Primary route is the
+   *  file itself (`Documents/boot-crumbs.log`, pulled with devicectl off a TestFlight build), but
+   *  a tester with the phone and no Mac must still be able to send it, and this is the existing
+   *  "copy the diagnostics" button they already know.
+   * ★ TAIL, not head, and capped: the file holds several launches and the one being reported is
+   *  the last. The whole file is still on the device for anyone who can reach it.
+   * ★ No PINs pass through here — crumbs record URLs and outcomes, never the PIN itself. Checked
+   *  against every crumb added, and it is why the connect crumbs log `${baseUrl}` and not `pin`. */
+  lines.push('', '--- boot breadcrumbs (most recent) ---');
+  try {
+    const c = await readCrumbs();
+    lines.push(c ? c.slice(-6000) : 'none recorded');
+  } catch { lines.push('unavailable'); }
 
   lines.push('', '(No PINs, passwords or location are included. Nothing is sent unless you send it.)');
   return lines.join('\n');

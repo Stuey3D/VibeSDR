@@ -41,6 +41,13 @@ import { ThemeProvider }    from './src/contexts/ThemeContext';
 import type { ViewMode }    from './src/services/viewMode';
 import type { SDRMode }     from './src/services/UberSDRClient';
 import { useDeepLinks }     from './src/linking/useDeepLinks';
+import { crumb }            from './src/services/crumbs';
+
+/* ★★★ THE VERY FIRST JS CRUMB, at module scope — BEFORE any component mounts. Paired with the
+ *   native launch crumb it brackets the whole of React's startup, which is the half of the black
+ *   screen we have never once measured: if this line is absent from a session, the bundle never
+ *   evaluated; if it is present and no render crumb follows, React started and never drew. */
+crumb('bundle evaluated');
 
 export type RootStackParamList = {
   // autoSpy: set by an `sdr://host:port` deep link → the picker auto-runs
@@ -194,6 +201,11 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 export const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
 export default function App() {
+  /* ★★ App() RUNNING is not the same as a FRAME EXISTING — but the pair of them, against the
+   *  scene crumbs either side, says which of those the black screen is. */
+  crumb('App() render');
+  useEffect(() => { crumb('App mounted'); }, []);
+
   // Install the global JS crash guard once — flaky SDR servers must never abort
   // the whole app; recover to the picker with a server-attributed message.
   useEffect(() => { installCrashGuard(navigationRef); }, []);
@@ -337,7 +349,8 @@ export default function App() {
 
     const applyInstance = (urlIn: string, wtype?: string, wname?: string) => {
       let url = urlIn;
-      if (!url) return;
+      crumb(`applyInstance url=${urlIn} type=${wtype ?? '-'}`);
+      if (!url) { crumb('applyInstance: EMPTY URL, giving up'); return; }
       watchTargetPending.claimed = true;   // stop the picker auto-connecting past us
       watchProvider.setPhoneStatus('starting');
       // ★★★ AND KEEP US ALIVE LONG ENOUGH TO FINISH — see watchProvider.holdAwake. From cold this
@@ -419,7 +432,20 @@ export default function App() {
            *   screen that does not speak the protocol, which is why choosing a radio on Buddy hung
            *   with the phone still unconnected. See RootStackParamList.autoVibe. */
           if (type === 'vibeserver') {
-            if (!(await whenNavReady())) { watchTargetPending.claimed = false; watchProvider.holdAwake(false); return; }
+            crumb(`vibeserver branch — waiting for nav ready, url=${url}`);
+            if (!(await whenNavReady())) {
+              /* ★★★ A SILENT GIVE-UP — the attempt ends here with nothing on screen and nothing
+               *   said. Worth a crumb because whenNavReady POLLS on a 50 ms setInterval, and a
+               *   watch-woken app is headless, where iOS throttles JS timers: a gate that normally
+               *   clears instantly can take arbitrarily long in the background.
+               * ★★ NOT by itself the UberSDR/VibeServer differential — goTo() waits on this same
+               *   gate, so it cannot explain why only VibeServer needs several attempts. What it
+               *   CAN explain is an attempt that silently evaporates. Let the crumbs say which
+               *   attempts reach here. */
+              crumb('vibeserver branch — NAV NEVER READY, attempt abandoned');
+              watchTargetPending.claimed = false; watchProvider.holdAwake(false); return;
+            }
+            crumb('vibeserver branch — nav ready, resetting to picker with autoVibe');
             /* ★★★ `index` IS NOT OPTIONAL, and leaving it out is why the phone went BLACK. goTo()
              *   three hundred lines up passes `index: 1` with its two routes; this reset shipped
              *   with a routes array and no index at all. A navigation state React Navigation
@@ -437,6 +463,7 @@ export default function App() {
                                    autoVibe: { url, name: f?.name ?? cached?.name ?? wname ?? url } } }],
             } as never);
             splashBridge.dismiss();
+            crumb('vibeserver branch — reset dispatched, splash dismissed');
             return;
           }
           if (f) return goTo({ ...f, serverType: (type ?? f.serverType) as typeof f.serverType }, viewMode);
@@ -707,8 +734,10 @@ export default function App() {
    * ★ Deliberately NOT the splash: this must not depend on state, fonts, or anything that can
    *   itself fail to resolve. A plain View is the one thing that cannot. */
   if (!fontsLoaded && !fontError && !fontWaitOver) {
+    crumb('render: FONT GATE (plain frame)');
     return <View style={{ flex: 1, backgroundColor: '#080601' }} />;
   }
+  crumb(`render: full tree (fonts=${fontsLoaded} err=${!!fontError} waitOver=${fontWaitOver})`);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
