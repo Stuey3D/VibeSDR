@@ -391,8 +391,8 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     guard let w = window else { VibeCrumbs.log("scene didBecomeActive — NO WINDOW"); return }
     VibeCrumbs.log("scene didBecomeActive — \(describe(w))")
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-      guard let w = self?.window else { return }
-      VibeCrumbs.log("scene +600ms — \(describe(w))")
+      guard let self, let w = self.window else { return }
+      VibeCrumbs.log("scene +600ms — \(self.describe(w))")
     }
   }
 
