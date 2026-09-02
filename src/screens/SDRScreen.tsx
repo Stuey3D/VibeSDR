@@ -648,6 +648,25 @@ export default function SDRScreen({ route, navigation }: Props) {
    *    nobody. See the resolver above. */
   const awaitingRadio = !!door && !radioBase
     && (door.radios.length > 1 || !!door.landingMessage || door.radios.some((r) => !!r.antenna));
+
+  /* ★★★ THERE IS NO SESSION WHILE THE LISTENER IS STILL CHOOSING A RADIO — and the resume path did
+   *   not know it. On a multi-radio VibeServer the door is open, no radio is picked, and so there
+   *   is NO client, NO spectrum socket and NO audio. Backgrounding from that screen and coming
+   *   back armed the reinit watchdog anyway; it looked for audio, found none, and escalated to the
+   *   "Connection lost — reconnect or go back" popup. Pressing Reconnect then tried to re-establish
+   *   a session that had never existed, which is the red "Reconnect Failed — Tap to Retry".
+   *   Stuart, 2026-09-02, on the radio picker: "it gets stuck on reconnecting as it thinks the SDR
+   *   is running and is expecting a spectrum socket that doesnt exist."
+   * ★★ `awaitingRadio` ALREADY guards the two other places that must not run yet — the client
+   *   build (see the doorPending check) and the connect timeout, whose comment says it in as many
+   *   words: "NOT WHILE THE LISTENER IS STILL CHOOSING". The AppState listener simply never
+   *   learned the same rule. Three readers of one fact, and the third was missed.
+   * ★ A REF because that listener is registered once with an empty dependency array, so a captured
+   *   value would be frozen at whatever was true when the screen mounted — which is exactly the
+   *   state this bug appears in. */
+  const noSessionYetRef = useRef(true);
+  useEffect(() => { noSessionYetRef.current = doorPending || awaitingRadio; },
+            [doorPending, awaitingRadio]);
   /** The radio we are actually on, when there is a choice — the door already described it. */
   const chosenRadio = useMemo(() => {
     if (!door || !radioBase) return null;
@@ -1270,6 +1289,22 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
   const lastReconnectAt = useRef(0);
   const fullReconnect = useCallback(() => {
+    /* ★★★ THERE IS NOTHING TO RECONNECT TO WHILE A RADIO IS STILL BEING CHOSEN, and trying
+     *   guarantees the red banner: this arms a 12 s timer that raises "Reconnect Failed — Tap to
+     *   Retry" unless `connectedRef` goes true, and on the door screen it never can — no radio has
+     *   been picked, so no session was ever opened. Stuart, 2026-09-02: "i tapped reconnect and it
+     *   simply dismissed the box but then at the top of the screen in red Reconnect Failed."
+     * ★★ The popup that offered the button should no longer appear at all (see noSessionYetRef in
+     *   the AppState listener), but this is the belt to that braces: anything else that reaches
+     *   here — a lock-screen control, the media session, a watch command — must not be able to
+     *   manufacture a failure that cannot be satisfied.
+     * ★ It CLEARS the failure flags rather than merely returning, so a banner already on screen
+     *   from an earlier attempt goes away instead of persisting over a screen it cannot describe. */
+    if (noSessionYetRef.current) {
+      VibePowerModule?.setReconnectFailed?.(false);
+      setReconnectFailedUi(false);
+      return;
+    }
     const now = Date.now();
     if (now - lastReconnectAt.current < 2000) return;  // debounce double-triggers
     lastReconnectAt.current = now;
@@ -4679,6 +4714,16 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     let resumeTimer: ReturnType<typeof setTimeout> | null = null;
     const sub = AppState.addEventListener('change', (state: string) => {
+      /* ★★★ NOTHING TO SUSPEND OR RESUME WHILE THERE IS NO SESSION — see noSessionYetRef. Only
+       *   appActiveRef is kept in step, because the watch hand-off and several effects read it as
+       *   "is somebody looking at the phone" regardless of whether a radio is open. Everything
+       *   below this line assumes a live client, a spectrum socket and flowing audio; on the radio
+       *   chooser there are none of the three, and pretending otherwise is what produced a
+       *   connection-lost popup for a connection that was never made. */
+      if (noSessionYetRef.current) {
+        appActiveRef.current = (state === 'active');
+        return;
+      }
       if (state !== 'active') {
         if (resumeTimer) { clearTimeout(resumeTimer); resumeTimer = null; }
         // Backgrounded: the spectrum pause starves the link to 0, but that's NOT
