@@ -72,6 +72,17 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
   button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
   /* ★ An ANCHOR styled as the primary button: it is a navigation, so it should be a real link
      (middle-click, open in a new tab, copy the address) rather than a button running location=. */
+  /* ★ The converter quick-picks: the NAME reads first and the LO sits under it as the fact being
+     set, so the button is self-documenting — you can see what it will type before you press it.
+     Deliberately quieter than the page's primary amber buttons; this is a shortcut, not an
+     action, and it must not compete with Save. */
+  button.convPreset{background:transparent;color:var(--amber);border:1px solid var(--amber);
+    border-radius:8px;padding:5px 10px;font-size:12px;line-height:1.15;cursor:pointer;
+    display:flex;flex-direction:column;align-items:center;gap:1px}
+  button.convPreset small{opacity:.6;font-size:10px}
+  button.convPreset:hover{background:rgba(255,184,51,.12)}
+  button.convPreset.on{background:var(--amber);color:#1a1200}
+  button.convPreset.on small{opacity:.75}
   a.gotoBtn{background:var(--amber);color:#1a1200;border-radius:8px;padding:9px 18px;
             font:600 14px/1 inherit;text-decoration:none;display:inline-block;white-space:nowrap}
   .modes{display:grid;gap:14px;grid-template-columns:1fr}
@@ -859,6 +870,25 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           <span>This is a down-converter (an LNB or transverter block)</span></label>
         <label style="margin-top:6px"><span class="lbl">Highest frequency it passes (MHz)</span>
           <input type="number" id="convHi" step="0.001" placeholder="30"></label>
+        <!-- ★★★ PICK THE BOX, NOT THE NUMBER. Everything above asks the owner to already know
+             their LO, their direction and their pass-band — three facts about a box whose lid
+             says "Ham It Up". The prose hint below names two of them, which helps only somebody
+             who reads to the end and then scrolls back up to type 125.
+             ★★ Same change, same reason, as the app's converter buttons: the LO is the ground
+                truth and stays the field, the PRODUCT NAME is how a person recognises their own
+                hardware. These fill all three fields at once, so the pass-band — the one nobody
+                guesses — is right without being explained.
+             ★ Examples, NOT a supported-hardware list: any converter works by typing its LO, and
+               that is exactly why this list can stay short and never needs updating. -->
+        <div id="convPresets" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">
+          <button type="button" class="convPreset" data-lo="100"   data-down="0" data-hi="30">Ham It Up v1.1<small>100</small></button>
+          <button type="button" class="convPreset" data-lo="120"   data-down="0" data-hi="60">SpyVerter<small>120</small></button>
+          <button type="button" class="convPreset" data-lo="125"   data-down="0" data-hi="30">Ham It Up v1.2+<small>125</small></button>
+          <button type="button" class="convPreset" data-lo="9750"  data-down="1" data-hi="0">Ku LNB low<small>9750</small></button>
+          <button type="button" class="convPreset" data-lo="10600" data-down="1" data-hi="0">Ku LNB high<small>10600</small></button>
+          <button type="button" class="convPreset" data-lo="10750" data-down="1" data-hi="0">Single-band LNB<small>10750</small></button>
+          <button type="button" class="convPreset" data-lo="0"     data-down="0" data-hi="0">None</button>
+        </div>
         <p class="why">Leave the LO at 0 unless there is a converter between your aerial and this
            radio. An up-converter — a Ham It Up is 125, a SpyVerter 120 — mixes HF up so a dongle
            can hear it; enter 125 and tick nothing. For a down-converter, enter its LO and tick the
@@ -2368,12 +2398,51 @@ function fill() {
   // ★ Stored SIGNED in Hz (an up-converter is negative — see RadioConfig::converterOffsetHz), but
   //   shown as a positive LO in MHz plus a direction: the box in the owner's hands is labelled
   //   "125 MHz", and asking them to type a minus sign is a mistake waiting to be made.
+  /* ★★ Wired once, and it also REFLECTS the saved value — a preset that can only be pressed is a
+     shortcut; one that lights up when it matches is also a readout, and tells the owner at a
+     glance which box the server currently thinks is fitted. */
+  (function(){
+    var host = $("convPresets"); if (!host) return;
+    /* ★★★ WIRED ONCE, NOT ONCE PER RADIO. This block sits inside the per-radio load, which runs
+       again every time the owner selects a different receiver — so without this guard each visit
+       would add another click listener and a preset press would fire two, three, four times. The
+       handlers are idempotent so nothing would visibly break, which is exactly why it would never
+       have been noticed. */
+    if (host.__wired) { return; }
+    host.__wired = 1;
+    function syncPresets() {
+      var lo = Math.abs(parseFloat(($("convLo") || {}).value || "0")) || 0;
+      var dn = $("convDown") && $("convDown").checked ? 1 : 0;
+      var btns = host.querySelectorAll(".convPreset");
+      for (var i = 0; i < btns.length; i++) {
+        var b = btns[i];
+        var m = (parseFloat(b.getAttribute("data-lo")) === lo)
+             && (lo === 0 || (+b.getAttribute("data-down")) === dn);
+        if (m) b.classList.add("on"); else b.classList.remove("on");
+      }
+    }
+    host.addEventListener("click", function (e) {
+      var b = e.target && e.target.closest ? e.target.closest(".convPreset") : null;
+      if (!b) return;
+      e.preventDefault();
+      if ($("convLo"))   $("convLo").value   = b.getAttribute("data-lo");
+      if ($("convDown")) $("convDown").checked = b.getAttribute("data-down") === "1";
+      if ($("convHi"))   $("convHi").value   = b.getAttribute("data-hi");
+      syncPresets();
+    });
+    var lo = $("convLo"), dn = $("convDown");
+    if (lo) lo.addEventListener("input", syncPresets);
+    if (dn) dn.addEventListener("change", syncPresets);
+    window.__syncConvPresets = syncPresets;
+  })();
   if ($("convLo")) {
     var co = r.converterOffsetHz != null ? r.converterOffsetHz : 0;
     $("convLo").value = co ? Math.abs(co) / 1e6 : 0;
     if ($("convDown")) $("convDown").checked = co > 0;
     var chi = r.converterInputHiHz != null ? r.converterInputHiHz : 0;
     if ($("convHi")) $("convHi").value = chi ? chi / 1e6 : 0;
+    // ★ Light the preset that matches what was just loaded — see the note on syncPresets.
+    if (window.__syncConvPresets) window.__syncConvPresets();
   }
   if ($("ppb"))   $("ppb").value = r.ppb != null ? r.ppb : 0;
   if ($("releaseWhenIdle")) $("releaseWhenIdle").checked = !!r.releaseWhenIdle;
