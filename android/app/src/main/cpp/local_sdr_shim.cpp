@@ -16999,9 +16999,30 @@ void LocalSdrShim::autoBandwidthTick() {
         const bool   rdsPlausible = snr >= 14.0;
         const double releaseDb    = (g_adjRdsWasOn.load(std::memory_order_relaxed) || rdsPlausible)
                                     ? 1.5 : 0.3;
-        if (ifGain < releaseDb) { g_adjNarrow.store(false, std::memory_order_relaxed);
-                                  LOGI("adjacent narrow: OFF — gain %.1f dB < %.1f (snr %.1f dB)",
-                                       ifGain, releaseDb, snr); }
+        /* ★★★ THE MEASUREMENT FLIPS SIGN WHEN WE NARROW, AND THIS ARM DID NOT.
+         *
+         *  pipeline.cpp's shadow evaluates THE OTHER OPTION: 110 kHz while the audio path is wide,
+         *  and WIDE OPEN while the audio path is narrowed. Its two operands keep the names
+         *  `narrowDb` and `wideDb` in both cases, so once narrowed `ifGainDb_` is
+         *  wideSNR - narrowSNR — "what WIDE would gain" — the exact opposite of what it means on
+         *  the engage arm above. UberSDRClient.ts:132 says so in as many words ("the sign flips
+         *  once narrowed") and the web readout prints it that way: "110k narrow · wide would gain
+         *  11.6 dB".
+         *  ★★★ SO THE OLD TEST COULD NEVER RELEASE. It read `ifGain < 1.5` against a number that
+         *      is LARGE precisely when widening is most worthwhile: at +11.6 dB it concluded
+         *      "not worth 1.5 dB" and stayed narrow for ever. Stuart, 2026-09-02, on 106.0 from
+         *      the Xcover: "106 narrowed and stayed narrowed even though the advanced RDS said it
+         *      would gain over 10 dB by being wide." The panel and the controller were reading the
+         *      same figure with opposite meanings — one rule, two readers.
+         *  ★★ THE INTENT IS UNCHANGED, and that is why this is a negation and not a new threshold:
+         *     staying narrow must be WORTH `releaseDb`, so narrow's own gain is `-ifGain` here and
+         *     the comparison above it survives verbatim. The Schmitt, the RDS-aware bar and the
+         *     latched verdict all keep their existing values and meanings. */
+        const double narrowWorthDb = -ifGain;   // while narrow, ifGain is what WIDE would gain
+        if (narrowWorthDb < releaseDb) { g_adjNarrow.store(false, std::memory_order_relaxed);
+                                  LOGI("adjacent narrow: OFF — narrow worth %.1f dB < %.1f "
+                                       "(wide would gain %.1f, snr %.1f dB)",
+                                       narrowWorthDb, releaseDb, ifGain, snr); }
     }
     /* ★ …and while it is NOT engaged, say so periodically with the numbers. "Nothing in the log"
      *   is the state that wasted the time; a control that declines must be able to say why. */
