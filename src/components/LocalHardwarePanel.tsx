@@ -167,8 +167,12 @@ export interface LocalHardwarePanelProps {
   hrfBiasT?: boolean;    onHrfBiasT?: (on: boolean) => void;
 }
 
-function Seg<T>({ options, value, onChange, fmt, slot }: {
+function Seg<T>({ options, value, onChange, fmt, sub, slot }: {
   options: T[]; value: T; onChange: (v: T) => void; fmt: (v: T) => string;
+  /** ★ An optional SECOND LINE under the title — used by the converter row to name the products
+   *  that use each LO. Undefined for every other Seg in this panel, which stays exactly as it was:
+   *  a row of one-word options does not want a subtitle slot it never fills. */
+  sub?: (v: T) => string | undefined;
   /** Claims a place in the panel's focus order — see the note in LocalHardwarePanel. */
   slot?: (run: () => void) => boolean;
 }) {
@@ -191,6 +195,9 @@ function Seg<T>({ options, value, onChange, fmt, slot }: {
                     on && kb && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
             onPress={() => onChange(o)}>
             <Text style={[styles.segTxt, active && styles.segTxtActive]}>{fmt(o)}</Text>
+            {!!sub?.(o) && (
+              <Text style={[styles.segSub, active && styles.segSubActive]}>{sub(o)}</Text>
+            )}
           </TouchableOpacity>
         );
       })}
@@ -830,7 +837,8 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                        ? { ...conv, id: 'custom', label: 'Custom' }
                        : fromPreset(pr, conv));
                    }}
-                   fmt={(id) => presetById(id)?.label ?? id} />
+                   fmt={(id) => presetById(id)?.label ?? id}
+                   sub={(id) => presetById(id)?.model} />
               <Text style={styles.note}>{presetById(conv.id)?.hint ?? 'Custom converter'}</Text>
 
               {conv.id === 'custom' && (<>
@@ -959,10 +967,15 @@ const styles = StyleSheet.create({
   close: { fontSize: 18, color: C.muted },
   section: { fontSize: 10, letterSpacing: 2, color: C.sectionC, marginTop: 16, marginBottom: 4 },
   segRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  seg: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', backgroundColor: C.btnBg },
+  seg: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', backgroundColor: C.btnBg, alignItems: 'center' },
   segActive: { borderColor: C.abtn, backgroundColor: C.active },
   segTxt: { fontSize: 12, color: C.muted },
   segTxtActive: { color: C.gold },
+  /* ★ Dimmer and smaller than the title, because the LO is the fact and the product name is the
+   *  hint — a newcomer finds their box by the name, and everyone else reads past it. Centred so a
+   *  two-line button still reads as one control. */
+  segSub: { fontSize: 9, color: C.muted, opacity: 0.7, marginTop: 1, textAlign: 'center' },
+  segSubActive: { color: C.gold, opacity: 0.85 },
   stepperRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   stepBtn: { width: 44, height: 36, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', backgroundColor: C.btnBg, alignItems: 'center', justifyContent: 'center' },
   stepBtnTxt: { fontSize: 20, color: C.gold },

@@ -153,6 +153,14 @@ export function displayRange(hw: readonly [number, number], c: ConverterProfile)
 export interface ConverterPreset {
   id: string; label: string; hint: string; offsetHz: number; inverted: boolean;
   inputLoHz: number; inputHiHz: number;
+  /** ★★ THE SECOND LINE THE NOTE ABOVE ALREADY ASKS FOR. The LO stays the button's title — it is
+   *  the ground truth, it is what is printed on the box, and it covers converters nobody has heard
+   *  of — but an LO alone is unreadable to somebody who has just bought a thing with a NAME on it
+   *  and no idea what 125 MHz means. Stuart: "so a newbie user can quickly identify their model."
+   *  ★ Kept to a few words and deliberately NOT exhaustive: these read as EXAMPLES of what uses
+   *    this LO, never as a supported-hardware list — same rule as the hint. Absent where there is
+   *    no product to name (None, Manual). */
+  model?: string;
 }
 
 export const CONVERTER_PRESETS: ConverterPreset[] = [
@@ -161,10 +169,13 @@ export const CONVERTER_PRESETS: ConverterPreset[] = [
 
   // ── Up-converters: HF in, VHF out. The input range is what the low-pass filter passes. ──
   { id: 'up-100',     label: '100 MHz up',  hint: 'Ham It Up v1.1 and earlier · 100 kHz\u201330 MHz',
+    model: 'Ham It Up v1.1',
     offsetHz: -100_000_000, inverted: false, inputLoHz: 100_000, inputHiHz: 30_000_000 },
   { id: 'up-120',     label: '120 MHz up',  hint: 'SpyVerter, SpyVerter R2 · 100 kHz\u201360 MHz',
+    model: 'SpyVerter',
     offsetHz: -120_000_000, inverted: false, inputLoHz: 100_000, inputHiHz: 60_000_000 },
   { id: 'up-125',     label: '125 MHz up',  hint: 'Ham It Up v1.2+, Ham It Up Plus, most clones \u00b7 100 kHz\u201330 MHz',
+    model: 'Ham It Up v1.2+',
     offsetHz: -125_000_000, inverted: false, inputLoHz: 100_000, inputHiHz: 30_000_000 },
 
   /* ── Down-converters: satellite in, UHF out. ──
@@ -181,10 +192,13 @@ export const CONVERTER_PRESETS: ConverterPreset[] = [
    *   implements it, and shipping a preset that needs it would mis-tune and break every decoder.
    *   See the note below. */
   { id: 'dn-9750',    label: '9750 MHz down', hint: 'Ku LNB low band \u00b7 QO-100 narrowband',
+    model: 'Ku LNB low',
     offsetHz: 9_750_000_000, inverted: false, inputLoHz: 0, inputHiHz: 0 },
   { id: 'dn-10600',   label: '10600 MHz down', hint: 'Ku LNB high band',
+    model: 'Ku LNB high',
     offsetHz: 10_600_000_000, inverted: false, inputLoHz: 0, inputHiHz: 0 },
   { id: 'dn-10750',   label: '10750 MHz down', hint: 'Single-band Ku LNB',
+    model: 'Single-band LNB',
     offsetHz: 10_750_000_000, inverted: false, inputLoHz: 0, inputHiHz: 0 },
 
   { id: 'custom',     label: 'Manual\u2026',  hint: 'Enter the LO and the range it converts',
