@@ -741,14 +741,40 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       Alert.alert('VibeServer', `Could not reach ${host}:${port}. Is it on the same network?`);
       return;
     }
-    crumb('connectVibeServer: auth resolved, navigating to SDR');
+    crumb('connectVibeServer: auth resolved, resetting to SDR');
     setConnecting(false);
-    navigation.navigate('SDR', {
-      baseUrl, instanceName: name, viewMode,
-      serverType: 'ubersdr', isLocal: true, localPort: port,
-      localHost: host, authSuffix,
-      localGen: newLocalSession(),
-    });
+    /* ★★★ RESET, NOT navigate — AND THIS IS THE WHOLE OF "VIBESERVER PATH ONLY".
+     *
+     *  `navigate` PUSHES, and a push is an ANIMATED UIKit view-controller transition. UIKit does
+     *  not run those while the app is in the background, and RNSScreenStack defers its update while
+     *  a transitionCoordinator is live (RNSScreenStack.mm:599) with `didMoveToWindow` as its only
+     *  retry — which never fires again, because the window does not change. So on a watch-driven
+     *  connect the push was accepted by React, deferred by UIKit, and never applied: React reported
+     *  "nav: [InstancePicker > SDR] index=1" while the native stack held an EMPTY
+     *  UIViewControllerWrapperView. 12 views against a healthy 441.
+     *
+     *  ★★★ EVERY OTHER BACKEND ALREADY DOES IT THIS WAY. goTo() in App.tsx lands with a single
+     *      reset — `index: 1, routes: [InstancePicker, target]` — which RN Screens applies as a
+     *      wholesale setViewControllers with NO transition to defer. That is the entire reason
+     *      UberSDR and FM-DX cold-boot from Buddy perfectly and only VibeServer went black.
+     *      Stuart asked the question that found it: "why does this only affect VibeServer?"
+     *  ★★ Same shape as this file's other resets, and the picker stays beneath so Back still goes
+     *     somewhere. Identical result on a foreground connect, where a push would have worked
+     *     anyway — so this is not a special case for the watch, it is the ONE way we navigate.
+     *  ★ The session is untouched: this replaces the controller list, it does not remount the
+     *    React tree, so nothing that is already playing is disturbed. */
+    navigation.reset({
+      index: 1,
+      routes: [
+        { name: 'InstancePicker', params: { noAutoConnect: true } },
+        { name: 'SDR', params: {
+            baseUrl, instanceName: name, viewMode,
+            serverType: 'ubersdr', isLocal: true, localPort: port,
+            localHost: host, authSuffix,
+            localGen: newLocalSession(),
+          } },
+      ],
+    } as never);
   }, [navigation, viewMode]);
 
   // Tap a discovered/typed VibeServer: prompt for the PIN if it needs one, with a
