@@ -69,6 +69,12 @@ export type RootStackParamList = {
      *  mounts, which would drag the user straight back off the server the watch just
      *  chose. This says "be here, but don't take over". */
     noAutoConnect?: boolean;
+    /** ★ Land on the picker with a DIRECTORY already open. Used by Server mode's "stop and back to
+     *  the directory": somebody who has just stopped serving is usually going to go and listen to
+     *  somebody else's receiver, and making them tap through the chooser to the same list every
+     *  time is a step with no decision in it. Implies noAutoConnect — arriving at a directory is
+     *  a choice in progress, so the default instance must not take over underneath it. */
+    openDir?: string;
   } | undefined;
   SDR: {
     baseUrl:         string;

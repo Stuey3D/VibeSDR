@@ -55,7 +55,7 @@ import {
   type ConverterProfile, NO_CONVERTER, active as convActive, isIdentity as convIsIdentity,
   toDisplay as convToDisplay, toHardware as convToHardware,
 } from '../services/converter';
-import { wrapWithConverter } from '../services/ConverterBackend';
+import { wrapWithConverter, wrapConverterCallbacks } from '../services/ConverterBackend';
 import { KiwiAdapter } from '../services/KiwiAdapter';
 import { localSessionGen } from '../services/localSession';
 import { startBookmarkAutosave, stopBookmarkAutosave,
@@ -3409,7 +3409,13 @@ export default function SDRScreen({ route, navigation }: Props) {
      *   tuner. See ConverterBackend.ts for why this is a boundary transform and not a display one.
      *  ★ The profile is passed as a live getter, so the ENGAGE toggle works on a running session
      *    without rebuilding the client. */
-    const c = wrapWithConverter(createBackend(route.params.serverType ?? 'ubersdr', connectBase, sessionUuid, {
+    /* ★★★ THE CALLBACKS ARE WRAPPED TOO, and leaving them unwrapped was the whole of the
+     *   "it tuned right and displayed wrong" bug. The wrapper below transforms what the app ASKS
+     *   for and what it PULLS; these callbacks are what the radio PUSHES, and they are what
+     *   actually feed the readout, the band bar and the spectrum axis. Without this the app was
+     *   told the hardware frequency and believed it — 102.2 MHz on an FM band bar while the
+     *   listener was really on 2.2 MHz behind a Ham It Up. */
+    const c = wrapWithConverter(createBackend(route.params.serverType ?? 'ubersdr', connectBase, sessionUuid, wrapConverterCallbacks({
       // (callbacks below; bypass password rides every WS URL)
       // ★★★ A CONNECTION THAT SUCCEEDED TAKES THE REFUSAL CARD DOWN WITH IT. Every other notice
       //     was cleared here and this one was not, so after a successful admin takeover the
@@ -4175,7 +4181,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           ]);
         }
       },
-    }, password, !!route.params.isLocal), () => converterRef.current);
+    }, () => converterRef.current), password, !!route.params.isLocal), () => converterRef.current);
     client.current = c;
     /* ★★★ TELL THE WATCH THIS RECEIVER IS EXCLUSIVE UNTIL IT SAYS OTHERWISE. Buddy learns about a
      *   shared dial ONLY from a `dial` message, and it keeps what it was last told for the life of

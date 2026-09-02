@@ -71,6 +71,60 @@ const OPTIONAL_MEMBERS = [
   'getProfiles', 'selectProfile', 'getSecondaryDecoder', 'sendChat',
 ] as const;
 
+/* ★★★ THE PUSH SIDE, WHICH THIS FILE CLAIMED TO COVER AND DID NOT.
+ *
+ *  ConverterBackend transforms the PULL side — getStatus(), getView(), caps, panSpan — and every
+ *  call going DOWN. But the backend's CALLBACKS are handed to createBackend() INSIDE the
+ *  wrapWithConverter(...) call, so they belong to the inner backend and never meet upStatus().
+ *  Every frequency the UI actually displays arrives that way: onStatus is what sets the readout,
+ *  the band bar and the spectrum axis.
+ *
+ * ★★★ MEASURED ON THE XCOVER, 2026-09-02. With "100 MHz up · Ham It Up v1.1" fitted, asking for
+ *     2.2 MHz moved the tuner correctly to 102.2 — the down transform worked — and then the app
+ *     displayed 102.200000 MHz on an FM band bar. Stuart, watching from across the room:
+ *     "shouldnt it say 2.2MHz and be one of the HF bands being shown on screen?" It should. The
+ *     header of this file promises "128 MHz exists nowhere above this file", and it was leaking
+ *     through the one door nothing was watching.
+ *
+ * ★★ SO THE CALLBACKS ARE WRAPPED HERE, next to the transform they must agree with, rather than
+ *    at the call site — putting `toDisplay` in SDRScreen's onStatus would be the second reader
+ *    this file's own comment warns about, and the next callback added would miss it again.
+ * ★ bins are deliberately NOT touched, for the reason given above: consumers derive them from
+ *   centerHz, so transforming the centre transforms them, and doing both double-counts.
+ */
+export function wrapConverterCallbacks<T extends Record<string, any>>(
+  cbs: T,
+  getProfile: () => ConverterProfile,
+): T {
+  const prof = () => active(getProfile());
+  const upHz = (hz: number) => toDisplay(hz, prof());
+  const upSt = (s: SDRStatus): SDRStatus => {
+    const c = prof();
+    if (isIdentity(c)) return s;
+    return {
+      ...s,
+      frequency: toDisplay(s.frequency, c),
+      centerHz:  toDisplay(s.centerHz, c),
+      ...(s.trueCenterHz !== undefined ? { trueCenterHz: toDisplay(s.trueCenterHz, c) } : {}),
+    };
+  };
+
+  const out: Record<string, any> = { ...cbs };
+  if (typeof cbs.onStatus === 'function') {
+    out.onStatus = (s: SDRStatus) => cbs.onStatus(upSt(s));
+  }
+  if (typeof cbs.onSpectrum === 'function') {
+    out.onSpectrum = (bins: Float32Array, s: SDRStatus) => cbs.onSpectrum(bins, upSt(s));
+  }
+  /* ★ The shared dial reports where somebody else put the tuner, in HARDWARE Hz. Local hardware
+   *   has a shared VFO ("shared VFO · up to 10" on the Xcover), so this is reachable on exactly
+   *   the backends the converter is offered for — it is not a VibeServer-only path. */
+  if (typeof cbs.onDialMoved === 'function') {
+    out.onDialMoved = (hz: number, mode?: string) => cbs.onDialMoved(upHz(hz), mode);
+  }
+  return out as T;
+}
+
 export function wrapWithConverter(
   inner: SDRBackend,
   getProfile: () => ConverterProfile,

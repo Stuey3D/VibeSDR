@@ -386,6 +386,19 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       .finally(() => setLoading(false));
   }, []);
 
+  /* ★ Arrived with a directory to open — see RootStackParamList.openDir. One-shot: the param is
+   *  cleared so that a re-render, or coming back to this screen later, does not re-open a list the
+   *  user has since navigated away from. Same shape as autoSpy/autoVibe. */
+  const openDirFired = useRef(false);
+  useEffect(() => {
+    const want = route.params?.openDir;
+    if (!want) { openDirFired.current = false; return; }
+    if (openDirFired.current) return;
+    openDirFired.current = true;
+    navigation.setParams({ openDir: undefined } as never);
+    openDirectory(want as DirectoryId);
+  }, [route.params?.openDir, navigation, openDirectory]);
+
   // Assigned once connectLocal/tryUsbLaunch are defined below; the mount + focus
   // effects (declared above those callbacks) call it through this ref to avoid a
   // use-before-declaration cycle.

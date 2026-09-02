@@ -950,6 +950,35 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     navigation.goBack();
   }, [navigation]);
 
+  /* ★★★ THREE WAYS OUT, BECAUSE STOPPING THE SERVER IS NOT ONE INTENTION.
+   *
+   *  There was only "stop & back to servers", and it is the WRONG one for the two commonest
+   *  reasons to stop: you want to change a setting and start again, or you have finished serving
+   *  and now want to go and listen to somebody else. Both were reachable only by stopping, landing
+   *  on the picker, re-entering Server mode and scrolling the whole settings page back down to
+   *  Start — which is exactly the walk it took to restart this phone after a test tonight.
+   *  ★ Named for where they LAND, not for what they stop, because the stop is the same in all
+   *    three and the destination is the entire difference.
+   */
+  const stopAndSetup = useCallback(() => {
+    stopAdvertiseRtlTcp();
+    stopVibeServer();
+    runningRef.current = false;
+    // ★ Stay on this screen: `running` is what chooses the status view over the config form, so
+    //   clearing it drops straight back into the settings with everything as it was.
+    setRunning(null);
+  }, []);
+
+  const stopAndDirectory = useCallback(() => {
+    stopAdvertiseRtlTcp();
+    stopVibeServer();
+    runningRef.current = false;
+    /* ★ noAutoConnect rides along: arriving at a directory is a choice in progress, and a default
+     *  instance auto-connecting underneath it would take the user somewhere they did not ask to
+     *  go — the same reason the watch path sets it. */
+    navigation.navigate('InstancePicker', { openDir: 'vibeserver', noAutoConnect: true } as never);
+  }, [navigation]);
+
   const toggleCompress = useCallback((on: boolean) => {
     setCompress(on);
     if (runningRef.current) setVibeServerCompressAudio(on);   // live toggle
@@ -1200,6 +1229,19 @@ export default function ServerModeScreen({ navigation, route }: Props) {
 
           <TouchableOpacity style={[styles.stopBtn, { borderColor: C.red }]} onPress={stopAndBack}>
             <Text style={{ color: C.red, fontFamily: F, fontSize: 16 }}>■ Stop server & back to servers</Text>
+          </TouchableOpacity>
+
+          {/* ★ The two destinations the single button could not reach — see stopAndSetup. Drawn in
+              amber rather than red: they stop the server too, but the RED one is the "I have
+              finished" button and these are "I am going somewhere else next". */}
+          <TouchableOpacity style={[styles.stopBtn, { borderColor: C.amber, marginTop: 10 }]}
+                            onPress={stopAndSetup}>
+            <Text style={{ color: C.amber, fontFamily: F, fontSize: 16 }}>■ Stop server & back to setup</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={[styles.stopBtn, { borderColor: C.amber, marginTop: 10 }]}
+                            onPress={stopAndDirectory}>
+            <Text style={{ color: C.amber, fontFamily: F, fontSize: 16 }}>■ Stop server & browse the directory</Text>
           </TouchableOpacity>
         </ScrollView>
       </SafeAreaView>
