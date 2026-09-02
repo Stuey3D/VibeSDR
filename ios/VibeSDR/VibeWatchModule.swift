@@ -481,24 +481,47 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   /// directory, which would be absurd on a wrist. This is what makes the watch
   /// useful when it LAUNCHES the phone and the phone has no default instance: the
   /// wrist can pick one instead of staring at nothing.
+  /* ★★★ DURABLE, FOR THE SAME REASON sendRadios IS — see the note below it. This dropped the
+   *   favourites on the floor in TWO ways at once: it RETURNED EARLY when the link was not alive,
+   *   and when it was, a failed sendMessage went to `errorHandler: nil`. Either way the wrist shows
+   *   an empty list, which is indistinguishable from "you have no favourites" — so the one thing
+   *   Buddy exists to offer when it wakes a phone with no default instance was simply missing.
+   *   Stuart, 2026-09-02: "and no favourites showing."
+   * ★ transferUserInfo is QUEUED and delivered when it can be, and the watch routes
+   *   didReceiveUserInfo through the same apply(), so nothing on the wrist has to change. */
   @objc(sendFavourites:)
   func sendFavourites(_ json: String) {
-    guard let s = session, linkAlive else { return }
-    s.sendMessage(["k": "favs", "j": json], replyHandler: nil, errorHandler: nil)
+    guard let s = session else { return }
+    guard linkAlive else { s.transferUserInfo(["k": "favs", "j": json]); return }
+    s.sendMessage(["k": "favs", "j": json], replyHandler: nil,
+                  errorHandler: { _ in s.transferUserInfo(["k": "favs", "j": json]) })
   }
 
   /// A directory's servers, fetched by the PHONE on the watch's request. Buddy has no server list of
   /// its own — it mirrors the phone's and connects by referencing these (which the phone caches).
   @objc(sendDirectory:)
   func sendDirectory(_ json: String) {
-    guard let s = session, linkAlive else { return }
-    // ★★ AN ERROR HANDLER, because this send is ONE-SHOT. The row path can afford to discard
-    //   failures (it sends ~16/s, so the next one covers you); a directory is sent once and a
-    //   dropped one shows up on the wrist as an indefinite spinner with nothing logged anywhere.
-    //   Deliberately NOT fed into noteSendFailure() — that counter's decay is calibrated for the
-    //   row rate, and a lone one-shot failure must not pollute the revive heuristic.
-    s.sendMessage(["k": "dir", "j": json], replyHandler: nil, errorHandler: { err in
-      NSLog("[VibeWatch] sendDirectory failed (%d bytes): %@", json.utf8.count, err.localizedDescription)
+    /* ★★★ THE SPINNING SERVERS LIST. This is the fault sendRadios below already fixed, left
+     *   un-applied to the function its OWN comment cites as the precedent — one rule, two readers,
+     *   and the second reader was three lines away.
+     *  ★★ It had the error handler the note asks for, and the note is right that a one-shot send
+     *     needs one. But LOGGING A FAILURE IS NOT DELIVERING IT: the handler wrote an NSLog — which
+     *     on this device is not even readable — and the wrist span for ever. It also returned early
+     *     whenever `linkAlive` was false, which is a second silent drop on the same path.
+     *  ★★★ MEASURED, 2026-09-02: the phone answered every browse ("dir vibeserver sending 3
+     *      servers, 1436B, reachable=true") while Buddy sat spinning, and `watch reachable` was
+     *      flapping false→true→false→true across those same seconds. A message posted into that is
+     *      a coin toss, and a lost directory has no retry anywhere — the watch asked once.
+     *  ★ Same shape as sendRadios: queue it when the link is down, and fall back to the queue when
+     *    an immediate send fails. transferUserInfo is delivered when it can be, and the watch
+     *    already routes didReceiveUserInfo into the same apply(). */
+    guard let s = session else { return }
+    let msg: [String: Any] = ["k": "dir", "j": json]
+    guard linkAlive else { s.transferUserInfo(msg); return }
+    s.sendMessage(msg, replyHandler: nil, errorHandler: { err in
+      NSLog("[VibeWatch] sendDirectory failed (%d bytes): %@ — queueing", json.utf8.count,
+            err.localizedDescription)
+      s.transferUserInfo(msg)
     })
   }
 
