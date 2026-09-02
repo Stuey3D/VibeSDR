@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Modal, View, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, ScrollView,
-  KeyboardAvoidingView, Platform,
+  KeyboardAvoidingView, Platform, Animated,
   Switch, StyleSheet,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -118,6 +118,10 @@ export interface LocalHardwarePanelProps {
   onAdminUnlock?: (password: string) => void;
   /** Set when the server refused something, so the panel can say why rather than sit there. */
   adminRefused?: boolean;
+  /** ★ WHY it failed. A rejected password is a typo; a challenge we could not fetch is a network
+   *  problem — and telling somebody their password is wrong when the receiver is unreachable sends
+   *  them off to change a password that was fine. */
+  adminFailReason?: null | 'wrong' | 'unreachable';
   /** Airspy HF+ live state + setters (only used when radio.driver === 'airspyhf'). */
   ahfAgc?: boolean;      onAhfAgc?: (on: boolean) => void;
   ahfAgcHigh?: boolean;  onAhfAgcThreshold?: (high: boolean) => void;
@@ -211,6 +215,30 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   // ★ Same rule as Seg's ring: only show keyboard focus when a keyboard is actually driving.
   const kbNav = useKeyboardMode();
   const [adminPw, setAdminPw] = useState('');
+  /* ★★★ A REFUSAL HAS TO BE FELT, NOT JUST PRINTED. A wrong password left the box looking exactly
+   *   as it did before — same colour, same contents cleared — so the only difference was a line of
+   *   small text below a keyboard that may well be covering it. Stuart, 2026-09-02: "There is no
+   *   warning if a password is entered incorrectly either."
+   * ★ Shake, red border and a "!" together: the movement catches the eye even while looking at the
+   *   keyboard, the colour survives after the movement stops, and the mark is what remains for
+   *   somebody who was not watching at the moment it happened. One of the three alone is missable.
+   * ★ Driven off a COUNTER rather than the boolean, so a second wrong attempt shakes again — with
+   *   `adminRefused` already true the flag does not change and an effect keyed on it would sit
+   *   still, which reads as the app ignoring the second try. */
+  const shakeX = useRef(new Animated.Value(0)).current;
+  const refusalSeen = useRef(0);
+  useEffect(() => {
+    if (!p.adminRefused || p.adminOk) return;
+    refusalSeen.current += 1;
+    shakeX.setValue(0);
+    Animated.sequence([
+      Animated.timing(shakeX, { toValue: 8,  duration: 45, useNativeDriver: true }),
+      Animated.timing(shakeX, { toValue: -8, duration: 45, useNativeDriver: true }),
+      Animated.timing(shakeX, { toValue: 6,  duration: 45, useNativeDriver: true }),
+      Animated.timing(shakeX, { toValue: -6, duration: 45, useNativeDriver: true }),
+      Animated.timing(shakeX, { toValue: 0,  duration: 45, useNativeDriver: true }),
+    ]).start();
+  }, [p.adminRefused, p.adminFailReason, p.adminOk, shakeX]);
   // ★ Decide from what the RADIO SAID, never from what else happens to be set.
   const isAhf = p.radio?.driver === 'airspyhf';
   const isRsp = p.radio?.driver === 'sdrplay';
@@ -423,7 +451,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                                             : ' Tuning stays open.'))}
               </Text>
               {!p.adminOk && (
-                <View style={styles.adminRow}>
+                <Animated.View style={[styles.adminRow, { transform: [{ translateX: shakeX }] }]}>
                   <TextInput
                     value={adminPw} onChangeText={setAdminPw}
                     placeholder="Admin password" placeholderTextColor="rgba(200,210,225,0.45)"
@@ -435,16 +463,21 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                     autoFocus={nothingForUser}
                     onSubmitEditing={() => { p.onAdminUnlock?.(adminPw); setAdminPw(''); }}
                     returnKeyType="go"
-                    style={styles.adminInput} />
+                    style={[styles.adminInput,
+                            p.adminRefused && !p.adminOk && styles.adminInputBad]} />
                   <TouchableOpacity style={styles.adminBtn}
                     onPress={() => { p.onAdminUnlock?.(adminPw); setAdminPw(''); }}>
                     <Text style={styles.adminBtnTxt}>UNLOCK</Text>
                   </TouchableOpacity>
-                </View>
+                </Animated.View>
               )}
               {p.adminRefused && !p.adminOk && (
                 <Text style={[styles.note, { color: '#ff8a7d' }]}>
-                  That control is locked. Enter the owner's password to use it.
+                  {p.adminFailReason === 'unreachable'
+                    ? '\u26A0  Could not reach the receiver to check that password. Try again.'
+                    : p.adminFailReason === 'wrong'
+                      ? '\u26A0  That password was not accepted. Check it and try again.'
+                      : 'That control is locked. Enter the owner\u2019s password to use it.'}
                 </Text>
               )}
             </View>
@@ -1038,6 +1071,10 @@ const styles = StyleSheet.create({
   convRow:   { flexDirection: 'row', alignItems: 'center', gap: 10 },
   convHalf:  { flex: 1 },
   convDash:  { fontSize: 13, color: C.dim },
+  /* ★ Red only while the refusal stands — it clears the moment a new attempt starts (see
+   *  onAdminUnlockPw, which resets the flag before it asks), so the box is not permanently
+   *  accusing somebody who has since corrected it. */
+  adminInputBad: { borderColor: '#ff6b5e', borderWidth: 1.5 },
   adminInput: { flex: 1, borderWidth: 1, borderColor: C.border, borderRadius: 6,
                 paddingHorizontal: 10, paddingVertical: 8, color: C.gold, fontSize: 14 },
   adminBtn:  { borderWidth: 1, borderColor: C.abtn, borderRadius: 6,

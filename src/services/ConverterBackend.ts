@@ -222,6 +222,47 @@ class ConverterBackend implements SDRBackend {
   getStatus(): SDRStatus { return this.upStatus(this.inner.getStatus()); }
   getView():   SDRStatus { return this.upStatus(this.inner.getView()); }
 
+  /* ★★★ FIVE METHODS THE WRAPPER SILENTLY SWALLOWED, and TypeScript could not see any of them.
+   *
+   *  SDRScreen reaches these through `(client.current as any)?.method?.()` because they are not on
+   *  the SDRBackend interface — so once a session is wrapped (which is ALWAYS, wrapWithConverter
+   *  is unconditional) the property is undefined and the optional call does NOTHING. No error, no
+   *  warning, no type complaint: two escape hatches, `as any` and `?.`, lined up so that the call
+   *  vanished.
+   *
+   *  ★★ adminUnlock is how this was found. Stuart, 2026-09-02: "the admin password is a bit hit or
+   *     miss ... I tried entering it in the hardware page and it wouldnt unlock, I tried again it
+   *     wouldnt unlock." It never unlocked from there: the socket-level proof was dropped here.
+   *     The times it DID work were the door-ticket path (mintAdminTicket) taking effect instead —
+   *     which is exactly what "hit or miss" looks like from outside.
+   *  ★★★ AND THE OTHER FOUR ARE EVERY HARDWARE CONTROL FOR THREE OF THE FOUR RADIOS: the Airspy
+   *     HF+'s attenuator/LNA/AGC, the HackRF's amp/LNA/VGA/bias-T, the SDRplay's LNA/IF gain
+   *     reduction/notches, and the tuner bandwidth. All dead in the same way, since the converter
+   *     wrapper landed.
+   *  ★ None carries a frequency. setTunerBandwidth is a WIDTH — the same reasoning as zoom's
+   *    binBandwidth above: an offset must never touch one, and a non-inverting converter leaves it
+   *    unchanged anyway. So they are plain pass-throughs, which is what they should always have
+   *    been.
+   *  ▶ WHEN ADDING A METHOD TO UberSDRClient THAT SDRScreen CALLS VIA `as any`, ADD IT HERE TOO.
+   *    The type system cannot help; grep `client.current as any` for the full list. */
+  adminUnlock(nonce: string, token: string) {
+    (this.inner as unknown as { adminUnlock?: (n: string, t: string) => void })
+      .adminUnlock?.(nonce, token);
+  }
+  ahfControl(o: { att?: number; lna?: boolean; thresh?: boolean; ppb?: number; agc?: boolean }) {
+    (this.inner as unknown as { ahfControl?: (o: unknown) => void }).ahfControl?.(o);
+  }
+  hackrfControl(o: { amp?: boolean; lna?: number; vga?: number; biast?: boolean }) {
+    (this.inner as unknown as { hackrfControl?: (o: unknown) => void }).hackrfControl?.(o);
+  }
+  rspControl(o: { lna?: number; ifgr?: number; ifagc?: boolean; agcset?: number;
+                  rfNotch?: boolean; dabNotch?: boolean }) {
+    (this.inner as unknown as { rspControl?: (o: unknown) => void }).rspControl?.(o);
+  }
+  setTunerBandwidth(hz: number) {
+    (this.inner as unknown as { setTunerBandwidth?: (hz: number) => void }).setTunerBandwidth?.(hz);
+  }
+
   // ── Everything below carries no frequency: passed straight through. ──
   getProfiles?() { return this.inner.getProfiles!(); }
   selectProfile?(id: string) { this.inner.selectProfile?.(id); }

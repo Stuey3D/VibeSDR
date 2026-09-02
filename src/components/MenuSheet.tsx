@@ -237,6 +237,9 @@ export interface MenuSheetProps {
   adminSet?:        boolean;
   adminOk?:         boolean;
   adminRefused?:    boolean;
+  /** ★ Why it failed — see the same prop on LocalHardwarePanel. A rejected password and an
+   *  unreachable receiver are different problems and must not share a sentence. */
+  adminFailReason?: null | 'wrong' | 'unreachable';
   onAdminUnlock?:   (pw: string) => void;
   onResetSettings?: () => void;
   onReplayTour?:    () => void;
@@ -709,7 +712,7 @@ export default function MenuSheet({
   userBookmarks = [], currentFreq = 0, currentMode = '',
   onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks, onPickImportFile,
   onClose, onBack, onLocalHardware, radioModel, isTcp, onAdminLink,
-  adminSet = false, adminOk = false, adminRefused = false, onAdminUnlock,
+  adminSet = false, adminOk = false, adminRefused = false, adminFailReason = null, onAdminUnlock,
   onResetSettings, onReplayTour, onDisplaySettings,
   serverVersion = null, isVibeServer = false, onAbout, onRecordings,
   onZoomIn, onZoomOut, onZoomMin, onZoomMax, onSetDefault, isDefaultInstance = false,
@@ -1389,7 +1392,9 @@ export default function MenuSheet({
                   </View>
                   <Text style={styles.kbSkipNote}>
                     {adminRefused
-                      ? 'That password was not accepted.'
+                      ? (adminFailReason === 'unreachable'
+                          ? '\u26A0  Could not reach the receiver to check that password. Try again.'
+                          : '\u26A0  That password was not accepted. Check it and try again.')
                       : 'The owner\u2019s password unlocks the admin and setup pages, and the hardware controls.'}
                   </Text>
                 </>

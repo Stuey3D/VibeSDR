@@ -1957,6 +1957,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onAdminUnlockPw = useCallback(async (pw: string) => {
     if (!pw) return;
     setAdminRefused(false);
+    setAdminFailReason(null);
     // ★★★ THE NONCE MUST COME FROM THE PROCESS THAT WILL CHECK IT. `/vibeserver/auth` hands out a
     //     nonce from the process you ASK, and every radio behind a front door is a SEPARATE
     //     process with its own nonce store — so a challenge proved at the DOOR is meaningless at a
@@ -1982,7 +1983,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★ A wrong password and an unreachable server both come back empty — say it did not work
     //   rather than inventing which. The SOCKET is the half that decides: the server has the last
     //   word on it, and onAdminState will correct us if it disagrees.
-    if (!nonce || !token) setAdminRefused(true);
+    if (!nonce || !token) { setAdminRefused(true); setAdminFailReason('unreachable'); }
   }, [baseUrl, connectBase, mintAdminTicket]);
 
   /**
@@ -2719,6 +2720,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [adminSet, setAdminSet] = useState(false);
   const [adminOk,  setAdminOk]  = useState(false);
   const [adminRefused, setAdminRefused] = useState(false);
+  /* ★★ WHY it was refused, because the two causes want different words and the old single flag
+   *  could only say "locked". A password the SERVER rejected is a typo; a challenge we could not
+   *  fetch is a network problem, and telling somebody their password is wrong when the receiver is
+   *  unreachable sends them to change a password that was fine. */
+  const [adminFailReason, setAdminFailReason] = useState<null | 'wrong' | 'unreachable'>(null);
   /** ★★ A transient line for something that happened TO the admin session, as opposed to something
    *  the user did. Losing admin to a more recent login is not a fault and not a refusal, so it
    *  gets neither the refusal card (which is terminal and offers a retry) nor silence (which is
@@ -3971,8 +3977,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         //     with the countdown carrying on unchanged from where it was). Whoever stops a clock
         //     has to stop the thing that WINDS it.
         if (st.ok) { setSessionEndsAt(null); setSessionLeftMs(null); }
-        if (st.refused) setAdminRefused(true);
-        if (st.ok) setAdminRefused(false);
+        if (st.refused) { setAdminRefused(true); setAdminFailReason('wrong'); }
+        if (st.ok) { setAdminRefused(false); setAdminFailReason(null); }
         // ★★★ SUPERSEDED — an owner unlocked more recently somewhere else. Let the credential go,
         //     for the same reason as onEvicted: a ticket we keep is one the next reconnect
         //     replays, and replaying it takes the radio back off the person who just claimed it.
@@ -8306,6 +8312,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         adminSet={adminSet}
         adminOk={adminOk}
         adminRefused={adminRefused}
+        adminFailReason={adminFailReason}
         onAdminUnlock={onAdminUnlockPw}
         serverLabel={serverLabel}
         onOwrxSquelch={(db) => { owrxSquelchRef.current = db; client.current?.setSquelch?.(db); }}
@@ -8525,6 +8532,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           adminSet={adminSet}
           adminOk={adminOk}
           adminRefused={adminRefused}
+          adminFailReason={adminFailReason}
           onAdminUnlock={onAdminUnlockPw}
           rspSysGain={rspSys} rspOverload={rspOvl} rspSettling={rspSettling}
           rspLna={rspLna}
