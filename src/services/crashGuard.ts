@@ -13,6 +13,7 @@ import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { NavigationContainerRef } from '@react-navigation/native';
 import type { RootStackParamList } from '../../App';
+import { crumb } from './crumbs';
 
 const KEY = 'vibe.lastCrash';
 let recovering = false;
@@ -148,6 +149,16 @@ export function installCrashGuard(navRef: NavigationContainerRef<RootStackParamL
   EU.setGlobalHandler((error: any, isFatal?: boolean) => {
     const route = navRef.isReady() ? navRef.getCurrentRoute()?.name : undefined;
     const info = recordCrash(error, route);
+    /* ★★★ NAME THE CRASH IN THE BREADCRUMB TRAIL, not only in a store the device will not hand
+     *   over. A fatal here RESETS TO THE PICKER (below), and from the outside that is
+     *   indistinguishable from "the connect silently did not happen" — which is exactly how it
+     *   read on 2026-09-02: the wrist chose a radio, every connect crumb succeeded, and 313 ms
+     *   later the picker remounted with no explanation anywhere. The recovery was working
+     *   perfectly and hiding its own cause.
+     * ★★ Diagnostics already stores this, but only Documents/ is readable off the device, so the
+     *   record existed and could not be reached. The crumb file is the one that can. */
+    crumb(`CRASH ${isFatal ? 'FATAL' : 'non-fatal'} on ${route ?? '?'}: `
+          + String(info.message ?? error?.message ?? error).slice(0, 200));
 
     // Non-fatal: just log (keep the dev redbox in __DEV__).
     if (!isFatal) { if (__DEV__ && prev) prev(error, isFatal); return; }
