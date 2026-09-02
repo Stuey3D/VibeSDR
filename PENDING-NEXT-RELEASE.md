@@ -221,3 +221,31 @@ the device, and the log archive is a ~20 s buffer — so every piece of
 instrumentation added on 2026-09-01 was unreadable. The app's `Documents/` folder
 IS readable (`devicectl device info files --domain-type appDataContainer`), so
 write boot breadcrumbs there and read them back. One reproduce then answers it.
+
+## Serve AND listen on the same Android phone — designed, PROVEN, not built (2026-09-03)
+Discovered by ACCIDENT on the Xcover, which is the strongest form of the evidence: an hour
+unattended, real listeners, nobody nursing it.
+
+**Measured:** serving alone **82%** of 800% available; serving + listening to itself **277%**,
+with `iqDrops: 0` throughout. No audio issues. That is a mid-range Android 11 handset, so the
+"flagship only" caveat is gentler than it sounds — battery and heat are the real limits, not
+headroom. Stuart: "running a server and listening to it on the same phone is childs play."
+
+★★ IT ALREADY WORKS. Listen mode did not seize the dongle — it connected to the running server as
+a CLIENT (the panel said "sample rate set by the server", showed the owner lock, and counted
+"2 listening"). So there is no USB conflict to solve and no second shim: the plumbing is done.
+
+### What to build
+1. **"Keep serving & browse"** on the running-server screen — the sibling of the two exits added
+   on 2026-09-02, minus the teardown. Green: the only button there that leaves the receiver ON,
+   and that must be visible BEFORE the press.
+2. ★★★ **THE SERVING INDICATOR IS THE FEATURE, NOT THE BUTTON.** A pill on the picker (and while
+   listening) — `● SERVING · N listening` — that taps back to the server screen. Leaving silently
+   is exactly how an hour of 3x CPU went unexplained on 2026-09-02; without the pill this is a
+   trap, not a feature. ▶ A half-built version of this was written and REVERTED for that reason.
+3. **Loopback, like the Mac.** Stuart: "loopback like the mac". Listening to your own server must
+   go via 127.0.0.1, not the LAN address — no Wi-Fi round trip, and it cannot be broken by the
+   network dropping.
+4. ★ **THE COPY.** The server screen says "Leaving this screen stops the server and frees the
+   dongle". That becomes false — AGENTS.md's rule, and the half that always gets skipped.
+5. ★ Not the default. Stopping stays the ordinary way out for a phone that is warm or on battery.
