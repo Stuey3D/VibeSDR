@@ -289,7 +289,14 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   private struct DirMsg: Codable {
     let dir: String; let servers: [DirRow]
     struct DirRow: Codable { let id: String; let name: String; let type: String
-                             let country: String?; let users: Int; let full: Bool; let dist: Double? }
+                             let country: String?; let users: Int; let full: Bool; let dist: Double?
+                             /* ★ A VibeServer's radios, so one can be chosen IN the directory
+                              *  rather than through a second trip to the front door. Optional
+                              *  because every other backend sends none — and because an older
+                              *  PHONE build sends none either, and Buddy must keep working
+                              *  against one: a decode that required this key would empty the
+                              *  whole list on the pairing we most need to survive. */
+                             let radios: [DirRadio]? }
   }
   /// The DAB multiplex, when the phone is on a DAB profile. DAB is a LIST, not a
   /// continuum: the crown SELECTS a service, it does not tune. (The phone already
@@ -1552,7 +1559,8 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
         directories[msg.dir] = msg.servers.map { r in
           SDRServer(name: r.name, url: r.id, host: URL(string: r.id)?.host ?? r.id,
                     serverType: ServerType(rawValue: r.type) ?? .ubersdr,
-                    countryCode: r.country, distance: r.dist, users: r.users, full: r.full)
+                    countryCode: r.country, distance: r.dist, users: r.users, full: r.full,
+                    radios: r.radios)
         }
       }
 

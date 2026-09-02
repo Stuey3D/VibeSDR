@@ -392,14 +392,31 @@ object VibeTunnel {
                     put("users", r.optInt("users", 1))
                     put("shared", !r.optBoolean("locked", false) && r.optInt("users", 1) > 1)
                     put("restricted", r.optBoolean("restricted", false))
-                    // ★★★ THE FRONT DOOR'S `coverage` IS NUMBERS, AND THE DIRECTORY'S IS WORDS.
-                    //     Two different vocabularies behind one key: /vibeserver/radios sends
-                    //     [[500,31000000]] as `coverage` and the band NAMES as `allowedNames`,
-                    //     while the directory page joins `coverage` as text. Passing it straight
-                    //     through would have printed "500,31000000" on the card of every
-                    //     multi-radio server — the Pi and the Mac — the day one first listed. It
-                    //     has never been seen only because the phone takes the branch below.
-                    put("coverage", r.optJSONArray("allowedNames") ?: JSONArray())
+                    /* ★★★ THE RADIO'S ID, WITHOUT WHICH IT CANNOT BE ADDRESSED. Every radio behind
+                     *   a door lives at /r/<id>, so a listing that omits the id describes radios
+                     *   nobody can be sent to — which is exactly what stopped Buddy connecting
+                     *   straight to a chosen radio and forced a second trip through the door.
+                     *   directory.cpp has published it since the front door existed. */
+                    r.optString("id").takeIf { it.isNotEmpty() }?.let { put("id", it) }
+                    // ★ The cap this radio actually has, and who is on it — the same pair the
+                    //   fallback branch below now publishes. `users` stays for older readers.
+                    put("maxListeners", r.optInt("users", 1))
+                    if (r.has("listeners")) put("listeners", r.optInt("listeners", 0))
+                    // ★ What it is and where it is pointed, so a chooser can tell two apart.
+                    r.optString("antenna").takeIf { it.isNotEmpty() }?.let { put("antenna", it) }
+                    if (r.has("centreHz")) put("centreHz", r.optLong("centreHz", 0L))
+                    if (r.has("spanHz"))   put("spanHz",   r.optLong("spanHz", 0L))
+                    /* ★★★ CORRECTED, AND THIS IS THE FAULT THAT SPLIT THE DIRECTORY IN TWO. The
+                     *   comment that used to sit here said the directory's `coverage` is WORDS —
+                     *   true when it was written, and no longer: directory.cpp now forwards
+                     *   /vibeserver/radios' three fields under their own names, so `coverage` is
+                     *   the hardware's reach IN HZ and `allowedNames` is the words. Publishing
+                     *   words under `coverage` meant one directory carried both vocabularies under
+                     *   one key, and no reader could tell which it had.
+                     * ★★ Straight through now, each under the name that means what it holds. */
+                    r.optJSONArray("coverage")?.let { put("coverage", it) }
+                    r.optJSONArray("allowedNames")?.let { put("allowedNames", it) }
+                    r.optJSONArray("allowed")?.let { put("allowed", it) }
                     // ★★ AND THE NUMBERS TRAVEL SEPARATELY, under a key that means numbers. What
                     //    the owner PERMITS, falling back to the hardware's reach where no lists
                     //    are set — a search must not offer a band the operator has blocked.
@@ -437,6 +454,22 @@ object VibeTunnel {
                 val cap = ident?.optInt("maxUsers", 1) ?: 1
                 put("users", cap)
                 put("shared", !locked && cap > 1)
+                /* ★★★ AND WHO IS ON IT RIGHT NOW. `users` is the CAP; without a live count beside
+                 *   it every reader can say is "up to 10", which is what Buddy's radio rows showed
+                 *   for the Xcover while the Pi's rows showed real occupancy. The number is already
+                 *   in `ident` — it is published at the top level of this very payload, ten lines
+                 *   below — and was simply never put on the radio.
+                 * ★★ ONE RULE, TWO READERS: directory.cpp grew `listeners`/`maxListeners` per radio
+                 *   and this publisher did not, so the SAME directory carried two different radio
+                 *   shapes and the app could not tell which it was reading. Both now say the same
+                 *   thing. `users` is kept beside them so older app builds keep working.
+                 * ★ An absent count must read as UNKNOWN, never as zero — advertising a free radio
+                 *   on no evidence sends somebody to one that will refuse them. So it is only put
+                 *   when we actually read it. */
+                ident?.let {
+                    if (it.has("listeners")) put("listeners", it.optInt("listeners", 0))
+                }
+                put("maxListeners", cap)
                 // ★ What this radio is actually allowed to tune, when the owner has narrowed it —
                 //   "FM broadcast" is far more use to a listener than a frequency pair.
                 // ★ Prefer the owner's own words for the band; fall back to the names the
@@ -452,15 +485,39 @@ object VibeTunnel {
                 //     and a string of one are indistinguishable.
                 //  ★ Split here rather than at the screen, because the screen's join is what the
                 //    SETUP page shows a human and is right for that.
-                if (coverage.isNotEmpty())
-                    put("coverage", JSONArray().apply {
-                        coverage.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                                .forEach { put(it) }
-                    })
-                else if (bands != null && bands.length() > 0) put("coverage", bands)
+                /* ★★★ WORDS GO IN `allowedNames`, NOT IN `coverage`. This is the second half of
+                 *   the same two-readers fault: `coverage` means the hardware's reach IN HZ
+                 *   everywhere else — that is what /vibeserver/radios sends and what directory.cpp
+                 *   forwards — and this publisher was putting BAND NAMES in it. So one directory
+                 *   carried numbers under `coverage` from the Pi and strings under `coverage` from
+                 *   the Xcover, and any reader doing arithmetic on it got words.
+                 * ★★ The names were never wrong, only mis-filed: they move to `allowedNames`, which
+                 *   is the key that has always meant "those ranges, in words", and is what the app
+                 *   reads to write "Shared · AM/FM Broadcast" on a wrist.
+                 * ★ `coverage` is now simply OMITTED rather than filled with the wrong kind of
+                 *   thing: this branch is a phone holding one dongle and does not know the
+                 *   hardware's full reach. Absent is honest; wrong is not. */
+                val ownerBands = coverage.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                if (ownerBands.isNotEmpty())
+                    put("allowedNames", JSONArray().apply { ownerBands.forEach { put(it) } })
+                else if (bands != null && bands.length() > 0) put("allowedNames", bands)
+                /* ★★ RESTRICTED IS THE OWNER NARROWING IT, and only the owner's own list says so.
+                 *  `bands` is what the server DERIVED from its band plan, which an unrestricted
+                 *  radio has too — reading that as a restriction would mark every radio limited. */
+                put("restricted", ownerBands.isNotEmpty())
                 // ★★ WHAT IT CAN BE TUNED TO, in Hz — see vsTunableRanges in the shim. Absent when
                 //    the server could not say, and absent must never be read as "anything".
-                ident?.optJSONArray("tunable")?.let { put("ranges", it) }
+                //  ★ Under BOTH keys, as directory.cpp does: `allowed` is what the owner permits,
+                //    `ranges` is the same thing under the name the directory page reads.
+                ident?.optJSONArray("tunable")?.let { put("ranges", it); put("allowed", it) }
+                // ★ Where it is pointed and how it is demodulating, when the shim says. Only put
+                //   when present — a locked radio's window is drawn from centre ± span/2, so a
+                //   guessed centre would draw a window that does not exist.
+                ident?.let {
+                    if (it.has("centreHz")) put("centreHz", it.optLong("centreHz", 0L))
+                    if (it.has("spanHz"))   put("spanHz",   it.optLong("spanHz", 0L))
+                    if (it.has("mode"))     put("mode",     it.optString("mode", ""))
+                }
             })
         }
         out.put("radios", radios)

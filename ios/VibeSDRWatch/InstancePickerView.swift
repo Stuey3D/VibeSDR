@@ -61,6 +61,9 @@ struct InstancePickerView: View {
 
   @State private var openDir: String? = nil
   @State private var openGroups: Set<String> = []   // "dirId|ISO" of expanded country groups
+  /// ★ Which multi-radio servers are expanded, by url. See serverRow: a VibeServer holding several
+  ///  receivers opens IN PLACE rather than sending the wearer to a second screen.
+  @State private var openRadios: Set<String> = []
   @State private var lists: [String: [SDRServer]] = [:]     // directoryId -> servers
   @State private var loading: Set<String> = []
   @State private var errored: Set<String> = []
@@ -228,21 +231,79 @@ struct InstancePickerView: View {
     }
   }
 
+  /* ★★★ A SERVER WITH SEVERAL RADIOS OPENS IN PLACE; EVERY OTHER ROW CONNECTS ON TAP.
+   *
+   *  This is the whole of the change Stuart asked for. A VibeServer front door was the ONE backend
+   *  that needed a second step — pick the server, then open its landing page and pick a radio —
+   *  and that second step is a second round trip to a phone that may have gone back to sleep. The
+   *  radios now arrive with the directory listing, so the choice happens here and the tap goes
+   *  straight to the radio's own /r/<id> address. The door is never opened.
+   * ★★ ONLY WHERE THERE IS A CHOICE. `radios` is nil for every other backend and for single-radio
+   *    servers, and those rows behave exactly as they always have — connect on tap. It is also nil
+   *    when the phone is an older build that does not send radios, which must keep working.
+   * ★ The chevron is what tells the two apart before you touch anything: a row that expands must
+   *   not look identical to a row that connects. */
   @ViewBuilder private func serverRow(_ s: SDRServer) -> some View {
-    Button { connect(url: s.url, name: s.name, type: s.serverType) } label: {
+    let radios = s.radios ?? []
+    let expandable = radios.count > 1
+    let open = openRadios.contains(s.url)
+
+    Button {
+      if expandable {
+        if open { openRadios.remove(s.url) } else { openRadios.insert(s.url) }
+      } else {
+        connect(url: s.url, name: s.name, type: s.serverType)
+      }
+    } label: {
       HStack(spacing: 8) {
         typeBadge(s.serverType)
         VStack(alignment: .leading, spacing: 1) {
           Text(s.name).font(.system(size: 14)).foregroundColor(s.full ? Self.dim : Self.cream).lineLimit(1)
-          Text(serverSubtitle(s)).font(.system(size: 9)).foregroundColor(Self.dim).lineLimit(1)
+          Text(expandable ? "\(radios.count) radios" : serverSubtitle(s))
+            .font(.system(size: 9)).foregroundColor(Self.dim).lineLimit(1)
         }
         Spacer()
+        if expandable {
+          Image(systemName: open ? "chevron.up" : "chevron.down")
+            .font(.system(size: 11)).foregroundColor(Self.dim)
+        }
         Button { favs.toggle(s) } label: {
           Image(systemName: favs.isFav(s.url) ? "heart.fill" : "heart")
             .font(.system(size: 13)).foregroundColor(favs.isFav(s.url) ? .red : Self.dim)
         }.buttonStyle(.plain)
       }.opacity(s.full ? 0.5 : 1)
-    }.buttonStyle(.plain).disabled(s.full)
+    }.buttonStyle(.plain).disabled(s.full && !expandable)
+
+    if expandable && open {
+      ForEach(radios) { r in radioRow(s, r) }
+    }
+  }
+
+  /* One radio, in two lines: who is on it, and what you may do with it.
+   * ★★★ BOTH LINES ARE FINISHED TEXT FROM THE PHONE. Nothing here counts listeners, formats a
+   *   frequency or decides what "restricted" means — the phone's radioOccupancy/radioLimits own
+   *   all of that, so there is ONE wording shared by both platforms instead of a Swift copy that
+   *   drifts. It also keeps Hz arithmetic off arm64_32, where Int is 32-bit below watchOS 27.
+   * ★★ A FULL RADIO IS SHOWN AND DISABLED, not hidden: "3/3 full" tells the wearer to wait or
+   *   choose another, whereas a vanished row reads as a broken list. */
+  @ViewBuilder private func radioRow(_ s: SDRServer, _ r: DirRadio) -> some View {
+    let full = r.full ?? false
+    Button { connect(url: r.id, name: r.name, type: .vibeserver) } label: {
+      HStack(spacing: 6) {
+        // Indent, so a radio reads as belonging to the server above it rather than as a peer.
+        Rectangle().fill(Self.dim.opacity(0.5)).frame(width: 2, height: 26).padding(.leading, 6)
+        VStack(alignment: .leading, spacing: 1) {
+          HStack(spacing: 4) {
+            Text(r.name).font(.system(size: 12)).foregroundColor(full ? Self.dim : Self.cream)
+              .lineLimit(1)
+            Text(r.occupancy).font(.system(size: 9))
+              .foregroundColor(full ? .orange : Self.dim).lineLimit(1)
+          }
+          Text(r.limits).font(.system(size: 9)).foregroundColor(Self.dim).lineLimit(1)
+        }
+        Spacer()
+      }.opacity(full ? 0.5 : 1)
+    }.buttonStyle(.plain).disabled(full)
   }
 
   /// Simplified wrist sort: by distance from the user when the directory reports it (UberSDR gives

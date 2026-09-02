@@ -1,4 +1,5 @@
 import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
+import type { VibeRadio } from './vibeserverRadios';
 
 export interface SDRInstance {
   uuid:          string | null;  // collector `id` (UUIDv4) — used for vibesdr:// deep links
@@ -40,6 +41,19 @@ export interface SDRInstance {
    *  ask BEFORE connecting — a stranger meeting a PIN box they cannot fill reads it as a broken
    *  server rather than one that was never for them. */
   needsPin?: boolean;
+  /** ★★★ THE RADIOS BEHIND A FRONT DOOR, CARRIED FROM THE LISTING ITSELF.
+   *
+   *  The VibeServer directory has always published these — `directories.ts` parsed them, used the
+   *  count to write "4 radios" on the row, and then threw the array away. So the app went back to
+   *  the door over the network to re-fetch a list it was already holding, and that second trip is
+   *  the step no other backend has: it is where a watch-driven connect needed several attempts,
+   *  because it needs the phone awake a second time.
+   *  ★★ Keeping them means a radio can be chosen straight from the directory and connected at its
+   *     own /r/<id> address, with the door never opened. See radioOccupancy/radioLimits for how
+   *     they are described, and browseForWatch for how they reach Buddy.
+   *  ★ Optional and possibly EMPTY on an older publisher that sends no ids — absent must fall back
+   *    to the door, never delete the server. */
+  radios?: VibeRadio[];
 }
 
 const BASE_URL = 'https://instances.ubersdr.org/api/instances?conditions=true';

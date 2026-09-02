@@ -860,6 +860,10 @@ class WatchProvider {
   sendDirectory(dirId: string, servers: {
     id: string; name: string; type: string; country: string | null;
     users: number; full: boolean; dist: number | null;
+    /** ★ A VibeServer's radios, where there is a choice to make — see browseForWatch. The strings
+     *  are already formatted for a wrist row; Buddy draws them and computes nothing. Absent on
+     *  every other backend and on single-radio servers, which connect at the door as before. */
+    radios?: { id: string; name: string; occupancy: string; limits: string; full: boolean }[];
   }[]) {
     /* NOT gated on `reachable` — same reasoning as flushPhone(). A browse that WOKE us headless is
      * answered before the isReachable poll has settled, so this flag was still false and the reply

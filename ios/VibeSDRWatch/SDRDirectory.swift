@@ -69,6 +69,44 @@ struct SDRServer: Identifiable, Codable, Hashable {
   var maxUsers: Int = 0
   var full: Bool = false
   var pin: String = ""             // VibeServer PIN (saved per host when the user enters one)
+  /* ★★★ THE RADIOS BEHIND THIS SERVER, WHERE THERE IS A CHOICE TO MAKE.
+   *
+   *  A VibeServer front door holds several receivers, and until now choosing one meant a SECOND
+   *  step after picking the server: the phone opened the door, sent back a list, and the wearer
+   *  chose from a separate screen. That second step is the only one no other backend has, and it
+   *  needs the phone awake a second time — which is where a watch-driven VibeServer connect kept
+   *  needing several attempts.
+   *  ★★ The listing already knows the radios, so they arrive WITH the row and the wearer expands
+   *     it in place. Tapping one connects straight to its own /r/<id> address; the front door is
+   *     never opened.
+   *  ★ nil on every other backend and on single-radio servers — one radio is not a choice, and
+   *    those rows connect exactly as they always have. nil also covers an older phone build that
+   *    sends no radios at all, which must keep working.
+   *  ★ `occupancy` and `limits` are FINISHED TEXT from the phone. Buddy draws them and computes
+   *    nothing: one formatter for both platforms, and no Hz arithmetic on arm64_32, where Swift's
+   *    Int is 32 bits below watchOS 27. */
+  var radios: [DirRadio]? = nil
+}
+
+/// One radio behind a front door, as the phone described it. Two lines, already worded.
+struct DirRadio: Identifiable, Codable, Hashable {
+  /// The FULL address, already /r/<id>-prefixed by the phone. The watch is handed addresses and
+  /// never taught to build them — the same rule the directory rows themselves follow.
+  var id: String
+  var name: String
+  /// "Free", "In use", "2/10 in use" — see radioOccupancy on the phone.
+  var occupancy: String
+  /// "Unrestricted", "Locked 2.8-10.8MHz", "Shared · AM/FM Broadcast" — see radioLimits.
+  var limits: String
+  /* ★★★ OPTIONAL, AND THAT IS NOT A STYLE CHOICE — A DEFAULT WOULD NOT HAVE WORKED.
+   *   Swift's synthesised Codable REQUIRES every non-optional key to be present; `= false` is an
+   *   initialiser default and does nothing for decoding, so a payload without `full` would throw
+   *   and take the ENTIRE directory listing with it.
+   * ★★ And version skew here is not hypothetical, it is the normal state: a phone install does
+   *   NOT update the watch app, so a new Buddy routinely runs against an older phone and vice
+   *   versa. Every key added to this struct from now on must be optional for that reason.
+   * ★ nil reads as "not full" — unknown occupancy must never lock somebody out of a radio. */
+  var full: Bool?
 }
 
 // ── Directory metadata ───────────────────────────────────────────────────────────

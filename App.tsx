@@ -10,7 +10,8 @@ import { useFonts } from 'expo-font';
 LogBox.ignoreAllLogs();
 
 import { watchProvider } from './src/services/watchProvider';
-import { fetchFrontDoor, radioBaseUrl, isSharedDial } from './src/services/vibeserverRadios';
+import { fetchFrontDoor, radioBaseUrl, isSharedDial,
+         radioOccupancy, radioLimits } from './src/services/vibeserverRadios';
 import { favouritesCollection, getFavourites, getTcpFavs, setFavouriteServerType } from './src/services/favourites';
 import { bookmarksCollection } from './src/services/bookmarksSync';
 import { registerCollection, registerSyncHook, startCloudSync } from './src/services/cloudSync';
@@ -536,6 +537,37 @@ export default function App() {
             users: s.users ?? 0,
             full: !!s.full,
             dist: s.distance ?? null,
+            /* ★★★ THE RADIOS, SO THE WRIST NEVER HAS TO ASK THE DOOR. This is the whole of Stuart's
+             *   change: a VibeServer was the one backend needing a SECOND step — pick the server,
+             *   then open its landing page and pick a radio — and that second step needs the phone
+             *   awake a second time, which is where "VibeServer needs several attempts" lived.
+             *   The listing already carries the radios, so they travel with the row and the wearer
+             *   picks a radio in the directory, in place.
+             * ★★ ONLY WHERE THERE IS A CHOICE TO MAKE. One radio is not a choice: that row stays a
+             *   plain server row and connects as it always has, at the door.
+             * ★★★ AND ONLY WHERE THEY CAN BE ADDRESSED. A radio with no `id` has no /r/<id> to be
+             *   sent to — the older Android publisher omitted it — so offering it on the wrist
+             *   would draw a row that cannot be tapped. Those servers keep the door route, which
+             *   still works. Missing data must not delete a server.
+             * ★ FINISHED TEXT, not fields: the phone owns the wording (radioOccupancy /
+             *   radioLimits) so there is one formatter, not one per platform, and no Hz arithmetic
+             *   happens on arm64_32 where Swift's Int is 32-bit below watchOS 27.
+             * ★ `id` is the FULL address, already /r/<id>-prefixed — the same rule sendRadios and
+             *   the directory rows follow: the watch is handed addresses, never taught to build
+             *   them. */
+            radios: (s.radios && s.radios.length > 1 && s.radios.every((r) => !!r.id))
+              ? s.radios.map((r) => ({
+                  id: radioBaseUrl(s.url, r.id),
+                  name: r.label,
+                  occupancy: radioOccupancy(r),
+                  limits: radioLimits(r),
+                  /* ★★ SAID BY THE PHONE, NOT INFERRED FROM THE TEXT. Buddy dims and disables a
+                   *  full radio, and parsing "3/3 full" back out of a sentence to decide that
+                   *  would be a second reader of a rule the phone already knows. Unknown
+                   *  occupancy is NOT full — absent data must never lock somebody out. */
+                  full: r.listeners != null && r.users > 0 && r.listeners >= r.users,
+                }))
+              : undefined,
           })));
         })
         .catch(() => watchProvider.sendDirectory(dirId, []));   // empty list = "couldn't load" on the wrist

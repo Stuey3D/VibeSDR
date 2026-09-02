@@ -9,6 +9,7 @@ import { fetchFmdxServers } from './fmdxDirectory';
 import { countryForCoord } from './countryLookup';   // Kiwi/Receiverbook carry no country code
 import { countryFromText } from './countryFromText'; // last resort: parse the name/location text
 import { isoForCallsign } from './callsignIso';       // final resort: map the callsign prefix
+import type { VibeRadio } from './vibeserverRadios';
 
 export type DirectoryId = 'vibeserver' | 'ubersdr' | 'receiverbook' | 'kiwisdr' | 'fmdx' | 'spyserver';
 
@@ -76,6 +77,58 @@ const VIBESERVER_DIR_URL = 'https://vibeserver.vibesdr.net/api/directory';
  * ★ Anything the server did not say stays absent rather than being guessed: an unlisted radio
  *   model shows nothing, not "unknown".
  */
+/** Is this a [lo, hi] pair of numbers, rather than a band NAME? */
+const isNumRanges = (v: any): v is [number, number][] =>
+  Array.isArray(v) && v.length > 0 && Array.isArray(v[0]) && typeof v[0][0] === 'number';
+
+/**
+ * A listing's radio objects, in the shape the rest of the app speaks.
+ *
+ * ★★★ TWO PUBLISHERS, TWO SHAPES, AND THE APP CANNOT TELL THEM APART FROM THE URL. directory.cpp
+ *     sends `id` / `listeners` / `maxListeners` with NUMBERS in `coverage` and words in
+ *     `allowedNames`; Android's VibeTunnel.kt sent `users`, no id, and put the WORDS in
+ *     `coverage`. Both were in the live directory at once on 2026-09-02 — the Pi one way, the
+ *     Xcover the other. VibeTunnel.kt has been corrected, but a server upgrades when its owner
+ *     upgrades it, so this must go on reading both for as long as any old build is listed.
+ * ★★ WHICH IS WHY `coverage` IS SNIFFED BY TYPE, not trusted by name: strings are band names,
+ *    number pairs are Hz. The one thing that must never happen is arithmetic on a word.
+ * ★ A radio with no `id` is kept, not dropped — it simply cannot be addressed at /r/<id>, and the
+ *   caller falls back to the door for it. Missing data must not delete a radio.
+ */
+function normaliseRadios(rows: any[]): VibeRadio[] {
+  return rows.map((r: any): VibeRadio => {
+    const cov = r.coverage;
+    // Words may arrive under `allowedNames` (current) or under `coverage` (older Android).
+    const names: string[] | undefined =
+      Array.isArray(r.allowedNames) && r.allowedNames.length ? r.allowedNames.map(String)
+      : (Array.isArray(cov) && typeof cov[0] === 'string') ? cov.map(String)
+      : undefined;
+    const allowed = isNumRanges(r.allowed) ? r.allowed
+                  : isNumRanges(r.ranges)  ? r.ranges
+                  : undefined;
+    return {
+      id: String(r.id ?? ''),
+      label: String(r.name ?? r.label ?? 'Radio'),
+      driver: String(r.driver ?? ''),
+      // ★ The CAP. `maxListeners` is the current name; `users` is what the older publisher called
+      //   the same number, so it is a fallback and not a second meaning.
+      users: Number(r.maxListeners ?? r.users ?? 1) || 1,
+      // ★ LIVE occupancy, and undefined where it was never published — see radioOccupancy: an
+      //   absent count reads as unknown, never as an empty radio.
+      listeners: typeof r.listeners === 'number' ? r.listeners : undefined,
+      locked: !!r.locked,
+      restricted: !!r.restricted,
+      centreHz: typeof r.centreHz === 'number' ? r.centreHz : undefined,
+      spanHz: typeof r.spanHz === 'number' ? r.spanHz : undefined,
+      mode: typeof r.mode === 'string' ? r.mode : undefined,
+      antenna: typeof r.antenna === 'string' ? r.antenna : undefined,
+      coverage: isNumRanges(cov) ? cov : undefined,
+      allowed,
+      allowedNames: names,
+    };
+  });
+}
+
 async function fetchVibeServers(lat?: number, lon?: number): Promise<SDRInstance[]> {
   const res = await dirFetch(VIBESERVER_DIR_URL);
   if (!res.ok) throw new Error(`VibeServer directory: HTTP ${res.status}`);
@@ -123,6 +176,7 @@ async function fetchVibeServers(lat?: number, lon?: number): Promise<SDRInstance
       full: max > 0 && users >= max,
       sessionLimitMins: Number(s.limitMin) > 0 ? Number(s.limitMin) : undefined,
       needsPin: !!s.pin,
+      radios: normaliseRadios(radios),
     };
   }).filter((i: SDRInstance) => !!i.url);
 }
