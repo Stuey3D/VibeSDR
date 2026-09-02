@@ -3340,16 +3340,36 @@ enum VibeCrashLog {
       .appendingPathComponent("boot-crumbs.log")
   }
 
-  /// UIApplication.applicationState is main-thread-only, so it is sampled by whoever is on the
-  /// main thread and passed in — never read from the writer queue.
+  /* ★★★ THE STATE, EVEN WHEN WE ARE NOT ON THE MAIN THREAD TO ASK FOR IT.
+   *
+   *  UIApplication.applicationState is main-thread-only, so this returned "?" for every crumb
+   *  written from anywhere else — which in practice meant EVERY JS crumb, because JS has its own
+   *  thread. The first real capture came back with the whole React startup marked "?", losing
+   *  exactly the column the black-screen question turns on: was the app still headless while it
+   *  rendered?
+   * ★★ So the last main-thread reading is CACHED and reused, marked with "~" to say it is
+   *    inherited rather than freshly sampled. An inherited letter is a genuine fact about the most
+   *    recent lifecycle event; a "?" is nothing at all. It is never silently presented as a live
+   *    reading — the tilde is the whole point.
+   * ★ The scene callbacks all log from the main thread, so the cache is refreshed at every
+   *   transition that matters and a JS crumb is only ever inheriting from moments ago. */
+  private static let stateLock = NSLock()
+  private static var lastState = "?"
+
   private static func stateLetter() -> String {
-    guard Thread.isMainThread else { return "?" }
-    switch UIApplication.shared.applicationState {
-    case .active:     return "A"     // foreground, receiving events
-    case .inactive:   return "I"     // foreground, not receiving (mid-transition)
-    case .background: return "B"     // ★ the one that matters — a headless, watch-woken launch
-    @unknown default: return "?"
+    guard Thread.isMainThread else {
+      stateLock.lock(); defer { stateLock.unlock() }
+      return lastState == "?" ? "?" : lastState + "~"
     }
+    let s: String
+    switch UIApplication.shared.applicationState {
+    case .active:     s = "A"     // foreground, receiving events
+    case .inactive:   s = "I"     // foreground, not receiving (mid-transition)
+    case .background: s = "B"     // ★ the one that matters — a headless, watch-woken launch
+    @unknown default: s = "?"
+    }
+    stateLock.lock(); lastState = s; stateLock.unlock()
+    return s
   }
 
   private static let stamp: DateFormatter = {

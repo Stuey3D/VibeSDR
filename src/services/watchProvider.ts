@@ -26,6 +26,7 @@ import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
 import { getColorLUT } from '../assets/colormapUtils';
 import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalProcessor';
 import { getBandsAtRegion, bandHex } from '../constants/bandPlan';
+import { crumb } from './crumbs';
 
 const Native = NativeModules.VibeWatchModule as
   | {
@@ -513,6 +514,7 @@ class WatchProvider {
   private setReachable(r: boolean) {
     if (r === this.reachable) return;
     this.reachable = r;
+    crumb(`watch reachable -> ${r}`);
     if (r) this.lastPalette = '';   // re-send palette on (re)connect
     this.onReachable?.(r);
     if (r) this.flushAll();   // the watch arrived (or came back) with nothing
@@ -836,8 +838,17 @@ class WatchProvider {
   }
 
   private flushFavs() {
-    if (!this.available || !this.reachable || this.lastFavs === this.sentFavs) return;
+    /* ★★★ THREE WAYS TO SEND NOTHING, AND THEY LOOK IDENTICAL ON THE WRIST — an empty favourites
+     *   list. `reachable` is the interesting one: on watchOS it means FOREGROUND, not alive, and
+     *   at cold boot it has not settled, so a watch that is plainly in front of the user can still
+     *   be "unreachable" here. Say WHICH gate closed rather than leaving it to be guessed. */
+    if (!this.available || !this.reachable || this.lastFavs === this.sentFavs) {
+      crumb(`favs NOT sent: available=${this.available} reachable=${this.reachable}`
+            + ` unchanged=${this.lastFavs === this.sentFavs}`);
+      return;
+    }
     this.sentFavs = this.lastFavs;
+    crumb(`favs sent (${this.lastFavs.length}B)`);
     Native!.sendFavourites(this.lastFavs);
   }
 
@@ -870,8 +881,16 @@ class WatchProvider {
      * was dropped on the floor: the wrist span for 20 s and then said the phone was silent, about a
      * phone that had just fetched the whole directory for it. The native side gates on `linkAlive`
      * (reachable OR we heard from the watch < 10 s ago) — and we demonstrably just did. */
-    if (!this.available) return;
-    Native?.sendDirectory?.(JSON.stringify({ dir: dirId, servers }));
+    if (!this.available) { crumb(`dir ${dirId} NOT sent: watch link unavailable`); return; }
+    const payload = JSON.stringify({ dir: dirId, servers });
+    /* ★★★ THE BYTE COUNT, BECAUSE sendMessage HAS A ~65 KB CEILING AND DROPS THE MESSAGE WHOLE.
+     *   That has already produced this exact symptom once — the wrist spinning to its timeout
+     *   while the phone believed it had answered — and radios have just been added to these rows,
+     *   which makes the payload bigger than any measurement we have. Log it rather than assume the
+     *   cap is still enough. */
+    crumb(`dir ${dirId} sending ${servers.length} servers, ${payload.length}B`
+          + ` (reachable=${this.reachable})`);
+    Native?.sendDirectory?.(payload);
   }
 
   /** Register the "browse this directory for the watch" handler (phone fetches + sends). Outside

@@ -489,6 +489,7 @@ export default function App() {
        *   DEFAULT instance, i.e. audio pours out of a phone whose owner only asked to see a list.
        *   `claimed` is exactly the "the watch is deciding where we go, stand down" flag; a browse
        *   is that decision beginning. Cleared by applyInstance when the choice actually lands. */
+      crumb(`browseForWatch ${dirId} — fetching`);
       watchTargetPending.claimed = true;
       /* ★★ AND STAY AWAKE WHILE THEY BROWSE. Fetching a directory means the wearer is mid-task and
        *  their next tap is seconds away — but nothing was playing, so iOS would suspend us between
@@ -510,6 +511,7 @@ export default function App() {
            * ★ Filtered HERE, not on the watch: Buddy's list comes from this handler, not from its
            *   own Directories.fetch, so the watch never sees what it is not sent. Jr does the same
            *   filtering in its own fetch because Jr fetches for itself. */
+          crumb(`browseForWatch ${dirId} — directory returned ${all.length} servers`);
           const filtered = all.filter((s) => s.extApi !== 0);
 
           /* ★★★ CAP THE LIST — `sendMessage` HAS A ~65 KB CEILING and drops the message whole.
@@ -570,7 +572,13 @@ export default function App() {
               : undefined,
           })));
         })
-        .catch(() => watchProvider.sendDirectory(dirId, []));   // empty list = "couldn't load" on the wrist
+        .catch((e) => {
+          /* ★★★ THE DIRECTORY FETCH FAILED, and until now that was indistinguishable on the wrist
+           *   from a phone that never answered — both draw an empty list. Naming the error is the
+           *   difference between "the phone is asleep" and "vibeserver.vibesdr.net timed out". */
+          crumb(`browseForWatch ${dirId} — FETCH FAILED: ${String(e?.message ?? e).slice(0, 120)}`);
+          watchProvider.sendDirectory(dirId, []);   // empty list = "couldn't load" on the wrist
+        });
     };
     watchProvider.setBrowseHandler(browseForWatch);
 
