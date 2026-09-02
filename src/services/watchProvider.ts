@@ -619,7 +619,19 @@ class WatchProvider {
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
     if (this.lastRxLat === lat && this.lastRxLon === lon) return;   // idempotent
     this.lastRxLat = lat; this.lastRxLon = lon;
-    Native!.sendReceiver(lat, lon);
+    /* ★★★ OPTIONAL-CALLED, AND LOUD ABOUT IT. `Native!.sendReceiver(...)` threw "undefined is not
+     *   a function" for as long as the method existed in VibeWatchModule.swift but not in the .m —
+     *   and because this runs in a useEffect on SDRScreen, React tore the whole screen down and
+     *   crashGuard reset to the picker. One unexported bridge method presented as "VibeServer will
+     *   not connect", a two-attempt connect and a black phone.
+     * ★★ The `?.` is the seatbelt, but SILENCE is how this survived three occurrences — so a
+     *   missing method now says so in the crumb trail instead of quietly doing nothing. A no-op we
+     *   can read is safe; a no-op we cannot is the bug that keeps coming back. */
+    if (typeof Native?.sendReceiver !== 'function') {
+      crumb('sendReceiver MISSING from the native bridge — not exported in the .m?');
+      return;
+    }
+    Native.sendReceiver(lat, lon);
   }
   private lastRxLat: number | null = null;
   private lastRxLon: number | null = null;

@@ -50,6 +50,16 @@ RCT_EXTERN_METHOD(sendDirectory : (NSString *)json)
 //     anywhere says so. This file has cost us that twice already.
 RCT_EXTERN_METHOD(sendRadios : (NSString *)json)
 
+/* ★★★ THE THIRD TIME A SWIFT @objc METHOD WAS NEVER LISTED HERE, AND THE FIRST TIME IT CRASHED
+ *   THE APP. VibeWatchModule.swift has declared sendReceiver(_:lon:) all along; without this line
+ *   it simply IS NOT THERE as far as JS is concerned, so `Native!.sendReceiver(lat, lon)` in
+ *   watchProvider is a call on `undefined`.
+ * ★★ It threw inside a useEffect on SDRScreen, so React unmounted the whole screen and crashGuard
+ *   reset to the picker — which looked exactly like "the VibeServer connect silently failed", and
+ *   left the phone showing a 13-view tree where a healthy one is 565. That is the black screen,
+ *   the two-attempt connect and the "VibeServer will not connect" report: ONE missing line.
+ * ★ Only VibeServers hit it because only they arrive with a receiver location to send. */
+RCT_EXTERN_METHOD(sendReceiver : (nonnull NSNumber *)lat lon : (nonnull NSNumber *)lon)
 RCT_EXTERN_METHOD(sendPhone : (NSString *)status)
 RCT_EXTERN_METHOD(sendSession : (nonnull NSNumber *)secsLeft limitMin : (nonnull NSNumber *)limitMin)
 RCT_EXTERN_METHOD(sendPinRequest : (NSString *)name)
