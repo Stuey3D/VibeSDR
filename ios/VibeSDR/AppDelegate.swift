@@ -409,6 +409,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     guard let w = window else { VibeCrumbs.log("scene didBecomeActive — NO WINDOW"); return }
     VibeCrumbs.log("scene didBecomeActive — \(describe(w))")
     VibeCrumbs.log("tree: \(hierarchy(w))")
+    VibeCrumbs.log("vcs: \(vcTree(w))")
     kickScreenStack(w)
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
       guard let self, let w = self.window else { return }
@@ -443,6 +444,36 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
    *    view is built in a background scene and never draws" — was wrong about the WINDOW (scene,
    *    key window and rootVC are healthy in every capture) and right about the shape one layer
    *    down, at the screen stack. */
+  /* ★★★ THE VIEW CONTROLLERS, WHICH IS WHERE THIS ACTUALLY LIVES.
+   *
+   *  The kick above found the screen stack and changed nothing (viewsTotal 12 before, 12 after,
+   *  still 12 at +600 ms — a real failure, not a sampling artefact). And the telling detail is
+   *  that the stack is empty from the FIRST foreground: the PICKER never rendered natively either,
+   *  so this was never about the SDR push. On a headless launch no screen mounts at all.
+   *  ★★ Views cannot answer that. UIViewControllerWrapperView being empty means no child view
+   *     controller's view is loaded — and whether that is "no child VC exists" (React/RN Screens
+   *     never mounted one) or "the VC exists and UIKit has not loaded its view" (a background app
+   *     is not asked to) are opposite bugs with one appearance. The VC tree separates them in one
+   *     line, and I have now guessed at this node twice.
+   *  ★ isViewLoaded is the whole point and must NOT be read as `vc.view != nil` — touching `.view`
+   *    LOADS it, so the naive check destroys the very thing it is measuring. */
+  private func vcTree(_ w: UIWindow) -> String {
+    var out: [String] = []
+    func walk(_ vc: UIViewController, _ d: Int) {
+      if out.count >= 20 { return }
+      out.append("\(String(repeating: ".", count: d))\(type(of: vc))"
+                 + "|loaded=\(vc.isViewLoaded)"
+                 + "|children=\(vc.children.count)"
+                 + (vc.parent == nil ? "|NOPARENT" : ""))
+      for c in vc.children { walk(c, d + 1) }
+      if let nav = vc as? UINavigationController {
+        out.append("\(String(repeating: ".", count: d)):navStack=\(nav.viewControllers.count)")
+      }
+    }
+    if let r = w.rootViewController { walk(r, 0) }
+    return out.joined(separator: " ")
+  }
+
   private func kickScreenStack(_ w: UIWindow) {
     guard let root = w.rootViewController?.view else { return }
     var kicked = 0
@@ -463,6 +494,31 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
       c(root); return n
     }()
     VibeCrumbs.log("kick: nudged \(kicked) screen stack(s), viewsTotal now \(after)")
+
+    /* ★★ AND IF THE CONTROLLERS ARE THERE BUT UNLOADED, LOAD THEM. UIKit does not load a view
+     *  controller's view while the app is in the background — it has no reason to — and the push
+     *  that happened headlessly may therefore have left a perfectly good VC with no view. This is a
+     *  no-op when there is no navigation controller or its view is already loaded, which is exactly
+     *  the case the vcs: line above will have recorded, so the measurement is not confounded by the
+     *  attempt. Re-measured on the next runloop, because loading a view is not synchronous with
+     *  the subtree appearing. */
+    var navs: [UINavigationController] = []
+    func findNav(_ vc: UIViewController) {
+      if let n = vc as? UINavigationController { navs.append(n) }
+      for c in vc.children { findNav(c) }
+    }
+    if let r = w.rootViewController { findNav(r) }
+    for n in navs {
+      n.loadViewIfNeeded()
+      n.topViewController?.loadViewIfNeeded()
+      n.view.setNeedsLayout(); n.view.layoutIfNeeded()
+    }
+    if !navs.isEmpty {
+      DispatchQueue.main.async { [weak self] in
+        guard let self, let w2 = self.window else { return }
+        VibeCrumbs.log("kick: after loadViewIfNeeded on \(navs.count) nav(s) — \(self.describe(w2))")
+      }
+    }
   }
 
   /// One line describing whether this window can possibly be showing anything: is it in a scene,
