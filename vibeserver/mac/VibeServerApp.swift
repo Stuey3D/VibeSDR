@@ -377,8 +377,50 @@ final class Server: ObservableObject {
     @AppStorage("dirName")     var dirName     = ""
     /** >0 temporary, 0 = until switched off. Mirrors dirShareSec on the web setup page. */
     @AppStorage("dirShareSec") var dirShareSec = 0
-    /** What vibedir says about the listing — the address to share, or why there is not one. */
+    /** What vibedir says about the listing — the address to share, or why there is not one.
+     *  ★ RAW JSON from vibedir::statusJson(). Kept because the browser setup page reads the same
+     *    string, so the two cannot disagree — but it is NOT for showing to a person: the pane used
+     *    to print it verbatim, braces and all. Parsed into the fields below for display. */
     @Published var dirStatus = ""
+    /** The shareable hostname vibedir issued — "stuey3d-rsp1b.vibeserver.vibesdr.net".
+     *  ★ Shown under the switch once the listing is live, which is what the Android server does
+     *    and what makes the toggle feel like it did something. An owner who cannot see the address
+     *    has no way to share the receiver, which is the entire point of switching it on. */
+    @Published var dirAddress = ""
+    /** vibedir's own complaint, if it has one. Surfaced rather than swallowed. */
+    @Published var dirError = ""
+    /** Is the listing actually live right now, as vibedir sees it — not merely switched on. */
+    @Published var dirLive = false
+
+    /* ★★★ WHAT A PUBLIC LISTING REQUIRES BEFORE IT CAN MEAN ANYTHING.
+     *
+     *  Stuart, 2026-09-02: the switch "looks like it is turning on" while nothing happens. Three
+     *  things have to be true and none of them was checked:
+     *    · A RADIO. Listing a receiver with no receiver attached publishes a map pin that refuses
+     *      every visitor — the failure this file already warns about under stopSimple().
+     *    · A NAME. vibedir derives the shareable hostname from it; with neither this nor the
+     *      receiver's own name there is no address to issue, and applyDirectory silently passes
+     *      `false` for listed.
+     *    · AN ADMIN PASSWORD. The listing puts the receiver in front of strangers, and without one
+     *      every hardware control on it is world-writable. The menu bar already warns about this
+     *      for a plain LAN server; publishing to the internet makes it not a warning but a bar.
+     * ★ Simple mode only. Full mode is configured through the browser setup page, which cannot
+     *   even be opened until the server is running WITH an admin password — so it enforces the
+     *   same rule earlier, by construction. */
+    var publicNameForListing: String {
+        let n = dirName.trimmingCharacters(in: .whitespaces)
+        return n.isEmpty ? rxName.trimmingCharacters(in: .whitespaces) : n
+    }
+    var hasAdminPassword: Bool { !adminPassword.trimmingCharacters(in: .whitespaces).isEmpty }
+    var hasRadioAttached: Bool { deviceCount > 0 || !devices.isEmpty }
+    var canListPublicly: Bool { hasRadioAttached && hasAdminPassword && !publicNameForListing.isEmpty }
+    /// Why the switch is unavailable, in the order a person would fix them.
+    var publicBlockReason: String {
+        if !hasRadioAttached      { return "Plug in a radio first — a listing with no receiver turns every visitor away." }
+        if publicNameForListing.isEmpty { return "Set a public name (or a receiver name): the shareable address is made from it." }
+        if !hasAdminPassword      { return "Set an admin password: a public receiver without one lets any visitor change its hardware settings." }
+        return ""
+    }
     // ── Link management ceilings ─────────────────────────────────────────────
     // What the OPERATOR is willing to spend on each listener. The server enforces these, and —
     // crucially — publishes them so an adaptive client can see the ceiling instead of reading it
@@ -905,6 +947,18 @@ final class Server: ObservableObject {
      * ★ Nothing is published while the server is stopped — there would be no port to point at,
      *   and vibedir would be advertising a door that is not open. */
     func applyDirectory(ownerChanged: Bool) {
+        /* ★★★ AND START SERVING IF WE ARE NOT, because the switch is otherwise a no-op that looks
+         *   like a yes. This guard used to simply return: with the server stopped, flipping
+         *   "List on VibeSDR.net" stored the preference, published nothing, and left a toggle in
+         *   the ON position over a receiver that was not running. Stuart, 2026-09-02: "even with
+         *   the switch in the on position for VibeSDR.net the main server can look like it is not
+         *   actually serving."
+         * ★★ Nobody asks to be listed publicly and NOT to be serving — the listing exists to send
+         *   strangers to a working receiver, so switching it on is a request for both. Turning it
+         *   OFF still leaves the server running, which is what the caption promises.
+         * ★ start() is idempotent-ish and async; applyDirectory is called again after a successful
+         *   start (see the note above), so the listing lands once the port exists. */
+        if dirListed && !running && !starting && canListPublicly { start(); return }
         guard running else { return }
         let nm = dirName.trimmingCharacters(in: .whitespaces)
         // ★ A listing with no name has no address: vibedir derives the shareable hostname from it.
@@ -933,6 +987,16 @@ final class Server: ObservableObject {
         // ★ statusJson() is what the setup page reads; showing it here means the Mac and the
         //   browser cannot disagree about whether a receiver is listed.
         dirStatus = String(cString: vs_directory_status())
+        /* ★★ PARSED, BECAUSE IT IS JSON AND THE PANE WAS PRINTING IT VERBATIM. The owner saw
+         *   {"running":true,"listed":true,"address":"…"} under the switch. The address inside it is
+         *   the one thing they actually need — it is what they send to somebody else. */
+        guard let d = dirStatus.data(using: .utf8),
+              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
+            dirAddress = ""; dirError = ""; dirLive = false; return
+        }
+        dirAddress = (j["address"] as? String) ?? ""
+        dirError   = (j["error"] as? String) ?? ""
+        dirLive    = (j["listed"] as? Bool) ?? false
     }
 
     func applyAdvertise() {
@@ -1752,8 +1816,17 @@ struct SettingsView: View {
         //    the note on the two modes. What is left is one box, behind dots because a settings
         //    pane is exactly where someone reads over your shoulder, and a line saying what it is
         //    FOR that changes with the mode: optional in Simple, required in Full.
+        /* ★ RED WHILE IT IS BLOCKING A PUBLIC LISTING. Simple mode's admin password is genuinely
+         *   optional for a LAN receiver — the prompt still says so — but the moment the owner has
+         *   asked to be listed on VibeSDR.net it stops being optional, and the field they must fill
+         *   should be the one that looks urgent. Colouring it whenever it is empty would nag every
+         *   private user about a decision they have not made. */
         SecureField("Admin password", text: $server.adminPassword,
-                    prompt: Text(server.fullMode ? "Required in Full mode" : "Optional \u{2014} controls stay local"))
+                    prompt: Text(server.fullMode ? "Required in Full mode"
+                                 : (server.dirListed ? "Required to list publicly"
+                                                     : "Optional \u{2014} controls stay local")))
+            .foregroundStyle((server.fullMode || server.dirListed) && !server.hasAdminPassword
+                             ? Color.red : Color.primary)
         if server.fullMode && server.adminPassword.trimmingCharacters(in: .whitespaces).isEmpty {
             // ★ Stated where the empty box is, not only when Start refuses: being told what to do
             //   BEFORE pressing the button is the difference between a rule and an obstacle.
@@ -2039,20 +2112,54 @@ struct SettingsView: View {
              *    to the browser setup page. A Mac in Simple mode could not share a receiver at all
              *    without switching modes, which is not what Simple should mean. */
             Section("Make public") {
+                /* ★★★ DISABLED UNTIL IT CAN ACTUALLY DO SOMETHING — see canListPublicly. It used to
+                 *   move under the pointer and publish nothing, which reads as a broken listing
+                 *   rather than as an unmet requirement: "the switch looks like it is turning on"
+                 *   (Stuart, 2026-09-02). A control that cannot work must not accept the press;
+                 *   the same rule as AGENTS.md's "never leave a control visible and inert".
+                 * ★ And it SAYS WHY, in the order a person would fix it, rather than leaving them
+                 *   to guess which of three things is missing. */
                 Toggle("List on VibeSDR.net", isOn: Binding(
-                    get: { server.dirListed },
+                    get: { server.dirListed && server.canListPublicly },
                     set: { server.dirListed = $0; server.applyDirectory(ownerChanged: true) }))
+                    .disabled(!server.canListPublicly)
+                if !server.canListPublicly {
+                    Text(server.publicBlockReason)
+                        .font(.caption).foregroundStyle(.orange)
+                }
                 Text("Off by default. Nothing is published until you switch it on, and switching it "
                    + "off removes the entry straight away. The receiver keeps running either way.")
                     .font(.caption).foregroundStyle(.secondary)
+                /* ★★★ THE ADDRESS, ONCE THERE IS ONE — the whole reason to switch this on. The
+                 *   Android server shows it under its own switch and the Mac showed raw JSON.
+                 *   Without it the owner has nothing to send anybody. */
+                if server.dirLive && !server.dirAddress.isEmpty {
+                    Text("Anyone can listen at \(server.dirAddress) — share that address, it stays the same.")
+                        .font(.caption).foregroundStyle(.green).textSelection(.enabled)
+                }
+                if !server.dirError.isEmpty {
+                    Text(server.dirError).font(.caption).foregroundStyle(.red)
+                }
+                /* ★ RED WHILE IT IS THE THING STANDING IN THE WAY. Not red merely for being empty —
+                 *   a receiver that is never going public needs neither of these, and colouring
+                 *   them on a fresh install would be nagging about a decision nobody has made. */
                 TextField("Public name", text: Binding(
                     get: { server.dirName },
                     set: { server.dirName = $0 }),
                     prompt: Text(server.rxName.isEmpty ? "e.g. Moulton RSP1B" : server.rxName))
                     .onSubmit { server.applyDirectory(ownerChanged: false) }
+                    .foregroundStyle(server.publicNameForListing.isEmpty ? Color.red : Color.primary)
+                if server.publicNameForListing.isEmpty {
+                    Text("Needed before this receiver can be listed — the shareable address is made from it.")
+                        .font(.caption).foregroundStyle(.red)
+                }
                 Text("The shareable address is made from this name. Shown to strangers, so nothing "
                    + "private. Left empty, the receiver's own name is used.")
                     .font(.caption).foregroundStyle(.secondary)
+                if !server.hasAdminPassword {
+                    Text("No admin password set — required before listing publicly. Set one above.")
+                        .font(.caption).foregroundStyle(.red)
+                }
                 /* ★ THE SAME CHOICES AS THE WEB SETUP PAGE's dirShareSec, in the same order and
                  *   with the same meanings — two GUIs onto one setting that disagreed about what
                  *   "temporary" offered would be worse than only one of them having it. */
