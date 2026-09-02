@@ -186,3 +186,22 @@ throughout. No preset ships that needs either.
 apt release or the install is a silent no-op.
 
 ★ Reply to Sebastian: he owns the one thing that cannot be tested here.
+
+## Buddy — where 229 left it, 2026-09-02
+FIXED AND CONFIRMED ON DEVICE: the watch spectrum handoff (it lived inside an
+AppState *transition* listener, which a headless launch never fires); the Servers
+button waking the phone (its own rate limiter ate the tap, and `backToPicker()`
+was a second silent door); two AVAudioEngines running at once whenever Buddy was
+on the wrist; UberSDR's crown demanding an arm it does not need.
+**UberSDR cold-boots from Buddy perfectly.**
+
+★★★ STILL BROKEN, VIBESERVER PATH ONLY: the pure black screen on opening the
+phone app, and needing several attempts to connect. Six theories died on this in
+one day — see the memory note `buddy_vibeserver_black_screen_open` for what is
+RULED OUT, so nobody re-proposes them.
+
+▶▶ DO THIS FIRST, BEFORE ANY MORE THEORISING: our own NSLog is NOT readable off
+the device, and the log archive is a ~20 s buffer — so every piece of
+instrumentation added on 2026-09-01 was unreadable. The app's `Documents/` folder
+IS readable (`devicectl device info files --domain-type appDataContainer`), so
+write boot breadcrumbs there and read them back. One reproduce then answers it.
