@@ -1991,6 +1991,46 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   display: flex; align-items: center; gap: 8px; padding: 7px 10px;
   border-bottom: 1px solid var(--bar-border); font-size: 12px;
 }
+/* ★★★ SAY THAT THE HEADER SCROLLS, BECAUSE NOTHING ELSE DOES.
+ *
+ *  The strip below scrolls on a narrow box and the scrollbar is deliberately hidden, so the only
+ *  hint anybody gets is a button sliced in half at the edge — which reads as a broken layout, not
+ *  as "there is more this way". Stuart had the FT8 box open and could not find resize or minimise
+ *  at all; he only got to them days later by remembering WE BUILT the scroll. A control you have
+ *  to remember the existence of is not discoverable.
+ *  ★★ The note above this block already worried about the opposite failure — controls that "LOOK
+ *     complete until you need one". Clipping fixed that and created this one: they now look
+ *     INCOMPLETE and still do not look reachable.
+ *  ★ A gradient AND an arrow, not one or the other: the fade says "content continues", the chevron
+ *    says "and you can go there". The fade alone is easily read as a style.
+ *  ★★ Shown per SIDE and only when that side actually overflows — Stuart's own spec: right only,
+ *     left only, or both. An arrow pointing at nothing teaches people to ignore arrows.
+ *  ★ It is a real <button>, so it is tappable (the whole point — the arrow scrolls for you) and
+ *    keyboard-reachable. `display: none` by default so it costs nothing on a wide box. */
+#decHeadWrap { position: relative; }
+.decHeadArr {
+  position: absolute; top: 0; bottom: 0; width: 26px; z-index: 3;
+  display: none; align-items: center; justify-content: center;
+  border: 0; padding: 0; cursor: pointer; color: var(--fg, #ffb833);
+  font: inherit; font-size: 13px; line-height: 1;
+  /* ★ Below the header's own bottom border, so the fade never covers the rule that separates the
+     header from the body. */
+  margin-bottom: 1px;
+}
+#decHeadWrap.canL .decHeadArr.left  { display: flex; }
+#decHeadWrap.canR .decHeadArr.right { display: flex; }
+.decHeadArr.left  { left: 0;
+  background: linear-gradient(90deg, rgba(8,6,2,0.98) 45%, rgba(8,6,2,0)); }
+.decHeadArr.right { right: 0;
+  background: linear-gradient(270deg, rgba(8,6,2,0.98) 45%, rgba(8,6,2,0)); }
+.decHeadArr::before { content: "\2039"; font-size: 17px; opacity: .85; }
+.decHeadArr.right::before { content: "\203A"; }
+.decHeadArr:hover::before, .decHeadArr:focus-visible::before { opacity: 1; }
+/* ★ The strip must not sit UNDER the arrows: pad the ends by the arrow width whenever one is
+   showing, or the first and last control are permanently half-hidden behind the affordance that
+   exists to reveal them. */
+#decHeadWrap.canL #decBoxHead { padding-left: 30px; }
+#decHeadWrap.canR #decBoxHead { padding-right: 30px; }
 #decBoxHead .dot {
   width: 8px; height: 8px; border-radius: 50%;
   background: rgba(255,255,255,0.25); flex: 0 0 8px;
@@ -2914,6 +2954,13 @@ select.btn { padding: 6px 8px; }
 </div>
 
 <div id="decBox">
+  <!-- ★★ The header is a horizontal scroller on a narrow box; this wrapper exists ONLY to give the
+       edge arrows something to position against, so they stay put while the strip moves under
+       them. Putting them inside the scroller would scroll them away — which is precisely the
+       problem they are there to solve. -->
+  <div id="decHeadWrap">
+  <button type="button" class="decHeadArr left"  aria-label="Scroll controls left"></button>
+  <button type="button" class="decHeadArr right" aria-label="Scroll controls right"></button>
   <div id="decBoxHead">
     <span class="dot" id="decDot"></span>
     <span id="decTitle">RTTY</span>
@@ -2939,6 +2986,7 @@ select.btn { padding: 6px 8px; }
     <button class="btn" id="rdsSize" title="Taller / shorter panel"><svg viewBox="0 0 12 14" aria-hidden="true"><rect id="rdsSizeBox" x="1.5" y="7" width="9" height="6"/><path d="M6 1 L6 5 M4 3 L6 1 L8 3" /></svg></button>
     <button class="btn" id="decMin" title="Minimise">–</button>
     <button class="btn" id="decHide" title="Stop and close">&#10005;</button>
+  </div>
   </div>
   <div id="decBody">
     <pre id="decText"></pre>

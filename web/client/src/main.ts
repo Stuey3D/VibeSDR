@@ -6132,6 +6132,55 @@ function initDecoders(host: string, auth: AuthState) {
   $('decMin').onclick = () => $('decBox').classList.toggle('min');
   $('decHide').onclick = () => { stopDecoder(); decoders!.setSpots(false);
     $<HTMLButtonElement>('spotsBtn').classList.remove('on'); hideDecBox(); };
+  initDecHeadScroll();
+}
+
+/* ★★★ THE HEADER SCROLLS, AND UNTIL NOW NOTHING SAID SO.
+ *
+ *  On a narrow decoder box #decBoxHead becomes a horizontal scroller with the scrollbar hidden on
+ *  purpose, so the only clue is a button sliced in half at the edge — which reads as a broken
+ *  layout rather than "there is more this way". Stuart had the FT8 box open, could not find
+ *  resize or minimise, and only reached them days later by REMEMBERING we had built the scroll.
+ *
+ * ★★ Per SIDE, and only when that side actually overflows — his spec exactly: right only, left
+ *    only, or both. An arrow that points at nothing teaches people to ignore arrows, so the test
+ *    is the real scroll position and not "is this a phone".
+ * ★ Recomputed on scroll, on RESIZE of the strip, and on any change to its CHILDREN — the buttons
+ *   come and go by decoder (PREV/SAVE are hidden for text modes, the spot filters only exist for
+ *   spot decoders), so overflow changes without the box ever being resized or scrolled.
+ * ★ A 1px tolerance because scrollWidth/clientWidth are fractional under a zoom or a device pixel
+ *   ratio, and an exact comparison leaves an arrow permanently lit at a hard end.
+ */
+function initDecHeadScroll(): void {
+  const wrap = document.getElementById('decHeadWrap');
+  const strip = document.getElementById('decBoxHead');
+  if (!wrap || !strip) return;
+
+  const update = () => {
+    const max = strip.scrollWidth - strip.clientWidth;
+    wrap.classList.toggle('canL', strip.scrollLeft > 1);
+    wrap.classList.toggle('canR', strip.scrollLeft < max - 1);
+  };
+
+  // ★ Most of a screenful, not all of it: a jump that leaves nothing in common is disorienting,
+  //   and the overlap is what tells you it moved rather than replaced.
+  const nudge = (dir: number) => {
+    strip.scrollBy({ left: dir * Math.max(80, strip.clientWidth * 0.7), behavior: 'smooth' });
+  };
+
+  for (const el of Array.from(wrap.querySelectorAll<HTMLButtonElement>('.decHeadArr'))) {
+    const dir = el.classList.contains('left') ? -1 : 1;
+    el.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); nudge(dir); });
+  }
+
+  strip.addEventListener('scroll', update, { passive: true });
+  try {
+    new ResizeObserver(update).observe(strip);
+    new MutationObserver(update).observe(strip, { childList: true, subtree: true,
+                                                  attributes: true, attributeFilter: ['style'] });
+  } catch { /* older browsers simply keep the arrows hidden — no worse than before */ }
+  window.addEventListener('resize', update);
+  update();
 }
 
 /** Wire a segmented control; `on` marks the selected button. */
