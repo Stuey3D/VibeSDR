@@ -174,7 +174,17 @@ RF, so no client learns a converter exists.
 So this is no longer a "before anyone is told it exists" item; it is a RELEASE GATE. The server
 half is already on air in 4.1.55 (all three servers), including the setup page's model
 quick-picks. The client half ships with the store build.
-▶ THE BENCH TEST BELOW IS THE OUTSTANDING GATE, and it needs no converter hardware.
+▶ AND IT SHIPS UNLABELLED. Stuart, 2026-09-02, on marking it beta/experimental: "we include it
+and then see if we end up with issues being raised then make changes if needed."
+★ No "Beta" chip: the App Store's beta rule is aimed at beta APPS rather than beta features, so a
+  label was unlikely to be rejected — but it reads as "we are not sure this works", which serves
+  the one person who owns a Ham It Up worst of all. The feature defaults to None and is gated to
+  local/rtl_tcp/SpyServer, so nobody meets it by accident, and the existing copy is already honest
+  without hedging.
+▶ THE BENCH TEST IS STILL UNRUN and needs no converter hardware — LO 1000 as a DOWN-converter,
+  tune 1100 MHz, and broadcast FM should appear from the dongle at 100 MHz. It stays worth doing
+  at the first idle moment (it needs the test radio's allow-list cleared, or the range check
+  refuses 1100 MHz for the wrong reason). Shipping first is a DECISION, not an oversight.
 
 ★★★ NOTHING HAS BEEN TESTED ON A RADIO. Typecheck, `scripts/test-converter.ts`
 (47 checks) and `vibeserver/test-converter.cpp` (20 checks) only. The bench test
