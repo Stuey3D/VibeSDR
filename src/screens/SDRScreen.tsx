@@ -8715,7 +8715,23 @@ export default function SDRScreen({ route, navigation }: Props) {
       {route.params.isLocal && route.params.localPort != null ? (
         <LocalAudioPlayer
           port={!refusal && tuneLoaded ? route.params.localPort : null}   // see the note on AudioPlayer
-          frequency={status.frequency}
+          /* ★★★ HARDWARE Hz, BECAUSE THIS TALKS TO THE RADIO WITHOUT GOING THROUGH SDRBackend.
+           *   LocalAudioPlayer sends this straight down the audio socket as a tune
+           *   (Vibe.sendLocalTune / the ws send), so it is the second door ConverterBackend's
+           *   header warns about by name — "anything that talks to the radio without going through
+           *   SDRBackend MUST be given the offset explicitly. Today that is the watch forwarder
+           *   alone. Check for others before assuming a new native path is covered." There was a
+           *   second one, and it is this.
+           * ★★★ IT WAS ACCIDENTALLY RIGHT UNTIL THE CALLBACKS WERE WRAPPED. `status.frequency` used
+           *   to arrive as HARDWARE Hz, because onStatus bypassed the converter — the very bug that
+           *   made the dial read 102.2 instead of 2.2. Fixing the display turned this prop into
+           *   DISPLAY Hz and the audio socket dutifully retuned the dongle to 2 MHz, where this
+           *   receiver's allow-list clamped it to 1.6065 MHz and the dial went to -98.393500.
+           *   Measured on the Xcover, 2026-09-02. Two halves of one rule: whoever speaks to the
+           *   radio speaks hardware, and everything above speaks true RF.
+           * ★ A no-op with no converter fitted (toHardware is the identity), so nothing changes for
+           *   the overwhelming majority of local sessions. */
+          frequency={convToHardware(status.frequency, converterRef.current)}
           mode={status.mode}
           bandwidthLow={status.bandwidthLow}
           bandwidthHigh={status.bandwidthHigh}
