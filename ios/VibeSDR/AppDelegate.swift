@@ -390,6 +390,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
   func sceneDidBecomeActive(_ scene: UIScene) {
     guard let w = window else { VibeCrumbs.log("scene didBecomeActive — NO WINDOW"); return }
     VibeCrumbs.log("scene didBecomeActive — \(describe(w))")
+    VibeCrumbs.log("tree: \(hierarchy(w))")
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
       guard let self, let w = self.window else { return }
       VibeCrumbs.log("scene +600ms — \(self.describe(w))")
@@ -409,6 +410,36 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     return "scene=\(w.windowScene == nil ? "NIL" : "set") key=\(w.isKeyWindow) hidden=\(w.isHidden) "
          + "alpha=\(w.alpha) size=\(Int(w.bounds.width))x\(Int(w.bounds.height)) "
          + "rootVC=\(w.rootViewController == nil ? "NIL" : "yes") rootSubviews=\(kids) viewsTotal=\(deepest)"
+  }
+
+  /* ★★★ THIRTEEN VIEWS. WHICH THIRTEEN?
+   *
+   *  Measured on 2026-09-02: a healthy foreground reports viewsTotal=565, and a black screen after
+   *  a VibeServer connect reports 13 — with the session ALIVE and feeding the watch, because the
+   *  audio and spectrum pumps are native and do not care what JS is doing. So the tree is real but
+   *  nearly empty, and the count alone cannot say whether that is the CrashBoundary's error view,
+   *  App's full-screen splash overlay (#0A0A12, zIndex 9999 — near-black and would look exactly
+   *  like this), a picker still in its loading state, or a root view with nothing in it at all.
+   *  Those are four different bugs with one appearance, and guessing between them is what this
+   *  whole exercise exists to stop.
+   * ★★ So name the classes, with frame, hidden and alpha. An RN view tree carries its component
+   *    identity in the class name, so this distinguishes them in one line — and alpha/hidden catch
+   *    the case where the real tree IS mounted but something opaque sits on top of it.
+   * ★ Depth-capped and count-capped: this is a diagnostic on a hot path, not a dump. */
+  private func hierarchy(_ w: UIWindow, limit: Int = 18) -> String {
+    var out: [String] = []
+    func walk(_ v: UIView, _ depth: Int) {
+      if out.count >= limit || depth > 4 { return }
+      let f = v.frame
+      out.append("\(String(repeating: ".", count: depth))\(type(of: v))"
+                 + "[\(Int(f.width))x\(Int(f.height))]"
+                 + (v.isHidden ? "|HID" : "")
+                 + (v.alpha < 0.99 ? "|a\(String(format: "%.2f", v.alpha))" : "")
+                 + (v.backgroundColor == nil ? "" : "|bg"))
+      for s in v.subviews { walk(s, depth + 1) }
+    }
+    if let rv = w.rootViewController?.view { walk(rv, 0) }
+    return out.joined(separator: " ")
   }
 
   /// The scene went away — EITHER the user swiped the app out of the switcher OR the system
