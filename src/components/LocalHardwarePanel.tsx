@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Modal, View, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, ScrollView,
+  KeyboardAvoidingView, Platform,
   Switch, StyleSheet,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -273,8 +274,22 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
    *   about an AGC it does not have; this is about a figure the owner has fixed, which is a claim
    *   about the RADIO and true of all three. The server refuses the message, so an offered control
    *   would spring back — the same house rule, reached from the other direction. */
-  const canGain      = !p.gainLocked && (!p.agcLocked || p.radio?.driver === 'hackrf');
-  const canRate      = !(p.lockedRate && p.lockedRate > 0);
+  /* ★★★ AN UNLOCKED ADMIN IS THE OWNER, AND THE OWNER'S OWN LOCK MUST NOT SHUT THEM OUT.
+   *   Every gate below describes what a LISTENER may do — agcLocked, gainLocked and lockedRate are
+   *   the owner's policy FOR VISITORS. They were applied to everybody, so after proving the admin
+   *   password the panel still showed no gain, no rate and no AGC: the owner had locked themselves
+   *   out of their own receiver. Stuart, 2026-09-02, on his own Xcover: "none of the gain controls
+   *   or controls at all load up when i enter the admin password."
+   * ★★ AND THE PANEL PROMISES OTHERWISE IN ITS OWN WORDS, three lines above the box he typed into:
+   *   "Every hardware control on this receiver is set by its owner. There is nothing here for a
+   *   listener to change — ENTER THE PASSWORD TO TAKE IT OVER." Taking it over is exactly what
+   *   adminOk means, and nothing acted on it.
+   * ★ The server agrees: adminOkFor() lets an admin socket past the same locks, so these controls
+   *   are not offers that would spring back — the messages are accepted. This is the client
+   *   catching up with a permission the server already grants. */
+  const isAdmin      = !!p.adminOk;
+  const canGain      = isAdmin || (!p.gainLocked && (!p.agcLocked || p.radio?.driver === 'hackrf'));
+  const canRate      = isAdmin || !(p.lockedRate && p.lockedRate > 0);
   /* ★ Nothing left but the password box. Then the panel does not pretend to be a control panel:
    *  it says what it is and puts the cursor where the only useful action is. */
   const nothingForUser = !canProtected && !canGain && !canRate;
@@ -354,6 +369,19 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
       <TouchableWithoutFeedback onPress={p.onClose}>
         <View style={styles.backdrop} />
       </TouchableWithoutFeedback>
+      {/* ★★★ THE KEYBOARD USED TO SIT ON TOP OF THIS SHEET. Focusing the admin-password field
+          raised it over a bottom-anchored panel that never moved, leaving "a slither of the top of
+          it" visible — you could not see the box you were typing into, let alone the controls
+          below (Stuart, 2026-09-02, trying to check VibeAGC on a locked receiver).
+          ★★ `padding` on iOS and `height` on Android: the two platforms report the keyboard
+             differently, and iOS is the one that overlays rather than resizing the window. The
+             wrapper is `pointerEvents: box-none` so the backdrop behind it still takes a tap to
+             dismiss — otherwise fixing the keyboard would break closing the sheet.
+          ★ The sheet keeps maxHeight 85%, so with the keyboard up it shrinks and its ScrollView
+            scrolls; nothing is unreachable, which is the whole complaint. */}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.kbWrap} pointerEvents="box-none">
       <View style={[styles.sheet, {
         paddingBottom: insets.bottom + 12,
         paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right,  // clear the notch in landscape
@@ -442,6 +470,22 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   + 'free there.'
                 : 'The gain is managed by this receiver: its owner has fixed the automatic gain '
                   + 'control on, so it is the same for everybody listening.'}
+            </Text>
+          )}
+          {/* ★★★ AND THIS IS HOW THE GAIN GETS SET IN THE FIRST PLACE. Stuart: "all controls should
+              be present for admin users as that is how the initial gain is set for non AGC
+              servers." So the admin's access here is not a courtesy override on a locked
+              receiver — on a server with no AGC it is the ONLY way the owner picks the figure
+              every listener then gets. A lock that shut the owner out shut out the only person
+              who could set the thing being locked.
+              ★ The note says who else is affected and stops there. An earlier draft called this
+                "your override, not a change to the receiver's settings" — which would be a claim
+                about persistence I have not verified, and is plainly wrong if this is where the
+                resting gain comes from. */}
+          {isAdmin && (p.gainLocked || p.agcLocked) && (
+            <Text style={[styles.note, { marginTop: 12 }]}>
+              Unlocked as the owner — these controls are yours to set. Everybody else listening
+              sees the figure you leave here, and cannot change it.
             </Text>
           )}
           {canGain && (isAhf ? (
@@ -953,13 +997,17 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           </Text>}
         </ScrollView>
       </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
   backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)' },
-  sheet: { position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '85%',
+  /* ★ Fills the screen so KeyboardAvoidingView has something to shrink; the sheet inside stays
+   *  bottom-anchored, so with no keyboard up nothing about the layout changes. */
+  kbWrap: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, justifyContent: 'flex-end' },
+  sheet: { left: 0, right: 0, maxHeight: '85%',
            backgroundColor: C.bg, borderTopLeftRadius: 16, borderTopRightRadius: 16,
            borderWidth: 1, borderColor: C.border, paddingHorizontal: 16, paddingTop: 10 },
   handleBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
