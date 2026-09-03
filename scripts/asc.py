@@ -5,6 +5,7 @@
   python3 scripts/asc.py builds jr
   python3 scripts/asc.py versions vibesdr
   python3 scripts/asc.py trigger ios|tv|jr     # start a Cloud build on main
+  python3 scripts/asc.py distribute jr         # put the newest build into internal testing
 
 Needs `pyjwt`. Key/issuer per memory: testflight_setup.md.
 """
@@ -123,10 +124,47 @@ def trigger(which):
         "sourceBranchOrTag": {"data": {"type": "scmGitReferences", "id": MAIN_REF}}}}})
     print("started run", r["data"]["attributes"].get("number"), "id", r["data"]["id"])
 
+# ★★★ JR'S WORKFLOW HAS NO TESTFLIGHT POST-ACTION, so its builds stop at
+#     READY_FOR_BETA_TESTING and someone has to finish the job. FIVE times out of five
+#     (2026-09-02/03) I pushed Jr through by hand and called it a stall; it is not a stall and not
+#     a flake, it is a missing step. The evidence is in the RUN, not the workflow:
+#         iOS 247 actions:  Archive - iOS          + TestFlight Internal Testing - iOS
+#         Jr   80 actions:  Archive - iOS
+#     ★★ AND THE API CANNOT ADD IT. `ciWorkflows` models `actions` (ARCHIVE/BUILD/TEST/ANALYZE)
+#        and has no representation of Xcode Cloud POST-actions at all — the two workflows are
+#        byte-identical through the API apart from scheme and path. Adding the post-action is a
+#        one-time change in the Xcode Cloud UI and cannot be scripted from here.
+#     ★ So this exists to make the manual step one command rather than a hand-written API call
+#       remembered from last time. It stays useful even after the post-action is added: a build
+#       that misses distribution for any other reason is fixed the same way.
+#  ★ hasAccessToAllBuilds is ALREADY true on that group, and export compliance is answered
+#    (usesNonExemptEncryption=false) — both checked, so neither is the cause. Do not chase them.
+def distribute(app, version=""):
+    rows = sorted(all_pages("apps/%s/builds?limit=200" % APPS[app]),
+                  key=lambda x: x["attributes"].get("uploadedDate") or "", reverse=True)
+    if version:
+        rows = [x for x in rows if x["attributes"]["version"] == version]
+        if not rows:
+            raise SystemExit("no build %s for %s" % (version, app))
+    b = rows[0]
+    groups = [g for g in call("apps/%s/betaGroups?limit=20" % APPS[app])["data"]
+              if g["attributes"].get("isInternalGroup")]
+    if not groups:
+        raise SystemExit("no internal group on %s" % app)
+    # ★ Named in the output, because two groups sharing a name has bitten us before
+    #   (testflight_groups_trap) — the id is what actually identifies it.
+    for g in groups:
+        call("builds/%s/relationships/betaGroups" % b["id"], "POST",
+             {"data": [{"type": "betaGroups", "id": g["id"]}]})
+        print("build %s -> %s (%s)" % (b["attributes"]["version"], g["attributes"]["name"], g["id"]))
+    st = call("builds/%s/buildBetaDetail" % b["id"])["data"]["attributes"].get("internalBuildState")
+    print("internal state now:", st)
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     arg = sys.argv[2] if len(sys.argv) > 2 else ""
     if   cmd == "builds"   and arg in APPS:      builds(arg)
     elif cmd == "versions" and arg in APPS:      versions(arg)
     elif cmd == "trigger"  and arg in WORKFLOWS: trigger(arg)
+    elif cmd == "distribute" and arg in APPS:    distribute(arg, sys.argv[3] if len(sys.argv) > 3 else "")
     else: raise SystemExit(__doc__)
