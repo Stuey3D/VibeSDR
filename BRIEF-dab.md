@@ -307,6 +307,19 @@ Stuart, 2026-09-04: *"the advanced signal info button must live in the header of
     hidden. So it is fixed at one end of the header, outside the scrolling group, with the
     decoder's own controls scrolling beside it.
 
+★★ AND IT COULD NOT LIVE ANYWHERE ELSE. Stuart, 2026-09-04: *"since the decoder box will be open
+   for DAB anyway and moving to the demodulator menu will close the DAB box down."* A switch in the
+   demodulator/decoders menu would be unreachable by construction — opening that menu dismisses the
+   very box it controls. The header is not a preference here, it is the only surface that is up at
+   the same time as the thing it switches.
+
+★★★ THE COROLLARY: "always open in DAB mode" HAS TO SURVIVE THE MENU. If the menu closes the box,
+    the box must come back when the menu does — either the menu does not dismiss it in DAB mode, or
+    it is restored on dismissal. Otherwise a trip to the demodulator menu silently costs you the
+    station list and the now-playing text, with no control anywhere to bring them back, and the
+    receiver looks like it has dropped out of DAB when it has not. ▶ Decide which of the two on the
+    way in and write it down; do not leave it to whichever happens.
+
 ★ It shows STATE, not just an action: which pane you are on has to be readable without pressing it.
   A toggle that does not say which side it is on is the same half-built indicator as a background
   job with no light.
