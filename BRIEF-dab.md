@@ -134,6 +134,28 @@ are the common ancestor of all of them and are separately licensed; if we use th
 4. **A station list that does not flap.** Services must persist across FIB CRC failures rather than
    appearing and vanishing while the list is being read.
 
+## Reference data captured from the Rohde & Schwarz talk (Stuart, 2026-09-04)
+
+**Transmission modes** are now in `vibe_dab_modes.h`, stored in SAMPLES at 2.048 MHz rather than in
+the published microseconds — see the note there. Band III, and everything the UK transmits, is
+**Mode I**: 1536 carriers at 1 kHz, 76 symbols per frame, 96 ms.
+
+**Error protection** — needed for the Viterbi puncturing and for the per-service protection level
+we want to report to DX-ers:
+
+| FEC code | code rate | mux capacity (kbps) |
+|---|---|---|
+| 1A | 1/4 | 576 |
+| 2A | 3/8 | 864 |
+| 3A | 1/2 | 1152 |
+| 3B | 2/3 | 1536 |
+| 4A | 3/4 | 1728 |
+
+★ Protection may be **equal (EEP)** or **unequal (UEP)**, where the more important bits get more
+protection; and interleaving spreads errors in **time and frequency** so bursts are recoverable.
+Higher protection means lower capacity but the same coverage at lower power — which is exactly the
+trade a DX-er wants to see reported, and nobody in the survey above surfaces it well.
+
 ## Build order (riskiest first)
 1. Channel table + capability gate + the UI shell — settled, small, and it makes the rest testable.
 2. OFDM acquisition: null-symbol detect, coarse/fine frequency offset, phase reference correlation.
