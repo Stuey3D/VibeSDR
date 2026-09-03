@@ -5258,11 +5258,29 @@ const SRC_LABEL: Record<string, string> = {
   user: ICON_LOCAL, server: ICON_SERVER, eibi: 'EiBi', band: 'BAND',
 };
 
+/* ★★★ THE RESULT LIST SURVIVES THE STATION YOU JUST TRIED — AND ONLY FOR A WHILE.
+ *
+ *  A search for one broadcaster returns several frequencies (Voice of Korea is the example), most
+ *  of them inaudible from any given place at any given hour, and you find the one that works by
+ *  trying them. So tuning a result must not throw the list away.
+ *
+ *  ★ The two clients differed, in opposite directions: the APP cleared the query the instant you
+ *    tuned a result, and THIS one kept the results in the closure for ever, so clicking back into
+ *    the box an hour later reopened a list from a session you had forgotten. Same rule now in
+ *    both — keep it, then let it go — because the same person uses both (Stuart: "this is both
+ *    the app and the web client so the behaviour should be the same in both").
+ *  ★ The window restarts each time you come back, so a long hunt never expires mid-hunt; only
+ *    walking away ends it. Kept identical to FreqModal.SEARCH_STICKY_MS.
+ */
+const SEARCH_STICKY_MS = 90_000;
+
 function initSearch() {
   const el = $<HTMLInputElement>('search');
   const list = $('searchResults');
   let results: SearchResult[] = [];
   let sel = -1;
+  /** When the list was last USED. 0 = never, so a list nobody has tuned from is not on the clock. */
+  let usedAt = 0;
 
   const close = () => { list.classList.remove('open'); sel = -1; };
 
@@ -5281,7 +5299,7 @@ function initSearch() {
       // A logo makes a long result list scannable at a glance. EiBi rows carry their
       // transmitter country, so those resolve without any guesswork at all.
       if (r.source !== 'band') void attachBookmarkLogo(row, r.name, r.itu);
-      row.onclick = () => { tuneTo(r); close(); };
+      row.onclick = () => { usedAt = Date.now(); tuneTo(r); close(); };
       list.appendChild(row);
     });
     list.classList.add('open');
@@ -5290,9 +5308,16 @@ function initSearch() {
   el.oninput = () => {
     results = search(el.value);
     sel = -1;
+    usedAt = 0;                                // a new query is a new hunt, not a stale one
     render();
   };
-  el.onfocus = () => { if (results.length) list.classList.add('open'); };
+  el.onfocus = () => {
+    if (!results.length) return;
+    // ★ Never tuned from this list yet? It is still the search you are typing — always reopen.
+    if (usedAt && Date.now() - usedAt > SEARCH_STICKY_MS) { results = []; usedAt = 0; return; }
+    if (usedAt) usedAt = Date.now();          // the window restarts on every return
+    list.classList.add('open');
+  };
   el.onblur = () => setTimeout(close, 150);   // let a click land first
 
   el.onkeydown = (e) => {
@@ -5301,6 +5326,7 @@ function initSearch() {
     if (e.key === 'ArrowDown') { sel = Math.min(results.length - 1, sel + 1); render(); e.preventDefault(); }
     else if (e.key === 'ArrowUp') { sel = Math.max(0, sel - 1); render(); e.preventDefault(); }
     else if (e.key === 'Enter') {
+      usedAt = Date.now();
       tuneTo(results[Math.max(0, sel)]);
       el.blur();
       close();

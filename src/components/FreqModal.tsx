@@ -141,6 +141,26 @@ function KeyCap({ letter, color, label, font, textStyle }: {
 /** Below this the "keyboard" is an accessory bar, not something to move out of the way. */
 const KB_ANCHOR_MIN = 140;
 
+/* ★★★ THE SEARCH SURVIVES THE STATION YOU JUST TRIED.
+ *
+ *  Tuning a result closed the card and cleared the query, so a search that returns SEVERAL
+ *  frequencies for one broadcaster — which is the normal case on shortwave — could only ever be
+ *  used once. Stuart: "if I am not able to receive the first frequency I choose then I can click
+ *  the frequency input and the list still remains so I can click the next and the next after
+ *  that." Voice of Korea is the example: half a dozen frequencies, most of them inaudible from
+ *  any given place at any given hour, and you find the one that works by trying them.
+ *
+ *  ★ MODULE SCOPE, not component state, because the card resets itself every time it opens — the
+ *    whole point is to outlive that.
+ *  ★★ IT EXPIRES, so the card does not silently change what it does. Reopening the frequency box
+ *     an hour later must give you a frequency box; reopening it while you are still working
+ *     through a list must give you the list. The window restarts each time you come back, so a
+ *     long hunt never times out mid-hunt — only walking away ends it.
+ *  ★ Cleared when the query is emptied by hand: that is the user saying they are finished with it.
+ */
+const SEARCH_STICKY_MS = 90_000;
+let stickySearch: { q: string; at: number } | null = null;
+
 /** The short provenance tag at the end of a search row — see the note where it is drawn.
  *  ★ 'SERVER' rather than a guess when the backend does not distinguish saved from heard: UberSDR,
  *    OWRX and Kiwi send no such flag, and inventing one would be a label that is sometimes a lie. */
@@ -235,7 +255,17 @@ export default function FreqModal({
     if (visible) {
       setValue(toDisplay(currentHz, unit));
       setDraftVts(null);   // start from the tuned station; typing takes over
-      setCardMode('tune'); setSearchQuery(''); setBmImportOpen(false); setBmImportMsg('');
+      // ★ Come back to the list you were working through — see stickySearch.
+      const sticky = stickySearch && (Date.now() - stickySearch.at) < SEARCH_STICKY_MS
+        ? stickySearch : null;
+      if (sticky) {
+        sticky.at = Date.now();          // the window restarts on every return, not on the first
+        setCardMode('bookmarks'); setSearchQuery(sticky.q);
+      } else {
+        stickySearch = null;
+        setCardMode('tune'); setSearchQuery('');
+      }
+      setBmImportOpen(false); setBmImportMsg('');
       // ★★★ DO NOT RAISE THE KEYBOARD ON OPEN. This card is not a frequency box any more — it
       // houses frequency entry, the VTS bookmarks AND the bookmark search, so it is TALL, and a
       // soft keyboard arriving with it pushed the top of the card off the screen in landscape.
@@ -603,7 +633,11 @@ export default function FreqModal({
                 ref={(r: any) => { (searchRef as any).current = r; slotRef(r); }}
                 style={[st.searchInput, { color: t.freqColor, fontFamily: t.font,
                                           borderColor: on ? NAV_FOCUS : bdrDim, borderWidth: on ? 2 : 1 }]}
-                value={searchQuery} onChangeText={setSearchQuery}
+                value={searchQuery} onChangeText={(v: string) => {
+                  setSearchQuery(v);
+                  // ★ Emptying the box by hand is the user saying they are done with that list.
+                  if (!v.trim()) stickySearch = null;
+                }}
                 placeholder="🔍 Search bookmarks & band plan…" placeholderTextColor={dimText}
                 autoCorrect={false} autoCapitalize="none" spellCheck={false} clearButtonMode="while-editing" />
               ); })()}
@@ -613,7 +647,9 @@ export default function FreqModal({
                 <Text style={[st.bmHint, { color: dimText }]}>{searchResults.length} result{searchResults.length !== 1 ? 's' : ''} · tap to tune</Text>
                 {searchResults.map((r: SearchResult, i: number) => {
                   const tune = () => {
-                    setSearchQuery('');
+                    // ★ Keep the query rather than clearing it: this is the tap that USED the
+                    //   list, which is exactly when you are most likely to want it again.
+                    stickySearch = { q: searchQuery, at: Date.now() };
                     if (r.isBand && r.band) onSearchTune?.(r.band.start, r.band.mode, true);
                     else if (r.bm) onSearchTune?.(r.bm.frequency, r.bm.mode);
                     onClose();
