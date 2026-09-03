@@ -226,6 +226,49 @@ hunting a mux.
   roughly how far away it is. For a DX-er this is the whole game, and it is the clearest way to be
   "the best on the market" rather than merely complete.
 
+## The chipmunks, named — and the two other things OWRX does not do
+
+Stuart, 2026-09-04: *"I'm not going to half arse it like OWRX and call it a day. OWRX has
+mismatched sample rates hence the chipmunks and only shows the station name, not even the now
+playing text."*
+
+Three separate failures, and all three are now designed against rather than hoped about.
+
+### 1. The chipmunks are two bits wide (TS 102 563, table 2)
+`dac_rate` and `sbr_flag` in the super frame header give four cases — and the AAC CORE rate is not
+the playback rate:
+
+| dac_rate | sbr_flag | AUs | core | **output** |
+|---|---|---|---|---|
+| 0 | 1 | 2 | 16 kHz | **32 kHz** |
+| 1 | 1 | 3 | 24 kHz | **48 kHz** |
+| 0 | 0 | 4 | 32 kHz | **32 kHz** |
+| 1 | 0 | 6 | 48 kHz | **48 kHz** |
+
+Two ways to get it wrong, both audible as chipmunks and neither failing loudly:
+- assume 48 kHz when the service is 32 kHz → **1.5x fast**;
+- take the CORE rate as the output rate when SBR is on → **2x fast**.
+
+★★ AND IT IS OUR PROBLEM EVEN THOUGH WE DO NOT DECODE DAB+. We hand the bitstream to the browser,
+but WE write the ADTS/ASC header it reads, and that header must carry the **core** rate — the
+decoder does the SBR doubling itself. Put the output rate there and the browser makes the
+chipmunks on our behalf. `vibe_dab_superframe.h` encodes exactly this, and the test pins all four
+cases plus both wrong-ratio traps by name.
+
+★ It also matters WITHIN a mux: services at 32 kHz and 48 kHz sit side by side, so switching
+  service must renegotiate the rate. A pipeline that decides its rate once, at connect, is the
+  same bug deferred.
+
+### 2. "Only shows the station name" — we want the now-playing text
+That is **DLS (Dynamic Label Segment)**, carried in X-PAD, and it is the RadioText equivalent. It
+is not optional here: a receiver that shows a service label and nothing else is showing the least
+interesting field DAB carries. DLS, plus the full inventory above.
+
+### 3. And the firecode is for CORRECTING, not just checking
+TS 102 563 on `header_firecode`: *"capable of detecting and correcting most single error burst of
+up to 6 bits"*. The standard says correcting; DAB-Radio's TODO says it does not. That is the
+difference between a marginal mux staying audible and stuttering, and it is a stated goal here.
+
 ## Build order (riskiest first)
 1. Channel table + capability gate + the UI shell — settled, small, and it makes the rest testable.
 2. OFDM acquisition: null-symbol detect, coarse/fine frequency offset, phase reference correlation.
