@@ -15,7 +15,13 @@ int main() {
     printf("test-dab-channels\n");
 
     // ── The table itself ─────────────────────────────────────────────────────
-    CHECK(kBandIIICount == 38, "Band III should hold 38 channels (5A..13F)");
+    CHECK(kBandIIICount == 41, "Band III: 38 lettered blocks plus 10N, 11N and 12N");
+
+    // ★★ THE OFFSET BLOCKS. Missing from the first draft; Stuart's own block list caught it. A
+    //    receiver that cannot step onto 11N silently skips a multiplex that is on air.
+    CHECK(channelByName("10N") && channelByName("10N")->centreHz == 210096000, "10N = 210.096");
+    CHECK(channelByName("11N") && channelByName("11N")->centreHz == 217088000, "11N = 217.088");
+    CHECK(channelByName("12N") && channelByName("12N")->centreHz == 224096000, "12N = 224.096");
 
     // ★★ The one everybody quotes, and the one on Stuart's screen: 11D = 222.064 MHz.
     const Channel* c11d = channelByName("11D");
@@ -51,6 +57,10 @@ int main() {
     int i11d = nearestChannel(222064000);
     CHECK(strcmp(kBandIII[stepChannel(i11d, +1)].name, "12A") == 0, "11D + 1 = 12A");
     CHECK(strcmp(kBandIII[stepChannel(i11d, -1)].name, "11C") == 0, "11D - 1 = 11C");
+    // ★ Stepping up from 11A must land on 11N, not jump over it to 11B.
+    int i11a = nearestChannel(216928000);
+    CHECK(strcmp(kBandIII[stepChannel(i11a, +1)].name, "11N") == 0, "11A + 1 = 11N, not 11B");
+    CHECK(strcmp(kBandIII[stepChannel(i11a, +2)].name, "11B") == 0, "11A + 2 = 11B");
     // ★ CLAMPS, never wraps — 13F -> 5A in one press is not what a band scan meant.
     CHECK(stepChannel(0, -1) == 0, "stepping below 5A stays on 5A");
     CHECK(stepChannel(int(kBandIIICount) - 1, +1) == int(kBandIIICount) - 1, "stepping past 13F stays");

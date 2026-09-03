@@ -103,6 +103,37 @@ So VibeAGC stays live in DAB mode, and the gain UI stays available. ★ The rela
 that the ADC-peak headroom the loop already tracks is exactly the signal a DAB front end needs, so
 this should need no new mechanism — only care that the DAB path does not accidentally bypass it.
 
+## Reference implementations — read them, do not wrap them
+
+Stuart, 2026-09-04: *"look at open source DAB decoders but build our own, hopefully better one."*
+
+| project | licence | what it is good for |
+|---|---|---|
+| [williamyang98/DAB-Radio](https://github.com/williamyang98/DAB-Radio) | **MIT** | The closest match to what we are building: its own OFDM demod + DAB decode for RTL-SDR, split into `src/ofdm` and `src/dab`. The most readable reference for the acquisition chain. Its own TODO admits **no firecode error correction on the DAB+ superframe** and **no TII decoding** — two places we can be better on purpose. |
+| [welle.io](https://github.com/AlbrechtL/welle.io) | GPL-2.0+ | The mature one; runs on a Pi. Good for behaviour to compare against, not for structure. |
+| [dab-cmdline](https://github.com/openatv/dab-cmdline) (van Katwijk) | GPL-2.0 | Library-shaped, many input devices; the ancestor of much of the ecosystem. |
+| [dablin](https://github.com/Opendigitalradio/dablin) + eti tools | GPL | ETI-side playback and service handling. This is the lineage **OWRX** draws on — the one Stuart has already had to work around. |
+| [csdr-eti](https://github.com/jketterl/csdr-eti) | — | How OWRX plugs DAB in, i.e. exactly what we are choosing not to be. |
+
+★★ **LICENCE POSITION.** VibeSDR is GPL-3.0, so the GPL-2.0+ projects are compatible to *read* and
+even to borrow from — but we are writing our own, so the only thing that crosses is understanding.
+DAB-Radio being MIT makes it the safest to study closely. Phil Karn's Viterbi/Reed-Solomon routines
+are the common ancestor of all of them and are separately licensed; if we use them, say so.
+
+### Where we intend to be better
+1. **Sample rates handled per service, not assumed.** Stuart: *"UK dab stations are broadcast with
+   multiple sample rates… so we are better than OWRX out of the box."* 48 kHz and 32 kHz services
+   coexist in one mux, and HE-AAC's SBR means the CORE rate is half the output rate. The resampler
+   must switch cleanly when you change service INSIDE a mux — the moment a naive implementation
+   clicks, plays at the wrong speed, or drops to silence.
+2. **DAB+ firecode error correction**, which DAB-Radio explicitly does not do: it is what keeps a
+   marginal mux audible rather than stuttering.
+3. **DX-grade reporting**: per-service protection level, CIF error rate, ensemble label, ECC/country
+   — and **TII** (transmitter identification), which tells a DX-er WHICH transmitter they have.
+   Nobody in the list above surfaces this well and it is exactly our audience.
+4. **A station list that does not flap.** Services must persist across FIB CRC failures rather than
+   appearing and vanishing while the list is being read.
+
 ## Build order (riskiest first)
 1. Channel table + capability gate + the UI shell — settled, small, and it makes the rest testable.
 2. OFDM acquisition: null-symbol detect, coarse/fine frequency offset, phase reference correlation.
