@@ -68,6 +68,41 @@ the rule survives the next radio. Consequences today:
 - The **decoder box is always open in DAB mode**, split: station list with logos on one side, the
   full multiplex / signal / RDS-equivalent detail on the other.
 
+## Two things that must NOT happen to a mux
+
+### ★★★ ZOOM IS BLOCKED IN DAB MODE
+Stuart, 2026-09-04: *"in DAB mode the zoom buttons should be blocked especially on an RTL-SDR
+running auto IF narrowing with zoom."*
+
+This is not tidiness. On the RTL-SDR the tuner's IF bandwidth FOLLOWS the zoom (`tunerBwAuto`, the
+"IF wide auto" indicator) — zooming in narrows the analogue filter to match the visible span. An
+ensemble is 1.536 MHz wide and needs every kHz of it: narrow the IF and the mux is cut, the DQPSK
+falls apart and the audio stops. The user zoomed the WATERFALL and lost the RADIO, with nothing on
+screen connecting the two.
+
+So in DAB mode:
+- the zoom controls are **disabled**, not merely ignored — a control that does nothing when pressed
+  is the fault AGENTS.md names;
+- the IF filter is **pinned wide** and the auto-narrowing is suspended for the duration, because
+  the zoom is not the only thing that can move it;
+- the span is the mux. There is nothing to zoom INTO: a DAB spectrum is one 1.536 MHz block, not a
+  band to explore.
+
+★ Same reasoning as the existing whole-profile data modes (DAB/ADS-B/ISM in `isWholeProfileMode`),
+  where the VFO is already suppressed because the only thing it can do is drag you off the block.
+
+### ★★ VIBEAGC MATTERS MORE HERE, NOT LESS
+Stuart: *"the VibeAGC is probably more important than ever for DAB."* Agreed, and it is worth
+saying why so nobody "simplifies" it away with the zoom controls: DAB is DQPSK across 1536
+carriers, and the constellation only survives a narrow window of drive. Overload from a strong
+adjacent mux clips the ADC and the errors are spread across every carrier at once; underdrive
+loses the weak ones into the noise. FM degrades gracefully under both; DAB does not — it works,
+then it stops.
+
+So VibeAGC stays live in DAB mode, and the gain UI stays available. ★ The relationship to watch is
+that the ADC-peak headroom the loop already tracks is exactly the signal a DAB front end needs, so
+this should need no new mechanism — only care that the DAB path does not accidentally bypass it.
+
 ## Build order (riskiest first)
 1. Channel table + capability gate + the UI shell — settled, small, and it makes the rest testable.
 2. OFDM acquisition: null-symbol detect, coarse/fine frequency offset, phase reference correlation.
