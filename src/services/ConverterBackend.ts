@@ -132,6 +132,49 @@ export function wrapWithConverter(
   const w = new ConverterBackend(inner, getProfile);
   const bag = w as unknown as Record<string, unknown>;
   const src = inner as unknown as Record<string, unknown>;
+
+  /* ★★★ FORWARD EVERYTHING THIS CLASS DOES NOT ITSELF HANDLE — and this is a MECHANISM, replacing
+   *   a list that has now failed twice.
+   *
+   *  SDRScreen reaches many client methods either through `(client.current as any)?.m?.()` or, for
+   *  members the interface marks OPTIONAL, through a plain `c?.m?.()`. In both shapes an absent
+   *  method is not an error: the call evaporates. So every method UberSDRClient gained that this
+   *  wrapper had not been told about became SILENTLY INERT the moment the converter shipped —
+   *  and the wrapper is applied to every session.
+   *
+   *  ★★ WHAT THAT COST, reported from a day's use (2026-09-03): "the Advanced RDS button is
+   *     completely missing, the NR slider and Notch filter isnt working at all but button and
+   *     slider looks like they are working but nothing changes" — while the same server was fine
+   *     in the browser. The RDS button vanishes because its gate is literally
+   *     `if (!c?.setAdvRds) return; // only VibeServer has the lever`: an unforwarded method reads
+   *     as a server that does not have the feature.
+   *  ★★ FIXED ONCE BEFORE BY HAND — adminUnlock, ahfControl, hackrfControl, rspControl,
+   *     setTunerBandwidth were added explicitly on 2026-09-02, after the admin password was found
+   *     to be dead. That was treating the symptom: the list was never going to stay complete,
+   *     because nothing makes it complete. A method added to UberSDRClient tomorrow would break
+   *     again, silently, and the type system cannot see it.
+   *
+   * ★ SO: copy every function the inner backend has that this wrapper does not define, bound to
+   *   the inner. Anything ConverterBackend implements — every frequency-bearing call — is left
+   *   alone, so the transforms still own their own methods. New methods are covered by
+   *   construction rather than by somebody remembering.
+   * ★ Walks the PROTOTYPE CHAIN, because these are class methods, not own properties. */
+  const mine = new Set<string>();
+  for (let pr = Object.getPrototypeOf(w); pr && pr !== Object.prototype; pr = Object.getPrototypeOf(pr)) {
+    for (const k of Object.getOwnPropertyNames(pr)) mine.add(k);
+  }
+  for (const k of Object.keys(w)) mine.add(k);   // arrow-function fields (up/down/upStatus)
+  for (let pr: object | null = inner; pr && pr !== Object.prototype; pr = Object.getPrototypeOf(pr)) {
+    for (const k of Object.getOwnPropertyNames(pr)) {
+      if (k === 'constructor' || mine.has(k) || k in bag) continue;
+      let isFn = false;
+      try { isFn = typeof src[k] === 'function'; } catch { isFn = false; }   // skip throwing getters
+      if (!isFn) continue;
+      mine.add(k);
+      bag[k] = (...args: unknown[]) => (src[k] as (...a: unknown[]) => unknown).apply(inner, args);
+    }
+  }
+
   for (const m of OPTIONAL_MEMBERS) {
     /* ★ SHADOWED WITH undefined, not deleted. These are PROTOTYPE methods, and `delete
      *   instance.method` removes an OWN property — of which there are none — so it silently does
