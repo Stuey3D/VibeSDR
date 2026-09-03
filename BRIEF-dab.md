@@ -292,6 +292,25 @@ panel: codec detail and sample rate, error and error-correction statistics, prot
 code rate, sub-channel position, the physical layer (frequency offset in Hz and ppm, per-carrier
 SNR, DQPSK MER, the SFN channel impulse response) and TII.
 
+### The button lives in the decoder box HEADER
+Stuart, 2026-09-04: *"the advanced signal info button must live in the header of the decoder box."*
+
+★ The header is outside the scrolling pane, so the toggle cannot be scrolled away from — the same
+  reason the frequency card's ✕ went in its header tonight rather than into the content.
+
+★★★ AND IT MUST BE PINNED, NOT MERELY PLACED THERE. That header SCROLLS HORIZONTALLY when its
+    controls overflow the box — which is the exact fault Stuart reported earlier today: *"I had the
+    FT8 box open and couldnt work out how to make it bigger or smaller or minimise it because the
+    controls were off the edge of the box."* We fixed the AFFORDANCE (edge fades and chevrons) but
+    the controls still scroll. If the STATIONS/SIGNAL toggle is allowed to scroll off on a narrow
+    box, the entire advanced panel becomes unreachable and the feature looks missing rather than
+    hidden. So it is fixed at one end of the header, outside the scrolling group, with the
+    decoder's own controls scrolling beside it.
+
+★ It shows STATE, not just an action: which pane you are on has to be readable without pressing it.
+  A toggle that does not say which side it is on is the same half-built indicator as a background
+  job with no light.
+
 ### The one state rule that matters
 The view returns to the station list **when the ENSEMBLE changes** — first open, or tuning to a
 different multiplex — because a new mux means a new list and the old signal figures are about a
