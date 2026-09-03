@@ -164,14 +164,34 @@ export function wrapWithConverter(
     for (const k of Object.getOwnPropertyNames(pr)) mine.add(k);
   }
   for (const k of Object.keys(w)) mine.add(k);   // arrow-function fields (up/down/upStatus)
+
+  /* ★★★ DESCRIPTORS, NOT VALUES — AND GETTERS MUST BE FORWARDED AS GETTERS.
+   *   A first pass at this copied only `typeof src[k] === 'function'`, which fails twice over.
+   *   `isVibe` is an ACCESSOR (UberSDRAdapter: `get isVibe()`), so reading it returns a BOOLEAN,
+   *   not a function — it was skipped, and `advRdsAvail: !!(client as any)?.isVibe` stayed false,
+   *   which is precisely why the ADVANCED RDS button was still missing after the "fix".
+   *   ★★ And reading a value to test its type INVOKES the getter, on every property of a live
+   *      client, which is a side effect nobody asked for. Descriptors answer the question without
+   *      touching anything. */
   for (let pr: object | null = inner; pr && pr !== Object.prototype; pr = Object.getPrototypeOf(pr)) {
     for (const k of Object.getOwnPropertyNames(pr)) {
-      if (k === 'constructor' || mine.has(k) || k in bag) continue;
-      let isFn = false;
-      try { isFn = typeof src[k] === 'function'; } catch { isFn = false; }   // skip throwing getters
-      if (!isFn) continue;
-      mine.add(k);
-      bag[k] = (...args: unknown[]) => (src[k] as (...a: unknown[]) => unknown).apply(inner, args);
+      if (k === 'constructor' || mine.has(k)) continue;
+      const d = Object.getOwnPropertyDescriptor(pr, k);
+      if (!d) continue;
+      if (typeof d.get === 'function') {
+        mine.add(k);
+        Object.defineProperty(bag, k, {
+          configurable: true, enumerable: false,
+          get: () => (src as Record<string, unknown>)[k],
+          // ★ A settable property stays settable — `isLocal` and friends are written as well as read.
+          ...(typeof d.set === 'function'
+              ? { set: (v: unknown) => { (src as Record<string, unknown>)[k] = v; } }
+              : {}),
+        });
+      } else if (typeof d.value === 'function') {
+        mine.add(k);
+        bag[k] = (...args: unknown[]) => (d.value as (...a: unknown[]) => unknown).apply(inner, args);
+      }
     }
   }
 
