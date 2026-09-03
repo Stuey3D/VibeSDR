@@ -2392,6 +2392,22 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 }
 #freqInput:focus { outline: none; border-color: var(--btn-active-bdr); }
 #freqPanel { width: min(92vw, 420px); }
+/* ★★★ INSIDE THE FREQUENCY PANEL THE RESULTS ARE IN FLOW, NOT FLOATING.
+   #searchWrap is MOVED into #freqPanel at narrow widths (see mSearchHost) — the real node, not a
+   copy. But #freqPanel is `overflow-y: auto`, and an absolutely-positioned child that floats
+   UPWARD out of a scrolling container is clipped by it: the top of the list was cut off against
+   the top of the card, and the rows above it could not be reached at all (Stuart, 2026-09-03,
+   with a screenshot — "the top of list is clipped against the top of the tuning box").
+   ★★ ONE SCROLLER, NOT TWO. In flow, the PANEL scrolls to reveal the results, so there is no
+      nested scroll area to fight: dragging the list used to scroll the panel underneath it and
+      snap back. Nested scrollers inside a fixed card are a trap on touch, and the fix is to not
+      have two.
+   ★ Below the input, which is also where the APP puts them (FreqModal) — the same person uses
+     both, and this is the layout they already know. */
+#freqPanel #searchResults {
+  position: static; bottom: auto; margin-top: 0.5em;
+  max-height: none; overflow: visible;
+}
 #freqPanel .mrow input { flex: 1 1 auto; }
 
 

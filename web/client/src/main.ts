@@ -5322,7 +5322,19 @@ function initSearch() {
     if (usedAt) usedAt = Date.now();          // the window restarts on every return
     list.classList.add('open');
   };
-  el.onblur = () => setTimeout(close, 150);   // let a click land first
+  /* ★★★ TOUCHING THE LIST BLURS THE INPUT — so a scroll used to CLOSE it.
+   *  On a touch screen, putting a finger on the results takes focus off the search box, and the
+   *  blur handler then closed the list 150 ms later, mid-drag. It read as the list fighting you
+   *  and snapping back (Stuart, 2026-09-03). The 150 ms delay was only ever there so a mouse
+   *  click could land before the close; a touch drag needs the same protection and never had it.
+   *  ★ So a pointer that goes DOWN on the list cancels the pending close outright. Tapping a row
+   *    still closes it — that path calls close() itself, deliberately, after tuning. */
+  let holdingList = false;
+  list.addEventListener('pointerdown', () => { holdingList = true; });
+  el.onblur = () => setTimeout(() => {
+    if (holdingList) { holdingList = false; return; }
+    close();
+  }, 150);
 
   el.onkeydown = (e) => {
     if (e.key === 'Escape') { el.blur(); close(); return; }
