@@ -9114,6 +9114,17 @@ function renderFreq() {
   const hz = Math.round(spec.frequency);
   $('freq').textContent = (hz / UNIT_DIV[freqUnit]).toFixed(UNIT_DP[freqUnit]);
   $('freqUnit').textContent = UNIT_LBL[freqUnit];
+  /* ★★ THE CARD'S INPUT FOLLOWS THE RADIO TOO. It was filled once when the panel opened and never
+     again, so tuning from the search list left the box showing where you USED to be — 96.600 while
+     the receiver sat on 93.000. Harmless until the list started surviving the tune, which is
+     exactly when you stay on this card and work down a list of frequencies: the one field naming
+     a frequency then disagrees with the radio for the whole hunt.
+     ★ Never while it has focus — that is somebody typing, and overwriting it mid-entry is worse
+       than the staleness this fixes. */
+  const fi = document.getElementById('freqInput') as HTMLInputElement | null;
+  if (fi && document.activeElement !== fi) {
+    fi.value = (hz / UNIT_DIV[freqUnit]).toFixed(UNIT_DP[freqUnit]);
+  }
 }
 
 function setFreqUnit(u: FreqUnit) {
