@@ -90,16 +90,47 @@ inline int stepChannel(int index, int delta) {
     return n;
 }
 
-/** May this radio be offered DAB? Both halves must hold, and neither is about the driver.
- *  @param loHz,hiHz  the radio's tunable range
- *  @param captureHz  the widest capture (sample rate) it can sustain */
-inline bool radioCanDab(uint32_t loHz, uint32_t hiHz, uint32_t captureHz) {
+struct Range { uint32_t loHz, hiHz; };
+
+/** ★★★ FEED THIS THE EFFECTIVE LIMITS, NOT THE HARDWARE'S DATASHEET.
+ *
+ *  Stuart, 2026-09-04: *"an unlocked RTL-SDR v4 is fair game, but if i were to put restrictions on
+ *  it such as the sample rate like on the Xcover or limit its frequency range also like the xcover
+ *  then the button shouldnt even present itself."*
+ *
+ *  The operator's settings are part of the answer, not a detail applied afterwards. A locked
+ *  sample rate below 2.048 MSPS, or an allowed-range list that excludes Band III, makes DAB
+ *  impossible on hardware that could otherwise do it — and a button offered on that receiver is
+ *  the exact fault AGENTS.md names: the user concludes the FEATURE is broken, not the server.
+ *
+ *  ★★ So `captureHz` is the rate this receiver will ACTUALLY run at (the locked rate if one is
+ *     set, otherwise the widest it sustains), and `ranges` is the tunable set AFTER allow/block
+ *     lists — the same `tunable` array the server already publishes in vibeserver.json, so there
+ *     is ONE reader of that rule rather than a second copy that can drift from it.
+ *
+ *  On Stuart's own three radios today:
+ *    · RTL-SDR V4 / V4L, unrestricted  — capable.
+ *    · Airspy HF+   — reaches nothing above 31 MHz AND caps near 912 kHz: out on both counts.
+ *    · SDRplay RSP1B — plenty of sample rate, but locked to 2.8-10.8 MHz: out on range alone.
+ *      ★ That one is the reason this takes RANGES rather than a single lo/hi: the restriction is
+ *        the operator's, the hardware is blameless, and only the effective set knows the difference.
+ */
+inline bool radioCanDab(const Range* ranges, size_t n, uint32_t captureHz) {
+    if (!ranges || n == 0) return false;
     if (captureHz < kMinCaptureHz) return false;
-    // It has to reach at least one whole channel, not merely touch the band edge.
-    for (size_t i = 0; i < kBandIIICount; ++i) {
-        if (kBandIII[i].centreHz >= loHz && kBandIII[i].centreHz <= hiHz) return true;
-    }
+    // A whole channel must be REACHABLE — touching the band edge is not enough, and a channel
+    // straddling two disjoint allowed ranges is not reachable either.
+    for (size_t i = 0; i < kBandIIICount; ++i)
+        for (size_t r = 0; r < n; ++r)
+            if (kBandIII[i].centreHz >= ranges[r].loHz && kBandIII[i].centreHz <= ranges[r].hiHz)
+                return true;
     return false;
+}
+
+/** Single-range convenience — the common case, and it keeps the tests readable. */
+inline bool radioCanDab(uint32_t loHz, uint32_t hiHz, uint32_t captureHz) {
+    const Range r{loHz, hiHz};
+    return radioCanDab(&r, 1, captureHz);
 }
 
 /** The readout Stuart specified: "222.064 (11D)" — the frequency AND the channel, because on a

@@ -69,6 +69,23 @@ int main() {
     // Touching the band edge without containing a channel centre is not enough.
     CHECK(radioCanDab(174000000, 174900000, 2400000) == false, "band edge without a channel = no");
 
+    // ── THE OPERATOR'S RESTRICTIONS ARE PART OF THE ANSWER ───────────────────
+    // Stuart, 2026-09-04: a restricted V4 must not offer the button at all. These are his three
+    // radios and the two ways an operator disqualifies a capable one.
+    CHECK(radioCanDab(500000, 1766000000u, 2400000) == true,  "V4 unrestricted: offered");
+    CHECK(radioCanDab(500000, 1766000000u, 1200000) == false, "V4 with a LOCKED RATE below 2.048: not offered");
+    CHECK(radioCanDab(87500000, 108000000, 2400000) == false, "V4 restricted to FM: not offered");
+    // ★★ SDRplay RSP1B: sample rate is ample, the operator has locked it to 2.8-10.8 MHz. Out on
+    //    range alone — the hardware is blameless, which is why the gate reads the EFFECTIVE set.
+    CHECK(radioCanDab(2800000, 10800000, 8000000) == false, "RSP1B locked to 2.8-10.8 MHz: not offered");
+
+    // Disjoint allowed ranges: a channel must fall INSIDE one of them, not between two.
+    const Range gap[] = { {87500000, 108000000}, {225000000, 1700000000u} };
+    CHECK(radioCanDab(gap, 2, 2400000) == true, "an allowed range containing 12B+ qualifies");
+    const Range gap2[] = { {87500000, 108000000}, {240000000, 1700000000u} };
+    CHECK(radioCanDab(gap2, 2, 2400000) == false, "allowed ranges either side of Band III do not");
+    CHECK(radioCanDab(nullptr, 0, 2400000) == false, "no allowed ranges at all = no DAB");
+
     // ── The readout Stuart specified ─────────────────────────────────────────
     CHECK(displayLabel(i11d) == "222.064 (11D)", "readout is 'frequency (channel)'");
     CHECK(displayLabel(-1).empty(), "an invalid index yields no label, not a crash");
