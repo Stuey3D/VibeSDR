@@ -1,0 +1,79 @@
+// test-dab-channels.cpp — the Band III plan and the DAB capability gate.
+//
+// ★ Header-only and device-free, like test-utf8: the rules here belong to the BAND and to the
+//   radio's capability, not to any one driver, so the test must run with no hardware present.
+#include "vibe_dab_channels.h"
+#include <cassert>
+#include <cstdio>
+#include <cstring>
+
+using namespace vibedab;
+static int fails = 0;
+#define CHECK(c, msg) do { if (!(c)) { printf("  FAIL: %s\n", msg); ++fails; } } while (0)
+
+int main() {
+    printf("test-dab-channels\n");
+
+    // ── The table itself ─────────────────────────────────────────────────────
+    CHECK(kBandIIICount == 38, "Band III should hold 38 channels (5A..13F)");
+
+    // ★★ The one everybody quotes, and the one on Stuart's screen: 11D = 222.064 MHz.
+    const Channel* c11d = channelByName("11D");
+    CHECK(c11d && c11d->centreHz == 222064000, "11D must be 222.064 MHz");
+    CHECK(channelByName("11d") == c11d, "channel lookup is case-insensitive");
+    CHECK(channelByName("11E") == nullptr, "11E does not exist");
+    CHECK(channelByName(nullptr) == nullptr, "a null name is not a channel");
+
+    // ★★★ THE POINT OF A TABLE. Spot-check the irregularities a formula would get wrong: the step
+    //     INSIDE a group is 1.712 MHz, but the step ACROSS a group boundary is not, and 13D->13E
+    //     breaks again at the top.
+    const Channel* c11a = channelByName("11A");
+    const Channel* c11b = channelByName("11B");
+    CHECK(c11b->centreHz - c11a->centreHz == 1712000, "within a group the step is 1.712 MHz");
+    const Channel* c10d = channelByName("10D");
+    CHECK(c11a->centreHz - c10d->centreHz != 1712000, "the step ACROSS a group is NOT 1.712 MHz");
+    const Channel* c13d = channelByName("13D");
+    const Channel* c13e = channelByName("13E");
+    CHECK(c13e->centreHz - c13d->centreHz == 1712000, "13D->13E");
+    CHECK(channelByName("13C")->centreHz + 1568000 == c13d->centreHz, "13C->13D is the odd one");
+
+    // Monotonic and unique — a duplicate or an out-of-order entry would make nearestChannel lie.
+    for (size_t i = 1; i < kBandIIICount; ++i)
+        CHECK(kBandIII[i].centreHz > kBandIII[i-1].centreHz, "channels ascend and are unique");
+
+    // ── nearestChannel ───────────────────────────────────────────────────────
+    CHECK(strcmp(kBandIII[nearestChannel(222064000)].name, "11D") == 0, "exact centre -> 11D");
+    CHECK(strcmp(kBandIII[nearestChannel(222000000)].name, "11D") == 0, "just below -> 11D");
+    CHECK(strcmp(kBandIII[nearestChannel(0)].name, "5A") == 0, "far below the band -> the lowest");
+    CHECK(strcmp(kBandIII[nearestChannel(4000000000u)].name, "13F") == 0, "far above -> the highest");
+
+    // ── stepChannel: the tuning buttons in DAB mode ──────────────────────────
+    int i11d = nearestChannel(222064000);
+    CHECK(strcmp(kBandIII[stepChannel(i11d, +1)].name, "12A") == 0, "11D + 1 = 12A");
+    CHECK(strcmp(kBandIII[stepChannel(i11d, -1)].name, "11C") == 0, "11D - 1 = 11C");
+    // ★ CLAMPS, never wraps — 13F -> 5A in one press is not what a band scan meant.
+    CHECK(stepChannel(0, -1) == 0, "stepping below 5A stays on 5A");
+    CHECK(stepChannel(int(kBandIIICount) - 1, +1) == int(kBandIIICount) - 1, "stepping past 13F stays");
+
+    // ── The capability gate ──────────────────────────────────────────────────
+    // RTL-SDR V4: 500 kHz - 1.766 GHz at 2.4 MSPS — capable.
+    CHECK(radioCanDab(500000, 1766000000u, 2400000) == true, "RTL-SDR V4 can do DAB");
+    // ★★★ Airspy HF+: reaches 31 MHz and captures ~912 kHz. BOTH halves disqualify it, and it is
+    //     Stuart's own shared radio — the obvious test receiver is the wrong one.
+    CHECK(radioCanDab(1000, 31000000, 912000) == false, "Airspy HF+ cannot do DAB");
+    // A wide radio that cannot REACH Band III is still out (a hypothetical HF-only 2.5 MSPS rig).
+    CHECK(radioCanDab(1000, 30000000, 2500000) == false, "wide but out of band = no DAB");
+    // And one that reaches the band but cannot capture a whole mux is out — this is the case that
+    // matters, because it LOOKS like it should work and demodulates to nothing.
+    CHECK(radioCanDab(24000000, 1700000000u, 1024000) == false, "in band but too narrow = no DAB");
+    // Touching the band edge without containing a channel centre is not enough.
+    CHECK(radioCanDab(174000000, 174900000, 2400000) == false, "band edge without a channel = no");
+
+    // ── The readout Stuart specified ─────────────────────────────────────────
+    CHECK(displayLabel(i11d) == "222.064 (11D)", "readout is 'frequency (channel)'");
+    CHECK(displayLabel(-1).empty(), "an invalid index yields no label, not a crash");
+
+    if (fails == 0) printf("  all passed\n");
+    else            printf("  %d FAILED\n", fails);
+    return fails ? 1 : 0;
+}
