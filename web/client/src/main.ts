@@ -5306,7 +5306,11 @@ function initSearch() {
   };
 
   el.oninput = () => {
-    results = search(el.value);
+    /* ★★ 200, NOT 40 — the same ceiling the app uses (stations.searchStations). The browser was
+       quietly returning a THIRD of the rows for the same query against the same receiver, so a
+       broad search ("china" comes back with 62 in the app) looked truncated because it WAS.
+       One number with two readers, and only one of them had been raised. */
+    results = search(el.value, 200);
     sel = -1;
     usedAt = 0;                                // a new query is a new hunt, not a stale one
     render();

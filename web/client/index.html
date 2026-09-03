@@ -1101,9 +1101,19 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 #search::placeholder { color: var(--text-dim); }
 
 /* Results float UPWARD — the bar is at the bottom of the screen. */
+/* ★★ SIZED FROM THE SCREEN, NOT FROM A GUESS. 320px was a fixed pixel height in a layout that is
+   otherwise all em and clamp(), so on a phone it showed a handful of rows out of dozens and read
+   as the list refusing to expand (Stuart, 2026-09-03: "the search list isnt expanding properly and
+   is cutting results off"). The bar is at the BOTTOM, so everything above it is available.
+   ★ touch-action: pan-y — the same trap as the directory map earlier today. #app sets
+     `pan-x pan-y`, but a list that scrolls inside itself has to claim the vertical swipe or the
+     rows past the fold cannot be reached BY TOUCH at all, which looks exactly like truncation.
+   ★ overscroll-behavior: contain stops a flick that reaches the end from scrolling the page
+     underneath and shifting every hit target. */
 #searchResults {
   display: none; position: absolute; bottom: calc(100% + 6px); left: 0; right: 0;
-  max-height: 320px; overflow-y: auto; z-index: 40;
+  max-height: min(60vh, 30em); overflow-y: auto; z-index: 40;
+  touch-action: pan-y; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
   background: rgba(8,6,2,0.98); border: 1px solid var(--btn-border);
   border-radius: 8px; padding: 4px;
 }
@@ -1527,9 +1537,19 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #search::placeholder { color: var(--text-dim); }
 
 /* Results float UPWARD — the bar is at the bottom of the screen. */
+/* ★★ SIZED FROM THE SCREEN, NOT FROM A GUESS. 320px was a fixed pixel height in a layout that is
+   otherwise all em and clamp(), so on a phone it showed a handful of rows out of dozens and read
+   as the list refusing to expand (Stuart, 2026-09-03: "the search list isnt expanding properly and
+   is cutting results off"). The bar is at the BOTTOM, so everything above it is available.
+   ★ touch-action: pan-y — the same trap as the directory map earlier today. #app sets
+     `pan-x pan-y`, but a list that scrolls inside itself has to claim the vertical swipe or the
+     rows past the fold cannot be reached BY TOUCH at all, which looks exactly like truncation.
+   ★ overscroll-behavior: contain stops a flick that reaches the end from scrolling the page
+     underneath and shifting every hit target. */
 #searchResults {
   display: none; position: absolute; bottom: calc(100% + 6px); left: 0; right: 0;
-  max-height: 320px; overflow-y: auto; z-index: 40;
+  max-height: min(60vh, 30em); overflow-y: auto; z-index: 40;
+  touch-action: pan-y; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
   background: rgba(8,6,2,0.98); border: 1px solid var(--btn-border);
   border-radius: 8px; padding: 4px;
 }

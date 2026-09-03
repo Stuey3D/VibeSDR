@@ -233,7 +233,9 @@ function parseFreq(q: string): number | null {
 let tunableWindow: [number, number] | null = null;
 export function setTunableWindow(w: [number, number] | null) { tunableWindow = w; }
 
-export function search(query: string, limit = 40): SearchResult[] {
+/* ★ Default raised 40 → 200 to match the app's searchStations(), which has always used 200. The
+ *  browser and the phone searching the same receiver must not disagree about how much there is. */
+export function search(query: string, limit = 200): SearchResult[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
   const out: SearchResult[] = [];
