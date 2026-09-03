@@ -717,7 +717,28 @@ export class UberSDRClient {
   // the server ladder passes large values through unchecked and a runaway
   // zoom-out wedges the session.
   zoom(frequency: number, binBandwidth: number) {
-    const f = Math.max(this.minHz, Math.min(this.maxHz, Math.round(frequency)));
+    /* ★★★ THE VIEW CENTRE IS NOT A TUNE REQUEST — DO NOT CLAMP IT TO THE TUNER'S RANGE.
+     *
+     *  This was `Math.max(this.minHz, …)`, and for every VibeServer connection minHz is
+     *  LOCAL_CAPS.freqRange[0] = 100 kHz — the RTL-SDR's floor, applied to whatever radio is
+     *  actually on the far end. On the Pi's Airspy HF+ (1 kHz up) a view centred on MSF at 60 kHz
+     *  was silently rewritten to 100 kHz, so every zoom closed in on 100 kHz and walked the VFO
+     *  off the left edge until MSF and DCF77 could not be zoomed into at all (Stuart, 2026-09-03).
+     *  ★★ AGENTS.md's "ELSE MEANS DONGLE", exactly: a limit that belongs to ONE radio applied to
+     *     all three because the local path was written when the RTL-SDR was the only one.
+     *
+     *  ★★★ MEASURED, not assumed. Probing the shim directly: ask for centre 60000 with a 48 kHz
+     *      span and it answers `centerFreq: 60000` and puts 60000 in every frame header — it
+     *      honours a window running below the radio's lowest tunable frequency and simply sends
+     *      the dead space, which is what the web client shows and what Stuart asked for ("the web
+     *      client isnt afraid to show dead space to keep the VFO in the centre"). The device log
+     *      then showed anchor=60000 going in and {"frequency":100000} going out, which is where
+     *      the 40 kHz went.
+     *  ★ The SPAN is still capped below — that is a real client-side limit (render artefacts and a
+     *    runaway zoom-out wedging the session). Only the CENTRE clamp goes, and the server remains
+     *    the authority on what it will serve.
+     */
+    const f = Math.round(frequency);
     const n  = this.status.binCount || 1024;
     // Max-zoom floor: 6 kHz total span (3 kHz per sideband — one SSB
     // channel both sides). The server goes deeper but past this the
@@ -731,7 +752,9 @@ export class UberSDRClient {
   }
 
   pan(frequency: number) {
-    const f = Math.max(this.minHz, Math.min(this.maxHz, Math.round(frequency)));
+    // ★ Same rule as zoom(): panning the VIEW is not tuning, so the tuner's range does not bound
+    //   it. Clamping here hid the low end of every radio that reaches below the RTL-SDR's floor.
+    const f = Math.round(frequency);
     this.view.centerHz = f;
     this._sendView(f, this.view.binBandwidth || this.status.binBandwidth);
   }

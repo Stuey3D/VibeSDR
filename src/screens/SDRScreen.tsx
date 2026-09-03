@@ -5303,11 +5303,30 @@ export default function SDRScreen({ route, navigation }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /* ★★★ THE ± BUTTONS ZOOM ON THE VFO, FULL STOP — no visibility test.
+   *
+   *  zoomAnchorHz() falls back to the VIEW CENTRE when it judges the VFO to be outside the
+   *  current span, which is right for a DRUM or PINCH (your fingers are pointing somewhere) and
+   *  wrong for a button that means "close in on what I am listening to". At 60 kHz on a wide view
+   *  the fallback fired and each press shrank the span around the view centre instead, walking
+   *  MSF off the left edge until it could not be zoomed into at all (Stuart, 2026-09-03; DCF77 the
+   *  same). The web client's own zoomBy says this in as many words: "Omit the anchor to zoom about
+   *  the VFO, which is what the +/- buttons want."
+   *
+   *  ★★ MEASURED FIRST, against the Pi's Airspy at 60 kHz: the server returns
+   *     `centerFreq: 60000` for a 48 kHz span and every frame header carries 60000. It honours a
+   *     window that runs below the radio's lowest tunable frequency and simply sends the dead
+   *     space — so there was never a server-side clamp to work around, and nothing to fix but the
+   *     frequency we were asking for.
+   *  ★ Falls back to the view centre only when there is genuinely no VFO to anchor on.
+   */
   const zoomBy = useCallback((factor: number) => {
     const c = client.current; if (!c) return;
     const v = c.getView(); if (!v.binBandwidth || !v.centerHz) return;
-    c.zoom(zoomAnchorHz(v), Math.max(1, v.binBandwidth * factor));
-  }, [zoomAnchorHz]);
+    const tuned = c.getStatus().frequency;
+    const anchor = tuned > 0 ? tuned : v.centerHz;
+    c.zoom(anchor, Math.max(1, v.binBandwidth * factor));
+  }, []);
   const onZoomIn  = useCallback(() => zoomBy(0.5), [zoomBy]);
   const onZoomOut = useCallback(() => zoomBy(2),   [zoomBy]);
 
