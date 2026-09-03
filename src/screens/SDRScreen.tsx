@@ -8717,6 +8717,19 @@ export default function SDRScreen({ route, navigation }: Props) {
           restricted receivers are hidden entirely in the picker on that platform. */}
       {!IS_TV && <BrowserOverlay
         url={adminPage?.url ?? null}
+        /* ★★★ THE INSET WAS PASSED AT THE OTHER CALL SITE AND NOT THIS ONE — reported by Michael
+         *  DL8LDN on an iPhone 17e (issue #22): "if switching to the OWRX Map there is no way back
+         *  because the back button is in the IPhone Status bar under the clock. The two arrows are
+         *  under the battery symbol."
+         *  ★★ BrowserOverlay's own note says why the prop exists: useSafeAreaInsets returns 0
+         *     inside an RN Modal, so the component cannot measure this for itself and the native
+         *     SafeAreaView fallback only works once the modal's window has laid out. The compat
+         *     call site was given the prop; this one was missed, so on a phone with a tall status
+         *     bar our whole bar sat underneath it.
+         *  ★★★ AND THE MAP IS THE WORST PLACE FOR IT TO HAPPEN: injectCSS below hides OWRX's own
+         *      header to give a full-screen map, so our bar is the ONLY way out. Two reasonable
+         *      decisions — hide their chrome, trust the fallback — combined into no exit at all. */
+        topInset={insets.top}
         title={adminPage?.title}
         allowSave={!!adminPage?.url?.includes('/files')}
         injectCSS={adminPage?.url?.endsWith('/map')
