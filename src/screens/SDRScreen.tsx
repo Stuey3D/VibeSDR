@@ -6869,6 +6869,29 @@ export default function SDRScreen({ route, navigation }: Props) {
   // that band's demodulator + tune step (band-aware tuning) — a deliberate user
   // action, so it applies handheld too. Bookmark taps keep the bookmark's own
   // mode and leave the step untouched.
+  /* ★★★ A MODE WE CAN SET IS NOT THE SAME AS A MODE WE HAVE A BANDWIDTH FOR.
+   *
+   *  Every branch below used to test `mode in MODE_BANDWIDTHS`, which is our table of ANALOGUE
+   *  filter widths — am, usb, lsb, nfm, wfm, cw. An OpenWebRX bookmark carrying a DIGITAL
+   *  modulation (dmr, ysf, dstar, nxdn, m17, drm, and the digimodes) is not in that table, so
+   *  onMode() was never called and the mode was dropped in silence. Analogue bookmarks worked,
+   *  which is exactly the shape Michael DL8LDN reported on issue #22: "if switching to an OWRX
+   *  bookmark [that] have a digital mode defined the app don't switch to that mode. This is not
+   *  if it is a analoge mode like AM or USB."
+   *
+   *  ★★ THE BACKEND IS THE AUTHORITY ON ITS OWN MODES. `serverModes` is what the server told us it
+   *     supports (onModes) and what the mode selector already draws from; OwrxAdapter.setMode
+   *     handles the digimode cases properly once it is actually called. MODE_BANDWIDTHS is a
+   *     lookup for a default filter width — a fine reason to choose a bandwidth, and the wrong
+   *     question to ask about whether a mode exists.
+   *  ★ Kept as a fallback for backends that never send a mode list (UberSDR/VibeServer), so the
+   *    analogue path is unchanged where nothing advertises anything.
+   */
+  const canSetMode = useCallback((m: string): boolean => {
+    if (serverModes.some((s) => s.id === m)) return true;
+    return m in MODE_BANDWIDTHS;
+  }, [serverModes]);
+
   const onSearchTune = useCallback((hz: number, mode?: string | null, isBand?: boolean, voiceStep?: boolean) => {
     setMenuOpen(false);
     const target = Math.round(hz);
@@ -6877,18 +6900,18 @@ export default function SDRScreen({ route, navigation }: Props) {
     const explicit = mode?.toLowerCase() as SDRMode | undefined;
     if (isBand) {
       const m = d.mode ?? explicit;
-      if (m && m in MODE_BANDWIDTHS) onMode(m);
+      if (m && canSetMode(m)) onMode(m);
       if (d.step) setStep(d.step);
     } else if (voiceStep) {
       // Voice/bookmark tune: explicit (spoken) mode wins, else the band default;
       // and adopt the band step too (e.g. Radio Caroline → MW 9 kHz).
-      const m = (explicit && explicit in MODE_BANDWIDTHS) ? explicit : d.mode;
-      if (m && m in MODE_BANDWIDTHS) onMode(m);
+      const m = (explicit && canSetMode(explicit)) ? explicit : d.mode;
+      if (m && canSetMode(m)) onMode(m);
       if (d.step) setStep(d.step);
-    } else if (explicit && explicit in MODE_BANDWIDTHS) {
+    } else if (explicit && canSetMode(explicit)) {
       onMode(explicit);  // plain bookmark tap — mode only, step untouched
     }
-  }, [onTuneHz, onMode, ituRegion]);
+  }, [onTuneHz, onMode, ituRegion, canSetMode]);
 
   // Menu INSTANCE row — ← BACK returns to the instance picker (it previously
   // fell back to just closing the menu). The ⟳ RECONNECT button was removed
