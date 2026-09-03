@@ -1608,14 +1608,43 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   // MARK: - WCSessionDelegate
 
   func session(_ s: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {
-    DispatchQueue.main.async { self.reachable = s.isReachable }
+    DispatchQueue.main.async {
+      self.reachable = s.isReachable
+      /* ★★★ THE WRIST-UP HAS TO BE ASSERTED ON ARRIVAL, NOT ONLY ON A TRANSITION.
+       *
+       *  The phone pauses the row forwarder while the wrist is down, and `resume()` — which sends
+       *  `wrist down:false` — ran ONLY from becameActive(), i.e. from
+       *  `.onChange(of: scenePhase)`. onChange does not fire for a value that is ALREADY `.active`
+       *  when the scene mounts, so on the launches that go straight to active nothing ever told
+       *  the phone the wrist was up: rows never started, the spectrum sat frozen, and TUNING STILL
+       *  WORKED because commands travel on their own path and only the forwarder was paused.
+       *  Dropping the wrist and lifting it produced a real transition and it all came alive
+       *  (Stuart, 2026-09-03: "wrist down then up again and it starts flowing").
+       *
+       *  ★★ AND EVEN WHEN onChange DID FIRE it could beat this activation, because a send before
+       *     the session is activated goes nowhere. That is the second half of the same race and
+       *     the reason it was INTERMITTENT — "sometimes it will work perfectly on the first go"
+       *     depends on which of the two orderings you got.
+       *
+       *  ★ Guarded by !phoneClosed so the no-auto-cold-boot rule still holds: this asserts state
+       *    to a phone we are already talking to, it never starts one. Wrist-down is respected too,
+       *    or activating in a pocket would resume a feed nobody can see.
+       */
+      if state == .activated && !self.isBackground && !self.phoneClosed { self.resume() }
+    }
   }
 
   func sessionReachabilityDidChange(_ s: WCSession) {
     DispatchQueue.main.async {
       self.reachable = s.isReachable
       // ★ The wake we asked for has landed — deliver the command properly now. See sendDurable.
-      if s.isReachable { self.flushPendingWake() }
+      if s.isReachable {
+        self.flushPendingWake()
+        /* ★ Same assertion, for the ordering where activation completed while UNREACHABLE — the
+         *  resume above would have been sent into a void. Re-stating it is idempotent: the phone
+         *  simply learns again that the wrist is up. */
+        if !self.isBackground && !self.phoneClosed { self.resume() }
+      }
     }
   }
 }
