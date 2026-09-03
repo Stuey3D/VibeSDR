@@ -298,7 +298,14 @@ Stuart, 2026-09-04: *"the advanced signal info button must live in the header of
 ★ The header is outside the scrolling pane, so the toggle cannot be scrolled away from — the same
   reason the frequency card's ✕ went in its header tonight rather than into the content.
 
-★★★ AND IT MUST BE PINNED, NOT MERELY PLACED THERE. That header SCROLLS HORIZONTALLY when its
+★★ IN DAB MODE THE HEADER IS NEARLY EMPTY, so this fits any screen. Stuart, 2026-09-04: *"the
+   decoder box will only have that button in it next to the minimise big/small and close buttons."*
+   Four controls, no overflow — the crowded header that caused today's trouble is the FT8 case, not
+   this one. ▶ The rule that keeps it true: **the DAB header stays minimal.** If controls are added
+   later and it starts to overflow, the toggle is the one that must not scroll off, for the reason
+   below.
+
+★ (Kept for whoever adds that fifth control.) NOT MERELY PLACED THERE, IF IT EVER OVERFLOWS. That header SCROLLS HORIZONTALLY when its
     controls overflow the box — which is the exact fault Stuart reported earlier today: *"I had the
     FT8 box open and couldnt work out how to make it bigger or smaller or minimise it because the
     controls were off the edge of the box."* We fixed the AFFORDANCE (edge fades and chevrons) but
