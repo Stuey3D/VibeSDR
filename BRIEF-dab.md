@@ -269,6 +269,37 @@ TS 102 563 on `header_firecode`: *"capable of detecting and correcting most sing
 up to 6 bits"*. The standard says correcting; DAB-Radio's TODO says it does not. That is the
 difference between a marginal mux staying audible and stuttering, and it is a stated goal here.
 
+## The decoder box: LEFT/RIGHT, and why
+
+Stuart left the call to me, leaning left/right and noting it means scrolling. Left/right it is, and
+there is a stronger reason than space.
+
+**The two halves update at completely different rates.** The station list changes rarely — on a
+retune, or when a mux reconfigures. The signal block updates several times a second. Stacked, a
+list that gains a service pushes the numbers you are reading down the screen; side by side, each
+column moves in its own lane and the eye can hold a figure while the other half changes. Anything
+that makes a live readout jump while you are reading it is the same fault as a wandering VFO.
+
+**And two short scrollers is worse than two tall ones.** Top/bottom halves the height of both, so
+each becomes a cramped scroll area — and nested short scrollers inside a panel are precisely what
+went wrong with the web client's search list tonight: the list fought the drag and snapped back.
+Full-height columns scroll once, cleanly, and a DAB station list is long enough to want every pixel.
+
+Layout:
+- **Left: the station list**, with logos (off-air via MOT SlideShow where the mux sends them —
+  see above — falling back to our own database). Ordered as they appear in the mux, which is what
+  a DX-er expects and what the recall key (channel + service id) is built on.
+- **Right: the full signal block**, laid out exactly like the Advanced RDS panel so the two read
+  as the same instrument. ★ Ordered by how often it is wanted, not by where it comes from in the
+  decode chain: codec / bit rate / error rate first, protection and sub-channel next, the physical
+  layer and TII below. Somebody hunting a mux scrolls down; somebody checking a station does not
+  scroll at all.
+
+★★ **NARROW SCREENS DO NOT SQUEEZE — THEY SWITCH.** Below the breakpoint the split becomes a
+   segmented toggle (STATIONS | SIGNAL), one at a time, full width. Half of a phone's width is
+   unusable for either column, and the August design already says small mode is the station list
+   alone; this is that rule with the signal half reachable rather than lost.
+
 ## Build order (riskiest first)
 1. Channel table + capability gate + the UI shell — settled, small, and it makes the rest testable.
 2. OFDM acquisition: null-symbol detect, coarse/fine frequency offset, phase reference correlation.
