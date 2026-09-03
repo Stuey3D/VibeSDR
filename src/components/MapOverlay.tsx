@@ -323,6 +323,22 @@ L.control.zoom({position:'bottomright'}).addTo(map);
 // updateWhenZooming stops Leaflet firing requests it will throw away mid-animation.
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
   {attribution:'&copy; OSM',maxZoom:14,keepBuffer:4,updateWhenZooming:false}).addTo(map);
+/* ★★★ WARM THE WHOLE WORLD AT THE LOW ZOOMS, ONCE. Every flyTo arcs out through z0-z3 whatever
+ *     its endpoints are, so those tiles are needed by EVERY flight and there are only 21 of them
+ *     in total (1 + 4 + 16). Fetching them at startup — while nothing is animating and the user is
+ *     reading the topbar — means the wide part of the arc is always already in cache, rather than
+ *     being requested per flight and arriving after the animation has passed through it.
+ * ★ Fire and forget: no callback, nothing waits on it, and a failure costs exactly the old
+ *   behaviour. It runs once per map, not once per flight. */
+(function warmLowZooms(){
+  for(var z=0;z<=2;z++){
+    var n=Math.pow(2,z);
+    for(var x=0;x<n;x++)for(var y=0;y<n;y++){
+      var im=new Image();
+      im.src='https://'+'abc'.charAt((x+y)%3)+'.tile.openstreetmap.org/'+z+'/'+x+'/'+y+'.png';
+    }
+  }
+})();
 var cnt=document.getElementById('cnt');
 var toast=document.getElementById('toast');
 
@@ -505,8 +521,13 @@ if(KIND==='hfdl'){
     }
     var here=map.getCenter();
     grab(centre,zoom);grab(centre,zoom-1);grab(centre,zoom-2);
-    // the wide part of the arc, over whatever sits between here and there
-    grab(L.latLng((here.lat+centre.lat)/2,(here.lng+centre.lng)/2),Math.max(0,zoom-3));
+    /* ★★ THE ARC GOES LOWER THAN WE WERE FETCHING. flyTo pulls OUT and back IN, and on a long
+     *    flight the top of that arc is several levels below the destination — we warmed z-3 only,
+     *    so z-4 and below still arrived square by square while the animation was running
+     *    (Stuart, 2026-09-04: "still buffering in the tiles as it animates different zoom levels").
+     *    Each level up is 4x the ground per tile, so these cost a handful of images between them. */
+    var mid=L.latLng((here.lat+centre.lat)/2,(here.lng+centre.lng)/2);
+    grab(mid,Math.max(0,zoom-3));grab(mid,Math.max(0,zoom-4));grab(mid,Math.max(0,zoom-5));
     if(pending===0)fin();
   }
 

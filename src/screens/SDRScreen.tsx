@@ -8764,6 +8764,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* Frequency modal */}
       <FreqModal
         visible={freqModalOpen}
+        /* ★ The card is inside a Modal, where useSafeAreaInsets reads 0 — measure out here and
+         *   pass it in, the same way BrowserOverlay has done since build 70. */
+        topInset={insets.top}
         currentHz={status.frequency}
         onConfirm={onTuneHz}
         onClose={() => setFreqModalOpen(false)}

@@ -64,6 +64,11 @@ interface FreqModalProps {
    *  Tune | Bookmarks segmented header. All lifted verbatim from MenuSheet. */
   currentMode?:      string;
   onSearchTune?:     (hz: number, mode?: string | null, isBand?: boolean) => void;
+  /** ★★★ MEASURED BY THE PARENT. useSafeAreaInsets returns 0 INSIDE an RN Modal — BrowserOverlay
+   *  learned this the hard way (build 70: its bar drew under the clock). This card lives in a
+   *  Modal too, so the hook below cannot be trusted on its own and the parent, which is not in a
+   *  modal, passes the real value in. Falls back to the hook where nobody supplies it. */
+  topInset?:         number;
   searchBookmarks?:  ServerBookmark[];
   searchBands?:      ServerBand[];
   eibiEnabled?:      boolean;
@@ -181,7 +186,7 @@ export default function FreqModal({
   onShare,
   profiles = [], activeProfileId, sdrUsage, clientCount, onSelectProfile,
   vtsName, vtsFreq, onVtsPrev, onVtsNext, vtsLookup,
-  currentMode = 'usb', onSearchTune, searchBookmarks = [], searchBands = [],
+  currentMode = 'usb', onSearchTune, searchBookmarks = [], searchBands = [], topInset,
   eibiEnabled = true, onEibiToggle, userBookmarks = [],
   onAddBookmark, onDeleteBookmark, onToggleBookmarkSync, onExportBookmarks, onImportBookmarks, onPickImportFile,
 }: FreqModalProps) {
@@ -191,7 +196,10 @@ export default function FreqModal({
   const { width: winW, height: winH } = useWindowDimensions();
   /* ★★ THE REAL INSETS, not a constant. The card is centred, so whatever it cannot fit overflows
    *  BOTH ends equally — and the top end is where the Dynamic Island is. */
-  const insets = useSafeAreaInsets();
+  const hookInsets = useSafeAreaInsets();
+  /** ★ The parent's measurement wins; the hook is the fallback. See the topInset prop. */
+  const safeTop = topInset ?? hookInsets.top;
+  const safeBottom = hookInsets.bottom;
   const isLandscape = winW > winH;
   const [unitState, setUnitState] = useState<Unit>('khz');
   const unit = unitProp ?? unitState;
@@ -448,7 +456,7 @@ export default function FreqModal({
    *  ★ Both insets, doubled, because centring splits the overflow: keeping the top clear is the
    *    requirement, and the bottom must not be allowed to buy the space back.
    */
-  const chrome = (isLandscape ? 96 : 96) + Math.max(insets.top, insets.bottom) * 2;
+  const chrome = 96 + Math.max(safeTop, safeBottom) * 2;
   const bmMaxH = Math.max(160, winH - kbHeight - chrome);
 
   return (
