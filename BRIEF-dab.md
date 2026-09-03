@@ -269,36 +269,39 @@ TS 102 563 on `header_firecode`: *"capable of detecting and correcting most sing
 up to 6 bits"*. The standard says correcting; DAB-Radio's TODO says it does not. That is the
 difference between a marginal mux staying audible and stuttering, and it is a stated goal here.
 
-## The decoder box: LEFT/RIGHT, and why
+## The decoder box: ONE PANE AT A TIME, stations first
 
-Stuart left the call to me, leaning left/right and noting it means scrolling. Left/right it is, and
-there is a stronger reason than space.
+Stuart, 2026-09-04, after considering a left/right split: *"stations/signal info toggle is the
+better split actually, make that the default."* Agreed, and it is better than the split I had
+argued for — with a toggle **each pane gets the whole box instead of half**, which answers the
+scrolling problem outright rather than mitigating it. Side by side, both columns would have been
+narrow AND still scrolling; this way neither is.
 
-**The two halves update at completely different rates.** The station list changes rarely — on a
-retune, or when a mux reconfigures. The signal block updates several times a second. Stacked, a
-list that gains a service pushes the numbers you are reading down the screen; side by side, each
-column moves in its own lane and the eye can hold a figure while the other half changes. Anything
-that makes a live readout jump while you are reading it is the same fault as a wandering VFO.
+★ It also matches the instrument that already exists. On FM the display carries PS and RadioText
+  inline and **ADVANCED RDS** is a button to the deep panel. DAB gets the same shape, so the two
+  modes read as one radio rather than two designs.
 
-**And two short scrollers is worse than two tall ones.** Top/bottom halves the height of both, so
-each becomes a cramped scroll area — and nested short scrollers inside a panel are precisely what
-went wrong with the web client's search list tonight: the list fought the drag and snapped back.
-Full-height columns scroll once, cleanly, and a DAB station list is long enough to want every pixel.
+**Left pane / default view — the station list**, and it carries the everyday fields itself:
+- service label, and the **now-playing text (DLS)** — the thing OWRX omits and the reason Stuart
+  named it. It belongs in the LIST, not behind the button.
+- logo (off-air via MOT SlideShow where the mux sends one, else our own database)
+- enough to choose a station: bit rate, codec badge, whether it is currently decodable.
 
-Layout:
-- **Left: the station list**, with logos (off-air via MOT SlideShow where the mux sends them —
-  see above — falling back to our own database). Ordered as they appear in the mux, which is what
-  a DX-er expects and what the recall key (channel + service id) is built on.
-- **Right: the full signal block**, laid out exactly like the Advanced RDS panel so the two read
-  as the same instrument. ★ Ordered by how often it is wanted, not by where it comes from in the
-  decode chain: codec / bit rate / error rate first, protection and sub-channel next, the physical
-  layer and TII below. Somebody hunting a mux scrolls down; somebody checking a station does not
-  scroll at all.
+**Behind the button — ADVANCED SIGNAL INFO**, the full block laid out exactly like the Advanced RDS
+panel: codec detail and sample rate, error and error-correction statistics, protection profile and
+code rate, sub-channel position, the physical layer (frequency offset in Hz and ppm, per-carrier
+SNR, DQPSK MER, the SFN channel impulse response) and TII.
 
-★★ **NARROW SCREENS DO NOT SQUEEZE — THEY SWITCH.** Below the breakpoint the split becomes a
-   segmented toggle (STATIONS | SIGNAL), one at a time, full width. Half of a phone's width is
-   unusable for either column, and the August design already says small mode is the station list
-   alone; this is that rule with the signal half reachable rather than lost.
+### The one state rule that matters
+The view returns to the station list **when the ENSEMBLE changes** — first open, or tuning to a
+different multiplex — because a new mux means a new list and the old signal figures are about a
+receiver you have left.
+
+★★ It does NOT reset when you change SERVICE inside the same mux. That is the same lesson as the
+   bookmark search earlier tonight: do not throw away the view somebody is working in. Someone
+   comparing error rates across the services of one mux is doing exactly what this panel is for,
+   and bouncing them back to the list on every selection would make it unusable for the one job it
+   is best at.
 
 ## Build order (riskiest first)
 1. Channel table + capability gate + the UI shell — settled, small, and it makes the rest testable.
