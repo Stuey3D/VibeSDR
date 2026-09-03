@@ -156,6 +156,76 @@ protection; and interleaving spreads errors in **time and frequency** so bursts 
 Higher protection means lower capacity but the same coverage at lower power — which is exactly the
 trade a DX-er wants to see reported, and nobody in the survey above surfaces it well.
 
+## What we surface — "on par with our advanced RDS decoder"
+
+Stuart, 2026-09-04: *"i want to see the codec, the error rate and error correction stats —
+everything a signal nerd would love, i want our DAB implementation to be the absolute best on the
+market with information on par with our advanced RDS decoder."*
+
+That is the bar, and it is achievable because DAB carries far MORE than RDS does. The inventory
+below is taken from EN 300 401 (downloaded and read, not remembered) so nothing here is guesswork
+about what is available.
+
+### The RDS equivalents — service information (clause 8.1, carried in the FIC)
+| DAB | clause | the RDS thing it answers to |
+|---|---|---|
+| Ensemble label | 8.1.13 | — (no RDS equivalent; the mux name) |
+| Service label / component label | 8.1.14 | PS |
+| **Dynamic Label (DLS)**, via X-PAD | 7.4.5 | RadioText |
+| Programme Type | 8.1.5 | PTY |
+| Announcements + switching | 8.1.6 | TA / TP |
+| Frequency Information | 8.1.8 | AF |
+| Service linking | 8.1.15 | EON |
+| Other-ensemble services | 8.1.10 | EON (other network) |
+| Date/time, country, LTO | 8.1.3 | CT / PI country nibble |
+| Component language | 8.1.2 | — |
+| User applications (SlideShow, SPI/EPG) | 6.3.6 | — |
+
+★★ **STATION LOGOS COME OFF THE AIR.** MOT SlideShow / SPI carries station artwork, so the "station
+list with logos" Stuart specified need not depend on our own logo database at all — the broadcaster
+supplies it. Fall back to `stationLogo.ts` when a mux does not send one.
+
+### The nerd panel — what the demodulator can measure at each stage
+★ Grouped by where it comes from, because that is also the order it becomes available: the physical
+layer reports long before any service is decoded, which makes the panel useful while you are still
+hunting a mux.
+
+**Physical / OFDM**
+- carrier frequency offset (coarse + fine), in Hz **and ppm** — the number that tells you your
+  dongle is drifting rather than the transmitter
+- sample-rate error, null-symbol depth, time-sync confidence
+- **channel impulse response**: the SFN echo profile — how many transmitters you are hearing, at
+  what delay and what relative level. ★★ This is the single most DX-interesting readout DAB can
+  give and almost nothing on the market shows it.
+- per-carrier SNR across the 1536, and DQPSK **MER / constellation tightness**
+
+**FIC (the fast information channel)**
+- FIB CRC pass rate — 12 FIBs per 96 ms frame, so a real error figure updated 12.5x a second
+- FIG coverage: which extensions are being received, and how stale each is
+
+**MSC (the audio path)**
+- Viterbi corrected-bit estimate — the pre-FEC error rate, i.e. how close to the cliff you are
+- **DAB+ superframe: Reed-Solomon (120,110) corrections per superframe, and uncorrectable count**
+- **firecode CRC pass rate** — ★ and we intend to CORRECT with it, which DAB-Radio's own TODO says
+  it does not do; that is the difference between a marginal mux stuttering and staying audible
+- audio-frame CRC failures, concealment events
+
+**Service configuration**
+- protection profile: EEP or UEP, level, **code rate** (1A 1/4 … 4A 3/4) and the resulting capacity
+- sub-channel size in CUs and start CU — where in the mux this service physically sits
+- bit rate
+
+**Codec** (Stuart's first-named item)
+- MP2 vs AAC-LC / HE-AAC / HE-AACv2, **sample rate**, channel mode, SBR and PS presence
+- and whether WE decoded it (MP2) or handed it to the browser (DAB+) — the honest answer to "why is
+  this silent", which is the licence position made visible rather than mysterious
+
+**TII — transmitter identification (clause 14.8)**
+- main id + sub id, resolved against the ensemble's transmitter list where one is available
+- ★★★ combined with the echo delays above this identifies WHICH transmitter you are receiving and
+  roughly how far away it is. For a DX-er this is the whole game, and it is the clearest way to be
+  "the best on the market" rather than merely complete.
+
 ## Build order (riskiest first)
 1. Channel table + capability gate + the UI shell — settled, small, and it makes the rest testable.
 2. OFDM acquisition: null-symbol detect, coarse/fine frequency offset, phase reference correlation.
