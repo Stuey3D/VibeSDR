@@ -511,6 +511,18 @@ export default function FreqModal({
                   )}
                 </TouchableOpacity>
               ))}
+              {/* ★★★ AN EXIT THAT IS ALWAYS ON SCREEN. The only ways out of the bookmarks tab were
+                  the backdrop and the TUNE tab's CANCEL — and on a tall phone the card can fill the
+                  screen, leaving no backdrop to tap (Stuart, 2026-09-03). A modal whose dismissal
+                  depends on there being spare screen around it is one bad screen size from being a
+                  trap.
+                  ★ In the HEADER, which sits outside the ScrollView, so it cannot be scrolled away
+                    however long the results list gets — the tune tab's CANCEL scrolls with its
+                    content and this one must not. */}
+              <TouchableOpacity onPress={onClose} style={st.segClose} hitSlop={10}
+                                accessibilityRole="button" accessibilityLabel="Close">
+                <Text style={{ fontFamily: t.font, fontSize: 18, color: dimText }}>✕</Text>
+              </TouchableOpacity>
             </View>
           ) : (
             <Text style={[st.title, { color: t.sectionColor, fontFamily: t.font }]}>FREQUENCY</Text>
@@ -807,6 +819,9 @@ const st = StyleSheet.create({
   // Bookmarks mode (§4.2)
   segHeader:    { flexDirection: 'row', marginBottom: 12 },
   segTab:       { flex: 1, alignItems: 'center', paddingVertical: 8, borderBottomWidth: 2 },
+  // ★ Fixed width so it takes the same bite out of both tabs rather than squeezing one of them,
+  //   and no bottom border: it is not a third tab and must not read as one.
+  segClose:     { width: 34, alignItems: 'center', justifyContent: 'center', paddingVertical: 8 },
   segTabText:   { fontSize: 12, letterSpacing: 2, fontWeight: '700' },
   bmScroll:     { maxHeight: 340 },
   searchInput:  { borderWidth: 1, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8, fontSize: 14, marginBottom: 8, backgroundColor: 'rgba(255,255,255,0.04)' },
