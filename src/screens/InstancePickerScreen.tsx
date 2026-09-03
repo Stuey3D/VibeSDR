@@ -113,6 +113,7 @@ import { getKiwiIdent, setKiwiIdent } from '../services/kiwiIdent';
 import { VibePowerModule } from '../components/AudioPlayer';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import { APP_VERSION } from '../constants/version';
+import { useServing, loopbackIfSelf, servingNow } from '../services/serving';
 import { DIRECTORIES, fetchDirectory, type DirectoryId } from '../services/directories';
 import { startMdnsDiscovery, type DiscoveredServer } from '../services/mdns';
 import { resolveVibeAuth } from '../services/vibeAuth';
@@ -507,6 +508,10 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   }, []));
 
   const { colors: C, font: F, scale } = themeFor(viewMode);
+  /* ★ ONE source for "am I serving?", shared with the loopback rewrite in connectVibeServer —
+   *  see services/serving.ts. Two separate pollers could disagree, and the disagreement would be
+   *  invisible: the row would say SERVING while the connect path dialled the LAN address. */
+  const serving = useServing();
 
   const normalisedCustomUrl = useMemo(() => {
     let u = customUrl.trim().replace(/\/+$/, '');
@@ -731,11 +736,21 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // but pointed at a LAN host, with the PIN resolved to an auth suffix. No local
   // shim is started — the radio lives on the serving phone.
   const connectVibeServer = useCallback(async (host: string, port: number, name: string, pin: string,
-                                              base?: string) => {
+                                              base?: string, adminPw?: string,
+                                              adminTakeover?: boolean) => {
     setConnecting(true);
+    /* ★★★ LISTENING TO OUR OWN SERVER GOES OVER LOOPBACK — Stuart: "loopback like the mac".
+     *  mDNS advertises the LAN address, so without this a phone serving and listening to itself
+     *  sends every waterfall frame out to the router and back: latency for nothing, and a session
+     *  that dies the moment the Wi-Fi does. loopbackIfSelf is a no-op for every other server, and
+     *  it reads the SAME cached status the SERVING pill draws from, so the two cannot disagree
+     *  about whether this address is us. */
+    host = loopbackIfSelf(host, port);
     // ★ The probed address wins — see the note in the router. `http://host:port` is only the
     //   fallback for the paths that never probed (mDNS discovery on a LAN).
-    const baseUrl = base || `http://${host}:${port}`;
+    //   ★ ...except when we just rewrote the host to loopback: `base` was probed over the LAN and
+    //     would send us straight back out to the router, defeating the rewrite above.
+    const baseUrl = (host === '127.0.0.1') ? `http://127.0.0.1:${port}` : (base || `http://${host}:${port}`);
     let authSuffix = '';
     /* ★★ resolveVibeAuth is a LAN fetch, and it is the one step UberSDR's path does not have —
      *  named in the open-issue notes as part of what makes this route different. Bracketed by
@@ -785,10 +800,54 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             serverType: 'ubersdr', isLocal: true, localPort: port,
             localHost: host, authSuffix,
             localGen: newLocalSession(),
+            /* ★ Loopback only: the owner listening to their own server is admin by definition, so
+             *  the receiver screen unlocks itself instead of asking for a password the phone
+             *  already holds. SDRScreen proves it against the server exactly as a typed one. */
+            autoAdminPw: adminPw || undefined,
+            /* ★ Only when the owner answered "Continue" to the in-use warning: the takeover flag
+             *  is one-shot and deliberate, never a property of connecting over loopback. */
+            autoTakeover: adminTakeover || undefined,
           } },
       ],
     } as never);
   }, [navigation, viewMode]);
+
+  /* ★★★ LISTEN TO OUR OWN RUNNING SERVER, OVER 127.0.0.1.
+   *
+   *  ★ Loopback, not the LAN address mDNS advertises — Stuart: "loopback like the mac". Otherwise
+   *    every waterfall frame goes out to the router and back: latency for nothing, and a session
+   *    that dies the moment the Wi-Fi does. Serving and listening on one phone has to keep working
+   *    when the network does not.
+   *
+   *  ★★ THE OWNER GETS PRIORITY, but is ASKED first. On a single-user server, or one with every
+   *     slot taken, connecting displaces somebody who is listening right now — so the warning is
+   *     not a formality, it is the only notice that person's session is about to end. Cancel is
+   *     the default-safe half of the pair.
+   *
+   *  ★★★ ADMIN COMES FROM THE PASSWORD, NOT FROM THE SOURCE ADDRESS. It is tempting to have the
+   *      server simply trust 127.0.0.1 and hand it admin — and it would be a hole: a reverse proxy
+   *      makes EVERY visitor look like 127.0.0.1, which has already silently disabled the session
+   *      limit for us once, and local_sdr_shim.cpp carries its own note about the same address.
+   *      We are the owner and we hold the admin password, so we prove it the ordinary way and the
+   *      server's rule stays "whoever knows the secret", which is true from any address.
+   */
+  const connectLoopback = useCallback(async () => {
+    const s = servingNow();
+    if (!s.running) { connectLocal(); return; }
+    const full = s.listeners > 0 && (s.maxUsers <= 1 || s.listeners >= s.maxUsers);
+    const go = async (takeover: boolean) => {
+      const pw = (await AsyncStorage.getItem('vs_adminpw')) || '';
+      connectVibeServer('127.0.0.1', s.port, 'This phone (loopback)', '', undefined, pw, takeover);
+    };
+    if (!full) { void go(false); return; }
+    Alert.alert(
+      'Server in use',
+      s.maxUsers <= 1
+        ? 'This server allows one listener at a time. Connecting will disconnect the current user.'
+        : `All ${s.maxUsers} slots are in use. Connecting will disconnect the current user.`,
+      [{ text: 'Back', style: 'cancel' }, { text: 'Continue', onPress: () => { void go(true); } }],
+    );
+  }, [connectLocal, connectVibeServer]);
 
   // Tap a discovered/typed VibeServer: prompt for the PIN if it needs one, with a
   // saved PIN pre-filled (per host:port) so the user need not retype it. "Save &
@@ -2364,28 +2423,47 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     Android only: iOS has no USB host SDR. */}
                 {Platform.OS === 'android' && (<>
                   <SectionHeader label={localSdrLabel || 'USB SDR'} fs={fs} F={F} C={C} />
+                  {/* ★★★ WHILE SERVING, THIS ROW IS A LOOPBACK CLIENT — NOT A SECOND SHIM.
+                      connectLocal() opens the USB device and calls stopSpectrumInternal() first,
+                      so pressing Listen with a server running would tear down the very radio the
+                      server is sharing and drop everybody on it. The dongle is one resource; the
+                      way to hear it while serving is to be an ordinary listener on our own server,
+                      over 127.0.0.1. See connectLoopback. */}
                   <ChooserRow
-                    style={[styles.row, { borderColor: C.amber }]}
-                    onPress={() => connectLocal()}
+                    style={[styles.row, { borderColor: serving.running ? C.green : C.amber }]}
+                    onPress={() => (serving.running ? connectLoopback() : connectLocal())}
                   >
                     <View style={styles.rowMain}>
-                      <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber }} numberOfLines={1}>Listen</Text>
+                      <Text style={{ fontFamily: F, fontSize: fs(16), color: serving.running ? C.green : C.amber }} numberOfLines={1}>Listen</Text>
                       <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
-                        tune the dongle plugged into this phone (USB-C OTG)
+                        {serving.running
+                          ? `server via local loopback · ${serving.listeners}/${serving.maxUsers} connected`
+                          : 'tune the dongle plugged into this phone (USB-C OTG)'}
                       </Text>
                     </View>
-                    <View style={{ marginLeft: 4 }}><UsbSdrIcon size={26} color={C.amber} strokeWidth={2.4} /></View>
+                    <View style={{ marginLeft: 4 }}><UsbSdrIcon size={26} color={serving.running ? C.green : C.amber} strokeWidth={2.4} /></View>
                     <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 8 }}>›</Text>
                   </ChooserRow>
+                  {/* ★★★ THE SERVING INDICATOR IS THE SAFETY OF THE FEATURE, not decoration.
+                        On 2026-09-02 this phone sat at 3x its normal CPU for an hour and the
+                        reason was invisible — a server had been left running. A background job
+                        with no indicator is a trap, so the row that STARTS serving is also the
+                        row that says it is still happening, and it is the only green thing on the
+                        page. keepOnExit: this is a "let me look at it" tap, so backing out of the
+                        server screen must not silently stop the server. */}
                   {rtlTcpServerSupported && (
                     <ChooserRow
-                      style={[styles.row, { borderColor: C.amber }]}
-                      onPress={() => navigation.navigate('ServerMode', {})}
+                      style={[styles.row, { borderColor: serving.running ? C.green : C.amber }]}
+                      onPress={() => navigation.navigate('ServerMode', { keepOnExit: serving.running } as never)}
                     >
                       <View style={styles.rowMain}>
-                        <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber }} numberOfLines={1}>⇆ Use as server</Text>
+                        <Text style={{ fontFamily: F, fontSize: fs(16), color: serving.running ? C.green : C.amber }} numberOfLines={1}>
+                          {serving.running ? '● Currently serving' : '⇆ Use as server'}
+                        </Text>
                         <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
-                          serve this dongle to other devices on your Wi-Fi
+                          {serving.running
+                            ? `${serving.listeners}/${serving.maxUsers} connected — tap for the server screen`
+                            : 'serve this dongle to other devices on your Wi-Fi'}
                         </Text>
                       </View>
                       <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 8 }}>›</Text>

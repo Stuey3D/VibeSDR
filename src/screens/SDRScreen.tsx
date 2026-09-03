@@ -740,7 +740,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const connectedOnceRef = useRef(false);
   refusalRef.current = refusal;
   /** Admin takeover, offered on the IN USE refusal. See the modal for why it reconnects. */
-  const [takeoverPw, setTakeoverPw] = useState('');
+  const [takeoverPwState, setTakeoverPw] = useState('');
   const [takeoverErr, setTakeoverErr] = useState<string | null>(null);
   /** ★ Set while a takeover attempt is in flight. resolveVibeAdminAuth CANNOT tell a wrong
    *  password from a right one — it just HMACs whatever was typed — so the only evidence is
@@ -1323,7 +1323,12 @@ export default function SDRScreen({ route, navigation }: Props) {
    * ★★ See doPickerUnlock: an unhandled Return does not stay in the text field, it reaches the
    *    window's shortcut layer and opens the frequency box on the screen behind.
    */
-  const doTakeover = useCallback(async () => {
+  /* ★ Takes the password as an ARGUMENT so the loopback path can reuse it verbatim rather than
+   *  growing a second copy of the resolve/intent/reconnect sequence. Defaults to the typed one, so
+   *  every existing caller is unchanged. "One rule, two readers" is this project's most expensive
+   *  fault shape and a takeover is exactly the kind of rule that must have one reader. */
+  const doTakeover = useCallback(async (pwArg?: string) => {
+    const takeoverPw = pwArg ?? takeoverPwState;
     if (!takeoverPw) return;
     // ★★★ PROVED AT THE DOOR, USED AT A RADIO — the mistake this file already
     //     documents a few hundred lines up for the in-session unlock, repeated
@@ -1383,7 +1388,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     adminAuthWireRef.current = wire;
     client.current?.setAdminAuth?.(wire);
     fullReconnect();
-  }, [takeoverPw, baseUrl, connectBase, fullReconnect]);
+  }, [takeoverPwState, baseUrl, connectBase, fullReconnect]);
 
   /**
    * ★★★ ONE IDENTITY PER RADIO, KEPT ACROSS RECONNECTS. This was re-minted on every connEpoch —
@@ -1986,6 +1991,44 @@ export default function SDRScreen({ route, navigation }: Props) {
     //   word on it, and onAdminState will correct us if it disagrees.
     if (!nonce || !token) { setAdminRefused(true); setAdminFailReason('unreachable'); }
   }, [baseUrl, connectBase, mintAdminTicket]);
+
+  /* ★★★ THE OWNER LISTENING TO THEIR OWN SERVER IS ADMIN — proved, not assumed.
+   *
+   *  Stuart: "in local loopback mode all admin settings are fully unlocked at all times." The
+   *  temptation is to have the server grant admin to anything arriving from 127.0.0.1. That would
+   *  be a hole, not a shortcut: a reverse proxy makes EVERY visitor look like 127.0.0.1 — it has
+   *  already silently disabled our session limit once, and local_sdr_shim.cpp carries its own note
+   *  about the same address. The server's rule stays "whoever knows the admin secret", which is
+   *  honest from any address.
+   *
+   *  ★ So the picker hands us the password it already holds and we prove it exactly as a typed one
+   *    would be — same function, same two challenges. If the owner never set an admin password
+   *    there is nothing to prove and nothing to unlock, which is correct: a server with no admin
+   *    secret has no admin.
+   *  ★ Once per session, after the socket exists: onAdminUnlockPw proves against the RADIO, so it
+   *    needs a live connection to unlock anything.
+   */
+  const autoAdminDone = useRef(false);
+  useEffect(() => {
+    const pr = route.params as any;
+    const pw = pr?.autoAdminPw as string | undefined;
+    if (!pw || autoAdminDone.current) return;
+    /* ★ ONLY mark it done once we actually act. Marking it on the first run latched the effect
+     *  shut before `connected` was ever true, so the unlock never happened and the panel still
+     *  said "protected by the owner" — the same shape as every other "decided once for the
+     *  process" fault in this codebase. The takeover path has no such wait: it carries the
+     *  credential on the handshake, so it must fire before a connection exists. */
+    if (!pr?.autoTakeover && !connected) return;
+    autoAdminDone.current = true;
+    /* ★★★ EVICTION IS DECIDED ON THE HANDSHAKE, not afterwards. override_ is
+     *  `adminAuthed && occupied && mayEvict` at accept time, so a credential proved AFTER the
+     *  socket is open unlocks the controls and displaces nobody. When the owner has already
+     *  answered "Continue" to the warning at the picker, the intent has to travel WITH the
+     *  connection — which is precisely what doTakeover does, so it is reused rather than copied.
+     *  ★ Without that answer this is an ordinary unlock: admin granted, nobody thrown off. */
+    if (pr?.autoTakeover) void doTakeover(pw);
+    else void onAdminUnlockPw(pw);
+  }, [connected, onAdminUnlockPw, doTakeover, route.params]);
 
   /**
    * Keep the admin lease alive for as long as we hold one.
@@ -8368,7 +8411,7 @@ export default function SDRScreen({ route, navigation }: Props) {
                   If this is your receiver, enter its admin password to take it back.
                 </Text>
                 <TextInput
-                  value={takeoverPw} onChangeText={setTakeoverPw}
+                  value={takeoverPwState} onChangeText={setTakeoverPw}
                   placeholder="Admin password" placeholderTextColor="rgba(255,160,0,0.35)"
                   secureTextEntry autoCapitalize="none" autoCorrect={false}
                   style={styles.noticeInput}
@@ -8377,9 +8420,9 @@ export default function SDRScreen({ route, navigation }: Props) {
                   returnKeyType="go"
                   onSubmitEditing={() => { void doTakeover(); }}
                 />
-                <TouchableOpacity style={styles.noticeBtn} disabled={!takeoverPw}
+                <TouchableOpacity style={styles.noticeBtn} disabled={!takeoverPwState}
                   onPress={() => { void doTakeover(); }}>
-                  <Text style={[styles.noticeBtnTxt, !takeoverPw && { opacity: 0.4 }]}>
+                  <Text style={[styles.noticeBtnTxt, !takeoverPwState && { opacity: 0.4 }]}>
                     TAKE OVER
                   </Text>
                 </TouchableOpacity>

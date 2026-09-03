@@ -371,6 +371,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [starting, setStarting] = useState(false);
   const [error, setError]     = useState<string | null>(null);
   const runningRef = useRef(false);
+  /* ★★ Set by keepServingAndBrowse(), and PRE-SET when the picker's "Currently serving" row
+   *  opened this screen to LOOK at a running server. Read only by the unmount teardown below. */
+  const keepServingRef = useRef(!!(route.params as any)?.keepOnExit);
 
   // Load saved preferences + name.
   useEffect(() => {
@@ -482,10 +485,19 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     })();
   }, []);
 
-  // Stop the server when leaving unless it's running (VibeServer is ad-hoc: a
-  // single remote client, so we tear down on exit to free the dongle).
+  /* ★★★ LEAVING STOPS THE SERVER — UNLESS YOU ASKED IT NOT TO.
+   *
+   *  Tearing down on unmount is the right default: the dongle is one physical resource and
+   *  walking away from this screen normally means you are done with it.
+   *
+   *  ★ "Return to browse — server remains active" is the deliberate exception, and it has to be
+   *    honoured HERE rather than by not navigating, because this cleanup runs on ANY unmount and
+   *    cannot tell one exit from another. The ref is set immediately before the navigate; it
+   *    cannot leak into a LATER exit because that navigate pops this screen, so the ref dies with
+   *    it and coming back builds a fresh false one.
+   */
   useEffect(() => () => {
-    if (runningRef.current) { stopAdvertiseRtlTcp(); stopVibeServer(); }
+    if (runningRef.current && !keepServingRef.current) { stopAdvertiseRtlTcp(); stopVibeServer(); }
   }, []);
 
   /** ★★★ ADOPT A SERVER THAT IS ALREADY RUNNING. `running` was set in exactly ONE place — after
@@ -968,6 +980,22 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     setRunning(null);
   }, []);
 
+  /* ★★★ THE ONE EXIT THAT LEAVES THE RECEIVER ON.
+   *
+   *  Discovered by accident on the Xcover (2026-09-03): serving and listening on one phone is
+   *  already within budget. Measured — serving alone 82% of 800% available, serving AND listening
+   *  to itself 277%, iqDrops 0 throughout, on a mid-range Android 11 handset. Stuart: "running a
+   *  server and listening to it on the same phone is childs play."
+   *
+   *  ★ Not the default: stopping stays the ordinary way out for a phone that is warm or on
+   *    battery. This one says what it does before the press, because it is the only exit here
+   *    that does not free the dongle.
+   */
+  const keepServingAndBrowse = useCallback(() => {
+    keepServingRef.current = true;
+    navigation.navigate('InstancePicker', { noAutoConnect: true } as never);
+  }, [navigation]);
+
   const toggleCompress = useCallback((on: boolean) => {
     setCompress(on);
     if (runningRef.current) setVibeServerCompressAudio(on);   // live toggle
@@ -1008,7 +1036,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           <Text style={[styles.h1, { color: C.amber, fontFamily: F }]}>VibeServer</Text>
           <Text style={[styles.sub, { color: C.textDim, fontFamily: F }]}>
             {`Serving this phone's ${radio?.model ?? 'SDR'} with server-side DSP.`} Leaving this screen
-            stops the server and frees the dongle.
+            stops the server and frees the dongle — except with "Return to browse", which leaves it
+            running so you can listen to it yourself over loopback.
           </Text>
 
           <View style={[styles.card, { borderColor: C.borderBright }]}>
@@ -1223,13 +1252,22 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 the same exit twice under two names. Stuart spotted the duplicate on the device.
               ★ Setup is first because it is the one you want mid-session (change a setting, start
                 again); the red one is "I have finished serving, take me back to listening". */}
+          {/* ★★★ THREE EXITS, and the THIRD is the whole of serve-and-listen. Wording and order
+              are Stuart's (2026-09-03). The first two stop the server and differ only in where
+              they land; the third leaves the receiver ON, so it is green and its label does not
+              begin with "Stop" — it must not read as a third variety of stopping. */}
           <TouchableOpacity style={[styles.stopBtn, { borderColor: C.amber }]} onPress={stopAndSetup}>
-            <Text style={{ color: C.amber, fontFamily: F, fontSize: 16 }}>■ Stop server & back to setup</Text>
+            <Text style={{ color: C.amber, fontFamily: F, fontSize: 16 }}>■ Stop server & return to config</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={[styles.stopBtn, { borderColor: C.red, marginTop: 10 }]}
                             onPress={stopAndBack}>
-            <Text style={{ color: C.red, fontFamily: F, fontSize: 16 }}>■ Stop server & back to servers</Text>
+            <Text style={{ color: C.red, fontFamily: F, fontSize: 16 }}>■ Stop server & return to browse</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={[styles.stopBtn, { borderColor: C.green, marginTop: 10 }]}
+                            onPress={keepServingAndBrowse}>
+            <Text style={{ color: C.green, fontFamily: F, fontSize: 16 }}>▶ Return to browse — server remains active</Text>
           </TouchableOpacity>
         </ScrollView>
       </SafeAreaView>
