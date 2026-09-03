@@ -632,6 +632,19 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   private var tuning: Bool { tuneSettle != nil }
 
   func tune(delta: Int) {
+    /* ★★★ THE PREDICTION OBEYS THE SAME GATE AS THE SEND. flushCrown() already refuses to send a
+     *  tune on a shared dial you have not armed — but this predicted anyway, so on a locked VFO the
+     *  readout ticked along under the crown while the spectrum and audio correctly stood still, and
+     *  then snapped back when armTuneSettle's ping restored the truth (Stuart, 2026-09-03). The
+     *  radio was behaving perfectly; only the number lied.
+     *  ★★ GATED HERE, NOT AT THE CALL SITES. FmdxView checks its own `armed` before calling this
+     *     and the waterfall screen does not — one rule with two readers, and the waterfall was the
+     *     one that had never been given it. `canTune` is the single authority for "may this watch
+     *     move the dial", so the guard belongs beside it where a new caller inherits it for free.
+     *  ★ Dropping the delta rather than accumulating it is deliberate: flushCrown() discards
+     *    pendingTune unsent in exactly this case, so keeping it would only be a lump of rotation
+     *    waiting to be applied the instant somebody armed the dial. */
+    guard canTune else { return }
     predictTune(delta: delta)
     pendingTune += delta
     scheduleFlush()

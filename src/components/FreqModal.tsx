@@ -15,6 +15,7 @@ import {
 } from '../services/stations';
 import { type UserBookmark } from '../services/userBookmarks';
 import { useListNav, useKeyboardMode, NAV_FOCUS, revealIn, noteTouchInteraction } from './PanelNav';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type Unit = 'hz' | 'khz' | 'mhz';
 
@@ -188,6 +189,9 @@ export default function FreqModal({
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
   const { width: winW, height: winH } = useWindowDimensions();
+  /* ★★ THE REAL INSETS, not a constant. The card is centred, so whatever it cannot fit overflows
+   *  BOTH ends equally — and the top end is where the Dynamic Island is. */
+  const insets = useSafeAreaInsets();
   const isLandscape = winW > winH;
   const [unitState, setUnitState] = useState<Unit>('khz');
   const unit = unitProp ?? unitState;
@@ -430,10 +434,22 @@ export default function FreqModal({
   const bdrDim   = isWhite ? 'rgba(255,255,255,0.20)' : 'rgba(80,50,0,0.40)';
   const bdrBrt   = isWhite ? 'rgba(255,255,255,0.45)' : 'rgba(160,90,0,0.60)';
   const btnPadY  = isWhite ? 12 : 10;
-  // Bookmarks list cap (§6.4/§6.5): size to the space actually available above the keyboard, so a
-  // big phone (17PM) shows every button with no scroll, while small phones cap-and-scroll. Chrome =
-  // card padding + segmented header + top safe gap + the gap above the keyboard.
-  const bmMaxH = Math.max(160, winH - kbHeight - (isLandscape ? 96 : 150));
+  /* Bookmarks list cap (§6.4/§6.5): size to the space actually available above the keyboard, so a
+   * big phone (17PM) shows every button with no scroll, while small phones cap-and-scroll.
+   *
+   * ★★★ THE CHROME ALLOWANCE WAS A CONSTANT, AND THE STATUS BAR IS NOT. 150 stood for "card
+   *     padding + segmented header + top safe gap", so on a phone whose Dynamic Island is deeper
+   *     than that guess the card ran up UNDER it — the first rows sat behind the clock and the
+   *     battery (Stuart, 2026-09-03, with a screenshot). The card is centred, so half of any
+   *     overflow lands at the top, which is the one edge that has furniture on it.
+   *  ★★ It only started showing now: the search results survive a tune, so the card OPENS at its
+   *     full height instead of growing there while you look at it. My change did not cause the
+   *     bad arithmetic, it stopped hiding it.
+   *  ★ Both insets, doubled, because centring splits the overflow: keeping the top clear is the
+   *    requirement, and the bottom must not be allowed to buy the space back.
+   */
+  const chrome = (isLandscape ? 96 : 96) + Math.max(insets.top, insets.bottom) * 2;
+  const bmMaxH = Math.max(160, winH - kbHeight - chrome);
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}
