@@ -7924,10 +7924,6 @@ struct LocalSdrShim::Impl {
          *  tuning buttons step BLOCKS (11A, 11B, 11C…) — and no zoom, because on an RTL-SDR the
          *  IF bandwidth follows the zoom and narrowing it cuts the ensemble in half. */
         if (type == "dab") {
-            if (!vsDabCapable()) {
-                sendText(sock, "{\"type\":\"dab_error\",\"why\":\"this receiver cannot reach a DAB multiplex at 2.048 MS/s\"}");
-                return;
-            }
             /* ★★ THE DEFAULT IS OFF. It was 1, so a {"type":"dab"} with the key missing SEIZED
              *  the receiver — DAB suspends the shared-dial lock and takes the whole capture, so
              *  "on" is the one thing a malformed message must never mean. The web client always
@@ -7990,6 +7986,19 @@ struct LocalSdrShim::Impl {
              *  stopped, nothing decoded.
              *  ★ tuneHw() afterwards as well, for the case where the rate did not actually change
              *    and therefore nothing was rebuilt. Both paths end up on the multiplex. */
+            /* ★★★ THE CAPABILITY GATE GOES AFTER THE OFF BRANCH, NOT BEFORE IT.
+             *  It used to be the first thing in the handler, so a receiver that answered "no" at
+             *  that moment could not be taken OUT of DAB — the handler replied dab_error and
+             *  returned with g_dabMode still set. Seen on the live Pi at 4.1.73: the V4 entered
+             *  DAB, refused to leave, and sat there serving no spectrum to anybody until the
+             *  service was restarted. Getting IN is a capability question; getting OUT never is.
+             *  ★ And the answer is not constant — DAB moves the rate and suspends the locked
+             *    rate the gate reads, so the gate is being asked about a radio DAB has already
+             *    changed. One more reason it must not stand between a listener and the way out. */
+            if (!vsDabCapable()) {
+                sendText(sock, "{\"type\":\"dab_error\",\"why\":\"this receiver cannot reach a DAB multiplex at 2.048 MS/s\"}");
+                return;
+            }
             /* ★★★ TAKE THE LOCK OFF FIRST — see g_dabLockHeld. Anything below that moves the
              *  radio is undone by the rebuild while the lock still stands. */
             if (!g_dabLockHeld.exchange(true)) {
