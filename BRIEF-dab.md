@@ -359,10 +359,18 @@ with a matching `vibeserver/test-dab-*.cpp`.
 | 8 | FIC/FIG parser → ensemble, services, labels, sub-channels | ✅ tested |
 | 9 | phase reference symbol (tables machine-extracted from the PDF) | ✅ tested |
 | 10 | puncturing vectors + depuncturing (machine-extracted) | ✅ tested |
+| 11 | **complete FIC decode: soft bits → ensemble + station list** | ✅ tested |
+
+★★★ **STAGE 11 IS THE MILESTONE, AND IT PASSES.** `test-dab-ficdec` builds a small multiplex,
+transmits it through the real encode/puncture/multiplex chain, corrupts 5% of the symbols, and
+recovers "BBC Radio 4" with its codec and sub-channel. That is the entire path below the MSC
+proven end to end in one test — scrambler, rate-1/4 code, PI 16/15 puncturing, the tail vector,
+the four-codeword round robin, the Viterbi, the CRC and the FIG parser. ★ It also proves the demux
+PHASE, because decoding the wrong slot must yield nothing, and the test asserts that too.
 
 **Still to build, honestly:**
-- **FIC extraction from the OFDM symbols** — which symbols carry it, and wiring 4→8→9→10 into one
-  path. This is the last piece before a STATION LIST can appear from real IQ, and it is small.
+- **Wiring the FIC to the OFDM front end** — feeding the three FIC symbols' soft bits into
+  ficDecodeFrame. The decode itself is done; this is plumbing.
 - **MSC**: CIF extraction, 16-deep time deinterleaving, UEP/EEP tables (table 15 extracts cleanly,
   same technique as the others).
 - **MP2 decoder** — ours, because the browser refuses Layer II. A full audio codec: bit allocation,
