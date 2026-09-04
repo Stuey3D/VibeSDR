@@ -85,6 +85,7 @@
 #include "decoders/wefax_decoder.h" // WEFAX (audio-extension decoder)
 #include "decoders/ft8_decoder.h"   // FT8/FT4 → digital spots
 #include "opus_audio_encoder.h" // VibeServer compressed audio (Opus; VIBE_HAVE_OPUS-gated)
+#include "vibe_dab_service.h"   // DAB (experimental) — see BRIEF-dab.md
 #include "decoders/sstv_decoder.h"  // SSTV (audio-extension image decoder)
 #include "decoders/audio_nr.h"      // self-contained spectral-subtraction audio NR
 #include "decoders/auto_notch.h"    // NLMS automatic notch (adaptive line enhancer)
@@ -555,6 +556,22 @@ static std::atomic<bool>   g_vsWebEnabled{true};
 // {"type":"sampleRate"} is IGNORED and the rate is advertised as locked, so the
 // client can hide a control it isn't allowed to use.
 static std::atomic<double> g_vsLockedRate{0.0};
+
+/* ── DAB (experimental) ──────────────────────────────────────────────────────────────────────
+ *  ★★ ONE SERVICE PER PROCESS, because there is one radio per process. It is only ever fed from
+ *     the DSP thread and only ever read under its own lock, so it needs no coordination beyond
+ *     what it already carries.
+ *  ★ Gated at the UI by radioCanDab() on the EFFECTIVE limits — Stuart, 2026-09-04: a restricted
+ *    V4 "shouldnt even present itself". */
+static vibedab::DabService g_dab;
+static std::atomic<bool>   g_dabMode{false};
+static std::atomic<int>    g_dabChannel{-1};
+
+/** May this receiver be offered DAB? Reads the EFFECTIVE tunable set and the rate it would run at,
+ *  never the driver name — so a locked-down V4 is refused and a future wideband radio inherits the
+ *  right answer for free. */
+static bool vsDabCapable();
+
 // ★ A PIN, not the ceiling above it. See setVibeServerRateLock.
 static std::atomic<bool>   g_vsRateLock{false};
 // ★★★ Locked hardware centre — see setVibeServerLockedCentre in the header for why. 0 = off.
@@ -6389,6 +6406,47 @@ struct LocalSdrShim::Impl {
      *  and WHOSE codec preference it uses. ★ An Opus encoder carries stream state, so it cannot be
      *  shared between listeners: two clients through one encoder interleave their frames and both
      *  get garbage. */
+    /** ★★ DAB audio to every listener, and the signal block with it.
+     *
+     *  MP2 is decoded HERE (patents expired; the browser refuses Layer II — measured) and goes out
+     *  on the ordinary audio socket, so nothing downstream needs to know DAB exists. DAB+ is not
+     *  decoded at all: its AAC is reframed and handed to the browser, which is what keeps this
+     *  server free of any codec licence.
+     */
+    void pumpDabAudio() {
+        const size_t have = g_dab.pcmAvailable();
+        if (have >= 480) {                                  // 10 ms at 48 kHz
+            std::vector<float> f(have * 2);
+            const size_t got = g_dab.takePcm(f.data(), have);
+            if (got) {
+                std::vector<int16_t> pcm(got * 2);
+                for (size_t i = 0; i < got * 2; ++i) {
+                    const float v = f[i] > 1.0f ? 1.0f : (f[i] < -1.0f ? -1.0f : f[i]);
+                    pcm[i] = int16_t(v * 32767.0f);
+                }
+                std::vector<std::pair<ClientDsp*, std::shared_ptr<net::Socket>>> targets;
+                { std::lock_guard<std::mutex> lk(clientMtx);
+                  for (auto& kv : clientDsp) if (kv.second->audio && kv.second->audio->isOpen())
+                      targets.emplace_back(kv.second.get(), kv.second->audio); }
+                for (auto& t : targets) sendClientAudio(t.first, t.second, pcm.data(), int(got), 2);
+            }
+        }
+        /* ★ The signal block twice a second: fast enough to watch a mux come and go, slow enough
+         *  that it is not a load. The station list rides with it — it changes rarely, and sending
+         *  it whole means a client that joins mid-stream is never missing rows. */
+        const double now = Impl::nowSecs();
+        if (now - lastDabJson_ >= 0.5) {
+            lastDabJson_ = now;
+            const std::string j = g_dab.json();
+            std::vector<std::shared_ptr<net::Socket>> socks;
+            { std::lock_guard<std::mutex> lk(clientMtx);
+              for (auto& kv : clientDsp) if (kv.second->spec && kv.second->spec->isOpen())
+                  socks.push_back(kv.second->spec); }
+            for (auto& sk : socks) sendText(sk, j);
+        }
+    }
+    double lastDabJson_ = 0;
+
     void sendClientAudio(ClientDsp* c, const std::shared_ptr<net::Socket>& sock,
                          const int16_t* pcm, int count, int ch) {
         if (count <= 0) return;
@@ -7801,6 +7859,46 @@ struct LocalSdrShim::Impl {
                 LocalSdrShim::instance().setBiasT(v != 0);
             return;
         }
+        /* ── DAB (experimental) ─────────────────────────────────────────────────────────────
+         *  Two controls only: which multiplex, and which service. There is no VFO in DAB — the
+         *  tuning buttons step BLOCKS (11A, 11B, 11C…) — and no zoom, because on an RTL-SDR the
+         *  IF bandwidth follows the zoom and narrowing it cuts the ensemble in half. */
+        if (type == "dab") {
+            if (!vsDabCapable()) {
+                sendText(sock, "{\"type\":\"dab_error\",\"why\":\"this receiver cannot reach a DAB multiplex at 2.048 MS/s\"}");
+                return;
+            }
+            double onV = 1; jsonNum(msg, "on", onV);
+            const bool on = onV != 0;
+            if (!on) {
+                g_dabMode.store(false);
+                sendText(sock, "{\"type\":\"dab_off\"}");
+                return;
+            }
+            double chV = -1; jsonNum(msg, "channel", chV);
+            int idx = int(chV);
+            if (idx < 0) idx = g_dabChannel.load() >= 0 ? g_dabChannel.load()
+                                                        : vibedab::nearestChannel(225648000);  // 12B
+            g_dabChannel.store(idx);
+            g_dab.setChannel(idx);
+            /* ★★★ THE RADIO MUST BE AT 2.048 MS/s AND ON THE BLOCK CENTRE. Everything below
+             *  assumes the canonical rate — it is what makes the useful symbol exactly 2048
+             *  samples — so this is set here rather than hoped for. */
+            LocalSdrShim::instance().setSampleRate(double(vibedab::DabService::kRateHz));
+            retune(double(g_dab.centreHz()));
+            g_dabMode.store(true);
+            double sid = 0; jsonNum(msg, "sid", sid);
+            if (sid > 0) g_dab.setService(uint32_t(sid));
+            sendText(sock, g_dab.json());
+            return;
+        }
+        if (type == "dab_service") {
+            double sid = 0; jsonNum(msg, "sid", sid);
+            g_dab.setService(uint32_t(sid));
+            sendText(sock, g_dab.json());
+            return;
+        }
+
         if (type == "reset") { zoomFactor.store(1.0); updateZoomView(); sendConfig(sock); return; }
         if (type == "zoom") { // spectrum view-centre move (+ span via binBandwidth)
             if (jsonNum(msg,"frequency",v) && v > 0) {
@@ -12531,6 +12629,16 @@ struct LocalSdrShim::Impl {
             //     channelizer's (emitWideFromBins), and its DEMODULATOR produced audio that NOBODY
             //     listened to — every listener has their own chain now. Running it was paying full
             //     price for a spectrum we already had and audio nobody could hear.
+            /* ★★★ DAB TAKES THE WHOLE CHAIN. An ensemble is a 1.536 MHz block demodulated as one
+             *  thing — there is no channel filter, no VFO and nothing for the ordinary pipeline to
+             *  do with it — so in DAB mode the IQ goes to the DAB receiver and the FM/SSB chain is
+             *  not run at all. That is also why the zoom controls are disabled in this mode: on an
+             *  RTL-SDR the tuner's IF bandwidth FOLLOWS the zoom, and narrowing it cuts the mux. */
+            if (g_dabMode.load(std::memory_order_relaxed)) {
+                g_dab.feed(reinterpret_cast<const float*>(buf.data()), buf.size());
+                pumpDabAudio();
+                continue;
+            }
             if (!perClientDsp()) rx.feed(buf.data(), (int)buf.size());
             const auto tMid = std::chrono::steady_clock::now();
             // ★★★ PER-CLIENT DEMOD. The shared `rx` above still produces the WIDE waterfall
@@ -15575,10 +15683,30 @@ static vibebands::Ranges vsTunableRanges() {
 /** The two directory fields, from ONE evaluation of the set — `tunable` in Hz and `bands` in the
  *  band plan's own words. Computed together because they are two readings of the same fact, and
  *  two evaluations of a set that depends on a live lock state can disagree. */
+/** ★★ THE GATE, ON EFFECTIVE LIMITS. Stuart, 2026-09-04: an unrestricted V4 is fair game, but a
+ *  locked rate or a restricted range means the button "shouldnt even present itself". So this asks
+ *  the same `tunable` set the directory publishes — after allow/block lists — and the rate the
+ *  receiver would actually run at. Never the driver name: AGENTS.md's "ELSE MEANS DONGLE". */
+static bool vsDabCapable() {
+    const vibebands::Ranges t = vsTunableRanges();
+    if (t.empty()) return false;
+    std::vector<vibedab::Range> r;
+    r.reserve(t.size());
+    for (const auto& x : t) r.push_back({ uint32_t(x.lo), uint32_t(x.hi) });
+    /* ★ The rate we would USE, not the widest the hardware could manage: a receiver whose owner
+     *  has locked it below 2.048 MS/s cannot carry an ensemble however capable the chip is. */
+    const uint32_t cap = uint32_t(g_vsLockedRate.load() > 0 ? g_vsLockedRate.load()
+                                                            : double(vibedab::DabService::kRateHz));
+    return vibedab::radioCanDab(r.data(), r.size(), cap);
+}
+
 static std::string vsTunableJson() {
     const vibebands::Ranges t = vsTunableRanges();
     if (t.empty()) return {};
     std::string j = ",\"tunable\":" + vibebands::toJson(t);
+    // ★ Whether to OFFER DAB at all. The client must not draw a control whose every use is a
+    //   no-op (AGENTS.md), and only the server knows the effective limits.
+    j += std::string(",\"dab\":") + (vsDabCapable() ? "true" : "false");
     // ★ The same ranges in WORDS where the plan has words for them — "FM broadcast" is what a
     //   listener searches for, and the plan that knows the names is region-aware and lives here.
     const std::string names = vibebands::labelsJson(t, vibebands::defaultRegion());

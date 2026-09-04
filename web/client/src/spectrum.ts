@@ -176,6 +176,17 @@ export interface RadioCaps {
   ranges?: [number, number][];
 }
 
+/** What the server reports about a DAB multiplex. Every field is MEASURED — see BRIEF-dab.md;
+ *  nothing here is inferred, which is the standard the Advanced RDS panel already sets. */
+export interface DabState {
+  channel: string; centreHz: number; label: string; eid: number;
+  locked: boolean; nullDepthDb: number; offsetHz: number; offsetPpm: number;
+  carrierShift: number; prs: number;
+  fibOk: number; fibTotal: number; fibRate: number; frames: number;
+  sid: number; bitrate: number; protection: string;
+  services: { sid: number; label: string; codec: string; subch: number }[];
+}
+
 export interface SpectrumCallbacks {
   onBins?:   (bins: Float32Array, centerHz: number, bwHz: number) => void;
   onConfig?: (cfg: Config) => void;
@@ -295,6 +306,10 @@ export interface SpectrumCallbacks {
   onOverload?: (steps: number, dir: number, gainTenthDb: number, agc: boolean,
                 adcPeak?: number) => void;
   onDialRefused?: () => void;
+  /** ★ DAB (experimental): the ensemble, the station list and the signal block, twice a second.
+   *  Sent whole every time — the list changes rarely, and sending it entire means a client that
+   *  joins mid-stream is never missing rows. */
+  onDab?: (d: DabState) => void;
   /** Somebody said one of the canned phrases. `id` is a phrase id, never text. */
   /** `admin` is what the sender WAS when they said it — the server records it per line, so it
    *  does not change when the lock changes hands. */
@@ -510,6 +525,15 @@ export class SpectrumClient {
     let msg: any;
     try { msg = JSON.parse(raw); } catch { return; }
     switch (msg.type) {
+      case 'dab':
+        this.cb.onDab?.(msg as unknown as DabState);
+        return;
+      case 'dab_off':
+        this.cb.onDab?.(null as unknown as DabState);
+        return;
+      case 'dab_error':
+        this.cb.onNotice?.(String(msg.why ?? 'DAB is not available on this receiver'));
+        return;
       case 'config': {
         const cfg: Config = {
           centerFreq:     msg.centerFreq ?? this.cfg.centerFreq,
@@ -1123,6 +1147,17 @@ export class SpectrumClient {
 
     this.zoom(newCentre, newBb);
   }
+
+  /** Enter or leave DAB, optionally naming the multiplex and service.
+   *  ★ The server sets the radio to 2.048 MS/s and the block centre itself — the client never
+   *    tunes in DAB mode, because there is no VFO in a multiplex. */
+  dab(on: boolean, channel?: number, sid?: number) {
+    const m: Record<string, unknown> = { type: 'dab', on: on ? 1 : 0 };
+    if (channel !== undefined) m.channel = channel;
+    if (sid !== undefined) m.sid = sid;
+    this._send(m);
+  }
+  dabService(sid: number) { this._send({ type: 'dab_service', sid }); }
 
   pan(frequency: number) {
     this.zoom(frequency, this.view.binBandwidth || this.cfg.binBandwidth);

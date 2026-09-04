@@ -1,0 +1,172 @@
+// vibe_dab_service.h — DAB as the shim sees it: IQ in, PCM and JSON out.
+//
+// Everything below this file is pure DSP with no threading and no I/O. This is the one place that
+// knows about locks, buffering and the shim's conventions, so the decoder stays testable on its
+// own with a two-line g++ command.
+//
+// ★★ THE SAMPLE RATE IS NOT NEGOTIABLE. A DAB ensemble wants 2.048 MSPS — the rate the standard
+//    was designed around, and the one that makes the useful symbol exactly 2048 samples. The shim
+//    must put the radio there before feeding this; resampling 2.4 MSPS down would cost CPU on a Pi
+//    for nothing, since the dongle can simply run at 2.048.
+#pragma once
+
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <deque>
+#include <mutex>
+#include <string>
+#include <vector>
+
+#include "vibe_dab_channels.h"
+#include "vibe_dab_mp2.h"
+#include "vibe_dab_receiver.h"
+
+namespace vibedab {
+
+class DabService {
+public:
+    static constexpr uint32_t kRateHz = kCanonicalRateHz;   // 2.048 MSPS
+
+    /** Tune to a Band III block by index into kBandIII. Clears the ensemble: a new multiplex is a
+     *  new station list, and showing the old one would be a lie for as long as it took to refill. */
+    void setChannel(int idx) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (idx < 0 || idx >= int(kBandIIICount)) return;
+        if (idx == channel_) return;
+        channel_ = idx;
+        rx_.reset();
+        iq_.clear();
+        pcm_.clear();
+        sid_ = 0;
+        mp2_.reset();
+    }
+    int  channel()   const { return channel_; }
+    uint32_t centreHz() const { return kBandIII[channel_ < 0 ? 0 : channel_].centreHz; }
+
+    /** Choose a service by SId. Safe to call before the ensemble has arrived — it is remembered
+     *  and applied as soon as the service appears, which is what makes a bookmark work on a cold
+     *  tune (recall is channel + SId; see BRIEF-dab.md). */
+    void setService(uint32_t sid) {
+        std::lock_guard<std::mutex> lk(m_);
+        want_ = sid;
+        if (rx_.ensemble().services.count(sid)) { if (rx_.selectService(sid)) sid_ = sid; }
+        pcm_.clear();
+        mp2_.reset();
+    }
+    uint32_t service() const { return sid_; }
+
+    /** Feed interleaved complex samples at 2.048 MSPS. */
+    void feed(const float* interleaved, size_t nSamples) {
+        std::lock_guard<std::mutex> lk(m_);
+        const size_t base = iq_.size();
+        iq_.resize(base + nSamples);
+        for (size_t i = 0; i < nSamples; ++i)
+            iq_[base + i] = { interleaved[2 * i], interleaved[2 * i + 1] };
+
+        const size_t need = size_t(modeI().frameSamples) * 2;
+        while (iq_.size() >= need) {
+            rx_.push(iq_.data(), need);
+            /* ★ Consume exactly one frame and re-acquire. A streaming receiver would track across
+             *  the boundary; stepping a frame at a time costs one acquisition per 96 ms and is
+             *  immune to the buffer edges, which matters more while this is experimental. */
+            rx_.resetSync();
+            iq_.erase(iq_.begin(), iq_.begin() + long(modeI().frameSamples));
+
+            if (want_ && sid_ != want_ && rx_.ensemble().services.count(want_))
+                if (rx_.selectService(want_)) sid_ = want_;
+
+            drainAudio();
+        }
+        /* ★ Never let the backlog grow without bound: if the caller feeds faster than we decode,
+         *  drop the OLDEST samples. Audio that is minutes late is worse than a gap. */
+        if (iq_.size() > need * 4) iq_.erase(iq_.begin(), iq_.end() - long(need * 2));
+    }
+
+    /** Take decoded audio (interleaved stereo, 48 kHz). Returns frames written. */
+    size_t takePcm(float* out, size_t maxFrames) {
+        std::lock_guard<std::mutex> lk(m_);
+        size_t n = 0;
+        while (n < maxFrames && pcm_.size() >= 2) {
+            out[2 * n]     = pcm_.front(); pcm_.pop_front();
+            out[2 * n + 1] = pcm_.front(); pcm_.pop_front();
+            ++n;
+        }
+        return n;
+    }
+    size_t pcmAvailable() { std::lock_guard<std::mutex> lk(m_); return pcm_.size() / 2; }
+
+    /** The station list and the signal block, as the web client wants them. */
+    std::string json() {
+        std::lock_guard<std::mutex> lk(m_);
+        const Ensemble& e = rx_.ensemble();
+        const DabStats& s = rx_.stats();
+        std::string j = "{\"type\":\"dab\"";
+        char b[512];
+        snprintf(b, sizeof b, ",\"channel\":\"%s\",\"centreHz\":%u,\"label\":\"%s\",\"eid\":%u",
+                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(),
+                 esc(e.label).c_str(), unsigned(e.eid));
+        j += b;
+        snprintf(b, sizeof b,
+                 ",\"locked\":%s,\"nullDepthDb\":%.1f,\"offsetHz\":%.0f,\"offsetPpm\":%.2f"
+                 ",\"carrierShift\":%d,\"prs\":%.3f,\"fibOk\":%d,\"fibTotal\":%d,\"fibRate\":%.3f"
+                 ",\"frames\":%d,\"sid\":%u,\"bitrate\":%d,\"protection\":\"%s\"",
+                 s.locked ? "true" : "false", s.nullDepthDb, s.freqOffsetHz, s.freqOffsetPpm,
+                 s.intOffsetCarriers, s.prsCorrelation, s.fibsOk, s.fibsTotal, s.fibRate,
+                 s.framesSeen, unsigned(sid_), rx_.serviceBitrate(),
+                 rx_.uepProf().valid ? "UEP" : (rx_.profile().valid ? "EEP" : ""));
+        j += b;
+        j += ",\"services\":[";
+        bool first = true;
+        for (const auto& kv : e.services) {
+            const Service& sv = kv.second;
+            int sub = -1, type = -1;
+            for (const auto& c : sv.components) if (c.subChId >= 0) { sub = c.subChId; type = c.scType; if (c.primary) break; }
+            if (sub < 0) continue;
+            if (!first) j += ',';
+            first = false;
+            snprintf(b, sizeof b, "{\"sid\":%u,\"label\":\"%s\",\"codec\":\"%s\",\"subch\":%d}",
+                     unsigned(kv.first), esc(sv.label).c_str(),
+                     type == 63 ? "DAB+" : type == 0 ? "MP2" : "?", sub);
+            j += b;
+        }
+        j += "]}";
+        return j;
+    }
+
+private:
+    /** Turn whatever logical frames arrived into PCM. */
+    void drainAudio() {
+        // ★ TAKE, do not index — the receiver's buffer is a bounded ring. See takeAudioFrames().
+        const auto frames = rx_.takeAudioFrames();
+        for (const auto& f : frames) {
+            /* ★★ MP2 WE DECODE OURSELVES — the browser refuses Layer II, measured 2026-09-04, and
+             *  MP2's patents have expired so it is the one codec we may implement. DAB+ is handed
+             *  onward as ADTS instead; that path links no decoder here. */
+            if (rx_.selectedType() != 0) continue;
+            std::vector<float> out;
+            if (mp2_.decode(f.data(), f.size(), out) <= 0) continue;
+            for (float v : out) pcm_.push_back(v);
+        }
+        while (pcm_.size() > 48000 * 2 * 2) pcm_.pop_front();   // ~2 s of slack, no more
+    }
+
+    static std::string esc(const std::string& s) {
+        std::string o;
+        for (char c : s) {
+            if (c == '"' || c == '\\') { o += '\\'; o += c; }
+            else if (uint8_t(c) >= 0x20) o += c;
+        }
+        return o;
+    }
+
+    mutable std::mutex m_;
+    DabReceiver rx_{kRateHz};
+    Mp2Decoder  mp2_;
+    std::vector<Cplx> iq_;
+    std::deque<float> pcm_;
+    int channel_ = -1;
+    uint32_t sid_ = 0, want_ = 0;
+};
+
+}  // namespace vibedab

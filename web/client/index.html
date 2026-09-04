@@ -1090,6 +1090,28 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 }
 @keyframes sqlBreathe { 0%,100% { opacity: 0.45; } 50% { opacity: 1; } }
 
+/* ── DAB (experimental) ───────────────────────────────────────────────────────────────────── */
+#dabStations { padding: 6px 4px; }
+.dabSvc { display:flex; align-items:center; gap:8px; padding:7px 9px; border-radius:5px;
+          cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.08); }
+.dabSvc:hover { background: var(--btn-active-bg); }
+.dabSvc.on   { background: var(--btn-active-bg); border-left:3px solid var(--freq); }
+.dabSvc .nm  { flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+               color: var(--btn-text); }
+/* ★ The now-playing text lives in the LIST, not behind the button — it is the field OWRX omits
+   and the reason Stuart asked for it. */
+.dabSvc .dls { display:block; font-size:10px; opacity:.6; }
+.dabSvc .cod { font-size:9px; letter-spacing:1px; padding:1px 5px; border-radius:3px;
+               border:1px solid var(--btn-border); color: var(--unit); flex:0 0 auto; }
+#dabSignal { padding: 8px 10px; font-size: 11.5px; }
+#dabSignal h4 { margin:10px 0 4px; font-size:10px; letter-spacing:2px; color:var(--unit);
+                font-weight:normal; }
+#dabSignal .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; }
+#dabSignal .row span:last-child { color: var(--freq); font-variant-numeric: tabular-nums; }
+#dabMux { display:flex; align-items:center; gap:6px; padding:6px 8px;
+          border-bottom:1px solid var(--btn-border); }
+#dabMux .lbl { flex:1 1 auto; text-align:center; color:var(--freq); letter-spacing:1px; }
+
 /* Search: bookmarks + band plan. */
 #searchWrap { position: relative; flex: 1 1 auto; min-width: 0; }
 #search {
@@ -1525,6 +1547,28 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   animation: sqlBreathe 1.2s ease-in-out infinite;
 }
 @keyframes sqlBreathe { 0%,100% { opacity: 0.45; } 50% { opacity: 1; } }
+
+/* ── DAB (experimental) ───────────────────────────────────────────────────────────────────── */
+#dabStations { padding: 6px 4px; }
+.dabSvc { display:flex; align-items:center; gap:8px; padding:7px 9px; border-radius:5px;
+          cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.08); }
+.dabSvc:hover { background: var(--btn-active-bg); }
+.dabSvc.on   { background: var(--btn-active-bg); border-left:3px solid var(--freq); }
+.dabSvc .nm  { flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+               color: var(--btn-text); }
+/* ★ The now-playing text lives in the LIST, not behind the button — it is the field OWRX omits
+   and the reason Stuart asked for it. */
+.dabSvc .dls { display:block; font-size:10px; opacity:.6; }
+.dabSvc .cod { font-size:9px; letter-spacing:1px; padding:1px 5px; border-radius:3px;
+               border:1px solid var(--btn-border); color: var(--unit); flex:0 0 auto; }
+#dabSignal { padding: 8px 10px; font-size: 11.5px; }
+#dabSignal h4 { margin:10px 0 4px; font-size:10px; letter-spacing:2px; color:var(--unit);
+                font-weight:normal; }
+#dabSignal .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; }
+#dabSignal .row span:last-child { color: var(--freq); font-variant-numeric: tabular-nums; }
+#dabMux { display:flex; align-items:center; gap:6px; padding:6px 8px;
+          border-bottom:1px solid var(--btn-border); }
+#dabMux .lbl { flex:1 1 auto; text-align:center; color:var(--freq); letter-spacing:1px; }
 
 /* Search: bookmarks + band plan. */
 #searchWrap { position: relative; flex: 1 1 auto; min-width: 0; }
@@ -3020,11 +3064,26 @@ select.btn { padding: 6px 8px; }
     <!-- ★ Sits with minimise and close, where a window's size controls belong — the user
          already knows to look there, and it needs no explaining (Stuart, 2026-07-26). -->
     <button class="btn" id="rdsSize" title="Taller / shorter panel"><svg viewBox="0 0 12 14" aria-hidden="true"><rect id="rdsSizeBox" x="1.5" y="7" width="9" height="6"/><path d="M6 1 L6 5 M4 3 L6 1 L8 3" /></svg></button>
+    <!-- ★★★ DAB: the STATIONS/SIGNAL toggle. Stuart, 2026-09-04: "the advanced signal info button
+         must live in the header of the decoder box" — and it could live nowhere else, because
+         opening the demodulator menu DISMISSES the box it would control. It shows STATE, not just
+         an action: which pane you are on must be readable without pressing it. -->
+    <button class="btn" id="dabPane" title="Station list / advanced signal info"
+            style="display:none">SIGNAL &#9656;</button>
     <button class="btn" id="decMin" title="Minimise">–</button>
     <button class="btn" id="decHide" title="Stop and close">&#10005;</button>
   </div>
   </div>
   <div id="decBody">
+    <!-- ★ DAB: one pane at a time, each getting the WHOLE box. A split would have made both
+         columns narrow AND still scrolling; the toggle answers that outright. -->
+    <div id="dabMux" style="display:none">
+      <button class="btn" id="dabPrev" title="Previous multiplex">&#9664;</button>
+      <span class="lbl" id="dabMuxLbl">—</span>
+      <button class="btn" id="dabNext" title="Next multiplex">&#9654;</button>
+    </div>
+    <div id="dabStations" style="display:none"></div>
+    <div id="dabSignal" style="display:none"></div>
     <pre id="decText"></pre>
     <canvas id="decImage"></canvas>
     <div id="spotList"></div>

@@ -6,7 +6,7 @@
  * an explicit host:port.
  */
 
-import { SpectrumClient, MODE_BANDWIDTHS, type SDRMode } from './spectrum';
+import { SpectrumClient, MODE_BANDWIDTHS, type SDRMode, type DabState } from './spectrum';
 import { AudioPlayer } from './audio';
 import { initMobileControls } from './mobile';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
@@ -465,6 +465,10 @@ async function loadAudioPolicy(httpBase: string) {
       srvUncompressed = j.uncompressed;
     srvLocal = j.local === true;
     srvAdminProtected = j.admin === true;
+    /* ★★ THE SERVER DECIDES WHETHER DAB IS OFFERED. Only it knows the EFFECTIVE limits — the
+     *  tunable set after allow/block lists and the rate the receiver will actually run at — so a
+     *  V4 locked to FM or held below 2.048 MS/s never draws the button at all. */
+    dabCapable = j.dab === true;
     // ★★★ IS THE DIAL SHARED? Needed BEFORE the first config arrives, because the very first
     //     thing this client does with a config is restore the frequency it was last on — and on a
     //     shared dial that would drag the whole room to somebody's remembered station the instant
@@ -964,6 +968,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     // ★ Pushed the instant the owner posts one — the people already watching the spectrum
     //   misbehave are exactly who it is for.
     onNotice: (text: string) => showOwnerNotice(text),
+    /* ★ DAB arrives twice a second with the whole station list — see BRIEF-dab.md for why it is
+     *  sent entire rather than as deltas. A null means the server left DAB mode. */
+    onDab: (d: DabState) => { dabState = d ?? null; if (!d) dabOn = false; dabRender(); },
     onAdmin: (ok, refused) => {
       if (refused) {
         adminUnlocked = false;
@@ -4230,6 +4237,122 @@ async function drawSplashSpectrogram(): Promise<void> {
   if (tip) tip.textContent = '';       // the element stays for layout; the text now lives on canvas
 }
 
+/* ── DAB (experimental) ──────────────────────────────────────────────────────────────────────
+ *  ★★ OFFERED ONLY WHERE IT CAN WORK. The server decides — it is the only side that knows the
+ *     EFFECTIVE limits after allow/block lists and a locked sample rate — and publishes `dab` in
+ *     /vibeserver.json. AGENTS.md: never draw a control whose every use is a no-op.
+ *  ★ Labelled "DAB (Experimental)" because it is, and because a user who knows to expect rough
+ *    edges reports them instead of concluding the receiver is broken.
+ */
+let dabCapable = false;
+let dabOn = false;
+let dabState: DabState | null = null;
+let dabPane: 'stations' | 'signal' = 'stations';
+let dabChannel = -1;
+let dabLastEid = -1;
+
+/** Band III, mirroring vibe_dab_channels.h — including the OFFSET blocks 10N/11N/12N, which are
+ *  easy to miss and are genuinely on air. */
+const DAB_BLOCKS: { name: string; hz: number }[] = [
+  ['5A',174928],['5B',176640],['5C',178352],['5D',180064],
+  ['6A',181936],['6B',183648],['6C',185360],['6D',187072],
+  ['7A',188928],['7B',190640],['7C',192352],['7D',194064],
+  ['8A',195936],['8B',197648],['8C',199360],['8D',201072],
+  ['9A',202928],['9B',204640],['9C',206352],['9D',208064],
+  ['10A',209936],['10N',210096],['10B',211648],['10C',213360],['10D',215072],
+  ['11A',216928],['11N',217088],['11B',218640],['11C',220352],['11D',222064],
+  ['12A',223936],['12N',224096],['12B',225648],['12C',227360],['12D',229072],
+  ['13A',230784],['13B',232496],['13C',234208],['13D',235776],['13E',237488],['13F',239200],
+].map(([n, k]) => ({ name: String(n), hz: Number(k) * 1000 }));
+
+function dabSetPane(p: 'stations' | 'signal') {
+  dabPane = p;
+  const st = document.getElementById('dabStations');
+  const sg = document.getElementById('dabSignal');
+  const bt = document.getElementById('dabPane');
+  if (st) st.style.display = dabOn && p === 'stations' ? 'block' : 'none';
+  if (sg) sg.style.display = dabOn && p === 'signal' ? 'block' : 'none';
+  // ★ The label names where the button GOES, and the state is readable without pressing it.
+  if (bt) bt.innerHTML = p === 'stations' ? 'SIGNAL &#9656;' : '&#9666; STATIONS';
+}
+
+function dabRender() {
+  const st = document.getElementById('dabStations');
+  const sg = document.getElementById('dabSignal');
+  const lbl = document.getElementById('dabMuxLbl');
+  const d = dabState;
+  if (lbl) lbl.textContent = d
+    ? `${(d.centreHz / 1e6).toFixed(3)} (${d.channel})${d.label ? ' — ' + d.label : ''}`
+    : (dabChannel >= 0 ? `${(DAB_BLOCKS[dabChannel].hz / 1e6).toFixed(3)} (${DAB_BLOCKS[dabChannel].name})` : '—');
+  if (!d || !st || !sg) return;
+
+  /* ★★ RESET TO THE LIST WHEN THE ENSEMBLE CHANGES, and only then. A new multiplex means a new
+   *  list and the old figures describe a receiver you have left — but changing SERVICE inside one
+   *  mux must NOT bounce you back, because comparing services is exactly what the panel is for.
+   *  (Same lesson as the bookmark search: do not throw away the view somebody is working in.) */
+  if (d.eid !== dabLastEid) { dabLastEid = d.eid; dabSetPane('stations'); }
+
+  st.innerHTML = d.services.length
+    ? d.services.map(sv => `<div class="dabSvc${sv.sid === d.sid ? ' on' : ''}" data-sid="${sv.sid}">`
+        + `<span class="nm">${escapeHtml(sv.label || '(unnamed)')}</span>`
+        + `<span class="cod">${sv.codec}</span></div>`).join('')
+    : `<div style="padding:14px;opacity:.6">${d.locked ? 'Reading the multiplex…' : 'Searching for a multiplex…'}</div>`;
+  for (const el of Array.from(st.querySelectorAll('.dabSvc')) as HTMLElement[])
+    el.onclick = () => { spec?.dabService(Number(el.dataset.sid)); };
+
+  const row = (k: string, v: string) => `<div class="row"><span>${k}</span><span>${v}</span></div>`;
+  sg.innerHTML =
+    '<h4>SERVICE</h4>'
+    + row('Codec', d.services.find(x => x.sid === d.sid)?.codec ?? '—')
+    + row('Bit rate', d.bitrate ? d.bitrate + ' kbit/s' : '—')
+    + row('Protection', d.protection || '—')
+    + '<h4>ERROR RATE</h4>'
+    + row('FIB this frame', `${d.fibOk} / ${d.fibTotal}`)
+    + row('FIB pass rate', (d.fibRate * 100).toFixed(1) + ' %')
+    + '<h4>MULTIPLEX</h4>'
+    + row('Ensemble', d.label || '—')
+    + row('EId', '0x' + d.eid.toString(16).toUpperCase().padStart(4, '0'))
+    + row('Services', String(d.services.length))
+    + '<h4>PHYSICAL LAYER</h4>'
+    + row('Lock', d.locked ? 'locked' : 'searching')
+    + row('Null depth', d.nullDepthDb.toFixed(1) + ' dB')
+    + row('Frequency offset', `${d.offsetHz.toFixed(0)} Hz (${d.offsetPpm.toFixed(2)} ppm)`)
+    + row('Carrier shift', String(d.carrierShift))
+    + row('Phase reference', d.prs.toFixed(3))
+    + row('Frames seen', String(d.frames));
+}
+
+function dabTune(delta: number) {
+  if (dabChannel < 0) dabChannel = DAB_BLOCKS.findIndex(b => b.name === '12B');
+  // ★ CLAMP, never wrap: 13F -> 5A in one press is not what a band scan meant.
+  dabChannel = Math.max(0, Math.min(DAB_BLOCKS.length - 1, dabChannel + delta));
+  dabState = null;
+  spec?.dab(true, dabChannel);
+  dabRender();
+}
+
+function dabSetMode(on: boolean) {
+  dabOn = on;
+  const mux = document.getElementById('dabMux');
+  const bt  = document.getElementById('dabPane');
+  if (mux) mux.style.display = on ? 'flex' : 'none';
+  if (bt)  bt.style.display  = on ? '' : 'none';
+  const dt = document.getElementById('decText');
+  if (dt) dt.style.display = on ? 'none' : '';
+  if (on) {
+    if (dabChannel < 0) dabChannel = DAB_BLOCKS.findIndex(b => b.name === '12B');
+    spec?.dab(true, dabChannel);
+    dabSetPane('stations');
+    // ★★ The decoder box is ALWAYS OPEN in DAB — the station list IS the tuning UI.
+    document.getElementById('decBox')?.classList.add('open');
+  } else {
+    spec?.dab(false);
+    dabState = null;
+  }
+  dabSetPane(dabPane);
+  dabRender();
+}
+
 function buildModeButtons() {
   const modes = $('modes');
   if (!modes) return;
@@ -4243,6 +4366,18 @@ function buildModeButtons() {
     b.onclick = () => setMode(m, true);
     modes.appendChild(b);
   }
+  /* ★ DAB sits with the demodulators because that is what a listener is choosing — but it is not
+   *  an SDRMode: it replaces the whole chain rather than filtering a channel out of it. Offered
+   *  only where the SERVER says it can work. */
+  if (dabCapable) {
+    const b2 = document.createElement('button');
+    b2.className = 'btn' + (dabOn ? ' on' : '');
+    b2.textContent = 'DAB (EXPERIMENTAL)';
+    b2.id = 'modeDab';
+    b2.onclick = () => { const want = !dabOn; if (want) dabSetMode(true); else dabSetMode(false); buildModeButtons(); };
+    modes.appendChild(b2);
+  }
+
   // Re-mark the active button — this runs after the controls already exist.
   const cur = spec?.mode;
   if (cur) for (const b of Array.from(modes.children) as HTMLButtonElement[])
@@ -4336,6 +4471,11 @@ function buildControls() {
   initPanels();
   initRecorder();
   initSearch();
+  // ★ DAB controls: the two multiplex buttons and the pinned pane toggle.
+  { const dp = document.getElementById('dabPrev'); if (dp) (dp as HTMLElement).onclick = () => dabTune(-1);
+    const dn = document.getElementById('dabNext'); if (dn) (dn as HTMLElement).onclick = () => dabTune(+1);
+    const pb = document.getElementById('dabPane');
+    if (pb) (pb as HTMLElement).onclick = () => dabSetPane(dabPane === 'stations' ? 'signal' : 'stations'); }
   initBookmarks();
   buildMenu();
 

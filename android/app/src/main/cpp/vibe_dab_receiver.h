@@ -255,6 +255,16 @@ public:
 
     /** Logical frames of decoded audio bytes — MP2 frames, or DAB+ super frame fifths. */
     const std::vector<std::vector<uint8_t>>& audioFrames() const { return audio_; }
+
+    /** ★★ TAKE the frames rather than index into them. The buffer is a bounded ring, so a caller
+     *  that remembers "I have consumed N" silently loses frames the moment it wraps — which is
+     *  exactly what happened: ten seconds of capture yielded 1.5 seconds of audio, with no error
+     *  anywhere. Moving them out makes that impossible to get wrong. */
+    std::vector<std::vector<uint8_t>> takeAudioFrames() {
+        std::vector<std::vector<uint8_t>> out;
+        out.swap(audio_);
+        return out;
+    }
     int  selectedType() const { return selType_; }      ///< 0 = MP2, 63 = DAB+
     const EepProfile& profile() const { return prof_; }
     const UepProfile& uepProf() const { return uprof_; }
