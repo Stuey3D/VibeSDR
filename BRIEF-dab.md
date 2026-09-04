@@ -360,6 +360,8 @@ with a matching `vibeserver/test-dab-*.cpp`.
 | 9 | phase reference symbol (tables machine-extracted from the PDF) | ✅ tested |
 | 10 | puncturing vectors + depuncturing (machine-extracted) | ✅ tested |
 | 11 | **complete FIC decode: soft bits → ensemble + station list** | ✅ tested |
+| 12 | MSC: CIF geometry, 16-deep time deinterleaving, EEP profiles | ✅ tested |
+| 13 | **MPEG-1/2 Layer II decoder — verified against ffmpeg to 3.7e-07** | ✅ tested |
 
 ★★★ **STAGE 11 IS THE MILESTONE, AND IT PASSES.** `test-dab-ficdec` builds a small multiplex,
 transmits it through the real encode/puncture/multiplex chain, corrupts 5% of the symbols, and
@@ -371,10 +373,7 @@ PHASE, because decoding the wrong slot must yield nothing, and the test asserts 
 **Still to build, honestly:**
 - **Wiring the FIC to the OFDM front end** — feeding the three FIC symbols' soft bits into
   ficDecodeFrame. The decode itself is done; this is plumbing.
-- **MSC**: CIF extraction, 16-deep time deinterleaving, UEP/EEP tables (table 15 extracts cleanly,
-  same technique as the others).
-- **MP2 decoder** — ours, because the browser refuses Layer II. A full audio codec: bit allocation,
-  scalefactors, subband synthesis. The single biggest remaining piece.
+- **UEP profiles** (table 15) for the older services — EEP is done, UEP extracts the same way.
 - **DAB+**: Reed-Solomon (120,110) over GF(256), firecode correction, ADTS reframing.
 - **Integration** into the shim (a DAB source path, per-service sample rates) and the **web client
   UI** (mux tuning, station list, signal panel, the pinned toggle).
