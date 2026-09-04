@@ -1488,6 +1488,20 @@ static std::atomic<bool>     g_rtlAgc{false};
 //  ★ Still six decibels back from the rail: the peak we measured is a second old and the band
 //     moves, so this is an operating point, not the loudest level that avoids clipping.
 static constexpr double      kAgcTargetDbfs  = -6.0;
+/* ★★★ OFDM IS NOT AN FM CARRIER, AND -6 dBFS COOKS IT.
+ *  A DAB ensemble fills 1.5 MHz of the 2.048 MS/s capture with 1536 randomly-phased carriers, so
+ *  it is noise-like with a crest factor around 10-12 dB: the AGC sees a modest AVERAGE, keeps
+ *  asking for gain, and the PEAKS clip long before the average reaches target. An FM carrier has
+ *  almost no crest factor, which is what -6 was chosen against.
+ *  ★ Stuart, 2026-09-04, close to the D1 transmitter: "the DAB signal swamps most of the sample
+ *    rate, the AGC is setting itself too high which is resulting in signal clipping and breakup.
+ *    DAB only needs minimal if any gain where I live." His screenshot: 37.2 dB of gain, peak
+ *    -3.5 dBFS — clipping, and the breakup was the receiver being deafened by its own front end,
+ *    not a weak signal.
+ *  ★ Headroom, not a fixed low gain: a listener far from a transmitter still needs the AGC to
+ *    work for them. Backing the TARGET off leaves the loop free to find whatever gain the site
+ *    actually needs, and never limits permanently (MEMORY.md). */
+static constexpr double      kAgcDabTargetDbfs = -18.0;
 /* ★★★ THE BACKOFF GUARDS THE CEILING, NOT THE OPERATING POINT — AND THAT IS THE 96.1 BUG.
  *     This was -6.0, the same figure as the target, so the loop CUT on any peak above its own
  *     operating point while kAgcHardCeilDbfs (-2.0) and the note beneath it said the opposite:
@@ -1776,6 +1790,11 @@ static inline int agcStride() {
     return st > 6 ? 6 : st;
 }
 /** ★ The observed ratio, as a stride — see the note above. */
+/** The peak the AGC aims for, which DAB moves down. See kAgcDabTargetDbfs. */
+static inline double agcTargetDbfs() {
+    return g_dabMode.load(std::memory_order_relaxed) ? kAgcDabTargetDbfs : kAgcTargetDbfs;
+}
+
 static inline void agcAskStride(float moved, float stepDb) {
     if (stepDb <= 0.1f) return;
     const int st = (int)std::lround(moved / stepDb);
@@ -17976,7 +17995,7 @@ void LocalSdrShim::overloadTick() {
             LOGI("either side of the station is %.1f dB above its quietest for this gain — the "
                  "front end is making noise here", shoulderNorm - bestShoulder);
     } else if (clipRun < 2 &&
-               ((g_agcFastCut.load(std::memory_order_relaxed) > 0 && peakNow > kAgcTargetDbfs)
+               ((g_agcFastCut.load(std::memory_order_relaxed) > 0 && peakNow > agcTargetDbfs())
                 || (peakNow > kAgcBackoffDbfs
                     && g_adcHotRun.load(std::memory_order_relaxed) >= 2))) {
         // ★★ TOO HOT WITHOUT ACTUALLY RAILING — which is exactly where intermodulation lives. The
@@ -18011,7 +18030,7 @@ void LocalSdrShim::overloadTick() {
             backoffToFit = true;
             g_agcFastCut.store(0, std::memory_order_relaxed);   // one cut, not a mode
             LOGI("%.1f dBFS is above the %.1f dBFS operating point just after the IF filter "
-                 "opened — taking the whole cut now", peakNow, kAgcTargetDbfs);
+                 "opened — taking the whole cut now", peakNow, agcTargetDbfs());
         }
     } else if (clipRun >= 2) {
         // ★★★ AND IT COMES DOWN BY AS MUCH AS IT IS OVER. One step at a time is a search; the clip
@@ -18244,7 +18263,7 @@ void LocalSdrShim::overloadTick() {
                 idx  = best;
                 want = tgtIdx - best;
                 LOGI("clear by %.1f dB — jumping to %.1f dB, then stepping the last couple",
-                     kAgcTargetDbfs - peak, gains[(size_t)idx] / 10.0);
+                     agcTargetDbfs() - peak, gains[(size_t)idx] / 10.0);
             }
         }
     }
@@ -18294,7 +18313,7 @@ void LocalSdrShim::overloadTick() {
         const int from = tgtIdx - steps;                       // the rung we are on now
         if (from > 0) {
             const double peak = g_adcPeakDbfs.load(std::memory_order_relaxed);
-            const double shed = std::max(0.0, peak - kAgcTargetDbfs);
+            const double shed = std::max(0.0, peak - agcTargetDbfs());
             int best = from - 1;                               // always at least one rung
             for (int i = from - 1; i >= 0; --i) {
                 best = i;

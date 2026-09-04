@@ -4280,6 +4280,14 @@ function dabRender() {
   const sg = document.getElementById('dabSignal');
   const lbl = document.getElementById('dabMuxLbl');
   const d = dabState;
+  /* ★★★ THE DIAL FOLLOWS THE MULTIPLEX. The readout is the client's own, driven by the VFO, and
+   *  DAB does not move a VFO — so stepping 12B -> 11D left it reading 225657 kHz while the mux bar
+   *  said 222.064 (11D). Two readings of one fact, disagreeing, which is the thing the tuning
+   *  block exists not to do. */
+  if (d && spec && Math.abs(spec.frequency - d.centreHz) > 1) {
+    spec.frequency = d.centreHz;
+    mobileUi?.refresh();          // the card owns the readout; nudge it rather than paint it here
+  }
   if (lbl) lbl.textContent = d
     ? `${(d.centreHz / 1e6).toFixed(3)} (${d.channel})${d.label ? ' — ' + d.label : ''}`
     : (dabChannel >= 0 ? `${(DAB_BLOCKS[dabChannel].hz / 1e6).toFixed(3)} (${DAB_BLOCKS[dabChannel].name})` : '—');
@@ -4344,9 +4352,19 @@ function dabSetMode(on: boolean) {
     dabSetPane('stations');
     // ★★ The decoder box is ALWAYS OPEN in DAB — the station list IS the tuning UI.
     document.getElementById('decBox')?.classList.add('open');
+    /* ★★★ AND IT MUST SAY DAB. Opening the box directly skips openDecoder(), which is what
+     *  normally sets the title — so it kept whatever decoder was last used and announced a DAB
+     *  ensemble as "RTTY" (Stuart's screenshot, 2026-09-04). The one job of a box header is to
+     *  say what you are looking at. */
+    const dt2 = document.getElementById('decTitle');
+    if (dt2) dt2.textContent = 'DAB';
+    const ds2 = document.getElementById('decStatus');
+    if (ds2) ds2.textContent = 'tuning…';
   } else {
     spec?.dab(false);
     dabState = null;
+    const ds3 = document.getElementById('decStatus');
+    if (ds3) ds3.textContent = '';
   }
   dabSetPane(dabPane);
   dabRender();

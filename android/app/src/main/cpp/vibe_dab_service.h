@@ -26,6 +26,8 @@ namespace vibedab {
 
 class DabService {
 public:
+    /** The rate every listener socket is fed at, whatever the service was coded at. */
+    static constexpr uint32_t kAudioRateHz = 48000;
     static constexpr uint32_t kRateHz = kCanonicalRateHz;   // 2.048 MSPS
 
     /** Tune to a Band III block by index into kBandIII. Clears the ensemble: a new multiplex is a
@@ -155,9 +157,47 @@ private:
             if (rx_.selectedType() != 0) continue;
             std::vector<float> out;
             if (mp2_.decode(f.data(), f.size(), out) <= 0) continue;
-            for (float v : out) pcm_.push_back(v);
+            /* ★★★ THE CHIPMUNKS. Mp2Decoder writes INTERLEAVED at the frame's OWN channel count
+             *  and its OWN sample rate, and this pushed the result straight into a buffer that
+             *  takePcm() reads as 48 kHz STEREO pairs. Two independent speed-ups, and UK DAB has
+             *  both: a MONO service (talkSPORT, LBC) hands back one sample per frame slot and
+             *  every pair read as L/R plays at 2x; an LSF service at 24 kHz plays at 2x again.
+             *  BBC National 12B is 48 kHz stereo throughout, which is why it sounded perfect and
+             *  D1 National did not — the first mux I tested agreed with the bug.
+             *  ★ Upmix and resample HERE, where the frame's own header is still in hand. Linear
+             *    interpolation: the ratios are exact small integers (48/24 = 2, 48/32 = 1.5) so
+             *    this is not the place to spend an FIR, and a wrong-speed stream is not a
+             *    fidelity problem to be tuned — it is a bug to be removed. */
+            const auto& mi = mp2_.info();
+            const int   nch = mi.channels > 0 ? mi.channels : 2;
+            const int   sr  = mi.sampleRateHz > 0 ? mi.sampleRateHz : int(kAudioRateHz);
+            const size_t frames = out.size() / size_t(nch);
+            if (!frames) continue;
+            if (sr == int(kAudioRateHz)) {
+                for (size_t i = 0; i < frames; ++i) {
+                    const float l = out[i * size_t(nch)];
+                    const float r = nch == 1 ? l : out[i * size_t(nch) + 1];
+                    pcm_.push_back(l); pcm_.push_back(r);
+                }
+            } else {
+                const double step = double(sr) / double(kAudioRateHz);
+                const double span = double(frames - 1);
+                for (double t = 0.0; t <= span; t += step) {
+                    const size_t i = size_t(t);
+                    const double fr = t - double(i);
+                    const size_t j = i + 1 < frames ? i + 1 : i;
+                    const float l0 = out[i * size_t(nch)], l1 = out[j * size_t(nch)];
+                    const float l  = float(l0 + (l1 - l0) * fr);
+                    float r = l;
+                    if (nch == 2) {
+                        const float r0 = out[i * size_t(nch) + 1], r1 = out[j * size_t(nch) + 1];
+                        r = float(r0 + (r1 - r0) * fr);
+                    }
+                    pcm_.push_back(l); pcm_.push_back(r);
+                }
+            }
         }
-        while (pcm_.size() > 48000 * 2 * 2) pcm_.pop_front();   // ~2 s of slack, no more
+        while (pcm_.size() > size_t(kAudioRateHz) * 2 * 2) pcm_.pop_front();   // ~2 s of slack
     }
 
     static std::string esc(const std::string& s) {
