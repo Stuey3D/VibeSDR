@@ -67,6 +67,7 @@ public:
     /** Feed interleaved complex samples at 2.048 MSPS. */
     void feed(const float* interleaved, size_t nSamples) {
         std::lock_guard<std::mutex> lk(m_);
+        samplesIn_ += nSamples;
         const size_t base = iq_.size();
         iq_.resize(base + nSamples);
         for (size_t i = 0; i < nSamples; ++i)
@@ -74,7 +75,8 @@ public:
 
         const size_t need = size_t(modeI().frameSamples) * 2;
         while (iq_.size() >= need) {
-            rx_.push(iq_.data(), need);
+            ++pushCalls_;
+            if (rx_.push(iq_.data(), need)) ++pushOk_;
             /* ★★★ TRACK ACROSS THE BOUNDARY — DO NOT RE-ACQUIRE EVERY FRAME.
              *  This used to call resetSync() here, throwing the lock away and acquiring afresh on
              *  every 96 ms frame. Acquisition takes the GLOBAL MINIMUM over a frame-long scan, so
@@ -108,7 +110,10 @@ public:
         }
         /* ★ Never let the backlog grow without bound: if the caller feeds faster than we decode,
          *  drop the OLDEST samples. Audio that is minutes late is worse than a gap. */
-        if (iq_.size() > need * 4) iq_.erase(iq_.begin(), iq_.end() - long(need * 2));
+        if (iq_.size() > need * 4) {
+            dropped_ += uint32_t(iq_.size() - need * 2);
+            iq_.erase(iq_.begin(), iq_.end() - long(need * 2));
+        }
     }
 
     /** Take decoded audio (interleaved stereo, 48 kHz). Returns frames written. */
@@ -150,8 +155,8 @@ public:
          *  the live Pi — DAB reported 12B while the dongle sat on 96.6 MHz — and without both
          *  numbers side by side that is indistinguishable from "DAB does not decode here". */
         snprintf(b, sizeof b,
-                 ",\"channel\":\"%s\",\"centreHz\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
-                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
+                 ",\"channel\":\"%s\",\"centreHz\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
+                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
                  esc(e.label).c_str(), unsigned(e.eid));
         j += b;
         snprintf(b, sizeof b,
@@ -299,6 +304,12 @@ private:
      *  what cost the evening: no frames arriving, frames of an unusable length, the firecode
      *  never aligning, or AUs produced and not sent. Each has its own number. */
     uint32_t sfFrames_ = 0, sfBadLen_ = 0, sfTried_ = 0, sfOk_ = 0, ausOut_ = 0;
+    /* ★ The input side, because the 50% frame shortfall has exactly three possible homes and
+     *  they need separating by measurement rather than argument: samples never arriving, frames
+     *  arriving and being REJECTED by push(), or samples arriving and being dropped by the
+     *  backlog guard. One counter each. */
+    uint64_t samplesIn_ = 0;
+    uint32_t pushCalls_ = 0, pushOk_ = 0, dropped_ = 0;
     int  aacCoreCh_ = 2;                       ///< what the ADTS header declares
     int  aacOutCh_  = 2;                       ///< what the decoder will produce (PS -> 2)
 

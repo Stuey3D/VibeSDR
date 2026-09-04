@@ -1161,6 +1161,16 @@ export class AudioPlayer {
   private aacCh = 0;
   private aacTs = 0;
   private aacBroken = false;
+  /** 7 when the decoder wanted raw AAC with a description, so the ADTS header is removed. */
+  private aacStrip = 0;
+
+  /** AudioSpecificConfig for AAC-LC: 5 bits object type, 4 bits rate index, 4 bits channels. */
+  private _ascFor(rateHz: number, ch: number): Uint8Array | null {
+    const table = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
+    const idx = table.indexOf(rateHz);
+    if (idx < 0 || ch < 1 || ch > 2) return null;
+    return new Uint8Array([ (2 << 3) | (idx >> 1), ((idx & 1) << 7) | (ch << 3) ]);
+  }
 
   private _decodeAac(buf: ArrayBuffer, channels: number, coreRateHz: number) {
     if (this.aacBroken || !coreRateHz) return;
@@ -1188,19 +1198,37 @@ export class AudioPlayer {
        *  ★ Whatever happens, it is SAID OUT LOUD — see _failAac. Silence with no explanation is
        *    the worst outcome and it is the one we had. */
       let configured = false;
+      this.aacStrip = 0;
       for (const codec of ['mp4a.40.5', 'mp4a.40.2']) {
         try {
           this.aacDec.configure({ codec, sampleRate: coreRateHz, numberOfChannels: channels });
           configured = true;
-          console.info(`[audio] DAB+ decoding as ${codec} @ ${coreRateHz} Hz, ${channels}ch`);
+          console.info(`[audio] DAB+ decoding as ${codec} @ ${coreRateHz} Hz, ${channels}ch (ADTS)`);
           break;
         } catch (e) { console.warn(`[audio] AAC configure ${codec} failed:`, e); }
+      }
+      /* ★★★ AND THE EXPLICIT-CONFIG ATTEMPT, FOR SAFARI. Apple has AAC everywhere in its media
+       *  stack — it co-owns the patents — but WebCodecs is a much newer API and Safari's
+       *  AudioDecoder will not infer a config from raw ADTS the way Chromium does. Give it an
+       *  AudioSpecificConfig as `description` and strip the 7-byte ADTS header from every packet,
+       *  which is the same bitstream expressed the way that decoder expects it. */
+      if (!configured) {
+        const asc = this._ascFor(coreRateHz, channels);
+        if (asc) {
+          try {
+            this.aacDec.configure({ codec: 'mp4a.40.2', sampleRate: coreRateHz,
+                                    numberOfChannels: channels, description: asc });
+            configured = true;
+            this.aacStrip = 7;
+            console.info(`[audio] DAB+ decoding as mp4a.40.2 @ ${coreRateHz} Hz, ${channels}ch (raw + ASC)`);
+          } catch (e) { console.warn('[audio] AAC configure with description failed:', e); }
+        }
       }
       if (!configured) { this._failAac('configure', 'no AAC codec this browser accepts'); return; }
     }
     try {
       this.aacDec.decode(new EncodedAudioChunk({
-        type: 'key', timestamp: this.aacTs, data: buf.slice(6),
+        type: 'key', timestamp: this.aacTs, data: buf.slice(6 + this.aacStrip),
       }));
     } catch (e) { this._failAac('enqueue', e); return; }
     this.aacTs += Math.round(1024 * 1e6 / coreRateHz);
@@ -1218,17 +1246,50 @@ export class AudioPlayer {
 
   private _onAacData(ad: AudioData) {
     const ch = ad.numberOfChannels, frames = ad.numberOfFrames;
-    const pcm = new Int16Array(frames * ch);
+    /* ★★★ RESAMPLE TO 48 kHz FROM WHAT THE DECODER ACTUALLY PRODUCED. _playPcm has one rate and
+     *  it is 48000; a DAB+ service at 32 kbit/s decodes to 32 kHz, and handing that straight over
+     *  plays it 1.5x fast. Stuart, on Edge: "chipmunks in DAB+" — the SECOND time DAB has produced
+     *  chipmunks, and for the same underlying reason both times: a rate that was assumed instead
+     *  of read. The first was mono MP2 at 24 kHz. Read ad.sampleRate; never assume it.
+     *  ★ It is read from the AudioData rather than computed from the ADTS, because whether the
+     *    decoder applied SBR (doubling it) is the decoder's business and differs between them. */
+    const srIn = ad.sampleRate || 48000;
     const plane = new Float32Array(frames);
+    const planes: Float32Array[] = [];
     for (let c = 0; c < ch; c++) {
-      ad.copyTo(plane, { planeIndex: c, format: 'f32-planar' });
-      for (let i = 0; i < frames; i++) {
-        let sm = Math.round(plane[i] * 32767);
-        sm = sm < -32768 ? -32768 : sm > 32767 ? 32767 : sm;
-        pcm[i * ch + c] = sm;
-      }
+      const p = new Float32Array(frames);
+      ad.copyTo(p, { planeIndex: c, format: 'f32-planar' });
+      planes.push(p);
     }
     ad.close();
+    void plane;
+
+    if (srIn === 48000) {
+      const pcm = new Int16Array(frames * ch);
+      for (let c = 0; c < ch; c++)
+        for (let i = 0; i < frames; i++) {
+          let sm = Math.round(planes[c][i] * 32767);
+          pcm[i * ch + c] = sm < -32768 ? -32768 : sm > 32767 ? 32767 : sm;
+        }
+      this._playPcm(pcm, ch);
+      return;
+    }
+
+    const step = srIn / 48000;
+    const out = Math.max(0, Math.floor((frames - 1) / step));
+    if (out <= 0) return;
+    const pcm = new Int16Array(out * ch);
+    for (let c = 0; c < ch; c++) {
+      const src = planes[c];
+      for (let n = 0; n < out; n++) {
+        const t = n * step;
+        const i = t | 0;
+        const fr = t - i;
+        const v = src[i] + (src[i + 1 < frames ? i + 1 : i] - src[i]) * fr;
+        let sm = Math.round(v * 32767);
+        pcm[n * ch + c] = sm < -32768 ? -32768 : sm > 32767 ? 32767 : sm;
+      }
+    }
     this._playPcm(pcm, ch);
   }
 
