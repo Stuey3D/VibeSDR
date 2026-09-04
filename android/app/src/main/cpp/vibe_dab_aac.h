@@ -22,6 +22,12 @@ struct SuperFrame {
     int  rsUncorrected = 0;                  ///< codewords beyond the code's power
     bool firecodeOk    = false;
     bool valid         = false;
+    /* ★★ THE CHANNEL MODE AND PS FLAG, which were parsed and thrown away. ADTS needs the CORE
+     *  channel count — 1 for mono AND for HE-AAC v2, where parametric stereo reconstructs the
+     *  second channel from a mono core and is signalled implicitly. Writing 2 there for a PS
+     *  stream tells the decoder to expect something the bitstream does not contain. */
+    bool stereo        = false;   ///< aac_channel_mode: the CORE is two channels
+    bool ps            = false;   ///< parametric stereo — mono core, stereo output
 };
 
 /** CRC-16-CCITT as TS 102 563 specifies for the header firecode field: G(x) = x^16+x^12+x^5+1,
@@ -81,7 +87,8 @@ inline SuperFrame decodeSuperFrame(const uint8_t* wire, size_t n, int index) {
     const bool sbr     = (b2 >> 5) & 1;
     const bool chMode  = (b2 >> 4) & 1;
     const bool ps      = (b2 >> 3) & 1;
-    (void)chMode; (void)ps;
+    sf.stereo = chMode;
+    sf.ps     = ps;
     sf.fmt = dabPlusFormat(dacRate, sbr);
 
     // au_start[1..n-1] are 12-bit; au_start[0] is not transmitted — "The first AU always starts

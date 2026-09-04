@@ -1548,6 +1548,15 @@ static constexpr double      kAgcHardCeilDbfs = -2.0;
  *    the backoff's two-second hot dwell, and a climb that was a mistake is handed straight back by
  *    the verdict — this loop already makes every move prove itself. */
 static constexpr double      kAgcClimbCeilDbfs = kAgcBackoffDbfs;
+/* ★★★ AND THE CLIMB HAS ITS OWN CEILING — WHICH IS WHY LOWERING THE TARGET DID NOT HOLD.
+ *  kAgcDabTargetDbfs steers the CUT path; the climb stops against THIS constant instead, so after
+ *  restarting from the bottom the loop simply walked back up to the FM operating point. Measured
+ *  on Stuart's V4L: gain down to 7.7 dB as intended, and peaks back at -4.4 dBFS — an OFDM block
+ *  driven to within 4 dB of full scale, whose spectral regrowth is the comb of evenly spaced
+ *  humps across Band III in his screenshot, and whose bursts of errors "sound like reception".
+ *  ★ ONE RULE, TWO READERS, again: an operating point expressed as two constants, and I changed
+ *    one of them. Both now ask the same question. */
+static constexpr double      kAgcDabClimbCeilDbfs = -15.0;
 
 /* ══ ONE LOOP, THREE TEMPERAMENTS ═══════════════════════════════════════════════════════════════
  * ★★★ STUART, 2026-08-25: "should we have different AGC algorithyms per band ... All invisible to
@@ -1794,6 +1803,12 @@ static inline int agcStride() {
 /** The peak the AGC aims for, which DAB moves down. See kAgcDabTargetDbfs. */
 static inline double agcTargetDbfs() {
     return g_dabMode.load(std::memory_order_relaxed) ? kAgcDabTargetDbfs : kAgcTargetDbfs;
+}
+
+/** The ceiling the CLIMB stops against. See kAgcDabClimbCeilDbfs — DAB needs both this and the
+ *  target moved, because the two together define the operating point. */
+static inline double agcClimbCeilDbfs() {
+    return g_dabMode.load(std::memory_order_relaxed) ? kAgcDabClimbCeilDbfs : kAgcClimbCeilDbfs;
 }
 
 static inline void agcAskStride(float moved, float stepDb) {
@@ -18229,7 +18244,7 @@ void LocalSdrShim::overloadTick() {
             if (peak > g_snrPlateauPeak.load(std::memory_order_relaxed) - 6.0) return;
             g_snrPlateau.store(false, std::memory_order_relaxed);
         }
-        if (peak + stepDb > kAgcClimbCeilDbfs) return;
+        if (peak + stepDb > agcClimbCeilDbfs()) return;
         // ★ Not consulted while kGhostMayCut is false — an unproven detector must not block a
         //   climb either, or it starves the gain by the back door instead of the front.
         // ★ And never climb while the floor is already lifted — that is the condition a climb
@@ -18240,7 +18255,7 @@ void LocalSdrShim::overloadTick() {
         //   jump path was just fixed for; this is the SINGLE-step copy of the same check and it
         //   would have quietly reinstated it (silently, at that — the branch does not log).
         if (peak + stepDb > -std::min(g_ovlMargin.load(std::memory_order_relaxed),
-                                      -kAgcClimbCeilDbfs)) {
+                                      -agcClimbCeilDbfs())) {
             // ★ Silent. This runs every 2 s and would otherwise fill the log with a line saying
             //   nothing happened — the one thing guaranteed to make the useful lines unreadable.
             return;
@@ -18273,14 +18288,14 @@ void LocalSdrShim::overloadTick() {
             // ★ Clamped so the learned margin can never be stricter than the one ceiling above —
             //   it was 3.0 (aim at -3.0 dBFS) and that IS the dead zone, by another name.
             const double mgn = std::min(g_ovlMargin.load(std::memory_order_relaxed),
-                                        -kAgcClimbCeilDbfs);
+                                        -agcClimbCeilDbfs());
             int best = idx;
             for (int j = idx + 1; j <= tgtIdx; j++) {
                 const double add = (gains[(size_t)j] - gains[(size_t)from]) / 10.0;
                 // ★ The same ceiling the single step now uses, or the jump would stop at the old
                 //   operating point and the loop would creep the rest of the way — the exact
                 //   slowness the jump exists to remove.
-                if (peak + add > kAgcClimbCeilDbfs) break;
+                if (peak + add > agcClimbCeilDbfs()) break;
                 if (peak + add > -mgn) break;
                 if (bad >= 0 && gains[(size_t)j] >= bad && cleanRun < holdJ) break;
                 best = j;
