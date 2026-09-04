@@ -4249,6 +4249,12 @@ let dabState: DabState | null = null;
 let dabPane: 'stations' | 'signal' = 'stations';
 let dabChannel = -1;
 let dabLastEid = -1;
+/* ★★★ THE VFO DAB BORROWED, so it can be given back. dabRender points the readout at the
+ *  multiplex centre — right while DAB is on — but that is the CLIENT's own frequency field and
+ *  nothing put it back on the way out. Stuart, 2026-09-04: back on FM with RDS decoding Heart
+ *  perfectly, the readout stuck at 208064 kHz and "tuning is stuck fully" — because every tune he
+ *  sent was computed from a dial that thought it was in Band III. */
+let dabPrevFreq = 0;
 
 /** Band III, mirroring vibe_dab_channels.h — including the OFFSET blocks 10N/11N/12N, which are
  *  easy to miss and are genuinely on air. */
@@ -4348,6 +4354,7 @@ function dabSetMode(on: boolean) {
   if (dt) dt.style.display = on ? 'none' : '';
   if (on) {
     if (dabChannel < 0) dabChannel = DAB_BLOCKS.findIndex(b => b.name === '12B');
+    if (spec && !dabPrevFreq) dabPrevFreq = spec.frequency;   // give it back on the way out
     spec?.dab(true, dabChannel);
     dabSetPane('stations');
     // ★★ The decoder box is ALWAYS OPEN in DAB — the station list IS the tuning UI.
@@ -4363,6 +4370,10 @@ function dabSetMode(on: boolean) {
   } else {
     spec?.dab(false);
     dabState = null;
+    // ★ Hand the dial back — see dabPrevFreq. The server restores its own centre; this is the
+    //   client's copy, and the two disagreeing is what left the tuning stuck.
+    if (spec && dabPrevFreq) { spec.frequency = dabPrevFreq; mobileUi?.refresh(); }
+    dabPrevFreq = 0;
     const ds3 = document.getElementById('decStatus');
     if (ds3) ds3.textContent = '';
   }

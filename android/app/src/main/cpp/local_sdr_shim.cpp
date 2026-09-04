@@ -7995,6 +7995,10 @@ struct LocalSdrShim::Impl {
                     LOGI("[DAB] mode OFF: lock restored (centre %.3f MHz, rate %.0f)", c / 1e6, r);
                 }
                 sendText(sock, "{\"type\":\"dab_off\"}");
+                /* ★ And tell the client where the radio actually IS. Leaving DAB moves the centre,
+                 *  the rate and the gain back, and a client still holding the multiplex centre
+                 *  computes every subsequent tune from a dial in the wrong band. */
+                sendConfig(sock);
                 return;
             }
             /* ★★ THE CHANNEL MAY ARRIVE AS AN INDEX OR AS ITS NAME. The web client sends the
