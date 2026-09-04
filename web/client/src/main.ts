@@ -4433,7 +4433,11 @@ function buildControls() {
     zoomBy:     (f) => { spec?.zoomBy(f); updateViewOverlays(); },
     freqHz:     () => spec?.frequency ?? null,
     freqText:   () => cardFreqText(),
-    mode:       () => spec?.mode ?? '',
+    /* ★★★ DAB IS THE MODE WHILE IT IS ON. The card kept showing WFM — the demodulator the
+     *  server is no longer running, because DAB replaces the whole chain rather than being an
+     *  SDRMode. A readout naming a demodulator that is not running is the same fault as the
+     *  decoder box saying RTTY: the panel describing the receiver has to describe THIS one. */
+    mode:       () => dabOn ? 'DAB' : (spec?.mode ?? ''),
     stepLabel:  () => formatStep(step),
     openStepMenu: (anchor) => openStepMenu(anchor),
     // sigSmooth is the same 0..1 the desktop meter fills to, and the three readings come from

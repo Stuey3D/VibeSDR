@@ -587,6 +587,7 @@ static std::atomic<int>    g_dabChannel{-1};
  *    most expensive shape. Suspend the lock ITSELF, in one place, and restore it on the way out.
  *  ★ DAB is exclusive by nature: an ensemble IS the capture, so there is no shared-dial meaning
  *    to preserve while it runs. */
+static std::atomic<int>    g_dabSavedGain{-1};
 static std::atomic<double> g_dabSavedCentre{0.0};
 static std::atomic<double> g_dabSavedRate{0.0};
 static std::atomic<bool>   g_dabLockHeld{false};
@@ -7972,6 +7973,8 @@ struct LocalSdrShim::Impl {
                     const double c = g_dabSavedCentre.load(), r = g_dabSavedRate.load();
                     g_vsLockedCentre.store(c);
                     g_vsLockedRate.store(r);
+                    LocalSdrShim::instance().setGain(g_dabSavedGain.load());
+                    agcForget("DAB off: the gain that suited an ensemble does not suit a carrier");
                     if (r > 0.0) LocalSdrShim::instance().setSampleRate(r);
                     if (c > 0.0) { rtlCenter.store(c); tuneHw(c); audioFreq.store(c); viewCenter.store(c); }
                     LOGI("[DAB] mode OFF: lock restored (centre %.3f MHz, rate %.0f)", c / 1e6, r);
@@ -8036,7 +8039,23 @@ struct LocalSdrShim::Impl {
             if (!g_dabLockHeld.exchange(true)) {
                 g_dabSavedCentre.store(g_vsLockedCentre.load());
                 g_dabSavedRate.store(g_vsLockedRate.load());
+                g_dabSavedGain.store(g_gainTarget.load(std::memory_order_relaxed));
             }
+            /* ★★★ RESTART THE AGC FROM THE BOTTOM. The loop is built to start at the minimum and
+             *  climb, taking a step only when the measured peak says the whole step still fits —
+             *  safe by construction. Entering DAB skipped all of that: it INHERITED whatever gain
+             *  the FM carrier had climbed to (37 dB on Stuart's V4) and could only unwind one step
+             *  per tick, so the front end sat overloaded the entire time. His screenshot showed
+             *  what that looks like — a comb of evenly spaced spikes right across Band III, which
+             *  is intermodulation, not a band plan: "the gain is killing the signal fully, i think
+             *  it is overloading".
+             *  ★ A local DAB transmitter needs almost no gain ("DAB only needs minimal if any gain
+             *    where I live"), and an ensemble fills 1.5 MHz rather than presenting one carrier,
+             *    so the right starting point is the bottom for everyone — a distant listener's AGC
+             *    simply climbs, which is the same thing it does on a cold start. Nothing is limited
+             *    permanently (MEMORY.md); the gain is RESTORED on the way out. */
+            LocalSdrShim::instance().setGain(-1);
+            agcForget("DAB: an ensemble is not the carrier we came off — reconverge from the bottom");
             g_vsLockedCentre.store(0.0);
             g_vsLockedRate.store(0.0);
             /* ★★★ OFFSET TUNING PUTS THE DONGLE 15 kHz ABOVE WHERE YOU ASKED FOR.
