@@ -342,6 +342,45 @@ receiver you have left.
    and bouncing them back to the list on every selection would make it unusable for the one job it
    is best at.
 
+## ★★★ DECODED OFF AIR — 2026-09-04, 07:15
+
+**Real BBC National DAB, 12B (225.648 MHz), RTL-SDR V4 on the Pi, 2.048 MSPS.**
+
+```
+frame  8: LOCK null 22.4 dB  off -111 Hz (-0.50 ppm)  shift +0  FIBs 12/12
+
+=== ENSEMBLE ===  'BBC National DAB'  EId 0xCE15   15 services, 15 sub-channels
+  SId 0xC221 'BBC Radio1'        [subch 1  MP2 ]
+  SId 0xC222 'BBC Radio2'        [subch 2  MP2 ]
+  SId 0xC223 'BBC Radio3'        [subch 3  MP2 ]
+  SId 0xC224 'BBC Radio4'        [subch 4  MP2 ]
+  SId 0xC225 'BBC Radio5Live'    [subch 5  MP2 ]
+  SId 0xC229 'BBC Radio1Dance'   [subch 6  DAB+]
+  SId 0xC22A 'BBC Radio1Xtra'    [subch 10 MP2 ]
+  SId 0xC22B 'BBC Radio6Music'   [subch 11 MP2 ]
+  SId 0xC22C 'BBC Radio4Extra'   [subch 12 MP2 ]
+  SId 0xC22D 'BBC Radio1Anthms'  [subch 13 DAB+]
+  SId 0xC22E 'BBC Radio3Unwind'  [subch 14 DAB+]
+  SId 0xC236 'BBC AsianNetwork'  [subch 7  MP2 ]
+  SId 0xC238 'BBC WorldService'  [subch 9  MP2 ]
+```
+
+12 of 12 FIBs on every frame, offset tracked at −0.5 ppm, phase reference correlating **0.922**
+against a real transmitter. The MP2/DAB+ split is read from the air and matches reality: the
+classic networks are Layer II, the newer ones DAB+ — which is exactly why the browser-refuses-MP2
+measurement mattered.
+
+★★ **THE BUG THAT COST THE SESSION, AND WHAT IT LOOKED LIKE.** Everything above the bit ordering
+   was right from the first live run: 22.3 dB null lock, offset to 0.5 ppm, phase reference at
+   0.92 — and 0 of 12 FIBs. Two faults, both in how bits reach the Viterbi:
+   1. clause 14.5 — the 2K bits per symbol are TWO HALVES (real parts then imaginary), not
+      alternating pairs;
+   2. clause 14.4.1.1 — the four FIC codewords are **concatenated** (i' = 2304·mod(r,4) + i), not
+      round-robin interleaved.
+   ★ The flattened PDF renders that second equation as literal garbage ("3042 and 3032"). It only
+     became readable by pulling the single page. **When a spec extraction looks like noise, read
+     the page — do not infer the shape of the rule.**
+
 ## STATUS — 2026-09-04, 01:15
 
 Built and tested overnight. Every header is `vibe_dab_*.h` in `android/app/src/main/cpp/`, each

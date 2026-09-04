@@ -43,6 +43,8 @@ struct DabStats {
     int    fibsTotal     = 0;
     double fibRate       = 0.0;    ///< running pass rate, 0..1
     int    framesSeen    = 0;
+    int    intOffsetCarriers = 0;   ///< whole carriers of offset, from the phase reference
+    float  prsCorrelation    = 0.0f;///< how well the phase reference matched — a lock quality
 };
 
 class DabReceiver {
@@ -72,7 +74,6 @@ public:
         stats_.freqOffsetPpm = float(double(stats_.freqOffsetHz) / 222.064e6 * 1e6);  // vs 11D
         if (std::fabs(frac) > 1e-6f) derotate(work.data(), work.size(), double(frac) / double(fft_));
 
-        // ── every symbol to carriers, then DQPSK against the previous ───────
         const int K = mode_->carriers;
         /* ★ Braces, not parens: `std::vector<C32> cur(size_t(K))` is a FUNCTION DECLARATION, not
          *  a vector — C++'s most vexing parse, and the compiler warned about exactly that. It
@@ -80,24 +81,86 @@ public:
         std::vector<C32> cur(size_t(K), C32{}), prev(size_t(K), C32{}), spec(fft_, C32{});
         std::vector<int8_t> frameBits(size_t(K) * 2 * size_t(mode_->symbolsPerFrame - 1));
 
+        /* ★★★ THE INTEGER FREQUENCY OFFSET — WITHOUT THIS, NOTHING DECODES.
+         *
+         *  The cyclic prefix resolves only a FRACTION of a carrier spacing (±500 Hz in Mode I).
+         *  An RTL-SDR's crystal is typically tens of ppm out, and at 225 MHz even 1 ppm is 225 Hz
+         *  — so a real dongle sits several WHOLE carriers away and every carrier lands in the
+         *  wrong bin. On the first live capture this showed as a solid 22.3 dB null lock with
+         *  0/12 FIBs: the frame structure was found perfectly and the contents were nonsense.
+         *
+         *  ★★ The phase reference symbol is the only thing in DAB whose carriers are known
+         *     absolutely, which is exactly what makes it the tool for this: correlate the
+         *     received symbol against it at each candidate shift and take the peak. It costs one
+         *     transform we have already done.
+         *  ★ Searched once per frame rather than tracked, because it cannot change quickly — a
+         *    crystal does not drift a kilohertz between frames — and re-measuring is cheaper than
+         *    being wrong after a retune.
+         */
+        {
+            const Cplx* p0 = work.data() + size_t(guardSamplesAt(rate_));
+            dft(p0, spec.data());
+            std::vector<C32> got(size_t(K), C32{});
+            carriersFromFft(spec.data(), int(fft_), K, got.data());
+            float best = -1.0f; int bestShift = 0;
+            const int span = 48;                       // ±48 carriers ≈ ±48 kHz ≈ ±210 ppm
+            for (int d = -span; d <= span; ++d) {
+                double re = 0, im = 0;
+                for (int k = 0; k < K; ++k) {
+                    const int src = k + d;
+                    if (src < 0 || src >= K) continue;
+                    const C32 a2 = got[size_t(src)];
+                    const C32 b2 = prs_[size_t(k)];
+                    re += double(a2.real()) * b2.real() + double(a2.imag()) * b2.imag();
+                    im += double(a2.imag()) * b2.real() - double(a2.real()) * b2.imag();
+                }
+                const float mag = float(std::sqrt(re * re + im * im));
+                if (mag > best) { best = mag; bestShift = d; }
+            }
+            intShift_ = bestShift;
+            stats_.intOffsetCarriers = bestShift;
+            stats_.freqOffsetHz += float(bestShift) * float(mode_->spacingHz);
+            stats_.freqOffsetPpm = float(double(stats_.freqOffsetHz) / 222.064e6 * 1e6);
+            stats_.prsCorrelation = best / float(K);
+        }
+
+        // ── every symbol to carriers, then DQPSK against the previous ───────
         for (int sym = 0; sym < mode_->symbolsPerFrame; ++sym) {
             const Cplx* p = work.data() + size_t(sym) * symLen + size_t(guardSamplesAt(rate_));
             dft(p, spec.data());
             carriersFromFft(spec.data(), int(fft_), K, cur.data());
-            if (sym == 0) { prev = cur; continue; }          // the phase reference — not data
-            std::vector<int8_t> soft(size_t(K) * 2);
-            for (int k = 0; k < K; ++k) {
-                const SoftBits b = dqpskSoft(cur[size_t(k)], prev[size_t(k)]);
-                soft[size_t(k) * 2]     = b.b0;
-                soft[size_t(k) * 2 + 1] = b.b1;
+            // ★ Undo the integer offset by reading the carriers the transmitter actually used.
+            if (intShift_ != 0) {
+                std::vector<C32> shifted(size_t(K), C32{});
+                for (int k = 0; k < K; ++k) {
+                    const int src = k + intShift_;
+                    shifted[size_t(k)] = (src >= 0 && src < K) ? cur[size_t(src)] : C32{};
+                }
+                cur.swap(shifted);
             }
-            // ★ Frequency deinterleave undoes the transmitter's carrier scramble, per symbol.
+            if (sym == 0) { prev = cur; continue; }          // the phase reference — not data
+            /* ★★★ THE 2K BITS ARE NOT INTERLEAVED — THE FIRST K ARE THE REAL PARTS.
+             *
+             *  EN 300 401 clause 14.5, verbatim:
+             *      q(l,n) = (1/√2)[ (1 - 2·p(l,n)) + j·(1 - 2·p(l,n+K)) ]
+             *  So bit n is the REAL part of QPSK symbol n and bit n+K is its IMAGINARY part. The
+             *  vector is two halves, not alternating pairs.
+             *
+             *  ★★ I had written p[2n] / p[2n+1], and on the first live capture that produced a
+             *     rock-solid lock — 22.3 dB null, correct frequency offset, phase reference found
+             *     at shift 0 — and 0 of 12 FIBs. Every stage reported itself healthy while the bit
+             *     order was wrong, which is this project's most familiar failure shape. Only
+             *     reading the clause settled it.
+             *  ★ (1 - 2p): p=0 gives +1, so a POSITIVE soft value means bit 0 — which is the
+             *    convention the Viterbi already expects.
+             */
             std::vector<int8_t> di(size_t(K) * 2);
             for (int nIdx = 0; nIdx < K; ++nIdx) {
-                const int kk  = fi_.carrierFor(nIdx);
+                const int kk  = fi_.carrierFor(nIdx);        // carrier that carried symbol nIdx
                 const int src = kk < 0 ? kk + 768 : kk + 767;
-                di[size_t(nIdx) * 2]     = soft[size_t(src) * 2];
-                di[size_t(nIdx) * 2 + 1] = soft[size_t(src) * 2 + 1];
+                const SoftBits b = dqpskSoft(cur[size_t(src)], prev[size_t(src)]);
+                di[size_t(nIdx)]              = b.b0;        // real  -> p[n]
+                di[size_t(K) + size_t(nIdx)]  = b.b1;        // imag  -> p[n+K]
             }
             std::copy(di.begin(), di.end(),
                       frameBits.begin() + long(size_t(sym - 1) * size_t(K) * 2));
@@ -107,6 +170,7 @@ public:
         // ── symbols 1..3 are the FIC ────────────────────────────────────────
         const size_t ficBits = size_t(K) * 2 * 3;
         if (frameBits.size() >= ficBits) {
+            ficBits_.assign(frameBits.begin(), frameBits.begin() + long(ficBits));
             const int ok = ficDecodeFrame(frameBits.data(), ensemble_, viterbi_);
             stats_.fibsOk    = ok;
             stats_.fibsTotal = 12;
@@ -118,9 +182,17 @@ public:
         return true;
     }
 
+    /** ★ The FIC soft bits of the last frame — for diagnostics against a live signal, where the
+     *  question "is the chain wrong before or after the Viterbi?" is otherwise unanswerable. */
+    const std::vector<int8_t>& lastFicBits() const { return ficBits_; }
+
     const Ensemble& ensemble() const { return ensemble_; }
     const DabStats& stats()    const { return stats_; }
     void reset() { sync_.reset(); ensemble_ = Ensemble{}; stats_ = DabStats{}; fibHist_ = 0; }
+    /** ★ Drop the frame-timing prediction but KEEP the ensemble. For a caller that steps through a
+     *  capture window by window rather than streaming — the tracker's prediction is relative to
+     *  the buffer it was given, so a new window needs a fresh acquisition. */
+    void resetSync() { sync_.reset(); }
 
 private:
     int symbolSamplesAt(uint32_t r) const {
@@ -154,6 +226,8 @@ private:
     Ensemble ensemble_;
     DabStats stats_;
     double fibHist_ = 0;
+    int    intShift_ = 0;
+    std::vector<int8_t> ficBits_;
     std::array<C32, 1536> prs_{};
 };
 

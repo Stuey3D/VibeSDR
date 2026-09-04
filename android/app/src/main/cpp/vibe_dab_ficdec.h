@@ -79,11 +79,22 @@ inline int ficDecodeCodeword(const int8_t* rx2304, Ensemble& e, Viterbi& v) {
 }
 
 /** De-multiplex the four codewords a Mode I frame carries.
- *  ★ b'(4i + r) = b(r, i): the four codewords are round-robin interleaved, so codeword r is every
- *    fourth soft value starting at r. Getting the phase wrong here decodes four codewords of
- *    nonsense while every stage below reports itself healthy. */
+ *
+ *  ★★★ CONCATENATED, NOT INTERLEAVED. EN 300 401 clause 14.4.1.1:
+ *          b'(i') = b(r,i)   with   i' = 2304 · mod(r,4) + i,   i = 0 … 2303
+ *      so codeword r is a CONTIGUOUS run of 2304 bits, not every fourth bit.
+ *
+ *  ★★ I implemented the round-robin form and it cost most of a debugging session on a live
+ *     signal. The symptom was perfect: a 22.3 dB null lock, the frequency offset measured to
+ *     0.5 ppm, the phase reference correlating at 0.92 against a real BBC transmitter — and zero
+ *     of twelve FIBs. Every stage reported itself healthy because every stage WAS healthy; the
+ *     bits were simply being handed to the Viterbi in the wrong order.
+ *  ★ The flattened PDF text renders this equation as garbage ("3042 and 3032"); it only became
+ *     readable by pulling the page on its own. When a spec extraction looks like noise, read the
+ *     page rather than guessing the shape of the rule. */
 inline void ficDemux(const int8_t* frame9216, int cw, int8_t* out2304) {
-    for (int i = 0; i < kFicCodewordBits; ++i) out2304[i] = frame9216[4 * i + cw];
+    const int base = kFicCodewordBits * (cw & 3);
+    for (int i = 0; i < kFicCodewordBits; ++i) out2304[i] = frame9216[base + i];
 }
 
 /** Whole-frame convenience: 9216 soft values (3 OFDM symbols' worth) -> ensemble updates.

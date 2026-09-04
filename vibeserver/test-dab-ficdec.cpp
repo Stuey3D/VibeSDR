@@ -114,9 +114,11 @@ int main() {
     {
         std::vector<int8_t> frame(9216);
         // Put our codeword in slot 2, filler elsewhere, and check demux picks the right one.
+        // ★ Codewords are CONTIGUOUS blocks of 2304 (clause 14.4.1.1), not every fourth bit.
         for (int r = 0; r < 4; ++r)
             for (int i = 0; i < kFicCodewordBits; ++i)
-                frame[4 * i + r] = (r == 2) ? int8_t(tx[i] ? -100 : 100) : int8_t(int(rnd() % 255) - 127);
+                frame[kFicCodewordBits * r + i] =
+                    (r == 2) ? int8_t(tx[i] ? -100 : 100) : int8_t(int(rnd() % 255) - 127);
         std::vector<int8_t> cw(kFicCodewordBits);
         ficDemux(frame.data(), 2, cw.data());
         Ensemble e; Viterbi v;
