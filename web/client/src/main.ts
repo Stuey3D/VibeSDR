@@ -1068,7 +1068,6 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     //   assume it can filter at build time.
     onBlockedModes: (list) => {
       blockedModes = new Set(list.map(m => m.toLowerCase()));
-      buildModeButtons();
       // If we are somehow already ON a blocked mode (an owner switched it off mid-session),
       // move to the first one that is still allowed rather than leaving a dead selection.
       if (spec?.mode && isModeBlocked(String(spec.mode))) {
@@ -4353,50 +4352,15 @@ function dabSetMode(on: boolean) {
   dabRender();
 }
 
-function buildModeButtons() {
-  const modes = $('modes');
-  if (!modes) return;
-  modes.innerHTML = '';
-  for (const m of MODES) {
-    if (isModeBlocked(m)) continue;      // ★ omitted entirely, not disabled
-    const b = document.createElement('button');
-    b.className = 'btn';
-    b.textContent = m.toUpperCase();
-    b.dataset.mode = m;
-    b.onclick = () => setMode(m, true);
-    modes.appendChild(b);
-  }
-  /* ★ DAB sits with the demodulators because that is what a listener is choosing — but it is not
-   *  an SDRMode: it replaces the whole chain rather than filtering a channel out of it. Offered
-   *  only where the SERVER says it can work. */
-  if (dabCapable) {
-    const b2 = document.createElement('button');
-    b2.className = 'btn' + (dabOn ? ' on' : '');
-    /* ★★★ 'DAB', NOT 'DAB (EXPERIMENTAL)'. This row is #modes inside #demod, and #bar says it
-     *  outright: "NEVER wrap ... let items SHRINK instead", with the clamped font-size absorbing
-     *  a narrow window rather than overflow. Every other button here is two or three characters
-     *  (FM, AM, USB), so an eighteen-character one appended to the end was squeezed off the edge
-     *  of the bar — present in the DOM, drawn, and invisible. Stuart, on a V4 and a V4L, both of
-     *  which report dab:true: "cant see the dab button".
-     *  ★ The warning is not dropped, it is MOVED to where it cannot break the layout and cannot
-     *    be missed: the tooltip, and the multiplex bar the moment DAB is actually engaged. A
-     *    label nobody can see warns nobody. */
-    b2.textContent = 'DAB';
-    b2.title = 'DAB (Experimental) — digital radio, Band III';
-    b2.id = 'modeDab';
-    b2.onclick = () => { const want = !dabOn; if (want) dabSetMode(true); else dabSetMode(false); buildModeButtons(); };
-    modes.appendChild(b2);
-  }
-
-  // Re-mark the active button — this runs after the controls already exist.
-  const cur = spec?.mode;
-  if (cur) for (const b of Array.from(modes.children) as HTMLButtonElement[])
-    b.classList.toggle('on', b.dataset.mode === cur);
-}
+/* ★★★ THE DESKTOP BAR'S MODE ROW IS GONE. #bar was retired in favour of the one unified card
+ *  (it is `display:none` in every layout), so buildModeButtons() was building buttons into a
+ *  container nobody can see, and marking the active one on them. The mode picker that exists is
+ *  the card's, built in mobile.ts from deps.modes().
+ *  ★ This is what hid the DAB button: it was added HERE, correctly, and drawn where no listener
+ *    could ever look (Stuart, 2026-09-04). Deleting the row means the next control cannot be
+ *    added to the dead one by mistake. */
 
 function buildControls() {
-  buildModeButtons();
-
   buildVfo();
 
   // No anchor = zoom about the LISTEN VFO: the station you're on stays put and the
@@ -4470,7 +4434,12 @@ function buildControls() {
         : -1,
     }),
     openFreqEntry: () => $('pill').click(),
-    modes:      () => MODES as unknown as string[],
+    /* ★★★ BLOCKED MODES WERE NEVER FILTERED HERE. isModeBlocked() was applied only in
+     *  buildModeButtons — the DESKTOP bar's row — and that bar is retired and hidden, so an
+     *  owner who switched a demodulator off still had it offered in the only picker anybody
+     *  uses, and picking it was a no-op. AGENTS.md: never draw a control whose every use is a
+     *  no-op. The list is read fresh on every open, so a mid-session change takes effect. */
+    modes:      () => MODES.filter(m => !isModeBlocked(m)) as unknown as string[],
     setMode:    (m) => setMode(m as SDRMode, true),
     openMenu:      () => togglePanel('menu'),
     openAudio:     () => togglePanel('audioPanel'),
@@ -4479,7 +4448,7 @@ function buildControls() {
     //    copy of the rule, which is how the two pickers came to disagree in the first place.
     dabCapable:    () => dabCapable,
     dabOn:         () => dabOn,
-    toggleDab:     () => { dabSetMode(!dabOn); buildModeButtons(); },
+    toggleDab:     () => dabSetMode(!dabOn),
     openChat:      () => { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); },
   });
   initBw();
@@ -8724,10 +8693,8 @@ function setMode(m: SDRMode, send: boolean) {
   if (!spec) return;
   if (send) spec.setMode(m);
   else { spec.mode = m; const bw = MODE_BANDWIDTHS[m]; spec.bandwidthLow = bw[0]; spec.bandwidthHigh = bw[1]; }
-  $('modeLbl').textContent = m.toUpperCase();
-  for (const b of Array.from($('modes').children) as HTMLButtonElement[]) {
-    b.classList.toggle('on', b.dataset.mode === m);
-  }
+  // ★ The card's own readout (#mMode) is the one on screen; the bar's #modeLbl and its row of
+  //   buttons went with the bar. See the note above buildControls.
   if (m !== 'wfm') {
     $('stereo').classList.remove('on');
     rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = ''; logoDnsKey = ''; rdsLogoPi = -1;

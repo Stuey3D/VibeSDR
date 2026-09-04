@@ -1264,7 +1264,6 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 #pill:hover { border-color: var(--btn-active-bdr); }
 #freq { font-size: 2.3em; color: var(--freq); letter-spacing: 0.05em; font-variant-numeric: tabular-nums; }
 #freqUnit { font-size: 0.85em; color: var(--unit); }
-#modeLbl { font-size: 1em; color: var(--amber); letter-spacing: 0.15em; }
 #stereo { font-size: 0.78em; color: var(--green); border: 1px solid var(--green); border-radius: 3px; padding: 0 0.25em; display: none; }
 #stereo.on { display: inline; }
 
@@ -1726,7 +1725,6 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #pill:hover { border-color: var(--btn-active-bdr); }
 #freq { font-size: 2.3em; color: var(--freq); letter-spacing: 0.05em; font-variant-numeric: tabular-nums; }
 #freqUnit { font-size: 0.85em; color: var(--unit); }
-#modeLbl { font-size: 1em; color: var(--amber); letter-spacing: 0.15em; }
 #stereo { font-size: 0.78em; color: var(--green); border: 1px solid var(--green); border-radius: 3px; padding: 0 0.25em; display: none; }
 #stereo.on { display: inline; }
 
@@ -3350,7 +3348,7 @@ select.btn { padding: 6px 8px; }
       <div id="tuner">
         <div id="pill" title="Click to enter a frequency">
           <span id="freq">—</span><span id="freqUnit">MHz</span>
-          <span id="modeLbl">NFM</span><span id="stereo">ST</span>
+          <span id="stereo">ST</span>
         </div>
         <div id="vfo">
           <button class="btn arrow" id="tuneDown" title="Tune down one step">◀</button>
@@ -3364,7 +3362,10 @@ select.btn { padding: 6px 8px; }
       <!-- Demodulator + its bandwidth. Part of the TUNING block: what you're
            listening to and how you're demodulating it are one decision. -->
       <div id="demod">
-        <div class="group" id="modes"></div>
+        <!-- ★ The mode buttons lived here, in the retired desktop bar. The picker in use is the
+             card's, built in mobile.ts. Removed rather than left hidden: a control added to an
+             invisible row looks done and reaches nobody, which is exactly how the DAB button
+             came to be missing (2026-09-04). -->
         <!-- ★★★ THE DECODERS LIVE WITH THE DEMODULATORS, as they do in the app (ModeSelector's
              `decoderControls`). What you demodulate and what you decode out of it are one
              decision — USB then RTTY, CW then TIME — and the app has always said so. This is
