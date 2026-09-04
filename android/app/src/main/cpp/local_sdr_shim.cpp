@@ -7911,8 +7911,18 @@ struct LocalSdrShim::Impl {
             /* ★★★ THE RADIO MUST BE AT 2.048 MS/s AND ON THE BLOCK CENTRE. Everything below
              *  assumes the canonical rate — it is what makes the useful symbol exactly 2048
              *  samples — so this is set here rather than hoped for. */
+            /* ★★★ MOVE THE HARDWARE CENTRE, NOT THE VFO. retune() sets the listener's VFO inside
+             *  the captured window — which is right for FM and useless here: an ensemble IS the
+             *  capture. Tuning the VFO to 225.648 while the dongle stayed where it was gave a
+             *  6.5 dB null and no lock on the live Pi, which reads as "DAB does not work" rather
+             *  than "we tuned the wrong thing". rtlCenter + tuneHw is the pair that actually moves
+             *  the radio (see flushPendingDongle, which does exactly this). */
             LocalSdrShim::instance().setSampleRate(double(vibedab::DabService::kRateHz));
-            retune(double(g_dab.centreHz()));
+            const double centre = double(g_dab.centreHz());
+            rtlCenter.store(centre);
+            tuneHw(centre);
+            audioFreq.store(centre);          // the readout follows the mux
+            viewCenter.store(centre);
             g_dabMode.store(true);
             double sid = 0; jsonNum(msg, "sid", sid);
             if (sid > 0) g_dab.setService(uint32_t(sid));
