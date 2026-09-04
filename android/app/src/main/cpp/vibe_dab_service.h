@@ -55,6 +55,8 @@ public:
         mp2_.reset();
     }
     uint32_t service() const { return sid_; }
+    /** The receiver tells us where the radio actually is, so the two can be compared. */
+    void setRfCentre(double hz) { std::lock_guard<std::mutex> lk(m_); rfCentre_ = hz; }
 
     /** Feed interleaved complex samples at 2.048 MSPS. */
     void feed(const float* interleaved, size_t nSamples) {
@@ -103,8 +105,12 @@ public:
         const DabStats& s = rx_.stats();
         std::string j = "{\"type\":\"dab\"";
         char b[512];
-        snprintf(b, sizeof b, ",\"channel\":\"%s\",\"centreHz\":%u,\"label\":\"%s\",\"eid\":%u",
-                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(),
+        /* ★ `rfCentreHz` is what the RADIO is actually on, not what we asked for. They diverged on
+         *  the live Pi — DAB reported 12B while the dongle sat on 96.6 MHz — and without both
+         *  numbers side by side that is indistinguishable from "DAB does not decode here". */
+        snprintf(b, sizeof b,
+                 ",\"channel\":\"%s\",\"centreHz\":%u,\"rfCentreHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
+                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), rfCentre_,
                  esc(e.label).c_str(), unsigned(e.eid));
         j += b;
         snprintf(b, sizeof b,
@@ -166,6 +172,7 @@ private:
     std::vector<Cplx> iq_;
     std::deque<float> pcm_;
     int channel_ = -1;
+    double rfCentre_ = 0;
     uint32_t sid_ = 0, want_ = 0;
 };
 

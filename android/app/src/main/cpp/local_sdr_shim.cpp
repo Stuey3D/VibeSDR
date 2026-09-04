@@ -12672,6 +12672,7 @@ struct LocalSdrShim::Impl {
              *  not run at all. That is also why the zoom controls are disabled in this mode: on an
              *  RTL-SDR the tuner's IF bandwidth FOLLOWS the zoom, and narrowing it cuts the mux. */
             if (g_dabMode.load(std::memory_order_relaxed)) {
+                g_dab.setRfCentre(rtlCenter.load());
                 g_dab.feed(reinterpret_cast<const float*>(buf.data()), buf.size());
                 pumpDabAudio();
                 continue;
