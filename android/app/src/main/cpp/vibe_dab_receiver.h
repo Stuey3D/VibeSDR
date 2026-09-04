@@ -277,6 +277,8 @@ public:
      *  capture window by window rather than streaming — the tracker's prediction is relative to
      *  the buffer it was given, so a new window needs a fresh acquisition. */
     void resetSync() { sync_.reset(); }
+    /** Tell the sync that `n` samples were dropped from the front of the buffer. See consumed(). */
+    void syncConsumed(size_t n) { sync_.consumed(n); }
 
 private:
     int symbolSamplesAt(uint32_t r) const {

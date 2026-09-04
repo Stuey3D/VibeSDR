@@ -74,11 +74,22 @@ public:
         const size_t need = size_t(modeI().frameSamples) * 2;
         while (iq_.size() >= need) {
             rx_.push(iq_.data(), need);
-            /* ★ Consume exactly one frame and re-acquire. A streaming receiver would track across
-             *  the boundary; stepping a frame at a time costs one acquisition per 96 ms and is
-             *  immune to the buffer edges, which matters more while this is experimental. */
-            rx_.resetSync();
+            /* ★★★ TRACK ACROSS THE BOUNDARY — DO NOT RE-ACQUIRE EVERY FRAME.
+             *  This used to call resetSync() here, throwing the lock away and acquiring afresh on
+             *  every 96 ms frame. Acquisition takes the GLOBAL MINIMUM over a frame-long scan, so
+             *  it only has to lose once — one noisy frame where some other dip is deeper — and
+             *  that frame decodes as noise. On the live V4L that was 66 dips below 0.99 FIB in
+             *  three minutes, with the gain never moving and the frequency offset rock steady at
+             *  37 Hz: brief random bursts in an otherwise clean stream, which is what Stuart heard
+             *  and rightly suspected was ours rather than the aerial.
+             *  ★ The tell was in the numbers all along: nullDepthDb alternating between 15 and 24
+             *    dB frame by frame is one detector choosing between two candidates, not a signal
+             *    changing, and prs collapsing from 11.8 to 0.96 is a window in the wrong place.
+             *  ★ The TRACK path searches +/-64 samples around a PREDICTION and was written for
+             *    exactly this. It needs only to be told what we consumed, which is what the old
+             *    comment here ("immune to the buffer edges") was working around instead. */
             iq_.erase(iq_.begin(), iq_.begin() + long(modeI().frameSamples));
+            rx_.syncConsumed(size_t(modeI().frameSamples));
 
             if (want_ && sid_ != want_ && rx_.ensemble().services.count(want_))
                 if (rx_.selectService(want_)) sid_ = want_;

@@ -154,6 +154,12 @@ public:
 
     void reset() { locked_ = false; misses_ = 0; predicted_ = 0; depth_ = 0.0f; }
 
+    /** ★★★ THE CALLER CONSUMED `n` SAMPLES — REBASE, DO NOT RESET.
+     *  `predicted_` is an index into the buffer handed to offer(), so a caller that drops the
+     *  front of that buffer must say so or the prediction points `n` samples too far ahead. This
+     *  is what lets the TRACK path survive across calls, which is the whole reason it exists. */
+    void consumed(size_t n) { predicted_ = predicted_ > n ? predicted_ - n : 0; }
+
 private:
     /** ★ Four frames of nothing (~0.4 s in Mode I) before we admit we are lost. Long enough to ride
      *  out a fade under a bridge, short enough that a retune does not sit on a dead lock. */
