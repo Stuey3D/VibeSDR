@@ -20,9 +20,11 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "vibe_dab_fec.h"
+#include "vibe_dab_fft.h"
 #include "vibe_dab_ficdec.h"
 #include "vibe_dab_interleave.h"
 #include "vibe_dab_modes.h"
@@ -52,6 +54,7 @@ public:
     explicit DabReceiver(uint32_t sampleRateHz = kCanonicalRateHz)
         : rate_(sampleRateHz), mode_(&modeI()), sync_(modeI(), sampleRateHz),
           fft_(size_t(fftSizeFor(modeI(), sampleRateHz))) {
+        fftp_ = std::make_unique<Fft>(fft_);
         prsSymbol(prs_.data());
     }
 
@@ -178,6 +181,16 @@ public:
             fibHist_ = fibHist_ * 0.9 + (double(ok) / 12.0) * 0.1;
             stats_.fibRate = fibHist_;
         }
+        /* ── the MSC: symbols 4..76 carry four CIFs ─────────────────────────
+         *  ★ 72 data symbols x 3072 bits = 221 184 = 4 x 55 296, which is the arithmetic that
+         *    says the split is right. A CIF is 864 capacity units of 64 bits and arrives every
+         *    24 ms, four to a Mode I frame. */
+        if (frameBits.size() >= ficBits + size_t(kCifBits) * 4) {
+            const int8_t* msc = frameBits.data() + ficBits;
+            for (int c = 0; c < kCifsPerFrameI; ++c)
+                pumpService(msc + size_t(c) * size_t(kCifBits));
+        }
+
         ++stats_.framesSeen;
         return true;
     }
@@ -185,6 +198,44 @@ public:
     /** ★ The FIC soft bits of the last frame — for diagnostics against a live signal, where the
      *  question "is the chain wrong before or after the Viterbi?" is otherwise unanswerable. */
     const std::vector<int8_t>& lastFicBits() const { return ficBits_; }
+
+    /** Choose which service to decode audio for. Returns false when it is not in the ensemble
+     *  yet, or has no audio component we can reach. */
+    bool selectService(uint32_t sid) {
+        auto it = ensemble_.services.find(sid);
+        if (it == ensemble_.services.end() || it->second.components.empty()) return false;
+        const ServiceComponent* pick = nullptr;
+        for (const auto& c : it->second.components)
+            if (c.subChId >= 0 && (pick == nullptr || c.primary)) pick = &c;
+        if (!pick) return false;
+        auto sc = ensemble_.subChannels.find(pick->subChId);
+        if (sc == ensemble_.subChannels.end() || sc->second.sizeCu <= 0) return false;
+        sel_      = sc->second;
+        selType_  = pick->scType;
+        selSid_   = sid;
+        /* ★★ A sub-channel's CU size fixes its bit rate: 1 CU = 64 bits per 24 ms = 8 kbit/s at
+         *  rate 1/2 … but the honest derivation is through the PROTECTION PROFILE, because the
+         *  coded size is sizeCu x 64 and the profile says how much of that is data. */
+        const int codedBits = sel_.sizeCu * kCuBits;
+        prof_ = {};
+        for (int n = 1; n <= 24 && !prof_.valid; ++n) {
+            const EepProfile p = eepProfile(sel_.protLevel + 1, false, n);
+            if (p.valid && eepCodedBits(p) == codedBits) { prof_ = p; dataBits_ = n * 8 * 24; }
+        }
+        if (!prof_.valid)
+            for (int n = 1; n <= 24 && !prof_.valid; ++n) {
+                const EepProfile p = eepProfile(sel_.protLevel + 1, true, n);
+                if (p.valid && eepCodedBits(p) == codedBits) { prof_ = p; dataBits_ = n * 32 * 24; }
+            }
+        deint_ = std::make_unique<TimeDeinterleaver>(size_t(codedBits));
+        audio_.clear();
+        return prof_.valid;
+    }
+
+    /** Logical frames of decoded audio bytes — MP2 frames, or DAB+ super frame fifths. */
+    const std::vector<std::vector<uint8_t>>& audioFrames() const { return audio_; }
+    int  selectedType() const { return selType_; }      ///< 0 = MP2, 63 = DAB+
+    const EepProfile& profile() const { return prof_; }
 
     const Ensemble& ensemble() const { return ensemble_; }
     const DabStats& stats()    const { return stats_; }
@@ -200,24 +251,44 @@ private:
     }
     int guardSamplesAt(uint32_t r) const { return guardSamplesFor(*mode_, r); }
 
-    /** ★ A plain DFT for now — correct before fast. The shim already carries a real FFT
-     *  (vibedsp::ComplexFFT) and this is the one call to swap when it is wired in; keeping it
-     *  obvious here means the first integration bug cannot be hiding in a transform. */
+    /** ★ Was a plain O(N^2) DFT, deliberately, so the first integration bug could not be hiding
+     *  in a transform. That paid off — the bugs were in bit ordering, not the maths — and now the
+     *  transform can be fast: 2048 points radix-2, ~11 000 operations instead of 4.2 million. */
     void dft(const Cplx* in, C32* out) {
-        const size_t N = fft_;
-        for (size_t k = 0; k < N; ++k) {
-            double re = 0, im = 0;
-            for (size_t t = 0; t < N; ++t) {
-                const double a = -2.0 * M_PI * double(k) * double(t) / double(N);
-                const double c = std::cos(a), s = std::sin(a);
-                re += double(in[t].re) * c - double(in[t].im) * s;
-                im += double(in[t].re) * s + double(in[t].im) * c;
-            }
-            out[k] = C32(float(re), float(im));
+        buf_.assign(fft_, C32{});
+        for (size_t i = 0; i < fft_; ++i) buf_[i] = C32(in[i].re, in[i].im);
+        fftp_->forward(buf_.data());
+        for (size_t i = 0; i < fft_; ++i) out[i] = buf_[i];
+    }
+
+    /** One CIF: pull our sub-channel's capacity units out, deinterleave, decode. */
+    void pumpService(const int8_t* cif) {
+        if (!prof_.valid || !deint_) return;
+        const size_t coded = size_t(sel_.sizeCu) * size_t(kCuBits);
+        const int8_t* start = cif + size_t(sel_.startCu) * size_t(kCuBits);
+        const std::vector<int8_t>& di = deint_->push(start);
+        /* ★★ 15 CIFs of latency before the first complete logical frame — that is the interleaving
+         *  depth, not an inefficiency. Emitting audio early means emitting frames with holes. */
+        if (!deint_->ready()) return;
+
+        std::vector<int8_t> mother(size_t(dataBits_ + 6) * 4, 0);
+        eepDepuncture(di.data(), coded, prof_, mother.data(), mother.size());
+        std::vector<uint8_t> bits = viterbi_.decode(mother.data(), size_t(dataBits_));
+        EnergyDispersal ed; ed.apply(bits.data(), bits.size());
+
+        std::vector<uint8_t> bytes(bits.size() / 8);
+        for (size_t i = 0; i < bytes.size(); ++i) {
+            uint8_t b = 0;
+            for (int k = 0; k < 8; ++k) b = uint8_t((b << 1) | (bits[i * 8 + size_t(k)] & 1));
+            bytes[i] = b;
         }
+        audio_.push_back(std::move(bytes));
+        if (audio_.size() > 64) audio_.erase(audio_.begin());     // bounded
     }
 
     uint32_t rate_;
+    std::unique_ptr<Fft> fftp_;
+    std::vector<C32> buf_;
     const Mode* mode_;
     FrameSync sync_;
     size_t fft_;
@@ -228,6 +299,12 @@ private:
     double fibHist_ = 0;
     int    intShift_ = 0;
     std::vector<int8_t> ficBits_;
+    SubChannel sel_{};
+    EepProfile prof_{};
+    int selType_ = -1, dataBits_ = 0;
+    uint32_t selSid_ = 0;
+    std::unique_ptr<TimeDeinterleaver> deint_;
+    std::vector<std::vector<uint8_t>> audio_;
     std::array<C32, 1536> prs_{};
 };
 
