@@ -6471,6 +6471,18 @@ struct LocalSdrShim::Impl {
                   for (auto& kv : clientDsp) if (kv.second->audio && kv.second->audio->isOpen())
                       targets.emplace_back(kv.second.get(), kv.second->audio); }
                 for (auto& t : targets) sendClientAudio(t.first, t.second, pcm.data(), int(got), 2);
+                /* ★★★ AND THE SHARED LISTENERS, WHO ARE A DIFFERENT REGISTRY. clientDsp holds
+                 *  only the PER-CLIENT-DSP listeners; a shared receiver keeps its listeners in
+                 *  audioClient + audioExtra and its spectrum sockets in specClient + specExtra.
+                 *  DAB knew about one of the three, so on exactly the kind of server it was being
+                 *  tested on the decoder ran and its audio went nowhere. onAudio() is the shared
+                 *  fan-out every other demodulator already uses, so routing through it brings the
+                 *  Opus encode, the mono fold and the fan-out with it rather than reimplementing
+                 *  three things that would then drift. No double-send: allAudioSocks() does not
+                 *  include the clientDsp sockets handled above. */
+                std::vector<stereo_t> st(got);
+                for (size_t i = 0; i < got; ++i) { st[i].l = f[i * 2]; st[i].r = f[i * 2 + 1]; }
+                onAudio(st.data(), int(got), 2);
             }
         }
         /* ★ The signal block twice a second: fast enough to watch a mux come and go, slow enough
@@ -6480,10 +6492,12 @@ struct LocalSdrShim::Impl {
         if (now - lastDabJson_ >= 0.5) {
             lastDabJson_ = now;
             const std::string j = g_dab.json();
+            /* ★★★ ALL THREE REGISTRIES — see the audio note above. allSpecClientsLocked()
+             *  already unions specClient, specExtra and clientDsp, and is the ONLY definition of
+             *  "every spectrum listener" worth trusting; the hand-rolled clientDsp loop that used
+             *  to be here sent the status block to nobody on a shared receiver. */
             std::vector<std::shared_ptr<net::Socket>> socks;
-            { std::lock_guard<std::mutex> lk(clientMtx);
-              for (auto& kv : clientDsp) if (kv.second->spec && kv.second->spec->isOpen())
-                  socks.push_back(kv.second->spec); }
+            { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
             for (auto& sk : socks) sendText(sk, j);
         }
     }
@@ -6633,7 +6647,10 @@ struct LocalSdrShim::Impl {
         // ★★★ NOT IN SHARED MODE. Here the shared pipeline's VFO is nobody's: every listener has
         //     their own. Decoding from it means decoding a frequency no human selected, so the
         //     decoders are driven from the OWNING listener's audio instead (onClientAudio).
-        if (!perClientDsp()) {
+        /* ★ NOT FROM DAB EITHER. The analogue decoders (RDS, the digital spotters) are being
+         *  handed a demodulated DAB service here — audio no analogue decoder can mean anything
+         *  by, at a cost, with spurious spots as the failure mode. */
+        if (!perClientDsp() && !g_dabMode.load(std::memory_order_relaxed)) {
             feedDecoder(data, count);
             feedSpots(data, count);
             decoderFedSamples.fetch_add((uint64_t)count, std::memory_order_relaxed);
