@@ -1176,20 +1176,44 @@ export class AudioPlayer {
       this.aacRate = coreRateHz; this.aacCh = channels; this.aacTs = 0;
       this.aacDec = new AudioDecoder({
         output: (ad) => this._onAacData(ad),
-        error:  (e)  => { console.warn('[audio] AAC decode failed:', e); this.aacBroken = true; },
+        error:  (e)  => { this._failAac('decode', e); },
       });
-      try {
-        // mp4a.40.5 = HE-AAC. SBR and PS are signalled implicitly inside the bitstream, which is
-        // how DAB+ carries them, so no description is passed and ADTS is parsed as-is.
-        this.aacDec.configure({ codec: 'mp4a.40.5', sampleRate: coreRateHz, numberOfChannels: channels });
-      } catch (e) { console.warn('[audio] AAC configure failed:', e); this.aacBroken = true; return; }
+      /* ★★★ TRY BOTH CODEC STRINGS. mp4a.40.5 is HE-AAC and is what DAB+ actually carries, but
+       *  not every browser advertises it even when it can decode the stream — the SBR and PS
+       *  signalling is implicit in the bitstream, so an AAC-LC decoder configured as 40.2 will
+       *  often take the same ADTS quite happily. Chrome accepts raw ADTS when no `description`
+       *  is supplied; Safari is stricter, and a silent configure failure here is indistinguishable
+       *  from a dead radio (Stuart: "no audio at all on DAB", with the server provably sending
+       *  429 AAC packets in 45 s).
+       *  ★ Whatever happens, it is SAID OUT LOUD — see _failAac. Silence with no explanation is
+       *    the worst outcome and it is the one we had. */
+      let configured = false;
+      for (const codec of ['mp4a.40.5', 'mp4a.40.2']) {
+        try {
+          this.aacDec.configure({ codec, sampleRate: coreRateHz, numberOfChannels: channels });
+          configured = true;
+          console.info(`[audio] DAB+ decoding as ${codec} @ ${coreRateHz} Hz, ${channels}ch`);
+          break;
+        } catch (e) { console.warn(`[audio] AAC configure ${codec} failed:`, e); }
+      }
+      if (!configured) { this._failAac('configure', 'no AAC codec this browser accepts'); return; }
     }
     try {
       this.aacDec.decode(new EncodedAudioChunk({
         type: 'key', timestamp: this.aacTs, data: buf.slice(6),
       }));
-    } catch (e) { console.warn('[audio] AAC enqueue failed:', e); this.aacBroken = true; return; }
+    } catch (e) { this._failAac('enqueue', e); return; }
     this.aacTs += Math.round(1024 * 1e6 / coreRateHz);
+  }
+
+  /** ★ Say it where the listener is looking. A DAB+ service that cannot be decoded must not
+   *  present as a working radio with no sound — the decoder box says so instead. */
+  private _failAac(stage: string, e: unknown) {
+    if (this.aacBroken) return;
+    this.aacBroken = true;
+    console.warn(`[audio] DAB+ AAC ${stage} failed:`, e);
+    const st = document.getElementById('decStatus');
+    if (st) st.textContent = 'DAB+ needs AAC support this browser does not offer';
   }
 
   private _onAacData(ad: AudioData) {

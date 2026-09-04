@@ -4363,6 +4363,13 @@ function dabSetMode(on: boolean) {
      *  normally sets the title — so it kept whatever decoder was last used and announced a DAB
      *  ensemble as "RTTY" (Stuart's screenshot, 2026-09-04). The one job of a box header is to
      *  say what you are looking at. */
+    /* ★★★ REBUILD THE RATE ROW. hwinfo returns early when the hardware signature is unchanged
+     *  (`if (hwSig === lastHwSig) return`), and entering DAB changes nothing in that signature —
+     *  so the picker kept offering 2.4 MS/s and showing it as selected while the radio ran at
+     *  2.048, which is the state Stuart photographed twice. The rate row is a function of DAB
+     *  being on, so DAB has to ask for it; nothing else will. */
+    applyRateOptions();
+    populateHw();                // the option list itself is built here, not in applyRateOptions
     const dt2 = document.getElementById('decTitle');
     if (dt2) dt2.textContent = 'DAB';
     const ds2 = document.getElementById('decStatus');
@@ -4374,6 +4381,8 @@ function dabSetMode(on: boolean) {
     //   client's copy, and the two disagreeing is what left the tuning stuck.
     if (spec && dabPrevFreq) { spec.frequency = dabPrevFreq; mobileUi?.refresh(); }
     dabPrevFreq = 0;
+    applyRateOptions();
+    populateHw();                // give the real rate list back — see the note on the way in
     const ds3 = document.getElementById('decStatus');
     if (ds3) ds3.textContent = '';
   }
