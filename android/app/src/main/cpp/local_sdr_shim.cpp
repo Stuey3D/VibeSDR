@@ -7994,13 +7994,29 @@ struct LocalSdrShim::Impl {
             }
             g_vsLockedCentre.store(0.0);
             g_vsLockedRate.store(0.0);
-            const double centre = double(g_dab.centreHz());
-            rtlCenter.store(centre);
+            /* ★★★ OFFSET TUNING PUTS THE DONGLE 15 kHz ABOVE WHERE YOU ASKED FOR.
+             *  tuneHw(x) tunes the hardware to x + hwOffsetHz() — that is the whole point of it,
+             *  and every other demodulator gets the 15 kHz back through vfoOffsetNow(). DAB does
+             *  not go anywhere near the VFO path: an ensemble IS the capture, so it reads the raw
+             *  IQ around DC and had no idea DC was not where it asked.
+             *  ★ Measured on the live Pi at 4.1.70, and the number named the cause outright:
+             *    offsetHz = -15178 against HW_OFFSET_HZ of 15000 — the 178 Hz left over is the
+             *    dongle's own crystal, well under 1 ppm. It LOCKED (null 15 dB, PRS 3.58, 1053
+             *    frames) and every single FIB failed CRC, because 15 kHz is fifteen carriers of
+             *    DQPSK rotation. A receiver locked to the right multiplex at the wrong frequency
+             *    looks exactly like a broken Viterbi.
+             *  ★ Corrected at the tune, not by leaning on the AFC: the offset is KNOWN, and an
+             *    AFC asked to pull fifteen carrier spacings is being asked to rescue a bug.
+             *  ★ hwOffsetHz() and not the constant — it is 0 on the RSP and the HF+, and this is
+             *    exactly the "ELSE MEANS DONGLE" shape that has cost us a bug per new radio. */
+            const double centre  = double(g_dab.centreHz());
+            const double logical = centre - hwOffsetHz();   // so PHYSICAL DC lands on the mux
+            rtlCenter.store(logical);
             audioFreq.store(centre);          // the readout follows the mux
             viewCenter.store(centre);
             LocalSdrShim::instance().setSampleRate(double(vibedab::DabService::kRateHz));
-            rtlCenter.store(centre);
-            tuneHw(centre);
+            rtlCenter.store(logical);
+            tuneHw(logical);
             g_dabMode.store(true);
             LOGI("[DAB] mode ON: channel %s, centre %.3f MHz, rate %.0f — dspLoop should follow",
                  vibedab::kBandIII[idx].name, centre / 1e6, double(vibedab::DabService::kRateHz));
@@ -12755,7 +12771,10 @@ struct LocalSdrShim::Impl {
                 if (!dabLogged_) { dabLogged_ = true;
                     LOGI("[DAB] dspLoop is feeding the receiver: %zu samples, rtlCenter %.3f MHz",
                          buf.size(), rtlCenter.load() / 1e6); }
-                g_dab.setRfCentre(rtlCenter.load());
+                /* ★ The PHYSICAL centre — rtlCenter is the logical one and the radio sits
+                 *  hwOffsetHz() above it. Reporting the logical figure would show 225.633 for a
+                 *  mux at 225.648 and start the next hunt in the wrong place. */
+                g_dab.setRfCentre(rtlCenter.load() + hwOffsetHz());
                 g_dab.setRfRate(sampleRate);
                 g_dab.feed(reinterpret_cast<const float*>(buf.data()), buf.size());
                 pumpDabAudio();
