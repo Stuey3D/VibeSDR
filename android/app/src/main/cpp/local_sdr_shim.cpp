@@ -1502,7 +1502,7 @@ static constexpr double      kAgcTargetDbfs  = -6.0;
  *  ★ Headroom, not a fixed low gain: a listener far from a transmitter still needs the AGC to
  *    work for them. Backing the TARGET off leaves the loop free to find whatever gain the site
  *    actually needs, and never limits permanently (MEMORY.md). */
-static constexpr double      kAgcDabTargetDbfs = -18.0;
+static constexpr double      kAgcDabTargetDbfs = -12.0;
 /* ★★★ THE BACKOFF GUARDS THE CEILING, NOT THE OPERATING POINT — AND THAT IS THE 96.1 BUG.
  *     This was -6.0, the same figure as the target, so the loop CUT on any peak above its own
  *     operating point while kAgcHardCeilDbfs (-2.0) and the note beneath it said the opposite:
@@ -1556,7 +1556,15 @@ static constexpr double      kAgcClimbCeilDbfs = kAgcBackoffDbfs;
  *  humps across Band III in his screenshot, and whose bursts of errors "sound like reception".
  *  ★ ONE RULE, TWO READERS, again: an operating point expressed as two constants, and I changed
  *    one of them. Both now ask the same question. */
-static constexpr double      kAgcDabClimbCeilDbfs = -15.0;
+/* ★★ -5, AND THE NUMBER IS MEASURED, NOT CHOSEN. An RTL is an EIGHT-BIT converter, so backing
+ *  off is not free: too little drive costs quantisation SNR just as surely as too much costs
+ *  headroom, and the FIB CRC rate says which is happening. Three points from the live V4 on 12B:
+ *      ceiling  -1  ->  peak  -4.4 dBFS  ->  visible clipping regrowth, audible breakup
+ *      (none)       ->  peak  -9.1 dBFS  ->  fibRate 0.988   <- best
+ *      ceiling -15  ->  peak -20.6 dBFS  ->  fibRate 0.952   <- starved
+ *  The loop settles about 5.6 dB below its ceiling, so -5 lands near the -9 that measured best.
+ *  ★ Re-measure before moving this again, and move it on the FIB rate, not on the picture. */
+static constexpr double      kAgcDabClimbCeilDbfs = -5.0;
 
 /* ══ ONE LOOP, THREE TEMPERAMENTS ═══════════════════════════════════════════════════════════════
  * ★★★ STUART, 2026-08-25: "should we have different AGC algorithyms per band ... All invisible to
