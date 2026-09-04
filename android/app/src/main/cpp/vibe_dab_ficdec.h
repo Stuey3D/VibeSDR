@@ -32,10 +32,8 @@ namespace vibedab {
 inline constexpr int kFicCodewordBits = 2304;   ///< punctured, as received
 inline constexpr int kFicMotherBits   = 3096;   ///< 768*4 + 24
 inline constexpr int kFicDataBits     = 768;    ///< 3 FIBs
-inline constexpr uint32_t kTailVec    = 0xCCCCCCu;  ///< V_T, 24 bits: 1100 x6 (MSB first)
-
-/** Tail bit i (0..23): true when punctured (not transmitted). */
-inline constexpr bool tailPunctured(int i) { return ((kTailVec >> (23 - i)) & 1u) == 0u; }
+// ★ kTailVec / tailPunctured now live in vibe_dab_punct.h, beside the other puncturing vectors —
+//   the MSC profiles append the same tail, so it was in the wrong file while only the FIC used it.
 
 /** Expand one received FIC codeword (2304 soft values) onto the 3096-bit mother code. */
 inline void ficDepuncture(const int8_t* rx, int8_t* mother) {

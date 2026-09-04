@@ -47,6 +47,15 @@ inline constexpr uint32_t kPunctureVec[25] = {
     0xFFFFFFFFu,   // PI 24  rate 8/32  11111111 11111111 11111111 11111111
 };
 
+/** ★ The TAIL vector V_T, EN 300 401 11.1.2: "The last 24 bits of the serial mother codeword …
+ *  shall be punctured using the puncturing vector given by: (1100 1100 1100 1100 1100 1100)",
+ *  leaving 12 tail bits. It lives here beside the other vectors rather than in whichever decoder
+ *  happened to need it first — both the FIC and every MSC profile append it. */
+inline constexpr uint32_t kTailVec = 0xCCCCCCu;   // 24 bits, MSB first
+
+/** Tail bit i (0..23): true when punctured (not transmitted). */
+inline constexpr bool tailPunctured(int i) { return ((kTailVec >> (23 - i)) & 1u) == 0u; }
+
 /** Bit i (0..31) of vector PI: 1 = transmitted, 0 = punctured.
  *  ★ Stored MSB-first so the hex reads in the same order the spec prints the bits. */
 inline constexpr bool punctured(int pi, int i) {
