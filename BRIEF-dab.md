@@ -342,6 +342,45 @@ receiver you have left.
    and bouncing them back to the list on every selection would make it unusable for the one job it
    is best at.
 
+## STATUS — 2026-09-04, 01:15
+
+Built and tested overnight. Every header is `vibe_dab_*.h` in `android/app/src/main/cpp/`, each
+with a matching `vibeserver/test-dab-*.cpp`.
+
+| stage | what | state |
+|---|---|---|
+| 1 | channel plan (41 blocks), capability gate on EFFECTIVE limits | ✅ tested |
+| 2 | transmission modes, in samples — verified against ETSI table 22 | ✅ tested |
+| 3 | DAB+ superframe rate bits (the chipmunk bug) | ✅ tested |
+| 4 | null-symbol acquisition + frame tracking with fade tolerance | ✅ tested |
+| 5 | OFDM: fractional offset from the CP, de-rotation, soft DQPSK, carrier↔bin | ✅ tested |
+| 6 | FEC: rate-1/4 soft Viterbi, energy dispersal, FIB CRC | ✅ tested |
+| 7 | frequency interleaving — bijection **proven**, not sampled | ✅ tested |
+| 8 | FIC/FIG parser → ensemble, services, labels, sub-channels | ✅ tested |
+| 9 | phase reference symbol (tables machine-extracted from the PDF) | ✅ tested |
+| 10 | puncturing vectors + depuncturing (machine-extracted) | ✅ tested |
+
+**Still to build, honestly:**
+- **FIC extraction from the OFDM symbols** — which symbols carry it, and wiring 4→8→9→10 into one
+  path. This is the last piece before a STATION LIST can appear from real IQ, and it is small.
+- **MSC**: CIF extraction, 16-deep time deinterleaving, UEP/EEP tables (table 15 extracts cleanly,
+  same technique as the others).
+- **MP2 decoder** — ours, because the browser refuses Layer II. A full audio codec: bit allocation,
+  scalefactors, subband synthesis. The single biggest remaining piece.
+- **DAB+**: Reed-Solomon (120,110) over GF(256), firecode correction, ADTS reframing.
+- **Integration** into the shim (a DAB source path, per-service sample rates) and the **web client
+  UI** (mux tuning, station list, signal panel, the pinned toggle).
+- **Deployment** to the Pi.
+
+★★ THE HONEST SUMMARY: the physical layer and the whole FIC path are built and tested; the audio
+   path and the integration are not. Nothing here has yet seen a real signal — every test is
+   synthetic or spec-derived, and AGENTS.md's rule stands: measure on the live radio before
+   believing any of it. The first real test will be the station list, because it needs no codec.
+
+★ Three spec tables (23/24 phase reference, 13 puncturing) were MACHINE-EXTRACTED from the PDF
+  rather than typed, and each has an independent consistency check in its test — the puncturing
+  one verifies that every vector keeps exactly 8+PI of 32 bits, which is its printed code rate.
+
 ## Build order (riskiest first)
 1. Channel table + capability gate + the UI shell — settled, small, and it makes the rest testable.
 2. OFDM acquisition: null-symbol detect, coarse/fine frequency offset, phase reference correlation.
