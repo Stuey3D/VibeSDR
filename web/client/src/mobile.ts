@@ -46,6 +46,16 @@ export type MobileDeps = {
   openMenu: () => void;
   openAudio: () => void;
   openDecoders: () => void;
+  /** ★★★ DAB, WHICH IS NOT AN SDRMode AND SO CANNOT COME THROUGH modes(). It replaces the whole
+   *  chain rather than filtering a channel out of it, so it is offered here as its own entry —
+   *  and ONLY where the server says the receiver can reach a multiplex.
+   *  ★ This is the second mode picker. The desktop bar has one and this card has another, and
+   *    DAB was added to the bar alone: on the phone layout (and on a Mac window narrow enough to
+   *    use this card) the button simply did not exist. Stuart, 2026-09-04, on a V4 and a V4L that
+   *    both report dab:true: "cant see the dab button". ONE RULE, TWO READERS. */
+  dabCapable: () => boolean;
+  dabOn: () => boolean;
+  toggleDab: () => void;
   /** ★ On a shared-dial receiver only — see chat.ts. The button that opens it is hidden
    *  everywhere else, because on an ordinary receiver there is nobody to talk to. */
   openChat: () => void;
@@ -345,6 +355,18 @@ export function initMobileControls(deps: MobileDeps) {
     // ★ A door, not a copy: the decoders panel is a screenful of settings, image views and spot
     //   lists. Rebuilding it inside a popup anchored to the pill would be a second implementation
     //   of a thing that already works.
+    /* ★ Before DECODERS, because it is a demodulator choice and they are not. Labelled 'DAB'
+     *  like every other entry here; the EXPERIMENTAL warning rides on the multiplex bar, where
+     *  it is unmissable the moment you are actually in DAB and cannot squeeze any layout. */
+    if (deps.dabCapable()) {
+      const dabRow = document.createElement('button');
+      dabRow.className = 'mModeOpt' + (deps.dabOn() ? ' on' : '');
+      dabRow.textContent = 'DAB';
+      dabRow.title = 'DAB (Experimental) — digital radio, Band III';
+      dabRow.onclick = () => { deps.toggleDab(); close(); refresh(); };
+      grid.appendChild(dabRow);
+    }
+
     const decRow = document.createElement('button');
     decRow.className = 'mModeOpt';
     decRow.textContent = 'DECODERS…';

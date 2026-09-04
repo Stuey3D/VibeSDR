@@ -4372,7 +4372,17 @@ function buildModeButtons() {
   if (dabCapable) {
     const b2 = document.createElement('button');
     b2.className = 'btn' + (dabOn ? ' on' : '');
-    b2.textContent = 'DAB (EXPERIMENTAL)';
+    /* ★★★ 'DAB', NOT 'DAB (EXPERIMENTAL)'. This row is #modes inside #demod, and #bar says it
+     *  outright: "NEVER wrap ... let items SHRINK instead", with the clamped font-size absorbing
+     *  a narrow window rather than overflow. Every other button here is two or three characters
+     *  (FM, AM, USB), so an eighteen-character one appended to the end was squeezed off the edge
+     *  of the bar — present in the DOM, drawn, and invisible. Stuart, on a V4 and a V4L, both of
+     *  which report dab:true: "cant see the dab button".
+     *  ★ The warning is not dropped, it is MOVED to where it cannot break the layout and cannot
+     *    be missed: the tooltip, and the multiplex bar the moment DAB is actually engaged. A
+     *    label nobody can see warns nobody. */
+    b2.textContent = 'DAB';
+    b2.title = 'DAB (Experimental) — digital radio, Band III';
     b2.id = 'modeDab';
     b2.onclick = () => { const want = !dabOn; if (want) dabSetMode(true); else dabSetMode(false); buildModeButtons(); };
     modes.appendChild(b2);
@@ -4465,6 +4475,11 @@ function buildControls() {
     openMenu:      () => togglePanel('menu'),
     openAudio:     () => togglePanel('audioPanel'),
     openDecoders:  () => togglePanel('decodersPanel'),
+    // ★★ The SAME dabCapable and the SAME toggle the desktop bar's button uses — not a second
+    //    copy of the rule, which is how the two pickers came to disagree in the first place.
+    dabCapable:    () => dabCapable,
+    dabOn:         () => dabOn,
+    toggleDab:     () => { dabSetMode(!dabOn); buildModeButtons(); },
     openChat:      () => { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); },
   });
   initBw();

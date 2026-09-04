@@ -1111,6 +1111,10 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 #dabMux { display:flex; align-items:center; gap:6px; padding:6px 8px;
           border-bottom:1px solid var(--btn-border); }
 #dabMux .lbl { flex:1 1 auto; text-align:center; color:var(--freq); letter-spacing:1px; }
+/* ★ The experimental badge. Sits on the multiplex bar because the mode button cannot carry it —
+   see the note in the markup. flex:0 0 auto so it never steals the mux label's centring. */
+#dabExp { flex:0 0 auto; font-size:9px; letter-spacing:1.5px; padding:1px 5px; border-radius:3px;
+          color:#c9922e; border:1px solid rgba(201,146,46,.45); opacity:.85; }
 
 /* Search: bookmarks + band plan. */
 #searchWrap { position: relative; flex: 1 1 auto; min-width: 0; }
@@ -1569,6 +1573,10 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #dabMux { display:flex; align-items:center; gap:6px; padding:6px 8px;
           border-bottom:1px solid var(--btn-border); }
 #dabMux .lbl { flex:1 1 auto; text-align:center; color:var(--freq); letter-spacing:1px; }
+/* ★ The experimental badge. Sits on the multiplex bar because the mode button cannot carry it —
+   see the note in the markup. flex:0 0 auto so it never steals the mux label's centring. */
+#dabExp { flex:0 0 auto; font-size:9px; letter-spacing:1.5px; padding:1px 5px; border-radius:3px;
+          color:#c9922e; border:1px solid rgba(201,146,46,.45); opacity:.85; }
 
 /* Search: bookmarks + band plan. */
 #searchWrap { position: relative; flex: 1 1 auto; min-width: 0; }
@@ -3080,6 +3088,12 @@ select.btn { padding: 6px 8px; }
     <div id="dabMux" style="display:none">
       <button class="btn" id="dabPrev" title="Previous multiplex">&#9664;</button>
       <span class="lbl" id="dabMuxLbl">—</span>
+      <!-- ★★ THE EXPERIMENTAL WARNING LIVES HERE, not on the mode button. That button sits in
+           rows that must not wrap (the desktop bar shrinks rather than wrapping; the phone card's
+           picker is a fixed grid), so a long label there is squeezed out of sight — which is
+           exactly what happened. Here it costs no layout and cannot be missed: you see it the
+           moment you are actually in DAB. -->
+      <span class="lbl" id="dabExp" title="DAB support is new — please report anything odd">EXPERIMENTAL</span>
       <button class="btn" id="dabNext" title="Next multiplex">&#9654;</button>
     </div>
     <div id="dabStations" style="display:none"></div>
