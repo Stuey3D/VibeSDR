@@ -7918,12 +7918,21 @@ struct LocalSdrShim::Impl {
              *  6.5 dB null and no lock on the live Pi, which reads as "DAB does not work" rather
              *  than "we tuned the wrong thing". rtlCenter + tuneHw is the pair that actually moves
              *  the radio (see flushPendingDongle, which does exactly this). */
-            LocalSdrShim::instance().setSampleRate(double(vibedab::DabService::kRateHz));
+            /* ★★★ CENTRE FIRST, THEN THE RATE. setSampleRate TEARS DOWN AND REBUILDS the source,
+             *  and the rebuild opens the radio at whatever rtlCenter says at that moment — so
+             *  setting the rate first and the centre second leaves the rebuild re-tuning to the
+             *  OLD frequency and quietly undoing the move. On the live Pi that showed as DAB
+             *  reporting 12B while the dongle stayed on 96.6 MHz FM: mode engaged, spectrum
+             *  stopped, nothing decoded.
+             *  ★ tuneHw() afterwards as well, for the case where the rate did not actually change
+             *    and therefore nothing was rebuilt. Both paths end up on the multiplex. */
             const double centre = double(g_dab.centreHz());
             rtlCenter.store(centre);
-            tuneHw(centre);
             audioFreq.store(centre);          // the readout follows the mux
             viewCenter.store(centre);
+            LocalSdrShim::instance().setSampleRate(double(vibedab::DabService::kRateHz));
+            rtlCenter.store(centre);
+            tuneHw(centre);
             g_dabMode.store(true);
             LOGI("[DAB] mode ON: channel %s, centre %.3f MHz, rate %.0f — dspLoop should follow",
                  vibedab::kBandIII[idx].name, centre / 1e6, double(vibedab::DabService::kRateHz));
@@ -12679,6 +12688,7 @@ struct LocalSdrShim::Impl {
                     LOGI("[DAB] dspLoop is feeding the receiver: %zu samples, rtlCenter %.3f MHz",
                          buf.size(), rtlCenter.load() / 1e6); }
                 g_dab.setRfCentre(rtlCenter.load());
+                g_dab.setRfRate(sampleRate);
                 g_dab.feed(reinterpret_cast<const float*>(buf.data()), buf.size());
                 pumpDabAudio();
                 continue;
