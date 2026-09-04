@@ -88,8 +88,26 @@ public:
              *  ★ The TRACK path searches +/-64 samples around a PREDICTION and was written for
              *    exactly this. It needs only to be told what we consumed, which is what the old
              *    comment here ("immune to the buffer edges") was working around instead. */
-            iq_.erase(iq_.begin(), iq_.begin() + long(modeI().frameSamples));
-            rx_.syncConsumed(size_t(modeI().frameSamples));
+            rx_.resetSync();
+            /* ★★★ CONSUME THROUGH THE FRAME WE JUST DECODED, not a fixed amount off the front.
+             *  The null is found at `at`, anywhere in the search window — but this erased exactly
+             *  frameSamples from position 0 regardless, so the buffer stayed misaligned by `at`
+             *  for ever. push() then hit its own guard:
+             *      if (start + symLen * symbolsPerFrame > n) return false;
+             *  because a frame starting at `at` does not FIT in two frames' worth of buffer once
+             *  `at` exceeds one frame. It only got through on the occasional oversized buffer.
+             *  ★★★ MEASURED: 2.09 DAB frames decoded per second against a real-time rate of 10.42
+             *    — 20% — with the box 64% idle and the radio at 22% CPU, so nothing was starved
+             *    for time. Four of every five frames were being thrown away by an off-by-`at`
+             *    buffer, and the audio arrived at 11 packets/s instead of 50: the client ran dry
+             *    and concealed, which is Stuart's "random 1 second burst of errors" and why it
+             *    sounded like reception on a signal whose FIB CRC was 0.99.
+             *  ★ Aligning here also makes the next acquisition start ON the null, which is why
+             *    the depth reading stops flickering between two candidates. */
+            const long at = rx_.lastFrameStart();
+            const size_t drop = at >= 0 ? size_t(at) + size_t(modeI().frameSamples)
+                                        : size_t(modeI().frameSamples);
+            iq_.erase(iq_.begin(), iq_.begin() + long(drop < iq_.size() ? drop : iq_.size()));
 
             if (want_ && sid_ != want_ && rx_.ensemble().services.count(want_))
                 if (rx_.selectService(want_)) sid_ = want_;

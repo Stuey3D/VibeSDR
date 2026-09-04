@@ -61,6 +61,7 @@ public:
     /** Feed a buffer of at least one frame. Returns true when a frame was decoded. */
     bool push(const Cplx* iq, size_t n) {
         const long at = sync_.offer(iq, n);
+        lastAt_ = at;
         if (at < 0) { stats_.locked = sync_.locked(); return false; }
         stats_.locked      = true;
         stats_.nullDepthDb = 10.0f * std::log10(sync_.lastDepth() + 1e-9f);
@@ -195,6 +196,8 @@ public:
         return true;
     }
 
+    long lastAt_ = -1;
+
     /** ★ The FIC soft bits of the last frame — for diagnostics against a live signal, where the
      *  question "is the chain wrong before or after the Viterbi?" is otherwise unanswerable. */
     const std::vector<int8_t>& lastFicBits() const { return ficBits_; }
@@ -277,6 +280,9 @@ public:
      *  capture window by window rather than streaming — the tracker's prediction is relative to
      *  the buffer it was given, so a new window needs a fresh acquisition. */
     void resetSync() { sync_.reset(); }
+    /** Where the last push() found the null, or -1. The caller must consume THROUGH the frame it
+     *  decoded, not a fixed amount from the front — see DabService::feed. */
+    long lastFrameStart() const { return lastAt_; }
     /** Tell the sync that `n` samples were dropped from the front of the buffer. See consumed(). */
     void syncConsumed(size_t n) { sync_.consumed(n); }
 
