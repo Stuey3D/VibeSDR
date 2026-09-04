@@ -923,6 +923,12 @@ export class AudioPlayer {
     // decoded PCM lands in _onOpusData → _playPcm, same tail as the sync paths below.
     if (format === 3) { this._decodeOpus(buf, channels); return; }
 
+    /* ★★★ format 4 = DAB+ AAC, in ADTS. VibeServer links no AAC decoder — it de-interleaves the
+     *  super frame, corrects it with Reed-Solomon and reframes the access units, and the BROWSER's
+     *  own decoder does the rest, which it is already licensed for. Most of the UK's stations are
+     *  DAB+, and every one of them was silent before this. */
+    if (format === 4) { this._decodeAac(buf, channels, new DataView(buf).getUint32(2, true)); return; }
+
     let pcm: Int16Array;
     let ch: number;
     if (format === 0) {
@@ -1141,6 +1147,65 @@ export class AudioPlayer {
       }));
     } catch (e) { this._failOpus('enqueue', e); return; }
     this.opusTs += 20000;   // 20 ms in microseconds
+  }
+
+  /** ★★★ DAB+ ACCESS UNITS, HANDED TO THE PLATFORM. WebCodecs takes ADTS directly when no
+   *  `description` is supplied, so the AAC config travels in the bitstream where DAB put it.
+   *  ★ The rate we CONFIGURE with is the AAC CORE rate the ADTS header carries; under SBR the
+   *    decoder doubles it and reports the real thing on the AudioData, which is what _playPcm is
+   *    given. Configuring with the output rate is the 2x chipmunk — DAB has already caught us
+   *    with one of those, in the MP2 path, so it is spelled out here.
+   *  ★ 1024 samples per AU at the core rate is the AAC frame length, hence the timestamp step. */
+  private aacDec: AudioDecoder | null = null;
+  private aacRate = 0;
+  private aacCh = 0;
+  private aacTs = 0;
+  private aacBroken = false;
+
+  private _decodeAac(buf: ArrayBuffer, channels: number, coreRateHz: number) {
+    if (this.aacBroken || !coreRateHz) return;
+    if (typeof AudioDecoder === 'undefined') {
+      if (!this.aacBroken) {
+        this.aacBroken = true;
+        console.warn('[audio] DAB+ needs WebCodecs AAC and this browser has no AudioDecoder — silence');
+      }
+      return;
+    }
+    if (!this.aacDec || this.aacRate !== coreRateHz || this.aacCh !== channels) {
+      try { this.aacDec?.close(); } catch { /* already gone */ }
+      this.aacRate = coreRateHz; this.aacCh = channels; this.aacTs = 0;
+      this.aacDec = new AudioDecoder({
+        output: (ad) => this._onAacData(ad),
+        error:  (e)  => { console.warn('[audio] AAC decode failed:', e); this.aacBroken = true; },
+      });
+      try {
+        // mp4a.40.5 = HE-AAC. SBR and PS are signalled implicitly inside the bitstream, which is
+        // how DAB+ carries them, so no description is passed and ADTS is parsed as-is.
+        this.aacDec.configure({ codec: 'mp4a.40.5', sampleRate: coreRateHz, numberOfChannels: channels });
+      } catch (e) { console.warn('[audio] AAC configure failed:', e); this.aacBroken = true; return; }
+    }
+    try {
+      this.aacDec.decode(new EncodedAudioChunk({
+        type: 'key', timestamp: this.aacTs, data: buf.slice(6),
+      }));
+    } catch (e) { console.warn('[audio] AAC enqueue failed:', e); this.aacBroken = true; return; }
+    this.aacTs += Math.round(1024 * 1e6 / coreRateHz);
+  }
+
+  private _onAacData(ad: AudioData) {
+    const ch = ad.numberOfChannels, frames = ad.numberOfFrames;
+    const pcm = new Int16Array(frames * ch);
+    const plane = new Float32Array(frames);
+    for (let c = 0; c < ch; c++) {
+      ad.copyTo(plane, { planeIndex: c, format: 'f32-planar' });
+      for (let i = 0; i < frames; i++) {
+        let sm = Math.round(plane[i] * 32767);
+        sm = sm < -32768 ? -32768 : sm > 32767 ? 32767 : sm;
+        pcm[i * ch + c] = sm;
+      }
+    }
+    ad.close();
+    this._playPcm(pcm, ch);
   }
 
   private _onOpusData(ad: AudioData) {

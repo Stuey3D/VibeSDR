@@ -6498,7 +6498,46 @@ struct LocalSdrShim::Impl {
      *  decoded at all: its AAC is reframed and handed to the browser, which is what keeps this
      *  server free of any codec licence.
      */
+    /** ★★★ DAB+ LEAVES AS ADTS, NOT PCM. We never link an AAC decoder — the super frame is
+     *  de-interleaved and RS-corrected, the access units are reframed, and the BROWSER decodes
+     *  them with the codec it is already licensed for. That is the whole licence position behind
+     *  this design (vibe_dab_aac.h), and it is why most of the UK's stations were silent until
+     *  now: every non-MP2 service was skipped outright rather than carried.
+     *  ★ Format 4 on the existing audio frame header — [channels][format][rate LE32] — so it
+     *    travels the same socket as PCM and Opus and needs no second connection. The rate written
+     *    is the AAC CORE rate, which is what a decoder must be CONFIGURED with; under SBR it
+     *    doubles that itself. Writing the output rate here is the 2x chipmunk, and DAB has already
+     *    caught us with one of those. */
+    void pumpDabPlusAudio() {
+        std::vector<uint8_t> au;
+        while (g_dab.takeAdts(au)) {
+            const uint32_t sr = uint32_t(g_dab.aacCoreRateHz());
+            const uint8_t  ch = uint8_t(g_dab.aacChannels());
+            if (sr == 0 || au.empty()) continue;
+            std::vector<uint8_t> frame;
+            frame.reserve(6 + au.size());
+            frame.push_back(ch);
+            frame.push_back(4);                       // 4 = AAC in ADTS (DAB+)
+            frame.push_back(uint8_t(sr & 0xff));         frame.push_back(uint8_t((sr >> 8) & 0xff));
+            frame.push_back(uint8_t((sr >> 16) & 0xff)); frame.push_back(uint8_t((sr >> 24) & 0xff));
+            frame.insert(frame.end(), au.begin(), au.end());
+
+            std::vector<std::shared_ptr<net::Socket>> socks;
+            { std::lock_guard<std::mutex> lk(clientMtx);
+              for (auto& kv : clientDsp)
+                  if (kv.second->audio && kv.second->audio->isOpen()) socks.push_back(kv.second->audio);
+              if (audioClient && audioClient->isOpen()) socks.push_back(audioClient);
+              for (auto& a2 : audioExtra) if (a2 && a2->isOpen()) socks.push_back(a2); }
+            for (auto& sk : socks) {
+                sendWs(sk, 0x2, frame.data(), frame.size(), Out::Audio);
+                vsAudioBytes.fetch_add(frame.size(), std::memory_order_relaxed);
+            }
+        }
+    }
+
     void pumpDabAudio() {
+        // ★ DAB+ never produces PCM here — it is reframed and handed on. See pumpDabPlusAudio.
+        pumpDabPlusAudio();
         const size_t have = g_dab.pcmAvailable();
         if (have >= 480) {                                  // 10 ms at 48 kHz
             std::vector<float> f(have * 2);

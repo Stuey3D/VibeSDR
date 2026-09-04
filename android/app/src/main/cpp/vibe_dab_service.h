@@ -20,6 +20,7 @@
 
 #include "vibe_dab_channels.h"
 #include "vibe_dab_mp2.h"
+#include "vibe_dab_aac.h"
 #include "vibe_dab_receiver.h"
 
 namespace vibedab {
@@ -89,25 +90,16 @@ public:
              *    exactly this. It needs only to be told what we consumed, which is what the old
              *    comment here ("immune to the buffer edges") was working around instead. */
             rx_.resetSync();
-            /* ★★★ CONSUME THROUGH THE FRAME WE JUST DECODED, not a fixed amount off the front.
-             *  The null is found at `at`, anywhere in the search window — but this erased exactly
-             *  frameSamples from position 0 regardless, so the buffer stayed misaligned by `at`
-             *  for ever. push() then hit its own guard:
-             *      if (start + symLen * symbolsPerFrame > n) return false;
-             *  because a frame starting at `at` does not FIT in two frames' worth of buffer once
-             *  `at` exceeds one frame. It only got through on the occasional oversized buffer.
-             *  ★★★ MEASURED: 2.09 DAB frames decoded per second against a real-time rate of 10.42
-             *    — 20% — with the box 64% idle and the radio at 22% CPU, so nothing was starved
-             *    for time. Four of every five frames were being thrown away by an off-by-`at`
-             *    buffer, and the audio arrived at 11 packets/s instead of 50: the client ran dry
-             *    and concealed, which is Stuart's "random 1 second burst of errors" and why it
-             *    sounded like reception on a signal whose FIB CRC was 0.99.
-             *  ★ Aligning here also makes the next acquisition start ON the null, which is why
-             *    the depth reading stops flickering between two candidates. */
-            const long at = rx_.lastFrameStart();
-            const size_t drop = at >= 0 ? size_t(at) + size_t(modeI().frameSamples)
-                                        : size_t(modeI().frameSamples);
-            iq_.erase(iq_.begin(), iq_.begin() + long(drop < iq_.size() ? drop : iq_.size()));
+            /* ★★★ REVERTED (4.1.89): consuming `at + frameSamples` MEASURED WORSE on air.
+             *  It raised the decoded frame rate from 20% to 50% of real time and then wrecked the
+             *  thing that matters — Stuart's signal panel on 11A read frequency offset -24152 Hz,
+             *  carrier shift -24 and phase reference 0.495, with FIB pass at 1.7% and most of the
+             *  station list "(unnamed)". Before it, that same receiver sat at -126 Hz, shift 0 and
+             *  FIB 0.99. A frame rate is not worth a receiver that cannot read the ensemble.
+             *  ★ The 20% shortfall is REAL and still unexplained — see the frame-rate measurement
+             *    in the 4.1.88 message. It is not this. Measure where the samples go before
+             *    changing this line again. */
+            iq_.erase(iq_.begin(), iq_.begin() + long(modeI().frameSamples));
 
             if (want_ && sid_ != want_ && rx_.ensemble().services.count(want_))
                 if (rx_.selectService(want_)) sid_ = want_;
@@ -131,6 +123,21 @@ public:
         return n;
     }
     size_t pcmAvailable() { std::lock_guard<std::mutex> lk(m_); return pcm_.size() / 2; }
+
+    /** True while the selected service is DAB+ — its audio leaves as ADTS, not PCM. */
+    bool dabPlus() { std::lock_guard<std::mutex> lk(m_); return rx_.selectedType() != 0; }
+    /** Take one reframed access unit, or false when none is waiting. */
+    bool takeAdts(std::vector<uint8_t>& out) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (adts_.empty()) return false;
+        out = std::move(adts_.front());
+        adts_.pop_front();
+        return true;
+    }
+    /** The rate the ADTS header declares — the AAC CORE rate. Under SBR the decoder doubles it
+     *  itself, so this is what a decoder must be CONFIGURED with, not what it will output. */
+    int aacCoreRateHz() { std::lock_guard<std::mutex> lk(m_); return afmt_.coreRateHz; }
+    int aacChannels()   { std::lock_guard<std::mutex> lk(m_); return aacOutCh_; }
 
     /** The station list and the signal block, as the web client wants them. */
     std::string json() {
@@ -183,7 +190,7 @@ private:
             /* ★★ MP2 WE DECODE OURSELVES — the browser refuses Layer II, measured 2026-09-04, and
              *  MP2's patents have expired so it is the one codec we may implement. DAB+ is handed
              *  onward as ADTS instead; that path links no decoder here. */
-            if (rx_.selectedType() != 0) continue;
+            if (rx_.selectedType() != 0) { pumpDabPlus(f); continue; }
             std::vector<float> out;
             if (mp2_.decode(f.data(), f.size(), out) <= 0) continue;
             /* ★★★ THE CHIPMUNKS. Mp2Decoder writes INTERLEAVED at the frame's OWN channel count
@@ -229,6 +236,42 @@ private:
         while (pcm_.size() > size_t(kAudioRateHz) * 2 * 2) pcm_.pop_front();   // ~2 s of slack
     }
 
+    /** One DAB+ logical frame: hold five, test the firecode, reframe the AUs it contains. */
+    void pumpDabPlus(const std::vector<uint8_t>& frame) {
+        if (frame.empty()) return;
+        sf_.push_back(frame);
+        if (sf_.size() > 5) sf_.pop_front();
+        if (sf_.size() < 5) return;
+
+        /* ★ subchannel_index is the sub-channel size in kbit/s / 8, and clause 6.2 lays the wire
+         *  out as index rows by 120 columns — so five logical frames of 24*index bytes each. The
+         *  index is derived from the frame length rather than the advertised bitrate: the length
+         *  is what the de-interleaver actually has to match, and deriving it cannot disagree. */
+        const size_t per = sf_.front().size();
+        for (const auto& x : sf_) if (x.size() != per) { sf_.pop_front(); return; }
+        const int index = int(per / 24);
+        if (index < 1 || index > 24) { sf_.pop_front(); return; }
+
+        std::vector<uint8_t> wire;
+        wire.reserve(per * 5);
+        for (const auto& x : sf_) wire.insert(wire.end(), x.begin(), x.end());
+
+        SuperFrame s = decodeSuperFrame(wire.data(), wire.size(), index);
+        // ★ SLIDE BY ONE on failure. Dropping all five would re-test the same phase for ever.
+        if (!s.valid || !s.firecodeOk) { sf_.pop_front(); return; }
+        sf_.clear();
+
+        afmt_       = s.fmt;
+        aacCoreCh_  = s.stereo ? 2 : 1;
+        aacOutCh_   = (s.stereo || s.ps) ? 2 : 1;
+        for (const auto& au : s.aus) {
+            std::vector<uint8_t> pkt = toAdts(au.data(), au.size(), s.fmt, aacCoreCh_);
+            if (!pkt.empty()) adts_.push_back(std::move(pkt));
+        }
+        // ★ Bounded like the PCM: audio minutes late is worse than a gap.
+        while (adts_.size() > 250) adts_.pop_front();
+    }
+
     static std::string esc(const std::string& s) {
         std::string o;
         for (char c : s) {
@@ -237,6 +280,20 @@ private:
         }
         return o;
     }
+
+    /* ── DAB+ ──────────────────────────────────────────────────────────────────────────────
+     *  We never decode AAC. The super frame is de-interleaved and Reed-Solomon corrected here,
+     *  the access units are reframed as ADTS, and the BROWSER's own decoder does the rest — which
+     *  is the licence position this whole design was chosen for (see vibe_dab_aac.h).
+     *  ★ Five 24 ms logical frames make one 120 ms super frame, and nothing tells us which of the
+     *    five starts it. The firecode does: assemble five, test it, and on failure slide by ONE
+     *    frame rather than dropping all five, or a stream that starts mid-super-frame never
+     *    aligns at all. */
+    std::deque<std::vector<uint8_t>> sf_;      ///< the five-frame window
+    std::deque<std::vector<uint8_t>> adts_;    ///< reframed AUs, ready for the wire
+    AudioFormat afmt_{};
+    int  aacCoreCh_ = 2;                       ///< what the ADTS header declares
+    int  aacOutCh_  = 2;                       ///< what the decoder will produce (PS -> 2)
 
     mutable std::mutex m_;
     DabReceiver rx_{kRateHz};
