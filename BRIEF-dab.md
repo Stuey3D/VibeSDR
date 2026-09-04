@@ -362,6 +362,7 @@ with a matching `vibeserver/test-dab-*.cpp`.
 | 11 | **complete FIC decode: soft bits → ensemble + station list** | ✅ tested |
 | 12 | MSC: CIF geometry, 16-deep time deinterleaving, EEP profiles | ✅ tested |
 | 13 | **MPEG-1/2 Layer II decoder — verified against ffmpeg to 3.7e-07** | ✅ tested |
+| 14 | DAB+: RS(120,110), virtual interleaver, super frames, ADTS reframing | ✅ tested |
 
 ★★★ **STAGE 11 IS THE MILESTONE, AND IT PASSES.** `test-dab-ficdec` builds a small multiplex,
 transmits it through the real encode/puncture/multiplex chain, corrupts 5% of the symbols, and
@@ -374,7 +375,8 @@ PHASE, because decoding the wrong slot must yield nothing, and the test asserts 
 - **Wiring the FIC to the OFDM front end** — feeding the three FIC symbols' soft bits into
   ficDecodeFrame. The decode itself is done; this is plumbing.
 - **UEP profiles** (table 15) for the older services — EEP is done, UEP extracts the same way.
-- **DAB+**: Reed-Solomon (120,110) over GF(256), firecode correction, ADTS reframing.
+- **Firecode CORRECTION** on the DAB+ header (detection is in; correction is the stated goal that
+  DAB-Radio's TODO says it lacks).
 - **Integration** into the shim (a DAB source path, per-service sample rates) and the **web client
   UI** (mux tuning, station list, signal panel, the pinned toggle).
 - **Deployment** to the Pi.
