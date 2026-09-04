@@ -575,6 +575,21 @@ static vibedab::DabService g_dab;
 static std::atomic<uint32_t> g_vsHwMaxRate{0};
 static std::atomic<bool>   g_dabMode{false};
 static std::atomic<int>    g_dabChannel{-1};
+/* ★★★ DAB TAKES THE DIAL OFF THE LOCK FOR AS LONG AS IT OWNS THE RADIO.
+ *  A locked centre is a SHARED-RECEIVER promise — nobody may retune — and it is enforced in
+ *  ~20 places, one of which is the source rebuild (see the g_vsLockedCentre block in the open
+ *  path): it re-stores rtlCenter and re-tunes to the locked frequency. setSampleRate rebuilds
+ *  the source, so entering DAB tuned the dongle to the multiplex and then the rebuild put it
+ *  straight back. Measured on the live Pi at 4.1.68: DAB reported its block while rfCentreHz
+ *  read 96.600 MHz — the FM station the V4 was locked to. The rate had changed; the frequency
+ *  never moved, so the receiver saw FM at 2.048 MS/s and of course never locked.
+ *  ★ Guarding each of the twenty readers would be twenty chances to miss one — this project's
+ *    most expensive shape. Suspend the lock ITSELF, in one place, and restore it on the way out.
+ *  ★ DAB is exclusive by nature: an ensemble IS the capture, so there is no shared-dial meaning
+ *    to preserve while it runs. */
+static std::atomic<double> g_dabSavedCentre{0.0};
+static std::atomic<double> g_dabSavedRate{0.0};
+static std::atomic<bool>   g_dabLockHeld{false};
 
 /** May this receiver be offered DAB? Reads the EFFECTIVE tunable set and the rate it would run at,
  *  never the driver name — so a locked-down V4 is refused and a future wideband radio inherits the
@@ -7900,13 +7915,41 @@ struct LocalSdrShim::Impl {
             const bool on = onV != 0;
             if (!on) {
                 g_dabMode.store(false);
+                /* ★★★ GIVE THE SHARED RECEIVER BACK EXACTLY AS WE FOUND IT. Restoring the lock
+                 *  is not enough on its own: the radio is sitting on a multiplex at 2.048 MS/s,
+                 *  and the lock is only re-applied by a rebuild that may not come. Put the rate
+                 *  and the centre back by hand, then restore the promise. */
+                if (g_dabLockHeld.exchange(false)) {
+                    const double c = g_dabSavedCentre.load(), r = g_dabSavedRate.load();
+                    g_vsLockedCentre.store(c);
+                    g_vsLockedRate.store(r);
+                    if (r > 0.0) LocalSdrShim::instance().setSampleRate(r);
+                    if (c > 0.0) { rtlCenter.store(c); tuneHw(c); audioFreq.store(c); viewCenter.store(c); }
+                    LOGI("[DAB] mode OFF: lock restored (centre %.3f MHz, rate %.0f)", c / 1e6, r);
+                }
                 sendText(sock, "{\"type\":\"dab_off\"}");
                 return;
             }
-            double chV = -1; jsonNum(msg, "channel", chV);
-            int idx = int(chV);
+            /* ★★ THE CHANNEL MAY ARRIVE AS AN INDEX OR AS ITS NAME. The web client sends the
+             *  index; anything hand-written sends "12B", and jsonNum parses that as 0 — which is
+             *  a VALID index (5A), so a wrong request became a silent tune to the bottom of Band
+             *  III rather than an error. Read the name first, and treat an unusable value as a
+             *  failure instead of falling through to a channel nobody asked for. */
+            int idx = -1;
+            const std::string chName = jsonStr(msg, "channel");
+            if (!chName.empty()) {
+                if (const vibedab::Channel* c = vibedab::channelByName(chName.c_str()))
+                    idx = int(c - &vibedab::kBandIII[0]);
+            } else {
+                double chV = -1;
+                if (jsonNum(msg, "channel", chV)) idx = int(chV);
+            }
             if (idx < 0) idx = g_dabChannel.load() >= 0 ? g_dabChannel.load()
                                                         : vibedab::nearestChannel(225648000);  // 12B
+            if (idx < 0 || size_t(idx) >= vibedab::kBandIIICount) {
+                sendText(sock, "{\"type\":\"dab\",\"error\":\"unknown channel\"}");
+                return;
+            }
             g_dabChannel.store(idx);
             g_dab.setChannel(idx);
             /* ★★★ THE RADIO MUST BE AT 2.048 MS/s AND ON THE BLOCK CENTRE. Everything below
@@ -7926,6 +7969,14 @@ struct LocalSdrShim::Impl {
              *  stopped, nothing decoded.
              *  ★ tuneHw() afterwards as well, for the case where the rate did not actually change
              *    and therefore nothing was rebuilt. Both paths end up on the multiplex. */
+            /* ★★★ TAKE THE LOCK OFF FIRST — see g_dabLockHeld. Anything below that moves the
+             *  radio is undone by the rebuild while the lock still stands. */
+            if (!g_dabLockHeld.exchange(true)) {
+                g_dabSavedCentre.store(g_vsLockedCentre.load());
+                g_dabSavedRate.store(g_vsLockedRate.load());
+            }
+            g_vsLockedCentre.store(0.0);
+            g_vsLockedRate.store(0.0);
             const double centre = double(g_dab.centreHz());
             rtlCenter.store(centre);
             audioFreq.store(centre);          // the readout follows the mux
