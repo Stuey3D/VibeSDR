@@ -527,6 +527,21 @@ Three of the four faults were in the plumbing between the shim and the demodulat
 ★ The wire key is **`on`**, not `enable`, and its default is now **off**: DAB suspends the
 shared-dial lock and takes the whole capture, so a malformed message must never mean "on".
 
+### A fifth fault, found only by cycling it (4.1.73 → 4.1.74)
+
+The capability gate was the first statement in the handler, so a receiver that answered
+"no" at that moment could not be taken OUT of DAB: dab_error, early return, `g_dabMode`
+still set. The V4 entered DAB, refused to leave and served no spectrum to anybody until
+the service was restarted.
+
+It was intermittent because the answer is not constant — DAB moves the sample rate and
+suspends the locked rate the gate reads, so by the time the off message arrives the gate
+is being asked about a radio DAB has already changed. **Getting in is a capability
+question; getting out never is.** The off branch now runs first and unconditionally.
+
+★ Found by running the cycle three times rather than once. The first end-to-end run passed
+  cleanly, and a single pass would have shipped this.
+
 ### Still open
 - Firecode correction on the DAB+ header (detection is in, correction is not).
 - `label` reports the ensemble after a service select; the client shows the service label
