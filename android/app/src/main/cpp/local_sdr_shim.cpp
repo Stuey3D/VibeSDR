@@ -564,6 +564,15 @@ static std::atomic<double> g_vsLockedRate{0.0};
  *  ★ Gated at the UI by radioCanDab() on the EFFECTIVE limits — Stuart, 2026-09-04: a restricted
  *    V4 "shouldnt even present itself". */
 static vibedab::DabService g_dab;
+/** ★★★ THE RADIO'S REAL SAMPLE-RATE CEILING, in Hz. 0 = not known yet.
+ *
+ *  The DAB gate first assumed every receiver could reach 2.048 MS/s, and the Pi promptly reported
+ *  `dab: true` for the Airspy HF+ — which tops out near 912 kHz and can see about a third of an
+ *  ensemble. That is exactly the fault AGENTS.md names: a control offered where every use is a
+ *  no-op, and the user concludes the FEATURE is broken rather than the radio unsuitable.
+ *  ★ Set from supportedRates(), which is per-driver and already asks the HF+ itself rather than
+ *    hard-coding it — so a Dual Port and a Discovery each get their own honest answer. */
+static std::atomic<uint32_t> g_vsHwMaxRate{0};
 static std::atomic<bool>   g_dabMode{false};
 static std::atomic<int>    g_dabChannel{-1};
 
@@ -4534,7 +4543,25 @@ struct LocalSdrShim::Impl {
         return ok;
     }
 
+    /** ★ Publishes the ceiling as a side effect — see g_vsHwMaxRate. Done here because this is
+     *  the one place that already knows the per-driver truth, and a second table would be the
+     *  "one rule, two readers" fault this project keeps paying for. */
     std::string supportedRates() {
+        const std::string r = supportedRatesImpl();
+        uint32_t mx = 0;
+        size_t i = 0;
+        while (i < r.size()) {
+            size_t j = r.find(',', i);
+            if (j == std::string::npos) j = r.size();
+            const unsigned long v = strtoul(r.substr(i, j - i).c_str(), nullptr, 10);
+            if (v > mx) mx = uint32_t(v);
+            i = j + 1;
+        }
+        if (mx) g_vsHwMaxRate.store(mx, std::memory_order_relaxed);
+        return r;
+    }
+
+    std::string supportedRatesImpl() {
         // ★ Nothing to offer when this process holds no radio. Empty is what the setup page wants:
         //   it then falls back to the DRIVER table for the radio whose tab is open, which is the
         //   right answer per radio rather than one process's guess for all of them.
@@ -15693,10 +15720,15 @@ static bool vsDabCapable() {
     std::vector<vibedab::Range> r;
     r.reserve(t.size());
     for (const auto& x : t) r.push_back({ uint32_t(x.lo), uint32_t(x.hi) });
-    /* ★ The rate we would USE, not the widest the hardware could manage: a receiver whose owner
-     *  has locked it below 2.048 MS/s cannot carry an ensemble however capable the chip is. */
-    const uint32_t cap = uint32_t(g_vsLockedRate.load() > 0 ? g_vsLockedRate.load()
-                                                            : double(vibedab::DabService::kRateHz));
+    /* ★★ THE RATE THIS RECEIVER WILL ACTUALLY RUN AT — the lower of what the HARDWARE can do and
+     *  what its owner has locked it to. Both halves matter and each has a real example on the
+     *  Pi: the Airspy HF+ cannot exceed ~912 kHz whatever the config says, and a V4 locked to
+     *  1.2 MS/s cannot carry an ensemble however capable the chip is. */
+    const uint32_t hw     = g_vsHwMaxRate.load(std::memory_order_relaxed);
+    const uint32_t locked = uint32_t(g_vsLockedRate.load());
+    if (hw == 0) return false;                       // not known yet — do not promise
+    uint32_t cap = hw;
+    if (locked > 0 && locked < cap) cap = locked;
     return vibedab::radioCanDab(r.data(), r.size(), cap);
 }
 

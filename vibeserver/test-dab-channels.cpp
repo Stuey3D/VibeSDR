@@ -96,6 +96,24 @@ int main() {
     CHECK(radioCanDab(gap2, 2, 2400000) == false, "allowed ranges either side of Band III do not");
     CHECK(radioCanDab(nullptr, 0, 2400000) == false, "no allowed ranges at all = no DAB");
 
+    /* ★★★ THE PI'S OWN THREE RADIOS, AS THE SERVER ACTUALLY REPORTS THEM. The first version of the
+     *  gate assumed every receiver could reach 2.048 MS/s and the live Pi answered `dab: true` for
+     *  the Airspy HF+ — which tops out near 912 kHz and can see about a third of an ensemble. The
+     *  range test alone does NOT exclude it, because the HF+ Discovery reaches 60-260 MHz and so
+     *  covers Band III; only the RATE does. */
+    {
+        const Range hfPlus[] = { {500, 31000000}, {60000000, 260000000} };
+        CHECK(radioCanDab(hfPlus, 2, 912000) == false,
+              "★ Airspy HF+ REACHES Band III but caps at 912 kHz — refused on rate alone");
+        CHECK(radioCanDab(hfPlus, 2, 2400000) == true,
+              "…and the same ranges at a usable rate would qualify, so it is the rate that decides");
+        const Range v4[] = { {500000, 1766000000} };
+        CHECK(radioCanDab(v4, 1, 2400000) == true,  "RTL-SDR V4 unrestricted: offered");
+        CHECK(radioCanDab(v4, 1, 1200000) == false, "V4 held below 2.048 MS/s: not offered");
+        const Range rsp[] = { {2800000, 10800000} };
+        CHECK(radioCanDab(rsp, 1, 8000000) == false, "RSP1B locked to 2.8-10.8 MHz: not offered");
+    }
+
     // ── The readout Stuart specified ─────────────────────────────────────────
     CHECK(displayLabel(i11d) == "222.064 (11D)", "readout is 'frequency (channel)'");
     CHECK(displayLabel(-1).empty(), "an invalid index yields no label, not a crash");
