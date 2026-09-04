@@ -7142,6 +7142,8 @@ struct LocalSdrShim::Impl {
 
     // retune the demod (and RTL centre if the offset would fall outside span)
     void retune(double freq) {
+        // ★ There is no VFO in DAB — the ensemble IS the capture. See flushPendingDongle.
+        if (g_dabMode.load(std::memory_order_relaxed)) return;
         // ★★ ONE LINE PER TUNE, KEPT. Tuning is a deliberate act a few times a minute, not a
         //    stream — this costs nothing and answers the question that has now been asked twice:
         //    did the server receive the tune and act on it, or not receive it at all? "It only
@@ -8081,8 +8083,15 @@ struct LocalSdrShim::Impl {
              *    so the right starting point is the bottom for everyone — a distant listener's AGC
              *    simply climbs, which is the same thing it does on a cold start. Nothing is limited
              *    permanently (MEMORY.md); the gain is RESTORED on the way out. */
-            LocalSdrShim::instance().setGain(-1);
-            agcForget("DAB: an ensemble is not the carrier we came off — reconverge from the bottom");
+            /* ★ ONLY IF THE AGC WAS ALREADY IN CHARGE. Seizing the gain from an owner who set
+             *  it by hand is taking away the very control they chose, and it left Stuart unable
+             *  to set it at all: every manual value he picked was overwritten the next time he
+             *  entered DAB. A manual gain is an explicit intent — DAB re-points the AGC, it does
+             *  not overrule a person. */
+            if (g_gainTarget.load(std::memory_order_relaxed) < 0) {
+                LocalSdrShim::instance().setGain(-1);
+                agcForget("DAB: an ensemble is not the carrier we came off — reconverge from the bottom");
+            }
             g_vsLockedCentre.store(0.0);
             g_vsLockedRate.store(0.0);
             /* ★★★ OFFSET TUNING PUTS THE DONGLE 15 kHz ABOVE WHERE YOU ASKED FOR.
@@ -12352,6 +12361,17 @@ struct LocalSdrShim::Impl {
      *  DSP loop, which already holds modeMtx — the same lock the pan handler takes, so there is
      *  exactly one hardware tune in flight at a time. Cheap: a comparison per buffer. */
     void flushPendingDongle() {
+        /* ★★★ DAB OWNS THE DIAL. A pan or a zoom parks a requested centre in pendingDongle and
+         *  this applies it on the next block — which, in DAB, RETUNES THE DONGLE OFF THE
+         *  MULTIPLEX. The receiver then loses lock, re-acquires, and the listener hears a burst
+         *  of errors in an otherwise clean stream: "it stays clean for a while then has a quick
+         *  burst then cleans up again" (Stuart, 2026-09-04).
+         *  ★ It only started once the spectrum came back in 4.1.78. Before that the waterfall was
+         *    dead, so nothing generated pans; restoring the picture restored the interference with
+         *    it, which is why this looked like an aerial problem rather than a regression.
+         *  ★ Dropped, not deferred: there is no VFO in DAB and no later moment when moving the
+         *    hardware off the ensemble becomes right. */
+        if (g_dabMode.load(std::memory_order_relaxed)) { pendingDongle = 0.0; return; }
         if (pendingDongle <= 0.0) return;
         const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
