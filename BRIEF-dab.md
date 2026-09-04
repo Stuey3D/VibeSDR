@@ -342,6 +342,38 @@ receiver you have left.
    and bouncing them back to the list on every selection would make it unusable for the one job it
    is best at.
 
+## ★★★ AUDIO OFF AIR — 2026-09-04, 07:45
+
+**BBC Radio 2, 3 and 4 decoded to listenable audio from the Pi's RTL-SDR V4.** Stuart, listening
+to the WAVs: *"audio sounds good"*. The break-up in them is the capture (the dongle was run at a
+fixed 30 dB and overloaded) and appears **at the same instant on all three services**, which is
+exactly what a reception fault looks like and what a decoding fault does not.
+
+| service | rate | protection | codec |
+|---|---|---|---|
+| BBC Radio 2 | 112 kbit/s | UEP L3 | Layer II |
+| BBC Radio 3 | **160 kbit/s** | UEP L3 | Layer II |
+| BBC Radio 4 | 112 kbit/s | UEP L3 | Layer II |
+
+★ Radio 3 at 160 while the others are 112 is the BBC's real allocation, read off the air — a
+  reality check that no synthetic test could have given.
+
+### Two faults found by real audio that every synthetic test had passed
+1. **UEP, not EEP.** Every BBC Layer II service uses the SHORT FORM of FIG 0/1 — a 6-bit table
+   index, no explicit size — so `sizeCu` arrives as 0 and everything comes from table 8. A guard
+   rejecting `sizeCu <= 0` silently refused every one of them while the station list looked
+   perfect. Tables 8 and 15 are now extracted and all 64 profiles verified: coded bits == capacity.
+2. **JOINT STEREO.** ★★★ The decoder matched ffmpeg to 3.7e-07 and was demonstrably correct — on a
+   file I had encoded myself, which happened to be plain stereo. The BBC transmits mode 1, where
+   sub-bands above the bound share ONE allocation and ONE set of samples between the channels.
+   Reading two desynchronises the bit reader and the output is full-scale noise, with perfectly
+   valid frame headers throughout. **A test built from convenient input agrees with the bug.**
+   Four real BBC frames are now embedded in `test-dab-mp2` so it cannot come back.
+
+★ Diagnosis: dumping our extracted logical frames and letting **ffmpeg** decode them separated
+  "the bits are wrong" from "our decoder is wrong" in one step — ffmpeg got crest 7.2 from the same
+  bytes we turned into noise, which pointed straight at the codec rather than the demodulator.
+
 ## ★★★ DECODED OFF AIR — 2026-09-04, 07:15
 
 **Real BBC National DAB, 12B (225.648 MHz), RTL-SDR V4 on the Pi, 2.048 MSPS.**
@@ -403,6 +435,10 @@ with a matching `vibeserver/test-dab-*.cpp`.
 | 13 | **MPEG-1/2 Layer II decoder — verified against ffmpeg to 3.7e-07** | ✅ tested |
 | 14 | DAB+: RS(120,110), virtual interleaver, super frames, ADTS reframing | ✅ tested |
 | 15 | **DabReceiver — the whole chain, IQ in, ensemble out** | ✅ tested |
+| 16 | radix-2 FFT (was a deliberate O(N²) DFT while unproven) | ✅ |
+| 17 | MSC per-service audio: CU extraction → deinterleave → FEC → frames | ✅ **off air** |
+| 18 | UEP tables 8 + 15, all 64 profiles verified | ✅ tested |
+| 19 | **joint stereo** — the fault only real broadcast exposed | ✅ tested |
 
 ★★★ **STAGE 11 IS THE MILESTONE, AND IT PASSES.** `test-dab-ficdec` builds a small multiplex,
 transmits it through the real encode/puncture/multiplex chain, corrupts 5% of the symbols, and

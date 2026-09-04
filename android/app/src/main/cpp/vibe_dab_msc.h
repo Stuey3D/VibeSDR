@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "vibe_dab_punct.h"
+#include "vibe_dab_uep.h"
 
 namespace vibedab {
 
@@ -130,6 +131,22 @@ inline size_t eepDepuncture(const int8_t* rx, size_t nRx, const EepProfile& p,
     };
     blocks(p.L1, p.PI1);
     blocks(p.L2, p.PI2);
+    for (int i = 0; i < 24 && w < outCap; ++i)
+        out[w++] = tailPunctured(i) ? int8_t(0) : (r < nRx ? rx[r++] : int8_t(0));
+    return w;
+}
+
+/** Depuncture a UEP logical frame onto the mother code — four block groups, then the tail.
+ *  ★ Padding bits are transmitted but carry nothing; they are simply not consumed. */
+inline size_t uepDepuncture(const int8_t* rx, size_t nRx, const UepProfile& p,
+                            int8_t* out, size_t outCap) {
+    if (!p.valid || !rx || !out) return 0;
+    size_t r = 0, w = 0;
+    for (int g = 0; g < 4; ++g)
+        for (int blk = 0; blk < p.L[g] && w + 128 <= outCap; ++blk)
+            for (int sub = 0; sub < 4; ++sub)
+                for (int i = 0; i < 32; ++i)
+                    out[w++] = punctured(p.PI[g], i) ? int8_t(0) : (r < nRx ? rx[r++] : int8_t(0));
     for (int i = 0; i < 24 && w < outCap; ++i)
         out[w++] = tailPunctured(i) ? int8_t(0) : (r < nRx ? rx[r++] : int8_t(0));
     return w;

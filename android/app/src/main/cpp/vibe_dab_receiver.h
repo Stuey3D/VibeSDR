@@ -209,33 +209,56 @@ public:
             if (c.subChId >= 0 && (pick == nullptr || c.primary)) pick = &c;
         if (!pick) return false;
         auto sc = ensemble_.subChannels.find(pick->subChId);
-        if (sc == ensemble_.subChannels.end() || sc->second.sizeCu <= 0) return false;
+        /* ★ NOT `sizeCu <= 0`. A short-form (UEP) sub-channel legitimately reports size 0 — its
+         *  capacity comes from table 8, not from the bitstream — so that guard silently rejected
+         *  every BBC Layer II service while the station list looked perfect. */
+        if (sc == ensemble_.subChannels.end()) return false;
+        if (sc->second.eep && sc->second.sizeCu <= 0) return false;
         sel_      = sc->second;
         selType_  = pick->scType;
         selSid_   = sid;
         /* ★★ A sub-channel's CU size fixes its bit rate: 1 CU = 64 bits per 24 ms = 8 kbit/s at
          *  rate 1/2 … but the honest derivation is through the PROTECTION PROFILE, because the
          *  coded size is sizeCu x 64 and the profile says how much of that is data. */
-        const int codedBits = sel_.sizeCu * kCuBits;
-        prof_ = {};
-        for (int n = 1; n <= 24 && !prof_.valid; ++n) {
-            const EepProfile p = eepProfile(sel_.protLevel + 1, false, n);
-            if (p.valid && eepCodedBits(p) == codedBits) { prof_ = p; dataBits_ = n * 8 * 24; }
-        }
-        if (!prof_.valid)
+        prof_ = {}; uprof_ = {}; dataBits_ = 0;
+        int codedBits = 0;
+        if (!sel_.eep) {
+            /* ★★★ UEP — WHICH IS WHAT THE BBC ACTUALLY USES. The short form of FIG 0/1 carries a
+             *  6-bit TABLE INDEX rather than a size, so sizeCu arrives as 0 and everything must
+             *  come from table 8: the capacity, the protection level and the bit rate. Reading
+             *  the real 12B multiplex, every Layer II service is short-form — so without this the
+             *  station list decodes perfectly and not one service can be played. */
+            if (sel_.protLevel < 0 || sel_.protLevel > 63) return false;
+            const UepIndex& ix = kUepIndex[sel_.protLevel];
+            uprof_ = uepProfile(ix.bitrateKbps, ix.protLevel);
+            if (!uprof_.valid) return false;
+            sel_.sizeCu = ix.sizeCu;
+            codedBits   = ix.sizeCu * kCuBits;
+            dataBits_   = ix.bitrateKbps * 24;          // kbit/s x 24 ms
+            bitrate_    = ix.bitrateKbps;
+        } else {
+            codedBits = sel_.sizeCu * kCuBits;
+            for (int n = 1; n <= 24 && !prof_.valid; ++n) {
+                const EepProfile p = eepProfile(sel_.protLevel + 1, false, n);
+                if (p.valid && eepCodedBits(p) == codedBits) { prof_ = p; dataBits_ = n * 8 * 24; bitrate_ = n * 8; }
+            }
             for (int n = 1; n <= 24 && !prof_.valid; ++n) {
                 const EepProfile p = eepProfile(sel_.protLevel + 1, true, n);
-                if (p.valid && eepCodedBits(p) == codedBits) { prof_ = p; dataBits_ = n * 32 * 24; }
+                if (p.valid && eepCodedBits(p) == codedBits) { prof_ = p; dataBits_ = n * 32 * 24; bitrate_ = n * 32; }
             }
+            if (!prof_.valid) return false;
+        }
         deint_ = std::make_unique<TimeDeinterleaver>(size_t(codedBits));
         audio_.clear();
-        return prof_.valid;
+        return prof_.valid || uprof_.valid;
     }
 
     /** Logical frames of decoded audio bytes — MP2 frames, or DAB+ super frame fifths. */
     const std::vector<std::vector<uint8_t>>& audioFrames() const { return audio_; }
     int  selectedType() const { return selType_; }      ///< 0 = MP2, 63 = DAB+
     const EepProfile& profile() const { return prof_; }
+    const UepProfile& uepProf() const { return uprof_; }
+    int  serviceBitrate() const { return bitrate_; }
 
     const Ensemble& ensemble() const { return ensemble_; }
     const DabStats& stats()    const { return stats_; }
@@ -263,7 +286,7 @@ private:
 
     /** One CIF: pull our sub-channel's capacity units out, deinterleave, decode. */
     void pumpService(const int8_t* cif) {
-        if (!prof_.valid || !deint_) return;
+        if ((!prof_.valid && !uprof_.valid) || !deint_) return;
         const size_t coded = size_t(sel_.sizeCu) * size_t(kCuBits);
         const int8_t* start = cif + size_t(sel_.startCu) * size_t(kCuBits);
         const std::vector<int8_t>& di = deint_->push(start);
@@ -272,7 +295,8 @@ private:
         if (!deint_->ready()) return;
 
         std::vector<int8_t> mother(size_t(dataBits_ + 6) * 4, 0);
-        eepDepuncture(di.data(), coded, prof_, mother.data(), mother.size());
+        if (uprof_.valid) uepDepuncture(di.data(), coded, uprof_, mother.data(), mother.size());
+        else              eepDepuncture(di.data(), coded, prof_,  mother.data(), mother.size());
         std::vector<uint8_t> bits = viterbi_.decode(mother.data(), size_t(dataBits_));
         EnergyDispersal ed; ed.apply(bits.data(), bits.size());
 
@@ -301,6 +325,8 @@ private:
     std::vector<int8_t> ficBits_;
     SubChannel sel_{};
     EepProfile prof_{};
+    UepProfile uprof_{};
+    int bitrate_ = 0;
     int selType_ = -1, dataBits_ = 0;
     uint32_t selSid_ = 0;
     std::unique_ptr<TimeDeinterleaver> deint_;

@@ -12,6 +12,7 @@
 //    and, more usefully, makes "the middle code is silence" a property the code cannot get wrong.
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -79,6 +80,8 @@ struct Mp2Info {
     int channels     = 0;
     int frameBytes   = 0;
     bool lsf         = false;   ///< MPEG-2 low sampling frequency (24 kHz for DAB)
+    int  mode        = 0;       ///< 0 stereo, 1 JOINT stereo, 2 dual channel, 3 mono
+    int  modeExt     = 0;       ///< joint stereo: (modeExt+1)*4 = the bound sub-band
     bool valid       = false;
 };
 
@@ -98,7 +101,9 @@ inline Mp2Info mp2Header(const uint8_t* d, size_t n) {
     f.lsf          = (ver == 2);
     f.bitrateKbps  = f.lsf ? kBr2[bi] : kBr1[bi];
     f.sampleRateHz = f.lsf ? kSr1[si] / 2 : kSr1[si];
-    f.channels     = ((d[3] >> 6) & 3) == 3 ? 1 : 2;
+    f.mode         = (d[3] >> 6) & 3;
+    f.modeExt      = (d[3] >> 4) & 3;
+    f.channels     = f.mode == 3 ? 1 : 2;
     const int pad  = (d[2] >> 1) & 1;
     f.frameBytes   = 144 * f.bitrateKbps * 1000 / f.sampleRateHz + pad;
     f.valid        = true;
@@ -127,10 +132,32 @@ public:
         br.get(32);                                   // header
         if (((frame[1] >> 0) & 1) == 0) br.get(16);   // protection bit CLEAR = CRC present
 
+        /* ★★★ JOINT STEREO — AND THE REAL BBC USES IT.
+         *
+         *  In mode 1 the sub-bands from `bound` upwards are coded ONCE and shared by both
+         *  channels (intensity stereo): one allocation, one set of samples, but a scalefactor
+         *  each. Reading two allocations up there desynchronises the bit reader and everything
+         *  after it is noise.
+         *
+         *  ★★ THIS IS EXACTLY WHY VERIFYING AGAINST A FILE I ENCODED MYSELF WAS NOT ENOUGH. My
+         *     ffmpeg reference was plain stereo (mode 0), so the decoder matched to 3.7e-07 and
+         *     looked finished. The first real BBC frame is JOINT stereo, and the same decoder
+         *     produced pure noise. A test built from convenient input agrees with the bug.
+         *  ★ bound = (modeExt + 1) x 4, capped at sblimit.
+         */
+        const int bound = (f.mode == 1) ? std::min(sblimit, (f.modeExt + 1) * 4) : sblimit;
+
         int alloc[2][32] = {};
-        for (int sb = 0; sb < sblimit; ++sb)
-            for (int ch = 0; ch < nch; ++ch)
-                alloc[ch][sb] = tab.sb[sb].nbal ? tab.sb[sb].nlevels[br.get(tab.sb[sb].nbal)] : 0;
+        for (int sb = 0; sb < sblimit; ++sb) {
+            if (!tab.sb[sb].nbal) continue;
+            if (sb < bound) {
+                for (int ch = 0; ch < nch; ++ch)
+                    alloc[ch][sb] = tab.sb[sb].nlevels[br.get(tab.sb[sb].nbal)];
+            } else {
+                const int a2 = tab.sb[sb].nlevels[br.get(tab.sb[sb].nbal)];
+                for (int ch = 0; ch < nch; ++ch) alloc[ch][sb] = a2;   // shared
+            }
+        }
 
         int scfsi[2][32] = {};
         for (int sb = 0; sb < sblimit; ++sb)
@@ -162,14 +189,22 @@ public:
                 for (int ch = 0; ch < nch; ++ch) {
                     const int nl = alloc[ch][sb];
                     if (!nl) continue;
-                    const float s = sf[ch][sb][gr >> 2];
+                    // ★ Above the bound the samples are read ONCE and shared; each channel then
+                    //   applies its OWN scalefactor, which is what makes it intensity stereo.
+                    if (sb >= bound && ch > 0) continue;
+                    float raw[3];
                     if (quantGrouped(nl)) {
                         uint32_t code = br.get(quantCodeBits(nl));
-                        for (int k = 0; k < 3; ++k) { sample[ch][k][sb] = dequant(int(code % uint32_t(nl)), nl) * s; code /= uint32_t(nl); }
+                        for (int k = 0; k < 3; ++k) { raw[k] = dequant(int(code % uint32_t(nl)), nl); code /= uint32_t(nl); }
                     } else {
                         const int bits = quantCodeBits(nl);
-                        for (int k = 0; k < 3; ++k) sample[ch][k][sb] = dequant(int(br.get(bits)), nl) * s;
+                        for (int k = 0; k < 3; ++k) raw[k] = dequant(int(br.get(bits)), nl);
                     }
+                    if (sb >= bound)
+                        for (int c2 = 0; c2 < nch; ++c2)
+                            for (int k = 0; k < 3; ++k) sample[c2][k][sb] = raw[k] * sf[c2][sb][gr >> 2];
+                    else
+                        for (int k = 0; k < 3; ++k) sample[ch][k][sb] = raw[k] * sf[ch][sb][gr >> 2];
                 }
             for (int k = 0; k < 3; ++k)
                 for (int ch = 0; ch < nch; ++ch)
