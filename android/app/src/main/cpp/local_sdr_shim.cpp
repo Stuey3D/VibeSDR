@@ -6489,6 +6489,7 @@ struct LocalSdrShim::Impl {
                 { std::lock_guard<std::mutex> lk(clientMtx);
                   for (auto& kv : clientDsp) if (kv.second->audio && kv.second->audio->isOpen())
                       targets.emplace_back(kv.second.get(), kv.second->audio); }
+                dabInject_ = true;
                 for (auto& t : targets) sendClientAudio(t.first, t.second, pcm.data(), int(got), 2);
                 /* ★★★ AND THE SHARED LISTENERS, WHO ARE A DIFFERENT REGISTRY. clientDsp holds
                  *  only the PER-CLIENT-DSP listeners; a shared receiver keeps its listeners in
@@ -6502,6 +6503,7 @@ struct LocalSdrShim::Impl {
                 std::vector<stereo_t> st(got);
                 for (size_t i = 0; i < got; ++i) { st[i].l = f[i * 2]; st[i].r = f[i * 2 + 1]; }
                 onAudio(st.data(), int(got), 2);
+                dabInject_ = false;
             }
         }
         /* ★ The signal block twice a second: fast enough to watch a mux come and go, slow enough
@@ -6522,10 +6524,19 @@ struct LocalSdrShim::Impl {
     }
     double lastDabJson_ = 0;
     bool   dabLogged_ = false;
+    /* ★★★ "THIS AUDIO IS DAB'S." In DAB mode the ordinary chain still runs, because the SPECTRUM
+     *  is not decoration: without it the client has no frame rate, no link meter and no view, and
+     *  it starts asking to CENTRE ON VFO while the buffer climbs (Stuart, 2026-09-04 — the whole
+     *  UI degrades). But that chain also demodulates FM from a DAB block, and that audio must
+     *  reach nobody. Set only around DAB's own sends, on the DSP thread that does all of this in
+     *  one sequence, so no atomic is needed and no other thread can see it. */
+    bool   dabInject_ = false;
 
     void sendClientAudio(ClientDsp* c, const std::shared_ptr<net::Socket>& sock,
                          const int16_t* pcm, int count, int ch) {
         if (count <= 0) return;
+        // ★ Same rule for the per-client path — see dabInject_.
+        if (g_dabMode.load(std::memory_order_relaxed) && !dabInject_) return;
         std::vector<int16_t> monoBuf;
         if (c->forceMono && ch == 2) {
             monoBuf.resize((size_t)count);
@@ -6651,6 +6662,8 @@ struct LocalSdrShim::Impl {
 
     void onAudio(stereo_t* data, int count, int ch) {
         if (count <= 0) return;
+        // ★ FM demodulated from a DAB block reaches nobody — see dabInject_.
+        if (g_dabMode.load(std::memory_order_relaxed) && !dabInject_) return;
         {
             for (int i = 0; i < count; i++) { audit.note(data[i].l); if (ch == 2) audit.note(data[i].r); }
             char line[160];
@@ -12810,6 +12823,15 @@ struct LocalSdrShim::Impl {
                 g_dab.setRfRate(sampleRate);
                 g_dab.feed(reinterpret_cast<const float*>(buf.data()), buf.size());
                 pumpDabAudio();
+                /* ★★★ AND THE SPECTRUM STILL RUNS. Skipping the ordinary chain entirely stopped
+                 *  the waterfall, and the spectrum socket is what carries the client's frame
+                 *  rate, link meter and view state — so the whole UI degraded: 0.0 fps, no
+                 *  connection meter, the buffer climbing to 400 ms and a CENTRE ON VFO prompt
+                 *  over a frozen picture of the band it used to be on. The ensemble is also the
+                 *  one thing worth LOOKING at here, which is what OWRX shows.
+                 *  ★ Its audio is discarded, not its FFT — see dabInject_. */
+                if (!perClientDsp()) rx.feed(buf.data(), (int)buf.size());
+                else                 feedClientChannels(buf.data(), (int)buf.size());
                 continue;
             }
             if (!perClientDsp()) rx.feed(buf.data(), (int)buf.size());
