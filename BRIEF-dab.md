@@ -363,6 +363,7 @@ with a matching `vibeserver/test-dab-*.cpp`.
 | 12 | MSC: CIF geometry, 16-deep time deinterleaving, EEP profiles | ✅ tested |
 | 13 | **MPEG-1/2 Layer II decoder — verified against ffmpeg to 3.7e-07** | ✅ tested |
 | 14 | DAB+: RS(120,110), virtual interleaver, super frames, ADTS reframing | ✅ tested |
+| 15 | **DabReceiver — the whole chain, IQ in, ensemble out** | ✅ tested |
 
 ★★★ **STAGE 11 IS THE MILESTONE, AND IT PASSES.** `test-dab-ficdec` builds a small multiplex,
 transmits it through the real encode/puncture/multiplex chain, corrupts 5% of the symbols, and
@@ -372,8 +373,12 @@ the four-codeword round robin, the Viterbi, the CRC and the FIG parser. ★ It a
 PHASE, because decoding the wrong slot must yield nothing, and the test asserts that too.
 
 **Still to build, honestly:**
-- **Wiring the FIC to the OFDM front end** — feeding the three FIC symbols' soft bits into
-  ficDecodeFrame. The decode itself is done; this is plumbing.
+- **The MSC audio path through the receiver** — the FIC half is wired and locks on a synthesised
+  transmission; the per-service MSC extraction (CU selection, time deinterleave, EEP depuncture,
+  Viterbi, then MP2 or DAB+) is built and tested stage by stage but not yet joined to DabReceiver.
+- **Speed**: the receiver uses a plain O(N²) DFT — deliberately, so the first integration bug
+  cannot be hiding in a transform. `vibedsp::ComplexFFT` is the one call to swap in, and it must
+  be swapped before a Pi sees this.
 - **UEP profiles** (table 15) for the older services — EEP is done, UEP extracts the same way.
 - **Firecode CORRECTION** on the DAB+ header (detection is in; correction is the stated goal that
   DAB-Radio's TODO says it lacks).

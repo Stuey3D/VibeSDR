@@ -94,7 +94,7 @@ inline NullSearch findNull(const Cplx* x, size_t n, size_t nullLen) {
 class FrameSync {
 public:
     explicit FrameSync(const Mode& m, uint32_t sampleRateHz = kCanonicalRateHz)
-        : mode_(&m),
+        :
           nullLen_(size_t((uint64_t(m.nullSamples)  * sampleRateHz) / kCanonicalRateHz)),
           frameLen_(size_t((uint64_t(m.frameSamples) * sampleRateHz) / kCanonicalRateHz)) {}
 
@@ -159,7 +159,9 @@ private:
      *  out a fade under a bridge, short enough that a retune does not sit on a dead lock. */
     static constexpr int kMaxMisses = 4;
 
-    const Mode* mode_;
+    // ★ The mode is captured in the derived lengths below; keeping a pointer we never read was
+    //   dead weight the compiler correctly noticed.
+
     size_t nullLen_, frameLen_;
     bool   locked_    = false;
     size_t predicted_ = 0;
