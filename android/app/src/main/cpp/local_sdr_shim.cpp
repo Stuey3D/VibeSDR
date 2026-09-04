@@ -7928,7 +7928,11 @@ struct LocalSdrShim::Impl {
                 sendText(sock, "{\"type\":\"dab_error\",\"why\":\"this receiver cannot reach a DAB multiplex at 2.048 MS/s\"}");
                 return;
             }
-            double onV = 1; jsonNum(msg, "on", onV);
+            /* ★★ THE DEFAULT IS OFF. It was 1, so a {"type":"dab"} with the key missing SEIZED
+             *  the receiver — DAB suspends the shared-dial lock and takes the whole capture, so
+             *  "on" is the one thing a malformed message must never mean. The web client always
+             *  sends it (spectrum.ts dab(): `on: on ? 1 : 0`); this is for everything else. */
+            double onV = 0; jsonNum(msg, "on", onV);
             const bool on = onV != 0;
             if (!on) {
                 g_dabMode.store(false);

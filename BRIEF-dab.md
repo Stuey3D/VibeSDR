@@ -482,3 +482,52 @@ PHASE, because decoding the wrong slot must yield nothing, and the test asserts 
 
 ★ Do not skip 3's checkpoint. A station list from the FIC with no audio at all is a real,
   demonstrable milestone and it proves the whole chain above the MSC.
+
+
+## Live bring-up on the Pi (2026-09-04) — WORKING END TO END
+
+Proven on the V4 against BBC National DAB (12B), not in a test harness:
+
+| | |
+|---|---|
+| ensemble | `BBC National DAB`, eid 52757 |
+| services | 14, correct labels |
+| FIB CRC | `fibRate = 1.0` |
+| lock | null 22.3 dB, PRS 5.12, carrierShift 0 |
+| residual offset | −126 Hz (−0.57 ppm — the dongle's own crystal) |
+| service select | sid 49697 BBC Radio1, bitrate 112, protection UEP |
+| audio | 50.2–50.3 frames/s, identical to FM's 50.2 |
+| exit | `dab_off`, spectrum and RDS resume, lock restored |
+
+### The four faults live hardware found that the offline tests could not
+
+All four presented identically — "the demodulator does not lock" — and none was in the
+demodulator, which had been decoding a captured file correctly the whole time.
+
+1. **The locked centre pulled the dongle back.** A shared receiver's locked centre is
+   enforced in ~20 places, one being the source rebuild that `setSampleRate` triggers. DAB
+   tuned to the multiplex and the rebuild put it back on 96.6 MHz FM. Fixed by suspending
+   the lock itself for the life of DAB mode — one owner, not twenty guards.
+2. **The output went to one listener registry of three.** `pumpDabAudio` knew only
+   `clientDsp`; a shared receiver keeps listeners in `audioClient`/`audioExtra` and
+   `specClient`/`specExtra`. The decoder ran and everything it produced went nowhere.
+3. **Offset tuning.** `tuneHw(x)` tunes the hardware to `x + hwOffsetHz()`, and every other
+   demodulator gets the 15 kHz back via `vfoOffsetNow()`. DAB reads raw IQ around DC and
+   never goes near the VFO path. `offsetHz = -15178` against `HW_OFFSET_HZ` of 15000 named
+   it outright — fifteen carrier spacings of DQPSK rotation, so it locked and every FIB
+   failed CRC.
+4. **`"12B"` parsed as 0.** `jsonNum` on a string yields 0, which is a *valid* index (5A),
+   so a request that could not be honoured became a silent tune to the bottom of Band III.
+
+★★★ The lesson is the one already in MEMORY.md and it cost four deploys anyway: **a
+receiver pointed at the wrong frequency is indistinguishable from one that cannot decode.**
+Three of the four faults were in the plumbing between the shim and the demodulator. Read
+`rfCentreHz` and `rfRateHz` — they exist for this — before touching the DSP.
+
+★ The wire key is **`on`**, not `enable`, and its default is now **off**: DAB suspends the
+shared-dial lock and takes the whole capture, so a malformed message must never mean "on".
+
+### Still open
+- Firecode correction on the DAB+ header (detection is in, correction is not).
+- `label` reports the ensemble after a service select; the client shows the service label
+  from the list, so this is cosmetic.
