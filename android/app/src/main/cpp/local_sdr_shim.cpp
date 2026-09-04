@@ -8475,6 +8475,22 @@ struct LocalSdrShim::Impl {
                 LOGI("sampleRate ignored — the owner has pinned the rate");
                 return;
             }
+            /* ★★★ AND DAB OWNS THE RATE, exactly as it owns the dial. Mode I has a 2048-sample
+             *  useful symbol, so 2.048 MS/s makes the FFT exactly one symbol; any other rate means
+             *  fractionally resampling every sample. Changing it under a running ensemble also
+             *  REBUILDS THE SOURCE, which is a hole in the stream.
+             *  ★★★ And the client pushes this on its own. buildRateList ends with
+             *    `spec.setHwSampleRate(wanted)` — 2.4 MS/s from its saved preference — and it runs
+             *    whenever the rate list is rebuilt, i.e. on hwinfo. So the client was periodically
+             *    yanking a live ensemble off its rate with nobody touching anything, which is the
+             *    burst of errors in an otherwise clean stream that read as an aerial problem
+             *    (Stuart, 2026-09-04, whose menu showed 2.4 MS/s while the radio ran at 2.048).
+             *  ★ Refused here as well as fixed in the client, because the server is the only place
+             *    that can be sure: an old client, another tab or a hand-rolled tool asks too. */
+            if (g_dabMode.load(std::memory_order_relaxed)) {
+                LOGI("sampleRate ignored — DAB owns the rate (2.048 MS/s)");
+                return;
+            }
             if (jsonNum(msg,"value",v) && v > 0) {
                 const double maxR = g_serveOnLan.load() ? g_vsLockedRate.load() : 0.0;
                 if (maxR > 0 && v > maxR) v = maxR;   // clamp to the ceiling; lower is allowed

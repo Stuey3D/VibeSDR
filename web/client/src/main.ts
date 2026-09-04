@@ -8717,6 +8717,27 @@ function populateHw() {
           // slowest is over the line, take the slowest of a bad lot.
           : ([...hwRates].sort((a, b) => a - b).filter(x => x <= RTL_SAFE_RATE).pop()
              ?? Math.min(...hwRates)));
+    /* ★★★ NOT WHILE DAB IS ON. This runs on every hwinfo, and it ENDS BY PUSHING the saved
+     *  preference at the server — so a listener in DAB had 2.4 MS/s asserted at a receiver
+     *  running an ensemble at 2.048, periodically, with nobody touching the control. Changing the
+     *  rate rebuilds the source, so each push was a hole in the stream: clean, burst, clean. It
+     *  looked like reception because nothing in the UI moved when it happened.
+     *  ★ Show the truth instead. The server refuses this too — the client must not be the only
+     *    thing standing between a live ensemble and its rate. */
+    if (dabOn) {
+      /* ★ And the option has to EXIST to be selectable — 2.048 is not in the dongle's advertised
+       *  list, so setting .value alone leaves the <select> showing whatever was first and lying
+       *  about the rate again, which is the fault this whole block was written to stop. Disabled,
+       *  because in DAB it is not a choice: the server refuses any other value. */
+      const o = document.createElement('option');
+      o.value = '2048000';
+      o.textContent = '2.048 MS/s (DAB)';
+      r.appendChild(o);
+      r.value = '2048000';
+      r.disabled = true;
+      return;
+    }
+    r.disabled = false;
     r.value = String(wanted);
     spec!.setHwSampleRate(wanted);
   }
