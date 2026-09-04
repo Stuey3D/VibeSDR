@@ -15724,6 +15724,11 @@ static bool vsDabCapable() {
      *  what its owner has locked it to. Both halves matter and each has a real example on the
      *  Pi: the Airspy HF+ cannot exceed ~912 kHz whatever the config says, and a V4 locked to
      *  1.2 MS/s cannot carry an ensemble however capable the chip is. */
+    /* ★ Ask if we have not been told yet. vibeserver.json is served before any client opens a
+     *  websocket, so relying on hwinfo to have run first made every radio report dab:false on a
+     *  freshly started server — the exact opposite of the earlier bug, and just as wrong. */
+    if (g_vsHwMaxRate.load(std::memory_order_relaxed) == 0)
+        LocalSdrShim::instance().maxSampleRateHz();
     const uint32_t hw     = g_vsHwMaxRate.load(std::memory_order_relaxed);
     const uint32_t locked = uint32_t(g_vsLockedRate.load());
     if (hw == 0) return false;                       // not known yet — do not promise
@@ -18849,6 +18854,20 @@ static void agcSettleAfterGain(double now) {
      *  ★ Re-acquiring is safe because nothing is judged for 1.3s after a write anyway: by the time
      *    anybody asks, the hold has been rebuilt from the level that actually exists now. */
     g_resetPeakHold.store(true, std::memory_order_relaxed);
+}
+
+unsigned LocalSdrShim::maxSampleRateHz() {
+    if (!p) return 0;
+    const std::string r = p->supportedRates();        // ★ also refreshes g_vsHwMaxRate
+    unsigned mx = 0; size_t i = 0;
+    while (i < r.size()) {
+        size_t j = r.find(',', i);
+        if (j == std::string::npos) j = r.size();
+        const unsigned long v = strtoul(r.substr(i, j - i).c_str(), nullptr, 10);
+        if (v > mx) mx = unsigned(v);
+        i = j + 1;
+    }
+    return mx;
 }
 
 void LocalSdrShim::setSampleRate(double rate) {

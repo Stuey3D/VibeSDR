@@ -19,6 +19,12 @@ class LocalSdrShim {
 public:
     static LocalSdrShim& instance();
 
+    /** The radio's highest usable sample rate in Hz, or 0 when no radio is open.
+     *  ★ Forwards to the SAME per-driver list the setup page and hwinfo use. This file already
+     *    warns that there are three rate sources and that fixing one leaves the others wrong —
+     *    so this is a forwarder, never a fourth table. */
+    unsigned maxSampleRateHz();
+
     // Open the RTL-SDR on `fd`, start FFT + demod pipelines and the localhost
     // server (spectrum + audio WebSockets). Returns the chosen TCP port (>0) on
     // success, or -1 with `err` set. `fd` stays owned by the caller (Kotlin).
