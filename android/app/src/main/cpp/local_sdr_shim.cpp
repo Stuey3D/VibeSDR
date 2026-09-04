@@ -6473,6 +6473,7 @@ struct LocalSdrShim::Impl {
         }
     }
     double lastDabJson_ = 0;
+    bool   dabLogged_ = false;
 
     void sendClientAudio(ClientDsp* c, const std::shared_ptr<net::Socket>& sock,
                          const int16_t* pcm, int count, int ch) {
@@ -7924,6 +7925,8 @@ struct LocalSdrShim::Impl {
             audioFreq.store(centre);          // the readout follows the mux
             viewCenter.store(centre);
             g_dabMode.store(true);
+            LOGI("[DAB] mode ON: channel %s, centre %.3f MHz, rate %.0f — dspLoop should follow",
+                 vibedab::kBandIII[idx].name, centre / 1e6, double(vibedab::DabService::kRateHz));
             double sid = 0; jsonNum(msg, "sid", sid);
             if (sid > 0) g_dab.setService(uint32_t(sid));
             sendText(sock, g_dab.json());
@@ -12672,6 +12675,9 @@ struct LocalSdrShim::Impl {
              *  not run at all. That is also why the zoom controls are disabled in this mode: on an
              *  RTL-SDR the tuner's IF bandwidth FOLLOWS the zoom, and narrowing it cuts the mux. */
             if (g_dabMode.load(std::memory_order_relaxed)) {
+                if (!dabLogged_) { dabLogged_ = true;
+                    LOGI("[DAB] dspLoop is feeding the receiver: %zu samples, rtlCenter %.3f MHz",
+                         buf.size(), rtlCenter.load() / 1e6); }
                 g_dab.setRfCentre(rtlCenter.load());
                 g_dab.feed(reinterpret_cast<const float*>(buf.data()), buf.size());
                 pumpDabAudio();
