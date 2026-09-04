@@ -8069,6 +8069,19 @@ struct LocalSdrShim::Impl {
                 g_dabSavedCentre.store(g_vsLockedCentre.load());
                 g_dabSavedRate.store(g_vsLockedRate.load());
                 g_dabSavedGain.store(g_gainTarget.load(std::memory_order_relaxed));
+                /* ★★★ ON ENTRY ONLY — AND THIS IS THE WHOLE BUG. The reset used to run on every
+                 *  "dab on" message, and STEPPING A MULTIPLEX SENDS ONE, so a listener's manual
+                 *  gain was wiped every time they pressed the next-mux button. That is what
+                 *  Stuart hit as "I cannot set the gain correctly at all" — not entering DAB, but
+                 *  tuning inside it. I then guessed at the cause and made the reset conditional on
+                 *  the AGC already being in charge, which fixed his complaint and put the overload
+                 *  straight back: measured on the V4L at -2.1 dBFS with the gain never moving,
+                 *  which is a clipped OFDM peak every few seconds — his "nasty bursts".
+                 *  ★ Here, inside the once-only block, both hold: entering DAB hands the gain to
+                 *    the AGC at the bottom, changing multiplex leaves it alone, and a manual gain
+                 *    set WHILE in DAB is nobody's business but the listener's. */
+                LocalSdrShim::instance().setGain(-1);
+                agcForget("DAB: an ensemble is not the carrier we came off — reconverge from the bottom");
             }
             /* ★★★ RESTART THE AGC FROM THE BOTTOM. The loop is built to start at the minimum and
              *  climb, taking a step only when the measured peak says the whole step still fits —
@@ -8083,15 +8096,6 @@ struct LocalSdrShim::Impl {
              *    so the right starting point is the bottom for everyone — a distant listener's AGC
              *    simply climbs, which is the same thing it does on a cold start. Nothing is limited
              *    permanently (MEMORY.md); the gain is RESTORED on the way out. */
-            /* ★ ONLY IF THE AGC WAS ALREADY IN CHARGE. Seizing the gain from an owner who set
-             *  it by hand is taking away the very control they chose, and it left Stuart unable
-             *  to set it at all: every manual value he picked was overwritten the next time he
-             *  entered DAB. A manual gain is an explicit intent — DAB re-points the AGC, it does
-             *  not overrule a person. */
-            if (g_gainTarget.load(std::memory_order_relaxed) < 0) {
-                LocalSdrShim::instance().setGain(-1);
-                agcForget("DAB: an ensemble is not the carrier we came off — reconverge from the bottom");
-            }
             g_vsLockedCentre.store(0.0);
             g_vsLockedRate.store(0.0);
             /* ★★★ OFFSET TUNING PUTS THE DONGLE 15 kHz ABOVE WHERE YOU ASKED FOR.
