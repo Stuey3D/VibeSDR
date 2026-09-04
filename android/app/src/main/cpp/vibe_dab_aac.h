@@ -32,6 +32,29 @@ struct SuperFrame {
 
 /** CRC-16-CCITT as TS 102 563 specifies for the header firecode field: G(x) = x^16+x^12+x^5+1,
  *  register preset to all ones, complemented before transmission. */
+/** ★★★ THE DAB+ HEADER FIRE CODE IS NOT CRC-16-CCITT.
+ *
+ *  TS 102 563 clause 5.2 gives the generator as g(x) = (x^11 + 1)(x^5 + x^3 + x^2 + x + 1), which
+ *  expands to x^16 + x^14 + x^13 + x^12 + x^11 + x^5 + x^3 + x^2 + x + 1 — 0x782F, with a ZERO
+ *  initial state and no final complement. It is a Fire code, chosen because it CORRECTS a burst;
+ *  CCITT is a different polynomial that happens to be the right width.
+ *
+ *  ★★★ MEASURED ON AIR: with CCITT here, 2049 super frames were assembled from 2053 logical
+ *      frames and NOT ONE passed. Every DAB+ service was silent, which is most of the UK. Nothing
+ *      caught it because test-dab-aac.cpp never exercises the firecode at all — and a test that
+ *      built a header with this same function would have agreed with the bug, which is a shape
+ *      this project has been bitten by before.
+ *  ★ The AU CRCs below are a different thing and DO use the standard DAB CRC-16. Both live in
+ *    this file; only the header one was wrong. */
+inline uint16_t dabFireCode16(const uint8_t* d, size_t n) {
+    uint16_t c = 0;
+    for (size_t i = 0; i < n; ++i) {
+        c ^= uint16_t(d[i]) << 8;
+        for (int b = 0; b < 8; ++b) c = (c & 0x8000) ? uint16_t((c << 1) ^ 0x782F) : uint16_t(c << 1);
+    }
+    return c;
+}
+
 inline uint16_t dabCrc16(const uint8_t* d, size_t n) {
     uint16_t c = 0xFFFF;
     for (size_t i = 0; i < n; ++i) {
@@ -80,7 +103,7 @@ inline SuperFrame decodeSuperFrame(const uint8_t* wire, size_t n, int index) {
 
     // ── he_aac_super_frame_header (table 2) ─────────────────────────────────
     const uint16_t fire = uint16_t((data[0] << 8) | data[1]);
-    sf.firecodeOk = (fire == uint16_t(~dabCrc16(&data[2], 9)));
+    sf.firecodeOk = (fire == dabFireCode16(&data[2], 9));
 
     const uint8_t b2   = data[2];
     const bool dacRate = (b2 >> 6) & 1;

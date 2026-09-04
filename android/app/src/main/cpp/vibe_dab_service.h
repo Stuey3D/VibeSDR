@@ -150,8 +150,8 @@ public:
          *  the live Pi — DAB reported 12B while the dongle sat on 96.6 MHz — and without both
          *  numbers side by side that is indistinguishable from "DAB does not decode here". */
         snprintf(b, sizeof b,
-                 ",\"channel\":\"%s\",\"centreHz\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
-                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), rfCentre_, rfRate_,
+                 ",\"channel\":\"%s\",\"centreHz\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
+                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
                  esc(e.label).c_str(), unsigned(e.eid));
         j += b;
         snprintf(b, sizeof b,
@@ -239,6 +239,7 @@ private:
     /** One DAB+ logical frame: hold five, test the firecode, reframe the AUs it contains. */
     void pumpDabPlus(const std::vector<uint8_t>& frame) {
         if (frame.empty()) return;
+        ++sfFrames_;
         sf_.push_back(frame);
         if (sf_.size() > 5) sf_.pop_front();
         if (sf_.size() < 5) return;
@@ -248,25 +249,27 @@ private:
          *  index is derived from the frame length rather than the advertised bitrate: the length
          *  is what the de-interleaver actually has to match, and deriving it cannot disagree. */
         const size_t per = sf_.front().size();
-        for (const auto& x : sf_) if (x.size() != per) { sf_.pop_front(); return; }
+        for (const auto& x : sf_) if (x.size() != per) { ++sfBadLen_; sf_.pop_front(); return; }
         const int index = int(per / 24);
-        if (index < 1 || index > 24) { sf_.pop_front(); return; }
+        if (index < 1 || index > 24) { ++sfBadLen_; sf_.pop_front(); return; }
 
         std::vector<uint8_t> wire;
         wire.reserve(per * 5);
         for (const auto& x : sf_) wire.insert(wire.end(), x.begin(), x.end());
 
+        ++sfTried_;
         SuperFrame s = decodeSuperFrame(wire.data(), wire.size(), index);
         // ★ SLIDE BY ONE on failure. Dropping all five would re-test the same phase for ever.
         if (!s.valid || !s.firecodeOk) { sf_.pop_front(); return; }
         sf_.clear();
+        ++sfOk_;
 
         afmt_       = s.fmt;
         aacCoreCh_  = s.stereo ? 2 : 1;
         aacOutCh_   = (s.stereo || s.ps) ? 2 : 1;
         for (const auto& au : s.aus) {
             std::vector<uint8_t> pkt = toAdts(au.data(), au.size(), s.fmt, aacCoreCh_);
-            if (!pkt.empty()) adts_.push_back(std::move(pkt));
+            if (!pkt.empty()) { adts_.push_back(std::move(pkt)); ++ausOut_; }
         }
         // ★ Bounded like the PCM: audio minutes late is worse than a gap.
         while (adts_.size() > 250) adts_.pop_front();
@@ -292,6 +295,10 @@ private:
     std::deque<std::vector<uint8_t>> sf_;      ///< the five-frame window
     std::deque<std::vector<uint8_t>> adts_;    ///< reframed AUs, ready for the wire
     AudioFormat afmt_{};
+    /* ★ Counters, because "no audio" has four possible causes here and guessing between them is
+     *  what cost the evening: no frames arriving, frames of an unusable length, the firecode
+     *  never aligning, or AUs produced and not sent. Each has its own number. */
+    uint32_t sfFrames_ = 0, sfBadLen_ = 0, sfTried_ = 0, sfOk_ = 0, ausOut_ = 0;
     int  aacCoreCh_ = 2;                       ///< what the ADTS header declares
     int  aacOutCh_  = 2;                       ///< what the decoder will produce (PS -> 2)
 
