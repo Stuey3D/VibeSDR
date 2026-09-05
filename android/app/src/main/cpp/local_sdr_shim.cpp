@@ -2156,9 +2156,13 @@ static std::atomic<bool>           g_biasTeeOn{false};
  *  THE SERVER STARTS, deliberately ("a powered loop needs its DC before the first listener
  *  arrives"), which is before the dongle has been opened. So the call was dropped on the floor
  *  and nothing ever re-asserted it: the switch moved, the setting saved, and the hardware kept
- *  whatever it had. Stuart, 2026-09-06, on a Xcover whose aerial does not want DC: "I think I
- *  accidentally left the Bias-T on" — the server reported it ON after he had turned it OFF and
- *  restarted, because the OFF never reached the radio.
+ *  whatever it had.
+ *  ★ HOW IT WAS FOUND, accurately: Stuart had set bias-T ON deliberately for a powered antenna on
+ *    a different RTL-SDR and simply forgot to switch it back when he changed dongles — "I just
+ *    forgot to switch it off when i changed back to the current RTL-SDR which doesnt have a
+ *    powered antenna". That is not a bug. The BUG appeared when I turned it off FOR him: the
+ *    server screen showed OFF, the setting saved, the server restarted — and hwinfo still
+ *    reported biasT true, with the DC still on the feedline, until this was fixed.
  *  ★★ Exactly the shape g_rtlDigitalAgc already solved: remember the wish, assert it at open. A
  *     setting that only applies when the hardware happens to be ready is a coin toss. */
 static std::atomic<int>            g_biasTeeWant{-1};   // -1 = never asked
