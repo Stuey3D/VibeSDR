@@ -1259,22 +1259,35 @@ export class AudioPlayer {
 
   /** Open an <audio> + MediaSource pipeline for AAC. Returns false when the browser cannot. */
   private async _startMse(coreRateHz: number, channels: number): Promise<boolean> {
+    const Managed = (self as unknown as { ManagedMediaSource?: typeof MediaSource }).ManagedMediaSource;
     const MS: typeof MediaSource | undefined =
-      (self as unknown as { ManagedMediaSource?: typeof MediaSource }).ManagedMediaSource
-      ?? (typeof MediaSource !== 'undefined' ? MediaSource : undefined);
+      Managed ?? (typeof MediaSource !== 'undefined' ? MediaSource : undefined);
     const asc = this._ascFor(coreRateHz, channels);
-    if (!MS || !asc) return false;
-    const mime = ['audio/mp4; codecs="mp4a.40.5"', 'audio/mp4; codecs="mp4a.40.2"']
-      .find((m) => MS.isTypeSupported(m));
-    if (!mime) return false;
+    if (!MS)  { console.warn('[audio] no MediaSource in this browser'); return false; }
+    if (!asc) { console.warn(`[audio] no AudioSpecificConfig for ${coreRateHz} Hz / ${channels}ch`); return false; }
+    const mime = ['audio/mp4; codecs="mp4a.40.5"', 'audio/mp4; codecs="mp4a.40.2"',
+                  'audio/mp4; codecs="mp4a.40.05"', 'audio/mp4; codecs="mp4a.40.02"']
+      .find((m) => { try { return MS.isTypeSupported(m); } catch { return false; } });
+    if (!mime) { console.warn('[audio] MediaSource supports no AAC mp4 type'); return false; }
+    console.info(`[audio] DAB+ opening ${Managed ? 'ManagedMediaSource' : 'MediaSource'} with ${mime}`);
 
     return await new Promise<boolean>((resolve) => {
       const el = document.createElement('audio');
       el.autoplay = true;
-      // ★ Safari will not open a ManagedMediaSource without this attribute on the element.
       (el as unknown as { disableRemotePlayback: boolean }).disableRemotePlayback = true;
+      /* ★★★ IN THE DOCUMENT, AND ATTACHED WITH srcObject. Two Safari requirements that a
+       *  detached element with a blob URL fails silently:
+       *   - ManagedMediaSource CANNOT be attached with URL.createObjectURL — it is srcObject
+       *     only, and createObjectURL(MediaSource) throws or yields a source that never opens;
+       *   - the element has to be in the document for Safari to start the media pipeline.
+       *  Either mistake shows up as sourceopen simply never firing, which is what the 3-second
+       *  timeout was catching and reporting as "no AAC support". */
+      el.style.display = 'none';
+      document.body.appendChild(el);
       const ms = new MS();
-      el.src = URL.createObjectURL(ms as unknown as MediaSource);
+      const anyEl = el as unknown as { srcObject: unknown };
+      if ('srcObject' in el) { try { anyEl.srcObject = ms; } catch { el.src = URL.createObjectURL(ms as unknown as MediaSource); } }
+      else el.src = URL.createObjectURL(ms as unknown as MediaSource);
       let settled = false;
       ms.addEventListener('sourceopen', () => {
         try {
@@ -1293,7 +1306,14 @@ export class AudioPlayer {
           if (!settled) { settled = true; resolve(false); }
         }
       }, { once: true });
-      setTimeout(() => { if (!settled) { settled = true; resolve(false); } }, 3000);
+      setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          console.warn(`[audio] MediaSource never opened (readyState=${ms.readyState}) — giving up`);
+          el.remove();
+          resolve(false);
+        }
+      }, 4000);
     });
   }
 
