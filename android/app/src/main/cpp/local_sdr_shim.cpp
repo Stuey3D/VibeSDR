@@ -633,21 +633,17 @@ static std::atomic<bool>   g_dabSavedAgcOn{false};
  *    listener's momentary A/B, not an owner's setting, so taking it for the duration costs
  *    nothing they chose deliberately. */
 static std::atomic<bool>   g_dabSavedDigAgc{false};
-/** ★★★ WHERE THE DAB AGC GOT TO LAST TIME, in tenths of a dB, or -1 for "never converged".
- *  Handing DAB to the AGC starts it at the tuner's MINIMUM and climbs one step per ~1.85 s —
- *  about 50 s to cross an R820T's 49 dB. That climb is not cosmetic: measured on the live Pi
- *  2026-09-05, the SAME receiver and mux read 25.5% of MP2 frames failing when counted from the
- *  moment of selection and 1.5% after a 45 s settle. 12B went 0.9% -> 0.0%. Every listener
- *  entering DAB heard the whole climb.
- *  ★★ Stuart named it: "dont forget the AGC may be working against you when first selecting a
- *     multiplex."
- *  ★ Seeding from a gain THIS RECEIVER converged on IN DAB is safe in a way that inheriting the
- *    FM gain never was — that was the 37 dB overload. And it is still a floor, not a target: the
- *    loop climbs from it exactly as before, and a step is only taken when the measured peak says
- *    the whole step fits. */
-static std::atomic<int>    g_dabSeedGainTenth{-1};
-/** One-shot: consumed by the next auto-gain handover, then cleared. */
-static std::atomic<int>    g_agcSeedTenthDb{-1};
+/* ★★★ SEEDING THE DAB AGC FROM ITS LAST CONVERGED GAIN WAS TRIED IN 4.5.6 AND MEASURED WORSE.
+ *  The idea was sound — the climb from the tuner's minimum takes ~50 s and a listener entering
+ *  DAB hears every second of it (25.5% of MP2 frames failing counted from selection against 1.5%
+ *  after a 45 s settle). But seeded entries measured 40.6% and 16.6% against 0.2% for a cold
+ *  climb, twice, on two different multiplexes, with the FIC still reading a PERFECT 1.0000 — the
+ *  signature of a front end running slightly too hot, where the heavily protected FIC survives
+ *  and the lightly protected MSC does not.
+ *  ★★ The gain recorded at dabRestore() is not necessarily a gain that SUITS the mux being
+ *     entered next, and a seed that is 4 dB too high costs more than a slow climb does.
+ *  ★ DO NOT RE-ADD without a measurement of the ENTRY, per multiplex. The climb is slow; it is
+ *    not the thing that breaks the audio. */
 
 /* ★★★ TEMPORARY 2.048 FOR DAB, ON A RECEIVER THAT RUNS SLOWER THE REST OF THE TIME.
  *  Stuart, on the XCover: "on the xcover I chose 1.2 for reliablility but in this case 2048 may
@@ -6691,11 +6687,6 @@ struct LocalSdrShim::Impl {
      *  like three separate faults. */
     void dabRestore() {
         if (!g_dabLockHeld.exchange(false)) return;
-        /* ★ Remember where the DAB AGC ended up, for the next entry — see g_dabSeedGainTenth. */
-        {
-            const int g = LocalSdrShim::instance().currentGainTenthDb();
-            if (g > 0) g_dabSeedGainTenth.store(g, std::memory_order_relaxed);
-        }
         g_dabMode.store(false);
         /* ★ Give the audio chain back, and reset it: it has seen no samples for the whole DAB
          *  session, so every recursive state in it (the pilot PLL, de-emphasis, the AGC) is stale
@@ -8373,13 +8364,6 @@ struct LocalSdrShim::Impl {
                  *  set the ceiling.
                  *  ★ Turned on for DAB and restored on the way out with everything else. DAB
                  *    re-points the AGC; it needs the AGC to be running to be re-pointed. */
-                /* ★ Hand the loop its starting point BEFORE the handover reads it — one-shot,
-                 *   and only from a DAB-converged gain. A few dB below, so the climb still
-                 *   arrives from underneath rather than landing on the answer. */
-                {
-                    const int sg = g_dabSeedGainTenth.load(std::memory_order_relaxed);
-                    if (sg > 0) g_agcSeedTenthDb.store(sg - 40, std::memory_order_relaxed);
-                }
                 LocalSdrShim::instance().setGain(-1);
                 /* ★★★ AND STOP DEMODULATING AN ENSEMBLE AS IF IT WERE AN FM CARRIER. The
                  *  spectrum pipeline is still fed (the waterfall, frame rate, link meter and view
@@ -16784,20 +16768,6 @@ int LocalSdrShim::start(int fd, int vid, int pid,
             rtlsdr_get_tuner_gains(impl->dev, gs.data());
             applyGain   = *std::min_element(gs.begin(), gs.end());
             agcCeiling  = *std::max_element(gs.begin(), gs.end());
-            /* ★★★ START FROM WHERE THIS RECEIVER GOT TO LAST TIME, when something has told us.
-             *  See g_dabSeedGainTenth: the climb from minimum is ~50 s, and a listener entering
-             *  DAB heard every second of it. Clamped into the tuner's own list and never above
-             *  the seed, so the loop still arrives from BELOW. One-shot. */
-            const int seed = g_agcSeedTenthDb.exchange(-1, std::memory_order_relaxed);
-            if (seed > applyGain) {
-                int best = applyGain;
-                for (int g : gs) if (g <= seed && g > best) best = g;
-                if (best > applyGain) {
-                    applyGain = best;
-                    LOGI("gain: AGC — seeded at %.1f dB (where DAB settled last time) rather than "
-                         "climbing from the bottom", double(applyGain) / 10.0);
-                }
-            }
             LOGI("gain: AGC — starting at %.1f dB and climbing towards %.1f dB as headroom allows",
                  applyGain / 10.0, agcCeiling / 10.0);
         }
