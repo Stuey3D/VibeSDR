@@ -1309,12 +1309,18 @@ export class AudioPlayer {
   private mseSeq = 1;
   private mseTime = 0;
   private mseDur = 1024;
+  /** True when the source is a ManagedMediaSource, which gates appends — see _startMse. */
+  private mseManaged = false;
+  private mseStreaming = false;
+  private mseSawStreaming = false;
 
   /** Open an <audio> + MediaSource pipeline for AAC. Returns false when the browser cannot. */
   private async _startMse(coreRateHz: number, channels: number): Promise<boolean> {
     const Managed = (self as unknown as { ManagedMediaSource?: typeof MediaSource }).ManagedMediaSource;
     const MS: typeof MediaSource | undefined =
       Managed ?? (typeof MediaSource !== 'undefined' ? MediaSource : undefined);
+    this.mseManaged = !!Managed && MS === Managed;
+    this.mseStreaming = false; this.mseSawStreaming = false;
     /* ★★★ THE MSE TIMELINE RUNS AT THE OUTPUT RATE, NOT THE CORE — see _ascExplicitSbr. */
     const outRate = this._sbrOutRate(coreRateHz);
     const asc = outRate ? this._ascExplicitSbr(coreRateHz, outRate, channels)
@@ -1352,6 +1358,34 @@ export class AudioPlayer {
           const sb = ms.addSourceBuffer(mime);
           sb.mode = 'sequence';
           sb.addEventListener('updateend', () => this._mseDrain());
+          /* ★★★ ManagedMediaSource ONLY WANTS DATA BETWEEN startstreaming AND endstreaming.
+           *  This is the half of the MMS contract we were not keeping. Safari's managed source
+           *  decides for itself when it is prepared to buffer — that is the entire point of it,
+           *  and the reason it exists on iOS where an unmanaged MediaSource is not available —
+           *  and appends made outside that window can be dropped on the floor. The source opens,
+           *  we queue happily, and nothing ever plays: precisely what Stuart has seen every time
+           *  ("no aac in safari", three builds running).
+           *  ★★ Harmless on a plain MediaSource, which never fires these, so the queue drains on
+           *     updateend as before. No branch on browser identity — the events decide.
+           *  ★ While not streaming we hold the frames instead of appending; DAB+ access units are
+           *    about 170 bytes, so a brief hold costs nothing and keeps the timeline continuous. */
+          const mms = ms as unknown as EventTarget;
+          mms.addEventListener('startstreaming', () => {
+            this.mseStreaming = true; this.mseSawStreaming = true; this._mseDrain();
+          });
+          mms.addEventListener('endstreaming',   () => { this.mseStreaming = false; });
+          /* ★★★ AND A WAY OUT, because I cannot test Safari from here. If the gate above is wrong
+           *  for this browser — startstreaming never fires, or fires only once data has arrived —
+           *  then holding everything back would be WORSE than the bug it is meant to fix: silence
+           *  by a new route. After 1.5 s with no such event, assume an unmanaged source and append
+           *  regardless. A guess that can only ADD appends, never remove them. */
+          setTimeout(() => {
+            if (!this.mseSawStreaming) {
+              console.info('[audio] no startstreaming in 1.5 s — treating the source as unmanaged');
+              this.mseManaged = false;
+              this._mseDrain();
+            }
+          }, 1500);
           this.mseEl = el; this.mseSrc = ms; this.mseBuf = sb;
           this.mseSeq = 1; this.mseTime = 0; this.mseDur = outRate ? 2048 : 1024;
           this.mseQueue = [initSegment(tsRate, channels, asc)];
@@ -1379,6 +1413,8 @@ export class AudioPlayer {
   private _mseDrain() {
     const sb = this.mseBuf;
     if (!sb || sb.updating || !this.mseQueue.length) return;
+    // ★ See the startstreaming note: a managed source takes data only while it asks for it.
+    if (this.mseManaged && !this.mseStreaming) return;
     const seg = this.mseQueue.shift()!;
     try { sb.appendBuffer(seg as unknown as BufferSource); }
     catch (e) { console.warn('[audio] MSE append failed:', e); this.mseQueue.length = 0; }
