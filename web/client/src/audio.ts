@@ -1281,7 +1281,7 @@ export class AudioPlayer {
       try {
         const dec = new AudioDecoder({
           output: (ad) => this._onAacData(ad),
-          error:  (e)  => this._failAac('decode', e),
+          error:  (e)  => this._recoverAac(e),
         });
         dec.configure(cfg);
         this.aacDec = dec;
@@ -1397,6 +1397,35 @@ export class AudioPlayer {
 
   /** ★ Say it where the listener is looking. A DAB+ service that cannot be decoded must not
    *  present as a working radio with no sound — the decoder box says so instead. */
+  /** ★★★ A DECODE ERROR IS NOT A CAPABILITY VERDICT. AudioDecoder reports a bad access unit
+   *  through the same error callback as an unsupported configuration, and both went to
+   *  _failAac — which sets aacBroken FOR THE SESSION and tells the listener their browser cannot
+   *  play AAC. Stuart, 2026-09-05, on Classic FM (64k HE-AAC, the best DAB+ we have): "it worked
+   *  for about a minute in edge before giving up and saying this browser doesnt support aac."
+   *  The browser plainly did support it — it had just played a minute of it.
+   *  ★★★ And DAB HANDS US CORRUPT FRAMES BY DESIGN on a marginal signal; that is the whole point
+   *      of the error protection. A decoder that dies on the first one cannot work on radio.
+   *  ★★ NEVER LIMIT PERMANENTLY: rebuild the decoder and carry on. Only if it fails repeatedly
+   *     WITHOUT ever producing audio is "this browser cannot" an honest thing to say.
+   *  ★ The decoder is dropped rather than reset: _decodeAac reconfigures when aacDec is null,
+   *    which is the existing path and needs no second one. */
+  private aacOkFrames = 0;
+  private aacRecoveries = 0;
+  private _recoverAac(e: unknown) {
+    if (this.aacBroken) return;
+    if (this.aacOkFrames === 0 && ++this.aacRecoveries > 3) {
+      this._failAac('decode', e);          // never once worked — that IS a capability answer
+      return;
+    }
+    this.aacRecoveries++;
+    console.warn(`[audio] DAB+ decode error after ${this.aacOkFrames} good frames — `
+               + `rebuilding the decoder (recovery ${this.aacRecoveries}):`, e);
+    try { this.aacDec?.close(); } catch { /* already gone */ }
+    this.aacDec = null;
+    this.aacTs = 0;
+    this.aacOkFrames = 0;
+  }
+
   private _failAac(stage: string, e: unknown) {
     if (this.aacBroken) return;
     this.aacBroken = true;
@@ -1414,6 +1443,7 @@ export class AudioPlayer {
      *  of read. The first was mono MP2 at 24 kHz. Read ad.sampleRate; never assume it.
      *  ★ It is read from the AudioData rather than computed from the ADTS, because whether the
      *    decoder applied SBR (doubling it) is the decoder's business and differs between them. */
+    this.aacOkFrames++;                  // ★ proof the browser CAN decode this — see _recoverAac
     const srIn = ad.sampleRate || 48000;
     const plane = new Float32Array(frames);
     const planes: Float32Array[] = [];
