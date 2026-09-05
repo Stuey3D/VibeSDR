@@ -162,8 +162,8 @@ public:
          *  the live Pi — DAB reported 12B while the dongle sat on 96.6 MHz — and without both
          *  numbers side by side that is indistinguishable from "DAB does not decode here". */
         snprintf(b, sizeof b,
-                 ",\"channel\":\"%s\",\"centreHz\":%u,\"syncJumps\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
-                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
+                 ",\"channel\":\"%s\",\"centreHz\":%u,\"mp2In\":%u,\"mp2Bad\":%u,\"mp2Out\":%u,\"syncJumps\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
+                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), mp2In_, mp2Bad_, mp2Out_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
                  esc(e.label).c_str(), unsigned(e.eid));
         j += b;
         snprintf(b, sizeof b,
@@ -204,7 +204,9 @@ private:
              *  onward as ADTS instead; that path links no decoder here. */
             if (rx_.selectedType() != 0) { pumpDabPlus(f); continue; }
             std::vector<float> out;
-            if (mp2_.decode(f.data(), f.size(), out) <= 0) continue;
+            ++mp2In_;
+            if (mp2_.decode(f.data(), f.size(), out) <= 0) { ++mp2Bad_; continue; }
+            ++mp2Out_;
             /* ★★★ THE CHIPMUNKS. Mp2Decoder writes INTERLEAVED at the frame's OWN channel count
              *  and its OWN sample rate, and this pushed the result straight into a buffer that
              *  takePcm() reads as 48 kHz STEREO pairs. Two independent speed-ups, and UK DAB has
@@ -321,6 +323,12 @@ private:
      *  and a wrong frame feeds garbage into a 15-CIF time deinterleaver, so one bad acquisition
      *  costs ~400 ms of audio while the FIB rate, which is not interleaved, barely moves. That is
      *  the shape of Stuart's bursts on a signal reporting 98% FIB. */
+    /* ★★★ THE MSC IS NOT THE FIC. They are protected separately — the FIC always heavily, the
+     *  MSC by this subchannel's own UEP or EEP profile — so a 100% FIB pass rate says the CONTROL
+     *  channel is clean and NOTHING about the audio. Stuart is hearing breakup at 100% FIB, which
+     *  is exactly what that distinction predicts, and it is where the measurement has to go next:
+     *  how many audio frames actually decode, against how many arrive. */
+    uint32_t mp2In_ = 0, mp2Bad_ = 0, mp2Out_ = 0;
     long     lastAt_ = -1;
     uint32_t syncJumps_ = 0;
     uint64_t samplesIn_ = 0;
