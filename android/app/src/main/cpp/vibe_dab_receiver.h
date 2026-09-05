@@ -201,6 +201,17 @@ public:
          *      phase-reference correlation collapsing from 9.5 to 0.90 with the whole FIC failing
          *      0/12 — and it destroyed THIRTEEN consecutive audio frames, ~300 ms, which is the
          *      squeal Stuart has been hearing. The event is one frame; the damage was ours.
+         *  ★★★ 0.25, MEASURED — NOT CHOSEN. Swept against 60 s of captured air carrying three real
+         *      burst events, decoding BBC Radio 1 on 12B:
+         *          off   0 erased of 624   MP2 bad 2.3%
+         *          0.15 12 erased          0.6%
+         *          0.25 20 erased          0.1%   <- here
+         *          0.35 34 erased          1.3%   <- what I first guessed at, and shipped
+         *          0.50 43 erased          1.5%
+         *          0.65 72 erased          3.1%
+         *      Erasing too much is as harmful as erasing too little: past the optimum the
+         *      deinterleaver window starts drawing on several erased frames at once and the code
+         *      runs out of usable bits. My guess was 13x worse than the measurement.
          *  ★ The threshold is RELATIVE, because the correlation's scale follows the signal. A
          *    frame at a third of the running reference is not a fade — a fade moves the null
          *    depth too — it is a window in the wrong place. */
@@ -209,7 +220,9 @@ public:
              prsRef_ = prsRef_ * 0.90f + stats_.prsCorrelation * 0.10f;   // rise quickly
         else prsRef_ = prsRef_ * 0.99f + stats_.prsCorrelation * 0.01f;   // fall slowly
         static const bool kNoErase = std::getenv("VIBE_DAB_NOERASE") != nullptr;   // ★ A/B switch
-        const bool untrusted = !kNoErase && (prsRef_ > 0.0f && stats_.prsCorrelation < 0.35f * prsRef_);
+        static const float kEraseFrac = std::getenv("VIBE_DAB_ERASE_FRAC")
+                                     ? float(atof(std::getenv("VIBE_DAB_ERASE_FRAC"))) : 0.25f;
+        const bool untrusted = !kNoErase && (prsRef_ > 0.0f && stats_.prsCorrelation < kEraseFrac * prsRef_);
         const size_t ficBits = size_t(K) * 2 * 3;
         if (untrusted) {
             ++stats_.erasedFrames;
