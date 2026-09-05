@@ -2151,6 +2151,17 @@ static std::string                 g_vsPathPrefix;
 static std::string                 g_vsPathPrefixAlt;
 /// ★ What WE last set the bias-T to. The dongle cannot be asked, so we remember.
 static std::atomic<bool>           g_biasTeeOn{false};
+/** ★★★ WHAT THE OWNER ASKED FOR, WHICH IS NOT THE SAME AS WHAT THE RADIO IS DOING.
+ *  setBiasTee() ends in `if (!p->dev) return;` — and the app sends the bias-T setting THE MOMENT
+ *  THE SERVER STARTS, deliberately ("a powered loop needs its DC before the first listener
+ *  arrives"), which is before the dongle has been opened. So the call was dropped on the floor
+ *  and nothing ever re-asserted it: the switch moved, the setting saved, and the hardware kept
+ *  whatever it had. Stuart, 2026-09-06, on a Xcover whose aerial does not want DC: "I think I
+ *  accidentally left the Bias-T on" — the server reported it ON after he had turned it OFF and
+ *  restarted, because the OFF never reached the radio.
+ *  ★★ Exactly the shape g_rtlDigitalAgc already solved: remember the wish, assert it at open. A
+ *     setting that only applies when the hardware happens to be ready is a coin toss. */
+static std::atomic<int>            g_biasTeeWant{-1};   // -1 = never asked
 /** Reboot / restart / update, performed by the daemon. Null on a phone — see adminAction(). */
 static LocalSdrShim::AdminActionFn g_vsAdminActionFn;
 static LocalSdrShim::AdminLogFn    g_vsAdminLogFn;
@@ -14474,6 +14485,13 @@ struct LocalSdrShim::Impl {
         // ★ The digital AGC is one of the things the device forgot, and it was missing from this
         //   list — so a replug silently handed control back to the dongle. See g_rtlDigitalAgc.
         rtlsdr_set_agc_mode(dev, g_rtlDigitalAgc.load(std::memory_order_relaxed) ? 1 : 0);
+        /* ★ And the bias-T the owner asked for — see g_biasTeeWant. Only when they HAVE asked;
+         *   a radio nobody has set must keep its own state rather than be forced off. */
+        if (const int bt = g_biasTeeWant.load(std::memory_order_relaxed); bt >= 0) {
+            rtlsdr_set_bias_tee(dev, bt);
+            g_biasTeeOn.store(bt != 0);
+            LOGI("bias-tee re-asserted at open: %s", bt ? "ON — DC on the feedline" : "off");
+        }
         rtlsdr_reset_buffer(dev);
 
         launchCapture();
@@ -16813,6 +16831,11 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     rtlsdr_set_tuner_gain_mode(impl->dev, 1);
     // ★ SAY IT, do not inherit it — see g_rtlDigitalAgc. Off unless a listener asked otherwise.
     rtlsdr_set_agc_mode(impl->dev, g_rtlDigitalAgc.load(std::memory_order_relaxed) ? 1 : 0);
+    if (const int bt = g_biasTeeWant.load(std::memory_order_relaxed); bt >= 0) {
+        rtlsdr_set_bias_tee(impl->dev, bt);
+        g_biasTeeOn.store(bt != 0);
+        LOGI("bias-tee re-asserted at open: %s", bt ? "ON — DC on the feedline" : "off");
+    }
     if (applyGain >= 0) rtlsdr_set_tuner_gain(impl->dev, applyGain);
     rtlsdr_reset_buffer(impl->dev);
     // Use the ACTUAL rate the RTL rounded to (keeps the waterfall calibrated).
@@ -19336,7 +19359,13 @@ void LocalSdrShim::setBiasTee(bool on) {
         LOGI("bias-tee (HackRF): %s", on ? "ON — DC on the feedline" : "off");
         return;
     }
-    if (!p->dev) return;
+    /* ★ Remembered BEFORE the device check, so an early call survives to be applied at open. */
+    g_biasTeeWant.store(on ? 1 : 0, std::memory_order_relaxed);
+    if (!p->dev) {
+        LOGI("bias-tee: %s remembered — the radio is not open yet, applying when it is",
+             on ? "ON" : "off");
+        return;
+    }
     rtlsdr_set_bias_tee(p->dev, on ? 1 : 0);
     g_biasTeeOn.store(on);
     LOGI("bias-tee: %s", on ? "ON — DC on the feedline" : "off");
