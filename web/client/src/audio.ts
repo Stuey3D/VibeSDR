@@ -1550,9 +1550,23 @@ export class AudioPlayer {
      *  to be too slow ... justin timberlake is sounding closer to barry white". An octave down is
      *  the unmistakable signature of 2x, and the frame count is the half of the pair that cannot
      *  lie about it. */
+    /* ★★★ COMPUTE THE RATE, DO NOT ASK FOR IT. Every DAB+ access unit is 960 CORE samples —
+     *  measured on air, not assumed: 576 AUs in 34.6 s on a 16 kHz-core service is 60.0 ms each,
+     *  and 60 ms x 16000 = 960 exactly. So whatever the decoder hands back covers a known 960/core
+     *  seconds, and its true rate is frames x core / 960 — arithmetic, with nothing to disagree
+     *  about.
+     *  ★★★ ad.sampleRate IS NOT RELIABLE HERE and that is the whole bug. Decoders differ over
+     *      whether they report the CORE rate or the SBR-doubled one, so believing it made some
+     *      services play fast and others slow on the same browser — Stuart: "some stations are
+     *      slow and others are fast", then "Lou Reed ... is fast" and later "Axel Rose is sounding
+     *      more like a soul singer". Two directions of error from one assumption.
+     *  ★ ad.sampleRate is kept only as the fallback when the frame count is missing, and the
+     *    result is sanity-clamped: an absurd rate should degrade to "believe the decoder", not to
+     *    silence or a squeal. */
     let srIn = ad.sampleRate || 48000;
-    if (frames >= 1920 && srIn === this.aacRate && this._sbrOutRate(this.aacRate)) {
-      srIn = this._sbrOutRate(this.aacRate);
+    if (frames > 0 && this.aacRate > 0) {
+      const computed = Math.round(frames * this.aacRate / 960);
+      if (computed >= 8000 && computed <= 96000) srIn = computed;
     }
     const plane = new Float32Array(frames);
     const planes: Float32Array[] = [];
