@@ -8360,7 +8360,14 @@ struct LocalSdrShim::Impl {
             rtlCenter.store(logical);
             audioFreq.store(centre);          // the readout follows the mux
             viewCenter.store(centre);
-            LocalSdrShim::instance().setSampleRate(double(vibedab::DabService::kRateHz));
+            /* ★★★ CAPTURE AT 2.4, DECODE AT 2.048. The dongle is asked for 2.4 MS/s — an exact
+             *  28.8/12 division it is reliable at, and the rate every working DAB implementation
+             *  uses — and vibe_dab_resample.h converts to the 2.048 the demodulator requires.
+             *  ★ If the radio cannot give 2.4 we fall back to asking for 2.048 directly; the
+             *    service resamples only when the rate it is told about is 2.4. */
+            LocalSdrShim::instance().setSampleRate(2400000.0);
+            if (std::fabs(LocalSdrShim::instance().captureSpanHz() - 2400000.0) > 1000.0)
+                LocalSdrShim::instance().setSampleRate(double(vibedab::DabService::kRateHz));
             rtlCenter.store(logical);
             tuneHw(logical);
             g_dabMode.store(true);
@@ -16296,6 +16303,10 @@ static bool vsDabCapable() {
     /* ★★ …unless the owner has allowed DAB to borrow the rate. Then only the HARDWARE limits it;
      *  see g_dabRateBoost. */
     if (g_dabRateBoost.load(std::memory_order_relaxed)) cap = hw;
+    /* ★ DAB now CAPTURES at 2.4 and resamples to 2.048, so the question is whether the radio can
+     *  reach the capture rate — but a receiver that can only manage 2.048 is still perfectly
+     *  usable, because the service resamples only when it is actually given 2.4. So the gate
+     *  stays at the DECODER's rate and the capture rate is best-effort. */
     // ★ And the owner may switch it off outright, whatever the hardware can do.
     if (vsModeBlocked("dab")) return false;
     return vibedab::radioCanDab(r.data(), r.size(), cap);

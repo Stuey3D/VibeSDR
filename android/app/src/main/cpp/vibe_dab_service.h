@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "vibe_dab_channels.h"
+#include "vibe_dab_resample.h"
 #include "vibe_dab_mp2.h"
 #include "vibe_dab_aac.h"
 #include "vibe_dab_receiver.h"
@@ -92,10 +93,24 @@ public:
             if (!started_) { started_ = true; stop_ = false;
                              worker_ = std::thread([this] { workerLoop(); }); }
             samplesIn_ += nSamples;
+            /* ★★★ THE DONGLE RUNS AT 2.4 MS/s AND THE DECODER GETS 2.048. See
+             *  vibe_dab_resample.h: RTL-SDRs are unreliable at 2.048 — every OpenWebRX DAB
+             *  profile Stuart has is 2.4, SDRangel had the same trouble, and our own XCover
+             *  delivered only 94% of the samples at 2.048 while the Pi managed 100%. 2.4 MS/s is
+             *  an exact 28.8/12 division of the crystal. The 64/75 ratio is exact, so the symbol
+             *  timing cannot drift. */
+            const float* src = interleaved;
+            size_t       n   = nSamples;
+            if (std::fabs(rfRate_ - 2400000.0) < 1000.0) {
+                rsOut_.clear();
+                rs_.process(interleaved, nSamples, rsOut_);
+                src = rsOut_.data();
+                n   = rsOut_.size() / 2;
+            }
             const size_t base = iq_.size();
-            iq_.resize(base + nSamples);
-            for (size_t i = 0; i < nSamples; ++i)
-                iq_[base + i] = { interleaved[2 * i], interleaved[2 * i + 1] };
+            iq_.resize(base + n);
+            for (size_t i = 0; i < n; ++i)
+                iq_[base + i] = { src[2 * i], src[2 * i + 1] };
             /* ★ Bound the backlog here, where the producer is: if the worker cannot keep up, the
              *  OLDEST samples go. Audio minutes late is worse than a gap, and now the drop is
              *  ours and counted rather than the driver's and silent. */
@@ -403,6 +418,8 @@ private:
     int  aacCoreCh_ = 2;                       ///< what the ADTS header declares
     int  aacOutCh_  = 2;                       ///< what the decoder will produce (PS -> 2)
 
+    Resample24to2048        rs_;
+    std::vector<float>      rsOut_;
     std::thread             worker_;
     std::condition_variable cv_;
     bool                    stop_ = false, started_ = false;
