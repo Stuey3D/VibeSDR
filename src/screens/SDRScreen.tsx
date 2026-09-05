@@ -2821,6 +2821,8 @@ export default function SDRScreen({ route, navigation }: Props) {
    *   the hardware. Feeds every gain control in the panel — the dongle's slider as well as the
    *   HackRF's two stages, because a client that offers gain the server clamps is lying. */
   const [hwGainCap,  setHwGainCap]  = useState(-1);
+  /** Modes and decoders the owner has switched off on this receiver — hwinfo.blocked. */
+  const [blockedModes, setBlockedModes] = useState<Set<string>>(new Set());
   /* ★★★ "THE RADIO IS DEAF AND THAT IS WHY YOU SEE NOTHING." Stuart: "dont want people connecting
    *   to a server seeing a flat spectrum thinking this is fucked and then leaving."
    *   A receiver sitting at minimum gain looks EXACTLY like a broken one — flat waterfall, no
@@ -3629,6 +3631,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       onHwGainLocked: (v: boolean) => { if (!destroyed.current) setHwGainLocked(v); },
       onHwIfGrFloor: (v: number) => { if (!destroyed.current) setHwIfGrFloor(v); },
       onHwGainCap: (v: number) => { if (!destroyed.current) setHwGainCap(v); },
+      /* ★ The owner's switched-off modes and decoders. The server refuses them, so the app must
+       *  not offer them — see onHwBlockedModes in UberSDRClient. */
+      onHwBlockedModes: (list: string[]) => { if (!destroyed.current) setBlockedModes(new Set(list)); },
       onHwTunerBw: (hz: number, auto: boolean) => {
         if (destroyed.current) return;
         setHwHasTunerBw(true); setHwTunerBw(hz); setHwTunerBwAuto(auto);
@@ -8516,7 +8521,18 @@ export default function SDRScreen({ route, navigation }: Props) {
       <ModeSelector
         visible={modeSelOpen}
         current={status.mode}
-        modes={isLocal ? LOCAL_MODES : route.params.serverType === 'owrx' ? serverModes : undefined}
+        /* ★★★ MINUS WHATEVER THE OWNER SWITCHED OFF. A blocked mode is not shown at all rather
+         *  than shown and refused: on an HF-only RSP1B, WFM is not a broken button, it is a mode
+         *  that receiver does not have (Stuart, 2026-09-05). Applies to the DEFAULT list too,
+         *  which is why the fallback is spelled out here instead of left to ModeSelector. */
+        modes={(() => {
+          const base = isLocal ? LOCAL_MODES
+                    : route.params.serverType === 'owrx' ? serverModes
+                    : LOCAL_MODES;
+          if (!base || !blockedModes.size) return isLocal || route.params.serverType === 'owrx' ? base : undefined;
+          const kept = base.filter(m => !blockedModes.has(String(m.id).toLowerCase()));
+          return kept.length ? kept : base;
+        })()}
         activeDecoder={route.params.serverType === 'owrx'
           ? (activeDecoder === 'sstv' ? 'sstv' : activeDecoder === 'wefax' ? 'fax' : undefined)
           : undefined}

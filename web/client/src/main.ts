@@ -1070,6 +1070,21 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     //   assume it can filter at build time.
     onBlockedModes: (list) => {
       blockedModes = new Set(list.map(m => m.toLowerCase()));
+      /* ★★★ DECODERS TOO, not just demodulators. The owner's list covers everything a listener
+       *  can choose — Stuart: "block WFM and Adv RDS from ever being shown as they are redundant
+       *  on a HF only radio" — and a decoder button that opens a panel the server will refuse is
+       *  the same broken-looking control as a dead mode. Removed from the DOM rather than
+       *  disabled: greyed out still says "this receiver has this and you cannot have it", which
+       *  is not what an HF radio wants to say about WFM. */
+      for (const b of Array.from(document.querySelectorAll('[data-dec]')) as HTMLElement[]) {
+        const id = (b.dataset.dec || '').toLowerCase();
+        b.hidden = blockedModes.has(id);
+      }
+      // ★ And the door to them, when there is nothing left behind it.
+      const anyDec = ['rtty', 'navtex', 'wefax', 'sstv', 'time', 'rds', 'ft8']
+        .some(d => !blockedModes.has(d));
+      const db = document.getElementById('decodersBtn');
+      if (db) db.hidden = !anyDec;
       // If we are somehow already ON a blocked mode (an owner switched it off mid-session),
       // move to the first one that is still allowed rather than leaving a dead selection.
       if (spec?.mode && isModeBlocked(String(spec.mode))) {

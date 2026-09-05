@@ -266,6 +266,8 @@ export interface SDRCallbacks {
    *  ★ Frequency-dependent (per-band rules), so it can CHANGE ON A RETUNE — treat it as live
    *  state, not as a property of the radio. */
   onHwGainCap?: (capTenthDb: number) => void;
+  /** Modes and decoders the owner has switched off (lower case ids). */
+  onHwBlockedModes?: (list: string[]) => void;
   /** ★ The tuner's IF filter: the width in Hz (0 = wide open) and whether it is FOLLOWING THE
    *  ZOOM. The web client has had this picker since the filter existed; the app never had one. */
   onHwTunerBw?: (hz: number, auto: boolean) => void;
@@ -2157,6 +2159,13 @@ export class UberSDRClient {
       //   "no limit", and 0 would read as "no gain allowed at all".
       this.callbacks.onHwGainCap?.(
         typeof msg.gainCap === 'number' ? (msg.gainCap as number) : -1);
+      /* ★★★ MODES AND DECODERS THE OWNER HAS SWITCHED OFF. Same rule as the locks above and for
+       *  the same reason: the server REFUSES these, so the app must not offer them. Stuart's
+       *  cases are an RSP1B locked to HF (where WFM and Adv RDS can do nothing) and an XCover set
+       *  up for AM/FM only. Absent = nothing blocked, which is what every server before this one
+       *  meant — never "block everything". */
+      if (Array.isArray(msg.blocked))
+        this.callbacks.onHwBlockedModes?.((msg.blocked as string[]).map(x => String(x).toLowerCase()));
       // ★ Only when the server actually states it — an older server has no such filter and must
       //   not be read as "wide open", which is a claim about hardware we have not been told about.
       if (msg.tunerBw !== undefined)
