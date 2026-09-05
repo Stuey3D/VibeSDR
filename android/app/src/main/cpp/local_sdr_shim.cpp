@@ -604,6 +604,18 @@ static std::atomic<double> g_dabSavedRtl{0.0}, g_dabSavedAudio{0.0}, g_dabSavedV
  *  DAB mode reverts VibeAGC to manual every time" (Stuart). Two halves of one setting, and I
  *  saved one of them. */
 static std::atomic<bool>   g_dabSavedAgcOn{false};
+/* ★★★ AND THE DONGLE'S OWN AGC, WHICH MUST BE OFF UNDER OFDM. Stuart, reading the previous
+ *  commit: "is the RTL-AGC being stuck on alongside VibeAGC, if so this could explain a lot of
+ *  errors." It was on — his menu showed DIGITAL AGC ON — and this file already says why that is
+ *  wrong, at g_rtlDigitalAgc: "unreliable across tuners and known broken on the RTL-SDR Blog v4,
+ *  and this server never uses it… a hardware AGC underneath it is fighting the same gain."
+ *  ★ Two loops chasing one gain is exactly the shape of a receiver that is clean for a while and
+ *    then bursts: they only disagree occasionally, and when they do the front end moves under a
+ *    demodulator that has no idea it happened.
+ *  ★ Forced off for DAB and restored on the way out, like everything else DAB borrows. It is a
+ *    listener's momentary A/B, not an owner's setting, so taking it for the duration costs
+ *    nothing they chose deliberately. */
+static std::atomic<bool>   g_dabSavedDigAgc{false};
 static std::atomic<double> g_dabSavedActualRate{0.0};
 static std::atomic<double> g_dabSavedCentre{0.0};
 static std::atomic<double> g_dabSavedRate{0.0};
@@ -8065,6 +8077,7 @@ struct LocalSdrShim::Impl {
                     g_vsLockedRate.store(g_dabSavedRate.load());
                     LocalSdrShim::instance().setGain(g_dabSavedGain.load());
                     g_rtlAgc.store(g_dabSavedAgcOn.load(), std::memory_order_relaxed);
+                    LocalSdrShim::instance().setAgc(g_dabSavedDigAgc.load());
                     agcForget("DAB off: the gain that suited an ensemble does not suit a carrier");
                     /* ★★★ AND PUT THE RADIO BACK WHERE IT WAS — unconditionally. See the note on
                      *  g_dabSavedRtl: gating this on a centre LOCK left every unlocked receiver
@@ -8146,6 +8159,7 @@ struct LocalSdrShim::Impl {
                 g_dabSavedRate.store(g_vsLockedRate.load());
                 g_dabSavedGain.store(g_gainTarget.load(std::memory_order_relaxed));
                 g_dabSavedAgcOn.store(g_rtlAgc.load(std::memory_order_relaxed));
+                g_dabSavedDigAgc.store(g_rtlDigitalAgc.load(std::memory_order_relaxed));
                 g_dabSavedRtl.store(rtlCenter.load());
                 g_dabSavedAudio.store(audioFreq.load());
                 g_dabSavedView.store(viewCenter.load());
@@ -8172,6 +8186,7 @@ struct LocalSdrShim::Impl {
                  *    re-points the AGC; it needs the AGC to be running to be re-pointed. */
                 LocalSdrShim::instance().setGain(-1);
                 g_rtlAgc.store(true, std::memory_order_relaxed);
+                LocalSdrShim::instance().setAgc(false);   // the DONGLE's — see g_dabSavedDigAgc
                 agcForget("DAB: an ensemble is not the carrier we came off — reconverge from the bottom");
             }
             /* ★★★ RESTART THE AGC FROM THE BOTTOM. The loop is built to start at the minimum and
