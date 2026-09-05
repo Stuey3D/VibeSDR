@@ -1180,8 +1180,21 @@ export class AudioPlayer {
       return;
     }
     if (this.aacBroken || !coreRateHz) return;
+    /* ★★★ NO WebCodecs AT ALL — GO STRAIGHT TO MediaSource. This used to call _failAac and
+     *  return, and _failAac sets aacBroken, so the fMP4 path built in 4.2.2 was never once
+     *  ATTEMPTED on a browser without AudioDecoder: the fallback was only reachable from inside
+     *  the WebCodecs probe, which cannot run when there is nothing to probe. Safari reported "no
+     *  AAC support" three builds running while the code meant to rescue it sat unreached.
+     *  ★ The same mistake as the DAB gate that only worked on a locked radio: a fallback placed
+     *    inside the thing it is a fallback FOR. */
     if (typeof AudioDecoder === 'undefined') {
-      this._failAac('support', 'this browser has no WebCodecs AudioDecoder');
+      if (!this.aacProbing) {
+        this.aacProbing = true;
+        void this._startMse(coreRateHz, channels).then((ok) => {
+          this.aacProbing = false;
+          if (!ok) this._failAac('support', 'no WebCodecs AAC and no MediaSource path');
+        });
+      }
       return;
     }
     if (!this.aacDec || this.aacRate !== coreRateHz || this.aacCh !== channels) {
