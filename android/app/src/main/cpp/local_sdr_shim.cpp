@@ -8365,15 +8365,20 @@ struct LocalSdrShim::Impl {
              *  uses — and vibe_dab_resample.h converts to the 2.048 the demodulator requires.
              *  ★ If the radio cannot give 2.4 we fall back to asking for 2.048 directly; the
              *    service resamples only when the rate it is told about is 2.4. */
-            /* ★★★ BACK TO 2.048 UNTIL THE RESAMPLER IS PROVEN. Capturing at 2.4 and
-             *  resampling worked mechanically — 2.399 MS/s in, zero drops, frames at 10.41/s of
-             *  10.42, so the RATIO and the timing are exact — and the FIB pass rate fell from
-             *  1.0 to 0.624. That is the resampler's FILTER damaging the signal, not the rate.
-             *  ★ A change that halves the error rate of the thing it was meant to fix does not
-             *    get to stay on a live receiver while I work out why. The 2.4 capture returns
-             *    when the resampler has a test that proves it passes a DAB-shaped signal intact.
-             *  ★ The IF-filter fix from 4.4.1 stays — it is independent and measured. */
-            LocalSdrShim::instance().setSampleRate(double(vibedab::DabService::kRateHz));
+            /* ★★★ CAPTURE AT 2.4, DECODE AT 2.048. RTL-SDRs are unreliable at 2.048 and every
+             *  working DAB implementation avoids it: all of Stuart's OpenWebRX DAB profiles are
+             *  2.4, SDRangel had the same trouble, and our XCover delivered only 94% of the
+             *  samples at 2.048 against the Pi's 100%. 2.4 is an exact 28.8/12 division of the
+             *  crystal. vibe_dab_resample.h converts 64/75 — exactly — to the 2.048 the
+             *  demodulator requires.
+             *  ★ Re-enabled only now that test-dab-resample pins the filter: every tone across
+             *    the ensemble within 0.25 dB and above 75 dB SNDR. The first attempt was 36 dB
+             *    down and went on air, halving the FIB rate.
+             *  ★ Best effort: if the radio will not give 2.4 we ask for 2.048 and the service
+             *    resamples only when it is actually handed 2.4. */
+            LocalSdrShim::instance().setSampleRate(2400000.0);
+            if (std::fabs(LocalSdrShim::instance().captureSpanHz() - 2400000.0) > 1000.0)
+                LocalSdrShim::instance().setSampleRate(double(vibedab::DabService::kRateHz));
             rtlCenter.store(logical);
             tuneHw(logical);
             g_dabMode.store(true);
