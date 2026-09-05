@@ -106,7 +106,7 @@ inline SuperFrame decodeSuperFrame(const uint8_t* wire, size_t n, int index) {
     sf.firecodeOk = (fire == dabFireCode16(&data[2], 9));
 
     const uint8_t b2   = data[2];
-    const bool dacRate = (b2 >> 6) & 1;
+    const bool dacRate = (b2 >> 6) & 1;   // used for the format; NOT for the header length
     const bool sbr     = (b2 >> 5) & 1;
     const bool chMode  = (b2 >> 4) & 1;
     const bool ps      = (b2 >> 3) & 1;
@@ -119,8 +119,23 @@ inline SuperFrame decodeSuperFrame(const uint8_t* wire, size_t n, int index) {
     const int nau = sf.fmt.accessUnits;
     std::vector<size_t> start(size_t(nau) + 1, 0);
     size_t bitPos = 3 * 8;                                  // after firecode + the parameter byte
-    const size_t headerBytes = 3 + size_t((nau - 1) * 12 + 7) / 8
-                             + ((!(dacRate && sbr)) ? 1 : 0);   // byte alignment, per table 2
+    /* ★★★ THE HEADER IS 24 BITS PLUS 12 PER ADDITIONAL AU, ROUNDED UP TO A BYTE — and nothing
+     *  else. Table 2: firecode (16) + the parameter byte (8) + au_start[1..n-1] (12 each), then
+     *  padding to alignment. This used to add a CONDITIONAL EXTRA BYTE on top of a separate
+     *  ceiling, which lands one byte late for a 2-AU super frame:
+     *      AUs   correct   old
+     *        2     5        6      <- wrong
+     *        3     6        6
+     *        4     8        8
+     *        6    11       11
+     *  ★★★ A 32 kbit/s DAB+ service with SBR carries exactly TWO AUs, so au_start[0] pointed one
+     *      byte into the first AU, its CRC failed and it was dropped — while AU 1, whose offset
+     *      comes from the bitstream and was therefore right, survived. The counters said it
+     *      outright: 424 super frames accepted and 424 access units produced, when two per frame
+     *      were due. Half the audio, hence Stuart's "start stop audio" on DAB+ in Edge.
+     *  ★ The other AU counts happened to come out right, which is why this survived the first
+     *    listen on a mux that used them. */
+    const size_t headerBytes = (24 + size_t(nau - 1) * 12 + 7) / 8;
     start[0] = headerBytes;
     for (int i = 1; i < nau; ++i) {
         size_t v = 0;
