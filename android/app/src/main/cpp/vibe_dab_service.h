@@ -290,8 +290,8 @@ public:
          *  the live Pi — DAB reported 12B while the dongle sat on 96.6 MHz — and without both
          *  numbers side by side that is indistinguishable from "DAB does not decode here". */
         snprintf(b, sizeof b,
-                 ",\"channel\":\"%s\",\"centreHz\":%u,\"scf\":[%u,%u,%u,%u,%u],\"mp2Crc\":%u,\"mp2In\":%u,\"mp2Bad\":%u,\"mp2Out\":%u,\"syncJumps\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
-                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), scfChecked_, scfOk_[0], scfOk_[1], scfOk_[2], scfOk_[3], mp2WithCrc_, mp2In_, mp2Bad_, mp2Out_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
+                 ",\"channel\":\"%s\",\"centreHz\":%u,\"scf\":[%u,%u,%u,%u,%u],\"mp2Crc\":%u,\"mp2In\":%u,\"mp2Bad\":%u,\"mp2Out\":%u,\"mp2Concealed\":%u,\"syncJumps\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
+                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), scfChecked_, scfOk_[0], scfOk_[1], scfOk_[2], scfOk_[3], mp2WithCrc_, mp2In_, mp2Bad_, mp2Out_, mp2Concealed_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
                  esc(e.label).c_str(), unsigned(e.eid));
         j += b;
         snprintf(b, sizeof b,
@@ -384,6 +384,40 @@ private:
             ++mp2In_;
             if (mp2_.decode(f.data(), f.size(), out) <= 0) { ++mp2Bad_; continue; }
             ++mp2Out_;
+            /* ★★★ CONCEAL THE SQUEAL. THE MPEG CRC DOES NOT COVER THE SCALEFACTORS — it spans the
+             *  header, the allocation and the scfsi only (see mp2Crc16) — so a frame whose
+             *  SCALEFACTORS were corrupted passes every check we make and decodes into full-scale
+             *  noise. Scalefactors are logarithmic gains: one wrong index is tens of dB, which is
+             *  why the failure is a SQUEAL rather than the bubbling mud of ordinary bit errors,
+             *  and why Stuart has described it that way from the very first report.
+             *  ★★★ MEASURED on 60 s of captured air (dab-offline): median frame RMS 0.145, p95
+             *      0.218 — and a peak of 2.927, which valid Layer II output cannot produce. 15
+             *      frames of 2439 arrive at full scale. Those fifteen are the squeals.
+             *  ★★★ THIS IS WHAT THE REFERENCE DOES. Stuart, comparing the SAME dongle and aerial
+             *      on OpenWebRX minutes earlier: "no awful squeal on OWRX, a little hiccup of
+             *      silence ... now crystal clear", and "I can listen to OWRX for extended periods
+             *      of time, I could not ours." A receiver that cannot decode a frame must say
+             *      nothing; it must never say something loud.
+             *  ★★ CONCEALMENT, NOT A CURE, and it is not pretending otherwise — the counter is
+             *     published so the underlying error rate stays visible. OWRX stalls far less
+             *     often than we squeal, which is the real gap and is still being worked.
+             *  ★ Two tests, both from the measurement above: a peak no valid frame can reach, and
+             *    a level wildly out of line with this service's own running average. The average
+             *    is seeded from the first good frames and moves slowly, so a genuinely loud
+             *    passage cannot be silenced by it. */
+            {
+                float pk = 0.0f; double sq = 0.0;
+                for (float v : out) { const float a = std::fabs(v); if (a > pk) pk = a; sq += double(v) * v; }
+                const double rms = out.empty() ? 0.0 : std::sqrt(sq / double(out.size()));
+                const bool impossible = (pk > 1.5f);
+                const bool wayOut     = (rmsRef_ > 0.0 && rms > rmsRef_ * 6.0);
+                if (impossible || wayOut) {
+                    ++mp2Concealed_;
+                    std::fill(out.begin(), out.end(), 0.0f);       // a stall, not a squeal
+                } else if (rms > 0.0) {
+                    rmsRef_ = rmsRef_ > 0.0 ? rmsRef_ * 0.98 + rms * 0.02 : rms;
+                }
+            }
             if (mp2_.lastHadCrc()) ++mp2WithCrc_;
             {   // ★ Which ScF-CRC convention matches on air — see Mp2Decoder::tallyScfCrc.
                 const auto& t = mp2_.scfCrc();
@@ -528,6 +562,9 @@ private:
     /** ★ The first half of a 24 kHz Layer II frame, waiting for its second. See drainAudio(). */
     std::vector<uint8_t>    lsfPend_;
     unsigned                lsfOrphans_ = 0;
+    /** Frames silenced because they decoded into something no valid audio frame can be. */
+    uint32_t                mp2Concealed_ = 0;
+    double                  rmsRef_ = 0.0;
     Resample24to2048        rs_;
     std::vector<float>      rsOut_;
     std::thread             worker_;

@@ -53,6 +53,8 @@ int main(int argc, char** argv) {
     int mp2In = 0, mp2Bad = 0, mp2Out = 0;
     long long blocks = 0;
     std::vector<uint8_t> pend;
+    std::vector<int> cifOfMp2; int cifSeq = 0;
+    std::vector<double> framePk, frameRms;
     std::vector<int> badIdx;            // ★ WHICH frames fail — runs and periods are the diagnosis
     std::vector<long> frameStarts;      // ★ and where each frame was found, to catch skips/dups
     std::vector<int>  fibOkPer, fibTotPer;   // ★ per-FRAME FIC health, to separate signal from us
@@ -129,6 +131,7 @@ int main(int argc, char** argv) {
                 ++mp2In;
                 std::vector<float> out;
                 frameOfMp2.push_back(int(blocks) - 1);
+                cifOfMp2.push_back(cifSeq++ & 3);   // ★ which CIF of the four this came from
                 if (mp2.decode(f.data(), f.size(), out) <= 0) {
                     ++mp2Bad; badIdx.push_back(mp2In - 1);
                     if (mp2Bad <= 3) {          // ★ LOOK AT THE BYTES, do not infer from the config
@@ -143,7 +146,13 @@ int main(int argc, char** argv) {
                         printf("\n");
                     }
                 }
-                else ++mp2Out;
+                else {
+                    ++mp2Out;
+                    double pk = 0, sq = 0;
+                    for (float v : out) { const double a = std::fabs(v); if (a > pk) pk = a; sq += double(v)*v; }
+                    const double rms = out.empty() ? 0 : std::sqrt(sq / double(out.size()));
+                    framePk.push_back(pk); frameRms.push_back(rms);
+                }
             }
         }
         }   // while (acc >= one frame)
@@ -182,6 +191,16 @@ int main(int argc, char** argv) {
         if (cur > longest) longest = cur;
         printf("contiguous runs >1: %d   longest run: %d frames\n", runs, longest);
     }
+    if (!badIdx.empty()) {
+        int perCif[4] = {0,0,0,0}, totCif[4] = {0,0,0,0};
+        for (size_t i = 0; i < cifOfMp2.size(); ++i) totCif[cifOfMp2[i]]++;
+        for (int b : badIdx) if (b < int(cifOfMp2.size())) perCif[cifOfMp2[size_t(b)]]++;
+        printf("\nbad by CIF position in the frame: ");
+        for (int c = 0; c < 4; ++c)
+            printf("CIF%d %d/%d (%.1f%%)  ", c, perCif[c], totCif[c],
+                   totCif[c] ? 100.0 * perCif[c] / totCif[c] : 0.0);
+        printf("\n");
+    }
     // ── WHAT WAS HAPPENING WHEN THE AUDIO BROKE ─────────────────────────────
     if (!badIdx.empty()) {
         const int f0 = frameOfMp2[size_t(badIdx.front())];
@@ -203,6 +222,27 @@ int main(int argc, char** argv) {
         printf("frame-start deltas: ");
         for (const auto& kv : d) printf("%ld:%d  ", kv.first, kv.second);
         printf("\n");
+    }
+    /* ★ THE SQUEAL IS LOUD. The MPEG CRC covers the header, allocation and scfsi — NOT the
+     *  scalefactors — so a frame with corrupted scalefactors passes and decodes to full-scale
+     *  noise. Measure how far out of line those frames are, so a concealment threshold can be
+     *  taken from the air rather than guessed. */
+    if (frameRms.size() > 20) {
+        std::vector<double> sorted = frameRms;
+        std::sort(sorted.begin(), sorted.end());
+        const double med = sorted[sorted.size()/2];
+        printf("\ndecoded-frame level: median rms %.4f  p95 %.4f  max %.4f  (peak max %.3f)\n",
+               med, sorted[size_t(sorted.size()*0.95)], sorted.back(),
+               *std::max_element(framePk.begin(), framePk.end()));
+        int over6 = 0, over12 = 0, over20 = 0, clipped = 0;
+        for (size_t i = 0; i < frameRms.size(); ++i) {
+            if (med > 0 && frameRms[i] > med * 2.0)  ++over6;
+            if (med > 0 && frameRms[i] > med * 4.0)  ++over12;
+            if (med > 0 && frameRms[i] > med * 10.0) ++over20;
+            if (framePk[i] >= 0.98) ++clipped;
+        }
+        printf("frames above the median by  6 dB: %d   12 dB: %d   20 dB: %d   at full scale: %d   (of %zu)\n",
+               over6, over12, over20, clipped, frameRms.size());
     }
     std::fclose(fp);
     return 0;

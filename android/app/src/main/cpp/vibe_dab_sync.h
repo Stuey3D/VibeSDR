@@ -54,7 +54,20 @@ inline constexpr float kMinNullDepth = 4.0f;
  *    of the null length. At 2.048 MHz a frame is 196608 samples and this runs on every one of them
  *    while unlocked — an O(n·nullLen) version would be 2656x that and would not keep up on a Pi.
  */
-inline NullSearch findNull(const Cplx* x, size_t n, size_t nullLen) {
+/** @param refMeanPower  Mean power to judge the null AGAINST, or 0 to use the search window's own.
+ *  ★★★ THIS PARAMETER IS THE WHOLE TRACKING PATH. depth is meanAll/meanNull, and when the search
+ *      window is only +/-64 samples around a predicted null it is ALMOST ENTIRELY NULL — so
+ *      meanAll == meanNull, depth == 1, and `found` is false however perfect the lock. The TRACK
+ *      branch could therefore never report a frame: it missed four times, dropped the lock, and
+ *      re-acquired. That is why offer() has always been used with resetSync() on every frame,
+ *      why syncConsumed() is dead code, and why wiring tracking up "properly" measured far WORSE
+ *      (63 frames of 311) — the design was sound and its depth test was not.
+ *  ★★ Re-acquiring every 96 ms is what produces the +/-1 sample jitter, the occasional +/-4, and
+ *     with it the frames that decode as noise: acquisition takes a GLOBAL MINIMUM over a frame,
+ *     so it only has to lose once. Measured on 60 s of captured air: three burst events, one of
+ *     19 consecutive audio frames.
+ *  ★ A caller that tracks passes the signal's own mean power, measured over the buffer. */
+inline NullSearch findNull(const Cplx* x, size_t n, size_t nullLen, double refMeanPower = 0.0) {
     NullSearch r;
     if (!x || n < nullLen * 2 || nullLen == 0) return r;
 
@@ -75,7 +88,7 @@ inline NullSearch findNull(const Cplx* x, size_t n, size_t nullLen) {
         if (win < best) { best = win; bestAt = i - nullLen + 1; }
     }
 
-    const double meanAll  = total / double(n);
+    const double meanAll  = refMeanPower > 0.0 ? refMeanPower : total / double(n);
     const double meanNull = best  / double(nullLen);
     // ★ A perfectly silent null gives meanNull == 0; report a large depth rather than dividing by
     //   zero. Synthetic test signals do exactly this, and so does a muted input.
@@ -117,7 +130,15 @@ public:
             const size_t lo = centre > slack ? centre - slack : 0;
             const size_t hiEnd = centre + slack + nullLen_;
             if (hiEnd <= n) {
-                NullSearch s = findNull(x + lo, (hiEnd - lo), nullLen_);
+                /* ★ The signal's mean power, sampled cheaply across the WHOLE buffer — this is
+                 *  what the null has to be deep against. Strided so tracking stays cheap, which
+                 *  was always the point of tracking. */
+                double ref = 0.0; size_t cnt = 0;
+                for (size_t i = 0; i < n; i += 64) {
+                    ref += double(x[i].re) * x[i].re + double(x[i].im) * x[i].im; ++cnt;
+                }
+                ref = cnt ? ref / double(cnt) : 0.0;
+                NullSearch s = findNull(x + lo, (hiEnd - lo), nullLen_, ref);
                 if (s.found) {
                     depth_ = s.depth;
                     const size_t at = lo + s.offset;

@@ -16,6 +16,7 @@
 //    what makes the integer frequency offset recoverable. Treating it as data shifts every symbol
 //    index by one and decodes nothing, with every stage reporting itself healthy.
 #pragma once
+#include <cstdlib>
 
 #include <cmath>
 #include <complex>
@@ -207,7 +208,8 @@ public:
         else if (stats_.prsCorrelation > prsRef_)
              prsRef_ = prsRef_ * 0.90f + stats_.prsCorrelation * 0.10f;   // rise quickly
         else prsRef_ = prsRef_ * 0.99f + stats_.prsCorrelation * 0.01f;   // fall slowly
-        const bool untrusted = (prsRef_ > 0.0f && stats_.prsCorrelation < 0.35f * prsRef_);
+        static const bool kNoErase = std::getenv("VIBE_DAB_NOERASE") != nullptr;   // ★ A/B switch
+        const bool untrusted = !kNoErase && (prsRef_ > 0.0f && stats_.prsCorrelation < 0.35f * prsRef_);
         const size_t ficBits = size_t(K) * 2 * 3;
         if (untrusted) {
             ++stats_.erasedFrames;
