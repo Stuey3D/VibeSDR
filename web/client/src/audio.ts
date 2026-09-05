@@ -1173,9 +1173,49 @@ export class AudioPlayer {
     return new Uint8Array([ (2 << 3) | (idx >> 1), ((idx & 1) << 7) | (ch << 3) ]);
   }
 
+  /** ★★★ DAB+ HAS EXACTLY FOUR FORMATS, so SBR is derivable from the core rate alone (TS 102 563
+   *  table 2): 16k core -> 32k out and 24k core -> 48k out both carry SBR; 32k and 48k do not.
+   *  The server sends only the CORE rate, and it is right to — but the fMP4 timeline has to know
+   *  what actually comes OUT. Returns 0 when there is no SBR. */
+  private _sbrOutRate(coreRateHz: number): number {
+    if (coreRateHz === 16000) return 32000;
+    if (coreRateHz === 24000) return 48000;
+    return 0;
+  }
+
+  /** ★★★ AN EXPLICIT (HIERARCHICAL) AudioSpecificConfig FOR HE-AAC — AOT 5, carrying the
+   *  extension sampling frequency, then AOT 2 for the core.
+   *  ★★★ WHY: the implicit config (_ascFor: AAC-LC at the core rate) leaves the decoder to detect
+   *      SBR for itself, and then the mp4 timeline and the decoder disagree about how long an
+   *      access unit is. Declaring 1024 samples at a 24 kHz timescale while the decoder returns
+   *      2048 at 48 kHz makes the browser STRETCH it — Stuart, 2026-09-05: "DAB+ sample rate
+   *      seems to be too slow now... justin timberlake is sounding closer to barry white." An
+   *      octave down is the unmistakable signature of exactly 2x.
+   *   ★★ Explicit signalling plus an OUTPUT-rate timeline (2048 per AU) is what mp4 muxers write
+   *      for HE-AAC, and it takes the guess away from both sides. This is also the most likely
+   *      reason Safari's MediaSource path never produced audio: it was handed a config it had to
+   *      infer from, on a timeline that then contradicted the inference.
+   *   ★ 25 bits: AOT(5)=5, freqIdx(4), channels(4), extFreqIdx(4), AOT(5)=2, GASpecificConfig(3). */
+  private _ascExplicitSbr(coreRateHz: number, outRateHz: number, ch: number): Uint8Array | null {
+    const table = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
+    const ci = table.indexOf(coreRateHz), oi = table.indexOf(outRateHz);
+    if (ci < 0 || oi < 0 || ch < 1 || ch > 2) return null;
+    let acc = 0, nbits = 0;
+    const out: number[] = [];
+    const put = (v: number, n: number) => {
+      acc = (acc << n) | (v & ((1 << n) - 1)); nbits += n;
+      while (nbits >= 8) { nbits -= 8; out.push((acc >> nbits) & 0xff); }
+    };
+    put(5, 5); put(ci, 4); put(ch, 4); put(oi, 4); put(2, 5); put(0, 3);
+    if (nbits) out.push((acc << (8 - nbits)) & 0xff);
+    return new Uint8Array(out);
+  }
+
   private _decodeAac(buf: ArrayBuffer, channels: number, coreRateHz: number) {
     if (this.mseBuf) {                       // Safari path — see _startMse
-      this.mseDur = 1024;
+      // ★ 2048 under SBR: the AU is 1024 CORE samples, which is 2048 at the doubled output rate
+      //   the timeline is now written in. See _ascExplicitSbr.
+      this.mseDur = this._sbrOutRate(coreRateHz) ? 2048 : 1024;
       this._mseFeed(new Uint8Array(buf, 6 + 7));   // strip the ADTS header; the ASC carries the config
       return;
     }
@@ -1275,7 +1315,11 @@ export class AudioPlayer {
     const Managed = (self as unknown as { ManagedMediaSource?: typeof MediaSource }).ManagedMediaSource;
     const MS: typeof MediaSource | undefined =
       Managed ?? (typeof MediaSource !== 'undefined' ? MediaSource : undefined);
-    const asc = this._ascFor(coreRateHz, channels);
+    /* ★★★ THE MSE TIMELINE RUNS AT THE OUTPUT RATE, NOT THE CORE — see _ascExplicitSbr. */
+    const outRate = this._sbrOutRate(coreRateHz);
+    const asc = outRate ? this._ascExplicitSbr(coreRateHz, outRate, channels)
+                        : this._ascFor(coreRateHz, channels);
+    const tsRate = outRate || coreRateHz;
     if (!MS)  { console.warn('[audio] no MediaSource in this browser'); return false; }
     if (!asc) { console.warn(`[audio] no AudioSpecificConfig for ${coreRateHz} Hz / ${channels}ch`); return false; }
     const mime = ['audio/mp4; codecs="mp4a.40.5"', 'audio/mp4; codecs="mp4a.40.2"',
@@ -1309,8 +1353,8 @@ export class AudioPlayer {
           sb.mode = 'sequence';
           sb.addEventListener('updateend', () => this._mseDrain());
           this.mseEl = el; this.mseSrc = ms; this.mseBuf = sb;
-          this.mseSeq = 1; this.mseTime = 0; this.mseDur = 1024;
-          this.mseQueue = [initSegment(coreRateHz, channels, asc)];
+          this.mseSeq = 1; this.mseTime = 0; this.mseDur = outRate ? 2048 : 1024;
+          this.mseQueue = [initSegment(tsRate, channels, asc)];
           this._mseDrain();
           void el.play().catch(() => { /* a gesture may be needed; the buffer keeps filling */ });
           console.info(`[audio] DAB+ via MediaSource ${mime} @ ${coreRateHz} Hz, ${channels}ch`);
