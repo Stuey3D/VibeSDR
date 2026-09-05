@@ -4397,9 +4397,15 @@ function dabSetMode(on: boolean) {
   } else {
     spec?.dab(false);
     dabState = null;
-    // ★ Hand the dial back — see dabPrevFreq. The server restores its own centre; this is the
-    //   client's copy, and the two disagreeing is what left the tuning stuck.
-    if (spec && dabPrevFreq) { spec.frequency = dabPrevFreq; mobileUi?.refresh(); }
+    /* ★★★ DO NOT RESTORE THE FREQUENCY FROM A CLIENT-SIDE COPY. This used to write dabPrevFreq
+     *  back into spec.frequency, and that copy can be stale — the server is the only thing that
+     *  knows where the radio actually ended up. On Stuart's V4 the readout came back 200 kHz low
+     *  (96.400 while RDS decoded Heart on 96.6) purely because the client asserted a remembered
+     *  number over the truth. It showed only on the V4 because that is the radio DAB had been
+     *  used on, and a restart cleared it because a fresh client takes the server's config.
+     *  ★ The server sends a config when DAB ends (see the dab_off handler) and spectrum.ts sets
+     *    this.frequency from cfg.serverVfo. Letting that arrive is both simpler and correct —
+     *    a client must not decide what only the server knows. */
     dabPrevFreq = 0;
     applyRateOptions();
     populateHw();                // give the real rate list back — see the note on the way in
