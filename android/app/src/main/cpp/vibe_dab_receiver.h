@@ -255,14 +255,19 @@ public:
             dataBits_   = ix.bitrateKbps * 24;          // kbit/s x 24 ms
             bitrate_    = ix.bitrateKbps;
         } else {
+            /* ★★★ THE OPTION IS ON AIR — USE IT, DO NOT GUESS IT. This tried EEP-A and then
+             *  EEP-B and kept whichever matched the coded size, which two profiles can both do;
+             *  a wrong choice depunctures with the wrong vector and every frame fails. The FIG
+             *  0/1 parser now stores it (it was being folded into protLevel, which is the bug
+             *  that took 11D out entirely). */
             codedBits = sel_.sizeCu * kCuBits;
+            const bool eepB = (sel_.option == 1);
+            const int  mult = eepB ? 32 : 8;
             for (int n = 1; n <= 24 && !prof_.valid; ++n) {
-                const EepProfile p = eepProfile(sel_.protLevel + 1, false, n);
-                if (p.valid && eepCodedBits(p) == codedBits) { prof_ = p; dataBits_ = n * 8 * 24; bitrate_ = n * 8; }
-            }
-            for (int n = 1; n <= 24 && !prof_.valid; ++n) {
-                const EepProfile p = eepProfile(sel_.protLevel + 1, true, n);
-                if (p.valid && eepCodedBits(p) == codedBits) { prof_ = p; dataBits_ = n * 32 * 24; bitrate_ = n * 32; }
+                const EepProfile p = eepProfile(sel_.protLevel + 1, eepB, n);
+                if (p.valid && eepCodedBits(p) == codedBits) {
+                    prof_ = p; dataBits_ = n * mult * 24; bitrate_ = n * mult;
+                }
             }
             if (!prof_.valid) return false;
         }

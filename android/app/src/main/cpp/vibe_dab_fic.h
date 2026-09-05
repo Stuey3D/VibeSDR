@@ -31,7 +31,10 @@ struct SubChannel {
     int  startCu   = 0;     ///< where it begins in the CIF
     int  sizeCu    = 0;
     bool eep       = true;  ///< equal (true) or unequal (false) error protection
-    int  protLevel = 0;     ///< EEP option/level, or the UEP table index
+    int  protLevel = 0;     ///< EEP protection level 1-4 (stored 0-3), or the UEP table index
+    /** ★★★ EEP OPTION: 0 = EEP-A, 1 = EEP-B. A SEPARATE FIELD because it is a separate field on
+     *  air, and folding it into protLevel is what broke 11D — see the parse in FIG 0/1. */
+    int  option    = 0;
 };
 
 struct ServiceComponent {
@@ -106,8 +109,21 @@ inline bool parseFib(const uint8_t* fib32, Ensemble& e) {
                         j += 3;
                     } else {
                         if (j + 4 > qn) break;
+                        /* ★★★ THREE FIELDS, NOT TWO. EN 300 401 §6.2.1 packs this byte as
+                         *  [1 bit short/long][3 bits Option][2 bits protection level][2 bits of
+                         *  the 10-bit size]. We read `(>>2) & 0x07`, which takes the LOW BIT OF
+                         *  THE OPTION together with both protection bits.
+                         *  ★★★ WITH EEP-A (option 0) THAT IS ACCIDENTALLY CORRECT, which is why
+                         *      12B decoded and 11D did not: an EEP-B sub-channel came out with a
+                         *      protection level of 4-7, off the end of a table that holds 1-4, so
+                         *      EVERY audio frame failed while the FIC stayed at a perfect 1.000.
+                         *      Measured 2026-09-05: talkSPORT mp2In 1865 / mp2Bad 1865 / mp2Out 0.
+                         *  ★ And the option was never stored at all, so the receiver was left
+                         *    GUESSING it — trying EEP-A then EEP-B and taking whichever matched
+                         *    the coded size, which two profiles can do. It is on air; read it. */
                         sc.eep       = true;
-                        sc.protLevel = (q[j + 2] >> 2) & 0x07;
+                        sc.option    = (q[j + 2] >> 4) & 0x07;
+                        sc.protLevel = (q[j + 2] >> 2) & 0x03;
                         sc.sizeCu    = ((q[j + 2] & 0x03) << 8) | q[j + 3];
                         j += 4;
                     }
