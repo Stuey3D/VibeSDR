@@ -644,6 +644,19 @@ void RxPipeline::feed(const cf32* iq, int n) {
             });
     }
 
+    /* ★★★ SPECTRUM ONLY — FOR A SIGNAL THIS PIPELINE CANNOT DEMODULATE ANYWAY.
+     *  In DAB the shim still feeds this pipeline, because the waterfall, the frame rate, the link
+     *  meter and the view state all ride on the spectrum socket — without it the whole UI
+     *  degrades. But it was running the ENTIRE audio chain as well: nco_.mix() over every sample
+     *  at 2.4 MS/s, the full decimation cascade, the demodulator, RDS — and then the shim threw
+     *  the audio away at the far end (see the g_dabMode early-returns in onAudio/onDecoders).
+     *  ★★★ THE PI ABSORBED IT AND THE PHONE DID NOT. Measured on the Xcover, 2026-09-05: USB
+     *      delivering a perfect 100% of 2.4 MS/s while iqDrops climbed at 5.71/s — 18% of the
+     *      stream thrown away for want of DSP time — and 1981 of 2016 MP2 frames failing. The
+     *      holes are punched in the IQ before the DAB receiver ever sees it.
+     *  ★ The spectrum and zoom blocks above still run; only the audio half is skipped. */
+    if (spectrumOnly_.load(std::memory_order_relaxed)) return;
+
     // ── Audio (DDC -> demod -> resample) ─────────────────────────────────────
     if (cb_.audio) {
         faultStage_ = nullptr;          // per-block: trace_() records the FIRST bad stage

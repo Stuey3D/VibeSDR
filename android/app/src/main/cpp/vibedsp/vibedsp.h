@@ -1747,6 +1747,12 @@ public:
      *  switching live swaps filter state under a running demodulator. false = Direct (per-client
      *  DDC, cheapest for one listener), true = Shared (fast convolution, flat cost per listener,
      *  and only meaningful when the hardware centre is LOCKED). */
+    /** ★★★ RUN THE SPECTRUM AND SKIP THE AUDIO CHAIN ENTIRELY. For DAB, where this pipeline is
+     *  fed only so the waterfall and the spectrum socket keep working — its demodulated audio is
+     *  discarded by the caller, and computing it costs an nco mix plus the whole decimation
+     *  cascade on every sample at the capture rate. See the note at the return in feed(). */
+    void setSpectrumOnly(bool on) { spectrumOnly_.store(on, std::memory_order_relaxed); }
+    bool spectrumOnly() const { return spectrumOnly_.load(std::memory_order_relaxed); }
     void setSharedChannels(bool shared) { sharedChannels_ = shared; }
     bool sharedChannels() const { return sharedChannels_; }
 
@@ -1960,6 +1966,7 @@ private:
      *  the caller must fall back to rebuildAudio(). */
     bool applySmoothBandwidth();
     // config
+    std::atomic<bool> spectrumOnly_{false};
     double sampleRate_ = 0.0, fftRate_ = 20.0, offsetHz_ = 0.0, bwHz_ = 10000.0;
     int fftSize_ = 1024, outRate_ = 48000;
     Mode mode_ = Mode::AM;

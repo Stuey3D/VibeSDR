@@ -6670,6 +6670,11 @@ struct LocalSdrShim::Impl {
     void dabRestore() {
         if (!g_dabLockHeld.exchange(false)) return;
         g_dabMode.store(false);
+        /* ★ Give the audio chain back, and reset it: it has seen no samples for the whole DAB
+         *  session, so every recursive state in it (the pilot PLL, de-emphasis, the AGC) is stale
+         *  by exactly the length of the gap. requestReset() is the existing way to say that. */
+        rx.setSpectrumOnly(false);
+        rx.requestReset();
         g_vsLockedCentre.store(g_dabSavedCentre.load());
         g_vsLockedRate.store(g_dabSavedRate.load());
         LocalSdrShim::instance().setGain(g_dabSavedGain.load());
@@ -8342,6 +8347,14 @@ struct LocalSdrShim::Impl {
                  *  ★ Turned on for DAB and restored on the way out with everything else. DAB
                  *    re-points the AGC; it needs the AGC to be running to be re-pointed. */
                 LocalSdrShim::instance().setGain(-1);
+                /* ★★★ AND STOP DEMODULATING AN ENSEMBLE AS IF IT WERE AN FM CARRIER. The
+                 *  spectrum pipeline is still fed (the waterfall, frame rate, link meter and view
+                 *  state all ride on it) but its AUDIO half was running too — an nco mix over
+                 *  every sample at the capture rate, the whole decimation cascade, the demod, RDS
+                 *  — and the result was discarded at the far end. Measured on the Xcover: USB
+                 *  perfect at 100% of 2.4 MS/s while iqDrops climbed 5.71/s (18% of the stream
+                 *  binned for want of DSP time) and 1981 of 2016 MP2 frames failed. */
+                rx.setSpectrumOnly(true);
                 g_rtlAgc.store(true, std::memory_order_relaxed);
                 LocalSdrShim::instance().setAgc(false);   // the DONGLE's — see g_dabSavedDigAgc
                 agcForget("DAB: an ensemble is not the carrier we came off — reconverge from the bottom");
