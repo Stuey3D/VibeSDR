@@ -414,6 +414,11 @@ private:
     long     lastAt_ = -1;
     uint32_t syncJumps_ = 0;
     uint64_t samplesIn_ = 0;
+    /** ★ Samples seen since the last check, for the capture-rate watchdog in the shim. */
+public:
+    uint64_t takeSamplesSeen() { std::lock_guard<std::mutex> lk(m_); const uint64_t v = samplesIn_ - seenMark_; seenMark_ = samplesIn_; return v; }
+private:
+    uint64_t seenMark_ = 0;
     uint32_t pushCalls_ = 0, pushOk_ = 0, dropped_ = 0;
     int  aacCoreCh_ = 2;                       ///< what the ADTS header declares
     int  aacOutCh_  = 2;                       ///< what the decoder will produce (PS -> 2)
