@@ -203,6 +203,20 @@ private:
              *  MP2's patents have expired so it is the one codec we may implement. DAB+ is handed
              *  onward as ADTS instead; that path links no decoder here. */
             if (rx_.selectedType() != 0) { pumpDabPlus(f); continue; }
+            /* ★ DIAGNOSTIC DUMP, off unless VIBE_DAB_DUMP names a file. Brute-forcing the
+             *  ScF-CRC's position and bit selection one five-minute deploy at a time is the wrong
+             *  way round; with real frames on disk the same search takes seconds and can try
+             *  every hypothesis at once. Removed once the parameters are known. */
+            if (const char* dp = std::getenv("VIBE_DAB_DUMP")) {
+                static FILE* fp = std::fopen(dp, "wb");
+                static int   left = 400;
+                if (fp && left > 0) {
+                    const uint32_t n32 = uint32_t(f.size());
+                    std::fwrite(&n32, 4, 1, fp);
+                    std::fwrite(f.data(), 1, f.size(), fp);
+                    if (--left == 0) { std::fflush(fp); std::fclose(fp); fp = nullptr; }
+                }
+            }
             std::vector<float> out;
             ++mp2In_;
             if (mp2_.decode(f.data(), f.size(), out) <= 0) { ++mp2Bad_; continue; }
