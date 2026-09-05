@@ -629,6 +629,8 @@ static std::atomic<bool>   g_dabSavedDigAgc{false};
  *  ★ Persisted, unlike the digital-AGC toggle: this is a decision about the machine, which is
  *    exactly the kind of thing that should survive a restart. */
 static std::atomic<bool>   g_dabRateBoost{false};
+/** Set by dabRestore(); consumed by the DSP loop once any pending rebuild has landed. */
+static std::atomic<bool>   g_dabRetuneAfterRebuild{false};
 
 /* ★★★ MODES AND DECODERS THE OWNER HAS SWITCHED OFF, as a comma-separated list.
  *  Stuart: "in the allowed/blocked bands we could have allowed/blocked bands AND MODES with the
@@ -6628,12 +6630,28 @@ struct LocalSdrShim::Impl {
         agcForget("DAB off: the gain that suited an ensemble does not suit a carrier");
         const double ar = g_dabSavedActualRate.load();
         const double rc = g_dabSavedRtl.load();
-        if (ar > 0.0) LocalSdrShim::instance().setSampleRate(ar);
+        /* ★ Only when it actually changed. setSampleRate TEARS DOWN AND REBUILDS the source, and
+         *  the rebuild re-applies the locked centre and rebuilds the audio chain — undoing
+         *  whatever we set just below it. Skipping a no-op rebuild removes the race entirely on
+         *  the common path. */
+        if (ar > 0.0 && std::fabs(ar - sampleRate) > 1.0) LocalSdrShim::instance().setSampleRate(ar);
         if (rc > 0.0) { rtlCenter.store(rc); tuneHw(rc); }
         if (g_dabSavedAudio.load() > 0.0) audioFreq.store(g_dabSavedAudio.load());
         if (g_dabSavedView.load()  > 0.0) viewCenter.store(g_dabSavedView.load());
         updateZoomView();
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        /* ★★★ AND RE-ASSERT IT ON THE DSP THREAD, AFTER ANY REBUILD HAS LANDED.
+         *  A rebuild is applied by the DSP thread on a later block, and the open path re-stores
+         *  rtlCenter from g_vsLockedCentre and re-tunes there (see the locked-centre block in the
+         *  source open). So on a LOCKED receiver the sequence was: restore the VFO here, rebuild
+         *  lands afterwards, hardware goes to the locked centre, and the display keeps the VFO we
+         *  restored — 200 kHz apart on Stuart's V4, reading 96.400 while RDS decoded Heart on
+         *  96.6. It only happened on the V4 because the V4L has no centre lock and therefore no
+         *  rebuild to fight. A restart cleared it, which is the signature of leftover state
+         *  rather than a bad calculation.
+         *  ★ One flag, consumed by the loop that owns the hardware, is the only ordering that
+         *    cannot race: whatever the rebuild does, this runs after it. */
+        g_dabRetuneAfterRebuild.store(true, std::memory_order_relaxed);
         LOGI("[DAB] mode OFF: radio back at %.3f MHz, %.0f S/s (VFO %.3f MHz)",
              rc / 1e6, ar, g_dabSavedAudio.load() / 1e6);
     }
@@ -8607,6 +8625,19 @@ struct LocalSdrShim::Impl {
                 if (wantsManual && LocalSdrShim::agcLocked()) {
                     LOGI("manual gain refused — the owner has locked the AGC on");
                     return;
+                }
+                /* ★★★ AND IN DAB, AN EXPLICIT GAIN MUST STOP THE LOOP. Entering DAB switches
+                 *  VibeAGC ON so its own ceiling can take effect (4.2.0) — which then overwrote
+                 *  every value a listener set, so the slider looked dead: "gain slider admin
+                 *  controls nothing works on the xcover in DAB mode" (Stuart).
+                 *  ★ Setting a gain by hand has always MEANT "stop deciding for me". Outside DAB
+                 *    the client sends a separate AGC-off message and the two arrive together; in
+                 *    DAB the server turned the loop on itself, so the server has to be the one to
+                 *    turn it off. Whoever switches a thing on owns switching it off. */
+                if (wantsManual && g_dabMode.load(std::memory_order_relaxed)
+                    && g_rtlAgc.load(std::memory_order_relaxed)) {
+                    g_rtlAgc.store(false, std::memory_order_relaxed);
+                    LOGI("DAB: manual gain set — VibeAGC off, the listener has taken the gain");
                 }
             }
             /* ★★★ AND THE CEILING CAN BE A SETTING RATHER THAN A LIMIT. With the gain lock on, a
@@ -13109,6 +13140,14 @@ struct LocalSdrShim::Impl {
                     std::chrono::duration<double,std::milli>(tLock1 - tLock0).count();
                 if (lockMs > g_dspLockMaxMs.load(std::memory_order_relaxed))
                     g_dspLockMaxMs.store(lockMs, std::memory_order_relaxed);
+            }
+            /* ★ Leaving DAB asked for the VFO to be re-applied once the source settled — see
+             *  the note in dabRestore. Here, on the thread that owns the hardware, is after. */
+            if (g_dabRetuneAfterRebuild.exchange(false, std::memory_order_relaxed)) {
+                updateZoomView();
+                rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+                LOGI("[DAB] VFO re-applied after the source settled: %.3f MHz (centre %.3f)",
+                     audioFreq.load() / 1e6, rtlCenter.load() / 1e6);
             }
             flushPendingDongle();     // a retune the pan cooldown postponed — never dropped
             // ★★★ IS THE DSP KEEPING REAL TIME? The only measure that matters under load, and the

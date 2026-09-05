@@ -158,11 +158,26 @@ public:
              *  ★ (1 - 2p): p=0 gives +1, so a POSITIVE soft value means bit 0 — which is the
              *    convention the Viterbi already expects.
              */
+            /* ★★★ TWO PASSES, BECAUSE THE SCALE IS A PROPERTY OF THE SYMBOL, NOT THE CARRIER.
+             *  The first pass forms the differential products and their mean magnitude; the
+             *  second scales every carrier by that ONE number, so the relative strengths survive
+             *  into the soft bits and the Viterbi can discount faded carriers. See
+             *  dqpskSoftScaled — normalising each carrier to full scale, as this used to, is the
+             *  same as telling the decoder every carrier is equally trustworthy. */
             std::vector<int8_t> di(size_t(K) * 2);
+            prod_.resize(size_t(K));
+            double magSum = 0.0;
             for (int nIdx = 0; nIdx < K; ++nIdx) {
                 const int kk  = fi_.carrierFor(nIdx);        // carrier that carried symbol nIdx
                 const int src = kk < 0 ? kk + 768 : kk + 767;
-                const SoftBits b = dqpskSoft(cur[size_t(src)], prev[size_t(src)]);
+                const C32 p = dqpskProduct(cur[size_t(src)], prev[size_t(src)]);
+                prod_[size_t(nIdx)] = p;
+                magSum += std::sqrt(double(p.real()) * p.real() + double(p.imag()) * p.imag());
+            }
+            const double avg = magSum / double(K);
+            const float invAvg = avg > 1e-12 ? float(1.0 / avg) : 0.0f;
+            for (int nIdx = 0; nIdx < K; ++nIdx) {
+                const SoftBits b = dqpskSoftScaled(prod_[size_t(nIdx)], invAvg);
                 di[size_t(nIdx)]              = b.b0;        // real  -> p[n]
                 di[size_t(K) + size_t(nIdx)]  = b.b1;        // imag  -> p[n+K]
             }
@@ -340,6 +355,7 @@ private:
     DabStats stats_;
     double fibHist_ = 0;
     int    intShift_ = 0;
+    std::vector<C32>    prod_;      // per-symbol differential products — see the CSI note
     std::vector<int8_t> ficBits_;
     SubChannel sel_{};
     EepProfile prof_{};

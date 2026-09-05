@@ -97,20 +97,52 @@ inline void derotate(Cplx* x, size_t n, double cyclesPerSample) {
  */
 struct SoftBits { int8_t b0, b1; };
 
-inline SoftBits dqpskSoft(C32 cur, C32 prev) {
-    // cur * conj(prev) — the differential phase.
-    const float re = cur.real() * prev.real() + cur.imag() * prev.imag();
-    const float im = cur.imag() * prev.real() - cur.real() * prev.imag();
-    // ★ The two bits are the two axes of the rotated constellation: pi/4 offset means the decision
-    //   boundaries are the axes themselves, so the soft value IS the coordinate. No trig.
-    const float mag = std::sqrt(re * re + im * im);
-    const float scale = mag > 1e-12f ? 127.0f / mag : 0.0f;
+/** The differential product for one carrier, unscaled. Its MAGNITUDE is the channel state. */
+inline C32 dqpskProduct(C32 cur, C32 prev) {
+    return C32(cur.real() * prev.real() + cur.imag() * prev.imag(),
+               cur.imag() * prev.real() - cur.real() * prev.imag());
+}
+
+/** ★★★ CHANNEL STATE INFORMATION — THE SINGLE BIGGEST WIN ON A MARGINAL MULTIPLEX.
+ *
+ *  This used to normalise EVERY CARRIER TO FULL SCALE:
+ *
+ *      const float scale = mag > 1e-12f ? 127.0f / mag : 0.0f;
+ *
+ *  which throws the magnitude away — and the magnitude IS the reliability. DAB is COFDM through
+ *  multipath: at any instant some carriers sit in deep fades and carry almost pure noise, while
+ *  others are strong. Normalising per carrier hands the Viterbi a faded carrier's noise with
+ *  EXACTLY the same confidence as a clean carrier's signal, so the decoder cannot tell them
+ *  apart and weights rubbish equally. That is the opposite of what soft decisions are for.
+ *
+ *  Scaling by a SYMBOL-WIDE average instead keeps the relative magnitudes, so a strong carrier
+ *  arrives at +-100 and a faded one at +-10, and the Viterbi's path metric discounts the faded
+ *  one automatically. This is what welle.io and dab-cmdline do, and it is worth several dB of
+ *  effective sensitivity in fading — the difference between audio and silence on a weak mux,
+ *  which is exactly the case Stuart wants to be best at.
+ *
+ *  ★ Soft-decision Viterbi already buys ~2 dB over hard decisions; CSI weighting is most of the
+ *    remaining gap to what the standard's designers assumed a receiver would do.
+ */
+inline SoftBits dqpskSoftScaled(C32 product, float invAvgMag) {
     auto clamp8 = [](float v) -> int8_t {
         if (v >  127.0f) return  127;
         if (v < -127.0f) return -127;
         return int8_t(v);
     };
-    return { clamp8(re * scale), clamp8(im * scale) };
+    /* ★ 64, not 127, as the scale for an AVERAGE carrier: an average-strength carrier should sit
+     *  mid-range so a strong one still has room to say "trust me more" instead of clipping into
+     *  the same value. Clipping at the top would quietly reintroduce the very flattening this
+     *  replaces. */
+    const float k = 64.0f * invAvgMag;
+    return { clamp8(product.real() * k), clamp8(product.imag() * k) };
+}
+
+/** Kept for the tests and for callers with a single carrier and no symbol context. */
+inline SoftBits dqpskSoft(C32 cur, C32 prev) {
+    const C32 p = dqpskProduct(cur, prev);
+    const float mag = std::sqrt(p.real() * p.real() + p.imag() * p.imag());
+    return dqpskSoftScaled(p, mag > 1e-12f ? 2.0f / mag : 0.0f);
 }
 
 /** Which FFT bin holds carrier k? DAB numbers carriers -K/2..+K/2 EXCLUDING zero (the centre
