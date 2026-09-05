@@ -6647,7 +6647,6 @@ struct LocalSdrShim::Impl {
      *  though it shows WFM and tuning or changing modes has 0 effect" — one cause, and it looked
      *  like three separate faults. */
     void dabRestore() {
-        dabRateAt_ = 0.0; dabSteppedDown_ = false;
         if (!g_dabLockHeld.exchange(false)) return;
         g_dabMode.store(false);
         g_vsLockedCentre.store(g_dabSavedCentre.load());
@@ -6786,23 +6785,6 @@ struct LocalSdrShim::Impl {
      *  reach nobody. Set only around DAB's own sends, on the DSP thread that does all of this in
      *  one sequence, so no atomic is needed and no other thread can see it. */
     bool   dabInject_ = false;
-    /** True once, when the capture is short of what 2.4 MS/s promised. See the call site. */
-    bool dabRateWatchdog_(double rate) {
-        if (dabSteppedDown_ || std::fabs(rate - 2400000.0) > 1000.0) return false;
-        const double now = Impl::nowSecs();
-        if (dabRateAt_ == 0.0) { dabRateAt_ = now; g_dab.takeSamplesSeen(); return false; }
-        if (now - dabRateAt_ < 8.0) return false;              // measure over a real interval
-        const uint64_t seen = g_dab.takeSamplesSeen();
-        const double got = double(seen) / (now - dabRateAt_);
-        dabRateAt_ = now;
-        // ★ 96% of nominal, so ordinary jitter never trips it — only a host that is genuinely short.
-        if (got > 2400000.0 * 0.96) return false;
-        LOGI("[DAB] capture delivering %.3f MS/s of 2.400 — short", got / 1e6);
-        dabSteppedDown_ = true;
-        return true;
-    }
-    double dabRateAt_ = 0.0;
-    bool   dabSteppedDown_ = false;
 
     void sendClientAudio(ClientDsp* c, const std::shared_ptr<net::Socket>& sock,
                          const int16_t* pcm, int count, int ch) {
@@ -13237,23 +13219,6 @@ struct LocalSdrShim::Impl {
                  *  mux at 225.648 and start the next hunt in the wrong place. */
                 g_dab.setRfCentre(rtlCenter.load() + hwOffsetHz());
                 g_dab.setRfRate(sampleRate);
-                /* ★★★ IF THE RADIO CANNOT ACTUALLY SUSTAIN 2.4, USE 2.048 INSTEAD.
-                 *  2.4 MS/s is the rate RTL dongles decode DAB best at — measured, and what every
-                 *  other implementation uses — but it is 4.8 MB/s over USB and not every host can
-                 *  carry it. Stuart's XCover delivers about 90% of it and decodes only 8.5 frames
-                 *  a second of 10.42, so its audio comes out SHORT: perfectly decoded (FIB 1.000,
-                 *  zero dips) and missing a fifth of itself. The Pi delivers 100% and is fine.
-                 *  ★ So ask for 2.4, then WATCH what actually arrives, and step down once if the
-                 *    host cannot keep up. A receiver that decodes 100% of a slightly worse rate
-                 *    beats one that decodes 81% of the best rate — the shortfall is a hole in the
-                 *    audio either way, and this one is silent about it.
-                 *  ★ ONE step down, never oscillating: 2.048 is the decoder's own rate, so there
-                 *    is nowhere further to go and nothing to hunt between. */
-                if (dabRateWatchdog_(sampleRate)) {
-                    LOGI("[DAB] this host cannot sustain 2.4 MS/s — stepping down to 2.048");
-                    LocalSdrShim::instance().setSampleRate(double(vibedab::DabService::kRateHz));
-                    g_dab.setRfRate(sampleRate);
-                }
                 g_dab.feed(reinterpret_cast<const float*>(buf.data()), buf.size());
                 pumpDabAudio(buf.size());
                 /* ★★★ AND THE SPECTRUM STILL RUNS. Skipping the ordinary chain entirely stopped
