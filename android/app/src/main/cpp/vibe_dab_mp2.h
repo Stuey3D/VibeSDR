@@ -208,6 +208,7 @@ public:
          *  full scale. Refusing costs 24 ms of silence; decoding it costs the listener's ears. */
         if (haveCrc && mp2Crc16(frame, crcFrom, br.bitPos()) != wantCrc) return 0;
 
+        scfIdx_.clear();
         float sf[2][32][3] = {};
         for (int sb = 0; sb < sblimit; ++sb)
             for (int ch = 0; ch < nch; ++ch) {
@@ -215,16 +216,28 @@ public:
                 // ★ scfsi says which of the three 8-sample parts share a scalefactor. Reading the
                 //   wrong count here desynchronises the whole rest of the frame, which is why a
                 //   Layer II bug is usually total rather than subtle.
+                /* ★ Keep the raw 6-bit INDICES as well as the gains. DAB protects the three
+                 *  most significant bits of each transmitted scale factor with a CRC-8 (TS 103
+                 *  466), and a scale factor is a logarithmic gain — one wrong value makes a
+                 *  sub-band ring, which is the tonal SQUEAL Stuart hears rather than the bubbling
+                 *  mud of ordinary MP2 bit errors. Collected in bitstream order, per sub-band. */
+                auto take6 = [&](int g0, int g1) {
+                    const int idx = int(br.get(6));
+                    scfIdx_.push_back({ sb, uint8_t(idx) });
+                    const float v = scaleFactor(idx);
+                    for (int g = g0; g <= g1; ++g) sf[ch][sb][g] = v;
+                };
                 switch (scfsi[ch][sb]) {
-                    case 0: for (int g = 0; g < 3; ++g) sf[ch][sb][g] = scaleFactor(int(br.get(6))); break;
-                    case 1: { float a = scaleFactor(int(br.get(6))); float b = scaleFactor(int(br.get(6)));
-                              sf[ch][sb][0] = sf[ch][sb][1] = a; sf[ch][sb][2] = b; break; }
-                    case 2: { float a = scaleFactor(int(br.get(6)));
-                              sf[ch][sb][0] = sf[ch][sb][1] = sf[ch][sb][2] = a; break; }
-                    default: { float a = scaleFactor(int(br.get(6))); float b = scaleFactor(int(br.get(6)));
-                               sf[ch][sb][0] = a; sf[ch][sb][1] = sf[ch][sb][2] = b; break; }
+                    case 0:  take6(0, 0); take6(1, 1); take6(2, 2); break;
+                    case 1:  take6(0, 1); take6(2, 2);              break;
+                    case 2:  take6(0, 2);                           break;
+                    default: take6(0, 0); take6(1, 2);              break;
                 }
             }
+
+        // ★ Now that the scale factors are known, check DAB's own CRC over them — counting
+        //   only, until the convention is measured. See tallyScfCrc.
+        tallyScfCrc(frame, f.frameBytes, f.bitrateKbps);
 
         out.assign(size_t(1152) * size_t(nch), 0.0f);
         for (int gr = 0; gr < 12; ++gr) {
@@ -258,6 +271,26 @@ public:
     }
 
     const Mp2Info& info() const { return info_; }
+
+    /* ★★★ THE SCALE FACTOR CRC (TS 103 466). This is the check DAB adds on top of MPEG's, and
+     *  the one that matters: the MPEG CRC covers the header, the bit allocation and scfsi — all
+     *  of which measured CLEAN here (2052 of 2052 frames) — and NOT the scale factors. A scale
+     *  factor is a logarithmic gain, so a single corrupted one makes a sub-band ring: the tonal
+     *  squeal Stuart describes, as against the "bubbling mud" of genuine MP2 sample errors, and
+     *  the 2.6x level jumps clipping to full scale that his recording showed.
+     *
+     *  Layout, from the END of the frame: [ ... audio ... ][ X-PAD ][ ScF-CRC ][ F-PAD (2) ].
+     *  Four CRC-8s at 48 kHz and >= 56 kbit/s (sub-bands 0-3, 4-7, 8-15, 16-26), two below that
+     *  (0-3, 4-7). Generator G2(X) = X^8 + X^4 + X^3 + X^2 + 1 = 0x1D, over the three most
+     *  significant bits of each transmitted scale factor.
+     *
+     *  ★★★ THE PRESET AND FINAL INVERSION ARE NOT MEASURED YET, so all four conventions are
+     *  computed and COUNTED rather than acted on. Guessing wrong here fails every frame and
+     *  silences the radio, and this session has already shipped two regressions from acting on
+     *  an untested assumption. The variant that matches ~99% of frames on air is the right one,
+     *  and it will be hard-coded with that evidence beside it. */
+    struct ScfCrcTally { uint32_t checked = 0, ok[4] = {0, 0, 0, 0}; };
+    const ScfCrcTally& scfCrc() const { return scfTally_; }
     /** ★ Did the last frame carry an MPEG header CRC at all? DAB may use the SCALE FACTOR CRC of
      *  TS 103 466 instead, in which case the MPEG protection bit is set and there is nothing to
      *  check here — which would make a zero refusal count meaningless. Measure before believing. */
@@ -302,6 +335,41 @@ private:
     float v_[2][1024] = {};
     Mp2Info info_;
     bool    lastHadCrc_ = false;
+    struct ScfEntry { int sb; uint8_t idx; };
+    std::vector<ScfEntry> scfIdx_;
+    ScfCrcTally scfTally_;
+
+    /** CRC-8, G2 = 0x1D, over the three MSBs of each scale factor in [sbLo, sbHi]. */
+    uint8_t scfCrc8(int sbLo, int sbHi, uint8_t init, bool invert) const {
+        uint8_t c = init;
+        for (const ScfEntry& e : scfIdx_) {
+            if (e.sb < sbLo || e.sb > sbHi) continue;
+            for (int b = 2; b >= 0; --b) {                 // the three most significant bits
+                const bool bit = ((e.idx >> (5 - (2 - b))) & 1) != 0;
+                const bool msb = (c & 0x80) != 0;
+                c = uint8_t(c << 1);
+                if (msb != bit) c ^= 0x1D;
+            }
+        }
+        return invert ? uint8_t(~c) : c;
+    }
+
+    /** Compare the four preset/inversion conventions against the transmitted bytes. */
+    void tallyScfCrc(const uint8_t* frame, int frameBytes, int bitrateKbps) {
+        const int ncrc = bitrateKbps >= 56 ? 4 : 2;
+        const int at = frameBytes - 2 - ncrc;              // before the two F-PAD bytes
+        if (at < 4 || scfIdx_.empty()) return;
+        static const int loA[4] = { 0, 4, 8, 16 }, hiA[4] = { 3, 7, 15, 26 };
+        ++scfTally_.checked;
+        const uint8_t inits[4]  = { 0x00, 0xFF, 0x00, 0xFF };
+        const bool    invs[4]   = { false, false, true,  true  };
+        for (int v = 0; v < 4; ++v) {
+            bool all = true;
+            for (int g = 0; g < ncrc; ++g)
+                if (scfCrc8(loA[g], hiA[g], inits[v], invs[v]) != frame[at + g]) { all = false; break; }
+            if (all) ++scfTally_.ok[v];
+        }
+    }
 };
 
 }  // namespace vibedab
