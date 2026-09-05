@@ -1326,6 +1326,10 @@ static std::atomic<bool>     g_adjRdsWasOn{false};
  *     dropping samples" from "something further downstream is stuttering". One of those is worth
  *     chasing in the DSP and the other very much is not. */
 static std::atomic<long long> g_iqDrops{0};
+/** ★★★ SAMPLES AS LIBUSB HANDED THEM TO US — the ONLY counter upstream of every choice we make.
+ *  The DAB decoder's samplesIn sits at the far end of the queue and the DSP loop, so a shortfall
+ *  there could be the wire OR us, and we could not tell which. Counted in the callback itself. */
+static std::atomic<unsigned long long> g_usbSamples{0};
 // ★★★ A STALL IS A MAXIMUM, NOT AN AVERAGE — which is why the dsp-load figure next to the loop
 //     never showed this. It averages 200 blocks and writes to logcat; a 40 ms freeze inside a
 //     200-block window is invisible in the mean AND unreadable on a phone that filters the log.
@@ -10539,6 +10543,7 @@ struct LocalSdrShim::Impl {
                              //   was. Cheap, always present, and the only way to see the IQ path
                              //   from outside on a phone whose log is unreadable.
                              + ",\"iqDrops\":" + std::to_string(g_iqDrops.load(std::memory_order_relaxed))
+                             + ",\"usbSamples\":" + std::to_string(g_usbSamples.load(std::memory_order_relaxed))
                              + ",\"dspCpu\":" + std::to_string((int)(dspLoadPct + 0.5))
                              + ",\"dspLockMs\":" + std::to_string((int)(g_dspLockMaxMs.load(std::memory_order_relaxed) + 0.5))
                              + ",\"dspWorkMs\":" + std::to_string((int)(g_dspWorkMaxMs.load(std::memory_order_relaxed) + 0.5))
@@ -13317,7 +13322,16 @@ struct LocalSdrShim::Impl {
         Impl* self = this;
         rtlThreadDone.store(false);
         rtlThread = std::thread([self, bufLen]{
-            vibeThreadName("vibe-rtl");
+            // ★★★ THE REAPER MUST OUTRANK THE CONSUMERS. This thread does almost no work — it
+            //     hands libusb back its completed transfers and resubmits them — but it is the
+            //     only thread in the process whose lateness LOSES DATA THAT CANNOT BE RECOVERED.
+            //     Every consumer (vibe-dsp x2, vibe-dab) already runs at -19 via vibeAudioThread;
+            //     this one was left at the default -4, so on a phone the things that eat the IQ
+            //     outranked the thing that fetches it. Measured on the Xcover: 2.186 MS/s of BYTES
+            //     against a requested 2.4 — short bytes, not corrupt bytes, which is the signature
+            //     of the host failing to resubmit rather than the dongle's FIFO overflowing.
+            //     The Pi never showed it: cores to spare, so priority never decided anything.
+            vibeAudioThread("vibe-rtl");
             // ★ Set on EVERY exit path, including the early returns below — a flag that is only
             //   correct on the happy path is worse than none, because it is trusted.
             struct Done { Impl* s; ~Done(){ s->rtlThreadDone.store(true); } } done{self};
@@ -14875,6 +14889,7 @@ struct LocalSdrShim::Impl {
         // arriving", and it is — we are simply choosing not to want it. Skipping the
         // stamp would make an idle server look like a dead dongle.
         self->lastIqAt.store(nowSecs(), std::memory_order_relaxed);
+        g_usbSamples.fetch_add(len / 2, std::memory_order_relaxed);
         if (self->idleDiscard.load(std::memory_order_relaxed)) return;   // nobody listening
         self->enqueueIq(buf, (int)(len / 2));
     }
