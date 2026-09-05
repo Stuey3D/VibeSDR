@@ -6607,6 +6607,37 @@ struct LocalSdrShim::Impl {
      *    is the AAC CORE rate, which is what a decoder must be CONFIGURED with; under SBR it
      *    doubles that itself. Writing the output rate here is the 2x chipmunk, and DAB has already
      *    caught us with one of those. */
+    /** ★★★ PUT THE RECEIVER BACK AS DAB FOUND IT. Factored out because the mode has to end in
+     *  TWO places and only ever ended in one: the listener switching it off, and the last
+     *  listener LEAVING.
+     *  ★★★ g_dabMode is a property of the PROCESS, not of the session that turned it on, so a
+     *  listener who closed the tab left the radio in DAB for ever. The next person arrived to a
+     *  client showing WFM over a receiver still demodulating an ensemble, where tuning did
+     *  nothing (DAB owns the dial), the mode buttons did nothing, and the gain slider did nothing
+     *  (DAB runs the AGC). Stuart: "whenever i return to the page it is stuck in DAB mode even
+     *  though it shows WFM and tuning or changing modes has 0 effect" — one cause, and it looked
+     *  like three separate faults. */
+    void dabRestore() {
+        if (!g_dabLockHeld.exchange(false)) return;
+        g_dabMode.store(false);
+        g_vsLockedCentre.store(g_dabSavedCentre.load());
+        g_vsLockedRate.store(g_dabSavedRate.load());
+        LocalSdrShim::instance().setGain(g_dabSavedGain.load());
+        g_rtlAgc.store(g_dabSavedAgcOn.load(), std::memory_order_relaxed);
+        LocalSdrShim::instance().setAgc(g_dabSavedDigAgc.load());
+        agcForget("DAB off: the gain that suited an ensemble does not suit a carrier");
+        const double ar = g_dabSavedActualRate.load();
+        const double rc = g_dabSavedRtl.load();
+        if (ar > 0.0) LocalSdrShim::instance().setSampleRate(ar);
+        if (rc > 0.0) { rtlCenter.store(rc); tuneHw(rc); }
+        if (g_dabSavedAudio.load() > 0.0) audioFreq.store(g_dabSavedAudio.load());
+        if (g_dabSavedView.load()  > 0.0) viewCenter.store(g_dabSavedView.load());
+        updateZoomView();
+        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        LOGI("[DAB] mode OFF: radio back at %.3f MHz, %.0f S/s (VFO %.3f MHz)",
+             rc / 1e6, ar, g_dabSavedAudio.load() / 1e6);
+    }
+
     void pumpDabPlusAudio() {
         std::vector<uint8_t> au;
         while (g_dab.takeAdts(au)) {
@@ -8132,28 +8163,7 @@ struct LocalSdrShim::Impl {
                  *  is not enough on its own: the radio is sitting on a multiplex at 2.048 MS/s,
                  *  and the lock is only re-applied by a rebuild that may not come. Put the rate
                  *  and the centre back by hand, then restore the promise. */
-                if (g_dabLockHeld.exchange(false)) {
-                    /* ★ The PROMISE first (it is only a policy value), then the radio itself. */
-                    g_vsLockedCentre.store(g_dabSavedCentre.load());
-                    g_vsLockedRate.store(g_dabSavedRate.load());
-                    LocalSdrShim::instance().setGain(g_dabSavedGain.load());
-                    g_rtlAgc.store(g_dabSavedAgcOn.load(), std::memory_order_relaxed);
-                    LocalSdrShim::instance().setAgc(g_dabSavedDigAgc.load());
-                    agcForget("DAB off: the gain that suited an ensemble does not suit a carrier");
-                    /* ★★★ AND PUT THE RADIO BACK WHERE IT WAS — unconditionally. See the note on
-                     *  g_dabSavedRtl: gating this on a centre LOCK left every unlocked receiver
-                     *  parked on the multiplex after leaving DAB. */
-                    const double ar = g_dabSavedActualRate.load();
-                    const double rc = g_dabSavedRtl.load();
-                    if (ar > 0.0) LocalSdrShim::instance().setSampleRate(ar);
-                    if (rc > 0.0) { rtlCenter.store(rc); tuneHw(rc); }
-                    if (g_dabSavedAudio.load() > 0.0) audioFreq.store(g_dabSavedAudio.load());
-                    if (g_dabSavedView.load()  > 0.0) viewCenter.store(g_dabSavedView.load());
-                    updateZoomView();
-                    rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
-                    LOGI("[DAB] mode OFF: radio back at %.3f MHz, %.0f S/s (VFO %.3f MHz)",
-                         rc / 1e6, ar, g_dabSavedAudio.load() / 1e6);
-                }
+                dabRestore();
                 sendText(sock, "{\"type\":\"dab_off\"}");
                 /* ★ And tell the client where the radio actually IS. Leaving DAB moves the centre,
                  *  the rate and the gain back, and a client still holding the multiplex centre
@@ -11914,6 +11924,13 @@ struct LocalSdrShim::Impl {
             bool stillEmpty;
             // ★ specExtra included here too — this site armed parks while extra viewers watched.
             { std::lock_guard<std::mutex> lk(clientMtx); stillEmpty = nobodyWatchingLocked(); }
+            /* ★★★ AND END DAB. It is a listener's mode, not a receiver setting — nobody is left to
+             *  hear it, and leaving it on hands the next person a radio whose every control is
+             *  inert. See dabRestore. */
+            if (stillEmpty && g_dabMode.load(std::memory_order_relaxed)) {
+                LOGI("[DAB] last listener left — restoring the receiver");
+                dabRestore();
+            }
             if (stillEmpty) armIdlePark();
             else LOGI("not parking — a new listener arrived while this socket was closing");
         }
