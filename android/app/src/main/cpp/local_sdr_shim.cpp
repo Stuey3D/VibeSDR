@@ -405,6 +405,23 @@ std::string jsonStr(const std::string& s, const char* key) {
     auto q = s.find('"', p+1); if (q == std::string::npos) return "";
     return s.substr(p+1, q-p-1);
 }
+/** ★★★ A BOOLEAN FIELD, WITHOUT DEPENDING ON HOW THE SENDER SPACED IT.
+ *  Thirteen controls used to test `msg.find("\"on\":true")` — a raw substring search that only
+ *  matches JSON with NO space after the colon. Our own client uses JSON.stringify, which happens
+ *  to emit exactly that, so every one of them worked and none of them was robust: any other
+ *  client (a script, another app, anything that pretty-prints) could turn these controls OFF and
+ *  never ON, because a failed match reads as `false` rather than as "absent".
+ *  ★ Found while verifying the AGC button fix with a probe that sent {"on": true} — the server
+ *    logged `agc: 0` for BOTH presses. The bug was in the reading, not the radio.
+ *  ★★ Locates the key like jsonNum does, then skips whitespace to the value. */
+bool jsonOn(const std::string& s, const char* key = "on") {
+    std::string pat = std::string("\"") + key + "\"";
+    auto p = s.find(pat); if (p == std::string::npos) return false;
+    p = s.find(':', p);   if (p == std::string::npos) return false;
+    ++p;
+    while (p < s.size() && std::isspace((unsigned char)s[p])) ++p;
+    return s.compare(p, 4, "true") == 0;
+}
 bool jsonNum(const std::string& s, const char* key, double& out) {
     std::string pat = std::string("\"") + key + "\"";
     auto p = s.find(pat); if (p == std::string::npos) return false;
@@ -7816,7 +7833,7 @@ struct LocalSdrShim::Impl {
             //     ★ Deliberately NOT admin-gated, unlike gain: these change only what THIS
             //       listener hears, so there is nothing shared to protect.
             if (type == "nr") {
-                me->nrOn.store(msg.find("\"on\":true") != std::string::npos);
+                me->nrOn.store(jsonOn(msg));
                 double st;
                 if (jsonNum(msg, "strength", st)) {
                     /* ★★★ 1.4, NOT 1.0 — CLAMPING HERE IS WHAT MADE THE SLIDER AN ON/OFF SWITCH.
@@ -7835,7 +7852,7 @@ struct LocalSdrShim::Impl {
                 return;
             }
             if (type == "notch") {
-                me->notchOn.store(msg.find("\"on\":true") != std::string::npos);
+                me->notchOn.store(jsonOn(msg));
                 if (!me->notchOn.load()) { std::lock_guard<std::mutex> lk(me->fxMtx);
                                            if (me->notchEng) me->notchEng->reset(); }
                 return;
@@ -7848,7 +7865,7 @@ struct LocalSdrShim::Impl {
                 return;
             }
             if (type == "stereo") {
-                const bool on = msg.find("\"on\":true") != std::string::npos;
+                const bool on = jsonOn(msg);
                 me->stereoOn.store(on);
                 if (me->rx) me->rx->setStereoEnabled(on);
                 return;
@@ -8728,7 +8745,7 @@ struct LocalSdrShim::Impl {
         }
         if (type == "biasT") {
             if (!adminGate("bias-T")) return;
-            const bool on = msg.find("\"on\":true") != std::string::npos;
+            const bool on = jsonOn(msg);
             LocalSdrShim::instance().setBiasTee(on);
             // ★★★ AND WRITE IT DOWN. Applied to the hardware but never saved, so a restart put the
             //     DC back off — and an antenna that needs phantom power went dead with the setting
@@ -8741,7 +8758,7 @@ struct LocalSdrShim::Impl {
         if (type == "agc") {
             // The AGC owns the gain, so it is the same shared front-end control by another name.
             if (!sharedGate("AGC")) return;
-            const bool on = msg.find("\"on\":true") != std::string::npos;
+            const bool on = jsonOn(msg);
             LocalSdrShim::instance().setAgc(on);
             vsPersist(std::string("{\"ifAgc\":") + (on ? "1" : "0") + "}");
             return;
@@ -8821,7 +8838,7 @@ struct LocalSdrShim::Impl {
         }
         if (type == "nr") {
             if (!sharedGate("noise reduction")) return;
-            LocalSdrShim::instance().setNR(msg.find("\"on\":true") != std::string::npos);
+            LocalSdrShim::instance().setNR(jsonOn(msg));
             // ★ Same 1.4 ceiling as the per-listener path above, and for the same reason —
             //   two copies of one clamp, so they must move together or the shared radio keeps
             //   the bug the per-client path just lost.
@@ -8866,15 +8883,15 @@ struct LocalSdrShim::Impl {
             if (shared) shared->store(on);
         };
         if (type == "wsp") {
-            perListener(&vibedsp::RxPipeline::setWeakSignalProc, &ClientDsp::wspOn, &weakProcOn, msg.find("\"on\":true") != std::string::npos);
+            perListener(&vibedsp::RxPipeline::setWeakSignalProc, &ClientDsp::wspOn, &weakProcOn, jsonOn(msg));
             return;
         }
         if (type == "nb") {
-            perListener(&vibedsp::RxPipeline::setNoiseBlanker, &ClientDsp::nbOn, &nbOn, msg.find("\"on\":true") != std::string::npos);
+            perListener(&vibedsp::RxPipeline::setNoiseBlanker, &ClientDsp::nbOn, &nbOn, jsonOn(msg));
             return;
         }
         if (type == "ceq") {
-            perListener(&vibedsp::RxPipeline::setCeq, &ClientDsp::ceqOn, &ceqOn, msg.find("\"on\":true") != std::string::npos);
+            perListener(&vibedsp::RxPipeline::setCeq, &ClientDsp::ceqOn, &ceqOn, jsonOn(msg));
             return;
         }
         if (type == "autobw") {
@@ -8885,7 +8902,7 @@ struct LocalSdrShim::Impl {
              *     VFO ("a toggle like the rest of the FM enhancements as it will apply to
              *     everybody"), and is why the client hides it on a locked-centre receiver, where
              *     each listener has their own DSP and this would move a pipeline nobody hears. */
-            const bool on = msg.find("\"on\":true") != std::string::npos;
+            const bool on = jsonOn(msg);
             g_autoBwOn.store(on, std::memory_order_relaxed);
             LOGI("auto bandwidth: %s", on ? "on" : "off");
             if (!on) g_autoBwNowHz.store(0.0, std::memory_order_relaxed);
@@ -8893,12 +8910,12 @@ struct LocalSdrShim::Impl {
             return;
         }
         if (type == "ims") {
-            perListener(&vibedsp::RxPipeline::setIms, &ClientDsp::imsOn, &imsOn, msg.find("\"on\":true") != std::string::npos);
+            perListener(&vibedsp::RxPipeline::setIms, &ClientDsp::imsOn, &imsOn, jsonOn(msg));
             return;
         }
         if (type == "notch") {
             if (!sharedGate("the notch filter")) return;
-            LocalSdrShim::instance().setNotch(msg.find("\"on\":true") != std::string::npos); return;
+            LocalSdrShim::instance().setNotch(jsonOn(msg)); return;
         }
         // ★★ THE ANALYSER SWITCH, ON THE CONTROL SOCKET. The web client turns the extended
         // RDS stream on by ATTACHING A DECODER, which is right for it — it already holds the
@@ -8921,7 +8938,7 @@ struct LocalSdrShim::Impl {
         }
         if (type == "stereo") {
             if (!sharedGate("stereo")) return;
-            LocalSdrShim::instance().setStereoEnabled(msg.find("\"on\":true") != std::string::npos); return;
+            LocalSdrShim::instance().setStereoEnabled(jsonOn(msg)); return;
         }
         // Live spectrum frame rate — the client throttles this when the user goes
         // idle, so an unattended (solar/battery) server stops burning CPU and
