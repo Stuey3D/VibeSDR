@@ -91,6 +91,13 @@ public:
              *  ★ The TRACK path searches +/-64 samples around a PREDICTION and was written for
              *    exactly this. It needs only to be told what we consumed, which is what the old
              *    comment here ("immune to the buffer edges") was working around instead. */
+            {
+                const long at = rx_.lastFrameStart();
+                if (at >= 0) {
+                    if (lastAt_ >= 0 && std::labs(at - lastAt_) > 16) ++syncJumps_;
+                    lastAt_ = at;
+                }
+            }
             rx_.resetSync();
             /* ★★★ REVERTED (4.1.89): consuming `at + frameSamples` MEASURED WORSE on air.
              *  It raised the decoded frame rate from 20% to 50% of real time and then wrecked the
@@ -155,8 +162,8 @@ public:
          *  the live Pi — DAB reported 12B while the dongle sat on 96.6 MHz — and without both
          *  numbers side by side that is indistinguishable from "DAB does not decode here". */
         snprintf(b, sizeof b,
-                 ",\"channel\":\"%s\",\"centreHz\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
-                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
+                 ",\"channel\":\"%s\",\"centreHz\":%u,\"syncJumps\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
+                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
                  esc(e.label).c_str(), unsigned(e.eid));
         j += b;
         snprintf(b, sizeof b,
@@ -308,6 +315,14 @@ private:
      *  they need separating by measurement rather than argument: samples never arriving, frames
      *  arriving and being REJECTED by push(), or samples arriving and being dropped by the
      *  backlog guard. One counter each. */
+    /* ★ WHERE THE NULL WAS FOUND, frame to frame. With resetSync() on every frame the buffer is
+     *  re-acquired from scratch each time, and because exactly one frame is consumed the answer
+     *  should be the SAME offset every time. A jump means acquisition picked a different dip —
+     *  and a wrong frame feeds garbage into a 15-CIF time deinterleaver, so one bad acquisition
+     *  costs ~400 ms of audio while the FIB rate, which is not interleaved, barely moves. That is
+     *  the shape of Stuart's bursts on a signal reporting 98% FIB. */
+    long     lastAt_ = -1;
+    uint32_t syncJumps_ = 0;
     uint64_t samplesIn_ = 0;
     uint32_t pushCalls_ = 0, pushOk_ = 0, dropped_ = 0;
     int  aacCoreCh_ = 2;                       ///< what the ADTS header declares
