@@ -1170,7 +1170,8 @@ export class AudioPlayer {
     const table = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
     const idx = table.indexOf(rateHz);
     if (idx < 0 || ch < 1 || ch > 2) return null;
-    return new Uint8Array([ (2 << 3) | (idx >> 1), ((idx & 1) << 7) | (ch << 3) ]);
+    // ★ frameLengthFlag = 1 (bit 2): DAB+ frames are 960 samples — see _ascExplicitSbr.
+    return new Uint8Array([ (2 << 3) | (idx >> 1), ((idx & 1) << 7) | (ch << 3) | (1 << 2) ]);
   }
 
   /** ★★★ DAB+ HAS EXACTLY FOUR FORMATS, so SBR is derivable from the core rate alone (TS 102 563
@@ -1206,18 +1207,55 @@ export class AudioPlayer {
       acc = (acc << n) | (v & ((1 << n) - 1)); nbits += n;
       while (nbits >= 8) { nbits -= 8; out.push((acc >> nbits) & 0xff); }
     };
-    put(5, 5); put(ci, 4); put(ch, 4); put(oi, 4); put(2, 5); put(0, 3);
+    /* ★★★ frameLengthFlag = 1 — DAB+ USES 960-SAMPLE AAC FRAMES, NOT 1024. The superframe is
+     *  120 ms and carries 2/3/4/6 access units at 16/24/32/48 kHz core; only 960 divides that
+     *  (960/16000 x 2 = 120 ms, and so on for every row). At 1024 each row would be 128 ms.
+     *  We signalled 1024 to every decoder, so each service ran at 1024/960 = 1.0667x the right
+     *  speed, and the error rides on top of whatever the SBR handling did — which is exactly
+     *  Stuart's "some stations are slow and others are fast" rather than one uniform wrongness.
+     *  ★ GASpecificConfig: frameLengthFlag(1)=1, dependsOnCoreCoder(1)=0, extensionFlag(1)=0. */
+    put(5, 5); put(ci, 4); put(ch, 4); put(oi, 4); put(2, 5); put(4, 3);
     if (nbits) out.push((acc << (8 - nbits)) & 0xff);
     return new Uint8Array(out);
   }
 
+  /** ★★★ THROW THE WHOLE MediaSource AWAY. Its configuration is fixed at creation — the ASC, the
+   *  timescale and the samples-per-AU all describe ONE service — so it cannot be reused for a
+   *  service with a different rate or channel count. Called when the format changes. */
+  private _mseTeardown() {
+    try { this.mseEl?.pause(); } catch { /* already gone */ }
+    try { this.mseEl?.remove(); } catch { /* not in the document */ }
+    this.mseEl = null; this.mseSrc = null; this.mseBuf = null;
+    this.mseQueue = []; this.mseSeq = 1; this.mseTime = 0;
+    this.mseStreaming = false; this.mseSawStreaming = false;
+    this.mseCore = 0; this.mseCh = 0;
+    this.aacProbing = false;      // ★ so the next service may build a fresh one
+  }
+
   private _decodeAac(buf: ArrayBuffer, channels: number, coreRateHz: number) {
     if (this.mseBuf) {                       // Safari path — see _startMse
-      // ★ 2048 under SBR: the AU is 1024 CORE samples, which is 2048 at the doubled output rate
-      //   the timeline is now written in. See _ascExplicitSbr.
-      this.mseDur = this._sbrOutRate(coreRateHz) ? 2048 : 1024;
-      this._mseFeed(new Uint8Array(buf, 6 + 7));   // strip the ADTS header; the ASC carries the config
-      return;
+      /* ★★★ ONE SOURCE PER FORMAT. A MediaSource is configured ONCE, at creation: the
+       *  AudioSpecificConfig, the timescale and the samples per access unit all describe one
+       *  service. This fed every later service into whatever source the FIRST one built, so
+       *  changing station — or going to an MP2 service and back — appended 24 kHz-core frames to
+       *  a buffer told to expect 16 kHz, and Safari played nothing at all.
+       *  ★★★ STUART DIAGNOSED THIS FROM THE SYMPTOM: "so aac in safari did something then didnt
+       *      ... i chose an MP2 station on the same ensemble, the MP2 played, so i went back to
+       *      the DAB+ then it refused to play", then "the sample rate mismatch making it not play
+       *      at all in safari?" — yes, exactly that.
+       *  ★ Rebuilt rather than patched: there is no way to re-point a source buffer's codec
+       *    configuration, and pretending otherwise is what produced the flashes of sound. */
+      if (this.mseCore !== coreRateHz || this.mseCh !== channels) {
+        console.info(`[audio] DAB+ format changed (${this.mseCore}/${this.mseCh} -> `
+                   + `${coreRateHz}/${channels}) — rebuilding the MediaSource`);
+        this._mseTeardown();
+      } else {
+        // ★ 2048 under SBR: the AU is 1024 CORE samples, which is 2048 at the doubled output rate
+        //   the timeline is written in. See _ascExplicitSbr.
+        this.mseDur = this._sbrOutRate(coreRateHz) ? 1920 : 960;   // 960-sample DAB+ frames
+        this._mseFeed(new Uint8Array(buf, 6 + 7));  // strip the ADTS header; the ASC has the config
+        return;
+      }
     }
     if (this.aacBroken || !coreRateHz) return;
     /* ★★★ NO WebCodecs AT ALL — GO STRAIGHT TO MediaSource. This used to call _failAac and
@@ -1256,7 +1294,7 @@ export class AudioPlayer {
         type: 'key', timestamp: this.aacTs, data: buf.slice(6 + this.aacStrip),
       }));
     } catch (e) { this._failAac('enqueue', e); return; }
-    this.aacTs += Math.round(1024 * 1e6 / coreRateHz);
+    this.aacTs += Math.round(960 * 1e6 / coreRateHz);   // ★ 960-sample DAB+ frames
   }
 
   private aacProbing = false;
@@ -1265,9 +1303,18 @@ export class AudioPlayer {
   private async _openAac(coreRateHz: number, channels: number) {
     const asc = this._ascFor(coreRateHz, channels);
     const tries: { codec: string; description?: Uint8Array; strip: number }[] = [];
+    /* ★★★ THE EXPLICIT CONFIG FIRST — ADTS CANNOT SAY 960. DAB+ uses 960-sample AAC frames, and
+     *  an ADTS header has no field for the frame length, so a decoder handed ADTS assumes 1024 and
+     *  runs 1024/960 = 1.0667x fast. Stuart, on Edge: "Lou Reed is not quite a chipmunk but he is
+     *  fast" — that ratio exactly. Only the AudioSpecificConfig carries frameLengthFlag, so the
+     *  raw-AAC-plus-description candidates must be tried BEFORE the ADTS ones.
+     *  ★ ADTS is kept as the last resort: slightly fast beats silent on a decoder that will not
+     *    take a description. */
+    for (const codec of ['mp4a.40.5', 'mp4a.40.05', 'mp4a.40.2', 'mp4a.40.02']) {
+      if (asc) tries.push({ codec, description: asc, strip: 7 });  // raw AAC + explicit config
+    }
     for (const codec of ['mp4a.40.5', 'mp4a.40.05', 'mp4a.40.2', 'mp4a.40.02']) {
       tries.push({ codec, strip: 0 });                             // ADTS, config inferred
-      if (asc) tries.push({ codec, description: asc, strip: 7 });  // raw AAC + explicit config
     }
     for (const t of tries) {
       const cfg: AudioDecoderConfig = {
@@ -1313,6 +1360,9 @@ export class AudioPlayer {
   private mseManaged = false;
   private mseStreaming = false;
   private mseSawStreaming = false;
+  /** The format the live MediaSource was BUILT for; a change means rebuild. See _mseTeardown. */
+  private mseCore = 0;
+  private mseCh = 0;
 
   /** Open an <audio> + MediaSource pipeline for AAC. Returns false when the browser cannot. */
   private async _startMse(coreRateHz: number, channels: number): Promise<boolean> {
@@ -1399,7 +1449,8 @@ export class AudioPlayer {
             }
           }, 1500);
           this.mseEl = el; this.mseSrc = ms; this.mseBuf = sb;
-          this.mseSeq = 1; this.mseTime = 0; this.mseDur = outRate ? 2048 : 1024;
+          this.mseCore = coreRateHz; this.mseCh = channels;
+          this.mseSeq = 1; this.mseTime = 0; this.mseDur = outRate ? 1920 : 960;
           this.mseQueue = [initSegment(tsRate, channels, asc)];
           this._mseDrain();
           void el.play().catch(() => { /* a gesture may be needed; the buffer keeps filling */ });
@@ -1492,7 +1543,17 @@ export class AudioPlayer {
      *  ★ It is read from the AudioData rather than computed from the ADTS, because whether the
      *    decoder applied SBR (doubling it) is the decoder's business and differs between them. */
     this.aacOkFrames++;                  // ★ proof the browser CAN decode this — see _recoverAac
-    const srIn = ad.sampleRate || 48000;
+    /* ★★★ TRUST THE FRAME COUNT OVER THE REPORTED RATE. Under SBR an access unit is 1024 CORE
+     *  samples and the decoder returns 2048 at DOUBLE the rate — but some decoders report the
+     *  CORE rate on the AudioData while handing back the doubled samples. Resampling from the
+     *  core rate then stretches everything by exactly 2: Stuart, on Edge, "DAB+ sample rate seems
+     *  to be too slow ... justin timberlake is sounding closer to barry white". An octave down is
+     *  the unmistakable signature of 2x, and the frame count is the half of the pair that cannot
+     *  lie about it. */
+    let srIn = ad.sampleRate || 48000;
+    if (frames >= 1920 && srIn === this.aacRate && this._sbrOutRate(this.aacRate)) {
+      srIn = this._sbrOutRate(this.aacRate);
+    }
     const plane = new Float32Array(frames);
     const planes: Float32Array[] = [];
     for (let c = 0; c < ch; c++) {
