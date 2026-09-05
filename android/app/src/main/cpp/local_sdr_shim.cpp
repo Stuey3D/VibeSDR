@@ -6665,10 +6665,26 @@ struct LocalSdrShim::Impl {
         }
     }
 
-    void pumpDabAudio() {
+    /** @param iqSamples how much capture this call represents — see the pacing note below. */
+    void pumpDabAudio(size_t iqSamples = 0) {
         // ★ DAB+ never produces PCM here — it is reframed and handed on. See pumpDabPlusAudio.
         pumpDabPlusAudio();
-        const size_t have = g_dab.pcmAvailable();
+        /* ★★★ PACE IT. A DAB frame yields 96 ms of audio ALL AT ONCE, and this used to send the
+         *  lot the moment it appeared: five Opus packets back to back, then silence for 96 ms.
+         *  FM trickles out a block at a time, so every jitter buffer in the client is sized for a
+         *  smooth cadence and underruns on a lumpy one — which is heard as breakup.
+         *  ★★★ AND THE DECODER IS PROVEN INNOCENT. Measured on the live Pi at 4.2.8: MP2 frames
+         *  in 41.6/s against a real-time 41.7, ZERO decode failures, FIB 1.0, zero sync jumps,
+         *  frames at exactly 10.41/s. Nothing upstream of here is dropping anything, which is
+         *  what left delivery as the only place the breakup could be — and why Stuart heard it
+         *  identically on a V4 and aerial that have decoded DAB perfectly under OWRX for a year.
+         *  ★ The allowance is the real time this call represents: iqSamples at 2.048 MS/s is
+         *    iqSamples * 48000 / 2048000 = iqSamples * 3 / 128 audio frames. Sending at most that
+         *    much per block makes the output as smooth as the capture that drives it, with no
+         *    added latency — the surplus simply waits in pcm_ for the next block, which is what
+         *    the two-second bound there was always for. */
+        const size_t allow = iqSamples ? (iqSamples * 3) / 128 : size_t(-1);
+        const size_t have  = std::min(g_dab.pcmAvailable(), allow);
         if (have >= 480) {                                  // 10 ms at 48 kHz
             std::vector<float> f(have * 2);
             const size_t got = g_dab.takePcm(f.data(), have);
@@ -13120,7 +13136,7 @@ struct LocalSdrShim::Impl {
                 g_dab.setRfCentre(rtlCenter.load() + hwOffsetHz());
                 g_dab.setRfRate(sampleRate);
                 g_dab.feed(reinterpret_cast<const float*>(buf.data()), buf.size());
-                pumpDabAudio();
+                pumpDabAudio(buf.size());
                 /* ★★★ AND THE SPECTRUM STILL RUNS. Skipping the ordinary chain entirely stopped
                  *  the waterfall, and the spectrum socket is what carries the client's frame
                  *  rate, link meter and view state — so the whole UI degraded: 0.0 fps, no
