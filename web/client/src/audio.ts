@@ -1352,6 +1352,18 @@ export class AudioPlayer {
       // ★ `el.src` inside this guard narrows el to never — assign through anyEl in BOTH arms.
       if ('srcObject' in el) { try { anyEl.srcObject = ms; } catch { anyEl.src = URL.createObjectURL(ms as unknown as MediaSource); } }
       else anyEl.src = URL.createObjectURL(ms as unknown as MediaSource);
+      /* ★★★ PLAY FIRST, THEN WAIT FOR sourceopen — NOT THE OTHER WAY ROUND. A ManagedMediaSource
+       *  does not open until the element actually ATTEMPTS PLAYBACK; that is the whole basis of it
+       *  being "managed". We called play() inside the sourceopen handler, so we were waiting for
+       *  an event that could only be caused by a call we would make once it arrived. It timed out
+       *  every single time and the client reported "DAB+ needs AAC support this browser does not
+       *  offer" — Safari's own screenshot, 2026-09-06, on a page where the ensemble and the
+       *  station list were decoding perfectly beside the message.
+       *  ★★ THIS IS WHY THE startstreaming FIX IN 4.6.1 CHANGED NOTHING: it lives inside
+       *     sourceopen, which never ran. A fix behind a door that never opens.
+       *  ★ Rejection is expected and harmless when a gesture is still needed — the element keeps
+       *    the source attached, sourceopen still fires, and the buffer fills meanwhile. */
+      void el.play().catch(() => { /* gesture may be required; the source still opens */ });
       let settled = false;
       ms.addEventListener('sourceopen', () => {
         try {
