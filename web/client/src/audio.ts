@@ -1298,9 +1298,10 @@ export class AudioPlayer {
       el.style.display = 'none';
       document.body.appendChild(el);
       const ms = new MS();
-      const anyEl = el as unknown as { srcObject: unknown };
-      if ('srcObject' in el) { try { anyEl.srcObject = ms; } catch { el.src = URL.createObjectURL(ms as unknown as MediaSource); } }
-      else el.src = URL.createObjectURL(ms as unknown as MediaSource);
+      const anyEl = el as unknown as { srcObject: unknown; src: string };
+      // ★ `el.src` inside this guard narrows el to never — assign through anyEl in BOTH arms.
+      if ('srcObject' in el) { try { anyEl.srcObject = ms; } catch { anyEl.src = URL.createObjectURL(ms as unknown as MediaSource); } }
+      else anyEl.src = URL.createObjectURL(ms as unknown as MediaSource);
       let settled = false;
       ms.addEventListener('sourceopen', () => {
         try {

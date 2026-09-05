@@ -9058,6 +9058,15 @@ struct LocalSdrShim::Impl {
                       //     Events say what just happened; hwinfo says what IS, and a readout is a
                       //     state.
                       + ",\"agc\":" + (g_rtlAgc.load(std::memory_order_relaxed) ? "1" : "0")
+                      /* ★★★ THE DONGLE'S OWN DIGITAL AGC — THE ONE THE BUTTON ACTUALLY COMMANDS.
+                       *     `agc` above is VibeAGC (g_rtlAgc). The client's AGC toggle sends {"type":"agc"}, and
+                       *     THAT handler calls setAgc() — the RTL2832's DIGITAL AGC. So one button READ one AGC
+                       *     and WROTE a different one. Stuart, 2026-09-05: "the digital AGC button looks like its
+                       *     on but when pressed I think it actually turns on then when pressed again it turns off."
+                       *     Never a polarity slip: the label tracked a flag the button does not control, so it
+                       *     could not agree with the radio at all.
+                       *  ★★ ONE NAME, TWO READERS. Publish what the button COMMANDS, and let it read THAT. */
+                      + ",\"digitalAgc\":" + (g_rtlDigitalAgc.load(std::memory_order_relaxed) ? "1" : "0")
                       + ",\"ovlSteps\":" + std::to_string(g_ovlSteps.load(std::memory_order_relaxed))
                       // ★★★ WHAT THE LOOP IS ACTUALLY MEASURING, so a person can see WHY it chose a
                       //     gain instead of only what it chose. Every wrong turn this AGC has taken
@@ -19000,6 +19009,15 @@ void LocalSdrShim::overloadTick() {
                             + ",\"dir\":" + (want > steps ? "-1" : "1")
                             + ",\"gain\":" + std::to_string(applied)
                             + ",\"agc\":" + (g_rtlAgc.load(std::memory_order_relaxed) ? "1" : "0")
+                            /* ★★★ THE DONGLE'S OWN DIGITAL AGC — THE ONE THE BUTTON ACTUALLY COMMANDS.
+                             *     `agc` above is VibeAGC (g_rtlAgc). The client's AGC toggle sends {"type":"agc"}, and
+                             *     THAT handler calls setAgc() — the RTL2832's DIGITAL AGC. So one button READ one AGC
+                             *     and WROTE a different one. Stuart, 2026-09-05: "the digital AGC button looks like its
+                             *     on but when pressed I think it actually turns on then when pressed again it turns off."
+                             *     Never a polarity slip: the label tracked a flag the button does not control, so it
+                             *     could not agree with the radio at all.
+                             *  ★★ ONE NAME, TWO READERS. Publish what the button COMMANDS, and let it read THAT. */
+                            + ",\"digitalAgc\":" + (g_rtlDigitalAgc.load(std::memory_order_relaxed) ? "1" : "0")
                             + ",\"adcPeak\":" + std::to_string((int)llround(
                                   g_adcPeakDbfs.load(std::memory_order_relaxed)))
                             + "}";

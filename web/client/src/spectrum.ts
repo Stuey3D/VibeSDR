@@ -289,6 +289,13 @@ export interface SpectrumCallbacks {
    *  argument on onHwInfo — that signature is already at the length where a caller gets one
    *  positional wrong and nothing complains. */
   onTunerBw?: (hz: number, rfCentreHz: number, auto: boolean) => void;
+  /** ★★★ THE DONGLE'S DIGITAL AGC — the flag the AGC BUTTON actually commands. `agc` on hwinfo is
+   *  VibeAGC; setHwAgc() sends {type:'agc'}, which the server routes to the RTL2832's digital AGC.
+   *  The button was painted from the first and wired to the second, so it could never agree with
+   *  the radio (Stuart: "it looks like its on but when pressed I think it actually turns on").
+   *  ★ Its own callback for the reason onTunerBw has one — onHwInfo's positional list is already
+   *    past the length where a wrong argument goes unnoticed. */
+  onDigitalAgc?: (on: boolean) => void;
   onRspStat?: (systemGainDb: number, lna: number, ifgr: number, overload: boolean,
                settling: boolean) => void;
   onStatus?: (s: 'connecting' | 'open' | 'closed' | 'error', detail?: string) => void;
@@ -754,6 +761,8 @@ export class SpectrumClient {
         //    not the enforcement — it is what lets us leave them out of the menu entirely.
         //    Offering a mode that will be refused reads as "the feature is broken"; not offering
         //    it reads as "this receiver is for HF", which is the truth.
+        if (msg.digitalAgc !== undefined)
+          this.cb.onDigitalAgc?.(msg.digitalAgc === 1 || msg.digitalAgc === true);
         if (Array.isArray(msg.blocked)) this.cb.onBlockedModes?.(msg.blocked as string[]);
         if (typeof msg.nr === 'boolean' || typeof msg.notch === 'boolean') {
           this.cb.onDspState?.({

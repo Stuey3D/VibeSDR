@@ -1092,6 +1092,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         if (first) setMode(first, true);
       }
     },
+    /* ★ Both halves, as the note on the removed setToggleTo said: a control that must not COMMAND
+     *   from storage has to READ from the radio — and it has to read the SAME flag it commands. */
+    onDigitalAgc: (on) => { hwDigitalAgcOn = on; setToggleTo('agc', on, 'agc'); },
     onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio, lockedCentre, gainCap, agcLocked, gainLocked, ifGrFloor,
                gainNow, agc, ovlSteps, adcPeak) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
@@ -1106,7 +1109,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *     "all those settings that were meant to be on still had to be set manually after a
        *     page refresh." A control that must not COMMAND from storage has to READ from the
        *     radio, or it just lies more quietly than before. Both halves or neither. */
-      setToggleTo('agc', hwAgcOn, 'agc');
+      /* ★★★ NOT FROM hwAgcOn — THAT IS A DIFFERENT AGC. See onDigitalAgc below: this button
+       *     sends {type:'agc'}, which the server routes to the DONGLE's digital AGC, while
+       *     `agc` on hwinfo reports VibeAGC. Painting it from VibeAGC is what made it behave as
+       *     though its polarity were inverted. The button now reads exactly what it writes. */
       // ★ Paint the chip from STATE, so it is right on arrival and after a reload — not only after
       //   the loop happens to move while you are watching.
       {
@@ -1690,6 +1696,9 @@ let hwGainNow = -1;
  *     closure is a value that WILL be stale, so it is held here and read through, never passed in.
  *  ★ A readout that names a mode the radio is not in is worse than a blank one. */
 let hwAgcOn = false;
+/** The DONGLE's digital AGC (rtlsdr_set_agc_mode), which is what the AGC button commands — as
+ *  distinct from hwAgcOn, which is VibeAGC and is what the GAIN logic reasons about. */
+let hwDigitalAgcOn = false;
 
 /* ★★★ THE "GAIN IS AT MINIMUM" NOTICE. See the markup note above #gainMinNote for why it exists,
  *   why it lives above the bar rather than in the top toast, and why it fades.
