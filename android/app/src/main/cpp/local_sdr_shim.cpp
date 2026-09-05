@@ -2916,6 +2916,33 @@ struct LocalSdrShim::Impl {
      *    does nothing) and released to WIDE once the view is bigger than the filter could usefully
      *    be, which is the zoomed-out case that wants no filtering at all. */
     void applyAutoIf() {
+        /* ★★★ NEVER NARROW THE TUNER UNDER DAB. THE ENSEMBLE *IS* THE CAPTURE.
+         *
+         *  This sets the tuner's IF filter from the listener's VIEW span — right for a station
+         *  inside a wide capture, catastrophic for a mode where the signal fills the whole band.
+         *  A DAB ensemble is 1 536 kHz wide; a zoomed-in listener drove `want` down to around
+         *  1 000 kHz, and Stuart's own status bar showed exactly that: "IF 1000 kHz auto". The
+         *  filter then cut the outer third of the carriers off.
+         *
+         *  ★★★ AND THAT IS THE BURST. Losing the edge carriers does not stop the receiver — the
+         *  null is still deep, the PRS still correlates, the FIC still passes — it just puts a
+         *  steady stream of bit errors into every codeword, which the Viterbi absorbs until it
+         *  cannot, and which lands hardest on the WEAKLY PROTECTED part of the frame. That is
+         *  precisely where the corruption measured: 232 of 312 damaged scale factors past the
+         *  L1/L2 boundary, decoding as loud tonal squeals rather than as bubbling mud.
+         *
+         *  ★ It also explains the two things that never fitted anything else: Stuart's "especially
+         *    when zooming in", and why his OWRX has decoded the same aerial perfectly for a year —
+         *    its DAB profile is a fixed 2.4 MS/s with no view-driven IF filter to narrow.
+         *
+         *  ★ 0 means "no filtering", which is what a mode that occupies the whole capture wants. */
+        if (g_dabMode.load(std::memory_order_relaxed)) {
+            if (g_tunerBwHz.load(std::memory_order_relaxed) != 0) {
+                LocalSdrShim::instance().setTunerBandwidth(0);
+                LOGI("[DAB] tuner IF filter opened right up — the ensemble is 1.536 MHz wide");
+            }
+            return;
+        }
         if (!g_tunerBwAuto.load(std::memory_order_relaxed)) return;
         /* ★★★ NOT ON A LOCKED-FREQUENCY RECEIVER, AND THAT IS THE RIGHT ANSWER RATHER THAN A
          *     LIMITATION. Stuart: "Cant have a 2.4MHz sample rate and promise a 3-5.4MHz spectrum
