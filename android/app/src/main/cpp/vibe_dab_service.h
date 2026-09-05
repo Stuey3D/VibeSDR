@@ -87,7 +87,61 @@ public:
      *    (frames 156-169, fourteen consecutive frames corrupted).
      *
      *  ★ This function is now a memcpy and a notify. Everything expensive is on the worker. */
+    /** ★★★ RAW IQ TO DISK, FOR AN OFFLINE HARNESS. Off unless VIBE_IQ_DUMP names a file.
+     *  Every wrong theory this week was overturned by REAL CAPTURED DATA and none by reasoning,
+     *  and each hypothesis was costing a ten-minute deploy to the live Pi. With the air on disk
+     *  the three stages that can still be at fault — the 16-CIF time deinterleaver, the UEP
+     *  depuncturing and CU extraction — can be tested in seconds against the same samples.
+     *  ★★★ BUFFERED IN RAM AND WRITTEN ONCE AT THE END. Writing 9.6 MB/s to the SD card from
+     *      this thread would stall the DSP loop and punch exactly the gaps we are hunting into
+     *      the recording — the capture would manufacture its own evidence.
+     *  ★★ VIBE_IQ_SKIP seconds are discarded first so the AGC has settled (Stuart asked for this
+     *     explicitly: a gain still climbing is not the receiver anyone listens to).
+     *  ★ int16 loses nothing: the source is an 8-bit dongle. Header carries the rate and centre,
+     *    because a capture whose sample rate has to be guessed is a capture that lies. */
+    void dumpIq_(const float* interleaved, size_t nSamples) {
+        static const char* path = std::getenv("VIBE_IQ_DUMP");
+        if (!path) return;
+        static const double skipSecs = std::getenv("VIBE_IQ_SKIP") ? atof(std::getenv("VIBE_IQ_SKIP")) : 30.0;
+        static const double capSecs  = std::getenv("VIBE_IQ_SECS") ? atof(std::getenv("VIBE_IQ_SECS")) : 30.0;
+        static bool done = false;
+        if (done) return;
+        const double rate = rfRate_ > 0 ? rfRate_ : 2400000.0;
+        static double firstAt = 0.0;
+        const double now = double(std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count()) / 1000.0;
+        if (firstAt == 0.0) { firstAt = now; return; }
+        if (now - firstAt < skipSecs) return;                   // let the AGC settle
+        static std::vector<int16_t> buf;
+        static size_t w = 0;
+        if (buf.empty()) {
+            buf.resize(size_t(rate * capSecs) * 2);
+            fprintf(stderr, "[DAB] IQ capture started: %.0f s at %.0f MS/s -> %s (%zu MB)\n",
+                    capSecs, rate, path, (buf.size() * 2) / (1024 * 1024));
+        }
+        const size_t want = std::min(nSamples * 2, buf.size() - w);
+        for (size_t i = 0; i < want; ++i) {
+            float v = interleaved[i] * 32767.0f;
+            buf[w + i] = int16_t(v > 32767.0f ? 32767.0f : (v < -32768.0f ? -32768.0f : v));
+        }
+        w += want;
+        if (w < buf.size()) return;
+        done = true;
+        if (FILE* fp = std::fopen(path, "wb")) {
+            const char magic[8] = { 'V','I','B','E','I','Q','1','6' };
+            const double rc = rfCentre_;
+            std::fwrite(magic, 1, 8, fp);
+            std::fwrite(&rate, sizeof rate, 1, fp);
+            std::fwrite(&rc,   sizeof rc,   1, fp);
+            std::fwrite(buf.data(), sizeof(int16_t), buf.size(), fp);
+            std::fclose(fp);
+            fprintf(stderr, "[DAB] IQ capture WRITTEN: %s\n", path);
+        }
+        std::vector<int16_t>().swap(buf);
+    }
+
     void feed(const float* interleaved, size_t nSamples) {
+        dumpIq_(interleaved, nSamples);
         {
             std::lock_guard<std::mutex> lk(m_);
             if (!started_) { started_ = true; stop_ = false;
