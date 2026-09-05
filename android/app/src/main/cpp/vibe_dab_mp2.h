@@ -166,6 +166,7 @@ public:
         // ★ Protection bit CLEAR = a CRC is present. Keep it: it is checked below, once the
         //   fields it covers have been read. See mp2Crc16.
         const bool haveCrc = ((frame[1] >> 0) & 1) == 0;
+        lastHadCrc_ = haveCrc;
         const uint16_t wantCrc = haveCrc ? uint16_t(br.get(16)) : 0;
         const size_t crcFrom = br.bitPos();
 
@@ -257,6 +258,10 @@ public:
     }
 
     const Mp2Info& info() const { return info_; }
+    /** ★ Did the last frame carry an MPEG header CRC at all? DAB may use the SCALE FACTOR CRC of
+     *  TS 103 466 instead, in which case the MPEG protection bit is set and there is nothing to
+     *  check here — which would make a zero refusal count meaningless. Measure before believing. */
+    bool lastHadCrc() const { return lastHadCrc_; }
     void reset() { std::memset(v_, 0, sizeof v_); }
 
 private:
@@ -296,6 +301,7 @@ private:
 
     float v_[2][1024] = {};
     Mp2Info info_;
+    bool    lastHadCrc_ = false;
 };
 
 }  // namespace vibedab

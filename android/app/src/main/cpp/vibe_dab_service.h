@@ -162,8 +162,8 @@ public:
          *  the live Pi — DAB reported 12B while the dongle sat on 96.6 MHz — and without both
          *  numbers side by side that is indistinguishable from "DAB does not decode here". */
         snprintf(b, sizeof b,
-                 ",\"channel\":\"%s\",\"centreHz\":%u,\"mp2In\":%u,\"mp2Bad\":%u,\"mp2Out\":%u,\"syncJumps\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
-                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), mp2In_, mp2Bad_, mp2Out_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
+                 ",\"channel\":\"%s\",\"centreHz\":%u,\"mp2Crc\":%u,\"mp2In\":%u,\"mp2Bad\":%u,\"mp2Out\":%u,\"syncJumps\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
+                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), mp2WithCrc_, mp2In_, mp2Bad_, mp2Out_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
                  esc(e.label).c_str(), unsigned(e.eid));
         j += b;
         snprintf(b, sizeof b,
@@ -207,6 +207,7 @@ private:
             ++mp2In_;
             if (mp2_.decode(f.data(), f.size(), out) <= 0) { ++mp2Bad_; continue; }
             ++mp2Out_;
+            if (mp2_.lastHadCrc()) ++mp2WithCrc_;
             /* ★★★ THE CHIPMUNKS. Mp2Decoder writes INTERLEAVED at the frame's OWN channel count
              *  and its OWN sample rate, and this pushed the result straight into a buffer that
              *  takePcm() reads as 48 kHz STEREO pairs. Two independent speed-ups, and UK DAB has
@@ -328,7 +329,7 @@ private:
      *  channel is clean and NOTHING about the audio. Stuart is hearing breakup at 100% FIB, which
      *  is exactly what that distinction predicts, and it is where the measurement has to go next:
      *  how many audio frames actually decode, against how many arrive. */
-    uint32_t mp2In_ = 0, mp2Bad_ = 0, mp2Out_ = 0;
+    uint32_t mp2In_ = 0, mp2Bad_ = 0, mp2Out_ = 0, mp2WithCrc_ = 0;
     long     lastAt_ = -1;
     uint32_t syncJumps_ = 0;
     uint64_t samplesIn_ = 0;
