@@ -1175,56 +1175,22 @@ export class AudioPlayer {
   private _decodeAac(buf: ArrayBuffer, channels: number, coreRateHz: number) {
     if (this.aacBroken || !coreRateHz) return;
     if (typeof AudioDecoder === 'undefined') {
-      if (!this.aacBroken) {
-        this.aacBroken = true;
-        console.warn('[audio] DAB+ needs WebCodecs AAC and this browser has no AudioDecoder — silence');
-      }
+      this._failAac('support', 'this browser has no WebCodecs AudioDecoder');
       return;
     }
     if (!this.aacDec || this.aacRate !== coreRateHz || this.aacCh !== channels) {
-      try { this.aacDec?.close(); } catch { /* already gone */ }
-      this.aacRate = coreRateHz; this.aacCh = channels; this.aacTs = 0;
-      this.aacDec = new AudioDecoder({
-        output: (ad) => this._onAacData(ad),
-        error:  (e)  => { this._failAac('decode', e); },
-      });
-      /* ★★★ TRY BOTH CODEC STRINGS. mp4a.40.5 is HE-AAC and is what DAB+ actually carries, but
-       *  not every browser advertises it even when it can decode the stream — the SBR and PS
-       *  signalling is implicit in the bitstream, so an AAC-LC decoder configured as 40.2 will
-       *  often take the same ADTS quite happily. Chrome accepts raw ADTS when no `description`
-       *  is supplied; Safari is stricter, and a silent configure failure here is indistinguishable
-       *  from a dead radio (Stuart: "no audio at all on DAB", with the server provably sending
-       *  429 AAC packets in 45 s).
-       *  ★ Whatever happens, it is SAID OUT LOUD — see _failAac. Silence with no explanation is
-       *    the worst outcome and it is the one we had. */
-      let configured = false;
-      this.aacStrip = 0;
-      for (const codec of ['mp4a.40.5', 'mp4a.40.2']) {
-        try {
-          this.aacDec.configure({ codec, sampleRate: coreRateHz, numberOfChannels: channels });
-          configured = true;
-          console.info(`[audio] DAB+ decoding as ${codec} @ ${coreRateHz} Hz, ${channels}ch (ADTS)`);
-          break;
-        } catch (e) { console.warn(`[audio] AAC configure ${codec} failed:`, e); }
-      }
-      /* ★★★ AND THE EXPLICIT-CONFIG ATTEMPT, FOR SAFARI. Apple has AAC everywhere in its media
-       *  stack — it co-owns the patents — but WebCodecs is a much newer API and Safari's
-       *  AudioDecoder will not infer a config from raw ADTS the way Chromium does. Give it an
-       *  AudioSpecificConfig as `description` and strip the 7-byte ADTS header from every packet,
-       *  which is the same bitstream expressed the way that decoder expects it. */
-      if (!configured) {
-        const asc = this._ascFor(coreRateHz, channels);
-        if (asc) {
-          try {
-            this.aacDec.configure({ codec: 'mp4a.40.2', sampleRate: coreRateHz,
-                                    numberOfChannels: channels, description: asc });
-            configured = true;
-            this.aacStrip = 7;
-            console.info(`[audio] DAB+ decoding as mp4a.40.2 @ ${coreRateHz} Hz, ${channels}ch (raw + ASC)`);
-          } catch (e) { console.warn('[audio] AAC configure with description failed:', e); }
-        }
-      }
-      if (!configured) { this._failAac('configure', 'no AAC codec this browser accepts'); return; }
+      /* ★★★ PROBE, DO NOT try/catch A configure(). This is the bug Stuart's snippet exposed:
+       *  configure() does NOT throw for a codec the browser cannot decode — it fails
+       *  ASYNCHRONOUSLY through the error callback. So the old loop "succeeded" on its first
+       *  candidate every time and NEVER tried the others; the fallbacks I added for Safari could
+       *  not have run. isConfigSupported() is the question actually being asked.
+       *  ★ Candidates include the ZERO-PADDED forms. 'mp4a.40.2' and 'mp4a.40.02' are the same
+       *    codec and browsers differ over which spelling they accept — Stuart found the padded
+       *    one in Apple's own example. */
+      this.aacRate = coreRateHz; this.aacCh = channels; this.aacTs = 0; this.aacStrip = 0;
+      this.aacDec = null;
+      if (!this.aacProbing) { this.aacProbing = true; void this._openAac(coreRateHz, channels); }
+      return;                       // AUs during the probe are dropped; it resolves in a moment
     }
     try {
       this.aacDec.decode(new EncodedAudioChunk({
@@ -1232,6 +1198,43 @@ export class AudioPlayer {
       }));
     } catch (e) { this._failAac('enqueue', e); return; }
     this.aacTs += Math.round(1024 * 1e6 / coreRateHz);
+  }
+
+  private aacProbing = false;
+
+  /** Find a config this browser will actually take, then open the decoder with it. */
+  private async _openAac(coreRateHz: number, channels: number) {
+    const asc = this._ascFor(coreRateHz, channels);
+    const tries: { codec: string; description?: Uint8Array; strip: number }[] = [];
+    for (const codec of ['mp4a.40.5', 'mp4a.40.05', 'mp4a.40.2', 'mp4a.40.02']) {
+      tries.push({ codec, strip: 0 });                             // ADTS, config inferred
+      if (asc) tries.push({ codec, description: asc, strip: 7 });  // raw AAC + explicit config
+    }
+    for (const t of tries) {
+      const cfg: AudioDecoderConfig = {
+        codec: t.codec, sampleRate: coreRateHz, numberOfChannels: channels,
+        ...(t.description ? { description: t.description } : {}),
+      };
+      let ok = false;
+      try { ok = (await AudioDecoder.isConfigSupported(cfg)).supported === true; }
+      catch { ok = false; }
+      if (!ok) continue;
+      try {
+        const dec = new AudioDecoder({
+          output: (ad) => this._onAacData(ad),
+          error:  (e)  => this._failAac('decode', e),
+        });
+        dec.configure(cfg);
+        this.aacDec = dec;
+        this.aacStrip = t.strip;
+        this.aacProbing = false;
+        console.info(`[audio] DAB+ decoding as ${t.codec}`
+                     + `${t.description ? ' (raw + ASC)' : ' (ADTS)'} @ ${coreRateHz} Hz, ${channels}ch`);
+        return;
+      } catch (e) { console.warn(`[audio] AAC configure ${t.codec} failed:`, e); }
+    }
+    this.aacProbing = false;
+    this._failAac('support', 'no AAC configuration this browser accepts');
   }
 
   /** ★ Say it where the listener is looking. A DAB+ service that cannot be decoded must not
