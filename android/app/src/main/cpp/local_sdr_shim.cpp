@@ -8161,7 +8161,17 @@ struct LocalSdrShim::Impl {
                  *  ★ Here, inside the once-only block, both hold: entering DAB hands the gain to
                  *    the AGC at the bottom, changing multiplex leaves it alone, and a manual gain
                  *    set WHILE in DAB is nobody's business but the listener's. */
+                /* ★★★ AND RUN THE LOOP. g_gainTarget = -1 says "auto", but the AGC only actually
+                 *  steps while g_rtlAgc is set — so on a receiver with VibeAGC switched off,
+                 *  every ceiling and target this file defines is dead code and the gain simply
+                 *  stays wherever it was. Measured: ADC peak parked at -11.8 dBFS with a -20
+                 *  ceiling in force and NOT ONE gain step in 160 seconds. That is why Stuart's
+                 *  front end is still folding the FM band into Band III at 208 MHz however low I
+                 *  set the ceiling.
+                 *  ★ Turned on for DAB and restored on the way out with everything else. DAB
+                 *    re-points the AGC; it needs the AGC to be running to be re-pointed. */
                 LocalSdrShim::instance().setGain(-1);
+                g_rtlAgc.store(true, std::memory_order_relaxed);
                 agcForget("DAB: an ensemble is not the carrier we came off — reconverge from the bottom");
             }
             /* ★★★ RESTART THE AGC FROM THE BOTTOM. The loop is built to start at the minimum and
