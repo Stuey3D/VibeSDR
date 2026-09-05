@@ -13,7 +13,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <condition_variable>
 #include <deque>
+#include <thread>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -27,7 +29,9 @@ namespace vibedab {
 
 class DabService {
 public:
-    /** The rate every listener socket is fed at, whatever the service was coded at. */
+        ~DabService() { stopWorker(); }
+
+/** The rate every listener socket is fed at, whatever the service was coded at. */
     static constexpr uint32_t kAudioRateHz = 48000;
     static constexpr uint32_t kRateHz = kCanonicalRateHz;   // 2.048 MSPS
 
@@ -64,16 +68,61 @@ public:
      *  than inferred from a receiver that simply fails to lock. */
     void setRfRate(double hz) { std::lock_guard<std::mutex> lk(m_); rfRate_ = hz; }
 
-    /** Feed interleaved complex samples at 2.048 MSPS. */
+    /** ★★★ FEED ONLY. THE DECODING HAPPENS ON ITS OWN THREAD — see workerLoop.
+     *
+     *  DAB was decoded INLINE on the DSP thread: a 64-state full-frame Viterbi over every CIF,
+     *  four times per 96 ms frame, inside the same callback that has to keep emptying the radio's
+     *  buffers. Whenever that overran, librtlsdr DISCARDED capture buffers before we ever saw
+     *  them — so `samplesIn` still averaged a healthy 2.048 MS/s and `dropped` stayed at zero,
+     *  because both of those count what ARRIVED. The loss was invisible to every counter we had,
+     *  which is why the measurements kept saying the input was perfect.
+     *
+     *  ★★★ Stuart's hypothesis, and the evidence for it is that the XCOVER — a phone, and slower —
+     *  is WORSE than the Pi on an aerial with a year of flawless DAB behind it. Signal problems do
+     *  not care how fast the computer is; timing problems care about nothing else.
+     *
+     *  ★ A gap in the IQ is a discontinuity, and ONE discontinuity spread through a 16-CIF
+     *    deinterleaver is ~380 ms of damage — exactly the runs measured in the captured frames
+     *    (frames 156-169, fourteen consecutive frames corrupted).
+     *
+     *  ★ This function is now a memcpy and a notify. Everything expensive is on the worker. */
     void feed(const float* interleaved, size_t nSamples) {
-        std::lock_guard<std::mutex> lk(m_);
-        samplesIn_ += nSamples;
-        const size_t base = iq_.size();
-        iq_.resize(base + nSamples);
-        for (size_t i = 0; i < nSamples; ++i)
-            iq_[base + i] = { interleaved[2 * i], interleaved[2 * i + 1] };
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            if (!started_) { started_ = true; stop_ = false;
+                             worker_ = std::thread([this] { workerLoop(); }); }
+            samplesIn_ += nSamples;
+            const size_t base = iq_.size();
+            iq_.resize(base + nSamples);
+            for (size_t i = 0; i < nSamples; ++i)
+                iq_[base + i] = { interleaved[2 * i], interleaved[2 * i + 1] };
+            /* ★ Bound the backlog here, where the producer is: if the worker cannot keep up, the
+             *  OLDEST samples go. Audio minutes late is worse than a gap, and now the drop is
+             *  ours and counted rather than the driver's and silent. */
+            const size_t need = size_t(modeI().frameSamples) * 2;
+            if (iq_.size() > need * 4) {
+                dropped_ += uint32_t(iq_.size() - need * 2);
+                iq_.erase(iq_.begin(), iq_.end() - long(need * 2));
+            }
+        }
+        cv_.notify_one();
+    }
 
+    /** Stop the decode thread. Safe to call more than once. */
+    void stopWorker() {
+        { std::lock_guard<std::mutex> lk(m_); stop_ = true; }
+        cv_.notify_all();
+        if (worker_.joinable()) worker_.join();
+        started_ = false;
+    }
+
+private:
+    /** The decode loop. Runs on its own thread; holds m_ except where noted. */
+    void workerLoop() {
+        std::unique_lock<std::mutex> lk(m_);
         const size_t need = size_t(modeI().frameSamples) * 2;
+        while (!stop_) {
+            if (iq_.size() < need) { cv_.wait(lk); continue; }
         while (iq_.size() >= need) {
             ++pushCalls_;
             if (rx_.push(iq_.data(), need)) ++pushOk_;
@@ -114,14 +163,11 @@ public:
                 if (rx_.selectService(want_)) sid_ = want_;
 
             drainAudio();
-        }
-        /* ★ Never let the backlog grow without bound: if the caller feeds faster than we decode,
-         *  drop the OLDEST samples. Audio that is minutes late is worse than a gap. */
-        if (iq_.size() > need * 4) {
-            dropped_ += uint32_t(iq_.size() - need * 2);
-            iq_.erase(iq_.begin(), iq_.end() - long(need * 2));
-        }
+        }   // while (iq_.size() >= need)
+        }   // while (!stop_)
     }
+
+public:
 
     /** Take decoded audio (interleaved stereo, 48 kHz). Returns frames written. */
     size_t takePcm(float* out, size_t maxFrames) {
@@ -356,6 +402,10 @@ private:
     uint32_t pushCalls_ = 0, pushOk_ = 0, dropped_ = 0;
     int  aacCoreCh_ = 2;                       ///< what the ADTS header declares
     int  aacOutCh_  = 2;                       ///< what the decoder will produce (PS -> 2)
+
+    std::thread             worker_;
+    std::condition_variable cv_;
+    bool                    stop_ = false, started_ = false;
 
     mutable std::mutex m_;
     DabReceiver rx_{kRateHz};
