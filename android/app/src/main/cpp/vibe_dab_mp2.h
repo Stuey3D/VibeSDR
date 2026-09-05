@@ -42,6 +42,39 @@ private:
     const uint8_t* d_; size_t n_; size_t pos_ = 0;
 };
 
+/** ★★★ THE LAYER II CRC, WHICH WE WERE READING PAST AND THROWING AWAY.
+ *
+ *  MPEG-1 Layer II protects the second half of the header, the bit ALLOCATION and the scfsi with
+ *  a CRC-16 (x^16 + x^15 + x^2 + 1, preset all ones). Those are exactly the fields that decide how
+ *  every following bit is interpreted, which is why the standard protects them and nothing else.
+ *
+ *  ★★★ MEASURED, from Stuart's own 41-second recording off the live receiver: normal audio peaks
+ *  at a very consistent 19,600 of 32,767 — the flatness of broadcast limiting — and three times
+ *  in that recording, at 6.24 s, 18.44 s and 31.56 s, the level jumps 2.6x and slams into full
+ *  scale for 140-160 ms. Spacing 12-13 seconds. That is his "clean for 10-15 seconds with a
+ *  1 second burst", and it is not programme material: a limited broadcast does not do that.
+ *
+ *  It is a corrupt frame decoded as though it were sound. A wrong allocation desynchronises the
+ *  bit reader and every sample after it is noise — loud noise, because the quantiser scales it.
+ *  Every real receiver checks this CRC and conceals the frame; we skipped the field with
+ *  `br.get(16)` and decoded the wreckage. That is why a V4 and aerial with a year of flawless
+ *  DAB under OWRX broke up on ours: not weaker demodulation — no error checking at the end of it.
+ *
+ *  ★ 0.05% of samples were at full scale. A tiny number, and all of it audible.
+ */
+inline uint16_t mp2Crc16(const uint8_t* d, size_t bitStart, size_t bitEnd) {
+    uint16_t crc = 0xFFFF;
+    const auto push = [&crc](unsigned bit) {
+        const bool msb = (crc & 0x8000u) != 0;
+        crc = uint16_t(crc << 1);
+        if (msb != (bit != 0)) crc ^= 0x8005u;
+    };
+    // The header's last two bytes are protected, the first two (sync and rates) are not.
+    for (size_t i = 16; i < 32; ++i) push((d[i >> 3] >> (7 - (i & 7))) & 1u);
+    for (size_t i = bitStart; i < bitEnd; ++i) push((d[i >> 3] >> (7 - (i & 7))) & 1u);
+    return crc;
+}
+
 /** Bits needed for one sample at `nlevels`: the smallest b with 2^b > nlevels. */
 inline constexpr int quantBits(int nlevels) {
     int b = 0; while ((1 << b) <= nlevels) ++b; return b;
@@ -130,7 +163,11 @@ public:
 
         BitReader br(frame, size_t(f.frameBytes));
         br.get(32);                                   // header
-        if (((frame[1] >> 0) & 1) == 0) br.get(16);   // protection bit CLEAR = CRC present
+        // ★ Protection bit CLEAR = a CRC is present. Keep it: it is checked below, once the
+        //   fields it covers have been read. See mp2Crc16.
+        const bool haveCrc = ((frame[1] >> 0) & 1) == 0;
+        const uint16_t wantCrc = haveCrc ? uint16_t(br.get(16)) : 0;
+        const size_t crcFrom = br.bitPos();
 
         /* ★★★ JOINT STEREO — AND THE REAL BBC USES IT.
          *
@@ -163,6 +200,12 @@ public:
         for (int sb = 0; sb < sblimit; ++sb)
             for (int ch = 0; ch < nch; ++ch)
                 if (alloc[ch][sb]) scfsi[ch][sb] = int(br.get(2));
+
+        /* ★★★ CHECK IT HERE, where the protected fields end. A frame that fails is REFUSED
+         *  rather than decoded: the allocation is what tells the reader how to interpret every
+         *  following bit, so a wrong one does not degrade the audio, it replaces it with noise at
+         *  full scale. Refusing costs 24 ms of silence; decoding it costs the listener's ears. */
+        if (haveCrc && mp2Crc16(frame, crcFrom, br.bitPos()) != wantCrc) return 0;
 
         float sf[2][32][3] = {};
         for (int sb = 0; sb < sblimit; ++sb)
