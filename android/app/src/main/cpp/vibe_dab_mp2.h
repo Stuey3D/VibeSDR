@@ -338,6 +338,9 @@ private:
     struct ScfEntry { int sb; uint8_t idx; };
     std::vector<ScfEntry> scfIdx_;
     ScfCrcTally scfTally_;
+    uint8_t prevScf_[4] = {0,0,0,0};
+    int     prevScfN_ = 0;
+    bool    prevScfValid_ = false;
 
     /** CRC-8, G2 = 0x1D, over the three MSBs of each scale factor in [sbLo, sbHi]. */
     uint8_t scfCrc8(int sbLo, int sbHi, uint8_t init, bool invert) const {
@@ -354,21 +357,36 @@ private:
         return invert ? uint8_t(~c) : c;
     }
 
-    /** Compare the four preset/inversion conventions against the transmitted bytes. */
+    /** Compare the four preset/inversion conventions against the transmitted bytes.
+     *
+     *  ★★★ THE ScF-CRC OF FRAME n IS TRANSMITTED IN FRAME n-1. That one sentence is why the
+     *  first attempt matched NOTHING — 2819 frames checked and zero hits under all four
+     *  conventions, which is the signature of comparing against the wrong bytes entirely rather
+     *  than of a wrong preset. The CRC carried by a frame describes the scale factors of the
+     *  frame that FOLLOWS it, so the bytes have to be held over.
+     *  ★ Zero out of 2819 was the useful result: a wrong preset would still have matched
+     *    occasionally by chance at one byte in 256. Nothing at all means structurally wrong. */
     void tallyScfCrc(const uint8_t* frame, int frameBytes, int bitrateKbps) {
         const int ncrc = bitrateKbps >= 56 ? 4 : 2;
         const int at = frameBytes - 2 - ncrc;              // before the two F-PAD bytes
-        if (at < 4 || scfIdx_.empty()) return;
+        if (at < 4 || scfIdx_.empty()) { prevScfValid_ = false; return; }
         static const int loA[4] = { 0, 4, 8, 16 }, hiA[4] = { 3, 7, 15, 26 };
-        ++scfTally_.checked;
         const uint8_t inits[4]  = { 0x00, 0xFF, 0x00, 0xFF };
         const bool    invs[4]   = { false, false, true,  true  };
-        for (int v = 0; v < 4; ++v) {
-            bool all = true;
-            for (int g = 0; g < ncrc; ++g)
-                if (scfCrc8(loA[g], hiA[g], inits[v], invs[v]) != frame[at + g]) { all = false; break; }
-            if (all) ++scfTally_.ok[v];
+
+        if (prevScfValid_ && prevScfN_ == ncrc) {
+            ++scfTally_.checked;
+            for (int v = 0; v < 4; ++v) {
+                bool all = true;
+                for (int g = 0; g < ncrc; ++g)
+                    if (scfCrc8(loA[g], hiA[g], inits[v], invs[v]) != prevScf_[g]) { all = false; break; }
+                if (all) ++scfTally_.ok[v];
+            }
         }
+        // Carry THIS frame's bytes forward — they describe the NEXT frame's scale factors.
+        for (int g = 0; g < ncrc; ++g) prevScf_[g] = frame[at + g];
+        prevScfN_ = ncrc;
+        prevScfValid_ = true;
     }
 };
 
