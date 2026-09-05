@@ -1615,7 +1615,12 @@ static constexpr double      kAgcTargetDbfs  = -6.0;
  *  ★ Headroom, not a fixed low gain: a listener far from a transmitter still needs the AGC to
  *    work for them. Backing the TARGET off leaves the loop free to find whatever gain the site
  *    actually needs, and never limits permanently (MEMORY.md). */
-static constexpr double      kAgcDabTargetDbfs = -12.0;
+/* ★ -9, not -12: MEASURED ON AIR BY STUART, 2026-09-05 — "vibeagc is under setting the gain on
+ *   the pi, agc wants 15.7 but it was breaking up, i set 19.7 and it cleaned up a lot". Roughly
+ *   4 dB of headroom this loop was leaving on the table on his aerial. Provisional and easily
+ *   reverted: it is ONE aerial on ONE box, and the opposite complaint (overload) came from the
+ *   same receiver on a different antenna, which is exactly why the figure is here and named. */
+static constexpr double      kAgcDabTargetDbfs = -9.0;
 /* ★★★ THE BACKOFF GUARDS THE CEILING, NOT THE OPERATING POINT — AND THAT IS THE 96.1 BUG.
  *     This was -6.0, the same figure as the target, so the loop CUT on any peak above its own
  *     operating point while kAgcHardCeilDbfs (-2.0) and the note beneath it said the opposite:
@@ -1686,7 +1691,9 @@ static constexpr double      kAgcClimbCeilDbfs = kAgcBackoffDbfs;
  *  target cannot see that at all.
  *  ★ So: -20, which is what "DAB only needs minimal if any gain where I live" actually asks for,
  *    and re-measure the FIB rate on a HEALTHY pipeline before moving it again. */
-static constexpr double      kAgcDabClimbCeilDbfs = -20.0;
+/* ★ Raised with the target above — the ceiling is what actually stops the climb, so moving the
+ *   target alone would have changed nothing. See kAgcDabTargetDbfs. */
+static constexpr double      kAgcDabClimbCeilDbfs = -15.0;
 
 /* ══ ONE LOOP, THREE TEMPERAMENTS ═══════════════════════════════════════════════════════════════
  * ★★★ STUART, 2026-08-25: "should we have different AGC algorithyms per band ... All invisible to
@@ -8596,6 +8603,22 @@ struct LocalSdrShim::Impl {
                      + ",\"id\":\"" + id + "\"}";
             }
             for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, line);
+            return;
+        }
+        /* ★★★ DAB OWNS THE RECEIVER — AND A SECOND BROWSER MUST NOT TAKE IT BACK. A client
+         *  pushes its remembered mode and dial on connect, so opening a second tab on a SHARED
+         *  receiver dragged an ensemble back to WFM and retuned it under everybody listening
+         *  (Stuart, 2026-09-05: "loaded up edge whilst safari was still running and this is a
+         *  shared VFO — edge hijacked the VFO and switched it back to WFM and retuned it").
+         *  ★★ retune() already refused the frequency half, which is why this presented as a mode
+         *     change plus a broadcastConfig that told EVERY client the receiver was on WFM. Half
+         *     a guard reads as a stranger fault than none.
+         *  ★ The way out of DAB is {"type":"dab","on":0}, which is handled above and never
+         *    reaches here. Refusing this is refusing an ACCIDENT, not a decision. */
+        if ((type == "mode" || type == "tune" || type == "bandwidth")
+                && g_dabMode.load(std::memory_order_relaxed)) {
+            LOGI("%s ignored — DAB owns the receiver (send {\"type\":\"dab\",\"on\":0} to leave)",
+                 type.c_str());
             return;
         }
         if (type == "tune") {
