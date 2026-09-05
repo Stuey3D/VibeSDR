@@ -588,6 +588,17 @@ static std::atomic<int>    g_dabChannel{-1};
  *  ★ DAB is exclusive by nature: an ensemble IS the capture, so there is no shared-dial meaning
  *    to preserve while it runs. */
 static std::atomic<int>    g_dabSavedGain{-1};
+/* ★★★ THE ACTUAL STATE, NOT JUST THE LOCK. The exit path used to restore only g_vsLockedCentre
+ *  and g_vsLockedRate, guarded by `if (c > 0.0)` — so on a receiver with NO centre lock (c == 0)
+ *  it restored NOTHING. The dongle stayed on the multiplex at 2.048 MS/s while the client
+ *  believed it was back on FM, and every tune after that was computed against a radio parked in
+ *  Band III. Stuart: "youve still not fixed the manual tuning after leaving dab mode" — and I had
+ *  fixed the client's half twice while the server's half only ever worked on a LOCKED radio,
+ *  which is the one I kept testing on.
+ *  ★ Save what the radio is actually doing. The lock is a separate promise and is restored
+ *    alongside, not instead. */
+static std::atomic<double> g_dabSavedRtl{0.0}, g_dabSavedAudio{0.0}, g_dabSavedView{0.0};
+static std::atomic<double> g_dabSavedActualRate{0.0};
 static std::atomic<double> g_dabSavedCentre{0.0};
 static std::atomic<double> g_dabSavedRate{0.0};
 static std::atomic<bool>   g_dabLockHeld{false};
@@ -8034,14 +8045,24 @@ struct LocalSdrShim::Impl {
                  *  and the lock is only re-applied by a rebuild that may not come. Put the rate
                  *  and the centre back by hand, then restore the promise. */
                 if (g_dabLockHeld.exchange(false)) {
-                    const double c = g_dabSavedCentre.load(), r = g_dabSavedRate.load();
-                    g_vsLockedCentre.store(c);
-                    g_vsLockedRate.store(r);
+                    /* ★ The PROMISE first (it is only a policy value), then the radio itself. */
+                    g_vsLockedCentre.store(g_dabSavedCentre.load());
+                    g_vsLockedRate.store(g_dabSavedRate.load());
                     LocalSdrShim::instance().setGain(g_dabSavedGain.load());
                     agcForget("DAB off: the gain that suited an ensemble does not suit a carrier");
-                    if (r > 0.0) LocalSdrShim::instance().setSampleRate(r);
-                    if (c > 0.0) { rtlCenter.store(c); tuneHw(c); audioFreq.store(c); viewCenter.store(c); }
-                    LOGI("[DAB] mode OFF: lock restored (centre %.3f MHz, rate %.0f)", c / 1e6, r);
+                    /* ★★★ AND PUT THE RADIO BACK WHERE IT WAS — unconditionally. See the note on
+                     *  g_dabSavedRtl: gating this on a centre LOCK left every unlocked receiver
+                     *  parked on the multiplex after leaving DAB. */
+                    const double ar = g_dabSavedActualRate.load();
+                    const double rc = g_dabSavedRtl.load();
+                    if (ar > 0.0) LocalSdrShim::instance().setSampleRate(ar);
+                    if (rc > 0.0) { rtlCenter.store(rc); tuneHw(rc); }
+                    if (g_dabSavedAudio.load() > 0.0) audioFreq.store(g_dabSavedAudio.load());
+                    if (g_dabSavedView.load()  > 0.0) viewCenter.store(g_dabSavedView.load());
+                    updateZoomView();
+                    rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+                    LOGI("[DAB] mode OFF: radio back at %.3f MHz, %.0f S/s (VFO %.3f MHz)",
+                         rc / 1e6, ar, g_dabSavedAudio.load() / 1e6);
                 }
                 sendText(sock, "{\"type\":\"dab_off\"}");
                 /* ★ And tell the client where the radio actually IS. Leaving DAB moves the centre,
@@ -8108,6 +8129,10 @@ struct LocalSdrShim::Impl {
                 g_dabSavedCentre.store(g_vsLockedCentre.load());
                 g_dabSavedRate.store(g_vsLockedRate.load());
                 g_dabSavedGain.store(g_gainTarget.load(std::memory_order_relaxed));
+                g_dabSavedRtl.store(rtlCenter.load());
+                g_dabSavedAudio.store(audioFreq.load());
+                g_dabSavedView.store(viewCenter.load());
+                g_dabSavedActualRate.store(sampleRate);
                 /* ★★★ ON ENTRY ONLY — AND THIS IS THE WHOLE BUG. The reset used to run on every
                  *  "dab on" message, and STEPPING A MULTIPLEX SENDS ONE, so a listener's manual
                  *  gain was wiped every time they pressed the next-mux button. That is what
