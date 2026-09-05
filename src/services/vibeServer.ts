@@ -112,6 +112,10 @@ export type VibeServerConfig = {
   /** Where listeners may tune. Block always wins over allow. */
   allowRanges?: string;
   blockRanges?: string;
+  /** Modes and decoders the owner has switched off, comma separated (e.g. "dab,wfm"). */
+  blockedModes?: string;
+  /** DAB may borrow 2.048 MS/s while it runs, on a receiver configured slower. */
+  dabRateBoost?: boolean;
   /** Per-band gain ceilings ("all:250,fm:150"), the gain to return to when everyone leaves
    *  (-1 = leave alone), and whether the AGC is locked on. */
   gainLimits?: string;
@@ -203,6 +207,8 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     landingLinkLabel: cfg.landingLinkLabel ?? '',
     allowRanges: cfg.allowRanges ?? '',
     blockRanges: cfg.blockRanges ?? '',
+    blockedModes: cfg.blockedModes ?? '',
+    dabRateBoost: cfg.dabRateBoost === true,
     gainLimits: cfg.gainLimits ?? '',
     restGain: cfg.restGain ?? -1,
     agcLock: cfg.agcLock ?? false,

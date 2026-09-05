@@ -217,6 +217,10 @@ object VibeLocalSDR {
     fun setTuneLimits(allowCsv: String, blockCsv: String) { ensureLoaded(); nativeSetTuneLimits(allowCsv, blockCsv) }
     private external fun nativeSetTuneLimits(allowCsv: String, blockCsv: String)
 
+    /** DAB may borrow 2.048 MS/s on a slower receiver, and the modes/decoders switched off. */
+    fun setDabPolicy(rateBoost: Boolean, blockedCsv: String) { ensureLoaded(); nativeSetDabPolicy(rateBoost, blockedCsv) }
+    private external fun nativeSetDabPolicy(rateBoost: Boolean, blockedCsv: String)
+
     /** Per-band gain ceilings, the gain to return to when everyone leaves (-1 = leave alone), and
      *  an AGC lock. ★ Ceilings are enforced on SET, on RETUNE INTO a capped band, at START and at
      *  the idle park — a cap applied at only one of those is one a listener can walk around. */

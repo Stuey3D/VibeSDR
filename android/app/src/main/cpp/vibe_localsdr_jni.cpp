@@ -955,6 +955,19 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetTuneLimits(JNIEnv* env, jobject,
     if (b) env->ReleaseStringUTFChars(block, b);
 }
 
+/* ★ DAB policy from the Android GUI: whether DAB may borrow 2.048 MS/s on a receiver
+ *  configured slower, and which modes and decoders the owner has switched off. Android never
+ *  serves the browser setup page (g_vsNativeSetup), so anything added there is invisible on a
+ *  phone — which is exactly what happened: "none of the new settings are on the xcover". */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetDabPolicy(JNIEnv* env, jobject,
+                                                     jboolean rateBoost, jstring blockedCsv) {
+    vibe::LocalSdrShim::setVibeServerDabRateBoost(rateBoost == JNI_TRUE);
+    const char* b = blockedCsv ? env->GetStringUTFChars(blockedCsv, nullptr) : nullptr;
+    vibe::LocalSdrShim::setVibeServerBlockedModes(b ? b : "");
+    if (b) env->ReleaseStringUTFChars(blockedCsv, b);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetGainLimits(JNIEnv* env, jobject,
                                                       jstring csv, jint rest, jboolean agcLock) {

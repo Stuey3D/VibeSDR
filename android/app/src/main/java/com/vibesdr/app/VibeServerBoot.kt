@@ -146,6 +146,11 @@ object VibeServerBoot {
             VibeLocalSDR.setTuneLimits(
                 if (adv) cfg.s("allowRanges") else "",
                 if (adv) cfg.s("blockRanges") else "")
+            /* ★ NOT gated on `adv`. Blocking a mode this receiver cannot usefully do is a
+             *  property of the RADIO and its aerial, like the resting gain below — not of
+             *  sharing or management, which is what Advanced governs. An HF-only radio should
+             *  not offer WFM whether or not its owner has opened the Advanced pane. */
+            VibeLocalSDR.setDabPolicy(cfg.b("dabRateBoost", false), cfg.s("blockedModes"))
             // ★★★ THE RESTING GAIN IS NOT AN ADVANCED SETTING, AND GATING IT ON `adv` THREW IT AWAY.
             //     The server screen offers STARTING GAIN in BOTH modes — deliberately, and its own
             //     comment says so ("One control, one value — it was not duplicated into Advanced")

@@ -1,6 +1,22 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import GainSlider from '../components/GainSlider';
 import BandLimitEditor, { Band } from '../components/BandLimitEditor';
+
+/* ★★★ EVERYTHING A LISTENER CAN CHOOSE, so an owner can switch off what this receiver cannot
+ *  usefully do. The ids are the ones the client and the server already use, so the CSV is matched
+ *  against them directly (vsModeBlocked in the shim) with nothing translating in between.
+ *  ★ Only what EXISTS is listed. Offering to block ADS-B before there is an ADS-B decoder would
+ *    be a setting with nothing behind it — but the mechanism takes any name, so each decoder
+ *    joins this list on the day it ships. Keep it in step with BLOCKABLE in vibe_setup_page.h. */
+const BLOCKABLE: { id: string; label: string }[] = [
+  { id: 'wfm', label: 'WFM' }, { id: 'nfm', label: 'NFM' }, { id: 'am', label: 'AM' },
+  { id: 'usb', label: 'USB' }, { id: 'lsb', label: 'LSB' },
+  { id: 'cwu', label: 'CW-U' }, { id: 'cwl', label: 'CW-L' },
+  { id: 'dab', label: 'DAB' }, { id: 'rds', label: 'Adv RDS' },
+  { id: 'rtty', label: 'RTTY' }, { id: 'navtex', label: 'NAVTEX' },
+  { id: 'wefax', label: 'WEFAX' }, { id: 'sstv', label: 'SSTV' },
+  { id: 'ft8', label: 'FT8 / FT4' },
+];
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator,
   StyleSheet, Platform, PermissionsAndroid, Switch, Alert, NativeModules,
@@ -114,7 +130,8 @@ const K = {
   idleGrace: 'vs_idlegrace', antenna: 'vs_antenna', antennaIcon: 'vs_antennaicon',
   adminPw: 'vs_adminpw', uncomp: 'vs_uncompressed', limitMin: 'vs_sessionlimit',
   advanced: 'vs_advanced', maxUsers: 'vs_maxusers',
-  allowRanges: 'vs_allow', blockRanges: 'vs_block',
+  allowRanges: 'vs_allow', blockRanges: 'vs_block', blockedModes: 'vs_blockedmodes',
+  dabRateBoost: 'vs_dabboost',
   gainLimits: 'vs_gainlimits', restGain: 'vs_restgain', agcLock: 'vs_agclock',
   gainLocks: 'vs_gainlocks', gainSplits: 'vs_gainsplits',
   rtlAgc: 'vs_rtlagc', tunerBwAuto: 'vs_tunerbwauto', publicName: PUBLIC_NAME_KEY,
@@ -221,6 +238,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [bands, setBands] = useState<Band[]>([]);
   const [allowRanges, setAllowRanges] = useState('');
   const [blockRanges, setBlockRanges] = useState('');
+  /** Modes and decoders switched off on this receiver, comma separated — see BLOCKABLE. */
+  const [blockedModes, setBlockedModes] = useState('');
+  /** DAB may borrow 2.048 MS/s while it runs, on a receiver configured slower. */
+  const [dabRateBoost, setDabRateBoost] = useState(false);
   const [gainLimits, setGainLimits]   = useState('');
   /** ★★ WHICH BANDS ARE FIXED at their ceiling rather than limited by it, and — on a HackRF — where
    *  between LNA and VGA a fixed band's total sits. Per band, both of them: an owner can hold FM at
@@ -356,6 +377,30 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               <OptRow key={o.value} C={C} F={F} active={rate === o.value} label={o.label} onPress={() => setRate(o.value)} />
             ))}
 
+            {/* ★★★ DAB NEEDS 2.048 MS/s AND NOTHING ELSE WILL DO. Mode I has a 2048-sample useful
+                symbol, so at 2.048 the FFT is exactly one symbol; any other rate means fractionally
+                resampling every sample. So on a receiver pinned lower, DAB either borrows the rate
+                or is not offered at all.
+                ★ Stuart's design, and the reason it is a choice rather than automatic: "on the
+                  xcover I chose 1.2 for reliablility but in this case 2048 may be usable for DAB,
+                  however on weaker devices 1.2 may be the genuine ceiling." A borrow the phone
+                  cannot sustain is worse than no DAB.
+                ★ Only shown where it can matter — at 2.048 or above there is nothing to borrow,
+                  and offering it would be a control whose every use is a no-op. */}
+            {rate > 0 && rate < 2_048_000 && (<>
+              <OptRow C={C} F={F} active={dabRateBoost}
+                label="Allow 2.048 MS/s for DAB"
+                onPress={() => {
+                  const v = !dabRateBoost;
+                  setDabRateBoost(v); AsyncStorage.setItem(K.dabRateBoost, v ? '1' : '0');
+                }} />
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
+                DAB takes 2.048 MS/s while it is running and gives your {(rate / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MS/s
+                back afterwards. Leave this off on a slower phone: if it cannot sustain 2.048 the
+                audio will break up, and the rate you picked is the one it can actually keep.
+              </Text>
+            </>)}
+
   </>);
 
   const [webServer, setWebServer] = useState(true);
@@ -386,7 +431,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
          *   put them anywhere else and every variable after them silently takes its neighbour's
          *   value, which type-checks perfectly and is wrong at run time. */
         const [p, a, pm, sp, r, fp, cp, ws, apw, unc, lim, fm,
-               mu, alw, blk, gl, glk, gsp, rg, agl, ragc, px, ru, lhz, lmd, bt] = await Promise.all([
+               mu, alw, blk, gl, bmd, dbb, glk, gsp, rg, agl, ragc, px, ru, lhz, lmd, bt] = await Promise.all([
           AsyncStorage.getItem(K.proto), AsyncStorage.getItem(K.advertise),
           AsyncStorage.getItem(K.pinMode), AsyncStorage.getItem(K.pin),
           AsyncStorage.getItem(K.rate), AsyncStorage.getItem(K.fps),
@@ -395,6 +440,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           AsyncStorage.getItem(K.limitMin), AsyncStorage.getItem(K.advanced),
           AsyncStorage.getItem(K.maxUsers), AsyncStorage.getItem(K.allowRanges),
           AsyncStorage.getItem(K.blockRanges), AsyncStorage.getItem(K.gainLimits),
+          AsyncStorage.getItem(K.blockedModes), AsyncStorage.getItem(K.dabRateBoost),
           AsyncStorage.getItem(K.gainLocks), AsyncStorage.getItem(K.gainSplits),
           AsyncStorage.getItem(K.restGain), AsyncStorage.getItem(K.agcLock),
           AsyncStorage.getItem(K.rtlAgc),
@@ -464,6 +510,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         }
         if (alw != null) setAllowRanges(alw);
         if (blk != null) setBlockRanges(blk);
+        if (bmd != null) setBlockedModes(bmd);
+        if (dbb != null) setDabRateBoost(dbb === '1');
         if (gl != null) setGainLimits(gl);
         // ★ -1 is "leave it alone" and is a REAL value, so no `|| default` here.
         if (rg != null && Number.isFinite(Number(rg))) setRestGain(Number(rg));
@@ -851,6 +899,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.zoomSpectrum, live.current.zoomSpec ? '1' : '0'], [K.spectrogram, live.current.spectrogram ? '1' : '0'],
       [K.idleGrace, String(live.current.idleGrace)], [K.antenna, live.current.antenna], [K.antennaIcon, live.current.antennaIcon],
       [K.allowRanges, allowRanges], [K.blockRanges, blockRanges],
+      [K.blockedModes, blockedModes], [K.dabRateBoost, dabRateBoost ? '1' : '0'],
       [K.gainLimits, gainLimits], [K.gainLocks, gainLocks], [K.gainSplits, gainSplits],
       [K.restGain, String(restGain)],
       [K.rtlAgc, rtlAgc ? '1' : '0'],
@@ -902,6 +951,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         autoRestore: true,
         advanced,
         maxUsers, allowRanges, blockRanges,
+        // ★ Not gated on `advanced`: what this aerial is good for is a property of the RADIO,
+        //   like the resting gain, not of sharing — see the note in VibeServerBoot.
+        blockedModes, dabRateBoost,
         // ★ The rest of the server's settings — the phone runs the same server, one radio at a
         //   time, so everything the desktop can set is set from here.
         sessionLimitSoft: live.current.limitSoft,
@@ -952,6 +1004,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   }, [name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
       webServer, locMode, locCity, checkBackgroundAllowed,
       adminPw, uncomp, limitMin, advanced, maxUsers, allowRanges, blockRanges,
+      blockedModes, dabRateBoost,
       gainLimits, gainLocks, gainSplits, restGain, agcLock, proxies, rtlAgc, tunerBwAuto,
       oneRadioPerIp]);
 
@@ -2189,6 +2242,45 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   &quot;88M-108M&quot;. Blocked always wins over allowed.{'\n\n'}
                   You are exempt: listening on this phone, and any session unlocked with the admin
                   password, tune anywhere the radio can hear.
+                </Text>
+
+                {/* ★★★ WHAT THIS RECEIVER IS FOR, under WHERE it can tune. Stuart: "basically just
+                    list all modes and decoders and allow the server owner to block them as needed"
+                    — an RSP1B locked to HF has no business offering WFM or Adv RDS, and an aerial
+                    that suits FM may be quite wrong for a DAB transmitter two miles away.
+                    ★ A blocked entry is never OFFERED, in any client, rather than shown and then
+                      refused: a control whose every use fails reads as a broken receiver instead
+                      of somebody's decision (AGENTS.md). The server enforces it too, so it holds
+                      for an old client or a hand-rolled tool. */}
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 14 }]}>
+                  Modes and decoders — tap to switch off
+                </Text>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
+                  {BLOCKABLE.map((m) => {
+                    const off = blockedModes.split(/[,;\s]+/).filter(Boolean).includes(m.id);
+                    return (
+                      <TouchableOpacity key={m.id}
+                        onPress={() => {
+                          const set = new Set(blockedModes.split(/[,;\s]+/).filter(Boolean));
+                          if (off) set.delete(m.id); else set.add(m.id);
+                          const v = [...set].join(',');
+                          setBlockedModes(v); AsyncStorage.setItem(K.blockedModes, v);
+                        }}
+                        style={{
+                          paddingVertical: 6, paddingHorizontal: 10, borderRadius: 6,
+                          borderWidth: 1,
+                          borderColor: off ? C.textDim : C.amber,
+                          opacity: off ? 0.45 : 1,
+                        }}>
+                        <Text style={{ color: off ? C.textDim : C.amber, fontFamily: F, fontSize: 12 }}>
+                          {m.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                  Dimmed means switched off — listeners are never offered it at all.
                 </Text>
                 </>)}
 
