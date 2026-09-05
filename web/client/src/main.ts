@@ -4482,7 +4482,13 @@ function buildControls() {
      *  uses, and picking it was a no-op. AGENTS.md: never draw a control whose every use is a
      *  no-op. The list is read fresh on every open, so a mid-session change takes effect. */
     modes:      () => MODES.filter(m => !isModeBlocked(m)) as unknown as string[],
-    setMode:    (m) => setMode(m as SDRMode, true),
+    /* ★★★ CHOOSING A DEMODULATOR LEAVES DAB. DAB is not an SDRMode — it replaces the whole
+     *  chain — so it sat alongside the others as a toggle and picking WFM did nothing but change
+     *  a mode the server was not running. Stuart: "I used to be able to click WFM and it change
+     *  but this time it stayed in DAB mode until I clicked the DAB button again."
+     *  ★ Selecting FM plainly MEANS "stop doing DAB", and a picker where one entry is a toggle
+     *    and the rest are a radio group is a picker that lies about what it does. */
+    setMode:    (m) => { if (dabOn) dabSetMode(false); setMode(m as SDRMode, true); },
     openMenu:      () => togglePanel('menu'),
     openAudio:     () => togglePanel('audioPanel'),
     openDecoders:  () => togglePanel('decodersPanel'),
