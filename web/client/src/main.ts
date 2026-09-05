@@ -469,6 +469,8 @@ async function loadAudioPolicy(httpBase: string) {
      *  tunable set after allow/block lists and the rate the receiver will actually run at — so a
      *  V4 locked to FM or held below 2.048 MS/s never draws the button at all. */
     dabCapable = j.dab === true;
+    dabBoost = j.dabBoost === true;
+    dabBoostUseful = j.dabBoostUseful === true;
     // ★★★ IS THE DIAL SHARED? Needed BEFORE the first config arrives, because the very first
     //     thing this client does with a config is restore the frequency it was last on — and on a
     //     shared dial that would drag the whole room to somebody's remembered station the instant
@@ -4244,6 +4246,9 @@ async function drawSplashSpectrogram(): Promise<void> {
  *    edges reports them instead of concluding the receiver is broken.
  */
 let dabCapable = false;
+/** The owner has allowed DAB to borrow 2.048 MS/s, and whether that offer is worth drawing. */
+let dabBoost = false;
+let dabBoostUseful = false;
 let dabOn = false;
 let dabState: DabState | null = null;
 let dabPane: 'stations' | 'signal' = 'stations';
@@ -4703,7 +4708,16 @@ function updateMediaSession() {
   if (!('mediaSession' in navigator) || !spec) return;
   navigator.mediaSession.playbackState = audio?.muted ? 'paused' : 'playing';
   const freq = `${(spec.frequency / 1e6).toFixed(3)} MHz`;
-  const station = rdsName || $('vtsName').textContent || '';
+  /* ★★★ IN DAB, THE MODE IS DAB AND THE STATION IS THE SERVICE. spec.mode is the demodulator
+   *  the server is NOT running while DAB is on, so the OS Now Playing card announced "WFM" over
+   *  a DAB ensemble (Stuart's media controls, 2026-09-05). Third readout to make this mistake
+   *  after the decoder box and the mode chip — the same fact, told in three places, and DAB is
+   *  not an SDRMode so none of them learn it from spec.mode. */
+  const dabSvc = dabOn && dabState
+    ? (dabState.services.find(x => x.sid === dabState!.sid)?.label || dabState.label || '')
+    : '';
+  const modeText = dabOn ? 'DAB' : spec.mode.toUpperCase();
+  const station = dabSvc || rdsName || $('vtsName').textContent || '';
   // Artwork: the RTL-TCP art the app uses, so Now Playing looks the same whether
   // you're listening on the phone or in the browser. If the station has an RDS
   // logo, prefer that — it's a picture of what you're actually hearing.
@@ -4714,7 +4728,7 @@ function updateMediaSession() {
   // tune, so the card never showed them, and the next tune published the logo of the station you
   // were LEAVING. That is the Heart logo flashing into the artwork for a split second on the way
   // past. (Stuart, 2026-07-25.)
-  const key = `${station}|${freq}|${spec.mode}|${artSrc}`;
+  const key = `${station}|${freq}|${modeText}|${artSrc}`;
   if (key === lastMediaKey) return;
   lastMediaKey = key;
   // Artwork is a BONUS, never a precondition. This used to `return` when artSrc was empty,
@@ -4723,7 +4737,7 @@ function updateMediaSession() {
   // are the parts worth having; publish them either way.
   navigator.mediaSession.metadata = new MediaMetadata({
     title: station && station !== '—' ? station : freq,
-    artist: station && station !== '—' ? `${freq} · ${spec.mode.toUpperCase()}` : spec.mode.toUpperCase(),
+    artist: station && station !== '—' ? `${freq} · ${modeText}` : modeText,
     album: 'VibeSDR',
     ...(artSrc ? { artwork: [{ src: artSrc, sizes: '512x512', type: 'image/png' }] } : {}),
   });

@@ -129,6 +129,10 @@ public:
      *   with. Both are read only where they mean something; see the setters. */
     /** The sample rate is PINNED rather than capped — see the definition. */
     static void setVibeServerRateLock(bool on);
+    /** DAB may borrow 2.048 MS/s while it runs, on a receiver configured slower. */
+    static void setVibeServerDabRateBoost(bool on);
+    /** Modes and decoders the owner has switched off, comma separated (e.g. "dab,cwl"). */
+    static void setVibeServerBlockedModes(const std::string& csv);
     static void setGainLock(bool on);
     /** ★★★ WHICH BANDS ARE FIXED — per band, because a receiver can want FM held at one figure
      *  while HF stays adjustable under a ceiling (Stuart, 2026-08-28). Same band syntax as the

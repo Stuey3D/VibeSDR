@@ -792,6 +792,20 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           just this one.</div>
       </div>
 
+      <div class="card" id="modeCard">
+        <h2>Modes and decoders</h2>
+        <div class="hint">Switch off anything this receiver cannot usefully do. A mode that is off
+          is never OFFERED — it does not appear in any client's menu at all — rather than being
+          shown and then refused, because a control whose every use fails reads as a broken
+          receiver instead of somebody's decision.
+          <br>Bands say WHERE this aerial is useful; this says WHAT it is useful for. An HF-only
+          radio has no business showing WFM or the RDS decoder, and an amplified aerial that suits
+          FM may be quite wrong for a DAB transmitter two miles away.
+          <br><b>The server enforces this as well as the page</b>, so it holds for every client.</div>
+        <div id="modeBlockList" class="row" style="flex-wrap:wrap;gap:10px;margin-top:10px"></div>
+        <div class="note" id="modeBlockNote"></div>
+      </div>
+
       <div class="card" id="radioHwCard">
       <h2>This radio's hardware</h2>
       <p class="why">Settings that stay in the radio itself. Listeners never get these.</p>
@@ -1273,6 +1287,59 @@ function bandLabel(entry) {
   return b ? b.label : entry;
 }
 
+/* ★★★ EVERYTHING A LISTENER CAN CHOOSE, so the owner can switch off what this receiver cannot
+ *  usefully do. The ids are the ones the client and the server already use, so nothing has to
+ *  translate: the CSV is matched against them directly (see vsModeBlocked).
+ *  ★ Only what EXISTS is listed. Offering to block ADS-B before there is an ADS-B decoder would
+ *    be a setting with nothing behind it, which is the shape this page exists to avoid — but the
+ *    mechanism takes any name, so each decoder joins this list on the day it ships. */
+const BLOCKABLE = [
+  { id: "wfm",    label: "WFM"      }, { id: "nfm",  label: "NFM"    },
+  { id: "am",     label: "AM"       }, { id: "usb",  label: "USB"    },
+  { id: "lsb",    label: "LSB"      }, { id: "cwu",  label: "CW-U"   },
+  { id: "cwl",    label: "CW-L"     },
+  { id: "dab",    label: "DAB"      }, { id: "rds",  label: "Adv RDS" },
+  { id: "rtty",   label: "RTTY"     }, { id: "navtex", label: "NAVTEX" },
+  { id: "wefax",  label: "WEFAX"    }, { id: "sstv", label: "SSTV"   },
+  { id: "ft8",    label: "FT8 / FT4" },
+];
+
+/** The blocked list as a Set of ids, from this radio's CSV. */
+function modeBlockSet() {
+  return new Set(String(radio().blockedModes || "").split(/[,;\s]+/).filter(Boolean));
+}
+
+function modeBlockRender() {
+  const host = $("modeBlockList");
+  if (!host) return;
+  const off = modeBlockSet();
+  host.innerHTML = BLOCKABLE.map(m =>
+    `<label class="row" style="gap:6px;flex:0 0 auto;align-items:center">`
+    + `<input type="checkbox" data-mode="${esc(m.id)}"${off.has(m.id) ? "" : " checked"}>`
+    + `<span class="lbl">${esc(m.label)}</span></label>`).join("");
+  host.querySelectorAll("input[data-mode]").forEach(el => {
+    el.addEventListener("change", () => {
+      const set = modeBlockSet();
+      // ★ CHECKED means OFFERED. The stored list is what is switched OFF, which is the shorter
+      //   list on almost every receiver and the one the server enforces.
+      if (el.checked) set.delete(el.dataset.mode); else set.add(el.dataset.mode);
+      radio().blockedModes = [...set].join(",");
+      modeBlockSummary();
+    });
+  });
+}
+
+/** One line saying what this receiver will and will not offer. */
+function modeBlockSummary() {
+  const el = $("modeBlockNote");
+  if (!el) return;
+  const off = [...modeBlockSet()];
+  const name = (id) => (BLOCKABLE.find(m => m.id === id) || { label: id }).label;
+  el.textContent = off.length
+    ? `Switched off: ${off.map(name).join(", ")}.`
+    : "Everything this radio can do is offered.";
+}
+
 function bandChips(which) {
   const list = (radio()[which === "allow" ? "allowRanges" : "blockRanges"] || "")
     .split(",").map(t => t.trim()).filter(Boolean);
@@ -1655,6 +1722,7 @@ function renderBands() {
   // ★ Shared mode has a locked range, which IS the limit — two answers to one question.
   $("bandCard").classList.toggle("hide", !single);
   if (!single) return;
+  modeBlockRender(); modeBlockSummary();
   for (const w of ["allow", "block"]) {
     const sel = $(w + "Pick");
     sel.innerHTML = '<option value="">— pick a band —</option>'

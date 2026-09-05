@@ -187,6 +187,14 @@ struct Config {
     /** See RadioConfig::biasT — asserted at every start so it is never inherited. */
     bool biasT = false;
     int  ppm = 0, ppb = 0, directSampling = -1;   // see RadioConfig
+    /** ★ DAB may borrow 2.048 MS/s while it runs, on a receiver configured slower. Opt-in: on a
+     *  weak device the slower rate is the REAL ceiling and a borrow it cannot sustain is worse
+     *  than no DAB at all (Stuart, on the XCover at 1.2 MS/s). See g_dabRateBoost in the shim. */
+    bool dabRateBoost = false;
+    /** Modes and decoders switched off on this receiver, comma separated (e.g. "dab").
+     *  ★ Bands say WHERE this aerial is useful; this says WHAT it is useful for. An amplified
+     *   attic aerial can be right for FM and wrong for a DAB transmitter two miles away. */
+    std::string blockedModes;
     /** See RadioConfig::converterOffsetHz — the up/down-converter in front of the aerial. The
      *  server corrects for it and publishes TRUE RF, so no client ever learns it is there. */
     double converterOffsetHz = 0, converterInputLoHz = 0, converterInputHiHz = 0;
@@ -394,6 +402,8 @@ struct RadioConfig {
 
     int    ppm = 0;             // RTL frequency correction, parts per million
     int    ppb = 0;             // Airspy HF+ calibration, parts per billion
+    bool   dabRateBoost = false;   // per radio — see Config::dabRateBoost
+    std::string blockedModes;      // per radio — see Config::blockedModes
     int    directSampling = -1; // RTL: 0 off, 1 I, 2 Q; -1 = leave alone (not needed on a V4)
 
     /** ★★★ DOES THE LANDING PAGE'S SPECTROGRAM — AND THE BAND CONDITIONS — COME FROM THIS RADIO?

@@ -393,7 +393,8 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     // ★ The three that turn a ceiling into a setting — added to BOTH writers, see the note below.
     B("gainLock", r.gainLock); S("gainLocks", r.gainLocks);
     S("ifGrLimits", r.ifGrLimits); S("gainSplits", r.gainSplits);
-    B("rateLock", r.rateLock);
+    B("rateLock", r.rateLock); B("dabRateBoost", r.dabRateBoost);
+    S("blockedModes", r.blockedModes);
     // ★ Absent keeps the safe defaults (AGC off, protection on) — B() only assigns when present.
     B("rtlAgc", r.rtlAgc); B("tunerBwAuto", r.tunerBwAuto);
     I("users", r.users); N("maxBw", r.maxBw); N("maxFps", r.maxFps); N("fftRate", r.fftRate);
@@ -436,7 +437,8 @@ std::string radioToJson(const RadioConfig& r) {
     S("gainLimits", r.gainLimits); N("restGain", r.restGain); N("agcLock", r.agcLock);
     B("gainLock", r.gainLock); S("gainLocks", r.gainLocks);
     S("ifGrLimits", r.ifGrLimits); S("gainSplits", r.gainSplits);
-    B("rateLock", r.rateLock);
+    B("rateLock", r.rateLock); B("dabRateBoost", r.dabRateBoost);
+    S("blockedModes", r.blockedModes);
     B("rtlAgc", r.rtlAgc); B("tunerBwAuto", r.tunerBwAuto);
     N("users", r.users); N("maxBw", r.maxBw); N("maxFps", r.maxFps); N("fftRate", r.fftRate);
     N("uncompressed", r.uncompressed);

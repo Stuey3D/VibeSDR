@@ -616,6 +616,67 @@ static std::atomic<bool>   g_dabSavedAgcOn{false};
  *    listener's momentary A/B, not an owner's setting, so taking it for the duration costs
  *    nothing they chose deliberately. */
 static std::atomic<bool>   g_dabSavedDigAgc{false};
+
+/* ★★★ TEMPORARY 2.048 FOR DAB, ON A RECEIVER THAT RUNS SLOWER THE REST OF THE TIME.
+ *  Stuart, on the XCover: "on the xcover I chose 1.2 for reliablility but in this case 2048 may
+ *  be usable for DAB, however on weaker devices 1.2 may be the genuine ceiling." So the rate the
+ *  owner picked stays the rate the receiver runs at, and DAB borrows 2.048 for as long as it is
+ *  on — the borrow-and-return machinery already exists, because leaving DAB already restores the
+ *  ACTUAL running rate (4.1.97) rather than only a locked one.
+ *  ★ OPT-IN, and only offered where it can matter: the hardware must reach 2.048 while the rate
+ *    in force does not. On a phone that cannot sustain it the toggle is the difference between a
+ *    mode that works and a receiver that falls over, so it is the owner's call and not ours.
+ *  ★ Persisted, unlike the digital-AGC toggle: this is a decision about the machine, which is
+ *    exactly the kind of thing that should survive a restart. */
+static std::atomic<bool>   g_dabRateBoost{false};
+
+/* ★★★ MODES AND DECODERS THE OWNER HAS SWITCHED OFF, as a comma-separated list.
+ *  Stuart: "in the allowed/blocked bands we could have allowed/blocked bands AND MODES with the
+ *  option to disable DAB ever being offered. Same with ADSB AIS ACARS etc when we eventually
+ *  offer it." His aerial may suit DAB on one receiver and not another, and a mode that cannot
+ *  work on this antenna should not be offered at all — the same argument AGENTS.md makes about a
+ *  control that only works on one radio.
+ *  ★★★ THE CLIENT HAS READ THIS SINCE THE DAY IT WAS WRITTEN AND NOTHING EVER SENT IT.
+ *  spectrum.ts has handled hwinfo's `blocked` array all along, complete with a comment explaining
+ *  why offering a refused mode "reads as the feature is broken" — but no server ever populated
+ *  it, so there was no UI, no enforcement and nothing to notice. A reader with no writer, which
+ *  is the mirror of this project's usual fault and just as quiet.
+ *  ★ Names are matched case-insensitively against the mode ids the client uses ('wfm', 'nfm',
+ *    'am', 'usb', 'lsb', 'cwu', 'cwl') plus 'dab', so the list reads the way a person would
+ *    write it. */
+static std::mutex          g_vsBlockedModesMtx;
+static std::string         g_vsBlockedModesCsv;
+
+/** True when the owner has switched this mode or decoder off on this receiver. */
+static bool vsModeBlocked(const std::string& name) {
+    std::string want;
+    for (char c : name) want += char(std::tolower((unsigned char)c));
+    std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx);
+    if (g_vsBlockedModesCsv.empty()) return false;
+    std::string tok;
+    for (size_t i = 0; i <= g_vsBlockedModesCsv.size(); ++i) {
+        const char c = i < g_vsBlockedModesCsv.size() ? g_vsBlockedModesCsv[i] : ',';
+        if (c == ',' || c == ' ' || c == ';') {
+            if (!tok.empty() && tok == want) return true;
+            tok.clear();
+        } else tok += char(std::tolower((unsigned char)c));
+    }
+    return false;
+}
+
+/** The same list as a JSON array, for hwinfo's `blocked` field. */
+static std::string vsBlockedModesJson() {
+    std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx);
+    std::string out = "[", tok;
+    bool first = true;
+    for (size_t i = 0; i <= g_vsBlockedModesCsv.size(); ++i) {
+        const char c = i < g_vsBlockedModesCsv.size() ? g_vsBlockedModesCsv[i] : ',';
+        if (c == ',' || c == ' ' || c == ';') {
+            if (!tok.empty()) { if (!first) out += ','; out += '"' + tok + '"'; first = false; tok.clear(); }
+        } else tok += char(std::tolower((unsigned char)c));
+    }
+    return out + "]";
+}
 static std::atomic<double> g_dabSavedActualRate{0.0};
 static std::atomic<double> g_dabSavedCentre{0.0};
 static std::atomic<double> g_dabSavedRate{0.0};
@@ -8148,6 +8209,10 @@ struct LocalSdrShim::Impl {
              *  ★ And the answer is not constant — DAB moves the rate and suspends the locked
              *    rate the gate reads, so the gate is being asked about a radio DAB has already
              *    changed. One more reason it must not stand between a listener and the way out. */
+            if (vsModeBlocked("dab")) {
+                sendText(sock, "{\"type\":\"dab_error\",\"why\":\"the operator has switched DAB off on this receiver\"}");
+                return;
+            }
             if (!vsDabCapable()) {
                 sendText(sock, "{\"type\":\"dab_error\",\"why\":\"this receiver cannot reach a DAB multiplex at 2.048 MS/s\"}");
                 return;
@@ -8233,6 +8298,18 @@ struct LocalSdrShim::Impl {
             double sid = 0; jsonNum(msg, "sid", sid);
             if (sid > 0) g_dab.setService(uint32_t(sid));
             sendText(sock, g_dab.json());
+            return;
+        }
+        if (type == "dabBoost") {
+            /* ★ An owner-level decision about the machine, so it goes through the same admin gate
+             *  as the other radio settings and is persisted. See g_dabRateBoost. */
+            double v = 0;
+            if (jsonNum(msg, "on", v) && adminGate("the DAB rate boost")) {
+                g_dabRateBoost.store(v != 0, std::memory_order_relaxed);
+                vsPersist(std::string("{\"dabRateBoost\":") + (v != 0 ? "1" : "0") + "}");
+                LOGI("DAB rate boost: %s", v != 0 ? "ON (2.048 MS/s while DAB runs)" : "off");
+                sendHwInfo(sock);
+            }
             return;
         }
         if (type == "dab_service") {
@@ -8419,6 +8496,15 @@ struct LocalSdrShim::Impl {
         }
         if (type == "mode") {
             std::string m = jsonStr(msg, "mode");
+            /* ★★★ THE SERVER IS THE ENFORCEMENT, NOT THE MENU. The client leaves blocked modes
+             *  out of its picker, which is the right thing for a listener to SEE — but an old
+             *  client, a second tab or a hand-rolled tool asks anyway, and a rule that only the
+             *  UI keeps is not a rule. Stuart's case: WFM on an RSP1B locked to HF, where the
+             *  mode cannot do anything useful and should not be reachable at all. */
+            if (!m.empty() && vsModeBlocked(m)) {
+                LOGI("mode %s refused — the operator has switched it off on this receiver", m.c_str());
+                return;
+            }
             // Decimation is derived from the mode's bandwidth, so re-negotiate it
             // BEFORE rebuilding the audio chain (it may change sampleRate/fftSize).
             if (!m.empty() && m != mode) { mode = m; spyRetuneDecimation(); buildAudio(); }
@@ -8820,6 +8906,9 @@ struct LocalSdrShim::Impl {
         //     ★ agcLocked says WHY the AGC switch will not move, so the client can show it locked
         //       rather than appear to ignore the tap.
         std::string j = "{\"type\":\"hwinfo\""
+                      /* ★ The owner's switched-off modes. spectrum.ts has read this array since
+                       *  it was written; this is the first thing that has ever sent it. */
+                      + std::string(",\"blocked\":") + vsBlockedModesJson()
                       + std::string(",\"gainCap\":")
                       + std::to_string(LocalSdrShim::gainCapAt(
                             LocalSdrShim::instance().listenFrequency()))
@@ -16009,7 +16098,14 @@ void LocalSdrShim::setVibeServerLockedRate(double rate) { g_vsLockedRate.store(r
 void LocalSdrShim::setVibeServerRateLock(bool on) {
     g_vsRateLock.store(on);
     LOGI("sample rate: %s", on ? "PINNED — listeners may not change it" : "listener's choice");
+}/** ★ DAB may borrow 2.048 MS/s on a receiver configured slower — see g_dabRateBoost. */
+void LocalSdrShim::setVibeServerDabRateBoost(bool on) { g_dabRateBoost.store(on, std::memory_order_relaxed); }
+/** ★ Modes and decoders the owner has switched off on this receiver — see g_vsBlockedModesCsv. */
+void LocalSdrShim::setVibeServerBlockedModes(const std::string& csv) {
+    std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx);
+    g_vsBlockedModesCsv = csv;
 }
+
 void LocalSdrShim::setVibeServerLockedCentre(double hz) { g_vsLockedCentre.store(hz > 0 ? hz : 0.0); }
 void LocalSdrShim::setVibeServerSharedChannels(bool shared) { g_vsSharedChannels.store(shared); }
 void LocalSdrShim::setVibeServerZoomSpectrum(bool on) { g_vsZoomSpectrum.store(on); }
@@ -16094,6 +16190,15 @@ static bool vsDabCapable() {
     if (hw == 0) return false;                       // not known yet — do not promise
     uint32_t cap = hw;
     if (locked > 0 && locked < cap) cap = locked;
+    /* ★ The rate IN FORCE counts too, not just the owner's pin — a receiver running at 1.2 MS/s
+     *  cannot carry an ensemble however high its ceiling. */
+    const uint32_t running = uint32_t(LocalSdrShim::instance().captureSpanHz());
+    if (running > 0 && running < cap) cap = running;
+    /* ★★ …unless the owner has allowed DAB to borrow the rate. Then only the HARDWARE limits it;
+     *  see g_dabRateBoost. */
+    if (g_dabRateBoost.load(std::memory_order_relaxed)) cap = hw;
+    // ★ And the owner may switch it off outright, whatever the hardware can do.
+    if (vsModeBlocked("dab")) return false;
     return vibedab::radioCanDab(r.data(), r.size(), cap);
 }
 
@@ -16104,6 +16209,20 @@ static std::string vsTunableJson() {
     // ★ Whether to OFFER DAB at all. The client must not draw a control whose every use is a
     //   no-op (AGENTS.md), and only the server knows the effective limits.
     j += std::string(",\"dab\":") + (vsDabCapable() ? "true" : "false");
+    /* ★ Two more fields so the client can draw the boost toggle ONLY where it can matter:
+     *  `dabBoost` is the setting, `dabBoostUseful` is true when the hardware could reach 2.048
+     *  but the rate in force does not. AGENTS.md: never draw a control whose every use is a
+     *  no-op — on a receiver already at 2.048 this offers nothing. */
+    {
+        const uint32_t hwMax   = g_vsHwMaxRate.load(std::memory_order_relaxed);
+        const uint32_t running = uint32_t(LocalSdrShim::instance().captureSpanHz());
+        const uint32_t locked  = uint32_t(g_vsLockedRate.load());
+        uint32_t eff = running ? running : hwMax;
+        if (locked > 0 && locked < eff) eff = locked;
+        const bool useful = hwMax >= vibedab::kCanonicalRateHz && eff < vibedab::kCanonicalRateHz;
+        j += std::string(",\"dabBoost\":") + (g_dabRateBoost.load(std::memory_order_relaxed) ? "true" : "false");
+        j += std::string(",\"dabBoostUseful\":") + (useful ? "true" : "false");
+    }
     // ★ The same ranges in WORDS where the plan has words for them — "FM broadcast" is what a
     //   listener searches for, and the plan that knows the names is region-aware and lives here.
     const std::string names = vibebands::labelsJson(t, vibebands::defaultRegion());
