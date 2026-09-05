@@ -598,6 +598,12 @@ static std::atomic<int>    g_dabSavedGain{-1};
  *  ★ Save what the radio is actually doing. The lock is a separate promise and is restored
  *    alongside, not instead. */
 static std::atomic<double> g_dabSavedRtl{0.0}, g_dabSavedAudio{0.0}, g_dabSavedView{0.0};
+/* ★ AND WHETHER VibeAGC WAS ON. g_rtlAgc is a SEPARATE flag from g_gainTarget — the first says
+ *  whether the loop runs, the second what the owner asked for — and DAB only ever saved the
+ *  second. Leaving DAB therefore handed back a gain figure with the loop switched off: "exiting
+ *  DAB mode reverts VibeAGC to manual every time" (Stuart). Two halves of one setting, and I
+ *  saved one of them. */
+static std::atomic<bool>   g_dabSavedAgcOn{false};
 static std::atomic<double> g_dabSavedActualRate{0.0};
 static std::atomic<double> g_dabSavedCentre{0.0};
 static std::atomic<double> g_dabSavedRate{0.0};
@@ -1573,9 +1579,18 @@ static constexpr double      kAgcClimbCeilDbfs = kAgcBackoffDbfs;
  *      ceiling  -1  ->  peak  -4.4 dBFS  ->  visible clipping regrowth, audible breakup
  *      (none)       ->  peak  -9.1 dBFS  ->  fibRate 0.988   <- best
  *      ceiling -15  ->  peak -20.6 dBFS  ->  fibRate 0.952   <- starved
- *  The loop settles about 5.6 dB below its ceiling, so -5 lands near the -9 that measured best.
- *  ★ Re-measure before moving this again, and move it on the FIB rate, not on the picture. */
-static constexpr double      kAgcDabClimbCeilDbfs = -5.0;
+ *  ★★★ THOSE THREE POINTS ARE VOID. Every one of them was taken while the receiver was throwing
+ *  away 80% of its frames (see 4.1.88 and the frame-rate measurement that followed), so the FIB
+ *  rates being compared came from a starved decoder and the comparison meant nothing. I chose -5
+ *  on that basis and it is why the front end is still being driven hard.
+ *  ★★★ AND THE ADC PEAK IS THE WRONG INSTRUMENT ANYWAY. It measures the CONVERTER; the tuner
+ *  overloads first, and tuner overload shows as IMAGES rather than as clipping — Stuart, at
+ *  208 MHz: "I am getting an almost perfect clone of BBC northampton and other stations", which
+ *  is an FM band folded into Band III by a front end being driven far too hard. An ADC-peak
+ *  target cannot see that at all.
+ *  ★ So: -20, which is what "DAB only needs minimal if any gain where I live" actually asks for,
+ *    and re-measure the FIB rate on a HEALTHY pipeline before moving it again. */
+static constexpr double      kAgcDabClimbCeilDbfs = -20.0;
 
 /* ══ ONE LOOP, THREE TEMPERAMENTS ═══════════════════════════════════════════════════════════════
  * ★★★ STUART, 2026-08-25: "should we have different AGC algorithyms per band ... All invisible to
@@ -8049,6 +8064,7 @@ struct LocalSdrShim::Impl {
                     g_vsLockedCentre.store(g_dabSavedCentre.load());
                     g_vsLockedRate.store(g_dabSavedRate.load());
                     LocalSdrShim::instance().setGain(g_dabSavedGain.load());
+                    g_rtlAgc.store(g_dabSavedAgcOn.load(), std::memory_order_relaxed);
                     agcForget("DAB off: the gain that suited an ensemble does not suit a carrier");
                     /* ★★★ AND PUT THE RADIO BACK WHERE IT WAS — unconditionally. See the note on
                      *  g_dabSavedRtl: gating this on a centre LOCK left every unlocked receiver
@@ -8129,6 +8145,7 @@ struct LocalSdrShim::Impl {
                 g_dabSavedCentre.store(g_vsLockedCentre.load());
                 g_dabSavedRate.store(g_vsLockedRate.load());
                 g_dabSavedGain.store(g_gainTarget.load(std::memory_order_relaxed));
+                g_dabSavedAgcOn.store(g_rtlAgc.load(std::memory_order_relaxed));
                 g_dabSavedRtl.store(rtlCenter.load());
                 g_dabSavedAudio.store(audioFreq.load());
                 g_dabSavedView.store(viewCenter.load());
