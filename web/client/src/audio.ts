@@ -25,6 +25,7 @@ import { decodeVibeAdpcmFrame } from '../../../src/services/imaAdpcm';
 // fine over plain http on a LAN IP — WASM has no secure-context gate and no platform media stack
 // to disagree with. The wasm is inlined in the module, so the single-file page stays self-contained.
 import { OpusDecoder } from 'opus-decoder';
+import { initSegment, mediaSegment } from './fmp4';
 
 /** How much audio to hold before playout starts, in seconds. This is also very nearly
  *  how far the audio LAGS THE WATERFALL, so it is the A/V sync knob.
@@ -1173,6 +1174,11 @@ export class AudioPlayer {
   }
 
   private _decodeAac(buf: ArrayBuffer, channels: number, coreRateHz: number) {
+    if (this.mseBuf) {                       // Safari path — see _startMse
+      this.mseDur = 1024;
+      this._mseFeed(new Uint8Array(buf, 6 + 7));   // strip the ADTS header; the ASC carries the config
+      return;
+    }
     if (this.aacBroken || !coreRateHz) return;
     if (typeof AudioDecoder === 'undefined') {
       this._failAac('support', 'this browser has no WebCodecs AudioDecoder');
@@ -1234,7 +1240,81 @@ export class AudioPlayer {
       } catch (e) { console.warn(`[audio] AAC configure ${t.codec} failed:`, e); }
     }
     this.aacProbing = false;
+    /* ★★★ NO WebCodecs AAC — TRY MediaSource. Safari has AAC throughout its media stack and
+     *  takes audio/mp4 in MSE; it simply has not implemented AAC in WebCodecs. The access units
+     *  are the same bytes either way, so they are wrapped as fragmented MP4 and handed to the
+     *  platform decoder through a <audio> element. We still decode nothing ourselves. */
+    if (await this._startMse(coreRateHz, channels)) return;
     this._failAac('support', 'no AAC configuration this browser accepts');
+  }
+
+  // ── MediaSource fallback (Safari) ──────────────────────────────────────────────────────────
+  private mseEl: HTMLAudioElement | null = null;
+  private mseSrc: MediaSource | null = null;
+  private mseBuf: SourceBuffer | null = null;
+  private mseQueue: Uint8Array[] = [];
+  private mseSeq = 1;
+  private mseTime = 0;
+  private mseDur = 1024;
+
+  /** Open an <audio> + MediaSource pipeline for AAC. Returns false when the browser cannot. */
+  private async _startMse(coreRateHz: number, channels: number): Promise<boolean> {
+    const MS: typeof MediaSource | undefined =
+      (self as unknown as { ManagedMediaSource?: typeof MediaSource }).ManagedMediaSource
+      ?? (typeof MediaSource !== 'undefined' ? MediaSource : undefined);
+    const asc = this._ascFor(coreRateHz, channels);
+    if (!MS || !asc) return false;
+    const mime = ['audio/mp4; codecs="mp4a.40.5"', 'audio/mp4; codecs="mp4a.40.2"']
+      .find((m) => MS.isTypeSupported(m));
+    if (!mime) return false;
+
+    return await new Promise<boolean>((resolve) => {
+      const el = document.createElement('audio');
+      el.autoplay = true;
+      // ★ Safari will not open a ManagedMediaSource without this attribute on the element.
+      (el as unknown as { disableRemotePlayback: boolean }).disableRemotePlayback = true;
+      const ms = new MS();
+      el.src = URL.createObjectURL(ms as unknown as MediaSource);
+      let settled = false;
+      ms.addEventListener('sourceopen', () => {
+        try {
+          const sb = ms.addSourceBuffer(mime);
+          sb.mode = 'sequence';
+          sb.addEventListener('updateend', () => this._mseDrain());
+          this.mseEl = el; this.mseSrc = ms; this.mseBuf = sb;
+          this.mseSeq = 1; this.mseTime = 0; this.mseDur = 1024;
+          this.mseQueue = [initSegment(coreRateHz, channels, asc)];
+          this._mseDrain();
+          void el.play().catch(() => { /* a gesture may be needed; the buffer keeps filling */ });
+          console.info(`[audio] DAB+ via MediaSource ${mime} @ ${coreRateHz} Hz, ${channels}ch`);
+          if (!settled) { settled = true; resolve(true); }
+        } catch (e) {
+          console.warn('[audio] MediaSource setup failed:', e);
+          if (!settled) { settled = true; resolve(false); }
+        }
+      }, { once: true });
+      setTimeout(() => { if (!settled) { settled = true; resolve(false); } }, 3000);
+    });
+  }
+
+  /** Append one queued segment; the rest follow on updateend. */
+  private _mseDrain() {
+    const sb = this.mseBuf;
+    if (!sb || sb.updating || !this.mseQueue.length) return;
+    const seg = this.mseQueue.shift()!;
+    try { sb.appendBuffer(seg as unknown as BufferSource); }
+    catch (e) { console.warn('[audio] MSE append failed:', e); this.mseQueue.length = 0; }
+  }
+
+  /** Wrap one access unit and queue it. Returns true when MSE is carrying the audio. */
+  private _mseFeed(au: Uint8Array): boolean {
+    if (!this.mseBuf) return false;
+    this.mseQueue.push(mediaSegment(this.mseSeq++, this.mseTime, this.mseDur, au));
+    this.mseTime += this.mseDur;
+    // ★ Bounded, like every other audio queue here: audio minutes late is worse than a gap.
+    while (this.mseQueue.length > 60) this.mseQueue.shift();
+    this._mseDrain();
+    return true;
   }
 
   /** ★ Say it where the listener is looking. A DAB+ service that cannot be decoded must not
