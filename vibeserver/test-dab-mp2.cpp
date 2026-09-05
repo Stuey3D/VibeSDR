@@ -323,6 +323,29 @@ int main() {
         CHECK(peak > 0.001 && peak < 0.8 && rms < 0.3, m);
     }
 
+    /* ── ★★★ A 24 kHz LSF SERVICE SPANS TWO DAB LOGICAL FRAMES ────────────────────────────
+     *  These are the real first four bytes of talkSPORT on 11D, captured off air 2026-09-05.
+     *  Layer II is 1152 samples per frame however it is clocked, so at 24 kHz one frame is 48 ms
+     *  — TWO DAB logical frames — and arrives as two 192-byte halves. The receiver decoded each
+     *  half on its own, `frameBytes > n` rejected every one, and 11D and SDL National produced
+     *  NO AUDIO AT ALL under a perfect FIC.
+     *  ★ 12B hid it completely: every BBC Layer II service is 48 kHz, where one frame is exactly
+     *    one logical frame. The first mux we tested agreed with the bug. */
+    {
+        const uint8_t hdr[4] = { 0xFF, 0xF4, 0x84, 0xCC };   // talkSPORT, 11D, off air
+        const Mp2Info f = mp2Header(hdr, sizeof hdr);
+        CHECK(f.valid,                   "the real talkSPORT header parses");
+        CHECK(f.lsf,                     "it is MPEG-2 LSF");
+        CHECK(f.sampleRateHz == 24000,   "24 kHz");
+        CHECK(f.bitrateKbps  == 64,      "64 kbit/s");
+        CHECK(f.channels     == 1,       "mono");
+        /* ★ THE WHOLE POINT: 384 bytes against the 192 a DAB logical frame carries at this rate.
+         *  A caller that does not join the halves can only ever reject it. */
+        CHECK(f.frameBytes   == 384,     "a 24 kHz Layer II frame is 384 bytes = TWO 192-byte DAB frames");
+        CHECK(size_t(f.frameBytes) > size_t(64 * 24 / 8),
+              "and it is longer than one logical frame, which is how the pairing is detected");
+    }
+
     if (fails == 0) printf("  all passed\n");
     else            printf("  %d FAILED\n", fails);
     return fails ? 1 : 0;

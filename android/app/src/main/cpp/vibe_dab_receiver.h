@@ -46,6 +46,10 @@ struct DabStats {
     double fibRate       = 0.0;    ///< running pass rate, 0..1
     int    framesSeen    = 0;
     int    intOffsetCarriers = 0;   ///< whole carriers of offset, from the phase reference
+    /** ★ Frames handed to the decoders as ERASURES because the phase reference said the window
+     *  was wrong. A receiver that never erases is one that is guessing; one that erases often is
+     *  losing sync. Both are worth seeing. */
+    int    erasedFrames      = 0;
     float  prsCorrelation    = 0.0f;///< how well the phase reference matched — a lock quality
 };
 
@@ -186,9 +190,40 @@ public:
             prev = cur;
         }
 
-        // ── symbols 1..3 are the FIC ────────────────────────────────────────
+        /* ★★★ A FRAME WE DO NOT TRUST IS AN ERASURE, NOT A GUESS.
+         *  Time interleaving exists so that a burst is spread thin enough for the convolutional
+         *  code to CORRECT it — one lost frame out of sixteen in the deinterleaver's memory is
+         *  well within what rate-1/2-ish DAB coding handles. It only works if the decoder is told
+         *  those bits are unknown. Hand it hard, confident nonsense instead and the Viterbi is
+         *  actively misled: it will happily find a wrong path that agrees with the garbage.
+         *  ★★★ MEASURED ON CAPTURED AIR (12B, 30 s, dab-offline): ONE frame in 311 lost sync —
+         *      phase-reference correlation collapsing from 9.5 to 0.90 with the whole FIC failing
+         *      0/12 — and it destroyed THIRTEEN consecutive audio frames, ~300 ms, which is the
+         *      squeal Stuart has been hearing. The event is one frame; the damage was ours.
+         *  ★ The threshold is RELATIVE, because the correlation's scale follows the signal. A
+         *    frame at a third of the running reference is not a fade — a fade moves the null
+         *    depth too — it is a window in the wrong place. */
+        if (prsRef_ <= 0.0f) prsRef_ = stats_.prsCorrelation;
+        else if (stats_.prsCorrelation > prsRef_)
+             prsRef_ = prsRef_ * 0.90f + stats_.prsCorrelation * 0.10f;   // rise quickly
+        else prsRef_ = prsRef_ * 0.99f + stats_.prsCorrelation * 0.01f;   // fall slowly
+        const bool untrusted = (prsRef_ > 0.0f && stats_.prsCorrelation < 0.35f * prsRef_);
         const size_t ficBits = size_t(K) * 2 * 3;
-        if (frameBits.size() >= ficBits) {
+        if (untrusted) {
+            ++stats_.erasedFrames;
+            /* ★ ONLY the MSC is erased. The FIC is not decoded AT ALL on a frame like this —
+             *  its FIBs are CRC-checked, but a window in the wrong place produces garbage that
+             *  occasionally passes, and one bad FIG rewrites the ensemble database (a
+             *  sub-channel's start or size) for every service. Nor is it counted as a FIC
+             *  failure: it is a frame we declined to read, and reporting it as 0/12 dragged the
+             *  displayed FIB rate from 1.00 to 0.82 — a quality figure Stuart reads off the
+             *  screen, describing a fault that is no longer happening. */
+            if (frameBits.size() > ficBits)
+                std::fill(frameBits.begin() + long(ficBits), frameBits.end(), int8_t(0));
+        }
+
+        // ── symbols 1..3 are the FIC ────────────────────────────────────────
+        if (!untrusted && frameBits.size() >= ficBits) {
             ficBits_.assign(frameBits.begin(), frameBits.begin() + long(ficBits));
             const int ok = ficDecodeFrame(frameBits.data(), ensemble_, viterbi_);
             stats_.fibsOk    = ok;
@@ -211,6 +246,7 @@ public:
         return true;
     }
 
+    float prsRef_ = 0.0f;      ///< running reference for the phase-reference correlation
     long lastAt_ = -1;
 
     /** ★ The FIC soft bits of the last frame — for diagnostics against a live signal, where the

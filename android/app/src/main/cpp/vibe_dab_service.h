@@ -313,7 +313,42 @@ private:
     void drainAudio() {
         // ★ TAKE, do not index — the receiver's buffer is a bounded ring. See takeAudioFrames().
         const auto frames = rx_.takeAudioFrames();
-        for (const auto& f : frames) {
+        for (const auto& fRaw : frames) {
+            /* ★★★ A 24 kHz (LSF) LAYER II FRAME SPANS TWO DAB LOGICAL FRAMES, AND WE WERE
+             *  THROWING EVERY ONE OF THEM AWAY. Layer II is 1152 samples per frame however it is
+             *  clocked: at 48 kHz that is 24 ms, exactly one DAB logical frame — but at 24 kHz it
+             *  is 48 ms, so the audio frame arrives as TWO 192-byte halves and must be joined
+             *  before it means anything.
+             *  ★★★ MEASURED, on captured air: talkSPORT on 11D is `FF F4 84 CC` — MPEG-2 LSF,
+             *      64 kbit/s, 24 kHz — so mp2Header computes frameBytes = 144*64000/24000 = 384
+             *      against the 192 bytes in hand, and `frameBytes > n` rejected the lot. 11D and
+             *      SDL decoded NOTHING while their FIC read a perfect 1.000, which is precisely
+             *      the shape that says "wrong bits", not "weak signal". With the halves joined:
+             *      100% failures -> 1.0%.
+             *  ★ 12B never showed it: every BBC Layer II service is 48 kHz, so the first mux we
+             *    tested agreed with the bug — the same trap as the mono/stereo chipmunks.
+             *  ★ THE ORPHAN GUARD MATTERS. If the second half is lost (an erased frame, a dropped
+             *    buffer), the held half would be joined to the NEXT service frame for ever after,
+             *    turning one lost frame into permanent corruption. A chunk that carries its own
+             *    valid over-length header is a first half, so the one being held was orphaned:
+             *    drop it and start again. */
+            std::vector<uint8_t> joined;
+            const std::vector<uint8_t>* fp = &fRaw;
+            if (rx_.selectedType() == 0) {
+                const Mp2Info hi = mp2Header(fRaw.data(), fRaw.size());
+                const bool firstHalf = hi.valid && size_t(hi.frameBytes) > fRaw.size();
+                if (!lsfPend_.empty() && !firstHalf) {
+                    joined = lsfPend_;
+                    joined.insert(joined.end(), fRaw.begin(), fRaw.end());
+                    lsfPend_.clear();
+                    fp = &joined;
+                } else if (firstHalf) {
+                    if (!lsfPend_.empty()) ++lsfOrphans_;
+                    lsfPend_.assign(fRaw.begin(), fRaw.end());
+                    continue;
+                }
+            }
+            const std::vector<uint8_t>& f = *fp;
             /* ★★ MP2 WE DECODE OURSELVES — the browser refuses Layer II, measured 2026-09-04, and
              *  MP2's patents have expired so it is the one codec we may implement. DAB+ is handed
              *  onward as ADTS instead; that path links no decoder here. */
@@ -477,6 +512,9 @@ private:
     int  aacCoreCh_ = 2;                       ///< what the ADTS header declares
     int  aacOutCh_  = 2;                       ///< what the decoder will produce (PS -> 2)
 
+    /** ★ The first half of a 24 kHz Layer II frame, waiting for its second. See drainAudio(). */
+    std::vector<uint8_t>    lsfPend_;
+    unsigned                lsfOrphans_ = 0;
     Resample24to2048        rs_;
     std::vector<float>      rsOut_;
     std::thread             worker_;
