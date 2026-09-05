@@ -46,6 +46,12 @@ public:
         rx_.reset();
         iq_.clear();
         pcm_.clear();
+        /* ★★★ AND DROP ANY HELD HALF-FRAME. lsfPend_ carries the first half of a 24 kHz Layer II
+         *  frame between calls; a service or multiplex change mid-pair would otherwise join it to
+         *  the FIRST frame of the new subchannel and leave the pairing off by one from then on —
+         *  a perfect FIC with a large fraction of the audio failing, which is precisely how it
+         *  presented: 1.0% on a first entry and 16.9% on the second, same service, same signal. */
+        lsfPend_.clear();
         sid_ = 0;
         mp2_.reset();
     }
@@ -61,6 +67,13 @@ public:
         if (rx_.ensemble().services.count(sid)) { if (rx_.selectService(sid)) sid_ = sid; }
         pcm_.clear();
         mp2_.reset();
+        /* ★★★ AND DROP ANY HELD HALF-FRAME. lsfPend_ carries the first half of a 24 kHz Layer II
+         *  frame between calls; a service or multiplex change mid-pair would otherwise join it to
+         *  the FIRST frame of the new subchannel and leave the pairing off by one from then on —
+         *  a perfect FIC with a large fraction of the audio failing, which is precisely how it
+         *  presented: 1.0% on a first entry and 16.9% on the second, same service, same signal. */
+        lsfPend_.clear();
+
     }
     uint32_t service() const { return sid_; }
     /** The receiver tells us where the radio actually is, so the two can be compared. */
