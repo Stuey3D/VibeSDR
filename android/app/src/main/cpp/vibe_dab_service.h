@@ -66,6 +66,16 @@ public:
         pcmOwed_ = 0; pcmPushed_ = 0;
         resampleReset();
     }
+    /** ★★★ A RETUNE IS IN FLIGHT — discard everything until the radio has settled on it.
+     *  Called straight after tuneHw(), which only QUEUES the frequency. See the note in feed().
+     *  @param seconds how long the hardware may take; 0.25 s is generous for a USB control
+     *         transfer and is paid once per multiplex change, not per frame. */
+    void armRetune(double seconds = 0.25) {
+        std::lock_guard<std::mutex> lk(m_);
+        const double rate = rfRate_ > 0 ? rfRate_ : 2400000.0;
+        settleDrop_ = size_t(seconds * rate);
+    }
+
     int  channel()   const { return channel_; }
     uint32_t centreHz() const { return kBandIII[channel_ < 0 ? 0 : channel_].centreHz; }
 
@@ -176,6 +186,45 @@ public:
             if (!started_) { started_ = true; stop_ = false;
                              worker_ = std::thread([this] { workerLoop(); }); }
             samplesIn_ += nSamples;
+            /* ★★★ THROW AWAY THE IQ THAT ARRIVES BEFORE THE RADIO HAS ACTUALLY MOVED.
+             *
+             *  ★★★ THE FAULT, and it is user-visible on every platform. Stuart: "when you first
+             *      activate dab mode it seems to default to 12B ... it looks like you should have
+             *      a signal judging by the spectrum but nothing locks in, tune away then back and
+             *      it works" — and it does the same on the XCover and on the Pi. MEASURED on the
+             *      XCover, tuning 11A while the radio sat on 10D:
+             *          first attempt   frames 0    locked false   rfCentre 215072000  (10D!)
+             *          second attempt  frames 495  locked true    rfCentre 216928000
+             *
+             *  ★★★ WHY IT CANNOT RECOVER BY ITSELF. tuneHw() QUEUES the frequency onto the
+             *      hardware-writer thread, so the dsp loop goes on delivering samples from the
+             *      OLD multiplex for as long as that takes. The receiver has just been reset by
+             *      setChannel, so it acquires on that — and acquisition is deliberately TRACKED
+             *      rather than re-taken every frame (see the note in workerLoop: re-acquiring per
+             *      frame costs a frame every time some other dip is deeper). Having locked onto
+             *      the wrong signal, it keeps tracking it. Tuning away and back works only
+             *      because by then the radio is already sitting still.
+             *
+             *  ★★ AND THE CENTRE CANNOT BE USED TO DETECT IT: rtlCenter is stored BEFORE tuneHw,
+             *     so rfCentre_ reports the NEW multiplex while the hardware is still on the old
+             *     one. The service has to be TOLD a retune is in flight — hence armRetune().
+             *  ★ Counted in SAMPLES, not milliseconds: the capture rate is the clock that matters
+             *    and it makes the settle identical on a fast phone and a slow Pi. */
+            if (settleDrop_ > 0) {
+                const size_t drop = nSamples < settleDrop_ ? nSamples : settleDrop_;
+                settleDrop_ -= drop;
+                preTuneDropped_ += uint32_t(drop);
+                if (settleDrop_ == 0) {
+                    /* ★ Everything that could hold state from the old frequency, together — a
+                     *  half-assembled LSF pair or a stale AAC decoder would outlive the retune
+                     *  exactly as the sync did. */
+                    rx_.reset(); iq_.clear(); lsfPend_.clear();
+                    mp2_.reset(); aac_.reset(); pad_.reset(); adts_.clear();
+                    { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
+                    pcmOwed_ = 0; pcmPushed_ = 0; resampleReset();
+                }
+                return;
+            }
             /* ★★★ THE DONGLE RUNS AT 2.4 MS/s AND THE DECODER GETS 2.048. See
              *  vibe_dab_resample.h: RTL-SDRs are unreliable at 2.048 — every OpenWebRX DAB
              *  profile Stuart has is 2.4, SDRangel had the same trouble, and our own XCover
@@ -356,8 +405,8 @@ public:
          *  the live Pi — DAB reported 12B while the dongle sat on 96.6 MHz — and without both
          *  numbers side by side that is indistinguishable from "DAB does not decode here". */
         snprintf(b, sizeof b,
-                 ",\"channel\":\"%s\",\"centreHz\":%u,\"scf\":[%u,%u,%u,%u,%u],\"mp2Crc\":%u,\"mp2In\":%u,\"mp2Bad\":%u,\"mp2Out\":%u,\"mp2Concealed\":%u,\"scfClamped\":%u,\"mp2HdrBad\":%u,\"mp2CrcBad\":%u,\"mp2NoSync\":%u,\"mp2TooLong\":%u,\"lsfOrphans\":%u,\"noSyncGaps\":\"%s\",\"aacDecoded\":%u,\"aacServerSide\":%s,\"aacRateHz\":%d,\"aacCh\":%d,\"aacPcmPerAu\":%u,\"pcmPushed\":%llu,\"pcmAvail\":%u,\"pcmFilled\":%u,\"syncJumps\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
-                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), scfChecked_, scfOk_[0], scfOk_[1], scfOk_[2], scfOk_[3], mp2WithCrc_, mp2In_, mp2Bad_, mp2Out_, mp2Concealed_, mp2_.scfClamped(), mp2_.hdrBad(), mp2_.crcBad(), mp2_.hdrNoSync(), mp2_.hdrTooLong(), lsfOrphans_, mp2_.noSyncGaps().c_str(), aacDecoded_, aac_.available() ? "true" : "false", aac_.rateHz(), aac_.channels(), aacPcmPerAu_, (unsigned long long)pcmPushed_, (unsigned)(pcm_.size()/2), pcmFilled_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
+                 ",\"channel\":\"%s\",\"centreHz\":%u,\"scf\":[%u,%u,%u,%u,%u],\"mp2Crc\":%u,\"mp2In\":%u,\"mp2Bad\":%u,\"mp2Out\":%u,\"mp2Concealed\":%u,\"scfClamped\":%u,\"mp2HdrBad\":%u,\"mp2CrcBad\":%u,\"mp2NoSync\":%u,\"mp2TooLong\":%u,\"lsfOrphans\":%u,\"noSyncGaps\":\"%s\",\"preTuneDropped\":%u,\"aacDecoded\":%u,\"aacServerSide\":%s,\"aacRateHz\":%d,\"aacCh\":%d,\"aacPcmPerAu\":%u,\"pcmPushed\":%llu,\"pcmAvail\":%u,\"pcmFilled\":%u,\"syncJumps\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
+                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), scfChecked_, scfOk_[0], scfOk_[1], scfOk_[2], scfOk_[3], mp2WithCrc_, mp2In_, mp2Bad_, mp2Out_, mp2Concealed_, mp2_.scfClamped(), mp2_.hdrBad(), mp2_.crcBad(), mp2_.hdrNoSync(), mp2_.hdrTooLong(), lsfOrphans_, mp2_.noSyncGaps().c_str(), preTuneDropped_, aacDecoded_, aac_.available() ? "true" : "false", aac_.rateHz(), aac_.channels(), aacPcmPerAu_, (unsigned long long)pcmPushed_, (unsigned)(pcm_.size()/2), pcmFilled_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
                  esc(e.label).c_str(), unsigned(e.eid));
         j += b;
         snprintf(b, sizeof b,
@@ -777,6 +826,8 @@ private:
     uint32_t   pcmFilled_ = 0;
     uint32_t   rsCorrected_ = 0, rsUncorrected_ = 0;  ///< Reed-Solomon: bytes fixed / codewords lost
     uint32_t   sfInvalid_ = 0, sfFireBad_ = 0;
+    size_t     settleDrop_ = 0;      ///< IQ samples still to discard after a retune
+    uint32_t   preTuneDropped_ = 0;  ///< how many were discarded, ever — published
     PadReader  pad_;               ///< dynamic label (and, later, MOT slideshow)        ///< and WHY a super frame was thrown away
     /** ★ Carried across calls so the 32 kHz -> 48 kHz conversion is ONE continuous stream rather
      *  than one restart per access unit. See pushPcm48Stereo. */

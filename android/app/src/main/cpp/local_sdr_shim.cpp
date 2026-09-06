@@ -8817,6 +8817,13 @@ struct LocalSdrShim::Impl {
              *  ★ After g_dabMode, never before: the branch reads it. */
             applyAutoIf();
             tuneHw(logical);          // ★ LAST. See the ordering note above.
+            /* ★★★ AND TELL THE DECODER THE RADIO IS STILL MOVING. tuneHw only QUEUES the
+             *  frequency onto the hardware-writer thread; until it lands, the dsp loop keeps
+             *  delivering samples from the PREVIOUS multiplex, and a receiver that has just been
+             *  reset will acquire on those and then TRACK them for ever. That is the "spectrum
+             *  shows a signal but nothing locks in, tune away and back and it works" fault, on
+             *  every platform. See DabService::armRetune. */
+            g_dab.armRetune();
             LOGI("[DAB] mode ON: channel %s, centre %.3f MHz, rate %.0f — dspLoop should follow",
                  vibedab::kBandIII[idx].name, centre / 1e6, double(vibedab::DabService::kRateHz));
             double sid = 0; jsonNum(msg, "sid", sid);
