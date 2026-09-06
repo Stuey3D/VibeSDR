@@ -429,7 +429,7 @@ public:
                  channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), scfChecked_, scfOk_[0], scfOk_[1], scfOk_[2], scfOk_[3], mp2WithCrc_, mp2In_, mp2Bad_, mp2Out_, mp2Concealed_, mp2_.scfClamped(), mp2_.hdrBad(), mp2_.crcBad(), mp2_.hdrNoSync(), mp2_.hdrTooLong(), lsfOrphans_, mp2_.noSyncGaps().c_str(), aacDecoded_, aac_.available() ? "true" : "false", aac_.rateHz(), aac_.channels(), aacPcmPerAu_, (unsigned long long)pcmPushed_, (unsigned)(pcm_.size()/2), pcmFilled_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
                  esc(e.label).c_str(), unsigned(e.eid));
         j += b;
-        snprintf(b, sizeof b,
+        const int nb2 = snprintf(b, sizeof b,
                  ",\"locked\":%s,\"nullDepthDb\":%.1f,\"offsetHz\":%.0f,\"offsetPpm\":%.2f"
                  ",\"carrierShift\":%d,\"prs\":%.3f,\"prsRef\":%.3f,\"prsRatio\":%.3f,\"erased\":%d,\"rsFixed\":%u,\"rsLost\":%u,\"sfInvalid\":%u,\"sfFireBad\":%u,\"dls\":\"%s\",\"dlsChanges\":%u,\"dlsCrcOk\":%u,\"dlsCrcFail\":%u,\"padFrames\":%u,\"xNone\":%u,\"xShort\":%u,\"xVar\":%u,\"xApp2\":%u,\"xApp3\":%u,\"xApp1\":%u,\"xApp12\":%u,\"fibOk\":%d,\"fibTotal\":%d,\"fibRate\":%.3f"
                  ",\"frames\":%d,\"sid\":%u,\"bitrate\":%d,\"protection\":\"%s\"",
@@ -439,11 +439,13 @@ public:
                  rx_.uepProf().valid ? "UEP" : (rx_.profile().valid ? "EEP" : ""));
         /* ★ snprintf returns the length it WANTED, so a truncation is knowable. Emit a valid
          *  object that SAYS the block was too long rather than a fragment that parses as nothing. */
-        if (nb < 0 || size_t(nb) >= sizeof b) {
+        /* ★ BOTH fragments. The second one carries the DLS text (up to 128 bytes) and was never
+         *  checked — the same silent cut, one line further down. */
+        if (nb < 0 || size_t(nb) >= sizeof b || nb2 < 0 || size_t(nb2) >= sizeof b) {
             char sb[192];
             snprintf(sb, sizeof sb,
                      "{\"type\":\"dab\",\"channel\":\"%s\",\"truncated\":%d,\"locked\":%s}",
-                     channel_ >= 0 ? kBandIII[channel_].name : "", nb,
+                     channel_ >= 0 ? kBandIII[channel_].name : "", nb2 < 0 || size_t(nb2) >= sizeof b ? nb2 : nb,
                      s.locked ? "true" : "false");
             return std::string(sb);
         }

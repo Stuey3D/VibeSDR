@@ -972,7 +972,31 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onNotice: (text: string) => showOwnerNotice(text),
     /* ★ DAB arrives twice a second with the whole station list — see BRIEF-dab.md for why it is
      *  sent entire rather than as deltas. A null means the server left DAB mode. */
-    onDab: (d: DabState) => { dabState = d ?? null; if (!d) dabOn = false; dabRender(); },
+    onDab: (d: DabState) => {
+      if (!d) {
+        /* ★★★ THE SERVER LEFT DAB WITHOUT US — the last listener went, or the owner took the
+         *  receiver back. Everything DAB locked has to be given back here too, or the zoom stays
+         *  disabled and the dial stays held on a receiver that is back on FM (my own fault of an
+         *  hour earlier: dabOn was cleared and nothing else was). */
+        if (dabOn) dabUiOff();
+        dabOn = false; dabState = null; dabRender(); return;
+      }
+      /* ★★★ HOLD THE LAST GOOD LIST. A frame where the FIC did not read — a fade, an erased frame,
+       *  the moment after a retune — arrives with no services, and painting that blanks the list
+       *  under the reader's finger ("showed all of its stations then promptly cleared them all
+       *  away", Stuart, 2026-09-06). TS 103 176 6.2.2: the list is a THING THE RECEIVER KEEPS, not
+       *  a picture of this frame. Hold it while the channel is unchanged; a retune clears it
+       *  (dabTune sets dabState = null), and a different ensemble replaces it. */
+      const prev = dabState;
+      if (prev && prev.channel === d.channel && d.services.length === 0 && prev.services.length > 0
+          && (d.eid === prev.eid || !d.eid)) {
+        d.services = prev.services;
+        if (!d.label) d.label = prev.label;
+        if (!d.eid) d.eid = prev.eid;
+        d.held = true;
+      }
+      dabState = d; dabRender();
+    },
     onAdmin: (ok, refused) => {
       if (refused) {
         adminUnlocked = false;
@@ -4333,11 +4357,17 @@ function dabRender() {
    *  (Same lesson as the bookmark search: do not throw away the view somebody is working in.) */
   if (d.eid !== dabLastEid) { dabLastEid = d.eid; dabSetPane('stations'); }
 
+  /* ★ The now-playing text (DLS) sits under the service it belongs to — the field OWRX omits
+   *  and the reason Stuart asked for it. The .dls style has been in the sheet since 2026-09-04;
+   *  nothing ever emitted the element. */
   st.innerHTML = d.services.length
     ? d.services.map(sv => `<div class="dabSvc${sv.sid === d.sid ? ' on' : ''}" data-sid="${sv.sid}">`
-        + `<span class="nm">${escapeHtml(sv.label || '(unnamed)')}</span>`
-        + `<span class="cod">${sv.codec}</span></div>`).join('')
-    : `<div style="padding:14px;opacity:.6">${d.locked ? 'Reading the multiplex…' : 'Searching for a multiplex…'}</div>`;
+        + `<span class="nm">${escapeHtml(sv.label || '(unnamed)')}`
+        + (sv.sid === d.sid && d.dls ? `<span class="dls">${escapeHtml(d.dls)}</span>` : '')
+        + `</span><span class="cod">${sv.codec}</span></div>`).join('')
+      + (d.held ? `<div style="padding:6px 9px;opacity:.5;font-size:10px">list held — the multiplex is not reading at the moment</div>` : '')
+    : `<div style="padding:14px;opacity:.6">${d.truncated ? 'Signal block too long for the server to send'
+        : d.locked ? 'Reading the multiplex…' : 'Searching for a multiplex…'}</div>`;
   for (const el of Array.from(st.querySelectorAll('.dabSvc')) as HTMLElement[])
     el.onclick = () => { spec?.dabService(Number(el.dataset.sid)); };
 
@@ -4354,13 +4384,28 @@ function dabRender() {
     + row('Ensemble', d.label || '—')
     + row('EId', '0x' + d.eid.toString(16).toUpperCase().padStart(4, '0'))
     + row('Services', String(d.services.length))
+    + (d.dls ? row('Now playing', escapeHtml(d.dls)) : '')
     + '<h4>PHYSICAL LAYER</h4>'
     + row('Lock', d.locked ? 'locked' : 'searching')
+    /* ★ Requested and actual, side by side — the pair that separates "cannot decode" from
+     *  "pointed at the wrong frequency" (2026-09-04, four deploys to learn it). */
+    + row('Radio centre', d.rfCentreHz ? `${(d.rfCentreHz / 1e6).toFixed(4)} MHz`
+        + (Math.abs(d.rfCentreHz - d.centreHz) > 500 ? ` (asked ${(d.centreHz / 1e6).toFixed(4)})` : '') : '—')
+    + row('Capture rate', d.rfRateHz ? (d.rfRateHz / 1e6).toFixed(3) + ' MS/s' : '—')
     + row('Null depth', d.nullDepthDb.toFixed(1) + ' dB')
     + row('Frequency offset', `${d.offsetHz.toFixed(0)} Hz (${d.offsetPpm.toFixed(2)} ppm)`)
     + row('Carrier shift', String(d.carrierShift))
-    + row('Phase reference', d.prs.toFixed(3))
-    + row('Frames seen', String(d.frames));
+    + row('Phase reference', d.prs.toFixed(3) + (d.prsRatio !== undefined ? ` (${d.prsRatio.toFixed(2)} of ref)` : ''))
+    + row('Frames seen', String(d.frames))
+    + row('Frames erased', String(d.erased ?? 0))
+    + row('Re-acquisitions', String(d.reacquires ?? 0))
+    + (d.dropped ? row('IQ dropped', String(d.dropped)) : '')
+    + '<h4>AUDIO CHANNEL</h4>'
+    + (d.mp2In ? row('Layer II frames', `${d.mp2In} in, ${d.mp2Bad ?? 0} bad, ${d.mp2Concealed ?? 0} concealed`) : '')
+    + (d.sfTried ? row('DAB+ super frames', `${d.sfOk ?? 0} of ${d.sfTried}`) : '')
+    + (d.sfTried ? row('Reed-Solomon', `${d.rsFixed ?? 0} fixed, ${d.rsLost ?? 0} lost`) : '')
+    + (d.aacRateHz ? row('AAC', `${d.aacRateHz} Hz, ${d.aacCh} ch${d.aacServerSide ? ', decoded on the server' : ''}`) : '')
+    + (d.dlsCrcOk !== undefined ? row('DLS groups', `${d.dlsCrcOk} ok, ${d.dlsCrcFail ?? 0} bad`) : '');
 }
 
 function dabTune(delta: number) {
@@ -4422,6 +4467,20 @@ function dabSetMode(on: boolean) {
   } else {
     spec?.dab(false);
     dabState = null;
+    dabUiOff();
+  }
+  dabSetPane(dabPane);
+  dabRender();
+}
+
+/** The UI half of leaving DAB — used both when WE leave and when the server leaves without us. */
+function dabUiOff() {
+  dabLockControls(false);
+  if (spec) spec.dabHeld = false;
+  const mux = document.getElementById('dabMux'); if (mux) mux.style.display = 'none';
+  const bt  = document.getElementById('dabPane'); if (bt) bt.style.display = 'none';
+  const dt  = document.getElementById('decText'); if (dt) dt.style.display = '';
+  {
     /* ★★★ DO NOT RESTORE THE FREQUENCY FROM A CLIENT-SIDE COPY. This used to write dabPrevFreq
      *  back into spec.frequency, and that copy can be stale — the server is the only thing that
      *  knows where the radio actually ended up. On Stuart's V4 the readout came back 200 kHz low
@@ -4436,8 +4495,6 @@ function dabSetMode(on: boolean) {
     const ds3 = document.getElementById('decStatus');
     if (ds3) ds3.textContent = '';
   }
-  dabSetPane(dabPane);
-  dabRender();
 }
 
 /* ★★★ THE DESKTOP BAR'S MODE ROW IS GONE. #bar was retired in favour of the one unified card

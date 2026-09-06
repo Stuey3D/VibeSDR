@@ -185,6 +185,20 @@ export interface DabState {
   fibOk: number; fibTotal: number; fibRate: number; frames: number;
   sid: number; bitrate: number; protection: string;
   services: { sid: number; label: string; codec: string; subch: number }[];
+  /* ★ The diagnostics the server has sent all along and the client never typed. `rfCentreHz` is
+   *  what the RADIO is on, beside `centreHz` which is what was asked for — the one pair that told
+   *  the 2026-09-04 bring-up apart from a dead decoder (see vibe_dab_service.h). */
+  rfCentreHz?: number; rfRateHz?: number;
+  prsRef?: number; prsRatio?: number; erased?: number; reacquires?: number; syncJumps?: number;
+  rsFixed?: number; rsLost?: number; sfOk?: number; sfTried?: number; sfFireBad?: number;
+  mp2In?: number; mp2Bad?: number; mp2Concealed?: number; mp2NoSync?: number;
+  dls?: string; dlsCrcOk?: number; dlsCrcFail?: number;
+  aacRateHz?: number; aacCh?: number; aacServerSide?: boolean;
+  dropped?: number;
+  /** Set (to the length snprintf wanted) when the server had to send a stub instead of the block. */
+  truncated?: number;
+  /** Client-side: the list is the last good one, held while the server reports none. */
+  held?: boolean;
 }
 
 export interface SpectrumCallbacks {
