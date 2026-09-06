@@ -157,7 +157,13 @@ public:
     /** @return samples per channel written, or 0 on a bad frame. */
     int decode(const uint8_t* frame, size_t n, std::vector<float>& out) {
         const Mp2Info f = mp2Header(frame, n);
-        if (!f.valid || size_t(f.frameBytes) > n) return 0;
+        /* ★★★ SEPARATE THE TWO WAYS A FRAME DIES, because they have opposite causes and only one
+         *  of them is fixable by us. A bad HEADER means the bytes we were handed are not an MP2
+         *  frame at all — wrong length, wrong sync — which is an assembly or framing fault. A
+         *  failed CRC means the bytes ARE a frame and the bits inside it are wrong, which is
+         *  residual bit error rate out of the Viterbi. Counted apart, "20.6% of frames bad" stops
+         *  being one number and becomes a diagnosis. */
+        if (!f.valid || size_t(f.frameBytes) > n) { ++hdrBad_; return 0; }
         info_ = f;
         const AllocTable& tab = allocTableFor(f);
         const int nch = f.channels, sblimit = tab.sblimit;
@@ -207,7 +213,7 @@ public:
          *  rather than decoded: the allocation is what tells the reader how to interpret every
          *  following bit, so a wrong one does not degrade the audio, it replaces it with noise at
          *  full scale. Refusing costs 24 ms of silence; decoding it costs the listener's ears. */
-        if (haveCrc && mp2Crc16(frame, crcFrom, br.bitPos()) != wantCrc) return 0;
+        if (haveCrc && mp2Crc16(frame, crcFrom, br.bitPos()) != wantCrc) { ++crcBad_; return 0; }
 
         scfIdx_.clear();
         float sf[2][32][3] = {};
@@ -404,6 +410,10 @@ public:
     /** How many scale factors the squeal guard has pulled back — published, so the underlying
      *  error rate stays visible rather than being hidden by the concealment. */
     uint32_t scfClamped() const { return sfClamped_; }
+    /** ★ Frames refused for not being frames at all (framing fault) vs frames whose bits failed
+     *  the CRC (bit errors). See the note at the header check. */
+    uint32_t hdrBad() const { return hdrBad_; }
+    uint32_t crcBad() const { return crcBad_; }
     /** ★★★ CALL THIS WHENEVER THE FRAME RUN BREAKS. The guard's reference is "what this sub-band
      *  was doing a moment ago", and after a gap it was doing it a moment ago in a different piece
      *  of music. Stale history would fight the first frames back in. */
@@ -461,6 +471,7 @@ private:
     uint8_t sfHist_[2][32] = {};
     bool    sfHistValid_[2][32] = {};
     uint32_t sfClamped_ = 0;
+    uint32_t hdrBad_ = 0, crcBad_ = 0;
 
     /** CRC-8, G2 = 0x1D, over the three MSBs of each scale factor in [sbLo, sbHi]. */
     uint8_t scfCrc8(int sbLo, int sbHi, uint8_t init, bool invert) const {
