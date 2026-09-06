@@ -1411,6 +1411,20 @@ export class AudioPlayer {
       Managed ?? (typeof MediaSource !== 'undefined' ? MediaSource : undefined);
     this.mseManaged = !!Managed && MS === Managed;
     this.mseStreaming = false; this.mseSawStreaming = false;
+    /* ★★★ 1024 FRAMING ON THIS PATH, ALWAYS — IT HAS EXACTLY ONE CONSUMER AND IT CANNOT DO 960.
+     *  MediaSource is only reached when WebCodecs is absent or has failed us, which in practice
+     *  means Safari, and Apple's decoder has been measured twice as unable to handle 960-sample
+     *  AAC frames: afconvert renders 500 access units as 32.000 s where the air says 30.000
+     *  (500 x 1024/16000 exactly), and Safari's AudioDecoder refuses a 960 configuration outright.
+     *  ★★★ DECLARING 960 HERE PRODUCES THE SLOW PLAYBACK STUART HEARS: the config says one frame
+     *      length and the decoder uses another, so the timeline and the audio disagree by
+     *      1024/960 — "the barry white impressions are back but it is stereo and it is sounding
+     *      better", which is the MediaSource switch working and the framing still wrong.
+     *  ★ Both halves move together: the AudioSpecificConfig below and the samples-per-AU on the
+     *    timeline are built from this same flag, so they cannot disagree about the frame length.
+     *  ★ It does not touch the WebCodecs path, where 960 is declared truthfully and only dropped
+     *    when a decoder actually rejects it. */
+    this.aacUse960 = false;
     /* ★★★ THE MSE TIMELINE RUNS AT THE OUTPUT RATE, NOT THE CORE — see _ascExplicitSbr. */
     const outRate = this._sbrOutRate(coreRateHz);
     const asc = outRate ? this._ascExplicitSbr(coreRateHz, outRate, channels, this.aacUse960)
