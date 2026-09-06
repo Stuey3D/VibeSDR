@@ -6808,6 +6808,9 @@ struct LocalSdrShim::Impl {
              rc / 1e6, ar, g_dabSavedAudio.load() / 1e6);
     }
 
+    /** ★ Has the DAB audio buffer reached its working depth? See the pre-buffer note below. */
+    bool dabPrimed_ = false;
+
     void pumpDabPlusAudio() {
         std::vector<uint8_t> au;
         while (g_dab.takeAdts(au)) {
@@ -6866,8 +6869,96 @@ struct LocalSdrShim::Impl {
          *    much per block makes the output as smooth as the capture that drives it, with no
          *    added latency — the surplus simply waits in pcm_ for the next block, which is what
          *    the two-second bound there was always for. */
-        const size_t allow = iqSamples ? (iqSamples * 3) / 128 : size_t(-1);
-        const size_t have  = std::min(g_dab.pcmAvailable(), allow);
+        /* ★★★ PACE AGAINST THE RATE THE RADIO IS ACTUALLY ON, NOT A HARD-CODED ONE.
+         *  ★★★ THIS WAS THE STUTTER. The constant was 3/128 = 48000/2048000, written when the
+         *      capture rate WAS 2.048 MS/s. DAB has captured at 2.4 MS/s since 4.7.x — RTL-SDRs
+         *      are unreliable at 2.048 and vibe_dab_resample.h converts 64/75 — and this call
+         *      receives the CAPTURE buffer, so every block claimed to represent
+         *          2400000 * 3/128 = 56250 audio frames a second
+         *      against the 48000 that actually exist: 17.2% too fast, for ever. The consumer
+         *      therefore drained the buffer faster than the decoder could fill it no matter how
+         *      deep it started, which is why pcmAvailable() sawtoothed straight through zero
+         *      several times a second while the physical layer measured perfect — FIB 1.000,
+         *      every super frame decoding, four different aerials, all the same.
+         *  ★★★ AND IT IS THE SAME FAULT SHAPE AS THE 960-SAMPLE FRAMING AND THE DAB+ OUTPUT RATE:
+         *      a rate constant that was true when it was written and silently stopped being true.
+         *      None of them corrupt the audio — they all just make it arrive at the wrong speed,
+         *      which is why every quality figure stayed clean while it sounded wrong.
+         *  ★ Derived, so a rate change cannot desynchronise it again. sampleRate is what
+         *    setSampleRate actually achieved, not what was asked for. */
+        const double capRate = sampleRate > 0.0 ? sampleRate : 2048000.0;
+        const size_t allow = iqSamples
+            ? size_t((double(iqSamples) * 48000.0) / capRate)
+            : size_t(-1);
+
+        /* ★★★ PRE-BUFFER, OR THE LEVEL SITS AT ZERO FOR EVER AND EVERY WOBBLE IS AN UNDERRUN.
+         *
+         *  ★★★ THE FAULT THIS FIXES, MEASURED. Sampling pcmAvailable() on 11A while talkSPORT 2
+         *      played: median 53 ms, max 150 ms, MIN ZERO — and 29.6% of samples holding under
+         *      10 ms of audio. The raw trace sawtooths straight through empty:
+         *          1440  0  0  0  3960  2160  360  7200  4320  2880  1080  5040  3240  1440  0 0 0
+         *      Several complete underruns a second, with the physical layer perfect: FIB 1.000,
+         *      every super frame decoding. That is the stutter Stuart could not reconcile with a
+         *      clean signal, and it survived four different aerials because it was never RF.
+         *
+         *  ★★★ WHY IT COULD NEVER RECOVER ON ITS OWN. `allow` correctly paces output at real time,
+         *      so the consumer cannot drain faster than the decoder fills — but that also means
+         *      the level never CLIMBS. Whatever depth it starts at, it keeps. Starting at zero it
+         *      stays at zero, and then any lumpiness in arrival is a gap.
+         *
+         *  ★★★ AND DAB+ IS LUMPY BY CONSTRUCTION, WHICH IS WHY MP2 HID THIS. MP2 delivers 24 ms
+         *      per logical frame — near enough continuous. DAB+ delivers a whole 120 ms SUPER
+         *      FRAME at once, five logical frames apart, so between bursts there is genuinely
+         *      nothing to send. A buffer hovering at zero cannot absorb a 120 ms arrival period.
+         *
+         *  ★★ SO: FILL BEFORE STARTING, AND RE-FILL AFTER ANY GAP. 250 ms is two super frames plus
+         *     margin — enough to cover the arrival period and the AAC decoder's own lag, and it is
+         *     paid ONCE at tune-in, not on every block. The cost is a quarter second before audio
+         *     starts; the alternative is a quarter second of stutter every second after it.
+         *  ★ Deliberately NOT the two-second bound in pcm_ — that is a ceiling against runaway
+         *    latency, not a target depth. This is the floor, and they are different decisions.
+         *  ★ Stuart's rule, and this is exactly it: "a slight bubbling mud or very slight silence
+         *    is fine but squeals is absolutely not" — a silent quarter second at tune-in is the
+         *    cheapest possible way to buy a stream that then runs. */
+        static constexpr size_t kPrimeFrames = 48000 / 4;    // 250 ms at 48 kHz — the working depth
+        const size_t avail = g_dab.pcmAvailable();
+        if (!dabPrimed_) {
+            if (avail < kPrimeFrames) return;                // still filling — send nothing yet
+            dabPrimed_ = true;
+        }
+
+        /* ★★★ STEER THE DEPTH, DO NOT GATE ON IT — AND NEVER RE-PRIME ON A MOMENTARY ZERO.
+         *
+         *  ★★★ MY FIRST VERSION RE-PRIMED WHENEVER avail HIT 0, AND THAT MADE IT WORSE. Arrival
+         *      is BURSTY by construction — a whole 120 ms super frame lands at once — so touching
+         *      zero between bursts is normal, not a stall. Re-priming turned each of those into a
+         *      deliberate quarter second of silence: a fix that manufactured the very gap it was
+         *      added to prevent. Measured after it: median depth up from 53 ms to 143 ms, but the
+         *      trace still read `... 4680  0  15480 ...` and 5.9% of samples sat under 10 ms.
+         *
+         *  ★★★ AND DEPTH CANNOT REBUILD BY ITSELF, WHICH IS THE PART THAT NEEDED THINKING ABOUT.
+         *      `allow` paces output at exactly real time, so the consumer can never drain faster
+         *      than the decoder fills — but it can never CATCH UP either. Whatever depth survives
+         *      a bad patch is the depth we keep for ever. The pre-buffer alone therefore fixes
+         *      tune-in and nothing else.
+         *
+         *  ★★ SO THE PACE IS TRIMMED BY AN EIGHTH, EITHER WAY. Below the target, send 7/8 of real
+         *     time so the backlog grows back over a few seconds — inaudible, because it is a 12.5%
+         *     change in how much is handed over per block, not a change in the audio itself.
+         *     Far above it, send 9/8 to shed latency that would otherwise stay for the whole
+         *     session. The result steers towards 250 ms and stays there instead of walking.
+         *  ★ 12.5% deliberately, not more: this is buffer control, not resampling. The samples are
+         *     never altered — only how many of them are released per block. Anything larger starts
+         *     to be audible as the stream running ahead or behind.
+         *  ★ No gating anywhere in here: if there is nothing to send this block, nothing is sent
+         *    and the next burst arrives as usual. Silence is only ever produced upstream, by the
+         *    timeline keeper covering a genuinely lost super frame. */
+        size_t paced = allow;
+        if (allow != size_t(-1)) {
+            if      (avail < kPrimeFrames)         paced = allow - allow / 8;   // rebuild depth
+            else if (avail > kPrimeFrames * 3)     paced = allow + allow / 8;   // shed latency
+        }
+        const size_t have  = std::min(avail, paced);
         if (have >= 480) {                                  // 10 ms at 48 kHz
             std::vector<float> f(have * 2);
             const size_t got = g_dab.takePcm(f.data(), have);
@@ -8358,6 +8449,7 @@ struct LocalSdrShim::Impl {
             const bool on = onV != 0;
             if (!on) {
                 g_dabMode.store(false);
+                dabPrimed_ = false;
                 /* ★★★ GIVE THE SHARED RECEIVER BACK EXACTLY AS WE FOUND IT. Restoring the lock
                  *  is not enough on its own: the radio is sitting on a multiplex at 2.048 MS/s,
                  *  and the lock is only re-applied by a rebuild that may not come. Put the rate
@@ -8555,6 +8647,7 @@ struct LocalSdrShim::Impl {
              *    every centre-frequency write (see startHwWriter) — so the filter survives, and
              *    the frequency is the value nothing follows. The reverse has no such repair. */
             g_dabMode.store(true);
+            dabPrimed_ = false;   // ★ a new multiplex fills from empty
             /* ★★★ APPLY THE IF FILTER — NOTHING ELSE WILL. applyAutoIf() is called from
              *  retune(), and this path deliberately does not go through retune: an ensemble IS
              *  the capture, so it moves the hardware centre directly (see the note above). The
