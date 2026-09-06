@@ -947,7 +947,9 @@ export class AudioPlayer {
       /* ★ Low nibble = the CORE channel count, bit 7 = parametric stereo. See the server's note
        *  on aacParametricStereo(): a mono core with PS must be declared as HE-AAC v2 or the
        *  decoder plays the core alone — mono, and half the bandwidth. */
-      this.aacPs = (channels & 0x80) !== 0;
+      const ps = (channels & 0x80) !== 0;
+      if (ps !== this.aacPs) { this.aacTriedMse = false; this.aacMonoFrames = 0; }
+      this.aacPs = ps;
       this._decodeAac(buf, channels & 0x0f, new DataView(buf).getUint32(2, true));
       return;
     }
@@ -1568,6 +1570,9 @@ export class AudioPlayer {
   private aacUse960 = true;
   /** Parametric stereo (HE-AAC v2): mono core, stereo out. Set from the frame header. */
   private aacPs = false;
+  /** Consecutive mono frames from a service declared as parametric stereo — see _onAacData. */
+  private aacMonoFrames = 0;
+  private aacTriedMse = false;
   private _recoverAac(e: unknown) {
     if (this.aacBroken) return;
     /* ★★★ NEVER PRODUCED A FRAME? THE CONFIG IS THE SUSPECT, NOT THE DATA. Try the other frame
@@ -1622,6 +1627,33 @@ export class AudioPlayer {
      *  ★ It is read from the AudioData rather than computed from the ADTS, because whether the
      *    decoder applied SBR (doubling it) is the decoder's business and differs between them. */
     this.aacOkFrames++;                  // ★ proof the browser CAN decode this — see _recoverAac
+    /* ★★★ THE DECODER SAID YES AND THEN DID NOT DO IT. A parametric-stereo service has a MONO
+     *  core and a reconstructed second channel; if the service is PS and the decoder keeps
+     *  handing back ONE channel, it is not reconstructing anything — we are hearing the bare
+     *  16 kHz core, which is Stuart's "hold music on a phone call" and, after the AOT 29 fix,
+     *  still "sounds like arse in safari".
+     *  ★★★ Safari's WebCodecs AudioDecoder accepts the HE-AAC v2 configuration and decodes only
+     *      the core; its MEDIASOURCE path is the full AVFoundation pipeline and is a different
+     *      decoder entirely. We never reached it because WebCodecs exists, so its presence was
+     *      being taken as proof it was the better route. It is not, for this codec.
+     *  ★★ Judged on OUTPUT, not on what the config promised: eight frames of mono when stereo was
+     *     declared is a fact, where isConfigSupported was only ever a prediction.
+     *  ★ One switch per service. If MediaSource cannot take it either, _startMse returns false
+     *    and nothing is worse than it was. */
+    if (this.aacPs && ch === 1 && !this.aacTriedMse) {
+      if (++this.aacMonoFrames >= 8) {
+        this.aacTriedMse = true;
+        this._aacNote('parametric stereo declared but the decoder returns mono — '
+                    + 'switching to MediaSource');
+        try { this.aacDec?.close(); } catch { /* already gone */ }
+        this.aacDec = null; this.aacTs = 0; this.aacOkFrames = 0;
+        ad.close();
+        void this._startMse(this.aacRate, this.aacCh);
+        return;
+      }
+    } else if (ch > 1) {
+      this.aacMonoFrames = 0;
+    }
     /* ★★★ TRUST THE FRAME COUNT OVER THE REPORTED RATE. Under SBR an access unit is 1024 CORE
      *  samples and the decoder returns 2048 at DOUBLE the rate — but some decoders report the
      *  CORE rate on the AudioData while handing back the doubled samples. Resampling from the
