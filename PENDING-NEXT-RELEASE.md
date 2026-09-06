@@ -4,7 +4,13 @@ Written 2026-08-18, while 10.3.1 (build 140) was in review. These are changes th
 exist in the tree but are NOT in the build users will get, so they are invisible
 until something deliberately carries them forward.
 
-## 1. The in-app release note for 10.3.1 is WRONG in the shipped build
+## 1. ~~The in-app release note for 10.3.1 is WRONG in the shipped build~~ — CARRIED, 2026-09-06
+
+★ VERIFIED in the tree and shipping with 10.5: the V10.3.1 entry in `AboutOverlay.tsx` now
+attributes the local-address silence to the transport fallback, not the session-registration bug.
+This item is closed the moment 10.5 is released; left here, struck through, until it is.
+
+### The original note
 `src/components/AboutOverlay.tsx` — the V10.3.1 entry in build 140 blames the
 local-address silence on the session-registration bug. That bug was real and is
 fixed, but it is **not** what was silencing UberSDR over a LAN address: the audio
