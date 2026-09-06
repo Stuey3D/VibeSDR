@@ -1203,6 +1203,29 @@ export class AudioPlayer {
    *  table 2): 16k core -> 32k out and 24k core -> 48k out both carry SBR; 32k and 48k do not.
    *  The server sends only the CORE rate, and it is right to — but the fMP4 timeline has to know
    *  what actually comes OUT. Returns 0 when there is no SBR. */
+  /** Samples the DECODER will hand back per access unit: its frame length, doubled under SBR. */
+  private _msePerAu(coreRateHz: number): number {
+    return (this.aacUse960 ? 960 : 1024) * (this._sbrOutRate(coreRateHz) ? 2 : 1);
+  }
+
+  /** ★★★ THE TIMESCALE ABSORBS A DECODER THAT CANNOT DO 960 — the same arithmetic that already
+   *  rescues the WebCodecs path, applied to the mp4 timeline.
+   *  A DAB+ access unit is 60 ms. Apple cannot decode 960-sample frames, so it hands back 1024
+   *  core samples — 2048 under SBR — where 60 ms at 32 kHz is only 1920. Its output is genuinely
+   *  6.67% too many samples, so NO choice of duration is right at the nominal rate: declare 1920
+   *  and the samples do not fit; declare 2048 and the unit lasts 64 ms. Both play slow, which is
+   *  exactly what Stuart heard twice — "barry white ... but it is stereo and it is sounding
+   *  better", then "still slow".
+   *  ★ So state the rate at which those samples ARE 60 ms: 2048 / 0.060 = 34133 Hz. The duration
+   *    then matches the decoder's output AND the timeline matches real time, and the samples play
+   *    slightly faster, which is what restores the pitch. An unusual track rate is legal in mp4
+   *    and is the honest description of what this decoder produces.
+   *  ★ With a decoder that DOES do 960 the numbers collapse back to the nominal rate on their own
+   *    — 1920 / 0.060 = 32000 — so there is no special case to maintain. */
+  private _mseTimescale(coreRateHz: number): number {
+    return Math.round(this._msePerAu(coreRateHz) / 0.060);
+  }
+
   private _sbrOutRate(coreRateHz: number): number {
     if (coreRateHz === 16000) return 32000;
     if (coreRateHz === 24000) return 48000;
@@ -1284,10 +1307,7 @@ export class AudioPlayer {
       } else {
         // ★ 2048 under SBR: the AU is 1024 CORE samples, which is 2048 at the doubled output rate
         //   the timeline is written in. See _ascExplicitSbr.
-        /* ★ The timeline must match what the DECODER produces, not what the air carries: if we
-         *  had to fall back to 1024-sample framing (see aacUse960) it will hand back 1024/2048. */
-        const per = this.aacUse960 ? 960 : 1024;
-        this.mseDur = this._sbrOutRate(coreRateHz) ? per * 2 : per;
+        this.mseDur = this._msePerAu(coreRateHz);
         this._mseFeed(new Uint8Array(buf, 6 + 7));  // strip the ADTS header; the ASC has the config
         return;
       }
@@ -1429,7 +1449,7 @@ export class AudioPlayer {
     const outRate = this._sbrOutRate(coreRateHz);
     const asc = outRate ? this._ascExplicitSbr(coreRateHz, outRate, channels, this.aacUse960)
                         : this._ascFor(coreRateHz, channels, this.aacUse960);
-    const tsRate = outRate || coreRateHz;
+    const tsRate = this._mseTimescale(coreRateHz);
     if (!MS)  { this._aacNote('no MediaSource in this browser'); return false; }
     if (!asc) { this._aacNote(`no config for ${coreRateHz} Hz / ${channels}ch`); return false; }
     const mime = [...(this.aacPs ? ['audio/mp4; codecs="mp4a.40.29"'] : []),
@@ -1505,8 +1525,7 @@ export class AudioPlayer {
           }, 1500);
           this.mseEl = el; this.mseSrc = ms; this.mseBuf = sb;
           this.mseCore = coreRateHz; this.mseCh = channels;
-          const per0 = this.aacUse960 ? 960 : 1024;
-          this.mseSeq = 1; this.mseTime = 0; this.mseDur = outRate ? per0 * 2 : per0;
+          this.mseSeq = 1; this.mseTime = 0; this.mseDur = this._msePerAu(coreRateHz);
           this.mseQueue = [initSegment(tsRate, channels, asc)];
           this._mseDrain();
           void el.play().catch(() => { /* a gesture may be needed; the buffer keeps filling */ });
