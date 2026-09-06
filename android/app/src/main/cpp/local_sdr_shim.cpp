@@ -6746,7 +6746,11 @@ struct LocalSdrShim::Impl {
         std::vector<uint8_t> au;
         while (g_dab.takeAdts(au)) {
             const uint32_t sr = uint32_t(g_dab.aacCoreRateHz());
-            const uint8_t  ch = uint8_t(g_dab.aacChannels());
+            /* ★ The CORE count, not the output count — see DabService::aacCoreChannels(). The
+             *  client uses this only to build the decoder's configuration; what actually plays
+             *  comes from the decoder's own AudioData, so parametric stereo still arrives in
+             *  stereo. */
+            const uint8_t  ch = uint8_t(g_dab.aacCoreChannels());
             if (sr == 0 || au.empty()) continue;
             std::vector<uint8_t> frame;
             frame.reserve(6 + au.size());

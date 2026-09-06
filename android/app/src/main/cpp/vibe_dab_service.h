@@ -278,6 +278,14 @@ public:
      *  itself, so this is what a decoder must be CONFIGURED with, not what it will output. */
     int aacCoreRateHz() { std::lock_guard<std::mutex> lk(m_); return afmt_.coreRateHz; }
     int aacChannels()   { std::lock_guard<std::mutex> lk(m_); return aacOutCh_; }
+    /** ★★★ THE CORE CHANNEL COUNT — 1 FOR PARAMETRIC STEREO, WHICH IS WHAT A DECODER MUST BE
+     *  TOLD. aacChannels() is what comes OUT (PS reconstructs a second channel from a mono core);
+     *  the AudioSpecificConfig and the ADTS header describe what goes IN. This file already wrote
+     *  the right number into the ADTS and the frame header sent the other one, so the browser
+     *  built its config from "2 channels" over a bitstream containing one — and Apple's decoder
+     *  refused every frame: "InternalAudioDecoderCocoa decoding failed", 0 good frames, for as
+     *  long as DAB+ has existed on Safari. Chromium is lenient about it; Apple is not. */
+    int aacCoreChannels() { std::lock_guard<std::mutex> lk(m_); return aacCoreCh_; }
 
     /** The station list and the signal block, as the web client wants them. */
     std::string json() {

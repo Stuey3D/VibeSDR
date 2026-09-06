@@ -359,6 +359,17 @@ function onFrame(buf) {
     return;
   }
   if (format === 0) { emit(new Int16Array(buf, 6, (buf.byteLength - 6) >> 1), channels); return; }
+  /* ★★★ DAB+ (format 4) GOES TO THE PAGE, BUT THE SOCKET STAYS HERE. It cannot be decoded in a
+   *  worker: the AAC path negotiates a decoder configuration, falls back between 960 and 1024
+   *  frame lengths, and falls back again to MediaSource — which needs an <audio> element and a
+   *  document, neither of which exists in here.
+   *  ★★★ BUT "unhandled" TORE DOWN THE WHOLE WORKER, taking the WebSocket and the Opus decoder to
+   *      the main thread with it — so selecting one DAB+ service moved EVERYTHING onto the thread
+   *      that also draws the waterfall. Both consoles showed it: "worker path failed (format 4) —
+   *      falling back to the main thread". Forwarding the frame instead keeps the network and
+   *      every other format off the main thread, and hands over only what genuinely cannot run
+   *      here. The buffer is transferred, not copied. */
+  if (format === 4) { self.postMessage({ type: 'passthru', buf }, [buf]); return; }
   // ★ Legacy IMA-ADPCM is retired server-side. Hand anything else back rather than guess.
   self.postMessage({ type: 'unhandled', format });
 }
@@ -834,7 +845,8 @@ export class AudioPlayer {
 
       w.onmessage = (e: MessageEvent) => {
         const d = e.data as { type?: string; s?: string; msg?: string; n?: number;
-                              pcm?: Int16Array; ch?: number; why?: string; format?: number };
+                              pcm?: Int16Array; ch?: number; why?: string; format?: number;
+                              buf?: ArrayBuffer };
         switch (d?.type) {
           case 'status':
             this.workerOpen = d.s === 'open';
@@ -848,6 +860,9 @@ export class AudioPlayer {
           // ★ Recording taps PCM on THIS side, so the Worker forwards it — but only while a
           //   recording is running. See emit() in WORKER_SRC.
           case 'pcm':    if (d.pcm && this.rec) this._recordPcm(d.pcm, d.ch || 1); break;
+          /* ★ A frame the worker cannot decode but the page can — DAB+ AAC. See the worker's own
+           *   note: forwarding it keeps the socket and every other format off the main thread. */
+          case 'passthru': if (d.buf) this._handleFrame(d.buf as ArrayBuffer); break;
           /* ★★★ A DECODER THAT WILL NOT WORK IN THE WORKER MUST NOT MEAN SILENCE. Fall the whole
            *     path back to the page, which still has the WASM decoder and every fallback this
            *     class has always had. Better a busy main thread than no audio. */
