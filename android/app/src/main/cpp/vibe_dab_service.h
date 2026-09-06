@@ -261,6 +261,29 @@ private:
                 if (rx_.selectService(want_)) sid_ = want_;
 
             drainAudio();
+            /* ★★★ LET GO OF THE LOCK BETWEEN FRAMES, OR AN UNLOCKABLE CHANNEL STARVES EVERYTHING.
+             *  ★★★ THE FAULT THIS FIXES, measured. This inner loop holds m_ for as long as there
+             *      is a frame's worth of IQ waiting, and json() — the station list and the whole
+             *      signal block the client reads — takes the same m_. On a channel that CANNOT
+             *      lock, the receiver runs its full re-acquisition scan on every frame, falls
+             *      behind real time, and the loop therefore never runs out of input: m_ is held
+             *      continuously and the stats stop dead. Tuning 10D produced EXACTLY ONE dab
+             *      message and then nothing for 58 seconds, while 11A streamed normally — same
+             *      build, same aerial, minutes apart. From outside it looks like "good signal, no
+             *      multiplex", which is exactly how Stuart reported it.
+             *  ★★ The yield is unconditional and cheap: unlocking and relocking a mutex nobody
+             *     else wants costs almost nothing, and when somebody DOES want it they get it
+             *     within one frame instead of never. Decoding is unaffected — the loop condition
+             *     is re-tested afterwards, and a producer that added more IQ meanwhile is served
+             *     on the next pass.
+             *  ★ This is the same class of fault as the PCM buffer sharing m_ with the decoder
+             *    (see takePcm): one lock covering both the slow work and the thing that reports on
+             *    it. The audio path was given its own lock; the reporting path needs the door
+             *    opening periodically instead. */
+            lk.unlock();
+            std::this_thread::yield();
+            lk.lock();
+            if (stop_) break;
         }   // while (iq_.size() >= need)
         }   // while (!stop_)
     }

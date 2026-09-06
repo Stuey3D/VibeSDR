@@ -7021,6 +7021,35 @@ struct LocalSdrShim::Impl {
          *  ★ Stuart's rule, and this is exactly it: "a slight bubbling mud or very slight silence
          *    is fine but squeals is absolutely not" — a silent quarter second at tune-in is the
          *    cheapest possible way to buy a stream that then runs. */
+        /* ★★★ THE SIGNAL BLOCK GOES OUT FIRST, BEFORE ANY AUDIO GATE CAN SWALLOW IT.
+         *  ★★★ IT USED TO SIT AT THE BOTTOM OF THIS FUNCTION, and the pre-buffer I added in 416
+         *      returns above it — so on a channel with NO AUDIO YET the stats were never sent at
+         *      all. A multiplex that cannot lock produces no PCM, the 250 ms pre-buffer is never
+         *      satisfied, the function returns every time, and the client sees NOTHING: no
+         *      station list, no lock flag, no signal figures. From the outside that reads as "good
+         *      clear visual signal but no multiplex being found", which is exactly how Stuart
+         *      reported 10C and 10D — a regression I introduced, not a reception fault.
+         *      MEASURED: tuning 10D produced exactly ONE dab message and then nothing for 58
+         *      seconds, while 11A streamed normally on the same build minutes apart.
+         *  ★★ REPORTING MUST NOT DEPEND ON THE THING IT REPORTS ON. The whole point of the signal
+         *     block is to say what is happening when audio ISN'T — a receiver that goes silent
+         *     about a channel it cannot decode is at its least useful exactly when it is most
+         *     needed. Emitted unconditionally, twice a second, whatever the audio is doing. */
+        {
+            const double tnow = Impl::nowSecs();
+            if (tnow - lastDabJson_ >= 0.5) {
+                lastDabJson_ = tnow;
+                const std::string j = g_dab.json();
+                /* ★★★ ALL THREE REGISTRIES. allSpecClientsLocked() unions specClient, specExtra
+                 *  and clientDsp and is the ONLY definition of "every spectrum listener" worth
+                 *  trusting; a hand-rolled clientDsp loop once sent this to nobody on a shared
+                 *  receiver. */
+                std::vector<std::shared_ptr<net::Socket>> socks;
+                { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+                for (auto& sk : socks) sendText(sk, j);
+            }
+        }
+
         static constexpr size_t kPrimeFrames = 48000 / 4;    // 250 ms at 48 kHz — the working depth
         const size_t avail = g_dab.pcmAvailable();
         if (!dabPrimed_) {
@@ -7116,21 +7145,7 @@ struct LocalSdrShim::Impl {
                 dabInject_ = false;
             }
         }
-        /* ★ The signal block twice a second: fast enough to watch a mux come and go, slow enough
-         *  that it is not a load. The station list rides with it — it changes rarely, and sending
-         *  it whole means a client that joins mid-stream is never missing rows. */
-        const double now = Impl::nowSecs();
-        if (now - lastDabJson_ >= 0.5) {
-            lastDabJson_ = now;
-            const std::string j = g_dab.json();
-            /* ★★★ ALL THREE REGISTRIES — see the audio note above. allSpecClientsLocked()
-             *  already unions specClient, specExtra and clientDsp, and is the ONLY definition of
-             *  "every spectrum listener" worth trusting; the hand-rolled clientDsp loop that used
-             *  to be here sent the status block to nobody on a shared receiver. */
-            std::vector<std::shared_ptr<net::Socket>> socks;
-            { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
-            for (auto& sk : socks) sendText(sk, j);
-        }
+        // ★ The signal block is emitted at the TOP of this function — see the note there.
     }
     double lastDabJson_ = 0;
     bool   dabLogged_ = false;
@@ -8753,9 +8768,22 @@ struct LocalSdrShim::Impl {
              *    down and went on air, halving the FIB rate.
              *  ★ Best effort: if the radio will not give 2.4 we ask for 2.048 and the service
              *    resamples only when it is actually handed 2.4. */
+            /* ★★★ THE FALLBACK TO 2.048 IS STICKY AND IT KILLS RECEPTION — measured, and it is
+             *  why Stuart saw "10C and 10D show good clear visual signals but no multiplex being
+             *  found". The tune asks for 2.4 MS/s and falls back to 2.048 if the readback does not
+             *  agree; the XCover delivers only ~94% of the samples at 2.048, so the receiver
+             *  starves and never locks. Worse, once it has fallen back EVERY LATER TUNE FALLS BACK
+             *  TOO — the log showed 10D at "rate 2048000" and then 11A, a channel that had locked
+             *  perfectly minutes earlier, also at "rate 2048000" with frames stuck at 0.
+             *  ★ So the readback is logged rather than trusted silently: a rate that quietly
+             *    halves the receiver's sensitivity must not be an unremarked side effect. */
             LocalSdrShim::instance().setSampleRate(2400000.0);
-            if (std::fabs(LocalSdrShim::instance().captureSpanHz() - 2400000.0) > 1000.0)
+            const double gotRate = LocalSdrShim::instance().captureSpanHz();
+            if (std::fabs(gotRate - 2400000.0) > 1000.0) {
+                LOGI("[DAB] ★ asked for 2.400 MS/s and the radio reports %.3f MS/s — falling back "
+                     "to 2.048, which this hardware may under-deliver", gotRate / 1e6);
                 LocalSdrShim::instance().setSampleRate(double(vibedab::DabService::kRateHz));
+            }
             rtlCenter.store(logical);
             /* ★★★ MODE FIRST, THEN THE FILTER, THEN THE FREQUENCY — AND THAT ORDER IS LOAD-BEARING.
              *  ★★★ THE IF FILTER WRITE MOVES THE TUNER. librtlsdr's rtlsdr_set_tuner_bandwidth()
