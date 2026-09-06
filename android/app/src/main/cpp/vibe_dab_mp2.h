@@ -163,7 +163,20 @@ public:
          *  failed CRC means the bytes ARE a frame and the bits inside it are wrong, which is
          *  residual bit error rate out of the Viterbi. Counted apart, "20.6% of frames bad" stops
          *  being one number and becomes a diagnosis. */
-        if (!f.valid || size_t(f.frameBytes) > n) { ++hdrBad_; return 0; }
+        if (!f.valid || size_t(f.frameBytes) > n) {
+            ++hdrBad_;
+            /* ★★★ AND WHICH KIND OF "not a frame" IT IS, because hdrBad alone cannot tell a
+             *  FRAMING fault from a BIT ERROR and I read it as if it could. An MPEG frame starts
+             *  with an 11-bit sync word of all ones. If those bits are present, we are looking at
+             *  a real frame header whose other fields are damaged — that is residual bit error
+             *  rate. If they are absent, these bytes are not the start of a frame at all, and the
+             *  fault is in how the logical frame was assembled or where it was cut.
+             *  ★ noSync counts the second kind: the one that is ours to fix. */
+            const bool sync = n >= 2 && frame[0] == 0xFF && (frame[1] & 0xE0) == 0xE0;
+            if (!sync) ++hdrNoSync_;
+            else if (f.valid) ++hdrTooLong_;     // real header, but longer than the bytes in hand
+            return 0;
+        }
         info_ = f;
         const AllocTable& tab = allocTableFor(f);
         const int nch = f.channels, sblimit = tab.sblimit;
@@ -414,6 +427,10 @@ public:
      *  the CRC (bit errors). See the note at the header check. */
     uint32_t hdrBad() const { return hdrBad_; }
     uint32_t crcBad() const { return crcBad_; }
+    /** ★ Of the hdrBad frames: how many carried NO sync word (a framing fault — ours) and how many
+     *  carried a valid header claiming more bytes than arrived (the LSF pairing's other arm). */
+    uint32_t hdrNoSync()  const { return hdrNoSync_; }
+    uint32_t hdrTooLong() const { return hdrTooLong_; }
     /** ★★★ CALL THIS WHENEVER THE FRAME RUN BREAKS. The guard's reference is "what this sub-band
      *  was doing a moment ago", and after a gap it was doing it a moment ago in a different piece
      *  of music. Stale history would fight the first frames back in. */
@@ -471,7 +488,7 @@ private:
     uint8_t sfHist_[2][32] = {};
     bool    sfHistValid_[2][32] = {};
     uint32_t sfClamped_ = 0;
-    uint32_t hdrBad_ = 0, crcBad_ = 0;
+    uint32_t hdrBad_ = 0, crcBad_ = 0, hdrNoSync_ = 0, hdrTooLong_ = 0;
 
     /** CRC-8, G2 = 0x1D, over the three MSBs of each scale factor in [sbLo, sbHi]. */
     uint8_t scfCrc8(int sbLo, int sbHi, uint8_t init, bool invert) const {
