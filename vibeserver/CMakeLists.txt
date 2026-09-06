@@ -382,6 +382,27 @@ target_link_libraries(test-radio-api PRIVATE vibeserver_core)
 #   without a device, a socket or the rest of the core.
 add_executable(test-utf8 "${CMAKE_CURRENT_SOURCE_DIR}/test-utf8.cpp")
 target_include_directories(test-utf8 PRIVATE "${CPP_DIR}")
+
+# ★★★ THE DAB TESTS ARE PART OF THE BUILD. Seventeen of them existed and not one was a target —
+#     each was "a two-line g++ command" nobody ran, which is how a 512-byte JSON buffer, an
+#     un-reversed X-PAD and a P/D flag read from the wrong bit all shipped past a test tree that
+#     would have caught two of the three. `ctest` (or `make dab-tests`) runs the lot; they are
+#     header-only and take seconds, with no radio.
+enable_testing()
+set(VIBE_DAB_TESTS modes channels prs sync ofdm interleave fec punct fic ficdec msc receiver
+                   resample superframe aac mp2 pad)
+add_custom_target(dab-tests)
+foreach(t ${VIBE_DAB_TESTS})
+  add_executable(test-dab-${t} "${CMAKE_CURRENT_SOURCE_DIR}/test-dab-${t}.cpp")
+  target_include_directories(test-dab-${t} PRIVATE "${CPP_DIR}")
+  target_compile_options(test-dab-${t} PRIVATE -O2)
+  add_test(NAME dab-${t} COMMAND test-dab-${t})
+  add_dependencies(dab-tests test-dab-${t})
+endforeach()
+# The offline replay harness: the same chain over a VIBE_IQ_DUMP capture, in seconds.
+add_executable(dab-offline "${CMAKE_CURRENT_SOURCE_DIR}/dab-offline.cpp")
+target_include_directories(dab-offline PRIVATE "${CPP_DIR}")
+target_compile_options(dab-offline PRIVATE -O2)
 if(APPLE)
   # libusb on macOS talks to IOKit; these are system frameworks, nothing to ship.
   target_link_libraries(vibeserver_core PUBLIC

@@ -46,6 +46,7 @@ public:
         if (idx == channel_) return;
         channel_ = idx;
         rx_.reset();
+        rx_.setCentreHz(double(kBandIII[idx].centreHz));
         iq_.clear();
         { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
         /* ★★★ AND DROP ANY HELD HALF-FRAME. lsfPend_ carries the first half of a 24 kHz Layer II
@@ -461,18 +462,33 @@ public:
                      s.reacquires, preTuneDropped_);
             j += rb;
         }
+        {
+            /* ★ What the FIC has said about the ensemble itself: ECC (with the EId, the world-unique
+             *  name of this multiplex), the CIF count the TII decoder keys on, and whether the MCI
+             *  is complete — the difference between "reading" and "read" (EN 300 401 6.4.2). */
+            char eb[96];
+            snprintf(eb, sizeof eb, ",\"ecc\":%d,\"cif\":%d,\"mci\":%s,\"nsvc\":%d",
+                     e.ecc, e.cifCount, e.mciComplete() ? "true" : "false", e.serviceCount);
+            j += eb;
+        }
         j += ",\"services\":[";
         bool first = true;
         for (const auto& kv : e.services) {
             const Service& sv = kv.second;
-            int sub = -1, type = -1;
-            for (const auto& c : sv.components) if (c.subChId >= 0) { sub = c.subChId; type = c.scType; if (c.primary) break; }
-            if (sub < 0) continue;
+            /* ★★★ TS 103 176 6.2.2: the list shows what the receiver can DECODE AND PRESENT, and
+             *  6.3.3: a service with incomplete MCI is ignored. So: audio services (a data service
+             *  would be a row that plays nothing), with a label and a sub-channel we know, and no
+             *  CA on the component (EN 300 401 6.3.1: "shall not decode"). A row that cannot play
+             *  is the AGENTS.md dead control in list form. */
+            if (sv.isData || !sv.complete(e.subChannels)) continue;
+            const ServiceComponent* pc = sv.primaryComponent();
+            if (!pc || pc->tmid != 0 || pc->subChId < 0 || pc->ca) continue;
             if (!first) j += ',';
             first = false;
-            snprintf(b, sizeof b, "{\"sid\":%u,\"label\":\"%s\",\"codec\":\"%s\",\"subch\":%d}",
-                     unsigned(kv.first), esc(sv.label).c_str(),
-                     type == 63 ? "DAB+" : type == 0 ? "MP2" : "?", sub);
+            snprintf(b, sizeof b, "{\"sid\":%u,\"label\":\"%s\",\"short\":\"%s\",\"codec\":\"%s\",\"subch\":%d,\"pty\":%d,\"slides\":%s}",
+                     unsigned(kv.first), esc(sv.label).c_str(), esc(sv.shortLabel).c_str(),
+                     pc->scType == 63 ? "DAB+" : pc->scType == 0 ? "MP2" : "?", pc->subChId,
+                     sv.pty, sv.hasSlideshow() ? "true" : "false");
             j += b;
         }
         j += "]}";

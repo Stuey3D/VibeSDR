@@ -104,7 +104,7 @@ public:
         std::vector<Cplx> work(iq + start, iq + start + symLen * size_t(mode_->symbolsPerFrame));
         const float frac = fractionalOffset(work.data(), work.size(), *mode_, 8);
         stats_.freqOffsetHz  = offsetHz(frac, *mode_);
-        stats_.freqOffsetPpm = float(double(stats_.freqOffsetHz) / 222.064e6 * 1e6);  // vs 11D
+        stats_.freqOffsetPpm = float(double(stats_.freqOffsetHz) / centreHz_ * 1e6);
         if (std::fabs(frac) > 1e-6f) derotate(work.data(), work.size(), double(frac) / double(fft_));
 
         const int K = mode_->carriers;
@@ -153,7 +153,7 @@ public:
             intShift_ = bestShift;
             stats_.intOffsetCarriers = bestShift;
             stats_.freqOffsetHz += float(bestShift) * float(mode_->spacingHz);
-            stats_.freqOffsetPpm = float(double(stats_.freqOffsetHz) / 222.064e6 * 1e6);
+            stats_.freqOffsetPpm = float(double(stats_.freqOffsetHz) / centreHz_ * 1e6);
             stats_.prsCorrelation = best / float(K);
         }
 
@@ -398,6 +398,9 @@ public:
     const Ensemble& ensemble() const { return ensemble_; }
     const DabStats& stats()    const { return stats_; }
     void reset() { sync_.reset(); ensemble_ = Ensemble{}; stats_ = DabStats{}; fibHist_ = 0; }
+    /** ★ The ppm figure was computed against 222.064 MHz (11D) whatever block was tuned — 8 %
+     *  wrong at 5A, invisible on 12B. The service tells us the block; this is what it divides by. */
+    void setCentreHz(double hz) { if (hz > 1e6) centreHz_ = hz; }
     /** ★ Drop the frame-timing prediction but KEEP the ensemble. For a caller that steps through a
      *  capture window by window rather than streaming — the tracker's prediction is relative to
      *  the buffer it was given, so a new window needs a fresh acquisition. */
@@ -461,6 +464,7 @@ private:
     Ensemble ensemble_;
     DabStats stats_;
     double fibHist_ = 0;
+    double centreHz_ = 222.064e6;   ///< the tuned block, for the ppm readout
     int    intShift_ = 0;
     std::vector<C32>    prod_;      // per-symbol differential products — see the CSI note
     std::vector<int8_t> ficBits_;

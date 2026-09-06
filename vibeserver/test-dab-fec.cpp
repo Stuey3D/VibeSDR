@@ -83,6 +83,17 @@ int main() {
         std::vector<uint8_t> a(400);
         for (auto& b : a) b = uint8_t(rnd() & 1);
         auto orig = a;
+        /* ★★★ THE PROVENANCE NOTE IN vibe_dab_fec.h IS NOW ANSWERED. EN 300 401 V2.2.1 clause 10,
+         *  table 12: P(X) = X^9 + X^5 + 1, register preset to all ones, and the first sixteen
+         *  output bits are 0000 0111 1011 1110. Read from the text of the standard, 2026-09-07. */
+        {
+            EnergyDispersal t; std::vector<uint8_t> z(16, 0);
+            t.apply(z.data(), z.size());
+            static const uint8_t kTable12[16] = {0,0,0,0,0,1,1,1,1,0,1,1,1,1,1,0};
+            bool same = true;
+            for (int i = 0; i < 16; ++i) if (z[size_t(i)] != kTable12[i]) same = false;
+            CHECK(same, "energy dispersal PRBS starts 0000 0111 1011 1110 (EN 300 401 table 12)");
+        }
         EnergyDispersal e; e.apply(a.data(), a.size());
         size_t diff = 0;
         for (size_t i = 0; i < a.size(); ++i) if (a[i] != orig[i]) ++diff;
