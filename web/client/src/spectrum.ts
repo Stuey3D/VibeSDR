@@ -1027,6 +1027,7 @@ export class SpectrumClient {
     //    call would ruin holding the step button down: each 100 Hz nudge would drop the buffer and
     //    re-arm it, turning a smooth tune into stuttering silence. Below one bandwidth the
     //    buffered audio is still substantially the signal you are listening to, so it is kept.
+    if (this.dabHeld) return;            // ★ see dabHeld — the multiplex is the tuning
     const prev = this.frequency;
     this.lastLocalTuneAt = Date.now();   // ★ so a config echo is not mistaken for somebody else
     if (frequency) this.frequency = Math.round(frequency);
@@ -1118,6 +1119,7 @@ export class SpectrumClient {
 
   /** Set view centre + span. binBandwidth is clamped to sane zoom limits. */
   zoom(frequency: number, binBandwidth: number) {
+    if (this.dabHeld) return;            // ★ see dabHeld — a zoom narrows the IF under the mux
     const n = this.cfg.binCount || 4096;
     const spanCap = this.cfg.maxBandwidth > 0 ? this.cfg.maxBandwidth : 30e6;
     const bb = Math.max(MIN_SPAN_HZ / n, Math.min(binBandwidth, spanCap / n));
@@ -1139,6 +1141,7 @@ export class SpectrumClient {
    * the thing you're listening to stays put and the span closes in around it.
    */
   zoomBy(factor: number, anchorHz?: number) {
+    if (this.dabHeld) return;            // ★ see dabHeld
     const bb = this.view.binBandwidth || this.cfg.binBandwidth;
     if (!bb) return;
     const n = this.cfg.binCount || 4096;
@@ -1160,7 +1163,18 @@ export class SpectrumClient {
   /** Enter or leave DAB, optionally naming the multiplex and service.
    *  ★ The server sets the radio to 2.048 MS/s and the block centre itself — the client never
    *    tunes in DAB mode, because there is no VFO in a multiplex. */
+  /** ★★★ DAB OWNS THE DIAL AND THE VIEW. An ensemble is one 1.536 MHz block: there is nothing to
+   *  tune inside it and nothing to zoom into, and on an RTL the IF filter FOLLOWS the view, so a
+   *  zoom cuts the multiplex. Stuart, 2026-09-07: "the zoom still worked instead of being locked
+   *  out… the spectrum can be clicked which knocks the multiplex tuning off". The server already
+   *  refused `tune`; it was `zoom` (a click or a pan) that parked the dongle to follow the view.
+   *  ★ ONE READER: every path that moves the dial or the view — arrows, wheel, keys, drag, tap,
+   *    search, bookmark — ends in tune()/zoom()/pan()/resetView(), so the hold lives here and not
+   *    at each call site. The multiplex is stepped through dab(), which is the one door left open. */
+  dabHeld = false;
+
   dab(on: boolean, channel?: number, sid?: number) {
+    this.dabHeld = on;
     const m: Record<string, unknown> = { type: 'dab', on: on ? 1 : 0 };
     if (channel !== undefined) m.channel = channel;
     if (sid !== undefined) m.sid = sid;
@@ -1172,7 +1186,7 @@ export class SpectrumClient {
     this.zoom(frequency, this.view.binBandwidth || this.cfg.binBandwidth);
   }
 
-  resetView() { this._send({ type: 'reset' }); }
+  resetView() { if (this.dabHeld) return; this._send({ type: 'reset' }); }
 
   /** Frame decimation: server emits only every Nth frame. NB this saves BANDWIDTH
    *  ONLY — the server still computes every FFT. Use setFftRate() to save power. */

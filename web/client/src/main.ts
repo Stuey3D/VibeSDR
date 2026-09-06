@@ -4283,7 +4283,6 @@ let dabLastEid = -1;
  *  nothing put it back on the way out. Stuart, 2026-09-04: back on FM with RDS decoding Heart
  *  perfectly, the readout stuck at 208064 kHz and "tuning is stuck fully" — because every tune he
  *  sent was computed from a dial that thought it was in Band III. */
-let dabPrevFreq = 0;
 
 /** Band III, mirroring vibe_dab_channels.h — including the OFFSET blocks 10N/11N/12N, which are
  *  easy to miss and are genuinely on air. */
@@ -4373,8 +4372,26 @@ function dabTune(delta: number) {
   dabRender();
 }
 
+/** ★★★ ZOOM IS BLOCKED IN DAB MODE — DISABLED, not merely ignored (AGENTS.md: a control that does
+ *  nothing when pressed reads as a broken feature). The hold itself is in SpectrumClient.dabHeld,
+ *  which also covers the wheel, the keys and the waterfall; this is the visible half. The arrows
+ *  stay live because in DAB they step the multiplex (see nudge). */
+function dabLockControls(on: boolean) {
+  for (const id of ['zoomIn', 'zoomOut', 'zoomReset', 'mZoomIn', 'mZoomOut']) {
+    const el = document.getElementById(id) as HTMLButtonElement | null;
+    if (!el) continue;
+    el.disabled = on;
+    if (on) { el.dataset.dabTitle = el.title; el.title = 'Zoom is locked in DAB — the span is the multiplex'; }
+    else if (el.dataset.dabTitle !== undefined) { el.title = el.dataset.dabTitle; delete el.dataset.dabTitle; }
+  }
+  const td = document.getElementById('tuneDown'); const tu = document.getElementById('tuneUp');
+  if (td) td.title = on ? 'Previous multiplex' : 'Tune down one step';
+  if (tu) tu.title = on ? 'Next multiplex' : 'Tune up one step';
+}
+
 function dabSetMode(on: boolean) {
   dabOn = on;
+  dabLockControls(on);
   const mux = document.getElementById('dabMux');
   const bt  = document.getElementById('dabPane');
   if (mux) mux.style.display = on ? 'flex' : 'none';
@@ -4383,7 +4400,6 @@ function dabSetMode(on: boolean) {
   if (dt) dt.style.display = on ? 'none' : '';
   if (on) {
     if (dabChannel < 0) dabChannel = DAB_BLOCKS.findIndex(b => b.name === '12B');
-    if (spec && !dabPrevFreq) dabPrevFreq = spec.frequency;   // give it back on the way out
     spec?.dab(true, dabChannel);
     dabSetPane('stations');
     // ★★ The decoder box is ALWAYS OPEN in DAB — the station list IS the tuning UI.
@@ -4415,7 +4431,6 @@ function dabSetMode(on: boolean) {
      *  ★ The server sends a config when DAB ends (see the dab_off handler) and spectrum.ts sets
      *    this.frequency from cfg.serverVfo. Letting that arrive is both simpler and correct —
      *    a client must not decide what only the server knows. */
-    dabPrevFreq = 0;
     applyRateOptions();
     populateHw();                // give the real rate list back — see the note on the way in
     const ds3 = document.getElementById('decStatus');
@@ -9293,6 +9308,10 @@ function showTuneGapMsg(text: string) {
 
 function nudge(hz: number) {
   if (!spec) return;
+  /* ★★★ IN DAB THE ARROWS STEP THE MULTIPLEX. Stuart, 2026-09-07: "the tuning buttons tuned as if
+   *  it were a standard VFO and not cycling through the DAB blocks like I wanted". A DAB station
+   *  is not a frequency, so the only tuning gesture that means anything is the next block. */
+  if (dabOn) { dabTune(hz < 0 ? -1 : 1); return; }
   // Snap to the step grid so repeated nudges stay on round frequencies.
   const mag = Math.abs(hz);
   const next = Math.round((spec.frequency + hz) / mag) * mag;

@@ -8860,6 +8860,16 @@ struct LocalSdrShim::Impl {
             return;
         }
 
+        /* ★★★ DAB OWNS THE VIEW AS WELL AS THE DIAL. `tune`/`mode`/`bandwidth` were already
+         *  refused below, and Stuart still reported that clicking the spectrum "knocks the
+         *  multiplex tuning off" (2026-09-07) — because a click or a pan arrives as `zoom`, and
+         *  the zoom handler PARKS THE DONGLE to follow the view (dongleForView -> tuneHw). Half a
+         *  guard again. An ensemble is the whole capture: there is no view to move it for. */
+        if ((type == "zoom" || type == "reset") && g_dabMode.load(std::memory_order_relaxed)) {
+            LOGI("%s ignored — DAB owns the view (send {\"type\":\"dab\",\"on\":0} to leave)",
+                 type.c_str());
+            return;
+        }
         if (type == "reset") { zoomFactor.store(1.0); updateZoomView(); sendConfig(sock); return; }
         if (type == "zoom") { // spectrum view-centre move (+ span via binBandwidth)
             if (jsonNum(msg,"frequency",v) && v > 0) {
