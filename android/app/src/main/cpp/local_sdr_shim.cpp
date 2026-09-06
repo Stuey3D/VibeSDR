@@ -2935,6 +2935,20 @@ struct LocalSdrShim::Impl {
          *     that need no offset, which is only true of radios that handle their own DC: an RSP
          *     has its own DC correction and libairspyhf applies a 5 kHz IF shift and rotates the
          *     remainder away. A HackRF does neither — it hands you the LO leakage at DC. */
+        /* ★★★ DAB NEEDS NO OFFSET — IT LEAVES THE CENTRE CARRIER EMPTY ON PURPOSE. The offset
+         *  exists to move the dongle's DC spike off the wanted signal, and for every analogue
+         *  mode that is right. But EN 300 401 does not transmit carrier k = 0 (see binForCarrier:
+         *  "the centre carrier is not transmitted"), so the spike lands in a gap the standard put
+         *  there for exactly this reason.
+         *  ★★★ AND THE OFFSET COSTS US. It puts a 1.536 MHz ensemble 15 kHz off-centre in the
+         *      passband, which is asymmetric in every filter downstream: measured, narrowing the
+         *      resampler's cut towards the ensemble edge made the error rate monotonically WORSE
+         *      (0.1% at Nyquist, 0.8% at 800 kHz), because one side was being eaten before the
+         *      other. Stuart, from two directions: "if we are 15KHz off tune that is the issue",
+         *      and "I dont think OWRX SDRAngel etc use an offset". They do not, and this is why.
+         *  ★ Centred, the ensemble is symmetric in the passband and an RF-bandwidth filter
+         *    becomes worth re-measuring — see the note in vibe_dab_resample.h. */
+        if (g_dabMode.load(std::memory_order_relaxed)) return 0.0;
         if (useHackRf()) return HW_OFFSET_HACKRF_HZ;
         return (useSdrplay() || useAirspyHf() || useTcp() || useSpy()) ? 0.0 : HW_OFFSET_HZ;
     }

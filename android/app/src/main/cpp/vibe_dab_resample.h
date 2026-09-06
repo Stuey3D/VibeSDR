@@ -23,6 +23,7 @@
 //     listening test describes as "still breaking up". test-dab-resample.cpp now pins it: every
 //     tone across the ensemble must come through within 1 dB and above 40 dB SNDR.
 #pragma once
+#include <cstdlib>
 
 #include <cmath>
 #include <cstddef>
@@ -46,7 +47,41 @@ public:
          * signal away. */
         const int n = kL * kTaps;
         h_.assign(size_t(n), 0.0f);
-        const double fc = 0.5 / double(kM);            // cycles per interpolated sample
+        /* ★★★ THE RF BANDWIDTH, NOT JUST THE ANTI-ALIAS. Cutting at the output Nyquist
+         *  (1.024 MHz) is the minimum this filter must do — it stops folding — but it passes
+         *  256 kHz of noise and neighbouring-block skirt on EACH SIDE of a signal that is only
+         *  +/-768 kHz wide, and all of it lands in the sync and the soft decisions.
+         *  ★★★ Stuart, quoting SDRangel's DAB demodulator: "RF Bandwidth ... a filter that is
+         *      applied to the input signal before decimation ... should typically be 1.537 MHz",
+         *      with a 2.048 MHz decoder rate. A DAB ensemble is 1.536 MHz wide, so that is the
+         *      band and everything outside it is noise by definition.
+         *  ★★★ AND IT WAS MEASURED, AND IT MADE THINGS WORSE. Swept against 60 s of captured air
+         *      carrying three real burst events, decoding BBC Radio 1 on 12B:
+         *
+         *          half-bandwidth   MP2 frames bad
+         *          1.024 MHz (Nyquist, as now)   0.1%
+         *          950 kHz                       0.1%
+         *          850 kHz                       0.4%
+         *          800 kHz                       0.8%
+         *          768 kHz (the ensemble edge)   0.6%
+         *
+         *      Narrowing towards the nominal edge is monotonically WORSE. The reason is the one
+         *      Stuart gave while it was being measured: "the 15KHz offset may be harming us with
+         *      a 1.536MHz bandwidth as the ensemble is 1.536MHz wide so if we are 15KHz off tune
+         *      that is the issue." We tune 15 kHz off deliberately (HW_OFFSET_HZ, to keep the
+         *      dongle's DC spike out of the signal), so a filter cut at the nominal edge starts
+         *      eating the outermost carriers on one side — and they carry data like every other.
+         *  ★★ SO THE DEFAULT STAYS AT NYQUIST. The RF-bandwidth idea is sound in general and it
+         *     is what SDRangel documents, but a filter is only free when it is wider than the
+         *     signal AND centred on it. Ours is neither, and the anti-alias limit is already
+         *     doing the part that matters.
+         *  ★ Kept overridable so this can be re-measured on another aerial rather than argued
+         *    from the spec — VIBE_DAB_RF_BW_HZ, in Hz of half-bandwidth. */
+        static const double kBwHz = std::getenv("VIBE_DAB_RF_BW_HZ")
+                                  ? atof(std::getenv("VIBE_DAB_RF_BW_HZ")) : 1e9;
+        const double nyq = 0.5 / double(kM);           // the anti-alias limit: never exceed it
+        const double want = kBwHz / (2400000.0 * double(kL));
+        const double fc = want < nyq ? want : nyq;     // cycles per interpolated sample
         for (int i = 0; i < n; ++i) {
             const double t = double(i) - double(n - 1) * 0.5;
             const double s = (std::fabs(t) < 1e-9) ? 2.0 * fc
