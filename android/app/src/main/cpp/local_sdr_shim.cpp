@@ -6810,6 +6810,14 @@ struct LocalSdrShim::Impl {
 
     /** ★ Has the DAB audio buffer reached its working depth? See the pre-buffer note below. */
     bool dabPrimed_ = false;
+    /** ★ Frames of silence emitted to keep the cadence unbroken — published, so a lost super
+     *  frame stays VISIBLE rather than being hidden by the very fix that conceals it. */
+    uint32_t dabFilled_ = 0;
+    std::chrono::steady_clock::time_point dabPumpLast_{};
+    int      dabPumpMaxMs_ = 0, dabPumpSumMs_ = 0, dabPumpN_ = 0;
+    uint32_t dabPumpLateN_ = 0;
+    std::atomic<bool> dabClockRun_{false};
+    std::thread       dabClockThread_;
 
     void pumpDabPlusAudio() {
         std::vector<uint8_t> au;
@@ -6852,9 +6860,102 @@ struct LocalSdrShim::Impl {
     }
 
     /** @param iqSamples how much capture this call represents — see the pacing note below. */
-    void pumpDabAudio(size_t iqSamples = 0) {
-        // ★ DAB+ never produces PCM here — it is reframed and handed on. See pumpDabPlusAudio.
-        pumpDabPlusAudio();
+    /* ★★★ THE AUDIO CLOCK — WHY DELIVERY MUST NOT RIDE ON IQ ARRIVAL.
+     *
+     *  ★★★ MEASURED, AND IT IS THE LAST THING IN THE CHAIN THAT WAS STILL LUMPY. pumpDabAudio()
+     *      was called from the DSP thread once per IQ block: average 40 ms apart when audio
+     *      packets are 20 ms, and about 1.8 wake-ups A SECOND longer than 60 ms. Those long ones
+     *      are holes in the stream — 26 gaps over 85 ms in 70 seconds, on a receiver with ZERO
+     *      gain writes, ZERO dropped IQ (2.4052 MS/s against 2.4000 nominal) and only three super
+     *      frame losses, none of them aligned with a gap. Nothing was lost; it simply left in
+     *      lumps, and no buffer downstream can invent a wake-up that never happened.
+     *
+     *  ★★★ AND IT IS WHY ANALOGUE NEVER SHOWED IT. Stuart: "analogue audio is not effected but
+     *      digital is". FM produces audio in lockstep with the IQ — a lumpy block in is a
+     *      proportionally lumpy block out, and the listener's buffer absorbs it. A DAB decoder
+     *      emits a whole 120 ms SUPER FRAME at once, on a boundary that has nothing to do with
+     *      the IQ block, so the two lumpinesses compound instead of cancelling. Any mode that
+     *      decodes into a buffer rather than straight through — FT8 and the rest — has the same
+     *      exposure.
+     *
+     *  ★★ SO THE BUFFER GETS A CLOCK, WHICH IS THE HALF THAT WAS MISSING. There has been a 300 ms
+     *     PCM buffer since the pre-buffer went in, and it was still being drained on somebody
+     *     else's schedule. 20 ms per tick, sleep_until on a steady clock so the cadence cannot
+     *     drift, and any shortfall zero-filled — the stream is continuous by construction.
+     *  ★ NOT the IQ side: that is already complete and already buffered (~384 ms, dropped = 0).
+     *    Buffering it further would only add latency to a stream that is not losing anything.
+     *
+     *  ★★★ AND THE DEPTH IS A CEILING, NOT A TARGET — BECAUSE SOME MODES ARE CLOCKS.
+     *      Stuart: "need to make sure the buffer isnt too large to effect FT8 that requires timing
+     *      to be accurate." DAB does not care: nothing downstream of it is time-referenced, and
+     *      120 ms super frames force a buffer deeper than that whatever we do. FT8 is the opposite
+     *      — it decodes against UTC in 15-second slots, so buffered audio is not late audio, it is
+     *      WRONG audio, mis-slotted by however deep the buffer is.
+     *      ★★ THIS CLOCK IS THEREFORE GATED ON g_dabMode AND RUNS FOR NOTHING ELSE. FM, AM, SSB
+     *         and every decoder that reads the audio path keep their existing straight-through
+     *         timing; the DAB pre-buffer (250 ms) and this cadence exist only while a multiplex is
+     *         tuned, and stopDabClock() ends both on the way out.
+     *      ★ If this pattern is ever reused for another mode, the depth must be chosen from THAT
+     *        mode's timing tolerance, not copied from here. 250 ms is right for an ensemble and
+     *        would be a bug for a mode that has to know what second it is. */
+    void dabClockLoop() {
+        vibeThreadName("vibe-dabclk");
+        using namespace std::chrono;
+        auto next = steady_clock::now();
+        while (dabClockRun_.load(std::memory_order_relaxed)) {
+            next += milliseconds(20);
+            std::this_thread::sleep_until(next);
+            if (!dabClockRun_.load(std::memory_order_relaxed)) break;
+            /* ★ If we have fallen a long way behind (the thread was descheduled, or the device
+             *  slept), do not try to make it up in one burst — resync the clock and carry on.
+             *  Catching up would deliver a wall of audio the listener has no use for. */
+            const auto now = steady_clock::now();
+            if (now - next > milliseconds(200)) next = now;
+            if (!g_dabMode.load(std::memory_order_relaxed)) continue;
+            pumpDabAudio(0, 48000 / 50);          // ★ exactly 20 ms of frames, every 20 ms
+        }
+    }
+
+    void startDabClock() {
+        if (dabClockRun_.exchange(true)) return;
+        dabClockThread_ = std::thread([this]{ dabClockLoop(); });
+    }
+    void stopDabClock() {
+        if (!dabClockRun_.exchange(false)) return;
+        if (dabClockThread_.joinable()) dabClockThread_.join();
+    }
+
+    /** @param forceFrames when non-zero, emit exactly this many 48 kHz frames — the audio clock's
+     *  entry point. Zero keeps the old IQ-paced behaviour, which is what drives the decoder. */
+    void pumpDabAudio(size_t iqSamples = 0, size_t forceFrames = 0) {
+        /* ★★★ HOW OFTEN IS THIS EVEN CALLED? The audio stream showed 26 gaps over 85 ms in 70
+         *  seconds with ZERO gain writes and only three super frame losses, none aligned with a
+         *  gap — so neither the AGC's control transfers nor decode loss explains them, and the
+         *  only thing left is the cadence of this call itself. If the IQ arrives in lumps, audio
+         *  leaves in lumps, and no amount of buffering downstream invents the missing wake-ups.
+         *  ★ Measured here rather than inferred from the far end, where the network and the Opus
+         *    encoder are both free to be blamed for something neither of them did. */
+        {
+            using namespace std::chrono;
+            const auto now = steady_clock::now();
+            if (dabPumpLast_.time_since_epoch().count()) {
+                const auto ms = duration_cast<milliseconds>(now - dabPumpLast_).count();
+                if (ms > dabPumpMaxMs_) dabPumpMaxMs_ = int(ms);
+                if (ms > 60) ++dabPumpLateN_;
+                dabPumpSumMs_ += int(ms); ++dabPumpN_;
+            }
+            dabPumpLast_ = now;
+        }
+        /* ★★★ THE IQ PATH STILL DRIVES THE DECODER; IT NO LONGER DECIDES WHEN ANYTHING IS HEARD.
+         *  forceFrames == 0 means "called from the DSP thread on IQ arrival" — reframe DAB+ and
+         *  then stop, because dabClockLoop() will emit the PCM on its own 20 ms cadence. The
+         *  clock's own call passes forceFrames and must fall through, or the audio it exists to
+         *  send would be short-circuited by the very flag that enables it. */
+        if (forceFrames == 0) {
+            // ★ DAB+ never produces PCM here — it is reframed and handed on. See pumpDabPlusAudio.
+            pumpDabPlusAudio();
+            if (dabClockRun_.load(std::memory_order_relaxed)) return;
+        }
         /* ★★★ PACE IT. A DAB frame yields 96 ms of audio ALL AT ONCE, and this used to send the
          *  lot the moment it appeared: five Opus packets back to back, then silence for 96 ms.
          *  FM trickles out a block at a time, so every jitter buffer in the client is sized for a
@@ -6958,10 +7059,36 @@ struct LocalSdrShim::Impl {
             if      (avail < kPrimeFrames)         paced = allow - allow / 8;   // rebuild depth
             else if (avail > kPrimeFrames * 3)     paced = allow + allow / 8;   // shed latency
         }
-        const size_t have  = std::min(avail, paced);
-        if (have >= 480) {                                  // 10 ms at 48 kHz
-            std::vector<float> f(have * 2);
-            const size_t got = g_dab.takePcm(f.data(), have);
+        /* ★★★ NEVER STOP SENDING. A HOLE IS A STUTTER; SILENCE IS A MUTE.
+         *
+         *  ★★★ THIS IS THE ONE STUART COULD HEAR. When a super frame is lost there is simply no
+         *      audio for 120 ms, and this used to send NOTHING for that period — the stream just
+         *      stopped and started again. A decoder on the far side sees a hole, underruns and
+         *      resynchronises, which is heard as a click or a stutter. MEASURED on the LAN with
+         *      talkSPORT 2 playing: 3001 packets at a steady 50/s, and TWELVE gaps over 90 ms in
+         *      sixty seconds, worst 115 ms — a stutter every five seconds, on a receiver whose
+         *      physical layer reads FIB 1.000.
+         *  ★★★ AND THE TIMELINE KEEPER DELIBERATELY DOES NOT COVER IT. Its 240 ms tolerance exists
+         *      so ordinary burst lag is not mistaken for loss — right for what it does, but it
+         *      means a SINGLE lost super frame (120 ms) never reaches the fill threshold and
+         *      passes straight through as a hole. Two mechanisms, and the gap between them was
+         *      exactly the size of the fault.
+         *  ★★ SO THE OUTPUT CADENCE IS NOW UNCONDITIONAL: whatever real time this block
+         *     represents is what gets sent, and any shortfall is zero-filled. The stream is
+         *     continuous by construction and the far side never has to recover from anything.
+         *  ★ Stuart's rule, and this is the whole of it: "a slight bubbling mud or very slight
+         *    silence is fine but squeals is absolutely not". A hole is not silence — it is the
+         *    receiver disappearing for a tenth of a second.
+         *  ★ Only once primed: before that there is genuinely nothing to say, and filling from
+         *    the start would broadcast a quarter second of silence at every tune-in. */
+        size_t want = forceFrames ? forceFrames : std::min(paced, size_t(48000));
+        if (want == size_t(-1) || want > 48000) want = 0;
+        const size_t have = std::min(avail, want);
+        if (want >= 480) {                                  // 10 ms at 48 kHz
+            std::vector<float> f(want * 2, 0.0f);           // ★ pre-zeroed: the fill IS the buffer
+            const size_t got0 = have ? g_dab.takePcm(f.data(), have) : 0;
+            if (got0 < want) dabFilled_ += uint32_t(want - got0);
+            const size_t got = want;                        // ★ always emit the full cadence
             if (got) {
                 std::vector<int16_t> pcm(got * 2);
                 for (size_t i = 0; i < got * 2; ++i) {
@@ -8450,6 +8577,7 @@ struct LocalSdrShim::Impl {
             if (!on) {
                 g_dabMode.store(false);
                 dabPrimed_ = false;
+                stopDabClock();
                 /* ★★★ GIVE THE SHARED RECEIVER BACK EXACTLY AS WE FOUND IT. Restoring the lock
                  *  is not enough on its own: the radio is sitting on a multiplex at 2.048 MS/s,
                  *  and the lock is only re-applied by a rebuild that may not come. Put the rate
@@ -8648,6 +8776,7 @@ struct LocalSdrShim::Impl {
              *    the frequency is the value nothing follows. The reverse has no such repair. */
             g_dabMode.store(true);
             dabPrimed_ = false;   // ★ a new multiplex fills from empty
+            startDabClock();      // ★ audio now leaves on a clock, not on IQ arrival
             /* ★★★ APPLY THE IF FILTER — NOTHING ELSE WILL. applyAutoIf() is called from
              *  retune(), and this path deliberately does not go through retune: an ensemble IS
              *  the capture, so it moves the hardware centre directly (see the note above). The
@@ -9465,6 +9594,12 @@ struct LocalSdrShim::Impl {
          *    selector) is corrected at once rather than one of them. */
         const bool bwAutoNow = g_tunerBwAuto.load(std::memory_order_relaxed)
                             && !g_dabMode.load(std::memory_order_relaxed);
+        /* ★ The DAB audio pump's own cadence, on the socket the client already reads — so a
+         *  delivery gap can be attributed to a missing wake-up here rather than guessed at from
+         *  the far end of a network and an Opus encoder. */
+        j += ",\"dabPumpMaxMs\":" + std::to_string(dabPumpMaxMs_)
+           + ",\"dabPumpAvgMs\":" + std::to_string(dabPumpN_ ? dabPumpSumMs_ / dabPumpN_ : 0)
+           + ",\"dabPumpLate\":"  + std::to_string(dabPumpLateN_);
         j += ",\"tunerBwAuto\":"
            + std::string(bwAutoNow ? "true" : "false")
            + ",\"tunerBw\":"

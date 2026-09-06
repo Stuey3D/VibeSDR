@@ -47,7 +47,7 @@ public:
         channel_ = idx;
         rx_.reset();
         iq_.clear();
-        pcm_.clear();
+        { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
         /* ★★★ AND DROP ANY HELD HALF-FRAME. lsfPend_ carries the first half of a 24 kHz Layer II
          *  frame between calls; a service or multiplex change mid-pair would otherwise join it to
          *  the FIRST frame of the new subchannel and leave the pairing off by one from then on —
@@ -76,7 +76,7 @@ public:
         std::lock_guard<std::mutex> lk(m_);
         want_ = sid;
         if (rx_.ensemble().services.count(sid)) { if (rx_.selectService(sid)) sid_ = sid; }
-        pcm_.clear();
+        { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
         mp2_.reset();
         aac_.reset();          // ★ a new service is a new codec configuration — see setChannel
         adts_.clear();
@@ -268,8 +268,19 @@ private:
 public:
 
     /** Take decoded audio (interleaved stereo, 48 kHz). Returns frames written. */
+    /** ★★★ THE PCM BUFFER HAS ITS OWN LOCK, AND THAT IS THE POINT.
+     *  ★★★ IT USED TO SHARE m_ WITH THE DECODER, so draining the audio buffer had to wait for
+     *      whatever the worker thread was doing — and workerLoop holds m_ across rx_.push(), which
+     *      is the entire OFDM demodulation, de-interleave and Viterbi for a frame. Audio delivery
+     *      was therefore serialised behind decoding, and no amount of clocking the reader could
+     *      help: MEASURED after the 20 ms audio clock went in, the average call spacing fell from
+     *      40 ms to 12 ms and there was STILL about one stall per second over 60 ms, because the
+     *      clock thread was simply blocked on the mutex.
+     *  ★★ Producer and consumer touch only pcm_ here, so it needs only pcm_'s lock. Order is
+     *     m_ THEN pm_ (the worker already holds m_ when it fills); nothing ever takes m_ while
+     *     holding pm_, so the two cannot deadlock. */
     size_t takePcm(float* out, size_t maxFrames) {
-        std::lock_guard<std::mutex> lk(m_);
+        std::lock_guard<std::mutex> lk(pm_);
         size_t n = 0;
         while (n < maxFrames && pcm_.size() >= 2) {
             out[2 * n]     = pcm_.front(); pcm_.pop_front();
@@ -278,7 +289,7 @@ public:
         }
         return n;
     }
-    size_t pcmAvailable() { std::lock_guard<std::mutex> lk(m_); return pcm_.size() / 2; }
+    size_t pcmAvailable() { std::lock_guard<std::mutex> lk(pm_); return pcm_.size() / 2; }
 
     /** True while the selected service is DAB+ — its audio leaves as ADTS, not PCM. */
     bool dabPlus() { std::lock_guard<std::mutex> lk(m_); return rx_.selectedType() != 0; }
@@ -533,6 +544,7 @@ private:
 
     void pushPcm48Stereo(const float* data, size_t nSamples, int nch, int srHz) {
         if (!data || nch <= 0 || srHz <= 0) return;
+        std::lock_guard<std::mutex> plk(pm_);        // ★ see takePcm — pcm_ has its own lock
         // ★ The carried state belongs to ONE rate. A service that changes it starts again.
         if (srHz != rsRate_) { resampleReset(); rsRate_ = srHz; }
         const size_t frames = nSamples / size_t(nch);
@@ -614,6 +626,7 @@ private:
      *  ★ Bounded per call: a long outage should come back as a gap, not as a wall of silence
      *    delivered in one go and then played out for seconds after the signal returned. */
     void holdTimeline() {
+        std::lock_guard<std::mutex> plk(pm_);        // ★ see takePcm
         static constexpr uint64_t kLagFrames  = uint64_t(kAudioRateHz) * 240 / 1000;  // 240 ms
         static constexpr uint64_t kMaxFillPer = uint64_t(kAudioRateHz) / 2;           // 0.5 s
         if (pcmOwed_ <= pcmPushed_ + kLagFrames) return;
@@ -800,6 +813,8 @@ private:
     Mp2Decoder  mp2_;
     std::vector<Cplx> iq_;
     std::deque<float> pcm_;
+    /** ★ Guards pcm_ ONLY — never held while taking m_. See takePcm for why it exists. */
+    mutable std::mutex pm_;
     int channel_ = -1;
     double rfCentre_ = 0, rfRate_ = 0;
     uint32_t sid_ = 0, want_ = 0;
