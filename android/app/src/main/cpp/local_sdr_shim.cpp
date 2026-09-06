@@ -8483,7 +8483,19 @@ struct LocalSdrShim::Impl {
              *  ★ hwOffsetHz() and not the constant — it is 0 on the RSP and the HF+, and this is
              *    exactly the "ELSE MEANS DONGLE" shape that has cost us a bug per new radio. */
             const double centre  = double(g_dab.centreHz());
-            const double logical = centre - hwOffsetHz();   // so PHYSICAL DC lands on the mux
+            /* ★★★ DEAD CENTRE, WRITTEN OUT — NOT VIA hwOffsetHz(). That helper returns 0 in DAB
+             *  (the centre carrier is not transmitted, so the DC spike lands in a gap the standard
+             *  provides) but g_dabMode IS NOT SET UNTIL 25 LINES BELOW THIS ONE. So the analogue
+             *  offset was still SUBTRACTED here and then NOT ADDED BACK when the receiver was told
+             *  where the radio is — every DAB tune since 4.7.1 sat 15 kHz low, with the coarse
+             *  estimator quietly absorbing it.
+             *  ★★★ CAUGHT FROM A CAPTURE HEADER: an IQ capture of 10C read "centred 213.345 MHz"
+             *      where 10C is 213.360. Captures taken before the offset change read 225.648 for
+             *      12B — exact. It also explains 12B's phase-reference correlation falling from
+             *      7-10 to 1.2 across that same change, which I had put down to a different radio.
+             *  ★ A helper whose answer depends on a flag set later in the same function is a trap
+             *    however correct the helper is. State the intent where the intent is known. */
+            const double logical = centre;                 // DAB: no offset, DC has no carrier
             rtlCenter.store(logical);
             audioFreq.store(centre);          // the readout follows the mux
             viewCenter.store(centre);
