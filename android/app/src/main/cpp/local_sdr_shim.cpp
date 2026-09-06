@@ -2992,7 +2992,7 @@ struct LocalSdrShim::Impl {
          *  ★ 0 means "no filtering", which is what a mode that occupies the whole capture wants. */
         if (g_dabMode.load(std::memory_order_relaxed)) {
             static const int kDabIfWant = std::getenv("VIBE_DAB_IF_HZ")
-                                        ? atoi(std::getenv("VIBE_DAB_IF_HZ")) : 1750000;
+                                        ? atoi(std::getenv("VIBE_DAB_IF_HZ")) : 1537000;
             if (g_tunerBwHz.load(std::memory_order_relaxed) != kDabIfWant) {
                 /* ★★★ 1.75 MHz, NOT WIDE OPEN — AND THE DIFFERENCE IS AN ADJACENT MULTIPLEX
                  *  FOLDED ON TOP OF THIS ONE. I set this to 0 ("automatic", i.e. as wide as the
@@ -3010,15 +3010,20 @@ struct LocalSdrShim::Impl {
                  *      and a frequency offset "all over the place" — sync pulled about by a
                  *      second ensemble aliased on top of the first. 12B and 11D have no close
                  *      neighbour here and were rock steady.
-                 *  ★ 1.75 MHz keeps the full 1.536 MHz ensemble with room for the filter's own
-                 *    roll-off, while putting the neighbour at 1.712 MHz on the skirt rather than
-                 *    in the passband. The R820T2 quantises this to its nearest step; asking for
-                 *    the number that matters is still right. */
+                 *  ★★ 1.537 MHz IS THE REFERENCE FIGURE, not a guess of mine. SDRangel's DAB demodulator
+                 *     documents exactly this: "RF Bandwidth ... should typically be 1.537 MHz",
+                 *     with a 2.048 MHz decoder rate — which is also our resampled rate. Stuart
+                 *     produced it while this was being written; my own first number was 1.75 MHz,
+                 *     which keeps the ensemble but leaves the neighbour at 1.712 MHz nearer the
+                 *     passband edge than it needs to be.
+                 *  ★ The R820T2 quantises this to its nearest step, so the exact request matters
+                 *    less than its size; asking for the figure that means something is still
+                 *    right. VIBE_DAB_IF_HZ overrides it for measurement on 10C. */
                 /* ★ Overridable so the right number can be MEASURED on the air that shows the
                  *  problem, rather than argued from the spec. 10C with 10D beside it is the case
                  *  that discriminates; 12B has no close neighbour and cannot. */
                 static const int kDabIfHz = std::getenv("VIBE_DAB_IF_HZ")
-                                          ? atoi(std::getenv("VIBE_DAB_IF_HZ")) : 1750000;
+                                          ? atoi(std::getenv("VIBE_DAB_IF_HZ")) : 1537000;
                 LocalSdrShim::instance().setTunerBandwidth(kDabIfHz);
                 LOGI("[DAB] tuner IF filter set to %.3f MHz — wide enough for a 1.536 MHz "
                      "ensemble, narrow enough to keep the next block out", kDabIfHz / 1e6);
