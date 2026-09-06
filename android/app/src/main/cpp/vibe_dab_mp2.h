@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "vibe_dab_mp2_tables.h"
@@ -156,6 +157,7 @@ class Mp2Decoder {
 public:
     /** @return samples per channel written, or 0 on a bad frame. */
     int decode(const uint8_t* frame, size_t n, std::vector<float>& out) {
+        ++sinceNoSync_;
         const Mp2Info f = mp2Header(frame, n);
         /* ★★★ SEPARATE THE TWO WAYS A FRAME DIES, because they have opposite causes and only one
          *  of them is fixable by us. A bad HEADER means the bytes we were handed are not an MP2
@@ -173,7 +175,18 @@ public:
              *  fault is in how the logical frame was assembled or where it was cut.
              *  ★ noSync counts the second kind: the one that is ours to fix. */
             const bool sync = n >= 2 && frame[0] == 0xFF && (frame[1] & 0xE0) == 0xE0;
-            if (!sync) ++hdrNoSync_;
+            if (!sync) {
+                ++hdrNoSync_;
+                /* ★★★ HOW FAR APART ARE THEY? A steady 3% loss can be periodic — a sub-block or
+                 *  CIF boundary landing wrong — or scattered, which would mean something else
+                 *  entirely. The two need completely different fixes and the rate alone cannot
+                 *  tell them apart, so the GAP between consecutive failures is recorded: a ring of
+                 *  the last eight, published as text. All the same number is a structural fault
+                 *  with a period; a spread of numbers is not. */
+                if (gapRing_.size() >= 8) gapRing_.erase(gapRing_.begin());
+                gapRing_.push_back(sinceNoSync_);
+                sinceNoSync_ = 0;
+            }
             else if (f.valid) ++hdrTooLong_;     // real header, but longer than the bytes in hand
             return 0;
         }
@@ -431,6 +444,12 @@ public:
      *  carried a valid header claiming more bytes than arrived (the LSF pairing's other arm). */
     uint32_t hdrNoSync()  const { return hdrNoSync_; }
     uint32_t hdrTooLong() const { return hdrTooLong_; }
+    /** ★ Frames between the last eight sync-word failures — the pattern, not just the rate. */
+    std::string noSyncGaps() const {
+        std::string r;
+        for (size_t i = 0; i < gapRing_.size(); ++i) { if (i) r += ' '; r += std::to_string(gapRing_[i]); }
+        return r;
+    }
     /** ★★★ CALL THIS WHENEVER THE FRAME RUN BREAKS. The guard's reference is "what this sub-band
      *  was doing a moment ago", and after a gap it was doing it a moment ago in a different piece
      *  of music. Stale history would fight the first frames back in. */
@@ -489,6 +508,8 @@ private:
     bool    sfHistValid_[2][32] = {};
     uint32_t sfClamped_ = 0;
     uint32_t hdrBad_ = 0, crcBad_ = 0, hdrNoSync_ = 0, hdrTooLong_ = 0;
+    uint32_t sinceNoSync_ = 0;
+    std::vector<uint32_t> gapRing_;
 
     /** CRC-8, G2 = 0x1D, over the three MSBs of each scale factor in [sbLo, sbHi]. */
     uint8_t scfCrc8(int sbLo, int sbHi, uint8_t init, bool invert) const {
