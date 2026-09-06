@@ -2935,20 +2935,19 @@ struct LocalSdrShim::Impl {
          *     that need no offset, which is only true of radios that handle their own DC: an RSP
          *     has its own DC correction and libairspyhf applies a 5 kHz IF shift and rotates the
          *     remainder away. A HackRF does neither — it hands you the LO leakage at DC. */
-        /* ★★★ DAB NEEDS NO OFFSET — IT LEAVES THE CENTRE CARRIER EMPTY ON PURPOSE. The offset
-         *  exists to move the dongle's DC spike off the wanted signal, and for every analogue
-         *  mode that is right. But EN 300 401 does not transmit carrier k = 0 (see binForCarrier:
-         *  "the centre carrier is not transmitted"), so the spike lands in a gap the standard put
-         *  there for exactly this reason.
-         *  ★★★ AND THE OFFSET COSTS US. It puts a 1.536 MHz ensemble 15 kHz off-centre in the
-         *      passband, which is asymmetric in every filter downstream: measured, narrowing the
-         *      resampler's cut towards the ensemble edge made the error rate monotonically WORSE
-         *      (0.1% at Nyquist, 0.8% at 800 kHz), because one side was being eaten before the
-         *      other. Stuart, from two directions: "if we are 15KHz off tune that is the issue",
-         *      and "I dont think OWRX SDRAngel etc use an offset". They do not, and this is why.
-         *  ★ Centred, the ensemble is symmetric in the passband and an RF-bandwidth filter
-         *    becomes worth re-measuring — see the note in vibe_dab_resample.h. */
-        if (g_dabMode.load(std::memory_order_relaxed)) return 0.0;
+        /* ★★★ DAB WAS TRIED WITH NO OFFSET (4.7.1-4.7.3) AND IT BROKE THE FIC COMPLETELY.
+         *  The reasoning was sound and Stuart's: EN 300 401 does not transmit carrier k = 0 (see
+         *  binForCarrier), so the dongle's DC spike should land in a gap the standard provides,
+         *  and OWRX and SDRangel tune dead centre. Measured on air with the tuning verified exact
+         *  (rfCentre error +0 Hz): phase-reference correlation ROSE to 11.3 — the best seen all
+         *  night — and the ensemble decoded NOTHING. Zero services, FIB 0.0000. A perfect lock
+         *  onto something the FIC decoder could not read.
+         *  ★★ So something downstream does depend on the signal sitting off DC — most likely the
+         *     integer-offset search correlating against a spike it has no model for. Not
+         *     diagnosed; reverted, because DAB measured 0 errors in 8 minutes on the XCover with
+         *     the offset in place and Stuart was asleep.
+         *  ★ DO NOT RE-TRY without a bench to test on: the failure is silent and total, and the
+         *    symptom (a superb prs with a dead FIC) looks nothing like a tuning problem. */
         if (useHackRf()) return HW_OFFSET_HACKRF_HZ;
         return (useSdrplay() || useAirspyHf() || useTcp() || useSpy()) ? 0.0 : HW_OFFSET_HZ;
     }
@@ -8483,19 +8482,7 @@ struct LocalSdrShim::Impl {
              *  ★ hwOffsetHz() and not the constant — it is 0 on the RSP and the HF+, and this is
              *    exactly the "ELSE MEANS DONGLE" shape that has cost us a bug per new radio. */
             const double centre  = double(g_dab.centreHz());
-            /* ★★★ DEAD CENTRE, WRITTEN OUT — NOT VIA hwOffsetHz(). That helper returns 0 in DAB
-             *  (the centre carrier is not transmitted, so the DC spike lands in a gap the standard
-             *  provides) but g_dabMode IS NOT SET UNTIL 25 LINES BELOW THIS ONE. So the analogue
-             *  offset was still SUBTRACTED here and then NOT ADDED BACK when the receiver was told
-             *  where the radio is — every DAB tune since 4.7.1 sat 15 kHz low, with the coarse
-             *  estimator quietly absorbing it.
-             *  ★★★ CAUGHT FROM A CAPTURE HEADER: an IQ capture of 10C read "centred 213.345 MHz"
-             *      where 10C is 213.360. Captures taken before the offset change read 225.648 for
-             *      12B — exact. It also explains 12B's phase-reference correlation falling from
-             *      7-10 to 1.2 across that same change, which I had put down to a different radio.
-             *  ★ A helper whose answer depends on a flag set later in the same function is a trap
-             *    however correct the helper is. State the intent where the intent is known. */
-            const double logical = centre;                 // DAB: no offset, DC has no carrier
+            const double logical = centre - hwOffsetHz();   // so PHYSICAL DC lands on the mux
             rtlCenter.store(logical);
             audioFreq.store(centre);          // the readout follows the mux
             viewCenter.store(centre);
