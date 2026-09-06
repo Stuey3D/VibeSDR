@@ -400,13 +400,33 @@ public:
         const Ensemble& e = rx_.ensemble();
         const DabStats& s = rx_.stats();
         std::string j = "{\"type\":\"dab\"";
-        char b[512];
+        /* ★★★ 2048, AND THE GUARD BELOW, BECAUSE 512 SILENTLY TRUNCATED THE WHOLE BLOCK.
+         *
+         *  ★★★ THIS WAS "DAB IS REALLY FUCKED". Every diagnostic field added during the DAB hunt
+         *      — mp2HdrBad, mp2NoSync, noSyncGaps, aacRateHz, pcmPushed, pcmFilled and the rest —
+         *      pushed this fragment past 512 bytes. snprintf then cut it MID-FIELD:
+         *          ..."rfRateHz":2400000,"l,"locked":false,...
+         *      which is not JSON, so every client discarded the message entirely and showed
+         *      nothing: no station list, no lock flag, no signal analysis. From the outside that
+         *      is a receiver that "never locks on even though signal and gain seem correct".
+         *
+         *  ★★★ AND IT IS INTERMITTENT BY CONSTRUCTION, which is why it read as flaky rather than
+         *      broken. The length depends on the ensemble LABEL and on how wide the numbers have
+         *      grown — so a short label fits and a long one does not, and the same multiplex
+         *      works until samplesIn gains a digit. "Showed all of its stations then promptly
+         *      cleared them all away" is exactly that boundary being crossed.
+         *
+         *  ★★ THE GUARD MATTERS MORE THAN THE SIZE. A buffer can always be outgrown again; what
+         *     must never happen again is doing it SILENTLY. snprintf returns the length it WANTED,
+         *     so truncation is detectable — and when it happens we now emit a short, VALID object
+         *     saying so, rather than a fragment that looks like a dead receiver. */
+        char b[2048];
         /* ★ `rfCentreHz` is what the RADIO is actually on, not what we asked for. They diverged on
          *  the live Pi — DAB reported 12B while the dongle sat on 96.6 MHz — and without both
          *  numbers side by side that is indistinguishable from "DAB does not decode here". */
-        snprintf(b, sizeof b,
-                 ",\"channel\":\"%s\",\"centreHz\":%u,\"scf\":[%u,%u,%u,%u,%u],\"mp2Crc\":%u,\"mp2In\":%u,\"mp2Bad\":%u,\"mp2Out\":%u,\"mp2Concealed\":%u,\"scfClamped\":%u,\"mp2HdrBad\":%u,\"mp2CrcBad\":%u,\"mp2NoSync\":%u,\"mp2TooLong\":%u,\"lsfOrphans\":%u,\"noSyncGaps\":\"%s\",\"preTuneDropped\":%u,\"aacDecoded\":%u,\"aacServerSide\":%s,\"aacRateHz\":%d,\"aacCh\":%d,\"aacPcmPerAu\":%u,\"pcmPushed\":%llu,\"pcmAvail\":%u,\"pcmFilled\":%u,\"syncJumps\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
-                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), scfChecked_, scfOk_[0], scfOk_[1], scfOk_[2], scfOk_[3], mp2WithCrc_, mp2In_, mp2Bad_, mp2Out_, mp2Concealed_, mp2_.scfClamped(), mp2_.hdrBad(), mp2_.crcBad(), mp2_.hdrNoSync(), mp2_.hdrTooLong(), lsfOrphans_, mp2_.noSyncGaps().c_str(), preTuneDropped_, aacDecoded_, aac_.available() ? "true" : "false", aac_.rateHz(), aac_.channels(), aacPcmPerAu_, (unsigned long long)pcmPushed_, (unsigned)(pcm_.size()/2), pcmFilled_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
+        const int nb = snprintf(b, sizeof b,
+                 ",\"channel\":\"%s\",\"centreHz\":%u,\"scf\":[%u,%u,%u,%u,%u],\"mp2Crc\":%u,\"mp2In\":%u,\"mp2Bad\":%u,\"mp2Out\":%u,\"mp2Concealed\":%u,\"scfClamped\":%u,\"mp2HdrBad\":%u,\"mp2CrcBad\":%u,\"mp2NoSync\":%u,\"mp2TooLong\":%u,\"lsfOrphans\":%u,\"noSyncGaps\":\"%s\",\"aacDecoded\":%u,\"aacServerSide\":%s,\"aacRateHz\":%d,\"aacCh\":%d,\"aacPcmPerAu\":%u,\"pcmPushed\":%llu,\"pcmAvail\":%u,\"pcmFilled\":%u,\"syncJumps\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
+                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), scfChecked_, scfOk_[0], scfOk_[1], scfOk_[2], scfOk_[3], mp2WithCrc_, mp2In_, mp2Bad_, mp2Out_, mp2Concealed_, mp2_.scfClamped(), mp2_.hdrBad(), mp2_.crcBad(), mp2_.hdrNoSync(), mp2_.hdrTooLong(), lsfOrphans_, mp2_.noSyncGaps().c_str(), aacDecoded_, aac_.available() ? "true" : "false", aac_.rateHz(), aac_.channels(), aacPcmPerAu_, (unsigned long long)pcmPushed_, (unsigned)(pcm_.size()/2), pcmFilled_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
                  esc(e.label).c_str(), unsigned(e.eid));
         j += b;
         snprintf(b, sizeof b,
@@ -417,7 +437,28 @@ public:
                  s.intOffsetCarriers, s.prsCorrelation, s.prsRef, s.prsRef > 0.0f ? s.prsCorrelation / s.prsRef : 0.0f, s.erasedFrames, rsCorrected_, rsUncorrected_, sfInvalid_, sfFireBad_, esc(pad_.dls().label().text).c_str(), pad_.dls().label().changes, pad_.dls().crcOk(), pad_.dls().crcFail(), pad_.framesSeen(), pad_.xIndCount(0), pad_.xIndCount(1), pad_.xIndCount(2), pad_.appSeen(2), pad_.appSeen(3), pad_.appSeen(1), pad_.appSeen(12), s.fibsOk, s.fibsTotal, s.fibRate,
                  s.framesSeen, unsigned(sid_), rx_.serviceBitrate(),
                  rx_.uepProf().valid ? "UEP" : (rx_.profile().valid ? "EEP" : ""));
+        /* ★ snprintf returns the length it WANTED, so a truncation is knowable. Emit a valid
+         *  object that SAYS the block was too long rather than a fragment that parses as nothing. */
+        if (nb < 0 || size_t(nb) >= sizeof b) {
+            char sb[192];
+            snprintf(sb, sizeof sb,
+                     "{\"type\":\"dab\",\"channel\":\"%s\",\"truncated\":%d,\"locked\":%s}",
+                     channel_ >= 0 ? kBandIII[channel_].name : "", nb,
+                     s.locked ? "true" : "false");
+            return std::string(sb);
+        }
         j += b;
+        /* ★★★ APPENDED SEPARATELY, NOT ADDED TO THE FORMAT STRING ABOVE. That snprintf carries
+         *  about forty arguments, and twice tonight I added a field to it and mis-aligned the
+         *  list — snprintf then produced MALFORMED JSON, every client silently discarded it, and
+         *  the symptom was indistinguishable from a dead decoder. A separate, short append cannot
+         *  drift out of step with its own arguments. */
+        {
+            char rb[64];
+            snprintf(rb, sizeof rb, ",\"reacquires\":%d,\"preTuneDropped\":%u",
+                     s.reacquires, preTuneDropped_);
+            j += rb;
+        }
         j += ",\"services\":[";
         bool first = true;
         for (const auto& kv : e.services) {

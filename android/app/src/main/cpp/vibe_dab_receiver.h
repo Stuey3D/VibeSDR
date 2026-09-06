@@ -53,6 +53,7 @@ inline std::atomic<float>& dabEraseFrac() {
 /** What the receiver can tell the DX panel right now. Every field is measured, never inferred. */
 struct DabStats {
     bool   locked        = false;
+    int    reacquires    = 0;      ///< times the sync was thrown away and re-taken
     float  nullDepthDb   = 0.0f;   ///< how deep the null symbol reads — the "is this real" number
     float  freqOffsetHz  = 0.0f;   ///< fractional part, from the cyclic prefix
     float  freqOffsetPpm = 0.0f;   ///< the same, as a receiver-clock error
@@ -276,6 +277,26 @@ public:
             // ★ A RUNNING rate, not this frame's — one bad frame is weather, not a signal quality.
             fibHist_ = fibHist_ * 0.9 + (double(ok) / 12.0) * 0.1;
             stats_.fibRate = fibHist_;
+            /* ★★★ RE-ACQUIRE WHEN THE LOCK IS GENUINELY GONE — NOTHING EVER DID.
+             *  Acquisition is TRACKED deliberately (re-taking it every frame costs a frame
+             *  whenever some other dip is deeper — see workerLoop), but nothing re-took it EVER,
+             *  so a lock lost to a fade, an AGC step or a retune was lost permanently. Stuart:
+             *  "the BBC multiplex showed all of its stations then promptly cleared them all away
+             *  and now isnt populating again ... tune away and back again reestablishes the
+             *  lock" — because that was the only thing that called reset().
+             *  ★★ THE THRESHOLD IS THE DESIGN. A frame or two of nothing is weather on a marginal
+             *     mux and must not throw the lock away. But the FIC is the most heavily protected
+             *     thing DAB transmits: if NOT ONE of twelve FIBs reads for a second and a half
+             *     while frames keep arriving, we are synchronised to something that is no longer
+             *     this ensemble. */
+            static constexpr int kDeadFramesToReacquire = 62;      // ~1.5 s of 24 ms frames
+            if (ok > 0) ficDead_ = 0;
+            else if (++ficDead_ >= kDeadFramesToReacquire) {
+                ficDead_ = 0;
+                ++stats_.reacquires;
+                sync_.reset();
+                fibHist_ = 0.0;
+            }
         }
         /* ── the MSC: symbols 4..76 carry four CIFs ─────────────────────────
          *  ★ 72 data symbols x 3072 bits = 221 184 = 4 x 55 296, which is the arithmetic that
@@ -449,6 +470,7 @@ private:
     int bitrate_ = 0;
     int selType_ = -1, dataBits_ = 0;
     uint32_t selSid_ = 0;
+    int    ficDead_ = 0;      ///< consecutive frames with NOT ONE readable FIB
     std::unique_ptr<TimeDeinterleaver> deint_;
     std::vector<std::vector<uint8_t>> audio_;
     std::array<C32, 1536> prs_{};
