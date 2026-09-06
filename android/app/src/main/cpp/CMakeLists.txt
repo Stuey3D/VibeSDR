@@ -174,4 +174,8 @@ target_link_libraries(vibelocalsdr PRIVATE
     # drivers share a single libusb rather than each dragging in a copy.
     "${SDR_KIT_ROOT}/${ANDROID_ABI}/lib/libusb1.0.so"
     "${OPUS_A}"
+    # ★★★ THE PLATFORM'S OWN AAC DECODER, for DAB+ — see vibe_dab_aacdec.h. libmediandk is part of
+    #     Android, not something we bundle, which is what keeps "VibeServer links no AAC decoder"
+    #     true: we call the OS's decoder exactly as we used to call the browser's.
+    mediandk
     log)
