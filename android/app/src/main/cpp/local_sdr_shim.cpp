@@ -6954,6 +6954,32 @@ struct LocalSdrShim::Impl {
         if (forceFrames == 0) {
             // ★ DAB+ never produces PCM here — it is reframed and handed on. See pumpDabPlusAudio.
             pumpDabPlusAudio();
+            /* ★★★ THE SIGNAL BLOCK GOES OUT FROM THE IQ PATH, AND NEVER FROM THE AUDIO CLOCK.
+             *  ★★★ TWO FAULTS MET HERE AND I CAUSED BOTH, ONE AFTER THE OTHER.
+             *   (1) It used to sit at the BOTTOM of this function, below the 250 ms pre-buffer's
+             *       early return — so a multiplex with no audio yet reported NOTHING at all. That
+             *       is what "10C and 10D show good clear visual signals but no multiplex being
+             *       found" was: not a reception fault, a receiver that had gone silent about it.
+             *   (2) Hoisting it to the top fixed that and broke something worse: g_dab.json()
+             *       takes the DECODER's mutex, and the top of this function is reached by the
+             *       20 ms audio clock. Every tick then blocked the audio thread on the decoder's
+             *       lock — reintroducing, three commits later, the exact contention that 419
+             *       removed. Stuart heard it immediately: "large multi second gaps", "I think the
+             *       stats are freezing". One lock, both symptoms.
+             *  ★★ SO IT LIVES HERE: on the IQ path, which already runs on the DSP thread and may
+             *     wait for the decoder without costing anybody a single sample of audio. It is
+             *     still unconditional — nothing about the audio buffer can suppress it — and it
+             *     still goes out twice a second.
+             *  ★ REPORTING MUST NOT DEPEND ON THE THING IT REPORTS ON, AND MUST NOT OBSTRUCT IT
+             *    EITHER. Both halves of that sentence cost a build to learn. */
+            const double tnow = Impl::nowSecs();
+            if (tnow - lastDabJson_ >= 0.5) {
+                lastDabJson_ = tnow;
+                const std::string j = g_dab.json();
+                std::vector<std::shared_ptr<net::Socket>> socks;
+                { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+                for (auto& sk : socks) sendText(sk, j);
+            }
             if (dabClockRun_.load(std::memory_order_relaxed)) return;
         }
         /* ★★★ PACE IT. A DAB frame yields 96 ms of audio ALL AT ONCE, and this used to send the
@@ -7021,35 +7047,6 @@ struct LocalSdrShim::Impl {
          *  ★ Stuart's rule, and this is exactly it: "a slight bubbling mud or very slight silence
          *    is fine but squeals is absolutely not" — a silent quarter second at tune-in is the
          *    cheapest possible way to buy a stream that then runs. */
-        /* ★★★ THE SIGNAL BLOCK GOES OUT FIRST, BEFORE ANY AUDIO GATE CAN SWALLOW IT.
-         *  ★★★ IT USED TO SIT AT THE BOTTOM OF THIS FUNCTION, and the pre-buffer I added in 416
-         *      returns above it — so on a channel with NO AUDIO YET the stats were never sent at
-         *      all. A multiplex that cannot lock produces no PCM, the 250 ms pre-buffer is never
-         *      satisfied, the function returns every time, and the client sees NOTHING: no
-         *      station list, no lock flag, no signal figures. From the outside that reads as "good
-         *      clear visual signal but no multiplex being found", which is exactly how Stuart
-         *      reported 10C and 10D — a regression I introduced, not a reception fault.
-         *      MEASURED: tuning 10D produced exactly ONE dab message and then nothing for 58
-         *      seconds, while 11A streamed normally on the same build minutes apart.
-         *  ★★ REPORTING MUST NOT DEPEND ON THE THING IT REPORTS ON. The whole point of the signal
-         *     block is to say what is happening when audio ISN'T — a receiver that goes silent
-         *     about a channel it cannot decode is at its least useful exactly when it is most
-         *     needed. Emitted unconditionally, twice a second, whatever the audio is doing. */
-        {
-            const double tnow = Impl::nowSecs();
-            if (tnow - lastDabJson_ >= 0.5) {
-                lastDabJson_ = tnow;
-                const std::string j = g_dab.json();
-                /* ★★★ ALL THREE REGISTRIES. allSpecClientsLocked() unions specClient, specExtra
-                 *  and clientDsp and is the ONLY definition of "every spectrum listener" worth
-                 *  trusting; a hand-rolled clientDsp loop once sent this to nobody on a shared
-                 *  receiver. */
-                std::vector<std::shared_ptr<net::Socket>> socks;
-                { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
-                for (auto& sk : socks) sendText(sk, j);
-            }
-        }
-
         static constexpr size_t kPrimeFrames = 48000 / 4;    // 250 ms at 48 kHz — the working depth
         const size_t avail = g_dab.pcmAvailable();
         if (!dabPrimed_) {
