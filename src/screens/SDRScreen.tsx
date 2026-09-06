@@ -381,6 +381,44 @@ const SHARED_VFO_LINE =
   ' This receiver has a shared VFO — everyone hears the same dial, so please use the chat to ask '
   + 'before tuning.';
 
+/** ★★★ THE DECODER SCROLLBACK, AND WHY IT IS NOT 4000 CHARACTERS ANY MORE.
+ *
+ *  ★★★ THE FAULT, issue #22. Michael (DL8LDN): "decoding results in digimodes are not the same
+ *      what OWRX really decode and show in browser. the app show less results and some digimodes
+ *      show no results but OWRX does." Stuart's deduction was exactly right and it is worth
+ *      recording, because it is the reasoning that found this: we are a WINDOW on a server-side
+ *      decoder — the browser and the app receive identical messages — "the only thing I can think
+ *      of is our window simply discards older spots rather than preserving them". It did.
+ *
+ *  ★★★ 4000 CHARACTERS IS ABOUT A HUNDRED LINES. An FT8 spot is roughly forty characters and a
+ *      busy band decodes thirty to fifty of them every fifteen seconds, so the panel held under
+ *      two minutes of history while OWRX's own panels hold far more. Nothing was ever dropped on
+ *      the way in; it was thrown away immediately after arriving.
+ *
+ *  ★★★ AND THE OLD TRIM CUT MID-LINE. slice(len - 4000) lands wherever it lands, so the first
+ *      entry on screen was usually half a spot — which reads as a corrupted or missing decode
+ *      rather than as a trimmed buffer, and is very likely part of "some digimodes show no
+ *      results". Trimming now advances to the next newline, so every visible line is whole.
+ *
+ *  ★★ 40 000 IS A DELIBERATE COMPROMISE, NOT A MAXIMUM. DecoderPanel renders the whole buffer as
+ *     a SINGLE <Text> inside a ScrollView, so layout cost grows with its length — and the devices
+ *     this has to stay smooth on include the weak-core phones this file already worries about.
+ *     Ten times the old history (~1000 spots, tens of minutes of a normal band) without risking
+ *     jank that cannot be measured before release. If it wants to be larger later, the panel
+ *     should render lines virtualised first; raising this alone would be trading one visible
+ *     fault for another.
+ *  ★ ONE definition, because there were two (3000 on the local decoder path, 4000 on OWRX) and
+ *    they drifted apart without either being deliberate. */
+const DECODER_SCROLLBACK_CHARS = 40_000;
+
+function appendDecoderText(prev: string, add: string): string {
+  const next = prev + add;
+  if (next.length <= DECODER_SCROLLBACK_CHARS) return next;
+  const cut = next.length - DECODER_SCROLLBACK_CHARS;
+  const nl = next.indexOf('\n', cut);
+  return nl >= 0 ? next.slice(nl + 1) : next.slice(cut);
+}
+
 export default function SDRScreen({ route, navigation }: Props) {
   const { baseUrl, instanceName, password } = route.params;
   useKeepAwake();
@@ -2945,10 +2983,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       onText: (text: string) => {
         setDecoding(true);
         markDecodeOutput();          // ★ output = presence; see the idle-release effect
-        setDecoderText((prev: string) => {
-          const next = prev + text;
-          return next.length > 3000 ? next.slice(next.length - 3000) : next;
-        });
+        setDecoderText((prev: string) => appendDecoderText(prev, text));
       },
       onStatus: (s: string)  => setDecoderStatus(s),
       onDot:    (d)          => setDecoding(d === 'active' || d === 'rx'),
@@ -3899,10 +3934,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (replace) { setDecoderText(line); return; }
         // Append raw — the adapter newline-terminates records and char-stream
         // decoders (RTTY/CW) carry their own line breaks.
-        setDecoderText((prev: string) => {
-          const next = prev + line;
-          return next.length > 4000 ? next.slice(next.length - 4000) : next;
-        });
+        setDecoderText((prev: string) => appendDecoderText(prev, line));
       },
       onDecoderImage: (ev) => {
         // OWRX decodes SSTV/Fax server-side and streams scanlines — paint them
