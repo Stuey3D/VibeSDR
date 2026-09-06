@@ -622,29 +622,26 @@ private:
              *  the last two bytes; the scale factor CRC sits between it and the X-PAD, so it has
              *  to be lifted out before the PAD reader sees the field or the indicator list is read
              *  out of the wrong bytes.
-             *  ★ Four CRC-8s at 48 kHz and >= 56 kbit/s, two below that — the same rule the scale
-             *    factor CRC itself uses, kept in step with it deliberately.
-             *  ★★ Nothing here can put wrong text on screen: a mis-located field fails the label's
-             *     own CRC-16 and is dropped. crcOk/crcFail are published so that is VISIBLE rather
-             *     than looking like a station that sends no label. */
+             *  ★★ THE ScF-CRC LENGTH RULE (TS 103 466, as dablin and welle.io apply it): four
+             *     bytes, except two for MPEG-1 below 56 kbit/s mono / 112 kbit/s stereo. LSF (24
+             *     kHz) frames always carry four. The 2026-09-05 conclusion that "this air carries
+             *     no ScF-CRC" was drawn while the X-PAD bytes were being read in the wrong order
+             *     (see vibe_dab_pad.h), so it is withdrawn and the rule is applied — and the DLS
+             *     CRC-16 is the oracle: a wrong length puts the indicator list in the wrong place
+             *     and crcOk stays at zero, which is VISIBLE. VIBE_DAB_SCFCRC_LEN still overrides.
+             *  ★ The whole tail goes to the reader, not 48 bytes: a variable X-PAD field can be
+             *    four sub-fields of 48 plus its list, and the reader sizes the field itself. */
             {
                 const auto& mi2 = mp2_.info();
-                /* ★★★ NO SCALE FACTOR CRC ON THIS AIR — MEASURED, NOT ASSUMED. The layout in
-                 *  vibe_dab_mp2.h puts a ScF-CRC between X-PAD and F-PAD, and the scale factor
-                 *  CRC hunt already found otherwise: those bytes carry VARIABLE X-PAD on the
-                 *  streams here, which is why every ScF-CRC convention failed to match. Skipping
-                 *  bytes that are actually X-PAD moves the contents indicator list and the label
-                 *  never assembles.
-                 *  ★ Overridable so the other case can be tried without a rebuild if a stream
-                 *    turns up that does carry it: VIBE_DAB_SCFCRC_LEN. The dynamic label's own
-                 *    CRC-16 is the oracle — a wrong value shows nothing rather than nonsense. */
-                static const size_t scfCrcLen = std::getenv("VIBE_DAB_SCFCRC_LEN")
-                                              ? size_t(atoi(std::getenv("VIBE_DAB_SCFCRC_LEN"))) : 0;
-                (void)mi2;
+                static const int scfCrcEnv = std::getenv("VIBE_DAB_SCFCRC_LEN")
+                                           ? atoi(std::getenv("VIBE_DAB_SCFCRC_LEN")) : -1;
+                size_t scfCrcLen = 4;
+                if (!mi2.lsf && mi2.bitrateKbps < (mi2.channels == 1 ? 56 : 112)) scfCrcLen = 2;
+                if (scfCrcEnv >= 0) scfCrcLen = size_t(scfCrcEnv);
                 if (f.size() > scfCrcLen + 2) {
                     const size_t fpadAt = f.size() - 2;
                     const size_t xEnd   = fpadAt - scfCrcLen;      // X-PAD ends before the ScF-CRC
-                    const size_t take   = xEnd < 48 ? xEnd : 48;   // 48 = the largest sub-field
+                    const size_t take   = xEnd < 200 ? xEnd : 200; // 4 x 48 + a 4-byte list
                     std::vector<uint8_t> win;
                     win.reserve(take + 2);
                     win.insert(win.end(), f.begin() + long(xEnd - take), f.begin() + long(xEnd));
@@ -829,6 +826,10 @@ private:
          *  ★ The ADTS reframing is unchanged and still the single description of a DAB+ access
          *    unit; the decoder is fed the very same bytes the wire used to carry. */
         for (const auto& au : s.aus) {
+            /* ★★★ THE PAD COMES OUT OF THE ACCESS UNIT HERE, before the decoder (which discards
+             *  it) sees the bytes. Until 2026-09-07 this call did not exist and DAB+ services had
+             *  no "now playing" at all, while the header of vibe_dab_pad.h said they did. */
+            pad_.feedAccessUnit(au.data(), au.size());
             std::vector<uint8_t> pkt = toAdts(au.data(), au.size(), s.fmt, aacCoreCh_);
             if (pkt.empty()) continue;
             ++ausOut_;
