@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -210,6 +211,11 @@ public:
 
         scfIdx_.clear();
         float sf[2][32][3] = {};
+        /* ★ Raw 6-bit indices kept per (channel, sub-band, granule) so the squeal guard below can
+         *  judge them against their own context BEFORE they become gains. -1 = not transmitted. */
+        int sfIdx[2][32][3];
+        for (int c = 0; c < 2; ++c) for (int b = 0; b < 32; ++b)
+            for (int g = 0; g < 3; ++g) sfIdx[c][b][g] = -1;
         for (int sb = 0; sb < sblimit; ++sb)
             for (int ch = 0; ch < nch; ++ch) {
                 if (!alloc[ch][sb]) continue;
@@ -224,8 +230,7 @@ public:
                 auto take6 = [&](int g0, int g1) {
                     const int idx = int(br.get(6));
                     scfIdx_.push_back({ sb, uint8_t(idx) });
-                    const float v = scaleFactor(idx);
-                    for (int g = g0; g <= g1; ++g) sf[ch][sb][g] = v;
+                    for (int g = g0; g <= g1; ++g) sfIdx[ch][sb][g] = idx;
                 };
                 switch (scfsi[ch][sb]) {
                     case 0:  take6(0, 0); take6(1, 1); take6(2, 2); break;
@@ -234,6 +239,107 @@ public:
                     default: take6(0, 0); take6(1, 2);              break;
                 }
             }
+
+        /* ★★★ THE SQUEAL GUARD — CATCH IT AS A GAIN, NOT AS A WAVEFORM.
+         *
+         *  ★★★ WHAT THE SQUEAL ACTUALLY IS, MEASURED. The MPEG CRC covers the header, the bit
+         *      allocation and the scfsi — it does NOT cover the scale factors (see mp2Crc16). So a
+         *      frame whose scale factors were corrupted passes every check we make and decodes
+         *      into a loud tone. On 400 captured frames the corruption was scale factors jumping
+         *      more than 24 dB, on every 6th frame, in BOTH channels at once — periodic and
+         *      bilateral, i.e. structural (the time deinterleaver / UEP sub-blocks), not noise.
+         *
+         *  ★★★ WHY HERE AND NOT ON THE OUTPUT. DabService already conceals on the decoded
+         *      waveform (peak > 1.5, RMS > 6x the running mean). That fires on only about a fifth
+         *      of the frames it should: measured on 10C, 1806 bad frames against 362 concealed.
+         *      By then the damage is spread across 1152 samples of synthesis filter and the only
+         *      remaining option is to mute the lot. A scale factor is a single logarithmic gain —
+         *      here it can be REPAIRED, and only the sub-band that was hit loses anything.
+         *
+         *  ★★★ IT ONLY EVER MAKES A BAND QUIETER, AND THAT IS THE WHOLE SAFETY ARGUMENT.
+         *      gain = 2 * 2^(-idx/3), so a SMALLER index is a LOUDER band and each index step is
+         *      2.007 dB. A squeal is therefore an index far BELOW its context. Corruption in the
+         *      other direction makes a band too quiet, which is inaudible against the rest of the
+         *      frame and is left strictly alone. So the guard cannot dull, colour or gate clean
+         *      audio: on a multiplex that is not corrupting scale factors it never fires at all.
+         *      ★ That matters because 10C is the outlier — Stuart: "10c is just one multiplex the
+         *        others BBC/D1/SDL we mostly fine". A fix that costs anything on 12B is not a fix.
+         *
+         *  ★★ CONTEXT IS THE PREVIOUS FRAME FIRST. The corruption hits both channels and all three
+         *     granules of a sub-band together, so the median WITHIN the frame is corrupt too and
+         *     cannot be the reference. The last frame in which this sub-band looked sane can.
+         *     Falls back to the in-frame median only when there is no history — after a run of
+         *     refused frames, when history is stale by construction.
+         *
+         *  ★ Threshold in INDICES, and deliberately at the measured pathology rather than a guess:
+         *    12 indices = 24.1 dB. An erasure threshold I guessed once before turned out 13x off
+         *    what measurement said, which is why this one is both env-overridable and counted.
+         *    VIBE_DAB_SCF_MAX_JUMP, in indices; 0 disables the guard entirely. */
+        {
+            /* ★★★ OFF BY DEFAULT — IT DAMAGED CLEAN AUDIO AND I SHIPPED IT ON A GUESS.
+             *  ★★★ MEASURED ON AIR, 11A, a multiplex with FIB 1.000 and 0.80% bad frames — i.e.
+             *      audio with essentially nothing wrong with it: 1412 scale factors clamped in
+             *      38 seconds, about 1% of every scale factor transmitted. Each one is a gain
+             *      moved by up to 24 dB, and Stuart heard exactly that: "MP2 bursts of noise".
+             *  ★★★ AND THE UNIT TEST SAID IT WAS INERT. It decodes FOUR frames of clean BBC
+             *      Radio 4 and asserts zero clamps, and it passes. Four frames is not a sample of
+             *      programme material — it never reaches a transient, and the cross-frame history
+             *      the guard leans on barely exists that early. A test that agrees with the bug is
+             *      worse than no test, and this file already carries that warning about the
+             *      SYNTHETIC case; I wrote another one.
+             *  ★★★ THE MODEL IS WRONG, NOT JUST THE NUMBER. Context is taken as the LOUDEST index
+             *      the sub-band recently held, and real music moves a sub-band tens of dB between
+             *      frames at every onset. Distinguishing that from corruption needs the measured
+             *      distribution of legitimate frame-to-frame jumps, which we have never taken —
+             *      dab-offline replays captured frames deterministically and is where it must be
+             *      derived, not on air a build at a time.
+             *  ★ 12 was chosen because the corruption measured >24 dB. That says where corruption
+             *    IS, not where clean audio ISN'T, and only the second one makes a threshold safe.
+             *  ★ The code stays, disabled, so the measurement can drive it: set
+             *    VIBE_DAB_SCF_MAX_JUMP to a jump in indices (2.007 dB each) to enable it.
+             *  ★ Squeal concealment is NOT gone — DabService still conceals on the decoded
+             *    waveform, which is the behaviour that was on air before today. */
+            static const int kMaxJump = std::getenv("VIBE_DAB_SCF_MAX_JUMP")
+                                      ? atoi(std::getenv("VIBE_DAB_SCF_MAX_JUMP")) : 0;
+            if (kMaxJump > 0) {
+                for (int sb = 0; sb < sblimit; ++sb)
+                    for (int ch = 0; ch < nch; ++ch) {
+                        if (!alloc[ch][sb]) continue;
+                        // In-frame median of the granules actually transmitted, as the fallback.
+                        int v[3], n = 0;
+                        for (int g = 0; g < 3; ++g) if (sfIdx[ch][sb][g] >= 0) v[n++] = sfIdx[ch][sb][g];
+                        if (n == 0) continue;
+                        for (int a = 0; a < n; ++a) for (int b = a + 1; b < n; ++b)
+                            if (v[b] < v[a]) { const int t = v[a]; v[a] = v[b]; v[b] = t; }
+                        const int med = v[n / 2];
+                        const bool haveHist = sfHistValid_[ch][sb];
+                        const int  ctx = haveHist ? int(sfHist_[ch][sb]) : med;
+                        for (int g = 0; g < 3; ++g) {
+                            const int idx = sfIdx[ch][sb][g];
+                            if (idx < 0) continue;
+                            // Smaller index = louder. Only an implausibly LOUD one is touched.
+                            if (idx < ctx - kMaxJump) {
+                                sfIdx[ch][sb][g] = ctx - kMaxJump;
+                                ++sfClamped_;
+                            }
+                        }
+                        /* ★ History follows the REPAIRED value, so a genuine slow crescendo still
+                         *  moves the reference frame by frame and is never fought; but a single
+                         *  corrupt frame cannot drag the reference loud and let the next one
+                         *  through. */
+                        int lo = 63;
+                        for (int g = 0; g < 3; ++g) if (sfIdx[ch][sb][g] >= 0 && sfIdx[ch][sb][g] < lo)
+                            lo = sfIdx[ch][sb][g];
+                        sfHist_[ch][sb] = uint8_t(lo);
+                        sfHistValid_[ch][sb] = true;
+                    }
+            }
+        }
+        // ★ Indices settled (and repaired) — only now turn them into gains.
+        for (int sb = 0; sb < sblimit; ++sb)
+            for (int ch = 0; ch < nch; ++ch)
+                for (int g = 0; g < 3; ++g)
+                    if (sfIdx[ch][sb][g] >= 0) sf[ch][sb][g] = scaleFactor(sfIdx[ch][sb][g]);
 
         // ★ Now that the scale factors are known, check DAB's own CRC over them — counting
         //   only, until the convention is measured. See tallyScfCrc.
@@ -295,6 +401,15 @@ public:
      *  TS 103 466 instead, in which case the MPEG protection bit is set and there is nothing to
      *  check here — which would make a zero refusal count meaningless. Measure before believing. */
     bool lastHadCrc() const { return lastHadCrc_; }
+    /** How many scale factors the squeal guard has pulled back — published, so the underlying
+     *  error rate stays visible rather than being hidden by the concealment. */
+    uint32_t scfClamped() const { return sfClamped_; }
+    /** ★★★ CALL THIS WHENEVER THE FRAME RUN BREAKS. The guard's reference is "what this sub-band
+     *  was doing a moment ago", and after a gap it was doing it a moment ago in a different piece
+     *  of music. Stale history would fight the first frames back in. */
+    void resetScfHistory() {
+        for (int c = 0; c < 2; ++c) for (int b = 0; b < 32; ++b) sfHistValid_[c][b] = false;
+    }
     void reset() { std::memset(v_, 0, sizeof v_); }
 
 private:
@@ -341,6 +456,11 @@ private:
     uint8_t prevScf_[4] = {0,0,0,0};
     int     prevScfN_ = 0;
     bool    prevScfValid_ = false;
+    /** ★ Per (channel, sub-band) reference for the squeal guard: the loudest index this sub-band
+     *  last held, after repair. Invalidated by resetScfHistory() whenever the frame run breaks. */
+    uint8_t sfHist_[2][32] = {};
+    bool    sfHistValid_[2][32] = {};
+    uint32_t sfClamped_ = 0;
 
     /** CRC-8, G2 = 0x1D, over the three MSBs of each scale factor in [sbLo, sbHi]. */
     uint8_t scfCrc8(int sbLo, int sbHi, uint8_t init, bool invert) const {

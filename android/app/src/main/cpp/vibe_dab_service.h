@@ -23,6 +23,8 @@
 #include "vibe_dab_channels.h"
 #include "vibe_dab_resample.h"
 #include "vibe_dab_mp2.h"
+#include "vibe_dab_aacdec.h"
+#include "vibe_dab_pad.h"
 #include "vibe_dab_aac.h"
 #include "vibe_dab_receiver.h"
 
@@ -54,6 +56,15 @@ public:
         lsfPend_.clear();
         sid_ = 0;
         mp2_.reset();
+        /* ★ And the AAC decoder, for the same reason as lsfPend_ and mp2_: it holds a codec
+         *  configured for the OLD service's rate and channel mode, and DAB+ services on one
+         *  multiplex differ in both. Carrying it across is the chipmunk bug wearing a new hat. */
+        aac_.reset();
+        adts_.clear();
+        pad_.reset();      // ★ the label belongs to the old programme
+        // ★ A new programme starts a new clock; catching up on the old one would be a wall of silence.
+        pcmOwed_ = 0; pcmPushed_ = 0;
+        resampleReset();
     }
     int  channel()   const { return channel_; }
     uint32_t centreHz() const { return kBandIII[channel_ < 0 ? 0 : channel_].centreHz; }
@@ -67,6 +78,11 @@ public:
         if (rx_.ensemble().services.count(sid)) { if (rx_.selectService(sid)) sid_ = sid; }
         pcm_.clear();
         mp2_.reset();
+        aac_.reset();          // ★ a new service is a new codec configuration — see setChannel
+        adts_.clear();
+        pad_.reset();
+        pcmOwed_ = 0; pcmPushed_ = 0;
+        resampleReset();
         /* ★★★ AND DROP ANY HELD HALF-FRAME. lsfPend_ carries the first half of a 24 kHz Layer II
          *  frame between calls; a service or multiplex change mid-pair would otherwise join it to
          *  the FIRST frame of the new subchannel and leave the pairing off by one from then on —
@@ -306,16 +322,16 @@ public:
          *  the live Pi — DAB reported 12B while the dongle sat on 96.6 MHz — and without both
          *  numbers side by side that is indistinguishable from "DAB does not decode here". */
         snprintf(b, sizeof b,
-                 ",\"channel\":\"%s\",\"centreHz\":%u,\"scf\":[%u,%u,%u,%u,%u],\"mp2Crc\":%u,\"mp2In\":%u,\"mp2Bad\":%u,\"mp2Out\":%u,\"mp2Concealed\":%u,\"syncJumps\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
-                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), scfChecked_, scfOk_[0], scfOk_[1], scfOk_[2], scfOk_[3], mp2WithCrc_, mp2In_, mp2Bad_, mp2Out_, mp2Concealed_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
+                 ",\"channel\":\"%s\",\"centreHz\":%u,\"scf\":[%u,%u,%u,%u,%u],\"mp2Crc\":%u,\"mp2In\":%u,\"mp2Bad\":%u,\"mp2Out\":%u,\"mp2Concealed\":%u,\"scfClamped\":%u,\"aacDecoded\":%u,\"aacServerSide\":%s,\"aacRateHz\":%d,\"aacCh\":%d,\"aacPcmPerAu\":%u,\"pcmPushed\":%llu,\"pcmAvail\":%u,\"pcmFilled\":%u,\"syncJumps\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
+                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), scfChecked_, scfOk_[0], scfOk_[1], scfOk_[2], scfOk_[3], mp2WithCrc_, mp2In_, mp2Bad_, mp2Out_, mp2Concealed_, mp2_.scfClamped(), aacDecoded_, aac_.available() ? "true" : "false", aac_.rateHz(), aac_.channels(), aacPcmPerAu_, (unsigned long long)pcmPushed_, (unsigned)(pcm_.size()/2), pcmFilled_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_, rfRate_,
                  esc(e.label).c_str(), unsigned(e.eid));
         j += b;
         snprintf(b, sizeof b,
                  ",\"locked\":%s,\"nullDepthDb\":%.1f,\"offsetHz\":%.0f,\"offsetPpm\":%.2f"
-                 ",\"carrierShift\":%d,\"prs\":%.3f,\"fibOk\":%d,\"fibTotal\":%d,\"fibRate\":%.3f"
+                 ",\"carrierShift\":%d,\"prs\":%.3f,\"prsRef\":%.3f,\"prsRatio\":%.3f,\"erased\":%d,\"rsFixed\":%u,\"rsLost\":%u,\"sfInvalid\":%u,\"sfFireBad\":%u,\"dls\":\"%s\",\"dlsChanges\":%u,\"dlsCrcOk\":%u,\"dlsCrcFail\":%u,\"padFrames\":%u,\"xNone\":%u,\"xShort\":%u,\"xVar\":%u,\"xApp2\":%u,\"xApp3\":%u,\"xApp1\":%u,\"xApp12\":%u,\"fibOk\":%d,\"fibTotal\":%d,\"fibRate\":%.3f"
                  ",\"frames\":%d,\"sid\":%u,\"bitrate\":%d,\"protection\":\"%s\"",
                  s.locked ? "true" : "false", s.nullDepthDb, s.freqOffsetHz, s.freqOffsetPpm,
-                 s.intOffsetCarriers, s.prsCorrelation, s.fibsOk, s.fibsTotal, s.fibRate,
+                 s.intOffsetCarriers, s.prsCorrelation, s.prsRef, s.prsRef > 0.0f ? s.prsCorrelation / s.prsRef : 0.0f, s.erasedFrames, rsCorrected_, rsUncorrected_, sfInvalid_, sfFireBad_, esc(pad_.dls().label().text).c_str(), pad_.dls().label().changes, pad_.dls().crcOk(), pad_.dls().crcFail(), pad_.framesSeen(), pad_.xIndCount(0), pad_.xIndCount(1), pad_.xIndCount(2), pad_.appSeen(2), pad_.appSeen(3), pad_.appSeen(1), pad_.appSeen(12), s.fibsOk, s.fibsTotal, s.fibRate,
                  s.framesSeen, unsigned(sid_), rx_.serviceBitrate(),
                  rx_.uepProf().valid ? "UEP" : (rx_.profile().valid ? "EEP" : ""));
         j += b;
@@ -398,7 +414,15 @@ private:
             }
             std::vector<float> out;
             ++mp2In_;
-            if (mp2_.decode(f.data(), f.size(), out) <= 0) { ++mp2Bad_; continue; }
+            if (mp2_.decode(f.data(), f.size(), out) <= 0) {
+                ++mp2Bad_;
+                /* ★ The squeal guard judges a scale factor against what this sub-band was doing a
+                 *  moment ago. A refused frame ends that continuity — the next frame we accept may
+                 *  be 24 ms or a second later, in a different passage — so drop the reference
+                 *  rather than fight the first frames back in with it. */
+                mp2_.resetScfHistory();
+                continue;
+            }
             ++mp2Out_;
             /* ★★★ CONCEAL THE SQUEAL. THE MPEG CRC DOES NOT COVER THE SCALEFACTORS — it spans the
              *  header, the allocation and the scfsi only (see mp2Crc16) — so a frame whose
@@ -451,40 +475,162 @@ private:
              *    interpolation: the ratios are exact small integers (48/24 = 2, 48/32 = 1.5) so
              *    this is not the place to spend an FIR, and a wrong-speed stream is not a
              *    fidelity problem to be tuned — it is a bug to be removed. */
-            const auto& mi = mp2_.info();
-            const int   nch = mi.channels > 0 ? mi.channels : 2;
-            const int   sr  = mi.sampleRateHz > 0 ? mi.sampleRateHz : int(kAudioRateHz);
-            const size_t frames = out.size() / size_t(nch);
-            if (!frames) continue;
-            if (sr == int(kAudioRateHz)) {
-                for (size_t i = 0; i < frames; ++i) {
-                    const float l = out[i * size_t(nch)];
-                    const float r = nch == 1 ? l : out[i * size_t(nch) + 1];
-                    pcm_.push_back(l); pcm_.push_back(r);
-                }
-            } else {
-                const double step = double(sr) / double(kAudioRateHz);
-                const double span = double(frames - 1);
-                for (double t = 0.0; t <= span; t += step) {
-                    const size_t i = size_t(t);
-                    const double fr = t - double(i);
-                    const size_t j = i + 1 < frames ? i + 1 : i;
-                    const float l0 = out[i * size_t(nch)], l1 = out[j * size_t(nch)];
-                    const float l  = float(l0 + (l1 - l0) * fr);
-                    float r = l;
-                    if (nch == 2) {
-                        const float r0 = out[i * size_t(nch) + 1], r1 = out[j * size_t(nch) + 1];
-                        r = float(r0 + (r1 - r0) * fr);
-                    }
-                    pcm_.push_back(l); pcm_.push_back(r);
+            /* ★★★ THE DYNAMIC LABEL — DAB'S "NOW PLAYING" — LIVES IN THE TAIL OF THIS FRAME.
+             *  EN 300 401 clause 7.4: [ ... audio ... ][ X-PAD ][ ScF-CRC ][ F-PAD (2) ]. F-PAD is
+             *  the last two bytes; the scale factor CRC sits between it and the X-PAD, so it has
+             *  to be lifted out before the PAD reader sees the field or the indicator list is read
+             *  out of the wrong bytes.
+             *  ★ Four CRC-8s at 48 kHz and >= 56 kbit/s, two below that — the same rule the scale
+             *    factor CRC itself uses, kept in step with it deliberately.
+             *  ★★ Nothing here can put wrong text on screen: a mis-located field fails the label's
+             *     own CRC-16 and is dropped. crcOk/crcFail are published so that is VISIBLE rather
+             *     than looking like a station that sends no label. */
+            {
+                const auto& mi2 = mp2_.info();
+                /* ★★★ NO SCALE FACTOR CRC ON THIS AIR — MEASURED, NOT ASSUMED. The layout in
+                 *  vibe_dab_mp2.h puts a ScF-CRC between X-PAD and F-PAD, and the scale factor
+                 *  CRC hunt already found otherwise: those bytes carry VARIABLE X-PAD on the
+                 *  streams here, which is why every ScF-CRC convention failed to match. Skipping
+                 *  bytes that are actually X-PAD moves the contents indicator list and the label
+                 *  never assembles.
+                 *  ★ Overridable so the other case can be tried without a rebuild if a stream
+                 *    turns up that does carry it: VIBE_DAB_SCFCRC_LEN. The dynamic label's own
+                 *    CRC-16 is the oracle — a wrong value shows nothing rather than nonsense. */
+                static const size_t scfCrcLen = std::getenv("VIBE_DAB_SCFCRC_LEN")
+                                              ? size_t(atoi(std::getenv("VIBE_DAB_SCFCRC_LEN"))) : 0;
+                (void)mi2;
+                if (f.size() > scfCrcLen + 2) {
+                    const size_t fpadAt = f.size() - 2;
+                    const size_t xEnd   = fpadAt - scfCrcLen;      // X-PAD ends before the ScF-CRC
+                    const size_t take   = xEnd < 48 ? xEnd : 48;   // 48 = the largest sub-field
+                    std::vector<uint8_t> win;
+                    win.reserve(take + 2);
+                    win.insert(win.end(), f.begin() + long(xEnd - take), f.begin() + long(xEnd));
+                    win.push_back(f[fpadAt]); win.push_back(f[fpadAt + 1]);
+                    pad_.feed(win.data(), win.size());
                 }
             }
+            const auto& mi = mp2_.info();
+            pushPcm48Stereo(out.data(), out.size(),
+                            mi.channels > 0 ? mi.channels : 2,
+                            mi.sampleRateHz > 0 ? mi.sampleRateHz : int(kAudioRateHz));
         }
         while (pcm_.size() > size_t(kAudioRateHz) * 2 * 2) pcm_.pop_front();   // ~2 s of slack
     }
 
+    /** ★★★ THE ONE PLACE ANYTHING BECOMES 48 kHz STEREO. MP2 and DAB+ both arrive at their own
+     *  rate and channel count, and takePcm() reads 48 kHz stereo pairs — so BOTH need upmixing and
+     *  resampling, and having written that twice is how the chipmunks got in the first time. A
+     *  MONO service read as L/R pairs plays at 2x; a 24 kHz service plays at 2x again; DAB+ adds
+     *  its own version of the same trap, because SBR and parametric stereo mean the decoder's
+     *  output rate and channel count are not the ones in the frame header.
+     *  ★ Linear interpolation on purpose: the ratios are exact small integers (48/24 = 2,
+     *    48/32 = 1.5), so this is not the place to spend an FIR — and a wrong-speed stream is not
+     *    a fidelity problem to be tuned, it is a bug to be removed. */
+    /** ★ A new programme, or a new rate, starts a new stream — drop the carried sample and phase
+     *  rather than splicing two different pieces of audio together. */
+    void resampleReset() { rsPrimed_ = false; rsPhase_ = 0.0; rsPrevL_ = rsPrevR_ = 0.0f; rsRate_ = 0; }
+
+    void pushPcm48Stereo(const float* data, size_t nSamples, int nch, int srHz) {
+        if (!data || nch <= 0 || srHz <= 0) return;
+        // ★ The carried state belongs to ONE rate. A service that changes it starts again.
+        if (srHz != rsRate_) { resampleReset(); rsRate_ = srHz; }
+        const size_t frames = nSamples / size_t(nch);
+        if (!frames) return;
+        const size_t before = pcm_.size();
+        if (srHz == int(kAudioRateHz)) {
+            for (size_t i = 0; i < frames; ++i) {
+                const float l = data[i * size_t(nch)];
+                const float r = nch == 1 ? l : data[i * size_t(nch) + 1];
+                pcm_.push_back(l); pcm_.push_back(r);
+            }
+        } else {
+            /* ★★★ THE PHASE MUST SURVIVE THE CALL, AND THIS IS WHY.
+             *
+             *  ★★★ THE FAULT IT FIXES. This used to run `for (double t = 0; t <= span; t += step)`
+             *      — starting at zero every time it was called. Fine for one long buffer; wrong
+             *      for a stream. DAB+ arrives one ACCESS UNIT at a time, 60 ms of 32 kHz audio per
+             *      call, so the resampler restarted about seventeen times a second. At every join
+             *      it (a) threw away the fractional phase it had reached and (b) never
+             *      interpolated ACROSS the boundary, because the last input sample of one call and
+             *      the first of the next were never seen together. Seventeen discontinuities a
+             *      second is a stutter.
+             *  ★★★ AND IT LOOKS LIKE NOTHING ELSE IS WRONG, WHICH IS THE TRAP. Stuart: "its odd I
+             *      am getting stutters but the FIB pass rate is 100%". It was: FIB 12/12, lock
+             *      solid, offset -19 Hz, every access unit decoding. The demodulator was never
+             *      involved — the damage is done after the audio is already perfect, by the last
+             *      arithmetic before it reaches the buffer.
+             *  ★★ MP2 NEVER SHOWED IT because 48 kHz services take the fast path above and never
+             *     resample at all; only a rate CHANGE reaches here, and DAB+ at 32 kHz reaches it
+             *     on every single access unit.
+             *  ★ prev + phase are members, reset only when the RATE changes or the programme does
+             *    (see resampleReset) — a new service is a new stream and joining it to the old
+             *    one's last sample would be one deliberate click instead of many accidental ones. */
+            const double step = double(srHz) / double(kAudioRateHz);
+            for (size_t i = 0; i < frames; ++i) {
+                const float l = data[i * size_t(nch)];
+                const float r = nch >= 2 ? data[i * size_t(nch) + 1] : l;
+                if (!rsPrimed_) { rsPrevL_ = l; rsPrevR_ = r; rsPhase_ = 0.0; rsPrimed_ = true; }
+                while (rsPhase_ < 1.0) {
+                    const float ph = float(rsPhase_);
+                    pcm_.push_back(rsPrevL_ + (l - rsPrevL_) * ph);
+                    pcm_.push_back(rsPrevR_ + (r - rsPrevR_) * ph);
+                    rsPhase_ += step;
+                }
+                rsPhase_ -= 1.0;
+                rsPrevL_ = l; rsPrevR_ = r;
+            }
+        }
+        /* ★★★ FRAMES ACTUALLY DELIVERED, COUNTED BEFORE THE TRIM. takePcm() reads 48 kHz stereo
+         *  pairs, so this must run at exactly 48000 a second in real time. Fewer and the listener
+         *  starves — audio that is perfectly CLEAR but slow, which is precisely how a rate error
+         *  presents once the decoding itself is right. There is no other number that settles it:
+         *  the decoder's reported rate, the AU count and the byte rate can all look correct while
+         *  this one is wrong. */
+        pcmPushed_ += uint64_t((pcm_.size() - before) / 2);
+        while (pcm_.size() > size_t(kAudioRateHz) * 2 * 2) pcm_.pop_front();   // ~2 s of slack
+    }
+
+    /** ★★★ KEEP THE CLOCK HONEST — A LOST SUPER FRAME MUST COST SILENCE, NOT TIME.
+     *
+     *  ★★★ THE FAULT THIS FIXES. A super frame that fails its firecode produced NOTHING: no audio
+     *      and no silence. The stream simply got shorter, so the listener starved a little more
+     *      with every loss and the audio ran permanently behind. MEASURED on 11A: 248 good super
+     *      frames of 298 tried delivered 43192 PCM frames a second against the 48000 takePcm()
+     *      reads, with the buffer sitting at empty — audio that is perfectly CLEAR and slow.
+     *      Stuart, twice, on exactly this: "still slow in safari but the audio is clear".
+     *  ★★★ AND SILENCE IS THE ANSWER HE ASKED FOR: "a slight bubbling mud or very slight silence
+     *      is fine but squeals is absolutely not." A gap keeps the timeline; a shortfall destroys
+     *      it, and a destroyed timeline is heard on every second of the programme, not just the
+     *      damaged ones.
+     *
+     *  ★★ THE TOLERANCE IS THE WHOLE DESIGN. Audio arrives in 120 ms bursts — five logical frames
+     *     are held, then one super frame's worth is decoded at once — so pcmPushed_ legitimately
+     *     lags pcmOwed_ by up to a super frame, and an AAC decoder runs a frame or two behind that
+     *     again. Topping up on every frame would inject silence into a stream that was merely
+     *     waiting, and then the real audio would arrive on top of it: the same total, twice the
+     *     length. So nothing is filled until the deficit EXCEEDS the lag a healthy stream shows,
+     *     and only the excess is filled.
+     *  ★ Bounded per call: a long outage should come back as a gap, not as a wall of silence
+     *    delivered in one go and then played out for seconds after the signal returned. */
+    void holdTimeline() {
+        static constexpr uint64_t kLagFrames  = uint64_t(kAudioRateHz) * 240 / 1000;  // 240 ms
+        static constexpr uint64_t kMaxFillPer = uint64_t(kAudioRateHz) / 2;           // 0.5 s
+        if (pcmOwed_ <= pcmPushed_ + kLagFrames) return;
+        uint64_t need = pcmOwed_ - pcmPushed_ - kLagFrames;
+        if (need > kMaxFillPer) need = kMaxFillPer;
+        for (uint64_t i = 0; i < need; ++i) { pcm_.push_back(0.0f); pcm_.push_back(0.0f); }
+        pcmPushed_ += need;
+        pcmFilled_ += uint32_t(need);
+        while (pcm_.size() > size_t(kAudioRateHz) * 2 * 2) pcm_.pop_front();
+    }
+
     /** One DAB+ logical frame: hold five, test the firecode, reframe the AUs it contains. */
     void pumpDabPlus(const std::vector<uint8_t>& frame) {
+        /* ★ One logical frame is 24 ms of programme, whatever happens to it after this point —
+         *  that is what makes the timeline knowable. 48000 x 0.024 = 1152 frames owed per call. */
+        pcmOwed_ += uint64_t(kAudioRateHz) * 24 / 1000;
+        struct Hold { DabService* s; ~Hold() { s->holdTimeline(); } } hold{this};
         if (frame.empty()) return;
         ++sfFrames_;
         sf_.push_back(frame);
@@ -507,6 +653,15 @@ private:
         ++sfTried_;
         SuperFrame s = decodeSuperFrame(wire.data(), wire.size(), index);
         // ★ SLIDE BY ONE on failure. Dropping all five would re-test the same phase for ever.
+        /* ★★★ COUNT WHERE THE SUPER FRAME DIED, because "sfOk vs sfTried" cannot tell you whether
+         *  more error correction would help or whether the signal is simply too weak. Reed-Solomon
+         *  running out of correction power and a header whose firecode failed are different
+         *  faults with different fixes, and both were invisible: rsCorrected and rsUncorrected
+         *  were computed on every super frame and read by NOTHING. */
+        rsCorrected_   += uint32_t(s.rsCorrected   < 0 ? 0 : s.rsCorrected);
+        rsUncorrected_ += uint32_t(s.rsUncorrected < 0 ? 0 : s.rsUncorrected);
+        if (!s.valid)       ++sfInvalid_;
+        if (!s.firecodeOk)  ++sfFireBad_;
         if (!s.valid || !s.firecodeOk) { sf_.pop_front(); return; }
         sf_.clear();
         ++sfOk_;
@@ -515,9 +670,45 @@ private:
         aacCoreCh_  = s.stereo ? 2 : 1;
         aacOutCh_   = (s.stereo || s.ps) ? 2 : 1;
         aacPs_      = s.ps;      // ★ mono core, stereo out — the decoder must be TOLD, see below
+        /* ★★★ DECODE HERE IF THE SERVER'S OS CAN, AND ONLY PUT ADTS ON THE WIRE IF IT CANNOT.
+         *  ★★★ THIS IS WHAT MAKES DAB+ EXACTLY WHAT MP2 ALREADY IS. Decoded here, it goes out as
+         *      PCM through the ordinary audio path — Opus or uncompressed, whatever the listener
+         *      negotiated — so format 4 never reaches a client and the whole browser codec problem
+         *      stops existing. Safari playing "split seconds" of DAB+, the 960-vs-1024 framing,
+         *      the mp4 timescale arithmetic, the parametric-stereo signalling: all of it is
+         *      browser-side handling of a format we no longer send.
+         *  ★★★ AND IT IS THE APPS THAT GAIN MOST. iOS and Android have had NO DAB+ audio work done
+         *      at all; client-side decoding meant writing this twice more, with the same class of
+         *      bugs each time. They now need nothing.
+         *  ★ We still ship no AAC decoder — see vibe_dab_aacdec.h. This calls the platform's,
+         *    which is the same posture as relying on the browser's.
+         *  ★ The ADTS reframing is unchanged and still the single description of a DAB+ access
+         *    unit; the decoder is fed the very same bytes the wire used to carry. */
         for (const auto& au : s.aus) {
             std::vector<uint8_t> pkt = toAdts(au.data(), au.size(), s.fmt, aacCoreCh_);
-            if (!pkt.empty()) { adts_.push_back(std::move(pkt)); ++ausOut_; }
+            if (pkt.empty()) continue;
+            ++ausOut_;
+            if (aac_.available()) {
+                AacPcm dec;
+                if (aac_.decode(pkt.data(), pkt.size(), dec)) {
+                    if (!dec.interleaved.empty()) {
+                        /* ★ Frames the decoder actually returned for this access unit. A DAB+ AU
+                         *  is a fixed 1024 samples at the decoder's OUTPUT rate for HE-AAC, so
+                         *  this number and the reported rate must agree — and if they do not, the
+                         *  audio plays at the wrong SPEED while sounding perfectly clean. */
+                        if (dec.channels > 0)
+                            aacPcmPerAu_ = uint32_t(dec.interleaved.size() / size_t(dec.channels));
+                        pushPcm48Stereo(dec.interleaved.data(), dec.interleaved.size(),
+                                        dec.channels, dec.rateHz);
+                    }
+                    ++aacDecoded_;
+                    continue;
+                }
+                /* ★ The decoder failed and said so. Fall through and hand the client the ADTS, so
+                 *  a server whose decoder dies mid-programme degrades to the old behaviour rather
+                 *  than to silence. */
+            }
+            adts_.push_back(std::move(pkt));
         }
         // ★ Bounded like the PCM: audio minutes late is worse than a gap.
         while (adts_.size() > 250) adts_.pop_front();
@@ -541,7 +732,22 @@ private:
      *    frame rather than dropping all five, or a stream that starts mid-super-frame never
      *    aligns at all. */
     std::deque<std::vector<uint8_t>> sf_;      ///< the five-frame window
-    std::deque<std::vector<uint8_t>> adts_;    ///< reframed AUs, ready for the wire
+    std::deque<std::vector<uint8_t>> adts_;    ///< reframed AUs, for a server with no decoder
+    AacDecoder aac_;                           ///< the PLATFORM's decoder — we ship none
+    uint32_t   aacDecoded_ = 0;
+    uint32_t   aacPcmPerAu_ = 0;
+    uint64_t   pcmPushed_ = 0;
+    uint64_t   pcmOwed_   = 0;     ///< 48 kHz frames the programme clock says we should have sent
+    uint32_t   pcmFilled_ = 0;
+    uint32_t   rsCorrected_ = 0, rsUncorrected_ = 0;  ///< Reed-Solomon: bytes fixed / codewords lost
+    uint32_t   sfInvalid_ = 0, sfFireBad_ = 0;
+    PadReader  pad_;               ///< dynamic label (and, later, MOT slideshow)        ///< and WHY a super frame was thrown away
+    /** ★ Carried across calls so the 32 kHz -> 48 kHz conversion is ONE continuous stream rather
+     *  than one restart per access unit. See pushPcm48Stereo. */
+    double     rsPhase_ = 0.0;
+    float      rsPrevL_ = 0.0f, rsPrevR_ = 0.0f;
+    bool       rsPrimed_ = false;
+    int        rsRate_ = 0;     ///< of those, how many were silence covering a lost super frame     ///< 48 kHz stereo frames delivered, ever   ///< PCM FRAMES the decoder returned for the last AU                ///< AUs turned into PCM here rather than on the client
     AudioFormat afmt_{};
     /* ★ Counters, because "no audio" has four possible causes here and guessing between them is
      *  what cost the evening: no frames arriving, frames of an unusable length, the firecode

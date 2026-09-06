@@ -304,6 +304,27 @@ int main() {
             off += size_t(f.frameBytes); ++n;
         }
         CHECK(n == 4, "all four frames decode");
+        /* ★★★ THE SQUEAL GUARD MUST BE INERT ON CLEAN AUDIO — the whole safety argument for it.
+         *  It repairs scale factors that are implausibly LOUD against their own recent context, to
+         *  kill the tonal squeal that scale-factor corruption produces (the MPEG CRC does not
+         *  cover scale factors, so those frames decode "successfully" at full scale). 10C is the
+         *  multiplex that suffers; BBC/D1/SDL are largely clean, and Stuart's requirement is that
+         *  a fix for the bad one costs nothing on the good ones.
+         *  ★ Real BBC Radio 4 joint-stereo audio, four consecutive frames, decoded through the
+         *    same path as on air: the guard must not touch a single scale factor. If this ever
+         *    fires the threshold has been set into the range of ordinary programme material and
+         *    the guard has become an audio processor, which it must never be. */
+        /* ★★★ THIS ASSERTION PASSED WHILE THE GUARD WAS DAMAGING REAL AUDIO — kept, with the
+         *  warning it earned. Four frames never reach a transient and barely build the
+         *  cross-frame history the guard uses, so "inert here" said nothing about inert on air:
+         *  measured on 11A, 1412 clamps in 38 s on a multiplex with FIB 1.000. The guard is now
+         *  off by default (see vibe_dab_mp2.h) and this only checks that the default IS off.
+         *  ★ A real test needs captured frames through dab-offline, with the distribution of
+         *    LEGITIMATE frame-to-frame scale factor jumps measured first. Until then a synthetic
+         *    pass here is not evidence — this tree's own rule: a synthetic test can agree with
+         *    the bug. */
+        CHECK(dec.scfClamped() == 0,
+              "★ the squeal guard is OFF by default and clamps nothing");
         /* ★★ THE DISCRIMINATOR IS LEVEL, NOT CREST. A mishandled joint-stereo frame desynchronises
          *  the bit reader and the output is FULL-SCALE noise — rms above 1.0, clipping hard —
          *  while still producing plenty of energy and perfectly valid frame headers. Correctly

@@ -18,6 +18,8 @@
 #pragma once
 #include <cstdlib>
 
+#include <atomic>
+#include <cstdlib>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -36,6 +38,18 @@
 
 namespace vibedab {
 
+/** ★ The MSC erasure threshold, as a fraction of the PRS correlation's own running reference.
+ *  0 disables erasure entirely. Live-settable so it can be A/B'd on a single lock — see the note
+ *  at the test itself. Seeded from VIBE_DAB_NOERASE / VIBE_DAB_ERASE_FRAC on first use. */
+inline std::atomic<float>& dabEraseFrac() {
+    static std::atomic<float> v{
+        std::getenv("VIBE_DAB_NOERASE") ? 0.0f
+      : (std::getenv("VIBE_DAB_ERASE_FRAC") ? float(std::atof(std::getenv("VIBE_DAB_ERASE_FRAC")))
+                                            : 0.25f) };
+    return v;
+}
+
+
 /** What the receiver can tell the DX panel right now. Every field is measured, never inferred. */
 struct DabStats {
     bool   locked        = false;
@@ -51,7 +65,16 @@ struct DabStats {
      *  was wrong. A receiver that never erases is one that is guessing; one that erases often is
      *  losing sync. Both are worth seeing. */
     int    erasedFrames      = 0;
-    float  prsCorrelation    = 0.0f;///< how well the phase reference matched — a lock quality
+    /** ★★★ NOT A QUALITY — A LEVEL TIMES A QUALITY, AND THE DIFFERENCE HAS TEETH.
+     *  The reference carriers are unit magnitude by construction, so this is
+     *      |SUM received_carrier x conj(reference_carrier)| / K
+     *  which scales with the RECEIVED AMPLITUDE. It moves when the AGC moves, with no change in
+     *  the signal at all. Its absolute value means nothing; only its ratio to its own recent
+     *  average does, which is exactly how the erasure test below uses it — and is why that ratio
+     *  is now published beside it rather than leaving a bare number on screen for a human to
+     *  judge against a scale that shifts underneath them. */
+    float  prsCorrelation    = 0.0f;
+    float  prsRef            = 0.0f;///< the running reference the erasure test compares against
 };
 
 class DabReceiver {
@@ -219,10 +242,17 @@ public:
         else if (stats_.prsCorrelation > prsRef_)
              prsRef_ = prsRef_ * 0.90f + stats_.prsCorrelation * 0.10f;   // rise quickly
         else prsRef_ = prsRef_ * 0.99f + stats_.prsCorrelation * 0.01f;   // fall slowly
-        static const bool kNoErase = std::getenv("VIBE_DAB_NOERASE") != nullptr;   // ★ A/B switch
-        static const float kEraseFrac = std::getenv("VIBE_DAB_ERASE_FRAC")
-                                     ? float(atof(std::getenv("VIBE_DAB_ERASE_FRAC"))) : 0.25f;
-        const bool untrusted = !kNoErase && (prsRef_ > 0.0f && stats_.prsCorrelation < kEraseFrac * prsRef_);
+        /* ★★★ SETTABLE WHILE IT RUNS, BECAUSE A RESTART DESTROYS THE COMPARISON. Changing this
+         *  by rebuilding means a new process, a new AGC climb from the tuner's minimum (~50 s) and
+         *  a fresh acquisition — and on a multiplex that varies minute to minute that confound is
+         *  larger than the effect being measured. It already ruined one A/B today: 1.537 vs 2.048
+         *  MHz measured nothing but 10C's own fading, twice, before the filter turned out never to
+         *  have been applied at all. Toggled live, both arms share one lock, one gain, one minute
+         *  of air. ★ Env still seeds it, so an unattended server can start either way. */
+        const float kEraseFrac = dabEraseFrac().load(std::memory_order_relaxed);
+        stats_.prsRef = prsRef_;
+        const bool untrusted = kEraseFrac > 0.0f
+                            && (prsRef_ > 0.0f && stats_.prsCorrelation < kEraseFrac * prsRef_);
         const size_t ficBits = size_t(K) * 2 * 3;
         if (untrusted) {
             ++stats_.erasedFrames;
