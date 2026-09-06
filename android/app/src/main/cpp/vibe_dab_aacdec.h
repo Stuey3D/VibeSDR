@@ -28,6 +28,14 @@
 #if defined(__ANDROID__)
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaFormat.h>
+#elif defined(__unix__) || defined(__APPLE__)
+#include <cerrno>          // ★ glibc does not pull this in transitively; macOS does
+#include <csignal>
+#include <cstdio>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 namespace vibedab {
@@ -215,6 +223,128 @@ private:
     int      rate_ = 0, ch_ = 0;
     int64_t  pts_  = 0;
     bool     failed_ = false;
+};
+
+#elif defined(__unix__) || defined(__APPLE__)
+
+/** ★★★ THE PLATFORM'S DECODER ON A POSIX SERVER IS ffmpeg, RUN AS A PROCESS.
+ *
+ *  ★★★ STILL NOT A DECODER WE SHIP. Same posture as AMediaCodec above and as the browser's before
+ *      that: we hand ADTS to something the operating system already provides and take PCM back.
+ *      Nothing is linked, nothing is bundled, and a machine without ffmpeg simply reports
+ *      available() == false. It is also what OpenWebRX does with dablin, so it is a shape this
+ *      hardware is already known to sustain.
+ *
+ *  ★★★ ffmpeg RESAMPLES TO 48 kHz STEREO FOR US, AND THAT IS DELIBERATE. DAB+ is HE-AAC: the core
+ *      rate in the ADTS header is not the output rate (SBR doubles it) and a mono core can decode
+ *      to two channels (parametric stereo). Asking the decoder for exactly what the audio path
+ *      wants removes that whole class of question — the same class that made the Android path
+ *      play at the wrong speed until the output format was read back rather than assumed.
+ *
+ *  ★★ ONE PROCESS PER SERVICE, STARTED LAZILY AND KILLED ON A SERVICE CHANGE. A DAB+ service can
+ *     change rate and channel mode, and a decoder configured for the previous one produces
+ *     confident nonsense.
+ *  ★ SIGPIPE is ignored once, process-wide: ffmpeg exiting mid-write must return an error here,
+ *    not kill the server.
+ */
+class AacDecoder {
+public:
+    AacDecoder() = default;
+    ~AacDecoder() { close(); }
+    AacDecoder(const AacDecoder&) = delete;
+    AacDecoder& operator=(const AacDecoder&) = delete;
+
+    /** ★ Probed ONCE: the binary must exist AND report an AAC decoder. A server with ffmpeg built
+     *  without AAC would otherwise look capable and deliver silence. */
+    bool available() const {
+        static const bool ok = probe();
+        return ok && !failed_;
+    }
+
+    bool decode(const uint8_t* adts, size_t n, AacPcm& out) {
+        if (!available() || n < 7) return available();
+        if (pid_ < 0 && !start()) return false;
+        ssize_t w = ::write(inFd_, adts, n);
+        if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) { close(); failed_ = true; return false; }
+        drain(out);
+        return true;
+    }
+
+    void drain(AacPcm& out) {
+        if (pid_ < 0) return;
+        for (;;) {
+            uint8_t buf[16384];
+            const ssize_t r = ::read(outFd_, buf, sizeof buf);
+            if (r <= 0) break;
+            const float* f = reinterpret_cast<const float*>(buf);
+            const size_t nf = size_t(r) / sizeof(float);
+            out.interleaved.insert(out.interleaved.end(), f, f + nf);
+            out.rateHz = 48000; out.channels = 2;      // what we asked ffmpeg for
+            if (size_t(r) < sizeof buf) break;
+        }
+    }
+
+    void close() {
+        if (inFd_  >= 0) { ::close(inFd_);  inFd_  = -1; }
+        if (outFd_ >= 0) { ::close(outFd_); outFd_ = -1; }
+        if (pid_ > 0) { ::kill(pid_, SIGKILL); int st = 0; ::waitpid(pid_, &st, 0); }
+        pid_ = -1;
+    }
+    void reset() { close(); failed_ = false; }
+    int rateHz()   const { return pid_ > 0 ? 48000 : 0; }
+    int channels() const { return pid_ > 0 ? 2 : 0; }
+
+private:
+    static bool probe() {
+        /* ★ `ffmpeg -decoders` and look for the aac line — the same check by hand as
+         *  `ffmpeg -decoders | grep ' aac '`, which is how the Pi was confirmed: "A....D aac". */
+        FILE* p = ::popen("ffmpeg -hide_banner -decoders 2>/dev/null", "r");
+        if (!p) return false;
+        char line[512]; bool found = false;
+        while (std::fgets(line, sizeof line, p)) {
+            const char* a = std::strstr(line, " aac ");
+            if (a) { found = true; break; }
+        }
+        ::pclose(p);
+        return found;
+    }
+
+    bool start() {
+        static const bool ignoredPipe = [] { ::signal(SIGPIPE, SIG_IGN); return true; }();
+        (void)ignoredPipe;
+        int inPipe[2], outPipe[2];
+        if (::pipe(inPipe) != 0) return false;
+        if (::pipe(outPipe) != 0) { ::close(inPipe[0]); ::close(inPipe[1]); return false; }
+        const pid_t pid = ::fork();
+        if (pid < 0) {
+            ::close(inPipe[0]); ::close(inPipe[1]); ::close(outPipe[0]); ::close(outPipe[1]);
+            failed_ = true; return false;
+        }
+        if (pid == 0) {
+            ::dup2(inPipe[0], STDIN_FILENO);
+            ::dup2(outPipe[1], STDOUT_FILENO);
+            ::close(inPipe[1]); ::close(outPipe[0]);
+            const int devnull = ::open("/dev/null", O_WRONLY);
+            if (devnull >= 0) ::dup2(devnull, STDERR_FILENO);
+            /* ★ nobuffer + low_delay because this is a live stream, not a file: ffmpeg's default
+             *  input buffering would add latency the audio path then has to carry for ever. */
+            ::execlp("ffmpeg", "ffmpeg", "-hide_banner", "-loglevel", "quiet", "-nostdin",
+                     "-fflags", "nobuffer", "-flags", "low_delay",
+                     "-f", "aac", "-i", "pipe:0",
+                     "-f", "f32le", "-ar", "48000", "-ac", "2", "pipe:1", (char*)nullptr);
+            ::_exit(127);
+        }
+        ::close(inPipe[0]); ::close(outPipe[1]);
+        inFd_ = inPipe[1]; outFd_ = outPipe[0];
+        ::fcntl(inFd_,  F_SETFL, O_NONBLOCK);
+        ::fcntl(outFd_, F_SETFL, O_NONBLOCK);
+        pid_ = pid;
+        return true;
+    }
+
+    pid_t pid_ = -1;
+    int   inFd_ = -1, outFd_ = -1;
+    bool  failed_ = false;
 };
 
 #else
