@@ -3004,9 +3004,12 @@ struct LocalSdrShim::Impl {
          *
          *  ★ 0 means "no filtering", which is what a mode that occupies the whole capture wants. */
         if (g_dabMode.load(std::memory_order_relaxed)) {
-            static const int kDabIfWant = std::getenv("VIBE_DAB_IF_HZ")
-                                        ? atoi(std::getenv("VIBE_DAB_IF_HZ")) : 1537000;
-            if (g_tunerBwHz.load(std::memory_order_relaxed) != kDabIfWant) {
+            /* ★★★ ONE CONSTANT, READ ONCE. There were TWO of these in this function — the same
+             *  getenv, the same default, twelve lines apart — so a change to either was half a
+             *  change. See the note below for what the number now is and why. */
+            static const int kDabIfHz = std::getenv("VIBE_DAB_IF_HZ")
+                                      ? atoi(std::getenv("VIBE_DAB_IF_HZ")) : 2048000;
+            if (g_tunerBwHz.load(std::memory_order_relaxed) != kDabIfHz) {
                 /* ★★★ 1.75 MHz, NOT WIDE OPEN — AND THE DIFFERENCE IS AN ADJACENT MULTIPLEX
                  *  FOLDED ON TOP OF THIS ONE. I set this to 0 ("automatic", i.e. as wide as the
                  *  tuner will go) to stop the zoom-following filter cutting into a 1.536 MHz
@@ -3023,20 +3026,37 @@ struct LocalSdrShim::Impl {
                  *      and a frequency offset "all over the place" — sync pulled about by a
                  *      second ensemble aliased on top of the first. 12B and 11D have no close
                  *      neighbour here and were rock steady.
-                 *  ★★ 1.537 MHz IS THE REFERENCE FIGURE, not a guess of mine. SDRangel's DAB demodulator
-                 *     documents exactly this: "RF Bandwidth ... should typically be 1.537 MHz",
-                 *     with a 2.048 MHz decoder rate — which is also our resampled rate. Stuart
-                 *     produced it while this was being written; my own first number was 1.75 MHz,
-                 *     which keeps the ensemble but leaves the neighbour at 1.712 MHz nearer the
-                 *     passband edge than it needs to be.
+                 *  ★★★ AND IT IS 2.048 MHz, NOT 1.537 — 1.537 WAS THE WRONG FILTER'S NUMBER.
+                 *     I took "RF Bandwidth ... should typically be 1.537 MHz" out of SDRangel's
+                 *     DAB demodulator and wrote it into rtlsdr_set_tuner_bandwidth(). Those are
+                 *     two different filters. Stuart: "1537 is the VFO bandwidth like 200KHz is
+                 *     for FM" — it is SDRangel's SOFTWARE passband, a channel filter applied
+                 *     after capture, and it sits beside a decoder rate of 2.048 MHz that is the
+                 *     rate the TUNER is expected to deliver. Copying a channel-filter figure onto
+                 *     the analogue front end asks the hardware to do a job it has the wrong shape
+                 *     for.
+                 *  ★★★ THE SHAPE IS THE WHOLE POINT. The R820T's bandwidth figure is roughly a
+                 *     -3 dB corner on a gentle multi-pole response, not a brick wall. At 1.537 MHz
+                 *     the corner lands at +/-768 kHz — which is EXACTLY the ensemble edge, so the
+                 *     outermost carriers sit in the shoulder of the roll-off and arrive already
+                 *     attenuated. Stuart: "1537 IF filter would put the edges of the multiplex
+                 *     into the shoulders of the filter cutoff." Then HW_OFFSET_HZ pushes the whole
+                 *     ensemble 15 kHz off centre and one side goes further in still.
+                 *  ★★★ WE HAD ALREADY MEASURED THIS AND ACTED ON IT — ON THE OTHER FILTER ONLY.
+                 *     vibe_dab_resample.h ran the sweep: cutting the SOFTWARE passband towards the
+                 *     ensemble edge was monotonically worse (0.1% bad frames at Nyquist, 0.6% at
+                 *     768 kHz), for this same reason, and it was left wide at Nyquist. The
+                 *     hardware filter was then set to the very figure that sweep rejected. One
+                 *     rule, two readers; the measured one was updated and this one was not.
+                 *  ★★ SO: 2.048 MHz. The corner is at +/-1024 kHz, leaving the ensemble edge at
+                 *     768 kHz and the 15 kHz offset well inside the flat part, while the
+                 *     neighbouring block at 1.712 MHz is 688 kHz PAST the corner and still gets
+                 *     the roll-off that keeps it from folding to 688 kHz on the ADC. It is also
+                 *     the number the rest of this chain already speaks in: the decoder rate, and
+                 *     what SDRangel expects the tuner to be doing while its 1.537 filter runs.
                  *  ★ The R820T2 quantises this to its nearest step, so the exact request matters
                  *    less than its size; asking for the figure that means something is still
                  *    right. VIBE_DAB_IF_HZ overrides it for measurement on 10C. */
-                /* ★ Overridable so the right number can be MEASURED on the air that shows the
-                 *  problem, rather than argued from the spec. 10C with 10D beside it is the case
-                 *  that discriminates; 12B has no close neighbour and cannot. */
-                static const int kDabIfHz = std::getenv("VIBE_DAB_IF_HZ")
-                                          ? atoi(std::getenv("VIBE_DAB_IF_HZ")) : 1537000;
                 LocalSdrShim::instance().setTunerBandwidth(kDabIfHz);
                 LOGI("[DAB] tuner IF filter set to %.3f MHz — wide enough for a 1.536 MHz "
                      "ensemble, narrow enough to keep the next block out", kDabIfHz / 1e6);
@@ -8343,6 +8363,17 @@ struct LocalSdrShim::Impl {
                  *  and the lock is only re-applied by a rebuild that may not come. Put the rate
                  *  and the centre back by hand, then restore the promise. */
                 dabRestore();
+                /* ★★★ AND RE-DERIVE THE IF FILTER, BECAUSE NOTHING ELSE WILL. DAB pins it at
+                 *  2.048 MHz for the whole ensemble; leaving DAB restores the rate and the centre
+                 *  but left the tuner still filtered to 2.048 MHz, and applyAutoIf runs only on a
+                 *  tune or a zoom — so the wrong filter simply STAYED until the listener happened
+                 *  to move something. On a 2.4 MS/s FM view that eats both edges of the spectrum:
+                 *  dead band at each end, which reads as a broken receiver rather than a stale
+                 *  filter.
+                 *  ★ Same shape as the deferred writes this file warns about a few hundred lines
+                 *    down — a correction that depends on an event that may never come is not a
+                 *    correction. Restore it here, where the mode actually changed. */
+                applyAutoIf();
                 sendText(sock, "{\"type\":\"dab_off\"}");
                 /* ★ And tell the client where the radio actually IS. Leaving DAB moves the centre,
                  *  the rate and the gain back, and a client still holding the multiplex centre
@@ -8506,8 +8537,39 @@ struct LocalSdrShim::Impl {
             if (std::fabs(LocalSdrShim::instance().captureSpanHz() - 2400000.0) > 1000.0)
                 LocalSdrShim::instance().setSampleRate(double(vibedab::DabService::kRateHz));
             rtlCenter.store(logical);
-            tuneHw(logical);
+            /* ★★★ MODE FIRST, THEN THE FILTER, THEN THE FREQUENCY — AND THAT ORDER IS LOAD-BEARING.
+             *  ★★★ THE IF FILTER WRITE MOVES THE TUNER. librtlsdr's rtlsdr_set_tuner_bandwidth()
+             *      re-applies the tuner's own last centre frequency as part of setting the filter,
+             *      so a bandwidth write that lands AFTER our DAB tune drags the radio back to
+             *      where librtlsdr thinks it should be — 15 kHz off, because DAB tunes the
+             *      physical centre directly and librtlsdr does not know that.
+             *  ★★★ MEASURED, AND IT WAS INTERMITTENT, WHICH IS WHY THE ORDER MUST BE EXPLICIT AND
+             *      NOT LUCK. Two identical 120 s runs on 10C, minutes apart, with the filter
+             *      write racing the tune on the hw-writer thread:
+             *          offsetHz  -15043   fibRate 0.000   badPct 99.98   <- filter landed last
+             *          offsetHz      11   fibRate 0.941   badPct 38.96   <- tune landed last
+             *      A receiver locked to the right multiplex at the wrong frequency, exactly as at
+             *      4.1.70. Half the runs would have been fine and the fault would have been
+             *      blamed on 10C, which is already the noisiest thing we own.
+             *  ★ The frequency goes LAST because the hw writer re-applies the IF filter after
+             *    every centre-frequency write (see startHwWriter) — so the filter survives, and
+             *    the frequency is the value nothing follows. The reverse has no such repair. */
             g_dabMode.store(true);
+            /* ★★★ APPLY THE IF FILTER — NOTHING ELSE WILL. applyAutoIf() is called from
+             *  retune(), and this path deliberately does not go through retune: an ensemble IS
+             *  the capture, so it moves the hardware centre directly (see the note above). The
+             *  DAB branch at the top of applyAutoIf was therefore DEAD CODE from the day it was
+             *  written — g_dabMode is set HERE, after the only tune, so even a call that did
+             *  happen would have taken the analogue path.
+             *  ★★★ MEASURED, WHICH IS THE ONLY REASON IT WAS FOUND. hwinfo reported tunerBw=0 at
+             *      0 s, 8 s AND 44 s after entering DAB, on a build whose default was 2048000.
+             *      An A/B of 1.537 vs 2.048 MHz then measured nothing at all — both arms ran the
+             *      filter wide open — and the "difference" between them was 10C's own fading.
+             *      A dead control does not report itself; the numbers on either side of it look
+             *      like data.
+             *  ★ After g_dabMode, never before: the branch reads it. */
+            applyAutoIf();
+            tuneHw(logical);          // ★ LAST. See the ordering note above.
             LOGI("[DAB] mode ON: channel %s, centre %.3f MHz, rate %.0f — dspLoop should follow",
                  vibedab::kBandIII[idx].name, centre / 1e6, double(vibedab::DabService::kRateHz));
             double sid = 0; jsonNum(msg, "sid", sid);
@@ -8525,6 +8587,16 @@ struct LocalSdrShim::Impl {
                 LOGI("DAB rate boost: %s", v != 0 ? "ON (2.048 MS/s while DAB runs)" : "off");
                 sendHwInfo(sock);
             }
+            return;
+        }
+        /* ★ MEASUREMENT CONTROL: the MSC erasure threshold, live. See dabEraseFrac(). 0 = off.
+         *  The number it sets was swept for MP2 on 12B and has NEVER been measured for DAB+, where
+         *  an erased frame costs a whole 120 ms super frame rather than 24 ms. */
+        if (type == "dab_erase") {
+            double v = 0.25; jsonNum(msg, "frac", v);
+            vibedab::dabEraseFrac().store(float(v), std::memory_order_relaxed);
+            LOGI("[DAB] erase threshold -> %.3f of the running PRS reference%s",
+                 v, v <= 0.0 ? " (erasure OFF)" : "");
             return;
         }
         if (type == "dab_service") {
@@ -9285,8 +9357,23 @@ struct LocalSdrShim::Impl {
          *     can be looking anywhere inside the capture — which is the whole point of moving the
          *     centre away from a blowtorch — so a client that assumed the view centre would draw
          *     the passband wrong by exactly the offset that makes it worth having. */
+        /* ★★★ "AUTO" IS A CLAIM ABOUT WHERE THE NUMBER CAME FROM, AND IN DAB IT IS FALSE.
+         *  Auto means the IF filter follows the listeners' zoom, re-derived on every tune. DAB
+         *  does none of that: applyAutoIf takes its DAB branch and pins the filter at 2.048 MHz
+         *  for the whole ensemble, deliberately, because an ensemble IS the capture and a
+         *  view-following filter cut the outer third of the carriers off.
+         *  ★★★ SO REPORTING THE STORED SETTING HERE MISDESCRIBES THE RADIO. Stuart's status bar
+         *      read "IF 2048 kHz auto" while the filter was fixed and nothing was following
+         *      anything — the same fault as a tour card naming the wrong home for a control, and
+         *      the same rule from AGENTS.md: when a control moves, fix the copy that says where
+         *      it is. A user reading "auto" reasonably concludes zooming will change it.
+         *  ★ The SETTING is untouched — this is the STATUS, and it is restored the moment DAB
+         *    ends. One emitter, so every reader (the web status bar, LocalHardwarePanel's
+         *    selector) is corrected at once rather than one of them. */
+        const bool bwAutoNow = g_tunerBwAuto.load(std::memory_order_relaxed)
+                            && !g_dabMode.load(std::memory_order_relaxed);
         j += ",\"tunerBwAuto\":"
-           + std::string(g_tunerBwAuto.load(std::memory_order_relaxed) ? "true" : "false")
+           + std::string(bwAutoNow ? "true" : "false")
            + ",\"tunerBw\":"
            + std::to_string(g_tunerBwHz.load(std::memory_order_relaxed))
            + ",\"rfCentre\":"
