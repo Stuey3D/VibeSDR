@@ -943,7 +943,14 @@ export class AudioPlayer {
      *  super frame, corrects it with Reed-Solomon and reframes the access units, and the BROWSER's
      *  own decoder does the rest, which it is already licensed for. Most of the UK's stations are
      *  DAB+, and every one of them was silent before this. */
-    if (format === 4) { this._decodeAac(buf, channels, new DataView(buf).getUint32(2, true)); return; }
+    if (format === 4) {
+      /* ★ Low nibble = the CORE channel count, bit 7 = parametric stereo. See the server's note
+       *  on aacParametricStereo(): a mono core with PS must be declared as HE-AAC v2 or the
+       *  decoder plays the core alone — mono, and half the bandwidth. */
+      this.aacPs = (channels & 0x80) !== 0;
+      this._decodeAac(buf, channels & 0x0f, new DataView(buf).getUint32(2, true));
+      return;
+    }
 
     let pcm: Int16Array;
     let ch: number;
@@ -1231,7 +1238,13 @@ export class AudioPlayer {
      *  speed, and the error rides on top of whatever the SBR handling did — which is exactly
      *  Stuart's "some stations are slow and others are fast" rather than one uniform wrongness.
      *  ★ GASpecificConfig: frameLengthFlag(1)=1, dependsOnCoreCoder(1)=0, extensionFlag(1)=0. */
-    put(5, 5); put(ci, 4); put(ch, 4); put(oi, 4); put(2, 5); put(len960 ? 4 : 0, 3);
+    /* ★★★ AOT 29 = HE-AAC v2 (SBR + PARAMETRIC STEREO); AOT 5 = HE-AAC v1 (SBR only). The rest
+     *  of the explicit hierarchical config is identical: core rate, CORE channel count, the
+     *  extension rate, then AOT 2 for the core itself. Declaring 5 for a PS stream is what left
+     *  Safari playing a mono 16 kHz core — audible as telephone-grade "hold music" — while the
+     *  same service in Edge came out full-bandwidth and in stereo. */
+    put(this.aacPs ? 29 : 5, 5);
+    put(ci, 4); put(ch, 4); put(oi, 4); put(2, 5); put(len960 ? 4 : 0, 3);
     if (nbits) out.push((acc << (8 - nbits)) & 0xff);
     return new Uint8Array(out);
   }
@@ -1330,10 +1343,15 @@ export class AudioPlayer {
      *  raw-AAC-plus-description candidates must be tried BEFORE the ADTS ones.
      *  ★ ADTS is kept as the last resort: slightly fast beats silent on a decoder that will not
      *    take a description. */
-    for (const codec of ['mp4a.40.5', 'mp4a.40.05', 'mp4a.40.2', 'mp4a.40.02']) {
+    /* ★ mp4a.40.29 is HE-AAC v2 and must be offered FIRST when the service uses parametric
+     *  stereo, or a decoder takes the v1 string at its word and never reconstructs the second
+     *  channel. */
+    const codecs = this.aacPs ? ['mp4a.40.29', 'mp4a.40.5', 'mp4a.40.05', 'mp4a.40.2', 'mp4a.40.02']
+                              : ['mp4a.40.5', 'mp4a.40.05', 'mp4a.40.2', 'mp4a.40.02'];
+    for (const codec of codecs) {
       if (asc) tries.push({ codec, description: asc, strip: 7 });  // raw AAC + explicit config
     }
-    for (const codec of ['mp4a.40.5', 'mp4a.40.05', 'mp4a.40.2', 'mp4a.40.02']) {
+    for (const codec of codecs) {
       tries.push({ codec, strip: 0 });                             // ADTS, config inferred
     }
     for (const t of tries) {
@@ -1398,7 +1416,8 @@ export class AudioPlayer {
     const tsRate = outRate || coreRateHz;
     if (!MS)  { this._aacNote('no MediaSource in this browser'); return false; }
     if (!asc) { this._aacNote(`no config for ${coreRateHz} Hz / ${channels}ch`); return false; }
-    const mime = ['audio/mp4; codecs="mp4a.40.5"', 'audio/mp4; codecs="mp4a.40.2"',
+    const mime = [...(this.aacPs ? ['audio/mp4; codecs="mp4a.40.29"'] : []),
+                  'audio/mp4; codecs="mp4a.40.5"', 'audio/mp4; codecs="mp4a.40.2"',
                   'audio/mp4; codecs="mp4a.40.05"', 'audio/mp4; codecs="mp4a.40.02"']
       .find((m) => { try { return MS.isTypeSupported(m); } catch { return false; } });
     if (!mime) { this._aacNote('MediaSource supports no AAC in mp4'); return false; }
@@ -1547,6 +1566,8 @@ export class AudioPlayer {
    *  ★ Truth first, then the lie: a decoder that handles 960 gets it. Only one that fails without
    *    ever producing a frame is told 1024 instead. */
   private aacUse960 = true;
+  /** Parametric stereo (HE-AAC v2): mono core, stereo out. Set from the frame header. */
+  private aacPs = false;
   private _recoverAac(e: unknown) {
     if (this.aacBroken) return;
     /* ★★★ NEVER PRODUCED A FRAME? THE CONFIG IS THE SUSPECT, NOT THE DATA. Try the other frame

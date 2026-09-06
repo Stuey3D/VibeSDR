@@ -286,6 +286,14 @@ public:
      *  refused every frame: "InternalAudioDecoderCocoa decoding failed", 0 good frames, for as
      *  long as DAB+ has existed on Safari. Chromium is lenient about it; Apple is not. */
     int aacCoreChannels() { std::lock_guard<std::mutex> lk(m_); return aacCoreCh_; }
+    /** ★★★ PARAMETRIC STEREO IN USE — HE-AAC v2. The core is mono and the second channel is
+     *  reconstructed from side information. A decoder that is not told this decodes the core and
+     *  stops: mono, and only the lower half of the spectrum, because SBR is not applied either.
+     *  Stuart on Safari once it finally played, 2026-09-06: "the audio sounds wank, really low
+     *  quality almost like hold music on a phone call", against Edge on the same service sounding
+     *  "like proper musical audio and in stereo". Chromium infers both from the payload; Apple
+     *  signals nothing it was not told. */
+    bool aacParametricStereo() { std::lock_guard<std::mutex> lk(m_); return aacPs_; }
 
     /** The station list and the signal block, as the web client wants them. */
     std::string json() {
@@ -506,6 +514,7 @@ private:
         afmt_       = s.fmt;
         aacCoreCh_  = s.stereo ? 2 : 1;
         aacOutCh_   = (s.stereo || s.ps) ? 2 : 1;
+        aacPs_      = s.ps;      // ★ mono core, stereo out — the decoder must be TOLD, see below
         for (const auto& au : s.aus) {
             std::vector<uint8_t> pkt = toAdts(au.data(), au.size(), s.fmt, aacCoreCh_);
             if (!pkt.empty()) { adts_.push_back(std::move(pkt)); ++ausOut_; }
@@ -566,6 +575,7 @@ private:
     uint32_t pushCalls_ = 0, pushOk_ = 0, dropped_ = 0;
     int  aacCoreCh_ = 2;                       ///< what the ADTS header declares
     int  aacOutCh_  = 2;                       ///< what the decoder will produce (PS -> 2)
+    bool aacPs_     = false;                   ///< parametric stereo: mono core, stereo output
 
     /** ★ The first half of a 24 kHz Layer II frame, waiting for its second. See drainAudio(). */
     std::vector<uint8_t>    lsfPend_;

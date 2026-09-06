@@ -6750,7 +6750,16 @@ struct LocalSdrShim::Impl {
              *  client uses this only to build the decoder's configuration; what actually plays
              *  comes from the decoder's own AudioData, so parametric stereo still arrives in
              *  stereo. */
-            const uint8_t  ch = uint8_t(g_dab.aacCoreChannels());
+            /* ★★★ AND WHETHER PARAMETRIC STEREO IS IN USE, in the top bit. The core channel
+             *  count alone is not enough: a decoder told "mono, 16 kHz" and nothing else plays
+             *  the core and stops — mono, and half the bandwidth, because SBR is not applied
+             *  either. That is Stuart's "hold music on a phone call" on Safari while Edge, which
+             *  infers both from the payload, sounded right. The client needs to say AOT 29
+             *  (HE-AAC v2) rather than AOT 5, and only the server knows which this is.
+             *  ★ Low nibble = core channels, bit 7 = PS. They ship together, so the encoding can
+             *    change; the field is only ever read by our own client. */
+            const uint8_t  ch = uint8_t(g_dab.aacCoreChannels())
+                              | (g_dab.aacParametricStereo() ? 0x80u : 0u);
             if (sr == 0 || au.empty()) continue;
             std::vector<uint8_t> frame;
             frame.reserve(6 + au.size());
