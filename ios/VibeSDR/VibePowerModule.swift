@@ -259,6 +259,23 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
    *  broken audio at the hardware, so this has to be several times that to be worth having, and
    *  small enough that the dial still feels immediate. */
   private let kPreRollSeconds: Double = 0.22
+  /* ★★★ THE LIVE-EDGE BOUND, AND WHY IT IS A VARIABLE NOW.
+   *  0.4 s is right for a source that TRICKLES: analogue audio arrives continuously, the queue
+   *  hovers at the pre-roll depth, and a tight ceiling keeps tuning responsive.
+   *  ★★★ IT IS WRONG FOR A SOURCE THAT BURSTS. DRM decodes in 400 ms frames, so OWRX hands us a
+   *      whole frame at once. With 220 ms of pre-roll already held, that peaks the queue near
+   *      620 ms — above the ceiling — so the tail of essentially EVERY DRM frame was DROPPED.
+   *      That is the fault Michael (DL8LDN) reported in issue #22: "using DRM have audio drop
+   *      outs. Using OWRX in Browser works ok to the same time and signal." The browser has no
+   *      such ceiling; the stream is identical and the difference was entirely on this side —
+   *      exactly as the pre-roll's own note says about the gap it was added to cover.
+   *  ★★ RAISED ONLY WHILE DRM IS SELECTED, at Stuart's direction: "only engage the larger buffer
+   *     if DRM is actively selected". Every other mode keeps 0.4 s and its current latency, so a
+   *     fix for a mode almost nobody can test cannot cost the modes everybody uses.
+   *  ★ It does NOT add latency by itself: queuedSeconds only grows when the source delivers
+   *    faster than real time. It is a safety valve, and this widens it for the one source whose
+   *    normal delivery pattern was tripping it. */
+  private var liveEdgeCap: Double = 0.4
   private var preRoll: Double = 0
   private var preRollBufs: [AVAudioPCMBuffer] = []
   // Now-playing overrides — JS computes a VTS-aware title/artist (station or
@@ -401,6 +418,20 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // (shared tuner — a skip would retune for everyone) and shows its own card.
   private var fmdxAudio = false
   private var externalRate: Double = 12000
+
+  /** ★ Widen (or restore) the live-edge bound for a bursty decoder. seconds <= 0 restores the
+   *  default. Called from the OWRX adapter on a mode change — see liveEdgeCap. */
+  @objc func setAudioBurstDepth(_ seconds: NSNumber) {
+    let v = seconds.doubleValue
+    audioQ.async { [weak self] in
+      guard let self else { return }
+      let want = v > 0 ? max(0.4, min(3.0, v)) : 0.4
+      if want != self.liveEdgeCap {
+        NSLog("[VibePowerModule] live-edge bound %.2f s -> %.2f s", self.liveEdgeCap, want)
+        self.liveEdgeCap = want
+      }
+    }
+  }
 
   @objc func startExternalAudio(_ sampleRate: NSNumber, pauseMode: String) {
     onMain { self.startExternalAudioOnMain(sampleRate, pauseMode: pauseMode) }
@@ -1087,7 +1118,10 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
        *     not "there is a normal amount of audio queued".
        *  ★ 0.35 s is under the 0.4 s bound, so a genuine pile-up after a delivery burst is still
        *    cut, while an ordinary queue is left alone and the tune stays seamless. */
-      if self.queuedSeconds > 0.35 {
+      /* ★ Scales with liveEdgeCap: under DRM the queue legitimately sits deeper, and a fixed
+       *  0.35 would flush it on EVERY tune — the very stop/play this threshold was raised to
+       *  avoid. Stays 0.05 s under the bound, as it was. */
+      if self.queuedSeconds > self.liveEdgeCap - 0.05 {
         self.queuedSeconds = 0
         // ★ Re-arm the cushion. A flush leaves playback hard against the live edge, which is
         //   exactly the state the pre-roll exists to avoid — without this, the first gap after
@@ -2438,7 +2472,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     // audio, drop instead of scheduling — latency stays bounded instead of
     // accumulating forever (runs on audioQ; queuedSeconds audioQ-only).
     let dur = Double(buf.frameLength) / fmt.sampleRate
-    if queuedSeconds > 0.4 { return }
+    if queuedSeconds > liveEdgeCap { return }
     /* ★★★ A PRE-ROLL, BECAUSE THERE WAS A CEILING ON LATENCY AND NO FLOOR. Buffers were scheduled
      *     the instant they arrived, so playback sat hard against the live edge with nothing
      *     queued — and the FIRST source gap became an underrun.

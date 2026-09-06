@@ -85,6 +85,15 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         VibeStreamService.instance?.pushExternalPcm(base64, sampleRate.toInt(), channels.toInt())
     }
 
+    /** ★ Widen the external player's cushion for a decoder that emits audio in BLOCKS (DRM, DAB,
+     *  HD Radio, digital voice). 0 restores the analogue default. See VibeStreamService.extBurstMs
+     *  — and note the @ReactMethod: without it this silently returns undefined, which this bridge
+     *  has been caught by twice. */
+    @ReactMethod
+    fun setAudioBurstDepth(ms: Double) {
+        VibeStreamService.instance?.setAudioBurstDepth(ms.toInt())
+    }
+
     @ReactMethod
     fun stopExternalAudio() { VibeStreamService.instance?.stopExternalAudio() }
 

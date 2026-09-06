@@ -26,6 +26,8 @@ import { USER_AGENT } from '../constants/version';
 const Vibe = NativeModules.VibePowerModule as {
   startExternalAudio?: (rate: number, pauseMode?: string) => void;
   pushExternalPcm?: (b64: string, rate: number, channels: number) => void;
+  /** ★ Widen the player's cushion for a decoder that emits in blocks. 0 = analogue default. */
+  setAudioBurstDepth?: (ms: number) => void;
   stopExternalAudio?: () => void;
 } | undefined;
 
@@ -1095,6 +1097,51 @@ export class OwrxAdapter implements SDRBackend {
     // DAB: which programme (audio service) within the ensemble to decode.
     if (mod === 'dab') params.audio_service_id = this.audioServiceId;
     this.send({ type: 'dspcontrol', params });
+    this.applyAudioBurstDepth(mod);
+  }
+
+  /* ★★★ DECODED MODES DELIVER AUDIO IN BLOCKS, AND THE PLAYER HAS TO BE TOLD.
+   *
+   *  ★★★ THE FAULT, from issue #22. Analogue audio trickles in continuously, so both players are
+   *      tuned for that: iOS drops anything above a 0.4 s live-edge bound, Android's writer polls
+   *      for 250 ms and writes nothing if it finds nothing. A DECODER does not trickle — DRM emits
+   *      a 400 ms frame in one go, so on iOS the tail of nearly every frame was discarded (0.22 s
+   *      of pre-roll plus a 0.4 s burst is over the bound) and on Android the track starved between
+   *      frames. Michael (DL8LDN): "using DRM have audio drop outs. Using OWRX in Browser works ok
+   *      to the same time and signal." The browser buffers deeply and rides through it; the stream
+   *      was never the problem.
+   *
+   *  ★★★ AND IT IS NOT ONLY DRM, which is why this is a LIST and not an `if`. Stuart: "make sure
+   *      we arent just fixing it for 1 mode and we fix for all digitmodes that need it." Taken
+   *      from his own OWRX+ /api/features, which has every codec installed — the audio-producing
+   *      decoders there are drm (dream-2-2), dab, hdradio, tetra, digital_voice_digiham
+   *      (DMR/D-Star/NXDN/YSF), digital_voice_freedv, digital_voice_m17 and digital_voice_rade.
+   *      Everything else available on that box — adsb, acars, hfdl, ism, pocsag, page, sonde,
+   *      vdl2, wsjt, js8call, packet — produces TEXT and never reaches the audio path at all.
+   *      ★ Digital voice bursts differently but for the same reason: nothing at all between
+   *        overs, then a transmission — so the first frames after each over have no cushion.
+   *
+   *  ★★ ANALOGUE IS LEFT EXACTLY AS IT IS. Stuart: "only engage the larger buffer if DRM is
+   *     actively selected" — generalised to the modes that need it, and to nothing else, so a fix
+   *     for modes almost nobody can test cannot cost latency on the ones everybody uses.
+   *  ★ Depth by how long a block is: DRM's 400 ms frame is the longest, HD Radio's is comparable;
+   *    DAB and digital voice are shorter. Names are matched loosely because OWRX+ spells them
+   *    differently across builds (dstar/d-star, hdr/hdradio). */
+  private static readonly BURST_MS: ReadonlyArray<[RegExp, number]> = [
+    [/^(drm)$/i, 800],
+    [/^(hdr|hdradio|nrsc5)$/i, 800],
+    [/^(dab)$/i, 500],
+    [/^(dmr|dstar|d-star|nxdn|ysf|m17|freedv|rade|tetra)$/i, 400],
+  ];
+
+  private lastBurstMs = -1;
+
+  private applyAudioBurstDepth(mod: string): void {
+    let ms = 0;
+    for (const [re, v] of OwrxAdapter.BURST_MS) if (re.test(mod)) { ms = v; break; }
+    if (ms === this.lastBurstMs) return;
+    this.lastBurstMs = ms;
+    Vibe?.setAudioBurstDepth?.(ms);
   }
 
   /** DAB: pick a programme within the tuned ensemble (re-sends the demod). */

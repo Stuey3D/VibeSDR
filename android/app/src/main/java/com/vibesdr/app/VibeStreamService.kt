@@ -636,6 +636,21 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private var extThread: Thread? = null
     // (rate, channels, interleaved int16 samples)
     private val extQueue = LinkedBlockingDeque<Triple<Int, Int, ShortArray>>(64)
+    /* ★★★ A PRE-ROLL FOR BURSTY DECODERS, AND ONLY FOR THEM.
+     *  ★★★ THE FAULT: this writer polls for 250 ms and, finding nothing, writes nothing — so the
+     *      AudioTrack starves and glitches. That is fine for a source that trickles, and wrong for
+     *      one that BURSTS: DRM decodes in 400 ms frames, so OWRX hands over a whole frame at once
+     *      and then says nothing for longer than the poll. Every frame boundary was an underrun.
+     *      Michael (DL8LDN), issue #22: "using DRM have audio drop outs. Using OWRX in Browser
+     *      works ok to the same time and signal." The browser buffers deeply; we had no cushion.
+     *  ★★ iOS had already grown a 220 ms pre-roll for the same class of gap (an RTL gain change
+     *     costs ~40 ms of hardware audio) — Android never did, which is why the two platforms
+     *     behaved differently on identical streams.
+     *  ★ ARMED BY MODE, at Stuart's direction: "only engage the larger buffer if DRM is actively
+     *    selected". 0 = off, and every other mode keeps today's latency exactly. */
+    @Volatile private var extBurstMs = 0
+    private val extQueuedFrames = java.util.concurrent.atomic.AtomicInteger(0)
+    @Volatile private var extPrimed = false
 
     fun startExternalAudio(rate: Int, pauseMode: String = "release") {
         Log.i(TAG, "startExternalAudio $rate pauseMode=$pauseMode")
@@ -649,7 +664,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         lastArtworkKey = ""
         packetCount = 0
         lastPacketAt = SystemClock.elapsedRealtime()
-        extQueue.clear()
+        extQueue.clear(); extQueuedFrames.set(0); extPrimed = false
         requestAudioFocus()
         startExtWriter()
         mediaSession?.isActive = true
@@ -669,7 +684,20 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shorts)
         lastPacketAt = SystemClock.elapsedRealtime()
         packetCount++
-        extQueue.offer(Triple(rate, if (channels == 2) 2 else 1, shorts))   // drop when full (backpressure)
+        val ch = if (channels == 2) 2 else 1
+        if (extQueue.offer(Triple(rate, ch, shorts)))       // drop when full (backpressure)
+            extQueuedFrames.addAndGet(shorts.size / ch)
+    }
+
+    /** ★ Arm or disarm the bursty-decoder pre-roll. ms <= 0 restores today's behaviour exactly.
+     *  Called from the OWRX adapter on a mode change — see extBurstMs. */
+    fun setAudioBurstDepth(ms: Int) {
+        val v = if (ms > 0) ms.coerceIn(100, 3000) else 0
+        if (v != extBurstMs) {
+            Log.i(TAG, "external audio burst pre-roll ${extBurstMs}ms -> ${v}ms")
+            extBurstMs = v
+            extPrimed = false
+        }
     }
 
     fun stopExternalAudio() {
@@ -1070,9 +1098,24 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
             try {
                 while (running && externalAudio) {
+                    /* ★ Hold back until the cushion exists. Only while a bursty mode is
+                     *  selected; re-armed whenever the queue runs dry, because that is exactly
+                     *  when the cushion has been spent. See extBurstMs. */
+                    val burst = extBurstMs
+                    if (burst > 0) {
+                        val rate0 = extRate.takeIf { it > 0 } ?: 48000
+                        val wantFrames = (rate0.toLong() * burst / 1000L).toInt()
+                        if (!extPrimed) {
+                            if (extQueuedFrames.get() < wantFrames) { Thread.sleep(10); continue }
+                            extPrimed = true
+                        } else if (extQueuedFrames.get() == 0) {
+                            extPrimed = false
+                        }
+                    }
                     val item = extQueue.poll(250, TimeUnit.MILLISECONDS)
                     handleRecRequests()   // arm/stop the recorder on this thread too
                     if (item == null) continue
+                    extQueuedFrames.addAndGet(-(item.third.size / item.second))
                     ensureExtTrack(item.first, item.second)
                     if (!muted) {
                         notchShorts(item.third, item.second)   // auto notch (network)
