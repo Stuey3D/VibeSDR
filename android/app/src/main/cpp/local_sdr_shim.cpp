@@ -18837,7 +18837,23 @@ void LocalSdrShim::overloadTick() {
          *     plateau). The converter's own limit is what finally stops it.
          *  ★ And the plateau lapses if the signal fades well away from where it was decided — that
          *    was an answer about a particular signal at a particular strength. */
-        if (g_snrPlateau.load(std::memory_order_relaxed)) {
+        /* ★★★ THE SAME FM-SHAPED TESTS AS THE VERDICT, AND THEY BLOCK THE CLIMB ITSELF. 4.6.8
+         *  stopped the separation JUDGEMENT from vetoing a DAB step, and the gain still would not
+         *  move — because two gates upstream of it decide whether a step is attempted at all:
+         *    - the SNR plateau: "a step stopped buying SNR". For a signal that fills the passband
+         *      no step ever visibly buys SNR, so the plateau latches and never lapses.
+         *    - floorLifted: "the climb lifted the noise floor". For DAB the floor IS the ensemble.
+         *      Raising the gain lifts it BY DEFINITION, so this is permanently true.
+         *  ★★★ Measured after 4.6.8 shipped: the AGC still sat at 15.7 dB with the ADC peak at
+         *      -21 dBFS against a -9 dBFS target — twelve decibels of headroom it would not take
+         *      — while a manual sweep on the same radio and signal read 1.83% of MP2 frames bad
+         *      at 10 dB and 0.00% at 20, 30 and 40. The fix was right and did not reach far
+         *      enough; a rule enforced in two places, and I moved one.
+         *  ★★ WHAT STILL STOPS IT IS THE CONVERTER, which is the limit that means something here:
+         *     the ceiling test below is untouched, so a strong ensemble cannot reach the rails.
+         *  ★ Cutting is never gated by any of this — anything asking for LESS gain still gets it. */
+        const bool dabClimbFree = g_dabMode.load(std::memory_order_relaxed);
+        if (!dabClimbFree && g_snrPlateau.load(std::memory_order_relaxed)) {
             if (peak > g_snrPlateauPeak.load(std::memory_order_relaxed) - 6.0) return;
             g_snrPlateau.store(false, std::memory_order_relaxed);
         }
@@ -18846,7 +18862,7 @@ void LocalSdrShim::overloadTick() {
         //   climb either, or it starves the gain by the back door instead of the front.
         // ★ And never climb while the floor is already lifted — that is the condition a climb
         //   created, and another step would deepen it.
-        if (floorLifted) return;
+        if (floorLifted && !dabClimbFree) return;
         // ★ The learned margin, clamped to the one ceiling — see kAgcClimbCeilDbfs. Unclamped it
         //   sat at 3 dB and refused every step landing above -3.0 dBFS, which is the dead zone the
         //   jump path was just fixed for; this is the SINGLE-step copy of the same check and it
