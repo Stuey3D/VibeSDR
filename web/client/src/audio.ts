@@ -1166,12 +1166,13 @@ export class AudioPlayer {
   private aacStrip = 0;
 
   /** AudioSpecificConfig for AAC-LC: 5 bits object type, 4 bits rate index, 4 bits channels. */
-  private _ascFor(rateHz: number, ch: number): Uint8Array | null {
+  private _ascFor(rateHz: number, ch: number, len960 = true): Uint8Array | null {
     const table = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
     const idx = table.indexOf(rateHz);
     if (idx < 0 || ch < 1 || ch > 2) return null;
     // ★ frameLengthFlag = 1 (bit 2): DAB+ frames are 960 samples — see _ascExplicitSbr.
-    return new Uint8Array([ (2 << 3) | (idx >> 1), ((idx & 1) << 7) | (ch << 3) | (1 << 2) ]);
+    return new Uint8Array([ (2 << 3) | (idx >> 1),
+                            ((idx & 1) << 7) | (ch << 3) | (len960 ? (1 << 2) : 0) ]);
   }
 
   /** ★★★ DAB+ HAS EXACTLY FOUR FORMATS, so SBR is derivable from the core rate alone (TS 102 563
@@ -1197,7 +1198,8 @@ export class AudioPlayer {
    *      reason Safari's MediaSource path never produced audio: it was handed a config it had to
    *      infer from, on a timeline that then contradicted the inference.
    *   ★ 25 bits: AOT(5)=5, freqIdx(4), channels(4), extFreqIdx(4), AOT(5)=2, GASpecificConfig(3). */
-  private _ascExplicitSbr(coreRateHz: number, outRateHz: number, ch: number): Uint8Array | null {
+  private _ascExplicitSbr(coreRateHz: number, outRateHz: number, ch: number,
+                          len960 = true): Uint8Array | null {
     const table = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
     const ci = table.indexOf(coreRateHz), oi = table.indexOf(outRateHz);
     if (ci < 0 || oi < 0 || ch < 1 || ch > 2) return null;
@@ -1214,7 +1216,7 @@ export class AudioPlayer {
      *  speed, and the error rides on top of whatever the SBR handling did — which is exactly
      *  Stuart's "some stations are slow and others are fast" rather than one uniform wrongness.
      *  ★ GASpecificConfig: frameLengthFlag(1)=1, dependsOnCoreCoder(1)=0, extensionFlag(1)=0. */
-    put(5, 5); put(ci, 4); put(ch, 4); put(oi, 4); put(2, 5); put(4, 3);
+    put(5, 5); put(ci, 4); put(ch, 4); put(oi, 4); put(2, 5); put(len960 ? 4 : 0, 3);
     if (nbits) out.push((acc << (8 - nbits)) & 0xff);
     return new Uint8Array(out);
   }
@@ -1252,7 +1254,10 @@ export class AudioPlayer {
       } else {
         // ★ 2048 under SBR: the AU is 1024 CORE samples, which is 2048 at the doubled output rate
         //   the timeline is written in. See _ascExplicitSbr.
-        this.mseDur = this._sbrOutRate(coreRateHz) ? 1920 : 960;   // 960-sample DAB+ frames
+        /* ★ The timeline must match what the DECODER produces, not what the air carries: if we
+         *  had to fall back to 1024-sample framing (see aacUse960) it will hand back 1024/2048. */
+        const per = this.aacUse960 ? 960 : 1024;
+        this.mseDur = this._sbrOutRate(coreRateHz) ? per * 2 : per;
         this._mseFeed(new Uint8Array(buf, 6 + 7));  // strip the ADTS header; the ASC has the config
         return;
       }
@@ -1301,7 +1306,7 @@ export class AudioPlayer {
 
   /** Find a config this browser will actually take, then open the decoder with it. */
   private async _openAac(coreRateHz: number, channels: number) {
-    const asc = this._ascFor(coreRateHz, channels);
+    const asc = this._ascFor(coreRateHz, channels, this.aacUse960);
     const tries: { codec: string; description?: Uint8Array; strip: number }[] = [];
     /* ★★★ THE EXPLICIT CONFIG FIRST — ADTS CANNOT SAY 960. DAB+ uses 960-sample AAC frames, and
      *  an ADTS header has no field for the frame length, so a decoder handed ADTS assumes 1024 and
@@ -1373,15 +1378,15 @@ export class AudioPlayer {
     this.mseStreaming = false; this.mseSawStreaming = false;
     /* ★★★ THE MSE TIMELINE RUNS AT THE OUTPUT RATE, NOT THE CORE — see _ascExplicitSbr. */
     const outRate = this._sbrOutRate(coreRateHz);
-    const asc = outRate ? this._ascExplicitSbr(coreRateHz, outRate, channels)
-                        : this._ascFor(coreRateHz, channels);
+    const asc = outRate ? this._ascExplicitSbr(coreRateHz, outRate, channels, this.aacUse960)
+                        : this._ascFor(coreRateHz, channels, this.aacUse960);
     const tsRate = outRate || coreRateHz;
-    if (!MS)  { console.warn('[audio] no MediaSource in this browser'); return false; }
-    if (!asc) { console.warn(`[audio] no AudioSpecificConfig for ${coreRateHz} Hz / ${channels}ch`); return false; }
+    if (!MS)  { this._aacNote('no MediaSource in this browser'); return false; }
+    if (!asc) { this._aacNote(`no config for ${coreRateHz} Hz / ${channels}ch`); return false; }
     const mime = ['audio/mp4; codecs="mp4a.40.5"', 'audio/mp4; codecs="mp4a.40.2"',
                   'audio/mp4; codecs="mp4a.40.05"', 'audio/mp4; codecs="mp4a.40.02"']
       .find((m) => { try { return MS.isTypeSupported(m); } catch { return false; } });
-    if (!mime) { console.warn('[audio] MediaSource supports no AAC mp4 type'); return false; }
+    if (!mime) { this._aacNote('MediaSource supports no AAC in mp4'); return false; }
     console.info(`[audio] DAB+ opening ${Managed ? 'ManagedMediaSource' : 'MediaSource'} with ${mime}`);
 
     return await new Promise<boolean>((resolve) => {
@@ -1450,21 +1455,22 @@ export class AudioPlayer {
           }, 1500);
           this.mseEl = el; this.mseSrc = ms; this.mseBuf = sb;
           this.mseCore = coreRateHz; this.mseCh = channels;
-          this.mseSeq = 1; this.mseTime = 0; this.mseDur = outRate ? 1920 : 960;
+          const per0 = this.aacUse960 ? 960 : 1024;
+          this.mseSeq = 1; this.mseTime = 0; this.mseDur = outRate ? per0 * 2 : per0;
           this.mseQueue = [initSegment(tsRate, channels, asc)];
           this._mseDrain();
           void el.play().catch(() => { /* a gesture may be needed; the buffer keeps filling */ });
           console.info(`[audio] DAB+ via MediaSource ${mime} @ ${coreRateHz} Hz, ${channels}ch`);
           if (!settled) { settled = true; resolve(true); }
         } catch (e) {
-          console.warn('[audio] MediaSource setup failed:', e);
+          this._aacNote(`MediaSource setup failed: ${(e as Error)?.name || e}`);
           if (!settled) { settled = true; resolve(false); }
         }
       }, { once: true });
       setTimeout(() => {
         if (!settled) {
           settled = true;
-          console.warn(`[audio] MediaSource never opened (readyState=${ms.readyState}) — giving up`);
+          this._aacNote(`MediaSource never opened (readyState ${ms.readyState}${this.mseManaged ? ', managed' : ''})`);
           el.remove();
           resolve(false);
         }
@@ -1480,7 +1486,10 @@ export class AudioPlayer {
     if (this.mseManaged && !this.mseStreaming) return;
     const seg = this.mseQueue.shift()!;
     try { sb.appendBuffer(seg as unknown as BufferSource); }
-    catch (e) { console.warn('[audio] MSE append failed:', e); this.mseQueue.length = 0; }
+    catch (e) {
+      this._aacNote(`MSE append failed: ${(e as Error)?.name || e}`);
+      this.mseQueue.length = 0;
+    }
   }
 
   /** Wrap one access unit and queue it. Returns true when MSE is carrying the audio. */
@@ -1510,8 +1519,31 @@ export class AudioPlayer {
    *    which is the existing path and needs no second one. */
   private aacOkFrames = 0;
   private aacRecoveries = 0;
+  /** ★★★ WHETHER TO TELL THE DECODER THE TRUTH ABOUT 960-SAMPLE FRAMES.
+   *  DAB+ genuinely uses them, and saying so is correct — but APPLE'S DECODER CANNOT DECODE THEM.
+   *  Safari's console, 2026-09-06: "DAB+ decoding as mp4a.40.5 (raw + ASC) @ 16000 Hz, 2ch" then
+   *  "decode error after 0 good frames — EncodingError: InternalAudioDecoderCocoa decoding
+   *  failed", over and over. ffmpeg refuses the same thing ("SBR with 960 frame length is not
+   *  implemented"), so Apple is not alone.
+   *  ★★★ AND FALLING BACK IS NOW SAFE, which it would not have been a build ago: since the
+   *      playback rate is COMPUTED as frames x core / 960, a decoder that assumes 1024 hands back
+   *      2048 samples for a 60 ms unit and we play them at 34133 Hz — restoring the duration AND
+   *      the pitch. The lie costs nothing but a slightly different transform.
+   *  ★ Truth first, then the lie: a decoder that handles 960 gets it. Only one that fails without
+   *    ever producing a frame is told 1024 instead. */
+  private aacUse960 = true;
   private _recoverAac(e: unknown) {
     if (this.aacBroken) return;
+    /* ★★★ NEVER PRODUCED A FRAME? THE CONFIG IS THE SUSPECT, NOT THE DATA. Try the other frame
+     *  length before concluding anything about the browser — see aacUse960. */
+    if (this.aacOkFrames === 0 && this.aacUse960) {
+      this.aacUse960 = false;
+      this._aacNote('decoder rejected 960-sample frames — retrying as 1024 '
+                  + '(playback rate is computed, so the speed stays right)');
+      try { this.aacDec?.close(); } catch { /* already gone */ }
+      this.aacDec = null; this.aacTs = 0; this.aacRecoveries = 0;
+      return;
+    }
     if (this.aacOkFrames === 0 && ++this.aacRecoveries > 3) {
       this._failAac('decode', e);          // never once worked — that IS a capability answer
       return;
@@ -1525,12 +1557,23 @@ export class AudioPlayer {
     this.aacOkFrames = 0;
   }
 
+  /** ★★★ THE REASON, ON SCREEN. "this browser does not offer AAC" was shown for every possible
+   *  failure, including ones where the browser plainly did offer it — Safari has now spent four
+   *  builds reporting a missing feature when the real faults were, in order: a fallback placed
+   *  inside the thing it was a fallback for, a config it had to infer from, a play() call made
+   *  inside the event that only play() could cause, and a source reused across formats. Each time
+   *  the message sent us looking at the browser instead of at us, and each time it needed Stuart
+   *  at a keyboard to find out otherwise.
+   *  ★ The trail is kept in `aacWhy` as the path is walked, so whatever finally fails can say
+   *    where it got to. Costs nothing and removes a round trip through a person. */
+  private aacWhy = '';
+  private _aacNote(s: string) { this.aacWhy = s; console.info(`[audio] DAB+: ${s}`); }
   private _failAac(stage: string, e: unknown) {
     if (this.aacBroken) return;
     this.aacBroken = true;
     console.warn(`[audio] DAB+ AAC ${stage} failed:`, e);
     const st = document.getElementById('decStatus');
-    if (st) st.textContent = 'DAB+ needs AAC support this browser does not offer';
+    if (st) st.textContent = `DAB+ audio unavailable — ${this.aacWhy || stage}`;
   }
 
   private _onAacData(ad: AudioData) {

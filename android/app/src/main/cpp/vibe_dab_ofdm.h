@@ -20,6 +20,7 @@
 //      the whole spectrum by whole bins and is recovered later from the phase reference symbol,
 //      which is a known sequence. Both are needed; this is the cheap half.
 #pragma once
+#include <cstdlib>
 
 #include <cmath>
 #include <complex>
@@ -134,7 +135,9 @@ inline SoftBits dqpskSoftScaled(C32 product, float invAvgMag) {
      *  mid-range so a strong one still has room to say "trust me more" instead of clipping into
      *  the same value. Clipping at the top would quietly reintroduce the very flattening this
      *  replaces. */
-    const float k = 64.0f * invAvgMag;
+    static const float kScale = std::getenv("VIBE_DAB_SOFT_SCALE")
+                             ? float(atof(std::getenv("VIBE_DAB_SOFT_SCALE"))) : 64.0f;
+    const float k = kScale * invAvgMag;
     return { clamp8(product.real() * k), clamp8(product.imag() * k) };
 }
 
