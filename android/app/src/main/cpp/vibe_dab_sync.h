@@ -79,13 +79,25 @@ inline NullSearch findNull(const Cplx* x, size_t n, size_t nullLen, double refMe
     double best  = win;
     size_t bestAt = 0;
 
+    /* ★★★ A RUNNING SUM DRIFTS, AND THE DRIFT CHOSE THE WRONG NULL. `win += add - sub` accumulates
+     *  rounding over 200 000 samples, and under gcc -O2 on the Pi (which contracts a*b+c into a
+     *  fused multiply-add, so `add` and `sub` round differently) the sum over a genuinely silent
+     *  null went slightly NEGATIVE a few hundred samples after the true minimum. Strict `<` then
+     *  moved bestAt to the END of the null, the frame overran the buffer, and test-dab-receiver
+     *  failed at -O2 and passed at -O1 with no undefined behaviour anywhere. On air the null is
+     *  never exactly zero, so the same drift shows as a few samples of timing jitter instead —
+     *  see the note in FrameSync about tracking. Two fixes: the window is clamped at zero, and a
+     *  new minimum has to beat the old one by more than rounding noise, so ties go to the FIRST
+     *  position, which for a silent null is the true start of it. */
+    const double eps = 1e-9 * (win + 1e-30);
     for (size_t i = nullLen; i < n; ++i) {
         const double add = double(x[i].re) * x[i].re + double(x[i].im) * x[i].im;
         const double sub = double(x[i - nullLen].re) * x[i - nullLen].re
                          + double(x[i - nullLen].im) * x[i - nullLen].im;
         win += add - sub;
+        if (win < 0.0) win = 0.0;
         total += add;
-        if (win < best) { best = win; bestAt = i - nullLen + 1; }
+        if (win < best - eps) { best = win; bestAt = i - nullLen + 1; }
     }
 
     const double meanAll  = refMeanPower > 0.0 ? refMeanPower : total / double(n);

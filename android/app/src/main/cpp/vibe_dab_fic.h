@@ -122,9 +122,11 @@ struct Ensemble {
      *  many with sub-channels. Under a weak signal this is the difference between "reading the
      *  multiplex" and a list that is genuinely finished (EN 300 401 6.4.2). */
     bool mciComplete() const {
-        if (serviceCount < 0) return false;
         int n = 0;
         for (const auto& kv : services) if (kv.second.complete(subChannels)) ++n;
+        /* ★ BBC National (12B, measured 2026-09-07) does not transmit FIG 0/7 at all, so without
+         *  the count the best available answer is "every service we know of is complete". */
+        if (serviceCount < 0) return n > 0 && n == int(services.size());
         return n >= serviceCount;
     }
 };
