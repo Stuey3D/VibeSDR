@@ -18281,7 +18281,8 @@ void LocalSdrShim::overloadTick() {
              *     "105.4 is very weak and needs a lot of tinkering with the gain to get it in."
              *  ★ Calibrated on the two cases seen: the genuine catch cost 3.8 dB overall and still
              *    fires; the doubtful one cost 1.7 dB and no longer does. */
-            if (runSep > -190.0f && runAt >= 0 && dir > 0 && sepNow < runSep - 2.0f) {
+            if (runSep > -190.0f && runAt >= 0 && dir > 0 && sepNow < runSep - 2.0f
+                    && !g_dabMode.load(std::memory_order_relaxed)) {
                 LOGI("this climb has cost %.1f dB of separation overall (%.1f -> %.1f) — every step "
                      "looked harmless, the run did not — back to %d steps below the ceiling",
                      runSep - sepNow, runSep, sepNow, runAt);
@@ -18295,6 +18296,29 @@ void LocalSdrShim::overloadTick() {
         }
         const float moved   = dir < 0 ? chFell : -chFell;
         const bool  runaway = stepDb > 0.5f && moved > 2.0f && moved > stepDb * prof.runawayRatio;
+
+        /* ★★★ SEPARATION IS A MEANINGLESS TEST FOR DAB, AND IT WAS STOPPING THE CLIMB DEAD.
+         *  Everything below judges a step by what it did to the CHANNEL-TO-FLOOR separation. On FM
+         *  that is exactly right: the wanted carrier is narrow, the harm is intermodulation all
+         *  around it, and a climb that lifts the surroundings faster than the station is a climb
+         *  that hurt. A DAB ensemble is NOISE-LIKE AND 1.536 MHz WIDE — it IS the passband — so
+         *  the "channel" and the "floor" are the same signal and rise together. No climb can ever
+         *  look like it helped, and the loop settles wherever it happens to be.
+         *  ★★★ MEASURED ON THE V4 WITH THE GAIN UNLOCKED, one minute, same signal:
+         *          10 dB  1.83% of MP2 frames bad
+         *          20 dB  0.00%
+         *          30 dB  0.00%
+         *          40 dB  0.00%
+         *      A wide clean plateau from 20 dB up, and the AGC was sitting at 10-15. That is the
+         *      whole MP2 breakup on that receiver. Stuart got there first from the other end:
+         *      "the Xcover ... requires the AGC to be pumped very high like 37db vs 15db on the
+         *      Pi ... not sure if the Pi is over or under gaining the signal." Under.
+         *  ★★ ADC HEADROOM STILL GOVERNS. The climb ceiling and target above are untouched, so a
+         *     strong ensemble still cannot drive the converter into the rails — that limit is
+         *     real for DAB and is the one that should decide. Only the FM-shaped separation
+         *     judgement is skipped.
+         *  ★ Cutting is never skipped: if something above asks for less gain it still gets it. */
+        const bool dabIgnoreSeparation = g_dabMode.load(std::memory_order_relaxed);
 
         /* ★★★ AND ON FM THE HARM IS NOT IN THE CHANNEL — IT IS ALL AROUND IT. Tuned to 104.2
          *     itself, the channel rises one-for-one with the gain because the station is REAL, so
@@ -18343,14 +18367,14 @@ void LocalSdrShim::overloadTick() {
              *    the evidence here is no weaker: 18.8 dB out of the channel for a 1.0 dB cut. */
             g_agcHurryUntil.store(now + 20.0, std::memory_order_relaxed);
             g_lastCutWasRunaway.store(true, std::memory_order_relaxed);
-        } else if (runaway) {
+        } else if (runaway && !dabIgnoreSeparation) {
             LOGI("that %.1f dB climb added %.1f dB to the channel — that is not amplification, "
                  "putting it back", stepDb, -chFell);
             steps_forceDown = true;
             g_settled.store(true, std::memory_order_relaxed);
             g_adcCleanRun.store(0, std::memory_order_relaxed);
             g_agcHurryUntil.store(now + 20.0, std::memory_order_relaxed);
-        } else if (d < -0.5f) {
+        } else if (d < -0.5f && !dabIgnoreSeparation) {
             // ★ Worse. Put it back, and do not try that direction again until something changes.
             LOGI("that %s cost %.1f dB of separation (%.1f -> %.1f) — putting it back",
                  dir > 0 ? "step up" : "step down", -d, sepWas, sepNow);
