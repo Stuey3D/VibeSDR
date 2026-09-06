@@ -130,20 +130,45 @@ public:
          *    crystal does not drift a kilohertz between frames — and re-measuring is cheaper than
          *    being wrong after a retune.
          */
+        /* ★★★ THE FFT WINDOW SITS IN THE MIDDLE OF THE GUARD INTERVAL, NOT AT THE END OF IT.
+         *  The frame start comes from the null-symbol energy search and jitters by several
+         *  samples frame to frame (measured on a 12B capture: deltas of -4..+5 on 40 % of frames).
+         *  With the window at the very start of the useful part, every LATE frame takes its last
+         *  samples from the NEXT symbol's prefix — inter-symbol interference on every carrier —
+         *  while an early one is harmless. Half a guard interval earlier the window tolerates
+         *  ±252 samples of timing error either way, and the linear phase ramp it puts across the
+         *  carriers cancels in the DQPSK difference because every symbol gets the same ramp. This
+         *  is also where a pre-echo (an earlier, weaker SFN path) does least damage. */
+        const size_t winOff = size_t(guardSamplesAt(rate_)) - size_t(guardSamplesAt(rate_)) / 2;
         {
-            const Cplx* p0 = work.data() + size_t(guardSamplesAt(rate_));
+            const Cplx* p0 = work.data() + winOff;
             dft(p0, spec.data());
             std::vector<C32> got(size_t(K), C32{});
             carriersFromFft(spec.data(), int(fft_), K, got.data());
+            /* ★★★ CORRELATE THE DIFFERENCE BETWEEN ADJACENT CARRIERS, NOT THE CARRIERS.
+             *  A timing error of t samples multiplies carrier k by exp(-j2pi k t / 2048): four
+             *  samples is three quarters of a turn across the band, and a direct correlation of
+             *  received against reference carriers collapses under it — which is why the old
+             *  "prsCorrelation" fell from ~10 to ~0.9 on jittered frames and frames were erased
+             *  that were perfectly readable. The product of a carrier with the conjugate of its
+             *  neighbour cancels the ramp (it is the same for both bar one step), so this figure
+             *  measures the PHASE REFERENCE and nothing else. welle.io, dab-cmdline and DAB-Radio
+             *  all do this; it took a comparison against them to see why ours did not. */
+            std::vector<C32> D(size_t(K) - 1);
+            for (int k = 0; k + 1 < K; ++k) D[size_t(k)] = got[size_t(k)] * std::conj(got[size_t(k) + 1]);
+            if (prsDiff_.empty()) {
+                prsDiff_.resize(size_t(K) - 1);
+                for (int k = 0; k + 1 < K; ++k) prsDiff_[size_t(k)] = prs_[size_t(k)] * std::conj(prs_[size_t(k) + 1]);
+            }
             float best = -1.0f; int bestShift = 0;
             const int span = 48;                       // ±48 carriers ≈ ±48 kHz ≈ ±210 ppm
             for (int d = -span; d <= span; ++d) {
                 double re = 0, im = 0;
-                for (int k = 0; k < K; ++k) {
+                for (int k = 0; k + 1 < K; ++k) {
                     const int src = k + d;
-                    if (src < 0 || src >= K) continue;
-                    const C32 a2 = got[size_t(src)];
-                    const C32 b2 = prs_[size_t(k)];
+                    if (src < 0 || src + 1 >= K) continue;
+                    const C32 a2 = D[size_t(src)];
+                    const C32 b2 = prsDiff_[size_t(k)];
                     re += double(a2.real()) * b2.real() + double(a2.imag()) * b2.imag();
                     im += double(a2.imag()) * b2.real() - double(a2.real()) * b2.imag();
                 }
@@ -155,22 +180,24 @@ public:
             stats_.freqOffsetHz += float(bestShift) * float(mode_->spacingHz);
             stats_.freqOffsetPpm = float(double(stats_.freqOffsetHz) / centreHz_ * 1e6);
             stats_.prsCorrelation = best / float(K);
+            /* ★★★ THE INTEGER OFFSET IS A FREQUENCY, SO IT IS REMOVED IN TIME, NOT BY RE-INDEXING
+             *  BINS. Reading carrier k from bin k+d gets the amplitudes right and the PHASES
+             *  wrong: an offset of d carriers advances every carrier by 2*pi*d*(Ts/Tu) between
+             *  consecutive symbols, i.e. d x 504/2048 of a turn = 88.6 degrees per carrier of
+             *  offset, and DQPSK differences that against nothing. The old bin shift therefore
+             *  decoded only when d was 0 (or by luck a multiple of ~4), which the 1 ppm TCXO in
+             *  the V4 hid completely; a dongle 20 ppm out would have locked perfectly and read
+             *  nothing — exactly the dead-centre-tuning symptom of 2026-09-06. Found by comparing
+             *  against the references, which all derotate the total offset in the time domain. */
+            if (bestShift != 0)
+                derotate(work.data(), work.size(), double(bestShift) / double(fft_));
         }
 
         // ── every symbol to carriers, then DQPSK against the previous ───────
         for (int sym = 0; sym < mode_->symbolsPerFrame; ++sym) {
-            const Cplx* p = work.data() + size_t(sym) * symLen + size_t(guardSamplesAt(rate_));
+            const Cplx* p = work.data() + size_t(sym) * symLen + winOff;
             dft(p, spec.data());
             carriersFromFft(spec.data(), int(fft_), K, cur.data());
-            // ★ Undo the integer offset by reading the carriers the transmitter actually used.
-            if (intShift_ != 0) {
-                std::vector<C32> shifted(size_t(K), C32{});
-                for (int k = 0; k < K; ++k) {
-                    const int src = k + intShift_;
-                    shifted[size_t(k)] = (src >= 0 && src < K) ? cur[size_t(src)] : C32{};
-                }
-                cur.swap(shifted);
-            }
             if (sym == 0) { prev = cur; continue; }          // the phase reference — not data
             /* ★★★ THE 2K BITS ARE NOT INTERLEAVED — THE FIRST K ARE THE REAL PARTS.
              *
@@ -466,6 +493,7 @@ private:
     double fibHist_ = 0;
     double centreHz_ = 222.064e6;   ///< the tuned block, for the ppm readout
     int    intShift_ = 0;
+    std::vector<C32>    prsDiff_;   // reference adjacent-carrier products, built once
     std::vector<C32>    prod_;      // per-symbol differential products — see the CSI note
     std::vector<int8_t> ficBits_;
     SubChannel sel_{};

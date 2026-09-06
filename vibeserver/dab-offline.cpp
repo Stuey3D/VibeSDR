@@ -13,6 +13,9 @@
 #include "vibe_dab_receiver.h"
 #include "vibe_dab_resample.h"
 #include "vibe_dab_mp2.h"
+#include "vibe_dab_aac.h"
+#include "vibe_dab_pad.h"
+#include <deque>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -59,7 +62,14 @@ int main(int argc, char** argv) {
     std::vector<long> frameStarts;      // ★ and where each frame was found, to catch skips/dups
     std::vector<int>  fibOkPer, fibTotPer;   // ★ per-FRAME FIC health, to separate signal from us
     std::vector<float> nullDepth, prsCorr;
+    std::vector<int>  erasedAt; int lastErased = 0;
     std::vector<int>  frameOfMp2;            // which DAB frame each MP2 frame came from
+    /* ★ DAB+ — the same five-frame window and slide-by-one as DabService::pumpDabPlus, so the
+     *  harness measures the super-frame path the listener gets, not a tidier one. */
+    std::deque<std::vector<uint8_t>> sfHold;
+    int sfTried = 0, sfOk = 0, sfFire = 0, sfInvalid = 0, sfBadLen = 0, rsFixed = 0, rsLost = 0, aus = 0;
+    std::vector<int> sfBadFrame;             // DAB frame index of each failed super frame
+    PadReader pad;
 
     while (true) {
         const size_t got = std::fread(raw.data(), sizeof(int16_t), raw.size(), fp);
@@ -84,6 +94,14 @@ int main(int argc, char** argv) {
             fibTotPer.push_back(rx.stats().fibsTotal);
             nullDepth.push_back(rx.stats().nullDepthDb);
             prsCorr.push_back(rx.stats().prsCorrelation);
+            if (rx.stats().erasedFrames != lastErased) {
+                lastErased = rx.stats().erasedFrames;
+                erasedAt.push_back(int(blocks));
+                if (erasedAt.size() <= 30)
+                    printf("  erased frame %lld: prs %.3f ref %.3f null %.1f dB fib %d/%d\n", blocks,
+                           rx.stats().prsCorrelation, rx.stats().prsRef, rx.stats().nullDepthDb,
+                           rx.stats().fibsOk, rx.stats().fibsTotal);
+            }
             ++blocks;
             if (track) rx.syncConsumed(one); else rx.resetSync();
             acc.erase(acc.begin(), acc.begin() + long(one * 2));
@@ -120,6 +138,27 @@ int main(int argc, char** argv) {
             //   frame still in it — 19056 "MP2 frames" out of 311 DAB frames (1244 CIFs). The
             //   live path calls takeAudioFrames(); a harness that does not is measuring itself.
             for (const auto& f0 : rx.takeAudioFrames()) {
+                if (rx.selectedType() != 0) {                 // DAB+ : super frames
+                    sfHold.push_back(f0);
+                    if (sfHold.size() > 5) sfHold.pop_front();
+                    if (sfHold.size() < 5) continue;
+                    const size_t per = sfHold.front().size();
+                    bool same = true; for (const auto& x : sfHold) if (x.size() != per) same = false;
+                    const int index = int(per / 24);
+                    if (!same || index < 1 || index > 24) { ++sfBadLen; sfHold.pop_front(); continue; }
+                    std::vector<uint8_t> wire; wire.reserve(per * 5);
+                    for (const auto& x : sfHold) wire.insert(wire.end(), x.begin(), x.end());
+                    ++sfTried;
+                    SuperFrame sfr = decodeSuperFrame(wire.data(), wire.size(), index);
+                    rsFixed += sfr.rsCorrected < 0 ? 0 : sfr.rsCorrected;
+                    rsLost  += sfr.rsUncorrected < 0 ? 0 : sfr.rsUncorrected;
+                    if (!sfr.firecodeOk) ++sfFire;
+                    if (!sfr.valid) ++sfInvalid;
+                    if (!sfr.valid || !sfr.firecodeOk) { sfBadFrame.push_back(int(blocks) - 1); sfHold.pop_front(); continue; }
+                    sfHold.clear(); ++sfOk;
+                    for (const auto& au : sfr.aus) { ++aus; pad.feedAccessUnit(au.data(), au.size()); }
+                    continue;
+                }
                 /* ★ LSF PAIRING TEST: a 24 kHz Layer II frame is 1152 samples = 48 ms = TWO DAB
                  *  logical frames, so the 192-byte chunks must be joined before decoding. */
                 std::vector<uint8_t> f = f0;
@@ -164,6 +203,29 @@ int main(int argc, char** argv) {
     printf("erased frames: %d of %d\n", s.erasedFrames, s.framesSeen);
     printf("MP2: in %d  bad %d (%.1f%%)  out %d\n",
            mp2In, mp2Bad, mp2In ? 100.0 * mp2Bad / mp2In : 0.0, mp2Out);
+    if (sfTried) {
+        printf("DAB+: super frames tried %d  ok %d (%.1f%% lost)  firecode-bad %d  invalid %d  badLen %d  RS fixed %d  RS lost %d  AUs %d\n",
+               sfTried, sfOk, 100.0 * (sfTried - sfOk) / sfTried, sfFire, sfInvalid, sfBadLen, rsFixed, rsLost, aus);
+        printf("DLS: \"%s\"  groups ok %u  bad %u  (pad frames %u, x-ind none %u short %u var %u)\n",
+               pad.dls().label().text.c_str(), pad.dls().crcOk(), pad.dls().crcFail(),
+               pad.framesSeen(), pad.xIndCount(0), pad.xIndCount(1), pad.xIndCount(2));
+        if (!sfBadFrame.empty()) {
+            printf("failed super frames at DAB frames:");
+            for (size_t i = 0; i < sfBadFrame.size() && i < 60; ++i) printf(" %d", sfBadFrame[i]);
+            printf("\n  frame  start   delta  fibOk/tot  nullDb   prs   (context of the first three)\n");
+            int shown = 0;
+            for (size_t b = 0; b < sfBadFrame.size() && shown < 3; ++b, ++shown) {
+                const int f = sfBadFrame[b];
+                for (int i = std::max(0, f - 6); i <= std::min(int(frameStarts.size()) - 1, f + 1); ++i) {
+                    const long d = i > 0 ? frameStarts[size_t(i)] - frameStarts[size_t(i-1)] : 0;
+                    printf("  %5d  %6ld  %5ld  %5d/%-4d  %6.1f  %5.2f%s\n", i, frameStarts[size_t(i)], d,
+                           fibOkPer[size_t(i)], fibTotPer[size_t(i)], nullDepth[size_t(i)], prsCorr[size_t(i)],
+                           i == f ? "   <-- SUPER FRAME FAILED" : "");
+                }
+                printf("\n");
+            }
+        }
+    }
     {   // ★ the whole ensemble as finally understood, so a service can be picked by hand
         printf("\nservices:\n");
         for (const auto& kv : rx.ensemble().services)
