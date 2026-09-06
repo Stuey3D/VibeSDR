@@ -2991,9 +2991,37 @@ struct LocalSdrShim::Impl {
          *
          *  ★ 0 means "no filtering", which is what a mode that occupies the whole capture wants. */
         if (g_dabMode.load(std::memory_order_relaxed)) {
-            if (g_tunerBwHz.load(std::memory_order_relaxed) != 0) {
-                LocalSdrShim::instance().setTunerBandwidth(0);
-                LOGI("[DAB] tuner IF filter opened right up — the ensemble is 1.536 MHz wide");
+            static const int kDabIfWant = std::getenv("VIBE_DAB_IF_HZ")
+                                        ? atoi(std::getenv("VIBE_DAB_IF_HZ")) : 1750000;
+            if (g_tunerBwHz.load(std::memory_order_relaxed) != kDabIfWant) {
+                /* ★★★ 1.75 MHz, NOT WIDE OPEN — AND THE DIFFERENCE IS AN ADJACENT MULTIPLEX
+                 *  FOLDED ON TOP OF THIS ONE. I set this to 0 ("automatic", i.e. as wide as the
+                 *  tuner will go) to stop the zoom-following filter cutting into a 1.536 MHz
+                 *  ensemble. That fixed the narrow case and opened a worse one.
+                 *  ★★★ DAB BLOCKS ARE 1.712 MHz APART AND WE CAPTURE AT 2.4 MS/s, so Nyquist is
+                 *      +/-1.2 MHz and the NEXT BLOCK IS OUTSIDE IT. With the IF filter wide open
+                 *      it still reaches the ADC, and sampling folds it to 2.4 - 1.712 = 688 kHz —
+                 *      INSIDE the wanted ensemble, where no amount of demodulation can remove it.
+                 *  ★★★ Stuart found it from the waterfall, which is the only place it is visible:
+                 *      "10C is northamptonshire multiplex and 10D is beds bucks and herts right
+                 *      next to it and when tuned to 10C you can see the edge of 10D ... if our
+                 *      passband is too high we could be picking some of that up." Exactly that,
+                 *      and it explains what made 10C different: a strong signal, heavy breakup,
+                 *      and a frequency offset "all over the place" — sync pulled about by a
+                 *      second ensemble aliased on top of the first. 12B and 11D have no close
+                 *      neighbour here and were rock steady.
+                 *  ★ 1.75 MHz keeps the full 1.536 MHz ensemble with room for the filter's own
+                 *    roll-off, while putting the neighbour at 1.712 MHz on the skirt rather than
+                 *    in the passband. The R820T2 quantises this to its nearest step; asking for
+                 *    the number that matters is still right. */
+                /* ★ Overridable so the right number can be MEASURED on the air that shows the
+                 *  problem, rather than argued from the spec. 10C with 10D beside it is the case
+                 *  that discriminates; 12B has no close neighbour and cannot. */
+                static const int kDabIfHz = std::getenv("VIBE_DAB_IF_HZ")
+                                          ? atoi(std::getenv("VIBE_DAB_IF_HZ")) : 1750000;
+                LocalSdrShim::instance().setTunerBandwidth(kDabIfHz);
+                LOGI("[DAB] tuner IF filter set to %.3f MHz — wide enough for a 1.536 MHz "
+                     "ensemble, narrow enough to keep the next block out", kDabIfHz / 1e6);
             }
             return;
         }
