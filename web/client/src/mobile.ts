@@ -512,14 +512,16 @@ export function initMobileControls(deps: MobileDeps) {
   function paintSignal() {
     const sig = deps.signal();
     // Clamp: a level outside 0..1 would paint the gradient past the pill or invert it.
-    $('mSig').style.width = `${Math.max(0, Math.min(1, sig.level)) * 100}%`;
+    const w = `${Math.max(0, Math.min(1, sig.level)) * 100}%`;
+    const mSig = $('mSig');
+    if (mSig.style.width !== w) mSig.style.width = w;   // ★ write on change — see setStyle in main.ts
     // ★ While the gate is shut the pill says SQL instead of a number — see the CSS.
     const snrEl = $('mSnr');
-    snrEl.classList.toggle('sql', sig.sqlClosed);
+    if (snrEl.classList.contains('sql') !== sig.sqlClosed) snrEl.classList.toggle('sql', sig.sqlClosed);
     put(snrEl, sig.sqlClosed ? 'SQL' : meterText(sig));
     const sql = $('mSqlLine');
-    if (sig.sqlNorm >= 0) { sql.hidden = false; sql.style.left = `${sig.sqlNorm * 100}%`; }
-    else sql.hidden = true;
+    if (sig.sqlNorm >= 0) { if (sql.hidden) sql.hidden = false; const l = `${sig.sqlNorm * 100}%`; if (sql.style.left !== l) sql.style.left = l; }
+    else if (!sql.hidden) sql.hidden = true;
   }
 
   // ★ UTC first, then local — the order every band plan, schedule and logbook uses, so

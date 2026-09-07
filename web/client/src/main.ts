@@ -1350,12 +1350,13 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       const el = document.getElementById('rxLightning');
       if (!el) return;
       const on = ratePerMin > 0;
-      el.hidden = !on;
+      setHidden(el, !on);
       if (on) {
         const ago = agoSecs >= 0 && agoSecs < 90 ? `, last ${Math.round(agoSecs)}s ago` : '';
-        el.title = 'Lightning nearby — the broadband lines across the spectrum and the jumps in '
+        const title = 'Lightning nearby — the broadband lines across the spectrum and the jumps in '
                  + 'the noise floor are sferics, not a fault with the receiver '
                  + `(about ${Math.round(ratePerMin)}/min${ago})`;
+        if (el.title !== title) el.title = title;
       }
     },
     onTunerBw: (hz: number, rfCentreHz: number, auto: boolean) => {
@@ -1873,7 +1874,8 @@ function renderHz(): number {
   // The render clock must also keep up with the waterfall's EMIT rate (Speed × dpr pixel rows/sec),
   // or a high speed on a Retina canvas would out-run the draw loop and the scroll would stall.
   const emit = wfSpeed * renderDpr();
-  return Math.min(60, Math.max(20, Math.max(wantedFps() * 3, emit)));
+  // ★ DAB holds the dial and the view: nothing on the spectrum needs more than 30 frames a second.
+  return Math.min(dabOn ? 30 : 60, Math.max(20, Math.max(wantedFps() * 3, emit)));
 }
 
 let lastRenderAt = 0;
@@ -2742,18 +2744,18 @@ function updateVts() {
     if (vtsRenderedMsg !== vtsBandMsg || vtsRenderedSub !== vtsBandSub) {
       vtsRenderedMsg = vtsBandMsg;
       vtsRenderedSub = vtsBandSub;
-      $('vtsName').textContent = vtsBandMsg;
-      $('vtsBand').textContent = vtsBandSub;
-      vts.classList.add('show');
-      vts.classList.remove('on');
+      setText($('vtsName'), vtsBandMsg);
+      setText($('vtsBand'), vtsBandSub);
+      setClass(vts, 'show', true);
+      setClass(vts, 'on', false);
       // ★ Measured and started ONCE, on the render that actually changed the words.
       applyVtsScroll(false);
       setDecBoxOffset();
     }
     for (const id of ['vtsRds', 'vtsSrc', 'vtsLogo', 'vtsFlag', 'vtsPi'])
       ($(id) as HTMLElement).style.display = 'none';
-    vts.classList.add('show');
-    vts.classList.remove('on');
+    setClass(vts, 'show', true);
+    setClass(vts, 'on', false);
     return;
   }
   /* ★★★ RETIRE AN EXPIRED NOTICE HERE, not only on its timer. vtsHideTimer is shared with
@@ -2767,7 +2769,7 @@ function updateVts() {
     ($(id) as HTMLElement).style.removeProperty('display');
 
   if (!name) {
-    vts.classList.remove('show', 'on');
+    setClass(vts, 'show', false); setClass(vts, 'on', false);
     // ★ CLEAR THE TEXT, don't just hide it. updateMediaSession() falls back to this
     // element when there is no RDS name, so a stale value left in the DOM came back as
     // the OS Now Playing title — the old station's name sitting on the card long after
@@ -2781,8 +2783,8 @@ function updateVts() {
     return;
   }
 
-  $('vtsName').textContent = name;
-  $('vtsBand').textContent = band ? (band.bandLabel || band.name) : '';
+  setText($('vtsName'), name);
+  setText($('vtsBand'), band ? (band.bandLabel || band.name) : '');
   applyVtsScroll(live || rdsPi > 0);
   // ★★ Static content gets a life; live RDS does not. A PI-only identification counts as live —
   //   it is the transmitter telling us who it is, and it will keep arriving.
@@ -2795,7 +2797,7 @@ function updateVts() {
     //       is `!vtsStaticUntil`; "has it run out?" is the comparison. Answering them together
     //       makes expiry indistinguishable from a fresh start.
     if (!vtsStaticUntil) vtsStaticUntil = Date.now() + VTS_BAND_MS;
-    if (Date.now() >= vtsStaticUntil) { vts.classList.remove('show', 'on'); setDecBoxOffset(); return; }
+    if (Date.now() >= vtsStaticUntil) { setClass(vts, 'show', false); setClass(vts, 'on', false); setDecBoxOffset(); return; }
     vtsHoldFor(vtsStaticUntil - Date.now() + 60);
   } else {
     vtsStaticUntil = 0;                       // live: no expiry at all
@@ -2905,7 +2907,7 @@ function updateVts() {
     logoEl.classList.remove('show');
   }
 
-  vts.classList.add('show');
+  setClass(vts, 'show', true);
   vts.classList.add('on');   // if it's showing at all, we're on the station
   setDecBoxOffset();
   // The OS card shows the same station identity as this bar, so republish from the same place.
@@ -3237,8 +3239,8 @@ function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
   sigSmooth += (norm - sigSmooth) * (norm > sigSmooth ? 0.30 : 0.12);
   sigPeak = norm > sigPeak ? norm : Math.max(norm, sigPeak - 0.004);
 
-  $('sigFill').style.width = `${(sigSmooth * 100).toFixed(1)}%`;
-  $('sigPeak').style.left = `${(sigPeak * 100).toFixed(1)}%`;
+  setStyle($('sigFill'), 'width', `${(sigSmooth * 100).toFixed(1)}%`);
+  setStyle($('sigPeak'), 'left', `${(sigPeak * 100).toFixed(1)}%`);
 
   // Feed the squelch control the same live scale and signal the main meter is drawing, so the ball
   // sits on exactly the level the fill is showing.
@@ -3250,15 +3252,15 @@ function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
   // to reach to open the gate, which is the only position that means anything.
   const sqlOn = squelchDb > -100;
   const sig = $('sig');
-  sig.classList.toggle('sqlOn', sqlOn);
+  setClass(sig, 'sqlOn', sqlOn);
   if (sqlOn) {
     const sqlNorm = Math.max(0, Math.min(1, (squelchDb - dbMin) / Math.max(1, dbMax - dbMin)));
-    $('sigSql').style.left = `${(sqlNorm * 100).toFixed(1)}%`;
+    setStyle($('sigSql'), 'left', `${(sqlNorm * 100).toFixed(1)}%`);
     // Compare against the RAW reading, not the smoothed fill: the smoothing has a slow decay, so a
     // gate that has just closed would keep reading "passing" for most of a second.
-    sig.classList.toggle('sqlClosed', sigDb < squelchDb);
+    setClass(sig, 'sqlClosed', sigDb < squelchDb);
   } else {
-    sig.classList.remove('sqlClosed');
+    setClass(sig, 'sqlClosed', false);
   }
 
   // FIXED-WIDTH fields so the row never shifts as values change length. The S-unit is the worst
@@ -3269,7 +3271,7 @@ function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
   const suStr   = toSUnit(sigDb).padEnd(5);                 // "S9+60" .. "S6   "
   const snrStr  = `SNR ${snrSmooth.toFixed(0).padStart(2)} dB`;
   const sqlStr  = sqlOn && sigDb < squelchDb ? ' · SQL' : '      ';   // reserve the slot either way
-  $('sigLabel').textContent = `${dbfsStr} · ${suStr} · ${snrStr}${sqlStr}`;
+  setText($('sigLabel'), `${dbfsStr} · ${suStr} · ${snrStr}${sqlStr}`);
 }
 
 /** The squelch threshold in dBFS, mirrored here so the meter can draw the needle. −100 = off. */
@@ -3293,24 +3295,24 @@ function drawSquelchBar(sigDbRaw: number) {
   const bar = document.getElementById('sqlBar');
   if (!bar) return;
   const on = squelchDb > SQL_OFF;
-  bar.classList.toggle('on', on);
+  setClass(bar, 'on', on);
   const fill = document.getElementById('sqlFill') as HTMLElement | null;
-  if (fill) fill.style.width = `${(Math.max(0, Math.min(1, sqlSigNorm)) * 100).toFixed(1)}%`;
+  setStyle(fill, 'width', `${(Math.max(0, Math.min(1, sqlSigNorm)) * 100).toFixed(1)}%`);
   const n = document.getElementById('sqlNeedle') as HTMLElement | null;
   if (on) {
     const span = Math.max(1, sqlScaleMax - sqlScaleMin);
     const frac = Math.max(0, Math.min(1, (squelchDb - sqlScaleMin) / span));
-    if (n) n.style.left = `${(frac * 100).toFixed(1)}%`;
-    bar.classList.toggle('closed', sigDbRaw < squelchDb);
+    setStyle(n, 'left', `${(frac * 100).toFixed(1)}%`);
+    setClass(bar, 'closed', sigDbRaw < squelchDb);
   } else {
     // Park the ball at the left when off — visible and grabbable, so the control is discoverable.
-    if (n) n.style.left = '0%';
-    bar.classList.remove('closed');
+    setStyle(n, 'left', '0%');
+    setClass(bar, 'closed', false);
   }
   const note = document.getElementById('sqlNote');
-  if (note) note.textContent = on
+  setText(note, on
     ? 'Audio passes only above the ball. The level you set is where it stays — the bar underneath moves with the signal, the threshold does not.'
-    : 'Off — audio always passes. Drag the ball up from the left to set a threshold.';
+    : 'Off — audio always passes. Drag the ball up from the left to set a threshold.');
 }
 
 /** Pointer handling for the squelch bar. Drag anywhere on the bar; drag off the LEFT edge to turn
@@ -4424,7 +4426,7 @@ function dabRender() {
     dabArmMarquee(st);
   }
 
-  const row = (k: string, v: string) => `<div class="row"><span>${k}</span><span>${v}</span></div>`;
+  const row = (k: string, v: string) => { rowsKeys.push(k); return `<div class="row"><span>${k}</span><span>${v}</span></div>`; };
   /* ★ KEEP THE SCROLL. Both panes are rebuilt from every stats block, twice a second, and an
    *  innerHTML rewrite puts the box back to the top — "when scrolling down to see more info in
    *  the signal analysis window it kept snapping up" (Stuart, 2026-09-07). */
@@ -4443,10 +4445,20 @@ function dabRender() {
   /* ★ The header lives in its own element and is rewritten only when it changes, so the radio
    *  text's marquee survives the twice-a-second rebuild of the numbers below it. */
   let headEl = sg.querySelector('#dabSigHead') as HTMLElement | null;
-  let rowsEl = sg.querySelector('#dabSigRows') as HTMLElement | null;
-  if (!headEl || !rowsEl) {
-    sg.innerHTML = '<div id="dabSigHead"></div><div id="dabSigRows"></div>';
-    headEl = sg.querySelector('#dabSigHead') as HTMLElement; rowsEl = sg.querySelector('#dabSigRows') as HTMLElement;
+  let rowsAEl = sg.querySelector('#dabSigRowsA') as HTMLElement | null;
+  let rowsBEl = sg.querySelector('#dabSigRowsB') as HTMLElement | null;
+  let scopesEl = sg.querySelector('#dabSigScopes') as HTMLElement | null;
+  if (!headEl || !rowsAEl || !rowsBEl || !scopesEl) {
+    /* ★★★ BUILT ONCE. The rows are patched value by value from then on, and the two scopes draw
+     *  on canvases that are never recreated — they keep their block-rate refresh (twice a
+     *  second; Stuart: "no point them having a super slow refresh"), they just stop being torn
+     *  down and rebuilt with every block. */
+    sg.innerHTML = '<div id="dabSigHead"></div><div id="dabSigRowsA"></div>'
+      + '<div id="dabSigScopes" class="dabScopes" hidden><div><span>CONSTELLATION</span><canvas id="dabConst" width="120" height="120"></canvas></div>'
+      + '<div><span>IMPULSE RESPONSE · 32 µs per division</span><canvas id="dabIr" width="256" height="72"></canvas></div></div>'
+      + '<div id="dabSigRowsB"></div>';
+    headEl = sg.querySelector('#dabSigHead') as HTMLElement; rowsAEl = sg.querySelector('#dabSigRowsA') as HTMLElement;
+    rowsBEl = sg.querySelector('#dabSigRowsB') as HTMLElement; scopesEl = sg.querySelector('#dabSigScopes') as HTMLElement;
     dabLastHeadHtml = '';
   }
   if (head !== dabLastHeadHtml) { dabLastHeadHtml = head; headEl.innerHTML = head; }
@@ -4454,7 +4466,8 @@ function dabRender() {
    *  hidden measures as zero wide and never armed (the header, on the Xcover, 2026-09-07). Arming
    *  an already-armed label is a no-op, so the marquee is not restarted. */
   dabArmMarquee(sg.offsetParent ? headEl : st);
-  rowsEl.innerHTML = ''
+  rowsKeys.length = 0;
+  const rowsA = ''
     + '<h4>SERVICE</h4>'
     + row('Codec', d.codecDetail ?? (d.services.find(x => x.sid === d.sid)?.codec ?? '—'))
     + row('Bit rate', d.bitrate ? d.bitrate + ' kbit/s' : '—')
@@ -4488,9 +4501,10 @@ function dabRender() {
     + row('Carrier shift', String(d.carrierShift))
     + row('Phase reference', d.prs.toFixed(3) + (d.prsRatio !== undefined ? ` (${d.prsRatio.toFixed(2)} of ref)` : ''))
     + (d.mer ? row('MER', d.mer.toFixed(1) + ' dB') : '')
-    + (d.mscBer !== undefined && d.sid ? row('MSC bit errors', (d.mscBer * 100).toFixed(2) + ' % before Viterbi') : '')
-    + (d.iq && d.ir ? `<div class="dabScopes"><div><span>CONSTELLATION</span><canvas id="dabConst" width="120" height="120"></canvas></div>`
-        + `<div><span>IMPULSE RESPONSE · 32 µs per division</span><canvas id="dabIr" width="256" height="72"></canvas></div></div>` : '')
+    + (d.mscBer !== undefined && d.sid ? row('MSC bit errors', (d.mscBer * 100).toFixed(2) + ' % before Viterbi') : '');
+  const keysA = rowsKeys.slice();
+  rowsKeys.length = 0;
+  const rowsB = ''
     + row('Frames seen', String(d.frames))
     + row('Frames erased', String(d.erased ?? 0))
     + row('Re-acquisitions', String(d.reacquires ?? 0))
@@ -4501,6 +4515,10 @@ function dabRender() {
     + (d.sfTried ? row('Reed-Solomon', `${d.rsFixed ?? 0} fixed, ${d.rsLost ?? 0} lost`) : '')
     + (d.aacRateHz ? row('AAC', `${d.aacRateHz} Hz, ${d.aacCh} ch${d.aacServerSide ? ', decoded on the server' : ''}`) : '')
     + (d.dlsCrcOk !== undefined ? row('DLS groups', `${d.dlsCrcOk} ok, ${d.dlsCrcFail ?? 0} bad`) : '');
+  const keysB = rowsKeys.slice();
+  dabPatchRows(rowsAEl, rowsA, keysA);
+  dabPatchRows(rowsBEl, rowsB, keysB);
+  setHidden(scopesEl, !(d.iq && d.ir));
   dabDrawScopes(d);
   if (body && keepScroll) body.scrollTop = keepScroll;
 }
@@ -4602,13 +4620,30 @@ function dabDrawScopes(d: DabState) {
 
 let dabLastListHtml = '';
 let dabLastHeadHtml = '';
+const rowsKeys: string[] = [];
+/** ★ Same skeleton (same headings and row labels) → only the values that changed are written;
+ *  a different skeleton → one rebuild. Twice a second, on a phone, this is the difference between
+ *  patching a few text nodes and re-creating forty rows. */
+function dabPatchRows(el: HTMLElement, html: string, keys: string[]) {
+  const sig = keys.join('\u0001') + '|' + (html.match(/<h4>[^<]*<\/h4>/g) || []).join('');
+  if (el.dataset.sig !== sig) { el.dataset.sig = sig; el.innerHTML = html; return; }
+  const vals = html.split('<div class="row">').slice(1)
+    .map(part => { const m = /<\/span><span>([^]*?)<\/span><\/div>/.exec(part); return m ? m[1] : ''; });
+  const spans = el.querySelectorAll('.row > span:last-child');
+  for (let i = 0; i < spans.length && i < vals.length; i++)
+    if (spans[i].innerHTML !== vals[i]) spans[i].innerHTML = vals[i];
+}
 /** Start the marquee on every label that overflows its box (the travel is the overflow). */
 function dabArmMarquee(scope: HTMLElement) {
-  for (const inner of Array.from(scope.querySelectorAll('.dlsIn')) as HTMLElement[]) {
+  /* ★ Each label is measured ONCE, and only while its pane is showing (a hidden label measures
+   *  zero wide). The first version measured every label on every render — 36 forced layouts a
+   *  second on the list pane, more than the whole rest of the page. */
+  if (!scope.offsetParent) return;
+  for (const inner of Array.from(scope.querySelectorAll('.dlsIn:not([data-armed])')) as HTMLElement[]) {
     const box = inner.parentElement as HTMLElement;
     const over = inner.scrollWidth - box.clientWidth;
+    inner.dataset.armed = '1';
     if (over > 4) { inner.style.setProperty('--dx', `-${over}px`); inner.classList.add('scroll'); }
-    else inner.classList.remove('scroll');
   }
 }
 
@@ -4930,6 +4965,18 @@ function buildControls() {
  * button to get back to it. The button's job is "I can't see what I'm listening
  * to", and that condition has nothing to do with the lock.
  */
+/* ★★★ WRITE ON CHANGE, EVERYWHERE THAT RUNS ON A CLOCK. Measured on the Xcover (2026-09-07,
+ *  MutationObserver census): the render loop and the signal messages were rewriting the same
+ *  values — hidden flags, meter widths, label text — 20 to 30 times a second whether or not they
+ *  had changed. Each same-value write still dirties style, and the next layout read forces a
+ *  full layout: ~55 layouts and ~85 style recalculations a second in EVERY mode, and in DAB the
+ *  tree they walk includes the open decoder box (~4,800 nodes). That is what warmed Stuart's
+ *  iPhone. Stuart: "I want everything to be super efficient." */
+function setHidden(el: HTMLElement | null, v: boolean) { if (el && el.hidden !== v) el.hidden = v; }
+function setText(el: Element | null, s: string) { if (el && el.textContent !== s) el.textContent = s; }
+function setStyle(el: HTMLElement | null, prop: string, v: string) { if (el && el.style.getPropertyValue(prop) !== v) el.style.setProperty(prop, v); }
+function setClass(el: Element | null, c: string, on: boolean) { if (el && el.classList.contains(c) !== on) el.classList.toggle(c, on); }
+
 function updateCentreBtn() {
   if (!wf || !spec) return;
   const span = wf.spanHz;
@@ -4939,7 +4986,7 @@ function updateCentreBtn() {
     const hi = lo + span;
     offscreen = spec.frequency < lo || spec.frequency > hi;
   }
-  $('centreBtn').hidden = !offscreen && spec.followVfo;
+  setHidden($('centreBtn'), !offscreen && spec.followVfo);
 
   // ★★ AND THE FLOATING ONE, over the waterfall. The menu copy is no use for this: the whole
   //    point is that the dial has gone off screen and you want it back NOW, and a control you
@@ -4947,7 +4994,7 @@ function updateCentreBtn() {
   //    off screen — a button that is always there stops meaning anything.
   const float = document.getElementById('mCentreFloat');
   if (float) {
-    float.hidden = !offscreen;
+    setHidden(float, !offscreen);
     if (offscreen) {
       const lo = wf.displayCenterHz() - span / 2;
       // Which way did it go? We have already worked it out to decide `offscreen`, and
