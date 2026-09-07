@@ -71,6 +71,7 @@ public:
         aacStartedKnown_ = knownRatio_ > 0.0;   // ★ known from the start — no "setting the clock" while the pipe primes
         adts_.clear();
         pad_.reset();      // ★ the label belongs to the old programme
+        slide_ = Slide{}; // ★ and so does the picture
         // ★ A new programme starts a new clock; catching up on the old one would be a wall of silence.
         pcmOwed_ = 0; pcmPushed_ = 0;
         resampleReset();
@@ -102,6 +103,7 @@ public:
         aacStartedKnown_ = knownRatio_ > 0.0;
         adts_.clear();
         pad_.reset();
+        slide_ = Slide{};
         pcmOwed_ = 0; pcmPushed_ = 0;
         resampleReset();
         /* ★★★ AND DROP ANY HELD HALF-FRAME. lsfPend_ carries the first half of a 24 kHz Layer II
@@ -446,6 +448,10 @@ public:
             fclose(f);
         }
     }
+    /** ★ The newest slideshow image off the air for the playing service — a station logo or
+     *  now-playing artwork (TS 101 499), served by the shim at /vibeserver/dabslide. */
+    struct Slide { std::vector<uint8_t> bytes; std::string mime, name; uint32_t seq = 0; uint32_t sid = 0; };
+    bool slide(Slide& out) { std::lock_guard<std::mutex> lk(m_); pollSlide(); if (!slide_.seq) return false; out = slide_; return true; }
     struct Quality { bool locked; float fibRate; float nullDepthDb; double mscBer; };
     Quality quality() {
         std::lock_guard<std::mutex> lk(m_);
@@ -562,6 +568,17 @@ public:
             /* ★ The RDS equivalents the ensemble broadcasts about ITSELF (Stuart, 2026-09-07: "the
              *  real full RDS info from DAB"): the clock (FIG 0/10, CT) with the local offset (0/9),
              *  and the other blocks this ensemble is on (0/21, AF). */
+            pollSlide();
+            if (slide_.seq) {
+                char sb[160];
+                snprintf(sb, sizeof sb, ",\"slide\":{\"seq\":%u,\"mime\":\"%s\",\"bytes\":%zu,\"name\":\"", slide_.seq, slide_.mime.c_str(), slide_.bytes.size());
+                j += sb; j += esc(slide_.name) + "\"}";
+            }
+            {
+                char mb[96];
+                snprintf(mb, sizeof mb, ",\"motGroups\":%u,\"motCrcFail\":%u,\"motObjects\":%u", pad_.mot().groups(), pad_.mot().crcFails(), pad_.mot().objects());
+                j += mb;
+            }
             {   // ★ How much linking/frequency signalling this ensemble carries at all — the DXer's
                 //   answer to "why is the FM row empty": the mux sends none, or we missed it.
                 char cb[48];
@@ -1342,6 +1359,12 @@ private:
     bool aacPrimed_ = false;   // the decoder has returned its first sample — counting starts AFTER it
     bool aacPrimeBurst_ = false;   // this output is the priming burst: excluded from the count
     bool aacStartedKnown_ = AacDecoder::kExactFrames; int aacAuTotal_ = 0;
+    Slide slide_;
+    uint32_t slideSeq_ = 0;
+    void pollSlide() {   // caller holds m_
+        MotObject o;
+        if (pad_.mot().take(o)) { slide_.bytes = std::move(o.body); slide_.mime = o.mime(); slide_.name = o.name; slide_.sid = sid_; slide_.seq = ++slideSeq_; }
+    }
     double knownRatio_ = AacDecoder::kExactFrames ? 1.0 : 0.0;   // samples returned / samples due, once measured
     int aacDeviantRun_ = 0;   // consecutive units on which the watched window disagrees with the known ratio
     std::string ratioFile_;

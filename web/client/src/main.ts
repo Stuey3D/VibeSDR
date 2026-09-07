@@ -4435,7 +4435,11 @@ function dabRender() {
   const cur = d.services.find(x => x.sid === d.sid);
   /* ★ The pane opens with WHO you are listening to — a larger logo and the name — before the
    *  numbers (Stuart, 2026-09-07, from his screenshot of the pane). */
-  const curLogo = cur ? (dabLogos.get(`${cur.ecc ?? d.ecc ?? -1}|${d.eid}|${cur.sid}`) || '') : '';
+  /* ★ OFF THE AIR FIRST: the slideshow image the service is transmitting (TS 101 499) outranks
+   *  the RadioDNS file — it is what the broadcaster is sending THIS listener right now. The
+   *  station list keeps RadioDNS, which covers every row. */
+  const slideUrl = d.slide && d.slide.seq ? P(`/vibeserver/dabslide?seq=${d.slide.seq}`) : '';
+  const curLogo = slideUrl || (cur ? (dabLogos.get(`${cur.ecc ?? d.ecc ?? -1}|${d.eid}|${cur.sid}`) || '') : '');
   const head = cur
     ? `<div class="dabHead">${curLogo ? `<img class="dabHeadLogo" src="${curLogo}" alt="">` : '<div class="dabHeadLogo"></div>'}`
       + `<div class="dabHeadText"><div class="dabHeadName">${escapeHtml(cur.label)}</div>`
@@ -4540,6 +4544,7 @@ function dabRender() {
     + (d.sfTried ? row('DAB+ super frames', `${d.sfOk ?? 0} of ${d.sfTried}`) : '')
     + (d.sfTried ? row('Reed-Solomon', `${d.rsFixed ?? 0} fixed, ${d.rsLost ?? 0} lost`) : '')
     + (d.aacRateHz ? row('AAC', `${d.aacRateHz} Hz, ${d.aacCh} ch${d.aacServerSide ? ', decoded on the server' : ''}`) : '')
+    + (d.motGroups !== undefined ? row('Slideshow', `${d.motObjects ?? 0} images, ${d.motGroups} groups, ${d.motCrcFail ?? 0} bad${d.slide?.name ? ' · ' + escapeHtml(d.slide.name) : ''}`) : '')
     + (d.dlsCrcOk !== undefined ? row('DLS groups', `${d.dlsCrcOk} ok, ${d.dlsCrcFail ?? 0} bad`) : '');
   const keysB = rowsKeys.slice();
   dabPatchRows(rowsAEl, rowsA, keysA);

@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "vibe_dab_charset.h"
+#include "vibe_dab_mot.h"
 
 namespace vibedab {
 
@@ -250,6 +251,8 @@ public:
 
     const DlsAssembler& dls() const { return dls_; }
     DlsAssembler&       dls()       { return dls_; }
+    MotAssembler&       mot()       { return mot_; }
+    const MotAssembler& mot() const { return mot_; }
     uint32_t framesSeen() const { return frames_; }
     uint32_t dlsBytes()   const { return dlsBytes_; }
     /** ★ How the X-PAD indicator read on each frame: [none, short, variable, other]. If this is
@@ -259,13 +262,17 @@ public:
     uint32_t appSeen(int i)   const { return appSeen_[i & 31]; }
     uint32_t overruns()       const { return overrun_; }
     uint32_t dseBad()         const { return dseBad_; }
-    void reset() { dls_.reset(); pend_.clear(); pendLen_ = 0; lastApp_ = kXpadEnd; lastFieldLen_ = 0; }
+    void reset() { dls_.reset(); pend_.clear(); pendLen_ = 0; lastApp_ = kXpadEnd; lastFieldLen_ = 0; mot_.reset(); motPend_.clear(); motLen_ = 0; motLenBuf_.clear(); }
 
 private:
     /** ★ A field with no indicator list continues the previous sub-field (7.4.2.1/7.4.2.2). For
      *  the dynamic label that means "continuation" even when the last CI said "start" — passing 2
      *  again would restart the group from its own second half. */
-    static uint8_t contApp(uint8_t app) { return app == kXpadDlsStart ? kXpadDlsCont : app; }
+    static uint8_t contApp(uint8_t app) {
+        /* ★ The same for MOT: measured on 7D, 402 "starts" against 23 length indicators in a minute
+         *  — every uncounted continuation restarted the group and no image ever completed. */
+        return app == kXpadDlsStart ? kXpadDlsCont : app == kXpadMotStart ? kXpadMotCont : app;
+    }
     /** ★ Accumulate one application's bytes, completing a data group when its declared length is
      *  reached. DLS groups are short and self-describing, so the length comes from the prefix. */
     void append(uint8_t app, const uint8_t* d, size_t n) {
@@ -282,10 +289,33 @@ private:
             dlsBytes_ += uint32_t(n);
             flush();
         }
-        /* ★ MOT (12/13) is recognised above and deliberately not assembled yet — slideshow needs
-         *  MSC data groups and a MOT directory on top of this, and half an implementation that
-         *  silently drops objects is worse than none. The application types are named so the next
-         *  step has somewhere obvious to begin. */
+        else if (app == 1) {
+            /* ★ Data group length indicator (7.4.5.1.1): 14-bit length + CRC, four bytes that may
+             *  arrive split (short X-PAD sends 3 then 1). It names the length of the MOT data group
+             *  that follows in app 12/13. */
+            motLenBuf_.insert(motLenBuf_.end(), d, d + n);
+            if (motLenBuf_.size() >= 4) {
+                const uint16_t want = uint16_t((motLenBuf_[2] << 8) | motLenBuf_[3]);
+                if (motCrc16(motLenBuf_.data(), 2) == want) motLen_ = size_t(((motLenBuf_[0] & 0x3F) << 8) | motLenBuf_[1]);
+                else motLen_ = 0;
+                motLenBuf_.clear();
+            }
+        } else if (app == kXpadMotStart) {
+            motPend_.assign(d, d + n);
+            motFlush();
+        } else if (app == kXpadMotCont) {
+            if (motPend_.empty()) return;
+            motPend_.insert(motPend_.end(), d, d + n);
+            motFlush();
+        }
+    }
+    /** ★ A data group is complete when the length the indicator gave has arrived (the X-PAD sub-field
+     *  may pad the last few bytes). */
+    void motFlush() {
+        if (motLen_ && motPend_.size() >= motLen_) {
+            mot_.feedDataGroup(motPend_.data(), motLen_);
+            motPend_.clear(); motLen_ = 0;
+        }
     }
     void flush() {
         if (pendLen_ && pend_.size() >= pendLen_) {
@@ -295,6 +325,9 @@ private:
     }
 
     DlsAssembler         dls_;
+    MotAssembler         mot_;
+    std::vector<uint8_t> motPend_, motLenBuf_;
+    size_t               motLen_ = 0;
     std::vector<uint8_t> pend_;
     std::vector<uint8_t> logical_;
     size_t               pendLen_ = 0;

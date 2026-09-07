@@ -10204,6 +10204,7 @@ struct LocalSdrShim::Impl {
                 || path0.rfind("/vibeserver/radios", 0) == 0
                 || path0.rfind("/vibeserver/stationlogo", 0) == 0
                 || path0.rfind("/vibeserver/dablogo", 0) == 0
+                || path0.rfind("/vibeserver/dabslide", 0) == 0
                 || path0.rfind("/vibeserver/auth", 0) == 0
                 || path0.rfind("/vibeserver/config", 0) == 0
                 || path0.rfind("/vibeserver/admin", 0) == 0
@@ -11259,6 +11260,19 @@ struct LocalSdrShim::Impl {
                           "Access-Control-Allow-Origin: *\r\nCache-Control: max-age=3600\r\n"
                           "Connection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close();
+        } else if (reqLine.rfind("GET /vibeserver/dabslide", 0) == 0) {
+            /* ★ The slideshow image the playing service is sending over the air (TS 101 499) —
+             *  the station logo or now-playing artwork, off the multiplex itself. */
+            vibedab::DabService::Slide sl;
+            if (g_dab.slide(sl) && !sl.bytes.empty()) {
+                std::string body(reinterpret_cast<const char*>(sl.bytes.data()), sl.bytes.size());
+                sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: " + sl.mime + "\r\n"
+                              "Access-Control-Allow-Origin: *\r\nCache-Control: no-cache\r\n"
+                              "Connection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
+            } else {
+                sock->sendstr("HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+            }
             sock->close();
         } else if (reqLine.rfind("GET /vibeserver/dablogo", 0) == 0) {
             /* ★ Station artwork for a DAB service, by its identity (ECC, EId, SId, SCIdS) through

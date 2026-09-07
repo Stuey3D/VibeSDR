@@ -211,6 +211,9 @@ export interface DabState {
   mjd?: number; utc?: string; lto?: number; altHz?: number[];
   /** Ofcom's licensed sites for this ensemble (nearest first when the receiver's position is known), and why the TII test failed. */
   licensed?: { site: string; area: string; code: string; km: number }[];
+  /** The newest slideshow image off the air for the playing service; fetch /vibeserver/dabslide?seq=. */
+  slide?: { seq: number; mime: string; bytes: number; name: string };
+  motGroups?: number; motCrcFail?: number; motObjects?: number;
   tiiDiag?: { comb: number; f4s: number; f45: number; frames: number };
   aacRateHz?: number; aacCh?: number; aacServerSide?: boolean;
   dropped?: number;
