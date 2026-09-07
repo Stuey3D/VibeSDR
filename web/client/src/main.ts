@@ -4356,6 +4356,10 @@ function dabRender() {
     ? `${(d.centreHz / 1e6).toFixed(3)} (${d.channel})${d.label ? ' — ' + d.label : ''}`
     : (dabChannel >= 0 ? `${(DAB_BLOCKS[dabChannel].hz / 1e6).toFixed(3)} (${DAB_BLOCKS[dabChannel].name})` : '—');
   if (!d || !st || !sg) return;
+  /* ★ The header status: "tuning…" was written on entry and never replaced, so a locked receiver
+   *  with fourteen stations on screen still said it was tuning (seen driving the client, 2026-09-07). */
+  { const ds = document.getElementById('decStatus');
+    if (ds) ds.textContent = !d.locked ? 'searching…' : d.services.length ? `${d.label || d.channel} · ${d.services.length} services` : 'reading the multiplex…'; }
 
   /* ★★ RESET TO THE LIST WHEN THE ENSEMBLE CHANGES, and only then. A new multiplex means a new
    *  list and the old figures describe a receiver you have left — but changing SERVICE inside one
