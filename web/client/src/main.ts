@@ -4465,7 +4465,7 @@ function dabRender() {
   /* ★ Measured on EVERY render, for whichever pane is showing: a label built while its pane was
    *  hidden measures as zero wide and never armed (the header, on the Xcover, 2026-09-07). Arming
    *  an already-armed label is a no-op, so the marquee is not restarted. */
-  dabArmMarquee(sg.offsetParent ? headEl : st);
+  dabArmMarquee(sg.offsetParent ? sg : st);   // the header AND the rows — a patched value is a new, unarmed label
   rowsKeys.length = 0;
   const rowsA = ''
     + '<h4>SERVICE</h4>'
@@ -4485,10 +4485,14 @@ function dabRender() {
     + (d.cif !== undefined && d.cif >= 0 ? row('CIF count', String(d.cif)) : '')
     /* ★ TII — the transmitter(s) behind the ensemble. Main/Sub ids as the planners publish them
      *  (hex, as on the UK TII lists), with how far each stands above the null's noise. */
-    + (d.tii && d.tii.length
-        ? d.tii.map((t, i) => row(i === 0 ? 'Transmitters' : '', dabTxText(t))).join('')
+    + (dabTxRemember(d).length
+        /* ★ One line per site, each scrolling rather than wrapping, and a fading site keeps its
+         *  line — see dabTxRemember. A list that wrapped and grew and shrank with every block made
+         *  everything below it jump ("it keeps bouncing", Stuart, 2026-09-07). */
+        ? dabTxRows(d, row)
         : row('Transmitters', d.locked ? 'none identified yet' : '—'))
-    + (d.dls ? row('Now playing', escapeHtml(d.dls)) : '')
+    /* ★ Always present: a row that comes and goes with its value rebuilds the pane and jumps it. */
+    + row('Now playing', d.dls ? `<span class="dls"><span class="dlsIn">${escapeHtml(d.dls)}</span></span>` : '—')
     + '<h4>PHYSICAL LAYER</h4>'
     + row('Lock', d.locked ? 'locked' : 'searching')
     /* ★ Requested and actual, side by side — the pair that separates "cannot decode" from
@@ -4500,15 +4504,15 @@ function dabRender() {
     + row('Frequency offset', `${d.offsetHz.toFixed(0)} Hz (${d.offsetPpm.toFixed(2)} ppm)`)
     + row('Carrier shift', String(d.carrierShift))
     + row('Phase reference', d.prs.toFixed(3) + (d.prsRatio !== undefined ? ` (${d.prsRatio.toFixed(2)} of ref)` : ''))
-    + (d.mer ? row('MER', d.mer.toFixed(1) + ' dB') : '')
-    + (d.mscBer !== undefined && d.sid ? row('MSC bit errors', (d.mscBer * 100).toFixed(2) + ' % before Viterbi') : '');
+    + row('MER', d.mer ? d.mer.toFixed(1) + ' dB' : '—')
+    + row('MSC bit errors', d.mscBer !== undefined && d.sid ? (d.mscBer * 100).toFixed(2) + ' % before Viterbi' : '—');
   const keysA = rowsKeys.slice();
   rowsKeys.length = 0;
   const rowsB = ''
     + row('Frames seen', String(d.frames))
     + row('Frames erased', String(d.erased ?? 0))
     + row('Re-acquisitions', String(d.reacquires ?? 0))
-    + (d.dropped ? row('IQ dropped', String(d.dropped)) : '')
+    + row('IQ dropped', String(d.dropped ?? 0))
     + '<h4>AUDIO CHANNEL</h4>'
     + (d.mp2In ? row('Layer II frames', `${d.mp2In} in, ${d.mp2Bad ?? 0} bad, ${d.mp2Concealed ?? 0} concealed`) : '')
     + (d.sfTried ? row('DAB+ super frames', `${d.sfOk ?? 0} of ${d.sfTried}`) : '')
@@ -4586,6 +4590,34 @@ async function dabLogoLookup(key: string, sv: DabState['services'][number], d: D
  *  when there is one, the bare TII code when there is not, distance only when the server knows
  *  where it is. Stuart's brief, 2026-09-07. Miles first because the directory's first country is
  *  the UK; kilometres beside it for everyone else. */
+/* ★★★ TRANSMITTER LINES THAT DO NOT BOUNCE. Stuart, 2026-09-07: "if it's 2 transmitters put them on
+ *  multiple lines, just scroll the longer text like radio text, and if a transmitter is fading in
+ *  and out we keep its line, just put an indication that it's not being received". A site is
+ *  remembered for a minute after it was last identified; while absent its line stays, dimmed and
+ *  marked. The list clears on a change of multiplex. */
+type DabTx = NonNullable<DabState['tii']>[number];
+const dabTxSeen = new Map<string, { t: DabTx; last: number; order: number }>();
+let dabTxChannel = '';
+let dabTxOrder = 0;
+function dabTxRemember(d: DabState): Array<{ t: DabTx; lost: boolean }> {
+  const now = Date.now();
+  if (d.channel !== dabTxChannel) { dabTxSeen.clear(); dabTxChannel = d.channel; }
+  for (const t of d.tii ?? []) {
+    const k = `${t.main}/${t.sub}`;
+    const e = dabTxSeen.get(k);
+    if (e) { e.t = t; e.last = now; } else dabTxSeen.set(k, { t, last: now, order: dabTxOrder++ });
+  }
+  for (const [k, e] of dabTxSeen) if (now - e.last > 60000) dabTxSeen.delete(k);
+  const live = new Set((d.tii ?? []).map(t => `${t.main}/${t.sub}`));
+  return [...dabTxSeen.values()].sort((a, b) => a.order - b.order)
+    .map(e => ({ t: e.t, lost: !live.has(`${e.t.main}/${e.t.sub}`) }));
+}
+function dabTxRows(d: DabState, row: (k: string, v: string) => string): string {
+  return dabTxRemember(d).map((e, i) =>
+    row(i === 0 ? 'Transmitters' : '',
+        `<span class="dls${e.lost ? ' txLost' : ''}"><span class="dlsIn">${dabTxText(e.t)}${e.lost ? ' · not received' : ''}</span></span>`)).join('');
+}
+
 function dabTxText(t: NonNullable<DabState['tii']>[number]): string {
   const code = `${t.main.toString(16).toUpperCase().padStart(2, '0')}/${t.sub.toString(16).toUpperCase().padStart(2, '0')}`;
   const name = t.site ? escapeHtml(t.site) + (t.area && t.area !== t.site ? ` (${escapeHtml(t.area)})` : '') + (t.ambiguous ? ' ?' : '') : code;

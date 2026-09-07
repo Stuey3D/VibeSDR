@@ -1127,7 +1127,12 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 #dabSignal h4 { margin:10px 0 4px; font-size:10px; letter-spacing:2px; color:var(--unit);
                 font-weight:normal; }
 #dabSignal .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; }
-#dabSignal .row span:last-child { color: var(--freq); font-variant-numeric: tabular-nums; }
+#dabSignal .row span:last-child { color: var(--freq); font-variant-numeric: tabular-nums; min-width:0; }
+/* ★ A row value that would wrap scrolls instead (transmitters, now playing) — same marquee as the list. */
+#dabSignal .row .dls { display:block; overflow:hidden; white-space:nowrap; text-align:right; }
+#dabSignal .row .dlsIn { display:inline-block; }
+#dabSignal .row .dlsIn.scroll { animation: dabDls 12s linear infinite; }
+#dabSignal .row .dls.txLost { opacity:.45; }
 .dabScopes { display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; margin:6px 0 2px; }
 .dabScopes > div { display:flex; flex-direction:column; gap:3px; }
 .dabScopes span { font-size:9px; letter-spacing:1.5px; color:var(--unit); }
