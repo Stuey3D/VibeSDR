@@ -98,7 +98,12 @@ public:
         if (++frames_ >= kFramesPerVerdict) { decide(); frames_ = 0; noiseAcc_ = 0.0; std::fill(acc_.begin(), acc_.end(), TiiC32{}); }
     }
     const std::vector<TiiHit>& hits() const { return hits_; }
-    void reset() { acc_.clear(); frames_ = 0; noiseAcc_ = 0.0; hits_.clear(); }
+    /** ★ Why a null symbol did NOT yield a hit: the best comb's four-strongest against the noise
+     *  and against the fifth. For the pane and for tuning the test on a multiplex that identifies
+     *  nothing (11D, Stuart, 2026-09-07: "the original commercial DAB multiplex of the UK"). */
+    struct Diag { int comb = -1; float fourthOverSigma = 0, fourthOverFifth = 0; int frames = 0; };
+    const Diag& diag() const { return diag_; }
+    void reset() { acc_.clear(); frames_ = 0; noiseAcc_ = 0.0; hits_.clear(); diag_ = Diag{}; }
 
     static constexpr int kFramesPerVerdict = 4;   ///< ~0.8 s of TII frames (every other frame)
 
@@ -110,6 +115,8 @@ private:
          * rejects half the noise. Per pair-slot power over `frames_` frames and 4 sections. */
         const double norm = 1.0 / (double(frames_) * 4.0);
         const double noisePair = (noiseAcc_ / frames_) * 1.0;    // E|n_k n_k+1*| ~ noise power
+        diag_ = Diag{}; diag_.frames = frames_;
+        float bestFourth = -1.0f;
         for (int c = 0; c < 24; ++c) {
             float v[8]; int idx[8];
             for (int b = 0; b < 8; ++b) { v[b] = float(acc_[size_t(c * 8 + b)].real() * norm); idx[b] = b; }
@@ -121,6 +128,7 @@ private:
              *  clear four of those on all four of its pairs, and the fifth-strongest slot must
              *  look like noise, or this is not a 4-of-8 pattern but a strong neighbour's leakage. */
             const float sigma = float(noisePair / std::sqrt(4.0 * frames_));
+            if (fourth > bestFourth) { bestFourth = fourth; diag_.comb = c; diag_.fourthOverSigma = sigma > 0 ? fourth / sigma : 0; diag_.fourthOverFifth = fifth > 0 ? fourth / fifth : 0; }
             if (fourth <= 4.0f * sigma) continue;
             if (fourth < fifth * 2.0f + 2.0f * sigma) continue;
             uint8_t bits = 0;
@@ -139,6 +147,7 @@ private:
 
     std::vector<TiiC32> acc_;
     std::vector<TiiHit> hits_;
+    Diag diag_;
     int    frames_  = 0;
     double noiseAcc_ = 0.0;
 };

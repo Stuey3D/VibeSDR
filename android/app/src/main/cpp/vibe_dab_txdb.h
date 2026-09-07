@@ -20,6 +20,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 namespace vibedab {
 
@@ -97,6 +98,28 @@ public:
                     }
         best.ambiguous = nMatch > 1 && !havePos;
         return best;
+    }
+    /** ★ THE LICENSED SITES FOR AN ENSEMBLE — Ofcom's record, not a measurement. Shown beside the
+     *  air's own TII so a reader can see both: an ensemble whose null symbol carries no TII (11D,
+     *  Digital One, measured 2026-09-07) or one sending the generic small-scale code 01/05 still
+     *  has a known transmitter. Stuart: "is that knowledge something we can add to the panel".
+     *  Nearest first when the receiver's position is known. */
+    struct Site { std::string site, area; int mainId = 0, subId = 0; double km = -1; };
+    std::vector<Site> sitesFor(int ecc, uint16_t eid, double rxLat, double rxLon, size_t maxN = 4) const {
+        std::vector<Site> out;
+        const bool havePos = !std::isnan(rxLat) && !std::isnan(rxLon);
+        auto add = [&](const std::string& site, const std::string& area, int m, int s, double lat, double lon) {
+            for (const auto& o : out) if (o.site == site) return;
+            Site x; x.site = site; x.area = area; x.mainId = m; x.subId = s;
+            x.km = havePos ? dabHaversineKm(rxLat, rxLon, lat, lon) : -1;
+            out.push_back(x);
+        };
+        for (const auto& r : loaded_) if (r.ecc == ecc && r.eid == eid) add(r.site, r.area, r.mainId, r.subId, r.lat, r.lon);
+        for (const auto& t : builtin_) if (t.ecc == ecc)
+            for (size_t i = 0; i < t.n; ++i) { const DabTx& r = t.rows[i]; if (r.eid == eid) add(r.site, r.area, r.mainId, r.subId, r.lat, r.lon); }
+        if (havePos) std::sort(out.begin(), out.end(), [](const Site& a, const Site& b) { return a.km < b.km; });
+        if (out.size() > maxN) out.resize(maxN);
+        return out;
     }
     bool hasCountry(int ecc) const {
         for (const auto& t : builtin_) if (t.ecc == ecc) return true;

@@ -186,7 +186,9 @@ export interface DabState {
   sid: number; bitrate: number; protection: string;
   services: { sid: number; label: string; codec: string; subch: number; short?: string; pty?: number;
               slides?: boolean; kbps?: number; prot?: string; cuStart?: number; cuSize?: number;
-              scids?: number; ecc?: number; dls?: string; dlsAge?: number }[];
+              scids?: number; ecc?: number; dls?: string; dlsAge?: number;
+    /** FIG 0/6 + 0/21: the FM stations that are this programme and the other DAB services carrying it. */
+    pi?: number[]; fm?: number[]; linkSids?: number[]; linkHard?: boolean; linkActive?: boolean; piImplicit?: boolean }[];
   /** The playing service's codec as DECODED (super frame / Layer II header), not as promised. */
   /** True while the server is still measuring the decoder's real output rate (the start-up glide). */
   aacSettling?: boolean;
@@ -205,6 +207,11 @@ export interface DabState {
   rsFixed?: number; rsLost?: number; sfOk?: number; sfTried?: number; sfFireBad?: number;
   mp2In?: number; mp2Bad?: number; mp2Concealed?: number; mp2NoSync?: number;
   dls?: string; dlsCrcOk?: number; dlsCrcFail?: number;
+  /** The RDS equivalents the ensemble broadcasts: clock (FIG 0/10), local offset, other blocks (0/21). */
+  mjd?: number; utc?: string; lto?: number; altHz?: number[];
+  /** Ofcom's licensed sites for this ensemble (nearest first when the receiver's position is known), and why the TII test failed. */
+  licensed?: { site: string; area: string; code: string; km: number }[];
+  tiiDiag?: { comb: number; f4s: number; f45: number; frames: number };
   aacRateHz?: number; aacCh?: number; aacServerSide?: boolean;
   dropped?: number;
   /** Set (to the length snprintf wanted) when the server had to send a stub instead of the block. */

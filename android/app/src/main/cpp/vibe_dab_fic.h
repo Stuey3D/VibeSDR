@@ -36,6 +36,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 #include "vibe_dab_fec.h"
 #include "vibe_dab_charset.h"
@@ -59,6 +60,24 @@ struct UserApp {
     int      xpadApp = -1;   ///< the X-PAD application type carrying it (audio components only)
     int      dscty   = -1;
     bool     ca      = false;
+};
+
+/** ★ FIG 0/6 service linking (8.1.15): one set per (LSN, IdLQ). IdLQ 0 lists DAB SIds (the first
+ *  is the key service), IdLQ 1 lists RDS PI codes, 3 DRM/AMSS ids. With ILS the ECC rides in the
+ *  top byte of a 16-bit id. This is the DAB side of RDS's PI and EON: which FM station IS this
+ *  service, and which other DAB services carry the same programme. */
+struct LinkSet {
+    uint16_t lsn = 0;
+    bool hard = false, active = false, ils = false;
+    int  idlq = 0;
+    std::vector<uint32_t> ids;
+};
+/** ★ FIG 0/21 frequency information (8.1.8): an id (EId for R&M 0000, RDS PI for 1000) and the
+ *  frequencies, in Hz, it can be found on. The DAB side of RDS's AF list. */
+struct FreqInfo {
+    uint16_t id = 0;
+    int rm = 0;
+    std::vector<uint32_t> hz;
 };
 
 struct ServiceComponent {
@@ -115,6 +134,10 @@ struct Ensemble {
     bool alarm = false;           ///< FIG 0/0 Al flag
     int  serviceCount = -1;       ///< FIG 0/7: how many services the MCI describes
     int  configCount  = -1;       ///< FIG 0/7: reconfiguration counter, mod 1024
+    std::map<uint32_t, LinkSet>  links;        ///< FIG 0/6, keyed by (LSN << 2) | IdLQ
+    std::map<uint32_t, FreqInfo> freqInfo;     ///< FIG 0/21, keyed by (R&M << 16) | Id
+    /** ★ FIG 0/10 date and time (8.1.3.1): the DAB side of RDS's CT. -1 until heard. */
+    int mjd = -1, utcHour = -1, utcMin = -1, utcSec = -1;
     std::map<uint32_t, Service> services;      ///< by SId, so repeats update rather than duplicate
     std::map<int, SubChannel>   subChannels;   ///< by SubChId
     bool empty() const { return services.empty() && label.empty(); }
@@ -368,7 +391,67 @@ inline bool parseFib(const uint8_t* fib32, Ensemble& e) {
                     if (it != e.services.end()) it->second.pty = code;
                 }
             }
-            // ★ everything else (0/3, 0/5, 0/10, 0/14, 0/18-0/26) is skipped by length, as 5.2.2.0 says
+            else if (ext == 6 && !cn) {                // service linking (8.1.15) — OE sets are about links, keep them
+                size_t j = 0;
+                while (j + 2 <= qn) {
+                    const bool idList = (q[j] & 0x80) != 0;
+                    const bool la  = (q[j] & 0x40) != 0;
+                    const bool sh  = (q[j] & 0x20) != 0;
+                    const bool ils = (q[j] & 0x10) != 0;
+                    const uint16_t lsn = uint16_t(((q[j] & 0x0F) << 8) | q[j + 1]);
+                    j += 2;
+                    if (!idList) {                         // (de)activation of an existing set
+                        for (auto& kv : e.links) if (kv.second.lsn == lsn) { kv.second.active = la; kv.second.hard = sh; }
+                        continue;
+                    }
+                    if (j >= qn) break;
+                    const int idlq = (q[j] >> 5) & 3;
+                    const int n    = q[j] & 0x0F;
+                    j += 1;
+                    LinkSet& ls = e.links[(uint32_t(lsn) << 2) | uint32_t(idlq)];
+                    ls.lsn = lsn; ls.hard = sh; ls.active = la; ls.ils = ils; ls.idlq = idlq;
+                    for (int k = 0; k < n; ++k) {
+                        uint32_t id;
+                        if (pd)       { if (j + 4 > qn) break; id = (uint32_t(q[j]) << 24) | (uint32_t(q[j+1]) << 16) | (uint32_t(q[j+2]) << 8) | q[j+3]; j += 4; }
+                        else if (ils) { if (j + 3 > qn) break; id = (uint32_t(q[j]) << 16) | (uint32_t(q[j+1]) << 8) | q[j+2]; j += 3; }
+                        else          { if (j + 2 > qn) break; id = (uint32_t(q[j]) << 8) | q[j+1]; j += 2; }
+                        bool have = false;
+                        for (uint32_t x : ls.ids) if (x == id) { have = true; break; }
+                        if (!have) ls.ids.push_back(id);   // a set may be split across FIGs: merge
+                    }
+                }
+            } else if (ext == 21) {                    // frequency information (8.1.8); OE entries are other ensembles' frequencies
+                if (qn >= 2) {
+                    const size_t end = std::min(qn, size_t(2) + size_t(q[1] & 0x1F));
+                    size_t j = 2;
+                    while (j + 3 <= end) {
+                        const uint16_t id = uint16_t((q[j] << 8) | q[j + 1]);
+                        const int rm   = q[j + 2] >> 4;
+                        const size_t flen = q[j + 2] & 0x07;
+                        j += 3;
+                        if (j + flen > end) break;
+                        FreqInfo& fi = e.freqInfo[(uint32_t(rm) << 16) | id];
+                        fi.id = id; fi.rm = rm;
+                        auto add = [&fi](uint32_t hz) { for (uint32_t x : fi.hz) if (x == hz) return; fi.hz.push_back(hz); };
+                        if (rm == 0) {                     // DAB: control(5) + freq a(19) in 16 kHz units
+                            for (size_t k = 0; k + 3 <= flen; k += 3)
+                                add(((uint32_t(q[j+k] & 0x07) << 16) | (uint32_t(q[j+k+1]) << 8) | q[j+k+2]) * 16000u);
+                        } else if (rm == 8) {              // FM with RDS: 87.5 MHz + b x 100 kHz
+                            for (size_t k = 0; k < flen; ++k) add(87500000u + uint32_t(q[j+k]) * 100000u);
+                        }                                  // DRM / AMSS (0110, 1110): skipped by length
+                        j += flen;
+                    }
+                }
+            } else if (ext == 10 && qn >= 4) {         // date and time (8.1.3.1)
+                /* Rfu(1) MJD(17) LSI(1) Rfa(1) UTC flag(1) then hours(5) minutes(6), and in the long
+                 * form seconds(6) milliseconds(10). The same fields sit in the same top bits either way. */
+                const uint32_t w = (uint32_t(q[0]) << 24) | (uint32_t(q[1]) << 16) | (uint32_t(q[2]) << 8) | q[3];
+                e.mjd     = int((w >> 14) & 0x1FFFF);
+                e.utcHour = int((w >> 6) & 0x1F);
+                e.utcMin  = int(w & 0x3F);
+                e.utcSec  = ((w >> 11) & 1) && qn >= 6 ? int(q[4] >> 2) : 0;
+            }
+            // ★ everything else (0/3, 0/5, 0/14, 0/18-0/26) is skipped by length, as 5.2.2.0 says
         } else if (type == 1) {
             const uint8_t charset = uint8_t(p[0] >> 4);
             const int ext = p[0] & 0x07;

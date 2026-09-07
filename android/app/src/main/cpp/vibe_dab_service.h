@@ -559,6 +559,64 @@ public:
             snprintf(eb, sizeof eb, ",\"ecc\":%d,\"cif\":%d,\"mci\":%s,\"nsvc\":%d",
                      e.ecc, e.cifCount, e.mciComplete() ? "true" : "false", e.serviceCount);
             j += eb;
+            /* ★ The RDS equivalents the ensemble broadcasts about ITSELF (Stuart, 2026-09-07: "the
+             *  real full RDS info from DAB"): the clock (FIG 0/10, CT) with the local offset (0/9),
+             *  and the other blocks this ensemble is on (0/21, AF). */
+            {   // ★ How much linking/frequency signalling this ensemble carries at all — the DXer's
+                //   answer to "why is the FM row empty": the mux sends none, or we missed it.
+                char cb[48];
+                snprintf(cb, sizeof cb, ",\"nLinks\":%zu,\"nFi\":%zu", e.links.size(), e.freqInfo.size());
+                j += cb;
+                const auto& td = rx_.tiiDiag();
+                char db[96];
+                snprintf(db, sizeof db, ",\"tiiDiag\":{\"comb\":%d,\"f4s\":%.1f,\"f45\":%.2f,\"frames\":%d}", td.comb, td.fourthOverSigma, td.fourthOverFifth, td.frames);
+                j += db;
+                /* ★ The raw linkage table (FIG 0/6) and frequency table (FIG 0/21), for the DX pane and
+                 *  for seeing what a multiplex actually signals. Small: a few sets of a few ids. */
+                if (!e.links.empty()) {
+                    j += ",\"links\":[";
+                    bool f1 = true;
+                    for (const auto& lk : e.links) {
+                        const LinkSet& ls = lk.second;
+                        if (!f1) j += ','; f1 = false;
+                        char lb[80];
+                        snprintf(lb, sizeof lb, "{\"lsn\":%u,\"idlq\":%d,\"hard\":%s,\"active\":%s,\"ils\":%s,\"ids\":[",
+                                 unsigned(ls.lsn), ls.idlq, ls.hard ? "true" : "false", ls.active ? "true" : "false", ls.ils ? "true" : "false");
+                        j += lb;
+                        bool f2 = true;
+                        for (uint32_t id : ls.ids) { if (!f2) j += ','; f2 = false; j += std::to_string(id); }
+                        j += "]}";
+                    }
+                    j += "]";
+                }
+                if (!e.freqInfo.empty()) {
+                    j += ",\"fi\":[";
+                    bool f1 = true;
+                    for (const auto& fk : e.freqInfo) {
+                        const FreqInfo& fi = fk.second;
+                        if (!f1) j += ','; f1 = false;
+                        j += "{\"id\":" + std::to_string(fi.id) + ",\"rm\":" + std::to_string(fi.rm) + ",\"hz\":[";
+                        bool f2 = true;
+                        for (uint32_t hz : fi.hz) { if (!f2) j += ','; f2 = false; j += std::to_string(hz); }
+                        j += "]}";
+                    }
+                    j += "]";
+                }
+            }
+            if (e.mjd >= 0) {
+                char tb[64];
+                snprintf(tb, sizeof tb, ",\"mjd\":%d,\"utc\":\"%02d:%02d:%02d\",\"lto\":%d", e.mjd, e.utcHour, e.utcMin, e.utcSec, e.ltoHalfHours);
+                j += tb;
+            }
+            {
+                auto fi = e.freqInfo.find((0u << 16) | e.eid);
+                if (fi != e.freqInfo.end() && !fi->second.hz.empty()) {
+                    j += ",\"altHz\":[";
+                    bool f1 = true;
+                    for (uint32_t hz : fi->second.hz) { if (!f1) j += ','; f1 = false; j += std::to_string(hz); }
+                    j += "]";
+                }
+            }
         }
         {
             /* ★ Signal analysis for the DX pane: MER, raw MSC bit error rate, the PRS impulse
@@ -606,6 +664,20 @@ public:
                 j += "}";
             }
             j += "]";
+            if (txdb_ && e.eid) {
+                const auto sites = txdb_->sitesFor(e.ecc, e.eid, rxLat_, rxLon_);
+                if (!sites.empty()) {
+                    j += ",\"licensed\":[";
+                    bool f1 = true;
+                    for (const auto& st : sites) {
+                        if (!f1) j += ','; f1 = false;
+                        char sb[64];
+                        snprintf(sb, sizeof sb, "\",\"code\":\"%02X/%02X\",\"km\":%.1f}", st.mainId, st.subId, st.km);
+                        j += "{\"site\":\"" + esc(st.site) + "\",\"area\":\"" + esc(st.area) + sb;
+                    }
+                    j += "]";
+                }
+            }
         }
         j += ",\"services\":[";
         bool first = true;
@@ -641,6 +713,55 @@ public:
                      sv.pty, sv.hasSlideshow() ? "true" : "false",
                      si.bitrateKbps, prot, sc.startCu, sizeCu, pc->scids, sv.ecc >= 0 ? sv.ecc : e.ecc);
             j += b;
+            /* ★ THE RDS SIDE OF THIS SERVICE, from the ensemble's own signalling: the FM stations
+             *  that ARE this programme (FIG 0/6 links to RDS PI codes, FIG 0/21 their frequencies)
+             *  and the other DAB services carrying it. Stuart, 2026-09-07: "I don't want invented
+             *  RDS, I want the real full RDS info from DAB". */
+            {
+                std::vector<uint16_t> lsns;
+                bool hard = false, active = false;
+                /* ★ A set names this service by its SId (IdLQ 0) — or, on 11D as measured, by its PI
+                 *  in a PI-only set (IdLQ 1), which is the implicit SId = PI rule again. */
+                for (const auto& lk : e.links) {
+                    const LinkSet& ls = lk.second;
+                    if (ls.idlq != 0 && ls.idlq != 1) continue;
+                    for (uint32_t id : ls.ids)
+                        if (id == kv.first || (id & 0xFFFFu) == (kv.first & 0xFFFFu)) { lsns.push_back(ls.lsn); hard = ls.hard; active = ls.active; break; }
+                }
+                std::vector<uint32_t> pis, sids;
+                for (const auto& lk : e.links) {
+                    const LinkSet& ls = lk.second;
+                    bool in = false; for (uint16_t l : lsns) if (l == ls.lsn) { in = true; break; }
+                    if (!in) continue;
+                    for (uint32_t id : ls.ids) {
+                        if (ls.idlq == 1) { const uint32_t pi = id & 0xFFFFu; if (pi == (kv.first & 0xFFFFu)) continue; bool h = false; for (uint32_t x : pis) if (x == pi) h = true; if (!h) pis.push_back(pi); }
+                        else if (ls.idlq == 0 && id != kv.first && (id & 0xFFFFu) != (kv.first & 0xFFFFu)) { bool h = false; for (uint32_t x : sids) if (x == id) h = true; if (!h) sids.push_back(id); }
+                    }
+                }
+                /* ★ IMPLICIT LINKING (TS 103 176 6.4.2 / EN 300 401 6.3.1): a programme service's
+                 *  16-bit SId has the RDS PI code's structure — country id + reference — and in the
+                 *  UK it IS the station's PI, which is how a car radio follows Flex FM between 7D
+                 *  and FM with no explicit link set on air (Stuart, 2026-09-07). With no explicit
+                 *  link the SId stands as the PI, marked implicit, and FIG 0/21 keyed by it gives
+                 *  the FM frequencies. */
+                const bool implicit = pis.empty() && !sv.isData;
+                if (!sv.isData) pis.insert(pis.begin(), kv.first & 0xFFFFu);   // own PI first, then the linked ones
+                if (!pis.empty() || !sids.empty()) {
+                    j += std::string(",\"piImplicit\":") + (implicit ? "true" : "false");
+                    j += ",\"pi\":[";
+                    bool f1 = true; for (uint32_t pi : pis) { if (!f1) j += ','; f1 = false; j += std::to_string(pi); }
+                    j += "],\"fm\":[";
+                    f1 = true;
+                    for (uint32_t pi : pis) {
+                        auto fi = e.freqInfo.find((8u << 16) | pi);
+                        if (fi == e.freqInfo.end()) continue;
+                        for (uint32_t hz : fi->second.hz) { if (!f1) j += ','; f1 = false; j += std::to_string(hz); }
+                    }
+                    j += "],\"linkSids\":[";
+                    f1 = true; for (uint32_t s2 : sids) { if (!f1) j += ','; f1 = false; j += std::to_string(s2); }
+                    j += std::string("],\"linkHard\":") + (hard ? "true" : "false") + ",\"linkActive\":" + (active ? "true" : "false");
+                }
+            }
             /* ★ Every row's "now playing": the playing service's live label, the others' from the
              *  scanner, with how old it is. */
             if (kv.first == sid_ && pad_.dls().label().valid && !pad_.dls().label().text.empty())

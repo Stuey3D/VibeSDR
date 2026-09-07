@@ -17266,9 +17266,20 @@ void LocalSdrShim::setStationsJson(const std::string& json) {
     LOGI("stations list set (%zu bytes)", json.size());
 }
 void LocalSdrShim::setLocationJson(const std::string& json) {
-    std::lock_guard<std::mutex> lk(g_locMtx);
-    g_locJson = json;
-    LOGI("receiver location set (%zu bytes)", json.size());
+    {
+        std::lock_guard<std::mutex> lk(g_locMtx);
+        g_locJson = json;
+        LOGI("receiver location set (%zu bytes)", json.size());
+    }
+    /* ★★★ THE SAME POSITION IS THE DAB RECEIVER POSITION. The app has always handed the phone's
+     *  (coarsened, ~1 km) position in here for the directory listing, and the transmitter
+     *  distances on the Pi come from setReceiverPosition — which nothing on Android ever called,
+     *  so the Xcover showed "Northampton IO92ng" in the listing and no distance against any
+     *  transmitter (Stuart, 2026-09-07: "the xcover gives its location yet for some reason we
+     *  cannot use that to determine transmitter ranges?"). One fact, one reader. */
+    double lat = 0, lon = 0;
+    if (jsonNum(json, "lat", lat) && jsonNum(json, "lon", lon) && (lat != 0.0 || lon != 0.0))
+        setReceiverPosition(lat, lon);
 }
 
 LocalSdrShim& LocalSdrShim::instance() { static LocalSdrShim inst; return inst; }

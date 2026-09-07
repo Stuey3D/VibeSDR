@@ -4475,14 +4475,25 @@ function dabRender() {
     + (cur ? row('Capacity units', `${cur.cuStart}–${(cur.cuStart ?? 0) + (cur.cuSize ?? 0) - 1} (${cur.cuSize} CU, sub-channel ${cur.subch})`) : '')
     + (cur && cur.pty !== undefined && cur.pty >= 0 ? row('Programme type', DAB_PTY[cur.pty] ?? String(cur.pty)) : '')
     + (cur && cur.ecc !== undefined && cur.ecc >= 0 ? row('Service id', `${cur.ecc.toString(16).toUpperCase()}:${cur.sid.toString(16).toUpperCase().padStart(4, '0')}`) : '')
+    /* ★ The RDS side, from the ensemble's own signalling (FIG 0/6 links, FIG 0/21 frequencies):
+     *  which FM station this programme is, where it is on FM, and which other DAB services carry
+     *  it. Stuart, 2026-09-07: "the real full RDS info from DAB". Rows are permanent — see above. */
+    + row('RDS PI', cur?.pi && cur.pi.length ? cur.pi.map(p => p.toString(16).toUpperCase().padStart(4, '0')).join(', ') + (cur.piImplicit ? ' (SId, implicit)' : (cur.linkActive === false ? ' (linked, inactive)' : ' (linked)')) : '—')
+    + row('On FM', cur?.fm && cur.fm.length ? cur.fm.map(hz => (hz / 1e6).toFixed(1)).join(', ') + ' MHz' : '—')
+    + row('Also carried by', cur?.linkSids && cur.linkSids.length
+        ? `<span class="dls"><span class="dlsIn">${cur.linkSids.map(s2 => { const o = d.services.find(x => x.sid === s2); return o ? escapeHtml(o.label) : s2.toString(16).toUpperCase().padStart(4, '0'); }).join(' · ')}${cur.linkHard === false ? ' (soft link)' : ''}${cur.linkActive === false ? ' (link inactive)' : ''}</span></span>`
+        : '—')
     + '<h4>ERROR RATE</h4>'
-    + row('FIB this frame', `${d.fibOk} / ${d.fibTotal}`)
-    + row('FIB pass rate', (d.fibRate * 100).toFixed(1) + ' %')
+    /* ★ Errors, not passes: "it's easier to read 5 % errors rather than 95 % pass" (Stuart). */
+    + row('FIB errors this frame', `${Math.max(0, d.fibTotal - d.fibOk)} of ${d.fibTotal}`)
+    + row('FIB error rate', ((1 - d.fibRate) * 100).toFixed(1) + ' %')
     + '<h4>MULTIPLEX</h4>'
     + row('Ensemble', d.label || '—')
     + row('EId', (d.ecc !== undefined && d.ecc >= 0 ? d.ecc.toString(16).toUpperCase() + ':' : '') + d.eid.toString(16).toUpperCase().padStart(4, '0'))
     + row('Services', String(d.services.length) + (d.nsvc !== undefined && d.nsvc >= 0 ? ` of ${d.nsvc}` : '') + (d.mci ? '' : ' (reading…)'))
     + (d.cif !== undefined && d.cif >= 0 ? row('CIF count', String(d.cif)) : '')
+    + row('Ensemble clock', d.utc ? `${d.utc} UTC` + (d.lto ? ` (local ${dabLocalTime(d.utc, d.lto)})` : '') : '—')
+    + row('Also on', d.altHz && d.altHz.length ? d.altHz.map(hz => { const b = DAB_BLOCKS.find(x => Math.abs(x.hz - hz) < 50000); return b ? b.name : (hz / 1e6).toFixed(3); }).join(', ') : '—')
     /* ★ TII — the transmitter(s) behind the ensemble. Main/Sub ids as the planners publish them
      *  (hex, as on the UK TII lists), with how far each stands above the null's noise. */
     + (dabTxRemember(d).length
@@ -4490,7 +4501,16 @@ function dabRender() {
          *  line — see dabTxRemember. A list that wrapped and grew and shrank with every block made
          *  everything below it jump ("it keeps bouncing", Stuart, 2026-09-07). */
         ? dabTxRows(d, row)
-        : row('Transmitters', d.locked ? 'none identified yet' : '—'))
+        /* ★ Say WHY when there is nothing: a null symbol with no TII energy at all (Digital One,
+         *  11D, measured 2026-09-07: the best comb at 0.6 of the noise against a 4x test) is a
+         *  multiplex that does not transmit identification, not a receiver that has not found it. */
+        : row('Transmitters', !d.locked ? '—'
+            : (d.tiiDiag && d.tiiDiag.frames > 0 && d.tiiDiag.f4s < 2 ? 'none transmitted — no TII in the null symbol' : 'none identified yet')))
+    /* ★ Ofcom's licence record for this ensemble, beside what the air says — labelled as such. */
+    + (d.licensed && d.licensed.length
+        ? d.licensed.map((l, i) => row(i === 0 ? 'Licensed sites' : '',
+            `<span class="dls"><span class="dlsIn">${escapeHtml(l.site)}${l.area && l.area !== l.site ? ` (${escapeHtml(l.area)})` : ''}${l.km >= 0 ? ` · ${(l.km * 0.621371).toFixed(l.km < 16 ? 1 : 0)} mi (${l.km.toFixed(l.km < 10 ? 1 : 0)} km)` : ''} · ${l.code} · Ofcom record</span></span>`)).join('')
+        : '')
     /* ★ Always present: a row that comes and goes with its value rebuilds the pane and jumps it. */
     + row('Now playing', d.dls ? `<span class="dls"><span class="dlsIn">${escapeHtml(d.dls)}</span></span>` : '—')
     + '<h4>PHYSICAL LAYER</h4>'
@@ -4618,9 +4638,21 @@ function dabTxRows(d: DabState, row: (k: string, v: string) => string): string {
         `<span class="dls${e.lost ? ' txLost' : ''}"><span class="dlsIn">${dabTxText(e.t)}${e.lost ? ' · not received' : ''}</span></span>`)).join('');
 }
 
+/** FIG 0/9's local time offset applied to the ensemble's UTC clock, in signed half hours. */
+function dabLocalTime(utc: string, ltoHalfHours: number): string {
+  const [h, m, s] = utc.split(':').map(Number);
+  let mins = h * 60 + m + ltoHalfHours * 30;
+  mins = ((mins % 1440) + 1440) % 1440;
+  return `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}:${String(s || 0).padStart(2, '0')}`;
+}
+
 function dabTxText(t: NonNullable<DabState['tii']>[number]): string {
   const code = `${t.main.toString(16).toUpperCase().padStart(2, '0')}/${t.sub.toString(16).toUpperCase().padStart(2, '0')}`;
-  const name = t.site ? escapeHtml(t.site) + (t.area && t.area !== t.site ? ` (${escapeHtml(t.area)})` : '') + (t.ambiguous ? ' ?' : '') : code;
+  /* ★ 01/05 is the generic code many small-scale DAB operators leave in place rather than the one
+   *  they were licensed (Stuart, 2026-09-07, having read up on it) — so an unmatched 01/05 is
+   *  named as that, not left looking like an unknown site. */
+  const name = t.site ? escapeHtml(t.site) + (t.area && t.area !== t.site ? ` (${escapeHtml(t.area)})` : '') + (t.ambiguous ? ' ?' : '')
+             : (t.main === 1 && t.sub === 5 ? `${code} · generic small-scale code, not set by the operator` : code);
   const dist = t.km !== undefined && t.km >= 0 ? ` · ${(t.km * 0.621371).toFixed(t.km < 16 ? 1 : 0)} mi (${t.km.toFixed(t.km < 10 ? 1 : 0)} km)` : '';
   return `${name}${dist} · ${t.db.toFixed(0)} dB${t.site ? ` <span style="opacity:.5">${code}</span>` : ''}`;
 }
@@ -4741,6 +4773,10 @@ function dabRememberedChannel(): number {
  *  {on:1, channel:12B} regardless and hijacked the dial from the station everyone was on. */
 function dabUiOn() {
   dabOn = true;
+  /* ★ THE ADVANCED RDS PANEL SHARES THIS BOX. Entering DAB with it open left it showing under
+   *  the station list ("the DAB stations populated over the top of it", Stuart, 2026-09-07).
+   *  DAB takes the box; the RDS panel closes as it does for any other decoder. */
+  if (activeDec === 'rds') { $('rdsPanel').classList.remove('show'); $('decBox').classList.remove('rds'); activeDec = null; }
   dabLockControls(true);
   if (spec) spec.dabHeld = true;
   const mux = document.getElementById('dabMux');
