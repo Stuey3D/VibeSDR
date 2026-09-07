@@ -1127,7 +1127,8 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 #dabSignal h4 { margin:10px 0 4px; font-size:10px; letter-spacing:2px; color:var(--unit);
                 font-weight:normal; }
 #dabSignal .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; }
-#dabSignal .row span:last-child { color: var(--freq); font-variant-numeric: tabular-nums; min-width:0; }
+#dabSignal .row span:first-child { flex:0 0 auto; white-space:nowrap; }   /* ★ the label never wraps: a wide value squeezed "Licensed sites" onto two lines (Stuart, 2026-09-07) */
+#dabSignal .row span:last-child { color: var(--freq); font-variant-numeric: tabular-nums; min-width:0; flex:1 1 auto; text-align:right; }
 /* ★ A row value that would wrap scrolls instead (transmitters, now playing) — same marquee as the list. */
 #dabSignal .row .dls { display:block; overflow:hidden; white-space:nowrap; text-align:right; }
 #dabSignal .row .dlsIn { display:inline-block; }

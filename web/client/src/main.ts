@@ -4506,8 +4506,10 @@ function dabRender() {
          *  multiplex that does not transmit identification, not a receiver that has not found it. */
         : row('Transmitters', !d.locked ? '—'
             : (d.tiiDiag && d.tiiDiag.frames > 0 && d.tiiDiag.f4s < 2 ? 'none transmitted — no TII in the null symbol' : 'none identified yet')))
-    /* ★ Ofcom's licence record for this ensemble, beside what the air says — labelled as such. */
-    + (d.licensed && d.licensed.length
+    /* ★ Ofcom's licence record for this ensemble — ONLY when the air gives nothing to go on: no TII
+     *  at all, or only the generic 01/05. With a real site identified it is clutter (Stuart,
+     *  2026-09-07: "that just adds too much in a small space"). */
+    + (d.licensed && d.licensed.length && !dabTxRemember(d).some(e => !e.lost && !!e.t.site)   // a NAMED site on air is the real thing; a bare or generic code is not
         ? d.licensed.map((l, i) => row(i === 0 ? 'Licensed sites' : '',
             `<span class="dls"><span class="dlsIn">${escapeHtml(l.site)}${l.area && l.area !== l.site ? ` (${escapeHtml(l.area)})` : ''}${l.km >= 0 ? ` · ${(l.km * 0.621371).toFixed(l.km < 16 ? 1 : 0)} mi (${l.km.toFixed(l.km < 10 ? 1 : 0)} km)` : ''} · ${l.code} · Ofcom record</span></span>`)).join('')
         : '')
