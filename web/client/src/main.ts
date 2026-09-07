@@ -4385,6 +4385,7 @@ function dabRender() {
   /* ★ The now-playing text (DLS) sits under the service it belongs to — the field OWRX omits
    *  and the reason Stuart asked for it. The .dls style has been in the sheet since 2026-09-04;
    *  nothing ever emitted the element. */
+  const listScroll = document.getElementById('decBody')?.scrollTop ?? 0;
   st.innerHTML = d.services.length
     ? d.services.map(sv => `<div class="dabSvc${sv.sid === d.sid ? ' on' : ''}" data-sid="${sv.sid}">`
         + dabLogoTag(sv, d)
@@ -4396,6 +4397,7 @@ function dabRender() {
         : d.locked ? 'Reading the multiplex…' : 'Searching for a multiplex…'}</div>`;
   for (const el of Array.from(st.querySelectorAll('.dabSvc')) as HTMLElement[])
     el.onclick = () => { spec?.dabService(Number(el.dataset.sid)); };
+  { const b = document.getElementById('decBody'); if (b && listScroll) b.scrollTop = listScroll; }
   /* ★ A label wider than its row SCROLLS (Stuart: "the radio text needs to scroll in the
    *  station list"). Measured after layout; the travel is the overflow, so it stops at the end. */
   for (const inner of Array.from(st.querySelectorAll('.dlsIn')) as HTMLElement[]) {
@@ -4405,6 +4407,11 @@ function dabRender() {
   }
 
   const row = (k: string, v: string) => `<div class="row"><span>${k}</span><span>${v}</span></div>`;
+  /* ★ KEEP THE SCROLL. Both panes are rebuilt from every stats block, twice a second, and an
+   *  innerHTML rewrite puts the box back to the top — "when scrolling down to see more info in
+   *  the signal analysis window it kept snapping up" (Stuart, 2026-09-07). */
+  const body = document.getElementById('decBody');
+  const keepScroll = body ? body.scrollTop : 0;
   const cur = d.services.find(x => x.sid === d.sid);
   /* ★ The pane opens with WHO you are listening to — a larger logo and the name — before the
    *  numbers (Stuart, 2026-09-07, from his screenshot of the pane). */
@@ -4462,6 +4469,7 @@ function dabRender() {
     + (d.aacRateHz ? row('AAC', `${d.aacRateHz} Hz, ${d.aacCh} ch${d.aacServerSide ? ', decoded on the server' : ''}`) : '')
     + (d.dlsCrcOk !== undefined ? row('DLS groups', `${d.dlsCrcOk} ok, ${d.dlsCrcFail ?? 0} bad`) : '');
   dabDrawScopes(d);
+  if (body && keepScroll) body.scrollTop = keepScroll;
 }
 
 /* ★★★ LOGOS FOR THE STATION LIST. Neither multiplex here carries a slideshow (no X-PAD app 12 on
