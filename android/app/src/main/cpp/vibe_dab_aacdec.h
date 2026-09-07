@@ -56,6 +56,13 @@ struct AacPcm {
  *  DAB+ access unit is. */
 class AacDecoder {
 public:
+    /** ★★★ AMediaCodec DOES THE 960-SAMPLE TRANSFORM — every access unit comes back exactly as
+     *  long as it should, so its claimed rate is the truth and nothing here needs measuring.
+     *  ★ It is also ASYNCHRONOUS: the first units return nothing and later ones return bursts,
+     *    so a rate MEASURED over its early output is wrong by construction. Gating the
+     *    measurement on this flag is what stopped the Xcover's DAB+ ramping up at the start of
+     *    every service (Stuart, 2026-09-07 evening: it "never needed it"). */
+    static constexpr bool kExactFrames = true;
     AacDecoder() = default;
     ~AacDecoder() { close(); }
     AacDecoder(const AacDecoder&) = delete;
@@ -249,6 +256,9 @@ private:
  */
 class AacDecoder {
 public:
+    /** ★★★ THIS DECODER CANNOT DO THE 960-SAMPLE DAB+ TRANSFORM — it returns 1024 samples per
+     *  access unit, so the caller must MEASURE its real output rate (see DabService). */
+    static constexpr bool kExactFrames = false;
     AacDecoder() = default;
     ~AacDecoder() { close(); }
     AacDecoder(const AacDecoder&) = delete;
@@ -354,6 +364,7 @@ private:
  *  producing nothing. The ensemble, the MP2 services and the signal figures are unaffected. */
 class AacDecoder {
 public:
+    static constexpr bool kExactFrames = true;
     bool available() const { return false; }
     bool decode(const uint8_t*, size_t, AacPcm&) { return false; }
     void drain(AacPcm&) {}

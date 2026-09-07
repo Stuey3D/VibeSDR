@@ -1059,7 +1059,12 @@ private:
                         /* ★ REMEMBERED, PROCESS-WIDE. Stuart likes the glide but not on every
                          *  return to a station: once the decoder's ratio (samples returned over
                          *  samples due) has been measured, the next service starts from it. */
-                        static double s_knownRatio = 0.0;
+                        /* ★★★ ONLY FOR A DECODER THAT CANNOT FRAME EXACTLY. AMediaCodec on the
+                         *  Xcover returns 960 per unit and its claimed rate is right; it is also
+                         *  asynchronous, so measuring its early, bursty output read a false rate
+                         *  and paced the audio at it — a start-up ramp on a platform that had
+                         *  played DAB+ perfectly that morning (Stuart, 2026-09-07). */
+                        static double s_knownRatio = AacDecoder::kExactFrames ? 1.0 : 0.0;
                         ++aacAuTotal_;                                   // lifetime, never halved
                         int rate = s_knownRatio > 0.0 ? int(std::lround(double(dec.rateHz) * s_knownRatio)) : dec.rateHz;
                         if (aacAuTotal_ <= 1) aacStartedKnown_ = s_knownRatio > 0.0;
@@ -1070,7 +1075,7 @@ private:
                          *  read the moving window's counter, which is halved and never reaches
                          *  its own threshold — so the notice never cleared. Lifetime counter now. */
                         const bool converged = aacAuTotal_ >= 160;
-                        if (aacAuAcc_ >= 8 && (s_knownRatio <= 0.0 || converged)) {
+                        if (!AacDecoder::kExactFrames && aacAuAcc_ >= 8 && (s_knownRatio <= 0.0 || converged)) {
                             const double auSec = 0.120 / double(s.fmt.accessUnits);
                             const double eff   = aacPcmAcc_ / (double(aacAuAcc_) * auSec);
                             if (eff > 8000.0 && eff < 200000.0 && std::fabs(eff - double(rate)) > double(rate) * 0.01) {
@@ -1139,7 +1144,7 @@ private:
     int        rsRate_ = 0;     ///< of those, how many were silence covering a lost super frame     ///< 48 kHz stereo frames delivered, ever   ///< PCM FRAMES the decoder returned for the last AU                ///< AUs turned into PCM here rather than on the client
     AudioFormat afmt_{};
     double aacPcmAcc_ = 0.0; int aacAuAcc_ = 0; int aacEffRateHz_ = 0; bool aacRateWarned_ = false;
-    bool aacStartedKnown_ = false; int aacAuTotal_ = 0;
+    bool aacStartedKnown_ = AacDecoder::kExactFrames; int aacAuTotal_ = 0;   // ★ an exact decoder has nothing to learn — no "setting the clock" flash before its first unit
     /* ★ Counters, because "no audio" has four possible causes here and guessing between them is
      *  what cost the evening: no frames arriving, frames of an unusable length, the firecode
      *  never aligning, or AUs produced and not sent. Each has its own number. */
