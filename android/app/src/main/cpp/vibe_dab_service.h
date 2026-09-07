@@ -504,6 +504,18 @@ public:
                      e.ecc, e.cifCount, e.mciComplete() ? "true" : "false", e.serviceCount);
             j += eb;
         }
+        {
+            /* ★ TII: which transmitter(s) of the SFN we are hearing — main id, sub id, dB over
+             *  the null's noise. The figure a DX-er wants beside the ensemble name. */
+            j += ",\"tii\":[";
+            bool f1 = true;
+            for (const auto& h : rx_.tii()) {
+                char tb[64];
+                snprintf(tb, sizeof tb, "%s{\"main\":%d,\"sub\":%d,\"db\":%.1f}", f1 ? "" : ",", h.mainId, h.subId, h.strength);
+                j += tb; f1 = false;
+            }
+            j += "]";
+        }
         j += ",\"services\":[";
         bool first = true;
         for (const auto& kv : e.services) {

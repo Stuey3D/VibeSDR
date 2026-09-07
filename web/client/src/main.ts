@@ -4399,6 +4399,11 @@ function dabRender() {
     + row('EId', (d.ecc !== undefined && d.ecc >= 0 ? d.ecc.toString(16).toUpperCase() + ':' : '') + d.eid.toString(16).toUpperCase().padStart(4, '0'))
     + row('Services', String(d.services.length) + (d.nsvc !== undefined && d.nsvc >= 0 ? ` of ${d.nsvc}` : '') + (d.mci ? '' : ' (reading…)'))
     + (d.cif !== undefined && d.cif >= 0 ? row('CIF count', String(d.cif)) : '')
+    /* ★ TII — the transmitter(s) behind the ensemble. Main/Sub ids as the planners publish them
+     *  (hex, as on the UK TII lists), with how far each stands above the null's noise. */
+    + row('Transmitters', d.tii && d.tii.length
+        ? d.tii.map(t => `${t.main.toString(16).toUpperCase().padStart(2, '0')}/${t.sub.toString(16).toUpperCase().padStart(2, '0')} ${t.db.toFixed(0)} dB`).join(', ')
+        : (d.locked ? 'none identified yet' : '—'))
     + (d.dls ? row('Now playing', escapeHtml(d.dls)) : '')
     + '<h4>PHYSICAL LAYER</h4>'
     + row('Lock', d.locked ? 'locked' : 'searching')

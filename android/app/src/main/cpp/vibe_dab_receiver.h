@@ -32,6 +32,7 @@
 #include "vibe_dab_interleave.h"
 #include "vibe_dab_modes.h"
 #include "vibe_dab_msc.h"
+#include "vibe_dab_tii.h"
 #include "vibe_dab_ofdm.h"
 #include "vibe_dab_prs.h"
 #include "vibe_dab_sync.h"
@@ -301,6 +302,19 @@ public:
             const int ok = ficDecodeFrame(frameBits.data(), ensemble_, viterbi_);
             stats_.fibsOk    = ok;
             stats_.fibsTotal = 12;
+            /* ★ TII rides in the null symbol of frames whose CIF count is 0..3 mod 8 (14.8), and
+             *  the CIF count is only known once THIS frame's FIG 0/0 has been read — so the null
+             *  is analysed here, after the FIC, from the samples still in hand. The window is the
+             *  last T_u of the null (the TII symbol's reference time is T_NULL - T_u), backed off
+             *  a little so timing jitter cannot run it into the first data symbol. */
+            if (ok > 0 && ensemble_.cifCount >= 0 && (ensemble_.cifCount % 8) < 4
+                    && size_t(at) + nullLen >= fft_ + 32) {
+                const Cplx* nz = iq + size_t(at) + nullLen - fft_ - 32;
+                dft(nz, spec.data());
+                std::vector<C32> nc(size_t(K), C32{});
+                carriersFromFft(spec.data(), int(fft_), K, nc.data());
+                tii_.feed(nc.data(), K);
+            }
             // ★ A RUNNING rate, not this frame's — one bad frame is weather, not a signal quality.
             fibHist_ = fibHist_ * 0.9 + (double(ok) / 12.0) * 0.1;
             stats_.fibRate = fibHist_;
@@ -424,7 +438,7 @@ public:
 
     const Ensemble& ensemble() const { return ensemble_; }
     const DabStats& stats()    const { return stats_; }
-    void reset() { sync_.reset(); ensemble_ = Ensemble{}; stats_ = DabStats{}; fibHist_ = 0; }
+    void reset() { sync_.reset(); ensemble_ = Ensemble{}; stats_ = DabStats{}; fibHist_ = 0; tii_.reset(); }
     /** ★ The ppm figure was computed against 222.064 MHz (11D) whatever block was tuned — 8 %
      *  wrong at 5A, invisible on 12B. The service tells us the block; this is what it divides by. */
     void setCentreHz(double hz) { if (hz > 1e6) centreHz_ = hz; }
@@ -432,6 +446,8 @@ public:
      *  capture window by window rather than streaming — the tracker's prediction is relative to
      *  the buffer it was given, so a new window needs a fresh acquisition. */
     void resetSync() { sync_.reset(); }
+    /** The transmitters identified from the null symbol — Main Id / Sub Id / dB above the noise. */
+    const std::vector<TiiHit>& tii() const { return tii_.hits(); }
     /** Where the last push() found the null, or -1. The caller must consume THROUGH the frame it
      *  decoded, not a fixed amount from the front — see DabService::feed. */
     long lastFrameStart() const { return lastAt_; }
@@ -488,6 +504,7 @@ private:
     size_t fft_;
     FreqInterleaveI fi_;
     Viterbi viterbi_;
+    TiiDetector tii_;
     Ensemble ensemble_;
     DabStats stats_;
     double fibHist_ = 0;
