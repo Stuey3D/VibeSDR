@@ -4359,7 +4359,9 @@ function dabRender() {
   /* ★ The header status: "tuning…" was written on entry and never replaced, so a locked receiver
    *  with fourteen stations on screen still said it was tuning (seen driving the client, 2026-09-07). */
   { const ds = document.getElementById('decStatus');
-    if (ds) ds.textContent = !d.locked ? 'searching…' : d.services.length ? `${d.label || d.channel} · ${d.services.length} services` : 'reading the multiplex…'; }
+    if (ds) ds.textContent = !d.locked ? 'searching…' : d.services.length
+      ? `${d.label || d.channel} · ${d.services.length} services${d.aacSettling && d.sid ? ' · learning DAB+ parameters…' : ''}`
+      : 'reading the multiplex…'; }
 
   /* ★★ RESET TO THE LIST WHEN THE ENSEMBLE CHANGES, and only then. A new multiplex means a new
    *  list and the old figures describe a receiver you have left — but changing SERVICE inside one
@@ -4445,8 +4447,13 @@ function dabLogoTag(sv: DabState['services'][number], d: DabState): string {
   const key = `${ecc}|${d.eid}|${sv.sid}`;
   const known = dabLogos.get(key);
   if (known === undefined) { dabLogos.set(key, null); void dabLogoLookup(key, sv, d, ecc); return ''; }
-  return known ? `<img class="dabLogo" src="${known}" alt="">` : '';
+  /* ★ A URL THAT RESOLVES IS NOT A PICTURE THAT LOADS (the RDS panel learned this first): the
+   *  name search hands back dead favicons, the browser drew its "?" tile, and the list is rebuilt
+   *  twice a second — so the tile FLASHED (Stuart's screenshot, Magic Radio, 2026-09-07). A logo
+   *  that fails to load is forgotten for that service and the row goes back to text. */
+  return known ? `<img class="dabLogo" src="${known}" alt="" data-k="${escapeHtml(key)}" onerror="this.remove();(window as any).dabLogoFailed&&(window as any).dabLogoFailed(this.dataset.k)">`.replace('(window as any)', 'window').replace('(window as any)', 'window') : '';
 }
+(window as any).dabLogoFailed = (k: string) => { dabLogos.set(k, null); };
 async function dabLogoLookup(key: string, sv: DabState['services'][number], d: DabState, ecc: number) {
   let url: string | null = null;
   try {
@@ -4703,9 +4710,10 @@ function buildControls() {
   initRecorder();
   initSearch();
   // ★ DAB controls: the two multiplex buttons and the pinned pane toggle.
-  { const dp = document.getElementById('dabPrev'); if (dp) (dp as HTMLElement).onclick = () => dabTune(-1);
-    const dn = document.getElementById('dabNext'); if (dn) (dn as HTMLElement).onclick = () => dabTune(+1);
-    const pb = document.getElementById('dabPane');
+  /* ★ The multiplex arrows that lived in the box are gone (Stuart, 2026-09-07): the main VFO
+   *  arrows step the multiplex in DAB now, and two controls for one job is the two-readers fault
+   *  in UI form. The bar keeps the frequency and ensemble name as the sub-heading. */
+  { const pb = document.getElementById('dabPane');
     if (pb) (pb as HTMLElement).onclick = () => dabSetPane(dabPane === 'stations' ? 'signal' : 'stations'); }
   initBookmarks();
   buildMenu();

@@ -492,6 +492,14 @@ public:
                          rx_.serviceBitrate(), afmt_.outputRateHz / 1000, prof, chan,
                          afmt_.outputRateHz, afmt_.coreRateHz, afmt_.sbr ? "true" : "false",
                          aacPs_ ? "true" : "false", aacOutCh_, aacEffRateHz_);
+                /* ★ Stuart, 2026-09-07, on the start-up glide of a DAB+ service on the Pi: "I
+                 *  don't mind the glide, it's quite fun, just make a notification to show buffer
+                 *  building". The measured-rate estimate is still moving for the first ~3 s of
+                 *  access units; the client says so while it is. */
+                /* Settling = the running estimate has not converged yet (~160 access units, the
+                 *  moving window's first full settle; Stuart heard the glide outlast a 48-AU
+                 *  notice) and no remembered ratio started this service at the right speed. */
+                j += (aacAuAcc_ < 160 && !aacStartedKnown_) ? ",\"aacSettling\":true" : ",\"aacSettling\":false";
                 j += cb;
             } else if (sid_ && rx_.selectedType() == 0 && mp2_.info().valid) {
                 const auto& mi = mp2_.info();
@@ -971,7 +979,12 @@ private:
                          *  not return exactly the same count every call. */
                         if (dec.channels > 0 && s.fmt.accessUnits > 0)
                             aacPcmAcc_ += double(dec.interleaved.size() / size_t(dec.channels));
-                        int rate = dec.rateHz;
+                        /* ★ REMEMBERED, PROCESS-WIDE. Stuart likes the glide but not on every
+                         *  return to a station: once the decoder's ratio (samples returned over
+                         *  samples due) has been measured, the next service starts from it. */
+                        static double s_knownRatio = 0.0;
+                        int rate = s_knownRatio > 0.0 ? int(std::lround(double(dec.rateHz) * s_knownRatio)) : dec.rateHz;
+                        if (aacAuAcc_ <= 1) aacStartedKnown_ = s_knownRatio > 0.0;
                         if (aacAuAcc_ >= 8) {
                             const double auSec = 0.120 / double(s.fmt.accessUnits);
                             const double eff   = aacPcmAcc_ / (double(aacAuAcc_) * auSec);
@@ -981,6 +994,7 @@ private:
                                 rate = int(std::lround(eff));
                             }
                             aacEffRateHz_ = rate;
+                            if (aacAuAcc_ >= 48 && dec.rateHz > 0) s_knownRatio = double(rate) / double(dec.rateHz);
                             if (aacAuAcc_ >= 100) { aacPcmAcc_ *= 0.5; aacAuAcc_ /= 2; }   // a moving window
                         }
                         pushPcm48Stereo(dec.interleaved.data(), dec.interleaved.size(),
@@ -1037,6 +1051,7 @@ private:
     int        rsRate_ = 0;     ///< of those, how many were silence covering a lost super frame     ///< 48 kHz stereo frames delivered, ever   ///< PCM FRAMES the decoder returned for the last AU                ///< AUs turned into PCM here rather than on the client
     AudioFormat afmt_{};
     double aacPcmAcc_ = 0.0; int aacAuAcc_ = 0; int aacEffRateHz_ = 0; bool aacRateWarned_ = false;
+    bool aacStartedKnown_ = false;
     /* ★ Counters, because "no audio" has four possible causes here and guessing between them is
      *  what cost the evening: no frames arriving, frames of an unusable length, the firecode
      *  never aligning, or AUs produced and not sent. Each has its own number. */

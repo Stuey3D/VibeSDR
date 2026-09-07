@@ -188,6 +188,8 @@ export interface DabState {
               slides?: boolean; kbps?: number; prot?: string; cuStart?: number; cuSize?: number;
               scids?: number; ecc?: number }[];
   /** The playing service's codec as DECODED (super frame / Layer II header), not as promised. */
+  /** True while the server is still measuring the decoder's real output rate (the start-up glide). */
+  aacSettling?: boolean;
   codecDetail?: string; audioRateHz?: number; coreRateHz?: number; sbr?: boolean; ps?: boolean; audioCh?: number;
   ecc?: number; cif?: number; mci?: boolean; nsvc?: number;
   /** Transmitter Identification: which transmitters of the SFN the null symbol says we hear. */
