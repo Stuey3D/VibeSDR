@@ -1108,6 +1108,10 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
                 font-weight:normal; }
 #dabSignal .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; }
 #dabSignal .row span:last-child { color: var(--freq); font-variant-numeric: tabular-nums; }
+.dabScopes { display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; margin:6px 0 2px; }
+.dabScopes > div { display:flex; flex-direction:column; gap:3px; }
+.dabScopes span { font-size:9px; letter-spacing:1.5px; color:var(--unit); }
+.dabScopes canvas { background:rgba(0,0,0,0.35); border:1px solid var(--btn-border); border-radius:4px; }
 #dabMux { display:flex; align-items:center; gap:6px; padding:6px 8px;
           border-bottom:1px solid var(--btn-border); }
 #dabMux .lbl { flex:1 1 auto; text-align:center; color:var(--freq); letter-spacing:1px; }

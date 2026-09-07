@@ -77,6 +77,13 @@ struct DabStats {
      *  judge against a scale that shifts underneath them. */
     float  prsCorrelation    = 0.0f;
     float  prsRef            = 0.0f;///< the running reference the erasure test compares against
+    /** ★ Modulation error ratio of the DQPSK differential products, dB, running over frames —
+     *  the one number that says how clean the constellation is, independent of level. */
+    float  merDb             = 0.0f;
+    /** ★ The MSC's bit error rate BEFORE the Viterbi, estimated by re-encoding what the decoder
+     *  decided and comparing with the hard decisions it was given — the margin a DX-er reads. */
+    double mscBer            = 0.0;
+    int    irPeakSamples     = 0;   ///< where the strongest path sits in the PRS impulse response
 };
 
 class DabReceiver {
@@ -192,6 +199,45 @@ public:
              *  against the references, which all derotate the total offset in the time domain. */
             if (bestShift != 0)
                 derotate(work.data(), work.size(), double(bestShift) / double(fft_));
+            /* ★ THE CHANNEL IMPULSE RESPONSE — the SFN's echo profile, which is what a DX-er with
+             *  a directional aerial actually wants to see. H[k] = received PRS carrier x conj(the
+             *  reference); its inverse transform is the channel: the main path, and every other
+             *  transmitter of the SFN as a later (or earlier) peak. Read at the integer shift the
+             *  search just found. Kept as 128 bins of dB relative to the peak, 4 samples (about
+             *  2 us, 590 m) per bin, from 32 samples before the peak to 480 after — the guard
+             *  interval is 504. The peak's position is the residual timing error, published too. */
+            {
+                std::vector<C32>& h = spec;          // reuse: the PRS spectrum is finished with
+                std::fill(h.begin(), h.end(), C32{});
+                for (int k = -768; k <= 768; ++k) {
+                    if (k == 0) continue;
+                    const int src = k + bestShift;
+                    if (src < -768 || src > 768 || src == 0) continue;
+                    const size_t pos = size_t(src < 0 ? src + 768 : src + 767);
+                    const size_t ref = size_t(k < 0 ? k + 768 : k + 767);
+                    const size_t bin = size_t(k < 0 ? int(fft_) + k : k);
+                    h[bin] = std::conj(got[pos] * std::conj(prs_[ref]));   // conj: inverse via forward
+                }
+                fftp_->forward(h.data());
+                float peak = 0.0f; size_t at2 = 0;
+                irMag_.resize(fft_);
+                for (size_t i = 0; i < fft_; ++i) { irMag_[i] = std::norm(h[i]); if (irMag_[i] > peak) { peak = irMag_[i]; at2 = i; } }
+                if (peak > 0.0f) {
+                    ir_.resize(128);
+                    for (int b = 0; b < 128; ++b) {
+                        const long n0 = long(at2) - 32 + long(b) * 4;
+                        float m = 0.0f;
+                        for (int j = 0; j < 4; ++j) { const size_t n = size_t((n0 + j + long(fft_)) % long(fft_)); if (irMag_[n] > m) m = irMag_[n]; }
+                        const float db = 10.0f * std::log10(m / peak + 1e-9f);        // <= 0
+                        const int v = int(255.0f + db * 4.0f);                        // 0 = -64 dB
+                        ir_[size_t(b)] = uint8_t(v < 0 ? 0 : v > 255 ? 255 : v);
+                    }
+                    // the peak's offset from the window start, as a signed sample count
+                    // ★ relative to where the window EXPECTS the symbol to start (winOff), so 0 = on time
+                    const long rel = (at2 > fft_ / 2 ? long(at2) - long(fft_) : long(at2)) - long(winOff);
+                    stats_.irPeakSamples = int(rel);
+                }
+            }
         }
 
         // ── every symbol to carriers, then DQPSK against the previous ───────
@@ -233,10 +279,38 @@ public:
             }
             const double avg = magSum / double(K);
             const float invAvg = avg > 1e-12 ? float(1.0 / avg) : 0.0f;
+            double errSum = 0.0;
             for (int nIdx = 0; nIdx < K; ++nIdx) {
                 const SoftBits b = dqpskSoftScaled(prod_[size_t(nIdx)], invAvg);
                 di[size_t(nIdx)]              = b.b0;        // real  -> p[n]
                 di[size_t(K) + size_t(nIdx)]  = b.b1;        // imag  -> p[n+K]
+                /* ★ MER, of the PHASE: each product against the ideal DQPSK point at its own
+                 *  magnitude. Nothing here equalises, so carrier amplitudes vary across the band
+                 *  with the channel; measuring against a single radius counted that honest
+                 *  variation as error and read 4 dB on a signal with 0.08 % raw BER. */
+                const float re = prod_[size_t(nIdx)].real(), im = prod_[size_t(nIdx)].imag();
+                const float mag = std::sqrt(re * re + im * im);
+                if (mag > 0.0f) {
+                    const float ir0 = (re >= 0 ? 0.70710678f : -0.70710678f) * mag, ii0 = (im >= 0 ? 0.70710678f : -0.70710678f) * mag;
+                    errSum += (double(re - ir0) * (re - ir0) + double(im - ii0) * (im - ii0)) / (double(mag) * mag);
+                }
+            }
+            merErr_ += errSum; merN_ += K;
+            if (sym == mode_->symbolsPerFrame - 1) {
+                /* the last data symbol of the frame is the constellation the client draws: one
+                 * carrier in eight, scaled so an ideal point sits at radius 60 */
+                constel_.resize(192 * 2);
+                for (int i = 0; i < 192; ++i) {
+                    const C32 v = prod_[size_t(i * 8)];
+                    const float cx = v.real() * invAvg * 60.0f, cy = v.imag() * invAvg * 60.0f;
+                    constel_[size_t(i * 2)]     = int8_t(cx < -127 ? -127 : cx > 127 ? 127 : cx);
+                    constel_[size_t(i * 2 + 1)] = int8_t(cy < -127 ? -127 : cy > 127 ? 127 : cy);
+                }
+                if (merN_ > 0 && merErr_ > 0.0) {
+                    const float mer = float(10.0 * std::log10(double(merN_) / merErr_));
+                    stats_.merDb = stats_.merDb == 0.0f ? mer : stats_.merDb * 0.8f + mer * 0.2f;
+                }
+                merErr_ = 0.0; merN_ = 0;
             }
             std::copy(di.begin(), di.end(),
                       frameBits.begin() + long(size_t(sym - 1) * size_t(K) * 2));
@@ -446,6 +520,10 @@ public:
      *  capture window by window rather than streaming — the tracker's prediction is relative to
      *  the buffer it was given, so a new window needs a fresh acquisition. */
     void resetSync() { sync_.reset(); }
+    /** The last data symbol's differential products, 192 (x, y) int8 pairs, ideal radius 60. */
+    const std::vector<int8_t>&  constellation()   const { return constel_; }
+    /** The PRS impulse response: 128 bins, 4 samples each, 0 = -64 dB, 255 = the peak. */
+    const std::vector<uint8_t>& impulseResponse() const { return ir_; }
     /** The transmitters identified from the null symbol — Main Id / Sub Id / dB above the noise. */
     const std::vector<TiiHit>& tii() const { return tii_.hits(); }
     /** Where the last push() found the null, or -1. The caller must consume THROUGH the frame it
@@ -484,6 +562,23 @@ private:
         if (uprof_.valid) uepDepuncture(di.data(), coded, uprof_, mother.data(), mother.size());
         else              eepDepuncture(di.data(), coded, prof_,  mother.data(), mother.size());
         std::vector<uint8_t> bits = viterbi_.decode(mother.data(), size_t(dataBits_));
+        {
+            /* ★ Re-encode the decision and count where the channel disagreed with it: the raw
+             *  bit error rate the Viterbi is absorbing. Punctured positions (soft 0) do not vote.
+             *  This is the margin figure — 0.1 % is comfortable, 5 % is the edge of the cliff. */
+            const std::vector<uint8_t> enc = convEncode(bits.data(), bits.size());
+            size_t err = 0, tot = 0;
+            const size_t n = enc.size() < mother.size() ? enc.size() : mother.size();
+            for (size_t i = 0; i < n; ++i) {
+                if (mother[i] == 0) continue;
+                ++tot;
+                if ((mother[i] < 0) != (enc[i] != 0)) ++err;
+            }
+            if (tot) {
+                const double ber = double(err) / double(tot);
+                stats_.mscBer = stats_.mscBer == 0.0 ? ber : stats_.mscBer * 0.9 + ber * 0.1;
+            }
+        }
         EnergyDispersal ed; ed.apply(bits.data(), bits.size());
 
         std::vector<uint8_t> bytes(bits.size() / 8);
@@ -505,6 +600,10 @@ private:
     FreqInterleaveI fi_;
     Viterbi viterbi_;
     TiiDetector tii_;
+    std::vector<int8_t>  constel_;
+    std::vector<uint8_t> ir_;
+    std::vector<float>   irMag_;
+    double merErr_ = 0.0; long merN_ = 0;
     Ensemble ensemble_;
     DabStats stats_;
     double fibHist_ = 0;

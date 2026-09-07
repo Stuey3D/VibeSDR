@@ -192,6 +192,9 @@ export interface DabState {
   ecc?: number; cif?: number; mci?: boolean; nsvc?: number;
   /** Transmitter Identification: which transmitters of the SFN the null symbol says we hear. */
   tii?: { main: number; sub: number; db: number }[];
+  /** Signal analysis: MER (dB), raw MSC bit error rate, PRS impulse response (128 x uint8 dB
+   *  bins, 4 samples each, 255 = peak), constellation (192 int8 x,y pairs, ideal radius 60). */
+  mer?: number; mscBer?: number; irPeak?: number; ir?: number[]; iq?: number[];
   /* ★ The diagnostics the server has sent all along and the client never typed. `rfCentreHz` is
    *  what the RADIO is on, beside `centreHz` which is what was asked for — the one pair that told
    *  the 2026-09-04 bring-up apart from a dead decoder (see vibe_dab_service.h). */

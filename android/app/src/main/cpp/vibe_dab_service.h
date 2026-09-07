@@ -505,6 +505,27 @@ public:
             j += eb;
         }
         {
+            /* ★ Signal analysis for the DX pane: MER, raw MSC bit error rate, the PRS impulse
+             *  response and a constellation snapshot. Built by append, never through the big
+             *  printf (see the argument-misalignment note above). */
+            char ab[96];
+            snprintf(ab, sizeof ab, ",\"mer\":%.1f,\"mscBer\":%.5f,\"irPeak\":%d",
+                     s.merDb, s.mscBer, s.irPeakSamples);
+            j += ab;
+            const auto& ir = rx_.impulseResponse();
+            if (!ir.empty()) {
+                j += ",\"ir\":[";
+                for (size_t i = 0; i < ir.size(); ++i) { if (i) j += ','; j += std::to_string(int(ir[i])); }
+                j += "]";
+            }
+            const auto& cs = rx_.constellation();
+            if (!cs.empty()) {
+                j += ",\"iq\":[";
+                for (size_t i = 0; i < cs.size(); ++i) { if (i) j += ','; j += std::to_string(int(cs[i])); }
+                j += "]";
+            }
+        }
+        {
             /* ★ TII: which transmitter(s) of the SFN we are hearing — main id, sub id, dB over
              *  the null's noise. The figure a DX-er wants beside the ensemble name. */
             j += ",\"tii\":[";

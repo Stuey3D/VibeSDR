@@ -4416,6 +4416,10 @@ function dabRender() {
     + row('Frequency offset', `${d.offsetHz.toFixed(0)} Hz (${d.offsetPpm.toFixed(2)} ppm)`)
     + row('Carrier shift', String(d.carrierShift))
     + row('Phase reference', d.prs.toFixed(3) + (d.prsRatio !== undefined ? ` (${d.prsRatio.toFixed(2)} of ref)` : ''))
+    + (d.mer ? row('MER', d.mer.toFixed(1) + ' dB') : '')
+    + (d.mscBer !== undefined && d.sid ? row('MSC bit errors', (d.mscBer * 100).toFixed(2) + ' % before Viterbi') : '')
+    + (d.iq && d.ir ? `<div class="dabScopes"><div><span>CONSTELLATION</span><canvas id="dabConst" width="120" height="120"></canvas></div>`
+        + `<div><span>IMPULSE RESPONSE · 32 µs per division</span><canvas id="dabIr" width="256" height="72"></canvas></div></div>` : '')
     + row('Frames seen', String(d.frames))
     + row('Frames erased', String(d.erased ?? 0))
     + row('Re-acquisitions', String(d.reacquires ?? 0))
@@ -4426,6 +4430,32 @@ function dabRender() {
     + (d.sfTried ? row('Reed-Solomon', `${d.rsFixed ?? 0} fixed, ${d.rsLost ?? 0} lost`) : '')
     + (d.aacRateHz ? row('AAC', `${d.aacRateHz} Hz, ${d.aacCh} ch${d.aacServerSide ? ', decoded on the server' : ''}`) : '')
     + (d.dlsCrcOk !== undefined ? row('DLS groups', `${d.dlsCrcOk} ok, ${d.dlsCrcFail ?? 0} bad`) : '');
+  dabDrawScopes(d);
+}
+
+/** ★ The two pictures a DX-er reads before any number: the DQPSK constellation (tight dots at
+ *  the four corners = clean; a smear = noise or a timing error) and the channel impulse response
+ *  (one spike = one transmitter; later spikes = other SFN transmitters and reflections; anything
+ *  past the guard interval is destroying carriers). Redrawn from every stats block. */
+function dabDrawScopes(d: DabState) {
+  const cc = document.getElementById('dabConst') as HTMLCanvasElement | null;
+  if (cc && d.iq) {
+    const g = cc.getContext('2d')!;
+    g.clearRect(0, 0, 120, 120);
+    g.strokeStyle = 'rgba(255,255,255,0.15)'; g.beginPath(); g.moveTo(60, 0); g.lineTo(60, 120); g.moveTo(0, 60); g.lineTo(120, 60); g.stroke();
+    g.fillStyle = '#ffe566';
+    for (let i = 0; i + 1 < d.iq.length; i += 2) g.fillRect(60 + d.iq[i] * 0.85 - 1, 60 - d.iq[i + 1] * 0.85 - 1, 2, 2);
+  }
+  const ic = document.getElementById('dabIr') as HTMLCanvasElement | null;
+  if (ic && d.ir) {
+    const g = ic.getContext('2d')!;
+    g.clearRect(0, 0, 256, 72);
+    g.strokeStyle = 'rgba(255,255,255,0.12)';
+    for (let x = 0; x <= 256; x += 32) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, 72); g.stroke(); }   // 32 px = 16 samples = ~7.8 µs? no: 8 bins x 4 samples = 32 samples = 15.6 µs
+    g.fillStyle = '#ffa000';
+    for (let i = 0; i < d.ir.length; i++) { const h = Math.max(0, (d.ir[i] - 0) / 255) * 70; g.fillRect(i * 2, 72 - h, 2, h); }
+    g.fillStyle = 'rgba(255,255,255,0.5)'; g.fillRect(16, 0, 1, 72);   // the peak sits at bin 8 = 16 px: everything right of it is an echo
+  }
 }
 
 function dabTune(delta: number) {
