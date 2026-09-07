@@ -853,7 +853,15 @@ private:
         if (!data || nch <= 0 || srHz <= 0) return;
         std::lock_guard<std::mutex> plk(pm_);        // ★ see takePcm — pcm_ has its own lock
         // ★ The carried state belongs to ONE rate. A service that changes it starts again.
-        if (srHz != rsRate_) { resampleReset(); rsRate_ = srHz; }
+        /* ★★★ A RATE CHANGE IS NOT A RESTART. This reset the interpolator whenever the input rate
+         *  moved — and during the DAB+ start-up glide the measured rate moves on every access
+         *  unit, so every unit began with a dropped phase and a re-primed sample: a click per
+         *  unit, fading as the estimate converged, gone once the ratio was remembered. Saber, in
+         *  the Netherlands where every station is DAB+, heard "weird clicking noises that do
+         *  appear to go away" (2026-09-07). The phase and the held samples carry across; only the
+         *  step changes. A reset is still right when the STREAM restarts (service change), and
+         *  that path calls resampleReset() itself. */
+        rsRate_ = srHz;
         const size_t frames = nSamples / size_t(nch);
         if (!frames) return;
         const size_t before = pcm_.size();
