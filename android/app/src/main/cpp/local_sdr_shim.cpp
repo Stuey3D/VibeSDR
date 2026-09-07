@@ -2765,6 +2765,7 @@ struct LocalSdrShim::Impl {
     std::mutex hwWrMtx;
     std::condition_variable hwWrCv;
     std::deque<uint32_t> pendingFreq;   // written in order — see startHwWriter()
+    uint32_t hwWrLastHz = 0;            // the last centre the writer put on the tuner
     static constexpr size_t HW_FREQ_MAX = 16;
     // ★★★ THE PACE OF A HAND YANKING THE SLIDER, not of one nudging it. 25 ms per step (build 127)
     //     made a LADDER the listener heard every rung of — Stuart, testing the case that matters,
@@ -15270,22 +15271,43 @@ struct LocalSdrShim::Impl {
                 const int gn = pendingGainTenth; pendingGainTenth = -1;
                 const int bw = pendingTunerBw;   pendingTunerBw   = -1;
                 lk.unlock();
+                /* ★★ THE FREQUENCY GOES FIRST, THEN THE FILTER. rtlsdr_set_tuner_bandwidth()
+                 *  re-applies librtlsdr's LAST centre as part of setting the filter (the DAB entry
+                 *  note says so), so a filter write that lands before the frequency re-tunes the
+                 *  dongle to wherever it was RESTING first — a pointless PLL excursion, and on a
+                 *  radio resting on medium wave one the tuner may not even be able to make. Write
+                 *  the frequency, then the filter, which re-applies the frequency we just wrote.
+                 *  ★★★ DEAD END, RECORDED (2026-09-07 01:00-07:45): the Pi's V4L (rests on 648 kHz)
+                 *      would not lock DAB under any binary I built on the Pi, while the packaged
+                 *      4.7.7 locked in 13 s. I "bisected" that to the 2026-09-06 tune-path change
+                 *      and added a guard here refusing filter writes below 24 MHz. Wrong. The
+                 *      packaged binary links its OWN librtlsdr (/usr/lib/vibeserver, the RTL-SDR
+                 *      Blog fork that knows the V4's HF path); every binary I built on the Pi
+                 *      linked Debian's stock librtlsdr 2.0.2, which cannot drive a V4 below
+                 *      28.8 MHz — hence "[R82XX] PLL not locked!" and a tuner left in a state no
+                 *      Band III tune recovered. The guard is gone: under the right driver a filter
+                 *      write on medium wave is legitimate, and refusing it would have cost the
+                 *      Xcover's MW listeners their IF filter. `ldd` before believing a bisect. */
+                if (hz) {
+                    std::lock_guard<std::recursive_mutex> dlk(devMtx);
+                    if (dev && !radioReleased.load()) {
+                        const int frc = rtlsdr_set_center_freq(dev, hz);
+                        hwWrLastHz = hz;
+                        if (frc != 0)
+                            LOGI("tuner centre -> %.3f MHz REFUSED (rc=%d, readback %.3f MHz)", hz / 1e6, frc,
+                                 rtlsdr_get_center_freq(dev) / 1e6);
+                        // ★ …and put our IF filter back, because that call just undid it.
+                        //   Silent: one line per retune would bury everything else.
+                        const int want = bw >= 0 ? bw : g_tunerBwHz.load(std::memory_order_relaxed);
+                        if (want > 0) rtlsdr_set_tuner_bandwidth(dev, (uint32_t)want);
+                    }
+                }
                 if (bw >= 0) {
                     std::lock_guard<std::recursive_mutex> dlk(devMtx);
                     if (dev && !radioReleased.load()) {
                         const int rc = rtlsdr_set_tuner_bandwidth(dev, (uint32_t)bw);
                         LOGI("tuner IF bandwidth -> %d Hz (rc=%d)%s", bw, rc,
                              bw == 0 ? " [0 = automatic, librtlsdr's own choice]" : "");
-                    }
-                }
-                if (hz) {
-                    std::lock_guard<std::recursive_mutex> dlk(devMtx);
-                    if (dev && !radioReleased.load()) {
-                        rtlsdr_set_center_freq(dev, hz);
-                        // ★ …and put our IF filter back, because that call just undid it.
-                        //   Silent: one line per retune would bury everything else.
-                        const int want = g_tunerBwHz.load(std::memory_order_relaxed);
-                        if (want > 0) rtlsdr_set_tuner_bandwidth(dev, (uint32_t)want);
                     }
                 }
                 // ── ★★★ ONE WRITE. THREE APPROACHES WERE TESTED BY EAR; THIS ONE WON ────────
