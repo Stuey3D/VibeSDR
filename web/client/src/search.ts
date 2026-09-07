@@ -52,6 +52,8 @@ interface ServerStation {
   source?: 'eibi' | 'server' | 'user';
   bandwidth_low?: number;
   bandwidth_high?: number;
+  /** DAB identity for a learnt DAB service (mode "dab"). */
+  sid?: number; eid?: number; ecc?: number;
 }
 
 let stations: ServerStation[] = [];
@@ -143,13 +145,14 @@ export async function saveToServer(
   } catch { return false; }
 }
 
-export async function removeFromServer(frequency: number): Promise<boolean> {
+export async function removeFromServer(frequency: number, sid?: number): Promise<boolean> {
   if (!bmHost) return false;
   try {
     const qs = await adminQs(authQs());   // ★ DELETE is a write too
     const sep = qs ? '&' : '?';
     const r = await fetch(
-      `${httpBase(bmHost)}/bookmarks${qs}${sep}frequency=${Math.round(frequency)}`,
+      `${httpBase(bmHost)}/bookmarks${qs}${sep}frequency=${Math.round(frequency)}`
+      + (sid !== undefined && sid >= 0 ? `&sid=${sid}` : ''),   // ★ a DAB service is keyed by block + sid
       { method: 'DELETE' });
     if (!r.ok) return false;
     const arr = await r.json();

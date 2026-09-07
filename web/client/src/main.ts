@@ -4362,6 +4362,9 @@ function dabSetPane(p: 'stations' | 'signal') {
   if (sg) sg.style.display = dabOn && p === 'signal' ? 'block' : 'none';
   // ★ The label names where the button GOES, and the state is readable without pressing it.
   if (bt) bt.innerHTML = p === 'stations' ? 'SIGNAL &#9656;' : '&#9666; STATIONS';
+  // ★ The pane just shown was built hidden — its labels have not been measured yet.
+  const shown = p === 'stations' ? st : sg;
+  if (shown) requestAnimationFrame(() => dabArmMarquee(shown));
 }
 
 function dabRender() {
@@ -4398,7 +4401,10 @@ function dabRender() {
    *  and the reason Stuart asked for it. The .dls style has been in the sheet since 2026-09-04;
    *  nothing ever emitted the element. */
   const listScroll = document.getElementById('decBody')?.scrollTop ?? 0;
-  st.innerHTML = d.services.length
+  /* ★★ ONLY REWRITE THE LIST WHEN IT CHANGED. The stats block arrives twice a second; rebuilding
+   *  the rows each time restarted every scrolling label from its first frame, so long labels
+   *  never actually travelled. A string compare is far cheaper than the layout it saves. */
+  const listHtml = d.services.length
     ? d.services.map(sv => `<div class="dabSvc${sv.sid === d.sid ? ' on' : ''}" data-sid="${sv.sid}">`
         + dabLogoTag(sv, d)
         + `<span class="nm">${escapeHtml(sv.label || '(unnamed)')}`
@@ -4407,15 +4413,15 @@ function dabRender() {
       + (d.held ? `<div style="padding:6px 9px;opacity:.5;font-size:10px">list held — the multiplex is not reading at the moment</div>` : '')
     : `<div style="padding:14px;opacity:.6">${d.truncated ? 'Signal block too long for the server to send'
         : d.locked ? 'Reading the multiplex…' : 'Searching for a multiplex…'}</div>`;
-  for (const el of Array.from(st.querySelectorAll('.dabSvc')) as HTMLElement[])
-    el.onclick = () => { spec?.dabService(Number(el.dataset.sid)); };
-  { const b = document.getElementById('decBody'); if (b && listScroll) b.scrollTop = listScroll; }
-  /* ★ A label wider than its row SCROLLS (Stuart: "the radio text needs to scroll in the
-   *  station list"). Measured after layout; the travel is the overflow, so it stops at the end. */
-  for (const inner of Array.from(st.querySelectorAll('.dlsIn')) as HTMLElement[]) {
-    const box = inner.parentElement as HTMLElement;
-    const over = inner.scrollWidth - box.clientWidth;
-    if (over > 4) { inner.style.setProperty('--dx', `-${over}px`); inner.classList.add('scroll'); }
+  if (listHtml !== dabLastListHtml) {
+    dabLastListHtml = listHtml;
+    st.innerHTML = listHtml;
+    for (const el of Array.from(st.querySelectorAll('.dabSvc')) as HTMLElement[])
+      el.onclick = () => { spec?.dabService(Number(el.dataset.sid)); };
+    { const b = document.getElementById('decBody'); if (b && listScroll) b.scrollTop = listScroll; }
+    /* ★ A label wider than its row SCROLLS (Stuart: "the radio text needs to scroll in the
+     *  station list"). Measured after layout; the travel is the overflow, so it stops at the end. */
+    dabArmMarquee(st);
   }
 
   const row = (k: string, v: string) => `<div class="row"><span>${k}</span><span>${v}</span></div>`;
@@ -4431,9 +4437,24 @@ function dabRender() {
   const head = cur
     ? `<div class="dabHead">${curLogo ? `<img class="dabHeadLogo" src="${curLogo}" alt="">` : '<div class="dabHeadLogo"></div>'}`
       + `<div class="dabHeadText"><div class="dabHeadName">${escapeHtml(cur.label)}</div>`
-      + `<div class="dabHeadSub">${escapeHtml(cur.codec)}${cur.kbps ? ' ' + cur.kbps + ' kbit/s' : ''}${d.dls ? ' · ' + escapeHtml(d.dls) : ''}</div></div></div>`
+      + `<div class="dabHeadSub"><span class="fix">${escapeHtml(cur.codec)}${cur.kbps ? ' ' + cur.kbps + ' kbit/s' : ''}${d.dls ? ' ·' : ''}</span>`
+      + (d.dls ? `<span class="dls"><span class="dlsIn">${escapeHtml(d.dls)}</span></span>` : '') + `</div></div></div>`
     : '';
-  sg.innerHTML = head
+  /* ★ The header lives in its own element and is rewritten only when it changes, so the radio
+   *  text's marquee survives the twice-a-second rebuild of the numbers below it. */
+  let headEl = sg.querySelector('#dabSigHead') as HTMLElement | null;
+  let rowsEl = sg.querySelector('#dabSigRows') as HTMLElement | null;
+  if (!headEl || !rowsEl) {
+    sg.innerHTML = '<div id="dabSigHead"></div><div id="dabSigRows"></div>';
+    headEl = sg.querySelector('#dabSigHead') as HTMLElement; rowsEl = sg.querySelector('#dabSigRows') as HTMLElement;
+    dabLastHeadHtml = '';
+  }
+  if (head !== dabLastHeadHtml) { dabLastHeadHtml = head; headEl.innerHTML = head; }
+  /* ★ Measured on EVERY render, for whichever pane is showing: a label built while its pane was
+   *  hidden measures as zero wide and never armed (the header, on the Xcover, 2026-09-07). Arming
+   *  an already-armed label is a no-op, so the marquee is not restarted. */
+  dabArmMarquee(sg.offsetParent ? headEl : st);
+  rowsEl.innerHTML = ''
     + '<h4>SERVICE</h4>'
     + row('Codec', d.codecDetail ?? (d.services.find(x => x.sid === d.sid)?.codec ?? '—'))
     + row('Bit rate', d.bitrate ? d.bitrate + ' kbit/s' : '—')
@@ -4579,6 +4600,37 @@ function dabDrawScopes(d: DabState) {
   }
 }
 
+let dabLastListHtml = '';
+let dabLastHeadHtml = '';
+/** Start the marquee on every label that overflows its box (the travel is the overflow). */
+function dabArmMarquee(scope: HTMLElement) {
+  for (const inner of Array.from(scope.querySelectorAll('.dlsIn')) as HTMLElement[]) {
+    const box = inner.parentElement as HTMLElement;
+    const over = inner.scrollWidth - box.clientWidth;
+    if (over > 4) { inner.style.setProperty('--dx', `-${over}px`); inner.classList.add('scroll'); }
+    else inner.classList.remove('scroll');
+  }
+}
+
+/** ★ A learnt DAB bookmark: go to its block (joining or entering DAB as needed) and pick the
+ *  service. Stuart, 2026-09-07: the bookmarks list "shows the learnt stations". */
+function dabGoTo(hz: number, sid: number) {
+  const idx = DAB_BLOCKS.findIndex(b => Math.abs(b.hz - hz) < 50000);
+  if (idx < 0) return;
+  if (!dabOn) {
+    dabChannel = idx; savePref('dabChannel', DAB_BLOCKS[idx].name);
+    dabUiOn();
+    spec?.dab(true, idx, sid);
+  } else if (idx !== dabChannel) {
+    dabChannel = idx; savePref('dabChannel', DAB_BLOCKS[idx].name);
+    dabState = null;
+    spec?.dab(true, idx, sid);
+  } else {
+    spec?.dabService(sid);
+  }
+  dabRender();
+}
+
 function dabTune(delta: number) {
   if (dabChannel < 0) dabChannel = DAB_BLOCKS.findIndex(b => b.name === '12B');
   // ★ CLAMP, never wrap: 13F -> 5A in one press is not what a band scan meant.
@@ -4636,6 +4688,9 @@ function dabUiOn() {
   /* ★ And it gets the size toggle every other decoder has. Opening the box directly skips
    *  openDecoder(), which is where the button is shown — so DAB had no Big/Small (Stuart). */
   $('rdsSize').classList.add('show');
+  /* ★ CLR clears a text pane DAB does not have; its place goes to the learnt-stations button. */
+  $('decClr').style.display = 'none';
+  $('dabBm').style.display = '';
   applyRdsSize();
   /* ★★★ REBUILD THE RATE ROW. hwinfo returns early when the hardware signature is unchanged,
    *  and entering DAB changes nothing in that signature — so the picker kept offering 2.4 MS/s
@@ -4696,6 +4751,9 @@ function dabUiOff() {
      *  (seen on the Xcover, 2026-09-07). Give the box back the way it was found. */
     document.getElementById('decBox')?.classList.remove('open');
     $('rdsSize').classList.remove('show');
+    $('decClr').style.display = '';
+    $('dabBm').style.display = 'none';
+    dabLastListHtml = ''; dabLastHeadHtml = '';
     const dt3 = document.getElementById('decTitle');
     if (dt3 && dt3.textContent === 'DAB') dt3.textContent = dabPrevDecTitle;
   }
@@ -5879,7 +5937,13 @@ function tuneTo(r: SearchResult) {
 }
 
 function initBookmarks() {
+  $('dabBm').onclick = () => {
+    bmFilter = 'dab';
+    togglePanel('bookmarksPanel');
+    renderBookmarks();
+  };
   $('bookmarksBtn').onclick = () => {
+    bmFilter = 'all';
     togglePanel('bookmarksPanel');
     renderBookmarks();
   };
@@ -5975,9 +6039,19 @@ function initBookmarks() {
   };
 }
 
+/** ★ 'dab' = opened from the DAB box: only the stations learnt from multiplexes. */
+let bmFilter: 'all' | 'dab' = 'all';
+
 function renderBookmarks() {
   const host = $('bmList');
   host.innerHTML = '';
+  if (bmFilter === 'dab') {
+    const bar = document.createElement('div');
+    bar.id = 'bmFilterBar';
+    bar.innerHTML = '<span>DAB STATIONS ONLY</span><a>show all</a>';
+    (bar.querySelector('a') as HTMLElement).onclick = () => { bmFilter = 'all'; renderBookmarks(); };
+    host.appendChild(bar);
+  }
 
   // Two lists in one, distinguished by their glyph: a MONITOR for the ones saved in
   // this browser, a SERVER RACK for the ones on the receiver (learned from RDS, or
@@ -5986,20 +6060,27 @@ function renderBookmarks() {
     name: string; frequency: number; mode?: string;
     local: boolean; heard?: boolean;
     bwLo?: number | null; bwHi?: number | null;
+    sid?: number; eid?: number; ecc?: number;
   };
-  const rows: Row[] = [
+  let rows: Row[] = [
     ...getBookmarks().map(b => ({
       name: b.name, frequency: b.frequency, mode: b.mode, local: true,
       bwLo: b.bandwidth_low, bwHi: b.bandwidth_high,
     })),
     ...getServerBookmarks().map(b => ({
       name: b.name, frequency: b.frequency, mode: b.mode ?? 'wfm', local: false,
-      heard: !(b as any).manual,
+      heard: !(b as any).manual, sid: b.sid, eid: b.eid, ecc: b.ecc,
     })),
   ];
+  if (bmFilter === 'dab') rows = rows.filter(r => (r.mode || '').toLowerCase() === 'dab');
 
   if (!rows.length) {
-    host.innerHTML = '<div class="sres"><span class="n">No bookmarks yet — tune something and press ADD. Stations heard over RDS are added here automatically.</span></div>';
+    const empty = document.createElement('div');
+    empty.className = 'sres';
+    empty.innerHTML = bmFilter === 'dab'
+      ? '<span class="n">No DAB stations learnt yet — every multiplex this receiver is tuned to adds its services here.</span>'
+      : '<span class="n">No bookmarks yet — tune something and press ADD. Stations heard over RDS or on a DAB multiplex are added here automatically.</span>';
+    host.appendChild(empty);
     return;
   }
 
@@ -6018,7 +6099,7 @@ function renderBookmarks() {
     { title: 'YOUR BOOKMARKS', hint: 'Saved in this browser', of: r => r.local },
     { title: 'SAVED ON THE RECEIVER', hint: 'Saved by the owner, shared with everyone',
       of: r => !r.local && !r.heard },
-    { title: 'HEARD BY THIS RECEIVER', hint: 'Found automatically over RDS — expires if it stops being heard',
+    { title: 'HEARD BY THIS RECEIVER', hint: 'Found automatically over RDS or on a DAB multiplex — expires if it stops being heard',
       of: r => !r.local && !!r.heard },
   ];
 
@@ -6039,6 +6120,7 @@ function renderBookmarks() {
 function renderBookmarkRows(host: HTMLElement, rows: Array<{
   name: string; frequency: number; mode?: string;
   local: boolean; heard?: boolean; bwLo?: number | null; bwHi?: number | null;
+  sid?: number; eid?: number; ecc?: number;
 }>) {
   for (const b of rows) {
     const row = document.createElement('div');
@@ -6051,8 +6133,10 @@ function renderBookmarkRows(host: HTMLElement, rows: Array<{
       `<span class="f">${(b.frequency / 1e6).toFixed(3)}</span>` +
       `<span class="n">${escapeHtml(b.name)}</span>` +
       `<span class="src">${(b.mode || '').toUpperCase()}</span>`;
+    const isDab = (b.mode || '').toLowerCase() === 'dab' && b.sid !== undefined && b.sid >= 0;
     row.onclick = () => {
-      tuneTo({
+      if (isDab) dabGoTo(b.frequency, b.sid!);
+      else tuneTo({
         name: b.name, frequency: b.frequency, mode: b.mode,
         source: b.local ? 'user' : 'server',
         bandwidthLow: b.bwLo, bandwidthHigh: b.bwHi,
@@ -6065,7 +6149,7 @@ function renderBookmarkRows(host: HTMLElement, rows: Array<{
     del.onclick = async (e) => {
       e.stopPropagation();
       if (b.local) await removeBookmark(b.name, b.frequency);
-      else await removeFromServer(b.frequency);
+      else await removeFromServer(b.frequency, isDab ? b.sid : undefined);
       renderBookmarks();
     };
     row.appendChild(del);
@@ -6075,7 +6159,12 @@ function renderBookmarkRows(host: HTMLElement, rows: Array<{
     // "a local bookmark is whatever the user called it", but importing an UberSDR list
     // disproves that: it is full of real station names that match perfectly well, and
     // showing logos on one list and not the other just looks broken.
-    void attachBookmarkLogo(row, b.name, undefined, b.frequency);
+    /* ★ A DAB row's logo is the one the station list already resolved by identity, if any. */
+    const dabLogo = isDab ? dabLogos.get(`${b.ecc ?? -1}|${b.eid ?? 0}|${b.sid}`) : '';
+    if (dabLogo) {
+      const src = row.querySelector('.src') as HTMLElement | null;
+      if (src) src.innerHTML = `<img src="${dabLogo}" alt="" style="width:18px;height:18px;object-fit:contain;border-radius:3px">`;
+    } else void attachBookmarkLogo(row, b.name, undefined, b.frequency);
   }
 }
 

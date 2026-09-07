@@ -833,6 +833,8 @@ struct LearnedBm {
     std::string mode = "wfm";    // RDS learning is FM-only, but an IMPORT carries any mode
     long long   lastHeard = 0;   // unix seconds — drives expiry
     bool        manual = false;  // saved by hand: never expires
+    /** ★ DAB identity (mode "dab"): the service inside the multiplex at hz. -1 = not DAB. */
+    int         sid = -1, eid = -1, ecc = -1;
 };
 /**
  * A station we've seen but don't trust yet.
@@ -908,6 +910,11 @@ static const long long kExpirySecs  = 30LL * 24 * 3600;   // 30 days unheard
  * CB11 (27.085) both landed on 27.080.
  */
 static long long bmKey(double hz) { return (long long)(llround(hz / 1000.0) * 1000LL); }
+/** ★★★ A DAB SERVICE SHARES ITS FREQUENCY WITH EVERY OTHER SERVICE ON THE MULTIPLEX, so the
+ *  frequency alone cannot be its key — twenty services on 10D would overwrite one another. The
+ *  service id (≤ 0xFFFF) is added to the rounded block centre: Band III blocks are 1.712 MHz
+ *  apart, so two services can never collide, and nothing else is bookmarked in Band III. */
+static long long bmKeyFor(double hz, int sid) { return bmKey(hz) + (sid > 0 ? (long long)sid : 0LL); }
 
 static void bmSaveLocked();          // defined below; callers hold g_bmMtx
 
@@ -1033,6 +1040,34 @@ static void bmLearn(double hzRaw, int pi, const std::string& psRaw) {
  * group a station despite VFO drift, and emitting it as the frequency put bookmarks up
  * to 500 Hz out — far enough that the VTS (which matches within 99 Hz) never saw them.
  */
+/** ★★★ DAB STATION LEARNING — the DAB half of what RDS does for FM. Stuart, 2026-09-07: "as you
+ *  enter a multiplex it adds it to the bookmarks like the FM stations do", and deliberately NO
+ *  scanner: on a shared VFO a scan would drag every listener round the band. Called for every
+ *  complete service of the ensemble the radio is on, a few seconds apart. No character voting
+ *  is needed: a DAB label arrives CRC-checked, so one reading is the truth.
+ *  ★ A bookmark the owner saved by hand at the same identity is left alone. */
+static void bmLearnDab(double hz, int eid, int ecc, uint32_t sid, const std::string& label) {
+    const std::string n = bmTrim(label);
+    if (n.empty() || hz <= 0 || sid == 0) return;
+    std::lock_guard<std::mutex> lk(g_bmMtx);
+    const long long key = bmKeyFor(hz, int(sid));
+    const long long now = (long long)time(nullptr);
+    auto it = g_bookmarks.find(key);
+    if (it != g_bookmarks.end()) {
+        if (it->second.manual) return;
+        const bool same = it->second.name == n && it->second.eid == eid && it->second.ecc == ecc;
+        const bool stale = now - it->second.lastHeard > 3600;   // persist the heartbeat hourly, not every pass
+        it->second.name = n; it->second.eid = eid; it->second.ecc = ecc; it->second.lastHeard = now;
+        if (!same || stale) bmSaveLocked();
+        return;
+    }
+    LearnedBm b;
+    b.name = n; b.pi = -1; b.hz = (long long)llround(hz); b.mode = "dab";
+    b.lastHeard = now; b.manual = false; b.sid = int(sid); b.eid = eid; b.ecc = ecc;
+    g_bookmarks[key] = b;
+    bmSaveLocked();
+}
+
 static void bmAddManual(double hz, const std::string& name, const std::string& mode) {
     const std::string n = bmTrim(name);
     if (n.empty() || hz <= 0) return;
@@ -1081,9 +1116,9 @@ static void bmClearManual() {
     bmSaveLocked();
 }
 
-static void bmRemove(double hz) {
+static void bmRemove(double hz, int sid = -1) {
     std::lock_guard<std::mutex> lk(g_bmMtx);
-    g_bookmarks.erase(bmKey(hz));
+    g_bookmarks.erase(bmKeyFor(hz, sid));
     bmSaveLocked();
 }
 
@@ -1111,6 +1146,10 @@ static void bmLoadJson(const std::string& json) {
         size_t mp  = json.find("\"manual\":", p);
         size_t mdp = json.find("\"mode\":\"", p);
         size_t pip = json.find("\"pi\":", p);
+        // ★ Each of these must belong to THIS entry, not a later one: bounded by the next '{'.
+        const size_t nxt = json.find('{', p + 1);
+        auto within = [&](size_t q) { return q != std::string::npos && (nxt == std::string::npos || q < nxt); };
+        const size_t sp = json.find("\"sid\":", p), ep = json.find("\"eid\":", p), cp = json.find("\"ecc\":", p);
         if (np == std::string::npos || lp == std::string::npos) break;
         size_t ns = np + 8, ne = json.find('"', ns);
         LearnedBm b;
@@ -1123,7 +1162,10 @@ static void bmLoadJson(const std::string& json) {
             size_t ms = mdp + 8, me = json.find('"', ms);
             if (me != std::string::npos) b.mode = json.substr(ms, me - ms);
         }
-        if (freq > 0 && !b.name.empty()) g_bookmarks[bmKey((double)freq)] = b;
+        if (within(sp)) b.sid = atoi(json.c_str() + sp + 6);
+        if (within(ep)) b.eid = atoi(json.c_str() + ep + 6);
+        if (within(cp)) b.ecc = atoi(json.c_str() + cp + 6);
+        if (freq > 0 && !b.name.empty()) g_bookmarks[bmKeyFor((double)freq, b.sid)] = b;
         p = ne;
     }
     bmPrune();     // a long gap since the last run may have aged some out
@@ -1151,6 +1193,9 @@ static std::string bmJsonLocked() {
            + ",\"lastHeard\":" + std::to_string(kv.second.lastHeard)
            + ",\"manual\":" + (kv.second.manual ? "true" : "false")
            + ",\"mode\":\"" + bmEsc(kv.second.mode) + "\""
+           + (kv.second.sid >= 0 ? ",\"sid\":" + std::to_string(kv.second.sid)
+                                   + ",\"eid\":" + std::to_string(kv.second.eid)
+                                   + ",\"ecc\":" + std::to_string(kv.second.ecc) : std::string())
            + ",\"source\":\"server\"}";
     }
     return j + "]";
@@ -7000,6 +7045,13 @@ struct LocalSdrShim::Impl {
              *  ★ REPORTING MUST NOT DEPEND ON THE THING IT REPORTS ON, AND MUST NOT OBSTRUCT IT
              *    EITHER. Both halves of that sentence cost a build to learn. */
             const double tnow = Impl::nowSecs();
+            if (tnow - lastDabLearn_ >= 5.0) {
+                lastDabLearn_ = tnow;
+                /* ★ Every complete service of the multiplex we are on becomes a learnt bookmark
+                 *  (see bmLearnDab). Cheap: a snapshot under the decoder's lock, then map work. */
+                const double hz = double(g_dab.centreHz());
+                for (const auto& r : g_dab.learnable()) bmLearnDab(hz, r.eid, r.ecc, r.sid, r.label);
+            }
             if (tnow - lastDabJson_ >= 0.5) {
                 lastDabJson_ = tnow;
                 const std::string j = g_dab.json();
@@ -7172,6 +7224,7 @@ struct LocalSdrShim::Impl {
         // ★ The signal block is emitted at the TOP of this function — see the note there.
     }
     double lastDabJson_ = 0;
+    double lastDabLearn_ = 0.0;   // ★ DAB station learning cadence (5 s)
     bool   dabLogged_ = false;
     /* ★★★ "THIS AUDIO IS DAB'S." In DAB mode the ordinary chain still runs, because the SPECTRUM
      *  is not decoration: without it the client has no frame rate, no link meter and no view, and
@@ -11420,7 +11473,7 @@ struct LocalSdrShim::Impl {
                 sock->close();
                 return;
             }
-            if (remove) bmRemove(hz);
+            if (remove) { const std::string sidQ = queryParam(reqLine, "sid"); bmRemove(hz, sidQ.empty() ? -1 : atoi(sidQ.c_str())); }
             else bmAddManual(hz, name, urlDecode(queryParam(reqLine, "mode")));
 
             std::string body = bmJson();

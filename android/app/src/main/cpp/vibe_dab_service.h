@@ -411,6 +411,20 @@ public:
     /** ★ The receiver's own judgement of the signal, for the gain loop. A DAB gain step is right
      *  when the FIC reads better and the null symbol stands deeper — the figures the demodulator
      *  lives by — not when a narrow carrier stands further above its neighbours. */
+    /** ★ The services worth remembering: complete MCI (TS 103 176 6.3.3), audio, labelled. */
+    struct LearnRow { uint32_t sid; std::string label; int ecc; int eid; };
+    std::vector<LearnRow> learnable() {
+        std::vector<LearnRow> out;
+        std::lock_guard<std::mutex> lk(m_);
+        const Ensemble& e = rx_.ensemble();
+        if (!e.mciComplete() || e.eid == 0) return out;
+        for (const auto& kv : e.services) {
+            const Service& sv = kv.second;
+            if (sv.isData || !sv.complete(e.subChannels)) continue;
+            out.push_back({ sv.sid, sv.label, sv.ecc >= 0 ? sv.ecc : e.ecc, int(e.eid) });
+        }
+        return out;
+    }
     struct Quality { bool locked; float fibRate; float nullDepthDb; double mscBer; };
     Quality quality() {
         std::lock_guard<std::mutex> lk(m_);
