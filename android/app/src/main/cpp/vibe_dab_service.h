@@ -31,6 +31,8 @@
 #include "vibe_dab_receiver.h"
 #include "vibe_dab_txdb.h"
 #include "vibe_dab_padtap.h"
+#include "vibe_dab_packet.h"
+#include "vibe_dab_spi.h"
 
 namespace vibedab {
 
@@ -72,6 +74,7 @@ public:
         adts_.clear();
         pad_.reset();      // ★ the label belongs to the old programme
         slide_ = Slide{}; // ★ and so does the picture
+        spiSid_ = 0; packets_.reset(); carousel_.reset(); spiLogoRefs_.clear(); spiSeen_ = 0;   // ★ a new multiplex, a new carousel
         // ★ A new programme starts a new clock; catching up on the old one would be a wall of silence.
         pcmOwed_ = 0; pcmPushed_ = 0;
         resampleReset();
@@ -325,6 +328,7 @@ private:
 
             drainAudio();
             pumpScan();
+            pumpSpi();
             /* ★★★ LET GO OF THE LOCK BETWEEN FRAMES, OR AN UNLOCKABLE CHANNEL STARVES EVERYTHING.
              *  ★★★ THE FAULT THIS FIXES, measured. This inner loop holds m_ for as long as there
              *      is a frame's worth of IQ waiting, and json() — the station list and the whole
@@ -578,6 +582,37 @@ public:
                 char mb[96];
                 snprintf(mb, sizeof mb, ",\"motGroups\":%u,\"motCrcFail\":%u,\"motObjects\":%u", pad_.mot().groups(), pad_.mot().crcFails(), pad_.mot().objects());
                 j += mb;
+                char pb[160];
+                snprintf(pb, sizeof pb, ",\"spi\":{\"sid\":%u,\"packets\":%u,\"groups\":%u,\"crcFail\":%u,\"lost\":%u,\"dir\":%s,\"named\":%zu,\"complete\":%u,\"logoSvcs\":%zu}",
+                         spiSid_, packets_.packets(), packets_.groups(), packets_.crcFails(), packets_.lost(), carousel_.haveDirectory() ? "true" : "false", carousel_.named(), carousel_.completed(), spiLogoRefs_.size());
+                j += pb;
+                char qb[96]; snprintf(qb, sizeof qb, ",\"spiParse\":{\"runs\":%u,\"siDocs\":%u,\"svcs\":%u,\"eid\":%u}", spiParseRuns_, spiSiDocs_, spiParsedSvcs_, unsigned(e.eid)); j += qb;
+                if (carousel_.named()) {   // ★ what the carousel holds — names, types, sizes, done — for the DX pane and for debugging
+                    j += ",\"spiObjs\":[";
+                    bool f1 = true; size_t k = 0;
+                    for (const auto& kv : carousel_.objects()) {
+                        if (k++ >= 40) break;
+                        if (!f1) j += ','; f1 = false;
+                        char ob[64]; snprintf(ob, sizeof ob, "\",\"ct\":%d,\"st\":%d,\"size\":%u,\"done\":%s}", kv.second.contentType, kv.second.subType, kv.second.bodySize, kv.second.complete ? "true" : "false");
+                        j += "{\"name\":\"" + esc(kv.first) + ob;
+                    }
+                    j += "]";
+                }
+            }
+            {   /* ★ The DATA services and every user application signalled (FIG 0/13), so a DXer
+                 *  can see what else the multiplex carries — and whether an SPI/EPG data service
+                 *  (0x007) exists to take logos from when the audio carries no slideshow. */
+                std::string ds = ",\"dataSvcs\":[";
+                bool f1 = true;
+                for (const auto& kv : e.services) {
+                    const Service& sv = kv.second;
+                    std::string apps;
+                    for (const auto& c : sv.components) for (const auto& a : c.apps) { char ab[16]; snprintf(ab, sizeof ab, "%s%u", apps.empty() ? "" : ",", unsigned(a.type)); apps += ab; }
+                    if (!sv.isData && apps.empty()) continue;
+                    if (!f1) ds += ','; f1 = false;
+                    ds += "{\"sid\":" + std::to_string(kv.first) + ",\"label\":\"" + esc(sv.label) + "\",\"data\":" + (sv.isData ? "true" : "false") + ",\"apps\":[" + apps + "]}";
+                }
+                j += ds + "]";
             }
             {   // ★ How much linking/frequency signalling this ensemble carries at all — the DXer's
                 //   answer to "why is the FM row empty": the mux sends none, or we missed it.
@@ -724,8 +759,8 @@ public:
             if (sc.eep) snprintf(prot, sizeof prot, "%s %d (%s)", si.set, si.level, si.codeRate);
             else        snprintf(prot, sizeof prot, "UEP %d", uepLevel);
             const int sizeCu = sc.eep ? sc.sizeCu : (sc.protLevel < 64 ? kUepIndex[sc.protLevel].sizeCu : 0);
-            snprintf(b, sizeof b, "{\"sid\":%u,\"label\":\"%s\",\"short\":\"%s\",\"codec\":\"%s\",\"subch\":%d,\"pty\":%d,\"slides\":%s,\"kbps\":%d,\"prot\":\"%s\",\"cuStart\":%d,\"cuSize\":%d,\"scids\":%d,\"ecc\":%d",
-                     unsigned(kv.first), esc(sv.label).c_str(), esc(sv.shortLabel).c_str(),
+            snprintf(b, sizeof b, "{\"sid\":%u,\"logoAir\":%s,\"label\":\"%s\",\"short\":\"%s\",\"codec\":\"%s\",\"subch\":%d,\"pty\":%d,\"slides\":%s,\"kbps\":%d,\"prot\":\"%s\",\"cuStart\":%d,\"cuSize\":%d,\"scids\":%d,\"ecc\":%d",
+                     unsigned(kv.first), hasAirLogo(kv.first) ? "true" : "false", esc(sv.label).c_str(), esc(sv.shortLabel).c_str(),
                      pc->scType == 63 ? "DAB+" : pc->scType == 0 ? "MP2" : "?", pc->subChId,
                      sv.pty, sv.hasSlideshow() ? "true" : "false",
                      si.bitrateKbps, prot, sc.startCu, sizeCu, pc->scids, sv.ecc >= 0 ? sv.ecc : e.ecc);
@@ -805,6 +840,85 @@ private:
      *  three quarters of its time spare. */
     static constexpr size_t kScanSlots   = 4;
     static constexpr double kScanDwellS  = 4.0;    ///< the deinterleaver needs 0.4 s, a label ~2 s
+    /* ★★★ LOGOS FOR THE WHOLE MULTIPLEX, OFF THE AIR. A data service with user application 0x007
+     *  (SPI: "BBC Guide" on 12B, measured 2026-09-07) carries the SI document and every logo
+     *  file in one MOT carousel on a packet-mode sub-channel. A dedicated slot past the PAD
+     *  scanner's decodes that sub-channel; packets → data groups → directory-mode MOT → the SI
+     *  document names each service's logo files → logos by SId. Stuart: "don't forget worldwide
+     *  multiplexes may carry this info". */
+    static constexpr size_t kSpiSlot = kScanSlots;
+    void pumpSpi() {
+        const Ensemble& e = rx_.ensemble();
+        if (spiSid_ == 0 || !e.services.count(spiSid_)) {
+            spiSid_ = 0;
+            for (const auto& kv : e.services) {
+                const Service& sv = kv.second;
+                if (!sv.isData) continue;
+                for (const auto& c : sv.components) {
+                    bool spi = false; for (const auto& a : c.apps) if (a.type == 0x007) spi = true;
+                    if (spi && c.tmid == 3 && c.subChId >= 0 && c.packetAddr >= 0 && e.subChannels.count(c.subChId)) {
+                        if (rx_.scanSelect(kSpiSlot, kv.first)) { spiSid_ = kv.first; spiAddr_ = c.packetAddr; packets_.setAddress(spiAddr_); packets_.setSink([this](const uint8_t* g, size_t n) { carousel_.feedDataGroup(g, n); }); }
+                        break;
+                    }
+                }
+                if (spiSid_) break;
+            }
+            if (!spiSid_) return;
+        }
+        for (const auto& f : rx_.takeScanFrames(kSpiSlot)) packets_.feedFrame(f.data(), f.size());
+        if (carousel_.version() != spiSeen_) {
+            spiSeen_ = carousel_.version();
+            /* Re-read every complete SI object and rebuild the logo map: service SId → the best
+             *  logo file names. Cheap — a few objects, a few services. */
+            std::map<uint32_t, std::vector<SpiLogoRef>> refs;
+            ++spiParseRuns_; spiParsedSvcs_ = 0; spiSiDocs_ = 0;
+            for (const auto& kv : carousel_.objects()) {
+                const MotCarousel::Object& o = kv.second;
+                if (!o.complete || o.contentType != 7 || o.subType != 0) continue;   // SI documents only
+                ++spiSiDocs_;
+                for (const auto& sv : SpiDocument::parse(o.body.data(), o.body.size())) {
+                    ++spiParsedSvcs_;
+                    if (sv.sid && (sv.eid == 0 || sv.eid == e.eid)) refs[sv.sid] = sv.logos;
+                }
+            }
+            spiLogoRefs_.swap(refs);
+        }
+    }
+public:
+    /** The best off-air logo for a service: the largest square/unrestricted PNG or JPEG we hold. */
+    bool airLogo(uint32_t sid, std::vector<uint8_t>& bytes, std::string& mime, int& w, int& h) {
+        std::lock_guard<std::mutex> lk(m_);
+        auto it = spiLogoRefs_.find(sid);
+        if (it == spiLogoRefs_.end()) return false;
+        const MotCarousel::Object* best = nullptr; int bestPx = -1; const SpiLogoRef* bestRef = nullptr;
+        for (const auto& r : it->second) {
+            const MotCarousel::Object* o = carousel_.find(r.url);
+            if (!o) continue;
+            const int px = r.width * r.height;
+            if (px > bestPx && px <= 320 * 240) { best = o; bestPx = px; bestRef = &r; }
+        }
+        if (!best) return false;
+        bytes = best->body; w = bestRef->width; h = bestRef->height;
+        mime = !bestRef->mime.empty() ? bestRef->mime : (best->subType == 1 ? "image/jpeg" : "image/png");
+        return true;
+    }
+    /** Any complete carousel object by its content name — the SI document, a logo, anything the
+     *  multiplex carries (for the DX pane and for inspection). */
+    bool carouselObject(const std::string& name, std::vector<uint8_t>& bytes, int& ct, int& st) {
+        std::lock_guard<std::mutex> lk(m_);
+        const MotCarousel::Object* o = carousel_.find(name);
+        if (!o) return false;
+        bytes = o->body; ct = o->contentType; st = o->subType;
+        return true;
+    }
+    /** Does an off-air logo exist for this service (any complete file)? */
+    bool hasAirLogo(uint32_t sid) const {
+        auto it = spiLogoRefs_.find(sid);
+        if (it == spiLogoRefs_.end()) return false;
+        for (const auto& r : it->second) if (carousel_.find(r.url)) return true;
+        return false;
+    }
+private:
     void pumpScan() {
         const Ensemble& e = rx_.ensemble();
         if (e.services.empty()) return;
@@ -1346,6 +1460,11 @@ private:
     uint32_t   preTuneDropped_ = 0;  ///< how many were discarded, ever — published
     PadReader  pad_;               ///< dynamic label (and, later, MOT slideshow)
     std::vector<PadTap> taps_;     ///< the PAD scanner's slots — see pumpScan
+    uint32_t spiSid_ = 0; int spiAddr_ = -1; uint32_t spiSeen_ = 0;
+    uint32_t spiParseRuns_ = 0, spiParsedSvcs_ = 0, spiSiDocs_ = 0;
+    PacketAssembler packets_;
+    MotCarousel     carousel_;
+    std::map<uint32_t, std::vector<SpiLogoRef>> spiLogoRefs_;
     std::map<uint32_t, DlsRec> dlsAll_;
     double scanRotatedAt_ = 0; size_t scanCursor_ = 0;        ///< and WHY a super frame was thrown away
     /** ★ Carried across calls so the 32 kHz -> 48 kHz conversion is ONE continuous stream rather

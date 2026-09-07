@@ -10205,6 +10205,8 @@ struct LocalSdrShim::Impl {
                 || path0.rfind("/vibeserver/stationlogo", 0) == 0
                 || path0.rfind("/vibeserver/dablogo", 0) == 0
                 || path0.rfind("/vibeserver/dabslide", 0) == 0
+                || path0.rfind("/vibeserver/dablogoair", 0) == 0
+                || path0.rfind("/vibeserver/dabmot", 0) == 0
                 || path0.rfind("/vibeserver/auth", 0) == 0
                 || path0.rfind("/vibeserver/config", 0) == 0
                 || path0.rfind("/vibeserver/admin", 0) == 0
@@ -11260,6 +11262,31 @@ struct LocalSdrShim::Impl {
                           "Access-Control-Allow-Origin: *\r\nCache-Control: max-age=3600\r\n"
                           "Connection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close();
+        } else if (reqLine.rfind("GET /vibeserver/dabmot", 0) == 0) {
+            /* ★ Any complete object of the multiplex's MOT carousel, by content name. */
+            const std::string name = urlDecode(queryParam(reqLine, "name"));
+            std::vector<uint8_t> bytes; int ct = -1, st = -1;
+            if (!name.empty() && g_dab.carouselObject(name, bytes, ct, st)) {
+                const std::string mime = ct == 2 && st == 1 ? "image/jpeg" : ct == 2 && st == 3 ? "image/png" : "application/octet-stream";
+                std::string body(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: " + mime + "\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-cache\r\nConnection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
+            } else {
+                sock->sendstr("HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+            }
+            sock->close();
+        } else if (reqLine.rfind("GET /vibeserver/dablogoair", 0) == 0) {
+            /* ★ A service's logo from the multiplex's own SPI carousel (TS 102 818 over MOT). */
+            const uint32_t sid = uint32_t(strtoul(queryParam(reqLine, "sid").c_str(), nullptr, 10));
+            std::vector<uint8_t> bytes; std::string mime; int w = 0, h = 0;
+            if (sid && g_dab.airLogo(sid, bytes, mime, w, h) && !bytes.empty()) {
+                std::string body(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: " + mime + "\r\n"
+                              "Access-Control-Allow-Origin: *\r\nCache-Control: max-age=600\r\n"
+                              "Connection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
+            } else {
+                sock->sendstr("HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+            }
             sock->close();
         } else if (reqLine.rfind("GET /vibeserver/dabslide", 0) == 0) {
             /* ★ The slideshow image the playing service is sending over the air (TS 101 499) —

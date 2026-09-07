@@ -90,6 +90,9 @@ struct ServiceComponent {
     bool ca       = false;  ///< ★ "a non-CA receiver shall not decode a component with CA flag = 1"
     std::string label;      ///< FIG 1/4, secondary components only
     std::vector<UserApp> apps;
+    int  packetAddr = -1;      ///< FIG 0/3: the packet address inside the sub-channel (packet mode)
+    int  dscty = -1;           ///< FIG 0/3: data service component type
+    bool dataGroups = false;   ///< FIG 0/3: DG flag — MSC data groups are used
 };
 
 struct Service {
@@ -302,12 +305,28 @@ inline bool parseFib(const uint8_t* fib32, Ensemble& e) {
                          *  its user apps) across the repeat — 0/2 is sent every frame and must
                          *  not wipe them, or the slideshow flag flaps at the FIG rate. */
                         for (const auto& old : s.components)
-                            if (old.tmid == sc.tmid && old.subChId == sc.subChId && old.scid == sc.scid) {
+                            if (old.tmid == sc.tmid && old.scid == sc.scid && (sc.tmid == 3 || old.subChId == sc.subChId)) {
                                 sc.scids = old.scids; sc.label = old.label; sc.apps = old.apps;
+                                // ★ and what FIG 0/3 attached to a packet-mode component, which 0/2 never carries
+                                if (sc.tmid == 3) { sc.subChId = old.subChId; sc.packetAddr = old.packetAddr; sc.dscty = old.dscty; sc.dataGroups = old.dataGroups; }
                             }
                         comps.push_back(sc);
                     }
                     s.components.swap(comps);
+                }
+            } else if (ext == 3 && !foreign) {         // packet-mode component (6.3.2): SCId → sub-channel, packet address, DSCTy
+                size_t j = 0;
+                while (j + 5 <= qn) {
+                    const int  scid   = (q[j] << 4) | (q[j + 1] >> 4);
+                    const bool caOrg  = (q[j + 1] & 0x01) != 0;
+                    const bool dg     = (q[j + 2] & 0x80) != 0;
+                    const int  dscty  = q[j + 2] & 0x3F;
+                    const int  subch  = q[j + 3] >> 2;
+                    const int  addr   = ((q[j + 3] & 0x03) << 8) | q[j + 4];
+                    j += caOrg ? 7 : 5;
+                    for (auto& kv : e.services)
+                        for (auto& c : kv.second.components)
+                            if (c.tmid == 3 && c.scid == scid) { c.subChId = subch; c.packetAddr = addr; c.dscty = dscty; c.dataGroups = dg; }
                 }
             } else if (ext == 8 && !foreign) {         // service component global definition
                 size_t j = 0;

@@ -186,7 +186,7 @@ export interface DabState {
   sid: number; bitrate: number; protection: string;
   services: { sid: number; label: string; codec: string; subch: number; short?: string; pty?: number;
               slides?: boolean; kbps?: number; prot?: string; cuStart?: number; cuSize?: number;
-              scids?: number; ecc?: number; dls?: string; dlsAge?: number;
+              scids?: number; ecc?: number; dls?: string; dlsAge?: number; logoAir?: boolean;
     /** FIG 0/6 + 0/21: the FM stations that are this programme and the other DAB services carrying it. */
     pi?: number[]; fm?: number[]; linkSids?: number[]; linkHard?: boolean; linkActive?: boolean; piImplicit?: boolean }[];
   /** The playing service's codec as DECODED (super frame / Layer II header), not as promised. */
@@ -214,6 +214,7 @@ export interface DabState {
   /** The newest slideshow image off the air for the playing service; fetch /vibeserver/dabslide?seq=. */
   slide?: { seq: number; mime: string; bytes: number; name: string };
   motGroups?: number; motCrcFail?: number; motObjects?: number;
+  spi?: { sid: number; packets: number; groups: number; crcFail: number; lost: number; dir: boolean; named: number; complete: number; logoSvcs: number };
   tiiDiag?: { comb: number; f4s: number; f45: number; frames: number };
   aacRateHz?: number; aacCh?: number; aacServerSide?: boolean;
   dropped?: number;

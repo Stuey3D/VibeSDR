@@ -4439,7 +4439,8 @@ function dabRender() {
    *  the RadioDNS file — it is what the broadcaster is sending THIS listener right now. The
    *  station list keeps RadioDNS, which covers every row. */
   const slideUrl = d.slide && d.slide.seq ? P(`/vibeserver/dabslide?seq=${d.slide.seq}`) : '';
-  const curLogo = slideUrl || (cur ? (dabLogos.get(`${cur.ecc ?? d.ecc ?? -1}|${d.eid}|${cur.sid}`) || '') : '');
+  const airUrl = cur && cur.logoAir ? P(`/vibeserver/dablogoair?sid=${cur.sid}`) : '';
+  const curLogo = slideUrl || airUrl || (cur ? (dabLogos.get(`${cur.ecc ?? d.ecc ?? -1}|${d.eid}|${cur.sid}`) || '') : '');
   const head = cur
     ? `<div class="dabHead">${curLogo ? `<img class="dabHeadLogo" src="${curLogo}" alt="">` : '<div class="dabHeadLogo"></div>'}`
       + `<div class="dabHeadText"><div class="dabHeadName">${escapeHtml(cur.label)}</div>`
@@ -4544,6 +4545,7 @@ function dabRender() {
     + (d.sfTried ? row('DAB+ super frames', `${d.sfOk ?? 0} of ${d.sfTried}`) : '')
     + (d.sfTried ? row('Reed-Solomon', `${d.rsFixed ?? 0} fixed, ${d.rsLost ?? 0} lost`) : '')
     + (d.aacRateHz ? row('AAC', `${d.aacRateHz} Hz, ${d.aacCh} ch${d.aacServerSide ? ', decoded on the server' : ''}`) : '')
+    + (d.spi && d.spi.sid ? row('Service information', `${d.spi.logoSvcs} services with logos · ${d.spi.complete} of ${d.spi.named} files · ${d.spi.groups} groups, ${d.spi.crcFail} bad, ${d.spi.lost} lost`) : '')
     + (d.motGroups !== undefined ? row('Slideshow', `${d.motObjects ?? 0} images, ${d.motGroups} groups, ${d.motCrcFail ?? 0} bad${d.slide?.name ? ' · ' + escapeHtml(d.slide.name) : ''}`) : '')
     + (d.dlsCrcOk !== undefined ? row('DLS groups', `${d.dlsCrcOk} ok, ${d.dlsCrcFail ?? 0} bad`) : '');
   const keysB = rowsKeys.slice();
@@ -4584,6 +4586,9 @@ function dabLogosSave() {
 }
 dabLogosLoad();
 function dabLogoTag(sv: DabState['services'][number], d: DabState): string {
+  /* ★ OFF THE AIR FIRST: the multiplex's own SPI carousel names this service's logo (12B's "BBC
+   *  Guide", measured 2026-09-07) — the broadcaster's file from the broadcaster's transmitter. */
+  if (sv.logoAir) return `<img class="dabLogo" src="${P(`/vibeserver/dablogoair?sid=${sv.sid}`)}" alt="" loading="lazy">`;
   const ecc = (sv.ecc ?? d.ecc ?? -1);
   const key = `${ecc}|${d.eid}|${sv.sid}`;
   const known = dabLogos.get(key);
