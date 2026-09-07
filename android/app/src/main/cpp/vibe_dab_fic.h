@@ -131,6 +131,28 @@ struct Ensemble {
     }
 };
 
+/** ★ What the FIC says about a sub-channel's capacity, for the list and the DX panel.
+ *  UEP: table 8 index -> bit rate and level 1-5. EEP-A: sizes 12n/8n/6n/4n CU for 8n kbit/s at
+ *  levels 1-4, code rates 1/4 3/8 1/2 3/4 (table 9). EEP-B: 27n/21n/18n/15n CU for 32n kbit/s,
+ *  code rates 4/9 4/7 4/6 4/5 (table 10). EN 300 401 6.2.1. */
+struct SubChannelInfo { int bitrateKbps = 0; const char* set = ""; int level = 0; const char* codeRate = ""; };
+inline SubChannelInfo subChannelInfo(const SubChannel& sc, const struct UepIndex* uep = nullptr) {
+    SubChannelInfo i;
+    if (!sc.eep) {
+        i.set = "UEP"; i.level = 0;
+        (void)uep;   // the UEP table lives in vibe_dab_uep.h; callers that have it pass the row
+        return i;
+    }
+    static const int  divA[4] = { 12, 8, 6, 4 }, divB[4] = { 27, 21, 18, 15 };
+    static const char* rateA[4] = { "1/4", "3/8", "1/2", "3/4" };
+    static const char* rateB[4] = { "4/9", "4/7", "4/6", "4/5" };
+    const int lvl = sc.protLevel & 3;
+    i.level = lvl + 1;
+    if (sc.option == 1) { i.set = "EEP-B"; i.codeRate = rateB[lvl]; i.bitrateKbps = 32 * (sc.sizeCu / divB[lvl]); }
+    else                { i.set = "EEP-A"; i.codeRate = rateA[lvl]; i.bitrateKbps =  8 * (sc.sizeCu / divA[lvl]); }
+    return i;
+}
+
 /** ★★ A label is 16 bytes in the charset the FIG names (EBU Latin, 0000, is what the standard
  *  requires for type 1), with unused bytes 0x00 — "the characters are coded from byte 15 to byte
  *  0" is the standard's way of numbering bits, not a reversal: byte 15 is the FIRST byte on the

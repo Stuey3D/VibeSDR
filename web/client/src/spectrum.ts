@@ -184,7 +184,12 @@ export interface DabState {
   carrierShift: number; prs: number;
   fibOk: number; fibTotal: number; fibRate: number; frames: number;
   sid: number; bitrate: number; protection: string;
-  services: { sid: number; label: string; codec: string; subch: number }[];
+  services: { sid: number; label: string; codec: string; subch: number; short?: string; pty?: number;
+              slides?: boolean; kbps?: number; prot?: string; cuStart?: number; cuSize?: number;
+              scids?: number; ecc?: number }[];
+  /** The playing service's codec as DECODED (super frame / Layer II header), not as promised. */
+  codecDetail?: string; audioRateHz?: number; coreRateHz?: number; sbr?: boolean; ps?: boolean; audioCh?: number;
+  ecc?: number; cif?: number; mci?: boolean; nsvc?: number;
   /* ★ The diagnostics the server has sent all along and the client never typed. `rfCentreHz` is
    *  what the RADIO is on, beside `centreHz` which is what was asked for — the one pair that told
    *  the 2026-09-04 bring-up apart from a dead decoder (see vibe_dab_service.h). */

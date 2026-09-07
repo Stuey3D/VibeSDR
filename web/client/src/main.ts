@@ -4322,6 +4322,12 @@ const DAB_BLOCKS: { name: string; hz: number }[] = [
   ['13A',230784],['13B',232496],['13C',234208],['13D',235776],['13E',237488],['13F',239200],
 ].map(([n, k]) => ({ name: String(n), hz: Number(k) * 1000 }));
 
+/** TS 101 756 table 12 — the international programme type codes carried in FIG 0/17. */
+const DAB_PTY: string[] = ['None', 'News', 'Current Affairs', 'Information', 'Sport', 'Education', 'Drama',
+  'Culture', 'Science', 'Varied', 'Pop Music', 'Rock Music', 'Easy Listening', 'Light Classical',
+  'Serious Classical', 'Other Music', 'Weather', 'Finance', "Children's", 'Social Affairs', 'Religion',
+  'Phone In', 'Travel', 'Leisure', 'Jazz', 'Country', 'National Music', 'Oldies', 'Folk', 'Documentary'];
+
 function dabSetPane(p: 'stations' | 'signal') {
   dabPane = p;
   const st = document.getElementById('dabStations');
@@ -4364,7 +4370,7 @@ function dabRender() {
     ? d.services.map(sv => `<div class="dabSvc${sv.sid === d.sid ? ' on' : ''}" data-sid="${sv.sid}">`
         + `<span class="nm">${escapeHtml(sv.label || '(unnamed)')}`
         + (sv.sid === d.sid && d.dls ? `<span class="dls">${escapeHtml(d.dls)}</span>` : '')
-        + `</span><span class="cod">${sv.codec}</span></div>`).join('')
+        + `</span><span class="cod" title="${escapeHtml(sv.prot ?? '')}">${sv.codec}${sv.kbps ? ' ' + sv.kbps + 'k' : ''}</span></div>`).join('')
       + (d.held ? `<div style="padding:6px 9px;opacity:.5;font-size:10px">list held — the multiplex is not reading at the moment</div>` : '')
     : `<div style="padding:14px;opacity:.6">${d.truncated ? 'Signal block too long for the server to send'
         : d.locked ? 'Reading the multiplex…' : 'Searching for a multiplex…'}</div>`;
@@ -4372,18 +4378,23 @@ function dabRender() {
     el.onclick = () => { spec?.dabService(Number(el.dataset.sid)); };
 
   const row = (k: string, v: string) => `<div class="row"><span>${k}</span><span>${v}</span></div>`;
+  const cur = d.services.find(x => x.sid === d.sid);
   sg.innerHTML =
     '<h4>SERVICE</h4>'
-    + row('Codec', d.services.find(x => x.sid === d.sid)?.codec ?? '—')
+    + row('Codec', d.codecDetail ?? (d.services.find(x => x.sid === d.sid)?.codec ?? '—'))
     + row('Bit rate', d.bitrate ? d.bitrate + ' kbit/s' : '—')
-    + row('Protection', d.protection || '—')
+    + row('Protection', cur?.prot ?? (d.protection || '—'))
+    + (cur ? row('Capacity units', `${cur.cuStart}–${(cur.cuStart ?? 0) + (cur.cuSize ?? 0) - 1} (${cur.cuSize} CU, sub-channel ${cur.subch})`) : '')
+    + (cur && cur.pty !== undefined && cur.pty >= 0 ? row('Programme type', DAB_PTY[cur.pty] ?? String(cur.pty)) : '')
+    + (cur && cur.ecc !== undefined && cur.ecc >= 0 ? row('Service id', `${cur.ecc.toString(16).toUpperCase()}:${cur.sid.toString(16).toUpperCase().padStart(4, '0')}`) : '')
     + '<h4>ERROR RATE</h4>'
     + row('FIB this frame', `${d.fibOk} / ${d.fibTotal}`)
     + row('FIB pass rate', (d.fibRate * 100).toFixed(1) + ' %')
     + '<h4>MULTIPLEX</h4>'
     + row('Ensemble', d.label || '—')
-    + row('EId', '0x' + d.eid.toString(16).toUpperCase().padStart(4, '0'))
-    + row('Services', String(d.services.length))
+    + row('EId', (d.ecc !== undefined && d.ecc >= 0 ? d.ecc.toString(16).toUpperCase() + ':' : '') + d.eid.toString(16).toUpperCase().padStart(4, '0'))
+    + row('Services', String(d.services.length) + (d.nsvc !== undefined && d.nsvc >= 0 ? ` of ${d.nsvc}` : '') + (d.mci ? '' : ' (reading…)'))
+    + (d.cif !== undefined && d.cif >= 0 ? row('CIF count', String(d.cif)) : '')
     + (d.dls ? row('Now playing', escapeHtml(d.dls)) : '')
     + '<h4>PHYSICAL LAYER</h4>'
     + row('Lock', d.locked ? 'locked' : 'searching')

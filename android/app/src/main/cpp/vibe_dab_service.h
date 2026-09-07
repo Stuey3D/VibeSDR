@@ -463,6 +463,29 @@ public:
             j += rb;
         }
         {
+            /* ★ THE PLAYING SERVICE'S CODEC, AS DECODED — not as the FIC promised. For DAB+ the
+             *  super frame header says the core rate, SBR and PS; for Layer II the frame header
+             *  says the sample rate and channel mode. "DAB+ 32 kbit/s 32 kHz HE-AAC v2 Parametric
+             *  Stereo" is what a DXer wants to read, and it is only knowable here. */
+            char cb[200];
+            if (sid_ && rx_.selectedType() == 63 && afmt_.outputRateHz > 0) {
+                const char* prof = afmt_.sbr ? (aacPs_ ? "HE-AAC v2" : "HE-AAC v1") : "AAC-LC";
+                const char* chan = aacPs_ ? "Parametric Stereo" : (aacCoreCh_ == 2 ? "Stereo" : "Mono");
+                snprintf(cb, sizeof cb, ",\"codecDetail\":\"DAB+ %d kbit/s %d kHz %s %s\",\"audioRateHz\":%d,\"coreRateHz\":%d,\"sbr\":%s,\"ps\":%s,\"audioCh\":%d",
+                         rx_.serviceBitrate(), afmt_.outputRateHz / 1000, prof, chan,
+                         afmt_.outputRateHz, afmt_.coreRateHz, afmt_.sbr ? "true" : "false",
+                         aacPs_ ? "true" : "false", aacOutCh_);
+                j += cb;
+            } else if (sid_ && rx_.selectedType() == 0 && mp2_.info().valid) {
+                const auto& mi = mp2_.info();
+                static const char* modes[4] = { "Stereo", "Joint Stereo", "Dual Channel", "Mono" };
+                snprintf(cb, sizeof cb, ",\"codecDetail\":\"DAB %d kbit/s %d kHz MPEG-%s Layer II %s\",\"audioRateHz\":%d,\"audioCh\":%d",
+                         mi.bitrateKbps, mi.sampleRateHz / 1000, mi.lsf ? "2 LSF" : "1", modes[mi.mode & 3],
+                         mi.sampleRateHz, mi.channels);
+                j += cb;
+            }
+        }
+        {
             /* ★ What the FIC has said about the ensemble itself: ECC (with the EId, the world-unique
              *  name of this multiplex), the CIF count the TII decoder keys on, and whether the MCI
              *  is complete — the difference between "reading" and "read" (EN 300 401 6.4.2). */
@@ -485,10 +508,25 @@ public:
             if (!pc || pc->tmid != 0 || pc->subChId < 0 || pc->ca) continue;
             if (!first) j += ',';
             first = false;
-            snprintf(b, sizeof b, "{\"sid\":%u,\"label\":\"%s\",\"short\":\"%s\",\"codec\":\"%s\",\"subch\":%d,\"pty\":%d,\"slides\":%s}",
+            /* ★ Stuart, 2026-09-07: "codec info needs to be more than DAB+ 32Kb/s" — the FIC knows
+             *  the capacity and protection of every service before any of them is played, so the
+             *  list carries bit rate, protection set/level/code rate and the CU range per row. */
+            const SubChannel& sc = e.subChannels.at(pc->subChId);
+            SubChannelInfo si = subChannelInfo(sc);
+            int uepLevel = 0;
+            if (!sc.eep && sc.protLevel >= 0 && sc.protLevel < 64) {
+                si.bitrateKbps = kUepIndex[sc.protLevel].bitrateKbps;
+                uepLevel       = kUepIndex[sc.protLevel].protLevel;
+            }
+            char prot[40];
+            if (sc.eep) snprintf(prot, sizeof prot, "%s %d (%s)", si.set, si.level, si.codeRate);
+            else        snprintf(prot, sizeof prot, "UEP %d", uepLevel);
+            const int sizeCu = sc.eep ? sc.sizeCu : (sc.protLevel < 64 ? kUepIndex[sc.protLevel].sizeCu : 0);
+            snprintf(b, sizeof b, "{\"sid\":%u,\"label\":\"%s\",\"short\":\"%s\",\"codec\":\"%s\",\"subch\":%d,\"pty\":%d,\"slides\":%s,\"kbps\":%d,\"prot\":\"%s\",\"cuStart\":%d,\"cuSize\":%d,\"scids\":%d,\"ecc\":%d}",
                      unsigned(kv.first), esc(sv.label).c_str(), esc(sv.shortLabel).c_str(),
                      pc->scType == 63 ? "DAB+" : pc->scType == 0 ? "MP2" : "?", pc->subChId,
-                     sv.pty, sv.hasSlideshow() ? "true" : "false");
+                     sv.pty, sv.hasSlideshow() ? "true" : "false",
+                     si.bitrateKbps, prot, sc.startCu, sizeCu, pc->scids, sv.ecc >= 0 ? sv.ecc : e.ecc);
             j += b;
         }
         j += "]}";
