@@ -586,6 +586,16 @@ static vibedab::DabService g_dab;
  *  (see vibe_dab_txdb.h). Keyed by the ENSEMBLE's country code, so a listener on a border who hears
  *  three countries' multiplexes gets each named from its own country's list. */
 static vibedab::DabTxDb g_dabTxDb;
+/* ★★★ IN DAB, GAIN SERVES THE DECODER — AND A PERFECT DECODER NEEDS NO MORE. Saber (Netherlands,
+ *  a very strong ensemble): the loop sat correctly at 0 dB, and every two minutes, when its
+ *  memory of the rung that had overloaded expired, it climbed, overloaded the front end, and DAB
+ *  stuttered until it cut back (Stuart, 2026-09-07). FM has to climb to find out whether more gain
+ *  buys SNR; DAB knows: with every FIB reading and no raw bit errors there is nothing to buy.
+ *  Cuts are never gated by this — an overload still gets less gain at once. */
+static bool dabDecodingPerfectly() {
+    const auto q = g_dab.quality();
+    return q.locked && q.fibRate >= 0.995f && q.mscBer < 0.002;
+}
 static void dabTxDbInit() {
     static bool done = false;
     if (done) return;
@@ -12333,6 +12343,10 @@ struct LocalSdrShim::Impl {
                      session.empty() ? "(anon)" : session.c_str(), c->vfoHz / 1e3, c->mode.c_str());
             }
             sendConfig(sock); sendHwInfo(sock);
+            /* ★ A receiver already on a multiplex tells the joiner NOW, not at the next half-second
+             *  tick: the client opens its DAB box on the first block it sees (Stuart, 2026-09-07:
+             *  the second listener on a shared radio got audio and no box). */
+            if (g_dabMode.load(std::memory_order_relaxed)) sendText(sock, g_dab.json());
             broadcastUsers();          // ★ everyone learns someone joined, including the joiner
             if (asExtra)
                 LOGI("spectrum WS connected — listener %d of %d",
@@ -16872,6 +16886,13 @@ static vibebands::Ranges vsTunableRanges() {
  *  the same `tunable` set the directory publishes — after allow/block lists — and the rate the
  *  receiver would actually run at. Never the driver name: AGENTS.md's "ELSE MEANS DONGLE". */
 static bool vsDabCapable() {
+    /* ★ A LOCKED RF CENTRE CANNOT DO DAB. An ensemble IS the capture, so DAB must move the
+     *  hardware centre onto the block; a receiver whose centre the owner has locked (the Pi's
+     *  RSP1B, parked for its individual-VFO listeners) advertised DAB and could not deliver it
+     *  (Stuart, 2026-09-07). A SHARED-VFO receiver with a locked centre is different: DAB
+     *  suspends that lock for the life of the mode (see the entry path), and that case has
+     *  worked since 2026-09-04. The operator's restrictions are part of the answer. */
+    if (g_vsLockedCentre.load(std::memory_order_relaxed) > 0.0 && perClientDsp()) return false;
     const vibebands::Ranges t = vsTunableRanges();
     if (t.empty()) return false;
     std::vector<vibedab::Range> r;
@@ -19219,6 +19240,7 @@ void LocalSdrShim::overloadTick() {
     //  ★ Coming DOWN is unchanged and still immediate — an overload is ruining the signal NOW, and
     //    40 ms is a bargain to end it. This reluctance applies only to climbing back up.
     } else if (steps > 0 && !g_settled.load(std::memory_order_relaxed)
+               && !(g_dabMode.load(std::memory_order_relaxed) && dabDecodingPerfectly())
                && cleanRun >= (hurry ? 1 : kAgcClimbAfterSec)
                && !(g_climbAt.load(std::memory_order_relaxed) > 0
                     && now - g_climbAt.load(std::memory_order_relaxed) < kClimbTrialMaxSec)) {

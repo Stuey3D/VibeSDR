@@ -987,6 +987,18 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  away", Stuart, 2026-09-06). TS 103 176 6.2.2: the list is a THING THE RECEIVER KEEPS, not
        *  a picture of this frame. Hold it while the channel is unchanged; a retune clears it
        *  (dabTune sets dabState = null), and a different ensemble replaces it. */
+      if (!dabOn) {
+        /* ★★★ SOMEBODY ELSE PUT THIS RECEIVER ON A MULTIPLEX (or we reloaded while it was on):
+         *  the box opens now, with no message to the server. See dabUiOn. */
+        dabState = d;
+        const i = DAB_BLOCKS.findIndex(b => b.name === d.channel);
+        if (i >= 0) dabChannel = i;
+        dabUiOn();
+      }
+      if (d.channel && (dabChannel < 0 || DAB_BLOCKS[dabChannel]?.name !== d.channel)) {
+        const i = DAB_BLOCKS.findIndex(b => b.name === d.channel);
+        if (i >= 0) { dabChannel = i; savePref('dabChannel', d.channel); }
+      }
       const prev = dabState;
       if (prev && prev.channel === d.channel && d.services.length === 0 && prev.services.length > 0
           && (d.eid === prev.eid || !d.eid)) {
@@ -4571,6 +4583,7 @@ function dabTune(delta: number) {
   if (dabChannel < 0) dabChannel = DAB_BLOCKS.findIndex(b => b.name === '12B');
   // ★ CLAMP, never wrap: 13F -> 5A in one press is not what a band scan meant.
   dabChannel = Math.max(0, Math.min(DAB_BLOCKS.length - 1, dabChannel + delta));
+  savePref('dabChannel', DAB_BLOCKS[dabChannel].name);
   dabState = null;
   spec?.dab(true, dabChannel);
   dabRender();
@@ -4593,42 +4606,63 @@ function dabLockControls(on: boolean) {
   if (tu) tu.title = on ? 'Next multiplex' : 'Tune up one step';
 }
 
-function dabSetMode(on: boolean) {
-  dabOn = on;
-  dabLockControls(on);
+/** The block to start on: the one this browser was last on, else 12B. Stuart, 2026-09-07:
+ *  "it should remember where it was left as not all countries use 12B". */
+function dabRememberedChannel(): number {
+  const saved = prefs().dabChannel;
+  const i = typeof saved === 'string' ? DAB_BLOCKS.findIndex(b => b.name === saved) : -1;
+  return i >= 0 ? i : DAB_BLOCKS.findIndex(b => b.name === '12B');
+}
+
+/** ★★★ THE UI HALF OF ENTERING DAB, with no message to the server. Used both when WE turn DAB
+ *  on and when the RECEIVER IS ALREADY IN DAB — a listener joining a shared radio somebody else
+ *  has put on a multiplex must get the box the moment the first block arrives (Stuart, 2026-09-07:
+ *  "the DAB box doesn't open at all for the 2nd user"), and pressing DAB by hand on such a radio
+ *  must JOIN that session, not send a channel of its own. The first version sent
+ *  {on:1, channel:12B} regardless and hijacked the dial from the station everyone was on. */
+function dabUiOn() {
+  dabOn = true;
+  dabLockControls(true);
+  if (spec) spec.dabHeld = true;
   const mux = document.getElementById('dabMux');
   const bt  = document.getElementById('dabPane');
-  if (mux) mux.style.display = on ? 'flex' : 'none';
-  if (bt)  bt.style.display  = on ? '' : 'none';
+  if (mux) mux.style.display = 'flex';
+  if (bt)  bt.style.display  = '';
   const dt = document.getElementById('decText');
-  if (dt) dt.style.display = on ? 'none' : '';
+  if (dt) dt.style.display = 'none';
+  dabSetPane('stations');
+  // ★★ The decoder box is ALWAYS OPEN in DAB — the station list IS the tuning UI.
+  document.getElementById('decBox')?.classList.add('open');
+  /* ★ And it gets the size toggle every other decoder has. Opening the box directly skips
+   *  openDecoder(), which is where the button is shown — so DAB had no Big/Small (Stuart). */
+  $('rdsSize').classList.add('show');
+  applyRdsSize();
+  /* ★★★ REBUILD THE RATE ROW. hwinfo returns early when the hardware signature is unchanged,
+   *  and entering DAB changes nothing in that signature — so the picker kept offering 2.4 MS/s
+   *  while the radio ran at 2.048. The rate row is a function of DAB being on. */
+  applyRateOptions();
+  populateHw();                // the option list itself is built here, not in applyRateOptions
+  const dt2 = document.getElementById('decTitle');
+  if (dt2) dt2.textContent = 'DAB';
+  const ds2 = document.getElementById('decStatus');
+  if (ds2 && !dabState) ds2.textContent = 'tuning…';
+}
+
+function dabSetMode(on: boolean) {
   if (on) {
-    if (dabChannel < 0) dabChannel = DAB_BLOCKS.findIndex(b => b.name === '12B');
-    spec?.dab(true, dabChannel);
-    dabSetPane('stations');
-    // ★★ The decoder box is ALWAYS OPEN in DAB — the station list IS the tuning UI.
-    document.getElementById('decBox')?.classList.add('open');
-    /* ★ And it gets the size toggle every other decoder has. Opening the box directly skips
-     *  openDecoder(), which is where the button is shown — so DAB had no Big/Small (Stuart,
-     *  2026-09-07). Same button, same remembered preference. */
-    $('rdsSize').classList.add('show');
-    applyRdsSize();
-    /* ★★★ AND IT MUST SAY DAB. Opening the box directly skips openDecoder(), which is what
-     *  normally sets the title — so it kept whatever decoder was last used and announced a DAB
-     *  ensemble as "RTTY" (Stuart's screenshot, 2026-09-04). The one job of a box header is to
-     *  say what you are looking at. */
-    /* ★★★ REBUILD THE RATE ROW. hwinfo returns early when the hardware signature is unchanged
-     *  (`if (hwSig === lastHwSig) return`), and entering DAB changes nothing in that signature —
-     *  so the picker kept offering 2.4 MS/s and showing it as selected while the radio ran at
-     *  2.048, which is the state Stuart photographed twice. The rate row is a function of DAB
-     *  being on, so DAB has to ask for it; nothing else will. */
-    applyRateOptions();
-    populateHw();                // the option list itself is built here, not in applyRateOptions
-    const dt2 = document.getElementById('decTitle');
-    if (dt2) dt2.textContent = 'DAB';
-    const ds2 = document.getElementById('decStatus');
-    if (ds2) ds2.textContent = 'tuning…';
+    if (dabState && dabState.channel) {
+      /* ★ The receiver is already on a multiplex (a shared radio, or a reload while it was
+       *  on): join it. No channel is sent — the dial stays where everybody is. */
+      const i = DAB_BLOCKS.findIndex(b => b.name === dabState!.channel);
+      if (i >= 0) dabChannel = i;
+      dabUiOn();
+    } else {
+      if (dabChannel < 0) dabChannel = dabRememberedChannel();
+      dabUiOn();
+      spec?.dab(true, dabChannel);
+    }
   } else {
+    dabOn = false;
     spec?.dab(false);
     dabState = null;
     dabUiOff();
@@ -4636,8 +4670,6 @@ function dabSetMode(on: boolean) {
   dabSetPane(dabPane);
   dabRender();
 }
-
-/** The UI half of leaving DAB — used both when WE leave and when the server leaves without us. */
 function dabUiOff() {
   dabLockControls(false);
   if (spec) spec.dabHeld = false;
