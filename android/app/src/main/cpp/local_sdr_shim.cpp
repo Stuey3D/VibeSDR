@@ -1892,6 +1892,9 @@ static std::atomic<float>    g_contrastBeforeClimb{99.0f};
  *   have already checked the other side of the peak once, so a settled radio does not oscillate.
  */
 static std::atomic<float>    g_sepBeforeMove{0.0f};
+/** ★ DAB's own "before the move" figures — see the DAB verdict in overloadTick. */
+static std::atomic<float>    g_dabFibBeforeMove{-1.0f};
+static std::atomic<float>    g_dabNullBeforeMove{0.0f};
 static std::atomic<float>    g_chanBeforeMove{0.0f};
 /* ★★★ WHERE THIS CLIMB STARTED, because judging only the LAST STEP cannot see a slow slide.
  *     Measured on 105.4 at 1.2 MS/s: separation falls -0.1 -> -2.7 dB across the climb, steadily
@@ -18803,6 +18806,54 @@ void LocalSdrShim::overloadTick() {
             g_settled.store(false, std::memory_order_relaxed);
             // ★ Proved right again: earn a longer stride — see agcStride().
             g_sameDirRun.fetch_add(1, std::memory_order_relaxed);
+        } else if (dabIgnoreSeparation) {
+            /* ★★★ DAB GETS ITS OWN VERDICT, FROM THE DEMODULATOR. With the separation tests waived
+             *  every DAB step fell through to the "flat" arm below, which probes one step down and
+             *  then SETTLES — and nothing in DAB mode ever clears g_settled again (the clearers are
+             *  all separation-based). Measured on the Pi's V4L (shared FM aerial, 2026-09-07):
+             *  one overload cut at 33.8 dB, one flat probe, "settled", and from then on only cuts
+             *  could happen — ovlSteps ratcheted to 15, the ADC peak fell to -33 dBFS, and the
+             *  ensemble sat below the noise for as long as anyone cared to watch. Stuart named the
+             *  coupling before I found it: "screw up the AGC and the whole DAB work is based upon
+             *  poor RF performance".
+             *  ★★ The right judge is the receiver: a step is WORSE if the FIC reads worse or the
+             *     null symbol stands less deep, BETTER if either improves, and otherwise it did no
+             *     harm and the ADC headroom (the target and the climb ceiling) decides how far to
+             *     go. A DAB loop never "settles" on a flat result — a flat result is the normal
+             *     case for a signal that fills the passband. It stops where the converter says. */
+            const auto  q       = g_dab.quality();
+            const float fibWas  = g_dabFibBeforeMove.load(std::memory_order_relaxed);
+            const float nullWas = g_dabNullBeforeMove.load(std::memory_order_relaxed);
+            const bool  hadLock = fibWas >= 0.0f;
+            const float fibD    = hadLock ? (q.locked ? q.fibRate : 0.0f) - fibWas : 0.0f;
+            const float nullD   = hadLock ? q.nullDepthDb - nullWas : 0.0f;
+            const bool  worse   = hadLock && ((fibWas >= 0.5f && fibD < -0.15f) || (nullWas > 6.0f && nullD < -3.0f) || !q.locked);
+            const bool  better  = (!hadLock && q.locked) || fibD > 0.10f || nullD > 2.0f;
+            if (dir > 0 && worse) {
+                LOGI("[DAB] that %.1f dB climb hurt the ensemble (FIB %.2f -> %.2f, null %.1f -> %.1f dB) — putting it back",
+                     stepDb, fibWas, q.fibRate, nullWas, q.nullDepthDb);
+                steps_forceDown = true;
+                g_settled.store(true, std::memory_order_relaxed);
+                g_adcCleanRun.store(0, std::memory_order_relaxed);
+                g_agcHurryUntil.store(now + 20.0, std::memory_order_relaxed);
+            } else if (dir < 0 && worse) {
+                LOGI("[DAB] that %.1f dB cut hurt the ensemble (FIB %.2f -> %.2f, null %.1f -> %.1f dB) — going back up",
+                     stepDb, fibWas, q.fibRate, nullWas, q.nullDepthDb);
+                steps_forceUp = true;
+                g_settled.store(false, std::memory_order_relaxed);
+            } else if (dir < 0 && better) {
+                LOGI("[DAB] that %.1f dB cut IMPROVED the ensemble (FIB %.2f -> %.2f, null %.1f -> %.1f dB) — the front end was overdriven, going down again",
+                     stepDb, fibWas, q.fibRate, nullWas, q.nullDepthDb);
+                g_wantDown.store(true, std::memory_order_relaxed);
+                g_settled.store(false, std::memory_order_relaxed);
+                g_agcHurryUntil.store(now + 20.0, std::memory_order_relaxed);
+            } else {
+                LOGI("[DAB] %s of %.1f dB: ensemble %s (FIB %.2f -> %.2f, null %.1f -> %.1f dB) — headroom decides the next step",
+                     dir > 0 ? "climb" : "cut", stepDb, better ? "better" : "unchanged",
+                     fibWas, q.fibRate, nullWas, q.nullDepthDb);
+                g_settled.store(false, std::memory_order_relaxed);
+                if (dir > 0) g_sameDirRun.fetch_add(1, std::memory_order_relaxed);
+            }
         } else {
             /* ★★ Flat: the move neither helped nor hurt, so we are at the top of the hill. KEEP it
              *    (it did no harm) and stop reaching — the plateau Stuart described on 96.1, where
@@ -19427,6 +19478,11 @@ void LocalSdrShim::overloadTick() {
     }
     if (want != steps) {                      // ★ every move goes on trial, up or down alike
         g_sepBeforeMove.store(p->sepAvgDb.load(), std::memory_order_relaxed);
+        if (g_dabMode.load(std::memory_order_relaxed)) {
+            const auto q = g_dab.quality();
+            g_dabFibBeforeMove.store(q.locked ? q.fibRate : -1.0f, std::memory_order_relaxed);
+            g_dabNullBeforeMove.store(q.locked ? q.nullDepthDb : 0.0f, std::memory_order_relaxed);
+        }
         // ★ The channel and the size of the move, for the "are we making this?" verdict.
         g_chanBeforeMove.store(p->channelDbWide.load(), std::memory_order_relaxed);
         g_shoulderBeforeMove.store(p->shoulderDb.load(), std::memory_order_relaxed);

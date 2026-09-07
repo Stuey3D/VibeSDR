@@ -395,6 +395,16 @@ public:
      *  signals nothing it was not told. */
     bool aacParametricStereo() { std::lock_guard<std::mutex> lk(m_); return aacPs_; }
 
+    /** ★ The receiver's own judgement of the signal, for the gain loop. A DAB gain step is right
+     *  when the FIC reads better and the null symbol stands deeper — the figures the demodulator
+     *  lives by — not when a narrow carrier stands further above its neighbours. */
+    struct Quality { bool locked; float fibRate; float nullDepthDb; };
+    Quality quality() {
+        std::lock_guard<std::mutex> lk(m_);
+        const DabStats& s = rx_.stats();
+        return { s.locked, float(s.fibRate), s.nullDepthDb };
+    }
+
     /** The station list and the signal block, as the web client wants them. */
     std::string json() {
         std::lock_guard<std::mutex> lk(m_);
