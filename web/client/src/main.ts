@@ -4406,8 +4406,16 @@ function dabRender() {
 
   const row = (k: string, v: string) => `<div class="row"><span>${k}</span><span>${v}</span></div>`;
   const cur = d.services.find(x => x.sid === d.sid);
-  sg.innerHTML =
-    '<h4>SERVICE</h4>'
+  /* ★ The pane opens with WHO you are listening to — a larger logo and the name — before the
+   *  numbers (Stuart, 2026-09-07, from his screenshot of the pane). */
+  const curLogo = cur ? (dabLogos.get(`${cur.ecc ?? d.ecc ?? -1}|${d.eid}|${cur.sid}`) || '') : '';
+  const head = cur
+    ? `<div class="dabHead">${curLogo ? `<img class="dabHeadLogo" src="${curLogo}" alt="">` : '<div class="dabHeadLogo"></div>'}`
+      + `<div class="dabHeadText"><div class="dabHeadName">${escapeHtml(cur.label)}</div>`
+      + `<div class="dabHeadSub">${escapeHtml(cur.codec)}${cur.kbps ? ' ' + cur.kbps + ' kbit/s' : ''}${d.dls ? ' · ' + escapeHtml(d.dls) : ''}</div></div></div>`
+    : '';
+  sg.innerHTML = head
+    + '<h4>SERVICE</h4>'
     + row('Codec', d.codecDetail ?? (d.services.find(x => x.sid === d.sid)?.codec ?? '—'))
     + row('Bit rate', d.bitrate ? d.bitrate + ' kbit/s' : '—')
     + row('Protection', cur?.prot ?? (d.protection || '—'))
@@ -4462,6 +4470,29 @@ function dabRender() {
  *  server, with the name search the RDS panel already uses as the fallback. Looked up once per
  *  service and remembered; the list is re-rendered twice a second and must not refetch. */
 const dabLogos = new Map<string, string | null>();
+/* ★ REMEMBERED, so a return to an ensemble does not fetch every logo again (Stuart, 2026-09-07).
+ *  Identity-resolved URLs are the broadcaster's own and change rarely: kept for 30 days in
+ *  localStorage; a miss is not kept (the next visit may succeed). */
+const DAB_LOGO_STORE = 'vibe.dabLogos.v1';
+const DAB_LOGO_TTL_MS = 30 * 24 * 3600 * 1000;
+function dabLogosLoad() {
+  try {
+    const raw = localStorage.getItem(DAB_LOGO_STORE); if (!raw) return;
+    const j = JSON.parse(raw) as Record<string, { u: string; t: number }>;
+    const now = Date.now();
+    for (const [k, v] of Object.entries(j)) if (v && v.u && now - v.t < DAB_LOGO_TTL_MS) dabLogos.set(k, v.u);
+  } catch { /* storage unavailable: logos are simply fetched again */ }
+}
+function dabLogosSave() {
+  try {
+    const j: Record<string, { u: string; t: number }> = {};
+    const raw = localStorage.getItem(DAB_LOGO_STORE);
+    if (raw) { try { Object.assign(j, JSON.parse(raw)); } catch { /* start clean */ } }
+    for (const [k, v] of dabLogos) if (v) j[k] = { u: v, t: j[k]?.t ?? Date.now() };
+    localStorage.setItem(DAB_LOGO_STORE, JSON.stringify(j));
+  } catch { /* ignore */ }
+}
+dabLogosLoad();
 function dabLogoTag(sv: DabState['services'][number], d: DabState): string {
   const ecc = (sv.ecc ?? d.ecc ?? -1);
   const key = `${ecc}|${d.eid}|${sv.sid}`;
@@ -4473,7 +4504,7 @@ function dabLogoTag(sv: DabState['services'][number], d: DabState): string {
    *  that fails to load is forgotten for that service and the row goes back to text. */
   return known ? `<img class="dabLogo" src="${known}" alt="" data-k="${escapeHtml(key)}" onerror="this.remove();(window as any).dabLogoFailed&&(window as any).dabLogoFailed(this.dataset.k)">`.replace('(window as any)', 'window').replace('(window as any)', 'window') : '';
 }
-(window as any).dabLogoFailed = (k: string) => { dabLogos.set(k, null); };
+(window as any).dabLogoFailed = (k: string) => { dabLogos.set(k, null); try { const raw = localStorage.getItem(DAB_LOGO_STORE); if (raw) { const j = JSON.parse(raw); delete j[k]; localStorage.setItem(DAB_LOGO_STORE, JSON.stringify(j)); } } catch { /* ignore */ } };
 async function dabLogoLookup(key: string, sv: DabState['services'][number], d: DabState, ecc: number) {
   let url: string | null = null;
   try {
@@ -4489,6 +4520,7 @@ async function dabLogoLookup(key: string, sv: DabState['services'][number], d: D
     try { url = await lookupStationLogo(tidyStationName(sv.label), undefined, serverIso || undefined); } catch { url = null; }
   }
   dabLogos.set(key, url || null);
+  if (url) dabLogosSave();
 }
 
 /** ★ "Daventry (Northants) · 12 mi · 13 dB": the site from the country's transmitter directory
