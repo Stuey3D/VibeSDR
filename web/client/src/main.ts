@@ -4608,6 +4608,11 @@ function dabSetMode(on: boolean) {
     dabSetPane('stations');
     // ★★ The decoder box is ALWAYS OPEN in DAB — the station list IS the tuning UI.
     document.getElementById('decBox')?.classList.add('open');
+    /* ★ And it gets the size toggle every other decoder has. Opening the box directly skips
+     *  openDecoder(), which is where the button is shown — so DAB had no Big/Small (Stuart,
+     *  2026-09-07). Same button, same remembered preference. */
+    $('rdsSize').classList.add('show');
+    applyRdsSize();
     /* ★★★ AND IT MUST SAY DAB. Opening the box directly skips openDecoder(), which is what
      *  normally sets the title — so it kept whatever decoder was last used and announced a DAB
      *  ensemble as "RTTY" (Stuart's screenshot, 2026-09-04). The one job of a box header is to
