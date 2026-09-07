@@ -1817,6 +1817,11 @@ int main(int argc, char** argv) {
         //   silently do nothing on a server with no country configured.
         return vsradiodns::logoForAuto(pi, ecc, hz, g_runtimeConfig.country);
     });
+    LocalSdrShim::setDabLogoHandler([](const std::string& ecc, const std::string& eid,
+                                       const std::string& sid, int scids) -> std::string {
+        // ★ DAB always transmits its ECC (FIG 0/9), so no derivation is needed here.
+        return vsradiodns::logoForDab(ecc, eid, sid, scids);
+    });
     // ★ The admin page's "clear station logo cache" — see setLogoCacheClearHandler.
     LocalSdrShim::setLogoCacheClearHandler([] { vsradiodns::clearCache(); });
     LocalSdrShim::setEibiHandler([](bool refresh, std::string& err, std::string& updated) -> int {

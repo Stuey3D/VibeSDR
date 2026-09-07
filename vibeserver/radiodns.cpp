@@ -286,10 +286,32 @@ void setDir(const std::string& dir) {
     if (!dir.empty()) g_dir = dir;
 }
 
+/** The shared half: cache, CNAME, SRV, SPI document, bearer match. FM and DAB differ only in
+ *  the name they ask for and the bearer they look for. */
+static std::string logoViaFqdn(const std::string& fqdn, const std::string& bearer);
+
+std::string logoForDab(const std::string& ecc, const std::string& eidHex, const std::string& sidHex, int scids) {
+    if (ecc.size() < 2 || eidHex.size() != 4 || (sidHex.size() != 4 && sidHex.size() != 8) || scids < 0 || scids > 15) return {};
+    const std::string sid = lower(sidHex), eid = lower(eidHex);
+    // ★ The GCC is the SId's country nibble plus the ECC, exactly as for FM (see fqdnFor).
+    const std::string gcc = std::string(1, sid[0]) + lower(ecc.substr(ecc.size() - 2));
+    char sc[4]; std::snprintf(sc, sizeof sc, "%x", scids);
+    const std::string fqdn = std::string(sc) + "." + sid + "." + eid + "." + gcc + ".dab.radiodns.org";
+    return logoViaFqdn(fqdn, "dab:" + gcc + "." + eid + "." + sid + "." + std::string(sc));
+}
+
 std::string logoFor(const std::string& piHex, const std::string& ecc, double freqHz) {
     const std::string fqdn = fqdnFor(piHex, ecc, freqHz);
     if (fqdn.empty()) return {};
+    const std::string pi = lower(piHex);
+    const std::string gcc = std::string(1, pi[0]) + lower(ecc.substr(ecc.size() - 2));
+    char f[16];
+    std::snprintf(f, sizeof f, "%05d", (int)std::llround(freqHz / 10000.0));
+    // fm:<gcc>.<pi>.<freq> — the same three fields, in the order the SPI uses.
+    return logoViaFqdn(fqdn, "fm:" + gcc + "." + pi + "." + std::string(f));
+}
 
+static std::string logoViaFqdn(const std::string& fqdn, const std::string& bearer) {
     const time_t now = time(nullptr);
     {
         std::lock_guard<std::mutex> lk(g_mtx);
@@ -316,14 +338,7 @@ std::string logoFor(const std::string& piHex, const std::string& ecc, double fre
         const std::string base = tls ? "https://" + hostPort.substr(0, hostPort.size() - 4)
                                      : "http://" + hostPort;
         const std::string xml = httpGet(base + "/radiodns/spi/3.1/SI.xml", "");
-        if (!xml.empty()) {
-            // fm:<gcc>.<pi>.<freq> — the same three fields, in the order the SPI uses.
-            const std::string pi = lower(piHex);
-            const std::string gcc = std::string(1, pi[0]) + lower(ecc.substr(ecc.size() - 2));
-            char f[16];
-            std::snprintf(f, sizeof f, "%05d", (int)std::llround(freqHz / 10000.0));
-            url = logoFromSpi(xml, "fm:" + gcc + "." + pi + "." + std::string(f));
-        }
+        if (!xml.empty()) url = logoFromSpi(xml, bearer);
     }
 
     std::lock_guard<std::mutex> lk(g_mtx);

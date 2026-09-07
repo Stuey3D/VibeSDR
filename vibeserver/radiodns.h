@@ -40,6 +40,10 @@ namespace vsradiodns {
  *  ★ Cached in memory per service, including NEGATIVE results: a station that is not in RadioDNS
  *    must not cost a DNS query and an HTTP fetch every time somebody tunes past it. */
 std::string logoFor(const std::string& piHex, const std::string& ecc, double freqHz);
+/** ★ The same lookup for a DAB service: <scids>.<sid>.<eid>.<gcc>.dab.radiodns.org, bearer
+ *  dab:<gcc>.<eid>.<sid>.<scids> (RadioDNS TS 103 270). This is how a DAB radio gets its logos
+ *  when the multiplex carries no slideshow — and neither multiplex here does (2026-09-07). */
+std::string logoForDab(const std::string& ecc, const std::string& eidHex, const std::string& sidHex, int scids);
 
 /**
  * The ECC a station's country and PI nibble imply — for the stations that never send one.

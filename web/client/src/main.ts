@@ -29,7 +29,7 @@ import { resolveStationIso, isoToFlag, ituToIso } from '../../../src/services/rd
 import { countryForCallsign } from '../../../src/services/callsignCountry';
 import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
-import { lookupStationLogo } from '../../../src/services/stationLogo';
+import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
 import {
   loadStations, loadBookmarks, getBookmarks, getStations, addBookmark, removeBookmark,
   exportBookmarks, importBookmarks, search, type SearchResult,
@@ -4372,6 +4372,7 @@ function dabRender() {
    *  nothing ever emitted the element. */
   st.innerHTML = d.services.length
     ? d.services.map(sv => `<div class="dabSvc${sv.sid === d.sid ? ' on' : ''}" data-sid="${sv.sid}">`
+        + dabLogoTag(sv, d)
         + `<span class="nm">${escapeHtml(sv.label || '(unnamed)')}`
         + (sv.sid === d.sid && d.dls ? `<span class="dls">${escapeHtml(d.dls)}</span>` : '')
         + `</span><span class="cod" title="${escapeHtml(sv.prot ?? '')}">${sv.codec}${sv.kbps ? ' ' + sv.kbps + 'k' : ''}</span></div>`).join('')
@@ -4431,6 +4432,36 @@ function dabRender() {
     + (d.aacRateHz ? row('AAC', `${d.aacRateHz} Hz, ${d.aacCh} ch${d.aacServerSide ? ', decoded on the server' : ''}`) : '')
     + (d.dlsCrcOk !== undefined ? row('DLS groups', `${d.dlsCrcOk} ok, ${d.dlsCrcFail ?? 0} bad`) : '');
   dabDrawScopes(d);
+}
+
+/* ★★★ LOGOS FOR THE STATION LIST. Neither multiplex here carries a slideshow (no X-PAD app 12 on
+ *  12B or 10C, measured 2026-09-07), so the artwork comes the way a DAB radio gets it: RadioDNS,
+ *  by the service's identity (ECC, EId, SId, SCIdS) — the broadcaster's own file — through the
+ *  server, with the name search the RDS panel already uses as the fallback. Looked up once per
+ *  service and remembered; the list is re-rendered twice a second and must not refetch. */
+const dabLogos = new Map<string, string | null>();
+function dabLogoTag(sv: DabState['services'][number], d: DabState): string {
+  const ecc = (sv.ecc ?? d.ecc ?? -1);
+  const key = `${ecc}|${d.eid}|${sv.sid}`;
+  const known = dabLogos.get(key);
+  if (known === undefined) { dabLogos.set(key, null); void dabLogoLookup(key, sv, d, ecc); return ''; }
+  return known ? `<img class="dabLogo" src="${known}" alt="">` : '';
+}
+async function dabLogoLookup(key: string, sv: DabState['services'][number], d: DabState, ecc: number) {
+  let url: string | null = null;
+  try {
+    if (ecc >= 0 && d.eid) {
+      const q = `ecc=${ecc.toString(16).toUpperCase().padStart(2, '0')}&eid=${d.eid.toString(16).toUpperCase().padStart(4, '0')}`
+              + `&sid=${sv.sid.toString(16).toUpperCase().padStart(4, '0')}&scids=${Math.max(0, sv.scids ?? 0)}`;
+      const r = await fetch(P(`/vibeserver/dablogo?${q}`), { cache: 'no-store' });
+      if (r.ok) url = String((await r.json())?.logo ?? '') || null;
+    }
+  } catch { url = null; }
+  if (!url) {
+    // ★ Name search, as the bookmark list does — provisional, but far better than a blank tile.
+    try { url = await lookupStationLogo(tidyStationName(sv.label), undefined, serverIso || undefined); } catch { url = null; }
+  }
+  dabLogos.set(key, url || null);
 }
 
 /** ★ The two pictures a DX-er reads before any number: the DQPSK constellation (tight dots at
