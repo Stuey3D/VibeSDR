@@ -191,7 +191,7 @@ export interface DabState {
   codecDetail?: string; audioRateHz?: number; coreRateHz?: number; sbr?: boolean; ps?: boolean; audioCh?: number;
   ecc?: number; cif?: number; mci?: boolean; nsvc?: number;
   /** Transmitter Identification: which transmitters of the SFN the null symbol says we hear. */
-  tii?: { main: number; sub: number; db: number }[];
+  tii?: { main: number; sub: number; db: number; site?: string; area?: string; km?: number; lat?: number; lon?: number; ambiguous?: boolean }[];
   /** Signal analysis: MER (dB), raw MSC bit error rate, PRS impulse response (128 x uint8 dB
    *  bins, 4 samples each, 255 = peak), constellation (192 int8 x,y pairs, ideal radius 60). */
   mer?: number; mscBer?: number; irPeak?: number; ir?: number[]; iq?: number[];

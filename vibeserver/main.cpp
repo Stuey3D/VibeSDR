@@ -1800,6 +1800,20 @@ int main(int argc, char** argv) {
     // ★ RadioDNS station logos. Free and unlicensed to USE (radiodns.org) — but the DATA belongs
     //   to each broadcaster and carries their terms; see briefs/BRIEF-radiodns-logos.md.
     vsradiodns::setDir(vsDataDir());
+    {
+        /* ★ DAB transmitter names need to know where we are to say how far away they are. Exact
+         *  coordinates win; the locator (a 4 km square) is the fallback; nothing means codes and
+         *  names without distances. Same derivation the conditions panel uses. */
+        double la = 0, lo = 0; bool have = false;
+        try {
+            if (!g_runtimeConfig.lat.empty() && !g_runtimeConfig.lon.empty()) {
+                la = std::stod(g_runtimeConfig.lat); lo = std::stod(g_runtimeConfig.lon); have = true;
+            }
+        } catch (...) { have = false; }
+        if (!have && !g_runtimeConfig.locator.empty()) have = vssolar::gridToLatLon(g_runtimeConfig.locator, la, lo);
+        if (have) LocalSdrShim::setReceiverPosition(la, lo);
+        LocalSdrShim::loadDabTransmitterLists(vsDataDir());
+    }
     LocalSdrShim::setStationLogoHandler([](const std::string& pi, const std::string& ecc,
                                            double hz) -> std::string {
         // ★★★ DERIVE THE ECC WHEN THE STATION DOES NOT SEND ONE, OR THIS FEATURE MOSTLY NEVER

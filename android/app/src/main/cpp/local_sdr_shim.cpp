@@ -86,6 +86,7 @@
 #include "decoders/ft8_decoder.h"   // FT8/FT4 → digital spots
 #include "opus_audio_encoder.h" // VibeServer compressed audio (Opus; VIBE_HAVE_OPUS-gated)
 #include "vibe_dab_service.h"   // DAB (experimental) — see BRIEF-dab.md
+#include "vibe_dab_txdb_e1.h"    // the UK DAB transmitter directory (generated)
 #include "decoders/sstv_decoder.h"  // SSTV (audio-extension image decoder)
 #include "decoders/audio_nr.h"      // self-contained spectral-subtraction audio NR
 #include "decoders/auto_notch.h"    // NLMS automatic notch (adaptive line enhancer)
@@ -581,6 +582,17 @@ static std::atomic<double> g_vsLockedRate{0.0};
  *  ★ Gated at the UI by radioCanDab() on the EFFECTIVE limits — Stuart, 2026-09-04: a restricted
  *    V4 "shouldnt even present itself". */
 static vibedab::DabService g_dab;
+/** ★ The DAB transmitter directory: the UK compiled in, other countries from <data dir>/dab-tii-<ecc>.csv
+ *  (see vibe_dab_txdb.h). Keyed by the ENSEMBLE's country code, so a listener on a border who hears
+ *  three countries' multiplexes gets each named from its own country's list. */
+static vibedab::DabTxDb g_dabTxDb;
+static void dabTxDbInit() {
+    static bool done = false;
+    if (done) return;
+    done = true;
+    g_dabTxDb.addBuiltin(0xE1, vibedab::kDabTx_E1, vibedab::kDabTx_E1_n);
+    g_dab.setTxDb(&g_dabTxDb);
+}
 /** ★★★ THE RADIO'S REAL SAMPLE-RATE CEILING, in Hz. 0 = not known yet.
  *
  *  The DAB gate first assumed every receiver could reach 2.048 MS/s, and the Pi promptly reported
@@ -8804,6 +8816,7 @@ struct LocalSdrShim::Impl {
              *  ★ The frequency goes LAST because the hw writer re-applies the IF filter after
              *    every centre-frequency write (see startHwWriter) — so the filter survives, and
              *    the frequency is the value nothing follows. The reverse has no such repair. */
+            dabTxDbInit();        // ★ names for TII codes, even on a server that set no position
             g_dabMode.store(true);
             dabPrimed_ = false;   // ★ a new multiplex fills from empty
             startDabClock();      // ★ audio now leaves on a clock, not on IQ arrival
@@ -17021,6 +17034,20 @@ void LocalSdrShim::clearLogoCache() {
     LogoCacheClearFn fn;
     { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsLogoClearFn; }
     if (fn) fn();
+}
+void LocalSdrShim::setReceiverPosition(double lat, double lon) {
+    dabTxDbInit();
+    g_dab.setReceiverPosition(lat, lon);
+    LOGI("[DAB] receiver position for transmitter distances: %.4f, %.4f", lat, lon);
+}
+void LocalSdrShim::loadDabTransmitterLists(const std::string& dir) {
+    dabTxDbInit();
+    int files = 0, rows = 0;
+    for (int ecc = 0xA0; ecc <= 0xFF; ++ecc) {           // every ECC in use is in A0..FF
+        const int n = g_dabTxDb.loadCountryFile(dir, ecc);
+        if (n > 0) { ++files; rows += n; LOGI("[DAB] transmitter list for ECC %02X: %d sites from %s/dab-tii-%02x.csv", ecc, n, dir.c_str(), ecc); }
+    }
+    if (!files) LOGI("[DAB] no per-country transmitter lists in %s (UK is built in)", dir.c_str());
 }
 void LocalSdrShim::setDabLogoHandler(DabLogoFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);

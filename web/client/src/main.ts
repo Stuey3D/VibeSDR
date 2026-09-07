@@ -4402,9 +4402,9 @@ function dabRender() {
     + (d.cif !== undefined && d.cif >= 0 ? row('CIF count', String(d.cif)) : '')
     /* ★ TII — the transmitter(s) behind the ensemble. Main/Sub ids as the planners publish them
      *  (hex, as on the UK TII lists), with how far each stands above the null's noise. */
-    + row('Transmitters', d.tii && d.tii.length
-        ? d.tii.map(t => `${t.main.toString(16).toUpperCase().padStart(2, '0')}/${t.sub.toString(16).toUpperCase().padStart(2, '0')} ${t.db.toFixed(0)} dB`).join(', ')
-        : (d.locked ? 'none identified yet' : '—'))
+    + (d.tii && d.tii.length
+        ? d.tii.map((t, i) => row(i === 0 ? 'Transmitters' : '', dabTxText(t))).join('')
+        : row('Transmitters', d.locked ? 'none identified yet' : '—'))
     + (d.dls ? row('Now playing', escapeHtml(d.dls)) : '')
     + '<h4>PHYSICAL LAYER</h4>'
     + row('Lock', d.locked ? 'locked' : 'searching')
@@ -4462,6 +4462,17 @@ async function dabLogoLookup(key: string, sv: DabState['services'][number], d: D
     try { url = await lookupStationLogo(tidyStationName(sv.label), undefined, serverIso || undefined); } catch { url = null; }
   }
   dabLogos.set(key, url || null);
+}
+
+/** ★ "Daventry (Northants) · 12 mi · 13 dB": the site from the country's transmitter directory
+ *  when there is one, the bare TII code when there is not, distance only when the server knows
+ *  where it is. Stuart's brief, 2026-09-07. Miles first because the directory's first country is
+ *  the UK; kilometres beside it for everyone else. */
+function dabTxText(t: NonNullable<DabState['tii']>[number]): string {
+  const code = `${t.main.toString(16).toUpperCase().padStart(2, '0')}/${t.sub.toString(16).toUpperCase().padStart(2, '0')}`;
+  const name = t.site ? escapeHtml(t.site) + (t.area && t.area !== t.site ? ` (${escapeHtml(t.area)})` : '') + (t.ambiguous ? ' ?' : '') : code;
+  const dist = t.km !== undefined && t.km >= 0 ? ` · ${(t.km * 0.621371).toFixed(t.km < 16 ? 1 : 0)} mi (${t.km.toFixed(t.km < 10 ? 1 : 0)} km)` : '';
+  return `${name}${dist} · ${t.db.toFixed(0)} dB${t.site ? ` <span style="opacity:.5">${code}</span>` : ''}`;
 }
 
 /** ★ The two pictures a DX-er reads before any number: the DQPSK constellation (tight dots at

@@ -126,6 +126,13 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeInitRadioDns(JNIEnv* env, jobject /*thiz
         [iso](const std::string& pi, const std::string& ecc, double hz) -> std::string {
             return vsradiodns::logoForAuto(pi, ecc, hz, iso);
         });
+    /* ★ And the DAB form — by ECC/EId/SId/SCIdS. Without this the phone answered {} to every
+     *  /vibeserver/dablogo and the web client fell back to name-search artwork while the Pi,
+     *  which registers both in main.cpp, showed the broadcaster's own (Stuart, 2026-09-07). */
+    vibe::LocalSdrShim::setDabLogoHandler(
+        [](const std::string& ecc, const std::string& eid, const std::string& sid, int scids) -> std::string {
+            return vsradiodns::logoForDab(ecc, eid, sid, scids);
+        });
     LOGI("RadioDNS ready (station logos from the broadcaster; country hint '%s')",
          iso.empty() ? "none" : iso.c_str());
 }

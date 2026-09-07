@@ -445,6 +445,10 @@ public:
     using DabLogoFn = std::function<std::string(const std::string& ecc, const std::string& eidHex,
                                                 const std::string& sidHex, int scids)>;
     static void setDabLogoHandler(DabLogoFn fn);
+    /** ★ Where this receiver is, so DAB transmitter identities can carry a distance. */
+    static void setReceiverPosition(double lat, double lon);
+    /** ★ Load per-country DAB transmitter lists (dab-tii-<ecc>.csv) from a data directory. */
+    static void loadDabTransmitterLists(const std::string& dir);
     /** ★★ EMPTY THE SERVER'S STATION-LOGO CACHE. A logo is looked up once and remembered — hits
      *  for a day, misses for an hour — so a WRONG one is remembered exactly as confidently as a
      *  right one, and the owner has no way to say "that is not the station" (Stuart, 2026-08-15:

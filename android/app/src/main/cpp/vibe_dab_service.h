@@ -27,6 +27,7 @@
 #include "vibe_dab_pad.h"
 #include "vibe_dab_aac.h"
 #include "vibe_dab_receiver.h"
+#include "vibe_dab_txdb.h"
 
 namespace vibedab {
 
@@ -61,6 +62,7 @@ public:
          *  configured for the OLD service's rate and channel mode, and DAB+ services on one
          *  multiplex differ in both. Carrying it across is the chipmunk bug wearing a new hat. */
         aac_.reset();
+        aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacEffRateHz_ = 0; aacRateWarned_ = false;
         adts_.clear();
         pad_.reset();      // ★ the label belongs to the old programme
         // ★ A new programme starts a new clock; catching up on the old one would be a wall of silence.
@@ -395,6 +397,11 @@ public:
      *  signals nothing it was not told. */
     bool aacParametricStereo() { std::lock_guard<std::mutex> lk(m_); return aacPs_; }
 
+    /** ★ The transmitter directory (by country) and where THIS receiver is, so a TII code can be
+     *  printed as a place and a distance. Either may be absent: then the codes stand alone. */
+    void setTxDb(const DabTxDb* db) { std::lock_guard<std::mutex> lk(m_); txdb_ = db; }
+    void setReceiverPosition(double lat, double lon) { std::lock_guard<std::mutex> lk(m_); rxLat_ = lat; rxLon_ = lon; }
+
     /** ★ The receiver's own judgement of the signal, for the gain loop. A DAB gain step is right
      *  when the FIC reads better and the null symbol stands deeper — the figures the demodulator
      *  lives by — not when a narrow carrier stands further above its neighbours. */
@@ -481,10 +488,10 @@ public:
             if (sid_ && rx_.selectedType() == 63 && afmt_.outputRateHz > 0) {
                 const char* prof = afmt_.sbr ? (aacPs_ ? "HE-AAC v2" : "HE-AAC v1") : "AAC-LC";
                 const char* chan = aacPs_ ? "Parametric Stereo" : (aacCoreCh_ == 2 ? "Stereo" : "Mono");
-                snprintf(cb, sizeof cb, ",\"codecDetail\":\"DAB+ %d kbit/s %d kHz %s %s\",\"audioRateHz\":%d,\"coreRateHz\":%d,\"sbr\":%s,\"ps\":%s,\"audioCh\":%d",
+                snprintf(cb, sizeof cb, ",\"codecDetail\":\"DAB+ %d kbit/s %d kHz %s %s\",\"audioRateHz\":%d,\"coreRateHz\":%d,\"sbr\":%s,\"ps\":%s,\"audioCh\":%d,\"aacEffRateHz\":%d",
                          rx_.serviceBitrate(), afmt_.outputRateHz / 1000, prof, chan,
                          afmt_.outputRateHz, afmt_.coreRateHz, afmt_.sbr ? "true" : "false",
-                         aacPs_ ? "true" : "false", aacOutCh_);
+                         aacPs_ ? "true" : "false", aacOutCh_, aacEffRateHz_);
                 j += cb;
             } else if (sid_ && rx_.selectedType() == 0 && mp2_.info().valid) {
                 const auto& mi = mp2_.info();
@@ -531,9 +538,23 @@ public:
             j += ",\"tii\":[";
             bool f1 = true;
             for (const auto& h : rx_.tii()) {
-                char tb[64];
-                snprintf(tb, sizeof tb, "%s{\"main\":%d,\"sub\":%d,\"db\":%.1f}", f1 ? "" : ",", h.mainId, h.subId, h.strength);
+                char tb[96];
+                snprintf(tb, sizeof tb, "%s{\"main\":%d,\"sub\":%d,\"db\":%.1f", f1 ? "" : ",", h.mainId, h.subId, h.strength);
                 j += tb; f1 = false;
+                /* ★ Named from the country's directory when there is one for this ensemble's ECC;
+                 *  nearest site when the code is reused; distance only when we know where we are. */
+                if (txdb_ && e.ecc >= 0) {
+                    const DabTxMatch m = txdb_->lookup(e.ecc, e.eid, h.mainId, h.subId, rxLat_, rxLon_);
+                    if (m.found) {
+                        j += ",\"site\":\"" + esc(m.site) + "\",\"area\":\"" + esc(m.area) + "\"";
+                        char kb[64];
+                        snprintf(kb, sizeof kb, ",\"lat\":%.4f,\"lon\":%.4f", m.lat, m.lon);
+                        j += kb;
+                        if (m.km >= 0) { snprintf(kb, sizeof kb, ",\"km\":%.1f", m.km); j += kb; }
+                        if (m.ambiguous) j += ",\"ambiguous\":true";
+                    }
+                }
+                j += "}";
             }
             j += "]";
         }
@@ -914,8 +935,22 @@ private:
             std::vector<uint8_t> pkt = toAdts(au.data(), au.size(), s.fmt, aacCoreCh_);
             if (pkt.empty()) continue;
             ++ausOut_;
+            /* ★ VIBE_DAB_ADTS_DUMP=<path>: the first 500 access units as an ADTS file, so the
+             *  platform decoder can be run on the SAME bytes by hand (ffprobe / ffmpeg) when its
+             *  output rate is in doubt — the 2026-09-07 "slow on the Pi" measurement. */
+            {
+                static const char* dumpPath = std::getenv("VIBE_DAB_ADTS_DUMP");
+                static FILE* dumpFp = dumpPath ? std::fopen(dumpPath, "wb") : nullptr;
+                static int dumped = 0;
+                if (dumpFp && dumped < 500) { std::fwrite(pkt.data(), 1, pkt.size(), dumpFp); if (++dumped == 500) { std::fclose(dumpFp); dumpFp = nullptr; fprintf(stderr, "[DAB] ADTS dump written: %s\n", dumpPath); } }
+            }
             if (aac_.available()) {
                 AacPcm dec;
+                /* ★ Count the access unit HERE, whether or not this call returns samples: the
+                 *  ffmpeg pipe hands back its output in bursts, so charging two units' samples to
+                 *  the one call that received them read 102 kHz where the truth was 51.2 (measured
+                 *  both ways, 2026-09-07). */
+                if (s.fmt.accessUnits > 0) aacAuAcc_ += 1;
                 if (aac_.decode(pkt.data(), pkt.size(), dec)) {
                     if (!dec.interleaved.empty()) {
                         /* ★ Frames the decoder actually returned for this access unit. A DAB+ AU
@@ -924,8 +959,32 @@ private:
                          *  audio plays at the wrong SPEED while sounding perfectly clean. */
                         if (dec.channels > 0)
                             aacPcmPerAu_ = uint32_t(dec.interleaved.size() / size_t(dec.channels));
+                        /* ★★★ THE RATE IS COMPUTED, NEVER BELIEVED — on the server exactly as in
+                         *  the browser. ffmpeg is asked for 48 kHz and says 48 kHz, but a decoder
+                         *  that cannot do the 960-sample DAB+ transform decodes each access unit
+                         *  as 1024 and hands back 6.67 % more samples than 60 ms holds; played at
+                         *  the rate it CLAIMS they run slow, which is what Stuart heard on the Pi
+                         *  (2026-09-07) while the Xcover's AMediaCodec, which does 960, was
+                         *  perfect. The access unit's duration is fixed by the super frame (120 ms
+                         *  over 2/3/4/6 AUs), so samples-per-AU over the last few seconds IS the
+                         *  true rate. Averaged over AUs because a resampler inside the decoder does
+                         *  not return exactly the same count every call. */
+                        if (dec.channels > 0 && s.fmt.accessUnits > 0)
+                            aacPcmAcc_ += double(dec.interleaved.size() / size_t(dec.channels));
+                        int rate = dec.rateHz;
+                        if (aacAuAcc_ >= 8) {
+                            const double auSec = 0.120 / double(s.fmt.accessUnits);
+                            const double eff   = aacPcmAcc_ / (double(aacAuAcc_) * auSec);
+                            if (eff > 8000.0 && eff < 200000.0 && std::fabs(eff - double(rate)) > double(rate) * 0.01) {
+                                if (!aacRateWarned_) { aacRateWarned_ = true;
+                                    fprintf(stderr, "[DAB] AAC decoder claims %d Hz but returns %.0f samples/s of programme (%.0f floats over %d AUs, %d ch, %d AU/sf) — pacing at the measured rate\n", rate, eff, aacPcmAcc_ * dec.channels, aacAuAcc_, dec.channels, s.fmt.accessUnits); }
+                                rate = int(std::lround(eff));
+                            }
+                            aacEffRateHz_ = rate;
+                            if (aacAuAcc_ >= 100) { aacPcmAcc_ *= 0.5; aacAuAcc_ /= 2; }   // a moving window
+                        }
                         pushPcm48Stereo(dec.interleaved.data(), dec.interleaved.size(),
-                                        dec.channels, dec.rateHz);
+                                        dec.channels, rate);
                     }
                     ++aacDecoded_;
                     continue;
@@ -977,6 +1036,7 @@ private:
     bool       rsPrimed_ = false;
     int        rsRate_ = 0;     ///< of those, how many were silence covering a lost super frame     ///< 48 kHz stereo frames delivered, ever   ///< PCM FRAMES the decoder returned for the last AU                ///< AUs turned into PCM here rather than on the client
     AudioFormat afmt_{};
+    double aacPcmAcc_ = 0.0; int aacAuAcc_ = 0; int aacEffRateHz_ = 0; bool aacRateWarned_ = false;
     /* ★ Counters, because "no audio" has four possible causes here and guessing between them is
      *  what cost the evening: no frames arriving, frames of an unusable length, the firecode
      *  never aligning, or AUs produced and not sent. Each has its own number. */
@@ -1032,6 +1092,8 @@ private:
     mutable std::mutex pm_;
     int channel_ = -1;
     double rfCentre_ = 0, rfRate_ = 0;
+    const DabTxDb* txdb_ = nullptr;
+    double rxLat_ = NAN, rxLon_ = NAN;
     uint32_t sid_ = 0, want_ = 0;
 };
 

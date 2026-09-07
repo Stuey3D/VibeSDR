@@ -131,15 +131,23 @@ bool gridToLatLon(const std::string& g, double& lat, double& lon) {
     if (!isdigit((unsigned char)g[2]) || !isdigit((unsigned char)g[3])) return false;
     lon = A * 20.0 - 180.0 + (g[2] - '0') * 2.0;
     lat = B * 10.0 -  90.0 + (g[3] - '0') * 1.0;
+    bool sub = false;
     if (g.size() >= 6) {                       // sub-square: 5 min lon, 2.5 min lat
         const int a = up(g[4]) - 'A', b = up(g[5]) - 'A';
         if (a >= 0 && a < 24 && b >= 0 && b < 24) {
             lon += a * (2.0 / 24.0);
             lat += b * (1.0 / 24.0);
+            sub = true;
         }
     }
-    lon += 1.0;    // centre of the square rather than its corner
-    lat += 0.5;
+    /* ★ Centre of whichever square was GIVEN. This added the centre of the 2 x 1 degree square
+     *  (+1.0, +0.5) even after a sub-square had been resolved, putting IO92nh — Northampton — at
+     *  52.79 N 0.08 E, in the Fens 100 km away. Found the moment a distance was printed beside
+     *  it (2026-09-07: "Northampton transmitter, 87 km"). The directory listing has its own
+     *  converter in main.cpp (gridCentre) which was right, so the listing never showed it; the
+     *  conditions panel's day/night verdict quietly used this one. */
+    lon += sub ? (1.0 / 24.0) : 1.0;
+    lat += sub ? (0.5 / 24.0) : 0.5;
     return true;
 }
 

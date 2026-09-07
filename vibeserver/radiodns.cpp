@@ -23,7 +23,13 @@ namespace {
 std::mutex g_mtx;
 std::string g_dir = "/var/lib/vibeserver";
 
-struct Entry { std::string url; time_t at = 0; };
+struct Entry { std::string url; time_t at = 0; bool transient = false; };
+/** ★ Set by the resolvers when the NETWORK answered nothing at all — a DoH query that returned no
+ *  document is not "this station has no logo", it is "we could not ask". Remembering that for an
+ *  hour as a miss is exactly the unreliability Stuart has always seen on the Xcover: one slow
+ *  wifi moment on first tune and the station stays logo-less until the cache expires. */
+static thread_local bool g_lastQueryTransient = false;
+constexpr time_t kTransientTtl = 45;
 std::map<std::string, Entry> g_cache;
 // ★ A day for a hit, an hour for a miss. Logos change rarely; a station JOINING RadioDNS is worth
 //   noticing sooner than that, but not at the cost of a lookup every time somebody tunes past.
@@ -106,6 +112,7 @@ std::string fqdnFor(const std::string& piHex, const std::string& ecc, double fre
 std::string resolveSrv(const std::string& name) {
     const std::string js = httpGet(
         "https://cloudflare-dns.com/dns-query?name=" + name + "&type=SRV", "application/dns-json");
+    if (js.empty()) g_lastQueryTransient = true;
     const size_t a = js.find("\"Answer\"");
     if (a == std::string::npos) return {};
     // "data":"<prio> <weight> <port> <target>"
@@ -124,6 +131,7 @@ std::string resolveSrv(const std::string& name) {
 std::string resolveCname(const std::string& fqdn) {
     const std::string js = httpGet(
         "https://cloudflare-dns.com/dns-query?name=" + fqdn + "&type=CNAME", "application/dns-json");
+    g_lastQueryTransient = js.empty();
     if (js.empty()) return {};
     // The answer's "data" is the target, with a trailing dot.
     const size_t a = js.find("\"Answer\"");
@@ -317,12 +325,13 @@ static std::string logoViaFqdn(const std::string& fqdn, const std::string& beare
         std::lock_guard<std::mutex> lk(g_mtx);
         auto it = g_cache.find(fqdn);
         if (it != g_cache.end()) {
-            const time_t ttl = it->second.url.empty() ? kMissTtl : kHitTtl;
+            const time_t ttl = it->second.transient ? kTransientTtl : it->second.url.empty() ? kMissTtl : kHitTtl;
             if (now - it->second.at < ttl) return it->second.url;
         }
     }
 
     std::string url;
+    g_lastQueryTransient = false;
     const std::string anchor = resolveCname(fqdn);
     // ★ _radiospi first (the modern name for this service), _radioepg as the older fallback —
     //   plenty of broadcasters still publish only the latter.
@@ -338,11 +347,12 @@ static std::string logoViaFqdn(const std::string& fqdn, const std::string& beare
         const std::string base = tls ? "https://" + hostPort.substr(0, hostPort.size() - 4)
                                      : "http://" + hostPort;
         const std::string xml = httpGet(base + "/radiodns/spi/3.1/SI.xml", "");
-        if (!xml.empty()) url = logoFromSpi(xml, bearer);
+        if (xml.empty()) g_lastQueryTransient = true;     // the broadcaster's server did not answer
+        else url = logoFromSpi(xml, bearer);
     }
 
     std::lock_guard<std::mutex> lk(g_mtx);
-    g_cache[fqdn] = Entry{ url, now };
+    g_cache[fqdn] = Entry{ url, now, url.empty() && g_lastQueryTransient };
     return url;
 }
 
