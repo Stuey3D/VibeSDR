@@ -2075,6 +2075,10 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    which scroll their own content — but ADV RDS sizes itself deliberately, so it opts out.
    ★ A container limit and a child that manages its own height cannot both be in charge. */
 #decBody { max-height: 40vh; overflow-y: auto; padding: 8px 10px; }
+/* ★ BIG must grow the BODY, not only #decText: the DAB station list and signal pane live in
+ *  #decBody, so the toggle showed and did nothing (Stuart, 2026-09-07). Same cap as #decText's
+ *  big size, bounded by the box's own ceiling above. */
+#decBox.big #decBody { max-height: clamp(300px, 72vh, 900px); }
 #decBox.rds #decBody { max-height: none; overflow-y: visible; }
 #decBox.min #decBody { display: none; }
 #decText {
