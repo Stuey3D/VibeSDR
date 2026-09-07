@@ -15,6 +15,8 @@
 #include <cstring>
 #include <condition_variable>
 #include <deque>
+#include <map>
+#include <chrono>
 #include <thread>
 #include <mutex>
 #include <string>
@@ -28,6 +30,7 @@
 #include "vibe_dab_aac.h"
 #include "vibe_dab_receiver.h"
 #include "vibe_dab_txdb.h"
+#include "vibe_dab_padtap.h"
 
 namespace vibedab {
 
@@ -47,6 +50,8 @@ public:
         if (idx == channel_) return;
         channel_ = idx;
         rx_.reset();
+        dlsAll_.clear(); scanCursor_ = 0; scanRotatedAt_ = 0;
+        for (auto& t : taps_) t.reset();
         rx_.setCentreHz(double(kBandIII[idx].centreHz));
         iq_.clear();
         { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
@@ -62,7 +67,7 @@ public:
          *  configured for the OLD service's rate and channel mode, and DAB+ services on one
          *  multiplex differ in both. Carrying it across is the chipmunk bug wearing a new hat. */
         aac_.reset();
-        aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacEffRateHz_ = 0; aacRateWarned_ = false;
+        aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacAuTotal_ = 0; aacEffRateHz_ = 0; aacRateWarned_ = false;
         adts_.clear();
         pad_.reset();      // ★ the label belongs to the old programme
         // ★ A new programme starts a new clock; catching up on the old one would be a wall of silence.
@@ -313,6 +318,7 @@ private:
                 if (rx_.selectService(want_)) sid_ = want_;
 
             drainAudio();
+            pumpScan();
             /* ★★★ LET GO OF THE LOCK BETWEEN FRAMES, OR AN UNLOCKABLE CHANNEL STARVES EVERYTHING.
              *  ★★★ THE FAULT THIS FIXES, measured. This inner loop holds m_ for as long as there
              *      is a frame's worth of IQ waiting, and json() — the station list and the whole
@@ -499,7 +505,7 @@ public:
                 /* Settling = the running estimate has not converged yet (~160 access units, the
                  *  moving window's first full settle; Stuart heard the glide outlast a 48-AU
                  *  notice) and no remembered ratio started this service at the right speed. */
-                j += (aacAuAcc_ < 160 && !aacStartedKnown_) ? ",\"aacSettling\":true" : ",\"aacSettling\":false";
+                j += (aacAuTotal_ < 160 && !aacStartedKnown_) ? ",\"aacSettling\":true" : ",\"aacSettling\":false";
                 j += cb;
             } else if (sid_ && rx_.selectedType() == 0 && mp2_.info().valid) {
                 const auto& mi = mp2_.info();
@@ -594,18 +600,81 @@ public:
             if (sc.eep) snprintf(prot, sizeof prot, "%s %d (%s)", si.set, si.level, si.codeRate);
             else        snprintf(prot, sizeof prot, "UEP %d", uepLevel);
             const int sizeCu = sc.eep ? sc.sizeCu : (sc.protLevel < 64 ? kUepIndex[sc.protLevel].sizeCu : 0);
-            snprintf(b, sizeof b, "{\"sid\":%u,\"label\":\"%s\",\"short\":\"%s\",\"codec\":\"%s\",\"subch\":%d,\"pty\":%d,\"slides\":%s,\"kbps\":%d,\"prot\":\"%s\",\"cuStart\":%d,\"cuSize\":%d,\"scids\":%d,\"ecc\":%d}",
+            snprintf(b, sizeof b, "{\"sid\":%u,\"label\":\"%s\",\"short\":\"%s\",\"codec\":\"%s\",\"subch\":%d,\"pty\":%d,\"slides\":%s,\"kbps\":%d,\"prot\":\"%s\",\"cuStart\":%d,\"cuSize\":%d,\"scids\":%d,\"ecc\":%d",
                      unsigned(kv.first), esc(sv.label).c_str(), esc(sv.shortLabel).c_str(),
                      pc->scType == 63 ? "DAB+" : pc->scType == 0 ? "MP2" : "?", pc->subChId,
                      sv.pty, sv.hasSlideshow() ? "true" : "false",
                      si.bitrateKbps, prot, sc.startCu, sizeCu, pc->scids, sv.ecc >= 0 ? sv.ecc : e.ecc);
             j += b;
+            /* ★ Every row's "now playing": the playing service's live label, the others' from the
+             *  scanner, with how old it is. */
+            if (kv.first == sid_ && pad_.dls().label().valid && !pad_.dls().label().text.empty())
+                j += ",\"dls\":\"" + esc(pad_.dls().label().text) + "\",\"dlsAge\":0";
+            else {
+                auto dr = dlsAll_.find(kv.first);
+                if (dr != dlsAll_.end() && !dr->second.text.empty()) {
+                    char ab[40]; snprintf(ab, sizeof ab, "\",\"dlsAge\":%.0f", nowSec() - dr->second.at);
+                    j += ",\"dls\":\"" + esc(dr->second.text) + ab;
+                }
+            }
+            j += "}";
         }
         j += "]}";
         return j;
     }
 
 private:
+    /* ── ★★★ THE PAD SCANNER — every station's "now playing", not just the one you hear ──
+     *  Stuart's idea, 2026-09-07. Four extra sub-channels are decoded for their PAD only (see
+     *  vibe_dab_padtap.h) and rotated through the ensemble every few seconds, so each service's
+     *  label is refreshed roughly every half minute on a 30-service multiplex; the playing
+     *  service keeps its own live label. Costs four small Viterbis — the Pi's DSP thread had
+     *  three quarters of its time spare. */
+    static constexpr size_t kScanSlots   = 4;
+    static constexpr double kScanDwellS  = 4.0;    ///< the deinterleaver needs 0.4 s, a label ~2 s
+    void pumpScan() {
+        const Ensemble& e = rx_.ensemble();
+        if (e.services.empty()) return;
+        const double now = nowSec();
+        // harvest what the slots have decoded
+        for (size_t i = 0; i < rx_.scanSlots() && i < taps_.size(); ++i) {
+            const uint32_t sid = rx_.scanSid(i);
+            if (!sid) continue;
+            const int type = rx_.scanType(i);
+            for (const auto& f : rx_.takeScanFrames(i)) taps_[i].feed(f, type);
+            const DynamicLabel& l = taps_[i].label();
+            if (l.valid && !l.text.empty()) {
+                auto& rec = dlsAll_[sid];
+                if (rec.text != l.text) { rec.text = l.text; rec.changes++; }
+                rec.at = now;
+            }
+        }
+        if (now - scanRotatedAt_ < kScanDwellS) return;
+        scanRotatedAt_ = now;
+        // the next K audio services in SId order, skipping the one being played
+        std::vector<uint32_t> order;
+        for (const auto& kv : e.services) {
+            const Service& sv = kv.second;
+            if (sv.isData || !sv.complete(e.subChannels)) continue;
+            const ServiceComponent* pc = sv.primaryComponent();
+            if (!pc || pc->tmid != 0 || pc->subChId < 0 || pc->ca) continue;
+            if (kv.first == sid_) continue;
+            order.push_back(kv.first);
+        }
+        if (order.empty()) return;
+        if (taps_.size() < kScanSlots) taps_.resize(kScanSlots);
+        for (size_t i = 0; i < kScanSlots; ++i) {
+            const uint32_t sid = order[(scanCursor_ + i) % order.size()];
+            taps_[i].reset();
+            if (!rx_.scanSelect(i, sid)) rx_.scanSelect(i, 0);
+        }
+        scanCursor_ = (scanCursor_ + kScanSlots) % order.size();
+    }
+    static double nowSec() {
+        return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+    struct DlsRec { std::string text; double at = 0; uint32_t changes = 0; };
+
     /** Turn whatever logical frames arrived into PCM. */
     void drainAudio() {
         // ★ TAKE, do not index — the receiver's buffer is a bounded ring. See takeAudioFrames().
@@ -983,20 +1052,28 @@ private:
                          *  return to a station: once the decoder's ratio (samples returned over
                          *  samples due) has been measured, the next service starts from it. */
                         static double s_knownRatio = 0.0;
+                        ++aacAuTotal_;                                   // lifetime, never halved
                         int rate = s_knownRatio > 0.0 ? int(std::lround(double(dec.rateHz) * s_knownRatio)) : dec.rateHz;
-                        if (aacAuAcc_ <= 1) aacStartedKnown_ = s_knownRatio > 0.0;
-                        if (aacAuAcc_ >= 8) {
+                        if (aacAuTotal_ <= 1) aacStartedKnown_ = s_knownRatio > 0.0;
+                        /* ★ THE REMEMBERED RATIO WINS UNTIL A CONVERGED MEASUREMENT DISAGREES.
+                         *  Letting the fresh measurement override it from the eighth unit re-ran
+                         *  the whole glide on every return to a station, because the pipe primes
+                         *  again for every service (Stuart, 2026-09-07). And the "converged" test
+                         *  read the moving window's counter, which is halved and never reaches
+                         *  its own threshold — so the notice never cleared. Lifetime counter now. */
+                        const bool converged = aacAuTotal_ >= 160;
+                        if (aacAuAcc_ >= 8 && (s_knownRatio <= 0.0 || converged)) {
                             const double auSec = 0.120 / double(s.fmt.accessUnits);
                             const double eff   = aacPcmAcc_ / (double(aacAuAcc_) * auSec);
                             if (eff > 8000.0 && eff < 200000.0 && std::fabs(eff - double(rate)) > double(rate) * 0.01) {
                                 if (!aacRateWarned_) { aacRateWarned_ = true;
-                                    fprintf(stderr, "[DAB] AAC decoder claims %d Hz but returns %.0f samples/s of programme (%.0f floats over %d AUs, %d ch, %d AU/sf) — pacing at the measured rate\n", rate, eff, aacPcmAcc_ * dec.channels, aacAuAcc_, dec.channels, s.fmt.accessUnits); }
+                                    fprintf(stderr, "[DAB] AAC decoder claims %d Hz but returns %.0f samples/s of programme — pacing at the measured rate\n", dec.rateHz, eff); }
                                 rate = int(std::lround(eff));
                             }
-                            aacEffRateHz_ = rate;
-                            if (aacAuAcc_ >= 48 && dec.rateHz > 0) s_knownRatio = double(rate) / double(dec.rateHz);
+                            if (converged && dec.rateHz > 0) s_knownRatio = double(rate) / double(dec.rateHz);
                             if (aacAuAcc_ >= 100) { aacPcmAcc_ *= 0.5; aacAuAcc_ /= 2; }   // a moving window
                         }
+                        aacEffRateHz_ = rate;
                         pushPcm48Stereo(dec.interleaved.data(), dec.interleaved.size(),
                                         dec.channels, rate);
                     }
@@ -1042,7 +1119,10 @@ private:
     uint32_t   sfInvalid_ = 0, sfFireBad_ = 0;
     size_t     settleDrop_ = 0;      ///< IQ samples still to discard after a retune
     uint32_t   preTuneDropped_ = 0;  ///< how many were discarded, ever — published
-    PadReader  pad_;               ///< dynamic label (and, later, MOT slideshow)        ///< and WHY a super frame was thrown away
+    PadReader  pad_;               ///< dynamic label (and, later, MOT slideshow)
+    std::vector<PadTap> taps_;     ///< the PAD scanner's slots — see pumpScan
+    std::map<uint32_t, DlsRec> dlsAll_;
+    double scanRotatedAt_ = 0; size_t scanCursor_ = 0;        ///< and WHY a super frame was thrown away
     /** ★ Carried across calls so the 32 kHz -> 48 kHz conversion is ONE continuous stream rather
      *  than one restart per access unit. See pushPcm48Stereo. */
     double     rsPhase_ = 0.0;
@@ -1051,7 +1131,7 @@ private:
     int        rsRate_ = 0;     ///< of those, how many were silence covering a lost super frame     ///< 48 kHz stereo frames delivered, ever   ///< PCM FRAMES the decoder returned for the last AU                ///< AUs turned into PCM here rather than on the client
     AudioFormat afmt_{};
     double aacPcmAcc_ = 0.0; int aacAuAcc_ = 0; int aacEffRateHz_ = 0; bool aacRateWarned_ = false;
-    bool aacStartedKnown_ = false;
+    bool aacStartedKnown_ = false; int aacAuTotal_ = 0;
     /* ★ Counters, because "no audio" has four possible causes here and guessing between them is
      *  what cost the evening: no frames arriving, frames of an unusable length, the firecode
      *  never aligning, or AUs produced and not sent. Each has its own number. */

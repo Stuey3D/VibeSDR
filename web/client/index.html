@@ -1095,12 +1095,17 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 .dabSvc { display:flex; align-items:center; gap:8px; padding:7px 9px; border-radius:5px;
           cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.08); }
 .dabSvc:hover { background: var(--btn-active-bg); }
-.dabSvc.on   { background: var(--btn-active-bg); border-left:3px solid var(--freq); }
+/* ★ The tuned station lit GREEN (Stuart, 2026-09-07), not merely bordered. */
+.dabSvc.on   { background: rgba(51,204,68,0.10); border-left:3px solid #33cc44; }
+.dabSvc.on .nm { color: #7ee68a; }
 .dabSvc .nm  { flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
                color: var(--btn-text); }
 /* ★ The now-playing text lives in the LIST, not behind the button — it is the field OWRX omits
    and the reason Stuart asked for it. */
-.dabSvc .dls { display:block; font-size:10px; opacity:.6; }
+.dabSvc .dls { display:block; font-size:10px; opacity:.6; white-space:nowrap; overflow:hidden; }
+.dabSvc .dlsIn { display:inline-block; }
+.dabSvc .dlsIn.scroll { animation: dabDls 12s linear infinite; }
+@keyframes dabDls { 0%, 12% { transform: translateX(0); } 80%, 100% { transform: translateX(var(--dx)); } }
 .dabSvc .dabLogo { width:26px; height:26px; object-fit:contain; border-radius:4px; flex:0 0 auto;
                    background:rgba(255,255,255,0.04); }
 .dabSvc .cod { font-size:9px; letter-spacing:1px; padding:1px 5px; border-radius:3px;

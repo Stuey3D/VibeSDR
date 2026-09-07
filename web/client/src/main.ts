@@ -995,7 +995,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         if (!d.eid) d.eid = prev.eid;
         d.held = true;
       }
-      dabState = d; dabRender();
+      dabState = d; dabRender(); updateVts();
     },
     onAdmin: (ok, refused) => {
       if (refused) {
@@ -2663,12 +2663,25 @@ function updateVts() {
   let flag = rdsName ? isoToFlag(rdsIso) : '';
   let src = '';
   let logo = rdsName ? rdsLogoUrl : '';
+  /* ★ IN DAB THE BAR IS THE PLAYING SERVICE. Left to the RDS variables it kept showing the last
+   *  FM station ("C363 Heart" under a DAB ensemble, Stuart's screenshot, 2026-09-07). */
+  let dabRt = '';
+  if (dabOn && dabState && dabState.sid) {
+    const sv = dabState.services.find(x => x.sid === dabState!.sid);
+    if (sv) {
+      name = sv.label; src = 'DAB';
+      const ecc = sv.ecc ?? dabState.ecc ?? -1;
+      logo = dabLogos.get(`${ecc}|${dabState.eid}|${sv.sid}`) || '';
+      flag = ecc === 0xE1 ? isoToFlag('GB') : '';
+      dabRt = dabState.dls || '';
+    }
+  }
 
   // RDS is always genuine — the station is naming itself. A bookmark only counts
   // when we're actually sitting on it.
   // ★ Tracks whether what we are about to show is LIVE (the station naming itself) or STATIC (our
   //   guess from a list). Only the live kind may stay up — see vtsHoldFor().
-  let live = !!rdsName;
+  let live = !!rdsName || !!dabRt || (dabOn && !!dabState?.sid);
   if (!name) {
     const near = nearestStation(hz);
     if (near && Math.abs(near.frequency - hz) <= VTS_ON_HZ) {
@@ -2782,7 +2795,7 @@ function updateVts() {
   // overflows — a short message shouldn't slide around for no reason.
   const rtEl = $('vtsRt');
   const rtInner = $('vtsRtInner');
-  const rt = rdsName ? rdsText : '';
+  const rt = dabRt || (rdsName ? rdsText : '');
   const showRt = !!rt && rt !== name;
   // ★ Compare against the RAW message on the dataset, not textContent — while a long message is
   //   circling the element holds TWO copies plus a separator, so textContent never equals `rt`
@@ -4360,7 +4373,7 @@ function dabRender() {
    *  with fourteen stations on screen still said it was tuning (seen driving the client, 2026-09-07). */
   { const ds = document.getElementById('decStatus');
     if (ds) ds.textContent = !d.locked ? 'searching…' : d.services.length
-      ? `${d.label || d.channel} · ${d.services.length} services${d.aacSettling && d.sid ? ' · learning DAB+ parameters…' : ''}`
+      ? `${d.label || d.channel} · ${d.services.length} services${d.aacSettling && d.sid ? ' · setting the DAB+ sample-rate clock…' : ''}`
       : 'reading the multiplex…'; }
 
   /* ★★ RESET TO THE LIST WHEN THE ENSEMBLE CHANGES, and only then. A new multiplex means a new
@@ -4376,13 +4389,20 @@ function dabRender() {
     ? d.services.map(sv => `<div class="dabSvc${sv.sid === d.sid ? ' on' : ''}" data-sid="${sv.sid}">`
         + dabLogoTag(sv, d)
         + `<span class="nm">${escapeHtml(sv.label || '(unnamed)')}`
-        + (sv.sid === d.sid && d.dls ? `<span class="dls">${escapeHtml(d.dls)}</span>` : '')
+        + ((sv.sid === d.sid ? d.dls : sv.dls) ? `<span class="dls"><span class="dlsIn">${escapeHtml(sv.sid === d.sid ? (d.dls || '') : (sv.dls || ''))}</span></span>` : '')
         + `</span><span class="cod" title="${escapeHtml(sv.prot ?? '')}">${sv.codec}${sv.kbps ? ' ' + sv.kbps + 'k' : ''}</span></div>`).join('')
       + (d.held ? `<div style="padding:6px 9px;opacity:.5;font-size:10px">list held — the multiplex is not reading at the moment</div>` : '')
     : `<div style="padding:14px;opacity:.6">${d.truncated ? 'Signal block too long for the server to send'
         : d.locked ? 'Reading the multiplex…' : 'Searching for a multiplex…'}</div>`;
   for (const el of Array.from(st.querySelectorAll('.dabSvc')) as HTMLElement[])
     el.onclick = () => { spec?.dabService(Number(el.dataset.sid)); };
+  /* ★ A label wider than its row SCROLLS (Stuart: "the radio text needs to scroll in the
+   *  station list"). Measured after layout; the travel is the overflow, so it stops at the end. */
+  for (const inner of Array.from(st.querySelectorAll('.dlsIn')) as HTMLElement[]) {
+    const box = inner.parentElement as HTMLElement;
+    const over = inner.scrollWidth - box.clientWidth;
+    if (over > 4) { inner.style.setProperty('--dx', `-${over}px`); inner.classList.add('scroll'); }
+  }
 
   const row = (k: string, v: string) => `<div class="row"><span>${k}</span><span>${v}</span></div>`;
   const cur = d.services.find(x => x.sid === d.sid);

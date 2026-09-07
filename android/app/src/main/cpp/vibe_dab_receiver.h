@@ -419,8 +419,10 @@ public:
          *    24 ms, four to a Mode I frame. */
         if (frameBits.size() >= ficBits + size_t(kCifBits) * 4) {
             const int8_t* msc = frameBits.data() + ficBits;
-            for (int c = 0; c < kCifsPerFrameI; ++c)
+            for (int c = 0; c < kCifsPerFrameI; ++c) {
                 pumpService(msc + size_t(c) * size_t(kCifBits));
+                for (auto& sl : scan_) pumpSlot(sl, msc + size_t(c) * size_t(kCifBits));
+            }
         }
 
         ++stats_.framesSeen;
@@ -436,6 +438,41 @@ public:
 
     /** Choose which service to decode audio for. Returns false when it is not in the ensemble
      *  yet, or has no audio component we can reach. */
+    /** ★ Everything the FIC says about how a sub-channel is coded, resolved into the profile
+     *  the depuncturer needs. Shared by the playing service and the PAD scanner, so the UEP
+     *  table-8 rule and the EEP option live in ONE place (the two-readers fault, avoided).
+     *  @return false when the sub-channel cannot be decoded (unknown table row, no profile). */
+    static bool profileFor(SubChannel& sel, EepProfile& prof, UepProfile& uprof, int& dataBits, int& bitrate, int& codedBits) {
+        prof = {}; uprof = {}; dataBits = 0; codedBits = 0; bitrate = 0;
+        if (!sel.eep) {
+            /* ★★★ UEP — WHICH IS WHAT THE BBC ACTUALLY USES. The short form of FIG 0/1 carries a
+             *  6-bit TABLE INDEX rather than a size, so sizeCu arrives as 0 and everything must
+             *  come from table 8: the capacity, the protection level and the bit rate. */
+            if (sel.protLevel < 0 || sel.protLevel > 63) return false;
+            const UepIndex& ix = kUepIndex[sel.protLevel];
+            uprof = uepProfile(ix.bitrateKbps, ix.protLevel);
+            if (!uprof.valid) return false;
+            sel.sizeCu = ix.sizeCu;
+            codedBits  = ix.sizeCu * kCuBits;
+            dataBits   = ix.bitrateKbps * 24;          // kbit/s x 24 ms
+            bitrate    = ix.bitrateKbps;
+            return true;
+        }
+        /* ★★★ THE OPTION IS ON AIR — USE IT, DO NOT GUESS IT (folding it into protLevel is the
+         *  bug that took 11D out entirely). */
+        if (sel.sizeCu <= 0) return false;
+        codedBits = sel.sizeCu * kCuBits;
+        const bool eepB = (sel.option == 1);
+        const int  mult = eepB ? 32 : 8;
+        for (int n = 1; n <= 24 && !prof.valid; ++n) {
+            const EepProfile e = eepProfile(sel.protLevel + 1, eepB, n);
+            if (e.valid && eepCodedBits(e) == codedBits) { prof = e; dataBits = n * mult * 24; bitrate = n * mult; }
+        }
+        return prof.valid;
+    }
+
+    /** Choose which service to decode audio for. Returns false when it is not in the ensemble
+     *  yet, or has no audio component we can reach. */
     bool selectService(uint32_t sid) {
         auto it = ensemble_.services.find(sid);
         if (it == ensemble_.services.end() || it->second.components.empty()) return false;
@@ -444,53 +481,54 @@ public:
             if (c.subChId >= 0 && (pick == nullptr || c.primary)) pick = &c;
         if (!pick) return false;
         auto sc = ensemble_.subChannels.find(pick->subChId);
-        /* ★ NOT `sizeCu <= 0`. A short-form (UEP) sub-channel legitimately reports size 0 — its
-         *  capacity comes from table 8, not from the bitstream — so that guard silently rejected
-         *  every BBC Layer II service while the station list looked perfect. */
         if (sc == ensemble_.subChannels.end()) return false;
-        if (sc->second.eep && sc->second.sizeCu <= 0) return false;
-        sel_      = sc->second;
-        selType_  = pick->scType;
-        selSid_   = sid;
-        /* ★★ A sub-channel's CU size fixes its bit rate: 1 CU = 64 bits per 24 ms = 8 kbit/s at
-         *  rate 1/2 … but the honest derivation is through the PROTECTION PROFILE, because the
-         *  coded size is sizeCu x 64 and the profile says how much of that is data. */
-        prof_ = {}; uprof_ = {}; dataBits_ = 0;
-        int codedBits = 0;
-        if (!sel_.eep) {
-            /* ★★★ UEP — WHICH IS WHAT THE BBC ACTUALLY USES. The short form of FIG 0/1 carries a
-             *  6-bit TABLE INDEX rather than a size, so sizeCu arrives as 0 and everything must
-             *  come from table 8: the capacity, the protection level and the bit rate. Reading
-             *  the real 12B multiplex, every Layer II service is short-form — so without this the
-             *  station list decodes perfectly and not one service can be played. */
-            if (sel_.protLevel < 0 || sel_.protLevel > 63) return false;
-            const UepIndex& ix = kUepIndex[sel_.protLevel];
-            uprof_ = uepProfile(ix.bitrateKbps, ix.protLevel);
-            if (!uprof_.valid) return false;
-            sel_.sizeCu = ix.sizeCu;
-            codedBits   = ix.sizeCu * kCuBits;
-            dataBits_   = ix.bitrateKbps * 24;          // kbit/s x 24 ms
-            bitrate_    = ix.bitrateKbps;
-        } else {
-            /* ★★★ THE OPTION IS ON AIR — USE IT, DO NOT GUESS IT. This tried EEP-A and then
-             *  EEP-B and kept whichever matched the coded size, which two profiles can both do;
-             *  a wrong choice depunctures with the wrong vector and every frame fails. The FIG
-             *  0/1 parser now stores it (it was being folded into protLevel, which is the bug
-             *  that took 11D out entirely). */
-            codedBits = sel_.sizeCu * kCuBits;
-            const bool eepB = (sel_.option == 1);
-            const int  mult = eepB ? 32 : 8;
-            for (int n = 1; n <= 24 && !prof_.valid; ++n) {
-                const EepProfile p = eepProfile(sel_.protLevel + 1, eepB, n);
-                if (p.valid && eepCodedBits(p) == codedBits) {
-                    prof_ = p; dataBits_ = n * mult * 24; bitrate_ = n * mult;
-                }
-            }
-            if (!prof_.valid) return false;
-        }
+        SubChannel sel = sc->second;
+        EepProfile prof; UepProfile uprof; int dataBits = 0, bitrate = 0, codedBits = 0;
+        if (!profileFor(sel, prof, uprof, dataBits, bitrate, codedBits)) return false;
+        sel_ = sel; selType_ = pick->scType; selSid_ = sid;
+        prof_ = prof; uprof_ = uprof; dataBits_ = dataBits; bitrate_ = bitrate;
         deint_ = std::make_unique<TimeDeinterleaver>(size_t(codedBits));
         audio_.clear();
-        return prof_.valid || uprof_.valid;
+        return true;
+    }
+
+    /* ── ★★★ THE PAD SCANNER: a few more sub-channels decoded for their labels only ──────
+     *  Each slot is a second copy of the playing path's coding state, pumped from the same
+     *  CIFs; its logical frames go to a PadTap (no audio). DabService rotates the slots
+     *  through the ensemble. Stuart's idea, 2026-09-07. */
+    struct ScanSlot {
+        uint32_t sid = 0; int type = 0;
+        SubChannel sel; EepProfile prof; UepProfile uprof; int dataBits = 0;
+        std::unique_ptr<TimeDeinterleaver> deint;
+        std::vector<std::vector<uint8_t>> frames;
+    };
+    /** Point slot `i` at service `sid` (or 0 to idle it). False if it cannot be decoded. */
+    bool scanSelect(size_t i, uint32_t sid) {
+        if (scan_.size() <= i) scan_.resize(i + 1);
+        ScanSlot& sl = scan_[i];
+        sl = ScanSlot{};
+        if (!sid) return true;
+        auto it = ensemble_.services.find(sid);
+        if (it == ensemble_.services.end()) return false;
+        const ServiceComponent* pick = nullptr;
+        for (const auto& c : it->second.components)
+            if (c.subChId >= 0 && (pick == nullptr || c.primary)) pick = &c;
+        if (!pick) return false;
+        auto sc = ensemble_.subChannels.find(pick->subChId);
+        if (sc == ensemble_.subChannels.end()) return false;
+        SubChannel sel = sc->second; int bitrate = 0, codedBits = 0;
+        if (!profileFor(sel, sl.prof, sl.uprof, sl.dataBits, bitrate, codedBits)) return false;
+        sl.sel = sel; sl.sid = sid; sl.type = pick->scType;
+        sl.deint = std::make_unique<TimeDeinterleaver>(size_t(codedBits));
+        return true;
+    }
+    size_t   scanSlots() const { return scan_.size(); }
+    uint32_t scanSid(size_t i) const { return i < scan_.size() ? scan_[i].sid : 0; }
+    int      scanType(size_t i) const { return i < scan_.size() ? scan_[i].type : 0; }
+    std::vector<std::vector<uint8_t>> takeScanFrames(size_t i) {
+        std::vector<std::vector<uint8_t>> out;
+        if (i < scan_.size()) out.swap(scan_[i].frames);
+        return out;
     }
 
     /** Logical frames of decoded audio bytes — MP2 frames, or DAB+ super frame fifths. */
@@ -549,6 +587,42 @@ private:
     }
 
     /** One CIF: pull our sub-channel's capacity units out, deinterleave, decode. */
+    /** One sub-channel's logical frame: depuncture, Viterbi, descramble, pack. Shared by the
+     *  playing service and the scan slots. `err`/`tot` receive the raw bit-error tally. */
+    std::vector<uint8_t> decodeLogicalFrame(const std::vector<int8_t>& di, size_t coded,
+                                            const EepProfile& prof, const UepProfile& uprof, int dataBits,
+                                            size_t* err, size_t* tot) {
+        std::vector<int8_t> mother(size_t(dataBits + 6) * 4, 0);
+        if (uprof.valid) uepDepuncture(di.data(), coded, uprof, mother.data(), mother.size());
+        else             eepDepuncture(di.data(), coded, prof,  mother.data(), mother.size());
+        std::vector<uint8_t> bits = viterbi_.decode(mother.data(), size_t(dataBits));
+        if (err && tot) {
+            const std::vector<uint8_t> enc = convEncode(bits.data(), bits.size());
+            const size_t n = enc.size() < mother.size() ? enc.size() : mother.size();
+            for (size_t i = 0; i < n; ++i) {
+                if (mother[i] == 0) continue;
+                ++*tot;
+                if ((mother[i] < 0) != (enc[i] != 0)) ++*err;
+            }
+        }
+        EnergyDispersal ed; ed.apply(bits.data(), bits.size());
+        std::vector<uint8_t> bytes(bits.size() / 8);
+        for (size_t i = 0; i < bytes.size(); ++i) {
+            uint8_t b = 0;
+            for (int k = 0; k < 8; ++k) b = uint8_t((b << 1) | (bits[i * 8 + size_t(k)] & 1));
+            bytes[i] = b;
+        }
+        return bytes;
+    }
+    void pumpSlot(ScanSlot& sl, const int8_t* cif) {
+        if (!sl.sid || !sl.deint || (!sl.prof.valid && !sl.uprof.valid)) return;
+        const size_t coded = size_t(sl.sel.sizeCu) * size_t(kCuBits);
+        const std::vector<int8_t>& di = sl.deint->push(cif + size_t(sl.sel.startCu) * size_t(kCuBits));
+        if (!sl.deint->ready()) return;
+        sl.frames.push_back(decodeLogicalFrame(di, coded, sl.prof, sl.uprof, sl.dataBits, nullptr, nullptr));
+        if (sl.frames.size() > 64) sl.frames.erase(sl.frames.begin());
+    }
+
     void pumpService(const int8_t* cif) {
         if ((!prof_.valid && !uprof_.valid) || !deint_) return;
         const size_t coded = size_t(sel_.sizeCu) * size_t(kCuBits);
@@ -557,35 +631,13 @@ private:
         /* ★★ 15 CIFs of latency before the first complete logical frame — that is the interleaving
          *  depth, not an inefficiency. Emitting audio early means emitting frames with holes. */
         if (!deint_->ready()) return;
-
-        std::vector<int8_t> mother(size_t(dataBits_ + 6) * 4, 0);
-        if (uprof_.valid) uepDepuncture(di.data(), coded, uprof_, mother.data(), mother.size());
-        else              eepDepuncture(di.data(), coded, prof_,  mother.data(), mother.size());
-        std::vector<uint8_t> bits = viterbi_.decode(mother.data(), size_t(dataBits_));
-        {
-            /* ★ Re-encode the decision and count where the channel disagreed with it: the raw
-             *  bit error rate the Viterbi is absorbing. Punctured positions (soft 0) do not vote.
-             *  This is the margin figure — 0.1 % is comfortable, 5 % is the edge of the cliff. */
-            const std::vector<uint8_t> enc = convEncode(bits.data(), bits.size());
-            size_t err = 0, tot = 0;
-            const size_t n = enc.size() < mother.size() ? enc.size() : mother.size();
-            for (size_t i = 0; i < n; ++i) {
-                if (mother[i] == 0) continue;
-                ++tot;
-                if ((mother[i] < 0) != (enc[i] != 0)) ++err;
-            }
-            if (tot) {
-                const double ber = double(err) / double(tot);
-                stats_.mscBer = stats_.mscBer == 0.0 ? ber : stats_.mscBer * 0.9 + ber * 0.1;
-            }
-        }
-        EnergyDispersal ed; ed.apply(bits.data(), bits.size());
-
-        std::vector<uint8_t> bytes(bits.size() / 8);
-        for (size_t i = 0; i < bytes.size(); ++i) {
-            uint8_t b = 0;
-            for (int k = 0; k < 8; ++k) b = uint8_t((b << 1) | (bits[i * 8 + size_t(k)] & 1));
-            bytes[i] = b;
+        size_t err = 0, tot = 0;
+        std::vector<uint8_t> bytes = decodeLogicalFrame(di, coded, prof_, uprof_, dataBits_, &err, &tot);
+        if (tot) {
+            /* ★ Raw bit error rate BEFORE the Viterbi, by re-encoding the decision — the margin
+             *  figure: 0.1 % is comfortable, 5 % is the edge of the cliff. */
+            const double ber = double(err) / double(tot);
+            stats_.mscBer = stats_.mscBer == 0.0 ? ber : stats_.mscBer * 0.9 + ber * 0.1;
         }
         audio_.push_back(std::move(bytes));
         if (audio_.size() > 64) audio_.erase(audio_.begin());     // bounded
@@ -620,6 +672,7 @@ private:
     uint32_t selSid_ = 0;
     int    ficDead_ = 0;      ///< consecutive frames with NOT ONE readable FIB
     std::unique_ptr<TimeDeinterleaver> deint_;
+    std::vector<ScanSlot> scan_;
     std::vector<std::vector<uint8_t>> audio_;
     std::array<C32, 1536> prs_{};
 };

@@ -186,7 +186,7 @@ export interface DabState {
   sid: number; bitrate: number; protection: string;
   services: { sid: number; label: string; codec: string; subch: number; short?: string; pty?: number;
               slides?: boolean; kbps?: number; prot?: string; cuStart?: number; cuSize?: number;
-              scids?: number; ecc?: number }[];
+              scids?: number; ecc?: number; dls?: string; dlsAge?: number }[];
   /** The playing service's codec as DECODED (super frame / Layer II header), not as promised. */
   /** True while the server is still measuring the decoder's real output rate (the start-up glide). */
   aacSettling?: boolean;
