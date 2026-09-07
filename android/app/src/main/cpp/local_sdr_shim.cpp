@@ -8614,6 +8614,26 @@ struct LocalSdrShim::Impl {
             double onV = 0; jsonNum(msg, "on", onV);
             const bool on = onV != 0;
             if (!on) {
+                /* ★★★ ON A SHARED RADIO, ONE LISTENER CANNOT END DAB FOR THE OTHERS. Measured on
+                 *  the Xcover (2026-09-07, three headless clients): the second listener pressed
+                 *  DAB on a receiver already on a multiplex — the picker's entry is a toggle, so
+                 *  that press meant OFF — and this branch put the radio back on 96.1 FM under the
+                 *  first listener, who was still reading 12A. The first client was never told
+                 *  (dab_off went to the sender alone) and sat on a stale box; the third client
+                 *  found nothing to join. The multiplex IS the capture: while anybody else is
+                 *  watching it, an off from one socket is refused and that socket is handed the
+                 *  live block again so its box re-opens. The last listener's off — and the last
+                 *  socket closing — still restore the receiver, as before. */
+                std::vector<std::shared_ptr<net::Socket>> socks;
+                { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+                size_t others = 0;
+                for (auto& sk : socks) if (sk != sock) ++others;
+                if (others > 0 && g_dabMode.load(std::memory_order_relaxed)) {
+                    LOGI("[DAB] off refused — %zu other listener%s on this multiplex", others, others == 1 ? " is" : "s are");
+                    sendText(sock, "{\"type\":\"dab_error\",\"why\":\"DAB stays on \xe2\x80\x94 other listeners are on this multiplex\"}");
+                    sendText(sock, g_dab.json());
+                    return;
+                }
                 g_dabMode.store(false);
                 dabPrimed_ = false;
                 stopDabClock();
@@ -8633,11 +8653,11 @@ struct LocalSdrShim::Impl {
                  *    down — a correction that depends on an event that may never come is not a
                  *    correction. Restore it here, where the mode actually changed. */
                 applyAutoIf();
-                sendText(sock, "{\"type\":\"dab_off\"}");
-                /* ★ And tell the client where the radio actually IS. Leaving DAB moves the centre,
-                 *  the rate and the gain back, and a client still holding the multiplex centre
-                 *  computes every subsequent tune from a dial in the wrong band. */
-                sendConfig(sock);
+                /* ★ And tell EVERY client where the radio actually IS — the sender is not the only
+                 *  one holding the multiplex centre, and a client still holding it computes every
+                 *  subsequent tune from a dial in the wrong band. */
+                for (auto& sk : socks) { sendText(sk, "{\"type\":\"dab_off\"}"); sendConfig(sk); }
+                if (socks.empty()) { sendText(sock, "{\"type\":\"dab_off\"}"); sendConfig(sock); }
                 return;
             }
             /* ★★ THE CHANNEL MAY ARRIVE AS AN INDEX OR AS ITS NAME. The web client sends the
@@ -16892,7 +16912,7 @@ static bool vsDabCapable() {
      *  (Stuart, 2026-09-07). A SHARED-VFO receiver with a locked centre is different: DAB
      *  suspends that lock for the life of the mode (see the entry path), and that case has
      *  worked since 2026-09-04. The operator's restrictions are part of the answer. */
-    if (g_vsLockedCentre.load(std::memory_order_relaxed) > 0.0 && perClientDsp()) return false;
+    if (g_vsLockedCentre.load(std::memory_order_relaxed) > 0.0 && g_vsMaxUsers.load(std::memory_order_relaxed) > 1) return false;   // = Impl::perClientDsp(), which is not visible here
     const vibebands::Ranges t = vsTunableRanges();
     if (t.empty()) return false;
     std::vector<vibedab::Range> r;

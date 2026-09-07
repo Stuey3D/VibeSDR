@@ -4643,10 +4643,11 @@ function dabUiOn() {
   applyRateOptions();
   populateHw();                // the option list itself is built here, not in applyRateOptions
   const dt2 = document.getElementById('decTitle');
-  if (dt2) dt2.textContent = 'DAB';
+  if (dt2) { if (dt2.textContent !== 'DAB') dabPrevDecTitle = dt2.textContent || ''; dt2.textContent = 'DAB'; }
   const ds2 = document.getElementById('decStatus');
   if (ds2 && !dabState) ds2.textContent = 'tuning…';
 }
+let dabPrevDecTitle = '';
 
 function dabSetMode(on: boolean) {
   if (on) {
@@ -4690,6 +4691,13 @@ function dabUiOff() {
     populateHw();                // give the real rate list back — see the note on the way in
     const ds3 = document.getElementById('decStatus');
     if (ds3) ds3.textContent = '';
+    /* ★★★ AND CLOSE THE BOX. dabUiOn opens it directly and titles it DAB; nothing here undid
+     *  either, so a listener who left DAB kept an open box headed "DAB" with no controls in it
+     *  (seen on the Xcover, 2026-09-07). Give the box back the way it was found. */
+    document.getElementById('decBox')?.classList.remove('open');
+    $('rdsSize').classList.remove('show');
+    const dt3 = document.getElementById('decTitle');
+    if (dt3 && dt3.textContent === 'DAB') dt3.textContent = dabPrevDecTitle;
   }
 }
 
