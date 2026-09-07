@@ -8925,6 +8925,27 @@ struct LocalSdrShim::Impl {
              *  shows a signal but nothing locks in, tune away and back and it works" fault, on
              *  every platform. See DabService::armRetune. */
             g_dab.armRetune();
+            /* ★★★ THE VIEW IS THE WHOLE CAPTURE. A multiplex is 1.536 MHz of flat top; a view
+             *  zoomed in past that shows NOTHING BUT the flat top, which reads as an empty band.
+             *  Saber's server was left slightly zoomed in from FM and "it looked like nothing was
+             *  being received when in fact it was just the entire visible window looked flat like
+             *  a DAB multiplex would" (Stuart, 2026-09-07). Zoom is refused while DAB owns the
+             *  view, so the listener could not even fix it. Every listener's view goes back to
+             *  the full span on the block centre, and every client is told. */
+            {
+                zoomFactor.store(1.0);
+                viewCenter.store(centre);
+                std::vector<std::shared_ptr<ClientDsp>> views;
+                std::vector<std::shared_ptr<net::Socket>> socks;
+                {
+                    std::lock_guard<std::mutex> lk(clientMtx);
+                    for (auto& kv : clientDsp) if (kv.second) { kv.second->viewSpanHz = 0; kv.second->ownView = false; views.push_back(kv.second); }
+                    socks = allSpecClientsLocked();
+                }
+                for (auto& v : views) clientRetune(v.get());
+                updateZoomView();
+                for (auto& sk : socks) sendConfig(sk);
+            }
             LOGI("[DAB] mode ON: channel %s, centre %.3f MHz, rate %.0f — dspLoop should follow",
                  vibedab::kBandIII[idx].name, centre / 1e6, double(vibedab::DabService::kRateHz));
             double sid = 0; jsonNum(msg, "sid", sid);
@@ -17224,6 +17245,12 @@ void LocalSdrShim::setBookmarksPath(const std::string& path) {
         g_bmPath = path;
     }
     if (path.empty()) return;
+    /* ★ The DAB+ decoder's learnt sample-rate ratio lives beside the bookmarks — the one
+     *  writable place every server already has. See DabService::setRatioFile. */
+    {
+        const size_t slash = path.find_last_of('/');
+        g_dab.setRatioFile((slash == std::string::npos ? std::string() : path.substr(0, slash + 1)) + "dab-aac-ratio");
+    }
     FILE* f = fopen(path.c_str(), "rb");
     if (!f) return;                       // nothing saved yet — that's fine
     char buf[8192];

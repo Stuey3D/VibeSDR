@@ -67,7 +67,8 @@ public:
          *  configured for the OLD service's rate and channel mode, and DAB+ services on one
          *  multiplex differ in both. Carrying it across is the chipmunk bug wearing a new hat. */
         aac_.reset();
-        aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacAuTotal_ = 0; aacEffRateHz_ = 0; aacRateWarned_ = false;
+        aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacAuTotal_ = 0; aacEffRateHz_ = 0; aacRateWarned_ = false; aacPrimed_ = false;
+        aacStartedKnown_ = knownRatio_ > 0.0;   // ★ known from the start — no "setting the clock" while the pipe primes
         adts_.clear();
         pad_.reset();      // ★ the label belongs to the old programme
         // ★ A new programme starts a new clock; catching up on the old one would be a wall of silence.
@@ -97,6 +98,8 @@ public:
         { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
         mp2_.reset();
         aac_.reset();          // ★ a new service is a new codec configuration — see setChannel
+        aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacPrimed_ = false;   // ★ a restarted pipe primes again — see the count
+        aacStartedKnown_ = knownRatio_ > 0.0;
         adts_.clear();
         pad_.reset();
         pcmOwed_ = 0; pcmPushed_ = 0;
@@ -228,6 +231,7 @@ public:
                      *  exactly as the sync did. */
                     rx_.reset(); iq_.clear(); lsfPend_.clear();
                     mp2_.reset(); aac_.reset(); pad_.reset(); adts_.clear();
+                    aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacPrimed_ = false;
                     { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
                     pcmOwed_ = 0; pcmPushed_ = 0; resampleReset();
                 }
@@ -424,6 +428,23 @@ public:
             out.push_back({ sv.sid, sv.label, sv.ecc >= 0 ? sv.ecc : e.ecc, int(e.eid) });
         }
         return out;
+    }
+    /** ★★★ THE LEARNT RATIO SURVIVES A RESTART. Stuart, on Saber's Linux box (2026-09-07): "the
+     *  station was normal speed then there was a little blip then it went slow again and had to
+     *  retrain itself". Inside one process the ratio is applied the moment any decoder restarts,
+     *  so a retrain after a blip means the PROCESS restarted (systemd brings it straight back)
+     *  and the ratio — a property of that box's ffmpeg, which never changes — went with it. It is
+     *  now written next to the bookmarks when it converges and read back at start-up, so a
+     *  restart resumes at speed. An exact-frame decoder (Android) never needs the file. */
+    void setRatioFile(const std::string& path) {
+        std::lock_guard<std::mutex> lk(m_);
+        ratioFile_ = path;
+        if (AacDecoder::kExactFrames || path.empty()) return;
+        if (FILE* f = fopen(path.c_str(), "rb")) {
+            double r = 0.0;
+            if (fscanf(f, "%lf", &r) == 1 && r > 0.5 && r < 2.0) knownRatio_ = r;
+            fclose(f);
+        }
     }
     struct Quality { bool locked; float fibRate; float nullDepthDb; double mscBer; };
     Quality quality() {
@@ -1049,9 +1070,27 @@ private:
                  *  ffmpeg pipe hands back its output in bursts, so charging two units' samples to
                  *  the one call that received them read 102 kHz where the truth was 51.2 (measured
                  *  both ways, 2026-09-07). */
-                if (s.fmt.accessUnits > 0) aacAuAcc_ += 1;
+                /* ★★★ COUNT ONLY ONCE THE DECODER HAS ANSWERED. ffmpeg buffers several access
+                 *  units before it returns the first sample, and units written into that buffer
+                 *  were counted as programme time with nothing against them — a permanent deficit
+                 *  in the window, so the measured rate read low by the pipe's latency. On the UK's
+                 *  2-3 units per super frame it stayed under the 1 % override; on a Dutch HE-AAC v1
+                 *  service at 48 kHz (6 units per super frame) the same latency is three times the
+                 *  fraction, the window "converged" below the remembered ratio, overrode it, and
+                 *  every station "started at normal speed then went slow and had to relearn"
+                 *  (Stuart, from Saber's box, 2026-09-07). From the first output onwards each
+                 *  write yields one unit's worth, so the count starts there. */
+                if (s.fmt.accessUnits > 0 && aacPrimed_) aacAuAcc_ += 1;
                 if (aac_.decode(pkt.data(), pkt.size(), dec)) {
                     if (!dec.interleaved.empty()) {
+                        /* ★★★ THE FIRST BURST IS EXCLUDED, NOT COUNTED. It pays out the units ffmpeg
+                         *  buffered while priming — samples with no counted unit against them — and
+                         *  counting it biased the rate HIGH (1.0987 against 1.0669, measured on the
+                         *  Pi's V4L on a 96 kbit/s service, 2026-09-07), which paced every unit on the
+                         *  box fast and gap-filled 9 % of the output: the "vinyl popping". From here
+                         *  on each unit written yields one unit's worth out, so the count is unbiased
+                         *  whatever the latency. */
+                        if (!aacPrimed_) { aacPrimed_ = true; aacAuAcc_ = 0; aacPcmAcc_ = 0.0; aacPrimeBurst_ = true; }
                         /* ★ Frames the decoder actually returned for this access unit. A DAB+ AU
                          *  is a fixed 1024 samples at the decoder's OUTPUT rate for HE-AAC, so
                          *  this number and the reported rate must agree — and if they do not, the
@@ -1068,8 +1107,9 @@ private:
                          *  over 2/3/4/6 AUs), so samples-per-AU over the last few seconds IS the
                          *  true rate. Averaged over AUs because a resampler inside the decoder does
                          *  not return exactly the same count every call. */
-                        if (dec.channels > 0 && s.fmt.accessUnits > 0)
+                        if (dec.channels > 0 && s.fmt.accessUnits > 0 && !aacPrimeBurst_)
                             aacPcmAcc_ += double(dec.interleaved.size() / size_t(dec.channels));
+                        aacPrimeBurst_ = false;
                         /* ★ REMEMBERED, PROCESS-WIDE. Stuart likes the glide but not on every
                          *  return to a station: once the decoder's ratio (samples returned over
                          *  samples due) has been measured, the next service starts from it. */
@@ -1078,7 +1118,7 @@ private:
                          *  asynchronous, so measuring its early, bursty output read a false rate
                          *  and paced the audio at it — a start-up ramp on a platform that had
                          *  played DAB+ perfectly that morning (Stuart, 2026-09-07). */
-                        static double s_knownRatio = AacDecoder::kExactFrames ? 1.0 : 0.0;
+                        double& s_knownRatio = knownRatio_;   // ★ a member now, so it can be kept on disk (see setRatioFile)
                         ++aacAuTotal_;                                   // lifetime, never halved
                         int rate = s_knownRatio > 0.0 ? int(std::lround(double(dec.rateHz) * s_knownRatio)) : dec.rateHz;
                         if (aacAuTotal_ <= 1) aacStartedKnown_ = s_knownRatio > 0.0;
@@ -1089,15 +1129,35 @@ private:
                          *  read the moving window's counter, which is halved and never reaches
                          *  its own threshold — so the notice never cleared. Lifetime counter now. */
                         const bool converged = aacAuTotal_ >= 160;
-                        if (!AacDecoder::kExactFrames && aacAuAcc_ >= 8 && (s_knownRatio <= 0.0 || converged)) {
+                        if (!AacDecoder::kExactFrames && aacAuAcc_ >= 8) {
                             const double auSec = 0.120 / double(s.fmt.accessUnits);
                             const double eff   = aacPcmAcc_ / (double(aacAuAcc_) * auSec);
-                            if (eff > 8000.0 && eff < 200000.0 && std::fabs(eff - double(rate)) > double(rate) * 0.01) {
-                                if (!aacRateWarned_) { aacRateWarned_ = true;
-                                    fprintf(stderr, "[DAB] AAC decoder claims %d Hz but returns %.0f samples/s of programme — pacing at the measured rate\n", dec.rateHz, eff); }
-                                rate = int(std::lround(eff));
+                            const bool plausible = eff > 8000.0 && eff < 200000.0;
+                            const bool deviant   = plausible && std::fabs(eff - double(rate)) > double(rate) * 0.01;
+                            if (s_knownRatio <= 0.0) {
+                                // Learning: pace at the measurement and adopt it once it has converged.
+                                if (deviant) {
+                                    if (!aacRateWarned_) { aacRateWarned_ = true;
+                                        fprintf(stderr, "[DAB] AAC decoder claims %d Hz but returns %.0f samples/s of programme — pacing at the measured rate\n", dec.rateHz, eff); }
+                                    rate = int(std::lround(eff));
+                                }
+                                if (converged && dec.rateHz > 0) { s_knownRatio = double(rate) / double(dec.rateHz); saveRatio(); }
+                            } else {
+                                /* ★★★ KNOWN: THE RATIO IS A PROPERTY OF THE DECODER AND DOES NOT MOVE. The
+                                 *  first version kept chasing the moving window after convergence, so a
+                                 *  burst of lost access units — a sub-second blip — skewed the window by more
+                                 *  than 1 %, the rate followed it down, and the audio ran slow until the
+                                 *  window had refilled: "normal speed then there was a little blip then it
+                                 *  went slow again and had to retrain itself" (Stuart, on Saber's box,
+                                 *  2026-09-07; the Pi's journal shows the same: 44706 against 51200). Now the
+                                 *  window is only WATCHED: a disagreement must persist for 400 units (a
+                                 *  changed ffmpeg, not a blip) before the ratio is relearnt. */
+                                aacDeviantRun_ = deviant ? aacDeviantRun_ + 1 : 0;
+                                if (aacDeviantRun_ >= 400 && dec.rateHz > 0) {
+                                    fprintf(stderr, "[DAB] AAC decoder's output rate has changed: %.0f samples/s against %d expected — relearning\n", eff, rate);
+                                    s_knownRatio = eff / double(dec.rateHz); rate = int(std::lround(eff)); saveRatio(); aacDeviantRun_ = 0;
+                                }
                             }
-                            if (converged && dec.rateHz > 0) s_knownRatio = double(rate) / double(dec.rateHz);
                             if (aacAuAcc_ >= 100) { aacPcmAcc_ *= 0.5; aacAuAcc_ /= 2; }   // a moving window
                         }
                         aacEffRateHz_ = rate;
@@ -1158,7 +1218,17 @@ private:
     int        rsRate_ = 0;     ///< of those, how many were silence covering a lost super frame     ///< 48 kHz stereo frames delivered, ever   ///< PCM FRAMES the decoder returned for the last AU                ///< AUs turned into PCM here rather than on the client
     AudioFormat afmt_{};
     double aacPcmAcc_ = 0.0; int aacAuAcc_ = 0; int aacEffRateHz_ = 0; bool aacRateWarned_ = false;
-    bool aacStartedKnown_ = AacDecoder::kExactFrames; int aacAuTotal_ = 0;   // ★ an exact decoder has nothing to learn — no "setting the clock" flash before its first unit
+    bool aacPrimed_ = false;   // the decoder has returned its first sample — counting starts AFTER it
+    bool aacPrimeBurst_ = false;   // this output is the priming burst: excluded from the count
+    bool aacStartedKnown_ = AacDecoder::kExactFrames; int aacAuTotal_ = 0;
+    double knownRatio_ = AacDecoder::kExactFrames ? 1.0 : 0.0;   // samples returned / samples due, once measured
+    int aacDeviantRun_ = 0;   // consecutive units on which the watched window disagrees with the known ratio
+    std::string ratioFile_;
+    void saveRatio() {   // caller holds m_
+        if (ratioFile_.empty() || knownRatio_ <= 0.0) return;
+        const std::string tmp = ratioFile_ + ".tmp";
+        if (FILE* f = fopen(tmp.c_str(), "wb")) { fprintf(f, "%.6f\n", knownRatio_); fclose(f); rename(tmp.c_str(), ratioFile_.c_str()); }
+    }   // ★ an exact decoder has nothing to learn — no "setting the clock" flash before its first unit
     /* ★ Counters, because "no audio" has four possible causes here and guessing between them is
      *  what cost the evening: no frames arriving, frames of an unusable length, the firecode
      *  never aligning, or AUs produced and not sent. Each has its own number. */
