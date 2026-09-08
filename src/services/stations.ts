@@ -38,6 +38,13 @@ export interface ServerBookmark {
    *  ★ undefined on backends that do not say (UberSDR, OWRX, Kiwi): the honest label there is
    *    simply "the server's", not a guess at which. */
   manual?:         boolean;
+  /** ★ VibeServer only, on a bookmark the receiver LEARNED from a DAB multiplex (`mode: "dab"`):
+   *  the service inside the ensemble at `frequency`. With it a bookmark can tune the block AND
+   *  pick the station in one go (the web client's dabGoTo); without it a DAB bookmark is only a
+   *  frequency, which lands you on the multiplex listening to whatever was last chosen. */
+  sid?:            number;
+  eid?:            number;
+  ecc?:            number;
 }
 
 export interface ServerBand {

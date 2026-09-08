@@ -64,6 +64,12 @@ interface FreqModalProps {
    *  Tune | Bookmarks segmented header. All lifted verbatim from MenuSheet. */
   currentMode?:      string;
   onSearchTune?:     (hz: number, mode?: string | null, isBand?: boolean) => void;
+  /** ★ A DAB bookmark: tune the multiplex and select the service (web client's dabGoTo). Only
+   *  offered when the receiver can do DAB; otherwise a DAB row tunes like any other. */
+  onDabTune?:        (hz: number, sid: number) => void;
+  /** ★ Opened from the DAB window's ★: the bookmarks tab, showing DAB stations only, as the web
+   *  client's `dabBm` does. The filter is a starting point — "show all" is one tap away. */
+  dabOnly?:          boolean;
   /** ★★★ MEASURED BY THE PARENT. useSafeAreaInsets returns 0 INSIDE an RN Modal — BrowserOverlay
    *  learned this the hard way (build 70: its bar drew under the clock). This card lives in a
    *  Modal too, so the hook below cannot be trusted on its own and the parent, which is not in a
@@ -181,7 +187,7 @@ function srcTag(b?: ServerBookmark): string {
 
 export default function FreqModal({
   visible, currentHz, onConfirm, onClose,
-  unit: unitProp, onUnit,
+  unit: unitProp, onUnit, onDabTune, dabOnly,
   minHz = MIN_FREQ_HZ, maxHz = MAX_FREQ_HZ, lockUnit = false,
   onShare,
   profiles = [], activeProfileId, sdrUsage, clientCount, onSelectProfile,
@@ -212,12 +218,20 @@ export default function FreqModal({
 
   // ── Bookmarks mode (relocated from MenuSheet §4.2) ──────────────────────────
   const [cardMode, setCardMode]         = useState<'tune' | 'bookmarks'>('tune');
+  const [dabFilter, setDabFilter]       = useState(false);
   const [searchQuery, setSearchQuery]   = useState('');
   const [bmName, setBmName]             = useState('');
   const [bmAll, setBmAll]               = useState(false);
   const [bmImportOpen, setBmImportOpen] = useState(false);
   const [bmImportText, setBmImportText] = useState('');
   const [bmImportMsg, setBmImportMsg]   = useState('');
+  /** ★ One tune path for every server row: a DAB service goes through onDabTune when the
+   *  receiver can do DAB, everything else through onSearchTune. */
+  const tuneBm = (b: ServerBookmark) => {
+    const isDab = (b.mode || '').toLowerCase() === 'dab' && (b.sid ?? -1) >= 0;
+    if (isDab && onDabTune) onDabTune(b.frequency, b.sid!);
+    else onSearchTune?.(b.frequency, b.mode);
+  };
   const searchResults = useMemo(
     () => searchStations(searchBookmarks, searchBands, searchQuery),
     [searchBookmarks, searchBands, searchQuery],
@@ -270,7 +284,10 @@ export default function FreqModal({
       // ★ Come back to the list you were working through — see stickySearch.
       const sticky = stickySearch && (Date.now() - stickySearch.at) < SEARCH_STICKY_MS
         ? stickySearch : null;
-      if (sticky) {
+      setDabFilter(!!dabOnly);
+      if (dabOnly) {
+        setCardMode('bookmarks'); setSearchQuery('');
+      } else if (sticky) {
         sticky.at = Date.now();          // the window restarts on every return, not on the first
         setCardMode('bookmarks'); setSearchQuery(sticky.q);
       } else {
@@ -677,7 +694,29 @@ export default function FreqModal({
                 placeholder="🔍 Search bookmarks & band plan…" placeholderTextColor={dimText}
                 autoCorrect={false} autoCapitalize="none" spellCheck={false} clearButtonMode="while-editing" />
               ); })()}
-              {searchQuery.trim().length > 0 && (searchResults.length === 0 ? (
+              {dabFilter && (() => {
+                const rows = searchBookmarks
+                  .filter(b => (b.mode || '').toLowerCase() === 'dab' && (b.sid ?? -1) >= 0)
+                  .sort((a, b) => a.name.localeCompare(b.name));
+                return (<>
+                  <View style={st.bmToggleRow}>
+                    <Text style={[st.bmSub, { color: dimText, marginTop: 0 }]}>DAB STATIONS HEARD BY THIS RECEIVER ({rows.length})</Text>
+                    <TouchableOpacity onPress={() => setDabFilter(false)} hitSlop={8}>
+                      <Text style={{ color: t.freqColor, fontFamily: t.font, fontSize: 11 }}>SHOW ALL</Text>
+                    </TouchableOpacity>
+                  </View>
+                  {rows.length === 0 && <Text style={[st.bmMsg, { color: dimText }]}>None yet — the receiver learns them as multiplexes are decoded.</Text>}
+                  {rows.map((b, i) => (
+                    <TouchableOpacity key={`dab|${b.frequency}|${b.sid}|${i}`} activeOpacity={0.7} style={st.searchRow}
+                      onPress={() => { tuneBm(b); onClose(); }}>
+                      <Text style={[st.searchFreq, { color: t.freqColor }]}>{fmtFreq(b.frequency)}</Text>
+                      <Text style={[st.searchMode, { color: dimText }]}>DAB</Text>
+                      <Text style={[st.searchName, { color: t.btnText }]} numberOfLines={1}>{b.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </>);
+              })()}
+              {!dabFilter && searchQuery.trim().length > 0 && (searchResults.length === 0 ? (
                 <Text style={[st.bmMsg, { color: dimText }]}>No results for “{searchQuery.trim()}”</Text>
               ) : (<>
                 <Text style={[st.bmHint, { color: dimText }]}>{searchResults.length} result{searchResults.length !== 1 ? 's' : ''} · tap to tune</Text>
@@ -687,7 +726,7 @@ export default function FreqModal({
                     //   list, which is exactly when you are most likely to want it again.
                     stickySearch = { q: searchQuery, at: Date.now() };
                     if (r.isBand && r.band) onSearchTune?.(r.band.start, r.band.mode, true);
-                    else if (r.bm) onSearchTune?.(r.bm.frequency, r.bm.mode);
+                    else if (r.bm) tuneBm(r.bm);
                     onClose();
                   };
                   const { on, ref: slotRef } = bmSlot(tune);

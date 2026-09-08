@@ -1668,6 +1668,30 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDabOn(true);
   }, []);
 
+  /** ★ A DAB bookmark: the multiplex AND the service, in one go — the web client's dabGoTo.
+   *  Enters DAB if needed, retunes if the block differs, otherwise just switches service. */
+  const dabGoTo = useCallback((hz: number, sid: number) => {
+    const c = client.current;
+    if (!c?.dab) return;
+    const idx = DAB_BLOCKS.findIndex(b => Math.abs(b.hz - hz) < 50_000);
+    if (idx < 0) return;
+    markInteract();
+    AsyncStorage.setItem(dabBlockKeyRef.current, DAB_BLOCKS[idx].name).catch(() => {});
+    setDabBlock(idx);
+    setDabBoxOpen(true);
+    setDabError(undefined);
+    if (!dabOnRef.current) {
+      c.dab(true, idx, sid);
+      setDabOn(true);
+    } else if (idx !== dabBlockRef.current) {
+      setDabState(null);
+      c.dab(true, idx, sid);
+    } else {
+      c.dabService?.(sid);
+    }
+  }, []);
+  const [freqModalDab, setFreqModalDab] = useState(false);
+
   /** Step to another multiplex WITHOUT leaving DAB — the one door the hold leaves open. */
   const onDabBlock = useCallback((i: number) => {
     const c = client.current;
@@ -8532,6 +8556,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onClose={() => setDabBoxOpen(false)}
           onExit={toggleDab}
           tall={dabTall} onTall={onDabTall}
+          onBookmarks={() => { setFreqModalDab(true); setFreqModalOpen(true); }}
           bottomOffset={pillBottom + 8 + noticeStackH}
           /* ★ The RADIO's address, not the door's — the carousel and the kept logo files belong to
            *  the receiver that is decoding this multiplex. connectBase resolves to /r/<id>. */
@@ -9099,7 +9124,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         topInset={insets.top}
         currentHz={status.frequency}
         onConfirm={onTuneHz}
-        onClose={() => setFreqModalOpen(false)}
+        onClose={() => { setFreqModalOpen(false); setFreqModalDab(false); }}
+        onDabTune={dabCapable ? dabGoTo : undefined}
+        dabOnly={freqModalDab}
         unit={freqUnit}
         onUnit={setFreqUnit}
         minHz={client.current?.caps.freqRange[0]}

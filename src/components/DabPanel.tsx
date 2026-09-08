@@ -168,6 +168,43 @@ function useServiceLogo(base: string, d: DabState | null,
   return sv.logoSlide ? `${base}/vibeserver/dabslide?sid=${sv.sid}` : null;
 }
 
+/** ★★ THE SIGNAL PANE OPENS WITH WHO YOU ARE LISTENING TO — the web client's `dabHead`: a large
+ *  picture, the name, the codec and the radio text — before the numbers. And OFF THE AIR FIRST: the
+ *  slideshow image the service is transmitting (TS 101 499) outranks the RadioDNS file, because it
+ *  is what the broadcaster is sending THIS listener right now (cover art, a presenter, a weather
+ *  map). The app had no header at all; the slide was only a last-resort row logo. Keyed on the
+ *  slide's sequence number so a new picture replaces the old one and an unchanged one is not
+ *  refetched twice a second. */
+const SignalHead = React.memo(function SignalHead({ d, cur, base }: {
+  d: DabState; cur: DabState['services'][number] | undefined; base: string;
+}) {
+  const logo = useServiceLogo(base, d, cur);
+  const [dead, setDead] = React.useState<string | null>(null);
+  const slide = d.slide && d.slide.seq ? `${base}/vibeserver/dabslide?seq=${d.slide.seq}` : null;
+  const air = cur?.logoAir ? `${base}/vibeserver/dablogoair?sid=${cur.sid}` : null;
+  const pick = [slide, air, logo].find(u => !!u && u !== dead) ?? null;
+  if (!cur) return null;
+  const ann = (d.announce ?? []).filter(a => a.subChId === cur.subch && a.types.length);
+  const alarm = ann.some(a => a.alarm);
+  const sub = `${cur.codec}${cur.kbps ? ` ${cur.kbps} kbit/s` : ''}`;
+  return (
+    <View style={s.head}>
+      {pick
+        ? <Image key={pick} source={{ uri: pick }} style={s.headLogo} resizeMode="contain"
+                 onError={() => setDead(pick)} />
+        : <View style={s.headLogo} />}
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={s.headName} numberOfLines={1}>
+          {cur.label || cur.sid.toString(16).toUpperCase()}
+          {ann.length ? (alarm ? '  ⚠ ALARM' : '  ● ANN') : ''}
+        </Text>
+        <Text style={s.headSub} numberOfLines={1}>{sub}</Text>
+        {!!d.dls && <Marquee text={d.dls} style={s.headDls} />}
+      </View>
+    </View>
+  );
+});
+
 /**
  * ★★★ TEXT THAT IS TOO LONG SCROLLS, AS IT DOES IN THE WEB CLIENT. Stuart, 2026-09-08: "the
  * decoder window in the app needs to mirror the dab window in the web client so anything that
@@ -309,6 +346,8 @@ export interface DabPanelProps {
    *  just a height. Stuart: "the big/small button is missing". */
   tall: boolean;
   onTall: (v: boolean) => void;
+  /** ★ Bookmarks filtered to the DAB stations this receiver has learned — the web's `dabBm`. */
+  onBookmarks?: () => void;
   /** The receiver's own base URL — logos are fetched FROM the server we are listening to, which is
    *  the only thing that holds this multiplex's carousel. */
   base: string;
@@ -374,6 +413,7 @@ export default function DabPanel(p: DabPanelProps) {
 
       {!!d && pane === 'signal' && (
         <>
+          <SignalHead d={d} cur={cur} base={p.base} />
           <Section t="SERVICE" />
           <Row label="Codec" value={d.codecDetail ?? cur?.codec ?? DASH} />
           <Row label="Bit rate" value={d.bitrate ? `${d.bitrate} kbit/s` : DASH} />
@@ -635,6 +675,11 @@ export default function DabPanel(p: DabPanelProps) {
           <TouchableOpacity onPress={() => p.onTall(!p.tall)} style={[s.hbtn, p.tall && s.hbtnActive]}>
             <Text style={[s.hbtnTxt, p.tall && s.hbtnTxtActive]}>{p.tall ? 'SMALL' : 'BIG'}</Text>
           </TouchableOpacity>
+          {!!p.onBookmarks && (
+            <TouchableOpacity onPress={p.onBookmarks} style={s.hbtn} accessibilityLabel="DAB bookmarks">
+              <Text style={s.hbtnTxt}>★</Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity onPress={p.onExit} style={s.hbtn}>
             <Text style={s.hbtnTxt}>EXIT DAB</Text>
           </TouchableOpacity>
@@ -685,6 +730,12 @@ const s = StyleSheet.create({
   val:    { fontFamily: FONT, fontSize: 14, color: C.value },
   section:{ fontFamily: FONT, fontSize: 10, letterSpacing: 2, color: C.goldDim,
             marginTop: 10, marginBottom: 2 },
+  /* ★ The web's .dabHead: 56 px picture, green name, codec line, scrolling radio text. */
+  head:     { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 6, marginBottom: 4 },
+  headLogo: { width: 56, height: 56, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.05)' },
+  headName: { fontFamily: FONT, fontSize: 16, letterSpacing: 1, color: C.good },
+  headSub:  { fontFamily: FONT, fontSize: 12, color: C.muted, marginTop: 1 },
+  headDls:  { fontFamily: FONT, fontSize: 13, color: C.value, marginTop: 2 },
   svc:      { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6,
               paddingHorizontal: 6, borderRadius: 6 },
   svcActive:{ backgroundColor: C.rowAct },
