@@ -72,17 +72,21 @@ inline float offsetHz(float fractional, const Mode& m) { return fractional * flo
  *    difference between real time and not on a Pi. Renormalised every 1024 steps because the
  *    recurrence drifts in magnitude, which would otherwise scale the constellation slowly. */
 inline void derotate(Cplx* x, size_t n, double cyclesPerSample) {
+    /* ★ Float, not double: this walks every sample of every frame (2 M a second), and the
+     *  renormalisation every 1024 samples already bounds the drift a float oscillator has —
+     *  the double version bought precision the renorm then threw away. The step itself is
+     *  computed in double and rounded once. */
     const double w = -2.0 * M_PI * cyclesPerSample;
-    const double cs = std::cos(w), sn = std::sin(w);
-    double cr = 1.0, ci = 0.0;
+    const float cs = float(std::cos(w)), sn = float(std::sin(w));
+    float cr = 1.0f, ci = 0.0f;
     for (size_t i = 0; i < n; ++i) {
-        const double xr = x[i].re, xi = x[i].im;
-        x[i].re = float(xr * cr - xi * ci);
-        x[i].im = float(xr * ci + xi * cr);
-        const double nr = cr * cs - ci * sn, ni = cr * sn + ci * cs;
+        const float xr = x[i].re, xi = x[i].im;
+        x[i].re = xr * cr - xi * ci;
+        x[i].im = xr * ci + xi * cr;
+        const float nr = cr * cs - ci * sn, ni = cr * sn + ci * cs;
         cr = nr; ci = ni;
         if ((i & 1023u) == 1023u) {          // renormalise
-            const double mag = std::sqrt(cr * cr + ci * ci);
+            const float mag = std::sqrt(cr * cr + ci * ci);
             if (mag > 0) { cr /= mag; ci /= mag; }
         }
     }

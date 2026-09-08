@@ -33,7 +33,7 @@ echo "iphoneos SDK: $SDK"
 
 ARCH="-arch arm64 -isysroot $SDK -mios-version-min=$MIN_IOS"
 INC="-I$CPP -I$CPP/vibedsp -I$CPP/ft8_lib -I$CPP/spyserver"
-CXXFLAGS="-std=c++17 -O3 -ffp-contract=fast -fvisibility=hidden"
+CXXFLAGS="-std=c++17 -O3 -ffp-contract=fast -fvisibility=hidden -DVIBE_DAB_PFFFT=1"   # ★ DAB OFDM via PFFFT (pffft.c is compiled below)
 CFLAGS="-O3 -ffp-contract=fast"
 # vibedsp's vendored KissFFT is prefixed vibe_* to avoid clashing with ft8_lib's.
 KISSPFX="-Dkiss_fft_alloc=vibe_kiss_fft_alloc -Dkiss_fft=vibe_kiss_fft \

@@ -5123,7 +5123,12 @@ struct LocalSdrShim::Impl {
             }
             return "";
         }
-        return "2560000,2400000,1800000,1200000,960000";
+        /* ★ 2 048 000 ADDED (2026-09-08). It was never offered for the RTL "for some reason"
+         *  (Stuart) — and it is the one rate that lets the DAB question be MEASURED: whether the
+         *  XCover's 94 % sample delivery at 2.048 (the reason DAB captures at 2.4 and resamples)
+         *  was the dongle, or the phone starving the USB reader — which is now prioritised and
+         *  has a far lighter chain behind it. Offered, not defaulted; DAB still captures at 2.4. */
+        return "2560000,2400000,2048000,1800000,1200000,960000";
     }
 
     /** ★★★ THE DSP THREAD MAY NOT TAKE clientMtx. It holds modeMtx, and that lock order

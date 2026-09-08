@@ -220,7 +220,8 @@ target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_LIBRTLSDR)
 # ★★ THE VERSION, WHERE THE CODE CAN SAY IT. It lived only in CMake, so the server could not tell a
 #    client what it was — and the app's About panel had nothing to show but the client's own name.
 #    Defined from VIBESERVER_VERSION so it cannot drift from the package the user installed.
-target_compile_definitions(vibeserver_core PUBLIC VIBESERVER_VERSION_STR="${VIBESERVER_VERSION}")
+target_compile_definitions(vibeserver_core PUBLIC VIBESERVER_VERSION_STR="${VIBESERVER_VERSION}"
+    VIBE_DAB_PFFFT=1)   # ★ DAB OFDM through PFFFT — see vibe_dab_fft.h
 target_link_libraries(vibeserver_core PUBLIC "${RTLSDR_LIB}" "${USB_LIB}")
 
 # ── SDRplay (RSP): HEADERS ONLY, deliberately never linked ────────────────────
@@ -401,9 +402,14 @@ foreach(t ${VIBE_DAB_TESTS})
   add_dependencies(dab-tests test-dab-${t})
 endforeach()
 # The offline replay harness: the same chain over a VIBE_IQ_DUMP capture, in seconds.
-add_executable(dab-offline "${CMAKE_CURRENT_SOURCE_DIR}/dab-offline.cpp")
+# ★ dab-offline and the receiver test take the PFFFT path so the SERVER's transform is what gets
+#   replayed and tested; the other DAB tests keep the header-only radix-2, which is the reference.
+add_executable(dab-offline "${CMAKE_CURRENT_SOURCE_DIR}/dab-offline.cpp" "${CPP_DIR}/vibedsp/third_party/pffft/pffft.c")
 target_include_directories(dab-offline PRIVATE "${CPP_DIR}")
 target_compile_options(dab-offline PRIVATE -O2)
+target_compile_definitions(dab-offline PRIVATE VIBE_DAB_PFFFT=1)
+target_sources(test-dab-receiver PRIVATE "${CPP_DIR}/vibedsp/third_party/pffft/pffft.c")
+target_compile_definitions(test-dab-receiver PRIVATE VIBE_DAB_PFFFT=1)
 if(APPLE)
   target_link_libraries(dab-offline PRIVATE "-framework AudioToolbox" "-framework CoreAudio" "-framework CoreFoundation")   # the platform decoder it now exercises
 endif()

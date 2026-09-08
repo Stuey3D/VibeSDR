@@ -109,7 +109,11 @@ public:
         if (start + symLen * size_t(mode_->symbolsPerFrame) > n) return false;
 
         // ── fractional offset, and correct it ───────────────────────────────
-        std::vector<Cplx> work(iq + start, iq + start + symLen * size_t(mode_->symbolsPerFrame));
+        /* ★ PERSISTENT BUFFERS. This allocated ~1.5 MB (work), the carrier arrays, the spectrum and
+         *  the frame's soft bits afresh EVERY frame — ten times a second of malloc, page-fault and
+         *  free on a phone. assign() reuses the capacity; the contents are what they were. */
+        std::vector<Cplx>& work = work_;
+        work.assign(iq + start, iq + start + symLen * size_t(mode_->symbolsPerFrame));
         const float frac = fractionalOffset(work.data(), work.size(), *mode_, 8);
         stats_.freqOffsetHz  = offsetHz(frac, *mode_);
         stats_.freqOffsetPpm = float(double(stats_.freqOffsetHz) / centreHz_ * 1e6);
@@ -119,8 +123,10 @@ public:
         /* ★ Braces, not parens: `std::vector<C32> cur(size_t(K))` is a FUNCTION DECLARATION, not
          *  a vector — C++'s most vexing parse, and the compiler warned about exactly that. It
          *  would have compiled and then indexed a function. */
-        std::vector<C32> cur(size_t(K), C32{}), prev(size_t(K), C32{}), spec(fft_, C32{});
-        std::vector<int8_t> frameBits(size_t(K) * 2 * size_t(mode_->symbolsPerFrame - 1));
+        std::vector<C32>& cur = cur_;   cur.assign(size_t(K), C32{});
+        std::vector<C32>& prev = prev_; prev.assign(size_t(K), C32{});
+        std::vector<C32>& spec = spec_; spec.assign(fft_, C32{});
+        std::vector<int8_t>& frameBits = frameBits_; frameBits.assign(size_t(K) * 2 * size_t(mode_->symbolsPerFrame - 1), 0);
 
         /* ★★★ THE INTEGER FREQUENCY OFFSET — WITHOUT THIS, NOTHING DECODES.
          *
@@ -151,7 +157,7 @@ public:
         {
             const Cplx* p0 = work.data() + winOff;
             dft(p0, spec.data());
-            std::vector<C32> got(size_t(K), C32{});
+            std::vector<C32>& got = got_; got.assign(size_t(K), C32{});
             carriersFromFft(spec.data(), int(fft_), K, got.data());
             /* ★★★ CORRELATE THE DIFFERENCE BETWEEN ADJACENT CARRIERS, NOT THE CARRIERS.
              *  A timing error of t samples multiplies carrier k by exp(-j2pi k t / 2048): four
@@ -162,7 +168,7 @@ public:
              *  neighbour cancels the ramp (it is the same for both bar one step), so this figure
              *  measures the PHASE REFERENCE and nothing else. welle.io, dab-cmdline and DAB-Radio
              *  all do this; it took a comparison against them to see why ours did not. */
-            std::vector<C32> D(size_t(K) - 1);
+            std::vector<C32>& D = D_; D.resize(size_t(K) - 1);
             for (int k = 0; k + 1 < K; ++k) D[size_t(k)] = got[size_t(k)] * std::conj(got[size_t(k) + 1]);
             if (prsDiff_.empty()) {
                 prsDiff_.resize(size_t(K) - 1);
@@ -662,7 +668,11 @@ private:
     double fibHist_ = 0;
     double centreHz_ = 222.064e6;   ///< the tuned block, for the ppm readout
     int    intShift_ = 0;
-    std::vector<C32>    prsDiff_;   // reference adjacent-carrier products, built once
+    std::vector<C32>    prsDiff_;
+    // ★ Per-frame scratch, kept between frames — see push().
+    std::vector<Cplx> work_;
+    std::vector<C32>  cur_, prev_, spec_, got_, D_;
+    std::vector<int8_t> frameBits_;   // reference adjacent-carrier products, built once
     std::vector<C32>    prod_;      // per-symbol differential products — see the CSI note
     std::vector<int8_t> ficBits_;
     SubChannel sel_{};

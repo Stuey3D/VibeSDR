@@ -151,7 +151,8 @@ set(VIBESERVER_VERSION "${CMAKE_MATCH_1}")
 if(NOT VIBESERVER_VERSION)
   message(FATAL_ERROR "could not read the version from vibeserver/CMakeLists.txt — see the note above")
 endif()
-target_compile_definitions(vibelocalsdr PRIVATE VIBESERVER_VERSION_STR="${VIBESERVER_VERSION}")
+target_compile_definitions(vibelocalsdr PRIVATE VIBESERVER_VERSION_STR="${VIBESERVER_VERSION}"
+    VIBE_DAB_PFFFT=1)   # ★ the DAB OFDM transform uses the PFFFT this target already links — see vibe_dab_fft.h
 message(STATUS "VibeServer core version: ${VIBESERVER_VERSION}")
 
 target_compile_definitions(vibelocalsdr PRIVATE VIBE_HAVE_OPUS)
