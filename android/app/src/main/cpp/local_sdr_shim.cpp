@@ -33,57 +33,7 @@
   #include "rtl_sdr_stub.h"   // iOS: no-op rtlsdr_* decls so the USB path compiles
 #endif
 #include <unistd.h>
-// Thread naming + audio priority are Android/Linux-only (Darwin/iOS has no
-// <sys/prctl.h> / PR_SET_NAME). Guard so the shared shim still compiles for the
-// iOS prebuilt lib, where these are no-ops. `vibeAudioThread` = name + real
-// URGENT_AUDIO priority (nice -19) for the DSP/audio thread; `vibeThreadName` =
-// name only, so a spinning thread is identifiable in `top -H` / systrace instead
-// of showing as the inherited RN "mqt_v_native".
-/* ★★★ THIS WAS ANDROID-ONLY, AND THE PI IS WHERE IT MATTERS MOST. The guard was
- *  `#if defined(__ANDROID__)`, so on Linux — every apt server, every Pi, the amd64 box — BOTH
- *  halves compiled to nothing: no thread name and no audio priority. prctl(PR_SET_NAME) and
- *  setpriority() are plain Linux APIs; Android has them because Android IS Linux.
- *  ★★★ THE NAME. Every thread showed as "vibeserver" in `top -H`, which is how a 63 %-of-a-core
- *      thread on the RSP1B took a gdb session to identify (2026-09-08 audit). Naming is free and
- *      needs no privilege.
- *  ★★★ THE PRIORITY IS THE HALF THAT ACTUALLY COSTS SOMETHING, AND IT IS NOT FREE ON THE PI.
- *      The DSP must keep real time or the audio breaks up — that is what the IQ-backlog counter
- *      in dspLoop watches for. On Android the process may renice itself; a systemd unit running
- *      as User=vibeserver may NOT (measured on the Pi: nice 0, SCHED_OTHER, no capabilities), so
- *      setpriority() returns -1 and the thread runs at default priority alongside the web server
- *      and the tunnel. Granting it needs the UNIT to say so (Nice=-10, or AmbientCapabilities=
- *      CAP_SYS_NICE) — a packaging decision, not a code one.
- *  ★ So: SAY SO ONCE rather than assume. A silent failure here is indistinguishable from having
- *    the priority, which is precisely the class of bug this project keeps paying for. */
-#if defined(__ANDROID__) || defined(__linux__)
-  #include <sys/resource.h>   // setpriority
-  #include <sys/prctl.h>      // PR_SET_NAME
-  #include <cerrno>
-  #include <cstdio>           // ★ this block sits ABOVE the main include list — it must carry its own
-  #include <cstring>          //   (strerror)
-  #include <atomic>
-  static inline void vibeThreadName(const char* name) { prctl(PR_SET_NAME, name); }
-  static inline void vibeAudioThread(const char* name) {
-      prctl(PR_SET_NAME, name);
-      errno = 0;
-      if (setpriority(PRIO_PROCESS, 0, -19) != 0 && errno != 0) {   // = THREAD_PRIORITY_URGENT_AUDIO
-          static std::atomic<bool> warned{false};
-          if (!warned.exchange(true))
-              fprintf(stderr, "[VibeLocalSDR] ★ '%s' could not take audio priority (%s) — it runs at "
-                              "the default. On systemd add Nice=-10 or AmbientCapabilities="
-                              "CAP_SYS_NICE to the unit if the DSP falls behind under load.\n",
-                      name, strerror(errno));
-      }
-  }
-#elif defined(__APPLE__)
-  #include <pthread.h>
-  // macOS names the CALLING thread and takes no second argument.
-  static inline void vibeThreadName(const char* name) { pthread_setname_np(name); }
-  static inline void vibeAudioThread(const char* name) { pthread_setname_np(name); }
-#else
-  static inline void vibeAudioThread(const char*) {}
-  static inline void vibeThreadName(const char*) {}
-#endif
+#include "vibe_thread.h"   // ★ the one definition — see the header for why it moved
 
 #include <algorithm>
 #include <atomic>
@@ -915,11 +865,23 @@ static std::string g_dabLogoDir;
 static LocalSdrShim::LogoBytesFn g_vsLogoBytesFn;   // set by a host whose transport is binary-safe (the Pi: curl); Android leaves it unset
 static std::mutex g_vsLogoBytesMtx;
 void LocalSdrShim::setLogoBytesFetcher(LogoBytesFn fn) { std::lock_guard<std::mutex> lk(g_vsLogoBytesMtx); g_vsLogoBytesFn = std::move(fn); }
+/** ★★★ A PATH IS NOT A FIXED-SIZE THING. Both of these built one with snprintf into char[64] and
+ *  did not check the return — the same shape as the 512-byte stats buffer that presented as "DAB
+ *  never locks". It fits today by luck: the Pi's data dir makes 42 characters and Android internal
+ *  storage 57. On external storage it is 77, and a truncated path does not fail loudly — it makes
+ *  two services collide on one filename, so a station shows another station's logo.
+ *  ★ std::string removes the class of bug rather than widening the buffer, which would only move
+ *    the cliff. Found in the 2026-09-08 audit; not reached in any shipping configuration. */
+static std::string dabLogoBase(int ecc, uint16_t eid, uint32_t sid) {
+    char name[40];
+    snprintf(name, sizeof name, "/%02x-%04x-%x", unsigned(ecc & 0xFF), unsigned(eid), unsigned(sid));
+    return g_dabLogoDir + name;      // ★ only the NAME is bounded; the directory is whatever it is
+}
 static std::string dabLogoStoreFind(int ecc, uint16_t eid, uint32_t sid, std::string& ext) {
     if (g_dabLogoDir.empty()) return {};
-    char base[64]; snprintf(base, sizeof base, "%s/%02x-%04x-%x", g_dabLogoDir.c_str(), unsigned(ecc & 0xFF), unsigned(eid), unsigned(sid));
+    const std::string base = dabLogoBase(ecc, eid, sid);
     for (const char* e : { "png", "jpg", "svg", "gif", "webp" }) {
-        const std::string f = std::string(base) + "." + e;
+        const std::string f = base + "." + e;
         if (FILE* fp = fopen(f.c_str(), "rb")) { fclose(fp); ext = e; return f; }
     }
     return {};
@@ -934,8 +896,7 @@ static std::string dabLogoStorePut(int ecc, uint16_t eid, uint32_t sid, const st
     else if (bytes.size() > 12 && bytes.compare(8, 4, "WEBP") == 0) ext = "webp";
     else if (url.find(".jpg") != std::string::npos || url.find(".jpeg") != std::string::npos) ext = "jpg";
     mkdir(g_dabLogoDir.c_str(), 0755);
-    char base[64]; snprintf(base, sizeof base, "%s/%02x-%04x-%x", g_dabLogoDir.c_str(), unsigned(ecc & 0xFF), unsigned(eid), unsigned(sid));
-    const std::string f = std::string(base) + "." + ext, tmp = f + ".tmp";
+    const std::string f = dabLogoBase(ecc, eid, sid) + "." + ext, tmp = f + ".tmp";
     FILE* fp = fopen(tmp.c_str(), "wb");
     if (!fp) return {};
     fwrite(bytes.data(), 1, bytes.size(), fp); fclose(fp); rename(tmp.c_str(), f.c_str());
@@ -5065,6 +5026,14 @@ struct LocalSdrShim::Impl {
         return "2560000,2400000,1800000,1200000,960000";
     }
 
+    /** ★★★ THE DSP THREAD MAY NOT TAKE clientMtx. It holds modeMtx, and that lock order
+     *  deadlocked this server once already (see feedClientChannels). So the count is published
+     *  into an atomic HERE, at its single definition, and read lock-free by the idle gate.
+     *  ★ The staleness is deliberately asymmetric and in the safe direction: a CONNECT refreshes
+     *    it immediately (isFullLocked() calls this before admitting anyone), so audio is back
+     *    before the listener can want it; a DISCONNECT is only noticed at the next status pass,
+     *    so the receiver idles down a moment late rather than a moment early. */
+    static std::atomic<int> s_listenersCached;
     int specListenerCountLocked() {
         int n = (specClient && specClient->isOpen()) ? 1 : 0;
         for (auto& s : specExtra) if (s && s->isOpen()) ++n;
@@ -5088,6 +5057,7 @@ struct LocalSdrShim::Impl {
             const bool audioOpen = c->audio && c->audio->isOpen();
             if (!specOpen && audioOpen) ++n;
         }
+        s_listenersCached.store(n, std::memory_order_relaxed);
         return n;
     }
     /** How many listeners are attached. Call WITHOUT clientMtx held. */
@@ -7299,6 +7269,8 @@ struct LocalSdrShim::Impl {
     double lastDabJson_ = 0;
     double lastDabLearn_ = 0.0;   // ★ DAB station learning cadence (5 s)
     bool   dabLogged_ = false;
+    /** Whether the shared pipeline is currently idled to spectrum-only — see the gate in dspLoop. */
+    bool   rxIdleSpectrumOnly_ = false;
     /* ★★★ "THIS AUDIO IS DAB'S." In DAB mode the ordinary chain still runs, because the SPECTRUM
      *  is not decoration: without it the client has no frame rate, no link meter and no view, and
      *  it starts asking to CENTRE ON VFO while the buffer climbs (Stuart, 2026-09-04 — the whole
@@ -14041,6 +14013,42 @@ struct LocalSdrShim::Impl {
                 else                 feedClientChannels(buf.data(), (int)buf.size());
                 continue;
             }
+            /* ★★★ NOBODY LISTENING? RUN THE SPECTRUM, SKIP THE AUDIO. Stuart, 2026-09-08:
+             *  "no point having audio being decoded if nobody is listening to it."
+             *
+             *  ★★★ WHAT THIS DOES NOT TOUCH, WHICH IS THE WHOLE POINT. setSpectrumOnly() returns
+             *      inside RxPipeline::feed AFTER the wide FFT and the zoom spectrum and BEFORE the
+             *      NCO mix, so everything that must keep running with nobody connected still does:
+             *        · onSpectrum, and therefore THE RSP's AGC KICK and its gain telemetry — the
+             *          reason the RSP1B is left streaming at all. Its own comment already insists
+             *          the kick "no longer needs a listener, and must not".
+             *        · the landing-page spectrogram and the band-conditions measurement, which
+             *          exist precisely to tell somebody who has NOT connected what this receiver
+             *          has been hearing (an empty one is the "it's like it never woke up" fault).
+             *      And the RTL overload AGC is not involved either way: it measures the RAW ADC in
+             *      the source callback and decides on the housekeeping thread, nowhere near here.
+             *  ★★ ONLY THE SHARED PIPELINE. On a locked receiver rx is not fed at all — the
+             *     channelizer runs instead, and it ALREADY skips its fan-out when the listener
+             *     list is empty. There is nothing further to save there without taking away the
+             *     spectrogram, so this gate deliberately does not reach it.
+             *  ★★ AND NOT IN DAB, which owns the same flag for its own reason (an ensemble has no
+             *     VFO for this chain to demodulate). Leave its setting alone.
+             *  ★ COMING BACK IS A GAP IN THE STREAM. The RDS decoder's timing hypotheses and the
+             *    pilot PLL are recursive state; resuming into them after minutes of silence is the
+             *    stale-hypothesis fault requestReset() exists for. So the return to full is a
+             *    reset, not a resume. */
+            if (!perClientDsp() && !g_dabMode.load(std::memory_order_relaxed)) {
+                const bool idle = s_listenersCached.load(std::memory_order_relaxed) <= 0;
+                if (idle != rxIdleSpectrumOnly_) {
+                    rxIdleSpectrumOnly_ = idle;
+                    if (!idle) rx.requestReset();       // a gap invalidates every recursive state
+                    rx.setSpectrumOnly(idle);
+                    LOGI("%s — %s the audio chain (spectrum, AGC and the "
+                         "spectrogram keep running either way)",
+                         idle ? "no listeners" : "a listener arrived",
+                         idle ? "idling" : "restarting");
+                }
+            }
             if (!perClientDsp()) rx.feed(buf.data(), (int)buf.size());
             const auto tMid = std::chrono::steady_clock::now();
             // ★★★ PER-CLIENT DEMOD. The shared `rx` above still produces the WIDE waterfall
@@ -14129,7 +14137,10 @@ struct LocalSdrShim::Impl {
             // ★★★ THE REAPER MUST OUTRANK THE CONSUMERS. This thread does almost no work — it
             //     hands libusb back its completed transfers and resubmits them — but it is the
             //     only thread in the process whose lateness LOSES DATA THAT CANNOT BE RECOVERED.
-            //     Every consumer (vibe-dsp x2, vibe-dab) already runs at -19 via vibeAudioThread;
+            //     Every consumer (vibe-dsp x2, vibe-dab) runs at -19 via vibeAudioThread — which
+            //     was ASSERTED here long before it was true of vibe-dab: that thread lives in
+            //     vibe_dab_service.h and could not reach the helper until it moved to
+            //     vibe_thread.h (2026-09-08 audit);
             //     this one was left at the default -4, so on a phone the things that eat the IQ
             //     outranked the thing that fetches it. Measured on the Xcover: 2.186 MS/s of BYTES
             //     against a requested 2.4 — short bytes, not corrupt bytes, which is the signature
@@ -17441,6 +17452,9 @@ void LocalSdrShim::setLocationJson(const std::string& json) {
     if (jsonNum(json, "lat", lat) && jsonNum(json, "lon", lon) && (lat != 0.0 || lon != 0.0))
         setReceiverPosition(lat, lon);
 }
+
+/* ★ Out-of-line definition for the cached listener count — see specListenerCountLocked(). */
+std::atomic<int> LocalSdrShim::Impl::s_listenersCached{0};
 
 LocalSdrShim& LocalSdrShim::instance() { static LocalSdrShim inst; return inst; }
 

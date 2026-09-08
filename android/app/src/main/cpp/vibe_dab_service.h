@@ -34,6 +34,7 @@
 #include "vibe_dab_padtap.h"
 #include "vibe_dab_packet.h"
 #include "vibe_dab_spi.h"
+#include "vibe_thread.h"
 #include "vibe_dab_epg.h"
 #include <dirent.h>
 #include <sys/stat.h>
@@ -288,6 +289,14 @@ public:
 private:
     /** The decode loop. Runs on its own thread; holds m_ except where noted. */
     void workerLoop() {
+        /* ★★★ THE HEAVIEST CONSUMER IN THE PRODUCT, AND IT WAS NAMELESS AND UNPRIORITISED. A
+         *  64-state full-frame Viterbi over every CIF, four times per 96 ms frame — the work that
+         *  was moved OFF the DSP thread precisely because overrunning there made librtlsdr discard
+         *  capture buffers. Moving it to its own thread solved that; leaving that thread at the
+         *  default priority just moved the starvation somewhere the counters could not see it.
+         *  ★ local_sdr_shim.cpp asserted this already ran at -19 "via vibeAudioThread". It did
+         *    not: the helper was defined inside that .cpp and unreachable from this header. */
+        vibeAudioThread("vibe-dab");
         std::unique_lock<std::mutex> lk(m_);
         const size_t need = size_t(modeI().frameSamples) * 2;
         while (!stop_) {

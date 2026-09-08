@@ -29,6 +29,19 @@ User=vibeserver
 Group=vibeserver
 SupplementaryGroups=plugdev
 # Modest hardening — this thing may be exposed to the internet.
+# ★★★ LET THE REAL-TIME THREADS TAKE THE PRIORITY THEY ASK FOR. The DSP, the source reader, the
+# DAB decoder and each listener's encode all call setpriority(-19) on themselves; a unit running as
+# User=vibeserver cannot do that without this capability, so the call was failing and every thread
+# ran at the default. Measured on the Pi before this line existed: nice 0, SCHED_OTHER, no caps —
+# the DSP competing on equal terms with the web server and the tunnel. Falling behind is what the
+# IQ-backlog counter in dspLoop exists to detect and what a listener hears as break-up.
+# ★★ ONE CAPABILITY, NOT A BLANKET Nice=. Nice= would raise the WHOLE process, moving the accept
+#    loop and the housekeeping tick up with the DSP and separating nothing. The capability lets the
+#    code do what it already tries to do: lift only the chain that must keep real time.
+# ★ Compatible with NoNewPrivileges=yes — systemd grants ambient capabilities itself rather than
+#   the process acquiring them. If it is ever refused the server says so once and carries on.
+AmbientCapabilities=CAP_SYS_NICE
+CapabilityBoundingSet=CAP_SYS_NICE
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
