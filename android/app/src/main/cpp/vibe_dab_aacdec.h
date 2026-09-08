@@ -344,7 +344,8 @@ private:
 };
 
 #endif
-#if defined(__unix__) || defined(__APPLE__)
+/* ★ NOT ANDROID — Bionic defines __unix__ too, and the AMediaCodec class above is Android's. */
+#if !defined(__ANDROID__) && (defined(__unix__) || defined(__APPLE__))
 
 /** ★★★ THE PLATFORM'S DECODER ON A POSIX SERVER IS ffmpeg, RUN AS A PROCESS.
  *  ★ On macOS too, when it is installed (Homebrew): see AacDecoder below for why it is preferred.
