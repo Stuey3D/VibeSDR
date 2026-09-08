@@ -19,7 +19,7 @@
  *    string by concatenating one into JSON.
  */
 import React, { useMemo } from 'react';
-import { Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
+import { Image, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Canvas, Points, Rect } from '@shopify/react-native-skia';
 import type { DabState } from '../services/dabTypes';
@@ -118,6 +118,108 @@ const ImpulseResponse = React.memo(function ImpulseResponse({ ir, width, height 
   );
 });
 
+/**
+ * ★★★ THE STATION'S OWN ARTWORK, BY THE SAME CHAIN THE WEB CLIENT USES — and it is three sources,
+ * not one. Stuart, 2026-09-08: "no station logos at all… the DAB experience is not on par with the
+ * Web Client."
+ *
+ *   1. OFF THE AIR FIRST. `logoAir` means the multiplex's own SPI carousel carried this service's
+ *      logo, or RadioDNS resolved one and the SERVER kept the file. Either way it is the
+ *      broadcaster's file, served from the receiver we are already talking to.
+ *   2. RADIODNS BY IDENTITY, asked once per service: /vibeserver/dablogo?ecc&eid&sid&scids answers
+ *      with a URL (and keeps the bytes server-side, so the next client gets case 1 immediately).
+ *   3. THE SLIDESHOW, last. Programme artwork changes through the day, so it must never displace
+ *      the broadcaster's own logo — but for a small station that publishes neither it is the only
+ *      picture of that station in existence.
+ *
+ * ★★ ASKED ONCE PER SERVICE, EVER. The `dab` message arrives about once a second and this list is
+ *    re-rendered with it; a lookup per render would be a request per second per service. The cache
+ *    is claimed BEFORE the fetch (the same rule primeStationLogo follows in the web client) or the
+ *    first second fires one lookup per frame.
+ * ★ A miss is remembered as null, so a station with no artwork is not asked about for ever.
+ */
+const logoCache = new Map<string, string | null>();
+
+function useServiceLogo(base: string, d: DabState | null,
+                        sv: DabState['services'][number] | undefined): string | null {
+  const ecc = sv?.ecc ?? d?.ecc ?? -1;
+  const key = `${ecc}|${d?.eid ?? 0}|${sv?.sid ?? 0}`;
+  const [, bump] = React.useState(0);
+  if (!sv || !d) return null;
+  if (sv.logoAir) return `${base}/vibeserver/dablogoair?sid=${sv.sid}`;
+  const known = logoCache.get(key);
+  if (known === undefined) {
+    logoCache.set(key, null);                       // claim it BEFORE the fetch — see above
+    if (ecc >= 0 && d.eid) {
+      const hex = (n: number, w: number) => n.toString(16).toUpperCase().padStart(w, '0');
+      const q = `ecc=${hex(ecc, 2)}&eid=${hex(d.eid, 4)}&sid=${hex(sv.sid, 4)}&scids=${Math.max(0, sv.scids ?? 0)}`;
+      fetch(`${base}/vibeserver/dablogo?${q}`)
+        .then(r => (r.ok ? r.json() : null))
+        .then((j: { logo?: string } | null) => {
+          const u = j && typeof j.logo === 'string' && j.logo ? j.logo : '';
+          if (!u) return;
+          logoCache.set(key, u.startsWith('http') ? u : `${base}${u}`);
+          bump(x => x + 1);                          // it arrived after the render that asked
+        })
+        .catch(() => {});
+    }
+  }
+  if (known) return known;
+  return sv.logoSlide ? `${base}/vibeserver/dabslide?sid=${sv.sid}` : null;
+}
+
+/** One service row's picture, or the space where it would be — a list whose rows change width as
+ *  logos land is worse than one with none, so the box is always there. */
+const SvcLogo = React.memo(function SvcLogo({ uri }: { uri: string | null }) {
+  const [dead, setDead] = React.useState(false);
+  React.useEffect(() => { setDead(false); }, [uri]);
+  if (!uri || dead) return <View style={s.logoBox} />;
+  return (
+    <Image source={{ uri }} style={s.logoBox} resizeMode="contain"
+           /* ★ A URL that resolves is not a picture that loads — the RDS panel learned this first.
+            *  A logo that fails is dropped rather than left as a broken tile. */
+           onError={() => setDead(true)} />
+  );
+});
+
+/**
+ * ★★★ EVERY SERVICE'S OWN LIVE TEXT, ON EVERY ROW — WHICH IS THE FEATURE, not a detail of it.
+ * Stuart, 2026-09-08: "our full ensemble radio text is a huge boost none of the others do which is
+ * cool", and, when this panel shipped without it: "the simultaneous radio text from all stations on
+ * an ensemble is missing too". A DAB receiver decodes ONE service; we decode the whole multiplex's
+ * X-PAD, so this list shows what twenty stations are playing AT ONCE. Drawing it only for the
+ * tuned service threw away the one thing no other receiver can do.
+ * ★ `sv.dls` is per service and already gated (dabTypes.parseDabMessage); `d.dls` is the tuned
+ *   one's and is the fallback for the row that is playing, since the server sends it there.
+ */
+const ServiceRow = React.memo(function ServiceRow({ sv, d, base, onPress }: {
+  sv: DabState['services'][number]; d: DabState; base: string; onPress: () => void;
+}) {
+  const active = sv.sid === d.sid;
+  const logo = useServiceLogo(base, d, sv);
+  const text = sv.dls || (active ? d.dls : '') || '';
+  /* ★ THE ANNOUNCEMENT LAMP — a car's TA indicator with TA SWITCHING OFF. Stuart: "dont auto tune
+   *  but if we can show the signal being recieved that would be good. Like in a car with TA off."
+   *  We never retune to it: on a shared VFO one listener's traffic flash drags everybody else off
+   *  the station they chose. */
+  const ann = (d.announce ?? []).filter(a => a.subChId === sv.subch && a.types.length);
+  const alarm = ann.some(a => a.alarm);
+  return (
+    <TouchableOpacity onPress={onPress} style={[s.svc, active && s.svcActive]} activeOpacity={0.7}>
+      <SvcLogo uri={logo} />
+      <View style={{ flex: 1 }}>
+        <Text style={[s.svcName, active && { color: C.gold }]} numberOfLines={1}>
+          {sv.label || sv.sid.toString(16).toUpperCase()}
+          {ann.length ? (alarm ? '  ⚠ ALARM' : '  ● ANN') : ''}
+        </Text>
+        {!!text && <Text style={[s.svcDls, active && { color: 'rgba(255,200,110,0.85)' }]}
+                         numberOfLines={1}>{text}</Text>}
+      </View>
+      <Text style={s.svcCodec}>{sv.codec}{sv.kbps ? ` ${sv.kbps}k` : ''}</Text>
+    </TouchableOpacity>
+  );
+});
+
 export interface DabPanelProps {
   /** The last `dab` message, or null while the server has not sent one (starting, or off). */
   d: DabState | null;
@@ -125,7 +227,9 @@ export interface DabPanelProps {
   error?: string;
   /** Index into DAB_BLOCKS of the block being decoded or asked for. */
   blockIndex: number;
-  onBlock: (index: number) => void;
+  /* ★ No onBlock any more: the block is stepped by the MAIN tuning arrows, the drum and the
+   *  lock-screen skip, all in SDRScreen. A prop nothing reads is the "written and never read"
+   *  trap this repo keeps finding — so it is gone rather than left for later. */
   onService: (sid: number) => void;
   /** Close the WINDOW and leave DAB running — the X. See onExit for the other one. */
   onClose: () => void;
@@ -135,6 +239,9 @@ export interface DabPanelProps {
    *  leaving a mode are different intentions and now have different controls. */
   onExit: () => void;
   bottomOffset: number;
+  /** The receiver's own base URL — logos are fetched FROM the server we are listening to, which is
+   *  the only thing that holds this multiplex's carousel. */
+  base: string;
 }
 
 export default function DabPanel(p: DabPanelProps) {
@@ -160,12 +267,6 @@ export default function DabPanel(p: DabPanelProps) {
 
   const block = p.blockIndex >= 0 ? DAB_BLOCKS[p.blockIndex] : undefined;
   const muxTitle = d?.label || (d && !d.locked ? 'searching…' : block ? block.name : DASH);
-
-  const step = (dir: 1 | -1) => {
-    const n = DAB_BLOCKS.length;
-    const i = p.blockIndex < 0 ? 0 : (p.blockIndex + dir + n) % n;
-    p.onBlock(i);
-  };
 
   const body = (
     <ScrollView style={{ maxHeight: maxBody }} contentContainerStyle={s.body}
@@ -193,31 +294,10 @@ export default function DabPanel(p: DabPanelProps) {
               {d.locked ? 'Locked — reading the service list…' : 'Searching for the multiplex…'}
             </Text>
           )}
-          {d.services.map(sv => {
-            const active = sv.sid === d.sid;
-            /* ★ THE ANNOUNCEMENT LAMP, and it is a car's TA indicator with TA SWITCHING OFF.
-             *  Stuart: "dont auto tune but if we can show the signal being recieved that would be
-             *  good. Like in a car with TA off." FIG 0/18 support = the dim lamp (TP), FIG 0/19
-             *  switching = the lit one (TA). We never retune to it: on a shared VFO one listener's
-             *  traffic flash drags every other listener off the station they chose. */
-            const live = (d.announce || []).some(a => a.subChId === sv.subch && a.types.length);
-            const alarm = (d.announce || []).some(a => a.alarm);
-            return (
-              <TouchableOpacity key={sv.sid} onPress={() => p.onService(sv.sid)}
-                                style={[s.svc, active && s.svcActive]} activeOpacity={0.7}>
-                <View style={{ flex: 1 }}>
-                  <Text style={[s.svcName, active && { color: C.gold }]} numberOfLines={1}>
-                    {sv.label || sv.sid.toString(16).toUpperCase()}
-                    {live ? (alarm ? '  ⚠ ALARM' : '  ● ANN') : (sv.slides ? '' : '')}
-                  </Text>
-                  {active && !!d.dls && <Text style={s.svcDls} numberOfLines={2}>{d.dls}</Text>}
-                </View>
-                <Text style={s.svcCodec}>
-                  {sv.codec}{sv.kbps ? ` ${sv.kbps}k` : ''}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
+          {d.services.map(sv => (
+            <ServiceRow key={sv.sid} sv={sv} d={d} base={p.base}
+                        onPress={() => p.onService(sv.sid)} />
+          ))}
         </>
       )}
 
@@ -456,15 +536,18 @@ export default function DabPanel(p: DabPanelProps) {
 
         <View style={s.header}>
           <Text style={s.title}>DAB</Text>
-          {/* ★★★ THE BLOCK IS THE TUNING, so it gets the chevrons the VFO would have had. There is
-              no VFO inside a multiplex — an ensemble is one 1.536 MHz block — and the client's
-              tune/zoom/pan are locked out while decoding (SdrWsClient.dabHeld). */}
-          <TouchableOpacity onPress={() => step(-1)} style={s.hbtn}><Text style={s.hbtnTxt}>‹</Text></TouchableOpacity>
+          {/* ★★★ A READOUT, NOT A CONTROL. This was a pair of chevrons either side of the block —
+              and they were tiny, in a panel header, duplicating a control the app already has in
+              the right place. Stuart: "2 extremely tiny buttons in the decoder header are there
+              instead which we moved away from in the client."
+              ★★ THE BLOCK IS THE TUNING, so the MAIN tuning arrows step it (see onVfoStep), and so
+                 do the drum and the lock-screen skip. One meaning, in the controls the hand is
+                 already on. AGENTS.md: when a control moves, the copy that says where it is moves
+                 with it — which is why nothing here says "tap these". */}
           <Text style={s.blockTxt}>
             {block ? `${block.name}` : DASH}
             <Text style={s.blockHz}>{block ? `  ${(block.hz / 1e6).toFixed(3)}` : ''}</Text>
           </Text>
-          <TouchableOpacity onPress={() => step(1)} style={s.hbtn}><Text style={s.hbtnTxt}>›</Text></TouchableOpacity>
           <Text style={s.mux} numberOfLines={1}>{muxTitle}</Text>
           <View style={{ flex: 1 }} />
           <TouchableOpacity onPress={() => setPane(pane === 'stations' ? 'signal' : 'stations')}
@@ -526,6 +609,10 @@ const s = StyleSheet.create({
   svc:      { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6,
               paddingHorizontal: 6, borderRadius: 6 },
   svcActive:{ backgroundColor: C.rowAct },
+  /* ★ A FIXED BOX WHETHER OR NOT THERE IS A PICTURE. Logos arrive one at a time over a second or
+   *  two; if the box appeared with them, every name in the list would shuffle sideways as they
+   *  landed. Same size as the web client's row logo. */
+  logoBox:  { width: 20, height: 20, borderRadius: 3 },
   svcName:  { fontFamily: FONT, fontSize: 14, color: C.value },
   svcDls:   { fontFamily: FONT, fontSize: 11, color: C.muted, marginTop: 2 },
   svcCodec: { fontFamily: FONT, fontSize: 10, color: C.muted },

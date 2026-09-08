@@ -5589,6 +5589,20 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onVfoStep = useCallback((dir: -1 | 1) => {
     markInteract();
+    /* ★★★ IN DAB THE MAIN TUNING ARROWS STEP THE MULTIPLEX. Stuart, 2026-09-08: "the main tuning
+     *  buttons do not cycle through the blocks and 2 extremely tiny buttons in the decoder header
+     *  are there instead which we moved away from in the client."
+     *  ★★ AND IT IS THE SAME RULE AS EVERYWHERE ELSE IN THIS MODE: the block IS the tuning, so the
+     *     control that means "next" must mean the next block — not nothing, and certainly not a
+     *     second, smaller pair of arrows hidden in a panel header. This is the keys' entry point;
+     *     the drum has its own (dabDrumStep) and the lock-screen skip a third, and all three now
+     *     agree. */
+    if (dabOnRef.current) {
+      const n = DAB_BLOCKS.length;
+      const cur = dabBlockRef.current < 0 ? 0 : dabBlockRef.current;
+      onDabBlockRef.current?.(((cur + dir) % n + n) % n);
+      return;
+    }
     const c = client.current; if (!c) return;
     if (isWholeProfileMode(String(c.getStatus().mode))) return;   // DAB/ADS-B: nothing to tune
     const s = stepRef.current; if (!(s > 0)) return;
@@ -8445,11 +8459,13 @@ export default function SDRScreen({ route, navigation }: Props) {
           d={dabState}
           error={dabError}
           blockIndex={dabBlock}
-          onBlock={onDabBlock}
           onService={(sid) => client.current?.dabService?.(sid)}
           onClose={() => setDabBoxOpen(false)}
           onExit={toggleDab}
           bottomOffset={pillBottom + 8 + noticeStackH}
+          /* ★ The RADIO's address, not the door's — the carousel and the kept logo files belong to
+           *  the receiver that is decoding this multiplex. connectBase resolves to /r/<id>. */
+          base={connectBase.replace(/\/+$/, '')}
         />
       )}
       {/* ★ NB the panel itself still clears the NOTICE pills — it takes noticeStackH in its
