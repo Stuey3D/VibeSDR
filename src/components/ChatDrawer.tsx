@@ -104,7 +104,7 @@ const DRAWER_H = Math.min(SCREEN_H * 0.55, 480);
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
-export default function ChatDrawer({
+function ChatDrawerBody({
   visible, messages, myCallsign,
   onJoin, onSend, onClose, onChangeName,
   onMute, muted = false,
@@ -518,3 +518,9 @@ const cd = StyleSheet.create({
     color: 'rgba(255,184,51,0.75)', marginBottom: 2,
   },
 });
+
+/** ★ Same rule as MenuSheet: no hooks run for a drawer that is shut. */
+export default function ChatDrawer(props: ChatDrawerProps) {
+  if (!props.visible) return null;
+  return <ChatDrawerBody {...props} />;
+}

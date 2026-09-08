@@ -48,7 +48,8 @@ import { splashBridge }                 from '../../App';
 
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode, type RdsExt, type RadioCaps } from '../services/UberSDRClient';
 import AdvRdsPanel from '../components/AdvRdsPanel';
-import DabPanel, { dabLogoUrlFor } from '../components/DabPanel';
+import DabPanel from '../components/DabPanel';
+import { createValueBus } from '../services/valueBus';
 import DabPlusBadge from '../components/DabPlusBadge';
 import type { DabState } from '../services/dabTypes';
 import { DAB_BLOCKS, dabBlockIndex } from '../services/dabBlocks';
@@ -2325,18 +2326,25 @@ export default function SDRScreen({ route, navigation }: Props) {
   // bar count would be a guess dressed as a measurement — so the bars sweep
   // 1-2-3-3-2-1 while it decides, then land on the truth. Same idea as a Wi-Fi
   // glyph cycling while it associates: the animation says "asking", not "bad".
-  useEffect(() => {
+  /* ★ STARTED WHEN SETTLING STARTS, STOPPED WHEN IT ENDS. This was a 300 ms interval created at
+   *  mount and left running for the life of the screen — 3.3 wakes a second, backgrounded too,
+   *  for an animation that plays for a few seconds after connect. */
+  const startSettleSweep = useCallback(() => {
+    if (settleAnim.current) return;
     const SWEEP: (1|2|3)[] = [1, 2, 3, 3, 2, 1];
     let i = 0;
-    const t = setInterval(() => {
-      if (!settlingRef.current) return;
+    settleAnim.current = setInterval(() => {
+      if (!settlingRef.current) {
+        if (settleAnim.current) clearInterval(settleAnim.current);
+        settleAnim.current = null;
+        return;
+      }
       const b = meterBus.current;
       if (b.value.link === 0) return;            // disconnected wins outright
       b.emit({ ...b.value, link: SWEEP[i++ % SWEEP.length] });
     }, 300);
-    settleAnim.current = t;
-    return () => clearInterval(t);
   }, []);
+  useEffect(() => () => { if (settleAnim.current) clearInterval(settleAnim.current); }, []);
   const meterSmooth = useRef({ level: 0, peak: 0, hold: 0 });
   // SNR from radiod's channel status (basebandPower − noiseDensity), pushed by
   // native per audio packet. This is the demodulator's own measurement (zoom-
@@ -2957,7 +2965,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ★ Advanced RDS. Separate from activeDecoder on purpose: it is a server-side analyser, not
   // a DecoderClient decoder, and the two can be open at once without fighting.
   const [advRdsOpen, setAdvRdsOpen] = useState(false);
-  const [advRds,     setAdvRds]     = useState<RdsExt | null>(null);
+  /* ★ On a bus, not in state: it arrives every other spectrum frame — see services/valueBus.ts. */
+  const advRdsBus = useRef(createValueBus<RdsExt | null>(null)).current;
   // ★ RAW is per user, per SESSION — deliberately not persisted. It is a diagnostic view, and
   // finding the panel mysteriously full of red labels weeks later would read as a fault.
   const [advRdsRaw,  setAdvRdsRaw]  = useState(false);
@@ -3308,7 +3317,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!c?.setAdvRds) return;                 // only VibeServer has the lever
     const want = advRdsOpen && status.mode === 'wfm';
     c.setAdvRds(want);
-    if (!want) setAdvRds(null);                // drop the stale frame with the switch
+    if (!want) advRdsBus.emit(null);           // drop the stale frame with the switch
   }, [advRdsOpen, status.mode, connected]);
 
   /** Time-signal station: 'auto' picks from the tuned frequency (see timeStationFor). */
@@ -3863,6 +3872,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // Low Data) is a preference, not a symptom, and must never show red.
         rungBars.current = Math.max(1, 4 - Math.max(1, rung)) as 1|2|3;
         settlingRef.current = settling;
+        if (settling) startSettleSweep();
         // Spectrum (from the client) + audio (counted here) = what the LINK is
         // actually carrying, which is the only figure worth showing.
         const audioKb = audioBytes.current / 1024;
@@ -4157,7 +4167,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           else                    decoderImageRef.current?.wefaxLine(ev.line, ev.width, ev.pixels);
         } else { decoderImageRef.current?.imageDone(); }
       },
-      onRdsExt:     (xf) => { if (!destroyed.current) setAdvRds(xf); },
+      onRdsExt:     (xf) => { if (!destroyed.current) advRdsBus.emit(xf); },
       // ★★★ THE RADIO'S OWN WORD ON ITS FM TREATMENTS. Sticky AND shared, so this is the only
       //     authority: another listener may have turned one off, and a control that misreports the
       //     radio is worse than a missing one because nothing tells you to look. Receiving this at
@@ -6382,17 +6392,17 @@ export default function SDRScreen({ route, navigation }: Props) {
       on:       dabOn,
       block:    dabBlock >= 0 ? DAB_BLOCKS[dabBlock].name : '',
       noDecoder: !!vibeDab && (dabState.sfTried ?? 0) > 0 && dabState.aacServerSide === false,
-      /* ★ Every station's live text and picture travel with the list — the wrist shows what the
-       *  phone panel shows. The playing row falls back to the tuned text, as the panel does. */
+      /* ★ Names, and the PLAYING station's live text — nothing more. A watch has no room for
+       *  every station's text or pictures (Stuart, 2026-09-09: "a simple station name and maybe
+       *  a live scrolling text for that station is good but nothing more"). */
       list: vibeDab
         ? dabState.services.map(sv => ({
             id: sv.sid, name: sv.label || sv.sid.toString(16).toUpperCase(),
-            dls: sv.dls || (sv.sid === dabState.sid ? (dabState.dls || '') : ''),
-            logo: dabLogoUrlFor(connectBase.replace(/\/+$/, ''), dabState, sv),
+            ...(sv.sid === dabState.sid && (dabState.dls || sv.dls) ? { dls: dabState.dls || sv.dls } : {}),
           }))
         : dabProgrammes.map((p) => ({ id: p.id, name: p.name })),
     });
-  }, [dabProgrammes, activeDabId, dabEnsemble, dabState, dabOn, dabCapable, dabBlock, connectBase]);
+  }, [dabProgrammes, activeDabId, dabEnsemble, dabState, dabOn, dabCapable, dabBlock]);
 
   // The playing service's logo, for the wrist. DAB is the EASY case for the logo
   // lookup: the label is a decoded station name rather than a truncated 8-character
@@ -7248,6 +7258,31 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Stable handlers — inline lambdas defeat the React.memo on ControlsBar.
   const onStepOpen  = useCallback(() => setStepOpen(true), []);
   const onMenuOpen  = useCallback(() => setMenuOpen(true), []);
+  /* ★★ STABLE OBJECTS FOR A MEMOISED CHILD. ControlsBar is React.memo, and these two were object
+   *  literals built inline in the render — a new identity every time, so the memo could never
+   *  hit and the drum, the Skia meter and every button re-rendered at the screen's rate. */
+  const sessionLeftProp = useMemo(() => sessionLeftMs == null ? null : {
+    // ★ Once a GUARANTEE has run out the number means nothing — you are not counting down
+    //   to anything — so it stops being a clock and says what is actually true.
+    text: (limitSoft && sessionLeftMs <= 0)
+      ? 'open'
+      : `${Math.floor(sessionLeftMs / 60000)}:${String(Math.floor((sessionLeftMs % 60000) / 1000)).padStart(2, '0')}`,
+    // ★★ RED MEANS "YOU ARE ABOUT TO BE CUT OFF", which on a soft receiver is never true:
+    //    nobody is moved until another listener wants the slot, and then with 60s notice.
+    urgent: !limitSoft && sessionLeftMs < 120_000,
+    soft: limitSoft,
+  }, [sessionLeftMs, limitSoft]);
+  // ★ Only on a shared dial: on an ordinary receiver the dial is yours and a listener
+  //   count is trivia, not permission.
+  const sharedDialProp = useMemo(() => sharedDial && dialState ? {
+    listeners: dialState.listeners,
+    alone: dialState.listeners <= 1,
+    // ★★ NAME THE TUNER, NOT YOURSELF. "User 2 tuning" is the warning; your own last move
+    //    is not news to you, and putting it here would make the badge cry wolf.
+    tuning: (dialState.tuner && !dialState.mine)
+      ? (dialState.decoding ? `User ${dialState.tuner} decoding` : `User ${dialState.tuner} tuning`)
+      : '',
+  } : null, [sharedDial, dialState?.listeners, dialState?.tuner, dialState?.mine, dialState?.decoding]);
   const onFreqOpen  = useCallback(() => setFreqModalOpen(true), []);
   const onModeOpen  = useCallback(() => setModeSelOpen(true), []);
   const onAudioOpen = useCallback(() => setAudioSheetOpen(true), []);
@@ -8320,28 +8355,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           readOnly={readOnly}
           activeDecoder={activeDecoder}
           adminMode={adminOk}
-          sessionLeft={sessionLeftMs == null ? null : {
-            // ★ Once a GUARANTEE has run out the number means nothing — you are not counting down
-            //   to anything — so it stops being a clock and says what is actually true.
-            text: (limitSoft && sessionLeftMs <= 0)
-              ? 'open'
-              : `${Math.floor(sessionLeftMs / 60000)}:${String(Math.floor((sessionLeftMs % 60000) / 1000)).padStart(2, '0')}`,
-            // ★★ RED MEANS "YOU ARE ABOUT TO BE CUT OFF", which on a soft receiver is never true:
-            //    nobody is moved until another listener wants the slot, and then with 60s notice.
-            urgent: !limitSoft && sessionLeftMs < 120_000,
-            soft: limitSoft,
-          }}
-          // ★ Only on a shared dial: on an ordinary receiver the dial is yours and a listener
-          //   count is trivia, not permission.
-          sharedDial={sharedDial && dialState ? {
-            listeners: dialState.listeners,
-            alone: dialState.listeners <= 1,
-            // ★★ NAME THE TUNER, NOT YOURSELF. "User 2 tuning" is the warning; your own last move
-            //    is not news to you, and putting it here would make the badge cry wolf.
-            tuning: (dialState.tuner && !dialState.mine)
-              ? (dialState.decoding ? `User ${dialState.tuner} decoding` : `User ${dialState.tuner} tuning`)
-              : '',
-          } : null}
+          sessionLeft={sessionLeftProp}
+          sharedDial={sharedDialProp}
           frequency={status.frequency}
           mode={status.mode}
           step={step}
@@ -8539,7 +8554,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           went. A tablet has the room. */}
       {advRdsOpen && status.mode === 'wfm' && (!isLandscape || isTablet) && (
         <AdvRdsPanel
-          x={advRds}
+          bus={advRdsBus}
           ps={liveStation.name} rt={liveStation.text} pi={liveStation.pi}
           countryIso={liveStation.countryIso}
           logoUri={liveLogo}

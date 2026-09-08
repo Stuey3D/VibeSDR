@@ -139,15 +139,6 @@ const ImpulseResponse = React.memo(function ImpulseResponse({ ir, width, height 
  * ★ A miss is remembered as null, so a station with no artwork is not asked about for ever.
  */
 const logoCache = new Map<string, string | null>();
-/** ★ The picture this panel already knows for a service, for the WATCH payload — off-air first,
- *  then the RadioDNS file the list fetched, then the slideshow. Synchronous: it only reads what
- *  the list has resolved, so the wrist shows what the phone shows. */
-export function dabLogoUrlFor(base: string, d: DabState, sv: DabState['services'][number]): string {
-  if (sv.logoAir) return `${base}/vibeserver/dablogoair?sid=${sv.sid}`;
-  const known = logoCache.get(`${sv.ecc ?? d.ecc ?? -1}|${d.eid ?? 0}|${sv.sid}`);
-  if (known) return known;
-  return sv.logoSlide ? `${base}/vibeserver/dabslide?sid=${sv.sid}` : '';
-}
 
 function useServiceLogo(base: string, d: DabState | null,
                         sv: DabState['services'][number] | undefined): string | null {

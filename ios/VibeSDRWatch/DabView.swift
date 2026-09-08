@@ -238,11 +238,7 @@ struct DabView: View {
           .font(.system(size: 10, weight: .semibold)).foregroundStyle(.orange)
           .lineLimit(2).minimumScaleFactor(0.8)
       }
-      if !link.dabDlsText.isEmpty {
-        Text(link.dabDlsText)
-          .font(.system(size: 10, weight: .medium)).foregroundStyle(.white.opacity(0.65))
-          .lineLimit(1).truncationMode(.tail)
-      }
+      if !link.dabDlsText.isEmpty { DabMarquee(text: link.dabDlsText) }
       /* ★★★ THE WAY OUT. On OWRX you leave DAB by choosing another profile and this is not drawn;
        *  on a VibeServer DAB is a mode nothing else can end, so without it the wrist is stuck on
        *  this screen until the phone is picked up. */
@@ -302,24 +298,9 @@ struct DabView: View {
       Image(systemName: playing ? "speaker.wave.2.fill" : "circle")
         .font(.system(size: playing ? 11 : 7, weight: .semibold))
         .foregroundStyle(playing ? .green : .white.opacity(0.3)).frame(width: 14)
-      /* ★ The station's picture, when the server has one. A fixed box whether or not it does, so
-       *  the names do not shuffle sideways as logos land — the phone panel's rule. */
-      if let u = svc.logo {
-        AsyncImage(url: u) { img in img.resizable().scaledToFit() } placeholder: { Color.clear }
-          .frame(width: 20, height: 20).clipShape(RoundedRectangle(cornerRadius: 3))
-      }
-      VStack(alignment: .leading, spacing: 1) {
-        Text(svc.name)
-          .font(.system(size: 14, weight: playing ? .bold : .semibold, design: .rounded))
-          .foregroundStyle(playing ? .white : .white.opacity(0.85)).lineLimit(1).minimumScaleFactor(0.7)
-        /* ★ Every station's live text, as the phone and the browser show it. Truncated, not
-         *  scrolled: a moving label per row is a battery cost for a glance. */
-        if !svc.dls.isEmpty {
-          Text(svc.dls)
-            .font(.system(size: 9, weight: .medium)).foregroundStyle(.white.opacity(0.55))
-            .lineLimit(1).truncationMode(.tail)
-        }
-      }
+      Text(svc.name)
+        .font(.system(size: 14, weight: playing ? .bold : .semibold, design: .rounded))
+        .foregroundStyle(playing ? .white : .white.opacity(0.85)).lineLimit(1).minimumScaleFactor(0.7)
       Spacer(minLength: 0)
     }
     .padding(.horizontal, 8).padding(.vertical, 7)
@@ -328,3 +309,35 @@ struct DabView: View {
   }
 }
 
+/// ★ The playing station's live text, SCROLLING when it is wider than the screen (Stuart,
+///   2026-09-09: "a simple station name and maybe a live scrolling text for that station"). One
+///   line, one transform, and it only moves when the text does not fit — a label that fits sits
+///   still. Ping-pong with a pause at each end, the phone panel's motion.
+struct DabMarquee: View {
+  let text: String
+  @State private var textW: CGFloat = 0
+  @State private var boxW: CGFloat = 0
+  @State private var x: CGFloat = 0
+  var body: some View {
+    GeometryReader { g in
+      Text(text)
+        .font(.system(size: 10, weight: .medium)).foregroundStyle(.white.opacity(0.65))
+        .lineLimit(1).fixedSize()
+        .background(GeometryReader { t in
+          Color.clear
+            .onAppear { textW = t.size.width }
+            .onChange(of: text) { _, _ in textW = t.size.width }
+        })
+        .offset(x: x)
+        .onAppear { boxW = g.size.width; restart() }
+        .onChange(of: textW) { _, _ in restart() }
+    }
+    .frame(height: 13).clipped()
+  }
+  private func restart() {
+    x = 0
+    let over = textW - boxW
+    guard over > 4, boxW > 0 else { return }
+    withAnimation(.linear(duration: Double(over) / 30).delay(1.2).repeatForever(autoreverses: true)) { x = -over }
+  }
+}

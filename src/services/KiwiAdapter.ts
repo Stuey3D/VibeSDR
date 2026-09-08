@@ -53,18 +53,7 @@ const KIWI_FULL_BW = 30_000_000;   // zoom 0 span (Hz) — Kiwi's nominal 0–30
 const KIWI_MAX_ZOOM = 12;
 const WF_BINS = 1024;              // Kiwi waterfall is a fixed 1024-bin row
 
-const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-function bytesToBase64(b: Uint8Array): string {
-  let out = '';
-  for (let i = 0; i < b.length; i += 3) {
-    const a0 = b[i], a1 = b[i + 1], a2 = b[i + 2];
-    const e0 = a0 >> 2, e1 = ((a0 & 3) << 4) | (a1 >> 4);
-    const e2 = i + 1 < b.length ? (((a1 & 15) << 2) | (a2 >> 6)) : 64;
-    const e3 = i + 2 < b.length ? (a2 & 63) : 64;
-    out += B64[e0] + B64[e1] + (e2 === 64 ? '=' : B64[e2]) + (e3 === 64 ? '=' : B64[e3]);
-  }
-  return out;
-}
+import { bytesToBase64 } from './base64';   // ★ the shared pair-table encoder
 
 // SND flags (audio.js)
 const SND_COMPRESSED    = 0x0010;

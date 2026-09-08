@@ -230,6 +230,8 @@ export interface WatchCommandHandlers {
 class WatchProvider {
   private available = Platform.OS === 'ios' && !!Native;
   private reachable = false;
+  /** A watch has answered at least once this session — see the poll below. */
+  private everReachable = false;
   private lastRowAt = 0;
   /** Last tune/zoom crown command from the watch — rows back off while a spin is live. */
   private lastGestureAt = 0;
@@ -434,8 +436,12 @@ class WatchProvider {
      *   with no watch listening costs nothing. */
     let aliveTick = 0;
     this.pollTimer = setInterval(() => {
-      Native!.isReachable().then((r) => this.setReachable(r)).catch(() => {});
-      if (++aliveTick % 2 === 0) Native!.sendPhone(this.phoneStatus);
+      /* ★ A phone with no watch on it asked every 2 s for the whole session. Until a watch has
+       *  ever answered, ask every 10 s; once one has, keep the 2 s the watchdog needs. */
+      ++aliveTick;
+      if (!this.reachable && !this.everReachable && aliveTick % 5 !== 0) return;
+      Native!.isReachable().then((r) => { if (r) this.everReachable = true; this.setReachable(r); }).catch(() => {});
+      if (aliveTick % 2 === 0) Native!.sendPhone(this.phoneStatus);
     }, 2000);
   }
 
@@ -673,8 +679,8 @@ class WatchProvider {
                    block?: string;
                    /** ★ DAB+ will be silent: no AAC decoder on the server. */
                    noDecoder?: boolean;
-                   /** Per service: its live text and its picture's URL (VibeServer). */
-                   list: { id: number; name: string; dls?: string; logo?: string }[] }) {
+                   /** Per service; `dls` only on the playing one — the wrist shows one line. */
+                   list: { id: number; name: string; dls?: string }[] }) {
     if (!this.available) return;
     this.lastDab = JSON.stringify(state);
     this.flushDab();

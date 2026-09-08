@@ -20,6 +20,7 @@
  */
 
 import React, { useMemo, useRef } from 'react';
+import { useBusValue, type ValueBus } from '../services/valueBus';
 import { Platform, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import type { LayoutChangeEvent } from 'react-native';
 import { BlurView } from 'expo-blur';
@@ -111,7 +112,10 @@ const COV = ['Local', 'International', 'National', 'Supra-regional',
              'Regional 9', 'Regional 10', 'Regional 11', 'Regional 12'];
 
 export interface AdvRdsPanelProps {
-  x: RdsExt | null;
+  /** The analyser frame. Either directly, or — preferred — over a bus, so the five-a-second
+   *  arrival re-renders this panel and not the whole screen (see services/valueBus.ts). */
+  x?: RdsExt | null;
+  bus?: ValueBus<RdsExt | null>;
   /** Basic RDS, which arrives on its own message and is shown by the VTS bar too. */
   ps?: string; rt?: string; pi?: string; ber?: number; countryIso?: string;
   /** ★★★ THE LOGO THE REST OF THE APP IS ALREADY SHOWING, resolved once by SDRScreen with the PI
@@ -417,7 +421,9 @@ const Mpx = React.memo(function Mpx({ mpx, width, height }: { mpx: number[]; wid
 });
 
 export default function AdvRdsPanel(p: AdvRdsPanelProps) {
-  const { x, raw } = p;
+  const busX = useBusValue(p.bus);
+  const x = p.bus ? (busX ?? null) : (p.x ?? null);
+  const { raw } = p;
   // ★ The three Skia plots, at 3 Hz rather than the full rdsx rate — see useThrottledPoints.
   const plotXy  = useThrottledPoints(x?.xy);
   const plotMpx = useThrottledPoints(x?.mpx);

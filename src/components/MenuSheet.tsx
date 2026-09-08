@@ -682,7 +682,7 @@ function RttySettingsRows({ s, onChange }:
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function MenuSheet({
+function MenuSheetBody({
   visible, serverName, serverUrl,
   colormap, dbMin, dbMax, onColormap, onDbMin, onDbMax,
   filterLow, filterHigh, bwEdgeMax = 6000, onFilterLow, onFilterHigh, onFilterBoth,
@@ -1809,3 +1809,12 @@ const styles = StyleSheet.create({
   },
   closeBtnText: { color: C.goldDim, fontFamily: 'Atkinson Hyperlegible', fontSize: 12, fontWeight: 'bold', letterSpacing: 1 },
 });
+
+/** ★★ NOTHING RUNS WHILE THE SHEET IS SHUT. The body has 22 hooks and ~250 lines of setup that
+ *  used to execute on EVERY parent render — five a second with the RDS analyser open — before
+ *  its own `if (!visible) return null`. Hooks cannot sit below an early return, so the return
+ *  moved up a level. */
+export default function MenuSheet(props: MenuSheetProps) {
+  if (!props.visible) return null;
+  return <MenuSheetBody {...props} />;
+}

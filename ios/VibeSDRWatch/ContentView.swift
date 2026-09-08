@@ -757,6 +757,8 @@ struct ContentView: View {
     // independently of the render loop; ours drains on the render clock, so the tick has to
     // live somewhere that runs before the first row.
     .onReceive(driver) { _ in
+      // ★ A 20 Hz wake for a drain nobody can see. The wrist-down path already tells the link.
+      if link.isBackground { return }
       link.driverTick(now: ProcessInfo.processInfo.systemUptime)
     }
   }

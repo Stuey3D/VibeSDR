@@ -31,20 +31,8 @@ const Vibe = NativeModules.VibePowerModule as {
   stopExternalAudio?: () => void;
 } | undefined;
 
-const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-/** Minimal Uint8Array → base64 (no dep; Hermes has no btoa). */
-function bytesToBase64(b: Uint8Array): string {
-  let out = '', i = 0;
-  const n = b.length;
-  for (; i + 2 < n; i += 3) {
-    const v = (b[i] << 16) | (b[i + 1] << 8) | b[i + 2];
-    out += B64[(v >> 18) & 63] + B64[(v >> 12) & 63] + B64[(v >> 6) & 63] + B64[v & 63];
-  }
-  const rem = n - i;
-  if (rem === 1) { const v = b[i] << 16; out += B64[(v >> 18) & 63] + B64[(v >> 12) & 63] + '=='; }
-  else if (rem === 2) { const v = (b[i] << 16) | (b[i + 1] << 8); out += B64[(v >> 18) & 63] + B64[(v >> 12) & 63] + B64[(v >> 6) & 63] + '='; }
-  return out;
-}
+import { bytesToBase64 } from './base64';   // ★ the shared pair-table encoder
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';   // for the decoder below
 
 /** Longest common leading substring across the strings (for deriving an SDR's
  *  name from its profiles' "{sdrName} {profileName}" labels). */

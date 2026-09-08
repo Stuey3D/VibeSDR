@@ -383,15 +383,13 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   struct DabService: Codable, Equatable, Identifiable {
     var id = 0            // audio_service_id — what you send to switch
     var name = ""
-    var dls = ""          // ★ what it is playing now — every station at once (VibeServer)
-    var logo = ""         // ★ its picture's URL, resolved by the phone; "" = none
+    var dls = ""          // ★ what it is playing now (only the playing service carries one)
     /* ★ Same door as DabState: absent keys fall back rather than failing the whole decode. */
     init(from decoder: Decoder) throws {
       let c = try decoder.container(keyedBy: CodingKeys.self)
       id   = try c.decodeIfPresent(Int.self,    forKey: .id)   ?? 0
       name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
       dls  = try c.decodeIfPresent(String.self, forKey: .dls)  ?? ""
-      logo = try c.decodeIfPresent(String.self, forKey: .logo) ?? ""
     }
     init() {}
   }

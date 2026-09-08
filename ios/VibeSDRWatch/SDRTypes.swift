@@ -25,9 +25,6 @@ struct SDRProfile: Identifiable, Hashable {
 struct DabProgramme: Identifiable, Equatable {
   let id: Int
   let name: String
-  /// ★ Live text and picture per service, relayed by the phone (see WatchLink.DabService).
-  var dls: String = ""
-  var logo: URL? = nil
 }
 
 /// One line in the server's shared chat. `mine` is our own message echoed back (OWRX broadcasts every

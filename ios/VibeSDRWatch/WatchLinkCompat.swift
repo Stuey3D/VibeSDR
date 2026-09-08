@@ -86,10 +86,7 @@ extension WatchLink {
   }
   var isFmDx: Bool { isFmdx }
 
-  var dabProgrammes: [DabProgramme] {
-    (dab?.list ?? []).map { DabProgramme(id: $0.id, name: $0.name, dls: $0.dls,
-                                         logo: $0.logo.isEmpty ? nil : URL(string: $0.logo)) }
-  }
+  var dabProgrammes: [DabProgramme] { (dab?.list ?? []).map { DabProgramme(id: $0.id, name: $0.name) } }
   var dabNoDecoder: Bool { dab?.noDecoder ?? false }
   /// The playing service's text, for the header line Jr already has.
   var dabDlsText: String { (dab?.list ?? []).first { $0.id == dab?.active }?.dls ?? "" }
@@ -134,7 +131,9 @@ extension WatchLink {
 
   /// OWRX profiles and listener count are the PHONE's session; it does not forward them yet.
   var profiles: [SDRProfile] { [] }
-  var clients: Int { 0 }
+  /// ★ The listener count the phone already relays with the dial (an omission: the DAB and
+  ///   aircraft screens showed 0 beside the chat glyph while the main screen showed the truth).
+  var clients: Int { dialListeners }
   var chatLog: [ChatLine] { [] }
   /// The phone's learned FM-DX station names — WatchLink already receives these, so they only need
   /// the type it sends mapping onto the one the views name.
