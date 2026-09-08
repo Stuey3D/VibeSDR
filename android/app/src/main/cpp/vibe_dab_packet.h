@@ -44,6 +44,10 @@ public:
              *  ever lost. The multiplexer pads the sub-channel with a fixed pattern; it is skipped
              *  and counted as fill, so the pane's "bad" count means bad. */
             if (useful > plen - 5) { ++fill_; p += plen; continue; }
+            /* ★ And only OUR address is judged: the remaining failures (2.7 %, measured) were the same
+             *  fill at address 1022 with a plausible length. Another component's packets are not
+             *  ours to count as bad. */
+            if (addr_ >= 0 && addr != addr_) { ++other_; p += plen; continue; }
             const uint16_t want = uint16_t((f[p + plen - 2] << 8) | f[p + plen - 1]);
             if (motCrc16(f + p, plen - 2) != want) { ++crcFail_; ++failByLen_[lenCode]; lastFail_[0] = f[p]; lastFail_[1] = f[p+1]; lastFail_[2] = f[p+2]; lastFailAddr_ = addr; p += plen; continue; }
             ++packets_;
@@ -75,7 +79,7 @@ private:
     std::vector<uint8_t> buf_;
     bool open_ = false;
     int  lastCont_ = 0;
-    uint32_t packets_ = 0, groups_ = 0, crcFail_ = 0, lost_ = 0, short_ = 0, fill_ = 0;
+    uint32_t packets_ = 0, groups_ = 0, crcFail_ = 0, lost_ = 0, short_ = 0, fill_ = 0, other_ = 0;
     uint32_t failByLen_[4] = {0,0,0,0}; uint8_t lastFail_[3] = {0,0,0}; int lastFailAddr_ = -1;
 };
 
