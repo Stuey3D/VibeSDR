@@ -234,6 +234,14 @@ public:
                 preTuneDropped_ += uint32_t(drop);
                 if (settleDrop_ == 0) {
                     rx_.reset(); iq_.clear(); lsfPend_.clear();
+                    /* ★★★ THE SELECTION MUST BE RE-APPLIED AFTER THE RESET. rx_.reset() empties the
+                     *  ensemble and with it the receiver's chosen service — but sid_ still said it
+                     *  was selected, so the worker's "want_ != sid_" re-select never fired and the
+                     *  station sat silent until the user clicked it again (Stuart, 2026-09-08: "when
+                     *  the agc settled the station didnt start to play automatically until I clicked
+                     *  it again" — the AGC's gain cut re-arms this settle). Zero it: want_ is the
+                     *  intent and it re-applies the moment the ensemble is read again. */
+                    sid_ = 0;
                     resetAudioCounters();   // ★ a new multiplex starts its own tally
                     mp2_.reset(); aac_.reset(); pad_.reset(); adts_.clear();
                     aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacPrimed_ = false;

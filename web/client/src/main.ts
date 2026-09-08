@@ -4888,7 +4888,9 @@ function dabTxParts(t: NonNullable<DabState['tii']>[number]): { text: string; le
   const dist = t.km !== undefined && t.km >= 0 ? ` · ${(t.km * 0.621371).toFixed(t.km < 16 ? 1 : 0)} mi (${t.km.toFixed(t.km < 10 ? 1 : 0)} km)` : '';
   /* ★ The code scrolls with the name; only the level is fixed, so every level lines up on the right
    *  (Stuart, 2026-09-08). */
-  return { text: `${name}${dist}${t.site ? ` · <span style="opacity:.5">${code}</span>` : ''}`, level: `${t.db.toFixed(0)} dB` };
+  return { text: `${name}${dist}${t.site ? ` · <span style="opacity:.5">${code}</span>` : ''}`, /* ★ Padded to two figures with a FIGURE SPACE, so 9 dB and 10 dB are the same width and the
+          transmitter line does not wobble as the level alternates between them (Stuart). */
+          level: `${String(Math.round(t.db)).padStart(2, '\u2007')} dB` };
 }
 
 /** ★ The two pictures a DX-er reads before any number: the DQPSK constellation (tight dots at

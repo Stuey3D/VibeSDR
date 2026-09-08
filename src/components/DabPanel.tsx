@@ -415,7 +415,7 @@ export default function DabPanel(p: DabPanelProps) {
                           + (t.site ? ` · ${t.site}` : '')
                           + (t.area && t.area !== t.site ? ` (${t.area})` : '')
                           + (t.km !== undefined && t.km >= 0 ? ` · ${(t.km * 0.621371).toFixed(t.km < 16 ? 1 : 0)} mi` : '')
-                          + ` · ${t.db.toFixed(1)} dB`
+                          + ` · ${t.db.toFixed(1).padStart(4, '\u2007')} dB`   // ★ two figures: 9.5 and 10.2 dB are the same width
                           + (t.ambiguous ? ' · ambiguous' : '')} />
               ))
             : <Row label="Transmitters" value={!d.locked ? DASH
