@@ -919,11 +919,11 @@ public:
              *  resort behind RadioDNS and the SPI carousel, because a slideshow is programme
              *  artwork, not a logo — but for a small station that publishes neither it IS the
              *  station's picture, and Embrace on 7D is exactly that case. */
-            snprintf(b, sizeof b, "{\"sid\":%u,\"logoAir\":%s,\"logoSlide\":%s,\"label\":\"%s\",\"short\":\"%s\",\"codec\":\"%s\",\"subch\":%d,\"pty\":%d,\"slides\":%s,\"kbps\":%d,\"prot\":\"%s\",\"cuStart\":%d,\"cuSize\":%d,\"scids\":%d,\"ecc\":%d",
+            snprintf(b, sizeof b, "{\"sid\":%u,\"logoAir\":%s,\"logoSlide\":%s,\"label\":\"%s\",\"short\":\"%s\",\"codec\":\"%s\",\"subch\":%d,\"pty\":%d,\"ptyDyn\":%s,\"slides\":%s,\"kbps\":%d,\"prot\":\"%s\",\"cuStart\":%d,\"cuSize\":%d,\"scids\":%d,\"ecc\":%d",
                      unsigned(kv.first), hasAirLogo(kv.first) ? "true" : "false",
                      haveSlideNoLock(kv.first) ? "true" : "false", esc(sv.label).c_str(), esc(sv.shortLabel).c_str(),
                      pc->scType == 63 ? "DAB+" : pc->scType == 0 ? "MP2" : "?", pc->subChId,
-                     sv.pty, sv.hasSlideshow() ? "true" : "false",
+                     sv.pty, sv.ptyDynamic ? "true" : "false", sv.hasSlideshow() ? "true" : "false",
                      si.bitrateKbps, prot, sc.startCu, sizeCu, pc->scids, sv.ecc >= 0 ? sv.ecc : e.ecc);
             j += b;
             /* ★ THE RDS SIDE OF THIS SERVICE, from the ensemble's own signalling: the FM stations

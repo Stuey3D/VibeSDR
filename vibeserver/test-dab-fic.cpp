@@ -283,6 +283,25 @@ int main() {
         CHECK(g.announceSupport.count(0x1003) == 0, "★ a truncated 0/18 record is dropped whole");
     }
 
+    /* ── ★ FIG 0/17 — the S/D flag (EN 300 401 V2.2.1 clause 8.1.5, figure 41) ─────────────
+     *  The V2 record is four bytes: SId(16), then S/D(1) Rfa1(1) Rfu1(2) Rfa2(6) Rfu2(1)
+     *  Int.code(5). ★ welle.io parses the V1 layout here — a variable record with L_flag, CC_flag
+     *  and a language byte — so the two decoders genuinely disagree, and a reader who checks the
+     *  reference instead of the clause would "fix" ours into being wrong. This pins the version we
+     *  implement. */
+    {
+        Ensemble e;
+        { std::vector<uint8_t> p{ 0x02, 0xC2, 0x21, 0x01, 0x00, uint8_t((3 << 2) | 0x02) };
+          auto fib = makeFib({{0, p}}); parseFib(fib.data(), e); }
+        std::vector<uint8_t> p{ 0x11, 0xC2, 0x21, 0x80, 0x0A };   // ext 17; S/D = 1, code 10
+        auto fib = makeFib({{0, p}});
+        CHECK(parseFib(fib.data(), e), "the 0/17 FIB parses");
+        auto it = e.services.find(0xC221);
+        CHECK(it != e.services.end() && it->second.pty == 10, "the international code is the low 5 bits");
+        CHECK(it != e.services.end() && it->second.ptyDynamic,
+              "★ S/D = 1 is a DYNAMIC programme type — the top bit of the third byte");
+    }
+
     if (fails == 0) printf("  all passed\n");
     else            printf("  %d FAILED\n", fails);
     return fails ? 1 : 0;

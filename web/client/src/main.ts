@@ -4539,7 +4539,12 @@ function dabRender() {
     + row('Bit rate', d.bitrate ? d.bitrate + ' kbit/s' : '—')
     + row('Protection', cur?.prot ?? (d.protection || '—'))
     + (cur ? row('Capacity units', `${cur.cuStart}–${(cur.cuStart ?? 0) + (cur.cuSize ?? 0) - 1} (${cur.cuSize} CU, sub-channel ${cur.subch})`) : '')
-    + (cur && cur.pty !== undefined && cur.pty >= 0 ? row('Programme type', DAB_PTY[cur.pty] ?? String(cur.pty)) : '')
+    /* ★ The S/D flag of FIG 0/17 (EN 300 401 8.1.5): "dynamic" means the code follows the ITEMS
+     *  within a programme, so it is live; static is the programme's overall genre and does not
+     *  change within it. Saying which is the difference between a live readout and a label. */
+    + (cur && cur.pty !== undefined && cur.pty >= 0
+        ? row('Programme type', (DAB_PTY[cur.pty] ?? String(cur.pty))
+                                + (cur.ptyDyn ? ' · dynamic' : ' · static genre')) : '')
     + (cur && cur.ecc !== undefined && cur.ecc >= 0 ? row('Service id', `${cur.ecc.toString(16).toUpperCase()}:${cur.sid.toString(16).toUpperCase().padStart(4, '0')}`) : '')
     /* ★ The RDS side, from the ensemble's own signalling (FIG 0/6 links, FIG 0/21 frequencies):
      *  which FM station this programme is, where it is on FM, and which other DAB services carry

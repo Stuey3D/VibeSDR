@@ -186,7 +186,7 @@ export interface DabState {
   sid: number; bitrate: number; protection: string;
   services: { sid: number; label: string; codec: string; subch: number; short?: string; pty?: number;
               slides?: boolean; kbps?: number; prot?: string; cuStart?: number; cuSize?: number;
-              scids?: number; ecc?: number; dls?: string; dlsAge?: number; logoAir?: boolean; logoSlide?: boolean;
+              scids?: number; ecc?: number; dls?: string; dlsAge?: number; logoAir?: boolean; logoSlide?: boolean; ptyDyn?: boolean;
     /** FIG 0/6 + 0/21: the FM stations that are this programme and the other DAB services carrying it. */
     pi?: number[]; fm?: number[]; linkSids?: number[]; linkHard?: boolean; linkActive?: boolean; piImplicit?: boolean }[];
   /** The playing service's codec as DECODED (super frame / Layer II header), not as promised. */

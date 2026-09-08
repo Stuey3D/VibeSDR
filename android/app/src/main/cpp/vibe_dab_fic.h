@@ -17,7 +17,7 @@
 //   FIG 0/8  component global definition — SCIdS, which binds labels and user apps to components
 //   FIG 0/9  country / LTO / ECC        — what makes an EId and a SId unique in the world
 //   FIG 0/13 user application info      — which X-PAD application carries the slideshow
-//   FIG 0/17 programme type
+//   FIG 0/17 programme type            — with the S/D flag: static genre or dynamic PTy
 //   FIG 0/18 announcement support     — which types a service can carry, and its clusters
 //   FIG 0/19 announcement switching   — an announcement ON AIR now, and its sub-channel
 //   FIG 1/0  ensemble label             — the multiplex name
@@ -104,6 +104,7 @@ struct Service {
     std::string label;                ///< 16-char label, UTF-8
     std::string shortLabel;           ///< the abbreviated label the character flag field selects
     int      pty = -1;                ///< FIG 0/17 international programme type code
+    bool     ptyDynamic = false;      ///< FIG 0/17 S/D: the code follows the ITEMS, not the programme
     int      ecc = -1;                ///< FIG 0/9 override; -1 = the ensemble's
     std::vector<ServiceComponent> components;
 
@@ -443,14 +444,27 @@ inline bool parseFib(const uint8_t* fib32, Ensemble& e) {
                         if (match) c.apps = apps;
                     }
                 }
-            } else if (ext == 17 && !oe) {             // programme type
+            } else if (ext == 17 && !oe) {             // programme type (8.1.5)
+                /* ★★★ THE V2 RECORD IS FOUR BYTES AND THE S/D FLAG IS THE TOP BIT OF THE THIRD.
+                 *  EN 300 401 V2.2.1 figure 41: SId(16), then S/D(1) Rfa1(1) Rfu1(2) Rfa2(6)
+                 *  Rfu2(1) Int.code(5). ★ welle.io parses the V1 layout here instead — a variable
+                 *  record with L_flag, CC_flag and a language byte — which is why the two readers
+                 *  disagree and why this cites the figure: V1's fields were REMOVED, and a decoder
+                 *  written from the older text walks a 4-byte record as 5. Ours was already right;
+                 *  only the flag was being dropped on the floor.
+                 *  ★ S/D 1 means the code "represents the current programme contents" — a DYNAMIC
+                 *    PTy that follows the items within a programme. 0 is the overall genre of the
+                 *    programme and does not change within it. Showing "Pop Music" as though it
+                 *    were live when the station said it was the standing genre is a small lie the
+                 *    flag exists to prevent. */
                 size_t j = 0;
                 while (j + 4 <= qn) {
                     const uint32_t sid = (uint32_t(q[j]) << 8) | q[j + 1];
+                    const bool dynamic = (q[j + 2] & 0x80) != 0;
                     const int code = q[j + 3] & 0x1F;
                     j += 4;
                     auto it = e.services.find(sid);
-                    if (it != e.services.end()) it->second.pty = code;
+                    if (it != e.services.end()) { it->second.pty = code; it->second.ptyDynamic = dynamic; }
                 }
             }
             else if (ext == 6 && !cn) {                // service linking (8.1.15) — OE sets are about links, keep them
