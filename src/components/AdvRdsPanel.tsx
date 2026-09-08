@@ -341,6 +341,35 @@ const Constellation = React.memo(function Constellation({ xy, size }: { xy: numb
   );
 });
 
+/** ★ THE EYE — symbol value against time, the web's `drawEye`: two clean bands with a clear gap
+ *  between them means every bit is being read; a smear across the middle is where errors come
+ *  from. The same points as the constellation, rotated onto the wanted axis, drawn left to right.
+ *  One Points node, as the constellation — never an element per symbol. */
+const Eye = React.memo(function Eye({ xy, width, height }: { xy: number[]; width: number; height: number }) {
+  const pts = useMemo(() => {
+    const out: { x: number; y: number }[] = [];
+    const n = xy.length / 2;
+    if (n < 2) return out;
+    const rot = constellationAngle(xy);
+    const cr = Math.cos(rot), sr = Math.sin(rot);
+    const k = constellationScale(xy, height) * 0.9;
+    const mid = height / 2;
+    for (let i = 0; i < n; i++) {
+      const x = xy[i * 2] * cr - xy[i * 2 + 1] * sr;
+      out.push({ x: (i / (n - 1)) * (width - 2) + 1, y: mid - x * k });
+    }
+    return out;
+  }, [xy, width, height]);
+  return (
+    <Canvas style={{ width, height }}>
+      <Rect x={0} y={0} width={width} height={height} color="rgba(255,160,0,0.05)" />
+      <Rect x={0} y={height / 2 - 0.5} width={width} height={1} color="rgba(255,160,60,0.35)" />
+      <Points points={pts} mode="points" style="stroke" strokeWidth={1.8}
+              strokeCap="round" color="rgba(125,255,154,0.85)" />
+    </Canvas>
+  );
+});
+
 /** ★★ THE SYMBOL TRACE — the "two lines" read, and the one most people find easier than the
  *  constellation. Symbol value against time: two clean bands with a clear gap means every bit
  *  is being decided with margin; a filled gap means bits are landing near the threshold, and
@@ -904,7 +933,9 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={s.plotLbl}>MPX</Text>
-              <Mpx mpx={plotMpx} width={180} height={120} />
+              <Mpx mpx={plotMpx} width={180} height={72} />
+              <Text style={[s.plotLbl, { marginTop: 4 }]}>EYE</Text>
+              <Eye xy={plotXy} width={180} height={44} />
             </View>
           </View>
           {/* ★ THE SYMBOL TRACE, full width — the "two lines" read, and the one most people

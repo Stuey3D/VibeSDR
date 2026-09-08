@@ -1662,6 +1662,17 @@ struct SfericDetect {
     double agoSecs(double now) const { return lastStrikeAt > 0 ? now - lastStrikeAt : -1.0; }
 };
 static SfericDetect g_sferic;
+/* ★★★ A HARDWARE MOVE LIFTS THE WHOLE BAND TOO. The IF filter follows the zoom on an RTL and
+ *     VibeClarity re-centres the tuner under a stationary view, so a rapid zoom changes the
+ *     passband and the centre several times a second — each one a whole-band step that reads
+ *     exactly like a strike (Stuart, 2026-09-09: "I accidentally triggered it by rapid zooming").
+ *     Same treatment as a gain step: suppress for a moment after any retune, filter or rate
+ *     change, and keep the baseline following meanwhile. */
+static std::atomic<double> g_hwMovedAt{0.0};
+static inline void noteHwMoved() {
+    g_hwMovedAt.store(std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
+}
 static std::atomic<int>      g_adcHotRun{0};
 /** ★★★ WHEN THE PIPELINE WAS LAST DISTURBED — a dropped IQ buffer, or an engine rate change.
  *
@@ -3237,6 +3248,7 @@ struct LocalSdrShim::Impl {
                  *  ★ The R820T2 quantises this to its nearest step, so the exact request matters
                  *    less than its size; asking for the figure that means something is still
                  *    right. VIBE_DAB_IF_HZ overrides it for measurement on 10C. */
+                noteHwMoved();
                 LocalSdrShim::instance().setTunerBandwidth(kDabIfHz);
                 LOGI("[DAB] tuner IF filter set to %.3f MHz — wide enough for a 1.536 MHz "
                      "ensemble, narrow enough to keep the next block out", kDabIfHz / 1e6);
@@ -3362,6 +3374,7 @@ struct LocalSdrShim::Impl {
                     LOGI("IF filter widened %d -> %d kHz — the gain was set behind a narrower "
                          "filter, so cut fast if it is now too hot", cur / 1000, want / 1000);
                 }
+                noteHwMoved();
                 LocalSdrShim::instance().setTunerBandwidth(want);
                 LocalSdrShim::instance().broadcastHwInfo();
             }
@@ -3446,6 +3459,7 @@ struct LocalSdrShim::Impl {
 
     // Tune the radio to (logical centre + HW_OFFSET_HZ).
     void tuneHw(double logicalCenter) {
+        noteHwMoved();                       // ★ see g_hwMovedAt — a retune is not a sferic
         // ★ A new dial position is a new noise floor — see g_bestFloorDb. Carrying the old one
         //   across would have the AGC refusing gain on a quiet band because a busy one was noisy.
         g_bestFloorDb.store(0.0f, std::memory_order_relaxed);
@@ -5816,8 +5830,9 @@ struct LocalSdrShim::Impl {
             const double sinceGain = lxNow - g_ovlLastChangeAt.load(std::memory_order_relaxed);
             const double sinceCfg  = lxNow - g_agcForgetAt.load(std::memory_order_relaxed);
             const bool   hfBand    = rtlCenter.load() < 32e6;
+            const double sinceHw   = lxNow - g_hwMovedAt.load(std::memory_order_relaxed);
             if (hfBand) g_sferic.feed(fftAccum.data(), inv, bins, lxNow,
-                                      sinceGain < 1.5 || sinceCfg < 1.5);
+                                      sinceGain < 1.5 || sinceCfg < 1.5 || sinceHw < 2.0);
             else        g_sferic.hits.clear();
         }
 
@@ -7006,7 +7021,7 @@ struct LocalSdrShim::Impl {
          *  the rebuild re-applies the locked centre and rebuilds the audio chain — undoing
          *  whatever we set just below it. Skipping a no-op rebuild removes the race entirely on
          *  the common path. */
-        if (ar > 0.0 && std::fabs(ar - sampleRate) > 1.0) LocalSdrShim::instance().setSampleRate(ar);
+        if (ar > 0.0 && std::fabs(ar - sampleRate) > 1.0) { noteHwMoved(); LocalSdrShim::instance().setSampleRate(ar); }
         if (rc > 0.0) { rtlCenter.store(rc); tuneHw(rc); }
         if (g_dabSavedAudio.load() > 0.0) audioFreq.store(g_dabSavedAudio.load());
         if (g_dabSavedView.load()  > 0.0) viewCenter.store(g_dabSavedView.load());
@@ -9079,6 +9094,7 @@ struct LocalSdrShim::Impl {
              *     setting. The RSP lists 2.048 and the HackRF takes any rate from 2 MS/s up, so
              *     they capture natively too; the Airspy HF+ cannot reach Band III at all. */
             const double wantRate = double(vibedab::DabService::kRateHz);
+            noteHwMoved();
             LocalSdrShim::instance().setSampleRate(wantRate);
             const double gotRate = LocalSdrShim::instance().captureSpanHz();
             if (std::fabs(gotRate - wantRate) > 1000.0) {

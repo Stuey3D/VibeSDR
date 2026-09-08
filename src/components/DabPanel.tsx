@@ -408,6 +408,9 @@ export default function DabPanel(p: DabPanelProps) {
             <ServiceRow key={sv.sid} sv={sv} d={d} base={p.base}
                         onPress={() => p.onService(sv.sid)} />
           ))}
+          {/* ★ The list is the last good one, kept while the FIC is not reading — say so, as the
+              web does, rather than letting a stale list pass for a live one. */}
+          {d.held && <Text style={[s.notice, { color: C.muted, fontSize: 10 }]}>list held — the multiplex is not reading at the moment</Text>}
         </>
       )}
 

@@ -88,6 +88,10 @@ interface FreqModalProps {
   onExportBookmarks?: () => void;
   onImportBookmarks?: (text: string, allInstances: boolean) => string;
   onPickImportFile?:  (allInstances: boolean) => Promise<string>;
+  /** ★ Owner-only (present when the admin password is held): save on the RECEIVER, for everyone. */
+  onAddServerBookmark?:     (name: string) => Promise<string>;
+  onImportToServer?:        (text: string) => Promise<string>;
+  onPickImportFileToServer?: () => Promise<string>;
 }
 
 function toDisplay(hz: number, unit: Unit): string {
@@ -187,7 +191,7 @@ function srcTag(b?: ServerBookmark): string {
 
 export default function FreqModal({
   visible, currentHz, onConfirm, onClose,
-  unit: unitProp, onUnit, onDabTune, dabOnly,
+  unit: unitProp, onUnit, onDabTune, dabOnly, onAddServerBookmark, onImportToServer, onPickImportFileToServer,
   minHz = MIN_FREQ_HZ, maxHz = MAX_FREQ_HZ, lockUnit = false,
   onShare,
   profiles = [], activeProfileId, sdrUsage, clientCount, onSelectProfile,
@@ -780,6 +784,16 @@ export default function FreqModal({
                 <Text style={[st.bmBtnText, { color: t.freqColor },
                               !bmName.trim() && { opacity: 0.4 }]}>★ SAVE BOOKMARK</Text>
               </BmBtn>
+              {/* ★ ON THE RECEIVER — shared with every later visitor, so it is only offered while the
+                  admin password is held (the web's ADD TO SERVER). Same name box, same rule about
+                  an empty one. */}
+              {!!onAddServerBookmark && (
+                <BmBtn style={[st.bmBtn, { borderColor: bmName.trim() ? bdrBrt : bdrDim, marginTop: 6 }]}
+                       disabled={!bmName.trim()}
+                       onPress={async () => { if (!bmName.trim()) return; const m = await onAddServerBookmark(bmName); setBmImportMsg(m); if (m.startsWith('Saved')) setBmName(''); }}>
+                  <Text style={[st.bmBtnText, { color: t.freqColor }, !bmName.trim() && { opacity: 0.4 }]}>⚿ SAVE ON THE RECEIVER</Text>
+                </BmBtn>
+              )}
 
               <Text style={[st.bmSub, { color: dimText }]}>Saved ({userBookmarks.length})</Text>
               {userBookmarks.length === 0 && <Text style={[st.bmMsg, { color: dimText }]}>No bookmarks yet — tune somewhere good and save it.</Text>}
@@ -816,6 +830,11 @@ export default function FreqModal({
                   <Text style={[st.bmBtnText, { color: dimText }]}>📁 IMPORT FILE (JSON / YAML)</Text>
                 </TouchableOpacity>
               )}
+              {!!onPickImportFileToServer && (
+                <TouchableOpacity style={[st.bmBtn, { borderColor: bdrDim }]} onPress={async () => { const msg = await onPickImportFileToServer(); if (msg) { setBmImportMsg(msg); setBmImportOpen(false); } }}>
+                  <Text style={[st.bmBtnText, { color: dimText }]}>⚿ IMPORT FILE TO THE RECEIVER</Text>
+                </TouchableOpacity>
+              )}
               {!!bmImportMsg && <Text style={[st.bmMsg, { color: dimText }]}>{bmImportMsg}</Text>}
               {bmImportOpen && (<>
                 <TextInput style={[st.searchInput, st.bmImportBox, { color: t.freqColor, fontFamily: t.font, borderColor: bdrDim }]}
@@ -823,6 +842,11 @@ export default function FreqModal({
                 <TouchableOpacity style={[st.bmBtn, { borderColor: bdrBrt }]} onPress={() => { const msg = onImportBookmarks?.(bmImportText, bmAll) ?? ''; setBmImportMsg(msg); if (msg.startsWith('Imported')) setBmImportText(''); }}>
                   <Text style={[st.bmBtnText, { color: t.freqColor }]}>CONFIRM IMPORT</Text>
                 </TouchableOpacity>
+                {!!onImportToServer && (
+                  <TouchableOpacity style={[st.bmBtn, { borderColor: bdrBrt }]} onPress={async () => { const msg = await onImportToServer(bmImportText); setBmImportMsg(msg); if (msg.startsWith('Imported')) setBmImportText(''); }}>
+                    <Text style={[st.bmBtnText, { color: t.freqColor }]}>⚿ CONFIRM IMPORT TO THE RECEIVER</Text>
+                  </TouchableOpacity>
+                )}
               </>)}
               <View style={{ height: 12 }} />
             </ScrollView>

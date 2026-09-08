@@ -307,6 +307,10 @@ export interface ControlsBarProps {
    *  ★★ ALONE IS THE LOAD-BEARING STATE, so it gets words rather than a number: "Only you" is
    *     instantly readable as permission, where "1 listening" makes you count. */
   sharedDial?: { listeners: number; alone: boolean; tuning: string } | null;
+  /** ★ STORMS — sferics about, decided by the SERVER on the wide FFT (rate per minute, seconds
+   *  since the last flash). Answers "what are those lines across the waterfall?" before it is
+   *  asked; the number rides in the accessibility label, as the web's tooltip. */
+  storms?: { rate: number; ago: number } | null;
   /** ★★ ADMIN SESSIONS ARE NOT TIMED, so this slot says WHY rather than counting down. An admin is
    *  exempt from the session limit, and the honest thing to show where a countdown would be is
    *  what is actually true of this session (Stuart, 2026-08-12). Takes precedence over
@@ -715,7 +719,7 @@ function useHandbackFlash() {
 function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia,
-  readOnly, sessionLeft, sharedDial, adminMode, vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
+  readOnly, sessionLeft, sharedDial, storms, adminMode, vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
   onControlRects }: any) {
   const handbackFlash = useHandbackFlash();
 
@@ -934,6 +938,14 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
                     : `${sharedDial.listeners} listening on this shared dial`}>
               {sharedDial.alone ? '👤 Only you' : `👥 ${sharedDial.listeners}`}
               {sharedDial.tuning ? ` · ${sharedDial.tuning}` : ''}
+            </Text>
+          )}
+          {!!storms && (
+            <Text style={{ color: '#9fd0ff', fontFamily: t.font, fontSize: CLOCK_FONT, opacity: 0.9, letterSpacing: 1 }}
+                  numberOfLines={1}
+                  accessibilityLabel={`Lightning nearby — the broadband lines across the spectrum are sferics, not a fault (about ${Math.round(storms.rate)} a minute`
+                    + (storms.ago >= 0 && storms.ago < 90 ? `, last ${Math.round(storms.ago)} seconds ago)` : ')')}>
+              ⚡ STORMS
             </Text>
           )}
         </View>

@@ -340,7 +340,15 @@ export interface SDRCallbacks {
    *  saw a silent dead link and a retry loop. Checked message by message against
    *  web/client/src/spectrum.ts — the failure mode of a per-client protocol is SILENCE. */
   /** Someone else holds the receiver. Terminal — do not retry into a busy server. */
-  onBusy?: () => void;
+  /** Refused: somebody else has the radio. The server says where you stand — position in its
+   *  queue, how long it is, and when the slot frees (freeIn < 0 = no session limit). */
+  onBusy?: (q?: { queuePos?: number; queueLen?: number; freeIn?: number; queueFull?: boolean }) => void;
+  /** ★ LIGHTNING. The server decides — it is gated on the band this listener's VFO sits in and
+   *  on whether the activity amounts to a storm — so a non-zero rate is the whole decision. */
+  onLightning?: (ratePerMin: number, agoSecs: number) => void;
+  /** ★ The RADIO's centre and the owner's locked centre (0 = not locked), off hwinfo. The one
+   *  figure the walls and the RF-centre marker must be drawn from — the view centre is not it. */
+  onRfCentre?: (rfHz: number, lockedHz: number) => void;
   /** ★★★ ONE RADIO PER ADDRESS — you are already listening on another radio of THIS server.
    *  Deliberate policy, added after one visitor held both single-user radios of the demo at once by
    *  opening a tab on each (Stuart, 2026-08-21). ★★ It is NOT a queue and must never be presented
@@ -2053,7 +2061,9 @@ export abstract class SdrWsClient {
     }
     if (msg.type === 'busy') {
       this.refused = true;                    // a busy server must not be hammered
-      this.callbacks.onBusy?.();
+      const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+      this.callbacks.onBusy?.({ queuePos: n(msg.queuePos), queueLen: n(msg.queueLen),
+                                freeIn: n(msg.freeIn), queueFull: msg.queueFull === true });
       return;
     }
     if (msg.type === 'elsewhere') {
@@ -2164,6 +2174,10 @@ export abstract class SdrWsClient {
     //     `steps` below the ceiling, `dir` (+1 up / −1 down), the applied `gain` and whether the
     //     AGC is what moved it. The client shows a short readout rather than the server's full
     //     sentence — see the status row.
+    if (msg.type === 'lx') {
+      this.callbacks.onLightning?.(Number(msg.rate) || 0, Number(msg.ago));
+      return;
+    }
     if (msg.type === 'ovl') {
       this.callbacks.onOverload?.({
         gainTenthDb: Number(msg.gain) || 0,
@@ -2258,6 +2272,8 @@ export abstract class SdrWsClient {
       //   not be read as "wide open", which is a claim about hardware we have not been told about.
       if (msg.tunerBw !== undefined)
         this.callbacks.onHwTunerBw?.(Number(msg.tunerBw) || 0, msg.tunerBwAuto === true);
+      if (msg.rfCentre !== undefined || msg.lockedCentre !== undefined)
+        this.callbacks.onRfCentre?.(Number(msg.rfCentre) || 0, Number(msg.lockedCentre) || 0);
       // ★ Only the VibeServer shim sends hwinfo, and it carries the owner's FRAME-RATE CEILING.
       // Feed it to the controller: without it we would ask for the ladder's top rate, receive the
       // permitted one, and read the difference as a failing link — stepping down forever chasing a

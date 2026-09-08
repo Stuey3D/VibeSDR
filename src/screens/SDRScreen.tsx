@@ -883,6 +883,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [hwAutoGain,    setHwAutoGain]    = useState(true);
   const [hwPpm,         setHwPpm]         = useState(0);
   const [hwSampleRate,  setHwSampleRate]  = useState(2_400_000);
+  /** ★ The radio's own centre and the owner's lock, from hwinfo — see localRf. */
+  const [hwRfCentre,     setHwRfCentre]     = useState(0);
+  const [hwLockedCentre, setHwLockedCentre] = useState(0);
+  /** ★ Storms about (server-decided): flashes per minute and seconds since the last. */
+  const [storms, setStorms] = useState<{ rate: number; ago: number } | null>(null);
   const [hwBiasTee,     setHwBiasTee]     = useState(false);
   const [hwAgc,         setHwAgc]         = useState(false);
   const [hwDirectSamp,  setHwDirectSamp]  = useState(0);
@@ -1860,14 +1865,24 @@ export default function SDRScreen({ route, navigation }: Props) {
     const c = client.current as
       { rfCenterHz?: () => number; captureBandwidth?: () => number } | null;
     const fs = c?.captureBandwidth?.() || hwSampleRate;
-    const rf = c?.rfCenterHz?.();
+    /* ★★★ THE RADIO'S FIGURE WHEN WE HAVE IT. rfCenterHz() MIRRORS the phone's own dongle logic,
+     *  and on a VibeServer session it simply returned the VIEW centre — so the walls sat exactly
+     *  on the screen edges when zoomed out and off it when zoomed in, i.e. invisible: "the RF
+     *  centre and boundaries markers … seem to be missing in VibeServer" (Stuart, 2026-09-09).
+     *  hwinfo carries rfCentre (the tuner, offset included) and lockedCentre (the owner's pin);
+     *  the web client has drawn from those since 2026-08-02, for the same reason. */
+    const rf = hwLockedCentre > 0 ? hwLockedCentre
+             : hwRfCentre > 0 ? hwRfCentre
+             : c?.rfCenterHz?.();
     if (rf == null || !(fs > 0)) return null;
     return { rf, fs };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLocal, status.centerHz, status.frequency, status.bwHz, hwSampleRate, connEpoch]);
+  }, [isLocal, status.centerHz, status.frequency, status.bwHz, hwSampleRate, connEpoch, hwRfCentre, hwLockedCentre]);
 
   const walls = useMemo(() => {
-    if (vfoLocked) return null;
+    // ★ A pinned window is fixed context whatever the view is doing — shown even with the VFO
+    //   locked, as the web does; a free-running dongle only when the view has been let go.
+    if (vfoLocked && !(hwLockedCentre > 0)) return null;
     if (isLocal) {
       // Hard walls at the captured-band edges (dongle ± Fs/2) — these become
       // visible as you scroll the view across the band.
@@ -1878,7 +1893,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const s = client.current?.panSpan();
     return s ? { loHz: s.loHz, hiHz: s.hiHz } : null;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vfoLocked, isLocal, localRf, status.bwHz, connEpoch]);
+  }, [vfoLocked, isLocal, localRf, status.bwHz, connEpoch, hwLockedCentre]);
 
   // VFO has panned outside the visible span → show the floating recentre button.
   // (No toast hint — the floating button itself is the affordance; VTS pop-ups
@@ -3790,12 +3805,21 @@ export default function SDRScreen({ route, navigation }: Props) {
       // VibeServer: the serving device's tuner gains → drive the gain slider (a
       // remote client can't query the hardware natively).
       onHwGains: (gains: number[]) => { if (!destroyed.current && gains.length) setHwGains(gains); },
+      onRfCentre: (rf, locked) => { if (destroyed.current) return; setHwRfCentre(rf); setHwLockedCentre(locked); },
+      onLightning: (rate, ago) => { if (!destroyed.current) setStorms(rate > 0 ? { rate, ago } : null); },
       /** ★ DAB, about once a second, with the whole measured state of the multiplex. `null` means
        *  it has ended; `why` is the server's refusal, which is an explanation and not an error —
        *  showing it as one would put a red card over a receiver that is working perfectly. */
       onDab: (st, why) => {
         if (destroyed.current) return;
-        setDabState(st);
+        /* ★★★ HOLD THE LAST GOOD LIST — the web client's rule (TS 103 176 6.2.2: the list is a
+         *  thing the receiver KEEPS, not a picture of this frame). A frame where the FIC did not
+         *  read arrives with no services, and painting it blanks the list under the reader's
+         *  finger. Held while the channel and ensemble are unchanged; marked so the panel can say. */
+        setDabState(prev => (st && prev && prev.channel === st.channel && st.services.length === 0
+                             && prev.services.length > 0 && (st.eid === prev.eid || !st.eid))
+          ? { ...st, services: prev.services, label: st.label || prev.label, eid: st.eid || prev.eid, held: true }
+          : st);
         setDabError(why);
         if (why) { setDabOn(false); setDabBoxOpen(false); return; }
         if (st) {
@@ -3959,7 +3983,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       //     pops up in the app although it should say that an admin has taken over, not the
       //     generic in use message" (Stuart, 2026-08-15).
       // ★ The eviction is the more specific fact and it happened FIRST, so it wins.
-      onBusy: () => {
+      onBusy: (q) => {
         if (refusalRef.current?.title === 'TAKEN BACK') return;
         if (destroyed.current) return;
         // ★★★ A QUEUE POSITION FOR A SESSION THAT IS ALREADY LISTENING IS STALE BY DEFINITION.
@@ -3974,11 +3998,24 @@ export default function SDRScreen({ route, navigation }: Props) {
         const rejected = takeoverTried.current;
         takeoverTried.current = false;
         setTakeoverErr(rejected ? 'That admin password was not accepted.' : null);
-        setRefusal({
-          title: 'IN USE',
-          body: 'Someone else is listening on this receiver, and it serves one listener at a time.',
-          note: 'Try again in a few minutes, or pick another server.',
-        });
+        /* ★ SAY WHERE YOU STAND. The server sends the queue position, its length and when the
+         *  slot frees; the web client has shown them since the queue existed and the app said
+         *  only "try again". A number the reader can plan around beats a shrug. */
+        const mmss = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+        const pos = q?.queuePos, len = q?.queueLen, freeIn = q?.freeIn;
+        const queued = typeof pos === 'number' && pos > 0;
+        const body = q?.queueFull
+          ? 'This receiver is full, and so is its waiting queue.'
+          : queued
+            ? `Someone else is listening. You are ${pos === 1 ? 'next in line' : `${pos}${pos === 2 ? 'nd' : pos === 3 ? 'rd' : 'th'} of ${len ?? pos} waiting`}` +
+              ` — this card updates as the queue moves.`
+            : 'Someone else is listening on this receiver, and it serves one listener at a time.';
+        const note = q?.queueFull
+          ? 'Please try again later.'
+          : typeof freeIn === 'number' && freeIn > 0
+            ? `Their turn ends in ${mmss(freeIn)} at the latest.`
+            : 'Try again in a few minutes, or pick another server.';
+        setRefusal({ title: 'IN USE', body, note });
       },
       // ★★★ ALREADY LISTENING ON ANOTHER RADIO OF THIS SERVER. A deliberate policy — one radio per
       //     address, so one visitor cannot hold every radio of a multi-radio server at once — and
@@ -6872,6 +6909,51 @@ export default function SDRScreen({ route, navigation }: Props) {
     Share.share({ message: exportBookmarksJSON(list) }).catch(() => {});
   }, [userBookmarks]);
 
+  /* ★★★ SAVE ON THE RECEIVER — shared with everyone who comes after, which is why it is behind
+   *  the admin password (the web's ADD TO SERVER / IMPORT TO SERVER, offered there since
+   *  2026-08-07 and never here: "add to server import to server are admin locked and should be
+   *  present on the phone app", Stuart, 2026-09-09). Same route the browser uses: POST /bookmarks
+   *  with the ticket; the server answers with its whole list, which becomes ours. */
+  const postServerBookmark = useCallback(async (hz: number, name: string, mode?: string): Promise<boolean> => {
+    const q = adminAuthQRef.current;
+    if (!q) return false;
+    try {
+      const base = connectBase.replace(/\/+$/, '');
+      const r = await fetch(`${base}/bookmarks?${q}&frequency=${Math.round(hz)}&name=${encodeURIComponent(name)}`
+                            + (mode ? `&mode=${encodeURIComponent(mode)}` : ''), { method: 'POST' });
+      if (!r.ok) return false;
+      const arr = await r.json();
+      if (Array.isArray(arr)) {
+        const fresh: ServerBookmark[] = arr.filter((b: any) => b && b.name && b.frequency)
+          .map((b: any) => ({ ...b, source: 'server' as const }));
+        setSearchBookmarks(prev => [...fresh, ...prev.filter(b => b.source !== 'server')]);
+      }
+      return true;
+    } catch { return false; }
+  }, [connectBase]);
+  const onAddServerBookmark = useCallback(async (name: string): Promise<string> => {
+    const clean = name.trim();
+    if (!clean) return '';
+    const ok = await postServerBookmark(status.frequency, clean, status.mode);
+    return ok ? `Saved "${clean}" on the receiver.` : 'Could not save on the receiver (is the password still good?).';
+  }, [postServerBookmark, status.frequency, status.mode]);
+  const onImportToServer = useCallback(async (text: string): Promise<string> => {
+    let incoming: UserBookmark[];
+    try { incoming = parseBookmarksAny(text, ''); } catch { return 'Could not parse that file (need JSON or YAML).'; }
+    if (!incoming.length) return 'No bookmarks found (JSON or YAML).';
+    let n = 0;
+    for (const b of incoming) if (await postServerBookmark(b.frequency, b.name, b.mode)) n++;
+    return n ? `Imported ${n} of ${incoming.length} to the receiver.` : 'Could not save on the receiver (is the password still good?).';
+  }, [postServerBookmark]);
+  const onPickImportFileToServer = useCallback(async (): Promise<string> => {
+    try {
+      const res = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
+      if (res.canceled || !res.assets?.length) return '';
+      const text = await FileSystem.readAsStringAsync(res.assets[0].uri);
+      return onImportToServer(text);
+    } catch { return 'Could not read that file.'; }
+  }, [onImportToServer]);
+
   const onImportBookmarks = useCallback((text: string, allInstances: boolean): string => {
     try {
       const incoming = parseBookmarksAny(text, allInstances ? '' : baseUrl);
@@ -7890,7 +7972,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // Sits at the display centre until the dongle locks; then the view pans
         // on across the captured band and the marker slides off to the side.
         centerMarkerHz={localRf?.rf ?? status.centerHz}
-        showCenterMarker={isLocal && !vfoLocked}
+        showCenterMarker={isLocal && (!vfoLocked || hwLockedCentre > 0)}
       />
       </View>
 
@@ -8357,6 +8439,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           adminMode={adminOk}
           sessionLeft={sessionLeftProp}
           sharedDial={sharedDialProp}
+          storms={storms}
           frequency={status.frequency}
           mode={status.mode}
           step={step}
@@ -9177,6 +9260,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         onExportBookmarks={onExportBookmarks}
         onImportBookmarks={onImportBookmarks}
         onPickImportFile={onPickImportFile}
+        onAddServerBookmark={adminAuthQ ? onAddServerBookmark : undefined}
+        onImportToServer={adminAuthQ ? onImportToServer : undefined}
+        onPickImportFileToServer={adminAuthQ ? onPickImportFileToServer : undefined}
       />
 
       {/* Chat drawer */}
