@@ -954,6 +954,7 @@ public:
         mime = !bestRef->mime.empty() ? bestRef->mime : (best->subType == 1 ? "image/jpeg" : "image/png");
         return true;
     }
+    void ensembleIds(int& ecc, uint16_t& eid) { std::lock_guard<std::mutex> lk(m_); const Ensemble& e = rx_.ensemble(); ecc = e.ecc; eid = e.eid; }
     /** Any complete carousel object by its content name — the SI document, a logo, anything the
      *  multiplex carries (for the DX pane and for inspection). */
     bool carouselObject(const std::string& name, std::vector<uint8_t>& bytes, int& ct, int& st) {

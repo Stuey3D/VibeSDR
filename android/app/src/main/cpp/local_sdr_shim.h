@@ -445,6 +445,10 @@ public:
     using DabLogoFn = std::function<std::string(const std::string& ecc, const std::string& eidHex,
                                                 const std::string& sidHex, int scids)>;
     static void setDabLogoHandler(DabLogoFn fn);
+    /** ★ Fetch a logo file's BYTES so the server can keep it (see g_dabLogoDir). Only a host
+     *  whose transport is binary-safe sets this; without it the URL is handed out as before. */
+    using LogoBytesFn = std::function<std::string(const std::string& url)>;
+    static void setLogoBytesFetcher(LogoBytesFn fn);
     /** ★ Where this receiver is, so DAB transmitter identities can carry a distance. */
     static void setReceiverPosition(double lat, double lon);
     /** ★ Load per-country DAB transmitter lists (dab-tii-<ecc>.csv) from a data directory. */

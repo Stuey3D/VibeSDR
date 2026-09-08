@@ -4406,25 +4406,45 @@ function dabRender() {
   /* ★★ ONLY REWRITE THE LIST WHEN IT CHANGED. The stats block arrives twice a second; rebuilding
    *  the rows each time restarted every scrolling label from its first frame, so long labels
    *  never actually travelled. A string compare is far cheaper than the layout it saves. */
-  const listHtml = d.services.length
-    ? d.services.map(sv => `<div class="dabSvc${sv.sid === d.sid ? ' on' : ''}" data-sid="${sv.sid}">`
-        + dabLogoTag(sv, d)
-        + `<span class="nm">${escapeHtml(sv.label || '(unnamed)')}`
-        + ((sv.sid === d.sid ? d.dls : sv.dls) ? `<span class="dls"><span class="dlsIn">${escapeHtml(sv.sid === d.sid ? (d.dls || '') : (sv.dls || ''))}</span></span>` : '')
-        + `</span><span class="cod" title="${escapeHtml(sv.prot ?? '')}">${sv.codec}${sv.kbps ? ' ' + sv.kbps + 'k' : ''}</span></div>`).join('')
-      + (d.held ? `<div style="padding:6px 9px;opacity:.5;font-size:10px">list held — the multiplex is not reading at the moment</div>` : '')
-    : `<div style="padding:14px;opacity:.6">${d.truncated ? 'Signal block too long for the server to send'
-        : d.locked ? 'Reading the multiplex…' : 'Searching for a multiplex…'}</div>`;
-  if (listHtml !== dabLastListHtml) {
-    dabLastListHtml = listHtml;
-    st.innerHTML = listHtml;
+  /* ★★★ ROWS ARE PATCHED IN PLACE, NEVER REBUILT FOR A CHANGE OF TEXT. The string-compare gate
+   *  above it stopped the twice-a-second rebuild, but the PAD scanner changes some row's radio
+   *  text every few seconds, and any change rebuilt the whole list: every image element
+   *  recreated (Stuart, 2026-09-08: "the station logos are flashing as they refresh") and every
+   *  marquee restarted ("scrolls for a second then resets"). Now the list is built only when the
+   *  set or order of services changes; otherwise each row's class, logo, name, text and codec
+   *  are written only where they differ, and a marquee restarts only when its own text did. */
+  const skeleton = d.services.map(sv => sv.sid).join(',') + (d.held ? '|held' : '') + (d.services.length ? '' : `|empty|${d.truncated ? 't' : d.locked ? 'l' : 's'}`);
+  if (skeleton !== dabLastListHtml) {
+    dabLastListHtml = skeleton;
+    st.innerHTML = d.services.length
+      ? d.services.map(sv => `<div class="dabSvc" data-sid="${sv.sid}"><span class="lg"></span><span class="nm"><span class="nmT"></span><span class="dls" style="display:none"><span class="dlsIn"></span></span></span><span class="cod"></span></div>`).join('')
+        + (d.held ? `<div style="padding:6px 9px;opacity:.5;font-size:10px">list held — the multiplex is not reading at the moment</div>` : '')
+      : `<div style="padding:14px;opacity:.6">${d.truncated ? 'Signal block too long for the server to send'
+          : d.locked ? 'Reading the multiplex…' : 'Searching for a multiplex…'}</div>`;
     for (const el of Array.from(st.querySelectorAll('.dabSvc')) as HTMLElement[])
       el.onclick = () => { spec?.dabService(Number(el.dataset.sid)); };
     { const b = document.getElementById('decBody'); if (b && listScroll) b.scrollTop = listScroll; }
-    /* ★ A label wider than its row SCROLLS (Stuart: "the radio text needs to scroll in the
-     *  station list"). Measured after layout; the travel is the overflow, so it stops at the end. */
-    dabArmMarquee(st);
   }
+  for (const sv of d.services) {
+    const el = st.querySelector(`.dabSvc[data-sid="${sv.sid}"]`) as HTMLElement | null;
+    if (!el) continue;
+    setClass(el, 'on', sv.sid === d.sid);
+    const lg = el.querySelector('.lg') as HTMLElement;
+    const tag = dabLogoTag(sv, d);
+    if (lg.dataset.h !== tag) { lg.dataset.h = tag; lg.innerHTML = tag; }   // the image element lives on until its source changes
+    setText(el.querySelector('.nmT'), sv.label || '(unnamed)');
+    const dlsText = sv.sid === d.sid ? (d.dls || '') : (sv.dls || '');
+    const dlsBox = el.querySelector('.dls') as HTMLElement;
+    const inner = dlsBox.querySelector('.dlsIn') as HTMLElement;
+    setStyle(dlsBox, 'display', dlsText ? 'block' : 'none');
+    if (inner.textContent !== dlsText) { inner.textContent = dlsText; delete inner.dataset.armed; inner.classList.remove('scroll'); }
+    const cod = el.querySelector('.cod') as HTMLElement;
+    setText(cod, `${sv.codec}${sv.kbps ? ' ' + sv.kbps + 'k' : ''}`);
+    if (cod.title !== (sv.prot ?? '')) cod.title = sv.prot ?? '';
+  }
+  /* ★ A label wider than its row SCROLLS (Stuart: "the radio text needs to scroll in the
+   *  station list"). Measured once per label, after layout; the travel is the overflow. */
+  dabArmMarquee(st);
 
   const row = (k: string, v: string) => { rowsKeys.push(k); return `<div class="row"><span>${k}</span><span>${v}</span></div>`; };
   /* ★ KEEP THE SCROLL. Both panes are rebuilt from every stats block, twice a second, and an
@@ -4470,7 +4490,7 @@ function dabRender() {
   /* ★ Measured on EVERY render, for whichever pane is showing: a label built while its pane was
    *  hidden measures as zero wide and never armed (the header, on the Xcover, 2026-09-07). Arming
    *  an already-armed label is a no-op, so the marquee is not restarted. */
-  dabArmMarquee(sg.offsetParent ? sg : st);   // the header AND the rows — a patched value is a new, unarmed label
+  if (!sg.offsetParent) dabArmMarquee(st);    // the pane's own labels are armed below, after its rows are patched
   rowsKeys.length = 0;
   const rowsA = ''
     + '<h4>SERVICE</h4>'
@@ -4490,8 +4510,8 @@ function dabRender() {
         : '—')
     + '<h4>ERROR RATE</h4>'
     /* ★ Errors, not passes: "it's easier to read 5 % errors rather than 95 % pass" (Stuart). */
-    + row('FIB errors this frame', `${Math.max(0, d.fibTotal - d.fibOk)} of ${d.fibTotal}`)
-    + row('FIB error rate', ((1 - d.fibRate) * 100).toFixed(1) + ' %')
+    + row('FIB errors this frame', tl(`${Math.max(0, d.fibTotal - d.fibOk)} of ${d.fibTotal}`, d.fibOk >= d.fibTotal ? 'ok' : d.fibOk >= d.fibTotal - 2 ? 'warn' : 'bad'))
+    + row('FIB error rate', tl(((1 - d.fibRate) * 100).toFixed(1) + ' %', d.fibRate >= 0.99 ? 'ok' : d.fibRate >= 0.9 ? 'warn' : 'bad'))
     + '<h4>MULTIPLEX</h4>'
     + row('Ensemble', d.label || '—')
     + row('EId', (d.ecc !== undefined && d.ecc >= 0 ? d.ecc.toString(16).toUpperCase() + ':' : '') + d.eid.toString(16).toUpperCase().padStart(4, '0'))
@@ -4521,36 +4541,37 @@ function dabRender() {
     /* ★ Always present: a row that comes and goes with its value rebuilds the pane and jumps it. */
     + row('Now playing', d.dls ? `<span class="dls"><span class="dlsIn">${escapeHtml(d.dls)}</span></span>` : '—')
     + '<h4>PHYSICAL LAYER</h4>'
-    + row('Lock', d.locked ? 'locked' : 'searching')
+    + row('Lock', tl(d.locked ? 'locked' : 'searching', d.locked ? 'ok' : 'bad'))
     /* ★ Requested and actual, side by side — the pair that separates "cannot decode" from
      *  "pointed at the wrong frequency" (2026-09-04, four deploys to learn it). */
     + row('Radio centre', d.rfCentreHz ? `${(d.rfCentreHz / 1e6).toFixed(4)} MHz`
         + (Math.abs(d.rfCentreHz - d.centreHz) > 500 ? ` (asked ${(d.centreHz / 1e6).toFixed(4)})` : '') : '—')
     + row('Capture rate', d.rfRateHz ? (d.rfRateHz / 1e6).toFixed(3) + ' MS/s' : '—')
-    + row('Null depth', d.nullDepthDb.toFixed(1) + ' dB')
-    + row('Frequency offset', `${d.offsetHz.toFixed(0)} Hz (${d.offsetPpm.toFixed(2)} ppm)`)
+    + row('Null depth', tl(d.nullDepthDb.toFixed(1) + ' dB', d.nullDepthDb >= 14 ? 'ok' : d.nullDepthDb >= 8 ? 'warn' : 'bad'))
+    + row('Frequency offset', tl(`${d.offsetHz.toFixed(0)} Hz (${d.offsetPpm.toFixed(2)} ppm)`, Math.abs(d.offsetPpm) < 1 ? 'ok' : Math.abs(d.offsetPpm) < 3 ? 'warn' : 'bad'))
     + row('Carrier shift', String(d.carrierShift))
     + row('Phase reference', d.prs.toFixed(3) + (d.prsRatio !== undefined ? ` (${d.prsRatio.toFixed(2)} of ref)` : ''))
-    + row('MER', d.mer ? d.mer.toFixed(1) + ' dB' : '—')
-    + row('MSC bit errors', d.mscBer !== undefined && d.sid ? (d.mscBer * 100).toFixed(2) + ' % before Viterbi' : '—');
+    + row('MER', d.mer ? tl(d.mer.toFixed(1) + ' dB', d.mer >= 16 ? 'ok' : d.mer >= 10 ? 'warn' : 'bad') : '—')
+    + row('MSC bit errors', d.mscBer !== undefined && d.sid ? tl((d.mscBer * 100).toFixed(2) + ' % before Viterbi', d.mscBer < 0.005 ? 'ok' : d.mscBer < 0.03 ? 'warn' : 'bad') : '—');
   const keysA = rowsKeys.slice();
   rowsKeys.length = 0;
   const rowsB = ''
     + row('Frames seen', String(d.frames))
-    + row('Frames erased', String(d.erased ?? 0))
-    + row('Re-acquisitions', String(d.reacquires ?? 0))
-    + row('IQ dropped', String(d.dropped ?? 0))
+    + row('Frames erased', tl(String(d.erased ?? 0), !(d.erased ?? 0) || (d.erased ?? 0) / Math.max(1, d.frames) < 0.02 ? 'ok' : (d.erased ?? 0) / Math.max(1, d.frames) < 0.1 ? 'warn' : 'bad'))
+    + row('Re-acquisitions', tl(String(d.reacquires ?? 0), !(d.reacquires ?? 0) ? 'ok' : (d.reacquires ?? 0) < 3 ? 'warn' : 'bad'))
+    + row('IQ dropped', tl(String(d.dropped ?? 0), !(d.dropped ?? 0) ? 'ok' : 'warn'))
     + '<h4>AUDIO CHANNEL</h4>'
-    + (d.mp2In ? row('Layer II frames', `${d.mp2In} in, ${d.mp2Bad ?? 0} bad, ${d.mp2Concealed ?? 0} concealed`) : '')
-    + (d.sfTried ? row('DAB+ super frames', `${d.sfOk ?? 0} of ${d.sfTried}`) : '')
-    + (d.sfTried ? row('Reed-Solomon', `${d.rsFixed ?? 0} fixed, ${d.rsLost ?? 0} lost`) : '')
+    + (d.mp2In ? row('Layer II frames', tl(`${d.mp2In} in, ${d.mp2Bad ?? 0} bad, ${d.mp2Concealed ?? 0} concealed`, (d.mp2Bad ?? 0) / d.mp2In < 0.01 ? 'ok' : (d.mp2Bad ?? 0) / d.mp2In < 0.1 ? 'warn' : 'bad')) : '')
+    + (d.sfTried ? row('DAB+ super frames', tl(`${d.sfOk ?? 0} of ${d.sfTried}`, (d.sfOk ?? 0) / d.sfTried > 0.98 ? 'ok' : (d.sfOk ?? 0) / d.sfTried > 0.9 ? 'warn' : 'bad')) : '')
+    + (d.sfTried ? row('Reed-Solomon', tl(`${d.rsFixed ?? 0} fixed, ${d.rsLost ?? 0} lost`, !(d.rsLost ?? 0) ? 'ok' : (d.rsLost ?? 0) / Math.max(1, d.sfTried) < 0.05 ? 'warn' : 'bad')) : '')
     + (d.aacRateHz ? row('AAC', `${d.aacRateHz} Hz, ${d.aacCh} ch${d.aacServerSide ? ', decoded on the server' : ''}`) : '')
-    + (d.spi && d.spi.sid ? row('Service information', `${d.spi.logoSvcs} services with logos · ${d.spi.complete} of ${d.spi.named} files · ${d.spi.groups} groups, ${d.spi.crcFail} bad, ${d.spi.lost} lost`) : '')
-    + (d.motGroups !== undefined ? row('Slideshow', `${d.motObjects ?? 0} images, ${d.motGroups} groups, ${d.motCrcFail ?? 0} bad${d.slide?.name ? ' · ' + escapeHtml(d.slide.name) : ''}`) : '')
-    + (d.dlsCrcOk !== undefined ? row('DLS groups', `${d.dlsCrcOk} ok, ${d.dlsCrcFail ?? 0} bad`) : '');
+    + (d.spi && d.spi.sid ? row('Service information', tl(`${d.spi.logoSvcs} services with logos · ${d.spi.complete} of ${d.spi.named} files · ${d.spi.groups} groups, ${d.spi.crcFail} bad, ${d.spi.lost} lost`, !d.spi.crcFail && !d.spi.lost ? 'ok' : (d.spi.crcFail + d.spi.lost) < Math.max(1, d.spi.groups) / 10 ? 'warn' : 'bad')) : '')
+    + (d.motGroups !== undefined ? row('Slideshow', tl(`${d.motObjects ?? 0} images, ${d.motGroups} groups, ${d.motCrcFail ?? 0} bad${d.slide?.name ? ' · ' + escapeHtml(d.slide.name) : ''}`, !(d.motCrcFail ?? 0) ? 'ok' : (d.motCrcFail ?? 0) < d.motGroups / 10 ? 'warn' : 'bad')) : '')
+    + (d.dlsCrcOk !== undefined ? row('DLS groups', tl(`${d.dlsCrcOk} ok, ${d.dlsCrcFail ?? 0} bad`, !(d.dlsCrcFail ?? 0) ? 'ok' : (d.dlsCrcFail ?? 0) < d.dlsCrcOk / 10 ? 'warn' : 'bad')) : '');
   const keysB = rowsKeys.slice();
   dabPatchRows(rowsAEl, rowsA, keysA);
   dabPatchRows(rowsBEl, rowsB, keysB);
+  if (sg.offsetParent) dabArmMarquee(sg);      // now that every value is in place
   setHidden(scopesEl, !(d.iq && d.ir));
   dabDrawScopes(d);
   if (body && keepScroll) body.scrollTop = keepScroll;
@@ -4696,6 +4717,8 @@ function dabDrawScopes(d: DabState) {
 
 let dabLastListHtml = '';
 let dabLastHeadHtml = '';
+/** Traffic light on a value with a nominal range — the RDS box's scheme. */
+const tl = (v: string, level: 'ok' | 'warn' | 'bad') => `<span class="tl ${level}">${v}</span>`;
 const rowsKeys: string[] = [];
 /** ★ Same skeleton (same headings and row labels) → only the values that changed are written;
  *  a different skeleton → one rebuild. Twice a second, on a phone, this is the difference between
@@ -4705,9 +4728,13 @@ function dabPatchRows(el: HTMLElement, html: string, keys: string[]) {
   if (el.dataset.sig !== sig) { el.dataset.sig = sig; el.innerHTML = html; return; }
   const vals = html.split('<div class="row">').slice(1)
     .map(part => { const m = /<\/span><span>([^]*?)<\/span><\/div>/.exec(part); return m ? m[1] : ''; });
-  const spans = el.querySelectorAll('.row > span:last-child');
+  /* ★ Compared with the SOURCE last written, never with the live HTML: arming a marquee adds
+   *  attributes to the span, so its innerHTML never matched again, every block rewrote it and
+   *  the arming was undone at once — long transmitter lines never scrolled (Stuart, 2026-09-08,
+   *  measured on the Xcover: text 374 px in a 224 px box, unarmed). */
+  const spans = el.querySelectorAll('.row > span:last-child') as NodeListOf<HTMLElement>;
   for (let i = 0; i < spans.length && i < vals.length; i++)
-    if (spans[i].innerHTML !== vals[i]) spans[i].innerHTML = vals[i];
+    if (spans[i].dataset.src !== vals[i]) { spans[i].dataset.src = vals[i]; spans[i].innerHTML = vals[i]; }
 }
 /** Start the marquee on every label that overflows its box (the travel is the overflow). */
 function dabArmMarquee(scope: HTMLElement) {

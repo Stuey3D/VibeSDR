@@ -15,6 +15,9 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <unistd.h>
+#include <cstdlib>
+#include <cstdio>
 #include <sys/stat.h>
 
 namespace vsradiodns {
@@ -284,6 +287,26 @@ std::string eccForIso(const std::string& iso, const std::string& piHex) {
     return found;
 }
 
+bool fetchIsBinarySafe() { return !g_fetch; }
+/* ★ BYTES GO THROUGH A FILE, NOT THROUGH STDOUT. The text capture used for the JSON and XML
+ *  answers stops at the first NUL — measured: a 15,493-byte JPEG stored with zero NUL bytes and
+ *  no end marker, which the browser refused. curl writes the file; we read it back. */
+std::string httpGetRaw(const std::string& url) {
+    if (g_fetch) return {};
+    if (url.find('\'') != std::string::npos) return {};
+    char tmpl[] = "/tmp/vibe-logo-XXXXXX";
+    const int fd = mkstemp(tmpl);
+    if (fd < 0) return {};
+    close(fd);
+    const std::string cmd = "curl -fsSL --max-time 15 -o '" + std::string(tmpl) + "' '" + url + "' 2>/dev/null";
+    const int rc = system(cmd.c_str());
+    std::string out;
+    if (rc == 0) {
+        if (FILE* f = fopen(tmpl, "rb")) { char buf[8192]; size_t r; while ((r = fread(buf, 1, sizeof buf, f)) > 0) out.append(buf, r); fclose(f); }
+    }
+    unlink(tmpl);
+    return out;
+}
 void setFetcher(FetchFn fn) {
     // ★ No lock: set once at startup, before any lookup can run. Same contract as setDir.
     g_fetch = std::move(fn);

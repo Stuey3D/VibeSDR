@@ -871,6 +871,46 @@ static std::map<long long, LearnedBm> g_bookmarks;    // key: Hz (rounded)
  * Writing from here, on every change, takes the JS runtime out of the path entirely.
  */
 static std::string g_bmPath;
+/* ★★★ LOGOS ARE KEPT ON THE SERVER. Stuart, 2026-09-08: "the logos need to be cached on the server
+ *  so they appear instantly when you tune about unless you've never seen that station yet". The
+ *  off-air carousel already is (dab-carousel/); this is the RadioDNS half: the first time a
+ *  station's logo URL resolves, its BYTES are fetched once and kept at
+ *  <data>/dab-logos/<ecc>-<eid>-<sid>.<ext>, and every client is handed the local file instead
+ *  of the broadcaster's URL. Where the fetch transport is not binary-safe (Android's string
+ *  hook) the URL is handed out as before. */
+static std::string g_dabLogoDir;
+static LocalSdrShim::LogoBytesFn g_vsLogoBytesFn;   // set by a host whose transport is binary-safe (the Pi: curl); Android leaves it unset
+static std::mutex g_vsLogoBytesMtx;
+void LocalSdrShim::setLogoBytesFetcher(LogoBytesFn fn) { std::lock_guard<std::mutex> lk(g_vsLogoBytesMtx); g_vsLogoBytesFn = std::move(fn); }
+static std::string dabLogoStoreFind(int ecc, uint16_t eid, uint32_t sid, std::string& ext) {
+    if (g_dabLogoDir.empty()) return {};
+    char base[64]; snprintf(base, sizeof base, "%s/%02x-%04x-%x", g_dabLogoDir.c_str(), unsigned(ecc & 0xFF), unsigned(eid), unsigned(sid));
+    for (const char* e : { "png", "jpg", "svg", "gif", "webp" }) {
+        const std::string f = std::string(base) + "." + e;
+        if (FILE* fp = fopen(f.c_str(), "rb")) { fclose(fp); ext = e; return f; }
+    }
+    return {};
+}
+static std::string dabLogoStorePut(int ecc, uint16_t eid, uint32_t sid, const std::string& url, const std::string& bytes) {
+    if (g_dabLogoDir.empty() || bytes.size() < 64) return {};
+    std::string ext = "png";
+    if (bytes.size() > 3 && (uint8_t)bytes[0] == 0xFF && (uint8_t)bytes[1] == 0xD8) ext = "jpg";
+    else if (bytes.rfind("\x89PNG", 0) == 0) ext = "png";
+    else if (bytes.rfind("GIF8", 0) == 0) ext = "gif";
+    else if (bytes.find("<svg") != std::string::npos) ext = "svg";
+    else if (bytes.size() > 12 && bytes.compare(8, 4, "WEBP") == 0) ext = "webp";
+    else if (url.find(".jpg") != std::string::npos || url.find(".jpeg") != std::string::npos) ext = "jpg";
+    mkdir(g_dabLogoDir.c_str(), 0755);
+    char base[64]; snprintf(base, sizeof base, "%s/%02x-%04x-%x", g_dabLogoDir.c_str(), unsigned(ecc & 0xFF), unsigned(eid), unsigned(sid));
+    const std::string f = std::string(base) + "." + ext, tmp = f + ".tmp";
+    FILE* fp = fopen(tmp.c_str(), "wb");
+    if (!fp) return {};
+    fwrite(bytes.data(), 1, bytes.size(), fp); fclose(fp); rename(tmp.c_str(), f.c_str());
+    return f;
+}
+static const char* dabLogoMime(const std::string& ext) {
+    return ext == "jpg" ? "image/jpeg" : ext == "svg" ? "image/svg+xml" : ext == "gif" ? "image/gif" : ext == "webp" ? "image/webp" : "image/png";
+}
 static std::map<long long, PendingBm> g_bmPending;    // awaiting confirmation
 
 // THE PI CODE IS THE STATION'S IDENTITY — the name is only its label.
@@ -11279,7 +11319,17 @@ struct LocalSdrShim::Impl {
             /* ★ A service's logo from the multiplex's own SPI carousel (TS 102 818 over MOT). */
             const uint32_t sid = uint32_t(strtoul(queryParam(reqLine, "sid").c_str(), nullptr, 10));
             std::vector<uint8_t> bytes; std::string mime; int w = 0, h = 0;
-            if (sid && g_dab.airLogo(sid, bytes, mime, w, h) && !bytes.empty()) {
+            if (sid && !g_dab.airLogo(sid, bytes, mime, w, h)) {
+                /* Not in the carousel: the server's own store of RadioDNS files. The ensemble ids
+                 *  come with the request (a bookmark row may ask about another multiplex) or
+                 *  from the one we are on. */
+                int ecc = -1; uint16_t eid = 0;
+                const std::string eq = queryParam(reqLine, "ecc"), dq = queryParam(reqLine, "eid");
+                if (!eq.empty() && !dq.empty()) { ecc = atoi(eq.c_str()); eid = uint16_t(atoi(dq.c_str())); } else g_dab.ensembleIds(ecc, eid);
+                std::string ext; const std::string f = dabLogoStoreFind(ecc, eid, sid, ext);
+                if (!f.empty()) { if (FILE* fp = fopen(f.c_str(), "rb")) { uint8_t buf[4096]; size_t r; while ((r = fread(buf, 1, sizeof buf, fp)) > 0) bytes.insert(bytes.end(), buf, buf + r); fclose(fp); mime = dabLogoMime(ext); } }
+            }
+            if (sid && !bytes.empty()) {
                 std::string body(reinterpret_cast<const char*>(bytes.data()), bytes.size());
                 sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: " + mime + "\r\n"
                               "Access-Control-Allow-Origin: *\r\nCache-Control: max-age=600\r\n"
@@ -11312,7 +11362,19 @@ struct LocalSdrShim::Impl {
             const std::string sid = queryParam(reqLine, "sid");
             const int scids = atoi(queryParam(reqLine, "scids").c_str());
             std::string url;
-            if (fn && !ecc.empty() && !eid.empty() && !sid.empty()) url = fn(ecc, eid, sid, scids);
+            const int eccN = int(strtol(ecc.c_str(), nullptr, 16)); const uint16_t eidN = uint16_t(strtoul(eid.c_str(), nullptr, 16)); const uint32_t sidN = uint32_t(strtoul(sid.c_str(), nullptr, 16));
+            std::string ext, stored = dabLogoStoreFind(eccN, eidN, sidN, ext);
+            if (stored.empty() && fn && !ecc.empty() && !eid.empty() && !sid.empty()) {
+                url = fn(ecc, eid, sid, scids);
+                LocalSdrShim::LogoBytesFn bf;
+                { std::lock_guard<std::mutex> lk(g_vsLogoBytesMtx); bf = g_vsLogoBytesFn; }
+                if (!url.empty() && bf) {
+                    const std::string bytes = bf(url);
+                    stored = dabLogoStorePut(eccN, eidN, sidN, url, bytes);
+                    if (!stored.empty()) LOGI("[DAB] logo for %s:%s:%s kept on the server (%zu bytes)", ecc.c_str(), eid.c_str(), sid.c_str(), bytes.size());
+                }
+            }
+            if (!stored.empty()) url = "/vibeserver/dablogoair?sid=" + std::to_string(sidN) + "&ecc=" + std::to_string(eccN) + "&eid=" + std::to_string(eidN);
             const std::string body = url.empty() ? "{}" : "{\"logo\":\"" + vibeadmin::esc(url) + "\"}";
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Access-Control-Allow-Origin: *\r\nCache-Control: max-age=3600\r\n"
@@ -17292,6 +17354,7 @@ void LocalSdrShim::setBookmarksPath(const std::string& path) {
         const size_t slash = path.find_last_of('/');
         g_dab.setRatioFile((slash == std::string::npos ? std::string() : path.substr(0, slash + 1)) + "dab-aac-ratio");
         g_dab.setCacheDir((slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-carousel");
+        g_dabLogoDir = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-logos";
     }
     FILE* f = fopen(path.c_str(), "rb");
     if (!f) return;                       // nothing saved yet — that's fine

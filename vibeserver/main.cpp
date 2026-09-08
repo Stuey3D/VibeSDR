@@ -1831,6 +1831,7 @@ int main(int argc, char** argv) {
         //   silently do nothing on a server with no country configured.
         return vsradiodns::logoForAuto(pi, ecc, hz, g_runtimeConfig.country);
     });
+    LocalSdrShim::setLogoBytesFetcher([](const std::string& url) { return vsradiodns::fetchIsBinarySafe() ? vsradiodns::httpGetRaw(url) : std::string(); });
     LocalSdrShim::setDabLogoHandler([](const std::string& ecc, const std::string& eid,
                                        const std::string& sid, int scids) -> std::string {
         // ★ DAB always transmits its ECC (FIG 0/9), so no derivation is needed here.

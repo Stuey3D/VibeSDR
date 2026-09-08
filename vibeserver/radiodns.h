@@ -108,5 +108,9 @@ void setDir(const std::string& dir);
  */
 using FetchFn = std::function<std::string(const std::string& url, const std::string& accept)>;
 void setFetcher(FetchFn fn);
+/** ★ A raw GET for BYTES (a logo file). Only where the transport is binary-safe — curl is, the
+ *  Android string hook is not; ask first. */
+bool fetchIsBinarySafe();
+std::string httpGetRaw(const std::string& url);
 
 }  // namespace vsradiodns
