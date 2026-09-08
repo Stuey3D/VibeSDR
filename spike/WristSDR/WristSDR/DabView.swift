@@ -187,6 +187,15 @@ struct DabView: View {
           .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
         Spacer(minLength: 0)
       }
+      /* ★★★ SAY WHY IT IS SILENT. DAB+ is decoded ON THE SERVER — the client's only job is to
+       *  play the Opus that comes back — so a server without an AAC decoder produces a perfect
+       *  multiplex, a full station list, a moving label and no sound at all. That is the single
+       *  most confusing thing this screen can do, and it costs one line to explain. */
+      if link.dabNoDecoder {
+        Text("No sound: this server has no DAB+ decoder")
+          .font(.system(size: 10, weight: .semibold)).foregroundStyle(.orange)
+          .lineLimit(2).minimumScaleFactor(0.8)
+      }
       /* ★ Now playing, straight off the air. On a wrist this is most of what DAB is for, and it is
        *  the one line a glance is actually after. Marquee-free: it truncates rather than moving,
        *  because a scrolling label on a watch is a battery cost for a glance. */

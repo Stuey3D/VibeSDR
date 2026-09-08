@@ -95,6 +95,12 @@ final class UberClient: ObservableObject {
   @Published var dabLocked = false
   /// The service's Dynamic Label — the "now playing" line, which on the wrist is most of the point.
   @Published var dabDls = ""
+  /* ★★★ THIS SERVER CANNOT DECODE DAB+, so the tuned service will be silent. MEASURED, not
+   *  inferred: `aacServerSide` is the server's own report of whether its platform AAC decoder
+   *  opened, and `sfTried` says a DAB+ super frame is actually being received — both from the
+   *  decoder, neither derived here. Without this the listener gets a locked multiplex, a full
+   *  service list, a moving DLS and no sound, which reads as a broken app. */
+  @Published var dabNoServerDecoder = false
 
   /// Band III, mirroring vibe_dab_channels.h and the phone's dabBlocks.ts. ★ The OFFSET blocks
   /// 10N/11N/12N are easy to leave out of a hand-typed list and are genuinely on air.
@@ -1065,6 +1071,7 @@ final class UberClient: ObservableObject {
   func selectDabService(_ id: Int) { selectDabSid(id) }
   var dabBlockName: String { dabBlockIndex >= 0 ? Self.dabBlocks[dabBlockIndex].name : "" }
   var dabDlsText: String { dabDls }
+  var dabNoDecoder: Bool { dabNoServerDecoder }
   func setDabMode(_ on: Bool) { setDab(on) }
 
   /// ★★★ ONE `dab` MESSAGE A SECOND, CARRYING THE WHOLE MULTIPLEX. Jr takes the four things a
@@ -1107,6 +1114,8 @@ final class UberClient: ObservableObject {
     }
     dabActive = true
     dabLocked = (j["locked"] as? Bool) ?? false
+    let sfTried = (j["sfTried"] as? NSNumber)?.intValue ?? 0
+    dabNoServerDecoder = sfTried > 0 && ((j["aacServerSide"] as? Bool) ?? true) == false
     dabEnsembleV = dabSafe(j["label"], 32)
     dabDls = dabSafe(j["dls"])
     if let sid = (j["sid"] as? NSNumber)?.intValue { dabActiveSid = sid }
@@ -2775,6 +2784,16 @@ final class UberClient: ObservableObject {
       audio.play(pcm: pcm, rate: Int32(rate), channels: Int32(ch))
       return
     }
+
+    /* ★★★ FORMAT 4 IS DAB+ AAC AND JR DOES NOT TOUCH IT. Stuart, 2026-09-08: "dab+ audio should
+     *  always be handled on the server the client shouldnt do anything other then play the Opus
+     *  audio." The server decodes DAB+ with the platform's own decoder and fans out PCM or Opus
+     *  like everything else, so a frame of AAC here means that server has no working decoder —
+     *  which the DAB screen now SAYS, rather than leaving a silent radio to be guessed at.
+     *  ★ Returning here is not merely tidiness: below, offset 6 would be read as an ADPCM sample
+     *    count out of the middle of an ADTS header. It happens to fall through today; it would not
+     *    survive the next edit to this function. */
+    if format == 4 { return }
 
     guard d.count >= 8 else { return }
     let count = Int(d.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 6, as: UInt16.self) })

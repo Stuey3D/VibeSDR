@@ -288,6 +288,18 @@ export default function LocalAudioPlayer(
         Vibe?.pushExternalOpus?.(bytesToBase64(new Uint8Array(buf, 6)), rate3, ch3 === 2 ? 2 : 1);
         return;
       }
+      /* ★★★ FORMAT 4 IS DAB+ AAC, AND THIS CLIENT MUST NEVER TOUCH IT. Stuart, 2026-09-08: "dab+
+       *  audio should always be handled on the server the client shouldnt do anything other then
+       *  play the Opus audio." The server decodes DAB+ with the platform's own decoder and sends
+       *  PCM or Opus like everything else; a frame of AAC arriving here means that server has no
+       *  working decoder, and the answer is to drop it, not to grow a second decoder in the app.
+       *  ★★★ AND WITHOUT THIS IT WAS A BUG, NOT MERELY A GAP: format 4 fell into the `else` below
+       *  and its COMPRESSED BYTES were pushed as samples — a loud buzz on a perfect waterfall.
+       *  That is exactly the fault the native pump already carries a five-line note about ("ELSE
+       *  MEANS DONGLE": an `else` meaning "the other one" cannot survive a third case), which
+       *  Opus caused there in July. Same shape, different reader — AGENTS.md, "ONE RULE, TWO
+       *  READERS". Silence is a bug you go and look for; a buzz is one you blame on the radio. */
+      if (format === 4) return;
       if (format === 1 || format === 2) {
         // VibeServer compressed audio (IMA-ADPCM). Decode to int16 PCM bytes.
         const d = decodeVibeAdpcmFrame(buf);

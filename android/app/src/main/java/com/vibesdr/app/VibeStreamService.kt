@@ -834,6 +834,23 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                                 Triple(rate, if (channels == 2) 2 else 1, shorts)
                             }
                         }
+                        4 -> {
+                            /* ★★★ DAB+ AAC, AND IT IS NOT OURS TO DECODE. Stuart, 2026-09-08:
+                             * "dab+ audio should always be handled on the server the client
+                             * shouldnt do anything other then play the Opus audio."
+                             * The server decodes DAB+ with the platform's own decoder and fans it
+                             * out as PCM or Opus exactly like MP2 and FM, so this frame arriving
+                             * at all means that server has no working AAC decoder. The fix belongs
+                             * THERE — a client-side decoder would be the third copy of a job that
+                             * is already done once, with the same class of bug each time.
+                             * ★ Named rather than left to the `else`, so the log says what is
+                             *   actually wrong instead of "unknown format". */
+                            if (unknownFormatLogged.compareAndSet(false, true)) {
+                                Log.w(TAG, "local audio: server sent DAB+ AAC (format 4) — it has "
+                                         + "no server-side AAC decoder; DAB+ audio is silent")
+                            }
+                            null
+                        }
                         else -> {
                             // A format this build does not know. Dropping it is the only safe
                             // answer — see the note above.

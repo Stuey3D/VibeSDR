@@ -78,6 +78,8 @@ protocol SDRClient: AnyObject {
   var dabBlockName: String { get }
   /// The service's Dynamic Label — "now playing", which on a wrist is most of what DAB is for.
   var dabDlsText: String { get }
+  /// The server has no AAC decoder, so a DAB+ service will be silent. See UberClient.
+  var dabNoDecoder: Bool { get }
   func setDabMode(_ on: Bool)
   func stepDabBlock(_ delta: Int)
   /// ADS-B decoded aircraft (empty unless on a 1090 MHz ADS-B profile). OWRX-only; default inert.
@@ -137,6 +139,7 @@ extension SDRClient {
   var dabActive: Bool { false }
   var dabBlockName: String { "" }
   var dabDlsText: String { "" }
+  var dabNoDecoder: Bool { false }
   func setDabMode(_ on: Bool) {}
   func stepDabBlock(_ delta: Int) {}
   var aircraft: [Aircraft] { [] }

@@ -150,6 +150,7 @@ export default function DabPanel(p: DabPanelProps) {
   const maxBody = Math.max(140, winH - p.bottomOffset - 190);
   const d = p.d;
   const cur = d ? d.services.find(x => x.sid === d.sid) : undefined;
+  const noDecoder = !!d && (d.sfTried ?? 0) > 0 && d.aacServerSide === false;
 
   /* ★ The pane resets to STATIONS when the ENSEMBLE changes, as the browser's does: a new
    *  multiplex means a new list, and leaving the reader on a signal pane full of the last one's
@@ -170,6 +171,19 @@ export default function DabPanel(p: DabPanelProps) {
     <ScrollView style={{ maxHeight: maxBody }} contentContainerStyle={s.body}
                 showsVerticalScrollIndicator={false}>
       {!!p.error && <Text style={s.notice}>{p.error}</Text>}
+      {/* ★★★ SAY WHY IT IS SILENT, IN BOTH PANES. DAB+ is decoded ON THE SERVER — Stuart,
+          2026-09-08: "dab+ audio should always be handled on the server the client shouldnt do
+          anything other then play the Opus audio" — so a server without an AAC decoder gives a
+          locked multiplex, a full station list, a moving DLS and no sound whatever. There is
+          nothing the app can or should do about it, which is exactly why it has to SAY so: a
+          silent radio with a perfect display reads as a broken app.
+          ★ MEASURED, not inferred: `aacServerSide` is the server's own report of whether its
+            platform decoder opened, and `sfTried` says DAB+ super frames are actually arriving. */}
+      {noDecoder && (
+        <Text style={[s.notice, { color: C.bad }]}>
+          No sound: this server has no DAB+ decoder. MP2 services still play.
+        </Text>
+      )}
       {!d && !p.error && <Text style={s.notice}>Tuning the multiplex…</Text>}
 
       {!!d && pane === 'stations' && (
@@ -395,6 +409,13 @@ export default function DabPanel(p: DabPanelProps) {
           {!!d.aacRateHz && (
             <Row label="AAC" value={`${d.aacRateHz} Hz, ${d.aacCh} ch`
               + (d.aacServerSide ? ', decoded on the server' : '')} />
+          )}
+          {/* ★ The same fact as the notice at the top, in the place a reader diagnosing silence
+              will look for it — beside the super-frame and Reed-Solomon counters that prove the
+              DECODE is fine and the problem is downstream of it. */}
+          {noDecoder && (
+            <Row label="DAB+ decoder" value="not available on this server — DAB+ services are silent"
+                 tone="bad" />
           )}
           {!!d.spi?.sid && (
             <Row label="Service information"

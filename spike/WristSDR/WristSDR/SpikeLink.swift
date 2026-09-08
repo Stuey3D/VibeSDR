@@ -325,6 +325,7 @@ final class SpikeLink: ObservableObject {
   @Published var dabActive = false
   @Published var dabBlockName = ""
   @Published var dabDlsText = ""
+  @Published var dabNoDecoder = false
   /// ADS-B decoded aircraft (mirrored from the client).
   @Published var aircraft: [Aircraft] = []
   @Published var receiverLat: Double? = nil       // SDR site → ADS-B map centre + home marker
@@ -703,6 +704,7 @@ final class SpikeLink: ObservableObject {
     if dabActive != client.dabActive { dabActive = client.dabActive }
     if dabBlockName != client.dabBlockName { dabBlockName = client.dabBlockName }
     if dabDlsText != client.dabDlsText { dabDlsText = client.dabDlsText }
+    if dabNoDecoder != client.dabNoDecoder { dabNoDecoder = client.dabNoDecoder }
     if aircraft != client.aircraft { aircraft = client.aircraft }
     if receiverLat != client.receiverLat { receiverLat = client.receiverLat }
     if receiverLon != client.receiverLon { receiverLon = client.receiverLon }
