@@ -1385,6 +1385,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       }
     },
     onAdcStat: (peak: number, clip: number) => {
+      adcStatAt = Date.now();
       adcPeakDbfs = Number.isFinite(peak) && peak > -90 ? peak : null;
       adcClipPct  = Number.isFinite(clip) ? clip : 0;
       /* ★★★ AND REPAINT, or the warning waits for news it is not part of. The chip is written on
@@ -1824,7 +1825,15 @@ let hwRfCentre = 0;
  *  ★ Only meaningful while the automation is on: the server does not measure these otherwise, on
  *    purpose, so nothing here asks for them and the chip already goes quiet with the AGC off. */
 let adcClipPct = 0, adcPeakDbfs: number | null = null;
+/* ★★★ A RAIL FIGURE HAS AN AGE. The `adc` statistic arrives with the spectrum, and when it stops
+ *  arriving the chip kept saying whatever it last heard — on the Pi's 7D that was "8.0 % RAILED"
+ *  from the seconds the AGC spent pulling the strongest multiplex down at tune-in, shown for the
+ *  whole session while the ADC actually sat at -15 dBFS with 0.0000 % clip (Stuart, 2026-09-08:
+ *  "still 8 % railed … I think an instrumentation issue?"). A warning older than a few seconds is
+ *  not a measurement; it is a memory, and it is dropped. */
+let adcStatAt = 0;
 const pkText = () => {
+  if (Date.now() - adcStatAt > 5000) return '';
   if (adcClipPct >= 0.01) return ` · ${adcClipPct.toFixed(1)}% RAILED`;
   return adcPeakDbfs === null ? '' : ` · pk ${adcPeakDbfs.toFixed(1)} dBFS`;
 };
@@ -4603,7 +4612,7 @@ function dabRender() {
     /* ★ Ofcom's licence record for this ensemble — ONLY when the air gives nothing to go on: no TII
      *  at all, or only the generic 01/05. With a real site identified it is clutter (Stuart,
      *  2026-09-07: "that just adds too much in a small space"). */
-    + (d.licensed && d.licensed.length && !dabTxRemember(d).some(e => !e.lost && !!e.t.site)   // a NAMED site on air is the real thing; a bare or generic code is not
+    + (d.licensed && d.licensed.length && !dabTxRemember(d).some(e => !!e.t.site)   // ★ a NAMED site EVER seen on this multiplex is the real thing, faded or not — the record must not swap in and out beneath it
         ? d.licensed.map((l, i) => row(i === 0 ? 'Licensed sites' : '',
             `<span class="dls"><span class="dlsIn">${escapeHtml(l.site)}${l.area && l.area !== l.site ? ` (${escapeHtml(l.area)})` : ''}${l.km >= 0 ? ` · ${(l.km * 0.621371).toFixed(l.km < 16 ? 1 : 0)} mi (${l.km.toFixed(l.km < 10 ? 1 : 0)} km)` : ''} · ${l.code} · Ofcom record</span></span>`)).join('')
         : '')
@@ -4861,7 +4870,14 @@ function dabTxRemember(d: DabState): Array<{ t: DabTx; lost: boolean }> {
     const e = dabTxSeen.get(k);
     if (e) { e.t = t; e.last = now; } else dabTxSeen.set(k, { t, last: now, order: dabTxOrder++ });
   }
-  for (const [k, e] of dabTxSeen) if (now - e.last > 60000) dabTxSeen.delete(k);
+  /* ★★★ A TRANSMITTER THAT HAS BEEN SEEN KEEPS ITS LINE FOR THE LIFE OF THE MULTIPLEX. This expired
+   *  a site after 60 s unseen, and on a weak second transmitter that comes and goes with the SNR
+   *  the row was created, expired, created again — and each time it was absent the Ofcom
+   *  "Licensed sites" rows took its place, so the whole box grew and shrank with the fading
+   *  (Stuart, 2026-09-08: "if a real transmitter has been seen it stays on the line just fades
+   *  when it drops to 0 dB SNR"). It now stays, dimmed and marked "not received", until the block
+   *  changes — which is the one event that makes it genuinely stale (dabTxSeen.clear() above). */
+  void now;
   const live = new Set((d.tii ?? []).map(t => `${t.main}/${t.sub}`));
   return [...dabTxSeen.values()].sort((a, b) => a.order - b.order)
     .map(e => ({ t: e.t, lost: !live.has(`${e.t.main}/${e.t.sub}`) }));

@@ -262,6 +262,25 @@ const ServiceRow = React.memo(function ServiceRow({ sv, d, base, onPress }: {
   );
 });
 
+/** ★ The transmitter memory — one per multiplex, cleared on a block change. Mirrors dabTxRemember
+ *  in the web client, and for the same reason: a line that appears and disappears with the SNR
+ *  makes everything under it jump. */
+type DabTx = NonNullable<DabState['tii']>[number];
+const txSeen = new Map<string, { t: DabTx; order: number }>();
+let txChannel = '';
+let txOrder = 0;
+function rememberTransmitters(d: DabState): Array<{ t: DabTx; lost: boolean }> {
+  if (d.channel !== txChannel) { txSeen.clear(); txChannel = d.channel; }
+  for (const t of d.tii ?? []) {
+    const k = `${t.main}/${t.sub}`;
+    const e = txSeen.get(k);
+    if (e) e.t = t; else txSeen.set(k, { t, order: txOrder++ });
+  }
+  const live = new Set((d.tii ?? []).map(t => `${t.main}/${t.sub}`));
+  return [...txSeen.values()].sort((a, b) => a.order - b.order)
+    .map(e => ({ t: e.t, lost: !live.has(`${e.t.main}/${e.t.sub}`) }));
+}
+
 export interface DabPanelProps {
   /** The last `dab` message, or null while the server has not sent one (starting, or off). */
   d: DabState | null;
@@ -303,6 +322,7 @@ export default function DabPanel(p: DabPanelProps) {
   const maxBody = p.tall ? Math.max(140, winH - p.bottomOffset - 190) : 230;
   const d = p.d;
   const cur = d ? d.services.find(x => x.sid === d.sid) : undefined;
+  const txLines = useMemo(() => (d ? rememberTransmitters(d) : []), [d]);
   const noDecoder = !!d && (d.sfTried ?? 0) > 0 && d.aacServerSide === false;
 
   /* ★ The pane resets to STATIONS when the ENSEMBLE changes, as the browser's does: a new
@@ -408,22 +428,27 @@ export default function DabPanel(p: DabPanelProps) {
               null's noise. And when there are none, SAY WHY: a null symbol with no TII energy at
               all is a multiplex that does not transmit identification (Digital One on 11D,
               measured 2026-09-07), not a receiver that has failed to find it. */}
-          {d.tii?.length
-            ? d.tii.map((t, i) => (
-                <Row key={`${t.main}.${t.sub}.${i}`} label={i === 0 ? 'Transmitters' : ''}
-                     value={`${t.main.toString(16).toUpperCase()}/${t.sub.toString(16).toUpperCase().padStart(2, '0')}`
-                          + (t.site ? ` · ${t.site}` : '')
-                          + (t.area && t.area !== t.site ? ` (${t.area})` : '')
-                          + (t.km !== undefined && t.km >= 0 ? ` · ${(t.km * 0.621371).toFixed(t.km < 16 ? 1 : 0)} mi` : '')
-                          + ` · ${t.db.toFixed(1).padStart(4, '\u2007')} dB`   // ★ two figures: 9.5 and 10.2 dB are the same width
-                          + (t.ambiguous ? ' · ambiguous' : '')} />
+          {/* ★★★ TRANSMITTER LINES THAT DO NOT BOUNCE — the same memory the web client keeps. A site
+              is remembered for the life of the multiplex; while unheard its line stays, dimmed and
+              marked, rather than vanishing and letting the Ofcom record take its place (Stuart:
+              "the whole box grows and shrinks significantly with the licenced transmitters row"). */}
+          {txLines.length
+            ? txLines.map((e, i) => (
+                <Row key={`${e.t.main}.${e.t.sub}`} label={i === 0 ? 'Transmitters' : ''}
+                     value={`${e.t.main.toString(16).toUpperCase()}/${e.t.sub.toString(16).toUpperCase().padStart(2, '0')}`
+                          + (e.t.site ? ` · ${e.t.site}` : '')
+                          + (e.t.area && e.t.area !== e.t.site ? ` (${e.t.area})` : '')
+                          + (e.t.km !== undefined && e.t.km >= 0 ? ` · ${(e.t.km * 0.621371).toFixed(e.t.km < 16 ? 1 : 0)} mi` : '')
+                          + (e.lost ? ' · not received' : ` · ${e.t.db.toFixed(1).padStart(4, '\u2007')} dB`)
+                          + (e.t.ambiguous ? ' · ambiguous' : '')}
+                     tone={e.lost ? 'warn' : undefined} />
               ))
             : <Row label="Transmitters" value={!d.locked ? DASH
                 : (d.tiiDiag && d.tiiDiag.frames > 0 && d.tiiDiag.f4s < 2
                     ? 'none transmitted — no TII in the null symbol' : 'none identified yet')} />}
           {/* ★ Ofcom's licence record, ONLY when the air gives nothing to go on. With a real site
               identified it is clutter (Stuart: "that just adds too much in a small space"). */}
-          {!d.tii?.some(t => !!t.site) && d.licensed?.map((l, i) => (
+          {!txLines.some(e => !!e.t.site) && d.licensed?.map((l, i) => (
             <Row key={l.code + i} label={i === 0 ? 'Licensed sites' : ''}
                  value={`${l.site}${l.area && l.area !== l.site ? ` (${l.area})` : ''}`
                       + (l.km >= 0 ? ` · ${(l.km * 0.621371).toFixed(l.km < 16 ? 1 : 0)} mi` : '')
