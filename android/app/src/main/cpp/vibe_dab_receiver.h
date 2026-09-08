@@ -37,6 +37,28 @@
 #include "vibe_dab_prs.h"
 #include "vibe_dab_sync.h"
 
+#if defined(VIBE_DAB_PROFILE)
+#include <chrono>
+#include <cstdio>
+/* ★ Stage timers for push(), on request only. simpleperf on the phone put 34 % of vibe-dab in
+ *  push() and could not say WHERE inside it — every stage is inlined into one symbol. These add
+ *  ~1 µs a frame and print a running average every 100 frames; never built into the app. */
+struct VibeDabStageClock {
+    double acc[8] = {}; unsigned n = 0;
+    std::chrono::steady_clock::time_point t;
+    void start() { t = std::chrono::steady_clock::now(); }
+    void lap(int i) { auto now = std::chrono::steady_clock::now(); acc[i] += std::chrono::duration<double, std::micro>(now - t).count(); t = now; }
+    void frame() { if (++n % 100 == 0) { std::fprintf(stderr, "[dab-profile] us/frame: sync %.0f copy %.0f frac+derot %.0f prs %.0f ir %.0f symbols %.0f bits %.0f\n", acc[0]/n, acc[1]/n, acc[2]/n, acc[3]/n, acc[4]/n, acc[5]/n, acc[6]/n); } }
+};
+#define VDAB_T_START() stageClock_.start()
+#define VDAB_T_LAP(i)  stageClock_.lap(i)
+#define VDAB_T_FRAME() stageClock_.frame()
+#else
+#define VDAB_T_START() (void)0
+#define VDAB_T_LAP(i)  (void)0
+#define VDAB_T_FRAME() (void)0
+#endif
+
 namespace vibedab {
 
 /** ★ The MSC erasure threshold, as a fraction of the PRS correlation's own running reference.
@@ -97,6 +119,7 @@ public:
 
     /** Feed a buffer of at least one frame. Returns true when a frame was decoded. */
     bool push(const Cplx* iq, size_t n) {
+        VDAB_T_START();
         const long at = sync_.offer(iq, n);
         lastAt_ = at;
         if (at < 0) { stats_.locked = sync_.locked(); return false; }
@@ -112,12 +135,15 @@ public:
         /* ★ PERSISTENT BUFFERS. This allocated ~1.5 MB (work), the carrier arrays, the spectrum and
          *  the frame's soft bits afresh EVERY frame — ten times a second of malloc, page-fault and
          *  free on a phone. assign() reuses the capacity; the contents are what they were. */
+        VDAB_T_LAP(0);
         std::vector<Cplx>& work = work_;
         work.assign(iq + start, iq + start + symLen * size_t(mode_->symbolsPerFrame));
+        VDAB_T_LAP(1);
         const float frac = fractionalOffset(work.data(), work.size(), *mode_, 8);
         stats_.freqOffsetHz  = offsetHz(frac, *mode_);
         stats_.freqOffsetPpm = float(double(stats_.freqOffsetHz) / centreHz_ * 1e6);
         if (std::fabs(frac) > 1e-6f) derotate(work.data(), work.size(), double(frac) / double(fft_));
+        VDAB_T_LAP(2);
 
         const int K = mode_->carriers;
         /* ★ Braces, not parens: `std::vector<C32> cur(size_t(K))` is a FUNCTION DECLARATION, not
@@ -205,6 +231,7 @@ public:
              *  against the references, which all derotate the total offset in the time domain. */
             if (bestShift != 0)
                 derotate(work.data(), work.size(), double(bestShift) / double(fft_));
+            VDAB_T_LAP(3);
             /* ★ THE CHANNEL IMPULSE RESPONSE — the SFN's echo profile, which is what a DX-er with
              *  a directional aerial actually wants to see. H[k] = received PRS carrier x conj(the
              *  reference); its inverse transform is the channel: the main path, and every other
@@ -247,6 +274,7 @@ public:
         }
 
         // ── every symbol to carriers, then DQPSK against the previous ───────
+        VDAB_T_LAP(4);
         for (int sym = 0; sym < mode_->symbolsPerFrame; ++sym) {
             const Cplx* p = work.data() + size_t(sym) * symLen + winOff;
             dft(p, spec.data());
@@ -347,6 +375,7 @@ public:
          *  ★ The threshold is RELATIVE, because the correlation's scale follows the signal. A
          *    frame at a third of the running reference is not a fade — a fade moves the null
          *    depth too — it is a window in the wrong place. */
+        VDAB_T_LAP(5);
         if (prsRef_ <= 0.0f) prsRef_ = stats_.prsCorrelation;
         else if (stats_.prsCorrelation > prsRef_)
              prsRef_ = prsRef_ * 0.90f + stats_.prsCorrelation * 0.10f;   // rise quickly
@@ -380,6 +409,7 @@ public:
         if (!untrusted && frameBits.size() >= ficBits) {
             ficBits_.assign(frameBits.begin(), frameBits.begin() + long(ficBits));
             const int ok = ficDecodeFrame(frameBits.data(), ensemble_, viterbi_);
+            VDAB_T_LAP(6); VDAB_T_FRAME();
             stats_.fibsOk    = ok;
             stats_.fibsTotal = 12;
             /* ★ TII rides in the null symbol of frames whose CIF count is 0..3 mod 8 (14.8), and
@@ -672,7 +702,10 @@ private:
     // ★ Per-frame scratch, kept between frames — see push().
     std::vector<Cplx> work_;
     std::vector<C32>  cur_, prev_, spec_, got_, D_;
-    std::vector<int8_t> frameBits_;   // reference adjacent-carrier products, built once
+    std::vector<int8_t> frameBits_;
+#if defined(VIBE_DAB_PROFILE)
+    VibeDabStageClock stageClock_;
+#endif   // reference adjacent-carrier products, built once
     std::vector<C32>    prod_;      // per-symbol differential products — see the CSI note
     std::vector<int8_t> ficBits_;
     SubChannel sel_{};
