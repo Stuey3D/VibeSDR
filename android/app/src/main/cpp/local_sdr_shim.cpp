@@ -39,14 +39,47 @@
 // URGENT_AUDIO priority (nice -19) for the DSP/audio thread; `vibeThreadName` =
 // name only, so a spinning thread is identifiable in `top -H` / systrace instead
 // of showing as the inherited RN "mqt_v_native".
-#if defined(__ANDROID__)
+/* ★★★ THIS WAS ANDROID-ONLY, AND THE PI IS WHERE IT MATTERS MOST. The guard was
+ *  `#if defined(__ANDROID__)`, so on Linux — every apt server, every Pi, the amd64 box — BOTH
+ *  halves compiled to nothing: no thread name and no audio priority. prctl(PR_SET_NAME) and
+ *  setpriority() are plain Linux APIs; Android has them because Android IS Linux.
+ *  ★★★ THE NAME. Every thread showed as "vibeserver" in `top -H`, which is how a 63 %-of-a-core
+ *      thread on the RSP1B took a gdb session to identify (2026-09-08 audit). Naming is free and
+ *      needs no privilege.
+ *  ★★★ THE PRIORITY IS THE HALF THAT ACTUALLY COSTS SOMETHING, AND IT IS NOT FREE ON THE PI.
+ *      The DSP must keep real time or the audio breaks up — that is what the IQ-backlog counter
+ *      in dspLoop watches for. On Android the process may renice itself; a systemd unit running
+ *      as User=vibeserver may NOT (measured on the Pi: nice 0, SCHED_OTHER, no capabilities), so
+ *      setpriority() returns -1 and the thread runs at default priority alongside the web server
+ *      and the tunnel. Granting it needs the UNIT to say so (Nice=-10, or AmbientCapabilities=
+ *      CAP_SYS_NICE) — a packaging decision, not a code one.
+ *  ★ So: SAY SO ONCE rather than assume. A silent failure here is indistinguishable from having
+ *    the priority, which is precisely the class of bug this project keeps paying for. */
+#if defined(__ANDROID__) || defined(__linux__)
   #include <sys/resource.h>   // setpriority
   #include <sys/prctl.h>      // PR_SET_NAME
+  #include <cerrno>
+  #include <cstdio>           // ★ this block sits ABOVE the main include list — it must carry its own
+  #include <cstring>          //   (strerror)
+  #include <atomic>
+  static inline void vibeThreadName(const char* name) { prctl(PR_SET_NAME, name); }
   static inline void vibeAudioThread(const char* name) {
       prctl(PR_SET_NAME, name);
-      setpriority(PRIO_PROCESS, 0, -19); // = Process.THREAD_PRIORITY_URGENT_AUDIO
+      errno = 0;
+      if (setpriority(PRIO_PROCESS, 0, -19) != 0 && errno != 0) {   // = THREAD_PRIORITY_URGENT_AUDIO
+          static std::atomic<bool> warned{false};
+          if (!warned.exchange(true))
+              fprintf(stderr, "[VibeLocalSDR] ★ '%s' could not take audio priority (%s) — it runs at "
+                              "the default. On systemd add Nice=-10 or AmbientCapabilities="
+                              "CAP_SYS_NICE to the unit if the DSP falls behind under load.\n",
+                      name, strerror(errno));
+      }
   }
-  static inline void vibeThreadName(const char* name) { prctl(PR_SET_NAME, name); }
+#elif defined(__APPLE__)
+  #include <pthread.h>
+  // macOS names the CALLING thread and takes no second argument.
+  static inline void vibeThreadName(const char* name) { pthread_setname_np(name); }
+  static inline void vibeAudioThread(const char* name) { pthread_setname_np(name); }
 #else
   static inline void vibeAudioThread(const char*) {}
   static inline void vibeThreadName(const char*) {}

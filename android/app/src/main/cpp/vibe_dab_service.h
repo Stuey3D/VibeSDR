@@ -494,7 +494,7 @@ public:
             if (s.bytes.empty()) continue;
             s.mime = std::string("image/") + (strcmp(ext, "jpg") == 0 ? "jpeg" : ext);
             s.sid = sid; s.seq = 1;
-            slideBySid_[sid] = s;                 // ★ read once, then answered from memory
+            slideRemember(sid, s);                // ★ read once, then answered from memory
             out = s; return true;
         }
         return false;
@@ -1786,7 +1786,28 @@ private:
     std::map<uint8_t, SlideCategory> cats_;
     int slideAlert_ = 0;
     std::string slideClickUrl_;
+    /** ★★★ A CACHE, AND CACHES MUST BE BOUNDED. This holds whole JPEGs — one per service ever
+     *  visited, across every multiplex — and nothing evicted them: a server left running while
+     *  people tune around grew by ~10 kB a station for ever. The DISK store is the durable copy
+     *  (serviceSlide reloads from it in microseconds), so memory here is pure convenience and
+     *  can be dropped at any time. Caught auditing my own change from an hour earlier. */
+    static constexpr size_t kMaxSlidesHeld = 24;
     std::map<uint32_t, Slide> slideBySid_;   ///< the last picture from each service visited
+    std::deque<uint32_t> slideOrder_;        ///< insertion order, for the eviction above
+    /* ★ Bounded by construction: ONE pass over the queue, evicting the oldest entries that are
+     *  not the playing service. A loop that can put an element back is a loop that can, under
+     *  some input nobody has thought of yet, not finish — and this runs on the DSP thread. */
+    void slideRemember(uint32_t sid, const Slide& s) {   // caller holds m_
+        if (!slideBySid_.count(sid)) slideOrder_.push_back(sid);
+        slideBySid_[sid] = s;
+        size_t excess = slideOrder_.size() > kMaxSlidesHeld ? slideOrder_.size() - kMaxSlidesHeld : 0;
+        for (auto it = slideOrder_.begin(); excess && it != slideOrder_.end(); ) {
+            if (*it == sid_ || *it == sid) { ++it; continue; }   // never evict what is playing
+            slideBySid_.erase(*it);
+            it = slideOrder_.erase(it);
+            --excess;
+        }
+    }
     /** ★ Keyed by the ensemble as well as the SId: an SId is only unique within its ensemble
      *  (that is what the ECC and EId are for), and two multiplexes reusing one SId would
      *  otherwise show each other's artwork. */
@@ -1853,7 +1874,7 @@ private:
         /* ★★★ AND KEEP A COPY. `slide_` is cleared by every retune, which is right for the pane
          *  and is exactly why the picture kept having to be read off the air again. */
         if (!sid_ || slide_.bytes.empty()) return;
-        slideBySid_[sid_] = slide_;
+        slideRemember(sid_, slide_);
         const char* ext = slideExt(slide_.mime);
         if (slideDir_.empty() || !ext || !rx_.ensemble().eid) return;
         mkdir(slideDir_.c_str(), 0755);

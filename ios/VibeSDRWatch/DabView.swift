@@ -13,6 +13,17 @@ import Combine
 struct DabView: View {
   @EnvironmentObject var link: WatchLink
 
+  // ★★★ THE TICK IS A STORED PROPERTY, NOT BUILT IN body(). Timer.publish() creates a NEW
+  // publisher every time body is evaluated, and .onReceive resubscribes when the publisher
+  // changes — so an inline one is torn down and restarted on every render, and a view that
+  // re-renders faster than the interval NEVER REACHES ITS DEADLINE. `link` is an
+  // @EnvironmentObject whose level/snr/span are republished on every waterfall row (10 Hz), so
+  // every view observing it re-renders at that rate — faster than both ticks that were inline.
+  // ★ The correct form was already here: WaterfallCanvas in ContentView.swift holds
+  //   `private let driver = Timer.publish(...)` and its comment explains the isolation. Three of
+  //   the five Timer.publish sites were stored properties; these two were not.
+  private let tickClock = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
+
   @State private var cursor = 0
   @State private var crown = 0.0
   @State private var lastDetent = 0
@@ -117,7 +128,7 @@ struct DabView: View {
     }
     // Drive the client→UI mirror here — driverTick lives on ContentView (not rendered on this screen), so
     // without this the service list never grows and the "playing" icon never moves. 4 Hz suits a list.
-    .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
+    .onReceive(tickClock) { _ in
       link.driverTick(now: ProcessInfo.processInfo.systemUptime)
     }
     .onAppear {
