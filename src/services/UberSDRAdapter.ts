@@ -203,6 +203,15 @@ export class VibeServerAdapter extends UberSDRAdapter {
                        password?: string): SdrWsClient {
     return new VibeServerClient(baseUrl, uuid, callbacks, password);
   }
+
+  /** ★ The cast is CHECKED, not asserted away: makeClient above is the only thing that builds this
+   *  adapter's client and it builds a VibeServerClient, so the narrowing is a fact about this
+   *  class. A `(c as any).dab?.()` would have been the setAdminAuth mistake again. */
+  private get vibe(): VibeServerClient { return this.client as VibeServerClient; }
+
+  dab(on: boolean, channel?: number, sid?: number): void { this.vibe.dab(on, channel, sid); }
+  dabService(sid: number): void { this.vibe.dabService(sid); }
+  get inDab(): boolean { return this.vibe.inDab; }
 }
 
 export function createBackend(

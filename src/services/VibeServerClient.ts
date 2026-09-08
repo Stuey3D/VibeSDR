@@ -16,6 +16,7 @@
 //    copy, so a fix to the shared half still reaches both — which is the good half of the old
 //    arrangement and worth keeping. Only the divergence is below.
 import { SdrWsClient, LADDERS_FOR } from './SdrWsClient';
+import { parseDabMessage, dabSafeText, type DabState } from './dabTypes';
 
 export {
   MODE_BANDWIDTHS,
@@ -48,6 +49,55 @@ export class VibeServerClient extends SdrWsClient {
     if (this.spectrumWs?.readyState !== WebSocket.OPEN || targetFps <= 0) return;
     this.rateDivisor = 1;                       // one lever only
     this.spectrumWs.send(JSON.stringify({ type: 'fftRate', value: targetFps }));
+  }
+
+  // ─── DAB ────────────────────────────────────────────────────────────────────────────────────
+  //
+  // ★★★ THIS IS WHY THE SPLIT HAD TO HAPPEN FIRST. UberSDR has no DAB, and every line below would
+  //     otherwise have been another branch on the old mutable flag, in a file UberSDR also runs.
+  //     ADS-B, AIS, ACARS and DRM land here next, for the same reason.
+
+  /** Enter or leave DAB, optionally naming the multiplex (channel index) and service.
+   *
+   *  ★ THE SERVER OWNS THE DIAL IN DAB. It sets the radio to the block centre and the DAB sample
+   *    rate itself; the client never tunes, because there is no VFO inside a multiplex. Setting
+   *    `dabHeld` is what locks tune/zoom/pan/resetView out — see SdrWsClient.dabHeld, which is the
+   *    single reader every one of those paths passes through.
+   *
+   *  ★★ THE HOLD IS SET BEFORE THE SEND AND CLEARED BEFORE THE SEND. A `dab off` that raced its
+   *     own reply used to leave the view locked until the next connect; the lock is a client-side
+   *     rule about what the user may ask for, so it belongs to the REQUEST, not to the answer. */
+  dab(on: boolean, channel?: number, sid?: number) {
+    this.dabHeld = on;
+    const m: Record<string, unknown> = { type: 'dab', on: on ? 1 : 0 };
+    if (channel !== undefined) m.channel = channel;
+    if (sid     !== undefined) m.sid     = sid;
+    this.sendSpectrum(m);
+  }
+
+  /** Switch service WITHIN the tuned multiplex — no retune, no re-acquire. */
+  dabService(sid: number) { this.sendSpectrum({ type: 'dab_service', sid }); }
+
+  /** ★ `dab` arrives about once a second with the whole measured state; `dab_off` ends it;
+   *  `dab_error` is a refusal (the receiver has no DAB, or the owner switched it off) and is an
+   *  EXPLANATION, not a protocol fault — the panel says why rather than showing a dead button. */
+  protected handleServerMessage(msg: Record<string, unknown>): boolean {
+    switch (msg.type) {
+      case 'dab':
+        this.dabHeld = true;
+        this.callbacks.onDab?.(parseDabMessage(msg));
+        return true;
+      case 'dab_off':
+        this.dabHeld = false;
+        this.callbacks.onDab?.(null);
+        return true;
+      case 'dab_error':
+        this.dabHeld = false;
+        this.callbacks.onDab?.(null,
+          dabSafeText(msg.why, 160) || 'DAB is not available on this receiver');
+        return true;
+    }
+    return false;
   }
 
   get isVibe(): boolean { return true; }

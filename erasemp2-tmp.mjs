@@ -1,0 +1,23 @@
+import WebSocket from 'ws';
+const H='192.168.86.111:48000', CH=process.env.CH||'10C', PH=Number(process.env.PH||55);
+const sid='E'+Date.now();
+const w=new WebSocket(`ws://${H}/ws/user-spectrum?client=${sid}&user_session_id=${sid}`);
+let picked=false,last=null;
+w.on('open',()=>setTimeout(()=>w.send(JSON.stringify({type:'dab',on:1,channel:CH})),2000));
+w.on('message',m=>{const t=m.toString(); if(t[0]!=='{'||!t.includes('"type":"dab"'))return;
+  let j; try{j=JSON.parse(t);}catch(e){return;} last=j;
+  if(!picked&&j.services&&j.services.length){picked=true;
+    const d=j.services.find(x=>x.codec==='MP2');
+    console.log('service:',d.label||d.sid);
+    w.send(JSON.stringify({type:'dab_service',sid:d.sid}));}});
+const phases=[['erase 0.25',0.25],['erase OFF ',0],['erase 0.25',0.25],['erase OFF ',0]];
+let t=25000;
+phases.forEach(([name,f])=>{
+  setTimeout(()=>w.send(JSON.stringify({type:'dab_erase',frac:f})),t);
+  let base=null;
+  setTimeout(()=>{ if(last) base=JSON.parse(JSON.stringify(last));},t+8000);
+  setTimeout(()=>{ if(!base||!last){console.log(name+': NO DATA');return;} const d=k=>Number(last[k]||0)-Number(base[k]||0); const i=d('mp2In');
+    console.log(`${name}: ${i} frames | bad ${d('mp2Bad')} = ${i?(100*d('mp2Bad')/i).toFixed(2):'-'}% | noSync ${d('mp2NoSync')} crcBad ${d('mp2CrcBad')} | erased ${d('erased')} | fib ${last.fibRate}`);
+  },t+PH*1000);
+  t+=PH*1000;});
+setTimeout(()=>process.exit(0),t+3000);

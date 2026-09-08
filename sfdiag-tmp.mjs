@@ -1,0 +1,23 @@
+import WebSocket from 'ws';
+const H='192.168.86.111:48000', CH=process.env.CH||'11A';
+const sid='D'+Date.now();
+const url=`ws://${H}/ws/user-spectrum?client=${sid}&user_session_id=${sid}`;
+const p=new WebSocket(url); p.on('open',()=>p.close());
+p.on('close',()=>{ const w=new WebSocket(url); let last=null,b=null,picked=false,lbl='';
+  w.on('open',()=>setTimeout(()=>w.send(JSON.stringify({type:'dab',on:1,channel:CH})),1500));
+  w.on('message',m=>{const t=m.toString(); if(t[0]!=='{')return;
+    let j; try{j=JSON.parse(t);}catch(e){return;} if(j.type!=='dab')return; last=j;
+    if(!picked&&j.services&&j.services.length){picked=true;
+      const d=j.services.find(x=>x.codec==='DAB+')||j.services[0]; lbl=d.label;
+      w.send(JSON.stringify({type:'dab_service',sid:d.sid}));
+      setTimeout(()=>{b=JSON.parse(JSON.stringify(last));},70000);}});
+  setTimeout(()=>{ if(!b){console.log('no baseline');process.exit(1);}
+    const d=k=>Number(last[k]||0)-Number(b[k]||0); const secs=60;
+    console.log(`${lbl} over ${secs}s`);
+    console.log(`  superframes: tried ${d('sfTried')}  ok ${d('sfOk')}  badLen ${d('sfBadLen')}`);
+    console.log(`  thrown away: firecode ${d('sfFireBad')}  invalid ${d('sfInvalid')}`);
+    console.log(`  reed-solomon: bytes FIXED ${d('rsFixed')}   codewords LOST ${d('rsLost')}`);
+    console.log(`  aus/s ${(d('aus')/secs).toFixed(2)} of 16.67   erased ${d('erased')}   silence ${(d('pcmFilled')/48).toFixed(0)} ms`);
+    console.log(`  fib ${last.fibRate}  null ${last.nullDepthDb} dB  prsRatio ${last.prsRatio}`);
+    process.exit(0); },132000);
+});

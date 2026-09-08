@@ -1,0 +1,20 @@
+import WebSocket from 'ws';
+const H='192.168.86.111:48000', sid='J'+Date.now();
+const w=new WebSocket(`ws://${H}/ws/user-spectrum?client=${sid}&user_session_id=${sid}`);
+let picked=false, s1=null,t1=0, cur=null;
+w.on('open',()=>setTimeout(()=>w.send(JSON.stringify({type:'dab',on:1,channel:'11A'})),1500));
+w.on('message',m=>{const t=m.toString(); if(t[0]!=='{')return;
+  let j; try{j=JSON.parse(t);}catch(e){return;} if(j.type!=='dab')return;
+  cur=j;
+  if(!picked&&j.services&&j.services.length){picked=true;
+    const d=j.services.find(x=>x.codec==='DAB+')||j.services[0];
+    w.send(JSON.stringify({type:'dab_service',sid:d.sid}));}});
+setTimeout(()=>{ s1=Number(cur.samplesIn); t1=Date.now(); console.log('baseline set'); },25000);
+setTimeout(()=>{
+  const secs=(Date.now()-t1)/1000, got=Number(cur.samplesIn)-s1;
+  const nominal=2400000*secs;
+  console.log(`samplesIn ${got} in ${secs.toFixed(2)} s`);
+  console.log(`  ${(got/secs/1e6).toFixed(4)} MS/s vs 2.4000 nominal`);
+  console.log(`  ★ shortfall ${((1-got/nominal)*100).toFixed(3)}%  (${((nominal-got)/2400).toFixed(0)} ms of capture)`);
+  console.log(`  dropped=${cur.dropped}  pushOk=${cur.pushOk}  pushCalls=${cur.pushCalls}`);
+  process.exit(0);},85000);

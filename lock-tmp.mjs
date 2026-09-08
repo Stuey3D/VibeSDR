@@ -1,0 +1,11 @@
+import WebSocket from 'ws';
+const H='192.168.86.111:48000', CH=process.env.CH||'10C';
+const sid='K'+Date.now();
+const w=new WebSocket(`ws://${H}/ws/user-spectrum?client=${sid}&user_session_id=${sid}`);
+let n=0;
+w.on('open',()=>setTimeout(()=>w.send(JSON.stringify({type:'dab',on:1,channel:CH})),2000));
+w.on('message',m=>{const t=m.toString(); if(t[0]!=='{')return;
+  let j; try{j=JSON.parse(t);}catch(e){return;} if(j.type!=='dab')return;
+  if(++n%14===0) console.log(`${CH} locked=${j.locked} null=${j.nullDepthDb} prs=${j.prs} ratio=${j.prsRatio} off=${j.offsetHz} shift=${j.carrierShift} fib=${j.fibRate} (${j.fibOk}/${j.fibTotal}) svcs=${(j.services||[]).length} eid=0x${(j.eid||0).toString(16)} label="${j.label}" frames=${j.frames}`);
+});
+setTimeout(()=>process.exit(0),45000);

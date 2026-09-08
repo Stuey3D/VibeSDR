@@ -46,6 +46,7 @@
 //     delta: uint16 changeCount, then changeCount × {uint16 index, float32 value}
 //   8-bit variants: same layout but values are uint8 (0..255 mapped to dBFS range)
 
+import type { DabState } from './dabTypes';
 import 'react-native-get-random-values'; // polyfill for crypto.getRandomValues
 import { ungzip } from 'pako';
 import { VibePowerModule } from '../components/AudioPlayer';
@@ -209,6 +210,8 @@ export interface RadioCaps {
   rfNotch?: boolean; dabNotch?: boolean; biasT?: boolean;
 }
 
+export type { DabState } from './dabTypes';
+
 export interface SDRCallbacks {
   onSpectrum:   (bins: Float32Array, status: SDRStatus) => void;
   onStatus:     (status: SDRStatus) => void;
@@ -261,6 +264,10 @@ export interface SDRCallbacks {
    *  missing field into a false one and pinned its AUTO BW button off for ever. */
   onFmDsp?:     (s: { wsp: boolean; ims: boolean; ceq: boolean; nb: boolean;
                       autobw?: boolean }) => void;
+  /** ★★★ DAB, and it is a VIBESERVER-ONLY callback. `s` is the whole measured state of the
+   *  multiplex (see DabState — every field is MEASURED, nothing inferred); null means DAB has
+   *  ended, and `err` carries the server's refusal when it could not start. */
+  onDab?:       (s: DabState | null, err?: string) => void;
   onHwGains?:   (gains: number[]) => void;
   /** ★★★ WHERE THE GAIN ACTUALLY IS on the serving radio, in its own units; -1 = auto/AGC. The
    *  slider FOLLOWS this. A client cannot query a remote dongle, so before the server sent it the
@@ -440,7 +447,7 @@ export abstract class SdrWsClient {
 
   private baseUrl:   string;
   readonly uuid:     string; // shared with native audio WS
-  private callbacks: SDRCallbacks;
+  protected callbacks: SDRCallbacks;   // ★ protected: a subclass's own messages report through them
 
   protected spectrumWs:   WebSocket | null = null;   // ★ protected: the subclasses send their own rate lever
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -654,8 +661,44 @@ export abstract class SdrWsClient {
     }
   }
 
+  /** ★★★ DAB OWNS THE DIAL AND THE VIEW, AND THE HOLD LIVES HERE — ONE READER.
+   *
+   *  An ensemble is one 1.536 MHz block: there is nothing to tune inside it and nothing to zoom
+   *  into, and on an RTL the IF filter FOLLOWS the view, so a zoom cuts the multiplex out from
+   *  under the decoder. The web client learned this the expensive way (Stuart, 2026-09-07: "the
+   *  zoom still worked instead of being locked out… the spectrum can be clicked which knocks the
+   *  multiplex tuning off") — the server refused `tune` but never `zoom`, so a stray tap on the
+   *  waterfall parked the dongle on the view and the lock was gone.
+   *
+   *  ★ EVERY path that moves the dial or the view — drum, arrows, drag, tap, bookmark, band
+   *    button, search — ends in tune()/zoom()/pan()/resetView(). Gating those four is gating all
+   *    of them; gating call sites is how the web client missed one. AGENTS.md, "ONE RULE, TWO
+   *    READERS": there is one reader here on purpose.
+   *
+   *  ★ Base value is false and only VibeServerClient ever sets it, so UberSDR carries no branch. */
+  protected dabHeld = false;
+
+  /** True while a DAB multiplex is being decoded — the UI locks zoom and the VFO out. */
+  get inDab(): boolean { return this.dabHeld; }
+
+  /** ★ A message only ONE server speaks. Return true if handled; the base speaks neither DAB nor
+   *  anything else UberSDR lacks, so it returns false and the unhandled-type log still fires for
+   *  a message genuinely nobody expected. */
+  protected handleServerMessage(_msg: Record<string, unknown>): boolean { return false; }
+
+  /** Send one control message on the spectrum socket, or drop it if the socket is not up.
+   *  ★ DROPPING IS THE RIGHT ANSWER HERE and the wrong one elsewhere: these are commands the user
+   *  just issued about the state the radio is in NOW. Queueing one across a reconnect replays a
+   *  stale intent onto a session that has moved on. Anything that MUST survive a reconnect is
+   *  re-sent from the onopen path, deliberately, by name. */
+  protected sendSpectrum(msg: Record<string, unknown>): boolean {
+    if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return false;
+    try { this.spectrumWs.send(JSON.stringify(msg)); return true; } catch { return false; }
+  }
+
   /** Tune to a new frequency (and optionally mode). Sends to native audio WS + spectrum WS. */
   tune(frequency: number, mode?: SDRMode, opts?: { recenter?: boolean }) {
+    if (this.dabHeld) return;            // ★ see dabHeld — the multiplex IS the tuning
     this.lastLocalTuneAt = Date.now();   // ★ so the server's echo is not read as somebody else
     if (frequency) this.status.frequency = frequency;
     if (mode)      this._adoptMode(mode);      // ★ the passband travels with it — see _adoptMode
@@ -771,6 +814,7 @@ export abstract class SdrWsClient {
   // the server ladder passes large values through unchecked and a runaway
   // zoom-out wedges the session.
   zoom(frequency: number, binBandwidth: number) {
+    if (this.dabHeld) return;            // ★ see dabHeld — a zoom narrows the IF under the mux
     /* ★★★ THE VIEW CENTRE IS NOT A TUNE REQUEST — DO NOT CLAMP IT TO THE TUNER'S RANGE.
      *
      *  This was `Math.max(this.minHz, …)`, and for every VibeServer connection minHz is
@@ -806,6 +850,7 @@ export abstract class SdrWsClient {
   }
 
   pan(frequency: number) {
+    if (this.dabHeld) return;            // ★ see dabHeld
     // ★ Same rule as zoom(): panning the VIEW is not tuning, so the tuner's range does not bound
     //   it. Clamping here hid the low end of every radio that reaches below the RTL-SDR's floor.
     const f = Math.round(frequency);
@@ -1038,6 +1083,7 @@ export abstract class SdrWsClient {
   }
 
   resetView() {
+    if (this.dabHeld) return;            // ★ see dabHeld
     if (!this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return;
     this.spectrumWs.send(JSON.stringify({ type: 'reset' }));
   }
@@ -2430,6 +2476,11 @@ export abstract class SdrWsClient {
     // ★ Cheap on purpose: __DEV__-gated console, but ALWAYS through onDbg, so it reaches the
     // in-app debug surface on a release build where the real reports come from. Truncated because
     // an unknown message may be large, and the TYPE is the part that matters.
+    // ★ Server-specific messages (DAB on a VibeServer, and whatever ADS-B/AIS/ACARS/DRM bring)
+    //   get their chance BEFORE the unhandled log, or every one of them reports itself as a
+    //   protocol fault on the server that does speak them.
+    if (this.handleServerMessage(msg)) return;
+
     if (typeof msg.type === 'string') {
       /* ★★★ BUILD THE LINE ONCE PER TYPE. `sig` and `adc` arrive twenty times a second EACH, and
        *     this ran JSON.stringify on every one of them — on the JS thread, for ever, to produce

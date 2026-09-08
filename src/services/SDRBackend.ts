@@ -219,6 +219,25 @@ export interface SDRBackend {
   /** DAB: speed-correction factor for the dablin chipmunk (1 = off). */
   setDabAudioScale?(scale: number): void;
 
+  // ── DAB on a VibeServer ─────────────────────────────────────────────────────────────────────
+  // ★ OWRX's DAB arrives as a PROFILE (you leave DAB by choosing a non-DAB profile) and is already
+  //   handled by OwrxAdapter. VibeServer's is a mode the client turns on and off by name, on the
+  //   receiver it is already connected to — a different mechanism, so a different pair of methods
+  //   rather than one overloaded to mean both.
+  // ★★ Optional and TYPED. Per the setAdminAuth lesson three blocks up: an `any` cast plus optional
+  //    chaining makes a missing method indistinguishable from a working one, for ever.
+
+  /** Enter or leave DAB. `channel` is the block index (see the DAB channel table), `sid` an
+   *  optional service to land on. The SERVER tunes: it sets the block centre and the DAB sample
+   *  rate itself, and refuses tune/zoom while decoding. */
+  dab?(on: boolean, channel?: number, sid?: number): void;
+  /** Switch service inside the tuned multiplex — no retune, no re-acquire. */
+  dabService?(sid: number): void;
+  /** True while a multiplex is being decoded. The UI locks the zoom drum and the VFO out on this:
+   *  an ensemble is one 1.536 MHz block with nothing to tune inside it, and on an RTL the IF
+   *  filter follows the view, so a zoom cuts the multiplex out from under the decoder. */
+  readonly inDab?: boolean;
+
   /**
    * ★★ Carry an admin credential on every socket this backend opens.
    *
