@@ -234,7 +234,10 @@ namespace {
  *    is NUMBERS and its `allowedNames` is WORDS, while the directory's `coverage` is words and its
  *    `ranges` is numbers. Getting this backwards printed "500,31000000" on the Android side.
  */
+static bool g_radioUnanswered = false;   // set by buildStatus(); read by the ping loop
+
 std::string buildStatus(int port) {
+    g_radioUnanswered = false;
     const std::string ident  = httpGetLocal(port, "/vibeserver.json");
     const std::string radios = httpGetLocal(port, "/vibeserver/radios");
 
@@ -321,6 +324,12 @@ std::string buildStatus(int port) {
                     long long rmax = jsonNum(r, "users", 0);
                     if (!rid.empty()) {
                         const std::string ri = httpGetLocal(port, "/r/" + rid + "/vibeserver.json");
+                        // ★★ A RADIO THAT DID NOT ANSWER IS A RADIO STILL STARTING. After a reboot the
+                        //    door pings before its radio units are up, so `dab` and the counts were
+                        //    simply absent — and stayed absent for the full 15 minutes: the DAB+ badge
+                        //    vanished from the directory every time the Pi restarted. Say so, and the
+                        //    loop below pings again in 30 s instead of waiting the interval out.
+                        if (ri.empty()) g_radioUnanswered = true;
                         if (!ri.empty()) {
                             j += ",\"listeners\":" + std::to_string(jsonNum(ri, "listeners", 0));
                             const long long rm = jsonNum(ri, "maxUsers", 0);
@@ -705,6 +714,8 @@ void worker() {
         //    hostname the edge has not yet routed. So an unverified listing is retried soon rather
         //    than punished for being new, and only a proven one waits the full interval.
         long long wait = g_listed ? g_pingSec : 30;
+        // ★ A radio behind the door that did not answer this ping (still starting) — ask again soon.
+        if (g_radioUnanswered) wait = 30;
         // ★★ Back off a tunnel that will not start, so a cloudflared that is missing or broken is
         //    not respawned every thirty seconds for ever. Capped at five minutes so a link that
         //    does come back is still picked up promptly.

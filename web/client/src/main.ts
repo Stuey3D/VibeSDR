@@ -5715,6 +5715,15 @@ async function loadOwnerNotice() {
       ael.innerHTML = ant ? `${antIcon(j?.antennaIcon)}${escapeHtml(ant)}` : '';
       ael.style.display = ant ? '' : 'none';
     }
+    // ★ The DAB+ mark on a SINGLE-radio server, which has no radio card to carry it — the Pi's
+    //   cards had one and the Xcover's plain splash had nowhere to put it. Same 36 px artwork.
+    const del = document.getElementById('splashDab');
+    if (del) {
+      // ★ Not on a front door: its radios carry their own badges on their cards.
+      const solo = j?.dab === true && !j?.frontDoor;
+      del.innerHTML = solo ? dabBadge(j, j) : '';
+      del.style.display = solo ? 'flex' : 'none';
+    }
   } catch { /* an older server has no notice field — nothing to show */ }
 }
 void loadOwnerNotice();

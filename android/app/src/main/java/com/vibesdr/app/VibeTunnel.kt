@@ -402,6 +402,7 @@ object VibeTunnel {
                     //   fallback branch below now publishes. `users` stays for older readers.
                     put("maxListeners", r.optInt("users", 1))
                     if (r.has("listeners")) put("listeners", r.optInt("listeners", 0))
+                    if (r.has("dab")) put("dab", r.optBoolean("dab", false))
                     // ★ What it is and where it is pointed, so a chooser can tell two apart.
                     r.optString("antenna").takeIf { it.isNotEmpty() }?.let { put("antenna", it) }
                     if (r.has("centreHz")) put("centreHz", r.optLong("centreHz", 0L))
@@ -467,6 +468,9 @@ object VibeTunnel {
                  *   on no evidence sends somebody to one that will refuse them. So it is only put
                  *   when we actually read it. */
                 ident?.let {
+                    // ★ Whether THIS radio decodes DAB — its own /vibeserver.json says so. Drives the
+                    //   DAB+ badge on the directory card; the desktop publisher sends the same key.
+                    if (it.has("dab")) put("dab", it.optBoolean("dab", false))
                     if (it.has("listeners")) put("listeners", it.optInt("listeners", 0))
                 }
                 put("maxListeners", cap)
