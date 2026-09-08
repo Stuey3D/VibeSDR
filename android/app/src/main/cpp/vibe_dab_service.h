@@ -33,6 +33,8 @@
 #include "vibe_dab_padtap.h"
 #include "vibe_dab_packet.h"
 #include "vibe_dab_spi.h"
+#include <dirent.h>
+#include <sys/stat.h>
 
 namespace vibedab {
 
@@ -74,7 +76,7 @@ public:
         adts_.clear();
         pad_.reset();      // ★ the label belongs to the old programme
         slide_ = Slide{}; // ★ and so does the picture
-        spiSid_ = 0; packets_.reset(); carousel_.reset(); spiLogoRefs_.clear(); spiSeen_ = 0;   // ★ a new multiplex, a new carousel
+        spiSid_ = 0; packets_.reset(); carousel_.reset(); spiLogoRefs_.clear(); spiSeen_ = 0; cacheLoadedEid_ = 0;   // ★ a new multiplex, a new carousel
         // ★ A new programme starts a new clock; catching up on the old one would be a wall of silence.
         pcmOwed_ = 0; pcmPushed_ = 0;
         resampleReset();
@@ -442,6 +444,9 @@ public:
      *  and the ratio — a property of that box's ffmpeg, which never changes — went with it. It is
      *  now written next to the bookmarks when it converges and read back at start-up, so a
      *  restart resumes at speed. An exact-frame decoder (Android) never needs the file. */
+    /** ★ Where the carousel's files are kept between visits: <dir>/<ecc>-<eid>/<content name>. A
+     *  carousel cycles in minutes; a logo seen once should never be waited for again. */
+    void setCacheDir(const std::string& dir) { std::lock_guard<std::mutex> lk(m_); cacheDir_ = dir; }
     void setRatioFile(const std::string& path) {
         std::lock_guard<std::mutex> lk(m_);
         ratioFile_ = path;
@@ -584,9 +589,11 @@ public:
                 j += mb;
                 char pb[160];
                 snprintf(pb, sizeof pb, ",\"spi\":{\"sid\":%u,\"packets\":%u,\"groups\":%u,\"crcFail\":%u,\"lost\":%u,\"dir\":%s,\"named\":%zu,\"complete\":%u,\"logoSvcs\":%zu}",
-                         spiSid_, packets_.packets(), packets_.groups(), packets_.crcFails(), packets_.lost(), carousel_.haveDirectory() ? "true" : "false", carousel_.named(), carousel_.completed(), spiLogoRefs_.size());
+                         spiSid_, packets_.packets(), packets_.groups(), packets_.crcFails(), packets_.lost(), carousel_.haveDirectory() ? "true" : "false", carousel_.named(), carousel_.completeCount(), spiLogoRefs_.size());
                 j += pb;
-                char qb[96]; snprintf(qb, sizeof qb, ",\"spiParse\":{\"runs\":%u,\"siDocs\":%u,\"svcs\":%u,\"eid\":%u}", spiParseRuns_, spiSiDocs_, spiParsedSvcs_, unsigned(e.eid)); j += qb;
+                char qb[200]; snprintf(qb, sizeof qb, ",\"spiParse\":{\"runs\":%u,\"siDocs\":%u,\"svcs\":%u,\"eid\":%u},\"spiCrc\":{\"byLen\":[%u,%u,%u,%u],\"last\":\"%02x %02x %02x\",\"lastAddr\":%d}",
+                                         spiParseRuns_, spiSiDocs_, spiParsedSvcs_, unsigned(e.eid), packets_.failByLen(0), packets_.failByLen(1), packets_.failByLen(2), packets_.failByLen(3),
+                                         packets_.lastFail()[0], packets_.lastFail()[1], packets_.lastFail()[2], packets_.lastFailAddr()); j += qb;
                 if (carousel_.named()) {   // ★ what the carousel holds — names, types, sizes, done — for the DX pane and for debugging
                     j += ",\"spiObjs\":[";
                     bool f1 = true; size_t k = 0;
@@ -865,7 +872,9 @@ private:
             }
             if (!spiSid_) return;
         }
+        cacheLoad(e);
         for (const auto& f : rx_.takeScanFrames(kSpiSlot)) packets_.feedFrame(f.data(), f.size());
+        cacheSave(e);
         if (carousel_.version() != spiSeen_) {
             spiSeen_ = carousel_.version();
             /* Re-read every complete SI object and rebuild the logo map: service SId → the best
@@ -882,6 +891,49 @@ private:
                 }
             }
             spiLogoRefs_.swap(refs);
+        }
+    }
+public:
+    std::string cacheDir_; uint16_t cacheLoadedEid_ = 0;
+    static std::string cacheName(int ecc, uint16_t eid) { char b[24]; snprintf(b, sizeof b, "%02x-%04x", unsigned(ecc & 0xFF), unsigned(eid)); return b; }
+    static bool safeName(const std::string& n) { if (n.empty() || n.size() > 120) return false; for (char c : n) if (!(isalnum((unsigned char)c) || c == '.' || c == '_' || c == '-')) return false; return n[0] != '.'; }
+    static void typeFor(const std::string& n, int& ct, int& st) {
+        const size_t d = n.rfind('.'); const std::string ext = d == std::string::npos ? "" : n.substr(d + 1);
+        if (ext == "png" || ext == "PNG") { ct = 2; st = 3; } else if (ext == "jpg" || ext == "jpeg" || ext == "JPG") { ct = 2; st = 1; } else { ct = 7; st = 0; }
+    }
+    void cacheLoad(const Ensemble& e) {
+        if (cacheDir_.empty() || !e.eid || cacheLoadedEid_ == e.eid) return;
+        cacheLoadedEid_ = e.eid;
+        const std::string dir = cacheDir_ + "/" + cacheName(e.ecc, e.eid);
+        DIR* d = opendir(dir.c_str());
+        if (!d) return;
+        size_t loaded = 0;
+        while (dirent* en = readdir(d)) {
+            const std::string n = en->d_name;
+            if (!safeName(n)) continue;
+            FILE* f = fopen((dir + "/" + n).c_str(), "rb");
+            if (!f) continue;
+            std::vector<uint8_t> body; uint8_t buf[4096]; size_t r;
+            while ((r = fread(buf, 1, sizeof buf, f)) > 0) body.insert(body.end(), buf, buf + r);
+            fclose(f);
+            int ct, st; typeFor(n, ct, st);
+            if (!body.empty()) { carousel_.inject(n, ct, st, std::move(body)); ++loaded; }
+        }
+        closedir(d);
+        if (loaded) fprintf(stderr, "[DAB] %zu carousel files for %s from the cache\n", loaded, cacheName(e.ecc, e.eid).c_str());
+    }
+    void cacheSave(const Ensemble& e) {
+        if (cacheDir_.empty() || !e.eid) return;
+        const std::vector<std::string> done = carousel_.takeCompleted();
+        if (done.empty()) return;
+        const std::string dir = cacheDir_ + "/" + cacheName(e.ecc, e.eid);
+        mkdir(cacheDir_.c_str(), 0755); mkdir(dir.c_str(), 0755);
+        for (const std::string& n : done) {
+            if (!safeName(n)) continue;
+            const MotCarousel::Object* o = carousel_.find(n);
+            if (!o) continue;
+            const std::string tmp = dir + "/" + n + ".tmp";
+            if (FILE* f = fopen(tmp.c_str(), "wb")) { fwrite(o->body.data(), 1, o->body.size(), f); fclose(f); rename(tmp.c_str(), (dir + "/" + n).c_str()); }
         }
     }
 public:

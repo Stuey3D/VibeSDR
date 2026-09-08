@@ -196,18 +196,28 @@ public:
                 if (ok && (o.bodySize == 0 || total == o.bodySize)) {
                     o.body.clear(); o.body.reserve(total);
                     for (int i = 0; i <= bl->second; ++i) { const auto& s2 = segs[i]; o.body.insert(o.body.end(), s2.begin(), s2.end()); }
-                    o.complete = true; ++completed_; ++version_;
+                    o.complete = true; ++completed_; ++version_; justDone_.push_back(it->second);
                     bodySegs_.erase(tid); bodyLast_.erase(tid);
                 }
             }
         }
     }
     const std::map<std::string, Object>& objects() const { return objects_; }
+    /** ★ A complete object from the on-disk cache: instant logos on a later visit to the ensemble. */
+    void inject(const std::string& name, int ct, int st, std::vector<uint8_t> body) {
+        Object& o = objects_[name];
+        if (o.complete) return;
+        o.name = name; o.contentType = ct; o.subType = st; o.bodySize = uint32_t(body.size()); o.body = std::move(body); o.complete = true;
+        ++version_;
+    }
+    /** Names completed off the air since the last call (for the cache writer). */
+    std::vector<std::string> takeCompleted() { std::vector<std::string> v; v.swap(justDone_); return v; }
     const Object* find(const std::string& name) const { auto it = objects_.find(name); return it == objects_.end() || !it->second.complete ? nullptr : &it->second; }
     uint32_t version() const { return version_; }        ///< bumps whenever an object completes
     uint32_t groups() const { return groups_; }
     uint32_t crcFails() const { return crcFail_; }
     uint32_t completed() const { return completed_; }
+    uint32_t completeCount() const { uint32_t n = 0; for (const auto& kv : objects_) if (kv.second.complete) ++n; return n; }
     size_t   named() const { return objects_.size(); }
     bool     haveDirectory() const { return haveDir_; }
     void reset() { dirSegs_.clear(); dirLast_ = -1; dirTid_ = 0; objects_.clear(); byTid_.clear(); bodySegs_.clear(); bodyLast_.clear(); haveDir_ = false; }
@@ -257,6 +267,7 @@ private:
     std::map<uint16_t, std::map<int, std::vector<uint8_t>>> bodySegs_;
     std::map<uint16_t, int> bodyLast_;
     bool haveDir_ = false;
+    std::vector<std::string> justDone_;
     uint32_t groups_ = 0, crcFail_ = 0, completed_ = 0, compressed_ = 0, version_ = 0;
 };
 

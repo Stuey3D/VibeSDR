@@ -17291,6 +17291,7 @@ void LocalSdrShim::setBookmarksPath(const std::string& path) {
     {
         const size_t slash = path.find_last_of('/');
         g_dab.setRatioFile((slash == std::string::npos ? std::string() : path.substr(0, slash + 1)) + "dab-aac-ratio");
+        g_dab.setCacheDir((slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-carousel");
     }
     FILE* f = fopen(path.c_str(), "rb");
     if (!f) return;                       // nothing saved yet — that's fine
