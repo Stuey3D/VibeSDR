@@ -192,6 +192,10 @@ export interface WatchCommandHandlers {
    *  shared dial and nothing to say. */
   onSay?(id: string): void;
   onMode(mode: string): void;
+  /** VibeServer DAB: enter (true) or leave (false). Absent on backends without it. */
+  onDabMode?(on: boolean): void;
+  /** VibeServer DAB: step to the next/previous multiplex. */
+  onDabBlockStep?(dir: -1 | 1): void;
   onStep(hz: number): void;
   /** Crown in zoom mode. Drives the REAL server zoom, so the watch gets finer
    *  bins rather than a magnified crop — the only thing that beats the
@@ -468,6 +472,12 @@ class WatchProvider {
             this.lastPingAt = Date.now();
             break;
           case 'dab':  handlers.onDabSelect?.(Number(e.val ?? 0)); break;
+          /* ★ ENTER OR LEAVE DAB, relayed. Buddy never speaks to a receiver directly — the same
+           *  division as every other command here — so the wrist asks and the PHONE does it. */
+          case 'dabmode': handlers.onDabMode?.(e.val === true); break;
+          /* ★ Step the multiplex. The block IS the tuning in DAB, so this is what the crown and
+           *  the watch's own tuning gesture must mean there. */
+          case 'dabblock': handlers.onDabBlockStep?.(Number(e.delta ?? 0) < 0 ? -1 : 1); break;
           // Thin-remote server controls — the watch relayed a tap, run the phone's command.
           case 'bw':      handlers.onBandwidth?.(Number(e.lo ?? 0), Number(e.hi ?? 0)); break;
           case 'squelch': handlers.onSquelch?.(Number(e.val ?? -999)); break;
@@ -648,7 +658,19 @@ class WatchProvider {
    *  the ensemble, and you switch with setAudioServiceId(), never by tuning. So the
    *  watch gets a list and a selection, and the crown becomes a SELECTOR rather than
    *  a tuning control. Sent on change only (the list changes when the mux does). */
+  /* ★★★ AND WHETHER DAB CAN BE ENTERED AT ALL, which is a different question from what is IN the
+   *  multiplex. On OWRX, DAB is a PROFILE the owner configured — the watch is handed a list and
+   *  there is nothing to switch on. On a VibeServer it is a MODE the phone turns on, and until
+   *  Buddy was told that, its only route to DAB was the demodulator grid, which does not do it
+   *  (see ControlMenu.modes) — Stuart, 2026-09-08: "selecting DAB in buddy doesnt go into DAB mode
+   *  it stays in whatever mode it was in before just with loads of distortion." */
   sendDab(state: { ensemble: string; active: number;
+                   /** The receiver can enter DAB (VibeServer only) — draws the control. */
+                   capable?: boolean;
+                   /** It is in DAB now. */
+                   on?: boolean;
+                   /** The block being decoded, e.g. "11A" — "" when the backend has no blocks. */
+                   block?: string;
                    list: { id: number; name: string }[] }) {
     if (!this.available) return;
     this.lastDab = JSON.stringify(state);

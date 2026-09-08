@@ -1662,6 +1662,17 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   useEffect(() => { onDabBlockRef.current = onDabBlock; }, [onDabBlock]);
 
+  /** ★★★ WHAT THE RECEIVER IS ACTUALLY DOING, WHICH IN DAB IS NOT ITS DEMODULATOR.
+   *
+   *  `status.mode` stays on whatever it was before the multiplex was tuned — the server owns the
+   *  dial in DAB and never changes the demod — so the wrist was told "wfm" for a receiver decoding
+   *  11A. That is the same lie the admin page's listener table told (see vsDabBlockNow), and on
+   *  the watch it costs more than a wrong label: Buddy ROUTES ITS SCREEN on this string, so the
+   *  DAB screen could never appear for a VibeServer at all.
+   *  ★ A reported state, not a settable one: nothing on the far end accepts "dab" as a mode
+   *    command, which is exactly why it was removed from Buddy's demodulator grid. */
+  const watchMode = useCallback((m: string) => (dabOnRef.current ? 'dab' : m), []);
+
   const onDabSpeed = useCallback((scale: number) => {
     setDabSpeed(scale);
     client.current?.setDabAudioScale?.(scale);
@@ -6179,8 +6190,21 @@ export default function SDRScreen({ route, navigation }: Props) {
       // without touching the frequency, so the ensemble lock is never disturbed.
       onDabSelect: (id: number) => {
         const c = client.current; if (!c || !id) return;
+        /* ★ TWO MECHANISMS BEHIND ONE WRIST TAP. On a VibeServer a service change is a
+         *  `dab_service` inside the tuned multiplex — no retune, no re-acquire; on OWRX it is
+         *  setAudioServiceId, which re-sends the demod. The watch sends an id and does not care. */
+        if (dabOnRef.current && c.dabService) { c.dabService(id); return; }
         c.setAudioServiceId?.(id);
         setActiveDabId(id);
+      },
+      /* ★ The wrist asking for DAB. Buddy has no route of its own — see watchProvider's note on
+       *  the demodulator grid — so this is the whole mechanism. */
+      onDabMode: (on: boolean) => { if (on !== dabOnRef.current) toggleDab(); },
+      onDabBlockStep: (dir: -1 | 1) => {
+        if (!dabOnRef.current) return;
+        const n = DAB_BLOCKS.length;
+        const cur = dabBlockRef.current < 0 ? 0 : dabBlockRef.current;
+        onDabBlockRef.current?.(((cur + dir) % n + n) % n);
       },
 
       onZoomDelta: (delta: number) => {
@@ -6254,7 +6278,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         // Answer EVERY ping with state — the watch uses the freshness of this to tell
         // "the phone is dead" apart from "the phone is fine but rows are being lost",
         // and those need completely different fixes.
-        watchProvider.sendState(s.frequency, String(s.mode), stepRef.current);
+        /* ★★★ IN DAB, THE MODE WE REPORT IS "dab" — see watchMode. */
+        watchProvider.sendState(s.frequency, watchMode(String(s.mode)), stepRef.current);
       },
 
       // The watch app is usually opened AFTER the phone is already locked in a
@@ -6290,12 +6315,22 @@ export default function SDRScreen({ route, navigation }: Props) {
   //    knocks you off the ensemble and kills the decode). So the wrist gets the
   //    services, and its crown becomes a SELECTOR.
   useEffect(() => {
+    /* ★★★ TWO BACKENDS, ONE PAYLOAD. OWRX fills `dabProgrammes` from its profile; VibeServer fills
+     *  `dabState` from the `dab` message. The wrist wants the same four things either way — can I
+     *  enter DAB, am I in it, which block, and what is on it — so the phone answers that rather
+     *  than making the watch know which kind of server it is looking at. */
+    const vibeDab = dabOn && dabState;
     watchProvider.sendDab({
-      ensemble: dabEnsemble,
-      active: activeDabId,
-      list: dabProgrammes.map((p) => ({ id: p.id, name: p.name })),
+      ensemble: vibeDab ? (dabState.label || '') : dabEnsemble,
+      active:   vibeDab ? dabState.sid : activeDabId,
+      capable:  dabCapable,
+      on:       dabOn,
+      block:    dabBlock >= 0 ? DAB_BLOCKS[dabBlock].name : '',
+      list: vibeDab
+        ? dabState.services.map(sv => ({ id: sv.sid, name: sv.label || sv.sid.toString(16).toUpperCase() }))
+        : dabProgrammes.map((p) => ({ id: p.id, name: p.name })),
     });
-  }, [dabProgrammes, activeDabId, dabEnsemble]);
+  }, [dabProgrammes, activeDabId, dabEnsemble, dabState, dabOn, dabCapable, dabBlock]);
 
   // The playing service's logo, for the wrist. DAB is the EASY case for the logo
   // lookup: the label is a decoded station name rather than a truncated 8-character
@@ -6329,7 +6364,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Mode/step: rare, so send immediately.
   useEffect(() => {
-    watchProvider.sendState(status.frequency, String(status.mode), step);
+    watchProvider.sendState(status.frequency, watchMode(String(status.mode)), step);
   }, [status.mode, step]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Frequency: the AUTHORITATIVE echo, throttled to 4/sec with the last value

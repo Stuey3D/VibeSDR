@@ -333,6 +333,10 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// is in, and whether we have a multiplex to show.
   var screen: Screen {
     if isFmdx { return .fmdx }
+    /* ★ A VibeServer says so outright (`on`), and it must not wait for a service list: acquiring a
+     *  multiplex takes seconds and an empty block never acquires at all — gating on the list would
+     *  strand the wrist on the waterfall with no way to see what was happening or get back out. */
+    if let d = dab, d.on { return .dab }
     if mode == "dab", let d = dab, !d.list.isEmpty { return .dab }
     if mode == "adsb" || !aircraft.isEmpty { return .adsb }
     return .sdr
@@ -385,6 +389,12 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     var ensemble = ""     // the multiplex label, e.g. "BBC National DAB"
     var active = 0        // the audio_service_id currently decoding
     var list: [DabService] = []
+    /* ★ VibeServer only: DAB is a MODE there, not a profile, so the wrist needs to know whether it
+     *  can be entered and whether it is on. Both default false, so an older phone that sends
+     *  neither draws no control at all — which is the safe direction. */
+    var capable = false
+    var on = false
+    var block = ""        // "11A" — the multiplex being decoded; "" when the backend has no blocks
   }
 
   struct FmdxStation: Codable, Equatable, Identifiable {
@@ -789,6 +799,13 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// Pick a DAB service. NOT a tune — the phone calls setAudioServiceId(), which
   /// re-sends the demod without touching the frequency.
   func selectDab(_ id: Int) { send(["cmd": "dab", "val": id]) }
+  /// Enter or leave DAB on a VibeServer. The PHONE does it — Buddy never speaks to a receiver.
+  func setDabMode(_ on: Bool) { send(["cmd": "dabmode", "val": on]) }
+  /// Step the multiplex. The block IS the tuning in DAB, so this is what "next" means there.
+  func stepDabBlock(_ dir: Int) { send(["cmd": "dabblock", "delta": dir]) }
+  var dabCapable: Bool { dab?.capable ?? false }
+  var dabOn: Bool { dab?.on ?? false }
+  var dabBlock: String { dab?.block ?? "" }
 
   /// Switch the PHONE to another instance. Handled outside the SDR screen on the
   /// phone, because the whole point is that it works when no SDR screen is up.
@@ -1398,7 +1415,17 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
         // The phone always announces its mode, so let the mode retire whatever it
         // isn't: leaving ADS-B clears the aircraft, leaving DAB clears the mux.
         if md != "adsb" { aircraft = [] }
-        if md != "dab"  { dab = nil }
+        /* ★★★ RETIRE THE MULTIPLEX, KEEP THE CAPABILITY. This was `dab = nil`, which is right for
+         *  the ensemble — a stale service list outvoting reality is the fault the comment above
+         *  describes — but it also threw away `capable`, and that is a fact about the RECEIVER, not
+         *  about the mode it happens to be in. Wiping it meant the VibeServer DAB tile could never
+         *  be drawn: it is only ever needed while we are NOT in DAB, which is precisely when this
+         *  line ran. The one control that gets you INTO DAB, erased by the code that tidies up
+         *  after leaving it. */
+        if md != "dab", var d = dab {
+          d.ensemble = ""; d.active = 0; d.list = []; d.on = false; d.block = ""
+          dab = d.capable ? d : nil
+        }
         // Only the SDR screen sends `state` at all — FM-DX sends its own blob — so
         // receiving one is itself proof we are no longer on an FM-DX server.
         //

@@ -424,6 +424,16 @@ struct ControlMenu: View {
           if link.mode == "dab" {
             tile(name: "DAB", value: link.stationName.isEmpty ? "\(link.dabProgrammes.count) svc" : link.stationName, h: h) { showDab = true }
           }
+          /* ★★★ THE WAY IN AND THE WAY OUT, on a VibeServer — the thing the demodulator grid could
+           *  never do (see `modes` above). Drawn only when the PHONE says this receiver can enter
+           *  DAB: that answer depends on the owner's allow/block lists and the rate the receiver
+           *  will actually run at, and only the server knows both.
+           *  ★ Buddy asks; the phone acts. Same division as every other command on this screen. */
+          else if link.dabCapable {
+            tile(name: "DAB", value: link.dabOn ? (link.dabBlock.isEmpty ? "On" : link.dabBlock) : "Off", h: h) {
+              dismiss(); link.setDabMode(!link.dabOn)
+            }
+          }
           // Wrist-down spectrum timeout — battery vs "always live". Off keeps the waterfall
           // running with the wrist down (costs power); the timed options drop it after N and
           // reconnect on the way back.
@@ -607,7 +617,23 @@ struct ControlMenu: View {
   // Mirrors sdrTypes.ts. Kept in the order the phone lists them.
   // FM (narrow) + WFM (wide), matching the phone. `nfm` was a second NARROW-FM entry (redundant
   // with `fm`) and there was no wide FM at all — so broadcast FM couldn't be selected on the watch.
-  static let modes = ["usb", "lsb", "am", "sam", "fm", "wfm", "cwu", "cwl", "dab", "adsb"]
+  /* ★★★ "dab" AND "adsb" ARE NOT DEMODULATORS AND MUST NOT BE IN THIS GRID.
+   *
+   *  Stuart, 2026-09-08: "selecting DAB in buddy doesnt go into DAB mode it stays in whatever mode
+   *  it was in before just with loads of distortion." Exactly so. They are REPORTED states — the
+   *  phone says mode "dab" when a receiver is decoding a multiplex, and Buddy routes its screen on
+   *  that — but nothing on the far end accepts them as a `mode` command: OWRX enters DAB by
+   *  PROFILE and a VibeServer by its own `dab` message. So the tap changed nothing, the receiver
+   *  stayed on wide FM, and wide FM pointed at a 1.5 MHz OFDM block is a wall of noise. The
+   *  control was not merely inert; it was actively misleading about what it had done.
+   *
+   *  ★★ AGENTS.md, twice over: "never offer a control whose every use is a no-op", and a control
+   *     that works on one backend only should be removed rather than left visible and refused.
+   *     DAB now has a REAL control below, drawn only where it can work, and ADS-B is reached the
+   *     way it always was — by the profile that carries it.
+   *  ★ A mode the phone REPORTS still routes the screen; that path is untouched. This list is only
+   *    what the wrist may ASK for. */
+  static let modes = ["usb", "lsb", "am", "sam", "fm", "wfm", "cwu", "cwl"]
   static let steps: [Double] = [10, 100, 500, 1_000, 9_000, 10_000, 12_500, 25_000, 100_000]
 
   /// Reset the WATCH's waterfall offsets. Disabled (and dimmed) when they're already

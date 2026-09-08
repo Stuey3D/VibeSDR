@@ -33,6 +33,13 @@ struct DabView: View {
   @State private var showSpeed = false
   @State private var locked = false
   @State private var volumeMode = false        // crown drives volume (native HUD) instead of the list
+  /* ★★★ THE THIRD THING THE CROWN CAN BE, on a VibeServer: the MULTIPLEX. A watch has one
+   *  continuous input and DAB has two lists — the services in this ensemble, and the forty
+   *  multiplexes of Band III. Tapping the block hands the crown to the blocks and lights the
+   *  capsule; tapping again gives it back to the services. Same shape as the volume button beside
+   *  it, so there is one idea to learn rather than two. (Jr does exactly this — the two watch apps
+   *  must not disagree about a gesture.) */
+  @State private var blockMode = false
   @State private var volTimeout: DispatchWorkItem?
   @AppStorage("seenDabTutorial") private var seenDabTut = false
   @State private var showDabTut = false
@@ -109,6 +116,10 @@ struct DabView: View {
       // ★★ VOLUME MODE MEANS THE CROWN IS THE VOLUME. Without this the delta fell through to the
       //    list cursor — or, with focus released, was never delivered at all.
       if volumeMode { link.volume(delta: delta); return }
+      /* ★★ ONE DETENT, ONE BLOCK — never accumulated into a sweep. Every step is a retune and a
+       *  re-acquire on the server, a second or two of silence each, so a flick across twenty
+       *  blocks would be twenty of them. The crown's own detents are the rate limit. */
+      if blockMode { link.stepDabBlock(delta > 0 ? 1 : -1); return }
       let n = link.dabProgrammes.count
       guard n > 0 else { return }
       cursor = min(n - 1, max(0, cursor - delta))   // clamp, don't wrap — a list has ends (crown up = up)
@@ -177,7 +188,24 @@ struct DabView: View {
       HStack(spacing: 5) {
         Image(systemName: "square.stack.3d.up.fill")
           .font(.system(size: 10, weight: .semibold)).foregroundStyle(.cyan)
-        Text(link.dabEnsembleName.isEmpty ? "DAB" : link.dabEnsembleName)
+        /* ★ Drawn only where there IS a block to choose. On OWRX the multiplex is the owner's
+         *  profile and there is nothing here to pick, so a dead capsule would be exactly the
+         *  "control that works in one scenario only" AGENTS.md says to remove. */
+        if !link.dabBlock.isEmpty {
+          Button {
+            guard !locked else { return }
+            blockMode.toggle()
+            if blockMode { volumeMode = false }
+            WKInterfaceDevice.current().play(.click)
+          } label: {
+            Text(link.dabBlock)
+              .font(.system(size: 12, weight: .bold, design: .rounded))
+              .foregroundColor(blockMode ? .black : .cyan)
+              .padding(.horizontal, 7).padding(.vertical, 2)
+              .background(blockMode ? Color.cyan : Color.cyan.opacity(0.18), in: Capsule())
+          }.buttonStyle(.plain).disabled(locked)
+        }
+        Text(link.dabEnsembleName.isEmpty ? (link.dabOn ? "searching…" : "DAB") : link.dabEnsembleName)
           .font(.system(size: 12, weight: .semibold, design: .rounded))
           .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
         Spacer(minLength: 0)
@@ -190,7 +218,7 @@ struct DabView: View {
         LockButton(locked: $locked, size: 18)
         Spacer(minLength: 2)
         // VOLUME: flips the crown to volume (native HUD) and back; auto-times out.
-        Button { if !locked { volumeMode.toggle(); WKInterfaceDevice.current().play(.click) } } label: {
+        Button { if !locked { volumeMode.toggle(); if volumeMode { blockMode = false }; WKInterfaceDevice.current().play(.click) } } label: {
           Image(systemName: volumeMode ? "speaker.wave.2.fill" : "speaker.wave.2")
             .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(locked ? .white.opacity(0.3) : (volumeMode ? .orange : .white))
@@ -224,6 +252,26 @@ struct DabView: View {
         .background(link.dabScale != 1.0 ? Color.orange : Color.white.opacity(0.12), in: Capsule())
         .fixedSize()
       }.buttonStyle(.plain).disabled(locked)
+      /* ★★★ THE WAY OUT. On OWRX you leave DAB by choosing another profile and this is not drawn;
+       *  on a VibeServer DAB is a mode nothing else can end, so without it the wrist is stuck on
+       *  this screen until the phone is picked up. */
+      if link.dabOn && !link.dabBlock.isEmpty {
+        Button {
+          guard !locked else { return }
+          blockMode = false
+          link.setDabMode(false)
+          WKInterfaceDevice.current().play(.click)
+        } label: {
+          HStack(spacing: 4) {
+            Image(systemName: "arrow.uturn.left").font(.system(size: 10, weight: .semibold))
+            Text("Exit DAB").font(.system(size: 11, weight: .semibold))
+          }
+          .foregroundColor(.white)
+          .padding(.horizontal, 10).padding(.vertical, 4)
+          .background(Color.white.opacity(0.12), in: Capsule())
+          .fixedSize()
+        }.buttonStyle(.plain).disabled(locked)
+      }
     }
     .padding(.horizontal, 10)
     .padding(.top, 40)   // ensemble label sits just under the status band (top ignored)
