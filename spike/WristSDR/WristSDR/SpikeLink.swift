@@ -320,6 +320,11 @@ final class SpikeLink: ObservableObject {
   @Published var dabScale: Double = 1.0
   @Published var dabActiveId: Int = -1
   @Published var dabEnsembleName: String = ""
+  /// ── DAB as a MODE (VibeServer) — see the note on SDRClient.dabAvailable ──────────────────────
+  @Published var dabAvailable = false
+  @Published var dabActive = false
+  @Published var dabBlockName = ""
+  @Published var dabDlsText = ""
   /// ADS-B decoded aircraft (mirrored from the client).
   @Published var aircraft: [Aircraft] = []
   @Published var receiverLat: Double? = nil       // SDR site → ADS-B map centre + home marker
@@ -361,6 +366,12 @@ final class SpikeLink: ObservableObject {
     if client is FmDxClient { return .fmdx }
     // Route on the ACTUAL demod — the source of truth. Using `!aircraft.isEmpty` too meant a reconnect
     // that landed back on FM still showed the ADS-B screen (stale list) over an FM demod.
+    /* ★★★ ON A VIBESERVER, `dabActive` IS THE ROUTE — and it must not wait for a service list.
+     *  The OWRX test below is right for OWRX (the mode says dab and the ensemble arrives with the
+     *  profile), but a VibeServer takes several seconds to acquire a multiplex and may never
+     *  acquire an empty block at all. Gating on the list would have left the user on the waterfall
+     *  screen with no way to see what was happening and no way back out. */
+    if dabActive { return .dab }
     if mode == "dab", !dabProgrammes.isEmpty { return .dab }
     if mode == "adsb" { return .adsb }
     return .sdr
@@ -688,6 +699,10 @@ final class SpikeLink: ObservableObject {
     if dabScale != client.dabScale { dabScale = client.dabScale }
     if dabActiveId != client.dabActiveId { dabActiveId = client.dabActiveId }
     if dabEnsembleName != client.dabEnsembleName { dabEnsembleName = client.dabEnsembleName }
+    if dabAvailable != client.dabAvailable { dabAvailable = client.dabAvailable }
+    if dabActive != client.dabActive { dabActive = client.dabActive }
+    if dabBlockName != client.dabBlockName { dabBlockName = client.dabBlockName }
+    if dabDlsText != client.dabDlsText { dabDlsText = client.dabDlsText }
     if aircraft != client.aircraft { aircraft = client.aircraft }
     if receiverLat != client.receiverLat { receiverLat = client.receiverLat }
     if receiverLon != client.receiverLon { receiverLon = client.receiverLon }
@@ -993,6 +1008,11 @@ final class SpikeLink: ObservableObject {
 
   func setStep(_ hz: Double) { step = hz }
   func setDabScale(_ s: Double) { client?.setDabScale(s); dabScale = s }
+  /// ★ Enter or leave DAB. `dabActive` is set optimistically so the screen changes on the tap
+  ///   rather than a second later when the first `dab` message lands — a watch button that does
+  ///   nothing for a second reads as a watch button that did not work.
+  func setDabMode(_ on: Bool) { client?.setDabMode(on); dabActive = on; if !on { dabProgrammes = [] } }
+  func stepDabBlock(_ delta: Int) { client?.stepDabBlock(delta) }
   func selectDabService(_ id: Int) { client?.selectDabService(id) }
 
   /// Passband edges (Hz offsets from carrier). Pushed to the server + mirrored to filtLo/filtHi

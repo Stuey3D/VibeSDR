@@ -428,7 +428,17 @@ struct ControlMenu: View {
           tile(name: "BW", value: bwLabel, h: h) { showBw = true }
           // Squelch: SNR audio gate. Value = threshold in dB (Off = open).
           tile(name: "SQL", value: link.sql < 0 ? "Off" : "On", h: h) { showSquelch = true }
-          // (DAB tile removed — the programme picker + speed fix live on the main DAB screen now.)
+          // (The OWRX DAB tile was removed — its programme picker + speed fix live on the main DAB
+          //  screen. This is a different thing: the way IN, on a VibeServer, where DAB is a MODE
+          //  and not a profile, so there is nothing else that could ever start it.)
+          // ★ Drawn only when the SERVER says this radio can do DAB — a receiver locked to FM, or
+          //   held below 2.048 MS/s, never shows it. AGENTS.md: a control that is visible and
+          //   refused reads as a broken feature, not a blocked one.
+          if link.dabAvailable {
+            tile(name: "DAB", value: link.dabActive ? (link.dabBlockName.isEmpty ? "On" : link.dabBlockName) : "Off", h: h) {
+              dismiss(); link.setDabMode(!link.dabActive)
+            }
+          }
           tile(name: "CROWN", value: crownLabel, h: h) { showCrown = true }
           // DISPLAY — auto contrast + brightness + contrast (crown tweaks), palette + VFO colour
           // (crown-preview pickers), the peak-hold toggle and a reset. Watch-local look.

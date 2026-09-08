@@ -93,6 +93,11 @@ func dabTutorialTips() -> [TutorialTip] {
   t += [
     .init(icon: "hand.tap", text: "Or **tap** a station to tune it."),
     .init(icon: "speaker.wave.2", text: "The **volume** button switches the crown to volume."),
+    /* ★ AGENTS.md: when a control appears, fix the copy that says where things are — in the same
+     *  pass, not the next one. These two are the whole VibeServer half of this screen, and a tour
+     *  that does not mention them sends people hunting for a way to change multiplex. */
+    .init(icon: "square.stack.3d.up.fill", text: "On a VibeServer, **tap the block** (12B) to put the crown on multiplexes — turn to change block, tap again to go back to stations."),
+    .init(icon: "arrow.uturn.left", text: "**Exit DAB** leaves DAB and returns to the waterfall."),
     .init(icon: "gauge.with.dots.needle.bottom.50percent", text: "**Speed Fix** corrects a station that plays too fast (the DAB 'chipmunk') — remembered per station."),
     .init(icon: "line.3.horizontal", text: "The **menu** button has profiles, servers and the rest."),
   ]

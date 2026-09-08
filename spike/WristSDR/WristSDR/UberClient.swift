@@ -66,6 +66,96 @@ final class UberClient: ObservableObject {
   //   1. `secure` — VibeServer is plain ws:// on the LAN, UberSDR is wss://.
   //   2. `authSuffix` — VibeServer PIN via HMAC (see resolveVibeAuth); "&vs_nonce=…&vs_auth=…" on the URLs.
   //   3. `localAudio` — VibeServer audio is /ws/audio with ADPCM (self-seeded, mid-side stereo), not /ws Opus.
+  // ── DAB (VibeServer only) ────────────────────────────────────────────────────
+  //
+  // ★★★ JR IS A DIFFERENT BEAST FROM THE PHONE HERE, and Stuart said exactly why: "Jr is a
+  //     different beast as it will need a way to change block on DAB which the OWRX DAB screen
+  //     never had. Also a way to get back out of DAB as OWRX auto picks DAB on a DAB profile and
+  //     to get out of it choose a non DAB profile, we dont have that option."
+  //     OWRX's DAB is a PROFILE — the ensemble is whatever the owner configured, you leave it by
+  //     picking another profile, and there is no block to choose. A VibeServer's is a MODE this
+  //     client turns on and off, and the block is ours to pick. So both doors have to be built,
+  //     because on a VibeServer neither exists anywhere else.
+  //
+  // ★★ The server owns the dial in DAB: it sets the block centre and the sample rate itself and
+  //    refuses `tune` and `zoom` for as long as it decodes. Nothing here tunes.
+
+  /// The receiver can do DAB at all — from /vibeserver.json, which is the ONLY thing that knows the
+  /// effective limits (the tunable set after the owner's lists, and the rate it will really run).
+  @Published var dabAvailable = false
+  /// We are in DAB now.
+  @Published var dabActive = false
+  /// Index into `Self.dabBlocks` of the block being decoded or asked for.
+  @Published var dabBlockIndex = -1
+  /// The server's refusal, when it could not start. An explanation, not an error.
+  @Published var dabRefusal = ""
+  @Published var dabProgrammesV: [DabProgramme] = []
+  @Published var dabEnsembleV = ""
+  @Published var dabActiveSid = -1
+  @Published var dabLocked = false
+  /// The service's Dynamic Label — the "now playing" line, which on the wrist is most of the point.
+  @Published var dabDls = ""
+
+  /// Band III, mirroring vibe_dab_channels.h and the phone's dabBlocks.ts. ★ The OFFSET blocks
+  /// 10N/11N/12N are easy to leave out of a hand-typed list and are genuinely on air.
+  static let dabBlocks: [(name: String, hz: Double)] = [
+    ("5A", 174_928_000), ("5B", 176_640_000), ("5C", 178_352_000), ("5D", 180_064_000),
+    ("6A", 181_936_000), ("6B", 183_648_000), ("6C", 185_360_000), ("6D", 187_072_000),
+    ("7A", 188_928_000), ("7B", 190_640_000), ("7C", 192_352_000), ("7D", 194_064_000),
+    ("8A", 195_936_000), ("8B", 197_648_000), ("8C", 199_360_000), ("8D", 201_072_000),
+    ("9A", 202_928_000), ("9B", 204_640_000), ("9C", 206_352_000), ("9D", 208_064_000),
+    ("10A", 209_936_000), ("10N", 210_096_000), ("10B", 211_648_000), ("10C", 213_360_000), ("10D", 215_072_000),
+    ("11A", 216_928_000), ("11N", 217_088_000), ("11B", 218_640_000), ("11C", 220_352_000), ("11D", 222_064_000),
+    ("12A", 223_936_000), ("12N", 224_096_000), ("12B", 225_648_000), ("12C", 227_360_000), ("12D", 229_072_000),
+    ("13A", 230_784_000), ("13B", 232_496_000), ("13C", 234_208_000), ("13D", 235_776_000),
+    ("13E", 237_488_000), ("13F", 239_200_000),
+  ]
+
+  /// The remembered block, per SERVER — a listener who was on 12B yesterday wants 12B today, and
+  /// re-scanning Band III from 5A to find it is a minute of nothing on a watch.
+  private var dabBlockKey: String { "jr.dabBlock." + baseURL }
+
+  /// Enter or leave DAB. `block` nil = the remembered one (or 5A on a first visit).
+  func setDab(_ on: Bool, block: Int? = nil) {
+    guard isVibe else { return }
+    if !on {
+      specSock.send(json: ["type": "dab", "on": 0])
+      dabActive = false; dabProgrammesV = []; dabEnsembleV = ""; dabActiveSid = -1
+      dabLocked = false; dabDls = ""; dabRefusal = ""
+      return
+    }
+    var i = block ?? dabBlockIndex
+    if i < 0 {
+      let saved = UserDefaults.standard.string(forKey: dabBlockKey) ?? ""
+      i = Self.dabBlocks.firstIndex { $0.name == saved } ?? 0
+    }
+    i = max(0, min(Self.dabBlocks.count - 1, i))
+    dabBlockIndex = i
+    dabRefusal = ""
+    UserDefaults.standard.set(Self.dabBlocks[i].name, forKey: dabBlockKey)
+    specSock.send(json: ["type": "dab", "on": 1, "channel": i])
+    dabActive = true
+  }
+
+  /// Step to another multiplex WITHOUT leaving DAB — the one door the server's hold leaves open.
+  /// ★ Wraps: Band III is a ring on a crown, and stopping dead at 13F on a watch feels broken.
+  func stepDabBlock(_ delta: Int) {
+    guard isVibe, dabActive, delta != 0 else { return }
+    let n = Self.dabBlocks.count
+    let cur = dabBlockIndex < 0 ? 0 : dabBlockIndex
+    // ★ The list is cleared here rather than when the next `dab` arrives: the previous mux's
+    //   services are not this one's, and a stale list you can TAP is worse than an empty one.
+    dabProgrammesV = []; dabEnsembleV = ""; dabActiveSid = -1; dabLocked = false; dabDls = ""
+    setDab(true, block: ((cur + delta) % n + n) % n)
+  }
+
+  /// Switch service inside the tuned multiplex — no retune, no re-acquire.
+  func selectDabSid(_ sid: Int) {
+    guard isVibe, dabActive else { return }
+    specSock.send(json: ["type": "dab_service", "sid": sid])
+    dabActiveSid = sid
+  }
+
   /// True for a VibeServer connection.
   var isVibe = false
   /// wss (UberSDR) vs ws (VibeServer LAN).
@@ -646,6 +736,13 @@ final class UberClient: ObservableObject {
     //     "it isnt respecting the soft limit … all I can do is try again or back to servers").
     //  ★ ABSENT MEANS HARD, which is what every older server implies and what the shim documents.
     sessionLimitSoft = (j["limitMode"] as? String) == "soft"
+    /* ★★★ AND WHETHER THIS RADIO CAN DO DAB — asked of the RADIO, never of the front door. The URL
+     *  above already carries `radioPath`, which is what makes that true here for free. Measured on
+     *  the Pi, 2026-09-08: the door answers "dab": false because it owns no radio, while :48001
+     *  (the V4 behind it) answers true. Probing the door hides the mode on a receiver that has it.
+     *  ★ Only the server can decide this at all: it depends on the tunable set after the owner's
+     *    allow/block lists and the rate the receiver will actually run at. */
+    dabAvailable = (j["dab"] as? Bool) ?? false
     return (j["busy"] as? Bool) ?? false
   }
 
@@ -951,7 +1048,86 @@ final class UberClient: ObservableObject {
   /// different frequency or backend — the FM-DX stale-RDS bug Stuart called out.
   @Published private(set) var rdsPs = ""
   @Published private(set) var rdsText = ""
-  var stationName: String { rdsPs }
+  /// ★ In DAB the station is the SERVICE, not an RDS ps — the band strip must say "Planet Rock",
+  ///   not go blank because there is no FM carrier to have RDS on.
+  var stationName: String {
+    if dabActive, let sv = dabProgrammesV.first(where: { $0.id == dabActiveSid }) { return sv.name }
+    return rdsPs
+  }
+
+  // ── The SDRClient DAB surface, answered from the VibeServer state above ──────────────────────
+  // ★ OwrxClient answers these from its own profile-based DAB. Both are real; they are simply
+  //   different mechanisms behind one screen, which is why the protocol asks for behaviour
+  //   (select a service, step a block) and not for either one's internals.
+  var dabProgrammes: [DabProgramme] { dabProgrammesV }
+  var dabActiveId: Int { dabActiveSid }
+  var dabEnsembleName: String { dabEnsembleV }
+  func selectDabService(_ id: Int) { selectDabSid(id) }
+  var dabBlockName: String { dabBlockIndex >= 0 ? Self.dabBlocks[dabBlockIndex].name : "" }
+  var dabDlsText: String { dabDls }
+  func setDabMode(_ on: Bool) { setDab(on) }
+
+  /// ★★★ ONE `dab` MESSAGE A SECOND, CARRYING THE WHOLE MULTIPLEX. Jr takes the four things a
+  /// wrist can use — the ensemble, the services, which one is playing, and the label — and
+  /// deliberately not the forty measured rows the phone's window shows. There is no room for them
+  /// on a 41 mm watch and nothing you could do about them from one.
+  ///
+  /// ★★ EVERY STRING IS GATED, and that is not paranoia: it is the RDS fault pre-empted, the same
+  /// as the phone's dabSafeText. These are bytes off the air, reassembled from packets that may be
+  /// corrupt, and a CRC that passes says nothing about the CONTENT. A control character or a lone
+  /// surrogate in a SwiftUI Text is the shape of bug that took RDS down. Swift's String is already
+  /// valid UTF-8 by construction (invalid bytes became U+FFFD in JSONSerialization), so what is
+  /// left to do is strip the controls and BOUND the length — a label longer than any legal one is
+  /// corruption, not content, and must not be allowed to grow a row off the screen.
+  private func dabSafe(_ v: Any?, _ max: Int = 128) -> String {
+    guard let s = v as? String, !s.isEmpty else { return "" }
+    var out = ""
+    for ch in s.unicodeScalars {
+      if ch.properties.generalCategory == .control || ch.properties.generalCategory == .format {
+        out.unicodeScalars.append(" "); continue
+      }
+      out.unicodeScalars.append(ch)
+      if out.count >= max { break }
+    }
+    return out.trimmingCharacters(in: .whitespaces)
+  }
+
+  private func onDabJSON(_ type: String, _ j: [String: Any]) {
+    if type == "dab_off" {
+      dabActive = false; dabProgrammesV = []; dabEnsembleV = ""; dabActiveSid = -1
+      dabLocked = false; dabDls = ""
+      return
+    }
+    if type == "dab_error" {
+      // ★ An EXPLANATION, not an error. The receiver is working; it just will not do this.
+      dabRefusal = dabSafe(j["why"], 160)
+      if dabRefusal.isEmpty { dabRefusal = "DAB is not available on this receiver" }
+      dabActive = false; dabProgrammesV = []; dabEnsembleV = ""
+      return
+    }
+    dabActive = true
+    dabLocked = (j["locked"] as? Bool) ?? false
+    dabEnsembleV = dabSafe(j["label"], 32)
+    dabDls = dabSafe(j["dls"])
+    if let sid = (j["sid"] as? NSNumber)?.intValue { dabActiveSid = sid }
+    // ★ FOLLOW THE SERVER'S BLOCK rather than our own request — it may have landed elsewhere, and a
+    //   header naming the block we ASKED for while decoding another is a lie about the tuning.
+    let ch = dabSafe(j["channel"], 8)
+    if !ch.isEmpty, let i = Self.dabBlocks.firstIndex(where: { $0.name == ch }), i != dabBlockIndex {
+      dabBlockIndex = i
+      UserDefaults.standard.set(ch, forKey: dabBlockKey)
+    }
+    // ★★ CAPPED. A corrupt length field is exactly how a service list becomes ten thousand rows,
+    //    and the cost of that lands on a watch's render thread. 64 is far above any legal mux.
+    if let svcs = j["services"] as? [[String: Any]] {
+      let list: [DabProgramme] = svcs.prefix(64).compactMap { sv in
+        guard let sid = (sv["sid"] as? NSNumber)?.intValue else { return nil }
+        let name = dabSafe(sv["label"], 32)
+        return DabProgramme(id: sid, name: name.isEmpty ? String(sid, radix: 16).uppercased() : name)
+      }
+      if list != dabProgrammesV { dabProgrammesV = list }
+    }
+  }
   private func clearRds() { if !rdsPs.isEmpty || !rdsText.isEmpty { rdsPs = ""; rdsText = "" } }
   /// Passband edges as Hz offsets from the carrier (low negative = below). Mirrors the phone's
   /// MODE_BANDWIDTHS server defaults; the UI edits them and setBandwidth pushes them.
@@ -2059,6 +2235,10 @@ final class UberClient: ObservableObject {
         // ★ Your own phrase echoing back as an unread badge would be absurd.
         if from != self.dialYou { self.chatUnread += 1 }
       }
+      return
+    }
+    if type == "dab" || type == "dab_off" || type == "dab_error" {
+      onDabJSON(type ?? "", j)
       return
     }
     if type == "session_warning" {

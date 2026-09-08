@@ -65,6 +65,21 @@ protocol SDRClient: AnyObject {
   var dabEnsembleName: String { get }
   func selectDabService(_ id: Int)
   func setDabScale(_ scale: Double)
+  /// ── DAB as a MODE (VibeServer), rather than as a profile (OWRX) ──────────────────────────────
+  /// ★★★ TWO MECHANISMS, ONE SCREEN. On OWRX you enter DAB by choosing a DAB profile and leave it
+  /// by choosing another one, and the block is the owner's choice, not yours. On a VibeServer DAB
+  /// is a mode this client switches on, and picking the multiplex is ours to do. Jr's DAB screen
+  /// has to work either way, so the protocol asks for BEHAVIOUR — can you do this, are you in it,
+  /// go in, come out, step a block — and never for either backend's internals.
+  /// ★ Defaults below make every other backend inert, so nothing but UberClient implements them.
+  var dabAvailable: Bool { get }
+  var dabActive: Bool { get }
+  /// The block being decoded, e.g. "12B" — "" when the backend has no such concept (OWRX).
+  var dabBlockName: String { get }
+  /// The service's Dynamic Label — "now playing", which on a wrist is most of what DAB is for.
+  var dabDlsText: String { get }
+  func setDabMode(_ on: Bool)
+  func stepDabBlock(_ delta: Int)
   /// ADS-B decoded aircraft (empty unless on a 1090 MHz ADS-B profile). OWRX-only; default inert.
   var aircraft: [Aircraft] { get }
   /// The receiver's own location (SDR site), for the ADS-B map centre + aircraft distances. nil = unknown.
@@ -118,6 +133,12 @@ extension SDRClient {
   var dabEnsembleName: String { "" }
   func selectDabService(_ id: Int) {}
   func setDabScale(_ scale: Double) {}
+  var dabAvailable: Bool { false }
+  var dabActive: Bool { false }
+  var dabBlockName: String { "" }
+  var dabDlsText: String { "" }
+  func setDabMode(_ on: Bool) {}
+  func stepDabBlock(_ delta: Int) {}
   var aircraft: [Aircraft] { [] }
   var receiverLat: Double? { nil }
   var receiverLon: Double? { nil }

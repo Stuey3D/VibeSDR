@@ -26,6 +26,14 @@ struct DabView: View {
   @State private var showSpeed = false
   @State private var locked = false
   @State private var volumeMode = false        // crown drives volume (native HUD) instead of the list
+  /* ★★★ THE THIRD THING THE CROWN CAN BE, AND STUART NAMED IT: "maybe make the block number a
+   *  tapable element which the allows the crown to move blocks."
+   *  It is the right answer because a watch has ONE continuous input and DAB has TWO lists — the
+   *  services in this multiplex, and the 40 multiplexes in Band III. Tapping the block hands the
+   *  crown to the blocks and says so (the capsule lights); tapping it again gives it back to the
+   *  services. That is the same shape as the volume button beside it, which the screen has always
+   *  had, so there is one idea to learn rather than two. */
+  @State private var blockMode = false
   @State private var volTimeout: DispatchWorkItem?
   @AppStorage("seenDabTutorial") private var seenDabTut = false
   @State private var showDabTut = false
@@ -152,14 +160,40 @@ struct DabView: View {
 
   private var header: some View {
     VStack(alignment: .leading, spacing: 4) {
-      // Ensemble label — non-interactive, rides high just under the status band.
+      // Ensemble label, and — on a VibeServer — the BLOCK, which is tappable.
       HStack(spacing: 5) {
         Image(systemName: "square.stack.3d.up.fill")
           .font(.system(size: 10, weight: .semibold)).foregroundStyle(.cyan)
-        Text(link.dabEnsembleName.isEmpty ? "DAB" : link.dabEnsembleName)
+        /* ★★★ THE BLOCK NUMBER IS THE CONTROL. Shown only when the backend HAS blocks: on OWRX the
+         *  multiplex is the owner's profile and there is nothing here to choose, so drawing a dead
+         *  capsule would be exactly the "control that works on one radio only" AGENTS.md forbids.
+         *  ★ It doubles as the readout — which block, and whether the crown is on it. */
+        if !link.dabBlockName.isEmpty {
+          Button {
+            guard !locked else { return }
+            blockMode.toggle()
+            if blockMode { volumeMode = false }
+            WKInterfaceDevice.current().play(.click)
+          } label: {
+            Text(link.dabBlockName)
+              .font(.system(size: 12, weight: .bold, design: .rounded))
+              .foregroundColor(blockMode ? .black : .cyan)
+              .padding(.horizontal, 7).padding(.vertical, 2)
+              .background(blockMode ? Color.cyan : Color.cyan.opacity(0.18), in: Capsule())
+          }.buttonStyle(.plain).disabled(locked)
+        }
+        Text(link.dabEnsembleName.isEmpty ? (link.dabActive ? "searching…" : "DAB") : link.dabEnsembleName)
           .font(.system(size: 12, weight: .semibold, design: .rounded))
           .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
         Spacer(minLength: 0)
+      }
+      /* ★ Now playing, straight off the air. On a wrist this is most of what DAB is for, and it is
+       *  the one line a glance is actually after. Marquee-free: it truncates rather than moving,
+       *  because a scrolling label on a watch is a battery cost for a glance. */
+      if !link.dabDlsText.isEmpty {
+        Text(link.dabDlsText)
+          .font(.system(size: 10, weight: .medium)).foregroundStyle(.white.opacity(0.65))
+          .lineLimit(1).truncationMode(.tail)
       }
       // Buttons row — Lock · Volume · Menu · Chat (TAPPABLE area).
       // SPACERS, not a fixed gap. The old `spacing: 24` fitted THREE buttons on a 49mm; adding a
@@ -169,7 +203,7 @@ struct DabView: View {
         LockButton(locked: $locked, size: 18)
         Spacer(minLength: 2)
         // VOLUME: flips the crown to volume (native HUD) and back; auto-times out.
-        Button { if !locked { volumeMode.toggle(); WKInterfaceDevice.current().play(.click) } } label: {
+        Button { if !locked { volumeMode.toggle(); if volumeMode { blockMode = false }; WKInterfaceDevice.current().play(.click) } } label: {
           Image(systemName: volumeMode ? "speaker.wave.2.fill" : "speaker.wave.2")
             .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(locked ? .white.opacity(0.3) : (volumeMode ? .orange : .white))
@@ -203,6 +237,28 @@ struct DabView: View {
         .background(link.dabScale != 1.0 ? Color.orange : Color.white.opacity(0.12), in: Capsule())
         .fixedSize()
       }.buttonStyle(.plain).disabled(locked)
+      /* ★★★ THE WAY OUT, WHICH THIS SCREEN HAS NEVER HAD. Stuart: "Also a way to get back out of
+       *  DAB as OWRX auto picks DAB on a DAB profile and to get out of it choose a non DAB profile,
+       *  we dont have that option." On OWRX the profile sheet is the exit and this button is not
+       *  drawn; on a VibeServer DAB is a mode nothing else can end, so a screen with no exit is a
+       *  screen you are stuck on until you disconnect. */
+      if link.dabActive && !link.dabBlockName.isEmpty {
+        Button {
+          guard !locked else { return }
+          blockMode = false
+          link.setDabMode(false)
+          WKInterfaceDevice.current().play(.click)
+        } label: {
+          HStack(spacing: 4) {
+            Image(systemName: "arrow.uturn.left").font(.system(size: 10, weight: .semibold))
+            Text("Exit DAB").font(.system(size: 11, weight: .semibold))
+          }
+          .foregroundColor(.white)
+          .padding(.horizontal, 10).padding(.vertical, 4)
+          .background(Color.white.opacity(0.12), in: Capsule())
+          .fixedSize()
+        }.buttonStyle(.plain).disabled(locked)
+      }
     }
     .padding(.horizontal, 10)
     .padding(.top, 40)   // ensemble label sits just under the status band (top ignored)
@@ -215,6 +271,19 @@ struct DabView: View {
     ScrollViewReader { proxy in
       ScrollView {
         LazyVStack(spacing: 4) {
+          /* ★★★ SAY WHAT IS HAPPENING WHILE THERE IS NOTHING TO SHOW. A VibeServer takes a few
+           *  seconds to acquire a multiplex and an EMPTY block never acquires at all — and on a
+           *  watch, an empty screen with no explanation is indistinguishable from a crash. The
+           *  line also names the way forward, which is the block capsule in the header. */
+          if link.dabProgrammes.isEmpty {
+            Text(link.dabActive
+                 ? (link.dabBlockName.isEmpty ? "Waiting for the ensemble…"
+                    : "Searching \(link.dabBlockName)… tap the block to try another")
+                 : "Waiting for the ensemble…")
+              .font(.system(size: 12)).foregroundStyle(.white.opacity(0.55))
+              .multilineTextAlignment(.center)
+              .padding(.horizontal, 8).padding(.top, 16)
+          }
           ForEach(Array(link.dabProgrammes.enumerated()), id: \.element.id) { i, svc in
             row(svc, focused: i == cursor)
               .id(svc.id)
