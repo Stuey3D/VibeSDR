@@ -4336,7 +4336,8 @@ async function drawSplashSpectrogram(): Promise<void> {
  *    edges reports them instead of concluding the receiver is broken.
  */
 let dabCapable = false;
-/** The owner has allowed DAB to borrow the capture rate it needs (2.4 MS/s), and whether that
+/** The owner has allowed DAB to borrow the capture rate it needs (2.048 MS/s natively since
+ *  2026-09-08; 2.4 + resample only if a radio refuses 2.048), and whether that
  *  offer is worth drawing. */
 let dabBoost = false;
 let dabBoostUseful = false;
@@ -9571,7 +9572,7 @@ function populateHw() {
        *  ★ rfRateHz is what the RADIO REPORTS it is running (the same number the signal pane
        *    prints as "Capture rate"), so if the 2.048 fallback ever does fire this says so
        *    instead of hiding it — which is the entire point of the block. */
-      const dabRate = Math.round(dabState?.rfRateHz || 2400000);
+      const dabRate = Math.round(dabState?.rfRateHz || 2048000);   // ★ the server reports the real one
       const o = document.createElement('option');
       o.value = String(dabRate);
       o.textContent = `${(dabRate / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MS/s (DAB)`;

@@ -1,6 +1,11 @@
 // vibe_dab_resample.h — 2.4 MS/s in, 2.048 MS/s out. Rational 64/75, polyphase.
 //
-// ★★★ WHY WE DO NOT SIMPLY ASK THE DONGLE FOR 2.048.
+// ★★★ SINCE 2026-09-08 THIS IS THE FALLBACK, NOT THE PATH. DAB captures at 2.048 MS/s natively on
+//     every radio (see the DAB-on path in local_sdr_shim.cpp); this converter runs only when a
+//     radio REFUSES 2.048 and the shim captures at 2.4 instead. The history below is kept because
+//     it explains why the fallback exists and why it must stay correct.
+//
+// ★★★ WHY WE DID NOT SIMPLY ASK THE DONGLE FOR 2.048 (until it was re-measured).
 //
 //  Because in practice RTL-SDR dongles are not reliable there, and that is not a theory — it is
 //  what every working DAB implementation does. Every one of Stuart's OpenWebRX DAB profiles is

@@ -9062,12 +9062,29 @@ struct LocalSdrShim::Impl {
              *  perfectly minutes earlier, also at "rate 2048000" with frames stuck at 0.
              *  ★ So the readback is logged rather than trusted silently: a rate that quietly
              *    halves the receiver's sensitivity must not be an unremarked side effect. */
-            LocalSdrShim::instance().setSampleRate(2400000.0);
+            /* ★★★ DAB CAPTURES AT 2.048 MS/s — THE DECODER'S OWN RATE — ON EVERY RADIO.
+             *
+             *  It captured at 2.4 and resampled (64/75, 16-tap polyphase) because RTL dongles were
+             *  measured to under-deliver at 2.048: the XCover gave 94 % of its samples there, and
+             *  every OpenWebRX DAB profile of Stuart's is 2.4 for the same reason. Re-measured on
+             *  2026-09-08 once the USB reader had audio priority and the chain behind it was
+             *  lighter: 2.0513 MS/s delivered against 2.048 asked, zero drops, and a live 7D
+             *  decode of 260/260 super frames with 0 erased — the 94 % was the PHONE starving
+             *  its reader, never the dongle. Native capture took vibe-dsp from ~36 % to 15.5 % of
+             *  an XCover core: the converter was 70 % of the receiver before vectorisation and
+             *  ~7 % of a Cortex-A53 core after it, and now it simply does not run.
+             *  ★★ Stuart: "if 2048 works then remove the 2.4 option as it wont be needed." So
+             *     there is no option. 2.4 is asked for ONLY if the radio refuses 2.048, and
+             *     DabService's resampler still handles that case unchanged — a fallback, not a
+             *     setting. The RSP lists 2.048 and the HackRF takes any rate from 2 MS/s up, so
+             *     they capture natively too; the Airspy HF+ cannot reach Band III at all. */
+            const double wantRate = double(vibedab::DabService::kRateHz);
+            LocalSdrShim::instance().setSampleRate(wantRate);
             const double gotRate = LocalSdrShim::instance().captureSpanHz();
-            if (std::fabs(gotRate - 2400000.0) > 1000.0) {
-                LOGI("[DAB] ★ asked for 2.400 MS/s and the radio reports %.3f MS/s — falling back "
-                     "to 2.048, which this hardware may under-deliver", gotRate / 1e6);
-                LocalSdrShim::instance().setSampleRate(double(vibedab::DabService::kRateHz));
+            if (std::fabs(gotRate - wantRate) > 1000.0) {
+                LOGI("[DAB] ★ asked for 2.048 MS/s and the radio reports %.3f MS/s — capturing at "
+                     "2.4 and resampling instead", gotRate / 1e6);
+                LocalSdrShim::instance().setSampleRate(2400000.0);
             }
             rtlCenter.store(logical);
             /* ★★★ MODE FIRST, THEN THE FILTER, THEN THE FREQUENCY — AND THAT ORDER IS LOAD-BEARING.
