@@ -48,6 +48,9 @@ import { splashBridge }                 from '../../App';
 
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode, type RdsExt, type RadioCaps } from '../services/UberSDRClient';
 import AdvRdsPanel from '../components/AdvRdsPanel';
+import DabPanel from '../components/DabPanel';
+import type { DabState } from '../services/dabTypes';
+import { DAB_BLOCKS, dabBlockIndex } from '../services/dabBlocks';
 import { resolveVibeAdminAuth } from '../services/vibeAuth';
 import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/UberSDRAdapter';
@@ -534,6 +537,46 @@ export default function SDRScreen({ route, navigation }: Props) {
    *   had and nobody loses a remembered tune to this change.
    */
   const radioKeySuffix = radioBase ? radioBase.slice(radioBase.lastIndexOf('/r/')) : '';
+  /** ★★★ CAN THIS RECEIVER DO DAB? ASK THE RADIO, NOT THE DOOR.
+   *
+   *  The server decides whether DAB is offered at all — only it knows the EFFECTIVE limits, which
+   *  are the tunable set after the owner's allow/block lists and the rate the receiver will
+   *  actually run at. A V4 locked to FM, or held below 2.048 MS/s, must never draw the button
+   *  (AGENTS.md: a control that is visible and refused reads as a broken feature, not a blocked
+   *  one).
+   *
+   *  ★★★ AND IT IS A PER-RADIO ANSWER ON A MULTI-RADIO SERVER, which is exactly what the first
+   *  attempt at this got wrong. Measured on the Pi, 2026-09-08:
+   *      :48000 (front door)  "dab": false
+   *      :48001 (RTL-SDR V4)  "dab": true
+   *  The door owns no radio, so it truthfully says it cannot do DAB — and probing it hid the
+   *  button on a receiver that can. `connectBase` is the address that resolves to `/r/<id>` once
+   *  the door's radio list comes back, which is why it and not baseUrl is the dependency here.
+   *  The same late-arriving address is what LocalAudioPlayer's dep list learned about the hard
+   *  way; see the note there.
+   *
+   *  ★ Re-probed whenever that address changes, and cleared first: an answer belonging to the
+   *    previous radio is worse than no answer. */
+  useEffect(() => {
+    let dead = false;
+    setDabCapable(false);
+    if ((route.params.serverType ?? 'ubersdr') !== 'vibeserver') return;
+    fetchOccupancy(connectBase.replace(/\/+$/, ''))
+      .then(o => { if (!dead) setDabCapable(o?.dab === true); })
+      .catch(() => {});
+    return () => { dead = true; };
+  }, [connectBase, route.params.serverType]);
+
+  /** ★★ THE REMEMBERED MULTIPLEX, per RADIO for exactly the reason the tune key is (above): two
+   *  receivers on one server hear different ensembles, and offering the Airspy's last block to a
+   *  V4 on a different antenna is the same mistake as offering it 648 kHz. */
+  useEffect(() => {
+    const key = 'lsv_dab_block:' + baseUrl + radioKeySuffix;
+    dabBlockKeyRef.current = key;
+    AsyncStorage.getItem(key)
+      .then(name => { if (name) { const i = dabBlockIndex(name); if (i >= 0) setDabBlock(i); } })
+      .catch(() => {});
+  }, [baseUrl, radioKeySuffix]);
   /**
    * ★★★ ADMIN FROM THE LANDING PAGE, SO WE ARRIVE AS ADMIN RATHER THAN ASKING LATER.
    *
@@ -1520,6 +1563,35 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Live RDS (FM) / DAB station metadata (OWRX). liveStationRef mirrors the name
   // for the VTS resolver (reads in a debounced callback, avoids stale closures).
   const [dabProgrammes, setDabProgrammes] = useState<DabProgramme[]>([]);  // OWRX DAB ensemble
+  /* ── DAB on a VibeServer ────────────────────────────────────────────────────────────────────
+   * ★★★ SEPARATE STATE FROM dabProgrammes ON PURPOSE. OWRX's DAB arrives as a PROFILE — you leave
+   *     it by choosing a non-DAB profile, and the ensemble is whatever the owner configured — and
+   *     it has none of the measurement this does. Folding VibeServer's DAB into those two fields
+   *     would have meant every reader guessing which server it was looking at, which is the very
+   *     shape of bug the VibeServer/UberSDR split was done to end. */
+  const [dabState, setDabState] = useState<DabState | null>(null);
+  const [dabError, setDabError] = useState<string | undefined>(undefined);
+  const [dabOn, setDabOn] = useState(false);            // we have ASKED for DAB (see dabBoxOpen)
+  /** ★★★ THE BOX AND THE MODE ARE TWO DIFFERENT THINGS. Stuart, 2026-09-08: "the X button on the
+   *  decoder box closes the decoder but leaves DAB active but when you press DAB again from the
+   *  demodulator menu it deactivates DAB fully rather than restore the box." Closing a window is
+   *  not leaving a mode; the panel now carries both doors and this is the window's half. */
+  const [dabBoxOpen, setDabBoxOpen] = useState(false);
+  const [dabBlock, setDabBlock] = useState<number>(-1);
+  const [dabCapable, setDabCapable] = useState(false);  // the SERVER decides — /vibeserver.json
+  /* ★ Refs beside the state because the two callbacks below are created ONCE (empty dep list, so
+   *  they are stable for the ModeSelector's memo) and would otherwise close over the first render's
+   *  values for ever — the stale-closure fault this file has been bitten by repeatedly. */
+  const dabOnRef = useRef(false);
+  const dabBlockRef = useRef(-1);
+  const dabBoxOpenRef = useRef(false);
+  /** ★ onDabBlock is defined further down; the drum and the media-skip closures are created once,
+   *  so they reach it through a ref rather than closing over the first render's undefined. */
+  const onDabBlockRef = useRef<((i: number) => void) | null>(null);
+  const dabBlockKeyRef = useRef('lsv_dab_block');
+  useEffect(() => { dabOnRef.current = dabOn; }, [dabOn]);
+  useEffect(() => { dabBoxOpenRef.current = dabBoxOpen; }, [dabBoxOpen]);
+  useEffect(() => { dabBlockRef.current = dabBlock; }, [dabBlock]);
   const [activeDabId, setActiveDabId] = useState<number>(0);
   const [dabEnsemble, setDabEnsemble] = useState('');
   /** OWRX ADS-B: the live aircraft table. Structured — it used to be flattened to
@@ -1550,6 +1622,46 @@ export default function SDRScreen({ route, navigation }: Props) {
   // station. Applied live; the storage write is debounced so dragging the slider
   // doesn't hammer AsyncStorage (it fires onValueChange continuously).
   const dabSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** ★★★ ENTER OR LEAVE DAB. The mode and the window are separate (see dabBoxOpen): this is the
+   *  MODE, so leaving it tears the decode down on the server as well as closing the box.
+   *  ★★ THE BLOCK IS REMEMBERED PER SERVER and offered back on the next entry — a listener who was
+   *  on 12B yesterday wants 12B today, and re-scanning Band III from 5A to find it is a minute of
+   *  nothing. Falls back to the first block only when there is no memory at all. */
+  const toggleDab = useCallback(() => {
+    const c = client.current;
+    if (!c?.dab) return;                       // not a VibeServer — the button is not drawn either
+    if (dabOnRef.current) {
+      /* ★★★ IF DAB IS RUNNING AND THE BOX IS SHUT, THIS BUTTON BRINGS THE BOX BACK. Stuart,
+       *  2026-09-08: "the X button on the decoder box closes the decoder but leaves DAB active but
+       *  when you press DAB again from the demodulator menu it deactivates DAB fully rather than
+       *  restore the box." Pressing a lit button and being thrown out of the mode is not what
+       *  anybody means by it — they mean "show me that again". Leaving the mode is then the second
+       *  press, or EXIT DAB in the window's own header. */
+      if (!dabBoxOpenRef.current) { setDabBoxOpen(true); return; }
+      c.dab(false);
+      setDabOn(false); setDabBoxOpen(false); setDabState(null); setDabError(undefined);
+      return;
+    }
+    const i = dabBlockRef.current >= 0 ? dabBlockRef.current : 0;
+    setDabBlock(i);
+    setDabBoxOpen(true);
+    setDabError(undefined);
+    c.dab(true, i);
+    setDabOn(true);
+  }, []);
+
+  /** Step to another multiplex WITHOUT leaving DAB — the one door the hold leaves open. */
+  const onDabBlock = useCallback((i: number) => {
+    const c = client.current;
+    if (!c?.dab) return;
+    setDabBlock(i);
+    setDabState(null);                         // ★ the last mux's numbers are not this one's
+    AsyncStorage.setItem(dabBlockKeyRef.current, DAB_BLOCKS[i].name).catch(() => {});
+    c.dab(true, i);
+  }, []);
+
+  useEffect(() => { onDabBlockRef.current = onDabBlock; }, [onDabBlock]);
+
   const onDabSpeed = useCallback((scale: number) => {
     setDabSpeed(scale);
     client.current?.setDabAudioScale?.(scale);
@@ -2614,6 +2726,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   const mediaStepSkipRef = useRef<((dir: 'left' | 'right', recenter?: boolean) => void) | null>(null);
   mediaStepSkipRef.current = (dir: 'left' | 'right', recenter = true) => {
     const c = client.current; if (!c) return;
+    /* ★ In DAB the lock-screen skip steps the MULTIPLEX, for the same reason the drum does: there
+     *  is nothing else a "next" can mean inside one block. */
+    if (dabOnRef.current) {
+      const n = DAB_BLOCKS.length;
+      const cur = dabBlockRef.current < 0 ? 0 : dabBlockRef.current;
+      onDabBlockRef.current?.(((cur + (dir === 'right' ? 1 : -1)) % n + n) % n);
+      return;
+    }
     // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
     // thing a VFO can do is drag you OFF the block and kill the decode.
     if (isWholeProfileMode(String(c.getStatus().mode))) return;
@@ -3608,6 +3728,28 @@ export default function SDRScreen({ route, navigation }: Props) {
       // VibeServer: the serving device's tuner gains → drive the gain slider (a
       // remote client can't query the hardware natively).
       onHwGains: (gains: number[]) => { if (!destroyed.current && gains.length) setHwGains(gains); },
+      /** ★ DAB, about once a second, with the whole measured state of the multiplex. `null` means
+       *  it has ended; `why` is the server's refusal, which is an explanation and not an error —
+       *  showing it as one would put a red card over a receiver that is working perfectly. */
+      onDab: (st, why) => {
+        if (destroyed.current) return;
+        setDabState(st);
+        setDabError(why);
+        if (why) { setDabOn(false); setDabBoxOpen(false); return; }
+        if (st) {
+          setDabOn(true);
+          // ★ FOLLOW THE SERVER'S BLOCK, not our own request. It may have landed elsewhere (a
+          //   remembered multiplex on first tune), and a header that names the block we ASKED for
+          //   while decoding another is exactly the "asked/actual" confusion the physical-layer
+          //   rows exist to settle.
+          if (st.channel) {
+            const i = dabBlockIndex(st.channel);
+            if (i >= 0) setDabBlock(i);
+          }
+        } else {
+          setDabOn(false);
+        }
+      },
       // ★★★ THE RADIO IS THE AUTHORITY ON ITS OWN GAIN, and until the server sent this the app had
       //     no way to know it — so the slider showed a value of its own and the owner's resting
       //     gain looked as though it had been ignored: "I set the RTL-SDR on the server to return
@@ -5264,8 +5406,31 @@ export default function SDRScreen({ route, navigation }: Props) {
   const vfoPendingHz = useRef(0);
   const vfoVel = useRef({ t: 0, v: 0 }); // EMA thumb speed, px/s
 
+  /** ★★★ IN DAB, THE DRUM MOVES THE BLOCK. Stuart's brief for this window: "Zoom locked out VFO
+   *  moves the block". There is no VFO inside a multiplex — an ensemble is one 1.536 MHz block —
+   *  so the dial's natural meaning here is the only thing there IS to move. The client refuses
+   *  tune/zoom/pan while decoding anyway (SdrWsClient.dabHeld), so without this the drum would be
+   *  a control that does nothing, which AGENTS.md is explicit about not shipping.
+   *  ★ Accumulated like the frequency drum and stepped ONE BLOCK at a time, with a much coarser
+   *    threshold: 39 blocks across a flick is a re-acquire per block and a second of dead air each.
+   *  ★★ Returns true when it consumed the gesture. */
+  const dabPendingPx = useRef(0);
+  const dabDrumStep = useCallback((pxDelta: number): boolean => {
+    if (!dabOnRef.current) return false;
+    dabPendingPx.current += pxDelta;
+    const PX_PER_BLOCK = 48;
+    const steps = Math.trunc(dabPendingPx.current / PX_PER_BLOCK);
+    if (!steps) return true;
+    dabPendingPx.current -= steps * PX_PER_BLOCK;
+    const n = DAB_BLOCKS.length;
+    const cur = dabBlockRef.current < 0 ? 0 : dabBlockRef.current;
+    onDabBlockRef.current?.(((cur + steps) % n + n) % n);
+    return true;
+  }, []);
+
   const onVfoDelta = useCallback((pxDelta: number) => {
     const c = client.current; if (!c) return;
+    if (dabDrumStep(pxDelta)) return;   // ★ see dabDrumStep — the block IS the tuning
     // Whole-profile data modes are locked to their block — VFO tuning just knocks
     // you off it (kills the decode, and the block is a nuisance to re-find). DAB had
     // this guard; ADS-B did NOT, so the drum would happily drag you off 1090 MHz and
@@ -5303,7 +5468,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     c.tune(newHz);
     keepVfoAtEdge(newHz);          // same edge-follow as the keys — one behaviour
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: newHz }));
-  }, [keepVfoAtEdge]);
+  }, [keepVfoAtEdge, dabDrumStep]);
 
   // ── BW drum ───────────────────────────────────────────────────────────────
 
@@ -5587,6 +5752,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   const wfZoomAcc = useRef({ base: 0, f: 1, t: 0 });
   const wfZoomBy = useCallback((factor: number) => {
     const c = client.current; if (!c) return;
+    /* ★★★ ZOOM IS LOCKED OUT IN DAB, and it is locked out HERE as well as in the client. On an RTL
+     *  the IF filter FOLLOWS the view, so a zoom narrows the passband under the decoder and cuts
+     *  the multiplex out — the web client's own fault on 2026-09-07 ("the spectrum can be clicked
+     *  which knocks the multiplex tuning off"). The client refuses it; this stops the UI acting as
+     *  though it worked, which is the difference between a locked control and a broken one. */
+    if (dabOnRef.current) return;
     markInteract();
     const s = c.getView(); if (!s.binBandwidth || !s.centerHz) return;
     const a = wfZoomAcc.current;
@@ -5608,6 +5779,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onWfTapTune = useCallback((hz: number) => {
     const c = client.current; if (!c) return;
+    if (dabOnRef.current) return;          // ★ see wfZoomBy — a tap is a view move too
     // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
     // thing a VFO can do is drag you OFF the block and kill the decode.
     if (isWholeProfileMode(String(c.getStatus().mode))) return;
@@ -8263,6 +8435,23 @@ export default function SDRScreen({ route, navigation }: Props) {
           onClose={() => setAdvRdsOpen(false)}
         />
       )}
+      {/* ★★★ THE DAB WINDOW. Portrait-only on a phone for the same reason as the analyser above:
+          a service list plus forty measured rows needs vertical space landscape has not got.
+          ★★ `dabBoxOpen`, NOT `dabOn` — the window and the mode are two different things and the
+          panel carries both doors. Closing the box leaves DAB decoding and the audio playing;
+          EXIT DAB (and the DAB button in the demodulator sheet) leaves the mode. */}
+      {dabBoxOpen && (!isLandscape || isTablet) && (
+        <DabPanel
+          d={dabState}
+          error={dabError}
+          blockIndex={dabBlock}
+          onBlock={onDabBlock}
+          onService={(sid) => client.current?.dabService?.(sid)}
+          onClose={() => setDabBoxOpen(false)}
+          onExit={toggleDab}
+          bottomOffset={pillBottom + 8 + noticeStackH}
+        />
+      )}
       {/* ★ NB the panel itself still clears the NOTICE pills — it takes noticeStackH in its
           bottomOffset. Hiding the VTS bar removes one thing under it, not all of them: a
           POWER SAVE or idle-terms pill still has to be readable with the analyser open
@@ -8599,6 +8788,12 @@ export default function SDRScreen({ route, navigation }: Props) {
           // ★ Opening it is an interaction: the saver may ALREADY be engaged, and the
           // exemption above only stops it re-engaging — it cannot undo a slowdown in progress.
           onAdvRds: () => { markInteract(); setModeSelOpen(false); setAdvRdsOpen(o => !o); },
+          /* ★ Offered when the SERVER says it can (see dabCapable) — never inferred from the
+           *  radio, because whether DAB is possible depends on the owner's allow/block lists and
+           *  the rate the receiver will actually run at, and only the server knows both. */
+          dabAvail: dabCapable,
+          dabOn,
+          onDab: () => { markInteract(); setModeSelOpen(false); toggleDab(); },
         } : null}
         spotsControls={(route.params.serverType ?? 'ubersdr') !== 'owrx' ? {
           label: (isLocal || isKiwi) ? 'DECODED SPOTS' : 'SERVER EXTENSIONS',

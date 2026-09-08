@@ -342,6 +342,12 @@ export interface ServerOccupancy {
   landingMessage?: string;
   landingLinkUrl?: string;
   landingLinkLabel?: string;
+  /** ★★★ THE SERVER DECIDES WHETHER DAB IS OFFERED AT ALL, and only it can. The button depends on
+   *  the EFFECTIVE limits — the tunable set after the owner's allow/block lists, and the rate the
+   *  receiver will actually run at — so a V4 locked to FM, or held below 2.048 MS/s, must never
+   *  draw it. Per AGENTS.md: a control that is visible and refused reads as a broken feature, not
+   *  a blocked one. Undefined on a server older than the field, which hides it — the safe way. */
+  dab?: boolean;
 }
 
 /** Ask a VibeServer whether it is free. Returns null for anything that is not a VibeServer or
@@ -379,6 +385,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
                       ? j.landingLinkUrl : undefined,
       landingLinkLabel: typeof j.landingLinkLabel === 'string' && j.landingLinkLabel
                         ? j.landingLinkLabel : undefined,
+      dab:       j.dab === true,
     };
   } catch { return null; }
   finally { clearTimeout(t); }

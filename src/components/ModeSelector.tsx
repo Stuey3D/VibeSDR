@@ -164,6 +164,15 @@ interface ModeSelectorProps {
      *  anything. Offering a dead button elsewhere reads as broken support, not as
      *  "unavailable here". */
     advRdsAvail?: boolean; advRdsOn?: boolean; onAdvRds?: () => void;
+    /** ★★★ DAB, and it belongs beside the decoders rather than in the mode grid. It is not a
+     *  demodulator you point at a frequency: the SERVER retunes to a block, sets its own sample
+     *  rate and refuses tune and zoom for as long as it runs. Offered only when the server says it
+     *  can — a receiver locked to FM, or held below 2.048 MS/s, never draws it (AGENTS.md: a
+     *  control that is visible and refused reads as a broken feature, not a blocked one).
+     *  ★ PRESSING IT WHILE IT IS ON LEAVES DAB. Stuart, 2026-09-08: pressing DAB again "deactivates
+     *  DAB fully rather than restore the box" — which is correct for THIS button; it is the
+     *  decoder box's own X that was conflating the window with the mode. */
+    dabAvail?: boolean; dabOn?: boolean; onDab?: () => void;
     rttySettings?: RttySettings; onRttySettings?: (s: RttySettings) => void;
     /** '' / 'auto' = choose from the tuned frequency. Anything else forces that station. */
     timeStation?: string; onTimeStation?: (s: string) => void;
@@ -436,6 +445,20 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                   )}</NavItem>
                 );
               })}
+              {decoderControls.dabAvail && (
+                <NavItem key="dab" onPress={() => decoderControls.onDab?.()}>{(navFocused, navRef) => (
+                <TouchableOpacity ref={navRef as any}
+                  style={[st.btn, { borderColor: decoderControls.dabOn ? DEC_COL : t.btnBorder, paddingVertical: 10 },
+                          decoderControls.dabOn && { backgroundColor: 'rgba(80,220,100,0.14)' },
+                          navFocused && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+                  onPress={() => decoderControls.onDab?.()} activeOpacity={0.8}>
+                  <Text numberOfLines={1}
+                        style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: decoderControls.dabOn ? DEC_COL : t.btnText }]}>
+                    DAB
+                  </Text>
+                </TouchableOpacity>
+                )}</NavItem>
+              )}
               {decoderControls.advRdsAvail && (
                 <NavItem key="advrds" onPress={() => decoderControls.onAdvRds?.()}>{(navFocused, navRef) => (
                 <TouchableOpacity ref={navRef as any}
