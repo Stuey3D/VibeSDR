@@ -78,6 +78,7 @@ public:
         adts_.clear();
         pad_.reset();      // ★ the label belongs to the old programme
         slide_ = Slide{}; // ★ and so does the picture
+        cats_.clear(); slideAlert_ = 0; slideClickUrl_.clear();   // ★ and the gallery it belonged to
         spiSid_ = 0; packets_.reset(); carousel_.reset(); spiLogoRefs_.clear(); spiSeen_ = 0; cacheLoadedEid_ = 0;   // ★ a new multiplex, a new carousel
         // ★ A new programme starts a new clock; catching up on the old one would be a wall of silence.
         pcmOwed_ = 0; pcmPushed_ = 0;
@@ -110,7 +111,7 @@ public:
         aacStartedKnown_ = knownRatio_ > 0.0;
         adts_.clear();
         pad_.reset();
-        slide_ = Slide{};
+        slide_ = Slide{}; cats_.clear(); slideAlert_ = 0; slideClickUrl_.clear();
         pcmOwed_ = 0; pcmPushed_ = 0;
         resampleReset();
         /* ★★★ AND DROP ANY HELD HALF-FRAME. lsfPend_ carries the first half of a 24 kHz Layer II
@@ -620,6 +621,27 @@ public:
              *  real full RDS info from DAB"): the clock (FIG 0/10, CT) with the local offset (0/9),
              *  and the other blocks this ensemble is on (0/21, AF). */
             pollSlide();
+            /* ★★★ THE CATEGORISED SLIDESHOW'S GALLERY (TS 101 499). Names and titles only; the
+             *  pictures are fetched by name from the carousel endpoint as they are needed. */
+            if (!cats_.empty()) {
+                std::string g;
+                for (const auto& kv : cats_) {
+                    // ★ 5.3.5.3: a category with no title "shall not be shown to the user".
+                    if (kv.second.title.empty() || kv.second.slides.empty()) continue;
+                    if (!g.empty()) g += ',';
+                    g += "{\"id\":" + std::to_string(int(kv.first))
+                       + ",\"title\":\"" + esc(kv.second.title) + "\",\"slides\":[";
+                    bool fs = true;
+                    for (const auto& sl : kv.second.slides) {
+                        if (!fs) g += ','; fs = false;
+                        g += "{\"n\":\"" + esc(sl.name) + "\",\"i\":" + std::to_string(sl.slideId) + "}";
+                    }
+                    g += "]}";
+                }
+                if (!g.empty()) j += ",\"slideCats\":[" + g + "]";
+            }
+            if (slideAlert_) j += ",\"slideAlert\":" + std::to_string(slideAlert_);
+            if (!slideClickUrl_.empty()) j += ",\"slideClick\":\"" + esc(slideClickUrl_) + "\"";
             if (slide_.seq) {
                 char sb[160];
                 snprintf(sb, sizeof sb, ",\"slide\":{\"seq\":%u,\"mime\":\"%s\",\"bytes\":%zu,\"name\":\"", slide_.seq, slide_.mime.c_str(), slide_.bytes.size());
@@ -1756,6 +1778,14 @@ private:
     Slide slide_;
     uint32_t slideSeq_ = 0;
     std::string slideDir_;
+    /** ★ The categorised slideshow's gallery (TS 101 499 5.3.5), by CategoryID. Names only — the
+     *  pictures themselves stay in the carousel and are fetched by name, so a 64-slide gallery
+     *  costs a few hundred bytes rather than a few megabytes. */
+    struct CatSlide { std::string name; int slideId = 0; uint32_t seq = 0; };
+    struct SlideCategory { std::string title; std::vector<CatSlide> slides; };
+    std::map<uint8_t, SlideCategory> cats_;
+    int slideAlert_ = 0;
+    std::string slideClickUrl_;
     std::map<uint32_t, Slide> slideBySid_;   ///< the last picture from each service visited
     /** ★ Keyed by the ensemble as well as the SId: an SId is only unique within its ensemble
      *  (that is what the ECC and EId are for), and two multiplexes reusing one SId would
@@ -1789,6 +1819,35 @@ private:
     void pollSlide() {   // caller holds m_
         MotObject o;
         if (!pad_.mot().take(o)) return;
+        /* ★★★ CATEGORISED SLIDESHOW (TS 101 499 clause 5.3.5). A slide that names a category joins
+         *  a browsable gallery instead of merely replacing the last picture. Kept BEFORE the body
+         *  is moved out of the object, because it is the body we are about to std::move.
+         *  ★ CategoryID 0 decategorizes (5.3.5.1) and a category with a null title "shall not be
+         *    shown to the user" (5.3.5.3) — both are the transmitter withdrawing a slide, so both
+         *    remove rather than add. */
+        if (o.categoryId > 0 && o.slideId >= 0) {
+            CatSlide cs; cs.name = o.name; cs.slideId = o.slideId; cs.seq = slideSeq_ + 1;
+            auto& cat = cats_[uint8_t(o.categoryId)];
+            if (!o.categoryTitle.empty()) cat.title = o.categoryTitle;
+            /* ★ "When a slide is received containing a CategoryID/SlideID which matches that of
+             *  any slide already in the Holding Buffer, the other slides shall be decategorized"
+             *  (5.3.5.1) — so a repeated SlideID REPLACES, and a carousel cannot grow for ever. */
+            bool replaced = false;
+            for (auto& x : cat.slides) if (x.slideId == cs.slideId) { x = cs; replaced = true; break; }
+            if (!replaced) cat.slides.push_back(cs);
+            std::sort(cat.slides.begin(), cat.slides.end(),
+                      [](const CatSlide& a, const CatSlide& b) { return a.slideId < b.slideId; });
+            if (cat.slides.size() > 64) cat.slides.resize(64);
+        } else if (o.categoryId == 0) {
+            for (auto& kv : cats_)
+                for (size_t i = 0; i < kv.second.slides.size(); ++i)
+                    if (kv.second.slides[i].name == o.name) { kv.second.slides.erase(kv.second.slides.begin() + long(i)); break; }
+        }
+        /* ★ The Alert parameter (6.2.10, table 4): 1 is an emergency warning and the receiver
+         *  "shall switch back to the normal mode of presentation". We do not take over anyone's
+         *  screen — same reasoning as the announcement lamp — but the pane says so. */
+        slideAlert_ = o.alert;
+        slideClickUrl_ = o.clickUrl;
         slide_.bytes = std::move(o.body); slide_.mime = o.mime(); slide_.name = o.name;
         slide_.sid = sid_; slide_.seq = ++slideSeq_;
         /* ★★★ AND KEEP A COPY. `slide_` is cleared by every retune, which is right for the pane

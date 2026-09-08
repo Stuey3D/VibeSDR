@@ -39,6 +39,17 @@ struct MotObject {
     int         contentType = -1, subType = -1;
     std::string name;
     std::vector<uint8_t> body;
+    /* ★★★ CATEGORISED SLIDESHOW (ETSI TS 101 499 clause 6.2, table 3). A plain slideshow is one
+     *  picture replacing the last; CatSLS adds a gallery the listener can browse — "the album
+     *  covers this hour", "the presenters" — by tagging every slide with a category and a
+     *  position in it. All of it rides in MOT header parameters we were stepping over: only
+     *  ContentName (0x0C) was ever read. */
+    int         categoryId = -1;   ///< 0x25 upper byte; 0 decategorizes (5.3.5.1), -1 = absent
+    int         slideId    = -1;   ///< 0x25 lower byte — the order to present within a category
+    std::string categoryTitle;     ///< 0x26, UTF-8, max 128 bytes; a null title hides the category
+    std::string clickUrl;          ///< 0x27 ClickThroughURL, max 512 characters
+    std::string altUrl;            ///< 0x28 AlternativeLocationURL — fetch the image over IP
+    int         alert = 0;         ///< 0x29: 1 = emergency warning (table 4); 0 = none
     std::string mime() const {
         if (contentType == 2 && subType == 1) return "image/jpeg";
         if (contentType == 2 && subType == 3) return "image/png";
@@ -134,7 +145,21 @@ private:
             if (pli == 1) len = 1; else if (pli == 2) len = 4;
             else if (pli == 3) { if (p >= end) break; if (h[p] & 0x80) { if (p + 1 >= end) break; len = ((h[p] & 0x7F) << 8) | h[p + 1]; p += 2; } else { len = h[p] & 0x7F; p += 1; } }
             if (p + len > end) break;
-            if (id == 0x0C && len >= 1) o.name.assign(reinterpret_cast<const char*>(&h[p + 1]), len - 1);   // charset byte first
+            /* ★★★ ONLY ContentName CARRIES A CHARSET BYTE, AND THE TWO SPECS ARE WHY. ContentName
+             *  is EN 301 234's parameter and is defined there as charset(4) + rfa(4) followed by
+             *  the name. The CatSLS parameters are TS 101 499's own, and it defines each of them
+             *  as "a string using UTF-8 encoding" with no prefix at all (clauses 5.3.5.3, 6.2.8,
+             *  6.2.9). Stripping a leading byte from those would eat the first character of every
+             *  category title — which reads as a font or encoding problem, not a parser one. */
+            auto utf8Str = [&](std::string& dst) {
+                dst.assign(reinterpret_cast<const char*>(&h[p]), len);
+            };
+            if (id == 0x0C) { if (len >= 1) o.name.assign(reinterpret_cast<const char*>(&h[p + 1]), len - 1); }
+            else if (id == 0x25 && len >= 2) { o.categoryId = h[p]; o.slideId = h[p + 1]; }
+            else if (id == 0x26) utf8Str(o.categoryTitle);
+            else if (id == 0x27) utf8Str(o.clickUrl);
+            else if (id == 0x28) utf8Str(o.altUrl);
+            else if (id == 0x29 && len >= 1) o.alert = h[p];
             p += len;
         }
         o.body = join(obj.body, obj.bodyLast);

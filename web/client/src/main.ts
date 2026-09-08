@@ -4607,6 +4607,18 @@ function dabRender() {
      *    nothing is indistinguishable from a decoder that failed, and this one will render nothing
      *    for every UK listener: 12B's carousel holds service information only and 7D has no
      *    carousel at all (measured 2026-09-08). Same posture as the TII pane on 11D. */
+    /* ★★★ THE CATEGORISED SLIDESHOW (TS 101 499). A plain slideshow is one picture replacing the
+     *  last; CatSLS tags each slide with a category and a position, so the station can send a
+     *  browsable gallery — this hour's album covers, the presenters. The categories and their
+     *  slide counts are shown here; the pictures are already fetchable from the carousel by name.
+     *  ★ An Alert (table 4, value 1) is an emergency warning and the spec says a receiver "shall
+     *    switch back to the normal mode of presentation". We do not seize anyone's screen — the
+     *    same reasoning as the announcement lamp on a shared VFO — but it is not buried either. */
+    + (d.slideAlert ? row('Slideshow', tl('emergency warning signalled by the broadcaster', 'bad')) : '')
+    + (d.slideCats && d.slideCats.length
+        ? row('Gallery', d.slideCats.map(c =>
+            `${escapeHtml(c.title)} (${c.slides.length})`).join(' · '))
+        : '')
     + (d.epgNow || d.epgNext
         ? (d.epgNow  ? row('On now',  `<span class="dls"><span class="dlsIn">${d.epgNow.at} · ${escapeHtml(d.epgNow.name)}`
                                     + `${d.epgNow.mins ? ` · ${d.epgNow.mins} min` : ''}`

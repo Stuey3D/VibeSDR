@@ -221,6 +221,10 @@ export interface DabState {
   epgPi?: number;
   epgNow?:  { name: string; desc: string; at: string; mins: number; lto: number };
   epgNext?: { name: string; desc: string; at: string; mins: number; lto: number };
+  /** ★ Categorised slideshow (TS 101 499 5.3.5): a browsable gallery rather than one picture
+   *  replacing the last. `slideAlert` 1 is an emergency warning (table 4). */
+  slideCats?: { id: number; title: string; slides: { n: string; i: number }[] }[];
+  slideAlert?: number; slideClick?: string;
   /** The RDS equivalents the ensemble broadcasts: clock (FIG 0/10), local offset, other blocks (0/21). */
   mjd?: number; utc?: string; lto?: number; altHz?: number[];
   /** Ofcom's licensed sites for this ensemble (nearest first when the receiver's position is known), and why the TII test failed. */
