@@ -966,7 +966,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       }
     },
     onSessionWarning: (secs) => setTimeLeft(secs),
-    onDevice: (present) => showDeviceBanner(present),
+    onDevice: (present, reason) => showDeviceBanner(present, reason),
     // ★ Pushed the instant the owner posts one — the people already watching the spectrum
     //   misbehave are exactly who it is for.
     onNotice: (text: string) => showOwnerNotice(text),
@@ -5742,7 +5742,7 @@ function showOwnerNotice(text: string) {
   document.body.appendChild(el);
 }
 
-function showDeviceBanner(present: boolean) {
+function showDeviceBanner(present: boolean, reason?: string) {
   const id = 'deviceBanner';
   document.getElementById(id)?.remove();
   if (present) return;
@@ -5753,12 +5753,22 @@ function showDeviceBanner(present: boolean) {
     'background:rgba(40,10,0,0.94);color:#ffb833;border:1px solid rgba(255,120,0,0.6);' +
     'border-radius:8px;padding:10px 16px;font:13px ui-monospace,monospace;text-align:center;' +
     'box-shadow:0 4px 18px rgba(0,0,0,0.6)';
-  // Promise ONLY what we can deliver. Automatic resume was tried and withdrawn — reopening the
-  // device from the watchdog thread crashed the server (see local_sdr_shim.cpp) — so the message
-  // says what is actually true today rather than what we wish it did.
-  el.innerHTML = 'No radio connected to this server<br>' +
-    '<span style="opacity:0.7;font-size:11px">The receiver was unplugged or has failed. ' +
-    'Reconnect it and restart VibeServer to resume.</span>';
+  /* ★★★ TWO DIFFERENT FAULTS, AND ONE MESSAGE WAS WRONG FOR BOTH. "Unplugged or has failed —
+   *  reconnect it and restart VibeServer" is right when the radio is genuinely gone, and actively
+   *  misleading when it is simply held by another program: it sends the owner hunting a cable
+   *  fault we caused. Stuart, on Saber's server (2026-09-08): "I thought his RTL was broken as its
+   *  a cheap clone but he said it may have been in use by OWRX at the time."
+   *  ★ So the server now sends a REASON when it has one, and it is shown instead. The radio is
+   *    coming back on its own here — the idle release exists precisely so another program may
+   *    borrow it — so the advice is to wait, not to go and unplug things. */
+  el.innerHTML = reason
+    ? 'The radio on this server is in use by another program<br>' +
+      '<span style="opacity:0.7;font-size:11px">' + escapeHtml(reason) +
+      '. It was released while nobody was listening, which is deliberate — it returns as soon as ' +
+      'the other program lets go. Nothing is broken and there is nothing to reconnect.</span>'
+    : 'No radio connected to this server<br>' +
+      '<span style="opacity:0.7;font-size:11px">The receiver was unplugged or has failed. ' +
+      'Reconnect it and restart VibeServer to resume.</span>';
   document.body.appendChild(el);
 }
 

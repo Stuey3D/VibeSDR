@@ -121,8 +121,23 @@ using stereo_t = vibedsp::stereo;     // { float l, r; }
  *     teardown half-done — that is worth knowing about, and a silent catch would just move the
  *     mystery somewhere harder to find. What it must not do is take the app with it.
  */
+/** ★★★ AND NEVER JOIN THE THREAD YOU ARE ON — the second half of the same rule, which lived only
+ *  in stopLocked's local `joinSafely` lambda until now. `joinable()` means "has an associated
+ *  thread", NOT "is not me", so a thread that reaches a teardown it is itself part of joins
+ *  ITSELF: join() returns EDEADLK and throws, exactly as the double-join above does. Two versions
+ *  of one rule, one of them stronger — the shape this project keeps paying for — so the strong
+ *  one is now the only one.
+ *  ★ Detach rather than join: the thread is on its way out anyway (every caller clears its run
+ *    flag first), and a detached thread that outlives the call is a far smaller problem than an
+ *    abort. */
 static inline void joinOnce(std::thread& t, const char* what) {
-    try { if (t.joinable()) t.join(); }
+    if (!t.joinable()) return;
+    if (t.get_id() == std::this_thread::get_id()) {
+        LOGI("%s: is the calling thread — detaching rather than joining itself", what);
+        t.detach();
+        return;
+    }
+    try { t.join(); }
     catch (const std::exception& e) { LOGE("%s: join failed — %s", what, e.what()); }
 }
 
@@ -2162,6 +2177,26 @@ static std::atomic<bool>   g_vsPublicSharing{false};
  *  start must say THAT rather than let libusb report a device that is plugged in and busy as a
  *  device that is missing. */
 static std::atomic<bool>   g_radioOrphaned{false};
+/** ★★★ WHY THE RADIO IS NOT OURS RIGHT NOW — and it must reach the LISTENER, not just the log.
+ *  When the idle park has released the dongle so another program can use it, and that program
+ *  took it, resumeCaptureIdle's reacquire fails. That failure was only LOGI'd, so a listener saw
+ *  a server that sat there doing nothing: Stuart, on Saber's box (2026-09-08): "it sits and looks
+ *  like it is locked up ... he said it may have been in use by OWRX at the time which is exactly
+ *  how we designed the release radio on idle mode however we also designed a warning that the
+ *  radio was in use by another app on the server and that warning never fired up."
+ *  ★★ The warning was never built — only the log line was. The comment beside it promised the
+ *     listener "a clear reason"; nothing carried one. Same shape as the send failures that were
+ *     only logged in the Buddy black screen.
+ *  ★ Empty means "no reason to give": either we have the radio, or it is genuinely absent, and
+ *    the existing unplugged banner is the right message for that. */
+static std::mutex          g_radioBusyMtx;
+static std::string         g_radioBusyWhy;
+static void setRadioBusyReason(const std::string& why) {
+    std::lock_guard<std::mutex> lk(g_radioBusyMtx); g_radioBusyWhy = why;
+}
+static std::string radioBusyReason() {
+    std::lock_guard<std::mutex> lk(g_radioBusyMtx); return g_radioBusyWhy;
+}
 /** ★★ THE RTL'S OVERLOAD READINGS, published once a second from the IQ thread. `peak` is how close
  *  the loudest sample came to full scale (0 dBFS = on the rail); `clip` is the percentage of
  *  samples that actually sat on it. Aim the gain at a peak of about -3 dBFS with clip at zero. */
@@ -6933,6 +6968,7 @@ struct LocalSdrShim::Impl {
     uint32_t dabPumpLateN_ = 0;
     std::atomic<bool> dabClockRun_{false};
     std::thread       dabClockThread_;
+    std::mutex        dabClockMtx_;   ///< guards dabClockThread_ across start/stop — see stopDabClock
 
     void pumpDabPlusAudio() {
         std::vector<uint8_t> au;
@@ -7032,12 +7068,25 @@ struct LocalSdrShim::Impl {
     }
 
     void startDabClock() {
+        std::lock_guard<std::mutex> lk(dabClockMtx_);   // ★ same lock as stopDabClock — see there
         if (dabClockRun_.exchange(true)) return;
+        joinOnce(dabClockThread_, "dab clock (restart)");   // ★ never overwrite a joinable thread
         dabClockThread_ = std::thread([this]{ dabClockLoop(); });
     }
     void stopDabClock() {
-        if (!dabClockRun_.exchange(false)) return;
-        if (dabClockThread_.joinable()) dabClockThread_.join();
+        /* ★★★ THE ONE SITE THE 2026-08-17 PATTERN FIX MISSED. This was the bare
+         *  `if (joinable()) join()` that joinOnce exists to replace: it neither catches nor checks
+         *  for a self-join, so a stop reached FROM the clock thread (pumpDabAudio failing its way
+         *  out) joins itself, gets EDEADLK, throws, and aborts the app.
+         *  ★★ AND START/STOP RACED ON THE std::thread OBJECT ITSELF. The run flag is atomic, but
+         *     the thread was not guarded: startDabClock could be assigning dabClockThread_ while
+         *     this joined it. That is a data race on a non-atomic object, and its symptoms are
+         *     exactly the EINVAL that presents as this crash. One mutex removes it. */
+        std::thread t;
+        { std::lock_guard<std::mutex> lk(dabClockMtx_);
+          if (!dabClockRun_.exchange(false)) return;
+          t = std::move(dabClockThread_); }
+        joinOnce(t, "dab clock");
     }
 
     /** @param forceFrames when non-zero, emit exactly this many 48 kHz frames — the audio clock's
@@ -12593,8 +12642,8 @@ struct LocalSdrShim::Impl {
             // the state CHANGES, so anyone who connected — or refreshed — after the dongle was
             // pulled saw a page that simply never updated, with nothing to explain it. Refreshing
             // is the first thing anyone tries; it must be the moment they learn what is wrong.
-            if (deviceLost.load())
-                sendText(sock, "{\"type\":\"device\",\"present\":false}");
+            if (deviceLost.load() || !radioBusyReason().empty())
+                sendText(sock, deviceStateJson(false));
             // ★★★ AND TELL A NEW ARRIVAL WHERE THE DIAL IS. Same reasoning as the device line
             //     above: the strip is otherwise only sent when somebody TUNES, so a listener who
             //     joins a quiet room sees no strip and no chat button at all, on a receiver whose
@@ -14518,8 +14567,17 @@ struct LocalSdrShim::Impl {
         //    a socket that refuses to open or a waterfall that is simply blank.
         if (radioReleased.load()) {
             std::string err;
-            if (!LocalSdrShim::instance().reacquireRadio(err))
+            if (!LocalSdrShim::instance().reacquireRadio(err)) {
                 LOGI("listener arrived but the radio is not ours to take back — %s", err.c_str());
+                /* ★★★ AND TELL THEM. The comment above this block promises the listener "a clear
+                 *  reason"; until now the only thing that got one was the log. A listener on a
+                 *  server whose dongle another program had simply watched nothing happen. */
+                notifyRadioBusy(err.empty() ? std::string("another program on this server has it")
+                                            : err);
+            } else {
+                setRadioBusyReason("");        // ★ we have it back — withdraw the warning
+                notifyDeviceState();
+            }
         }
         if (!captureIdle.exchange(false)) return;             // wasn't paused
         // ★★★ THIS `else` REPORTED A WORKING RADIO AS UNPLUGGED. With an Airspy attached, `dev`
@@ -15173,14 +15231,26 @@ struct LocalSdrShim::Impl {
         LocalSdrShim::noteConnectionClosed(addr, "", "timeout");
     }
 
+    /** ★ ONE BUILDER, TWO SENDERS. This message goes out on a state CHANGE and again to every new
+     *  arrival; the two used to be separate string literals, and a reason added to one of them
+     *  would have been missing from the other — which is the case that matters, because the
+     *  listener who needs it most is the one who just connected. */
+    static std::string deviceStateJson(bool present) {
+        std::string j = std::string("{\"type\":\"device\",\"present\":") + (present ? "true" : "false");
+        const std::string why = radioBusyReason();
+        if (!present && !why.empty()) j += ",\"reason\":\"" + vibeadmin::esc(why) + "\"";
+        return j + "}";
+    }
     /** Tell every connected client whether we currently have a radio. They draw the message. */
     void notifyDeviceState() {
-        std::shared_ptr<net::Socket> sock;
-        { std::lock_guard<std::mutex> lk(clientMtx); sock = specClient; }
-        if (!sock || !sock->isOpen()) return;
-        sendText(sock, deviceLost.load()
-            ? "{\"type\":\"device\",\"present\":false}"
-            : "{\"type\":\"device\",\"present\":true}");
+        const std::string body = deviceStateJson(!deviceLost.load());
+        for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, body);
+    }
+    /** ★ The radio is held elsewhere: say so to everybody watching, right now. */
+    void notifyRadioBusy(const std::string& why) {
+        setRadioBusyReason(why);
+        const std::string body = deviceStateJson(false);
+        for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, body);
     }
 
     /** Re-find our dongle after a replug. Prefer the SERIAL — indices renumber when a different
