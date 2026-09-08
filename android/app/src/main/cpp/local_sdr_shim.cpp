@@ -611,6 +611,27 @@ static void dabTxDbInit() {
  *    hard-coding it — so a Dual Port and a Discovery each get their own honest answer. */
 static std::atomic<uint32_t> g_vsHwMaxRate{0};
 static std::atomic<bool>   g_dabMode{false};
+
+/** ★★★ WHAT THE LISTENER IS ACTUALLY ON, WHEN IT IS A MULTIPLEX. The admin page read `mode` — the
+ *  DEMODULATOR — and in DAB that is still whatever it was before the mode was entered, so a
+ *  receiver decoding 11A appeared in the listener table as "216.928 MHz WFM" (Stuart, 2026-09-08:
+ *  "the connection logs dont recognise DAB they just show WF"). A Band III frequency with an FM
+ *  demod beside it is not a wrong number; it is a true one that describes nothing.
+ *
+ *  ★★ AND IT IS THE RADIO'S STATE, NOT THE SESSION'S. g_dabMode is a property of the PROCESS —
+ *     one process per radio — so while it is set EVERY listener on this receiver is hearing the
+ *     multiplex, including ones who never asked for it. That is why this takes no session: there
+ *     is nothing per-listener about it, and pretending otherwise is how a shared receiver ends up
+ *     with a table that disagrees with itself.
+ *
+ *  ★ Empty when DAB is off, so the field is absent-shaped for the page and an older page that has
+ *    never heard of it renders exactly as before. */
+static std::string vsDabBlockNow() {
+    if (!g_dabMode.load(std::memory_order_relaxed)) return "";
+    const char* n = g_dab.channelName();
+    return n ? std::string(n) : std::string();
+}
+
 static std::atomic<int>    g_dabChannel{-1};
 /* ★★★ DAB TAKES THE DIAL OFF THE LOCK FOR AS LONG AS IT OWNS THE RADIO.
  *  A locked centre is a SHARED-RECEIVER promise — nobody may retune — and it is enforced in
@@ -16745,6 +16766,7 @@ std::string LocalSdrShim::adminSessionsJson() {
            + ",\"ip\":\"" + vibeadmin::esc(peer) + "\""
            + ",\"vfoHz\":" + std::to_string((long long)c->vfoHz)
            + ",\"mode\":\"" + vibeadmin::esc(c->mode) + "\""
+           + ",\"dab\":\"" + vsDabBlockNow() + "\""      // ★ see vsDabBlockNow
            + ",\"bwHz\":" + std::to_string((long long)c->bwHz)
            + ",\"audio\":" + (audioOpen ? "true" : "false")
            // ★★ SAY WHETHER THE WATERFALL IS RUNNING, so a row costing 68 kbit/s instead of the
@@ -16867,6 +16889,7 @@ std::string LocalSdrShim::adminSessionsJson() {
            + ",\"ip\":\"" + vibeadmin::esc(ip) + "\""
            + ",\"vfoHz\":" + std::to_string((long long)p->audioFreq.load())
            + ",\"mode\":\"" + vibeadmin::esc(p->mode) + "\""
+           + ",\"dab\":\"" + vsDabBlockNow() + "\""      // ★ see vsDabBlockNow
            + ",\"audio\":" + (soleAudio ? "true" : "false")
            + ",\"spectrum\":" + (soleSpec ? "true" : "false")
            + ",\"dropped\":0,\"zoomed\":false"
@@ -16966,6 +16989,7 @@ std::string LocalSdrShim::adminSessionsJson() {
                //   of the mode rather than a gap in the row.
                + ",\"vfoHz\":" + std::to_string((long long)p->audioFreq.load())
                + ",\"mode\":\"" + vibeadmin::esc(p->mode) + "\""
+               + ",\"dab\":\"" + vsDabBlockNow() + "\""  // ★ see vsDabBlockNow
                + ",\"audio\":false,\"spectrum\":true"
                + ",\"dropped\":0,\"zoomed\":false"
                + ",\"cc\":\"" + vibeadmin::esc(vsCountry(ip)) + "\""

@@ -779,7 +779,15 @@ function renderSessions(s: any) {
     <td>${withFlag(c.cc, c.ip || '—')}</td>
     <td>${c.radio ? esc(c.radio) : '<span class="dim">—</span>'}</td>
     <td>${esc(mhz(c.vfoHz))}</td>
-    <td>${esc(String(c.mode || '').toUpperCase())}${c.zoomed ? ' <span class="dim">zoom</span>' : ''}${
+    ${/* ★★★ DAB IS THE MODE WHEN DAB IS RUNNING. This cell showed the DEMODULATOR, and in DAB
+          that is still whatever it was before the multiplex was tuned — so a receiver decoding
+          11A read "216.928 MHz WFM" (Stuart, 2026-09-08: "the connection logs dont recognise DAB
+          they just show WF"). Not a wrong number: a true one that describes nothing.
+          ★ The BLOCK is the tuning in DAB (there is no VFO inside a multiplex), so it is named
+            here beside the mode rather than left to the frequency column to imply.
+          ★ `dab` is absent on a server older than the field, which renders exactly as before. */''}
+    <td>${c.dab ? `DAB <span class="dim">${esc(String(c.dab))}</span>`
+                : esc(String(c.mode || '').toUpperCase())}${c.zoomed ? ' <span class="dim">zoom</span>' : ''}${
       // ★★ WHY THIS ROW IS CHEAP. A backgrounded listener closes the spectrum socket and keeps the
       //    audio, so they cost about a quarter of a full listener. Without saying so, the row reads
       //    as somebody on a bad link — a fault an owner would go hunting for, and there is none.

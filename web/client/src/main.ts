@@ -4717,19 +4717,75 @@ function dabLogosSave() {
   } catch { /* ignore */ }
 }
 dabLogosLoad();
+
+/**
+ * ★★★ KEEP THE PICTURE THE MULTIPLEX GAVE US, so it outlives the tuning.
+ *
+ * Stuart, 2026-09-08: "station logos arent updating in the Bookmarks after the initial save,
+ * notice how embrace and inspiration now have logos from the DAB multiplex but they arent in the
+ * bookmarks."
+ *
+ * ★★★ AND THE REASON IS A CHAIN THAT EXISTS IN ONE READER ONLY. dabLogoTag has THREE sources — the
+ *     SPI carousel off the air, then RadioDNS/name search in `dabLogos`, then the slideshow — and
+ *     the bookmark row consults `dabLogos` and nothing else. So exactly the stations whose picture
+ *     comes off the air (Embrace and INSPIRATION FM on 7D, which have no RadioDNS entry at all)
+ *     draw in the service list and are blank in the bookmarks. AGENTS.md, "ONE RULE, TWO READERS".
+ *
+ * ★★★ THE FIX IS NOT TO COPY THE CHAIN INTO THE SECOND READER, because the off-air URLs only work
+ *     WHILE THAT MULTIPLEX IS TUNED — the server holds one carousel, for the block it is decoding.
+ *     A bookmark list is mostly other multiplexes, so a copied chain would draw for the tuned mux
+ *     and 404 (a broken-image tile, rebuilt twice a second) for every other row. Instead the
+ *     picture is taken ONCE, while we have it, and stored as a data: URL in the same cache
+ *     RadioDNS logos already use — which every reader already looks at, including the VTS.
+ *
+ * ★ RANKING PRESERVED. `provisional` marks a SLIDESHOW image: programme artwork that changes
+ *   through the day, so it is only kept when nothing better exists and is replaced the moment the
+ *   broadcaster's own file turns up. An SPI/air logo is the broadcaster's file and wins.
+ * ★ Bounded at 24 KB: localStorage is a handful of megabytes shared with everything else this
+ *   client remembers, and a logo bigger than that is not a logo.
+ */
+const dabAirKept = new Set<string>();
+async function dabKeepAirLogo(key: string, url: string, provisional: boolean) {
+  if (dabAirKept.has(key)) return;
+  if (provisional && dabLogos.get(key)) return;    // never displace a better source with cover art
+  dabAirKept.add(key);
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) { dabAirKept.delete(key); return; }
+    const blob = await r.blob();
+    if (!blob.size || blob.size > 24576) return;
+    const data: string = await new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(String(fr.result || ''));
+      fr.onerror = () => rej(new Error('read'));
+      fr.readAsDataURL(blob);
+    });
+    if (!data.startsWith('data:image/')) return;
+    dabLogos.set(key, data);
+    dabLogosSave();
+    /* ★ The bookmark panel is not redrawn on a timer — it is built when opened — so a logo that
+     *  arrives while it is open would otherwise not appear until the next open. */
+    if (isPanelOpen('bookmarksPanel')) renderBookmarks();
+  } catch { dabAirKept.delete(key); }   // a transient failure may succeed next time
+}
+
 function dabLogoTag(sv: DabState['services'][number], d: DabState): string {
   /* ★ OFF THE AIR FIRST: the multiplex's own SPI carousel names this service's logo (12B's "BBC
    *  Guide", measured 2026-09-07) — the broadcaster's file from the broadcaster's transmitter. */
-  if (sv.logoAir) return `<img class="dabLogo" src="${P(`/vibeserver/dablogoair?sid=${sv.sid}`)}" alt="" loading="lazy">`;
   const ecc = (sv.ecc ?? d.ecc ?? -1);
   const key = `${ecc}|${d.eid}|${sv.sid}`;
+  if (sv.logoAir) {
+    const air = P(`/vibeserver/dablogoair?sid=${sv.sid}`);
+    void dabKeepAirLogo(key, air, false);       // ★ see dabKeepAirLogo — so the bookmarks get it too
+    return `<img class="dabLogo" src="${air}" alt="" loading="lazy">`;
+  }
   const known = dabLogos.get(key);
-  if (known === undefined) { dabLogos.set(key, null); void dabLogoLookup(key, sv, d, ecc); return dabSlideTag(sv); }
+  if (known === undefined) { dabLogos.set(key, null); void dabLogoLookup(key, sv, d, ecc); return dabSlideTag(sv, key); }
   /* ★ A URL THAT RESOLVES IS NOT A PICTURE THAT LOADS (the RDS panel learned this first): the
    *  name search hands back dead favicons, the browser drew its "?" tile, and the list is rebuilt
    *  twice a second — so the tile FLASHED (Stuart's screenshot, Magic Radio, 2026-09-07). A logo
    *  that fails to load is forgotten for that service and the row goes back to text. */
-  return known ? `<img class="dabLogo" src="${known}" alt="" data-k="${escapeHtml(key)}" onerror="this.remove();(window as any).dabLogoFailed&&(window as any).dabLogoFailed(this.dataset.k)">`.replace('(window as any)', 'window').replace('(window as any)', 'window') : dabSlideTag(sv);
+  return known ? `<img class="dabLogo" src="${known}" alt="" data-k="${escapeHtml(key)}" onerror="this.remove();(window as any).dabLogoFailed&&(window as any).dabLogoFailed(this.dataset.k)">`.replace('(window as any)', 'window').replace('(window as any)', 'window') : dabSlideTag(sv, key);
 }
 
 /** ★★★ THE PICTURE THE STATION ITSELF TRANSMITS, AS THE LAST RESORT.
@@ -4745,9 +4801,12 @@ function dabLogoTag(sv: DabState['services'][number], d: DabState): string {
  *  ★ Gated on `logoSlide` from the server, which is true only when a file is actually held: an
  *    <img> pointed at a 404 draws the browser's broken-image tile, and the list is rebuilt twice
  *    a second, so a speculative one FLASHES — the fault the RadioDNS name search taught us. */
-function dabSlideTag(sv: DabState['services'][number]): string {
+function dabSlideTag(sv: DabState['services'][number], key?: string): string {
   if (!sv.logoSlide) return '';
-  return `<img class="dabLogo" src="${P(`/vibeserver/dabslide?sid=${sv.sid}`)}" alt="" loading="lazy">`;
+  const url = P(`/vibeserver/dabslide?sid=${sv.sid}`);
+  // ★ PROVISIONAL: cover art, kept only while the station has nothing better — see dabKeepAirLogo.
+  if (key) void dabKeepAirLogo(key, url, true);
+  return `<img class="dabLogo" src="${url}" alt="" loading="lazy">`;
 }
 (window as any).dabLogoFailed = (k: string) => { dabLogos.set(k, null); try { const raw = localStorage.getItem(DAB_LOGO_STORE); if (raw) { const j = JSON.parse(raw); delete j[k]; localStorage.setItem(DAB_LOGO_STORE, JSON.stringify(j)); } } catch { /* ignore */ } };
 async function dabLogoLookup(key: string, sv: DabState['services'][number], d: DabState, ecc: number) {

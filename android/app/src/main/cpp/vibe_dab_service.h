@@ -96,6 +96,12 @@ public:
     }
 
     int  channel()   const { return channel_; }
+    /** ★ The block's NAME ("11A"), for anything that has to describe the tuning to a person —
+     *  the admin page's listener table, which showed "216.928 MHz WFM" for a receiver that was
+     *  decoding a multiplex (Stuart, 2026-09-08: "the connection logs dont recognise DAB they
+     *  just show WF"). A frequency in Band III with a demod name attached is not a description of
+     *  DAB; the block is. */
+    const char* channelName() const { return channel_ >= 0 ? kBandIII[channel_].name : ""; }
     uint32_t centreHz() const { return kBandIII[channel_ < 0 ? 0 : channel_].centreHz; }
 
     /** Choose a service by SId. Safe to call before the ensemble has arrived — it is remembered
