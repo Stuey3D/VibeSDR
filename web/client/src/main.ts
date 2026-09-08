@@ -3598,7 +3598,11 @@ const latestRadioStatus = new Map<string, any>();
 function dabBadge(r: any, st: any): string {
   const can = st?.dab === true || r?.dab === true;
   if (!can) return '';
-  return `<span title="This receiver is set up for DAB+" style="display:inline-block;width:36px;height:21px;line-height:0">${DABPLUS_LOGO_SVG}</span>`;
+  // ★ The master SVG carries width="100" height="59" ATTRIBUTES, and an inline <svg> honours its
+  //   own attributes over the box it sits in — the badge shipped at 100 px, over the FREE tag.
+  //   The style on the element wins over the attributes; the span is then the only size.
+  const svg = DABPLUS_LOGO_SVG.replace('<svg ', '<svg style="width:100%;height:100%;display:block" ');
+  return `<span title="This receiver is set up for DAB+" style="display:inline-block;flex:none;width:36px;height:21px;line-height:0">${svg}</span>`;
 }
 
 function radioCardState(r: any, st: any): { state: string; blocked: boolean } {
