@@ -107,9 +107,23 @@ public:
     /** Choose a service by SId. Safe to call before the ensemble has arrived — it is remembered
      *  and applied as soon as the service appears, which is what makes a bookmark work on a cold
      *  tune (recall is channel + SId; see BRIEF-dab.md). */
+    /** ★★★ THE AUDIO-CHANNEL COUNTERS BELONG TO ONE SERVICE ON ONE MULTIPLEX. They were never
+     *  zeroed on a block or service change, so the signal pane carried "Layer II frames 957 in,
+     *  94 bad" from one multiplex to the next until DAB was left and re-entered (Stuart,
+     *  2026-09-08: "been stuck on the same figure … for multiple tunes"). A counter that
+     *  describes the last station is worse than none: it reads as a fault on this one. */
+    void resetAudioCounters() {
+        mp2In_ = mp2Bad_ = mp2Out_ = mp2WithCrc_ = 0; mp2Concealed_ = 0;
+        scfChecked_ = 0; scfOk_[0] = scfOk_[1] = scfOk_[2] = scfOk_[3] = 0;
+        lsfOrphans_ = 0; aacDecoded_ = 0; aacPcmPerAu_ = 0;
+        sfFrames_ = sfBadLen_ = sfTried_ = sfOk_ = 0; ausOut_ = 0;
+        rsCorrected_ = rsUncorrected_ = 0; sfInvalid_ = 0; sfFireBad_ = 0;
+        pcmFilled_ = 0; pcmPushed_ = 0;
+    }
     void setService(uint32_t sid) {
         std::lock_guard<std::mutex> lk(m_);
         want_ = sid;
+        resetAudioCounters();
         if (rx_.ensemble().services.count(sid)) { if (rx_.selectService(sid)) sid_ = sid; }
         { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
         mp2_.reset();
@@ -220,6 +234,7 @@ public:
                 preTuneDropped_ += uint32_t(drop);
                 if (settleDrop_ == 0) {
                     rx_.reset(); iq_.clear(); lsfPend_.clear();
+                    resetAudioCounters();   // ★ a new multiplex starts its own tally
                     mp2_.reset(); aac_.reset(); pad_.reset(); adts_.clear();
                     aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacPrimed_ = false;
                     { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
