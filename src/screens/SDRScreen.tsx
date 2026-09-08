@@ -1653,11 +1653,18 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  tuned to like the web client"). The server, told no channel, uses the block it was LAST
      *  decoding, or 12B if it never has — which is what the web client gets, because it sends a
      *  channel only when it has one saved. The header follows whatever the server reports. */
+    /* ★★★ AND NO CHANNEL EVEN WHEN ONE IS REMEMBERED. The app's own memory of a block is older
+     *  than the server's — the server was decoding SOMETHING a minute ago, for this user or
+     *  another — and sending ours retuned a shared dial away from it and, on a first visit after a
+     *  reinstall, still landed on whatever we last saved elsewhere (Stuart, 2026-09-09: "the
+     *  decoder box opening on the multiplex the server was last on rather than 5a"). The server's
+     *  last block is the answer every time; ours is only the drum's resting position until the
+     *  first report replaces it. */
     const i = dabBlockRef.current;
     if (i >= 0) setDabBlock(i);
     setDabBoxOpen(true);
     setDabError(undefined);
-    if (i >= 0) c.dab(true, i); else c.dab(true);
+    c.dab(true);
     setDabOn(true);
   }, []);
 
@@ -3759,6 +3766,14 @@ export default function SDRScreen({ route, navigation }: Props) {
         setDabError(why);
         if (why) { setDabOn(false); setDabBoxOpen(false); return; }
         if (st) {
+          /* ★★★ THE BOX OPENS ITSELF WHEN THE SERVER IS ALREADY IN DAB. On a shared dial the
+           *  multiplex is what everybody is hearing, and a `dab` report arriving before we asked
+           *  for one means we joined a receiver that was in the mode already. The old code lit the
+           *  DAB button and left the window shut, so the join played DAB audio over an FM layout
+           *  (Stuart, 2026-09-09: "the DAB box automatically appearing when connecting to a shared
+           *  vfo server in DAB mode"). Opened on the TRANSITION only — an X the user pressed
+           *  stays pressed for the reports that follow it. */
+          if (!dabOnRef.current) { setDabBoxOpen(true); dabOnRef.current = true; }
           setDabOn(true);
           // ★ FOLLOW THE SERVER'S BLOCK, not our own request. It may have landed elsewhere (a
           //   remembered multiplex on first tune), and a header that names the block we ASKED for
