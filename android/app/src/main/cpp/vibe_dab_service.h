@@ -10,6 +10,7 @@
 //    for nothing, since the dongle can simply run at 2.048.
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -823,9 +824,36 @@ public:
             }
             /* ★ Every row's "now playing": the playing service's live label, the others' from the
              *  scanner, with how old it is. */
-            if (kv.first == sid_ && pad_.dls().label().valid && !pad_.dls().label().text.empty())
+            if (kv.first == sid_ && pad_.dls().label().valid && !pad_.dls().label().text.empty()) {
                 j += ",\"dls\":\"" + esc(pad_.dls().label().text) + "\",\"dlsAge\":0";
-            else {
+                /* ★★★ DL PLUS — THE STATION SAYING WHICH PART IS THE ARTIST (TS 102 980). Only
+                 *  for the tuned service: the PAD scanner reads other services' labels without
+                 *  their audio, and a tag is a span of a label, so a scanned row's tags would go
+                 *  stale the moment its label was refreshed by another slot.
+                 *  ★ itemRunning false means the ITEM has ended — an ad break or the news under a
+                 *    label the station has not bothered to clear. A receiver that keeps showing
+                 *    the last track through the news is the thing this flag exists to prevent. */
+                const auto& dl = pad_.dls().label();
+                if (dl.hasDlPlus) {
+                    j += std::string(",\"dlpRunning\":") + (dl.itemRunning ? "true" : "false");
+                    j += ",\"dlp\":{";
+                    /* ★ Keyed by NAME, and the table is deliberately many-to-one: 9 and 12 are
+                     *  both "news", 27 and 28 both "programme". A duplicate key is not an object
+                     *  — JSON.parse keeps only the last — so the first tag of a name wins and the
+                     *  rest are dropped here, where it is visible, rather than in the browser. */
+                    bool ft = true;
+                    std::vector<std::string> used;
+                    for (const auto& t : dl.tags) {
+                        const char* nm = dlPlusTypeName(t.type);
+                        if (!nm || t.text.empty()) continue;
+                        if (std::find(used.begin(), used.end(), nm) != used.end()) continue;
+                        used.emplace_back(nm);
+                        if (!ft) j += ','; ft = false;
+                        j += "\"" + std::string(nm) + "\":\"" + esc(t.text) + "\"";
+                    }
+                    j += "}";
+                }
+            } else {
                 auto dr = dlsAll_.find(kv.first);
                 if (dr != dlsAll_.end() && !dr->second.text.empty()) {
                     char ab[40]; snprintf(ab, sizeof ab, "\",\"dlsAge\":%.0f", nowSec() - dr->second.at);

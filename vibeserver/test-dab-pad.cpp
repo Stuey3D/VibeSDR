@@ -21,6 +21,50 @@ static std::vector<uint8_t> group(const std::string& seg, bool first, bool last,
     return g;
 }
 
+/** One DLS TEXT data group, as group() but taking the segment as bytes (so a test may use the
+ *  EBU Latin high half, where one wire byte becomes two UTF-8 bytes). */
+static std::vector<uint8_t> dl(const std::string& seg, bool first, bool last, bool toggle) {
+    return group(seg, first, last, toggle);
+}
+
+/** ★ One DL Plus TAGS COMMAND data group (TS 102 980 clause 5.1).
+ *  prefix[0]: toggle/first/last, Command = 1, and the COMMAND NUMBER 2 in bits 3..0.
+ *  prefix[1]: the Link bit, and the body's LENGTH-1 in bits 3..0 — the byte the text form does
+ *             not use for length, which is exactly why it is easy to read from the wrong one.
+ *  body[0]:   0000, Item Toggle, Item Running, then NT = (number of tags - 1).
+ *  then NT+1 triplets of (content type, start marker, length marker-1), 7 bits each. */
+static std::vector<uint8_t> dlp(const std::vector<uint8_t>& triplets, bool it, bool ir) {
+    const size_t nTags = triplets.size() / 3;
+    std::vector<uint8_t> body{ uint8_t((it ? 0x08 : 0) | (ir ? 0x04 : 0) | uint8_t(nTags - 1)) };
+    body.insert(body.end(), triplets.begin(), triplets.end());
+    std::vector<uint8_t> g{ uint8_t(0x40 | 0x20 | 0x10 | 2), uint8_t(body.size() - 1) };
+    g.insert(g.end(), body.begin(), body.end());
+    const uint16_t c = dlsCrc16(g.data(), g.size());
+    g.push_back(uint8_t(c >> 8)); g.push_back(uint8_t(c & 0xFF));
+    return g;
+}
+
+/** Feed a whole group without restating its length at every call site. */
+static void push(DlsAssembler& a, const std::vector<uint8_t>& g) { a.pushGroup(g.data(), g.size()); }
+
+/** Is this valid UTF-8? The stats JSON carries it straight to the browser, where it is parsed. */
+static bool utf8Ok(const std::string& s) {
+    size_t i = 0;
+    while (i < s.size()) {
+        const uint8_t c = uint8_t(s[i]);
+        const size_t l = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 0;
+        if (l == 0 || i + l > s.size()) return false;
+        for (size_t k = 1; k < l; ++k) if ((uint8_t(s[i + k]) & 0xC0) != 0x80) return false;
+        i += l;
+    }
+    return true;
+}
+/** A raw control byte is not escaped by the stats JSON's esc() — it is DROPPED, so none may reach it. */
+static bool hasControl(const std::string& s) {
+    for (char c : s) if (uint8_t(c) < 0x20) return true;
+    return false;
+}
+
 int main() {
     printf("test-dab-pad\n");
 
@@ -183,6 +227,106 @@ int main() {
         const uint8_t plain[4] = { 0x21, 0x00, 0x49, 0x90 };          // an AU with no DSE
         r.feedAccessUnit(plain, 4);
         CHECK(r.xIndCount(0) == 1 && r.dseBad() == 0, "an AU without a DSE is 'no PAD', not an error");
+    }
+
+    /* ── ★★★ DL PLUS (TS 102 980) — the station's own division of the label ────────────────
+     *  Stuart, 2026-09-08: "I want our DAB implementation to be the best on the market." FM has
+     *  had RT+ for years (RdsDecoder::applyRtPlus); DAB parsed the command group and threw it
+     *  away with the comment "ignored for now". These pin the three things that are easy to get
+     *  wrong: which byte holds a COMMAND group's length, that markers count CHARACTERS, and that
+     *  a tag pointing into a label that has since changed must not survive. */
+    {
+        DlsAssembler a;
+        push(a, dl("Lou Reed - Perfe", true,  false, false));
+        push(a, dl("ct Day",           false, true,  false));
+        CHECK(a.label().text == "Lou Reed - Perfect Day", "the two-segment label assembles");
+        // artist = chars 0..7, title = chars 11..21
+        push(a, dlp({ 4,0,7, 1,11,10 }, true, true));
+        CHECK(a.label().hasDlPlus, "a tags command is recognised");
+        CHECK(a.label().tag(4) && *a.label().tag(4) == "Lou Reed", "★ tag 4 is the artist span");
+        CHECK(a.label().tag(1) && *a.label().tag(1) == "Perfect Day", "★ tag 1 is the title span");
+        CHECK(a.label().itemRunning, "item running");
+
+        /* ★★★ THE LENGTH OF A COMMAND GROUP IS IN prefix[1], NOT prefix[0] — prefix[0] bits 3..0
+         *  hold the COMMAND NUMBER, which is 2 for every tags command there will ever be. Read
+         *  from the wrong byte every command looks 3 bytes long: one tag, never two. */
+        CHECK(a.label().tags.size() == 2, "★ both tags survive — the length came from prefix[1]");
+
+        /* ★★★ A TAG BELONGS TO THE TEXT IT POINTS INTO. New label, no new tags: showing the old
+         *  artist under the new title is the fault this clears. */
+        push(a, dl("Something Else", true, true, true));
+        CHECK(a.label().text == "Something Else", "the next label replaces the last");
+        CHECK(a.label().tags.empty() && !a.label().hasDlPlus, "★ the old tags do not survive it");
+
+        // ★ Tags may arrive BEFORE the label completes; they are held, not dropped.
+        DlsAssembler b;
+        push(b, dlp({ 4,0,7, 1,11,10 }, true, true));
+        CHECK(b.label().tags.empty(), "a tags command with no label yet resolves to nothing");
+        push(b, dl("Lou Reed - Perfe", true,  false, false));
+        push(b, dl("ct Day",           false, true,  false));
+        CHECK(b.label().tag(4) && *b.label().tag(4) == "Lou Reed",
+              "★ a tags command that arrived first resolves when the label completes");
+
+        /* ★★★ THE MARKERS COUNT CHARACTERS, NOT BYTES. EBU Latin 0xC5 is one byte on the wire and
+         *  TWO in UTF-8. Slicing by byte offset cuts it in half — invalid UTF-8 into the stats
+         *  JSON, which is how RDS once killed the spectrum socket (Stuart, 2026-09-08: "make sure
+         *  we dont run into a glitch we had with RDS where broken packets translated into text
+         *  that broke the spectrum socket"). */
+        DlsAssembler c;
+        std::string acc = "Beyonc\xC2 - Halo";                        // 14 chars, 15 UTF-8 bytes
+        push(c, dl(acc, true, true, false));
+        CHECK(c.label().text.size() == 15, "the accent widened to two UTF-8 bytes");
+        push(c, dlp({ 4,0,6, 1,10,3 }, true, true));
+        CHECK(c.label().tag(1) && *c.label().tag(1) == "Halo", "★ a marker after a wide character still lands");
+        CHECK(c.label().tag(4) && *c.label().tag(4) == "Beyonc\xC3\x89",
+              "★ the artist span keeps the whole character, not half of it");
+    }
+
+    /* ── ★★★ CORRUPT GROUPS MUST NOT PRODUCE TEXT THAT BREAKS THE SOCKET ──────────────────
+     *  Stuart, 2026-09-08: "make sure we dont run into a glitch we had with RDS where broken
+     *  packets translated into text that broke the spectrum socket." A DL Plus tag is a (start,
+     *  length) pair the transmitter chooses, so a corrupt one indexes wherever it likes; the
+     *  label text reaches the browser inside the stats JSON, and invalid UTF-8 there is a
+     *  JSON.parse that throws. The client catches it — but a message dropped is a pane frozen,
+     *  so the guarantee belongs HERE, where the text is made.
+     *  ★ Biased at the DL Plus path on purpose: uniformly random bytes reach it about once in
+     *    8000 groups, which is a fuzz test that fuzzes almost nothing. */
+    {
+        uint32_t rng = 0x1234567u;
+        auto next = [&rng]() { rng = rng * 1664525u + 1013904223u; return rng >> 8; };
+        DlsAssembler a;
+        size_t tagObs = 0, resolved = 0;
+        for (int iter = 0; iter < 120000; ++iter) {
+            if (iter % 501 == 0) a.reset();
+            std::vector<uint8_t> g;
+            if (next() % 3) {                                  // a text segment, so tags have a target
+                const size_t len = 1 + next() % 16;
+                g.push_back(uint8_t((next() % 2 ? 0x40 : 0) | (next() % 2 ? 0x20 : 0) | (len - 1)));
+                g.push_back(uint8_t(next() % 2 ? 0x00 : 0xF0));           // EBU Latin or UTF-8
+                for (size_t k = 0; k < len; ++k) g.push_back(uint8_t(next()));
+            } else {                                           // a tags command with WILD markers
+                const size_t nt = next() % 4, blen = 1 + (nt + 1) * 3;
+                g.push_back(uint8_t(0x40 | 0x20 | 0x10 | 2));
+                g.push_back(uint8_t((next() % 2 ? 0x80 : 0) | (blen - 1)));
+                g.push_back(uint8_t(((next() % 16) << 4) | (next() % 2 ? 0x08 : 0)
+                                    | (next() % 2 ? 0x04 : 0) | nt));
+                for (size_t k = 0; k < (nt + 1) * 3; ++k) g.push_back(uint8_t(next()));
+            }
+            const uint16_t c = dlsCrc16(g.data(), g.size());   // valid CRC: the parser is REACHED
+            g.push_back(uint8_t(c >> 8)); g.push_back(uint8_t(c & 0xFF));
+            a.pushGroup(g.data(), g.size());
+
+            const auto& L = a.label();
+            if (!utf8Ok(L.text) || hasControl(L.text)) { CHECK(false, "★ a corrupt group produced an unsendable LABEL"); break; }
+            bool bad = false;
+            for (const auto& t : L.tags) {
+                if (!utf8Ok(t.text) || hasControl(t.text) || t.text.size() > L.text.size() || t.type == 0) bad = true;
+            }
+            if (bad) { CHECK(false, "★ a corrupt group produced an unsendable TAG"); break; }
+            if (L.tags.size() > 4) { CHECK(false, "★ more tags than NT can express"); break; }
+            tagObs += L.tags.size(); resolved += L.hasDlPlus ? 1 : 0;
+        }
+        CHECK(tagObs > 1000 && resolved > 1000, "★ the fuzz actually reached the DL Plus path");
     }
 
     if (fails == 0) printf("  all passed\n");

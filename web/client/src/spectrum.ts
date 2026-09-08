@@ -207,6 +207,10 @@ export interface DabState {
   rsFixed?: number; rsLost?: number; sfOk?: number; sfTried?: number; sfFireBad?: number;
   mp2In?: number; mp2Bad?: number; mp2Concealed?: number; mp2NoSync?: number;
   dls?: string; dlsCrcOk?: number; dlsCrcFail?: number;
+  /** ★ DL Plus (TS 102 980): the station's own division of the label into artist, title and the
+   *  rest — DAB's RT+, keyed by name. `dlpRunning` false means the ITEM has ended (an ad break,
+   *  the news) under a label the station has not cleared. */
+  dlp?: Record<string, string>; dlpRunning?: boolean;
   /** The RDS equivalents the ensemble broadcasts: clock (FIG 0/10), local offset, other blocks (0/21). */
   mjd?: number; utc?: string; lto?: number; altHz?: number[];
   /** Ofcom's licensed sites for this ensemble (nearest first when the receiver's position is known), and why the TII test failed. */

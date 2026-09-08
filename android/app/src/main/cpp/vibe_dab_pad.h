@@ -66,11 +66,57 @@ inline uint16_t dlsCrc16(const uint8_t* d, size_t n) {
     return uint16_t(~crc);
 }
 
+/** ★★★ DL PLUS CONTENT TYPES (ETSI TS 102 980 table 3) — the same table RDS RT+ uses, which is
+ *  the point: `RdsDecoder::applyRtPlus` already lifts title (1) and artist (4) out of FM
+ *  RadioText, and a listener who sees "artist / title" on 96.1 should see it on 12B too.
+ *  ★ Only the types worth SHOWING are named. An unnamed type is still carried — the tag list is
+ *    the decoder's output and the UI decides what to draw — but a radio that renders
+ *    "STATIONNOW.5" at a listener has not helped them. */
+inline const char* dlPlusTypeName(int type) {
+    switch (type) {
+        case 1:  return "title";        case 2:  return "album";
+        case 3:  return "track";        case 4:  return "artist";
+        case 5:  return "composer";     case 6:  return "band";
+        case 7:  return "comment";      case 8:  return "genre";
+        case 9:  return "news";         case 11: return "sport";
+        case 12: return "news";         case 15: return "weather";
+        case 16: return "traffic";      case 17: return "alarm";
+        case 18: return "advertisement";
+        case 25: return "presenter";    case 26: return "editor";
+        case 27: return "programme";    case 28: return "programme";
+        case 31: return "homepage";
+        case 33: return "phone";        case 36: return "email";
+        case 39: return "sms";
+        case 41: return "station";      case 42: return "slogan";
+        case 43: return "logo";         case 44: return "country";
+        default: return nullptr;
+    }
+}
+
+/** One DL Plus object: a span of the dynamic label, said to BE something. */
+struct DlPlusTag {
+    int         type = 0;      ///< TS 102 980 content type; 0 is DUMMY and is never stored
+    std::string text;          ///< the span of the label this tag points at, already UTF-8
+};
+
 /** The assembled dynamic label, plus enough state to know when it CHANGED rather than repeated. */
 struct DynamicLabel {
     std::string text;          ///< the complete label, UTF-8, once every segment has arrived
     uint32_t    changes = 0;   ///< how many complete, DIFFERENT labels have been seen
     bool        valid   = false;
+    /* ★★★ DL PLUS (TS 102 980): the station saying which PART of the label is the artist and
+     *  which is the title, instead of leaving a receiver to guess at the dash. */
+    std::vector<DlPlusTag> tags;             ///< the tagged objects, in transmission order
+    bool        itemToggle  = false;         ///< flips when the ITEM (the track) changes
+    bool        itemRunning = false;         ///< false = the item has ended (an ad break, news)
+    bool        hasDlPlus   = false;         ///< a tags command has been received for this label
+    uint32_t    itemChanges = 0;             ///< how many times itemToggle has flipped
+
+    /** The text of the first tag of a given content type, or empty. */
+    const std::string* tag(int type) const {
+        for (const auto& t : tags) if (t.type == type) return &t.text;
+        return nullptr;
+    }
 };
 
 /** ★★★ ASSEMBLES ONE DYNAMIC LABEL FROM ITS SEGMENTS (EN 300 401 7.4.5.2).
@@ -103,9 +149,33 @@ public:
         if (cmd) {
             /* ★ A command group, not text. Command 1 is "clear display" — the station telling us
              *  it has nothing to say, which must blank the label rather than leave the last track
-             *  showing under the next programme. Command 2 (DL Plus, TS 102 980) is tagging over
-             *  the current text and is ignored for now. */
-            if ((g[0] & 0x0F) == 1) { label_.text.clear(); label_.valid = true; ++label_.changes; }
+             *  showing under the next programme. */
+            if ((g[0] & 0x0F) == 1) {
+                label_.text.clear(); label_.valid = true; ++label_.changes;
+                clearDlPlus();                    // the tags pointed into text that is now gone
+                return;
+            }
+            /* ★★★ COMMAND 2 IS DL PLUS, AND ITS LENGTH IS IN THE OTHER BYTE. A text segment's
+             *  length is prefix[0] bits 3..0; a command group's is prefix[1] bits 3..0
+             *  (TS 102 980 clause 5.1). Reading it from prefix[0] — where the COMMAND NUMBER
+             *  lives — yields length 3 for every tags command there will ever be, which is
+             *  exactly long enough to look plausible and always one tag short.
+             *  ★ And its reassembly is gated on the LINK BIT, not the toggle: prefix[1] bit 7
+             *    associates a tags command with the label it describes, and the toggle in a
+             *    command group's prefix[0] is not the label's toggle. */
+            if ((g[0] & 0x0F) != 2) return;                    // no other command is defined
+            if (bodyLen < 2) return;
+            const size_t cmdLen = size_t(g[1] & 0x0F) + 1;
+            if (2 + cmdLen > bodyLen) return;
+            const bool link  = (g[1] & 0x80) != 0;
+            const bool cFirst = (g[0] & 0x40) != 0;
+            const bool cLast  = (g[0] & 0x20) != 0;
+            if (cFirst || link != dpLink_) { dpBuild_.clear(); dpLink_ = link; dpStarted_ = cFirst; }
+            if (!dpStarted_ && !cFirst) return;                // joined mid-command
+            dpStarted_ = true;
+            dpBuild_.insert(dpBuild_.end(), g + 2, g + 2 + cmdLen);
+            if (dpBuild_.size() > 64) { dpBuild_.clear(); dpStarted_ = false; return; }
+            if (cLast) { applyDlPlus(dpBuild_); dpBuild_.clear(); dpStarted_ = false; }
             return;
         }
         const size_t segLen = size_t(g[0] & 0x0F) + 1;
@@ -121,15 +191,82 @@ public:
         if (last) {
             std::string t = dabTextToUtf8(build_.data(), build_.size(), charset_);
             while (!t.empty() && (t.back() == ' ' || t.back() == '\0')) t.pop_back();
-            if (t != label_.text) { label_.text = t; ++label_.changes; }
+            /* ★★★ THE TAGS BELONG TO THE TEXT THEY POINT INTO. A DL Plus tag is a (start, length)
+             *  pair indexing the label — so the instant the label changes, every tag held from
+             *  the previous one describes a span of text that no longer exists. Keeping them is
+             *  how a receiver shows the last track's artist under the new track's title. */
+            if (t != label_.text) { label_.text = t; ++label_.changes; clearDlPlus(); }
             label_.valid = true;
             build_.clear(); started_ = false;
+            /* ★ A tags command that arrived BEFORE its label completed is held, not dropped:
+             *  the two are separate data groups and nothing guarantees their order. */
+            if (!dpPending_.empty()) resolveDlPlus();
         }
     }
     const DynamicLabel& label() const { return label_; }
+
+private:
+    /** Forget every tag. The label itself is untouched — text without tags is still a label. */
+    void clearDlPlus() {
+        label_.tags.clear(); label_.hasDlPlus = false;
+    }
+
+    /** Hold a complete tags command, and resolve it as soon as there is a label to resolve against. */
+    void applyDlPlus(const std::vector<uint8_t>& raw) {
+        if (raw.empty()) return;
+        /* ★ High nibble 0 marks the "DL Plus tags" command. TS 102 980 reserves the rest, and a
+         *  reserved command whose body we parsed as tags would publish garbage as a track name. */
+        if ((raw[0] >> 4) != 0) return;
+        dpPending_ = raw;
+        if (label_.valid) resolveDlPlus();
+    }
+
+    /** ★★★ THE MARKERS COUNT CHARACTERS, NOT BYTES. start and length index the dynamic label as
+     *  the listener reads it, and our label is already UTF-8 — where an EBU Latin byte ≥ 0x80
+     *  (every accent, and the whole of Greek and Cyrillic) has become two or three bytes. Slicing
+     *  by byte offset therefore cuts a multi-byte character in half on exactly the stations whose
+     *  names most need the accents, and hands the UI invalid UTF-8. So the offsets are walked as
+     *  characters. */
+    void resolveDlPlus() {
+        std::vector<uint8_t> raw;
+        raw.swap(dpPending_);
+        if (raw.empty() || !label_.valid) return;
+
+        const bool it = (raw[0] & 0x08) != 0;
+        if (label_.hasDlPlus && it != label_.itemToggle) ++label_.itemChanges;
+        label_.itemToggle  = it;
+        label_.itemRunning = (raw[0] & 0x04) != 0;
+        const size_t nTags = size_t(raw[0] & 0x03) + 1;      // NT is the count MINUS one
+        if (1 + nTags * 3 > raw.size()) return;              // truncated — publish nothing
+
+        // Character boundaries of the label, so a marker pair becomes a byte range.
+        std::vector<size_t> at;                              // byte offset of each character
+        for (size_t i = 0; i < label_.text.size(); ++i)
+            if ((uint8_t(label_.text[i]) & 0xC0) != 0x80) at.push_back(i);
+        at.push_back(label_.text.size());
+        const size_t nChars = at.size() - 1;
+
+        label_.tags.clear();
+        for (size_t i = 0; i < nTags; ++i) {
+            const uint8_t* t = &raw[1 + i * 3];
+            const int type = t[0] & 0x7F;
+            if (type == 0) continue;                         // DUMMY — a padded-out tag slot
+            const size_t start = size_t(t[1] & 0x7F);
+            const size_t len   = size_t(t[2] & 0x7F) + 1;    // stored as length-1
+            if (start >= nChars) continue;                   // points past the label we hold
+            const size_t end = start + len > nChars ? nChars : start + len;
+            label_.tags.push_back(DlPlusTag{ type, label_.text.substr(at[start], at[end] - at[start]) });
+        }
+        label_.hasDlPlus = true;
+    }
+
+public:
     uint32_t crcOk()   const { return crcOk_; }
     uint32_t crcFail() const { return crcFail_; }
-    void reset() { build_.clear(); started_ = false; label_ = DynamicLabel{}; }
+    void reset() {
+        build_.clear(); started_ = false; label_ = DynamicLabel{};
+        dpBuild_.clear(); dpPending_.clear(); dpStarted_ = false;
+    }
 
 private:
     std::vector<uint8_t> build_;
@@ -138,6 +275,11 @@ private:
     bool     started_ = false;
     uint8_t  charset_ = kCharsetEbuLatin;
     uint32_t crcOk_ = 0, crcFail_ = 0;
+    // ── DL Plus: a second reassembly, gated on the link bit rather than the toggle ──────────
+    std::vector<uint8_t> dpBuild_;      ///< the tags command being assembled from its segments
+    std::vector<uint8_t> dpPending_;    ///< a complete command waiting for a label to point into
+    bool     dpLink_    = false;
+    bool     dpStarted_ = false;
 };
 
 /** ★★★ WALKS THE PAD OF ONE AUDIO FRAME OR ACCESS UNIT AND FEEDS OUT THE DATA GROUPS IT CARRIES.

@@ -4540,6 +4540,20 @@ function dabRender() {
         : '')
     /* ★ Always present: a row that comes and goes with its value rebuilds the pane and jumps it. */
     + row('Now playing', d.dls ? `<span class="dls"><span class="dlsIn">${escapeHtml(d.dls)}</span></span>` : '—')
+    /* ★★★ DL PLUS — WHAT THE STATION SAYS THE LABEL MEANS. Everything here is a span of the
+     *  "Now playing" line above it, so the rows are drawn under it and only when tagged. The
+     *  order is fixed (artist, title, then the rest as sent) rather than following transmission
+     *  order, or the pane's rows would reshuffle themselves mid-track. */
+    + (d.dlp ? (['artist', 'title', 'album', 'track', 'composer', 'band', 'presenter', 'programme',
+                 'genre', 'station', 'slogan', 'comment', 'homepage', 'phone', 'email', 'sms',
+                 'news', 'sport', 'weather', 'traffic', 'alarm', 'advertisement', 'country']
+                .filter(k => d.dlp![k])
+                .map(k => row(k[0].toUpperCase() + k.slice(1),
+                              `<span class="dls"><span class="dlsIn">${escapeHtml(d.dlp![k])}</span></span>`))
+                .join('')
+              + (d.dlpRunning === false
+                  ? row('Item', tl('ended — the label is not the current item', 'warn')) : ''))
+             : '')
     + '<h4>PHYSICAL LAYER</h4>'
     + row('Lock', tl(d.locked ? 'locked' : 'searching', d.locked ? 'ok' : 'bad'))
     /* ★ Requested and actual, side by side — the pair that separates "cannot decode" from
