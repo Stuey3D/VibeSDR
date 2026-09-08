@@ -214,38 +214,11 @@ public:
             if (!started_) { started_ = true; stop_ = false;
                              worker_ = std::thread([this] { workerLoop(); }); }
             samplesIn_ += nSamples;
-            /* ★★★ THROW AWAY THE IQ THAT ARRIVES BEFORE THE RADIO HAS ACTUALLY MOVED.
-             *
-             *  ★★★ THE FAULT, and it is user-visible on every platform. Stuart: "when you first
-             *      activate dab mode it seems to default to 12B ... it looks like you should have
-             *      a signal judging by the spectrum but nothing locks in, tune away then back and
-             *      it works" — and it does the same on the XCover and on the Pi. MEASURED on the
-             *      XCover, tuning 11A while the radio sat on 10D:
-             *          first attempt   frames 0    locked false   rfCentre 215072000  (10D!)
-             *          second attempt  frames 495  locked true    rfCentre 216928000
-             *
-             *  ★★★ WHY IT CANNOT RECOVER BY ITSELF. tuneHw() QUEUES the frequency onto the
-             *      hardware-writer thread, so the dsp loop goes on delivering samples from the
-             *      OLD multiplex for as long as that takes. The receiver has just been reset by
-             *      setChannel, so it acquires on that — and acquisition is deliberately TRACKED
-             *      rather than re-taken every frame (see the note in workerLoop: re-acquiring per
-             *      frame costs a frame every time some other dip is deeper). Having locked onto
-             *      the wrong signal, it keeps tracking it. Tuning away and back works only
-             *      because by then the radio is already sitting still.
-             *
-             *  ★★ AND THE CENTRE CANNOT BE USED TO DETECT IT: rtlCenter is stored BEFORE tuneHw,
-             *     so rfCentre_ reports the NEW multiplex while the hardware is still on the old
-             *     one. The service has to be TOLD a retune is in flight — hence armRetune().
-             *  ★ Counted in SAMPLES, not milliseconds: the capture rate is the clock that matters
-             *    and it makes the settle identical on a fast phone and a slow Pi. */
             if (settleDrop_ > 0) {
                 const size_t drop = nSamples < settleDrop_ ? nSamples : settleDrop_;
                 settleDrop_ -= drop;
                 preTuneDropped_ += uint32_t(drop);
                 if (settleDrop_ == 0) {
-                    /* ★ Everything that could hold state from the old frequency, together — a
-                     *  half-assembled LSF pair or a stale AAC decoder would outlive the retune
-                     *  exactly as the sync did. */
                     rx_.reset(); iq_.clear(); lsfPend_.clear();
                     mp2_.reset(); aac_.reset(); pad_.reset(); adts_.clear();
                     aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacPrimed_ = false;
@@ -254,27 +227,27 @@ public:
                 }
                 return;
             }
-            /* ★★★ THE DONGLE RUNS AT 2.4 MS/s AND THE DECODER GETS 2.048. See
-             *  vibe_dab_resample.h: RTL-SDRs are unreliable at 2.048 — every OpenWebRX DAB
-             *  profile Stuart has is 2.4, SDRangel had the same trouble, and our own XCover
-             *  delivered only 94% of the samples at 2.048 while the Pi managed 100%. 2.4 MS/s is
-             *  an exact 28.8/12 division of the crystal. The 64/75 ratio is exact, so the symbol
-             *  timing cannot drift. */
-            const float* src = interleaved;
-            size_t       n   = nSamples;
-            if (std::fabs(rfRate_ - 2400000.0) < 1000.0) {
-                rsOut_.clear();
-                rs_.process(interleaved, nSamples, rsOut_);
-                src = rsOut_.data();
-                n   = rsOut_.size() / 2;
-            }
+        }
+        /* ★★★ THE RATE CONVERTER RUNS OUTSIDE THE DECODER'S MUTEX. It was inside it — and it was
+         *  70 % of the receiver's CPU (see vibe_dab_resample.h), so for most of every block the
+         *  worker thread could not take IQ and the DSP thread could not hand it over: two
+         *  real-time threads serialised on the one lock, on the phone, for nothing. rs_ and
+         *  rsOut_ are only ever touched by the thread that calls feed() (the DSP loop; dab-offline's
+         *  main), so they need no lock at all. Only the append to iq_ does. */
+        const float* src = interleaved;
+        size_t       n   = nSamples;
+        if (std::fabs(rfRate_ - 2400000.0) < 1000.0) {
+            rsOut_.clear();
+            rs_.process(interleaved, nSamples, rsOut_);
+            src = rsOut_.data();
+            n   = rsOut_.size() / 2;
+        }
+        {
+            std::lock_guard<std::mutex> lk(m_);
             const size_t base = iq_.size();
             iq_.resize(base + n);
             for (size_t i = 0; i < n; ++i)
                 iq_[base + i] = { src[2 * i], src[2 * i + 1] };
-            /* ★ Bound the backlog here, where the producer is: if the worker cannot keep up, the
-             *  OLDEST samples go. Audio minutes late is worse than a gap, and now the drop is
-             *  ours and counted rather than the driver's and silent. */
             const size_t need = size_t(modeI().frameSamples) * 2;
             if (iq_.size() > need * 4) {
                 dropped_ += uint32_t(iq_.size() - need * 2);
@@ -283,8 +256,6 @@ public:
         }
         cv_.notify_one();
     }
-
-    /** Stop the decode thread. Safe to call more than once. */
     void stopWorker() {
         { std::lock_guard<std::mutex> lk(m_); stop_ = true; }
         cv_.notify_all();

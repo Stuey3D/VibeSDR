@@ -53,10 +53,23 @@
   }
 #elif defined(__APPLE__)
   #include <pthread.h>
-  // ★ macOS names the CALLING thread and takes no handle. There is no portable nice() equivalent
-  //   worth reaching for here — the Mac build is a desktop receiver, not a loaded shared server.
+  #include <pthread/qos.h>
+  // ★ macOS names the CALLING thread and takes no handle.
   inline void vibeThreadName(const char* name) { pthread_setname_np(name); }
-  inline void vibeAudioThread(const char* name) { pthread_setname_np(name); }
+  /* ★★★ THE MAC BUILD IS A SERVER TOO, and this used to do nothing but name the thread. "The Mac
+   *  build is a desktop receiver, not a loaded shared server" was the comment here — and then the
+   *  notarised Mac VibeServer shipped (V5), with DAB, serving the same tunnel the Pi does. Its
+   *  20 ms audio clock, its USB reader and its DSP loop were all running at the default QoS,
+   *  which macOS is free to throttle behind a Safari tab.
+   *  ★ QOS_CLASS_USER_INTERACTIVE is the highest class a process may ask for without entitlements
+   *    and is what CoreAudio's own render threads sit near; it is the honest equivalent of the
+   *    nice -19 the Linux and Android builds take. A time-constraint policy would be stronger and
+   *    is deliberately not used: it needs the thread's period and computation declared, and a
+   *    wrong declaration is worse than a good QoS. */
+  inline void vibeAudioThread(const char* name) {
+      pthread_setname_np(name);
+      pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+  }
 #else
   inline void vibeThreadName(const char*) {}
   inline void vibeAudioThread(const char*) {}

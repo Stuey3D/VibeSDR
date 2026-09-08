@@ -4801,7 +4801,29 @@ struct LocalSdrShim::Impl {
             if (specClient && specClient->isOpen()) acc(specClient);
             for (auto& s : specExtra) if (s && s->isOpen()) acc(s);
         }
-        if (want <= 0) want = baseFftRate;
+        /* ★★★ NOBODY IS WATCHING: RUN THE ENGINE AT WHAT THE HOUSEKEEPING NEEDS, NOT THE BASE RATE.
+         *
+         *  `want` is 0 here exactly when there is no spectrum client at all, and this fell back
+         *  to baseFftRate — 20 fps x FFT_AVG(4) = 80 wide FFTs a second of 2.4 MS/s, for no one.
+         *  Measured on the XCover with zero listeners, 2026-09-08: vibe-dsp 21.8 % of a core,
+         *  idle; on the Pi the RSP1B's chain sat at 20 % the same way. That is battery on a phone
+         *  serving nobody, and heat on a Pi doing nothing.
+         *
+         *  ★★ WHAT STILL NEEDS ROWS WHEN NOBODY IS WATCHING, and why 2 fps covers all of it:
+         *     - the landing-page spectrogram folds wide rows and emits one a MINUTE;
+         *     - measureBands() wants a few rows per window;
+         *     - VibeAGC reads g_adcPeakDbfs, which is TIME-DOMAIN (the IQ peak in the reader),
+         *       not the FFT — so the gain loop is untouched by this. Stuart's condition for the
+         *       RSP1B was "gotta make sure the SDRPlay AGC remains working": it does, because it
+         *       never depended on this rate.
+         *     - DAB has its own path and never used the wide FFT.
+         *  ★★ NOT A LIMIT — never limit permanently. The first client to arrive lands in
+         *     recomputeEngineRate() with its own fps and this branch is not taken. Same rule as
+         *     the audio-chain idle gate above it.
+         *  ★ FFT_AVG still applies, so 2 fps here is 8 FFTs a second: the rows the spectrogram
+         *    gets are averaged the same way as when someone is watching. */
+        static constexpr double kIdleFps = 2.0;
+        if (want <= 0) want = std::min(baseFftRate, kIdleFps);
         const double mr = g_vsMaxFftRate.load();     // the owner's ceiling still wins
         if (mr > 0 && want > mr) want = mr;
         if (want <= 0 || std::fabs(want - fftRate) < 0.01) return;
@@ -4811,6 +4833,10 @@ struct LocalSdrShim::Impl {
     /** Set the engine rate itself. The per-client decimation below turns this into each
      *  listener's own rate; nothing else should call rx.setFftRate directly. */
     void applyEngineRate(double fps) {
+        // ★ Logged, so an idle floor or a listener's request can be SEEN taking effect rather than
+        //   inferred from a CPU figure — the 2 fps idle floor was verified this way.
+        if (std::fabs(fps - fftRate) >= 0.01)
+            LOGI("engine FFT rate %.1f -> %.1f fps (x%d)", fftRate, fps, FFT_AVG);
         fftRate = fps;
         // The engine runs at FFT_AVG× the EMIT rate — onSpectrum block-averages FFT_AVG frames
         // into each one it sends. Pass the raw fps and everything comes out 4× too slow.
@@ -17655,6 +17681,10 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     impl->fftSize = fftSize;
     impl->fftRate = fftRate;
     impl->baseFftRate = fftRate;   // the owner's default — the floor every listener rate is measured against
+    /* ★ Apply the idle floor NOW, not on the first client event: with nobody connected at
+     *  start the engine otherwise runs at the base rate until somebody arrives and LEAVES —
+     *  which is how the floor measured 8.6 % after a DAB session and 19 % on a fresh launch. */
+    impl->recomputeEngineRate();
     // VibeServer waterfall frame-rate throttle: a serving host can cap fps (Full
     // 20 / Half 10 / Quarter 5) to save CPU and wire data. The client interpolates
     // the waterfall, so a lower rate still scrolls smoothly.
@@ -17928,6 +17958,10 @@ int LocalSdrShim::startHackRfCommon(int index, int fd,
     auto* impl = new Impl();
     impl->fftRate = fftRate;
     impl->baseFftRate = fftRate;
+    /* ★ Apply the idle floor NOW, not on the first client event: with nobody connected at
+     *  start the engine otherwise runs at the base rate until somebody arrives and LEAVES —
+     *  which is how the floor measured 8.6 % after a DAB session and 19 % on a fresh launch. */
+    impl->recomputeEngineRate();
     impl->rtlCenter.store(centerFreq);
     impl->viewCenter.store(centerFreq);
     impl->audioFreq.store(centerFreq);
