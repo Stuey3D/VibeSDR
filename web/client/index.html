@@ -1123,6 +1123,20 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 .dabHeadSub .dls { flex:1 1 auto; min-width:0; overflow:hidden; white-space:nowrap; }
 .dabHeadSub .dlsIn { display:inline-block; }
 .dabHeadSub .dlsIn.scroll { animation: dabDls 12s linear infinite; }
+/* ★★★ THE ANNOUNCEMENT LAMP — a car's TA indicator, with TA switching OFF (Stuart, 2026-09-08:
+ *  "dont auto tune but if we can show the signal being recieved that would be good. Like in a car
+ *  with TA off"). DAB's two announcement FIGs map exactly onto a car radio's two lamps: FIG 0/18
+ *  (this service SUPPORTS announcements) is TP and sits dim; FIG 0/19 (one is running NOW) is TA
+ *  and lights. The radio never retunes — on a shared VFO that would drag every other listener off
+ *  the station they chose. */
+.dabAnn { flex:0 0 auto; font-size:9px; letter-spacing:1px; padding:1px 5px; border-radius:3px;
+          border:1px solid var(--btn-border); color:var(--unit); opacity:.45; }
+.dabAnn.on { opacity:1; color:#0c0f0c; background:#e8b33a; border-color:#e8b33a;
+             animation: dabAnnPulse 1.6s ease-in-out infinite; }
+/* ★ Alarm is the one type a receiver must never bury (EN 300 401 8.1.6.1) — it takes the bad
+ *  colour and pulses faster, so it is distinguishable from a traffic flash at a glance. */
+.dabAnn.alarm { color:#fff; background:#c0392b; border-color:#c0392b; animation-duration:.7s; }
+@keyframes dabAnnPulse { 0%,100% { opacity:1; } 50% { opacity:.55; } }
 #bmFilterBar { display:flex; align-items:center; gap:8px; padding:6px 10px; font-size:10.5px; letter-spacing:1px; opacity:.85; border-bottom:1px solid var(--btn-border); }
 #bmFilterBar a { color:#7ee68a; cursor:pointer; text-decoration:underline; }
 #dabSignal h4 { margin:10px 0 4px; font-size:10px; letter-spacing:2px; color:var(--unit);

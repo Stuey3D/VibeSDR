@@ -4355,6 +4355,40 @@ const DAB_PTY: string[] = ['None', 'News', 'Current Affairs', 'Information', 'Sp
   'Serious Classical', 'Other Music', 'Weather', 'Finance', "Children's", 'Social Affairs', 'Religion',
   'Phone In', 'Travel', 'Leisure', 'Jazz', 'Country', 'National Music', 'Oldies', 'Folk', 'Documentary'];
 
+/** ★★★ THE ANNOUNCEMENT LAMP — a car's TA indicator, with TA switching turned OFF.
+ *
+ *  Stuart, 2026-09-08: "dont auto tune but if we can show the signal being recieved that would be
+ *  good. Like in a car with TA off." DAB's two announcement FIGs map straight onto a car radio's
+ *  two lamps and it is worth naming the correspondence, because it is what makes the display
+ *  legible without a manual:
+ *      FIG 0/18, announcement SUPPORT  = TP — this service carries announcements at all. Dim.
+ *      FIG 0/19, announcement SWITCHING = TA — one is running RIGHT NOW. Lit, and pulsing.
+ *  The lamp is a statement about the multiplex, never a control: we do not retune, because on a
+ *  shared VFO one listener's traffic flash would drag every other listener off the station they
+ *  chose. The title carries the detail — which types, and which service is actually carrying it.
+ *  ★ ALARM outranks everything (EN 300 401 8.1.6.1) and is drawn differently, not merely first.
+ */
+function annLamp(d: DabState): string {
+  const live = (d.announce || []).filter(a => a.types.length);
+  if (live.length) {
+    const alarm = live.some(a => a.alarm);
+    /* ★ Alarm first whatever order the multiplex sent them in, then the rest as sent. */
+    const ordered = live.slice().sort((a, b) => Number(b.alarm) - Number(a.alarm));
+    const types = Array.from(new Set(ordered.flatMap(a => a.types)));
+    const on = ordered.map(a => a.on).filter(Boolean);
+    const tip = `${types.join(', ')} announcement on air`
+              + (on.length ? ` — carried on ${Array.from(new Set(on)).join(', ')}` : '')
+              + '. The radio does not switch to it: other listeners share this receiver.';
+    return `<span class="dabAnn on${alarm ? ' alarm' : ''}" title="${escapeHtml(tip)}">`
+         + `${alarm ? 'ALARM' : escapeHtml(types[0].toUpperCase())}</span>`;
+  }
+  if (d.announceSupport && d.announceSupport.length) {
+    return `<span class="dabAnn" title="${escapeHtml('This service carries announcements: '
+             + d.announceSupport.join(', ') + '. None is running now.')}">ANN</span>`;
+  }
+  return '';
+}
+
 function dabSetPane(p: 'stations' | 'signal') {
   dabPane = p;
   const st = document.getElementById('dabStations');
@@ -4465,7 +4499,8 @@ function dabRender() {
     ? `<div class="dabHead">${curLogo ? `<img class="dabHeadLogo" src="${curLogo}" alt="">` : '<div class="dabHeadLogo"></div>'}`
       + `<div class="dabHeadText"><div class="dabHeadName">${escapeHtml(cur.label)}</div>`
       + `<div class="dabHeadSub"><span class="fix">${escapeHtml(cur.codec)}${cur.kbps ? ' ' + cur.kbps + ' kbit/s' : ''}${d.dls ? ' ·' : ''}</span>`
-      + (d.dls ? `<span class="dls"><span class="dlsIn">${escapeHtml(d.dls)}</span></span>` : '') + `</div></div></div>`
+      + (d.dls ? `<span class="dls"><span class="dlsIn">${escapeHtml(d.dls)}</span></span>` : '')
+      + annLamp(d) + `</div></div></div>`
     : '';
   /* ★ The header lives in its own element and is rewritten only when it changes, so the radio
    *  text's marquee survives the twice-a-second rebuild of the numbers below it. */
