@@ -2191,11 +2191,29 @@ static std::atomic<bool>   g_radioOrphaned{false};
  *    the existing unplugged banner is the right message for that. */
 static std::mutex          g_radioBusyMtx;
 static std::string         g_radioBusyWhy;
+static double              g_radioBusyAt = 0.0;
+/** ★★★ AND IT AGES OUT, because we only LEARN the radio is taken by trying to take it back. The
+ *  other program can hand it over at any moment and nothing tells us; without an expiry a single
+ *  failed attempt would grey that radio out in the picker for ever, which is a worse lie than the
+ *  one this fixes. Sixty seconds: long enough that a visitor who reads the card and clicks it
+ *  still gets the truth, short enough that a released dongle comes back on the next glance.
+ *  ★ NOT a probe. Opening the device speculatively to find out would poke a dongle another
+ *    program is actively streaming from, and this project has already learned what talking to a
+ *    busy radio costs (rtl_sdr tools, the usb nudge). The next real listener finds out for us. */
+static constexpr double    kRadioBusyTtlSec = 60.0;
 static void setRadioBusyReason(const std::string& why) {
-    std::lock_guard<std::mutex> lk(g_radioBusyMtx); g_radioBusyWhy = why;
+    std::lock_guard<std::mutex> lk(g_radioBusyMtx);
+    g_radioBusyWhy = why;
+    g_radioBusyAt  = why.empty() ? 0.0
+        : std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 static std::string radioBusyReason() {
-    std::lock_guard<std::mutex> lk(g_radioBusyMtx); return g_radioBusyWhy;
+    std::lock_guard<std::mutex> lk(g_radioBusyMtx);
+    if (g_radioBusyWhy.empty()) return {};
+    const double now = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (now - g_radioBusyAt > kRadioBusyTtlSec) return {};   // stale — let the card read free again
+    return g_radioBusyWhy;
 }
 /** ★★ THE RTL'S OVERLOAD READINGS, published once a second from the IQ thread. `peak` is how close
  *  the loudest sample came to full scale (0 dBFS = on the rail); `clip` is the percentage of
@@ -11302,6 +11320,16 @@ struct LocalSdrShim::Impl {
                              //    else. A client that does not know this key sees today's "IN
                              //    USE", which is the safe way to be wrong.
                              + (vsClaimNow ? std::string(",\"claimable\":true") : std::string())
+                             /* ★★★ THE RADIO IS BORROWED — SAY SO ON THE CARD. Stuart, 2026-09-08:
+                              *  "it should also grey itself out in the selction window on a multi
+                              *  radio server too to prevent a user trying to connect to a radio
+                              *  that cannot be used." Without this the card reads FREE, because
+                              *  free is exactly what it looks like from the listener count: nobody
+                              *  is on it. They pick it, and it sits there.
+                              *  ★ Omitted when we hold the radio, so an older client is unchanged
+                              *    and a newer one reads absence as "nothing to say". */
+                             + (radioBusyReason().empty() ? std::string()
+                                  : ",\"radioBusy\":\"" + vibeadmin::esc(radioBusyReason()) + "\"")
                              // ★★★ WHO MAY TUNE — the third usage mode. OMITTED when exclusive, so
                              //     an older client sees exactly what it saw before and a newer one
                              //     reads absence as "today's behaviour". Same rule as limitMode.

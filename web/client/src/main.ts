@@ -3603,10 +3603,19 @@ function radioCardState(r: any, st: any): { state: string; blocked: boolean } {
   //    fiction lives on this card and nowhere else.
   // ★ Absent = today's behaviour, so an older server still reads as IN USE.
   const claimable = st?.claimable === true;
+  /* ★★★ BORROWED BY ANOTHER PROGRAM ON THAT MACHINE, and it must READ as unusable. The idle
+   *  release hands the dongle to whatever else wants it (OWRX, rtl_fm, anything), and while it is
+   *  gone the listener count is ZERO — so the card said FREE, which is the most misleading answer
+   *  available: somebody picks it and watches nothing happen. Stuart hit exactly this on Saber's
+   *  server and concluded the RTL was broken.
+   *  ★ Blocked rather than merely labelled: there is nothing a visitor can do here, and a
+   *    clickable card that leads to a dead waterfall is worse than one they cannot click. */
+  const busyElsewhere = typeof st?.radioBusy === 'string' && st.radioBusy !== '';
   const full = !down && max > 0 && listeners >= max && !claimable;
   const admin = inAdminMode();
   let state: string;
   if (down)         state = 'NOT RESPONDING';
+  else if (busyElsewhere) state = 'IN USE BY ANOTHER APP';
   else if (full && admin) state = freeIn >= 0 ? `IN USE ${mmss(freeIn)} · TAKE OVER`
                                               : 'IN USE · TAKE OVER';
   else if (full && freeIn >= 0) state = `FULL · FREE IN ${mmss(freeIn)}`;
@@ -3617,7 +3626,7 @@ function radioCardState(r: any, st: any): { state: string; blocked: boolean } {
   else if (claimable) state = 'FREE';
   else if (max > 1) state = `${listeners} OF ${max} LISTENING`;
   else              state = 'FREE';
-  return { state, blocked: down || (full && !admin) };
+  return { state, blocked: down || busyElsewhere || (full && !admin) };
 }
 
 /** ★★★ THE AERIAL ICONS — ONE SET, DRAWN THE SAME EVERYWHERE.
