@@ -320,9 +320,24 @@ struct DabView: View {
       Image(systemName: playing ? "speaker.wave.2.fill" : "circle")
         .font(.system(size: playing ? 11 : 7, weight: .semibold))
         .foregroundStyle(playing ? .green : .white.opacity(0.3)).frame(width: 14)
-      Text(svc.name)
-        .font(.system(size: 14, weight: playing ? .bold : .semibold, design: .rounded))
-        .foregroundStyle(playing ? .white : .white.opacity(0.85)).lineLimit(1).minimumScaleFactor(0.7)
+      /* ★ The station's picture, when the server has one. A fixed box whether or not it does, so
+       *  the names do not shuffle sideways as logos land — the phone panel's rule. */
+      if let u = svc.logo {
+        AsyncImage(url: u) { img in img.resizable().scaledToFit() } placeholder: { Color.clear }
+          .frame(width: 20, height: 20).clipShape(RoundedRectangle(cornerRadius: 3))
+      }
+      VStack(alignment: .leading, spacing: 1) {
+        Text(svc.name)
+          .font(.system(size: 14, weight: playing ? .bold : .semibold, design: .rounded))
+          .foregroundStyle(playing ? .white : .white.opacity(0.85)).lineLimit(1).minimumScaleFactor(0.7)
+        /* ★ Every station's live text, as the phone and the browser show it. Truncated, not
+         *  scrolled: a moving label per row is a battery cost for a glance. */
+        if !svc.dls.isEmpty {
+          Text(svc.dls)
+            .font(.system(size: 9, weight: .medium)).foregroundStyle(.white.opacity(0.55))
+            .lineLimit(1).truncationMode(.tail)
+        }
+      }
       Spacer(minLength: 0)
     }
     .padding(.horizontal, 8).padding(.vertical, 7)

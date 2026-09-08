@@ -1129,10 +1129,22 @@ final class UberClient: ObservableObject {
     // ★★ CAPPED. A corrupt length field is exactly how a service list becomes ten thousand rows,
     //    and the cost of that lands on a watch's render thread. 64 is far above any legal mux.
     if let svcs = j["services"] as? [[String: Any]] {
+      let httpScheme = secure ? "https" : "http"
       let list: [DabProgramme] = svcs.prefix(64).compactMap { sv in
         guard let sid = (sv["sid"] as? NSNumber)?.intValue else { return nil }
         let name = dabSafe(sv["label"], 32)
-        return DabProgramme(id: sid, name: name.isEmpty ? String(sid, radix: 16).uppercased() : name)
+        /* ★ The picture the server already holds for this service: the off-air SPI carousel first,
+         *  the slideshow as cover art second. No RadioDNS lookup from the wrist — the phone and the
+         *  browser do that, and a watch fetching twenty JSON files per multiplex is a battery cost
+         *  for a picture the server will usually have off the air anyway. */
+        var logo: URL? = nil
+        if (sv["logoAir"] as? Bool) == true {
+          logo = URL(string: "\(httpScheme)://\(host)\(radioPath)/vibeserver/dablogoair?sid=\(sid)")
+        } else if (sv["logoSlide"] as? Bool) == true {
+          logo = URL(string: "\(httpScheme)://\(host)\(radioPath)/vibeserver/dabslide?sid=\(sid)")
+        }
+        return DabProgramme(id: sid, name: name.isEmpty ? String(sid, radix: 16).uppercased() : name,
+                            dls: dabSafe(sv["dls"], 128), logo: logo)
       }
       if list != dabProgrammesV { dabProgrammesV = list }
     }

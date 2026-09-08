@@ -48,7 +48,7 @@ import { splashBridge }                 from '../../App';
 
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode, type RdsExt, type RadioCaps } from '../services/UberSDRClient';
 import AdvRdsPanel from '../components/AdvRdsPanel';
-import DabPanel from '../components/DabPanel';
+import DabPanel, { dabLogoUrlFor } from '../components/DabPanel';
 import DabPlusBadge from '../components/DabPlusBadge';
 import type { DabState } from '../services/dabTypes';
 import { DAB_BLOCKS, dabBlockIndex } from '../services/dabBlocks';
@@ -6381,11 +6381,18 @@ export default function SDRScreen({ route, navigation }: Props) {
       capable:  dabCapable,
       on:       dabOn,
       block:    dabBlock >= 0 ? DAB_BLOCKS[dabBlock].name : '',
+      noDecoder: !!vibeDab && (dabState.sfTried ?? 0) > 0 && dabState.aacServerSide === false,
+      /* ★ Every station's live text and picture travel with the list — the wrist shows what the
+       *  phone panel shows. The playing row falls back to the tuned text, as the panel does. */
       list: vibeDab
-        ? dabState.services.map(sv => ({ id: sv.sid, name: sv.label || sv.sid.toString(16).toUpperCase() }))
+        ? dabState.services.map(sv => ({
+            id: sv.sid, name: sv.label || sv.sid.toString(16).toUpperCase(),
+            dls: sv.dls || (sv.sid === dabState.sid ? (dabState.dls || '') : ''),
+            logo: dabLogoUrlFor(connectBase.replace(/\/+$/, ''), dabState, sv),
+          }))
         : dabProgrammes.map((p) => ({ id: p.id, name: p.name })),
     });
-  }, [dabProgrammes, activeDabId, dabEnsemble, dabState, dabOn, dabCapable, dabBlock]);
+  }, [dabProgrammes, activeDabId, dabEnsemble, dabState, dabOn, dabCapable, dabBlock, connectBase]);
 
   // The playing service's logo, for the wrist. DAB is the EASY case for the logo
   // lookup: the label is a decoded station name rather than a truncated 8-character

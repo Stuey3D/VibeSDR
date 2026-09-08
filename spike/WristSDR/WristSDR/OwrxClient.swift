@@ -14,6 +14,11 @@ struct SDRProfile: Identifiable, Hashable {
 struct DabProgramme: Identifiable, Equatable {
   let id: Int
   let name: String
+  /// ★ What this service is playing RIGHT NOW (its Dynamic Label) — every station on the multiplex
+  ///   at once, which is the one thing DAB shows that FM cannot. "" on OWRX, which has no per-service
+  ///   text. And its picture, off the air or from the slideshow — nil when the server has none.
+  var dls: String = ""
+  var logo: URL? = nil
 }
 
 /// One line in the server's shared chat. `mine` is our own message echoed back (OWRX broadcasts every

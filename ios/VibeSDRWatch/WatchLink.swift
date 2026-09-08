@@ -383,6 +383,17 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   struct DabService: Codable, Equatable, Identifiable {
     var id = 0            // audio_service_id — what you send to switch
     var name = ""
+    var dls = ""          // ★ what it is playing now — every station at once (VibeServer)
+    var logo = ""         // ★ its picture's URL, resolved by the phone; "" = none
+    /* ★ Same door as DabState: absent keys fall back rather than failing the whole decode. */
+    init(from decoder: Decoder) throws {
+      let c = try decoder.container(keyedBy: CodingKeys.self)
+      id   = try c.decodeIfPresent(Int.self,    forKey: .id)   ?? 0
+      name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+      dls  = try c.decodeIfPresent(String.self, forKey: .dls)  ?? ""
+      logo = try c.decodeIfPresent(String.self, forKey: .logo) ?? ""
+    }
+    init() {}
   }
 
   struct DabState: Codable, Equatable {
@@ -395,6 +406,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     var capable = false
     var on = false
     var block = ""        // "11A" — the multiplex being decoded; "" when the backend has no blocks
+    var noDecoder = false // ★ DAB+ services will be silent: the server has no AAC decoder
 
     /* ★★★ THE DEFAULTS ABOVE DO NOT SURVIVE SYNTHESISED DECODING, AND THAT WOULD HAVE BEEN A
      *     REGRESSION ON EVERY OLDER PHONE. Swift's synthesised `init(from:)` calls decode(_:forKey:)
@@ -416,6 +428,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       capable  = try c.decodeIfPresent(Bool.self,         forKey: .capable)  ?? false
       on       = try c.decodeIfPresent(Bool.self,         forKey: .on)       ?? false
       block    = try c.decodeIfPresent(String.self,       forKey: .block)    ?? ""
+      noDecoder = try c.decodeIfPresent(Bool.self,        forKey: .noDecoder) ?? false
     }
     init() {}
   }

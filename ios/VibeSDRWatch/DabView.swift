@@ -30,7 +30,6 @@ struct DabView: View {
   @State private var showProfiles = false
   @State private var showMenu = false
   @State private var showChat = false
-  @State private var showSpeed = false
   @State private var locked = false
   @State private var volumeMode = false        // crown drives volume (native HUD) instead of the list
   /* ★★★ THE THIRD THING THE CROWN CAN BE, on a VibeServer: the MULTIPLEX. A watch has one
@@ -54,14 +53,8 @@ struct DabView: View {
     DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: work)   // generous — native crown isn't visible to reset on
   }
 
-  private var speedLabel: String {
-    speeds.first { abs(link.dabScale - $0.v) < 0.001 }?.l ?? "×\(String(format: "%.2f", link.dabScale))"
-  }
 
   private static let detents = 1000.0
-  private let speeds: [(v: Double, l: String)] = [
-    (1, "Off"), (0.6667, "×.67"), (0.5, "×.50"), (0.3333, "×.33"), (0.25, "×.25"),
-  ]
 
   var body: some View {
     VStack(spacing: 0) {
@@ -134,9 +127,6 @@ struct DabView: View {
     .sheet(isPresented: $showChat) { NavigationStack { ChatSheet().environmentObject(link) } }
     // Passive status icons in the clock's band, top-left (clock keeps the right corner).
     .overlay(alignment: .topLeading) { chrome }
-    .sheet(isPresented: $showSpeed) {
-      DabSpeedSheet(current: link.dabScale, speeds: speeds) { v in link.setDabScale(v); showSpeed = false }
-    }
     // Drive the client→UI mirror here — driverTick lives on ContentView (not rendered on this screen), so
     // without this the service list never grows and the "playing" icon never moves. 4 Hz suits a list.
     .onReceive(tickClock) { _ in
@@ -240,18 +230,19 @@ struct DabView: View {
         }
         Spacer(minLength: 0)
       }
-      // Speed fix — ONE compact button (the inline presets were too small to hit). Opens a sheet with
-      // big targets. The label shows the current factor so it doubles as a status readout.
-      Button { if !locked { showSpeed = true } } label: {
-        HStack(spacing: 4) {
-          Image(systemName: "gauge.with.dots.needle.bottom.50percent").font(.system(size: 10, weight: .semibold))
-          Text(link.dabScale != 1.0 ? "Speed Fix \(speedLabel)" : "Speed Fix").font(.system(size: 11, weight: .semibold))
-        }
-        .foregroundColor(link.dabScale != 1.0 ? .black : .white)
-        .padding(.horizontal, 10).padding(.vertical, 4)
-        .background(link.dabScale != 1.0 ? Color.orange : Color.white.opacity(0.12), in: Capsule())
-        .fixedSize()
-      }.buttonStyle(.plain).disabled(locked)
+      /* ★★★ NO SPEED FIX HERE. Buddy's went through the phone, which never implemented it — the
+       *  sheet drew, the tap did nothing (setDabScale was a no-op). A control that does nothing
+       *  must not be there (AGENTS.md). Jr keeps its own, which works, for OWRX. */
+      if link.dabNoDecoder {
+        Text("No sound: this server has no DAB+ decoder")
+          .font(.system(size: 10, weight: .semibold)).foregroundStyle(.orange)
+          .lineLimit(2).minimumScaleFactor(0.8)
+      }
+      if !link.dabDlsText.isEmpty {
+        Text(link.dabDlsText)
+          .font(.system(size: 10, weight: .medium)).foregroundStyle(.white.opacity(0.65))
+          .lineLimit(1).truncationMode(.tail)
+      }
       /* ★★★ THE WAY OUT. On OWRX you leave DAB by choosing another profile and this is not drawn;
        *  on a VibeServer DAB is a mode nothing else can end, so without it the wrist is stuck on
        *  this screen until the phone is picked up. */
@@ -311,9 +302,24 @@ struct DabView: View {
       Image(systemName: playing ? "speaker.wave.2.fill" : "circle")
         .font(.system(size: playing ? 11 : 7, weight: .semibold))
         .foregroundStyle(playing ? .green : .white.opacity(0.3)).frame(width: 14)
-      Text(svc.name)
-        .font(.system(size: 14, weight: playing ? .bold : .semibold, design: .rounded))
-        .foregroundStyle(playing ? .white : .white.opacity(0.85)).lineLimit(1).minimumScaleFactor(0.7)
+      /* ★ The station's picture, when the server has one. A fixed box whether or not it does, so
+       *  the names do not shuffle sideways as logos land — the phone panel's rule. */
+      if let u = svc.logo {
+        AsyncImage(url: u) { img in img.resizable().scaledToFit() } placeholder: { Color.clear }
+          .frame(width: 20, height: 20).clipShape(RoundedRectangle(cornerRadius: 3))
+      }
+      VStack(alignment: .leading, spacing: 1) {
+        Text(svc.name)
+          .font(.system(size: 14, weight: playing ? .bold : .semibold, design: .rounded))
+          .foregroundStyle(playing ? .white : .white.opacity(0.85)).lineLimit(1).minimumScaleFactor(0.7)
+        /* ★ Every station's live text, as the phone and the browser show it. Truncated, not
+         *  scrolled: a moving label per row is a battery cost for a glance. */
+        if !svc.dls.isEmpty {
+          Text(svc.dls)
+            .font(.system(size: 9, weight: .medium)).foregroundStyle(.white.opacity(0.55))
+            .lineLimit(1).truncationMode(.tail)
+        }
+      }
       Spacer(minLength: 0)
     }
     .padding(.horizontal, 8).padding(.vertical, 7)
@@ -322,26 +328,3 @@ struct DabView: View {
   }
 }
 
-/// Big-target speed-fix picker for the DAB screen (the inline header presets were too small to tap).
-/// The current factor is highlighted; picking one applies + persists it for the tuned station.
-struct DabSpeedSheet: View {
-  let current: Double
-  let speeds: [(v: Double, l: String)]
-  let onPick: (Double) -> Void
-  var body: some View {
-    List {
-      Section(footer: Text("Fixes the dablin “chipmunk” on stations whose rate the server misreads. Remembered per station.").font(.system(size: 10))) {
-        ForEach(speeds, id: \.l) { o in
-          Button { onPick(o.v) } label: {
-            HStack {
-              Text(o.l).font(.system(size: 16, weight: .semibold))
-              Spacer()
-              if abs(current - o.v) < 0.001 { Image(systemName: "checkmark").foregroundColor(.orange) }
-            }
-          }.buttonStyle(.plain)
-        }
-      }
-    }
-    .navigationTitle("Speed fix")
-  }
-}

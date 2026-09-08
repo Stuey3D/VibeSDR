@@ -86,7 +86,13 @@ extension WatchLink {
   }
   var isFmDx: Bool { isFmdx }
 
-  var dabProgrammes: [DabProgramme] { (dab?.list ?? []).map { DabProgramme(id: $0.id, name: $0.name) } }
+  var dabProgrammes: [DabProgramme] {
+    (dab?.list ?? []).map { DabProgramme(id: $0.id, name: $0.name, dls: $0.dls,
+                                         logo: $0.logo.isEmpty ? nil : URL(string: $0.logo)) }
+  }
+  var dabNoDecoder: Bool { dab?.noDecoder ?? false }
+  /// The playing service's text, for the header line Jr already has.
+  var dabDlsText: String { (dab?.list ?? []).first { $0.id == dab?.active }?.dls ?? "" }
   var dabActiveId: Int { dab?.active ?? -1 }
   var dabEnsembleName: String { dab?.ensemble ?? "" }
 

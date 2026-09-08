@@ -671,7 +671,10 @@ class WatchProvider {
                    on?: boolean;
                    /** The block being decoded, e.g. "11A" — "" when the backend has no blocks. */
                    block?: string;
-                   list: { id: number; name: string }[] }) {
+                   /** ★ DAB+ will be silent: no AAC decoder on the server. */
+                   noDecoder?: boolean;
+                   /** Per service: its live text and its picture's URL (VibeServer). */
+                   list: { id: number; name: string; dls?: string; logo?: string }[] }) {
     if (!this.available) return;
     this.lastDab = JSON.stringify(state);
     this.flushDab();
