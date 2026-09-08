@@ -14033,6 +14033,18 @@ struct LocalSdrShim::Impl {
              *     spectrogram, so this gate deliberately does not reach it.
              *  ★★ AND NOT IN DAB, which owns the same flag for its own reason (an ensemble has no
              *     VFO for this chain to demodulate). Leave its setting alone.
+             *  ★★★ AND IT CANNOT CUT AUDIO SOMEBODY COULD HEAR — BY CONSTRUCTION, NOT BY BELIEF.
+             *      onAudio() delivers to allAudioSocks() and returns early when that is empty; the
+             *      only consumers of demodulated audio anywhere in this server are open sockets.
+             *      specListenerCountLocked() counts exactly those sockets (spectrum and audio,
+             *      including the pocketed-app case where only the audio one is open). So a count of
+             *      zero means there is nowhere for the audio to go, and everything skipped here was
+             *      already being discarded one function later. Verified on the phone too: the
+             *      Android app has no private JNI audio path — its own UI is a socket client of its
+             *      own server, so a local listener counts like any other.
+             *  ★ Someone watching only the waterfall still counts, so the chain runs for them. That
+             *    is deliberate: they may unmute at any moment, and being early costs one radio a
+             *    few percent while being late costs them the start of a transmission.
              *  ★ COMING BACK IS A GAP IN THE STREAM. The RDS decoder's timing hypotheses and the
              *    pilot PLL are recursive state; resuming into them after minutes of silence is the
              *    stale-hypothesis fault requestReset() exists for. So the return to full is a
