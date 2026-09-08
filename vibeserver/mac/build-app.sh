@@ -144,8 +144,11 @@ swiftc \
   "$MAC/FullMode.swift" \
   $LIBS "$RTLSDR" "$USBLIB" "$OPUSLIB" ${AHFLIB:+"$AHFLIB"} ${HRFLIB:+"$HRFLIB"} \
   -lc++ \
+  `# ★ ONE RULE, TWO READERS: CMakeLists.txt links these for vibeserver/dab-offline; this line is the app's own.` \
+  `# AudioToolbox + CoreAudio: the DAB+ decoder fallback in vibe_dab_aacdec.h (5.0.0 broke here without them).` \
   -framework IOKit -framework CoreFoundation -framework Security -framework AppKit -framework SwiftUI \
   -framework CoreLocation \
+  -framework AudioToolbox -framework CoreAudio \
   -o "$APP/Contents/MacOS/VibeServer"
 
 # ★★ SHIP THE FRONT DOOR INSIDE THE BUNDLE. Contents/MacOS is the right home: it is code, it is
