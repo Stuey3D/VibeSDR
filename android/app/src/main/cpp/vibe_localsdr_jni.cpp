@@ -431,6 +431,20 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetBookmarksPath(JNIEnv* env, jobject, jstring path) {
     const char* c = env->GetStringUTFChars(path, nullptr);
     vibe::LocalSdrShim::setBookmarksPath(c ? c : "");
+    /* ★★★ AND THE PER-COUNTRY DAB TRANSMITTER LISTS, WHICH ANDROID NEVER LOADED. The UK table is
+     *  compiled in; every other country comes from <data>/dab-tii-<ecc>.csv — and only
+     *  vibeserver/main.cpp ever called the loader, so on a PHONE those files were never read even
+     *  if one was sitting there. One rule, two readers, and the reader abroad was the broken one.
+     *  ★ Here rather than in a new Kotlin call: setBookmarksPath is already "the shim has been
+     *    given its data directory", which is exactly the fact the loader needs, and both callers
+     *    on the Android side already make it. A second entry point would be a second thing to
+     *    forget. */
+    if (c) {
+        std::string dir(c);
+        const size_t slash = dir.find_last_of('/');
+        vibe::LocalSdrShim::loadDabTransmitterLists(
+            slash == std::string::npos ? std::string(".") : dir.substr(0, slash));
+    }
     if (c) env->ReleaseStringUTFChars(path, c);
 }
 
