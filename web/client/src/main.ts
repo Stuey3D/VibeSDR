@@ -5715,6 +5715,23 @@ async function loadOwnerNotice() {
       ael.innerHTML = ant ? `${antIcon(j?.antennaIcon)}${escapeHtml(ant)}` : '';
       ael.style.display = ant ? '' : 'none';
     }
+    // ★★ WHAT THIS RADIO OFFERS, on a SINGLE-radio server. The directory card says "AM (medium
+    //    wave) broadcast, FM Broadcast Band, DAB (Band III) · shared VFO · unlocked RF centre ·
+    //    30 minute limit" about the Xcover and its own splash said nothing (Stuart, 2026-09-08:
+    //    "look at the website directory vs the radio splash screen"). Same words, same order, from
+    //    the same facts — a multi-radio door says them per card instead.
+    const bel = document.getElementById('splashBands');
+    if (bel && !j?.frontDoor) {
+      const names: string[] = Array.isArray(j?.bands) ? j.bands.filter((b: unknown) => typeof b === 'string') : [];
+      const max = Number(j?.maxUsers) || 0;
+      const kind = max <= 1 ? 'one listener at a time'
+                 : j?.tuneMode === 'open' ? 'shared VFO · unlocked RF centre'
+                                          : 'individual VFOs · locked RF centre';
+      const lim = Number(j?.limitMin) > 0 ? `${Number(j.limitMin)} minute limit` : '';
+      const bits = [names.join(', '), kind, lim].filter(Boolean);
+      bel.textContent = bits.join(' · ');
+      bel.style.display = bits.length ? '' : 'none';
+    }
     // ★ The DAB+ mark on a SINGLE-radio server, which has no radio card to carry it — the Pi's
     //   cards had one and the Xcover's plain splash had nowhere to put it. Same 36 px artwork.
     const del = document.getElementById('splashDab');
