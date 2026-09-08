@@ -4352,8 +4352,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★ Declare the backend BEFORE connecting. Both the local shim and the LAN
     // shim (VibeServer) speak fftRate and use the 20/10/5 ladder; waiting for
     // hwinfo to reveal that is a race the controller always lost. See
-    // UberSDRClient.markVibeServer().
-    if (isLocal) (c as { markVibeServer?: () => void }).markVibeServer?.();
+    /* ★ The markVibeServer() call that lived here is gone: the backend now IS a VibeServerClient
+     *  because createBackend() was told 'vibeserver', so there is nothing to tell it after the
+     *  fact. That late telling was the bug — see SdrWsClient.ts. */
     // QoL: restore the last frequency/mode used on THIS instance before
     // connecting (the hardcoded default landed on the 20m FT8 squeal every
     // launch). Falls back to the default tune on first visit / bad data.

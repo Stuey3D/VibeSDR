@@ -82,7 +82,11 @@ export type RootStackParamList = {
     instanceName?:   string;
     viewMode:        ViewMode;
     serverLongitude?: number | null;
-    serverType?:     'ubersdr' | 'kiwi' | 'web888' | 'owrx';   // v3 multi-backend; default ubersdr
+    /* ★★★ 'vibeserver' BELONGS HERE. It was missing from this union while the directory produced
+     *  it, favourites stored it and the watch sent it — so every VibeServer navigation had to
+     *  flatten itself to 'ubersdr' to typecheck, which is precisely how the app ended up building
+     *  an UberSDR client for a VibeServer. See SdrWsClient.ts. */
+    serverType?:     'ubersdr' | 'vibeserver' | 'kiwi' | 'web888' | 'owrx';   // default ubersdr
     // NB FM-DX servers route to the 'Tuner' screen instead (see below), not here.
     // V4 local hardware (Android): connect to the on-device shim on localhost.
     // Audio comes from its /ws/audio (external-PCM engine), not the UberSDR /ws.

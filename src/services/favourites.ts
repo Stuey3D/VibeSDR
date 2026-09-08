@@ -163,35 +163,21 @@ export async function saveTcpFavs(favs: TcpFav[]): Promise<void> {
   await AsyncStorage.setItem(TCP_KEY, JSON.stringify(favs));
 }
 
-/**
- * One-shot repair for the v8.0.0 mis-detection.
+/* ★★★ repairVibeserverFavourites() LIVED HERE AND IS NOW GONE (2026-09-08).
  *
- * detectServerType() matched "vibesdr" as well as "vibeserver" — but "vibesdr"
- * is the CLIENT's name: UberSDR instances carry vibesdr:// deep-link banners, so
- * genuine UberSDR pages matched the VibeServer rule. The picker treats detection
- * as authoritative, so it wrote 'vibeserver' back over the saved favourite: the
- * corruption is PERSISTED, and fixing the detector alone would not undo it.
+ * It was a one-shot that DELETED the serverType from any favourite marked 'vibeserver', written
+ * when v8.0.0's detector matched the client's own name ("vibesdr") and mislabelled genuine UberSDR
+ * servers. It could only ever be right while 'vibeserver' was a type nothing could act on — the app
+ * had one client class and a late-flipping flag, so the label was noise at best and a wrong route at
+ * worst.
  *
- * So: strip the type from any favourite v8 marked 'vibeserver'. We clear rather
- * than force to 'ubersdr' because a few of them may be real VibeServers — the
- * (now fixed) detector re-derives the correct type on the next connect, and an
- * unreachable host falls back to 'ubersdr', which is right for the vast majority.
- */
-const VIBESERVER_FIX_KEY = 'vsdr_fav_vibeserver_fix_v1';
-
-export async function repairVibeserverFavourites(): Promise<void> {
-  try {
-    if (await AsyncStorage.getItem(VIBESERVER_FIX_KEY)) return;   // already run
-    const favs = await getFavourites();
-    if (favs.some(f => f.serverType === 'vibeserver')) {
-      await saveFavourites(favs.map(f =>
-        f.serverType === 'vibeserver' ? { name: f.name, url: f.url } : f));
-    }
-    await AsyncStorage.setItem(VIBESERVER_FIX_KEY, '1');
-  } catch {
-    // Never block startup on the repair — a failed pass retries next launch.
-  }
-}
+ * That is no longer true: a VibeServer is its own backend with its own client (VibeServerClient),
+ * and the saved type is what SELECTS it at connect time. Keeping the repair would have quietly
+ * erased the only durable record of which servers are VibeServers, on every launch, for ever.
+ *
+ * ★ Safe to remove outright rather than leave as a stub: it was gated on 'vsdr_fav_vibeserver_fix_v1'
+ * and ran on the picker's first focus, so every install from v8.0.0 onwards has already spent it.
+ * The key itself is left in place — it costs nothing and nothing reads it. */
 
 /** Persist a learned serverType onto an existing favourite (after detection). */
 export async function setFavouriteServerType(url: string, serverType: BackendType): Promise<void> {

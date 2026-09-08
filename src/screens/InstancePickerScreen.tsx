@@ -101,7 +101,7 @@ import { watchTargetPending } from '../services/watchBoot';
 import { watchProvider } from '../services/watchProvider';
 import { findVibeServerPort } from '../services/vibeServer';
 import { Favourite, getFavourites, toggleFavourite, setFavouriteServerType,
-         repairVibeserverFavourites, saveFavourites, registerFavouriteVisit,
+         saveFavourites, registerFavouriteVisit,
          updateFavourite, favIsCustom,
          FavSort, getFavSort, setFavSort,
          TcpFav, getTcpFavs, saveTcpFavs } from '../services/favourites';
@@ -485,10 +485,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // set/clear both, and returning here doesn't remount (stale star / missing
     // favourite otherwise).
     getDefaultInstance().then(d => setDefaultInst(d)).catch(() => {});
-    // Undo the v8.0.0 mis-detection BEFORE reading them, or we'd show (and
-    // connect with) the corrupted 'vibeserver' type for one more session.
-    repairVibeserverFavourites()
-      .then(getFavourites)
+    // ★ No repair pass any more: 'vibeserver' is a REAL saved type now (it picks the client), so
+    // the old one-shot that stripped it would erase what we need. See favourites.ts.
+    getFavourites()
       .then(f => setFavourites(f))
       .catch(() => {});
     getTcpFavs().then(f => setTcpFavs(f)).catch(() => {});
@@ -750,7 +749,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       setConnecting(false);
       navigation.navigate('SDR', {
         baseUrl: res.wsBaseUrl, instanceName: 'Local Hardware', viewMode: modeOverride ?? viewMode,
-        serverType: 'ubersdr', isLocal: true, localPort: res.port,
+        // ★ The on-device shim IS a VibeServer — same binary as the LAN one. See the note
+        //   at the connectVibeServer navigate() for why this used to say 'ubersdr'.
+        serverType: 'vibeserver', isLocal: true, localPort: res.port,
         localGen: newLocalSession(),
       });
     } catch (e: any) {
@@ -826,7 +827,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         { name: 'InstancePicker', params: { noAutoConnect: true } },
         { name: 'SDR', params: {
             baseUrl, instanceName: name, viewMode,
-            serverType: 'ubersdr', isLocal: true, localPort: port,
+            /* ★★★ 'vibeserver', NOT 'ubersdr'. This line is where the type was flattened, and it
+             *  is the source of a year of confusion: the app then built an UberSDRClient for a
+             *  VibeServer, showed the UberSDR logo, offered UberSDR admin pages that 404, and let
+             *  the client discover what it really was from a message that arrives after every
+             *  connect-time decision has been made. createBackend() now has a 'vibeserver' arm and
+             *  VibeServerClient knows what it is before a socket opens — see SdrWsClient.ts. */
+            serverType: 'vibeserver', isLocal: true, localPort: port,
             localHost: host, authSuffix,
             localGen: newLocalSession(),
             /* ★ Loopback only: the owner listening to their own server is admin by definition, so
@@ -998,7 +1005,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       setConnecting(false);
       navigation.navigate('SDR', {
         baseUrl: res.wsBaseUrl, instanceName: name || `${host}:${port}`, viewMode,
-        serverType: 'ubersdr', isLocal: true, isTcp: true, localPort: res.port,
+        // ★ The on-device shim IS a VibeServer — same binary as the LAN one. See the note
+        //   at the connectVibeServer navigate() for why this used to say 'ubersdr'.
+        serverType: 'vibeserver', isLocal: true, isTcp: true, localPort: res.port,
         tcpHost: host, tcpPort: port, localGen: newLocalSession(),
       });
     } catch (e: any) {
@@ -1023,7 +1032,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       setConnecting(false);
       navigation.navigate('SDR', {
         baseUrl: res.wsBaseUrl, instanceName: name || `${host}:${port}`, viewMode,
-        serverType: 'ubersdr', isLocal: true, isTcp: true, localPort: res.port,
+        // ★ The on-device shim IS a VibeServer — same binary as the LAN one. See the note
+        //   at the connectVibeServer navigate() for why this used to say 'ubersdr'.
+        serverType: 'vibeserver', isLocal: true, isTcp: true, localPort: res.port,
         tcpHost: host, tcpPort: port, localGen: newLocalSession(),
         sessionLimitMins,
       });
