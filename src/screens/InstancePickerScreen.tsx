@@ -684,22 +684,51 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   //   the answer arrives, and "USB SDR" if something is attached that we cannot name — never a
   //   guess at the model. Android only; iOS has no USB host SDR.
   const [localSdrLabel, setLocalSdrLabel] = useState('');
-  useEffect(() => {
+  /* ★★★ ASK AGAIN — A SINGLE ATTEMPT ON MOUNT SILENTLY LOSES THE DONGLE.
+   *
+   *  ★★★ THE FAULT THIS FIXES. This ran once, on mount, and began
+   *          if (!Local?.listDevices) return;
+   *      — so if the native module was not registered YET, the picker gave up for ever: no retry,
+   *      no error, and `localSdrLabel` stayed empty, which is exactly how the screen says "there
+   *      is no radio attached". Stuart, 2026-09-08: "it was not a thing before the radio always
+   *      appeared and worked" — and it is intermittent, because it is a race with module
+   *      registration. Seen on the Xcover straight after an install: the dongle was enumerated by
+   *      the kernel (0bda:2838 Blog V4) and the app showed no local radio at all until it was
+   *      relaunched. A user would conclude their dongle is not supported.
+   *  ★★ TWO SEPARATE CAUSES, ONE SYMPTOM, so the fix has to cover both:
+   *      · the module answering late  -> retry briefly rather than bail on the first miss;
+   *      · a dongle plugged in AFTER this screen was built -> re-ask whenever it regains focus,
+   *        which is also the moment somebody returns from plugging one in.
+   *  ★ Bounded: ten tries, 300 ms apart. A module that has not appeared in three seconds is not
+   *    coming, and a picker that polls for ever would keep a phone awake for nothing.
+   *  ★ There is no USB-attach EVENT to subscribe to — the native side exposes only
+   *    consumeUsbLaunch(), a one-shot flag for "this launch was caused by an attach" — so focus
+   *    is the honest trigger rather than a listener that does not exist. */
+  useFocusEffect(useCallback(() => {
     if (Platform.OS !== 'android') return;
     let alive = true;
-    const Local = (NativeModules as any).VibeLocalSDR;
-    if (!Local?.listDevices) return;
-    Local.listDevices()
-      .then((devs: Array<{ label?: string }>) => {
-        if (!alive) return;
-        if (!devs?.length) { setLocalSdrLabel(''); return; }
-        // More than one attached and we cannot say which the "Listen" row will open
-        // (openAndProbe takes the first), so stay generic rather than name the wrong one.
-        setLocalSdrLabel(devs.length === 1 ? (devs[0]?.label || 'USB SDR') : 'USB SDR');
-      })
-      .catch(() => { if (alive) setLocalSdrLabel(''); });
-    return () => { alive = false; };
-  }, []);
+    let tries = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const ask = () => {
+      if (!alive) return;
+      const Local = (NativeModules as any).VibeLocalSDR;
+      if (!Local?.listDevices) {
+        if (++tries <= 10) timer = setTimeout(ask, 300);
+        return;
+      }
+      Local.listDevices()
+        .then((devs: Array<{ label?: string }>) => {
+          if (!alive) return;
+          if (!devs?.length) { setLocalSdrLabel(''); return; }
+          // More than one attached and we cannot say which the "Listen" row will open
+          // (openAndProbe takes the first), so stay generic rather than name the wrong one.
+          setLocalSdrLabel(devs.length === 1 ? (devs[0]?.label || 'USB SDR') : 'USB SDR');
+        })
+        .catch(() => { if (alive) setLocalSdrLabel(''); });
+    };
+    ask();
+    return () => { alive = false; if (timer) clearTimeout(timer); };
+  }, []));
 
   // V4 local hardware (Android only): start the on-device shim (an RTL-SDR or Airspy HF+ over
   // USB OTG) and connect to it on localhost. Audio rides /ws/audio (external
