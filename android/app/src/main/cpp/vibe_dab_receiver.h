@@ -143,7 +143,7 @@ public:
         std::vector<Cplx>& work = work_;
         work.assign(iq + start, iq + start + symLen * size_t(mode_->symbolsPerFrame));
         VDAB_T_LAP(1);
-        const float frac = fractionalOffset(work.data(), work.size(), *mode_, 8);
+        const float frac = fractionalOffset(work.data(), work.size(), *mode_, mode_->symbolsPerFrame);
         stats_.freqOffsetHz  = offsetHz(frac, *mode_);
         stats_.freqOffsetPpm = float(double(stats_.freqOffsetHz) / centreHz_ * 1e6);
         if (std::fabs(frac) > 1e-6f) derotate(work.data(), work.size(), double(frac) / double(fft_));
@@ -183,7 +183,9 @@ public:
          *  ±252 samples of timing error either way, and the linear phase ramp it puts across the
          *  carriers cancels in the DQPSK difference because every symbol gets the same ramp. This
          *  is also where a pre-echo (an earlier, weaker SFN path) does least damage. */
-        const size_t winOff = size_t(guardSamplesAt(rate_)) - size_t(guardSamplesAt(rate_)) / 2;
+        static const int winOffEnv = std::getenv("VIBE_DAB_WINOFF") ? atoi(std::getenv("VIBE_DAB_WINOFF")) : -1;   // experiment hook
+        const size_t winOff = winOffEnv >= 0 ? size_t(winOffEnv)
+                            : size_t(guardSamplesAt(rate_)) - size_t(guardSamplesAt(rate_)) / 2;
         long  irRel   = 0;      // strongest path relative to the window — see FrameSync
         float irRatio = 0.0f;   // impulse peak / mean magnitude — the lock statistic
         {

@@ -20,6 +20,8 @@
 //      the whole spectrum by whole bins and is recovered later from the phase reference symbol,
 //      which is a known sequence. Both are needed; this is the cheap half.
 #pragma once
+#include <string>
+#include <cstdlib>
 #include <cstdlib>
 
 #include <cmath>
@@ -129,23 +131,50 @@ inline C32 dqpskProduct(C32 cur, C32 prev) {
  *  ★ Soft-decision Viterbi already buys ~2 dB over hard decisions; CSI weighting is most of the
  *    remaining gap to what the standard's designers assumed a receiver would do.
  */
+/* ★★★ THE SOFT DECISION IS AN AMPLITUDE, NOT A POWER — AND ITS SCALE WAS 5 dB OF MARGIN.
+ *
+ *  The DQPSK product cur·conj(prev) has magnitude |cur||prev| ≈ A², so scaling it linearly hands
+ *  the Viterbi an LLR proportional to the carrier's POWER: a carrier 3 dB stronger than average
+ *  counted twice as much, one 3 dB weaker half as much, and the whole distribution sat so low
+ *  against the ±127 clip (average mapped to 64) that most bits were effectively soft-to-nothing.
+ *
+ *  ★★★ MEASURED on the 9A capture (Rugby+Daventry at the edge of reception, 32 kbit/s MP2, EEP),
+ *      bad MP2 frames out of 1403, everything else identical:
+ *          linear ×64 (what shipped)   70.3 %
+ *          linear ×96                  51.8 %
+ *          linear ×256                 15.6 %
+ *          linear ×400                 14.1 %
+ *          sqrt   ×200                 13.5 %   <- this
+ *      FIB pass 0.83 → 0.997 alongside. 12B and 10C: 0.0 % bad before and after — a strong
+ *      signal saturates either way, which is why this was never seen. welle's own MSC dump of
+ *      the same 9A capture is ~45 % valid frames; this is now better than the reference on
+ *      identical samples.
+ *  ★ Magnitude → sqrt → amplitude, normalised by the frame's mean amplitude, then ×200 so the
+ *    average carrier lands past the clip and only genuinely weak carriers stay soft. That is the
+ *    shape a log-likelihood ratio should have on a channel where the noise is the same on every
+ *    carrier and the signal is not.
+ *  ★ VIBE_DAB_SOFT_SCALE and VIBE_DAB_SOFT_MODE=linear remain as measurement hooks. */
 inline SoftBits dqpskSoftScaled(C32 product, float invAvgMag) {
     auto clamp8 = [](float v) -> int8_t {
         if (v >  127.0f) return  127;
         if (v < -127.0f) return -127;
         return int8_t(v);
     };
-    /* ★ 64, not 127, as the scale for an AVERAGE carrier: an average-strength carrier should sit
-     *  mid-range so a strong one still has room to say "trust me more" instead of clipping into
-     *  the same value. Clipping at the top would quietly reintroduce the very flattening this
-     *  replaces. */
     static const float kScale = std::getenv("VIBE_DAB_SOFT_SCALE")
-                             ? float(atof(std::getenv("VIBE_DAB_SOFT_SCALE"))) : 64.0f;
-    const float k = kScale * invAvgMag;
+                             ? float(atof(std::getenv("VIBE_DAB_SOFT_SCALE"))) : 200.0f;
+    static const bool linearMode = std::getenv("VIBE_DAB_SOFT_MODE")
+                             && std::string(std::getenv("VIBE_DAB_SOFT_MODE")) == "linear";
+    if (linearMode) {
+        const float k = kScale * invAvgMag;
+        return { clamp8(product.real() * k), clamp8(product.imag() * k) };
+    }
+    const float mag = std::sqrt(product.real() * product.real() + product.imag() * product.imag());
+    if (mag <= 1e-12f) return { 0, 0 };
+    const float amp = std::sqrt(mag) * std::sqrt(invAvgMag);   // A / mean A, roughly
+    const float k = kScale * amp / mag;
     return { clamp8(product.real() * k), clamp8(product.imag() * k) };
 }
 
-/** Kept for the tests and for callers with a single carrier and no symbol context. */
 inline SoftBits dqpskSoft(C32 cur, C32 prev) {
     const C32 p = dqpskProduct(cur, prev);
     const float mag = std::sqrt(p.real() * p.real() + p.imag() * p.imag());
