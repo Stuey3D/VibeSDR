@@ -390,11 +390,34 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     var active = 0        // the audio_service_id currently decoding
     var list: [DabService] = []
     /* ★ VibeServer only: DAB is a MODE there, not a profile, so the wrist needs to know whether it
-     *  can be entered and whether it is on. Both default false, so an older phone that sends
-     *  neither draws no control at all — which is the safe direction. */
+     *  can be entered and whether it is on. Both default false — an older phone that sends neither
+     *  draws no control at all, which is the safe direction. */
     var capable = false
     var on = false
     var block = ""        // "11A" — the multiplex being decoded; "" when the backend has no blocks
+
+    /* ★★★ THE DEFAULTS ABOVE DO NOT SURVIVE SYNTHESISED DECODING, AND THAT WOULD HAVE BEEN A
+     *     REGRESSION ON EVERY OLDER PHONE. Swift's synthesised `init(from:)` calls decode(_:forKey:)
+     *     — never decodeIfPresent — for a non-optional property, so a property's default value is
+     *     NOT used when the key is missing: the whole decode THROWS.
+     *
+     *  ★★★ THE WATCH AND THE PHONE UPDATE SEPARATELY. A wrist on this build paired to a phone that
+     *      has not updated receives the old three-field payload, `try?` swallows the throw, `dab`
+     *      stays nil — and DAB disappears completely, INCLUDING the OWRX service list that worked
+     *      perfectly before. Adding a field to a wire format must never be able to do that.
+     *
+     *  ★ So every key is optional at the door and falls back to its default. Same rule as the
+     *    server's JSON readers: absent is not the same as false, and absent must never be fatal. */
+    init(from decoder: Decoder) throws {
+      let c = try decoder.container(keyedBy: CodingKeys.self)
+      ensemble = try c.decodeIfPresent(String.self,       forKey: .ensemble) ?? ""
+      active   = try c.decodeIfPresent(Int.self,          forKey: .active)   ?? 0
+      list     = try c.decodeIfPresent([DabService].self, forKey: .list)     ?? []
+      capable  = try c.decodeIfPresent(Bool.self,         forKey: .capable)  ?? false
+      on       = try c.decodeIfPresent(Bool.self,         forKey: .on)       ?? false
+      block    = try c.decodeIfPresent(String.self,       forKey: .block)    ?? ""
+    }
+    init() {}
   }
 
   struct FmdxStation: Codable, Equatable, Identifiable {
