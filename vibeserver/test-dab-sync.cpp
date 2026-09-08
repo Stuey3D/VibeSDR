@@ -72,7 +72,10 @@ int main() {
         FrameSync fs(m);
         CHECK(!fs.locked(), "starts unlocked");
         long a = fs.offer(sig.data(), sig.size());
-        CHECK(a >= 0 && fs.locked(), "acquires on the first frame offered");
+        // ★ offer() now yields a CANDIDATE; the phase reference confirms it (see FrameSync).
+        CHECK(a >= 0 && !fs.locked(), "offers a candidate on the first frame, not yet a lock");
+        fs.confirm(a);
+        CHECK(fs.locked(), "confirm() is what locks");
         CHECK(labs(a - long(at)) <= 8, "acquisition lands on the null");
         CHECK(fs.frameLen() == F && fs.nullLen() == N, "frame and null lengths come from the mode");
     }
@@ -89,13 +92,25 @@ int main() {
     {
         FrameSync fs(m);
         auto good = makeSignal(2, 2000);
-        CHECK(fs.offer(good.data(), good.size()) >= 0 && fs.locked(), "locked on good signal");
+        const long g = fs.offer(good.data(), good.size());
+        CHECK(g >= 0, "offers the good signal's null");
+        fs.confirm(g);
+        CHECK(fs.locked(), "locked on good signal");
         std::vector<Cplx> flat(F * 2);
         for (auto& c : flat) { c.re = rnd(); c.im = rnd(); }
-        // Three consecutive frames with no null at all.
-        for (int i = 0; i < 3; ++i) CHECK(fs.offer(flat.data(), flat.size()) < 0, "a miss reports -1");
+        /* ★ While locked, offer() returns the best dip in its window whatever the depth — the
+         *  phase reference is the judge, and it says no on flat noise: reject(). */
+        /* ★ Exactly as the worker drives it: two frames in the window, one consumed per push, and
+         *  the sync told so — the prediction stays inside the window that way. */
+        fs.consumed(F);
+        for (int i = 0; i < 3; ++i) {
+            const long r = fs.offer(flat.data(), flat.size());
+            CHECK(r >= 0, "a tracked frame is still offered");
+            if (r >= 0) fs.reject();
+            fs.consumed(F);
+        }
         CHECK(fs.locked(), "three misses do NOT drop the lock — a fade is ordinary");
-        fs.offer(flat.data(), flat.size());
+        if (fs.offer(flat.data(), flat.size()) >= 0) fs.reject();
         CHECK(!fs.locked(), "four misses does drop it — that is a real loss");
     }
 

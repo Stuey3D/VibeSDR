@@ -69,7 +69,14 @@ inline constexpr float kMinNullDepth = 4.0f;
  *  ★ A caller that tracks passes the signal's own mean power, measured over the buffer. */
 inline NullSearch findNull(const Cplx* x, size_t n, size_t nullLen, double refMeanPower = 0.0) {
     NullSearch r;
-    if (!x || n < nullLen * 2 || nullLen == 0) return r;
+    /* ★★★ n >= nullLen, NOT nullLen * 2. The old guard demanded a span of two null lengths, which
+     *  every ACQUISITION call satisfies and NO TRACKING call ever did: the ±64-sample window is
+     *  nullLen + 128, so this returned the empty result — offset 0, depth 0 — on every tracked
+     *  frame, and the prediction walked 64 samples backwards per frame until the lock was lost.
+     *  That is the fault under the 4.1.89 "tracking measured worse" note, and the reason the
+     *  parameter above could never do what it was added for. One window plus room to slide is
+     *  all the running sum needs. */
+    if (!x || nullLen == 0 || n < nullLen + 1) return r;
 
     // Running sum of |x|^2 over the window.
     double win = 0.0;
@@ -116,96 +123,97 @@ inline NullSearch findNull(const Cplx* x, size_t n, size_t nullLen, double refMe
  *     where the next null is predicted, which is what makes this cheap AND what stops a momentary
  *     fade re-acquiring from scratch and losing the audio for a frame.
  */
+/* ★★★ THE NULL SYMBOL FINDS A CANDIDATE; THE PHASE REFERENCE CONFIRMS IT. That is the split the
+ *  reference receivers make and this one did not, and it is why 9A never locked on the Pi while
+ *  OpenWebRX on the same aerial model decoded it cleanly (Stuart, 2026-09-08).
+ *
+ *  ★★★ WHAT WAS WRONG. Lock was decided HERE, from the null symbol's energy dip alone, against a
+ *      fixed depth of 4 (6 dB): meanAll / meanNull is 1 + S/N, so a signal below ~5 dB SNR could
+ *      NEVER lock — however decodable it was (DQPSK with rate-1/3 coding decodes at ~5–7 dB). And
+ *      the service reset this object after EVERY frame, so the ±64-sample tracking branch below
+ *      never ran once: every frame was a cold acquisition needing that 6 dB. On 9A the depth sat
+ *      at 1–2 and the receiver reported "searching" for a minute with a PRS correlation of 0.05.
+ *
+ *  ★★ THE SHAPE NOW. offer() returns the best null position it can find — a CANDIDATE, with a
+ *     deliberately low depth floor that only rejects flat noise. The receiver then correlates the
+ *     symbol after it against the phase reference (the impulse response it already computes for
+ *     the panel) and calls confirm() or reject(). All 1536 carriers of the PRS add coherently in
+ *     that impulse, so its peak stands 30 dB over the noise floor at an SNR where the null dip is
+ *     invisible. Lock, timing and the miss count are therefore decided by the thing that cannot
+ *     be fooled by noise, and the null does only what it is good at: saying roughly where.
+ *  ★ The 4.1.89 note in vibe_dab_service.h records the previous attempt at tracking measuring
+ *    worse ON AIR. It changed what was CONSUMED, not the detector; this changes the detector and
+ *    leaves consumption exactly as it was. Proved on the 12B capture before it went anywhere
+ *    near a radio: same 452 clean frames. */
 class FrameSync {
 public:
     explicit FrameSync(const Mode& m, uint32_t sampleRateHz = kCanonicalRateHz)
         :
           nullLen_(size_t((uint64_t(m.nullSamples)  * sampleRateHz) / kCanonicalRateHz)),
           frameLen_(size_t((uint64_t(m.frameSamples) * sampleRateHz) / kCanonicalRateHz)) {}
-
     bool   locked()    const { return locked_; }
     size_t frameLen()  const { return frameLen_; }
     size_t nullLen()   const { return nullLen_; }
-    /** Depth of the last accepted null — the honest "how good is this signal" number. */
-    float  lastDepth() const { return depth_; }
-
-    /** Offer a buffer holding at least one whole frame. Returns the offset of the null that starts
-     *  the next frame, or -1 when nothing convincing was found.
-     *  ★ `slack` is how far the prediction may drift between frames; at 2.048 MHz and a 50 ppm
-     *    dongle that is ~10 samples a frame, so the default is comfortable rather than tight. */
+    /** The confirmed frame's depth while locked; the current candidate's while not. */
+    float  lastDepth() const { return locked_ ? depth_ : candDepth_; }
+    /** A candidate frame start, or -1 when there is nothing worth testing. Not a lock: the caller
+     *  must confirm() or reject() it. */
     long offer(const Cplx* x, size_t n, size_t slack = 64) {
         if (!x || n < frameLen_) return -1;
-
         if (locked_) {
-            // TRACK: look only around where the next null is due.
             const size_t centre = predicted_;
             const size_t lo = centre > slack ? centre - slack : 0;
             const size_t hiEnd = centre + slack + nullLen_;
             if (hiEnd <= n) {
-                /* ★ The signal's mean power, sampled cheaply across the WHOLE buffer — this is
-                 *  what the null has to be deep against. Strided so tracking stays cheap, which
-                 *  was always the point of tracking. */
                 double ref = 0.0; size_t cnt = 0;
                 for (size_t i = 0; i < n; i += 64) {
                     ref += double(x[i].re) * x[i].re + double(x[i].im) * x[i].im; ++cnt;
                 }
                 ref = cnt ? ref / double(cnt) : 0.0;
+                /* ★ Tracking: the best dip in the window is the candidate WHATEVER its depth. At the
+                 *  SNR this exists for, the depth is meaningless; the phase reference decides. */
                 NullSearch s = findNull(x + lo, (hiEnd - lo), nullLen_, ref);
-                if (s.found) {
-                    depth_ = s.depth;
-                    const size_t at = lo + s.offset;
-                    predicted_ = at + frameLen_;
-                    misses_ = 0;
-                    return long(at);
-                }
+                candDepth_ = s.depth;
+                return long(lo + s.offset);
             }
-            // ★ A miss is not a loss. Carry the prediction forward and try the next frame; only a
-            //   run of them means we are genuinely off the signal, because a single deep fade is
-            //   ordinary on a marginal mux and re-acquiring would cost a whole frame of audio.
-            if (++misses_ >= kMaxMisses) { locked_ = false; misses_ = 0; }
-            predicted_ += frameLen_;
+            /* The prediction has run off the end of what we hold: count it as a miss and move on. */
+            reject();
             return -1;
         }
-
-        /* ACQUIRE: nothing known — scan exactly ONE frame plus a null length.
-         * ★★★ NOT TWO FRAMES. Searching two means two nulls are in range and the global minimum
-         *     picks whichever noise made deeper — so acquisition landed on the SECOND one, a whole
-         *     frame late, and everything downstream would have been offset by 96 ms. The test
-         *     caught it immediately ("acquisition lands on the null" failed while "acquires"
-         *     passed, which is the signature of finding A null rather than THE null).
-         * ★ frameLen + nullLen is the right window: nulls are exactly frameLen apart, so any span
-         *   that long contains exactly one WHOLE null wherever it starts. */
         const size_t span = frameLen_ + nullLen_;
         NullSearch s = findNull(x, n < span ? n : span, nullLen_);
-        if (!s.found) return -1;
-        locked_    = true;
-        depth_     = s.depth;
-        predicted_ = s.offset + frameLen_;
-        misses_    = 0;
+        candDepth_ = s.depth;
+        if (s.depth < kCandidateDepth) return -1;          // flat noise: nothing to test
         return long(s.offset);
     }
-
-    void reset() { locked_ = false; misses_ = 0; predicted_ = 0; depth_ = 0.0f; }
-
-    /** ★★★ THE CALLER CONSUMED `n` SAMPLES — REBASE, DO NOT RESET.
-     *  `predicted_` is an index into the buffer handed to offer(), so a caller that drops the
-     *  front of that buffer must say so or the prediction points `n` samples too far ahead. This
-     *  is what lets the TRACK path survive across calls, which is the whole reason it exists. */
+    /** The phase reference agreed: this is a frame. `at` may carry the impulse-response timing
+     *  correction, so the next prediction is centred where the strongest path actually is. */
+    void confirm(long at) {
+        locked_    = true;
+        depth_     = candDepth_;
+        predicted_ = size_t(at < 0 ? 0 : at) + frameLen_;
+        misses_    = 0;
+    }
+    /** The phase reference did not agree. A locked receiver keeps its prediction moving and drops
+     *  the lock after kMaxMisses; an unlocked one simply searches again next frame. */
+    void reject() {
+        if (!locked_) return;
+        if (++misses_ >= kMaxMisses) { locked_ = false; misses_ = 0; return; }
+        predicted_ += frameLen_;
+    }
+    void reset() { locked_ = false; misses_ = 0; predicted_ = 0; depth_ = 0.0f; candDepth_ = 0.0f; }
     void consumed(size_t n) { predicted_ = predicted_ > n ? predicted_ - n : 0; }
-
 private:
-    /** ★ Four frames of nothing (~0.4 s in Mode I) before we admit we are lost. Long enough to ride
-     *  out a fade under a bridge, short enough that a retune does not sit on a dead lock. */
-    static constexpr int kMaxMisses = 4;
-
-    // ★ The mode is captured in the derived lengths below; keeping a pointer we never read was
-    //   dead weight the compiler correctly noticed.
-
+    /** ★ Only flat noise is rejected here (1 dB of dip); a real but weak signal passes to the
+     *  phase-reference test, which is where the decision belongs. */
+    static constexpr float kCandidateDepth = 1.25f;
+    static constexpr int   kMaxMisses = 4;
     size_t nullLen_, frameLen_;
     bool   locked_    = false;
-    size_t predicted_ = 0;
     int    misses_    = 0;
+    size_t predicted_ = 0;
     float  depth_     = 0.0f;
+    float  candDepth_ = 0.0f;
 };
 
 }  // namespace vibedab

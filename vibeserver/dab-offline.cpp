@@ -105,7 +105,7 @@ int main(int argc, char** argv) {
                            rx.stats().fibsOk, rx.stats().fibsTotal);
             }
             ++blocks;
-            if (track) rx.syncConsumed(one); else rx.resetSync();
+            if (track) rx.syncConsumed(one); else rx.syncConsumed(need / 2);   // ★ as the live worker does now — see FrameSync
             acc.erase(acc.begin(), acc.begin() + long(one * 2));
 
         if (!selected) {

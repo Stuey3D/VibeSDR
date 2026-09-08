@@ -302,7 +302,11 @@ private:
                     lastAt_ = at;
                 }
             }
-            rx_.resetSync();
+            /* ★★★ TOLD WHAT WAS CONSUMED, NOT RESET. resetSync() here threw the prediction away after
+             *  every frame, so FrameSync's tracking branch never ran and each frame was a cold
+             *  acquisition against a 6 dB null — the whole reason 9A could not lock (see the note
+             *  on FrameSync). Consumption below is unchanged; only the detector keeps its memory. */
+            rx_.syncConsumed(modeI().frameSamples);
             /* ★★★ REVERTED (4.1.89): consuming `at + frameSamples` MEASURED WORSE on air.
              *  It raised the decoded frame rate from 20% to 50% of real time and then wrecked the
              *  thing that matters — Stuart's signal panel on 11A read frequency offset -24152 Hz,

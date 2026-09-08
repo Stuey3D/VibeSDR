@@ -106,6 +106,8 @@ struct DabStats {
      *  decided and comparing with the hard decisions it was given — the margin a DX-er reads. */
     double mscBer            = 0.0;
     int    irPeakSamples     = 0;   ///< where the strongest path sits in the PRS impulse response
+    float  irRatio           = 0;   ///< impulse-response peak / mean magnitude — the lock statistic
+    int    prsRejects        = 0;   ///< candidate frames the phase reference refused
 };
 
 class DabReceiver {
@@ -122,8 +124,10 @@ public:
         VDAB_T_START();
         const long at = sync_.offer(iq, n);
         lastAt_ = at;
+        { static const bool dbg = std::getenv("VIBE_DAB_DEBUG_IR") != nullptr;
+          if (dbg) std::fprintf(stderr, "[offer] at=%ld n=%zu locked=%d depth=%.2f\n", at, n, int(sync_.locked()), sync_.lastDepth()); }
         if (at < 0) { stats_.locked = sync_.locked(); return false; }
-        stats_.locked      = true;
+        // stats_.locked is decided by the phase reference below, not by the null candidate.
         stats_.nullDepthDb = 10.0f * std::log10(sync_.lastDepth() + 1e-9f);
 
         const size_t nullLen = sync_.nullLen();
@@ -180,6 +184,8 @@ public:
          *  carriers cancels in the DQPSK difference because every symbol gets the same ramp. This
          *  is also where a pre-echo (an earlier, weaker SFN path) does least damage. */
         const size_t winOff = size_t(guardSamplesAt(rate_)) - size_t(guardSamplesAt(rate_)) / 2;
+        long  irRel   = 0;      // strongest path relative to the window — see FrameSync
+        float irRatio = 0.0f;   // impulse peak / mean magnitude — the lock statistic
         {
             const Cplx* p0 = work.data() + winOff;
             dft(p0, spec.data());
@@ -269,9 +275,37 @@ public:
                     // ★ relative to where the window EXPECTS the symbol to start (winOff), so 0 = on time
                     const long rel = (at2 > fft_ / 2 ? long(at2) - long(fft_) : long(at2)) - long(winOff);
                     stats_.irPeakSamples = int(rel);
+                    irRel = rel;
                 }
+                /* ★★★ THE LOCK DECISION — see FrameSync. Peak against MEAN of the impulse response's
+                 *  MAGNITUDE (not power: the maximum of 2048 Rayleigh noise samples sits at ~3.1x
+                 *  the mean, so a magnitude ratio of 4.5 is a false alarm about once in 4000
+                 *  frames of pure noise, while a real phase reference — 1536 carriers adding
+                 *  coherently — stands far above it even below 0 dB SNR). welle uses 3 on the same
+                 *  statistic; 4.5 leaves the false locks to the FIC CRC less often. */
+                double magSum = 0.0;
+                for (size_t i = 0; i < fft_; ++i) magSum += std::sqrt(irMag_[i]);
+                const float meanMag = float(magSum / double(fft_));
+                irRatio = meanMag > 0.0f ? std::sqrt(peak) / meanMag : 0.0f;
+                stats_.irRatio = irRatio;
             }
         }
+        { static const bool dbg = std::getenv("VIBE_DAB_DEBUG_IR") != nullptr;
+          if (dbg) std::fprintf(stderr, "[ir] at=%ld ratio=%.2f depth=%.2f shift=%d\n", at, irRatio, sync_.lastDepth(), intShift_); }
+        if (irRatio < kIrConfirm) {
+            sync_.reject();
+            stats_.locked = sync_.locked();
+            ++stats_.prsRejects;
+            return false;
+        }
+        /* ★ Confirmed. The prediction is centred on the null the search found: the impulse-response
+         *  peak (irRel) is REPORTED, not fed back — a first version fed it back as a timing
+         *  correction and the 12B capture fell from 452 clean frames to 1, because a correction of
+         *  the wrong sign walks the ±64-sample search window off the true null within a few
+         *  frames. The null search re-finds the exact position every frame anyway; the phase
+         *  reference's job here is to say whether it IS a frame. */
+        sync_.confirm(at);
+        stats_.locked = true;
 
         // ── every symbol to carriers, then DQPSK against the previous ───────
         VDAB_T_LAP(4);
@@ -465,6 +499,7 @@ public:
         return true;
     }
 
+    static constexpr float kIrConfirm = 4.5f;   ///< see the lock decision in push()
     float prsRef_ = 0.0f;      ///< running reference for the phase-reference correlation
     long lastAt_ = -1;
 
