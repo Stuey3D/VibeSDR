@@ -20,7 +20,8 @@ foreach(f ${DSP_NAMES})
 endforeach()
 list(APPEND DSP_SRC
     ${DSP}/third_party/kissfft/kiss_fft.c
-    ${DSP}/third_party/kissfft/kiss_fftr.c)
+    ${DSP}/third_party/kissfft/kiss_fftr.c
+    ${DSP}/third_party/pffft/pffft.c)
 
 add_executable(vibedsp_tests test_fft.cpp ${DSP_SRC})
 target_include_directories(vibedsp_tests PRIVATE ${DSP})
@@ -31,6 +32,16 @@ target_compile_options(vibedsp_tests PRIVATE -O2 -Wall)
 # the recovered tone's FREQUENCY and amplitude, not merely its presence.
 # Both zoom methods must put the same tone in the same bin — that claim is what the VibeServer
 # setup copy tells the operator, so a failure here means the COPY is wrong too.
+# ★★★ THE FFT KERNEL AGAINST ITS REFERENCE. PFFFT replaced KissFFT as the transform (4.3x at
+# N=32768, measured on the Pi) and KissFFT stayed as the reference it is checked against — the
+# same discipline VIBE_FORCE_SCALAR gives the NEON kernels. A faster FFT that computes something
+# slightly different is not a faster FFT; it is a new bug in every mode at once.
+# ★ Includes an UNALIGNED destination, which is what the channelizer hands it when it writes a
+#   channel into a slice of a larger buffer, and what segfaults if the alignment guard is wrong.
+add_executable(vibedsp_cfft_kernel_tests test_cfft_kernel.cpp ${DSP_SRC})
+target_include_directories(vibedsp_cfft_kernel_tests PRIVATE ${DSP})
+target_compile_options(vibedsp_cfft_kernel_tests PRIVATE -O2 -Wall)
+
 add_executable(vibedsp_zoomspec_tests test_zoomspec.cpp ${DSP_SRC})
 target_include_directories(vibedsp_zoomspec_tests PRIVATE ${DSP})
 target_compile_options(vibedsp_zoomspec_tests PRIVATE -O2 -Wall)

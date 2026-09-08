@@ -56,6 +56,7 @@ while IFS= read -r f <&9; do
 done 9< "$CPP/vibedsp/SOURCES"
 cc "$CPP/vibedsp/third_party/kissfft/kiss_fft.c"  "$KISSPFX"
 cc "$CPP/vibedsp/third_party/kissfft/kiss_fftr.c" "$KISSPFX"
+cc "$CPP/vibedsp/third_party/pffft/pffft.c"  "$KISSPFX"   # ★ the fourth build — see vibedsp/SOURCES
 
 echo "== shim + net + decoders =="
 cxx "$CPP/local_sdr_shim.cpp"

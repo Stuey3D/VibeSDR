@@ -41,7 +41,8 @@ endforeach()
 add_library(vibedsp STATIC
     ${VIBEDSP_SRC}
     vibedsp/third_party/kissfft/kiss_fft.c
-    vibedsp/third_party/kissfft/kiss_fftr.c)
+    vibedsp/third_party/kissfft/kiss_fftr.c
+    vibedsp/third_party/pffft/pffft.c)
 set_target_properties(vibedsp PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 # -O3 for the DSP hot loops (the RelWithDebInfo default is only -O2). AArch64 has
 # mandatory NEON; the engine also uses explicit NEON intrinsics (simd_internal.h).

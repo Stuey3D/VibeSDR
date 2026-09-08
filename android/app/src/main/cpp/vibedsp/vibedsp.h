@@ -79,8 +79,18 @@ public:
     void powerDbShifted(const cf32* in, const float* win, float* outDb, float scale = 1.0f);
 
 private:
+    void freePffft();
     int n_;
-    void* cfg_ = nullptr;            // kiss_fft_cfg
+    bool  inverse_ = false;
+    void* cfg_ = nullptr;            // kiss_fft_cfg — the reference path, and sizes pffft cannot do
+    /* ★ PFFFT: 4.3x KissFFT at N=32768 on the Pi (measured). See the note at the top of fft.cpp
+     *  for why the kiss path stays. The three buffers are 16-byte aligned because PFFFT reads and
+     *  writes through SIMD loads; alignedIn_/alignedOut_ are only touched when a CALLER hands us
+     *  an unaligned pointer, which the channelizer can. */
+    void* pf_         = nullptr;     // PFFFT_Setup*
+    void* work_       = nullptr;
+    void* alignedIn_  = nullptr;
+    void* alignedOut_ = nullptr;
     std::vector<cf32> in_, out_;     // working buffers (length n_)
 };
 

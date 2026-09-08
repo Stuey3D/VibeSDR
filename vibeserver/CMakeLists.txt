@@ -52,7 +52,8 @@ endforeach()
 add_library(vibedsp STATIC
     ${VIBEDSP_SRC}
     "${CPP_DIR}/vibedsp/third_party/kissfft/kiss_fft.c"
-    "${CPP_DIR}/vibedsp/third_party/kissfft/kiss_fftr.c")
+    "${CPP_DIR}/vibedsp/third_party/kissfft/kiss_fftr.c"
+    "${CPP_DIR}/vibedsp/third_party/pffft/pffft.c")
 target_include_directories(vibedsp PUBLIC "${CPP_DIR}/vibedsp")
 target_compile_options(vibedsp PRIVATE -O3 -ffp-contract=fast)
 
