@@ -114,7 +114,7 @@ export type VibeServerConfig = {
   blockRanges?: string;
   /** Modes and decoders the owner has switched off, comma separated (e.g. "dab,wfm"). */
   blockedModes?: string;
-  /** DAB may borrow 2.048 MS/s while it runs, on a receiver configured slower. */
+  /** DAB may borrow the 2.4 MS/s it captures at, on a receiver configured slower. */
   dabRateBoost?: boolean;
   /** Per-band gain ceilings ("all:250,fm:150"), the gain to return to when everyone leaves
    *  (-1 = leave alone), and whether the AGC is locked on. */

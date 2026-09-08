@@ -4327,7 +4327,8 @@ async function drawSplashSpectrogram(): Promise<void> {
  *    edges reports them instead of concluding the receiver is broken.
  */
 let dabCapable = false;
-/** The owner has allowed DAB to borrow 2.048 MS/s, and whether that offer is worth drawing. */
+/** The owner has allowed DAB to borrow the capture rate it needs (2.4 MS/s), and whether that
+ *  offer is worth drawing. */
 let dabBoost = false;
 let dabBoostUseful = false;
 let dabOn = false;
@@ -9458,15 +9459,25 @@ function populateHw() {
      *  ★ Show the truth instead. The server refuses this too — the client must not be the only
      *    thing standing between a live ensemble and its rate. */
     if (dabOn) {
-      /* ★ And the option has to EXIST to be selectable — 2.048 is not in the dongle's advertised
-       *  list, so setting .value alone leaves the <select> showing whatever was first and lying
-       *  about the rate again, which is the fault this whole block was written to stop. Disabled,
-       *  because in DAB it is not a choice: the server refuses any other value. */
+      /* ★ And the option has to EXIST to be selectable — the DAB rate is not in the dongle's
+       *  advertised list, so setting .value alone leaves the <select> showing whatever was first
+       *  and lying about the rate again, which is the fault this whole block was written to stop.
+       *  Disabled, because in DAB it is not a choice: the server refuses any other value.
+       *  ★★★ AND THE NUMBER IS READ, NOT ASSUMED. This said "2.048 MS/s (DAB)" — hardcoded —
+       *      while the radio has captured at 2.400 since the fallback was measured to starve the
+       *      receiver. 2.048 is the DAB IF FILTER and the decoder's canonical rate; it is not
+       *      what the dongle is asked for. Stuart, 2026-09-08: "the DAB override toggle in the
+       *      sample rate is listed at 2048 when it should be 2.4MSPS as we dont use 2048 sample
+       *      rate only 2048 IF filter."
+       *  ★ rfRateHz is what the RADIO REPORTS it is running (the same number the signal pane
+       *    prints as "Capture rate"), so if the 2.048 fallback ever does fire this says so
+       *    instead of hiding it — which is the entire point of the block. */
+      const dabRate = Math.round(dabState?.rfRateHz || 2400000);
       const o = document.createElement('option');
-      o.value = '2048000';
-      o.textContent = '2.048 MS/s (DAB)';
+      o.value = String(dabRate);
+      o.textContent = `${(dabRate / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MS/s (DAB)`;
       r.appendChild(o);
-      r.value = '2048000';
+      r.value = String(dabRate);
       r.disabled = true;
       return;
     }

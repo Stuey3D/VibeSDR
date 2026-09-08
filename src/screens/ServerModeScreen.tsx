@@ -240,7 +240,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [blockRanges, setBlockRanges] = useState('');
   /** Modes and decoders switched off on this receiver, comma separated — see BLOCKABLE. */
   const [blockedModes, setBlockedModes] = useState('');
-  /** DAB may borrow 2.048 MS/s while it runs, on a receiver configured slower. */
+  /** DAB may borrow the 2.4 MS/s it captures at, on a receiver configured slower. */
   const [dabRateBoost, setDabRateBoost] = useState(false);
   const [gainLimits, setGainLimits]   = useState('');
   /** ★★ WHICH BANDS ARE FIXED at their ceiling rather than limited by it, and — on a HackRF — where
@@ -377,26 +377,37 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               <OptRow key={o.value} C={C} F={F} active={rate === o.value} label={o.label} onPress={() => setRate(o.value)} />
             ))}
 
-            {/* ★★★ DAB NEEDS 2.048 MS/s AND NOTHING ELSE WILL DO. Mode I has a 2048-sample useful
-                symbol, so at 2.048 the FFT is exactly one symbol; any other rate means fractionally
-                resampling every sample. So on a receiver pinned lower, DAB either borrows the rate
-                or is not offered at all.
+            {/* ★★★ DAB CAPTURES AT 2.4 MS/s. 2.048 is TWO OTHER THINGS and this comment used to
+                confuse all three: it is the DAB IF filter width, and it is the decoder's canonical
+                rate (Mode I's useful symbol is 2048 samples, so the FFT is one symbol at 2.048).
+                The dongle is asked for 2.400 and the service resamples — measured, and deliberate:
+                the 2.048 fallback starves this very phone, which delivers only ~94 % of the
+                samples at that rate, so the receiver never locks. See the fallback warning in
+                local_sdr_shim.cpp.
+                ★ Stuart, 2026-09-08: "we dont use 2048 sample rate only 2048 IF filter."
+                So on a receiver pinned lower, DAB either borrows the rate or is not offered at all.
                 ★ Stuart's design, and the reason it is a choice rather than automatic: "on the
                   xcover I chose 1.2 for reliablility but in this case 2048 may be usable for DAB,
                   however on weaker devices 1.2 may be the genuine ceiling." A borrow the phone
                   cannot sustain is worse than no DAB.
-                ★ Only shown where it can matter — at 2.048 or above there is nothing to borrow,
-                  and offering it would be a control whose every use is a no-op. */}
+                ★ Only shown where it can matter, and the threshold is 2.048 rather than 2.4 ON
+                  PURPOSE: this toggle does not set the rate, it lifts the gate in vsDabCapable(),
+                  which asks whether the pinned rate clears kMinCaptureHz (2.048 — the narrowest
+                  capture that can still hold a 1.536 MHz ensemble). At 2.048 or above DAB is
+                  already offered, so there is nothing to unlock and the control would be a no-op.
+                  ★ Worth knowing: DAB RELEASES the pin while it runs (g_vsLockedRate is zeroed on
+                    entry and restored on exit), so a receiver pinned at 2.048 is taken to 2.4 with
+                    no toggle involved. That is why the sentence below says 2.4 whatever was pinned. */}
             {rate > 0 && rate < 2_048_000 && (<>
               <OptRow C={C} F={F} active={dabRateBoost}
-                label="Allow 2.048 MS/s for DAB"
+                label="Allow 2.4 MS/s for DAB"
                 onPress={() => {
                   const v = !dabRateBoost;
                   setDabRateBoost(v); AsyncStorage.setItem(K.dabRateBoost, v ? '1' : '0');
                 }} />
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
-                DAB takes 2.048 MS/s while it is running and gives your {(rate / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MS/s
-                back afterwards. Leave this off on a slower phone: if it cannot sustain 2.048 the
+                DAB takes 2.4 MS/s while it is running and gives your {(rate / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MS/s
+                back afterwards. Leave this off on a slower phone: if it cannot sustain 2.4 the
                 audio will break up, and the rate you picked is the one it can actually keep.
               </Text>
             </>)}
