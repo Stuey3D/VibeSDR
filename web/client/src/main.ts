@@ -4988,10 +4988,30 @@ function dabUiOn() {
   /* ★ CLR clears a text pane DAB does not have; its place goes to the learnt-stations button. */
   $('decClr').style.display = 'none';
   $('dabBm').style.display = '';
+  /* ★★★ AND NO CLOSE BUTTON IN DAB — THE APP HAS ALWAYS SAID SO AND THIS READER DID NOT.
+   *
+   *  ★★★ THE FAULT IT FIXES. Stuart, 2026-09-08: "the X button on the decoder box closes the
+   *      decoder but leaves DAB active but when you press DAB again from the demodulator menu it
+   *      deactivates DAB fully rather than restore the box." So the X stranded you: the radio
+   *      stayed on the multiplex with nothing on screen, and the only control that looked like a
+   *      way back turned DAB off instead of bringing the box out again.
+   *  ★★★ ONE RULE, TWO READERS — and the OTHER reader was already right. DecoderPanel.tsx has
+   *      hidden it since it was written: "NOT shown for DAB or ADS-B: there the whole profile IS
+   *      the decoder, so closing the box would leave the receiver in a mode with nothing to show
+   *      and no obvious way back. Every other decoder is something layered ON a mode you can
+   *      happily return to, on every server type — hence no backend condition here." That last
+   *      clause is why this needs no app change and covers OWRX's DAB as well as ours: the app
+   *      keys on being in DAB at all, never on which backend is decoding it.
+   *  ★ Minimise (−) stays. It hides the body and keeps the header, so it cannot strand anyone;
+   *    the app keeps it in DAB for the same reason. The way OUT of DAB is the mode menu, which
+   *    unwinds the whole thing properly through dabUiOff(). */
+  $('decHide').style.display = 'none';
   applyRdsSize();
-  /* ★★★ REBUILD THE RATE ROW. hwinfo returns early when the hardware signature is unchanged,
-   *  and entering DAB changes nothing in that signature — so the picker kept offering 2.4 MS/s
-   *  while the radio ran at 2.048. The rate row is a function of DAB being on. */
+  /* ★★★ REBUILD THE RATE ROW. hwinfo returns early when the hardware signature is unchanged, and
+   *  entering DAB changes nothing in that signature — so the picker kept offering the owner's
+   *  chosen rate while DAB ran at its own. The rate row is a function of DAB being on.
+   *  ★ (This note used to say "offering 2.4 while the radio ran at 2.048". It is the other way
+   *    round — DAB captures at 2.4 — which is the same confusion the select itself had.) */
   applyRateOptions();
   populateHw();                // the option list itself is built here, not in applyRateOptions
   const dt2 = document.getElementById('decTitle');
@@ -5050,6 +5070,7 @@ function dabUiOff() {
     $('rdsSize').classList.remove('show');
     $('decClr').style.display = '';
     $('dabBm').style.display = 'none';
+    $('decHide').style.display = '';   // ★ every other decoder is closeable — give it back
     dabLastListHtml = ''; dabLastHeadHtml = '';
     const dt3 = document.getElementById('decTitle');
     if (dt3 && dt3.textContent === 'DAB') dt3.textContent = dabPrevDecTitle;
