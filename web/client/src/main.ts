@@ -4544,6 +4544,20 @@ function dabRender() {
      *  "Now playing" line above it, so the rows are drawn under it and only when tagged. The
      *  order is fixed (artist, title, then the rest as sent) rather than following transmission
      *  order, or the pane's rows would reshuffle themselves mid-track. */
+    /* ★★★ AN ANNOUNCEMENT IS RUNNING (FIG 0/19). Drawn immediately under "Now playing" because
+     *  that is what it is about: the label above may be describing a programme that has been
+     *  interrupted. ALARM is the one type a receiver must never bury — it gets the bad traffic
+     *  light and leads the list, whatever order the multiplex sent them in.
+     *  ★ We report and do not switch: the correct receiver behaviour is to retune to the
+     *    announcing sub-channel, and on a shared VFO that drags every other listener with it. */
+    + (d.announce && d.announce.length
+        ? d.announce.slice().sort((a, b) => Number(b.alarm) - Number(a.alarm)).map(a =>
+            row(a.alarm ? 'ALARM' : 'Announcement',
+                tl(`${a.types.join(', ')}${a.on ? ` on ${a.on}` : ''}`, a.alarm ? 'bad' : 'warn')))
+          .join('')
+        : '')
+    + (d.announceSupport && d.announceSupport.length
+        ? row('Can carry', d.announceSupport.join(', ')) : '')
     + (d.dlp ? (['artist', 'title', 'album', 'track', 'composer', 'band', 'presenter', 'programme',
                  'genre', 'station', 'slogan', 'comment', 'homepage', 'phone', 'email', 'sms',
                  'news', 'sport', 'weather', 'traffic', 'alarm', 'advertisement', 'country']

@@ -228,6 +228,61 @@ int main() {
         CHECK(dabTextToUtf8((const uint8_t*)"\xE1\x8F\xA9", 3) == "\xC3\x85\xC5\xB8\xE2\x82\xAC", "0xE1 is A-ring, not a-acute; 0xA9 is the euro");
     }
 
+    /* ── ★★★ FIG 0/18 AND 0/19 — ANNOUNCEMENTS (8.1.6) ────────────────────────────────────
+     *  The one DAB feature with a safety dimension: bit 0 of table 15 is ALARM, which a receiver
+     *  is required to honour whatever else it is doing. Both records are VARIABLE length — 0/18
+     *  by its cluster count, 0/19 by its region flag — and a fixed stride walks straight into the
+     *  next record's identifier and invents services and announcements that were never sent. */
+    {
+        Ensemble e;
+        /* Two services in one FIG. The first supports Alarm|Road traffic (0xC000) in clusters
+         * {1,2}; the second supports News (bit 4 => 0x0800) in cluster {9}. If the cluster count
+         * is ignored, the second record is read starting inside the first one's cluster list. */
+        std::vector<uint8_t> p{ 18,
+            0x10, 0x01, 0xC0, 0x00, 2, 1, 2,
+            0x10, 0x02, 0x08, 0x00, 1, 9 };
+        auto fib = makeFib({{0, p}});
+        CHECK(parseFib(fib.data(), e), "the 0/18 FIB parses");
+        CHECK(e.announceSupport.size() == 2, "★ two records, because the cluster count set the stride");
+        CHECK(e.announceSupport[0x1001].asuFlags == 0xC000, "alarm + road traffic supported");
+        CHECK(e.announceSupport[0x1001].clusters.size() == 2
+              && e.announceSupport[0x1001].clusters[0] == 1
+              && e.announceSupport[0x1001].clusters[1] == 2, "both clusters listed");
+        CHECK(e.announceSupport[0x1002].asuFlags == 0x0800, "★ the SECOND record was found, not garbage");
+        CHECK(e.announceSupport.count(0x0201) == 0, "no phantom service from a mis-strided read");
+
+        /* 0/19: cluster 2, road traffic (bit 1 => 0x4000) on sub-channel 5, region flag SET so a
+         * further byte follows; then cluster 9 with news on sub-channel 7 and no region byte. */
+        Ensemble f;
+        std::vector<uint8_t> q{ 19,
+            2, 0x40, 0x00, uint8_t(0x80 | 0x40 | 5), 0x00,
+            9, 0x08, 0x00, 7 };
+        auto fib2 = makeFib({{0, q}});
+        CHECK(parseFib(fib2.data(), f), "the 0/19 FIB parses");
+        CHECK(f.announceActive.size() == 2, "★ the region byte was stepped over, so both were read");
+        CHECK(f.announceActive[2].subChId == 5 && f.announceActive[2].regional
+              && f.announceActive[2].newFlag, "cluster 2: regional road traffic on sub-channel 5");
+        CHECK(f.announceActive[9].subChId == 7 && !f.announceActive[9].regional,
+              "★ cluster 9 read correctly — the variable record did not shift it");
+        CHECK(dabAnnouncementName(0) && std::string(dabAnnouncementName(0)) == "Alarm",
+              "bit 0 of table 15 is the alarm");
+
+        // ★ Flags of zero mean the announcement has ENDED, and cluster 0 is "not used".
+        std::vector<uint8_t> z{ 19, 2, 0x00, 0x00, 5,  0, 0x40, 0x00, 6 };
+        auto fib3 = makeFib({{0, z}});
+        CHECK(parseFib(fib3.data(), f), "the clearing FIB parses");
+        CHECK(f.announceActive.count(2) == 0, "★ zero flags end the announcement rather than latching it");
+        CHECK(f.announceActive.count(0) == 0, "★ cluster 0 is 'not used' and raises nothing");
+
+        /* ★ A truncated record must contribute NOTHING. The cluster count says 4 and one byte
+         *  follows: reading it would publish three bytes of the next FIG as cluster ids. */
+        Ensemble g;
+        std::vector<uint8_t> tr{ 18, 0x10, 0x03, 0xC0, 0x00, 4, 1 };
+        auto fib4 = makeFib({{0, tr}});
+        parseFib(fib4.data(), g);
+        CHECK(g.announceSupport.count(0x1003) == 0, "★ a truncated 0/18 record is dropped whole");
+    }
+
     if (fails == 0) printf("  all passed\n");
     else            printf("  %d FAILED\n", fails);
     return fails ? 1 : 0;

@@ -211,6 +211,11 @@ export interface DabState {
    *  rest — DAB's RT+, keyed by name. `dlpRunning` false means the ITEM has ended (an ad break,
    *  the news) under a label the station has not cleared. */
   dlp?: Record<string, string>; dlpRunning?: boolean;
+  /** ★ Announcements (FIG 0/18 and 0/19). `announce` is what is ON AIR now and relevant to the
+   *  tuned service (plus any alarm, which is relevant to everyone); `announceSupport` is what this
+   *  service can carry at all. Reported only — switching the audio would hijack a shared VFO. */
+  announce?: { cluster: number; types: string[]; subChId: number; on: string; alarm: boolean }[];
+  announceSupport?: string[];
   /** The RDS equivalents the ensemble broadcasts: clock (FIG 0/10), local offset, other blocks (0/21). */
   mjd?: number; utc?: string; lto?: number; altHz?: number[];
   /** Ofcom's licensed sites for this ensemble (nearest first when the receiver's position is known), and why the TII test failed. */

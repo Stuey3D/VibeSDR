@@ -668,6 +668,69 @@ public:
                 snprintf(tb, sizeof tb, ",\"mjd\":%d,\"utc\":\"%02d:%02d:%02d\",\"lto\":%d", e.mjd, e.utcHour, e.utcMin, e.utcSec, e.ltoHalfHours);
                 j += tb;
             }
+            /* ★★★ ANNOUNCEMENTS ON AIR NOW (FIG 0/19, EN 300 401 8.1.6). Reported, never acted on:
+             *  the correct receiver behaviour is to switch the audio to the announcing sub-channel,
+             *  and on a SHARED VFO that is a hijack — one listener's traffic flash would drag every
+             *  other listener off the station they chose, which is the same fault as the `dab off`
+             *  that put the whole radio back on 96.1 under a listener who was never told
+             *  (2026-09-07). So the pane says an announcement is running and on which service, and
+             *  the listener decides.
+             *  ★★ AN ANNOUNCEMENT IS ONLY TRUE NOW. 0/19 repeats while it runs and simply stops
+             *     when it ends — a transmitter need not send the clearing flags — so an entry is
+             *     aged out here rather than latched. Ten seconds: the FIG repeats about once a
+             *     second, so this survives a burst of FIB losses without outliving the event.
+             *  ★ Only announcements whose CLUSTER the tuned service belongs to are relevant to
+             *    this listener, except the alarm, which is relevant to everyone (8.1.6.1). */
+            {
+                const double now = ficNowSec();
+                auto sup = e.announceSupport.find(sid_);
+                std::string items;
+                for (const auto& kv : e.announceActive) {
+                    if (now - kv.second.at > 10.0) continue;
+                    const bool alarm = (kv.second.aswFlags & 0x8000) != 0;
+                    bool mine = alarm;
+                    if (!mine && sup != e.announceSupport.end())
+                        for (uint8_t c : sup->second.clusters) if (c == kv.first) { mine = true; break; }
+                    if (!mine) continue;
+                    std::string types;
+                    for (int b = 0; b < 11; ++b) {
+                        if (!(kv.second.aswFlags & (0x8000 >> b))) continue;
+                        const char* nm = dabAnnouncementName(b);
+                        if (!nm) continue;
+                        if (!types.empty()) types += ',';
+                        types += "\"" + std::string(nm) + "\"";
+                    }
+                    if (types.empty()) continue;
+                    /* ★ Which service is carrying it: the sub-channel is the only pointer 0/19
+                     *  gives, so it is matched back to a service the listener has a name for. */
+                    std::string on;
+                    for (const auto& sv : e.services) {
+                        const auto* pc = sv.second.primaryComponent();
+                        if (pc && pc->subChId == kv.second.subChId) { on = sv.second.label; break; }
+                    }
+                    if (!items.empty()) items += ',';
+                    items += "{\"cluster\":" + std::to_string(int(kv.first))
+                           + ",\"types\":[" + types + "]"
+                           + ",\"subChId\":" + std::to_string(kv.second.subChId)
+                           + ",\"on\":\"" + esc(on) + "\""
+                           + ",\"alarm\":" + (alarm ? "true" : "false") + "}";
+                }
+                if (!items.empty()) j += ",\"announce\":[" + items + "]";
+                /* ★ And what this service CAN carry (0/18) — a station that supports the traffic
+                 *  flash but is not running one now is a different thing from one that never will,
+                 *  and only the standing capability can tell them apart. */
+                if (sup != e.announceSupport.end() && sup->second.asuFlags) {
+                    std::string types;
+                    for (int b = 0; b < 11; ++b) {
+                        if (!(sup->second.asuFlags & (0x8000 >> b))) continue;
+                        const char* nm = dabAnnouncementName(b);
+                        if (!nm) continue;
+                        if (!types.empty()) types += ',';
+                        types += "\"" + std::string(nm) + "\"";
+                    }
+                    if (!types.empty()) j += ",\"announceSupport\":[" + types + "]";
+                }
+            }
             {
                 auto fi = e.freqInfo.find((0u << 16) | e.eid);
                 if (fi != e.freqInfo.end() && !fi->second.hz.empty()) {

@@ -18,6 +18,8 @@
 //   FIG 0/9  country / LTO / ECC        — what makes an EId and a SId unique in the world
 //   FIG 0/13 user application info      — which X-PAD application carries the slideshow
 //   FIG 0/17 programme type
+//   FIG 0/18 announcement support     — which types a service can carry, and its clusters
+//   FIG 0/19 announcement switching   — an announcement ON AIR now, and its sub-channel
 //   FIG 1/0  ensemble label             — the multiplex name
 //   FIG 1/1  programme service label    — the station name
 //   FIG 1/4  service component label    — secondary components (TS 103 176 6.2.1 says shall)
@@ -37,6 +39,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <chrono>
 
 #include "vibe_dab_fec.h"
 #include "vibe_dab_charset.h"
@@ -121,6 +124,41 @@ struct Service {
     }
 };
 
+/** Seconds on a monotonic clock. An announcement is only true NOW, so the FIC has to stamp one:
+ *  FIG 0/19 is repeated while the announcement runs and simply STOPS when it ends — a transmitter
+ *  is not required to send the clearing flags — so anything reading announceActive must be able to
+ *  age an entry out rather than show a traffic flash for the rest of the evening. */
+inline double ficNowSec() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+/** ★★★ ANNOUNCEMENT TYPES (EN 300 401 table 15). The ASu and ASw flag words share this table:
+ *  bit 0 is the MOST significant bit of the 16, and bit 0 is ALARM — the one type a receiver is
+ *  required to honour whatever else it is doing (8.1.6.1). */
+inline const char* dabAnnouncementName(int bit) {
+    static const char* kNames[11] = {
+        "Alarm", "Road traffic", "Transport", "Warning/Service", "News",
+        "Area weather", "Event", "Special event", "Programme information",
+        "Sport", "Financial",
+    };
+    return (bit >= 0 && bit < 11) ? kNames[bit] : nullptr;
+}
+
+/** FIG 0/18: which announcement types a service supports, and the clusters it listens to. */
+struct AnnouncementSupport {
+    uint16_t asuFlags = 0;              ///< the types this service can carry
+    std::vector<uint8_t> clusters;      ///< cluster ids it belongs to
+};
+
+/** FIG 0/19: an announcement that is ON AIR right now, and where to hear it. */
+struct AnnouncementSwitch {
+    uint16_t aswFlags = 0;              ///< the types currently active for this cluster
+    int      subChId  = -1;             ///< the sub-channel carrying it
+    bool     newFlag  = false;
+    bool     regional = false;
+    double   at       = 0.0;            ///< when it was last signalled (seconds), so it can expire
+};
+
 /** Everything the FIC has told us so far. Persistent across FIBs on purpose — see the note on
  *  parseFib, and the "station list that does not flap" goal in BRIEF-dab.md. */
 struct Ensemble {
@@ -143,6 +181,11 @@ struct Ensemble {
     int mjd = -1, utcHour = -1, utcMin = -1, utcSec = -1;
     std::map<uint32_t, Service> services;      ///< by SId, so repeats update rather than duplicate
     std::map<int, SubChannel>   subChannels;   ///< by SubChId
+    /** ★★★ ANNOUNCEMENTS (8.1.6). 0/18 is the standing capability — which services support which
+     *  types, and which clusters they belong to; 0/19 is the live event. Kept separate because
+     *  they expire differently: support persists for the ensemble, a switch is only true NOW. */
+    std::map<uint32_t, AnnouncementSupport> announceSupport;   ///< by SId
+    std::map<uint8_t,  AnnouncementSwitch>  announceActive;    ///< by cluster id
     bool empty() const { return services.empty() && label.empty(); }
     /** ★ The MCI is complete when FIG 0/7 has said how many services there are and we have that
      *  many with sub-channels. Under a weak signal this is the difference between "reading the
@@ -470,7 +513,50 @@ inline bool parseFib(const uint8_t* fib32, Ensemble& e) {
                 e.utcMin  = int(w & 0x3F);
                 e.utcSec  = ((w >> 11) & 1) && qn >= 6 ? int(q[4] >> 2) : 0;
             }
-            // ★ everything else (0/3, 0/5, 0/14, 0/18-0/26) is skipped by length, as 5.2.2.0 says
+            /* ★★★ FIG 0/18 — ANNOUNCEMENT SUPPORT (8.1.6.1). Per service: SId, then the 16 ASu
+             *  flags saying which of table 15's types it can carry, then a byte whose LOW FIVE
+             *  bits are the cluster count (the top three are Rfa) and that many cluster ids.
+             *  ★ The record is VARIABLE length. A fixed stride here walks off into the next
+             *    record's SId and invents services that do not exist. */
+            else if (ext == 18 && !oe) {
+                size_t j = 0;
+                while (j + 5 <= qn) {
+                    const uint32_t sid = (uint32_t(q[j]) << 8) | q[j + 1];
+                    const uint16_t asu = uint16_t((q[j + 2] << 8) | q[j + 3]);
+                    const size_t   nc  = size_t(q[j + 4] & 0x1F);
+                    j += 5;
+                    if (j + nc > qn) break;                    // truncated record — take none of it
+                    AnnouncementSupport& a = e.announceSupport[sid];
+                    a.asuFlags = asu;
+                    a.clusters.assign(q + j, q + j + nc);
+                    j += nc;
+                }
+            }
+            /* ★★★ FIG 0/19 — ANNOUNCEMENT SWITCHING (8.1.6.2): an announcement is ON AIR NOW.
+             *  Cluster id, the 16 ASw flags, then New(1) Region flag(1) SubChId(6); when the
+             *  region flag is set a further byte carries the region, which we skip but must
+             *  still STEP OVER.
+             *  ★ Cluster id 0 is "not used" and 0xFF means the whole ensemble (8.1.6.2) — 0 is
+             *    dropped so a padded record cannot raise a phantom announcement. */
+            else if (ext == 19 && !oe) {
+                size_t j = 0;
+                while (j + 4 <= qn) {
+                    const uint8_t  cluster = q[j];
+                    const uint16_t asw     = uint16_t((q[j + 1] << 8) | q[j + 2]);
+                    const bool     newf    = (q[j + 3] & 0x80) != 0;
+                    const bool     region  = (q[j + 3] & 0x40) != 0;
+                    const int      subCh   = q[j + 3] & 0x3F;
+                    j += 4;
+                    if (region) { if (j >= qn) break; j += 1; }
+                    if (cluster == 0) continue;
+                    if (asw == 0) { e.announceActive.erase(cluster); continue; }   // it has ended
+                    AnnouncementSwitch& s = e.announceActive[cluster];
+                    s.aswFlags = asw; s.subChId = subCh;
+                    s.newFlag = newf; s.regional = region;
+                    s.at = ficNowSec();
+                }
+            }
+            // ★ everything else (0/3, 0/5, 0/14, 0/20-0/26) is skipped by length, as 5.2.2.0 says
         } else if (type == 1) {
             const uint8_t charset = uint8_t(p[0] >> 4);
             const int ext = p[0] & 0x07;
