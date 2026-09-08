@@ -1339,8 +1339,34 @@ export class AudioPlayer {
        *  ★ Candidates include the ZERO-PADDED forms. 'mp4a.40.2' and 'mp4a.40.02' are the same
        *    codec and browsers differ over which spelling they accept — Stuart found the padded
        *    one in Apple's own example. */
+      /* ★★★ CLOSE THE OLD DECODER, AND FLUSH WHAT IT ALREADY PRODUCED. This branch used to drop
+       *  the reference and nothing else, and BOTH halves of that are wrong:
+       *
+       *  ★★★ THE FAULT IT FIXES. Stuart, 2026-09-08, changing service inside one ensemble: "if I
+       *      move from a 48KHz station to a 32KHz one there is a bit of stutter and broken audio
+       *      but mostly silence until I select the station again." A dropped AudioDecoder is not
+       *      a closed one — it keeps its queue and its output callback still points here. So its
+       *      LATE frames, decoded at the OLD rate, arrive after `aacRate` has already been moved
+       *      to the NEW one, and _onAacData resamples them against a rate they were never
+       *      sampled at. Every one of those frames is wrong, and they arrive interleaved with the
+       *      new decoder's correct ones: stutter, then broken audio, then a playout buffer full
+       *      of the wrong service. Selecting the station again "fixes" it only because by then
+       *      the orphan has drained and the rate no longer changes, so this branch is a no-op.
+       *  ★★★ IT IS ONLY THE WebCodecs HALF THAT WAS WRONG. The MediaSource path four lines up
+       *      does the whole job — _mseTeardown() rebuilds the element, the source, the queue and
+       *      the timeline — because Safari made the fault audible immediately (a format change
+       *      played NOTHING). WebCodecs degraded quietly instead, so the same rule got enforced
+       *      properly in one reader and half-heartedly in the other.
+       *  ★ aacOkFrames / aacMonoFrames / aacTriedMse are judgements about a DECODER DECODING THIS
+       *    SERVICE — "the browser managed a frame", "it promised stereo and gave mono". Carried
+       *    across a reconfiguration they answer a question nobody asked: _recoverAac's 960-frame
+       *    fallback tests `aacOkFrames === 0` and would never fire again after the first service
+       *    of the session had decoded one frame. A new configuration is a new claim to test. */
+      try { this.aacDec?.close(); } catch { /* already closing */ }
       this.aacRate = coreRateHz; this.aacCh = channels; this.aacTs = 0; this.aacStrip = 0;
       this.aacDec = null;
+      this.aacOkFrames = 0; this.aacMonoFrames = 0; this.aacTriedMse = false;
+      this.flush();                 // the old service's PCM is still queued ahead of the new one
       if (!this.aacProbing) { this.aacProbing = true; void this._openAac(coreRateHz, channels); }
       return;                       // AUs during the probe are dropped; it resolves in a moment
     }
