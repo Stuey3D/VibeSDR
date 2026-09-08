@@ -202,8 +202,13 @@ const Marquee = React.memo(function Marquee({ text, style }: { text: string; sty
   }, [textW, boxW, x, text]);
   return (
     <View style={{ flex: 1, overflow: 'hidden' }} onLayout={e => setBoxW(e.nativeEvent.layout.width)}>
+      {/* ★★★ THE TEXT MUST NOT SHRINK. Inside a bounded row RN wraps a Text to the box rather than
+          letting it overflow, so textW never exceeded boxW, nothing ever scrolled, and a long
+          transmitter line showed as a clipped second line. flexShrink 0 + one line = the text keeps
+          its natural width and the box hides the rest, which is what the measurement assumes. */}
       <Animated.View style={{ flexDirection: 'row', alignSelf: 'flex-start', transform: [{ translateX: x }] }}>
-        <Text style={style} onLayout={e => setTextW(e.nativeEvent.layout.width)}>{text}</Text>
+        <Text style={[style, { flexShrink: 0 }]} numberOfLines={1}
+              onLayout={e => setTextW(e.nativeEvent.layout.width)}>{text}</Text>
       </Animated.View>
     </View>
   );
@@ -676,8 +681,8 @@ const s = StyleSheet.create({
   body:   { paddingHorizontal: 12, paddingVertical: 8, gap: 3 },
   notice: { fontFamily: FONT, fontSize: 12, color: C.warn, paddingVertical: 6 },
   row:    { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  lbl:    { fontFamily: FONT, fontSize: 11, letterSpacing: 1, color: C.muted, width: 124 },
-  val:    { fontFamily: FONT, fontSize: 13, color: C.value },
+  lbl:    { fontFamily: FONT, fontSize: 12, letterSpacing: 1, color: C.muted, width: 124 },
+  val:    { fontFamily: FONT, fontSize: 14, color: C.value },
   section:{ fontFamily: FONT, fontSize: 10, letterSpacing: 2, color: C.goldDim,
             marginTop: 10, marginBottom: 2 },
   svc:      { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6,
@@ -685,11 +690,12 @@ const s = StyleSheet.create({
   svcActive:{ backgroundColor: C.rowAct },
   /* ★ A FIXED BOX WHETHER OR NOT THERE IS A PICTURE. Logos arrive one at a time over a second or
    *  two; if the box appeared with them, every name in the list would shuffle sideways as they
-   *  landed. Same size as the web client's row logo. */
-  logoBox:  { width: 24, height: 24, borderRadius: 3 },
+   *  landed. 34 px — up from the browser's 24: on a phone the picture is the fastest way to find a
+   *  station (Stuart, 2026-09-09: "logos larger, font"). */
+  logoBox:  { width: 34, height: 34, borderRadius: 4 },
   /* ★ Up from 14/11/10: on the Mac the list was tiny (Stuart). The browser's row is 15px. */
-  svcName:  { fontFamily: FONT, fontSize: 16, color: C.value },
-  svcDls:   { fontFamily: FONT, fontSize: 13, color: C.muted, marginTop: 2 },
+  svcName:  { fontFamily: FONT, fontSize: 17, color: C.value },
+  svcDls:   { fontFamily: FONT, fontSize: 14, color: C.muted, marginTop: 2 },
   svcCodec: { fontFamily: FONT, fontSize: 11, color: C.muted },
   plots:    { flexDirection: 'row', gap: 10, marginTop: 8, alignItems: 'flex-end' },
   plotLbl:  { fontFamily: FONT, fontSize: 9, letterSpacing: 1, color: C.muted, marginBottom: 2 },
