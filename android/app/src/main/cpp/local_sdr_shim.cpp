@@ -11351,11 +11351,20 @@ struct LocalSdrShim::Impl {
         } else if (reqLine.rfind("GET /vibeserver/dabslide", 0) == 0) {
             /* ★ The slideshow image the playing service is sending over the air (TS 101 499) —
              *  the station logo or now-playing artwork, off the multiplex itself. */
+            /* ★ With ?sid= this answers the KEPT picture for that service, from memory or the
+             *  disk store, so the station list and the VTS bar can show a station whose only
+             *  artwork is the one it transmits. Without it, the live slide for whatever is
+             *  playing — the pane's behaviour, unchanged. */
+            const std::string slideSid = queryParam(reqLine, "sid");
             vibedab::DabService::Slide sl;
-            if (g_dab.slide(sl) && !sl.bytes.empty()) {
+            const bool haveSlide = slideSid.empty()
+                ? g_dab.slide(sl)
+                : g_dab.serviceSlide(uint32_t(strtoul(slideSid.c_str(), nullptr, 10)), sl);
+            if (haveSlide && !sl.bytes.empty()) {
                 std::string body(reinterpret_cast<const char*>(sl.bytes.data()), sl.bytes.size());
                 sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: " + sl.mime + "\r\n"
-                              "Access-Control-Allow-Origin: *\r\nCache-Control: no-cache\r\n"
+                              "Access-Control-Allow-Origin: *\r\nCache-Control: "
+                              + (slideSid.empty() ? "no-cache" : "max-age=60") + "\r\n"
                               "Connection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
             } else {
                 sock->sendstr("HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
@@ -17365,6 +17374,9 @@ void LocalSdrShim::setBookmarksPath(const std::string& path) {
         g_dab.setRatioFile((slash == std::string::npos ? std::string() : path.substr(0, slash + 1)) + "dab-aac-ratio");
         g_dab.setCacheDir((slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-carousel");
         g_dabLogoDir = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-logos";
+        /* ★ The off-air slideshow store, beside the carousel and the RadioDNS logos: one file per
+         *  service, so a station whose picture only exists on air is not re-read on every visit. */
+        g_dab.setSlideDir((slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-slides");
     }
     FILE* f = fopen(path.c_str(), "rb");
     if (!f) return;                       // nothing saved yet — that's fine

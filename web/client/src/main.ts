@@ -2685,7 +2685,13 @@ function updateVts() {
     if (sv) {
       name = sv.label; src = 'DAB';
       const ecc = sv.ecc ?? dabState.ecc ?? -1;
-      logo = dabLogos.get(`${ecc}|${dabState.eid}|${sv.sid}`) || '';
+      /* ★ Same order as the station list: RadioDNS, then the multiplex's own carousel, then the
+       *  picture the station transmits. The bar used to show a blank tile for a station whose
+       *  logo was drawn perfectly well two panes away. */
+      logo = dabLogos.get(`${ecc}|${dabState.eid}|${sv.sid}`)
+             || (sv.logoAir ? P(`/vibeserver/dablogoair?sid=${sv.sid}`) : '')
+             || (sv.logoSlide ? P(`/vibeserver/dabslide?sid=${sv.sid}`) : '')
+             || '';
       flag = ecc === 0xE1 ? isoToFlag('GB') : '';
       dabRt = dabState.dls || '';
     }
@@ -4676,12 +4682,30 @@ function dabLogoTag(sv: DabState['services'][number], d: DabState): string {
   const ecc = (sv.ecc ?? d.ecc ?? -1);
   const key = `${ecc}|${d.eid}|${sv.sid}`;
   const known = dabLogos.get(key);
-  if (known === undefined) { dabLogos.set(key, null); void dabLogoLookup(key, sv, d, ecc); return ''; }
+  if (known === undefined) { dabLogos.set(key, null); void dabLogoLookup(key, sv, d, ecc); return dabSlideTag(sv); }
   /* ★ A URL THAT RESOLVES IS NOT A PICTURE THAT LOADS (the RDS panel learned this first): the
    *  name search hands back dead favicons, the browser drew its "?" tile, and the list is rebuilt
    *  twice a second — so the tile FLASHED (Stuart's screenshot, Magic Radio, 2026-09-07). A logo
    *  that fails to load is forgotten for that service and the row goes back to text. */
-  return known ? `<img class="dabLogo" src="${known}" alt="" data-k="${escapeHtml(key)}" onerror="this.remove();(window as any).dabLogoFailed&&(window as any).dabLogoFailed(this.dataset.k)">`.replace('(window as any)', 'window').replace('(window as any)', 'window') : '';
+  return known ? `<img class="dabLogo" src="${known}" alt="" data-k="${escapeHtml(key)}" onerror="this.remove();(window as any).dabLogoFailed&&(window as any).dabLogoFailed(this.dataset.k)">`.replace('(window as any)', 'window').replace('(window as any)', 'window') : dabSlideTag(sv);
+}
+
+/** ★★★ THE PICTURE THE STATION ITSELF TRANSMITS, AS THE LAST RESORT.
+ *
+ *  Stuart, 2026-09-08: "Embrace on the NNDAB multiplex has no RadioDNS or other logo fallback but
+ *  when I tuned to it in the advanced signal window the image drew in and worked, but then wasnt
+ *  saved so when i switched back to the list it wasnt in the list nor the VTS."
+ *
+ *  ★ It is LAST on purpose. A slideshow is programme artwork — cover art, an advert, a presenter —
+ *    and it changes through the day, so it must never displace the broadcaster's own logo from
+ *    RadioDNS or the multiplex's SPI carousel. But for a small station that publishes neither, it
+ *    is the only picture of that station in existence, and the row was drawing nothing at all.
+ *  ★ Gated on `logoSlide` from the server, which is true only when a file is actually held: an
+ *    <img> pointed at a 404 draws the browser's broken-image tile, and the list is rebuilt twice
+ *    a second, so a speculative one FLASHES — the fault the RadioDNS name search taught us. */
+function dabSlideTag(sv: DabState['services'][number]): string {
+  if (!sv.logoSlide) return '';
+  return `<img class="dabLogo" src="${P(`/vibeserver/dabslide?sid=${sv.sid}`)}" alt="" loading="lazy">`;
 }
 (window as any).dabLogoFailed = (k: string) => { dabLogos.set(k, null); try { const raw = localStorage.getItem(DAB_LOGO_STORE); if (raw) { const j = JSON.parse(raw); delete j[k]; localStorage.setItem(DAB_LOGO_STORE, JSON.stringify(j)); } } catch { /* ignore */ } };
 async function dabLogoLookup(key: string, sv: DabState['services'][number], d: DabState, ecc: number) {

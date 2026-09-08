@@ -462,6 +462,46 @@ public:
      *  now-playing artwork (TS 101 499), served by the shim at /vibeserver/dabslide. */
     struct Slide { std::vector<uint8_t> bytes; std::string mime, name; uint32_t seq = 0; uint32_t sid = 0; };
     bool slide(Slide& out) { std::lock_guard<std::mutex> lk(m_); pollSlide(); if (!slide_.seq) return false; out = slide_; return true; }
+
+    /** ★★★ THE OFF-AIR PICTURE, KEPT. Where the carousel's logos are cached per ensemble, this is
+     *  the per-SERVICE slideshow store — and it exists because of a station with no logo anywhere
+     *  else. Stuart, 2026-09-08, on Embrace (7B): "Embrace on the NNDAB multiplex has no RadioDNS
+     *  or other logo fallback but when I tuned to it in the advanced signal window the image drew
+     *  in and worked, but then wasnt saved so when i switched back to the list it wasnt in the
+     *  list nor the VTS and when I tuned away and back again it had to be read again from the air."
+     *  All three follow from one fact: the slide lived ONLY in `slide_`, which setService and
+     *  setChannel both clear — correctly, because the pane must never show the last station's
+     *  artwork under this one's name. The live slide keeps that behaviour; this is a second,
+     *  durable copy that survives the retune and answers by SId. */
+    void setSlideDir(const std::string& dir) { std::lock_guard<std::mutex> lk(m_); slideDir_ = dir; }
+
+    /** The kept slideshow image for one service, from memory or from the disk store. */
+    bool serviceSlide(uint32_t sid, Slide& out) {
+        std::lock_guard<std::mutex> lk(m_);
+        pollSlide();
+        auto it = slideBySid_.find(sid);
+        if (it != slideBySid_.end() && !it->second.bytes.empty()) { out = it->second; return true; }
+        if (slideDir_.empty() || !sid) return false;
+        for (const char* ext : { "png", "jpg", "gif", "webp" }) {
+            const std::string p = slidePath(sid, ext);
+            FILE* f = fopen(p.c_str(), "rb");
+            if (!f) continue;
+            Slide s; uint8_t buf[4096]; size_t r;
+            while ((r = fread(buf, 1, sizeof buf, f)) > 0) s.bytes.insert(s.bytes.end(), buf, buf + r);
+            fclose(f);
+            if (s.bytes.empty()) continue;
+            s.mime = std::string("image/") + (strcmp(ext, "jpg") == 0 ? "jpeg" : ext);
+            s.sid = sid; s.seq = 1;
+            slideBySid_[sid] = s;                 // ★ read once, then answered from memory
+            out = s; return true;
+        }
+        return false;
+    }
+    /** Do we hold a picture for this service? Cheap enough for the station list's every block. */
+    bool haveServiceSlide(uint32_t sid) {
+        std::lock_guard<std::mutex> lk(m_);
+        return haveSlideNoLock(sid);
+    }
     struct Quality { bool locked; float fibRate; float nullDepthDb; double mscBer; };
     Quality quality() {
         std::lock_guard<std::mutex> lk(m_);
@@ -830,8 +870,13 @@ public:
             if (sc.eep) snprintf(prot, sizeof prot, "%s %d (%s)", si.set, si.level, si.codeRate);
             else        snprintf(prot, sizeof prot, "UEP %d", uepLevel);
             const int sizeCu = sc.eep ? sc.sizeCu : (sc.protLevel < 64 ? kUepIndex[sc.protLevel].sizeCu : 0);
-            snprintf(b, sizeof b, "{\"sid\":%u,\"logoAir\":%s,\"label\":\"%s\",\"short\":\"%s\",\"codec\":\"%s\",\"subch\":%d,\"pty\":%d,\"slides\":%s,\"kbps\":%d,\"prot\":\"%s\",\"cuStart\":%d,\"cuSize\":%d,\"scids\":%d,\"ecc\":%d",
-                     unsigned(kv.first), hasAirLogo(kv.first) ? "true" : "false", esc(sv.label).c_str(), esc(sv.shortLabel).c_str(),
+            /* ★ `logoSlide` says we hold a picture this service sent over the air. It is the LAST
+             *  resort behind RadioDNS and the SPI carousel, because a slideshow is programme
+             *  artwork, not a logo — but for a small station that publishes neither it IS the
+             *  station's picture, and Embrace on 7D is exactly that case. */
+            snprintf(b, sizeof b, "{\"sid\":%u,\"logoAir\":%s,\"logoSlide\":%s,\"label\":\"%s\",\"short\":\"%s\",\"codec\":\"%s\",\"subch\":%d,\"pty\":%d,\"slides\":%s,\"kbps\":%d,\"prot\":\"%s\",\"cuStart\":%d,\"cuSize\":%d,\"scids\":%d,\"ecc\":%d",
+                     unsigned(kv.first), hasAirLogo(kv.first) ? "true" : "false",
+                     haveSlideNoLock(kv.first) ? "true" : "false", esc(sv.label).c_str(), esc(sv.shortLabel).c_str(),
                      pc->scType == 63 ? "DAB+" : pc->scType == 0 ? "MP2" : "?", pc->subChId,
                      sv.pty, sv.hasSlideshow() ? "true" : "false",
                      si.bitrateKbps, prot, sc.startCu, sizeCu, pc->scids, sv.ecc >= 0 ? sv.ecc : e.ecc);
@@ -1624,9 +1669,56 @@ private:
     bool aacStartedKnown_ = AacDecoder::kExactFrames; int aacAuTotal_ = 0;
     Slide slide_;
     uint32_t slideSeq_ = 0;
+    std::string slideDir_;
+    std::map<uint32_t, Slide> slideBySid_;   ///< the last picture from each service visited
+    /** ★ Keyed by the ensemble as well as the SId: an SId is only unique within its ensemble
+     *  (that is what the ECC and EId are for), and two multiplexes reusing one SId would
+     *  otherwise show each other's artwork. */
+    /** ★ The station list asks this for every service on every stats block, and the JSON builder
+     *  already holds m_ — so the lock lives in the public wrapper, not here. A `stat` per service
+     *  is cheaper than it looks and the answers land in the page cache after the first pass; the
+     *  in-memory map answers for everything visited this session without touching the disk. */
+    bool haveSlideNoLock(uint32_t sid) const {   // caller holds m_
+        if (slideBySid_.count(sid)) return true;
+        if (slideDir_.empty() || !sid || !rx_.ensemble().eid) return false;
+        for (const char* ext : { "png", "jpg", "gif", "webp" }) {
+            struct stat st{};
+            if (::stat(slidePath(sid, ext).c_str(), &st) == 0 && st.st_size > 0) return true;
+        }
+        return false;
+    }
+    std::string slidePath(uint32_t sid, const char* ext) const {   // caller holds m_
+        char b[64];
+        snprintf(b, sizeof b, "/%02x-%04x-%08x.%s", unsigned(rx_.ensemble().ecc & 0xFF),
+                 unsigned(rx_.ensemble().eid), unsigned(sid), ext);
+        return slideDir_ + b;
+    }
+    static const char* slideExt(const std::string& mime) {
+        if (mime == "image/png")  return "png";
+        if (mime == "image/jpeg") return "jpg";
+        if (mime == "image/gif")  return "gif";
+        if (mime == "image/webp") return "webp";
+        return nullptr;                       // ★ an unknown type is not written, so it cannot be read back
+    }
     void pollSlide() {   // caller holds m_
         MotObject o;
-        if (pad_.mot().take(o)) { slide_.bytes = std::move(o.body); slide_.mime = o.mime(); slide_.name = o.name; slide_.sid = sid_; slide_.seq = ++slideSeq_; }
+        if (!pad_.mot().take(o)) return;
+        slide_.bytes = std::move(o.body); slide_.mime = o.mime(); slide_.name = o.name;
+        slide_.sid = sid_; slide_.seq = ++slideSeq_;
+        /* ★★★ AND KEEP A COPY. `slide_` is cleared by every retune, which is right for the pane
+         *  and is exactly why the picture kept having to be read off the air again. */
+        if (!sid_ || slide_.bytes.empty()) return;
+        slideBySid_[sid_] = slide_;
+        const char* ext = slideExt(slide_.mime);
+        if (slideDir_.empty() || !ext || !rx_.ensemble().eid) return;
+        mkdir(slideDir_.c_str(), 0755);
+        const std::string p = slidePath(sid_, ext);
+        const std::string tmp = p + ".tmp";
+        if (FILE* f = fopen(tmp.c_str(), "wb")) {
+            const bool ok = fwrite(slide_.bytes.data(), 1, slide_.bytes.size(), f) == slide_.bytes.size();
+            fclose(f);
+            if (ok) rename(tmp.c_str(), p.c_str()); else remove(tmp.c_str());
+        }
     }
     double knownRatio_ = AacDecoder::kExactFrames ? 1.0 : 0.0;   // samples returned / samples due, once measured
     int aacDeviantRun_ = 0;   // consecutive units on which the watched window disagrees with the known ratio
