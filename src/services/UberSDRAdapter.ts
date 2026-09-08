@@ -5,6 +5,8 @@
  * Zero behaviour change from calling the client directly.
  */
 
+import { SdrWsClient } from './SdrWsClient';
+import { VibeServerClient } from './VibeServerClient';
 import { UberSDRClient, type SDRMode, type SDRStatus } from './UberSDRClient';
 import type { SDRBackend, BackendCallbacks, BackendCapabilities, BackendKind } from './SDRBackend';
 import { OwrxAdapter } from './OwrxAdapter';
@@ -33,13 +35,22 @@ const LOCAL_CAPS: BackendCapabilities = {
 export class UberSDRAdapter implements SDRBackend {
   readonly kind: BackendKind = 'ubersdr';
   readonly caps: BackendCapabilities;
-  private client: UberSDRClient;
+  protected client: SdrWsClient;
   private baseUrl: string;
   private cb: BackendCallbacks;
 
+  /** ★★★ THE ONE LINE THAT DECIDES WHICH PROTOCOL THIS CONNECTION IS. It used to be settled far
+   *  later, by a message arriving, and everything chosen before then was chosen as UberSDR — see
+   *  the note at the top of SdrWsClient.ts. A subclass overrides this and the decision is made
+   *  before a socket is opened, which is the whole point of the split. */
+  protected makeClient(baseUrl: string, uuid: string, callbacks: BackendCallbacks,
+                       password?: string): SdrWsClient {
+    return new UberSDRClient(baseUrl, uuid, callbacks, password);
+  }
+
   constructor(baseUrl: string, uuid: string, callbacks: BackendCallbacks, password?: string, local = false) {
     // onSMeter/onProfiles unused: S-meter is spectrum-derived, no profiles.
-    this.client = new UberSDRClient(baseUrl, uuid, callbacks, password);
+    this.client = this.makeClient(baseUrl, uuid, callbacks, password);
     this.baseUrl = baseUrl;
     this.cb = callbacks;
     // Local hardware tunes far beyond UberSDR's HF 30 MHz cap.
@@ -181,6 +192,19 @@ export class UberSDRAdapter implements SDRBackend {
 }
 
 /** Backend factory — KiwiAdapter / OwrxAdapter register here in later phases. */
+/** ★ A VibeServer differs from an UberSDR in WHICH CLIENT it speaks through and nothing else at
+ *  this layer — the capabilities, the tuning and the callbacks are identical, which is exactly the
+ *  "VibeDSP + UberSDR = VibeServer" relationship. So it is a three-line subclass, and everything
+ *  VibeServer-only (DAB now; ADS-B, AIS, ACARS and DRM next) goes in VibeServerClient where
+ *  UberSDR can neither see it nor be broken by it. */
+export class VibeServerAdapter extends UberSDRAdapter {
+  readonly kind: BackendKind = 'vibeserver';
+  protected makeClient(baseUrl: string, uuid: string, callbacks: BackendCallbacks,
+                       password?: string): SdrWsClient {
+    return new VibeServerClient(baseUrl, uuid, callbacks, password);
+  }
+}
+
 export function createBackend(
   kind: BackendKind,
   baseUrl: string,
@@ -191,6 +215,13 @@ export function createBackend(
 ): SDRBackend {
   switch (kind) {
     case 'ubersdr': return new UberSDRAdapter(baseUrl, uuid, callbacks, password, local);
+    /* ★★★ THE CASE THAT WAS NEVER HERE. 'vibeserver' has existed as a serverType in the directory
+     *  layer for a year, but this switch had no arm for it — so it fell through to the default and
+     *  threw, which is why the app shipped repairVibeserverFavourites() to DELETE the type as
+     *  "corruption" rather than handle it. Five separate workarounds grew out of that one gap:
+     *  the UberSDR logo on VibeServers, UberSDR admin links that 404, the watch's autoVibe detour,
+     *  the favourites repair, and the link-ladder race. */
+    case 'vibeserver': return new VibeServerAdapter(baseUrl, uuid, callbacks, password, local);
     case 'owrx':    return new OwrxAdapter(baseUrl, uuid, callbacks);
     // Same adapter for both Kiwi dialects — only the WebSocket path differs, and it self-corrects
     // if the guess was wrong (KiwiAdapter.tryOtherWsPrefix).
