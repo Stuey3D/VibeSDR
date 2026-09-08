@@ -1578,6 +1578,10 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  not leaving a mode; the panel now carries both doors and this is the window's half. */
   const [dabBoxOpen, setDabBoxOpen] = useState(false);
   const [dabBlock, setDabBlock] = useState<number>(-1);
+  /** BIG/SMALL for the DAB window, remembered — the same control the RDS analyser has. */
+  const [dabTall, setDabTall] = useState(true);
+  useEffect(() => { AsyncStorage.getItem('lsv_dab_tall').then(v => { if (v === '0') setDabTall(false); }).catch(() => {}); }, []);
+  const onDabTall = useCallback((v: boolean) => { setDabTall(v); AsyncStorage.setItem('lsv_dab_tall', v ? '1' : '0').catch(() => {}); }, []);
   const [dabCapable, setDabCapable] = useState(false);  // the SERVER decides — /vibeserver.json
   /* ★ Refs beside the state because the two callbacks below are created ONCE (empty dep list, so
    *  they are stable for the ModeSelector's memo) and would otherwise close over the first render's
@@ -1642,11 +1646,17 @@ export default function SDRScreen({ route, navigation }: Props) {
       setDabOn(false); setDabBoxOpen(false); setDabState(null); setDabError(undefined);
       return;
     }
-    const i = dabBlockRef.current >= 0 ? dabBlockRef.current : 0;
-    setDabBlock(i);
+    /* ★★★ NO CHANNEL WHEN NOTHING IS REMEMBERED. This sent block 0 — 5A — and 5A is empty
+     *  nearly everywhere, so every first entry on a new receiver was a search for nothing
+     *  (Stuart: "when loading DAB in the app it defaults to 5A not what the server was last
+     *  tuned to like the web client"). The server, told no channel, uses the block it was LAST
+     *  decoding, or 12B if it never has — which is what the web client gets, because it sends a
+     *  channel only when it has one saved. The header follows whatever the server reports. */
+    const i = dabBlockRef.current;
+    if (i >= 0) setDabBlock(i);
     setDabBoxOpen(true);
     setDabError(undefined);
-    c.dab(true, i);
+    if (i >= 0) c.dab(true, i); else c.dab(true);
     setDabOn(true);
   }, []);
 
@@ -3755,7 +3765,12 @@ export default function SDRScreen({ route, navigation }: Props) {
           //   rows exist to settle.
           if (st.channel) {
             const i = dabBlockIndex(st.channel);
-            if (i >= 0) setDabBlock(i);
+            if (i >= 0) {
+              setDabBlock(i);
+              // ★ Remembered from the SERVER's report, as the web client does (savePref) — so a
+              //   block the server chose for us is offered back next time, not just one we chose.
+              AsyncStorage.setItem(dabBlockKeyRef.current, st.channel).catch(() => {});
+            }
           }
         } else {
           setDabOn(false);
@@ -8497,6 +8512,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onService={(sid) => client.current?.dabService?.(sid)}
           onClose={() => setDabBoxOpen(false)}
           onExit={toggleDab}
+          tall={dabTall} onTall={onDabTall}
           bottomOffset={pillBottom + 8 + noticeStackH}
           /* ★ The RADIO's address, not the door's — the carousel and the kept logo files belong to
            *  the receiver that is decoding this multiplex. connectBase resolves to /r/<id>. */

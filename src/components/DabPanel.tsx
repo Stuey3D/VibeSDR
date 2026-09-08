@@ -19,7 +19,7 @@
  *    string by concatenating one into JSON.
  */
 import React, { useMemo } from 'react';
-import { Image, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
+import { Animated, Easing, Image, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Canvas, Points, Rect } from '@shopify/react-native-skia';
 import type { DabState } from '../services/dabTypes';
@@ -61,7 +61,7 @@ const Row = React.memo(function Row({ label, value, tone }: {
   return (
     <View style={s.row}>
       <Text style={s.lbl} numberOfLines={2}>{label}</Text>
-      <Text style={[s.val, { color: toneColour(tone) }]}>{value}</Text>
+      <Marquee text={value} style={[s.val, { color: toneColour(tone) }]} />
     </View>
   );
 });
@@ -168,6 +168,47 @@ function useServiceLogo(base: string, d: DabState | null,
   return sv.logoSlide ? `${base}/vibeserver/dabslide?sid=${sv.sid}` : null;
 }
 
+/**
+ * ★★★ TEXT THAT IS TOO LONG SCROLLS, AS IT DOES IN THE WEB CLIENT. Stuart, 2026-09-08: "the
+ * decoder window in the app needs to mirror the dab window in the web client so anything that
+ * needs to scroll will scroll". A Dynamic Label is up to 128 characters and a row is ~30 wide, so
+ * truncating it threw away most of the one thing DAB shows that FM cannot.
+ *
+ * ★ PING-PONG, NOT A CIRCULAR TICKER: the browser's ticker needs a duplicated copy of the text and
+ *   a measured gap; on the native driver a two-way sweep with a pause at each end reads the same
+ *   and costs one transform. It only animates when the text is actually wider than its box — a
+ *   label that fits sits still, exactly like the browser's `dls` span.
+ * ★ Restarts only when its own TEXT changes (the key), not on every `dab` message: the list is
+ *   re-rendered every second, and a marquee that restarted with it "scrolls for a second then
+ *   resets" — the browser's own fault, 2026-09-07.
+ */
+const Marquee = React.memo(function Marquee({ text, style }: { text: string; style: object }) {
+  const [boxW, setBoxW] = React.useState(0);
+  const [textW, setTextW] = React.useState(0);
+  const x = React.useRef(new Animated.Value(0)).current;
+  React.useEffect(() => {
+    x.setValue(0);
+    const over = textW - boxW;
+    if (!(over > 4) || !boxW) return;
+    const ms = Math.max(1500, over * 28);           // ~36 px/s — the browser's reading pace
+    const loop = Animated.loop(Animated.sequence([
+      Animated.delay(1200),
+      Animated.timing(x, { toValue: -over, duration: ms, easing: Easing.linear, useNativeDriver: true }),
+      Animated.delay(1200),
+      Animated.timing(x, { toValue: 0, duration: ms, easing: Easing.linear, useNativeDriver: true }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [textW, boxW, x, text]);
+  return (
+    <View style={{ flex: 1, overflow: 'hidden' }} onLayout={e => setBoxW(e.nativeEvent.layout.width)}>
+      <Animated.View style={{ flexDirection: 'row', alignSelf: 'flex-start', transform: [{ translateX: x }] }}>
+        <Text style={style} onLayout={e => setTextW(e.nativeEvent.layout.width)}>{text}</Text>
+      </Animated.View>
+    </View>
+  );
+});
+
 /** One service row's picture, or the space where it would be — a list whose rows change width as
  *  logos land is worse than one with none, so the box is always there. */
 const SvcLogo = React.memo(function SvcLogo({ uri }: { uri: string | null }) {
@@ -208,12 +249,13 @@ const ServiceRow = React.memo(function ServiceRow({ sv, d, base, onPress }: {
     <TouchableOpacity onPress={onPress} style={[s.svc, active && s.svcActive]} activeOpacity={0.7}>
       <SvcLogo uri={logo} />
       <View style={{ flex: 1 }}>
-        <Text style={[s.svcName, active && { color: C.gold }]} numberOfLines={1}>
+        {/* ★ GREEN for the station that is playing — the browser's `.dabSvc.on` — because gold on
+            gold did not stand out (Stuart: "the highlighted station being green to stand out"). */}
+        <Text style={[s.svcName, active && { color: C.good }]} numberOfLines={1}>
           {sv.label || sv.sid.toString(16).toUpperCase()}
           {ann.length ? (alarm ? '  ⚠ ALARM' : '  ● ANN') : ''}
         </Text>
-        {!!text && <Text style={[s.svcDls, active && { color: 'rgba(255,200,110,0.85)' }]}
-                         numberOfLines={1}>{text}</Text>}
+        {!!text && <Marquee text={text} style={[s.svcDls, active && { color: 'rgba(125,255,154,0.80)' }]} />}
       </View>
       <Text style={s.svcCodec}>{sv.codec}{sv.kbps ? ` ${sv.kbps}k` : ''}</Text>
     </TouchableOpacity>
@@ -239,6 +281,10 @@ export interface DabPanelProps {
    *  leaving a mode are different intentions and now have different controls. */
   onExit: () => void;
   bottomOffset: number;
+  /** BIG/SMALL — the same control the browser's window and the RDS analyser have, and equally
+   *  just a height. Stuart: "the big/small button is missing". */
+  tall: boolean;
+  onTall: (v: boolean) => void;
   /** The receiver's own base URL — logos are fetched FROM the server we are listening to, which is
    *  the only thing that holds this multiplex's carousel. */
   base: string;
@@ -254,7 +300,7 @@ export default function DabPanel(p: DabPanelProps) {
    *  perfectly and did nothing at all (measured on the Xcover on 11A, 2026-09-08, where the taps
    *  fell through to the list instead).
    *  ★ So the BODY is capped to what is left after the chips, and the list scrolls inside it. */
-  const maxBody = Math.max(140, winH - p.bottomOffset - 190);
+  const maxBody = p.tall ? Math.max(140, winH - p.bottomOffset - 190) : 230;
   const d = p.d;
   const cur = d ? d.services.find(x => x.sid === d.sid) : undefined;
   const noDecoder = !!d && (d.sfTried ?? 0) > 0 && d.aacServerSide === false;
@@ -556,6 +602,9 @@ export default function DabPanel(p: DabPanelProps) {
                 it — the browser's rule for this same control. */}
             <Text style={[s.hbtnTxt, s.hbtnTxtActive]}>{pane === 'stations' ? 'SIGNAL' : 'STATIONS'}</Text>
           </TouchableOpacity>
+          <TouchableOpacity onPress={() => p.onTall(!p.tall)} style={[s.hbtn, p.tall && s.hbtnActive]}>
+            <Text style={[s.hbtnTxt, p.tall && s.hbtnTxtActive]}>{p.tall ? 'SMALL' : 'BIG'}</Text>
+          </TouchableOpacity>
           <TouchableOpacity onPress={p.onExit} style={s.hbtn}>
             <Text style={s.hbtnTxt}>EXIT DAB</Text>
           </TouchableOpacity>
@@ -602,8 +651,8 @@ const s = StyleSheet.create({
   body:   { paddingHorizontal: 12, paddingVertical: 8, gap: 3 },
   notice: { fontFamily: FONT, fontSize: 12, color: C.warn, paddingVertical: 6 },
   row:    { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  lbl:    { fontFamily: FONT, fontSize: 10, letterSpacing: 1, color: C.muted, width: 118 },
-  val:    { fontFamily: FONT, fontSize: 12, color: C.value, flex: 1 },
+  lbl:    { fontFamily: FONT, fontSize: 11, letterSpacing: 1, color: C.muted, width: 124 },
+  val:    { fontFamily: FONT, fontSize: 13, color: C.value },
   section:{ fontFamily: FONT, fontSize: 10, letterSpacing: 2, color: C.goldDim,
             marginTop: 10, marginBottom: 2 },
   svc:      { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6,
@@ -612,10 +661,11 @@ const s = StyleSheet.create({
   /* ★ A FIXED BOX WHETHER OR NOT THERE IS A PICTURE. Logos arrive one at a time over a second or
    *  two; if the box appeared with them, every name in the list would shuffle sideways as they
    *  landed. Same size as the web client's row logo. */
-  logoBox:  { width: 20, height: 20, borderRadius: 3 },
-  svcName:  { fontFamily: FONT, fontSize: 14, color: C.value },
-  svcDls:   { fontFamily: FONT, fontSize: 11, color: C.muted, marginTop: 2 },
-  svcCodec: { fontFamily: FONT, fontSize: 10, color: C.muted },
+  logoBox:  { width: 24, height: 24, borderRadius: 3 },
+  /* ★ Up from 14/11/10: on the Mac the list was tiny (Stuart). The browser's row is 15px. */
+  svcName:  { fontFamily: FONT, fontSize: 16, color: C.value },
+  svcDls:   { fontFamily: FONT, fontSize: 13, color: C.muted, marginTop: 2 },
+  svcCodec: { fontFamily: FONT, fontSize: 11, color: C.muted },
   plots:    { flexDirection: 'row', gap: 10, marginTop: 8, alignItems: 'flex-end' },
   plotLbl:  { fontFamily: FONT, fontSize: 9, letterSpacing: 1, color: C.muted, marginBottom: 2 },
 });
