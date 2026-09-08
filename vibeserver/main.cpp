@@ -2254,7 +2254,15 @@ int main(int argc, char** argv) {
                                      r.name.c_str(), r.driver.c_str(),
                                      r.serial.empty() ? "(none)" : r.serial.c_str());
                 }
-                return 1;
+                /* ★★★ _Exit, NOT return. Threads are already running by this point — the mDNS
+                 *  responder, the directory announcer — and returning from main() destroys their
+                 *  joinable std::thread objects, which is std::terminate: "terminate called without
+                 *  an active exception", SIGABRT, and systemd restarting us every second. Seen on the
+                 *  Pi 2026-09-08 when the V4's USB identity wedged: 44 restarts hammering a dongle
+                 *  that needed a power cycle, and an ABRT in the journal that read as a crash in the
+                 *  receiver. A missing radio is a clean, reportable exit. */
+                std::fflush(stderr);
+                std::_Exit(1);
             }
             /* ★ NAME EVERY SOURCE. The comment in local_sdr_shim's rate branch records that a
              *   two-source world written as "the other one" mis-handles the third every time;
