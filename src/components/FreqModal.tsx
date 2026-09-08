@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Keyboard, KeyboardAvoidingView, Modal, NativeEventEmitter, NativeModules, Platform,
   Pressable, StyleSheet, Text, TextInput, TouchableOpacity, useWindowDimensions, View,
@@ -236,9 +236,11 @@ export default function FreqModal({
     if (isDab && onDabTune) onDabTune(b.frequency, b.sid!);
     else onSearchTune?.(b.frequency, b.mode);
   };
+  // ★ Deferred: the keystroke paints first, the thousands-long scan follows when the thread is free.
+  const deferredQuery = useDeferredValue(searchQuery);
   const searchResults = useMemo(
-    () => searchStations(searchBookmarks, searchBands, searchQuery),
-    [searchBookmarks, searchBands, searchQuery],
+    () => searchStations(searchBookmarks, searchBands, deferredQuery),
+    [searchBookmarks, searchBands, deferredQuery],
   );
 
   // As the user types, resolve the nearest station to the DRAFT frequency.

@@ -228,6 +228,7 @@ export class OwrxAdapter implements SDRBackend {
   // stalls/gaps = weak. Mirrors the UberSDR 0–3 bar indicator.
   private gapHist: number[] = [];
   private lastFrameAt = 0;
+  private lastLinkEvalAt = 0;
   private connectedAt = 0;
   private lastLink: -1 | 0 | 1 | 2 | 3 = -1;
 
@@ -977,7 +978,9 @@ export class OwrxAdapter implements SDRBackend {
       if (this.gapHist.length > 40) this.gapHist.shift();
     }
     this.lastFrameAt = now;
-    this.evalLink();
+    // ★ The meter sorts a 40-entry history for its median; once every half second is plenty for
+    //   a bar count, and it was doing it on every FFT frame.
+    if (now - this.lastLinkEvalAt >= 500) { this.lastLinkEvalAt = now; this.evalLink(); }
     this.emitSlice(row);
   }
 

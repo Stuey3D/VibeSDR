@@ -49,6 +49,8 @@ import { splashBridge }                 from '../../App';
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode, type RdsExt, type RadioCaps } from '../services/UberSDRClient';
 import AdvRdsPanel from '../components/AdvRdsPanel';
 import DabPanel from '../components/DabPanel';
+import DoorSpectrogram from '../components/DoorSpectrogram';
+import DoorConditions from '../components/DoorConditions';
 import { createValueBus } from '../services/valueBus';
 import DabPlusBadge from '../components/DabPlusBadge';
 import type { DabState } from '../services/dabTypes';
@@ -5384,52 +5386,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => clearTimeout(t);
   }, [isLocal, connected, serverIdleSecs]);
 
-  // ── The old 30-minute hand-back, left inert for one release ──────────────────
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const _deadIdleHandback = () => {
-    if (isLocal || !connected) { setIdleWarnLeftMs(null); return; }
-    const t = setInterval(() => {
-      // The same "someone IS watching" exemptions the powersave saver uses: a watch
-      // showing the waterfall, and an open RDS analyser, are active viewers even
-      // though nobody is touching the phone.
-      // ★ Stamp OUR OWN baseline, never `lastInteractRef` — that ref belongs to the
-      //   30 s powersave saver, and writing to it from here would silently change
-      //   when the saver engages. The two timers share the same "user touched
-      //   something" signal and nothing else.
-      // ★★★ A RUNNING DECODER IS A VIEWER. This hand-back watched TOUCHES plus "a watch or an open
-      // analyser", and a decoder counted as NEITHER — so 30 minutes of SSTV on Stuart's own UberSDR
-      // with nobody touching the screen looked exactly like a phone in a pocket, and the slot was
-      // given back MID-PICTURE (2026-07-30).
-      // ★★ Decoding is arguably the STRONGEST evidence of use there is: the user is waiting on a
-      // result that takes minutes to arrive, and can do nothing but wait.
-      // ★★★ OUTPUT, NOT INTENT — stamped when a decoder PRODUCES something, never merely when one
-      // is selected. A decoder left on a dead frequency produces nothing, and a phone in a pocket
-      // is exactly the case this feature exists for.
-      // ★ It is also the honest answer to the question the server is asking: an idle kick asks "is a
-      // human still listening?", and a decoder producing output is real evidence that one is.
-      if (watchProvider.isActive || advRdsOpenRef.current
-          || Date.now() - lastDecodeRef.current < DECODE_ACTIVE_MS) {
-        lastViewerRef.current = Date.now();
-        setIdleWarnLeftMs(null);
-        return;
-      }
-      const idleFor = Date.now() - Math.max(lastInteractRef.current, lastViewerRef.current);
-      if (idleFor < IDLE_RELEASE_MS) { setIdleWarnLeftMs(null); return; }
-      const left = IDLE_RELEASE_MS + IDLE_RELEASE_WARN_MS - idleFor;
-      if (left > 0) { setIdleWarnLeftMs(left); return; }
-      // Time's up: hand the slot back and say so plainly. Not an error, and not
-      // phrased as one — they did nothing wrong and can walk straight back in.
-      setIdleWarnLeftMs(null);
-      client.current?.disconnectSocket?.();
-      setRefusal({
-        title: 'HANDED BACK',
-        body: 'Nothing had touched this for half an hour, so we gave the receiver back for someone else to use.',
-        note: 'Reconnect whenever you like — this is just so an app left running in a pocket does not hold a shared radio all day.',
-      });
-    }, 5000);
-    return () => clearInterval(t);
-  };
-  void _deadIdleHandback;   // referenced so the retained body does not read as dead code
+  // ★ The old 30-minute hand-back was retained inert for one release (see git history) and is gone.
 
   const onSmoothTune = useCallback((v: boolean) => {
     setSmoothTune(v);
@@ -7765,6 +7722,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           would have been drawn underneath the button. */}
       {awaitingRadio && door && (
         <View style={[styles.radioPickBackdrop, { paddingTop: insets.top + 46 }]}>
+          {/* ★ The receiver's last day behind the list — the web landing page's backdrop. Sized
+              to the screen; absent silently on a server without history. */}
+          <DoorSpectrogram base={baseUrl} width={screenW} height={rootH || screenH} />
           {/* ★★★ THE WAY OUT. This screen covers the whole app and nothing on it went back, so a
               listener who opened the wrong server was stuck with the system gesture (or nothing at
               all on Android's gesture nav) — on the one screen where changing your mind is the
@@ -7829,7 +7789,19 @@ export default function SDRScreen({ route, navigation }: Props) {
                   //    already entered, is a deliberate takeover — the row says so before it is
                   //    tapped. A FREE radio needs no such permission, so do not ask for it: the
                   //    flag is only ever set where somebody is actually about to be displaced.
-                  if (busy) setTakeoverIntent(true);
+                  /* ★ ASK FIRST, AND SAY HOW LONG THEY HAVE. Taking over disconnects somebody; the
+                   *  web's card confirms and states the incumbent's remaining time, and the app
+                   *  just did it. The figure comes from the row's own occupancy answer. */
+                  if (busy) {
+                    const left = radioBusy[r.id]?.freeInSec ?? -1;
+                    const when = left > 0 ? ` Their turn ends in ${Math.ceil(left / 60)} min at the latest.` : '';
+                    Alert.alert('Take over this receiver?',
+                      `Someone is listening on ${r.label} now.${when} Taking over disconnects them.`,
+                      [{ text: 'Cancel', style: 'cancel' },
+                       { text: 'Take over', style: 'destructive',
+                         onPress: () => { setTakeoverIntent(true); setRadioBase(radioBaseUrl(baseUrl, r.id)); } }]);
+                    return;
+                  }
                   setRadioBase(radioBaseUrl(baseUrl, r.id));
                 }}
               >
@@ -7868,6 +7840,8 @@ export default function SDRScreen({ route, navigation }: Props) {
                 )}
               </Pressable>
             ); })}
+            {/* ★ Predicted vs actual band conditions and where the receiver is — the web's block. */}
+            <DoorConditions base={baseUrl} />
           </ScrollView>
 
           {/* ── ADMIN, BENEATH THE RADIOS ────────────────────────────────────────────────

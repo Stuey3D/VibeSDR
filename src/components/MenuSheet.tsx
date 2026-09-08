@@ -9,7 +9,7 @@
 
 import StationLogo from './StationLogo';
 import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, useListNav, noteTouchInteraction, revealIn, useKeyboardMode, useFullKeyboardAccessSuspected } from './PanelNav';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
@@ -912,9 +912,10 @@ function MenuSheetBody({
 
   // Search bookmarks & band plan (skin lsv-mp-bm-input)
   const [searchQuery, setSearchQuery] = useState('');
+  const deferredQuery = useDeferredValue(searchQuery);   // ★ see FreqModal — paint first, scan after
   const searchResults = useMemo(
-    () => searchStations(searchBookmarks, searchBands, searchQuery),
-    [searchBookmarks, searchBands, searchQuery],
+    () => searchStations(searchBookmarks, searchBands, deferredQuery),
+    [searchBookmarks, searchBands, deferredQuery],
   );
   useEffect(() => { if (!visible) setSearchQuery(''); }, [visible]);
 

@@ -1509,11 +1509,14 @@ export abstract class SdrWsClient {
     const freqHi    = view.getUint32(18, true);
     const frequency = freqLo + freqHi * 0x100000000;
 
+    /* ★ NO COPY FOR THE COMMON FRAME. binary8 full frames are the steady state (every frame on a
+     *  VibeServer at 1024–4096 bins); slicing the body allocated a fresh 1–4 KB ArrayBuffer per
+     *  frame for a view that can index the original at an offset. Float32 bodies still need the
+     *  copy: offset 22 is not 4-byte aligned and a Float32Array view would throw. */
+    if (flags === FLAG_FULL_U8) { this._applyFullU8(new Uint8Array(buf, 22), frequency); return; }
     const body = buf.slice(22);
-
     if (flags === FLAG_FULL_F32)  { this._applyFull(new Float32Array(body), frequency); }
     else if (flags === FLAG_DELTA_F32) { this._applyDeltaF32(body, frequency); }
-    else if (flags === FLAG_FULL_U8)   { this._applyFullU8(new Uint8Array(body), frequency); }
     else if (flags === FLAG_DELTA_U8)  { this._applyDeltaU8(body, frequency); }
   }
 

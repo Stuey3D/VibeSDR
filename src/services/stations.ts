@@ -294,6 +294,16 @@ export function grpAbbr(g?: string): string {
   return m[k] || m[k.split(/\s+/)[0]] || g.trim().substring(0, 4).toUpperCase();
 }
 
+/** ★ The formatted frequency of a bookmark, lowercased, computed ONCE per bookmark object. With
+ *  the EiBi schedule loaded the list is thousands long and this ran fmtFreq() for every one of
+ *  them on every keystroke — the likeliest source of typing lag in the search box. */
+const freqTextCache = new WeakMap<ServerBookmark, string>();
+function freqText(bm: ServerBookmark): string {
+  let t = freqTextCache.get(bm);
+  if (t === undefined) { t = fmtFreq(bm.frequency).toLowerCase(); freqTextCache.set(bm, t); }
+  return t;
+}
+
 function scoreBm(name: string, q: string): number {
   const n = name.toLowerCase(), lq = q.toLowerCase().trim();
   if (!lq) return 0;
@@ -345,9 +355,10 @@ export function searchStations(
 
   const scoredBms: Array<{ bm: ServerBookmark; s: number }> = [];
   if (!isGenBand) {
+    const lqFreq = qFreq.toLowerCase();
     for (const bm of bms) {
       let s = scoreBm(bm.name || '', q);
-      if (!s && fmtFreq(bm.frequency).toLowerCase().indexOf(qFreq.toLowerCase()) !== -1) s = 1;
+      if (!s && freqText(bm).indexOf(lqFreq) !== -1) s = 1;
       if (s > 0) scoredBms.push({ bm, s });
     }
     scoredBms.sort((a, b) => b.s - a.s || (a.bm.frequency || 0) - (b.bm.frequency || 0));
