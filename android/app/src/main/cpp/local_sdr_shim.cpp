@@ -7089,7 +7089,31 @@ struct LocalSdrShim::Impl {
      *        mode's timing tolerance, not copied from here. 250 ms is right for an ensemble and
      *        would be a bug for a mode that has to know what second it is. */
     void dabClockLoop() {
-        vibeThreadName("vibe-dabclk");
+        /* ★★★ THE AUDIO CLOCK IS A REAL-TIME THREAD AND WAS THE ONE LEFT AT DEFAULT PRIORITY.
+         *
+         *  ★★★ MEASURED ON THE XCOVER SERVING 7D, 2026-09-08, and it is a priority inversion WE
+         *      INTRODUCED. Stuart: "been getting a little stutering on 7D not sure if that is
+         *      signal or related to any of our optimisations". The decode was flawless over 45 s —
+         *      FIB 100 %, MER 20.1 dB, 0 erased frames, 0 re-acquires, 0 IQ dropped, 372 of 372
+         *      super frames, 0 RS lost, 0 PCM silence filled — so nothing upstream of this thread
+         *      was losing anything at all. But the audio LEFT in lumps: measured on the
+         *      adb-forwarded local port (tunnel and browser removed from the picture) the Opus
+         *      packets came at a median 19.5 ms and a p99 of 104 ms, with 65 gaps over 60 ms and
+         *      25 over 100 ms in thirty seconds. Against a 150 ms client buffer, that is the
+         *      stutter, and it is emission — not reception, not the link.
+         *
+         *  ★★★ AND THE AUDIT MADE IT WORSE. `nice -19` went to vibe-dsp, vibe-rtl and vibe-dab so
+         *      the chain could not be starved — and this thread, whose ENTIRE JOB is to hit a
+         *      20 ms deadline, kept the default 0 and now loses to all three. Confirmed on the
+         *      live phone: vibe-dsp -19, vibe-rtl -19, vibe-dab -19, vibe-dabclk 0.
+         *
+         *  ★★ THE COMMENT BELOW ALREADY KNEW. "If we have fallen a long way behind (the thread was
+         *     descheduled…)" — the resync exists because being descheduled was expected. What was
+         *     missing is the one line that makes it unlikely.
+         *
+         *  ★ vibeAudioThread, not vibeThreadName: same call the three threads it competes with
+         *    make, so it is raised WITH them rather than left behind by them. */
+        vibeAudioThread("vibe-dabclk");
         using namespace std::chrono;
         auto next = steady_clock::now();
         while (dabClockRun_.load(std::memory_order_relaxed)) {
