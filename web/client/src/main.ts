@@ -4666,9 +4666,11 @@ function dabTxRemember(d: DabState): Array<{ t: DabTx; lost: boolean }> {
     .map(e => ({ t: e.t, lost: !live.has(`${e.t.main}/${e.t.sub}`) }));
 }
 function dabTxRows(d: DabState, row: (k: string, v: string) => string): string {
-  return dabTxRemember(d).map((e, i) =>
-    row(i === 0 ? 'Transmitters' : '',
-        `<span class="dls${e.lost ? ' txLost' : ''}"><span class="dlsIn">${dabTxText(e.t)}${e.lost ? ' · not received' : ''}</span></span>`)).join('');
+  /* ★ The level sits OUTSIDE the marquee: it changes with every block, and a value that changes
+   *  is rewritten — which restarted the scroll each time ("it looks like it's trying to scroll
+   *  then it gets snapped back to the start", Stuart, 2026-09-08). */
+  return dabTxRemember(d).map((e, i) => { const p = dabTxParts(e.t); return row(i === 0 ? 'Transmitters' : '',
+        `<span class="dls${e.lost ? ' txLost' : ''}"><span class="dlsIn">${p.text}</span></span><span class="lvl${e.lost ? ' txLost' : ''}">${e.lost ? 'not received' : p.level}</span>`); }).join('');
 }
 
 /** FIG 0/9's local time offset applied to the ensemble's UTC clock, in signed half hours. */
@@ -4688,6 +4690,16 @@ function dabTxText(t: NonNullable<DabState['tii']>[number]): string {
              : (t.main === 1 && t.sub === 5 ? `${code} · generic small-scale code, not set by the operator` : code);
   const dist = t.km !== undefined && t.km >= 0 ? ` · ${(t.km * 0.621371).toFixed(t.km < 16 ? 1 : 0)} mi (${t.km.toFixed(t.km < 10 ? 1 : 0)} km)` : '';
   return `${name}${dist} · ${t.db.toFixed(0)} dB${t.site ? ` <span style="opacity:.5">${code}</span>` : ''}`;
+}
+/** The same in two parts: the text that scrolls (stable) and the level that changes every block. */
+function dabTxParts(t: NonNullable<DabState['tii']>[number]): { text: string; level: string } {
+  const code = `${t.main.toString(16).toUpperCase().padStart(2, '0')}/${t.sub.toString(16).toUpperCase().padStart(2, '0')}`;
+  const name = t.site ? escapeHtml(t.site) + (t.area && t.area !== t.site ? ` (${escapeHtml(t.area)})` : '') + (t.ambiguous ? ' ?' : '')
+             : (t.main === 1 && t.sub === 5 ? `${code} · generic small-scale code, not set by the operator` : code);
+  const dist = t.km !== undefined && t.km >= 0 ? ` · ${(t.km * 0.621371).toFixed(t.km < 16 ? 1 : 0)} mi (${t.km.toFixed(t.km < 10 ? 1 : 0)} km)` : '';
+  /* ★ The code scrolls with the name; only the level is fixed, so every level lines up on the right
+   *  (Stuart, 2026-09-08). */
+  return { text: `${name}${dist}${t.site ? ` · <span style="opacity:.5">${code}</span>` : ''}`, level: `${t.db.toFixed(0)} dB` };
 }
 
 /** ★ The two pictures a DX-er reads before any number: the DQPSK constellation (tight dots at
@@ -4733,8 +4745,23 @@ function dabPatchRows(el: HTMLElement, html: string, keys: string[]) {
    *  the arming was undone at once — long transmitter lines never scrolled (Stuart, 2026-09-08,
    *  measured on the Xcover: text 374 px in a 224 px box, unarmed). */
   const spans = el.querySelectorAll('.row > span:last-child') as NodeListOf<HTMLElement>;
-  for (let i = 0; i < spans.length && i < vals.length; i++)
-    if (spans[i].dataset.src !== vals[i]) { spans[i].dataset.src = vals[i]; spans[i].innerHTML = vals[i]; }
+  for (let i = 0; i < spans.length && i < vals.length; i++) {
+    if (spans[i].dataset.src === vals[i]) continue;
+    spans[i].dataset.src = vals[i];
+    /* ★ If the value's scrolling text is unchanged, keep that armed element and replace only the
+     *  rest — the level beside a transmitter, say — so the marquee runs on. */
+    const oldBox = spans[i].querySelector('.dls') as HTMLElement | null;
+    if (oldBox) {
+      const tmp = document.createElement('span'); tmp.innerHTML = vals[i];
+      const newBox = tmp.querySelector('.dls') as HTMLElement | null;
+      if (newBox && newBox.textContent === oldBox.textContent) {
+        newBox.replaceWith(oldBox);
+        spans[i].replaceChildren(...Array.from(tmp.childNodes));
+        continue;
+      }
+    }
+    spans[i].innerHTML = vals[i];
+  }
 }
 /** Start the marquee on every label that overflows its box (the travel is the overflow). */
 function dabArmMarquee(scope: HTMLElement) {
@@ -4794,6 +4821,14 @@ function dabLockControls(on: boolean) {
   const td = document.getElementById('tuneDown'); const tu = document.getElementById('tuneUp');
   if (td) td.title = on ? 'Previous multiplex' : 'Tune down one step';
   if (tu) tu.title = on ? 'Next multiplex' : 'Tune up one step';
+  /* ★ THE IF FILTER IS DAB'S while a multiplex is being received — 2.048 MHz for the ensemble.
+   *  Greyed, not merely ignored (AGENTS.md), with the reason on the control (Stuart, 2026-09-08). */
+  const bw = document.getElementById('tunerBw') as HTMLSelectElement | null;
+  if (bw) {
+    bw.disabled = on;
+    if (on) { bw.dataset.dabTitle = bw.title; bw.title = 'Set by DAB — the filter is pinned to the multiplex while it is being received'; }
+    else if (bw.dataset.dabTitle !== undefined) { bw.title = bw.dataset.dabTitle; delete bw.dataset.dabTitle; }
+  }
 }
 
 /** The block to start on: the one this browser was last on, else 12B. Stuart, 2026-09-07:

@@ -404,9 +404,13 @@ add_executable(dab-offline "${CMAKE_CURRENT_SOURCE_DIR}/dab-offline.cpp")
 target_include_directories(dab-offline PRIVATE "${CPP_DIR}")
 target_compile_options(dab-offline PRIVATE -O2)
 if(APPLE)
+  target_link_libraries(dab-offline PRIVATE "-framework AudioToolbox" "-framework CoreAudio" "-framework CoreFoundation")   # the platform decoder it now exercises
+endif()
+if(APPLE)
   # libusb on macOS talks to IOKit; these are system frameworks, nothing to ship.
   target_link_libraries(vibeserver_core PUBLIC
-      "-framework IOKit" "-framework CoreFoundation" "-framework Security" objc)
+      "-framework IOKit" "-framework CoreFoundation" "-framework Security"
+      "-framework AudioToolbox" "-framework CoreAudio" objc)   # ★ AudioToolbox decodes DAB+ (vibe_dab_aacdec.h)
 endif()
 find_package(Threads REQUIRED)
 target_link_libraries(vibeserver_core PUBLIC Threads::Threads)

@@ -24,12 +24,18 @@
 #include <cstdint>
 #include <cstring>
 #include <vector>
+#include <string>
 
 #if defined(__ANDROID__)
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaFormat.h>
 #elif defined(__unix__) || defined(__APPLE__)
-#include <cerrno>          // ★ glibc does not pull this in transitively; macOS does
+#if defined(__APPLE__)
+#include <AudioToolbox/AudioToolbox.h>   // ★ outside the namespace below — system headers must not be wrapped in it
+#endif
+#include <cerrno>
+#include <cstdlib>
+#include <cstring>          // ★ glibc does not pull this in transitively; macOS does
 #include <csignal>
 #include <cstdio>
 #include <fcntl.h>
@@ -63,6 +69,7 @@ public:
      *    measurement on this flag is what stopped the Xcover's DAB+ ramping up at the start of
      *    every service (Stuart, 2026-09-07 evening: it "never needed it"). */
     static constexpr bool kExactFrames = true;
+    const char* backend() const { return "AMediaCodec"; }
     AacDecoder() = default;
     ~AacDecoder() { close(); }
     AacDecoder(const AacDecoder&) = delete;
@@ -232,9 +239,115 @@ private:
     bool     failed_ = false;
 };
 
-#elif defined(__unix__) || defined(__APPLE__)
+#elif defined(__APPLE__)
+
+/** ★★★ THE PLATFORM'S DECODER ON macOS IS AudioToolbox — the same posture as AMediaCodec on
+ *  Android and ffmpeg on Linux: the operating system decodes, nothing is shipped. Stuart,
+ *  2026-09-08: "route the AAC for DAB+ through the MacOS decoder".
+ *  ★ An AudioConverter fed one access unit at a time. The ADTS header gives the core rate and
+ *    channel count; a core at 24 kHz or below is HE-AAC (SBR, and parametric stereo when the core
+ *    is mono) and decodes to twice its rate in stereo; a 32 or 48 kHz core is plain AAC-LC.
+ *  ★ Apple decodes 1024-sample frames, not DAB+'s 960 — the same substitution ffmpeg makes, so
+ *    kExactFrames is false and DabService measures the real rate exactly as it does for ffmpeg. */
+class AacDecoderApple {
+public:
+    static constexpr bool kExactFrames = false;
+    AacDecoderApple() = default;
+    ~AacDecoderApple() { close(); }
+    AacDecoderApple(const AacDecoderApple&) = delete;
+    AacDecoderApple& operator=(const AacDecoderApple&) = delete;
+    bool available() const { return !failed_; }
+    const char* backend() const { return "AudioToolbox"; }
+
+    bool decode(const uint8_t* adts, size_t n, AacPcm& out) {
+        if (failed_ || !adts || n < 7) return false;
+        if (adts[0] != 0xFF || (adts[1] & 0xF0) != 0xF0) return false;
+        const bool protAbsent = (adts[1] & 0x01) != 0;
+        const size_t hdr = protAbsent ? 7 : 9;
+        const int sfi = (adts[2] >> 2) & 0x0F;
+        const int ch  = ((adts[2] & 0x01) << 2) | (adts[3] >> 6);
+        static const int kRates[16] = { 96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350, 0, 0, 0 };
+        const int core = kRates[sfi];
+        if (!core || n <= hdr) return false;
+        if (!conv_ || core != coreRate_ || ch != coreCh_) { close(); if (!open(core, ch)) { failed_ = true; return false; } }
+        pkt_ = adts + hdr; pktLen_ = n - hdr; pktGiven_ = false;
+        std::vector<float> buf(size_t(4096) * 2);
+        AudioBufferList abl;
+        abl.mNumberBuffers = 1;
+        abl.mBuffers[0].mNumberChannels = 2;
+        abl.mBuffers[0].mDataByteSize   = UInt32(buf.size() * sizeof(float));
+        abl.mBuffers[0].mData           = buf.data();
+        UInt32 frames = 4096;
+        const OSStatus st = AudioConverterFillComplexBuffer(conv_, inputCb, this, &frames, &abl, nullptr);
+        if (st != noErr && st != kNoMoreInput) { ++errors_; lastErr_ = st; if (errors_ > 200) failed_ = true; return false; }
+        if (frames) {
+            out.rateHz = rate_; out.channels = 2;
+            out.interleaved.insert(out.interleaved.end(), buf.begin(), buf.begin() + size_t(frames) * 2);
+        }
+        return true;
+    }
+    void drain(AacPcm&) {}
+    void close() { if (conv_) { AudioConverterDispose(conv_); conv_ = nullptr; } }
+    void reset() { close(); failed_ = false; errors_ = 0; }
+    int rateHz()   const { return conv_ ? rate_ : 0; }
+    int channels() const { return conv_ ? 2 : 0; }
+    long lastError() const { return long(lastErr_); }
+
+private:
+    enum : OSStatus { kNoMoreInput = 'nomo' };   // our own: the converter has eaten this unit
+    static OSStatus inputCb(AudioConverterRef, UInt32* nPackets, AudioBufferList* io, AudioStreamPacketDescription** desc, void* user) {
+        AacDecoderApple* self = static_cast<AacDecoderApple*>(user);
+        if (self->pktGiven_ || !self->pkt_) { *nPackets = 0; return kNoMoreInput; }
+        self->pktGiven_ = true;
+        io->mNumberBuffers = 1;
+        io->mBuffers[0].mNumberChannels = UInt32(self->inCh_);
+        io->mBuffers[0].mData           = const_cast<uint8_t*>(self->pkt_);
+        io->mBuffers[0].mDataByteSize   = UInt32(self->pktLen_);
+        self->desc_.mStartOffset = 0; self->desc_.mVariableFramesInPacket = 0; self->desc_.mDataByteSize = UInt32(self->pktLen_);
+        if (desc) *desc = &self->desc_;
+        *nPackets = 1;
+        return noErr;
+    }
+    bool open(int core, int ch) {
+        const bool he = core <= 24000;
+        AudioStreamBasicDescription in{};
+        /* ★ MEASURED on the 12B capture (Radio 1 Dance, HE-AAC v2, 16 kHz core), 2026-09-08:
+         *  HE_V2 at 2048 frames per packet decodes; HE_V2 at 1024, HE at 2048 and LC at 1024 decode
+         *  NOTHING. Even so a quarter of the units come back 'bada' — Apple's parser wants
+         *  1024-sample frames and DAB+ carries 960, and where ffmpeg is lenient this one refuses.
+         *  That is why the wrapper below prefers ffmpeg when the machine has it. */
+        in.mFormatID        = he ? kAudioFormatMPEG4AAC_HE_V2 : kAudioFormatMPEG4AAC;
+        in.mSampleRate      = core;
+        in.mChannelsPerFrame = UInt32(he ? 2 : (ch ? ch : 2));
+        in.mFramesPerPacket = he ? 2048 : 1024;
+        UInt32 sz = sizeof in;
+        AudioFormatGetProperty(kAudioFormatProperty_FormatInfo, 0, nullptr, &sz, &in);
+        AudioStreamBasicDescription o{};
+        o.mFormatID         = kAudioFormatLinearPCM;
+        o.mFormatFlags      = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
+        o.mSampleRate       = he ? core * 2 : core;
+        o.mChannelsPerFrame = 2;
+        o.mBitsPerChannel   = 32;
+        o.mBytesPerFrame    = 8;
+        o.mFramesPerPacket  = 1;
+        o.mBytesPerPacket   = 8;
+        if (AudioConverterNew(&in, &o, &conv_) != noErr) { conv_ = nullptr; return false; }
+        coreRate_ = core; coreCh_ = ch; inCh_ = int(in.mChannelsPerFrame); rate_ = int(o.mSampleRate);
+        return true;
+    }
+
+    AudioConverterRef conv_ = nullptr;
+    AudioStreamPacketDescription desc_{};
+    const uint8_t* pkt_ = nullptr; size_t pktLen_ = 0; bool pktGiven_ = true;
+    int coreRate_ = 0, coreCh_ = 0, inCh_ = 2, rate_ = 0;
+    bool failed_ = false; int errors_ = 0; OSStatus lastErr_ = 0;
+};
+
+#endif
+#if defined(__unix__) || defined(__APPLE__)
 
 /** ★★★ THE PLATFORM'S DECODER ON A POSIX SERVER IS ffmpeg, RUN AS A PROCESS.
+ *  ★ On macOS too, when it is installed (Homebrew): see AacDecoder below for why it is preferred.
  *
  *  ★★★ STILL NOT A DECODER WE SHIP. Same posture as AMediaCodec above and as the browser's before
  *      that: we hand ADTS to something the operating system already provides and take PCM back.
@@ -254,15 +367,16 @@ private:
  *  ★ SIGPIPE is ignored once, process-wide: ffmpeg exiting mid-write must return an error here,
  *    not kill the server.
  */
-class AacDecoder {
+class AacDecoderFfmpeg {
 public:
     /** ★★★ THIS DECODER CANNOT DO THE 960-SAMPLE DAB+ TRANSFORM — it returns 1024 samples per
      *  access unit, so the caller must MEASURE its real output rate (see DabService). */
     static constexpr bool kExactFrames = false;
-    AacDecoder() = default;
-    ~AacDecoder() { close(); }
-    AacDecoder(const AacDecoder&) = delete;
-    AacDecoder& operator=(const AacDecoder&) = delete;
+    AacDecoderFfmpeg() = default;
+    ~AacDecoderFfmpeg() { close(); }
+    AacDecoderFfmpeg(const AacDecoderFfmpeg&) = delete;
+    AacDecoderFfmpeg& operator=(const AacDecoderFfmpeg&) = delete;
+    const char* backend() const { return "ffmpeg"; }
 
     /** ★ Probed ONCE: the binary must exist AND report an AAC decoder. A server with ffmpeg built
      *  without AAC would otherwise look capable and deliver silence. */
@@ -305,10 +419,23 @@ public:
     int channels() const { return pid_ > 0 ? 2 : 0; }
 
 private:
+    /** ★★★ THE BINARY IS FOUND BY PATH, NOT BY $PATH. A macOS app launched from the Finder has
+     *  /usr/bin:/bin:/usr/sbin:/sbin and nothing else — Homebrew's /opt/homebrew/bin (Apple
+     *  silicon) and /usr/local/bin (Intel) are not on it, so `execlp("ffmpeg")` would report "no
+     *  ffmpeg" on a Mac that has it. The known homes first, then whatever $PATH offers. */
+    static const char* ffmpegPath() {
+        static const std::string path = [] {
+            for (const char* c : { "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg" })
+                if (::access(c, X_OK) == 0) return std::string(c);
+            return std::string("ffmpeg");
+        }();
+        return path.c_str();
+    }
     static bool probe() {
         /* ★ `ffmpeg -decoders` and look for the aac line — the same check by hand as
          *  `ffmpeg -decoders | grep ' aac '`, which is how the Pi was confirmed: "A....D aac". */
-        FILE* p = ::popen("ffmpeg -hide_banner -decoders 2>/dev/null", "r");
+        const std::string cmd = std::string("'") + ffmpegPath() + "' -hide_banner -decoders 2>/dev/null";
+        FILE* p = ::popen(cmd.c_str(), "r");
         if (!p) return false;
         char line[512]; bool found = false;
         while (std::fgets(line, sizeof line, p)) {
@@ -338,7 +465,7 @@ private:
             if (devnull >= 0) ::dup2(devnull, STDERR_FILENO);
             /* ★ nobuffer + low_delay because this is a live stream, not a file: ffmpeg's default
              *  input buffering would add latency the audio path then has to carry for ever. */
-            ::execlp("ffmpeg", "ffmpeg", "-hide_banner", "-loglevel", "quiet", "-nostdin",
+            ::execlp(ffmpegPath(), "ffmpeg", "-hide_banner", "-loglevel", "quiet", "-nostdin",
                      "-fflags", "nobuffer", "-flags", "low_delay",
                      "-f", "aac", "-i", "pipe:0",
                      "-f", "f32le", "-ar", "48000", "-ac", "2", "pipe:1", (char*)nullptr);
@@ -357,7 +484,37 @@ private:
     bool  failed_ = false;
 };
 
+#if defined(__APPLE__)
+/** ★★★ macOS: ffmpeg IF THE MACHINE HAS IT, AudioToolbox OTHERWISE. Stuart, 2026-09-08: "route
+ *  the AAC for DAB+ through the MacOS decoder". Measured on the 12B capture, Apple's decoder
+ *  refuses a quarter of DAB+'s 960-sample access units as bad data (it parses 1024-sample frames)
+ *  where ffmpeg decodes every one of them — so a Mac with Homebrew ffmpeg gets the clean path and
+ *  a Mac without it still plays DAB+ with the operating system's own decoder rather than not at
+ *  all. Which one is in use is reported (backend()) so nobody has to guess from the sound. */
+class AacDecoder {
+public:
+    static constexpr bool kExactFrames = false;
+    /** ★ VIBE_AAC_APPLE=1 forces AudioToolbox — read once, here, so dab-offline can measure both. */
+    AacDecoder() : useFf_(ff_.available() && !getenv("VIBE_AAC_APPLE")) {}
+    bool available() const { return useFf_ ? ff_.available() : at_.available(); }
+    const char* backend() const { return useFf_ ? ff_.backend() : at_.backend(); }
+    bool decode(const uint8_t* adts, size_t n, AacPcm& out) { return useFf_ ? ff_.decode(adts, n, out) : at_.decode(adts, n, out); }
+    void drain(AacPcm& out) { if (useFf_) ff_.drain(out); else at_.drain(out); }
+    void close() { ff_.close(); at_.close(); }
+    void reset() { ff_.reset(); at_.reset(); }
+    int rateHz()   const { return useFf_ ? ff_.rateHz()   : at_.rateHz(); }
+    int channels() const { return useFf_ ? ff_.channels() : at_.channels(); }
+private:
+    AacDecoderFfmpeg ff_;
+    AacDecoderApple  at_;
+    bool useFf_ = false;
+};
 #else
+using AacDecoder = AacDecoderFfmpeg;
+#endif
+
+#endif
+#if !defined(__ANDROID__) && !defined(__unix__) && !defined(__APPLE__)
 
 /** ★★ NO PLATFORM DECODER HERE YET — Linux gets ffmpeg and macOS AudioToolbox, and until then
  *  available() answers honestly and the DAB+ services are marked unplayable rather than silently
@@ -366,6 +523,7 @@ class AacDecoder {
 public:
     static constexpr bool kExactFrames = true;
     bool available() const { return false; }
+    const char* backend() const { return "none"; }
     bool decode(const uint8_t*, size_t, AacPcm&) { return false; }
     void drain(AacPcm&) {}
     void close() {}

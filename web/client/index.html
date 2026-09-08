@@ -1142,7 +1142,12 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 #dabSignal .row .dls { display:block; overflow:hidden; white-space:nowrap; text-align:right; }
 #dabSignal .row .dlsIn { display:inline-block; }
 #dabSignal .row .dlsIn.scroll { animation: dabDls 12s linear infinite; }
-#dabSignal .row .dls.txLost { opacity:.45; }
+#dabSignal .row .dls.txLost, #dabSignal .row .lvl.txLost { opacity:.45; }
+/* ★ A value with a marquee AND a fixed part (the transmitter's level): the text takes what is
+ *  left and scrolls, the level keeps its width. */
+#dabSignal .row > span:last-child:has(.lvl) { display:flex; justify-content:flex-end; gap:6px; align-items:baseline; }
+#dabSignal .row > span:last-child:has(.lvl) .dls { flex:1 1 auto; min-width:0; }
+#dabSignal .row .lvl { flex:0 0 auto; white-space:nowrap; }
 .dabScopes { display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; margin:6px 0 2px; }
 .dabScopes > div { display:flex; flex-direction:column; gap:3px; }
 .dabScopes span { font-size:9px; letter-spacing:1.5px; color:var(--unit); }

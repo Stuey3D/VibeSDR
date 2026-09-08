@@ -15,6 +15,7 @@
 #include "vibe_dab_mp2.h"
 #include "vibe_dab_aac.h"
 #include "vibe_dab_pad.h"
+#include "vibe_dab_aacdec.h"   // ★ the platform decoder — on a Mac, AudioToolbox — so a capture proves the whole DAB+ chain
 #include <deque>
 #include <cstdio>
 #include <cstring>
@@ -68,6 +69,7 @@ int main(int argc, char** argv) {
      *  harness measures the super-frame path the listener gets, not a tidier one. */
     std::deque<std::vector<uint8_t>> sfHold;
     int sfTried = 0, sfOk = 0, sfFire = 0, sfInvalid = 0, sfBadLen = 0, rsFixed = 0, rsLost = 0, aus = 0;
+    vibedab::AacDecoder dec; long decAus = 0, decSamples = 0; int decRate = 0, decCh = 0, decFail = 0; int decFailPos[8] = {0,0,0,0,0,0,0,0}; std::vector<int> decFailSf;
     std::vector<int> sfBadFrame;             // DAB frame index of each failed super frame
     PadReader pad;
 
@@ -156,7 +158,16 @@ int main(int argc, char** argv) {
                     if (!sfr.valid) ++sfInvalid;
                     if (!sfr.valid || !sfr.firecodeOk) { sfBadFrame.push_back(int(blocks) - 1); sfHold.pop_front(); continue; }
                     sfHold.clear(); ++sfOk;
-                    for (const auto& au : sfr.aus) { ++aus; pad.feedAccessUnit(au.data(), au.size()); }
+                    for (size_t k = 0; k < sfr.aus.size(); ++k) {
+                        const auto& au = sfr.aus[k];
+                        ++aus; pad.feedAccessUnit(au.data(), au.size());
+                        if (dec.available()) {
+                            std::vector<uint8_t> pkt = toAdts(au.data(), au.size(), sfr.fmt, sfr.stereo ? 2 : 1);
+                            vibedab::AacPcm pcm;
+                            if (dec.decode(pkt.data(), pkt.size(), pcm)) { ++decAus; if (pcm.channels > 0) decSamples += long(pcm.interleaved.size() / size_t(pcm.channels)); if (pcm.rateHz) { decRate = pcm.rateHz; decCh = pcm.channels; } }
+                            else { ++decFail; if (k < 8) ++decFailPos[k]; if (k == 0 && decFailSf.size() < 60) decFailSf.push_back(sfOk); if (decFail <= 3) printf("  AU %zu of %zu failed: %zu bytes, head %02x %02x %02x\n", k, sfr.aus.size(), au.size(), au.size() > 0 ? au[0] : 0, au.size() > 1 ? au[1] : 0, au.size() > 2 ? au[2] : 0); }
+                        }
+                    }
                     continue;
                 }
                 /* ★ LSF PAIRING TEST: a 24 kHz Layer II frame is 1152 samples = 48 ms = TWO DAB
@@ -206,6 +217,10 @@ int main(int argc, char** argv) {
     if (sfTried) {
         printf("DAB+: super frames tried %d  ok %d (%.1f%% lost)  firecode-bad %d  invalid %d  badLen %d  RS fixed %d  RS lost %d  AUs %d\n",
                sfTried, sfOk, 100.0 * (sfTried - sfOk) / sfTried, sfFire, sfInvalid, sfBadLen, rsFixed, rsLost, aus);
+        printf("AAC (%s): %ld of %d units decoded, %d failed, %ld samples at %d Hz x %d ch = %.1f s of audio (units carry %.1f s)\n",
+               dec.backend(), decAus, aus, decFail, decSamples, decRate, decCh, decRate ? double(decSamples) / decRate : 0.0, sfOk * 0.120);   // ★ a super frame is 120 ms whatever its AU count (2, 3, 4 or 6 by core rate)
+        printf("AAC failures by position in the super frame: %d %d %d %d %d %d\n", decFailPos[0], decFailPos[1], decFailPos[2], decFailPos[3], decFailPos[4], decFailPos[5]);
+        printf("AAC failing super frames (ok-count at failure):"); for (int x : decFailSf) printf(" %d", x); printf("\n");
         printf("DLS: \"%s\"  groups ok %u  bad %u  (pad frames %u, x-ind none %u short %u var %u)\n",
                pad.dls().label().text.c_str(), pad.dls().crcOk(), pad.dls().crcFail(),
                pad.framesSeen(), pad.xIndCount(0), pad.xIndCount(1), pad.xIndCount(2));

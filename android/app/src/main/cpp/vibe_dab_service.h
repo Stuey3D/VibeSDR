@@ -682,8 +682,8 @@ public:
              *  response and a constellation snapshot. Built by append, never through the big
              *  printf (see the argument-misalignment note above). */
             char ab[96];
-            snprintf(ab, sizeof ab, ",\"mer\":%.1f,\"mscBer\":%.5f,\"irPeak\":%d",
-                     s.merDb, s.mscBer, s.irPeakSamples);
+            snprintf(ab, sizeof ab, ",\"mer\":%.1f,\"mscBer\":%.5f,\"irPeak\":%d,\"aacDec\":\"%s\"",
+                     s.merDb, s.mscBer, s.irPeakSamples, aac_.backend());   // ★ which decoder DAB+ goes through — never guessed from the sound
             j += ab;
             const auto& ir = rx_.impulseResponse();
             if (!ir.empty()) {

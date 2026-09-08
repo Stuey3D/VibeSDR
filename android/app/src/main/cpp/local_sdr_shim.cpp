@@ -9261,6 +9261,16 @@ struct LocalSdrShim::Impl {
              *  ★ 0 = back to librtlsdr's automatic choice, which is what every build before this
              *    one did and is still the default. */
             if (!sharedGate("tunerbw")) return;
+            /* ★★★ NOT IN DAB. The ensemble IS the capture and the filter is pinned at 2.048 MHz for
+             *  it (see the DAB entry path); narrowing it takes the multiplex's edges off and the
+             *  decoder with them. Stuart, 2026-09-08: "lock out the IF filter when in DAB mode,
+             *  don't want someone accidentally narrowing it and breaking DAB". The client greys the
+             *  control; this is the same rule for anything else that sends the message. */
+            if (g_dabMode.load(std::memory_order_relaxed)) {
+                LOGI("tunerbw ignored — DAB owns the IF filter");
+                sendText(sock, "{\"type\":\"dab_error\",\"why\":\"The IF filter is set by DAB while a multiplex is being received\"}");
+                return;
+            }
             double v = 0;
             if (jsonNum(msg, "value", v)) {
                 /* ★★★ -1 MEANS FOLLOW THE ZOOM. This read `v >= 0` and silently DISCARDED the
