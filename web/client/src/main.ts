@@ -6,6 +6,7 @@
  * an explicit host:port.
  */
 
+import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { SpectrumClient, MODE_BANDWIDTHS, type SDRMode, type DabState } from './spectrum';
 import { AudioPlayer } from './audio';
 import { initMobileControls } from './mobile';
@@ -3580,6 +3581,17 @@ function updateStatus() {
  *     stale, and the staleness is invisible because the visible half is correct. */
 const latestRadioStatus = new Map<string, any>();
 
+/** ★ THE DAB+ BADGE — the official WorldDAB logo, drawn only beside a receiver whose own status says
+ *  it can decode DAB (Stuart, 2026-09-08: "include the little DAB icon in the radio selection screen
+ *  to show which radios are setup for DAB"). `st` is the radio's live /vibeserver.json on a landing
+ *  page; on the directory the door has already folded the same answer into `r.dab`. 36 px wide —
+ *  the toolkit's minimum is 32. See assets/branding/dabplus/README.md for the terms. */
+function dabBadge(r: any, st: any): string {
+  const can = st?.dab === true || r?.dab === true;
+  if (!can) return '';
+  return `<span title="This receiver is set up for DAB+" style="display:inline-block;width:36px;height:21px;line-height:0">${DABPLUS_LOGO_SVG}</span>`;
+}
+
 function radioCardState(r: any, st: any): { state: string; blocked: boolean } {
   const mmss = (sec: number) => {
     const m = Math.floor(sec / 60), sx = Math.max(0, Math.floor(sec % 60));
@@ -3904,7 +3916,7 @@ async function showSplashRadios(): Promise<void> {
          + `text-decoration:none;color:inherit;${dim}">`
          + `<div style="display:flex;justify-content:space-between;gap:12px">`
          + `<strong style="letter-spacing:.05em">${escapeHtml(r.label)}</strong>`
-         + `<span class="rcState" style="font-size:11px;opacity:.85">${state}</span></div>`
+         + `<span style="display:flex;align-items:center;gap:10px">${dabBadge(r, st)}<span class="rcState" style="font-size:11px;opacity:.85">${state}</span></span></div>`
          + `<div class="sub" style="margin-top:2px;font-size:11px;opacity:.7"${
               rangeTitle ? ` title="${rangeTitle.replace(/"/g, '&quot;')}"` : ''
             }>${range} · ${kind}</div>`

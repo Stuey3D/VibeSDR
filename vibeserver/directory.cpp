@@ -325,6 +325,9 @@ std::string buildStatus(int port) {
                             j += ",\"listeners\":" + std::to_string(jsonNum(ri, "listeners", 0));
                             const long long rm = jsonNum(ri, "maxUsers", 0);
                             if (rm > 0) rmax = rm;
+                            // ★ Whether this RADIO can decode DAB — its own answer, which is the only one
+                            //   that knows its rate lock and band lists. Drives the DAB+ badge on the card.
+                            j += std::string(",\"dab\":") + (jsonBool(ri, "dab") ? "true" : "false");
                             const long long fi = jsonNum(ri, "freeInSec", -1);
                             if (fi >= 0) j += ",\"freeInSec\":" + std::to_string(fi);
                         }

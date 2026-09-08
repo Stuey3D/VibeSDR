@@ -49,6 +49,7 @@ import { splashBridge }                 from '../../App';
 import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode, type RdsExt, type RadioCaps } from '../services/UberSDRClient';
 import AdvRdsPanel from '../components/AdvRdsPanel';
 import DabPanel from '../components/DabPanel';
+import DabPlusBadge from '../components/DabPlusBadge';
 import type { DabState } from '../services/dabTypes';
 import { DAB_BLOCKS, dabBlockIndex } from '../services/dabBlocks';
 import { resolveVibeAdminAuth } from '../services/vibeAuth';
@@ -704,7 +705,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *    radio, so it is the only honest source. In parallel, and failures simply stay unknown: a
    *    radio that does not answer must not be labelled free.
    */
-  const [radioBusy, setRadioBusy] = useState<Record<string, { busy: boolean; freeInSec: number }>>({});
+  const [radioBusy, setRadioBusy] = useState<Record<string, { busy: boolean; freeInSec: number; dab?: boolean }>>({});
   useEffect(() => {
     if (!door || !door.radios.length) { setRadioBusy({}); return; }
     let dead = false;
@@ -712,7 +713,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       door.radios.forEach((r) => {
         fetchOccupancy(radioBaseUrl(baseUrl, r.id)).then((o) => {
           if (dead || !o) return;
-          setRadioBusy((prev) => ({ ...prev, [r.id]: { busy: o.busy, freeInSec: o.freeInSec } }));
+          setRadioBusy((prev) => ({ ...prev, [r.id]: { busy: o.busy, freeInSec: o.freeInSec, dab: o.dab === true } }));
         }).catch(() => {});
       });
     };
@@ -7671,6 +7672,9 @@ export default function SDRScreen({ route, navigation }: Props) {
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                   <Text style={[styles.radioPickName, { flexShrink: 1 }]}>{r.label}</Text>
+                  {/* ★ The official DAB+ logo, only beside a receiver whose own status says it can decode DAB.
+                      See assets/branding/dabplus/README.md — unaltered, and never under 32 px. */}
+                  {radioBusy[r.id]?.dab === true && <DabPlusBadge width={36} />}
                   {/* ★ Only ever said when we have been TOLD. An unknown radio shows nothing —
                       claiming "free" about a radio that did not answer is the error that costs
                       somebody a wasted choice. */}
