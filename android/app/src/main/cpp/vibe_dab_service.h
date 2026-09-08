@@ -34,6 +34,7 @@
 #include "vibe_dab_padtap.h"
 #include "vibe_dab_packet.h"
 #include "vibe_dab_spi.h"
+#include "vibe_dab_epg.h"
 #include <dirent.h>
 #include <sys/stat.h>
 
@@ -703,6 +704,28 @@ public:
                     j += "]";
                 }
             }
+            /* ★★★ NOW AND NEXT, FROM THE MULTIPLEX'S OWN SCHEDULE (TS 102 371 Programme
+             *  Information). `epgPi` is published even when it is zero, and that is the point:
+             *  nothing in the UK transmits PI, so the row must be able to say "none transmitted"
+             *  rather than looking like a decoder that failed. Same posture as the TII pane on
+             *  11D, which says so rather than showing an empty box. */
+            {
+                const EpgProgramme *nowP = nullptr, *nextP = nullptr;
+                epgNowNext(sid_, e, nowP, nextP);
+                j += ",\"epgPi\":" + std::to_string(spiPiDocs_);
+                auto one = [&](const char* key, const EpgProgramme* p) {
+                    if (!p) return;
+                    char tb[48];
+                    snprintf(tb, sizeof tb, "\",\"at\":\"%02d:%02d\",\"mins\":%d,\"lto\":%d}",
+                             (p->start.utcMinutes() + p->start.ltoHalfHours * 30 + 1440) / 60 % 24,
+                             (p->start.utcMinutes() + p->start.ltoHalfHours * 30 + 1440) % 60,
+                             (p->durationSec + 59) / 60, p->start.ltoHalfHours);
+                    j += std::string(",\"") + key + "\":{\"name\":\"" + esc(p->name)
+                       + "\",\"desc\":\"" + esc(p->description) + tb;
+                };
+                one("epgNow",  nowP);
+                one("epgNext", nextP);
+            }
             if (e.mjd >= 0) {
                 char tb[64];
                 snprintf(tb, sizeof tb, ",\"mjd\":%d,\"utc\":\"%02d:%02d:%02d\",\"lto\":%d", e.mjd, e.utcHour, e.utcMin, e.utcSec, e.ltoHalfHours);
@@ -1016,10 +1039,19 @@ private:
             /* Re-read every complete SI object and rebuild the logo map: service SId → the best
              *  logo file names. Cheap — a few objects, a few services. */
             std::map<uint32_t, std::vector<SpiLogoRef>> refs;
-            ++spiParseRuns_; spiParsedSvcs_ = 0; spiSiDocs_ = 0;
+            std::map<uint32_t, std::vector<EpgProgramme>> sched;
+            ++spiParseRuns_; spiParsedSvcs_ = 0; spiSiDocs_ = 0; spiPiDocs_ = 0;
             for (const auto& kv : carousel_.objects()) {
                 const MotCarousel::Object& o = kv.second;
-                if (!o.complete || o.contentType != 7 || o.subType != 0) continue;   // SI documents only
+                if (!o.complete || o.contentType != 7) continue;         // SPI application objects
+                /* ★★★ SUBTYPE TELLS THE THREE SPI DOCUMENTS APART (TS 102 371 table 11):
+                 *      7/0 Service Information — the services and their logos
+                 *      7/1 Programme Information — the schedule
+                 *      7/2 Group Information — series groupings, not read
+                 *  Only 7/0 was ever looked at; 7/1 was dropped by this filter, which is why the
+                 *  EPG "was not implemented" — the objects were arriving and being discarded. */
+                if (o.subType == 1) { readEpgObject(o, e, sched); continue; }
+                if (o.subType != 0) continue;
                 ++spiSiDocs_;
                 for (const auto& sv : SpiDocument::parse(o.body.data(), o.body.size())) {
                     ++spiParsedSvcs_;
@@ -1027,9 +1059,12 @@ private:
                 }
             }
             spiLogoRefs_.swap(refs);
+            if (!sched.empty() || !epg_.empty()) epg_.swap(sched);
         }
     }
 public:
+    std::map<uint32_t, std::vector<EpgProgramme>> epg_;   ///< the schedule, by SId — see readEpgObject
+    uint32_t spiPiDocs_ = 0;      ///< Programme Information objects seen (0 everywhere in the UK)
     std::string cacheDir_; uint16_t cacheLoadedEid_ = 0;
     static std::string cacheName(int ecc, uint16_t eid) { char b[24]; snprintf(b, sizeof b, "%02x-%04x", unsigned(ecc & 0xFF), unsigned(eid)); return b; }
     static bool safeName(const std::string& n) { if (n.empty() || n.size() > 120) return false; for (char c : n) if (!(isalnum((unsigned char)c) || c == '.' || c == '_' || c == '-')) return false; return n[0] != '.'; }
@@ -1058,6 +1093,57 @@ public:
         closedir(d);
         if (loaded) fprintf(stderr, "[DAB] %zu carousel files for %s from the cache\n", loaded, cacheName(e.ecc, e.eid).c_str());
     }
+    /** ★★★ ONE PROGRAMME INFORMATION OBJECT (MOT 7/1) INTO THE SCHEDULE.
+     *
+     *  ★ A carousel carries one PI object per service per day, so the programmes for one service
+     *    arrive across several objects and must be MERGED, not replaced — the last object read
+     *    would otherwise be the only day anyone ever saw.
+     *  ★ Sorted by start time and de-duplicated on it: a carousel repeats its objects for ever, so
+     *    without this the same evening accumulates on every cycle until the pane is unreadable.
+     *  ★ NOT VERIFIABLE HERE. Nothing within reach of Northampton transmits PI (measured
+     *    2026-09-08). This is written against TS 102 371 and tested against synthesised documents;
+     *    it costs nothing when no object arrives, which is the UK case. */
+    void readEpgObject(const MotCarousel::Object& o, const Ensemble& e,
+                       std::map<uint32_t, std::vector<EpgProgramme>>& sched) {
+        ++spiPiDocs_;
+        for (const auto& s : EpgDocument::parse(o.body.data(), o.body.size())) {
+            if (!s.sid) continue;
+            if (s.eid && e.eid && s.eid != e.eid) continue;      // another ensemble's schedule
+            auto& v = sched[s.sid];
+            for (const auto& pr : s.programmes) {
+                if (!pr.start.valid() || pr.name.empty()) continue;
+                bool dup = false;
+                for (const auto& x : v)
+                    if (x.start.mjd == pr.start.mjd && x.start.utcMinutes() == pr.start.utcMinutes()
+                        && x.name == pr.name) { dup = true; break; }
+                if (!dup) v.push_back(pr);
+            }
+            std::sort(v.begin(), v.end(), [](const EpgProgramme& a, const EpgProgramme& b) {
+                if (a.start.mjd != b.start.mjd) return a.start.mjd < b.start.mjd;
+                return a.start.utcMinutes() < b.start.utcMinutes();
+            });
+            if (v.size() > 400) v.resize(400);                   // a week of a busy service
+        }
+    }
+
+    /** What is on now and next for a service, judged against the ensemble's own clock (FIG 0/10).
+     *  ★ The ensemble clock rather than ours: a receiver whose host clock is wrong would otherwise
+     *    show the wrong programme with no way for the listener to tell. */
+    bool epgNowNext(uint32_t sid, const Ensemble& e,
+                    const EpgProgramme*& now, const EpgProgramme*& next) const {
+        now = next = nullptr;
+        auto it = epg_.find(sid);
+        if (it == epg_.end() || it->second.empty() || e.mjd < 0) return false;
+        const int nowMin = e.utcHour * 60 + e.utcMin;
+        for (const auto& pr : it->second) {
+            const long tp = long(pr.start.mjd) * 1440 + pr.start.utcMinutes();
+            const long tn = long(e.mjd) * 1440 + nowMin;
+            if (tp <= tn && tn < tp + (pr.durationSec + 59) / 60) now = &pr;
+            else if (tp > tn && !next) next = &pr;
+        }
+        return now || next;
+    }
+
     void cacheSave(const Ensemble& e) {
         if (cacheDir_.empty() || !e.eid) return;
         const std::vector<std::string> done = carousel_.takeCompleted();

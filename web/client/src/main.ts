@@ -4599,6 +4599,21 @@ function dabRender() {
         : '')
     + (d.announceSupport && d.announceSupport.length
         ? row('Can carry', d.announceSupport.join(', ')) : '')
+    /* ★★★ THE PROGRAMME GUIDE OFF THE AIR (TS 102 371 Programme Information, carried in the same
+     *  SPI carousel as the logos). Stuart, 2026-09-08: "the full technical implementation needs to
+     *  be added even if its just a line in the advanced window that will not populate in the UK" —
+     *  the precedent being RT+, built for the Netherlands and never testable here.
+     *  ★ The row is drawn even when EMPTY, saying no PI is transmitted. A feature that renders
+     *    nothing is indistinguishable from a decoder that failed, and this one will render nothing
+     *    for every UK listener: 12B's carousel holds service information only and 7D has no
+     *    carousel at all (measured 2026-09-08). Same posture as the TII pane on 11D. */
+    + (d.epgNow || d.epgNext
+        ? (d.epgNow  ? row('On now',  `<span class="dls"><span class="dlsIn">${d.epgNow.at} · ${escapeHtml(d.epgNow.name)}`
+                                    + `${d.epgNow.mins ? ` · ${d.epgNow.mins} min` : ''}`
+                                    + `${d.epgNow.desc ? ` — ${escapeHtml(d.epgNow.desc)}` : ''}</span></span>`) : '')
+        + (d.epgNext ? row('On next', `<span class="dls"><span class="dlsIn">${d.epgNext.at} · ${escapeHtml(d.epgNext.name)}`
+                                    + `${d.epgNext.mins ? ` · ${d.epgNext.mins} min` : ''}</span></span>`) : '')
+        : (d.spi ? row('Guide', tl('no programme information transmitted', 'warn')) : ''))
     + (d.dlp ? (['artist', 'title', 'album', 'track', 'composer', 'band', 'presenter', 'programme',
                  'genre', 'station', 'slogan', 'comment', 'homepage', 'phone', 'email', 'sms',
                  'news', 'sport', 'weather', 'traffic', 'alarm', 'advertisement', 'country']

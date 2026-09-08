@@ -216,6 +216,11 @@ export interface DabState {
    *  service can carry at all. Reported only — switching the audio would hijack a shared VFO. */
   announce?: { cluster: number; types: string[]; subChId: number; on: string; alarm: boolean }[];
   announceSupport?: string[];
+  /** ★ The multiplex's own schedule (TS 102 371 Programme Information). `epgPi` counts the PI
+   *  objects seen — zero everywhere in the UK, which is why the row says so rather than hiding. */
+  epgPi?: number;
+  epgNow?:  { name: string; desc: string; at: string; mins: number; lto: number };
+  epgNext?: { name: string; desc: string; at: string; mins: number; lto: number };
   /** The RDS equivalents the ensemble broadcasts: clock (FIG 0/10), local offset, other blocks (0/21). */
   mjd?: number; utc?: string; lto?: number; altHz?: number[];
   /** Ofcom's licensed sites for this ensemble (nearest first when the receiver's position is known), and why the TII test failed. */
