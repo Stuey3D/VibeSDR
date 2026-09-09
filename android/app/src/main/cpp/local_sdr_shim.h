@@ -182,6 +182,8 @@ public:
     int  waitingCount() const;
     /** The captured span in Hz (the sample rate). 0 when nothing is running. */
     double captureSpanHz() const;
+    /** Full-rate raw IQ on offer: the capture rate in Hz, or 0 when not (see Impl::iqFullRateOffered). */
+    int rawIqFullRate() const;
     /** ★★ SPECTROGRAM PERSISTENCE. Setting a path also LOADS whatever is there, so a restart keeps
      *  the history the landing page exists to show. Empty path (the default, and every phone) =
      *  memory only, exactly as before.

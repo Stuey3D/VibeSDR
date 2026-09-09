@@ -3951,6 +3951,12 @@ struct LocalSdrShim::Impl {
     /** ★ One session's raw IQ endpoint — see the RAW IQ OUT note above. */
     struct IqOut {
         int  rate = 48000;                       // what the consumer asked for and will assume
+        /* ★★★ FULL RATE — the radio's own stream, before the down-converter. LAN only, and
+         *  only when the session has the radio to itself (g_vsMaxUsers <= 1): a SET_FREQUENCY
+         *  from the consumer moves the HARDWARE centre, which on a shared radio would move
+         *  everybody. Stuart, 2026-09-09: "the RSP1B gets the 250K option, the single user
+         *  RTL-SDRs get 2.4MHz" — Trunk Recorder needs a whole trunked system in one window. */
+        bool full = false;
         int  port = 0;                           // LAN TCP port, 0 when WebSocket-only (public)
         bool pub  = false;                       // through the tunnel: code + token, no port
         std::string code, token, host;
@@ -13605,6 +13611,15 @@ struct LocalSdrShim::Impl {
             const uint32_t v = (uint32_t(cmd[1]) << 24) | (uint32_t(cmd[2]) << 16) | (uint32_t(cmd[3]) << 8) | cmd[4];
             if (cmd[0] == 0x01 && v > 0 && spec) {
                 handleControl(spec, "{\"type\":\"tune\",\"frequency\":" + std::to_string(v) + "}");
+                /* ★★★ FULL RATE: the consumer sees the radio's whole window, so its SET_FREQUENCY
+                 *  is the CENTRE of that window, not a VFO. Trunk Recorder sets it once and then
+                 *  channelises inside it; if the hardware centre is anywhere else every channel it
+                 *  derives is wrong. Only when the session's tune was ACCEPTED (a blocked band
+                 *  leaves the dial where it was, and the centre must not move on its own). */
+                if (iq->full && std::fabs(audioFreq.load() - (double)v) < 1.0) {
+                    requestPhysicalCentre((double)v);
+                    LOGI("raw IQ out: full-rate consumer set the centre to %.6f MHz", v / 1e6);
+                }
                 // ★ TELL THE OWNING CLIENT. A tune normally comes FROM the client, which already
                 //   knows where it put the dial, so the handler never echoes it back — and a tune
                 //   from the rtl_tcp side moved the radio while the browser's dial stayed put
@@ -13642,12 +13657,19 @@ struct LocalSdrShim::Impl {
         auto* p = (Impl*)ctx;
         std::shared_ptr<IqOut> iq;
         { std::lock_guard<std::mutex> lk(p->iqDirectMtx); iq = p->iqDirect; }
-        if (iq) p->iqTapInto(iq, x, n, (int)std::lround(rateHz));
+        if (iq && !iq->full) p->iqTapInto(iq, x, n, (int)std::lround(rateHz));
+    }
+    /** Full rate: the raw block from the DSP loop, at the capture rate, before anything touches it. */
+    void iqTapFull(const cf32* x, int n, double rateHz) {
+        std::shared_ptr<IqOut> iq;
+        { std::lock_guard<std::mutex> lk(iqDirectMtx); iq = iqDirect; }
+        if (iq && iq->full) iqTapInto(iq, x, n, (int)std::lround(rateHz));
     }
     void iqTapInto(const std::shared_ptr<IqOut>& iq, const cf32* in, int n, int inRate) {
         if (!iq || !iq->conn || n <= 0) return;
         if (inRate <= 0) return;
-        if (iq->inRate != inRate || !iq->ri) {
+        const bool same = inRate == iq->rate;    // ★ full rate: nothing to resample
+        if (!same && (iq->inRate != inRate || !iq->ri)) {
             iq->ri.reset(new vibedsp::RationalResampler(inRate, iq->rate));
             iq->rq.reset(new vibedsp::RationalResampler(inRate, iq->rate));
             iq->inRate = inRate;
@@ -13657,11 +13679,15 @@ struct LocalSdrShim::Impl {
         //   vectorises; the resampler behind it is vibedsp's NEON/SSE2 one.
         const float* f = reinterpret_cast<const float*>(in);
         for (int i = 0; i < n; i++) { iq->fi[i] = f[2 * i]; iq->fq[i] = f[2 * i + 1]; }
-        const int cap = iq->ri->maxOut(n);
-        iq->oi.resize((size_t)cap); iq->oq.resize((size_t)cap);
-        const int ni = iq->ri->process(iq->fi.data(), n, iq->oi.data());
-        const int nq = iq->rq->process(iq->fq.data(), n, iq->oq.data());
-        const int m = std::min(ni, nq);
+        int m;
+        if (same) { iq->oi.swap(iq->fi); iq->oq.swap(iq->fq); m = n; }
+        else {
+            const int cap = iq->ri->maxOut(n);
+            iq->oi.resize((size_t)cap); iq->oq.resize((size_t)cap);
+            const int ni = iq->ri->process(iq->fi.data(), n, iq->oi.data());
+            const int nq = iq->rq->process(iq->fq.data(), n, iq->oq.data());
+            m = std::min(ni, nq);
+        }
         if (m <= 0) return;
         std::vector<uint8_t> out((size_t)m * 2);
         /* ★★★ UNITY — THE LEVEL THE SERVER'S OWN DEMODULATORS SEE. Two guesses preceded this:
@@ -13723,10 +13749,26 @@ struct LocalSdrShim::Impl {
     void iqStopFor(const std::shared_ptr<net::Socket>& sock) {
         std::shared_ptr<ClientDsp> c;
         { std::lock_guard<std::mutex> lk(clientMtx); auto it = clientDsp.find(sock.get()); if (it != clientDsp.end()) c = it->second; }
-        if (c) { iqStop(c.get()); return; }
+        if (c) iqStop(c.get());
+        // ★ A full-rate stream lives in the direct slot whatever the mode — check it either way.
         bool mine = false;
         { std::lock_guard<std::mutex> lk(iqDirectMtx); mine = iqDirect && iqDirectSock == sock; }
         if (mine) iqStopDirect();
+    }
+    /** How much full-rate raw IQ this receiver offers: the capture rate, or 0 when it is not on
+     *  offer — the owner has IQ out off, the radio is shared, or DAB has it. */
+    int iqFullRateOffered() const {
+        if (g_vsRawIqMode.load(std::memory_order_relaxed) == 0) return 0;
+        if (g_vsMaxUsers.load() > 1) return 0;
+        if (g_dabMode.load(std::memory_order_relaxed)) return 0;
+        return (int)std::lround(sampleRate);
+    }
+    /** Ask the DSP thread to put the PHYSICAL centre on `hz` — what an rtl_tcp consumer of the
+     *  full-rate stream means by SET_FREQUENCY. Goes through pendingDongle so it is applied on
+     *  the thread that owns the hardware, like a pan. */
+    void requestPhysicalCentre(double hz) {
+        std::lock_guard<std::recursive_mutex> lk(modeMtx);
+        pendingDongle = hz - hwOffsetHz();
     }
     /** Turn IQ out on for the session behind `sock`. Returns the JSON reply (an `iqout` message,
      *  with `why` when refused). */
@@ -13752,9 +13794,15 @@ struct LocalSdrShim::Impl {
         static const int kRates[] = { 48000, 96000, 192000, 250000 };
         int want = 48000;
         for (int r : kRates) if (r == rate) want = r;
+        // ★ FULL RATE: the client asks for exactly the rate the receiver advertised (rawIqFull).
+        const int fullRate = iqFullRateOffered();
+        const bool full = local && fullRate > 0 && rate == fullRate;
+        if (!full && local && rate >= 1000000) return refuse("full-rate raw IQ is only for a radio with one listener, on the local network");
+        if (full) want = fullRate;
         if (!local) want = 48000;                                       // ★ the tunnel's ceiling
+        if (full) iqStopDirect();        // ★ one full stream per radio, whatever the mode
         auto iq = std::make_shared<IqOut>();
-        iq->rate = want; iq->pub = !local;
+        iq->rate = want; iq->pub = !local; iq->full = full;
         iq->token = vsRandomCode(20, "abcdefghijklmnopqrstuvwxyz0123456789");
         if (local) {
             iq->host = primaryIpv4();
@@ -13767,8 +13815,10 @@ struct LocalSdrShim::Impl {
             iq->code = vsRandomCode(6, "abcdefghjkmnpqrstuvwxyz23456789");   // no 0/O/1/l/i — typed by a person
         }
         g_vsRawIqActive.fetch_add(1);
-        if (c) { std::lock_guard<std::mutex> lk(c->mtx); c->iq = iq; }
-        else   { std::lock_guard<std::mutex> lk(iqDirectMtx); iqDirect = iq; iqDirectSock = sock; }
+        // ★ A full-rate stream is fed from the raw block, so it lives in the direct slot even
+        //   when this session has a per-client channel of its own.
+        if (c && !full) { std::lock_guard<std::mutex> lk(c->mtx); c->iq = iq; }
+        else            { std::lock_guard<std::mutex> lk(iqDirectMtx); iqDirect = iq; iqDirectSock = sock; }
         iq->writeTh = std::thread([this, iq]{ iqWriteLoop(iq); });
         if (iq->lis) {
             std::shared_ptr<net::Socket> spec = sock;
@@ -13786,12 +13836,18 @@ struct LocalSdrShim::Impl {
                 }
             });
         }
-        if (c) clientRetune(c.get());               // ★ widen the channel to the IQ rate (chanBinsFor above)
+        if (full) {
+            // ★ The window IS the capture: put the physical centre on the listener's dial so the
+            //   consumer's first read is what the web client shows, until it sets its own.
+            requestPhysicalCentre(audioFreq.load());
+        }
+        else if (c) clientRetune(c.get());          // ★ widen the channel to the IQ rate (chanBinsFor above)
         else   rx.setIqMinRate((double)iq->rate);   // ★ direct: the pipeline's channel floor
         LOGI("raw IQ out: on for %s — %s at %d Hz%s", peer.c_str(),
              local ? ("port " + std::to_string(iq->port)).c_str() : "tunnel", iq->rate,
              iq->pub ? (", code " + iq->code).c_str() : "");
         std::string j = "{\"type\":\"iqout\",\"on\":1,\"rate\":" + std::to_string(iq->rate)
+                      + ",\"full\":" + (iq->full ? "true" : "false")
                       + ",\"public\":" + (iq->pub ? "true" : "false")
                       + ",\"token\":\"" + iq->token + "\"";
         if (iq->port) j += ",\"host\":\"" + iq->host + "\",\"port\":" + std::to_string(iq->port);
@@ -14684,6 +14740,7 @@ struct LocalSdrShim::Impl {
             //     test and a listener saying the audio broke up. The IQ backlog IS that signal.
             const auto t0 = std::chrono::steady_clock::now();
             const double haveSec = (double)buf.size() / sampleRate;   // real time in this block
+            iqTapFull(buf.data(), (int)buf.size(), sampleRate);       // ★ full-rate raw IQ out, if on
             // ★★★ IN SHARED MODE THE SHARED PIPELINE IS NOT RUN AT ALL. Its FFT is replaced by the
             //     channelizer's (emitWideFromBins), and its DEMODULATOR produced audio that NOBODY
             //     listened to — every listener has their own chain now. Running it was paying full
@@ -16884,6 +16941,7 @@ bool LocalSdrShim::isBusy() const {
          || (p->audioClient && p->audioClient->isOpen()));
 }
 int LocalSdrShim::listenerCount() const { return p ? p->specListenerCount() : 0; }
+int LocalSdrShim::rawIqFullRate() const { return p ? p->iqFullRateOffered() : 0; }
 
 double LocalSdrShim::captureSpanHz() const { return p ? p->sampleRate : 0.0; }
 
@@ -17967,6 +18025,9 @@ static std::string vsTunableJson() {
         j += std::string(",\"rawIq\":\"") + kModes[m] + "\"";
         j += ",\"rawIqMax\":" + std::to_string(vsRawIqMax());
         j += ",\"rawIqActive\":" + std::to_string(g_vsRawIqActive.load(std::memory_order_relaxed));
+        // ★ The full-rate offer: the capture rate in Hz, or 0. LAN visitors with the radio to
+        //   themselves get it as a "FULL" entry in the rate picker.
+        j += ",\"rawIqFull\":" + std::to_string(LocalSdrShim::instance().rawIqFullRate());
     }
     // ★ The same ranges in WORDS where the plan has words for them — "FM broadcast" is what a
     //   listener searches for, and the plan that knows the names is region-aware and lives here.
