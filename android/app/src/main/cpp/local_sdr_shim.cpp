@@ -46,6 +46,14 @@
 #include <cctype>    // ★ tolower — reached transitively on the desktop toolchains, not guaranteed on the NDK's libc++
 #include <dirent.h>
 #include <deque>
+#include <ifaddrs.h>          // ★ raw IQ out: the machine's own LAN address for the "connect to" line
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#if defined(__ARM_NEON) && defined(__aarch64__)
+#include <arm_neon.h>         // ★ raw IQ out: float → 8-bit conversion, 8 samples a go
+#elif defined(__SSE2__)
+#include <emmintrin.h>
+#endif
 #include <memory>
 #include <map>
 #include <set>
@@ -2631,6 +2639,113 @@ static bool isLoopback(const std::string& ip) {
     return ip.rfind("127.", 0) == 0 || ip == "::1" || ip == "::ffff:127.0.0.1";
 }
 
+// ── ★★★ RAW IQ OUT — the listener's own channel, as an rtl_tcp stream ─────────────────────────
+//
+// Stuart, 2026-09-09: "a RAW IQ stream out of VibeServer just in case a user wants to pipe it to
+// another app for a decoder we dont and will not support such as digital voice". The design that
+// was settled that day:
+//   • It is a SIDE CHANNEL OF A LIVE SESSION, not a mode. The web client or the app turns it on from
+//     the audio panel; the session's time limit, cooldown and etiquette apply unchanged; the port
+//     dies with the session. Audio keeps playing — the DDC output is split, not diverted.
+//   • rtl_tcp framing everywhere ("RTL0" header, 8-bit IQ, 5-byte commands), because that is what
+//     every decoder already speaks. On the LAN it is a real TCP port from 50001 up; through the
+//     tunnel — which carries no raw ports — the same bytes ride a WebSocket (/ws/iq) and the
+//     VibeIQ bridge presents them as localhost:1234. 48 kHz over the tunnel, up to 250 kHz locally.
+//   • A frequency command from the decoder tunes THIS session's VFO, through the same rules as any
+//     tune. Gain and rate commands are ignored: the server owns the hardware.
+//   • Never on a shared dial. Owner setting: off / local only / local + public, and a total cap.
+//   • A consumer that is taking data is USING the radio — the idle prompt does not fire.
+static std::atomic<int> g_vsRawIqMode{0};     // 0 off · 1 local only · 2 local + public
+static std::atomic<int> g_vsRawIqMax{0};      // 0 = the default for this host
+static std::atomic<int> g_vsRawIqActive{0};   // sessions with IQ out on right now
+static int vsRawIqDefaultMax() {
+#if defined(__ANDROID__)
+    return 1;                                  // a phone: one, unless the owner knows better
+#else
+    const unsigned n = std::thread::hardware_concurrency();
+    return n >= 8 ? 4 : n >= 4 ? 3 : 1;
+#endif
+}
+static int vsRawIqMax() { const int m = g_vsRawIqMax.load(std::memory_order_relaxed); return m > 0 ? m : vsRawIqDefaultMax(); }
+static bool isPrivateIp(const std::string& ip) {
+    if (isLoopback(ip)) return true;
+    std::string v = ip.rfind("::ffff:", 0) == 0 ? ip.substr(7) : ip;
+    if (v.rfind("10.", 0) == 0 || v.rfind("192.168.", 0) == 0) return true;
+    if (v.rfind("172.", 0) == 0) { const int o = atoi(v.c_str() + 4); if (o >= 16 && o <= 31) return true; }
+    if (v.rfind("fd", 0) == 0 || v.rfind("fe80", 0) == 0) return true;   // ULA / link-local v6
+    return false;
+}
+/** The machine's own LAN address, for the "connect your app to …" line. First non-loopback IPv4. */
+static std::string primaryIpv4() {
+    struct ifaddrs* ifa = nullptr;
+    if (getifaddrs(&ifa) != 0) return "";
+    std::string out;
+    for (auto* p = ifa; p; p = p->ifa_next) {
+        if (!p->ifa_addr || p->ifa_addr->sa_family != AF_INET) continue;
+        char buf[INET_ADDRSTRLEN] = {0};
+        const auto* sa = reinterpret_cast<const sockaddr_in*>(p->ifa_addr);
+        if (!inet_ntop(AF_INET, &sa->sin_addr, buf, sizeof buf)) continue;
+        std::string a = buf;
+        if (a.rfind("127.", 0) == 0) continue;
+        if (out.empty() || a.rfind("192.168.", 0) == 0 || a.rfind("10.", 0) == 0) out = a;
+    }
+    freeifaddrs(ifa);
+    return out;
+}
+static std::string vsRandomCode(int n, const char* alphabet) {
+    static std::atomic<unsigned> ctr{0};
+    unsigned x = (unsigned)std::chrono::steady_clock::now().time_since_epoch().count() ^ (ctr++ * 2654435761u) ^ (unsigned)(uintptr_t)&ctr;
+    std::string out; const size_t A = strlen(alphabet);
+    for (int i = 0; i < n; i++) { x ^= x << 13; x ^= x >> 17; x ^= x << 5; out += alphabet[x % A]; }
+    return out;
+}
+/** ★ float IQ → 8-bit unsigned interleaved, the rtl_tcp sample. x4 lift (the channel is
+ *  gain-normalised by the pipeline), clip, ×127 + 127.5. NEON / SSE2 eight at a time; scalar tail.
+ *  Stuart: "efficiency is king" — this runs for every sample of every IQ listener. */
+static void iqFloatToU8(const float* i, const float* q, int n, uint8_t* out) {
+    int k = 0;
+#if defined(__ARM_NEON) && defined(__aarch64__)
+    const float32x4_t g = vdupq_n_f32(4.0f), hi = vdupq_n_f32(1.0f), lo = vdupq_n_f32(-1.0f);
+    const float32x4_t sc = vdupq_n_f32(127.0f), off = vdupq_n_f32(127.5f);
+    for (; k + 8 <= n; k += 8) {
+        float32x4_t a0 = vminq_f32(hi, vmaxq_f32(lo, vmulq_f32(vld1q_f32(i + k), g)));
+        float32x4_t a1 = vminq_f32(hi, vmaxq_f32(lo, vmulq_f32(vld1q_f32(i + k + 4), g)));
+        float32x4_t b0 = vminq_f32(hi, vmaxq_f32(lo, vmulq_f32(vld1q_f32(q + k), g)));
+        float32x4_t b1 = vminq_f32(hi, vmaxq_f32(lo, vmulq_f32(vld1q_f32(q + k + 4), g)));
+        uint16x4_t ia0 = vmovn_u32(vcvtq_u32_f32(vmlaq_f32(off, a0, sc)));
+        uint16x4_t ia1 = vmovn_u32(vcvtq_u32_f32(vmlaq_f32(off, a1, sc)));
+        uint16x4_t ib0 = vmovn_u32(vcvtq_u32_f32(vmlaq_f32(off, b0, sc)));
+        uint16x4_t ib1 = vmovn_u32(vcvtq_u32_f32(vmlaq_f32(off, b1, sc)));
+        uint8x8_t ua = vmovn_u16(vcombine_u16(ia0, ia1));
+        uint8x8_t ub = vmovn_u16(vcombine_u16(ib0, ib1));
+        uint8x8x2_t iqp; iqp.val[0] = ua; iqp.val[1] = ub;
+        vst2_u8(out + (size_t)k * 2, iqp);                        // interleave I,Q
+    }
+#elif defined(__SSE2__)
+    const __m128 g = _mm_set1_ps(4.0f), hi = _mm_set1_ps(1.0f), lo = _mm_set1_ps(-1.0f);
+    const __m128 sc = _mm_set1_ps(127.0f), off = _mm_set1_ps(127.5f);
+    for (; k + 8 <= n; k += 8) {
+        __m128 a0 = _mm_min_ps(hi, _mm_max_ps(lo, _mm_mul_ps(_mm_loadu_ps(i + k), g)));
+        __m128 a1 = _mm_min_ps(hi, _mm_max_ps(lo, _mm_mul_ps(_mm_loadu_ps(i + k + 4), g)));
+        __m128 b0 = _mm_min_ps(hi, _mm_max_ps(lo, _mm_mul_ps(_mm_loadu_ps(q + k), g)));
+        __m128 b1 = _mm_min_ps(hi, _mm_max_ps(lo, _mm_mul_ps(_mm_loadu_ps(q + k + 4), g)));
+        __m128i ia = _mm_packs_epi32(_mm_cvtps_epi32(_mm_add_ps(_mm_mul_ps(a0, sc), off)),
+                                     _mm_cvtps_epi32(_mm_add_ps(_mm_mul_ps(a1, sc), off)));
+        __m128i ib = _mm_packs_epi32(_mm_cvtps_epi32(_mm_add_ps(_mm_mul_ps(b0, sc), off)),
+                                     _mm_cvtps_epi32(_mm_add_ps(_mm_mul_ps(b1, sc), off)));
+        __m128i u = _mm_unpacklo_epi8(_mm_packus_epi16(ia, ia), _mm_packus_epi16(ib, ib));   // I0 Q0 I1 Q1 …
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(out + (size_t)k * 2), u);
+    }
+#endif
+    for (; k < n; k++) {
+        float a = i[k] * 4.0f, b = q[k] * 4.0f;
+        a = a > 1.0f ? 1.0f : (a < -1.0f ? -1.0f : a);
+        b = b > 1.0f ? 1.0f : (b < -1.0f ? -1.0f : b);
+        out[(size_t)k * 2]     = (uint8_t)std::lround(a * 127.0f + 127.5f);
+        out[(size_t)k * 2 + 1] = (uint8_t)std::lround(b * 127.0f + 127.5f);
+    }
+}
+
 // Extract a query-string value (?a=1&key=val) from a full HTTP request line.
 /** Percent-decode a query value. queryParam() returns it RAW, so a station name
  *  ("Heart FM") arrives as "Heart%20FM" and would be stored with the escape in it. */
@@ -3829,7 +3944,29 @@ struct LocalSdrShim::Impl {
     // radio, and the phone and Mac builds compile this same file — so when the centre is not
     // locked, none of this is constructed and the original single-pipeline path runs untouched.
     // The riskiest thing here would be changing behaviour for the shipping app.
+    /** ★ One session's raw IQ endpoint — see the RAW IQ OUT note above. */
+    struct IqOut {
+        int  rate = 48000;                       // what the consumer asked for and will assume
+        int  port = 0;                           // LAN TCP port, 0 when WebSocket-only (public)
+        bool pub  = false;                       // through the tunnel: code + token, no port
+        std::string code, token, host;
+        std::shared_ptr<net::Listener> lis;
+        std::shared_ptr<net::Socket>   conn;     // the one consumer — TCP or the /ws/iq socket
+        bool ws = false;
+        std::atomic<bool> run{true};
+        std::thread acceptTh;
+        std::mutex qm; std::condition_variable qcv;
+        std::deque<std::vector<uint8_t>> q; size_t qBytes = 0;
+        std::thread writeTh;
+        std::atomic<double> lastReadAt{0};       // last time the consumer took bytes
+        std::atomic<long long> bytesSent{0};
+        int inRate = 0;                          // the DDC rate the resamplers were built for
+        std::unique_ptr<vibedsp::RationalResampler> ri, rq;
+        std::vector<float> fi, fq, oi, oq;
+    };
+
     struct ClientDsp {
+        std::shared_ptr<IqOut> iq;              // ★ raw IQ out, while the listener has it on
         std::shared_ptr<net::Socket> spec;      // whose channel this is
         std::shared_ptr<net::Socket> audio;     // its own audio socket, or null until one opens
         std::string session;
@@ -4530,7 +4667,11 @@ struct LocalSdrShim::Impl {
         //     ★ The view is served from this channel when it fits inside it — which is every zoom
         //       deep enough to be worth a private view — and from the shared wide row when it does
         //       not. That is the same handover, decided without resizing anything.
-        const int want = chanBinsFor(bw);
+        int want = chanBinsFor(bw);
+        // ★ RAW IQ OUT needs the channel at least as wide as the rate it delivers (the resampler
+        //   can only take away). 250 kHz IQ on a 12.5 kHz NFM channel would otherwise be 12.5 kHz of
+        //   signal inside 250 kHz of nothing.
+        if (c->iq) want = std::max(want, chanBinsFor(double(c->iq->rate) * 0.5));
         std::lock_guard<std::mutex> lk(c->mtx);
         if (want != c->chanBins || !c->rx) {
             c->chanBins = want;
@@ -9224,6 +9365,34 @@ struct LocalSdrShim::Impl {
             sendText(sock, g_dab.json());
             return;
         }
+        if (type == "rawIq") {
+            /* ★ Owner setting: mode 0/1/2 and the total cap (0 = default for this host). */
+            double m = -1, mx = -1;
+            const bool hasM = jsonNum(msg, "mode", m), hasMax = jsonNum(msg, "max", mx);
+            if ((hasM || hasMax) && adminGate("raw IQ out")) {
+                if (hasM)   g_vsRawIqMode.store(std::max(0, std::min(2, (int)m)), std::memory_order_relaxed);
+                if (hasMax) g_vsRawIqMax.store(std::max(0, (int)mx), std::memory_order_relaxed);
+                vsPersist("{\"rawIq\":" + std::to_string(g_vsRawIqMode.load()) + ",\"rawIqMax\":" + std::to_string(g_vsRawIqMax.load()) + "}");
+                LOGI("raw IQ out: mode %d, cap %d (default %d)", g_vsRawIqMode.load(), g_vsRawIqMax.load(), vsRawIqDefaultMax());
+                sendHwInfo(sock);
+            }
+            return;
+        }
+        if (type == "iqout") {
+            /* ★ The listener turns their raw IQ stream on or off. The reply says where it is. */
+            double onV = 0, rateV = 48000; jsonNum(msg, "on", onV); jsonNum(msg, "rate", rateV);
+            if (onV == 0) { iqStopFor(sock); sendText(sock, "{\"type\":\"iqout\",\"on\":0}"); return; }
+            sendText(sock, iqStartFor(sock, (int)rateV));
+            return;
+        }
+        if (type == "iqtune") {
+            /* ★ The VibeIQ bridge relays an rtl_tcp SET_FREQUENCY as this — through the session's
+             *  own tune, so every rule that gates tuning runs. */
+            double hz = 0;
+            if (jsonNum(msg, "hz", hz) && hz > 0)
+                handleControl(sock, "{\"type\":\"tune\",\"frequency\":" + std::to_string((long long)hz) + "}");
+            return;
+        }
         if (type == "dabBoost") {
             /* ★ An owner-level decision about the machine, so it goes through the same admin gate
              *  as the other radio settings and is persisted. See g_dabRateBoost. */
@@ -10701,6 +10870,13 @@ struct LocalSdrShim::Impl {
             return;
         }
 
+        if (reqLine.find("/ws/iq") != std::string::npos && !wsKey.empty()) {
+            // ★ The raw IQ stream over a WebSocket, for the tunnel. The TOKEN is the credential —
+            //   minted with the session's IQ out, dies with it. No PIN pre-flight: the token proves
+            //   a session that already passed it.
+            acceptIqWs(sock, wsKey, queryParam(reqLine, "tok"));
+            return;
+        }
         if (wsDx && !wsKey.empty()) {
             // PIN-gate this like the other sockets. It was open: anyone who could
             // reach the port could attach decoders and start the FT8 engine without
@@ -12981,6 +13157,7 @@ struct LocalSdrShim::Impl {
           //   holding clientMtx would deadlock against anything that thread wants.
           { auto it = clientDsp.find(sock.get());
             if (it != clientDsp.end()) { goneDsp = it->second; clientDsp.erase(it); } }
+          if (goneDsp && goneDsp->iq) iqStop(goneDsp.get());   // ★ the port dies with the session
           sockSession.erase(sock.get());
           sockSince.erase(sock.get());
           for (auto it = pendingAudio.begin(); it != pendingAudio.end(); ) {
@@ -13375,6 +13552,192 @@ struct LocalSdrShim::Impl {
     /** @param session the listener this decoder socket belongs to. ★ It never carried one: with
      *  a single VFO there was only one thing it could possibly be decoding. Per-client tuning
      *  makes "whose audio?" a real question, and the session is the only thing that answers it. */
+    // ── RAW IQ OUT: start / stop / tap / serve ──────────────────────────────────────────────
+    static void iqSendHeader(const std::shared_ptr<net::Socket>& sock) {
+        // "RTL0", tuner type (5 = R820T, so a client's gain table lookup is sane), 0 gains.
+        const uint8_t hdr[12] = { 'R','T','L','0', 0,0,0,5, 0,0,0,0 };
+        sock->send(hdr, sizeof hdr);
+    }
+    /** The 5-byte rtl_tcp command reader for one consumer: SET_FREQUENCY tunes the session. */
+    void iqReadCommands(ClientDsp* c, const std::shared_ptr<IqOut>& iq, const std::shared_ptr<net::Socket>& conn) {
+        uint8_t cmd[5];
+        while (serverRunning.load() && iq->run.load() && conn->isOpen()) {
+            const int n = conn->recv(cmd, 5, true, 1000);
+            if (n == 0) continue;               // timeout — keep waiting
+            if (n < 5) break;                   // closed or broken
+            const uint32_t v = (uint32_t(cmd[1]) << 24) | (uint32_t(cmd[2]) << 16) | (uint32_t(cmd[3]) << 8) | cmd[4];
+            if (cmd[0] == 0x01 && v > 0 && c->spec)
+                handleControl(c->spec, "{\"type\":\"tune\",\"frequency\":" + std::to_string(v) + "}");
+            // 0x02 rate, 0x04 gain, 0x05 ppm … — the server owns the hardware; ignored.
+        }
+    }
+    void iqWriteLoop(const std::shared_ptr<IqOut>& iq) {
+        vibeAudioThread("vibe-iqout");          // ★ a stream with a clock: same priority as audio
+        while (iq->run.load()) {
+            std::vector<uint8_t> frame;
+            {
+                std::unique_lock<std::mutex> lk(iq->qm);
+                iq->qcv.wait_for(lk, std::chrono::milliseconds(200), [&]{ return !iq->q.empty() || !iq->run.load(); });
+                if (!iq->run.load()) break;
+                if (iq->q.empty()) continue;
+                frame = std::move(iq->q.front()); iq->q.pop_front(); iq->qBytes -= frame.size();
+            }
+            auto conn = iq->conn;
+            if (!conn || !conn->isOpen()) continue;
+            int r;
+            if (iq->ws) { sendWs(conn, 0x2, frame.data(), frame.size(), Out::Audio); r = (int)frame.size(); }
+            else        r = conn->send(frame.data(), frame.size());
+            if (r > 0) { iq->bytesSent += r; iq->lastReadAt.store(Impl::nowSecs()); }
+        }
+    }
+    /** Called from feedOneClient under c->mtx: resample the DDC slice and queue it as 8-bit IQ. */
+    void iqTap(ClientDsp* c, const cf32* in, int n) {
+        auto iq = c->iq;
+        if (!iq || !iq->conn || n <= 0) return;
+        const int inRate = (int)std::lround(c->chanRate);
+        if (inRate <= 0) return;
+        if (iq->inRate != inRate || !iq->ri) {
+            iq->ri.reset(new vibedsp::RationalResampler(inRate, iq->rate));
+            iq->rq.reset(new vibedsp::RationalResampler(inRate, iq->rate));
+            iq->inRate = inRate;
+        }
+        iq->fi.resize((size_t)n); iq->fq.resize((size_t)n);
+        // ★ De-interleave: cf32 is {re, im} pairs, so this is a strided copy the compiler
+        //   vectorises; the resampler behind it is vibedsp's NEON/SSE2 one.
+        const float* f = reinterpret_cast<const float*>(in);
+        for (int i = 0; i < n; i++) { iq->fi[i] = f[2 * i]; iq->fq[i] = f[2 * i + 1]; }
+        const int cap = iq->ri->maxOut(n);
+        iq->oi.resize((size_t)cap); iq->oq.resize((size_t)cap);
+        const int ni = iq->ri->process(iq->fi.data(), n, iq->oi.data());
+        const int nq = iq->rq->process(iq->fq.data(), n, iq->oq.data());
+        const int m = std::min(ni, nq);
+        if (m <= 0) return;
+        std::vector<uint8_t> out((size_t)m * 2);
+        iqFloatToU8(iq->oi.data(), iq->oq.data(), m, out.data());
+        std::lock_guard<std::mutex> lk(iq->qm);
+        // ★ A consumer that stops reading must not grow us without bound: keep ~1 s, drop the oldest.
+        const size_t kMax = (size_t)iq->rate * 2;
+        while (iq->qBytes + out.size() > kMax && !iq->q.empty()) { iq->qBytes -= iq->q.front().size(); iq->q.pop_front(); }
+        iq->qBytes += out.size(); iq->q.push_back(std::move(out));
+        iq->qcv.notify_one();
+    }
+    void iqStop(ClientDsp* c) {
+        std::shared_ptr<IqOut> iq;
+        { std::lock_guard<std::mutex> lk(c->mtx); iq = c->iq; c->iq.reset(); }
+        if (!iq) return;
+        iq->run.store(false);
+        iq->qcv.notify_all();
+        if (iq->lis)  iq->lis->stop();
+        if (iq->conn) iq->conn->close();
+        if (iq->acceptTh.joinable()) iq->acceptTh.join();
+        if (iq->writeTh.joinable())  iq->writeTh.join();
+        g_vsRawIqActive.fetch_sub(1);
+        LOGI("raw IQ out: off (%lld bytes sent%s)", (long long)iq->bytesSent.load(), iq->pub ? ", public" : "");
+    }
+    void iqStopFor(const std::shared_ptr<net::Socket>& sock) {
+        std::shared_ptr<ClientDsp> c;
+        { std::lock_guard<std::mutex> lk(clientMtx); auto it = clientDsp.find(sock.get()); if (it != clientDsp.end()) c = it->second; }
+        if (c) iqStop(c.get());
+    }
+    /** Turn IQ out on for the session behind `sock`. Returns the JSON reply (an `iqout` message,
+     *  with `why` when refused). */
+    std::string iqStartFor(const std::shared_ptr<net::Socket>& sock, int rate) {
+        auto refuse = [](const std::string& why) { return "{\"type\":\"iqout\",\"on\":0,\"why\":\"" + why + "\"}"; };
+        std::shared_ptr<ClientDsp> c;
+        { std::lock_guard<std::mutex> lk(clientMtx); auto it = clientDsp.find(sock.get()); if (it != clientDsp.end()) c = it->second; }
+        if (!c) return refuse("no channel for this session yet");
+        const int mode = g_vsRawIqMode.load(std::memory_order_relaxed);
+        if (mode == 0) return refuse("the owner has raw IQ out switched off on this receiver");
+        const std::string peer = sock->peerAddress();
+        const bool local = isPrivateIp(peer);
+        if (!local && mode < 2) return refuse("raw IQ out is local-network only on this receiver");
+        // ★ Never on a shared dial: an rtl_tcp client's tune would move everybody.
+        if (g_vsMaxUsers.load() > 1 && !perClientDsp()) return refuse("not on a shared dial — every listener here shares one VFO");
+        if (g_dabMode.load(std::memory_order_relaxed)) return refuse("not while DAB has the receiver");
+        if (c->iq) iqStop(c.get());
+        if (g_vsRawIqActive.load() >= vsRawIqMax())
+            return refuse("all " + std::to_string(vsRawIqMax()) + " raw IQ slots on this receiver are in use");
+        static const int kRates[] = { 48000, 96000, 192000, 250000 };
+        int want = 48000;
+        for (int r : kRates) if (r == rate) want = r;
+        if (!local) want = 48000;                                       // ★ the tunnel's ceiling
+        auto iq = std::make_shared<IqOut>();
+        iq->rate = want; iq->pub = !local;
+        iq->token = vsRandomCode(20, "abcdefghijklmnopqrstuvwxyz0123456789");
+        if (local) {
+            iq->host = primaryIpv4();
+            for (int port = 50001; port <= 50100 && !iq->lis; port++) {
+                // ★ Same bind rule as the server's own listener: LAN when serving the LAN, else loopback.
+                try { iq->lis = net::listen(g_serveOnLan.load() ? "0.0.0.0" : "127.0.0.1", port); iq->port = port; } catch (...) { iq->lis = nullptr; }
+            }
+            if (!iq->lis) return refuse("no free port for raw IQ out (50001-50100 all taken)");
+        } else {
+            iq->code = vsRandomCode(6, "abcdefghjkmnpqrstuvwxyz23456789");   // no 0/O/1/l/i — typed by a person
+        }
+        g_vsRawIqActive.fetch_add(1);
+        { std::lock_guard<std::mutex> lk(c->mtx); c->iq = iq; }
+        iq->writeTh = std::thread([this, iq]{ iqWriteLoop(iq); });
+        if (iq->lis) {
+            ClientDsp* cp = c.get();
+            iq->acceptTh = std::thread([this, iq, cp]{
+                while (serverRunning.load() && iq->run.load()) {
+                    auto conn = iq->lis->accept(nullptr, 1000);
+                    if (!conn) continue;
+                    if (iq->conn && iq->conn->isOpen()) { conn->close(); continue; }   // one consumer
+                    iqSendHeader(conn);
+                    iq->conn = conn;
+                    LOGI("raw IQ out: consumer connected from %s at %d Hz", conn->peerAddress().c_str(), iq->rate);
+                    iqReadCommands(cp, iq, conn);
+                    if (iq->conn == conn) iq->conn = nullptr;
+                    LOGI("raw IQ out: consumer left");
+                }
+            });
+        }
+        clientRetune(c.get());   // ★ widen the channel to the IQ rate (chanBinsFor above)
+        LOGI("raw IQ out: on for %s — %s at %d Hz%s", peer.c_str(),
+             local ? ("port " + std::to_string(iq->port)).c_str() : "tunnel", iq->rate,
+             iq->pub ? (", code " + iq->code).c_str() : "");
+        std::string j = "{\"type\":\"iqout\",\"on\":1,\"rate\":" + std::to_string(iq->rate)
+                      + ",\"public\":" + (iq->pub ? "true" : "false")
+                      + ",\"token\":\"" + iq->token + "\"";
+        if (iq->port) j += ",\"host\":\"" + iq->host + "\",\"port\":" + std::to_string(iq->port);
+        if (!iq->code.empty()) j += ",\"code\":\"" + iq->code + "\"";
+        return j + "}";
+    }
+    /** /ws/iq?tok=… — the tunnel form: the same rtl_tcp bytes as binary frames; commands come back
+     *  as 5-byte binary frames or `iqtune` text frames from the VibeIQ bridge. */
+    void acceptIqWs(std::shared_ptr<net::Socket> sock, const std::string& wsKey, const std::string& tok) {
+        std::shared_ptr<ClientDsp> c;
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            for (auto& kv : clientDsp) if (kv.second->iq && !tok.empty() && kv.second->iq->token == tok) { c = kv.second; break; }
+        }
+        if (!c) { sock->sendstr("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"); sock->close(); return; }
+        auto iq = c->iq;
+        if (iq->conn && iq->conn->isOpen()) { sock->sendstr("HTTP/1.1 409 Conflict\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"); sock->close(); return; }
+        std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+        uint8_t digest[20]; Sha1().hash((const uint8_t*)acc.data(), acc.size(), digest);
+        sock->sendstr("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                      "Sec-WebSocket-Accept: " + base64(digest, 20) + "\r\n\r\n");
+        outboxOpen(sock);
+        { const uint8_t hdr[12] = { 'R','T','L','0', 0,0,0,5, 0,0,0,0 }; sendWs(sock, 0x2, hdr, sizeof hdr, Out::Audio); }
+        iq->ws = true; iq->conn = sock;
+        LOGI("raw IQ out: tunnel consumer connected (%s) at %d Hz", sock->peerAddress().c_str(), iq->rate);
+        while (serverRunning.load() && iq->run.load() && sock->isOpen()) {
+            std::string payload;
+            int op = recvWs(sock, payload);
+            if (op < 0 || op == 0x8) break;
+            if (op == 0x9) { sendWs(sock, 0xA, (const uint8_t*)payload.data(), payload.size()); continue; }
+            if (op == 0x1 && jsonStr(payload, "type") == "iqtune" && c->spec) handleControl(c->spec, payload);
+            if (op == 0x2 && payload.size() >= 5 && (uint8_t)payload[0] == 0x01 && c->spec) {
+                const uint32_t v = (uint32_t((uint8_t)payload[1]) << 24) | (uint32_t((uint8_t)payload[2]) << 16) | (uint32_t((uint8_t)payload[3]) << 8) | (uint8_t)payload[4];
+                if (v > 0) handleControl(c->spec, "{\"type\":\"tune\",\"frequency\":" + std::to_string(v) + "}");
+            }
+        }
+        if (iq->conn == sock) iq->conn = nullptr;
+        LOGI("raw IQ out: tunnel consumer left");
+    }
+
     void acceptDxcluster(std::shared_ptr<net::Socket> sock, const std::string& wsKey,
                          const std::string& session = "") {
         std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -13973,6 +14336,9 @@ struct LocalSdrShim::Impl {
         const int got = chan_->extract(bins, clientCentreBin(c.get()), c->chanBins,
                                        c->slice.data(), c->ectx, blockIndex);
         if (got > 0) c->rx->feed(c->slice.data(), got);
+        // ★ RAW IQ OUT: the same slice, resampled to the consumer's rate, as 8-bit IQ. The demod
+        //   above keeps its copy — the stream is split, not diverted.
+        if (got > 0 && c->iq && c->iq->conn) iqTap(c.get(), c->slice.data(), got);
         // ★ And the VIEW channel, when this listener is drawing its own waterfall.
         if (c->viewRx && c->viewChanBins > 0) {
             const int gv = chan_->extract(bins, clientViewCentreBin(c.get()),
@@ -15236,6 +15602,11 @@ struct LocalSdrShim::Impl {
                 // ★ Watching a decode IS using the radio. Also resets the clock, so the prompt does
                 //   not fire the moment they close it having watched for an hour.
                 if (!decoderOwnerSession.empty() && c->session == decoderOwnerSession) {
+                    c->lastAsk = now; c->idleAskAt = 0; continue;
+                }
+                // ★ A raw IQ consumer that is taking data IS using the radio — the decoder in
+                //   another app never touches the browser (Stuart, 2026-09-09).
+                if (c->iq && c->iq->conn && now - c->iq->lastReadAt.load() < 15.0) {
                     c->lastAsk = now; c->idleAskAt = 0; continue;
                 }
                 if (c->idleAskAt > 0) {
@@ -16905,6 +17276,7 @@ std::string LocalSdrShim::adminSessionsJson() {
            + ",\"vfoHz\":" + std::to_string((long long)c->vfoHz)
            + ",\"mode\":\"" + vibeadmin::esc(c->mode) + "\""
            + ",\"dab\":\"" + vsDabBlockNow() + "\""      // ★ see vsDabBlockNow
+           + ",\"iq\":" + std::to_string(c->iq && c->iq->conn ? c->iq->rate : 0)   // ★ raw IQ out, Hz
            + ",\"bwHz\":" + std::to_string((long long)c->bwHz)
            + ",\"audio\":" + (audioOpen ? "true" : "false")
            // ★★ SAY WHETHER THE WATERFALL IS RUNNING, so a row costing 68 kbit/s instead of the
@@ -17028,6 +17400,7 @@ std::string LocalSdrShim::adminSessionsJson() {
            + ",\"vfoHz\":" + std::to_string((long long)p->audioFreq.load())
            + ",\"mode\":\"" + vibeadmin::esc(p->mode) + "\""
            + ",\"dab\":\"" + vsDabBlockNow() + "\""      // ★ see vsDabBlockNow
+           + ",\"iq\":0"                                  // ★ raw IQ out is never on a shared dial
            + ",\"audio\":" + (soleAudio ? "true" : "false")
            + ",\"spectrum\":" + (soleSpec ? "true" : "false")
            + ",\"dropped\":0,\"zoomed\":false"
@@ -17128,6 +17501,7 @@ std::string LocalSdrShim::adminSessionsJson() {
                + ",\"vfoHz\":" + std::to_string((long long)p->audioFreq.load())
                + ",\"mode\":\"" + vibeadmin::esc(p->mode) + "\""
                + ",\"dab\":\"" + vsDabBlockNow() + "\""  // ★ see vsDabBlockNow
+               + ",\"iq\":0"
                + ",\"audio\":false,\"spectrum\":true"
                + ",\"dropped\":0,\"zoomed\":false"
                + ",\"cc\":\"" + vibeadmin::esc(vsCountry(ip)) + "\""
@@ -17347,6 +17721,10 @@ void LocalSdrShim::setVibeServerRateLock(bool on) {
     LOGI("sample rate: %s", on ? "PINNED — listeners may not change it" : "listener's choice");
 }/** ★ DAB may borrow 2.048 MS/s on a receiver configured slower — see g_dabRateBoost. */
 void LocalSdrShim::setVibeServerDabRateBoost(bool on) { g_dabRateBoost.store(on, std::memory_order_relaxed); }
+void LocalSdrShim::setVibeServerRawIq(int mode, int maxUsers) {
+    g_vsRawIqMode.store(std::max(0, std::min(2, mode)), std::memory_order_relaxed);
+    g_vsRawIqMax.store(std::max(0, maxUsers), std::memory_order_relaxed);
+}
 /** ★ Modes and decoders the owner has switched off on this receiver — see g_vsBlockedModesCsv. */
 void LocalSdrShim::setVibeServerBlockedModes(const std::string& csv) {
     std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx);
@@ -17480,6 +17858,14 @@ static std::string vsTunableJson() {
         const bool useful = hwMax >= vibedab::kCanonicalRateHz && eff < vibedab::kCanonicalRateHz;
         j += std::string(",\"dabBoost\":") + (g_dabRateBoost.load(std::memory_order_relaxed) ? "true" : "false");
         j += std::string(",\"dabBoostUseful\":") + (useful ? "true" : "false");
+    }
+    {
+        // ★ RAW IQ OUT: the owner's mode, the cap and what is free — the audio panel's row reads these.
+        static const char* kModes[] = { "off", "local", "public" };
+        const int m = std::max(0, std::min(2, g_vsRawIqMode.load(std::memory_order_relaxed)));
+        j += std::string(",\"rawIq\":\"") + kModes[m] + "\"";
+        j += ",\"rawIqMax\":" + std::to_string(vsRawIqMax());
+        j += ",\"rawIqActive\":" + std::to_string(g_vsRawIqActive.load(std::memory_order_relaxed));
     }
     // ★ The same ranges in WORDS where the plan has words for them — "FM broadcast" is what a
     //   listener searches for, and the plan that knows the names is region-aware and lives here.

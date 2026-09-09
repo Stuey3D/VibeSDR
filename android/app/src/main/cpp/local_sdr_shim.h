@@ -131,6 +131,8 @@ public:
     static void setVibeServerRateLock(bool on);
     /** DAB may borrow 2.048 MS/s while it runs, on a receiver configured slower. */
     static void setVibeServerDabRateBoost(bool on);
+    /** ★ Raw IQ out: 0 off, 1 local network only, 2 local + public (tunnel); maxUsers 0 = host default. */
+    static void setVibeServerRawIq(int mode, int maxUsers);
     /** Modes and decoders the owner has switched off, comma separated (e.g. "dab,cwl"). */
     static void setVibeServerBlockedModes(const std::string& csv);
     static void setGainLock(bool on);
