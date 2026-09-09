@@ -212,6 +212,7 @@
 
   /* ══ HOST ══ */
   .proof { display: grid; grid-template-columns: .55fr 1.45fr; gap: 20px; align-items: start; }
+  .stack { display: grid; gap: 20px; }
   @media (max-width: 860px) { .proof { grid-template-columns: 1fr; } }
   .proof img { display: block; width: 100%; height: auto; }
   table.meter { border-collapse: collapse; width: 100%; max-width: 420px; margin: 14px 0 6px; }
@@ -416,16 +417,23 @@
           <tr><td>DSP load, nobody listening</td><td>8% of one core</td></tr>
           <tr><td>DSP load, one listener on FM stereo with Advanced RDS</td><td><b>60% of one core</b></td></tr>
           <tr><td>To that listener, waterfall at 10 fps plus audio</td><td><b>35 KB/s</b></td></tr>
+          <tr><td>To that listener on DAB+, with all 31 services' text, at 8.8 fps</td><td>62 KB/s</td></tr>
           <tr><td>To that listener, idle at 5 fps plus audio</td><td>13 KB/s</td></tr>
           <tr><td>Sample rate</td><td>1.2 MS/s</td></tr>
           <tr><td>Cores</td><td>8</td></tr>
         </table>
-        <p class="fine">DSP load read from the server's own status feed on 10 September 2026, sampled every five seconds until it settled; the 35 KB/s read off the listening client at the same time. The idle figure was measured earlier, when the waterfall drops to 5 fps after 30 seconds without a touch. Sharing your radio costs about as much bandwidth as a podcast.</p>
+        <p class="fine">DSP load read from the server's own status feed on 10 September 2026, sampled every five seconds until it settled; the 35 KB/s and 62 KB/s read off the listening client's status bar in the same session. The idle figure was measured earlier, when the waterfall drops to 5 fps after 30 seconds without a touch. Sharing your radio costs about as much bandwidth as a podcast.</p>
       </figure>
+      <div class="stack">
       <figure>
         <img class="bezel" src="assets/shots/mac-advanced-rds.webp" loading="lazy" alt="The Mac app listening to that phone, with Advanced RDS fully decoded: station name, RadioText, the AF list, MPX signal to noise 29 dB, constellation and MPX plots" />
         <figcaption>The other end. The Mac app listening to that phone, with Advanced RDS fully decoded from the signal it sent: station, RadioText, AF list, MPX S/N, constellation, group share. Nobody else can show this picture, because nobody else owns the demodulator that produced it.</figcaption>
       </figure>
+      <figure>
+        <img class="bezel" src="assets/shots/web-client-dab-xcover.webp" loading="lazy" alt="The web client in a browser tuned to DAB block 11A on that phone: the SDL National ensemble with 31 services listed, each with its logo and live programme text, Radio X Classic Rock playing, the status bar reading 62 KB/s at 8.8 fps" />
+        <figcaption>Same phone, on DAB+. The web client tuned to 11A: 31 services with their logos and every station's live text at once, Radio X playing. 62 KB/s to the listener at 8.8 fps, off the status bar.</figcaption>
+      </figure>
+      </div>
     </div>
 
     <div class="grid2" style="margin-top:36px; align-items:start">
