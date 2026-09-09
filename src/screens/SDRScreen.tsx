@@ -93,6 +93,7 @@ import { DecoderClient, RTTY_PRESETS, timeStationFor,
          type SpotRow, type SpotsKind,
          type ChatUserRow }                            from '../services/DecoderClient';
 import { type DecoderImageHandle }                     from '../components/DecoderImageCanvas';
+import { registerIqCode } from '../services/iqPairing';
 import { MIN_HZ, MAX_HZ, STEPS, stepsForFreq, fetchOccupancy,
          isKiwiProtocol, kiwiFamilyLabel } from '../services/sdrTypes';
 import { v4 as uuidv4 }                                from 'uuid';
@@ -890,6 +891,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [hwLockedCentre, setHwLockedCentre] = useState(0);
   /** ★ Storms about (server-decided): flashes per minute and seconds since the last. */
   const [storms, setStorms] = useState<{ rate: number; ago: number } | null>(null);
+  /** ★ RAW IQ OUT: the owner's policy from /vibeserver.json (null = not offered) and the server's
+   *  answer to our last request. The audio sheet draws the row only when `onIqOut` is passed. */
+  const [rawIqMode, setRawIqMode] = useState<'off' | 'local' | 'public' | null>(null);
+  const [iqState, setIqState] = useState<{ on: boolean; rate?: number; host?: string; port?: number; code?: string; public?: boolean } | null>(null);
   const [hwBiasTee,     setHwBiasTee]     = useState(false);
   const [hwAgc,         setHwAgc]         = useState(false);
   const [hwDirectSamp,  setHwDirectSamp]  = useState(0);
@@ -1991,6 +1996,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       .then((o) => {
         if (dead) return;
         setRawAudioPolicy(o?.uncompressed ?? null);
+        setRawIqMode(o?.rawIq ?? null);
         // ★ Same request, one more field — the server's version, so the app can say WHAT it is
         //   talking to. Undefined on a server older than the field: we then show nothing rather
         //   than a number we guessed.
@@ -3811,6 +3817,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       onHwGains: (gains: number[]) => { if (!destroyed.current && gains.length) setHwGains(gains); },
       onRfCentre: (rf, locked) => { if (destroyed.current) return; setHwRfCentre(rf); setHwLockedCentre(locked); },
       onLightning: (rate, ago) => { if (!destroyed.current) setStorms(rate > 0 ? { rate, ago } : null); },
+      /** ★ The server's answer to a raw IQ request: the address or the pairing code, or why not. */
+      onIqOut: (m) => {
+        if (destroyed.current) return;
+        if (m.on) { setIqState({ on: true, rate: m.rate, host: m.host, port: m.port, code: m.code, public: m.public }); registerIqCode(connectBase, m.code, m.token); }
+        else { setIqState({ on: false }); registerIqCode(connectBase); if (m.why) Alert.alert('Raw IQ out', m.why); }
+      },
       /** ★ DAB, about once a second, with the whole measured state of the multiplex. `null` means
        *  it has ended; `why` is the server's refusal, which is an explanation and not an error —
        *  showing it as one would put a red card over a receiver that is working perfectly. */
@@ -9046,6 +9058,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         fmNb={fmNb}   onFmNb={vibeFmDsp ? onFmNb : undefined}
         rawAudio={rawAudio}
         onRawAudio={rawAudioPolicy === 'choice' ? setRawAudio : undefined}
+        iq={iqState}
+        iqLocal={/^https?:\/\/(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|localhost)/i.test(connectBase)}
+        onIqOut={rawIqMode && rawIqMode !== 'off' && !sharedDial ? (on, rate) => client.current?.iqOut?.(on, rate) : undefined}
         onOwrxSquelch={(db) => { owrxSquelchRef.current = db; client.current?.setSquelch?.(db); }}
         onOwrxNr={(th) => client.current?.setNr?.(th)}
         owrxDspDefaults={owrxDspDefaults}

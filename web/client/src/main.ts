@@ -437,6 +437,29 @@ let srvRawIq: 'off' | 'local' | 'public' = 'off';
 let srvRawIqMax = 0, srvRawIqActive = 0;
 let iqState: { on: boolean; rate?: number; host?: string; port?: number; code?: string; public?: boolean } = { on: false };
 let iqWired = false;
+/** ★★★ THE PAIRING CODE'S REGISTRATION WITH THE DIRECTORY. The directory proxies the page, not
+ *  the stream, so the VibeIQ bridge must reach the server's own tunnel hostname — which rotates.
+ *  The stable name is this page's slug host; the code is what a person types. This page is ON the
+ *  slug host and holds the token the server just issued, so it registers code → slug + token
+ *  (the server has two directory registrars already; a third would be one rule, three readers).
+ *  A bogus row buys nothing: the token is checked by the real server on /ws/iq. Refreshed every
+ *  ten minutes while on, removed when off. LAN sessions have no slug and register nothing. */
+const IQ_DIRECTORY = 'https://vibeserver.vibesdr.net';
+const IQ_ZONE = '.vibeserver.vibesdr.net';
+let iqReg: { code: string; token: string; slug: string } | null = null;
+let iqRegTimer: number | null = null;
+function registerIqCode(code?: string, token?: string) {
+  if (iqRegTimer) { clearInterval(iqRegTimer); iqRegTimer = null; }
+  const post = (path: string, body: unknown) => fetch(IQ_DIRECTORY + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).catch(() => {});
+  if (iqReg && (!code || iqReg.code !== code)) { post('/api/iq/off', { code: iqReg.code, token: iqReg.token }); iqReg = null; }
+  const h = location.hostname.toLowerCase();
+  const slug = h.endsWith(IQ_ZONE) ? h.slice(0, -IQ_ZONE.length) : '';
+  if (!code || !token || !slug || slug.includes('.')) return;
+  iqReg = { code, token, slug };
+  const send = () => post('/api/iq', { code, token, slug });
+  send();
+  iqRegTimer = window.setInterval(send, 10 * 60 * 1000);
+}
 function refreshIqRow() {
   const row = document.getElementById('iqRow'), note = document.getElementById('iqNote');
   const btn = document.getElementById('iqBtn') as HTMLButtonElement | null;
@@ -470,8 +493,11 @@ function refreshIqRow() {
     note.innerHTML = `IQ out is on at <b>${kHz} kHz</b>. Connect your rtl_tcp app to <b>${escapeHtml(iqState.host ?? '')}:${iqState.port}</b>. `
       + 'Tuning from that app moves this dial; audio here keeps playing. It ends when this session does.';
   } else if (iqState.on && iqState.public) {
-    note.innerHTML = `IQ out is on at <b>${kHz} kHz</b>. Open <b>VibeIQ</b> and enter the code <b style="letter-spacing:.15em">${escapeHtml(iqState.code ?? '')}</b>, `
-      + 'then connect your rtl_tcp app to <b>127.0.0.1:1234</b>. Tuning from that app moves this dial.';
+    note.innerHTML = iqReg
+      ? `IQ out is on at <b>${kHz} kHz</b>. Open <b>VibeIQ</b> and enter the code <b style="letter-spacing:.15em">${escapeHtml(iqState.code ?? '')}</b>, `
+        + 'then connect your rtl_tcp app to <b>127.0.0.1:1234</b>. Tuning from that app moves this dial.'
+      : `IQ out is on at <b>${kHz} kHz</b>. Open <b>VibeIQ</b> and give it this receiver's address <b>${escapeHtml(location.host)}</b> with the code <b style="letter-spacing:.15em">${escapeHtml(iqState.code ?? '')}</b>, `
+        + 'then connect your rtl_tcp app to <b>127.0.0.1:1234</b>. (This page is not on a directory address, so the code alone cannot find the receiver.)';
   } else {
     const free = Math.max(0, srvRawIqMax - srvRawIqActive);
     note.textContent = 'Your channel as raw IQ, in rtl_tcp form, for a decoder this client does not carry — digital voice, say. '
@@ -1399,8 +1425,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
      *   lines?", which is the question somebody actually has; the number is for whoever looks. */
     onIqOut: (m) => {
       /* ★ The server's answer: the address or the code, or the reason it said no. */
-      if (m.on) { iqState = { on: true, rate: m.rate, host: m.host, port: m.port, code: m.code, public: m.public }; }
-      else { iqState = { on: false }; if (m.why) showPill(`Raw IQ out: ${m.why}`, 9000); }
+      if (m.on) { iqState = { on: true, rate: m.rate, host: m.host, port: m.port, code: m.code, public: m.public }; registerIqCode(m.code, m.token); }
+      else { iqState = { on: false }; registerIqCode(); if (m.why) showPill(`Raw IQ out: ${m.why}`, 9000); }
       refreshIqRow();
     },
     onLightning: (ratePerMin: number, agoSecs: number) => {

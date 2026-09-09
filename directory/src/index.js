@@ -747,6 +747,59 @@ async function serveBySlug(host, request, env) {
   return new Response(out, { status: res.status, headers });
 }
 
+// ── RAW IQ OUT pairing codes ──────────────────────────────────────────────────────────────────
+// See migrations/0005-iq-codes.sql. The code is what a person types into the VibeIQ bridge; the
+// answer is the receiver's slug (so the bridge can read /vibeserver.json through us and learn the
+// live tunnel hostname) and the session token the server will check on /ws/iq.
+const IQ_TTL = 20 * 60;            // seconds after the last refresh
+const IQ_PER_HOUR = 30;            // registrations per source address
+const IQ_CODE_RE = /^[a-z0-9]{6}$/;
+const IQ_TOKEN_RE = /^[a-z0-9]{8,64}$/;
+const IQ_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+async function iqRegister(request, env) {
+  const body = await readBody(request);
+  if (!body) return json({ error: 'bad json' }, 400);
+  const code = String(body.code || '').toLowerCase(), token = String(body.token || ''), slug = String(body.slug || '').toLowerCase();
+  if (!IQ_CODE_RE.test(code) || !IQ_TOKEN_RE.test(token) || !IQ_SLUG_RE.test(slug)) return json({ error: 'bad code, token or slug' }, 400);
+  // ★ The slug must be a listed receiver — a code pointing nowhere is refused, not stored.
+  const srv = await env.DB.prepare('SELECT id FROM servers WHERE slug = ?').bind(slug).first();
+  if (!srv) return json({ error: 'no such receiver' }, 404);
+  const ip = request.headers.get('cf-connecting-ip') || '';
+  const t = now();
+  // ★ Rate limit per source address, counting live rows from it — a refresh of the SAME code is
+  //   an upsert and does not add to the count.
+  const mine = await env.DB.prepare('SELECT COUNT(*) AS n FROM iq_codes WHERE ip = ? AND expires_at > ? AND code != ?').bind(ip, t, code).first();
+  if (Number(mine?.n || 0) >= IQ_PER_HOUR) return json({ error: 'too many codes from this address' }, 429);
+  // ★ A code already held by ANOTHER session (different token) is not overwritten — it is theirs.
+  const held = await env.DB.prepare('SELECT token FROM iq_codes WHERE code = ? AND expires_at > ?').bind(code, t).first();
+  if (held && held.token !== token) return json({ error: 'code in use' }, 409);
+  await env.DB.batch([
+    env.DB.prepare('INSERT OR REPLACE INTO iq_codes (code, slug, token, ip, expires_at) VALUES (?,?,?,?,?)').bind(code, slug, token, ip, t + IQ_TTL),
+    env.DB.prepare('DELETE FROM iq_codes WHERE expires_at < ?').bind(t - 3600),
+  ]);
+  return json({ ok: true, expiresIn: IQ_TTL });
+}
+
+async function iqOff(request, env) {
+  const body = await readBody(request);
+  if (!body) return json({ error: 'bad json' }, 400);
+  const code = String(body.code || '').toLowerCase(), token = String(body.token || '');
+  if (!IQ_CODE_RE.test(code) || !IQ_TOKEN_RE.test(token)) return json({ error: 'bad code or token' }, 400);
+  await env.DB.prepare('DELETE FROM iq_codes WHERE code = ? AND token = ?').bind(code, token).run();
+  return json({ ok: true });
+}
+
+async function iqLookup(codeRaw, env) {
+  const code = String(codeRaw || '').toLowerCase();
+  if (!IQ_CODE_RE.test(code)) return json({ error: 'bad code' }, 400);
+  const row = await env.DB.prepare('SELECT slug, token, expires_at FROM iq_codes WHERE code = ?').bind(code).first();
+  if (!row || Number(row.expires_at) <= now()) return json({ error: 'unknown or expired code' }, 404);
+  // ★ The bridge reads /vibeserver.json at this host to learn the live tunnel hostname (directUrl).
+  return json({ slug: row.slug, host: `${row.slug}.${PUBLIC_ZONE}`, token: row.token, expiresAt: Number(row.expires_at) },
+              200, { 'cache-control': 'no-store' });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -775,6 +828,9 @@ export default {
       if (p === '/api/directory/register' && request.method === 'POST') return await register(request, env);
       if (p === '/api/directory/ping' && request.method === 'POST') return await ping(request, env);
       if (p === '/api/directory/delist' && request.method === 'POST') return await delist(request, env);
+      if (p === '/api/iq' && request.method === 'POST') return await iqRegister(request, env);
+      if (p === '/api/iq/off' && request.method === 'POST') return await iqOff(request, env);
+      if (p.startsWith('/api/iq/') && request.method === 'GET') return await iqLookup(p.slice('/api/iq/'.length), env);
     } catch (err) {
       // ★ Never leak a D1 error to a caller; it names tables.
       console.error('directory error', (err && err.stack) || String(err));
