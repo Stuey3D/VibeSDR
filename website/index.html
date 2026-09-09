@@ -142,7 +142,21 @@
   figure { margin: 0; }
 
   /* ══ HERO ══ */
-  .hero { padding: 48px 0 40px; }
+  .hero { padding: 48px 0 40px; position: relative; overflow: hidden; }
+  /* ★★★ THE LIVE HF RECORD BEHIND THE HERO. Sonar Green, as the receiver's own landing page draws
+   *     it, because the type in front is amber and green sits on the far side of the wheel. Two
+   *     dimmings on top: the canvas opacity, then a gradient that goes solid behind the headline
+   *     so the words never fight a carrier. Hidden until real data has been drawn — a backdrop
+   *     that is a guess is worse than none. */
+  .hero-spg { position: absolute; inset: 0; z-index: 0; pointer-events: none; opacity: 0; transition: opacity 1.2s ease; }
+  .hero-spg.on { opacity: 1; }
+  .hero-spg canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .55; image-rendering: pixelated; }
+  .hero-spg::after { content: ""; position: absolute; inset: 0;
+    background: linear-gradient(90deg, var(--bg) 0%, rgba(8,6,1,.92) 34%, rgba(8,6,1,.55) 60%, rgba(8,6,1,.35) 100%),
+                linear-gradient(180deg, var(--bg) 0%, rgba(8,6,1,0) 18%, rgba(8,6,1,0) 82%, var(--bg) 100%); }
+  .hero .wrap { position: relative; z-index: 1; }
+  .hero-spg-cap { position: absolute; right: 20px; bottom: 10px; z-index: 1; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--dim); text-shadow: 0 0 6px #000, 0 0 3px #000; }
+  @media (max-width: 860px) { .hero-spg-cap { display: none; } }
   .hero-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 40px; align-items: center; }
   @media (max-width: 860px) { .hero-grid { grid-template-columns: 1fr; } }
   .hero .num { font-size: clamp(34px, 6vw, 64px); display: block; line-height: 1; margin-bottom: 12px; }
@@ -280,6 +294,8 @@
 
 <!-- ══ HERO: the app ══ -->
 <section class="hero">
+  <div class="hero-spg" id="heroSpg" aria-hidden="true"><canvas id="heroSpgCanvas"></canvas></div>
+  <span class="hero-spg-cap" id="heroSpgCap" hidden></span>
   <div class="wrap hero-grid">
     <div>
       <h1>A radio in your pocket. It fits any screen you own.</h1>
@@ -732,6 +748,63 @@ function drawList(servers) {
   note.textContent = (more > 0 ? `${more} more ${more === 1 ? 'server is' : 'servers are'} listed on the directory. ` : '') + 'Live from the directory. Occupancy is what each server reports; a single-listener radio is one person at a time.';
 }
 
+/* ══ THE LIVE HF RECORD BEHIND THE HERO ═══════════════════════════════════════════════════════
+ * Drawn from /api/spectrogram, which the Worker fills from the Pi and holds at the edge (see
+ * worker.js). Wire: "VSPW" u8 ver u16 bins u16 rows f64 centreHz f64 spanHz i64 firstMs i64 lastMs,
+ * then rows x bins bytes of dB, oldest row first. Newest row at the TOP, as the app's waterfall.
+ * ★ Auto-contrast from the data's own percentiles, as the receiver's landing page does: a fixed
+ *   window reads as fog because the noise floor moves through the day.
+ * ★ The caption prints the REAL span and window from the header. Never a fixed claim. */
+const SONAR_GREEN = [[0,0,0],[0,8,0],[0,26,0],[0,51,0],[0,80,0],[0,120,0],[0,170,0],[0,204,0],[0,255,0],[128,255,128],[204,255,204],[239,255,255]];
+function sonarGreen(t) {
+  const x = Math.max(0, Math.min(1, t)) * (SONAR_GREEN.length - 1);
+  const i = Math.min(SONAR_GREEN.length - 2, Math.floor(x)), f = x - i;
+  const a = SONAR_GREEN[i], b = SONAR_GREEN[i + 1];
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+}
+async function loadSpectrogram() {
+  const box = $('heroSpg'), cv = $('heroSpgCanvas'), cap = $('heroSpgCap');
+  if (!box || !cv) return;
+  try {
+    const r = await fetch('/api/spectrogram', { cache: 'no-store' });
+    if (r.status !== 200) return;
+    const buf = await r.arrayBuffer();
+    const dv = new DataView(buf), u8 = new Uint8Array(buf);
+    if (u8.length < 41 || String.fromCharCode(u8[0], u8[1], u8[2], u8[3]) !== 'VSPW') return;
+    const bins = dv.getUint16(5, true), rows = dv.getUint16(7, true);
+    const centre = dv.getFloat64(9, true), span = dv.getFloat64(17, true);
+    const first = Number(dv.getBigInt64(25, true)), last = Number(dv.getBigInt64(33, true));
+    if (rows < 2 || bins < 2 || u8.length < 41 + rows * bins) return;
+
+    const hist = new Uint32Array(256);
+    for (let i = 41; i < 41 + rows * bins; i++) hist[u8[i]]++;
+    const pct = (q) => { let seen = 0, want = rows * bins * q; for (let v = 0; v < 256; v++) { seen += hist[v]; if (seen >= want) return v; } return 255; };
+    const lo = pct(0.30), hi = Math.max(lo + 6, pct(0.998));
+
+    cv.width = bins; cv.height = rows;
+    const g = cv.getContext('2d');
+    const img = g.createImageData(bins, rows);
+    for (let row = 0; row < rows; row++) {
+      const src = 41 + row * bins, y = rows - 1 - row;           // newest at the top
+      for (let b = 0; b < bins; b++) {
+        const t = Math.pow(Math.max(0, Math.min(1, (u8[src + b] - lo) / (hi - lo))), 0.8);
+        const [cr, cg, cb] = sonarGreen(t);
+        const p = (y * bins + b) * 4;
+        img.data[p] = cr; img.data[p + 1] = cg; img.data[p + 2] = cb; img.data[p + 3] = 255;
+      }
+    }
+    g.putImageData(img, 0, 0);
+    box.classList.add('on');
+
+    const hours = (last - first) / 3.6e6;
+    const stale = r.headers.get('x-stale') === '1';
+    if (cap && hours > 0 && span > 0) {
+      cap.textContent = `${stale ? 'last recorded' : 'live'} HF · ${hz(centre - span / 2)} – ${hz(centre + span / 2)} · ${hours.toFixed(1)} h · a receiver in England`;
+      cap.hidden = false;
+    }
+  } catch { /* no backdrop, no claim */ }
+}
+
 async function loadDirectory() {
   try {
     const r = await fetch(DIR, { cache: 'no-store' });
@@ -760,6 +833,7 @@ async function loadDirectory() {
   }
 }
 loadDirectory();
+loadSpectrogram();
 setInterval(loadDirectory, 60000);
 
 /* ══ THE VERSION LABEL, READ, NOT TYPED ═══════════════════════════════════════════════════════
