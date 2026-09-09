@@ -146,9 +146,6 @@
   .hero-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 40px; align-items: center; }
   @media (max-width: 860px) { .hero-grid { grid-template-columns: 1fr; } }
   .hero .num { font-size: clamp(34px, 6vw, 64px); display: block; line-height: 1; margin-bottom: 12px; }
-  .readout { display: inline-flex; align-items: baseline; gap: 10px; border: 1px solid var(--line); padding: 6px 12px; margin-bottom: 18px; }
-  .readout .num { font-size: 22px; margin: 0; display: inline; }
-  .readout .lbl { letter-spacing: .14em; }
 
   /* ══ REFRAME ══ */
   .reframe { padding: 40px 0; }
@@ -285,7 +282,6 @@
 <section class="hero">
   <div class="wrap hero-grid">
     <div>
-      <div class="readout"><span class="num">96.600</span><span class="lbl">MHz</span><span class="lbl on">WFM · STEREO · RDS</span></div>
       <h1>A radio in your pocket. It fits any screen you own.</h1>
       <p class="lede" style="margin-top:16px">An SDR receiver built for fingers and thumbs, with its own DSP. Tune any receiver you can reach, or plug a dongle in and tune your own.</p>
       <div class="keys" style="margin-top:22px">
