@@ -7760,7 +7760,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           )}
           <ScrollView
             style={styles.radioPickList}
-            contentContainerStyle={{ paddingBottom: 24 }}
+            /* ★ Room under the last block for the admin row that floats over the bottom — the band
+               conditions table sat behind it (Xcover, APK 439). */
+            contentContainerStyle={{ paddingBottom: 130 }}
             showsVerticalScrollIndicator
           >
             {door.radios.map((r: VibeRadio) => {

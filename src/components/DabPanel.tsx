@@ -238,12 +238,16 @@ const Marquee = React.memo(function Marquee({ text, style }: { text: string; sty
     return () => loop.stop();
   }, [textW, boxW, x, text]);
   return (
-    <View style={{ flex: 1, overflow: 'hidden' }} onLayout={e => setBoxW(e.nativeEvent.layout.width)}>
+    {/* ★★★ ROW DIRECTION ON THE BOX TOO. Measured on the Xcover (APK 439): with the box a column,
+        Yoga clamps a non-stretched child to the box width, so the Text still ended in an ellipsis
+        and textW never exceeded boxW. In a row a flexShrink:0 child keeps its content width and
+        overflows, which is what the box's overflow:hidden is for. */}
+    <View style={{ flex: 1, overflow: 'hidden', flexDirection: 'row' }} onLayout={e => setBoxW(e.nativeEvent.layout.width)}>
       {/* ★★★ THE TEXT MUST NOT SHRINK. Inside a bounded row RN wraps a Text to the box rather than
           letting it overflow, so textW never exceeded boxW, nothing ever scrolled, and a long
           transmitter line showed as a clipped second line. flexShrink 0 + one line = the text keeps
           its natural width and the box hides the rest, which is what the measurement assumes. */}
-      <Animated.View style={{ flexDirection: 'row', alignSelf: 'flex-start', transform: [{ translateX: x }] }}>
+      <Animated.View style={{ flexDirection: 'row', flexShrink: 0, alignSelf: 'flex-start', transform: [{ translateX: x }] }}>
         <Text style={[style, { flexShrink: 0 }]} numberOfLines={1}
               onLayout={e => setTextW(e.nativeEvent.layout.width)}>{text}</Text>
       </Animated.View>
