@@ -128,8 +128,11 @@
   /* media in bezels: square, hairline, no glow */
   .bezel { border: 1px solid var(--line); background: #000; display: block; }
   video, img { max-width: 100%; }
-  .phone-clip { width: 280px; max-width: 74vw; margin: 0 auto; }
-  .phone-clip video { display: block; width: 100%; height: auto; }
+  .duo { display: flex; gap: 16px; align-items: flex-end; justify-content: center; }
+  .duo figure { flex: 0 1 auto; min-width: 0; }
+  .duo figure:first-child { width: 250px; max-width: 46vw; }
+  .duo figure:last-child { width: 190px; max-width: 38vw; }
+  .duo video { display: block; width: 100%; height: auto; }
   figcaption { font-size: 12px; color: var(--dim); margin-top: 8px; line-height: 1.5; }
   figure { margin: 0; }
 
@@ -196,7 +199,7 @@
   /* ══ WEAR ══ */
   .wear-grid { display: grid; grid-template-columns: .7fr 1.3fr; gap: 30px; align-items: center; }
   @media (max-width: 860px) { .wear-grid { grid-template-columns: 1fr; } }
-  .wear-grid video { display: block; width: 100%; max-width: 300px; margin: 0 auto; }
+  .wear-grid img { display: block; width: 100%; max-width: 340px; margin: 0 auto; height: auto; }
 
   /* ══ RDS / DAB ══ */
   .rds-grid { display: grid; grid-template-columns: 1.1fr .9fr; gap: 28px; align-items: start; }
@@ -285,9 +288,16 @@
       <p class="fine" style="margin-top:16px">£2.99 covers Apple's developer fees. The source is free and always will be. No subscription, no account, nothing phoned home.</p>
       <p class="fine">Android is in Google's closed testing. <a href="https://groups.google.com/g/vibesdr-play-store-test">Join the test group</a> first, then Google's <a href="https://play.google.com/apps/testing/com.vibesdr.app">opt-in link</a> lets you in. Or just take the APK above, which needs no Google at all.</p>
     </div>
-    <figure class="phone-clip bezel">
-      <video src="assets/phone-demo.mp4" autoplay muted loop playsinline preload="auto" aria-label="VibeSDR on an iPhone, tuning across the AM band with the drum dial while the waterfall scrolls"></video>
-    </figure>
+    <div class="duo">
+      <figure>
+        <video class="bezel" src="assets/phone-demo.mp4" autoplay muted loop playsinline preload="auto" aria-label="VibeSDR on an iPhone, tuning across the AM band with the drum dial while the waterfall scrolls"></video>
+        <figcaption><b>VibeSDR</b> on an iPhone.</figcaption>
+      </figure>
+      <figure>
+        <video class="bezel" src="assets/watch-demo.mp4" autoplay muted loop playsinline preload="auto" aria-label="VibeSDR Jr on an Apple Watch: a live waterfall, tuned with the Digital Crown"></video>
+        <figcaption><b>VibeSDR Jr</b> on an Apple Watch. Same engine.</figcaption>
+      </figure>
+    </div>
   </div>
 </section>
 
@@ -429,7 +439,7 @@
 <section id="wear">
   <div class="wrap wear-grid">
     <figure>
-      <video class="bezel" src="assets/watch-demo.mp4" autoplay muted loop playsinline preload="auto" aria-label="VibeSDR Jr on an Apple Watch: a live waterfall, tuned with the Digital Crown"></video>
+      <img class="bezel" src="assets/watch-wrist.jpg" loading="lazy" alt="VibeSDR Jr on an Apple Watch, on a wrist, showing a live waterfall" />
     </figure>
     <div>
       <span class="lbl on">03 · Wear</span>
