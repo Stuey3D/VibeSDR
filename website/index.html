@@ -611,7 +611,7 @@
     <div>
       <div class="stat"><span class="num">GPLv3</span><span class="l">full source, free forever</span></div>
       <div class="stat"><span class="num">£2.99</span><span class="l">on the App Store, to cover the fees</span></div>
-      <div class="stat"><span class="num">0</span><span class="l">subscriptions, accounts, trackers</span></div>
+      <div class="stat"><span class="num">0</span><span class="l">subscriptions, accounts, trackers, ads</span></div>
       <div class="stat"><span class="num">3</span><span class="l">radio drivers built in: RTL-SDR including the latest V4L, Airspy HF+ and HackRF. SDRplay through its own API</span></div>
     </div>
   </div>
@@ -657,6 +657,11 @@ function hz(v) { return v >= 1e6 ? `${mhz(v)} MHz` : `${Math.round(v / 1e3)} kHz
 const pairs = (v) => (Array.isArray(v) ? v : []).filter((x) => Array.isArray(x) && Number.isFinite(+x[0]) && Number.isFinite(+x[1]) && +x[1] > +x[0]).map((x) => [+x[0], +x[1]]);
 const words = (v) => (Array.isArray(v) ? v : []).filter((c) => typeof c === 'string' && c.trim()).map((c) => c.trim());
 const reachOf = (r) => {
+  // ★ A LOCKED radio reaches its window and nothing else. The RSP1B advertises 1 kHz – 2 GHz as
+  //   hardware but is fixed to 2.8–10.8 MHz, and the bar was claiming the network went to 2 GHz
+  //   (Stuart, 2026-09-09). Same rule the row's text follows.
+  const centre = Number(r.centreHz) || 0, span = Number(r.spanHz) || 0;
+  if (r.locked && centre > 0 && span > 0) return [[centre - span / 2, centre + span / 2]];
   const allowed = pairs(r.allowed).length ? pairs(r.allowed) : pairs(r.ranges);
   return allowed.length ? allowed : pairs(r.coverage);
 };
@@ -701,6 +706,24 @@ function radioState(r, s) {
   if (r.restricted && !r.locked && !(Array.isArray(r.allowedNames) && r.allowedNames.length)) extras.push('restricted range');
   if (s && Number(s.limitMin) > 0) extras.push(`${s.limitMin} minute limit`);
   return { kind, text, cls: down ? 'unk' : isFull ? 'full' : said === null ? 'unk' : 'free', extras };
+}
+/** The directory's own segment rule, reduced: free beats temporary-free beats unknown beats busy. */
+function segments(items) {
+  const edges = [...new Set(items.flatMap((i) => [i.lo, i.hi]))].sort((a, b) => a - b);
+  const out = [];
+  for (let k = 0; k < edges.length - 1; k++) {
+    const lo = edges[k], hi = edges[k + 1];
+    const on = items.filter((i) => i.lo <= lo && i.hi >= hi);
+    let state = 'gap';
+    if (on.length) {
+      state = on.some((i) => i.free === true && !i.temporary) ? 'free'
+            : on.some((i) => i.free === true) ? 'temp'
+            : on.some((i) => i.free === null) ? 'unknown' : 'busy';
+    }
+    const prev = out[out.length - 1];
+    if (prev && prev.state === state && prev.hi === lo) prev.hi = hi; else out.push({ lo, hi, state });
+  }
+  return out;
 }
 function drawBar(servers) {
   const items = [], tuned = [];
