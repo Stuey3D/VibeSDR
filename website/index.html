@@ -415,12 +415,12 @@
         <table class="meter">
           <tr><td>DSP load, nobody listening</td><td>8% of one core</td></tr>
           <tr><td>DSP load, one listener on FM stereo with Advanced RDS</td><td><b>60% of one core</b></td></tr>
-          <tr><td>Waterfall to that listener, at the idle 5 fps</td><td>5 KB/s</td></tr>
-          <tr><td>Audio to that listener</td><td>8 KB/s</td></tr>
+          <tr><td>To that listener, waterfall at 10 fps plus audio</td><td><b>35 KB/s</b></td></tr>
+          <tr><td>To that listener, idle at 5 fps plus audio</td><td>13 KB/s</td></tr>
           <tr><td>Sample rate</td><td>1.2 MS/s</td></tr>
           <tr><td>Cores</td><td>8</td></tr>
         </table>
-        <p class="fine">DSP load read from the server's own status feed on 10 September 2026, sampled every five seconds until it settled. The waterfall figure was measured earlier with the listener idle, when the rate drops to 5 fps after 30 seconds without a touch; interacting, it runs at 20 fps and that one figure rises with it. Audio does not change. Sharing your radio costs about as much bandwidth as a podcast.</p>
+        <p class="fine">DSP load read from the server's own status feed on 10 September 2026, sampled every five seconds until it settled; the 35 KB/s read off the listening client at the same time. The idle figure was measured earlier, when the waterfall drops to 5 fps after 30 seconds without a touch. Sharing your radio costs about as much bandwidth as a podcast.</p>
       </figure>
       <figure>
         <img class="bezel" src="assets/shots/mac-advanced-rds.webp" loading="lazy" alt="The Mac app listening to that phone, with Advanced RDS fully decoded: station name, RadioText, the AF list, MPX signal to noise 29 dB, constellation and MPX plots" />
