@@ -387,7 +387,7 @@
   <div class="wrap">
     <span class="lbl">Scaling</span>
     <h2 style="margin-top:8px">Everyone, regardless of device, is equal in the VibeSDR ecosystem.</h2>
-    <p class="lede">Grab a window and drag it. The layout follows in real time and the waterfall keeps scrolling through it, never redrawing. The app does it. The built-in web client does it. The watch is the same layout at one inch. That one behaviour is what lets VibeSDR run on everything from a one-inch watch face to a large desktop display, and everything in between, without a separate app for each.</p>
+    <p class="lede">Grab a window and drag it. The layout follows in real time and the waterfall keeps scrolling through it, never redrawing. The app does it. The built-in web client does it. The watch is the same layout at one inch. That one behaviour is what lets VibeSDR run on everything from a one-inch watch face to a large desktop display, and everything in between, from one design.</p>
     <div class="pair" style="margin-top:22px">
       <figure>
         <video class="bezel" src="assets/scaling-demo.mp4" autoplay muted loop playsinline preload="metadata" aria-label="A VibeSDR window on a Mac dragged from wide to narrow while the waterfall keeps scrolling"></video>
@@ -583,7 +583,7 @@
       <div class="panel-b">
         <h3>The raw IQ, out of any VibeServer that offers it, into your other apps.</h3>
         <p style="margin-top:8px">Switch <b>Raw IQ out</b> on in the client's audio controls and the channel you are tuned to becomes an rtl_tcp stream. Point SDR++, SDR#, GQRX, DSD-FME or anything else that speaks rtl_tcp at it. Tuning from that app moves the dial on the receiver, and the web client keeps playing.</p>
-        <p style="margin-top:8px"><b>On your own network</b> nothing else is needed: the client shows the receiver's address and port, up to 250 kHz wide, and your app connects straight to it. <b>Through the tunnel</b> the client shows a six-character code instead. Run VibeIQ on your machine, type the code, and the stream arrives on <code>127.0.0.1:1234</code>, 48 kHz wide, which covers every digital voice and data mode.</p>
+        <p style="margin-top:8px"><b>On your own network</b> nothing else is needed: the client shows the receiver's address and port, up to 250 kHz wide, or the radio's full bandwidth when it has one listener, and your app connects straight to it. <b>Through the tunnel</b> the client shows a six-character code instead. Run VibeIQ on your machine, type the code, and the stream arrives on <code>127.0.0.1:1234</code>, 48 kHz wide, which covers every digital voice and data mode.</p>
         <p class="fine">VibeIQ is one static binary for macOS, Linux and Windows, nothing to install. Needs a receiver whose owner has enabled Raw IQ out.</p>
         <div class="keys"><a class="key" href="https://github.com/Stuey3D/VibeSDR/releases/tag/vibeiq-v1.0.0">Download VibeIQ 1.0</a></div>
       </div>
