@@ -173,6 +173,8 @@
   .reframe p { font-size: clamp(19px, 2.6vw, 28px); line-height: 1.3; color: var(--text); max-width: min(30ch, 100%); }
   .reframe p b { color: var(--phosphor); }
   .reframe .why { font-size: 15px; color: var(--prose); max-width: min(62ch, 100%); margin-top: 18px; }
+  .reframe p.fine { font-size: 12.5px; line-height: 1.55; color: var(--dim); max-width: min(70ch, 100%); margin-top: 22px; }
+  .reframe sup { font-size: .55em; line-height: 0; vertical-align: super; color: var(--dim); }
 
   /* doors */
   .door .n { font-family: var(--nixie); font-size: 34px; color: var(--phosphor); line-height: 1; margin-bottom: 10px; }
@@ -331,9 +333,8 @@
 <!-- ══ THE REFRAME ══ -->
 <section class="reframe">
   <div class="wrap">
-    <p>Most SDR apps show you a modified copy of the server's own web client. <b>VibeSDR connects at the API level and is the client.</b> One set of controls, one familiar interface, one set of settings across every server.*</p>
+    <p>Most SDR apps show you a modified copy of the server's own web client. <b>VibeSDR connects at the API level and is the client.</b> One set of controls, one familiar interface, one set of settings across every server.<sup>*</sup></p>
     <p class="why">And because we write the demodulator too, the same signal path runs everywhere: on your phone, on the server you host, on your wrist. That one fact is what buys Advanced RDS on a watch, an AGC that sorts a £30 dongle out by itself, and a server that runs on a phone.</p>
-    <p class="fine">* Some KiwiSDRs refuse API-level connections. For those you are offered a compatibility option that shows the original Kiwi web client inside VibeSDR.</p>
     <div class="grid3" style="margin-top:28px">
       <div class="door">
         <div class="n">01</div>
@@ -354,6 +355,7 @@
         <a class="more" href="#wear">See it on the Watch →</a>
       </div>
     </div>
+    <p class="fine"><sup>*</sup> Some KiwiSDRs refuse API-level connections. For those you are offered a compatibility option that shows the original Kiwi web client inside VibeSDR.</p>
   </div>
 </section>
 
