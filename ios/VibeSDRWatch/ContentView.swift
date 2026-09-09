@@ -757,8 +757,12 @@ struct ContentView: View {
     // independently of the render loop; ours drains on the render clock, so the tick has to
     // live somewhere that runs before the first row.
     .onReceive(driver) { _ in
-      // ★ A 20 Hz wake for a drain nobody can see. The wrist-down path already tells the link.
-      if link.isBackground { return }
+      /* ★★★ NOT GATED ON isBackground. It was, for one build (260): the flag is set the instant the
+       *  scene leaves .active, which on watchOS includes states where the app is STILL ON SCREEN
+       *  (dimmed, a notification over it) and the phone is still forwarding rows under its grace
+       *  period — so the rows arrived and nobody drained them: "the spectrum being sent to Buddy
+       *  from the app is stalling lots" (Stuart, 2026-09-09). When we are truly suspended the
+       *  timer does not fire anyway; the gate saved nothing and cost the picture. */
       link.driverTick(now: ProcessInfo.processInfo.systemUptime)
     }
   }
