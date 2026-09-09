@@ -68,6 +68,10 @@ export interface LocalHardwarePanelProps {
   serverRates?: number[] | null;
   /** >0 = the server PINNED the capture rate; the picker is replaced by a note. */
   lockedRate?: number | null;
+  /** ★ DAB owns the rate AND the IF filter while it runs (2.048 MS/s, 2.048 MHz) — the server
+   *  ignores both messages in the mode. The pickers stayed live and did nothing (Stuart,
+   *  2026-09-09); in DAB each is a note saying who holds it, as the web pins them. */
+  dabOn?: boolean;
   /** SpyServer: the server owns the radio, so most RTL-specific controls do not
    *  apply. Gain does (it is in the protocol); sample rate, PPM, bias-T, digital
    *  AGC and direct sampling do not — some have no wire representation at all,
@@ -817,7 +821,9 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               ★★ Hidden rather than disabled: a greyed control still reads as an offer. */}
           {!p.isSpy && p.radio?.driver !== 'airspyhf' && <>
           <Text style={styles.section}>SAMPLE RATE</Text>
-          {p.lockedRate && p.lockedRate > 0 ? (
+          {p.dabOn ? (
+            <Text style={styles.note}>2.048M — held by DAB while it runs. Leave DAB to change it.</Text>
+          ) : p.lockedRate && p.lockedRate > 0 ? (
             // The SERVER pinned the rate — it IGNORES a sampleRate message outright.
             // Showing a picker whose every use is silently dropped is worse than
             // showing none, so say who set it instead.
@@ -854,7 +860,11 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                  and nobody has to know what an IF filter is. It is also the only setting that
                  cannot be got wrong by leaving it alone.
               ★ Drawn only when the server has actually told us it has one — see hasTunerBw. */}
-          {p.hasTunerBw && !p.isSpy && isRtl && p.onTunerBw && <>
+          {p.hasTunerBw && !p.isSpy && isRtl && p.onTunerBw && p.dabOn && <>
+          <Text style={styles.section}>IF FILTER</Text>
+          <Text style={styles.note}>2.048 MHz — held by DAB: wide enough for a 1.536 MHz ensemble, narrow enough to keep the next block out.</Text>
+          </>}
+          {p.hasTunerBw && !p.isSpy && isRtl && p.onTunerBw && !p.dabOn && <>
           <Text style={styles.section}>IF FILTER</Text>
           <Seg slot={slot} options={TUNER_BWS}
                value={p.tunerBwAuto ? -1 : (p.tunerBw ?? 0)}

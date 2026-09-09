@@ -9132,6 +9132,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           isTcp={!!route.params.isTcp}
           serverRates={hwServerRates}
           lockedRate={hwLockedRate}
+          dabOn={dabOn}
           biasTee={hwBiasTee}
           onBiasTee={onHwBiasTee}
           agc={hwAgc}
