@@ -439,7 +439,9 @@ let srvSharedDial = false;
 /* ★ RAW IQ OUT — the owner's policy from /vibeserver.json, and this session's stream once it is on. */
 let srvRawIq: 'off' | 'local' | 'public' = 'off';
 let srvRawIqMax = 0, srvRawIqActive = 0;
-let iqState: { on: boolean; rate?: number; host?: string; port?: number; code?: string; public?: boolean } = { on: false };
+/* ★ Full-rate raw IQ on offer: the capture rate in Hz (a single-listener radio, LAN only), or 0. */
+let srvRawIqFull = 0;
+let iqState: { on: boolean; rate?: number; host?: string; port?: number; code?: string; public?: boolean; full?: boolean } = { on: false };
 let iqWired = false;
 /** ★★★ THE PAIRING CODE'S REGISTRATION WITH THE DIRECTORY. The directory proxies the page, not
  *  the stream, so the VibeIQ bridge must reach the server's own tunnel hostname — which rotates.
@@ -489,11 +491,21 @@ function refreshIqRow() {
   // ★★ srvLan, not srvLocal: the server's own "local only" test is the private-address one, and
   //   reading loopback here greyed the switch for every LAN visitor (2026-09-09).
   sel.hidden = !srvLan;
+  // ★★★ FULL: the radio's whole window, offered only on the LAN when this radio has one listener
+  //   (the server decides — rawIqFull is 0 otherwise). Tuning from the rtl_tcp app then moves the
+  //   radio's centre, which is what Trunk Recorder needs and what a shared radio cannot allow.
+  let fullOpt = document.getElementById('iqRateFull') as HTMLOptionElement | null;
+  if (srvLan && srvRawIqFull > 0) {
+    if (!fullOpt) { fullOpt = document.createElement('option'); fullOpt.id = 'iqRateFull'; sel.appendChild(fullOpt); }
+    fullOpt.value = String(srvRawIqFull);
+    fullOpt.textContent = `${(srvRawIqFull / 1e6).toFixed(srvRawIqFull % 1e6 ? 2 : 1)}M FULL`;
+  } else if (fullOpt) { if (sel.value === fullOpt.value) { sel.value = '250000'; } fullOpt.remove(); }
   if (!srvLan) sel.value = '48000';
-  // ★ On the LAN the DEFAULT is the full 250 kHz — the tunnel's 48 kHz ceiling is a tunnel
-  //   limit, not a preference (Stuart, 2026-09-09: "internal IPs like this one need the full
-  //   250K"). The listener's own pick, once made, stands.
-  else if (!iqRateChosen && !iqState.on) sel.value = '250000';
+  // ★ On the LAN the DEFAULT is the widest on offer — FULL where the radio is this listener's
+  //   alone, else 250 kHz. The tunnel's 48 kHz ceiling is a tunnel limit, not a preference
+  //   (Stuart, 2026-09-09: "internal IPs like this one need the full 250K"; "the single user
+  //   RTL-SDRs get 2.4MHz"). The listener's own pick, once made, stands.
+  else if (!iqRateChosen && !iqState.on) sel.value = srvRawIqFull > 0 ? String(srvRawIqFull) : '250000';
   sel.disabled = iqState.on;
   // ★ The owner set LOCAL ONLY and this visitor is not on the LAN: shown dimmed, never
   //   enable-able, with the reason — a visitor who saw it work on the LAN should not wonder
@@ -502,10 +514,13 @@ function refreshIqRow() {
   btn.disabled = localOnly;
   row.style.opacity = localOnly ? '0.45' : '';
   if (localOnly) { note.textContent = 'Raw IQ out is local-network only on this receiver — not available through the tunnel.'; return; }
-  const kHz = (iqState.rate ?? Number(sel.value) ?? 48000) / 1000;
+  const rateHz = iqState.rate ?? Number(sel.value) ?? 48000;
+  const kHz = rateHz / 1000;
+  const rateTxt = rateHz >= 1e6 ? `${(rateHz / 1e6).toFixed(rateHz % 1e6 ? 2 : 1)} MHz` : `${kHz} kHz`;
   if (iqState.on && !iqState.public) {
-    note.innerHTML = `IQ out is on at <b>${kHz} kHz</b>. Connect your rtl_tcp app to <b>${escapeHtml(iqState.host ?? '')}:${iqState.port}</b>. `
-      + 'Tuning from that app moves this dial; audio here keeps playing. It ends when this session does.';
+    note.innerHTML = `IQ out is on at <b>${rateTxt}</b>${iqState.full ? ' (the radio\'s full window)' : ''}. Connect your rtl_tcp app to <b>${escapeHtml(iqState.host ?? '')}:${iqState.port}</b>. `
+      + (iqState.full ? 'Tuning from that app moves the radio\'s centre and this dial with it; audio here keeps playing. It ends when this session does.'
+                      : 'Tuning from that app moves this dial; audio here keeps playing. It ends when this session does.');
   } else if (iqState.on && iqState.public) {
     note.innerHTML = iqReg
       ? `IQ out is on at <b>${kHz} kHz</b>. Open <b>VibeIQ</b> and enter the code <b style="letter-spacing:.15em">${escapeHtml(iqState.code ?? '')}</b>, `
@@ -515,7 +530,9 @@ function refreshIqRow() {
   } else {
     const free = Math.max(0, srvRawIqMax - srvRawIqActive);
     note.textContent = 'Your channel as raw IQ, in rtl_tcp form, for a decoder this client does not carry — digital voice, say. '
-      + (srvLan ? '48 kHz covers every digital voice mode; wider rates are for the local network. ' : '48 kHz through the tunnel, via the VibeIQ bridge. ')
+      + (srvLan ? (srvRawIqFull > 0 ? 'FULL is the radio\'s whole window, for a trunking or wideband app; 48 kHz covers every digital voice mode. '
+                                     : '48 kHz covers every digital voice mode; wider rates are for the local network. ')
+                : '48 kHz through the tunnel, via the VibeIQ bridge. ')
       + (srvRawIqMax > 0 ? `${free} of ${srvRawIqMax} slots free.` : '');
   }
 }
@@ -554,6 +571,7 @@ async function loadAudioPolicy(httpBase: string) {
       srvUncompressed = j.uncompressed;
     srvRawIq = j.rawIq === 'local' || j.rawIq === 'public' ? j.rawIq : 'off';
     srvRawIqMax = Number(j.rawIqMax) || 0; srvRawIqActive = Number(j.rawIqActive) || 0;
+    srvRawIqFull = Number(j.rawIqFull) || 0;
     srvLocal = j.local === true;
     srvLan = j.lan === true;
     srvAdminProtected = j.admin === true;
@@ -1441,7 +1459,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
      *   lines?", which is the question somebody actually has; the number is for whoever looks. */
     onIqOut: (m) => {
       /* ★ The server's answer: the address or the code, or the reason it said no. */
-      if (m.on) { iqState = { on: true, rate: m.rate, host: m.host, port: m.port, code: m.code, public: m.public }; registerIqCode(m.code, m.token); }
+      if (m.on) { iqState = { on: true, rate: m.rate, host: m.host, port: m.port, code: m.code, public: m.public, full: m.full }; registerIqCode(m.code, m.token); }
       else { iqState = { on: false }; registerIqCode(); if (m.why) showPill(`Raw IQ out: ${m.why}`, 9000); }
       refreshIqRow();
     },

@@ -373,7 +373,7 @@ export interface SpectrumCallbacks {
    *  joins mid-stream is never missing rows. */
   onDab?: (d: DabState) => void;
   /** ★ Raw IQ out: the server's answer to iqOut() — where the stream is, or why not. */
-  onIqOut?: (m: { on: boolean; rate?: number; host?: string; port?: number; code?: string; token?: string; public?: boolean; why?: string }) => void;
+  onIqOut?: (m: { on: boolean; rate?: number; host?: string; port?: number; code?: string; token?: string; public?: boolean; full?: boolean; why?: string }) => void;
   /** Somebody said one of the canned phrases. `id` is a phrase id, never text. */
   /** `admin` is what the sender WAS when they said it — the server records it per line, so it
    *  does not change when the lock changes hands. */
@@ -801,7 +801,7 @@ export class SpectrumClient {
       case 'iqout':
         this.cb.onIqOut?.({ on: Number(msg.on) === 1, rate: Number(msg.rate) || undefined, host: typeof msg.host === 'string' ? msg.host : undefined,
                             port: Number(msg.port) || undefined, code: typeof msg.code === 'string' ? msg.code : undefined,
-                            token: typeof msg.token === 'string' ? msg.token : undefined, public: msg.public === true,
+                            token: typeof msg.token === 'string' ? msg.token : undefined, public: msg.public === true, full: msg.full === true,
                             why: typeof msg.why === 'string' ? msg.why : undefined });
         break;
       case 'hwinfo':

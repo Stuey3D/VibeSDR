@@ -585,7 +585,8 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           <option value="2">Local &amp; public (through the tunnel)</option>
         </select>
         <div class="hint">Lets a listener take the channel they are tuned to as an
-          <b>rtl_tcp</b> stream &mdash; up to 250 kHz on your local network, 48 kHz through the
+          <b>rtl_tcp</b> stream &mdash; up to 250 kHz on your local network (or the radio's full
+          bandwidth when it has one listener, for a trunking app), 48 kHz through the
           tunnel (paired by a six-character code in the VibeIQ bridge) &mdash; for a decoder that
           does not run in a browser: DSD, a DMR/P25 decoder, a data mode. The port only opens
           while somebody has it on and closes with their session. A stream that is being read
