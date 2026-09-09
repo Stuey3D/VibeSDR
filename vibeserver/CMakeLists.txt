@@ -454,6 +454,8 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   # ★ /lib/udev/rules.d is the PACKAGE path; /etc/udev/rules.d is for the ADMIN's own overrides.
   #   Shipping into /etc would fight the sysadmin and survive `apt purge`.
   install(FILES linux/99-vibeserver-sdr.rules DESTINATION lib/udev/rules.d)
+  # ★★★ And keep the kernel's DVB driver off the dongles — see the file for the wedge it caused.
+  install(FILES linux/vibeserver-blacklist-dvb.conf DESTINATION lib/modprobe.d)
   # ★★ THE MAINTENANCE BUTTONS' PRIVILEGE. The service runs unprivileged AND with
   #    NoNewPrivileges=yes, so it cannot elevate at all — sudo is impossible by design here. The
   #    daemon writes a request file instead; the .path unit notices it and runs the helper as
