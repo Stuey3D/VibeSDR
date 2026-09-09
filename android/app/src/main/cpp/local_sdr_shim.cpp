@@ -13594,8 +13594,14 @@ struct LocalSdrShim::Impl {
             if (n == 0) continue;               // timeout — keep waiting
             if (n < 5) break;                   // closed or broken
             const uint32_t v = (uint32_t(cmd[1]) << 24) | (uint32_t(cmd[2]) << 16) | (uint32_t(cmd[3]) << 8) | cmd[4];
-            if (cmd[0] == 0x01 && v > 0 && spec)
+            if (cmd[0] == 0x01 && v > 0 && spec) {
                 handleControl(spec, "{\"type\":\"tune\",\"frequency\":" + std::to_string(v) + "}");
+                // ★ TELL THE OWNING CLIENT. A tune normally comes FROM the client, which already
+                //   knows where it put the dial, so the handler never echoes it back — and a tune
+                //   from the rtl_tcp side moved the radio while the browser's dial stayed put
+                //   (Stuart, 2026-09-09, SDR++: "the client is not following it").
+                sendConfig(spec);
+            }
             // 0x02 rate, 0x04 gain, 0x05 ppm … — the server owns the hardware; ignored.
         }
     }
@@ -13783,10 +13789,10 @@ struct LocalSdrShim::Impl {
             int op = recvWs(sock, payload);
             if (op < 0 || op == 0x8) break;
             if (op == 0x9) { sendWs(sock, 0xA, (const uint8_t*)payload.data(), payload.size()); continue; }
-            if (op == 0x1 && jsonStr(payload, "type") == "iqtune" && spec) handleControl(spec, payload);
+            if (op == 0x1 && jsonStr(payload, "type") == "iqtune" && spec) { handleControl(spec, payload); sendConfig(spec); }
             if (op == 0x2 && payload.size() >= 5 && (uint8_t)payload[0] == 0x01 && spec) {
                 const uint32_t v = (uint32_t((uint8_t)payload[1]) << 24) | (uint32_t((uint8_t)payload[2]) << 16) | (uint32_t((uint8_t)payload[3]) << 8) | (uint8_t)payload[4];
-                if (v > 0) handleControl(spec, "{\"type\":\"tune\",\"frequency\":" + std::to_string(v) + "}");
+                if (v > 0) { handleControl(spec, "{\"type\":\"tune\",\"frequency\":" + std::to_string(v) + "}"); sendConfig(spec); }
             }
         }
         if (iq->conn == sock) iq->conn = nullptr;
