@@ -128,6 +128,14 @@ public:
         { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
         mp2_.reset();
         aac_.reset();          // ★ a new service is a new codec configuration — see setChannel
+        /* ★★★ AND THE SUPER-FRAME WINDOW. sf_ holds the last five logical frames — of the OLD
+         *  service. The first super frame after a switch could be four old frames and one new,
+         *  pass its firecode on the OLD service's header, and be decoded under the OLD format: on
+         *  Android that opened AMediaCodec at the previous rate and the codec was never reopened,
+         *  so a 48 kHz → 32 kHz switch stayed silent until a second selection rebuilt it cleanly
+         *  (Stuart, 2026-09-09: "moving from a 48KHz station to a 32KHz one on the Xcover it gets
+         *  stuck until you select it again"). Start the window from the new service's frames. */
+        sf_.clear();
         aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacPrimed_ = false;   // ★ a restarted pipe primes again — see the count
         aacStartedKnown_ = knownRatio_ > 0.0;
         adts_.clear();
@@ -243,7 +251,7 @@ public:
                      *  intent and it re-applies the moment the ensemble is read again. */
                     sid_ = 0;
                     resetAudioCounters();   // ★ a new multiplex starts its own tally
-                    mp2_.reset(); aac_.reset(); pad_.reset(); adts_.clear();
+                    mp2_.reset(); aac_.reset(); pad_.reset(); adts_.clear(); sf_.clear();
                     aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacPrimed_ = false;
                     { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
                     pcmOwed_ = 0; pcmPushed_ = 0; resampleReset();

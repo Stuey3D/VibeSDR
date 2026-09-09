@@ -83,6 +83,21 @@ public:
     bool decode(const uint8_t* adts, size_t n, AacPcm& out) {
         if (failed_) return false;
         if (n < 7) return true;
+        /* ★★★ THE HEADER DECIDES THE CODEC, EVERY UNIT. The codec was opened once, from the first
+         *  header it saw, and kept whatever that said — so a unit whose header names another
+         *  rate or channel layout (a service change, or a first super frame assembled from the
+         *  previous service's frames) went into a codec configured for something else, which
+         *  decodes nothing and says nothing. Reopen on any change; cheap, and it happens once. */
+        {
+            const int profile = ((adts[2] >> 6) & 0x03) + 1;
+            const int sfIndex = (adts[2] >> 2) & 0x0F;
+            const int chCfg   = ((adts[2] & 0x01) << 2) | ((adts[3] >> 6) & 0x03);
+            if (codec_ && (profile != openedProfile_ || sfIndex != openedSf_ || chCfg != openedCh_)) {
+                fprintf(stderr, "[DAB] AAC header changed (sf %d→%d, ch %d→%d) — reopening the decoder\n",
+                        openedSf_, sfIndex, openedCh_, chCfg);
+                close();
+            }
+        }
         if (!codec_ && !open(adts, n)) return false;
 
         /* ★★★ THE ADTS HEADER IS STRIPPED AND THE CONFIG COMES FROM csd-0 INSTEAD. MediaCodec can
@@ -230,10 +245,12 @@ private:
         /* ★ Seeded from the CORE, then corrected the moment the decoder reports its real output
          *  format. SBR and PS both change it and only the decoder knows. */
         rate_ = coreRate; ch_ = chCfg;
+        openedProfile_ = profile; openedSf_ = sfIndex; openedCh_ = chCfg;
         return true;
     }
 
     AMediaCodec* codec_ = nullptr;
+    int      openedProfile_ = 0, openedSf_ = -1, openedCh_ = -1;   ///< what the codec was opened for
     int      rate_ = 0, ch_ = 0;
     int64_t  pts_  = 0;
     bool     failed_ = false;
