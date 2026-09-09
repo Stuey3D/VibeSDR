@@ -3965,6 +3965,7 @@ struct LocalSdrShim::Impl {
         std::atomic<double> lastReadAt{0};       // last time the consumer took bytes
         std::atomic<long long> bytesSent{0};
         int inRate = 0;                          // the DDC rate the resamplers were built for
+        float lvl = 1.0f;                        // ★ the 8-bit normaliser's gain (see iqTapInto)
         std::unique_ptr<vibedsp::RationalResampler> ri, rq;
         std::vector<float> fi, fq, oi, oq;
     };
@@ -13663,7 +13664,24 @@ struct LocalSdrShim::Impl {
          *  The channel after digital gain is what every demod here is fed, its level is held
          *  steady by the same loops, and it is what an 8-bit consumer needs (Stuart, 2026-09-09:
          *  "really poor reception compared to the web client … a surging quality"). */
-        iqFloatToU8(iq->oi.data(), iq->oq.data(), m, out.data(), 1.0f);
+        /* ★★★ AND THEN A LEVEL, BECAUSE EIGHT BITS. Measured at unity the channel still sat at
+         *  RMS 2 LSB — about -36 dBFS — on an S9+30 station: VibeAGC parks the TUNER low on a
+         *  strong band and the audio chain normalises afterwards, so the raw channel is quiet by
+         *  design. A float consumer would not care; a u8 one gets quantisation noise. So: a slow
+         *  normaliser. Instant attack on a peak that would clip, 3 dB/s release towards a peak of
+         *  half scale, 60 dB range. Slow enough that it never sounds like AGC, and every rtl_tcp
+         *  app has its own AGC behind it anyway. */
+        {
+            float pk = 1e-6f;
+            for (int i = 0; i < m; i++) { pk = std::max(pk, std::max(std::fabs(iq->oi[i]), std::fabs(iq->oq[i]))); }
+            const float secs = (float)m / (float)iq->rate;
+            const float want = 0.5f / pk;                        // gain that puts this block's peak at half scale
+            if (pk * iq->lvl > 0.95f) iq->lvl = 0.95f / pk;      // attack: never clip
+            else if (want > iq->lvl)  iq->lvl = std::min(want, iq->lvl * std::exp(0.3454f * secs));   // 3 dB/s
+            else                      iq->lvl = std::max(want, iq->lvl * std::exp(-0.3454f * secs));
+            iq->lvl = std::min(1000.0f, std::max(1.0f, iq->lvl));
+        }
+        iqFloatToU8(iq->oi.data(), iq->oq.data(), m, out.data(), iq->lvl);
         std::lock_guard<std::mutex> lk(iq->qm);
         // ★ A consumer that stops reading must not grow us without bound: keep ~1 s, drop the oldest.
         const size_t kMax = (size_t)iq->rate * 2;
