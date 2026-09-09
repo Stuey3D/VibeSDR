@@ -1,1016 +1,575 @@
 <!doctype html>
-<html lang="en">
+<html lang="en-GB">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="icon" type="image/png" href="assets/favicon.png" />
 <link rel="apple-touch-icon" href="assets/icon.png" />
-<title>VibeSDR — the mobile-first SDR</title>
-<meta name="description" content="A live SDR waterfall drawn on your Apple Watch, tuned with the Digital Crown. Multi-server, local RTL-SDR, and its own clean-room DSP. On the App Store." />
+<title>VibeSDR</title>
+<meta name="description" content="An SDR receiver for iPhone, Android, Mac and Apple Watch, with its own DSP. Listen to any receiver, host your own from a spare phone, or wear one on your wrist." />
 <style>
-  :root {
-    --ground: #060809;
-    --panel: #0E1315;
-    --panel-2: #131A1C;
-    --line: #1E2A2A;
-    --phosphor: #35E08A;
-    --phosphor-dim: #1F8A57;
-    --amber: #FF8C00;
-    --ink: #E7EEEA;
-    --muted: #7E8C86;
-    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, monospace;
-    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    --maxw: 1080px;
+  /* ★★★ ONE DESIGN LANGUAGE. These are the web client's own tokens (web/client/index.html) and the
+     directory's (directory/public/index.html), copied by value because this page ships alone on a
+     Worker. The previous site had its own palette, its own type and rounded cards, and readers on
+     r/RTLSDR spotted it for what it was: a template. The app looks like an instrument; so does this.
+     If the brand moves, it moves in all three places. */
+  @font-face {
+    font-family: "Nixie One";
+    src: url("assets/NixieOne-Regular.ttf") format("truetype");
+    font-display: swap;
   }
-
+  :root {
+    --bg: #080601; --panel: #0d0a02; --panel-2: #120d03;
+    --line: rgba(255,176,0,.22); --line-strong: rgba(255,176,0,.45);
+    --text: #ffcc88; --prose: #e6d3ad; --dim: rgba(255,160,0,.55); --accent: #ffb833;
+    --phosphor: #28A745; --busy: #e05050; --temp: #4fc3f7;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --nixie: "Nixie One", var(--mono);
+    --maxw: 1120px;
+  }
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; }
   body {
-    margin: 0;
-    background: var(--ground);
-    color: var(--ink);
-    font-family: var(--sans);
-    line-height: 1.6;
-    font-size: 17px;
-    -webkit-font-smoothing: antialiased;
-    overflow-x: hidden;
+    margin: 0; background: var(--bg); color: var(--prose);
+    font-family: var(--mono); font-size: 15px; line-height: 1.6;
+    -webkit-font-smoothing: antialiased; overflow-x: hidden;
   }
-  ::selection { background: rgba(53,224,138,0.28); }
-  a { color: inherit; }
+  ::selection { background: rgba(255,184,51,.28); }
+  a { color: var(--accent); }
+  a:hover { color: #ffe566; }
+  b, strong { color: var(--text); font-weight: 600; }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 20px; min-width: 0; }
+  .grid2 > *, .grid3 > *, .proof > *, .pair > *, .rds-grid > *, .wear-grid > *, .made-grid > *, .hero-grid > * { min-width: 0; }
+  .srv-h, .rad, figcaption { overflow-wrap: anywhere; }
 
-  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+  /* Screen-printed labels: the small uppercase tags an instrument panel carries */
+  .lbl { font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--dim); }
+  .lbl.on { color: var(--phosphor); }
+  .num { font-family: var(--nixie); font-weight: 400; letter-spacing: .02em; color: var(--accent); }
 
-  /* eyebrow / mono labels */
-  .eyebrow {
-    font-family: var(--mono);
-    font-size: 12px;
-    letter-spacing: 0.22em;
-    text-transform: uppercase;
-    color: var(--phosphor);
-  }
+  h1, h2, h3 { color: var(--text); font-weight: 500; letter-spacing: -.005em; text-wrap: balance; margin: 0; }
+  h1 { font-size: clamp(30px, 5vw, 52px); line-height: 1.08; }
+  h2 { font-size: clamp(22px, 3vw, 32px); line-height: 1.15; }
+  h3 { font-size: 17px; }
+  p { margin: 0 0 14px; max-width: min(66ch, 100%); }
+  .lede { font-size: clamp(16px, 1.9vw, 19px); color: var(--text); max-width: min(58ch, 100%); }
 
-  /* ── Top bar ── */
-  header {
-    position: relative; z-index: 3;
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 16px; padding: 20px 24px; max-width: var(--maxw); margin: 0 auto;
+  /* ══ THE NETWORK BAR ═══════════════════════════════════════════════════════════════════════
+     ★★★ Stuart's idea: the directory's dial, reduced to a single strip, sticky at the top, live.
+     The one banner on the page that cannot be mistaken for decoration. It replaces the ON AIR
+     sign: the network includes his receivers, and two sticky strips would be one too many.
+     ★★ IT MUST NOT LOOK BROKEN AT ZERO. If the directory does not answer, the wording without
+     figures stays and the strip is a plain amber hairline. "0 radios on 0 servers" is never
+     printed. */
+  #netBar {
+    position: sticky; top: 0; z-index: 60; display: block; text-decoration: none;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+    color: var(--text); overflow: hidden;
   }
-  .wordmark { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -0.01em; font-size: 18px; }
-  .wordmark .dot {
-    width: 10px; height: 10px; border-radius: 50%;
-    background: var(--phosphor);
-    box-shadow: 0 0 10px var(--phosphor), 0 0 2px #fff inset;
-    animation: pulse 2.6s ease-in-out infinite;
-  }
-  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
-  header nav { display: flex; gap: 22px; font-size: 14px; }
-  header nav a { color: var(--muted); text-decoration: none; transition: color .18s; }
-  header nav a:hover { color: var(--ink); }
-  @media (max-width: 620px) { header nav { display: none; } }
+  #netBar .nb-inner { position: relative; max-width: var(--maxw); margin: 0 auto; padding: 0 20px; height: 38px;
+    display: flex; align-items: center; gap: 14px; }
+  #netBar svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #netBar .nb-txt { position: relative; z-index: 1; width: 100%; display: flex; align-items: baseline; gap: 12px; flex-wrap: nowrap;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; letter-spacing: .06em;
+    text-shadow: 0 0 6px var(--bg), 0 0 2px var(--bg), 0 0 10px var(--bg); }
+  #netBar .nb-name { text-transform: uppercase; letter-spacing: .18em; color: var(--accent); font-weight: 600; }
+  #netBar .nb-fig { color: var(--phosphor); }
+  #netBar .nb-fig .num { font-family: var(--mono); font-weight: 700; font-size: 13px; color: var(--phosphor); }
+  #netBar .nb-cta { margin-left: auto; color: var(--accent); }
+  #netBar:hover .nb-cta { color: #ffe566; }
+  @media (max-width: 640px) { #netBar .nb-range { display: none; } #netBar .nb-txt { font-size: 11px; gap: 9px; } }
+  .seg.free { fill: var(--phosphor); } .seg.busy { fill: var(--busy); } .seg.temp { fill: var(--temp); }
+  .seg.unknown { fill: var(--dim); } .seg.gap { fill: transparent; }
+  .vfo { stroke: #ff3b30; stroke-width: 2; }
+  .vfo-cap { fill: #ff3b30; }
 
-  /* ── Hero ── */
-  .hero { position: relative; padding: 34px 0 56px; }
-  .hero-grid {
-    display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 48px; align-items: center;
-  }
-  @media (max-width: 860px) { .hero-grid { grid-template-columns: 1fr; gap: 34px; } }
+  /* ══ HEADER ══ */
+  header { border-bottom: 1px solid var(--line); }
+  header .wrap { display: flex; align-items: center; justify-content: space-between; gap: 14px; height: 54px; }
+  .wordmark { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--accent); letter-spacing: .22em; text-transform: uppercase; font-weight: 600; font-size: 14px; }
+  .wordmark img { width: 26px; height: 26px; display: block; }
+  header nav { display: flex; gap: 18px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+  header nav a { color: var(--dim); text-decoration: none; }
+  header nav a:hover { color: var(--accent); }
+  @media (max-width: 900px) { header nav { display: none; } }
 
-  /* The app icon — the VFO dial, our branding, front and centre */
-  .hero-icon { display: flex; justify-content: center; }
-  .hero-icon .frame { position: relative; }
-  .hero-icon img {
-    display: block; width: min(340px, 72vw); height: auto;
-    border-radius: 23%;
-    box-shadow:
-      0 0 0 1px rgba(53,224,138,0.14),
-      0 30px 70px -22px rgba(255,140,0,0.42),
-      0 18px 60px -26px rgba(53,224,138,0.5);
-    animation: float 7s ease-in-out infinite;
-  }
-  /* phosphor glow puddle behind the dial */
-  .hero-icon .frame::after {
-    content: ""; position: absolute; inset: 8% 8% -14% 8%; z-index: -1;
-    background: radial-gradient(closest-side, rgba(53,224,138,0.28), transparent 72%);
-    filter: blur(28px);
-  }
-  @keyframes float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
-  @media (max-width: 860px) { .hero-icon { order: -1; } .hero-icon img { width: min(240px, 58vw); } }
+  /* ══ PANELS ══ every section is a panel with hairlines, square corners, left-aligned. */
+  section { border-bottom: 1px solid var(--line); padding: 56px 0; }
+  .panel { border: 1px solid var(--line); background: var(--panel); }
+  .panel-h { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    border-bottom: 1px solid var(--line); padding: 8px 14px; }
+  .panel-b { padding: 16px 14px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: center; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; border: 1px solid var(--line); }
+  .grid3 > div { padding: 22px 20px; border-right: 1px solid var(--line); }
+  .grid3 > div:last-child { border-right: 0; }
+  @media (max-width: 860px) { .grid2 { grid-template-columns: 1fr; } .grid3 { grid-template-columns: 1fr; }
+    .grid3 > div { border-right: 0; border-bottom: 1px solid var(--line); } .grid3 > div:last-child { border-bottom: 0; } }
 
-  /* Showcase — the real app, tuning by hand */
-  .showcase { margin-top: 58px; display: grid; grid-template-columns: auto 1fr; gap: 52px; align-items: center; }
-  @media (max-width: 820px) { .showcase { grid-template-columns: 1fr; gap: 34px; justify-items: center; } }
-  .phone {
-    position: relative; width: 300px; max-width: 74vw;
-    border-radius: 34px; padding: 8px;
-    background: linear-gradient(160deg, #1b2422, #090c0b);
-    box-shadow:
-      0 0 0 1px rgba(53,224,138,0.12),
-      0 42px 90px -30px rgba(255,140,0,0.4),
-      0 30px 80px -34px rgba(53,224,138,0.42);
-  }
-  .phone::after {
-    content: ""; position: absolute; inset: 14% 12% -12% 12%; z-index: -1;
-    background: radial-gradient(closest-side, rgba(53,224,138,0.22), transparent 72%); filter: blur(30px);
-  }
-  .phone video { display: block; width: 100%; height: auto; border-radius: 27px; background: #000; }
-  .showcase-copy { max-width: 52ch; }
-  .scale-clip { margin: 46px auto 0; }
-  .scale-clip video {
-    display: block; width: 100%; height: auto; border-radius: 16px; background: #000;
-    box-shadow: 0 40px 90px -34px rgba(0,0,0,0.9), 0 0 0 1px rgba(53,224,138,0.12);
-  }
-  .scale-clip figcaption {
-    margin-top: 14px; text-align: center; color: var(--muted); font-size: 14px; line-height: 1.55;
-    max-width: 68ch; margin-inline: auto;
-  }
-  .sc-h { font-size: clamp(24px, 3.4vw, 34px); letter-spacing: -0.02em; font-weight: 750; margin: 8px 0 14px; text-wrap: balance; }
-  .showcase-copy > p { color: #C4CFC9; margin: 0 0 20px; }
-  .ticks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 11px; }
-  .ticks li { position: relative; padding-left: 26px; font-size: 15px; color: var(--ink); }
-  .ticks li::before {
-    content: ""; position: absolute; left: 2px; top: 8px; width: 8px; height: 8px; border-radius: 50%;
-    background: var(--phosphor); box-shadow: 0 0 8px var(--phosphor);
-  }
+  /* buttons: keys, not pills */
+  .keys { display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; }
+  .key { display: inline-flex; align-items: center; gap: 10px; padding: 11px 16px; text-decoration: none;
+    border: 1px solid var(--line-strong); color: var(--accent); font-size: 13px; letter-spacing: .06em; text-transform: uppercase;
+    background: rgba(20,10,0,.75); }
+  .key:hover { background: rgba(255,200,0,.10); border-color: rgba(255,229,102,.55); color: #ffe566; }
+  .key.primary { background: var(--accent); color: #1a1000; border-color: var(--accent); }
+  .key.primary:hover { background: #ffe566; color: #1a1000; }
+  .key .price { font-family: var(--nixie); font-size: 15px; letter-spacing: 0; opacity: .85; text-transform: none; }
+  .fine { font-size: 12.5px; color: var(--dim); line-height: 1.55; }
+  .fine a { color: var(--accent); }
 
-  /* Apple Watch — point 2. Jr (a 1.0, not a beta); Buddy is the beta. */
-  .watch-grid { display: grid; grid-template-columns: 1fr 0.92fr; gap: 50px; align-items: center; }
-  @media (max-width: 820px) { .watch-grid { grid-template-columns: 1fr; gap: 30px; } .watch-shot { order: -1; } }
-  .watch-shot img {
-    display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto; border-radius: 18px;
-    box-shadow: 0 34px 80px -30px rgba(0,0,0,0.85), 0 0 0 1px var(--line);
-  }
-  .badge-free {
-    display: inline-block; font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase;
-    color: #06210f; background: var(--phosphor); padding: 3px 9px; border-radius: 6px; margin-left: 8px; font-weight: 700;
-  }
-  .watch-shot video {
-    display: block; width: 100%; max-width: 372px; height: auto; margin: 0 auto; border-radius: 20px;
-    filter: drop-shadow(0 30px 62px rgba(53,224,138,0.3)) drop-shadow(0 18px 50px rgba(255,140,0,0.22));
-  }
-  .soon-card {
-    margin-top: 24px; border: 1px solid var(--phosphor-dim); border-radius: 14px; padding: 16px 18px;
-    background: linear-gradient(180deg, rgba(53,224,138,0.07), rgba(53,224,138,0.02));
-  }
-  .soon-k { font-family: var(--mono); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--amber); margin: 0 0 7px; }
-  .soon-h { font-size: 19px; font-weight: 750; letter-spacing: -0.01em; margin: 0 0 6px; text-wrap: balance; }
-  .soon-h .glow { color: var(--phosphor); text-shadow: 0 0 18px rgba(53,224,138,0.4); }
-  .soon-p { color: var(--muted); font-size: 14px; margin: 0; line-height: 1.5; }
-  .watch-shot { display: flex; flex-direction: column; align-items: center; gap: 26px; }
-  .wrist { margin: 0 auto; max-width: 340px; }
-  .wrist img { display: block; width: 100%; height: auto; border-radius: 16px; box-shadow: 0 24px 60px -26px rgba(0,0,0,0.85), 0 0 0 1px var(--line); }
-  .wrist figcaption { font-family: var(--mono); font-size: 11px; letter-spacing: 0.02em; color: var(--muted); text-align: center; margin-top: 10px; }
+  /* media in bezels: square, hairline, no glow */
+  .bezel { border: 1px solid var(--line); background: #000; display: block; }
+  video, img { max-width: 100%; }
+  .phone-clip { width: 280px; max-width: 74vw; margin: 0 auto; }
+  .phone-clip video { display: block; width: 100%; height: auto; }
+  figcaption { font-size: 12px; color: var(--dim); margin-top: 8px; line-height: 1.5; }
+  figure { margin: 0; }
 
-  /* VibeServer — no more e-waste */
-  .sub.big { font-size: clamp(16px, 2vw, 19px); max-width: 68ch; color: #C4CFC9; }
-  .ewaste h2 .glow { display: inline; }
-  .browser {
-    margin: 34px 0 30px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
-    background: var(--panel); box-shadow: 0 40px 90px -34px rgba(0,0,0,0.85), 0 0 0 1px rgba(53,224,138,0.06);
-  }
-  .browser-bar {
-    display: flex; align-items: center; gap: 7px; padding: 10px 14px;
-    background: var(--panel-2); border-bottom: 1px solid var(--line);
-  }
-  .browser-bar > span { width: 10px; height: 10px; border-radius: 50%; background: #2b3a37; }
-  .browser-bar > span:first-child { background: #FF8C00; }
-  .browser-bar em {
-    font-family: var(--mono); font-style: normal; font-size: 12px; color: var(--muted);
-    margin-left: 12px; padding: 3px 12px; border-radius: 7px; background: rgba(0,0,0,0.35); letter-spacing: 0.02em;
-  }
-  .browser img { display: block; width: 100%; height: auto; }
-  .ticks-row { flex-direction: row; flex-wrap: wrap; gap: 10px 28px; }
-  .ticks-row li { flex: 1 1 240px; }
-  @media (max-width: 620px) { .ticks-row { flex-direction: column; } }
+  /* ══ HERO ══ */
+  .hero { padding: 48px 0 40px; }
+  .hero-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 40px; align-items: center; }
+  @media (max-width: 860px) { .hero-grid { grid-template-columns: 1fr; } }
+  .hero .num { font-size: clamp(34px, 6vw, 64px); display: block; line-height: 1; margin-bottom: 12px; }
+  .readout { display: inline-flex; align-items: baseline; gap: 10px; border: 1px solid var(--line); padding: 6px 12px; margin-bottom: 18px; }
+  .readout .num { font-size: 22px; margin: 0; display: inline; }
+  .readout .lbl { letter-spacing: .14em; }
 
-  .readout {
-    display: inline-flex; align-items: baseline; gap: 12px;
-    font-family: var(--mono);
-    padding: 9px 14px; margin-bottom: 26px;
-    border: 1px solid var(--line); border-radius: 10px;
-    background: rgba(6,8,9,0.6); backdrop-filter: blur(4px);
-  }
-  .readout .freq { font-size: 20px; font-weight: 600; color: var(--amber); letter-spacing: 0.02em; font-variant-numeric: tabular-nums; }
-  .readout .mode { font-size: 12px; color: var(--phosphor); letter-spacing: 0.16em; }
-  .readout .bars { display: inline-flex; gap: 2px; align-items: flex-end; height: 14px; margin-left: 2px; }
-  .readout .bars i { width: 3px; background: var(--phosphor); border-radius: 1px; display: block; }
+  /* ══ REFRAME ══ */
+  .reframe { padding: 40px 0; }
+  .reframe p { font-size: clamp(19px, 2.6vw, 28px); line-height: 1.3; color: var(--text); max-width: min(30ch, 100%); }
+  .reframe p b { color: var(--phosphor); }
+  .reframe .why { font-size: 15px; color: var(--prose); max-width: min(62ch, 100%); margin-top: 18px; }
 
-  h1 {
-    font-size: clamp(38px, 7.2vw, 76px);
-    line-height: 1.02;
-    letter-spacing: -0.03em;
-    font-weight: 800;
-    margin: 0 0 22px;
-    max-width: 15ch;
-    text-wrap: balance;
-  }
-  h1 .glow { color: var(--phosphor); text-shadow: 0 0 26px rgba(53,224,138,0.35); }
-  .lede { font-size: clamp(17px, 2.2vw, 21px); color: #C4CFC9; max-width: 56ch; margin: 0 0 34px; }
+  /* doors */
+  .door .n { font-family: var(--nixie); font-size: 34px; color: var(--phosphor); line-height: 1; margin-bottom: 10px; }
+  .door h3 { font-size: 20px; margin-bottom: 8px; }
+  .door p { font-size: 14px; margin-bottom: 10px; }
+  .door a.more { font-size: 12px; letter-spacing: .1em; text-transform: uppercase; text-decoration: none; }
 
-  .cta-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-  .btn {
-    display: inline-flex; align-items: center; gap: 10px;
-    font-family: var(--sans); font-size: 15px; font-weight: 600;
-    padding: 13px 20px; border-radius: 12px; text-decoration: none;
-    border: 1px solid transparent; transition: transform .12s ease, box-shadow .18s, background .18s, border-color .18s;
-  }
-  .btn:active { transform: translateY(1px); }
-  .btn-buy { background: var(--amber); color: #1a1200; box-shadow: 0 6px 30px -8px rgba(255,140,0,0.6); }
-  .btn-buy:hover { box-shadow: 0 10px 40px -8px rgba(255,140,0,0.8); }
-  .btn-buy .price { font-family: var(--mono); font-weight: 700; opacity: 0.72; }
-  .btn-beta { background: rgba(53,224,138,0.08); color: var(--ink); border-color: var(--phosphor-dim); }
-  .btn-beta:hover { background: rgba(53,224,138,0.16); border-color: var(--phosphor); }
-  .btn-ghost { color: var(--muted); border-color: var(--line); }
-  .btn-ghost:hover { color: var(--ink); border-color: var(--muted); }
-  .btn-soon { color: var(--muted); border: 1px dashed var(--line); cursor: default; }
-  .btn-soon .price { font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--phosphor); opacity: 0.85; }
-  .trust { font-family: var(--mono); font-size: 12.5px; color: var(--muted); margin-top: 20px; letter-spacing: 0.01em; }
-  .trust b { color: var(--phosphor); font-weight: 600; }
+  /* ══ LISTEN NOW: the directory ══ */
+  .srv { border: 1px solid var(--line); background: var(--panel); margin-bottom: 10px; }
+  .srv-h { display: flex; align-items: baseline; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .srv-h b { color: var(--accent); }
+  .srv-h .where { color: var(--dim); font-size: 12px; }
+  .srv-h .host { margin-left: auto; color: var(--dim); font-size: 11px; letter-spacing: .06em; }
+  .rad { display: grid; grid-template-columns: 1.2fr 1.4fr auto; gap: 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid rgba(255,176,0,.10); font-size: 13px; }
+  .rad:last-child { border-bottom: 0; }
+  .rad .rng { color: var(--dim); }
+  .rad .st { text-align: right; white-space: nowrap; }
+  .rad .st.free { color: var(--phosphor); } .rad .st.full { color: var(--busy); } .rad .st.unk { color: var(--dim); }
+  .dab { display: inline-block; vertical-align: middle; width: 36px; height: 21px; margin-left: 8px; }
+  .dab img { width: 36px; height: 21px; display: block; }
+  @media (max-width: 640px) { .rad { grid-template-columns: 1fr auto; } .rad .rng { grid-column: 1 / -1; } }
+  #dirNote { color: var(--dim); font-size: 12.5px; }
 
-  /* ── Works-with strip: the first question a visitor has is "does it do MY server?" ── */
-  .worksfor { margin-top: 22px; }
-  .worksfor .wf-lead { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em;
-    text-transform: uppercase; color: var(--muted); margin-bottom: 9px; }
-  .wf-list { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; padding: 0; margin: 0; }
-  .wf-list li { font-family: var(--mono); font-size: 11.5px; color: var(--phosphor);
-    border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px;
-    background: rgba(255,255,255,0.02); white-space: nowrap; }
+  /* ══ SCALING PAIR ══ */
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 860px) { .pair { grid-template-columns: 1fr; } }
+  .pair video { display: block; width: 100%; height: auto; }
 
-  /* ── Section scaffold ── */
-  section { position: relative; z-index: 2; }
-  .band { border-top: 1px solid var(--line); padding: 72px 0; }
+  /* ══ HOST ══ */
+  .proof { display: grid; grid-template-columns: .55fr 1.45fr; gap: 20px; align-items: start; }
+  @media (max-width: 860px) { .proof { grid-template-columns: 1fr; } }
+  .proof img { display: block; width: 100%; height: auto; }
+  table.meter { border-collapse: collapse; width: 100%; max-width: 420px; margin: 14px 0 6px; }
+  table.meter td { border-bottom: 1px solid var(--line); padding: 6px 0; font-size: 13px; }
+  table.meter td:last-child { text-align: right; font-family: var(--nixie); font-size: 17px; color: var(--accent); }
+  table.meter td b { color: var(--phosphor); font-family: var(--nixie); font-size: 19px; }
+  .tunnel li { margin-bottom: 8px; }
+  ul.ticks { list-style: none; padding: 0; margin: 0 0 14px; }
+  ul.ticks li { position: relative; padding-left: 18px; margin-bottom: 8px; font-size: 14px; }
+  ul.ticks li::before { content: ""; position: absolute; left: 0; top: .72em; width: 8px; height: 1px; background: var(--phosphor); }
+  .vs-eq { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 18px; margin: 22px 0 4px; }
+  .vs-eq .t { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--accent); font-size: 12px; letter-spacing: .1em; text-transform: uppercase; }
+  .vs-eq .t img { width: 44px; height: 44px; display: block; border: 1px solid var(--line); }
+  .vs-eq .op { color: var(--dim); font-size: 22px; }
+  .vs-eq figcaption { flex-basis: 100%; margin-top: 4px; }
 
+  /* ══ WEAR ══ */
+  .wear-grid { display: grid; grid-template-columns: .7fr 1.3fr; gap: 30px; align-items: center; }
+  @media (max-width: 860px) { .wear-grid { grid-template-columns: 1fr; } }
+  .wear-grid video { display: block; width: 100%; max-width: 300px; margin: 0 auto; }
 
-  /* VibeServer "equation" credit: VibeDSP + UberSDR = VibeServer */
-  .vs-eq { display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
-    gap: 18px 22px; margin: 30px 0 10px; }
-  .vs-eq .eq-term { display: flex; flex-direction: column; align-items: center; gap: 8px;
-    text-decoration: none; color: inherit; }
-  .vs-eq .eq-term img { width: 78px; height: 78px; border-radius: 18px; display: block;
-    box-shadow: 0 6px 20px rgba(0,0,0,0.5); }
-  .vs-eq .eq-term b { font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em;
-    color: var(--phosphor); }
-  .vs-eq .eq-link:hover b { color: var(--ink); }
-  .vs-eq .eq-op { font-size: 30px; font-weight: 300; color: var(--muted); line-height: 78px; }
-  .vs-eq figcaption { flex-basis: 100%; text-align: center; margin-top: 6px; color: #C4CFC9;
-    font-size: clamp(15px, 2vw, 18px); }
-  .vs-eq figcaption a { color: var(--phosphor); text-decoration: none; }
-  .vs-eq figcaption a:hover { text-decoration: underline; }
+  /* ══ RDS / DAB ══ */
+  .rds-grid { display: grid; grid-template-columns: 1.1fr .9fr; gap: 28px; align-items: start; }
+  @media (max-width: 860px) { .rds-grid { grid-template-columns: 1fr; } }
+  .rds-grid img { display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto; }
 
-  /* VibeServer macOS alpha callout */
-  .mac-alpha { margin-top: 34px; padding: 26px 28px; border: 1px solid var(--phosphor-dim);
-    border-radius: 14px; background: rgba(53,224,138,0.05); max-width: 60ch; }
-  .mac-alpha h3 { font-family: var(--sans); font-size: 22px; margin: 0 0 10px; color: var(--ink); }
-  .mac-alpha p { color: var(--muted); font-size: 15px; line-height: 1.55; margin: 0 0 18px; }
-  .mac-alpha .btn { display: inline-block; }
-  /* The Vibe family grid */
-  /* Screenshot shelf — scrolls sideways rather than stacking, so eleven shots cost no page
-     height and the gesture is the same one people already use on a phone. */
-  .shots { margin-top: 30px; }
-  .shot-rail { display: flex; gap: 16px; overflow-x: auto; padding: 4px 0 18px;
-    scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; }
-  .shot-rail::-webkit-scrollbar { height: 8px; }
-  .shot-rail::-webkit-scrollbar-thumb { background: rgba(53,224,138,0.28); border-radius: 4px; }
-  .shot-rail figure { margin: 0; flex: 0 0 auto; scroll-snap-align: center; }
-  .shot-rail img { width: 210px; border-radius: 18px; display: block;
-    border: 1px solid rgba(53,224,138,0.18); box-shadow: 0 8px 26px rgba(0,0,0,0.55); }
-  @media (max-width: 640px) { .shot-rail img { width: 168px; } }
-  .shot-hint { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: 0.04em; }
-  .scheme-pair {
-    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: clamp(18px, 4vw, 44px);
-    max-width: 720px; margin: 30px auto 14px; align-items: start;
-  }
-  .scheme-pair figure { margin: 0; }
-  .scheme-pair img {
-    display: block; width: 100%; height: auto; border-radius: 20px;
-    box-shadow: 0 30px 70px -30px rgba(0,0,0,0.9), 0 0 0 1px rgba(53,224,138,0.14);
-  }
-  .scheme-pair figcaption { margin-top: 12px; text-align: center; font-size: 14px; color: var(--muted); }
-  .scheme-pair figcaption b { color: var(--ink); font-weight: 700; }
-  .scheme-note { text-align: center; margin: 0 0 34px; }
-  /* Advanced RDS — the photo carries this section, so it gets real width. */
-  .rds-grid { display: grid; grid-template-columns: 1fr 1.05fr; gap: 46px; align-items: center; }
-  .rds-photo img { max-width: 460px; margin: 0 auto; }
-  .vid-card {
-    display: flex; align-items: center; gap: 14px; margin-top: 20px; padding: 10px;
-    border: 1px solid var(--line); border-radius: 14px; text-decoration: none; max-width: 420px;
-    background: rgba(255,255,255,0.02); transition: border-color .18s ease, transform .18s ease;
-  }
-  .vid-card:hover { border-color: var(--phosphor-dim); transform: translateY(-2px); }
-  .vid-thumb { position: relative; flex: 0 0 132px; }
-  .vid-thumb img { display: block; width: 132px; height: auto; border-radius: 9px; }
-  .vid-play {
-    position: absolute; inset: 0; display: grid; place-items: center;
-    color: #fff; font-size: 22px; text-shadow: 0 2px 10px rgba(0,0,0,0.9);
-  }
-  .vid-meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-  .vid-meta b { color: var(--ink); font-size: 15px; font-weight: 700; }
-  .vid-meta span { color: var(--muted); font-size: 13px; line-height: 1.4; }
-  .rds-photo figcaption b { color: var(--phosphor); font-weight: 700; }
-  .watch-grid .shack-photo { margin: 0; }
-  @media (max-width: 860px) { .rds-grid { grid-template-columns: 1fr; gap: 28px; } .shack-photo { order: -1; } }
-  .shack-photo img { width: 100%; border-radius: 16px; display: block;
-    border: 1px solid rgba(53,224,138,0.18); box-shadow: 0 14px 40px rgba(0,0,0,0.6); }
-  .shack-photo figcaption { font-family: var(--mono); font-size: 11px; color: var(--muted);
-    letter-spacing: 0.03em; margin-top: 10px; line-height: 1.6; }
-  .wc-shot { margin: 30px 0 6px; }
-  .wc-shot img { width: 100%; border-radius: 12px; display: block;
-    border: 1px solid rgba(53,224,138,0.18); box-shadow: 0 12px 34px rgba(0,0,0,0.55); }
-  .wc-shot figcaption { font-family: var(--mono); font-size: 11px; color: var(--muted);
-    letter-spacing: 0.03em; margin-top: 10px; }
-  .jr-showcase { display: grid; grid-template-columns: 0.8fr 1fr; gap: 40px; align-items: center;
-    margin: 34px 0 6px; }
-  @media (max-width: 820px) { .jr-showcase { grid-template-columns: 1fr; gap: 24px; } }
-  .jr-media video { width: 100%; max-width: 300px; display: block; margin: 0 auto; border-radius: 18px; }
-  .jr-copy h3 { font-size: 1.35em; margin: 6px 0 10px; }
-  /* ★ .jr-showcase sets its own margin, which kills .wrap's auto-centring when it IS the wrap. */
-  .jr-band .jr-showcase { margin-inline: auto; }
-  .jr-band .jr-media video { max-width: 340px; }
-  .family-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 22px; margin-top: 34px; }
-  .fam { margin: 0; text-align: center; }
-  .fam img { width: 108px; height: 108px; border-radius: 22px; display: block; margin: 0 auto 14px;
-    box-shadow: 0 6px 22px rgba(0,0,0,0.5); }
-  .fam figcaption { font-family: var(--mono); font-size: 12px; color: var(--phosphor); line-height: 1.5; }
-  .fam figcaption b { display: block; font-size: 13px; letter-spacing: 0.04em; margin-bottom: 5px; }
-  .fam figcaption span { display: block; color: var(--muted); font-size: 11.5px; letter-spacing: 0.01em; }
+  /* ══ SCHEMES ══ */
+  .schemes { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 760px; }
+  .schemes img { display: block; width: 100%; height: auto; }
+  @media (max-width: 640px) { .schemes { grid-template-columns: 1fr; } }
+  .rail { display: flex; gap: 10px; overflow-x: auto; padding: 4px 0 12px; scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; margin-top: 18px; }
+  .rail::-webkit-scrollbar { height: 6px; } .rail::-webkit-scrollbar-thumb { background: var(--line-strong); }
+  .rail img { width: 180px; display: block; scroll-snap-align: start; border: 1px solid var(--line); }
 
-  .band h2 {
-    font-size: clamp(24px, 3.4vw, 34px); letter-spacing: -0.02em; font-weight: 750;
-    margin: 10px 0 8px; text-wrap: balance;
-  }
-  .band .sub { color: var(--muted); max-width: 60ch; margin: 0 0 40px; }
+  /* ══ NOBODY LEFT OUT ══ */
+  .cover { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); }
+  .cover > div { padding: 16px 14px; border-right: 1px solid var(--line); font-size: 13px; }
+  .cover > div:last-child { border-right: 0; }
+  .cover .lbl { display: block; margin-bottom: 6px; }
+  @media (max-width: 760px) { .cover { grid-template-columns: 1fr 1fr; } .cover > div:nth-child(2) { border-right: 0; }
+    .cover > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); } }
 
-  /* ── Connects grid ── */
-  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-  @media (max-width: 820px) { .grid { grid-template-columns: repeat(2, 1fr); } }
-  @media (max-width: 520px) { .grid { grid-template-columns: 1fr; } }
-  .card {
-    background: linear-gradient(180deg, var(--panel-2), var(--panel));
-    border: 1px solid var(--line); border-radius: 14px; padding: 20px 20px 22px;
-    transition: border-color .2s, transform .2s;
-  }
-  .card:hover { border-color: var(--phosphor-dim); transform: translateY(-2px); }
-  .card .k { font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--phosphor); }
-  .card h3 { font-size: 18px; margin: 8px 0 6px; letter-spacing: -0.01em; }
-  .card p { color: var(--muted); font-size: 14.5px; margin: 0; line-height: 1.55; }
-  .card.accent .k { color: var(--amber); }
-  .card.accent:hover { border-color: rgba(255,140,0,0.5); }
+  /* ══ MADE ══ */
+  .made-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 36px; align-items: start; }
+  @media (max-width: 860px) { .made-grid { grid-template-columns: 1fr; } }
+  .stat { border-left: 1px solid var(--line-strong); padding: 6px 0 6px 16px; margin-bottom: 14px; }
+  .stat .num { font-size: 28px; display: block; line-height: 1.1; }
+  .stat .l { font-size: 12.5px; color: var(--dim); }
 
-  /* ── Honesty / craft ── */
-  .honest { background: var(--panel); }
-  .honest .inner { display: grid; grid-template-columns: 1.4fr 1fr; gap: 48px; align-items: start; }
-  @media (max-width: 780px) { .honest .inner { grid-template-columns: 1fr; gap: 28px; } }
-  .honest p { color: #C4CFC9; }
-  .honest p + p { margin-top: 16px; }
-  .honest .tagline {
-    font-size: clamp(30px, 5.2vw, 48px); font-weight: 800; letter-spacing: -0.03em;
-    line-height: 1.04; margin: 14px 0 22px; color: var(--ink); text-wrap: balance;
-  }
-  .honest .tagline .glow { color: var(--phosphor); text-shadow: 0 0 24px rgba(53,224,138,0.35); }
-  .honest .pull { font-size: clamp(19px, 2.4vw, 23px); line-height: 1.4; color: var(--ink); letter-spacing: -0.01em; }
-  .honest .pull b { color: var(--phosphor); font-weight: 600; }
-  .stat-stack { display: flex; flex-direction: column; gap: 2px; border-left: 2px solid var(--phosphor-dim); padding-left: 20px; }
-  .stat { padding: 8px 0; }
-  .stat .n { font-family: var(--mono); font-size: 26px; font-weight: 700; color: var(--amber); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
-  .stat .l { font-size: 13px; color: var(--muted); }
+  footer { padding: 36px 0 60px; }
+  footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 20px; align-items: flex-start; }
+  footer .links { display: flex; flex-wrap: wrap; gap: 18px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+  footer .links a { text-decoration: none; color: var(--dim); }
+  footer .links a:hover { color: var(--accent); }
 
-  /* ── Footer ── */
-  footer { border-top: 1px solid var(--line); padding: 44px 0 60px; }
-  .foot { display: flex; flex-wrap: wrap; gap: 24px; align-items: center; justify-content: space-between; }
-  .foot .links { display: flex; flex-wrap: wrap; gap: 22px; font-size: 14px; }
-  .foot .links a { color: var(--muted); text-decoration: none; }
-  .foot .links a:hover { color: var(--ink); }
-  .foot .fine { font-family: var(--mono); font-size: 12px; color: #4C5A55; max-width: 42ch; line-height: 1.5; }
-
-  a.btn:focus-visible, header nav a:focus-visible, .foot .links a:focus-visible {
-    outline: 2px solid var(--phosphor); outline-offset: 3px; border-radius: 6px;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .wordmark .dot { animation: none; }
-    * { scroll-behavior: auto; }
-  }
+  a:focus-visible, .key:focus-visible { outline: 2px solid var(--phosphor); outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
 </style>
 </head>
 <body>
-<!-- ★★★ THE ON-AIR SIGN. A studio light, in the place a studio light lives: across the top, lit only
-     when the receivers are actually broadcasting. It is the loudest thing on the page BECAUSE the
-     live demo is the strongest argument the page has — everything below it is a claim, and this is
-     the claim running.
-     ★★ It is hidden until the server answers. An ON AIR sign that is lit when nothing is on air is
-     worse than no sign at all: it is the one element on the page that must never lie. -->
-<div id="onAirBar" hidden>
-  <style>
-    #onAirBar {
-      position: sticky; top: 0; z-index: 60;
-      display: flex; align-items: center; justify-content: center; gap: 18px; flex-wrap: wrap;
-      padding: 10px 18px;
-      background: linear-gradient(180deg, #1a0705 0%, #120504 100%);
-      border-bottom: 1px solid #3a1512;
-      box-shadow: 0 6px 24px rgba(0,0,0,0.55);
-    }
-    /* ★ The lamp itself. Red because every studio sign is red — the metaphor does the explaining,
-         so the words do not have to. */
-    .oa-lamp {
-      display: inline-flex; align-items: center; gap: 10px;
-      padding: 6px 16px; border-radius: 4px;
-      border: 1px solid #ff4d3d; background: rgba(255,77,61,0.10);
-      color: #ff6a58; font: 700 13px/1 var(--mono); letter-spacing: .32em; text-transform: uppercase;
-      text-shadow: 0 0 14px rgba(255,77,61,0.7);
-      box-shadow: 0 0 22px rgba(255,77,61,0.28), inset 0 0 18px rgba(255,77,61,0.12);
-      animation: oaGlow 3.4s ease-in-out infinite;
-    }
-    /* ★ A sign that breathes reads as LIVE; one that sits still reads as a graphic. Slow, though —
-         this is a lamp warming, not a warning light. */
-    @keyframes oaGlow {
-      0%,100% { box-shadow: 0 0 22px rgba(255,77,61,0.28), inset 0 0 18px rgba(255,77,61,0.12); }
-      50%     { box-shadow: 0 0 34px rgba(255,77,61,0.50), inset 0 0 22px rgba(255,77,61,0.20); }
-    }
-    @media (prefers-reduced-motion: reduce) { .oa-lamp { animation: none; } }
 
-    .oa-what { color: var(--ink); font-size: 14px; }
-    .oa-what b { color: #ff8a7a; font-weight: 600; }
-    .oa-sub { color: var(--muted); font-size: 13px; }
-    .oa-listen {
-      display: inline-block; padding: 8px 18px; border-radius: 6px;
-      background: #ff4d3d; color: #120603; text-decoration: none;
-      font: 700 14px/1 var(--sans); letter-spacing: .01em;
-      box-shadow: 0 0 20px rgba(255,77,61,0.35);
-      transition: transform .12s ease, box-shadow .18s ease;
-    }
-    .oa-listen:hover { transform: translateY(-1px); box-shadow: 0 0 30px rgba(255,77,61,0.55); }
-    /* ★ On a phone the sub-line is the first thing to go: the lamp and the button are the message. */
-    @media (max-width: 620px) { .oa-sub { display: none; } #onAirBar { gap: 12px; padding: 9px 12px; } }
-  </style>
-  <span class="oa-lamp">On air</span>
-  <span class="oa-what"><b id="oaCount">3 receivers</b> <span class="oa-sub">live from England &mdash; tune them yourself</span></span>
-  <a class="oa-listen" id="oaListen" href="#">Listen now</a>
-</div>
-
-
+<!-- ★★★ THE NETWORK BAR. Live from the directory: what the network can hear, drawn as the
+     directory draws it (green free, red every radio in use, blue temporary, dim unreported), with
+     a red VFO sitting where one of the network's radios is actually tuned right now. -->
+<a id="netBar" href="https://vibeserver.vibesdr.net" aria-label="VibeServer Network directory">
+  <div class="nb-inner">
+    <svg id="netSvg" preserveAspectRatio="none" aria-hidden="true"></svg>
+    <div class="nb-txt">
+      <span class="nb-name">VibeServer Network</span>
+      <span class="nb-fig" id="nbFig">a new network of receivers, run by the people listening to them</span>
+      <span class="nb-range" id="nbRange"></span>
+      <span class="nb-cta">add yours →</span>
+    </div>
+  </div>
+</a>
 
 <header>
-  <div class="wordmark"><span class="dot"></span>VibeSDR</div>
-  <nav>
-    <a href="#watch">Apple&nbsp;Watch</a>
-    <a href="#screens">Controls</a>
-    <a href="#shack">Big screen</a>
-    <a href="#rds">Advanced RDS</a>
-    <a href="#tunes">Works with</a>
-    <a href="#server">VibeServer</a>
-    <a href="#family">Family</a>
-    <a href="#made">How it's made</a>
-    <a href="https://discord.gg/pr9EjUUBCA">Discord</a>
-    <a href="https://github.com/Stuey3D/VibeSDR">Source</a>
-    <a href="https://apps.apple.com/gb/app/vibesdr/id6786344049">App&nbsp;Store</a>
-  </nav>
+  <div class="wrap">
+    <a class="wordmark" href="/"><img src="assets/icon.png" alt="" />VibeSDR</a>
+    <nav>
+      <a href="#listen">Listen</a>
+      <a href="#host">Host</a>
+      <a href="#wear">Wear</a>
+      <a href="#rds">RDS + DAB+</a>
+      <a href="#works">Works with</a>
+      <a href="#made">How it's made</a>
+      <a href="https://discord.gg/pr9EjUUBCA">Discord</a>
+      <a href="https://github.com/Stuey3D/VibeSDR">Source</a>
+    </nav>
+  </div>
 </header>
 
+<!-- ══ HERO: the app ══ -->
 <section class="hero">
   <div class="wrap hero-grid">
-    <div class="hero-copy">
-      <p class="eyebrow" style="margin-bottom:18px">Mobile&#8209;first · scalable · iOS · Android · Apple&nbsp;Watch · Mac</p>
-      <h1>Mobile&#8209;first. Scalable. <span class="glow">From a 1&Prime; watch to a 65&Prime; TV.</span></h1>
-      <p class="lede">
-        One SDR client that fits every screen you own. VibeDSP is light enough to run on your wrist and powerful enough to fill a television — so the same radio, the same waterfall and the same controls follow you from one to the other.
-      </p>
-      <div class="cta-row">
-        <a class="btn btn-buy" href="https://apps.apple.com/gb/app/vibesdr/id6786344049">Get it on the App&nbsp;Store <span class="price">£2.99</span></a>
-        <!-- ★★★ THE GROUP FIRST, THE OPT-IN LINK SECOND — and the order is the whole point. Joining
-             the group is what puts someone on the tester list; Google's opt-in URL
-             (play.google.com/apps/testing/com.vibesdr.app) shows an ERROR PAGE to anyone who is not
-             already on it. Linking that URL on its own, as this briefly did, sends every visitor
-             straight to the error. ★★ People can join the group NOW, while the track is still in
-             review, so recruiting does not have to wait on Google. -->
-        <a class="btn btn-beta" href="https://groups.google.com/g/vibesdr-play-store-test">Join the Android&nbsp;test <span class="price">Free</span></a>
-        <!-- ★ The TestFlight beta was RETIRED when 10.0.1 went live (2026-08-01). Do not re-add a
-             beta button unless a new public link actually exists — a dead invite is worse than none. -->
-        <a class="btn btn-ghost" href="https://github.com/Stuey3D/VibeSDR">View source</a>
+    <div>
+      <div class="readout"><span class="num">96.600</span><span class="lbl">MHz</span><span class="lbl on">WFM · STEREO · RDS</span></div>
+      <h1>A radio in your pocket. It fits any screen you own.</h1>
+      <p class="lede" style="margin-top:16px">An SDR receiver built for fingers and thumbs, with its own DSP. Tune any receiver you can reach, or plug a dongle in and tune your own.</p>
+      <div class="keys" style="margin-top:22px">
+        <a class="key primary" href="https://apps.apple.com/gb/app/vibesdr/id6786344049">App Store <span class="price">£2.99</span></a>
+        <a class="key" href="https://github.com/Stuey3D/VibeSDR/releases/latest">Android APK <span class="price">free</span></a>
+        <a class="key" href="https://github.com/Stuey3D/VibeSDR">Source · GPLv3</a>
       </div>
-      <p class="trust">£2.99 covers <b>Apple's fee, not a paywall</b> — VibeSDR is GPLv3 and the source is free forever.</p>
-      <p class="trust"><b>Android is in closed testing</b>, awaiting Google's approval. Join the
-        group above to get on the tester list, then Google's
-        <a href="https://play.google.com/apps/testing/com.vibesdr.app">opt&#8209;in link</a> will let
-        you in &mdash; in that order. Or just take the
-        <a href="https://github.com/Stuey3D/VibeSDR/releases/latest">APK</a>, which needs no Google at all.</p>
+      <p class="fine" style="margin-top:16px">£2.99 covers Apple's developer fees. The source is free and always will be. No subscription, no account, nothing phoned home.</p>
+      <p class="fine">Android is in Google's closed testing. <a href="https://groups.google.com/g/vibesdr-play-store-test">Join the test group</a> first, then Google's <a href="https://play.google.com/apps/testing/com.vibesdr.app">opt-in link</a> lets you in. Or just take the APK above, which needs no Google at all.</p>
     </div>
-    <div class="hero-icon">
-      <div class="frame"><img src="assets/icon.png" alt="VibeSDR app icon — the VFO tuning dial" /></div>
-    </div>
-  </div>
-
-  <div class="wrap showcase">
-    <div class="phone">
-      <video src="assets/phone-demo.mp4" autoplay muted loop playsinline preload="auto" aria-label="VibeSDR running on iPhone — tuning across the AM band with the drum dial, live waterfall scrolling"></video>
-    </div>
-    <div class="showcase-copy">
-      <p class="eyebrow">Scaling</p>
-      <h2 class="sc-h">It doesn't reflow. It just fits.</h2>
-      <p>Grab the window and drag it. The layout follows in real time — landscape controls become portrait ones as the shape changes, panels find new homes, and the waterfall carries on scrolling through all of it without a single redraw. No stutter, no reload, no moment where the app catches up with you.</p>
-      <p>The same behaviour is what lets one build run on a watch, a phone, a tablet and a television. It isn't three apps with three layouts. It's one that genuinely fits whatever it's given.</p>
-      <p class="trust">And, entirely by accident: because it's built properly for iPad, it runs on Apple&nbsp;Silicon Macs as a desktop app. We didn't plan that one. It just works.</p>
-    </div>
-  </div>
-
-  <figure class="wrap scale-clip">
-    <video src="assets/scaling-demo.mp4" autoplay muted loop playsinline preload="metadata" aria-label="A VibeSDR window on a Mac being dragged from wide to narrow — the waterfall keeps scrolling without redrawing, and the controls rearrange themselves as the shape changes"></video>
-    <figcaption>Live, unedited. The waterfall never redraws &mdash; it carries on scrolling while the window changes shape &mdash; and the controls rearrange themselves to suit the size and proportions they're given.</figcaption>
-  </figure>
-</section>
-
-<!-- ★ The watch sits this high on purpose: it is the thing people actually react to. Twenty
-     RTL-SDR giveaway codes came back as comments, and they were all about the wrist. -->
-<!-- ★★★ THE LIVE DEMO. Everything else on this page is a claim; this is the claim running. It sits
-     directly under the hero on purpose — someone deciding whether the DSP is any good should be
-     able to hear it before they read a word about it.
-     ★★ IT HIDES ITSELF WHEN THE RECEIVER IS OFF. A dead demo link is worse than no demo link: it
-     turns "look how well this works" into a broken promise on the one page that has to be
-     convincing. The card starts hidden and is only revealed once the server has answered.
-     ★ The status comes from /api/demo, which is fetched by the WORKER, not the browser — see
-     website/worker.js for why (mixed content, and keeping a home address off a public page). -->
-<section class="band demo-band" id="demo" hidden>
-  <style>
-    .demo-band { border-top: 1px solid var(--line); }
-    .demo-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
-    .demo-live {
-      display: inline-flex; align-items: center; gap: 8px;
-      font: 600 12px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase;
-      color: var(--phosphor);
-    }
-    .demo-dot {
-      width: 9px; height: 9px; border-radius: 50%;
-      background: var(--phosphor); box-shadow: 0 0 10px rgba(53,224,138,0.8);
-      animation: demoPulse 2s ease-in-out infinite;
-    }
-    /* ★ Respect a stated preference. A pulsing dot is decoration; for someone who has asked for
-       less motion it is just movement they did not want. */
-    @media (prefers-reduced-motion: reduce) { .demo-dot { animation: none; } }
-    @keyframes demoPulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
-
-    .demo-grid {
-      display: grid; gap: 14px; margin: 26px 0 22px;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    }
-    .demo-card {
-      background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-      padding: 16px 18px;
-    }
-    .demo-card h3 { margin: 0 0 2px; font: 600 16px/1.3 var(--sans); color: var(--ink); }
-    .demo-where { font: 400 12px/1.5 var(--mono); color: var(--muted); }
-    .demo-tuned { color: var(--muted); opacity: .75; margin-top: 2px; }
-    .demo-open { color: var(--phosphor-dim); }
-    /* ★ Bold and underlined, as asked — it changes what a visitor is allowed to do, so it should
-       not read like the rest of the line. help cursor signals there is more on hover. */
-    .demo-restricted {
-      font-weight: 700; text-decoration: underline; text-underline-offset: 2px;
-      color: var(--amber); cursor: help; text-decoration-style: dotted;
-    }
-    .demo-state { margin-top: 12px; font: 400 13px/1.6 var(--mono); color: var(--ink); }
-    .demo-state b { color: var(--phosphor); font-weight: 600; }
-    .demo-state .busy { color: var(--amber); }
-    .demo-tag {
-      display: inline-block; margin-top: 10px; padding: 3px 8px; border-radius: 999px;
-      font: 600 10px/1.6 var(--mono); letter-spacing: .1em; text-transform: uppercase;
-      border: 1px solid var(--line); color: var(--muted);
-    }
-    .demo-tag.shared { border-color: var(--phosphor-dim); color: var(--phosphor); }
-    .demo-note { color: var(--muted); font-size: 14px; max-width: 62ch; }
-  </style>
-
-  <div class="wrap">
-    <div class="demo-head">
-      <p class="eyebrow" style="margin:0">Live demo</p>
-      <span class="demo-live"><span class="demo-dot"></span><span id="demoLive">On air</span></span>
-    </div>
-
-    <h2>Take it for a spin <span class="glow">on our radios, right now.</span></h2>
-    <p class="lede" style="max-width:64ch">
-      No install, no account, nothing to plug in. This is the same VibeDSP engine the apps run,
-      driving three real receivers on a shelf in England — demodulating, decoding and drawing every
-      pixel of the waterfall on hardware you can hear for yourself.
-    </p>
-
-    <div class="demo-grid" id="demoGrid"></div>
-
-    <div class="cta-row">
-      <a class="btn btn-buy" id="demoOpen" href="#" rel="noopener">Open the receiver</a>
-      <a class="btn btn-ghost" href="#server">Run your own</a>
-    </div>
-    <p class="demo-note" id="demoNote" style="margin-top:14px"></p>
-  </div>
-</section>
-
-<script>
-// ★★★ THE CARD ONLY EXISTS IF THE RECEIVER ANSWERS. Written so the FAILURE path is the quiet one:
-//     no server, no card, no console noise, and a page that is otherwise untouched.
-async function loadDemo() {
-  const sec = document.getElementById('demo');
-  if (!sec) return;
-  const fmt = (hz) => hz >= 1e6 ? (hz / 1e6).toFixed(3).replace(/\.?0+$/, '') + ' MHz'
-                                : Math.round(hz / 1e3) + ' kHz';
-  // ★★★ AN ON AIR SIGN MUST BE ABLE TO GO OUT. Every path in here used to set `hidden = false`
-  //     and nothing ever set it back, so the first successful poll lit the sign permanently: when
-  //     the demo went down the radio cards updated but the sign kept saying "3 receivers live from
-  //     England — tune them yourself", inviting people to click through to nothing (Stuart,
-  //     2026-08-20, with a screenshot taken while the Pi was off the LAN).
-  //  ★★ It is the same rule the sign's own comment states — "hidden until the server answers" —
-  //     applied to the case nobody wrote: the server answering and then STOPPING. A stale sign is
-  //     worse than no sign, because it is a promise the page cannot keep.
-  const hideDemo = () => {
-    const bar = document.getElementById('onAirBar');
-    if (bar) bar.hidden = true;
-    sec.hidden = true;
-  };
-  try {
-    const r = await fetch('/api/demo', { cache: 'no-store' });
-    if (!r.ok) { hideDemo(); return; }
-    const d = await r.json();
-    if (!d.onAir || !d.radios || !d.radios.length) { hideDemo(); return; }
-
-    document.getElementById('demoOpen').href = d.url;
-
-    // ★★★ THE SIGN AND THE CARD ARE FED BY THE SAME ANSWER. Two fetches would let them disagree —
-    //     a lit ON AIR sign above a card saying the receiver is down is exactly the sort of thing
-    //     nobody notices until a visitor screenshots it.
-    // ★ "0 receivers live" is not an invitation, it is an apology — so the sign goes out entirely
-    //   when every radio is down, even though the machine itself answered.
-    const up = d.radios.filter((x) => x.up).length;
-    const bar = document.getElementById('onAirBar');
-    if (bar) {
-      if (up === 0) { bar.hidden = true; }
-      else {
-        document.getElementById('oaCount').textContent =
-          up === 1 ? '1 receiver' : `${up} receivers`;
-        document.getElementById('oaListen').href = d.url;
-        bar.hidden = false;
-      }
-    }
-    document.getElementById('demoLive').textContent =
-      d.listeners === 1 ? 'On air · 1 listening' :
-      d.listeners ? `On air · ${d.listeners} listening` : 'On air';
-
-    document.getElementById('demoGrid').innerHTML = d.radios.map((x) => {
-      // ★ Say what a visitor will actually GET. "Shared" means their own tuning inside the owner's
-      //   window; a single-listener radio is one person at a time, and if it is taken they should
-      //   know that BEFORE they click rather than meeting a queue.
-      // ★★★ WHAT IT COVERS, NOT WHERE IT IS PARKED. "648 kHz AM" tells you nothing about whether
-      //     the radio is worth opening; "500 kHz – 1.7 GHz" does. The tuned frequency stays, small,
-      //     underneath — it is a nice detail, not the headline (Stuart, 2026-08-09).
-      const rng = (a, b) => `${fmt(a)} – ${fmt(b)}`;
-      // ★★★ A SHARED RECEIVER IS ITS WINDOW. Announcing the tuner's full reach and then adding
-      //     "restrictions in place" is true and useless when the radio is fixed to one band —
-      //     the window IS the answer, so say it and nothing else.
-      const cover = x.shared && x.spanHz
-        ? rng(x.centreHz - x.spanHz / 2, x.centreHz + x.spanHz / 2)
-        : (x.coverage || []).map(([a, b]) => rng(a, b)).join(', ');
-      // ★★ AND SAY IF THE OWNER HAS NARROWED IT. Bold and underlined because it changes what a
-      //    visitor can do; the tooltip carries the detail so the card stays readable.
-      // ★ And a shared radio needs no label at all — there is nothing left to qualify.
-      const limits = x.shared ? '' : x.restricted
-        ? `<abbr class="demo-restricted" title="${
-             [x.allowList ? 'Allowed: ' + x.allowList : '', x.blockList ? 'Blocked: ' + x.blockList : '']
-               .filter(Boolean).join(' — ') || 'The operator has fixed this receiver to one band.'
-           }">Restrictions in place</abbr>`
-        : '<span class="demo-open">Unrestricted</span>';
-      const where = (cover ? cover + (limits ? ' · ' + limits : '') : '')
-        + (x.centreHz ? `<div class="demo-tuned">on ${fmt(x.centreHz)}${x.mode ? ' · ' + x.mode.toUpperCase() : ''}</div>` : '');
-      // ★★★ SAY WHEN IT FREES UP, not merely that it is taken. "In use" makes someone leave;
-      //     "free in 4:12" makes them wait — and the receiver already knows the number, because
-      //     it runs the same countdown on screen for whoever is using it.
-      const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-      const free = x.freeInSec >= 0
-        ? ` · <span class="demo-free" data-left="${x.freeInSec}">free in ${mmss(x.freeInSec)}</span>` : '';
-      const state = !x.up ? '<span class="busy">not answering</span>'
-        : x.shared ? `<b>${x.listeners}</b> of ${x.maxListeners} listening`
-        : x.full   ? `<span class="busy">in use</span>${free}${x.queue ? ` · ${x.queue} waiting` : ''}`
-                   : '<b>free</b> — one listener at a time';
-      return `<div class="demo-card">
-          <h3>${x.name}</h3>
-          <div class="demo-where">${where}</div>
-          <div class="demo-state">${state}</div>
-          <span class="demo-tag${x.shared ? ' shared' : ''}">${x.shared ? 'Shared · own tuning' : 'One at a time'}</span>
-        </div>`;
-    }).join('');
-
-    // ★★ A COUNTDOWN THAT DOES NOT COUNT IS A TIMESTAMP. It ticks locally every second, and the
-    //    whole card re-fetches every 30 s so a listener who leaves early is reflected rather than
-    //    the page insisting on a turn that has already ended.
-    if (!window.__demoTick) {
-      window.__demoTick = setInterval(() => {
-        document.querySelectorAll('.demo-free').forEach((el) => {
-          const left = Math.max(0, Number(el.dataset.left) - 1);
-          el.dataset.left = String(left);
-          el.textContent = left ? `free in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`
-                                : 'free any moment';
-        });
-      }, 1000);
-    }
-
-    document.getElementById('demoNote').textContent =
-      'Runs on a Raspberry Pi on a home broadband line, so please be gentle with it. '
-      + 'Everything you see there is in the source.';
-    sec.hidden = false;
-  } catch (e) {
-    // ★ Off, or unreachable. The card never appears on a first visit — and DISAPPEARS on a tab
-    //   that has been open since before the demo went down, which is the case this catch used to
-    //   leave stale.
-    hideDemo();
-  }
-}
-
-loadDemo();
-// ★ Re-read every 30 s. Cheap — the Worker caches for 15 — and it keeps the ON AIR sign, the
-//   listener counts and the countdown honest on a tab somebody left open all afternoon.
-setInterval(loadDemo, 30000);
-</script>
-
-<section class="band jr-band" id="watch">
-  <div class="wrap jr-showcase">
-    <div class="jr-media">
-      <video src="assets/watch-demo.mp4" autoplay muted loop playsinline preload="auto" aria-label="VibeSDR Jr live on an Apple Watch — spectrum waterfall, tuning with the Digital Crown"></video>
-    </div>
-    <div class="jr-copy">
-      <!-- ★★★ JR IS NOT A BETA. Jr is the STANDALONE watch receiver, submitted to the App Store as
-           1.0. BUDDY is the wrist remote and it ships INSIDE VibeSDR 10 on the App Store (the
-           TestFlight route was retired 2026-08-01). This section once said "Free beta" and pointed at
-           testflight.apple.com/join/AnKTNhuZ — the VIBESDR beta — so anyone here for Jr was being
-           sent the WRONG WATCH APP. See
-           memory/watch_split_jr_buddy.md: Jr = spike/WristSDR, Buddy = ios/VibeSDRWatch. -->
-      <p class="eyebrow">VibeSDR&nbsp;Jr <span class="badge-free">On the App&nbsp;Store</span></p>
-      <h2>A complete receiver <span class="glow">on the Apple&nbsp;Watch.</span></h2>
-      <p class="sub big">Its own connection, its own audio, no phone involved. Turn the Digital&nbsp;Crown to tune, press and hold for the menu, and leave the handset at home.</p>
-      <p class="sub">Not a remote control for the phone in your pocket — a receiver, on your wrist, that connects to the radio by itself.</p>
-      <a class="vid-card" href="https://www.youtube.com/watch?v=3cd5RE3XRtM" target="_blank" rel="noopener">
-        <span class="vid-thumb">
-          <img src="assets/jr-demo.jpg" loading="lazy" alt="Thumbnail for the VibeSDR Jr demonstration video on YouTube" />
-          <span class="vid-play" aria-hidden="true">▶</span>
-        </span>
-        <span class="vid-meta">
-          <b>Watch the 20&#8209;minute demo</b>
-          <span>Jr running live on the wrist, unedited &mdash; crashes and all.</span>
-        </span>
-      </a>
-      <!-- ★ Jr IS live — do not put it back to "coming soon". It shipped as 1.0, and this button sat
-           on "Coming to the App Store" for weeks after approval because nothing here was told.
-           Its own listing, NOT VibeSDR's: id6795507029 is Jr, id6786344049 is the phone app. -->
-      <p style="margin-top:18px"><a class="btn btn-buy" href="https://apps.apple.com/gb/app/vibesdr-jr/id6795507029">Get VibeSDR&nbsp;Jr on the App&nbsp;Store&nbsp;→</a></p>
-      <p class="sub" style="margin-top:14px">
-        Looking for the <b>wrist remote</b> instead? That's <b>VibeSDR&nbsp;Buddy</b> — it drives the phone
-        app from your Watch, and it ships inside VibeSDR&nbsp;10 — no separate download.
-        <a href="https://apps.apple.com/gb/app/vibesdr/id6786344049">Get VibeSDR&nbsp;→</a>
-      </p>
-    </div>
-  </div>
-</section>
-
-<section class="band" id="elegance">
-  <div class="wrap">
-    <p class="eyebrow">Simple elegance</p>
-    <h2>Somewhere between a HiFi tuner <span class="glow">and a lab bench.</span></h2>
-    <p class="sub big">
-      Real tuners were a pleasure to use and impossible to get wrong. SDR software is the opposite: enormously capable, and a wall of panels. VibeSDR sits in the gap — the reach of software&#8209;defined radio with the feel of a good tuner.
-    </p>
-    <p class="sub big">
-      The controls are built for fingers and thumbs, because that's what you're holding the thing with. As Steve Jobs put it when he launched the iPhone: the best pointing device in the world is one we're all born with ten of.
-    </p>
-    <p class="sub big">
-      This isn't desktop SDR software shrunk down to fit. It was built for mobile from the first line.
-    </p>
-  </div>
-</section>
-
-<section class="band shots" id="screens">
-  <div class="wrap">
-    <p class="eyebrow">Two control schemes</p>
-    <h2>Pick your <span class="glow">decade.</span></h2>
-    <p class="sub big">
-      <b>The drum.</b> Eighties boombox, in acrylic and glow. Not a slider dressed up as a dial — a weighted drum with real inertia and haptics underneath it. Spin it and it runs on. Flick it and it coasts down. Catch it and it stops dead.
-    </p>
-    <p class="sub big">
-      <b>The buttons.</b> Or, if you'd rather, a nineties Saab dashboard at night — green glowing on black. Tap to step the frequency with a click you can feel. Hold, and it sweeps the band, exactly as the real thing did.
-    </p>
-    <!-- ★ The same station, the same screen — only the controls differ. That is the entire point of
-         this section, so the pair must stay matched if either is ever re-shot.
-         ★★ It used to also claim "the same second". It was NOT: the two status bars read 01:02 and
-         01:01, a minute apart, so the copy was contradicted by the very images beneath it. Don't
-         claim a precision the screenshots can be checked against. -->
-    <div class="scheme-pair">
-      <figure>
-        <img src="assets/shots/scheme-drum.jpg" loading="lazy" alt="VibeSDR tuned to The Buzzer on 4625 kHz USB — the drum control scheme, with weighted tuning and zoom drums along the bottom" />
-        <figcaption><b>The drum.</b> Spin, flick, catch.</figcaption>
-      </figure>
-      <figure>
-        <img src="assets/shots/scheme-keys.jpg" loading="lazy" alt="The identical screen tuned to The Buzzer on 4625 kHz USB — the button control scheme, with green-on-black step and zoom keys along the bottom" />
-        <figcaption><b>The buttons.</b> Tap to step, hold to sweep.</figcaption>
-      </figure>
-    </div>
-    <p class="shot-hint scheme-note">The same station, the same screen, on 4625&nbsp;kHz. Only the bottom inch changes.</p>
-
-    <div class="shot-rail">
-      <figure><img src="assets/shots/shot01.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 1" /></figure>
-      <figure><img src="assets/shots/shot02.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 2" /></figure>
-      <figure><img src="assets/shots/shot03.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 3" /></figure>
-      <figure><img src="assets/shots/shot04.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 4" /></figure>
-      <figure><img src="assets/shots/shot05.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 5" /></figure>
-      <figure><img src="assets/shots/shot06.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 6" /></figure>
-      <figure><img src="assets/shots/shot07.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 7" /></figure>
-      <figure><img src="assets/shots/shot08.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 8" /></figure>
-      <figure><img src="assets/shots/shot09.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 9" /></figure>
-      <figure><img src="assets/shots/shot10.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 10" /></figure>
-      <figure><img src="assets/shots/shot11.jpg" loading="lazy" alt="VibeSDR on iPhone — screenshot 11" /></figure>
-    </div>
-    <p class="shot-hint">Scroll sideways for more →</p>
-  </div>
-</section>
-
-<section class="band watch" id="shack">
-  <div class="wrap watch-grid">
-    <div class="watch-copy">
-      <p class="eyebrow">AirPlay + keyboard</p>
-      <h2>Put it on the telly. <span class="glow">Then sit back.</span></h2>
-      <p class="sub">AirPlay&nbsp;Mirroring throws the receiver onto a television. It's the phone's own screen up there, letterbox and all — but a waterfall a metre wide is a different thing to one in your palm, and you can read the band across the room.</p>
-      <p class="sub">Pair a Bluetooth keyboard and you never have to reach for the phone again. Nearly every button in the app has a key behind it — tuning, zoom, mode, step, the servers list, bookmarks, the menus and panels — so you can put the handset down, kick back across the room and drive the whole thing from the keys with the waterfall on the big screen.</p>
-      <p class="sub">A shack, assembled from a phone and a telly.</p>
-    </div>
-    <figure class="shack-photo">
-      <img src="assets/shack-tv.jpg" loading="lazy" alt="VibeSDR mirrored to a television showing the full spectrum and waterfall at 648 kHz, with the phone on the shelf beneath it" />
-      <figcaption>648&nbsp;kHz mirrored to the big screen — spectrum, waterfall and band plan at full size. The receiver is an MLA&#8209;30+ loop in the garden.</figcaption>
+    <figure class="phone-clip bezel">
+      <video src="assets/phone-demo.mp4" autoplay muted loop playsinline preload="auto" aria-label="VibeSDR on an iPhone, tuning across the AM band with the drum dial while the waterfall scrolls"></video>
     </figure>
   </div>
 </section>
 
-<section class="band" id="tunes">
+<!-- ══ THE REFRAME ══ -->
+<section class="reframe">
   <div class="wrap">
-    <p class="eyebrow">Works with</p>
-    <h2>Point it at <span class="glow">almost any receiver.</span></h2>
-    <p class="sub big">
-      Native adapters for the major SDR networks, for local USB hardware, and for your own server — all behind the same dial and the same waterfall. Change receiver and nothing about the app changes with it.
-    </p>
-    <ul class="ticks" style="margin-top:22px">
-      <li><b>UberSDR · OpenWebRX · KiwiSDR · Web&#8209;888</b> — native clients for the big shared&#8209;receiver networks, with a directory to find one near you.</li>
-      <li><b>FM&#8209;DX Webserver</b> — the worldwide network of shared FM tuners. Station names, RadioText and distances, in stereo.</li>
-      <li><b>RTL&#8209;SDR over USB</b> — plug a dongle into an Android phone or reach a networked rtl_tcp. VibeSDR demodulates the raw IQ itself.</li>
-      <li><b>SpyServer · rtl_tcp</b> — the standard network protocols, spoken natively.</li>
-      <li><b>VibeServer</b> — your own receiver, on your own network.</li>
+    <p>Most SDR apps are a window onto somebody else's receiver. <b>VibeSDR is the receiver too.</b></p>
+    <p class="why">Because we write the demodulator, the same signal path runs everywhere: on your phone, on the server you host, on your wrist. That one fact is what buys Advanced RDS on a watch, an AGC that sorts a £30 dongle out by itself, and a server that runs on a phone.</p>
+    <div class="grid3" style="margin-top:28px">
+      <div class="door">
+        <div class="n">01</div>
+        <h3>Listen</h3>
+        <p>Any receiver, yours or somebody else's. UberSDR, OpenWebRX, KiwiSDR, FM-DX, SpyServer, rtl_tcp, and every VibeServer in the network.</p>
+        <a class="more" href="#listen">Tune one now →</a>
+      </div>
+      <div class="door">
+        <div class="n">02</div>
+        <h3>Host</h3>
+        <p>Plug an SDR into a spare phone, a Mac or a Linux box. It's a receiver anyone can listen to, shared by sending a link.</p>
+        <a class="more" href="#host">Turn a spare phone into one →</a>
+      </div>
+      <div class="door">
+        <div class="n">03</div>
+        <h3>Wear</h3>
+        <p>A real receiver on your wrist, not a remote. VibeSDR Jr connects, tunes and plays on the Apple Watch by itself.</p>
+        <a class="more" href="#wear">See it on the Watch →</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ LISTEN: the network, live ══ -->
+<section id="listen">
+  <div class="wrap">
+    <span class="lbl on">01 · Listen</span>
+    <h2 style="margin-top:8px">Tune a real receiver now. Nothing to install.</h2>
+    <p class="lede">These are the VibeServers listed on the network at this moment. Open one in a browser and you get the full client: waterfall, Advanced RDS, the decoders. A new network, run by the people listening to it.</p>
+    <div id="dirList" style="margin-top:22px"></div>
+    <p id="dirNote">Loading the directory…</p>
+    <div class="keys" style="margin-top:16px">
+      <a class="key primary" href="https://vibeserver.vibesdr.net">Open the directory</a>
+      <a class="key" href="#host">Add your receiver</a>
+    </div>
+  </div>
+</section>
+
+<!-- ══ SCALING: the app and the browser, side by side ══ -->
+<section>
+  <div class="wrap">
+    <span class="lbl">Scaling</span>
+    <h2 style="margin-top:8px">Everyone, regardless of device, is equal in the VibeSDR ecosystem.</h2>
+    <p class="lede">Grab a window and drag it. The layout follows in real time and the waterfall keeps scrolling through it, never redrawing. The app does it. The built-in web client does it. The watch is the same layout at one inch.</p>
+    <div class="pair" style="margin-top:22px">
+      <figure>
+        <video class="bezel" src="assets/scaling-demo.mp4" autoplay muted loop playsinline preload="metadata" aria-label="A VibeSDR window on a Mac dragged from wide to narrow while the waterfall keeps scrolling"></video>
+        <figcaption><b>The app</b> on a Mac. Live, unedited. Landscape controls become portrait ones as the shape changes.</figcaption>
+      </figure>
+      <figure>
+        <video class="bezel" src="assets/shots/web-client-live.mp4" poster="assets/shots/web-client-live-poster.webp" autoplay muted loop playsinline preload="metadata" aria-label="The VibeServer web client in a browser, tuned to Heart on 96.6 with Advanced RDS open, being resized while the waterfall and constellation keep moving"></video>
+        <figcaption><b>The web client</b> in a browser, nothing installed. Heart on 96.6, Advanced RDS open, the window being resized.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ══ HOST: the call to arms ══ -->
+<section id="host">
+  <div class="wrap">
+    <span class="lbl on">02 · Host</span>
+    <h2 style="margin-top:8px">Got a spare Android phone? Plug an SDR in. It's a receiver anyone can listen to.</h2>
+    <p class="lede">In a few minutes it's a VibeServer, with Advanced RDS and the decoders included. No config file, no Docker, no reverse proxy, no port forwarding. It sorts the gain out itself. Share it by sending a link. We run one on a rugged handset from 2019 to prove the point: if it can do it, your old phone can.</p>
+
+    <div class="proof" style="margin-top:24px">
+      <figure>
+        <img class="bezel" src="assets/shots/xcover-server-live.webp" loading="lazy" alt="The VibeServer screen on a Samsung XCover phone with a listener connected: waterfall 5 KB/s, audio 8 KB/s, 1.2 MS/s, one core busy" />
+        <figcaption>The phone, serving. Measured while a listener was connected.</figcaption>
+        <table class="meter">
+          <tr><td>Waterfall</td><td>5 KB/s</td></tr>
+          <tr><td>Audio</td><td>8 KB/s</td></tr>
+          <tr><td>Total to each listener</td><td><b>13 KB/s</b></td></tr>
+          <tr><td>Sample rate</td><td>1.2 MS/s</td></tr>
+          <tr><td>CPU</td><td>1 core of 8</td></tr>
+        </table>
+        <p class="fine">Sharing your radio costs about as much bandwidth as a podcast. Idle, the phone sits at a tenth of that core.</p>
+      </figure>
+      <figure>
+        <img class="bezel" src="assets/shots/mac-advanced-rds.webp" loading="lazy" alt="The Mac app listening to that phone, with Advanced RDS fully decoded: station name, RadioText, the AF list, MPX signal to noise 29 dB, constellation and MPX plots" />
+        <figcaption>The other end. The Mac app listening to that phone, with Advanced RDS fully decoded from the signal it sent: station, RadioText, AF list, MPX S/N, constellation, group share. Nobody else can show this picture, because nobody else owns the demodulator that produced it.</figcaption>
+      </figure>
+    </div>
+
+    <div class="grid2" style="margin-top:36px; align-items:start">
+      <div class="panel">
+        <div class="panel-h"><span class="lbl">Sharing it with the world</span><span class="lbl on">tunnel</span></div>
+        <div class="panel-b">
+          <p>Tick <b>List on VibeSDR.net</b> and the server opens a Cloudflare tunnel to the directory by itself.</p>
+          <ul class="ticks tunnel">
+            <li><b>No port forwarding.</b> The tunnel dials out, so nothing opens on your router. It works behind CGNAT, where forwarding is not merely awkward but impossible.</li>
+            <li><b>No DDNS, no address to chase.</b> You get a stable name under vibeserver.vibesdr.net.</li>
+            <li><b>Your home address stays private.</b> Listeners connect to Cloudflare. They never see, and never connect to, the machine in your house.</li>
+            <li><b>Real HTTPS.</b> A port-forwarded home server cannot have a certificate, so its listeners get "Not Secure" and its admin password crosses in clear. The tunnel is the more secure option for the listener, not a compromise for the host.</li>
+          </ul>
+          <p class="fine">Set a PIN and it's yours and your club's. Leave it open and it's on the directory. The settings stay behind an admin password either way.</p>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-h"><span class="lbl">No spare Android?</span><span class="lbl on" id="vsVer">Mac · Linux</span></div>
+        <div class="panel-b">
+          <p>The same server runs native on Apple Silicon as a menu-bar app, and on Linux, arm64 and amd64, from our apt repository. Plug in an RTL-SDR, an Airspy HF+ or an SDRplay RSP, click <b>Open in Browser</b>, and tune. Several receivers can sit behind one address; listeners pick from a front page that shows what's free.</p>
+          <ul class="ticks">
+            <li><b>macOS</b> on Apple Silicon, notarised, so it opens cleanly.</li>
+            <li><b>Linux</b>: a Raspberry Pi, an old laptop, a NUC, a home server. Tested on Debian and Ubuntu; other distributions are likely to work but are unverified.</li>
+            <li><b>Android</b>: built into the app. Tap <b>Use as server</b>.</li>
+          </ul>
+          <div class="keys">
+            <a class="key" id="vsMac" href="https://github.com/Stuey3D/VibeSDR/releases">Download for macOS</a>
+            <a class="key" href="https://apt.vibesdr.net/">apt.vibesdr.net</a>
+          </div>
+          <p class="fine" style="margin-top:12px">Hosting needs Android, macOS or Linux. Listening needs nothing but a browser.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ★★ THE UBERSDR CREDIT belongs here and nowhere else: UberSDR is the protocol VibeServer
+         speaks, not the thing VibeSDR is an offshoot of. Dropped once in a rewrite; it comes with
+         this section whenever the page is rebuilt. -->
+    <figure class="vs-eq" aria-label="VibeDSP plus UberSDR equals VibeServer">
+      <span class="t"><img src="assets/family-vibedsp.png" loading="lazy" alt="" />VibeDSP</span>
+      <span class="op">+</span>
+      <a class="t" href="https://ubersdr.org" target="_blank" rel="noopener"><img src="assets/logo_ubersdr.png" loading="lazy" alt="" />UberSDR</a>
+      <span class="op">=</span>
+      <span class="t"><img src="assets/family-vibeserver.png" loading="lazy" alt="" />VibeServer</span>
+      <figcaption>The lightweight power of VibeDSP meets the networking of <a href="https://ubersdr.org" target="_blank" rel="noopener">UberSDR</a>, whose protocol VibeServer speaks.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ══ WEAR ══ -->
+<section id="wear">
+  <div class="wrap wear-grid">
+    <figure>
+      <video class="bezel" src="assets/watch-demo.mp4" autoplay muted loop playsinline preload="auto" aria-label="VibeSDR Jr on an Apple Watch: a live waterfall, tuned with the Digital Crown"></video>
+    </figure>
+    <div>
+      <span class="lbl on">03 · Wear</span>
+      <h2 style="margin-top:8px">A complete receiver on the Apple Watch.</h2>
+      <p class="lede">Its own connection, its own audio, no phone involved. Turn the Digital Crown to tune, press and hold for the menu, leave the handset at home. A standalone SDR client on a one-inch screen cannot be bolted on. It exists because the DSP is ours.</p>
+      <p>Speaker output on models Apple allows it on; headphones on older ones.</p>
+      <div class="keys">
+        <a class="key primary" href="https://apps.apple.com/gb/app/vibesdr-jr/id6795507029">VibeSDR Jr on the App Store</a>
+        <a class="key" href="https://www.youtube.com/watch?v=3cd5RE3XRtM" target="_blank" rel="noopener">20-minute demo, unedited</a>
+      </div>
+      <p class="fine" style="margin-top:14px">Want the wrist <b>remote</b> instead? That's VibeSDR Buddy. It drives the phone app from your Watch and ships inside VibeSDR, no separate download.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══ RDS + DAB+ ══ -->
+<section id="rds">
+  <div class="wrap">
+    <div class="rds-grid">
+      <div>
+        <span class="lbl">Advanced RDS</span>
+        <h2 style="margin-top:8px">A broadcast analyser, in your hand.</h2>
+        <p style="margin-top:12px">Not just the station name. The PI code and what it means, PTY, the traffic and music flags, RadioText and RadioText+, Long PS, the clock, the language, alternative frequencies and the other stations in the network.</p>
+        <p>Then the measurements you'd normally buy hardware for. Pilot and RDS deviation. Block error rate. A live constellation with a scatter figure, the MPX spectrum, and the symbol trace that explains the error rate at a glance.</p>
+        <p>And the RDS-to-pilot phase, the reason this panel exists. Near 0°, or near 90° for quadrature encoding, is correct. The middle ground means a transmitter fault. It will also tell you when a station's encoder isn't locked to its own pilot at all, which draws as a rotating ring rather than two lobes. That's a real fault, found on air, confirmed on two independent receivers.</p>
+        <p class="fine">Calibrated against a PIRA broadcast analyser by <a href="https://fmdx.org">Hans van Eijsden</a>, who measured our readings against professional equipment station by station until they agreed. Thank you, Hans.</p>
+
+        <div class="panel" style="margin-top:24px">
+          <div class="panel-h"><span class="lbl">New</span><span class="dab"><img src="assets/dabplus.svg" alt="DAB+" /></span></div>
+          <div class="panel-b">
+            <h3>DAB and DAB+, decoded on the server.</h3>
+            <p style="margin-top:8px">Tune a VibeServer to a Band III ensemble and every service on it appears, with its logo and its live text, all at once. Pick one and it plays, on the phone, in the browser, or on the watch. The receiver does the decoding, so a watch gets DAB+ with nothing added to the watch.</p>
+            <p class="fine">Shown beside a receiver in the directory only when its owner has set it up for DAB+.</p>
+          </div>
+        </div>
+      </div>
+      <figure>
+        <img class="bezel" src="assets/rds-inhand.jpg" loading="lazy" alt="The Advanced RDS panel open on a phone held in a garden: PI, station, deviation, AF list, constellation, MPX spectrum and symbol trace, with the RDS-to-pilot phase reading a rotating 47 degrees" />
+        <figcaption>BBC R3 on 98.2 MHz, in a garden, on a phone. Read the RDS-to-pilot line: <b>rotating 47°, encoder not locked to pilot</b>. The fault, caught in the open air.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ══ CONTROLS ══ -->
+<section id="controls">
+  <div class="wrap">
+    <span class="lbl">Two control schemes</span>
+    <h2 style="margin-top:8px">Somewhere between a HiFi tuner and a lab bench.</h2>
+    <p class="lede">Real tuners were a pleasure to use and impossible to get wrong. SDR software is the opposite: enormously capable, and a wall of panels. VibeSDR sits in the gap, built for fingers and thumbs from the first line. Pick your decade.</p>
+    <div class="schemes" style="margin-top:22px">
+      <figure>
+        <img class="bezel" src="assets/shots/scheme-drum.jpg" loading="lazy" alt="VibeSDR tuned to The Buzzer on 4625 kHz USB with the drum control scheme: weighted tuning and zoom drums along the bottom" />
+        <figcaption><b>The drum.</b> A weighted drum with real inertia and haptics. Spin it and it runs on. Flick it and it coasts. Catch it and it stops dead.</figcaption>
+      </figure>
+      <figure>
+        <img class="bezel" src="assets/shots/scheme-keys.jpg" loading="lazy" alt="The same screen tuned to The Buzzer on 4625 kHz USB with the button control scheme: green-on-black step and zoom keys along the bottom" />
+        <figcaption><b>The keys.</b> A nineties dashboard at night. Tap to step with a click you can feel. Hold, and it sweeps the band.</figcaption>
+      </figure>
+    </div>
+    <p class="fine" style="margin-top:10px">The same station, the same screen, on 4625 kHz. Only the bottom inch changes.</p>
+    <div class="rail" aria-label="More screenshots">
+      <img src="assets/shots/shot01.jpg" loading="lazy" alt="VibeSDR screenshot 1" />
+      <img src="assets/shots/shot02.jpg" loading="lazy" alt="VibeSDR screenshot 2" />
+      <img src="assets/shots/shot03.jpg" loading="lazy" alt="VibeSDR screenshot 3" />
+      <img src="assets/shots/shot04.jpg" loading="lazy" alt="VibeSDR screenshot 4" />
+      <img src="assets/shots/shot05.jpg" loading="lazy" alt="VibeSDR screenshot 5" />
+      <img src="assets/shots/shot06.jpg" loading="lazy" alt="VibeSDR screenshot 6" />
+      <img src="assets/shots/shot07.jpg" loading="lazy" alt="VibeSDR screenshot 7" />
+      <img src="assets/shots/shot08.jpg" loading="lazy" alt="VibeSDR screenshot 8" />
+      <img src="assets/shots/shot09.jpg" loading="lazy" alt="VibeSDR screenshot 9" />
+      <img src="assets/shots/shot10.jpg" loading="lazy" alt="VibeSDR screenshot 10" />
+      <img src="assets/shots/shot11.jpg" loading="lazy" alt="VibeSDR screenshot 11" />
+    </div>
+    <div class="grid2" style="margin-top:28px">
+      <figure>
+        <img class="bezel" src="assets/shack-tv.jpg" loading="lazy" alt="VibeSDR mirrored onto a television with a Bluetooth keyboard on the sofa" />
+      </figure>
+      <div>
+        <span class="lbl">Big screen</span>
+        <h3 style="margin-top:8px">Put it on the telly. Then sit back.</h3>
+        <p style="margin-top:10px">AirPlay Mirroring throws the receiver onto a television. A waterfall a metre wide is a different thing to one in your palm. Pair a Bluetooth keyboard and nearly every button has a key behind it: tuning, zoom, mode, step, bookmarks, the servers list, the panels. A shack, assembled from a phone and a telly.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ WORKS WITH ══ -->
+<section id="works">
+  <div class="wrap">
+    <span class="lbl">Works with</span>
+    <h2 style="margin-top:8px">Everything they do, and the whole chain is ours.</h2>
+    <p class="lede">It is "and", not "or". VibeSDR is a first-class client for the receivers you already use, behind the same dial and the same waterfall. Change receiver and nothing about the app changes with it.</p>
+    <ul class="ticks" style="margin-top:18px">
+      <li><b>UberSDR · OpenWebRX · KiwiSDR · Web-888</b>: the shared-receiver networks, spoken natively.</li>
+      <li><b>FM-DX Webserver</b>: the worldwide network of shared FM tuners. Station names, RadioText and distances, in stereo.</li>
+      <li><b>RTL-SDR, Airspy HF+ and HackRF over USB</b> on Android. VibeSDR demodulates the raw IQ itself. SDRplay on Mac and Linux.</li>
+      <li><b>SpyServer · rtl_tcp</b>: the standard network protocols. A VibeServer can also put raw IQ back out as rtl_tcp, for SDR++ or a decoder.</li>
+      <li><b>VibeServer</b>: your own receiver, on your own network or on the directory.</li>
     </ul>
   </div>
 </section>
 
-<section class="band" id="rds">
-  <div class="wrap rds-grid">
-    <div>
-      <p class="eyebrow">Advanced RDS</p>
-      <h2>A broadcast analyser, <span class="glow">in your hand.</span></h2>
-      <p class="sub big">
-        Not just the station name. The PI code and what it means, PTY, the traffic and music flags, RadioText and RadioText+, Long&nbsp;PS, the clock, the language, alternative frequencies and the other stations in the network.
-      </p>
-      <p class="sub big">
-        Then the measurements you'd normally buy hardware for. Pilot and RDS deviation. Block error rate. A live constellation with a scatter figure, the MPX spectrum, and the symbol trace that explains the error rate at a glance.
-      </p>
-      <p class="sub big">
-        And the RDS&#8209;to&#8209;pilot phase — the reason this panel exists. Near 0°, or near 90° for quadrature encoding, is correct; the middle ground means a transmitter fault. It will also tell you when a station's encoder isn't locked to its own pilot at all, which draws as a rotating ring rather than two lobes. That's a real fault, found on air, confirmed on two independent receivers.
-      </p>
-      <p class="trust">
-        Calibrated against a PIRA broadcast analyser by <a href="https://fmdx.org">Hans van&nbsp;Eijsden</a>, who measured our readings against professional equipment station by station until they agreed. Thank you, Hans.
-      </p>
-    </div>
-    <figure class="shack-photo rds-photo">
-      <img src="assets/rds-inhand.jpg" loading="lazy" alt="The Advanced RDS panel open on a phone held in a garden — PI, station, deviation, AF list, constellation, MPX spectrum and symbol trace, with the RDS-to-pilot phase reading a rotating 47 degrees" />
-      <figcaption>BBC&nbsp;R3 on 98.2&nbsp;MHz, in a garden, on a phone. Read the RDS&#8209;to&#8209;pilot line: <b>rotating 47° — encoder not locked to pilot</b>. That is the fault, caught in the open air.</figcaption>
-    </figure>
-  </div>
-</section>
-
-<section class="band ewaste" id="server">
+<!-- ══ NOBODY LEFT OUT ══ -->
+<section>
   <div class="wrap">
-    <p class="eyebrow">VibeServer · built in, free</p>
-    <h2>Your old phone is <span class="glow">a radio waiting to happen.</span></h2>
-    <p class="sub big">
-      Have you got an old Android lying around? If there's one in a drawer somewhere, it has a fast ARM chip, a USB port and a Wi&#8209;Fi radio, and it is doing nothing. Plug an RTL&#8209;SDR or an Airspy into it, tap <b>Use as server</b>, and it's a receiver on your network. No drivers. No config files. No terminal.
-    </p>
-    <p class="sub big">
-      It serves its own web page too, so you're not tied to the app — point any browser at <i>vibesdr.local</i> and tune from your desktop. And because VibeDSP does the compression, you're sending a finished radio rather than a firehose of raw IQ: about 25× lighter than rtl_tcp, which is the difference between working over a hotspot and not.
-    </p>
-    <!-- ★★ THE UBERSDR CREDIT. Dropped once already, in the v10 rewrite (1d7c023) — the page was
-         rebuilt from the brief and this figure was not in it, leaving the .vs-eq CSS orphaned,
-         which is what gave it away. If the page is ever rewritten again, this figure comes with it.
-
-         ★★★ AND IT BELONGS HERE, NOT EVERYWHERE. Stuart: "I don't want people believing that
-         VibeSDR is simply an offshoot of UberSDR, but the credits need to be where it makes sense,
-         and in this case it makes most sense when talking about VibeServer." A site-wide credit —
-         a footer link, a line in the hero — was tried and REMOVED: it reads as a claim about the
-         whole product. VibeSDR is its own client on its own DSP engine and speaks five backends;
-         UberSDR is the protocol VIBESERVER speaks. Credit it prominently in this section and
-         nowhere else. -->
-    <figure class="vs-eq" aria-label="VibeDSP plus UberSDR equals VibeServer">
-      <span class="eq-term"><img src="assets/family-vibedsp.png" loading="lazy" alt="VibeDSP" /><b>VibeDSP</b></span>
-      <span class="eq-op">+</span>
-      <a class="eq-term eq-link" href="https://ubersdr.org" target="_blank" rel="noopener">
-        <img src="assets/logo_ubersdr.png" loading="lazy" alt="UberSDR" /><b>UberSDR</b></a>
-      <span class="eq-op">=</span>
-      <span class="eq-term"><img src="assets/family-vibeserver.png" loading="lazy" alt="VibeServer" /><b>VibeServer</b></span>
-      <figcaption>The lightweight power of <b>VibeDSP</b> meets the powerful networking of
-        <a href="https://ubersdr.org" target="_blank" rel="noopener">UberSDR</a>.</figcaption>
-    </figure>
-    <figure class="wc-shot">
-      <img src="assets/web-client.jpg" loading="lazy" alt="VibeServer's built-in web client running in a desktop browser — full spectrum, waterfall and controls, with no software installed" />
-      <figcaption>No app required at the other end — VibeServer serves this itself.</figcaption>
-    </figure>
-    <!-- ★★★ FOUR things move together and they went stale as a set: the version label, the release
-         tag in the href, the button text, and THE COPY. This block still said "v1.0" and "one
-         receiver at a time" when the shipping build was 3.1.18 and hosts several radios behind one
-         address — the description of the product was wrong, not just the number (2026-08-16).
-         ★ The Linux line is the SAME server from the same source tree; keep its version in step too.
-         ★★★ AND IT WENT STALE AGAIN — 3.1.18 here while 4.1.1 was shipping (2026-08-25). A warning
-         that a hand-maintained version WILL rot is not a fix for it: this is the second time, the
-         note above did not prevent the second time, and it will not prevent the third.
-         ▶ THE REAL FIX IS TO STOP HAND-WRITING IT. The apt repo publishes the current version at
-         https://apt.vibesdr.net/dists/stable/main/binary-arm64/Packages and the GitHub API names
-         the latest release; either can fill this label and this href at load. See
-         briefs/BRIEF-website-redesign.md — do it as part of that work rather than patching the number a
-         third time. -->
-    <div class="mac-alpha">
-      <p class="soon-k">New · macOS &amp; Linux · v4.1.2</p>
-      <h3>No spare Android? Use the Mac — or a Pi.</h3>
-      <p>
-        The same server, native on Apple&nbsp;Silicon — a menu&#8209;bar app around the same DSP core.
-        Plug in an RTL&#8209;SDR, an Airspy&nbsp;HF+ or an SDRplay&nbsp;RSP, click <b>Open in Browser</b>,
-        and tune. Notarised by Apple, so it opens cleanly.
-      </p>
-      <p>
-        Several receivers, one address. Listeners pick which radio they want from a front page that
-        shows what is free and what is in use — and you can take one back from any device with the
-        admin password. Safe to put on a public site, but if you open it to the internet,
-        <b>set a PIN</b>, or a listener can change the receiver's hardware settings.
-      </p>
-      <a class="btn btn-beta" href="https://github.com/Stuey3D/VibeSDR/releases/tag/vibeserver-mac-v4.1.2">Download VibeServer 4.1.2 for macOS →</a>
-      <p class="sub" style="margin-top:14px">
-        On a Raspberry&nbsp;Pi or any Debian box, install it from our apt repository and it updates
-        itself with the rest of the system — <a href="https://apt.vibesdr.net/">apt.vibesdr.net</a>.
-      </p>
+    <h2>Old or new. Low end or high end. Big screen or small. Nobody is left out.</h2>
+    <p class="lede">The DSP is light enough for a 2019 budget phone to host a server and a 1 GB Android Go handset to run the client. Apps for iOS, Android, Mac and Apple Watch. Everywhere else, the built-in web client with nothing to install.</p>
+    <div class="cover" style="margin-top:22px">
+      <div><span class="lbl on">iPhone · iPad · Mac</span>VibeSDR on the App Store. Runs on Apple Silicon Macs as a desktop app.</div>
+      <div><span class="lbl on">Android</span>VibeSDR, with local USB radios and the server built in. APK now, Play closed testing.</div>
+      <div><span class="lbl on">Apple Watch</span>VibeSDR Jr, a standalone receiver. Buddy, the remote, inside VibeSDR.</div>
+      <div><span class="lbl on">Windows · Linux · TV</span>The web client every VibeServer serves. Full client, no install.</div>
     </div>
   </div>
 </section>
 
-<section class="band family-band" id="family">
-  <div class="wrap">
-    <p class="eyebrow">The Vibe family</p>
-    <h2>Four shapes, <span class="glow">one engine.</span></h2>
-    <p class="sub big">
-      Everything here runs on VibeDSP, so the waterfall you set up on one turns up looking the same on the rest.
-    </p>
-
-    <div class="family-grid">
-      <figure class="fam">
-        <img src="assets/icon.png" alt="VibeSDR app icon" />
-        <figcaption><b>VibeSDR</b><span>The receiver. iPhone, Android, iPad, and up to the big screen.</span></figcaption>
-      </figure>
-      <figure class="fam">
-        <img src="assets/family-jr.png" alt="VibeSDR Jr app icon" />
-        <figcaption><b><a href="https://apps.apple.com/gb/app/vibesdr-jr/id6795507029">VibeSDR&nbsp;Jr</a></b><span>A complete receiver on the Apple&nbsp;Watch. Its own connection, its own audio, no phone involved.</span></figcaption>
-      </figure>
-      <figure class="fam">
-        <img src="assets/family-buddy.png" alt="VibeSDR Buddy app icon" />
-        <figcaption><b>VibeSDR&nbsp;Buddy</b><span>The wrist remote, included with VibeSDR&nbsp;10. Drives the phone app from your Watch when the phone's the one doing the listening.</span></figcaption>
-      </figure>
-      <figure class="fam">
-        <img src="assets/family-vibeserver.png" alt="VibeServer icon" />
-        <figcaption><b>VibeServer</b><span>Turn an Android phone and a spare dongle into a private receiver for your own devices. Now on macOS too.</span></figcaption>
-      </figure>
-      <figure class="fam">
-        <img src="assets/family-vibedsp.png" alt="VibeDSP icon" />
-        <figcaption><b>VibeDSP</b><span>Our own ARM&#8209;NEON engine. It demodulates the signal and draws every pixel on your device, which is why the display never changes character when you change server.</span></figcaption>
-      </figure>
-    </div>
-  </div>
-</section>
-
-<section class="band honest" id="made">
-  <div class="wrap inner">
+<!-- ══ HOW IT'S MADE ══ -->
+<section id="made">
+  <div class="wrap made-grid">
     <div>
-      <p class="eyebrow">How it's made</p>
-      <p class="tagline">Vibe&#8209;coded, <span class="glow">but not slop.</span></p>
-      <p class="pull">I'm not a licensed amateur and I don't transmit. I'm a <b>listener</b>.</p>
-      <p>It started on the east coast of England as a kid, pulling Dutch television in on an indoor aerial — but only when the weather was exactly right. I didn't know then that I was watching a Sporadic&#8209;E opening. I just knew that some evenings the sky decided to hand me another country, and that was enough to hook me for life. I still chase it: how far can I drag a signal in on an antenna that has no business receiving it?</p>
-      <p>VibeSDR came out of frustration. I was carrying around a phone more powerful than the computers that used to run this stuff, and every piece of SDR software I tried had clearly been designed for a desk and then squeezed onto a handset.</p>
-      <p>So I built the receiver I wanted. Designed it, tested it, broke it. Redesigned it, tested it, broke it again. Weeks of late nights and long weekends. Claude wrote the code — hence the name, and I'm not going to pretend otherwise — but every decision, every dead end and every release sign&#8209;off was mine. VibeSDR is human at heart. I don't ship things I wouldn't use myself.</p>
+      <span class="lbl">How it's made</span>
+      <h2 style="margin-top:8px">Vibe-coded. Named so you'd know.</h2>
+      <p style="margin-top:14px">I'm not a licensed amateur and I don't transmit. I'm a listener. It started on the east coast of England as a kid, pulling Dutch television in on an indoor aerial when the weather was exactly right. I didn't know I was watching a Sporadic-E opening. I still chase it.</p>
+      <p>I am not a developer and I won't pretend to be one. I'm the concept, the UI and the tester, and the readme says so. Claude writes the code. Every decision, every dead end and every release sign-off is mine, and the whole history, failed experiments included, is on GitHub for anyone to read. A user has already fixed a bug and sent a pull request.</p>
+      <p>Nothing ships that I haven't driven myself on real hardware. The RDS analyser was checked against a professional broadcast analyser by someone who owns one. The DAB decoder took four days of chasing a breakup before it was right. Where I couldn't test, like HackRF, I worked with someone who could.</p>
+      <p>The App Store price covers Apple's fees. The source is GPLv3, the APK is free, and it stays that way.</p>
     </div>
-    <div class="stat-stack" aria-hidden="false">
-      <div class="stat"><div class="n">500+</div><div class="l">tests before I was happy with the dial</div></div>
-      <div class="stat"><div class="n">5</div><div class="l">real devices, high-end to budget</div></div>
-      <div class="stat"><div class="n">GPLv3</div><div class="l">full source, free forever</div></div>
+    <div>
+      <div class="stat"><span class="num">GPLv3</span><span class="l">full source, free forever</span></div>
+      <div class="stat"><span class="num">£2.99</span><span class="l">on the App Store, to cover the fees</span></div>
+      <div class="stat"><span class="num">0</span><span class="l">subscriptions, accounts, trackers</span></div>
+      <div class="stat"><span class="num">5</span><span class="l">radio drivers: RTL-SDR (V3, V4, V4L), Airspy HF+, HackRF, SDRplay</span></div>
     </div>
   </div>
 </section>
 
 <footer>
-  <div class="wrap foot">
+  <div class="wrap">
     <div>
-      <div class="wordmark" style="margin-bottom:10px"><span class="dot"></span>VibeSDR</div>
-      <p class="fine">A mobile-first SDR receiver for iOS, Android and Apple&nbsp;Watch. Built and tested by one listener; released open under GPL-3.0.</p>
+      <a class="wordmark" href="/"><img src="assets/icon.png" alt="" />VibeSDR</a>
+      <p class="fine" style="margin-top:10px; max-width:44ch">An SDR receiver for iOS, Android, Mac and Apple Watch, and the server that feeds it. Built and tested by one listener, released under GPL-3.0.</p>
     </div>
     <div class="links">
-      <a href="https://apps.apple.com/gb/app/vibesdr/id6786344049">App Store · £2.99</a>
+      <a href="https://apps.apple.com/gb/app/vibesdr/id6786344049">App Store</a>
+      <a href="https://apps.apple.com/gb/app/vibesdr-jr/id6795507029">VibeSDR Jr</a>
+      <a href="https://vibeserver.vibesdr.net">Directory</a>
+      <a href="https://apt.vibesdr.net/">apt</a>
       <a href="https://discord.gg/pr9EjUUBCA">Discord</a>
       <a href="https://github.com/Stuey3D/VibeSDR">GitHub</a>
       <a href="https://github.com/Stuey3D/VibeSDR/issues">Report a bug</a>
@@ -1018,6 +577,142 @@ setInterval(loadDemo, 30000);
   </div>
 </footer>
 
+<script>
+/* ══ THE DIRECTORY, ON THIS PAGE ══════════════════════════════════════════════════════════════
+ * ★ Fetched straight from the directory Worker: its /api/directory already answers with
+ *   access-control-allow-origin: *, so no proxy is needed. One source feeds the bar and the list,
+ *   so they cannot disagree.
+ * ★★ FAILURE IS QUIET. No answer: the bar keeps its wording without figures, the list says so in
+ *    one line, and nothing prints a zero. */
+const DIR = 'https://vibeserver.vibesdr.net/api/directory';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function hz(v) {
+  if (v >= 1e9) return (v / 1e9).toFixed(v % 1e9 ? 3 : 0).replace(/\.?0+$/, '') + ' GHz';
+  if (v >= 1e6) return (v / 1e6).toFixed(v % 1e6 ? 3 : 0).replace(/\.?0+$/, '') + ' MHz';
+  if (v >= 1e3) return (v / 1e3).toFixed(v % 1e3 ? 1 : 0).replace(/\.?0+$/, '') + ' kHz';
+  return v + ' Hz';
+}
+/** What a listener may actually tune on a radio: ranges, else allowed, else coverage. */
+const reachOf = (r) => (r.ranges || r.allowed || r.coverage || []).filter((x) => Array.isArray(x) && x[1] > x[0]);
+/** Free, busy, or not reported. Never guessed: a radio that says nothing is `null`. */
+function radioFree(r, s) {
+  const l = Number(r.listeners), m = Number(r.maxListeners);
+  if (Number.isFinite(l) && Number.isFinite(m) && m > 0) return l < m;
+  if (s && (s.radios || []).length === 1 && Number.isFinite(Number(s.maxListeners)) && s.maxListeners > 0) return Number(s.listeners || 0) < s.maxListeners;
+  return null;
+}
+/** The directory's own segment rule, reduced: free beats temporary-free beats unknown beats busy. */
+function segments(items) {
+  const edges = [...new Set(items.flatMap((i) => [i.lo, i.hi]))].sort((a, b) => a - b);
+  const out = [];
+  for (let k = 0; k < edges.length - 1; k++) {
+    const lo = edges[k], hi = edges[k + 1];
+    const on = items.filter((i) => i.lo <= lo && i.hi >= hi);
+    let state = 'gap';
+    if (on.length) {
+      state = on.some((i) => i.free === true && !i.temporary) ? 'free'
+            : on.some((i) => i.free === true) ? 'temp'
+            : on.some((i) => i.free === null) ? 'unknown' : 'busy';
+    }
+    const prev = out[out.length - 1];
+    if (prev && prev.state === state && prev.hi === lo) prev.hi = hi; else out.push({ lo, hi, state });
+  }
+  return out;
+}
 
+function drawBar(servers) {
+  const items = [], tuned = [];
+  for (const s of servers) for (const r of (s.radios || [])) {
+    const free = radioFree(r, s);
+    for (const [lo, hi] of reachOf(r)) items.push({ lo, hi, free, temporary: !!s.temporary });
+    if (r.centreHz > 0) tuned.push(r.centreHz);
+  }
+  const svg = $('netSvg');
+  if (!items.length) { svg.innerHTML = ''; return null; }
+  const segs = segments(items);
+  const lo = Math.max(1, segs[0].lo), hi = segs[segs.length - 1].hi;
+  // ★ Log axis: 500 Hz to 2 GHz is six decades, and a linear bar would be one green pixel of HF.
+  const L = Math.log10(lo), R = Math.log10(hi);
+  const x = (v) => ((Math.log10(Math.max(v, lo)) - L) / (R - L) * 1000).toFixed(2);
+  let d = '';
+  for (const g of segs) {
+    if (g.state === 'gap') continue;
+    const a = x(g.lo), b = x(g.hi);
+    d += `<rect class="seg ${g.state}" x="${a}" y="0" width="${Math.max(0.6, b - a).toFixed(2)}" height="100" opacity=".28"/>`;
+    d += `<rect class="seg ${g.state}" x="${a}" y="86" width="${Math.max(0.6, b - a).toFixed(2)}" height="14"/>`;
+  }
+  // ★ The VFO sits where a radio in the network is tuned right now. A real frequency, not a prop.
+  if (tuned.length) {
+    const v = x(tuned[Math.floor(Math.random() * tuned.length)]);
+    d += `<line class="vfo" x1="${v}" y1="0" x2="${v}" y2="100" vector-effect="non-scaling-stroke"/>`;
+  }
+  svg.setAttribute('viewBox', '0 0 1000 100');
+  svg.innerHTML = d;
+  return [lo, hi];
+}
+
+function drawList(servers) {
+  const list = $('dirList'), note = $('dirNote');
+  const up = servers.filter((s) => s && (s.radios || []).length);
+  if (!up.length) { list.innerHTML = ''; note.textContent = 'Nothing is listed at the moment. Yours could be first.'; return; }
+  const names = (() => { try { return new Intl.DisplayNames(['en-GB'], { type: 'region' }); } catch { return null; } })();
+  list.innerHTML = up.map((s) => {
+    const where = [s.country && names ? names.of(s.country) : s.country, s.grid].filter(Boolean).join(' · ');
+    const host = [s.host, s.platform].filter(Boolean).join(' · ');
+    const rows = (s.radios || []).map((r) => {
+      const free = radioFree(r, s);
+      const l = Number(r.listeners || 0), m = Number(r.maxListeners || s.maxListeners || 0);
+      const st = free === null ? '<span class="st unk">occupancy not reported</span>'
+        : free ? `<span class="st free">free${m > 1 ? ` · ${l} of ${m} listening` : ''}</span>`
+        : '<span class="st full">in use</span>';
+      const rng = reachOf(r).map(([a, b]) => `${hz(a)} – ${hz(b)}`).join(', ');
+      const dab = r.dab === true ? '<span class="dab" title="Set up for DAB+"><img src="assets/dabplus.svg" alt="DAB+" /></span>' : '';
+      return `<div class="rad"><span><b>${esc(r.name || r.driver || 'Radio')}</b>${dab}</span><span class="rng">${esc(rng)}</span>${st}</div>`;
+    }).join('');
+    const url = s.address ? `https://${s.address}` : (s.url || 'https://vibeserver.vibesdr.net');
+    return `<div class="srv"><div class="srv-h"><a href="${esc(url)}" rel="noopener"><b>${esc(s.name)}</b></a><span class="where">${esc(where)}</span>${s.temporary ? '<span class="lbl" style="color:var(--temp)">temporary</span>' : ''}<span class="host">${esc(host)}</span></div>${rows}</div>`;
+  }).join('');
+  note.textContent = 'Live from the directory. Occupancy is what each server reports; a single-listener radio is one person at a time.';
+}
+
+async function loadDirectory() {
+  try {
+    const r = await fetch(DIR, { cache: 'no-store' });
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    const servers = Array.isArray(d.servers) ? d.servers : [];
+    const radios = servers.reduce((n, s) => n + (s.radios || []).length, 0);
+    const span = drawBar(servers);
+    if (radios > 0 && servers.length > 0) {
+      $('nbFig').innerHTML = `<span class="num">${radios}</span> radio${radios === 1 ? '' : 's'} on <span class="num">${servers.length}</span> server${servers.length === 1 ? '' : 's'}`;
+      $('nbRange').textContent = span ? `${hz(span[0])} – ${hz(span[1])}` : '';
+    }
+    drawList(servers);
+  } catch (e) {
+    // ★ Quiet. The wording without figures stays; the list says so once.
+    $('dirNote').textContent = 'The directory is not answering at the moment. Try vibeserver.vibesdr.net directly.';
+  }
+}
+loadDirectory();
+setInterval(loadDirectory, 60000);
+
+/* ══ THE VERSION LABEL, READ, NOT TYPED ═══════════════════════════════════════════════════════
+ * ★★★ A hand-written version rotted twice (3.1.18 while 4.1.1 shipped; 4.1.1 while 4.1.2 shipped).
+ *     GitHub names the latest Mac release; the label and the download link follow it at load.
+ *     On failure the link still goes to the releases page, and the label says nothing false. */
+(async () => {
+  try {
+    const r = await fetch('https://api.github.com/repos/Stuey3D/VibeSDR/releases?per_page=30', { headers: { accept: 'application/vnd.github+json' } });
+    if (!r.ok) return;
+    const rel = (await r.json()).find((x) => !x.draft && !x.prerelease && /^vibeserver-mac-v\d+\.\d+\.\d+$/.test(x.tag_name));
+    if (!rel) return;
+    const v = rel.tag_name.replace('vibeserver-mac-v', '');
+    $('vsMac').textContent = `Download ${v} for macOS`;
+    $('vsMac').href = rel.html_url;
+    $('vsVer').textContent = `Mac · Linux · v${v}`;
+  } catch {}
+})();
+</script>
 </body>
 </html>
