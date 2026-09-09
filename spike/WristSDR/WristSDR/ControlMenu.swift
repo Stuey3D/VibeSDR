@@ -434,11 +434,8 @@ struct ControlMenu: View {
           // ★ Drawn only when the SERVER says this radio can do DAB — a receiver locked to FM, or
           //   held below 2.048 MS/s, never shows it. AGENTS.md: a control that is visible and
           //   refused reads as a broken feature, not a blocked one.
-          if link.dabAvailable {
-            tile(name: "DAB", value: link.dabActive ? (link.dabBlockName.isEmpty ? "On" : link.dabBlockName) : "Off", h: h) {
-              dismiss(); link.setDabMode(!link.dabActive)
-            }
-          }
+          // ★ The DAB tile is gone: DAB sits in the DEMOD list when the server can (see the picker
+          //   below), as the app and the web client place it; Exit DAB on the DAB screen leaves.
           tile(name: "CROWN", value: crownLabel, h: h) { showCrown = true }
           // DISPLAY — auto contrast + brightness + contrast (crown tweaks), palette + VFO colour
           // (crown-preview pickers), the peak-hold toggle and a reset. Watch-local look.
@@ -525,8 +522,10 @@ struct ControlMenu: View {
        *  adsb ARE profile modes. Same rule Buddy's menu already applies. */
       PickerList(title: "Demod",
                  // ★ A VibeServer has WFM, NFM, AM, USB, LSB and CW — no SAM, CWU or CWL (Stuart).
-                 items: link.vibe != nil ? ["usb", "lsb", "am", "nfm", "wfm", "cw"] : Self.modes,
-                 current: link.mode) { m in
+                 // ★★ And DAB in the same list when the server says it can (the app's and the web's
+                 //    placing): that is the way in; Exit DAB on the DAB screen is the way out.
+                 items: link.vibe != nil ? ["usb", "lsb", "am", "nfm", "wfm", "cw"] + (link.dabAvailable ? ["dab"] : []) : Self.modes,
+                 current: link.dabActive ? "dab" : link.mode) { m in
         if m == "dab", link.vibe != nil { link.setDabMode(true) } else { link.setMode(m) }
         showModes = false; dismiss()
       }

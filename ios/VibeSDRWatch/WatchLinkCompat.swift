@@ -90,7 +90,13 @@ extension WatchLink {
   var dabNoDecoder: Bool { dab?.noDecoder ?? false }
   /// ★ The demodulators THIS server has. A VibeServer has no SAM, CWU or CWL — only CW (Stuart,
   ///   2026-09-09) — and a list that offers them is a list of controls that do nothing there.
-  var demodModes: [String] { dab?.backend == "vibeserver" ? ["wfm", "nfm", "am", "usb", "lsb", "cw"] : ControlMenu.modes }
+  var demodModes: [String] {
+    let base = dab?.backend == "vibeserver" ? ["wfm", "nfm", "am", "usb", "lsb", "cw"] : ControlMenu.modes
+    /* ★★★ DAB IS IN THE DEMODULATOR LIST, as it is in the app's mode grid and the web's picker —
+     *  "the only way to get DAB working" (Stuart, 2026-09-09) — and ONLY when the server says it
+     *  can (`capable`, from the phone's own probe of that radio). */
+    return dabCapable ? base + ["dab"] : base
+  }
   /// The playing service's text, for the header line Jr already has.
   var dabDlsText: String { (dab?.list ?? []).first { $0.id == dab?.active }?.dls ?? "" }
   var dabActiveId: Int { dab?.active ?? -1 }

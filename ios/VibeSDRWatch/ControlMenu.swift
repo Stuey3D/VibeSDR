@@ -429,11 +429,8 @@ struct ControlMenu: View {
            *  DAB: that answer depends on the owner's allow/block lists and the rate the receiver
            *  will actually run at, and only the server knows both.
            *  ★ Buddy asks; the phone acts. Same division as every other command on this screen. */
-          else if link.dabCapable {
-            tile(name: "DAB", value: link.dabOn ? (link.dabBlock.isEmpty ? "On" : link.dabBlock) : "Off", h: h) {
-              dismiss(); link.setDabMode(!link.dabOn)
-            }
-          }
+          // ★ The VibeServer DAB tile is gone: DAB is in the DEMOD list now (link.demodModes), the
+          //   way the app and the web client offer it; Exit DAB on the DAB screen is the way out.
           // Wrist-down spectrum timeout — battery vs "always live". Off keeps the waterfall
           // running with the wrist down (costs power); the timed options drop it after N and
           // reconnect on the way back.
@@ -516,8 +513,10 @@ struct ControlMenu: View {
         .environmentObject(link)
     }
     .sheet(isPresented: $showModes) {
-      PickerList(title: "Demod", items: link.demodModes, current: link.mode) { m in
-        link.setMode(m); showModes = false; dismiss()
+      PickerList(title: "Demod", items: link.demodModes, current: link.dabOn ? "dab" : link.mode) { m in
+        // ★ "dab" is a MODE the phone enters, not a demodulator the server switches to.
+        if m == "dab" { link.setDabMode(true) } else { link.setMode(m) }
+        showModes = false; dismiss()
       }
     }
     .sheet(isPresented: $showDab) {
