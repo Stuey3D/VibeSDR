@@ -406,7 +406,7 @@
   <div class="wrap">
     <span class="lbl on">02 · Host</span>
     <h2 style="margin-top:8px">Got a spare Android phone? Plug an SDR in. It's a receiver anyone can listen to.</h2>
-    <p class="lede">In a few minutes it's a VibeServer, with Advanced RDS and the decoders included. No config file, no Docker, no reverse proxy, no port forwarding. It sorts the gain out itself. Share it by sending a link. We run one on a rugged handset that was low end when it was new in 2019, seven years on, to prove the point: if it can do it, your old phone can.</p>
+    <p class="lede">In a few minutes it's a VibeServer, with Advanced RDS and the decoders included. No config file, no Docker, no reverse proxy, no port forwarding. It sorts the gain out itself. Share it by sending a link. We run one on a rugged handset that was low end when it was new in 2019, <span id="phoneAge">seven years</span> on, to prove the point: if it can do it, your old phone can.</p>
 
     <div class="proof" style="margin-top:24px">
       <figure>
@@ -881,6 +881,13 @@ async function loadDirectory() {
 }
 loadDirectory();
 loadSpectrogram();
+// ★ The demo phone's age, computed so the sentence never dates. The Galaxy XCover 4s shipped in 2019.
+(() => {
+  const el = $('phoneAge'); if (!el) return;
+  const y = new Date().getFullYear() - 2019;
+  const words = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+  if (y >= 1) el.textContent = `${words[y] || y} year${y === 1 ? '' : 's'}`;
+})();
 setInterval(loadDirectory, 60000);
 
 /* ══ THE VERSION LABEL, READ, NOT TYPED ═══════════════════════════════════════════════════════
