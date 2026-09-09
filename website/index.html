@@ -38,6 +38,7 @@
   a { color: var(--accent); }
   a:hover { color: #ffe566; }
   b, strong { color: var(--text); font-weight: 600; }
+  code { color: #ffe566; font-family: var(--mono); }
   .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 20px; min-width: 0; }
   .grid2 > *, .grid3 > *, .proof > *, .pair > *, .rds-grid > *, .wear-grid > *, .made-grid > *, .hero-grid > * { min-width: 0; }
   .srv-h, .rad, figcaption { overflow-wrap: anywhere; }
@@ -544,9 +545,18 @@
       <li><b>UberSDR · OpenWebRX · KiwiSDR · Web-888</b>: the shared-receiver networks, spoken natively.</li>
       <li><b>FM-DX Webserver</b>: the worldwide network of shared FM tuners. Station names, RadioText and distances, in stereo.</li>
       <li><b>RTL-SDR, Airspy HF+ and HackRF over USB</b> on Android. VibeSDR demodulates the raw IQ itself. SDRplay on Mac and Linux.</li>
-      <li><b>SpyServer · rtl_tcp</b>: the standard network protocols. A VibeServer can also put raw IQ back out as rtl_tcp, for SDR++ or a decoder.</li>
+      <li><b>SpyServer · rtl_tcp</b>: the standard network protocols, spoken natively.</li>
       <li><b>VibeServer</b>: your own receiver, on your own network or on the directory.</li>
     </ul>
+    <div class="panel" style="margin-top:26px; max-width:760px">
+      <div class="panel-h"><span class="lbl">VibeIQ</span><span class="lbl on">raw IQ · rtl_tcp</span></div>
+      <div class="panel-b">
+        <h3>The raw IQ, out of any VibeServer that offers it, into your other apps.</h3>
+        <p style="margin-top:8px">Switch <b>Raw IQ out</b> on in the client's audio controls and it shows a six-character code. Run VibeIQ on your machine, type the code, and the channel you are tuned to arrives as rtl_tcp on <code>127.0.0.1:1234</code>. Point SDR++, SDR#, GQRX, DSD-FME or anything else that speaks rtl_tcp at it. Tuning from that app moves the dial on the receiver, and the web client keeps playing.</p>
+        <p class="fine">48 kHz wide through the tunnel, which covers every digital voice and data mode, and up to 250 kHz on your own network, where no code is needed. One static binary for macOS, Linux and Windows, nothing to install. Needs a receiver whose owner has enabled it.</p>
+        <div class="keys"><a class="key" href="https://github.com/Stuey3D/VibeSDR/releases/tag/vibeiq-v1.0.0">Download VibeIQ 1.0</a></div>
+      </div>
+    </div>
   </div>
 </section>
 
