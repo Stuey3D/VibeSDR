@@ -394,6 +394,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     B("gainLock", r.gainLock); S("gainLocks", r.gainLocks);
     S("ifGrLimits", r.ifGrLimits); S("gainSplits", r.gainSplits);
     B("rateLock", r.rateLock); B("dabRateBoost", r.dabRateBoost);
+    I("rawIq", r.rawIq); I("rawIqMax", r.rawIqMax);
     S("blockedModes", r.blockedModes);
     // ★ Absent keeps the safe defaults (AGC off, protection on) — B() only assigns when present.
     B("rtlAgc", r.rtlAgc); B("tunerBwAuto", r.tunerBwAuto);
@@ -438,6 +439,7 @@ std::string radioToJson(const RadioConfig& r) {
     B("gainLock", r.gainLock); S("gainLocks", r.gainLocks);
     S("ifGrLimits", r.ifGrLimits); S("gainSplits", r.gainSplits);
     B("rateLock", r.rateLock); B("dabRateBoost", r.dabRateBoost);
+    N("rawIq", r.rawIq); N("rawIqMax", r.rawIqMax);
     S("blockedModes", r.blockedModes);
     B("rtlAgc", r.rtlAgc); B("tunerBwAuto", r.tunerBwAuto);
     N("users", r.users); N("maxBw", r.maxBw); N("maxFps", r.maxFps); N("fftRate", r.fftRate);
@@ -509,6 +511,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.gainLock = one.gainLock; r.gainLocks = one.gainLocks;
     r.ifGrLimits = one.ifGrLimits; r.gainSplits = one.gainSplits;
     r.rateLock = one.rateLock;
+    r.rawIq = one.rawIq; r.rawIqMax = one.rawIqMax;
     r.sessionLimitMin = one.sessionLimitMin;
     r.biasT = one.biasT;
     r.ppm = one.ppm; r.ppb = one.ppb; r.directSampling = one.directSampling;
@@ -809,6 +812,7 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.gainLock = r.gainLock; c.gainLocks = r.gainLocks;
     c.ifGrLimits = r.ifGrLimits; c.gainSplits = r.gainSplits;
     c.rateLock = r.rateLock;
+    c.rawIq = r.rawIq; c.rawIqMax = r.rawIqMax;   // ★ raw IQ out — the last link, as the note below says
     /* ★★★ THE LAST LINK IN THE CHAIN, AND THE ONE THAT WAS MISSING. This function flattens a
      *     RADIO's settings into the server-level Config that the worker process actually reads, so
      *     a per-radio field that is not copied here simply never arrives — however correctly it is

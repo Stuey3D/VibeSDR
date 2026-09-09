@@ -220,6 +220,9 @@ object VibeLocalSDR {
     /** DAB may borrow 2.048 MS/s on a slower receiver, and the modes/decoders switched off. */
     fun setDabPolicy(rateBoost: Boolean, blockedCsv: String) { ensureLoaded(); nativeSetDabPolicy(rateBoost, blockedCsv) }
     private external fun nativeSetDabPolicy(rateBoost: Boolean, blockedCsv: String)
+    /** ★ Raw IQ out: 0 off, 1 local only, 2 local + public; max 0 = this phone's default (1). */
+    fun setRawIq(mode: Int, max: Int) { ensureLoaded(); nativeSetRawIq(mode, max) }
+    private external fun nativeSetRawIq(mode: Int, max: Int)
 
     /** Per-band gain ceilings, the gain to return to when everyone leaves (-1 = leave alone), and
      *  an AGC lock. ★ Ceilings are enforced on SET, on RETUNE INTO a capped band, at START and at

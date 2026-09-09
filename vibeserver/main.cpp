@@ -127,6 +127,7 @@ struct Opts {
     std::string gainSplits;              // HackRF LNA share of the total, 0-100, per band
     bool        rateLock = false;        // the sample rate is PINNED, not merely capped
     bool        dabRateBoost = false;    // DAB may borrow 2.048 MS/s — see Config::dabRateBoost
+    int         rawIq = 0, rawIqMax = 0; // raw IQ out — see RadioConfig::rawIq
     std::string blockedModes;            // modes/decoders switched off — see Config::blockedModes
     int         adminIdleMin = 30;      // admin controls re-lock after this idle; 0 = never
     // ★ Local by default — the mode that behaves exactly as VibeServer always has. A new setting
@@ -445,7 +446,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.gainLimits = c.gainLimits; o.restGain = c.restGain; o.agcLock = c.agcLock;
     o.gainLock = c.gainLock; o.gainLocks = c.gainLocks;
     o.ifGrLimits = c.ifGrLimits; o.gainSplits = c.gainSplits;
-    o.rateLock = c.rateLock; o.dabRateBoost = c.dabRateBoost;
+    o.rateLock = c.rateLock; o.dabRateBoost = c.dabRateBoost; o.rawIq = c.rawIq; o.rawIqMax = c.rawIqMax;
     o.blockedModes = c.blockedModes;
     o.rtlAgc = c.rtlAgc; o.tunerBwAuto = c.tunerBwAuto;
     o.adminIdleMin    = c.adminIdleMin;
@@ -483,7 +484,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.gainLimits = o.gainLimits; c.restGain = o.restGain; c.agcLock = o.agcLock;
     c.gainLock = o.gainLock; c.gainLocks = o.gainLocks;
     c.ifGrLimits = o.ifGrLimits; c.gainSplits = o.gainSplits;
-    c.rateLock = o.rateLock; c.dabRateBoost = o.dabRateBoost;
+    c.rateLock = o.rateLock; c.dabRateBoost = o.dabRateBoost; c.rawIq = o.rawIq; c.rawIqMax = o.rawIqMax;
     c.blockedModes = o.blockedModes;
     c.rtlAgc = o.rtlAgc; c.tunerBwAuto = o.tunerBwAuto;
     c.adminIdleMin    = o.adminIdleMin;
@@ -1268,6 +1269,7 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerLockedRate(o.lockRate);
     LocalSdrShim::setVibeServerRateLock(o.rateLock);
     LocalSdrShim::setVibeServerDabRateBoost(o.dabRateBoost);
+    LocalSdrShim::setVibeServerRawIq(o.rawIq, o.rawIqMax);
     LocalSdrShim::setVibeServerBlockedModes(o.blockedModes);
 
     // ── Channel method: decided ONCE, here, and never again while the process runs ──────────
@@ -1917,6 +1919,7 @@ int main(int argc, char** argv) {
             r.rfNotch = next.rfNotch; r.dabNotch = next.dabNotch; r.zoomSpectrum = next.zoomSpectrum;
             r.biasT = next.biasT; r.ppm = next.ppm; r.ppb = next.ppb;
             r.directSampling = next.directSampling; r.dabRateBoost = next.dabRateBoost;
+            r.rawIq = next.rawIq; r.rawIqMax = next.rawIqMax;
             r.blockedModes = next.blockedModes;
             // ★ The converter travels with the rest of the per-radio set — it describes what is
             //   bolted to THIS radio's aerial, so it is saved exactly where the gain and the ppm
