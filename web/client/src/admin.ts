@@ -796,7 +796,14 @@ function renderSessions(s: any) {
       c.spectrum === false
         ? ' <span class="dim" title="Listening with the waterfall stopped — the app is in the background or the tab is hidden. They still hold the slot; they just cost much less.">audio only</span>'
         : ''}</td>
-    <td>${c.decoder ? esc(String(c.decoder).toUpperCase()) : '<span class="dim">—</span>'}</td>
+    ${/* ★ RAW IQ OUT rides in the decoder column: it is what this listener is decoding WITH, in
+          another app, and it costs a channel of DSP plus the stream — an owner watching costs
+          wants to see it (Stuart, 2026-09-09: "we need to show if the user is using RAW IQ").
+          `iq` is the stream's rate in Hz while a consumer is attached, 0 or absent otherwise. */''}
+    <td>${c.decoder ? esc(String(c.decoder).toUpperCase()) : ''}${
+      typeof c.iq === 'number' && c.iq > 0
+        ? `${c.decoder ? ' · ' : ''}<span title="Raw IQ out: an rtl_tcp app is taking this listener's channel at ${esc(String(c.iq / 1000))} kHz.">RAW IQ <span class="dim">${esc(String(c.iq / 1000))}k</span></span>`
+        : ''}${!c.decoder && !(typeof c.iq === 'number' && c.iq > 0) ? '<span class="dim">—</span>' : ''}</td>
     <td>${esc(c.secs ? dur(c.secs) : '—')}</td>
     <td title="Share of ONE core: 100% = a core fully busy keeping up with this listener's stream. Not a share of the whole machine — the HEALTH card above is that.">${rate(c.cpu, '% core')}</td>
     <td>${rate(c.kbps, 'k')}</td>
