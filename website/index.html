@@ -874,7 +874,9 @@ async function loadDirectory() {
     if (radios > 0 && servers.length > 0) {
       const countries = new Set(servers.map((s) => s.country).filter(Boolean)).size;
       const n = (k, one, many) => `<b>${k}</b> ${k === 1 ? one : many}`;
-      $('oaWhat').innerHTML = `${n(radios, 'receiver', 'receivers')} on ${n(servers.length, 'server', 'servers')}`
+      // ★ A call to arms first, the live count second (Stuart, 2026-09-10: "a new network of
+      //   remote SDRs, join us for free"). The count stays real; the sentence is the invitation.
+      $('oaWhat').innerHTML = `A new network of remote SDRs. Join us, it's free. · ${n(radios, 'receiver', 'receivers')} on ${n(servers.length, 'server', 'servers')}`
         + (countries ? ` in ${n(countries, 'country', 'countries')}` : '')
         + (span ? ` <span class="lbl oa-range" style="margin-left:8px">${esc(hz(span[0]))} – ${esc(hz(span[1]))}</span>` : '');
       bar.hidden = false;
