@@ -429,6 +429,7 @@ let srvLocal = false;
 /* ★ On the owner's private network (server-judged) — the test raw IQ 'local only' uses. Not the
  * same as srvLocal, which is loopback and drives forced-uncompressed audio. */
 let srvLan = false;
+let iqRateChosen = false;   // the listener touched the raw IQ rate picker this page
 // ★ Does this server have an admin password at all? Only then is there anything to unlock.
 let srvAdminProtected = false;
 /** ★★ The receiver runs ONE dial that everybody hears (an unlocked radio with room for several).
@@ -478,6 +479,7 @@ function refreshIqRow() {
   if (!iqWired) {
     iqWired = true;
     btn.onclick = () => { if (!spec) return; if (iqState.on) spec.iqOut(false); else spec.iqOut(true, Number(sel.value) || 48000); };
+    sel.onchange = () => { iqRateChosen = true; };
   }
   btn.textContent = iqState.on ? 'ON' : 'OFF';
   btn.classList.toggle('on', iqState.on);
@@ -488,6 +490,10 @@ function refreshIqRow() {
   //   reading loopback here greyed the switch for every LAN visitor (2026-09-09).
   sel.hidden = !srvLan;
   if (!srvLan) sel.value = '48000';
+  // ★ On the LAN the DEFAULT is the full 250 kHz — the tunnel's 48 kHz ceiling is a tunnel
+  //   limit, not a preference (Stuart, 2026-09-09: "internal IPs like this one need the full
+  //   250K"). The listener's own pick, once made, stands.
+  else if (!iqRateChosen && !iqState.on) sel.value = '250000';
   sel.disabled = iqState.on;
   // ★ The owner set LOCAL ONLY and this visitor is not on the LAN: shown dimmed, never
   //   enable-able, with the reason — a visitor who saw it work on the LAN should not wonder
