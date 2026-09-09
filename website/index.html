@@ -188,14 +188,19 @@
   .srv-h b { color: var(--accent); }
   .srv-h .where { color: var(--dim); font-size: 12px; }
   .srv-h .host { margin-left: auto; color: var(--dim); font-size: 11px; letter-spacing: .06em; }
-  .rad { display: grid; grid-template-columns: 1.2fr 1.4fr auto; gap: 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid rgba(255,176,0,.10); font-size: 13px; }
-  .rad:last-child { border-bottom: 0; }
+  /* ★ FIXED COLUMNS. Each row is its own grid, so an `auto` state column and fr ranges gave every
+   *   row a different middle edge — "full" and "0 of 10 listening" set different widths and the
+   *   range text wandered (Stuart, 2026-09-09). Name and state are fixed; the range takes the rest.
+   *   The dial kind sits on its own dim line under the range, as the directory draws it. */
+  .rad { display: grid; grid-template-columns: 250px 1fr 165px; gap: 14px; align-items: center; padding: 8px 14px; border-bottom: 1px solid rgba(255,176,0,.10); font-size: 13px; }
   .rad .rng { color: var(--dim); }
+  .rad .rng small { display: block; font-size: 12px; color: rgba(255,160,0,.42); margin-top: 2px; }
+  .rad:last-child { border-bottom: 0; }
   .rad .st { text-align: right; white-space: nowrap; }
   .rad .st.free { color: var(--phosphor); } .rad .st.full { color: var(--busy); } .rad .st.unk { color: var(--dim); }
   .dab { display: inline-block; vertical-align: middle; width: 36px; height: 21px; margin-left: 8px; }
   .dab img { width: 36px; height: 21px; display: block; }
-  @media (max-width: 640px) { .rad { grid-template-columns: 1fr auto; } .rad .rng { grid-column: 1 / -1; } }
+  @media (max-width: 760px) { .rad { grid-template-columns: 1fr auto; } .rad .rng { grid-column: 1 / -1; } }
   #dirNote { color: var(--dim); font-size: 12.5px; }
 
   /* ══ SCALING PAIR ══ */
@@ -771,9 +776,9 @@ function drawList(servers) {
     const rows = (s.radios || []).map((r) => {
       const st0 = radioState(r, s);
       const st = st0.text ? `<span class="st ${st0.cls}">${esc(st0.text)}</span>` : '<span class="st unk">occupancy not reported</span>';
-      const rng = [rangeText(r), st0.kind, ...st0.extras].filter(Boolean).join(' · ');
+      const rng = esc(rangeText(r)) + `<small>${esc([st0.kind, ...st0.extras].filter(Boolean).join(' · '))}</small>`;
       const dab = r.dab === true ? '<span class="dab" title="Set up for DAB+"><img src="assets/dabplus.svg" alt="DAB+" /></span>' : '';
-      return `<div class="rad"><span><b>${esc(r.name || r.driver || 'Radio')}</b>${dab}</span><span class="rng">${esc(rng)}</span>${st}</div>`;
+      return `<div class="rad"><span><b>${esc(r.name || r.driver || 'Radio')}</b>${dab}</span><span class="rng">${rng}</span>${st}</div>`;
     }).join('');
     const url = s.address ? `https://${s.address}` : (s.url || 'https://vibeserver.vibesdr.net');
     return `<div class="srv"><div class="srv-h"><a href="${esc(url)}" rel="noopener"><b>${esc(s.name)}</b></a><span class="where">${esc(where)}</span>${s.temporary ? '<span class="lbl" style="color:var(--temp)">temporary</span>' : ''}<span class="host">${esc(host)}</span></div>${rows}</div>`;
