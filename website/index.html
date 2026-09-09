@@ -160,8 +160,10 @@
    *    page learnt this the same way, 2026-08-06). */
   h1, h2, h3, p, li, .lbl, .stat, figcaption, .oa-count, .hero-spg-cap { text-shadow: 0 0 4px #000, 0 0 2px #000; }
   body > *:not(.page-spg) { position: relative; z-index: 1; }
-  .hero-spg-cap { position: absolute; right: 20px; bottom: 10px; z-index: 1; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--dim); text-shadow: 0 0 6px #000, 0 0 3px #000; }
-  @media (max-width: 860px) { .hero-spg-cap { display: none; } }
+  /* ★ At the TOP of the hero, in phosphor green so it cannot be mistaken for a link (the links
+   *   are amber); sentence case for the same reason. Hours and window come from the data. */
+  .hero-spg-cap { display: block; margin: 0 0 22px; font-size: 12px; letter-spacing: .04em; color: var(--phosphor); text-shadow: 0 0 6px #000, 0 0 3px #000; }
+  .hero-spg-cap b { color: var(--phosphor); font-weight: 600; }
   .hero-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 40px; align-items: center; }
   @media (max-width: 860px) { .hero-grid { grid-template-columns: 1fr; } }
   .hero .num { font-size: clamp(34px, 6vw, 64px); display: block; line-height: 1; margin-bottom: 12px; }
@@ -300,7 +302,7 @@
 <!-- ══ HERO: the app ══ -->
 <div class="page-spg" id="heroSpg" aria-hidden="true"><canvas id="heroSpgCanvas"></canvas></div>
 <section class="hero">
-  <span class="hero-spg-cap" id="heroSpgCap" hidden></span>
+  <div class="wrap"><span class="hero-spg-cap" id="heroSpgCap" hidden></span></div>
   <div class="wrap hero-grid">
     <div>
       <h1>A radio in your pocket. It fits any screen you own.</h1>
@@ -804,7 +806,7 @@ async function loadSpectrogram() {
     const hours = (last - first) / 3.6e6;
     const stale = r.headers.get('x-stale') === '1';
     if (cap && hours > 0 && span > 0) {
-      cap.textContent = `${stale ? 'last recorded' : 'live'} HF · ${hz(centre - span / 2)} – ${hz(centre + span / 2)} · ${hours.toFixed(1)} h · a receiver in England`;
+      cap.innerHTML = `<b>Background:</b> ${hours.toFixed(1)} hours of ${stale ? 'the last recorded' : 'live'} signal history from an SDRplay RSP1B in Northampton, England, ${esc(mhz(centre - span / 2))} – ${esc(mhz(centre + span / 2))} MHz.`;
       cap.hidden = false;
     }
   } catch { /* no backdrop, no claim */ }
