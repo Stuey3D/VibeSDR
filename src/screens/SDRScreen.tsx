@@ -9443,7 +9443,9 @@ const styles = StyleSheet.create({
   radioPickRow: {
     borderWidth: 1, borderColor: 'rgba(255,229,102,0.35)', borderRadius: 10,
     paddingVertical: 14, paddingHorizontal: 16, marginBottom: 10,
-    backgroundColor: 'rgba(255,229,102,0.06)',
+    // ★ A dark fill: the cards sit over the band-activity spectrogram now, and amber on green was
+    //   hard to read (Stuart, 2026-09-09: "make the radio lines darker against the background").
+    backgroundColor: 'rgba(0,0,0,0.72)',
   },
   radioPickName:   { color: '#ffe566', fontSize: 16 },
   // ★ The owner's standing message and its link, above the radio list. Left-aligned and allowed

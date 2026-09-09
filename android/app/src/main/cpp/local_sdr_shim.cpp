@@ -8976,6 +8976,7 @@ struct LocalSdrShim::Impl {
                 sendText(sock, "{\"type\":\"dab\",\"error\":\"unknown channel\"}");
                 return;
             }
+            const bool dabWasOn = g_dabMode.load(std::memory_order_relaxed);   // ★ a block CHANGE, not an entry
             g_dabChannel.store(idx);
             g_dab.setChannel(idx);
             /* ★★★ THE RADIO MUST BE AT 2.048 MS/s AND ON THE BLOCK CENTRE. Everything below
@@ -9160,6 +9161,15 @@ struct LocalSdrShim::Impl {
              *  ★ The frequency goes LAST because the hw writer re-applies the IF filter after
              *    every centre-frequency write (see startHwWriter) — so the filter survives, and
              *    the frequency is the value nothing follows. The reverse has no such repair. */
+            /* ★★★ A BLOCK CHANGE WHILE ALREADY IN DAB NEVER MOVED THE RADIO. On first entry the
+             *     rate changes (2.4 → 2.048), setSampleRate() rebuilds the source, and the rebuild
+             *     tunes to rtlCenter — so the centre appeared to be applied by the store above. On
+             *     a change while on, the rate is already 2.048, nothing is rebuilt, and the dongle
+             *     stayed on the old multiplex: the log said "mode ON: channel 11D, centre 222.064"
+             *     while the decoder went on reading BBC National on 12B (Stuart, 2026-09-09:
+             *     "telling me it is changing block but its not"). rtlCenter + tuneHw is the pair
+             *     that moves the radio — see flushPendingDongle. */
+            if (dabWasOn) tuneHw(logical);
             dabTxDbInit();        // ★ names for TII codes, even on a server that set no position
             g_dabMode.store(true);
             dabPrimed_ = false;   // ★ a new multiplex fills from empty
