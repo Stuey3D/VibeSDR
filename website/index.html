@@ -619,14 +619,35 @@
 const DIR = 'https://vibeserver.vibesdr.net/api/directory';
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-function hz(v) {
-  if (v >= 1e9) return (v / 1e9).toFixed(v % 1e9 ? 3 : 0).replace(/\.?0+$/, '') + ' GHz';
-  if (v >= 1e6) return (v / 1e6).toFixed(v % 1e6 ? 3 : 0).replace(/\.?0+$/, '') + ' MHz';
-  if (v >= 1e3) return (v / 1e3).toFixed(v % 1e3 ? 1 : 0).replace(/\.?0+$/, '') + ' kHz';
-  return v + ' Hz';
+/** ★ The directory page's own formatter (hzTxt), copied by value so the two pages agree. The old
+ *  one stripped trailing zeros off WHOLE numbers too: 500 kHz printed as "5 kHz", 60 MHz as "6 MHz"
+ *  (Stuart, 2026-09-09: "the restrictions not matching the directory page"). */
+const mhz = (h) => (h / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+function hz(v) { return v >= 1e6 ? `${mhz(v)} MHz` : `${Math.round(v / 1e3)} kHz`; }
+/** What a listener may actually tune on a radio, the narrower of what is allowed and what the
+ *  hardware reaches. Same order as the directory page (directory/public/index.html, radioRange),
+ *  so the two never disagree: a LOCKED radio is its window; a RESTRICTED one is its named bands,
+ *  else its allowed ranges; otherwise the hardware coverage. */
+const pairs = (v) => (Array.isArray(v) ? v : []).filter((x) => Array.isArray(x) && Number.isFinite(+x[0]) && Number.isFinite(+x[1]) && +x[1] > +x[0]).map((x) => [+x[0], +x[1]]);
+const words = (v) => (Array.isArray(v) ? v : []).filter((c) => typeof c === 'string' && c.trim()).map((c) => c.trim());
+const reachOf = (r) => {
+  const allowed = pairs(r.allowed).length ? pairs(r.allowed) : pairs(r.ranges);
+  return allowed.length ? allowed : pairs(r.coverage);
+};
+function rangeText(r) {
+  const centre = Number(r.centreHz) || 0, span = Number(r.spanHz) || 0;
+  if (r.locked && centre > 0 && span > 0) return `${mhz(centre - span / 2)} – ${mhz(centre + span / 2)} MHz`;
+  const named = words(r.allowedNames).length ? words(r.allowedNames) : words(r.coverage);
+  const allowed = pairs(r.allowed).length ? pairs(r.allowed) : pairs(r.ranges);
+  const cov = pairs(r.coverage);
+  const txt = (a) => a.map(([x, y]) => `${hz(x)} – ${hz(y)}`).join(', ');
+  if (r.restricted && named.length) return named.join(', ');
+  if (r.restricted && allowed.length) return txt(allowed);
+  if (cov.length) return txt(cov) + (r.restricted ? ' · RESTRICTIONS IN PLACE' : ' · UNRESTRICTED');
+  if (named.length) return named.join(', ');
+  if (allowed.length) return txt(allowed);
+  return centre > 0 ? hz(centre) : '';
 }
-/** What a listener may actually tune on a radio: ranges, else allowed, else coverage. */
-const reachOf = (r) => (r.ranges || r.allowed || r.coverage || []).filter((x) => Array.isArray(x) && x[1] > x[0]);
 /** Free, busy, or not reported. Never guessed: a radio that says nothing is `null`. */
 function radioFree(r, s) {
   const l = Number(r.listeners), m = Number(r.maxListeners);
@@ -689,7 +710,10 @@ function drawList(servers) {
   const up = servers.filter((s) => s && (s.radios || []).length);
   if (!up.length) { list.innerHTML = ''; note.textContent = 'Nothing is listed at the moment. Yours could be first.'; return; }
   const names = (() => { try { return new Intl.DisplayNames(['en-GB'], { type: 'region' }); } catch { return null; } })();
-  list.innerHTML = up.map((s) => {
+  // ★ The list is a taste, not the directory. Six servers, then a count and the button below.
+  const SHOW = 6;
+  const shown = up.slice(0, SHOW), more = up.length - shown.length;
+  list.innerHTML = shown.map((s) => {
     const where = [s.country && names ? names.of(s.country) : s.country, s.grid].filter(Boolean).join(' · ');
     const host = [s.host, s.platform].filter(Boolean).join(' · ');
     const rows = (s.radios || []).map((r) => {
@@ -698,14 +722,14 @@ function drawList(servers) {
       const st = free === null ? '<span class="st unk">occupancy not reported</span>'
         : free ? `<span class="st free">free${m > 1 ? ` · ${l} of ${m} listening` : ''}</span>`
         : '<span class="st full">in use</span>';
-      const rng = reachOf(r).map(([a, b]) => `${hz(a)} – ${hz(b)}`).join(', ');
+      const rng = rangeText(r);
       const dab = r.dab === true ? '<span class="dab" title="Set up for DAB+"><img src="assets/dabplus.svg" alt="DAB+" /></span>' : '';
       return `<div class="rad"><span><b>${esc(r.name || r.driver || 'Radio')}</b>${dab}</span><span class="rng">${esc(rng)}</span>${st}</div>`;
     }).join('');
     const url = s.address ? `https://${s.address}` : (s.url || 'https://vibeserver.vibesdr.net');
     return `<div class="srv"><div class="srv-h"><a href="${esc(url)}" rel="noopener"><b>${esc(s.name)}</b></a><span class="where">${esc(where)}</span>${s.temporary ? '<span class="lbl" style="color:var(--temp)">temporary</span>' : ''}<span class="host">${esc(host)}</span></div>${rows}</div>`;
   }).join('');
-  note.textContent = 'Live from the directory. Occupancy is what each server reports; a single-listener radio is one person at a time.';
+  note.textContent = (more > 0 ? `${more} more ${more === 1 ? 'server is' : 'servers are'} listed on the directory. ` : '') + 'Live from the directory. Occupancy is what each server reports; a single-listener radio is one person at a time.';
 }
 
 async function loadDirectory() {
