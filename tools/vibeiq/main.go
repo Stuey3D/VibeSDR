@@ -58,16 +58,39 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
-	if flag.NArg() != 1 {
+	if flag.NArg() > 1 {
 		flag.Usage()
 		os.Exit(2)
 	}
-	code := strings.ToLower(strings.TrimSpace(flag.Arg(0)))
-
-	p, err := resolve(code, *host)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "vibeiq:", err)
-		os.Exit(1)
+	// ★ Double-clicked from Finder or Explorer there are no arguments at all — the first cut
+	//   printed usage and quit before anyone could read it (Stuart, 2026-09-09: "it never asked
+	//   me for the code or anything"). So ask, and keep asking until a code pairs.
+	code := ""
+	if flag.NArg() == 1 {
+		code = strings.ToLower(strings.TrimSpace(flag.Arg(0)))
+	}
+	in := bufio.NewReader(os.Stdin)
+	var p pairing
+	for {
+		if code == "" {
+			fmt.Println("VibeIQ — raw IQ from a VibeServer as rtl_tcp on this machine.")
+			fmt.Println("In the web client or the app, open AUDIO, switch RAW IQ OUT on, and read the six-character code.")
+			fmt.Print("Code: ")
+			line, err := in.ReadString('\n')
+			if err != nil {
+				return
+			}
+			code = strings.ToLower(strings.TrimSpace(line))
+			if code == "" {
+				continue
+			}
+		}
+		var err error
+		if p, err = resolve(code, *host); err == nil {
+			break
+		}
+		fmt.Println("vibeiq:", err)
+		code = ""
 	}
 	fmt.Printf("vibeiq: paired with %s%s\n", p.host, strings.TrimSuffix(p.path, "/"))
 
