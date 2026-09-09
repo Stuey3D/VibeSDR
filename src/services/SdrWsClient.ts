@@ -212,6 +212,12 @@ export interface RadioCaps {
 
 export type { DabState } from './dabTypes';
 
+/** ★ Raw IQ out, as the server reports it. `public` = through the tunnel: a pairing code for
+ *  the VibeIQ bridge instead of a LAN address. */
+export interface IqOutState {
+  on: boolean; rate?: number; host?: string; port?: number; code?: string; token?: string; public?: boolean; why?: string;
+}
+
 export interface SDRCallbacks {
   onSpectrum:   (bins: Float32Array, status: SDRStatus) => void;
   onStatus:     (status: SDRStatus) => void;
@@ -268,6 +274,8 @@ export interface SDRCallbacks {
    *  multiplex (see DabState — every field is MEASURED, nothing inferred); null means DAB has
    *  ended, and `err` carries the server's refusal when it could not start. */
   onDab?:       (s: DabState | null, err?: string) => void;
+  /** ★ Raw IQ out: the server's answer to iqOut() — where the stream is, or why not. */
+  onIqOut?:     (m: IqOutState) => void;
   onHwGains?:   (gains: number[]) => void;
   /** ★★★ WHERE THE GAIN ACTUALLY IS on the serving radio, in its own units; -1 = auto/AGC. The
    *  slider FOLLOWS this. A client cannot query a remote dongle, so before the server sent it the

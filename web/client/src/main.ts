@@ -432,6 +432,42 @@ let srvAdminProtected = false;
  *  What changes here is not what you may do — anybody may tune — but what happens WITHOUT you
  *  doing anything: nothing at all. See the restore in onConfig. */
 let srvSharedDial = false;
+/* ★ RAW IQ OUT — the owner's policy from /vibeserver.json, and this session's stream once it is on. */
+let srvRawIq: 'off' | 'local' | 'public' = 'off';
+let srvRawIqMax = 0, srvRawIqActive = 0;
+let iqState: { on: boolean; rate?: number; host?: string; port?: number; code?: string; public?: boolean } = { on: false };
+let iqWired = false;
+function refreshIqRow() {
+  const row = document.getElementById('iqRow'), note = document.getElementById('iqNote');
+  const btn = document.getElementById('iqBtn') as HTMLButtonElement | null;
+  const sel = document.getElementById('iqRate') as HTMLSelectElement | null;
+  if (!row || !note || !btn || !sel) return;
+  // ★ Offered only where it can work: the owner has it on, and this is not a shared dial (a tune
+  //   from the other app would move everybody). The server re-checks everything on the request.
+  const show = srvRawIq !== 'off' && !srvSharedDial && !isFrontDoor;
+  row.hidden = !show; note.hidden = !show;
+  if (!show) return;
+  if (!iqWired) {
+    iqWired = true;
+    btn.onclick = () => { if (!spec) return; if (iqState.on) spec.iqOut(false); else spec.iqOut(true, Number(sel.value) || 48000); };
+  }
+  btn.textContent = iqState.on ? 'ON' : 'OFF';
+  btn.classList.toggle('on', iqState.on);
+  sel.disabled = iqState.on;
+  const kHz = (iqState.rate ?? Number(sel.value) ?? 48000) / 1000;
+  if (iqState.on && !iqState.public) {
+    note.innerHTML = `IQ out is on at <b>${kHz} kHz</b>. Connect your rtl_tcp app to <b>${escapeHtml(iqState.host ?? '')}:${iqState.port}</b>. `
+      + 'Tuning from that app moves this dial; audio here keeps playing. It ends when this session does.';
+  } else if (iqState.on && iqState.public) {
+    note.innerHTML = `IQ out is on at <b>${kHz} kHz</b>. Open <b>VibeIQ</b> and enter the code <b style="letter-spacing:.15em">${escapeHtml(iqState.code ?? '')}</b>, `
+      + 'then connect your rtl_tcp app to <b>127.0.0.1:1234</b>. Tuning from that app moves this dial.';
+  } else {
+    const free = Math.max(0, srvRawIqMax - srvRawIqActive);
+    note.textContent = 'Your channel as raw IQ, in rtl_tcp form, for a decoder this client does not carry — digital voice, say. '
+      + (srvLocal ? '48 kHz covers every digital voice mode; wider rates are for the local network. ' : '48 kHz through the tunnel, via the VibeIQ bridge. ')
+      + (srvRawIqMax > 0 ? `${free} of ${srvRawIqMax} slots free.` : '');
+  }
+}
 let adminUnlocked = false;
 /** ★★ THE ADMIN PASSWORD, IN MEMORY ONLY, for the duration of this tab.
  *  The admin API signs every request with HMAC(password, fresh nonce), so the page genuinely
@@ -464,6 +500,8 @@ async function loadAudioPolicy(httpBase: string) {
     const j = await r.json();
     if (j.uncompressed === 'choice' || j.uncompressed === 'compat' || j.uncompressed === 'off')
       srvUncompressed = j.uncompressed;
+    srvRawIq = j.rawIq === 'local' || j.rawIq === 'public' ? j.rawIq : 'off';
+    srvRawIqMax = Number(j.rawIqMax) || 0; srvRawIqActive = Number(j.rawIqActive) || 0;
     srvLocal = j.local === true;
     srvAdminProtected = j.admin === true;
     /* ★★ THE SERVER DECIDES WHETHER DAB IS OFFERED. Only it knows the EFFECTIVE limits — the
@@ -753,6 +791,7 @@ async function connect(host: string, pin: string) {
     ? `[audio] requesting Opus (${await AudioPlayer.supportsWebCodecsOpus() ? 'WebCodecs' : 'WASM'} decoder)`
     : `[audio] requesting uncompressed (${srvLocal ? 'loopback' : 'listener choice'})`);
   refreshRawAudioRow();   // the policy is only known now, and the panel may already be built
+  refreshIqRow();
   refreshAdminRow();
 
   // The shim only rejects a bad PIN at WS-upgrade time (401), so surface that
@@ -1347,6 +1386,12 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
      *   client deciding something only the server can know.
      * ★ The rate rides in the TOOLTIP rather than the chip. The chip answers "what are those
      *   lines?", which is the question somebody actually has; the number is for whoever looks. */
+    onIqOut: (m) => {
+      /* ★ The server's answer: the address or the code, or the reason it said no. */
+      if (m.on) { iqState = { on: true, rate: m.rate, host: m.host, port: m.port, code: m.code, public: m.public }; }
+      else { iqState = { on: false }; if (m.why) showPill(`Raw IQ out: ${m.why}`, 9000); }
+      refreshIqRow();
+    },
     onLightning: (ratePerMin: number, agoSecs: number) => {
       const el = document.getElementById('rxLightning');
       if (!el) return;
@@ -9240,6 +9285,7 @@ function buildMenu() {
     location.reload();   // last tune and every other setting are restored on connect
   };
   refreshRawAudioRow();
+  iqState = { on: false }; refreshIqRow();   // ★ the stream dies with the session
 
   // ── Display / Waterfall / Spectrum ───────────────────────────────────────
   // The full set the app exposes, split into the sections it uses. All of it

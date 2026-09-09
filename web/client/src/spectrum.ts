@@ -372,6 +372,8 @@ export interface SpectrumCallbacks {
    *  Sent whole every time — the list changes rarely, and sending it entire means a client that
    *  joins mid-stream is never missing rows. */
   onDab?: (d: DabState) => void;
+  /** ★ Raw IQ out: the server's answer to iqOut() — where the stream is, or why not. */
+  onIqOut?: (m: { on: boolean; rate?: number; host?: string; port?: number; code?: string; token?: string; public?: boolean; why?: string }) => void;
   /** Somebody said one of the canned phrases. `id` is a phrase id, never text. */
   /** `admin` is what the sender WAS when they said it — the server records it per line, so it
    *  does not change when the lock changes hands. */
@@ -795,6 +797,12 @@ export class SpectrumClient {
        *   it could not run. Adding a message type means adding a CASE. */
       case 'lx':
         this.cb.onLightning?.(Number(msg.rate) || 0, Number(msg.ago));
+        break;
+      case 'iqout':
+        this.cb.onIqOut?.({ on: Number(msg.on) === 1, rate: Number(msg.rate) || undefined, host: typeof msg.host === 'string' ? msg.host : undefined,
+                            port: Number(msg.port) || undefined, code: typeof msg.code === 'string' ? msg.code : undefined,
+                            token: typeof msg.token === 'string' ? msg.token : undefined, public: msg.public === true,
+                            why: typeof msg.why === 'string' ? msg.why : undefined });
         break;
       case 'hwinfo':
         if (msg.tunerBw !== undefined)
@@ -1236,6 +1244,10 @@ export class SpectrumClient {
     this._send(m);
   }
   dabService(sid: number) { this._send({ type: 'dab_service', sid }); }
+  /** ★ Raw IQ out for THIS session — see the audio panel's row. */
+  iqOut(on: boolean, rate = 48000) { this._send({ type: 'iqout', on: on ? 1 : 0, rate }); }
+  /** The VibeIQ bridge's tune, relayed through the session (an rtl_tcp SET_FREQUENCY). */
+  iqTune(hz: number) { this._send({ type: 'iqtune', hz: Math.round(hz) }); }
 
   pan(frequency: number) {
     this.zoom(frequency, this.view.binBandwidth || this.cfg.binBandwidth);

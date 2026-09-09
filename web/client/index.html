@@ -3487,6 +3487,21 @@ select.btn { padding: 6px 8px; }
     roughly twenty times more, out of the operator's connection. Worth it on a fast link if
     you can hear the difference; a courtesy to leave off if you can't.
   </div>
+  <!-- ★★★ RAW IQ OUT — this session's channel as an rtl_tcp stream, for a decoder we do not carry
+       (digital voice, and anything else). A side channel of THIS session: it dies with it, and a
+       tune from the other app moves this dial. Audio keeps playing. Shown only when the owner
+       allows it; the server answers with the address (LAN) or a pairing code for VibeIQ (tunnel). -->
+  <div class="mrow" id="iqRow" hidden>
+    <label>RAW IQ OUT</label>
+    <div class="seg">
+      <select id="iqRate" class="btn" title="Sample rate of the IQ stream. 48 kHz covers every digital voice mode; wider only on the local network.">
+        <option value="48000">48k</option><option value="96000">96k</option>
+        <option value="192000">192k</option><option value="250000">250k</option>
+      </select>
+      <button class="btn" id="iqBtn">OFF</button>
+    </div>
+  </div>
+  <div class="lbl wrap" id="iqNote" hidden></div>
   <div class="mrow">
     <label for="nr">NOISE REDUCTION</label>
     <input type="range" id="nr" min="0" max="100" value="0">

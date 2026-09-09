@@ -78,6 +78,9 @@ export class VibeServerClient extends SdrWsClient {
   /** Switch service WITHIN the tuned multiplex — no retune, no re-acquire. */
   dabService(sid: number) { this.sendSpectrum({ type: 'dab_service', sid }); }
 
+  /** ★ Raw IQ out for THIS session — the audio sheet's row. The server answers with `iqout`. */
+  iqOut(on: boolean, rate = 48000) { this.sendSpectrum({ type: 'iqout', on: on ? 1 : 0, rate }); }
+
   /** ★ `dab` arrives about once a second with the whole measured state; `dab_off` ends it;
    *  `dab_error` is a refusal (the receiver has no DAB, or the owner switched it off) and is an
    *  EXPLANATION, not a protocol fault — the panel says why rather than showing a dead button. */
@@ -90,6 +93,17 @@ export class VibeServerClient extends SdrWsClient {
       case 'dab_off':
         this.dabHeld = false;
         this.callbacks.onDab?.(null);
+        return true;
+      case 'iqout':
+        this.callbacks.onIqOut?.({
+          on: Number(msg.on) === 1, rate: Number(msg.rate) || undefined,
+          host: typeof msg.host === 'string' ? dabSafeText(msg.host, 64) : undefined,
+          port: Number(msg.port) || undefined,
+          code: typeof msg.code === 'string' ? dabSafeText(msg.code, 16) : undefined,
+          token: typeof msg.token === 'string' ? dabSafeText(msg.token, 40) : undefined,
+          public: msg.public === true,
+          why: typeof msg.why === 'string' ? dabSafeText(msg.why, 160) : undefined,
+        });
         return true;
       case 'dab_error':
         this.dabHeld = false;

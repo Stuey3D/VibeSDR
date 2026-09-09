@@ -348,6 +348,10 @@ export interface ServerOccupancy {
    *  draw it. Per AGENTS.md: a control that is visible and refused reads as a broken feature, not
    *  a blocked one. Undefined on a server older than the field, which hides it — the safe way. */
   dab?: boolean;
+  /** ★ Raw IQ out: the owner's policy and the slots. Absent on an older server. */
+  rawIq?: 'off' | 'local' | 'public';
+  rawIqMax?: number;
+  rawIqActive?: number;
 }
 
 /** Ask a VibeServer whether it is free. Returns null for anything that is not a VibeServer or
@@ -372,6 +376,9 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       listeners: typeof j.listeners === 'number' ? j.listeners : undefined,
       limitSoft: j.limitMode === 'soft',
       admin:     j.admin === true,
+      rawIq:     j.rawIq === 'local' || j.rawIq === 'public' ? j.rawIq : undefined,
+      rawIqMax:  typeof j.rawIqMax === 'number' ? j.rawIqMax : undefined,
+      rawIqActive: typeof j.rawIqActive === 'number' ? j.rawIqActive : undefined,
       uncompressed: j.uncompressed === 'choice' || j.uncompressed === 'compat'
                     || j.uncompressed === 'off' ? j.uncompressed : undefined,
       version:   typeof j.version === 'string' && j.version ? j.version : undefined,

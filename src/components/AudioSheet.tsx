@@ -291,6 +291,12 @@ export interface AudioSheetProps {
    *  ★ Hans identified Opus by ear on first listen, which is why this exists at all. */
   rawAudio?: boolean;
   onRawAudio?: (on: boolean) => void;
+  /** ★★★ RAW IQ OUT — this session's channel as an rtl_tcp stream, for a decoder we do not carry.
+   *  Offered only when the owner allows it (SDRScreen passes undefined otherwise). `iq` is the
+   *  server's answer: the LAN address, or a pairing code for the VibeIQ bridge through the tunnel. */
+  iq?: { on: boolean; rate?: number; host?: string; port?: number; code?: string; public?: boolean } | null;
+  onIqOut?: (on: boolean, rate: number) => void;
+  iqLocal?: boolean;           // we are on the owner's network: wider rates are on offer
   deemph?: number;             // FM de-emphasis tau, SECONDS (0 = off, 50e-6, 75e-6)
   onDeemph?: (tau: number) => void;
   stereo?: boolean;            // WFM stereo on, vs forced mono
@@ -337,11 +343,12 @@ export default function AudioSheet({
   notchOn = false, onNotch,
   deemph = 50e-6, onDeemph, stereo = true, onStereo,
   fmNr, onFmNr, fmIms, onFmIms, fmCeq, onFmCeq, fmNb, onFmNb, fmAutoBw, onFmAutoBw,
-  rawAudio = false, onRawAudio,
+  rawAudio = false, onRawAudio, iq = null, onIqOut, iqLocal = false,
   onOwrxSquelch, onOwrxNr, owrxDspDefaults,
   serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
   dspFilters = [], dspError = null, onServerDsp, onServerDspFilter, onServerDspParam,
 }: AudioSheetProps) {
+  const [iqRate, setIqRate] = useState(48000);   // ★ raw IQ out: the rate to ask for
   const { theme: t } = useTheme();
   const insets = useSafeAreaInsets();
   const isOwrx = serverType === 'owrx';
@@ -538,6 +545,39 @@ export default function AudioSheet({
                   {rawAudio ? 'ON' : 'OFF'}
                 </Text>
               </TouchableOpacity>
+            </View>
+          )}
+
+          {/* ★★★ RAW IQ OUT — a side channel of this session. See the note on the prop. */}
+          {onIqOut && (
+            <View style={{ marginTop: 6 }}>
+              <View style={st.bwRow}>
+                <Text style={[st.bwLabel, { width: 78 }]}>RAW IQ</Text>
+                <View style={{ flex: 1, flexDirection: 'row', gap: 6 }}>
+                  {(iqLocal ? [48000, 96000, 192000, 250000] : [48000]).map(r => (
+                    <TouchableOpacity key={r} onPress={() => { if (!iq?.on) setIqRate(r); }} hitSlop={6}
+                      style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 5, borderWidth: 1,
+                               borderColor: (iq?.rate ?? iqRate) === r ? C.gold : C.muted, opacity: iq?.on && iq.rate !== r ? 0.35 : 1 }}>
+                      <Text style={{ color: (iq?.rate ?? iqRate) === r ? C.gold : C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 10 }}>{r / 1000}k</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <TouchableOpacity onPress={() => onIqOut(!iq?.on, iqRate)} hitSlop={8}
+                  style={{ paddingHorizontal: 16, paddingVertical: 4, borderRadius: 6,
+                           backgroundColor: iq?.on ? C.gold : 'transparent',
+                           borderWidth: 1, borderColor: iq?.on ? C.gold : C.muted }}>
+                  <Text style={{ color: iq?.on ? '#000' : C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
+                    {iq?.on ? 'ON' : 'OFF'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              <Text selectable style={{ color: C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, lineHeight: 15, marginTop: 4 }}>
+                {iq?.on && !iq.public
+                  ? `IQ out is on at ${(iq.rate ?? iqRate) / 1000} kHz. Connect your rtl_tcp app to ${iq.host}:${iq.port}. Tuning from that app moves this dial; audio here keeps playing.`
+                  : iq?.on && iq.public
+                  ? `IQ out is on at ${(iq.rate ?? 48000) / 1000} kHz. Open VibeIQ and enter the code ${iq.code}, then connect your rtl_tcp app to 127.0.0.1:1234.`
+                  : 'Your channel as raw IQ, in rtl_tcp form, for a decoder this app does not carry — digital voice, say. 48 kHz covers every digital voice mode.'}
+              </Text>
             </View>
           )}
 

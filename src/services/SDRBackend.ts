@@ -233,6 +233,8 @@ export interface SDRBackend {
   dab?(on: boolean, channel?: number, sid?: number): void;
   /** Switch service inside the tuned multiplex — no retune, no re-acquire. */
   dabService?(sid: number): void;
+  /** ★ Raw IQ out for this session (VibeServer). */
+  iqOut?(on: boolean, rate?: number): void;
   /** True while a multiplex is being decoded. The UI locks the zoom drum and the VFO out on this:
    *  an ensemble is one 1.536 MHz block with nothing to tune inside it, and on an RTL the IF
    *  filter follows the view, so a zoom cuts the multiplex out from under the decoder. */
