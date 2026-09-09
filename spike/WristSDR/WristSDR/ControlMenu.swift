@@ -524,7 +524,8 @@ struct ControlMenu: View {
        *  2026-09-09: "selecting DAB just widens the passband"). OWRX keeps them: there dab and
        *  adsb ARE profile modes. Same rule Buddy's menu already applies. */
       PickerList(title: "Demod",
-                 items: link.vibe != nil ? Self.modes.filter { $0 != "dab" && $0 != "adsb" } : Self.modes,
+                 // ★ A VibeServer has WFM, NFM, AM, USB, LSB and CW — no SAM, CWU or CWL (Stuart).
+                 items: link.vibe != nil ? ["usb", "lsb", "am", "nfm", "wfm", "cw"] : Self.modes,
                  current: link.mode) { m in
         if m == "dab", link.vibe != nil { link.setDabMode(true) } else { link.setMode(m) }
         showModes = false; dismiss()

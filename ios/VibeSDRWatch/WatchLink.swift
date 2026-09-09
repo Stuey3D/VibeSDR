@@ -405,6 +405,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     var on = false
     var block = ""        // "11A" — the multiplex being decoded; "" when the backend has no blocks
     var noDecoder = false // ★ DAB+ services will be silent: the server has no AAC decoder
+    var backend = ""      // ★ "vibeserver" | "ubersdr" | "owrx" … — trims the demod list
 
     /* ★★★ THE DEFAULTS ABOVE DO NOT SURVIVE SYNTHESISED DECODING, AND THAT WOULD HAVE BEEN A
      *     REGRESSION ON EVERY OLDER PHONE. Swift's synthesised `init(from:)` calls decode(_:forKey:)
@@ -427,6 +428,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       on       = try c.decodeIfPresent(Bool.self,         forKey: .on)       ?? false
       block    = try c.decodeIfPresent(String.self,       forKey: .block)    ?? ""
       noDecoder = try c.decodeIfPresent(Bool.self,        forKey: .noDecoder) ?? false
+      backend   = try c.decodeIfPresent(String.self,      forKey: .backend)   ?? ""
     }
     init() {}
   }

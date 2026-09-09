@@ -260,6 +260,8 @@ class WatchProvider {
   private lastAirAt = 0;
   private airTimer: ReturnType<typeof setTimeout> | null = null;
   private lastDab = '';
+  /** DAB is on — every state message must say so (see sendState). */
+  private dabOnNow = false;
   private sentDab = '\u0000';
   private lastStations = '';
   private sentStations = '\u0000';
@@ -679,9 +681,13 @@ class WatchProvider {
                    block?: string;
                    /** ★ DAB+ will be silent: no AAC decoder on the server. */
                    noDecoder?: boolean;
+                   /** Which kind of server this is — the wrist trims its demod list to what a
+                    *  VibeServer has (Stuart: no SAM, CWU or CWL there, only CW). */
+                   backend?: string;
                    /** Per service; `dls` only on the playing one — the wrist shows one line. */
                    list: { id: number; name: string; dls?: string }[] }) {
     if (!this.available) return;
+    this.dabOnNow = !!state.on;
     this.lastDab = JSON.stringify(state);
     this.flushDab();
   }
@@ -1132,6 +1138,14 @@ class WatchProvider {
   }
 
   sendState(freq: number, mode: string, step: number) {
+    /* ★★★ THE MODE THE WATCH ROUTES ON, SUBSTITUTED HERE FOR EVERY CALLER. Buddy retires its DAB
+     *  facts whenever a state message names a mode other than "dab" — right, because a stale
+     *  multiplex must not outvote reality. But the row path (flushState) passed the RAW
+     *  demodulator ("wfm") while DAB was on: every row batch knocked the DAB screen off, every
+     *  one-a-second DAB payload put it back — "flashes up for a second then goes again", and on
+     *  wrist-up the DAB payload is resent first, then the rows resume (Stuart, 2026-09-09).
+     *  SDRScreen already substituted on ITS two calls; this one did not. One place now. */
+    if (this.dabOnNow) mode = 'dab';
     // SDR SCREEN ONLY — this is an INVARIANT, not a nicety.
     //
     // The watch routes on what it RECEIVES: a `state` message means "the SDR screen is

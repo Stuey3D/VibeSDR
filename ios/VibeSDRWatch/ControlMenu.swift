@@ -516,7 +516,7 @@ struct ControlMenu: View {
         .environmentObject(link)
     }
     .sheet(isPresented: $showModes) {
-      PickerList(title: "Demod", items: Self.modes, current: link.mode) { m in
+      PickerList(title: "Demod", items: link.demodModes, current: link.mode) { m in
         link.setMode(m); showModes = false; dismiss()
       }
     }

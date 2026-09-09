@@ -6391,6 +6391,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       on:       dabOn,
       block:    dabBlock >= 0 ? DAB_BLOCKS[dabBlock].name : '',
       noDecoder: !!vibeDab && (dabState.sfTried ?? 0) > 0 && dabState.aacServerSide === false,
+      backend: route.params.serverType ?? 'ubersdr',
       /* ★ Names, and the PLAYING station's live text — nothing more. A watch has no room for
        *  every station's text or pictures (Stuart, 2026-09-09: "a simple station name and maybe
        *  a live scrolling text for that station is good but nothing more"). */
