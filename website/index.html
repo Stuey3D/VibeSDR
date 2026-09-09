@@ -142,19 +142,18 @@
   figure { margin: 0; }
 
   /* ══ HERO ══ */
-  .hero { padding: 48px 0 40px; position: relative; overflow: hidden; }
-  /* ★★★ THE LIVE HF RECORD BEHIND THE HERO. Sonar Green, as the receiver's own landing page draws
-   *     it, because the type in front is amber and green sits on the far side of the wheel. Two
-   *     dimmings on top: the canvas opacity, then a gradient that goes solid behind the headline
-   *     so the words never fight a carrier. Hidden until real data has been drawn — a backdrop
-   *     that is a guess is worse than none. */
-  .hero-spg { position: absolute; inset: 0; z-index: 0; pointer-events: none; opacity: 0; transition: opacity 1.2s ease; }
-  .hero-spg.on { opacity: 1; }
-  .hero-spg canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .55; image-rendering: pixelated; }
-  .hero-spg::after { content: ""; position: absolute; inset: 0;
-    background: linear-gradient(90deg, var(--bg) 0%, rgba(8,6,1,.92) 34%, rgba(8,6,1,.55) 60%, rgba(8,6,1,.35) 100%),
-                linear-gradient(180deg, var(--bg) 0%, rgba(8,6,1,0) 18%, rgba(8,6,1,0) 82%, var(--bg) 100%); }
-  .hero .wrap { position: relative; z-index: 1; }
+  .hero { padding: 48px 0 40px; position: relative; }
+  /* ★★★ THE LIVE HF RECORD BEHIND THE WHOLE PAGE (Stuart: "needs to cover the entire background of
+   *     the entire page"). A FIXED layer under everything: the page scrolls over a picture that
+   *     stays put, so every section sits on live spectrum. Sonar Green, as the receiver's own
+   *     landing page draws it, because the type is amber and green sits on the far side of the
+   *     wheel. Dimmed by the canvas opacity, then a dark wash so the words never fight a carrier.
+   *     Panels stay their own solid colour on top. Hidden until real data has been drawn. */
+  .page-spg { position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: 0; transition: opacity 1.2s ease; }
+  .page-spg.on { opacity: 1; }
+  .page-spg canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .42; image-rendering: pixelated; }
+  .page-spg::after { content: ""; position: absolute; inset: 0; background: rgba(8,6,1,.45); }
+  body > *:not(.page-spg) { position: relative; z-index: 1; }
   .hero-spg-cap { position: absolute; right: 20px; bottom: 10px; z-index: 1; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--dim); text-shadow: 0 0 6px #000, 0 0 3px #000; }
   @media (max-width: 860px) { .hero-spg-cap { display: none; } }
   .hero-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 40px; align-items: center; }
@@ -293,8 +292,8 @@
 </header>
 
 <!-- ══ HERO: the app ══ -->
+<div class="page-spg" id="heroSpg" aria-hidden="true"><canvas id="heroSpgCanvas"></canvas></div>
 <section class="hero">
-  <div class="hero-spg" id="heroSpg" aria-hidden="true"><canvas id="heroSpgCanvas"></canvas></div>
   <span class="hero-spg-cap" id="heroSpgCap" hidden></span>
   <div class="wrap hero-grid">
     <div>
