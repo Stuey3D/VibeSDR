@@ -202,6 +202,7 @@
   .dab img { width: 36px; height: 21px; display: block; }
   @media (max-width: 760px) { .rad { grid-template-columns: 1fr auto; } .rad .rng { grid-column: 1 / -1; } }
   #dirNote { color: var(--dim); font-size: 12.5px; }
+  #dabNote { margin-top: 10px; display: flex; align-items: center; gap: 0; max-width: 70ch; }
 
   /* ══ SCALING PAIR ══ */
   .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
@@ -372,6 +373,7 @@
     <p class="lede">These are the VibeServers listed on the network at this moment. Open one in a browser and you get the full client: waterfall, Advanced RDS, the decoders. A new network, run by the people listening to it.</p>
     <div id="dirList" style="margin-top:22px"></div>
     <p id="dirNote">Loading the directory…</p>
+    <p id="dabNote" class="fine"><span class="dab" style="margin-left:0;margin-right:8px"><img src="assets/dabplus.svg" alt="DAB+" /></span>Receivers showing the DAB+ mark play DAB and DAB+ in the client. DAB+ audio is decoded on the server by its own operating-system AAC decoder; plain DAB uses our own MP2 decoder, with advanced signal metrics for both.</p>
     <div class="keys" style="margin-top:16px">
       <a class="key primary" href="https://vibeserver.vibesdr.net">Open the directory</a>
       <a class="key" href="join.html">Add your receiver</a>
