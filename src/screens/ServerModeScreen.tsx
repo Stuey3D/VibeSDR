@@ -126,6 +126,7 @@ const K = {
   webServer: 'vs_webserver',
   landingMsg: 'vs_landingmsg', landingUrl: 'vs_landingurl', landingLbl: 'vs_landinglbl',
   idleKick: 'vs_idlekick', limitSoft: 'vs_limitsoft', idleSaver: 'vs_idlesaver',
+  rawIq: 'vs_rawiq', rawIqMax: 'vs_rawiqmax',
   lockedCentre: 'vs_lockedcentre', zoomSpectrum: 'vs_zoomspec', spectrogram: 'vs_spectrogram',
   idleGrace: 'vs_idlegrace', antenna: 'vs_antenna', antennaIcon: 'vs_antennaicon',
   adminPw: 'vs_adminpw', uncomp: 'vs_uncompressed', limitMin: 'vs_sessionlimit',
@@ -167,6 +168,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   /** The time limit as a GUARANTEE rather than a deadline, and the optional idle release. */
   const [limitSoft, setLimitSoft]   = useState(false);
   const [idleKick, setIdleKick]     = useState(0);
+  /** ★ RAW IQ OUT: 0 off, 1 local network, 2 local and public; and the stream cap (0 = default). */
+  const [rawIq, setRawIq]           = useState(0);
+  const [rawIqMax, setRawIqMax]     = useState(0);
   /** Machine-wide spectrum slowdown when nobody is looking — lives with the frame rate. */
   const [idleSaver, setIdleSaver]   = useState(false);
   /** ★ Locked mode only: the captured window everyone shares, and real bins at deep zoom. */
@@ -506,6 +510,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           setLandingLbl(await g(K.landingLbl));
           setLimitSoft((await g(K.limitSoft)) === '1');
           setIdleKick(Number(await g(K.idleKick)) || 0);
+          setRawIq(Number(await g(K.rawIq)) || 0);
+          setRawIqMax(Number(await g(K.rawIqMax)) || 0);
           setIdleSaver((await g(K.idleSaver)) === '1');
           setLockedCentre(Number(await g(K.lockedCentre)) || 0);
           // ★ Absent means "never chosen", which must read as the DEFAULT (on) and not as off —
@@ -898,7 +904,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const live = useRef<any>({});
   live.current = {
     limitSoft, idleKick, idleSaver, lockedCentre, zoomSpec, spectrogram, idleGrace,
-    antenna, antennaIcon, landingMsg, landingUrl, landingLbl,
+    antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax,
   };
 
   const start = useCallback(async () => {
@@ -916,6 +922,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.advanced, advanced ? '1' : '0'], [K.maxUsers, String(maxUsers)],
       [K.landingMsg, live.current.landingMsg], [K.landingUrl, live.current.landingUrl], [K.landingLbl, live.current.landingLbl],
       [K.limitSoft, live.current.limitSoft ? '1' : '0'], [K.idleKick, String(live.current.idleKick)],
+      [K.rawIq, String(live.current.rawIq)], [K.rawIqMax, String(live.current.rawIqMax)],
       [K.idleSaver, live.current.idleSaver ? '1' : '0'], [K.lockedCentre, String(live.current.lockedCentre)],
       [K.zoomSpectrum, live.current.zoomSpec ? '1' : '0'], [K.spectrogram, live.current.spectrogram ? '1' : '0'],
       [K.idleGrace, String(live.current.idleGrace)], [K.antenna, live.current.antenna], [K.antennaIcon, live.current.antennaIcon],
@@ -980,6 +987,11 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         sessionLimitSoft: live.current.limitSoft,
         idleKickMin: live.current.idleKick,
         forceIdleSaver: live.current.idleSaver,
+        // ★ Raw IQ out is refused by the server on a shared dial, so it is only offered — and
+        //   only sent — where it can work: one listener, or a locked window.
+        ...(maxUsers === 1 || radioUse === 'locked'
+          ? { rawIq: live.current.rawIq, rawIqMax: live.current.rawIqMax }
+          : { rawIq: 0, rawIqMax: 0 }),
         idleGraceSec: live.current.idleGrace,
         antenna: live.current.antenna, antennaIcon: live.current.antennaIcon,
         landingMessage: live.current.landingMsg, landingLinkUrl: live.current.landingUrl, landingLinkLabel: live.current.landingLbl,
@@ -2135,6 +2147,52 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                     minutes to draw and RTTY runs for hours.{'\n\n'}
                     Fifteen minutes is the shortest offered — long enough to hear a block of music
                     before the ad break. Off by default.
+                  </Text>
+                </View>
+                </>)}
+
+                {/* ★★★ RAW IQ OUT. A listener on the web client or the app can ask for the
+                    channel they are tuned to as an rtl_tcp stream — 48 kHz over the tunnel, up to
+                    250 kHz on the local network — for a decoder the browser cannot run (DSD, a
+                    DMR/P25 decoder, a data mode). Never on a shared dial: an rtl_tcp client's
+                    tune would move everybody, so it is only shown where the server would not
+                    refuse it (Stuart, 2026-09-09). */}
+                {(maxUsers === 1 || radioUse === 'locked') && (<>
+                <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>RAW IQ OUT</Text>
+                <View style={[styles.card, { borderColor: C.border }]}>
+                  <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                    {([[0, 'Off'], [1, 'Local only'], [2, 'Local & public']] as const).map(([n, lbl]) => (
+                      <TouchableOpacity key={n} onPress={() => setRawIq(n)}
+                        style={[styles.card, { borderColor: rawIq === n ? C.green : C.border,
+                                               backgroundColor: rawIq === n ? C.green + '18' : 'transparent',
+                                               paddingHorizontal: 14 }]}>
+                        <Text style={{ color: rawIq === n ? C.green : C.gold, fontFamily: F, fontSize: 14 }}>
+                          {lbl}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  {rawIq > 0 && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>Streams at once</Text>
+                      <TextInput
+                        value={rawIqMax > 0 ? String(rawIqMax) : ''}
+                        onChangeText={(t) => setRawIqMax(Math.max(0, Math.min(16, parseInt(t.replace(/[^0-9]/g, ''), 10) || 0)))}
+                        keyboardType="number-pad" placeholder="1" placeholderTextColor={C.textDim}
+                        style={[styles.input, { width: 64, textAlign: 'center', color: C.amber, borderColor: C.border, fontFamily: F }]} />
+                      <TouchableOpacity onPress={() => setRawIqMax(0)}
+                        style={[styles.card, { borderColor: C.border, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 0 }]}>
+                        <Text style={{ color: C.gold, fontFamily: F, fontSize: 12 }}>Default</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                  <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                    A listener can take the channel they are tuned to as an rtl_tcp stream, for a
+                    decoder that does not run in a browser. Up to 250 kHz on your local network;
+                    48 kHz through the tunnel, paired by a six-character code in the VibeIQ bridge.
+                    The port only opens while somebody has it on, and closes with their session.{'\n\n'}
+                    Default is one stream on a phone. Each 250 kHz stream is about 4 Mb/s on the
+                    LAN and a little more DSP; the tunnel stream is 0.8 Mb/s of upload.
                   </Text>
                 </View>
                 </>)}

@@ -2699,13 +2699,17 @@ static std::string vsRandomCode(int n, const char* alphabet) {
     for (int i = 0; i < n; i++) { x ^= x << 13; x ^= x >> 17; x ^= x << 5; out += alphabet[x % A]; }
     return out;
 }
-/** ★ float IQ → 8-bit unsigned interleaved, the rtl_tcp sample. x4 lift (the channel is
- *  gain-normalised by the pipeline), clip, ×127 + 127.5. NEON / SSE2 eight at a time; scalar tail.
+/** ★ float IQ → 8-bit unsigned interleaved, the rtl_tcp sample: ×gain, clip, ×127 + 127.5.
+ *  NEON / SSE2 eight at a time; scalar tail.
+ *  ★★ THE GAIN UNDOES THE SERVER'S DIGITAL GAIN, NOTHING MORE. The first cut lifted ×4 on the
+ *     belief the channel was normalised; measured on the V4L at 250k on a strong FM station
+ *     70 % of samples were on the rails. A raw IQ consumer wants the ADC, linearly — so the
+ *     only scaling is 1/g_digGain, which puts an ADC full-scale sample back at ±127.
  *  Stuart: "efficiency is king" — this runs for every sample of every IQ listener. */
-static void iqFloatToU8(const float* i, const float* q, int n, uint8_t* out) {
+static void iqFloatToU8(const float* i, const float* q, int n, uint8_t* out, float gain) {
     int k = 0;
 #if defined(__ARM_NEON) && defined(__aarch64__)
-    const float32x4_t g = vdupq_n_f32(4.0f), hi = vdupq_n_f32(1.0f), lo = vdupq_n_f32(-1.0f);
+    const float32x4_t g = vdupq_n_f32(gain), hi = vdupq_n_f32(1.0f), lo = vdupq_n_f32(-1.0f);
     const float32x4_t sc = vdupq_n_f32(127.0f), off = vdupq_n_f32(127.5f);
     for (; k + 8 <= n; k += 8) {
         float32x4_t a0 = vminq_f32(hi, vmaxq_f32(lo, vmulq_f32(vld1q_f32(i + k), g)));
@@ -2722,7 +2726,7 @@ static void iqFloatToU8(const float* i, const float* q, int n, uint8_t* out) {
         vst2_u8(out + (size_t)k * 2, iqp);                        // interleave I,Q
     }
 #elif defined(__SSE2__)
-    const __m128 g = _mm_set1_ps(4.0f), hi = _mm_set1_ps(1.0f), lo = _mm_set1_ps(-1.0f);
+    const __m128 g = _mm_set1_ps(gain), hi = _mm_set1_ps(1.0f), lo = _mm_set1_ps(-1.0f);
     const __m128 sc = _mm_set1_ps(127.0f), off = _mm_set1_ps(127.5f);
     for (; k + 8 <= n; k += 8) {
         __m128 a0 = _mm_min_ps(hi, _mm_max_ps(lo, _mm_mul_ps(_mm_loadu_ps(i + k), g)));
@@ -2738,7 +2742,7 @@ static void iqFloatToU8(const float* i, const float* q, int n, uint8_t* out) {
     }
 #endif
     for (; k < n; k++) {
-        float a = i[k] * 4.0f, b = q[k] * 4.0f;
+        float a = i[k] * gain, b = q[k] * gain;
         a = a > 1.0f ? 1.0f : (a < -1.0f ? -1.0f : a);
         b = b > 1.0f ? 1.0f : (b < -1.0f ? -1.0f : b);
         out[(size_t)k * 2]     = (uint8_t)std::lround(a * 127.0f + 127.5f);
@@ -4122,6 +4126,12 @@ struct LocalSdrShim::Impl {
         vibedsp::Channelizer::ExtractCtx ectx, vectx;
     };
     std::map<net::Socket*, std::shared_ptr<ClientDsp>> clientDsp;
+    /** ★ RAW IQ OUT in DIRECT mode (one listener, no ClientDsp): the tap hangs off the single
+     *  pipeline's iq callback instead. `iqDirectSock` is the spectrum socket that owns it — the
+     *  stream dies with that socket exactly as a ClientDsp's does with its listener. */
+    std::shared_ptr<IqOut> iqDirect;
+    std::shared_ptr<net::Socket> iqDirectSock;
+    std::mutex iqDirectMtx;
     /** The session we have already landed on the owner's chosen frequency. Guards against landing
      *  the same listener again every time one of their sockets arrives to an empty room. */
     std::string landedSession;
@@ -8039,6 +8049,7 @@ struct LocalSdrShim::Impl {
         cb.rdsText  = &Impl::rdsTextCb;
         cb.rdsEcc   = &Impl::rdsEccCb;
         cb.stereo   = &Impl::stereoCb;
+        cb.iq       = &Impl::iqCb;
         fftAccum.assign(fftSize, 0.0f); accumCount = 0;
         rx.start(sampleRate, fftSize, fftRate * FFT_AVG, (int)AUDIO_SR, cb);
     }
@@ -9312,6 +9323,7 @@ struct LocalSdrShim::Impl {
              *     that moves the radio — see flushPendingDongle. */
             if (dabWasOn) tuneHw(logical);
             dabTxDbInit();        // ★ names for TII codes, even on a server that set no position
+            iqStopDirect();       // ★ raw IQ out cannot follow the receiver into DAB
             g_dabMode.store(true);
             dabPrimed_ = false;   // ★ a new multiplex fills from empty
             startDabClock();      // ★ audio now leaves on a clock, not on IQ arrival
@@ -13158,6 +13170,9 @@ struct LocalSdrShim::Impl {
           { auto it = clientDsp.find(sock.get());
             if (it != clientDsp.end()) { goneDsp = it->second; clientDsp.erase(it); } }
           if (goneDsp && goneDsp->iq) iqStop(goneDsp.get());   // ★ the port dies with the session
+          { bool mine = false;
+            { std::lock_guard<std::mutex> dl(iqDirectMtx); mine = iqDirect && iqDirectSock == sock; }
+            if (mine) iqStopDirect(); }                          // ★ and so does the direct-mode one
           sockSession.erase(sock.get());
           sockSince.erase(sock.get());
           for (auto it = pendingAudio.begin(); it != pendingAudio.end(); ) {
@@ -13559,15 +13574,15 @@ struct LocalSdrShim::Impl {
         sock->send(hdr, sizeof hdr);
     }
     /** The 5-byte rtl_tcp command reader for one consumer: SET_FREQUENCY tunes the session. */
-    void iqReadCommands(ClientDsp* c, const std::shared_ptr<IqOut>& iq, const std::shared_ptr<net::Socket>& conn) {
+    void iqReadCommands(const std::shared_ptr<net::Socket>& spec, const std::shared_ptr<IqOut>& iq, const std::shared_ptr<net::Socket>& conn) {
         uint8_t cmd[5];
         while (serverRunning.load() && iq->run.load() && conn->isOpen()) {
             const int n = conn->recv(cmd, 5, true, 1000);
             if (n == 0) continue;               // timeout — keep waiting
             if (n < 5) break;                   // closed or broken
             const uint32_t v = (uint32_t(cmd[1]) << 24) | (uint32_t(cmd[2]) << 16) | (uint32_t(cmd[3]) << 8) | cmd[4];
-            if (cmd[0] == 0x01 && v > 0 && c->spec)
-                handleControl(c->spec, "{\"type\":\"tune\",\"frequency\":" + std::to_string(v) + "}");
+            if (cmd[0] == 0x01 && v > 0 && spec)
+                handleControl(spec, "{\"type\":\"tune\",\"frequency\":" + std::to_string(v) + "}");
             // 0x02 rate, 0x04 gain, 0x05 ppm … — the server owns the hardware; ignored.
         }
     }
@@ -13592,9 +13607,17 @@ struct LocalSdrShim::Impl {
     }
     /** Called from feedOneClient under c->mtx: resample the DDC slice and queue it as 8-bit IQ. */
     void iqTap(ClientDsp* c, const cf32* in, int n) {
-        auto iq = c->iq;
+        iqTapInto(c->iq, in, n, (int)std::lround(c->chanRate));
+    }
+    /** Direct mode: the pipeline's own channel, from RxPipeline::feed on the DSP thread. */
+    static void iqCb(void* ctx, const cf32* x, int n, double rateHz) {
+        auto* p = (Impl*)ctx;
+        std::shared_ptr<IqOut> iq;
+        { std::lock_guard<std::mutex> lk(p->iqDirectMtx); iq = p->iqDirect; }
+        if (iq) p->iqTapInto(iq, x, n, (int)std::lround(rateHz));
+    }
+    void iqTapInto(const std::shared_ptr<IqOut>& iq, const cf32* in, int n, int inRate) {
         if (!iq || !iq->conn || n <= 0) return;
-        const int inRate = (int)std::lround(c->chanRate);
         if (inRate <= 0) return;
         if (iq->inRate != inRate || !iq->ri) {
             iq->ri.reset(new vibedsp::RationalResampler(inRate, iq->rate));
@@ -13613,7 +13636,8 @@ struct LocalSdrShim::Impl {
         const int m = std::min(ni, nq);
         if (m <= 0) return;
         std::vector<uint8_t> out((size_t)m * 2);
-        iqFloatToU8(iq->oi.data(), iq->oq.data(), m, out.data());
+        const float dg = g_digGain.load(std::memory_order_relaxed);
+        iqFloatToU8(iq->oi.data(), iq->oq.data(), m, out.data(), 1.0f / std::max(dg, 1e-3f));
         std::lock_guard<std::mutex> lk(iq->qm);
         // ★ A consumer that stops reading must not grow us without bound: keep ~1 s, drop the oldest.
         const size_t kMax = (size_t)iq->rate * 2;
@@ -13624,6 +13648,16 @@ struct LocalSdrShim::Impl {
     void iqStop(ClientDsp* c) {
         std::shared_ptr<IqOut> iq;
         { std::lock_guard<std::mutex> lk(c->mtx); iq = c->iq; c->iq.reset(); }
+        iqTearDown(iq);
+    }
+    void iqStopDirect() {
+        std::shared_ptr<IqOut> iq;
+        { std::lock_guard<std::mutex> lk(iqDirectMtx); iq = iqDirect; iqDirect.reset(); iqDirectSock.reset(); }
+        if (!iq) return;
+        rx.setIqMinRate(0.0);          // ★ let the channel shrink back to what the mode wants
+        iqTearDown(iq);
+    }
+    void iqTearDown(const std::shared_ptr<IqOut>& iq) {
         if (!iq) return;
         iq->run.store(false);
         iq->qcv.notify_all();
@@ -13637,7 +13671,10 @@ struct LocalSdrShim::Impl {
     void iqStopFor(const std::shared_ptr<net::Socket>& sock) {
         std::shared_ptr<ClientDsp> c;
         { std::lock_guard<std::mutex> lk(clientMtx); auto it = clientDsp.find(sock.get()); if (it != clientDsp.end()) c = it->second; }
-        if (c) iqStop(c.get());
+        if (c) { iqStop(c.get()); return; }
+        bool mine = false;
+        { std::lock_guard<std::mutex> lk(iqDirectMtx); mine = iqDirect && iqDirectSock == sock; }
+        if (mine) iqStopDirect();
     }
     /** Turn IQ out on for the session behind `sock`. Returns the JSON reply (an `iqout` message,
      *  with `why` when refused). */
@@ -13645,7 +13682,9 @@ struct LocalSdrShim::Impl {
         auto refuse = [](const std::string& why) { return "{\"type\":\"iqout\",\"on\":0,\"why\":\"" + why + "\"}"; };
         std::shared_ptr<ClientDsp> c;
         { std::lock_guard<std::mutex> lk(clientMtx); auto it = clientDsp.find(sock.get()); if (it != clientDsp.end()) c = it->second; }
-        if (!c) return refuse("no channel for this session yet");
+        // ★ Direct mode (one listener, no per-client channel): the tap is on the pipeline itself.
+        const bool direct = !c && !perClientDsp();
+        if (!c && !direct) return refuse("no channel for this session yet");
         const int mode = g_vsRawIqMode.load(std::memory_order_relaxed);
         if (mode == 0) return refuse("the owner has raw IQ out switched off on this receiver");
         const std::string peer = sock->peerAddress();
@@ -13654,7 +13693,8 @@ struct LocalSdrShim::Impl {
         // ★ Never on a shared dial: an rtl_tcp client's tune would move everybody.
         if (g_vsMaxUsers.load() > 1 && !perClientDsp()) return refuse("not on a shared dial — every listener here shares one VFO");
         if (g_dabMode.load(std::memory_order_relaxed)) return refuse("not while DAB has the receiver");
-        if (c->iq) iqStop(c.get());
+        if (c && c->iq) iqStop(c.get());
+        if (direct) iqStopDirect();      // one stream per dial: a second request replaces the first
         if (g_vsRawIqActive.load() >= vsRawIqMax())
             return refuse("all " + std::to_string(vsRawIqMax()) + " raw IQ slots on this receiver are in use");
         static const int kRates[] = { 48000, 96000, 192000, 250000 };
@@ -13675,11 +13715,12 @@ struct LocalSdrShim::Impl {
             iq->code = vsRandomCode(6, "abcdefghjkmnpqrstuvwxyz23456789");   // no 0/O/1/l/i — typed by a person
         }
         g_vsRawIqActive.fetch_add(1);
-        { std::lock_guard<std::mutex> lk(c->mtx); c->iq = iq; }
+        if (c) { std::lock_guard<std::mutex> lk(c->mtx); c->iq = iq; }
+        else   { std::lock_guard<std::mutex> lk(iqDirectMtx); iqDirect = iq; iqDirectSock = sock; }
         iq->writeTh = std::thread([this, iq]{ iqWriteLoop(iq); });
         if (iq->lis) {
-            ClientDsp* cp = c.get();
-            iq->acceptTh = std::thread([this, iq, cp]{
+            std::shared_ptr<net::Socket> spec = sock;
+            iq->acceptTh = std::thread([this, iq, spec]{
                 while (serverRunning.load() && iq->run.load()) {
                     auto conn = iq->lis->accept(nullptr, 1000);
                     if (!conn) continue;
@@ -13687,13 +13728,14 @@ struct LocalSdrShim::Impl {
                     iqSendHeader(conn);
                     iq->conn = conn;
                     LOGI("raw IQ out: consumer connected from %s at %d Hz", conn->peerAddress().c_str(), iq->rate);
-                    iqReadCommands(cp, iq, conn);
+                    iqReadCommands(spec, iq, conn);
                     if (iq->conn == conn) iq->conn = nullptr;
                     LOGI("raw IQ out: consumer left");
                 }
             });
         }
-        clientRetune(c.get());   // ★ widen the channel to the IQ rate (chanBinsFor above)
+        if (c) clientRetune(c.get());               // ★ widen the channel to the IQ rate (chanBinsFor above)
+        else   rx.setIqMinRate((double)iq->rate);   // ★ direct: the pipeline's channel floor
         LOGI("raw IQ out: on for %s — %s at %d Hz%s", peer.c_str(),
              local ? ("port " + std::to_string(iq->port)).c_str() : "tunnel", iq->rate,
              iq->pub ? (", code " + iq->code).c_str() : "");
@@ -13707,13 +13749,13 @@ struct LocalSdrShim::Impl {
     /** /ws/iq?tok=… — the tunnel form: the same rtl_tcp bytes as binary frames; commands come back
      *  as 5-byte binary frames or `iqtune` text frames from the VibeIQ bridge. */
     void acceptIqWs(std::shared_ptr<net::Socket> sock, const std::string& wsKey, const std::string& tok) {
-        std::shared_ptr<ClientDsp> c;
+        std::shared_ptr<IqOut> iq; std::shared_ptr<net::Socket> spec;
         {
             std::lock_guard<std::mutex> lk(clientMtx);
-            for (auto& kv : clientDsp) if (kv.second->iq && !tok.empty() && kv.second->iq->token == tok) { c = kv.second; break; }
+            for (auto& kv : clientDsp) if (kv.second->iq && !tok.empty() && kv.second->iq->token == tok) { iq = kv.second->iq; spec = kv.second->spec; break; }
         }
-        if (!c) { sock->sendstr("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"); sock->close(); return; }
-        auto iq = c->iq;
+        if (!iq) { std::lock_guard<std::mutex> lk(iqDirectMtx); if (iqDirect && !tok.empty() && iqDirect->token == tok) { iq = iqDirect; spec = iqDirectSock; } }
+        if (!iq) { sock->sendstr("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"); sock->close(); return; }
         if (iq->conn && iq->conn->isOpen()) { sock->sendstr("HTTP/1.1 409 Conflict\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"); sock->close(); return; }
         std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         uint8_t digest[20]; Sha1().hash((const uint8_t*)acc.data(), acc.size(), digest);
@@ -13728,10 +13770,10 @@ struct LocalSdrShim::Impl {
             int op = recvWs(sock, payload);
             if (op < 0 || op == 0x8) break;
             if (op == 0x9) { sendWs(sock, 0xA, (const uint8_t*)payload.data(), payload.size()); continue; }
-            if (op == 0x1 && jsonStr(payload, "type") == "iqtune" && c->spec) handleControl(c->spec, payload);
-            if (op == 0x2 && payload.size() >= 5 && (uint8_t)payload[0] == 0x01 && c->spec) {
+            if (op == 0x1 && jsonStr(payload, "type") == "iqtune" && spec) handleControl(spec, payload);
+            if (op == 0x2 && payload.size() >= 5 && (uint8_t)payload[0] == 0x01 && spec) {
                 const uint32_t v = (uint32_t((uint8_t)payload[1]) << 24) | (uint32_t((uint8_t)payload[2]) << 16) | (uint32_t((uint8_t)payload[3]) << 8) | (uint8_t)payload[4];
-                if (v > 0) handleControl(c->spec, "{\"type\":\"tune\",\"frequency\":" + std::to_string(v) + "}");
+                if (v > 0) handleControl(spec, "{\"type\":\"tune\",\"frequency\":" + std::to_string(v) + "}");
             }
         }
         if (iq->conn == sock) iq->conn = nullptr;
@@ -17501,7 +17543,8 @@ std::string LocalSdrShim::adminSessionsJson() {
                + ",\"vfoHz\":" + std::to_string((long long)p->audioFreq.load())
                + ",\"mode\":\"" + vibeadmin::esc(p->mode) + "\""
                + ",\"dab\":\"" + vsDabBlockNow() + "\""  // ★ see vsDabBlockNow
-               + ",\"iq\":0"
+               + ",\"iq\":" + std::to_string([&]{ std::lock_guard<std::mutex> dl(p->iqDirectMtx);
+                                                    return (p->iqDirect && p->iqDirect->conn && p->iqDirectSock == sk) ? p->iqDirect->rate : 0; }())
                + ",\"audio\":false,\"spectrum\":true"
                + ",\"dropped\":0,\"zoomed\":false"
                + ",\"cc\":\"" + vibeadmin::esc(vsCountry(ip)) + "\""

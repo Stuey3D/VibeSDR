@@ -1743,6 +1743,10 @@ public:
         void (*rdsExt)(void* ctx, const RdsExt& x) = nullptr;
         // Optional: WFM stereo-pilot lock state for the UI stereo indicator.
         void (*stereo)(void* ctx, bool locked) = nullptr;
+        /** ★ RAW IQ OUT (direct mode): the channel after the decimation cascade, BEFORE any
+         *  demodulation — complex samples at rateHz (= chFs_). Split, not diverted: the demod
+         *  runs on the same buffer afterwards. Only fires while set, so it costs nothing off. */
+        void (*iq)(void* ctx, const cf32* x, int n, double rateHz) = nullptr;
     };
 
     // sampleRate = input IQ rate; fftSize = waterfall bins; fftRate = frames/sec;
@@ -1832,6 +1836,9 @@ public:
     // FM de-emphasis time constant (seconds): 0 = off, 50e-6 (EU/UK), 75e-6 (US).
     // Applies to WFM and NFM. Takes effect on the next tune/rebuild.
     void setDeemphasis(double tauSec) { deempTau_ = tauSec; dirty_ = true; }
+    /** ★ RAW IQ OUT: the channel rate must be at least this (Hz) so the consumer's rate can be
+     *  resampled out of it. 0 = no constraint. Rebuilds the chain (same discipline as dirty_). */
+    void setIqMinRate(double hz) { iqMinRate_ = hz; dirty_ = true; }
     /** ★ Turn on the RDS guard-band noise measurement — the second filter pair that makes the
      *  DEVIATION READOUT honest on a weak signal. Costs CPU, and buys nothing but accuracy of a
      *  number, so it is driven by whether anyone has the analyser OPEN rather than by a setting.
@@ -2203,6 +2210,7 @@ private:
     std::vector<float> ref57Buf_, ref57qBuf_, bitClkBuf_;
     int chDecim_ = 1;
     double chFs_ = 0.0;
+    std::atomic<double> iqMinRate_{0.0};     // raw IQ out floor on chFs_ (see setIqMinRate)
     // MPX spectrum for the Advanced RDS panel. Only computed while somebody is looking at
     // it — an extra FFT per block otherwise buys nothing.
     std::unique_ptr<RealFFT> mpxFft_;

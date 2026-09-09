@@ -95,6 +95,11 @@ export type VibeServerConfig = {
   spectrogram?: boolean;
   /** The spectrum slowdown when nobody is looking. CPU and uplink, not the radio. */
   forceIdleSaver?: boolean;
+  /** ★ RAW IQ OUT: 0 off, 1 local network only, 2 local and public (through the tunnel, via the
+   *  VibeIQ bridge). Never on a shared dial — the server refuses it there. */
+  rawIq?: number;
+  /** How many raw IQ streams at once. 0 = the server's default (1 on a phone). */
+  rawIqMax?: number;
   /** Seconds after the last listener before the capture parks to save power. The device stays
    *  CLAIMED so it restarts instantly.
    *  ★ NOT the Linux "release to another program": Android's permission model means nothing else
@@ -198,6 +203,8 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     zoomSpectrum: cfg.zoomSpectrum ?? false,
     spectrogram: cfg.spectrogram ?? false,
     forceIdleSaver: cfg.forceIdleSaver ?? false,
+    rawIq: cfg.rawIq ?? 0,
+    rawIqMax: cfg.rawIqMax ?? 0,
     // ★ 300 s matches the desktop default. The radio parks; it is never handed away.
     idleGraceSec: cfg.idleGraceSec ?? 300,
     antenna: cfg.antenna ?? '',

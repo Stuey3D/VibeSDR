@@ -574,6 +574,32 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           <br><b>15 minutes is the shortest it will accept</b> &mdash; enough to hear a block of
           music before the ad break. Only offered on a radio with several slots: a one-at-a-time
           receiver has nobody to reclaim it for.</div></label>
+      <!-- ★★★ RAW IQ OUT. A listener may take the channel they are tuned to as an rtl_tcp stream
+           for a decoder the browser cannot run. Never on a shared dial (the server refuses it):
+           an rtl_tcp client's tune would move everybody (Stuart, 2026-09-09). -->
+      <label style="margin-top:12px" id="rawIqRow"><span class="lbl">Raw IQ out</span>
+        <select id="rawIq">
+          <option value="0">Off</option>
+          <option value="1">Local network only</option>
+          <option value="2">Local &amp; public (through the tunnel)</option>
+        </select>
+        <div class="hint">Lets a listener take the channel they are tuned to as an
+          <b>rtl_tcp</b> stream &mdash; up to 250 kHz on your local network, 48 kHz through the
+          tunnel (paired by a six-character code in the VibeIQ bridge) &mdash; for a decoder that
+          does not run in a browser: DSD, a DMR/P25 decoder, a data mode. The port only opens
+          while somebody has it on and closes with their session. A stream that is being read
+          counts as using the radio, so the idle prompt leaves it alone.
+          <br><b>Never on a shared dial</b>: with one VFO for everybody an rtl_tcp client's tune
+          would move every listener, so the server refuses it there. One-listener radios and
+          locked windows only.</div></label>
+      <label id="rawIqMaxRow"><span class="lbl">Raw IQ streams at once</span>
+        <span style="display:flex;gap:8px;align-items:center">
+          <input type="number" id="rawIqMax" min="0" max="16" step="1" placeholder="default" style="max-width:8em">
+          <button type="button" class="ghost" id="rawIqMaxDefault">Default</button>
+        </span>
+        <div class="hint">Empty means the machine's default: one on a phone, three on a Pi or a
+          small box, four on eight cores or more. Each 250 kHz stream is about 4 Mb/s on the LAN
+          and one more channel of DSP; a tunnel stream is 0.8 Mb/s of upload.</div></label>
     </div>
       <!-- ★★★ WHERE LISTENERS MAY TUNE THIS RADIO. Single-user only: in shared mode the locked
            range IS the limit, so offering these there would be two answers to one question
@@ -2520,6 +2546,9 @@ function fill() {
   $("sessionLimit").value = r.sessionLimitMin || 0;
   $("sessionLimitMode").value = r.sessionLimitSoft ? "soft" : "hard";
   $("idleKick").value = r.idleKickMin || 0;
+  if ($("rawIq"))    $("rawIq").value = String(r.rawIq || 0);
+  if ($("rawIqMax")) $("rawIqMax").value = r.rawIqMax > 0 ? String(r.rawIqMax) : "";
+  if ($("rawIqMaxDefault")) $("rawIqMaxDefault").addEventListener("click", () => { $("rawIqMax").value = ""; });
   // ★★★ SHOWN ON EVERY RADIO, AND THE OLD REASONING WAS EXACTLY BACKWARDS. It used to hide on a
   //     one-listener receiver — "there is nobody to reclaim the slot FOR" — which is the opposite
   //     of the truth: on a ONE-LISTENER radio a forgotten tab blocks EVERYBODY, and on a ten-
@@ -2753,6 +2782,10 @@ function collectRadio() {
     // ★ Sent as typed; the SERVER clamps to the 15-minute floor, so the page cannot be the thing
     //   that decides what is too short.
     idleKickMin: parseInt($("idleKick").value || "0", 10),
+    // ★ Raw IQ out: the mode and the cap (0 = the machine's default). The server refuses it on a
+    //   shared dial whatever is saved here — see the note by the control.
+    rawIq: parseInt($("rawIq").value || "0", 10),
+    rawIqMax: parseInt($("rawIqMax").value || "0", 10),
     // ★ Never claim the spectrogram for a radio that cannot honestly draw one — the checkbox is
     //   hidden in that case, and a hidden control must not still be sending a value.
     spectrogram: !$("hwSpectro").classList.contains("hide") && $("spectrogram").checked

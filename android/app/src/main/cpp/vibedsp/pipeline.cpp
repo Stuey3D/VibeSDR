@@ -225,6 +225,9 @@ void RxPipeline::rebuildAudio() {
     // it. See the chHalf note below: widening recovers subcarrier AMPLITUDE and destroys
     // subcarrier SNR, which is the thing that actually decodes.
     if (mode_ == Mode::WFM) targetCh = std::max(bwHz_ * 1.5, 150000.0);
+    // ★ Raw IQ out needs the channel at least as wide as the consumer's rate — a 48 kHz consumer
+    //   cannot be fed from the 12 kHz channel a narrow mode would otherwise build.
+    { const double f = iqMinRate_.load(std::memory_order_relaxed); if (f > 0.0) targetCh = std::max(targetCh, f); }
     chDecim_ = std::max(1, (int)std::floor(sampleRate_ / targetCh));
     chFs_    = sampleRate_ / chDecim_;
 
@@ -678,6 +681,8 @@ void RxPipeline::feed(const cf32* iq, int n) {
         if (src != chBuf_.data()) {
             chBuf_.assign(src, src + nc);
         }
+        // ★ RAW IQ OUT tap — the channel as it stands, before the demod touches anything.
+        if (cb_.iq && nc > 0) cb_.iq(cb_.ctx, chBuf_.data(), nc, chFs_);
 
         demodBuf_.resize(nc);
         // ★★★ MEASURED ON THE IQ, BEFORE DEMODULATION — this is the ONLY place the information
