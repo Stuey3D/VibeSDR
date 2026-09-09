@@ -58,10 +58,17 @@ final class Delegate: NSObject, NSApplicationDelegate, ObservableObject {
         pipe.fileHandleForReading.readabilityHandler = { [weak self] h in
             let s = String(decoding: h.availableData, as: UTF8.self)
             // "VibeIQ window: http://127.0.0.1:PORT/"
-            if let r = s.range(of: "http://127.0.0.1:"), let end = s[r.lowerBound...].firstIndex(of: "/") ?? s[r.lowerBound...].lastIndex(where: { $0.isNumber }) {
-                let addr = String(s[r.lowerBound...end])
-                DispatchQueue.main.async { self?.url = URL(string: addr.hasSuffix("/") ? addr : addr + "/") }
-                h.readabilityHandler = nil
+            // ★ Search for the closing "/" AFTER the prefix, not from its start — the first "/"
+            //   from the start is the one in "http://", and the window loaded "http:/" — blank
+            //   (Stuart, 2026-09-09: "VibeIQ GUI is just a blank screen").
+            if let r = s.range(of: "http://127.0.0.1:") {
+                let rest = s[r.upperBound...]
+                let digits = rest.prefix(while: { $0.isNumber })
+                if !digits.isEmpty {
+                    let addr = "http://127.0.0.1:" + digits + "/"
+                    DispatchQueue.main.async { self?.url = URL(string: addr) }
+                    h.readabilityHandler = nil
+                }
             }
         }
         do { try p.run() } catch { NSLog("VibeIQ: cannot start the bridge: \(error)") }
