@@ -61,23 +61,30 @@
      ★★ IT MUST NOT LOOK BROKEN AT ZERO. If the directory does not answer, the wording without
      figures stays and the strip is a plain amber hairline. "0 radios on 0 servers" is never
      printed. */
-  #netBar {
-    position: sticky; top: 0; z-index: 60; display: block; text-decoration: none;
-    background: var(--panel); border-bottom: 1px solid var(--line);
-    color: var(--text); overflow: hidden;
+  #onAirBar {
+    position: sticky; top: 0; z-index: 60; overflow: hidden;
+    background: #140604; border-bottom: 1px solid #3a1512;
   }
-  #netBar .nb-inner { position: relative; max-width: var(--maxw); margin: 0 auto; padding: 0 20px; height: 38px;
-    display: flex; align-items: center; gap: 14px; }
-  #netBar svg { position: absolute; inset: 0; width: 100%; height: 100%; }
-  #netBar .nb-txt { position: relative; z-index: 1; width: 100%; display: flex; align-items: baseline; gap: 12px; flex-wrap: nowrap;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; letter-spacing: .06em;
+  #onAirBar svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .oa-inner { position: relative; z-index: 1; max-width: var(--maxw); margin: 0 auto; padding: 7px 20px;
+    display: flex; align-items: center; gap: 16px; flex-wrap: nowrap; min-height: 42px;
     text-shadow: 0 0 6px var(--bg), 0 0 2px var(--bg), 0 0 10px var(--bg); }
-  #netBar .nb-name { text-transform: uppercase; letter-spacing: .18em; color: var(--accent); font-weight: 600; }
-  #netBar .nb-fig { color: var(--phosphor); }
-  #netBar .nb-fig .num { font-family: var(--mono); font-weight: 700; font-size: 13px; color: var(--phosphor); }
-  #netBar .nb-cta { margin-left: auto; color: var(--accent); }
-  #netBar:hover .nb-cta { color: #ffe566; }
-  @media (max-width: 640px) { #netBar .nb-range { display: none; } #netBar .nb-txt { font-size: 11px; gap: 9px; } }
+  /* ★ The lamp: red because every studio sign is red. */
+  .oa-lamp { display: inline-flex; align-items: center; padding: 5px 12px; flex: none;
+    border: 1px solid #ff4d3d; background: rgba(255,77,61,.12); color: #ff6a58;
+    font: 700 12px/1 var(--mono); letter-spacing: .3em; text-transform: uppercase;
+    text-shadow: 0 0 12px rgba(255,77,61,.7); box-shadow: 0 0 18px rgba(255,77,61,.28), inset 0 0 14px rgba(255,77,61,.12);
+    animation: oaGlow 3.4s ease-in-out infinite; }
+  @keyframes oaGlow { 0%,100% { box-shadow: 0 0 18px rgba(255,77,61,.28), inset 0 0 14px rgba(255,77,61,.12); }
+                      50% { box-shadow: 0 0 30px rgba(255,77,61,.5), inset 0 0 20px rgba(255,77,61,.2); } }
+  @media (prefers-reduced-motion: reduce) { .oa-lamp { animation: none; } }
+  .oa-what { color: var(--text); text-decoration: none; font-size: 13px; letter-spacing: .04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .oa-what b { color: var(--phosphor); font-weight: 700; }
+  .oa-what:hover { color: #ffe566; }
+  .oa-listen { margin-left: auto; flex: none; padding: 7px 14px; background: #ff4d3d; color: #120603; text-decoration: none;
+    font: 700 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; box-shadow: 0 0 16px rgba(255,77,61,.35); }
+  .oa-listen:hover { background: #ff6a58; color: #120603; }
+  @media (max-width: 640px) { .oa-inner { gap: 10px; padding: 6px 12px; } .oa-what { font-size: 11.5px; white-space: normal; line-height: 1.3; } .oa-range { display: none; } }
   .seg.free { fill: var(--phosphor); } .seg.busy { fill: var(--busy); } .seg.temp { fill: var(--temp); }
   .seg.unknown { fill: var(--dim); } .seg.gap { fill: transparent; }
   .vfo { stroke: #ff3b30; stroke-width: 2; }
@@ -234,17 +241,18 @@
 <!-- ★★★ THE NETWORK BAR. Live from the directory: what the network can hear, drawn as the
      directory draws it (green free, red every radio in use, blue temporary, dim unreported), with
      a red VFO sitting where one of the network's radios is actually tuned right now. -->
-<a id="netBar" href="https://vibeserver.vibesdr.net" aria-label="VibeServer Network directory">
-  <div class="nb-inner">
-    <svg id="netSvg" preserveAspectRatio="none" aria-hidden="true"></svg>
-    <div class="nb-txt">
-      <span class="nb-name">VibeServer Network</span>
-      <span class="nb-fig" id="nbFig">a new network of receivers, run by the people listening to them</span>
-      <span class="nb-range" id="nbRange"></span>
-      <span class="nb-cta">add yours →</span>
-    </div>
+<!-- ★★★ THE ON-AIR SIGN, kept (Stuart, 2026-09-09) and now fed by the whole network: the lamp,
+     "N receivers on N servers in N countries", and Listen now → the directory. The network's
+     coverage is drawn underneath it as the strip. Hidden until the directory answers, and hidden
+     again if it stops: an ON AIR sign that is lit when nothing is on air must never happen. -->
+<div id="onAirBar" hidden>
+  <svg id="netSvg" preserveAspectRatio="none" aria-hidden="true"></svg>
+  <div class="oa-inner">
+    <span class="oa-lamp">On air</span>
+    <a class="oa-what" id="oaWhat" href="https://vibeserver.vibesdr.net"></a>
+    <a class="oa-listen" href="https://vibeserver.vibesdr.net">Listen now</a>
   </div>
-</a>
+</div>
 
 <header>
   <div class="wrap">
@@ -684,13 +692,22 @@ async function loadDirectory() {
     const servers = Array.isArray(d.servers) ? d.servers : [];
     const radios = servers.reduce((n, s) => n + (s.radios || []).length, 0);
     const span = drawBar(servers);
+    const bar = $('onAirBar');
     if (radios > 0 && servers.length > 0) {
-      $('nbFig').innerHTML = `<span class="num">${radios}</span> radio${radios === 1 ? '' : 's'} on <span class="num">${servers.length}</span> server${servers.length === 1 ? '' : 's'}`;
-      $('nbRange').textContent = span ? `${hz(span[0])} – ${hz(span[1])}` : '';
+      const countries = new Set(servers.map((s) => s.country).filter(Boolean)).size;
+      const n = (k, one, many) => `<b>${k}</b> ${k === 1 ? one : many}`;
+      $('oaWhat').innerHTML = `${n(radios, 'receiver', 'receivers')} on ${n(servers.length, 'server', 'servers')}`
+        + (countries ? ` in ${n(countries, 'country', 'countries')}` : '')
+        + (span ? ` <span class="lbl oa-range" style="margin-left:8px">${esc(hz(span[0]))} – ${esc(hz(span[1]))}</span>` : '');
+      bar.hidden = false;
+    } else {
+      // ★ "0 receivers" is not an invitation. The sign goes out.
+      bar.hidden = true;
     }
     drawList(servers);
   } catch (e) {
-    // ★ Quiet. The wording without figures stays; the list says so once.
+    // ★ Quiet. The sign goes out; the list says so once.
+    $('onAirBar').hidden = true;
     $('dirNote').textContent = 'The directory is not answering at the moment. Try vibeserver.vibesdr.net directly.';
   }
 }
