@@ -119,7 +119,7 @@ final class UberClient: ObservableObject {
 
   /// The remembered block, per SERVER — a listener who was on 12B yesterday wants 12B today, and
   /// re-scanning Band III from 5A to find it is a minute of nothing on a watch.
-  private var dabBlockKey: String { "jr.dabBlock." + baseURL }
+  private var dabBlockKey: String { "jr.dabBlock." + host + radioPath }   // ★ per server AND radio
 
   /// Enter or leave DAB. `block` nil = the remembered one (or 5A on a first visit).
   func setDab(_ on: Bool, block: Int? = nil) {
