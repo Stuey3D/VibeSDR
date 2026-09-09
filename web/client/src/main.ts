@@ -456,7 +456,9 @@ function registerIqCode(code?: string, token?: string) {
   const slug = h.endsWith(IQ_ZONE) ? h.slice(0, -IQ_ZONE.length) : '';
   if (!code || !token || !slug || slug.includes('.')) return;
   iqReg = { code, token, slug };
-  const send = () => post('/api/iq', { code, token, slug });
+  // ★ A radio behind a multi-radio front door lives at /r/<serial>/ — part of WHICH receiver.
+  const path = (location.pathname.match(/^\/r\/[^/]+\//) || [''])[0];
+  const send = () => post('/api/iq', { code, token, slug, path });
   send();
   iqRegTimer = window.setInterval(send, 10 * 60 * 1000);
 }

@@ -18,6 +18,11 @@ const ZONE = '.vibeserver.vibesdr.net';
 let timer: ReturnType<typeof setInterval> | null = null;
 let current: { code: string; token: string; slug: string } | null = null;
 
+/** The /r/<serial>/ prefix when the receiver is behind a multi-radio front door, else ''. */
+function pathOf(base: string): string {
+  try { return (new URL(base).pathname.match(/^\/r\/[^/]+\//) || [''])[0]; } catch { return ''; }
+}
+
 /** The slug when `base` is a directory address, else null (LAN and raw tunnel hosts have none). */
 export function slugOf(base: string): string | null {
   try {
@@ -42,7 +47,7 @@ export function registerIqCode(base: string, code?: string, token?: string): voi
   const slug = slugOf(base);
   if (!code || !token || !slug) return;
   current = { code, token, slug };
-  const send = () => post('/api/iq', { code, token, slug });
+  const send = () => post('/api/iq', { code, token, slug, path: pathOf(base) });
   send();
   timer = setInterval(send, 10 * 60 * 1000);
 }

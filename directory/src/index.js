@@ -756,12 +756,16 @@ const IQ_PER_HOUR = 30;            // registrations per source address
 const IQ_CODE_RE = /^[a-z0-9]{6}$/;
 const IQ_TOKEN_RE = /^[a-z0-9]{8,64}$/;
 const IQ_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const IQ_PATH_RE = /^\/r\/[A-Za-z0-9_-]{1,40}\/?$/;   // a radio behind a front door, or '' for the root
 
 async function iqRegister(request, env) {
   const body = await readBody(request);
   if (!body) return json({ error: 'bad json' }, 400);
   const code = String(body.code || '').toLowerCase(), token = String(body.token || ''), slug = String(body.slug || '').toLowerCase();
   if (!IQ_CODE_RE.test(code) || !IQ_TOKEN_RE.test(token) || !IQ_SLUG_RE.test(slug)) return json({ error: 'bad code, token or slug' }, 400);
+  let path = typeof body.path === 'string' ? body.path : '';
+  if (path && !IQ_PATH_RE.test(path)) return json({ error: 'bad path' }, 400);
+  if (path && !path.endsWith('/')) path += '/';
   // ★ The slug must be a listed receiver — a code pointing nowhere is refused, not stored.
   const srv = await env.DB.prepare('SELECT id FROM servers WHERE slug = ?').bind(slug).first();
   if (!srv) return json({ error: 'no such receiver' }, 404);
@@ -775,7 +779,7 @@ async function iqRegister(request, env) {
   const held = await env.DB.prepare('SELECT token FROM iq_codes WHERE code = ? AND expires_at > ?').bind(code, t).first();
   if (held && held.token !== token) return json({ error: 'code in use' }, 409);
   await env.DB.batch([
-    env.DB.prepare('INSERT OR REPLACE INTO iq_codes (code, slug, token, ip, expires_at) VALUES (?,?,?,?,?)').bind(code, slug, token, ip, t + IQ_TTL),
+    env.DB.prepare('INSERT OR REPLACE INTO iq_codes (code, slug, token, ip, expires_at, path) VALUES (?,?,?,?,?,?)').bind(code, slug, token, ip, t + IQ_TTL, path),
     env.DB.prepare('DELETE FROM iq_codes WHERE expires_at < ?').bind(t - 3600),
   ]);
   return json({ ok: true, expiresIn: IQ_TTL });
@@ -793,10 +797,10 @@ async function iqOff(request, env) {
 async function iqLookup(codeRaw, env) {
   const code = String(codeRaw || '').toLowerCase();
   if (!IQ_CODE_RE.test(code)) return json({ error: 'bad code' }, 400);
-  const row = await env.DB.prepare('SELECT slug, token, expires_at FROM iq_codes WHERE code = ?').bind(code).first();
+  const row = await env.DB.prepare('SELECT slug, token, expires_at, path FROM iq_codes WHERE code = ?').bind(code).first();
   if (!row || Number(row.expires_at) <= now()) return json({ error: 'unknown or expired code' }, 404);
   // ★ The bridge reads /vibeserver.json at this host to learn the live tunnel hostname (directUrl).
-  return json({ slug: row.slug, host: `${row.slug}.${PUBLIC_ZONE}`, token: row.token, expiresAt: Number(row.expires_at) },
+  return json({ slug: row.slug, host: `${row.slug}.${PUBLIC_ZONE}`, path: row.path || '', token: row.token, expiresAt: Number(row.expires_at) },
               200, { 'cache-control': 'no-store' });
 }
 

@@ -13771,9 +13771,15 @@ struct LocalSdrShim::Impl {
         std::shared_ptr<IqOut> iq; std::shared_ptr<net::Socket> spec;
         {
             std::lock_guard<std::mutex> lk(clientMtx);
-            for (auto& kv : clientDsp) if (kv.second->iq && !tok.empty() && kv.second->iq->token == tok) { iq = kv.second->iq; spec = kv.second->spec; break; }
+            // ★ The token, or the pairing CODE on a public session: a page that is not on a
+            //   directory address cannot register the code, so the bridge is given the receiver's
+            //   address and the code alone (see the web client's note). The code is only ever
+            //   issued for public sessions, so it is only accepted for them.
+            auto matches = [&](const std::shared_ptr<IqOut>& q) {
+                return q && !tok.empty() && (q->token == tok || (q->pub && !q->code.empty() && q->code == tok)); };
+            for (auto& kv : clientDsp) if (matches(kv.second->iq)) { iq = kv.second->iq; spec = kv.second->spec; break; }
         }
-        if (!iq) { std::lock_guard<std::mutex> lk(iqDirectMtx); if (iqDirect && !tok.empty() && iqDirect->token == tok) { iq = iqDirect; spec = iqDirectSock; } }
+        if (!iq) { std::lock_guard<std::mutex> lk(iqDirectMtx); if (iqDirect && !tok.empty() && (iqDirect->token == tok || (iqDirect->pub && iqDirect->code == tok))) { iq = iqDirect; spec = iqDirectSock; } }
         if (!iq) { sock->sendstr("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"); sock->close(); return; }
         if (iq->conn && iq->conn->isOpen()) { sock->sendstr("HTTP/1.1 409 Conflict\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"); sock->close(); return; }
         std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
