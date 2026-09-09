@@ -426,6 +426,9 @@ function uuid(): string {
 type UncompressedPolicy = 'off' | 'choice' | 'compat';
 let srvUncompressed: UncompressedPolicy = 'off';
 let srvLocal = false;
+/* ★ On the owner's private network (server-judged) — the test raw IQ 'local only' uses. Not the
+ * same as srvLocal, which is loopback and drives forced-uncompressed audio. */
+let srvLan = false;
 // ★ Does this server have an admin password at all? Only then is there anything to unlock.
 let srvAdminProtected = false;
 /** ★★ The receiver runs ONE dial that everybody hears (an unlocked radio with room for several).
@@ -481,12 +484,15 @@ function refreshIqRow() {
   // ★ Off the owner's network there is ONE rate — 48 kHz is the tunnel's ceiling — so the rate
   //   picker goes and RAW IQ OUT is a plain on/off (Stuart, 2026-09-09, on the tunnel: "it should
   //   be 48K out only here and RAW IQ being a simple toggle"). On the LAN the choice stays.
-  sel.hidden = !srvLocal;
-  if (!srvLocal) sel.value = '48000';
+  // ★★ srvLan, not srvLocal: the server's own "local only" test is the private-address one, and
+  //   reading loopback here greyed the switch for every LAN visitor (2026-09-09).
+  sel.hidden = !srvLan;
+  if (!srvLan) sel.value = '48000';
   sel.disabled = iqState.on;
-  // ★ The owner set LOCAL ONLY and this visitor is not local: shown dimmed, never enable-able,
-  //   with the reason — a visitor who saw it work on the LAN should not wonder where it went.
-  const localOnly = srvRawIq === 'local' && !srvLocal;
+  // ★ The owner set LOCAL ONLY and this visitor is not on the LAN: shown dimmed, never
+  //   enable-able, with the reason — a visitor who saw it work on the LAN should not wonder
+  //   where it went.
+  const localOnly = srvRawIq === 'local' && !srvLan;
   btn.disabled = localOnly;
   row.style.opacity = localOnly ? '0.45' : '';
   if (localOnly) { note.textContent = 'Raw IQ out is local-network only on this receiver — not available through the tunnel.'; return; }
@@ -503,7 +509,7 @@ function refreshIqRow() {
   } else {
     const free = Math.max(0, srvRawIqMax - srvRawIqActive);
     note.textContent = 'Your channel as raw IQ, in rtl_tcp form, for a decoder this client does not carry — digital voice, say. '
-      + (srvLocal ? '48 kHz covers every digital voice mode; wider rates are for the local network. ' : '48 kHz through the tunnel, via the VibeIQ bridge. ')
+      + (srvLan ? '48 kHz covers every digital voice mode; wider rates are for the local network. ' : '48 kHz through the tunnel, via the VibeIQ bridge. ')
       + (srvRawIqMax > 0 ? `${free} of ${srvRawIqMax} slots free.` : '');
   }
 }
@@ -532,6 +538,7 @@ async function loadAudioPolicy(httpBase: string) {
   // guessing our way into 187 KB/s of someone else's uplink.
   srvUncompressed = 'off';
   srvLocal = false;
+  srvLan = false;
   srvSharedDial = false;
   try {
     const r = await fetch(`${httpBase}/vibeserver.json`, { cache: 'no-store' });
@@ -542,6 +549,7 @@ async function loadAudioPolicy(httpBase: string) {
     srvRawIq = j.rawIq === 'local' || j.rawIq === 'public' ? j.rawIq : 'off';
     srvRawIqMax = Number(j.rawIqMax) || 0; srvRawIqActive = Number(j.rawIqActive) || 0;
     srvLocal = j.local === true;
+    srvLan = j.lan === true;
     srvAdminProtected = j.admin === true;
     /* ★★ THE SERVER DECIDES WHETHER DAB IS OFFERED. Only it knows the EFFECTIVE limits — the
      *  tunable set after allow/block lists and the rate the receiver will actually run at — so a

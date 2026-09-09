@@ -11572,6 +11572,14 @@ struct LocalSdrShim::Impl {
                              + (vsSharedDial() ? "off"
                                 : um == 1 ? "choice" : um == 2 ? "compat" : "off")
                              + "\",\"local\":" + (loop ? "true" : "false")
+                             // ★★★ `lan` is NOT `local`. `local` is the host itself (loopback) and
+                             //     drives the forced-uncompressed audio; `lan` is a private
+                             //     address, which is the test iqStartFor() applies to "local
+                             //     only" raw IQ. The client read `local` for the IQ row and greyed
+                             //     the switch for EVERY LAN visitor on a local-only receiver while
+                             //     the server would have said yes (a Pi owner's first try at
+                             //     5.2.0, 2026-09-09). One rule, two readers — now one field.
+                             + ",\"lan\":" + (isPrivateIp(sock->peerAddress()) ? "true" : "false")
                              + ",\"admin\":" + (adminSet ? "true" : "false") + verField + hostField
                              // ★ The owner's notice, so a client can say WHY the receiver is odd
                              //   before anybody concludes the radio is rubbish.
