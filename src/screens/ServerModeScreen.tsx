@@ -15,7 +15,7 @@ const BLOCKABLE: { id: string; label: string }[] = [
   { id: 'dab', label: 'DAB' }, { id: 'rds', label: 'Adv RDS' },
   { id: 'rtty', label: 'RTTY' }, { id: 'navtex', label: 'NAVTEX' },
   { id: 'wefax', label: 'WEFAX' }, { id: 'sstv', label: 'SSTV' },
-  { id: 'ft8', label: 'FT8 / FT4' },
+  { id: 'ft8', label: 'FT8 / FT4' }, { id: 'time', label: 'Time signals' },
 ];
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator,
@@ -987,11 +987,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         sessionLimitSoft: live.current.limitSoft,
         idleKickMin: live.current.idleKick,
         forceIdleSaver: live.current.idleSaver,
-        // ★ Raw IQ out is refused by the server on a shared dial, so it is only offered — and
-        //   only sent — where it can work: one listener, or a locked window.
-        ...(maxUsers === 1 || radioUse === 'locked'
-          ? { rawIq: live.current.rawIq, rawIqMax: live.current.rawIqMax }
-          : { rawIq: 0, rawIqMax: 0 }),
+        // ★ Raw IQ out. Default OFF, like uncompressed audio. Sent as set; the SERVER refuses it
+        //   on a shared dial, so the card stays visible everywhere (Stuart, 2026-09-09: "the card
+        //   should be in the GUI on the app screen on the phone").
+        rawIq: (maxUsers > 1 && radioUse !== 'locked') ? 0 : live.current.rawIq, rawIqMax: live.current.rawIqMax,
         idleGraceSec: live.current.idleGrace,
         antenna: live.current.antenna, antennaIcon: live.current.antennaIcon,
         landingMessage: live.current.landingMsg, landingLinkUrl: live.current.landingUrl, landingLinkLabel: live.current.landingLbl,
@@ -2157,22 +2156,26 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                     DMR/P25 decoder, a data mode). Never on a shared dial: an rtl_tcp client's
                     tune would move everybody, so it is only shown where the server would not
                     refuse it (Stuart, 2026-09-09). */}
-                {(maxUsers === 1 || radioUse === 'locked') && (<>
                 <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>RAW IQ OUT</Text>
                 <View style={[styles.card, { borderColor: C.border }]}>
                   <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-                    {([[0, 'Off'], [1, 'Local only'], [2, 'Local & public']] as const).map(([n, lbl]) => (
-                      <TouchableOpacity key={n} onPress={() => setRawIq(n)}
-                        style={[styles.card, { borderColor: rawIq === n ? C.green : C.border,
-                                               backgroundColor: rawIq === n ? C.green + '18' : 'transparent',
-                                               paddingHorizontal: 14 }]}>
-                        <Text style={{ color: rawIq === n ? C.green : C.gold, fontFamily: F, fontSize: 14 }}>
+                    {/* ★ On a shared dial the server refuses it, so the choice is held at Off and
+                        the buttons are inert — shown, so the owner sees why, never enable-able. */}
+                    {([[0, 'Off'], [1, 'Local only'], [2, 'Local & public']] as const).map(([n, lbl]) => {
+                      const shared = maxUsers > 1 && radioUse !== 'locked';
+                      const sel = (shared ? 0 : rawIq) === n;
+                      return (
+                      <TouchableOpacity key={n} disabled={shared} onPress={() => setRawIq(n)}
+                        style={[styles.card, { borderColor: sel ? C.green : C.border,
+                                               backgroundColor: sel ? C.green + '18' : 'transparent',
+                                               paddingHorizontal: 14, opacity: shared && !sel ? 0.4 : 1 }]}>
+                        <Text style={{ color: sel ? C.green : C.gold, fontFamily: F, fontSize: 14 }}>
                           {lbl}
                         </Text>
-                      </TouchableOpacity>
-                    ))}
+                      </TouchableOpacity>);
+                    })}
                   </View>
-                  {rawIq > 0 && (
+                  {rawIq > 0 && !(maxUsers > 1 && radioUse !== 'locked') && (
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                       <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>Streams at once</Text>
                       <TextInput
@@ -2193,9 +2196,11 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                     The port only opens while somebody has it on, and closes with their session.{'\n\n'}
                     Default is one stream on a phone. Each 250 kHz stream is about 4 Mb/s on the
                     LAN and a little more DSP; the tunnel stream is 0.8 Mb/s of upload.
+                    {maxUsers > 1 && radioUse !== 'locked'
+                      ? '\n\nNOT AVAILABLE IN SHARED VFO MODE: an rtl_tcp client\'s tune would move every listener. Set one listener, or a locked centre, to offer it.'
+                      : ''}
                   </Text>
                 </View>
-                </>)}
                 {/* ★★★ HOW MANY — ON EITHER KIND OF RECEIVER, and on an unlocked one this is the
                     control that turns it into an FM-DX receiver. It used to live inside the
                     locked-range block, so an unlocked radio was stuck at one listener and the

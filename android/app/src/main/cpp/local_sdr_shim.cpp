@@ -13266,6 +13266,19 @@ struct LocalSdrShim::Impl {
 
     void startDecoder(const std::string& msg, const std::string& bySession = "") {
         std::string ext = jsonStr(msg, "extension_name");
+        /* ★★★ THE SERVER IS THE ENFORCEMENT FOR DECODERS TOO. The mode path refused a blocked mode
+         *  (see "THE SERVER IS THE ENFORCEMENT, NOT THE MENU"); the decoder path never did, so an
+         *  old client or a hand-rolled tool could start any decoder the owner had switched off.
+         *  The wire names differ from the setup page's: fsk = RTTY, the five station names = TIME. */
+        {
+            std::string key = ext;
+            if (ext == "fsk") key = "rtty";
+            else if (ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb") key = "time";
+            if (!key.empty() && vsModeBlocked(key)) {
+                LOGI("decoder %s refused — the operator has switched it off on this receiver", ext.c_str());
+                return;
+            }
+        }
         { std::lock_guard<std::mutex> lk(decoderMtx); currentDecoder = ext; }
         // ★★★ AND WHO STARTED IT. currentDecoder is the RADIO's — one decoder runs at a time — but
         //     the admin table has to say WHOSE it is, and this path recorded nothing at all. So

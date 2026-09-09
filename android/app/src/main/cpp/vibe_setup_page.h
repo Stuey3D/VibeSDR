@@ -112,6 +112,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
      than patched per selector — which is the pattern that guarantees a fourth. */
   [hidden]{display:none !important}
   .hide{display:none}
+  select:disabled,input:disabled{opacity:.45;cursor:not-allowed}
   .modalWrap{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.72);
              display:flex;align-items:center;justify-content:center;padding:20px}
   .modalBox{background:var(--panel);border:1px solid var(--line);border-radius:12px;
@@ -591,7 +592,9 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           counts as using the radio, so the idle prompt leaves it alone.
           <br><b>Never on a shared dial</b>: with one VFO for everybody an rtl_tcp client's tune
           would move every listener, so the server refuses it there. One-listener radios and
-          locked windows only.</div></label>
+          locked windows only.
+          <br><b id="rawIqShared" class="hide">Not available in shared VFO mode. Set Listeners
+          to 1, or lock the centre, to offer it.</b></div></label>
       <label id="rawIqMaxRow"><span class="lbl">Raw IQ streams at once</span>
         <span style="display:flex;gap:8px;align-items:center">
           <input type="number" id="rawIqMax" min="0" max="16" step="1" placeholder="default" style="max-width:8em">
@@ -1176,7 +1179,25 @@ function syncUncompressed() {
     : "Raw audio is about twenty times the bandwidth of Opus, out of your upload.";
 }
 
+/** ★ RAW IQ OUT IS NOT ENABLE-ABLE ON A SHARED DIAL. The server refuses it there, and a control
+ *  whose every use is refused must not be offered (AGENTS.md). Stuart, 2026-09-09, seeing the
+ *  select live on the Airspy: "this is a shared VFO radio with the ability to enable it". The
+ *  row stays — the owner should see WHY it is off — but the choice is forced to Off and disabled
+ *  until the radio is one listener or a locked window. */
+function rawIqAvail() {
+  const sel = $("rawIq"); if (!sel) return;
+  const n = parseInt($("users").value || "1", 10);
+  const shared = radio().mode !== "locked" && n > 1;
+  if (shared) sel.value = "0";
+  sel.disabled = shared;
+  const mx = $("rawIqMax"), mxRow = $("rawIqMaxRow");
+  if (mx) mx.disabled = shared;
+  if (mxRow) mxRow.classList.toggle("hide", shared || sel.value === "0");
+  const why = $("rawIqShared");
+  if (why) why.classList.toggle("hide", !shared);
+}
 function usersNote() {
+  rawIqAvail();
   const el = $("usersNote"); if (!el) return;
   const n = parseInt($("users").value || "1", 10);
   const locked = radio().mode === "locked";
@@ -1327,7 +1348,7 @@ const BLOCKABLE = [
   { id: "dab",    label: "DAB"      }, { id: "rds",  label: "Adv RDS" },
   { id: "rtty",   label: "RTTY"     }, { id: "navtex", label: "NAVTEX" },
   { id: "wefax",  label: "WEFAX"    }, { id: "sstv", label: "SSTV"   },
-  { id: "ft8",    label: "FT8 / FT4" },
+  { id: "ft8",    label: "FT8 / FT4" }, { id: "time", label: "Time signals" },
 ];
 
 /** The blocked list as a Set of ids, from this radio's CSV. */
@@ -2549,6 +2570,8 @@ function fill() {
   if ($("rawIq"))    $("rawIq").value = String(r.rawIq || 0);
   if ($("rawIqMax")) $("rawIqMax").value = r.rawIqMax > 0 ? String(r.rawIqMax) : "";
   if ($("rawIqMaxDefault")) $("rawIqMaxDefault").addEventListener("click", () => { $("rawIqMax").value = ""; });
+  if ($("rawIq")) $("rawIq").addEventListener("change", rawIqAvail);
+  rawIqAvail();
   // ★★★ SHOWN ON EVERY RADIO, AND THE OLD REASONING WAS EXACTLY BACKWARDS. It used to hide on a
   //     one-listener receiver — "there is nobody to reclaim the slot FOR" — which is the opposite
   //     of the truth: on a ONE-LISTENER radio a forgotten tab blocks EVERYBODY, and on a ten-
