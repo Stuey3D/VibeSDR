@@ -375,7 +375,7 @@
     <p class="lede">These are the VibeServers listed on the network at this moment. Open one in a browser and you get the full client: waterfall, Advanced RDS, the decoders. A new network, run by the people listening to it.</p>
     <div id="dirList" style="margin-top:22px"></div>
     <p id="dirNote">Loading the directory…</p>
-    <p id="dabNote" class="fine"><span class="dab"><img src="assets/dabplus.svg" alt="DAB+" /></span><span>Receivers showing the DAB+ mark play DAB and DAB+ in the client. DAB+ audio is decoded on the server by its own operating-system AAC decoder; plain DAB uses our own MP2 decoder, with advanced signal metrics for both.</span></p>
+    <p id="dabNote" class="fine"><span class="dab"><img src="assets/dabplus.svg" alt="DAB+" /></span><span>Receivers with the DAB+ mark play DAB and DAB+ in the client, decoded on the server. <a href="#dab">How it works.</a></span></p>
     <div class="keys" style="margin-top:16px">
       <a class="key primary" href="https://vibeserver.vibesdr.net">Open the directory</a>
       <a class="key" href="join.html">Add your receiver</a>
@@ -516,11 +516,11 @@
         <p class="fine">Calibrated against a PIRA broadcast analyser by <a href="https://fmdx.org">Hans van Eijsden</a>, who measured our readings against professional equipment station by station until they agreed. Thank you, Hans.</p>
 
         <div class="panel" style="margin-top:24px">
-          <div class="panel-h"><span class="lbl">New</span><span class="dab"><img src="assets/dabplus.svg" alt="DAB+" /></span></div>
+          <div class="panel-h" id="dab"><span class="lbl">New</span><span class="dab"><img src="assets/dabplus.svg" alt="DAB+" /></span></div>
           <div class="panel-b">
             <h3>DAB and DAB+, decoded on the server.</h3>
             <p style="margin-top:8px">Tune a VibeServer to a Band III ensemble and every service on it appears, with its logo and its live text, all at once. Pick one and it plays, on the phone, in the browser, or on the watch. The receiver does the decoding, so a watch gets DAB+ with nothing added to the watch.</p>
-            <p class="fine">Shown beside a receiver in the directory only when its owner has set it up for DAB+.</p>
+            <p class="fine">DAB+ audio is decoded on the server by its own operating-system AAC decoder; plain DAB by our own MP2 decoder, with advanced signal metrics for both. The mark appears beside a receiver in the directory only when its owner has set it up for DAB+.</p>
           </div>
         </div>
       </div>
