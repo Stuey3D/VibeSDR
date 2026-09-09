@@ -57,6 +57,12 @@
   .key.join { background: var(--phosphor); color: #041a0a; border-color: var(--phosphor); }
   .key.join:hover { background: #3fd25f; color: #041a0a; }
   .fine { font-size: 12.5px; color: var(--dim); line-height: 1.55; }
+  .modes { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); margin-top: 18px; }
+  .modes > div { padding: 16px 14px; border-right: 1px solid var(--line); font-size: 14px; }
+  .modes > div:last-child { border-right: 0; }
+  .modes .lbl { display: block; margin-bottom: 8px; }
+  .modes b { display: block; margin-bottom: 6px; }
+  @media (max-width: 700px) { .modes { grid-template-columns: 1fr; } .modes > div { border-right: 0; border-bottom: 1px solid var(--line); } .modes > div:last-child { border-bottom: 0; } }
   .tabs { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); margin: 22px 0 28px; }
   .tabs a { padding: 12px 14px; text-decoration: none; color: var(--accent); border-right: 1px solid var(--line); font-size: 13px; letter-spacing: .06em; text-transform: uppercase; }
   .tabs a:last-child { border-right: 0; }
@@ -143,8 +149,16 @@ sudo apt install vibeserver</pre>
 
 <section>
   <div class="wrap">
-    <h2>What listeners get, and what you keep</h2>
-    <p style="margin-top:12px">Listeners get the full web client in a browser, or the receiver in VibeSDR, VibeSDR Jr and Buddy. You choose the shape: one listener at a time with the radio unlocked, a shared tuner with a live waterfall, or a locked window with independent tuning for several people. You can take a radio back from any device with the admin password, and the server drops the listing on its own the moment you switch it off.</p>
+    <h2>Your radio, your rules.</h2>
+    <p class="lede" style="margin-top:12px">VibeServer can serve a radio in three shapes, so you decide what listeners get.</p>
+    <div class="modes">
+      <div><span class="lbl on">Single user</span><b>One listener at a time.</b> The radio is theirs while they have it: any frequency, any mode, any decoder. Like a SpyServer.</div>
+      <div><span class="lbl on">Shared VFO</span><b>One tuner, one decoder, many listeners.</b> Everyone hears the same station and sees the same live waterfall. Like an FM-DX server, with a waterfall.</div>
+      <div><span class="lbl on">Locked range</span><b>A fixed window, independent tuning.</b> Several people tune as they please inside a range you set. Like an OpenWebRX profile.</div>
+    </div>
+    <p style="margin-top:18px">On top of the shape you choose, you can allow or block frequencies and bands, allow or block demodulators and decoders, cap the gain, or lock it entirely.</p>
+    <p><b>Club, friends and family.</b> Want to list the receiver but not open it to everyone? Set a PIN and only people you give it to can connect. The settings sit behind the admin password either way, and you can take a radio back from any device.</p>
+    <p><b>It shares its toys.</b> On Linux, VibeServer can release the radio when nobody is listening so another program can use it. Handy if a decoder wants the dongle between sessions.</p>
     <p class="fine">Listeners' addresses are visible to you, as on every SDR receiver on the internet. That is how session limits and block lists work. Yours is never published.</p>
     <div class="keys" style="margin-top:18px">
       <a class="key primary" href="https://vibeserver.vibesdr.net">See who's on the network</a>
