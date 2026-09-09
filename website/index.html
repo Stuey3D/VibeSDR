@@ -806,7 +806,13 @@ async function loadSpectrogram() {
     const hours = (last - first) / 3.6e6;
     const stale = r.headers.get('x-stale') === '1';
     if (cap && hours > 0 && span > 0) {
-      cap.innerHTML = `<b>Background:</b> ${hours.toFixed(1)} hours of ${stale ? 'the last recorded' : 'live'} signal history from an SDRplay RSP1B in Northampton, England, ${esc(mhz(centre - span / 2))} – ${esc(mhz(centre + span / 2))} MHz.`;
+      // ★ HONEST ABOUT AGE. `last` is the newest row the receiver recorded, not the time the page was
+      //   fetched, so the stamp is when the DATA ends. Hours are first-to-last, so a power cut that
+      //   shortens the record shortens the number. Older than a day gets its date as well.
+      const d = new Date(last), ageH = (Date.now() - last) / 3.6e6;
+      const hhmm = `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+      const when = ageH < 24 ? `${hhmm} UTC` : `${d.getUTCDate()} ${d.toLocaleString('en-GB', { month: 'short', timeZone: 'UTC' })} ${hhmm} UTC`;
+      cap.innerHTML = `<b>Background:</b> ${hours.toFixed(1)} hours of signal history from an SDRplay RSP1B in Northampton, England, ${esc(mhz(centre - span / 2))} – ${esc(mhz(centre + span / 2))} MHz. Last updated ${when}${stale ? ', the receiver is not answering' : ''}.`;
       cap.hidden = false;
     }
   } catch { /* no backdrop, no claim */ }
