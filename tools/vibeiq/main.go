@@ -39,6 +39,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -188,6 +189,7 @@ func serve(app net.Conn, p pairing) {
 	}()
 	backoff := time.Second
 	sentHeader := false
+	appRate := 250000 // rtl_tcp apps always send SET_SAMPLE_RATE; this is only the fallback
 	for {
 		select {
 		case <-gone:
@@ -197,7 +199,7 @@ func serve(app net.Conn, p pairing) {
 		u, err := wsURL(p)
 		if err != nil {
 			fmt.Println("vibeiq: receiver not reachable:", err)
-		} else if err = relay(u, app, cmds, gone, &sentHeader); err != nil {
+		} else if err = relay(u, app, cmds, gone, &sentHeader, &appRate); err != nil {
 			fmt.Println("vibeiq: stream ended:", err)
 		} else {
 			return
@@ -213,8 +215,12 @@ func serve(app net.Conn, p pairing) {
 	}
 }
 
+// streamRate is what the tunnel carries — the public path is always 48 kHz (the server forces
+// it), and the app's SET_SAMPLE_RATE says what it expects; the bridge converts between the two.
+const streamRate = 48000
+
 // relay runs one WebSocket session. Returns nil when the app left, an error when the socket did.
-func relay(u string, app net.Conn, cmds <-chan [5]byte, gone <-chan struct{}, sentHeader *bool) error {
+func relay(u string, app net.Conn, cmds <-chan [5]byte, gone <-chan struct{}, sentHeader *bool, appRate *int) error {
 	ws, err := dialWS(u)
 	if err != nil {
 		return err
@@ -222,6 +228,8 @@ func relay(u string, app net.Conn, cmds <-chan [5]byte, gone <-chan struct{}, se
 	defer ws.Close()
 	fmt.Println("vibeiq: streaming")
 	errc := make(chan error, 1)
+	var rs *iqResampler
+	var rsMu sync.Mutex
 	go func() {
 		for {
 			op, payload, err := ws.read()
@@ -238,6 +246,17 @@ func relay(u string, app net.Conn, cmds <-chan [5]byte, gone <-chan struct{}, se
 						continue
 					}
 					*sentHeader = true
+				} else {
+					rsMu.Lock()
+					want := *appRate
+					if want > 0 && want != streamRate {
+						if rs == nil || rs.out != want {
+							rs = newIqResampler(streamRate, want)
+							fmt.Printf("vibeiq: converting %d Hz → %d Hz for the app\n", streamRate, want)
+						}
+						payload = rs.convert(payload)
+					}
+					rsMu.Unlock()
 				}
 				if _, err := app.Write(payload); err != nil {
 					errc <- errAppGone
@@ -268,6 +287,12 @@ func relay(u string, app net.Conn, cmds <-chan [5]byte, gone <-chan struct{}, se
 			}
 			if c[0] == 0x01 {
 				fmt.Printf("vibeiq: tune %.6f MHz\n", float64(binary.BigEndian.Uint32(c[1:]))/1e6)
+			}
+			if c[0] == 0x02 {
+				rsMu.Lock()
+				*appRate = int(binary.BigEndian.Uint32(c[1:]))
+				rsMu.Unlock()
+				fmt.Printf("vibeiq: app expects %d Hz\n", *appRate)
 			}
 		}
 	}
