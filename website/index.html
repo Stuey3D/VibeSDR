@@ -674,36 +674,39 @@ function rangeText(r) {
   if (allowed.length) return txt(allowed);
   return centre > 0 ? hz(centre) : '';
 }
-/** Free, busy, or not reported. Never guessed: a radio that says nothing is `null`. */
-function radioFree(r, s) {
-  const l = Number(r.listeners), m = Number(r.maxListeners);
-  if (Number.isFinite(l) && Number.isFinite(m) && m > 0) return l < m;
-  if (s && (s.radios || []).length === 1 && Number.isFinite(Number(s.maxListeners)) && s.maxListeners > 0) return Number(s.listeners || 0) < s.maxListeners;
-  return null;
+/** ★★★ THE DIRECTORY'S OWN WORDS (directory/public/index.html, radioLine). The state column and the
+ *  "kind" of dial are decided exactly as there, so the two pages never disagree about a radio
+ *  (Stuart, 2026-09-09: "the RSP1B doesn't show the fact it's multiple users with individual
+ *  VFOs"). Occupancy is said or it is not shown — never a zero filled in for a missing count. */
+function radioState(r, s) {
+  const mmss = (sec) => `${Math.floor(sec / 60)}:${String(Math.max(0, Math.floor(sec % 60))).padStart(2, '0')}`;
+  const max = Number(r.maxListeners) || (s && Number(s.maxListeners)) || 0;
+  const kind = max <= 1 ? 'one listener at a time'
+             : r.locked ? 'individual VFOs · locked RF centre'
+                        : 'shared VFO · unlocked RF centre';
+  const solo = !!(s && Array.isArray(s.radios) && s.radios.length === 1);
+  const said = Number.isFinite(Number(r.listeners)) ? Number(r.listeners)
+             : solo && Number.isFinite(Number(s.listeners)) ? Number(s.listeners) : null;
+  const freeIn = Number.isFinite(Number(r.freeInSec)) ? Number(r.freeInSec) : solo ? Number(s.freeInSec) : -1;
+  const claimable = r.claimable === true || (solo && s && s.claimable === true);
+  const isFull = said !== null && max > 0 && said >= max && !claimable;
+  const down = !!(s && s.unreachable);
+  const text = down ? 'not responding'
+             : said === null ? ''
+             : isFull ? (freeIn > 0 ? `full · free in ${mmss(freeIn)}` : 'full')
+             : claimable && said >= max ? 'free · take over'
+             : max <= 1 ? 'free'
+             : `${said} of ${max} listening`;
+  const extras = [];
+  if (r.restricted && !r.locked && !(Array.isArray(r.allowedNames) && r.allowedNames.length)) extras.push('restricted range');
+  if (s && Number(s.limitMin) > 0) extras.push(`${s.limitMin} minute limit`);
+  return { kind, text, cls: down ? 'unk' : isFull ? 'full' : said === null ? 'unk' : 'free', extras };
 }
-/** The directory's own segment rule, reduced: free beats temporary-free beats unknown beats busy. */
-function segments(items) {
-  const edges = [...new Set(items.flatMap((i) => [i.lo, i.hi]))].sort((a, b) => a - b);
-  const out = [];
-  for (let k = 0; k < edges.length - 1; k++) {
-    const lo = edges[k], hi = edges[k + 1];
-    const on = items.filter((i) => i.lo <= lo && i.hi >= hi);
-    let state = 'gap';
-    if (on.length) {
-      state = on.some((i) => i.free === true && !i.temporary) ? 'free'
-            : on.some((i) => i.free === true) ? 'temp'
-            : on.some((i) => i.free === null) ? 'unknown' : 'busy';
-    }
-    const prev = out[out.length - 1];
-    if (prev && prev.state === state && prev.hi === lo) prev.hi = hi; else out.push({ lo, hi, state });
-  }
-  return out;
-}
-
 function drawBar(servers) {
   const items = [], tuned = [];
   for (const s of servers) for (const r of (s.radios || [])) {
-    const free = radioFree(r, s);
+    // ★ Same decision as the row: full is red, free is green, unknown is null (drawn dim).
+    const c = radioState(r, s).cls; const free = c === 'unk' ? null : c === 'free';
     for (const [lo, hi] of reachOf(r)) items.push({ lo, hi, free, temporary: !!s.temporary });
     if (r.centreHz > 0) tuned.push(r.centreHz);
   }
@@ -743,12 +746,9 @@ function drawList(servers) {
     const where = [s.country && names ? names.of(s.country) : s.country, s.grid].filter(Boolean).join(' · ');
     const host = [s.host, s.platform].filter(Boolean).join(' · ');
     const rows = (s.radios || []).map((r) => {
-      const free = radioFree(r, s);
-      const l = Number(r.listeners || 0), m = Number(r.maxListeners || s.maxListeners || 0);
-      const st = free === null ? '<span class="st unk">occupancy not reported</span>'
-        : free ? `<span class="st free">free${m > 1 ? ` · ${l} of ${m} listening` : ''}</span>`
-        : '<span class="st full">in use</span>';
-      const rng = rangeText(r);
+      const st0 = radioState(r, s);
+      const st = st0.text ? `<span class="st ${st0.cls}">${esc(st0.text)}</span>` : '<span class="st unk">occupancy not reported</span>';
+      const rng = [rangeText(r), st0.kind, ...st0.extras].filter(Boolean).join(' · ');
       const dab = r.dab === true ? '<span class="dab" title="Set up for DAB+"><img src="assets/dabplus.svg" alt="DAB+" /></span>' : '';
       return `<div class="rad"><span><b>${esc(r.name || r.driver || 'Radio')}</b>${dab}</span><span class="rng">${esc(rng)}</span>${st}</div>`;
     }).join('');
