@@ -13655,8 +13655,15 @@ struct LocalSdrShim::Impl {
         const int m = std::min(ni, nq);
         if (m <= 0) return;
         std::vector<uint8_t> out((size_t)m * 2);
-        const float dg = g_digGain.load(std::memory_order_relaxed);
-        iqFloatToU8(iq->oi.data(), iq->oq.data(), m, out.data(), 1.0f / std::max(dg, 1e-3f));
+        /* ★★★ UNITY — THE LEVEL THE SERVER'S OWN DEMODULATORS SEE. Two guesses preceded this:
+         *  ×4 put 70 % of a strong FM station on the rails; 1/g_digGain (the ADC's own level)
+         *  put Radio Caroline at S9+30 into the bottom two bits — RMS 2–3 LSB of 127, measured on
+         *  the V4L at 648 AM — because VibeAGC keeps the tuner LOW on a strong band and the digital
+         *  gain is what makes up the difference. Eight bits cannot afford to throw that away.
+         *  The channel after digital gain is what every demod here is fed, its level is held
+         *  steady by the same loops, and it is what an 8-bit consumer needs (Stuart, 2026-09-09:
+         *  "really poor reception compared to the web client … a surging quality"). */
+        iqFloatToU8(iq->oi.data(), iq->oq.data(), m, out.data(), 1.0f);
         std::lock_guard<std::mutex> lk(iq->qm);
         // ★ A consumer that stops reading must not grow us without bound: keep ~1 s, drop the oldest.
         const size_t kMax = (size_t)iq->rate * 2;
