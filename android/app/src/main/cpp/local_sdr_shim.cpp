@@ -8416,6 +8416,28 @@ struct LocalSdrShim::Impl {
                 sendConfig(sock);
                 return;
             }
+            /* ★★★ "mode":"dab" IS NOT A DEMODULATOR. A bookmark learnt from a multiplex carries
+             *     mode "dab", and every client's ordinary tune path sent it here as a mode name —
+             *     so the server set `me->mode = "dab"` with paramsFor("dab")'s bandwidth: the
+             *     passband widened, nothing else happened. Stuart, 2026-09-09: "clicking a DAB
+             *     bookmark doesnt actually tune to that station … it will change to DAB but wont
+             *     move the tuning or select the station"; on Jr "selecting DAB just widens the
+             *     passband". One reader for every client: rewrite it as the DAB entry it means —
+             *     the block nearest the asked frequency, and the service if one was named. */
+            if ((type == "tune" || type == "mode") && jsonStr(msg, "mode") == "dab") {
+                double hz = 0; jsonNum(msg, "frequency", hz);
+                if (hz <= 0) hz = me->vfoHz;
+                const int idx = vibedab::nearestChannel(uint32_t(hz > 0 ? hz : 0));
+                if (idx >= 0) {
+                    double sidV = 0; jsonNum(msg, "sid", sidV);
+                    const std::string re = "{\"type\":\"dab\",\"on\":1,\"channel\":" + std::to_string(idx)
+                        + (sidV > 0 ? ",\"sid\":" + std::to_string((long long)sidV) : std::string()) + "}";
+                    LOGI("[DAB] mode 'dab' asked as a demodulator at %.3f MHz — entering DAB on %s instead",
+                         hz / 1e6, vibedab::kBandIII[idx].name);
+                    handleControl(sock, re);
+                    return;
+                }
+            }
             if (type == "tune" || type == "mode" || type == "bandwidth") {
                 std::string m = jsonStr(msg, "mode");
                 double v = 0, lo = 0, hi = 0, bw = 0;

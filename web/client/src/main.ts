@@ -4980,6 +4980,18 @@ function dabPatchRows(el: HTMLElement, html: string, keys: string[]) {
       if (newBox && newBox.textContent === oldBox.textContent) {
         newBox.replaceWith(oldBox);
         spans[i].replaceChildren(...Array.from(tmp.childNodes));
+        /* ★★★ RE-MEASURE THE TRAVEL. The box is kept so the marquee runs on — but its WIDTH is
+         *  not constant: the level beside it is "14 dB" one block and "not received" the next
+         *  (74c81b37), and the travel was measured once, when the label was armed. So a line that
+         *  had scrolled fully stopped short by the width the level had grown (Stuart, 2026-09-09:
+         *  "the scrolling on the transmitter line has reverted back to not scrolling fully").
+         *  Setting the variable does not restart the animation; the next cycle uses it. */
+        const inner = oldBox.querySelector('.dlsIn') as HTMLElement | null;
+        if (inner && oldBox.offsetParent) {
+          const over = inner.scrollWidth - oldBox.clientWidth;
+          if (over > 4) { inner.style.setProperty('--dx', `-${over}px`); inner.classList.add('scroll'); }
+          else inner.classList.remove('scroll');
+        }
         continue;
       }
     }
@@ -5005,16 +5017,18 @@ function dabArmMarquee(scope: HTMLElement) {
 function dabGoTo(hz: number, sid: number) {
   const idx = DAB_BLOCKS.findIndex(b => Math.abs(b.hz - hz) < 50000);
   if (idx < 0) return;
+  // ★ sid < 0 = "this block, whatever was playing" — a bookmark without a service id.
+  const svc = sid >= 0 ? sid : undefined;
   if (!dabOn) {
     dabChannel = idx; savePref('dabChannel', DAB_BLOCKS[idx].name);
     dabUiOn();
-    spec?.dab(true, idx, sid);
+    spec?.dab(true, idx, svc);
   } else if (idx !== dabChannel) {
     dabChannel = idx; savePref('dabChannel', DAB_BLOCKS[idx].name);
     dabState = null;
-    spec?.dab(true, idx, sid);
-  } else {
-    spec?.dabService(sid);
+    spec?.dab(true, idx, svc);
+  } else if (svc !== undefined) {
+    spec?.dabService(svc);
   }
   dabRender();
 }
@@ -6391,6 +6405,11 @@ function applyBandDefaults(hz: number) {
 
 function tuneTo(r: SearchResult) {
   if (!spec || !r) return;
+  /* ★★★ A DAB BOOKMARK IS A BLOCK AND A SERVICE, NOT A FREQUENCY AND A MODE. Sent down this path
+   *  it reached the server as mode "dab" — a demodulator name — and the passband widened while
+   *  the dial stayed put (Stuart, 2026-09-09). Every list that tunes lands here (search, VTS,
+   *  the bookmarks card), so this is the one place to divert. */
+  if ((r.mode || '').toLowerCase() === 'dab') { dabGoTo(r.frequency, r.sid ?? -1); return; }
   // An explicit mode on the result wins; otherwise take the band's.
   const bandMode = bandTuneDefaults(r.frequency, ituRegion()).mode;
   const mode = (r.mode || bandMode || spec.mode) as SDRMode;

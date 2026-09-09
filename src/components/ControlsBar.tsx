@@ -311,6 +311,8 @@ export interface ControlsBarProps {
    *  since the last flash). Answers "what are those lines across the waterfall?" before it is
    *  asked; the number rides in the accessibility label, as the web's tooltip. */
   storms?: { rate: number; ago: number } | null;
+  /** ★ In DAB the pill says DAB — the server's demodulator is idle and its name is a lie there. */
+  dabOn?: boolean;
   /** ★★ ADMIN SESSIONS ARE NOT TIMED, so this slot says WHY rather than counting down. An admin is
    *  exempt from the session limit, and the honest thing to show where a countdown would be is
    *  what is actually true of this session (Stuart, 2026-08-12). Takes precedence over
@@ -1154,7 +1156,7 @@ const lnd = StyleSheet.create({
 function ControlsBar({
   frequency, mode, step, connected, bottomInset,
   signalLevel, peakLevel, snrDb = 40, signalActive, meterBus, signalMode = 'snr',
-  fmStereo = false, activeDecoder = null,
+  fmStereo = false, activeDecoder = null, dabOn = false,
   onVfoDelta, onBwDelta, onMode, onStep,
   onMenu, onChat, onAudio, audioAsRecord = false, onFreqTap, onModeTap,
   instanceHost = 'ubersdr',
@@ -1237,7 +1239,7 @@ function ControlsBar({
   const shared = {
     freqStr, unit,
     // §5.1: compose the running decoder onto the demod — USB → USB: RTTY (wefax reads FAX).
-    modeLabel: modeDisplay(mode) + (activeDecoder ? `: ${(activeDecoder === 'wefax' ? 'fax' : activeDecoder).toUpperCase()}` : ''),
+    modeLabel: dabOn ? 'DAB' : modeDisplay(mode) + (activeDecoder ? `: ${(activeDecoder === 'wefax' ? 'fax' : activeDecoder).toUpperCase()}` : ''),
     snrText, fmStereo,
     connected, signalActive, bus: meterBus, meterMode: signalMode,
     signal: signalLevel, peak: peakLevel,

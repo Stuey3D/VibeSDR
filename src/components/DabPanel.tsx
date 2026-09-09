@@ -19,7 +19,8 @@
  *    string by concatenating one into JSON.
  */
 import React, { useMemo } from 'react';
-import { Animated, Easing, Image, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
+import { Image, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
+import Reanimated, { Easing as REasing, cancelAnimation, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import { BlurView } from 'expo-blur';
 import { Canvas, Points, Rect } from '@shopify/react-native-skia';
 import type { DabState } from '../services/dabTypes';
@@ -222,34 +223,36 @@ const SignalHead = React.memo(function SignalHead({ d, cur, base }: {
 const Marquee = React.memo(function Marquee({ text, style }: { text: string; style: object }) {
   const [boxW, setBoxW] = React.useState(0);
   const [textW, setTextW] = React.useState(0);
-  const x = React.useRef(new Animated.Value(0)).current;
+  /* ★★★ REANIMATED, ON THE UI THREAD. The Animated.loop version parked at the end of its first
+   *  sweep and never moved again on the Xcover (two screenshots six seconds apart, identical):
+   *  a JS-driven loop that the once-a-second re-render of the list quietly stopped. A shared
+   *  value with withRepeat runs on the UI thread and does not care what React is doing. */
+  const x = useSharedValue(0);
   React.useEffect(() => {
-    x.setValue(0);
+    cancelAnimation(x);
+    x.value = 0;
     const over = textW - boxW;
     if (!(over > 4) || !boxW) return;
     const ms = Math.max(1500, over * 28);           // ~36 px/s — the browser's reading pace
-    const loop = Animated.loop(Animated.sequence([
-      Animated.delay(1200),
-      Animated.timing(x, { toValue: -over, duration: ms, easing: Easing.linear, useNativeDriver: true }),
-      Animated.delay(1200),
-      Animated.timing(x, { toValue: 0, duration: ms, easing: Easing.linear, useNativeDriver: true }),
-    ]));
-    loop.start();
-    return () => loop.stop();
+    x.value = withDelay(1200, withRepeat(withSequence(
+      withTiming(-over, { duration: ms, easing: REasing.linear }),
+      withDelay(1200, withTiming(0, { duration: ms, easing: REasing.linear })),
+      withDelay(1200, withTiming(0, { duration: 1 })),
+    ), -1, false));
+    return () => { cancelAnimation(x); };
   }, [textW, boxW, x, text]);
+  const anim = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
   return (
-    // ★★★ A HORIZONTAL SCROLLVIEW, NOT A VIEW. Measured on the Xcover twice (APK 439, 440): a Text
-    //     inside any plain View is measured against the available width whatever flexShrink says —
-    //     Yoga hands the box width to the text measurer, and it ellipsises. A horizontal
-    //     ScrollView measures its content UNCONSTRAINED, so the text takes its natural width and
-    //     textW really exceeds boxW. Scrolling is disabled; the transform does the moving.
+    // ★★★ A HORIZONTAL SCROLLVIEW, NOT A VIEW — the one container Yoga measures unconstrained, so
+    //     the text takes its natural width and textW really exceeds boxW (measured on the Xcover
+    //     three times before this was found). Scrolling is disabled; the transform moves it.
     <ScrollView horizontal scrollEnabled={false} showsHorizontalScrollIndicator={false}
                 style={{ flex: 1 }} contentContainerStyle={{ flexGrow: 0 }}
                 onLayout={e => setBoxW(e.nativeEvent.layout.width)}>
-      <Animated.View style={{ flexDirection: 'row', transform: [{ translateX: x }] }}>
+      <Reanimated.View style={[{ flexDirection: 'row' }, anim]}>
         <Text style={style} numberOfLines={1}
               onLayout={e => setTextW(e.nativeEvent.layout.width)}>{text}</Text>
-      </Animated.View>
+      </Reanimated.View>
     </ScrollView>
   );
 });

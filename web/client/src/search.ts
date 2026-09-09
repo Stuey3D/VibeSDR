@@ -38,6 +38,8 @@ export interface SearchResult {
   itu?: string;              // EiBi transmitter-country code — AUTHORITATIVE, no guessing
   bandwidthLow?: number | null;
   bandwidthHigh?: number | null;
+  /** ★ A DAB service learnt from a multiplex: the service inside the block at `frequency`. */
+  sid?: number;
 }
 
 /** A station as the shim serves it (src/services/stations.ts ServerBookmark). */
@@ -273,7 +275,7 @@ export function search(query: string, limit = 200): SearchResult[] {
   for (const b of serverBookmarks) {
     if (hit(b.name)) {
       out.push({
-        name: b.name, frequency: b.frequency, mode: b.mode ?? 'wfm', source: 'server',
+        name: b.name, frequency: b.frequency, mode: b.mode ?? 'wfm', source: 'server', sid: b.sid,
         detail: (b as any).manual ? 'Saved on the receiver' : 'Heard by this receiver',
       });
     }

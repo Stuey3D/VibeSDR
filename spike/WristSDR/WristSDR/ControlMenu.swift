@@ -519,8 +519,15 @@ struct ControlMenu: View {
         .environmentObject(link)
     }
     .sheet(isPresented: $showModes) {
-      PickerList(title: "Demod", items: Self.modes, current: link.mode) { m in
-        link.setMode(m); showModes = false; dismiss()
+      /* ★★★ ON A VIBESERVER "dab" IS NOT A DEMODULATOR — it is a mode the DAB tile enters. Offered
+       *  here it went to the server as a mode name and only widened the passband (Stuart,
+       *  2026-09-09: "selecting DAB just widens the passband"). OWRX keeps them: there dab and
+       *  adsb ARE profile modes. Same rule Buddy's menu already applies. */
+      PickerList(title: "Demod",
+                 items: link.vibe != nil ? Self.modes.filter { $0 != "dab" && $0 != "adsb" } : Self.modes,
+                 current: link.mode) { m in
+        if m == "dab", link.vibe != nil { link.setDabMode(true) } else { link.setMode(m) }
+        showModes = false; dismiss()
       }
     }
     .sheet(isPresented: $showSteps) {

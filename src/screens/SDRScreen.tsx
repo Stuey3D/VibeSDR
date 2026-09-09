@@ -1680,23 +1680,25 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  Enters DAB if needed, retunes if the block differs, otherwise just switches service. */
   const dabGoTo = useCallback((hz: number, sid: number) => {
     const c = client.current;
-    if (!c?.dab) return;
+    if (!c?.dab) return false;
     const idx = DAB_BLOCKS.findIndex(b => Math.abs(b.hz - hz) < 50_000);
-    if (idx < 0) return;
+    if (idx < 0) return false;
     markInteract();
+    const svc = sid >= 0 ? sid : undefined;   // ★ no service id = the block, whatever plays
     AsyncStorage.setItem(dabBlockKeyRef.current, DAB_BLOCKS[idx].name).catch(() => {});
     setDabBlock(idx);
     setDabBoxOpen(true);
     setDabError(undefined);
     if (!dabOnRef.current) {
-      c.dab(true, idx, sid);
-      setDabOn(true);
+      c.dab(true, idx, svc);
+      setDabOn(true); dabOnRef.current = true;
     } else if (idx !== dabBlockRef.current) {
       setDabState(null);
-      c.dab(true, idx, sid);
-    } else {
-      c.dabService?.(sid);
+      c.dab(true, idx, svc);
+    } else if (svc !== undefined) {
+      c.dabService?.(svc);
     }
+    return true;
   }, []);
   const [freqModalDab, setFreqModalDab] = useState(false);
 
@@ -3823,7 +3825,10 @@ export default function SDRScreen({ route, navigation }: Props) {
           ? { ...st, services: prev.services, label: st.label || prev.label, eid: st.eid || prev.eid, held: true }
           : st);
         setDabError(why);
-        if (why) { setDabOn(false); setDabBoxOpen(false); return; }
+        /* ★ A REFUSAL IS SHOWN, NOT SWALLOWED. The box closed on `why`, so the reason the server
+         *  gave was never seen — the mode just failed to happen. The web keeps its box and says
+         *  why; so does this now (the panel draws `error`). */
+        if (why) { setDabOn(false); dabOnRef.current = false; setDabBoxOpen(true); return; }
         if (st) {
           /* ★★★ THE BOX OPENS ITSELF WHEN THE SERVER IS ALREADY IN DAB. On a shared dial the
            *  multiplex is what everybody is hearing, and a `dab` report arriving before we asked
@@ -7265,6 +7270,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onSearchTune = useCallback((hz: number, mode?: string | null, isBand?: boolean, voiceStep?: boolean) => {
     setMenuOpen(false);
     const target = Math.round(hz);
+    /* ★★★ A DAB BOOKMARK IS A BLOCK, NOT A FREQUENCY AND A MODE. Down this path it tuned the VFO
+     *  and sent the server mode "dab" as a demodulator, which only widened the passband (Stuart,
+     *  2026-09-09). The menu's search, the VTS skip and voice tunes all land here; the frequency
+     *  card's rows carry the service id and take the dabGoTo path of their own. */
+    if ((mode || '').toLowerCase() === 'dab' && dabGoTo(target, -1)) return;
     onTuneHz(target);
     const d = bandTuneDefaults(target, ituRegion);
     const explicit = mode?.toLowerCase() as SDRMode | undefined;
@@ -7281,7 +7291,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     } else if (explicit && canSetMode(explicit)) {
       onMode(explicit);  // plain bookmark tap — mode only, step untouched
     }
-  }, [onTuneHz, onMode, ituRegion, canSetMode]);
+  }, [onTuneHz, onMode, ituRegion, canSetMode, dabGoTo]);
 
   // Menu INSTANCE row — ← BACK returns to the instance picker (it previously
   // fell back to just closing the menu). The ⟳ RECONNECT button was removed
@@ -8416,6 +8426,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           sessionLeft={sessionLeftProp}
           sharedDial={sharedDialProp}
           storms={storms}
+          dabOn={dabOn}
           frequency={status.frequency}
           mode={status.mode}
           step={step}
