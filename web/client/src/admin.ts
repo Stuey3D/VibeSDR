@@ -1390,14 +1390,22 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
    *    ends, so nothing keeps polling once there is nothing to watch. */
   let logTimer = 0;
   stopFollowing = () => { window.clearInterval(logTimer); logTimer = 0; };
-  const followLog = () => {
+  /** @param before what the log said BEFORE the request — the previous action's output, which
+   *  the server only replaces once the helper starts. Seeing it again is "not started yet". */
+  const followLog = (before = '') => {
     const box = $('actLog');
     window.clearInterval(logTimer);
     let idleRounds = 0;
     const tick = async () => {
       let j: any;
       try { j = await get('maintenance-log'); } catch { return; }
-      const text = String(j.text ?? '');
+      let text = String(j.text ?? '');
+      // ★★★ THE PREVIOUS RUN'S LOG IS NOT THIS RUN'S. Until the helper truncates it the file
+      //     still holds the last action's output AND its end marker, so this looked finished
+      //     on the first poll and the button appeared dead until pressed again (Stuart,
+      //     2026-09-10). Treat an unchanged log as "nothing yet" — newer servers also unlink
+      //     it at the request, so this is belt and braces for older ones.
+      if (!j.running && text && text === before) text = '';
       if (text) {
         box.hidden = false;
         const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 24;
@@ -1410,13 +1418,16 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
       // ★★ Do not stop on the FIRST not-running reply. The helper is triggered by systemd
       //    noticing a file, so for a moment after the request there is no log and nothing
       //    running — stopping there would abandon the action just before it started.
-      if (++idleRounds < 4 && !text) return;
+      // ★ Up to ~11 s: a path unit normally fires within a second, but an apt lock or a slow
+      //   SD card has been seen to hold the helper longer than the old 3.6 s allowed.
+      if (++idleRounds < 12 && !text) return;
       window.clearInterval(logTimer);
       logTimer = 0;
+      if (!text) { msg('actMsg', 'The maintenance helper did not start. Is vibeserver-maintenance.path enabled?'); return; }
       const failed = Number(j.exitCode) !== 0;
-      box.classList.toggle('failed', failed && !!text);
+      box.classList.toggle('failed', failed);
       box.classList.toggle('done', !failed);
-      if (text) msg('actMsg', failed ? `Finished with errors (exit ${j.exitCode}).` : 'Finished.');
+      msg('actMsg', failed ? `Finished with errors (exit ${j.exitCode}).` : 'Finished.');
     };
     void tick();
     logTimer = window.setInterval(tick, 900);
@@ -1434,9 +1445,13 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
     box.textContent = '';
     box.hidden = true;
     box.classList.remove('done', 'failed');
+    // ★ Snapshot the previous action's output BEFORE asking, so the follower can tell it apart
+    //   from this action's — see followLog.
+    let before = '';
+    try { before = String((await get('maintenance-log')).text ?? ''); } catch { /* none */ }
     try {
       await post('action', { action });
-      followLog();
+      followLog(before);
       // ★ Reboot and shutdown take the server away mid-action, so the follower will simply stop
       //   getting answers. That is not a failure and must not be reported as one.
       if (action === 'reboot' || action === 'shutdown') { window.clearInterval(logTimer); logTimer = 0; }

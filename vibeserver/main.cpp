@@ -2755,6 +2755,15 @@ int main(int argc, char** argv) {
             err = "could not submit the maintenance request";
             return false;
         }
+        /* ★★★ CLEAR THE LAST ACTION'S LOG NOW, NOT WHEN THE HELPER STARTS. The helper truncates it,
+         *  but the helper is started by systemd noticing the request file, a second or so later —
+         *  and in that gap the admin page's first poll read the PREVIOUS run's output, complete
+         *  with its end marker, and concluded the new action had already finished. First press:
+         *  "Finished." over stale text; second press: follows the first one, now running (Stuart,
+         *  2026-09-10: "it didn't look like it was doing anything until I pressed it a 2nd time";
+         *  a user found the same). The daemon cannot write the root-owned log, but it owns the
+         *  directory, so it can unlink it. */
+        remove("/var/lib/vibeserver/maintenance.log");
         std::printf("VibeServer: maintenance '%s' requested\n", action.c_str());
         return true;
     });
