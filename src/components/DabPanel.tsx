@@ -238,10 +238,10 @@ const Marquee = React.memo(function Marquee({ text, style }: { text: string; sty
     return () => loop.stop();
   }, [textW, boxW, x, text]);
   return (
-    {/* ★★★ ROW DIRECTION ON THE BOX TOO. Measured on the Xcover (APK 439): with the box a column,
-        Yoga clamps a non-stretched child to the box width, so the Text still ended in an ellipsis
-        and textW never exceeded boxW. In a row a flexShrink:0 child keeps its content width and
-        overflows, which is what the box's overflow:hidden is for. */}
+    // ★★★ ROW DIRECTION ON THE BOX TOO. Measured on the Xcover (APK 439): with the box a column,
+    //     Yoga clamps a non-stretched child to the box width, so the Text still ended in an ellipsis
+    //     and textW never exceeded boxW. In a row a flexShrink:0 child keeps its content width and
+    //     overflows, which is what the box's overflow:hidden is for.
     <View style={{ flex: 1, overflow: 'hidden', flexDirection: 'row' }} onLayout={e => setBoxW(e.nativeEvent.layout.width)}>
       {/* ★★★ THE TEXT MUST NOT SHRINK. Inside a bounded row RN wraps a Text to the box rather than
           letting it overflow, so textW never exceeded boxW, nothing ever scrolled, and a long
