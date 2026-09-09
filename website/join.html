@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/png" href="assets/favicon.png" />
+<title>Join the VibeServer Network</title>
+<meta name="description" content="How to put your own receiver on the VibeServer Network from an Android phone, a Mac or a Linux box. No port forwarding, no DDNS, your home address stays private." />
+<style>
+  /* Same tokens as index.html, by value. Keep them in step. */
+  @font-face { font-family: "Nixie One"; src: url("assets/NixieOne-Regular.ttf") format("truetype"); font-display: swap; }
+  :root {
+    --bg: #080601; --panel: #0d0a02; --line: rgba(255,176,0,.22); --line-strong: rgba(255,176,0,.45);
+    --text: #ffcc88; --prose: #e6d3ad; --dim: rgba(255,160,0,.55); --accent: #ffb833;
+    --phosphor: #28A745; --busy: #e05050;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; --nixie: "Nixie One", var(--mono);
+    --maxw: 860px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--prose); font-family: var(--mono); font-size: 15px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+  a { color: var(--accent); } a:hover { color: #ffe566; }
+  b { color: var(--text); font-weight: 600; }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 20px; }
+  header { border-bottom: 1px solid var(--line); }
+  header .wrap { display: flex; align-items: center; justify-content: space-between; height: 54px; }
+  .wordmark { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--accent); letter-spacing: .22em; text-transform: uppercase; font-weight: 600; font-size: 14px; }
+  .wordmark img { width: 26px; height: 26px; display: block; }
+  header nav a { color: var(--dim); text-decoration: none; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; margin-left: 18px; }
+  header nav a:hover { color: var(--accent); }
+  .lbl { font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--dim); }
+  .lbl.on { color: var(--phosphor); }
+  h1, h2, h3 { color: var(--text); font-weight: 500; margin: 0; text-wrap: balance; }
+  h1 { font-size: clamp(28px, 4.5vw, 44px); line-height: 1.1; }
+  h2 { font-size: 22px; }
+  h3 { font-size: 16px; }
+  p { margin: 0 0 14px; max-width: min(66ch, 100%); }
+  .lede { font-size: clamp(16px, 1.9vw, 19px); color: var(--text); }
+  section { border-bottom: 1px solid var(--line); padding: 40px 0; }
+  .num { font-family: var(--nixie); color: var(--phosphor); font-size: 34px; line-height: 1; }
+  .step { display: grid; grid-template-columns: 56px 1fr; gap: 14px; padding: 18px 0; border-top: 1px solid var(--line); }
+  .step:first-of-type { border-top: 0; }
+  .step p:last-child { margin-bottom: 0; }
+  .panel { border: 1px solid var(--line); background: var(--panel); }
+  .panel-h { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); padding: 8px 14px; }
+  .panel-b { padding: 4px 14px; }
+  pre { background: rgba(255,160,0,.06); border: 1px solid var(--line); padding: 12px 14px; overflow-x: auto; color: var(--text); font-size: 13px; margin: 8px 0 12px; }
+  code { color: #ffe566; }
+  kbd { color: var(--text); border: 1px solid var(--line-strong); padding: 1px 6px; font-family: var(--mono); font-size: 13px; white-space: nowrap; }
+  ul.ticks { list-style: none; padding: 0; margin: 0 0 14px; }
+  ul.ticks li { position: relative; padding-left: 18px; margin-bottom: 8px; font-size: 14px; }
+  ul.ticks li::before { content: ""; position: absolute; left: 0; top: .72em; width: 8px; height: 1px; background: var(--phosphor); }
+  .keys { display: flex; flex-wrap: wrap; gap: 10px; }
+  .key { display: inline-flex; align-items: center; gap: 10px; padding: 11px 16px; text-decoration: none; border: 1px solid var(--line-strong); color: var(--accent); font-size: 13px; letter-spacing: .06em; text-transform: uppercase; background: rgba(20,10,0,.75); }
+  .key:hover { background: rgba(255,200,0,.10); color: #ffe566; }
+  .key.primary { background: var(--accent); color: #1a1000; border-color: var(--accent); }
+  .key.primary:hover { background: #ffe566; color: #1a1000; }
+  .key.join { background: var(--phosphor); color: #041a0a; border-color: var(--phosphor); }
+  .key.join:hover { background: #3fd25f; color: #041a0a; }
+  .fine { font-size: 12.5px; color: var(--dim); line-height: 1.55; }
+  .tabs { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); margin: 22px 0 28px; }
+  .tabs a { padding: 12px 14px; text-decoration: none; color: var(--accent); border-right: 1px solid var(--line); font-size: 13px; letter-spacing: .06em; text-transform: uppercase; }
+  .tabs a:last-child { border-right: 0; }
+  .tabs a span { display: block; color: var(--dim); text-transform: none; letter-spacing: 0; font-size: 12px; margin-top: 2px; }
+  .tabs a:hover { background: rgba(255,200,0,.06); }
+  @media (max-width: 640px) { .tabs { grid-template-columns: 1fr; } .tabs a { border-right: 0; border-bottom: 1px solid var(--line); } .tabs a:last-child { border-bottom: 0; } }
+  footer { padding: 30px 0 60px; font-size: 12px; color: var(--dim); }
+  footer a { margin-right: 18px; text-decoration: none; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
+  footer a:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <a class="wordmark" href="/"><img src="assets/icon.png" alt="" />VibeSDR</a>
+    <nav><a href="/">Home</a><a href="https://vibeserver.vibesdr.net">Directory</a><a href="https://discord.gg/pr9EjUUBCA">Discord</a></nav>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <span class="lbl on">Join the network</span>
+    <h1 style="margin-top:8px">Put your receiver on the VibeServer Network.</h1>
+    <p class="lede" style="margin-top:14px">A new network, run by the people listening to it. Plug an SDR into a spare Android phone, a Mac or a Linux box, give it a name, and switch on the listing. The server opens a Cloudflare tunnel to the directory by itself.</p>
+    <ul class="ticks">
+      <li><b>No port forwarding.</b> The tunnel dials out, so nothing opens on your router. Works behind CGNAT.</li>
+      <li><b>No DDNS.</b> You get a stable name: <code>your-name.vibeserver.vibesdr.net</code>.</li>
+      <li><b>Your home address stays private.</b> Listeners connect to Cloudflare, never to your house.</li>
+      <li><b>Real HTTPS</b>, with a real certificate.</li>
+    </ul>
+    <div class="tabs">
+      <a href="#android">Android<span>The app, on a spare phone</span></a>
+      <a href="#mac">Mac<span>Apple Silicon, menu-bar app</span></a>
+      <a href="#linux">Linux<span>Raspberry Pi, arm64 or amd64</span></a>
+    </div>
+    <p class="fine">You need one of: an RTL-SDR (V3, V4 or V4L), an Airspy HF+, a HackRF, or on Mac and Linux an SDRplay RSP. Radios with the widest range make the most useful listings, but a receiver locked to one band is welcome too.</p>
+  </div>
+</section>
+
+<section id="android">
+  <div class="wrap">
+    <span class="lbl">Android</span>
+    <h2 style="margin-top:8px">A spare phone becomes a receiver</h2>
+    <p class="fine">Any 64-bit Android with USB host. We run one on a 2019 Samsung XCover 4S.</p>
+    <div class="step"><div class="num">1</div><div><h3>Install VibeSDR and plug the radio in</h3><p>Take the <a href="https://github.com/Stuey3D/VibeSDR/releases/latest">APK from GitHub</a>, or join the <a href="https://groups.google.com/g/vibesdr-play-store-test">Play test group</a>. Connect the dongle with a USB-C OTG adapter and let Android grant the app access to it.</p></div></div>
+    <div class="step"><div class="num">2</div><div><h3>Use as server</h3><p>On the servers list, tap <kbd>⇆ Use as server</kbd>. Give the server a local name, choose the radio, and start it. It is now a receiver on your own network, with its own web page.</p></div></div>
+    <div class="step"><div class="num">3</div><div><h3>Say where it is</h3><p>Under <b>Where this receiver is</b>, enter a Maidenhead locator such as <code>IO92NH</code>. The directory places receivers on a map, and it will not list one without a location. Describing the antenna is optional and helps listeners.</p></div></div>
+    <div class="step"><div class="num">4</div><div><h3>Give it a public name and list it</h3><p>Enter a <b>public name</b>. That name becomes your address on the network. Then switch on <kbd>List this server publicly</kbd>. The server opens the tunnel, registers with the directory, and appears at <a href="https://vibeserver.vibesdr.net">vibeserver.vibesdr.net</a> within a minute.</p></div></div>
+    <div class="step"><div class="num">5</div><div><h3>Optional: a PIN, and limits</h3><p>Set a PIN and only people you give it to can listen. The settings are behind the admin password either way. Session limits, cooldowns and bans are on the same page.</p></div></div>
+  </div>
+</section>
+
+<section id="mac">
+  <div class="wrap">
+    <span class="lbl">Mac</span>
+    <h2 style="margin-top:8px">A menu-bar app around the same engine</h2>
+    <p class="fine">Apple Silicon. Notarised, so it opens cleanly.</p>
+    <div class="step"><div class="num">1</div><div><h3>Download and open VibeServer</h3><p>Get the latest <a href="https://github.com/Stuey3D/VibeSDR/releases">VibeServer for macOS</a> from the releases page and plug the radio in. RTL-SDR and Airspy HF+ need nothing extra. For an SDRplay RSP, install SDRplay's own API first.</p></div></div>
+    <div class="step"><div class="num">2</div><div><h3>Name it and open it</h3><p>Give the receiver a name, choose the radio, and click <kbd>Open in Browser</kbd>. That is the receiver: waterfall, audio, decoders, and the same page the apps talk to.</p></div></div>
+    <div class="step"><div class="num">3</div><div><h3>List on VibeSDR.net</h3><p>Open <kbd>Settings…</kbd> from the menu bar and switch on <kbd>List on VibeSDR.net</kbd>. Give it a public name and a locator if it asks. Off by default. Nothing is published until you switch it on.</p></div></div>
+  </div>
+</section>
+
+<section id="linux">
+  <div class="wrap">
+    <span class="lbl">Linux</span>
+    <h2 style="margin-top:8px">A Pi, an old laptop, a NUC, a home server</h2>
+    <p class="fine">Debian, Ubuntu and Raspberry Pi OS, arm64 or amd64, 64-bit only. Tested on Debian 13 and Ubuntu 24.04. Other distributions are likely to work but are unverified.</p>
+    <div class="step"><div class="num">1</div><div><h3>Install from apt</h3><p>The same block on ARM and on Intel/AMD. Everything VibeServer needs comes with it.</p>
+<pre>curl -fsSL https://apt.vibesdr.net/KEY.gpg \
+  | sudo gpg --dearmor -o /usr/share/keyrings/vibesdr.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net stable main" \
+  | sudo tee /etc/apt/sources.list.d/vibesdr.list
+sudo apt update
+sudo apt install vibeserver</pre>
+<p><b>Log out and back in.</b> The install adds you to the <code>plugdev</code> group so the radio opens without root, and that only takes effect on a new login.</p></div></div>
+    <div class="step"><div class="num">2</div><div><h3>Run the wizard</h3><pre>vibeserver</pre><p>A short text wizard: name, location, radio, admin password. When you finish it enables and starts the service for you.</p></div></div>
+    <div class="step"><div class="num">3</div><div><h3>Open the receiver and its setup page</h3><p>Browse to <code>http://&lt;the address the wizard printed&gt;:48000</code>. On the same network <code>http://vibeserver.local:48000</code> usually works. The splash screen has a <kbd>SETUP</kbd> button. It asks for the admin password.</p></div></div>
+    <div class="step"><div class="num">4</div><div><h3>Advertise on VibeSDR.net</h3><p>On the setup page, fill in <b>Where this receiver is</b> with a Maidenhead locator. Then under <b>Advertise on VibeSDR.net</b>, enter a <b>public name</b> and switch on <kbd>List this server publicly</kbd>. Save. The tunnel opens and the listing appears within a minute.</p></div></div>
+    <div class="step"><div class="num">5</div><div><h3>Bring the gain up</h3><p>A new install starts the radio at minimum gain, on purpose. Open the menu in the receiver and raise it until the noise floor lifts. What you set is remembered.</p></div></div>
+    <p class="fine">If you have an SDRplay RSP, apt cannot fetch SDRplay's driver for licensing reasons. The <a href="https://apt.vibesdr.net/">apt page</a> has the three lines to install it.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>What listeners get, and what you keep</h2>
+    <p style="margin-top:12px">Listeners get the full web client in a browser, or the receiver in VibeSDR, VibeSDR Jr and Buddy. You choose the shape: one listener at a time with the radio unlocked, a shared tuner with a live waterfall, or a locked window with independent tuning for several people. You can take a radio back from any device with the admin password, and the server drops the listing on its own the moment you switch it off.</p>
+    <p class="fine">Listeners' addresses are visible to you, as on every SDR receiver on the internet. That is how session limits and block lists work. Yours is never published.</p>
+    <div class="keys" style="margin-top:18px">
+      <a class="key primary" href="https://vibeserver.vibesdr.net">See who's on the network</a>
+      <a class="key" href="https://discord.gg/pr9EjUUBCA">Ask on Discord</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <a href="/">Home</a><a href="https://vibeserver.vibesdr.net">Directory</a><a href="https://apt.vibesdr.net/">apt</a><a href="https://github.com/Stuey3D/VibeSDR">GitHub</a>
+  </div>
+</footer>
+</body>
+</html>

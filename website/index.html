@@ -81,10 +81,14 @@
   .oa-what { color: var(--text); text-decoration: none; font-size: 13px; letter-spacing: .04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .oa-what b { color: var(--phosphor); font-weight: 700; }
   .oa-what:hover { color: #ffe566; }
-  .oa-listen { margin-left: auto; flex: none; padding: 7px 14px; background: #ff4d3d; color: #120603; text-decoration: none;
-    font: 700 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; box-shadow: 0 0 16px rgba(255,77,61,.35); }
+  .oa-keys { margin-left: auto; flex: none; display: flex; gap: 8px; }
+  .oa-join { flex: none; padding: 7px 14px; background: var(--phosphor); color: #041a0a; text-decoration: none;
+    font: 700 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; text-shadow: none; box-shadow: 0 0 16px rgba(40,167,69,.35); }
+  .oa-join:hover { background: #3fd25f; color: #041a0a; }
+  .oa-listen { flex: none; padding: 7px 14px; background: #ff4d3d; color: #120603; text-decoration: none;
+    font: 700 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; text-shadow: none; box-shadow: 0 0 16px rgba(255,77,61,.35); }
   .oa-listen:hover { background: #ff6a58; color: #120603; }
-  @media (max-width: 640px) { .oa-inner { gap: 10px; padding: 6px 12px; } .oa-what { font-size: 11.5px; white-space: normal; line-height: 1.3; } .oa-range { display: none; } }
+  @media (max-width: 640px) { .oa-inner { gap: 10px; padding: 6px 12px; } .oa-what { font-size: 11.5px; white-space: normal; line-height: 1.3; } .oa-range { display: none; } .oa-keys { flex-direction: column; gap: 4px; } .oa-listen, .oa-join { padding: 5px 10px; font-size: 11px; text-align: center; } }
   .seg.free { fill: var(--phosphor); } .seg.busy { fill: var(--busy); } .seg.temp { fill: var(--temp); }
   .seg.unknown { fill: var(--dim); } .seg.gap { fill: transparent; }
   .vfo { stroke: #ff3b30; stroke-width: 2; }
@@ -253,7 +257,10 @@
   <div class="oa-inner">
     <span class="oa-lamp">On air</span>
     <a class="oa-what" id="oaWhat" href="https://vibeserver.vibesdr.net"></a>
-    <a class="oa-listen" href="https://vibeserver.vibesdr.net">Listen now</a>
+    <span class="oa-keys">
+      <a class="oa-listen" href="https://vibeserver.vibesdr.net">Listen now</a>
+      <a class="oa-join" href="join.html">Join the network</a>
+    </span>
   </div>
 </div>
 
@@ -339,7 +346,7 @@
     <p id="dirNote">Loading the directory…</p>
     <div class="keys" style="margin-top:16px">
       <a class="key primary" href="https://vibeserver.vibesdr.net">Open the directory</a>
-      <a class="key" href="#host">Add your receiver</a>
+      <a class="key" href="join.html">Add your receiver</a>
     </div>
   </div>
 </section>
@@ -657,8 +664,8 @@ function drawBar(servers) {
   for (const g of segs) {
     if (g.state === 'gap') continue;
     const a = x(g.lo), b = x(g.hi);
-    d += `<rect class="seg ${g.state}" x="${a}" y="0" width="${Math.max(0.6, b - a).toFixed(2)}" height="100" opacity=".28"/>`;
-    d += `<rect class="seg ${g.state}" x="${a}" y="86" width="${Math.max(0.6, b - a).toFixed(2)}" height="14"/>`;
+    d += `<rect class="seg ${g.state}" x="${a}" y="0" width="${Math.max(0.6, b - a).toFixed(2)}" height="100" opacity=".10"/>`;
+    d += `<rect class="seg ${g.state}" x="${a}" y="90" width="${Math.max(0.6, b - a).toFixed(2)}" height="10" opacity=".55"/>`;
   }
   // ★ The VFO sits where a radio in the network is tuned right now. A real frequency, not a prop.
   if (tuned.length) {
