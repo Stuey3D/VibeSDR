@@ -8944,13 +8944,31 @@ struct LocalSdrShim::Impl {
              *  III rather than an error. Read the name first, and treat an unusable value as a
              *  failure instead of falling through to a channel nobody asked for. */
             int idx = -1;
-            const std::string chName = jsonStr(msg, "channel");
-            if (!chName.empty()) {
-                if (const vibedab::Channel* c = vibedab::channelByName(chName.c_str()))
-                    idx = int(c - &vibedab::kBandIII[0]);
-            } else {
-                double chV = -1;
-                if (jsonNum(msg, "channel", chV)) idx = int(chV);
+            /* ★★★ READ THE VALUE THAT IS THERE, NOT THE NEXT QUOTE IN THE MESSAGE. jsonStr() scans
+             *     forward from the colon to the next '"' — so for a NUMERIC channel it returned the
+             *     text of whatever key followed ("sid"), the name lookup failed, and the number was
+             *     never tried: every client's block request fell to the LAST block. Measured on the
+             *     Pi, 2026-09-09: the app asked for 11A, the log said "mode ON: channel 12B". This
+             *     was "clicking a DAB bookmark … wont move the tuning" on the web and the app alike.
+             *     A string value starts with a quote; anything else is the index. */
+            {
+                std::string chName;
+                size_t kp = msg.find("\"channel\"");
+                if (kp != std::string::npos) {
+                    kp = msg.find(':', kp);
+                    while (kp != std::string::npos && kp + 1 < msg.size() && isspace((unsigned char)msg[kp + 1])) ++kp;
+                    if (kp != std::string::npos && kp + 1 < msg.size() && msg[kp + 1] == '"') {
+                        const size_t q = msg.find('"', kp + 2);
+                        if (q != std::string::npos) chName = msg.substr(kp + 2, q - kp - 2);
+                    }
+                }
+                if (!chName.empty()) {
+                    if (const vibedab::Channel* c = vibedab::channelByName(chName.c_str()))
+                        idx = int(c - &vibedab::kBandIII[0]);
+                } else {
+                    double chV = -1;
+                    if (jsonNum(msg, "channel", chV)) idx = int(chV);
+                }
             }
             if (idx < 0) idx = g_dabChannel.load() >= 0 ? g_dabChannel.load()
                                                         : vibedab::nearestChannel(225648000);  // 12B
