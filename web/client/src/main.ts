@@ -453,7 +453,18 @@ function refreshIqRow() {
   }
   btn.textContent = iqState.on ? 'ON' : 'OFF';
   btn.classList.toggle('on', iqState.on);
+  // ★ Off the owner's network there is ONE rate — 48 kHz is the tunnel's ceiling — so the rate
+  //   picker goes and RAW IQ OUT is a plain on/off (Stuart, 2026-09-09, on the tunnel: "it should
+  //   be 48K out only here and RAW IQ being a simple toggle"). On the LAN the choice stays.
+  sel.hidden = !srvLocal;
+  if (!srvLocal) sel.value = '48000';
   sel.disabled = iqState.on;
+  // ★ The owner set LOCAL ONLY and this visitor is not local: shown dimmed, never enable-able,
+  //   with the reason — a visitor who saw it work on the LAN should not wonder where it went.
+  const localOnly = srvRawIq === 'local' && !srvLocal;
+  btn.disabled = localOnly;
+  row.style.opacity = localOnly ? '0.45' : '';
+  if (localOnly) { note.textContent = 'Raw IQ out is local-network only on this receiver — not available through the tunnel.'; return; }
   const kHz = (iqState.rate ?? Number(sel.value) ?? 48000) / 1000;
   if (iqState.on && !iqState.public) {
     note.innerHTML = `IQ out is on at <b>${kHz} kHz</b>. Connect your rtl_tcp app to <b>${escapeHtml(iqState.host ?? '')}:${iqState.port}</b>. `
