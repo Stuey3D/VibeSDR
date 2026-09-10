@@ -96,6 +96,14 @@ add_library(vibelocalsdr SHARED
     #   file to drift.
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../vibeserver/geoip.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../vibeserver/asndb.cpp
+    # ★★★ AND THE PROCESS RUNNER THEY CALL. The three files below replaced their hand-quoted shell
+    #     command lines with fork+execvp (see vibeserver/proc.h — one of them was a real command
+    #     injection from data decoded off the air). Android never TAKES those paths: it has no curl
+    #     and fetches through VibeHttp instead. But "never called" is not "never linked", and
+    #     leaving this out cost a red CodeQL run with two undefined symbols at ld.lld
+    #     (2026-09-10). ★ This is the whole reason the compiled java-kotlin analysis exists — the
+    #     daemon built clean on the Mac and on the Pi, and only the NDK link caught it.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../vibeserver/proc.cpp
     # ★ RadioDNS — the broadcaster's own station logo by PI code. Shared with the daemon; its curl
     #   transport is replaced here by VibeHttp (Android has no curl). See radiodns.h setFetcher.
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../vibeserver/radiodns.cpp
