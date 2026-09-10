@@ -82,6 +82,10 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   /// starts a fresh count, so an occasional drop never accumulates into a false alarm,
   /// while a genuinely one-way link piles up fast (we send ~16 rows a second).
   private var lastFailAt = Date.distantPast
+  /// When the link is believed dead, the last time a row was sent anyway to find out. See
+  /// pushWatchRow: a downlink that refuses to try can never learn that it is working again.
+  private var lastDeadProbeAt = Date.distantPast
+
   private func noteSendFailure() {
     if Date().timeIntervalSince(lastFailAt) > 3 { sendFails = 0 }
     lastFailAt = Date()
@@ -330,7 +334,23 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   func pushWatchRow(_ row: Data, freq: Double, span: Double, snr: Double,
                     level: Double, lo: Double, hi: Double, meter: String, sql: Double = -1) {
     watchSendQueue.async { [weak self] in
-      guard let self, let s = self.session, self.linkAlive else { return }
+      guard let self, let s = self.session else { return }
+      /* ★★★ NO ATTEMPT MEANS NO ERROR MEANS NO RECOVERY — a stall that sustains itself.
+       *  This used to `return` whenever `linkAlive` was false, and that is a trap rather than a
+       *  saving: the error handler below is what feeds noteSendFailure, and fifteen failures are
+       *  what call reviveSession. Refusing to send removes the only evidence the recovery runs on,
+       *  so the downlink stays dead until the WATCH happens to say something (see sawWatch) — which
+       *  is precisely why Stuart finds that "wrist down and up often resurrects the spectrum": a
+       *  wrist-raise makes Buddy ping, and the ping is what revives the phone's opinion of a link
+       *  that was fine all along.
+       *  ★★ So when the link looks dead, still probe it — just not at ten frames a second. One row
+       *     per second is nothing on the wire and it is the phone's own way of finding out, rather
+       *     than waiting to be told. If it gets through, the waterfall simply resumes; if it does
+       *     not, the failures now accumulate towards a revive that previously could not happen. */
+      if !self.linkAlive {
+        if Date().timeIntervalSince(self.lastDeadProbeAt) < 1.0 { return }
+        self.lastDeadProbeAt = Date()
+      }
 
       var blob = Data(capacity: 8 * 7 + Self.meterBytes + row.count)
       for v in [freq, span, snr, level, lo, hi, sql] {

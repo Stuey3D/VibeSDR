@@ -1486,7 +1486,20 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
          *  after leaving it. */
         if md != "dab", var d = dab {
           d.ensemble = ""; d.active = 0; d.list = []; d.on = false; d.block = ""
-          dab = d.capable ? d : nil
+          /* ★★★ AND IT MUST NOT GO TO NIL AT ALL. This was `dab = d.capable ? d : nil`, which
+           *  kept the capability and still threw away `backend` — and backend is what tells this
+           *  watch WHAT KIND OF SERVER it is looking at. With it gone, demodModes falls back to
+           *  ControlMenu.modes, so a VibeServer is offered SAM, CWU and CWL, which it does not
+           *  have, and the DAB entry disappears. Stuart, 2026-09-10: "Still no DAB button in the
+           *  demodulators and CWU CWL should be CW on VibeServer. Is Buddy still treating
+           *  VibeServers as UberSDR we separated them remember." He was right, and this line is
+           *  where the separation was undone.
+           *  ★★ The fault the nil was there to prevent is ALREADY handled two lines above: the
+           *     ensemble, the service list, the block and `on` are cleared, so nothing stale can
+           *     outvote reality. What is left — `capable`, `backend`, `noDecoder`, `blocks` — are
+           *     facts about the RECEIVER, not about the mode it happens to be in, and they are
+           *     true whether or not DAB is running. [[reported_state_is_not_a_command]] */
+          dab = d
         }
         // Only the SDR screen sends `state` at all — FM-DX sends its own blob — so
         // receiving one is itself proof we are no longer on an FM-DX server.
