@@ -641,6 +641,14 @@ static std::string vsDabBlockNow() {
 }
 
 static std::atomic<int>    g_dabChannel{-1};
+/* ★★★ THE GAIN EACH BLOCK LAST DECODED AT, in AGC steps below the ceiling. DAB enters at the
+ *  AGC's resting gain (12.5 dB on the V4) and a weak block then waits the entry settle plus one
+ *  climb per 0.4 s before the first FIB — 3 to 6 s on 10D, which wants ~36 dB. A block that has
+ *  decoded before tells us where to start: enter THERE, and the clip guard still rules if the
+ *  band has changed. Learned once a block's FIB rate is above 0.9; in-process only for now. */
+static std::mutex          g_dabGainMemMtx;
+static std::map<int, int>  g_dabGainMem;              // block index -> g_ovlSteps that decoded it
+static std::atomic<bool>   g_dabSeedPending{false};   // set at entry and on a block change
 /* ★★★ DAB TAKES THE DIAL OFF THE LOCK FOR AS LONG AS IT OWNS THE RADIO.
  *  A locked centre is a SHARED-RECEIVER promise — nobody may retune — and it is enforced in
  *  ~20 places, one of which is the source rebuild (see the g_vsLockedCentre block in the open
@@ -9169,6 +9177,7 @@ struct LocalSdrShim::Impl {
             }
             const bool dabWasOn = g_dabMode.load(std::memory_order_relaxed);   // ★ a block CHANGE, not an entry
             g_dabChannel.store(idx);
+            g_dabSeedPending.store(true, std::memory_order_relaxed);   // ★ see g_dabGainMem
             g_dab.setChannel(idx);
             /* ★★★ THE RADIO MUST BE AT 2.048 MS/s AND ON THE BLOCK CENTRE. Everything below
              *  assumes the canonical rate — it is what makes the useful symbol exactly 2048
@@ -19877,6 +19886,34 @@ static constexpr double kAgcVerdictSec    = 2.5;
  *  permanently disturbed receiver is merely slow rather than stuck. */
 static constexpr double kClimbTrialMaxSec = 20.0;
 
+/** Put the AGC straight at `wantSteps` below the ceiling and write that gain — the tick's own
+ *  write path (steps, settle, pending write, notify) without a decision. Returns false when the
+ *  radio has no gain list to map through (an RSP, a HF+). See g_dabGainMem. */
+template <class ImplT>   // ★ Impl is LocalSdrShim's private type; deduced, never named
+static bool dabSeedGain(ImplT* p, int wantSteps, double now) {
+    if (!p) return false;
+    std::lock_guard<std::recursive_mutex> hw(p->modeMtx);
+    if (!p->dev || p->radioReleased.load()) return false;
+    const int n = rtlsdr_get_tuner_gains(p->dev, nullptr);
+    if (n <= 1) return false;
+    std::vector<int> gains((size_t)n);
+    rtlsdr_get_tuner_gains(p->dev, gains.data());
+    const int target = g_gainTarget.load(std::memory_order_relaxed);
+    int tgtIdx = 0;
+    for (int i = 0; i < n; i++) if (gains[(size_t)i] <= target) tgtIdx = i;
+    int want = wantSteps; if (want > tgtIdx) want = tgtIdx; if (want < 0) want = 0;
+    const int idx = tgtIdx - want;
+    const int applied = gains[(size_t)idx];
+    g_ovlSteps.store(want, std::memory_order_relaxed);
+    g_ovlLastChangeAt.store(now, std::memory_order_relaxed);
+    agcSettleAfterGain(now);
+    p->lastGainTenthDb = applied;
+    { std::lock_guard<std::mutex> lk(p->hwWrMtx); p->pendingGainTenth = applied; }
+    p->hwWrCv.notify_one();
+    LOGI("[DAB] entering block %s at the gain it last decoded at: %.1f dB (%d steps below the ceiling)",
+         vibedab::kBandIII[g_dabChannel.load() < 0 ? 0 : g_dabChannel.load()].name, applied / 10.0, want);
+    return true;
+}
 void LocalSdrShim::overloadTick() {
     if (!p) return;
     if (p->useSpy() || p->useTcp() || p->useSdrplay()) return;   // they manage themselves
@@ -19942,6 +19979,18 @@ void LocalSdrShim::overloadTick() {
      *  same treatment. */
     const bool dabAcquiring = g_dabMode.load(std::memory_order_relaxed) && clipRun < 2
                               && g_dab.quality().fibRate <= 0.0f;
+    if (g_dabMode.load(std::memory_order_relaxed)) {
+        const int blk = g_dabChannel.load();
+        if (!dabAcquiring && g_dab.quality().fibRate > 0.9f && blk >= 0) {
+            // ★ Decoding well: remember where the gain sits for this block.
+            std::lock_guard<std::mutex> lk(g_dabGainMemMtx);
+            g_dabGainMem[blk] = steps;
+        } else if (dabAcquiring && g_dabSeedPending.exchange(false, std::memory_order_relaxed) && blk >= 0) {
+            int learned = -1;
+            { std::lock_guard<std::mutex> lk(g_dabGainMemMtx); auto it = g_dabGainMem.find(blk); if (it != g_dabGainMem.end()) learned = it->second; }
+            if (learned >= 0 && learned != steps && dabSeedGain(p, learned, now)) return;   // ★ this tick's work
+        }
+    }
     const bool hurry = now < g_agcHurryUntil.load(std::memory_order_relaxed) || dabAcquiring;
     /* ★ The profile's cadence, not one figure for the whole radio. FM is dense and a wrong gain is
      *   audible at once; MW's ghosts last "a few seconds at a time due to MW/HF signal fade"
