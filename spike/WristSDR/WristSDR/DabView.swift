@@ -96,6 +96,12 @@ struct DabView: View {
       if delta >  range / 2 { delta -= range }
       if delta < -range / 2 { delta += range }
       lastDetent = detent
+      /* ★★★ THE BLOCK CAPSULE LIT AND THE CROWN DID NOTHING (Stuart, 2026-09-10: "i tap 5a and the
+       *  crown wont move it even though its lit"). blockMode was toggled by the capsule and read
+       *  by nothing on this path — Buddy's DabView has the branch, Jr's never got it. WRITTEN AND
+       *  NEVER READ, the recurring shape. One detent, one block, never a sweep: every step is a
+       *  retune and a re-acquire on the server. */
+      if blockMode { link.stepDabBlock(delta > 0 ? 1 : -1); return }
       let n = link.dabProgrammes.count
       guard n > 0 else { return }
       cursor = min(n - 1, max(0, cursor - delta))   // clamp, don't wrap — a list has ends (crown up = up)
@@ -231,6 +237,10 @@ struct DabView: View {
       }
       // Speed fix — ONE compact button (the inline presets were too small to hit). Opens a sheet with
       // big targets. The label shows the current factor so it doubles as a status readout.
+      // ★ OWRX ONLY: it is the dablin chipmunk workaround. A VibeServer decodes DAB itself at the
+      //   right rate, so on one this was a control whose every use is a no-op (Stuart, 2026-09-10:
+      //   "we dont need the speed fix that is only for OWRX") — AGENTS.md: remove it, do not leave it.
+      if link.vibe == nil {
       Button { if !locked { showSpeed = true } } label: {
         HStack(spacing: 4) {
           Image(systemName: "gauge.with.dots.needle.bottom.50percent").font(.system(size: 10, weight: .semibold))
@@ -241,6 +251,7 @@ struct DabView: View {
         .background(link.dabScale != 1.0 ? Color.orange : Color.white.opacity(0.12), in: Capsule())
         .fixedSize()
       }.buttonStyle(.plain).disabled(locked)
+      }
       /* ★★★ THE WAY OUT, WHICH THIS SCREEN HAS NEVER HAD. Stuart: "Also a way to get back out of
        *  DAB as OWRX auto picks DAB on a DAB profile and to get out of it choose a non DAB profile,
        *  we dont have that option." On OWRX the profile sheet is the exit and this button is not

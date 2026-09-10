@@ -1921,6 +1921,11 @@ export class AudioPlayer {
   /** performance.now() of the last audible output, 0 if none yet — for "has anything played since
    *  I pressed that station?" (the DAB tuning-in line). */
   get lastAudibleAtMs(): number { return this.lastAudibleAt; }
+  /** ★ performance.now() of the last moment ANY path put samples out: the PCM level scan OR the
+   *  playout node's drain report. `lastAudibleAt` alone is only written on the PCM path, so on a
+   *  worker-decoded stream it never moved and the DAB "tuning in" line stuck for a minute after
+   *  the audio had started (Stuart, 2026-09-10). */
+  get lastOutputAtMs(): number { return Math.max(this.lastAudibleAt, this.lastDrainAt); }
   /** When the playout node last reported that it had actually put samples out. */
   private lastDrainAt = 0;
   private stallWatch: number | null = null;

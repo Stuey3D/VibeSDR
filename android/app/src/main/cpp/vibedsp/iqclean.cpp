@@ -48,7 +48,7 @@ void IqCleaner::configure(double rate, double dcTauSec, double imbTauSec) {
 
 void IqCleaner::reset() {
     dcI_ = dcQ_ = 0.0f; dcSeeded_ = false;
-    sII_ = sQQ_ = sIQ_ = 0.0; imbSeeded_ = false;
+    sII_ = sQQ_ = sIQ_ = 0.0; imbSeeded_ = false; imbWarmSec_ = 0.0;
     A_ = 1.0f; B_ = 0.0f;
     phase_ = 0.0;
 }
@@ -138,9 +138,17 @@ void IqCleaner::process(cf32* z, int n) {
             const double a = std::min(1.0, (double)n / (imbTau_ * rate_));
             sII_ += a * (mII - sII_); sQQ_ += a * (mQQ - sQQ_); sIQ_ += a * (mIQ - sIQ_);
         }
+        imbWarmSec_ += (double)n / rate_;
         // Coefficients for the NEXT block.
         float nA = 1.0f, nB = 0.0f;
-        if (sII_ > 1e-12 && sQQ_ > 1e-12) {
+        /* ★★★ NOT UNTIL A SECOND OF STATISTICS EXISTS. The first block after start seeded the
+         *  averages and was APPLIED at once — on the V4 it read 24° of "phase error" (the ADC
+         *  settling, a retune mid-block, whatever the first few ms hold) and the "correction"
+         *  smeared an image across the whole band until the two-second average caught up. The
+         *  sferic detector keys on exactly that lift across the band, and the STORM badge lit on
+         *  a clear morning (Stuart, 2026-09-10). A front end's mismatch is a constant; a second's
+         *  wait costs nothing and a wild first block costs a false alarm. */
+        if (imbWarmSec_ >= 1.0 && sII_ > 1e-12 && sQQ_ > 1e-12) {
             const double phi   = sIQ_ / std::sqrt(sII_ * sQQ_);   // sin(phase error)
             const double alpha = std::sqrt(sQQ_ / sII_);          // gain ratio Q/I
             if (std::fabs(phi) < 0.5 && alpha > 0.5 && alpha < 2.0) {

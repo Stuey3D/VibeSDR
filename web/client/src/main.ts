@@ -4597,12 +4597,18 @@ function dabRender() {
     // ★ +400 ms: the PREVIOUS station's buffered tail drains for a moment after the press — a
     //   same-multiplex switch (Stuart: "even stations on the same multiplex") would otherwise
     //   clear the line before the new service had produced a sample.
-    if (d.locked && d.sid && dabPickedAt > 0 && audio && audio.lastAudibleAtMs < dabPickedAt + 400) {
-      const secs = Math.floor((performance.now() - dabPickedAt) / 1000);
+    /* ★★ TWO WAYS TO CLEAR, AND ONE MUST ALWAYS WORK: output seen since the press (any playout
+     *  path), OR the player simply reporting healthy after 8 s — a line that can stick is worse
+     *  than no line, and it stuck for a minute on the first try because the audible timestamp was
+     *  only written on one decode path. */
+    const secsSincePick = dabPickedAt > 0 ? (performance.now() - dabPickedAt) / 1000 : 0;
+    const heard = !!audio && (audio.lastOutputAtMs >= dabPickedAt + 400 || (secsSincePick > 8 && audio.health === 'ok'));
+    if (d.locked && d.sid && dabPickedAt > 0 && audio && !heard) {
+      const secs = Math.floor(secsSincePick);
       waiting = secs < 30
         ? ` · tuning in — waiting for the gain to settle and the audio clock to lock… ${secs}s`
         : ` · still tuning in (${secs}s) — a weak multiplex can take a while; the decoder has not given up`;
-    } else if (dabPickedAt > 0 && audio && audio.lastAudibleAtMs >= dabPickedAt + 400) {
+    } else if (dabPickedAt > 0 && heard) {
       dabPickedAt = 0;   // heard it — the line goes
     }
     if (ds) ds.textContent = !d.locked ? 'searching…' : d.services.length
