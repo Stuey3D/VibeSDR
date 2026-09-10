@@ -110,8 +110,13 @@ echo "==> publishing vibeserver $FULLVER ($ARCH)"
 #     Mac, at Xcode, at anything except a copy step that had no business carrying the file at all.
 # ★★ EXCLUDED FROM THE COPY, NOT FROM THE TREE. Nothing on the developer's machine is removed; the
 #    standing rule against stripping node_modules/Pods is about the working tree and is unaffected.
+# ★★ THE FUZZ CORPUS IS LIVE. scripts/fuzz-dab.sh writes into vibeserver/fuzz-corpus while it
+#    runs, and rsync exits 24 ("file has vanished") if a run is in flight — which failed a package
+#    build mid-audit, 2026-09-10. None of these belong in a .deb anyway.
 COPY_EXCLUDES="--exclude build --exclude .git --exclude node_modules --exclude Pods
-               --exclude tvos --exclude ios --exclude spike --exclude web/dist"
+               --exclude tvos --exclude ios --exclude spike --exclude web/dist
+               --exclude fuzz-corpus --exclude build-fuzz --exclude build-san
+               --exclude fuzz-crashes"
 
 # ★★★ A .deb BUILT SOMEWHERE ELSE — VIBE_PREBUILT_DEB.
 #
