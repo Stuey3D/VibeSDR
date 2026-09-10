@@ -2561,10 +2561,45 @@ static std::string          g_vsLandingMode;
 
 // Nonce ledger (single-use, 30 s TTL) + per-IP failure backoff. Small maps: a
 // single-client server, so lock contention is trivial.
+/* ★★★ SECRETS COME FROM THE OPERATING SYSTEM, NOT FROM THE CLOCK.
+ *
+ *  Everything security-bearing in this file used to be seeded from steady_clock: the auth nonce
+ *  (a 64-bit Mersenne Twister) and, worse, vsRandomCode — a 32-bit xorshift seeded from a clock
+ *  tick, a counter and the address of a static. The RAW IQ pairing code and its 20-character token
+ *  both came out of it, so a token that looks like 103 bits of entropy actually carried at most 32,
+ *  and because the code and the token are drawn microseconds apart they are CORRELATED: recover one
+ *  seed by exhausting 2^32 offline and the sibling is in a tiny neighbourhood. (Audit, 2026-09-10.)
+ *
+ *  ★★ getrandom/arc4random, never a userspace PRNG. Both block only until the pool is initialised
+ *     and never afterwards. If the OS somehow cannot answer we FAIL rather than fall back to a
+ *     clock: a predictable credential that looks fine is worse than an error nobody can miss.
+ *  ★ Not std::random_device — it is permitted to be deterministic, and has been on some toolchains. */
+#if !defined(__APPLE__) && !defined(__FreeBSD__)
+#include <sys/random.h>
+#endif
+#include <cerrno>
+static void vsRandomBytes(void* out, size_t n) {
+#if defined(__APPLE__) || defined(__FreeBSD__)
+    arc4random_buf(out, n);
+#else
+    size_t got = 0;
+    auto* p8 = static_cast<uint8_t*>(out);
+    while (got < n) {
+        const ssize_t r = ::getrandom(p8 + got, n - got, 0);
+        if (r > 0) { got += (size_t)r; continue; }
+        if (r < 0 && errno == EINTR) continue;
+        // ★ The fallback is the same KIND of source, not a weaker one.
+        FILE* f = std::fopen("/dev/urandom", "rb");
+        if (f) { got += std::fread(p8 + got, 1, n - got, f); std::fclose(f); }
+        if (got < n) { LOGI("FATAL: no OS randomness available — refusing to invent a secret"); std::abort(); }
+    }
+#endif
+}
+static uint64_t vsRandom64() { uint64_t v = 0; vsRandomBytes(&v, sizeof v); return v; }
+
 namespace {
 struct VsAuth {
     std::mutex mtx;
-    std::mt19937_64 rng{ (uint64_t)std::chrono::steady_clock::now().time_since_epoch().count() };
     std::unordered_map<std::string, int64_t> issued;    // nonce hex -> issue ms
     struct Fail { int count = 0; int64_t until = 0; };  // lockout epoch ms
     std::unordered_map<std::string, Fail> fails;
@@ -2586,7 +2621,7 @@ struct VsAuth {
         std::lock_guard<std::mutex> lk(mtx);
         int64_t now = nowMs(); prune(now);
         uint8_t raw[16];
-        uint64_t a = rng(), b = rng();
+        uint64_t a = nextRandom(), b = nextRandom();
         memcpy(raw, &a, 8); memcpy(raw + 8, &b, 8);
         std::string hex = toHex(raw, 16);
         issued[hex] = now;
@@ -2619,6 +2654,8 @@ struct VsAuth {
     void recordOk(const std::string& ip) {
         std::lock_guard<std::mutex> lk(mtx); fails.erase(ip);
     }
+    /** ★ 64 bits straight from the OS — see vsRandomBytes. */
+    uint64_t nextRandom() { return vsRandom64(); }
     // Consume the nonce (single-use) and confirm HMAC(secret, nonce)==token.
     bool verify(const std::string& secret, const std::string& nonce, const std::string& token) {
         std::lock_guard<std::mutex> lk(mtx);
@@ -2749,11 +2786,24 @@ static std::string primaryIpv4() {
     freeifaddrs(ifa);
     return out;
 }
+/** ★★★ ONE OS-RANDOM BYTE PER CHARACTER, REJECTION-SAMPLED. See vsRandomBytes for why the old
+ *  clock-seeded xorshift had to go. The rejection loop matters as much as the source: `x % A` over
+ *  a 256-value byte is BIASED whenever A does not divide 256 — with a 30-character alphabet the
+ *  first 16 characters come up 9 times per 256 and the rest 8, which is a measurable lean an
+ *  attacker can exploit to order their guesses. Drawing again on the ragged tail costs nothing and
+ *  makes every character uniform. */
 static std::string vsRandomCode(int n, const char* alphabet) {
-    static std::atomic<unsigned> ctr{0};
-    unsigned x = (unsigned)std::chrono::steady_clock::now().time_since_epoch().count() ^ (ctr++ * 2654435761u) ^ (unsigned)(uintptr_t)&ctr;
-    std::string out; const size_t A = strlen(alphabet);
-    for (int i = 0; i < n; i++) { x ^= x << 13; x ^= x >> 17; x ^= x << 5; out += alphabet[x % A]; }
+    const size_t A = strlen(alphabet);
+    if (A == 0 || n <= 0) return {};
+    const unsigned limit = (unsigned)(256 - (256 % A));   // the largest whole multiple of A
+    std::string out;
+    out.reserve((size_t)n);
+    while ((int)out.size() < n) {
+        uint8_t buf[64];
+        vsRandomBytes(buf, sizeof buf);
+        for (size_t i = 0; i < sizeof buf && (int)out.size() < n; i++)
+            if (buf[i] < limit) out += alphabet[buf[i] % A];
+    }
     return out;
 }
 /** ★ float IQ → 8-bit unsigned interleaved, the rtl_tcp sample: ×gain, clip, ×127 + 127.5.
