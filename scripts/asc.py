@@ -10,6 +10,7 @@
 Needs `pyjwt`. Key/issuer per memory: testflight_setup.md.
 """
 import json, os, time, sys, urllib.request, urllib.error
+from datetime import datetime
 
 # ★★★ THE IDENTITY LIVES OUTSIDE THE REPO. This is a PUBLIC repo, and the key id and issuer are
 #     account identifiers — not secrets on their own (the .p8 is the secret, and that has never
@@ -98,9 +99,22 @@ def all_pages(path):
             return out
         r = call(nxt)
 
+def _local(ts):
+    """App Store Connect stamps builds in APPLE'S timezone, not yours: the uploadedDate carries a
+    real offset (-07:00, Cupertino). This used to be truncated with [:16], which threw the offset
+    away and left a Pacific afternoon looking like a British one — EIGHT HOURS of error, silently.
+    On 2026-09-10 that misdated three separate builds in one evening and had me tell Stuart a build
+    he was holding did not exist yet. Print it in the local timezone, and say which."""
+    if not ts:
+        return ""
+    try:
+        return datetime.fromisoformat(ts).astimezone().strftime("%Y-%m-%d %H:%M %Z")
+    except Exception:
+        return ts[:16] + " (unparsed)"
+
 def builds(app):
     rows = [(int(x["attributes"]["version"]), x["attributes"].get("processingState"),
-             (x["attributes"].get("uploadedDate") or "")[:16], x["attributes"].get("expired"))
+             _local(x["attributes"].get("uploadedDate")), x["attributes"].get("expired"))
             for x in all_pages("apps/%s/builds?limit=200" % APPS[app])]
     rows.sort(reverse=True)
     for v, st, up, exp in rows[:12]:
