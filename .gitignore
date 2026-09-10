@@ -109,3 +109,8 @@ tools/cloudflared-desktop/bin/
 # release commit by `git add -A` on 2026-08-26 and taken back out before it reached GitHub.
 .ws-hold.mjs
 tools/vibeiq/out/
+
+# ★ Sanitiser build trees (scripts/sanitize-tests.sh). Separate directories on purpose: a
+#   sanitised object must never find its way into a release binary.
+build-san/
+vibeserver/build-san/
