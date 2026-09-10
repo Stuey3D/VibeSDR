@@ -12489,7 +12489,27 @@ struct LocalSdrShim::Impl {
             }
             const std::string csp =
                 "Content-Security-Policy: default-src 'self'; "
-                "script-src 'nonce-" + nonce + "' https://unpkg.com; "
+                /* ★★★ 'wasm-unsafe-eval' AND blob:, or the audio never starts. The Opus decoder is
+                 *  WebAssembly, and Chromium refuses WebAssembly.instantiate under a script-src
+                 *  that does not say so — with no ordinary console violation, which is exactly how
+                 *  it hid: zero reported violations and a client stuck on the splash (measured
+                 *  headless, 2026-09-10). blob: is for the AudioWorklet, which is addModule'd from
+                 *  a Blob URL on a secure origin. Neither weakens the injection defence: an
+                 *  attacker still cannot run inline script without the nonce. */
+                /* ★★★ 'unsafe-eval' IS FORCED BY OUR OWN BUILD, and it costs less than it looks.
+                 *  The page does not contain its JavaScript as script — build-web.mjs packs it as
+                 *  base64 so it survives being embedded in a C++ header (NUL bytes and all), and
+                 *  the loader decodes it and eval()s the lot. Measured by intercepting eval in the
+                 *  browser: one call, the entire bundle. So a nonce alone can never work here.
+                 *  ★★ WHAT THE NONCE STILL BUYS, which is the part that matters: an INJECTED
+                 *     <script> and an INLINE EVENT HANDLER are both governed by 'unsafe-inline',
+                 *     NOT 'unsafe-eval' — and 'unsafe-inline' is absent. Every XSS this audit found
+                 *     was exactly that shape: an onerror= smuggled through a station logo URL, and
+                 *     markup in an off-air DAB field. Both are still refused.
+                 *  ★ What is given up: a future bug that feeds attacker text INTO an eval sink.
+                 *    There is one eval in the product and it takes a compile-time constant.
+                 *  ★ 'wasm-unsafe-eval' stays for the Opus decoder; blob: for the AudioWorklet. */
+                "script-src 'nonce-" + nonce + "' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://unpkg.com; "
                 "style-src 'self' 'unsafe-inline' https://unpkg.com; "
                 "img-src 'self' data: blob: https: http:; "
                 "media-src 'self' data: blob:; "
@@ -12497,7 +12517,11 @@ struct LocalSdrShim::Impl {
                 "connect-src 'self' ws: wss: https: http:; "
                 "worker-src 'self' blob:; "
                 "child-src 'self' blob:; "
-                "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\n";
+                /* ★ form-action 'self', NOT 'none': the page posts a form back to ITSELF and
+                 *  'none' blocked it — measured headless, the client never reached the point of
+                 *  opening audio. 'self' still stops a form being redirected to somebody else's
+                 *  server, which is the attack this directive is for. */
+                "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'\r\n";
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
                           "Access-Control-Allow-Origin: *\r\n"
                           + csp +
