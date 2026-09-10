@@ -1592,6 +1592,28 @@ static std::atomic<int>      g_ovlSteps{0};
  *  ★ Armed as a countdown of ticks rather than a level, so it expires by itself: this is a
  *    reaction to an EVENT, and nothing about the steady state should be different afterwards. */
 static std::atomic<int>      g_agcFastCut{0};
+/** ★★★ COME BACK UP AS DECISIVELY AS WE CAME DOWN — for a short while after an overload cut.
+ *
+ *  Stuart, 2026-09-10, watching the V4 sit 18 dB below the V4L on the same aerial: "I am happy it
+ *  cut quick to prevent overload as that was what the AGC was meant for, but holding it 18db below
+ *  the V4L and showing no signs of increasing it again until I interacted by zooming in and out
+ *  again is not right. We were cautious about rapidly increasing the gain to prevent constant up
+ *  and down flap on FM but we do need to be quicker to recover from an overload situation."
+ *
+ *  ★★ The caution is right and stays. It exists because a settled receiver that keeps reaching for
+ *     one more rung flaps audibly on FM, and one step every couple of seconds is the price of not
+ *     doing that. But the seconds AFTER AN OVERLOAD CUT are not a settled receiver: we have just
+ *     shed a known number of decibels in one deliberate move, and the converter is now sitting far
+ *     below its operating point with measured headroom. Climbing back one rung at a time from
+ *     there is a search for a figure we can calculate — the same mistake the cut itself used to
+ *     make before it learned to size the jump ("GO STRAIGHT THERE. ONE CHANGE, NOT SIX").
+ *  ★ So this is a DEADLINE, not a mode: armed only where a cut is taken for overload, and it
+ *    lapses. Outside the window nothing changes at all, which is what keeps FM's steady state
+ *    exactly as it was.
+ *  ★ It asks through g_nextStride — the existing "the evidence asked for a bigger jump" path — so
+ *    every guard downstream still applies unchanged, including the prediction that refuses any
+ *    move whose landing peak would pass the climb ceiling. */
+static std::atomic<double>   g_agcRecoverUntil{0.0};
 /** ★★★ THE GAIN THAT WAS HOLDING WHILE THE FILTER WAS WIDE — the deterministic half of the
  *      zoom-out cut, and the half that actually works.
  *  ★★★ REACTING IS NOT ENOUGH, MEASURED TWICE. First the cut waited for the ADC to read hot,
@@ -20367,6 +20389,10 @@ int LocalSdrShim::currentGainTenthDb() const { return p ? p->lastGainTenthDb : -
  *  ★ The verdict cannot go below the settle window plus a measurement — 1.3s of stale samples are
  *    discarded after each write, so 2.5s leaves a little over a second of fresh evidence. */
 static constexpr int    kAgcClimbAfterSec = 2;
+/** How long after an overload cut the climb is sized from headroom rather than crawling a rung at
+ *  a time. ★ 25 s: long enough to walk back up a gross cut at the normal 2 s cadence, short enough
+ *  that it can never become the receiver's ordinary behaviour. See g_agcRecoverUntil. */
+static constexpr double kAgcRecoverWindowSec = 25.0;
 static constexpr double kAgcClimbDwellSec = 2.0;
 /** ★ How long a climb or a cut is left on trial before it is judged. One constant, because the two
  *  verdicts must not drift apart — they are the same question asked in opposite directions. */
@@ -20902,6 +20928,7 @@ void LocalSdrShim::overloadTick() {
       if (fc > 0) g_agcFastCut.store(fc - 1, std::memory_order_relaxed); }
 
     bool backoffToFit = false;   // ★ see the clipRun branch: the jump is sized under the lock
+    bool climbToFit   = false;   // ★ the same arithmetic upward, only while recovering from a cut
     // ★ Which reason took gain away, so the cut can be JUDGED — see the verdict above. Only the
     //   floor's cut needs it: clipping is a measured fact, and the climb verdict has its own.
     bool downForFloor = false;
@@ -20997,6 +21024,7 @@ void LocalSdrShim::overloadTick() {
         if (g_agcFastCut.load(std::memory_order_relaxed) > 0) {
             backoffToFit = true;
             g_agcFastCut.store(0, std::memory_order_relaxed);   // one cut, not a mode
+            g_agcRecoverUntil.store(now + kAgcRecoverWindowSec, std::memory_order_relaxed);
             LOGI("%.1f dBFS is above the %.1f dBFS operating point just after the IF filter "
                  "opened — taking the whole cut now", peakNow, agcTargetDbfs());
         }
@@ -21028,6 +21056,11 @@ void LocalSdrShim::overloadTick() {
         //    there, against the real steps this tuner offers.
         backoffToFit = true;
         want = steps + 1;                                        // overdriven — back off (at least)
+        /* ★★★ AND ARM THE WAY BACK. The comment above says "the climb back up stays cautious and
+         *  one-at-a-time" — which is right for a settled receiver and wrong for the ten seconds
+         *  after a jump like this one. See g_agcRecoverUntil: for a short window the climb is
+         *  sized from the measured headroom instead of crawling, and every guard still applies. */
+        g_agcRecoverUntil.store(now + kAgcRecoverWindowSec, std::memory_order_relaxed);
         // ★★★ IF THAT OVERLOAD FOLLOWED A CLIMB, THE CLIMB WAS THE MISTAKE. Widen the margin so the
         //     next attempt has to prove more. This is what stops the straddle: one failed try and
         //     the loop stops reaching for a step it cannot hold.
@@ -21091,7 +21124,20 @@ void LocalSdrShim::overloadTick() {
         //    loop settles one step below the overload instead of straddling it.
         // ★ The margin is what stops it settling exactly ON the edge, where any fade or a passing
         //   lorry would start the cycle again.
-        want = steps - agcStride();   // provisional; the prediction below may refuse it
+        /* ★★★ RECOVERING FROM AN OVERLOAD: ASK FOR THE WHOLE WAY BACK, NOT ONE RUNG.
+         *  Inside the window armed by the cut (see g_agcRecoverUntil), the headroom is MEASURED —
+         *  the peak says exactly how far below the operating point the converter is sitting — so
+         *  the number of rungs that fit is a calculation, not a search. Stuart's V4 spent about a
+         *  minute crawling back from 2.7 dB while the V4L beside it on the same aerial sat at 25.4.
+         *  ★★ The learned margin is subtracted first, so a receiver that has been burned here
+         *     recently still aims lower than one that has not — the caution is kept, the crawl is
+         *     not. And this only ASKS: `agcStride` takes the larger of the request and what
+         *     repetition has earned, and the prediction downstream still refuses any move whose
+         *     landing peak would pass the climb ceiling. Nothing here can climb into a rail.
+         *  ★ Bounded by agcStride's own cap of 6 rungs. Outside the window this is not reached and
+         *    the cadence is exactly what it has always been, which is what protects FM. */
+        climbToFit = now < g_agcRecoverUntil.load(std::memory_order_relaxed) && clipRun == 0;
+        want = steps - agcStride();   // provisional; climbToFit and the prediction may re-size it
     }
     if (want == steps) return;
 
@@ -21126,6 +21172,46 @@ void LocalSdrShim::overloadTick() {
     if (want > tgtIdx) want = tgtIdx;                 // cannot go below the bottom of the list
     if (want < 0) want = 0;
     int idx = tgtIdx - want;   // ★ not const: backoffToFit re-sizes the move below
+    /* ★★★ THE WAY BACK UP, SIZED THE SAME WAY THE WAY DOWN IS. Stuart: "it doesnt need to climb
+     *  step by step if it detects the max signal level is 10db below clipping then it can jump say
+     *  8db." Exactly so — and now that the tuner's own list is in hand the jump is COUNTED against
+     *  the real rungs rather than estimated, because they are irregular (3.7 → 7.7 is 4.0 dB,
+     *  7.7 → 14.4 is 6.7) and an estimate either wastes headroom or overshoots.
+     *  ★★ IT AIMS AT THE OPERATING POINT, NOT AT THE RAIL, and that is deliberate: the loop's
+     *     target is about -6 dBFS because an R820T starts making intermodulation well before it
+     *     clips, which is the fault behind "blasted past the ideal gain level ... now i'm getting
+     *     intermodulation issues". So of 10 dB of headroom it takes the part that reaches the
+     *     operating point, less the learned margin — decisive, but not into the mush.
+     *  ★★ JUMP TO THE BALLPARK, THEN WALK — Stuart's own description of the shape, and it falls
+     *     out of this without another mechanism. The first tick after a cut has metres of headroom
+     *     and takes it in one move; the tick after that finds `room` nearly spent, so climbToFit
+     *     declines and the ordinary one-rung cadence resumes to feel for the limit. If it walks
+     *     one rung too far, the overload path cuts and re-arms this window — back again, as he
+     *     put it, and each round trip leaves the margin a little wider.
+     *  ★ Only inside the recovery window. The prediction immediately below still judges the final
+     *    landing peak and refuses anything that would pass the climb ceiling, so this changes the
+     *    SIZE of the ask and never the safety of the answer. */
+    if (climbToFit && want < steps) {
+        const int from = tgtIdx - steps;
+        const double peak = g_adcPeakDbfs.load(std::memory_order_relaxed);
+        const double room = agcTargetDbfs() - peak - g_ovlMargin.load(std::memory_order_relaxed);
+        if (from >= 0 && room > 1.0) {
+            int best = from;
+            for (int i = from + 1; i < n && (tgtIdx - i) >= 0; ++i) {
+                if ((gains[(size_t)i] - gains[(size_t)from]) / 10.0 > room) break;
+                best = i;
+            }
+            if (best > from && (tgtIdx - best) < want) {
+                LOGI("recovering: %.1f dBFS is %.1f dB below the %.1f dBFS operating point — "
+                     "taking %.1f dB in one move (%.1f -> %.1f dB) instead of one rung",
+                     peak, agcTargetDbfs() - peak, agcTargetDbfs(),
+                     (gains[(size_t)best] - gains[(size_t)from]) / 10.0,
+                     gains[(size_t)from] / 10.0, gains[(size_t)best] / 10.0);
+                want = tgtIdx - best;
+                idx  = best;
+            }
+        }
+    }
     // ★★★ THE PREDICTION. Only for a climb — backing off is never refused.
     if (want < steps) {
         const int from = tgtIdx - steps;               // where we are now
