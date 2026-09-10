@@ -9316,6 +9316,15 @@ struct LocalSdrShim::Impl {
                 g_rtlAgc.store(true, std::memory_order_relaxed);
                 LocalSdrShim::instance().setAgc(false);   // the DONGLE's — see g_dabSavedDigAgc
                 agcForget("DAB: an ensemble is not the carrier we came off — reconverge from the bottom");
+                /* ★★★ AND DO NOT SIT OUT THE FULL 2.5 s BEFORE THE FIRST CLIMB. The forget's settle
+                 *  guards a STALE peak-hold — the FM level the radio just left — so drop it now, the
+                 *  way every gain write does, and shorten the gate to 1.5 s: acquisition may then
+                 *  step 0.5 s after entry on a peak measured on THIS band. Measured on the V4
+                 *  (2026-09-10 12:25): 11A entered at 7.7 dB, first climb at 3.0 s, first FIB 3.5 s
+                 *  — every unlearned block pays the settle before it pays the climb. */
+                { const double tnow = Impl::nowSecs();
+                  agcSettleAfterGain(tnow);
+                  g_gainSettleUntil.store(tnow + 1.5, std::memory_order_relaxed); }
             }
             /* ★★★ RESTART THE AGC FROM THE BOTTOM. The loop is built to start at the minimum and
              *  climb, taking a step only when the measured peak says the whole step still fits —
