@@ -138,6 +138,10 @@
   .duo figure:first-child { width: 250px; max-width: 46vw; }
   .duo figure:last-child { width: 190px; max-width: 38vw; }
   .duo video { display: block; width: 100%; height: auto; }
+  /* ★ THE WATCH FLOATS. The Jr clip was shot against white and the white surround was the first
+   *   thing a reviewer noticed. A mask traced from the clip's own frame (assets/watch-mask.png,
+   *   the non-white body, crown included) cuts it out, so the watch sits over the spectrogram. */
+  .duo figure:last-child video { border: 0; background: transparent; -webkit-mask-image: url(assets/watch-mask.png); mask-image: url(assets/watch-mask.png); -webkit-mask-size: 100% 100%; mask-size: 100% 100%; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; filter: drop-shadow(0 18px 28px rgba(0,0,0,.6)); }
   figcaption { font-size: 12px; color: var(--dim); margin-top: 8px; line-height: 1.5; }
   figure { margin: 0; }
 
