@@ -1,0 +1,40 @@
+# THROWAWAY — proves the Android build in CI before it is folded into the CodeQL workflow.
+# Delete once java-kotlin analyses with build-mode: manual.
+name: Android build probe
+
+on:
+  push:
+    branches: [codeql-advanced]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ★★★ NODE FIRST, AND THIS IS THE WHOLE FIX. android/settings.gradle resolves the React
+      #     Native and Expo Gradle plugins by shelling out to `node --print require.resolve(...)`,
+      #     so Gradle cannot evaluate its own settings until node_modules exists. Without this the
+      #     build dies at "A problem occurred evaluating settings 'android'. > Process 'command
+      #     'node'' finished with non-zero exit value 1" — which autobuild reports as the useless
+      #     "unable to automatically build your code".
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # ★ JDK 17: what React Native 0.86 and Expo SDK 57 expect.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # ★ ONE ABI, not two. The Java/Kotlin analysis does not care which native ABIs are built,
+      #   and arm64-v8a alone halves the NDK compile — a CI scope choice, not a disabled check.
+      - name: assembleDebug
+        working-directory: android
+        run: ./gradlew assembleDebug --stacktrace -PreactNativeArchitectures=arm64-v8a
