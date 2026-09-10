@@ -49,6 +49,23 @@ export const DIRECTORIES: DirectoryMeta[] = [
  *  unreachable from mainland China. A directory that fails FAST and says so is strictly better than
  *  one that hangs: the user can retry, pick another, or type a custom address.
  *  ★ 12 s is deliberately generous — receiverbook is a ~400 KB page we parse — but finite. */
+/**
+ * Strip markup from a name that came out of somebody else's directory.
+ *
+ * ★★★ `replace(/<[^>]*>/g, '')` IS NOT ENOUGH, and CodeQL was right to say so
+ *  (js/incomplete-multi-character-sanitization). One pass over `<<a>script>` leaves `<script>`:
+ *  removing the inner match SPLICES THE OUTER ONE BACK TOGETHER. Any single-pass tag stripper has
+ *  this hole, which is why the rule exists rather than being pedantry about regexes.
+ * ★★ So do not try to recognise tags at all. These are display names for a receiver in a list —
+ *  no legitimate one contains an angle bracket — so both characters simply go. There is no
+ *  cleverness left to be wrong: the result cannot contain a tag because it cannot contain a `<`.
+ * ★ These names come from Receiverbook and the KiwiSDR list, i.e. from strangers, and reach React
+ *  components which escape their own text. That is why this was cosmetic rather than exploitable
+ *  today — but a name that has been through here is safe to put anywhere, and that is worth having
+ *  before somebody renders one into HTML.
+ */
+const stripMarkup = (s: unknown): string => String(s ?? '').replace(/[<>]/g, '');
+
 const DIR_TIMEOUT_MS = 12_000;
 const dirFetch = (url: string, init?: RequestInit) =>
   fetch(url, { ...init, signal: AbortSignal.timeout(DIR_TIMEOUT_MS) });
@@ -250,7 +267,7 @@ async function fetchReceiverbook(lat?: number, lon?: number): Promise<SDRInstanc
       const url = ro?.url ?? site?.url;
       if (!url) continue;
       out.push(blank({
-        name: String(ro?.label ?? site?.label ?? 'Unknown').replace(/<[^>]*>/g, '').slice(0, 120),
+        name: stripMarkup(ro?.label ?? site?.label ?? 'Unknown').slice(0, 120),
         url: String(url).replace(/\/+$/, ''),
         latitude: Number.isFinite(slat) ? slat : null,
         longitude: Number.isFinite(slon) ? slon : null,
@@ -281,7 +298,7 @@ async function fetchKiwiList(lat?: number, lon?: number): Promise<SDRInstance[]>
       // "snr":"46,47" → best of the pair
       const snr = String(r.snr ?? '').split(',').map(Number).filter((n) => Number.isFinite(n));
       return blank({
-        name: String(r.name ?? 'KiwiSDR').replace(/<[^>]*>/g, '').slice(0, 120),
+        name: stripMarkup(r.name ?? 'KiwiSDR').slice(0, 120),
         url: String(r.url).replace(/\/+$/, ''),
         location: String(r.loc ?? ''),
         users: Number(r.users) || 0,
@@ -350,7 +367,7 @@ const hostPortOf = (u: string): string => {
   } catch { return ''; }
 };
 const joinName = (s: string): string =>
-  String(s || '').toLowerCase().replace(/<[^>]*>/g, '').replace(/[^a-z0-9]/g, '').slice(0, 40);
+  stripMarkup(s).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 40);
 
 /** Session cache — the join needs the Kiwi list even when the user opened Receiverbook, and they
  *  may well open both. One fetch per session, not per screen. */

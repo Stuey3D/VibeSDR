@@ -22,6 +22,7 @@
 //   announces this", which is exactly the case lookup() must report as unknown — keeping them
 //   would let an owner ban AS0 and catch every unrouted address at once.
 #include "asndb.h"
+#include "proc.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -230,16 +231,26 @@ bool refresh(std::string& err) {
     //   with "No such file or directory" wearing a curl download error as its message.
     ::mkdir(g_dir.c_str(), 0755);
     const std::string tsv = g_dir + "/asn.tsv.tmp";
-    // ★ curl piped through gunzip: the daemon has no zlib linked and this is a once-a-week fetch.
-    //   Same reasoning as eibi.cpp shelling out to curl rather than growing an HTTP stack.
-// ★★★ QUOTE THE PATH. macOS's data directory is "~/Library/Application Support/VibeServer"
-    //     — it contains a SPACE, so an unquoted path splits and curl read "Support" as a
-    //     HOSTNAME: `curl: (6) Could not resolve host: Support`. The URL was already quoted;
-    //     the destination was not, and only a platform whose standard directory has a space
-    //     in it ever shows the difference (Stuart, 2026-08-11, on macOS).
-    const std::string cmd = "curl -fsSL --max-time 180 '" + std::string(kUrl)
-                          + "' | gunzip -c > '" + tsv + "' 2>/dev/null";
-    if (std::system(cmd.c_str()) != 0) { err = "download failed"; remove(tsv.c_str()); return false; }
+    /* ★ curl then gunzip: the daemon has no zlib linked and this is a once-a-week fetch. Same
+     *  reasoning as eibi.cpp shelling out to curl rather than growing an HTTP stack.
+     * ★★★ TWO PROGRAMS IN TURN, NOT A SHELL PIPELINE. A pipeline is a shell feature, and the whole
+     *  point of vibeproc is that there is no shell here to get the quoting wrong in — so the
+     *  download lands in a .gz and gunzip reads it back. One extra temporary file, and the class
+     *  of bug that CodeQL flagged across this daemon is gone rather than argued with.
+     * ★★ THE OLD QUOTING NOTE, KEPT BECAUSE IT EXPLAINS WHY THIS MATTERS. macOS's data directory
+     *  is "~/Library/Application Support/VibeServer" — it contains a SPACE, so an unquoted path
+     *  split and curl read "Support" as a HOSTNAME: `curl: (6) Could not resolve host: Support`
+     *  (Stuart, 2026-08-11, on macOS). Hand-quoting fixed that one case; an argument vector fixes
+     *  every case, including the quote character that hand-quoting cannot survive. */
+    const std::string gz = g_dir + "/asn.tsv.gz.tmp";
+    if (vibeproc::run({"curl", "-fsSL", "--max-time", "180", "-o", gz, kUrl}) != 0) {
+        err = "download failed"; remove(gz.c_str()); return false;
+    }
+    if (vibeproc::runToFile({"gunzip", "-c", gz}, tsv) != 0) {
+        err = "could not decompress the download";
+        remove(gz.c_str()); remove(tsv.c_str()); return false;
+    }
+    remove(gz.c_str());
 
 
     const bool ok = ingest(tsv, err);

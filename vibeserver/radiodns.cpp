@@ -1,4 +1,5 @@
 #include "radiodns.h"
+#include "proc.h"
 
 #include <algorithm>
 #include <array>
@@ -45,30 +46,32 @@ std::string lower(std::string s) {
 }
 
 /** ★ curl, exactly as eibi/geoip/asndb do it — the daemon has no TLS stack of its own and this is
- *  a rare fetch. Quoted destinations and URLs; see the space-in-the-path note in asndb.cpp. */
+ *  a rare fetch. Run through vibeproc, never a shell: see the note on httpGet below. */
 FetchFn g_fetch;
 
-std::string runCurl(const std::string& cmd) {
-    std::string out;
-    FILE* p = popen(cmd.c_str(), "r");
-    if (!p) return out;
-    char buf[4096];
-    while (fgets(buf, sizeof buf, p)) out += buf;
-    pclose(p);
-    return out;
-}
+
 
 /** Extract a JSON string value for `key` — enough for the DoH answer, which is flat and small. */
 /** ★★ ONE PLACE THAT FETCHES. It was three curl command lines with their own timeouts and
  *  quoting; now the URL and the Accept header are the only things a caller supplies, which is what
- *  makes the transport swappable at all. */
+ *  makes the transport swappable at all — and what made it a one-line job to take the shell out. */
 std::string httpGet(const std::string& url, const std::string& accept) {
     if (g_fetch) return g_fetch(url, accept);
-    // ★ Quoted, because these URLs carry & and ? — see the note above.
-    std::string cmd = "curl -fsS --max-time 12 ";
-    if (!accept.empty()) cmd += "-H 'accept: " + accept + "' ";
-    cmd += "'" + url + "' 2>/dev/null";
-    return runCurl(cmd);
+    /* ★★★ NO SHELL, AND ON THIS PATH THAT IS A SECURITY FIX, NOT A TIDY-UP. This built a command
+     *  line and wrapped the URL in single quotes. The DAB lookup composes its FQDN from the
+     *  service and ensemble identifiers, which are DECODED OFF THE AIR, and the later fetches use
+     *  a hostname that came out of a DNS answer — so a single quote in any of them closed ours and
+     *  handed the remainder to /bin/sh as commands, running as the vibeserver user on the
+     *  receiver. CodeQL called it cpp/command-line-injection and it was right.
+     *  ★★ An argument vector cannot have this bug: one argument is one argument whatever bytes are
+     *     in it. There is nothing to escape, so there is nothing to escape WRONGLY — which matters
+     *     because the old code believed it was quoting correctly. */
+    std::vector<std::string> argv{"curl", "-fsS", "--max-time", "12"};
+    if (!accept.empty()) { argv.push_back("-H"); argv.push_back("accept: " + accept); }
+    argv.push_back(url);
+    std::string out;
+    vibeproc::run(argv, &out);
+    return out;
 }
 
 std::string jsonStr(const std::string& s, const std::string& key) {

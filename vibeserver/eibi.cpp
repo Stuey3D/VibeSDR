@@ -16,6 +16,7 @@
 //   build for that would be a poor trade. If the fetch fails we keep whatever cache we have, which
 //   is the behaviour the app already has and the only one that keeps a receiver useful offline.
 #include "eibi.h"
+#include "proc.h"
 
 #include "../android/app/src/main/cpp/local_sdr_shim.h"
 
@@ -31,16 +32,7 @@
 namespace vseibi {
 namespace {
 
-std::string runCmd(const std::string& cmd) {
-    std::string out;
-    FILE* p = popen(cmd.c_str(), "r");
-    if (!p) return out;
-    char buf[4096];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof buf, p)) > 0) out.append(buf, n);
-    pclose(p);
-    return out;
-}
+
 
 /** EiBi labels a season by the year it STARTED, so Jan/Feb belong to the previous year's winter.
  *  ★ Derived exactly as `src/services/eibi.ts` does — the app and the server must ask for the same
@@ -207,10 +199,19 @@ int refresh(std::string& err) {
     //     NEXT TO the target, not somewhere convenient.
     mkdir(g_dir.c_str(), 0755);
     const std::string tmp = g_dir + "/eibi.csv.tmp";
-    // ★ Quote the destination: see the note in asndb.cpp.
-    const std::string cmd = "curl -fsSL --max-time 45 -o '" + tmp +
-                            "' http://www.eibispace.de/dx/" + file + " 2>&1";
-    const std::string out = runCmd(cmd);
+    /* ★★★ NO SHELL — see vibeserver/proc.h. `file` is composed from the season and year here, so
+     *  this one was not exploitable, but it is the same shape as the RadioDNS path that WAS, and
+     *  leaving one shell command line in the daemon is how the next one gets written. stderr is
+     *  merged into the output because curl's own message is what this reports to the owner when
+     *  the fetch fails. */
+    std::string out;
+    vibeproc::Child c = vibeproc::spawn(
+        {"curl", "-fsSL", "--max-time", "45", "-o", tmp, "http://www.eibispace.de/dx/" + file}, true);
+    if (c.ok()) {
+        char buf[4096]; size_t n;
+        while ((n = fread(buf, 1, sizeof buf, c.out)) > 0) out.append(buf, n);
+    }
+    vibeproc::reap(c);
     FILE* f = fopen(tmp.c_str(), "rb");
     if (!f) { err = out.empty() ? "could not reach eibispace.de" : out; return 0; }
     std::string csv;

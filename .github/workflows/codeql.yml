@@ -98,6 +98,29 @@ jobs:
           build-mode: ${{ matrix.build-mode }}
           config: |
             threat-models: remote
+            # ★★★ SCOPE, NOT SUPPRESSION. Everything excluded here is either NOT OURS or NOT
+            #     SHIPPED. Nothing that runs on a listener's machine or on a VibeServer is
+            #     excluded, and no finding in our own product code is silenced by this list — a
+            #     real alert in main.ts, admin.ts, the app or the daemon still lands.
+            #     The reason to scope at all: a security tab full of alerts in somebody else's
+            #     Gradle plugin is a security tab nobody reads, and the ones that matter drown.
+            paths-ignore:
+              # Dependencies. We do not write them and cannot patch them here; upgrading is
+              # Dependabot's job and that is where those findings belong.
+              - node_modules
+              - '**/node_modules'
+              # Build output — generated from web/client, so a finding here is a duplicate of one
+              # in the source that produced it.
+              - web/dist
+              - android/app/build
+              # ★ Two static skins from 2026-07-11, referenced by nothing and served by nothing:
+              #   the live client is web/client and the daemon embeds only what that builds. They
+              #   are kept because one is Stuart's own earlier work, not because they run.
+              - web/UberSDR_Pocket_v116.html
+              - web/vibesdr_web_client_base_v6_3_1.html
+              # Development and test harnesses. They run on a developer's machine against a
+              # receiver they already control, take no untrusted input, and ship in nothing.
+              - scripts
 
       # ── The manual builds. CodeQL traces whatever the compiler does between init and analyze ──
       - name: Build the Android app

@@ -4045,7 +4045,7 @@ async function showSplashRadios(): Promise<void> {
     //   page, and a secondary's card shows that radio's own copy of this list.
     const href = blocked ? ''
                : ` href="${location.origin}/r/${encodeURIComponent((r as any).id || r.serial)}/?join=1"`;
-    return `<${tag}${href} class="radioCard" data-serial="${r.serial}" style="display:block;text-align:left;`
+    return `<${tag}${href} class="radioCard" data-serial="${escapeHtml(r.serial)}" style="display:block;text-align:left;`
          + `border:1px solid rgba(255,176,0,.35);border-radius:8px;padding:10px 12px;margin:8px 0;`
          + `text-decoration:none;color:inherit;${dim}">`
          + `<div style="display:flex;justify-content:space-between;gap:12px">`
@@ -4053,7 +4053,7 @@ async function showSplashRadios(): Promise<void> {
          + `<span style="display:flex;align-items:center;gap:10px">${dabBadge(r, st)}<span class="rcState" style="font-size:11px;opacity:.85">${state}</span></span></div>`
          + `<div class="sub" style="margin-top:2px;font-size:11px;opacity:.7"${
               rangeTitle ? ` title="${rangeTitle.replace(/"/g, '&quot;')}"` : ''
-            }>${range} · ${kind}</div>`
+            }>${escapeHtml(range)} · ${kind}</div>`
          // ★★ THE AERIAL, UNDER THE RANGE IT QUALIFIES. That order is the point: the range says
          //    where this radio CAN tune, and the aerial says where it will actually hear anything.
          //    A dongle advertising 1 kHz – 1.7 GHz above "Discone, good to 300 MHz" tells a visitor
@@ -4195,12 +4195,12 @@ async function showSplashConditions(): Promise<void> {
       // ★ The rule sits on the PREDICTED cell's right edge, so it runs the height of the table
       //   automatically — a separate element would have to be measured and kept in step.
       return `<tr>
-        <td style="padding:1px 12px 1px 0;color:var(--amber);text-align:right">${m.band}</td>
-        <td style="${DIV}">${pred}</td>
+        <td style="padding:1px 12px 1px 0;color:var(--amber);text-align:right">${escapeHtml(m.band)}</td>
+        <td style="${DIV}">${escapeHtml(pred)}</td>
         <td style="padding:1px 0 1px 12px;opacity:0.95">${rate(m.snrDb)}` +
         `<span style="opacity:0.6"> (${m.snrDb.toFixed(0)} dB)</span></td></tr>`;
     }).join('');
-    const solarLine = solar ? ` &nbsp;·&nbsp; SFI ${solar.sfi} · K ${solar.kp}` : '';
+    const solarLine = solar ? ` &nbsp;·&nbsp; SFI ${escapeHtml(solar.sfi)} · K ${escapeHtml(solar.kp)}` : '';
     el.innerHTML =
       `<div style="opacity:0.8;letter-spacing:1px;margin-bottom:4px">BAND CONDITIONS${solarLine}</div>` +
       `<table style="margin:0 auto;border-collapse:collapse;font-size:11px">` +
@@ -4722,9 +4722,15 @@ function dabRender() {
   const airUrl = cur && cur.logoAir ? P(`/vibeserver/dablogoair?sid=${cur.sid}`) : '';
   const curLogo = slideUrl || airUrl || (cur ? (dabLogos.get(`${cur.ecc ?? d.ecc ?? -1}|${d.eid}|${cur.sid}`) || '') : '');
   const head = cur
-    ? `<div class="dabHead">${curLogo ? `<img class="dabHeadLogo" src="${curLogo}" alt="">` : '<div class="dabHeadLogo"></div>'}`
+    /* ★★★ ESCAPED — THE SAME BUG AS dabLogoTag, MISSED HERE. The note beside dabLogoTag records
+     *  it: a logo URL reaches us from radio-browser.info, a PUBLIC, USER-EDITABLE database, and the
+     *  only check on it is that it starts with https://. So `https://x/a" onerror="…` closes this
+     *  src attribute and runs script on the receiver's own origin, where the admin ticket lives.
+     *  That template was fixed and this one, three hundred lines away, was not — one rule, two
+     *  readers, again. Found by CodeQL (js/xss) on 2026-09-10 and it was right. */
+    ? `<div class="dabHead">${curLogo ? `<img class="dabHeadLogo" src="${escapeHtml(curLogo)}" alt="">` : '<div class="dabHeadLogo"></div>'}`
       + `<div class="dabHeadText"><div class="dabHeadName">${escapeHtml(cur.label)}</div>`
-      + `<div class="dabHeadSub"><span class="fix">${escapeHtml(cur.codec)}${cur.kbps ? ' ' + cur.kbps + ' kbit/s' : ''}${d.dls ? ' ·' : ''}</span>`
+      + `<div class="dabHeadSub"><span class="fix">${escapeHtml(cur.codec)}${cur.kbps ? ' ' + (Number(cur.kbps) || 0) + ' kbit/s' : ''}${d.dls ? ' ·' : ''}</span>`
       + (d.dls ? `<span class="dls"><span class="dlsIn">${escapeHtml(d.dls)}</span></span>` : '')
       + annLamp(d) + `</div></div></div>`
     : '';
@@ -6811,7 +6817,7 @@ function renderBookmarkRows(host: HTMLElement, rows: Array<{
       `<span class="src">${b.local ? ICON_LOCAL : ICON_SERVER}</span>` +
       `<span class="f">${(b.frequency / 1e6).toFixed(3)}</span>` +
       `<span class="n">${escapeHtml(b.name)}</span>` +
-      `<span class="src">${(b.mode || '').toUpperCase()}</span>`;
+      `<span class="src">${escapeHtml((b.mode || '').toUpperCase())}</span>`;
     const isDab = (b.mode || '').toLowerCase() === 'dab' && b.sid !== undefined && b.sid >= 0;
     row.onclick = () => {
       if (isDab) dabGoTo(b.frequency, b.sid!);
@@ -8671,12 +8677,32 @@ function spotsMapPoints() {
   }
   if (dropped) console.warn(`[map] ${dropped} spot(s) had an unparseable grid`);
 
+  /* ★★★ SANITISED HERE, ONCE, BECAUSE OF WHERE THESE GO. Every field below was DECODED OFF THE
+   *  AIR — an FT8 or WSPR callsign and grid are whatever the transmitter sent, and a bad decode
+   *  produces arbitrary bytes. They then travel into a popup document TWICE over: first as
+   *  `JSON.stringify(pts)` inside a <script> block (where a callsign containing the closing script
+   *  tag ends the script and starts injecting markup — JSON.stringify does not escape `/`), and
+   *  then into that page's own innerHTML, unescaped, in eight places. The popup is opened with
+   *  window.open('', '_blank'), so it is SAME ORIGIN as the receiver, where the admin ticket lives.
+   *  ★★ Sanitising at the source rather than at the eight sinks is the point: the alternative is
+   *     escaping correctly in a generated document, for ever, at every place a spot is rendered,
+   *     including the live push that refreshes them after the window is already open.
+   *  ★ These are ALLOW-lists, not escapes, and they can be: a callsign, a grid, a band and a mode
+   *    all have known alphabets. A country name is free text, so it loses only the characters that
+   *    matter to a parser. Nothing legitimate is lost — no real callsign contains `<`.
+   *  (CodeQL js/xss, 2026-09-10.) */
+  const ok = (v: unknown, re: RegExp, max: number) =>
+    String(v ?? '').replace(re, '').slice(0, max);
   const pts = rows.map(({ s, p }) => {
     return {
-      callsign: s.callsign, grid: s.grid, mode: s.mode, band: s.band, snr: s.snr,
-      frequency: s.frequency, timestamp: s.timestamp,
+      callsign: ok(s.callsign, /[^A-Za-z0-9/\-]/g, 16),
+      grid:     ok(s.grid,     /[^A-Za-z0-9]/g,     8),
+      mode:     ok(s.mode,     /[^A-Za-z0-9+-]/g,   12),
+      band:     ok(s.band,     /[^A-Za-z0-9]/g,     8),
+      snr: Number(s.snr) || 0,
+      frequency: Number(s.frequency) || 0, timestamp: Number(s.timestamp) || 0,
       lat: p.lat, lon: p.lon,
-      country: countryForCallsign(s.callsign) || '',
+      country: ok(countryForCallsign(s.callsign) || '', /[<>&"'`]/g, 40),
       km: me ? Math.round(haversineKm(me, p)) : null,
       colour: BAND_COLOUR[s.band] || '#aaaaaa',
     };
@@ -8778,7 +8804,7 @@ ${ST}
 <script>
 // ★★ MUTABLE, and everything that reads it lives in render(). The page used to be top-level
 //    procedural code over a const, which is exactly why it could never update.
-let spots = ${JSON.stringify(pts)};
+let spots = ${JSON.stringify(pts).replace(/</g, '\\u003c')};
 const me = ${JSON.stringify(me)};
 const COL = ${JSON.stringify(BAND_COLOUR)};
 
@@ -11232,8 +11258,14 @@ function initKeyboard() {
   });
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, c => (
+/** ★★ TAKES ANYTHING, NOT JUST A STRING. Almost every value it now guards arrives as JSON from a
+ *  server — so a field the server omits is `undefined`, and a count or a solar index is a number,
+ *  and `.replace` on either is a TypeError. Typed as `string`, TypeScript could not warn about it,
+ *  because the JSON is typed `any` on the way in. Coercing first means "escape this" always means
+ *  it, and a panel is never taken out by a field that simply was not sent.
+ *  ★ Escapes the single quote as well, so it is safe in a single-quoted attribute too. */
+function escapeHtml(s: unknown): string {
+  return String(s ?? '').replace(/[&<>"']/g, c => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!
   ));
 }

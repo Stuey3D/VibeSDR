@@ -69,7 +69,12 @@ async function post(path: string, body: unknown): Promise<any> {
 
 // ── Formatting ────────────────────────────────────────────────────────────────────────────────
 
-const esc = (s: string) => s.replace(/[&<>"]/g, (c) =>
+/** ★★ TAKES ANYTHING, NOT JUST A STRING. Every value on this page arrives as JSON from the
+ *  daemon, so a field the server omits is `undefined` and a count is a number — and `.replace` on
+ *  either is a TypeError that takes the whole panel out, not just the row. Coercing first means
+ *  "escape this" always means it. It escapes `"` as well as the angle brackets, so it is correct
+ *  inside a double-quoted attribute as well as in text. */
+const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 
 /** ★ Durations read as durations, not as seconds. "4327" is a number nobody can picture;
@@ -620,7 +625,7 @@ function renderCountries(list: any[]) {
       <span class="ccFlag">${flag(c.cc)}</span>
       <span class="ccName">${esc(c.cc)}</span>
       <span class="ccBar"><i style="width:${(100 * c.n / max).toFixed(1)}%"></i></span>
-      <span class="ccN">${c.n}</span>
+      <span class="ccN">${Number(c.n) || 0}</span>
     </div>`).join('');
 }
 

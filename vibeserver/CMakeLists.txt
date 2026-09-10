@@ -104,6 +104,7 @@ add_library(vibeserver_core STATIC
     #   into the Android and iOS apps too, and a phone has no /etc to write. See vibeserver_config.h.
     "${CMAKE_CURRENT_SOURCE_DIR}/vibeserver_config.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/eibi.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/proc.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/solar.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/geoip.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/asndb.cpp"

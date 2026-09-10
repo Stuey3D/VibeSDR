@@ -28,6 +28,7 @@
 // /var/lib/vibeserver, refresh at most daily.
 #include <sys/stat.h>
 #include "geoip.h"
+#include "proc.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -248,10 +249,12 @@ bool refresh(std::string& err) {
         const std::string tmp = g_dir + "/geoip.src.tmp";
         // ★ curl, for the same reason eibi.cpp uses it: the daemon has no TLS stack of its own,
         //   and this is a once-a-day fetch. -f so an HTTP error is a failure, not a saved error page.
-        // ★ Quote the destination: see the note in asndb.cpp — a space in the path made curl
-        //   treat part of it as a hostname.
-        const std::string cmd = "curl -fsSL --max-time 120 -o '" + tmp + "' '" + url + "' 2>/dev/null";
-        if (std::system(cmd.c_str()) != 0) continue;    // one registry down must not lose the rest
+        /* ★★★ NO SHELL. This built a command line and quoted the destination by hand — which was
+         *  itself a fix for a path containing a space (see the note in asndb.cpp). An argument
+         *  vector needs neither: the path is one argument whatever is in it, spaces and quotes
+         *  alike, and there is no /bin/sh to reinterpret it. */
+        if (vibeproc::run({"curl", "-fsSL", "--max-time", "120", "-o", tmp, url}) != 0)
+            continue;                                   // one registry down must not lose the rest
         got.push_back(tmp);
         std::lock_guard<std::mutex> lk(g_mtx);
         parseFile(tmp);

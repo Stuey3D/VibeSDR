@@ -17,6 +17,7 @@
 // ★ COST: one HTTPS request an hour, via curl, on a detached thread. NOAA publishes F10.7 daily
 //   and Kp every minute, so hourly is already finer than the data changes for HF purposes.
 #include "solar.h"
+#include "proc.h"
 
 #include <cmath>
 #include <cstdio>
@@ -39,14 +40,9 @@ double monoNow() {
     return (double)ts.tv_sec;
 }
 
-std::string runCmd(const std::string& cmd) {
+std::string runCmd(const std::vector<std::string>& argv) {
     std::string out;
-    FILE* p = popen(cmd.c_str(), "r");
-    if (!p) return out;
-    char buf[8192];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof buf, p)) > 0) out.append(buf, n);
-    pclose(p);
+    vibeproc::run(argv, &out);
     return out;
 }
 
@@ -84,10 +80,13 @@ std::string lastString(const std::string& json, const std::string& key) {
 bool fetch(std::string& err) {
     // ★ -f so an error PAGE is a failure rather than something we "parse" into zeroes and then
     //   publish as though it were a reading.
-    const std::string flux = runCmd(
-        "curl -fsSL --max-time 25 https://services.swpc.noaa.gov/json/f107_cm_flux.json 2>/dev/null");
-    const std::string kp = runCmd(
-        "curl -fsSL --max-time 25 https://services.swpc.noaa.gov/json/planetary_k_index_1m.json 2>/dev/null");
+    /* ★ No shell — see vibeserver/proc.h. These two URLs are compile-time constants and were
+     *  never exploitable; they move for consistency, so that no shell command line survives in the
+     *  daemon for the next fetch to be copied from. */
+    const std::string flux = runCmd({"curl", "-fsSL", "--max-time", "25",
+                                     "https://services.swpc.noaa.gov/json/f107_cm_flux.json"});
+    const std::string kp = runCmd({"curl", "-fsSL", "--max-time", "25",
+                                   "https://services.swpc.noaa.gov/json/planetary_k_index_1m.json"});
 
     Solar s;
     double v = 0;
