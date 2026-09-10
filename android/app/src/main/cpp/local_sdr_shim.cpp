@@ -21353,6 +21353,14 @@ bool LocalSdrShim::isHackRf()   const { return p && p->useHackRf(); }
  *    carried across a retune it is a memory of somewhere else.
  */
 static void agcForget(const char* why) {
+    /* ★★★ AND THE SFERIC DETECTOR STARTS AGAIN. Every reason this is called — a retune, a sample
+     *  rate change, DAB on or off, the IF filter widening — is the band under the FFT changing,
+     *  and a baseline learned on the old band reads the new one as one enormous strike: leaving
+     *  DAB put the V4L back on medium wave from a dead Band III block and the detector counted
+     *  three "strikes" 3.5 s later, past the 2 s retune hold (Pi, 2026-09-10 10:54). So: hold for
+     *  six seconds AND throw the baseline away, so it re-learns with its own five-second warm-up. */
+    sfericHold(6.0);
+    g_sferic.base.clear();
     // ★ Fresh meters first (the old station's samples are still in the one-second window), then
     //   permission to move at once rather than creeping.
     // ★ The same clock Impl::nowSecs() reads — spelled out here because this is a free function and
