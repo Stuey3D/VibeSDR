@@ -2382,7 +2382,14 @@ export abstract class SdrWsClient {
           //  ★ Only when this client is following the VFO. Somebody who has deliberately panned
           //    away to watch another part of the band chose that view, and yanking it back on
           //    every move somebody else makes would be the opposite of helpful.
-          if (this.followVfo && moved > bw) {
+          // ★★★ AND WHEN SMALL STEPS ADD UP: an rtl_tcp app walking the dial in 100 kHz steps on
+          //     WFM never crossed one bandwidth, so the view never followed and the VFO walked to
+          //     the edge of a LOCKed view (web client, 2026-09-10). Also recentre once the dial
+          //     has drifted more than a tenth of the view from its middle.
+          const bbNow = this.view.binBandwidth || this.status.binBandwidth;
+          const viewSpan = bbNow ? bbNow * (this.status.binCount || 4096) : 0;
+          const drifted = viewSpan > 0 && Math.abs(sv - this.view.centerHz) > viewSpan * 0.1;
+          if (this.followVfo && (moved > bw || drifted)) {
             const bb = this.view.binBandwidth || this.status.binBandwidth;
             if (bb) this.zoom(sv, bb); else this.pan(sv);
           }

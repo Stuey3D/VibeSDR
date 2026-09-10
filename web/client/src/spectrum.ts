@@ -679,8 +679,16 @@ export class SpectrumClient {
             // ★ Bring the VIEW with it when this client is following the VFO, exactly as a local
             //   tune does — otherwise the dial moves to a station that is off the side of the
             //   spectrum somebody is watching.
-            if (this.followVfo && moved > bw) {
-              const n = this.cfg.binCount || 4096;
+            // ★★★ AND WHEN SMALL STEPS ADD UP. An rtl_tcp app walked the dial in 100 kHz steps on
+            //     WFM (bw 200 kHz): every step was under one bandwidth, so the readout followed and
+            //     the view never did, and the VFO walked off to the edge of a LOCKed view (Stuart,
+            //     2026-09-10, full-rate raw IQ from SDR++). LOCK means the VFO stays centred, so
+            //     also recentre once the dial has drifted more than a tenth of the view from its
+            //     middle — rare enough that a nudged dial does not make the view twitch.
+            const n = this.cfg.binCount || 4096;
+            const viewSpan = (this.view.binBandwidth || (this.cfg.totalBandwidth / n)) * n;
+            const drifted = Math.abs(this.frequency - this.view.centerHz) > viewSpan * 0.1;
+            if (this.followVfo && (moved > bw || drifted)) {
               this.view.centerHz = this.frequency;
               this.zoom(this.frequency, this.view.binBandwidth || (this.cfg.totalBandwidth / n));
             }
