@@ -586,7 +586,8 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
         </select>
         <div class="hint">Lets a listener take the channel they are tuned to as an
           <b>rtl_tcp</b> stream &mdash; up to 250 kHz on your local network (or the radio's full
-          bandwidth when it has one listener, for a trunking app), 48 kHz through the
+          bandwidth when it has one listener, for a trunking app &mdash; that one wants a wired
+          Pi 4 or better; a Pi Zero or a phone should offer the lower rates), 48 kHz through the
           tunnel (paired by a six-character code in the VibeIQ bridge) &mdash; for a decoder that
           does not run in a browser: DSD, a DMR/P25 decoder, a data mode. The port only opens
           while somebody has it on and closes with their session. A stream that is being read
@@ -596,6 +597,19 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           locked windows only.
           <br><b id="rawIqShared" class="hide">Not available in shared VFO mode. Set Listeners
           to 1, or lock the centre, to offer it.</b></div></label>
+      <label style="margin-top:12px" id="nbWideRow"><span class="lbl">Impulse noise blanker</span>
+        <select id="nbWide">
+          <option value="0">Off</option>
+          <option value="1">Auto (below 30 MHz)</option>
+          <option value="2">On</option>
+        </select>
+        <div class="hint">Blanks impulse noise &mdash; distant lightning, power-line hash, ignition,
+          switch-mode supplies &mdash; on the <b>whole capture</b>, before the waterfall and before
+          any listener's channel, so everybody benefits at once. Impulses are microseconds long and
+          wideband, which is why this works far better here than after a channel filter has smeared
+          them. On a clean signal it blanks nothing. <b>Auto</b> engages it only when the radio is
+          below 30 MHz: on a strong VHF broadcast band a blanker trades clicks for damage. Each
+          listener also has their own blanker on their own channel, in the audio menu.</div></label>
       <label id="rawIqMaxRow"><span class="lbl">Raw IQ streams at once</span>
         <span style="display:flex;gap:8px;align-items:center">
           <input type="number" id="rawIqMax" min="0" max="16" step="1" placeholder="default" style="max-width:8em">
@@ -2569,6 +2583,7 @@ function fill() {
   $("sessionLimitMode").value = r.sessionLimitSoft ? "soft" : "hard";
   $("idleKick").value = r.idleKickMin || 0;
   if ($("rawIq"))    $("rawIq").value = String(r.rawIq || 0);
+  if ($("nbWide"))   $("nbWide").value = String(r.nbWide === undefined || r.nbWide === null ? 1 : r.nbWide);
   if ($("rawIqMax")) $("rawIqMax").value = r.rawIqMax > 0 ? String(r.rawIqMax) : "";
   if ($("rawIqMaxDefault")) $("rawIqMaxDefault").addEventListener("click", () => { $("rawIqMax").value = ""; });
   if ($("rawIq")) $("rawIq").addEventListener("change", rawIqAvail);
@@ -2810,6 +2825,8 @@ function collectRadio() {
     //   shared dial whatever is saved here — see the note by the control.
     rawIq: parseInt($("rawIq").value || "0", 10),
     rawIqMax: parseInt($("rawIqMax").value || "0", 10),
+    // ★ Wide impulse blanker: 0 off, 1 auto (HF only), 2 on.
+    nbWide: parseInt($("nbWide").value || "1", 10),
     // ★ Never claim the spectrogram for a radio that cannot honestly draw one — the checkbox is
     //   hidden in that case, and a hidden control must not still be sending a value.
     spectrogram: !$("hwSpectro").classList.contains("hide") && $("spectrogram").checked

@@ -378,6 +378,57 @@ private:
     std::vector<float> buf_;     // [phaseLen_ history][block]
 };
 
+// ── IQ cleaner: DC block + I/Q imbalance + rotation, one SIMD pass ─────────────
+/** ★ See iqclean.cpp. Applied to the RAW capture on every radio (DC and the I/Q image), and to
+ *  the full-rate raw IQ stream with `setRotation(+hwOffset)` so a consumer's centre is clean and
+ *  exact. Correction happens BEFORE rotation, at the true DC. Fail-safe: a wild estimate applies
+ *  nothing. Coefficients are one block behind the statistics. */
+class IqCleaner {
+public:
+    void configure(double rate, double dcTauSec = 1.0, double imbTauSec = 2.0);
+    void reset();
+    void setDc(bool on)        { dcOn_ = on; }
+    void setImbalance(bool on) { imbOn_ = on; }
+    /** Positive = the stream moves UP in frequency (a signal at −hz lands on 0). 0 = off. */
+    void setRotation(double hz);
+    void process(cf32* z, int n);          // in place
+    float dcI() const { return dcI_; }
+    float dcQ() const { return dcQ_; }
+    /** Applied correction q' = A·q + B·i — A ≈ 1/α, B ≈ −φ; both 1/0 when nothing is applied. */
+    float coefA() const { return A_; }
+    float coefB() const { return B_; }
+private:
+    double rate_ = 0.0, dcTau_ = 1.0, imbTau_ = 2.0;
+    bool dcOn_ = true, imbOn_ = true;
+    float dcI_ = 0.0f, dcQ_ = 0.0f; bool dcSeeded_ = false;
+    double sII_ = 0.0, sQQ_ = 0.0, sIQ_ = 0.0; bool imbSeeded_ = false;
+    float A_ = 1.0f, B_ = 0.0f;
+    double rotHz_ = 0.0, phase_ = 0.0;
+};
+
+// ── Wide-stream impulse blanker (owner-level, capture rate) ────────────────────
+/** ★ The classic hold blanker on the RAW capture, vectorised in two passes — see iqclean.cpp.
+ *  Distinct from NoiseBlanker, which is per listener on their own WFM channel. This one is the
+ *  owner's, for HF (sferics, power-line hash), and blanks BEFORE the FFT so every listener and
+ *  the waterfall benefit. `k` is the amplitude threshold over the running reference; a run longer
+ *  than maxRunSec is let through — that is a signal, not a click. */
+class ImpulseBlanker {
+public:
+    void configure(double rate, double tauSec = 0.020, float k = 4.0f, double maxRunSec = 20e-6);
+    void reset();
+    void process(cf32* z, int n);          // in place
+    /** Fraction of samples blanked since the last call (0..1). */
+    float rate();
+private:
+    void blankOne(cf32* z, int i, bool hit);
+    double rate_ = 0.0, tau_ = 0.020;
+    float k2_ = 16.0f, avgP_ = 0.0f; bool seeded_ = false;
+    int maxRun_ = 8, run_ = 0;
+    cf32 last_{0.0f, 0.0f};
+    long long blanked_ = 0, seen_ = 0;
+    std::vector<float> p_;
+};
+
 // ── AM demodulator ───────────────────────────────────────────────────────--
 // Envelope detector: audio = |z| with the carrier DC removed (one-pole DC
 // blocker), then a fixed gain. Input is the DDC'd baseband channel; output is
@@ -1923,6 +1974,11 @@ public:
     /** Noise blanker — impulse noise only. ON by default: on a clean signal it blanks nothing. */
     void  setNoiseBlanker(bool on) { nbOn_.store(on, std::memory_order_relaxed); }
     bool  noiseBlanker() const { return nbOn_.load(std::memory_order_relaxed); }
+    /** The listener's blanker for every mode BUT WFM (the audio-menu NOISE BLANKER). OFF by
+     *  default until it has been measured on speech: the run limit keeps it safe, but a blanker
+     *  that clips a syllable onset is a fault a listener should opt into, not discover. */
+    void  setNoiseBlankerHf(bool on) { nbxOn_.store(on, std::memory_order_relaxed); }
+    bool  noiseBlankerHf() const { return nbxOn_.load(std::memory_order_relaxed); }
     /** Fraction of samples being blanked, 0..1. This is the DIAGNOSTIC that matters: it tells an
      *  owner whether they have an impulse-noise problem at all, which is otherwise guesswork. */
     float noiseBlankRate() const { return nbRate_; }
@@ -2121,8 +2177,9 @@ private:
     //     reads it as the equaliser leaves it. Two meters mean the feature scores itself on every
     //     real signal instead of being trusted — and a CMA equaliser that is making things worse
     //     is not a hypothetical: fed noise it will contort itself trying to correct randomness.
-    NoiseBlanker   nb_;
+    ImpulseBlanker nb_;                     // ★ vectorised, every mode (was NoiseBlanker, WFM only)
     std::atomic<bool> nbOn_{true};
+    std::atomic<bool> nbxOn_{false};        // ★ the audio-menu blanker, every mode but WFM
     float          nbRate_ = 0.0f;          // fraction of samples blanked, smoothed
     CmaEqualiser   ceq_;
     MultipathMeter ceqOut_;

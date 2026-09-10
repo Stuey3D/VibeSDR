@@ -133,6 +133,8 @@ public:
     static void setVibeServerDabRateBoost(bool on);
     /** ★ Raw IQ out: 0 off, 1 local network only, 2 local + public (tunnel); maxUsers 0 = host default. */
     static void setVibeServerRawIq(int mode, int maxUsers);
+    /** ★ Wide impulse blanker on the raw capture: 0 off, 1 auto (only below 30 MHz), 2 on. */
+    static void setVibeServerNbWide(int mode);
     /** Modes and decoders the owner has switched off, comma separated (e.g. "dab,cwl"). */
     static void setVibeServerBlockedModes(const std::string& csv);
     static void setGainLock(bool on);

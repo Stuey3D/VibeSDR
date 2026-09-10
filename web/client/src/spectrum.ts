@@ -311,6 +311,8 @@ export interface SpectrumCallbacks {
     ceq: boolean;
     /** Noise blanker — impulses, the fourth fault and the fourth switch. */
     nb: boolean;
+    /** ★ The audio-menu NOISE BLANKER (every mode but WFM); undefined from a server without it. */
+    nbx?: boolean;
     /** ★ TEF-style automatic demodulator bandwidth, and the width it has settled on (Hz). */
     autobw?: boolean;
     autobwHz?: number;
@@ -844,6 +846,7 @@ export class SpectrumClient {
             ims: msg.ims !== false,
             ceq: msg.ceq !== false,
             nb: msg.nb !== false,
+            nbx: typeof msg.nbx === 'boolean' ? msg.nbx : undefined,
             // ★ Only forward what the server actually stated. `undefined` travels through as
             //   "no opinion" and the renderer leaves that control alone.
             /* ★★★ DECLARED IN THE TYPE IS NOT COPIED ON THE WIRE. `autobw` sat in this callback's
@@ -1332,6 +1335,8 @@ export class SpectrumClient {
   /** Noise blanker — impulse noise. Not the same as NR: impulses are brief and enormous, and the
    *  cure is to remove the moments they occupy, not to filter continuously. */
   setNoiseBlanker(on: boolean) { this._send({ type: 'nb', on }); }
+  /** The audio-menu NOISE BLANKER — every mode but broadcast FM. */
+  setNoiseBlankerHf(on: boolean) { this._send({ type: 'nbx', on }); }
 
   // ── Coalesced view sender ──────────────────────────────────────────────────
 

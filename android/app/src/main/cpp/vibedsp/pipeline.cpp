@@ -444,7 +444,7 @@ void RxPipeline::rebuildAudio() {
             mpxNoise_.configure(chFs_);
             multipath_.configure(chFs_);
             adaptIf_.configure(chFs_); adaptIf_.setBandwidth(ifBwHz_);
-            nb_.configure(chFs_); nbRate_ = 0.0f;
+            nb_.configure(chFs_, 0.020, 4.0f, 8.0 / std::max(1.0, chFs_)); nbRate_ = 0.0f;   // 8 samples, as before
             ceq_.configure(9); ceqOut_.configure(chFs_);
             ceqEngaged_ = false; ceqDwell_ = 0; ceqEffort_ = 0.0f;
             shadowIf_.configure(chFs_); shadowIf_.setBandwidth(shadowBwHz_);
@@ -721,11 +721,18 @@ void RxPipeline::feed(const cf32* iq, int n) {
         //    the spike. Blanking on the raw input would be more effective and costs a magnitude
         //    per sample at the full rate — real money on a Pi that already runs its DSP near real
         //    time. If the measured benefit is not there, this belongs earlier, not tuned harder.
-        if (mode_ == Mode::WFM && nbOn_.load(std::memory_order_relaxed)) {
-            nb_.process(chBuf_.data(), nc, 4.0f);
+        // ★★ TWO SWITCHES, ONE BLANKER. On WFM this is the TEF6686-style NB in the Broadcast FM
+        //    processing row (nbOn_), untouched. On every other mode it is the listener's own
+        //    NOISE BLANKER in the audio menu (nbxOn_), which did not exist before — on HF, where
+        //    the impulses are, a listener had no blanker at all (Stuart, 2026-09-10). Same
+        //    vectorised engine either way (iqclean.cpp).
+        const bool on = (mode_ == Mode::WFM) ? nbOn_.load(std::memory_order_relaxed)
+                                             : nbxOn_.load(std::memory_order_relaxed);
+        if (on) {
+            nb_.process(chBuf_.data(), nc);
             nbRate_ += 0.1f * (nb_.rate() - nbRate_);
             if (!std::isfinite(nbRate_)) nbRate_ = 0.0f;
-        } else if (mode_ == Mode::WFM) {
+        } else {
             nbRate_ = 0.0f;
         }
 

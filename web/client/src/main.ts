@@ -1183,6 +1183,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       setToggleTo('imsBtn', s.ims, 'ims', (on) => on ? 'IMS ON' : 'IMS OFF');
       setToggleTo('ceqBtn', s.ceq, 'ceq', (on) => on ? 'CEQ ON' : 'CEQ OFF');
       setToggleTo('nbBtn',  s.nb,  'nb',  (on) => on ? 'NB ON'  : 'NB OFF');
+      if (typeof s.nbx === 'boolean') {
+        setHidden($('nbxRow'), false);
+        setToggleTo('nbxBtn', s.nbx, 'nbx', (on) => on ? 'ON' : 'OFF');
+      }
       // ★ AUTO BW is decided once for the whole receiver (it changes the demodulator, not a
       //   per-listener effect), so the server's word is the only truth here.
       // ★ ONLY WHEN THE SERVER ACTUALLY STATED IT. `!!s.autobw` turned "not reported" into "off"
@@ -9335,6 +9339,8 @@ function buildMenu() {
     $('nbBtn').textContent = on ? 'NB ON' : 'NB OFF';
     spec!.setNoiseBlanker(on);
   }, 'nb', true);
+  // ★ The audio-menu NOISE BLANKER — its own state, every mode but WFM. Off until chosen.
+  toggle('nbxBtn', (on) => { spec!.setNoiseBlankerHf(on); }, 'nbx', false, false);
   // ★★ DEFAULTS ON, like the other four. It is the TEF6686's own behaviour and the reason Stuart
   //    went looking for it: "if you disable auto bandwidth it becomes really messy and noisy". It
   //    declines to act on anything that is not FM broadcast and on anything with no pilot, so it

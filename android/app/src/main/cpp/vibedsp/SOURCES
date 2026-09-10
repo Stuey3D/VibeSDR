@@ -32,3 +32,4 @@ resampler.cpp
 stereo.cpp
 rds.cpp
 pipeline.cpp
+iqclean.cpp

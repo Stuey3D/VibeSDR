@@ -3511,6 +3511,13 @@ select.btn { padding: 6px 8px; }
     <label>AUTO NOTCH</label>
     <div class="seg"><button class="btn" id="notch">OFF</button></div>
   </div>
+  <!-- ★ The listener's own impulse blanker for every mode BUT broadcast FM — the FM one is the
+       TEF6686-style NB in the Broadcast FM processing row and stays there. Shown once the server
+       reports its state, which only a VibeServer does. -->
+  <div class="mrow" id="nbxRow" hidden>
+    <label>NOISE BLANKER</label>
+    <div class="seg"><button class="btn" id="nbxBtn" title="Impulse noise blanker on your own channel — the crackle of distant lightning, power-line hash, ignition, thermostats, switch-mode supplies. Removes the moments an impulse occupies rather than filtering continuously; on a clean signal it blanks nothing. Not for broadcast FM, which has its own NB below. The owner may also run a wider one on the whole receiver.">OFF</button></div>
+  </div>
   <div class="msub">BROADCAST FM</div>
   <div class="mrow">
     <label>FM DE-EMPHASIS</label>

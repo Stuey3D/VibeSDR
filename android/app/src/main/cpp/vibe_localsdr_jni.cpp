@@ -985,6 +985,10 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetRawIq(JNIEnv*, jobject, jint mode, ji
     vibe::LocalSdrShim::setVibeServerRawIq((int)mode, (int)max);
 }
 extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetNbWide(JNIEnv*, jobject, jint mode) {
+    vibe::LocalSdrShim::setVibeServerNbWide((int)mode);
+}
+extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetDabPolicy(JNIEnv* env, jobject,
                                                      jboolean rateBoost, jstring blockedCsv) {
     vibe::LocalSdrShim::setVibeServerDabRateBoost(rateBoost == JNI_TRUE);

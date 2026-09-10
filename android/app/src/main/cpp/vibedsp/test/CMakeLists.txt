@@ -106,3 +106,7 @@ target_compile_options(vibedsp_rds_snr_probe PRIVATE -O2 -Wall)
 add_executable(vibedsp_iq_probe iq_probe.cpp ${DSP_SRC})
 target_include_directories(vibedsp_iq_probe PRIVATE ${DSP})
 target_compile_options(vibedsp_iq_probe PRIVATE -O2 -Wall)
+
+add_executable(vibedsp_iqclean_tests test_iqclean.cpp ${DSP_SRC})
+target_include_directories(vibedsp_iqclean_tests PRIVATE ${DSP})
+target_compile_options(vibedsp_iqclean_tests PRIVATE -O2 -Wall)

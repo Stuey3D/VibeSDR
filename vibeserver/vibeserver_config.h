@@ -193,6 +193,7 @@ struct Config {
     bool dabRateBoost = false;
     int  rawIq = 0;               // ★ raw IQ out: 0 off, 1 local only, 2 local + public
     int  rawIqMax = 0;            // ★ total raw IQ listeners at once; 0 = host default
+    int  nbWide = 1;              // ★ wide impulse blanker on the raw capture: 0 off, 1 auto (HF only), 2 on
     /** Modes and decoders switched off on this receiver, comma separated (e.g. "dab").
      *  ★ Bands say WHERE this aerial is useful; this says WHAT it is useful for. An amplified
      *   attic aerial can be right for FM and wrong for a DAB transmitter two miles away. */
@@ -407,6 +408,7 @@ struct RadioConfig {
     bool   dabRateBoost = false;   // per radio — see Config::dabRateBoost
     int    rawIq = 0;              // ★ raw IQ out: 0 off, 1 local network only, 2 local + public
     int    rawIqMax = 0;           // ★ total raw IQ listeners at once; 0 = the host's default
+    int    nbWide = 1;             // ★ wide impulse blanker: 0 off, 1 auto (below 30 MHz), 2 on
     std::string blockedModes;      // per radio — see Config::blockedModes
     int    directSampling = -1; // RTL: 0 off, 1 I, 2 Q; -1 = leave alone (not needed on a V4)
 

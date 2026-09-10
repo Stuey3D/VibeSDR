@@ -223,6 +223,8 @@ object VibeLocalSDR {
     /** ★ Raw IQ out: 0 off, 1 local only, 2 local + public; max 0 = this phone's default (1). */
     fun setRawIq(mode: Int, max: Int) { ensureLoaded(); nativeSetRawIq(mode, max) }
     private external fun nativeSetRawIq(mode: Int, max: Int)
+    fun setNbWide(mode: Int) { ensureLoaded(); nativeSetNbWide(mode) }
+    private external fun nativeSetNbWide(mode: Int)
 
     /** Per-band gain ceilings, the gain to return to when everyone leaves (-1 = leave alone), and
      *  an AGC lock. ★ Ceilings are enforced on SET, on RETUNE INTO a capped band, at START and at

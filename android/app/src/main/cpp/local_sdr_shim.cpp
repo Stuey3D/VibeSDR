@@ -2657,6 +2657,8 @@ static bool isLoopback(const std::string& ip) {
 //   • A consumer that is taking data is USING the radio — the idle prompt does not fire.
 static std::atomic<int> g_vsRawIqMode{0};     // 0 off · 1 local only · 2 local + public
 static std::atomic<int> g_vsRawIqMax{0};      // 0 = the default for this host
+/* ★ Wide impulse blanker on the raw capture — the OWNER's: 0 off, 1 auto (below 30 MHz), 2 on. */
+static std::atomic<int> g_vsNbWide{1};
 static std::atomic<int> g_vsRawIqActive{0};   // sessions with IQ out on right now
 static int vsRawIqDefaultMax() {
 #if defined(__ANDROID__)
@@ -3016,7 +3018,8 @@ struct LocalSdrShim::Impl {
     std::atomic<bool>  weakProcOn{true};
     std::atomic<bool>  imsOn{true};        // adaptive IF — a neighbour, not noise
     std::atomic<bool>  ceqOn{true};        // blind channel equaliser — a reflection
-    std::atomic<bool>  nbOn{true};         // noise blanker — impulses
+    std::atomic<bool>  nbOn{true};         // noise blanker — impulses (Broadcast FM row)
+    std::atomic<bool>  nbxOn{false};       // ★ the audio-menu NOISE BLANKER, every mode but WFM
     std::atomic<float> nrCpuPct{0.0f};      // rolling CPU% (NR time / wall time)
     std::mutex         nrMtx;
     AudioNR*           nrEng = nullptr;
@@ -3980,6 +3983,8 @@ struct LocalSdrShim::Impl {
         float lvl = 1.0f;                        // ★ the 8-bit normaliser's gain (see iqTapInto)
         std::unique_ptr<vibedsp::RationalResampler> ri, rq;
         std::vector<float> fi, fq, oi, oq;
+        vibedsp::IqCleaner rot;                  // ★ full rate: the offset rotation only
+        std::vector<cf32>  rotBuf;
     };
 
     struct ClientDsp {
@@ -4101,7 +4106,7 @@ struct LocalSdrShim::Impl {
         //     anything, which is the WORST version of this bug because it looks like it is
         //     working". Seeded from the server's configured values when the listener arrives, so
         //     the owner still sets the house default and only this listener can change it.
-        std::atomic<bool> wspOn{true}, imsOn{true}, ceqOn{true}, nbOn{true};
+        std::atomic<bool> wspOn{true}, imsOn{true}, ceqOn{true}, nbOn{true}, nbxOn{false};
         // ★★★ ADMIN IS PER LISTENER TOO, and the radio-wide flag it replaces was already
         //     DESCRIBED as "per connected client" while being one atomic for the whole process.
         //     On a shared receiver that means two owners share one bit: whoever unlocks last
@@ -4729,6 +4734,7 @@ struct LocalSdrShim::Impl {
             c->rx->setIms(c->imsOn.load());
             c->rx->setCeq(c->ceqOn.load());
             c->rx->setNoiseBlanker(c->nbOn.load());
+            c->rx->setNoiseBlankerHf(c->nbxOn.load());
             LOGI("client channel: %.3f kHz wide (%d bins) for %s",
                  c->chanRate / 1e3, want, c->mode.c_str());
         }
@@ -9944,6 +9950,11 @@ struct LocalSdrShim::Impl {
             perListener(&vibedsp::RxPipeline::setNoiseBlanker, &ClientDsp::nbOn, &nbOn, jsonOn(msg));
             return;
         }
+        if (type == "nbx") {
+            /* ★ The audio-menu NOISE BLANKER — the listener's own, every mode but WFM. */
+            perListener(&vibedsp::RxPipeline::setNoiseBlankerHf, &ClientDsp::nbxOn, &nbxOn, jsonOn(msg));
+            return;
+        }
         if (type == "ceq") {
             perListener(&vibedsp::RxPipeline::setCeq, &ClientDsp::ceqOn, &ceqOn, jsonOn(msg));
             return;
@@ -10438,6 +10449,7 @@ struct LocalSdrShim::Impl {
         j += std::string(",\"ims\":") + (mine(&ClientDsp::imsOn, imsOn)      ? "true" : "false");
         j += std::string(",\"ceq\":") + (mine(&ClientDsp::ceqOn, ceqOn)      ? "true" : "false");
         j += std::string(",\"nb\":")  + (mine(&ClientDsp::nbOn,  nbOn)       ? "true" : "false");
+        j += std::string(",\"nbx\":") + (mine(&ClientDsp::nbxOn, nbxOn)      ? "true" : "false");
         j += std::string(",\"notch\":") + (notchOn.load() ? "true" : "false");
         // ★★★ THE SAME BUG AS `nr`/`notch` ABOVE, AND THE FIX WAS LEFT HALF-DONE. That pair was
         //     added on 2026-07-28 because rendering our saved prefs showed NR OFF while it was
@@ -12949,6 +12961,7 @@ struct LocalSdrShim::Impl {
                 // ★ The owner's configured defaults are what a new listener starts from.
                 c->wspOn.store(weakProcOn.load()); c->imsOn.store(imsOn.load());
                 c->ceqOn.store(ceqOn.load());      c->nbOn.store(nbOn.load());
+                c->nbxOn.store(nbxOn.load());
                 // ★ The credential proved at the handshake belongs to THIS listener. The accept
                 //   path settled it into the radio-wide flag a few lines earlier (it is still the
                 //   right answer for a receiver with no per-client DSP), so it is read from there
@@ -13623,7 +13636,7 @@ struct LocalSdrShim::Impl {
                  *  derives is wrong. Only when the session's tune was ACCEPTED (a blocked band
                  *  leaves the dial where it was, and the centre must not move on its own). */
                 if (iq->full && std::fabs(audioFreq.load() - (double)v) < 1.0) {
-                    requestPhysicalCentre((double)v);
+                    requestConsumerCentre((double)v);
                     LOGI("raw IQ out: full-rate consumer set the centre to %.6f MHz", v / 1e6);
                 }
                 // ★ TELL THE OWNING CLIENT. A tune normally comes FROM the client, which already
@@ -13665,6 +13678,42 @@ struct LocalSdrShim::Impl {
         { std::lock_guard<std::mutex> lk(p->iqDirectMtx); iq = p->iqDirect; }
         if (iq && !iq->full) p->iqTapInto(iq, x, n, (int)std::lround(rateHz));
     }
+    // ── the capture cleaner and the owner's wide blanker ─────────────────────────────────
+    vibedsp::IqCleaner     iqCapClean_;
+    vibedsp::ImpulseBlanker nbWide_;
+    double  capCleanRate_ = 0.0;
+    bool    capCleanOff_ = false, capCleanChecked_ = false;
+    bool    nbWideWas_ = false;
+    double  capCleanLogAt_ = 0.0;
+    void cleanCapture(cf32* z, int n) {
+        if (n <= 0) return;
+        if (!capCleanChecked_) { capCleanChecked_ = true; const char* e = std::getenv("VIBE_IQ_CLEAN"); capCleanOff_ = e && *e == '0'; }
+        if (capCleanRate_ != sampleRate) {
+            capCleanRate_ = sampleRate;
+            iqCapClean_.configure(sampleRate);
+            nbWide_.configure(sampleRate);
+        }
+        if (!capCleanOff_) iqCapClean_.process(z, n);
+        const int m = g_vsNbWide.load(std::memory_order_relaxed);
+        const bool hf = (rtlCenter.load() + hwOffsetHz()) < 30e6;
+        const bool on = m == 2 || (m == 1 && hf);
+        if (on != nbWideWas_) { nbWideWas_ = on; nbWide_.reset(); LOGI("wide impulse blanker %s", on ? "engaged" : "released"); }
+        if (on) nbWide_.process(z, n);
+        // ★ One line a minute, so the correction can be READ off the live radio rather than
+        //   believed: the DC it found and the imbalance it is applying.
+        const double now = Impl::nowSecs();
+        if (now - capCleanLogAt_ > 60.0) {
+            capCleanLogAt_ = now;
+            const float A = iqCapClean_.coefA(), B = iqCapClean_.coefB();
+            LOGI("capture clean: dc %.4f,%.4f  imbalance gain %.3f dB phase %.2f°%s  wide NB %s%s",
+                 iqCapClean_.dcI(), iqCapClean_.dcQ(),
+                 (A > 0 ? -20.0 * std::log10((double)A * std::sqrt(1.0 - std::min(0.99, (double)B * B / (A * A + B * B)))) : 0.0),
+                 (A > 0 ? std::asin(std::max(-1.0, std::min(1.0, (double)(-B) / std::sqrt((double)A * A + B * B)))) * 180.0 / M_PI : 0.0),
+                 capCleanOff_ ? " [cleaner OFF by VIBE_IQ_CLEAN=0]" : "",
+                 on ? "on" : "off",
+                 on ? (", blanking " + std::to_string(nbWide_.rate() * 100.0f) + " %").c_str() : "");
+        }
+    }
     /** Is a full-rate raw IQ stream on right now? (On, not attached: the filter must be right
      *  before the first byte.) */
     bool iqFullActive() {
@@ -13680,6 +13729,13 @@ struct LocalSdrShim::Impl {
     void iqTapInto(const std::shared_ptr<IqOut>& iq, const cf32* in, int n, int inRate) {
         if (!iq || !iq->conn || n <= 0) return;
         if (inRate <= 0) return;
+        // ★ Full rate: rotate the capture down by the hardware offset on a COPY (the pipeline
+        //   still needs the original), so the consumer's centre is exact. See requestConsumerCentre.
+        if (iq->full && hwOffsetHz() != 0.0) {
+            iq->rotBuf.assign(in, in + n);
+            iq->rot.process(iq->rotBuf.data(), n);
+            in = iq->rotBuf.data();
+        }
         const bool same = inRate == iq->rate;    // ★ full rate: nothing to resample
         if (!same && (iq->inRate != inRate || !iq->ri)) {
             iq->ri.reset(new vibedsp::RationalResampler(inRate, iq->rate));
@@ -13783,6 +13839,16 @@ struct LocalSdrShim::Impl {
         std::lock_guard<std::recursive_mutex> lk(modeMtx);
         pendingDongle = hz - hwOffsetHz();
     }
+    /** ★★★ THE FULL-RATE CONSUMER'S CENTRE IS THE LOGICAL ONE. The dongle sits hwOffsetHz() ABOVE
+     *  it — exactly as it does for VibeServer's own demodulators — and the tap rotates the stream
+     *  back down by the same amount, so the consumer's centre is EXACT and its DC spike sits
+     *  15 kHz away from anything it is listening to. Stuart, 2026-09-10: "how about both IQ
+     *  correction and offset tuning?" — correction first at the true DC (iqCapClean_), rotation
+     *  after (iqTapInto). */
+    void requestConsumerCentre(double hz) {
+        std::lock_guard<std::recursive_mutex> lk(modeMtx);
+        pendingDongle = hz;
+    }
     /** Turn IQ out on for the session behind `sock`. Returns the JSON reply (an `iqout` message,
      *  with `why` when refused). */
     std::string iqStartFor(const std::shared_ptr<net::Socket>& sock, int rate) {
@@ -13852,7 +13918,9 @@ struct LocalSdrShim::Impl {
         if (full) {
             // ★ The window IS the capture: put the physical centre on the listener's dial so the
             //   consumer's first read is what the web client shows, until it sets its own.
-            requestPhysicalCentre(audioFreq.load());
+            requestConsumerCentre(audioFreq.load());
+            iq->rot.configure(sampleRate); iq->rot.setDc(false); iq->rot.setImbalance(false);
+            iq->rot.setRotation(hwOffsetHz());   // ★ +offset: the signal at −15 kHz lands on 0
             applyAutoIf();                       // ★ and open the tuner's IF filter right up
         }
         else if (c) clientRetune(c.get());          // ★ widen the channel to the IQ rate (chanBinsFor above)
@@ -14754,6 +14822,11 @@ struct LocalSdrShim::Impl {
             //     test and a listener saying the audio broke up. The IQ backlog IS that signal.
             const auto t0 = std::chrono::steady_clock::now();
             const double haveSec = (double)buf.size() / sampleRate;   // real time in this block
+            /* ★★★ CLEAN THE CAPTURE FIRST — every radio, every listener. DC and the I/Q image are
+             *     properties of the front end and belong nowhere downstream (iqclean.cpp). Then
+             *     the owner's wide impulse blanker, below 30 MHz on auto. Both are one SIMD pass
+             *     each over the block; VIBE_IQ_CLEAN=0 switches the cleaner off for A/B tests. */
+            cleanCapture(buf.data(), (int)buf.size());
             iqTapFull(buf.data(), (int)buf.size(), sampleRate);       // ★ full-rate raw IQ out, if on
             // ★★★ IN SHARED MODE THE SHARED PIPELINE IS NOT RUN AT ALL. Its FFT is replaced by the
             //     channelizer's (emitWideFromBins), and its DEMODULATOR produced audio that NOBODY
@@ -17894,6 +17967,10 @@ void LocalSdrShim::setVibeServerRateLock(bool on) {
     LOGI("sample rate: %s", on ? "PINNED — listeners may not change it" : "listener's choice");
 }/** ★ DAB may borrow 2.048 MS/s on a receiver configured slower — see g_dabRateBoost. */
 void LocalSdrShim::setVibeServerDabRateBoost(bool on) { g_dabRateBoost.store(on, std::memory_order_relaxed); }
+void LocalSdrShim::setVibeServerNbWide(int mode) {
+    g_vsNbWide.store(std::max(0, std::min(2, mode)), std::memory_order_relaxed);
+    LOGI("wide impulse blanker: %s", mode == 0 ? "off" : mode == 2 ? "on" : "auto (below 30 MHz)");
+}
 void LocalSdrShim::setVibeServerRawIq(int mode, int maxUsers) {
     g_vsRawIqMode.store(std::max(0, std::min(2, mode)), std::memory_order_relaxed);
     g_vsRawIqMax.store(std::max(0, maxUsers), std::memory_order_relaxed);
