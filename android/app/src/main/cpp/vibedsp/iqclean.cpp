@@ -49,7 +49,8 @@ void IqCleaner::configure(double rate, double dcTauSec, double imbTauSec) {
 void IqCleaner::reset() {
     dcI_ = dcQ_ = 0.0f; dcSeeded_ = false;
     sII_ = sQQ_ = sIQ_ = 0.0; imbSeeded_ = false; imbWarmSec_ = 0.0;
-    A_ = 1.0f; B_ = 0.0f;
+    A_ = 1.0f; B_ = 0.0f; Aprev_ = 1.0f; Bprev_ = 0.0f;
+    dcPrevI_ = dcPrevQ_ = 0.0f; dcPrevSeeded_ = false;
     phase_ = 0.0;
 }
 
@@ -87,18 +88,37 @@ void IqCleaner::process(cf32* z, int n) {
         }
         if (!std::isfinite(dcI_) || !std::isfinite(dcQ_)) { dcI_ = mi; dcQ_ = mq; }
     }
-    const float di = dcOn_ ? dcI_ : 0.0f, dq = dcOn_ ? dcQ_ : 0.0f;
+    /* ★★★ NO STEPS. Subtracting the NEW estimate from the whole block put a step at every block
+     *  boundary whenever the estimate moved — small once converged, but while the AGC walks the
+     *  gain after a start the offset moves every block, and a step is broadband: the sferic
+     *  detector (a quarter of the band up 6 dB in one frame) counted them as strikes and lit the
+     *  STORM badge on a clear morning (Stuart, 2026-09-10, lightning map empty). So the value
+     *  subtracted RAMPS linearly from last block's estimate to this one's — continuous, no edge.
+     *  The same for the imbalance coefficients below. */
+    const float di1 = dcOn_ ? dcI_ : 0.0f, dq1 = dcOn_ ? dcQ_ : 0.0f;
+    const float di0 = dcOn_ ? (dcPrevSeeded_ ? dcPrevI_ : di1) : 0.0f;
+    const float dq0 = dcOn_ ? (dcPrevSeeded_ ? dcPrevQ_ : dq1) : 0.0f;
+    dcPrevI_ = di1; dcPrevQ_ = dq1; dcPrevSeeded_ = true;
+    const float dStepI = (di1 - di0) / (float)n, dStepQ = (dq1 - dq0) / (float)n;
 
     // ── 2. Imbalance: subtract DC, accumulate S_ii/S_qq/S_iq, apply q' = A·q + B·i ─────────
     //    (coefficients from the PREVIOUS block's averages — one block of latency on a two-second
     //    time constant is nothing, and it keeps this a single pass.)
-    const float A = imbOn_ ? A_ : 1.0f, B = imbOn_ ? B_ : 0.0f;
+    const float A1 = imbOn_ ? A_ : 1.0f, B1 = imbOn_ ? B_ : 0.0f;
+    const float A0 = imbOn_ ? Aprev_ : 1.0f, B0 = imbOn_ ? Bprev_ : 0.0f;
+    Aprev_ = A1; Bprev_ = B1;
+    const float aStep = (A1 - A0) / (float)n, bStep = (B1 - B0) / (float)n;
     double bII = 0.0, bQQ = 0.0, bIQ = 0.0;
     {
         int k = 0;
 #if VIBE_NEON
-        const float32x4_t vdi = vdupq_n_f32(di), vdq = vdupq_n_f32(dq);
-        const float32x4_t vA = vdupq_n_f32(A), vB = vdupq_n_f32(B);
+        const float32x4_t lane = {0.0f, 1.0f, 2.0f, 3.0f};
+        float32x4_t vdi = vmlaq_f32(vdupq_n_f32(di0), lane, vdupq_n_f32(dStepI));
+        float32x4_t vdq = vmlaq_f32(vdupq_n_f32(dq0), lane, vdupq_n_f32(dStepQ));
+        float32x4_t vA  = vmlaq_f32(vdupq_n_f32(A0),  lane, vdupq_n_f32(aStep));
+        float32x4_t vB  = vmlaq_f32(vdupq_n_f32(B0),  lane, vdupq_n_f32(bStep));
+        const float32x4_t sdi = vdupq_n_f32(4 * dStepI), sdq = vdupq_n_f32(4 * dStepQ);
+        const float32x4_t sA = vdupq_n_f32(4 * aStep), sB = vdupq_n_f32(4 * bStep);
         float32x4_t aII = vdupq_n_f32(0.0f), aQQ = vdupq_n_f32(0.0f), aIQ = vdupq_n_f32(0.0f);
         for (; k + 4 <= n; k += 4) {
             float32x4x2_t v = vld2q_f32(f + 2 * k);
@@ -108,11 +128,17 @@ void IqCleaner::process(cf32* z, int n) {
             q = vmlaq_f32(vmulq_f32(q, vA), i, vB);
             v.val[0] = i; v.val[1] = q;
             vst2q_f32(f + 2 * k, v);
+            vdi = vaddq_f32(vdi, sdi); vdq = vaddq_f32(vdq, sdq); vA = vaddq_f32(vA, sA); vB = vaddq_f32(vB, sB);
         }
         bII = vaddvq_f32(aII); bQQ = vaddvq_f32(aQQ); bIQ = vaddvq_f32(aIQ);
 #elif VIBE_SSE
-        const __m128 vdi = _mm_set1_ps(di), vdq = _mm_set1_ps(dq);
-        const __m128 vA = _mm_set1_ps(A), vB = _mm_set1_ps(B);
+        const __m128 lane = _mm_set_ps(3.0f, 2.0f, 1.0f, 0.0f);
+        __m128 vdi = _mm_add_ps(_mm_set1_ps(di0), _mm_mul_ps(lane, _mm_set1_ps(dStepI)));
+        __m128 vdq = _mm_add_ps(_mm_set1_ps(dq0), _mm_mul_ps(lane, _mm_set1_ps(dStepQ)));
+        __m128 vA  = _mm_add_ps(_mm_set1_ps(A0),  _mm_mul_ps(lane, _mm_set1_ps(aStep)));
+        __m128 vB  = _mm_add_ps(_mm_set1_ps(B0),  _mm_mul_ps(lane, _mm_set1_ps(bStep)));
+        const __m128 sdi = _mm_set1_ps(4 * dStepI), sdq = _mm_set1_ps(4 * dStepQ);
+        const __m128 sA = _mm_set1_ps(4 * aStep), sB = _mm_set1_ps(4 * bStep);
         __m128 aII = _mm_setzero_ps(), aQQ = _mm_setzero_ps(), aIQ = _mm_setzero_ps();
         for (; k + 4 <= n; k += 4) {
             __m128 i, q; sseLoad2(f + 2 * k, i, q);
@@ -122,10 +148,13 @@ void IqCleaner::process(cf32* z, int n) {
             aIQ = _mm_add_ps(aIQ, _mm_mul_ps(i, q));
             q = _mm_add_ps(_mm_mul_ps(q, vA), _mm_mul_ps(i, vB));
             sseStore2(f + 2 * k, i, q);
+            vdi = _mm_add_ps(vdi, sdi); vdq = _mm_add_ps(vdq, sdq); vA = _mm_add_ps(vA, sA); vB = _mm_add_ps(vB, sB);
         }
         bII = sseAddv(aII); bQQ = sseAddv(aQQ); bIQ = sseAddv(aIQ);
 #endif
         for (; k < n; ++k) {
+            const float di = di0 + dStepI * k, dq = dq0 + dStepQ * k;
+            const float A = A0 + aStep * k, B = B0 + bStep * k;
             const float i = f[2 * k] - di, q0 = f[2 * k + 1] - dq;
             bII += (double)i * i; bQQ += (double)q0 * q0; bIQ += (double)i * q0;
             f[2 * k] = i; f[2 * k + 1] = A * q0 + B * i;

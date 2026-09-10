@@ -404,6 +404,8 @@ private:
     double sII_ = 0.0, sQQ_ = 0.0, sIQ_ = 0.0; bool imbSeeded_ = false;
     double imbWarmSec_ = 0.0;               // seconds of statistics so far — nothing applied before 1 s
     float A_ = 1.0f, B_ = 0.0f;
+    float Aprev_ = 1.0f, Bprev_ = 0.0f;     // last block's coefficients — the ramp's start
+    float dcPrevI_ = 0.0f, dcPrevQ_ = 0.0f; bool dcPrevSeeded_ = false;
     double rotHz_ = 0.0, phase_ = 0.0;
 };
 

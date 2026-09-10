@@ -1249,6 +1249,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio, lockedCentre, gainCap, agcLocked, gainLocked, ifGrFloor,
                gainNow, agc, ovlSteps, adcPeak) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
+      if (typeof gainNow === 'number' && gainNow !== hwGainNow) hwGainChangedAt = performance.now();
       hwGainNow = typeof gainNow === 'number' ? gainNow : -1;
       hwAgcOn = agc === true;                       // ★ the live flag the chip reads through
       maybeExplainRtlAutomation();   // ★ we may only now know the radio is running its own gain
@@ -4492,6 +4493,15 @@ let dabState: DabState | null = null;
 let dabPickedAt = 0;
 /** The "tuning in" line for the picked station's live-text slot, '' once audio has arrived. */
 let dabWaiting = '';
+/** performance.now() of the last change in the reported hardware gain — the AGC is "settled" when
+ *  this is two seconds old (or the AGC is off). Linked into the DAB line: on a weak multiplex the
+ *  gain is still climbing while the decoder is starting, and the line must not claim "tuned and
+ *  ready" while either is still moving (Stuart, 2026-09-10). */
+let hwGainChangedAt = 0;
+/** The decoder's PCM counter as last seen, when it last rose, and when the current unbroken run
+ *  of rises began — "the digital flow counters, like the advanced analysis" (Stuart). A gap of
+ *  more than 1.5 s between rises starts a new run. */
+let dabPcmLast = -1, dabPcmRoseAt = 0, dabPcmRunStart = 0;
 let dabPane: 'stations' | 'signal' = 'stations';
 let dabChannel = -1;
 let dabLastEid = -1;
@@ -4604,19 +4614,38 @@ function dabRender() {
      *  than no line, and it stuck for a minute on the first try because the audible timestamp was
      *  only written on one decode path. */
     const secsSincePick = dabPickedAt > 0 ? (performance.now() - dabPickedAt) / 1000 : 0;
-    // ★ A sustained SECOND of audible output whose run began after the press (+400 ms for the old
-    //   station's tail). A start-up flash followed by silence starts a run that never reaches a
-    //   second, so the line stays up through it. The health backstop is longer for the same reason.
-    const heard = !!audio && ((audio.audibleRunStartAtMs >= dabPickedAt + 400 && audio.audibleRunMs >= 1000)
-                              || (secsSincePick > 15 && audio.health === 'ok'));
+    // ★ TWO THINGS MUST BOTH BE TRUE, and the line names the one still pending:
+    //   (1) the gain has settled — the AGC is off, or the reported gain has not moved for 2 s;
+    //   (2) a sustained SECOND of audible output whose run began after the press (+400 ms for the
+    //       old station's tail). A start-up flash followed by silence starts a run that never
+    //       reaches a second, so the line stays up through it.
+    //   No time-based backstop: a line that guesses "ready" is the thing this exists to prevent.
+    const gainSettled = !hwAgcOn || (performance.now() - hwGainChangedAt) > 2000;
+    // (2) the DECODER is producing audio: its PCM counter has risen on every report for a second.
+    {
+      const pc = typeof d.pcmPushed === 'number' ? d.pcmPushed : -1;
+      const now = performance.now();
+      if (pc >= 0 && pc !== dabPcmLast) {
+        if (dabPcmLast >= 0 && pc > dabPcmLast) { if (now - dabPcmRoseAt > 1500) dabPcmRunStart = now; dabPcmRoseAt = now; }
+        dabPcmLast = pc;
+      }
+    }
+    const decoderFlowing = dabPcmRunStart >= dabPickedAt && dabPcmRoseAt >= dabPickedAt + 400 && (dabPcmRoseAt - dabPcmRunStart) >= 1000
+                           && (performance.now() - dabPcmRoseAt) < 1500;
+    // (3) and it is actually HEARD: a sustained second of audible output since the press.
+    const audioClean = !!audio && audio.audibleRunStartAtMs >= dabPickedAt + 400 && audio.audibleRunMs >= 1000;
+    const heard = gainSettled && decoderFlowing && audioClean;
     if (d.locked && d.sid && dabPickedAt > 0 && audio && !heard) {
       const secs = Math.floor(secsSincePick);
       // ★ Shown in the STATION'S live-text line, not the header (Stuart: "very squashed in that
       //   header so in the app it will be even more so") — it scrolls like the radio text and the
       //   radio text comes back when the audio does.
+      const why = !gainSettled ? 'waiting for the gain to settle'
+                : !decoderFlowing ? 'waiting for the decoder to run clean'
+                : 'waiting for the audio to run clean';
       dabWaiting = secs < 30
-        ? `Tuning in — waiting for the gain to settle and the audio clock to lock… ${secs}s`
-        : `Still tuning in (${secs}s) — a weak multiplex can take a while; the decoder has not given up`;
+        ? `Tuning in — ${why}… ${secs}s`
+        : `Still tuning in (${secs}s) — ${why}; a weak multiplex can take a while and the decoder has not given up`;
     } else if (dabPickedAt > 0 && heard) {
       dabPickedAt = 0;   // heard it — the line goes
     }
@@ -4653,7 +4682,7 @@ function dabRender() {
       : `<div style="padding:14px;opacity:.6">${d.truncated ? 'Signal block too long for the server to send'
           : d.locked ? 'Reading the multiplex…' : 'Searching for a multiplex…'}</div>`;
     for (const el of Array.from(st.querySelectorAll('.dabSvc')) as HTMLElement[])
-      el.onclick = () => { dabPickedAt = performance.now(); spec?.dabService(Number(el.dataset.sid)); dabRender(); };
+      el.onclick = () => { dabPickedAt = performance.now(); dabPcmRunStart = 0; dabPcmRoseAt = 0; spec?.dabService(Number(el.dataset.sid)); dabRender(); };
     { const b = document.getElementById('decBody'); if (b && listScroll) b.scrollTop = listScroll; }
   }
   for (const sv of d.services) {

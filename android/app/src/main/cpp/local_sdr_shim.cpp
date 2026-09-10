@@ -1639,6 +1639,9 @@ struct SfericDetect {
         if (now - lastStrikeAt < kRefracS) return false;
         lastStrikeAt = now;
         hits.push_back(now);
+        // ★ One line per strike (they are rare by construction): the fraction of the band that
+        //   lifted, so a false alarm can be SEEN in the journal beside whatever else happened.
+        LOGI("sferic: %.0f %% of the band up %.0f dB (hits in window: %zu)", frac * 100.0, (double)kOverDb, hits.size());
         return true;
     }
     /* ★★★ A BADGE MEANS "THERE IS A STORM ABOUT", NOT "A SFERIC HAPPENED". Stuart: "one or 2
