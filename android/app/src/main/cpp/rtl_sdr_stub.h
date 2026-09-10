@@ -18,6 +18,11 @@ static inline int      rtlsdr_close(rtlsdr_dev_t*)                     { return 
 static inline int      rtlsdr_set_sample_rate(rtlsdr_dev_t*, uint32_t) { return 0; }
 static inline uint32_t rtlsdr_get_sample_rate(rtlsdr_dev_t*)           { return 0; }
 static inline int      rtlsdr_set_center_freq(rtlsdr_dev_t*, uint32_t) { return 0; }
+/* ★ The readback beside the setter. The shim logs it when a tune is REFUSED, so the pair must
+ *  exist together — this one was missing and it is why the iOS build had been failing, and so why
+ *  libvibelocalsdr_ios.a sat at 28 August while every DAB fix since landed only on Android.
+ *  A stale prebuilt lib is silent: the app builds, ships, and simply lacks the work. */
+static inline uint32_t rtlsdr_get_center_freq(rtlsdr_dev_t*)           { return 0; }
 static inline int      rtlsdr_set_freq_correction(rtlsdr_dev_t*, int)  { return 0; }
 static inline int      rtlsdr_set_tuner_gain_mode(rtlsdr_dev_t*, int)  { return 0; }
 static inline int      rtlsdr_set_tuner_gain(rtlsdr_dev_t*, int)       { return 0; }
