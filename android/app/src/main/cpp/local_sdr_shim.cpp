@@ -4074,8 +4074,48 @@ struct LocalSdrShim::Impl {
         bool pub  = false;                       // through the tunnel: code + token, no port
         std::string code, token, host;
         std::shared_ptr<net::Listener> lis;
+        /* ★★★ ONE CONSUMER, AND NOW ACTUALLY ONE. `conn` was a bare shared_ptr written by the LAN
+         *  accept thread AND the /ws/iq HTTP thread while the DSP thread, the writer thread, the
+         *  housekeeping tick and the admin JSON all read it — five threads, no lock. Two things
+         *  followed. The "one consumer" test was a check-then-assign with a gap in the middle, so
+         *  two arrivals could both pass it; and a shared_ptr COPY racing an assignment is a data
+         *  race on the control block, which is a use-after-free of the net::Socket, not merely two
+         *  listeners. `ws` had the same problem and picks the send path, so a torn read sends WebSocket
+         *  framing down a raw TCP socket. Found by audit and confirmed, 2026-09-10.
+         *  ★ claim() is the test and the set in one step under the lock; everything else goes
+         *    through current()/hasConsumer(). The mutex is a LEAF — never call out while holding it. */
+        std::mutex connMu;
         std::shared_ptr<net::Socket>   conn;     // the one consumer — TCP or the /ws/iq socket
         bool ws = false;
+
+        /** Take the single consumer slot. False when somebody already has it. */
+        bool claim(const std::shared_ptr<net::Socket>& s, bool isWs) {
+            std::lock_guard<std::mutex> lk(connMu);
+            if (conn && conn->isOpen()) return false;
+            conn = s; ws = isWs;
+            return true;
+        }
+        /** Give the slot back, but only if it is still ours — a later consumer must not be evicted. */
+        void release(const net::Socket* s) {
+            std::lock_guard<std::mutex> lk(connMu);
+            if (conn.get() == s) { conn.reset(); ws = false; }
+        }
+        /** A consistent snapshot of the pair. The shared_ptr copy keeps the socket alive for the
+         *  caller even if the consumer leaves mid-send. */
+        std::pair<std::shared_ptr<net::Socket>, bool> current() {
+            std::lock_guard<std::mutex> lk(connMu);
+            return { conn, ws };
+        }
+        bool hasConsumer() {
+            std::lock_guard<std::mutex> lk(connMu);
+            return conn && conn->isOpen();
+        }
+        /** Detach the socket for closing — done OUTSIDE the lock by the caller. */
+        std::shared_ptr<net::Socket> takeForClose() {
+            std::lock_guard<std::mutex> lk(connMu);
+            auto c = std::move(conn); conn.reset(); ws = false;
+            return c;
+        }
         std::atomic<bool> run{true};
         std::thread acceptTh;
         std::mutex qm; std::condition_variable qcv;
@@ -13848,10 +13888,10 @@ struct LocalSdrShim::Impl {
                 if (iq->q.empty()) continue;
                 frame = std::move(iq->q.front()); iq->q.pop_front(); iq->qBytes -= frame.size();
             }
-            auto conn = iq->conn;
+            auto [conn, isWs] = iq->current();
             if (!conn || !conn->isOpen()) continue;
             int r;
-            if (iq->ws) { sendWs(conn, 0x2, frame.data(), frame.size(), Out::Audio); r = (int)frame.size(); }
+            if (isWs) { sendWs(conn, 0x2, frame.data(), frame.size(), Out::Audio); r = (int)frame.size(); }
             else        r = conn->send(frame.data(), frame.size());
             if (r > 0) { iq->bytesSent += r; iq->lastReadAt.store(Impl::nowSecs()); }
         }
@@ -13916,7 +13956,7 @@ struct LocalSdrShim::Impl {
         if (iq && iq->full) iqTapInto(iq, x, n, (int)std::lround(rateHz));
     }
     void iqTapInto(const std::shared_ptr<IqOut>& iq, const cf32* in, int n, int inRate) {
-        if (!iq || !iq->conn || n <= 0) return;
+        if (!iq || n <= 0 || !iq->hasConsumer()) return;
         if (inRate <= 0) return;
         // ★ Full rate: rotate the capture down by the hardware offset on a COPY (the pipeline
         //   still needs the original), so the consumer's centre is exact. See requestConsumerCentre.
@@ -13998,7 +14038,7 @@ struct LocalSdrShim::Impl {
         iq->run.store(false);
         iq->qcv.notify_all();
         if (iq->lis)  iq->lis->stop();
-        if (iq->conn) iq->conn->close();
+        if (auto c = iq->takeForClose()) c->close();   // ★ closed OUTSIDE the lock
         if (iq->acceptTh.joinable()) iq->acceptTh.join();
         if (iq->writeTh.joinable())  iq->writeTh.join();
         g_vsRawIqActive.fetch_sub(1);
@@ -14094,12 +14134,11 @@ struct LocalSdrShim::Impl {
                 while (serverRunning.load() && iq->run.load()) {
                     auto conn = iq->lis->accept(nullptr, 1000);
                     if (!conn) continue;
-                    if (iq->conn && iq->conn->isOpen()) { conn->close(); continue; }   // one consumer
+                    if (!iq->claim(conn, false)) { conn->close(); continue; }   // ★ one consumer, atomically
                     iqSendHeader(conn);
-                    iq->conn = conn;
                     LOGI("raw IQ out: consumer connected from %s at %d Hz", conn->peerAddress().c_str(), iq->rate);
                     iqReadCommands(spec, iq, conn);
-                    if (iq->conn == conn) iq->conn = nullptr;
+                    iq->release(conn.get());
                     LOGI("raw IQ out: consumer left");
                 }
             });
@@ -14141,14 +14180,17 @@ struct LocalSdrShim::Impl {
         }
         if (!iq) { std::lock_guard<std::mutex> lk(iqDirectMtx); if (iqDirect && !tok.empty() && (iqDirect->token == tok || (iqDirect->pub && iqDirect->code == tok))) { iq = iqDirect; spec = iqDirectSock; } }
         if (!iq) { sock->sendstr("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"); sock->close(); return; }
-        if (iq->conn && iq->conn->isOpen()) { sock->sendstr("HTTP/1.1 409 Conflict\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"); sock->close(); return; }
+        if (iq->hasConsumer()) { sock->sendstr("HTTP/1.1 409 Conflict\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"); sock->close(); return; }
         std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         uint8_t digest[20]; Sha1().hash((const uint8_t*)acc.data(), acc.size(), digest);
         sock->sendstr("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                       "Sec-WebSocket-Accept: " + base64(digest, 20) + "\r\n\r\n");
         outboxOpen(sock);
         { const uint8_t hdr[12] = { 'R','T','L','0', 0,0,0,5, 0,0,0,0 }; sendWs(sock, 0x2, hdr, sizeof hdr, Out::Audio); }
-        iq->ws = true; iq->conn = sock;
+        /* ★ The 409 above is only a courtesy: claim() is the real test, and it is what closes the
+         *  window between the two. A loser here has already had the handshake written, so it says
+         *  so and goes rather than silently sharing the slot. */
+        if (!iq->claim(sock, true)) { sock->close(); return; }
         LOGI("raw IQ out: tunnel consumer connected (%s) at %d Hz", sock->peerAddress().c_str(), iq->rate);
         while (serverRunning.load() && iq->run.load() && sock->isOpen()) {
             std::string payload;
@@ -14161,7 +14203,7 @@ struct LocalSdrShim::Impl {
                 if (v > 0) { handleControl(spec, "{\"type\":\"tune\",\"frequency\":" + std::to_string(v) + "}"); sendConfig(spec); }
             }
         }
-        if (iq->conn == sock) iq->conn = nullptr;
+        iq->release(sock.get());
         LOGI("raw IQ out: tunnel consumer left");
     }
 
@@ -14765,7 +14807,7 @@ struct LocalSdrShim::Impl {
         if (got > 0) c->rx->feed(c->slice.data(), got);
         // ★ RAW IQ OUT: the same slice, resampled to the consumer's rate, as 8-bit IQ. The demod
         //   above keeps its copy — the stream is split, not diverted.
-        if (got > 0 && c->iq && c->iq->conn) iqTap(c.get(), c->slice.data(), got);
+        if (got > 0 && c->iq && c->iq->hasConsumer()) iqTap(c.get(), c->slice.data(), got);
         // ★ And the VIEW channel, when this listener is drawing its own waterfall.
         if (c->viewRx && c->viewChanBins > 0) {
             const int gv = chan_->extract(bins, clientViewCentreBin(c.get()),
@@ -16039,7 +16081,7 @@ struct LocalSdrShim::Impl {
                 }
                 // ★ A raw IQ consumer that is taking data IS using the radio — the decoder in
                 //   another app never touches the browser (Stuart, 2026-09-09).
-                if (c->iq && c->iq->conn && now - c->iq->lastReadAt.load() < 15.0) {
+                if (c->iq && c->iq->hasConsumer() && now - c->iq->lastReadAt.load() < 15.0) {
                     c->lastAsk = now; c->idleAskAt = 0; continue;
                 }
                 if (c->idleAskAt > 0) {
@@ -17723,7 +17765,7 @@ std::string LocalSdrShim::adminSessionsJson() {
            + ",\"vfoHz\":" + std::to_string((long long)c->vfoHz)
            + ",\"mode\":\"" + vibeadmin::esc(c->mode) + "\""
            + ",\"dab\":\"" + vsDabBlockNow() + "\""      // ★ see vsDabBlockNow
-           + ",\"iq\":" + std::to_string(c->iq && c->iq->conn ? c->iq->rate : 0)   // ★ raw IQ out, Hz
+           + ",\"iq\":" + std::to_string(c->iq && c->iq->hasConsumer() ? c->iq->rate : 0)   // ★ raw IQ out, Hz
            + ",\"bwHz\":" + std::to_string((long long)c->bwHz)
            + ",\"audio\":" + (audioOpen ? "true" : "false")
            // ★★ SAY WHETHER THE WATERFALL IS RUNNING, so a row costing 68 kbit/s instead of the
