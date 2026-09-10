@@ -16142,8 +16142,20 @@ struct LocalSdrShim::Impl {
             while (hotplugRun.load()) {
                 // 2s: fast enough that a replug feels immediate, slow enough that scanning USB
                 // costs nothing measurable on a Pi.
-                for (int i = 0; i < 20 && hotplugRun.load(); i++)
+                /* ★★★ ACQUIRING A MULTIPLEX, THE AGC TICKS EVERY 0.4 s, NOT EVERY 2. The dwell in
+                 *  overloadTick was already lifted for acquisition, and the steps still came 2 s
+                 *  apart — because THIS loop only calls it every 2 s (measured on the V4,
+                 *  2026-09-10: steps at 4.1 s and 6.1 s either way). The rest of the housekeeping
+                 *  here keeps its 2 s. */
+                int slept = 0;
+                for (int i = 0; i < 20 && hotplugRun.load(); i++) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    if (++slept >= 4 && g_dabMode.load(std::memory_order_relaxed)
+                        && g_dab.quality().fibRate <= 0.0f && !stopping.load() && !restarting.load()) {
+                        LocalSdrShim::instance().overloadTick();
+                        slept = 0;
+                    }
+                }
                 if (!hotplugRun.load()) break;
                 if (stopping.load() || restarting.load()) continue;
 
@@ -19884,7 +19896,16 @@ void LocalSdrShim::overloadTick() {
     // ★ Nothing measured before the last gain write has anything to say about the gain now — see
     //   agcSettleAfterGain(). Cheap and blunt on purpose: waiting one second beats cutting three
     //   times for one overload.
-    if (Impl::nowSecs() < g_gainSettleUntil.load(std::memory_order_relaxed)) return;
+    /* ★ The settle gate is 2.5 s after a forget and 1.3 s after a gain write, so the ADC peak
+     *  reflects the new gain before it is judged. While ACQUIRING a multiplex nothing is judged
+     *  but headroom, and a few blocks are enough for that: 0.3 s after a write, 1.5 s after a
+     *  forget (the gate minus one second). See dabAcquiring below. */
+    {
+        const double tnow = Impl::nowSecs();
+        const double until = g_gainSettleUntil.load(std::memory_order_relaxed);
+        const bool acq = g_dabMode.load(std::memory_order_relaxed) && g_dab.quality().fibRate <= 0.0f;
+        if (tnow < until && !(acq && tnow >= until - 1.0)) return;
+    }
     const int clipRun  = g_adcClipRun.load(std::memory_order_relaxed);
     const int cleanRun = g_adcCleanRun.load(std::memory_order_relaxed);
     const int steps    = g_ovlSteps.load(std::memory_order_relaxed);
