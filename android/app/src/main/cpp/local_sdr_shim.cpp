@@ -2169,6 +2169,9 @@ static std::atomic<double>   g_agcLearnedAtHz{0.0};
  *  prediction, the ceiling, the failed-gain hysteresis and the trial afterwards are all untouched.
  */
 static std::atomic<double>   g_agcHurryUntil{0.0};
+/** ★ Is the current settle gate a FORGET (peak-hold stale, must run its full course) or a gain
+ *  write (peak-hold dropped, may be judged early while acquiring a multiplex)? */
+static std::atomic<bool>     g_gainSettleIsForget{false};
 /** ★ Set on every gain write: the channel peak-hold must forget the old gain's level. */
 static std::atomic<bool>     g_resetPeakHold{false};
 // Defined further down, beside setSampleRate(); declared here because retune() and the loop both
@@ -19904,7 +19907,13 @@ void LocalSdrShim::overloadTick() {
         const double tnow = Impl::nowSecs();
         const double until = g_gainSettleUntil.load(std::memory_order_relaxed);
         const bool acq = g_dabMode.load(std::memory_order_relaxed) && g_dab.quality().fibRate <= 0.0f;
-        if (tnow < until && !(acq && tnow >= until - 1.0)) return;
+        /* ★★★ NEVER SHORTEN THE SETTLE AFTER A FORGET. That gate lets the peak-hold drain of the
+         *  gain we just LEFT; acting on it early read the hot FM level as "overdriven" and CUT
+         *  12.5 → 3.7 dB on DAB entry, which cost 10C two seconds it never used to spend
+         *  (measured 2026-09-10 11:35). Only a gain write, which drops the peak-hold itself, may
+         *  be judged early. */
+        const bool forget = g_gainSettleIsForget.load(std::memory_order_relaxed);
+        if (tnow < until && !(acq && !forget && tnow >= until - 1.0)) return;
     }
     const int clipRun  = g_adcClipRun.load(std::memory_order_relaxed);
     const int cleanRun = g_adcCleanRun.load(std::memory_order_relaxed);
@@ -20498,8 +20507,12 @@ void LocalSdrShim::overloadTick() {
     } else if (steps > 0 && !g_settled.load(std::memory_order_relaxed)
                && !(g_dabMode.load(std::memory_order_relaxed) && dabDecodingPerfectly())
                && cleanRun >= (hurry ? 1 : kAgcClimbAfterSec)
-               && !(g_climbAt.load(std::memory_order_relaxed) > 0
-                    && now - g_climbAt.load(std::memory_order_relaxed) < kClimbTrialMaxSec)) {
+               /* ★ A climb on trial blocks the next one until its verdict — right when there is an
+                *   ensemble to judge, pure pacing while ACQUIRING one: the steps still came 2 s
+                *   apart with the dwell lifted (measured 2026-09-10 11:35). Acquisition climbs on
+                *   headroom; the first FIB ends acquisition and the trials resume. */
+               && (dabAcquiring || !(g_climbAt.load(std::memory_order_relaxed) > 0
+                    && now - g_climbAt.load(std::memory_order_relaxed) < kClimbTrialMaxSec))) {
         /* ★★★ ONE CLIMB ON TRIAL AT A TIME. Every step is supposed to prove itself before the next
          *     is attempted — and it was not: the trial takes 4 seconds, the climb branch fires
          *     every 4 seconds, and a trial that gets RE-ARMED (a listener joins, a buffer drops)
@@ -21408,6 +21421,7 @@ static void agcForget(const char* why) {
      *         that cut did not lower the floor (-18.1 dB for 0.5 dB of gain)
      *     Neither number is physics. Both were acted on. */
     g_gainSettleUntil.store(now + 2.5, std::memory_order_relaxed);
+    g_gainSettleIsForget.store(true, std::memory_order_relaxed);   // ★ the peak-hold is STALE here
     g_agcHurryUntil.store(now + 8.0, std::memory_order_relaxed);
     g_ovlMargin.store(3.0, std::memory_order_relaxed);
     g_bestFloorDb.store(0.0f, std::memory_order_relaxed);      // 0 = unset, see the floor test
@@ -21446,6 +21460,7 @@ static void agcForget(const char* why) {
  *  then went back to fuzz". Each of those cuts was answering the previous cut's question. */
 static void agcSettleAfterGain(double now) {
     g_gainSettleUntil.store(now + 1.3, std::memory_order_relaxed);
+    g_gainSettleIsForget.store(false, std::memory_order_relaxed);
     /* ★★★ AND DROP THE PEAK-HOLD, OR IT REMEMBERS THE GAIN WE JUST LEFT. The held channel level
      *     decays at half a decibel a second — which is what lets it bridge a pause in speech — so
      *     for the first seconds after a CUT it still carries the louder pre-cut level, and the
