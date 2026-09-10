@@ -693,6 +693,103 @@ static void dabGainSaveLocked() {
         std::rename(tmp.c_str(), g_dabGainFile.c_str());
     }
 }
+/* ★★★ WHAT THIS AERIAL HAS HEARD, PER BLOCK — the block picker's whole reason to exist.
+ *  Band III is 41 blocks and a given aerial carries perhaps six of them. Stepping one at a time is
+ *  therefore a hunt through mostly silence with nothing to aim at, which is what Stuart hit on the
+ *  watch: "it jumped from 5a - 10a". This server has ALREADY decoded those ensembles, so it says
+ *  so, and the picker can offer "7D  NNDAB" and "9A  Rugby+Daventry" instead of a column of bare
+ *  numbers. It is the same shape as g_dabGainMem above and shares its lifetime and its rules.
+ *  ★★ A MEMORY, NOT A READING. It is what was heard here once; the live ensemble outranks it
+ *     whenever the two disagree, and the clients are told to treat it that way — an ensemble can be
+ *     re-planned, and a stale name presented as current is exactly [[client_infers_server_decisions]].
+ *  ★ Learned only while the FIB rate is above 0.9 — the same bar the gain memory uses — so a label
+ *    half-decoded out of a marginal signal never gets written down.
+ *  ★ Only blocks actually HEARD are in here, which is why it is cheap enough to put on the wire:
+ *    six entries, not forty-one. */
+static std::mutex                  g_dabEnsMemMtx;
+static std::map<int, std::string>  g_dabEnsMem;            // block index -> ensemble label
+static std::string                 g_dabEnsFile;
+static bool                        g_dabEnsLoaded = false;
+/** One "BLOCK label with spaces" line per block — block name first, so the label may contain
+ *  spaces and still parse. ★ Newlines are stripped on the way IN, never trusted on the way out. */
+static void dabEnsLoadLocked() {
+    if (g_dabEnsLoaded) return;
+    g_dabEnsLoaded = true;
+    if (g_dabEnsFile.empty()) return;
+    if (FILE* f = std::fopen(g_dabEnsFile.c_str(), "r")) {
+        char line[256];
+        while (std::fgets(line, sizeof line, f)) {
+            std::string s(line);
+            while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
+            const size_t sp = s.find(' ');
+            if (sp == std::string::npos || sp == 0) continue;
+            const std::string name = s.substr(0, sp);
+            std::string label = s.substr(sp + 1);
+            if (label.size() > 64) label.resize(64);        // ★ capped: a corrupt file is not a licence
+            if (label.empty()) continue;
+            for (size_t i = 0; i < vibedab::kBandIIICount; ++i)
+                if (name == vibedab::kBandIII[i].name) { g_dabEnsMem[(int)i] = label; break; }
+        }
+        std::fclose(f);
+        if (!g_dabEnsMem.empty())
+            LOGI("[DAB] %zu block ensemble name(s) remembered from %s",
+                 g_dabEnsMem.size(), g_dabEnsFile.c_str());
+    }
+}
+static void dabEnsSaveLocked() {
+    if (g_dabEnsFile.empty()) return;
+    const std::string tmp = g_dabEnsFile + ".tmp";
+    if (FILE* f = std::fopen(tmp.c_str(), "w")) {
+        for (const auto& kv : g_dabEnsMem)
+            if (kv.first >= 0 && (size_t)kv.first < vibedab::kBandIIICount && !kv.second.empty())
+                std::fprintf(f, "%s %s\n", vibedab::kBandIII[kv.first].name, kv.second.c_str());
+        std::fclose(f);
+        std::rename(tmp.c_str(), g_dabEnsFile.c_str());     // ★ atomic, as the gain file is
+    }
+}
+/** JSON-escape a remembered label. ★ The class member `jsonEscape` is not reachable from up here,
+ *  and a label is DECODED FROM THE AIR — a quote, a backslash or a control byte in it would break
+ *  every client's parser, so this must never be skipped. Control bytes are dropped rather than
+ *  \u-escaped: nothing legitimate in a DAB ensemble label is one. */
+static std::string dabEscape(const std::string& s) {
+    std::string o;
+    o.reserve(s.size() + 8);
+    for (unsigned char c : s) {
+        if (c == '"' || c == '\\') { o += '\\'; o += char(c); }
+        else if (c >= 0x20)        { o += char(c); }
+    }
+    return o;
+}
+/** `,"blocks":{"7D":"NNDAB",…}` for the DAB status message — "" when nothing is remembered yet.
+ *  ★ Built here rather than in DabService::json() because the memory belongs to the RADIO (it
+ *    outlives any one multiplex) while that object describes the multiplex currently decoding.
+ *    The note above json()'s format string asks for exactly this: a separate short fragment. */
+static std::string dabBlocksJson() {
+    std::lock_guard<std::mutex> lk(g_dabEnsMemMtx);
+    dabEnsLoadLocked();
+    if (g_dabEnsMem.empty()) return std::string();
+    std::string j = ",\"blocks\":{";
+    bool first = true;
+    for (const auto& kv : g_dabEnsMem) {
+        if (kv.first < 0 || (size_t)kv.first >= vibedab::kBandIIICount || kv.second.empty()) continue;
+        if (!first) j += ",";
+        first = false;
+        j += "\"" + std::string(vibedab::kBandIII[kv.first].name) + "\":\"" + dabEscape(kv.second) + "\"";
+    }
+    return j + "}";
+}
+/** The DAB status message, with the per-block memory appended. ★ ONE helper, because there are
+ *  five callers of g_dab.json() and a field added at four of them is the "one rule, several
+ *  readers" fault this codebase keeps paying for. */
+static std::string dabStatusJson() {
+    std::string j = g_dab.json();
+    const std::string blocks = dabBlocksJson();
+    // ★ Only ever inserted before the FINAL brace, and only if json() actually returned an object —
+    //   the truncation guard in json() can return a short object and must still be valid.
+    if (!blocks.empty() && !j.empty() && j.back() == '}') j.insert(j.size() - 1, blocks);
+    return j;
+}
+
 /* ★★★ DAB TAKES THE DIAL OFF THE LOCK FOR AS LONG AS IT OWNS THE RADIO.
  *  A locked centre is a SHARED-RECEIVER promise — nobody may retune — and it is enforced in
  *  ~20 places, one of which is the source rebuild (see the g_vsLockedCentre block in the open
@@ -7632,7 +7729,7 @@ struct LocalSdrShim::Impl {
             }
             if (tnow - lastDabJson_ >= 0.5) {
                 lastDabJson_ = tnow;
-                const std::string j = g_dab.json();
+                const std::string j = dabStatusJson();
                 std::vector<std::shared_ptr<net::Socket>> socks;
                 { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
                 for (auto& sk : socks) sendText(sk, j);
@@ -9306,7 +9403,7 @@ struct LocalSdrShim::Impl {
                 if (others > 0 && g_dabMode.load(std::memory_order_relaxed)) {
                     LOGI("[DAB] off refused — %zu other listener%s on this multiplex", others, others == 1 ? " is" : "s are");
                     sendText(sock, "{\"type\":\"dab_error\",\"why\":\"DAB stays on \xe2\x80\x94 other listeners are on this multiplex\"}");
-                    sendText(sock, g_dab.json());
+                    sendText(sock, dabStatusJson());
                     return;
                 }
                 g_dabMode.store(false);
@@ -9632,7 +9729,7 @@ struct LocalSdrShim::Impl {
                  vibedab::kBandIII[idx].name, centre / 1e6, double(vibedab::DabService::kRateHz));
             double sid = 0; jsonNum(msg, "sid", sid);
             if (sid > 0) g_dab.setService(uint32_t(sid));
-            sendText(sock, g_dab.json());
+            sendText(sock, dabStatusJson());
             return;
         }
         if (type == "rawIq") {
@@ -9697,7 +9794,7 @@ struct LocalSdrShim::Impl {
         if (type == "dab_service") {
             double sid = 0; jsonNum(msg, "sid", sid);
             g_dab.setService(uint32_t(sid));
-            sendText(sock, g_dab.json());
+            sendText(sock, dabStatusJson());
             return;
         }
 
@@ -13380,7 +13477,7 @@ struct LocalSdrShim::Impl {
             /* ★ A receiver already on a multiplex tells the joiner NOW, not at the next half-second
              *  tick: the client opens its DAB box on the first block it sees (Stuart, 2026-09-07:
              *  the second listener on a shared radio got audio and no box). */
-            if (g_dabMode.load(std::memory_order_relaxed)) sendText(sock, g_dab.json());
+            if (g_dabMode.load(std::memory_order_relaxed)) sendText(sock, dabStatusJson());
             broadcastUsers();          // ★ everyone learns someone joined, including the joiner
             if (asExtra)
                 LOGI("spectrum WS connected — listener %d of %d",
@@ -18747,6 +18844,8 @@ void LocalSdrShim::setBookmarksPath(const std::string& path) {
         g_dab.setCacheDir((slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-carousel");
         { std::lock_guard<std::mutex> lk(g_dabGainMemMtx);
           g_dabGainFile = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-gains.txt"; }
+        { std::lock_guard<std::mutex> lk(g_dabEnsMemMtx);   // ★ beside the gain memory, same directory
+          g_dabEnsFile = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-ensembles.txt"; }
         g_dabLogoDir = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-logos";
         /* ★ The off-air slideshow store, beside the carousel and the RadioDNS logos: one file per
          *  service, so a station whose picture only exists on air is not re-read on every visit. */
@@ -20336,6 +20435,25 @@ void LocalSdrShim::overloadTick() {
             dabGainLoadLocked();
             auto it = g_dabGainMem.find(blk);
             if (it == g_dabGainMem.end() || it->second != steps) { g_dabGainMem[blk] = steps; dabGainSaveLocked(); }
+        }
+        /* ★★★ AND REMEMBER WHAT IS ON IT, for the block picker — same bar as the gain above (FIB
+         *  rate over 0.9), because a label half-decoded out of a marginal signal is worse than no
+         *  label: the picker would offer it as a reason to stop there. Written only when it
+         *  CHANGES, so the file is not rewritten every second on a stable multiplex. */
+        if (!dabAcquiring && g_dab.quality().fibRate > 0.9f && blk >= 0) {
+            std::string label = g_dab.ensembleLabel();
+            while (!label.empty() && label.back() == ' ') label.pop_back();   // DAB pads to 16 chars
+            if (!label.empty()) {
+                if (label.size() > 64) label.resize(64);
+                std::lock_guard<std::mutex> lk(g_dabEnsMemMtx);
+                dabEnsLoadLocked();
+                auto e = g_dabEnsMem.find(blk);
+                if (e == g_dabEnsMem.end() || e->second != label) {
+                    g_dabEnsMem[blk] = label;
+                    dabEnsSaveLocked();
+                    LOGI("[DAB] %s remembered as \"%s\"", vibedab::kBandIII[blk].name, label.c_str());
+                }
+            }
         }
     }
     const bool hurry = now < g_agcHurryUntil.load(std::memory_order_relaxed) || dabAcquiring;

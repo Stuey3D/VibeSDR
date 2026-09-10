@@ -525,6 +525,13 @@ public:
         std::lock_guard<std::mutex> lk(m_);
         return haveSlideNoLock(sid);
     }
+    /** The ensemble's label, on its own — for the per-block memory the block picker draws from.
+     *  ★ Under the same mutex as everything else here; `json()` reads it via rx_.ensemble() and
+     *    the FIC thread overwrites it on every FIG 1/0, so reading it unlocked is a data race. */
+    std::string ensembleLabel() {
+        std::lock_guard<std::mutex> lk(m_);
+        return rx_.ensemble().label;
+    }
     struct Quality { bool locked; float fibRate; float nullDepthDb; double mscBer; };
     Quality quality() {
         std::lock_guard<std::mutex> lk(m_);

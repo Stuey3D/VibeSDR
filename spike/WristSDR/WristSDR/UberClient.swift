@@ -89,6 +89,9 @@ final class UberClient: ObservableObject {
   @Published var dabBlockIndex = -1
   /// The block we last ASKED for, and when — so a `dab` report still in flight from the multiplex
   /// we just left can be dropped instead of adopted. See the filter in the `dab` handler.
+  /// ★★★ WHAT THE SERVER HAS HEARD, PER BLOCK — filled from the `blocks` map on the `dab` message.
+  ///  @Published so the picker redraws when a newly-decoded ensemble is remembered mid-session.
+  @Published var dabBlockNamesV: [String: String] = [:]
   private var dabWantIndex = -1
   private var dabWantAt: TimeInterval = 0
   /// The server's refusal, when it could not start. An explanation, not an error.
@@ -1076,6 +1079,16 @@ final class UberClient: ObservableObject {
   var dabEnsembleName: String { dabEnsembleV }
   func selectDabService(_ id: Int) { selectDabSid(id) }
   var dabBlockName: String { dabBlockIndex >= 0 ? Self.dabBlocks[dabBlockIndex].name : "" }
+  var dabBlockNames: [String: String] { dabBlockNamesV }
+  /// ★ Absolute, and it goes through setDab so the stale-report filter is armed with the block we
+  ///   asked for — the whole point of picking from a list rather than nudging.
+  func setDabBlockIndex(_ index: Int) {
+    guard isVibe, dabActive, index >= 0, index < Self.dabBlocks.count, index != dabBlockIndex else { return }
+    // ★ The previous mux's services are not this one's, and a stale list you can TAP is worse than
+    //   an empty one — same clear-out stepDabBlock does.
+    dabProgrammesV = []; dabEnsembleV = ""; dabActiveSid = -1; dabLocked = false; dabDls = ""
+    setDab(true, block: index)
+  }
   var dabDlsText: String { dabDls }
   var dabNoDecoder: Bool { dabNoServerDecoder }
   func setDabMode(_ on: Bool) { setDab(on) }
@@ -1146,6 +1159,23 @@ final class UberClient: ObservableObject {
     if let sid = (j["sid"] as? NSNumber)?.intValue { dabActiveSid = sid }
     // ★ FOLLOW THE SERVER'S BLOCK rather than our own request — it may have landed elsewhere, and a
     //   header naming the block we ASKED for while decoding another is a lie about the tuning.
+    /* ★★★ WHAT THIS SERVER HAS HEARD, PER BLOCK — for the picker. Sent only when the server has
+     *  something to say, so an absent key means "nothing remembered yet", NEVER "forget what you
+     *  had": a `dab` message can arrive before the memory is loaded, and wiping the list on every
+     *  one of those would leave the picker permanently blank.
+     *  ★★ Every name goes through dabSafe like the ensemble label does — it was decoded off the
+     *     air, and the same control characters that would break a header break a list row.
+     *  ★ Only keys that are real Band III blocks are kept: the picker indexes by block name and a
+     *    key that matches none of them is either a corrupt file on the server or not for us. */
+    if let raw = j["blocks"] as? [String: Any] {
+      var m: [String: String] = [:]
+      for (k, v) in raw.prefix(64) {
+        let label = dabSafe(v, 40)
+        guard !label.isEmpty, Self.dabBlocks.contains(where: { $0.name == k }) else { continue }
+        m[k] = label
+      }
+      if dabBlockNamesV != m { dabBlockNamesV = m }
+    }
     let ch = dabSafe(j["channel"], 8)
     if !ch.isEmpty, let i = Self.dabBlocks.firstIndex(where: { $0.name == ch }), i != dabBlockIndex {
       dabBlockIndex = i

@@ -406,6 +406,11 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     var block = ""        // "11A" — the multiplex being decoded; "" when the backend has no blocks
     var noDecoder = false // ★ DAB+ services will be silent: the server has no AAC decoder
     var backend = ""      // ★ "vibeserver" | "ubersdr" | "owrx" … — trims the demod list
+    /* ★★★ WHAT THIS SERVER HAS HEARD, PER BLOCK — block name -> ensemble label, the block
+     *  picker's whole content. Band III is 41 blocks and an aerial carries maybe six; without this
+     *  the picker is a column of bare numbers and choosing is still guessing. A MEMORY, not a
+     *  reading: the live ensemble outranks it wherever the two disagree. */
+    var blocks: [String: String] = [:]
 
     /* ★★★ THE DEFAULTS ABOVE DO NOT SURVIVE SYNTHESISED DECODING, AND THAT WOULD HAVE BEEN A
      *     REGRESSION ON EVERY OLDER PHONE. Swift's synthesised `init(from:)` calls decode(_:forKey:)
@@ -429,6 +434,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       block    = try c.decodeIfPresent(String.self,       forKey: .block)    ?? ""
       noDecoder = try c.decodeIfPresent(Bool.self,        forKey: .noDecoder) ?? false
       backend   = try c.decodeIfPresent(String.self,      forKey: .backend)   ?? ""
+      blocks    = try c.decodeIfPresent([String: String].self, forKey: .blocks) ?? [:]
     }
     init() {}
   }
@@ -839,9 +845,14 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   func setDabMode(_ on: Bool) { send(["cmd": "dabmode", "val": on]) }
   /// Step the multiplex. The block IS the tuning in DAB, so this is what "next" means there.
   func stepDabBlock(_ dir: Int) { send(["cmd": "dabblock", "delta": dir]) }
+  /* ★★★ ABSOLUTE, for the picker. A delta is right for a nudge and wrong for a choice: it is
+   *  measured against a block the phone may already have left, which is exactly how a pick of 10A
+   *  landed on 9A (Stuart, 2026-09-10). The phone clamps it to the band. */
+  func setDabBlockIndex(_ index: Int) { send(["cmd": "dabblock", "index": index]) }
   var dabCapable: Bool { dab?.capable ?? false }
   var dabOn: Bool { dab?.on ?? false }
   var dabBlock: String { dab?.block ?? "" }
+  var dabBlockNames: [String: String] { dab?.blocks ?? [:] }
 
   /* ★★★ BAND III BY NAME, so the watch can draw the block the crown has reached before the phone
    *  and the server have confirmed it. Mirrors vibe_dab_channels.h, the phone's dabBlocks.ts and

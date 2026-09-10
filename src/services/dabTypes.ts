@@ -16,6 +16,11 @@ export interface DabState {
   carrierShift: number; prs: number;
   fibOk: number; fibTotal: number; fibRate: number; frames: number;
   sid: number; bitrate: number; protection: string;
+  /** ★★★ What this server has HEARD on each Band III block — block name -> ensemble label,
+   *  remembered across restarts by the server. The block pickers on the watches are built from it,
+   *  and a picker without it is a column of bare numbers. Absent until the server has heard
+   *  something; a MEMORY, not a reading, so the live `label` outranks it wherever they differ. */
+  blocks?: Record<string, string>;
   services: { sid: number; label: string; codec: string; subch: number; short?: string; pty?: number;
               slides?: boolean; kbps?: number; prot?: string; cuStart?: number; cuSize?: number;
               scids?: number; ecc?: number; dls?: string; dlsAge?: number; logoAir?: boolean; logoSlide?: boolean; ptyDyn?: boolean;
@@ -138,6 +143,18 @@ export function parseDabMessage(m: Record<string, unknown>): DabState {
   const o = { ...m } as unknown as DabState;
   const cap = <T,>(v: unknown, n: number): T[] => (Array.isArray(v) ? (v.slice(0, n) as T[]) : []);
 
+  /* ★★ SANITISED LIKE EVERY OTHER LABEL ON THIS MESSAGE. These came off the air and out of a file
+   *  on the server, and the same control characters that broke the spectrum socket break a list
+   *  row. Bounded to 64 blocks and 40 characters — Band III has 41 and no legal ensemble label is
+   *  longer than 16. */
+  if (m.blocks && typeof m.blocks === 'object' && !Array.isArray(m.blocks)) {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(m.blocks as Record<string, unknown>).slice(0, 64)) {
+      const name = dabSafeText(k, 8), label = dabSafeText(v, 40);
+      if (name && label) out[name] = label;
+    }
+    o.blocks = out;
+  }
   o.channel  = dabSafeText(m.channel, 8);
   o.label    = dabSafeText(m.label, 32);
   o.protection = dabSafeText(m.protection, 16);

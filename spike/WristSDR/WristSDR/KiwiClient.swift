@@ -76,6 +76,16 @@ protocol SDRClient: AnyObject {
   var dabActive: Bool { get }
   /// The block being decoded, e.g. "12B" — "" when the backend has no such concept (OWRX).
   var dabBlockName: String { get }
+  /// ★★★ WHAT THIS SERVER HAS HEARD ON EACH BLOCK — block name -> ensemble label, remembered
+  ///  across restarts by the server, NOT by us. Band III is 41 blocks and a given aerial carries
+  ///  maybe six, so a picker without this is a hunt through mostly silence. It is a MEMORY, not a
+  ///  reading: the live ensemble outranks it whenever the two disagree. Empty on any backend that
+  ///  has no blocks to remember.
+  var dabBlockNames: [String: String] { get }
+  /// Tune an ABSOLUTE Band III index. `stepDabBlock` is for a nudge; this is for a picker, where
+  /// deriving a delta from a block the server may already have left is how you land on the wrong
+  /// multiplex (Stuart, 2026-09-10: "it jumped from 5a - 10a and ... started showing the 9A stations").
+  func setDabBlockIndex(_ index: Int)
   /// The service's Dynamic Label — "now playing", which on a wrist is most of what DAB is for.
   var dabDlsText: String { get }
   /// The server has no AAC decoder, so a DAB+ service will be silent. See UberClient.
@@ -138,6 +148,8 @@ extension SDRClient {
   var dabAvailable: Bool { false }
   var dabActive: Bool { false }
   var dabBlockName: String { "" }
+  var dabBlockNames: [String: String] { [:] }
+  func setDabBlockIndex(_ index: Int) {}
   var dabDlsText: String { "" }
   var dabNoDecoder: Bool { false }
   func setDabMode(_ on: Bool) {}

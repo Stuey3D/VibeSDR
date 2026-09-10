@@ -199,6 +199,8 @@ export interface WatchCommandHandlers {
    *  STOPPED, so this can be several blocks in one go; clamping it to ±1 moved one block and
    *  silently dropped the rest of the spin (Stuart, 2026-09-10). Sign gives the direction. */
   onDabBlockStep?(step: number): void;
+  /** The wrist PICKED a block from the list: an absolute Band III index, already bounded. */
+  onDabBlockPick?(index: number): void;
   onStep(hz: number): void;
   /** Crown in zoom mode. Drives the REAL server zoom, so the watch gets finer
    *  bins rather than a magnified crop — the only thing that beats the
@@ -489,8 +491,17 @@ class WatchProvider {
           /* ★ Step the multiplex. The block IS the tuning in DAB, so this is what the crown and
            *  the watch's own tuning gesture must mean there. */
           case 'dabblock': {
-            // ★ Bounded: a corrupt delta must not send the tuner on a lap of Band III. Band III is
-            //   41 blocks, so anything past that is nonsense whatever the watch meant.
+            /* ★★★ TWO SHAPES, AND THE ABSOLUTE ONE WINS. `index` is the block PICKER saying which
+             *  multiplex the listener chose; `delta` is the older nudge. A pick must never be
+             *  turned into a delta on the way through — a delta is measured against a block the
+             *  phone may already have left, which is how a pick of 10A landed on 9A (Stuart,
+             *  2026-09-10). Both are bounded: Band III is 41 blocks and anything past that is
+             *  nonsense whatever the watch meant. */
+            if (e.index !== undefined && e.index !== null) {
+              const i = Math.trunc(Number(e.index));
+              if (Number.isFinite(i)) handlers.onDabBlockPick?.(Math.max(0, Math.min(40, i)));
+              break;
+            }
             const d = Math.trunc(Number(e.delta ?? 0)) || 0;
             if (d) handlers.onDabBlockStep?.(Math.max(-41, Math.min(41, d)));
             break;
@@ -690,6 +701,12 @@ class WatchProvider {
                    block?: string;
                    /** ★ DAB+ will be silent: no AAC decoder on the server. */
                    noDecoder?: boolean;
+                   /** ★★★ Block name -> the ensemble this server has HEARD there. The wrist's
+                    *  block picker is built from this; without it the picker is bare numbers and
+                    *  choosing a multiplex is still guessing. Sent with the rest of the DAB state
+                    *  because it changes about as often (a new block learned) and is tiny — only
+                    *  blocks actually heard are in it, six or so, not all forty-one. */
+                   blocks?: Record<string, string>;
                    /** Which kind of server this is — the wrist trims its demod list to what a
                     *  VibeServer has (Stuart: no SAM, CWU or CWL there, only CW). */
                    backend?: string;

@@ -324,6 +324,9 @@ final class SpikeLink: ObservableObject {
   @Published var dabAvailable = false
   @Published var dabActive = false
   @Published var dabBlockName = ""
+  /// Block name -> the ensemble this server has HEARD there. The block picker's whole content.
+  /// ★ A memory, not a reading — the live ensemble outranks it. See UberClient.dabBlockNames.
+  @Published var dabBlockNames: [String: String] = [:]
   @Published var dabDlsText = ""
   @Published var dabNoDecoder = false
   /// ADS-B decoded aircraft (mirrored from the client).
@@ -703,6 +706,7 @@ final class SpikeLink: ObservableObject {
     if dabAvailable != client.dabAvailable { dabAvailable = client.dabAvailable }
     if dabActive != client.dabActive { dabActive = client.dabActive }
     if dabBlockName != client.dabBlockName { dabBlockName = client.dabBlockName }
+    if dabBlockNames != client.dabBlockNames { dabBlockNames = client.dabBlockNames }
     if dabDlsText != client.dabDlsText { dabDlsText = client.dabDlsText }
     if dabNoDecoder != client.dabNoDecoder { dabNoDecoder = client.dabNoDecoder }
     if aircraft != client.aircraft { aircraft = client.aircraft }
@@ -1015,6 +1019,8 @@ final class SpikeLink: ObservableObject {
   ///   nothing for a second reads as a watch button that did not work.
   func setDabMode(_ on: Bool) { client?.setDabMode(on); dabActive = on; if !on { dabProgrammes = [] } }
   func stepDabBlock(_ delta: Int) { client?.stepDabBlock(delta) }
+  /// ★ Absolute, for the picker — see the protocol note on why a delta is wrong there.
+  func setDabBlockIndex(_ index: Int) { client?.setDabBlockIndex(index) }
   func selectDabService(_ id: Int) { client?.selectDabService(id) }
 
   /// Passband edges (Hz offsets from carrier). Pushed to the server + mirrored to filtLo/filtHi

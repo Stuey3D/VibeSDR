@@ -17,6 +17,7 @@
 		2DD9FACA78E847F8DD45878A /* Gzip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 925623A77CBA453D1DCBC89C /* Gzip.swift */; };
 		39074027502AA1428ECB7AE2 /* VolumeControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4CF2036846CBC9B73EB6B76 /* VolumeControl.swift */; };
 		3F732DB5186C7323FF018599 /* DabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09436CC1B635338E3E4DD851 /* DabView.swift */; };
+		3F732DB5186C7323FF018510 /* DabBlockSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09436CC1B635338E3E4DD810 /* DabBlockSheet.swift */; };
 		427D355E68B41F1F7DF6D591 /* AudioSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95C9E447690E046FCA7ADBD1 /* AudioSocket.swift */; };
 		49B1CE88BEF3CDE13AAD1252 /* WristSDRApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37E79CD0DECFF7A26AFB7B06 /* WristSDRApp.swift */; };
 		4BBBE5A5D455F015F2705056 /* KiwiClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1629C7E4EFDC0509FC3A567 /* KiwiClient.swift */; };
@@ -77,6 +78,7 @@
 
 /* Begin PBXFileReference section */
 		09436CC1B635338E3E4DD851 /* DabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DabView.swift; sourceTree = "<group>"; };
+		09436CC1B635338E3E4DD810 /* DabBlockSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DabBlockSheet.swift; sourceTree = "<group>"; };
 		0AB51A8941C99A626615A0FC /* Chat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Chat.swift; sourceTree = "<group>"; };
 		398EA67E3DF9994DCAABFA4C /* ViewMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewMemory.swift; sourceTree = "<group>"; };
 		F75850ECD424239D80257C94 /* DialChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DialChatView.swift; sourceTree = "<group>"; };
@@ -163,6 +165,7 @@
 				A0192327755EB9D29ED557A5 /* ControlMenu.swift */,
 				7D903159E7D775FA2D8BC9E3 /* CpuMeter.swift */,
 				09436CC1B635338E3E4DD851 /* DabView.swift */,
+				09436CC1B635338E3E4DD810 /* DabBlockSheet.swift */,
 				8D1A340FCDD8315E6BC8086C /* FmDxClient.swift */,
 				3EEC2B3FFA6441C4C3A46B8F /* FmdxMp3Decoder.swift */,
 				8BD3236140BA1A61CD183211 /* FmdxSettings.swift */,
@@ -347,6 +350,7 @@
 				AB09236DE493D07D3AD771C2 /* ControlMenu.swift in Sources */,
 				84E896EF03E1F50282383A9A /* CpuMeter.swift in Sources */,
 				3F732DB5186C7323FF018599 /* DabView.swift in Sources */,
+				3F732DB5186C7323FF018510 /* DabBlockSheet.swift in Sources */,
 				D0EC43E7337B45D852942651 /* FmDxClient.swift in Sources */,
 				92F20CE6946AA32256E9DA24 /* FmdxMp3Decoder.swift in Sources */,
 				E06C7A835869C607636C4B96 /* FmdxSettings.swift in Sources */,

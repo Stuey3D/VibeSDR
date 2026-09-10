@@ -6280,6 +6280,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       /* ★ The wrist asking for DAB. Buddy has no route of its own — see watchProvider's note on
        *  the demodulator grid — so this is the whole mechanism. */
       onDabMode: (on: boolean) => { if (on !== dabOnRef.current) toggleDab(); },
+      /* ★ A PICK, not a nudge: the wrist chose this block from the list, so tune it directly.
+       *  Turning it back into a delta here would reintroduce the bug the picker exists to kill. */
+      onDabBlockPick: (index: number) => {
+        if (!dabOnRef.current) return;
+        onDabBlockRef.current?.(Math.max(0, Math.min(DAB_BLOCKS.length - 1, index)));
+      },
       onDabBlockStep: (step: number) => {
         if (!dabOnRef.current || !step) return;
         const n = DAB_BLOCKS.length;
@@ -6406,6 +6412,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       ensemble: vibeDab ? (dabState.label || '') : dabEnsemble,
       active:   vibeDab ? dabState.sid : activeDabId,
       capable:  dabCapable,
+      /* ★ The per-block memory, straight from the server — the wrist's block picker is built from
+       *  it. Only present on a VibeServer, and only once it has heard something. */
+      ...(dabState?.blocks && Object.keys(dabState.blocks).length ? { blocks: dabState.blocks } : {}),
       on:       dabOn,
       block:    dabBlock >= 0 ? DAB_BLOCKS[dabBlock].name : '',
       noDecoder: !!vibeDab && (dabState.sfTried ?? 0) > 0 && dabState.aacServerSide === false,
