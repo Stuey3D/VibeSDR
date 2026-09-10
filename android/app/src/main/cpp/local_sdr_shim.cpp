@@ -12473,12 +12473,9 @@ struct LocalSdrShim::Impl {
                 return stamped;
             };
             const std::string& kBase = frontDoorOnly ? frontDoorPage() : vibeWebPage();
-            /* ★★★ A CONTENT SECURITY POLICY, WITH A NONCE — the one control that would have
-             *  contained today's XSS findings rather than merely fixing them. The bundle is ONE
-             *  inline <script> and ZERO inline event handlers (measured), so a nonce works: our
-             *  script runs, and anything INJECTED — an onerror= smuggled through a station logo
-             *  URL, markup in an off-air DAB field — does not, because an attacker cannot guess a
-             *  fresh 128-bit value.
+            /* ★★★ A CONTENT SECURITY POLICY — bounding where the page may fetch, connect, frame
+             *  and post, on top of the XSS fixes themselves. It carried a script nonce for one
+             *  afternoon; see the note below the policy for why that came out again.
              *  ★★ What the page genuinely needs from elsewhere, and nothing more: Leaflet from
              *     unpkg for the map, OpenStreetMap tiles, station logos (which are arbitrary https
              *     hosts by nature), and websockets back to this server. `style-src` keeps
@@ -12487,12 +12484,23 @@ struct LocalSdrShim::Impl {
              *  ★ frame-ancestors/base-uri/object-src/form-action cost nothing here — the page has
              *    no frames, no <base>, no plugins and no cross-site form — and each closes a
              *    standard trick: clickjacking, base-tag hijack, plugin abuse, form redirection. */
-            const std::string nonce = vsRandomCode(22, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
-            std::string kPage = kBase;
-            {   // stamp the nonce on the single script tag
-                const size_t at = kPage.find("<script");
-                if (at != std::string::npos) kPage.insert(at + 7, " nonce=\"" + nonce + "\"");
-            }
+            /* ★★★ THE NONCE IS OUT. It broke the product twice in one day in Stuart's hands:
+             *  first the whole landing page (only the door's injected <script> got stamped), then
+             *  — with every tag stamped — the spectrogram gone and no radio enterable, because
+             *  the running bundle CREATES script at runtime and a created script carries no
+             *  nonce. A policy that keeps taking the page down is not a security control.
+             *  ★★ What it was ever worth here was already small: the bundle is delivered as
+             *     base64 and eval()d, so 'unsafe-eval' is forced regardless, and the two XSS
+             *     findings this audit turned up (an onerror= smuggled through a station logo URL,
+             *     markup in an off-air DAB field) are FIXED AT THE SOURCE by escaping in
+             *     web/client/src/main.ts. The nonce was defence in depth over a hole already shut.
+             *  ★ Everything else in this policy stays and costs nothing: object-src, base-uri,
+             *    form-action and frame-ancestors still close clickjacking, base-tag hijack,
+             *    plugin abuse and form redirection, and connect/img/style still bound the page.
+             *  ★ Re-adding a nonce needs the created-script path solved first (stamp .nonce in a
+             *    shim) AND a headless check that ENTERS A RADIO and sees the spectrogram — the
+             *    front-door check alone passed both times this shipped broken. */
+            const std::string& kPage = kBase;
             const std::string csp =
                 "Content-Security-Policy: default-src 'self'; "
                 /* ★★★ 'wasm-unsafe-eval' AND blob:, or the audio never starts. The Opus decoder is
@@ -12515,7 +12523,7 @@ struct LocalSdrShim::Impl {
                  *  ★ What is given up: a future bug that feeds attacker text INTO an eval sink.
                  *    There is one eval in the product and it takes a compile-time constant.
                  *  ★ 'wasm-unsafe-eval' stays for the Opus decoder; blob: for the AudioWorklet. */
-                "script-src 'nonce-" + nonce + "' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://unpkg.com; "
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://unpkg.com; "
                 "style-src 'self' 'unsafe-inline' https://unpkg.com; "
                 "img-src 'self' data: blob: https: http:; "
                 "media-src 'self' data: blob:; "
