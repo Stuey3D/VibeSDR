@@ -14,7 +14,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$HERE/../.."
 OUT="$HERE/out"; DIST="$OUT/dist"; TMP="$OUT/tmp"
-VER="${VIBEIQ_VERSION:-1.0.0}"
+VER="${VIBEIQ_VERSION:-1.0.1}"
 WANT="${1:-all}"
 
 rm -rf "$DIST"; mkdir -p "$DIST" "$TMP"
@@ -123,6 +123,19 @@ if [ "$WANT" = all ] || [ "$WANT" = darwin ]; then
   build darwin amd64 "$TMP/vibeiq-darwin-amd64"
   lipo -create "$TMP/vibeiq-darwin-arm64" "$TMP/vibeiq-darwin-amd64" -output "$d/vibeiq"
   check "$d/vibeiq" "VibeIQ window:"
+  # ★ Sign it if there is an identity to sign with, so the binary is at least attributable and
+  #   `codesign -v` passes. It is NOT notarised: `stapler` can only attach a ticket to a bundle,
+  #   dmg or pkg, so a loose executable has nowhere to carry one and Gatekeeper would fall back to
+  #   an online check anyway. The quarantine line in the README is the honest answer for this file;
+  #   people who want Gatekeeper to just work want VibeIQ.app, which IS notarised and stapled.
+  IDENT=$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application" | head -1 | awk '{print $2}' || true)
+  if [ -n "${IDENT:-}" ]; then
+    codesign --force --timestamp --options runtime --identifier net.vibesdr.vibeiq.cli --sign "$IDENT" "$d/vibeiq"
+    codesign --verify --strict "$d/vibeiq"
+    echo "    signed (not notarised — see README.txt)"
+  else
+    echo "    !! no Developer ID: shipping the macOS binary UNSIGNED"
+  fi
   cat > "$d/README.txt" <<TXT
 VibeIQ $VER — the command-line bridge, universal (Apple silicon + Intel).
 

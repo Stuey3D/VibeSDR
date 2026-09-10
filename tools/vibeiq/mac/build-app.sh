@@ -12,7 +12,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$HERE/.."
 ROOT="$SRC/../.."
 OUT="$SRC/out"; APP="$OUT/VibeIQ.app"
-VER="${VIBEIQ_VERSION:-1.0.0}"
+VER="${VIBEIQ_VERSION:-1.0.1}"
 BUILD=$(echo "$VER" | awk -F. '{printf "%d", $1*10000 + $2*100 + $3}')
 NOTARISE=1; [ "${1:-}" = "--no-notarise" ] && NOTARISE=0
 
