@@ -6280,11 +6280,13 @@ export default function SDRScreen({ route, navigation }: Props) {
       /* ★ The wrist asking for DAB. Buddy has no route of its own — see watchProvider's note on
        *  the demodulator grid — so this is the whole mechanism. */
       onDabMode: (on: boolean) => { if (on !== dabOnRef.current) toggleDab(); },
-      onDabBlockStep: (dir: -1 | 1) => {
-        if (!dabOnRef.current) return;
+      onDabBlockStep: (step: number) => {
+        if (!dabOnRef.current || !step) return;
         const n = DAB_BLOCKS.length;
         const cur = dabBlockRef.current < 0 ? 0 : dabBlockRef.current;
-        onDabBlockRef.current?.(((cur + dir) % n + n) % n);
+        // ★ Still wraps: the crown is a ring, and Buddy sends a step it worked out from the SAME
+        //   Band III table (WatchLink.dabBlocks), so cur + step is where the wrist stopped.
+        onDabBlockRef.current?.(((cur + step) % n + n) % n);
       },
 
       onZoomDelta: (delta: number) => {

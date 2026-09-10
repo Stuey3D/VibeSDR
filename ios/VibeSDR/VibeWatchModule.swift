@@ -550,10 +550,28 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
 
   /// The DAB multiplex — ensemble, services, and which one is playing. DAB is a
   /// LIST, not a continuum: you switch service, you never tune.
+  ///
+  /// ★★★ DURABLE, NOT DROPPED — this is why Buddy's DAB button was "fully missing still" (Stuart,
+  ///  2026-09-10) while Jr's worked. This used to `return` when the link was momentarily down, and
+  ///  the phone had ALREADY marked the payload sent (watchProvider.flushDab stamps `sentDab`
+  ///  before calling in here). So the one message that says "this receiver can do DAB" was thrown
+  ///  away and never re-sent: the demodulator list is built from `dab.capable`, so with no `dab`
+  ///  at all there is no DAB entry, permanently, until something else forces a full flush.
+  /// ★★ A drop is only acceptable for a message the NEXT one supersedes — a spectrum row, a level.
+  ///  This is a durable fact about the receiver, so it takes the same `transferUserInfo` fallback
+  ///  the favourites and radio list already use: queued by the system and delivered on wake.
+  /// ★ Same trap as the note above on line 510 — one rule, several readers, and this reader was
+  ///  never updated.
   @objc(sendDab:)
   func sendDab(_ json: String) {
-    guard let s = session, linkAlive else { return }
-    s.sendMessage(["k": "dab", "j": json], replyHandler: nil, errorHandler: nil)
+    guard let s = session else { return }
+    let msg = ["k": "dab", "j": json]
+    guard linkAlive else { s.transferUserInfo(msg); return }
+    s.sendMessage(msg, replyHandler: nil, errorHandler: { _ in
+      // ★ AND WHEN THE SEND ITSELF FAILS. `errorHandler: nil` discards the failure, which is how
+      //   this hid: reachable one instant, gone the next, and nobody the wiser.
+      s.transferUserInfo(msg)
+    })
   }
 
   /// The dial's station memory — the same list the phone's dial draws.

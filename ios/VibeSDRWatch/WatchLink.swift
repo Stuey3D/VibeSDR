@@ -843,6 +843,21 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   var dabOn: Bool { dab?.on ?? false }
   var dabBlock: String { dab?.block ?? "" }
 
+  /* ★★★ BAND III BY NAME, so the watch can draw the block the crown has reached before the phone
+   *  and the server have confirmed it. Mirrors vibe_dab_channels.h, the phone's dabBlocks.ts and
+   *  Jr's UberClient.dabBlocks — ONE RULE, FOUR READERS, so if a block is ever added it must be
+   *  added in all of them. ★ The OFFSET blocks 10N/11N/12N are easy to leave out of a hand-typed
+   *  list and are genuinely on air. */
+  static let dabBlocks: [String] = [
+    "5A", "5B", "5C", "5D", "6A", "6B", "6C", "6D",
+    "7A", "7B", "7C", "7D", "8A", "8B", "8C", "8D",
+    "9A", "9B", "9C", "9D",
+    "10A", "10N", "10B", "10C", "10D",
+    "11A", "11N", "11B", "11C", "11D",
+    "12A", "12N", "12B", "12C", "12D",
+    "13A", "13B", "13C", "13D", "13E", "13F",
+  ]
+
   /// Switch the PHONE to another instance. Handled outside the SDR screen on the
   /// phone, because the whole point is that it works when no SDR screen is up.
   /// Pick a server for the PHONE to connect to. Send the TYPE (and name) too — a directory server the

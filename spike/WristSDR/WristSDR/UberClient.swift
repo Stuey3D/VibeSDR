@@ -87,6 +87,10 @@ final class UberClient: ObservableObject {
   @Published var dabActive = false
   /// Index into `Self.dabBlocks` of the block being decoded or asked for.
   @Published var dabBlockIndex = -1
+  /// The block we last ASKED for, and when — so a `dab` report still in flight from the multiplex
+  /// we just left can be dropped instead of adopted. See the filter in the `dab` handler.
+  private var dabWantIndex = -1
+  private var dabWantAt: TimeInterval = 0
   /// The server's refusal, when it could not start. An explanation, not an error.
   @Published var dabRefusal = ""
   @Published var dabProgrammesV: [DabProgramme] = []
@@ -137,6 +141,8 @@ final class UberClient: ObservableObject {
     }
     i = max(0, min(Self.dabBlocks.count - 1, i))
     dabBlockIndex = i
+    dabWantIndex = i                                    // ★ arm the stale-report filter
+    dabWantAt = ProcessInfo.processInfo.systemUptime
     dabRefusal = ""
     UserDefaults.standard.set(Self.dabBlocks[i].name, forKey: dabBlockKey)
     specSock.send(json: ["type": "dab", "on": 1, "channel": i])
@@ -1111,6 +1117,25 @@ final class UberClient: ObservableObject {
       if dabRefusal.isEmpty { dabRefusal = "DAB is not available on this receiver" }
       dabActive = false; dabProgrammesV = []; dabEnsembleV = ""
       return
+    }
+    /* ★★★ DROP A REPORT THAT BELONGS TO THE BLOCK WE JUST LEFT. Stuart, 2026-09-10: "it jumped
+     *  from 5a - 10a and for some reason started showing the 9A stations." A retune takes the
+     *  server a second or two, and every `dab` message still in flight from the OLD multiplex
+     *  arrives AFTER the request — carrying that mux's ensemble label, its service list, and its
+     *  `channel`, which the follow-the-server rule below then adopts as the truth. The header
+     *  went backwards and the list you could tap was the wrong mux's.
+     *  ★★ The whole message goes, not just the channel: label, services, DLS and sid all describe
+     *     a multiplex the listener is no longer on, and a stale list you can TAP is worse than an
+     *     empty one — the same reason stepDabBlock clears the list on the way out.
+     *  ★ It EXPIRES (6 s). "Follow the server, not our own request" is still right when the server
+     *    genuinely landed somewhere else — refusing a block, or clamping — and a filter with no
+     *    timeout would wedge the screen on a block that is never coming. */
+    if dabWantIndex >= 0 {
+      let want = Self.dabBlocks[dabWantIndex].name
+      let ch0 = dabSafe(j["channel"], 8)
+      if ProcessInfo.processInfo.systemUptime - dabWantAt > 6.0 { dabWantIndex = -1 }
+      else if !ch0.isEmpty && ch0 != want { return }
+      else if ch0 == want { dabWantIndex = -1 }
     }
     dabActive = true
     dabLocked = (j["locked"] as? Bool) ?? false

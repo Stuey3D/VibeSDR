@@ -34,6 +34,14 @@ struct DabView: View {
    *  services. That is the same shape as the volume button beside it, which the screen has always
    *  had, so there is one idea to learn rather than two. */
   @State private var blockMode = false
+  /* ★★★ THE SPIN IS LOCAL; ONLY THE LANDING IS A RETUNE. Stuart, 2026-09-10: "the block moving
+   *  felt really sluggish with no visual feedback and made me almost about to come here and say
+   *  it wasnt working." Every detent used to be a full retune and re-acquire on the server, so a
+   *  four-block spin was four tune-ups, each cancelling the last, and the capsule showed nothing
+   *  until one of them came back. Now the crown moves a LOCAL index that the capsule draws at
+   *  once, and one request goes out when the crown stops. */
+  @State private var pendingBlock: Int? = nil          // index into UberClient.dabBlocks, nil = none
+  @State private var blockSend: DispatchWorkItem?
   @State private var volTimeout: DispatchWorkItem?
   @AppStorage("seenDabTutorial") private var seenDabTut = false
   @State private var showDabTut = false
@@ -101,7 +109,13 @@ struct DabView: View {
        *  by nothing on this path — Buddy's DabView has the branch, Jr's never got it. WRITTEN AND
        *  NEVER READ, the recurring shape. One detent, one block, never a sweep: every step is a
        *  retune and a re-acquire on the server. */
-      if blockMode { link.stepDabBlock(delta > 0 ? 1 : -1); return }
+      /* ★★★ THE PADLOCK MUST STOP THIS TOO. The capsule is .disabled(locked) so you cannot
+       *  ENTER block mode while locked — but if you were already in it and then locked the screen,
+       *  the crown carried on changing multiplex, which is precisely what a lock is for (Stuart,
+       *  2026-09-10: "the padlock doesnt do anything as when pressed the crown still moved the
+       *  block"). Water Lock is the case that matters: a wet sleeve should not retune the radio. */
+      if locked { return }
+      if blockMode { stepBlock(delta > 0 ? 1 : -1); return }
       let n = link.dabProgrammes.count
       guard n > 0 else { return }
       cursor = min(n - 1, max(0, cursor - delta))   // clamp, don't wrap — a list has ends (crown up = up)
@@ -135,6 +149,21 @@ struct DabView: View {
     .onChange(of: link.dabActiveId) { _, id in
       if let i = link.dabProgrammes.firstIndex(where: { $0.id == id }) { cursor = i }
     }
+    /* ★★★ THE OPTIMISTIC LABEL ENDS WHERE THE SERVER AGREES. Cleared only when the confirmed
+     *  block IS the one the crown asked for — clearing on any change would hand the capsule back
+     *  to a report from the mux we just left, which is the very confusion this replaced. */
+    .onChange(of: link.dabBlockName) { _, name in
+      if let i = pendingBlock, UberClient.dabBlocks.indices.contains(i),
+         UberClient.dabBlocks[i].name == name { pendingBlock = nil; cursor = 0 }
+    }
+    /* ★★★ LEAVING BLOCK MODE FLUSHES, IT DOES NOT CANCEL. Tapping the capsule to hand the crown
+     *  back is the natural end of a spin, and it lands well inside the 0.4 s debounce — cancelling
+     *  there would silently throw the retune away and leave the listener on the old multiplex
+     *  wondering why the block they chose never happened. */
+    .onChange(of: blockMode) { _, on in
+      if !on, blockSend != nil { blockSend?.cancel(); sendPendingBlock() }
+    }
+    .onDisappear { blockSend?.cancel(); volTimeout?.cancel() }
   }
 
   // PASSIVE status icons only — safe up in the clock's band (which doesn't take touches). The lock/menu
@@ -149,6 +178,52 @@ struct DabView: View {
     }
     .padding(.leading, 28).padding(.top, 3)
     .ignoresSafeArea(edges: .top)
+  }
+
+  /// The block the capsule should DRAW: what the crown has reached, falling back to what the server
+  /// has confirmed. ★ Without the fallback a listener who never touched the crown sees nothing.
+  private var shownBlock: String {
+    if let i = pendingBlock, UberClient.dabBlocks.indices.contains(i) { return UberClient.dabBlocks[i].name }
+    return link.dabBlockName
+  }
+
+  /// Move the multiplex by one detent — LOCALLY — and send a single request once the crown settles.
+  ///
+  /// ★★★ Debounced, not throttled. A throttle sends the first step immediately and the server spends
+  ///  the rest of the spin acquiring a mux you have already spun past; a debounce sends only where you
+  ///  stopped. 0.4 s is the same dwell the server's own DAB acquisition uses.
+  /// ★★ It CLAMPS rather than wraps at 5A and 13F. The client's `stepDabBlock` wraps because a crown
+  ///  is a ring, but that was written for one step at a time — with a local index a fast spin would
+  ///  skate past 13F round to 5A and land nowhere near where the wrist stopped.
+  /// ★ A haptic on every detent even though only the last one tunes: the feedback IS the fix.
+  private func stepBlock(_ dir: Int) {
+    let blocks = UberClient.dabBlocks
+    guard !blocks.isEmpty else { return }
+    let base = pendingBlock ?? blocks.firstIndex { $0.name == link.dabBlockName } ?? 0
+    let next = min(blocks.count - 1, max(0, base + dir))
+    guard next != base || pendingBlock == nil else { return }
+    pendingBlock = next
+    WKInterfaceDevice.current().play(.click)
+    blockSend?.cancel()
+    let work = DispatchWorkItem { sendPendingBlock() }
+    blockSend = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+  }
+
+  /// Send the block the crown settled on. Called by the debounce, and directly when block mode ends.
+  private func sendPendingBlock() {
+    blockSend = nil
+    guard let target = pendingBlock else { return }
+    let blocks = UberClient.dabBlocks
+    // ★ The delta is measured against where the server ACTUALLY is at send time, not against where
+    //   the spin started — the server may have moved underneath us.
+    guard let now = blocks.firstIndex(where: { $0.name == link.dabBlockName }) else {
+      pendingBlock = nil; return             // no block confirmed yet: nothing to step FROM
+    }
+    if target != now { link.stepDabBlock(target - now) } else { pendingBlock = nil }
+    // ★ pendingBlock is NOT cleared on a real send — it stays as the label until the server
+    //   confirms that block (onChange below). Clearing here would snap the capsule back to the old
+    //   block for the second or two the retune takes: the sluggishness again.
   }
 
   /// Commit the service under the cursor — from a tap OR the pinch gesture (the latter works in Water
@@ -174,16 +249,20 @@ struct DabView: View {
          *  multiplex is the owner's profile and there is nothing here to choose, so drawing a dead
          *  capsule would be exactly the "control that works on one radio only" AGENTS.md forbids.
          *  ★ It doubles as the readout — which block, and whether the crown is on it. */
-        if !link.dabBlockName.isEmpty {
+        if !shownBlock.isEmpty {
           Button {
             guard !locked else { return }
             blockMode.toggle()
             if blockMode { volumeMode = false }
             WKInterfaceDevice.current().play(.click)
           } label: {
-            Text(link.dabBlockName)
+            /* ★ TUNING-IN, VISIBLY. While the crown is ahead of the server the capsule shows the
+             *  block you have reached and dims — so a spin reads as "going to 10A", not as a
+             *  frozen screen. It goes solid the moment the server confirms that block. */
+            Text(shownBlock)
               .font(.system(size: 12, weight: .bold, design: .rounded))
               .foregroundColor(blockMode ? .black : .cyan)
+              .opacity(pendingBlock == nil ? 1 : 0.55)
               .padding(.horizontal, 7).padding(.vertical, 2)
               .background(blockMode ? Color.cyan : Color.cyan.opacity(0.18), in: Capsule())
           }.buttonStyle(.plain).disabled(locked)

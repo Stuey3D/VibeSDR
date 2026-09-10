@@ -195,7 +195,10 @@ export interface WatchCommandHandlers {
   /** VibeServer DAB: enter (true) or leave (false). Absent on backends without it. */
   onDabMode?(on: boolean): void;
   /** VibeServer DAB: step to the next/previous multiplex. */
-  onDabBlockStep?(dir: -1 | 1): void;
+  /* ★ A STEP, NOT A DIRECTION. Buddy debounces a crown spin locally and sends where the wrist
+   *  STOPPED, so this can be several blocks in one go; clamping it to ±1 moved one block and
+   *  silently dropped the rest of the spin (Stuart, 2026-09-10). Sign gives the direction. */
+  onDabBlockStep?(step: number): void;
   onStep(hz: number): void;
   /** Crown in zoom mode. Drives the REAL server zoom, so the watch gets finer
    *  bins rather than a magnified crop — the only thing that beats the
@@ -485,7 +488,13 @@ class WatchProvider {
           case 'dabmode': handlers.onDabMode?.(e.val === true); break;
           /* ★ Step the multiplex. The block IS the tuning in DAB, so this is what the crown and
            *  the watch's own tuning gesture must mean there. */
-          case 'dabblock': handlers.onDabBlockStep?.(Number(e.delta ?? 0) < 0 ? -1 : 1); break;
+          case 'dabblock': {
+            // ★ Bounded: a corrupt delta must not send the tuner on a lap of Band III. Band III is
+            //   41 blocks, so anything past that is nonsense whatever the watch meant.
+            const d = Math.trunc(Number(e.delta ?? 0)) || 0;
+            if (d) handlers.onDabBlockStep?.(Math.max(-41, Math.min(41, d)));
+            break;
+          }
           // Thin-remote server controls — the watch relayed a tap, run the phone's command.
           case 'bw':      handlers.onBandwidth?.(Number(e.lo ?? 0), Number(e.hi ?? 0)); break;
           case 'squelch': handlers.onSquelch?.(Number(e.val ?? -999)); break;
