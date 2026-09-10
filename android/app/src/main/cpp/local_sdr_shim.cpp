@@ -2287,6 +2287,20 @@ static inline void agcAskStride(float moved, float stepDb) {
     if (st > 1) g_nextStride.store(st, std::memory_order_relaxed);
 }
 static std::atomic<float>    g_shoulderBeforeMove{0.0f};
+/** ★★★ WAS THE CONVERTER ON THE RAIL WHEN THE "BEFORE" READING WAS TAKEN? A clipped window does
+ *  not measure the band, it measures the clipping: the reading is compressed AND the flat tops
+ *  spray energy across every bin, the channel included. So a cut that merely ENDS the clipping
+ *  makes the channel appear to collapse by far more than the gain that was removed — and the
+ *  runaway test reads that as proof the front end was manufacturing the signal, and keeps diving.
+ *  Measured on the Pi's V4, 40m, 2026-09-10 18:27 (Stuart: "the V4 knocked its gain down and never
+ *  went back up again"): a zoom-out widened the IF filter to full, the ADC railed at −0.1 dBFS,
+ *  the overload cut took 7.9 dB — and the channel fell 20.2 dB. The loop concluded "nothing real
+ *  falls that fast", dived a further 6 dB to 2.7, and then had to climb all the way back. About a
+ *  minute of mud for a verdict that was never evidence.
+ *  ★★ This is the SAME principle the pipeline-disturbed rule already states a few hundred lines
+ *     up: a verdict reached across a disturbed window is not evidence, so it is thrown away and
+ *     the move is re-judged rather than counted against the radio. Clipping is a disturbance. */
+static std::atomic<bool>     g_clipBeforeMove{false};
 static std::atomic<bool>     g_lastCutWasRunaway{false};
 static std::atomic<double>   g_moveStepDb{0.0};
 static std::atomic<int>      g_moveDir{0};
@@ -20574,7 +20588,28 @@ void LocalSdrShim::overloadTick() {
             }
         }
         const float moved   = dir < 0 ? chFell : -chFell;
-        const bool  runaway = stepDb > 0.5f && moved > 2.0f && moved > stepDb * prof.runawayRatio;
+        /* ★★★ NOT AGAINST A CLIPPED "BEFORE". See g_clipBeforeMove: when the converter was on the
+         *  rail, the reading the verdict compares against is the clipping, not the band, and a cut
+         *  that merely ends the clipping looks exactly like a front end that was manufacturing the
+         *  signal. Both runaway tests are therefore skipped for that one move — the ordinary loop
+         *  re-judges the next one, off a clean measurement.
+         *  ★★ WHAT IS *NOT* SKIPPED, and this is the whole reason it is safe: the overload cut
+         *     itself. Clipping is detected from the ADC directly and still takes the gain down
+         *     immediately, hard, exactly as before. This suppresses only the EXTRA dive that the
+         *     invalid comparison asked for afterwards, and only on the single move that crossed
+         *     out of clipping — so a genuine intermod runaway, which is measured on a converter
+         *     that is NOT railing, is judged exactly as it was. Nothing changes for a receiver
+         *     that never clips, which is FM and every other band on a sane signal. */
+        const bool  clipBefore = g_clipBeforeMove.load(std::memory_order_relaxed);
+        const bool  runaway = !clipBefore && stepDb > 0.5f && moved > 2.0f
+                              && moved > stepDb * prof.runawayRatio;
+        // ★ Every reason names itself — the rule this file already keeps. A suppression that is
+        //   silent is indistinguishable from a loop that has stopped thinking.
+        if (clipBefore && dir < 0 && stepDb > 0.5f && moved > 2.0f
+                && moved > stepDb * prof.runawayRatio)
+            LOGI("that %.1f dB cut took %.1f dB out of the channel — but the reading before it came "
+                 "off a railing converter, so that is the clipping ending, not the front end being "
+                 "caught. Not evidence; the next clean step is judged normally.", stepDb, moved);
 
         /* ★★★ SEPARATION IS A MEANINGLESS TEST FOR DAB, AND IT WAS STOPPING THE CLIMB DEAD.
          *  Everything below judges a step by what it did to the CHANNEL-TO-FLOOR separation. On FM
@@ -20613,7 +20648,7 @@ void LocalSdrShim::overloadTick() {
         const float shWas   = g_shoulderBeforeMove.load(std::memory_order_relaxed);
         const float shNow   = p->shoulderDb.load();
         const float shMoved = dir < 0 ? (shWas - shNow) : (shNow - shWas);
-        const bool  spraying = prof.watchShoulders && p->sepFromShoulders.load()
+        const bool  spraying = !clipBefore && prof.watchShoulders && p->sepFromShoulders.load()
                                && stepDb > 0.5f && shMoved > 2.0f
                                && shMoved > stepDb * prof.runawayRatio;
         if (spraying && dir > 0) {
@@ -21364,6 +21399,10 @@ void LocalSdrShim::overloadTick() {
         // ★ The channel and the size of the move, for the "are we making this?" verdict.
         g_chanBeforeMove.store(p->channelDbWide.load(), std::memory_order_relaxed);
         g_shoulderBeforeMove.store(p->shoulderDb.load(), std::memory_order_relaxed);
+        // ★ …and whether that reading was taken off a railing converter. See g_clipBeforeMove.
+        g_clipBeforeMove.store(g_adcClipRun.load(std::memory_order_relaxed) > 0
+                               || g_adcPeakDbfs.load(std::memory_order_relaxed) > -0.5,
+                               std::memory_order_relaxed);
         {
             const int fromS = (tgtIdx - steps) < 0 ? 0 : (tgtIdx - steps);
             g_moveStepDb.store(std::fabs((gains[(size_t)idx] - gains[(size_t)fromS]) / 10.0),
