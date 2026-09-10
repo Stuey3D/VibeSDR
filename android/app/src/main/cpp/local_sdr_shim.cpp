@@ -10271,6 +10271,24 @@ struct LocalSdrShim::Impl {
             if (jsonNum(msg,"value",v) && v > 0) {
                 const double maxR = g_serveOnLan.load() ? g_vsLockedRate.load() : 0.0;
                 if (maxR > 0 && v > maxR) v = maxR;   // clamp to the ceiling; lower is allowed
+                /* ★★★ AND TO THE RADIO'S OWN CEILING, which nothing enforced at all. hwinfo has always
+                 *  advertised what this radio can do; the handler then took whatever it was sent,
+                 *  so a client could put the hardware somewhere the list never offered. The Pi's
+                 *  V4L was found capturing at 2.56 MS/s with the owner's page set to 2.4 (Stuart,
+                 *  2026-09-10) — above what an RTL2832U can sustain over USB, so it drops samples
+                 *  and runs hot, which reads as a bad receiver rather than a bad setting.
+                 *  ★★ THIS IS THE HALF THAT PROTECTS SOMEBODY ELSE'S RECEIVER. The rate lock is off by
+                 *     default, so without this a visiting listener could do it to a stranger's radio
+                 *     and degrade it for everyone on it. A client must not decide what only the
+                 *     server knows — and the server is the only place that can be sure, because an
+                 *     old client, another tab or a hand-rolled tool asks too.
+                 *  ★ Clamped, not refused: there IS a nearer legal value, so move to it rather than
+                 *    ignore the request and leave the picker disagreeing with the radio. */
+                const double hwMax = maxAdvertisedRateHz();
+                if (hwMax > 0 && v > hwMax) {
+                    LOGI("sampleRate %.0f is above this radio's ceiling — clamped to %.0f", v, hwMax);
+                    v = hwMax;
+                }
                 LocalSdrShim::instance().setSampleRate(v);
             }
             return;
@@ -10481,6 +10499,56 @@ struct LocalSdrShim::Impl {
         sendText(sock, b);
     }
 
+    /** ★★★ THE RATES THIS RADIO CAN ACTUALLY DO — ONE LIST, TWO READERS, AND NOW ONE SOURCE.
+     *
+     *  hwinfo advertises this so the client's picker aligns with the radio rather than a generic
+     *  RTL-TCP list, and the sampleRate handler CLAMPS to its maximum. Those are the same rule read
+     *  twice, and until now only the advertisement existed: the handler took whatever a client
+     *  asked for. So a client could put a dongle somewhere the list never offered, which is how the
+     *  Pi's V4L came to be capturing at 2.56 MS/s with the owner's page set to 2.4 (Stuart,
+     *  2026-09-10) — and on someone ELSE'S receiver a visiting listener could do the same.
+     *
+     *  ★★ NAME EVERY SOURCE. The old shape here was `if (isSdrplay()) … else <dongle>`, and this
+     *     file already records that a two-source world written as "the other one" mis-handles the
+     *     third EVERY time — it cost the HF+ its real rate list once already.
+     *
+     *  ★ SDRplay: nothing below 2 MHz (the RSP is zero-IF only at 2 MHz and up; narrower spans need
+     *    a low-IF mode we do not configure, so offering 1 MHz would advertise a span the radio
+     *    cannot legally produce). And no 10 MSPS: measured on air it is "a broken mess" while 8
+     *    works well (Stuart, 2026-07-26).
+     *  ★ HackRF and Airspy HF+: THE RADIO'S OWN LIST, descending to match the others. An HF+
+     *    Discovery tops out near 912 kHz, below where the dongle list even starts.
+     *  ★★★ RTL: THE CEILING IS 2.4, NOT 2.56. This list ended in 2560000 and the comment defended
+     *      it as "the real ceiling" — the same reasoning that had already dropped 3.2. But the
+     *      RTL2832U only ACCEPTS 2.56; on a Pi feeding four radios the USB transfers fall behind
+     *      and it drops samples while running hot, which reads as a bad receiver rather than a bad
+     *      setting. Stuart, 2026-09-10, with the V4L sat there doing it: "a device that is limited
+     *      to 2.4". Being the biggest number in the list is exactly why it got picked. */
+    std::vector<double> advertisedRates() const {
+        if (LocalSdrShim::instance().isSdrplay())
+            return { 8000000, 6000000, 5000000, 4000000, 3000000, 2048000, 2000000 };
+        if (useHackRf()) {
+            std::vector<double> out;
+            const auto& rl = hrf->sampleRates();
+            for (size_t i = rl.size(); i-- > 0; ) out.push_back((double)rl[i]);
+            return out;
+        }
+        if (useAirspyHf()) {
+            std::vector<double> out;
+            const auto& rl = ahf->sampleRates();
+            for (size_t i = rl.size(); i-- > 0; ) out.push_back((double)rl[i]);
+            return out;
+        }
+        return { 2400000, 1800000, 1200000, 960000 };
+    }
+    /** The highest rate this radio is offered, and therefore the highest any client may ask for.
+     *  0 only if the list is somehow empty, which means "do not clamp" rather than "allow nothing". */
+    double maxAdvertisedRateHz() const {
+        double m = 0;
+        for (double r : advertisedRates()) if (r > m) m = r;
+        return m;
+    }
+
     void sendHwInfo(const std::shared_ptr<net::Socket>& sock) {
         std::vector<int> gains = LocalSdrShim::instance().getTunerGains();
         // ★★★ THE OWNER'S CEILING TRAVELS WITH THE HARDWARE INFO. A cap the client does not know
@@ -10556,68 +10624,34 @@ struct LocalSdrShim::Impl {
                             g_adcPeakDbfs.load(std::memory_order_relaxed)))
                       + ",\"gains\":[";
         for (size_t i = 0; i < gains.size(); i++) { if (i) j += ','; j += std::to_string(gains[i]); }
-        // Capture sample rates this server offers (= the spectrum spans the client
-        // may pick). These are the rates built into THIS server, so the client's
-        // picker aligns with the server rather than a generic RTL-TCP list.
-        // NO 3.2 MSPS. The RTL2832U will happily ACCEPT the rate and then fail to
-        // sustain it: above ~2.56 MSPS the USB transfers can't keep up, so it drops
-        // samples and runs hot doing it. It looked like the biggest number in the
-        // list — it was the first entry — so it was the one a curious user reached
-        // for, and the dropped samples then read as a bad receiver rather than a bad
-        // setting. 2.56 is the real ceiling; offer that instead.
-        // ★★ THE RATES THIS RADIO CAN ACTUALLY DO. An RSP is not a dongle: it runs to
-        // 10 MSPS where the RTL2832U tops out near 2.56, and offering the dongle's list on
-        // an RSP wastes most of the hardware while implying it is the limit. The client
-        // renders whatever we send, so the honest answer is per-device (2026-07-26).
-        if (LocalSdrShim::instance().isSdrplay())
-            // ★★ NOTHING BELOW 2 MHz. The RSP runs ZERO-IF only at 2 MHz and above; narrower
-            // spans need a LOW-IF mode (450 kHz / 1.62 / 2.048 MHz) with its own bandwidth
-            // rules, or the ADC left at a legal rate and the API's DECIMATION used to reach
-            // the output rate. We do neither yet, so offering 1 MHz would advertise a span
-            // the radio cannot legally produce in the mode we configure (Stuart, 2026-07-26).
-            // ★ Advertising a capability we have not implemented is worse than omitting it:
-            // it fails at the radio, where it looks like broken hardware.
-            // ★ NO 10 MSPS EITHER, and for exactly the reason 3.2 is missing from the RTL
-            // list above: measured on air, 10 MHz is "a broken mess" while 8 works well
-            // (Stuart, 2026-07-26). The API accepts it and then fails to sustain it — and
-            // being the biggest number in the list, it is the first one a curious user
-            // reaches for, so the dropped samples read as a bad receiver rather than a bad
-            // setting. Offer the real ceiling instead.
-            j += "],\"rates\":[8000000,6000000,5000000,4000000,3000000,2048000,2000000]";
-        else if (useHackRf()) {
-            /* ★★ A CHOSEN LIST, NOT THE RADIO'S. libhackrf takes a continuous rate, so unlike
-             *    the HF+ there is nothing to read back — hackrf_source.h picks the ones worth
-             *    offering. The floor is the hardware's own 2 MSPS, which is ABOVE where an RTL
-             *    dongle is usually run here: a HackRF costs more DSP than any other supported
-             *    radio before it has done anything useful, and the picker should not pretend
-             *    otherwise by offering a rate it cannot do. */
-            j += "],\"rates\":[";
-            const auto& rl = hrf->sampleRates();
-            for (size_t i = rl.size(); i-- > 0; ) {
-                j += std::to_string(rl[i]);
-                if (i) j += ",";
+        // The rates this server offers, and the ceiling the sampleRate handler enforces — see
+        // advertisedRates() above. One list, so the picker and the enforcement can never disagree.
+        j += "],\"rates\":[";
+        {
+            const auto rl = advertisedRates();
+            for (size_t n = 0; n < rl.size(); n++) {
+                if (n) j += ',';
+                j += std::to_string((long long)llround(rl[n]));
             }
-            j += "]";
         }
-        else if (useAirspyHf()) {
-            // ★★★ THE RADIO'S OWN LIST, not ours. An HF+ Discovery tops out near 912 kHz where
-            // the dongle list starts at 960 kHz — so EVERY rate we were offering was impossible,
-            // and the picker was showing a list the hardware would refuse (Stuart, 2026-07-27:
-            // "still got the RTL sample rates").
-            // ★ FOURTH time this exact shape has bitten today: `if (isSdrplay()) ... else
-            // <dongle>`. A two-source world written as "the other one" mis-handles the third
-            // EVERY time — see radioCapsJson and resumeCaptureIdle. Name every source.
-            j += "],\"rates\":[";
-            const auto& rl = ahf->sampleRates();
-            // Descending, to match the order the other two lists use — the client shows them
-            // in the order given and a list that runs the other way looks like a different
-            // control.
-            for (size_t i = rl.size(); i-- > 0; )
-                j += std::to_string(rl[i]) + (i ? "," : "");
-            j += "]";
-        }
-        else
-            j += "],\"rates\":[2560000,2400000,1800000,1200000,960000]";
+        j += "]";
+        /* ★★★ WHERE THE RATE ACTUALLY IS — the same rule as gainNow, one field over.
+         *
+         *  hwinfo said which rates were on OFFER and whether the owner had PINNED one, but never
+         *  which one the radio was RUNNING. So a client had nothing to adopt and could only assert:
+         *  both of ours restored a remembered rate on connect and pushed it, which silently
+         *  overrode the owner's setting and, on a shared receiver, re-spanned it for everybody
+         *  already listening. That is word for word the fault gainNow was added to close in August
+         *  ("I set the RTL-SDR on the server to return to 12.5db but when I opened it in the app it
+         *  was at 29.7db") — the reasoning was written down, and the rate was simply missed.
+         *
+         *  ★★ The radio is the authority on its own capture rate; the picker follows it. Stuart,
+         *     2026-09-10: "the app should obey the server on initial connection not force itself
+         *     upon the server and change settings blindly."
+         *  ★ captureSpanHz() is what the source is ACTUALLY running, not what anyone asked for — so
+         *    if a rate was clamped, refused, or overridden by DAB, this says so. */
+        j += ",\"rateNow\":" + std::to_string((long long)llround(
+                 LocalSdrShim::instance().captureSpanHz()));
         /* ★★★ THE TUNER'S IF FILTER AND WHERE IT SITS — ON THE SOCKET THE CLIENT ACTUALLY READS.
          *     These first went onto GET /vibeserver/hardware, which is the SETUP PAGE's endpoint,
          *     so the web client received nothing and the passband shading never drew. That is the

@@ -290,7 +290,15 @@ export interface SpectrumCallbacks {
               /** RTL only: is VibeSDR's AGC running, and how many steps below the ceiling is it? */
               agc?: boolean, ovlSteps?: number,
               /** Peak ADC level in dBFS — what the AGC is actually aiming at. */
-              adcPeak?: number) => void;
+              adcPeak?: number,
+              /** ★★★ WHERE THE RATE ACTUALLY IS — the capture rate the radio is RUNNING, in Hz.
+               *  Exactly `gainNow` one field over, and for exactly the same reason: without it a
+               *  client has nothing to adopt and can only assert, so both of ours restored a
+               *  remembered rate on connect and PUSHED it — silently overriding the owner's setting
+               *  and re-spanning a shared receiver for everyone already listening. The picker
+               *  follows the radio. 0 = an older server that does not say, and only then may the
+               *  old assert-a-default behaviour stand in. */
+              rateNow?: number) => void;
   /** ★★★ Demodulators/decoders the owner has switched off on this receiver. The server refuses
    *  them anyway; this exists so the client can HIDE them. Per AGENTS.md, a control that is
    *  visible and refused reads as a broken feature, not a blocked one. */
@@ -832,7 +840,8 @@ export class SpectrumClient {
                            typeof msg.gainNow === 'number' ? msg.gainNow : undefined,
                            msg.agc === 1 || msg.agc === true,
                            Number(msg.ovlSteps) || 0,
-                           typeof msg.adcPeak === 'number' ? msg.adcPeak : undefined);
+                           typeof msg.adcPeak === 'number' ? msg.adcPeak : undefined,
+                           Number(msg.rateNow) || 0);
         // ★★ Demodulators the OWNER has switched off. The server also REFUSES them, so this is
         //    not the enforcement — it is what lets us leave them out of the menu entirely.
         //    Offering a mode that will be refused reads as "the feature is broken"; not offering

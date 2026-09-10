@@ -1247,8 +1247,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
      *   from storage has to READ from the radio — and it has to read the SAME flag it commands. */
     onDigitalAgc: (on) => { hwDigitalAgcOn = on; setToggleTo('agc', on, 'agc'); },
     onHwInfo: (gains, rates, locked, maxFps, forceIdle, radio, lockedCentre, gainCap, agcLocked, gainLocked, ifGrFloor,
-               gainNow, agc, ovlSteps, adcPeak) => {
+               gainNow, agc, ovlSteps, adcPeak, rateNow) => {
       hwGains = gains; hwRates = rates; hwLockedRate = locked;
+      hwRateNow = typeof rateNow === 'number' ? rateNow : 0;
       if (typeof gainNow === 'number' && gainNow !== hwGainNow) hwGainChangedAt = performance.now();
       hwGainNow = typeof gainNow === 'number' ? gainNow : -1;
       hwAgcOn = agc === true;                       // ★ the live flag the chip reads through
@@ -1977,6 +1978,10 @@ let hwGainLocked = false;
 /** The least IF gain reduction the owner allows here, in dB — the slider's own units; -1 = none. */
 let hwIfGrFloor = -1;
 let hwRates: number[] = [];
+/** ★★★ THE RATE THE RADIO IS ACTUALLY RUNNING (Hz), from hwinfo; 0 = an older server that does
+ *  not report it. The picker follows this rather than asserting what we happen to remember — see
+ *  the block that builds the rate list. */
+let hwRateNow = 0;
 /** >0 = the SERVER pinned the capture rate; the picker is hidden. */
 let hwLockedRate = 0;
 // The operator pinned the captured window (see onHwInfo). A real lock, not a ceiling.
@@ -9882,6 +9887,31 @@ function populateHw() {
       return;
     }
     r.disabled = false;
+    /* ★★★ ADOPT, DO NOT ASSERT. This block runs on EVERY hwinfo, and it used to end by PUSHING
+     *  the remembered preference at the server. The justification was real — with nothing to read,
+     *  a silent client left the dropdown showing whatever was first while the radio ran at
+     *  something else, "not just defaulting badly, LYING about the rate" — but the cure asserted a
+     *  listener's saved value at a radio they may not own. On the Pi's V4L that put a dongle at
+     *  2.56 MS/s with the owner's page set to 2.4, periodically, with nobody touching the control
+     *  (Stuart, 2026-09-10: "the app should obey the server on initial connection not force itself
+     *  upon the server and change settings blindly").
+     *  ★★ rateNow removes the reason. The radio now says what it is running, so we can show the
+     *     truth without imposing one — the same move gainNow made for the gain slider.
+     *  ★ The option must EXIST to be selectable: a rate the radio reports but never advertised
+     *    (clamped, or an owner's odd setting) would otherwise leave the <select> showing the wrong
+     *    entry, which is the lie this block was written to stop. Same fix as the DAB branch above.
+     *  ★ Only a server too old to send rateNow still gets the assert, because for that one there
+     *    is genuinely nothing to read and a silent client goes back to lying. */
+    if (hwRateNow > 0) {
+      if (!hwRates.includes(hwRateNow)) {
+        const o = document.createElement('option');
+        o.value = String(hwRateNow);
+        o.textContent = `${(hwRateNow / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MS/s`;
+        r.appendChild(o);
+      }
+      r.value = String(hwRateNow);
+      return;
+    }
     r.value = String(wanted);
     spec!.setHwSampleRate(wanted);
   }

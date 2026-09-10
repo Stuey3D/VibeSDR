@@ -3884,6 +3884,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         setHwAutoGain(false); setHwGain(tenthDb);
       },
       onHwRates: (rates: number[]) => { if (!destroyed.current && rates.length) setHwServerRates(rates); },
+      /* ★★★ THE RADIO'S OWN CAPTURE RATE, ADOPTED. Same rule as onHwGainNow directly above, and it
+       *  was missed for the rate until the Pi's V4L turned up running 2.56 MS/s with its owner's
+       *  page set to 2.4 (Stuart, 2026-09-10). Without this the picker showed whatever this phone
+       *  had saved for the device — a readout of our own memory, presented as the radio's state.
+       *  ★ LOCAL STATE ONLY. It must never be sent back: adopting is the whole point, and echoing
+       *    it would re-assert a value at a radio we do not own. */
+      onHwRateNow: (hz: number) => { if (!destroyed.current && hz > 0) setHwSampleRate(hz); },
       // ★★★ VIBEAGC ON THE STATUS ROW. The server's own gain loop moves the radio under the
       //     listener, and until now nothing on the phone said so — a receiver that re-gains itself
       //     with no explanation reads as a fault. Kept SHORT ("GAIN ↑ 8.7 dB"): the browser has

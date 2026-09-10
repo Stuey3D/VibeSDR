@@ -293,10 +293,19 @@ final class UberClient: ObservableObject {
     if let v = s["rfnotch"]  as? Bool { rspRfNotch  = v }
     if let v = s["dabnotch"] as? Bool { rspDabNotch = v }
 
-    // Capture rate only if the host hasn't pinned it and the server actually offers it.
-    if lockedRate == 0, let r = s["rate"] as? Int, r > 0, offeredRates.contains(r), r != sampleRate {
-      setCaptureRate(r)
-    }
+    /* ★★★ THE CAPTURE RATE IS NO LONGER RESTORED, AND MUST NOT BE.
+     *
+     *  This pushed the saved rate at the server, and restoreVibeHw runs on EVERY hwinfo — so the
+     *  watch periodically asserted its own remembered span at a live receiver with nobody touching
+     *  the control. On a shared radio that re-spans it under everyone already listening; on
+     *  somebody else's it is a stranger changing their hardware. The rate now comes the other way:
+     *  hwinfo carries `rateNow` and we adopt it (see the parser above).
+     *  ★★ The rest of this function is a different case and stays. Gain, bias-T, ppm and the
+     *     notches are settings a listener legitimately chooses FOR THEMSELVES on arrival — but the
+     *     gain half deserves the same scrutiny one day, because `gainNow` exists for exactly this
+     *     reason and this function still pushes over it. Not tonight, and not silently: noted.
+     *  ★ `rate` is left in the saved dictionary deliberately, so an older build of this app that
+     *    still reads it is not confused by the key vanishing. */
     // Gain LAST: an RTL dongle commonly resets tuner gain when the sample rate changes. Both ride the same
     // spectrum WS, so the server applies them in this order.
     if let auto = s["auto"] as? Bool, auto {
@@ -541,6 +550,14 @@ final class UberClient: ObservableObject {
     if let g = j["gains"] as? [Int] { offeredGains = g }
     if let r = j["rates"] as? [Int] { offeredRates = r }
     lockedRate = (j["lockedRate"] as? NSNumber)?.intValue ?? 0
+    /* ★★★ WHAT THE RADIO IS ACTUALLY CAPTURING AT — adopt it, never assert over it.
+     *  `rates` says what is on OFFER and `lockedRate` whether the owner pinned one; neither says
+     *  which the radio is RUNNING. With nothing to read, restoreVibeHw() below could only push its
+     *  saved value, on EVERY hwinfo — so this watch re-spanned a receiver it may not own, over and
+     *  over, with nobody touching anything. The Pi's V4L was found at 2.56 MS/s with its owner's
+     *  page set to 2.4 (Stuart, 2026-09-10).
+     *  ★ Absent on an older server, and 0 must not read as "running at nothing". */
+    if let rn = (j["rateNow"] as? NSNumber)?.intValue, rn > 0 { sampleRate = rn }
     agcLocked  = (j["agcLocked"] as? NSNumber)?.boolValue ?? ((j["agcLocked"] as? Bool) ?? false)
     // ★ -1 when absent, never 0 — an older server that never sends it must read as "no limit",
     //   and 0 would read as "no gain allowed at all".

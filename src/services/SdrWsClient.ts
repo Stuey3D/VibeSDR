@@ -282,6 +282,15 @@ export interface SDRCallbacks {
    *  app showed its own idea of the gain and, on connecting, pushed it — overriding the owner's
    *  resting gain and re-gaining a shared receiver under everyone already listening. */
   onHwGainNow?: (tenthDb: number) => void;
+  /** ★★★ WHERE THE RATE ACTUALLY IS on the serving radio, in Hz — `gainNow` one field over, and
+   *  the same lesson. A client cannot query a remote dongle, so with nothing to adopt the picker
+   *  could only show what this phone happened to remember, and a client that shows a rate the
+   *  radio is not using is worse than one with no picker at all: nothing tells you to look.
+   *  ★★ ADOPTED, NEVER PUSHED BACK. Arriving at somebody's receiver is not a reason to change it,
+   *     and on a shared one it re-spans the radio under everybody already listening. Stuart,
+   *     2026-09-10: "the app should obey the server on initial connection not force itself upon
+   *     the server and change settings blindly." */
+  onHwRateNow?: (hz: number) => void;
   /**
    * ★★★ VIBEAGC, AND WHICH WAY IT JUST MOVED. The server runs its own gain loop for RTL-SDR and
    *     announces every move (`hwinfo.agc` for the state, a separate `ovl` message for the event).
@@ -2253,6 +2262,10 @@ export abstract class SdrWsClient {
       }
       if (Array.isArray(msg.gains)) this.callbacks.onHwGains?.(msg.gains as number[]);
       if (typeof msg.gainNow === 'number') this.callbacks.onHwGainNow?.(msg.gainNow);
+      // ★ Only when the server states it — an older one does not, and 0 must not be read as
+      //   "the radio is running at nothing".
+      if (typeof msg.rateNow === 'number' && msg.rateNow > 0)
+        this.callbacks.onHwRateNow?.(msg.rateNow);
       // ★ Whether the server's own AGC is running — see onHwAgc.
       if (typeof msg.agc === 'boolean') this.callbacks.onHwAgc?.(msg.agc);
       if (Array.isArray(msg.rates)) this.callbacks.onHwRates?.(msg.rates as number[]);
