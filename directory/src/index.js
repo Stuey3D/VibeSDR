@@ -201,6 +201,25 @@ function validUrl(u) {
   try { parsed = new URL(String(u)); } catch { return null; }
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
   if (!parsed.hostname) return null;
+  /* ★★★ AND NOT SOMETHING ONLY THE WORKER CAN REACH. The scheme was the only check, so a
+   *  registration could name 127.0.0.1, a private range, or 169.254.169.254 — and because the
+   *  worker faithfully proxies method, path, query and body to whatever it was given, that made
+   *  it a general-purpose SSRF oracle wearing a vibesdr.net name. verifyAddress even reports the
+   *  upstream status and the connection error back to the caller, which is a port scanner.
+   *  A receiver on a private address is served by the LAN or by the operator's own tunnel; it has
+   *  no business being reachable THROUGH us. (Audit, 2026-09-10.) */
+  const h = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') ||
+      h === '::1' || h === '0.0.0.0' || h.startsWith('fe80:') ||
+      h.startsWith('fc') || h.startsWith('fd')) return null;
+  const v4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    if (a === 127 || a === 10 || a === 0 ||
+        (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) ||
+        (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127) ||
+        a >= 224) return null;
+  }
   return parsed.origin;
 }
 
@@ -369,12 +388,32 @@ async function register(request, env) {
      *   and simply be told its address has gone.
      */
     const holder = await env.DB.prepare(
-      'SELECT id, url FROM servers WHERE slug = ?'
+      'SELECT id, url, updated_at FROM servers WHERE slug = ?'
     ).bind(wanted).first();
 
+    /* ★★★ THE URL IS NOT A SECRET, SO IT CANNOT BE THE PROOF. This released the slug to anyone
+     *  serving "at the exact address the holder published" — and list() PUBLISHES that address to
+     *  the whole world (see the `url` field it returns). Read the directory, re-register with a
+     *  victim's url and their slug, and the slug was yours: victim.vibeserver.vibesdr.net then
+     *  proxied YOUR box, which is attacker HTML on a vibesdr.net origin and every link the victim
+     *  ever shared. Registration needs no credential, so nothing else stood in the way.
+     *  ★ The url match stays — it is what lets a genuine server reclaim its own name after a
+     *    crash — but only once the holder has LAPSED, which is exactly the rule releaseLapsedSlug
+     *    already applies. A live holder keeps its address. (Audit, 2026-09-10.) */
+    /* ★ "Lapsed" is the SAME expression releaseLapsedSlug and slugHeld use — a hold that grows
+     *  with how long the server has been around, floored and capped — rather than a second
+     *  definition that could drift from them. The UPDATE is its own test: it changes a row only
+     *  if the holder is genuinely past its hold, so there is no gap between checking and acting. */
+    let released = false;
     if (holder && holder.url === url) {
-      await env.DB.prepare('UPDATE servers SET slug = NULL WHERE id = ?').bind(holder.id).run();
-    } else {
+      const r = await env.DB.prepare(
+        `UPDATE servers SET slug = NULL WHERE id = ? AND updated_at <= (? - ${HOLD_SQL})`
+      ).bind(holder.id, now()).run();
+      released = Number(r?.meta?.changes || 0) > 0;
+    }
+    if (released) {
+      // the name is free again
+    } else if (holder) {
       // ★ 409 with alternatives, so the app can put them straight into its dropdown rather than
       //   making the owner guess what is free.
       return json({
@@ -605,8 +644,11 @@ async function serveBySlug(host, request, env) {
   const slug = host.slice(0, -(PUBLIC_ZONE.length + 1)).toLowerCase();
   if (!slug || slug.includes('.')) return null;      // only one label deep
 
+  /* ★★★ VERIFIED ONLY, as list() has always required. This did not check, so a registration that
+   *  never passed verifyAddress could still be SERVED under its slug — the attacker in the note
+   *  above never had to run a real receiver at all. (Audit, 2026-09-10.) */
   const row = await env.DB.prepare(
-    'SELECT url, name, expires_at, updated_at, created_at FROM servers WHERE slug = ?'
+    'SELECT url, name, expires_at, updated_at, created_at FROM servers WHERE slug = ? AND verified = 1'
   ).bind(slug).first();
 
   if (!row) {

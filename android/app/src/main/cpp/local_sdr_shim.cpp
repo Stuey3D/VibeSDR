@@ -3958,7 +3958,27 @@ struct LocalSdrShim::Impl {
     // server
     std::shared_ptr<net::Listener> listener;
     std::thread acceptThread;
-    std::vector<std::thread> connThreads;
+    /* ★★★ REAPED, NOT JUST COLLECTED. Every accepted connection used to append a std::thread that
+     *  was joined ONLY at shutdown — so a thread that had finished its request stayed *joinable*,
+     *  and on glibc/bionic that keeps its descriptor and its stack mapping alive for the life of
+     *  the process. One HTTP request, one permanently leaked thread slot: a scanner, or a browser
+     *  refreshing, walks the process into the thread limit, std::thread's constructor throws in
+     *  acceptLoop, and the radio goes off the air and STAYS off. Unauthenticated, before the PIN
+     *  and before the ban list. Found by audit, 2026-09-10.
+     *  ★ Each handler now clears a flag when it returns and the accept loop joins the finished
+     *    ones on its way past — bounded work, and shutdown still joins whatever is left. */
+    struct ConnThread { std::thread th; std::shared_ptr<std::atomic<bool>> done; };
+    std::vector<ConnThread> connThreads;
+    /** Join and drop every handler that has already returned. Call with connMtx held. */
+    void reapConnThreadsLocked() {
+        for (size_t i = 0; i < connThreads.size();) {
+            if (connThreads[i].done->load(std::memory_order_acquire)) {
+                if (connThreads[i].th.joinable()) connThreads[i].th.join();
+                connThreads[i] = std::move(connThreads.back());
+                connThreads.pop_back();
+            } else ++i;
+        }
+    }
     std::mutex connMtx;
     std::atomic<bool> serverRunning{false};
     int port = 0;
@@ -8711,6 +8731,12 @@ struct LocalSdrShim::Impl {
             }
             if (type == "tune" || type == "mode" || type == "bandwidth") {
                 std::string m = jsonStr(msg, "mode");
+                // ★ …and in the per-listener path, which claims tune/mode/bandwidth before the
+                //   shared handlers ever run. Same rule, third reader.
+                if (!m.empty() && vsModeBlocked(m)) {
+                    LOGI("mode %s refused for this listener — the owner has switched it off", m.c_str());
+                    m.clear();
+                }
                 double v = 0, lo = 0, hi = 0, bw = 0;
                 bool changed = false;
                 if (!m.empty() && m != me->mode) { me->mode = m; me->bwHz = paramsFor(m).bandwidth; changed = true; }
@@ -9553,7 +9579,16 @@ struct LocalSdrShim::Impl {
          *  The number it sets was swept for MP2 on 12B and has NEVER been measured for DAB+, where
          *  an erased frame costs a whole 120 ms super frame rather than 24 ms. */
         if (type == "dab_erase") {
+            /* ★★★ BOX-WIDE, SO IT IS NOT A LISTENER'S TO SET. This is the MSC erasure threshold for
+             *  the whole multiplex: any listener could destroy DAB audio for everybody with one
+             *  message, and it stayed destroyed after they left. A leftover measurement control —
+             *  the same shape as `tunerbw`, which was moved behind the admin gate long ago. Bounded
+             *  as well as gated: an absurd value is as effective a denial of service as a malicious
+             *  one (audit, 2026-09-10). */
+            if (!adminGate("the DAB erasure threshold")) return;
             double v = 0.25; jsonNum(msg, "frac", v);
+            if (!(v >= 0.0)) v = 0.0;            // NaN-safe: !(NaN >= 0) is true
+            if (v > 4.0) v = 4.0;
             vibedab::dabEraseFrac().store(float(v), std::memory_order_relaxed);
             LOGI("[DAB] erase threshold -> %.3f of the running PRS reference%s",
                  v, v <= 0.0 ? " (erasure OFF)" : "");
@@ -9759,6 +9794,14 @@ struct LocalSdrShim::Impl {
                 if (it != sockSession.end() && !it->second.empty()) preTunedSession = it->second;
             }
             std::string m = jsonStr(msg, "mode");
+            /* ★★★ A BLOCKED MODE IS BLOCKED HERE TOO. The check lived only in the `mode` handler,
+             *  and every client sends the mode INSIDE its tune — so `{"type":"tune","mode":"wfm"}`
+             *  walked straight past the owner's blocked list. ONE RULE, TWO READERS, and only one
+             *  of them enforced it (audit, 2026-09-10). */
+            if (!m.empty() && vsModeBlocked(m)) {
+                LOGI("mode %s refused in a tune — the owner has switched it off", m.c_str());
+                m.clear();
+            }
             bool rebuilt = false;
             if (!m.empty() && m != mode) { mode = m; buildAudio(); rebuilt = true; }
             if (jsonNum(msg, "frequency", v) && v > 0) retune(v);
@@ -9931,6 +9974,15 @@ struct LocalSdrShim::Impl {
         if (type == "agc") {
             // The AGC owns the gain, so it is the same shared front-end control by another name.
             if (!sharedGate("AGC")) return;
+            /* ★★★ AND THE OWNER'S LOCK. Both radio-specific paths refuse an AGC-off when the owner
+             *  has locked it (the Airspy and RSP handlers say so in as many words), and the manual
+             *  `gain` handler refuses for the same reason — but this one, the generic switch the
+             *  web client actually sends, checked nothing (audit, 2026-09-10). */
+            if (LocalSdrShim::agcLocked() && !jsonOn(msg)) {
+                LOGI("AGC off refused — locked by the owner");
+                sendHwInfo(sock);
+                return;
+            }
             const bool on = jsonOn(msg);
             LocalSdrShim::instance().setAgc(on);
             vsPersist(std::string("{\"ifAgc\":") + (on ? "1" : "0") + "}");
@@ -10637,7 +10689,10 @@ struct LocalSdrShim::Impl {
             try { sock = listener->accept(nullptr, 500); } catch (...) { sock = nullptr; }
             if (!sock) continue;
             std::lock_guard<std::mutex> lk(connMtx);
-            connThreads.emplace_back([this, sock]{ routeOrHandle(sock); });
+            reapConnThreadsLocked();
+            auto done = std::make_shared<std::atomic<bool>>(false);
+            connThreads.push_back({ std::thread([this, sock, done]{
+                routeOrHandle(sock); done->store(true, std::memory_order_release); }), done });
         }
     }
 
@@ -10712,7 +10767,10 @@ struct LocalSdrShim::Impl {
             LOGI("adopted a handed-over connection");
             auto sock = std::make_shared<net::Socket>(fd);
             std::lock_guard<std::mutex> lk(connMtx);
-            connThreads.emplace_back([this, sock]{ handleConnection(sock); });
+            reapConnThreadsLocked();
+            auto done = std::make_shared<std::atomic<bool>>(false);
+            connThreads.push_back({ std::thread([this, sock, done]{
+                handleConnection(sock); done->store(true, std::memory_order_release); }), done });
         }
     }
 
@@ -11916,6 +11974,19 @@ struct LocalSdrShim::Impl {
             }
             if (sid && !bytes.empty()) {
                 std::string body(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                /* ★★★ THAT MIME TYPE CAME OFF THE AIR. It is an SPI attribute copied verbatim out
+                 *  of the multiplex (vibe_dab_spi.h, tag 0x80) with no validation, and it was
+                 *  spliced straight into a response header — a CR LF in it splits the response and
+                 *  serves an attacker's own body from the receiver's origin, which is where the
+                 *  admin page lives. Anything but a plain image type is not a MIME type we have
+                 *  any business echoing (audit, 2026-09-10). */
+                {
+                    static const char* kOkMime[] = { "image/png", "image/jpeg", "image/jpg",
+                                                     "image/gif", "image/webp", "image/bmp" };
+                    bool ok = false;
+                    for (const char* m : kOkMime) if (mime == m) { ok = true; break; }
+                    if (!ok) mime = "application/octet-stream";
+                }
                 sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: " + mime + "\r\n"
                               "Access-Control-Allow-Origin: *\r\nCache-Control: max-age=600\r\n"
                               "Connection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
@@ -12020,7 +12091,12 @@ struct LocalSdrShim::Impl {
                 std::vector<char> buf((size_t)contentLength + 1, 0);
                 int got = 0;
                 while (got < (int)contentLength) {
-                    const int n = sock->recv((uint8_t*)buf.data() + got, (size_t)contentLength - got, 5000);
+                    /* ★★★ `false, 5000`, NOT `5000`. The third parameter is forceLen and the FOURTH
+                     *  is the timeout, so a bare 5000 meant "block until you have every byte, with
+                     *  NO timeout" — a client that sends a Content-Length and then one byte pinned
+                     *  this thread for the life of the process. Every other body reader in this
+                     *  file gets it right; this was the one slip (audit, 2026-09-10). */
+                    const int n = sock->recv((uint8_t*)buf.data() + got, (size_t)contentLength - got, false, 5000);
                     if (n <= 0) break;
                     got += n;
                 }
@@ -19490,7 +19566,7 @@ void LocalSdrShim::stopLocked() {
     //   is listening on, and every hand-off to it would fail with "connection refused".
     if (!impl->handoffPath.empty()) ::unlink(impl->handoffPath.c_str());
     { std::lock_guard<std::mutex> lk(impl->connMtx);
-      for (auto& t : impl->connThreads) joinSafely(t, "connection thread");
+      for (auto& c : impl->connThreads) joinSafely(c.th, "connection thread");
       impl->connThreads.clear(); }
 
     if (impl->dev) rtlsdr_close(impl->dev);
