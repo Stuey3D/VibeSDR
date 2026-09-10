@@ -1313,14 +1313,49 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   /// with the same timestamp, so instead of pushing them together we hand each the next slot one
   /// `interval` after the last — spreading the clump across future frames at the true row rate. After
   /// a gap the schedule snaps back to `now + cushion`, so a slow feed never accrues artificial latency.
+  /// Hard backstop on the queue depth — and, with `rowFps`, on how far into the FUTURE the
+  /// release schedule may run. See the clamp in enqueueRows.
+  private static let maxPending = 12
+
   private func enqueueRows(_ rows: [[UInt8]]) {
     let now = ProcessInfo.processInfo.systemUptime
     let interval = 1.0 / Self.rowFps
+    /* ★★★ THE SCHEDULE MUST NOT RUN AWAY INTO THE FUTURE.
+     *
+     *  `lastSlot + interval` advances by one RELEASE interval per ARRIVING row, so it snaps back to
+     *  `now` only when the feed is SLOWER than rowFps. When the phone sends FASTER, every row pushes
+     *  the schedule further ahead of real time and NOTHING bounded that. The two rates are stated in
+     *  two places and they do not agree: watchProvider gates at MIN_ROW_MS = 60 (up to 16.7 rows/s)
+     *  while rowFps here is 10. Any overrun accrues monotonically — within a minute the head of the
+     *  queue is due tens of seconds from now, the depth cap keeps only the NEWEST rows (the ones
+     *  furthest in the future), and driverTick then releases nothing at all, ever.
+     *
+     *  That is a freeze that SUSTAINS ITSELF, and it does not look like one: handleRow keeps
+     *  decoding every row, so the meter, the SNR bar and `lastRowAt` all stay live. Stuart,
+     *  2026-09-10: "the spectrum still freezes shows no pill both connection glyphs are green the
+     *  SNR bar moves and the S9+40 indication is live updating too." It also explains the recovery
+     *  he had already noticed — drop the wrist and the phone stops forwarding, so `lastSlot` stands
+     *  still while real time catches up, and the queue is due again the moment you raise it.
+     *
+     *  So bound the lead to what the queue can hold. Past that the excess row REPLACES the newest
+     *  queued one instead of extending the schedule: the cadence stays even, the picture stays in
+     *  the present, and what is thrown away is a duplicate frame. That is this file's own doctrine
+     *  — "a dropped row is invisible on a scrolling waterfall; a backed-up queue is thirty seconds
+     *  of lag" (VibeWatchModule). ★ Fixing the rate disagreement is a SEPARATE job; this clamp has to
+     *  hold whatever the two ends are set to. */
+    let maxLead = now + Self.rowCushion + Double(Self.maxPending) * interval
     for r in rows {
-      lastSlot = max(now + Self.rowCushion, lastSlot + interval)
-      pendingRows.append((lastSlot, r))
+      let next = max(now + Self.rowCushion, lastSlot + interval)
+      if next > maxLead, !pendingRows.isEmpty {
+        pendingRows[pendingRows.count - 1].row = r      // newest wins, schedule stands still
+        continue
+      }
+      lastSlot = next
+      pendingRows.append((next, r))
     }
-    if pendingRows.count > 12 { pendingRows.removeFirst(pendingRows.count - 12) }   // hard backstop
+    if pendingRows.count > Self.maxPending {
+      pendingRows.removeFirst(pendingRows.count - Self.maxPending)   // hard backstop
+    }
   }
 
   /// Called every render frame from ContentView. Release any rows whose scheduled slot has arrived —
