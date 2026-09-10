@@ -8613,6 +8613,19 @@ struct LocalSdrShim::Impl {
         int opcode = h[0] & 0x0F; bool masked = h[1] & 0x80; uint64_t len = h[1] & 0x7F;
         if (len == 126) { uint8_t e[2]; if(!recvN(s,e,2)) return -1; len=(e[0]<<8)|e[1]; }
         else if (len == 127) { uint8_t e[8]; if(!recvN(s,e,8)) return -1; len=0; for(int i=0;i<8;i++) len=(len<<8)|e[i]; }
+        /* ★★★ A LENGTH OFF THE WIRE IS NOT AN ALLOCATION SIZE. `len` is up to 2^64-1 from a
+         *  127-form header, and this called out.resize() on it directly: an UNAUTHENTICATED peer
+         *  could ask the server for gigabytes with an eight-byte header and no payload at all —
+         *  bad_alloc or the OOM killer, either way the radio goes off the air for everybody. The
+         *  VibeIQ bridge has had this guard since it was written (ws.go: "frame too large"); the
+         *  server, which is the one facing the internet, did not. Found while wiring up fuzzing,
+         *  2026-09-10. Every control message here is small JSON — 1 MiB is already absurd. */
+        static constexpr uint64_t kMaxWsFrame = 1u << 20;
+        if (len > kMaxWsFrame) {
+            LOGI("websocket frame of %llu bytes from %s refused (cap %llu) — closing",
+                 (unsigned long long)len, s->peerAddress().c_str(), (unsigned long long)kMaxWsFrame);
+            return -1;
+        }
         uint8_t mask[4]={0,0,0,0}; if (masked && !recvN(s,mask,4)) return -1;
         out.resize((size_t)len);
         if (len && !recvN(s,(uint8_t*)out.data(),(size_t)len)) return -1;

@@ -23,6 +23,35 @@ cmake_minimum_required(VERSION 3.20)
 #     it. They must not drift: a Pi reporting 3.1.0 while the Mac says 3.0.2 makes every "which
 #     version are you on?" answer ambiguous, which is the question every fault report starts with.
 project(vibeserver VERSION 5.4.0 LANGUAGES CXX C)
+
+# ── ★★★ SANITISER BUILDS FOR THE TESTS AND THE OFFLINE REPLAY ────────────────────────────────
+#
+#   cmake -S vibeserver -B vibeserver/build-san -DVIBE_SANITIZE=ON && cmake --build ... && ctest
+#   scripts/sanitize-tests.sh   does both, plus the vibedsp suites
+#
+# ★★★ THE TESTS AND `dab-offline` ONLY — NEVER THE SERVER. ASan doubles the memory and costs
+#     2-3x; a Pi already runs its DSP near real time, so a sanitised server would drop buffers and
+#     "find" faults that are its own slowness. The offline replay is where this pays: the SAME
+#     decoder over a captured air file (VIBE_IQ_DUMP), no clock to keep, so a read one byte past
+#     an FIB or a shift by 32 is caught AT THE INSTRUCTION rather than three frames later as a
+#     mysterious burst of errors — which is exactly how the five DSP bugs of 2026-09-07 presented.
+# ★★ UBSan does NOT recover: the first signed overflow or misaligned load fails the test then and
+#    there, with a stack. A recovered warning in a thousand-line log is a warning nobody reads.
+# ★ Not on by default. It is a deliberate run, and a release build must never carry these.
+option(VIBE_SANITIZE "Build the tests and dab-offline with AddressSanitizer + UBSan" OFF)
+set(VIBE_SAN_OPTS "")
+if(VIBE_SANITIZE)
+  set(VIBE_SAN_OPTS -fsanitize=address,undefined -fno-sanitize-recover=undefined
+                    -fno-omit-frame-pointer -g)
+  message(STATUS "VIBE_SANITIZE=ON — tests and dab-offline carry ASan + UBSan (the server does NOT)")
+endif()
+function(vibe_sanitize tgt)
+  if(VIBE_SANITIZE)
+    target_compile_options(${tgt} PRIVATE ${VIBE_SAN_OPTS})
+    target_link_options(${tgt} PRIVATE ${VIBE_SAN_OPTS})
+  endif()
+endfunction()
+
 # ★ The single source of truth for the version. macOS shipped as VibeServer 1.0.0 (notarised),
 #   so Linux starts level with it rather than inventing a separate number for the same server.
 set(VIBESERVER_VERSION "${PROJECT_VERSION}")
@@ -377,12 +406,14 @@ target_link_libraries(vibeserver PRIVATE vibeserver_core)
 #      list is being rescanned underneath it, and a wrong answer there is a serial pointed at the
 #      wrong hardware, not a crash.
 add_executable(test-radio-api "${CMAKE_CURRENT_SOURCE_DIR}/test-radio-api.cpp")
+vibe_sanitize(test-radio-api)
 target_link_libraries(test-radio-api PRIVATE vibeserver_core)
 
 # ★ Header-only and dependency-free on purpose: the rule it guards (never emit a byte a browser
 #   will hang up over) belongs to the wire, not to any one radio, so its test must be runnable
 #   without a device, a socket or the rest of the core.
 add_executable(test-utf8 "${CMAKE_CURRENT_SOURCE_DIR}/test-utf8.cpp")
+vibe_sanitize(test-utf8)
 target_include_directories(test-utf8 PRIVATE "${CPP_DIR}")
 
 # ★★★ THE DAB TESTS ARE PART OF THE BUILD. Seventeen of them existed and not one was a target —
@@ -391,6 +422,7 @@ target_include_directories(test-utf8 PRIVATE "${CPP_DIR}")
 #     would have caught two of the three. `ctest` (or `make dab-tests`) runs the lot; they are
 #     header-only and take seconds, with no radio.
 enable_testing()
+
 set(VIBE_DAB_TESTS modes channels prs sync ofdm interleave fec punct fic ficdec msc receiver
                    resample superframe aac mp2 pad tii epg mot)
 add_custom_target(dab-tests)
@@ -398,6 +430,7 @@ foreach(t ${VIBE_DAB_TESTS})
   add_executable(test-dab-${t} "${CMAKE_CURRENT_SOURCE_DIR}/test-dab-${t}.cpp")
   target_include_directories(test-dab-${t} PRIVATE "${CPP_DIR}")
   target_compile_options(test-dab-${t} PRIVATE -O2)
+  vibe_sanitize(test-dab-${t})
   add_test(NAME dab-${t} COMMAND test-dab-${t})
   add_dependencies(dab-tests test-dab-${t})
 endforeach()
@@ -407,6 +440,7 @@ endforeach()
 add_executable(dab-offline "${CMAKE_CURRENT_SOURCE_DIR}/dab-offline.cpp" "${CPP_DIR}/vibedsp/third_party/pffft/pffft.c")
 target_include_directories(dab-offline PRIVATE "${CPP_DIR}")
 target_compile_options(dab-offline PRIVATE -O2)
+vibe_sanitize(dab-offline)
 target_compile_definitions(dab-offline PRIVATE VIBE_DAB_PFFFT=1)
 target_sources(test-dab-receiver PRIVATE "${CPP_DIR}/vibedsp/third_party/pffft/pffft.c")
 target_compile_definitions(test-dab-receiver PRIVATE VIBE_DAB_PFFFT=1)

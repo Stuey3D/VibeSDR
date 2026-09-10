@@ -8,6 +8,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(DSP ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
+# ★ ASan + UBSan on demand — see the long note in vibeserver/CMakeLists.txt. Host tests only.
+#   cmake -S . -B build-san -DVIBE_SANITIZE=ON
+option(VIBE_SANITIZE "Build these tests with AddressSanitizer + UBSan" OFF)
+if(VIBE_SANITIZE)
+  add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g)
+  add_link_options(-fsanitize=address,undefined)
+endif()
+
 # ★ ONE SOURCE LIST — see vibedsp/SOURCES. Do not list .cpp files here; add them there and every
 # build (app, tests, server, iOS) picks them up together.
 # ★ Match only lines that LOOK LIKE FILENAMES (no spaces, ending .cpp). Comments and blanks
