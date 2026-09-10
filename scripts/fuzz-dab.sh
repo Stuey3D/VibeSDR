@@ -25,32 +25,46 @@ TARGETS="${ONLY:-fib mot pad spi epg}"
 #     than put a 1.5 GB Homebrew LLVM on a Mac that has run out of disk before, run the fuzzers in
 #     the SAME Debian container the packages are built in: real libFuzzer, no Mac disk cost, and
 #     the platform the server actually ships on. A local clang that CAN link it is used directly.
-BUILD_IN_DOCKER=1
-if command -v clang >/dev/null 2>&1; then
-  probe="$(mktemp -t fuzzprobe).cc"
-  printf 'extern "C" int LLVMFuzzerTestOneInput(const unsigned char*,unsigned long){return 0;}\n' > "$probe"
-  if clang++ -fsanitize=fuzzer -o "${probe%.cc}.bin" "$probe" >/dev/null 2>&1; then BUILD_IN_DOCKER=0; fi
-  rm -f "$probe" "${probe%.cc}.bin"
-fi
+CPPDIR="$ROOT/android/app/src/main/cpp"
+OUT="$ROOT/vibeserver/build-fuzz"
+mkdir -p "$OUT"
 
-if [ "$BUILD_IN_DOCKER" = 1 ]; then
+# ★★★ COMPILED DIRECTLY, NOT THROUGH vibeserver/CMakeLists.txt. Every one of these parsers is
+#     header-only; going through the server's build made them inherit its librtlsdr and libusb
+#     requirement and fail to configure for want of a radio driver they never touch.
+# ★★ APPLE'S CLANG HAS NO libFuzzer. Xcode ships the -fsanitize=fuzzer FLAG and not
+#    libclang_rt.fuzzer_osx.a, so the link fails with "library not found". Rather than put a
+#    1.5 GB Homebrew LLVM on a Mac that has run out of disk before, borrow a real libFuzzer from
+#    the same Debian the packages are built in — which is also what the server ships on.
+FLAGS=(-O1 -g -std=c++17 "-I$CPPDIR" -fsanitize=fuzzer,address,undefined
+       -fno-sanitize-recover=undefined -fno-omit-frame-pointer)
+probe="$(mktemp -t fuzzprobe).cc"
+printf 'extern "C" int LLVMFuzzerTestOneInput(const unsigned char*,unsigned long){return 0;}\n' > "$probe"
+if command -v clang++ >/dev/null 2>&1 && clang++ -fsanitize=fuzzer -o "$probe.bin" "$probe" >/dev/null 2>&1; then
+  rm -f "$probe" "$probe.bin"
+  RUN_PREFIX=(); base="$ROOT"
+  for t in $TARGETS; do
+    up=$(echo "$t" | tr a-z A-Z)
+    clang++ "${FLAGS[@]}" -DVIBE_FUZZ_${up}=1 "$ROOT/vibeserver/fuzz-dab.cpp" -o "$OUT/fuzz-dab-$t"
+  done
+else
+  rm -f "$probe" "$probe.bin"
   command -v docker >/dev/null || { echo "!! no libFuzzer locally and no docker to borrow one from"; exit 1; }
-  echo "==> no local libFuzzer — building the fuzzers in Debian (clang + libclang_rt)"
+  echo "==> no local libFuzzer — building in Debian (clang + libclang_rt)"
   IMAGE=vibeserver-fuzz:bookworm
   docker build -q -t "$IMAGE" - >/dev/null <<'DOCKERFILE'
 FROM debian:bookworm
-RUN apt-get update && apt-get install -y --no-install-recommends       clang cmake make libclang-rt-14-dev ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      clang libclang-rt-14-dev ca-certificates && rm -rf /var/lib/apt/lists/*
 DOCKERFILE
-  docker run --rm -v "$ROOT:/work" -w /work "$IMAGE" bash -euo pipefail -c '
-    cmake -S vibeserver -B vibeserver/build-fuzz -DVIBE_FUZZ=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo           -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ >/dev/null
-    cmake --build vibeserver/build-fuzz --target dab-fuzzers -j "$(nproc)" >/dev/null'
-  RUN_PREFIX=(docker run --rm -v "$ROOT:/work" -w /work "$IMAGE")
-else
-  cmake -S "$ROOT/vibeserver" -B "$ROOT/vibeserver/build-fuzz" -DVIBE_FUZZ=ON \
-        -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ >/dev/null 2>&1
-  cmake --build "$ROOT/vibeserver/build-fuzz" --target dab-fuzzers \
-        -j "$(getconf _NPROCESSORS_ONLN)" >/dev/null 2>&1
-  RUN_PREFIX=()
+  for t in $TARGETS; do
+    up=$(echo "$t" | tr a-z A-Z)
+    docker run --rm -v "$ROOT:/work" -w /work "$IMAGE" \
+      clang++ -O1 -g -std=c++17 -I/work/android/app/src/main/cpp \
+        -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer \
+        -DVIBE_FUZZ_${up}=1 /work/vibeserver/fuzz-dab.cpp -o "/work/vibeserver/build-fuzz/fuzz-dab-$t"
+  done
+  RUN_PREFIX=(docker run --rm -v "$ROOT:/work" -w /work "$IMAGE"); base=/work
 fi
 
 mkdir -p "$ROOT/vibeserver/fuzz-crashes"
@@ -59,7 +73,6 @@ for t in $TARGETS; do
   [ -x "$ROOT/vibeserver/build-fuzz/fuzz-dab-$t" ] || { echo "no such target: $t"; exit 1; }
   mkdir -p "$ROOT/vibeserver/fuzz-corpus/$t"
   # ★ Paths are the CONTAINER's when we borrowed one; /work is the repo either way.
-  if [ ${#RUN_PREFIX[@]} -gt 0 ]; then base=/work; else base="$ROOT"; fi
   bin="$base/vibeserver/build-fuzz/fuzz-dab-$t"
   corpus="$base/vibeserver/fuzz-corpus/$t"
   printf '==> %-4s %ss  ' "$t" "$SECS"
