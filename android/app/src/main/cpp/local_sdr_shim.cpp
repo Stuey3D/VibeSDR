@@ -18515,7 +18515,54 @@ void LocalSdrShim::setDirectoryKey(const std::string& key) {
     g_vsDirKey = key;
 }
 
+/* ★★★ THE OWNER'S LIST, AND WHETHER WE ARE RUNNING THE TUNNEL OURSELVES. Kept apart so the two
+ *  can be combined without either clobbering the other — the owner may edit their list while the
+ *  tunnel is up, and the tunnel may come and go while the owner's list stays. See
+ *  setTunnelLoopbackTrust for why this exists at all. */
+static std::mutex       g_vsProxyOwnerMtx;
+static std::string      g_vsProxyOwnerCsv;
+static std::atomic<bool> g_vsProxyTunnelLoopback{false};
+static void vsApplyTrustedProxies();
+static void vsSetTrustedProxiesCsv(const std::string& csv);
+
 void LocalSdrShim::setTrustedProxies(const std::string& csv) {
+    { std::lock_guard<std::mutex> lk(g_vsProxyOwnerMtx); g_vsProxyOwnerCsv = csv; }
+    vsApplyTrustedProxies();
+}
+
+/** ★★★ TRUST LOOPBACK WHILE — AND ONLY WHILE — WE ARE THE ONES RUNNING THE TUNNEL.
+ *
+ *  cloudflared connects to us over 127.0.0.1, so behind it EVERY visitor on earth arrives with a
+ *  loopback peer address. This file privileges loopback in a dozen places, because on a desktop it
+ *  genuinely means "the person sitting at the machine": the listener PIN is waived, bans and
+ *  cooldowns and session limits do not apply, bookmarks may be written, and raw IQ marked
+ *  LOCAL ONLY is served. With no trusted proxy configured, all of that was handed to the internet
+ *  the moment an owner enabled the tunnel.
+ *
+ *  ★★ Android has always done this (VibeTunnel.applyLoopbackTrust, called from VibeServerBoot on
+ *     every restart). The Linux daemon never got the equivalent, and nothing on Linux sets
+ *     trustedProxies automatically — not the wizard, not the postinst, not startTunnel — so the
+ *     default was the exposed one. Found by audit, 2026-09-10.
+ *  ★ Conditional on OUR tunnel, not on "is anything in front of us": a reverse proxy somebody else
+ *    runs is theirs to declare, and guessing on their behalf is how you trust the wrong hop. */
+void LocalSdrShim::setTunnelLoopbackTrust(bool on) {
+    if (g_vsProxyTunnelLoopback.exchange(on) == on) return;
+    LOGI("tunnel loopback trust: %s — X-Forwarded-For from 127.0.0.1/::1 is %s",
+         on ? "ON" : "off", on ? "now believed" : "no longer believed");
+    vsApplyTrustedProxies();
+}
+
+static void vsApplyTrustedProxies() {
+    std::string csv;
+    { std::lock_guard<std::mutex> lk(g_vsProxyOwnerMtx); csv = g_vsProxyOwnerCsv; }
+    if (g_vsProxyTunnelLoopback.load()) {
+        if (csv.find("127.0.0.1") == std::string::npos) csv += (csv.empty() ? "" : ",") + std::string("127.0.0.1");
+        if (csv.find("::1")       == std::string::npos) csv += ",::1";
+    }
+    vsSetTrustedProxiesCsv(csv);
+}
+
+static void vsSetTrustedProxiesCsv(const std::string& csv) {
     g_vsHaveTrustedProxies.store(!csv.empty());
     std::vector<std::string> entries;
     size_t start = 0;

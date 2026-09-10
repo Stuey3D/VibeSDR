@@ -606,6 +606,9 @@ std::string startTunnel(int port) {
 }
 
 void stopTunnel() {
+    // ★ The tunnel is going: loopback stops meaning "the internet" and goes back to meaning the
+    //   person at the machine. See setTunnelLoopbackTrust.
+    vibe::LocalSdrShim::setTunnelLoopbackTrust(false);
     // ★★ Bumping the generation first retires any drain thread still running, so its EOF cannot
     //    clear the liveness of whatever replaces this tunnel.
     g_tunnelGen++;
@@ -683,6 +686,12 @@ void worker() {
                 g_tunnelUrl = startTunnel(want.port);
                 if (g_tunnelUrl.empty()) tunnelFails++;
                 else                     tunnelFails = 0;
+                /* ★★★ AND TELL THE SERVER THE TUNNEL IS OURS. cloudflared reaches us over
+                 *  127.0.0.1, so without this every visitor through it arrives as loopback — which
+                 *  this codebase treats as "the person at the machine": PIN waived, bans and limits
+                 *  skipped, LAN-only raw IQ served. Android has always done this; the Linux daemon
+                 *  never did, and nothing here sets trustedProxies automatically. (Audit 2026-09-10.) */
+                vibe::LocalSdrShim::setTunnelLoopbackTrust(!g_tunnelUrl.empty());
             }
             url = g_tunnelUrl;
         }

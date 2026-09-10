@@ -167,6 +167,9 @@ public:
      *  client-supplied, so believing it from any peer lets a stranger forge an address and walk
      *  through the ban list. See vibe_proxy.h. */
     static void setTrustedProxies(const std::string& csv);
+    /** ★ Trust loopback's X-Forwarded-For while WE are running the tunnel — see the long note by
+     *  the definition. Android calls the same thing through VibeTunnel.applyLoopbackTrust. */
+    static void setTunnelLoopbackTrust(bool on);
     /** The directory's shared secret, for answering its address challenge. */
     static void setDirectoryKey(const std::string& key);
     /** ★ Per-listener time limit in MINUTES; 0 = unlimited (default). For a PUBLIC receiver,

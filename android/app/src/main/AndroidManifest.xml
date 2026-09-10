@@ -43,7 +43,7 @@
       <data android:scheme="https"/>
     </intent>
   </queries>
-  <application android:name=".MainApplication" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="true" android:theme="@style/AppTheme" android:supportsRtl="true" android:enableOnBackInvokedCallback="false" android:usesCleartextTraffic="true">
+  <application android:name=".MainApplication" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="true" android:fullBackupContent="@xml/backup_rules" android:dataExtractionRules="@xml/backup_rules_v2" android:theme="@style/AppTheme" android:supportsRtl="true" android:enableOnBackInvokedCallback="false" android:usesCleartextTraffic="true">
     <!-- ★★★ LET A RELEASE BUILD BE PROFILED, WITHOUT MAKING IT DEBUGGABLE. Android 10+ only.
          `shell="true"` permits heapprofd and Perfetto from adb and NOTHING ELSE — no debugger, no
          run-as, no reduced hardening. Google recommends shipping it precisely so production

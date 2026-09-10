@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ★ Android 12+ (dataExtractionRules). Same exclusions as backup_rules.xml — see the note there.
+     `cloud-backup` covers Google's backup; `device-transfer` covers phone-to-phone migration, and
+     the credential should not ride along on either. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="database" path="RKStorage" />
+        <exclude domain="sharedpref" path="vibesdr_secure.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="database" path="RKStorage" />
+        <exclude domain="sharedpref" path="vibesdr_secure.xml" />
+    </device-transfer>
+</data-extraction-rules>

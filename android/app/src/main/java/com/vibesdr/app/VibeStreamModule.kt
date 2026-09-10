@@ -34,7 +34,7 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun startAudioEngine(baseUrl: String, frequency: Double, mode: String, uuid: String, password: String) {
         VibeStreamService.reactContext = reactContext
-        val intent = Intent(reactContext, VibeStreamService::class.java).apply {
+        val intent = Intent(reactContext, VibeStreamService::class.java).putExtra(VibeStreamService.EXTRA_CONTROL_TOKEN, VibeStreamService.CONTROL_TOKEN).apply {
             action = VibeStreamService.ACTION_START
             putExtra(VibeStreamService.EXTRA_BASE_URL, baseUrl)
             putExtra(VibeStreamService.EXTRA_FREQUENCY, frequency.toLong())
@@ -60,7 +60,7 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun stopAudioEngine() {
         reactContext.startService(
-            Intent(reactContext, VibeStreamService::class.java).apply {
+            Intent(reactContext, VibeStreamService::class.java).putExtra(VibeStreamService.EXTRA_CONTROL_TOKEN, VibeStreamService.CONTROL_TOKEN).apply {
                 action = VibeStreamService.ACTION_STOP
             }
         )
@@ -71,7 +71,7 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun startExternalAudio(sampleRate: Double, pauseMode: String = "release") {
         VibeStreamService.reactContext = reactContext
-        val intent = Intent(reactContext, VibeStreamService::class.java).apply {
+        val intent = Intent(reactContext, VibeStreamService::class.java).putExtra(VibeStreamService.EXTRA_CONTROL_TOKEN, VibeStreamService.CONTROL_TOKEN).apply {
             action = VibeStreamService.ACTION_START_EXTERNAL
             putExtra(VibeStreamService.EXTRA_RATE, sampleRate.toInt())
             putExtra(VibeStreamService.EXTRA_PAUSE_MODE, pauseMode)
@@ -128,7 +128,7 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     fun startLocalAudio(host: String, port: Double, initialTune: String, authSuffix: String,
                         wsBase: String) {
         VibeStreamService.reactContext = reactContext
-        val intent = Intent(reactContext, VibeStreamService::class.java).apply {
+        val intent = Intent(reactContext, VibeStreamService::class.java).putExtra(VibeStreamService.EXTRA_CONTROL_TOKEN, VibeStreamService.CONTROL_TOKEN).apply {
             action = VibeStreamService.ACTION_START_LOCAL
             putExtra(VibeStreamService.EXTRA_HOST, host)
             putExtra(VibeStreamService.EXTRA_PORT, port.toInt())
@@ -156,7 +156,7 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun startFmdxAudio(baseUrl: String) {
         VibeStreamService.reactContext = reactContext
-        val intent = Intent(reactContext, VibeStreamService::class.java).apply {
+        val intent = Intent(reactContext, VibeStreamService::class.java).putExtra(VibeStreamService.EXTRA_CONTROL_TOKEN, VibeStreamService.CONTROL_TOKEN).apply {
             action = VibeStreamService.ACTION_START_FMDX
             putExtra(VibeStreamService.EXTRA_BASE_URL, baseUrl)
         }

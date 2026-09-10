@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ★★★ WHAT MUST NEVER LEAVE THE DEVICE IN A BACKUP.
+     The app keeps the operator's SERVER ADMIN PASSWORD and per-receiver PINs in AsyncStorage,
+     which is a plain SQLite database. With Auto Backup on and no rules, that database went into
+     Google's backup and into `adb backup` — so a credential that lifts every limit on somebody's
+     radio was recoverable from a backup extraction. (Audit, 2026-09-10.)
+     ★ Excluding the store outright rather than naming keys: AsyncStorage is one database, the keys
+       inside it are not separable here, and the rest of what it holds is preferences that cost
+       nothing to lose. Losing them on a restore is a far smaller harm than leaking the password.
+     ★ This file is the pre-Android-12 form (fullBackupContent); backup_rules_v2.xml is the one
+       Android 12 and later reads. BOTH are needed — ONE RULE, TWO READERS. -->
+<full-backup-content>
+    <exclude domain="database" path="RKStorage" />
+    <exclude domain="sharedpref" path="vibesdr_secure.xml" />
+</full-backup-content>

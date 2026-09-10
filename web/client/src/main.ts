@@ -4755,9 +4755,9 @@ function dabRender() {
   rowsKeys.length = 0;
   const rowsA = ''
     + '<h4>SERVICE</h4>'
-    + row('Codec', d.codecDetail ?? (d.services.find(x => x.sid === d.sid)?.codec ?? '—'))
+    + row('Codec', escapeHtml(String(d.codecDetail ?? (d.services.find(x => x.sid === d.sid)?.codec ?? '—'))))
     + row('Bit rate', d.bitrate ? d.bitrate + ' kbit/s' : '—')
-    + row('Protection', cur?.prot ?? (d.protection || '—'))
+    + row('Protection', escapeHtml(String(cur?.prot ?? (d.protection || '—'))))
     + (cur ? row('Capacity units', `${cur.cuStart}–${(cur.cuStart ?? 0) + (cur.cuSize ?? 0) - 1} (${cur.cuSize} CU, sub-channel ${cur.subch})`) : '')
     /* ★ The S/D flag of FIG 0/17 (EN 300 401 8.1.5): "dynamic" means the code follows the ITEMS
      *  within a programme, so it is live; static is the programme's overall genre and does not
@@ -4779,11 +4779,11 @@ function dabRender() {
     + row('FIB errors this frame', tl(`${Math.max(0, d.fibTotal - d.fibOk)} of ${d.fibTotal}`, d.fibOk >= d.fibTotal ? 'ok' : d.fibOk >= d.fibTotal - 2 ? 'warn' : 'bad'))
     + row('FIB error rate', tl(((1 - d.fibRate) * 100).toFixed(1) + ' %', d.fibRate >= 0.99 ? 'ok' : d.fibRate >= 0.9 ? 'warn' : 'bad'))
     + '<h4>MULTIPLEX</h4>'
-    + row('Ensemble', d.label || '—')
+    + row('Ensemble', escapeHtml(d.label || '—'))
     + row('EId', (d.ecc !== undefined && d.ecc >= 0 ? d.ecc.toString(16).toUpperCase() + ':' : '') + d.eid.toString(16).toUpperCase().padStart(4, '0'))
     + row('Services', String(d.services.length) + (d.nsvc !== undefined && d.nsvc >= 0 ? ` of ${d.nsvc}` : '') + (d.mci ? '' : ' (reading…)'))
     + (d.cif !== undefined && d.cif >= 0 ? row('CIF count', String(d.cif)) : '')
-    + row('Ensemble clock', d.utc ? `${d.utc} UTC` + (d.lto ? ` (local ${dabLocalTime(d.utc, d.lto)})` : '') : '—')
+    + row('Ensemble clock', d.utc ? `${escapeHtml(String(d.utc))} UTC` + (d.lto ? ` (local ${dabLocalTime(d.utc, d.lto)})` : '') : '—')
     + row('Also on', d.altHz && d.altHz.length ? d.altHz.map(hz => { const b = DAB_BLOCKS.find(x => Math.abs(x.hz - hz) < 50000); return b ? b.name : (hz / 1e6).toFixed(3); }).join(', ') : '—')
     /* ★ TII — the transmitter(s) behind the ensemble. Main/Sub ids as the planners publish them
      *  (hex, as on the UK TII lists), with how far each stands above the null's noise. */
@@ -4819,11 +4819,11 @@ function dabRender() {
     + (d.announce && d.announce.length
         ? d.announce.slice().sort((a, b) => Number(b.alarm) - Number(a.alarm)).map(a =>
             row(a.alarm ? 'ALARM' : 'Announcement',
-                tl(`${a.types.join(', ')}${a.on ? ` on ${a.on}` : ''}`, a.alarm ? 'bad' : 'warn')))
+                tl(`${escapeHtml(a.types.join(', '))}${a.on ? ` on ${escapeHtml(String(a.on))}` : ''}`, a.alarm ? 'bad' : 'warn')))
           .join('')
         : '')
     + (d.announceSupport && d.announceSupport.length
-        ? row('Can carry', d.announceSupport.join(', ')) : '')
+        ? row('Can carry', escapeHtml(d.announceSupport.join(', '))) : '')
     /* ★★★ THE PROGRAMME GUIDE OFF THE AIR (TS 102 371 Programme Information, carried in the same
      *  SPI carousel as the logos). Stuart, 2026-09-08: "the full technical implementation needs to
      *  be added even if its just a line in the advanced window that will not populate in the UK" —
@@ -4845,10 +4845,10 @@ function dabRender() {
             `${escapeHtml(c.title)} (${c.slides.length})`).join(' · '))
         : '')
     + (d.epgNow || d.epgNext
-        ? (d.epgNow  ? row('On now',  `<span class="dls"><span class="dlsIn">${d.epgNow.at} · ${escapeHtml(d.epgNow.name)}`
+        ? (d.epgNow  ? row('On now',  `<span class="dls"><span class="dlsIn">${escapeHtml(String(d.epgNow.at))} · ${escapeHtml(d.epgNow.name)}`
                                     + `${d.epgNow.mins ? ` · ${d.epgNow.mins} min` : ''}`
                                     + `${d.epgNow.desc ? ` — ${escapeHtml(d.epgNow.desc)}` : ''}</span></span>`) : '')
-        + (d.epgNext ? row('On next', `<span class="dls"><span class="dlsIn">${d.epgNext.at} · ${escapeHtml(d.epgNext.name)}`
+        + (d.epgNext ? row('On next', `<span class="dls"><span class="dlsIn">${escapeHtml(String(d.epgNext.at))} · ${escapeHtml(d.epgNext.name)}`
                                     + `${d.epgNext.mins ? ` · ${d.epgNext.mins} min` : ''}</span></span>`) : '')
         : (d.spi ? row('Guide', tl('no programme information transmitted', 'warn')) : ''))
     + (d.dlp ? (['artist', 'title', 'album', 'track', 'composer', 'band', 'presenter', 'programme',
@@ -4995,7 +4995,12 @@ function dabLogoTag(sv: DabState['services'][number], d: DabState): string {
    *  name search hands back dead favicons, the browser drew its "?" tile, and the list is rebuilt
    *  twice a second — so the tile FLASHED (Stuart's screenshot, Magic Radio, 2026-09-07). A logo
    *  that fails to load is forgotten for that service and the row goes back to text. */
-  return known ? `<img class="dabLogo" src="${known}" alt="" data-k="${escapeHtml(key)}" onerror="this.remove();(window as any).dabLogoFailed&&(window as any).dabLogoFailed(this.dataset.k)">`.replace('(window as any)', 'window').replace('(window as any)', 'window') : dabSlideTag(sv, key);
+  /* ★★★ ESCAPED. `known` is a logo URL from radio-browser.info — a database anyone may edit — and
+   *  the only check on it is that it starts with https, which stops javascript: and data: but NOT a
+   *  double quote. `https://x/a" onerror="…` broke out of the attribute and ran script on the
+   *  receiver's own origin, where the admin ticket lives. The data-k beside it was already escaped,
+   *  which is exactly what made this easy to miss. (Audit, 2026-09-10.) */
+  return known ? `<img class="dabLogo" src="${escapeHtml(known)}" alt="" data-k="${escapeHtml(key)}" onerror="this.remove();(window as any).dabLogoFailed&&(window as any).dabLogoFailed(this.dataset.k)">`.replace('(window as any)', 'window').replace('(window as any)', 'window') : dabSlideTag(sv, key);
 }
 
 /** ★★★ THE PICTURE THE STATION ITSELF TRANSMITS, AS THE LAST RESORT.
@@ -6837,7 +6842,8 @@ function renderBookmarkRows(host: HTMLElement, rows: Array<{
     const dabLogo = isDab ? dabLogos.get(`${b.ecc ?? -1}|${b.eid ?? 0}|${b.sid}`) : '';
     if (dabLogo) {
       const src = row.querySelector('.src') as HTMLElement | null;
-      if (src) src.innerHTML = `<img src="${dabLogo}" alt="" style="width:18px;height:18px;object-fit:contain;border-radius:3px">`;
+      // ★ Same URL, same reason — see dabLogoTag.
+      if (src) src.innerHTML = `<img src="${escapeHtml(dabLogo)}" alt="" style="width:18px;height:18px;object-fit:contain;border-radius:3px">`;
     } else void attachBookmarkLogo(row, b.name, undefined, b.frequency);
   }
 }

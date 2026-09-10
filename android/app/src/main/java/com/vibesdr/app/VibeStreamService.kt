@@ -80,6 +80,12 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         const val MEDIA_ROOT_ID = "vibesdr_root"
         const val BOOKMARKS_ID = "bookmarks"
         const val BANDS_ID = "bands"
+        /** ★ The per-process control token — see the note in onStartCommand. Regenerated on every
+         *  process start, so it cannot be learned once and reused after a restart, and never
+         *  written to disk or a log. */
+        @JvmStatic
+        val CONTROL_TOKEN: String = java.util.UUID.randomUUID().toString()
+        const val EXTRA_CONTROL_TOKEN = "vibesdr_control_token"
         const val ACTION_PLAY = "com.vibesdr.app.PLAY"
         const val ACTION_PAUSE = "com.vibesdr.app.PAUSE"
         const val ACTION_STOP = "com.vibesdr.app.STOP"
@@ -297,7 +303,26 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         startCarConnectionWatch()
     }
 
+    /** True when this intent came from inside VibeSDR. Notification actions and anything this
+     *  process sends carry the token; a stranger's intent does not. */
+    private fun isTrustedCaller(intent: Intent): Boolean =
+        intent.getStringExtra(EXTRA_CONTROL_TOKEN) == CONTROL_TOKEN
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        /* ★★★ EXPORTED FOR MEDIA BROWSING, NOT FOR CONTROL. This service must be exported so
+         *  Android Auto and the system media browser can BIND to it — that is what
+         *  MediaBrowserServiceCompat needs. But onStartCommand is a different door, and it was
+         *  wide open: any app on the device, with no permission at all, could
+         *  startService(ACTION_START, EXTRA_BASE_URL="https://attacker/", EXTRA_PASSWORD=…) and
+         *  point the audio engine at a server of its choosing — or stop it, or retune it.
+         *  ★ The fix is a per-process token that only this app can know. It is generated in this
+         *    process, handed out through VibeStreamModule, and never leaves; a control intent
+         *    without it is dropped and logged. Media BROWSING is unaffected: it comes through
+         *    onBind/onGetRoot, not through here. (Audit, 2026-09-10.) */
+        if (intent != null && !isTrustedCaller(intent)) {
+            Log.w(TAG, "ignoring ${intent.action} — no valid caller token (an app outside VibeSDR?)")
+            return START_STICKY
+        }
         when (intent?.action) {
             ACTION_START -> {
                 val base = intent.getStringExtra(EXTRA_BASE_URL) ?: return START_STICKY
@@ -2264,7 +2289,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
     private fun pi(requestCode: Int, action: String) = PendingIntent.getService(
         this, requestCode,
-        Intent(this, VibeStreamService::class.java).apply { this.action = action },
+        Intent(this, VibeStreamService::class.java).putExtra(VibeStreamService.EXTRA_CONTROL_TOKEN, VibeStreamService.CONTROL_TOKEN).apply { this.action = action },
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     )
 
