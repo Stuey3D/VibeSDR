@@ -182,6 +182,8 @@ export interface WaterfallViewProps {
   wfBrightness?:   number;
   wfContrast?:     number;
   wfSharpness?:    number;
+  /** ★ Minimum dB span of the auto range; DAB passes 15 (see SignalProcessorSettings.minRangeDb). */
+  minRangeDb?:     number;
   frameRate?:      '10fps' | '20fps' | '30fps';   // legacy; superseded by wfScroll below
   /** ★★★ SCROLL SPEED AS A FIXED FRAME-GENERATION MULTIPLIER — the whole point is that it is a
    *  CONSTANT. lines-per-frame maps ALL waterfall history, so every time it changes the picture
@@ -325,7 +327,7 @@ function WaterfallView({
   specShow = true, specFrac = 0.26,
   autoContrast = 5, specSmoothing = 5, avgFrames = 0, specFloor = 0, specPeakScale = 10,
   peakHold = true, spatialSmooth = true,
-  wfBrightness = 0, wfContrast = 0, wfSharpness = 0,
+  wfBrightness = 0, wfContrast = 0, wfSharpness = 0, minRangeDb = 30,
   frameRate = '20fps', wfScroll = 'sharp', feedFloorFps = 3.3, needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
   bgImageUrl = null, bgOpacity = 0, stationId = null, onStationIdHeight,
   smoothTune = true, lastInteractAt,
@@ -476,11 +478,12 @@ function WaterfallView({
       spatialSmooth, peakHold,
       wfBrightness, wfContrast,
       wfSharpness: Math.min(12, sharpBase * sharpMul * 2),
+      minRangeDb,
     };
     proc.current.applySettings(patch);
   }, [autoContrast, wfCoarse, dbMin, dbMax, specFloor, specPeakScale,
       specSmoothing, avgFrames, spatialSmooth, peakHold, wfBrightness, wfContrast,
-      wfSharpness, frameRate, wfScroll, feedFloorFps]);
+      wfSharpness, minRangeDb, frameRate, wfScroll, feedFloorFps]);
 
   // ── Colormap LUT + derived spectrum colours (9 stops, idx 15→235) ───────────
   const lut = useMemo(() => getColorLUT(colormap), [colormap]);

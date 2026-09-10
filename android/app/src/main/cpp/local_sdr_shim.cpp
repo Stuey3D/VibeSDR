@@ -16538,6 +16538,7 @@ struct LocalSdrShim::Impl {
                 if (gn >= 0) {
                     std::lock_guard<std::recursive_mutex> dlk(devMtx);
                     if (dev && !radioReleased.load()) rtlsdr_set_tuner_gain(dev, gn);
+                    noteHwMoved();   // ★ a gain step lifts the whole band; it is not a sferic
                     hwGainNow = gn;
                 }
                 lk.lock();
@@ -18520,6 +18521,7 @@ int LocalSdrShim::start(int fd, int vid, int pid,
             rtlsdr_get_tuner_gains(impl->dev, gs.data());
             applyGain   = *std::min_element(gs.begin(), gs.end());
             agcCeiling  = *std::max_element(gs.begin(), gs.end());
+            sfericHold(15.0);   // ★ the entry climb lifts the band for seconds (7 false strikes on the V4L, 2026-09-10)
             LOGI("gain: AGC — starting at %.1f dB and climbing towards %.1f dB as headroom allows",
                  applyGain / 10.0, agcCeiling / 10.0);
         }

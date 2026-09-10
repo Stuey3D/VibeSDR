@@ -1090,7 +1090,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
          *  disabled and the dial stays held on a receiver that is back on FM (my own fault of an
          *  hour earlier: dabOn was cleared and nothing else was). */
         if (dabOn) dabUiOff();
-        dabOn = false; dabState = null; dabRender(); return;
+        dabOn = false; dabState = null; wf?.applySettings({ minRangeDb: 30 }); dabRender(); return;
       }
       /* ★★★ HOLD THE LAST GOOD LIST. A frame where the FIC did not read — a fade, an erased frame,
        *  the moment after a retune — arrives with no services, and painting that blanks the list
@@ -5268,6 +5268,7 @@ function dabRememberedChannel(): number {
  *  {on:1, channel:12B} regardless and hijacked the dial from the station everyone was on. */
 function dabUiOn() {
   dabOn = true;
+  wf?.applySettings({ minRangeDb: 15 });   // ★ a DAB block is flat and a few dB up — see SignalProcessorSettings.minRangeDb
   /* ★ THE ADVANCED RDS PANEL SHARES THIS BOX. Entering DAB with it open left it showing under
    *  the station list ("the DAB stations populated over the top of it", Stuart, 2026-09-07).
    *  DAB takes the box; the RDS panel closes as it does for any other decoder. */
@@ -5337,6 +5338,7 @@ function dabSetMode(on: boolean) {
     }
   } else {
     dabOn = false;
+    wf?.applySettings({ minRangeDb: 30 });
     spec?.dab(false);
     dabState = null;
     dabUiOff();

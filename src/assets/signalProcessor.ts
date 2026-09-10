@@ -104,6 +104,11 @@ const MIN_RANGE_DB = 30;
 export interface SignalProcessorSettings {
   /** 0–20 dB symmetric contrast: floor +N, ceiling −N. UberSDR web uses 10. */
   autoContrast:    number;
+  /** ★ The display window never shrinks below this many dB (see MIN_RANGE_DB). 30 is right for a
+   *  band with carriers to rise into; in DAB the whole view IS one flat block a few dB above the
+   *  floor, and 30 left a weak multiplex looking like noise floor (Stuart, 2026-09-10, 7D at
+   *  -58 in a -35…-65 window: "a user may skip past it"). DAB sets 15. */
+  minRangeDb:      number;
   /** Manual range override (wfCoarse='manual'). When set, auto-range is bypassed. */
   manualRange:     { minDb: number; maxDb: number } | null;
   /** −20…+20 dB offset applied to the spectrum trace floor (not waterfall). */
@@ -130,6 +135,7 @@ export interface SignalProcessorSettings {
 
 export const DEFAULT_PROCESSOR_SETTINGS: SignalProcessorSettings = {
   autoContrast:    5,       // 10 (UberSDR's value) crushes the floor — too dark
+  minRangeDb:      MIN_RANGE_DB,
   manualRange:     null,
   specFloor:       0,
   specPeakScale:   10,
@@ -204,7 +210,7 @@ export class SignalProcessor {
   /** Patch settings. Range-affecting changes flush history (matches v1.5). */
   applySettings(patch: Partial<SignalProcessorSettings>) {
     const rangeKeys: Array<keyof SignalProcessorSettings> =
-      ['autoContrast', 'manualRange', 'wfBrightness', 'wfContrast', 'wfSharpness'];
+      ['autoContrast', 'manualRange', 'wfBrightness', 'wfContrast', 'wfSharpness', 'minRangeDb'];
     const rangeChanged = rangeKeys.some(
       k => patch[k] !== undefined && patch[k] !== this.settings[k],
     );
@@ -471,8 +477,9 @@ export class SignalProcessor {
     // floor at the noise and raise only the CEILING to a minimum span, so noise stays low with headroom
     // above it for a signal to rise into, and the waterfall maps that noise dark again. MIN_RANGE_DB is
     // the one dial — bigger = noise sits lower / more headroom.
-    if (this.actualMaxDb - this.actualMinDb < MIN_RANGE_DB) {
-      this.actualMaxDb = this.actualMinDb + MIN_RANGE_DB;
+    const minRange = Number.isFinite(s.minRangeDb) && s.minRangeDb > 0 ? s.minRangeDb : MIN_RANGE_DB;
+    if (this.actualMaxDb - this.actualMinDb < minRange) {
+      this.actualMaxDb = this.actualMinDb + minRange;
     }
     const dbRange = this.actualMaxDb - this.actualMinDb;
 

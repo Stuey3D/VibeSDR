@@ -7955,6 +7955,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         wfBrightness={wfBrightness}
         wfContrast={wfContrast}
         wfSharpness={wfSharpness}
+        minRangeDb={dabOn ? 15 : 30}
         frameRate={frameRate}
         wfScroll={wfScroll}
         /* ★ The floor this backend can drop to — see WaterfallView.feedFloorFps. A property of the
