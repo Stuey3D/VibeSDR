@@ -9316,15 +9316,10 @@ struct LocalSdrShim::Impl {
                 g_rtlAgc.store(true, std::memory_order_relaxed);
                 LocalSdrShim::instance().setAgc(false);   // the DONGLE's — see g_dabSavedDigAgc
                 agcForget("DAB: an ensemble is not the carrier we came off — reconverge from the bottom");
-                /* ★★★ AND DO NOT SIT OUT THE FULL 2.5 s BEFORE THE FIRST CLIMB. The forget's settle
-                 *  guards a STALE peak-hold — the FM level the radio just left — so drop it now, the
-                 *  way every gain write does, and shorten the gate to 1.5 s: acquisition may then
-                 *  step 0.5 s after entry on a peak measured on THIS band. Measured on the V4
-                 *  (2026-09-10 12:25): 11A entered at 7.7 dB, first climb at 3.0 s, first FIB 3.5 s
-                 *  — every unlearned block pays the settle before it pays the climb. */
-                { const double tnow = Impl::nowSecs();
-                  agcSettleAfterGain(tnow);
-                  g_gainSettleUntil.store(tnow + 1.5, std::memory_order_relaxed); }
+                /* ★ The settle that follows is shortened by agcForget itself while a multiplex is
+                 *  being acquired — doing it here was useless, because entering DAB fires a SECOND
+                 *  forget ("sample rate changed") a millisecond later and that one put the 2.5 s
+                 *  back (journal, 2026-09-10 12:25: 11A's first climb at 3.0 s either way). */
             }
             /* ★★★ RESTART THE AGC FROM THE BOTTOM. The loop is built to start at the minimum and
              *  climb, taking a step only when the measured peak says the whole step still fits —
@@ -21517,8 +21512,16 @@ static void agcForget(const char* why) {
      *         that step raised the noise floor 34.4 dB for 3.7 dB of gain
      *         that cut did not lower the floor (-18.1 dB for 0.5 dB of gain)
      *     Neither number is physics. Both were acted on. */
-    g_gainSettleUntil.store(now + 2.5, std::memory_order_relaxed);
-    g_gainSettleIsForget.store(true, std::memory_order_relaxed);   // ★ the peak-hold is STALE here
+    /* ★★★ ACQUIRING A MULTIPLEX, THE FORGET SETTLE IS 1.2 s AND THE PEAK-HOLD GOES. The 2.5 s
+     *  guards a peak-hold holding the level of the band we just LEFT — so drop that peak-hold
+     *  outright, exactly as a gain write does, and the guard has nothing left to guard. Every
+     *  unlearned block used to pay this before it could pay its first climb (measured on the V4,
+     *  2026-09-10: entry, then the first climb at 2.7–3.0 s, then the first FIB). Outside DAB
+     *  acquisition nothing changes: 2.5 s and the peak-hold left alone. */
+    const bool dabAcq = g_dabMode.load(std::memory_order_relaxed) && g_dab.quality().fibRate <= 0.0f;
+    g_gainSettleUntil.store(now + (dabAcq ? 1.2 : 2.5), std::memory_order_relaxed);
+    g_gainSettleIsForget.store(!dabAcq, std::memory_order_relaxed);   // ★ the peak-hold is STALE here
+    if (dabAcq) g_resetPeakHold.store(true, std::memory_order_relaxed);
     g_agcHurryUntil.store(now + 8.0, std::memory_order_relaxed);
     g_ovlMargin.store(3.0, std::memory_order_relaxed);
     g_bestFloorDb.store(0.0f, std::memory_order_relaxed);      // 0 = unset, see the floor test
