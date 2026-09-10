@@ -37,6 +37,8 @@ export interface DabState {
   rfCentreHz?: number; rfRateHz?: number;
   prsRef?: number; prsRatio?: number; erased?: number; reacquires?: number; syncJumps?: number;
   rsFixed?: number; rsLost?: number; sfOk?: number; sfTried?: number; sfFireBad?: number;
+  /** ★ The decoder's PCM output counter (cumulative, DAB+ and MP2 alike) — the digital flow. */
+  pcmPushed?: number;
   mp2In?: number; mp2Bad?: number; mp2Concealed?: number; mp2NoSync?: number;
   dls?: string; dlsCrcOk?: number; dlsCrcFail?: number;
   /** ★ DL Plus (TS 102 980): the station's own division of the label into artist, title and the

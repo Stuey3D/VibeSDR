@@ -18,7 +18,7 @@
  *    the RDS fault, pre-empted. Nothing in here re-checks them, and nothing in here should build a
  *    string by concatenating one into JSON.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { Image, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import Reanimated, { Easing as REasing, cancelAnimation, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import { BlurView } from 'expo-blur';
@@ -389,18 +389,32 @@ export default function DabPanel(p: DabPanelProps) {
    *  every DAB state update (about once a second), which is what makes the seconds count. */
   const [pickedAt, setPickedAt] = useState(0);
   const pick = (sid: number) => { setPickedAt(Date.now()); p.onService(sid); };
-  // ★ A sustained second of packets whose run began after the press: a start-up flash then
-  //   silence never reaches a second, so the line stays up through it.
+  // ★ TWO THINGS, BOTH TRUE, mirror of the web client: (1) the DECODER's PCM counter has been
+  //   climbing for a second (the digital flow — "like the advanced analysis", Stuart), and (2) a
+  //   sustained second of audio packets whose run began after the press. A start-up flash then
+  //   silence never reaches a second on either, so the line stays up through it.
+  const pcm = useRef({ last: -1, roseAt: 0, runStart: 0 });
+  {
+    const v = typeof d?.pcmPushed === 'number' ? d.pcmPushed : -1, now = Date.now();
+    if (v >= 0 && v !== pcm.current.last) {
+      if (pcm.current.last >= 0 && v > pcm.current.last) { if (now - pcm.current.roseAt > 1500) pcm.current.runStart = now; pcm.current.roseAt = now; }
+      pcm.current.last = v;
+    }
+  }
+  const decoderFlowing = pcm.current.runStart >= pickedAt && pcm.current.roseAt >= pickedAt + 400
+    && pcm.current.roseAt - pcm.current.runStart >= 1000 && Date.now() - pcm.current.roseAt < 1500;
   const runStart = p.audioRunStartAt?.() ?? 0, lastPkt = p.lastAudioAt?.() ?? 0;
-  const heardSincePick = pickedAt > 0 && runStart >= pickedAt + 400 && lastPkt - runStart >= 1000;
+  const audioClean = runStart >= pickedAt + 400 && lastPkt - runStart >= 1000;
+  const heardSincePick = pickedAt > 0 && decoderFlowing && audioClean;
   if (heardSincePick && pickedAt > 0) setTimeout(() => setPickedAt(0), 0);
   const waitingSecs = (!!d && d.locked && !!d.sid && pickedAt > 0 && !heardSincePick)
     ? Math.floor((Date.now() - pickedAt) / 1000) : -1;
   // ★ In the STATION'S live-text line (the marquee), not a notice above the list — the header and
   //   a notice are both too squashed on a phone; the radio text comes back when the audio does.
+  const why = !decoderFlowing ? 'waiting for the decoder to run clean' : 'waiting for the audio to run clean';
   const waitingText = waitingSecs < 0 ? '' : waitingSecs < 30
-    ? `Tuning in — waiting for the gain to settle and the audio clock to lock… ${waitingSecs}s`
-    : `Still tuning in (${waitingSecs}s) — a weak multiplex can take a while; the decoder has not given up`;
+    ? `Tuning in — ${why}… ${waitingSecs}s`
+    : `Still tuning in (${waitingSecs}s) — ${why}; a weak multiplex can take a while and the decoder has not given up`;
 
   /* ★ The pane resets to STATIONS when the ENSEMBLE changes, as the browser's does: a new
    *  multiplex means a new list, and leaving the reader on a signal pane full of the last one's
