@@ -38,6 +38,14 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+/* ★★★ AT THE TOP, NOT BESIDE THE FUNCTION THAT USES THEM. An #include inside `namespace vibe {`
+ *  drops every declaration it carries INTO that namespace: ::getrandom then does not exist and the
+ *  compiler helpfully suggests vibe::getrandom. It built on macOS only because that path uses
+ *  arc4random from <cstdlib>, which was already included. (2026-09-10.) */
+#if !defined(__APPLE__) && !defined(__FreeBSD__)
+#include <sys/random.h>
+#endif
+#include <cerrno>
 #include <cmath>
 #include <climits>
 #include <condition_variable>
@@ -2574,10 +2582,6 @@ static std::string          g_vsLandingMode;
  *     and never afterwards. If the OS somehow cannot answer we FAIL rather than fall back to a
  *     clock: a predictable credential that looks fine is worse than an error nobody can miss.
  *  ★ Not std::random_device — it is permitted to be deterministic, and has been on some toolchains. */
-#if !defined(__APPLE__) && !defined(__FreeBSD__)
-#include <sys/random.h>
-#endif
-#include <cerrno>
 static void vsRandomBytes(void* out, size_t n) {
 #if defined(__APPLE__) || defined(__FreeBSD__)
     arc4random_buf(out, n);
@@ -12462,9 +12466,43 @@ struct LocalSdrShim::Impl {
                 }();
                 return stamped;
             };
-            const std::string& kPage = frontDoorOnly ? frontDoorPage() : vibeWebPage();
+            const std::string& kBase = frontDoorOnly ? frontDoorPage() : vibeWebPage();
+            /* ★★★ A CONTENT SECURITY POLICY, WITH A NONCE — the one control that would have
+             *  contained today's XSS findings rather than merely fixing them. The bundle is ONE
+             *  inline <script> and ZERO inline event handlers (measured), so a nonce works: our
+             *  script runs, and anything INJECTED — an onerror= smuggled through a station logo
+             *  URL, markup in an off-air DAB field — does not, because an attacker cannot guess a
+             *  fresh 128-bit value.
+             *  ★★ What the page genuinely needs from elsewhere, and nothing more: Leaflet from
+             *     unpkg for the map, OpenStreetMap tiles, station logos (which are arbitrary https
+             *     hosts by nature), and websockets back to this server. `style-src` keeps
+             *     'unsafe-inline' because the page styles inline throughout and injected CSS is a
+             *     far smaller prize than injected script.
+             *  ★ frame-ancestors/base-uri/object-src/form-action cost nothing here — the page has
+             *    no frames, no <base>, no plugins and no cross-site form — and each closes a
+             *    standard trick: clickjacking, base-tag hijack, plugin abuse, form redirection. */
+            const std::string nonce = vsRandomCode(22, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+            std::string kPage = kBase;
+            {   // stamp the nonce on the single script tag
+                const size_t at = kPage.find("<script");
+                if (at != std::string::npos) kPage.insert(at + 7, " nonce=\"" + nonce + "\"");
+            }
+            const std::string csp =
+                "Content-Security-Policy: default-src 'self'; "
+                "script-src 'nonce-" + nonce + "' https://unpkg.com; "
+                "style-src 'self' 'unsafe-inline' https://unpkg.com; "
+                "img-src 'self' data: blob: https: http:; "
+                "media-src 'self' data: blob:; "
+                "font-src 'self' data:; "
+                "connect-src 'self' ws: wss: https: http:; "
+                "worker-src 'self' blob:; "
+                "child-src 'self' blob:; "
+                "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\n";
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
                           "Access-Control-Allow-Origin: *\r\n"
+                          + csp +
+                          "X-Content-Type-Options: nosniff\r\n"
+                          "Referrer-Policy: no-referrer\r\n"
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(kPage.size()) + "\r\n\r\n" + kPage);
             sock->close();
