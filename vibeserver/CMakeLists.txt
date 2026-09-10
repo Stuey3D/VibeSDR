@@ -434,6 +434,29 @@ foreach(t ${VIBE_DAB_TESTS})
   add_test(NAME dab-${t} COMMAND test-dab-${t})
   add_dependencies(dab-tests test-dab-${t})
 endforeach()
+# ── ★★★ FUZZING THE PARSERS THAT EAT BYTES OFF THE AIR ───────────────────────────────────────
+#
+#   scripts/fuzz-dab.sh              build all five and run each for a minute
+#   scripts/fuzz-dab.sh 600 mot      ten minutes on one of them
+#
+# ★★ libFuzzer wants ONE entry point per binary, so the harness is compiled five times with a
+#    different VIBE_FUZZ_* define. Corpora are kept per parser under vibeserver/fuzz-corpus/.
+# ★ Needs clang (-fsanitize=fuzzer). Off by default and never part of a release build.
+option(VIBE_FUZZ "Build the DAB parser fuzz targets (needs clang)" OFF)
+if(VIBE_FUZZ)
+  add_custom_target(dab-fuzzers)
+  foreach(f fib mot pad spi epg)
+    string(TOUPPER ${f} F)
+    add_executable(fuzz-dab-${f} EXCLUDE_FROM_ALL "${CMAKE_CURRENT_SOURCE_DIR}/fuzz-dab.cpp")
+    target_include_directories(fuzz-dab-${f} PRIVATE "${CPP_DIR}")
+    target_compile_definitions(fuzz-dab-${f} PRIVATE VIBE_FUZZ_${F}=1)
+    target_compile_options(fuzz-dab-${f} PRIVATE -O1 -g -fsanitize=fuzzer,address,undefined
+                                                 -fno-sanitize-recover=undefined -fno-omit-frame-pointer)
+    target_link_options(fuzz-dab-${f} PRIVATE -fsanitize=fuzzer,address,undefined)
+    add_dependencies(dab-fuzzers fuzz-dab-${f})
+  endforeach()
+endif()
+
 # The offline replay harness: the same chain over a VIBE_IQ_DUMP capture, in seconds.
 # ★ dab-offline and the receiver test take the PFFFT path so the SERVER's transform is what gets
 #   replayed and tested; the other DAB tests keep the header-only radix-2, which is the reference.

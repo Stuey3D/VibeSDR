@@ -114,3 +114,7 @@ tools/vibeiq/out/
 #   sanitised object must never find its way into a release binary.
 build-san/
 vibeserver/build-san/
+
+# Fuzzing artefacts (scripts/fuzz-dab.sh) — the corpus is worth keeping, the builds are not.
+vibeserver/build-fuzz/
+vibeserver/fuzz-crashes/
