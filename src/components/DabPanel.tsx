@@ -281,12 +281,14 @@ const SvcLogo = React.memo(function SvcLogo({ uri }: { uri: string | null }) {
  * ★ `sv.dls` is per service and already gated (dabTypes.parseDabMessage); `d.dls` is the tuned
  *   one's and is the fallback for the row that is playing, since the server sends it there.
  */
-const ServiceRow = React.memo(function ServiceRow({ sv, d, base, onPress }: {
+const ServiceRow = React.memo(function ServiceRow({ sv, d, base, onPress, waiting }: {
   sv: DabState['services'][number]; d: DabState; base: string; onPress: () => void;
+  /** The "tuning in" line, shown in this row's live-text slot while it is the picked station. */
+  waiting?: string;
 }) {
   const active = sv.sid === d.sid;
   const logo = useServiceLogo(base, d, sv);
-  const text = sv.dls || (active ? d.dls : '') || '';
+  const text = (active && waiting) || sv.dls || (active ? d.dls : '') || '';
   /* ★ THE ANNOUNCEMENT LAMP — a car's TA indicator with TA SWITCHING OFF. Stuart: "dont auto tune
    *  but if we can show the signal being recieved that would be good. Like in a car with TA off."
    *  We never retune to it: on a shared VFO one listener's traffic flash drags everybody else off
@@ -389,6 +391,11 @@ export default function DabPanel(p: DabPanelProps) {
   if (heardSincePick && pickedAt > 0) setTimeout(() => setPickedAt(0), 0);
   const waitingSecs = (!!d && d.locked && !!d.sid && pickedAt > 0 && !heardSincePick)
     ? Math.floor((Date.now() - pickedAt) / 1000) : -1;
+  // ★ In the STATION'S live-text line (the marquee), not a notice above the list — the header and
+  //   a notice are both too squashed on a phone; the radio text comes back when the audio does.
+  const waitingText = waitingSecs < 0 ? '' : waitingSecs < 30
+    ? `Tuning in — waiting for the gain to settle and the audio clock to lock… ${waitingSecs}s`
+    : `Still tuning in (${waitingSecs}s) — a weak multiplex can take a while; the decoder has not given up`;
 
   /* ★ The pane resets to STATIONS when the ENSEMBLE changes, as the browser's does: a new
    *  multiplex means a new list, and leaving the reader on a signal pane full of the last one's
@@ -417,13 +424,6 @@ export default function DabPanel(p: DabPanelProps) {
         </Text>
       )}
       {!d && !p.error && <Text style={s.notice}>Tuning the multiplex…</Text>}
-      {waitingSecs >= 0 && (
-        <Text style={s.notice}>
-          {waitingSecs < 30
-            ? `Tuning in — waiting for the gain to settle and the audio clock to lock… ${waitingSecs}s`
-            : `Still tuning in (${waitingSecs}s) — a weak multiplex can take a while; the decoder has not given up.`}
-        </Text>
-      )}
 
       {!!d && pane === 'stations' && (
         <>
@@ -434,6 +434,7 @@ export default function DabPanel(p: DabPanelProps) {
           )}
           {d.services.map(sv => (
             <ServiceRow key={sv.sid} sv={sv} d={d} base={p.base}
+                        waiting={sv.sid === d.sid ? waitingText : ''}
                         onPress={() => pick(sv.sid)} />
           ))}
           {/* ★ The list is the last good one, kept while the FIC is not reading — say so, as the

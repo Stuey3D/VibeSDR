@@ -4490,6 +4490,8 @@ let dabOn = false;
 let dabState: DabState | null = null;
 /** performance.now() when the listener last picked a DAB service; 0 once it has been heard. */
 let dabPickedAt = 0;
+/** The "tuning in" line for the picked station's live-text slot, '' once audio has arrived. */
+let dabWaiting = '';
 let dabPane: 'stations' | 'signal' = 'stations';
 let dabChannel = -1;
 let dabLastEid = -1;
@@ -4593,7 +4595,7 @@ function dabRender() {
      *  2026-09-10: "a little indication that we haven't given up on loading it"). Shown from the
      *  press until the first AUDIBLE output since that press, with the seconds counting so it is
      *  visibly alive; after 30 s it says so, and it still does not give up — the server hasn't. */
-    let waiting = '';
+    dabWaiting = '';
     // ★ +400 ms: the PREVIOUS station's buffered tail drains for a moment after the press — a
     //   same-multiplex switch (Stuart: "even stations on the same multiplex") would otherwise
     //   clear the line before the new service had produced a sample.
@@ -4605,14 +4607,17 @@ function dabRender() {
     const heard = !!audio && (audio.lastOutputAtMs >= dabPickedAt + 400 || (secsSincePick > 8 && audio.health === 'ok'));
     if (d.locked && d.sid && dabPickedAt > 0 && audio && !heard) {
       const secs = Math.floor(secsSincePick);
-      waiting = secs < 30
-        ? ` · tuning in — waiting for the gain to settle and the audio clock to lock… ${secs}s`
-        : ` · still tuning in (${secs}s) — a weak multiplex can take a while; the decoder has not given up`;
+      // ★ Shown in the STATION'S live-text line, not the header (Stuart: "very squashed in that
+      //   header so in the app it will be even more so") — it scrolls like the radio text and the
+      //   radio text comes back when the audio does.
+      dabWaiting = secs < 30
+        ? `Tuning in — waiting for the gain to settle and the audio clock to lock… ${secs}s`
+        : `Still tuning in (${secs}s) — a weak multiplex can take a while; the decoder has not given up`;
     } else if (dabPickedAt > 0 && heard) {
       dabPickedAt = 0;   // heard it — the line goes
     }
     if (ds) ds.textContent = !d.locked ? 'searching…' : d.services.length
-      ? `${d.label || d.channel} · ${d.services.length} services${d.aacSettling && d.sid ? ' · setting the DAB+ sample-rate clock…' : ''}${waiting}`
+      ? `${d.label || d.channel} · ${d.services.length} services${d.aacSettling && d.sid ? ' · setting the DAB+ sample-rate clock…' : ''}`
       : 'reading the multiplex…'; }
 
   /* ★★ RESET TO THE LIST WHEN THE ENSEMBLE CHANGES, and only then. A new multiplex means a new
@@ -4655,7 +4660,7 @@ function dabRender() {
     const tag = dabLogoTag(sv, d);
     if (lg.dataset.h !== tag) { lg.dataset.h = tag; lg.innerHTML = tag; }   // the image element lives on until its source changes
     setText(el.querySelector('.nmT'), sv.label || '(unnamed)');
-    const dlsText = sv.sid === d.sid ? (d.dls || '') : (sv.dls || '');
+    const dlsText = sv.sid === d.sid ? (dabWaiting || d.dls || '') : (sv.dls || '');
     const dlsBox = el.querySelector('.dls') as HTMLElement;
     const inner = dlsBox.querySelector('.dlsIn') as HTMLElement;
     setStyle(dlsBox, 'display', dlsText ? 'block' : 'none');
