@@ -42,7 +42,13 @@
  *  drops every declaration it carries INTO that namespace: ::getrandom then does not exist and the
  *  compiler helpfully suggests vibe::getrandom. It built on macOS only because that path uses
  *  arc4random from <cstdlib>, which was already included. (2026-09-10.) */
-#if !defined(__APPLE__) && !defined(__FreeBSD__)
+/* ★★★ THREE PLATFORMS, THREE ANSWERS — and Android is the one that bites. bionic only DECLARES
+ *  getrandom() from API 28 and this app supports 24, so <sys/random.h> is not enough there and the
+ *  NDK build failed with "no member named 'getrandom' in the global namespace" (caught by CodeQL's
+ *  compiled java-kotlin analysis, 2026-09-10 — macOS and Debian had both built clean).
+ *  arc4random_buf has been in bionic since API 21 and is exactly the same kind of source, so
+ *  Android takes that path with Apple and the BSDs. */
+#if !defined(__APPLE__) && !defined(__FreeBSD__) && !defined(__ANDROID__)
 #include <sys/random.h>
 #endif
 #include <cerrno>
@@ -2583,7 +2589,7 @@ static std::string          g_vsLandingMode;
  *     clock: a predictable credential that looks fine is worse than an error nobody can miss.
  *  ★ Not std::random_device — it is permitted to be deterministic, and has been on some toolchains. */
 static void vsRandomBytes(void* out, size_t n) {
-#if defined(__APPLE__) || defined(__FreeBSD__)
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__ANDROID__)
     arc4random_buf(out, n);
 #else
     size_t got = 0;
