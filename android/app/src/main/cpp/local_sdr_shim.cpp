@@ -3406,6 +3406,12 @@ struct LocalSdrShim::Impl {
         // ★ Wider than the capture is the same as no filter at all — say so plainly rather than
         //   commanding a number the tuner will ignore.
         if (want >= (int)(sampleRate * 0.95)) want = 0;
+        /* ★★★ A FULL-RATE RAW IQ CONSUMER SEES THE WHOLE CAPTURE. The IF filter following the
+         *  listener's zoom would hand Trunk Recorder a 2.4 MHz window with only the middle
+         *  700 kHz in it (Stuart's screenshot, 2026-09-10 02:39: "IF 700 kHz auto" beside a
+         *  full-rate stream). Widest there is, for as long as the consumer is on; the zoom
+         *  takes over again when it stops — iqStartFor/iqStopDirect re-run this. */
+        if (iqFullActive()) want = 0;
         {
             const int cur = g_tunerBwHz.load(std::memory_order_relaxed);
             /* ★★★ EVERY WRITE HERE IS A SYNCHRONOUS USB CONTROL TRANSFER ON THE BUS CARRYING
@@ -13659,6 +13665,12 @@ struct LocalSdrShim::Impl {
         { std::lock_guard<std::mutex> lk(p->iqDirectMtx); iq = p->iqDirect; }
         if (iq && !iq->full) p->iqTapInto(iq, x, n, (int)std::lround(rateHz));
     }
+    /** Is a full-rate raw IQ stream on right now? (On, not attached: the filter must be right
+     *  before the first byte.) */
+    bool iqFullActive() {
+        std::lock_guard<std::mutex> lk(iqDirectMtx);
+        return iqDirect && iqDirect->full;
+    }
     /** Full rate: the raw block from the DSP loop, at the capture rate, before anything touches it. */
     void iqTapFull(const cf32* x, int n, double rateHz) {
         std::shared_ptr<IqOut> iq;
@@ -13734,6 +13746,7 @@ struct LocalSdrShim::Impl {
         if (!iq) return;
         rx.setIqMinRate(0.0);          // ★ let the channel shrink back to what the mode wants
         iqTearDown(iq);
+        if (iq->full) applyAutoIf();   // ★ the IF filter follows the zoom again
     }
     void iqTearDown(const std::shared_ptr<IqOut>& iq) {
         if (!iq) return;
@@ -13840,6 +13853,7 @@ struct LocalSdrShim::Impl {
             // ★ The window IS the capture: put the physical centre on the listener's dial so the
             //   consumer's first read is what the web client shows, until it sets its own.
             requestPhysicalCentre(audioFreq.load());
+            applyAutoIf();                       // ★ and open the tuner's IF filter right up
         }
         else if (c) clientRetune(c.get());          // ★ widen the channel to the IQ rate (chanBinsFor above)
         else   rx.setIqMinRate((double)iq->rate);   // ★ direct: the pipeline's channel floor
