@@ -17,7 +17,12 @@ OUT="$HERE/out"; DIST="$OUT/dist"; TMP="$OUT/tmp"
 VER="${VIBEIQ_VERSION:-1.0.1}"
 WANT="${1:-all}"
 
-rm -rf "$DIST"; mkdir -p "$DIST" "$TMP"
+# ★ Only a full run clears the output. Asking for ONE family used to wipe `dist` first, so
+#   `build-all.sh darwin` silently deleted the linux and windows packages built moments before —
+#   found while assembling a release, with the artefacts already checksummed. A partial build must
+#   never destroy what it is not rebuilding.
+[ "$WANT" = all ] && rm -rf "$DIST"
+mkdir -p "$DIST" "$TMP"
 cd "$HERE"
 
 # ★★ VERIFY THE ARTEFACT, not the exit status. A cross-build that quietly produced the wrong
