@@ -19901,13 +19901,25 @@ void LocalSdrShim::overloadTick() {
     //     listening, so coming down is never made to wait.
     // ★ The climb dwell is long BECAUSE a change is expensive (see the note by the climb branch).
     //   An overload still escapes immediately — clipRun short-circuits this.
-    const bool hurry = now < g_agcHurryUntil.load(std::memory_order_relaxed);
+    /* ★★★ ACQUIRING A MULTIPLEX: NOTHING TO MEASURE, SO NOTHING TO WAIT FOR. The dwell between
+     *  steps exists so a step can be JUDGED by what it did to the ensemble — but until the first
+     *  FIB decodes there is no ensemble to judge, and the wait is pure delay. Measured on the V4
+     *  (2026-09-10): 10D entered at 12.5 dB, first climb at 3.2 s, second at 5.3 s, first FIB at
+     *  5.9 s — every second of it the dwell; 10C, strong enough at 12.5 dB, decoded at 0.8 s.
+     *  So while DAB is on and the FIB rate is zero, climb on ADC headroom alone (the clip guard
+     *  still rules), no faster than every 0.4 s; the dwell and the verdict take over again the
+     *  moment the first FIB arrives. Block steps reset the FIB rate, so a block change gets the
+     *  same treatment. */
+    const bool dabAcquiring = g_dabMode.load(std::memory_order_relaxed) && clipRun < 2
+                              && g_dab.quality().fibRate <= 0.0f;
+    const bool hurry = now < g_agcHurryUntil.load(std::memory_order_relaxed) || dabAcquiring;
     /* ★ The profile's cadence, not one figure for the whole radio. FM is dense and a wrong gain is
      *   audible at once; MW's ghosts last "a few seconds at a time due to MW/HF signal fade"
      *   (Stuart), so chasing them fast would cut for nothing. */
     const AgcProfile& tickProf = *g_profile.load(std::memory_order_relaxed);
-    if (!hurry && clipRun < 2
-        && now - g_ovlLastChangeAt.load(std::memory_order_relaxed) < tickProf.climbDwellSec)
+    const double dwell = dabAcquiring ? 0.4 : tickProf.climbDwellSec;
+    if ((!hurry || dabAcquiring) && clipRun < 2
+        && now - g_ovlLastChangeAt.load(std::memory_order_relaxed) < dwell)
         return;
 
     // ★★★ DID THE LAST CLIMB ACTUALLY HELP? Judged on SNR, a few seconds later, once the meters
