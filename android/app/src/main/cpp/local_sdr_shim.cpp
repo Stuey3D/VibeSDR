@@ -1684,6 +1684,17 @@ static inline void noteHwMoved() {
     g_hwMovedAt.store(std::chrono::duration<double>(
         std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
 }
+/** ★★★ HOLD THE SFERIC DETECTOR while a HARDWARE AGC is ramping. The RSP's kick sequence parks
+ *  the IF reduction at maximum and then hands the gain to the radio's own loop, which lifts the
+ *  WHOLE band over the next five seconds — 13 "strikes" in a row on a clear morning (measured on
+ *  the Pi, 2026-09-10 10:51, every one inside the window after "AGC kick 6/6"). The 2 s retune
+ *  hold is too short for that; this is an explicit hold in seconds from now. */
+static std::atomic<double> g_sfericHoldUntil{0.0};
+static inline void sfericHold(double secs) {
+    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    double cur = g_sfericHoldUntil.load(std::memory_order_relaxed);
+    if (now + secs > cur) g_sfericHoldUntil.store(now + secs, std::memory_order_relaxed);
+}
 static std::atomic<int>      g_adcHotRun{0};
 /** ★★★ WHEN THE PIPELINE WAS LAST DISTURBED — a dropped IQ buffer, or an engine rate change.
  *
@@ -6004,8 +6015,9 @@ struct LocalSdrShim::Impl {
             const double sinceCfg  = lxNow - g_agcForgetAt.load(std::memory_order_relaxed);
             const bool   hfBand    = rtlCenter.load() < 32e6;
             const double sinceHw   = lxNow - g_hwMovedAt.load(std::memory_order_relaxed);
+            const bool   held      = lxNow < g_sfericHoldUntil.load(std::memory_order_relaxed);
             if (hfBand) g_sferic.feed(fftAccum.data(), inv, bins, lxNow,
-                                      sinceGain < 1.5 || sinceCfg < 1.5 || sinceHw < 2.0);
+                                      sinceGain < 1.5 || sinceCfg < 1.5 || sinceHw < 2.0 || held);
             else        g_sferic.hits.clear();
         }
 
@@ -6654,6 +6666,7 @@ struct LocalSdrShim::Impl {
                      sdrp->currentLnaState(), sdrp->currentIfGr(), sdrp->systemGainDb());
             }
             else if (sdrpAgcWanted && sdrpAgcKick < 6 && n > 10 && (n % 20) == 0) {
+                noteHwMoved();                 // ★ every kick step moves the level; none is a sferic
                 switch (++sdrpAgcKick) {
                     case 1: sdrp->setLnaState(std::max(0, sdrp->lnaStateCount() - 1 - kRspInitRfGainPos));
                             LOGI("AGC kick 1/6: LNA state -> %d (RF gain %d/%d)",
@@ -6682,6 +6695,7 @@ struct LocalSdrShim::Impl {
                             //   setting the reduction first and then enabling AGC would let the
                             //   loop immediately undo it. Same ordering rule as ahf_control.
                             sdrp->setIfAgc(savedAgc != 0);          // -1 (unset) => on, as before
+                            if (savedAgc != 0) sfericHold(10.0);   // ★ the radio's own loop now ramps the band
                             if (savedAgc == 0 && savedGr >= 0) sdrp->setIfGainReduction(savedGr);
                             LOGI("AGC kick 6/6: %s (ifgr %d, lna %d, sysGain %.1f dB)%s",
                                  savedAgc == 0 ? "AGC off — owner's saved gain restored" : "AGC on",
@@ -16777,7 +16791,7 @@ void LocalSdrShim::applyDesiredDsp(LocalSdrShim::Impl* impl) {
         // reduction is refused while the AGC owns that register, so set the AGC state FIRST and
         // only push a manual IFGR when the AGC is off. Reversing these drops the value silently.
         const int agc = g_dsp.rspIfAgc.load();
-        if (agc >= 0) impl->sdrp->setIfAgc(agc != 0);
+        if (agc >= 0) { impl->sdrp->setIfAgc(agc != 0); if (agc != 0) sfericHold(10.0); }
         if (agc == 0 && g_dsp.rspIfGr.load() >= 0)
             impl->sdrp->setIfGainReduction(g_dsp.rspIfGr.load());
     }
@@ -21920,6 +21934,7 @@ void LocalSdrShim::setIfAgc(bool v) {
     // which is the honest way to respect a manual choice, rather than by racing it.
     p->sdrpAgcWanted = v;
     p->sdrp->setIfAgc(v);
+    if (v) sfericHold(10.0);   // ★ the radio's own loop ramps the whole band for seconds — not sferics
 }
 void LocalSdrShim::setIfAgcSetPoint(int v)  { g_dsp.rspAgcSet.store(v);
                                               if (!p || !p->useSdrplay()) return;
