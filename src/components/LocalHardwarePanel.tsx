@@ -35,11 +35,18 @@ const C = {
   abtn:   'rgba(255,229,102,0.55)',
 };
 
-// 3.2 MSPS is gone: the RTL2832U accepts the rate but cannot sustain it — above
-// ~2.56 MSPS the USB transfers fall behind, so it drops samples and runs hot doing
-// it. Offering it only invited people to pick the biggest number and then blame the
-// receiver for the gaps. 2.56 is the real ceiling.
-const SAMPLE_RATES = [250000, 1024000, 1536000, 1800000, 2048000, 2400000, 2560000];
+// 3.2 MSPS is gone: the RTL2832U accepts the rate but cannot sustain it — the USB transfers fall
+// behind, so it drops samples and runs hot doing it. Offering it only invited people to pick the
+// biggest number and then blame the receiver for the gaps.
+// ★★★ AND 2.56 IS GONE FOR THE SAME REASON. This list stopped at 2560000 and the comment called it
+//     "the real ceiling" — but the chip merely ACCEPTS it, which is the identical mistake one rung
+//     down, and being the biggest number is exactly why it gets picked. Found on the Pi's V4L,
+//     which was capturing at 2.56 with its owner's page set to 2.4 (Stuart, 2026-09-10: "a device
+//     that is limited to 2.4"). The server refuses it now too — it clamps to the radio's own
+//     ceiling — so leaving it here would be offering a control whose top entry springs back.
+// ★ This is only the FALLBACK, used when neither the server nor the radio states its rates. A
+//   VibeServer sends its own list and that always wins; see the Seg below.
+const SAMPLE_RATES = [250000, 1024000, 1536000, 1800000, 2048000, 2400000];
 /** ★ The tuner IF widths the picker offers. -1 = AUTO (follows the zoom), 0 = wide open.
  *  ★★ The same list the web client offers, minus the ones that were no-ops there: below about
  *     350 kHz the R820T stops honouring the request, so offering 300/250/200 was three choices

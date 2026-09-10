@@ -5649,7 +5649,17 @@ struct LocalSdrShim::Impl {
          *  XCover's 94 % sample delivery at 2.048 (the reason DAB captures at 2.4 and resamples)
          *  was the dongle, or the phone starving the USB reader — which is now prioritised and
          *  has a far lighter chain behind it. Offered, not defaulted; DAB still captures at 2.4. */
-        return "2560000,2400000,2048000,1800000,1200000,960000";
+        /* ★★★ NO 2 560 000 — and this is the THIRD reader of that one rule. The RTL2832U accepts
+         *  2.56 MS/s and cannot sustain it over USB; on a Pi feeding four radios it drops samples
+         *  and runs hot, which reads as a bad receiver rather than a bad setting. It was the
+         *  biggest number in the list, which is exactly why it got picked — the same argument that
+         *  removed 3.2 before it. Stuart, 2026-09-10, with the V4L sat there doing it: "a device
+         *  that is limited to 2.4".
+         *  ★★ THIS LIST AND advertisedRates() MUST MATCH. They are the same fact told to two
+         *     audiences (this one the setup page and the apps, that one hwinfo), and they had
+         *     already drifted — 2 048 000 was added here on 2026-09-08 and never there. Change one,
+         *     change the other, or a rate is offered in one place and refused in the other. */
+        return "2400000,2048000,1800000,1200000,960000";
     }
 
     /** ★★★ THE DSP THREAD MAY NOT TAKE clientMtx. It holds modeMtx, and that lock order
@@ -10539,7 +10549,10 @@ struct LocalSdrShim::Impl {
             for (size_t i = rl.size(); i-- > 0; ) out.push_back((double)rl[i]);
             return out;
         }
-        return { 2400000, 1800000, 1200000, 960000 };
+        /* ★ 2 048 000 is here to MATCH supportedRatesImpl(), which has offered it since 2026-09-08
+         *  ("it was never offered for the RTL for some reason" — Stuart) and is the rate that lets
+         *  the DAB question be measured. The two lists had drifted; see the note there. */
+        return { 2400000, 2048000, 1800000, 1200000, 960000 };
     }
     /** The highest rate this radio is offered, and therefore the highest any client may ask for.
      *  0 only if the list is somehow empty, which means "do not clamp" rather than "allow nothing". */
