@@ -32,7 +32,7 @@
     "react-native-svg": "15.15.4",
     "react-native-webview": "^13.16.1",
     "react-native-worklets": "^0.10.1",
-    "uuid": "^14.0.0"
+    "uuid": "^14.0.1"
   },
   "devDependencies": {
     "@react-native-tvos/config-tv": "^0.1.6",
