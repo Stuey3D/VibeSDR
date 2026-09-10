@@ -18,7 +18,7 @@
  *    the RDS fault, pre-empted. Nothing in here re-checks them, and nothing in here should build a
  *    string by concatenating one into JSON.
  */
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Image, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import Reanimated, { Easing as REasing, cancelAnimation, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import { BlurView } from 'expo-blur';
@@ -340,6 +340,9 @@ export interface DabPanelProps {
    *  lock-screen skip, all in SDRScreen. A prop nothing reads is the "written and never read"
    *  trap this repo keeps finding — so it is gone rather than left for later. */
   onService: (sid: number) => void;
+  /** Date.now() of the last audio packet the app received, read on demand — for the "tuning in"
+   *  line: a picked station stays marked as loading until sound has arrived SINCE the press. */
+  lastAudioAt?: () => number;
   /** Close the WINDOW and leave DAB running — the X. See onExit for the other one. */
   onClose: () => void;
   /** ★★★ TWO DOORS, AND THE DIFFERENCE MATTERS. Stuart, 2026-09-08: "the X button on the decoder
@@ -374,6 +377,18 @@ export default function DabPanel(p: DabPanelProps) {
   const cur = d ? d.services.find(x => x.sid === d.sid) : undefined;
   const txLines = useMemo(() => (d ? rememberTransmitters(d) : []), [d]);
   const noDecoder = !!d && (d.sfTried ?? 0) > 0 && d.aacServerSide === false;
+  /* ★★ SAY WE HAVE NOT GIVEN UP — mirror of the web client's line. A service can take a good few
+   *  seconds to start, even on the same multiplex (AGC settling, re-lock, decoder priming, the
+   *  sample-rate clock), and a picked station with a silent radio reads as broken (Stuart,
+   *  2026-09-10). Shown from the press until audio has arrived at least 400 ms AFTER it — the old
+   *  station's buffered tail drains for a moment and must not clear it. This panel re-renders on
+   *  every DAB state update (about once a second), which is what makes the seconds count. */
+  const [pickedAt, setPickedAt] = useState(0);
+  const pick = (sid: number) => { setPickedAt(Date.now()); p.onService(sid); };
+  const heardSincePick = pickedAt > 0 && (p.lastAudioAt?.() ?? 0) >= pickedAt + 400;
+  if (heardSincePick && pickedAt > 0) setTimeout(() => setPickedAt(0), 0);
+  const waitingSecs = (!!d && d.locked && !!d.sid && pickedAt > 0 && !heardSincePick)
+    ? Math.floor((Date.now() - pickedAt) / 1000) : -1;
 
   /* ★ The pane resets to STATIONS when the ENSEMBLE changes, as the browser's does: a new
    *  multiplex means a new list, and leaving the reader on a signal pane full of the last one's
@@ -402,6 +417,13 @@ export default function DabPanel(p: DabPanelProps) {
         </Text>
       )}
       {!d && !p.error && <Text style={s.notice}>Tuning the multiplex…</Text>}
+      {waitingSecs >= 0 && (
+        <Text style={s.notice}>
+          {waitingSecs < 30
+            ? `Tuning in — waiting for the gain to settle and the audio clock to lock… ${waitingSecs}s`
+            : `Still tuning in (${waitingSecs}s) — a weak multiplex can take a while; the decoder has not given up.`}
+        </Text>
+      )}
 
       {!!d && pane === 'stations' && (
         <>
@@ -412,7 +434,7 @@ export default function DabPanel(p: DabPanelProps) {
           )}
           {d.services.map(sv => (
             <ServiceRow key={sv.sid} sv={sv} d={d} base={p.base}
-                        onPress={() => p.onService(sv.sid)} />
+                        onPress={() => pick(sv.sid)} />
           ))}
           {/* ★ The list is the last good one, kept while the FIC is not reading — say so, as the
               web does, rather than letting a stale list pass for a live one. */}

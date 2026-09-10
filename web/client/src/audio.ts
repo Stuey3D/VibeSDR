@@ -1918,6 +1918,9 @@ export class AudioPlayer {
   }
 
   private lastAudibleAt = 0;
+  /** performance.now() of the last audible output, 0 if none yet — for "has anything played since
+   *  I pressed that station?" (the DAB tuning-in line). */
+  get lastAudibleAtMs(): number { return this.lastAudibleAt; }
   /** When the playout node last reported that it had actually put samples out. */
   private lastDrainAt = 0;
   private stallWatch: number | null = null;

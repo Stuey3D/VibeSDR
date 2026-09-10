@@ -4488,6 +4488,8 @@ let dabBoost = false;
 let dabBoostUseful = false;
 let dabOn = false;
 let dabState: DabState | null = null;
+/** performance.now() when the listener last picked a DAB service; 0 once it has been heard. */
+let dabPickedAt = 0;
 let dabPane: 'stations' | 'signal' = 'stations';
 let dabChannel = -1;
 let dabLastEid = -1;
@@ -4585,8 +4587,26 @@ function dabRender() {
   /* ★ The header status: "tuning…" was written on entry and never replaced, so a locked receiver
    *  with fourteen stations on screen still said it was tuning (seen driving the client, 2026-09-07). */
   { const ds = document.getElementById('decStatus');
+    /* ★★ SAY WE HAVE NOT GIVEN UP. A DAB service can take a good few seconds to start — the AGC
+     *  settling on a new block, the ensemble re-locking, the decoder priming, the sample-rate
+     *  clock being measured — and a picked station with a silent radio reads as broken (Stuart,
+     *  2026-09-10: "a little indication that we haven't given up on loading it"). Shown from the
+     *  press until the first AUDIBLE output since that press, with the seconds counting so it is
+     *  visibly alive; after 30 s it says so, and it still does not give up — the server hasn't. */
+    let waiting = '';
+    // ★ +400 ms: the PREVIOUS station's buffered tail drains for a moment after the press — a
+    //   same-multiplex switch (Stuart: "even stations on the same multiplex") would otherwise
+    //   clear the line before the new service had produced a sample.
+    if (d.locked && d.sid && dabPickedAt > 0 && audio && audio.lastAudibleAtMs < dabPickedAt + 400) {
+      const secs = Math.floor((performance.now() - dabPickedAt) / 1000);
+      waiting = secs < 30
+        ? ` · tuning in — waiting for the gain to settle and the audio clock to lock… ${secs}s`
+        : ` · still tuning in (${secs}s) — a weak multiplex can take a while; the decoder has not given up`;
+    } else if (dabPickedAt > 0 && audio && audio.lastAudibleAtMs >= dabPickedAt + 400) {
+      dabPickedAt = 0;   // heard it — the line goes
+    }
     if (ds) ds.textContent = !d.locked ? 'searching…' : d.services.length
-      ? `${d.label || d.channel} · ${d.services.length} services${d.aacSettling && d.sid ? ' · setting the DAB+ sample-rate clock…' : ''}`
+      ? `${d.label || d.channel} · ${d.services.length} services${d.aacSettling && d.sid ? ' · setting the DAB+ sample-rate clock…' : ''}${waiting}`
       : 'reading the multiplex…'; }
 
   /* ★★ RESET TO THE LIST WHEN THE ENSEMBLE CHANGES, and only then. A new multiplex means a new
@@ -4618,7 +4638,7 @@ function dabRender() {
       : `<div style="padding:14px;opacity:.6">${d.truncated ? 'Signal block too long for the server to send'
           : d.locked ? 'Reading the multiplex…' : 'Searching for a multiplex…'}</div>`;
     for (const el of Array.from(st.querySelectorAll('.dabSvc')) as HTMLElement[])
-      el.onclick = () => { spec?.dabService(Number(el.dataset.sid)); };
+      el.onclick = () => { dabPickedAt = performance.now(); spec?.dabService(Number(el.dataset.sid)); dabRender(); };
     { const b = document.getElementById('decBody'); if (b && listScroll) b.scrollTop = listScroll; }
   }
   for (const sv of d.services) {

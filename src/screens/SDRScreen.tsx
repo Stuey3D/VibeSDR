@@ -8658,6 +8658,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           error={dabError}
           blockIndex={dabBlock}
           onService={(sid) => client.current?.dabService?.(sid)}
+          lastAudioAt={() => lastAudioAtRef.current}
           onClose={() => setDabBoxOpen(false)}
           onExit={toggleDab}
           tall={dabTall} onTall={onDabTall}
