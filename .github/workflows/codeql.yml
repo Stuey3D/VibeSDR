@@ -1,0 +1,67 @@
+# CodeQL — advanced setup.
+#
+# ★★★ WHY ADVANCED AND NOT DEFAULT. Default setup could not analyse java-kotlin here: it tries to
+#     build the Android app and fails with "unable to automatically build your code". Advanced
+#     setup lets each language say HOW it should be built, and for the interpreted ones the answer
+#     is "do not build at all" (build-mode: none), which is both correct and much faster.
+#     The two are mutually exclusive — default setup must be disabled for this to run.
+#
+# ★★ THREAT MODEL: REMOTE, matching the default config it replaces. This repo's crown jewels are
+#    network-facing: VibeServer takes WebSocket frames, HTTP requests and rtl_tcp commands from
+#    anyone who can reach it. The default model treats only a narrow set of sources as tainted;
+#    `remote` adds the ones that actually matter to us.
+#
+# ★ SWIFT NEEDS macOS. The CodeQL Swift extractor does not run on Linux, so that one job takes a
+#   macOS runner and the rest stay on Linux where they are cheaper.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, Monday 04:17 UTC — off the hour, so it does not queue behind everyone else's cron.
+    - cron: '17 4 * * 1'
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ${{ (matrix.language == 'swift' && 'macos-latest') || 'ubuntu-latest' }}
+    permissions:
+      # ★ security-events: write is what lets the run upload its results. Without it the analysis
+      #   succeeds and reports nothing, which looks exactly like a clean repository.
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: java-kotlin
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+          - language: c-cpp
+            build-mode: autobuild
+          - language: swift
+            build-mode: autobuild
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          config: |
+            threat-models: remote
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:${{ matrix.language }}'
