@@ -649,6 +649,36 @@ static std::atomic<int>    g_dabChannel{-1};
 static std::mutex          g_dabGainMemMtx;
 static std::map<int, int>  g_dabGainMem;              // block index -> g_ovlSteps that decoded it
 static std::atomic<bool>   g_dabSeedPending{false};   // set at entry and on a block change
+/* ★ Persisted beside the DAB carousel cache ("dab-gains.txt", one "BLOCK steps" line per block),
+ *  so a block learned once is fast from the first visit after a restart too. Loaded lazily on
+ *  the first lookup, rewritten whole whenever a block's figure changes. All under the mutex. */
+static std::string         g_dabGainFile;
+static bool                g_dabGainLoaded = false;
+static void dabGainLoadLocked() {
+    if (g_dabGainLoaded) return;
+    g_dabGainLoaded = true;
+    if (g_dabGainFile.empty()) return;
+    if (FILE* f = std::fopen(g_dabGainFile.c_str(), "r")) {
+        char name[16]; int steps;
+        while (std::fscanf(f, "%15s %d", name, &steps) == 2) {
+            for (size_t i = 0; i < vibedab::kBandIIICount; ++i)
+                if (std::strcmp(vibedab::kBandIII[i].name, name) == 0) { g_dabGainMem[(int)i] = steps; break; }
+        }
+        std::fclose(f);
+        if (!g_dabGainMem.empty()) LOGI("[DAB] %zu block gain(s) remembered from %s", g_dabGainMem.size(), g_dabGainFile.c_str());
+    }
+}
+static void dabGainSaveLocked() {
+    if (g_dabGainFile.empty()) return;
+    const std::string tmp = g_dabGainFile + ".tmp";
+    if (FILE* f = std::fopen(tmp.c_str(), "w")) {
+        for (const auto& kv : g_dabGainMem)
+            if (kv.first >= 0 && (size_t)kv.first < vibedab::kBandIIICount)
+                std::fprintf(f, "%s %d\n", vibedab::kBandIII[kv.first].name, kv.second);
+        std::fclose(f);
+        std::rename(tmp.c_str(), g_dabGainFile.c_str());
+    }
+}
 /* ★★★ DAB TAKES THE DIAL OFF THE LOCK FOR AS LONG AS IT OWNS THE RADIO.
  *  A locked centre is a SHARED-RECEIVER promise — nobody may retune — and it is enforced in
  *  ~20 places, one of which is the source rebuild (see the g_vsLockedCentre block in the open
@@ -2812,6 +2842,35 @@ std::string queryParam(const std::string& reqLine, const char* key) {
 } // namespace
 
 // ── Impl ────────────────────────────────────────────────────────────────────
+/** Put the AGC straight at `wantSteps` below the ceiling and write that gain — the tick's own
+ *  write path (steps, settle, pending write, notify) without a decision. Returns false when the
+ *  radio has no gain list to map through (an RSP, a HF+). See g_dabGainMem. */
+template <class ImplT>   // ★ Impl is LocalSdrShim's private type; deduced, never named
+static bool dabSeedGain(ImplT* p, int wantSteps, double now) {
+    if (!p) return false;
+    std::lock_guard<std::recursive_mutex> hw(p->modeMtx);
+    if (!p->dev || p->radioReleased.load()) return false;
+    const int n = rtlsdr_get_tuner_gains(p->dev, nullptr);
+    if (n <= 1) return false;
+    std::vector<int> gains((size_t)n);
+    rtlsdr_get_tuner_gains(p->dev, gains.data());
+    const int target = g_gainTarget.load(std::memory_order_relaxed);
+    int tgtIdx = 0;
+    for (int i = 0; i < n; i++) if (gains[(size_t)i] <= target) tgtIdx = i;
+    int want = wantSteps; if (want > tgtIdx) want = tgtIdx; if (want < 0) want = 0;
+    const int idx = tgtIdx - want;
+    const int applied = gains[(size_t)idx];
+    g_ovlSteps.store(want, std::memory_order_relaxed);
+    g_ovlLastChangeAt.store(now, std::memory_order_relaxed);
+    agcSettleAfterGain(now);
+    p->lastGainTenthDb = applied;
+    { std::lock_guard<std::mutex> lk(p->hwWrMtx); p->pendingGainTenth = applied; }
+    p->hwWrCv.notify_one();
+    LOGI("[DAB] entering block %s at the gain it last decoded at: %.1f dB (%d steps below the ceiling)",
+         vibedab::kBandIII[g_dabChannel.load() < 0 ? 0 : g_dabChannel.load()].name, applied / 10.0, want);
+    LocalSdrShim::instance().broadcastHwInfo();   // ★ the clients' gain readout follows the radio
+    return true;
+}
 struct LocalSdrShim::Impl {
     bool decoderOnly = false;             // sidecar mode: decoders only, no RTL
     std::vector<float> pcmResid;          // upsample carry (fractional sample pos)
@@ -9417,6 +9476,14 @@ struct LocalSdrShim::Impl {
                 for (auto& v : views) clientRetune(v.get());
                 updateZoomView();
                 for (auto& sk : socks) sendConfig(sk);
+            }
+            /* ★★★ ENTER AT THE GAIN THIS BLOCK LAST DECODED AT — here, at once, not on the AGC's
+             *  first tick: that tick waits out the 2.5 s entry settle, and the seed landed 2.5 s
+             *  after "mode ON" (journal, 2026-09-10 12:07). A deliberate write needs no settle. */
+            if (g_dabSeedPending.exchange(false, std::memory_order_relaxed)) {
+                int learned = -1;
+                { std::lock_guard<std::mutex> lk(g_dabGainMemMtx); dabGainLoadLocked(); auto it = g_dabGainMem.find(idx); if (it != g_dabGainMem.end()) learned = it->second; }
+                if (learned >= 0) dabSeedGain(this, learned, Impl::nowSecs());
             }
             LOGI("[DAB] mode ON: channel %s, centre %.3f MHz, rate %.0f — dspLoop should follow",
                  vibedab::kBandIII[idx].name, centre / 1e6, double(vibedab::DabService::kRateHz));
@@ -18370,6 +18437,8 @@ void LocalSdrShim::setBookmarksPath(const std::string& path) {
         const size_t slash = path.find_last_of('/');
         g_dab.setRatioFile((slash == std::string::npos ? std::string() : path.substr(0, slash + 1)) + "dab-aac-ratio");
         g_dab.setCacheDir((slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-carousel");
+        { std::lock_guard<std::mutex> lk(g_dabGainMemMtx);
+          g_dabGainFile = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-gains.txt"; }
         g_dabLogoDir = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-logos";
         /* ★ The off-air slideshow store, beside the carousel and the RadioDNS logos: one file per
          *  service, so a station whose picture only exists on air is not re-read on every visit. */
@@ -19886,34 +19955,6 @@ static constexpr double kAgcVerdictSec    = 2.5;
  *  permanently disturbed receiver is merely slow rather than stuck. */
 static constexpr double kClimbTrialMaxSec = 20.0;
 
-/** Put the AGC straight at `wantSteps` below the ceiling and write that gain — the tick's own
- *  write path (steps, settle, pending write, notify) without a decision. Returns false when the
- *  radio has no gain list to map through (an RSP, a HF+). See g_dabGainMem. */
-template <class ImplT>   // ★ Impl is LocalSdrShim's private type; deduced, never named
-static bool dabSeedGain(ImplT* p, int wantSteps, double now) {
-    if (!p) return false;
-    std::lock_guard<std::recursive_mutex> hw(p->modeMtx);
-    if (!p->dev || p->radioReleased.load()) return false;
-    const int n = rtlsdr_get_tuner_gains(p->dev, nullptr);
-    if (n <= 1) return false;
-    std::vector<int> gains((size_t)n);
-    rtlsdr_get_tuner_gains(p->dev, gains.data());
-    const int target = g_gainTarget.load(std::memory_order_relaxed);
-    int tgtIdx = 0;
-    for (int i = 0; i < n; i++) if (gains[(size_t)i] <= target) tgtIdx = i;
-    int want = wantSteps; if (want > tgtIdx) want = tgtIdx; if (want < 0) want = 0;
-    const int idx = tgtIdx - want;
-    const int applied = gains[(size_t)idx];
-    g_ovlSteps.store(want, std::memory_order_relaxed);
-    g_ovlLastChangeAt.store(now, std::memory_order_relaxed);
-    agcSettleAfterGain(now);
-    p->lastGainTenthDb = applied;
-    { std::lock_guard<std::mutex> lk(p->hwWrMtx); p->pendingGainTenth = applied; }
-    p->hwWrCv.notify_one();
-    LOGI("[DAB] entering block %s at the gain it last decoded at: %.1f dB (%d steps below the ceiling)",
-         vibedab::kBandIII[g_dabChannel.load() < 0 ? 0 : g_dabChannel.load()].name, applied / 10.0, want);
-    return true;
-}
 void LocalSdrShim::overloadTick() {
     if (!p) return;
     if (p->useSpy() || p->useTcp() || p->useSdrplay()) return;   // they manage themselves
@@ -19982,13 +20023,11 @@ void LocalSdrShim::overloadTick() {
     if (g_dabMode.load(std::memory_order_relaxed)) {
         const int blk = g_dabChannel.load();
         if (!dabAcquiring && g_dab.quality().fibRate > 0.9f && blk >= 0) {
-            // ★ Decoding well: remember where the gain sits for this block.
+            // ★ Decoding well: remember where the gain sits for this block (and on disk when it moves).
             std::lock_guard<std::mutex> lk(g_dabGainMemMtx);
-            g_dabGainMem[blk] = steps;
-        } else if (dabAcquiring && g_dabSeedPending.exchange(false, std::memory_order_relaxed) && blk >= 0) {
-            int learned = -1;
-            { std::lock_guard<std::mutex> lk(g_dabGainMemMtx); auto it = g_dabGainMem.find(blk); if (it != g_dabGainMem.end()) learned = it->second; }
-            if (learned >= 0 && learned != steps && dabSeedGain(p, learned, now)) return;   // ★ this tick's work
+            dabGainLoadLocked();
+            auto it = g_dabGainMem.find(blk);
+            if (it == g_dabGainMem.end() || it->second != steps) { g_dabGainMem[blk] = steps; dabGainSaveLocked(); }
         }
     }
     const bool hurry = now < g_agcHurryUntil.load(std::memory_order_relaxed) || dabAcquiring;
