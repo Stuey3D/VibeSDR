@@ -2385,6 +2385,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   // flows). Used to tell a slow spectrum re-subscribe (audio still alive → keep
   // the calm "reinitialising" notice) from a genuine drop (audio dead too).
   const lastAudioAtRef = useRef(0);
+  /** When the current unbroken run of audio packets began — a gap over 400 ms starts a new run.
+   *  ★ A DAB station can fire a flash of audio as it starts and fall silent again, so "started"
+   *  needs a sustained run, not a first packet (Stuart, 2026-09-10). */
+  const audioRunStartRef = useRef(0);
   // OWRX reports a real channel S-meter (dBm) over the control WS — the
   // demodulator's own level reading, zoom-independent like UberSDR's SNR. We
   // store the latest value and let it drive the absolute (S-meter/dBFS) meter
@@ -3600,7 +3604,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       // 30 dB low (which is why its SNR is inflated), but basebandPower itself is calibrated: raw ≈
       // −73 dBFS = S9, matching the ka9q web S-meter. The −30 belongs to the SNR only, never here.
       if (typeof e.dbfs === 'number') audioDbfsRef.current = e.dbfs;
-      lastAudioAtRef.current = Date.now();
+      { const now = Date.now(); if (now - lastAudioAtRef.current > 400) audioRunStartRef.current = now; lastAudioAtRef.current = now; }
     });
     // Native ⏮⏭ defer to JS. Bookmark mode jumps the station list; step mode
     // (used by OWRX/Kiwi, whose tuning lives in JS) snaps by the tune step.
@@ -8659,6 +8663,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           blockIndex={dabBlock}
           onService={(sid) => client.current?.dabService?.(sid)}
           lastAudioAt={() => lastAudioAtRef.current}
+          audioRunStartAt={() => audioRunStartRef.current}
           onClose={() => setDabBoxOpen(false)}
           onExit={toggleDab}
           tall={dabTall} onTall={onDabTall}

@@ -345,6 +345,8 @@ export interface DabPanelProps {
   /** Date.now() of the last audio packet the app received, read on demand — for the "tuning in"
    *  line: a picked station stays marked as loading until sound has arrived SINCE the press. */
   lastAudioAt?: () => number;
+  /** Date.now() when the current unbroken run of audio packets began (see SDRScreen). */
+  audioRunStartAt?: () => number;
   /** Close the WINDOW and leave DAB running — the X. See onExit for the other one. */
   onClose: () => void;
   /** ★★★ TWO DOORS, AND THE DIFFERENCE MATTERS. Stuart, 2026-09-08: "the X button on the decoder
@@ -387,7 +389,10 @@ export default function DabPanel(p: DabPanelProps) {
    *  every DAB state update (about once a second), which is what makes the seconds count. */
   const [pickedAt, setPickedAt] = useState(0);
   const pick = (sid: number) => { setPickedAt(Date.now()); p.onService(sid); };
-  const heardSincePick = pickedAt > 0 && (p.lastAudioAt?.() ?? 0) >= pickedAt + 400;
+  // ★ A sustained second of packets whose run began after the press: a start-up flash then
+  //   silence never reaches a second, so the line stays up through it.
+  const runStart = p.audioRunStartAt?.() ?? 0, lastPkt = p.lastAudioAt?.() ?? 0;
+  const heardSincePick = pickedAt > 0 && runStart >= pickedAt + 400 && lastPkt - runStart >= 1000;
   if (heardSincePick && pickedAt > 0) setTimeout(() => setPickedAt(0), 0);
   const waitingSecs = (!!d && d.locked && !!d.sid && pickedAt > 0 && !heardSincePick)
     ? Math.floor((Date.now() - pickedAt) / 1000) : -1;

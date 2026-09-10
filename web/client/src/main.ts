@@ -4604,7 +4604,11 @@ function dabRender() {
      *  than no line, and it stuck for a minute on the first try because the audible timestamp was
      *  only written on one decode path. */
     const secsSincePick = dabPickedAt > 0 ? (performance.now() - dabPickedAt) / 1000 : 0;
-    const heard = !!audio && (audio.lastOutputAtMs >= dabPickedAt + 400 || (secsSincePick > 8 && audio.health === 'ok'));
+    // ★ A sustained SECOND of audible output whose run began after the press (+400 ms for the old
+    //   station's tail). A start-up flash followed by silence starts a run that never reaches a
+    //   second, so the line stays up through it. The health backstop is longer for the same reason.
+    const heard = !!audio && ((audio.audibleRunStartAtMs >= dabPickedAt + 400 && audio.audibleRunMs >= 1000)
+                              || (secsSincePick > 15 && audio.health === 'ok'));
     if (d.locked && d.sid && dabPickedAt > 0 && audio && !heard) {
       const secs = Math.floor(secsSincePick);
       // ★ Shown in the STATION'S live-text line, not the header (Stuart: "very squashed in that

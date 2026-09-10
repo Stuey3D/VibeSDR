@@ -224,12 +224,22 @@ class VibeSink extends AudioWorkletProcessor {
         this.port.postMessage({ jitterMs: Math.round(this.target / 48) });
       }
     }
+    let pk = 0;
     for (let i = 0; i < n; i++) {
       const r = (this.r + i) % this.cap;
       for (let c = 0; c < out.length; c++) out[c][i] = this.buf[Math.min(c, 1)][r];
+      const a = Math.abs(this.buf[0][r]); if (a > pk) pk = a;
     }
     this.r = (this.r + n) % this.cap;
     this.filled -= n;
+    // ★ AUDIBLE, as distinct from DRAINED: drained counts silence too (the buffer plays out
+    //   zeros between stations), so a "has the new station started?" test built on it fired
+    //   2-3 s early (Stuart, 2026-09-10). This is the peak of what actually left, on every
+    //   decode path, reported at most every ~100 ms.
+    if (pk > 0.002) {
+      this.audibleSince = (this.audibleSince || 0) + n;
+      if (this.audibleSince >= 4800) { this.audibleSince = 0; this.port.postMessage({ audible: 1 }); }
+    }
     // ★★★ SAY THAT SOUND IS ACTUALLY LEAVING. Everything else the page can see — frames arriving,
     //     packets decoding, a peak level, even a clean RECORDING — is measured BEFORE this node.
     //     So a stalled output looks identical to a healthy stream from every vantage point the
@@ -694,13 +704,14 @@ export class AudioPlayer {
         //   nobody can read is indistinguishable from a bug.
         this.node.port.onmessage = (e: MessageEvent) => {
           const d = e.data as { jitterMs?: number; drained?: number; underruns?: number;
-                                skips?: number };
+                                skips?: number; audible?: number };
           if (typeof d?.jitterMs === 'number') this.jitterMs = d.jitterMs;
           if (typeof d?.underruns === 'number') this.underruns = d.underruns;
           if (typeof d?.skips === 'number') this.skips = d.skips;
           // ★★★ THE ONLY PROOF THAT SOUND IS LEAVING. See the note in the worklet: every other
           //     signal this class has is measured before the node.
           if (typeof d?.drained === 'number') this.lastDrainAt = performance.now();
+          if (d?.audible) this._noteAudible();
         };
         this.node.connect(this.gain);
         this._connectOutput();
@@ -1846,7 +1857,7 @@ export class AudioPlayer {
         if (m > peak) peak = m;
       }
     }
-    if (peak > 0.002) this.lastAudibleAt = performance.now();
+    if (peak > 0.002) this._noteAudible();
     this.cb.onLevel?.(peak);
     if (this.node) this.node.port.postMessage({ l, r }, [l.buffer, r.buffer]);
     else if (this.ring) this._pushRing(l, r);
@@ -1925,7 +1936,19 @@ export class AudioPlayer {
    *  playout node's drain report. `lastAudibleAt` alone is only written on the PCM path, so on a
    *  worker-decoded stream it never moved and the DAB "tuning in" line stuck for a minute after
    *  the audio had started (Stuart, 2026-09-10). */
-  get lastOutputAtMs(): number { return Math.max(this.lastAudibleAt, this.lastDrainAt); }
+  get lastOutputAtMs(): number { return this.lastAudibleAt; }
+  /** When the current unbroken run of audible output began (performance.now()), and how long it
+   *  has lasted. ★ A DAB station can fire a FLASH of audio as it starts and fall silent again
+   *  (Stuart, 2026-09-10), so "started" needs a sustained run, not a first peak. A gap of more
+   *  than 400 ms between audible reports starts a new run. */
+  get audibleRunStartAtMs(): number { return this.audibleRunStart; }
+  get audibleRunMs(): number { return this.lastAudibleAt > 0 ? this.lastAudibleAt - this.audibleRunStart : 0; }
+  private audibleRunStart = 0;
+  private _noteAudible() {
+    const now = performance.now();
+    if (now - this.lastAudibleAt > 400) this.audibleRunStart = now;
+    this.lastAudibleAt = now;
+  }
   /** When the playout node last reported that it had actually put samples out. */
   private lastDrainAt = 0;
   private stallWatch: number | null = null;
@@ -1991,11 +2014,12 @@ export class AudioPlayer {
         this.node = new AudioWorkletNode(this.ctx, 'vibe-sink', { outputChannelCount: [2] });
         this.node.port.onmessage = (e: MessageEvent) => {
           const d = e.data as { jitterMs?: number; drained?: number; underruns?: number;
-                                skips?: number };
+                                skips?: number; audible?: number };
           if (typeof d?.jitterMs === 'number') this.jitterMs = d.jitterMs;
           if (typeof d?.underruns === 'number') this.underruns = d.underruns;
           if (typeof d?.skips === 'number') this.skips = d.skips;
           if (typeof d?.drained === 'number') this.lastDrainAt = performance.now();
+          if (d?.audible) this._noteAudible();
         };
         this.node.connect(this.gain!);
         this.lastDrainAt = performance.now();     // give the new node its own two seconds
