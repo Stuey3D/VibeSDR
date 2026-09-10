@@ -115,6 +115,10 @@ tools/vibeiq/out/
 build-san/
 vibeserver/build-san/
 
-# Fuzzing artefacts (scripts/fuzz-dab.sh) — the corpus is worth keeping, the builds are not.
+# Fuzzing artefacts (scripts/fuzz-dab.sh). ★ The corpus is worth keeping ON DISK — it is what
+# makes the next run start where the last one stopped — but it is 7.6 MB of generated inputs
+# after four minutes and grows without limit, so it stays local. A crash file is the thing to
+# commit, and only with the fix that closes it.
 vibeserver/build-fuzz/
 vibeserver/fuzz-crashes/
+vibeserver/fuzz-corpus/
