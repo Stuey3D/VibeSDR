@@ -673,6 +673,10 @@ int vibeserverTui() {
      *  from software they installed five minutes ago has been taught a habit we should not be
      *  teaching.
      *
+     *  ★★ AND IT DOES NOT PROMISE ONE PROMPT. This said "needs your administrator password once",
+     *     which is not true: sudo caches for about fifteen minutes, so changing a setting later, or
+     *     a run tomorrow, asks again. A sentence a user can catch you out on costs more than the
+     *     reassurance it buys.
      *  ★★ ASKED ONLY WHEN IT WILL ACTUALLY BE ASKED. `sudo -n true` succeeds silently when the
      *     credentials are already cached or the account needs no password, so a second run inside
      *     the timeout says nothing — an explanation that appears every time is noise, and noise is
@@ -683,12 +687,15 @@ int vibeserverTui() {
      *    to surface from inside an unrelated-looking command further down. */
     if (std::system("sudo -n true >/dev/null 2>&1") != 0) {
         std::printf(
-            "\nVibeServer needs your administrator password once.\n\n"
-            "  It is used to:\n"
-            "    - register VibeServer as a system service, so your radio starts serving\n"
+            "\nVibeServer needs administrator access to set itself up.\n\n"
+            "  Two things need it:\n"
+            "    - registering VibeServer as a system service, so your radio starts serving\n"
             "      automatically whenever this machine boots\n"
-            "    - keep the settings in %s, readable only by the server itself,\n"
-            "      because your admin password and any listening PIN are stored there\n\n"
+            "    - writing the settings to %s, which is owned by the\n"
+            "      server and kept unreadable by your own account, because your admin password\n"
+            "      and any listening PIN are stored in it\n\n"
+            "  The radio itself does NOT need this: the install put you in the plugdev group, so\n"
+            "  the dongle opens as you. Administrator access is only for the two things above.\n\n"
             "  You are being asked by sudo, not by VibeServer, and nothing leaves this machine.\n"
             "  Prefer not to? Press Ctrl-C and run it without a service:  vibeserver --serve\n\n",
             CONF);
