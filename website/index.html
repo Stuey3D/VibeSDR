@@ -64,10 +64,24 @@
      printed. */
   #onAirBar {
     position: sticky; top: 0; z-index: 60; overflow: hidden;
-    background: #140604; border-bottom: 1px solid #3a1512;
+    /* ★ Pure black behind the dial, as a receiver's face is — the banner was a dark red-brown,
+       which the green ticks and their glow sat on badly. */
+    background: #000;
+    /* ★★ THE DIAL'S OWN BASELINE IS THE DIVIDER. It used to be a dark red rule while a green line
+       from the coverage strip sat up inside the banner, so the bar had two edges and neither read
+       as the boundary (Stuart, 2026-09-11: "the green line needs to move below the shadowed box
+       and act as the divide between the bar and the page"). One lit green line, under everything,
+       in the same hue as the dial face above it. */
+    border-bottom: 1px solid hsl(120,100%,45%);
+    box-shadow: 0 1px 10px hsla(120,100%,45%,.35);
   }
   #onAirBar svg { position: absolute; inset: 0; width: 100%; height: 100%; }
-  .oa-inner { position: relative; z-index: 1; max-width: var(--maxw); margin: 0 auto; padding: 7px 20px;
+  /* ★★ THE WORDING RIDES ON A PANEL, NOT ON A SHADOW. A text-shadow spread the banner's own dark
+     red into the dial behind and simply smeared it out (Stuart, 2026-09-11: "the green shadow
+     hides it"). A translucent black plate is the honest version: the dial keeps its glow and runs
+     on past the edges of the panel, and the text has something solid to sit on. */
+  .oa-inner { background: rgba(0,0,0,0.55); backdrop-filter: blur(1.5px);
+    border-radius: 8px; position: relative; z-index: 1; max-width: var(--maxw); margin: 0 auto; padding: 7px 20px;
     display: flex; align-items: center; gap: 16px; flex-wrap: nowrap; min-height: 42px;
     text-shadow: 0 0 6px var(--bg), 0 0 2px var(--bg), 0 0 10px var(--bg); }
   /* ★ The lamp: red because every studio sign is red. */
@@ -83,16 +97,42 @@
   .oa-what b { color: var(--phosphor); font-weight: 700; }
   .oa-what:hover { color: #ffe566; }
   .oa-keys { margin-left: auto; flex: none; display: flex; gap: 8px; }
-  .oa-join { flex: none; padding: 7px 14px; background: var(--phosphor); color: #041a0a; text-decoration: none;
-    font: 700 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; text-shadow: none; box-shadow: 0 0 16px rgba(40,167,69,.35); }
-  .oa-join:hover { background: #3fd25f; color: #041a0a; }
-  .oa-listen { flex: none; padding: 7px 14px; background: #ff4d3d; color: #120603; text-decoration: none;
-    font: 700 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; text-shadow: none; box-shadow: 0 0 16px rgba(255,77,61,.35); }
-  .oa-listen:hover { background: #ff6a58; color: #120603; }
+  /* ★★ THE BUTTONS TAKE THE DIAL'S OWN TWO COLOURS. They were the site's --phosphor green and a
+     separate #ff4d3d red, both a shade off the LED palette now used by the ticks and the needle —
+     near-misses, which read worse than a deliberate contrast would. One green and one red across
+     the whole banner: the dial face, the needle, and the two things you can press.
+     Stuart, 2026-09-11: "match the red of the listen now and join the network buttons to the dial
+     and needle". */
+  .oa-join { flex: none; padding: 7px 14px; background: hsl(120,100%,45%); color: #041a0a; text-decoration: none;
+    font: 700 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; text-shadow: none; box-shadow: 0 0 16px hsla(120,100%,45%,.35); }
+  .oa-join:hover { background: hsl(120,100%,55%); color: #041a0a; }
+  .oa-listen { flex: none; padding: 7px 14px; background: hsl(4,95%,52%); color: #120603; text-decoration: none;
+    font: 700 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; text-shadow: none; box-shadow: 0 0 16px hsla(4,95%,52%,.35); }
+  .oa-listen:hover { background: hsl(4,95%,62%); color: #120603; }
   @media (max-width: 640px) { .oa-inner { gap: 10px; padding: 6px 12px; } .oa-what { font-size: 11.5px; white-space: normal; line-height: 1.3; } .oa-range { display: none; } .oa-keys { flex-direction: column; gap: 4px; } .oa-listen, .oa-join { padding: 5px 10px; font-size: 11px; text-align: center; } }
   .seg.free { fill: var(--phosphor); } .seg.busy { fill: var(--busy); } .seg.temp { fill: var(--temp); }
   .seg.unknown { fill: var(--dim); } .seg.gap { fill: transparent; }
   .vfo { stroke: #ff3b30; stroke-width: 2; }
+  /* ★★ THE DIAL AND ITS NEEDLE. The scale is faded phosphor so it reads as the printed face of a
+     receiver; the needle is the only bright thing in the banner, because on a dial there is only
+     ever one. Earlier attempts put RED marks here and both read as faults rather than markings —
+     short ones looked like "broken remnants" of the needle, full-height ones drew "thin lines
+     over the bar" through the wording (Stuart, 2026-09-11). A green scale at the foot and a red
+     needle over it is the arrangement every real receiver already uses. */
+  /* ★★ A LIT DIAL FACE. The glow is on the GROUP, not on each of the ~97 lines — one filter pass
+     instead of ninety-seven, which matters because this repaints on every scroll frame. */
+  /* ★★★ THE APP'S OWN LED PALETTE, not the site's. These are the exact values FmdxDial.tsx uses,
+     where the note reads "Match the VFO drum's LED palette: green digits (hue 120), warm red
+     needle (hue 4), on a near-black face" — so the dial on the website is the same dial the app
+     draws, rather than a lookalike in the site's softer --phosphor. Stuart, 2026-09-11: "the
+     green needs to match the green of the dial in the FM-DX screen and the red needle too". */
+  .dial { filter: drop-shadow(0 0 3px hsla(120,100%,45%,.5)); }
+  .dial-tick { stroke: hsla(120,100%,45%,0.28); stroke-width: 1; }
+  .dial-tick.major { stroke: hsl(120,100%,45%); }
+  /* ★ The needle is the one lit thing that moves: a hot core with a red bloom around it. */
+  .vfo-sweep { stroke: hsl(4,95%,52%); stroke-width: 2;
+    filter: drop-shadow(0 0 3px hsla(4,95%,52%,.95)) drop-shadow(0 0 9px hsla(4,95%,52%,.6)); }
+
   .vfo-cap { fill: #ff3b30; }
 
   /* ══ HEADER ══ */
@@ -432,7 +472,7 @@
       <div class="stack">
       <figure>
         <img class="bezel" src="assets/shots/mac-advanced-rds.webp" loading="lazy" alt="The Mac app listening to that phone, with Advanced RDS fully decoded: station name, RadioText, the AF list, MPX signal to noise 29 dB, constellation and MPX plots" />
-        <figcaption>The other end. The Mac app listening to that phone, with Advanced RDS fully decoded from the signal it sent: station, RadioText, AF list, MPX S/N, constellation, group share. Nobody else can show this picture, because nobody else owns the demodulator that produced it.</figcaption>
+        <figcaption>The other end. The Mac app listening to that phone, with Advanced RDS fully decoded from the signal it sent: station, RadioText, AF list, MPX S/N, constellation, group share. The same DSP runs on the phone, the server and the watch, so this analysis travels with you rather than waiting on a desktop.</figcaption>
       </figure>
       <figure>
         <img class="bezel" src="assets/shots/web-client-dab-xcover.webp" loading="lazy" alt="The web client in a browser tuned to DAB block 11A on that phone: the SDL National ensemble with 31 services listed, each with its logo and live programme text, Radio X Classic Rock playing, the status bar reading 62 KB/s at 8.8 fps" />
@@ -450,7 +490,7 @@
             <li><b>No port forwarding.</b> The tunnel dials out, so nothing opens on your router. It works behind CGNAT, where forwarding is not merely awkward but impossible.</li>
             <li><b>No DDNS, no address to chase.</b> You get a stable name under vibeserver.vibesdr.net.</li>
             <li><b>Your home address stays private.</b> Listeners connect to Cloudflare. They never see, and never connect to, the machine in your house.</li>
-            <li><b>Real HTTPS.</b> A port-forwarded home server cannot have a certificate, so its listeners get "Not Secure" and its admin password crosses in clear. The tunnel is the more secure option for the listener, not a compromise for the host.</li>
+            <li><b>HTTPS with nothing to maintain.</b> A port-forwarded server can be given a certificate &mdash; plenty of operators do &mdash; but somebody has to obtain it, renew it and keep it configured. The tunnel arrives with HTTPS already on, no certificate to manage and no port open on the router.</li>
           </ul>
           <p class="fine">Set a PIN and it's yours and your club's. Leave it open and it's on the directory. The settings stay behind an admin password either way.</p>
         </div>
@@ -625,9 +665,16 @@
     <div>
       <span class="lbl">How it's made</span>
       <h2 style="margin-top:8px">Vibe-coded. Named so you'd know.</h2>
+      <p style="margin-top:14px">I wanted something I could use up a ladder working on antennas: tools in one hand, something to see the results on in the other, all worked with one thumb. A spectrum analyser would have done the job, but that is money spent when I already owned SDRs that could do the same. What I actually had was <a href="https://youtube.com/shorts/5HtoGd5Lco8" target="_blank" rel="noopener">SDR++ Brown on an Android phone with a Bluetooth trackball to point at it</a> &mdash; workable propped on a steering wheel, impossible up a ladder &mdash; because the interface was drawn for a desktop and something had to stand in for the mouse. <a href="https://www.youtube.com/watch?v=iY3Qxx1YU1g" target="_blank" rel="noopener">That was a session, start to finish</a>. VibeSDR exists to get rid of the trackball: it is built to feel as close to a real handheld radio as a phone can manage &mdash; a dial you turn with your thumb, not a cursor you push around a screen.</p>
+      <figure style="margin:18px 0 0">
+        <img src="assets/shots/before-vibesdr-trackball.webp" loading="lazy" style="width:100%;height:auto;border-radius:10px;display:block"
+             alt="A phone in a rugged case wedged against the steering wheel of a Nissan, running SDR++ Brown on 3.766 MHz with the 80m ham band and 75m broadcast segments marked and decoded callsigns overlaid on the waterfall. A Bluetooth trackball sits behind it." />
+        <figcaption>Before VibeSDR: 3.766 MHz from the driver&rsquo;s seat, on a desktop interface. The trackball behind the phone is not an accessory &mdash; it is what the interface required.</figcaption>
+      </figure>
       <p style="margin-top:14px">I'm not a licensed amateur and I don't transmit. I'm a listener. It started on the east coast of England as a kid, pulling Dutch television in on an indoor aerial when the weather was exactly right. I didn't know I was watching a Sporadic-E opening. I still chase it.</p>
       <p>I am not a developer and I won't pretend to be one. I'm the concept, the UI and the tester, and the readme says so. Claude writes the code. Every decision, every dead end and every release sign-off is mine, and the whole history, failed experiments included, is on GitHub for anyone to read. A user has already fixed a bug and sent a pull request.</p>
       <p>Nothing ships that I haven't driven myself on real hardware. The RDS analyser was checked against a professional broadcast analyser by someone who owns one. The DAB decoder took four days of chasing a breakup before it was right. Where I couldn't test, like HackRF, I worked with someone who could.</p>
+      <p>The repository runs GitHub's CodeQL code scanning across Swift, Kotlin, C/C++, JavaScript and Python, with Dependabot watching the dependencies. That is a process, not a promise: the findings are public in the repository's Security tab, open ones included.</p>
       <p>The App Store price covers Apple's fees. The source is GPLv3, the APK is free, and it stays that way.</p>
     </div>
     <div>
@@ -763,17 +810,60 @@ function drawBar(servers) {
   const L = Math.log10(lo), R = Math.log10(hi);
   const x = (v) => ((Math.log10(Math.max(v, lo)) - L) / (R - L) * 1000).toFixed(2);
   let d = '';
-  for (const g of segs) {
-    if (g.state === 'gap') continue;
-    const a = x(g.lo), b = x(g.hi);
-    d += `<rect class="seg ${g.state}" x="${a}" y="0" width="${Math.max(0.6, b - a).toFixed(2)}" height="100" opacity=".10"/>`;
-    d += `<rect class="seg ${g.state}" x="${a}" y="90" width="${Math.max(0.6, b - a).toFixed(2)}" height="10" opacity=".55"/>`;
+  /* ★★★ THE COVERAGE SHADING IS GONE, AND THE BANNER IS A DIAL FACE NOW (Stuart, 2026-09-11: "the
+   *    dial background needs to be pure black and it doesnt need the fainter different coloured
+   *    green line").
+   *
+   *  It used to draw each covered span twice — a 10% wash up the full height and a brighter strip
+   *  along the foot — which put a second, duller green line under the dial and tinted the black
+   *  behind it. Two greens a few percent apart read as a mistake rather than as two facts.
+   *  ★ Nothing true is lost: the range this covers is stated in words beside the counts
+   *    ("1 kHz – 1766 MHz"), and the segs are still walked below for those figures. What has gone
+   *    is a picture of the coverage nobody could read at 40 pixels tall.
+   *  ★ `segs`, `lo` and `hi` are still computed and still returned — the caller prints the range
+   *    from them, so this removes the drawing and not the data. */
+  /* ★★★ A DIAL FACE FOR THE NEEDLE TO MOVE AGAINST (Stuart, 2026-09-11: "a little thin stylised
+   *    green dial ticks so the red needle has something to move against ... so when scrolling the
+   *    page looks like you are tuning a proper dial").
+   *
+   *  ★★ EVENLY SPACED, AND DELIBERATELY SO. The first cut derived the marks from the bar's own
+   *     LOG scale, which is honest but looks broken here: 1 kHz to 1766 MHz is six decades, so
+   *     every mark below about 10 MHz piles into the left-hand edge and the rest of the dial is
+   *     bare. The directory's dial reads well because it is LINEAR — evenly spaced marks with
+   *     labels — and that even rhythm is what the eye reads as a dial. So these are gradations,
+   *     matched to the directory and the app, not a second frequency scale: the bar already
+   *     states its range in words beside the counts, and the coverage is the shading behind.
+   *  ★ Kept LOW in the banner so it is a surface, not a pattern over the wording. */
+  {
+    const MINOR = 96;
+    d += '<g class="dial">';
+    for (let i = 0; i <= MINOR; i++) {
+      const tx = (i / MINOR * 1000).toFixed(2);
+      const major = (i % 8 === 0);
+      // ★ Centred on the banner: the marks sit BEHIND the lamp, the counts and the buttons, which
+      //   ride over them on their own translucent panel. Major marks are taller, as on a dial face.
+      const h = major ? 30 : 16;
+      d += `<line class="dial-tick${major ? ' major' : ''}" x1="${tx}" y1="${50 - h / 2}" x2="${tx}" y2="${50 + h / 2}" vector-effect="non-scaling-stroke"/>`;
+    }
+    d += '</g>';
   }
-  // ★ The VFO sits where a radio in the network is tuned right now. A real frequency, not a prop.
-  if (tuned.length) {
-    const v = x(tuned[Math.floor(Math.random() * tuned.length)]);
-    d += `<line class="vfo" x1="${v}" y1="0" x2="${v}" y2="100" vector-effect="non-scaling-stroke"/>`;
-  }
+  /* ★★★ AND A SWEEP LINE THAT FOLLOWS THE READER (Stuart, 2026-09-11). It used to be a single
+   *    needle placed on ONE tuned radio picked AT RANDOM on every directory refresh, which is why
+   *    it appeared to move for no reason anybody could see. Scroll drives it now, left to right
+   *    across the band as you read the page.
+   * ★★ IT IS A READING POSITION, NOT A DIAL, and it must not be dressed as one — a line that
+   *    sweeps wherever the reader happens to be is decoration, and calling it a VFO would be the
+   *    same overclaim as the two taken off this page this morning. The real dials are the ticks
+   *    above; this is thinner, dimmer and unlabelled.
+   * ★ Continuous, not snapped between ticks: snapping is what made it jump, and CSS transitions
+   *    do not apply to SVG x1/x2 attributes, so there was nothing smoothing it either. */
+  /* ★ A plain lit filament. An acrylic body was tried here — a gradient flank with a lit and a
+   *  shadowed edge, the trick DrumWheel.tsx uses — and it did not render cleanly at this size:
+   *  the banner is ~40px tall and the SVG is stretched with preserveAspectRatio="none", so a
+   *  shape a few user-units wide lands on fractional pixels and comes out banded. A stroked line
+   *  with a glow is immune to that, because the stroke is non-scaling (Stuart, 2026-09-11:
+   *  "remove it it doesnt render correctly in the page"). */
+  d += `<line class="vfo-sweep" id="vfoNeedle" x1="0" y1="0" x2="0" y2="100" vector-effect="non-scaling-stroke"/>`;
   svg.setAttribute('viewBox', '0 0 1000 100');
   svg.innerHTML = d;
   return [lo, hi];
@@ -895,6 +985,34 @@ async function loadDirectory() {
 }
 loadDirectory();
 loadSpectrogram();
+
+/* ★★ THE ON-AIR SWEEP FOLLOWS THE READER. Top of the page is the left edge of the band, the
+ *  footer the right, mapped continuously so it glides rather than jumps. The real tuned
+ *  frequencies are the separate ticks — see drawBar().
+ *  ★ rAF-coalesced: scroll fires far faster than the screen refreshes, and this touches the DOM.
+ *  ★ Silent when the directory gave us nothing to point at: no marks, no needle, no handler work. */
+(function () {
+  let queued = false;
+  function place() {
+    queued = false;
+    const line = document.getElementById('vfoNeedle');
+    if (!line) return;
+    const doc = document.documentElement;
+    const travel = (doc.scrollHeight - window.innerHeight) || 1;
+    const p = Math.min(1, Math.max(0, window.scrollY / travel));
+    // ★ The viewBox is 0..1000, so scroll maps straight onto it: top of the page is the left edge
+    //   of the band, the footer is the right. Continuous, which is what makes it smooth.
+    const v = (p * 1000).toFixed(2);
+    line.setAttribute('x1', v);
+    line.setAttribute('x2', v);
+  }
+  window.addEventListener('scroll', function () {
+    if (!queued) { queued = true; requestAnimationFrame(place); }
+  }, { passive: true });
+  window.addEventListener('resize', function () {
+    if (!queued) { queued = true; requestAnimationFrame(place); }
+  }, { passive: true });
+})();
 // ★ The demo phone's age, computed so the sentence never dates. The Galaxy XCover 4s shipped in 2019.
 (() => {
   const el = $('phoneAge'); if (!el) return;
