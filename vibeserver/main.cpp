@@ -2499,7 +2499,23 @@ int main(int argc, char** argv) {
                         return dir + "/" + sc.radios[(size_t)idx].serial + ".sock";
                     }
                     if (path.rfind("/r/", 0) != 0) return "";
-                    const size_t e2 = path.find('/', 3);
+                    /* ★★★ THE ID ENDS AT '?' AND '#' TOO, NOT ONLY AT '/'. This looked for the next
+                     *     SLASH, so a request with a query and no trailing slash —
+                     *     "/r/59a1a7d0?join=1" — made the serial "59a1a7d0?join=1", matched no
+                     *     radio, and the front door served its own "that radio is not answering".
+                     *
+                     * ★★★ AND THAT IS THE ORDINARY PATH THROUGH A TUNNEL. The landing page's radio
+                     *     card links to "/r/<id>/?join=1" WITH a trailing slash, so it worked on a
+                     *     LAN and over a port forward — but Cloudflare normalises the trailing
+                     *     slash away in transit, and the origin receives "/r/<id>?join=1". So the
+                     *     one route every listener takes from the front door was broken through
+                     *     the tunnel and only through the tunnel (Stuart, 2026-09-11: "but the
+                     *     tunnel always fails", while the local IP was always fine).
+                     * ★ Measured: the front door's own log says it plainly —
+                     *     route /r/59a1a7d0?join=1 -> (here)        [503]
+                     *     route /r/59a1a7d0        -> …2235030199.sock  [200]
+                     * ★ find_first_of, so any future query-bearing link is safe as well. */
+                    const size_t e2 = path.find_first_of("/?#", 3);
                     const std::string serial = path.substr(3, e2 == std::string::npos
                                                               ? std::string::npos : e2 - 3);
                     if (serial.empty() || serial == g_myRadioSerial

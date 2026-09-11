@@ -11597,8 +11597,21 @@ struct LocalSdrShim::Impl {
                 if (reqLine.compare(sp + 1, pre->size(), *pre) != 0) continue;
                 // Leave a leading '/' behind: "/r/ABC" + "/ws/audio" -> "/ws/audio", and
                 // "/r/ABC" alone -> "/", which is the receiver page.
+                /* ★★★ AND "/r/ABC?join=1" -> "/?join=1", NOT "?join=1". This tested only for the
+                 *     end of the path or a space, so a prefix followed immediately by a QUERY lost
+                 *     its leading slash and the radio 404'd the request the front door had just
+                 *     handed it — the second half of the same fault fixed in main.cpp's router.
+                 * ★★ Both halves only ever fire through a tunnel, because the landing page's card
+                 *    links to "/r/<id>/?join=1" WITH a trailing slash and Cloudflare normalises it
+                 *    away in transit. On a LAN the slash survives and neither bug is reachable,
+                 *    which is precisely why "the tunnel always fails" and the local IP never did
+                 *    (Stuart, 2026-09-11).
+                 * ★ Fixing only the router moved the failure from 503 to 404 — the hand-off then
+                 *   succeeded and the radio refused the path. Exactly the shape of the 2026-08-09
+                 *   fault noted above: two readers of one rule, and only one of them updated. */
                 const size_t cut = sp + 1 + pre->size();
-                const bool bare = (cut >= reqLine.size() || reqLine[cut] == ' ');
+                const bool bare = (cut >= reqLine.size() || reqLine[cut] == ' '
+                                   || reqLine[cut] == '?' || reqLine[cut] == '#');
                 reqLine = reqLine.substr(0, sp + 1) + (bare ? "/" : "") + reqLine.substr(cut);
                 break;
             }
