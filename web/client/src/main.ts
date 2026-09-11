@@ -9830,7 +9830,20 @@ function populateHw() {
       // is absent for an RSP for the same measured reason 3.2 is absent for a dongle — so
       // anything still on offer here is safe on THIS receiver.
       const risky = radioCaps?.driver !== 'sdrplay' && rate > RTL_SAFE_RATE;
-      o.textContent = risky ? `${mhz} (may drop samples)` : mhz;
+      /* ★★★ AND ON AN RSP, WHAT THE RATE COSTS IN BITS. The converter trades resolution for
+       *     bandwidth in hardware (RSP1A specs): 14-bit to 6.048 MS/s, 12-bit to 8.064, 10-bit
+       *     to 9.216, 8-bit above. So picking 8 MS/s quietly gives up TWO BITS of dynamic range
+       *     for span the listener may not need — the most consequential thing about the choice,
+       *     and the one thing neither picker said. The same label is on the setup page; this is
+       *     the other place the decision is actually made (Stuart, 2026-09-11).
+       * ★ RSP only. On a dongle it would be a lie — an RTL is 8-bit at every rate — and the
+       *   dongle's own caveat above is the one that matters there. Exactly the rule in AGENTS.md:
+       *   branch on the driver or leave it out. */
+      const bits = radioCaps?.driver === 'sdrplay'
+        ? (rate <= 6048000 ? 14 : rate <= 8064000 ? 12 : rate <= 9216000 ? 10 : 8) : 0;
+      o.textContent = risky ? `${mhz} (may drop samples)`
+                    : bits  ? `${mhz} — ${bits}-bit ADC`
+                            : mhz;
       r.appendChild(o);
     }
     r.onchange = () => {
