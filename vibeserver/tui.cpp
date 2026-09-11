@@ -664,6 +664,40 @@ void statusScreen(vsconfig::Config& cfg) {
 } // namespace
 
 int vibeserverTui() {
+    /* ★★★ SAY WHAT THE PASSWORD IS FOR, BEFORE ASKING FOR IT.
+     *
+     *  The very first thing this program did was shell out to `sudo cat`, so a person running
+     *  `vibeserver` for the first time met a bare "[sudo] password for ..." with no explanation of
+     *  what wanted root or why. Stuart, 2026-09-11: "cant expect people to randomly allow sudo
+     *  access." He is right, and anybody who types their root password into an unexplained prompt
+     *  from software they installed five minutes ago has been taught a habit we should not be
+     *  teaching.
+     *
+     *  ★★ ASKED ONLY WHEN IT WILL ACTUALLY BE ASKED. `sudo -n true` succeeds silently when the
+     *     credentials are already cached or the account needs no password, so a second run inside
+     *     the timeout says nothing — an explanation that appears every time is noise, and noise is
+     *     what people learn to click past.
+     *  ★ Printed BEFORE initscr(), because this is the one moment the terminal is still plain: a
+     *    sudo prompt underneath a curses screen is invisible, and the program looks hung.
+     *  ★ `sudo -v` takes the password here, with the reason still on screen, rather than leaving it
+     *    to surface from inside an unrelated-looking command further down. */
+    if (std::system("sudo -n true >/dev/null 2>&1") != 0) {
+        std::printf(
+            "\nVibeServer needs your administrator password once.\n\n"
+            "  It is used to:\n"
+            "    - register VibeServer as a system service, so your radio starts serving\n"
+            "      automatically whenever this machine boots\n"
+            "    - keep the settings in %s, readable only by the server itself,\n"
+            "      because your admin password and any listening PIN are stored there\n\n"
+            "  You are being asked by sudo, not by VibeServer, and nothing leaves this machine.\n"
+            "  Prefer not to? Press Ctrl-C and run it without a service:  vibeserver --serve\n\n",
+            CONF);
+        std::fflush(stdout);
+        // ★ The result is deliberately ignored: if the password is refused or wrong, the read below
+        //   fails and prints its own, more specific message about the configuration.
+        (void)!std::system("sudo -v");
+    }
+
     vsconfig::Config cfg;
     std::string err;
     const int have = loadConfigViaSudo(cfg, err);
