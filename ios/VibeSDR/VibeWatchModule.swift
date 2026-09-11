@@ -676,6 +676,30 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
 
   // MARK: - Watch -> Phone
 
+  /* ★★★ ANSWER THE PING. THE REPLY IS THE POINT OF IT.
+   *
+   *  Buddy's watchdog asks one question — "is the phone still there" — and its heartbeat is how it
+   *  asks. Until now nothing was sent back, so the answer had to be inferred from whatever traffic
+   *  happened to be flowing for other reasons: rows, a state echo, a changed payload. That holds
+   *  right up to the moment a session goes quiet for a legitimate reason, and a settled DAB
+   *  ensemble is precisely that — watchProvider.flushDab() returns early when the JSON has not
+   *  changed, so with the multiplex acquired and nothing altering, this app had nothing to say and
+   *  the wrist declared it dead five seconds later (Stuart, 2026-09-11).
+   *
+   *  ★★ THE REPLY COMES FIRST, AND FROM NATIVE. First, because answering must not wait on the work
+   *     — the same rule the row handler already follows. From native, because the question is "is
+   *     this process alive", and this delegate running IS the answer; routing it through the JS
+   *     bridge would make a busy bundle look like a closed app, which is the very confusion being
+   *     fixed.
+   *  ★ Only the ping needs this. Everything else Buddy sends uses replyHandler: nil and lands in the
+   *    plain handler below, so adding this variant changes nothing else — but it must forward, or a
+   *    future command sent WITH a reply would be silently dropped by the delegate that answered it. */
+  func session(_ s: WCSession, didReceiveMessage message: [String: Any],
+               replyHandler: @escaping ([String: Any]) -> Void) {
+    replyHandler(["k": "pong"])
+    session(s, didReceiveMessage: message)
+  }
+
   func session(_ s: WCSession, didReceiveMessage message: [String: Any]) {
     sawWatch()
     /* ★★★ PRODUCE AUDIO BEFORE DOING ANYTHING ELSE — THIS LINE IS THE COLD-START FIX.

@@ -984,8 +984,20 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
   func browse(_ dir: String) {
     // ★ Durable: a directory request is worth waking the phone for — see sendDurable.
     sendDurable(["cmd": "browse", "dir": dir])
+    /* ★★★ DO NOT SPEND 20 SECONDS FINDING OUT WHAT WE ALREADY KNOW. The long wait is for the case
+     *  the comment above describes — a phone that MIGHT still answer, where cutting a slow-but-
+     *  working fetch off early would be wrong. When the user has quit the app themselves we are not
+     *  guessing: the goodbye told us, and `deliberatelyClosed` is the one flag that means it. Stuart,
+     *  2026-09-11, having just quit VibeSDR: Buddy "act[ed] as if there was no app on the phone at
+     *  all sitting stuck loading on the servers directory". It would have resolved on its own — but
+     *  twenty seconds of spinner in front of someone who knows perfectly well what they just did
+     *  reads as broken, and nobody waits that long to be told something they already know.
+     *  ★ Four seconds, not zero, because the browse itself is durable and may WAKE the app — that is
+     *    what it is for. If the phone comes up and answers, the reply clears the silent mark
+     *    (see the `dir` case) and the list replaces the message. Self-correcting either way. */
+    let wait: TimeInterval = deliberatelyClosed ? 4.0 : 20.0
     browseTimers[dir]?.invalidate()
-    browseTimers[dir] = Timer.scheduledTimer(withTimeInterval: 20.0, repeats: false) { [weak self] _ in
+    browseTimers[dir] = Timer.scheduledTimer(withTimeInterval: wait, repeats: false) { [weak self] _ in
       guard let self else { return }
       Task { @MainActor in
         self.browseTimers[dir] = nil
@@ -1081,8 +1093,41 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       if quiet > 6 { requestMissing() }
     }
 
-    // Mid-reopen: keep asking to reopen (a single reopen can be dropped during relaunch).
-    send(reopenPending ? ["cmd": "reopen"] : ["cmd": "ping"])
+    /* ★★★ AND THE PING IS ANSWERED NOW — WHICH IS THE WHOLE POINT OF SENDING ONE.
+     *
+     *  The watchdog above asks "is the phone still there". The ping asks the phone exactly that,
+     *  four times a minute — and the phone sent nothing back, so the answer had to be inferred from
+     *  whatever traffic happened to be flowing for OTHER reasons. That works right up until the
+     *  session goes quiet legitimately, and a settled DAB ensemble is exactly that: the dab payload
+     *  is deduped (`flushDab` returns early when the JSON has not changed), so with the multiplex
+     *  acquired and nothing altering, the phone had nothing to say. Five seconds later this watch
+     *  declared a working app dead.
+     *
+     *  ★★ THAT IS THE 10-SECOND CYCLE. Stuart, 2026-09-11: "it went back to the VibeSDR not running
+     *     screen even though it was and when I pressed the start button it returned to the DAB
+     *     screen but only stayed up for about 10 seconds before saying the app was not running
+     *     again." Pressing Start sent `reopen`, whose handler calls flushAll() — which clears the
+     *     dedupe and re-sends the ensemble, so the screen came back — and then the session settled,
+     *     went quiet again, and the watchdog fired again. The cure and the fault were the same
+     *     mechanism.
+     *
+     *  ★ A reply costs nothing and cannot desync: it is not a flag anyone has to remember to set,
+     *    it is the transport confirming the counterpart answered. The phone's own note beside this
+     *    command already said "the reply is free"; it simply never sent one.
+     *  ★ Stamped as lastAnyAt, the same field every other inbound message stamps, so the watchdog
+     *    needs no new case — see the note there about every message kind counting. */
+    if reopenPending {
+      send(["cmd": "reopen"])
+    } else if let s = session, s.isReachable {
+      s.sendMessage(["cmd": "ping"], replyHandler: { [weak self] _ in
+        DispatchQueue.main.async { self?.lastAnyAt = Date() }
+      }, errorHandler: { _ in
+        /* ★ SILENT ON PURPOSE. A failed ping is not evidence the app is gone — the link blips
+         *  constantly over Bluetooth — and the watchdog above already draws that conclusion from
+         *  sustained silence, with a grace period. Concluding it here as well would be a second
+         *  reader of the same rule, and a far twitchier one. */
+      })
+    }
 
     // ONE-WAY LINK RECOVERY, from this end.
     //
