@@ -366,7 +366,16 @@
   <div class="wrap"><span class="hero-spg-cap" id="heroSpgCap" hidden></span></div>
   <div class="wrap hero-grid">
     <div>
-      <h1>Old or new. Low end or high end. Big or small.</h1>
+      <!-- ★★★ WHAT IT IS, NOT WHAT IT SCALES TO. This read "Old or new. Low end or high end. Big
+           or small." — which describes a feature, and left a first-time visitor unable to tell
+           from the headline that this is a radio at all. The scaling line has moved down to sit
+           over the resize demos, where it describes what is actually on screen.
+           ★★ The new line states the design intent behind the drum and the keys: one hand, and as
+              close to a real set as a sheet of glass gets. It is also the one thing no other
+              mobile SDR is aiming at, which is what a headline is for.
+           ★ NOTHING ABOUT HOW IT WAS BUILT BELONGS HERE. That is the "How it's made" section at
+             the foot of the page, and it stays there. -->
+      <h1>One hand. As close to a real radio as a touchscreen gets.</h1>
       <p class="lede" style="margin-top:16px">A full SDR ecosystem, not just an app: the VibeSDR receiver, the VibeServer that feeds it, and VibeSDR Jr on your wrist, all running the same DSP and the same dial. Not a desktop app squashed down to fit a phone: every screen gets a layout designed and optimised for it, from a watch face to a monitor. Tune the shared networks it speaks, UberSDR, OpenWebRX, KiwiSDR, FM-DX, SpyServer and rtl_tcp, or plug a dongle in and tune your own. Or host your own VibeServer and share it with everyone.</p>
       <div class="keys" style="margin-top:22px">
         <a class="key primary" href="https://apps.apple.com/gb/app/vibesdr/id6786344049">App Store <span class="price">£2.99</span></a>
@@ -375,6 +384,16 @@
       </div>
       <p class="fine" style="margin-top:16px">£2.99 covers Apple's developer fees. The source is free and always will be. No subscription, no account, nothing phoned home.</p>
       <p class="fine">The APK above installs straight from GitHub and needs no Google at all. Prefer the Play Store version? It is in Google's closed testing: <a href="https://groups.google.com/g/vibesdr-play-store-test">join the Google Group</a> first, then Google's <a href="https://play.google.com/apps/testing/com.vibesdr.app">opt-in link</a> lets you in.</p>
+      <!-- ★★ THE ARGUMENT, IN ONE PICTURE, HIGH ON THE PAGE. A still rather than a video so it is
+           there the moment the page paints — the two demos beside it are already video, and a
+           third would push the first meaningful paint out for the sake of a shot that does not
+           move anyway. -->
+      <figure style="margin:26px 0 0">
+        <img src="assets/shots/before-vibesdr-trackball.webp" loading="eager" decoding="async"
+             style="width:100%;max-width:420px;height:auto;border-radius:10px;display:block"
+             alt="A phone in a rugged case wedged against the steering wheel of a car, running SDR++ Brown on 3.766 MHz with the 80m ham band and 75m broadcast segments marked and decoded callsigns overlaid on the waterfall. A Bluetooth trackball sits behind it." />
+        <figcaption>Before VibeSDR: a Bluetooth trackball on the passenger seat, because the interface was built for a desktop.</figcaption>
+      </figure>
     </div>
     <div class="duo">
       <figure>
@@ -438,7 +457,7 @@
 <section>
   <div class="wrap">
     <span class="lbl">Scaling</span>
-    <h2 style="margin-top:8px">Everyone, regardless of device, is equal in the VibeSDR ecosystem.</h2>
+    <h2 style="margin-top:8px">Old or new. Low end or high end. Big or small.</h2>
     <p class="lede">Grab a window and drag it. The layout follows in real time and the waterfall keeps scrolling through it, never redrawing. The app does it. The built-in web client does it. The watch is the same layout at one inch. That one behaviour is what lets VibeSDR run on everything from a one-inch watch face to a large desktop display, and everything in between, all on one DSP engine.</p>
     <div class="pair" style="margin-top:22px">
       <figure>
@@ -655,7 +674,10 @@
 <!-- ══ NOBODY LEFT OUT ══ -->
 <section>
   <div class="wrap">
-    <h2>Old or new. Low end or high end. Big screen or small. Nobody is left out.</h2>
+    <!-- ★ The scaling half of this heading now lives over the resize demos, where it describes what
+         is on screen. What is left here is the claim those demos do not make: that it runs on the
+         cheap and the old as well as the new. One line, one place. -->
+    <h2>Nobody is left out.</h2>
     <p class="lede">The DSP is light enough for a 2019 budget phone to host a server and a 1 GB Android Go handset to run the client. Apps for iOS, Android, Mac and Apple Watch. Everywhere else, the built-in web client with nothing to install.</p>
     <div class="cover" style="margin-top:22px">
       <div><span class="lbl on">iPhone · iPad · Mac</span>VibeSDR on the App Store. Runs on Apple Silicon Macs as a desktop app.</div>
@@ -673,11 +695,6 @@
       <span class="lbl">How it's made</span>
       <h2 style="margin-top:8px">Vibe-coded. Named so you'd know.</h2>
       <p style="margin-top:14px">I wanted something I could use up a ladder working on antennas: tools in one hand, something to see the results on in the other, all worked with one thumb. A spectrum analyser would have done the job, but that is money spent when I already owned SDRs that could do the same. What I actually had was <a href="https://youtube.com/shorts/5HtoGd5Lco8" target="_blank" rel="noopener">SDR++ Brown on an Android phone with a Bluetooth trackball to point at it</a> &mdash; workable propped on a steering wheel, impossible up a ladder &mdash; because the interface was drawn for a desktop and something had to stand in for the mouse. <a href="https://www.youtube.com/watch?v=iY3Qxx1YU1g" target="_blank" rel="noopener">That was a session, start to finish</a>. VibeSDR exists to get rid of the trackball: it is built to feel as close to a real handheld radio as a phone can manage &mdash; a dial you turn with your thumb, not a cursor you push around a screen.</p>
-      <figure style="margin:18px 0 0">
-        <img src="assets/shots/before-vibesdr-trackball.webp" loading="lazy" style="width:100%;height:auto;border-radius:10px;display:block"
-             alt="A phone in a rugged case wedged against the steering wheel of a Nissan, running SDR++ Brown on 3.766 MHz with the 80m ham band and 75m broadcast segments marked and decoded callsigns overlaid on the waterfall. A Bluetooth trackball sits behind it." />
-        <figcaption>Before VibeSDR: 3.766 MHz from the driver&rsquo;s seat, on a desktop interface. The trackball behind the phone is not an accessory &mdash; it is what the interface required.</figcaption>
-      </figure>
       <p style="margin-top:14px">I'm not a licensed amateur and I don't transmit. I'm a listener. It started on the east coast of England as a kid, pulling Dutch television in on an indoor aerial when the weather was exactly right. I didn't know I was watching a Sporadic-E opening. I still chase it.</p>
       <p>I am not a developer and I won't pretend to be one. I'm the concept, the UI and the tester, and the readme says so. Claude writes the code. Every decision, every dead end and every release sign-off is mine, and the whole history, failed experiments included, is on GitHub for anyone to read. A user has already fixed a bug and sent a pull request.</p>
       <p>Nothing ships that I haven't driven myself on real hardware. The RDS analyser was checked against a professional broadcast analyser by someone who owns one. The DAB decoder took four days of chasing a breakup before it was right. Where I couldn't test, like HackRF, I worked with someone who could.</p>
