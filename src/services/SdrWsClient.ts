@@ -2430,9 +2430,36 @@ export abstract class SdrWsClient {
         const windowed = msg.locked === true && span > 0 && centre > 0;
         const reachable = !windowed
           || Math.abs(want.frequency - centre) <= span / 2;
-        if (!reachable) {
+        /* ★★★ AND NEVER ON A SHARED DIAL, WHOEVER ELSE IS ALREADY ON IT.
+         *
+         *  Everything below assumes the dial is OURS to put back where we left it. On a shared
+         *  receiver it is not: the frequency is the room's, a joining listener arrives into
+         *  somebody else's programme, and asserting a remembered one drags them off it. The note
+         *  further down already saw the danger — "it would fight a shared VFO for ever" — and
+         *  guarded only the REPEAT, not the first assertion.
+         *
+         *  ★★ THE ASSUMPTION WAS WRITTEN DOWN AND IT WAS WRONG: "Unlocked receivers have no window
+         *     to be outside of, so memory always wins there — which is the two single-user radios,
+         *     and the common case." Unlocked does NOT mean single-user. Stuart's XCover is unlocked
+         *     AND shared (ten listeners, dial mode "open"), so the one rule that was never meant to
+         *     apply to a shared dial applied to it on every connect.
+         *
+         *  ★★ AND THIS IS THE "RANDOM" DISTORTION ON CONNECT. Stuart, 2026-09-11: "it will look like
+         *     its sat on a signal and the correct demodulator set but the tuning will be off broken
+         *     up and distorted, if i tune away then back it all lines up perfectly … this is on a
+         *     shared VFO radio which should leave the tuning where it was left so new connecting
+         *     clients dont trigger a retune." Random because it only bites when the remembered
+         *     frequency differs from where the room is sitting — join on the same station and
+         *     nothing happens at all.
+         *
+         *  ★ `shared` is in THIS message, beside `locked`, and always has been — the config names
+         *    both and only one was read. No new field, no ordering question, no guess from the
+         *    listener count. */
+        if (!reachable || msg.shared === true) {
           // Adopt what the server actually did, so the readout stops claiming otherwise.
-          this.dbg(`remembered ${want.frequency} is outside the locked window — keeping the landing`);
+          this.dbg(msg.shared === true
+            ? `shared dial — adopting the room's ${serverVfo}, not the remembered ${want.frequency}`
+            : `remembered ${want.frequency} is outside the locked window — keeping the landing`);
           if (Number.isFinite(serverVfo) && serverVfo > 0) this.status.frequency = serverVfo;
           if (typeof msg.mode === 'string' && msg.mode) this._adoptMode(msg.mode as SDRMode);
           this.callbacks.onStatus({ ...this.status });
