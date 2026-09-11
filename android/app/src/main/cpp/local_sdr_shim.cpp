@@ -914,6 +914,9 @@ static std::atomic<bool>   g_dabLockHeld{false};
  *  never the driver name — so a locked-down V4 is refused and a future wideband radio inherits the
  *  right answer for free. */
 static bool vsDabCapable();
+// ★ Forward-declared alongside vsDabCapable for the same reason: the DAB entry path refuses
+//   thousands of lines above the definition, and it needs to name WHICH restriction bit.
+static bool vsDabDecoderAvailable();
 
 // ★ A PIN, not the ceiling above it. See setVibeServerRateLock.
 static std::atomic<bool>   g_vsRateLock{false};
@@ -2517,6 +2520,85 @@ static std::string         g_occDir, g_occSerial, g_occLabel, g_occHeldIp;
 static std::string occHeldElsewhere(const std::string& ip);
 static void        occWrite(const std::string& ip);
 static std::atomic<double> g_adcPeakDbfs{-99.0};
+
+/* ══ RF AGC FOR THE SDRplay RSP ═══════════════════════════════════════════════════════════════
+ * ★★★ THE API's AGC MOVES ONE STAGE AND ONLY ONE: the IF gain reduction (gRdB, 20..59 dB). The
+ *     LNA state — the RF gain, ahead of the mixer — it never touches, so when the IF loop runs
+ *     out of room it simply saturates and the front end stays wherever it was put. That is not a
+ *     fault in their AGC; it is half a gain control, and the other half is ours.
+ *
+ * ★★★ MEASURED, SIDE BY SIDE, ON 7D (Stuart, 2026-09-11 — "this is ideal" / "this is not"):
+ *         ideal:  LNA state 5, IF gain reduction 45 dB, system gain 38.5 dB
+ *         bad:    LNA state 3, IF gain reduction 55 dB, system gain 39.5 dB
+ *     Two LNA steps too much RF gain, and the IF AGC spends 10 extra dB of reduction hiding it —
+ *     ending 4 dB short of its 59 dB ceiling with nothing left to give. The system gain is almost
+ *     identical in both, which is the point: the TOTAL is not what matters, WHERE it is taken is.
+ *     Gain taken in front of the mixer costs headroom the IF stage cannot win back, and on DAB it
+ *     shows as banding across the waterfall and a decode that falls apart on peaks.
+ *
+ * ★★ SO WE STEER BY THE IF AGC'S OWN RESTING PLACE, which is Stuart's design: "if [the] IF AGC
+ *    swings wildly away from the middle of its range one way or another we tinker with the RF
+ *    gain". The IF AGC keeps doing the fast work; this only decides which decade it works in.
+ *      reduction HIGH (>= kGrHigh) => too much RF gain  => LNA state UP   (state 0 is MOST gain)
+ *      reduction LOW  (<= kGrLow)  => too little        => LNA state DOWN
+ *    The window is deliberately wide and centred on the MEASURED ideal (45 dB), not on the
+ *    arithmetic middle of 20..59 — a receiver is not a spreadsheet.
+ *
+ * ★★★ ONE STEP, THEN WAIT, AND WAIT LONGER THAN THE IF LOOP TAKES. An LNA step is ~5 dB here and
+ *     the IF AGC needs seconds to re-settle around it (the decay is 5000 ms — see setIfAgcDynamics
+ *     in sdrplay_source.cpp). Judging the result before it settles is how a gain loop starts
+ *     hunting, and this project has already paid for that once: "the AGC going up and down like a
+ *     YoYo" (2026-08-05). So: a step at most every kSettleMs, and the condition must PERSIST for
+ *     kHoldTicks consecutive looks before anything moves at all.
+ * ★ It never fights the operator. The band cap already forces a minimum LNA state on retune, and
+ *   this refuses to go below it — an owner who capped the RF gain keeps that cap. */
+static std::atomic<int> g_rspRfAgc{1};        // ★ on by default; the IF AGC alone is half a loop
+static std::atomic<int> g_rspRfAgcLastLna{-1};   // what we last set, for the readout
+
+/* ★ `ifAgcOn` is PASSED, not read: this sits above the DSP state block, and a helper reaching
+ *   forward for a global is how a file grows an ordering dependency nobody can see. */
+static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) {
+    if (!sdrp || !g_rspRfAgc.load(std::memory_order_relaxed)) return;
+    // ★ Only meaningful while the IF AGC is running: with it off the reduction is whatever the
+    //   owner typed, and steering off a number nobody is moving would walk the LNA to an end stop.
+    if (!ifAgcOn) return;
+
+    constexpr int kGrLow    = 40;    // below this the IF stage has slack — take more RF gain
+    constexpr int kGrHigh   = 50;    // above this it is working too hard — take less
+    constexpr int kSettleMs = 4000;  // ★ longer than the IF AGC's 5 s decay is not needed; less is
+    constexpr int kHoldTicks = 3;    //   how it hunts. Three consecutive looks, ~0.2 s apart.
+
+    static int  hold = 0, holdDir = 0;
+    static auto lastMove = std::chrono::steady_clock::time_point{};
+
+    const int gr = sdrp->currentIfGr();
+    if (gr <= 0) return;                                  // not reported yet
+    const int dir = gr >= kGrHigh ? +1 : (gr <= kGrLow ? -1 : 0);
+    if (dir == 0) { hold = 0; holdDir = 0; return; }      // ★ in the window: leave it alone
+    if (dir != holdDir) { holdDir = dir; hold = 0; }
+    if (++hold < kHoldTicks) return;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (lastMove.time_since_epoch().count() != 0 &&
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - lastMove).count() < kSettleMs)
+        return;
+
+    const int n = sdrp->lnaStateCount();
+    if (n <= 1) return;
+    const int cur  = sdrp->currentLnaState();
+    // ★ lnaFloor is the operator's cap expressed as a MINIMUM state (more state = less gain), so
+    //   the band's ceiling on RF gain is respected in the only direction that could break it.
+    const int lo   = std::max(0, lnaFloor);
+    const int want = std::min(n - 1, std::max(lo, cur + dir));
+    if (want == cur) { hold = 0; return; }                // already at an end stop — say nothing
+
+    LOGI("RSP RF AGC: IF reduction %d dB %s the %d-%d dB window — RF gain state %d -> %d",
+         gr, dir > 0 ? "above" : "below", kGrLow, kGrHigh, cur, want);
+    LocalSdrShim::instance().setLnaState(want);
+    g_rspRfAgcLastLna.store(want, std::memory_order_relaxed);
+    lastMove = now;
+    hold = 0; holdDir = 0;
+}
 // ★ Until when somebody has asked for ADC statistics with the automation off — see enqueueIq.
 static std::atomic<double> g_adcStatsUntil{0.0};
 static std::atomic<double> g_adcClipPct{0.0};
@@ -7106,6 +7188,19 @@ struct LocalSdrShim::Impl {
             //    dead S-meter and a frozen gain display — and a control that is visible and inert
             //    reads as "the feature is broken", not "you are the second listener". A shared
             //    receiver whose meters only work for whoever connected first is not shared.
+            /* ★ THE RF HALF OF THE GAIN LOOP, ticked where the IF figures are already read — see
+             *   vsSdrplayRfAgcTick. It rate-limits itself; this is only the heartbeat.
+             * ★★ NOT while the AGC kick is still settling: the kick deliberately drives the gain
+             *    to an end stop and back, so steering off the reduction mid-kick would chase it. */
+            if (!sdrpSettling) {
+                /* ★ The operator's cap is a GAIN POSITION and the LNA state counts the other way —
+                 *   the same conversion the retune path uses, and it must not drift from it. A
+                 *   negative cap means no cap, which is a floor of 0 (full RF gain permitted). */
+                const int capPos = LocalSdrShim::gainCapAt(LocalSdrShim::instance().listenFrequency());
+                const int floorState = capPos >= 0
+                    ? std::max(0, sdrp->lnaStateCount() - 1 - capPos) : 0;
+                vsSdrplayRfAgcTick(sdrp.get(), floorState, sdrpAgcWanted);
+            }
             if (n % 2 == 0) {
                 char gb[160];
                 snprintf(gb, sizeof gb,
@@ -9600,7 +9695,12 @@ struct LocalSdrShim::Impl {
                 return;
             }
             if (!vsDabCapable()) {
-                sendText(sock, "{\"type\":\"dab_error\",\"why\":\"this receiver cannot reach a DAB multiplex at 2.048 MS/s\"}");
+                /* ★ NAME THE ACTUAL REASON. "cannot reach a multiplex at 2.048 MS/s" sent the
+                 *  owner of a decoder-less server hunting through sample rates and aerials for a
+                 *  fault that was one apt line away. */
+                sendText(sock, !vsDabDecoderAvailable()
+                    ? "{\"type\":\"dab_error\",\"why\":\"this server has no AAC decoder \xe2\x80\x94 ffmpeg is required for DAB, and its owner has not installed it\"}"
+                    : "{\"type\":\"dab_error\",\"why\":\"this receiver cannot reach a DAB multiplex at 2.048 MS/s\"}");
                 return;
             }
             /* ★★★ TAKE THE LOCK OFF FIRST — see g_dabLockHeld. Anything below that moves the
@@ -18644,7 +18744,27 @@ static vibebands::Ranges vsTunableRanges() {
  *  locked rate or a restricted range means the button "shouldnt even present itself". So this asks
  *  the same `tunable` set the directory publishes — after allow/block lists — and the rate the
  *  receiver would actually run at. Never the driver name: AGENTS.md's "ELSE MEANS DONGLE". */
+/** ★★★ IS THERE ANYTHING ON THIS MACHINE THAT CAN DECODE DAB+ AUDIO? On Linux that is ffmpeg and
+ *  nothing else (`using AacDecoder = AacDecoderFfmpeg`; the AudioToolbox alternative is macOS
+ *  only), and it is not shipped — so a server can be perfectly capable of RECEIVING an ensemble
+ *  and quite unable to play a word of it.
+ *
+ *  ★★★ WHICH IS EXACTLY WHAT HAPPENED. The x86 box had no ffmpeg at all, advertised DAB, tuned
+ *      the multiplex, locked it, and delivered superframes with Reed-Solomon 0 fixed 0 lost —
+ *      then shipped the raw AAC to the client because it could not decode it itself. One service
+ *      crackled, another was silent, and the receiver's own figures said the air was perfect
+ *      (Stuart, 2026-09-11: "audio gone completely but look at the reception its the cleanest out
+ *      of them all"). Offering a mode we cannot complete is the fault AGENTS.md names outright.
+ *  ★ Probed once, inside AacDecoder::available(); constructing one starts no process. */
+static bool vsDabDecoderAvailable() {
+    static vibedab::AacDecoder probe;
+    return probe.available();
+}
+
 static bool vsDabCapable() {
+    /* ★★ NOTHING TO DECODE WITH = NOT CAPABLE, and this comes first because it is the one
+     *  restriction no amount of tuning, rate or operator setting can work around. */
+    if (!vsDabDecoderAvailable()) return false;
     /* ★ A LOCKED RF CENTRE CANNOT DO DAB. An ensemble IS the capture, so DAB must move the
      *  hardware centre onto the block; a receiver whose centre the owner has locked (the Pi's
      *  RSP1B, parked for its individual-VFO listeners) advertised DAB and could not deliver it
@@ -18694,6 +18814,10 @@ static std::string vsTunableJson() {
     // ★ Whether to OFFER DAB at all. The client must not draw a control whose every use is a
     //   no-op (AGENTS.md), and only the server knows the effective limits.
     j += std::string(",\"dab\":") + (vsDabCapable() ? "true" : "false");
+    /* ★ SEPARATE FROM `dab`, because the two answer different questions and the setup page needs
+     *  both: `dab` is "will this receiver do it", `dabDecoder` is "could any receiver on this
+     *  MACHINE do it". Only the second one has a fix the owner can apply from a button. */
+    j += std::string(",\"dabDecoder\":") + (vsDabDecoderAvailable() ? "true" : "false");
     /* ★ Two more fields so the client can draw the boost toggle ONLY where it can matter:
      *  `dabBoost` is the setting, `dabBoostUseful` is true when the hardware could reach 2.048
      *  but the rate in force does not. AGENTS.md: never draw a control whose every use is a
