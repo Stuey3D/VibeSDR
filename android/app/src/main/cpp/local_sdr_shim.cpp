@@ -18968,6 +18968,7 @@ void LocalSdrShim::setVibeServerRfNotch(bool on)  { g_vsRfNotch.store(on); }
  *   reason every other RSP control lives there. Auto then owns rfNotch/dabNotch from the retune
  *   path; these two only say whether it is running and who else may interfere. */
 void LocalSdrShim::setVibeServerAutoNotch(bool on)      { g_dsp.rspAutoNotch.store(on ? 1 : 0); }
+void LocalSdrShim::setVibeServerRfAgc(bool on) { g_rspRfAgc.store(on ? 1 : 0, std::memory_order_relaxed); }
 void LocalSdrShim::setVibeServerDabAgc(bool on, int target) {
     g_dabAgcOverride.store(on);
     if (target < 0 && target >= -60) g_dabAgcTarget.store(target);   // ★ sane dBFS only

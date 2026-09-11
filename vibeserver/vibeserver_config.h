@@ -194,6 +194,10 @@ struct Config {
      *  owner whose front end wants something else. */
     bool dabAgcOverride = true;
     int  dabAgcTarget = -40;   // dBFS
+    /* ★ RF AGC: the API's own AGC moves the IF gain reduction and NEVER the LNA, so when the IF
+     *  loop saturates the front end stays wherever it was put. This is the other half of the
+     *  loop. On by default — half a gain control is not a safe default. */
+    bool rfAgc = true;
     /** See RadioConfig::biasT — asserted at every start so it is never inherited. */
     bool biasT = false;
     int  ppm = 0, ppb = 0, directSampling = -1;   // see RadioConfig
@@ -372,6 +376,7 @@ struct RadioConfig {
     bool   autoNotch = false, userNotch = true;   // ★ see the note on the per-radio copy
     bool   dabAgcOverride = true;
     int    dabAgcTarget = -40;
+    bool   rfAgc = true;
     /** ★★★ DC ON THE FEEDLINE, REMEMBERED AND ASSERTED. A dongle's bias-T survives whatever set
      *  it — it is a GPIO that stays put for as long as the device has power — so a receiver that
      *  never states a preference inherits one. That is how a V4 came up with its red light on and

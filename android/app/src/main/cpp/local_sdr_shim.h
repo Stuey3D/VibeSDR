@@ -389,6 +389,8 @@ public:
     static void setVibeServerAutoNotch(bool on);
     /** ★ DAB lowers the IF AGC target for OFDM peak headroom; this is the owner's say in it. */
     static void setVibeServerDabAgc(bool on, int targetDbfs);
+    /** ★ The RF half of the gain loop — see vsSdrplayRfAgcTick. */
+    static void setVibeServerRfAgc(bool on);
     /** ★ Whether LISTENERS may toggle the notches at all. */
     static void setVibeServerUserNotch(bool allowed);
     /** ★★★ WHERE LISTENERS MAY TUNE. Two owner-written lists (see vibe_bands.h) collapsed against

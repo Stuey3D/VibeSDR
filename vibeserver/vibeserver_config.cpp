@@ -206,7 +206,7 @@ std::string toJson(const Config& c) {
     N("idleGrace", c.idleGrace);
     B("rfNotch", c.rfNotch); B("dabNotch", c.dabNotch); B("zoomSpectrum", c.zoomSpectrum);
     B("autoNotch", c.autoNotch); B("userNotch", c.userNotch);
-    B("dabAgcOverride", c.dabAgcOverride); N("dabAgcTarget", c.dabAgcTarget);
+    B("dabAgcOverride", c.dabAgcOverride); N("dabAgcTarget", c.dabAgcTarget); B("rfAgc", c.rfAgc);
     S("cpuGovernor", c.cpuGovernor);
     S("trustedProxies", c.trustedProxies);
     B("oneRadioPerIp", c.oneRadioPerIp);
@@ -285,6 +285,7 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     getBool(s, "userNotch", c.userNotch);
     getBool(s, "dabAgcOverride", c.dabAgcOverride);
     if (getNum(s, "dabAgcTarget", d)) c.dabAgcTarget = (int)d;
+    getBool(s, "rfAgc", c.rfAgc);
     getBool(s, "zoomSpectrum", c.zoomSpectrum);
     getStr(s, "cpuGovernor", c.cpuGovernor);
     getStr(s, "trustedProxies", c.trustedProxies);
@@ -411,7 +412,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     B("rfNotch", r.rfNotch);
     B("dabNotch", r.dabNotch); B("zoomSpectrum", r.zoomSpectrum);
     B("autoNotch", r.autoNotch); B("userNotch", r.userNotch);
-    B("dabAgcOverride", r.dabAgcOverride); I("dabAgcTarget", r.dabAgcTarget);
+    B("dabAgcOverride", r.dabAgcOverride); I("dabAgcTarget", r.dabAgcTarget); B("rfAgc", r.rfAgc);
     B("biasT", r.biasT);
     I("ppm", r.ppm); I("ppb", r.ppb); I("directSampling", r.directSampling);
     N("converterOffsetHz", r.converterOffsetHz);
@@ -456,7 +457,7 @@ std::string radioToJson(const RadioConfig& r) {
     N("idleGrace", r.idleGrace);
     B("rfNotch", r.rfNotch); B("dabNotch", r.dabNotch); B("zoomSpectrum", r.zoomSpectrum);
     B("autoNotch", r.autoNotch); B("userNotch", r.userNotch);
-    B("dabAgcOverride", r.dabAgcOverride); N("dabAgcTarget", r.dabAgcTarget);
+    B("dabAgcOverride", r.dabAgcOverride); N("dabAgcTarget", r.dabAgcTarget); B("rfAgc", r.rfAgc);
     B("biasT", r.biasT);
     N("ppm", r.ppm); N("ppb", r.ppb); N("directSampling", r.directSampling);
     N("converterOffsetHz", r.converterOffsetHz);
@@ -517,7 +518,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.idleGrace = one.idleGrace;
     r.rfNotch = one.rfNotch; r.dabNotch = one.dabNotch; r.zoomSpectrum = one.zoomSpectrum;
     r.autoNotch = one.autoNotch; r.userNotch = one.userNotch;
-    r.dabAgcOverride = one.dabAgcOverride; r.dabAgcTarget = one.dabAgcTarget;
+    r.dabAgcOverride = one.dabAgcOverride; r.dabAgcTarget = one.dabAgcTarget; r.rfAgc = one.rfAgc;
     r.allowRanges = one.allowRanges; r.blockRanges = one.blockRanges;
     r.gainLimits = one.gainLimits; r.restGain = one.restGain; r.agcLock = one.agcLock;
     r.gainLock = one.gainLock; r.gainLocks = one.gainLocks;
@@ -820,7 +821,7 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.idleGrace = r.idleGrace;
     c.rfNotch = r.rfNotch; c.dabNotch = r.dabNotch; c.zoomSpectrum = r.zoomSpectrum;
     c.autoNotch = r.autoNotch; c.userNotch = r.userNotch;
-    c.dabAgcOverride = r.dabAgcOverride; c.dabAgcTarget = r.dabAgcTarget;
+    c.dabAgcOverride = r.dabAgcOverride; c.dabAgcTarget = r.dabAgcTarget; c.rfAgc = r.rfAgc;
     c.allowRanges = r.allowRanges; c.blockRanges = r.blockRanges;
     c.gainLimits = r.gainLimits; c.restGain = r.restGain; c.agcLock = r.agcLock;
     c.gainLock = r.gainLock; c.gainLocks = r.gainLocks;

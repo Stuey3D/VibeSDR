@@ -2202,6 +2202,24 @@ async function renderHw() {
         marine VHF.</div>
 
       <label style="display:flex;align-items:center;gap:10px;margin-top:18px">
+        <input type="checkbox" id="rfAgc" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>Automatic RF gain (RF AGC)</span></label>
+      <div class="hint">The RSP's own AGC moves the <em>IF</em> gain reduction and never the LNA, so
+        when it runs out of room the front end stays wherever it was last put &mdash; half a gain
+        control. This is the other half: it watches where the IF AGC settles and moves the RF gain
+        a step at a time to keep it in its comfortable range.
+        <br>It steers by the IF reduction's resting place, targeting <b>30&ndash;50 dB</b> of the
+        20&ndash;59 dB range, which leaves about ten decibels of headroom at each end for the IF
+        loop to absorb transients on its own. It acts only outside 28/52 dB, judges on a rolling
+        average rather than a single reading, and waits longer the closer it is to the middle
+        &mdash; twelve seconds just past the trigger, under a second when the AGC is hard against
+        its limit and losing peaks.
+        <br>It will never make two moves that cancel each other out: on this hardware one LNA step
+        is worth about 20 dB, which is wider than the target window, so a step that would simply
+        undo the last one is refused and the radio is left at the closest it can get. It also
+        respects any gain cap you have set per band.</div>
+
+      <label style="display:flex;align-items:center;gap:10px;margin-top:18px">
         <input type="checkbox" id="autoNotch" style="width:16px;height:16px;accent-color:var(--amber)">
         <span>Automatic notch filtering</span></label>
       <div class="hint">Sets both notches from the frequency being received, so they protect the
@@ -2341,6 +2359,9 @@ async function renderHw() {
   //     The notches belong to the radio that HAS them, and the inconsistency sat one line apart.
   if ($("rfNotch")) $("rfNotch").checked = !!radio().rfNotch;
   if ($("dabNotch")) $("dabNotch").checked = !!radio().dabNotch;
+  // ★ DEFAULTS TO ON, so an undefined must read as ticked — see userNotch below for why `!!` is
+  //   the wrong test for a setting whose default is true.
+  if ($("rfAgc")) $("rfAgc").checked = radio().rfAgc !== false;
   if ($("autoNotch")) $("autoNotch").checked = !!radio().autoNotch;
   // ★ DEFAULTS TO ON, so an undefined must read as ticked — `!!undefined` is false and would
   //   silently switch the protection off on every receiver that upgrades.
@@ -2929,6 +2950,7 @@ function collectRadio() {
     //   be storing a setting that can never apply — the config would describe a radio we are not.
     ...($("rfNotch")  ? {rfNotch:  $("rfNotch").checked}  : {}),
     ...($("dabNotch") ? {dabNotch: $("dabNotch").checked} : {}),
+    ...($("rfAgc") ? {rfAgc: $("rfAgc").checked} : {}),
     ...($("autoNotch") ? {autoNotch: $("autoNotch").checked} : {}),
     ...($("dabAgcOverride") ? {dabAgcOverride: $("dabAgcOverride").checked} : {}),
     ...($("dabAgcTarget") ? {dabAgcTarget: +$("dabAgcTarget").value} : {}),
