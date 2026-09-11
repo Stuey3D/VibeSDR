@@ -2541,8 +2541,9 @@ static std::atomic<double> g_adcPeakDbfs{-99.0};
  *    gain". The IF AGC keeps doing the fast work; this only decides which decade it works in.
  *      reduction HIGH (>= kGrHigh) => too much RF gain  => LNA state UP   (state 0 is MOST gain)
  *      reduction LOW  (<= kGrLow)  => too little        => LNA state DOWN
- *    The window is deliberately wide and centred on the MEASURED ideal (45 dB), not on the
- *    arithmetic middle of 20..59 — a receiver is not a spreadsheet.
+ *    The window is 30..50 dB of the 20..59 range, which leaves roughly ten decibels of buffer at
+ *    each end for the IF loop to spend on transients by itself. The measured ideal (45 dB) sits
+ *    comfortably inside it, and so does the whole band either side of it.
  *
  * ★★★ ONE STEP, THEN WAIT, AND WAIT LONGER THAN THE IF LOOP TAKES. An LNA step is ~5 dB here and
  *     the IF AGC needs seconds to re-settle around it (the decay is 5000 ms — see setIfAgcDynamics
@@ -2563,24 +2564,90 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
     //   owner typed, and steering off a number nobody is moving would walk the LNA to an end stop.
     if (!ifAgcOn) return;
 
-    constexpr int kGrLow    = 40;    // below this the IF stage has slack — take more RF gain
-    constexpr int kGrHigh   = 50;    // above this it is working too hard — take less
-    constexpr int kSettleMs = 4000;  // ★ longer than the IF AGC's 5 s decay is not needed; less is
-    constexpr int kHoldTicks = 3;    //   how it hunts. Three consecutive looks, ~0.2 s apart.
+    /* ★★★ 30..50 IS THE WORKING RANGE, AND THE ENDS ARE BUFFER (Stuart, 2026-09-11: "IF AGC
+     *     should be targeting 30-50 as that leaves 20-30 and 50-59 as the buffer zone"). The
+     *     reduction runs 20..59 dB, so this keeps ~10 dB of headroom at each end that the IF loop
+     *     may use freely for transients — a station keying up, a fade — without the RF stage
+     *     moving at all. We act only once it has spent that buffer and is living at an extreme.
+     * ★ An earlier draft used 40..50, centred on the measured ideal of 45. Too narrow: with an LNA
+     *   step worth ~5 dB, a 10 dB window is only two steps wide and the loop would be correcting
+     *   for ordinary band activity rather than for a genuinely mis-set front end. */
+    constexpr int kGrLow    = 30;    // the working range: inside this, nothing happens
+    constexpr int kGrHigh   = 50;
+    /* ★★★ TRIGGER OUTSIDE THE WINDOW, NOT AT ITS EDGE — Stuart, 2026-09-11: "so if the IF AGC is
+     *     bouncing around 29-31 we dont immediately touch the RF gain". Quite right, and the first
+     *     draft would have: it compared the INSTANTANEOUS reduction against 30/50, so a momentary
+     *     dip to 30 counted. Acting at the boundary of a window is how a control chatters on the
+     *     boundary, which is worse than acting late.
+     * ★★ So there are two thresholds, and they are not the same number. We move only once the
+     *    reduction is CLEARLY outside — 28 or 52 — and we consider it settled again anywhere
+     *    inside 30..50. That two-decibel skirt means 29-31 can bounce all night and nothing moves.
+     * ★★★ AND IT IS JUDGED ON AN AVERAGE, NOT A SAMPLE. This loop runs at about 20 Hz, so "three
+     *     consecutive looks" was 150 ms — nothing at all, and trivially satisfied by a fade. The
+     *     reduction is now averaged over kWindowMs of real time and the AVERAGE has to sit outside
+     *     the skirt, twice running, before a single step is taken. A transient cannot do that; a
+     *     genuinely mis-set front end does it immediately. */
+    constexpr int kTrigLow  = 28;    // below this (on average) the IF stage has slack
+    constexpr int kTrigHigh = 52;    // above this (on average) it is working too hard
+    constexpr int kWindowMs = 500;   // granularity: the reduction is averaged over this
+    /* ★★★ HOW FAR OUT DECIDES HOW FAST — Stuart, 2026-09-11: "close to 20 faster the RF agc acts
+     *     same at the other end closer to 59 faster it acts". The fixed four seconds was wrong at
+     *     both ends of the scale: a reduction sitting at 52 is a preference and can be thought
+     *     about, while one at 58 means the IF AGC has one decibel left and the next peak is simply
+     *     lost. Urgency is not constant, so the patience must not be either.
+     * ★ Linear in the excess past the trigger — 4 s of evidence when it has only just left the
+     *   skirt, falling to 600 ms when it is hard against the rail. The dwell afterwards scales the
+     *   same way, so a badly mis-set front end walks back in consecutive steps instead of taking
+     *   half a minute, while a marginal one still moves at a considered pace.
+     * ★★ THE FLAP GUARDS ARE UNTOUCHED BY THIS. Even at maximum urgency there is still an
+     *    averaging window, still a skirt to get past, and still one step at a time: fast here means
+     *    600 ms of agreeing evidence, not a reflex. */
+    /* ★★★ AND THE CURVE IS QUADRATIC, NOT LINEAR — Stuart, 2026-09-11: "if its just dipping into
+     *     the safety zone be really cautious to adjust the rf gain". A linear ramp was still far
+     *     too eager at the shallow end: four seconds to react to a reduction that has merely
+     *     brushed 52 treats a passing lorry the same as a genuine overload. The buffer exists
+     *     precisely SO THAT brief excursions need no response at all.
+     *     ★ So: 12 seconds of agreeing evidence when it has only just crossed the trigger, 3.5 s
+     *       halfway, 600 ms hard against the rail. Squaring the remaining distance keeps the whole
+     *       shallow half of the range genuinely reluctant while leaving the emergency fast.
+     *     ★ The dwell after a step follows the same shape — 8 s when it was a marginal call, 1.5 s
+     *       when the radio is drowning and may need several steps in a row. */
+    const auto curve = [](double excess, double slow, double fast) {
+        const double t = std::min(1.0, std::max(0.0, excess / 6.0));
+        const double k = (1.0 - t) * (1.0 - t);           // ★ patient until it really is urgent
+        return (int)(fast + k * (slow - fast));
+    };
+    const auto sustainMsFor = [&](double excess) { return curve(excess, 12000.0, 600.0); };
+    const auto settleMsFor  = [&](double excess) { return curve(excess,  8000.0, 1500.0); };
 
-    static int  hold = 0, holdDir = 0;
-    static auto lastMove = std::chrono::steady_clock::time_point{};
+    static double accum = 0.0; static int count = 0;
+    static auto  winStart = std::chrono::steady_clock::time_point{};
+    static int   outMs = 0, outDir = 0;
+    static auto  lastMove = std::chrono::steady_clock::time_point{};
 
     const int gr = sdrp->currentIfGr();
     if (gr <= 0) return;                                  // not reported yet
-    const int dir = gr >= kGrHigh ? +1 : (gr <= kGrLow ? -1 : 0);
-    if (dir == 0) { hold = 0; holdDir = 0; return; }      // ★ in the window: leave it alone
-    if (dir != holdDir) { holdDir = dir; hold = 0; }
-    if (++hold < kHoldTicks) return;
-
     const auto now = std::chrono::steady_clock::now();
+    if (winStart.time_since_epoch().count() == 0) winStart = now;
+    accum += gr; ++count;
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - winStart).count() < kWindowMs)
+        return;                                           // ★ still filling this window
+
+    const double mean = count ? accum / count : 0.0;
+    accum = 0.0; count = 0; winStart = now;
+
+    const int dir = mean >= kTrigHigh ? +1 : (mean <= kTrigLow ? -1 : 0);
+    if (dir == 0) { outMs = 0; outDir = 0; return; }      // ★ in the window (or its skirt): leave it
+    if (dir != outDir) { outDir = dir; outMs = 0; }       // ★ a change of mind starts again
+    outMs += kWindowMs;
+
+    // ★ How far past the trigger, hence how urgent. High end runs out at 59, low end at 20.
+    const double excess = dir > 0 ? (mean - kTrigHigh) : (kTrigLow - mean);
+    if (outMs < sustainMsFor(excess)) return;
+
     if (lastMove.time_since_epoch().count() != 0 &&
-        std::chrono::duration_cast<std::chrono::milliseconds>(now - lastMove).count() < kSettleMs)
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - lastMove).count()
+            < settleMsFor(excess))
         return;
 
     const int n = sdrp->lnaStateCount();
@@ -2590,14 +2657,15 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
     //   the band's ceiling on RF gain is respected in the only direction that could break it.
     const int lo   = std::max(0, lnaFloor);
     const int want = std::min(n - 1, std::max(lo, cur + dir));
-    if (want == cur) { hold = 0; return; }                // already at an end stop — say nothing
+    if (want == cur) { outMs = 0; return; }               // already at an end stop — say nothing
 
-    LOGI("RSP RF AGC: IF reduction %d dB %s the %d-%d dB window — RF gain state %d -> %d",
-         gr, dir > 0 ? "above" : "below", kGrLow, kGrHigh, cur, want);
+    LOGI("RSP RF AGC: IF reduction averaged %.1f dB for %.1f s, %s the %d-%d dB window "
+         "(%.0f dB past the trigger) — RF gain state %d -> %d",
+         mean, outMs / 1000.0, dir > 0 ? "above" : "below", kGrLow, kGrHigh, excess, cur, want);
     LocalSdrShim::instance().setLnaState(want);
     g_rspRfAgcLastLna.store(want, std::memory_order_relaxed);
     lastMove = now;
-    hold = 0; holdDir = 0;
+    outMs = 0; outDir = 0;
 }
 // ★ Until when somebody has asked for ADC statistics with the automation off — see enqueueIq.
 static std::atomic<double> g_adcStatsUntil{0.0};
