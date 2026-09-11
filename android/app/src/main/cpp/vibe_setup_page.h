@@ -2130,9 +2130,22 @@ async function renderHw() {
   const rateSel = $("rate");
   if (rateSel && hw && hw.rates && hw.rates.length) {
     const want = String(radio().rate || hw.rates[0]);
-    rateSel.innerHTML = hw.rates.map(r =>
-      `<option value="${r}">${(r / 1e6).toFixed(3).replace(/0+$/, "").replace(/\.$/, "")} MHz` +
-      ` &nbsp;(${(r / 1e6).toFixed(2)} MS/s)</option>`).join("");
+    /* ★★★ SAY WHAT THE RATE COSTS IN BITS. An RSP's ADC is not 14-bit at every rate — it trades
+     *     resolution for bandwidth in hardware (RSP1A specs):
+     *         14-bit  2 - 6.048 MS/s      12-bit  6.048 - 8.064
+     *         10-bit  8.064 - 9.216       8-bit   above 9.216
+     *     So choosing 8 MS/s on this page quietly gives up TWO BITS of dynamic range for span the
+     *     owner may not need, and nothing here said so — the single most consequential thing about
+     *     the choice was the one thing left out (Stuart, 2026-09-11). Shown only for the RSP,
+     *     because it is a property of THAT converter and would be a lie on a dongle.
+     * ★ This is also why DAB drops to 2.048: at the native rate the ensemble is captured with the
+     *   converter in full 14-bit mode, which is worth more on a weak multiplex than any span. */
+    const adcBits = (hz) => hz <= 6048000 ? 14 : hz <= 8064000 ? 12 : hz <= 9216000 ? 10 : 8;
+    const isRsp = ((hw && hw.driver) || r.driver || "") === "sdrplay";
+    rateSel.innerHTML = hw.rates.map(rt =>
+      `<option value="${rt}">${(rt / 1e6).toFixed(3).replace(/0+$/, "").replace(/\.$/, "")} MHz` +
+      ` &nbsp;(${(rt / 1e6).toFixed(2)} MS/s)` +
+      (isRsp ? ` \u2014 ${adcBits(rt)}-bit ADC` : "") + `</option>`).join("");
     if (!hw.rates.some(r => String(r) === want))
       rateSel.insertAdjacentHTML("afterbegin",
         `<option value="${want}">${(+want / 1e6).toFixed(3)} MHz — not offered by this radio</option>`);
@@ -2209,6 +2222,23 @@ async function renderHw() {
         note that automatic notching owns them anyway while it is on, so a listener's flip would
         only be undone at the next retune. Either way they are told why, rather than finding a
         control that silently does nothing.</div>
+
+      <label style="display:flex;align-items:center;gap:10px;margin-top:18px">
+        <input type="checkbox" id="dabAgcOverride" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>Lower the IF AGC target for DAB</span></label>
+      <div class="hint">A DAB ensemble is 1536 carriers added together, so its peaks run about
+        10 dB above the average the AGC is levelling. An AGC holding the <em>average</em> at
+        &minus;30 dBFS therefore lets the <em>peaks</em> clip the converter &mdash; and clipped OFDM
+        is unrecoverable, so the ensemble breaks up while every figure on the signal page still
+        looks healthy. Measured on 10D: &minus;30 broke up, &minus;40 played.
+        <br>Ten decibels is almost exactly that peak margin, which is why it is the default. It is
+        restored the moment DAB is left, because a carrier does not need the headroom and would
+        only run quieter for it.
+        <label style="display:flex;align-items:center;gap:10px;margin-top:10px">
+          <span class="lbl" style="min-width:11em">DAB AGC target</span>
+          <input type="range" id="dabAgcTarget" min="-60" max="-10" step="1" style="flex:1">
+          <b id="dabAgcTargetVal" style="min-width:5.5em;text-align:right"></b>
+        </label></div>
 
       <div class="hint">The RSP manages its own gain by default. To set it by hand, see the note
         below.</div>`;
@@ -2303,6 +2333,15 @@ async function renderHw() {
   if ($("rfNotch")) $("rfNotch").checked = !!radio().rfNotch;
   if ($("dabNotch")) $("dabNotch").checked = !!radio().dabNotch;
   if ($("autoNotch")) $("autoNotch").checked = !!radio().autoNotch;
+  // ★ DEFAULTS TO ON, so an undefined must read as ticked — `!!undefined` is false and would
+  //   silently switch the protection off on every receiver that upgrades.
+  if ($("dabAgcOverride")) $("dabAgcOverride").checked = radio().dabAgcOverride !== false;
+  if ($("dabAgcTarget")) {
+    const t = $("dabAgcTarget");
+    t.value = String(radio().dabAgcTarget != null ? radio().dabAgcTarget : -40);
+    const show = () => { const v = $("dabAgcTargetVal"); if (v) v.textContent = t.value + " dBFS"; };
+    t.addEventListener("input", show); show();
+  }
   // ★ userNotch DEFAULTS TO ALLOWED, so an undefined must read as ticked — `!!undefined` is false
   //   and would silently take a permission away from every existing receiver on upgrade.
   if ($("userNotch")) $("userNotch").checked = radio().userNotch !== false;
@@ -2882,6 +2921,8 @@ function collectRadio() {
     ...($("rfNotch")  ? {rfNotch:  $("rfNotch").checked}  : {}),
     ...($("dabNotch") ? {dabNotch: $("dabNotch").checked} : {}),
     ...($("autoNotch") ? {autoNotch: $("autoNotch").checked} : {}),
+    ...($("dabAgcOverride") ? {dabAgcOverride: $("dabAgcOverride").checked} : {}),
+    ...($("dabAgcTarget") ? {dabAgcTarget: +$("dabAgcTarget").value} : {}),
     ...($("userNotch") ? {userNotch: $("userNotch").checked} : {}),
     ...($("gain")     ? {gain: parseInt($("gain").value, 10)} : {}),
     // ★ Only what this radio HAS. Sending ppb for a dongle would store a setting that can never

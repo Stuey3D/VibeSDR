@@ -188,6 +188,12 @@ struct Config {
      *  filter must never switch itself on over an owner's head. autoNotch owns rfNotch/dabNotch
      *  while it is on; userNotch says whether LISTENERS may touch them at all. */
     bool autoNotch = false, userNotch = true;
+    /* ★ DAB drops the IF AGC target for OFDM peak headroom — see kDabAgcSetPoint in the shim.
+     *  On by default because a breaking-up ensemble on a receiver whose figures look perfect is
+     *  the worst kind of fault to leave on by omission; the target itself is adjustable for an
+     *  owner whose front end wants something else. */
+    bool dabAgcOverride = true;
+    int  dabAgcTarget = -40;   // dBFS
     /** See RadioConfig::biasT — asserted at every start so it is never inherited. */
     bool biasT = false;
     int  ppm = 0, ppb = 0, directSampling = -1;   // see RadioConfig
@@ -364,6 +370,8 @@ struct RadioConfig {
     int         agcLock  = -1;  ///< 1 = AGC forced on, listener may not turn it off (RSP, HF+).
     bool   rfNotch = false, dabNotch = false, zoomSpectrum = false;
     bool   autoNotch = false, userNotch = true;   // ★ see the note on the per-radio copy
+    bool   dabAgcOverride = true;
+    int    dabAgcTarget = -40;
     /** ★★★ DC ON THE FEEDLINE, REMEMBERED AND ASSERTED. A dongle's bias-T survives whatever set
      *  it — it is a GPIO that stays put for as long as the device has power — so a receiver that
      *  never states a preference inherits one. That is how a V4 came up with its red light on and

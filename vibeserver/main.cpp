@@ -171,6 +171,8 @@ struct Opts {
      *   setting, so the config -> Opts -> shim path has no gap for them to fall through. */
     bool        autoNotch = false;
     bool        userNotch = true;
+    bool        dabAgcOverride = true;
+    int         dabAgcTarget = -40;
     bool        dabNotch = false;
     int         port    = 0;             // 0 = auto (48000-48049)
     bool        web     = true;
@@ -477,6 +479,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.idleGrace = c.idleGrace;
     o.rfNotch = c.rfNotch; o.dabNotch = c.dabNotch; o.zoomSpectrum = c.zoomSpectrum;
     o.autoNotch = c.autoNotch; o.userNotch = c.userNotch;
+    o.dabAgcOverride = c.dabAgcOverride; o.dabAgcTarget = c.dabAgcTarget;
     o.port = c.port; o.web = c.web;
 }
 
@@ -508,6 +511,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.idleGrace = o.idleGrace;
     c.rfNotch = o.rfNotch; c.dabNotch = o.dabNotch; c.zoomSpectrum = o.zoomSpectrum;
     c.autoNotch = o.autoNotch; c.userNotch = o.userNotch;
+    c.dabAgcOverride = o.dabAgcOverride; c.dabAgcTarget = o.dabAgcTarget;
     c.port = o.port; c.web = o.web;
     c.mode = o.lockFreq > 0 ? vsconfig::Mode::LockedRange : vsconfig::Mode::SingleUser;
 }
@@ -1329,6 +1333,7 @@ int main(int argc, char** argv) {
      *  up with before anybody has tuned anywhere. */
     LocalSdrShim::setVibeServerAutoNotch(o.autoNotch);
     LocalSdrShim::setVibeServerUserNotch(o.userNotch);
+    LocalSdrShim::setVibeServerDabAgc(o.dabAgcOverride, o.dabAgcTarget);
     // ★ SAY WHAT THE FRONT END WILL DO. These are set once at startup and a listener cannot
     //   change them on a locked receiver, so if the operator's intent and the radio disagree
     //   there is otherwise NOTHING on screen or in the log to reveal it — which is exactly the
@@ -1486,6 +1491,7 @@ int main(int argc, char** argv) {
                 r.idleGrace = c.idleGrace;
                 r.rfNotch = c.rfNotch; r.dabNotch = c.dabNotch; r.zoomSpectrum = c.zoomSpectrum;
                 r.autoNotch = c.autoNotch; r.userNotch = c.userNotch;
+                r.dabAgcOverride = c.dabAgcOverride; r.dabAgcTarget = c.dabAgcTarget;
                 break;
             }
             return vsconfig::toJson(out);

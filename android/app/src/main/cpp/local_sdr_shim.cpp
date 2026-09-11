@@ -819,6 +819,24 @@ static std::atomic<double> g_dabSavedRtl{0.0}, g_dabSavedAudio{0.0}, g_dabSavedV
  *  DAB mode reverts VibeAGC to manual every time" (Stuart). Two halves of one setting, and I
  *  saved one of them. */
 static std::atomic<bool>   g_dabSavedAgcOn{false};
+/* ★★★ THE IF AGC TARGET WANTS TO BE LOWER FOR DAB, AND THE REASON IS OFDM. A DAB ensemble is
+ *     1536 carriers summed, so its peak-to-average ratio is around 10 dB — the peaks are enormous
+ *     next to the average the AGC is levelling. An AGC that holds the AVERAGE at -30 dBFS is
+ *     therefore letting the PEAKS clip the converter, and clipped OFDM symbols are unrecoverable:
+ *     the constellation smears and the decoder starts erasing frames, which is heard as break-up
+ *     on a signal whose figures otherwise look fine.
+ * ★★★ MEASURED ON AIR (Stuart, 2026-09-11, 10D): "the default -30 10D breaks up, but lower it to
+ *     -40 and it works". Ten decibels of extra headroom is almost exactly the PAPR, which is a
+ *     satisfying place for the number to land — it is not a fudge, it is the peak margin OFDM
+ *     needs and an AM or FM carrier does not.
+ * ★ Saved and restored like every other thing DAB borrows: a target that suits an ensemble is
+ *   wrong for a carrier, exactly as the gain is (see agcForget on the way out). */
+static std::atomic<int>    g_dabSavedAgcSet{-999};
+/* ★ Owner-settable, because a front end with a different aerial may want different headroom — but
+ *  ON by default: an ensemble breaking up on a receiver whose figures look perfect is the worst
+ *  kind of fault to leave switched off by omission. */
+static std::atomic<bool>   g_dabAgcOverride{true};
+static std::atomic<int>    g_dabAgcTarget{-40};     // dBFS — see above
 /* ★★★ AND THE DONGLE'S OWN AGC, WHICH MUST BE OFF UNDER OFDM. Stuart, reading the previous
  *  commit: "is the RTL-AGC being stuck on alongside VibeAGC, if so this could explain a lot of
  *  errors." It was on — his menu showed DIGITAL AGC ON — and this file already says why that is
@@ -2773,6 +2791,11 @@ static int   vsDesiredDabNotch();    // -1 unset, 0 off, 1 on
  *   and it sits thousands of lines before the desired-DSP block these read. */
 static bool  vsAutoNotchOn();
 static bool  vsUserNotchAllowed();
+/* ★ The IF AGC target the owner/listener last chose (-999 = never set). Forward-declared for the
+ *  same reason as its neighbours: g_dsp is declared thousands of lines below the DAB entry path
+ *  that needs to read it. ★★ THIS IS THE THIRD ACCESSOR ADDED FOR THAT REASON TONIGHT — anything
+ *  above the desired-DSP block must reach it through one of these, never directly. */
+static int   vsDesiredAgcSet();
 /* ★ And the write side, for the same reason — auto notch RECORDS what it chose so the readout and
  *   a rebuilt Impl both see it, and it does that from the retune path. */
 static void  vsRecordNotchChoice(bool rf, bool dab);
@@ -7851,6 +7874,13 @@ struct LocalSdrShim::Impl {
         LocalSdrShim::instance().setGain(g_dabSavedGain.load());
         g_rtlAgc.store(g_dabSavedAgcOn.load(), std::memory_order_relaxed);
         LocalSdrShim::instance().setAgc(g_dabSavedDigAgc.load());
+        /* ★ And give the AGC target back. -999 means the owner had never set one, so restore the
+         *   API's own default rather than leaving DAB's -40 on an FM carrier that does not need
+         *   it and would only run quieter for it. */
+        if (g_dabSavedAgcSet.load() != -999)
+            LocalSdrShim::instance().setIfAgcSetPoint(g_dabSavedAgcSet.load());
+        else if (useSdrplay())
+            LocalSdrShim::instance().setIfAgcSetPoint(-30);
         agcForget("DAB off: the gain that suited an ensemble does not suit a carrier");
         const double ar = g_dabSavedActualRate.load();
         const double rc = g_dabSavedRtl.load();
@@ -9895,6 +9925,19 @@ struct LocalSdrShim::Impl {
                 g_dabSavedRate.store(g_vsLockedRate.load());
                 g_dabSavedGain.store(g_gainTarget.load(std::memory_order_relaxed));
                 g_dabSavedAgcOn.store(g_rtlAgc.load(std::memory_order_relaxed));
+                /* ★ The RSP's IF AGC target, dropped to leave OFDM its peak headroom — see
+                 *   kDabAgcSetPoint. Only when this radio HAS one, and only if it is not already
+                 *   at or below it: an owner who has deliberately set -45 must not be raised. */
+                g_dabSavedAgcSet.store(vsDesiredAgcSet());
+                if (useSdrplay() && g_dabAgcOverride.load(std::memory_order_relaxed)) {
+                    const int want = g_dabAgcTarget.load(std::memory_order_relaxed);
+                    const int cur  = vsDesiredAgcSet();
+                    if (cur == -999 || cur > want) {
+                        LOGI("DAB: IF AGC target %d -> %d dBFS (OFDM peaks need the headroom)",
+                             cur == -999 ? -30 : cur, want);
+                        LocalSdrShim::instance().setIfAgcSetPoint(want);
+                    }
+                }
                 g_dabSavedDigAgc.store(g_rtlDigitalAgc.load(std::memory_order_relaxed));
                 g_dabSavedRtl.store(rtlCenter.load());
                 g_dabSavedAudio.store(audioFreq.load());
@@ -17665,6 +17708,7 @@ static void  vsRecordNotchChoice(bool rf, bool dab) {
     g_dsp.rspRfNotch.store(rf ? 1 : 0);
     g_dsp.rspDabNotch.store(dab ? 1 : 0);
 }
+static int   vsDesiredAgcSet()     { return g_dsp.rspAgcSet.load(); }
 static bool  vsAutoNotchOn()       { return g_dsp.rspAutoNotch.load() == 1; }
 static bool  vsUserNotchAllowed()  { return g_dsp.rspUserNotch.load() != 0; }
 
@@ -18911,6 +18955,10 @@ void LocalSdrShim::setVibeServerRfNotch(bool on)  { g_vsRfNotch.store(on); }
  *   reason every other RSP control lives there. Auto then owns rfNotch/dabNotch from the retune
  *   path; these two only say whether it is running and who else may interfere. */
 void LocalSdrShim::setVibeServerAutoNotch(bool on)      { g_dsp.rspAutoNotch.store(on ? 1 : 0); }
+void LocalSdrShim::setVibeServerDabAgc(bool on, int target) {
+    g_dabAgcOverride.store(on);
+    if (target < 0 && target >= -60) g_dabAgcTarget.store(target);   // ★ sane dBFS only
+}
 void LocalSdrShim::setVibeServerUserNotch(bool allowed) { g_dsp.rspUserNotch.store(allowed ? 1 : 0); }
 void LocalSdrShim::setProvidesSpectrogram(bool on) { g_vsProvidesSpectrogram.store(on); }
 
