@@ -263,6 +263,13 @@
   table.meter td { border-bottom: 1px solid var(--line); padding: 6px 0; font-size: 13px; }
   table.meter td:last-child { text-align: right; font-family: var(--nixie); font-size: 17px; color: var(--accent); }
   table.meter td b { color: var(--phosphor); font-family: var(--nixie); font-size: 19px; }
+  /* ★ The verification block: the same plain rules as the meter table, but this one carries
+     sentences rather than figures, so the right column keeps the body font and aligns left. */
+  table.verif { border-collapse: collapse; width: 100%; margin: 14px 0 6px; }
+  table.verif td { border-bottom: 1px solid var(--line); padding: 8px 0; font-size: 13px;
+    vertical-align: top; line-height: 1.55; }
+  table.verif td:first-child { width: 34%; padding-right: 18px; color: var(--phosphor);
+    letter-spacing: .04em; }
   .tunnel li { margin-bottom: 8px; }
   ul.ticks { list-style: none; padding: 0; margin: 0 0 14px; }
   ul.ticks li { position: relative; padding-left: 18px; margin-bottom: 8px; font-size: 14px; }
@@ -676,6 +683,27 @@
       <p>Nothing ships that I haven't driven myself on real hardware. The RDS analyser was checked against a professional broadcast analyser by someone who owns one. The DAB decoder took four days of chasing a breakup before it was right. Where I couldn't test, like HackRF, I worked with someone who could.</p>
       <p>The repository runs GitHub's CodeQL code scanning across Swift, Kotlin, C/C++, JavaScript and Python, with Dependabot watching the dependencies. That is a process, not a promise: the findings are public in the repository's Security tab, open ones included.</p>
       <p>The App Store price covers Apple's fees. The source is GPLv3, the APK is free, and it stays that way.</p>
+      <h3 style="margin-top:26px; font-size:14px; letter-spacing:.08em; text-transform:uppercase; color:var(--accent)">What&rsquo;s verified, and how</h3>
+      <p class="fine" style="margin-top:6px">Three lists, because &ldquo;tested&rdquo; covers three different things and running them together would be the sort of claim this page exists to avoid.</p>
+      <table class="verif">
+        <tr>
+          <td>Confirmed on hardware I own</td>
+          <td><b>Apple</b> &mdash; M4 MacBook Air (where it is written), iPhone 17 Pro Max, iPhone SE 2nd generation, Apple Watch Ultra 3, Apple Watch Series 6, iPad Air M2 13&Prime;.<br>
+              <b>Android</b> &mdash; Moto G35, Samsung Galaxy Tab A9, Samsung Galaxy XCover 4s.<br>
+              <b>Running VibeServer</b> &mdash; Raspberry Pi 500, the XCover 4s, and an 11th-generation Intel Core i5 laptop on Ubuntu 24.04 LTS.<br>
+              <b>Radios</b> &mdash; SDRplay RSP1A and RSP1B, three RTL-SDR V4, the RTL-SDR V4L and the Airspy HF+ &mdash; the last two bought specifically to build and test against.</td>
+        </tr>
+        <tr>
+          <td>Verified with someone else&rsquo;s hardware</td>
+          <td><b>HackRF</b> &mdash; made to work with a user who owns one, over several builds.<br>
+              <b>Advanced RDS</b> &mdash; checked against a professional PIRA broadcast analyser by Hans van Eijsden, who owns one.</td>
+        </tr>
+        <tr>
+          <td>Not personally verified</td>
+          <td><b>HackRF Pro</b> &mdash; bought for this work, arrived faulty, awaiting an RMA.<br>
+              <b>Linux distributions other than Debian and Ubuntu.</b></td>
+        </tr>
+      </table>
     </div>
     <div>
       <div class="stat"><span class="num">GPLv3</span><span class="l">full source, free forever</span></div>
