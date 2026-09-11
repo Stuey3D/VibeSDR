@@ -2829,6 +2829,33 @@ int main(int argc, char** argv) {
             //    made persistence necessary in the first place.
             LocalSdrShim::instance().saveSpectrogram();
             LocalSdrShim::stopMdns();
+            /* ★★★ A SAVE MUST NEVER BE ABLE TO TAKE THE RECEIVER OFF THE AIR, and without this it
+             *  could. The restart here is `return 0` and a reliance on systemd's Restart=always —
+             *  which only works if we actually EXIT. Stuart's OWRX box, 2026-09-11: the server
+             *  printed "Configuration saved — restarting to apply it", logged "local SDR stopped",
+             *  and then sat there. Seven minutes later the process was still alive (same pid),
+             *  answering nothing on 48000, with five sleeping threads and both USB devices
+             *  released. systemd never restarted it because it never died.
+             *
+             *  ★★ THE SUSPECT IS THE SDRplay TEARDOWN. That box had just been set up with an RSP1A,
+             *     and this file already records that unwinding SDRplay device selection has hung
+             *     inside the API's own shared mutex before (see the note on restartStream and
+             *     setPaused). A blocking Uninit/Release is exactly this shape.
+             *
+             *  ★ So do not depend on a clean stop to get us restarted. The spectrogram is already
+             *    saved on the line above and the config is on disk; there is nothing left worth
+             *    waiting for. If stop() has not returned in eight seconds, leave anyway — _exit
+             *    skips destructors deliberately, because a destructor is precisely what is stuck.
+             *    The kernel closes the USB handles, systemd brings us straight back.
+             *  ★ Detached, and it exits the process rather than being joined: the whole point is
+             *    that the thread it is guarding may never finish. */
+            std::thread([]{
+                std::this_thread::sleep_for(std::chrono::seconds(8));
+                std::fprintf(stderr, "VibeServer: shutdown did not complete in 8s — exiting anyway "
+                                     "so the service can restart.\n");
+                std::fflush(nullptr);
+                _exit(0);
+            }).detach();
             shim.stop();
             // ★★★ IF NOTHING WILL BRING US BACK, BRING OURSELVES BACK. "Restart" here is `return
             //     0` and a reliance on systemd's Restart=always — so on a box with no init, every
