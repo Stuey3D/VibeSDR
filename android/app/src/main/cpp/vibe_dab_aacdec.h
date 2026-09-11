@@ -485,6 +485,18 @@ private:
             if (a) { found = true; break; }
         }
         ::pclose(p);
+        /* ★★★ SAY IT ONCE, LOUDLY. Without ffmpeg the server cannot decode DAB+ at all: it ships
+         *  raw AAC to the client instead, which is the client-side decoding this project
+         *  deliberately moved away from, and the owner is told nothing. On the x86 box that showed
+         *  up as one service crackling and another silent on a receiver whose figures said the air
+         *  was perfect — hours to place, and one apt line to fix. */
+        if (!found)
+            std::fprintf(stderr,
+                "[DAB] no usable ffmpeg found (looked in /opt/homebrew/bin, /usr/local/bin, "
+                "/usr/bin and $PATH) — DAB+ CANNOT BE DECODED ON THIS SERVER. Install it with "
+                "`sudo apt install ffmpeg`. Everything else (the ensemble, MP2 services, the "
+                "signal figures) is unaffected.\n");
+        std::fflush(stderr);
         return found;
     }
 

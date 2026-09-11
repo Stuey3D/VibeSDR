@@ -581,6 +581,19 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   #     which this package already requires by shipping a .service unit. Declaring `systemd` would
   #     also wrongly refuse to install on a container image where the binary is still useful.
   set(CPACK_DEBIAN_PACKAGE_DEPENDS "adduser, curl, gzip")
+  # ★★★ ffmpeg IS HOW DAB+ IS DECODED ON LINUX, and it was never declared — so a machine simply
+  #     without it served DAB+ that the SERVER could not decode, fell back to shipping raw AAC to
+  #     the client, and told nobody. Measured on the x86 box (2026-09-11): no ffmpeg anywhere,
+  #     aacDecoded 0, perfect superframes, and audio quality decided by whatever the browser made
+  #     of it — which is precisely the client-side decoding this project moved AWAY from. The Pi
+  #     had it only because something else pulled it in.
+  # ★★ RECOMMENDS, NOT DEPENDS. apt installs Recommends by default and keeps them upgraded, which
+  #    is what "auto-updating" means here (Stuart, 2026-09-11) — while a hard dependency would drag
+  #    a large package onto a receiver run purely for FM/AM/SSB, and would refuse to install on a
+  #    minimal image where the binary is still perfectly useful. Same reasoning as systemd above.
+  # ★ The decoder also now SAYS so at start-up when it is absent — see vibe_dab_aacdec.h. A
+  #   missing Recommends must never again be a silent downgrade.
+  set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "ffmpeg")
   set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
   set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
       "${CMAKE_CURRENT_SOURCE_DIR}/linux/debian/postinst"
