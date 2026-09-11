@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cctype>
 #include <ctime>
 #include <fstream>
 #include <unistd.h>
@@ -215,8 +216,48 @@ std::string hostModel() {
         while (!m.empty() && (m.back() == '\0' || m.back() == '\n')) m.pop_back();
         if (!m.empty()) return m;
     }
-    const std::string dmi = trim(run("cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null"));
-    return dmi;
+    /* ★★★ A PC'S product_name IS OFTEN A FACTORY CODE, NOT A NAME. The Lenovo in this house
+     *     reports "82K1", which tells a listener in the directory precisely nothing — Stuart,
+     *     2026-09-11: "it just shows a model name like 82k something". Its product_version says
+     *     "IdeaPad Gaming 3 15IHU6", which is the name a human would use, so prefer that whenever
+     *     product_name looks like a bare code (short, and no lower-case letters in it).
+     * ★★ AND NAME THE PROCESSOR, which is what actually tells somebody what the receiver can do.
+     *    A Pi states its board and that is enough; an x86 box is defined by its CPU, and "82K1"
+     *    hides an i5-11300H. Result: "IdeaPad Gaming 3 15IHU6 · Intel Core i5-11300H".
+     * ★ Either half may be missing, and the other still stands on its own. */
+    std::string dmi  = trim(run("cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null"));
+    const bool codeLike = dmi.size() <= 8 &&
+        dmi.find_first_of("abcdefghijklmnopqrstuvwxyz") == std::string::npos;
+    if (codeLike) {
+        std::string alt = trim(run("cat /sys/devices/virtual/dmi/id/product_version 2>/dev/null"));
+        if (alt.empty()) alt = trim(run("cat /sys/devices/virtual/dmi/id/product_family 2>/dev/null"));
+        /* ★ Only if it is a real name: these fields are frequently "To Be Filled By O.E.M.",
+         *   "Default string" or "System Version", which are worse than the code they replace. */
+        const std::string lower = [&]{ std::string t = alt; for (char& c : t) c = char(::tolower((unsigned char)c)); return t; }();
+        if (!alt.empty() && lower.find("be filled") == std::string::npos
+            && lower.find("default string") == std::string::npos
+            && lower.find("system version") == std::string::npos
+            && lower.find("not specified") == std::string::npos
+            && lower.find("none") != 0)
+            dmi = alt;
+    }
+    /* ★ The CPU, tidied: "11th Gen Intel(R) Core(TM) i5-11300H @ 3.10GHz" is mostly punctuation.
+     *  Drop the registered marks, the clock (it is boost-dependent and reads as precision we do
+     *  not have) and the "CPU" filler, and keep the part that identifies the chip. */
+    std::string cpu = trim(run("sed -n 's/^model name[ \t]*: //p' /proc/cpuinfo 2>/dev/null | head -1"));
+    for (const char* junk : { "(R)", "(TM)", "(r)", "(tm)" }) {
+        for (size_t i; (i = cpu.find(junk)) != std::string::npos; ) cpu.erase(i, std::strlen(junk));
+    }
+    if (const size_t at = cpu.find(" @ "); at != std::string::npos) cpu.erase(at);
+    if (const size_t c = cpu.find(" CPU"); c != std::string::npos) cpu.erase(c, 4);
+    cpu = trim(cpu);
+    { std::string sq; bool sp = false;              // ★ collapse the gaps the deletions leave
+      for (char c : cpu) { if (c == ' ') { if (!sp) sq += c; sp = true; } else { sq += c; sp = false; } }
+      cpu = trim(sq); }
+
+    if (!dmi.empty() && !cpu.empty()) return dmi + " \xc2\xb7 " + cpu;
+    if (!dmi.empty()) return dmi;
+    return cpu;
 #endif
 }
 
