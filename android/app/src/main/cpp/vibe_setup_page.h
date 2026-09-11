@@ -494,18 +494,27 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           already on screen. Without it a close-in view goes blocky. Costs a little CPU and is
           what makes a shared receiver worth zooming into.</div>
       </div>
+    </div><!-- /lockedOnly -->
 
-      
-
-
-
+      <!-- ★★★ OUTSIDE #lockedOnly, AND THAT IS THE WHOLE FIX. This card sat INSIDE it, so the
+           entire Radio section — the RF and DAB notches, and everything added to them — was
+           hidden on any receiver whose RF centre is not locked. The Pi's RSP is locked and showed
+           them; the x86 box's RSP is "shared VFO, unlocked RF centre" and never did (Stuart,
+           2026-09-11, the FIRST thing reported that evening: "the Server wasnt giving me the
+           options for the RF/DAB notches on the RSP1A setup page").
+           ★★ It is wrong on the merits as well as by accident. A notch is an ANALOGUE filter ahead
+           of the tuner: it protects the front end from a transmitter nowhere near what you are
+           listening to, which has nothing whatever to do with whether the dial is locked. Only
+           the RANGE card above it is genuinely locked-only, because a range is what a locked
+           receiver HAS.
+           ★ I chased this for an evening — a driver gate, a dead radio, a lost `configured` flag —
+           and it was markup nesting the entire time. The gate in renderHw() was innocent. -->
       <div class="card">
         <h2>Radio</h2>
         <p class="why">Listeners cannot change these in shared mode, so they are set here or not
            at all.</p>
         <div id="hw"></div>
       </div>
-    </div>
       <div class="card">
         <h2>Antenna</h2>
         <p class="why">A receiver publishes what the TUNER can reach, never what the AERIAL can.
