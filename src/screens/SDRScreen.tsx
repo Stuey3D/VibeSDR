@@ -4673,6 +4673,32 @@ export default function SDRScreen({ route, navigation }: Props) {
         sharedNoDoorRef.current = false;
       }
       if (!destroyed.current) setSharedDialNow(sharedNoDoorRef.current || isSharedDial(chosenRadio));
+      /* ★★★ AND "I DO NOT KNOW" MUST NOT MEAN "GO AHEAD AND TUNE THE ROOM".
+       *
+       *  The probe above is the ONLY signal a bare door gives us, and it has 1.5 s to answer
+       *  because it sits in front of somebody's audio. Through a Cloudflare quick tunnel, from a
+       *  phone, it loses that race often enough — and "unknown" then fell through to asserting the
+       *  saved tune, which on a shared receiver drags everybody already listening off their
+       *  station. Stuart, 2026-09-11: "soon as the iphone connected they both had static like the
+       *  iphone nudged the tuning when it connected", with the frequency box still reading the
+       *  correct 99.7 on both. That is a nudge of a few kHz, heard as analogue mistuning — not a
+       *  digital fault, which is why the codec was the wrong place to look.
+       *
+       *  ★★ THE XCOVER CANNOT ANSWER THE OTHER WAY EITHER. `chosenRadio` needs a front door AND a
+       *     /r/<id> address; a phone running VibeServer publishes neither (its /vibeserver/radios
+       *     returns a stub, and it 404s every /r/<id>), so the probe is all there is. Its directory
+       *     entry DOES say `shared: true, users: 10` — but that is not in this screen's hands.
+       *
+       *  ★★ AND DEFERRING COSTS NOTHING. The saved tune is not lost by staying quiet here: the
+       *     `config` message carries `shared` authoritatively, and SdrWsClient restores the
+       *     remembered frequency there for exactly the receivers where it is right to — a moment
+       *     later, and knowing the answer instead of guessing it. So the timid choice keeps the
+       *     feature and drops only the risk.
+       *  ★ Under by a beat is a slightly later restore; over is a room full of listeners moved off
+       *    their station by somebody who only opened the app. */
+      if (!destroyed.current) {
+        setAssertTuneOk(chosenRadio ? !isSharedDial(chosenRadio) : (!!occ && occ.maxUsers <= 1));
+      }
       let j = await AsyncStorage.getItem(tuneKey).catch(() => null);
       // Migrate the pre-per-device global local key on first per-device connect.
       if (j == null && isLocal) j = await AsyncStorage.getItem('lsv_last_tune:local').catch(() => null);
@@ -4812,6 +4838,11 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  dial (2026-08-23). Suppressing the saved tune alone left the hijack in place.
    */
   const [sharedDialNow, setSharedDialNow] = useState(false);
+  /** ★ May this connection assert its remembered tune at the server? Only when we have POSITIVELY
+   *  established the dial is ours alone — never on "unknown". Kept separate from `sharedDialNow`,
+   *  which describes the room and drives the dial chat: conflating "it is shared" with "we could
+   *  not find out" would put the chat strip in front of people on a private receiver. */
+  const [assertTuneOk, setAssertTuneOk] = useState(false);
   // One-shot: a deep-link initial tune is applied on the first connect only.
   const deepLinkTuneApplied = useRef(false);
   // Start the session countdown once we're actually connected.
@@ -9437,7 +9468,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           //     is holding — and before the server's own state is adopted that is the app's DEFAULT,
           //     so joining somebody's shared receiver threw the room to 14.074 MHz, outside what
           //     that server even allows, before settling. The dial belongs to the room.
-          assertTune={!sharedDialNow}
+          assertTune={assertTuneOk}
           // ★ …and on a shared dial, stay silent until a person actually asks for something.
           //  ★★ A REF READ DURING RENDER, WHICH IS SAFE ONLY BECAUSE OF WHAT BUMPS IT: every site
           //     that increments this also changes `status`, so the screen re-renders and the new
