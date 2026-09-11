@@ -306,17 +306,24 @@ final class UberClient: ObservableObject {
      *     reason and this function still pushes over it. Not tonight, and not silently: noted.
      *  ★ `rate` is left in the saved dictionary deliberately, so an older build of this app that
      *    still reads it is not confused by the key vanishing. */
-    // Gain LAST: an RTL dongle commonly resets tuner gain when the sample rate changes. Both ride the same
-    // spectrum WS, so the server applies them in this order.
-    if let auto = s["auto"] as? Bool, auto {
-      if !gainAuto { setGainAuto(true) }
-    } else if let g = s["gain"] as? Double,
-              let step = permittedGains.min(by: { abs(Double($0) - g) < abs(Double($1) - g) }) {
-      // ★ permittedGains: a SAVED setting is exactly how a value from before the owner tightened
-      //   the limit gets pushed back at a capped server — restored, refused, and then shown as
-      //   though it took.
-      setGainValue(Double(step))   // snap to a step this tuner actually has
-    }
+    /* ★★★ THE GAIN IS NO LONGER RESTORED EITHER, for the same reason the rate is not.
+     *
+     *  This pushed the gain saved for this host, and restoreVibeHw runs on EVERY hwinfo — so the
+     *  wrist repeatedly imposed its own remembered gain on a radio it may not own, overriding the
+     *  owner's resting setting and, on a shared receiver, re-gaining it under everyone already
+     *  listening. It is the fault the app fixed in August ("I set the RTL-SDR on the server to
+     *  return to 12.5db but when I opened it in the app it was at 29.7db") and this reader was
+     *  missed. The gain now comes the other way: hwinfo carries `gainNow` and we adopt it.
+     *
+     *  ★★ AND IT WAS THE WORSE HALF OF THE PAIR. A wrong RATE is a wrong span, which is visible;
+     *     a wrong GAIN is a radio quietly overloaded or deaf, which reads as bad reception and
+     *     sends somebody hunting an aerial fault. Stuart, 2026-09-11: "fix Jr's gain etc".
+     *
+     *  ★ `auto`/`gain` stay in the saved dictionary deliberately, so an older build of this app
+     *    that still reads them is not confused by the keys vanishing.
+     *  ★ bias-T, ppm and the notches above are left: every one of them is admin-gated on the
+     *    server, so a receiver that is not yours refuses them outright rather than being changed
+     *    by a passing listener. They are settings for a radio you own. */
   }
 
   private let adpcmL = ImaAdpcmDecoder(flavor: .kiwi)   // VibeServer audio: mid / left channel
@@ -558,6 +565,19 @@ final class UberClient: ObservableObject {
      *  page set to 2.4 (Stuart, 2026-09-10).
      *  ★ Absent on an older server, and 0 must not read as "running at nothing". */
     if let rn = (j["rateNow"] as? NSNumber)?.intValue, rn > 0 { sampleRate = rn }
+    /* ★★★ AND WHERE THE GAIN ACTUALLY IS — the same rule as rateNow, and the field it was modelled
+     *  on. `gainNow` is the radio's own gain in tenths of a dB, -1 meaning its AGC has it. Jr never
+     *  read it: it only ever PUSHED the gain it had saved for this host, on every hwinfo, so the
+     *  wrist imposed a remembered value on a radio it may not own and re-gained a shared receiver
+     *  under everybody already listening. The app stopped doing this in August — "I set the RTL-SDR
+     *  on the server to return to 12.5db but when I opened it in the app it was at 29.7db" — and
+     *  the fix never reached here. [[one_rule_two_readers]]
+     *  ★ The slider FOLLOWS the radio. That is the whole point: a control that shows a value the
+     *    radio is not using is worse than no control, because nothing tells you to look. */
+    if let gn = (j["gainNow"] as? NSNumber)?.intValue {
+      if gn < 0 { if !gainAuto { gainAuto = true } }
+      else { if gainAuto { gainAuto = false }; gainValue = Double(gn) }
+    }
     agcLocked  = (j["agcLocked"] as? NSNumber)?.boolValue ?? ((j["agcLocked"] as? Bool) ?? false)
     // ★ -1 when absent, never 0 — an older server that never sends it must read as "no limit",
     //   and 0 would read as "no gain allowed at all".
