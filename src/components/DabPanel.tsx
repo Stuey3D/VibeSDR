@@ -25,6 +25,8 @@ import { BlurView } from 'expo-blur';
 import { Canvas, Points, Rect } from '@shopify/react-native-skia';
 import type { DabState } from '../services/dabTypes';
 import { DAB_BLOCKS, DAB_PTY, dabBlockAt } from '../services/dabBlocks';
+import { lookupStationLogo, tidyStationName } from '../services/stationLogo';
+import { receiverIso } from '../services/rdsCountry';
 
 const C = {
   /* ★★★ NEARLY OPAQUE, AND DELIBERATELY NOT GLASS LIKE THE RDS PANEL. That panel is see-through
@@ -149,21 +151,46 @@ function useServiceLogo(base: string, d: DabState | null,
   if (!sv || !d) return null;
   if (sv.logoAir) return `${base}/vibeserver/dablogoair?sid=${sv.sid}`;
   const known = logoCache.get(key);
-  if (known === undefined) {
+  /* ★★★ DO NOT CLAIM A SERVICE WE CANNOT YET ASK ABOUT. The claim exists to stop a request per
+   *  render, and it must not outlive its purpose: this used to be set BEFORE testing `ecc`/`eid`,
+   *  so a service rendered in the seconds before the ensemble identity had decoded was cached as
+   *  "no logo" permanently and never asked about again. The label is enough for the name search
+   *  below, so wait until there is one. */
+  if (known === undefined && (sv.label || (ecc >= 0 && d.eid))) {
     logoCache.set(key, null);                       // claim it BEFORE the fetch — see above
-    if (ecc >= 0 && d.eid) {
-      const hex = (n: number, w: number) => n.toString(16).toUpperCase().padStart(w, '0');
+    /* ★★★ THREE SOURCES, NOT TWO — the web client's fourth fallback was missing here, and it is the
+     *  one that fills most of the gaps. `dabLogoLookup` in main.ts ends with a NAME SEARCH when
+     *  RadioDNS has nothing: "provisional, but far better than a blank tile". Without it a station
+     *  that carries no logo over the air AND has no RadioDNS entry showed artwork in the browser
+     *  and a blank tile in the app — Stuart, 2026-09-11: "the app also seems to be missing some of
+     *  the station logos compared to the client too". SOME, because the two chains agree on every
+     *  station that does have one of the first two.
+     * ★ Identity first, name second, exactly as the browser ranks them: RadioDNS is the
+     *   broadcaster's own file for THIS service, a name match is a guess that is usually right. */
+    const hex = (n: number, w: number) => n.toString(16).toUpperCase().padStart(w, '0');
+    const viaName = async (): Promise<string | null> => {
+      const nm = tidyStationName(sv.label || '');
+      if (!nm) return null;
+      try { return await lookupStationLogo(nm, undefined, receiverIso() || undefined); }
+      catch { return null; }
+    };
+    const viaIdentity = async (): Promise<string | null> => {
+      if (!(ecc >= 0 && d.eid)) return null;
       const q = `ecc=${hex(ecc, 2)}&eid=${hex(d.eid, 4)}&sid=${hex(sv.sid, 4)}&scids=${Math.max(0, sv.scids ?? 0)}`;
-      fetch(`${base}/vibeserver/dablogo?${q}`)
-        .then(r => (r.ok ? r.json() : null))
-        .then((j: { logo?: string } | null) => {
-          const u = j && typeof j.logo === 'string' && j.logo ? j.logo : '';
-          if (!u) return;
-          logoCache.set(key, u.startsWith('http') ? u : `${base}${u}`);
-          bump(x => x + 1);                          // it arrived after the render that asked
-        })
-        .catch(() => {});
-    }
+      try {
+        const r = await fetch(`${base}/vibeserver/dablogo?${q}`);
+        if (!r.ok) return null;
+        const j: { logo?: string } | null = await r.json();
+        const u = j && typeof j.logo === 'string' && j.logo ? j.logo : '';
+        return u ? (u.startsWith('http') ? u : `${base}${u}`) : null;
+      } catch { return null; }
+    };
+    void (async () => {
+      const u = (await viaIdentity()) ?? (await viaName());
+      if (!u) return;
+      logoCache.set(key, u);
+      bump(x => x + 1);                              // it arrived after the render that asked
+    })();
   }
   if (known) return known;
   return sv.logoSlide ? `${base}/vibeserver/dabslide?sid=${sv.sid}` : null;
@@ -388,12 +415,31 @@ export default function DabPanel(p: DabPanelProps) {
    *  station's buffered tail drains for a moment and must not clear it. This panel re-renders on
    *  every DAB state update (about once a second), which is what makes the seconds count. */
   const [pickedAt, setPickedAt] = useState(0);
-  const pick = (sid: number) => { setPickedAt(Date.now()); p.onService(sid); };
+  const pcm = useRef({ last: -1, roseAt: 0, runStart: 0 });
+  /* ★★★ RE-ARM THE RUN TRACKER, NOT JUST THE CLOCK — the half of the web client's click handler
+   *  that did not get copied across. `runStart` below only advances when the PCM counter has
+   *  PAUSED for more than 1.5 s, so on a stream that is already decoding — a shared VFO playing
+   *  DAB, or simply switching service inside a multiplex you are already listening to — there is
+   *  no pause, `runStart` keeps its old value, and `runStart >= pickedAt` is never true again.
+   *  `decoderFlowing` then stays false for ever and the "Tuning in" line sticks while the station
+   *  plays perfectly (Stuart, 2026-09-11: "the DAB station connection text works perfect on the web
+   *  client but in the app it gets stuck even though the station is connected and playing the audio
+   *  perfectly").
+   *  ★★ The browser does exactly this on its own row click — `dabPcmRunStart = 0; dabPcmRoseAt = 0`
+   *     — which is what makes the next rise start a FRESH run (now - 0 is always > 1500). The gate
+   *     was mirrored from it faithfully; the two lines that arm the gate were left behind.
+   *  ★ `last` is deliberately NOT reset, matching the browser: clearing it would make the next
+   *    report a first sighting with no rise to detect, costing a whole second before the run can
+   *    even begin. */
+  const pick = (sid: number) => {
+    pcm.current.runStart = 0; pcm.current.roseAt = 0;
+    setPickedAt(Date.now());
+    p.onService(sid);
+  };
   // ★ TWO THINGS, BOTH TRUE, mirror of the web client: (1) the DECODER's PCM counter has been
   //   climbing for a second (the digital flow — "like the advanced analysis", Stuart), and (2) a
   //   sustained second of audio packets whose run began after the press. A start-up flash then
   //   silence never reaches a second on either, so the line stays up through it.
-  const pcm = useRef({ last: -1, roseAt: 0, runStart: 0 });
   {
     const v = typeof d?.pcmPushed === 'number' ? d.pcmPushed : -1, now = Date.now();
     if (v >= 0 && v !== pcm.current.last) {
