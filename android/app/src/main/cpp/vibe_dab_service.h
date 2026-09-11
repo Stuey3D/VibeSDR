@@ -75,7 +75,11 @@ public:
          *  multiplex differ in both. Carrying it across is the chipmunk bug wearing a new hat. */
         aac_.reset();
         aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacAuTotal_ = 0; aacEffRateHz_ = 0; aacRateWarned_ = false; aacPrimed_ = false;
-        aacStartedKnown_ = knownRatio_ > 0.0;   // ★ known from the start — no "setting the clock" while the pipe primes
+        /* ★ WHICH GEOMETRY THE NEW SERVICE USES IS NOT KNOWN UNTIL ITS FIRST SUPER FRAME, so this
+         *  can no longer be answered here. The first decoded unit sets it from that service's own
+         *  ratio (see aacStartedKnown_ below), one access unit later — tens of milliseconds, and
+         *  far better than claiming a ratio we may not have for the configuration about to play. */
+        aacStartedKnown_ = AacDecoder::kExactFrames;
         adts_.clear();
         pad_.reset();      // ★ the label belongs to the old programme
         slide_ = Slide{}; // ★ and so does the picture
@@ -137,7 +141,7 @@ public:
          *  stuck until you select it again"). Start the window from the new service's frames. */
         sf_.clear();
         aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacPrimed_ = false;   // ★ a restarted pipe primes again — see the count
-        aacStartedKnown_ = knownRatio_ > 0.0;
+        aacStartedKnown_ = AacDecoder::kExactFrames;   // ★ as in setChannel — the first unit answers it
         adts_.clear();
         pad_.reset();
         slide_ = Slide{}; cats_.clear(); slideAlert_ = 0; slideClickUrl_.clear();
@@ -476,8 +480,18 @@ public:
         ratioFile_ = path;
         if (AacDecoder::kExactFrames || path.empty()) return;
         if (FILE* f = fopen(path.c_str(), "rb")) {
-            double r = 0.0;
-            if (fscanf(f, "%lf", &r) == 1 && r > 0.5 && r < 2.0) knownRatio_ = r;
+            /* ★★ TWO FORMATS, because the file on an upgraded box is the old one. A line with two
+             *  fields is "<access units> <ratio>"; a line with one is a pre-5.4 bare ratio, and
+             *  the honest thing to do with it is DISCARD it: we do not know which geometry it was
+             *  measured on, and applying it to the wrong one is the bug being fixed here. Losing
+             *  it costs a few seconds of re-learning on first play; keeping it costs a receiver
+             *  that crackles on half its services. */
+            char line[128];
+            while (fgets(line, sizeof line, f)) {
+                int aus = 0; double r = 0.0;
+                if (sscanf(line, "%d %lf", &aus, &r) == 2 && aus > 0 && aus <= 64 && r > 0.5 && r < 2.0)
+                    knownRatios_[aus] = r;
+            }
             fclose(f);
         }
     }
@@ -626,7 +640,9 @@ public:
                 /* Settling = the running estimate has not converged yet (~160 access units, the
                  *  moving window's first full settle; Stuart heard the glide outlast a 48-AU
                  *  notice) and no remembered ratio started this service at the right speed. */
-                j += (aacAuTotal_ < 160 && !aacStartedKnown_) ? ",\"aacSettling\":true" : ",\"aacSettling\":false";
+                /* ★ Against THIS configuration's unit count, not the lifetime one — the lifetime
+                 *  counter made the notice clear on a service whose own ratio was still unlearnt. */
+                j += (aacCfgUnits_ < 160 && !aacStartedKnown_) ? ",\"aacSettling\":true" : ",\"aacSettling\":false";
                 j += cb;
             } else if (sid_ && rx_.selectedType() == 0 && mp2_.info().valid) {
                 const auto& mi = mp2_.info();
@@ -1695,7 +1711,11 @@ private:
                          *  asynchronous, so measuring its early, bursty output read a false rate
                          *  and paced the audio at it — a start-up ramp on a platform that had
                          *  played DAB+ perfectly that morning (Stuart, 2026-09-07). */
-                        double& s_knownRatio = knownRatio_;   // ★ a member now, so it can be kept on disk (see setRatioFile)
+                        /* ★ THE GEOMETRY THIS UNIT BELONGS TO — the key the ratio is stored under.
+                         *   See knownRatios_: a ratio measured on a 48 kHz service must never be
+                         *   applied to a 32 kHz one. */
+                        const int aacCfg = s.fmt.accessUnits;
+                        double s_knownRatio = ratioFor(aacCfg);
                         ++aacAuTotal_;                                   // lifetime, never halved
                         int rate = s_knownRatio > 0.0 ? int(std::lround(double(dec.rateHz) * s_knownRatio)) : dec.rateHz;
                         if (aacAuTotal_ <= 1) aacStartedKnown_ = s_knownRatio > 0.0;
@@ -1705,7 +1725,14 @@ private:
                          *  again for every service (Stuart, 2026-09-07). And the "converged" test
                          *  read the moving window's counter, which is halved and never reaches
                          *  its own threshold — so the notice never cleared. Lifetime counter now. */
-                        const bool converged = aacAuTotal_ >= 160;
+                        /* ★★★ CONVERGENCE BELONGS TO THE CONFIGURATION BEING MEASURED. `aacAuTotal_`
+                         *      is a lifetime counter that only resets on a CHANNEL change, so after
+                         *      the first service had converged every later service started life
+                         *      "converged" on a measurement made for a different geometry — and so
+                         *      never learnt its own. Count units seen on THIS configuration. */
+                        if (aacCfg != aacCfgSeen_) { aacCfgSeen_ = aacCfg; aacCfgUnits_ = 0; }
+                        ++aacCfgUnits_;
+                        const bool converged = aacCfgUnits_ >= 160;
                         if (!AacDecoder::kExactFrames && aacAuAcc_ >= 8) {
                             const double auSec = 0.120 / double(s.fmt.accessUnits);
                             const double eff   = aacPcmAcc_ / (double(aacAuAcc_) * auSec);
@@ -1718,7 +1745,7 @@ private:
                                         fprintf(stderr, "[DAB] AAC decoder claims %d Hz but returns %.0f samples/s of programme — pacing at the measured rate\n", dec.rateHz, eff); }
                                     rate = int(std::lround(eff));
                                 }
-                                if (converged && dec.rateHz > 0) { s_knownRatio = double(rate) / double(dec.rateHz); saveRatio(); }
+                                if (converged && dec.rateHz > 0) { knownRatios_[aacCfg] = double(rate) / double(dec.rateHz); saveRatio(); }
                             } else {
                                 /* ★★★ KNOWN: THE RATIO IS A PROPERTY OF THE DECODER AND DOES NOT MOVE. The
                                  *  first version kept chasing the moving window after convergence, so a
@@ -1731,8 +1758,8 @@ private:
                                  *  changed ffmpeg, not a blip) before the ratio is relearnt. */
                                 aacDeviantRun_ = deviant ? aacDeviantRun_ + 1 : 0;
                                 if (aacDeviantRun_ >= 400 && dec.rateHz > 0) {
-                                    fprintf(stderr, "[DAB] AAC decoder's output rate has changed: %.0f samples/s against %d expected — relearning\n", eff, rate);
-                                    s_knownRatio = eff / double(dec.rateHz); rate = int(std::lround(eff)); saveRatio(); aacDeviantRun_ = 0;
+                                    fprintf(stderr, "[DAB] AAC decoder's output rate has changed: %.0f samples/s against %d expected — relearning (%d AU/super frame)\n", eff, rate, aacCfg);
+                                    knownRatios_[aacCfg] = eff / double(dec.rateHz); rate = int(std::lround(eff)); saveRatio(); aacDeviantRun_ = 0;
                                 }
                             }
                             if (aacAuAcc_ >= 100) { aacPcmAcc_ *= 0.5; aacAuAcc_ /= 2; }   // a moving window
@@ -1803,6 +1830,7 @@ private:
     bool aacPrimed_ = false;   // the decoder has returned its first sample — counting starts AFTER it
     bool aacPrimeBurst_ = false;   // this output is the priming burst: excluded from the count
     bool aacStartedKnown_ = AacDecoder::kExactFrames; int aacAuTotal_ = 0;
+    int aacCfgSeen_ = 0, aacCfgUnits_ = 0;   // ★ which geometry is being measured, and for how long
     Slide slide_;
     uint32_t slideSeq_ = 0;
     std::string slideDir_;
@@ -1914,13 +1942,51 @@ private:
             if (ok) rename(tmp.c_str(), p.c_str()); else remove(tmp.c_str());
         }
     }
-    double knownRatio_ = AacDecoder::kExactFrames ? 1.0 : 0.0;   // samples returned / samples due, once measured
+    /** ★★★ ONE RATIO PER AUDIO CONFIGURATION, NOT ONE PER BOX. This was a single scalar, learnt on
+     *      whichever service happened to be playing, written to a file shared by every
+     *      `vibeserver@` unit, and then applied to EVERY service regardless of its codec
+     *      configuration. It is not a property of the box: it is a property of what the decoder
+     *      does with a given frame geometry, and DAB+ carries several.
+     *
+     *  ★★★ MEASURED, A/B, ON ONE MULTIPLEX PAIR (Stuart, 2026-09-11, RSP1A on the OWRX box). Two
+     *      services identical in every respect the panel reports — DAB+ 32 kbit/s, HE-AAC v2
+     *      Parametric Stereo, EEP-A 3 (1/2), 0.0 % FIB errors — differing ONLY in core rate:
+     *          Kerrang!     48 kHz  → clear
+     *          1047 SUBJAM  32 kHz  → constant crackle
+     *      The 48 kHz geometry had converged first and written the file; every 32 kHz service was
+     *      then paced at the wrong rate and the shortfall gap-filled, which is the vinyl-pop
+     *      clicking this project has chased twice before. The receiver's own figures said the air
+     *      was perfect throughout (super frames 138 of 138, Reed-Solomon 0 fixed 0 lost, MER
+     *      23.4 dB, IQ dropped 0) — so it read as broken hardware on the machine with the BEST
+     *      reception, which is what made it so hard to place.
+     *
+     *  ★★ AND A SERVICE CHANGE COULD NEVER CORRECT IT. `aac_.reset()` and the accumulators reset
+     *     on a new service, but `knownRatio_` did not, and `aacAuTotal_` only resets on a CHANNEL
+     *     change — so `converged` stayed true and a newly selected service never re-learnt. The
+     *     first geometry to converge owned the box until someone deleted the file.
+     *
+     *  ★ The key is the access-unit count per 120 ms super frame (2/3/4/6 ⇒ 16/24/32/48 kHz core),
+     *    which is the geometry itself and is known at the measurement site. */
+    std::map<int, double> knownRatios_;
     int aacDeviantRun_ = 0;   // consecutive units on which the watched window disagrees with the known ratio
     std::string ratioFile_;
+    /** ★ The ratio for this configuration, or 0 if it has not been learnt yet. An exact-frame
+     *  decoder (Android) needs no measurement at all and answers 1.0 for every geometry. */
+    double ratioFor(int aus) const {   // caller holds m_
+        if (AacDecoder::kExactFrames) return 1.0;
+        const auto it = knownRatios_.find(aus);
+        return it == knownRatios_.end() ? 0.0 : it->second;
+    }
     void saveRatio() {   // caller holds m_
-        if (ratioFile_.empty() || knownRatio_ <= 0.0) return;
+        if (ratioFile_.empty() || knownRatios_.empty()) return;
         const std::string tmp = ratioFile_ + ".tmp";
-        if (FILE* f = fopen(tmp.c_str(), "wb")) { fprintf(f, "%.6f\n", knownRatio_); fclose(f); rename(tmp.c_str(), ratioFile_.c_str()); }
+        if (FILE* f = fopen(tmp.c_str(), "wb")) {
+            /* ★ "<access units> <ratio>" per line. An OLD file holds a bare number on its own
+             *  line, which this format still reads — see setRatioFile — so an upgrade keeps what
+             *  the box already knew instead of making every receiver re-learn on first play. */
+            for (const auto& kv : knownRatios_) fprintf(f, "%d %.6f\n", kv.first, kv.second);
+            fclose(f); rename(tmp.c_str(), ratioFile_.c_str());
+        }
     }   // ★ an exact decoder has nothing to learn — no "setting the clock" flash before its first unit
     /* ★ Counters, because "no audio" has four possible causes here and guessing between them is
      *  what cost the evening: no frames arriving, frames of an unusable length, the firecode
