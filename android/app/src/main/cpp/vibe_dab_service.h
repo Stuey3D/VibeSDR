@@ -481,16 +481,22 @@ public:
         if (AacDecoder::kExactFrames || path.empty()) return;
         if (FILE* f = fopen(path.c_str(), "rb")) {
             /* ★★ TWO FORMATS, because the file on an upgraded box is the old one. A line with two
-             *  fields is "<access units> <ratio>"; a line with one is a pre-5.4 bare ratio, and
-             *  the honest thing to do with it is DISCARD it: we do not know which geometry it was
-             *  measured on, and applying it to the wrong one is the bug being fixed here. Losing
-             *  it costs a few seconds of re-learning on first play; keeping it costs a receiver
-             *  that crackles on half its services. */
+             *  fields is "<access units> <ratio>"; a bare number is a pre-5.4 ratio.
+             *  ★★★ THE LEGACY VALUE IS KEPT, AS A FALLBACK FOR GEOMETRIES NOT YET MEASURED — it is
+             *      NOT discarded. An earlier draft threw it away on the grounds that we cannot know
+             *      which geometry it was measured on, which is true but costs every working box a
+             *      re-learn on upgrade to fix a fault never observed on one: the Pi has carried a
+             *      single 1.066667 since 2026-09-07 with audio Stuart describes as perfect, and
+             *      16/15 is the decoder's constant for the geometries in use
+             *      ([[dab_ffmpeg_ratio_measurement_traps]]). Keep what works; let a per-geometry
+             *      measurement override it as each one converges. */
             char line[128];
             while (fgets(line, sizeof line, f)) {
                 int aus = 0; double r = 0.0;
                 if (sscanf(line, "%d %lf", &aus, &r) == 2 && aus > 0 && aus <= 64 && r > 0.5 && r < 2.0)
                     knownRatios_[aus] = r;
+                else if (sscanf(line, "%lf", &r) == 1 && r > 0.5 && r < 2.0)
+                    legacyRatio_ = r;
             }
             fclose(f);
         }
@@ -1968,6 +1974,7 @@ private:
      *  ★ The key is the access-unit count per 120 ms super frame (2/3/4/6 ⇒ 16/24/32/48 kHz core),
      *    which is the geometry itself and is known at the measurement site. */
     std::map<int, double> knownRatios_;
+    double legacyRatio_ = 0.0;   // ★ a pre-5.4 bare ratio: used until this geometry measures its own
     int aacDeviantRun_ = 0;   // consecutive units on which the watched window disagrees with the known ratio
     std::string ratioFile_;
     /** ★ The ratio for this configuration, or 0 if it has not been learnt yet. An exact-frame
@@ -1975,7 +1982,8 @@ private:
     double ratioFor(int aus) const {   // caller holds m_
         if (AacDecoder::kExactFrames) return 1.0;
         const auto it = knownRatios_.find(aus);
-        return it == knownRatios_.end() ? 0.0 : it->second;
+        if (it != knownRatios_.end()) return it->second;
+        return legacyRatio_;            // ★ 0.0 when there is none — "not learnt yet"
     }
     void saveRatio() {   // caller holds m_
         if (ratioFile_.empty() || knownRatios_.empty()) return;
