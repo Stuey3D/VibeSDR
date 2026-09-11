@@ -1424,30 +1424,29 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       // session"). Guarded so it publishes on the TRANSITION only, not on every 10fps row.
       if self.isFmdx { self.isFmdx = false }     // see `screen`
       if self.fmdx != nil { self.fmdx = nil }
-      /* ★★★ RETIRE THE MULTIPLEX, KEEP THE CAPABILITY — THE SECOND READER.
+      /* ★★★ AND DAB IS NOT RETIRED HERE AT ALL — A SPECTRUM ROW IS NOT PROOF WE HAVE LEFT IT.
        *
-       *  This was `self.dab = nil`, and it is the SAME fault b6a890ed fixed in the `state` handler
-       *  a few hundred lines below. That commit corrected the reader it was looking at and left
-       *  this one, so the bug survived its own fix: Stuart, 2026-09-10, on a build that HAD
-       *  b6a890ed — "its still identifying the server incorrectly VibeServer still has CWU CWL SAM
-       *  and no DAB".
+       *  The line above is true of FM-DX, which has no waterfall: receiving a row means that screen
+       *  is gone. It was never true of DAB. The server keeps the spectrum running THROUGHOUT an
+       *  ensemble, deliberately ("AND THE SPECTRUM STILL RUNS" — local_sdr_shim), so rows arrive
+       *  about ten times a second while DAB is perfectly alive, and anything this clears is
+       *  clearing live state.
        *
-       *  ★★ AND HERE IT IS WORSE, because of WHERE it runs. The state handler fires on a mode
-       *     change; this fires on EVERY ROW BATCH, about ten times a second for as long as the
-       *     waterfall is up. `backend` and `capable` are what `demodModes` reads to decide what
-       *     kind of receiver this is, so the once-a-second `dab` message restored them and the
-       *     next row threw them away again. The list was therefore drawn from nil almost always:
-       *     a VibeServer offered SAM, CWU and CWL, which it does not have, and the DAB entry
-       *     never appeared.
+       *  ★★★ THIS LINE HAS NOW CAUSED THE SAME SYMPTOM TWICE. As `dab = nil` it made the DAB entry
+       *      vanish from the demodulator list, because it threw away `backend` and `capable` ten
+       *      times a second (ab0b8680). Rewriting it to keep those but still clear `on` fixed the
+       *      list and broke the SCREEN instead — Stuart, 2026-09-11: "when DAB is selected the
+       *      window flashes up for a second then goes away … then when i go into the demodulator
+       *      window its stuck in DAB mode with no way of changing it as the DAB window isnt
+       *      showing." The one-a-second `dab` message put `on` back and the next row batch took it
+       *      away, which is the flashing screen 0397ebe0 already diagnosed once. The exit from DAB
+       *      lives ON the DAB screen, so a screen that cannot stay up is a mode with no way out.
        *
-       *  The ensemble, the service list, the block and `on` are still cleared — that is what stops
-       *  a stale mux bleeding onto the SDR ticker, which is the whole reason this line exists.
-       *  What survives is what is true about the RECEIVER whatever mode it is in.
+       *  ★★ THE RETIREMENT ALREADY HAS AN OWNER. The `state` handler below clears the ensemble,
+       *     service list, block and `on` when the MODE changes away from dab — keeping `capable`
+       *     and `backend` — which is the correct trigger and the correct set. A second copy on a
+       *     path that fires during DAB could only ever be wrong. One rule, one reader.
        *  [[reported_state_is_not_a_command]] · [[one_rule_two_readers]] */
-      if var d = self.dab, !d.ensemble.isEmpty || d.active != 0 || !d.list.isEmpty || d.on || !d.block.isEmpty {
-        d.ensemble = ""; d.active = 0; d.list = []; d.on = false; d.block = ""
-        self.dab = d
-      }
       // NOTE: the row's frequency is deliberately IGNORED — rows are lossy pixels and
       // can be queued; the readout comes from the throttled `state` echo and from our
       // own prediction while the crown moves.

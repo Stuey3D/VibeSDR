@@ -5907,6 +5907,26 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onMode = useCallback((m: SDRMode) => {
     const c = client.current; if (!c) return;
+    /* ★★★ CHOOSING ANOTHER DEMODULATOR IS HOW YOU LEAVE DAB. DAB is a MODE the phone enters, not
+     *  a demodulator the server switches to — so while it is on, the server refuses an ordinary
+     *  mode change and this sent one anyway. The only exit was the Exit button ON the DAB screen,
+     *  which is fine until that screen is not in front of you: Stuart, 2026-09-11, on the wrist —
+     *  "its stuck in DAB mode with no way of changing it as the DAB window isnt showing."
+     *  ★★ FIXED HERE, NOT IN THE WRIST'S PICKER, because every client reaches this one handler —
+     *     the phone's own mode grid, Buddy's Demod list, and anything added later. A way out that
+     *     exists in only one menu is the same trap one menu along.
+     *  ★ An exit is not a mode change to send: toggleDab() tears the ensemble down and restores the
+     *    demodulator the listener was on before it, so the request is complete without setMode. */
+    if (dabOnRef.current && m !== ('dab' as SDRMode)) {
+      /* ★★ NOT toggleDab(). That button means "show me that again" when the box is shut — it
+       *  REOPENS the window rather than leaving the mode, which is exactly what Stuart asked for on
+       *  2026-09-08 and exactly the wrong answer to "put me on AM". Leave DAB outright here, then
+       *  fall through and honour the demodulator that was actually asked for: a listener who picks
+       *  AM means AM, not "wherever I happened to be before the ensemble". */
+      c.dab?.(false);
+      dabOnRef.current = false;
+      setDabOn(false); setDabBoxOpen(false); setDabState(null); setDabError(undefined);
+    }
     userTuneSeq.current++;   // ★ a PERSON asked (mode) — see the note on userTuneSeq
     c.setMode(m); // client mirrors the server's per-mode bandwidth defaults
     setStatus({ ...c.getStatus() });
