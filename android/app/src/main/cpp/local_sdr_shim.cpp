@@ -5685,13 +5685,62 @@ struct LocalSdrShim::Impl {
         //    against maxUsers. Fixing it in one of them would leave the other two lying.
         // ★ Added only where the spectrum socket is ABSENT, so nobody is counted twice: a listener
         //   with both sockets open is already counted above.
-        if (n == 0 && audioClient && audioClient->isOpen() && !occupantSession.empty()) n = 1;
+        /* ★★★ AND `n == 0` WAS THE WRONG GUARD — IT ONLY SAW THE LAST LISTENER LEFT.
+         *
+         *  That test was written for a one-at-a-time receiver, where the audio client IS the
+         *  listener. On a SHARED receiver it means an audio-only listener is counted only while
+         *  NOBODY ELSE is watching the spectrum: one person on the browser holds n at 1, and a
+         *  second who pockets their phone — spectrum socket closed for power, audio still playing
+         *  — is never added. Stuart, 2026-09-11: "the web client isnt showing 2 users when I
+         *  minimise the iPhone app and it goes to audio only." The loop below did not save it
+         *  either: clientDsp is populated only where perClientDsp() is true (a LOCKED centre with
+         *  several users), and a shared dial is by definition unlocked, so on exactly the receiver
+         *  that can have several listeners the map is empty.
+         *
+         *  ★★ THIS IS NOT A COSMETIC NUMBER. Stuart: "we cannot have someone thinking nobody is
+         *     listening when you may have someone in the car or on headphones listening in and
+         *     suddenly wondering why they are hearing static." On a shared dial the count is what
+         *     tells the next person the room is occupied — an invisible listener is one somebody
+         *     else will tune out from under.
+         *
+         *  ★★ COUNT SESSIONS, NOT SOCKETS. A listener is a SESSION; the two sockets are how it
+         *     reaches us. `sockSession` maps every socket to its session and is always present.
+         *  ★ AN UNPAIRABLE AUDIO SOCKET IS STILL NOT COUNTED, deliberately. Without a session id
+         *    there is no way to tell it from the audio half of a listener already counted above,
+         *    and over-counting is the worse failure by far: the radio would advertise itself FULL
+         *    and start refusing people who could have listened. Under by one is a wrong number;
+         *    over by one is a closed door. */
+        std::set<std::string> specSessions;      // sessions already counted via a spectrum socket
+        {
+            auto noteSpec = [&](const std::shared_ptr<net::Socket>& sp) {
+                if (!sp || !sp->isOpen()) return;
+                auto it = sockSession.find(sp.get());
+                if (it != sockSession.end() && !it->second.empty()) specSessions.insert(it->second);
+            };
+            noteSpec(specClient);
+            for (auto& sp : specExtra) noteSpec(sp);
+        }
+        std::set<std::string> audioOnly;         // listening, but with no spectrum socket open
+        {
+            auto noteAudio = [&](const std::shared_ptr<net::Socket>& a) {
+                if (!a || !a->isOpen()) return;
+                auto it = sockSession.find(a.get());
+                if (it == sockSession.end() || it->second.empty()) return;   // see the note above
+                if (specSessions.count(it->second)) return;                  // already counted
+                audioOnly.insert(it->second);
+            };
+            noteAudio(audioClient);
+            for (auto& a : audioExtra) noteAudio(a);
+        }
+        n += (int)audioOnly.size();
         for (auto& kv : clientDsp) {
             auto& c = kv.second;
             if (!c) continue;
             const bool specOpen  = c->spec  && c->spec->isOpen();
             const bool audioOpen = c->audio && c->audio->isOpen();
-            if (!specOpen && audioOpen) ++n;
+            // ★ Skip one this session already added above, or a per-client listener whose audio
+            //   socket also sits in audioExtra would be counted twice.
+            if (!specOpen && audioOpen && !(!c->session.empty() && audioOnly.count(c->session))) ++n;
         }
         s_listenersCached.store(n, std::memory_order_relaxed);
         return n;
