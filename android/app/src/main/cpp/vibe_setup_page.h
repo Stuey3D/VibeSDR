@@ -2344,7 +2344,15 @@ function paintPanes() {
   if (rp) rp.classList.toggle("hide", curRadio < 0);
   const sr = $("saveRadioBtn");
   // ★ "Save radio settings" is meaningless on the server tab — hidden rather than left to fail.
-  if (sr) sr.classList.toggle("hide", curRadio < 0 || radioList().length < 2);
+  // ★★★ BUT A SINGLE-RADIO MACHINE NEEDS IT MOST. This also hid the button whenever there was only
+  //     one radio, on the reasoning that "Apply Changes and Restart VibeServer" covers it. It does
+  //     not: on a one-radio box that button drops the ONLY receiver on the machine, so the owner
+  //     is made to take everyone off air to change a label. The Pi has several radios and showed
+  //     the button; the OWRX box has one and did not, which read as a missing feature rather than
+  //     a deliberate gate (Stuart, 2026-09-11: "I noticed there was no save radio settings button
+  //     which I found odd"). Count of radios is not what makes a per-radio save meaningful — being
+  //     ON a radio's tab is.
+  if (sr) sr.classList.toggle("hide", curRadio < 0);
 }
 
 /** Copy what is on screen into the radio this tab belongs to, without saving to the server. */
@@ -2982,9 +2990,9 @@ async function signIn(fromTicket) {
     //    asked about (Stuart, 2026-08-08: "the server tab needs to be the first tab you see").
     // ★ The radios still show their own state on the tabs, so a half-finished one is not hidden by
     //   this — a red tab with a dot is a better prompt than being teleported to it.
-    const list = radioList();
     curRadio = -1;
-    if (list.length > 1) $("saveRadioBtn").classList.remove("hide");
+    // ★ Visibility belongs to paintPanes(), which renderTabs() calls — revealing it here as well
+    //   meant two readers of one rule, and this one disagreed with the other on a single radio.
     renderTabs();
     fill();
     // ★ Also picks up a change written BEFORE a reboot that has since happened — the page can
@@ -3104,7 +3112,10 @@ $("saveBtn").onclick = async () => {
     //     changes on every start, so a reply carrying a NEW one is proof the restart has happened
     //     and this server is the one holding the settings we just saved.
     const waitBack = async () => {
-      for (let i = 0; i < 60; i++) {
+      // ★ 120 s, not 60: an RSP on x86 has been seen to need well over a minute between the POST
+      //   and a new instance answering. Waiting longer costs nothing — the link below appears the
+      //   moment it is back — whereas giving up early costs the owner the one click they wanted.
+      for (let i = 0; i < 120; i++) {
         await new Promise(r => setTimeout(r, 1000));
         try {
           const s = await fetch("/vibeserver.json", {cache:"no-store"});
@@ -3122,7 +3133,18 @@ $("saveBtn").onclick = async () => {
           }
         } catch (e) { /* still down — expected, and the point */ }
       }
-      $("barMsg").textContent = "Saved, but the server has not come back. Check it on the machine.";
+      // ★★★ A TIMEOUT IS NOT A FAILURE, AND IT MUST NOT BE A DEAD END. This left the bar saying
+      //     the server had not come back and offered nothing to click, so on a machine that simply
+      //     restarts slowly — the x86 box, whose network adapters take an age to wake and whose
+      //     SDRplay teardown runs into the shutdown watchdog — the owner never got the "Open the
+      //     receiver" link at all, while the same save on the Pi produced it every time (Stuart,
+      //     2026-09-11: "the option to open the radio never seems to appear like it does on the
+      //     Pi"). The settings WERE saved either way: the only thing in doubt is whether the
+      //     restart has finished yet, so say that and still offer the door.
+      $("barMsg").innerHTML =
+        '<span class="ok">Saved.</span> The receiver is taking longer than usual to come back &mdash; '
+        + 'it may still be starting.'
+        + '<a id="gotoRx" href="/" class="gotoBtn" style="margin-left:14px">Open the receiver &rarr;</a>';
       $("saveBtn").disabled = false;
     };
     waitBack();
