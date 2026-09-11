@@ -1371,14 +1371,43 @@ function modeBlockSet() {
   return new Set(String(radio().blockedModes || "").split(/[,;\s]+/).filter(Boolean));
 }
 
+/** ★★★ CAN THIS MACHINE DECODE AAC AT ALL? Set from /vibeserver.json's dabDecoder — see
+ *  vsDabDecoderAvailable in the shim. Optimistic until told otherwise: an older server does not
+ *  send the field, and greying out DAB on a server that does it perfectly well would be worse
+ *  than saying nothing. */
+let DAB_DECODER = true;
+async function readDabDecoder() {
+  try {
+    const j = await (await fetch("/vibeserver.json", {cache:"no-store"})).json();
+    if (typeof j.dabDecoder === "boolean") DAB_DECODER = j.dabDecoder;
+  } catch (e) { /* leave it optimistic */ }
+}
+
 function modeBlockRender() {
   const host = $("modeBlockList");
   if (!host) return;
   const off = modeBlockSet();
-  host.innerHTML = BLOCKABLE.map(m =>
-    `<label class="row" style="gap:6px;flex:0 0 auto;align-items:center">`
-    + `<input type="checkbox" data-mode="${esc(m.id)}"${off.has(m.id) ? "" : " checked"}>`
-    + `<span class="lbl">${esc(m.label)}</span></label>`).join("");
+  host.innerHTML = BLOCKABLE.map(m => {
+    /* ★★★ DO NOT OFFER A MODE THE MACHINE CANNOT COMPLETE. DAB+ audio is decoded server-side by
+     *  ffmpeg and nothing else on Linux; without it the receiver tunes the multiplex, locks it
+     *  perfectly, and cannot play a word — which reads as broken hardware rather than a missing
+     *  package (Stuart, 2026-09-11). A tick box that cannot deliver is the fault AGENTS.md names:
+     *  branch on what the machine has, or leave it out. */
+    const dead = m.id === "dab" && !DAB_DECODER;
+    return `<label class="row" style="gap:6px;flex:0 0 auto;align-items:center`
+    + (dead ? ";opacity:.5" : "") + `"${dead ? ' title="ffmpeg is not installed on this machine"' : ""}>`
+    + `<input type="checkbox" data-mode="${esc(m.id)}"${off.has(m.id) ? "" : " checked"}`
+    + (dead ? " disabled" : "") + `>`
+    + `<span class="lbl">${esc(m.label)}</span></label>`; }).join("");
+  if (!DAB_DECODER) host.insertAdjacentHTML("beforeend",
+    `<div class="hint" style="flex:1 1 100%;margin-top:8px">`
+    + `<b>DAB is not available on this machine.</b> It needs <code>ffmpeg</code>, which decodes the`
+    + ` AAC audio a DAB+ multiplex carries, and it is not installed here. Install it with`
+    + ` <code>sudo apt install ffmpeg</code> and restart the server.`
+    + ` <br>The radio itself is fine \u2014 it will receive and lock a multiplex perfectly without it,`
+    + ` which is why the fault looks like bad reception rather than a missing package.`
+    + ` ffmpeg will also be what decodes DRM and the other AAC-based digital modes as they arrive.`
+    + `</div>`);
   host.querySelectorAll("input[data-mode]").forEach(el => {
     el.addEventListener("change", () => {
       const set = modeBlockSet();
@@ -2134,13 +2163,53 @@ async function renderHw() {
       <label style="display:flex;align-items:center;gap:10px;margin:0">
         <input type="checkbox" id="rfNotch" style="width:16px;height:16px;accent-color:var(--amber)">
         <span>Broadcast notch</span></label>
-      <div class="hint">Removes the MW <em>and</em> FM broadcast bands before the tuner. Use it on
-        HF or airband if a local transmitter is overloading the front end.
-        <b>Never use it to listen to FM</b> &mdash; it removes exactly that.</div>
+      <div class="hint">One switch, two filters, both ahead of the tuner: medium wave
+        (522&ndash;1710 kHz, &gt;14 dB; 660&ndash;1550 kHz, &gt;30 dB) and FM broadcast
+        (77&ndash;115 MHz, &gt;30 dB). Use it on HF if a local transmitter is overloading the front
+        end. <b>Never use it to listen to FM</b> &mdash; it removes exactly that.
+        <br><b>Two traps worth knowing.</b> The FM notch is far wider than the broadcast band, so
+        it also takes the bottom of airband, 108&ndash;115 MHz. And on <b>160 m</b> the medium-wave
+        notch's skirt has not finished rolling off &mdash; its &gt;14 dB stopband ends at 1710 kHz
+        and the band starts at 1810 &mdash; so top band is inside the attenuation, not clear of it.
+        Automatic notching below knows both of these.</div>
       <label style="display:flex;align-items:center;gap:10px;margin-top:14px">
         <input type="checkbox" id="dabNotch" style="width:16px;height:16px;accent-color:var(--amber)">
         <span>DAB notch</span></label>
-      <div class="hint">Same idea, for the DAB band.</div>
+      <div class="hint">Same idea, for Band III: 160&ndash;235 MHz at better than 20 dB
+        (165&ndash;230 MHz at better than 30 dB). Note it starts at 160 MHz, so it also covers
+        marine VHF.</div>
+
+      <label style="display:flex;align-items:center;gap:10px;margin-top:18px">
+        <input type="checkbox" id="autoNotch" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>Automatic notch filtering</span></label>
+      <div class="hint">Sets both notches from the frequency being received, so they protect the
+        front end without ever removing the band you are on. The two settings above then become the
+        <em>starting</em> state, before anyone has tuned anywhere.
+        <br><br>What it does:
+        <br>&middot; <b>Below 2.5 MHz</b> the broadcast notch comes <b>off</b>. That covers medium
+        wave itself, the whole of <b>160&nbsp;m</b>, and half a megahertz of clearance above it for
+        the roll-off to finish in &mdash; the stopband's own &gt;14 dB edge is 1710 kHz and the band
+        starts at 1810, so top band is in the skirt rather than past it.
+        <br>&middot; <b>75&ndash;117 MHz</b> it comes <b>off</b> &mdash; the whole FM stopband plus
+        a megahertz either side, which also keeps the bottom of airband clear.
+        <br>&middot; <b>Everywhere else</b> both notches go <b>on</b>, where they cost nothing and
+        protect the front end &mdash; all of HF, and airband above 117 MHz.
+        <br>&middot; The <b>DAB notch</b> comes off from 158 MHz to the top of Band III
+        (240 MHz), and throughout DAB mode.
+        <br><br>So 648 kHz reads <b>RF Notch: off &middot; DAB Notch: on</b>, 1.9 MHz on top band
+        reads <b>RF Notch: off &middot; DAB Notch: on</b>, and 3755 kHz reads
+        <b>RF Notch: on &middot; DAB Notch: on</b>. The receiver shows which it has chosen.
+        <br>The edges come from SDRplay's published filter response, not from guesswork.</div>
+
+      <label style="display:flex;align-items:center;gap:10px;margin-top:14px">
+        <input type="checkbox" id="userNotch" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>Let listeners toggle the notches</span></label>
+      <div class="hint">On a shared receiver the notches are part of the front end, so one
+        listener's change is everyone's. Leave this off if you would rather own them &mdash; and
+        note that automatic notching owns them anyway while it is on, so a listener's flip would
+        only be undone at the next retune. Either way they are told why, rather than finding a
+        control that silently does nothing.</div>
+
       <div class="hint">The RSP manages its own gain by default. To set it by hand, see the note
         below.</div>`;
   } else if (drv === "airspyhf") {
@@ -2233,6 +2302,10 @@ async function renderHw() {
   //     The notches belong to the radio that HAS them, and the inconsistency sat one line apart.
   if ($("rfNotch")) $("rfNotch").checked = !!radio().rfNotch;
   if ($("dabNotch")) $("dabNotch").checked = !!radio().dabNotch;
+  if ($("autoNotch")) $("autoNotch").checked = !!radio().autoNotch;
+  // ★ userNotch DEFAULTS TO ALLOWED, so an undefined must read as ticked — `!!undefined` is false
+  //   and would silently take a permission away from every existing receiver on upgrade.
+  if ($("userNotch")) $("userNotch").checked = radio().userNotch !== false;
   if ($("gain")) $("gain").value = String(radio().gain != null ? radio().gain : -1);
 
   // ★ And the dongle's own serial, refreshed for THIS tab. It was read once at sign-in, so
@@ -2808,6 +2881,8 @@ function collectRadio() {
     //   be storing a setting that can never apply — the config would describe a radio we are not.
     ...($("rfNotch")  ? {rfNotch:  $("rfNotch").checked}  : {}),
     ...($("dabNotch") ? {dabNotch: $("dabNotch").checked} : {}),
+    ...($("autoNotch") ? {autoNotch: $("autoNotch").checked} : {}),
+    ...($("userNotch") ? {userNotch: $("userNotch").checked} : {}),
     ...($("gain")     ? {gain: parseInt($("gain").value, 10)} : {}),
     // ★ Only what this radio HAS. Sending ppb for a dongle would store a setting that can never
     //   apply — the config would then describe a radio we are not.
@@ -2991,6 +3066,7 @@ async function signIn(fromTicket) {
     // ★ The radios still show their own state on the tabs, so a half-finished one is not hidden by
     //   this — a red tab with a dot is a better prompt than being teleported to it.
     curRadio = -1;
+    await readDabDecoder();   // ★ before renderTabs/fill, which draw the mode list
     // ★ Visibility belongs to paintPanes(), which renderTabs() calls — revealing it here as well
     //   meant two readers of one rule, and this one disagreed with the other on a single radio.
     renderTabs();

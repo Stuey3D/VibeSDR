@@ -385,6 +385,10 @@ public:
      *  0 parks immediately, i.e. the old behaviour. */
     static void setVibeServerIdleGrace(double sec);
     static void setVibeServerRfNotch(bool on);
+    /** ★ Auto notch: the RSP's front-end filters follow the dial (see vsAutoNotchFor). */
+    static void setVibeServerAutoNotch(bool on);
+    /** ★ Whether LISTENERS may toggle the notches at all. */
+    static void setVibeServerUserNotch(bool allowed);
     /** ★★★ WHERE LISTENERS MAY TUNE. Two owner-written lists (see vibe_bands.h) collapsed against
      *  the hardware's own coverage into ONE permitted set. Published to clients so the dial can
      *  bounce and jump exactly as it does at the Airspy's tuning hole, and enforced HERE as well:

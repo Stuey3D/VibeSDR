@@ -184,6 +184,10 @@ struct Config {
 
     // Front end
     bool rfNotch = false, dabNotch = false, zoomSpectrum = false;
+    /* ★ AUTO NOTCH: the RSP's front-end filters follow the dial. Off by default — a hardware
+     *  filter must never switch itself on over an owner's head. autoNotch owns rfNotch/dabNotch
+     *  while it is on; userNotch says whether LISTENERS may touch them at all. */
+    bool autoNotch = false, userNotch = true;
     /** See RadioConfig::biasT — asserted at every start so it is never inherited. */
     bool biasT = false;
     int  ppm = 0, ppb = 0, directSampling = -1;   // see RadioConfig
@@ -359,6 +363,7 @@ struct RadioConfig {
      *  ★ The AGC includes this; with rtlAgc on, this is redundant rather than contradictory. */
     int         agcLock  = -1;  ///< 1 = AGC forced on, listener may not turn it off (RSP, HF+).
     bool   rfNotch = false, dabNotch = false, zoomSpectrum = false;
+    bool   autoNotch = false, userNotch = true;   // ★ see the note on the per-radio copy
     /** ★★★ DC ON THE FEEDLINE, REMEMBERED AND ASSERTED. A dongle's bias-T survives whatever set
      *  it — it is a GPIO that stays put for as long as the device has power — so a receiver that
      *  never states a preference inherits one. That is how a V4 came up with its red light on and

@@ -2736,6 +2736,62 @@ static std::string vsAsnLabel(const std::string& ip);
  *     listener never chose, which is NOT the same as "off" and must not be reported as it. */
 static int   vsDesiredRfNotch();     // -1 unset, 0 off, 1 on
 static int   vsDesiredDabNotch();    // -1 unset, 0 off, 1 on
+/* ★ Forward-declared for the same reason as the two above: the RETUNE PATH decides the notches,
+ *   and it sits thousands of lines before the desired-DSP block these read. */
+static bool  vsAutoNotchOn();
+static bool  vsUserNotchAllowed();
+/* ★ And the write side, for the same reason — auto notch RECORDS what it chose so the readout and
+ *   a rebuilt Impl both see it, and it does that from the retune path. */
+static void  vsRecordNotchChoice(bool rf, bool dab);
+
+/* ══ WHICH FRONT-END NOTCHES SUIT THIS FREQUENCY ══════════════════════════════════════════════
+ * ★★★ THE RSP's NOTCHES ARE ANALOGUE AND AHEAD OF THE TUNER, so they protect the whole front end
+ *     from a transmitter that is nowhere near what you are listening to — and ruin the band they
+ *     sit on. Which of those two things they are doing depends ENTIRELY on where the dial is, and
+ *     until now the owner had to know that and flip them by hand.
+ *
+ * ★★★ THE EDGES COME FROM THE MEASURED FILTER RESPONSE, NOT FROM A GUESS. SDRplay publish the
+ *     RSP1A's stopbands (RSP1A Technical Information R1P0):
+ *         MW  notch   522-1710 kHz  > 14 dB      660-1550 kHz  > 30 dB
+ *         FM  notch   77-115 MHz    > 30 dB      85-100 MHz    > 50 dB
+ *         DAB notch   160-235 MHz   > 20 dB      165-230 MHz   > 30 dB
+ *     ★ On an RSP1A ONE switch (rfNotchEnable) arms BOTH the MW and the FM notch, so the RF notch
+ *       has two stopbands to avoid and either of them is reason enough to drop it.
+ *
+ * ★★★ 160 m IS THE CASE THAT SETS THE LOW EDGE. Stuart: "its the 160m band specifically we need to
+ *     try and preserve". The MW notch's own >14 dB figure runs to 1710 kHz and the band starts at
+ *     1810 — one hundred kilohertz — so top band sits in the skirt, not beyond it, exactly as he
+ *     said ("with it on the 160m band is just in the notch filters attenuation area"). The notch
+ *     therefore stays OFF below 2.5 MHz: that covers medium wave itself, the whole of 160 m, and
+ *     half a megahertz of clearance above the band edge for the roll-off to finish in.
+ *     ★ I had first written 3 MHz, reasoning backwards from an example Stuart gave of 3755 kHz.
+ *       That was fitting the rule to a data point rather than to the hardware; he said so, and the
+ *       published response is what settles it. 3755 kHz still gets the notch, as it should.
+ *
+ * ★★ AND NEVER NOTCH WHAT YOU ARE LISTENING TO — which is why the FM edges are 75..117 MHz and not
+ *    the broadcast band's 87.5..108. The stopband is 77..115, so the notch ruins far more than
+ *    "FM": the bottom of airband, 108-115 MHz, is inside it at better than 30 dB. Above 117 it is
+ *    pure protection again.
+ * ★ Everything else gets both. On HF, and on airband above 117 MHz, they cost nothing. */
+struct VsNotchWant { bool rf; bool dab; };
+static VsNotchWant vsAutoNotchFor(double hz, bool dabMode) {
+    VsNotchWant w{ true, true };
+
+    /* ★ MW half of the RF notch — and the reason 160 m gets a wide berth. The stopband's own
+     *   >14 dB edge is 1710 kHz and the band starts at 1810: one hundred kilohertz. Off below
+     *   2.5 MHz. */
+    if (hz < 2.5e6)                      w.rf = false;
+    /* ★ FM half. 75..117 gives a megahertz of margin either side of the 77..115 stopband. */
+    if (hz >= 75.0e6 && hz <= 117.0e6)   w.rf = false;
+
+    /* ★ DAB notch: the measured stopband plus margin, and the whole of Band III above it — the
+     *   filter stops at 235 MHz but the band runs to 240, and there is nothing to be gained by
+     *   notching the last five megahertz of the multiplexes we are trying to receive. */
+    if (dabMode)                         w.dab = false;  // the multiplex IS the capture
+    if (hz >= 158.0e6 && hz <= 240.0e6)  w.dab = false;
+    return w;
+}
+
 static float vsDesiredNrStrength();  // <0 = unset
 static int   vsDesiredRspBiasT();    // -1 unset, 0 off, 1 on
 // The RSP front end as the owner last left it. -1 = never set.
@@ -7270,13 +7326,29 @@ struct LocalSdrShim::Impl {
                 vsSdrplayRfAgcTick(sdrp.get(), floorState, sdrpAgcWanted);
             }
             if (n % 2 == 0) {
-                char gb[160];
-                snprintf(gb, sizeof gb,
+                /* ★★★ 320, AND CHECKED. This was 160 and the message has just grown five fields;
+                 *  snprintf would have cut it MID-FIELD, which is not JSON, so every client would
+                 *  discard the whole thing and show a frozen gain readout with no error anywhere.
+                 *  That exact fault cost an evening on the DAB stats block — see the note on its
+                 *  2048-byte buffer. snprintf returns the length it WANTED, so it is checked. */
+                char gb[320];
+                const int need = snprintf(gb, sizeof gb,
+                    /* ★ The notch state rides with the gain figures because it is the same kind of
+                     *   thing: what the FRONT END is doing right now. Stuart asked for the readout
+                     *   in so many words — "a little icon like the AGC for the RTL that shows the
+                     *   status: So for 648KHz AM it would be RF Notch: off | DAB Notch: On". */
                     "{\"type\":\"rspstat\",\"sysGain\":%.1f,\"lna\":%d,\"ifgr\":%d,\"overload\":%d,"
-                    "\"settling\":%d}",
+                    "\"settling\":%d,\"rfNotch\":%d,\"dabNotch\":%d,\"autoNotch\":%d,"
+                    "\"userNotch\":%d,\"rfAgc\":%d}",
                     sdrp->systemGainDb(), sdrp->currentLnaState(), sdrp->currentIfGr(),
-                    sdrp->overloaded() ? 1 : 0, sdrpSettling ? 1 : 0);
-                for (auto& p : peers) sendText(p.sock, gb, Out::RspStat);
+                    sdrp->overloaded() ? 1 : 0, sdrpSettling ? 1 : 0,
+                    vsDesiredRfNotch() > 0 ? 1 : 0, vsDesiredDabNotch() > 0 ? 1 : 0,
+                    vsAutoNotchOn() ? 1 : 0, vsUserNotchAllowed() ? 1 : 0,
+                    g_rspRfAgc.load(std::memory_order_relaxed) ? 1 : 0);
+                if (need < 0 || (size_t)need >= sizeof gb)
+                    LOGI("rspstat truncated (%d of %zu bytes) — not sent", need, sizeof gb);
+                else
+                    for (auto& p : peers) sendText(p.sock, gb, Out::RspStat);
             }
         }
 
@@ -9627,6 +9699,18 @@ struct LocalSdrShim::Impl {
                                                vsPersist(std::string("{\"rfNotch\":") + (v != 0 ? "true" : "false") + "}"); }
             if (jsonNum(msg, "dabnotch", v)) { LocalSdrShim::instance().setDabNotch(v != 0);
                                                vsPersist(std::string("{\"dabNotch\":") + (v != 0 ? "true" : "false") + "}"); }
+            /* ★★★ AND WHO IS ALLOWED TO. Two reasons a notch toggle must be refused here rather
+             *  than merely hidden in the UI: AUTO owns these filters while it is on (a listener's
+             *  flip would be undone at the next retune, which reads as a broken control), and an
+             *  owner may simply not want listeners touching the front end of a shared radio.
+             *  ★ Refused with a REASON, never silently — a control that does nothing and says
+             *    nothing is the fault this project keeps having to fix. */
+            if ((jsonNum(msg, "rfnotch", v) || jsonNum(msg, "dabnotch", v))
+                && (vsAutoNotchOn() || !vsUserNotchAllowed()))
+                sendText(sock, vsAutoNotchOn()
+                    ? "{\"type\":\"notice\",\"why\":\"the notches are on automatic \xe2\x80\x94 "
+                      "this receiver sets them from the tuned frequency\"}"
+                    : "{\"type\":\"notice\",\"why\":\"the operator has reserved the notch filters\"}");
             // ★ The RSP has its own bias-T, and it is the same hazard as the dongle's.
             if (jsonNum(msg, "biast", v) && adminGate("bias-T"))
                 LocalSdrShim::instance().setBiasT(v != 0);
@@ -15896,6 +15980,27 @@ struct LocalSdrShim::Impl {
          *   turns each `if (current > cap)` into an unconditional set. */
         const bool fix = LocalSdrShim::gainLockedAt(hz);   // this BAND's answer, not the radio's
         if (useSdrplay() && sdrp) {
+            /* ★★★ THE FRONT-END NOTCHES FOLLOW THE DIAL, when the owner has asked for that. This
+             *     runs on the retune path deliberately: the notches are a property of WHERE the
+             *     radio is listening, so the moment that changes is the only moment they need
+             *     reconsidering — no polling, and no chance of them lagging a band change.
+             * ★ Only on a CHANGE, like the gain cap beside it: an Update to the tuner per pan
+             *   would be a hardware write for every dial movement. */
+            if (vsAutoNotchOn()) {
+                const VsNotchWant w = vsAutoNotchFor(hz, g_dabMode.load(std::memory_order_relaxed));
+                static std::atomic<int> lastRf{-1}, lastDab{-1};
+                const bool rfChanged  = lastRf.exchange(w.rf ? 1 : 0)   != (w.rf ? 1 : 0);
+                const bool dabChanged = lastDab.exchange(w.dab ? 1 : 0) != (w.dab ? 1 : 0);
+                if (rfChanged) {
+                    LOGI("auto notch: broadcast notch %s at %.3f MHz", w.rf ? "ON" : "off", hz / 1e6);
+                    sdrp->setRfNotch(w.rf);
+                }
+                if (dabChanged) {
+                    LOGI("auto notch: DAB notch %s at %.3f MHz", w.dab ? "ON" : "off", hz / 1e6);
+                    sdrp->setDabNotch(w.dab);
+                }
+                if (rfChanged || dabChanged) vsRecordNotchChoice(w.rf, w.dab);
+            }
             // ★★ The cap is a GAIN POSITION; the LNA state counts the other way. See the note in
             //    the rsp_control handler — this is the same conversion and must not drift from it.
             const int n = sdrp->lnaStateCount();
@@ -17496,6 +17601,14 @@ struct DesiredDsp {
     std::atomic<int>  rspIfAgc{-1};      // tri-state: -1 unset, 0 off, 1 on
     std::atomic<int>  rspRfNotch{-1};
     std::atomic<int>  rspDabNotch{-1};
+    /* ★★★ AUTO NOTCH — the RSP's own front-end filters, driven by where the dial is.
+     *  ★ OFF unless the owner asks (tri-state, -1 unset = off). "An upgrade must never change how
+     *    a running receiver hears" is already the rule two hundred lines above this; switching a
+     *    hardware filter on by itself, on somebody else's receiver, would break it outright. */
+    std::atomic<int>  rspAutoNotch{-1};   // -1 unset, 0 off, 1 on
+    /* ★ May a LISTENER toggle the notches? Default yes (-1 unset = yes), which is how it has
+     *  always behaved. An owner running auto usually wants to say no, or the two fight. */
+    std::atomic<int>  rspUserNotch{-1};   // -1 unset (=allowed), 0 no, 1 yes
     // ★★ THE RSP'S BIAS-T HAD NO ENTRY HERE AT ALL, so unlike the RTL's it was never replayed
     //    onto a fresh Impl and never reportable to a client — the same omission, on the same
     //    control, that 2026-08-08 fixed for the DONGLE ("I had enabled the bias-t and was using
@@ -17515,6 +17628,13 @@ static DesiredDsp g_dsp;
 // ★ Forward-declared up by the hwinfo builder, which reports this state to the client.
 static int   vsDesiredRfNotch()    { return g_dsp.rspRfNotch.load(); }
 static int   vsDesiredDabNotch()   { return g_dsp.rspDabNotch.load(); }
+static void  vsRecordNotchChoice(bool rf, bool dab) {
+    g_dsp.rspRfNotch.store(rf ? 1 : 0);
+    g_dsp.rspDabNotch.store(dab ? 1 : 0);
+}
+static bool  vsAutoNotchOn()       { return g_dsp.rspAutoNotch.load() == 1; }
+static bool  vsUserNotchAllowed()  { return g_dsp.rspUserNotch.load() != 0; }
+
 static float vsDesiredNrStrength() { return g_dsp.nrStrength.load(); }
 static int   vsDesiredRspBiasT()   { return g_dsp.rspBiasT.load(); }
 
@@ -18754,6 +18874,11 @@ void LocalSdrShim::setVibeServerZoomSpectrum(bool on) { g_vsZoomSpectrum.store(o
 void LocalSdrShim::setVibeServerIdleGrace(double sec) { g_vsIdleGraceSec.store(sec < 0 ? 0 : sec); }
 void LocalSdrShim::setVibeServerReleaseWhenIdle(bool on) { g_vsReleaseWhenIdle.store(on); }
 void LocalSdrShim::setVibeServerRfNotch(bool on)  { g_vsRfNotch.store(on); }
+/* ★ Straight into the desired-DSP block, because that is what survives a rebuilt Impl — the same
+ *   reason every other RSP control lives there. Auto then owns rfNotch/dabNotch from the retune
+ *   path; these two only say whether it is running and who else may interfere. */
+void LocalSdrShim::setVibeServerAutoNotch(bool on)      { g_dsp.rspAutoNotch.store(on ? 1 : 0); }
+void LocalSdrShim::setVibeServerUserNotch(bool allowed) { g_dsp.rspUserNotch.store(allowed ? 1 : 0); }
 void LocalSdrShim::setProvidesSpectrogram(bool on) { g_vsProvidesSpectrogram.store(on); }
 
 void LocalSdrShim::setBandRegion(int region) {

@@ -278,7 +278,14 @@ echo "==> built $(basename "$DEB")"
 #   files whose names and contents disagree and apt believes the FILENAME.
 PKGVER="$(dpkg-deb -f "$DEB" Version)"
 [ "$PKGVER" = "$FULLVER" ] || { echo "version mismatch: package says $PKGVER, expected $FULLVER"; exit 1; }
-cp "$DEB" "$POOL/"
+# ★★★ UNDER ITS CANONICAL NAME, ALWAYS. The docker wrapper stages a pre-built package as
+#     "$SRC_DIR/.prebuilt-<name>" so it sits inside a path Docker Desktop will share, and this
+#     copied that HIDDEN name straight into the pool. The prune below globs vibeserver_*.deb, so
+#     every dot-prefixed amd64 package it ever published became immortal: 124 files and 2.59 GB
+#     going back to 4.1.44, in a git repository that had reached 10.8 GB, with Pages builds up
+#     from 460 s to 876 s and one of them failing outright (2026-09-11).
+# ★ The KEEP policy below was right the whole time. It was the NAME that escaped it.
+cp "$DEB" "$POOL/$(basename "$DEB" | sed 's/^\.prebuilt-//')"
 # ★ Record the high-water mark BEFORE pruning, so a pruned revision can never be handed out again.
 echo "$REV" > "$MARK"
 
@@ -288,7 +295,10 @@ echo "$REV" > "$MARK"
 #    versions nobody will install: apt only ever offers the newest. Keeping the last few is enough
 #    to roll back by hand if a release turns out bad, which is the only reason to keep any.
 KEEP=3
-mapfile -t OLD < <(ls -t "$POOL"/vibeserver_*_"$ARCH".deb 2>/dev/null | tail -n +$((KEEP+1)))
+# ★ Both spellings: the canonical one, and any dot-prefixed straggler from before the copy above
+#   was fixed. A prune that cannot see half the pool is not a prune.
+mapfile -t OLD < <(ls -t "$POOL"/vibeserver_*_"$ARCH".deb "$POOL"/.prebuilt-vibeserver_*_"$ARCH".deb \
+                   2>/dev/null | tail -n +$((KEEP+1)))
 if [ ${#OLD[@]} -gt 0 ]; then
   printf '==> pruning %d old package(s), keeping the newest %d\n' "${#OLD[@]}" "$KEEP"
   rm -f "${OLD[@]}"

@@ -167,6 +167,10 @@ struct Opts {
     // ★ RSP front-end notches. OFF unless the operator asks: the RF notch covers broadcast FM.
     double      idleGrace = 300.0;   // seconds before an unattended radio idle-parks
     bool        rfNotch  = false;
+    /* ★ Auto notch and who may touch the notches. Carried on Opts like every other per-radio
+     *   setting, so the config -> Opts -> shim path has no gap for them to fall through. */
+    bool        autoNotch = false;
+    bool        userNotch = true;
     bool        dabNotch = false;
     int         port    = 0;             // 0 = auto (48000-48049)
     bool        web     = true;
@@ -472,6 +476,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.releaseWhenIdle = c.releaseWhenIdle;
     o.idleGrace = c.idleGrace;
     o.rfNotch = c.rfNotch; o.dabNotch = c.dabNotch; o.zoomSpectrum = c.zoomSpectrum;
+    o.autoNotch = c.autoNotch; o.userNotch = c.userNotch;
     o.port = c.port; o.web = c.web;
 }
 
@@ -502,6 +507,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.releaseWhenIdle = o.releaseWhenIdle;
     c.idleGrace = o.idleGrace;
     c.rfNotch = o.rfNotch; c.dabNotch = o.dabNotch; c.zoomSpectrum = o.zoomSpectrum;
+    c.autoNotch = o.autoNotch; c.userNotch = o.userNotch;
     c.port = o.port; c.web = o.web;
     c.mode = o.lockFreq > 0 ? vsconfig::Mode::LockedRange : vsconfig::Mode::SingleUser;
 }
@@ -1317,12 +1323,28 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerSavedFrontEnd(g_runtimeConfig.lnaState, g_runtimeConfig.ifGr,
                                              g_runtimeConfig.ifAgc);
     LocalSdrShim::setVibeServerDabNotch(o.dabNotch);
+    /* ★★ AFTER the two starting states, deliberately: rfNotch/dabNotch above are where the filters
+     *  START, and auto takes them over from the first retune onward. Setting auto first would read
+     *  as if the starting states were ignored, which they are not — they are what the radio comes
+     *  up with before anybody has tuned anywhere. */
+    LocalSdrShim::setVibeServerAutoNotch(o.autoNotch);
+    LocalSdrShim::setVibeServerUserNotch(o.userNotch);
     // ★ SAY WHAT THE FRONT END WILL DO. These are set once at startup and a listener cannot
     //   change them on a locked receiver, so if the operator's intent and the radio disagree
     //   there is otherwise NOTHING on screen or in the log to reveal it — which is exactly the
     //   position the notches were in (2026-08-03).
     std::printf("VibeServer: front end — RF notch %s, DAB notch %s, idle grace %.0fs\n",
                 o.rfNotch ? "ON" : "off", o.dabNotch ? "ON" : "off", o.idleGrace);
+    /* ★ SAY WHAT THE FRONT END WILL DO — the same reasoning as the line above, which exists
+     *   because an operator's intent and the radio disagreeing is otherwise invisible. Auto notch
+     *   OVERRIDES those starting states from the first retune, so not saying so would make the
+     *   line above a half-truth. */
+    if (o.autoNotch)
+        std::fprintf(stderr, "VibeServer: automatic notch filtering is ON — the RF and DAB notches "
+                             "follow the tuned frequency, and the states above are only where they "
+                             "start.%s\n", o.userNotch ? "" : " Listeners may not change them.");
+    else if (!o.userNotch)
+        std::fprintf(stderr, "VibeServer: the notch filters are reserved to the operator.\n");
     // ★ --users is now the real listener cap, not just the channel-method hint.
     LocalSdrShim::setVibeServerMaxUsers(o.users);
 
@@ -1463,6 +1485,7 @@ int main(int argc, char** argv) {
                 r.forceIdleSaver = c.forceIdleSaver; r.releaseWhenIdle = c.releaseWhenIdle;
                 r.idleGrace = c.idleGrace;
                 r.rfNotch = c.rfNotch; r.dabNotch = c.dabNotch; r.zoomSpectrum = c.zoomSpectrum;
+                r.autoNotch = c.autoNotch; r.userNotch = c.userNotch;
                 break;
             }
             return vsconfig::toJson(out);
