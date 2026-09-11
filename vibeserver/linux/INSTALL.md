@@ -143,14 +143,24 @@ only the RSP family does.
 On a headless box, download it from the command line — there is no browser to use:
 
 ```sh
-curl -fLO https://www.sdrplay.com/software/SDRplay_RSP_API-Linux-3.15.2.run
-chmod +x SDRplay_RSP_API-Linux-3.15.2.run
-sudo ./SDRplay_RSP_API-Linux-3.15.2.run
+curl -fL -o SDRplay_RSP_API-Linux-3.15.run \
+  "https://sdrplay.com/download/hardware-api-linux/?wpdmdl=1906"
+chmod +x SDRplay_RSP_API-Linux-3.15.run
+sudo ./SDRplay_RSP_API-Linux-3.15.run
 ```
 
 ★ It is INTERACTIVE: it pages a licence (space to scroll), then asks twice for `y`. One file
-covers every architecture including ARM64 — there is no separate Pi download, despite the
-website's wording.
+covers every architecture — it carries `armhf`, `amd64` and `arm64` inside, so there is no separate
+Pi download, despite the website's wording.
+
+★★ **THE OLD `sdrplay.com/software/….run` LINKS ARE DEAD.** SDRplay moved their downloads behind a
+WordPress download manager in 2026 and every `SDRplay_RSP_API-Linux-3.15.x.run` address now 404s —
+including the one this page used to give (Stuart hit it on 2026-09-11). The address above is their
+current one and, importantly for a headless box, it resolves under `curl` with no browser and no
+User-Agent games: it redirects to SharePoint with a short-lived token that curl follows by itself.
+★ `wpdmdl=1906` is a download-manager file id, stable for this file but almost certainly new when
+they publish the next version. If it fails, the page to read is <https://www.sdrplay.com/api/>.
+★ Verified 2026-09-11: 499 KB, "SDRplay RSP API Install Package V3.15 (installer v2)".
 
 ★★ **Then reboot.** The installer asks for it, and it means it: the service and the USB rules both
 need to come up cleanly, and a replug only does half of that.

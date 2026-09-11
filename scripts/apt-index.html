@@ -25,6 +25,20 @@
   pre { background: rgba(255,160,0,0.06); border: 1px solid var(--line); border-radius: 8px;
         padding: .9rem 1rem; overflow-x: auto; color: var(--fg); font-size: .86rem; }
   code { color: #ffe566; }
+  /* ★ COPY BUTTONS. Added at runtime (see the script at the end) so every <pre> gets one and a
+     block added later needs no extra markup — this file is a TEMPLATE the publish script fills in,
+     and hand-decorating each block would be six places to forget. */
+  .codewrap { position: relative; }
+  .codewrap pre { padding-right: 4.2rem; }
+  .copy { position: absolute; top: .5rem; right: .5rem;
+          background: rgba(255,160,0,0.10); color: var(--fg);
+          border: 1px solid var(--line); border-radius: 6px;
+          font: inherit; font-size: .72rem; letter-spacing: 1px;
+          padding: .25rem .5rem; cursor: pointer; opacity: .75;
+          display: inline-flex; align-items: center; gap: .35rem; }
+  .copy:hover, .copy:focus { opacity: 1; background: rgba(255,160,0,0.18); }
+  .copy svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+  .copy.done { color: #7dff9a; border-color: rgba(125,255,154,0.5); opacity: 1; }
   .ver { color: var(--dim); font-size: .85rem; letter-spacing: 1px; }
   footer { margin-top: 3rem; border-top: 1px solid var(--line); padding-top: 1rem;
            font-size: .8rem; color: var(--dim); }
@@ -88,15 +102,24 @@ sudo apt install vibeserver</pre>
   <p><code>apt install</code> cannot fetch the SDRplay driver and this is not an oversight:
      SDRplay distribute it under their own licence and we are not permitted to redistribute it.
      RTL-SDR and Airspy HF+ need nothing extra.</p>
-<pre>curl -fLO https://www.sdrplay.com/software/SDRplay_RSP_API-Linux-3.15.2.run
-chmod +x SDRplay_RSP_API-Linux-3.15.2.run
-sudo ./SDRplay_RSP_API-Linux-3.15.2.run
+<pre>curl -fL -o SDRplay_RSP_API-Linux-3.15.run \
+  "https://sdrplay.com/download/hardware-api-linux/?wpdmdl=1906"
+chmod +x SDRplay_RSP_API-Linux-3.15.run
+sudo ./SDRplay_RSP_API-Linux-3.15.run
 sudo reboot
 # once it is back:
 systemctl status sdrplay        # should be active (running)</pre>
   <p>The installer is interactive &mdash; it pages a licence (space to scroll), then asks twice
-     for <code>y</code>. One file covers every architecture including ARM64. <strong>Reboot when
-     it finishes</strong>: the installer asks for it, and a replug is not enough.</p>
+     for <code>y</code>. One file covers every architecture: it carries <code>armhf</code>,
+     <code>amd64</code> and <code>arm64</code>, so the Pi and a desktop take the same download.
+     <strong>Reboot when it finishes</strong>: the installer asks for it, and a replug is not
+     enough.</p>
+  <p class="fine">SDRplay moved their downloads in 2026 and the old
+     <code>sdrplay.com/software/&hellip;.run</code> links now 404. The address above is their
+     current one and works under <code>curl</code> on a headless box &mdash; no browser needed.
+     It is a download-manager id, so expect it to change when they publish the next version;
+     if it ever fails, the page to look at is
+     <a href="https://www.sdrplay.com/api/">sdrplay.com/api</a>.</p>
   <p>Install it whenever you like &mdash; before or after VibeServer. If you add an RSP later,
      <code>sudo systemctl restart vibeserver</code> is enough; the driver is loaded at runtime.</p>
 
@@ -129,5 +152,67 @@ systemctl status sdrplay        # should be active (running)</pre>
     <a href="https://github.com/Stuey3D/VibeSDR">main repository</a>.
   </footer>
 </main>
+<script>
+/* ★★ ONE BUTTON PER <pre>, BUILT HERE RATHER THAN IN THE MARKUP. This page is a template whose
+   command blocks are filled in by the publish script; adding the control at runtime means a new
+   block is covered automatically and there is no per-block markup to keep in step.
+   ★ The button is OUTSIDE the <pre> (in a positioned wrapper) on purpose: <pre> scrolls
+     horizontally, and a control inside it would slide away from a long command line.
+   ★ navigator.clipboard needs a secure context. This page is served over https, but the
+     execCommand fallback costs three lines and covers a plain-http mirror or an old browser —
+     a copy button that silently does nothing is worse than none. */
+(function () {
+  var ICON = '<svg viewBox="0 0 24 24" aria-hidden="true">'
+           + '<rect x="9" y="9" width="12" height="12" rx="2"></rect>'
+           + '<path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>';
+  function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text);
+    }
+    return new Promise(function (resolve, reject) {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      document.body.removeChild(ta);
+      ok ? resolve() : reject();
+    });
+  }
+  document.querySelectorAll('pre').forEach(function (pre) {
+    var wrap = document.createElement('div');
+    wrap.className = 'codewrap';
+    pre.parentNode.insertBefore(wrap, pre);
+    wrap.appendChild(pre);
+
+    var btn = document.createElement('button');
+    btn.className = 'copy';
+    btn.type = 'button';
+    btn.setAttribute('aria-label', 'Copy to clipboard');
+    btn.innerHTML = ICON + '<span>COPY</span>';
+    btn.addEventListener('click', function () {
+      /* ★ textContent, not innerText: the whole block exactly as written, comments and all —
+         the blocks are meant to be pasted whole. The button lives outside the <pre>, so nothing
+         of its own can end up in the clipboard. */
+      copyText(pre.textContent.replace(/\s+$/, '') + '\n').then(function () {
+        btn.classList.add('done');
+        btn.querySelector('span').textContent = 'COPIED';
+        setTimeout(function () {
+          btn.classList.remove('done');
+          btn.querySelector('span').textContent = 'COPY';
+        }, 1600);
+      }).catch(function () {
+        btn.querySelector('span').textContent = 'SELECT IT';
+        setTimeout(function () { btn.querySelector('span').textContent = 'COPY'; }, 1600);
+      });
+    });
+    wrap.appendChild(btn);
+  });
+})();
+</script>
 </body>
 </html>
