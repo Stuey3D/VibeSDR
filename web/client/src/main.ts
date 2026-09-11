@@ -1208,6 +1208,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       //     receiver we push nothing, the server's word is the only truth, and that is
       //     precisely the case the bug was reported on.
       if (rspRestricted()) {
+        // ★ The RF AGC is a SERVER-side loop, so the radio's report is the only truth about it —
+        //   exactly as for the notches beside it. See setToggleTo on why a stale pref must not
+        //   command the radio.
+        if (s.rfAgc    !== undefined) setToggleTo('rspRfAgc',    s.rfAgc,    'rsp_rfagc');
         if (s.rfNotch  !== undefined) setToggleTo('rspRfNotch',  s.rfNotch,  'rsp_rfnotch');
         if (s.dabNotch !== undefined) setToggleTo('rspDabNotch', s.dabNotch, 'rsp_dabnotch');
         if (s.rspBiasT !== undefined) setToggleTo('rspBiasT',    s.rspBiasT, 'rsp_biast');
@@ -1441,6 +1445,18 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       // between updates so it glides rather than hopping.
       const agcOn = $<HTMLButtonElement>('rspIfAgc').classList.contains('on');
       applyRspLock();          // ★ who OWNS the slider — never decided by this message alone
+      /* ★ THE AGC TARGET THE RADIO IS ACTUALLY USING. The server moves this by itself when DAB
+       *  starts, so a slider rendered only from this browser's last choice is a lie the moment
+       *  that happens. Respect a press in the last few seconds, exactly as setToggleTo does, or a
+       *  report already in flight would drag the thumb back from under the user's finger. */
+      if (typeof m.agcSet === 'number') {
+        const el = $<HTMLInputElement>('rspAgcSet');
+        const pressedAt = recentPress.get('rspAgcSet') ?? 0;
+        if (Date.now() - pressedAt > 4000 && Number(el.value) !== m.agcSet) {
+          el.value = String(m.agcSet);
+          renderRspVals();
+        }
+      }
       if (agcOn) {
         // ★ Telemetry MOVES the thumb; it does not decide who owns it. Watching the reduction
         //   ride up and down is the only evidence a listener has that the AGC is alive.
@@ -11056,6 +11072,13 @@ function applyRspLock() {
   const agcOn = $('rspIfAgc').classList.contains('on');
   const gr = $<HTMLInputElement>('rspIfGr');
   gr.classList.toggle('agc', agcOn || restricted);
+  /* ★ THE RF HALF, EXACTLY AS ABOVE. The RF AGC steps the LNA, so while it is on the slider is
+   *  read-only and greyed — and still live, so you can watch it move. Guarded because an older
+   *  server sends no rfAgc and the button may not exist on a non-RSP radio. */
+  const rfAgcBtn = document.getElementById('rspRfAgc');
+  const rfAgcOn  = !!rfAgcBtn && rfAgcBtn.classList.contains('on');
+  const lna = document.getElementById('rspLna') as HTMLInputElement | null;
+  if (lna) lna.classList.toggle('agc', rfAgcOn || restricted);
 
   // ★ HIDDEN, not greyed, for a listener who cannot use them — a disabled control still reads
   //   as an offer, and there is nothing here for them to unlock without the password.
@@ -11064,7 +11087,7 @@ function applyRspLock() {
   //     but read-only BECAUSE IT MOVES — watching the AGC work is how you can tell it is working
   //     at all. A hidden slider and a frozen one look identical: broken.
   const rowOf = (id: string) => document.getElementById(id)?.closest('.mrow') as HTMLElement | null;
-  for (const id of ['rspLna', 'rspIfAgc']) {
+  for (const id of ['rspLna', 'rspIfAgc', 'rspRfAgc']) {
     const r = rowOf(id); if (r) r.hidden = restricted;
   }
   for (const id of ['rowAgcSet', 'rowRspNotch']) {
@@ -11084,8 +11107,14 @@ function renderRspVals() {
   // ★ Say which END is more gain, every time. "LNA 3" means nothing on its own.
   // Show the state too — an FM-DXer comparing against SDRuno or SDRconnect wants the actual
   // LNA state, not a slider position we invented.
+  /* ★ NAME WHO OWNS IT, exactly as the IF readout does with "· AGC". A greyed slider that moves
+   *  says something is driving it; only the label says WHAT. Tonight's whole last hour was
+   *  controls that were right and unreadable (Stuart, 2026-09-12: "i didnt realise that it was
+   *  working"), so where a loop owns a control, the control says so. */
+  const rfAgcOwns = !!document.getElementById('rspRfAgc')?.classList.contains('on');
   $('rspLnaVal').textContent =
-    `${pos}/${lnaMax} · LNA ${lna}${lna === 0 ? ' · max' : lna === lnaMax ? ' · min' : ''}`;
+    `${pos}/${lnaMax} · LNA ${lna}${lna === 0 ? ' · max' : lna === lnaMax ? ' · min' : ''}`
+    + (rfAgcOwns ? ' · AGC' : '');
   $('rspIfGrVal').textContent = `${gr} dB${gr <= 20 ? ' · max gain' : gr >= 59 ? ' · min gain' : ''}`;
   const sp = Number($<HTMLInputElement>('rspAgcSet').value);
   // ★ Say which way it drives. "-45 dBfs" alone tells nobody whether that is more or less.
@@ -11093,8 +11122,17 @@ function renderRspVals() {
   // default is -60, which is a different and much gentler thing), so it is the value a user
   // will want to come back to after experimenting — and a number means nothing without
   // knowing where home is (Stuart, 2026-07-26).
+  /* ★ AND SAY WHEN DAB HAS TAKEN IT. The server drops this target for OFDM headroom the moment
+   *  DAB starts and restores it on the way out — so the number moves on its own, and a slider
+   *  that changes with no explanation reads as a fault. "-40 dBfs · DAB" says the receiver did
+   *  it deliberately (Stuart, 2026-09-12: "the AGC target needs to update to show that it is
+   *  setting the -40 target when in DAB mode"). */
+  // ★ dabOn, not dabState: the explicit mode flag, cleared the moment DAB ends. dabState is a
+  //   report that can outlive the mode by a beat, and a label that lies for a beat is still a lie.
+  const dabOwns = dabOn && sp !== AGC_DEFAULT;
   $('rspAgcSetVal').textContent =
-    `${sp} dBfs${sp === AGC_DEFAULT ? ' · default' : sp >= -25 ? ' · hard' : sp <= -60 ? ' · gentle' : ''}`;
+    `${sp} dBfs${dabOwns ? ' · DAB' :
+       sp === AGC_DEFAULT ? ' · default' : sp >= -25 ? ' · hard' : sp <= -60 ? ' · gentle' : ''}`;
 }
 
 /** Glide the IF thumb to a new AGC value. Status arrives at 5 Hz; a slider that teleports
@@ -11127,7 +11165,8 @@ const RSP_PREFS = {
   lna: 'rspLna', ifgr: 'rspIfGr', agcset: 'rspAgcSet',
 } as const;
 const RSP_TOGGLES = {
-  ifagc: 'rspIfAgc', rfnotch: 'rspRfNotch', dabnotch: 'rspDabNotch', biast: 'rspBiasT',
+  ifagc: 'rspIfAgc', rfagc: 'rspRfAgc', rfnotch: 'rspRfNotch', dabnotch: 'rspDabNotch',
+  biast: 'rspBiasT',
 } as const;
 
 /** Push every current RSP setting to the server. Called whenever a radio announces itself,
@@ -11192,10 +11231,20 @@ function initRspControls() {
       savePref(`rsp_${key}`, on);
       // Turning AGC OFF hands the IF reduction back, so send the slider's value with it.
       if (key === 'ifagc' && !on) rspSend({ ifgr: Number($<HTMLInputElement>('rspIfGr').value) });
+      /* ★ AND THE SAME FOR THE RF HALF: turning the RF AGC off hands the LNA back, so send where
+       *  the slider is sitting. The value is INVERTED on the wire — the slider reads as gain,
+       *  the radio wants a state, and state 0 is the MOST gain. Same conversion as
+       *  pushAllRspSettings; getting it backwards would hand the front end to the wrong end of
+       *  its range at the moment the listener took control. */
+      if (key === 'rfagc' && !on) {
+        const lnaMax = (radioCaps?.lnaStates ?? 10) - 1;
+        rspSend({ lna: lnaMax - Number($<HTMLInputElement>('rspLna').value) });
+      }
       // ★ AND UNLOCK THE SLIDER RIGHT NOW, rather than waiting for an rspstat to say so. That
       //   wait was the bug: on a server whose stats never arrive, the AGC could be turned off
-      //   and the slider stayed read-only for ever (Stuart, 2026-08-03).
-      if (key === 'ifagc') applyRspLock();
+      //   and the slider stayed read-only for ever (Stuart, 2026-08-03). ★★ BOTH loops now, or
+      //   the RF slider inherits exactly the fault the IF one was cured of.
+      if (key === 'ifagc' || key === 'rfagc') applyRspLock();
     };
   };
   for (const [key, id] of Object.entries(RSP_TOGGLES)) toggle(id, key);

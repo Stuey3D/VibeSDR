@@ -7395,12 +7395,22 @@ struct LocalSdrShim::Impl {
                      *   status: So for 648KHz AM it would be RF Notch: off | DAB Notch: On". */
                     "{\"type\":\"rspstat\",\"sysGain\":%.1f,\"lna\":%d,\"ifgr\":%d,\"overload\":%d,"
                     "\"settling\":%d,\"rfNotch\":%d,\"dabNotch\":%d,\"autoNotch\":%d,"
-                    "\"userNotch\":%d,\"rfAgc\":%d}",
+                    "\"userNotch\":%d,\"rfAgc\":%d,\"agcSet\":%d}",
                     sdrp->systemGainDb(), sdrp->currentLnaState(), sdrp->currentIfGr(),
                     sdrp->overloaded() ? 1 : 0, sdrpSettling ? 1 : 0,
                     vsDesiredRfNotch() > 0 ? 1 : 0, vsDesiredDabNotch() > 0 ? 1 : 0,
                     vsAutoNotchOn() ? 1 : 0, vsUserNotchAllowed() ? 1 : 0,
-                    g_rspRfAgc.load(std::memory_order_relaxed) ? 1 : 0);
+                    g_rspRfAgc.load(std::memory_order_relaxed) ? 1 : 0,
+                    /* ★★★ THE LIVE AGC TARGET, because the server MOVES IT ON ITS OWN. DAB drops
+                     *     it for OFDM headroom (see kDabAgcSetPoint) and restores it on exit — and
+                     *     none of that reached the client, which advertised only the CAPABILITY
+                     *     (`agcSetPoint: true`) and never the value. So the slider sat at -30 while
+                     *     the radio ran at -40 and the log said so plainly (Stuart, 2026-09-12:
+                     *     "the DAB AGC target override is not applying either" — it was applying;
+                     *     only the readout was wrong).
+                     * ★ -999 means the owner never chose one; report the API's own default so the
+                     *   slider has somewhere honest to sit. */
+                    vsDesiredAgcSet() > -999 ? vsDesiredAgcSet() : -30);
                 if (need < 0 || (size_t)need >= sizeof gb)
                     LOGI("rspstat truncated (%d of %zu bytes) — not sent", need, sizeof gb);
                 else
@@ -9751,6 +9761,14 @@ struct LocalSdrShim::Impl {
                 }
             }
             if (jsonNum(msg, "agcset", v))   LocalSdrShim::instance().setIfAgcSetPoint((int)v);
+            /* ★ THE RF HALF OF THE GAIN LOOP, from the menu. Persisted like every other RSP
+             *  control so it survives a restart — and reported back on rspstat, which is what
+             *  keeps the button honest on a shared receiver where somebody else may flip it. */
+            if (jsonNum(msg, "rfagc", v)) {
+                LocalSdrShim::setVibeServerRfAgc(v != 0);
+                vsPersist(std::string("{\"rfAgc\":") + (v != 0 ? "true" : "false") + "}");
+                LOGI("RSP RF AGC %s by a listener", v != 0 ? "ON" : "off");
+            }
             // Loop dynamics arrive together — they only make sense as a set.
             {
                 double a, d, dd, th;
@@ -16088,7 +16106,21 @@ struct LocalSdrShim::Impl {
                     LOGI("auto notch: DAB notch %s at %.3f MHz", w.dab ? "ON" : "off", hz / 1e6);
                     sdrp->setDabNotch(w.dab);
                 }
-                if (rfChanged || dabChanged) vsRecordNotchChoice(w.rf, w.dab);
+                if (rfChanged || dabChanged) {
+                    vsRecordNotchChoice(w.rf, w.dab);
+                    /* ★★★ AND TELL THE LISTENERS. The notch state rides on hwinfo, which is sent
+                     *     at connect and when somebody CHANGES something — so a filter moved by
+                     *     the automatic rule was invisible: the radio was right and every client's
+                     *     buttons showed the state from connect time, which on entering DAB is the
+                     *     exact opposite of the truth (Stuart, 2026-09-12: "auto notches not
+                     *     working, i went to DAB and the RF is off and the DAB is on still" — the
+                     *     server was reporting rfNotch:1 dabNotch:0 at that very moment).
+                     * ★★ A CONTROL THAT SHOWS THE WRONG STATE IS WORSE THAN ONE THAT DOES NOTHING:
+                     *    it invites the owner to "fix" a filter that is already correct. Same rule
+                     *    the gain cap follows two hundred lines below — when the server moves
+                     *    something on the listener's behalf, it says so. */
+                    for (auto& pr : allSpecPeers()) sendHwInfo(pr.sock);
+                }
             }
             // ★★ The cap is a GAIN POSITION; the LNA state counts the other way. See the note in
             //    the rsp_control handler — this is the same conversion and must not drift from it.

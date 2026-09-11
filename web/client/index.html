@@ -2082,10 +2082,15 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 /* ★ While the AGC owns the IF reduction the slider is READ-ONLY but still LIVE — greyed so
    it is plainly not yours to drag, and still moving so you can watch the AGC work. A frozen
    control looks broken; a disabled one that animates explains itself (Stuart, 2026-07-26). */
-#rspIfGr.agc {
+/* ★★ AND THE RF SLIDER, WHEN THE RF AGC OWNS IT — same rule, same reason. Until the RF AGC had
+   a switch the question never arose; the moment it did, an amber RF slider next to a greyed IF
+   one said the front end was hand-set when a loop was quietly moving it (Stuart, 2026-09-12:
+   "auto mode the RF slider needs to grey out like the IF one"). A control that looks yours while
+   something else drives it is the same lie as one that looks broken while it works. */
+#rspIfGr.agc, #rspLna.agc {
   opacity: 0.55; pointer-events: none;
 }
-#rspIfGr.agc::-webkit-slider-thumb { background: var(--text-dim); }
+#rspIfGr.agc::-webkit-slider-thumb, #rspLna.agc::-webkit-slider-thumb { background: var(--text-dim); }
 /* ★★ FIXED-WIDTH READOUTS. These values change length as they are dragged ("-30 dBfs" ->
    "-10 dBfs · drives hard"), and in a flex row that RESIZES THE SLIDER MID-DRAG — so the
    pointer suddenly maps to a different position and the value leaps (Stuart, 2026-07-26:
@@ -3811,6 +3816,15 @@ select.btn { padding: 6px 8px; }
     <div class="mrow">
       <label>IF AGC</label>
       <div class="seg"><button class="btn on" id="rspIfAgc">AUTO</button></div>
+    </div>
+    <!-- ★★★ THE OTHER HALF OF THE LOOP. The RSP's own AGC moves the IF gain reduction and NEVER
+         the LNA, so when it saturates the front end stays wherever it was last put. This watches
+         where the IF AGC settles and steps the RF gain to keep it in its comfortable range.
+         ★ It belongs NEXT TO the IF one because an owner reading "IF AGC: AUTO" reasonably assumes
+           the whole gain chain is automatic, and until this switch existed only half of it was. -->
+    <div class="mrow" id="rowRspRfAgc">
+      <label>RF AGC</label>
+      <div class="seg"><button class="btn on" id="rspRfAgc">AUTO</button></div>
     </div>
     <!-- ★ The AGC's TARGET, as SDRconnect exposes it. It is a target, not a limit: a higher
          (less negative) figure asks for a louder output and so applies MORE gain. The right
