@@ -1398,7 +1398,15 @@ button.btn {
   padding: 0.55em 0.9em; border-radius: 0.45em; font-family: inherit; font-size: 0.95em;
   letter-spacing: 0.08em; cursor: pointer; white-space: nowrap;
 }
-button.btn:hover { background: var(--btn-active-bg); border-color: var(--btn-active-bdr); color: var(--btn-active-tx); }
+/* ★★★ HOVER MUST NOT LOOK LIKE ON. These two rules were IDENTICAL, so whichever button the
+ *     pointer happened to be over read as active — and on a row of toggles (RF NOTCH, DAB NOTCH,
+ *     BIAS-T) that makes the whole row unreadable: Stuart, 2026-09-11, "this filters row is
+ *     working but looks greyed out ... I cant tell what filters are active or not". He could
+ *     change them perfectly well; he could not SEE which were set, which for a front-end filter
+ *     that changes the radio for every listener is the half that matters.
+ * ★ Hover is now a faint lift only — enough to show the thing is pressable, nowhere near the lit
+ *   state below. :not(.on) so hovering an ACTIVE button never dims it back down. */
+button.btn:hover:not(.on) { background: rgba(255,200,0,0.06); border-color: var(--btn-active-bdr); }
 button.btn[hidden] { display: none; }
 /* Tap/hold keys: suppress the double-tap-zoom delay so a press registers at once,
    and light the key while it is sweeping so the mode change is visible as well as
@@ -1408,7 +1416,16 @@ button.btn[hidden] { display: none; }
   background: var(--btn-active-bg); border-color: var(--btn-active-bdr); color: var(--btn-active-tx);
   box-shadow: 0 0 10px rgba(80,255,120,0.35);
 }
-button.btn.on { background: var(--btn-active-bg); border-color: var(--btn-active-bdr); color: var(--btn-active-tx); }
+/* ★★★ LIT, NOT TINTED. A 10 %-opacity wash over a dark panel is a difference you have to hunt
+ *     for, and "is this filter in circuit?" is not a question anyone should squint at. This is the
+ *     same treatment .dabAnn.on already uses for the same reason — solid amber, dark text — so an
+ *     active toggle reads as a lamp that is ON from across the room.
+ * ★ The glow matches the tap/hold keys above, which is the other place in this file where a
+ *   control is deliberately "lit". */
+button.btn.on { background: var(--btn-active-tx); border-color: var(--btn-active-tx);
+                color: #0c0f0c; font-weight: 600;
+                box-shadow: 0 0 10px rgba(255,229,102,0.30); }
+button.btn.on:hover { background: #fff0a0; border-color: #fff0a0; }
 
 /* MUTE reads as a WARNING, not a mode: the amber "on" style looks like every
    other active toggle, so it's easy to sit there wondering why there's no audio. */

@@ -4655,7 +4655,15 @@ function dabRender() {
       dabPickedAt = 0;   // heard it — the line goes
     }
     if (ds) ds.textContent = !d.locked ? 'searching…' : d.services.length
-      ? `${d.label || d.channel} · ${d.services.length} services${d.aacSettling && d.sid ? ' · setting the DAB+ sample-rate clock…' : ''}`
+      /* ★★★ NOT IN THE HEADER. The per-station "Tuning in — …" line above already says this, in
+       *  the place it was deliberately MOVED TO — see the note on it, which quotes the reason:
+       *  "very squashed in that header so in the app it will be even more so". This suffix was
+       *  left behind afterwards, doing the same job in the spot that had just been rejected, so
+       *  the same fact was reported twice and the header did the squashing anyway (Stuart,
+       *  2026-09-11: "it shouldnt be saying the setting sample rate clock in the header we have a
+       *  proper per station line"). The header says WHICH multiplex and HOW MANY services; the
+       *  station line says what that station is doing. ★ ONE RULE, TWO READERS again. */
+      ? `${d.label || d.channel} · ${d.services.length} services`
       : 'reading the multiplex…'; }
 
   /* ★★ RESET TO THE LIST WHEN THE ENSEMBLE CHANGES, and only then. A new multiplex means a new

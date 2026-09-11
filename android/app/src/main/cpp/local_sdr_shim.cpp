@@ -2624,6 +2624,9 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
     static auto  winStart = std::chrono::steady_clock::time_point{};
     static int   outMs = 0, outDir = 0;
     static auto  lastMove = std::chrono::steady_clock::time_point{};
+    /* ★ What the last STEP did, so an immediate reversal can be recognised as hunting. Cleared by
+     *   a retune or a band change, where the right answer genuinely may be on the other side. */
+    static int   lastDir = 0; static double lastMean = 0.0; static bool oscWarned = false;
 
     const int gr = sdrp->currentIfGr();
     if (gr <= 0) return;                                  // not reported yet
@@ -2659,12 +2662,42 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
     const int want = std::min(n - 1, std::max(lo, cur + dir));
     if (want == cur) { outMs = 0; return; }               // already at an end stop — say nothing
 
+    /* ★★★ AN LNA STEP IS WORTH ~21 dB ON THIS RADIO, NOT THE ~5 dB I ASSUMED — measured on air
+     *     (Stuart, 2026-09-11, 96.1 MHz, RSP1A):
+     *         state 7 -> 8   IF reduction 32 -> 53      state 8 -> 7   55 -> 34
+     *     I had taken 5 dB from the gain ladder's spacing and never measured it, which made the
+     *     first window (40..50) NARROWER THAN A SINGLE STEP. A controller whose smallest possible
+     *     action exceeds its target window cannot settle: every correction overshoots to the far
+     *     side and it oscillates for ever — 4 seconds apart, all evening, audible as a stutter.
+     *
+     * ★★★ SO REFUSE TO UNDO THE LAST STEP. The 30..50 window survives a 21 dB step arithmetically
+     *     (55 -> 34, 28 -> 49, both inside) but only by a few decibels, and the step is not a
+     *     constant: it varies with band and with which state you are leaving. Relying on that
+     *     arithmetic is relying on luck. This does not: a step that immediately reverses the last
+     *     one is the definition of hunting, so it is refused outright and the radio is left at the
+     *     better of the two — whichever side it lands on, it is within one step of ideal, and one
+     *     step is all this hardware HAS.
+     * ★ Said once, at the moment it is decided, because an owner watching the gain sit still
+     *   between two figures deserves to know it is a considered compromise and not a stuck loop. */
+    if (lastDir != 0 && dir != lastDir) {
+        if (!oscWarned) {
+            oscWarned = true;
+            LOGI("RSP RF AGC: holding RF gain at state %d — one LNA step (~%d dB here) is wider "
+                 "than the %d-%d dB window, so stepping again would only undo the last move. "
+                 "This is the closest the hardware can get.",
+                 cur, (int)llround(std::fabs(mean - lastMean)), kGrLow, kGrHigh);
+        }
+        outMs = 0; outDir = 0;
+        return;
+    }
+    oscWarned = false;
     LOGI("RSP RF AGC: IF reduction averaged %.1f dB for %.1f s, %s the %d-%d dB window "
          "(%.0f dB past the trigger) — RF gain state %d -> %d",
          mean, outMs / 1000.0, dir > 0 ? "above" : "below", kGrLow, kGrHigh, excess, cur, want);
     LocalSdrShim::instance().setLnaState(want);
     g_rspRfAgcLastLna.store(want, std::memory_order_relaxed);
     lastMove = now;
+    lastDir = dir; lastMean = mean;
     outMs = 0; outDir = 0;
 }
 // ★ Until when somebody has asked for ADC statistics with the automation off — see enqueueIq.
