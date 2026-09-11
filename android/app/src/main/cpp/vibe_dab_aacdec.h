@@ -397,17 +397,41 @@ public:
     const char* backend() const { return "ffmpeg"; }
 
     /** ★ Probed ONCE: the binary must exist AND report an AAC decoder. A server with ffmpeg built
-     *  without AAC would otherwise look capable and deliver silence. */
+     *  without AAC would otherwise look capable and deliver silence. The BINARY does not come and
+     *  go, so probing once is right; the CHILD PROCESS does, which is what the retry below is for.
+     *
+     *  ★★★ `failed_` USED TO BE A ONE-WAY LATCH, AND IT KILLED DAB+ FOR THE LIFE OF THE SERVER.
+     *      One broken pipe — an ffmpeg child killed by anything at all — set it, nothing ever
+     *      cleared it, and from that moment every DAB+ access unit was dropped while the audio
+     *      path gap-filled 48 kHz of nothing. Measured on the OWRX box (2026-09-11): superframes
+     *      arriving perfectly (sfOk 67 of 67, Reed-Solomon 0 fixed 0 lost, MER 23.4 dB, IQ dropped
+     *      0) with `aacDecoded` stuck at 0 and `pcmFilled` climbing ~48,000/s — the whole of the
+     *      audio being filler. What the listener gets depends only on the filler: a 32 kHz service
+     *      crackles constantly, a 48 kHz one goes silent (Stuart: "audio gone completely but look
+     *      at the reception its the cleanest out of them all", then "on a 32K station constant
+     *      crackle"). Both are this one fault, and from the outside both read as broken hardware —
+     *      which is precisely why the receiver looked worst on the machine whose reception was best.
+     *
+     *  ★★ SO IT RETRIES, AND IT NEVER GIVES UP PERMANENTLY. The cooldown backs off to a cap so a
+     *     genuinely broken ffmpeg cannot spin the box respawning it, but there is no attempt count
+     *     that ends in a receiver that has quietly stopped decoding for good. A radio that fixes
+     *     itself when the cause goes away is worth more than one that has to be restarted by hand,
+     *     and "never limit permanently" is the rule this broke. */
     bool available() const {
         static const bool ok = probe();
-        return ok && !failed_;
+        if (!ok) return false;
+        if (!failed_) return true;
+        const long cool = coolSec();
+        if (::time(nullptr) - failedAt_ < cool) return false;
+        failed_ = false;            // ★ due for another go — decode() will start a fresh child
+        return true;
     }
 
     bool decode(const uint8_t* adts, size_t n, AacPcm& out) {
         if (!available() || n < 7) return available();
         if (pid_ < 0 && !start()) return false;
         ssize_t w = ::write(inFd_, adts, n);
-        if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) { close(); failed_ = true; return false; }
+        if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) { fail("write to ffmpeg failed"); return false; }
         drain(out);
         return true;
     }
@@ -432,7 +456,7 @@ public:
         if (pid_ > 0) { ::kill(pid_, SIGKILL); int st = 0; ::waitpid(pid_, &st, 0); }
         pid_ = -1;
     }
-    void reset() { close(); failed_ = false; }
+    void reset() { close(); failed_ = false; failures_ = 0; }
     int rateHz()   const { return pid_ > 0 ? 48000 : 0; }
     int channels() const { return pid_ > 0 ? 2 : 0; }
 
@@ -473,7 +497,7 @@ private:
         const pid_t pid = ::fork();
         if (pid < 0) {
             ::close(inPipe[0]); ::close(inPipe[1]); ::close(outPipe[0]); ::close(outPipe[1]);
-            failed_ = true; return false;
+            fail("could not fork for ffmpeg"); return false;
         }
         if (pid == 0) {
             ::dup2(inPipe[0], STDIN_FILENO);
@@ -497,9 +521,30 @@ private:
         return true;
     }
 
+    /** ★ ONE PLACE THAT RECORDS A FAILURE, so the cooldown, the counter and the message cannot
+     *  drift apart — and so the journal SAYS the decoder has gone. Silence in the log is what let
+     *  this sit undiagnosed behind a perfect-looking receiver. */
+    void fail(const char* why) {
+        close();
+        failed_ = true;
+        failedAt_ = ::time(nullptr);
+        if (failures_ < 1000000) ++failures_;
+        std::fprintf(stderr, "[DAB] AAC decoder lost (%s) — DAB+ audio is filler until it restarts; "
+                             "retrying in %lds (failure %d)\n", why, coolSec(), failures_);
+        std::fflush(stderr);
+    }
+    /** ★ 2 s, doubling to a 30 s cap. Quick enough that a one-off death is inaudible; slow enough
+     *  that a machine with no working ffmpeg is not forking one twice a second. */
+    long coolSec() const {
+        long c = 2; for (int i = 1; i < failures_ && c < 30; ++i) c *= 2;
+        return c > 30 ? 30 : c;
+    }
+
     pid_t pid_ = -1;
     int   inFd_ = -1, outFd_ = -1;
-    bool  failed_ = false;
+    mutable bool failed_ = false;
+    mutable long failedAt_ = 0;
+    int   failures_ = 0;
 };
 
 #if defined(__APPLE__)
