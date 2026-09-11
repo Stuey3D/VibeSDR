@@ -724,6 +724,7 @@ export abstract class SdrWsClient {
   /** Tune to a new frequency (and optionally mode). Sends to native audio WS + spectrum WS. */
   tune(frequency: number, mode?: SDRMode, opts?: { recenter?: boolean }) {
     if (this.dabHeld) return;            // ★ see dabHeld — the multiplex IS the tuning
+    const prevFreq = this.status.frequency;   // ★ read BEFORE it is overwritten — see sameSpot below
     this.lastLocalTuneAt = Date.now();   // ★ so the server's echo is not read as somebody else
     if (frequency) this.status.frequency = frequency;
     if (mode)      this._adoptMode(mode);      // ★ the passband travels with it — see _adoptMode
@@ -734,7 +735,37 @@ export abstract class SdrWsClient {
     // Goes through the coalesced view sender — a fast VFO drum spin fires per
     // step, and per-step recentres flood the link with config echoes. (Audio
     // tune above stays per-event via native, so tuning feel is unaffected.)
-    if (this.followVfo || opts?.recenter) {
+    /* ★★★ A TUNE TO WHERE WE ALREADY ARE IS NOT A TUNE, AND MUST NOT MOVE THE CAPTURE.
+     *
+     *  The recentre below is right for a real move — the waterfall follows the dial. But it also
+     *  fired for a tune to the SAME frequency, and on a shared receiver that is not harmless: the
+     *  zoom reaches the server's pan handler, which moves rtlCenter and PHYSICALLY RETUNES THE
+     *  DONGLE. The VFO never changes, so every readout still says the right number while the
+     *  capture window slides underneath everybody listening.
+     *
+     *  ★★ MEASURED ON STUART'S XCOVER, 2026-09-11, in the server's own log:
+     *       audio WS connected … shared
+     *       spectrum WS connected — listener 2 of 10
+     *       retune -> 96100.000 kHz (was 96100.000, centre 95720.000)
+     *       deferred retune applied: dongle -> 96100000 Hz
+     *     A tune to 96.100 while already on 96.100 — and the capture centre moved 380 kHz. Both
+     *     listeners heard analogue mistuning with a correct frequency box: "soon as the iphone
+     *     connected they both had static like the iphone nudged the tuning when it connected". He
+     *     had not retuned anything.
+     *
+     *  ★★ AND IT EXPLAINS THE CURE. "it needs to move a few hundred KHz to get it to produce clean
+     *     signal again" — a small nudge re-runs the same no-op-ish path, while a big one crosses
+     *     the server's recentre threshold and re-derives the placement from scratch.
+     *
+     *  ★ The server's own note says this "bites hardest exactly where it is least acceptable: ON
+     *    CONNECT. The client restores its zoom and its tune milliseconds apart" — the fault was
+     *    known from that end and never closed from this one.
+     *  ★ A REAL move still recentres, including on a shared dial: there the whole room follows the
+     *    dial by design, which is the point of sharing it. Only the no-op is suppressed, so nothing
+     *    a person actually does changes. `mode` counts as a move too — a new demodulator wants its
+     *    passband in view even at the same frequency. */
+    const sameSpot = !!frequency && Math.abs(frequency - prevFreq) < 1 && !mode;
+    if ((this.followVfo || opts?.recenter) && !sameSpot) {
       const bb = this.view.binBandwidth || this.status.binBandwidth;
       if (bb) this.zoom(frequency, bb);
       else    this.pan(frequency); // no geometry known yet — let server keep its bin_bw
