@@ -403,7 +403,42 @@ export default function App() {
            * ★ Skipped when the address already names a radio (…/r/<id>), which is exactly what
            *   the wrist sends back — otherwise choosing would ask the question again. */
           if (type === 'vibeserver' && /^https?:\/\//i.test(url) && !/\/r\/[^/]+$/.test(url)) {
-            const door = await fetchFrontDoor(url).catch(() => null);
+            /* ★★★ DO NOT ASK THE DOOR A QUESTION THE DIRECTORY HAS ALREADY ANSWERED.
+             *
+             *  This fetch exists for ONE decision: is there more than one radio, so must the wearer
+             *  choose? The directory row we cached moments ago already carries that list — it is
+             *  the same list browseForWatch reads to decide whether to send radios to the wrist at
+             *  all — so on a single-radio server this is a blocking network round trip whose answer
+             *  we are holding.
+             *
+             *  ★★ AND IT IS SPENT ON THE PATH THAT CAN LEAST AFFORD IT. This whole function runs
+             *     inside the few seconds iOS grants an app the WATCH woke headless. A bare door URL
+             *     already pays detectServerType (up to two 5 s fetches) before reaching here, then
+             *     this, and only then whenNavReady — which polls a 50 ms timer that iOS throttles
+             *     in the background. A multi-radio server never pays it: the wrist sends
+             *     …/r/<id> and the test above skips this block entirely, which is exactly why the
+             *     Pi connects from Buddy and a single-radio server is the one that struggles
+             *     (Stuart, 2026-09-11 — and the app's OWN picker reaches the same server fine,
+             *     because it never comes through here).
+             *
+             *  ★★ WORSE ON ANDROID, WHERE THE ANSWER CANNOT EXIST. A phone running VibeServer never
+             *     registers a radios handler (setRadiosHandler is called only by the daemon in
+             *     vibeserver/main.cpp), so /vibeserver/radios returns the stub {"radios":[]} and
+             *     this fetch can only ever come back null — four seconds to learn nothing. Nor can
+             *     the answer be used: that server 404s every /r/<id>, so the door IS the receiver
+             *     and a rewrite would break it. Measured on the XCover, 2026-09-11.
+             *
+             *  ★ ONE radio with an id: address it directly, no round trip. ONE with no id, or none
+             *    listed: connect at the door, no round trip. MORE than one, or nothing cached at
+             *    all: ask, exactly as before — that is the case this fetch was written for. */
+            const known = cached?.radios;
+            const knownOne = known && known.length === 1 ? known[0] : null;
+            if (knownOne?.id) {
+              url = radioBaseUrl(url, knownOne.id);
+            }
+            const door = (known && known.length <= 1)
+              ? null
+              : await fetchFrontDoor(url).catch(() => null);
             if (door && door.radios.length > 1) {
               watchProvider.sendRadios(url, door.name || wname || 'VibeServer',
                 door.radios.map((r) => ({
@@ -567,9 +602,23 @@ export default function App() {
              * ★ `id` is the FULL address, already /r/<id>-prefixed — the same rule sendRadios and
              *   the directory rows follow: the watch is handed addresses, never taught to build
              *   them. */
-            radios: (s.radios && s.radios.length > 1 && s.radios.every((r) => !!r.id))
+            /* ★★★ EVEN WHEN THERE IS ONLY ONE. Stuart, 2026-09-11: "can we not simply have the
+             *   xcover entry in buddy behave the same as the Pi and have it drop down even if its
+             *   only a single radio". Two rows that connect the same way should not look like two
+             *   different kinds of thing — and the expanded row carries the radio's NAME, what it
+             *   can do and who is on it, which a bare server row cannot say.
+             * ★★ AND A RADIO WITH NO ID IS NOW TAPPABLE, not omitted. The old rule dropped the whole
+             *    list unless EVERY radio had an id, because "a radio with no /r/<id> to be sent to
+             *    would draw a row that cannot be tapped". The answer is to send it the DOOR, which
+             *    is exactly where the plain server row would have sent it — no worse, and it keeps
+             *    the row. That is the Android case: a phone running VibeServer publishes no radio
+             *    ids and 404s every /r/<id>, so the door IS the receiver (measured on the XCover,
+             *    2026-09-11). Nothing is lost and the list stops disappearing.
+             * ★ A one-radio row still has a chevron and still expands. It is one tap either way;
+             *   what changes is that you can see WHAT you are about to connect to first. */
+            radios: (s.radios && s.radios.length >= 1)
               ? s.radios.map((r) => ({
-                  id: radioBaseUrl(s.url, r.id),
+                  id: r.id ? radioBaseUrl(s.url, r.id) : s.url,
                   name: r.label,
                   occupancy: radioOccupancy(r),
                   limits: radioLimits(r),

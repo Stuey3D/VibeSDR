@@ -245,7 +245,11 @@ struct InstancePickerView: View {
    *   not look identical to a row that connects. */
   @ViewBuilder private func serverRow(_ s: SDRServer) -> some View {
     let radios = s.radios ?? []
-    let expandable = radios.count > 1
+    /* ★ ONE RADIO EXPANDS TOO (Stuart, 2026-09-11). A single-radio VibeServer used to be drawn as
+     *  a plain row and connected at the door, so it looked like a different kind of server from the
+     *  four-radio one beside it. It is not: the expanded row names the radio, says what is on it and
+     *  who is listening, and the phone sends it to the same place either way. */
+    let expandable = radios.count >= 1
     let open = openRadios.contains(s.url)
 
     Button {
@@ -259,7 +263,8 @@ struct InstancePickerView: View {
         typeBadge(s.serverType)
         VStack(alignment: .leading, spacing: 1) {
           Text(s.name).font(.system(size: 14)).foregroundColor(s.full ? Self.dim : Self.cream).lineLimit(1)
-          Text(expandable ? "\(radios.count) radios" : serverSubtitle(s))
+          // ★ "1 radio", not "1 radios" — single-radio servers expand now, so this line reads it.
+          Text(expandable ? "\(radios.count) radio\(radios.count == 1 ? "" : "s")" : serverSubtitle(s))
             .font(.system(size: 9)).foregroundColor(Self.dim).lineLimit(1)
         }
         Spacer()
