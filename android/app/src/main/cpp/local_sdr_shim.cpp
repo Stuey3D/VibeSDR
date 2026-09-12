@@ -2792,6 +2792,10 @@ static std::atomic<int> g_vibeAgcLastGr{-1};   // what WE last commanded, for th
 static int g_vibeAgcBadLna = -1, g_vibeAgcCleanRun = 0, g_vibeAgcRailHi = 0, g_vibeAgcRailLo = 0;
 /** ★ Windows of ACQUIRE remaining — see the note in the tick. ~4 s at ~10 windows/s. */
 static int g_vibeAgcAcquire = 0;
+/** ★ A pending RF step awaiting its real gain figure — see the note at the RF write. */
+static unsigned g_vibeAgcLastWin = 0, g_vibeAgcSkipWin = 0;
+static double g_vibeAgcPendGain = 0.0;
+static int    g_vibeAgcPendGr = 0, g_vibeAgcPendPrevGr = 0, g_vibeAgcPendStep = 0;
 /** ★ The capture rate the loop is currently seeing, published by the tick's caller — the tick is
  *  a free function and cannot reach the Impl's member. A rate change re-arms acquisition. */
 static std::atomic<double> g_vibeAgcRateHz{0.0};
@@ -2808,6 +2812,9 @@ static std::atomic<int> g_vibeAgcHoldWin{20};    // 20 windows ≈ 2 s of persis
 static void vsVibeAgcForget() {
     g_vibeAgcBadLna = -1; g_vibeAgcCleanRun = 0; g_vibeAgcRailHi = 0; g_vibeAgcRailLo = 0;
     g_vibeAgcAcquire = 200;  // ★ a CAP (~20 s), not a duration — it exits on arrival
+    /* ★ The window bookkeeping too — adcRestart() zeroes the counter these are compared against,
+     *   and leaving them high silenced the whole loop. */
+    g_vibeAgcLastWin = 0; g_vibeAgcSkipWin = 0; g_vibeAgcPendStep = 0;
 }
 
 /* ★★★ VibeAGC'S TARGET IS VibeAGC'S TARGET — agcTargetDbfs(), THE SAME ONE THE DONGLE USES.
@@ -2854,10 +2861,17 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      *   we just made. We wait for the first window that is entirely after the write.
      * ★★ This makes the loop's real rate ~5 Hz, which is plenty: the IF stage has 1 dB resolution
      *    and the whole point of the design is that the RF stage stays put. */
+    /* ★★★ AND THESE MUST BE FORGOTTEN WITH THE COUNTER THEY TRACK. adcRestart() sets the window
+     *     counter back to zero on a retune or rate change — and these two held values from BEFORE
+     *     that, so `win < skipUntilWin` was 0 < 5002 and the tick returned early FOR EVER. The
+     *     loop went completely silent: no heartbeat, no decisions, every band frozen at LNA 9 /
+     *     IF 53 with -5 dB of system gain, looking for all the world like a settled radio.
+     * ★ Same fault shape as the badLna carry-over: I reset one thing and left its dependents
+     *   holding stale state. Anything derived from a counter has to be cleared when the counter
+     *   is, which is why they now live beside the rest of the per-tune state in vsVibeAgcForget. */
     const unsigned win = sdrp->adcWindows();
-    static unsigned lastWin = 0, skipUntilWin = 0;
-    if (win == lastWin || win < skipUntilWin) return;
-    lastWin = win;
+    if (win == g_vibeAgcLastWin || win < g_vibeAgcSkipWin) return;
+    g_vibeAgcLastWin = win;
 
     if (sdrp->adcWindows() == 0) {
         /* ★ And SAY so. A loop that is alive but has never measured looks identical to one that
@@ -3070,8 +3084,28 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
 
     const int n = sdrp->lnaStateCount();
     const int lna = sdrp->currentLnaState();
-    const int gr  = sdrp->currentIfGr();
+    int       gr  = sdrp->currentIfGr();
     if (n <= 0 || gr <= 0) return;
+
+    /* ★★★ SETTLE A PENDING RF STEP FIRST, with the gain figure that is now ready. See the note at
+     *     the write. If the real step differs from what we applied, correct the IF by the
+     *     difference before ANY decision is taken on this tick — otherwise the loop reacts to a
+     *     level that is wrong for a reason it caused itself. */
+    if (g_vibeAgcPendStep) {
+        g_vibeAgcPendStep = 0;
+        const double gNow  = sdrp->systemGainDb();
+        const int    real  = (int)std::lround(gNow - g_vibeAgcPendGain);
+        const int    applied = g_vibeAgcPendGr - g_vibeAgcPendPrevGr;
+        if (std::abs(real) <= 40 && real != applied) {
+            const int fix = std::max(20, std::min(59, gr + (real - applied)));
+            if (fix != gr) {
+                LOGI("VibeAGC/RSP: the step was really %+d dB, not %+d — IF reduction %d -> %d to "
+                     "finish the compensation", real, applied, gr, fix);
+                sdrp->setIfGainReduction(fix);
+                gr = fix;
+            }
+        }
+    }
 
     /* ── THE IF STAGE ─────────────────────────────────────────────────────────────────────────
      * ★ Continuous, and it does all the routine work. gRdB is a REDUCTION: more reduction is less
@@ -3358,8 +3392,38 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      *   Stuart asked for: "little constant tweaks a couple of db here or there not an issue its
      *   the 10db swings that cause big issues". */
     static int hotIf = 0, coldIf = 0;
+    /* ★★★ AND THE REST BAND SITS AS HIGH AS IT SAFELY CAN, because a HIGH IF reduction means the
+     *     RF stage is doing the work — which is the whole of SDRplay's "as high as possible" and
+     *     the only way to improve the noise figure, the LNA being the first stage.
+     * ★★★ THE UPPER LIMIT IS ARITHMETIC, NOT TASTE. A climb of one LNA step is ~19 dB and must be
+     *     absorbed by the IF, so the trigger has to leave room: threshold + 19 must stay below
+     *     the 59 dB rail, or the climb lands on the rail and bounces straight back. 38 is the
+     *     highest threshold that satisfies that (38 + 19 = 57). Above it the loop oscillates —
+     *     the same "window narrower than a step" trap as before, arriving from the other side.
+     * ★ Measured motive: 9A locked but broke up at LNA 5 / IF 36 — MER 9.1 dB, 7.66% pre-Viterbi
+     *   — with 22 dB of IF reduction unused. Stuart called it: "I wonder if in this situation one
+     *   more on the RF gain would help" (2026-09-12). One step lands the IF near 55, still clear
+     *   of the rail, with the same level and a better noise figure. */
+    /* ★★ TRIED AND REVERTED, 2026-09-12: 38..57, to take up Stuart's correct observation that 9A
+     *    broke up at LNA 5 / IF 36 with 22 dB of IF reduction unused, and that one more step of
+     *    RF gain should help. It is right in PRINCIPLE — the LNA is the first stage — but the
+     *    loop cannot safely spend that gain yet, and trying drove EVERY band to minimum RF gain:
+     *    9A -11.4 dB, FM 96.1 +10.7, both far worse than the 25..55 band gives.
+     *    ★ The reason is the weak link noted on the step compensation: `gainVals.curr` is often
+     *      not refreshed in time, the measured step is implausible and gets discarded, and the
+     *      climb then goes UNCOMPENSATED — a ~19 dB level jump, which clips, which makes the RF
+     *      stage retreat. Triggering climbs more often simply exposes that more often.
+     *    ★★ So the prerequisite is a RELIABLE step size, not a bolder threshold.
+     *    ▶ THAT PREREQUISITE IS NOW MET — the step is read a tick later, when the API has
+     *      actually published it (6 corrections observed in one run) — so the threshold is raised
+     *      to 35, chosen by the same arithmetic as the ceiling: a climb adds ~19 dB to the IF, so
+     *      35 + 19 = 54 lands just under the 55 ceiling and does not re-trigger.
+     *    ★ The motive is measured and it is a RATCHET: once the RF descended to LNA 9 the loop
+     *      could never climb back, because the old trigger needed the IF below 25 while it sat at
+     *      29..47. Early points in a run reached LNA 6 and +42 dB; everything after was stranded
+     *      at LNA 9 and -11..+16. "Patient to reclaim" had become one-directional. */
     if      (wantGr > 55) { ++hotIf;  coldIf = 0; }   // IF out of room -> less RF gain
-    else if (wantGr < 25) { ++coldIf; hotIf  = 0; }   // IF has real slack -> MORE RF gain
+    else if (wantGr < 35) { ++coldIf; hotIf  = 0; }   // IF has slack -> MORE RF gain (see below)
     else                  { hotIf = coldIf = 0; }     // 25..55: wider than a step, so it settles
 
     int wantLna = lna;
@@ -3472,7 +3536,7 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
         lastIfWrite = clock::now();
         sdrp->setIfGainReduction(wantGr);
         g_vibeAgcLastGr.store(wantGr, std::memory_order_relaxed);
-        skipUntilWin = win + 2;     // ★ ignore the straddling window — see the note above
+        g_vibeAgcSkipWin = win + 2;     // ★ ignore the straddling window — see the note above
     }
     if (wantLna != lna) {
         /* ★★★ MEASURE WHAT THE STEP WAS WORTH; DO NOT ASSUME IT. This used a flat 21 dB, taken
@@ -3495,7 +3559,7 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
         const double gBefore = sdrp->systemGainDb();
         LocalSdrShim::instance().setLnaState(wantLna);
         const double gAfter  = sdrp->systemGainDb();
-        int stepDb = (int)std::lround(gAfter - gBefore);         // + = the radio got louder
+        int stepDb = (int)std::lround(gAfter - gBefore);         // + = the radio got louder (often stale — see below)
         /* ★★★ AND SANITY-CHECK IT, BECAUSE IT IS NOT ALWAYS READY. gainVals.curr is refreshed by
          *     the API when it processes the update, which is not always before this read returns.
          *     Measured on air: 9->8 and 8->7 both reported "+0 dB", and 7->6 reported "-23 dB"
@@ -3518,7 +3582,21 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
         g_vibeAgcLastGr.store(comp, std::memory_order_relaxed);
         /* ★ An RF step is far bigger than an IF nudge and the radio needs a moment, so give it
          *   three clear windows before judging anything. */
-        skipUntilWin = win + 3;
+        g_vibeAgcSkipWin = win + 3;
+        /* ★★★ AND FINISH THE JOB NEXT TICK, WHEN THE READING IS ACTUALLY READY. gainVals.curr is
+         *     refreshed by the API when it processes the update, which is frequently NOT before
+         *     this read returns — measured: "+0 dB" and even "-23 dB while climbing" on a move
+         *     that was plainly +19. The implausible ones are discarded (below), which leaves the
+         *     step UNCOMPENSATED: a ~19 dB level jump that clips and makes the RF stage retreat.
+         *     That unreliability is what blocked taking up Stuart's 9A observation — see the
+         *     note on the rest band.
+         * ★ So the pending step is remembered and settled on the following tick, by which time
+         *   the API has published the real figure. One tick is ~50 ms; the alternative is
+         *   guessing, and guessing here is what caused the retreats. */
+        g_vibeAgcPendGain = gBefore;
+        g_vibeAgcPendPrevGr = wantGr;
+        g_vibeAgcPendGr   = comp;
+        g_vibeAgcPendStep = 1;
         LOGI("VibeAGC/RSP: RF gain %s — LNA %d -> %d (peak %.1f dBFS, clip %.4f%%, ovl %d/hw %d), "
              "step measured %+d dB, IF reduction %d -> %d dB to match%s",
              wantLna > lna ? "DOWN" : "UP", lna, wantLna, peak, clip,
