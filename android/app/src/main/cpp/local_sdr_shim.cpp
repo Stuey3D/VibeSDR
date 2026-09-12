@@ -3119,13 +3119,26 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
          *     what "going up super slowly" looks like from outside (Stuart, 2026-09-12).
          * ★ After both writes, whatever net gain change is left IS what the IF still has to
          *   absorb. No subtraction, no bookkeeping, nothing to get the sign of wrong. */
+        /* ★★★ COMPENSATE THE OVERSHOOT, NOT THE STEP. Nulling the whole step was self-defeating:
+         *     we climb the LNA BECAUSE we want more gain, and then handed it straight back to the
+         *     IF, which left gRdB at ~59 — above the 40 dB headroom the next climb needs. The IF
+         *     loop then had to walk nineteen decibels back down at about one a second before the
+         *     RF stage could move again. Nineteen seconds a step, eight steps from the bottom:
+         *     over two minutes to reach the top (Stuart, 2026-09-12: "the RF gain was still quite
+         *     low and took a while to ramp up").
+         * ★ The only thing worth preventing is going PAST the target. So: if the step has taken
+         *   the level above target, give back exactly that excess and no more; if it is still at
+         *   or below target, keep all of it. The climb then does what it was asked to do, in one
+         *   move, and the IF is left with room for the next one. */
         const double gNow  = sdrp->systemGainDb();
         const int    net   = (int)std::lround(gNow - g_vibeAgcPendGain);
-        if (std::abs(net) <= 40 && net != 0) {
-            const int fix = std::max(20, std::min(59, gr + net));
+        const int    over  = (int)std::lround(peak - (double)targetDbfs);
+        const int    give  = over > 0 ? over : 0;
+        if (std::abs(net) <= 40 && give != 0) {
+            const int fix = std::max(20, std::min(59, gr + give));
             if (fix != gr) {
-                LOGI("VibeAGC/RSP: %+d dB of the step is still uncompensated — IF reduction "
-                     "%d -> %d to finish the job", net, gr, fix);
+                LOGI("VibeAGC/RSP: the step put us %+d dB over target — IF reduction %d -> %d, "
+                     "keeping the rest of the gain", over, gr, fix);
                 sdrp->setIfGainReduction(fix);
                 vsVibeAgcEnvShift(-(double)(fix - gr));
                 gr = fix;
@@ -3247,13 +3260,25 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
             inBand = 0;
         }
     }
-    const int  needAgree = acquiring ? 1 : (tooHot ? 3 : 20);
+    /* ★★★ PATIENCE IS FOR SMALL ERRORS. The slow-recovery rules — twenty agreeing windows, ONE
+     *     decibel a step, one write a second — exist so the loop does not chase the gaps between
+     *     overs on an SSB band. Applied to a large deficit they are absurd: measured at LNA 5 /
+     *     IF 48 the level was -53.3 dBFS against a -12 dB target, FORTY-ONE decibels down, and
+     *     the loop needed half a minute of IF walk before it could even attempt an LNA climb.
+     *     That is the whole of "the RF gain was still quite low and took a while to ramp up"
+     *     (Stuart, 2026-09-12).
+     * ★ So the rules scale with the SIZE of the error, not merely its direction. A long way out
+     *   is treated as acquisition whatever the state machine thinks — no fade produces 41 dB, so
+     *   there is nothing to be cautious about. Inside 15 dB the careful asymmetry returns. */
+    const bool farOut    = std::fabs(err) > 15.0;
+    const bool hurry     = acquiring || farOut;
+    const int  needAgree = hurry ? 1 : (tooHot ? 3 : 20);
     /* ★ Big steps DOWN in gain (the safe direction) even while acquiring; more measured on the
      *   way up, where an overshoot is what clips and teaches the guard the wrong thing. */
     /* ★ And acquisition steps are capped well under one LNA step: a 21 dB IF lunge overshoots
      *   the 6 dB deadband by a factor of three and then has to come back, which IS a swing. */
-    const int  stepCap   = acquiring ? (tooHot ? 10 : 6) : (tooHot ? kMaxStep : 1);
-    if (dirNow != 0 && agree >= needAgree && (ifRateOk || acquiring)) {
+    const int  stepCap   = hurry ? 10 : (tooHot ? kMaxStep : 1);
+    if (dirNow != 0 && agree >= needAgree && (ifRateOk || hurry)) {
         int step = (int)std::lround(err);
         if (step >  stepCap) step =  stepCap;
         if (step < -stepCap) step = -stepCap;
@@ -3289,7 +3314,7 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
     const auto now = clock::now();
     const bool dwellOk = lastRf.time_since_epoch().count() == 0 ||
         std::chrono::duration_cast<std::chrono::milliseconds>(now - lastRf).count()
-            >= (acquiring ? 400 : 1500);
+            >= (hurry ? 400 : 1500);
 
     /* ══ THE RF STAGE — STUART'S RULE, AND IT IS THE WHOLE OF IT ════════════════════════════
      * ★★★ "Realistically the RF gain needs to be as high as possible. If IF Gain at minimum is
@@ -3311,10 +3336,35 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      *    the two rules simply apply again. The complexity I removed here was all mine, and all of
      *    it was in service of a decision that did not need making. */
     const int  lo = std::max(0, lnaFloor);          // the owner's band cap, as a MINIMUM state
+    /* ★★★ "IF AT MINIMUM GAIN" IS ALREADY "VERY CLOSE TO OVERLOAD" — it does not need an overload
+     *     on top. That extra condition was mine, and it stranded the receiver: dropping from DAB
+     *     to AM left it at LNA 1 with the IF railed at 59, which is a poor place to sit (no
+     *     headroom at all for a transient) and which the loop could not leave — the climb needs
+     *     IF headroom it did not have, and the reduce wanted an overload that had not happened
+     *     yet. Stuart: "dropped from DAB to AM and the RF gain is about 2 clicks lower than it
+     *     should be" — and it was, because backing the RF off is what GIVES the IF its range back.
+     * ★ So a spent IF is reason enough on its own. Reducing the RF by one step hands the IF about
+     *   nineteen decibels of room, which is the whole point of the exercise.
+     * ★★ HYSTERESIS BY ARITHMETIC: reduce at >= 58, climb at <= 35. After a reduce the IF lands
+     *    near 40 — above the climb threshold, so it stays. After a climb it lands near 54 — below
+     *    the reduce threshold, so it stays. The gap is wider than the ~19 dB step, which is the
+     *    same rule that stopped the earlier oscillation and the one I keep having to re-learn. */
+    /* ★★★ BACK TO THE RULE THAT MEASURED BEST, after four changes that each made it worse.
+     *     The reduce needs BOTH halves of Stuart's sentence — the IF at minimum AND actually near
+     *     overload. Dropping the second half looked like a simplification and was not: the loop
+     *     opens with the IF at 59 by design, so "IF at minimum" is true before anything has been
+     *     assessed, and it backed the RF off from the first tick and parked every band at LNA 9
+     *     with -32 dB. Requiring the level to be up there as well did not rescue it either,
+     *     because the IF's resting place then fell between the thresholds and neither rule fired.
+     * ★ Measured best, and what this restores: 7.074 at LNA 0 / IF 38 / +49.4 dB, nought moves,
+     *   settling in a second; 7.173 at LNA 0 / +43.3 dB.
+     * ★★ The lesson is mine and it is about method, not gain: I changed this rule four times
+     *    against a moving target without re-measuring the baseline in between, so each result was
+     *    compared with my expectation rather than with the last known-good figure. */
     const bool nearOverload = ovl || heavyClip || peak > (double)targetDbfs;
     const bool ifSpent      = (wantGr >= 58);       // at or next to minimum IF gain
     /* ★ 40 leaves a full LNA step (~19 dB) before the 59 dB rail, so a climb is always absorbable
-     *   and can never be the thing that causes an overload. */
+     *   and can never itself cause an overload. */
     const bool ifHasRoom    = (wantGr <= 40);
 
     int wantLna = lna;
@@ -8295,7 +8345,11 @@ struct LocalSdrShim::Impl {
                      *   status: So for 648KHz AM it would be RF Notch: off | DAB Notch: On". */
                     "{\"type\":\"rspstat\",\"sysGain\":%.1f,\"lna\":%d,\"ifgr\":%d,\"overload\":%d,"
                     "\"settling\":%d,\"rfNotch\":%d,\"dabNotch\":%d,\"autoNotch\":%d,"
-                    "\"userNotch\":%d,\"rfAgc\":%d,\"agcSet\":%d}",
+                    "\"userNotch\":%d,\"rfAgc\":%d,\"agcSet\":%d,"
+                    /* ★ THE ADC LEVEL ITSELF. Every gain decision turns on this number and it was
+                     *   visible nowhere — so "the loop thinks it is at target" could only ever be
+                     *   inferred. Telemetry for the one measurement that drives everything. */
+                    "\"adcPeak\":%.1f,\"adcClip\":%.4f}",
                     sdrp->systemGainDb(), sdrp->currentLnaState(), sdrp->currentIfGr(),
                     /* ★ CORROBORATED, not the raw latch — see overloadReal(). The badge and
                      *   VibeAGC must answer to the same fact. */
@@ -8312,7 +8366,8 @@ struct LocalSdrShim::Impl {
                      *     only the readout was wrong).
                      * ★ -999 means the owner never chose one; report the API's own default so the
                      *   slider has somewhere honest to sit. */
-                    vsDesiredAgcSet() > -999 ? vsDesiredAgcSet() : -30);
+                    vsDesiredAgcSet() > -999 ? vsDesiredAgcSet() : -30,
+                    sdrp->adcPeakDbfs(), sdrp->adcClipPct());
                 if (need < 0 || (size_t)need >= sizeof gb)
                     LOGI("rspstat truncated (%d of %zu bytes) — not sent", need, sizeof gb);
                 else
