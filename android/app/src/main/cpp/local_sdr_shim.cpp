@@ -2592,6 +2592,7 @@ static std::atomic<int> g_rspRfAgcLastLna{-1};   // what we last set, for the re
 
 /* ★ `ifAgcOn` is PASSED, not read: this sits above the DSP state block, and a helper reaching
  *   forward for a global is how a file grows an ordering dependency nobody can see. */
+static constexpr int kGrLowPub = 30, kGrHighPub = 50;   // ★ the working window, for logs elsewhere
 static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) {
     if (!sdrp || !g_rspRfAgc.load(std::memory_order_relaxed)) return;
     // ★ Only meaningful while the IF AGC is running: with it off the reduction is whatever the
@@ -2688,7 +2689,16 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
     const double mean = count ? accum / count : 0.0;
     accum = 0.0; count = 0; winStart = now;
 
-    const int dir = mean >= kTrigHigh ? +1 : (mean <= kTrigLow ? -1 : 0);
+    /* ★★★ STRICTLY PAST THE TRIGGER, NOT AT IT. `>=` acts the moment the average TOUCHES the
+     *     threshold, which is the boundary behaviour the 28/52 skirt exists to prevent — the
+     *     whole point of putting the triggers outside the 30-50 window was that a control which
+     *     acts on its own boundary chatters there. The reduction is an integer, so an average
+     *     lands exactly on 52 constantly.
+     *  ★ Measured on four consecutive start-ups, identical every time: "IF reduction averaged
+     *    52.0 dB for 12.0 s, above the 30-50 dB window (0 dB past the trigger) — RF gain state
+     *    3 -> 4". Zero decibels past the trigger is not past it, and it gave away a rung on every
+     *    single boot. */
+    const int dir = mean > kTrigHigh ? +1 : (mean < kTrigLow ? -1 : 0);
     if (dir == 0) { outMs = 0; outDir = 0; return; }      // ★ in the window (or its skirt): leave it
     if (dir != outDir) { outDir = dir; outMs = 0; }       // ★ a change of mind starts again
     outMs += kWindowMs;
@@ -7703,10 +7713,34 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *    is not one we can steer by.
              * ★ The clock RESTARTS every time settling begins again, so each re-kick buys another
              *   full grace period rather than the loop pouncing the moment the counter ticks. */
+            /* ★★★ THE GRACE STARTS WHEN THEIR AGC TAKES CONTROL, NOT WHEN OUR KICK FINISHES.
+             *     The kick hands over deliberately at 59 dB — maximum attenuation, the safe
+             *     direction — and the tuner's AGC then walks down to a working reduction. Timing
+             *     the grace from the handover meant the RF loop's averaging window included that
+             *     walk, so it averaged the TRANSIENT rather than the settled value.
+             *  ★ Measured on three consecutive start-ups, identical every time:
+             *      AGC kick 6/6: AGC on (ifgr 59 ...)
+             *      RSP RF AGC: starting from RF gain 3/6
+             *      RSP RF AGC: IF reduction averaged 52.0 dB for 12.0 s ... 0 dB past the trigger
+             *                  — RF gain state 3 -> 4
+             *    Scraping past the 52 trigger by exactly nothing, on a number inflated by the
+             *    handover, and giving away a rung every single boot. Stuart: "0/6 RF 41 IF AGC
+             *    -14.3" — one rung low, then stuck there because 41 is inside the window.
+             *  ★★ So the clock starts when the reduction first MOVES off the handover value, which
+             *    is the only evidence that their loop is actually driving it. If it never moves,
+             *    the RF loop never runs — which is correct: steering off a number nobody is
+             *    updating is the end-stop walk vsSdrplayRfAgcTick warns about. */
             static auto settledAt = std::chrono::steady_clock::time_point{};
-            if (sdrpSettling) settledAt = std::chrono::steady_clock::time_point{};
-            else if (settledAt.time_since_epoch().count() == 0)
-                settledAt = std::chrono::steady_clock::now();
+            static int  handoverGr = -1;
+            if (sdrpSettling) {
+                settledAt = std::chrono::steady_clock::time_point{};
+                handoverGr = -1;
+            } else if (settledAt.time_since_epoch().count() == 0) {
+                const int gnow = sdrp->currentIfGr();
+                if (handoverGr < 0) handoverGr = gnow;            // the value we handed over at
+                else if (gnow != handoverGr)                       // their AGC has taken it
+                    settledAt = std::chrono::steady_clock::now();
+            }
             const bool ifAgcAlive = sdrp->currentIfGr() > 0;
             const bool graceDone  = settledAt.time_since_epoch().count() != 0 &&
                 std::chrono::duration_cast<std::chrono::seconds>(
@@ -7732,8 +7766,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 armedOnce = true;
                 const int n = sdrp->lnaStateCount();
                 if (n > 1) {
+                    /* ★★★ NEVER HAND OVER AT THE BOTTOM OF THE RF RANGE. At minimum RF gain there
+                     *   is barely anything arriving at the IF stage, so the tuner's AGC has
+                     *   nothing to work with and simply sits at maximum gain doing nothing — which
+                     *   is the -14 dB, "0/6 RF, 41 IF" state that keeps coming back. Stuart: "i
+                     *   think we need to start RF gain at 1/6 1/9 as 0 is not providing anything
+                     *   for the IF AGC to work with." One rung up costs nothing and gives their
+                     *   loop something to hold. */
                     const int want = g_rspRfAgcStart.load(std::memory_order_relaxed);
-                    const int pos  = (want < 0 || want > n - 1) ? (n - 1) / 2 : want;
+                    const int pos0 = (want < 0 || want > n - 1) ? (n - 1) / 2 : want;
+                    const int pos  = std::max(1, pos0);
                     const int st   = std::max(floorState, (n - 1) - pos);   // ★ position -> state
                     if (st != sdrp->currentLnaState()) {
                         LOGI("RSP RF AGC: starting from RF gain %d/%d (LNA state %d)",
@@ -7742,6 +7784,91 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     }
                 }
             }
+            /* ★★★ ONE BIG JUMP, FROM OUR OWN MEASUREMENT — THE WAY A PERSON WOULD DO IT.
+             *     The kick hands over at minimum RF gain, and on most bands the tuner's AGC then
+             *     pins itself at MAXIMUM gain and stops: there is nothing arriving for it to work
+             *     with, so it has no opinion to express. Left alone, our RF loop then discovers
+             *     this one rung at a time, slowly and badly, and every rung is another gain write
+             *     the API has to survive.
+             *  ★ Stuart's design, and his words: "when the SDR starts up we set RF Gain to 1 then
+             *    let the IF Gain do its kick and then set AGC, now for most bands this will pin
+             *    itself to maximum gain — we use our measurements to check the noisefloor and
+             *    signals etc ... Use that measurement to then set a rough RF gain and then watch
+             *    the IF agc, if it settles in the safe zone great we've done it, if its in the RF
+             *    agc trigger zone then we move up or down accordingly. Exactly like a human would
+             *    do it, they would see the band isnt providing any signals and therefore bump up
+             *    the RF gain in one big jump."
+             *  ★★ AND THE FLOOR IS THE HONEST MEASURE, NOT THE PEAK. At minimum RF gain a good part
+             *    of what reaches the converter is the radio's own spurs, and they are exactly the
+             *    thing a peak reading mistakes for signal. iqFloorDb is the 25th percentile of the
+             *    spectrum, so a handful of narrow birdies barely move it while the band's real
+             *    noise does — which is why the decision below is taken on the gap between the
+             *    floor and the strongest thing present, not on the peak alone.
+             *  ★★★ ONCE. This is a coarse placement, not a controller: it runs a single time after
+             *      the AGC has taken hold, and then the ordinary 30-50 rule has the radio. Minimal
+             *      writes is the whole point — it is what stops us breaking the API. */
+            static bool coarseDone = false;
+            static auto coarseAt   = std::chrono::steady_clock::time_point{};
+            if (sdrpSettling) { coarseDone = false; coarseAt = {}; }
+            else if (graceDone && ifAgcAlive && armedOnce && !coarseDone
+                     && g_rspRfAgc.load(std::memory_order_relaxed)) {
+                const auto nowC = std::chrono::steady_clock::now();
+                if (coarseAt.time_since_epoch().count() == 0) coarseAt = nowC;
+                else if (std::chrono::duration_cast<std::chrono::seconds>(nowC - coarseAt).count()
+                             >= 4) {
+                    coarseDone = true;
+                    const int    n    = sdrp->lnaStateCount();
+                    const int    cur  = sdrp->currentLnaState();
+                    const int    gr   = sdrp->currentIfGr();
+                    const double peak = sdrp->adcPeakDbfs();
+                    const double flr  = (double)iqFloorDb.load();
+                    /* ★ Their AGC's resting place says which way, and how badly:
+                     *   pinned at maximum gain (low reduction) = starved, wants RF gain;
+                     *   pinned at minimum gain (high reduction) = swamped, wants less. Anything
+                     *   between is the safe zone and needs nothing from us at all. */
+                    const bool starved = gr <= 24;
+                    const bool swamped = gr >= 55;
+                    if (!starved && !swamped) {
+                        LOGI("RSP RF AGC: the IF AGC settled at %d dB, inside the %d-%d window — "
+                             "no coarse correction needed (floor %.0f dB, peak %.1f dBFS)",
+                             gr, kGrLowPub, kGrHighPub, flr, peak);
+                    } else if (n > 1) {
+                        /* ★ How far the converter is from where we want it. -20 dBFS leaves the IF
+                         *   AGC plenty of room to work in both directions afterwards; aiming at
+                         *   the loop's own target would hand it a level it must immediately fight. */
+                        constexpr double kCoarseAimDbfs = -20.0;
+                        const double wantDb = starved ? (kCoarseAimDbfs - peak)
+                                                      : (kCoarseAimDbfs - peak);
+                        /* ★ Convert decibels to rungs with the LADDER where this band has taught it
+                         *   to us, and with a conservative 6 dB estimate where it has not. Capped,
+                         *   because a coarse placement that overshoots costs an overload. */
+                        int step = 0;
+                        const float gHere = sdrp->lnaGainDb(cur);
+                        if (std::isfinite(gHere)) {
+                            double best = 1e9;
+                            for (int st = 0; st < n; ++st) {
+                                const float g2 = sdrp->lnaGainDb(st);
+                                if (!std::isfinite(g2)) continue;
+                                const double e = std::fabs(((double)g2 - (double)gHere) - wantDb);
+                                if (e < best) { best = e; step = st - cur; }
+                            }
+                        }
+                        if (step == 0) step = (int)std::lround(-wantDb / 6.0);   // less gain = higher state
+                        step = std::max(-4, std::min(4, step));
+                        const int st = std::max(floorState, std::min(n - 1, cur + step));
+                        if (st != cur) {
+                            LOGI("RSP RF AGC: the IF AGC is %s at %d dB with the floor at %.0f dB "
+                                 "and the peak %.1f dBFS — one jump of %d state(s) to RF gain %d/%d "
+                                 "(LNA %d), then handing back to it",
+                                 starved ? "starved, pinned at maximum gain"
+                                         : "swamped, pinned at minimum gain",
+                                 gr, flr, peak, st - cur, n - 1 - st, n - 1, st);
+                            LocalSdrShim::instance().setLnaState(st);
+                        }
+                    }
+                }
+            }
+
             /* ★★★ THE RADIO'S OWN IF AGC RUNS THE IF. WE RUN THE RF, FROM ITS READINGS.
              *
              *     VibeAGC took BOTH stages on this radio for a day, and the day ended with the
