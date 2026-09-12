@@ -1498,6 +1498,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        * ★ Why it matters at all: the gain on this radio legitimately sits still for minutes, so a
        *   motionless readout reads as a broken one, and people wait for something that is already
        *   finished. */
+      if (typeof m.lnaN === 'number' && m.lnaN > 0) rspLnaN = m.lnaN;
       if (vibeAgcOwnsGain() && typeof m.sysGain === 'number') {
         const chip = $('ovlChip');
         /* ★ BREATHE ONLY FOR A LARGE CHANGE, and be a plain readout otherwise — the dongle's chip
@@ -1512,7 +1513,27 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         if (bigMove) rspMovedAt = Date.now();
         rspLastLna = lna; rspLastIf = ifgr;
         const busy = Date.now() - rspMovedAt < 2500;
-        chip.textContent = `VibeAGC ${m.sysGain.toFixed(1)} dB · LNA ${lna} · IF ${ifgr}`;
+        /* ★★★ SHOW RF GAIN, NOT THE RAW LNA STATE. The state number runs BACKWARDS — 0 is
+         *   maximum RF gain and the highest state is minimum — so "LNA 1" reads as "nearly
+         *   nothing" to anyone who has not learned the inversion, when it actually means one step
+         *   short of wide open. Stuart: "anybody not in the know would think the LNA was at its
+         *   minimum not 1 off maximum". The menu already says 5/6; the chip now agrees with it.
+         * ★ Out of the LIVE state count, which is per band — seven rungs on medium wave, ten in
+         *   Band III — so the denominator tells the truth about the range as well. */
+        const rfMax = (rspLnaN ?? radioCaps?.lnaStates ?? 10) - 1;
+        const rf = rfMax - lna;
+        /* ★★★ SAY SO WHILE IT IS STILL FINDING THE GAIN. On a fresh connection the RSP opens at a
+         *   default gain and the loop climbs from there, which for those few seconds looks
+         *   identical to a dead band — empty waterfall, no signals — and a new listener concludes
+         *   the receiver is broken rather than busy. Stuart: "the gain starts low and the band
+         *   looks dead, we need to put something like AGC TRAINING PLEASE WAIT".
+         * ★ It breathes throughout, because this is precisely the moment the breathing is FOR. */
+        if (m.training) {
+          chip.textContent = 'VibeAGC training — please wait';
+          rspMovedAt = Date.now();
+        } else {
+          chip.textContent = `VibeAGC ${m.sysGain.toFixed(1)} dB · RF ${rf}/${rfMax} · IF ${ifgr}`;
+        }
         chip.classList.add('set');
         // ★ breathing while it works (no .easing), calm once it has settled — and red if the
         //   converter is actually railing, which outranks both.
@@ -2054,6 +2075,16 @@ let hwAgcLocked = false;
  *  they are not a listener control while it runs. See applyRspLock. */
 let hwAutoNotch = false;
 /** ★ Last reported gain state, so a CHANGE can be shown — see the breathing indicator. */
+/** ★★★ HOW MANY LNA STATES THE RADIO HAS **RIGHT NOW**, straight from rspstat. The RSP's state
+ *  count is per BAND, not per model — seven below 60 MHz where hwinfo's per-model figure says ten
+ *  — so the slider must follow the live number or its top third maps onto states the radio
+ *  clamps away. null until the first rspstat arrives; every reader falls back to the capability.
+ *  ★ Declared HERE and not merely used: I added the reads first and the declaration never
+ *    followed, which threw a ReferenceError inside the settings render — so RF GAIN and AGC
+ *    TARGET showed "—" and the sample-rate menu came up empty, while the status chip (a different
+ *    path) kept showing the right numbers. Stuart: "the chip is showing the LNA number but not the
+ *    menu". A thrown render does not look like a crash, it looks like missing data. */
+let rspLnaN: number | null = null;
 let rspLastLna: number | null = null;
 let rspLastIf: number | null = null;
 /** ★ When the RSP's gain last moved, so the status chip can breathe for a moment after. */
