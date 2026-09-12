@@ -2803,6 +2803,7 @@ static unsigned g_vibeAgcLastWin = 0, g_vibeAgcSkipWin = 0;
  *  ★ When we change the gain by a known amount, the level at the converter changes by that amount.
  *    There is nothing to measure and nothing to wait for: shift the estimate and carry on. A loop
  *    that has to rediscover its own actions is fighting itself. */
+static void vsPersist(const std::string& patch);   // ★ defined below; the RF stage saves where it lands
 static double g_vibeAgcEnv = -99.0;
 static inline void vsVibeAgcEnvShift(double dB) {
     if (g_vibeAgcEnv > -98.0) g_vibeAgcEnv += dB;
@@ -3105,14 +3106,26 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      *     level that is wrong for a reason it caused itself. */
     if (g_vibeAgcPendStep) {
         g_vibeAgcPendStep = 0;
+        /* ★★★ THE RESIDUAL IS THE NET CHANGE, AND NOTHING ELSE. This computed
+         *     (gNow - gBefore) - appliedIfDelta and called it an error — but gainVals.curr is
+         *     TOTAL system gain, LNA and IF together, read after BOTH writes. So (gNow - gBefore)
+         *     is already the NET change of the pair, which for a correctly compensated step is
+         *     about zero. Subtracting the IF delta from it then counted that delta a second time,
+         *     and the "correction" undid the compensation in full:
+         *         RF gain UP — LNA 4 -> 3 ... IF 42 -> 59 to match
+         *         the step was really +1 dB, not +18 — IF reduction 59 -> 42
+         *     Every RF step therefore ended up uncompensated, the level jumped by the whole step,
+         *     and the slow IF loop had to walk it back one decibel at a time. That is exactly
+         *     what "going up super slowly" looks like from outside (Stuart, 2026-09-12).
+         * ★ After both writes, whatever net gain change is left IS what the IF still has to
+         *   absorb. No subtraction, no bookkeeping, nothing to get the sign of wrong. */
         const double gNow  = sdrp->systemGainDb();
-        const int    real  = (int)std::lround(gNow - g_vibeAgcPendGain);
-        const int    applied = g_vibeAgcPendGr - g_vibeAgcPendPrevGr;
-        if (std::abs(real) <= 40 && real != applied) {
-            const int fix = std::max(20, std::min(59, gr + (real - applied)));
+        const int    net   = (int)std::lround(gNow - g_vibeAgcPendGain);
+        if (std::abs(net) <= 40 && net != 0) {
+            const int fix = std::max(20, std::min(59, gr + net));
             if (fix != gr) {
-                LOGI("VibeAGC/RSP: the step was really %+d dB, not %+d — IF reduction %d -> %d to "
-                     "finish the compensation", real, applied, gr, fix);
+                LOGI("VibeAGC/RSP: %+d dB of the step is still uncompensated — IF reduction "
+                     "%d -> %d to finish the job", net, gr, fix);
                 sdrp->setIfGainReduction(fix);
                 vsVibeAgcEnvShift(-(double)(fix - gr));
                 gr = fix;
@@ -3268,265 +3281,46 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      * ★★ Both need DWELL, measured in consecutive ticks at the rail, because one window at an end
      *    stop is a transient and an LNA step on this radio is worth about 21 dB — far too big an
      *    action to take on a moment's evidence. */
-    int& railHi = g_vibeAgcRailHi;        // ★ likewise: a rail held at the old frequency means
-    int& railLo = g_vibeAgcRailLo;        //   nothing at the new one
+    /* ★ The rail counters, the overload memory (badLna/cleanRun), the hot/cold split counters and
+     *   the needHi/needLo dwells all lived here. They are gone: the RF rule below needs none of
+     *   them. Kept only what it does need — a dwell between steps, so one move settles before the
+     *   next is considered. */
     static auto lastRf = clock::time_point{};
     const auto now = clock::now();
-
-    /* ★ THE IF OUT OF ROOM, OR REAL CLIPPING. Not "above target" — see the note on ovl. */
-    if (wantGr >= 59 || ovl || heavyClip) ++railHi; else railHi = 0;
-    if (wantGr <= 20 && !ovl && clip <= 0.0)  ++railLo; else railLo = 0;
-
-    /* ★★★ A LIGHTNING CRASH IS NOT AN OVERLOAD, AND ONE SAMPLE IN 100,000 IS NOT EITHER.
-     *     This cut the RF gain the instant `ovl` went true, and `ovl` was corroborated by ANY
-     *     clipping at all. Measured on 3755 kHz with the storm detector firing: it cut a whole
-     *     LNA step — fifteen decibels — on a clip fraction of 0.0010%. One sample in a hundred
-     *     thousand, on an HF band during a thunderstorm, is static: it is the band, not the gain.
-     *     And the cut could not be undone, because at the state below the IF was already at
-     *     maximum gain and still 14 dB under target — so the receiver went deaf, climbed back,
-     *     caught another crash, and cut again. That is the flap Stuart saw, and it is also why he
-     *     was right that "RF could be 1 or 2 clicks higher" (2026-09-12).
-     * ★ So severity decides urgency. Sustained, heavy clipping is a real overload and is answered
-     *   at once. A trace of clipping has to persist across several windows — about a second —
-     *   before it costs an LNA step, which no impulse can do and a genuinely hot front end does
-     *   immediately.
-     * ★★ The IF stage is untouched by this and still reacts to every window: it is cheap, it is
-     *    reversible, and it is the stage that is supposed to absorb exactly this. */
-    const int  needHi = heavyClip ? 1 : (acquiring ? 2 : (ovl ? 6 : 4));
-    /* ★★★ ACQUISITION HURRIES DOWNWARD ONLY. Letting the RF stage CLIMB fast during acquire was
-     *     the dangerous direction given the aggressive treatment, and it showed: the LNA was
-     *     driven to 3 — nearly wide open — whereupon the IF had to sit at 59 dB of reduction to
-     *     hold the level, which is the worst split available and precisely what the front end
-     *     should never be doing. Measured identically on FM and AM, 36.3 dB of system gain taken
-     *     in the most intermodulation-prone way possible.
-     * ★ The IF has 39 dB of range and moves smoothly; it can carry the whole of an upward
-     *   acquisition on its own. The RF stage climbing is always a considered act, acquiring or
-     *   not — the same rule as everywhere else in this loop: fast in the safe direction, patient
-     *   in the one that can overload or distort. */
-    const int  needLo = 40;              // ★ windows; never hurried, acquiring or not
     const bool dwellOk = lastRf.time_since_epoch().count() == 0 ||
         std::chrono::duration_cast<std::chrono::milliseconds>(now - lastRf).count()
             >= (acquiring ? 400 : 1500);
 
-    /* ★★★ NEVER CLIMB BACK INTO A STATE THAT JUST OVERLOADED. Without this the loop flaps on the
-     *     overload boundary for ever: climb a step, overload, drop a step, find headroom, climb
-     *     again — "it goes up a few db, an overload warning flashes for a split second then it
-     *     goes down again" (Stuart, 2026-09-12). The RTL's AGC learned this same lesson and keeps
-     *     `g_ovlBadGain` for it; this is the RSP's version of the same guard.
-     * ★ `badLna` is the most-gain LNA state known to overload here. We may sit at it or below it
-     *   in gain (higher state number), never above, until a long clean spell says the conditions
-     *   have genuinely changed — a fade, a retune, an aerial change. */
-    int& badLna   = g_vibeAgcBadLna;      // ★ file-scope so a retune can clear them — see above
-    int& cleanRun = g_vibeAgcCleanRun;
-    /* ★ And only SUSTAINED trouble teaches the guard. A lesson learnt from one static crash is a
-     *   wrong lesson held for a minute. */
-    /* ★★★ AND IT MUST BE ABOVE TARGET TO COUNT AS AN OVERLOAD. `railHi` counts "IF at 59 dB of
-     *     reduction", which at START-UP is true by design — the loop deliberately opens at least
-     *     RF gain with the IF at maximum reduction, the safe direction. Four windows later the
-     *     guard had duly recorded "LNA 9 overloaded", and LNA 9 is the QUIETEST state there is,
-     *     so it then refused to climb anywhere at all: "not climbing past LNA 9" (measured,
-     *     2026-09-12). A lesson taken from the opening conditions and applied to everything after.
-     * ★ Real trouble is heavy clipping, or the IF railed while the level is still ABOVE target.
-     *   Railed and below target is not an overload — it is a quiet band with the gain wound down,
-     *   which is the state the loop is supposed to climb OUT of. */
-    /* ★★★ AND NOT FROM ITS OWN OVERSHOOT. During ACQUIRE the loop takes full-size steps on
-     *     purpose, which can clip for a window or two on the way past — and that was teaching the
-     *     guard "this LNA state overloaded", permanently, from a transient the loop itself
-     *     created. Measured: four DAB blocks pinned at LNA 9 / IF 59, system gain -11.6 dB, where
-     *     tracking alone had reached +40 to +46 dB. A controller must not learn a lasting lesson
-     *     from its own acquisition transient; that is not evidence about the band. */
-    if (!acquiring && (heavyClip || (railHi >= 4 && peak > (double)targetDbfs))) {
-        if (badLna < 0 || lna < badLna) badLna = lna;
-        cleanRun = 0;
-    }
-    else if (!acquiring) ++cleanRun;
-    /* ★★★ FORGETTING ON A TIMER ALONE IS A SLOW FLAP. Clearing the guard after a fixed clean spell
-     *     meant: climb, overload, learn, wait a minute, forget, climb, overload — once a minute,
-     *     for ever, disturbing the demodulator each time. A clean run only proves the CURRENT
-     *     setting is fine; it says nothing about the one above, which is exactly the setting that
-     *     failed. (The dongle's AGC records the same trap almost word for word.)
-     * ★ So the retry needs EVIDENCE that conditions changed, not merely that time passed: the
-     *   level has to have dropped well clear of target, meaning there is now real headroom that
-     *   was not there when it overloaded. A fade, a retune, an aerial change will all do it.
-     *   Nothing changing means no retry, which is the correct answer. */
-    if (badLna >= 0 && cleanRun > 600 && peak < (double)targetDbfs - 10.0) {
-        LOGI("VibeAGC/RSP: level has dropped to %.1f dBFS, %.0f dB below target — "
-             "letting the RF stage try above LNA %d again", peak, (double)targetDbfs - peak, badLna);
-        badLna = -1; cleanRun = 0;
-    }
-
-    /* ★★★ AND WHERE THE IF IS SITTING TELLS YOU HOW HARD THE FRONT END IS BEING DRIVEN.
-     *     This is the half I threw away when I rewrote the loop around SDRplay's "RF as high as
-     *     possible", and it is Stuart's original specification: "IF AGC should be targeting 30-50
-     *     as that leaves 20-30 and 50-59 as the buffer zone" (2026-09-11). It is not in conflict
-     *     with SDRplay's rule — theirs says how to reach a LEVEL, his says how to SPLIT it between
-     *     the two stages — and without it the loop is blind to the failure that matters most here.
+    /* ══ THE RF STAGE — STUART'S RULE, AND IT IS THE WHOLE OF IT ════════════════════════════
+     * ★★★ "Realistically the RF gain needs to be as high as possible. If IF Gain at minimum is
+     *     giving us Overload or very close to overload reduce RF gain one click" (2026-09-12).
      *
-     * ★★★ WHY IT MATTERS, MEASURED: the entire medium wave band swamped by Radio Caroline, a
-     *     signal that is normally unremarkable (Stuart, 2026-09-12). A broad hump across ±1.5 MHz
-     *     with the floor lifted everywhere is the MIXER being driven into distortion — and the ADC
-     *     was not clipping at all, because the IF was applying 45 dB of reduction AFTER the mixer.
-     *     So every detector this loop had said "fine": peak on target, clip zero, no overload. The
-     *     level was healthy and the receiver was useless.
-     * ★ An IF reduction of 45 out of 20..59 means the RF stage is handing over ~25 dB more than
-     *   the IF wants. Backing the RF off one step and letting the IF come back toward the middle
-     *   gives the SAME level with far less front-end drive: a little noise figure traded for a
-     *   great deal of intermodulation, which on a crowded broadcast band is not a close call.
-     * ★★ Slow, and outside the clipping path entirely — this is about where the gain is TAKEN,
-     *    not how much of it there is, so it must never fight the level loop. */
-    /* ★★★ AIM AT THE UPPER HALF OF THE BAND, NOT THE MIDDLE OF IT. The working band is 30..50,
-     *     but "anywhere in 30..50 is fine" is NOT the same rule as "RF as high as possible" — and
-     *     it was the wrong one. With the IF resting at 32 the RF stage is delivering barely more
-     *     than the IF needs, so the front end runs cold and the receiver's own noise figure
-     *     dominates: system gain 17.6 dB on 80 m, with weak SSB sunk into it (Stuart, 2026-09-12:
-     *     "gain now too low", on 3799 LSB).
-     * ★ More RF gain paired with more IF reduction produces the SAME level at the converter with a
-     *   BETTER noise figure — the LNA is the first stage, so gain taken there costs least. That is
-     *   precisely SDRplay's "set the gain as high as possible whilst avoiding ADC overload",
-     *   expressed as a split rather than a level.
-     * ★★ So the RF stage climbs until the IF is doing 40 dB or more of reduction, and backs off
-     *    above 50. The band is unchanged; where we AIM inside it is not. The intermod guard still
-     *    stops short of a wide-open LNA, and the overload guards are untouched — this only decides
-     *    which end of a safe range to sit at, and the quiet end was costing sensitivity for
-     *    nothing. */
-    /* ★★★ THE IF BAND MUST BE WIDER THAN ONE LNA STEP, OR EVERY RF MOVE CAUSES THE NEXT ONE.
-     *     An LNA step on this radio is worth ~19 dB. With the rest band at 40..50 — ten decibels
-     *     — a step can never land inside it, so the RF stage re-triggered immediately and the
-     *     loop oscillated: measured ifSpread of 18-19 dB across most of Band III, with the IF
-     *     sprinting up and down behind each LNA move.
-     * ★★★ I DIAGNOSED THIS EXACT FAULT EARLIER TONIGHT in the loop this one replaced — "a
-     *     controller whose smallest possible action exceeds its target window cannot settle:
-     *     every correction overshoots to the far side and it oscillates for ever" — fixed it
-     *     there, and then rebuilt it here with a window half the size. The lesson was written
-     *     down twenty lines from the code that broke it.
-     * ★ 25..55 is 30 dB, comfortably wider than a step, so after an RF move the IF lands INSIDE
-     *   the band and nothing re-triggers. The consequence is that RF moves become rare and the
-     *   smooth IF stage does almost everything — which is both SDRplay's advice and exactly what
-     *   Stuart asked for: "little constant tweaks a couple of db here or there not an issue its
-     *   the 10db swings that cause big issues". */
-    static int hotIf = 0, coldIf = 0;
-    /* ★★★ AND THE REST BAND SITS AS HIGH AS IT SAFELY CAN, because a HIGH IF reduction means the
-     *     RF stage is doing the work — which is the whole of SDRplay's "as high as possible" and
-     *     the only way to improve the noise figure, the LNA being the first stage.
-     * ★★★ THE UPPER LIMIT IS ARITHMETIC, NOT TASTE. A climb of one LNA step is ~19 dB and must be
-     *     absorbed by the IF, so the trigger has to leave room: threshold + 19 must stay below
-     *     the 59 dB rail, or the climb lands on the rail and bounces straight back. 38 is the
-     *     highest threshold that satisfies that (38 + 19 = 57). Above it the loop oscillates —
-     *     the same "window narrower than a step" trap as before, arriving from the other side.
-     * ★ Measured motive: 9A locked but broke up at LNA 5 / IF 36 — MER 9.1 dB, 7.66% pre-Viterbi
-     *   — with 22 dB of IF reduction unused. Stuart called it: "I wonder if in this situation one
-     *   more on the RF gain would help" (2026-09-12). One step lands the IF near 55, still clear
-     *   of the rail, with the same level and a better noise figure. */
-    /* ★★ TRIED AND REVERTED, 2026-09-12: 38..57, to take up Stuart's correct observation that 9A
-     *    broke up at LNA 5 / IF 36 with 22 dB of IF reduction unused, and that one more step of
-     *    RF gain should help. It is right in PRINCIPLE — the LNA is the first stage — but the
-     *    loop cannot safely spend that gain yet, and trying drove EVERY band to minimum RF gain:
-     *    9A -11.4 dB, FM 96.1 +10.7, both far worse than the 25..55 band gives.
-     *    ★ The reason is the weak link noted on the step compensation: `gainVals.curr` is often
-     *      not refreshed in time, the measured step is implausible and gets discarded, and the
-     *      climb then goes UNCOMPENSATED — a ~19 dB level jump, which clips, which makes the RF
-     *      stage retreat. Triggering climbs more often simply exposes that more often.
-     *    ★★ So the prerequisite is a RELIABLE step size, not a bolder threshold.
-     *    ▶ THAT PREREQUISITE IS NOW MET — the step is read a tick later, when the API has
-     *      actually published it (6 corrections observed in one run) — so the threshold is raised
-     *      to 35, chosen by the same arithmetic as the ceiling: a climb adds ~19 dB to the IF, so
-     *      35 + 19 = 54 lands just under the 55 ceiling and does not re-trigger.
-     *    ★ The motive is measured and it is a RATCHET: once the RF descended to LNA 9 the loop
-     *      could never climb back, because the old trigger needed the IF below 25 while it sat at
-     *      29..47. Early points in a run reached LNA 6 and +42 dB; everything after was stranded
-     *      at LNA 9 and -11..+16. "Patient to reclaim" had become one-directional. */
-    if      (wantGr > 55) { ++hotIf;  coldIf = 0; }   // IF out of room -> less RF gain
-    else if (wantGr < 35) { ++coldIf; hotIf  = 0; }   // IF has slack -> MORE RF gain (see below)
-    else                  { hotIf = coldIf = 0; }     // 25..55: wider than a step, so it settles
+     *     That is SDRplay's own guidance stated as an algorithm, and it is what their AGC does —
+     *     his RSP1B on the same aerial sits at LNA 1 with the IF at 35 and never moves the RF at
+     *     all. It replaces everything I had here: a rest band, hot/cold counters, a split rule, a
+     *     "take gain at the front end" heuristic and an overload guard with a memory. Every one
+     *     of those was an attempt to DECIDE where the RF gain belongs. It does not need deciding:
+     *     it belongs at the top, and it comes down only when the IF has run out of room and the
+     *     converter is in trouble.
+     *
+     * ★ Down: the IF is at its minimum gain (59 dB of reduction, nothing left to give) AND we are
+     *   overloading or on the edge of it. One step.
+     * ★ Up: whenever the IF has enough headroom to absorb a step (~19 dB) and nothing is hot, so
+     *   the climb cannot itself cause an overload. Repeat until the LNA is at the owner's floor.
+     * ★★ No memory of past overloads, no learned bad states, no ratchets. If conditions change,
+     *    the two rules simply apply again. The complexity I removed here was all mine, and all of
+     *    it was in service of a decision that did not need making. */
+    const int  lo = std::max(0, lnaFloor);          // the owner's band cap, as a MINIMUM state
+    const bool nearOverload = ovl || heavyClip || peak > (double)targetDbfs;
+    const bool ifSpent      = (wantGr >= 58);       // at or next to minimum IF gain
+    /* ★ 40 leaves a full LNA step (~19 dB) before the 59 dB rail, so a climb is always absorbable
+     *   and can never be the thing that causes an overload. */
+    const bool ifHasRoom    = (wantGr <= 40);
 
     int wantLna = lna;
     if (dwellOk && n > 1) {
-        const int lo = std::max(0, lnaFloor);    // the owner's band cap, as a MINIMUM state
-        /* ★ The RF stage reclaims on the same evidence as the IF — see the asymmetric deadband.
-         *   Without this the RF half would chase the silences the IF half no longer does. */
-        if (railHi >= needHi && lna < n - 1)      wantLna = lna + 1;   // less RF gain
-        else if (railLo >= needLo && lna > lo)    wantLna = lna - 1;   // more RF gain
-        /* ★ The split rule, at a slower cadence than the rails so it never pre-empts a genuine
-         *   overload. ~3 s of the IF living outside 30..50 before the RF stage answers for it. */
-        else if (hotIf  >= 30 && lna < n - 1)     wantLna = lna + 1;   // IF working too hard
-        else if (coldIf >= 30 && lna > lo)        wantLna = lna - 1;   // IF has slack to give back
-        /* ★★★ AND TAKE RF GAIN WHENEVER THE IF CAN VERY NEARLY ABSORB THE STEP. Every trigger
-         *     above asks "is the IF at a rail?" and none asks the question that actually matters:
-         *     "could I move this gain to the front end and still be in range?" So the loop sat
-         *     contentedly at LNA 8 with the IF at 44 — minimum RF gain, mid IF, and only -17.6 dB
-         *     of system gain on 40 m, where the same aerial on an RTL-SDR showed a band full of
-         *     signals (Stuart, 2026-09-12: "RF gain is stuck", with the two receivers side by
-         *     side). Nothing was railed, so nothing fired, and it never occurred to the loop that
-         *     it was in a poor place.
-         * ★ The arithmetic is small: an LNA step is `stepEst` dB, the IF can absorb (59 - wantGr)
-         *   of it, and what it cannot absorb becomes a level rise. Take the step whenever that
-         *   rise stays inside the deadband — the level is then still correct, and the SAME level
-         *   is being produced with more of the gain taken at the first stage, which is the whole
-         *   of SDRplay's advice and worth real noise figure.
-         * ★★ Slow and last in the chain, so a genuine overload or rail is always answered first,
-         *    and the overload guard still applies — this is an improvement, not an emergency. */
-        else if (lna > lo && dwellOk) {
-            const int stepEst   = 19;                       // conservative; the real one is measured
-            const int absorbable = 59 - wantGr;
-            const int rise       = stepEst - absorbable;
-            static int wantBetter = 0;
-            if (rise <= (int)kDead && wantGr > 25) ++wantBetter; else wantBetter = 0;
-            if (wantBetter >= 40) {                         // ~4 s of agreeing that it is worth it
-                wantBetter = 0;
-                wantLna = lna - 1;
-                LOGI("VibeAGC/RSP: taking gain at the front end — LNA %d -> %d, the IF can absorb "
-                     "%d of ~%d dB and the %d dB left over stays inside the deadband",
-                     lna, wantLna, absorbable, stepEst, rise > 0 ? rise : 0);
-            }
-        }
-        if (wantLna < lo) wantLna = lo;
-        /* ★ The guard, applied only to the CLIMB. Backing off is never refused — see the same
-         *   rule in the dongle's loop. A lower state number is MORE gain.
-         * ★★★ BUT IT MUST NOT LEAVE THE RECEIVER DEAF. If the IF stage is already at maximum gain
-         *     (20 dB, its least reduction) and the level is STILL well under target, there is no
-         *     gain left anywhere else — refusing the RF stage then does not prevent an overload,
-         *     it just throws the signal away. Stuart, 2026-09-12 on 3755 kHz: "IF is set to
-         *     maximum and RF could be 1 or 2 clicks higher", and he was right; the guard was
-         *     holding the front end down over a lesson learnt against a strong signal that was no
-         *     longer there.
-         * ★ A guard against overload has no business acting when the symptom is the opposite of
-         *   an overload. Below target with nothing left to give IS the evidence that conditions
-         *   changed — the same evidence the slow release looks for, available immediately. */
-    /* ★★★ A SPLIT CHANGE IS LEVEL-NEUTRAL, SO THE OVERLOAD GUARD MUST NOT BLOCK IT. Raising RF
-     *     gain because the IF has slack (coldIf) is always paired with an equal INCREASE in IF
-     *     reduction — the level at the converter is unchanged by construction, only where the
-     *     gain is taken changes. It therefore cannot clip, and refusing it on the grounds that
-     *     this LNA state once overloaded is refusing a move that carries none of the risk the
-     *     guard exists to prevent.
-     * ★★★ MEASURED IN DAB, and it is the worst outcome the loop can produce: 9A settled at LNA 9
-     *     with the IF at 20 — MINIMUM RF gain and MAXIMUM IF gain, the same level taken in the
-     *     noisiest possible way. The loop had backed the RF off on a clip, learned the state, and
-     *     was then forbidden from ever rebalancing. Stuart found the thread by asking whether the
-     *     DAB notch was really deactivating (it was — the check is in the log).
-     * ★ So the guard applies to the RAIL-driven climb, which really does add gain, and stands
-     *   aside for the split-driven one, which does not. */
-        const bool splitClimb  = (coldIf >= 30);
-        const bool ifOutOfGain = (wantGr <= 20) && (peak < (double)targetDbfs - 6.0);
-        /* ★★★ KEEP ONE STEP IN HAND. LNA 0 is the front end wide open, and Stuart is right that
-         *     maximum RF gain alongside maximum IF gain "would be too much": the ADC level we
-         *     measure cannot see front-end INTERMODULATION, so a loop steered by level alone will
-         *     happily drive the LNA to its limit and hear the mixer start making signals that are
-         *     not there. The dongle's AGC learned this the same way ("now i'm getting
-         *     intermodulation issues") and stops short of the loudest gain that merely avoids
-         *     clipping.
-         * ★ So the top state is reachable only when the IF is ALSO out of gain and we are still
-         *   well under target — a genuinely weak band, where intermod is not the risk. Otherwise
-         *   we stop one step down and let the IF finish the job. */
-        if (wantLna == 0 && lna > 0 && !ifOutOfGain) {
-            wantLna = 1;
-            if (lna == 1) { /* already there — nothing to do */ }
-        }
-        if (wantLna < lna && badLna >= 0 && wantLna <= badLna && !ifOutOfGain && !splitClimb)
-            wantLna = lna;
-        else if (wantLna < lna && badLna >= 0 && ifOutOfGain)
-            LOGI("VibeAGC/RSP: climbing past LNA %d after all — the IF is at maximum gain and the "
-                 "level is %.0f dB under target, so there is nothing left to lose",
-                 badLna, (double)targetDbfs - peak);
+        if (ifSpent && nearOverload && lna < n - 1)      wantLna = lna + 1;   // less RF gain
+        else if (ifHasRoom && !nearOverload && lna > lo) wantLna = lna - 1;   // MORE RF gain
     }
 
     /* ── THE WRITE ────────────────────────────────────────────────────────────────────────────
@@ -3542,24 +3336,16 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
         static std::atomic<int> beat{0};
         if (beat.fetch_add(1, std::memory_order_relaxed) % 50 == 0)
             LOGI("VibeAGC/RSP: peak %.1f dBFS (target %d), clip %.4f%%, ovl %d%s — "
-                 "LNA %d/%d, IF reduction %d -> %d dB, rails hi/lo %d/%d",
+                 "LNA %d/%d, IF reduction %d -> %d dB",
                  peak, targetDbfs, clip, ovl ? 1 : 0,
                  (ovlRaw && !ovl) ? " (hw flag set but NOT corroborated — stale latch, ignored)" : "",
-                 lna, n - 1, gr, wantGr, railHi, railLo);
+                 lna, n - 1, gr, wantGr);
         /* ★★★ RATE-LIMITED, AND IT MUST BE. This sat OUTSIDE the heartbeat's modulo and fired on
          *     every tick the condition held — which, since "IF outside 30-50" persists until the
          *     RF stage answers, meant tens of lines per second into journald from inside the tick
          *     loop. It took the radio out: "NOT RESPONDING" on the landing page, 2026-09-12.
          * ★ A diagnostic that degrades the thing it is diagnosing is worse than no diagnostic. It
          *   rides the same counter as the heartbeat now, so it can only ever print beside it. */
-        if ((hotIf > 5 || coldIf > 5) && beat.load(std::memory_order_relaxed) % 50 == 1)
-            LOGI("VibeAGC/RSP: IF reduction %d is outside the 30-50 working band (%s for %d "
-                 "windows) — the RF stage will answer for it",
-                 wantGr, hotIf ? "too high, front end overdriving" : "too low, RF gain to spare",
-                 hotIf ? hotIf : coldIf);
-        if (badLna >= 0 && beat.load(std::memory_order_relaxed) % 50 == 1)
-            LOGI("VibeAGC/RSP: not climbing past LNA %d — it overloaded here (clean for %d ticks)",
-                 badLna, cleanRun);
     }
     if (wantGr != gr) {
         /* ★★★ OUR OWN GAIN STEP IS NOT A LIGHTNING STRIKE. Every gain change puts a step in the
@@ -3604,52 +3390,34 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
         const double gBefore = sdrp->systemGainDb();
         LocalSdrShim::instance().setLnaState(wantLna);
         const double gAfter  = sdrp->systemGainDb();
-        int stepDb = (int)std::lround(gAfter - gBefore);         // + = the radio got louder (often stale — see below)
-        /* ★★★ AND SANITY-CHECK IT, BECAUSE IT IS NOT ALWAYS READY. gainVals.curr is refreshed by
-         *     the API when it processes the update, which is not always before this read returns.
-         *     Measured on air: 9->8 and 8->7 both reported "+0 dB", and 7->6 reported "-23 dB"
-         *     while CLIMBING — the sign was impossible. A reading that is wrong half the time is
-         *     worse than no reading, because it is trusted: it is the blunt detector that says
-         *     "clean" and stops you looking.
-         * ★ So the direction is known a priori — fewer LNA states is more gain — and any
-         *   measurement that disagrees with it, or is absurdly large, is discarded. With no
-         *   trustworthy figure we apply NO compensation and let the IF stage walk it back; that
-         *   is its job, it moves every tick, and the anti-flap guard above stops the walk turning
-         *   into a hunt. Honest and slightly slower beats confident and wrong. */
-        const int wantMoreGain = (wantLna < lna) ? +1 : -1;
-        if (stepDb == 0 || (stepDb > 0) != (wantMoreGain > 0) || std::abs(stepDb) > 40) {
-            LOGI("VibeAGC/RSP: gain step reading %+d dB is not plausible for an LNA %s — "
-                 "discarded, the IF stage will take it", stepDb, wantMoreGain > 0 ? "climb" : "cut");
-            stepDb = 0;
-        }
-        const int comp = std::max(20, std::min(59, wantGr + stepDb));
-        sdrp->setIfGainReduction(comp);
-        g_vibeAgcLastGr.store(comp, std::memory_order_relaxed);
-        /* ★ Both halves at once: the LNA step changed the gain by stepDb and the IF absorbed
-         *   (comp - gr) of reduction. The net is what the converter will actually see. */
-        vsVibeAgcEnvShift((double)stepDb - (double)(comp - gr));
-        /* ★ An RF step is far bigger than an IF nudge and the radio needs a moment, so give it
-         *   three clear windows before judging anything. */
-        g_vibeAgcSkipWin = win + 3;
-        /* ★★★ AND FINISH THE JOB NEXT TICK, WHEN THE READING IS ACTUALLY READY. gainVals.curr is
-         *     refreshed by the API when it processes the update, which is frequently NOT before
-         *     this read returns — measured: "+0 dB" and even "-23 dB while climbing" on a move
-         *     that was plainly +19. The implausible ones are discarded (below), which leaves the
-         *     step UNCOMPENSATED: a ~19 dB level jump that clips and makes the RF stage retreat.
-         *     That unreliability is what blocked taking up Stuart's 9A observation — see the
-         *     note on the rest band.
-         * ★ So the pending step is remembered and settled on the following tick, by which time
-         *   the API has published the real figure. One tick is ~50 ms; the alternative is
-         *   guessing, and guessing here is what caused the retreats. */
+        /* ★★★ DO NOT PRE-COMPENSATE. Every attempt to guess the step up front has failed, because
+         *     gainVals.curr is frequently not refreshed before this read returns — "+0 dB" and
+         *     "-23 dB while climbing" on moves that were plainly +19. A wrong guess is worse than
+         *     none: it lands the IF somewhere arbitrary, and the correction that follows then has
+         *     to be large, which rails the IF and sends the RF stage back the other way. Measured
+         *     across three attempts at getting this right, each worse than the last.
+         * ★ So the LNA moves ALONE. On the next tick the gain figure has settled and the net
+         *   change is the pure step, with no IF write mixed into it and nothing to disentangle —
+         *   and the IF absorbs it in one move. One tick of uncorrected level, about a tenth of a
+         *   second, in exchange for arithmetic that cannot be got wrong.
+         * ★★ The alternative was a learned step table per band and state. That is more code and
+         *   more state to go stale, to avoid a 100 ms transient nobody can hear. */
         g_vibeAgcPendGain = gBefore;
-        g_vibeAgcPendPrevGr = wantGr;
-        g_vibeAgcPendGr   = comp;
         g_vibeAgcPendStep = 1;
-        LOGI("VibeAGC/RSP: RF gain %s — LNA %d -> %d (peak %.1f dBFS, clip %.4f%%, ovl %d/hw %d), "
-             "step measured %+d dB, IF reduction %d -> %d dB to match%s",
+        LOGI("VibeAGC/RSP: RF gain %s — LNA %d -> %d (peak %.1f dBFS, clip %.4f%%, ovl %d/hw %d) "
+             "— the IF will absorb it next tick",
              wantLna > lna ? "DOWN" : "UP", lna, wantLna, peak, clip,
-             ovl ? 1 : 0, ovlRaw ? 1 : 0, stepDb, gr, comp, "");
-        lastRf = now; railHi = railLo = 0; hotIf = coldIf = 0;
+             ovl ? 1 : 0, ovlRaw ? 1 : 0);
+        lastRf = now;
+        /* ★★★ REMEMBER WHERE IT LANDED, so the next listener does not sit through the climb.
+         *     Stuart: "the Gain also needs to be remembered on page exit too so the next user
+         *     never has to wait overly long for the gain to settle" — and on HF that climb is
+         *     tens of seconds, which is a long time to hand somebody a quiet receiver.
+         * ★ Only the RF state is worth keeping: the IF re-levels in a moment from wherever it
+         *   starts, but the LNA has to walk up one coarse step at a time. Written on each RF move
+         *   rather than on exit, because there is no reliable "exit" — a browser tab simply stops
+         *   talking, and a write nothing will retry is a write that never happens. */
+        vsPersist("{\"rfAgcStart\":" + std::to_string((n - 1) - wantLna) + "}");
     }
 }
 

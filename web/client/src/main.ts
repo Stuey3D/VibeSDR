@@ -11293,8 +11293,16 @@ const RSP_TOGGLES = {
 function pushAllRspSettings() {
   if (radioCaps?.driver !== 'sdrplay') return;
   const lnaMax = (radioCaps?.lnaStates ?? 10) - 1;
+  /* ★★★ DO NOT PUSH THE GAIN AT VibeAGC. This runs on EVERY connect, including a page refresh,
+   *     and it sends this browser's remembered LNA position — undoing whatever the loop had
+   *     settled on and making it climb all over again, which on HF is tens of seconds. Stuart:
+   *     "also seems to reset on page refresh too". The loop owns the gain; a client that reloads
+   *     is not an instruction to move the front end.
+   * ★ The notches, bias-tee and AGC target still go, because those are genuinely the owner's
+   *   remembered choices and VibeAGC does not touch them. */
+  const gainIsOurs = !vibeAgcOwnsGain();
   rspSend({
-    lna:      lnaMax - Number($<HTMLInputElement>('rspLna').value),
+    ...(gainIsOurs ? { lna: lnaMax - Number($<HTMLInputElement>('rspLna').value) } : {}),
     agcset:   Number($<HTMLInputElement>('rspAgcSet').value),
     rfnotch:  $('rspRfNotch').classList.contains('on') ? 1 : 0,
     dabnotch: $('rspDabNotch').classList.contains('on') ? 1 : 0,
@@ -11303,9 +11311,11 @@ function pushAllRspSettings() {
   // ★ AGC last, and the IF reduction only when it is OFF — the server refuses a manual
   // IFGR while the AGC owns the register, so sending them the other way round would drop
   // the value silently.
-  const agcOn = $('rspIfAgc').classList.contains('on');
-  rspSend({ ifagc: agcOn ? 1 : 0 });
-  if (!agcOn) rspSend({ ifgr: Number($<HTMLInputElement>('rspIfGr').value) });
+  if (gainIsOurs) {
+    const agcOn = $('rspIfAgc').classList.contains('on');
+    rspSend({ ifagc: agcOn ? 1 : 0 });
+    if (!agcOn) rspSend({ ifgr: Number($<HTMLInputElement>('rspIfGr').value) });
+  }
 }
 
 /* ★★★ THE OWNER'S AGC LOCK APPLIES TO THE RSP TOO, AND MUST BE VISIBLE.
