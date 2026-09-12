@@ -1499,6 +1499,21 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *   motionless readout reads as a broken one, and people wait for something that is already
        *   finished. */
       if (typeof m.lnaN === 'number' && m.lnaN > 0) rspLnaN = m.lnaN;
+      /* ★★★ THE TRAINING NOTICE MUST NOT WAIT FOR THE SETTINGS. It lived inside the branch
+       *   below, which needs vibeAgcOwnsGain() — and that is false for the first seconds of a
+       *   connection, because it is decided from settings that have not arrived yet. So the one
+       *   message whose entire purpose is to explain the first few seconds was the one message
+       *   that could not appear in them. Stuart: "the agc training never comes on when first
+       *   connecting". The server is the authority on whether it is training; if it says so, say
+       *   so, whoever owns the gain. */
+      if (m.training) {
+        const chip = $('ovlChip');
+        chip.textContent = 'VibeAGC training — please wait';
+        chip.classList.add('set');
+        chip.classList.remove('easing');     // ★ breathe: this is what the breathing is for
+        rspMovedAt = Date.now();
+        return;
+      }
       if (vibeAgcOwnsGain() && typeof m.sysGain === 'number') {
         const chip = $('ovlChip');
         /* ★ BREATHE ONLY FOR A LARGE CHANGE, and be a plain readout otherwise — the dongle's chip
@@ -1528,12 +1543,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
          *   the receiver is broken rather than busy. Stuart: "the gain starts low and the band
          *   looks dead, we need to put something like AGC TRAINING PLEASE WAIT".
          * ★ It breathes throughout, because this is precisely the moment the breathing is FOR. */
-        if (m.training) {
-          chip.textContent = 'VibeAGC training — please wait';
-          rspMovedAt = Date.now();
-        } else {
-          chip.textContent = `VibeAGC ${m.sysGain.toFixed(1)} dB · RF ${rf}/${rfMax} · IF ${ifgr}`;
-        }
+        chip.textContent = `VibeAGC ${m.sysGain.toFixed(1)} dB · RF ${rf}/${rfMax} · IF ${ifgr}`;
         chip.classList.add('set');
         // ★ breathing while it works (no .easing), calm once it has settled — and red if the
         //   converter is actually railing, which outranks both.
