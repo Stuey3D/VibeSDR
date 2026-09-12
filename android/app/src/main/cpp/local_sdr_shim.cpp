@@ -3450,6 +3450,35 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
          *   overload. ~3 s of the IF living outside 30..50 before the RF stage answers for it. */
         else if (hotIf  >= 30 && lna < n - 1)     wantLna = lna + 1;   // IF working too hard
         else if (coldIf >= 30 && lna > lo)        wantLna = lna - 1;   // IF has slack to give back
+        /* ★★★ AND TAKE RF GAIN WHENEVER THE IF CAN VERY NEARLY ABSORB THE STEP. Every trigger
+         *     above asks "is the IF at a rail?" and none asks the question that actually matters:
+         *     "could I move this gain to the front end and still be in range?" So the loop sat
+         *     contentedly at LNA 8 with the IF at 44 — minimum RF gain, mid IF, and only -17.6 dB
+         *     of system gain on 40 m, where the same aerial on an RTL-SDR showed a band full of
+         *     signals (Stuart, 2026-09-12: "RF gain is stuck", with the two receivers side by
+         *     side). Nothing was railed, so nothing fired, and it never occurred to the loop that
+         *     it was in a poor place.
+         * ★ The arithmetic is small: an LNA step is `stepEst` dB, the IF can absorb (59 - wantGr)
+         *   of it, and what it cannot absorb becomes a level rise. Take the step whenever that
+         *   rise stays inside the deadband — the level is then still correct, and the SAME level
+         *   is being produced with more of the gain taken at the first stage, which is the whole
+         *   of SDRplay's advice and worth real noise figure.
+         * ★★ Slow and last in the chain, so a genuine overload or rail is always answered first,
+         *    and the overload guard still applies — this is an improvement, not an emergency. */
+        else if (lna > lo && dwellOk) {
+            const int stepEst   = 19;                       // conservative; the real one is measured
+            const int absorbable = 59 - wantGr;
+            const int rise       = stepEst - absorbable;
+            static int wantBetter = 0;
+            if (rise <= (int)kDead && wantGr > 25) ++wantBetter; else wantBetter = 0;
+            if (wantBetter >= 40) {                         // ~4 s of agreeing that it is worth it
+                wantBetter = 0;
+                wantLna = lna - 1;
+                LOGI("VibeAGC/RSP: taking gain at the front end — LNA %d -> %d, the IF can absorb "
+                     "%d of ~%d dB and the %d dB left over stays inside the deadband",
+                     lna, wantLna, absorbable, stepEst, rise > 0 ? rise : 0);
+            }
+        }
         if (wantLna < lo) wantLna = lo;
         /* ★ The guard, applied only to the CLIMB. Backing off is never refused — see the same
          *   rule in the dongle's loop. A lower state number is MORE gain.
