@@ -2792,48 +2792,12 @@ static std::atomic<int> g_vibeAgcLastGr{-1};   // what WE last commanded, for th
 static int g_vibeAgcBadLna = -1, g_vibeAgcCleanRun = 0, g_vibeAgcRailHi = 0, g_vibeAgcRailLo = 0;
 /** ★ Windows of ACQUIRE remaining — see the note in the tick. ~4 s at ~10 windows/s. */
 static int g_vibeAgcAcquire = 0;
-/** ★★★ IS THE GAIN LOOP STILL FINDING ITS FEET? Visible to the client, because the first
+/** ★★★ IS THE GAIN LOOP STILL FINDING ITS FEET? Reported to the client, because the first
  *  seconds on a new radio look exactly like a dead band: the RSP opens at a default gain, the
- *  loop climbs from there, and until it arrives the waterfall is empty and the listener concludes
- *  the receiver is broken. Stuart: "when first connecting to the SDRPlay the gain starts low and
- *  the band looks dead, we need to put something like AGC TRAINING PLEASE WAIT".
- *  ★ A state the user can see is worth more than a faster loop here — the climb takes as long as
- *    it takes, and the fault was never the waiting, it was the silence. */
+ *  loop climbs from there, and until it arrives the waterfall is empty and a new listener
+ *  concludes the receiver is broken rather than busy. Stuart: "the gain starts low and the band
+ *  looks dead, we need to put something like AGC TRAINING PLEASE WAIT". */
 static std::atomic<bool> g_vibeAgcTraining{false};
-
-/** ★ Set on every retune: the envelope must be re-seeded from the first measurement that
- *  actually belongs to the new frequency, never from the one taken before the change. */
-static bool g_vibeAgcReseed = false;
-/** ★ A remembered resting gain waiting to be applied — set at the retune, written a tick later
- *  so it never shares an instant with the frequency write. -1 = nothing pending. */
-static int g_restorePendLna = -1;
-static int g_restorePendGr  = -1;
-
-/** ★★★ WHERE THE GAIN CAME TO REST NEAR A GIVEN FREQUENCY, so a return visit starts there
- *  rather than climbing from the driver's default.
- *  ★ KEYED BY FREQUENCY, NOT BY THE GAIN-TABLE BAND. My first version used the API's band id,
- *    and band 1 runs from 60 to 250 MHz — so FM broadcast at 96.6 and a DAB ensemble at 215
- *    shared one remembered gain, which are about as different as two signals on one aerial get.
- *    Arriving at FM carrying DAB's resting point is worse than arriving cold. The gain tables
- *    change at the API's band edges; the SIGNAL ENVIRONMENT changes far faster, and it is the
- *    signal environment this remembers.
- *  ★★ A few megahertz of tolerance, so stepping across a broadcast band still counts as the
- *    same neighbourhood, and a small ring buffer — this is a convenience, not a database. */
-struct GainRest { double hz = 0; int lna = -1; int gr = -1; };
-static GainRest g_gainRest[8];
-static int      g_gainRestNext = 0;
-static double gainRestTolHz(double hz) { return hz < 30.0e6 ? 1.0e6 : 4.0e6; }
-static const GainRest* gainRestFor(double hz) {
-    for (const auto& r : g_gainRest)
-        if (r.lna >= 0 && std::fabs(r.hz - hz) <= gainRestTolHz(hz)) return &r;
-    return nullptr;
-}
-static void gainRestNote(double hz, int lna, int gr) {
-    for (auto& r : g_gainRest)
-        if (r.lna >= 0 && std::fabs(r.hz - hz) <= gainRestTolHz(hz)) { r.hz = hz; r.lna = lna; r.gr = gr; return; }
-    g_gainRest[g_gainRestNext] = { hz, lna, gr };
-    g_gainRestNext = (g_gainRestNext + 1) % 8;
-}
 /** ★ Which way the DAB hill climb steps next: -1 is more RF gain, +1 is less. Flipped whenever a
  *  trial is rejected, so the search covers both directions instead of assuming one. */
 static int g_dabTrialDir = -1;
@@ -2966,7 +2930,6 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
     const double peakRaw = sdrp->adcPeakDbfs();
     const double clip    = sdrp->adcClipPct();
 
-
     /* ★★★ FORGET EVERYTHING ON A RETUNE. Every piece of state below — which LNA state overloaded,
      *     how long it has been clean, how long a rail has been held — is a fact about ONE place on
      *     the dial with ONE signal in front of it. Carried across a retune it is not caution, it
@@ -2991,24 +2954,6 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
     /* ★ The last two raw windows, for the median filter below — declared here so the retune
      *   reset can clear them with everything else. */
     static double p1 = -99.0, p2 = -99.0;
-    /* ★ The first measurement after a retune IS the new frequency's level — adopt it whole
-     *   rather than letting the slow envelope walk to it from the old band's value. */
-    /* ★ The tune has landed by now, so a remembered resting gain can go in safely. */
-    if (g_restorePendLna >= 0) {
-        const int wantL = g_restorePendLna, wantG = g_restorePendGr;
-        g_restorePendLna = g_restorePendGr = -1;
-        if (wantL != sdrp->currentLnaState() || wantG != sdrp->currentIfGr()) {
-            LOGI("VibeAGC/RSP: starting from where this neighbourhood settled last time — "
-                 "LNA %d, IF reduction %d dB", wantL, wantG);
-            LocalSdrShim::instance().setLnaState(wantL);
-            sdrp->setIfGainReduction(wantG);
-        }
-    }
-    if (g_vibeAgcReseed) {
-        g_vibeAgcReseed = false;
-        g_vibeAgcEnv = peakRaw; p1 = p2 = peakRaw;
-        LOGI("VibeAGC/RSP: first look at the new frequency — %.1f dBFS", peakRaw);
-    }
     /* ★★★ A SAMPLE-RATE CHANGE IS A RETUNE TOO, AND DAB IS NOTHING BUT. Entering DAB drops the
      *     capture to 2.048 MS/s and re-centres on the multiplex — the level at the converter
      *     changes completely, and the frequency test above does not see it, because this watched
@@ -3032,44 +2977,9 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
          *     envelope is not enough; the thing feeding it has to be clean too. */
         sdrp->adcRestart();
         lastHz = nowHz; lastRate = nowRate;
-        /* ★★★ AND DO NOT SEED THE ENVELOPE FROM THE READING WE JUST THREW AWAY. This said
-         *     `g_vibeAgcEnv = peakRaw`, and peakRaw was sampled at the top of this function —
-         *     BEFORE adcRestart() — so the envelope for the new frequency was initialised with the
-         *     level of the OLD one. Arriving on FM from a quiet 648 kHz, the loop began convinced
-         *     the band was that quiet and climbed to maximum RF gain.
-         *  ★ MEASURED, TWICE ON THE SAME FREQUENCY SIX MINUTES APART: 96.6 MHz settled at 85.5 dB
-         *    of system gain arriving from medium wave, and at 25.2 dB arriving from within FM.
-         *    Stuart, who lives with this one: "I had to tune away and back again, the gain looked
-         *    fine", and separately "it was like the tuning was misaligned when tuning to it" — the
-         *    front end really is overloaded in the first case, on his strongest local signal, so
-         *    it sounds like a mistuned radio rather than a gain fault.
-         *  ★★ The restart zeroes the window counter, and nothing below runs until a window closes
-         *    again, so the NEXT tick carries a peak that genuinely belongs here. Seed from that. */
-        g_vibeAgcReseed = true;
+        g_vibeAgcEnv = peakRaw; p1 = p2 = peakRaw;
         vsVibeAgcForget();
         LOGI("VibeAGC/RSP: retuned to %.3f MHz — forgetting the previous gain lesson", nowHz / 1e6);
-        /* ★★★ BUT START FROM WHERE THIS BAND SETTLED LAST TIME, IF WE KNOW IT. Forgetting the
-         *     LESSON (the envelope, the acquisition state) is right — it was measured on a
-         *     different signal. Forgetting the PLACE is not: the gain that suited medium wave ten
-         *     minutes ago is still roughly the gain that suits medium wave now, and climbing to it
-         *     from the driver's default takes seconds during which the band looks dead.
-         *  ★ Stuart: "i exited then went back in and the gain reset itself and the band looked
-         *    dead" — and separately, the whole aim: a listener "plugs an SDR into VibeServer,
-         *    presses one button" and it works. Making them watch it grope for the gain on every
-         *    visit is the opposite of that.
-         *  ★★ A STARTING POINT, NOT A SETTING. The loop immediately measures and moves from here,
-         *    so a remembered value that has gone stale costs one correction — far less than the
-         *    climb it replaces. Per band, because that is the granularity at which the gain
-         *    tables, the noise floor and the signals all change together. */
-        /* ★★★ REMEMBER IT NOW, WRITE IT ON THE NEXT TICK. Writing the gain here put two threads
-         *     into the device parameter block at the same instant — this one and the hardware
-         *     writer carrying the frequency — and the tune is what lost. The lock in
-         *     setFrequency() closes that race properly, but there is no reason to be in the same
-         *     moment at all: one tick later the radio has landed and the write is uneventful. */
-        if (const GainRest* rest = gainRestFor(nowHz)) {
-            g_restorePendLna = rest->lna;
-            g_restorePendGr  = rest->gr;
-        }
     }
     /* ★★★ SYMMETRIC AND SLOW — FAST-ATTACK IS WRONG FOR THIS SIGNAL. My first version believed a
      *     RISING peak instantly, on the usual "safe direction" reasoning. For a carrier that is
@@ -3584,27 +3494,7 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      *    that looked redundant. In a feedback loop a condition that looks redundant is usually
      *    the thing stopping the loop feeding on its own output. */
     const bool ifRailed = (wantGr >= 58) && err > -1.0;
-    /* ★★★ FRONT-END OVERLOAD DOES NOT WAIT FOR THE IF, BECAUSE THE IF CANNOT CURE IT. The
-     *     retreat required `ifSpent` before it would act at all, which is right for ADC clipping
-     *     — the IF is the first line of defence there and should shed level before the front end
-     *     gives anything up. It is WRONG for the hardware's overload flag: that is the tuner
-     *     saying its own front end is being driven too hard, which happens UPSTREAM of the IF.
-     *     No amount of IF reduction touches it. Only taking RF gain away does.
-     *  ★ Measured on 648 kHz: the OVERLOAD badge lit with system gain 45.0 dB, RF at 6/6 (LNA 0,
-     *    maximum) and the IF at 42 — nowhere near spent — so nothing fired. Stuart: "it was
-     *    flashing it was lowering gain as overload but not lowering the gain". The loop was
-     *    announcing a decision that its own guard forbade it to carry out.
-     *  ★★ THE STALE-LATCH GUARD BECOMES PERSISTENCE INSTEAD OF `ifSpent`. The latch once walked
-     *    the LNA from 1 to 8 on a weak signal, and requiring a spent IF was how that was stopped.
-     *    That guard is now doing harm, so it is replaced by the honest one: the flag has to still
-     *    be set on three consecutive measurements. A latch that has genuinely gone stale clears;
-     *    a front end that is genuinely being overdriven keeps complaining. */
-    static int ovlRun = 0;
-    ovlRun = ovlRaw ? ovlRun + 1 : 0;
-    /* ★ TWO measurements, not three. Every tick spent confirming is a tick spent overloading, and
-     *   the listener hears all of them. Two is enough to reject a single stale latch. */
-    const bool frontEndHot = ovlRun >= 2;
-    const bool nearOverload = clipping || ifRailed || frontEndHot;
+    const bool nearOverload = clipping || ifRailed;
     /* ★ 40 leaves a full LNA step (~19 dB) before the 59 dB rail, so a climb is always absorbable
      *   and can never itself cause an overload. */
     /* ★★★ TRY IT AND LET CLIPPING JUDGE, because the step size is NOT knowable in advance. Every
@@ -3644,36 +3534,8 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
              *     cycle, not a resting place. kIfCeil leaves the IF somewhere it can still work in
              *     both directions after absorbing the step, so the climb has a stable fixed point:
              *     RF as high as the IF can support, and no rail to retreat from. */
-            /* ★★★ THE COMFORTABLE CEILING IS FOR GAIN WE DO NOT NEED. THE RAIL IS THE LIMIT FOR
-             *     GAIN WE DO. Applying kIfCeil to every climb deadlocked the loop: on medium wave
-             *     the rung from LNA 6 to 5 is 18.7 dB (measured -26.3 -> -7.6), so with the IF at
-             *     37 a climb would rest it at ~56 — absorbable, the rail being 59, but above the
-             *     52 ceiling. The climb was therefore refused, while the IF would not act either
-             *     because the error was inside its deadband. Stuck at MINIMUM RF gain, 5.6 dB
-             *     under target, indefinitely.
-             *  ★ Stuart, on a band that should be full of signals: "this is where it needs to say
-             *    AGC training as it sat looking dead for a good 20 seconds", "also RF not bumping
-             *    up" — RF 0/6 and -31.3 dB of system gain on 648 kHz, where it had been finding
-             *    RF 5/6 and +27 dB with 49 dB of SNR an hour earlier.
-             *  ★★ So the two cases are separated. SHORT OF LEVEL: take the gain if the IF can
-             *    absorb it at all, because sitting under target at the bottom of the RF range
-             *    helps nobody. AT OR ABOVE TARGET: only climb if the IF would still rest
-             *    comfortably, which is what stops the opportunistic ratchet the ceiling was
-             *    added for. The anti-oscillation property is kept exactly where it was needed
-             *    and dropped exactly where it did harm. */
-            constexpr double kIfCeil = 52.0;      // where the IF should REST after a free climb
-            constexpr double kIfRail = 57.0;      // the most it may absorb when we need the gain
-            /* ★★★ AND THE TEST MUST NOT SIT INSIDE THE IF'S OWN DEADBAND. My first attempt used
-             *     `err < -kDead`, which is below -6 dB — exactly where the IF also refuses to
-             *     act, because that is its deadband. Anything between -6 and -2 was therefore
-             *     "not needed" to the RF stage and "close enough" to the IF stage, so NEITHER
-             *     moved and the loop stuck again, this time at -5.1 dB under target with the RF
-             *     still at minimum. Two rules sharing one threshold left a gap between them that
-             *     nothing owned.
-             *  ★ 2 dB: below target by more than the noise on the measurement, and well clear of
-             *    the deadband above it, so every shortfall belongs to exactly one stage. */
-            const bool needIt = err < -2.0;      // genuinely short, not merely opportunistic
-            ifHasRoom = (wantGr + cost) <= (needIt ? kIfRail : kIfCeil);
+            constexpr double kIfCeil = 52.0;
+            ifHasRoom = (wantGr + cost) <= kIfCeil;
         }
     }
 
@@ -3693,9 +3555,6 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      *   the IF reduction currently applied. Only while dwellOk, so the reading belongs to the
      *   state it is filed under rather than to a move still in flight. */
     if (dwellOk) sdrp->noteLnaGain(lna, sdrp->systemGainDb(), gr);
-    /* ★ And remember WHERE this band rests, for the next visit — only once acquisition is over,
-     *   so a value captured mid-climb is never the one we return to. */
-    if (dwellOk && !acquiring) gainRestNote(nowHz, lna, gr);
 
     /* ★★★ AIM THE CORRECTION WHERE THE LADDER IS KNOWN, STEP WHERE IT IS NOT. Both endpoints
      *     have to have been visited for the distance between them to mean anything, so unknown
@@ -3721,25 +3580,14 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
 
     int wantLna = lna;
     if (dwellOk && n > 1) {
-        /* ★ `ifSpent ||` — a hot front end is reason enough on its own; see frontEndHot above. */
-        if ((ifSpent || frontEndHot) && nearOverload && lna < n - 1) {
+        if (ifSpent && nearOverload && lna < n - 1) {
             /* ★ Take off exactly as much RF gain as the IF needs to come off its rail and sit
              *   somewhere it can still work in both directions. kIfRest is that place: far enough
              *   from 59 to absorb a surge, far enough from 20 to give gain back if the signal
              *   fades. The IF then returns the same number of decibels and the listener's level
              *   does not move — only the load on the front end changes. */
             constexpr int kIfRest = 45;
-            /* ★★★ A HOT FRONT END IS NOT A LEVEL PROBLEM AND MUST NOT BE ANSWERED AT LEVEL PACE.
-             *     When the IF has railed, the shortfall to kIfRest says exactly how much RF gain
-             *     to give back and one aimed move does it. But when the TUNER is complaining, the
-             *     IF may be nowhere near its rail and that arithmetic asks for nothing — so the
-             *     loop crept down a state at a time while the front end stayed in trouble.
-             *  ★ Stuart, moving to 96.6 MHz: "it was clearly overloading but taking ages to drop
-             *    the gain". 10 dB at a time until the complaint stops: still one step on the big
-             *    rungs, two or three on the fine ones, and bounded by the ladder either way. */
-            const double relief = frontEndHot ? -10.0
-                                              : -(double)(wantGr - kIfRest);
-            wantLna = lnaStep(lna, relief);                      // negative = less RF gain
+            wantLna = lnaStep(lna, -(double)(wantGr - kIfRest));  // negative = less RF gain
             g_dabTrialDir = g_dabTrialDir;                       // (unrelated; DAB owns its own)
             g_rfClippedAt = lna;                                 // ★ do not climb straight back
             g_rfClippedWhen = now;
@@ -3806,22 +3654,15 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
             /* ★★★ AND THE REMEMBERED CEILING. Same frequency, still fresh, and we are already
              *     within the margin of a gain that overloaded here — so do not go looking for it
              *     again. This is the only rule in the loop that acts BEFORE the damage. */
-            /* ★★★ THE dB CEILING IS GONE — IT COMPARED TWO DIFFERENT QUANTITIES. It remembered
-             *     the SYSTEM gain at an overload and vetoed any climb that came within 5 dB of
-             *     it. But system gain is RF plus IF, so the moment the IF moves, the remembered
-             *     figure and the current one describe different things, and the comparison is
-             *     meaningless. Seen holding the loop at LNA 3 all evening: "holding RF — 30.0 dB
-             *     is within 5 dB of the 0.4 dB that overloaded here" — 0.4 dB was a TOTAL
-             *     recorded when the IF happened to be near its rail, and it vetoed everything
-             *     thereafter.
-             *  ★ The front end is what overloads, so the memory has to be about the FRONT END.
-             *    g_rfClippedAt already does exactly that and does it correctly: the LNA state
-             *    that clipped, vetoed for thirty seconds. This was redundant with it and, being
-             *    wrong, was the half that stranded the loop.
-             *  ★★ Stuart's original idea was sound — "if we know Overload is X db then max AGC
-             *    should be X -5db" — and it survives as the state veto. It was my choice of
-             *    units that was wrong, and that is the second time tonight a remembered value fed
-             *    the loop its own output back. */
+            /* ★★★ THE dB CEILING STAYS OFF — IT COMPARED TWO DIFFERENT QUANTITIES. It remembered
+             *     the SYSTEM gain at an overload and vetoed any climb within 5 dB of it, but
+             *     system gain is RF plus IF: once the IF moves, the remembered figure and the
+             *     current one describe different things. Measured holding the loop at LNA 3 for
+             *     an evening — "holding RF — 30.0 dB is within 5 dB of the 0.4 dB that overloaded
+             *     here", where 0.4 dB was a TOTAL recorded while the IF sat near its rail.
+             *  ★ The front end is what overloads, so the memory must be about the front end, and
+             *    g_rfClippedAt already does that correctly: the LNA state that clipped, vetoed
+             *    for thirty seconds. Stuart's idea was right; my choice of units was not. */
             const bool capped = false;
             /* ★ Ask for exactly the shortfall, so a weak band is answered in one move instead of
              *   one click per measurement window. Capped at the ladder's own ends by lnaStep. */
