@@ -2728,7 +2728,22 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
      *     step is all this hardware HAS.
      * ★ Said once, at the moment it is decided, because an owner watching the gain sit still
      *   between two figures deserves to know it is a considered compromise and not a stuck loop. */
-    if (lastDir != 0 && dir != lastDir) {
+    /* ★★★ UNLESS THE IF IS AT A RAIL, WHICH IS NOT A COMPROMISE — IT IS A LOSS OF CONTROL.
+     *     The refusal above assumes both sides of the step are workable, so staying put leaves the
+     *     radio "within one step of ideal". That is true between two mid-range values. It is false
+     *     when the reduction has reached an end stop: at 20 dB the IF AGC is at MAXIMUM gain with
+     *     nothing left to give, and at 59 it is at minimum with nothing left to shed. Sitting
+     *     there is not a considered compromise, it is the loop declining to use the only control
+     *     that can still help.
+     *  ★ Stuart on 40 m: "we seem to be reluctant to give RF gain back" — IF reduction pinned at
+     *    20, LNA at 4 of 6, and 20 dB of SNR on a band that should do far better. The LNA sets the
+     *    noise figure, so low RF gain with the IF wide open is the worst arrangement available for
+     *    a weak signal; the other side of that step leaves the IF high but CONTROLLABLE.
+     *  ★★ Both rails qualify, for symmetric reasons: starved at the bottom costs sensitivity,
+     *    saturated at the top costs linearity, and in each case the IF can no longer answer for
+     *    itself. A couple of decibels of skirt so this reads as "at the rail", not "near it". */
+    const bool ifAtRail = mean <= 22.0 || mean >= 57.0;
+    if (lastDir != 0 && dir != lastDir && !ifAtRail) {
         if (!oscWarned) {
             oscWarned = true;
             LOGI("RSP RF AGC: holding RF gain at state %d — one LNA step (~%d dB here) is wider "
@@ -2740,6 +2755,10 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         return;
     }
     oscWarned = false;
+    if (ifAtRail && lastDir != 0 && dir != lastDir)
+        LOGI("RSP RF AGC: the IF AGC is at its %s rail (%.0f dB) with nothing left to give — "
+             "taking the step anyway, because staying here leaves it no control at all",
+             mean <= 22.0 ? "maximum-gain" : "minimum-gain", mean);
     LOGI("RSP RF AGC: IF reduction averaged %.1f dB for %.1f s, %s the %d-%d dB window "
          "(%.0f dB past the trigger) — RF gain state %d -> %d",
          mean, outMs / 1000.0, dir > 0 ? "above" : "below", kGrLow, kGrHigh, excess, cur, want);
