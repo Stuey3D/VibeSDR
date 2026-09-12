@@ -2671,6 +2671,7 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
     };
 
     static double accum = 0.0; static int count = 0;
+    static auto lastStepAt = std::chrono::steady_clock::time_point{};
     static auto  winStart = std::chrono::steady_clock::time_point{};
     static int   outMs = 0, outDir = 0;
     static auto  lastMove = std::chrono::steady_clock::time_point{};
@@ -2698,6 +2699,29 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
      *    52.0 dB for 12.0 s, above the 30-50 dB window (0 dB past the trigger) — RF gain state
      *    3 -> 4". Zero decibels past the trigger is not past it, and it gave away a rung on every
      *    single boot. */
+    /* ★★★ SAY NOTHING FOR A FEW SECONDS AFTER OUR OWN STEP. An LNA rung on this radio can be
+     *     wider than the IF AGC's entire range — 39 dB measured at 106 MHz, against a 20-59 dB
+     *     reduction — so immediately after a step the reduction is slammed against one rail while
+     *     their loop walks back to a working value. Judged during that walk, the reading is not
+     *     the band, it is the wake of our own move.
+     *  ★ That is what the rail exemption turned into an oscillation, once a minute, for ever:
+     *      7 -> 8   (averaged 59.0 dB for 1.0 s, above the window)
+     *      8 -> 7   (averaged 20.0 dB for 1.0 s, below the window)
+     *      7 -> 8   (averaged 59.0 dB for 1.0 s ...)
+     *    Each decision taken on ONE SECOND of post-step transient, each one reversing the last.
+     *    Stuart watched the gain bounce between two states all evening because of it.
+     *  ★★ Five seconds and a cleared accumulator. The urgency curve still decides how long the
+     *    EVIDENCE must agree once we are listening again; this only stops us listening to
+     *    ourselves. A rail that is real is still a rail five seconds later. */
+    {
+        const auto nowStep = std::chrono::steady_clock::now();
+        if (lastStepAt.time_since_epoch().count() != 0 &&
+            std::chrono::duration_cast<std::chrono::milliseconds>(nowStep - lastStepAt).count()
+                < 5000) {
+            outMs = 0; outDir = 0; accum = 0.0; count = 0;
+            return;
+        }
+    }
     const int dir = mean > kTrigHigh ? +1 : (mean < kTrigLow ? -1 : 0);
     if (dir == 0) { outMs = 0; outDir = 0; return; }      // ★ in the window (or its skirt): leave it
     if (dir != outDir) { outDir = dir; outMs = 0; }       // ★ a change of mind starts again
@@ -2789,6 +2813,7 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
     g_rspRfAgcLastLna.store(want, std::memory_order_relaxed);
     lastMove = now;
     lastDir = dir; lastMean = mean;
+    lastStepAt = std::chrono::steady_clock::now();   // ★ start the quiet period — see above
     outMs = 0; outDir = 0;
 }
 
