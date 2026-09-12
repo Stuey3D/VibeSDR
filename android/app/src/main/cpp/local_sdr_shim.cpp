@@ -2790,8 +2790,24 @@ static std::atomic<int> g_vibeAgcLastGr{-1};   // what WE last commanded, for th
 /* ★ VibeAGC's learned state for ONE spot on the dial. File-scope, not function statics, precisely
  *   so a retune can throw it away — see the note in vsSdrplayVibeAgcTick. */
 static int g_vibeAgcBadLna = -1, g_vibeAgcCleanRun = 0, g_vibeAgcRailHi = 0, g_vibeAgcRailLo = 0;
+/** ★ Windows of ACQUIRE remaining — see the note in the tick. ~4 s at ~10 windows/s. */
+static int g_vibeAgcAcquire = 0;
+/** ★ The capture rate the loop is currently seeing, published by the tick's caller — the tick is
+ *  a free function and cannot reach the Impl's member. A rate change re-arms acquisition. */
+static std::atomic<double> g_vibeAgcRateHz{0.0};
+/* ★★★ THE ENVELOPE'S FOUR KNOBS, NAMED FOR SDRplay'S OWN — see vsSdrplayVibeAgcTick. Runtime
+ *     settable so a strategy can be swept on air rather than argued about; the wire message that
+ *     carries them already exists (agcAttack/agcDecay/agcDelay/agcThresh).
+ * ★ attack is dB*10 per window, decay is dB*100 per window, delay is in windows (~0.1 s each),
+ *   thresh is plain dB. holdWin is the persistence window that rejects transients. */
+static std::atomic<int> g_vibeAgcAttack {60};    // 6.0 dB/window — fast, but not a single step
+static std::atomic<int> g_vibeAgcDecay  {10};    // 0.10 dB/window ≈ 1 dB/s
+static std::atomic<int> g_vibeAgcDelay  {20};    // 20 windows ≈ 2 s hold before any decay
+static std::atomic<int> g_vibeAgcThresh {6};     // dB below the envelope before decay starts
+static std::atomic<int> g_vibeAgcHoldWin{20};    // 20 windows ≈ 2 s of persistence to count
 static void vsVibeAgcForget() {
     g_vibeAgcBadLna = -1; g_vibeAgcCleanRun = 0; g_vibeAgcRailHi = 0; g_vibeAgcRailLo = 0;
+    g_vibeAgcAcquire = 200;  // ★ a CAP (~20 s), not a duration — it exits on arrival
 }
 
 /* ★★★ VibeAGC'S TARGET IS VibeAGC'S TARGET — agcTargetDbfs(), THE SAME ONE THE DONGLE USES.
@@ -2862,7 +2878,7 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      *     still forbidding RF gain at 215 MHz in Band III, where the band, the aerial's behaviour
      *     and the signal are all different (Stuart, 2026-09-12, on 10D). Statics in a per-tick
      *     function outlive the conditions that justified them; that is their whole hazard. */
-    static double lastHz = 0.0;
+    static double lastHz = 0.0, lastRate = 0.0;
     const double  nowHz  = LocalSdrShim::instance().listenFrequency();
 
     /* ★★★ AND SMOOTH THE PEAK, FAST UP / SLOW DOWN. A DAB ensemble is 1536 randomly-phased
@@ -2877,9 +2893,27 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      * ★★ The RAW peak and the clip fraction are still used for the overload decisions below;
      *    smoothing is for the level loop only, where jitter is the enemy. */
     static double peakSm = -99.0;
-    if (lastHz == 0.0 || std::fabs(nowHz - lastHz) > 1.0e4) {
-        lastHz = nowHz;
-        peakSm = peakRaw;
+    /* ★ The last two raw windows, for the median filter below — declared here so the retune
+     *   reset can clear them with everything else. */
+    static double p1 = -99.0, p2 = -99.0;
+    /* ★★★ A SAMPLE-RATE CHANGE IS A RETUNE TOO, AND DAB IS NOTHING BUT. Entering DAB drops the
+     *     capture to 2.048 MS/s and re-centres on the multiplex — the level at the converter
+     *     changes completely, and the frequency test above does not see it, because this watched
+     *     only `listenFrequency`. Measured on 10D: the loop acquired at -18 dBFS, announced
+     *     itself acquired, handed over to tracking, and the level then rose TWENTY decibels as
+     *     the multiplex came in. Tracking crawls at ~2 s per dB, so it spent the rest of the test
+     *     travelling — which is exactly the DAB instability, and it is not instability at all,
+     *     it is acquisition aimed at the wrong moment.
+     * ★ Any change of rate re-arms acquisition, for the same reason a change of frequency does:
+     *   everything learned was about a different signal. */
+    const double nowRate = g_vibeAgcRateHz.load(std::memory_order_relaxed);
+    if (lastHz == 0.0 || std::fabs(nowHz - lastHz) > 1.0e4
+        || std::fabs(nowRate - lastRate) > 1.0) {
+        if (lastRate != 0.0 && std::fabs(nowRate - lastRate) > 1.0)
+            LOGI("VibeAGC/RSP: capture rate %.3f -> %.3f MS/s — re-acquiring, the level at the "
+                 "converter is a different signal now", lastRate / 1e6, nowRate / 1e6);
+        lastHz = nowHz; lastRate = nowRate;
+        peakSm = peakRaw; p1 = p2 = peakRaw;
         vsVibeAgcForget();
         LOGI("VibeAGC/RSP: retuned to %.3f MHz — forgetting the previous gain lesson", nowHz / 1e6);
     }
@@ -2916,9 +2950,86 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      * ★★ This REPLACES the asymmetric deadband and slow-release machinery I had bolted on to fake
      *    the same behaviour. One mechanism with a physical meaning beats two tuned constants
      *    fighting each other — and it is far easier to reason about when it next misbehaves. */
-    constexpr double kDecayPerWindow = 0.1;      // ~1 dB per second at ~10 windows/s
-    peakSm = (peakSm <= -98.0) ? peakRaw
-           : (peakRaw > peakSm ? peakRaw : peakSm - kDecayPerWindow);
+    /* ★★★ AND A TRANSIENT MUST NOT SET THE GAIN FOR THE NEXT HALF MINUTE. A peak hold adopts any
+     *     new maximum instantly — which is right for a station keying up and quite wrong for a
+     *     burst of broadband noise. Stuart identified exactly this on medium wave: "it was a
+     *     transient broadband noise that bounced the floor up", and I had recorded that same
+     *     event as front-end overload. One burst pushes the hold up, the gain comes down to
+     *     protect against something that no longer exists, and the slow decay then keeps it down
+     *     for thirty seconds. That is the "it initially started at a good level" drift.
+     * ★ So the hold is fed the MIDDLE of the last three windows, not the newest. An impulse
+     *   occupies one window and is discarded; anything real occupies two and is adopted with one
+     *   window (~0.1 s) of delay, which costs nothing. A median is the right filter here because
+     *   it rejects outliers outright rather than averaging them in — an average would still let a
+     *   loud enough burst drag the gain down, just more slowly.
+     * ★★ The CLIP fraction is deliberately not filtered: if samples are actually at the rail we
+     *    act at once, transient or not. Rejecting outliers is for deciding the operating point,
+     *    never for deciding whether the converter is in trouble. */
+    /* ★★★ REBUILT ON SDRplay'S OWN ARCHITECTURE. Stuart: "take inspiration from the SDRPlay IF
+     *     agc from their API, its on the box so you should be able to dissect it". Their
+     *     sdrplay_api_AgcT is a classic envelope controller, and the two fields that matter here
+     *     are the ones my hand-rolled version lacked:
+     *         attack_ms           how fast gain comes DOWN when the level rises
+     *         decay_ms            how fast gain goes back UP
+     *         decay_delay_ms      a HOLD before any decay may begin
+     *         decay_threshold_dB  the level must have fallen this far before decay begins
+     *     The hold and the threshold together are exactly what an intermittent band needs, and
+     *     they are why their loop behaves on SSB where mine did not.
+     *
+     * ★★★ AND A PERSISTENCE FILTER IN FRONT OF IT, which their API cannot express because it runs
+     *     in the tuner. The problem Stuart set: a gap between overs and a broadband noise burst
+     *     ENDING look identical from the level alone — both are "it got quieter". What separates
+     *     them is history. An over lasts seconds and recurs; a burst that "pumps the entire floor
+     *     for a second or so" happens once. So the OPERATING POINT is allowed to be set only by a
+     *     level that has PERSISTED: `sustained` is the minimum of the last kHoldWin windows, so
+     *     any excursion shorter than that window cannot raise it at all, while any real
+     *     transmission satisfies it trivially.
+     * ★ The clip path below is deliberately NOT filtered: if samples are at the rail we act at
+     *   once, transient or not. Persistence decides the operating point; it never decides whether
+     *   the converter is in trouble.
+     *
+     * ★★ EVERY CONSTANT HERE IS RUNTIME-SETTABLE (see setIfAgcDynamics) so strategies can be
+     *    swept on air without a rebuild — which is the only honest way to choose between them.
+     * ★ The acceptance criterion is Stuart's, not mine: "little constant tweaks a couple of db
+     *   here or there not an issue its the 10db swings that cause big issues". */
+    /* ★★★ AND THE PERSISTENCE FILTER MUST NOT BE A MINIMUM. This took the MIN of the last ~20
+     *     windows, reasoning that only a level which HELD should set the operating point. That
+     *     rejects transients — and it also makes the envelope track the QUIETEST recent moment,
+     *     so on any band with intermittent strong signals the loop concludes it is quiet, raises
+     *     the gain, and clips. Measured: 15.5% of samples at the rail while the envelope read
+     *     -16 dBFS, and every DAB block driven to minimum gain (-11.6 dB) where the previous
+     *     build reached +40 to +48.
+     * ★★★ THE ERROR WAS CONCEPTUAL, NOT NUMERIC. I made the INPUT conservative when the thing
+     *     that needed to be conservative was the RELEASE. Protection must see the peak at once —
+     *     that is the whole job — while only the recovery needs patience. That is exactly how
+     *     SDRplay's own AgcT is arranged: the attack has no delay, and the caution lives in
+     *     decay_delay_ms and decay_threshold_dB. I had their architecture in front of me and put
+     *     the caution in the wrong place.
+     * ★ So: a median of three windows, which discards a single-window spike and nothing else, and
+     *   the envelope's hold and threshold below carry all the patience. */
+    const double a = peakRaw, b = p1, c = p2;
+    const double sustained = std::max(std::min(a, b), std::min(std::max(a, b), c));
+    p2 = p1; p1 = peakRaw;
+
+    /* ── THE ENVELOPE ────────────────────────────────────────────────────────────────────────
+     * ★ Attack: the level rose and held — take it at once and restart the hold.
+     * ★ Hold:   nothing moves for decay_delay after the last attack.
+     * ★ Decay:  only once the level is decay_threshold BELOW the envelope, and then slowly. */
+    const double attackPerWin = g_vibeAgcAttack.load(std::memory_order_relaxed) / 10.0;
+    const double decayPerWin  = g_vibeAgcDecay.load(std::memory_order_relaxed)  / 100.0;
+    const double decayThresh  = g_vibeAgcThresh.load(std::memory_order_relaxed);
+    const int    holdWins     = g_vibeAgcDelay.load(std::memory_order_relaxed);
+    static int   sinceAttack  = 9999;
+
+    if (peakSm <= -98.0) peakSm = sustained;
+    if (sustained > peakSm) {
+        peakSm = std::min(sustained, peakSm + attackPerWin);   // ATTACK
+        sinceAttack = 0;
+    } else {
+        ++sinceAttack;
+        if (sinceAttack >= holdWins && (peakSm - sustained) > decayThresh)
+            peakSm -= decayPerWin;                             // DECAY
+    }
     const double peak = peakSm;
     /* ★★★ THE HARDWARE OVERLOAD FLAG LATCHES, SO IT MUST BE CORROBORATED BEFORE IT IS OBEYED.
      *     sdrplay_api raises PowerOverloadChange and the flag stays set until a clearing event
@@ -3030,9 +3141,53 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
     /* ★ Still a little more patient on the way up than the way down — the peak hold has removed
      *   the need for the big asymmetry, not the reason for caution in the direction that can
      *   overload. */
-    const int  needAgree = tooHot ? 3 : 20;
-    const int  stepCap   = tooHot ? kMaxStep : 1;
-    if (dirNow != 0 && agree >= needAgree && ifRateOk) {
+    /* ★★★ ACQUIRE, THEN TRACK. Measured across seven DAB blocks: settle times of 20-29 seconds,
+     *     and the weakest (9A) never settled at all. That is not a tuning error, it is the
+     *     arithmetic of the tracking rules applied to a job they are not for — twenty agreeing
+     *     windows, one decibel a step, one write a second means climbing 20 dB TAKES 20 seconds.
+     *     Right for following a band that drifts; absurd for arriving at a new one.
+     * ★ So for the first few seconds after a retune the loop ACQUIRES: no agreement requirement,
+     *   full-size steps, no rate limit, short RF dwell. Then it drops into the careful régime
+     *   that keeps it steady. The dongle's AGC already does this (its jump-to-ballpark recovery);
+     *   the RSP had no equivalent because I built the tracking half first and never wrote the
+     *   other half at all.
+     * ★★ Acquisition is armed by the retune reset, so it costs nothing while sitting still — the
+     *    two régimes never overlap, and there is no new way for them to fight each other. */
+    /* ★★★ ACQUISITION ENDS WHEN IT HAS ARRIVED, NOT AFTER A FIXED COUNT. A flat 40 windows (~4 s)
+     *     was a number, not a criterion — and the distance to travel is not fixed: coming from a
+     *     strong broadcast carrier to a weak DAB block is fifty decibels. Four seconds of
+     *     acquisition followed by tracking at ~2 s per decibel meant a HUNDRED SECONDS to arrive,
+     *     which measured as "pinned at minimum gain" on every block the test did not wait out.
+     *     It was not pinned; it was still travelling.
+     * ★ So acquire until the level is actually inside the deadband — then hand over to tracking.
+     *   The cap is a safety net for a band where the target can never be reached (a dead antenna,
+     *   a signal that simply is not there), not the normal exit.
+     * ★★ This is the difference between a controller that is FAST and one that ARRIVES. The
+     *   tracking rules are deliberately slow because their job is to not chase; they were never
+     *   meant to carry the loop across its whole range. */
+    const bool acquiring = g_vibeAgcAcquire > 0;
+    if (g_vibeAgcAcquire > 0) {
+        --g_vibeAgcAcquire;
+        /* ★ And it must HOLD there, not merely pass through. On DAB the level was still rising
+         *   when the error first fell inside the deadband, so "acquired" was announced mid-flight
+         *   and tracking inherited a moving target. Three consecutive windows inside the band is
+         *   cheap (~0.3 s) and means it has actually arrived. */
+        static int inBand = 0;
+        inBand = (std::fabs(peak - (double)targetDbfs) <= kDead) ? inBand + 1 : 0;
+        if (inBand >= 3) {
+            LOGI("VibeAGC/RSP: acquired — %.1f dBFS is within %.0f dB of target, tracking from here "
+                 "(LNA %d, IF reduction %d)", peak, kDead, lna, gr);
+            g_vibeAgcAcquire = 0;
+            inBand = 0;
+        }
+    }
+    const int  needAgree = acquiring ? 1 : (tooHot ? 3 : 20);
+    /* ★ Big steps DOWN in gain (the safe direction) even while acquiring; more measured on the
+     *   way up, where an overshoot is what clips and teaches the guard the wrong thing. */
+    /* ★ And acquisition steps are capped well under one LNA step: a 21 dB IF lunge overshoots
+     *   the 6 dB deadband by a factor of three and then has to come back, which IS a swing. */
+    const int  stepCap   = acquiring ? (tooHot ? 10 : 6) : (tooHot ? kMaxStep : 1);
+    if (dirNow != 0 && agree >= needAgree && (ifRateOk || acquiring)) {
         int step = (int)std::lround(err);
         if (step >  stepCap) step =  stepCap;
         if (step < -stepCap) step = -stepCap;
@@ -3084,10 +3239,21 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      *   immediately.
      * ★★ The IF stage is untouched by this and still reacts to every window: it is cheap, it is
      *    reversible, and it is the stage that is supposed to absorb exactly this. */
-    const int  needHi = heavyClip ? 1 : (ovl ? 6 : 4);
-    const int  needLo = 40;              // ★ windows (~4 s); the peak hold handles the silences
+    const int  needHi = heavyClip ? 1 : (acquiring ? 2 : (ovl ? 6 : 4));
+    /* ★★★ ACQUISITION HURRIES DOWNWARD ONLY. Letting the RF stage CLIMB fast during acquire was
+     *     the dangerous direction given the aggressive treatment, and it showed: the LNA was
+     *     driven to 3 — nearly wide open — whereupon the IF had to sit at 59 dB of reduction to
+     *     hold the level, which is the worst split available and precisely what the front end
+     *     should never be doing. Measured identically on FM and AM, 36.3 dB of system gain taken
+     *     in the most intermodulation-prone way possible.
+     * ★ The IF has 39 dB of range and moves smoothly; it can carry the whole of an upward
+     *   acquisition on its own. The RF stage climbing is always a considered act, acquiring or
+     *   not — the same rule as everywhere else in this loop: fast in the safe direction, patient
+     *   in the one that can overload or distort. */
+    const int  needLo = 40;              // ★ windows; never hurried, acquiring or not
     const bool dwellOk = lastRf.time_since_epoch().count() == 0 ||
-        std::chrono::duration_cast<std::chrono::milliseconds>(now - lastRf).count() >= 1500;
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - lastRf).count()
+            >= (acquiring ? 400 : 1500);
 
     /* ★★★ NEVER CLIMB BACK INTO A STATE THAT JUST OVERLOADED. Without this the loop flaps on the
      *     overload boundary for ever: climb a step, overload, drop a step, find headroom, climb
@@ -3110,11 +3276,17 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      * ★ Real trouble is heavy clipping, or the IF railed while the level is still ABOVE target.
      *   Railed and below target is not an overload — it is a quiet band with the gain wound down,
      *   which is the state the loop is supposed to climb OUT of. */
-    if (heavyClip || (railHi >= 4 && peak > (double)targetDbfs)) {
+    /* ★★★ AND NOT FROM ITS OWN OVERSHOOT. During ACQUIRE the loop takes full-size steps on
+     *     purpose, which can clip for a window or two on the way past — and that was teaching the
+     *     guard "this LNA state overloaded", permanently, from a transient the loop itself
+     *     created. Measured: four DAB blocks pinned at LNA 9 / IF 59, system gain -11.6 dB, where
+     *     tracking alone had reached +40 to +46 dB. A controller must not learn a lasting lesson
+     *     from its own acquisition transient; that is not evidence about the band. */
+    if (!acquiring && (heavyClip || (railHi >= 4 && peak > (double)targetDbfs))) {
         if (badLna < 0 || lna < badLna) badLna = lna;
         cleanRun = 0;
     }
-    else ++cleanRun;
+    else if (!acquiring) ++cleanRun;
     /* ★★★ FORGETTING ON A TIMER ALONE IS A SLOW FLAP. Clearing the guard after a fixed clean spell
      *     meant: climb, overload, learn, wait a minute, forget, climb, overload — once a minute,
      *     for ever, disturbing the demodulator each time. A clean run only proves the CURRENT
@@ -3164,10 +3336,25 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      *    stops short of a wide-open LNA, and the overload guards are untouched — this only decides
      *    which end of a safe range to sit at, and the quiet end was costing sensitivity for
      *    nothing. */
+    /* ★★★ THE IF BAND MUST BE WIDER THAN ONE LNA STEP, OR EVERY RF MOVE CAUSES THE NEXT ONE.
+     *     An LNA step on this radio is worth ~19 dB. With the rest band at 40..50 — ten decibels
+     *     — a step can never land inside it, so the RF stage re-triggered immediately and the
+     *     loop oscillated: measured ifSpread of 18-19 dB across most of Band III, with the IF
+     *     sprinting up and down behind each LNA move.
+     * ★★★ I DIAGNOSED THIS EXACT FAULT EARLIER TONIGHT in the loop this one replaced — "a
+     *     controller whose smallest possible action exceeds its target window cannot settle:
+     *     every correction overshoots to the far side and it oscillates for ever" — fixed it
+     *     there, and then rebuilt it here with a window half the size. The lesson was written
+     *     down twenty lines from the code that broke it.
+     * ★ 25..55 is 30 dB, comfortably wider than a step, so after an RF move the IF lands INSIDE
+     *   the band and nothing re-triggers. The consequence is that RF moves become rare and the
+     *   smooth IF stage does almost everything — which is both SDRplay's advice and exactly what
+     *   Stuart asked for: "little constant tweaks a couple of db here or there not an issue its
+     *   the 10db swings that cause big issues". */
     static int hotIf = 0, coldIf = 0;
-    if      (wantGr > 50) { ++hotIf;  coldIf = 0; }   // IF working too hard -> less RF gain
-    else if (wantGr < 40) { ++coldIf; hotIf  = 0; }   // IF has slack -> MORE RF gain
-    else                  { hotIf = coldIf = 0; }     // 40..50: the front end is earning its keep
+    if      (wantGr > 55) { ++hotIf;  coldIf = 0; }   // IF out of room -> less RF gain
+    else if (wantGr < 25) { ++coldIf; hotIf  = 0; }   // IF has real slack -> MORE RF gain
+    else                  { hotIf = coldIf = 0; }     // 25..55: wider than a step, so it settles
 
     int wantLna = lna;
     if (dwellOk && n > 1) {
@@ -8142,6 +8329,7 @@ struct LocalSdrShim::Impl {
                                   : rateNow <= 8064000.0 ? 12
                                   : rateNow <= 9216000.0 ? 10 : 8;
                 const int headroom = adcBits - 8;          // dB to stay back from the dongle's aim
+                g_vibeAgcRateHz.store(sampleRate, std::memory_order_relaxed);
                 vsSdrplayVibeAgcTick(sdrp.get(), floorState,
                                      (int)std::lround(agcTargetDbfs()) - headroom);
             }
@@ -10594,8 +10782,29 @@ struct LocalSdrShim::Impl {
             {
                 double a, d, dd, th;
                 if (jsonNum(msg, "agcAttack", a) && jsonNum(msg, "agcDecay", d)
-                 && jsonNum(msg, "agcDelay", dd) && jsonNum(msg, "agcThresh", th))
+                 && jsonNum(msg, "agcDelay", dd) && jsonNum(msg, "agcThresh", th)) {
+                    /* ★★★ THE SAME FOUR NUMBERS NOW DRIVE WHICHEVER LOOP IS RUNNING. They were
+                     *     SDRplay's AgcT fields, passed straight to the tuner — which under
+                     *     VibeAGC is a controller that is switched off, so they went nowhere.
+                     *     VibeAGC's envelope is modelled on that same structure (attack, decay,
+                     *     decay delay, decay threshold), so the message means exactly what it
+                     *     always meant; only the controller changed.
+                     * ★ And it makes the loop tunable ON AIR, which is the only honest way to
+                     *   choose between strategies: sweep them against real signals rather than
+                     *   rebuild for each guess. */
                     LocalSdrShim::instance().setIfAgcDynamics((int)a, (int)d, (int)dd, (int)th);
+                    g_vibeAgcAttack.store((int)a, std::memory_order_relaxed);
+                    g_vibeAgcDecay .store((int)d, std::memory_order_relaxed);
+                    g_vibeAgcDelay .store((int)dd, std::memory_order_relaxed);
+                    g_vibeAgcThresh.store((int)th, std::memory_order_relaxed);
+                    double hw;
+                    if (jsonNum(msg, "agcHoldWin", hw))
+                        g_vibeAgcHoldWin.store((int)hw, std::memory_order_relaxed);
+                    LOGI("VibeAGC/RSP: envelope set — attack %.1f dB/win, decay %.2f dB/win, "
+                         "hold %d win, threshold %d dB, persistence %d win",
+                         a / 10.0, d / 100.0, (int)dd, (int)th,
+                         g_vibeAgcHoldWin.load(std::memory_order_relaxed));
+                }
             }
             if (jsonNum(msg, "rfnotch", v))  { LocalSdrShim::instance().setRfNotch(v != 0);
                                                vsPersist(std::string("{\"rfNotch\":") + (v != 0 ? "true" : "false") + "}"); }
