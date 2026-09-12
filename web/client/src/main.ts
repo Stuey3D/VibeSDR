@@ -11296,17 +11296,19 @@ function renderRspVals() {
    *  says something is driving it; only the label says WHAT. Tonight's whole last hour was
    *  controls that were right and unreadable (Stuart, 2026-09-12: "i didnt realise that it was
    *  working"), so where a loop owns a control, the control says so. */
-  /* ★ NAMED, not just greyed. "· VibeAGC" rather than "· AGC" because on this radio there are two
-   *  different things that could be meant and they behave differently: the RADIO's IF AGC, and
-   *  ours. A label that cannot distinguish them is how "the AGC is broken" and "the AGC is fine"
-   *  were both true in the same hour. */
+  /* ★★★ NAME THE RIGHT LOOP ON THE RIGHT ROW. There are two controllers on this radio and they
+   *  are not the same thing: the RSP's OWN IF AGC, which lives inside the SDRplay API and runs
+   *  the IF stage, and OUR RF AGC, which moves the LNA from the reduction that AGC reports.
+   *  ★ Both rows used to read "· VibeAGC" because one loop drove both stages. Saying that now
+   *   would be worse than saying nothing: it would credit our loop with the IF stage it does not
+   *   touch, on the one radio where confusing those two controllers has cost the most. */
   const rfAgcOwns = !!document.getElementById('rspRfAgc')?.classList.contains('on');
   const ifAgcOwns = !!document.getElementById('rspIfAgc')?.classList.contains('on');
   $('rspLnaVal').textContent =
     `${pos}/${lnaMax} · LNA ${lna}${lna === 0 ? ' · max' : lna === lnaMax ? ' · min' : ''}`
-    + (rfAgcOwns ? ' · VibeAGC' : '');
+    + (rfAgcOwns ? ' · RF AGC' : '');
   $('rspIfGrVal').textContent = `${gr} dB${gr <= 20 ? ' · max gain' : gr >= 59 ? ' · min gain' : ''}`
-    + (rfAgcOwns ? ' · VibeAGC' : ifAgcOwns ? ' · AGC' : '');
+    + (ifAgcOwns ? ' · IF AGC' : '');
   const sp = Number($<HTMLInputElement>('rspAgcSet').value);
   // ★ Say which way it drives. "-45 dBfs" alone tells nobody whether that is more or less.
   // ★ Name the default where it sits. -30 dBFS is SDRplay's OWN working point (the API's
