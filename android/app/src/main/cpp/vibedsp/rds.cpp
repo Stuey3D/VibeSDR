@@ -240,13 +240,42 @@ float RdsDemod::rdsDeviationKHz() const {
         // ★ A deviation is a property of the transmitter and should not flicker at 20 Hz. The
         // difference is re-smoothed over seconds, and -1 is reserved for a subcarrier that is
         // genuinely and persistently at or below the noise — not for one that dipped for 50 ms.
+        /* ★★★ THE DECODER IS THE WITNESS: IF GROUPS ARE ARRIVING, THE SUBCARRIER EXISTS.
+         *     Reporting "no subcarrier" while the decoder is pulling PI, PS and radiotext out of
+         *     that very subcarrier is not a cautious answer, it is a self-contradiction — and
+         *     `agg_.groupTotal > 0` above has already established that groups ARE arriving.
+         *  ★ Measured across four radios on one station (96.6 Heart, 2026-09-12), all with the
+         *     panel open so all using this corrected path:
+         *         Airspy HF+   IF wide   — RDS 0.0 "no subcarrier", block errors 0 %, radiotext live
+         *         RSP1A        IF wide   — RDS 0.0 "no subcarrier"
+         *         V4 (Pi)      IF 168k   — RDS 0.5
+         *         XCover4S     IF 168k   — RDS 1.7 "typical"
+         *     Both WIDE radios read exactly zero and both NARROW ones read a real figure, which
+         *     is the signature of the GUARD BAND being contaminated rather than of any subcarrier
+         *     being absent: a wide IF admits adjacent-channel energy, some of it lands at 63 kHz
+         *     where the guard sits, and the subtraction then removes signal instead of noise.
+         *  ★★ So the correction may reduce the reading, never annihilate it. When the subtraction
+         *     would leave nothing, the guard is measuring something that is not our noise floor,
+         *     and the uncorrected estimate — which needs no guard at all — is the better answer.
+         *  ★★★ No Pira analyser is available to calibrate against (and Hans can no longer test),
+         *      so this deliberately does NOT invent an absolute scale. It makes the figure
+         *      self-consistent with the decoder beside it, which is a claim we can actually
+         *      support: a station cannot be decoding at 0 % block errors from a subcarrier that
+         *      is not there. */
+        const float raw = rdsRms_ * 1.520f * 75.0f;
         const float sigPow = sigPowSlow_;
-        if (sigPow <= 0.0f) return -1.0f;
+        if (sigPow <= 0.0f) return raw;
         // 1.381 = peak / RMS of a spec-shaped biphase envelope through our own +/-2.4 kHz
         // filter (tools/rdsdev_cal, stable to +/-0.2% from 192 to 320 kHz). NOT the 1.520 used
         // below: that one is peak / mean-envelope, and only an RMS can have noise power taken
         // off it.
-        return std::sqrt(sigPow) * 1.381f * 75.0f;
+        /* ★★ AND CAP HOW MUCH THE GUARD MAY TAKE. A noise floor that accounted for most of the
+         *   power in the RDS band would show up as block errors; with the decoder clean it
+         *   demonstrably does not. A correction deeper than 3 dB (half the power) is therefore
+         *   evidence that the guard band is seeing something other than our noise — so it is
+         *   allowed to trim the reading, not to dominate it. */
+        const float corrected = std::sqrt(sigPow) * 1.381f * 75.0f;
+        return std::max(corrected, raw * 0.707f);
     }
 
     // ★ Uncorrected fallback when the operator has not enabled the guard band. Same crest

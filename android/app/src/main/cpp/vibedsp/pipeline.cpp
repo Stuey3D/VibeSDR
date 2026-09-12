@@ -1129,13 +1129,70 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 x.eon = eons; x.nEon = nEon;
                 x.oda = odas; x.nOda = nOda;
                 x.constXY = xy; x.nPts = np;
+                /* ★★★ ONE OBSERVATION WINDOW FOR THE WHOLE PANEL. These fields are assembled in
+                 *     the same instant, but each arrived carrying a COMPLETELY DIFFERENT
+                 *     averaging interval: the RDS deviation smoothed over seconds, the pilot
+                 *     deviation essentially instantaneous, the block error rate over the
+                 *     decoder's own window, the constellation over its last N symbols. A frame
+                 *     was therefore a mosaic of a millisecond, a second and several seconds
+                 *     presented as one moment — so no two numbers on it were commensurable, and
+                 *     any contradiction between them was expected rather than diagnostic.
+                 *  ★ Stuart, after an evening of comparing four radios on six stations:
+                 *    "those numbers change so rapidly sub 1 second", "I think the issue is the
+                 *    lack of smoothing those numbers show the data the millisecond it arrives but
+                 *    ends up out of sync". He is right, and it invalidated most of a night's
+                 *    conclusions — mine especially: I read single frames of jittering quantities
+                 *    as measurements and built three theories on them, two of which were wrong.
+                 *  ★★ A PANEL IS AN INSTRUMENT, AND AN INSTRUMENT NEEDS A STATED INTEGRATION TIME.
+                 *    1.5 s, applied to every scalar here, so a frame describes one interval. The
+                 *    coefficient is derived from the real block duration rather than assumed, so
+                 *    the window is 1.5 seconds at any sample rate or block size.
+                 *  ★★★ Pilot deviation and RDS deviation are TRANSMITTER CONSTANTS — they should
+                 *      not move at all, and watching them jitter was the clue that none of this
+                 *      was measuring what it claimed to. */
+                {
+                    const double dt  = (chFs_ > 0.0) ? (double)nc / chFs_ : 0.0;
+                    const float  a   = (dt > 0.0) ? (float)(1.0 - std::exp(-dt / 1.5)) : 0.1f;
+                    const float  pd  = pll_.pilotDeviationKHz();
+                    const float  rd  = rdsDemod_.rdsDeviationKHz();
+                    const float  coh = rdsDemod_.pilotPhaseCoherence();
+                    const float  drf = rdsDemod_.pilotPhaseDriftDegPerSec();
+                    if (!extAvgInit_) {
+                        extAvgInit_ = true;
+                        extPilotDev_ = pd; extRdsDev_ = rd; extCoh_ = coh; extDrift_ = drf;
+                        extRdsBad_ = 0;
+                    } else {
+                        extPilotDev_ += a * (pd  - extPilotDev_);
+                        extCoh_      += a * (coh - extCoh_);
+                        extDrift_    += a * (drf - extDrift_);
+                        /* ★★★ THE "CANNOT MEASURE" SENTINEL MUST EARN ITS PLACE. The deviation
+                         *     carries a negative sentinel, and averaging a sentinel with a value
+                         *     produces a number that is neither — so it cannot simply be mixed in.
+                         *     But adopting it the instant it appears is just as wrong: a single
+                         *     bad tick then blanks a figure that is otherwise perfectly healthy,
+                         *     which is the whole fault being fixed here.
+                         *  ★ Stuart on Saber's FelineFM — 0 % block errors, carrier locked, full
+                         *    radiotext, and the deviation showing "no subcarrier": "sabers
+                         *    FelineFM has flashed 3.4KHz typical". The subcarrier was there all
+                         *    along at a healthy 3.4 kHz; the panel was catching the dips.
+                         *  ★★ So a real reading is adopted at once (it proves measurability), and
+                         *    "cannot measure" only after it has held for about a second. */
+                        if (rd >= 0.0f) {
+                            extRdsBad_ = 0;
+                            if (extRdsDev_ < 0.0f) extRdsDev_ = rd;          // first good reading
+                            else                   extRdsDev_ += a * (rd - extRdsDev_);
+                        } else if (++extRdsBad_ * dt > 1.0) {
+                            extRdsDev_ = rd;                                  // genuinely gone
+                        }
+                    }
+                }
                 x.pilotPhaseDeg = rdsDemod_.pilotPhaseDeg();
-                x.pilotPhaseCoherence = rdsDemod_.pilotPhaseCoherence();
-                x.pilotPhaseDriftDegPerSec = rdsDemod_.pilotPhaseDriftDegPerSec();
-                x.pilotDevKHz = pll_.pilotDeviationKHz();
+                x.pilotPhaseCoherence = extCoh_;
+                x.pilotPhaseDriftDegPerSec = extDrift_;
+                x.pilotDevKHz = extPilotDev_;
                 x.mpx = mpxOut_.empty() ? nullptr : mpxOut_.data();
                 x.nMpx = (int)mpxOut_.size();
-                x.rdsDevKHz   = rdsDemod_.rdsDeviationKHz();
+                x.rdsDevKHz   = extRdsDev_;
                 cb_.rdsExt(cb_.ctx, x);
             }
             if (wantRds && pll_.trackable())

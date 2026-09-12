@@ -2188,6 +2188,15 @@ private:
     MultipathMeter ceqOut_;
     std::atomic<bool> ceqOn_{true};
     bool           ceqEngaged_ = false;
+    /* ★ The advanced-RDS panel's common observation window — see the note where these are
+     *   filled. Every scalar the panel shows is averaged over the same 1.5 s so that one frame
+     *   describes one interval rather than a mosaic of several. */
+    bool  extAvgInit_  = false;
+    float extPilotDev_ = 0.0f;
+    float extRdsDev_   = 0.0f;
+    float extCoh_      = 0.0f;
+    float extDrift_    = 0.0f;
+    int   extRdsBad_   = 0;   // consecutive unmeasurable RDS ticks
     int            ceqDwell_ = 0;
     float          ceqEffort_ = 0.0f;
     /** WHY the equaliser is not engaged: 0 running, 1 switched off, 2 signal too weak to equalise
