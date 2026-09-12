@@ -661,7 +661,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
              when the last listener leaves &mdash; a listener who turns the gain up should not leave it
              up for the next person. Applied once they have all gone rather than the moment one
              disconnects, so a page reload does not undo somebody's setting.
-             <br><span id="gainRestAgcNote" class="hide">With VibeAGC on this is the STARTING gain:
+             <br><span id="gainRestAgcNote" class="hide">With automatic RF gain on this is the STARTING gain:
              the loop begins here and is then free to move in either direction, and it returns here
              rather than being switched off when the receiver empties.</span></div></label>
 
@@ -1824,7 +1824,11 @@ function renderGain() {
    * ★ Exactly the ordering hazard this file already documents one screen up for rtlAgc — "AFTER
    *   the line above, not before it". The durable fix is not to re-order but to stop depending on
    *   the order: read the fact, not the widget that displays it. */
-  { const vibe = isRsp && !!radio().rfAgc;
+  /* ★★★ NOTHING IS TAKEN ANY MORE, so nothing is greyed. The RSP's own IF AGC runs the IF
+   *   stage again and our loop moves only the LNA, so the IF ceiling, the AGC lock and the AGC
+   *   target are all live controls once more. Kept as a flag rather than deleted at every call
+   *   site so the revert reads as one decision. */
+  { const vibe = false;
     const own = (rowId, inputId) => {
       const row = $(rowId); if (!row) return;
       row.style.opacity = vibe ? "0.5" : "";
@@ -2281,37 +2285,33 @@ async function renderHw() {
 
       <label style="display:flex;align-items:center;gap:10px;margin-top:18px">
         <input type="checkbox" id="rfAgc" style="width:16px;height:16px;accent-color:var(--amber)">
-        <span>VibeAGC &mdash; automatic gain, both stages</span></label>
-      <div class="hint"><b>VibeAGC takes the whole gain path on this radio.</b> It switches the
-        RSP's own IF AGC <em>off</em> and drives the IF gain reduction and the LNA state together,
-        from its own measurement of the signal level reaching the converter &mdash; the same way it
-        already drives an RTL-SDR's tuner gain.
-        <br><br>Why it replaced the older loop: that one steered the RF stage by watching where the
-        RSP's IF AGC settled, which made our controller's input another controller's output. Turn
-        the radio's AGC off for manual control and the RF loop went inert; lock it on for a shared
-        receiver and manual IF gain became impossible; and every LNA write is also an IF write
-        (the API has one gain update carrying both), so moving the RF stage took the register from
-        their AGC mid-loop. One owner removes all three.
-        <br><br>How it decides, which is <b>SDRplay's published policy, not our invention</b>:
-        <br>&middot; <b>The IF stage does all the routine work</b>, because reducing IF gain costs
-        less noise floor than reducing RF gain. It holds the measured level at the AGC target set
-        below, within a couple of decibels, moving a few dB at a time.
-        <br>&middot; <b>The RF gain stays as high as the converter allows</b> &mdash; the LNA is the
-        first stage, so backing it off costs the most sensitivity. It is given up only on real
-        evidence: an overload, or the IF reduction genuinely out of range at 59 dB. It is reclaimed
-        when the IF sits at 20 dB with nothing clipping.
-        <br>&middot; The two directions are deliberately <b>unequal</b> &mdash; reluctant to spend
-        RF gain, willing to take it back. A symmetric window would keep the IF comfortably in the
-        middle, which is not what the documentation asks for.
-        <br>&middot; An LNA step is worth about <b>21 dB</b> on this hardware, so each RF move
-        carries a matching IF correction in the same update. Without that every step throws the
-        level 21 dB out and the IF spends seconds walking it back, which is audible as a swell.
-        <br>&middot; Clipping outranks everything: a clipped peak cannot report how far over it is,
-        so the loop backs off decisively rather than trusting the reading.
-        <br>It respects any gain cap you have set per band, and it will not run until it has
-        actually measured something.
-        <br><br>With this on, the IF ceiling and the SDRplay AGC lock below do nothing &mdash;
-        there is no listener-set IF gain to limit, and no SDRplay AGC to lock.</div>
+        <span>Automatic RF gain</span></label>
+      <div class="hint"><b>The RSP's own IF AGC runs the IF stage; this moves the LNA to suit it.</b>
+        The tuner's AGC lives inside the SDRplay API and makes its constant small adjustments there,
+        with no USB round trip for each one &mdash; it is the part SDRplay have working well, and it
+        is left alone. All this adds is the front-end management their AGC cannot do: the RSP1A can
+        be tuned anywhere, so the right LNA state on medium wave is not the right one in Band III.
+        <br><br>How it decides, using the one number the tuner's AGC already publishes &mdash; how
+        much IF gain reduction it is currently applying:
+        <br>&middot; <b>30&ndash;50 dB of reduction is the working range.</b> Inside it, nothing
+        happens: the reduction runs 20&ndash;59 dB, so this leaves about 10 dB of room at each end
+        for the IF AGC to absorb transients &mdash; a station keying up, a fade &mdash; without the
+        LNA moving at all.
+        <br>&middot; <b>It acts outside the window, not at its edge.</b> A step is taken only once
+        the reduction is clearly past 28 or 52, so a reduction bouncing around 29&ndash;31 can do so
+        all night and nothing moves.
+        <br>&middot; <b>Judged on an average, not a sample</b>, over real time rather than a
+        handful of ticks, and the average has to stay outside twice running.
+        <br>&middot; <b>How far out decides how fast.</b> A reduction that has merely brushed 52 is
+        a preference and gets twelve seconds of thought; one hard against 59 means the IF AGC has a
+        decibel left and the next peak is simply lost, so that gets six hundred milliseconds. The
+        curve between them is quadratic, which keeps the shallow half genuinely reluctant.
+        <br>&middot; <b>One step at a time</b>, with a dwell afterwards that scales the same way.
+        <br>It respects any gain cap you have set per band.
+        <br><br>On start-up the receiver gives the tuner's AGC a short <b>kick</b> &mdash; a
+        deliberate disable/enable transition, because <code>agc.enable</code> only takes effect on a
+        change &mdash; and opens at low RF gain so the loop climbs towards a working level rather
+        than descending from an overload.</div>
 
       <label style="display:flex;align-items:center;gap:10px;margin-top:18px">
         <input type="checkbox" id="autoNotch" style="width:16px;height:16px;accent-color:var(--amber)">
@@ -2355,11 +2355,9 @@ async function renderHw() {
         <br>Ten decibels is almost exactly that peak margin, which is why it is the default. It is
         restored the moment DAB is left, because a carrier does not need the headroom and would
         only run quieter for it.
-        <br><br><b>This applies to the RSP's own IF AGC only.</b> With VibeAGC on it is not used
-        and not needed: VibeAGC measures the <em>peak</em> reaching the converter rather than the
-        average, so OFDM's peak margin is already in the reading &mdash; dropping the target ten
-        decibels on top would pay for the same headroom twice and throw away signal-to-noise.
-        VibeAGC makes its own smaller DAB correction, the same one it makes on an RTL-SDR.
+        <br><br><b>This steers the RSP's own IF AGC</b>, which is the loop that runs the IF stage
+        on this radio. The automatic RF gain above works from where that AGC settles, so lowering
+        its target for DAB shifts the whole operating point &mdash; which is the intended effect.
         <label style="display:flex;align-items:center;gap:10px;margin-top:10px">
           <span class="lbl" style="min-width:11em">DAB AGC target</span>
           <input type="range" id="dabAgcTarget" min="-60" max="-10" step="1" style="flex:1">

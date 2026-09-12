@@ -2080,8 +2080,6 @@ let hwAutoNotch = false;
  *    path) kept showing the right numbers. Stuart: "the chip is showing the LNA number but not the
  *    menu". A thrown render does not look like a crash, it looks like missing data. */
 let rspLnaN: number | null = null;
-/** ★ True while the training notice owns the status chip's text — so it can be cleared again. */
-let rspTraining = false;
 let rspLastLna: number | null = null;
 let rspLastIf: number | null = null;
 /** ★ When the RSP's gain last moved, so the status chip can breathe for a moment after. */
