@@ -2915,6 +2915,28 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      *   holding stale state. Anything derived from a counter has to be cleared when the counter
      *   is, which is why they now live beside the rest of the per-tune state in vsVibeAgcForget. */
     const unsigned win = sdrp->adcWindows();
+    /* ★★★ AND SELF-HEAL IF THE COUNTER RESTARTED UNDER US, BECAUSE NOTHING DOWNSTREAM CAN.
+     *     vsVibeAgcForget() clears this bookkeeping — but it lives BELOW this guard, so once
+     *     these marks go stale the tick returns here for ever and never reaches the code that
+     *     would fix them. Not even a retune rescues it: the retune detection is downstream too.
+     *     The loop then goes completely silent — no heartbeat, no decisions, the gain frozen
+     *     wherever it happened to be and the acquire counter never decrementing, so the client
+     *     sits on "AGC training — please wait" indefinitely. Stuart, on a strong Radio Caroline:
+     *     "0 RF gain with a strong signal on radio caroline cannot happen", "also AGC never gets
+     *     out of training mode", with one log line in ninety seconds.
+     *  ★ The counter restarts whenever the source is rebuilt — a rate change does it, so entering
+     *    or leaving DAB does it — while these marks are file statics that survive the rebuild.
+     *  ★★ A LEGITIMATE SKIP IS AT MOST TWO WINDOWS AHEAD (see where skipWin is set). Anything
+     *    further can only mean the counter went backwards, so the marks are wrong rather than the
+     *    measurement being early. Adopt the new counter instead of waiting for a window that will
+     *    never arrive.
+     *  ★★★ Third time this exact shape has cost a night: something is reset and its dependents
+     *      are left holding stale state. A guard must never be the only thing standing between a
+     *      loop and the code that would repair it. */
+    if (g_vibeAgcSkipWin > win + 2 || g_vibeAgcLastWin > win + 2) {
+        g_vibeAgcLastWin = 0;
+        g_vibeAgcSkipWin = 0;
+    }
     if (win == g_vibeAgcLastWin || win < g_vibeAgcSkipWin) return;
     g_vibeAgcLastWin = win;
 
