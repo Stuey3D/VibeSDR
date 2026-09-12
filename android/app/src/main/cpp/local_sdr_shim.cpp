@@ -3571,6 +3571,12 @@ struct LocalSdrShim::Impl {
     // the transition evidently has to happen against a LIVE stream rather than a device
     // that has merely been initialised. Stuart's suggestion, and it is the same sequence a
     // user performs by hand, just done for them a second in (2026-07-26).
+/** ★★★ WHEN THE IF AGC WAS LAST RESTARTED UNDER US, so the client can SAY SO. A re-kick
+ *  moves the gain, which moves the noise floor, and an unexplained jump in the waterfall reads
+ *  as a fault in the receiver rather than a repair. Stuart: "we need to make sure we put a chip
+ *  up saying AGC Error Reinitialiizing or something so a user knows why the noise floor has
+ *  bounced." Seconds since the steady clock's epoch; 0 = never. */
+std::atomic<long long> g_rspAgcReinitAt{0};
     int  sdrpAgcKick = 0;
     // ★ What the USER wants, which the kick must respect. Somebody deliberately running
     // manual gain would otherwise have the AGC switched back on for them a second after
@@ -7568,10 +7574,30 @@ struct LocalSdrShim::Impl {
                 if (gnow != lastGr) { lastGr = gnow; lastMove = tnow; }
                 else if (std::chrono::duration_cast<std::chrono::seconds>(tnow - lastMove).count()
                              >= 30) {
+                    /* ★★★ A RE-KICK IS NOT A COLD START. The boot kick deliberately walks the gain
+                     *     down to minimum and back, because at boot we know nothing about the
+                     *     aerial and coming UP to a working level is the only safe direction.
+                     *     None of that applies here: the radio is tuned, the listener is hearing
+                     *     something, and we already know roughly where the gain belongs. All the
+                     *     API actually needs is a CHANGE — agc.enable takes effect on a transition
+                     *     and on nothing else — so disable, nudge the reduction a couple of
+                     *     decibels where it already stands, and enable again.
+                     *  ★ Stuart: "the Kick doesnt have to be a minimum gain wiggle the gain then
+                     *    enable it again, we can simply disable agc wiggle the gain in place then
+                     *    reenable it again." Two decibels instead of forty, and the listener hears
+                     *    a blip rather than the band disappearing and coming back.
+                     *  ★★ Nudged AWAY from whichever rail it is nearest, so the wiggle is always a
+                     *    real change the tuner can act on. */
+                    const int nudged = (gnow >= 40) ? std::max(20, gnow - 2)
+                                                    : std::min(59, gnow + 2);
                     LOGI("RSP: the IF AGC has not moved off %d dB for 30 s — it is not running. "
-                         "Kicking it again.", gnow);
-                    sdrpAgcKick = 0;          // ★ replay the whole sequence; it is what works
-                    sdrpSettling = true;
+                         "Restarting it in place (%d -> %d -> AGC on).", gnow, gnow, nudged);
+                    sdrp->setIfAgc(false);
+                    sdrp->setIfGainReduction(nudged);
+                    sdrp->setIfAgc(true);
+                    g_rspAgcReinitAt.store((long long)std::chrono::duration_cast<
+                        std::chrono::seconds>(tnow.time_since_epoch()).count(),
+                        std::memory_order_relaxed);
                     lastMove = tnow;
                 }
             }
@@ -7818,7 +7844,7 @@ struct LocalSdrShim::Impl {
                      *   say — the same rule that "a client must not decide what only the server
                      *   knows" was written for. hwinfo stays as it is: this is live state, and it
                      *   belongs on the live channel. */
-                    "\"adcPeak\":%.1f,\"adcClip\":%.4f,\"lnaN\":%d}",
+                    "\"adcPeak\":%.1f,\"adcClip\":%.4f,\"lnaN\":%d,\"agcReinit\":%d}",
                     sdrp->systemGainDb(), sdrp->currentLnaState(), sdrp->currentIfGr(),
                     /* ★ CORROBORATED, not the raw latch — see overloadReal(). The badge and
                      *   VibeAGC must answer to the same fact. */
@@ -7836,7 +7862,15 @@ struct LocalSdrShim::Impl {
                      * ★ -999 means the owner never chose one; report the API's own default so the
                      *   slider has somewhere honest to sit. */
                     vsDesiredAgcSet() > -999 ? vsDesiredAgcSet() : -30,
-                    sdrp->adcPeakDbfs(), sdrp->adcClipPct(), sdrp->lnaStateCount());
+                    sdrp->adcPeakDbfs(), sdrp->adcClipPct(), sdrp->lnaStateCount(),
+                    /* ★ True for 6 s after a re-kick — long enough to be seen, short enough not
+                     *   to linger over a radio that is working again. */
+                    [&]{ const long long at = g_rspAgcReinitAt.load(std::memory_order_relaxed);
+                         if (at == 0) return 0;
+                         const long long now = (long long)std::chrono::duration_cast<
+                             std::chrono::seconds>(
+                                 std::chrono::steady_clock::now().time_since_epoch()).count();
+                         return (now - at) <= 6 ? 1 : 0; }());
                 if (need < 0 || (size_t)need >= sizeof gb)
                     LOGI("rspstat truncated (%d of %zu bytes) — not sent", need, sizeof gb);
                 else

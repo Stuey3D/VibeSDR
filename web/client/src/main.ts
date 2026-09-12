@@ -1499,6 +1499,22 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *   motionless readout reads as a broken one, and people wait for something that is already
        *   finished. */
       if (typeof m.lnaN === 'number' && m.lnaN > 0) rspLnaN = m.lnaN;
+      /* ★★★ SAY WHEN THE RADIO'S AGC HAD TO BE RESTARTED. The SDRplay API sometimes stops
+       *   running its own IF AGC while still delivering samples; the server notices the reduction
+       *   has stopped moving and restarts it in place. That moves the gain, which moves the noise
+       *   floor — and an unexplained jump in the waterfall reads as a fault in the receiver
+       *   rather than as the repair it actually is. Stuart: "we need to make sure we put a chip up
+       *   saying AGC Error Reinitialiizing or something so a user knows why the noise floor has
+       *   bounced."
+       * ★ Breathing and marked as a fault, because something DID go wrong — it is just being
+       *   handled. Six seconds, then back to whatever the chip normally shows. */
+      if (m.agcReinit) {
+        const chip = $('ovlChip');
+        chip.textContent = 'AGC stalled — reinitialising';
+        chip.classList.add('set', 'fault');
+        chip.classList.remove('easing');
+        return;
+      }
       if (vibeAgcOwnsGain() && typeof m.sysGain === 'number') {
         const chip = $('ovlChip');
         /* ★ BREATHE ONLY FOR A LARGE CHANGE, and be a plain readout otherwise — the dongle's chip
