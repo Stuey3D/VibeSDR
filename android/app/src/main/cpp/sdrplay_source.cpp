@@ -452,6 +452,20 @@ void SdrplaySource::setFrequency(double hz) {
     impl_->params->rxChannelA->tunerParams.rfFreq.rfHz = hz;
     api().Update(impl_->dev.dev, impl_->dev.tuner,
                        sdrplay_api_Update_Tuner_Frf, sdrplay_api_Update_Ext1_None);
+    /* ★★★ AND RECALIBRATE THE DC OFFSET, BECAUSE IT IS FREQUENCY-DEPENDENT TOO. It is not only
+     *     gain that shifts it — a retune does as well, and without this the correction computed
+     *     for the OLD frequency goes on being applied to the new one until the tuner's periodic
+     *     calibration next comes round. A wrong DC correction is not a null operation: it injects
+     *     an offset rather than removing one.
+     * ★★★ THIS IS THE SHAPE OF A FAULT STUART HAS SEEN FOR A LONG TIME, on FM and AM alike and
+     *     long before any AGC work: "you click on a signal and it will be all distorted broken up
+     *     and nasty, tune slightly away then back again and its perfect", and "moved to 96.6
+     *     broken and distorted so I checked the gain no overload reported so tuned to 96.7 then
+     *     back to 96.6 and it cleaned up" (2026-09-12). Tuning away and back works because the
+     *     second retune lands while the calibration has caught up. Nothing about it correlates
+     *     with signal level, which is exactly what he observed.
+     * ★ The same one call that follows a gain change — see dcRecalibrate(). */
+    dcRecalibrate();
 }
 
 void SdrplaySource::setSampleRate(double hz) {
@@ -625,7 +639,20 @@ int SdrplaySource::bandwidthKHzForRate(double fs) {
     if (k <= 200)  return 200;
     if (k <= 300)  return 300;
     if (k <= 600)  return 600;
-    if (k <= 1536) return 1536;
+    /* ★★★ 2.048 MS/s IS DAB, AND DAB WANTS THE MATCHED FILTER. The rule above — the smallest
+     *     bandwidth covering the whole SPAN — is right for a spectrum display and wrong for this
+     *     one case: at 2.048 MS/s it reaches past 1536 and picks the 5 MHz filter, so a 1.536 MHz
+     *     multiplex is received through a filter three times too wide and the ADJACENT BLOCKS
+     *     come straight in. They sit ±1.7 MHz away, well inside 5 MHz, and they then drive the
+     *     gain — which is why 10D, "wedged in between 2 much stronger blocks" (Stuart), has been
+     *     the hardest of the lot while its neighbours behaved.
+     * ★ A DAB multiplex IS 1.536 MHz. The filter and the signal are the same width, so nothing
+     *   wanted is lost and everything unwanted is rejected before it reaches the converter.
+     * ★★ The waterfall's outer edges roll off as a result, which the rule above exists to avoid.
+     *    Stuart's call, and the right one: "the waterfall is just set dressing to be honest ...
+     *    choose the best rate for DAB". On a block you are trying to decode, reception beats
+     *    display fidelity — and there is nothing outside the multiplex worth displaying anyway. */
+    if (k <= 2100) return 1536;
     if (k <= 5000) return 5000;
     if (k <= 6000) return 6000;
     if (k <= 7000) return 7000;

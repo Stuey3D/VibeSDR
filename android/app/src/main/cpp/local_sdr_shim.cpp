@@ -3373,6 +3373,69 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
         else if (ifHasRoom && !nearOverload && lna > lo) wantLna = lna - 1;   // MORE RF gain
     }
 
+    /* ══ DAB STEERS BY ITS OWN METRICS, NOT BY THE ADC LEVEL ═══════════════════════════════════
+     * ★★★ Stuart's idea, and it is the right one: "DAB can be set to a different AGC standard
+     *     like we do with the RTL. DAB gives us metrics we can adjust based on" (2026-09-12).
+     *
+     * ★★★ AND IT FIXES THE THING NOTHING ELSE COULD — PATH DEPENDENCE. He watched 10D break up,
+     *     tuned to 11A, came back to 10D and it was "super clean": same block, same aerial, two
+     *     different outcomes depending on how the loop arrived. That is inevitable for a
+     *     controller that PREDICTS a good setting from a proxy. A controller that JUDGES THE
+     *     RESULT cannot be path-dependent: it tries a change, measures whether the demodulator
+     *     liked it, and keeps the better of the two. Where it came from stops mattering.
+     *
+     * ★ The objective is the MSC bit error rate before Viterbi — the earliest honest measure of
+     *   how well the signal is actually being received, and far more meaningful here than a level.
+     *   Measured against the RTL-SDR on the same aerial, the RSP was LOSING: MER 8.8 vs 9.5 dB,
+     *   MSC 9.62% vs 7.21%, Reed-Solomon 452 lost against 12. The level loop had the level right
+     *   and the reception wrong, which is the clearest possible argument for changing the
+     *   objective rather than tuning the proxy harder.
+     *
+     * ★★ Trial and revert, one step at a time, eight seconds apart: remember the error rate, take
+     *    a step, and if the rate got materially worse put it back. Nothing to tune, no thresholds
+     *    to be wrong about, and it stops of its own accord when the decoder is already perfect —
+     *    dabDecodingPerfectly() is the same test the dongle's loop uses, and with every FIB read
+     *    and no raw errors there is nothing left to buy. */
+    if (g_dabMode.load(std::memory_order_relaxed)) {
+        const auto q = g_dab.quality();
+        static double berBefore = -1.0;
+        static int    trialFrom = -1;
+        static auto   trialAt   = clock::time_point{};
+        const bool due = trialAt.time_since_epoch().count() == 0 ||
+            std::chrono::duration_cast<std::chrono::seconds>(now - trialAt).count() >= 8;
+
+        if (!q.locked) { trialFrom = -1; berBefore = -1.0; }
+        else if (due) {
+            trialAt = now;
+            if (trialFrom >= 0) {
+                /* ★ Judge the trial. "Materially worse" is a third again — the error rate wanders
+                 *   on its own, and reverting on noise would make this oscillate as surely as
+                 *   anything else has. */
+                if (q.mscBer > berBefore * 1.33 && berBefore >= 0.0) {
+                    LOGI("VibeAGC/RSP: DAB — LNA %d made the error rate worse (%.4f%% -> %.4f%%), "
+                         "going back to %d", sdrp->currentLnaState(), berBefore * 100.0,
+                         q.mscBer * 100.0, trialFrom);
+                    LocalSdrShim::instance().setLnaState(trialFrom);
+                } else {
+                    LOGI("VibeAGC/RSP: DAB — LNA %d is as good or better (%.4f%% -> %.4f%%, "
+                         "MER %.1f dB), keeping it", sdrp->currentLnaState(), berBefore * 100.0,
+                         q.mscBer * 100.0, q.merDb);
+                }
+                trialFrom = -1;
+            }
+            else if (!dabDecodingPerfectly() && !nearOverload && lna > lo) {
+                berBefore = q.mscBer;
+                trialFrom = lna;
+                LOGI("VibeAGC/RSP: DAB — trying LNA %d for more gain (error rate %.4f%%, "
+                     "MER %.1f dB)", lna - 1, q.mscBer * 100.0, q.merDb);
+                LocalSdrShim::instance().setLnaState(lna - 1);
+            }
+        }
+        /* ★ The level loop keeps the converter in range either way; only the RF stage is handed
+         *   over here, and only while a multiplex is locked. */
+        wantLna = sdrp->currentLnaState();
+    }
+
     /* ── THE WRITE ────────────────────────────────────────────────────────────────────────────
      * ★★★ ORDER MATTERS AND IS NOT ARBITRARY. setLnaState carries the CURRENT gRdB with it (the
      *     API has one gain update and it submits both fields), so writing the LNA after the IF
@@ -4555,8 +4618,28 @@ struct LocalSdrShim::Impl {
          *     the offset in place and Stuart was asleep.
          *  ★ DO NOT RE-TRY without a bench to test on: the failure is silent and total, and the
          *    symptom (a superb prs with a dead FIC) looks nothing like a tuning problem. */
+        /* ★★★ THE RSP NEEDS ONE TOO, AND THE REASONING THAT EXCLUDED IT WAS WRONG. "An RSP has
+         *     its own DC correction" is true and beside the point: that correction ESTIMATES AND
+         *     SUBTRACTS the offset, it does not avoid it. The tuner runs zero-IF (ifType is
+         *     sdrplay_api_IF_Zero, set in sdrplay_source.cpp), so a signal tuned dead centre sits
+         *     ON the DC spike — and the DC canceller then removes part of the SIGNAL. For AM,
+         *     where the carrier is the thing at centre, it removes the carrier: what comes out is
+         *     carrier-suppressed AM, which sounds exactly like the "right distorted broken mess"
+         *     Stuart reported on Radio Caroline at 648 kHz (2026-09-12).
+         * ★★★ AND IT EXPLAINS THE SHAPE OF THE FAULT, which nothing about gain ever did:
+         *     erratic rather than consistent (it depends where the tuning lands relative to exact
+         *     centre, and on how converged the canceller is); cured by tuning away and back;
+         *     unrelated to signal level — "clearly not based on the actual signal level as that
+         *     didnt change"; and present long before any of the AGC work. He had it from the
+         *     symptom alone: "almost like the RF centre is not tuning properly... I suspect we
+         *     are still hitting a DC spike of some kind."
+         * ★ 15 kHz, the same figure the dongle uses, through the same machinery — rtlCenter +
+         *   hwOffsetHz tunes the hardware, and everything downstream already shifts back.
+         * ★★ Note the DAB warning above cuts the other way: DAB broke when the offset was REMOVED
+         *    from the dongle, so it depends on having one. Giving the RSP an offset moves it
+         *    towards the arrangement DAB is known to want, not away from it. */
         if (useHackRf()) return HW_OFFSET_HACKRF_HZ;
-        return (useSdrplay() || useAirspyHf() || useTcp() || useSpy()) ? 0.0 : HW_OFFSET_HZ;
+        return (useAirspyHf() || useTcp() || useSpy()) ? 0.0 : HW_OFFSET_HZ;
     }
 
     // Physical DC of the FFT = rtlCenter + HW_OFFSET_HZ, so the VFO (at audioFreq)

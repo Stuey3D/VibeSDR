@@ -552,11 +552,12 @@ public:
         std::lock_guard<std::mutex> lk(m_);
         return rx_.ensemble().label;
     }
-    struct Quality { bool locked; float fibRate; float nullDepthDb; double mscBer; };
+    struct Quality { bool locked; float fibRate; float nullDepthDb; double mscBer;
+                     float merDb; };   // ★ merDb: the gain loop hill-climbs on it — see vsSdrplayDabGainTick
     Quality quality() {
         std::lock_guard<std::mutex> lk(m_);
         const DabStats& s = rx_.stats();
-        return { s.locked, float(s.fibRate), s.nullDepthDb, s.mscBer };
+        return { s.locked, float(s.fibRate), s.nullDepthDb, s.mscBer, s.merDb };
     }
 
     /** The station list and the signal block, as the web client wants them. */
