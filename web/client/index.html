@@ -1215,6 +1215,11 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 .mrow label .sub { display: block; font-size: 9.5px; letter-spacing: 0.04em; opacity: 0.62;
                    text-transform: none; margin-top: 1px; }
 #gainAuto.locked { opacity: 0.55; }
+/* ★ The same treatment for the SDRplay's IF half when the owner has locked the AGC on. Greyed
+   but NOT hidden, and the readout keeps animating — a locked control still reports what the
+   radio is doing, it just will not take instructions. See syncRspAgcLock in main.ts. */
+#rspIfAgc.locked { opacity: 0.55; }
+#rspIfGr:disabled { opacity: 0.45; cursor: not-allowed; }
 /* ★★ A HEADING FOR EACH KIND OF BOOKMARK — see renderBookmarks(). Your own choices, the owner's
    saved entries and what this aerial has actually HEARD are three different claims, and they used
    to run together in one list separated only by a glyph. ★ Quiet by design: these are signposts in
@@ -2091,6 +2096,29 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   opacity: 0.55; pointer-events: none;
 }
 #rspIfGr.agc::-webkit-slider-thumb, #rspLna.agc::-webkit-slider-thumb { background: var(--text-dim); }
+/* ★ THE RADIO'S OWN IF AGC SWITCH, while VibeAGC holds it off. Same treatment as the sliders it
+   sits beside — greyed and inert, because VibeAGC re-asserts it off every tick and a button that
+   springs back reads as the radio fighting you. Its title says who has it. */
+#rspIfAgc.agc { opacity: 0.55; pointer-events: none; }
+/* ★ And the AGC target slider, which belongs to the tuner's AGC — off under VibeAGC. */
+#rspAgcSet.agc { opacity: 0.55; pointer-events: none; }
+#rspAgcSet.agc::-webkit-slider-thumb { background: var(--text-dim); }
+/* ★ The notch buttons while automatic notch filtering owns them — greyed, still showing the
+   radio's real state so you can watch them follow the dial. */
+/* ★★★ OWNED, BUT STILL READABLE — AND THIS IS THE SECOND TIME. A flat `opacity: 0.55` dims the
+   LIT state and the UNLIT state equally, so the one thing you actually need from a front-end
+   filter — is it in or out? — is exactly what it destroys. Stuart, 2026-09-11: "this filters row
+   is working but looks greyed out ... I cant tell what filters are active or not"; and again on
+   2026-09-12 with the auto-notch greying: "I cant tell if they are enabled or not as DAB should
+   be enabled". The note on button.btn:hover above records the first occurrence. I read it and
+   then made the same mistake with a different property.
+   ★ So: the on/off colours stay at FULL strength. "Not yours" is said by removing the pressable
+   affordance — no pointer, no hover — and by a dashed border, which reads as "set by something
+   else" without touching the state. The label beside the row says why. */
+#rspRfNotch.agc, #rspDabNotch.agc {
+  pointer-events: none; cursor: default; border-style: dashed;
+}
+#rspRfNotch.agc:not(.on), #rspDabNotch.agc:not(.on) { opacity: 0.75; }
 /* ★★ FIXED-WIDTH READOUTS. These values change length as they are dragged ("-30 dBfs" ->
    "-10 dBfs · drives hard"), and in a flex row that RESIZES THE SLIDER MID-DRAG — so the
    pointer suddenly maps to a different position and the value leaps (Stuart, 2026-07-26:
@@ -3835,7 +3863,7 @@ select.btn { padding: 6px 8px; }
       <span class="val" id="rspAgcSetVal">—</span>
     </div>
     <div class="mrow" id="rowRspNotch">
-      <label>FILTERS</label>
+      <label>FILTERS<span id="notchOwner" hidden style="color:var(--amber);font-size:0.8em"> · AUTO</span></label>
       <div class="seg">
         <!-- ★★ "RF NOTCH", NOT "FM NOTCH". The RSP's broadcast notch covers MW AND FM, and the API call
              behind it has always been setRfNotch — only the LABEL said FM. Someone fighting MW

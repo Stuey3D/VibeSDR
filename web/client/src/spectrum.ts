@@ -364,8 +364,17 @@ export interface SpectrumCallbacks {
    *  ★ Its own callback for the reason onTunerBw has one — onHwInfo's positional list is already
    *    past the length where a wrong argument goes unnoticed. */
   onDigitalAgc?: (on: boolean) => void;
+  /* ★★★ AND THE WHOLE MESSAGE, because rspstat has GROWN and a positional list cannot grow with
+   *     it. The server sends agcSet, rfNotch, dabNotch, autoNotch, userNotch and rfAgc; this
+   *     boundary forwarded five positional numbers and DROPPED every one of them, so the handler
+   *     in main.ts read `m.agcSet` off a variable that was never bound to this message. The
+   *     server had been telling the truth the whole time — "the AGC target slider not moving in
+   *     DAB mode", the notch indicators not tracking, the RF AGC toggle not reflecting the
+   *     server: all of it is this one dropped argument (Stuart, 2026-09-12).
+   * ★ New fields go in `msg` from here on. Do not extend the positional list again — that is the
+   *   shape that let six fields go missing without a single error anywhere. */
   onRspStat?: (systemGainDb: number, lna: number, ifgr: number, overload: boolean,
-               settling: boolean) => void;
+               settling: boolean, msg?: any) => void;
   onStatus?: (s: 'connecting' | 'open' | 'closed' | 'error', detail?: string) => void;
   /** The server is already serving someone else — do not retry. */
   onBusy?: (q?: { queuePos?: number; queueLen?: number; freeIn?: number; queueFull?: boolean }) => void;
@@ -1045,7 +1054,7 @@ export class SpectrumClient {
         break;
       case 'rspstat':
         this.cb.onRspStat?.(Number(msg.sysGain) || 0, Number(msg.lna) || 0, Number(msg.ifgr) || 0,
-                            Number(msg.overload) === 1, Number(msg.settling) === 1);
+                            Number(msg.overload) === 1, Number(msg.settling) === 1, msg);
         break;
       case 'pong':
         if (this.lastPingAt) this.cb.onRtt?.(performance.now() - this.lastPingAt);

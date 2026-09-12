@@ -1319,6 +1319,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
           : "VibeAGC \u2014 VibeSDR's own AGC for RTL-SDR. It watches the ADC for overload and moves the tuner "
             + "gain to suit. The dongle's built-in AGC is unreliable and is never used.";
       }
+      syncRspAgcLock();   // ★ the same lock, on the SDRplay's half of the panel
       // ★ Re-applied on EVERY hwinfo, because the server re-sends it when the ceiling changes —
       //   which is how the slider follows the radio down on tuning into a limited band.
       applyGainCap();
@@ -1429,7 +1430,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         }
       }, 4000);
     },
-    onRspStat: (sys, lna, ifgr, overload, settling) => {
+    onRspStat: (sys, lna, ifgr, overload, settling, m: any = {}) => {
       $('initChip').classList.toggle('set', settling);
       // Same fact, two places: beside the gain controls where it can be ACTED on, and on the
       // main screen where it will actually be seen.
@@ -1439,7 +1440,16 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       $<HTMLElement>('rspOverload').hidden = !overload;
       // ★ Show what the radio IS doing, not what the sliders were last set to — with AGC on,
       // the IF reduction is the AGC's to move, and a stale slider reading would be a lie.
-      $('rspSysGain').textContent = sys > 0 ? `${sys.toFixed(1)} dB` : '—';
+      /* ★★★ ZERO IS A READING, NOT A MISSING READING. This tested `sys > 0` and drew a dash
+       *     otherwise — but on an RSP at medium wave the LNA states are ATTENUATORS, so a total
+       *     system gain of 0.4 dB, or below zero, is the honest truth about the front end. Tuning
+       *     back to 648 kHz therefore replaced a correct number with "—", which reads as the
+       *     radio having stopped reporting (Stuart, 2026-09-12: "total system gain is 2 dashes").
+       * ★ Exactly the fault the project files under "no inferred hardware readouts": a display
+       *   that decides a real measurement is implausible and hides it. -999 is the server's
+       *   sentinel for "cannot read it"; everything else is a measurement and gets shown. */
+      $('rspSysGain').textContent =
+        (Number.isFinite(sys) && sys > -200) ? `${sys.toFixed(1)} dB` : '—';
       // ★ Under AGC the slider is the AGC's, so it is greyed and unclickable — but it keeps
       // MOVING, because watching the loop work is how you tell it is doing its job. Tweened
       // between updates so it glides rather than hopping.
@@ -1449,6 +1459,28 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  starts, so a slider rendered only from this browser's last choice is a lie the moment
        *  that happens. Respect a press in the last few seconds, exactly as setToggleTo does, or a
        *  report already in flight would drag the thumb back from under the user's finger. */
+      /* ★★★ UNDER AUTO NOTCH THE SERVER OWNS THE NOTCHES, OWNER OR NOT. The only place these
+       *     buttons were synced from the radio was the hwinfo handler, behind `rspRestricted()` —
+       *     the rule being "on an unrestricted receiver the client is the source of truth". That
+       *     rule is right for a control the client commands and WRONG for one it does not: with
+       *     automatic notch filtering on, the edges follow the VFO and the server moves them by
+       *     itself. So the owner — the one person guaranteed to be unrestricted — was the only
+       *     one who never saw them move. "I go to DAB so we keep the DAB notch enabled" (Stuart,
+       *     2026-09-12): the server had dropped it, the button just never repainted.
+       * ★ rspstat arrives continuously and carries the live state, so this is where it belongs.
+       * ★★ The RF AGC gets the same treatment unconditionally: it is a SERVER-side loop, so the
+       *    radio's report is the only truth about it on any receiver, restricted or not. */
+      /* ★ WHO OWNS THE NOTCHES. autoNotch = the server sets them from the VFO; userNotch = the
+       *  owner permits listeners to touch them at all. Both arrive on rspstat, and both have to
+       *  reach the painter below or the buttons look like yours when they are not. */
+      if (m.autoNotch !== undefined) hwAutoNotch = Number(m.autoNotch) === 1;
+      if (m.userNotch !== undefined) hwUserNotch = Number(m.userNotch) !== 0;
+      applyRspLock();
+      if (Number(m.autoNotch) === 1) {
+        if (m.rfNotch  !== undefined) setToggleTo('rspRfNotch',  Number(m.rfNotch),  'rsp_rfnotch');
+        if (m.dabNotch !== undefined) setToggleTo('rspDabNotch', Number(m.dabNotch), 'rsp_dabnotch');
+      }
+      if (m.rfAgc !== undefined) setToggleTo('rspRfAgc', Number(m.rfAgc), 'rsp_rfagc');
       if (typeof m.agcSet === 'number') {
         const el = $<HTMLInputElement>('rspAgcSet');
         const pressedAt = recentPress.get('rspAgcSet') ?? 0;
@@ -1988,6 +2020,12 @@ const ifText = () => (hwTunerBw > 0
 /** Clears the "overload passed" chip once the gain is home — see onOverload. */
 let ovlClearTimer = 0;
 let hwAgcLocked = false;
+/** ★ Automatic notch filtering is ON — the server sets both notches from the tuned frequency, so
+ *  they are not a listener control while it runs. See applyRspLock. */
+let hwAutoNotch = false;
+/** ★ The owner permits listeners to toggle the notches. Default TRUE so an older server, which
+ *  sends neither field, behaves exactly as it did before rather than greying a working control. */
+let hwUserNotch = true;
 /** The owner has FIXED the gain on this band — see the hwinfo field. Per band, so it changes as
  *  the listener tunes; every control it governs is re-applied on each hwinfo. */
 let hwGainLocked = false;
@@ -11067,18 +11105,88 @@ function rspRestricted(): boolean {
  *  one stat received before zooming was never removed — an admin could turn the AGC off and the
  *  slider STILL could not be dragged (2026-08-03). UI state must never depend on a telemetry
  *  message arriving; telemetry moves the thumb, it does not decide who owns it. */
+/** ★ ONE READER FOR ONE FACT: does VibeAGC currently own this radio's gain? Asked by the lock
+ *  painter, by every input handler and by the readout, so it is defined once. The RF AGC toggle
+ *  IS the VibeAGC switch on an RSP — it drives both stages. */
+function vibeAgcOwnsGain(): boolean {
+  return !!document.getElementById('rspRfAgc')?.classList.contains('on');
+}
+
 function applyRspLock() {
   const restricted = rspRestricted();
+  /* ★★★ VibeAGC OWNS EVERY GAIN CONTROL ON THIS RADIO, AND SAYS SO. It drives the LNA state and
+   *     the IF reduction TOGETHER from its own level measurement, and it keeps the radio's own IF
+   *     AGC switched off — so with it on, all three of those controls are its, not yours. Leaving
+   *     any of them apparently live would be the same fault this panel has produced three times
+   *     tonight: a control that accepts input and changes nothing.
+   * ★ The AGC TARGET is the deliberate exception and stays live — it is VibeAGC's own set point,
+   *   the one thing here you still steer it with. Grey what is taken, never what still works. */
+  const rfAgcBtn  = document.getElementById('rspRfAgc');
+  const vibeAgcOn = !!rfAgcBtn && rfAgcBtn.classList.contains('on');
   const agcOn = $('rspIfAgc').classList.contains('on');
   const gr = $<HTMLInputElement>('rspIfGr');
-  gr.classList.toggle('agc', agcOn || restricted);
-  /* ★ THE RF HALF, EXACTLY AS ABOVE. The RF AGC steps the LNA, so while it is on the slider is
+  gr.classList.toggle('agc', agcOn || vibeAgcOn || restricted);
+  /* ★ THE RF HALF, EXACTLY AS ABOVE. VibeAGC steps the LNA, so while it is on the slider is
    *  read-only and greyed — and still live, so you can watch it move. Guarded because an older
    *  server sends no rfAgc and the button may not exist on a non-RSP radio. */
-  const rfAgcBtn = document.getElementById('rspRfAgc');
-  const rfAgcOn  = !!rfAgcBtn && rfAgcBtn.classList.contains('on');
   const lna = document.getElementById('rspLna') as HTMLInputElement | null;
-  if (lna) lna.classList.toggle('agc', rfAgcOn || restricted);
+  if (lna) lna.classList.toggle('agc', vibeAgcOn || restricted);
+  /* ★★ AND THE RADIO'S OWN IF AGC SWITCH. VibeAGC turns it off and re-asserts that every tick, so
+   *    a listener pressing it would watch it spring back — worse than a greyed control, because
+   *    it looks like the radio fighting them. Greyed, and the title says who has it. */
+  const ifAgcBtn = document.getElementById('rspIfAgc') as HTMLButtonElement | null;
+  if (ifAgcBtn) {
+    ifAgcBtn.classList.toggle('agc', vibeAgcOn);
+    if (vibeAgcOn) ifAgcBtn.title =
+      'Handled by VibeAGC — it drives the IF and RF stages together and keeps the '
+      + "radio's own IF AGC off. Turn VibeAGC off to use it.";
+  }
+  /* ★★★ AND THE AGC TARGET, WHICH I WRONGLY KEPT LIVE. That slider is the TUNER's AGC set point
+   *     (sdrplay_api agc.setPoint_dBfs) — VibeAGC switches that AGC off, so under VibeAGC the
+   *     slider drives nothing at all. VibeAGC has its own target and works it out the same way it
+   *     does on a dongle; it is not a thing you dial in here (Stuart, 2026-09-12: "that slider is
+   *     only for the traditional IF agc"). Greyed, not hidden: it is a real control of a real
+   *     feature, just not this one. */
+  const sp = document.getElementById('rspAgcSet') as HTMLInputElement | null;
+  if (sp) sp.classList.toggle('agc', vibeAgcOn || restricted);
+  /* ★★★ THE NOTCHES, WHEN THE SERVER OWNS THEM. With automatic notch filtering on, the receiver
+   *     sets both from the tuned frequency and REFUSES a manual flip — so clicking them changed
+   *     the button, changed nothing else, and said nothing (Stuart, 2026-09-12: "oh no i turned
+   *     those on myself ... they didnt work"). Same for a listener on a receiver whose owner has
+   *     not permitted notch control.
+   * ★ Greyed and still live, like every other loop-owned control here: the state shown is the
+   *   radio's real one, and watching it change as you tune is how you can tell auto is working.
+   * ★★ Stuart asked for exactly this on the SETUP page and I applied it only there — "in auto
+   *    notch filtering mode these 2 notches need to grey out ... in auto mode they are not a user
+   *    control". One rule, two readers: the listen menu is the other reader. */
+  const notchOwned = hwAutoNotch || !hwUserNotch;
+  /* ★ SAY IT ONCE, BESIDE THE ROW, rather than by dimming the buttons — the buttons have to keep
+   *  showing which filters are IN, which is the only thing they are there to tell you. */
+  {
+    const tag = document.getElementById('notchOwner');
+    if (tag) {
+      tag.hidden = !notchOwned;
+      tag.textContent = hwAutoNotch ? ' · AUTO' : ' · OPERATOR';
+    }
+  }
+  for (const id of ['rspRfNotch', 'rspDabNotch']) {
+    const b = document.getElementById(id) as HTMLButtonElement | null;
+    if (!b) continue;
+    b.classList.toggle('agc', notchOwned);
+    b.title = hwAutoNotch
+      ? 'Set automatically from the frequency being received — the receiver keeps the notches '
+        + 'clear of the band you are on. Not a manual control while this is on.'
+      : !hwUserNotch
+      ? "This receiver's operator keeps the notches for themselves — they are part of the front "
+        + 'end, so one listener changing them changes them for everybody.'
+      : 'Front-end notch filter.';
+  }
+  if (vibeAgcOn) {
+    gr.title  = 'Handled by VibeAGC — it sets the IF gain reduction from the measured ADC level.';
+    if (lna) lna.title = 'Handled by VibeAGC — it keeps the RF gain as high as the ADC allows.';
+    if (sp)  sp.title  = "Handled by VibeAGC — this is the tuner's own AGC set point, and VibeAGC "
+                       + 'keeps that AGC switched off. VibeAGC works out its own target.';
+  }
 
   // ★ HIDDEN, not greyed, for a listener who cannot use them — a disabled control still reads
   //   as an offer, and there is nothing here for them to unlock without the password.
@@ -11111,11 +11219,17 @@ function renderRspVals() {
    *  says something is driving it; only the label says WHAT. Tonight's whole last hour was
    *  controls that were right and unreadable (Stuart, 2026-09-12: "i didnt realise that it was
    *  working"), so where a loop owns a control, the control says so. */
+  /* ★ NAMED, not just greyed. "· VibeAGC" rather than "· AGC" because on this radio there are two
+   *  different things that could be meant and they behave differently: the RADIO's IF AGC, and
+   *  ours. A label that cannot distinguish them is how "the AGC is broken" and "the AGC is fine"
+   *  were both true in the same hour. */
   const rfAgcOwns = !!document.getElementById('rspRfAgc')?.classList.contains('on');
+  const ifAgcOwns = !!document.getElementById('rspIfAgc')?.classList.contains('on');
   $('rspLnaVal').textContent =
     `${pos}/${lnaMax} · LNA ${lna}${lna === 0 ? ' · max' : lna === lnaMax ? ' · min' : ''}`
-    + (rfAgcOwns ? ' · AGC' : '');
-  $('rspIfGrVal').textContent = `${gr} dB${gr <= 20 ? ' · max gain' : gr >= 59 ? ' · min gain' : ''}`;
+    + (rfAgcOwns ? ' · VibeAGC' : '');
+  $('rspIfGrVal').textContent = `${gr} dB${gr <= 20 ? ' · max gain' : gr >= 59 ? ' · min gain' : ''}`
+    + (rfAgcOwns ? ' · VibeAGC' : ifAgcOwns ? ' · AGC' : '');
   const sp = Number($<HTMLInputElement>('rspAgcSet').value);
   // ★ Say which way it drives. "-45 dBfs" alone tells nobody whether that is more or less.
   // ★ Name the default where it sits. -30 dBFS is SDRplay's OWN working point (the API's
@@ -11130,8 +11244,13 @@ function renderRspVals() {
   // ★ dabOn, not dabState: the explicit mode flag, cleared the moment DAB ends. dabState is a
   //   report that can outlive the mode by a beat, and a label that lies for a beat is still a lie.
   const dabOwns = dabOn && sp !== AGC_DEFAULT;
-  $('rspAgcSetVal').textContent =
-    `${sp} dBfs${dabOwns ? ' · DAB' :
+  const vibeOwns = rfAgcOwns;   // ★ VibeAGC owns the target too — see applyRspLock
+  /* ★ Under VibeAGC this number describes the TUNER's AGC, which is switched off — so it is not
+   *  "the AGC target" any more, it is a setting for a loop that is not running. Say that, rather
+   *  than printing a figure that looks like it is in force. */
+  $('rspAgcSetVal').textContent = vibeOwns
+    ? `${sp} dBfs · not in use`
+    : `${sp} dBfs${dabOwns ? ' · DAB' :
        sp === AGC_DEFAULT ? ' · default' : sp >= -25 ? ' · hard' : sp <= -60 ? ' · gentle' : ''}`;
 }
 
@@ -11189,6 +11308,35 @@ function pushAllRspSettings() {
   if (!agcOn) rspSend({ ifgr: Number($<HTMLInputElement>('rspIfGr').value) });
 }
 
+/* ★★★ THE OWNER'S AGC LOCK APPLIES TO THE RSP TOO, AND MUST BE VISIBLE.
+ *   `hwAgcLocked` was wired to `gainAuto` alone — the RTL's VibeAGC button — so on an SDRplay
+ *   the lock had NO representation anywhere in the UI. The IF AGC toggle still flipped, the IF
+ *   gain slider still slid, the numbers still moved, and the server refused BOTH every time
+ *   (`AGC off refused — the owner has locked it on`, and then the RSP itself refuses a manual
+ *   gRdB while its AGC owns the register). That is exactly "IF gain does nothing in manual
+ *   mode — only RF AGC makes a difference" (Stuart, 2026-09-12): the RF half is not locked, so
+ *   it was the only half that ever moved.
+ * ★ A refused control must LOOK refused. Same rule as the auto-notch boxes and gainAuto: greyed,
+ *   still animated by the readout, and saying WHY in its title — a lock is the owner's decision,
+ *   not a fault, and an unexplained dead control reads as the latter. */
+function syncRspAgcLock() {
+  const t = document.getElementById('rspIfAgc') as HTMLButtonElement | null;
+  const gr = document.getElementById('rspIfGr') as HTMLInputElement | null;
+  if (t) {
+    t.classList.toggle('locked', hwAgcLocked);
+    if (hwAgcLocked) t.classList.add('on');      // locked ON — never show it off
+    t.title = hwAgcLocked
+      ? 'The owner has locked the IF AGC on for this receiver, so the manual IF gain is not available.'
+      : "The radio's own IF AGC. Turn it off to set the IF gain reduction by hand.";
+  }
+  if (gr) {
+    gr.disabled = hwAgcLocked;
+    gr.title = hwAgcLocked
+      ? 'Locked: the owner has locked the IF AGC on, and the AGC owns this gain.'
+      : 'IF gain reduction, in dB. Available only with the IF AGC off.';
+  }
+}
+
 function initRspControls() {
   const p = prefs();
   // Restore before wiring, so nothing fires a send with a stale value.
@@ -11202,19 +11350,26 @@ function initRspControls() {
     $(id).classList.toggle('on', on);
   }
 
+  syncRspAgcLock();
   const lna = $<HTMLInputElement>('rspLna');
   const gr  = $<HTMLInputElement>('rspIfGr');
   lna.oninput = () => {
+    if (vibeAgcOwnsGain()) return;   // ★ VibeAGC steps the LNA — see applyRspLock
     renderRspVals();
     const lnaMax = (radioCaps?.lnaStates ?? 10) - 1;
     rspSend({ lna: lnaMax - Number(lna.value) });   // slider is gain, hardware wants state
     savePref('rsp_lna', Number(lna.value));
   };
   gr.oninput  = () => {
+    // ★ VibeAGC drives this; a send would be overwritten on its next tick. See applyRspLock.
+    if (vibeAgcOwnsGain()) return;
+    if (hwAgcLocked) return;   // ★ the AGC owns this gain; sending it would be dropped in silence
     renderRspVals(); rspSend({ ifgr: Number(gr.value) }); savePref('rsp_ifgr', Number(gr.value));
   };
   const sp = $<HTMLInputElement>('rspAgcSet');
   sp.oninput = () => {
+    // ★ The tuner's AGC set point, and VibeAGC keeps that AGC off — see applyRspLock.
+    if (vibeAgcOwnsGain()) return;
     // ★ A SOFT DETENT AT THE DEFAULT. Dragging near -30 snaps to it, so getting back to
     // SDRplay's working point is a gesture rather than a pixel-hunt. Narrow enough (±2 dB)
     // that it never fights someone deliberately choosing -28 or -32.
@@ -11225,6 +11380,14 @@ function initRspControls() {
   const toggle = (id: string, key: string) => {
     const b = $<HTMLButtonElement>(id);
     b.onclick = () => {
+      // ★ The owner's lock wins BEFORE the class is toggled — otherwise the button shows "off"
+      //   for the round trip and the server answers by simply ignoring it. See syncRspAgcLock.
+      if (key === 'ifagc' && hwAgcLocked && b.classList.contains('on')) return;
+      // ★ VibeAGC keeps the radio's IF AGC off and re-asserts that every tick, so pressing this
+      //   would show it spring back — which reads as the radio fighting you. See applyRspLock.
+      if (key === 'ifagc' && vibeAgcOwnsGain()) return;
+      // ★ And the notches while the server owns them — see applyRspLock. Sending would be refused.
+      if ((key === 'rfnotch' || key === 'dabnotch') && (hwAutoNotch || !hwUserNotch)) return;
       const on = !b.classList.contains('on');
       b.classList.toggle('on', on);
       rspSend({ [key]: on ? 1 : 0 });
@@ -11244,7 +11407,8 @@ function initRspControls() {
       //   wait was the bug: on a server whose stats never arrive, the AGC could be turned off
       //   and the slider stayed read-only for ever (Stuart, 2026-08-03). ★★ BOTH loops now, or
       //   the RF slider inherits exactly the fault the IF one was cured of.
-      if (key === 'ifagc' || key === 'rfagc') applyRspLock();
+      // ★ AND THE LABELS, or the slider greys while the text beside it still claims to be yours.
+      if (key === 'ifagc' || key === 'rfagc') { applyRspLock(); renderRspVals(); }
     };
   };
   for (const [key, id] of Object.entries(RSP_TOGGLES)) toggle(id, key);

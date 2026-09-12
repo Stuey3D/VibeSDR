@@ -712,6 +712,29 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
              limit.</div></label>
 
 
+        <!-- ★★★ THE AGC's TARGET, AND WHO OWNS IT. The RSP's AGC drives towards a level, and
+             where that level sits decides how hard the front end is run — so on a shared receiver
+             it is an operator setting, not a listener one. -30 dBFS is SDRplay's OWN working point
+             (the API default of -60 is a different, far gentler thing), so that is home.
+             ★ RSP only: nothing else here has a settable AGC target. -->
+        <label class="hide" id="agcSetRow"><span class="lbl">IF AGC target</span>
+          <div class="row" style="gap:8px">
+            <input type="range" id="agcSet" min="-72" max="-10" step="1" style="flex:1 1 200px">
+            <span class="dim" id="agcSetVal" style="flex:0 0 6em;text-align:right"></span>
+          </div>
+          <div class="note">Where the AGC aims. A higher (less negative) figure asks for a louder
+            output and so applies MORE gain, which on a strong band is how a front end is overloaded;
+            a lower one runs quieter with more headroom. <b>&minus;30 dBFS is the default</b> and
+            suits most aerials.
+            <br>DAB takes this lower while it runs &mdash; see the DAB override below &mdash; and
+            gives it back on the way out.</div></label>
+        <label class="hide" id="agcSetLockRow" class="row">
+          <input type="checkbox" id="agcSetLock">
+          <span class="lbl">Lock the AGC target</span>
+          <div class="note">Listeners see it but cannot move it. Worth setting on a shared
+            receiver: the target decides how hard everyone's front end is driven, so one listener
+            winding it up is a change everybody else hears.</div></label>
+
         <label class="hide" id="gainLimitRow"><span class="lbl">Per-band ceilings</span>
           <!-- ★★★ ONE BAND'S ENTRY, DRAWN AS ONE THING. The IF ceiling and the HackRF split are
                stored PER BAND, but they were laid out on their own lines BELOW the Add button —
@@ -1736,6 +1759,9 @@ function renderGain() {
   //    setGainLimits(..., agcLock) path. Offering the AGC without the means to fix it on is half a
   //    control on a shared receiver, where any listener could otherwise turn it off for everybody.
   $("gainAgcLockRow").classList.toggle("hide", !(isRsp || isHf || isRtl));
+  // ★ RSP only — it is the only driver here with a settable AGC target.
+  $("agcSetRow").classList.toggle("hide", !isRsp);
+  $("agcSetLockRow").classList.toggle("hide", !isRsp);
   $("gainRestRow").classList.toggle("hide", !(isRtl || isRsp));
   // ★ Remembered, because layoutLockedRadio() also hides this row (a pinned window has no other
   //   bands) and must not UNHIDE it on a radio that never had per-band ceilings to begin with.
@@ -1781,6 +1807,53 @@ function renderGain() {
   $("gainLockRow").classList.toggle("hide", !(isRtl || isRsp || isHrf));
   // ★★ IF ceiling: RSP only, and only while its AGC is NOT locked on — see the note above.
   $("gainIfRow").classList.toggle("hide", !(isRsp && r.agcLock !== 1));
+  /* ★★★ VibeAGC OWNS THE GAIN PATH, SO SAY SO ON EVERY CONTROL IT TAKES. With it on there is no
+   *     listener-set IF gain to put a ceiling under, and no SDRplay AGC left to lock — it is
+   *     switched off and held off. Leaving either apparently live is the fault this project keeps
+   *     paying for: a control that accepts a setting and changes nothing (Stuart, 2026-09-12:
+   *     "make sure all the other gain settings are greyed out with Handled by VibeAGC").
+   * ★ GREYED, NOT HIDDEN. Hiding them would read as "this radio has no such setting", which is
+   *   false and would send an owner hunting. Greyed with a reason reads as "not yours right now".
+   * ★★ The per-band gain cap is NOT greyed: VibeAGC reads it as its floor, so it is still live
+   *    and still means exactly what it says. Grey what is taken, never what still works. */
+  /* ★★★ FROM THE CONFIG, NOT FROM THE CHECKBOX. This read `$("rfAgc").checked`, and that box is
+   *     populated by a DIFFERENT render function — so whenever renderGain() ran before it, the
+   *     greying was computed from an unticked box and nothing greyed, on a page that was
+   *     otherwise fully up to date (Stuart, 2026-09-12: "VibeAGC on but legacy controls still
+   *     there"). radio().rfAgc is the source of truth and is always there.
+   * ★ Exactly the ordering hazard this file already documents one screen up for rtlAgc — "AFTER
+   *   the line above, not before it". The durable fix is not to re-order but to stop depending on
+   *   the order: read the fact, not the widget that displays it. */
+  { const vibe = isRsp && !!radio().rfAgc;
+    const own = (rowId, inputId) => {
+      const row = $(rowId); if (!row) return;
+      row.style.opacity = vibe ? "0.5" : "";
+      row.style.pointerEvents = vibe ? "none" : "";
+      if (inputId && $(inputId)) $(inputId).disabled = !!vibe;
+      let tag = row.querySelector(".vibeOwned");
+      if (vibe && !tag) {
+        tag = document.createElement("span");
+        tag.className = "vibeOwned";
+        tag.style.cssText = "margin-left:8px;color:var(--amber);font-size:12px";
+        tag.textContent = "\u00b7 Handled by VibeAGC";
+        (row.querySelector(".lbl") || row).appendChild(tag);
+      } else if (!vibe && tag) tag.remove();
+    };
+    own("gainIfRow", "gainIfSlider");
+    own("gainAgcLockRow", "gainAgcLock");
+    /* ★★★ AND THE IF AGC TARGET, WHICH IS THE TUNER'S AGC SET POINT AND NOTHING ELSE.
+     *     sdrplay_api's agc.setPoint_dBfs steers the RSP's OWN IF loop; VibeAGC switches that loop
+     *     off, so under VibeAGC this slider — and its lock, and the DAB override that moves it —
+     *     drive a controller that is not running. VibeAGC works out its own target the same way it
+     *     does on a dongle (Stuart, 2026-09-12: "that slider is only for the traditional IF agc",
+     *     "let VibeAGC calculate exactly what it needs the same as it does with the RTL").
+     * ★ The DAB override goes with it for the same reason, and for one more: it exists to buy peak
+     *   headroom an AVERAGE-steered AGC cannot see. VibeAGC measures the peak, so that headroom is
+     *   already in the reading and applying the override too would drop the target twice. */
+    own("agcSetRow", "agcSet");
+    own("agcSetLockRow", "agcSetLock");
+    own("dabAgcRow", "dabAgcOverride");
+  }
   { const v = parseInt($("gainIfSlider").value, 10);
     $("gainIfVal").textContent = isFinite(v)
       ? v + " dB" + (v <= 20 ? " \u00b7 max gain" : v >= 59 ? " \u00b7 min gain" : "") : ""; }
@@ -2201,23 +2274,44 @@ async function renderHw() {
         (165&ndash;230 MHz at better than 30 dB). Note it starts at 160 MHz, so it also covers
         marine VHF.</div>
 
+      <div class="hint" id="notchAutoNote" style="display:none;margin-top:-4px">
+        <b>Automatic notch filtering is on</b>, so the two settings above are only the
+        <em>starting</em> state &mdash; the receiver sets them from the frequency being received
+        from the first retune onward. Untick it below to control them by hand.</div>
+
       <label style="display:flex;align-items:center;gap:10px;margin-top:18px">
         <input type="checkbox" id="rfAgc" style="width:16px;height:16px;accent-color:var(--amber)">
-        <span>Automatic RF gain (RF AGC)</span></label>
-      <div class="hint">The RSP's own AGC moves the <em>IF</em> gain reduction and never the LNA, so
-        when it runs out of room the front end stays wherever it was last put &mdash; half a gain
-        control. This is the other half: it watches where the IF AGC settles and moves the RF gain
-        a step at a time to keep it in its comfortable range.
-        <br>It steers by the IF reduction's resting place, targeting <b>30&ndash;50 dB</b> of the
-        20&ndash;59 dB range, which leaves about ten decibels of headroom at each end for the IF
-        loop to absorb transients on its own. It acts only outside 28/52 dB, judges on a rolling
-        average rather than a single reading, and waits longer the closer it is to the middle
-        &mdash; twelve seconds just past the trigger, under a second when the AGC is hard against
-        its limit and losing peaks.
-        <br>It will never make two moves that cancel each other out: on this hardware one LNA step
-        is worth about 20 dB, which is wider than the target window, so a step that would simply
-        undo the last one is refused and the radio is left at the closest it can get. It also
-        respects any gain cap you have set per band.</div>
+        <span>VibeAGC &mdash; automatic gain, both stages</span></label>
+      <div class="hint"><b>VibeAGC takes the whole gain path on this radio.</b> It switches the
+        RSP's own IF AGC <em>off</em> and drives the IF gain reduction and the LNA state together,
+        from its own measurement of the signal level reaching the converter &mdash; the same way it
+        already drives an RTL-SDR's tuner gain.
+        <br><br>Why it replaced the older loop: that one steered the RF stage by watching where the
+        RSP's IF AGC settled, which made our controller's input another controller's output. Turn
+        the radio's AGC off for manual control and the RF loop went inert; lock it on for a shared
+        receiver and manual IF gain became impossible; and every LNA write is also an IF write
+        (the API has one gain update carrying both), so moving the RF stage took the register from
+        their AGC mid-loop. One owner removes all three.
+        <br><br>How it decides, which is <b>SDRplay's published policy, not our invention</b>:
+        <br>&middot; <b>The IF stage does all the routine work</b>, because reducing IF gain costs
+        less noise floor than reducing RF gain. It holds the measured level at the AGC target set
+        below, within a couple of decibels, moving a few dB at a time.
+        <br>&middot; <b>The RF gain stays as high as the converter allows</b> &mdash; the LNA is the
+        first stage, so backing it off costs the most sensitivity. It is given up only on real
+        evidence: an overload, or the IF reduction genuinely out of range at 59 dB. It is reclaimed
+        when the IF sits at 20 dB with nothing clipping.
+        <br>&middot; The two directions are deliberately <b>unequal</b> &mdash; reluctant to spend
+        RF gain, willing to take it back. A symmetric window would keep the IF comfortably in the
+        middle, which is not what the documentation asks for.
+        <br>&middot; An LNA step is worth about <b>21 dB</b> on this hardware, so each RF move
+        carries a matching IF correction in the same update. Without that every step throws the
+        level 21 dB out and the IF spends seconds walking it back, which is audible as a swell.
+        <br>&middot; Clipping outranks everything: a clipped peak cannot report how far over it is,
+        so the loop backs off decisively rather than trusting the reading.
+        <br>It respects any gain cap you have set per band, and it will not run until it has
+        actually measured something.
+        <br><br>With this on, the IF ceiling and the SDRplay AGC lock below do nothing &mdash;
+        there is no listener-set IF gain to limit, and no SDRplay AGC to lock.</div>
 
       <label style="display:flex;align-items:center;gap:10px;margin-top:18px">
         <input type="checkbox" id="autoNotch" style="width:16px;height:16px;accent-color:var(--amber)">
@@ -2250,9 +2344,9 @@ async function renderHw() {
         only be undone at the next retune. Either way they are told why, rather than finding a
         control that silently does nothing.</div>
 
-      <label style="display:flex;align-items:center;gap:10px;margin-top:18px">
+      <label id="dabAgcRow" style="display:flex;align-items:center;gap:10px;margin-top:18px">
         <input type="checkbox" id="dabAgcOverride" style="width:16px;height:16px;accent-color:var(--amber)">
-        <span>Lower the IF AGC target for DAB</span></label>
+        <span class="lbl">Lower the IF AGC target for DAB</span></label>
       <div class="hint">A DAB ensemble is 1536 carriers added together, so its peaks run about
         10 dB above the average the AGC is levelling. An AGC holding the <em>average</em> at
         &minus;30 dBFS therefore lets the <em>peaks</em> clip the converter &mdash; and clipped OFDM
@@ -2261,6 +2355,11 @@ async function renderHw() {
         <br>Ten decibels is almost exactly that peak margin, which is why it is the default. It is
         restored the moment DAB is left, because a carrier does not need the headroom and would
         only run quieter for it.
+        <br><br><b>This applies to the RSP's own IF AGC only.</b> With VibeAGC on it is not used
+        and not needed: VibeAGC measures the <em>peak</em> reaching the converter rather than the
+        average, so OFDM's peak margin is already in the reading &mdash; dropping the target ten
+        decibels on top would pay for the same headroom twice and throw away signal-to-noise.
+        VibeAGC makes its own smaller DAB correction, the same one it makes on an RTL-SDR.
         <label style="display:flex;align-items:center;gap:10px;margin-top:10px">
           <span class="lbl" style="min-width:11em">DAB AGC target</span>
           <input type="range" id="dabAgcTarget" min="-60" max="-10" step="1" style="flex:1">
@@ -2361,8 +2460,59 @@ async function renderHw() {
   if ($("dabNotch")) $("dabNotch").checked = !!radio().dabNotch;
   // ★ DEFAULTS TO ON, so an undefined must read as ticked — see userNotch below for why `!!` is
   //   the wrong test for a setting whose default is true.
-  if ($("rfAgc")) $("rfAgc").checked = radio().rfAgc !== false;
+  // ★ OFF by default now — see g_rspRfAgc. `!!` is the right test again.
+  if ($("rfAgc")) $("rfAgc").checked = !!radio().rfAgc;
+  /* ★ REPAINT THE GAIN SECTION WHEN VibeAGC IS TOGGLED. renderGain() decides which gain controls
+   *  VibeAGC has taken, so it has to run again the moment that answer changes — otherwise the
+   *  rows stay as they were drawn on load and the greying only appears after a reload, which
+   *  reads as the setting not having applied. Bound once; `dataset` is the guard because this
+   *  function runs on every radio switch. */
+  if ($("rfAgc") && !$("rfAgc").dataset.vibeBound) {
+    $("rfAgc").dataset.vibeBound = "1";
+    $("rfAgc").addEventListener("change", () => {
+      // ★ renderGain reads radio().rfAgc, so commit the change there FIRST or it repaints from
+      //   the previous value — the same "read the fact, not the widget" rule, in reverse.
+      radio().rfAgc = $("rfAgc").checked;
+      try { renderGain(); } catch (e) {}
+    });
+  }
+  if ($("agcSet")) {
+    const t = $("agcSet");
+    // ★ -999 is the sentinel for "never chosen", and it is NOT a slider position — show the
+    //   radio's own working point instead, or the thumb pins to the far left and reads as a
+    //   deliberate -72 dBFS that nobody set.
+    const v = radio().agcSet;
+    t.value = String(v == null || v <= -100 ? -30 : v);
+    const show = () => { const e = $("agcSetVal");
+      if (e) e.textContent = t.value + " dBFS" + (Number(t.value) === -30 ? " · default" : ""); };
+    t.addEventListener("input", show); show();
+  }
+  if ($("agcSetLock")) $("agcSetLock").checked = !!radio().agcSetLock;
   if ($("autoNotch")) $("autoNotch").checked = !!radio().autoNotch;
+  /* ★★★ UNDER AUTOMATIC NOTCHING THE TWO TICK BOXES ARE NOT CONTROLS. They become the STARTING
+   *     state — where the filters sit before anyone has tuned anywhere — and the rule owns them
+   *     from the first retune onward. Left looking like live switches, they read as settings the
+   *     owner had turned off: "every time i enter the setup it looks like they have been user
+   *     disabled when in auto mode they are not a user control" (Stuart, 2026-09-12).
+   * ★★ Greyed and disabled, not hidden: the value still matters (it IS the starting state) and
+   *    hiding it would leave an owner unable to see what the radio comes up with. Same reasoning
+   *    as the locked sliders in the listener menu — a control whose owner is elsewhere should say
+   *    so, not vanish.
+   * ★ collect() reads .checked directly, so disabling them does not lose the value on save. */
+  const syncNotchAuto = () => {
+    const auto = !!($("autoNotch") && $("autoNotch").checked);
+    for (const id of ["rfNotch", "dabNotch"]) {
+      const el = $(id); if (!el) continue;
+      el.disabled = auto;
+      const row = el.closest("label");
+      if (row) { row.style.opacity = auto ? "0.55" : ""; row.title = auto
+        ? "Automatic notch filtering is on — this is only where the filter starts" : ""; }
+    }
+    const note = $("notchAutoNote");
+    if (note) note.style.display = auto ? "" : "none";
+  };
+  if ($("autoNotch")) $("autoNotch").addEventListener("change", syncNotchAuto);
+  syncNotchAuto();
   // ★ DEFAULTS TO ON, so an undefined must read as ticked — `!!undefined` is false and would
   //   silently switch the protection off on every receiver that upgrades.
   if ($("dabAgcOverride")) $("dabAgcOverride").checked = radio().dabAgcOverride !== false;
@@ -2951,6 +3101,8 @@ function collectRadio() {
     ...($("rfNotch")  ? {rfNotch:  $("rfNotch").checked}  : {}),
     ...($("dabNotch") ? {dabNotch: $("dabNotch").checked} : {}),
     ...($("rfAgc") ? {rfAgc: $("rfAgc").checked} : {}),
+    ...($("agcSet") ? {agcSet: +$("agcSet").value} : {}),
+    ...($("agcSetLock") ? {agcSetLock: $("agcSetLock").checked} : {}),
     ...($("autoNotch") ? {autoNotch: $("autoNotch").checked} : {}),
     ...($("dabAgcOverride") ? {dabAgcOverride: $("dabAgcOverride").checked} : {}),
     ...($("dabAgcTarget") ? {dabAgcTarget: +$("dabAgcTarget").value} : {}),
