@@ -3644,8 +3644,27 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
              *     cycle, not a resting place. kIfCeil leaves the IF somewhere it can still work in
              *     both directions after absorbing the step, so the climb has a stable fixed point:
              *     RF as high as the IF can support, and no rail to retreat from. */
-            constexpr double kIfCeil = 52.0;
-            ifHasRoom = (wantGr + cost) <= kIfCeil;
+            /* ★★★ THE COMFORTABLE CEILING IS FOR GAIN WE DO NOT NEED. THE RAIL IS THE LIMIT FOR
+             *     GAIN WE DO. Applying kIfCeil to every climb deadlocked the loop: on medium wave
+             *     the rung from LNA 6 to 5 is 18.7 dB (measured -26.3 -> -7.6), so with the IF at
+             *     37 a climb would rest it at ~56 — absorbable, the rail being 59, but above the
+             *     52 ceiling. The climb was therefore refused, while the IF would not act either
+             *     because the error was inside its deadband. Stuck at MINIMUM RF gain, 5.6 dB
+             *     under target, indefinitely.
+             *  ★ Stuart, on a band that should be full of signals: "this is where it needs to say
+             *    AGC training as it sat looking dead for a good 20 seconds", "also RF not bumping
+             *    up" — RF 0/6 and -31.3 dB of system gain on 648 kHz, where it had been finding
+             *    RF 5/6 and +27 dB with 49 dB of SNR an hour earlier.
+             *  ★★ So the two cases are separated. SHORT OF LEVEL: take the gain if the IF can
+             *    absorb it at all, because sitting under target at the bottom of the RF range
+             *    helps nobody. AT OR ABOVE TARGET: only climb if the IF would still rest
+             *    comfortably, which is what stops the opportunistic ratchet the ceiling was
+             *    added for. The anti-oscillation property is kept exactly where it was needed
+             *    and dropped exactly where it did harm. */
+            constexpr double kIfCeil = 52.0;      // where the IF should REST after a free climb
+            constexpr double kIfRail = 57.0;      // the most it may absorb when we need the gain
+            const bool needIt = err < -kDead;     // genuinely short, not merely opportunistic
+            ifHasRoom = (wantGr + cost) <= (needIt ? kIfRail : kIfCeil);
         }
     }
 

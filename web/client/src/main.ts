@@ -1506,13 +1506,27 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *   that could not appear in them. Stuart: "the agc training never comes on when first
        *   connecting". The server is the authority on whether it is training; if it says so, say
        *   so, whoever owns the gain. */
+      /* ★★★ AND IT MUST BE TAKEN DOWN BY WHOEVER PUT IT UP. Returning early here left the
+       *   notice on screen whenever the readout branch below did not run — it needs
+       *   vibeAgcOwnsGain(), so on any tick where that is false nothing overwrote the text and
+       *   "training" simply stayed there for ever. Stuart: "the VibeAGC training icon is stuck on
+       *   on 96.1", with the server reporting training:0 throughout.
+       * ★ A latch that only one branch can clear is not a state, it is a leak. `rspTraining`
+       *   records that WE own the chip's text, so we can hand it back when we are done. */
       if (m.training) {
         const chip = $('ovlChip');
         chip.textContent = 'VibeAGC training — please wait';
         chip.classList.add('set');
         chip.classList.remove('easing');     // ★ breathe: this is what the breathing is for
+        rspTraining = true;
         rspMovedAt = Date.now();
         return;
+      }
+      if (rspTraining) {
+        rspTraining = false;
+        const chip = $('ovlChip');
+        chip.textContent = '';               // ★ give it back; the branches below re-fill it
+        chip.classList.remove('set');
       }
       if (vibeAgcOwnsGain() && typeof m.sysGain === 'number') {
         const chip = $('ovlChip');
@@ -2095,6 +2109,8 @@ let hwAutoNotch = false;
  *    path) kept showing the right numbers. Stuart: "the chip is showing the LNA number but not the
  *    menu". A thrown render does not look like a crash, it looks like missing data. */
 let rspLnaN: number | null = null;
+/** ★ True while the training notice owns the status chip's text — so it can be cleared again. */
+let rspTraining = false;
 let rspLastLna: number | null = null;
 let rspLastIf: number | null = null;
 /** ★ When the RSP's gain last moved, so the status chip can breathe for a moment after. */
