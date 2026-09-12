@@ -2912,6 +2912,12 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
         if (lastRate != 0.0 && std::fabs(nowRate - lastRate) > 1.0)
             LOGI("VibeAGC/RSP: capture rate %.3f -> %.3f MS/s — re-acquiring, the level at the "
                  "converter is a different signal now", lastRate / 1e6, nowRate / 1e6);
+        /* ★★★ AND THROW AWAY THE MEASUREMENT IN FLIGHT. The window being accumulated right now
+         *     contains samples from before this change — at the old rate, the old frequency and
+         *     the old gain — and reporting them as the new signal is what made this loop
+         *     BISTABLE: 43 dB apart on alternate runs of the same DAB block. Resetting the
+         *     envelope is not enough; the thing feeding it has to be clean too. */
+        sdrp->adcRestart();
         lastHz = nowHz; lastRate = nowRate;
         peakSm = peakRaw; p1 = p2 = peakRaw;
         vsVibeAgcForget();
@@ -3380,6 +3386,20 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
          * ★ A guard against overload has no business acting when the symptom is the opposite of
          *   an overload. Below target with nothing left to give IS the evidence that conditions
          *   changed — the same evidence the slow release looks for, available immediately. */
+    /* ★★★ A SPLIT CHANGE IS LEVEL-NEUTRAL, SO THE OVERLOAD GUARD MUST NOT BLOCK IT. Raising RF
+     *     gain because the IF has slack (coldIf) is always paired with an equal INCREASE in IF
+     *     reduction — the level at the converter is unchanged by construction, only where the
+     *     gain is taken changes. It therefore cannot clip, and refusing it on the grounds that
+     *     this LNA state once overloaded is refusing a move that carries none of the risk the
+     *     guard exists to prevent.
+     * ★★★ MEASURED IN DAB, and it is the worst outcome the loop can produce: 9A settled at LNA 9
+     *     with the IF at 20 — MINIMUM RF gain and MAXIMUM IF gain, the same level taken in the
+     *     noisiest possible way. The loop had backed the RF off on a clip, learned the state, and
+     *     was then forbidden from ever rebalancing. Stuart found the thread by asking whether the
+     *     DAB notch was really deactivating (it was — the check is in the log).
+     * ★ So the guard applies to the RAIL-driven climb, which really does add gain, and stands
+     *   aside for the split-driven one, which does not. */
+        const bool splitClimb  = (coldIf >= 30);
         const bool ifOutOfGain = (wantGr <= 20) && (peak < (double)targetDbfs - 6.0);
         /* ★★★ KEEP ONE STEP IN HAND. LNA 0 is the front end wide open, and Stuart is right that
          *     maximum RF gain alongside maximum IF gain "would be too much": the ADC level we
@@ -3395,7 +3415,8 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
             wantLna = 1;
             if (lna == 1) { /* already there — nothing to do */ }
         }
-        if (wantLna < lna && badLna >= 0 && wantLna <= badLna && !ifOutOfGain) wantLna = lna;
+        if (wantLna < lna && badLna >= 0 && wantLna <= badLna && !ifOutOfGain && !splitClimb)
+            wantLna = lna;
         else if (wantLna < lna && badLna >= 0 && ifOutOfGain)
             LOGI("VibeAGC/RSP: climbing past LNA %d after all — the IF is at maximum gain and the "
                  "level is %.0f dB under target, so there is nothing left to lose",

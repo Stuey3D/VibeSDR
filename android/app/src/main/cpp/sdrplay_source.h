@@ -204,6 +204,11 @@ public:
     double adcClipPct()  const { return clipPct_.load(std::memory_order_relaxed); }
     /** Windows closed since open — 0 means nothing has been measured yet and no loop may run. */
     unsigned adcWindows() const { return windows_.load(std::memory_order_relaxed); }
+    /** Discard the measurement window in progress — call on any retune or rate change. */
+    void adcRestart() { gen_.fetch_add(1, std::memory_order_relaxed);
+                        windows_.store(0, std::memory_order_relaxed);
+                        peakDbfs_.store(-99.0, std::memory_order_relaxed);
+                        clipPct_.store(0.0, std::memory_order_relaxed); }
 
 private:
     struct Impl;
@@ -230,6 +235,11 @@ private:
     std::atomic<bool>  liveValid_{false};
     // ★ The level measurement above, filled by streamCb. Atomics because the callback is the
     //   API's thread and every reader is ours.
+    /** ★★★ BUMPED WHENEVER THE CAPTURE CHANGES UNDER US (rate, frequency, gain re-plan), so the
+     *  measurement window in progress is DISCARDED rather than averaged across the change. A
+     *  window that straddles a retune contains samples taken at the old rate and the old gain,
+     *  and reports them as if they were the new signal. */
+    std::atomic<unsigned> gen_{0};
     std::atomic<double>   peakDbfs_{-99.0};
     std::atomic<double>   clipPct_{0.0};
     std::atomic<unsigned> windows_{0};

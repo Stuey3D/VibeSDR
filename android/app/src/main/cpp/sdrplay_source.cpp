@@ -270,7 +270,8 @@ struct CbCtx { std::vector<int16_t>* ilv; SdrplaySource::IqSink* sink; bool* los
                std::atomic<bool>* valid;
                // ★ OUR OWN LEVEL MEASUREMENT — see adcPeakDbfs() in the header for why the RSP
                //   needs one of its own rather than borrowing the AGC's reduction figure.
-               std::atomic<double>* peak; std::atomic<double>* clip; std::atomic<unsigned>* wins; };
+               std::atomic<double>* peak; std::atomic<double>* clip; std::atomic<unsigned>* wins;
+               std::atomic<unsigned>* gen; };
 }
 
 bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
@@ -359,7 +360,7 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
     static CbCtx ctx;
     ctx = CbCtx{ &impl_->ilv, &sink_, &lost_, &paused_, &overload_, impl_->dev.dev,
                  &liveGr_, &liveLna_, &liveGain_, &liveValid_,
-                 &peakDbfs_, &clipPct_, &windows_ };
+                 &peakDbfs_, &clipPct_, &windows_, &gen_ };
     sdrplay_api_CallbackFnsT fns{};
     fns.StreamACbFn = &streamCb;
     fns.StreamBCbFn = nullptr;
@@ -491,7 +492,7 @@ bool SdrplaySource::restartStream(std::string& err) {
     static CbCtx ctx;
     ctx = CbCtx{ &impl_->ilv, &sink_, &lost_, &paused_, &overload_, impl_->dev.dev,
                  &liveGr_, &liveLna_, &liveGain_, &liveValid_,
-                 &peakDbfs_, &clipPct_, &windows_ };
+                 &peakDbfs_, &clipPct_, &windows_, &gen_ };
     sdrplay_api_CallbackFnsT fns{};
     fns.StreamACbFn = &streamCb;
     fns.StreamBCbFn = nullptr;
@@ -937,6 +938,16 @@ static void streamCb(short* xi, short* xq, sdrplay_api_StreamCbParamsT*,
          *   and this build opens one device. */
         static int      wPeak  = 0;
         static uint64_t wRails = 0, wTotal = 0;
+        /* ★★★ THROW THE PART-BUILT WINDOW AWAY WHEN THE CAPTURE CHANGED. Without this a window
+         *     straddling a retune or a rate change reports samples taken at the OLD gain as the
+         *     new signal — a spuriously high peak, which the envelope then holds through its
+         *     decay delay, leaving the gain slammed down for a signal that was never there.
+         *     Measured as BISTABILITY: the same DAB block settling at -11.6 dB or +31.8 dB on
+         *     alternate runs, 43 dB apart, each perfectly stable, depending purely on whether the
+         *     first window happened to straddle the change. */
+        static unsigned lastGen = 0;
+        const unsigned g = c->gen ? c->gen->load(std::memory_order_relaxed) : 0;
+        if (g != lastGen) { lastGen = g; wPeak = 0; wRails = 0; wTotal = 0; }
         if (peak > wPeak) wPeak = peak;
         wRails += rails; wTotal += numSamples;
         if (wTotal >= 200000) {                    // ~0.1 s at 2 MSPS; rate-independent enough
