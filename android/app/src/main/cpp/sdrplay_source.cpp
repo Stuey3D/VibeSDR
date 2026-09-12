@@ -448,6 +448,18 @@ void SdrplaySource::close() {
 }
 
 void SdrplaySource::setFrequency(double hz) {
+    /* ★★★ UNDER THE SAME LOCK AS THE GAIN WRITES, OR THE TUNE CAN BE LOST. Every other writer
+     *     of the device parameter block takes api_mtx — setLnaState, setIfGainReduction,
+     *     setSampleRate — and this one did not. The tune runs on the hardware-writer thread while
+     *     the gain loop writes from its own, both mutating impl_->params and both calling
+     *     Update() on the same device.
+     *  ★ It became a live fault the moment the gain loop started writing AT RETUNE TIME (the
+     *     remembered resting gain), which is precisely when the frequency write is in flight.
+     *     Stuart: "large jumps seems to make the signal misaligned", "had to move up 200KHz and
+     *     back again" — a small move only shifts the VFO inside the existing capture and never
+     *     touches the hardware, which is exactly why only LARGE jumps showed it.
+     *  ★★ The mutex is recursive, so callers already holding it are unaffected. */
+    std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
     if (!open_ || !impl_->params || !impl_->params->rxChannelA) return;
     curCentre_ = hz;                      // remembered for reopen()
     impl_->params->rxChannelA->tunerParams.rfFreq.rfHz = hz;

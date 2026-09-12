@@ -2801,6 +2801,14 @@ static int g_vibeAgcAcquire = 0;
  *    it takes, and the fault was never the waiting, it was the silence. */
 static std::atomic<bool> g_vibeAgcTraining{false};
 
+/** ★ Set on every retune: the envelope must be re-seeded from the first measurement that
+ *  actually belongs to the new frequency, never from the one taken before the change. */
+static bool g_vibeAgcReseed = false;
+/** ★ A remembered resting gain waiting to be applied — set at the retune, written a tick later
+ *  so it never shares an instant with the frequency write. -1 = nothing pending. */
+static int g_restorePendLna = -1;
+static int g_restorePendGr  = -1;
+
 /** ★★★ WHERE THE GAIN CAME TO REST NEAR A GIVEN FREQUENCY, so a return visit starts there
  *  rather than climbing from the driver's default.
  *  ★ KEYED BY FREQUENCY, NOT BY THE GAIN-TABLE BAND. My first version used the API's band id,
@@ -2958,6 +2966,7 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
     const double peakRaw = sdrp->adcPeakDbfs();
     const double clip    = sdrp->adcClipPct();
 
+
     /* ★★★ FORGET EVERYTHING ON A RETUNE. Every piece of state below — which LNA state overloaded,
      *     how long it has been clean, how long a rail has been held — is a fact about ONE place on
      *     the dial with ONE signal in front of it. Carried across a retune it is not caution, it
@@ -2982,6 +2991,24 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
     /* ★ The last two raw windows, for the median filter below — declared here so the retune
      *   reset can clear them with everything else. */
     static double p1 = -99.0, p2 = -99.0;
+    /* ★ The first measurement after a retune IS the new frequency's level — adopt it whole
+     *   rather than letting the slow envelope walk to it from the old band's value. */
+    /* ★ The tune has landed by now, so a remembered resting gain can go in safely. */
+    if (g_restorePendLna >= 0) {
+        const int wantL = g_restorePendLna, wantG = g_restorePendGr;
+        g_restorePendLna = g_restorePendGr = -1;
+        if (wantL != sdrp->currentLnaState() || wantG != sdrp->currentIfGr()) {
+            LOGI("VibeAGC/RSP: starting from where this neighbourhood settled last time — "
+                 "LNA %d, IF reduction %d dB", wantL, wantG);
+            LocalSdrShim::instance().setLnaState(wantL);
+            sdrp->setIfGainReduction(wantG);
+        }
+    }
+    if (g_vibeAgcReseed) {
+        g_vibeAgcReseed = false;
+        g_vibeAgcEnv = peakRaw; p1 = p2 = peakRaw;
+        LOGI("VibeAGC/RSP: first look at the new frequency — %.1f dBFS", peakRaw);
+    }
     /* ★★★ A SAMPLE-RATE CHANGE IS A RETUNE TOO, AND DAB IS NOTHING BUT. Entering DAB drops the
      *     capture to 2.048 MS/s and re-centres on the multiplex — the level at the converter
      *     changes completely, and the frequency test above does not see it, because this watched
@@ -3005,7 +3032,20 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
          *     envelope is not enough; the thing feeding it has to be clean too. */
         sdrp->adcRestart();
         lastHz = nowHz; lastRate = nowRate;
-        g_vibeAgcEnv = peakRaw; p1 = p2 = peakRaw;
+        /* ★★★ AND DO NOT SEED THE ENVELOPE FROM THE READING WE JUST THREW AWAY. This said
+         *     `g_vibeAgcEnv = peakRaw`, and peakRaw was sampled at the top of this function —
+         *     BEFORE adcRestart() — so the envelope for the new frequency was initialised with the
+         *     level of the OLD one. Arriving on FM from a quiet 648 kHz, the loop began convinced
+         *     the band was that quiet and climbed to maximum RF gain.
+         *  ★ MEASURED, TWICE ON THE SAME FREQUENCY SIX MINUTES APART: 96.6 MHz settled at 85.5 dB
+         *    of system gain arriving from medium wave, and at 25.2 dB arriving from within FM.
+         *    Stuart, who lives with this one: "I had to tune away and back again, the gain looked
+         *    fine", and separately "it was like the tuning was misaligned when tuning to it" — the
+         *    front end really is overloaded in the first case, on his strongest local signal, so
+         *    it sounds like a mistuned radio rather than a gain fault.
+         *  ★★ The restart zeroes the window counter, and nothing below runs until a window closes
+         *    again, so the NEXT tick carries a peak that genuinely belongs here. Seed from that. */
+        g_vibeAgcReseed = true;
         vsVibeAgcForget();
         LOGI("VibeAGC/RSP: retuned to %.3f MHz — forgetting the previous gain lesson", nowHz / 1e6);
         /* ★★★ BUT START FROM WHERE THIS BAND SETTLED LAST TIME, IF WE KNOW IT. Forgetting the
@@ -3021,14 +3061,14 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
          *    so a remembered value that has gone stale costs one correction — far less than the
          *    climb it replaces. Per band, because that is the granularity at which the gain
          *    tables, the noise floor and the signals all change together. */
+        /* ★★★ REMEMBER IT NOW, WRITE IT ON THE NEXT TICK. Writing the gain here put two threads
+         *     into the device parameter block at the same instant — this one and the hardware
+         *     writer carrying the frequency — and the tune is what lost. The lock in
+         *     setFrequency() closes that race properly, but there is no reason to be in the same
+         *     moment at all: one tick later the radio has landed and the write is uneventful. */
         if (const GainRest* rest = gainRestFor(nowHz)) {
-            const int wantL = rest->lna, wantG = rest->gr;
-            if (wantL != sdrp->currentLnaState() || wantG != sdrp->currentIfGr()) {
-                LOGI("VibeAGC/RSP: starting from where this band settled last time — LNA %d, "
-                     "IF reduction %d dB", wantL, wantG);
-                LocalSdrShim::instance().setLnaState(wantL);
-                sdrp->setIfGainReduction(wantG);
-            }
+            g_restorePendLna = rest->lna;
+            g_restorePendGr  = rest->gr;
         }
     }
     /* ★★★ SYMMETRIC AND SLOW — FAST-ATTACK IS WRONG FOR THIS SIGNAL. My first version believed a

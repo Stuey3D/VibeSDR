@@ -750,7 +750,32 @@ void RxPipeline::feed(const cf32* iq, int n) {
         if (mode_ == Mode::WFM) {
             const bool ceqAllowed = ceqOn_.load(std::memory_order_relaxed);
             const bool strongEnough = blendSnrDb_ > 18.0f;
-            const bool worthIt = multipathValid_ && multipathCorr_ > 0.06f;
+            /* ★★★ HYSTERESIS, BECAUSE ONE THRESHOLD ON A WANDERING MEASUREMENT IS A FLAP. This
+             *     engaged above 6 % multipath and disengaged below the same 6 %, so a signal
+             *     sitting near that figure walks in and out of equalisation for ever — and every
+             *     crossing calls ceq_.reset(), which restarts a blind CMA equaliser from nothing
+             *     in the middle of a composite that was perfectly good. The damage is done by the
+             *     TRANSITIONS, not by the steady state, which is why the readout can honestly say
+             *     "standing by · nothing to correct" while the audio is being wrecked.
+             *  ★ Stuart's A/B on 96.6 MHz, his strongest local signal, seconds apart — multipath
+             *     5.0 % with CEQ on and 5.4 % with it off, both within a whisker of the 6 % line:
+             *         CEQ on — RDS errors 12 %, RDS deviation 0.0 kHz (no subcarrier at all),
+             *                  pilot 5.5 kHz "low", 80 % constellation scatter, blend down to 13.7 k
+             *         CEQ off — RDS errors 0 %, deviation 0.6 kHz, pilot 6.6 kHz nominal,
+             *                  38 % scatter, "clean · no treatment"
+             *     The RDS constellation told it plainest: two clean BPSK lobes became a rotating
+             *     smear, and the RDS-to-pilot rotation went from 3°/s to 7°/s. An equaliser that
+             *     rotates the composite is adding group delay, not removing it.
+             *  ★★ So: engage only at 12 %, where a reflection is not in doubt, and do not let go
+             *     until 5 %. Two thresholds that cannot meet, on a measurement that wanders by a
+             *     point either way. "The CEQ we built and tested on RTL-SDR's is damaging here"
+             *     (Stuart, 2026-09-12) — it was built against a front end whose multipath figure
+             *     sat somewhere else entirely.
+             *  ★★★ The same fault shape as the AGC window narrower than one LNA step, and the
+             *      SECOND time today a single threshold on a noisy quantity has produced an
+             *      oscillation nobody could see from the logs. */
+            const bool worthIt = multipathValid_ &&
+                (ceqEngaged_ ? multipathCorr_ > 0.05f : multipathCorr_ > 0.12f);
             const bool want = ceqAllowed && worthIt && strongEnough;
             // ★★ SAY WHICH CONDITION FAILED. "Standing by" is honest but useless on its own: the
             //    owner cannot tell whether the equaliser has declined, is broken, or is waiting for
