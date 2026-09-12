@@ -1824,41 +1824,11 @@ function renderGain() {
    * ★ Exactly the ordering hazard this file already documents one screen up for rtlAgc — "AFTER
    *   the line above, not before it". The durable fix is not to re-order but to stop depending on
    *   the order: read the fact, not the widget that displays it. */
-  /* ★★★ NOTHING IS TAKEN ANY MORE, so nothing is greyed. The RSP's own IF AGC runs the IF
-   *   stage again and our loop moves only the LNA, so the IF ceiling, the AGC lock and the AGC
-   *   target are all live controls once more. Kept as a flag rather than deleted at every call
-   *   site so the revert reads as one decision. */
-  { const vibe = false;
-    const own = (rowId, inputId) => {
-      const row = $(rowId); if (!row) return;
-      row.style.opacity = vibe ? "0.5" : "";
-      row.style.pointerEvents = vibe ? "none" : "";
-      if (inputId && $(inputId)) $(inputId).disabled = !!vibe;
-      let tag = row.querySelector(".vibeOwned");
-      if (vibe && !tag) {
-        tag = document.createElement("span");
-        tag.className = "vibeOwned";
-        tag.style.cssText = "margin-left:8px;color:var(--amber);font-size:12px";
-        tag.textContent = "\u00b7 Handled by VibeAGC";
-        (row.querySelector(".lbl") || row).appendChild(tag);
-      } else if (!vibe && tag) tag.remove();
-    };
-    own("gainIfRow", "gainIfSlider");
-    own("gainAgcLockRow", "gainAgcLock");
-    /* ★★★ AND THE IF AGC TARGET, WHICH IS THE TUNER'S AGC SET POINT AND NOTHING ELSE.
-     *     sdrplay_api's agc.setPoint_dBfs steers the RSP's OWN IF loop; VibeAGC switches that loop
-     *     off, so under VibeAGC this slider — and its lock, and the DAB override that moves it —
-     *     drive a controller that is not running. VibeAGC works out its own target the same way it
-     *     does on a dongle (Stuart, 2026-09-12: "that slider is only for the traditional IF agc",
-     *     "let VibeAGC calculate exactly what it needs the same as it does with the RTL").
-     * ★ The DAB override goes with it for the same reason, and for one more: it exists to buy peak
-     *   headroom an AVERAGE-steered AGC cannot see. VibeAGC measures the peak, so that headroom is
-     *   already in the reading and applying the override too would drop the target twice. */
-    own("agcSetRow", "agcSet");
-    own("agcSetLockRow", "agcSetLock");
-    own("dabAgcRow", "dabAgcOverride");
-  }
-  { const v = parseInt($("gainIfSlider").value, 10);
+  /* ★★★ THE "HANDLED BY VibeAGC" GREYING IS GONE. VibeAGC was an RSP loop that drove the IF
+   *   reduction and the LNA together, and it is retired: the radio's own IF AGC runs the IF stage
+   *   again and our automatic RF gain moves only the LNA. So the IF ceiling, the AGC lock and the
+   *   AGC target are the owner's controls once more, live and ungreyed, and nothing on this page
+   *   claims otherwise. */  { const v = parseInt($("gainIfSlider").value, 10);
     $("gainIfVal").textContent = isFinite(v)
       ? v + " dB" + (v <= 20 ? " \u00b7 max gain" : v >= 59 ? " \u00b7 min gain" : "") : ""; }
   // ★★ The split is a HackRF question and only when THIS band is being fixed; as a limiter the

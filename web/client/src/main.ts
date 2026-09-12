@@ -1519,42 +1519,6 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         chip.classList.remove('easing');     // ★ breathe: it is working, not stuck
         return;
       }
-      if (vibeAgcOwnsGain() && typeof m.sysGain === 'number') {
-        const chip = $('ovlChip');
-        /* ★ BREATHE ONLY FOR A LARGE CHANGE, and be a plain readout otherwise — the dongle's chip
-         *   behaves this way and it is the right instinct: the IF nudges a decibel or two as a
-         *   matter of routine, and a chip that flickers at every nudge stops meaning anything.
-         *   An LNA step is coarse (7-25 dB on this radio) and always worth announcing; an IF move
-         *   has to be worth a listener's attention before it earns the animation.
-         *   Stuart: "just the bar at the bottom breathe when AGC making large changes and just a
-         *   readout otherwise like the RTL" (2026-09-12). */
-        const bigMove = (rspLastLna !== null && lna !== rspLastLna)
-                     || (rspLastIf  !== null && Math.abs(ifgr - rspLastIf) >= 6);
-        if (bigMove) rspMovedAt = Date.now();
-        rspLastLna = lna; rspLastIf = ifgr;
-        const busy = Date.now() - rspMovedAt < 2500;
-        /* ★★★ SHOW RF GAIN, NOT THE RAW LNA STATE. The state number runs BACKWARDS — 0 is
-         *   maximum RF gain and the highest state is minimum — so "LNA 1" reads as "nearly
-         *   nothing" to anyone who has not learned the inversion, when it actually means one step
-         *   short of wide open. Stuart: "anybody not in the know would think the LNA was at its
-         *   minimum not 1 off maximum". The menu already says 5/6; the chip now agrees with it.
-         * ★ Out of the LIVE state count, which is per band — seven rungs on medium wave, ten in
-         *   Band III — so the denominator tells the truth about the range as well. */
-        const rfMax = (rspLnaN ?? radioCaps?.lnaStates ?? 10) - 1;
-        const rf = rfMax - lna;
-        /* ★★★ SAY SO WHILE IT IS STILL FINDING THE GAIN. On a fresh connection the RSP opens at a
-         *   default gain and the loop climbs from there, which for those few seconds looks
-         *   identical to a dead band — empty waterfall, no signals — and a new listener concludes
-         *   the receiver is broken rather than busy. Stuart: "the gain starts low and the band
-         *   looks dead, we need to put something like AGC TRAINING PLEASE WAIT".
-         * ★ It breathes throughout, because this is precisely the moment the breathing is FOR. */
-        chip.textContent = `VibeAGC ${m.sysGain.toFixed(1)} dB · RF ${rf}/${rfMax} · IF ${ifgr}`;
-        chip.classList.add('set');
-        // ★ breathing while it works (no .easing), calm once it has settled — and red if the
-        //   converter is actually railing, which outranks both.
-        chip.classList.toggle('easing', !busy);
-        chip.classList.toggle('fault', Number(m.adcClip) >= 0.01);
-      }
       if (agcOn) {
         // ★ Telemetry MOVES the thumb; it does not decide who owns it. Watching the reduction
         //   ride up and down is the only evidence a listener has that the AGC is alive.
@@ -11186,27 +11150,12 @@ function rspRestricted(): boolean {
  *  one stat received before zooming was never removed — an admin could turn the AGC off and the
  *  slider STILL could not be dragged (2026-08-03). UI state must never depend on a telemetry
  *  message arriving; telemetry moves the thumb, it does not decide who owns it. */
-/** ★ ONE READER FOR ONE FACT: does VibeAGC currently own this radio's gain? Asked by the lock
- *  painter, by every input handler and by the readout, so it is defined once. The RF AGC toggle
- *  IS the VibeAGC switch on an RSP — it drives both stages. */
-function vibeAgcOwnsGain(): boolean {
-  /* ★★★ NOTHING. VibeAGC NO LONGER OWNS ANY GAIN CONTROL ON AN RSP.
-   *     The radio's own IF AGC runs the IF stage again — it lives inside the SDRplay API, makes
-   *     its constant small adjustments with no USB round trip, and has run Stuart's RSP1B for
-   *     weeks without trouble. Our RF AGC moves the LNA from the reduction that AGC reports, and
-   *     that is the whole of our involvement.
-   *  ★ Driving gRdB from out here is what wedged the API repeatedly: writes stopped being
-   *    honoured while samples kept flowing, so the panel read 0 RF gain while the front end was
-   *    overloading. SDRplay's own documentation says IFGR cannot be adjusted with their AGC
-   *    enabled, and this file's own comment called doing it anyway "the bodge that makes SDRplay
-   *    AGC behave worse under third-party software than under SDRuno".
-   *  ★★ So every control this used to grey out is live again: the RF gain slider, the IF gain
-   *    slider, the radio's IF AGC switch and its target. The RF AGC enable and lock toggles are
-   *    once more the only thing VibeSDR adds here.
-   *  ★★★ Left as a function returning false rather than deleted at every call site, so the
-   *      revert is one obvious line rather than a hundred scattered edits made at the end of a
-   *      long night. The dead branches come out in a separate, behaviour-free pass. */
-  return false;
+/** ★ Is the automatic RF gain driving the LNA? The only loop VibeSDR runs on an SDRplay: it
+ *  moves the LNA from the IF AGC's reported reduction and touches nothing else. The radio's own
+ *  IF AGC owns the IF stage, so the IF reduction, its AGC switch and its target all remain the
+ *  owner's controls. (VibeAGC is an RTL-SDR loop and has no part on this radio.) */
+function rfAgcDrivesLna(): boolean {
+  return !!document.getElementById('rspRfAgc')?.classList.contains('on');
 }
 
 function applyRspLock() {
@@ -11399,7 +11348,17 @@ function pushAllRspSettings() {
    *     is not an instruction to move the front end.
    * ★ The notches, bias-tee and AGC target still go, because those are genuinely the owner's
    *   remembered choices and VibeAGC does not touch them. */
-  const gainIsOurs = !vibeAgcOwnsGain();
+  /* ★★★ AND THE PREDICATE MUST NAME THE LOOP THAT IS ACTUALLY DRIVING. This asked
+   *   !vibeAgcOwnsGain(), which was right while VibeAGC drove both stages — and became ALWAYS
+   *   TRUE the moment that loop was retired, so every connect and every page refresh began
+   *   pushing this browser's remembered LNA position at the radio again, stamping over whatever
+   *   the RF AGC had just placed. Stuart, seconds after opening the page: "0/6 41 IF -14.3 the
+   *   EXACT SAME as previously" — the server log showed it had settled at LNA 3 with the IF at
+   *   50, and the browser put it straight back.
+   * ★ The question was never "is VibeAGC on", it is "is anything automatic driving the LNA". On
+   *   this radio that is the RF AGC toggle, so ask that. A client that reloads is not an
+   *   instruction to move the front end. */
+  const gainIsOurs = !rfAgcDrivesLna();
   rspSend({
     ...(gainIsOurs ? { lna: lnaMax - Number($<HTMLInputElement>('rspLna').value) } : {}),
     agcset:   Number($<HTMLInputElement>('rspAgcSet').value),
@@ -11410,7 +11369,9 @@ function pushAllRspSettings() {
   // ★ AGC last, and the IF reduction only when it is OFF — the server refuses a manual
   // IFGR while the AGC owns the register, so sending them the other way round would drop
   // the value silently.
-  if (gainIsOurs) {
+  /* ★ The IF AGC switch is the owner's own choice and always goes; it is the manual IF
+   *   REDUCTION that must not be pushed while that AGC owns the register. */
+  {
     const agcOn = $('rspIfAgc').classList.contains('on');
     rspSend({ ifagc: agcOn ? 1 : 0 });
     if (!agcOn) rspSend({ ifgr: Number($<HTMLInputElement>('rspIfGr').value) });
@@ -11463,22 +11424,21 @@ function initRspControls() {
   const lna = $<HTMLInputElement>('rspLna');
   const gr  = $<HTMLInputElement>('rspIfGr');
   lna.oninput = () => {
-    if (vibeAgcOwnsGain()) return;   // ★ VibeAGC steps the LNA — see applyRspLock
+    /* ★ The automatic RF gain steps the LNA, so a manual move here would be undone on its next
+     *   decision. The IF reduction and the AGC target are NOT guarded: those belong to the
+     *   radio's own IF AGC, which is a different loop and still the owner's to steer. */
+    if (rfAgcDrivesLna()) return;
     renderRspVals();
     const lnaMax = (rspLnaN ?? radioCaps?.lnaStates ?? 10) - 1;
     rspSend({ lna: lnaMax - Number(lna.value) });   // slider is gain, hardware wants state
     savePref('rsp_lna', Number(lna.value));
   };
   gr.oninput  = () => {
-    // ★ VibeAGC drives this; a send would be overwritten on its next tick. See applyRspLock.
-    if (vibeAgcOwnsGain()) return;
     if (hwAgcLocked) return;   // ★ the AGC owns this gain; sending it would be dropped in silence
     renderRspVals(); rspSend({ ifgr: Number(gr.value) }); savePref('rsp_ifgr', Number(gr.value));
   };
   const sp = $<HTMLInputElement>('rspAgcSet');
   sp.oninput = () => {
-    // ★ The tuner's AGC set point, and VibeAGC keeps that AGC off — see applyRspLock.
-    if (vibeAgcOwnsGain()) return;
     // ★ A SOFT DETENT AT THE DEFAULT. Dragging near -30 snaps to it, so getting back to
     // SDRplay's working point is a gesture rather than a pixel-hunt. Narrow enough (±2 dB)
     // that it never fights someone deliberately choosing -28 or -32.
@@ -11492,9 +11452,6 @@ function initRspControls() {
       // ★ The owner's lock wins BEFORE the class is toggled — otherwise the button shows "off"
       //   for the round trip and the server answers by simply ignoring it. See syncRspAgcLock.
       if (key === 'ifagc' && hwAgcLocked && b.classList.contains('on')) return;
-      // ★ VibeAGC keeps the radio's IF AGC off and re-asserts that every tick, so pressing this
-      //   would show it spring back — which reads as the radio fighting you. See applyRspLock.
-      if (key === 'ifagc' && vibeAgcOwnsGain()) return;
       // ★ And the notches while the server owns them — see applyRspLock. Sending would be refused.
       if ((key === 'rfnotch' || key === 'dabnotch') && (hwAutoNotch || !hwUserNotch)) return;
       const on = !b.classList.contains('on');

@@ -11184,7 +11184,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (wantsManual && g_dabMode.load(std::memory_order_relaxed)
                     && g_rtlAgc.load(std::memory_order_relaxed)) {
                     g_rtlAgc.store(false, std::memory_order_relaxed);
-                    LOGI("DAB: manual gain set — VibeAGC off, the listener has taken the gain");
+                    LOGI("DAB: manual gain set — the listener has taken the gain");
                 }
             }
             /* ★★★ AND THE CEILING CAN BE A SETTING RATHER THAN A LIMIT. With the gain lock on, a
