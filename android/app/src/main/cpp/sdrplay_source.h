@@ -186,6 +186,12 @@ public:
      *  precisely what destroys RDS, so it is worth shouting about (Stuart, 2026-07-26).
      *  ★ The event MUST be acknowledged or the API stops sending them. */
     bool overloaded() const { return overload_; }
+    /** ★★★ HAS THE API ITSELF REPORTED A FAILURE? Set from sdrplay_api_DeviceFailure, which is
+     *  the library saying it has fallen over in its own words — no inference from behaviour, and
+     *  so no false positives on a radio that is merely settled. Cleared by the caller once it has
+     *  acted on it. */
+    bool apiFailed() const { return apiFailed_.load(std::memory_order_relaxed); }
+    void clearApiFailed() { apiFailed_.store(false, std::memory_order_relaxed); }
 
     /** Ask the tuner to recalibrate its DC offset now — the offset is gain-dependent, so this is
      *  called after every gain change. See the definition for why it matters. */
@@ -252,6 +258,7 @@ private:
     int    curGain_   = -1;
     bool paused_ = false;
     bool overload_ = false;
+    std::atomic<bool> apiFailed_{false};
     // ★★★ THE AGC'S OWN NUMBERS, from the gain-change EVENT. The API reports what the loop has
     //     actually done here; our copy of tunerParams.gain is only what WE last wrote, so with the
     //     AGC running it never moves — the readouts sat still and the IF slider never tracked

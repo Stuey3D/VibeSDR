@@ -1508,11 +1508,15 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *   bounced."
        * ★ Breathing and marked as a fault, because something DID go wrong — it is just being
        *   handled. Six seconds, then back to whatever the chip normally shows. */
-      if (m.agcReinit) {
+      if (m.agcReinit || m.agcInit) {
         const chip = $('ovlChip');
-        chip.textContent = 'AGC stalled — reinitialising';
-        chip.classList.add('set', 'fault');
-        chip.classList.remove('easing');
+        /* ★ Two different events, and the difference matters to whoever is watching: starting up
+         *   is normal and expected, being restarted means something went wrong and is being
+         *   handled. Only the second is marked as a fault. */
+        chip.textContent = m.agcReinit ? 'AGC stalled — reinitialising' : 'AGC initialising';
+        chip.classList.add('set');
+        chip.classList.toggle('fault', !!m.agcReinit);
+        chip.classList.remove('easing');     // ★ breathe: it is working, not stuck
         return;
       }
       if (vibeAgcOwnsGain() && typeof m.sysGain === 'number') {

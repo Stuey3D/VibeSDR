@@ -2742,7 +2742,20 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
      *  ★★ Both rails qualify, for symmetric reasons: starved at the bottom costs sensitivity,
      *    saturated at the top costs linearity, and in each case the IF can no longer answer for
      *    itself. A couple of decibels of skirt so this reads as "at the rail", not "near it". */
-    const bool ifAtRail = mean <= 22.0 || mean >= 57.0;
+    /* ★★★ AND ONLY ONCE IN A WHILE, OR THE EXEMPTION BECOMES THE HUNT IT REPLACED. Where one
+     *     LNA rung is wider than the whole window, a step from one rail lands on the OTHER rail —
+     *     so "at a rail, act anyway" on its own gives exactly the oscillation the guard was
+     *     written to stop: 20, step, 57, step, 20. Stuart saw it within a minute of the change:
+     *     "the agc decided it was going to minimum again then coming back".
+     *  ★ So a rail may override the guard at most once a minute. A front end that is genuinely
+     *    mis-set still gets corrected promptly; one that is merely caught between two coarse rungs
+     *    settles for whichever side it is on and stops thrashing. */
+    static auto lastRailOverride = std::chrono::steady_clock::time_point{};
+    const auto  nowRail = std::chrono::steady_clock::now();
+    const bool  railDue = lastRailOverride.time_since_epoch().count() == 0 ||
+        std::chrono::duration_cast<std::chrono::seconds>(nowRail - lastRailOverride).count() >= 60;
+    const bool ifAtRail = (mean <= 22.0 || mean >= 57.0) && railDue;
+    if (ifAtRail) lastRailOverride = nowRail;
     if (lastDir != 0 && dir != lastDir && !ifAtRail) {
         if (!oscWarned) {
             oscWarned = true;
@@ -7550,56 +7563,33 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      "(no AGC kick: there is no loop to settle)",
                      sdrp->currentLnaState(), sdrp->currentIfGr(), sdrp->systemGainDb());
             }
-            /* ★★★ IF THE TUNER'S AGC STOPS RUNNING, KICK IT AGAIN. The kick happens ONCE: the
-             *     counter reaches 6 and nothing re-arms it except a retune, which resets the
-             *     settling state. So if that AGC ever stops after the handover — and the SDRplay
-             *     API does exactly that when it gets sick — the reduction freezes, our RF loop
-             *     steers off a dead number, and the radio sits there indefinitely.
-             *  ★ Stuart, after a reboot had ruled out the API itself: "its stuck again no kick no
-             *    anything IF AGC at 41 when RF is 0 ... a full retune from MW to FM was the only
-             *    thing that restored it". A band change re-kicks; nothing else did.
-             *  ★★ THE DETECTOR IS THE ONE FACT WE CAN TRUST: their AGC never sits perfectly still
-             *    on live signal — it makes constant small adjustments, which is the whole reason it
-             *    is better than ours. A reduction that has not moved by a single decibel in half a
-             *    minute is therefore not a quiet band, it is a loop that is not running.
-             *  ★★★ It re-kicks rather than restarting anything: `agc.enable` only takes effect on a
-             *      CHANGE, so a disable/enable transition is all that is usually needed, and it
-             *      costs one pair of writes. Escalating to a stream restart belongs to the stall
-             *      watchdog, which is a different fault with a different signature. */
-            if (sdrpAgcWanted && sdrpAgcKick >= 6 && !sdrpSettling) {
-                static int      lastGr   = -1;
-                static auto     lastMove = std::chrono::steady_clock::now();
-                const int gnow = sdrp->currentIfGr();
-                const auto tnow = std::chrono::steady_clock::now();
-                if (gnow != lastGr) { lastGr = gnow; lastMove = tnow; }
-                else if (std::chrono::duration_cast<std::chrono::seconds>(tnow - lastMove).count()
-                             >= 30) {
-                    /* ★★★ A RE-KICK IS NOT A COLD START. The boot kick deliberately walks the gain
-                     *     down to minimum and back, because at boot we know nothing about the
-                     *     aerial and coming UP to a working level is the only safe direction.
-                     *     None of that applies here: the radio is tuned, the listener is hearing
-                     *     something, and we already know roughly where the gain belongs. All the
-                     *     API actually needs is a CHANGE — agc.enable takes effect on a transition
-                     *     and on nothing else — so disable, nudge the reduction a couple of
-                     *     decibels where it already stands, and enable again.
-                     *  ★ Stuart: "the Kick doesnt have to be a minimum gain wiggle the gain then
-                     *    enable it again, we can simply disable agc wiggle the gain in place then
-                     *    reenable it again." Two decibels instead of forty, and the listener hears
-                     *    a blip rather than the band disappearing and coming back.
-                     *  ★★ Nudged AWAY from whichever rail it is nearest, so the wiggle is always a
-                     *    real change the tuner can act on. */
-                    const int nudged = (gnow >= 40) ? std::max(20, gnow - 2)
-                                                    : std::min(59, gnow + 2);
-                    LOGI("RSP: the IF AGC has not moved off %d dB for 30 s — it is not running. "
-                         "Restarting it in place (%d -> %d -> AGC on).", gnow, gnow, nudged);
-                    sdrp->setIfAgc(false);
-                    sdrp->setIfGainReduction(nudged);
-                    sdrp->setIfAgc(true);
-                    g_rspAgcReinitAt.store((long long)std::chrono::duration_cast<
-                        std::chrono::seconds>(tnow.time_since_epoch()).count(),
-                        std::memory_order_relaxed);
-                    lastMove = tnow;
-                }
+            /* ★★★ THE API TELLS US WHEN IT HAS FAILED. ASK IT, DO NOT GUESS.
+             *     sdrplay_api_DeviceFailure is the library reporting its own collapse, and our
+             *     event callback now records it. That is an unambiguous fact; everything I tried
+             *     before this was an inference from gain behaviour, and behaviour cannot tell a
+             *     stalled AGC from a contented one — on a steady signal both hold the reduction
+             *     perfectly still.
+             *  ★ THE HEURISTIC VERSION DID REAL HARM. It called any reduction unchanged for 30 s a
+             *    dead loop and "repaired" a receiver that was working: "it was sitting happy at
+             *    3/6 33IF almost absolutely perfect ... then the agc thought it would be clever",
+             *    and the gain excursion was large enough to trip the storm warning. Removed rather
+             *    than retuned: no threshold makes a false signal true.
+             *  ★★ A re-kick is still the right REPAIR — agc.enable acts on a transition, so disable,
+             *    nudge the reduction two decibels where it stands, enable again. It just needs a
+             *    trustworthy trigger, and now it has one. */
+            if (sdrpAgcWanted && sdrp->apiFailed()) {
+                sdrp->clearApiFailed();
+                const int gnow   = sdrp->currentIfGr();
+                const int nudged = (gnow >= 40) ? std::max(20, gnow - 2) : std::min(59, gnow + 2);
+                LOGI("RSP: the SDRplay API reported a device failure — restarting its IF AGC in "
+                     "place (%d -> %d -> AGC on).", gnow, nudged);
+                sdrp->setIfAgc(false);
+                sdrp->setIfGainReduction(nudged);
+                sdrp->setIfAgc(true);
+                g_rspAgcReinitAt.store((long long)std::chrono::duration_cast<
+                    std::chrono::seconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count(),
+                    std::memory_order_relaxed);
             }
             /* ★★★ NO LONGER GATED ON THE RF AGC TOGGLE BEING OFF. That condition belonged to the
              *     VibeAGC design, where the toggle meant "we own both stages and the tuner's AGC
@@ -7844,7 +7834,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *   say — the same rule that "a client must not decide what only the server
                      *   knows" was written for. hwinfo stays as it is: this is live state, and it
                      *   belongs on the live channel. */
-                    "\"adcPeak\":%.1f,\"adcClip\":%.4f,\"lnaN\":%d,\"agcReinit\":%d}",
+                    "\"adcPeak\":%.1f,\"adcClip\":%.4f,\"lnaN\":%d,\"agcReinit\":%d,\"agcInit\":%d}",
                     sdrp->systemGainDb(), sdrp->currentLnaState(), sdrp->currentIfGr(),
                     /* ★ CORROBORATED, not the raw latch — see overloadReal(). The badge and
                      *   VibeAGC must answer to the same fact. */
@@ -7870,7 +7860,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                          const long long now = (long long)std::chrono::duration_cast<
                              std::chrono::seconds>(
                                  std::chrono::steady_clock::now().time_since_epoch()).count();
-                         return (now - at) <= 6 ? 1 : 0; }());
+                         return (now - at) <= 6 ? 1 : 0; }(),
+                    /* ★★★ AND SAY SO WHILE THE BOOT KICK IS STILL RUNNING. It walks the gain to
+                     *   minimum and back, which takes several seconds during which the band looks
+                     *   dead — and that is the exact moment a new listener decides the receiver is
+                     *   broken. Stuart, who has built this thing: "wow initial kick too ages with
+                     *   no initialising chip, i was about to tell you it was broken again."
+                     *   If he nearly called it, a stranger certainly would. */
+                    sdrpSettling ? 1 : 0);
                 if (need < 0 || (size_t)need >= sizeof gb)
                     LOGI("rspstat truncated (%d of %zu bytes) — not sent", need, sizeof gb);
                 else

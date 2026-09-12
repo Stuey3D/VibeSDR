@@ -272,7 +272,9 @@ struct CbCtx { std::vector<int16_t>* ilv; SdrplaySource::IqSink* sink; bool* los
                // ★ OUR OWN LEVEL MEASUREMENT — see adcPeakDbfs() in the header for why the RSP
                //   needs one of its own rather than borrowing the AGC's reduction figure.
                std::atomic<double>* peak; std::atomic<double>* clip; std::atomic<unsigned>* wins;
-               std::atomic<unsigned>* gen; };
+               std::atomic<unsigned>* gen;
+               // ★ Set when the API reports sdrplay_api_DeviceFailure — its own words.
+               std::atomic<bool>* apiFailed; };
 }
 
 bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
@@ -361,7 +363,7 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
     static CbCtx ctx;
     ctx = CbCtx{ &impl_->ilv, &sink_, &lost_, &paused_, &overload_, impl_->dev.dev,
                  &liveGr_, &liveLna_, &liveGain_, &liveValid_,
-                 &peakDbfs_, &clipPct_, &windows_, &gen_ };
+                 &peakDbfs_, &clipPct_, &windows_, &gen_, &apiFailed_ };
     sdrplay_api_CallbackFnsT fns{};
     fns.StreamACbFn = &streamCb;
     fns.StreamBCbFn = nullptr;
@@ -519,7 +521,7 @@ bool SdrplaySource::restartStream(std::string& err) {
     static CbCtx ctx;
     ctx = CbCtx{ &impl_->ilv, &sink_, &lost_, &paused_, &overload_, impl_->dev.dev,
                  &liveGr_, &liveLna_, &liveGain_, &liveValid_,
-                 &peakDbfs_, &clipPct_, &windows_, &gen_ };
+                 &peakDbfs_, &clipPct_, &windows_, &gen_, &apiFailed_ };
     sdrplay_api_CallbackFnsT fns{};
     fns.StreamACbFn = &streamCb;
     fns.StreamBCbFn = nullptr;
@@ -1147,6 +1149,19 @@ static void eventCb(sdrplay_api_EventT id, sdrplay_api_TunerSelectT tuner,
     // already distinguishes "stream fault" from "radio gone", and telling it the truth is what
     // keeps a false "no radio" off a working waterfall.
     if (id == sdrplay_api_DeviceRemoved && c->lost) *c->lost = true;
+    /* ★★★ AND THE API'S OWN FAILURE REPORT, WHICH WE WERE THROWING AWAY. sdrplay_api_DeviceFailure
+     *     is the library saying outright that it has fallen over — no inference required. We
+     *     handled overloads, gain changes and removals, and ignored the one event that means the
+     *     thing has broken.
+     *  ★ Stuart asked the right question after a night of me guessing from behaviour: "is there no
+     *    way of detecting at the API level if it has failed or not?" There is, and it has been
+     *    firing into a callback that dropped it.
+     *  ★★ Behavioural detectors cannot do this job. A stalled AGC and a contented one look
+     *    identical on a steady signal, which is how a watchdog built on "the reduction has not
+     *    moved" came to repair a receiver that was working perfectly. This one cannot false-positive:
+     *    the API either reported a failure or it did not. */
+    if (id == sdrplay_api_DeviceFailure && c->apiFailed)
+        c->apiFailed->store(true, std::memory_order_relaxed);
 }
 
 }  // namespace vibe
