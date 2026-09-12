@@ -72,7 +72,10 @@ public:
      *  A dongle's single gain slider cannot express it, so it must not pretend to. */
     void setLnaState(int state);
     /** IF gain REDUCTION in dB, 20..59. Higher means LESS gain — it is a reduction. */
-    void setIfGainReduction(int gRdB);
+    /* ★ Returns FALSE when the radio's own AGC owns gRdB and the write was refused, so a
+     *   caller can tell "applied" from "silently dropped" — a readout that reports a value the
+     *   hardware never took is the fault that made the IF slider look dead. */
+    bool setIfGainReduction(int gRdB);
     /** API-side AGC on the IF stage. While enabled the IF reduction cannot be set by hand. */
     void setIfAgc(bool on);
     /** ★★ THE AGC's TARGET LEVEL in dBfs, which SDRconnect exposes and which decides how
@@ -166,6 +169,42 @@ public:
      *  ★ The event MUST be acknowledged or the API stops sending them. */
     bool overloaded() const { return overload_; }
 
+    /** ★★★ THE OVERLOAD FLAG, CORROBORATED BY THE SAMPLES — AND THIS IS THE ONE TO USE.
+     *  `overloaded()` is the API's raw PowerOverloadChange latch. It is set on an overload event
+     *  and cleared only by a clearing event, which may simply never arrive — so in practice it
+     *  sticks ON and stays there. A warning lamp that is always lit says exactly as much as one
+     *  that never lights: nothing. (The inverse of the "fires once then goes quiet" trap the
+     *  acknowledgement in eventCb exists to avoid.)
+     *  ★ Now that we MEASURE the level ourselves, the flag can be checked against reality: an
+     *  overload means samples at the rail, or a peak effectively there. Uncorroborated, it is a
+     *  stale latch and is ignored.
+     *  ★★ ONE READER FOR ONE FACT. VibeAGC and the client's OVERLOAD badge must not disagree
+     *  about whether the radio is overloading — tonight they did, because the loop was taught to
+     *  distrust the latch and the telemetry was not (Stuart's screenshot, 2026-09-12: the badge
+     *  lit at 6.4 dB of system gain with nothing clipping). */
+    bool overloadReal() const {
+        if (!overload_) return false;
+        if (windows_.load(std::memory_order_relaxed) == 0) return true;   // no measurement yet
+        return clipPct_.load(std::memory_order_relaxed) > 0.0
+            || peakDbfs_.load(std::memory_order_relaxed) > -1.0;
+    }
+
+    /** ★★★ THE RADIO'S OWN SIGNAL LEVEL, MEASURED BY US. VibeAGC for the dongle closes its loop
+     *  on `g_adcPeakDbfs`, which is computed inside the u8→f32 conversion — an RTL-only path. The
+     *  RSP hands us int16 through its own callback and was never measured at all, so the RSP's
+     *  gain loop had nothing of its own to steer by and had to read SDRplay's IF AGC reduction as
+     *  a PROXY for level. That is why it died the moment anyone turned that AGC off: its input
+     *  was another controller's output (Stuart, 2026-09-12).
+     *  ★ Peak of |I|,|Q| over the last window, in dBFS at the API's output (full scale 32768).
+     *    -99 until the first window closes. Peak, not RMS: a gain control has to answer "how
+     *    close to the rail", and only the peak knows.
+     *  ★★ `adcClipPct` is the fraction of samples AT the rail, which is the honest overload
+     *     evidence — the hardware's PowerOverloadChange event is coarse and latches. */
+    double adcPeakDbfs() const { return peakDbfs_.load(std::memory_order_relaxed); }
+    double adcClipPct()  const { return clipPct_.load(std::memory_order_relaxed); }
+    /** Windows closed since open — 0 means nothing has been measured yet and no loop may run. */
+    unsigned adcWindows() const { return windows_.load(std::memory_order_relaxed); }
+
 private:
     struct Impl;
     Impl* impl_ = nullptr;
@@ -189,6 +228,11 @@ private:
     std::atomic<int>   liveLna_{0};     // LNA gain reduction, dB (not the LNA *state*)
     std::atomic<float> liveGain_{0.0f}; // total system gain, dB
     std::atomic<bool>  liveValid_{false};
+    // ★ The level measurement above, filled by streamCb. Atomics because the callback is the
+    //   API's thread and every reader is ours.
+    std::atomic<double>   peakDbfs_{-99.0};
+    std::atomic<double>   clipPct_{0.0};
+    std::atomic<unsigned> windows_{0};
 };
 
 }  // namespace vibe

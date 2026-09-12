@@ -11,6 +11,7 @@
 #include <future>
 #include <chrono>
 #include <cstdio>
+#include <cmath>
 
 namespace vibe {
 
@@ -266,7 +267,10 @@ struct CbCtx { std::vector<int16_t>* ilv; SdrplaySource::IqSink* sink; bool* los
                bool* overload; HANDLE dev;
                // The AGC's live figures — see the note on liveGr_ in the header.
                std::atomic<int>* gr; std::atomic<int>* lnaGr; std::atomic<float>* gain;
-               std::atomic<bool>* valid; };
+               std::atomic<bool>* valid;
+               // ★ OUR OWN LEVEL MEASUREMENT — see adcPeakDbfs() in the header for why the RSP
+               //   needs one of its own rather than borrowing the AGC's reduction figure.
+               std::atomic<double>* peak; std::atomic<double>* clip; std::atomic<unsigned>* wins; };
 }
 
 bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
@@ -354,7 +358,8 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
 
     static CbCtx ctx;
     ctx = CbCtx{ &impl_->ilv, &sink_, &lost_, &paused_, &overload_, impl_->dev.dev,
-                 &liveGr_, &liveLna_, &liveGain_, &liveValid_ };
+                 &liveGr_, &liveLna_, &liveGain_, &liveValid_,
+                 &peakDbfs_, &clipPct_, &windows_ };
     sdrplay_api_CallbackFnsT fns{};
     fns.StreamACbFn = &streamCb;
     fns.StreamBCbFn = nullptr;
@@ -485,7 +490,8 @@ bool SdrplaySource::restartStream(std::string& err) {
 
     static CbCtx ctx;
     ctx = CbCtx{ &impl_->ilv, &sink_, &lost_, &paused_, &overload_, impl_->dev.dev,
-                 &liveGr_, &liveLna_, &liveGain_, &liveValid_ };
+                 &liveGr_, &liveLna_, &liveGain_, &liveValid_,
+                 &peakDbfs_, &clipPct_, &windows_ };
     sdrplay_api_CallbackFnsT fns{};
     fns.StreamACbFn = &streamCb;
     fns.StreamBCbFn = nullptr;
@@ -668,17 +674,46 @@ std::string SdrplaySource::model() const {
 }
 
 float SdrplaySource::systemGainDb() const {
-    // Prefer what the AGC last REPORTED; fall back to the struct only before the first event.
-    if (liveValid_.load(std::memory_order_relaxed))
+    /* ★★★ EXACTLY THE FAULT currentIfGr() HAD, one function away, and it survived that fix.
+     *     This preferred the AGC's reported gain UNCONDITIONALLY — and that value only updates
+     *     when the radio's AGC fires a GainChange event. Under VibeAGC that AGC is switched off,
+     *     so no events ever come and this froze at whatever it last said, no matter how far the
+     *     gain was actually moved. A frozen 6.4 dB on screen while the front end was being walked
+     *     four LNA states (Stuart's screenshot, 2026-09-12).
+     * ★ With the AGC ON, its report is the truth. With it OFF, the struct is — the API refreshes
+     *   gainVals.curr on every Update_Tuner_Gr, so it is live and it is ours.
+     * ★★ AND THIS IS NOW LOad-BEARING, not just a readout: VibeAGC reads it either side of an LNA
+     *    step to learn what that step was actually WORTH, instead of assuming. See the note on
+     *    the compensation in vsSdrplayVibeAgcTick. */
+    const bool agcOn = impl_->params && impl_->params->rxChannelA
+        && impl_->params->rxChannelA->ctrlParams.agc.enable != sdrplay_api_AGC_DISABLE;
+    if (agcOn && liveValid_.load(std::memory_order_relaxed))
         return liveGain_.load(std::memory_order_relaxed);
-    if (!open_ || !impl_->params || !impl_->params->rxChannelA) return 0.0f;
+    /* ★ -999 is "cannot read it", NOT 0.0 — zero is a legitimate system gain on this radio at
+     *   medium wave, where the LNA states are attenuators, so returning 0 for "unknown" made a
+     *   real reading and a missing one indistinguishable. The client draws a dash only for the
+     *   sentinel. */
+    if (!open_ || !impl_->params || !impl_->params->rxChannelA) return -999.0f;
     return impl_->params->rxChannelA->tunerParams.gain.gainVals.curr;
 }
 int SdrplaySource::currentIfGr() const {
-    if (liveValid_.load(std::memory_order_relaxed))
-        return liveGr_.load(std::memory_order_relaxed);
     if (!impl_->params || !impl_->params->rxChannelA) return 0;
-    return impl_->params->rxChannelA->tunerParams.gain.gRdB;
+    /* ★★★ THE AGC'S EVENT IS ONLY THE TRUTH WHILE THE AGC IS RUNNING. This preferred liveGr_
+     *     unconditionally — and that value only ever updates when the AGC fires an event. Switch
+     *     the AGC off and no events come, so the readout froze at whatever the AGC last said and
+     *     stayed there no matter what was set by hand: the slider moved, the radio obeyed, and
+     *     every figure on screen insisted nothing had happened.
+     * ★★★ IT COST HOURS TONIGHT. It is why "the IF AGC is dead" and "it responds fine" were both
+     *     observed within minutes of each other — the numbers moved whenever the AGC was on and
+     *     firing, and froze the instant anything turned it off. Stuart got there first: "Or if it
+     *     is the display isnt showing it working anymore" (2026-09-12).
+     * ★ So: with the AGC ON, report what it says. With it OFF, report what we COMMANDED, which is
+     *   the struct — the only thing that can be true when nobody is sending events. */
+    const bool agcOn = impl_->params->rxChannelA->ctrlParams.agc.enable
+                       != sdrplay_api_AGC_DISABLE;
+    if (agcOn && liveValid_.load(std::memory_order_relaxed))
+        return liveGr_.load(std::memory_order_relaxed);
+    return (int)impl_->params->rxChannelA->tunerParams.gain.gRdB;
 }
 int SdrplaySource::currentLnaState() const {
     if (!impl_->params || !impl_->params->rxChannelA) return 0;
@@ -692,24 +727,68 @@ void SdrplaySource::setLnaState(int state) {
     if (state < 0) state = 0;
     if (state >= n) state = n - 1;
     impl_->params->rxChannelA->tunerParams.gain.LNAstate = (unsigned char)state;
+    /* ★★★ CARRY THE AGC'S OWN CURRENT gRdB, OR THIS UPDATE CLOBBERS IT. Update_Tuner_Gr submits
+     *     the WHOLE gain struct, so it writes gRdB as a side effect — and the struct still holds
+     *     whatever was last put there by hand (59, from the start-up kick). setIfGainReduction
+     *     below refuses to write gRdB while the AGC owns it, quoting SDRplay's own documentation;
+     *     this function was doing exactly that behind its back, every time it was called.
+     *
+     * ★★★ IT DID NOT MATTER UNTIL TONIGHT. The LNA used to move only on a retune, so the AGC was
+     *     knocked once in a while and recovered. The new RF AGC steps it every few seconds, and
+     *     the IF AGC stopped dead: ifgr pinned at 52, lna 5, system gain 30.9 dB, unchanged for
+     *     twenty-two seconds on a live DAB signal (Stuart, 2026-09-12: "IF agc seems to be broken
+     *     fully" — it was, and it was my doing).
+     * ★ So write back what the AGC last REPORTED, which makes the gRdB half of the update a
+     *   no-op. liveValid_ is false only before the first event; then the struct value stands, as
+     *   it did before. */
+    if (liveValid_.load(std::memory_order_relaxed)) {
+        const int gr = liveGr_.load(std::memory_order_relaxed);
+        if (gr >= 20 && gr <= 59)
+            impl_->params->rxChannelA->tunerParams.gain.gRdB = (float)gr;
+    }
     if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
                             sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
+    /* ★★★ AND GIVE THE AGC ITS REGISTER BACK. Update_Tuner_Gr submits gRdB, and on this API a
+     *     manual gain write is precisely how you TAKE the IF reduction away from the AGC — so a
+     *     single LNA change silently stops it, and it never runs again until something re-enables
+     *     it. Stuart put his finger on it exactly: "it looks like it does the kick then never
+     *     works afterwards" (2026-09-12). The kick hands over, the first LNA update takes it back,
+     *     and every figure sits still for ever.
+     * ★★★ IT IS NOT ONLY THE RF AGC THAT DOES THIS. The retune path calls setLnaState to enforce
+     *     a band's gain cap, so an ordinary band change could stop the AGC on any receiver — this
+     *     is older than tonight's loop, it simply took a loop that moves the LNA every few seconds
+     *     to make it obvious.
+     * ★★ RE-ASSERTED BY TRANSITION, not by writing the same value: `agc.enable` only takes effect
+     *    on a CHANGE — the reason open() performs a disable/enable dance after Init, and the
+     *    reason the start-up kick exists at all. So disable, then enable, exactly as they do.
+     * ★ Only when the AGC is supposed to be running; with it off there is nothing to restore. */
+    if (open_ && impl_->params->rxChannelA->ctrlParams.agc.enable != sdrplay_api_AGC_DISABLE) {
+        auto& agc = impl_->params->rxChannelA->ctrlParams.agc;
+        const auto want = agc.enable;
+        agc.enable = sdrplay_api_AGC_DISABLE;
+        api().Update(impl_->dev.dev, impl_->dev.tuner,
+                     sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
+        agc.enable = want;
+        api().Update(impl_->dev.dev, impl_->dev.tuner,
+                     sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
+    }
 }
 
-void SdrplaySource::setIfGainReduction(int gRdB) {
+bool SdrplaySource::setIfGainReduction(int gRdB) {
     std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
-    if (!impl_->params || !impl_->params->rxChannelA) return;
+    if (!impl_->params || !impl_->params->rxChannelA) return false;
     // ★★ REFUSED WHILE THE AGC IS ON. The API's own documentation is explicit that IFGR
     // cannot be adjusted with AGC enabled — and writing it anyway is exactly the "bodge" that
     // makes SDRplay AGC behave worse under third-party software than under SDRuno, despite
     // being the same API underneath (Stuart, 2026-07-26). Two controllers fighting over one
     // register is not a compromise; it is a bug that presents as poor hardware.
-    if (impl_->params->rxChannelA->ctrlParams.agc.enable != sdrplay_api_AGC_DISABLE) return;
+    if (impl_->params->rxChannelA->ctrlParams.agc.enable != sdrplay_api_AGC_DISABLE) return false;
     if (gRdB < 20) gRdB = 20;
     if (gRdB > 59) gRdB = 59;
     impl_->params->rxChannelA->tunerParams.gain.gRdB = gRdB;
     if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
                             sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
+    return true;
 }
 
 void SdrplaySource::setIfAgc(bool on) {
@@ -832,9 +911,42 @@ static void streamCb(short* xi, short* xq, sdrplay_api_StreamCbParamsT*,
     if (c->paused && *c->paused) return;      // idle: drop, never tear the device down
     auto& ilv = *c->ilv;
     if (ilv.size() < (size_t)numSamples * 2) ilv.resize((size_t)numSamples * 2);
+    /* ★★★ MEASURE WHILE WE ARE ALREADY TOUCHING EVERY SAMPLE. The interleave below reads all of
+     *     them anyway, so the peak costs two compares per sample and no extra pass. Done HERE
+     *     rather than downstream because this is the only point that sees the radio's output
+     *     before any of our own gain, filtering or decimation — a gain control must measure what
+     *     the ADC actually produced, not what the DSP made of it.
+     * ★ Peak of |I| and |Q| separately, not the vector magnitude: the ADC rails on each channel
+     *   independently, and it is the rail we are trying to stay off. */
+    int peak = 0; unsigned rails = 0;
     for (unsigned i = 0; i < numSamples; ++i) {
-        ilv[i * 2]     = xi[i];
-        ilv[i * 2 + 1] = xq[i];
+        const int a = xi[i], b = xq[i];
+        const int ai = a < 0 ? -a : a, bi = b < 0 ? -b : b;
+        if (ai > peak) peak = ai;
+        if (bi > peak) peak = bi;
+        /* ★ 32000 of 32767 — "at the rail" with a little slack, because a converter rarely hits
+         *   the exact end code and waiting for it would under-report clipping badly. */
+        if (ai >= 32000 || bi >= 32000) ++rails;
+        ilv[i * 2]     = a;
+        ilv[i * 2 + 1] = b;
+    }
+    if (c->peak) {
+        /* ★ Accumulated across callbacks into a window of about a tenth of a second, because one
+         *   callback is a few milliseconds and a gain loop steered by that would chase noise.
+         *   Static locals are safe: the API runs exactly one stream callback thread per device,
+         *   and this build opens one device. */
+        static int      wPeak  = 0;
+        static uint64_t wRails = 0, wTotal = 0;
+        if (peak > wPeak) wPeak = peak;
+        wRails += rails; wTotal += numSamples;
+        if (wTotal >= 200000) {                    // ~0.1 s at 2 MSPS; rate-independent enough
+            const double frac = (double)wPeak / 32768.0;
+            c->peak->store(frac > 0 ? 20.0 * std::log10(frac) : -99.0, std::memory_order_relaxed);
+            if (c->clip) c->clip->store(100.0 * (double)wRails / (double)wTotal,
+                                        std::memory_order_relaxed);
+            if (c->wins) c->wins->fetch_add(1, std::memory_order_relaxed);
+            wPeak = 0; wRails = 0; wTotal = 0;
+        }
     }
     (*c->sink)(ilv.data(), (int)numSamples);
 }
@@ -896,7 +1008,7 @@ bool SdrplaySource::reopen(std::string&) { return false; }
 void SdrplaySource::setGainTenthDb(int) {}
 void SdrplaySource::setBiasT(bool) {}
 void SdrplaySource::setLnaState(int) {}
-void SdrplaySource::setIfGainReduction(int) {}
+bool SdrplaySource::setIfGainReduction(int) { return false; }
 void SdrplaySource::setIfAgc(bool) {}
 void SdrplaySource::setIfAgcSetPoint(int) {}
 void SdrplaySource::setIfAgcDynamics(int, int, int, int) {}
