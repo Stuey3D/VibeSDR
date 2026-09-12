@@ -7544,6 +7544,37 @@ struct LocalSdrShim::Impl {
                      "(no AGC kick: there is no loop to settle)",
                      sdrp->currentLnaState(), sdrp->currentIfGr(), sdrp->systemGainDb());
             }
+            /* ★★★ IF THE TUNER'S AGC STOPS RUNNING, KICK IT AGAIN. The kick happens ONCE: the
+             *     counter reaches 6 and nothing re-arms it except a retune, which resets the
+             *     settling state. So if that AGC ever stops after the handover — and the SDRplay
+             *     API does exactly that when it gets sick — the reduction freezes, our RF loop
+             *     steers off a dead number, and the radio sits there indefinitely.
+             *  ★ Stuart, after a reboot had ruled out the API itself: "its stuck again no kick no
+             *    anything IF AGC at 41 when RF is 0 ... a full retune from MW to FM was the only
+             *    thing that restored it". A band change re-kicks; nothing else did.
+             *  ★★ THE DETECTOR IS THE ONE FACT WE CAN TRUST: their AGC never sits perfectly still
+             *    on live signal — it makes constant small adjustments, which is the whole reason it
+             *    is better than ours. A reduction that has not moved by a single decibel in half a
+             *    minute is therefore not a quiet band, it is a loop that is not running.
+             *  ★★★ It re-kicks rather than restarting anything: `agc.enable` only takes effect on a
+             *      CHANGE, so a disable/enable transition is all that is usually needed, and it
+             *      costs one pair of writes. Escalating to a stream restart belongs to the stall
+             *      watchdog, which is a different fault with a different signature. */
+            if (sdrpAgcWanted && sdrpAgcKick >= 6 && !sdrpSettling) {
+                static int      lastGr   = -1;
+                static auto     lastMove = std::chrono::steady_clock::now();
+                const int gnow = sdrp->currentIfGr();
+                const auto tnow = std::chrono::steady_clock::now();
+                if (gnow != lastGr) { lastGr = gnow; lastMove = tnow; }
+                else if (std::chrono::duration_cast<std::chrono::seconds>(tnow - lastMove).count()
+                             >= 30) {
+                    LOGI("RSP: the IF AGC has not moved off %d dB for 30 s — it is not running. "
+                         "Kicking it again.", gnow);
+                    sdrpAgcKick = 0;          // ★ replay the whole sequence; it is what works
+                    sdrpSettling = true;
+                    lastMove = tnow;
+                }
+            }
             /* ★★★ NO LONGER GATED ON THE RF AGC TOGGLE BEING OFF. That condition belonged to the
              *     VibeAGC design, where the toggle meant "we own both stages and the tuner's AGC
              *     is off, so there is nothing to kick". It now means our RF loop steers FROM the
