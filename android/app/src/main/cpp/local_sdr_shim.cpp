@@ -3470,7 +3470,23 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      *  ★★★ This is Stuart's own rule read properly. "If IF Gain at minimum is giving us Overload
      *      or very close to overload reduce RF gain one click" — the IF AT MINIMUM is the
      *      condition; I had been treating the overload as the condition and the IF as a caveat. */
-    const bool ifRailed = (wantGr >= 58);
+    /* ★★★ A RAILED IF ONLY MEANS "TOO MUCH RF GAIN" IF WE ARE NOT SHORT OF LEVEL. gRdB 59 is
+     *     MINIMUM IF gain, and there are two quite different ways to arrive there:
+     *       · the IF shed everything it had because the chain is too hot — the RF must give a
+     *         state back, and the IF then returns the gain, so the level does not move;
+     *       · the level is simply BELOW target, in which case the IF has its whole range still
+     *         available and will take gain back on its own. Nothing is wrong with the front end.
+     *     Dropping the level test entirely turned the second case into a ratchet: peak 2.7 dB
+     *     under target with the IF at 59, a retreat fires, the level falls further, the IF cannot
+     *     correct because the error is inside its deadband, so the rail persists and the RF walks
+     *     down again — LNA 3 to 4 to 6 in two ticks, straight to minimum gain.
+     *  ★ -1 dB, not 0: at target with the IF railed IS the case worth acting on (that is 10D —
+     *    level perfect, distribution wrong), and it is the whole reason this rule exists. Only a
+     *    genuine shortfall should stay its hand.
+     *  ★★ Second ratchet found in ten minutes in this one rule, both from removing a condition
+     *    that looked redundant. In a feedback loop a condition that looks redundant is usually
+     *    the thing stopping the loop feeding on its own output. */
+    const bool ifRailed = (wantGr >= 58) && err > -1.0;
     const bool nearOverload = clipping || ifRailed;
     /* ★ 40 leaves a full LNA step (~19 dB) before the 59 dB rail, so a climb is always absorbable
      *   and can never itself cause an overload. */
@@ -3541,8 +3557,21 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
             g_dabTrialDir = g_dabTrialDir;                       // (unrelated; DAB owns its own)
             g_rfClippedAt = lna;                                 // ★ do not climb straight back
             g_rfClippedWhen = now;
-            /* ★ Record the gain that earned this, so the next visit need not earn it again. */
-            const double ovlAt = sdrp->systemGainDb();
+            /* ★★★ ONLY REAL OVERLOAD EVIDENCE MAY SET A CEILING — A RAILED IF IS NOT AN OVERLOAD.
+             *     When the retreat learned to fire on a railed IF as well as on clipping, this
+             *     recording sat inside the same branch and started treating every rail-driven
+             *     retreat as "we overloaded at this gain". Each retreat then wrote a LOWER ceiling,
+             *     which vetoed the next climb, which left the IF railed, which retreated again —
+             *     a ratchet straight down to minimum RF gain.
+             *  ★ Stuart, minutes later: "connected but now there is no RF gain at all", with the
+             *    radio pinned at LNA 6 of 6 and the loop explaining itself perfectly: "holding RF
+             *    — -10.3 dB is within 5 dB of the -13.6 dB that overloaded here". Nothing had
+             *    overloaded at -13.6 dB. It had merely retreated there, and then believed itself.
+             *  ★★ A memory fed by its own output is not a memory. The ceiling exists to remember
+             *    what the AIR did to us, so only the air may write it: samples on the rail, or the
+             *    hardware's own overload flag. This is the "never limit permanently" rule — the
+             *    limit was not permanent by design, it just kept renewing itself. */
+            const double ovlAt = (clipping || ovlRaw) ? sdrp->systemGainDb() : -1000.0;
             if (ovlAt > -900.0) {
                 g_ovlCeilDb = ovlAt; g_ovlCeilHz = nowHz; g_ovlCeilWhen = now;
                 LOGI("VibeAGC/RSP: overloaded at %.1f dB of system gain — remembering a ceiling of "
