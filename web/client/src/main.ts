@@ -1528,7 +1528,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       // Keep the RF slider honest too if something else moved the state — and RE-RENDER, or
       // the thumb moves while the label beside it keeps the old number, which reads as the
       // two disagreeing about the same thing.
-      const lnaMax = (radioCaps?.lnaStates ?? 10) - 1;
+      const lnaMax = (rspLnaN ?? radioCaps?.lnaStates ?? 10) - 1;
       const el = $<HTMLInputElement>('rspLna');
       if (document.activeElement !== el) {
         el.value = String(lnaMax - lna);
@@ -11086,7 +11086,7 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   if (isHrf) { applyHrfCaps(caps); refreshAdminRow(); applyGainLocked(); return; }
   if (!isRsp) { applyGainLocked(); return; }
 
-  const n = caps?.lnaStates ?? 10;
+  const n = rspLnaN ?? caps?.lnaStates ?? 10;
   const lna = $<HTMLInputElement>('rspLna');
   lna.max = String(n - 1);
   if (typeof prefs()['rsp_lna'] !== 'number')
@@ -11243,7 +11243,7 @@ function applyRspLock() {
 function renderRspVals() {
   const n = radioCaps?.lnaStates ?? 10;
   // Slider position is GAIN; the hardware wants a STATE, which counts the other way.
-  const lnaMax = (radioCaps?.lnaStates ?? 10) - 1;
+  const lnaMax = (rspLnaN ?? radioCaps?.lnaStates ?? 10) - 1;
   const pos = Number($<HTMLInputElement>('rspLna').value);
   const lna = lnaMax - pos;
   const gr  = Number($<HTMLInputElement>('rspIfGr').value);
@@ -11327,7 +11327,7 @@ const RSP_TOGGLES = {
  *  so a reconnect or a server restart restores what the user chose. */
 function pushAllRspSettings() {
   if (radioCaps?.driver !== 'sdrplay') return;
-  const lnaMax = (radioCaps?.lnaStates ?? 10) - 1;
+  const lnaMax = (rspLnaN ?? radioCaps?.lnaStates ?? 10) - 1;
   /* ★★★ DO NOT PUSH THE GAIN AT VibeAGC. This runs on EVERY connect, including a page refresh,
    *     and it sends this browser's remembered LNA position — undoing whatever the loop had
    *     settled on and making it climb all over again, which on HF is tens of seconds. Stuart:
@@ -11401,7 +11401,7 @@ function initRspControls() {
   lna.oninput = () => {
     if (vibeAgcOwnsGain()) return;   // ★ VibeAGC steps the LNA — see applyRspLock
     renderRspVals();
-    const lnaMax = (radioCaps?.lnaStates ?? 10) - 1;
+    const lnaMax = (rspLnaN ?? radioCaps?.lnaStates ?? 10) - 1;
     rspSend({ lna: lnaMax - Number(lna.value) });   // slider is gain, hardware wants state
     savePref('rsp_lna', Number(lna.value));
   };
@@ -11445,7 +11445,7 @@ function initRspControls() {
        *  pushAllRspSettings; getting it backwards would hand the front end to the wrong end of
        *  its range at the moment the listener took control. */
       if (key === 'rfagc' && !on) {
-        const lnaMax = (radioCaps?.lnaStates ?? 10) - 1;
+        const lnaMax = (rspLnaN ?? radioCaps?.lnaStates ?? 10) - 1;
         rspSend({ lna: lnaMax - Number($<HTMLInputElement>('rspLna').value) });
       }
       // ★ AND UNLOCK THE SLIDER RIGHT NOW, rather than waiting for an rspstat to say so. That

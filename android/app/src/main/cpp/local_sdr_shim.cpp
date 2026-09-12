@@ -3503,7 +3503,34 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      * ★★ The retreat remembers the state that clipped for half a minute, so the pair cannot
      *   become a cycle. That is the one piece of memory this loop genuinely needs — the earlier
      *   version had four. */
-    const bool ifHasRoom    = (wantGr <= 50);
+    /* ★★★ ASK WHAT THE NEXT STEP ACTUALLY COSTS — DO NOT RESERVE 19 dB FOR A 6 dB STEP.
+     *     This was a flat "the IF must be at 50 or below", chosen when every step was believed to
+     *     be worth about 19 dB. The measured ladders say that is an HF fact and not even a
+     *     reliable one: on MW the rungs go 34.0, 28.3, 21.9, 16.0 — steps of 5.7, 6.4, 5.9 — and
+     *     Band III is similar. Reserving 9 dB of IF headroom for a 6 dB step means the loop sits
+     *     several decibels under target refusing to take gain it could comfortably absorb.
+     *  ★ Stuart, on medium wave: "gain is far too low, it needs to be 7/8 out of 9 for MW",
+     *    with the loop parked at LNA 3 of 6 and the level 5.7 dB under target — it had the room
+     *    and would not use it.
+     *  ★★ So the requirement is the size of the step we are about to take, plus 2 dB of slack,
+     *    and it falls back to the old flat threshold wherever the ladder has not been learned
+     *    yet. The rule now scales itself to whatever radio and band it finds. */
+    bool ifHasRoom = (wantGr <= 50);
+    if (lna > lo) {
+        const float gHere = sdrp->lnaGainDb(lna);
+        const float gNext = sdrp->lnaGainDb(lna - 1);       // one state up = more RF gain
+        if (std::isfinite(gHere) && std::isfinite(gNext)) {
+            const double cost = (double)gNext - (double)gHere;       // dB the IF must absorb
+            /* ★★★ CLIMB UNTIL THE IF WOULD REST COMFORTABLY, NOT UNTIL IT WOULD RAIL. Aiming at
+             *     59 means the loop keeps taking RF gain right up to the point the IF has nothing
+             *     left — and then the rail rule hands a state straight back, which is a limit
+             *     cycle, not a resting place. kIfCeil leaves the IF somewhere it can still work in
+             *     both directions after absorbing the step, so the climb has a stable fixed point:
+             *     RF as high as the IF can support, and no rail to retreat from. */
+            constexpr double kIfCeil = 52.0;
+            ifHasRoom = (wantGr + cost) <= kIfCeil;
+        }
+    }
 
     /* ★★★ THE RADIO'S OWN LADDER, SO A CORRECTION CAN BE AIMED RATHER THAN SHUFFLED TOWARDS.
      *     sdrp->lnaLadder() is the measured total gain of each LNA state IN THIS BAND (see
@@ -3597,7 +3624,22 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
          *    rests at LNA 1 because that suits the signal, not because it always maxes out.
          *  ★★★ 3 dB, not 0, so a signal sitting exactly on target cannot be nudged into a climb
          *      by its own noise and then have to retreat. That is the flap he asked me to avoid. */
-        else if (ifHasRoom && !nearOverload && lna > lo && err < -3.0) {
+        /* ★★★ AND RF GAIN IS TAKEN WHENEVER THE IF CAN CARRY IT — NOT ONLY WHEN WE ARE SHORT.
+         *     The `err < -3` test here was a correction to a real fault (the loop maxing the
+         *     front end and dumping the surplus in the IF), but it over-corrected: on medium wave
+         *     the ADC peak is set by whichever monster carrier is inside the 5 MHz window, so the
+         *     level reads "fine" while the signal the listener actually wants is starved at the
+         *     front end. Stuart: "gain is far too low, it needs to be 7/8 out of 9 for MW" — his
+         *     RSP1B sits there on the same aerial.
+         *  ★ SDRplay's own guidance, and his: RF gain as high as possible, the IF holds the level.
+         *    What made that dangerous before was that it climbed until the IF RAILED. It now
+         *    climbs only while the IF would still rest below kIfCeil, which is a stable stopping
+         *    point rather than a cliff — so the front end ends as high as the chain can carry
+         *    without the dumping, the oscillation, or the rail retreat firing at all.
+         *  ★★ The protections that matter are unchanged and are the right ones: clipping, the
+         *    hardware's own overload flag once the IF is spent, and the remembered ceiling. Those
+         *    answer "is this too much", which is a different question from "do we need more". */
+        else if (ifHasRoom && !nearOverload && lna > lo) {
             /* ★ ...unless we have just been told that state clips. Half a minute, then try again:
              *   conditions change, and a permanent veto is how the old loop stranded itself. */
             const bool vetoed = g_rfClippedAt == lna - 1 &&
@@ -8757,7 +8799,15 @@ struct LocalSdrShim::Impl {
                     /* ★ THE ADC LEVEL ITSELF. Every gain decision turns on this number and it was
                      *   visible nowhere — so "the loop thinks it is at target" could only ever be
                      *   inferred. Telemetry for the one measurement that drives everything. */
-                    "\"adcPeak\":%.1f,\"adcClip\":%.4f}",
+                    /* ★★★ AND HOW MANY LNA STATES EXIST RIGHT NOW. The client scaled its RF slider
+                     *   from a per-MODEL count in hwinfo, which stopped being true the moment the
+                     *   count became per-BAND: on medium wave the RSP1A has seven states, not ten,
+                     *   so the top third of the slider mapped onto states the radio clamps away.
+                     *   Only the server knows which band the radio is in, so only the server may
+                     *   say — the same rule that "a client must not decide what only the server
+                     *   knows" was written for. hwinfo stays as it is: this is live state, and it
+                     *   belongs on the live channel. */
+                    "\"adcPeak\":%.1f,\"adcClip\":%.4f,\"lnaN\":%d}",
                     sdrp->systemGainDb(), sdrp->currentLnaState(), sdrp->currentIfGr(),
                     /* ★ CORROBORATED, not the raw latch — see overloadReal(). The badge and
                      *   VibeAGC must answer to the same fact. */
@@ -8775,7 +8825,7 @@ struct LocalSdrShim::Impl {
                      * ★ -999 means the owner never chose one; report the API's own default so the
                      *   slider has somewhere honest to sit. */
                     vsDesiredAgcSet() > -999 ? vsDesiredAgcSet() : -30,
-                    sdrp->adcPeakDbfs(), sdrp->adcClipPct());
+                    sdrp->adcPeakDbfs(), sdrp->adcClipPct(), sdrp->lnaStateCount());
                 if (need < 0 || (size_t)need >= sizeof gb)
                     LOGI("rspstat truncated (%d of %zu bytes) — not sent", need, sizeof gb);
                 else
