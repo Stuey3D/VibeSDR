@@ -2792,6 +2792,9 @@ static std::atomic<int> g_vibeAgcLastGr{-1};   // what WE last commanded, for th
 static int g_vibeAgcBadLna = -1, g_vibeAgcCleanRun = 0, g_vibeAgcRailHi = 0, g_vibeAgcRailLo = 0;
 /** ★ Windows of ACQUIRE remaining — see the note in the tick. ~4 s at ~10 windows/s. */
 static int g_vibeAgcAcquire = 0;
+/** ★ Which way the DAB hill climb steps next: -1 is more RF gain, +1 is less. Flipped whenever a
+ *  trial is rejected, so the search covers both directions instead of assuming one. */
+static int g_dabTrialDir = -1;
 /** ★ A pending RF step awaiting its real gain figure — see the note at the RF write. */
 static unsigned g_vibeAgcLastWin = 0, g_vibeAgcSkipWin = 0;
 /** ★★★ THE LEVEL ENVELOPE, file-scope so the gain writes can FEED THEIR OWN ACTION FORWARD.
@@ -3416,6 +3419,7 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
                          "going back to %d", sdrp->currentLnaState(), berBefore * 100.0,
                          q.mscBer * 100.0, trialFrom);
                     LocalSdrShim::instance().setLnaState(trialFrom);
+                    g_dabTrialDir = -g_dabTrialDir;      // ★ that way was worse — try the other
                 } else {
                     LOGI("VibeAGC/RSP: DAB — LNA %d is as good or better (%.4f%% -> %.4f%%, "
                          "MER %.1f dB), keeping it", sdrp->currentLnaState(), berBefore * 100.0,
@@ -3423,12 +3427,29 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
                 }
                 trialFrom = -1;
             }
-            else if (!dabDecodingPerfectly() && !nearOverload && lna > lo) {
-                berBefore = q.mscBer;
-                trialFrom = lna;
-                LOGI("VibeAGC/RSP: DAB — trying LNA %d for more gain (error rate %.4f%%, "
-                     "MER %.1f dB)", lna - 1, q.mscBer * 100.0, q.merDb);
-                LocalSdrShim::instance().setLnaState(lna - 1);
+            else if (!dabDecodingPerfectly()) {
+                /* ★★★ TRY BOTH DIRECTIONS. The first version only ever tried MORE gain, so when
+                 *     LESS was better it could never find it — it simply climbed and degraded.
+                 *     Measured on 10D: LNA 5 gave MER 23.2 dB with ZERO bit errors, LNA 3 gave
+                 *     9.7 dB and 7.2%. Nineteen decibels more RF gain, and the multiplex fell
+                 *     apart — front-end intermodulation, which the ADC level cannot see at all
+                 *     (no clipping, no overload flag) and which is precisely why steering DAB by
+                 *     its own metrics is the right answer.
+                 * ★ A hill climb that only walks uphill is not a search, it is an assumption. It
+                 *   alternates now: if a step in one direction did not help, the next trial goes
+                 *   the other way. */
+                const int dir = g_dabTrialDir;
+                const int cand = lna + dir;
+                if (cand >= lo && cand <= n - 1) {
+                    berBefore = q.mscBer;
+                    trialFrom = lna;
+                    LOGI("VibeAGC/RSP: DAB — trying LNA %d (%s gain) — error rate %.4f%%, "
+                         "MER %.1f dB", cand, dir < 0 ? "more" : "less",
+                         q.mscBer * 100.0, q.merDb);
+                    LocalSdrShim::instance().setLnaState(cand);
+                } else {
+                    g_dabTrialDir = -g_dabTrialDir;      // that way is blocked; try the other
+                }
             }
         }
         /* ★ The level loop keeps the converter in range either way; only the RF stage is handed
@@ -4638,8 +4659,20 @@ struct LocalSdrShim::Impl {
          * ★★ Note the DAB warning above cuts the other way: DAB broke when the offset was REMOVED
          *    from the dongle, so it depends on having one. Giving the RSP an offset moves it
          *    towards the arrangement DAB is known to want, not away from it. */
+        /* ▶ REVERTED, 2026-09-12, SAME DAY IT WAS ADDED. Giving the RSP the dongle's 15 kHz offset
+         *   is sound in theory — the tuner is zero-IF and a signal on DC gets eaten by the DC
+         *   canceller — but it produced a worse fault immediately: tuning to 96.6 showed a large
+         *   peak with NO signal, and audio that played "crunchy" once it did. That is the
+         *   signature of a frequency error, not of DC, so some part of the RSP path does not
+         *   compensate for hwOffsetHz the way the dongle path does, and I did not find out which
+         *   before shipping it.
+         * ★ The DC problem is real and remains — it is addressed at the source instead, by
+         *   recalibrating the tuner's DC offset on every retune and gain change (see
+         *   dcRecalibrate), which needs no frequency shift and nothing downstream to agree with.
+         * ★★ Re-try only after auditing every reader of hwOffsetHz for driver assumptions. The
+         *    failure is silent on a waterfall — the peak is still drawn in the right place. */
         if (useHackRf()) return HW_OFFSET_HACKRF_HZ;
-        return (useAirspyHf() || useTcp() || useSpy()) ? 0.0 : HW_OFFSET_HZ;
+        return (useSdrplay() || useAirspyHf() || useTcp() || useSpy()) ? 0.0 : HW_OFFSET_HZ;
     }
 
     // Physical DC of the FFT = rtlCenter + HW_OFFSET_HZ, so the VFO (at audioFreq)
