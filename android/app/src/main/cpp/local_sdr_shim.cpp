@@ -3433,7 +3433,20 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      *     if the latch is lying, and it is the only thing that can answer front-end intermod.
      *  ★ It cannot run away, either. Each retreat lets the IF give gain back, `wantGr` falls
      *    below 58, `ifSpent` goes false and the walk stops on its own. */
-    const bool nearOverload = clipping || (ifSpent && ovlRaw);
+    /* ★★★ AND THE RAIL ITSELF IS EVIDENCE, WITH NO CLIPPING REQUIRED. The retreat was driven
+     *     only by clipping and the overload latch, so a chain that was over-gained but not yet
+     *     in trouble had NO WAY DOWN. The IF would reduce until it hit 59 — minimum gain, nothing
+     *     left to give — and simply stay there, still above target, for as long as the signal
+     *     lasted.
+     *  ★ Stuart on 10D, 2026-09-12: "mostly clean but getting the odd drop in audio as I suspect
+     *    the gain maybe slightly too much", with the menu showing LNA 5, IF reduction 59 and 0.0 dB
+     *    of system gain. That is the rail, held. DAB is where it shows up first because OFDM
+     *    peaks stress the converter without producing the clipped samples the old rule waited for.
+     *  ★★ This is the exact mirror of the climb's missing level condition, and the pair is now
+     *    symmetric: take RF gain only when short of level, give it back when over it and the IF
+     *    can no longer help. 2 dB, matching the climb's margin, so the two cannot meet. */
+    const bool ifRailedAndHot = (wantGr >= 59) && err > 2.0;
+    const bool nearOverload = clipping || (ifSpent && ovlRaw) || ifRailedAndHot;
     /* ★ 40 leaves a full LNA step (~19 dB) before the 59 dB rail, so a climb is always absorbable
      *   and can never itself cause an overload. */
     /* ★★★ TRY IT AND LET CLIPPING JUDGE, because the step size is NOT knowable in advance. Every
