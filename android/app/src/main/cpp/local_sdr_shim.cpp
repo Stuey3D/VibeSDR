@@ -3663,7 +3663,16 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
              *    and dropped exactly where it did harm. */
             constexpr double kIfCeil = 52.0;      // where the IF should REST after a free climb
             constexpr double kIfRail = 57.0;      // the most it may absorb when we need the gain
-            const bool needIt = err < -kDead;     // genuinely short, not merely opportunistic
+            /* ★★★ AND THE TEST MUST NOT SIT INSIDE THE IF'S OWN DEADBAND. My first attempt used
+             *     `err < -kDead`, which is below -6 dB — exactly where the IF also refuses to
+             *     act, because that is its deadband. Anything between -6 and -2 was therefore
+             *     "not needed" to the RF stage and "close enough" to the IF stage, so NEITHER
+             *     moved and the loop stuck again, this time at -5.1 dB under target with the RF
+             *     still at minimum. Two rules sharing one threshold left a gap between them that
+             *     nothing owned.
+             *  ★ 2 dB: below target by more than the noise on the measurement, and well clear of
+             *    the deadband above it, so every shortfall belongs to exactly one stage. */
+            const bool needIt = err < -2.0;      // genuinely short, not merely opportunistic
             ifHasRoom = (wantGr + cost) <= (needIt ? kIfRail : kIfCeil);
         }
     }
@@ -3797,13 +3806,23 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
             /* ★★★ AND THE REMEMBERED CEILING. Same frequency, still fresh, and we are already
              *     within the margin of a gain that overloaded here — so do not go looking for it
              *     again. This is the only rule in the loop that acts BEFORE the damage. */
-            bool capped = false;
-            if (g_ovlCeilHz > 0.0 && std::fabs(nowHz - g_ovlCeilHz) < nowRate * 0.5 &&
-                std::chrono::duration_cast<std::chrono::seconds>(now - g_ovlCeilWhen).count()
-                    < OVL_CEIL_TTL_S) {
-                const double gNow = sdrp->systemGainDb();
-                capped = gNow > -900.0 && gNow >= g_ovlCeilDb - OVL_CEIL_MARGIN_DB;
-            }
+            /* ★★★ THE dB CEILING IS GONE — IT COMPARED TWO DIFFERENT QUANTITIES. It remembered
+             *     the SYSTEM gain at an overload and vetoed any climb that came within 5 dB of
+             *     it. But system gain is RF plus IF, so the moment the IF moves, the remembered
+             *     figure and the current one describe different things, and the comparison is
+             *     meaningless. Seen holding the loop at LNA 3 all evening: "holding RF — 30.0 dB
+             *     is within 5 dB of the 0.4 dB that overloaded here" — 0.4 dB was a TOTAL
+             *     recorded when the IF happened to be near its rail, and it vetoed everything
+             *     thereafter.
+             *  ★ The front end is what overloads, so the memory has to be about the FRONT END.
+             *    g_rfClippedAt already does exactly that and does it correctly: the LNA state
+             *    that clipped, vetoed for thirty seconds. This was redundant with it and, being
+             *    wrong, was the half that stranded the loop.
+             *  ★★ Stuart's original idea was sound — "if we know Overload is X db then max AGC
+             *    should be X -5db" — and it survives as the state veto. It was my choice of
+             *    units that was wrong, and that is the second time tonight a remembered value fed
+             *    the loop its own output back. */
+            const bool capped = false;
             /* ★ Ask for exactly the shortfall, so a weak band is answered in one move instead of
              *   one click per measurement window. Capped at the ladder's own ends by lnaStep. */
             if (!vetoed && !capped) wantLna = lnaStep(lna, -err);   // err is negative here
