@@ -197,7 +197,18 @@ struct Config {
     /* ★ RF AGC: the API's own AGC moves the IF gain reduction and NEVER the LNA, so when the IF
      *  loop saturates the front end stays wherever it was put. This is the other half of the
      *  loop. On by default — half a gain control is not a safe default. */
-    bool rfAgc = true;
+    bool rfAgc = false;   // ★ see g_rspRfAgc — off until proven on air
+    /* ★ Where the RF AGC BEGINS, as a gain position (0 = least RF gain … lnaStates-1 = most).
+     *  -1 = the middle. Without it the loop inherits whatever the start-up kick left behind —
+     *  often an end stop — and has to walk several steps to get anywhere, which is precisely
+     *  when it disturbs the IF AGC. Starting from a sensible place means it usually has nothing
+     *  to do at all (Stuart, 2026-09-12). */
+    int  rfAgcStart = -1;
+    /* ★ The RSP's IF AGC TARGET (dBFS). -999 = the owner never chose one, so the radio keeps
+     *  SDRplay's own working point of -30. agcSetLock withholds it from listeners, exactly as
+     *  gainLock withholds the gain: it changes the radio for everybody on a shared receiver. */
+    int  agcSet = -999;
+    bool agcSetLock = false;
     /** See RadioConfig::biasT — asserted at every start so it is never inherited. */
     bool biasT = false;
     int  ppm = 0, ppb = 0, directSampling = -1;   // see RadioConfig
@@ -376,7 +387,10 @@ struct RadioConfig {
     bool   autoNotch = false, userNotch = true;   // ★ see the note on the per-radio copy
     bool   dabAgcOverride = true;
     int    dabAgcTarget = -40;
-    bool   rfAgc = true;
+    bool   rfAgc = false;
+    int    rfAgcStart = -1;
+    int    agcSet = -999;
+    bool   agcSetLock = false;
     /** ★★★ DC ON THE FEEDLINE, REMEMBERED AND ASSERTED. A dongle's bias-T survives whatever set
      *  it — it is a GPIO that stays put for as long as the device has power — so a receiver that
      *  never states a preference inherits one. That is how a V4 came up with its red light on and

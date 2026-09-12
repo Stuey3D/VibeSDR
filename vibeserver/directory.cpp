@@ -737,6 +737,27 @@ void worker() {
             url = g_tunnelUrl;
         }
         if (url.empty()) {
+            /* ★★★ AND SAY SO IN THE LOG, NOT ONLY IN A STATUS STRING NOBODY IS READING. When
+             *     Cloudflare rate-limited quick-tunnel creation (HTTP 429, error 1015) this
+             *     logged "apply: starting worker" and then NOTHING — the tunnel silently did not
+             *     exist, the friendly address returned 530, and it took an hour and running
+             *     cloudflared by hand to find out why (2026-09-12). The error was known here the
+             *     whole time and went into a string instead of the journal.
+             * ★ Rate-limited to once a minute: the worker retries on a loop and this must not
+             *   become the flood it is reporting. */
+            {
+                static std::chrono::steady_clock::time_point saidAt{};
+                const auto now = std::chrono::steady_clock::now();
+                if (saidAt.time_since_epoch().count() == 0 ||
+                    std::chrono::duration_cast<std::chrono::seconds>(now - saidAt).count() >= 60) {
+                    saidAt = now;
+                    std::fprintf(stderr, "[directory] NO TUNNEL — cloudflared did not produce a "
+                                 "hostname (%d consecutive failures). Common causes: cloudflared "
+                                 "missing, no outbound network, or Cloudflare rate-limiting quick "
+                                 "tunnels (HTTP 429 / error 1015) after many restarts.\n",
+                                 tunnelFails);
+                }
+            }
             std::lock_guard<std::mutex> lk(g_mtx);
             g_error = "cloudflared is not installed, or no tunnel came up";
             g_listed = false;

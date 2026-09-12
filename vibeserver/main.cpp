@@ -173,7 +173,10 @@ struct Opts {
     bool        userNotch = true;
     bool        dabAgcOverride = true;
     int         dabAgcTarget = -40;
-    bool        rfAgc = true;
+    bool        rfAgc = false;
+    int         rfAgcStart = -1;
+    int         agcSet = -999;
+    bool        agcSetLock = false;
     bool        dabNotch = false;
     int         port    = 0;             // 0 = auto (48000-48049)
     bool        web     = true;
@@ -480,7 +483,8 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.idleGrace = c.idleGrace;
     o.rfNotch = c.rfNotch; o.dabNotch = c.dabNotch; o.zoomSpectrum = c.zoomSpectrum;
     o.autoNotch = c.autoNotch; o.userNotch = c.userNotch;
-    o.dabAgcOverride = c.dabAgcOverride; o.dabAgcTarget = c.dabAgcTarget; o.rfAgc = c.rfAgc;
+    o.dabAgcOverride = c.dabAgcOverride; o.dabAgcTarget = c.dabAgcTarget; o.rfAgc = c.rfAgc; o.rfAgcStart = c.rfAgcStart;
+    o.agcSet = c.agcSet; o.agcSetLock = c.agcSetLock;
     o.port = c.port; o.web = c.web;
 }
 
@@ -512,7 +516,8 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.idleGrace = o.idleGrace;
     c.rfNotch = o.rfNotch; c.dabNotch = o.dabNotch; c.zoomSpectrum = o.zoomSpectrum;
     c.autoNotch = o.autoNotch; c.userNotch = o.userNotch;
-    c.dabAgcOverride = o.dabAgcOverride; c.dabAgcTarget = o.dabAgcTarget; c.rfAgc = o.rfAgc;
+    c.dabAgcOverride = o.dabAgcOverride; c.dabAgcTarget = o.dabAgcTarget; c.rfAgc = o.rfAgc; c.rfAgcStart = o.rfAgcStart;
+    c.agcSet = o.agcSet; c.agcSetLock = o.agcSetLock;
     c.port = o.port; c.web = o.web;
     c.mode = o.lockFreq > 0 ? vsconfig::Mode::LockedRange : vsconfig::Mode::SingleUser;
 }
@@ -1336,6 +1341,11 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerUserNotch(o.userNotch);
     LocalSdrShim::setVibeServerDabAgc(o.dabAgcOverride, o.dabAgcTarget);
     LocalSdrShim::setVibeServerRfAgc(o.rfAgc);
+    LocalSdrShim::setVibeServerRfAgcStart(o.rfAgcStart);
+    /* ★ The owner's AGC target, applied at start-up. -999 means they never chose one, so the
+     *  radio keeps SDRplay's own working point rather than us inventing a value. */
+    if (o.agcSet > -100) LocalSdrShim::instance().setIfAgcSetPoint(o.agcSet);
+    LocalSdrShim::setVibeServerAgcSetLock(o.agcSetLock);
     // ★ SAY WHAT THE FRONT END WILL DO. These are set once at startup and a listener cannot
     //   change them on a locked receiver, so if the operator's intent and the radio disagree
     //   there is otherwise NOTHING on screen or in the log to reveal it — which is exactly the
@@ -1494,6 +1504,8 @@ int main(int argc, char** argv) {
                 r.rfNotch = c.rfNotch; r.dabNotch = c.dabNotch; r.zoomSpectrum = c.zoomSpectrum;
                 r.autoNotch = c.autoNotch; r.userNotch = c.userNotch;
                 r.dabAgcOverride = c.dabAgcOverride; r.dabAgcTarget = c.dabAgcTarget; r.rfAgc = c.rfAgc;
+                r.rfAgcStart = c.rfAgcStart;
+                r.agcSet = c.agcSet; r.agcSetLock = c.agcSetLock;
                 break;
             }
             return vsconfig::toJson(out);
