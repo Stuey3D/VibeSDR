@@ -3205,12 +3205,26 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
          *   and it was the unreliable one. The loop now takes its level, its clipping and its step
          *   size from samples we counted ourselves, exactly as the dongle's AGC does, and uses
          *   SDRplay's word for one thing only: the overload flag, and even that is corroborated. */
+        /* ★★★ BOTH DIRECTIONS. This read `over > 0 ? over : 0`, so the IF absorbed the surplus
+         *     when an RF step left us ABOVE target and did nothing at all when a step left us
+         *     BELOW it. Every RETREAT therefore cost level permanently: the RF gave up a rung,
+         *     the level fell with it, and the IF would not give it back because the shortfall
+         *     landed inside its deadband. The pair then ratcheted — retreat, lose 5 dB, retreat
+         *     again — until both stages sat at minimum gain with the band looking dead.
+         *  ★ Measured on 648 kHz straight after a reboot, the loop ticking normally throughout:
+         *      RF gain DOWN — LNA 5 -> 6 (peak -11.0)        ← correct: IF railed, too much RF
+         *      peak -16.0 dBFS (target -12) ... LNA 6/6, IF reduction 59 -> 59
+         *    The retreat was right and the aftermath was not.
+         *  ★★ The entire purpose of this block is "the RF moved by an amount we do not know in
+         *    advance — put the IF where it now belongs". Which way it moved is beside the point,
+         *    and the asymmetry was never reasoned for, only inherited from the case that was
+         *    written first. */
         const int    over  = (int)std::lround(peak - (double)targetDbfs);
-        const int    give  = over > 0 ? over : 0;
+        const int    give  = over;
         if (give != 0) {
             const int fix = std::max(20, std::min(59, gr + give));
             if (fix != gr) {
-                LOGI("VibeAGC/RSP: the step put us %+d dB over target — IF reduction %d -> %d, "
+                LOGI("VibeAGC/RSP: the step put us %+d dB from target — IF reduction %d -> %d, "
                      "keeping the rest of the gain", over, gr, fix);
                 sdrp->setIfGainReduction(fix);
                 vsVibeAgcEnvShift(-(double)(fix - gr));
