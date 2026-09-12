@@ -2795,6 +2795,10 @@ static int g_vibeAgcAcquire = 0;
 /** ★ Which way the DAB hill climb steps next: -1 is more RF gain, +1 is less. Flipped whenever a
  *  trial is rejected, so the search covers both directions instead of assuming one. */
 static int g_dabTrialDir = -1;
+/** ★ The LNA state that clipped, and when — the one piece of memory the RF rule needs, so a climb
+ *  and a clip-driven retreat cannot become a cycle. Expires after half a minute. */
+static int g_rfClippedAt = -1;
+static std::chrono::steady_clock::time_point g_rfClippedWhen{};
 /** ★ A pending RF step awaiting its real gain figure — see the note at the RF write. */
 static unsigned g_vibeAgcLastWin = 0, g_vibeAgcSkipWin = 0;
 /** ★★★ THE LEVEL ENVELOPE, file-scope so the gain writes can FEED THEIR OWN ACTION FORWARD.
@@ -2811,7 +2815,6 @@ static double g_vibeAgcEnv = -99.0;
 static inline void vsVibeAgcEnvShift(double dB) {
     if (g_vibeAgcEnv > -98.0) g_vibeAgcEnv += dB;
 }
-static double g_vibeAgcPendGain = 0.0;
 static int    g_vibeAgcPendGr = 0, g_vibeAgcPendPrevGr = 0, g_vibeAgcPendStep = 0;
 /** ★ The capture rate the loop is currently seeing, published by the tick's caller — the tick is
  *  a free function and cannot reach the Impl's member. A rate change re-arms acquisition. */
@@ -3133,11 +3136,19 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
          *   the level above target, give back exactly that excess and no more; if it is still at
          *   or below target, keep all of it. The climb then does what it was asked to do, in one
          *   move, and the IF is left with room for the next one. */
-        const double gNow  = sdrp->systemGainDb();
-        const int    net   = (int)std::lround(gNow - g_vibeAgcPendGain);
+        /* ★★★ OUR OWN MEASUREMENT, END TO END. This still consulted SDRplay's gainVals.curr as a
+         *     sanity gate, and that figure is the one remaining weak link in the loop: it is
+         *     frequently not refreshed before we read it, so a +19 dB step comes back as "+0" or
+         *     even "-23 while climbing". Three attempts to build compensation on it all failed.
+         *     Stuart: "if their code is causing a weak link use our own" (2026-09-12).
+         * ★ Nothing is lost by dropping it, because the correction AMOUNT was always ours — the
+         *   overshoot past target, measured from our own peak. The gate was the only foreign part
+         *   and it was the unreliable one. The loop now takes its level, its clipping and its step
+         *   size from samples we counted ourselves, exactly as the dongle's AGC does, and uses
+         *   SDRplay's word for one thing only: the overload flag, and even that is corroborated. */
         const int    over  = (int)std::lround(peak - (double)targetDbfs);
         const int    give  = over > 0 ? over : 0;
-        if (std::abs(net) <= 40 && give != 0) {
+        if (give != 0) {
             const int fix = std::max(20, std::min(59, gr + give));
             if (fix != gr) {
                 LOGI("VibeAGC/RSP: the step put us %+d dB over target — IF reduction %d -> %d, "
@@ -3364,16 +3375,58 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      * ★★ The lesson is mine and it is about method, not gain: I changed this rule four times
      *    against a moving target without re-measuring the baseline in between, so each result was
      *    compared with my expectation rather than with the last known-good figure. */
-    const bool nearOverload = ovl || heavyClip || peak > (double)targetDbfs;
+    /* ★★★ "NEAR OVERLOAD" MEANS OVERLOAD, NOT "ABOVE THE TARGET LINE". This counted any level
+     *     above target as a reason to retreat, which is far too tight: the target is the middle
+     *     of a deadband, so being a few decibels over it is NORMAL and expected. The effect was
+     *     that the loop could never take a step whose leftover rise landed above target — which
+     *     is every step the IF cannot absorb perfectly — so it sat at LNA 5 with the IF at 44 and
+     *     would not climb, with Caroline audible but buried (Stuart, 2026-09-12: "the AGC is not
+     *     increasing, I think i can hear caroline cleanly but she is just in the noise").
+     * ★ Stuart's rule says OVERLOAD: "If IF Gain at minimum is giving us Overload or very close to
+     *   overload reduce RF gain one click". Clipping is the test, not a level comparison. The IF
+     *   stage already owns the level; if it rails at 59 and the signal is still too hot, the
+     *   converter clips and that fires this at once.
+     * ★★ It also breaks the oscillation the two thresholds had between them. While both rules
+     *    were driven by the same level comparison they were complementary — a climb produced the
+     *    condition for a retreat and back again — and the only defence was a gap wider than an
+     *    LNA step, which left the IF's natural resting place stranded between them. Driving them
+     *    from DIFFERENT evidence (headroom for the climb, clipping for the retreat) removes the
+     *    coupling entirely, which is why the gap can now be narrower than the step. */
+    const bool clipping     = ovl || heavyClip;
+    const bool nearOverload = clipping;
     const bool ifSpent      = (wantGr >= 58);       // at or next to minimum IF gain
     /* ★ 40 leaves a full LNA step (~19 dB) before the 59 dB rail, so a climb is always absorbable
      *   and can never itself cause an overload. */
-    const bool ifHasRoom    = (wantGr <= 40);
+    /* ★★★ TRY IT AND LET CLIPPING JUDGE, because the step size is NOT knowable in advance. Every
+     *     threshold here has assumed a ~19 dB LNA step, and the ladder is uneven — measured on
+     *     40 m it runs 47.3, 40.7, 34.3, 9.3, -13.7, -13.7, -13.7 dB across the states, so the
+     *     steps are 7, 6, 25, 23, 0, 0. A fixed rule based on one assumed step size will always
+     *     be wrong somewhere, and it was: parked at LNA 5 with the IF at 50 and the level 5.6 dB
+     *     UNDER target, refusing to climb, with Caroline audible but buried in the noise.
+     * ★ 50 leaves 9 dB of IF headroom, which covers the small steps outright and most of a large
+     *   one. What it cannot cover shows up as clipping — and clipping now drives the retreat, so
+     *   the worst case is one step up, a clip, and one step back. That is a measurement, which is
+     *   worth more than another guessed constant.
+     * ★★ The retreat remembers the state that clipped for half a minute, so the pair cannot
+     *   become a cycle. That is the one piece of memory this loop genuinely needs — the earlier
+     *   version had four. */
+    const bool ifHasRoom    = (wantGr <= 50);
 
     int wantLna = lna;
     if (dwellOk && n > 1) {
-        if (ifSpent && nearOverload && lna < n - 1)      wantLna = lna + 1;   // less RF gain
-        else if (ifHasRoom && !nearOverload && lna > lo) wantLna = lna - 1;   // MORE RF gain
+        if (ifSpent && nearOverload && lna < n - 1) {
+            wantLna = lna + 1;                                   // less RF gain
+            g_dabTrialDir = g_dabTrialDir;                       // (unrelated; DAB owns its own)
+            g_rfClippedAt = lna;                                 // ★ do not climb straight back
+            g_rfClippedWhen = now;
+        }
+        else if (ifHasRoom && !nearOverload && lna > lo) {
+            /* ★ ...unless we have just been told that state clips. Half a minute, then try again:
+             *   conditions change, and a permanent veto is how the old loop stranded itself. */
+            const bool vetoed = g_rfClippedAt == lna - 1 &&
+                std::chrono::duration_cast<std::chrono::seconds>(now - g_rfClippedWhen).count() < 30;
+            if (!vetoed) wantLna = lna - 1;                       // MORE RF gain
+        }
     }
 
     /* ══ DAB STEERS BY ITS OWN METRICS, NOT BY THE ADC LEVEL ═══════════════════════════════════
@@ -3521,9 +3574,7 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
         /* ★ And an RF step most of all — it is the biggest step this loop can make. See above. */
         noteHwMoved();
         sfericHold(1.0);
-        const double gBefore = sdrp->systemGainDb();
         LocalSdrShim::instance().setLnaState(wantLna);
-        const double gAfter  = sdrp->systemGainDb();
         /* ★★★ DO NOT PRE-COMPENSATE. Every attempt to guess the step up front has failed, because
          *     gainVals.curr is frequently not refreshed before this read returns — "+0 dB" and
          *     "-23 dB while climbing" on moves that were plainly +19. A wrong guess is worse than
@@ -3532,11 +3583,11 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
          *     across three attempts at getting this right, each worse than the last.
          * ★ So the LNA moves ALONE. On the next tick the gain figure has settled and the net
          *   change is the pure step, with no IF write mixed into it and nothing to disentangle —
-         *   and the IF absorbs it in one move. One tick of uncorrected level, about a tenth of a
-         *   second, in exchange for arithmetic that cannot be got wrong.
+         *   and the IF absorbs it in one move, measured from OUR OWN peak — SDRplay's gain
+         *   figure is no longer consulted anywhere in this loop. One tick of uncorrected level,
+         *   about a tenth of a second, in exchange for arithmetic that cannot be got wrong.
          * ★★ The alternative was a learned step table per band and state. That is more code and
          *   more state to go stale, to avoid a 100 ms transient nobody can hear. */
-        g_vibeAgcPendGain = gBefore;
         g_vibeAgcPendStep = 1;
         LOGI("VibeAGC/RSP: RF gain %s — LNA %d -> %d (peak %.1f dBFS, clip %.4f%%, ovl %d/hw %d) "
              "— the IF will absorb it next tick",
@@ -4663,16 +4714,17 @@ struct LocalSdrShim::Impl {
          *   is sound in theory — the tuner is zero-IF and a signal on DC gets eaten by the DC
          *   canceller — but it produced a worse fault immediately: tuning to 96.6 showed a large
          *   peak with NO signal, and audio that played "crunchy" once it did. That is the
-         *   signature of a frequency error, not of DC, so some part of the RSP path does not
-         *   compensate for hwOffsetHz the way the dongle path does, and I did not find out which
-         *   before shipping it.
+         *   signature of a frequency error, not of DC — and the culprit was the RSP's two
+         *   open() paths, which passed the LOGICAL centre while tuneHw() passes the physical one.
+         *   Harmless while the offset was zero, a 15 kHz error the moment it was not. Both now
+         *   add it; see the note at the open call.
          * ★ The DC problem is real and remains — it is addressed at the source instead, by
          *   recalibrating the tuner's DC offset on every retune and gain change (see
          *   dcRecalibrate), which needs no frequency shift and nothing downstream to agree with.
          * ★★ Re-try only after auditing every reader of hwOffsetHz for driver assumptions. The
          *    failure is silent on a waterfall — the peak is still drawn in the right place. */
         if (useHackRf()) return HW_OFFSET_HACKRF_HZ;
-        return (useSdrplay() || useAirspyHf() || useTcp() || useSpy()) ? 0.0 : HW_OFFSET_HZ;
+        return (useAirspyHf() || useTcp() || useSpy()) ? 0.0 : HW_OFFSET_HZ;
     }
 
     // Physical DC of the FFT = rtlCenter + HW_OFFSET_HZ, so the VFO (at audioFreq)
@@ -21131,7 +21183,19 @@ int LocalSdrShim::startSdrplay(int index,
         self->lastIqAt.store(Impl::nowSecs(), std::memory_order_relaxed);
         self->enqueueIqInt16(iq, n, /*blockIfFull=*/false);
     });
-    if (!impl->sdrp->open(index, sampleRate, centerFreq, gainTenthDb, err)) {
+    /* ★★★ TUNE TO (LOGICAL CENTRE + OFFSET), exactly as tuneHw() and the HackRF's open do. This
+     *     passed the LOGICAL centre, which was harmless only while the RSP's offset was zero —
+     *     and the moment it was not, the radio sat 15 kHz from where the whole server believed it
+     *     was. The symptom is brutal and looks nothing like a tuning fault: a large peak on the
+     *     waterfall (drawn from the logical centre, so still in the right place) with NO signal
+     *     demodulating, and audio that plays "crunchy" when it does (Stuart, 2026-09-12). Tuning
+     *     away and back appears to fix it because a retune goes through tuneHw(), which gets it
+     *     right — so the fault only ever shows on an open or a reopen, which is exactly what a
+     *     sample-rate change out of DAB performs.
+     * ★ The comment on the HackRF open calls this "two tune paths, and only one of them applying
+     *   the offset" — it was written about that radio while this one had the same hole. */
+    const double sdrpPhys = centerFreq + impl->hwOffsetHz();
+    if (!impl->sdrp->open(index, sampleRate, sdrpPhys, gainTenthDb, err)) {
         delete impl; return -1;
     }
     // ★★★ THE OPERATOR'S FRONT-END FILTERS, APPLIED BY THE SERVER ITSELF.
@@ -23454,7 +23518,10 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
           err.clear();
       }
     if (rsp) {
-        ok = impl->sdrp->open(impl->sdrpIndex, impl->sampleRate, impl->rtlCenter.load(),
+        // ★ + hwOffsetHz(), for the reason spelled out at the initial open above: an open that
+        //   skips it parks the radio away from where the rest of the server thinks it is.
+        ok = impl->sdrp->open(impl->sdrpIndex, impl->sampleRate,
+                              impl->rtlCenter.load() + impl->hwOffsetHz(),
                               impl->lastGainTenthDb, err);
     } else if (ahf) {
         ok = impl->ahf->open(impl->ahfIndex, impl->sampleRate, impl->rtlCenter.load(),

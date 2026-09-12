@@ -1489,6 +1489,22 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
           renderRspVals();
         }
       }
+      /* ★★★ BREATHE WHEN THE RADIO ACTUALLY MOVES. The gain on this receiver legitimately sits
+       *     still for minutes, so a motionless readout could equally mean "settled" or "dead" —
+       *     and people read it as dead. A short pulse on each reported change makes the
+       *     difference visible without adding a control or a number to interpret. */
+      {
+        const flash = (id: string) => {
+          const el = document.getElementById(id); if (!el) return;
+          el.classList.remove('agcMoved');
+          void (el as HTMLElement).offsetWidth;        // restart the animation
+          el.classList.add('agcMoved');
+          setTimeout(() => el.classList.remove('agcMoved'), 2000);
+        };
+        if (rspLastLna !== null && lna !== rspLastLna) flash('rspLnaVal');
+        if (rspLastIf  !== null && ifgr !== rspLastIf) flash('rspIfGrVal');
+        rspLastLna = lna; rspLastIf = ifgr;
+      }
       if (agcOn) {
         // ★ Telemetry MOVES the thumb; it does not decide who owns it. Watching the reduction
         //   ride up and down is the only evidence a listener has that the AGC is alive.
@@ -2023,6 +2039,9 @@ let hwAgcLocked = false;
 /** ★ Automatic notch filtering is ON — the server sets both notches from the tuned frequency, so
  *  they are not a listener control while it runs. See applyRspLock. */
 let hwAutoNotch = false;
+/** ★ Last reported gain state, so a CHANGE can be shown — see the breathing indicator. */
+let rspLastLna: number | null = null;
+let rspLastIf: number | null = null;
 /** ★ The owner permits listeners to toggle the notches. Default TRUE so an older server, which
  *  sends neither field, behaves exactly as it did before rather than greying a working control. */
 let hwUserNotch = true;
