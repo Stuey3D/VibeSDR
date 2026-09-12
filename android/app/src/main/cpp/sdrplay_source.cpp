@@ -674,6 +674,25 @@ std::string SdrplaySource::model() const {
     }
 }
 
+/** ★★★ THE TUNER'S DC OFFSET IS GAIN-DEPENDENT, SO IT MUST BE RECALIBRATED WHEN THE GAIN MOVES.
+ *  The API corrects DC for us — DCenable and IQenable are both set, and dcCal defaults to 3
+ *  (Periodic) — which is exactly why DC spikes are not normally visible in ordinary use: the gain
+ *  sits still and the periodic calibration converges on it. Ours does not sit still. Every LNA or
+ *  gRdB change shifts the offset, and periodic recalibration then spends its whole interval
+ *  chasing, which is when the spikes appear. Stuart asked the right question — "how does SDRPlay
+ *  work around the DC spikes, I'm pretty sure you dont see them in regular use" (2026-09-12) —
+ *  and the answer is that they do work around them, and the difference here is us.
+ *  ★ sdrplay_api_Update_Tuner_DcOffset asks for that calibration NOW rather than at the next
+ *    interval. One extra API call per gain change, and gain changes are now rare.
+ *  ★★ This is the fix at the source. The AGC also ignores DC when measuring level (see streamCb),
+ *     because a loop that counts DC as signal winds itself down chasing its own offset — but that
+ *     is robustness, not a substitute for correcting the offset in the first place. */
+void SdrplaySource::dcRecalibrate() {
+    if (!open_ || !impl_->selected) return;
+    api().Update(impl_->dev.dev, impl_->dev.tuner,
+                 sdrplay_api_Update_Tuner_DcOffset, sdrplay_api_Update_Ext1_None);
+}
+
 float SdrplaySource::systemGainDb() const {
     /* ★★★ EXACTLY THE FAULT currentIfGr() HAD, one function away, and it survived that fix.
      *     This preferred the AGC's reported gain UNCONDITIONALLY — and that value only updates
@@ -747,8 +766,11 @@ void SdrplaySource::setLnaState(int state) {
         if (gr >= 20 && gr <= 59)
             impl_->params->rxChannelA->tunerParams.gain.gRdB = (float)gr;
     }
-    if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
-                            sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
+    if (open_) {
+        api().Update(impl_->dev.dev, impl_->dev.tuner,
+                     sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
+        dcRecalibrate();          // ★ the DC offset is gain-dependent — see dcRecalibrate()
+    }
     /* ★★★ AND GIVE THE AGC ITS REGISTER BACK. Update_Tuner_Gr submits gRdB, and on this API a
      *     manual gain write is precisely how you TAKE the IF reduction away from the AGC — so a
      *     single LNA change silently stops it, and it never runs again until something re-enables
@@ -919,17 +941,43 @@ static void streamCb(short* xi, short* xq, sdrplay_api_StreamCbParamsT*,
      *     the ADC actually produced, not what the DSP made of it.
      * ★ Peak of |I| and |Q| separately, not the vector magnitude: the ADC rails on each channel
      *   independently, and it is the rail we are trying to stay off. */
+    /* ★★★ MEASURE THE SIGNAL, NOT THE DC OFFSET. This took max(|I|,|Q|) on the RAW samples, so any
+     *     DC offset counted as level — and that is a runaway, not merely an error: DC inflates
+     *     the peak, the AGC winds the gain down to "protect" against it, the wanted signal
+     *     shrinks while the DC does not, so the peak stays inflated and the gain keeps falling.
+     *     It ends with both stages at minimum and the signal under the noise.
+     *     Measured on air (Stuart, 2026-09-12): 7D with the IF pegged at 59 and only 12.3 dB of
+     *     system gain, MER down from 24.8 to 12.4 dB and 108 frames erased; 9A unable to resolve
+     *     at all, with "large DC spikes present" plainly visible in the spectrum.
+     * ★ The mean is taken per callback and applied to the NEXT one — DC moves slowly, a callback
+     *   is a few milliseconds, and this costs one pass of adds rather than a division per sample.
+     * ★★ CLIPPING still uses the RAW value, because the converter rails on the raw sample, DC and
+     *    all. Level and overload are different questions about the same samples: one asks how
+     *    loud the signal is, the other asks whether the ADC is in trouble. */
+    static double dcI = 0.0, dcQ = 0.0;
+    const int dcIi = (int)dcI, dcQi = (int)dcQ;
+    long long sumI = 0, sumQ = 0;
     int peak = 0; unsigned rails = 0;
     for (unsigned i = 0; i < numSamples; ++i) {
         const int a = xi[i], b = xq[i];
-        const int ai = a < 0 ? -a : a, bi = b < 0 ? -b : b;
+        sumI += a; sumQ += b;
+        const int ac = a - dcIi, bc = b - dcQi;          // ★ DC-removed, for LEVEL
+        const int ai = ac < 0 ? -ac : ac, bi = bc < 0 ? -bc : bc;
         if (ai > peak) peak = ai;
         if (bi > peak) peak = bi;
         /* ★ 32000 of 32767 — "at the rail" with a little slack, because a converter rarely hits
-         *   the exact end code and waiting for it would under-report clipping badly. */
-        if (ai >= 32000 || bi >= 32000) ++rails;
+         *   the exact end code and waiting for it would under-report clipping badly.
+         * ★★ On the RAW sample: the ADC clips on what it actually produced. */
+        const int ar = a < 0 ? -a : a, br = b < 0 ? -b : b;
+        if (ar >= 32000 || br >= 32000) ++rails;
         ilv[i * 2]     = a;
         ilv[i * 2 + 1] = b;
+    }
+    if (numSamples) {
+        /* ★ Slew slowly toward the measured mean — a real DC offset is steady, and following it
+         *   quickly would let a strong low-frequency component be mistaken for DC and removed. */
+        dcI += ((double)sumI / (double)numSamples - dcI) * 0.05;
+        dcQ += ((double)sumQ / (double)numSamples - dcQ) * 0.05;
     }
     if (c->peak) {
         /* ★ Accumulated across callbacks into a window of about a tenth of a second, because one
@@ -947,7 +995,7 @@ static void streamCb(short* xi, short* xq, sdrplay_api_StreamCbParamsT*,
          *     first window happened to straddle the change. */
         static unsigned lastGen = 0;
         const unsigned g = c->gen ? c->gen->load(std::memory_order_relaxed) : 0;
-        if (g != lastGen) { lastGen = g; wPeak = 0; wRails = 0; wTotal = 0; }
+        if (g != lastGen) { lastGen = g; wPeak = 0; wRails = 0; wTotal = 0; dcI = dcQ = 0.0; }
         if (peak > wPeak) wPeak = peak;
         wRails += rails; wTotal += numSamples;
         if (wTotal >= 200000) {                    // ~0.1 s at 2 MSPS; rate-independent enough
@@ -1034,6 +1082,7 @@ bool SdrplaySource::apiUnresponsive() { return false; }
 void SdrplaySource::retryApi() {}
 std::string SdrplaySource::deviceNameLocked(int) { return ""; }
 float SdrplaySource::systemGainDb() const { return 0.0f; }
+void SdrplaySource::dcRecalibrate() {}
 int SdrplaySource::currentIfGr() const { return 0; }
 int SdrplaySource::currentLnaState() const { return 0; }
 int SdrplaySource::bandwidthKHzForRate(double) { return 0; }

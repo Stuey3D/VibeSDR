@@ -2794,6 +2794,19 @@ static int g_vibeAgcBadLna = -1, g_vibeAgcCleanRun = 0, g_vibeAgcRailHi = 0, g_v
 static int g_vibeAgcAcquire = 0;
 /** ★ A pending RF step awaiting its real gain figure — see the note at the RF write. */
 static unsigned g_vibeAgcLastWin = 0, g_vibeAgcSkipWin = 0;
+/** ★★★ THE LEVEL ENVELOPE, file-scope so the gain writes can FEED THEIR OWN ACTION FORWARD.
+ *  This was a function static with no such path, and the consequence was a ratchet that ended at
+ *  the end stop every time: the envelope decays at ~1 dB/s after a 2 s hold, which cannot follow a
+ *  19 dB gain step we made ourselves. Measured — five consecutive RF cuts, 36 dB of gain removed,
+ *  and the reported peak sat at EXACTLY -3.7 dBFS throughout. The loop saw "still too hot" after
+ *  every cut, cut again, and ran out of range.
+ *  ★ When we change the gain by a known amount, the level at the converter changes by that amount.
+ *    There is nothing to measure and nothing to wait for: shift the estimate and carry on. A loop
+ *    that has to rediscover its own actions is fighting itself. */
+static double g_vibeAgcEnv = -99.0;
+static inline void vsVibeAgcEnvShift(double dB) {
+    if (g_vibeAgcEnv > -98.0) g_vibeAgcEnv += dB;
+}
 static double g_vibeAgcPendGain = 0.0;
 static int    g_vibeAgcPendGr = 0, g_vibeAgcPendPrevGr = 0, g_vibeAgcPendStep = 0;
 /** ★ The capture rate the loop is currently seeing, published by the tick's caller — the tick is
@@ -2906,7 +2919,6 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      *   and the asymmetry is the point — it is safe in the direction that matters.
      * ★★ The RAW peak and the clip fraction are still used for the overload decisions below;
      *    smoothing is for the level loop only, where jitter is the enemy. */
-    static double peakSm = -99.0;
     /* ★ The last two raw windows, for the median filter below — declared here so the retune
      *   reset can clear them with everything else. */
     static double p1 = -99.0, p2 = -99.0;
@@ -2933,7 +2945,7 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
          *     envelope is not enough; the thing feeding it has to be clean too. */
         sdrp->adcRestart();
         lastHz = nowHz; lastRate = nowRate;
-        peakSm = peakRaw; p1 = p2 = peakRaw;
+        g_vibeAgcEnv = peakRaw; p1 = p2 = peakRaw;
         vsVibeAgcForget();
         LOGI("VibeAGC/RSP: retuned to %.3f MHz — forgetting the previous gain lesson", nowHz / 1e6);
     }
@@ -3041,16 +3053,16 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
     const int    holdWins     = g_vibeAgcDelay.load(std::memory_order_relaxed);
     static int   sinceAttack  = 9999;
 
-    if (peakSm <= -98.0) peakSm = sustained;
-    if (sustained > peakSm) {
-        peakSm = std::min(sustained, peakSm + attackPerWin);   // ATTACK
+    if (g_vibeAgcEnv <= -98.0) g_vibeAgcEnv = sustained;
+    if (sustained > g_vibeAgcEnv) {
+        g_vibeAgcEnv = std::min(sustained, g_vibeAgcEnv + attackPerWin);   // ATTACK
         sinceAttack = 0;
     } else {
         ++sinceAttack;
-        if (sinceAttack >= holdWins && (peakSm - sustained) > decayThresh)
-            peakSm -= decayPerWin;                             // DECAY
+        if (sinceAttack >= holdWins && (g_vibeAgcEnv - sustained) > decayThresh)
+            g_vibeAgcEnv -= decayPerWin;                             // DECAY
     }
-    const double peak = peakSm;
+    const double peak = g_vibeAgcEnv;
     /* ★★★ THE HARDWARE OVERLOAD FLAG LATCHES, SO IT MUST BE CORROBORATED BEFORE IT IS OBEYED.
      *     sdrplay_api raises PowerOverloadChange and the flag stays set until a clearing event
      *     arrives — which may not come. Used as a STANDING condition it becomes a ratchet: every
@@ -3102,6 +3114,7 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
                 LOGI("VibeAGC/RSP: the step was really %+d dB, not %+d — IF reduction %d -> %d to "
                      "finish the compensation", real, applied, gr, fix);
                 sdrp->setIfGainReduction(fix);
+                vsVibeAgcEnvShift(-(double)(fix - gr));
                 gr = fix;
             }
         }
@@ -3534,6 +3547,9 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
          *   braces — the real cure is the peak hold above, which stops the steps happening. */
         sfericHold(2.0);
         lastIfWrite = clock::now();
+        /* ★ FEED IT FORWARD: more reduction is less gain, so the level falls by exactly this
+         *   much. Waiting to observe it is what made the loop ratchet — see g_vibeAgcEnv. */
+        vsVibeAgcEnvShift(-(double)(wantGr - gr));
         sdrp->setIfGainReduction(wantGr);
         g_vibeAgcLastGr.store(wantGr, std::memory_order_relaxed);
         g_vibeAgcSkipWin = win + 2;     // ★ ignore the straddling window — see the note above
@@ -3580,6 +3596,9 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
         const int comp = std::max(20, std::min(59, wantGr + stepDb));
         sdrp->setIfGainReduction(comp);
         g_vibeAgcLastGr.store(comp, std::memory_order_relaxed);
+        /* ★ Both halves at once: the LNA step changed the gain by stepDb and the IF absorbed
+         *   (comp - gr) of reduction. The net is what the converter will actually see. */
+        vsVibeAgcEnvShift((double)stepDb - (double)(comp - gr));
         /* ★ An RF step is far bigger than an IF nudge and the radio needs a moment, so give it
          *   three clear windows before judging anything. */
         g_vibeAgcSkipWin = win + 3;

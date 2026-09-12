@@ -169,6 +169,10 @@ public:
      *  ★ The event MUST be acknowledged or the API stops sending them. */
     bool overloaded() const { return overload_; }
 
+    /** Ask the tuner to recalibrate its DC offset now — the offset is gain-dependent, so this is
+     *  called after every gain change. See the definition for why it matters. */
+    void dcRecalibrate();
+
     /** ★★★ THE OVERLOAD FLAG, CORROBORATED BY THE SAMPLES — AND THIS IS THE ONE TO USE.
      *  `overloaded()` is the API's raw PowerOverloadChange latch. It is set on an overload event
      *  and cleared only by a clearing event, which may simply never arrive — so in practice it
