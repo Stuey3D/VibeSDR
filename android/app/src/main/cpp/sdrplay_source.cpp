@@ -10,6 +10,7 @@
 #include <atomic>
 #include <future>
 #include <chrono>
+#include <thread>
 #include <cstdio>
 #include <cmath>
 
@@ -659,15 +660,34 @@ int SdrplaySource::bandwidthKHzForRate(double fs) {
     return 8000;
 }
 
-int SdrplaySource::lnaStateCount() const {
+/** ★★★ HOW MANY LNA STATES THIS RADIO HAS **IN THIS BAND** — IT IS NOT ONE NUMBER.
+ *  Every RSP has fewer LNA states below 60 MHz and in L-band than it does in between, and the
+ *  API says so itself: RSPIA_NUM_LNA_STATES is 10 but RSPIA_NUM_LNA_STATES_AM is 7 and
+ *  _LBAND is 9. We returned the flat per-model number, so on HF the loop was offered three
+ *  states that do not exist.
+ *  ★ THAT IS WHAT THE 40 m MEASUREMENT WAS SHOWING AND I READ IT AS HARDWARE. Sweeping the
+ *    states with the IF pinned gave 47.3, 40.7, 34.3, 9.3, -13.7, -13.7, -13.7 dB — I recorded
+ *    "uneven, and saturated above state 6" and built rules around the saturation. There is no
+ *    saturation. On HF the RSP1A has SEVEN states; 7, 8 and 9 were the same state, clamped,
+ *    and the gain loop spent its time walking into a dead zone it could not tell from a rail.
+ *  ★★ The numbers come from the API's own #defines, used as the interface intends — nothing
+ *    of SDRplay's is copied or derived. Band edges are the standard ones the API switches on.
+ *  ★★★ lnaStateCount() with no argument answers for WHERE THE RADIO IS NOW, so every existing
+ *      caller becomes band-correct without changing. */
+int SdrplaySource::lnaStateCount() const { return lnaStateCount(curCentre_); }
+
+int SdrplaySource::lnaStateCount(double hz) const {
+    const bool am    = hz <  60.0e6;
+    const bool b420  = hz >= 420.0e6 && hz < 1000.0e6;
+    const bool lband = hz >= 1000.0e6;
     switch (impl_->dev.hwVer) {
-        case SDRPLAY_RSP1_ID:    return 4;
+        case SDRPLAY_RSP1_ID:    return 4;                       // one table, all bands
         case SDRPLAY_RSP1A_ID:
-        case SDRPLAY_RSP1B_ID:   return 10;
-        case SDRPLAY_RSP2_ID:    return 9;
-        case SDRPLAY_RSPduo_ID:  return 10;
+        case SDRPLAY_RSP1B_ID:   return am ? 7 : lband ? 9 : 10;
+        case SDRPLAY_RSP2_ID:    return b420 ? 6 : 9;
+        case SDRPLAY_RSPduo_ID:  return am ? 7 : lband ? 9 : 10;
         case SDRPLAY_RSPdx_ID:
-        case SDRPLAY_RSPdxR2_ID: return 28;
+        case SDRPLAY_RSPdxR2_ID: return hz < 250.0e6 ? 27 : b420 ? 21 : lband ? 19 : 28;
         default:                 return 4;
     }
 }
@@ -765,6 +785,52 @@ int SdrplaySource::currentIfGr() const {
 int SdrplaySource::currentLnaState() const {
     if (!impl_->params || !impl_->params->rxChannelA) return 0;
     return (int)impl_->params->rxChannelA->tunerParams.gain.LNAstate;
+}
+
+/** ★★★ LEARN THE LNA LADDER FROM THE MOVES THE LOOP ALREADY MAKES — DO NOT SWEEP FOR IT.
+ *  The first version wrote every LNA state in turn and read gainVals back. It kept returning
+ *  nonsense: ten identical rungs when the sweep crossed a device rebuild, then rungs in exact
+ *  duplicated PAIRS ("76.7 76.7 62.1 62.1 ...") whatever delay was used. gainVals is refreshed on
+ *  the API's own schedule and a burst of writes outruns it, so the readings belong to the wrong
+ *  rungs — and a ladder wrong at one rung sends the loop to exactly the wrong state.
+ *  ★ It was also the wrong shape of solution: ten register writes purely to calibrate, on a live
+ *    radio with a listener on it, repeated per band.
+ *  ★★ THE RADIO IS ALREADY TELLING US. Every settled tick reports the total gain it is
+ *    delivering, and the LNA's own contribution is that total plus the IF reduction currently
+ *    applied — gRdB is a REDUCTION, so adding it back removes the IF from the figure and leaves
+ *    the front end's. Record that against the state we are in, per band, and the ladder fills
+ *    itself in from ordinary operation with no writes, no disturbance and no race.
+ *  ★★★ STATES WE HAVE NOT VISITED STAY UNKNOWN, and the loop falls back to a single step for
+ *      those — which is exactly what it did before, so nothing is worse while it learns and
+ *      everything is better once it has. A measurement taken from the radio in its real state
+ *      beats one taken from a sweep that disturbs the thing it measures. */
+void SdrplaySource::noteLnaGain(int state, float totalGainDb, int ifGrDb) {
+    const int band = lnaBandId(curCentre_);
+    if (band < 0 || band >= kLnaBands) return;
+    if (state < 0 || state >= kLnaStatesMax) return;
+    if (totalGainDb < -900.0f || ifGrDb <= 0) return;
+    const float lnaOnly = totalGainDb + (float)ifGrDb;   // ★ gRdB is a reduction; add it back
+    float& slot = lnaObs_[band][state];
+    if (lnaSeen_[band][state]) slot += (lnaOnly - slot) * 0.25f;   // ★ gentle, in case of noise
+    else { slot = lnaOnly; lnaSeen_[band][state] = true; }
+}
+
+/** The learned gain of an LNA state in the band the radio is in now, or NaN if never visited. */
+float SdrplaySource::lnaGainDb(int state) const {
+    const int band = lnaBandId(curCentre_);
+    if (band < 0 || band >= kLnaBands || state < 0 || state >= kLnaStatesMax) return NAN;
+    if (!lnaSeen_[band][state]) return NAN;
+    return lnaObs_[band][state];
+}
+
+/** ★ Which of the API's gain-table bands a frequency falls in. The tables change at these edges,
+ *  so a ladder learned on one side of one does not apply on the other. */
+int SdrplaySource::lnaBandId(double hz) {
+    if (hz <   60.0e6) return 0;
+    if (hz <  250.0e6) return 1;
+    if (hz <  420.0e6) return 2;
+    if (hz < 1000.0e6) return 3;
+    return 4;
 }
 
 void SdrplaySource::setLnaState(int state) {
@@ -1101,6 +1167,10 @@ void SdrplaySource::setIfAgcDynamics(int, int, int, int) {}
 void SdrplaySource::setRfNotch(bool) {}
 void SdrplaySource::setDabNotch(bool) {}
 int  SdrplaySource::lnaStateCount() const { return 0; }
+int  SdrplaySource::lnaStateCount(double) const { return 0; }
+void  SdrplaySource::noteLnaGain(int, float, int) {}
+float SdrplaySource::lnaGainDb(int) const { return NAN; }
+int   SdrplaySource::lnaBandId(double) { return 0; }
 bool SdrplaySource::hasRfNotch() const { return false; }
 bool SdrplaySource::hasDabNotch() const { return false; }
 bool SdrplaySource::hasBiasT() const { return false; }

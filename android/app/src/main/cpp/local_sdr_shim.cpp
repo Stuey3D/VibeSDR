@@ -3209,7 +3209,15 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      *     where in a 6 dB band it sits. Stuart, 2026-09-12 on 3729 kHz: "causing noise floor jumps
      *     ... too aggressive on the IF AGC now".
      * ★ Slow in, slow out: the averaging above is now ~3 s, so ordinary QSB never reaches here. */
-    constexpr double kDead   = 6.0;    // dB: inside this, the level is correct and nothing moves
+    /* ★★★ HALVED FOR DAB, BECAUSE A DEADBAND IS HEADROOM GIVEN AWAY. 6 dB either side is a
+     *     band "worth nothing to the listener and everything to stability" for a carrier — but
+     *     an OFDM ensemble sitting 6 dB hot and declared correct is 6 dB of peak headroom that
+     *     1536 carriers needed. Measured on 10D: peak -6.4 dBFS against a -12 target, the IF
+     *     holding at 36 -> 36 because +5.6 dB is inside the band, MER 9.1 dB and 246 frames
+     *     erased. The loop was right by its own rule and wrong for the signal.
+     *  ★ 3 dB still covers the wander of a 1536-carrier peak (see the note below on why 3 and
+     *    not 2), so this buys headroom without buying flap. */
+    const double kDead = g_dabMode.load(std::memory_order_relaxed) ? 3.0 : 6.0;
     /* ★ Ordinarily 4 dB a tick — approach, never lunge. But when the level is a LONG way out,
      *   which is what an uncompensated LNA step leaves behind, crawling at 4 dB means seconds of
      *   wrong level and possibly seconds of clipping. So the step scales with the error: small
@@ -3445,8 +3453,25 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      *  ★★ This is the exact mirror of the climb's missing level condition, and the pair is now
      *    symmetric: take RF gain only when short of level, give it back when over it and the IF
      *    can no longer help. 2 dB, matching the climb's margin, so the two cannot meet. */
-    const bool ifRailedAndHot = (wantGr >= 59) && err > 2.0;
-    const bool nearOverload = clipping || (ifSpent && ovlRaw) || ifRailedAndHot;
+    /* ★★★ THE IF AT ITS RAIL IS THE TRIGGER, FULL STOP — NO LEVEL TEST NEEDED. This asked for
+     *     err > 2 as well, and that was still thinking in levels. The level can be perfectly on
+     *     target while the DISTRIBUTION is wrong, and on 10D it was: LNA 3 with the IF pinned at
+     *     59, 42 dB of system gain, peak right where it was asked to be — and MER 9.4 dB with 431
+     *     frames erased. Nothing in the level could object, because nothing about the level was
+     *     wrong.
+     *  ★ gRdB 59 is MINIMUM IF gain. The IF only ends up there by shedding everything it has, and
+     *    it only has to do that when the stage in front of it is handing over more than the chain
+     *    wants. So a railed IF is direct evidence of excess RF gain, whatever the converter says.
+     *  ★★ And the correction is LEVEL-NEUTRAL, which is what makes it safe to take without
+     *    waiting for damage: drop one LNA step and the IF gives back the gain it was throwing
+     *    away, so the listener's level does not move — only the amount of signal being forced
+     *    through the front end does. It stops itself, too: the moment the IF comes off 59 this
+     *    is false.
+     *  ★★★ This is Stuart's own rule read properly. "If IF Gain at minimum is giving us Overload
+     *      or very close to overload reduce RF gain one click" — the IF AT MINIMUM is the
+     *      condition; I had been treating the overload as the condition and the IF as a caveat. */
+    const bool ifRailed = (wantGr >= 58);
+    const bool nearOverload = clipping || ifRailed;
     /* ★ 40 leaves a full LNA step (~19 dB) before the 59 dB rail, so a climb is always absorbable
      *   and can never itself cause an overload. */
     /* ★★★ TRY IT AND LET CLIPPING JUDGE, because the step size is NOT knowable in advance. Every
@@ -3464,10 +3489,55 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      *   version had four. */
     const bool ifHasRoom    = (wantGr <= 50);
 
+    /* ★★★ THE RADIO'S OWN LADDER, SO A CORRECTION CAN BE AIMED RATHER THAN SHUFFLED TOWARDS.
+     *     sdrp->lnaLadder() is the measured total gain of each LNA state IN THIS BAND (see
+     *     SdrplaySource::lnaLadder). With it, "the IF is railed and needs about 14 dB of relief"
+     *     picks the state that supplies 14 dB of relief — one move, in one dwell. Without it the
+     *     loop can only step by one and re-measure, which on HF overshoots by 20 dB and in Band
+     *     III takes six ticks to cover the same ground.
+     *  ★ `lnaStep(from, wantDb)` returns the state closest to `wantDb` decibels away from `from`,
+     *    never past the ends, and never the state it started on unless nothing better exists.
+     *  ★★ FALLS BACK TO A SINGLE STEP whenever the ladder is unavailable — an unmeasured radio,
+     *    a model we have not seen, a failed sweep. A loop that only works on calibrated hardware
+     *    is a loop that stops working the first time a new RSP appears. */
+    /* ★ TEACH IT WHERE WE ARE, every settled tick. Costs nothing and needs no writes: the tuner
+     *   is already reporting the gain it delivers, and the LNA's share of it is that figure plus
+     *   the IF reduction currently applied. Only while dwellOk, so the reading belongs to the
+     *   state it is filed under rather than to a move still in flight. */
+    if (dwellOk) sdrp->noteLnaGain(lna, sdrp->systemGainDb(), gr);
+
+    /* ★★★ AIM THE CORRECTION WHERE THE LADDER IS KNOWN, STEP WHERE IT IS NOT. Both endpoints
+     *     have to have been visited for the distance between them to mean anything, so unknown
+     *     states are simply not candidates; the loop then falls back to moving one state, which
+     *     is what it always did, and learns that state's gain on arrival. Nothing is worse while
+     *     it is learning, and once learned "I need 14 dB less RF gain" is one move rather than a
+     *     shuffle. */
+    auto lnaStep = [&](int from, double wantDb) -> int {
+        const float here = sdrp->lnaGainDb(from);
+        const int   one  = from + (wantDb < 0 ? 1 : -1);     // higher state = less RF gain
+        if (!std::isfinite(here)) return one;
+        const double aim = (double)here + wantDb;
+        int best = -1; double bestErr = 1e9;
+        for (int st = 0; st < n; ++st) {
+            const float g2 = sdrp->lnaGainDb(st);
+            if (!std::isfinite(g2)) continue;
+            const double e = std::fabs((double)g2 - aim);
+            if (e < bestErr) { bestErr = e; best = st; }
+        }
+        if (best < 0 || best == from) return std::max(0, std::min(n - 1, one));
+        return std::max(0, std::min(n - 1, best));
+    };
+
     int wantLna = lna;
     if (dwellOk && n > 1) {
         if (ifSpent && nearOverload && lna < n - 1) {
-            wantLna = lna + 1;                                   // less RF gain
+            /* ★ Take off exactly as much RF gain as the IF needs to come off its rail and sit
+             *   somewhere it can still work in both directions. kIfRest is that place: far enough
+             *   from 59 to absorb a surge, far enough from 20 to give gain back if the signal
+             *   fades. The IF then returns the same number of decibels and the listener's level
+             *   does not move — only the load on the front end changes. */
+            constexpr int kIfRest = 45;
+            wantLna = lnaStep(lna, -(double)(wantGr - kIfRest));  // negative = less RF gain
             g_dabTrialDir = g_dabTrialDir;                       // (unrelated; DAB owns its own)
             g_rfClippedAt = lna;                                 // ★ do not climb straight back
             g_rfClippedWhen = now;
@@ -3513,7 +3583,9 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
                 const double gNow = sdrp->systemGainDb();
                 capped = gNow > -900.0 && gNow >= g_ovlCeilDb - OVL_CEIL_MARGIN_DB;
             }
-            if (!vetoed && !capped) wantLna = lna - 1;            // MORE RF gain
+            /* ★ Ask for exactly the shortfall, so a weak band is answered in one move instead of
+             *   one click per measurement window. Capped at the ladder's own ends by lnaStep. */
+            if (!vetoed && !capped) wantLna = lnaStep(lna, -err);   // err is negative here
             /* ★ ONCE every 15 s. This loop runs at tick rate and an unrate-limited LOGI in it
              *   has already taken this radio off the air once (2026-09-12). */
             else if (capped) {
@@ -3604,8 +3676,32 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
             }
         }
         /* ★ The level loop keeps the converter in range either way; only the RF stage is handed
-         *   over here, and only while a multiplex is locked. */
-        wantLna = sdrp->currentLnaState();
+         *   over here, and only while a multiplex is locked.
+         * ★★★ BUT A RAIL OUTRANKS THE SEARCH. This line used to hand the RF stage over
+         *     unconditionally, and that quietly threw away the one decision that is not an
+         *     optimisation: the retreat taken when the IF has railed at minimum gain. So on a
+         *     multiplex the loop could sit at LNA 3 with the IF pinned at 59 and 42 dB of system
+         *     gain indefinitely — every safety rule in this function computed, and then
+         *     discarded a few lines later. Measured repeatedly on 10D, which is wedged between
+         *     two much stronger blocks and is exactly where excess front-end gain hurts most.
+         *  ★ A hill climb searching for the best error rate is the right owner of "which state is
+         *    BEST". It is not the right owner of "this state is unusable", and it cannot even see
+         *    the difference — its only input is the error rate it is trying to minimise, which is
+         *    already degraded by the overload it is being asked to notice.
+         *  ★★ So a RETREAT survives (a higher state is less RF gain) and everything else defers.
+         *    The search is free to work within whatever ceiling the rails impose. */
+        const int safetyLna = wantLna;                  // what the rails asked for
+        wantLna = sdrp->currentLnaState();              // what the search chose
+        if (safetyLna > wantLna) {
+            static std::chrono::steady_clock::time_point saidRail{};
+            if (std::chrono::duration_cast<std::chrono::seconds>(now - saidRail).count() >= 15) {
+                saidRail = now;
+                LOGI("VibeAGC/RSP: DAB — the IF is railed at %d dB, so the front end gives a "
+                     "state back (LNA %d -> %d); the error-rate search resumes under that",
+                     gr, wantLna, safetyLna);
+            }
+            wantLna = safetyLna;
+        }
     }
 
     /* ── THE WRITE ────────────────────────────────────────────────────────────────────────────
@@ -8561,8 +8657,25 @@ struct LocalSdrShim::Impl {
                                   : rateNow <= 9216000.0 ? 10 : 8;
                 const int headroom = adcBits - 8;          // dB to stay back from the dongle's aim
                 g_vibeAgcRateHz.store(sampleRate, std::memory_order_relaxed);
-                vsSdrplayVibeAgcTick(sdrp.get(), floorState,
-                                     (int)std::lround(agcTargetDbfs()) - headroom);
+                /* ★★★ SAY WHAT WE AIMED AT AND WHY, ONCE PER CHANGE. Whether DAB's -9 base was
+                 *     reaching this loop at all cost a long detour through the source on
+                 *     2026-09-12 — the heartbeat printed the target but nothing said where it
+                 *     came from, so "-12 while on 10D" could not be told apart from "-15 that I
+                 *     misread". A derived number that cannot be traced to its inputs is a number
+                 *     you end up arguing about. */
+                const double baseTgt = agcTargetDbfs();
+                const int    tgt     = (int)std::lround(baseTgt) - headroom;
+                {
+                    static int saidTgt = 999;
+                    if (tgt != saidTgt) {
+                        saidTgt = tgt;
+                        LOGI("VibeAGC/RSP: aiming at %d dBFS — %s base %.0f, less %d dB of "
+                             "headroom for a %d-bit converter at %.3f MS/s",
+                             tgt, g_dabMode.load(std::memory_order_relaxed) ? "DAB" : "normal",
+                             baseTgt, headroom, adcBits, rateNow / 1e6);
+                    }
+                }
+                vsSdrplayVibeAgcTick(sdrp.get(), floorState, tgt);
             }
             else if (!sdrpSettling && graceDone && ifAgcAlive)
                 vsSdrplayRfAgcTick(sdrp.get(), floorState, sdrpAgcWanted);

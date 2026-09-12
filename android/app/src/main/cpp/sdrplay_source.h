@@ -17,6 +17,8 @@
 //   3. Gain is TWO-DIMENSIONAL — an LNA state plus an IF gain reduction — so it cannot be
 //      mapped onto the dongle's single index without deciding a policy. See setGainTenthDb.
 #pragma once
+#include <vector>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <atomic>
@@ -103,6 +105,22 @@ public:
 
     /** How many LNA states this model offers — 4 on an RSP1, 10 on an RSP1A/1B, 28 on a dx. */
     int  lnaStateCount() const;
+    /** ★ How many LNA states exist AT THIS FREQUENCY. Fewer below 60 MHz and in L-band than in
+     *  between, per the API's own per-band constants — the no-argument form answers for wherever
+     *  the radio is tuned now. Offering a state the band does not have gives a gain loop a dead
+     *  zone it cannot tell from a rail. */
+    int  lnaStateCount(double hz) const;
+
+    /** ★★★ TEACH THE RADIO'S LNA LADDER FROM ORDINARY OPERATION. Call once per settled tick
+     *  with the state we are in, the total gain the tuner reports, and the IF reduction applied;
+     *  the LNA's own contribution is total + reduction. Learned per band, because the gain tables
+     *  change at the API's band edges. No sweep, no extra writes, nothing disturbed. */
+    void  noteLnaGain(int state, float totalGainDb, int ifGrDb);
+    /** Learned gain of an LNA state in the current band, or NaN if that state has never been
+     *  visited here. Callers MUST cope with NaN rather than assume a step size. */
+    float lnaGainDb(int state) const;
+    /** Which of the API's gain-table bands a frequency falls in. */
+    static int lnaBandId(double hz);
     bool hasRfNotch() const;
     bool hasDabNotch() const;
     bool hasBiasT() const;
@@ -225,6 +243,12 @@ private:
     std::string curSerial_;
     double curRate_   = 0.0;
     double curCentre_ = 0.0;
+    /* ★ The learned LNA ladder: gain per state, per API gain-table band. Filled in from
+     *   ordinary operation by noteLnaGain(); NaN-free only where lnaSeen_ says so. */
+    static constexpr int kLnaBands     = 5;
+    static constexpr int kLnaStatesMax = 28;    // the RSPdx, the largest table we support
+    float lnaObs_ [kLnaBands][kLnaStatesMax] = {};
+    bool  lnaSeen_[kLnaBands][kLnaStatesMax] = {};
     int    curGain_   = -1;
     bool paused_ = false;
     bool overload_ = false;
