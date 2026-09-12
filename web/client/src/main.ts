@@ -1499,35 +1499,6 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *   motionless readout reads as a broken one, and people wait for something that is already
        *   finished. */
       if (typeof m.lnaN === 'number' && m.lnaN > 0) rspLnaN = m.lnaN;
-      /* ★★★ THE TRAINING NOTICE MUST NOT WAIT FOR THE SETTINGS. It lived inside the branch
-       *   below, which needs vibeAgcOwnsGain() — and that is false for the first seconds of a
-       *   connection, because it is decided from settings that have not arrived yet. So the one
-       *   message whose entire purpose is to explain the first few seconds was the one message
-       *   that could not appear in them. Stuart: "the agc training never comes on when first
-       *   connecting". The server is the authority on whether it is training; if it says so, say
-       *   so, whoever owns the gain. */
-      /* ★★★ AND IT MUST BE TAKEN DOWN BY WHOEVER PUT IT UP. Returning early here left the
-       *   notice on screen whenever the readout branch below did not run — it needs
-       *   vibeAgcOwnsGain(), so on any tick where that is false nothing overwrote the text and
-       *   "training" simply stayed there for ever. Stuart: "the VibeAGC training icon is stuck on
-       *   on 96.1", with the server reporting training:0 throughout.
-       * ★ A latch that only one branch can clear is not a state, it is a leak. `rspTraining`
-       *   records that WE own the chip's text, so we can hand it back when we are done. */
-      if (m.training) {
-        const chip = $('ovlChip');
-        chip.textContent = 'VibeAGC training — please wait';
-        chip.classList.add('set');
-        chip.classList.remove('easing');     // ★ breathe: this is what the breathing is for
-        rspTraining = true;
-        rspMovedAt = Date.now();
-        return;
-      }
-      if (rspTraining) {
-        rspTraining = false;
-        const chip = $('ovlChip');
-        chip.textContent = '';               // ★ give it back; the branches below re-fill it
-        chip.classList.remove('set');
-      }
       if (vibeAgcOwnsGain() && typeof m.sysGain === 'number') {
         const chip = $('ovlChip');
         /* ★ BREATHE ONLY FOR A LARGE CHANGE, and be a plain readout otherwise — the dongle's chip
@@ -11201,7 +11172,23 @@ function rspRestricted(): boolean {
  *  painter, by every input handler and by the readout, so it is defined once. The RF AGC toggle
  *  IS the VibeAGC switch on an RSP — it drives both stages. */
 function vibeAgcOwnsGain(): boolean {
-  return !!document.getElementById('rspRfAgc')?.classList.contains('on');
+  /* ★★★ NOTHING. VibeAGC NO LONGER OWNS ANY GAIN CONTROL ON AN RSP.
+   *     The radio's own IF AGC runs the IF stage again — it lives inside the SDRplay API, makes
+   *     its constant small adjustments with no USB round trip, and has run Stuart's RSP1B for
+   *     weeks without trouble. Our RF AGC moves the LNA from the reduction that AGC reports, and
+   *     that is the whole of our involvement.
+   *  ★ Driving gRdB from out here is what wedged the API repeatedly: writes stopped being
+   *    honoured while samples kept flowing, so the panel read 0 RF gain while the front end was
+   *    overloading. SDRplay's own documentation says IFGR cannot be adjusted with their AGC
+   *    enabled, and this file's own comment called doing it anyway "the bodge that makes SDRplay
+   *    AGC behave worse under third-party software than under SDRuno".
+   *  ★★ So every control this used to grey out is live again: the RF gain slider, the IF gain
+   *    slider, the radio's IF AGC switch and its target. The RF AGC enable and lock toggles are
+   *    once more the only thing VibeSDR adds here.
+   *  ★★★ Left as a function returning false rather than deleted at every call site, so the
+   *      revert is one obvious line rather than a hundred scattered edits made at the end of a
+   *      long night. The dead branches come out in a separate, behaviour-free pass. */
+  return false;
 }
 
 function applyRspLock() {

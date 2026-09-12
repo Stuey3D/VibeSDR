@@ -8543,8 +8543,14 @@ struct LocalSdrShim::Impl {
                      "(no AGC kick: there is no loop to settle)",
                      sdrp->currentLnaState(), sdrp->currentIfGr(), sdrp->systemGainDb());
             }
-            else if (sdrpAgcWanted && sdrpAgcKick < 6 && n > 10 && (n % 20) == 0
-                     && !g_rspRfAgc.load(std::memory_order_relaxed)) {
+            /* ★★★ NO LONGER GATED ON THE RF AGC TOGGLE BEING OFF. That condition belonged to the
+             *     VibeAGC design, where the toggle meant "we own both stages and the tuner's AGC
+             *     is off, so there is nothing to kick". It now means our RF loop steers FROM the
+             *     tuner's IF AGC — so with the toggle ON the kick is needed MORE, not less.
+             *  ★ With it in place the kick never fired and the IF AGC never started: ifgr sat
+             *    frozen at 41 while the converter level moved, and the RF loop stepped the LNA on
+             *    the strength of a number nobody was updating. */
+            else if (sdrpAgcWanted && sdrpAgcKick < 6 && n > 10 && (n % 20) == 0) {
                 noteHwMoved();                 // ★ every kick step moves the level; none is a sferic
                 switch (++sdrpAgcKick) {
                     case 1: sdrp->setLnaState(std::max(0, sdrp->lnaStateCount() - 1 - kRspInitRfGainPos));
@@ -8603,46 +8609,18 @@ struct LocalSdrShim::Impl {
              * ★ Gating a controller on the settling of the thing it replaces is the same category
              *   error as gating the notches on the gain loop. If a condition does not describe
              *   the work, it does not belong in front of it. */
-            if (g_rspRfAgc.load(std::memory_order_relaxed)) {
-                if (sdrpAgcKick < 6) {
-                    LOGI("VibeAGC/RSP: skipping the SDRplay AGC kick — that AGC is not in use");
-                    sdrpAgcKick = 6;
-                    /* ★★★ BUT KEEP THE ONE THING THE KICK WAS RIGHT ABOUT: OPEN QUIET.
-                     *     The kick left the front end at minimum gain and maximum attenuation on
-                     *     purpose — "we know nothing about your aerial yet, and coming UP to a
-                     *     working gain is the only safe direction", as this project's own setup
-                     *     page tells every new owner. Retiring the kick threw that away with it:
-                     *     the radio opened at LNA 1, which is very nearly MAXIMUM RF gain, and
-                     *     VibeAGC then spent fifteen seconds walking down to 5. Measured tonight:
-                     *     "peak -15.2 dBFS ... LNA 1/9". On a strong aerial those fifteen seconds
-                     *     are an overload, and overload is the one thing the RF stage exists to
-                     *     avoid.
-                     * ★ So: start at the owner's chosen RF start position if they set one, else
-                     *   at minimum RF gain, and let the loop CLIMB. Climbing is the safe
-                     *   direction and costs a few seconds; descending from maximum gain costs a
-                     *   clipped converter. Once only — armedOnce is reset when settling restarts. */
-                    const int n = sdrp->lnaStateCount();
-                    if (n > 1) {
-                        /* ★ The owner's band cap, computed HERE rather than borrowed from further
-                         *   down the loop — that variable is declared below this point and reaching
-                         *   for it has broken this build twice now. It is two cheap calls. */
-                        const int capPos0 = LocalSdrShim::gainCapAt(
-                            LocalSdrShim::instance().listenFrequency());
-                        const int floor0  = capPos0 >= 0 ? std::max(0, n - 1 - capPos0) : 0;
-                        const int want = g_rspRfAgcStart.load(std::memory_order_relaxed);
-                        const int st   = (want >= 0 && want <= n - 1)
-                                       ? std::max(floor0, (n - 1) - want)       // position -> state
-                                       : n - 1;                                 // least RF gain
-                        if (st != sdrp->currentLnaState()) {
-                            LOGI("VibeAGC/RSP: opening at LNA %d/%d (%s) — climbing is the safe "
-                                 "direction", st, n - 1,
-                                 want >= 0 ? "the owner's RF start" : "least RF gain");
-                            LocalSdrShim::instance().setLnaState(st);
-                        }
-                    }
-                }
-                sdrpSettling = false;
-            }
+            /* ★★★ THE KICK RUNS AGAIN, BECAUSE THE AGC IT STARTS IS THE ONE WE NOW DEPEND ON.
+             *     This block skipped the kick whenever the RF AGC toggle was on, because in the
+             *     VibeAGC design that toggle meant "we own both stages and the radio's own AGC is
+             *     off". It now means the opposite: our RF loop steers FROM the tuner's IF AGC, so
+             *     that AGC has to be running or we are reading a number nobody is moving.
+             *  ★ Measured immediately after the switch-over: ifgr frozen at 31 for forty seconds
+             *    while the converter level wandered 2.5 dB, and the RF loop stepping the LNA on
+             *    the strength of it — precisely the end-stop walk vsSdrplayRfAgcTick warns about.
+             *  ★★ `agc.enable` only takes effect on a CHANGE, which is the entire reason the kick
+             *    exists: a disable/enable transition after Init, repeated until the reduction
+             *    starts moving. Stuart: "The IF AGC works perfectly with our little kick on boot
+             *    for the RSP1B". */
 
             // ★ The RSP's live gain state. The AGC moves the IF reduction on its own, so a
             //   slider position is NOT the truth — and total system gain is the one figure that
@@ -8716,85 +8694,40 @@ struct LocalSdrShim::Impl {
                     }
                 }
             }
-            /* ★★★ VibeAGC OWNS BOTH STAGES, OR NEITHER. When it is on the radio's own IF AGC is
-             *     turned off and KEPT off, and vsSdrplayVibeAgcTick drives gRdB and LNAstate
-             *     together from our own level measurement — see the policy note on that function.
-             *     When it is off, nothing here changes: the radio's IF AGC runs as it always has
-             *     and the RF stage is the owner's to set by hand.
-             * ★ The two loops are mutually exclusive by construction. Running both would be the
-             *   original bug wearing a different hat — two controllers, one register. */
-            if (g_rspRfAgc.load(std::memory_order_relaxed)) {
-                /* ★★ ASSERTED EVERY TICK, not once. The client re-sends its saved settings on
-                 *    connect and DAB entry re-applies a target, so an AGC we disabled at start-up
-                 *    can be switched back on behind us — which is precisely how the start-up kick
-                 *    kept coming undone. Idempotent in effect: setIfAgc(false) on an already
-                 *    disabled AGC writes nothing new. */
-                /* ★ Re-asserted whenever something turns the radio's AGC back on — the client
-                 *   re-sends saved settings on connect and DAB entry re-applies a target — but
-                 *   SAID only when it actually changes, or this fills the journal at 20 Hz. */
-                if (sdrpAgcWanted) {
-                    LOGI("VibeAGC/RSP: taking both gain stages — the radio's own IF AGC is off");
-                    LocalSdrShim::instance().setIfAgc(false);
-                }
-                /* ★ The SAME target the dongle's VibeAGC uses, DAB switch and all — see the
-                 *   note on vsSdrplayVibeAgcTick. Not the AGC target slider, which belongs to the
-                 *   tuner's own AGC and is switched off while this loop runs. */
-                /* ★ Its OWN readiness is the only precondition: the tick refuses to act until
-                 *   it has closed a measurement window (see adcWindows). It does NOT wait on
-                 *   `graceDone`, which times a settling period for an AGC that is not running. */
-                /* ★★★ THE DONGLE'S TARGET, MINUS THE RSP's HEADROOM. agcTargetDbfs() is -6 dBFS
-                 *     peak (-9 in DAB), and those were measured on an RTL-SDR — an EIGHT-bit
-                 *     converter, where every decibel of headroom is a real fraction of the range
-                 *     you have, so running near the rail is worth the risk.
-                 * ★     The RSP is FOURTEEN bits. Backing off 6 dB costs one bit of a budget with
-                 *     six to spare and still leaves far more dynamic range than the dongle has at
-                 *     its best — while an overload costs everything, and recovering from one here
-                 *     means a 15-20 dB LNA step and a visible jump in the noise floor. Not close.
-                 * ★★ It is also the direction SDRplay advise: a set point "between -20 and -30
-                 *    dBFs", well back from the rail. Their measure is not our peak so the number
-                 *    does not transfer, but the direction does — away from the rail, not at it. */
-                /* ★★★ AND THE HEADROOM FOLLOWS THE ADC, WHICH FOLLOWS THE SAMPLE RATE.
-                 *     The RSP trades converter resolution for bandwidth in hardware (RSP1A spec,
-                 *     the same table the rate picker publishes): 14-bit to 6.048 MS/s, 12-bit to
-                 *     8.064, 10-bit to 9.216, 8-bit above. So "the RSP is 14-bit, headroom is
-                 *     nearly free" — the argument I used for backing off 6 dB — is only true at
-                 *     the LOW rates. At 8 bits this radio has exactly the dynamic range of the
-                 *     dongle those targets were measured on, and giving away 6 dB there is giving
-                 *     away range it does not have (Stuart, 2026-09-12).
-                 * ★ One decibel of headroom per SPARE bit over the dongle's eight: 14-bit -> 6 dB
-                 *   back, 12-bit -> 4, 10-bit -> 2, 8-bit -> none, which lands exactly on
-                 *   agcTargetDbfs() — the figure measured on an 8-bit converter, for an 8-bit
-                 *   converter. The rule needs no special cases because it is the reason itself.
-                 * ★★ Thresholds identical to adcBits() on the setup page and the client's rate
-                 *    picker. Three readers of one hardware fact; if the table is ever wrong it is
-                 *    wrong in three places, so it is written the same way in all of them. */
-                const double rateNow = sampleRate;
-                const int adcBits = rateNow <= 6048000.0 ? 14
-                                  : rateNow <= 8064000.0 ? 12
-                                  : rateNow <= 9216000.0 ? 10 : 8;
-                const int headroom = adcBits - 8;          // dB to stay back from the dongle's aim
-                g_vibeAgcRateHz.store(sampleRate, std::memory_order_relaxed);
-                /* ★★★ SAY WHAT WE AIMED AT AND WHY, ONCE PER CHANGE. Whether DAB's -9 base was
-                 *     reaching this loop at all cost a long detour through the source on
-                 *     2026-09-12 — the heartbeat printed the target but nothing said where it
-                 *     came from, so "-12 while on 10D" could not be told apart from "-15 that I
-                 *     misread". A derived number that cannot be traced to its inputs is a number
-                 *     you end up arguing about. */
-                const double baseTgt = agcTargetDbfs();
-                const int    tgt     = (int)std::lround(baseTgt) - headroom;
-                {
-                    static int saidTgt = 999;
-                    if (tgt != saidTgt) {
-                        saidTgt = tgt;
-                        LOGI("VibeAGC/RSP: aiming at %d dBFS — %s base %.0f, less %d dB of "
-                             "headroom for a %d-bit converter at %.3f MS/s",
-                             tgt, g_dabMode.load(std::memory_order_relaxed) ? "DAB" : "normal",
-                             baseTgt, headroom, adcBits, rateNow / 1e6);
-                    }
-                }
-                vsSdrplayVibeAgcTick(sdrp.get(), floorState, tgt);
-            }
-            else if (!sdrpSettling && graceDone && ifAgcAlive)
+            /* ★★★ THE RADIO'S OWN IF AGC RUNS THE IF. WE RUN THE RF, FROM ITS READINGS.
+             *
+             *     VibeAGC took BOTH stages on this radio for a day, and the day ended with the
+             *     SDRplay API wedged: gain writes no longer honoured while samples kept flowing,
+             *     "sdrplay_api_device: eventHandlerThread: Exit" in the log, and a readback that
+             *     said 0 RF gain while the front end was plainly overloading. Only a reboot
+             *     cleared it, twice.
+             *
+             *  ★ Stuart worked out why, and the reasoning is sound: SDRplay's IF AGC lives INSIDE
+             *    the API. It makes its constant small adjustments — "only a few db up or down ...
+             *    lots of little adjustments all the time" — with no USB round trip per nudge. We
+             *    replaced that with an external loop writing the same register several times a
+             *    second across the wire. Their own documentation says IFGR cannot be adjusted with
+             *    their AGC enabled; setIfGainReduction has said so in a comment since July, and
+             *    called the alternative "the bodge that makes SDRplay AGC behave worse under
+             *    third-party software than under SDRuno, despite being the same API underneath".
+             *    We then became that third-party software.
+             *
+             *  ★★ THE CONTROL EXPERIMENT IS HIS OWN RSP1B: the same API, the same house, the
+             *    internal IF AGC, and weeks of stability. "The only thing that makes the 1A truly
+             *    different is the 1B is locked to 2.8-10.8MHz so a stable band whereas the 1A can
+             *    be tuned anywhere which is why we need the RF AGC." That is the whole division of
+             *    labour: a fixed band needs no front-end management, a tunable one does.
+             *
+             *  ★★★ AND THIS PATH WAS UNREACHABLE. vsSdrplayRfAgcTick returns immediately unless
+             *      g_rspRfAgc is set — and g_rspRfAgc was also what handed BOTH stages to VibeAGC,
+             *      so with it on the RF loop never ran, and with it off it refused to. Dead code
+             *      since VibeAGC landed, which is exactly what Stuart reported at the time ("RF
+             *      agc not doing anything now it seems") and I went looking elsewhere for.
+             *
+             *  ★ What VibeAGC taught us is kept: the per-band LNA ladder, the DAB matched filter
+             *    and notch handling, the honest ADC measurement. What goes is the idea that we
+             *    should be writing gRdB at all on this radio. */
+            if (!sdrpSettling && graceDone && ifAgcAlive)
                 vsSdrplayRfAgcTick(sdrp.get(), floorState, sdrpAgcWanted);
             /* ★★★ THE NOTCHES ARE NOT PART OF THE GAIN LOOP AND MUST NOT SHARE ITS GATE.
              *     This call used to sit INSIDE the `!sdrpSettling && graceDone && ifAgcAlive`

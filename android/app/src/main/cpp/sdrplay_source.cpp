@@ -845,43 +845,9 @@ int SdrplaySource::lnaBandId(double hz) {
     return 4;
 }
 
-/** ★★★ A FLOOR ON HOW OFTEN THE TUNER'S GAIN REGISTER MAY BE WRITTEN.
- *  Every gain change is a USB transaction to a device this project already knows is fragile
- *  under API pressure, and sdrplay_api does not queue them: a burst outruns its own bookkeeping.
- *  Ten writes in quick succession were enough to make gainVals return figures belonging to the
- *  WRONG LNA STATE (the ladder sweep, twice), and a sustained stream of them is worse — the API
- *  stops honouring updates while still delivering samples, so the readback goes fictional while
- *  the front end is plainly overloading.
- *  ★ Stuart traced it from the symptom: "MW which was working great, to 40m ... to FM which also
- *    worked great, to DAB where the gain bounced up and down like crazy and wouldnt lock on and
- *    both sliders ended up at 0, and then back to MW where the sliders are saying 0 RF gain but
- *    overloading. So we are breaking the SDRPlay API we maybe need to limit the amount of
- *    changes we do." The three bands that worked are the ones where the loop settles and goes
- *    quiet; the failure came out of DAB, the one mode that writes gain continuously — a level
- *    loop AND an error-rate hill climb, on top of a rate change that rebuilds the device.
- *  ★★ THE LIMIT LIVES HERE, NOT IN THE LOOP, so it covers every writer: the level stage, the RF
- *    stage, the DAB hill climb, and the retune path's band cap. The gain loop already has its own
- *    dwells, but each was reasoned about in isolation and `hurry` bypasses the IF's entirely.
- *  ★★★ A REFUSED WRITE IS DROPPED, NOT QUEUED, and that is deliberate: the loop re-measures and
- *      re-decides a few times a second, so the next tick simply asks again with fresher evidence.
- *      Queueing would replay a decision made about a signal that has since moved. */
-static std::chrono::steady_clock::time_point g_lastGainWrite{};
-static bool gainWriteDue() {
-    const auto now = std::chrono::steady_clock::now();
-    if (g_lastGainWrite.time_since_epoch().count() != 0 &&
-        std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastGainWrite).count() < 200)
-        return false;
-    g_lastGainWrite = now;
-    return true;
-}
-
 void SdrplaySource::setLnaState(int state) {
     std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
     if (!impl_->params || !impl_->params->rxChannelA) return;
-    /* ★ Not faster than the API can take — see gainWriteDue(). Dropped, not queued: the loop
-     *   re-decides a few times a second and will ask again with fresher evidence. */
-    if ((int)impl_->params->rxChannelA->tunerParams.gain.LNAstate != state && !gainWriteDue())
-        return;
     const int n = lnaStateCount();
     if (state < 0) state = 0;
     if (state >= n) state = n - 1;
@@ -945,11 +911,6 @@ bool SdrplaySource::setIfGainReduction(int gRdB) {
     // being the same API underneath (Stuart, 2026-07-26). Two controllers fighting over one
     // register is not a compromise; it is a bug that presents as poor hardware.
     if (impl_->params->rxChannelA->ctrlParams.agc.enable != sdrplay_api_AGC_DISABLE) return false;
-    /* ★ And no faster than the API can take — see gainWriteDue(). The IF stage is the busy one:
-     *   its own 1 s limit is bypassed whenever the loop is acquiring or far out, which is
-     *   permanently true through a DAB entry, so this is the floor that actually holds. */
-    if ((int)impl_->params->rxChannelA->tunerParams.gain.gRdB != gRdB && !gainWriteDue())
-        return false;
     if (gRdB < 20) gRdB = 20;
     if (gRdB > 59) gRdB = 59;
     impl_->params->rxChannelA->tunerParams.gain.gRdB = gRdB;
