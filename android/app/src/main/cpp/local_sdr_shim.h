@@ -391,6 +391,10 @@ public:
     static void setVibeServerDabAgc(bool on, int targetDbfs);
     /** ★ The RF half of the gain loop — see vsSdrplayRfAgcTick. */
     static void setVibeServerRfAgc(bool on);
+    /** ★ Gain POSITION the RF AGC begins from; -1 = the middle. */
+    static void setVibeServerRfAgcStart(int pos);
+    /** ★ Listeners may not move the AGC target — it decides how hard everyone's front end runs. */
+    static void setVibeServerAgcSetLock(bool locked);
     /** ★ Whether LISTENERS may toggle the notches at all. */
     static void setVibeServerUserNotch(bool allowed);
     /** ★★★ WHERE LISTENERS MAY TUNE. Two owner-written lists (see vibe_bands.h) collapsed against

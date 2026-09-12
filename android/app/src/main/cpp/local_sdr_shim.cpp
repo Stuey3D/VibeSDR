@@ -2571,7 +2571,23 @@ static std::atomic<double> g_adcPeakDbfs{-99.0};
  *     kHoldTicks consecutive looks before anything moves at all.
  * ★ It never fights the operator. The band cap already forces a minimum LNA state on retune, and
  *   this refuses to go below it — an owner who capped the RF gain keeps that cap. */
-static std::atomic<int> g_rspRfAgc{1};        // ★ on by default; the IF AGC alone is half a loop
+/* ★★★ OFF BY DEFAULT, AS OF 2026-09-12, AND IT HAS EARNED THAT. In one evening this loop hunted
+ *     at four-second intervals on a draft window, fought the start-up kick for the LNA, and — by
+ *     calling setLnaState every few seconds — wrote the gain struct through a path the file
+ *     itself documents as dangerous while the AGC owns it, leaving the IF AGC pinned at 59 dB and
+ *     unable to recover. Each of those was found by Stuart noticing the radio misbehave, not by a
+ *     test. A feature with that record does not get to be on by default until it has been proved
+ *     on air over more than one evening.
+ * ★ The switch is on the setup page and in the menu; an owner who wants it can have it. */
+static std::atomic<int> g_rspRfAgc{0};
+/* ★ Declared HERE, with its neighbour, because the control handler reads it thousands of lines
+ *  before the setter is defined. Fourth time tonight a flag has had to move up for that reason:
+ *  anything the message handlers read must be declared above them, not next to its setter. */
+static std::atomic<bool> g_rspAgcSetLock{false};
+/* ★ Where the RF AGC starts from, as a GAIN POSITION (-1 = the middle). Applied ONCE each time
+ *  the loop arms, so it begins from a sensible place instead of inheriting an end stop from the
+ *  start-up kick — which is what made it walk several steps and disturb the IF AGC. */
+static std::atomic<int>  g_rspRfAgcStart{-1};
 static std::atomic<int> g_rspRfAgcLastLna{-1};   // what we last set, for the readout
 
 /* ★ `ifAgcOn` is PASSED, not read: this sits above the DSP state block, and a helper reaching
@@ -2636,7 +2652,22 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         return (int)(fast + k * (slow - fast));
     };
     const auto sustainMsFor = [&](double excess) { return curve(excess, 12000.0, 600.0); };
-    const auto settleMsFor  = [&](double excess) { return curve(excess,  8000.0, 1500.0); };
+    /* ★★★ NEVER FASTER THAN THE AGC CAN RE-CONVERGE. The floor was 1500 ms at maximum urgency,
+     *     and that is what broke the IF AGC. Every LNA step writes the whole gain struct through
+     *     Update_Tuner_Gr, and the RSP's AGC has a 5000 ms DECAY (setIfAgcDynamics) — so stepping
+     *     every 1.5 s means it never completes a cycle and freezes at whatever it was holding.
+     *     Measured: it pinned at 59 dB and stayed there, and the radio ended up at 6.5 dB of
+     *     system gain with the front end starved (2026-09-12).
+     * ★★ AND IT EXPLAINS WHY IT SEEMED FINE AT FIRST. Stuart: "the RF agc was working about an
+     *    hour ago" — it was, because it was HOLDING, and a holding loop touches nothing. The harm
+     *    only starts when it steps repeatedly, which is exactly the railed case it was asked to
+     *    react to fastest. The urgency curve was working against the hardware.
+     * ★ 6 s floor: longer than the decay, so each step gets a whole cycle to settle before the
+     *   next is even considered. Being right slowly beats being wrong quickly on a control that
+     *   changes the radio for everyone listening. */
+    const auto settleMsFor  = [&](double excess) {
+        return std::max(6000, curve(excess, 10000.0, 6000.0));
+    };
 
     static double accum = 0.0; static int count = 0;
     static auto  winStart = std::chrono::steady_clock::time_point{};
@@ -2718,6 +2749,576 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
     lastDir = dir; lastMean = mean;
     outMs = 0; outDir = 0;
 }
+
+/* ══ VibeAGC FOR THE SDRplay RSP — BOTH STAGES, ONE OWNER ═════════════════════════════════════
+ * ★★★ WHY THIS EXISTS. The loop above steers the RF stage off SDRplay's IF AGC reduction figure,
+ *     which makes our controller's INPUT another controller's OUTPUT. Everything wrong with the
+ *     RSP gain tonight follows from that one coupling:
+ *       · turn the radio's IF AGC off for manual control and the RF loop goes inert, because its
+ *         only input stops moving — but its switch still reads "on";
+ *       · lock the AGC on for a shared receiver and manual IF gain becomes impossible, because
+ *         the RSP refuses gRdB while its own AGC owns the register;
+ *       · every LNA write is also an IF write (Update_Tuner_Gr carries BOTH, and the API has no
+ *         LNA-only flag), so moving the RF stage steals the register from their AGC mid-loop.
+ *     Stuart's reading of it was right: "the unreliability of the IF agc is probably worth
+ *     working around with our own dual stage AGC" (2026-09-12).
+ *
+ * ★★★ SO: THE RADIO'S AGC IS TURNED OFF AND STAYS OFF, and VibeAGC owns gRdB and LNAstate
+ *     together — exactly as it already owns the dongle's gain. One writer, no contention, and
+ *     the single-update constraint that was a hazard becomes an ASSET: both stages move in one
+ *     atomic call, so the front end is never briefly in a combination we did not choose.
+ *
+ * ★★★ THE POLICY IS SDRplay'S OWN, NOT ONE I INVENTED. Checked against their documentation
+ *     rather than fitted to a measurement, because fitting a rule to one example is exactly the
+ *     mistake Stuart caught me making on the notch edges:
+ *       · "You want to set the gain as high as possible whilst avoiding ADC overload to get the
+ *         best sensitivity and dynamic range."
+ *       · AN008: "The noise floor of the receiver will increase when gain is reduced but the
+ *         effect is less when using the IF gain control so this is the first place to start
+ *         reducing gain. For very strong signals the IF gain will be at a minimum and the RF
+ *         gain will have to be manually reduced by the user when the Overload warning appears."
+ *     Which is Friis in plain words: the LNA is the first stage, so backing IT off costs the most
+ *     noise figure. Hence the asymmetry below — the IF does all routine work, and the RF moves
+ *     only on real evidence (an overload, or the IF genuinely out of range).
+ *
+ * ★★ AND IT IS NOT A CENTRED WINDOW. The old loop held the IF reduction inside 30..50, i.e. "the
+ *    IF comfortably in the middle", which is NOT what the documentation asks for: it asks for the
+ *    most RF gain that does not overload. So the two directions here are deliberately unequal —
+ *    reluctant to spend RF gain, willing to reclaim it.
+ * ══════════════════════════════════════════════════════════════════════════════════════════ */
+static std::atomic<int> g_vibeAgcLastGr{-1};   // what WE last commanded, for the readout
+/* ★ VibeAGC's learned state for ONE spot on the dial. File-scope, not function statics, precisely
+ *   so a retune can throw it away — see the note in vsSdrplayVibeAgcTick. */
+static int g_vibeAgcBadLna = -1, g_vibeAgcCleanRun = 0, g_vibeAgcRailHi = 0, g_vibeAgcRailLo = 0;
+static void vsVibeAgcForget() {
+    g_vibeAgcBadLna = -1; g_vibeAgcCleanRun = 0; g_vibeAgcRailHi = 0; g_vibeAgcRailLo = 0;
+}
+
+/* ★★★ VibeAGC'S TARGET IS VibeAGC'S TARGET — agcTargetDbfs(), THE SAME ONE THE DONGLE USES.
+ *     Not the AGC target slider: that is sdrplay_api's `agc.setPoint_dBfs`, a parameter of the
+ *     TUNER's AGC, which this loop switches off. Feeding it in here made a control that drives
+ *     nothing appear to drive this (Stuart, 2026-09-12: "if VibeAGC is handling it then there
+ *     doesnt need to be an agc target slider, that slider is only for the traditional IF agc").
+ *     And not a constant of my own either — "let VibeAGC calculate exactly what it needs the same
+ *     as it does with the RTL". It already does, and the figures are MEASURED rather than guessed:
+ *         kAgcTargetDbfs    = -6 dBFS peak   — the operating point, where the front end stays
+ *                                              linear; aiming at the rail produced intermodulation
+ *         kAgcDabTargetDbfs = -9 dBFS peak   — OFDM is not an FM carrier
+ *     One function, one pair of numbers, both loops. If they are ever re-tuned they are re-tuned
+ *     once — which is the whole point, and the opposite of the ONE RULE, TWO READERS fault.
+ *
+ * ★★ NOTE WHAT THIS SETTLES ABOUT DAB. `agcTargetDbfs()` already switches to -9 in DAB mode, so
+ *    DAB is handled here by the same mechanism as everywhere else. The RSP's separate -40 dBFS
+ *    DAB override is NOT wanted on this path and is not read: that override exists because the
+ *    TUNER's AGC is steered by an average and cannot see OFDM's ~10 dB peak-to-average ratio, so
+ *    its target had to be dropped by roughly that much to leave room for peaks it was blind to.
+ *    This loop measures the peak itself — the headroom is in the reading. Applying the override
+ *    on top would drop the target twice for one reason and throw away ~10 dB of signal-to-noise
+ *    on DAB. The 3 dB step from -6 to -9 is a different and much smaller correction, and it is
+ *    the correct one.
+ * ★ The parameter is kept so the call site reads honestly and so a future caller can override it
+ *   deliberately; nothing passes anything but agcTargetDbfs() today. */
+static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDbfs) {
+    if (!sdrp) return;
+    using clock = std::chrono::steady_clock;
+
+    /* ★ NOTHING MAY RUN UNTIL WE HAVE MEASURED. adcWindows() counts closed measurement windows;
+     *   zero means the stream has not delivered enough samples yet. A gain loop that acts on an
+     *   unset level would slam the front end on the first tick — and "-99 dBFS" reads as a very
+     *   quiet band, so it would slam it the WRONG way, to maximum gain. */
+    /* ★★★ ONE DECISION PER MEASUREMENT, AND NOT ONE MORE. This is the bug behind "flapping like
+     *     crazy on the IF gain" (Stuart, 2026-09-12, 10C). The tick runs at about 20 Hz; a
+     *     measurement window closes at about 10. So the loop was judging the SAME reading two or
+     *     three times over, moving another 4 dB each time — correcting an error it had already
+     *     corrected but could not yet see. That is not a tuning problem, it is a control-loop
+     *     error: acting faster than you can observe guarantees overshoot, and overshoot with a
+     *     deadband guarantees oscillation.
+     * ★ AND SKIP THE WINDOW THAT STRADDLES A CHANGE. The window in progress when we write still
+     *   contains samples taken at the OLD gain, so judging it would double-count the correction
+     *   we just made. We wait for the first window that is entirely after the write.
+     * ★★ This makes the loop's real rate ~5 Hz, which is plenty: the IF stage has 1 dB resolution
+     *    and the whole point of the design is that the RF stage stays put. */
+    const unsigned win = sdrp->adcWindows();
+    static unsigned lastWin = 0, skipUntilWin = 0;
+    if (win == lastWin || win < skipUntilWin) return;
+    lastWin = win;
+
+    if (sdrp->adcWindows() == 0) {
+        /* ★ And SAY so. A loop that is alive but has never measured looks identical to one that
+         *   is not running, which is exactly the confusion that cost tonight. Once every 10 s. */
+        static std::atomic<int> said{0};
+        if (said.fetch_add(1, std::memory_order_relaxed) % 50 == 0)
+            LOGI("VibeAGC/RSP: waiting for the first level measurement — nothing moves until then");
+        return;
+    }
+
+    const double peakRaw = sdrp->adcPeakDbfs();
+    const double clip    = sdrp->adcClipPct();
+
+    /* ★★★ FORGET EVERYTHING ON A RETUNE. Every piece of state below — which LNA state overloaded,
+     *     how long it has been clean, how long a rail has been held — is a fact about ONE place on
+     *     the dial with ONE signal in front of it. Carried across a retune it is not caution, it
+     *     is a wrong answer applied confidently: the guard learned at 648 kHz on medium wave was
+     *     still forbidding RF gain at 215 MHz in Band III, where the band, the aerial's behaviour
+     *     and the signal are all different (Stuart, 2026-09-12, on 10D). Statics in a per-tick
+     *     function outlive the conditions that justified them; that is their whole hazard. */
+    static double lastHz = 0.0;
+    const double  nowHz  = LocalSdrShim::instance().listenFrequency();
+
+    /* ★★★ AND SMOOTH THE PEAK, FAST UP / SLOW DOWN. A DAB ensemble is 1536 randomly-phased
+     *     carriers, so its instantaneous peak is a random variable: successive 0.1 s windows differ by
+     *     several decibels with nothing whatever changing on air. Steering a 2 dB deadband off
+     *     that is chasing noise, and it is why the loop flapped on a multiplex that was sitting
+     *     still — and why the multiplex could not settle, because the demodulator was being moved
+     *     underneath it.
+     * ★ Attack instantly, release slowly: a peak that RISES is believed at once (that is the one
+     *   that clips), a peak that falls is averaged down over about a second. Standard AGC shape,
+     *   and the asymmetry is the point — it is safe in the direction that matters.
+     * ★★ The RAW peak and the clip fraction are still used for the overload decisions below;
+     *    smoothing is for the level loop only, where jitter is the enemy. */
+    static double peakSm = -99.0;
+    if (lastHz == 0.0 || std::fabs(nowHz - lastHz) > 1.0e4) {
+        lastHz = nowHz;
+        peakSm = peakRaw;
+        vsVibeAgcForget();
+        LOGI("VibeAGC/RSP: retuned to %.3f MHz — forgetting the previous gain lesson", nowHz / 1e6);
+    }
+    /* ★★★ SYMMETRIC AND SLOW — FAST-ATTACK IS WRONG FOR THIS SIGNAL. My first version believed a
+     *     RISING peak instantly, on the usual "safe direction" reasoning. For a carrier that is
+     *     right; for OFDM it is the bug. A DAB ensemble throws random high peaks by its nature, so
+     *     instant-attack jumped the estimate on every spike, the loop cut gain, the estimate
+     *     decayed back, gain crept up, another spike arrived — a chase driven entirely by the
+     *     signal's STATISTICS with nothing changing on air. "Every multiplex I enter it flaps like
+     *     mad super quick" (Stuart, 2026-09-12).
+     * ★ So the level loop is steered by a slow average in BOTH directions — about a second — and
+     *   genuine danger is handled where it belongs: the clip fraction below bypasses the deadband
+     *   entirely and backs off at once. Slow level control, fast clip protection. Chasing peaks is
+     *   neither.
+     * ★★ This is also why the DAB target only needs to be 3 dB lower rather than ten: we are
+     *    levelling the ensemble, not duelling with its crest factor. */
+    /* ★★★ A PEAK HOLD WITH SLOW DECAY — STUART'S SUGGESTION, AND IT IS THE RIGHT MECHANISM.
+     *     "can you not average between quiet periods and loud periods and set the gain in between
+     *     the 2?" (2026-09-12). Yes — and the honest form of it is not an average but a decaying
+     *     MAXIMUM, because the two ends are not equally binding: what must not happen is the
+     *     LOUDEST signal clipping. A mean would be dragged down by every silence and would let the
+     *     next over clip; a peak hold is set by the loudest station recently heard and simply
+     *     stays there. The gain does land between quiet and loud, which is what he described —
+     *     that is the RESULT, and the loudest signal is the REASON.
+     *
+     * ★ Rises instantly, falls about 1 dB per second. So:
+     *     · a gap between overs decays it a few dB and moves nothing, because the deadband is
+     *       wider than that;
+     *     · a genuinely quieter band bleeds it down over half a minute and the gain follows;
+     *     · a station keying up is caught in a single window and answered at once.
+     *   Which is what an operator does by hand, and why manual gain sounds steadier than a
+     *   fast AGC: they set it for the loudest thing on the band and leave it alone.
+     *
+     * ★★ This REPLACES the asymmetric deadband and slow-release machinery I had bolted on to fake
+     *    the same behaviour. One mechanism with a physical meaning beats two tuned constants
+     *    fighting each other — and it is far easier to reason about when it next misbehaves. */
+    constexpr double kDecayPerWindow = 0.1;      // ~1 dB per second at ~10 windows/s
+    peakSm = (peakSm <= -98.0) ? peakRaw
+           : (peakRaw > peakSm ? peakRaw : peakSm - kDecayPerWindow);
+    const double peak = peakSm;
+    /* ★★★ THE HARDWARE OVERLOAD FLAG LATCHES, SO IT MUST BE CORROBORATED BEFORE IT IS OBEYED.
+     *     sdrplay_api raises PowerOverloadChange and the flag stays set until a clearing event
+     *     arrives — which may not come. Used as a STANDING condition it becomes a ratchet: every
+     *     dwell it takes another LNA step, all the way to minimum RF gain, on evidence that
+     *     expired long ago. Measured on 96.1 MHz — a signal Stuart rightly pointed out "isn't even
+     *     strong" — it walked LNA 1 -> 8 with the peak sitting ON TARGET at -6 dBFS and clipping
+     *     at exactly 0.0000%. That is the opposite of SDRplay's policy: it threw away nearly all
+     *     the RF gain we are supposed to be preserving.
+     * ★ So: an overload is believed only when the samples agree — something at the rail, or the
+     *   level actually above target. We now MEASURE what that flag used to be the only proxy for,
+     *   so the flag is a hint that makes us react faster, never a reason on its own.
+     * ★★ I wrote "the hardware's PowerOverloadChange event is coarse and latches" in the comment
+     *    on adcClipPct, and then used it as a standing truth twenty lines later. A warning you
+     *    write and do not act on is worth nothing. */
+    /* ★ Severity, declared up here because several decisions below turn on it. 0.1% of samples at
+     *   the rail is unmistakable and sustained; anything less is an impulse until it proves
+     *   otherwise — see the note on needHi. */
+    const bool heavyClip = clip > 0.1;
+    const bool ovlRaw = sdrp->overloaded();          // the raw latch, for the log only
+    /* ★★★ AND CORROBORATED BY CLIPPING, NOT MERELY BY BEING ABOVE TARGET. My first attempt
+     *     accepted `peak > targetDbfs` as corroboration — but a peak above target is the ORDINARY
+     *     condition the IF stage exists to correct, so that made the RF stage fire on the IF
+     *     stage's routine work. Measured: LNA walked 1 -> 4 at peak -2.3 dBFS with the IF sitting
+     *     at 46 dB and twelve decibels of range still unused. Precisely backwards from the
+     *     documented policy — "the IF gain control ... is the first place to start reducing gain",
+     *     and the RF stage only "for very strong signals [when] the IF gain will be at a minimum".
+     * ★ So the RF stage answers to two things only: samples actually AT the rail, or the IF
+     *   genuinely out of room (handled below by the 59 dB rail). -1 dBFS catches a peak that is
+     *   effectively clipping in a window where no single sample quite reached the end code. */
+    const bool ovl    = sdrp->overloadReal();        // ★ the SAME question the badge asks
+
+    const int n = sdrp->lnaStateCount();
+    const int lna = sdrp->currentLnaState();
+    const int gr  = sdrp->currentIfGr();
+    if (n <= 0 || gr <= 0) return;
+
+    /* ── THE IF STAGE ─────────────────────────────────────────────────────────────────────────
+     * ★ Continuous, and it does all the routine work. gRdB is a REDUCTION: more reduction is less
+     *   gain, so a peak ABOVE target needs MORE reduction. Getting this sign wrong would drive
+     *   the front end to an end stop in about a second, so it is spelled out rather than clever.
+     * ★★ A DEADBAND, because the target is a region and not a line. Without one the loop writes
+     *    on every tick for ever, and every write is a USB transaction on a radio we already know
+     *    stalls under API pressure. */
+    /* ★ 3 dB, not 2. Even smoothed, a 1536-carrier peak wanders; a deadband narrower than the
+     *  signal's own variation guarantees a write on most ticks, and every write is a USB
+     *  transaction on a radio this project already knows stalls under API pressure. */
+    /* ★★★ SIX DECIBELS — A CONVERTER GUARD, NOT AN AUDIO LEVELLER. That distinction is why it was
+     *     twitchy: an HF signal fades and swells by many decibels a second on its own, and a loop
+     *     that follows it rewrites the gain register constantly, each write shifting the noise
+     *     floor — visible, audible and pointless. The audio AGC downstream levels the listening;
+     *     this stage only has to keep the ADC out of trouble, and a 14-bit converter does not care
+     *     where in a 6 dB band it sits. Stuart, 2026-09-12 on 3729 kHz: "causing noise floor jumps
+     *     ... too aggressive on the IF AGC now".
+     * ★ Slow in, slow out: the averaging above is now ~3 s, so ordinary QSB never reaches here. */
+    constexpr double kDead   = 6.0;    // dB: inside this, the level is correct and nothing moves
+    /* ★ Ordinarily 4 dB a tick — approach, never lunge. But when the level is a LONG way out,
+     *   which is what an uncompensated LNA step leaves behind, crawling at 4 dB means seconds of
+     *   wrong level and possibly seconds of clipping. So the step scales with the error: small
+     *   corrections stay gentle, a 20 dB error is taken in one move. The measurement window is
+     *   ~0.1 s and the deadband stops it ringing. */
+    const int kMaxStep = (std::fabs(peak - (double)targetDbfs) > 15.0) ? 21 : 3;
+    const double err = peak - (double)targetDbfs;
+    /* ★ AND IT MUST AGREE WITH ITSELF. One window outside the deadband is a maybe; two in the
+     *   same direction is a level that has actually moved. Costs a fifth of a second and removes
+     *   the last of the dither. Reset whenever the error changes sign or comes back inside. */
+    static int agree = 0, agreeDir = 0;
+    /* ★★★ AN ASYMMETRIC DEADBAND, BECAUSE THE TWO DIRECTIONS ARE NOT THE SAME RISK.
+     *     Above target is a cliff: a few decibels more and the converter clips and the signal is
+     *     destroyed. Below target is a gentle slope: on fourteen bits, sitting 20 dB under costs
+     *     about three bits of a budget with six to spare, and nothing is lost that cannot be got
+     *     back. Treating them with one symmetric threshold is what made the loop chase an
+     *     amateur band up and down.
+     * ★★★ AND THIS IS THE SHAPE OF AN SSB BAND, WHICH STUART DESCRIBED EXACTLY: "its when people
+     *     TX it is increasing when nobody TX's then a new TX happens and it drops rapidly so its
+     *     flapping" (2026-09-12). The gaps between overs ARE the band — they are not a fade, and
+     *     there is nothing to correct. A loop that raises the gain into every silence has to
+     *     drop it again on every single over, and each of those moves the noise floor under the
+     *     person listening.
+     * ★ So: act at +6 dB above target, but tolerate 20 dB below it before touching anything. The
+     *   loop then sets itself for the LOUDEST station on the band and stays there, which is what
+     *   an operator does by hand and why manual gain sounds steadier than a bad AGC. */
+    /* ★ Symmetric again, and it can be: the peak hold above already refuses to follow silences,
+     *   so the deadband no longer has to fake that asymmetry. 6 dB either side of target on a
+     *   14-bit converter is a band worth nothing to the listener and everything to stability. */
+    const int dirNow = (err > kDead) ? 1 : (err < -kDead) ? -1 : 0;
+    if (dirNow == 0 || dirNow != agreeDir) { agree = (dirNow == 0) ? 0 : 1; agreeDir = dirNow; }
+    else ++agree;
+
+    int wantGr = gr;
+    /* ★★★ PROTECT QUICKLY, RECOVER SLOWLY. A converter guard is not symmetric: too much level is
+     *     a hazard and is answered at once, too little is merely a quiet moment — and answering
+     *     that fast means FOLLOWING EVERY FADE. On 80 m, where signals swing twenty decibels by
+     *     themselves, a symmetric loop walks the gain up on every dip and back down on every
+     *     peak: "moved to 80m band and its doing 10db IF swings" (Stuart, 2026-09-12). Every one
+     *     of those swings moves the noise floor under the listener for no benefit at all.
+     * ★ So: three windows and up to 3 dB to come DOWN in gain; thirty windows (~3 s) and one
+     *   decibel at a time to go back UP. A real change in conditions still arrives; a fade never
+     *   does. The clipping path below is untouched and stays immediate.
+     * ★★ And never more than once a second, as a backstop against register churn on a radio this
+     *    project already knows stalls under API pressure. */
+    static auto lastIfWrite = clock::time_point{};
+    const bool ifRateOk = lastIfWrite.time_since_epoch().count() == 0 ||
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            clock::now() - lastIfWrite).count() >= 1000;
+    const bool tooHot    = dirNow > 0;            // peak above target -> needs LESS gain
+    /* ★ And ten seconds of sustained quiet before reclaiming gain — longer than any gap between
+     *   overs, so a conversation never moves it, while a genuine band change still does. */
+    /* ★ Still a little more patient on the way up than the way down — the peak hold has removed
+     *   the need for the big asymmetry, not the reason for caution in the direction that can
+     *   overload. */
+    const int  needAgree = tooHot ? 3 : 20;
+    const int  stepCap   = tooHot ? kMaxStep : 1;
+    if (dirNow != 0 && agree >= needAgree && ifRateOk) {
+        int step = (int)std::lround(err);
+        if (step >  stepCap) step =  stepCap;
+        if (step < -stepCap) step = -stepCap;
+        wantGr = gr + step;                       // peak too high -> more reduction
+        lastIfWrite = clock::now();
+    }
+    /* ★ Clipping is not a level, it is a fault, and it outranks the deadband: if samples are AT
+     *   the rail the measured peak is a LIE (it cannot report above full scale), so the error
+     *   term understates how far out we are. Back off decisively and let the next window tell
+     *   the truth. That is the same trap as the clipped-verdict bug on the dongle's AGC. */
+    /* ★ The IF answers a trace of clipping straight away — that is its job and it costs nothing
+     *   to undo. Only the RF stage needs the patience above. */
+    if (clip > 0.0 || ovl) wantGr = std::max(wantGr, gr + 4);
+    wantGr = std::max(20, std::min(59, wantGr));
+
+    /* ── THE RF STAGE ─────────────────────────────────────────────────────────────────────────
+     * ★ Slow, and asymmetric on purpose (see the policy note above).
+     *   · SPEND RF gain (raise the state) only when the IF has run out of room at the quiet end
+     *     — reduction railed at 59 — or the radio is actually overloading. Both are the
+     *     documented trigger: "the IF gain will be at a minimum ... when the Overload warning
+     *     appears".
+     *   · RECLAIM RF gain (lower the state) when the IF is railed at 20 — full IF gain and still
+     *     short of target — and nothing is clipping. This is the half that implements "as high as
+     *     possible": left out, the front end would only ever ratchet downwards.
+     * ★★ Both need DWELL, measured in consecutive ticks at the rail, because one window at an end
+     *    stop is a transient and an LNA step on this radio is worth about 21 dB — far too big an
+     *    action to take on a moment's evidence. */
+    int& railHi = g_vibeAgcRailHi;        // ★ likewise: a rail held at the old frequency means
+    int& railLo = g_vibeAgcRailLo;        //   nothing at the new one
+    static auto lastRf = clock::time_point{};
+    const auto now = clock::now();
+
+    /* ★ THE IF OUT OF ROOM, OR REAL CLIPPING. Not "above target" — see the note on ovl. */
+    if (wantGr >= 59 || ovl || heavyClip) ++railHi; else railHi = 0;
+    if (wantGr <= 20 && !ovl && clip <= 0.0)  ++railLo; else railLo = 0;
+
+    /* ★★★ A LIGHTNING CRASH IS NOT AN OVERLOAD, AND ONE SAMPLE IN 100,000 IS NOT EITHER.
+     *     This cut the RF gain the instant `ovl` went true, and `ovl` was corroborated by ANY
+     *     clipping at all. Measured on 3755 kHz with the storm detector firing: it cut a whole
+     *     LNA step — fifteen decibels — on a clip fraction of 0.0010%. One sample in a hundred
+     *     thousand, on an HF band during a thunderstorm, is static: it is the band, not the gain.
+     *     And the cut could not be undone, because at the state below the IF was already at
+     *     maximum gain and still 14 dB under target — so the receiver went deaf, climbed back,
+     *     caught another crash, and cut again. That is the flap Stuart saw, and it is also why he
+     *     was right that "RF could be 1 or 2 clicks higher" (2026-09-12).
+     * ★ So severity decides urgency. Sustained, heavy clipping is a real overload and is answered
+     *   at once. A trace of clipping has to persist across several windows — about a second —
+     *   before it costs an LNA step, which no impulse can do and a genuinely hot front end does
+     *   immediately.
+     * ★★ The IF stage is untouched by this and still reacts to every window: it is cheap, it is
+     *    reversible, and it is the stage that is supposed to absorb exactly this. */
+    const int  needHi = heavyClip ? 1 : (ovl ? 6 : 4);
+    const int  needLo = 40;              // ★ windows (~4 s); the peak hold handles the silences
+    const bool dwellOk = lastRf.time_since_epoch().count() == 0 ||
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - lastRf).count() >= 1500;
+
+    /* ★★★ NEVER CLIMB BACK INTO A STATE THAT JUST OVERLOADED. Without this the loop flaps on the
+     *     overload boundary for ever: climb a step, overload, drop a step, find headroom, climb
+     *     again — "it goes up a few db, an overload warning flashes for a split second then it
+     *     goes down again" (Stuart, 2026-09-12). The RTL's AGC learned this same lesson and keeps
+     *     `g_ovlBadGain` for it; this is the RSP's version of the same guard.
+     * ★ `badLna` is the most-gain LNA state known to overload here. We may sit at it or below it
+     *   in gain (higher state number), never above, until a long clean spell says the conditions
+     *   have genuinely changed — a fade, a retune, an aerial change. */
+    int& badLna   = g_vibeAgcBadLna;      // ★ file-scope so a retune can clear them — see above
+    int& cleanRun = g_vibeAgcCleanRun;
+    /* ★ And only SUSTAINED trouble teaches the guard. A lesson learnt from one static crash is a
+     *   wrong lesson held for a minute. */
+    /* ★★★ AND IT MUST BE ABOVE TARGET TO COUNT AS AN OVERLOAD. `railHi` counts "IF at 59 dB of
+     *     reduction", which at START-UP is true by design — the loop deliberately opens at least
+     *     RF gain with the IF at maximum reduction, the safe direction. Four windows later the
+     *     guard had duly recorded "LNA 9 overloaded", and LNA 9 is the QUIETEST state there is,
+     *     so it then refused to climb anywhere at all: "not climbing past LNA 9" (measured,
+     *     2026-09-12). A lesson taken from the opening conditions and applied to everything after.
+     * ★ Real trouble is heavy clipping, or the IF railed while the level is still ABOVE target.
+     *   Railed and below target is not an overload — it is a quiet band with the gain wound down,
+     *   which is the state the loop is supposed to climb OUT of. */
+    if (heavyClip || (railHi >= 4 && peak > (double)targetDbfs)) {
+        if (badLna < 0 || lna < badLna) badLna = lna;
+        cleanRun = 0;
+    }
+    else ++cleanRun;
+    /* ★★★ FORGETTING ON A TIMER ALONE IS A SLOW FLAP. Clearing the guard after a fixed clean spell
+     *     meant: climb, overload, learn, wait a minute, forget, climb, overload — once a minute,
+     *     for ever, disturbing the demodulator each time. A clean run only proves the CURRENT
+     *     setting is fine; it says nothing about the one above, which is exactly the setting that
+     *     failed. (The dongle's AGC records the same trap almost word for word.)
+     * ★ So the retry needs EVIDENCE that conditions changed, not merely that time passed: the
+     *   level has to have dropped well clear of target, meaning there is now real headroom that
+     *   was not there when it overloaded. A fade, a retune, an aerial change will all do it.
+     *   Nothing changing means no retry, which is the correct answer. */
+    if (badLna >= 0 && cleanRun > 600 && peak < (double)targetDbfs - 10.0) {
+        LOGI("VibeAGC/RSP: level has dropped to %.1f dBFS, %.0f dB below target — "
+             "letting the RF stage try above LNA %d again", peak, (double)targetDbfs - peak, badLna);
+        badLna = -1; cleanRun = 0;
+    }
+
+    /* ★★★ AND WHERE THE IF IS SITTING TELLS YOU HOW HARD THE FRONT END IS BEING DRIVEN.
+     *     This is the half I threw away when I rewrote the loop around SDRplay's "RF as high as
+     *     possible", and it is Stuart's original specification: "IF AGC should be targeting 30-50
+     *     as that leaves 20-30 and 50-59 as the buffer zone" (2026-09-11). It is not in conflict
+     *     with SDRplay's rule — theirs says how to reach a LEVEL, his says how to SPLIT it between
+     *     the two stages — and without it the loop is blind to the failure that matters most here.
+     *
+     * ★★★ WHY IT MATTERS, MEASURED: the entire medium wave band swamped by Radio Caroline, a
+     *     signal that is normally unremarkable (Stuart, 2026-09-12). A broad hump across ±1.5 MHz
+     *     with the floor lifted everywhere is the MIXER being driven into distortion — and the ADC
+     *     was not clipping at all, because the IF was applying 45 dB of reduction AFTER the mixer.
+     *     So every detector this loop had said "fine": peak on target, clip zero, no overload. The
+     *     level was healthy and the receiver was useless.
+     * ★ An IF reduction of 45 out of 20..59 means the RF stage is handing over ~25 dB more than
+     *   the IF wants. Backing the RF off one step and letting the IF come back toward the middle
+     *   gives the SAME level with far less front-end drive: a little noise figure traded for a
+     *   great deal of intermodulation, which on a crowded broadcast band is not a close call.
+     * ★★ Slow, and outside the clipping path entirely — this is about where the gain is TAKEN,
+     *    not how much of it there is, so it must never fight the level loop. */
+    /* ★★★ AIM AT THE UPPER HALF OF THE BAND, NOT THE MIDDLE OF IT. The working band is 30..50,
+     *     but "anywhere in 30..50 is fine" is NOT the same rule as "RF as high as possible" — and
+     *     it was the wrong one. With the IF resting at 32 the RF stage is delivering barely more
+     *     than the IF needs, so the front end runs cold and the receiver's own noise figure
+     *     dominates: system gain 17.6 dB on 80 m, with weak SSB sunk into it (Stuart, 2026-09-12:
+     *     "gain now too low", on 3799 LSB).
+     * ★ More RF gain paired with more IF reduction produces the SAME level at the converter with a
+     *   BETTER noise figure — the LNA is the first stage, so gain taken there costs least. That is
+     *   precisely SDRplay's "set the gain as high as possible whilst avoiding ADC overload",
+     *   expressed as a split rather than a level.
+     * ★★ So the RF stage climbs until the IF is doing 40 dB or more of reduction, and backs off
+     *    above 50. The band is unchanged; where we AIM inside it is not. The intermod guard still
+     *    stops short of a wide-open LNA, and the overload guards are untouched — this only decides
+     *    which end of a safe range to sit at, and the quiet end was costing sensitivity for
+     *    nothing. */
+    static int hotIf = 0, coldIf = 0;
+    if      (wantGr > 50) { ++hotIf;  coldIf = 0; }   // IF working too hard -> less RF gain
+    else if (wantGr < 40) { ++coldIf; hotIf  = 0; }   // IF has slack -> MORE RF gain
+    else                  { hotIf = coldIf = 0; }     // 40..50: the front end is earning its keep
+
+    int wantLna = lna;
+    if (dwellOk && n > 1) {
+        const int lo = std::max(0, lnaFloor);    // the owner's band cap, as a MINIMUM state
+        /* ★ The RF stage reclaims on the same evidence as the IF — see the asymmetric deadband.
+         *   Without this the RF half would chase the silences the IF half no longer does. */
+        if (railHi >= needHi && lna < n - 1)      wantLna = lna + 1;   // less RF gain
+        else if (railLo >= needLo && lna > lo)    wantLna = lna - 1;   // more RF gain
+        /* ★ The split rule, at a slower cadence than the rails so it never pre-empts a genuine
+         *   overload. ~3 s of the IF living outside 30..50 before the RF stage answers for it. */
+        else if (hotIf  >= 30 && lna < n - 1)     wantLna = lna + 1;   // IF working too hard
+        else if (coldIf >= 30 && lna > lo)        wantLna = lna - 1;   // IF has slack to give back
+        if (wantLna < lo) wantLna = lo;
+        /* ★ The guard, applied only to the CLIMB. Backing off is never refused — see the same
+         *   rule in the dongle's loop. A lower state number is MORE gain.
+         * ★★★ BUT IT MUST NOT LEAVE THE RECEIVER DEAF. If the IF stage is already at maximum gain
+         *     (20 dB, its least reduction) and the level is STILL well under target, there is no
+         *     gain left anywhere else — refusing the RF stage then does not prevent an overload,
+         *     it just throws the signal away. Stuart, 2026-09-12 on 3755 kHz: "IF is set to
+         *     maximum and RF could be 1 or 2 clicks higher", and he was right; the guard was
+         *     holding the front end down over a lesson learnt against a strong signal that was no
+         *     longer there.
+         * ★ A guard against overload has no business acting when the symptom is the opposite of
+         *   an overload. Below target with nothing left to give IS the evidence that conditions
+         *   changed — the same evidence the slow release looks for, available immediately. */
+        const bool ifOutOfGain = (wantGr <= 20) && (peak < (double)targetDbfs - 6.0);
+        /* ★★★ KEEP ONE STEP IN HAND. LNA 0 is the front end wide open, and Stuart is right that
+         *     maximum RF gain alongside maximum IF gain "would be too much": the ADC level we
+         *     measure cannot see front-end INTERMODULATION, so a loop steered by level alone will
+         *     happily drive the LNA to its limit and hear the mixer start making signals that are
+         *     not there. The dongle's AGC learned this the same way ("now i'm getting
+         *     intermodulation issues") and stops short of the loudest gain that merely avoids
+         *     clipping.
+         * ★ So the top state is reachable only when the IF is ALSO out of gain and we are still
+         *   well under target — a genuinely weak band, where intermod is not the risk. Otherwise
+         *   we stop one step down and let the IF finish the job. */
+        if (wantLna == 0 && lna > 0 && !ifOutOfGain) {
+            wantLna = 1;
+            if (lna == 1) { /* already there — nothing to do */ }
+        }
+        if (wantLna < lna && badLna >= 0 && wantLna <= badLna && !ifOutOfGain) wantLna = lna;
+        else if (wantLna < lna && badLna >= 0 && ifOutOfGain)
+            LOGI("VibeAGC/RSP: climbing past LNA %d after all — the IF is at maximum gain and the "
+                 "level is %.0f dB under target, so there is nothing left to lose",
+                 badLna, (double)targetDbfs - peak);
+    }
+
+    /* ── THE WRITE ────────────────────────────────────────────────────────────────────────────
+     * ★★★ ORDER MATTERS AND IS NOT ARBITRARY. setLnaState carries the CURRENT gRdB with it (the
+     *     API has one gain update and it submits both fields), so writing the LNA after the IF
+     *     preserves the IF figure we just chose, whereas the reverse order would have the LNA
+     *     write clobber it with the stale one. */
+    /* ★ A HEARTBEAT, because "it did not move" and "it is not running" are different faults and
+     *   they look the same from outside. Every ~10 s, say what it is seeing and what it decided —
+     *   that is how the dwell counts and the target get tuned against real signals rather than
+     *   argued about. */
+    {
+        static std::atomic<int> beat{0};
+        if (beat.fetch_add(1, std::memory_order_relaxed) % 50 == 0)
+            LOGI("VibeAGC/RSP: peak %.1f dBFS (target %d), clip %.4f%%, ovl %d%s — "
+                 "LNA %d/%d, IF reduction %d -> %d dB, rails hi/lo %d/%d",
+                 peak, targetDbfs, clip, ovl ? 1 : 0,
+                 (ovlRaw && !ovl) ? " (hw flag set but NOT corroborated — stale latch, ignored)" : "",
+                 lna, n - 1, gr, wantGr, railHi, railLo);
+        /* ★★★ RATE-LIMITED, AND IT MUST BE. This sat OUTSIDE the heartbeat's modulo and fired on
+         *     every tick the condition held — which, since "IF outside 30-50" persists until the
+         *     RF stage answers, meant tens of lines per second into journald from inside the tick
+         *     loop. It took the radio out: "NOT RESPONDING" on the landing page, 2026-09-12.
+         * ★ A diagnostic that degrades the thing it is diagnosing is worse than no diagnostic. It
+         *   rides the same counter as the heartbeat now, so it can only ever print beside it. */
+        if ((hotIf > 5 || coldIf > 5) && beat.load(std::memory_order_relaxed) % 50 == 1)
+            LOGI("VibeAGC/RSP: IF reduction %d is outside the 30-50 working band (%s for %d "
+                 "windows) — the RF stage will answer for it",
+                 wantGr, hotIf ? "too high, front end overdriving" : "too low, RF gain to spare",
+                 hotIf ? hotIf : coldIf);
+        if (badLna >= 0 && beat.load(std::memory_order_relaxed) % 50 == 1)
+            LOGI("VibeAGC/RSP: not climbing past LNA %d — it overloaded here (clean for %d ticks)",
+                 badLna, cleanRun);
+    }
+    if (wantGr != gr) {
+        /* ★★★ OUR OWN GAIN STEP IS NOT A LIGHTNING STRIKE. Every gain change puts a step in the
+         *     signal, and a step is exactly what the sferic detector is looking for — so VibeAGC
+         *     was lighting the STORMS badge with its own footprints. Stuart spotted what I had
+         *     mis-read as weather: "the storms icon is the gain flapping looking like lightning
+         *     strikes" (2026-09-12), and I had just built a whole clipping theory on top of it.
+         * ★ The machinery already exists and the old AGC kick already used it — noteHwMoved() is
+         *   called before every one of its six steps. This loop simply never called it. */
+        noteHwMoved();
+        /* ★ AND AN EXPLICIT HOLD, not only the 2 s `sinceHw` window. The sferic detector
+         *   ACCUMULATES hits and the badge persists once lit, so a run of closely-spaced steps
+         *   can light it even when each one individually falls inside the window. Belt and
+         *   braces — the real cure is the peak hold above, which stops the steps happening. */
+        sfericHold(2.0);
+        lastIfWrite = clock::now();
+        sdrp->setIfGainReduction(wantGr);
+        g_vibeAgcLastGr.store(wantGr, std::memory_order_relaxed);
+        skipUntilWin = win + 2;     // ★ ignore the straddling window — see the note above
+    }
+    if (wantLna != lna) {
+        /* ★★★ MEASURE WHAT THE STEP WAS WORTH; DO NOT ASSUME IT. This used a flat 21 dB, taken
+         *     from ONE observation at 96.1 MHz — and the RSP's LNA ladder is not uniform: it
+         *     differs per band and per state, and on medium wave the steps are far smaller. So
+         *     the compensation overshot, the IF walked the level back, the climb condition
+         *     re-armed, and the loop ratcheted into the overload and back out again. That is the
+         *     flapping Stuart saw at 648 kHz. The same fitted-to-one-example mistake as the notch
+         *     edges, and he called that one too.
+         * ★ The radio tells us exactly: gainVals.curr is the total system gain and the API
+         *   refreshes it on every gain update, so the difference either side of the LNA write IS
+         *   the step, in decibels, for this band and these two states. No constant, nothing to
+         *   drift, correct on every model.
+         * ★★ Order: the LNA write first (it carries the current gRdB with it), then the IF put
+         *    exactly where the measured step says. That leaves one API round trip of uncorrected
+         *    level — milliseconds — which is the price of not having to guess. */
+        /* ★ And an RF step most of all — it is the biggest step this loop can make. See above. */
+        noteHwMoved();
+        sfericHold(1.0);
+        const double gBefore = sdrp->systemGainDb();
+        LocalSdrShim::instance().setLnaState(wantLna);
+        const double gAfter  = sdrp->systemGainDb();
+        int stepDb = (int)std::lround(gAfter - gBefore);         // + = the radio got louder
+        /* ★★★ AND SANITY-CHECK IT, BECAUSE IT IS NOT ALWAYS READY. gainVals.curr is refreshed by
+         *     the API when it processes the update, which is not always before this read returns.
+         *     Measured on air: 9->8 and 8->7 both reported "+0 dB", and 7->6 reported "-23 dB"
+         *     while CLIMBING — the sign was impossible. A reading that is wrong half the time is
+         *     worse than no reading, because it is trusted: it is the blunt detector that says
+         *     "clean" and stops you looking.
+         * ★ So the direction is known a priori — fewer LNA states is more gain — and any
+         *   measurement that disagrees with it, or is absurdly large, is discarded. With no
+         *   trustworthy figure we apply NO compensation and let the IF stage walk it back; that
+         *   is its job, it moves every tick, and the anti-flap guard above stops the walk turning
+         *   into a hunt. Honest and slightly slower beats confident and wrong. */
+        const int wantMoreGain = (wantLna < lna) ? +1 : -1;
+        if (stepDb == 0 || (stepDb > 0) != (wantMoreGain > 0) || std::abs(stepDb) > 40) {
+            LOGI("VibeAGC/RSP: gain step reading %+d dB is not plausible for an LNA %s — "
+                 "discarded, the IF stage will take it", stepDb, wantMoreGain > 0 ? "climb" : "cut");
+            stepDb = 0;
+        }
+        const int comp = std::max(20, std::min(59, wantGr + stepDb));
+        sdrp->setIfGainReduction(comp);
+        g_vibeAgcLastGr.store(comp, std::memory_order_relaxed);
+        /* ★ An RF step is far bigger than an IF nudge and the radio needs a moment, so give it
+         *   three clear windows before judging anything. */
+        skipUntilWin = win + 3;
+        LOGI("VibeAGC/RSP: RF gain %s — LNA %d -> %d (peak %.1f dBFS, clip %.4f%%, ovl %d/hw %d), "
+             "step measured %+d dB, IF reduction %d -> %d dB to match%s",
+             wantLna > lna ? "DOWN" : "UP", lna, wantLna, peak, clip,
+             ovl ? 1 : 0, ovlRaw ? 1 : 0, stepDb, gr, comp, "");
+        lastRf = now; railHi = railLo = 0; hotIf = coldIf = 0;
+    }
+}
+
 // ★ Until when somebody has asked for ADC statistics with the automation off — see enqueueIq.
 static std::atomic<double> g_adcStatsUntil{0.0};
 static std::atomic<double> g_adcClipPct{0.0};
@@ -2799,6 +3400,8 @@ static int   vsDesiredAgcSet();
 /* ★ And the write side, for the same reason — auto notch RECORDS what it chose so the readout and
  *   a rebuilt Impl both see it, and it does that from the retune path. */
 static void  vsRecordNotchChoice(bool rf, bool dab);
+/* ★ Evaluate and apply the automatic notches for a frequency. Returns true if anything moved. */
+static bool  vsApplyAutoNotch(SdrplaySource* sdrp, double hz);
 
 /* ══ WHICH FRONT-END NOTCHES SUIT THIS FREQUENCY ══════════════════════════════════════════════
  * ★★★ THE RSP's NOTCHES ARE ANALOGUE AND AHEAD OF THE TUNER, so they protect the whole front end
@@ -7309,7 +7912,8 @@ struct LocalSdrShim::Impl {
                      "(no AGC kick: there is no loop to settle)",
                      sdrp->currentLnaState(), sdrp->currentIfGr(), sdrp->systemGainDb());
             }
-            else if (sdrpAgcWanted && sdrpAgcKick < 6 && n > 10 && (n % 20) == 0) {
+            else if (sdrpAgcWanted && sdrpAgcKick < 6 && n > 10 && (n % 20) == 0
+                     && !g_rspRfAgc.load(std::memory_order_relaxed)) {
                 noteHwMoved();                 // ★ every kick step moves the level; none is a sferic
                 switch (++sdrpAgcKick) {
                     case 1: sdrp->setLnaState(std::max(0, sdrp->lnaStateCount() - 1 - kRspInitRfGainPos));
@@ -7352,6 +7956,62 @@ struct LocalSdrShim::Impl {
             // waterfall's bounce is EXPLAINED rather than looking like a fault. An unexplained
             // transient reads as a defect; a labelled one reads as a radio settling.
             sdrpSettling = (sdrpAgcKick < 6);
+            /* ★★★ THE KICK BELONGS TO THE RADIO'S AGC, AND VibeAGC REPLACES THAT AGC.
+             *     `sdrpSettling` means "the six-step kick that starts SDRplay's IF AGC has not
+             *     finished". Under VibeAGC there is no such AGC to start: it is switched off and
+             *     held off. So the kick is retired here rather than left to run, for two reasons,
+             *     and the second one is the bug:
+             *       · the kick deliberately walks the gain to an end stop and back, which is a
+             *         fight with the loop that now owns those registers; and
+             *       · the kick only ADVANCES while `sdrpAgcWanted` is true, so with VibeAGC
+             *         turning that off every tick the counter could never reach 6 — settling
+             *         latched ON FOR EVER, and VibeAGC, which I had gated on `!sdrpSettling`,
+             *         never ran a single time. That is 96.1 MHz sitting at LNA 1 with the IF
+             *         railed at 59 and the overload lamp lit, with nothing driving it at all
+             *         (Stuart, 2026-09-12: "VibeAGC doing the grand total of fuck all").
+             * ★ Gating a controller on the settling of the thing it replaces is the same category
+             *   error as gating the notches on the gain loop. If a condition does not describe
+             *   the work, it does not belong in front of it. */
+            if (g_rspRfAgc.load(std::memory_order_relaxed)) {
+                if (sdrpAgcKick < 6) {
+                    LOGI("VibeAGC/RSP: skipping the SDRplay AGC kick — that AGC is not in use");
+                    sdrpAgcKick = 6;
+                    /* ★★★ BUT KEEP THE ONE THING THE KICK WAS RIGHT ABOUT: OPEN QUIET.
+                     *     The kick left the front end at minimum gain and maximum attenuation on
+                     *     purpose — "we know nothing about your aerial yet, and coming UP to a
+                     *     working gain is the only safe direction", as this project's own setup
+                     *     page tells every new owner. Retiring the kick threw that away with it:
+                     *     the radio opened at LNA 1, which is very nearly MAXIMUM RF gain, and
+                     *     VibeAGC then spent fifteen seconds walking down to 5. Measured tonight:
+                     *     "peak -15.2 dBFS ... LNA 1/9". On a strong aerial those fifteen seconds
+                     *     are an overload, and overload is the one thing the RF stage exists to
+                     *     avoid.
+                     * ★ So: start at the owner's chosen RF start position if they set one, else
+                     *   at minimum RF gain, and let the loop CLIMB. Climbing is the safe
+                     *   direction and costs a few seconds; descending from maximum gain costs a
+                     *   clipped converter. Once only — armedOnce is reset when settling restarts. */
+                    const int n = sdrp->lnaStateCount();
+                    if (n > 1) {
+                        /* ★ The owner's band cap, computed HERE rather than borrowed from further
+                         *   down the loop — that variable is declared below this point and reaching
+                         *   for it has broken this build twice now. It is two cheap calls. */
+                        const int capPos0 = LocalSdrShim::gainCapAt(
+                            LocalSdrShim::instance().listenFrequency());
+                        const int floor0  = capPos0 >= 0 ? std::max(0, n - 1 - capPos0) : 0;
+                        const int want = g_rspRfAgcStart.load(std::memory_order_relaxed);
+                        const int st   = (want >= 0 && want <= n - 1)
+                                       ? std::max(floor0, (n - 1) - want)       // position -> state
+                                       : n - 1;                                 // least RF gain
+                        if (st != sdrp->currentLnaState()) {
+                            LOGI("VibeAGC/RSP: opening at LNA %d/%d (%s) — climbing is the safe "
+                                 "direction", st, n - 1,
+                                 want >= 0 ? "the owner's RF start" : "least RF gain");
+                            LocalSdrShim::instance().setLnaState(st);
+                        }
+                    }
+                }
+                sdrpSettling = false;
+            }
 
             // ★ The RSP's live gain state. The AGC moves the IF reduction on its own, so a
             //   slider position is NOT the truth — and total system gain is the one figure that
@@ -7372,15 +8032,152 @@ struct LocalSdrShim::Impl {
              *   vsSdrplayRfAgcTick. It rate-limits itself; this is only the heartbeat.
              * ★★ NOT while the AGC kick is still settling: the kick deliberately drives the gain
              *    to an end stop and back, so steering off the reduction mid-kick would chase it. */
-            if (!sdrpSettling) {
-                /* ★ The operator's cap is a GAIN POSITION and the LNA state counts the other way —
-                 *   the same conversion the retune path uses, and it must not drift from it. A
-                 *   negative cap means no cap, which is a floor of 0 (full RF gain permitted). */
-                const int capPos = LocalSdrShim::gainCapAt(LocalSdrShim::instance().listenFrequency());
-                const int floorState = capPos >= 0
-                    ? std::max(0, sdrp->lnaStateCount() - 1 - capPos) : 0;
-                vsSdrplayRfAgcTick(sdrp.get(), floorState, sdrpAgcWanted);
+            /* ★★★ NOT UNTIL THE RADIO HAS FINISHED SETTING ITSELF UP, AND THEN NOT FOR A WHILE.
+             *     `sdrpSettling` only says the six-step kick has finished — it does NOT say the
+             *     IF AGC has converged, and the kick deliberately RESETS THE LNA to its starting
+             *     position on the way through. So the RF AGC would walk the gain down, a re-kick
+             *     (a retune, a DAB entry, a reopen) would put the LNA back to its start, and the
+             *     two would take turns undoing each other — which is what Stuart saw: LNA 0 with
+             *     the IF railed at 59, on a radio that had already walked itself to state 8.
+             * ★★ HIS RULE, AND IT IS THE RIGHT ONE: "our RF AGC must not apply until the
+             *    initialising step of the SDRplay runs and IF AGC is confirmed working." So:
+             *    the kick must be done, AND a grace period must have passed since it finished,
+             *    AND the IF AGC must be reporting a live figure — an AGC that has never reported
+             *    is not one we can steer by.
+             * ★ The clock RESTARTS every time settling begins again, so each re-kick buys another
+             *   full grace period rather than the loop pouncing the moment the counter ticks. */
+            static auto settledAt = std::chrono::steady_clock::time_point{};
+            if (sdrpSettling) settledAt = std::chrono::steady_clock::time_point{};
+            else if (settledAt.time_since_epoch().count() == 0)
+                settledAt = std::chrono::steady_clock::now();
+            const bool ifAgcAlive = sdrp->currentIfGr() > 0;
+            const bool graceDone  = settledAt.time_since_epoch().count() != 0 &&
+                std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::steady_clock::now() - settledAt).count() >= 12;
+            /* ★ The operator's cap is a GAIN POSITION and the LNA state counts the other way —
+             *   the same conversion the retune path uses, and it must not drift from it. A
+             *   negative cap means no cap, which is a floor of 0 (full RF gain permitted).
+             *   ★★ Computed HERE, above the starting-level block, because that block clamps to
+             *   it too — it used to be declared below and the build failed on it. */
+            const int capPos = LocalSdrShim::gainCapAt(LocalSdrShim::instance().listenFrequency());
+            const int floorState = capPos >= 0
+                ? std::max(0, sdrp->lnaStateCount() - 1 - capPos) : 0;
+            /* ★★★ START FROM A KNOWN PLACE. The moment the loop arms — after the kick and its
+             *     grace — put the LNA where the owner said to begin, once. The kick deliberately
+             *     leaves the front end at an end stop (the safe, quiet direction), so a loop that
+             *     inherits that has to walk several steps to reach anything sensible, and every
+             *     step is a write the IF AGC has to survive. Starting in the right neighbourhood
+             *     usually means no steps at all (Stuart's suggestion, 2026-09-12). */
+            static bool armedOnce = false;
+            if (sdrpSettling) armedOnce = false;
+            if (!sdrpSettling && graceDone && ifAgcAlive && !armedOnce
+                && g_rspRfAgc.load(std::memory_order_relaxed)) {
+                armedOnce = true;
+                const int n = sdrp->lnaStateCount();
+                if (n > 1) {
+                    const int want = g_rspRfAgcStart.load(std::memory_order_relaxed);
+                    const int pos  = (want < 0 || want > n - 1) ? (n - 1) / 2 : want;
+                    const int st   = std::max(floorState, (n - 1) - pos);   // ★ position -> state
+                    if (st != sdrp->currentLnaState()) {
+                        LOGI("RSP RF AGC: starting from RF gain %d/%d (LNA state %d)",
+                             pos, n - 1, st);
+                        LocalSdrShim::instance().setLnaState(st);
+                    }
+                }
             }
+            /* ★★★ VibeAGC OWNS BOTH STAGES, OR NEITHER. When it is on the radio's own IF AGC is
+             *     turned off and KEPT off, and vsSdrplayVibeAgcTick drives gRdB and LNAstate
+             *     together from our own level measurement — see the policy note on that function.
+             *     When it is off, nothing here changes: the radio's IF AGC runs as it always has
+             *     and the RF stage is the owner's to set by hand.
+             * ★ The two loops are mutually exclusive by construction. Running both would be the
+             *   original bug wearing a different hat — two controllers, one register. */
+            if (g_rspRfAgc.load(std::memory_order_relaxed)) {
+                /* ★★ ASSERTED EVERY TICK, not once. The client re-sends its saved settings on
+                 *    connect and DAB entry re-applies a target, so an AGC we disabled at start-up
+                 *    can be switched back on behind us — which is precisely how the start-up kick
+                 *    kept coming undone. Idempotent in effect: setIfAgc(false) on an already
+                 *    disabled AGC writes nothing new. */
+                /* ★ Re-asserted whenever something turns the radio's AGC back on — the client
+                 *   re-sends saved settings on connect and DAB entry re-applies a target — but
+                 *   SAID only when it actually changes, or this fills the journal at 20 Hz. */
+                if (sdrpAgcWanted) {
+                    LOGI("VibeAGC/RSP: taking both gain stages — the radio's own IF AGC is off");
+                    LocalSdrShim::instance().setIfAgc(false);
+                }
+                /* ★ The SAME target the dongle's VibeAGC uses, DAB switch and all — see the
+                 *   note on vsSdrplayVibeAgcTick. Not the AGC target slider, which belongs to the
+                 *   tuner's own AGC and is switched off while this loop runs. */
+                /* ★ Its OWN readiness is the only precondition: the tick refuses to act until
+                 *   it has closed a measurement window (see adcWindows). It does NOT wait on
+                 *   `graceDone`, which times a settling period for an AGC that is not running. */
+                /* ★★★ THE DONGLE'S TARGET, MINUS THE RSP's HEADROOM. agcTargetDbfs() is -6 dBFS
+                 *     peak (-9 in DAB), and those were measured on an RTL-SDR — an EIGHT-bit
+                 *     converter, where every decibel of headroom is a real fraction of the range
+                 *     you have, so running near the rail is worth the risk.
+                 * ★     The RSP is FOURTEEN bits. Backing off 6 dB costs one bit of a budget with
+                 *     six to spare and still leaves far more dynamic range than the dongle has at
+                 *     its best — while an overload costs everything, and recovering from one here
+                 *     means a 15-20 dB LNA step and a visible jump in the noise floor. Not close.
+                 * ★★ It is also the direction SDRplay advise: a set point "between -20 and -30
+                 *    dBFs", well back from the rail. Their measure is not our peak so the number
+                 *    does not transfer, but the direction does — away from the rail, not at it. */
+                /* ★★★ AND THE HEADROOM FOLLOWS THE ADC, WHICH FOLLOWS THE SAMPLE RATE.
+                 *     The RSP trades converter resolution for bandwidth in hardware (RSP1A spec,
+                 *     the same table the rate picker publishes): 14-bit to 6.048 MS/s, 12-bit to
+                 *     8.064, 10-bit to 9.216, 8-bit above. So "the RSP is 14-bit, headroom is
+                 *     nearly free" — the argument I used for backing off 6 dB — is only true at
+                 *     the LOW rates. At 8 bits this radio has exactly the dynamic range of the
+                 *     dongle those targets were measured on, and giving away 6 dB there is giving
+                 *     away range it does not have (Stuart, 2026-09-12).
+                 * ★ One decibel of headroom per SPARE bit over the dongle's eight: 14-bit -> 6 dB
+                 *   back, 12-bit -> 4, 10-bit -> 2, 8-bit -> none, which lands exactly on
+                 *   agcTargetDbfs() — the figure measured on an 8-bit converter, for an 8-bit
+                 *   converter. The rule needs no special cases because it is the reason itself.
+                 * ★★ Thresholds identical to adcBits() on the setup page and the client's rate
+                 *    picker. Three readers of one hardware fact; if the table is ever wrong it is
+                 *    wrong in three places, so it is written the same way in all of them. */
+                const double rateNow = sampleRate;
+                const int adcBits = rateNow <= 6048000.0 ? 14
+                                  : rateNow <= 8064000.0 ? 12
+                                  : rateNow <= 9216000.0 ? 10 : 8;
+                const int headroom = adcBits - 8;          // dB to stay back from the dongle's aim
+                vsSdrplayVibeAgcTick(sdrp.get(), floorState,
+                                     (int)std::lround(agcTargetDbfs()) - headroom);
+            }
+            else if (!sdrpSettling && graceDone && ifAgcAlive)
+                vsSdrplayRfAgcTick(sdrp.get(), floorState, sdrpAgcWanted);
+            /* ★★★ THE NOTCHES ARE NOT PART OF THE GAIN LOOP AND MUST NOT SHARE ITS GATE.
+             *     This call used to sit INSIDE the `!sdrpSettling && graceDone && ifAgcAlive`
+             *     block above, so the notches only tracked the dial when the RF AGC's own
+             *     preconditions happened to hold: the six-step kick finished, twelve seconds of
+             *     grace elapsed, and the IF AGC reporting. Turn the IF AGC off to take manual
+             *     control — as any operator may — and the notches stopped following the VFO
+             *     entirely. That is "I go to DAB so we keep the DAB notch enabled" (Stuart,
+             *     2026-09-12): entering DAB should drop the DAB notch, the rule said so, and the
+             *     line that applies the rule was never reached.
+             * ★ A notch depends on ONE thing: where the dial is. Not on gain, not on settling,
+             *   not on who owns the IF register. Gate it on nothing. Idempotent, so it costs
+             *   nothing until the answer changes.
+             * ★★ Same fault shape as ONE RULE, TWO READERS in reverse: one gate, two unrelated
+             *    jobs. If a condition does not describe the work, it does not belong in front of it. */
+            /* ★★★ AND THE RIGHT FREQUENCY, WHICH IN DAB IS NOT listenFrequency().
+             *     That returns `audioFreq > 0 ? audioFreq : rtlCenter` — the audio VFO. In DAB
+             *     there is no audio VFO, so it keeps whatever it last held: tune away from medium
+             *     wave into Band III and the rule was still being asked about 648 kHz. It duly
+             *     answered "RF notch off, DAB notch ON" — correct for medium wave, exactly wrong
+             *     for a DAB multiplex, and precisely what Stuart saw: "moved to DAB and DAB still
+             *     on and RF is off when it should be the other way around" (2026-09-12).
+             * ★ I wrote "in DAB the listen frequency is the multiplex centre, which is what the
+             *   rule wants" in the comment when I ungated this. It was an assumption, it was
+             *   wrong, and it was sitting there as documentation the whole time.
+             * ★ The capture centre is the multiplex centre in DAB and the right answer everywhere
+             *   else the audio VFO is absent. */
+            const double notchHz = g_dabMode.load(std::memory_order_relaxed)
+                                 ? rtlCenter.load()
+                                 : LocalSdrShim::instance().listenFrequency();
+            if (vsApplyAutoNotch(sdrp.get(), notchHz))
+                for (auto& pr : allSpecPeers()) sendHwInfo(pr.sock);
             if (n % 2 == 0) {
                 /* ★★★ 320, AND CHECKED. This was 160 and the message has just grown five fields;
                  *  snprintf would have cut it MID-FIELD, which is not JSON, so every client would
@@ -7397,7 +8194,9 @@ struct LocalSdrShim::Impl {
                     "\"settling\":%d,\"rfNotch\":%d,\"dabNotch\":%d,\"autoNotch\":%d,"
                     "\"userNotch\":%d,\"rfAgc\":%d,\"agcSet\":%d}",
                     sdrp->systemGainDb(), sdrp->currentLnaState(), sdrp->currentIfGr(),
-                    sdrp->overloaded() ? 1 : 0, sdrpSettling ? 1 : 0,
+                    /* ★ CORROBORATED, not the raw latch — see overloadReal(). The badge and
+                     *   VibeAGC must answer to the same fact. */
+                    sdrp->overloadReal() ? 1 : 0, sdrpSettling ? 1 : 0,
                     vsDesiredRfNotch() > 0 ? 1 : 0, vsDesiredDabNotch() > 0 ? 1 : 0,
                     vsAutoNotchOn() ? 1 : 0, vsUserNotchAllowed() ? 1 : 0,
                     g_rspRfAgc.load(std::memory_order_relaxed) ? 1 : 0,
@@ -9746,8 +10545,6 @@ struct LocalSdrShim::Impl {
                     v = floor;
                 }
             }
-            if (jsonNum(msg, "ifgr", v))   { LocalSdrShim::instance().setIfGainReduction((int)v);
-                                             vsPersist("{\"ifGr\":" + std::to_string((int)v) + "}"); }
             // ★★★ AGC LOCKED = THE LISTENER MAY NOT TURN IT OFF. The owner has decided the radio's
             //     own loop keeps the front end safe; letting a visitor switch to manual would hand
             //     them the very control the lock exists to withhold. Turning it ON is always
@@ -9760,7 +10557,31 @@ struct LocalSdrShim::Impl {
                     vsPersist(std::string("{\"ifAgc\":") + (v != 0 ? "1" : "0") + "}");
                 }
             }
-            if (jsonNum(msg, "agcset", v))   LocalSdrShim::instance().setIfAgcSetPoint((int)v);
+            /* ★★★ ORDER: THE AGC SWITCH BEFORE THE MANUAL GAIN, ALWAYS.
+             *   `setIfGainReduction` is REFUSED outright while the radio's AGC owns gRdB (see
+             *   sdrplay_source.cpp — two controllers on one register is the bug this refusal
+             *   exists to prevent). The client sends the switch and the slider IN THE SAME
+             *   MESSAGE, and this handler used to run `ifgr` FIRST — so the write was refused
+             *   against an AGC that was about to be turned off a few lines later, and the gain
+             *   never moved. That is precisely "IF gain does nothing in manual mode" (Stuart,
+             *   2026-09-12): the slider moved, the number changed, the radio did not.
+             * ★ Moving the block below the switch is the whole fix. Do not move it back: the two
+             *   are ordered by a hardware rule, not by the order the fields happen to be read. */
+            if (jsonNum(msg, "ifgr", v))   { LocalSdrShim::instance().setIfGainReduction((int)v);
+                                             vsPersist("{\"ifGr\":" + std::to_string((int)v) + "}"); }
+            /* ★★ REFUSED WHEN THE OWNER HAS LOCKED IT, and SAID SO. The target decides how hard
+             *  the front end is driven for everybody on a shared receiver, so it is the operator's
+             *  to set — but a control that silently ignores you is the fault this project keeps
+             *  fixing, so the refusal carries a reason. */
+            if (jsonNum(msg, "agcset", v)) {
+                if (g_rspAgcSetLock.load()) {
+                    LOGI("AGC target change refused — the owner has locked it");
+                    sendText(sock, "{\"type\":\"notice\",\"why\":\"the operator has fixed this "
+                                   "receiver's AGC target\"}");
+                } else {
+                    LocalSdrShim::instance().setIfAgcSetPoint((int)v);
+                }
+            }
             /* ★ THE RF HALF OF THE GAIN LOOP, from the menu. Persisted like every other RSP
              *  control so it survives a restart — and reported back on rspstat, which is what
              *  keeps the button honest on a shared receiver where somebody else may flip it. */
@@ -16093,35 +16914,17 @@ struct LocalSdrShim::Impl {
              *     reconsidering — no polling, and no chance of them lagging a band change.
              * ★ Only on a CHANGE, like the gain cap beside it: an Update to the tuner per pan
              *   would be a hardware write for every dial movement. */
-            if (vsAutoNotchOn()) {
-                const VsNotchWant w = vsAutoNotchFor(hz, g_dabMode.load(std::memory_order_relaxed));
-                static std::atomic<int> lastRf{-1}, lastDab{-1};
-                const bool rfChanged  = lastRf.exchange(w.rf ? 1 : 0)   != (w.rf ? 1 : 0);
-                const bool dabChanged = lastDab.exchange(w.dab ? 1 : 0) != (w.dab ? 1 : 0);
-                if (rfChanged) {
-                    LOGI("auto notch: broadcast notch %s at %.3f MHz", w.rf ? "ON" : "off", hz / 1e6);
-                    sdrp->setRfNotch(w.rf);
-                }
-                if (dabChanged) {
-                    LOGI("auto notch: DAB notch %s at %.3f MHz", w.dab ? "ON" : "off", hz / 1e6);
-                    sdrp->setDabNotch(w.dab);
-                }
-                if (rfChanged || dabChanged) {
-                    vsRecordNotchChoice(w.rf, w.dab);
-                    /* ★★★ AND TELL THE LISTENERS. The notch state rides on hwinfo, which is sent
-                     *     at connect and when somebody CHANGES something — so a filter moved by
-                     *     the automatic rule was invisible: the radio was right and every client's
-                     *     buttons showed the state from connect time, which on entering DAB is the
-                     *     exact opposite of the truth (Stuart, 2026-09-12: "auto notches not
-                     *     working, i went to DAB and the RF is off and the DAB is on still" — the
-                     *     server was reporting rfNotch:1 dabNotch:0 at that very moment).
-                     * ★★ A CONTROL THAT SHOWS THE WRONG STATE IS WORSE THAN ONE THAT DOES NOTHING:
-                     *    it invites the owner to "fix" a filter that is already correct. Same rule
-                     *    the gain cap follows two hundred lines below — when the server moves
-                     *    something on the listener's behalf, it says so. */
-                    for (auto& pr : allSpecPeers()) sendHwInfo(pr.sock);
-                }
-            }
+            /* ★★★ AND TELL THE LISTENERS when it moves one. The notch state rides on hwinfo, sent
+             *     at connect and when somebody CHANGES something — so a filter moved by the
+             *     automatic rule was invisible: the radio was right and every client's buttons
+             *     showed the state from connect time, which on entering DAB is the exact opposite
+             *     of the truth (Stuart, 2026-09-12: "auto notches not working, i went to DAB and
+             *     the RF is off and the DAB is on still" — the server was reporting rfNotch:1
+             *     dabNotch:0 at that very moment).
+             * ★★ A CONTROL THAT SHOWS THE WRONG STATE IS WORSE THAN ONE THAT DOES NOTHING: it
+             *    invites the owner to "fix" a filter that is already correct. */
+            if (vsApplyAutoNotch(sdrp.get(), hz))
+                for (auto& pr : allSpecPeers()) sendHwInfo(pr.sock);
             // ★★ The cap is a GAIN POSITION; the LNA state counts the other way. See the note in
             //    the rsp_control handler — this is the same conversion and must not drift from it.
             const int n = sdrp->lnaStateCount();
@@ -17187,7 +17990,14 @@ struct LocalSdrShim::Impl {
                     // ★★ NEVER PARK MID-SETTLE. Parking costs the AGC its convergence, so cutting
                     //    the kick short would hand the next listener exactly the stuck AGC this
                     //    whole sequence exists to prevent. Wait for it; it takes ~6 s.
-                    const bool settling = useSdrplay() && sdrpAgcWanted && sdrpAgcKick < 6;
+                    /* ★ AND NOT WHEN THERE IS NO KICK TO PROTECT. VibeAGC replaces SDRplay's
+                     *   IF AGC, so there is no convergence to lose and nothing to wait for — it
+                     *   re-measures and re-settles in seconds from wherever it restarts. Stated
+                     *   here explicitly rather than relying on the kick counter having been
+                     *   retired elsewhere: this is the SECOND place that decides "are we
+                     *   settling?", and two readers of one rule is how half-applied fixes ship. */
+                    const bool settling = useSdrplay() && sdrpAgcWanted && sdrpAgcKick < 6
+                                          && !g_rspRfAgc.load(std::memory_order_relaxed);
                     if (!empty) { idleParkDueAt.store(0.0); }
                     else if (settling) { /* hold the deadline open and re-check next tick */ }
                     else if (g_vsReleaseWhenIdle.load()) {
@@ -17749,6 +18559,65 @@ static DesiredDsp g_dsp;
 // ★ Forward-declared up by the hwinfo builder, which reports this state to the client.
 static int   vsDesiredRfNotch()    { return g_dsp.rspRfNotch.load(); }
 static int   vsDesiredDabNotch()   { return g_dsp.rspDabNotch.load(); }
+/* ★★★ EVALUATED CONTINUOUSLY, NOT ONLY ON RETUNE. It lived on the retune path, which looked
+ *     right — the notches depend on frequency, so why evaluate them when nothing has moved? —
+ *     but LEAVING DAB restores the frequency by another route entirely. So a listener came out
+ *     of an ensemble at 215 MHz back down to 648 kHz with the broadcast notch still ON, notching
+ *     away the very medium wave they had returned to hear (Stuart, 2026-09-12: "auto notches
+ *     still not firing correctly").
+ * ★★ THE RULE: a control derived from state must be recomputed wherever that state can change,
+ *    and "wherever" is every route, not the obvious one. Cheap to run and idempotent — it only
+ *    touches the hardware when the ANSWER changes — so the safe place is the periodic tick, and
+ *    the retune path calls the same function so a band change is still instant. */
+static bool  vsApplyAutoNotch(SdrplaySource* sdrp, double hz) {
+    /* ★★★ SAY WHY NOTHING HAPPENED. This returned false on three different conditions without a
+     *     word, so "the notches are not working" had three possible causes and no way to tell
+     *     them apart — and I spent two rounds guessing instead of knowing. Rate-limited to once
+     *     every ten seconds so it explains itself without filling the journal.
+     * ★ A silent early return in a periodic task is invisible by construction: there is no error,
+     *   no user-visible state change, and nothing to grep for. It is the same fault shape as
+     *   WRITTEN AND NEVER READ. */
+    if (!sdrp || !vsAutoNotchOn() || hz <= 0) {
+        static std::atomic<double> lastSaid{0.0};
+        const double now = (double)std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        double prev = lastSaid.load(std::memory_order_relaxed);
+        if (now - prev >= 10.0 && lastSaid.compare_exchange_strong(prev, now))
+            LOGI("auto notch: not applied — radio %s, auto notch %s, listen frequency %.3f MHz",
+                 sdrp ? "present" : "ABSENT",
+                 vsAutoNotchOn() ? "on" : "OFF",
+                 hz / 1e6);
+        return false;
+    }
+    const VsNotchWant w = vsAutoNotchFor(hz, g_dabMode.load(std::memory_order_relaxed));
+    /* ★★★ COMPARE AGAINST WHAT THE RADIO IS ACTUALLY SET TO, NOT AGAINST WHAT WE LAST DECIDED.
+     *     This kept its own `lastRf`/`lastDab` cache and wrote only when its OWN answer changed.
+     *     That is idempotence measured against the wrong thing: the moment anything else moved a
+     *     notch — the client pushing its remembered settings on connect is the common one, and it
+     *     happens on EVERY connect — the hardware diverged from the cache and auto never noticed,
+     *     because from its point of view nothing had changed. The notch then stayed wrong until
+     *     the rule's answer happened to flip, which on a fixed frequency is never.
+     *     That is "the notches get stuck" (Stuart, 2026-09-12), and why one could be seen ON in
+     *     DAB minutes after the log had correctly recorded it going off.
+     * ★ vsDesiredRfNotch()/vsDesiredDabNotch() are the recorded STATE of the radio, updated by
+     *   every path that sets a notch — so comparing against them makes this self-healing: whoever
+     *   moves a notch, auto puts it back on the next tick. Which is exactly what "automatic notch
+     *   filtering owns these" is supposed to mean.
+     * ★★ A cache of your own past decisions is not a picture of the world. */
+    const bool rfChanged  = (vsDesiredRfNotch()  > 0) != w.rf;
+    const bool dabChanged = (vsDesiredDabNotch() > 0) != w.dab;
+    if (rfChanged) {
+        LOGI("auto notch: broadcast notch %s at %.3f MHz", w.rf ? "ON" : "off", hz / 1e6);
+        sdrp->setRfNotch(w.rf);
+    }
+    if (dabChanged) {
+        LOGI("auto notch: DAB notch %s at %.3f MHz", w.dab ? "ON" : "off", hz / 1e6);
+        sdrp->setDabNotch(w.dab);
+    }
+    if (rfChanged || dabChanged) vsRecordNotchChoice(w.rf, w.dab);
+    return rfChanged || dabChanged;
+}
+
 static void  vsRecordNotchChoice(bool rf, bool dab) {
     g_dsp.rspRfNotch.store(rf ? 1 : 0);
     g_dsp.rspDabNotch.store(dab ? 1 : 0);
@@ -18322,7 +19191,7 @@ std::string LocalSdrShim::adminStatusJson() {
                      "\"ifGrDb\":%d,\"overload\":%s,\"ifAgc\":%s}",
                      p->sdrp->systemGainDb(), p->sdrp->currentLnaState(),
                      p->sdrp->lnaStateCount(), p->sdrp->currentIfGr(),
-                     p->sdrp->overloaded() ? "true" : "false",
+                     p->sdrp->overloadReal() ? "true" : "false",
                      g_vsSavedIfAgc.load() == 0 ? "false" : "true");
             j += b;
         }
@@ -19001,6 +19870,8 @@ void LocalSdrShim::setVibeServerRfNotch(bool on)  { g_vsRfNotch.store(on); }
  *   path; these two only say whether it is running and who else may interfere. */
 void LocalSdrShim::setVibeServerAutoNotch(bool on)      { g_dsp.rspAutoNotch.store(on ? 1 : 0); }
 void LocalSdrShim::setVibeServerRfAgc(bool on) { g_rspRfAgc.store(on ? 1 : 0, std::memory_order_relaxed); }
+void LocalSdrShim::setVibeServerRfAgcStart(int pos) { g_rspRfAgcStart.store(pos, std::memory_order_relaxed); }
+void LocalSdrShim::setVibeServerAgcSetLock(bool locked) { g_rspAgcSetLock.store(locked); }
 void LocalSdrShim::setVibeServerDabAgc(bool on, int target) {
     g_dabAgcOverride.store(on);
     if (target < 0 && target >= -60) g_dabAgcTarget.store(target);   // ★ sane dBFS only
@@ -23163,9 +24034,18 @@ void LocalSdrShim::setAhfCalibrationPpb(int ppb) {
 void LocalSdrShim::setLnaState(int v)       { g_dsp.rspLna.store(v);
                                               if (!p || !p->useSdrplay()) return;
                                               VIBE_HW_LOCK(); p->sdrp->setLnaState(v); }
-void LocalSdrShim::setIfGainReduction(int v){ g_dsp.rspIfGr.store(v);
-                                              if (!p || !p->useSdrplay()) return;
-                                              VIBE_HW_LOCK(); p->sdrp->setIfGainReduction(v); }
+void LocalSdrShim::setIfGainReduction(int v){
+    /* ★ Remembered even with no radio yet — that is the owner's stored preference, not a reading.
+     *   But once there IS a radio, only record what the hardware actually TOOK: the RSP refuses
+     *   this write outright while its own AGC owns gRdB, and storing the requested figure anyway
+     *   made the readout report a gain the tuner had never been set to. The slider moved, the
+     *   number moved, nothing else did. Report the refusal instead. */
+    if (!p || !p->useSdrplay()) { g_dsp.rspIfGr.store(v); return; }
+    VIBE_HW_LOCK();
+    if (p->sdrp->setIfGainReduction(v)) g_dsp.rspIfGr.store(v);
+    else LOGI("IF gain reduction %d REFUSED — the radio's own AGC owns this register "
+              "(turn the IF AGC off first)", v);
+}
 void LocalSdrShim::setIfAgc(bool v) {
     g_dsp.rspIfAgc.store(v ? 1 : 0);   // remembered even with no radio yet
     if (!p || !p->useSdrplay()) return;
