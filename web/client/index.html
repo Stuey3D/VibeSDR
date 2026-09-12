@@ -2119,17 +2119,8 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   pointer-events: none; cursor: default; border-style: dashed;
 }
 #rspRfNotch.agc:not(.on), #rspDabNotch.agc:not(.on) { opacity: 0.75; }
-/* ★★★ SAY THAT THE LOOP IS ALIVE. A readout that has not moved for a few seconds is
-   indistinguishable from a broken one, and on this radio the gain legitimately sits still for
-   minutes at a time — so "nothing is happening" and "nothing needs to happen" look identical, and
-   the natural reading is the first. Stuart: "we need a breathing indicator when the AGC is working
-   like the RTL so that users know that its doing something and if things arent looking right give
-   it a second or so" (2026-09-12).
-   ★ Two breaths on each move the RADIO reports, so a settled loop is still and a working one
-   visibly pulses. Same language as the recording button and the squelch chip, which both breathe
-   to mean "this is live". */
-#rspLnaVal.agcMoved, #rspIfGrVal.agcMoved { animation: agcBreathe 0.9s ease-in-out 2; }
-@keyframes agcBreathe { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+/* ★ The AGC's "I am alive" signal lives on #ovlChip in the status bar, not in the menu —
+   see the RSP branch in onRspStat. The menu readouts simply report; they do not animate. */
 /* ★★ FIXED-WIDTH READOUTS. These values change length as they are dragged ("-30 dBfs" ->
    "-10 dBfs · drives hard"), and in a flex row that RESIZES THE SLIDER MID-DRAG — so the
    pointer suddenly maps to a different position and the value leaps (Stuart, 2026-07-26:

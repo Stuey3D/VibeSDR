@@ -1489,21 +1489,35 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
           renderRspVals();
         }
       }
-      /* ★★★ BREATHE WHEN THE RADIO ACTUALLY MOVES. The gain on this receiver legitimately sits
-       *     still for minutes, so a motionless readout could equally mean "settled" or "dead" —
-       *     and people read it as dead. A short pulse on each reported change makes the
-       *     difference visible without adding a control or a number to interpret. */
-      {
-        const flash = (id: string) => {
-          const el = document.getElementById(id); if (!el) return;
-          el.classList.remove('agcMoved');
-          void (el as HTMLElement).offsetWidth;        // restart the animation
-          el.classList.add('agcMoved');
-          setTimeout(() => el.classList.remove('agcMoved'), 2000);
-        };
-        if (rspLastLna !== null && lna !== rspLastLna) flash('rspLnaVal');
-        if (rspLastIf  !== null && ifgr !== rspLastIf) flash('rspIfGrVal');
+      /* ★★★ THE STATUS-BAR CHIP IS WHERE "THE LOOP IS ALIVE" BELONGS — the same place, and the
+       *     same visual language, the dongle already uses. #ovlChip breathes by default and goes
+       *     calm when `.easing` is set, so a moving loop pulses and a settled one sits quiet with
+       *     no extra machinery. I first put this in the MENU, which is the one place you have to
+       *     open to see it: "i meant a breathing icon at the bottom of the controls like we do for
+       *     the RTL" (Stuart, 2026-09-12). The menu readouts report; they do not animate.
+       * ★ Why it matters at all: the gain on this radio legitimately sits still for minutes, so a
+       *   motionless readout reads as a broken one, and people wait for something that is already
+       *   finished. */
+      if (vibeAgcOwnsGain() && typeof m.sysGain === 'number') {
+        const chip = $('ovlChip');
+        /* ★ BREATHE ONLY FOR A LARGE CHANGE, and be a plain readout otherwise — the dongle's chip
+         *   behaves this way and it is the right instinct: the IF nudges a decibel or two as a
+         *   matter of routine, and a chip that flickers at every nudge stops meaning anything.
+         *   An LNA step is coarse (7-25 dB on this radio) and always worth announcing; an IF move
+         *   has to be worth a listener's attention before it earns the animation.
+         *   Stuart: "just the bar at the bottom breathe when AGC making large changes and just a
+         *   readout otherwise like the RTL" (2026-09-12). */
+        const bigMove = (rspLastLna !== null && lna !== rspLastLna)
+                     || (rspLastIf  !== null && Math.abs(ifgr - rspLastIf) >= 6);
+        if (bigMove) rspMovedAt = Date.now();
         rspLastLna = lna; rspLastIf = ifgr;
+        const busy = Date.now() - rspMovedAt < 2500;
+        chip.textContent = `VibeAGC ${m.sysGain.toFixed(1)} dB · LNA ${lna} · IF ${ifgr}`;
+        chip.classList.add('set');
+        // ★ breathing while it works (no .easing), calm once it has settled — and red if the
+        //   converter is actually railing, which outranks both.
+        chip.classList.toggle('easing', !busy);
+        chip.classList.toggle('fault', Number(m.adcClip) >= 0.01);
       }
       if (agcOn) {
         // ★ Telemetry MOVES the thumb; it does not decide who owns it. Watching the reduction
@@ -2042,6 +2056,8 @@ let hwAutoNotch = false;
 /** ★ Last reported gain state, so a CHANGE can be shown — see the breathing indicator. */
 let rspLastLna: number | null = null;
 let rspLastIf: number | null = null;
+/** ★ When the RSP's gain last moved, so the status chip can breathe for a moment after. */
+let rspMovedAt = 0;
 /** ★ The owner permits listeners to toggle the notches. Default TRUE so an older server, which
  *  sends neither field, behaves exactly as it did before rather than greying a working control. */
 let hwUserNotch = true;

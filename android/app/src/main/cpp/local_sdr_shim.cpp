@@ -2799,6 +2799,25 @@ static int g_dabTrialDir = -1;
  *  and a clip-driven retreat cannot become a cycle. Expires after half a minute. */
 static int g_rfClippedAt = -1;
 static std::chrono::steady_clock::time_point g_rfClippedWhen{};
+
+/* ★★★ THE OVERLOAD CEILING — A GAIN WE HAVE BEEN PUNISHED FOR, KEPT WITH A MARGIN UNDER IT.
+ *     Stuart, 2026-09-12: "i suspect the distortion on 96.6 is Gain overload. Maybe add a saftey
+ *     buffer. So if we know Overload is X db then max AGC should be X -5db or somthing."
+ *  ★ Everything else in this loop is REACTIVE: overload, retreat, overload, retreat. That is why
+ *    96.6 could sound broken until it was tuned away from and back — each visit re-learned the
+ *    same lesson from scratch by first overloading. A remembered ceiling makes the SECOND visit
+ *    free, which is the one the listener notices.
+ *  ★★ SCOPED TO THE FREQUENCY THAT EARNED IT, because the overload point is a property of what
+ *    is on the air there, not of the radio. 96.6 overloading says nothing about 648 kHz. A move
+ *    of more than half a capture window is a different signal and drops the lesson.
+ *  ★★★ AND IT EXPIRES. A permanent cap is how this loop has stranded itself twice before: the
+ *      band changes, the antenna swings, the interferer goes off the air, and a ceiling learned an
+ *      hour ago is just a signal the listener cannot hear. Five minutes, then prove it again. */
+static double g_ovlCeilDb   = 0.0;     // system gain, dB, at which we were last overloaded
+static double g_ovlCeilHz   = 0.0;     // the centre it was learned at — 0 = nothing learned
+static std::chrono::steady_clock::time_point g_ovlCeilWhen{};
+static constexpr double OVL_CEIL_MARGIN_DB = 5.0;   // Stuart's "X - 5 dB"
+static constexpr int    OVL_CEIL_TTL_S     = 300;
 /** ★ A pending RF step awaiting its real gain figure — see the note at the RF write. */
 static unsigned g_vibeAgcLastWin = 0, g_vibeAgcSkipWin = 0;
 /** ★★★ THE LEVEL ENVELOPE, file-scope so the gain writes can FEED THEIR OWN ACTION FORWARD.
@@ -3088,7 +3107,7 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      *   the rail is unmistakable and sustained; anything less is an impulse until it proves
      *   otherwise — see the note on needHi. */
     const bool heavyClip = clip > 0.1;
-    const bool ovlRaw = sdrp->overloaded();          // the raw latch, for the log only
+    const bool ovlRaw = sdrp->overloaded();          // the raw latch — see the retreat rule
     /* ★★★ AND CORROBORATED BY CLIPPING, NOT MERELY BY BEING ABOVE TARGET. My first attempt
      *     accepted `peak > targetDbfs` as corroboration — but a peak above target is the ORDINARY
      *     condition the IF stage exists to correct, so that made the RF stage fire on the IF
@@ -3100,6 +3119,18 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      *   genuinely out of room (handled below by the 59 dB rail). -1 dBFS catches a peak that is
      *   effectively clipping in a window where no single sample quite reached the end code. */
     const bool ovl    = sdrp->overloadReal();        // ★ the SAME question the badge asks
+    /* ★★★ THE RAW LATCH TOO — because the front end can overload where the ADC cannot see it.
+     *     `overloadReal()` dismisses the hardware's latch whenever our own converter is clean, and
+     *     that is right for the badge: it stopped the badge lighting at 6.4 dB of system gain with
+     *     nothing clipping. But ANALOGUE overload — intermodulation in the LNA — produces no
+     *     clipped samples at all. It shows up as a mush of products across the window, and our
+     *     peak reads perfectly healthy while the audio turns to crackle.
+     *  ★ Measured 2026-09-12, DAB→AM: the loop came to rest on 648 kHz at LNA 0 (MAXIMUM RF gain)
+     *    with the IF reduction pinned at 59 (MINIMUM IF gain), hardware overload asserted and ADC
+     *    clip 0.0000%. That shape can only mean one thing — the front end is being driven harder
+     *    than the chain wants and the IF is throwing the excess away again. Nothing in the level
+     *    could say so, so nothing backed it off.
+     *  ★★ Trusted ONLY where it cannot do harm: see `ifSpent` at the retreat below. */
 
     const int n = sdrp->lnaStateCount();
     const int lna = sdrp->currentLnaState();
@@ -3393,8 +3424,16 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
      *    from DIFFERENT evidence (headroom for the climb, clipping for the retreat) removes the
      *    coupling entirely, which is why the gap can now be narrower than the step. */
     const bool clipping     = ovl || heavyClip;
-    const bool nearOverload = clipping;
     const bool ifSpent      = (wantGr >= 58);       // at or next to minimum IF gain
+    /* ★★★ WITH THE IF SPENT, THE HARDWARE'S OWN LATCH IS EVIDENCE ENOUGH. A stale latch was
+     *     what once walked the LNA 1→8 on a weak signal, so it is not trusted in general — but
+     *     that walk happened with the IF nowhere near its rail. Once `ifSpent` holds, the IF has
+     *     already surrendered all of its gain, so more RF gain buys the listener NOTHING: one
+     *     click off the front end and the IF takes the level straight back. The move is free even
+     *     if the latch is lying, and it is the only thing that can answer front-end intermod.
+     *  ★ It cannot run away, either. Each retreat lets the IF give gain back, `wantGr` falls
+     *    below 58, `ifSpent` goes false and the walk stops on its own. */
+    const bool nearOverload = clipping || (ifSpent && ovlRaw);
     /* ★ 40 leaves a full LNA step (~19 dB) before the 59 dB rail, so a climb is always absorbable
      *   and can never itself cause an overload. */
     /* ★★★ TRY IT AND LET CLIPPING JUDGE, because the step size is NOT knowable in advance. Every
@@ -3419,13 +3458,59 @@ static void vsSdrplayVibeAgcTick(SdrplaySource* sdrp, int lnaFloor, int targetDb
             g_dabTrialDir = g_dabTrialDir;                       // (unrelated; DAB owns its own)
             g_rfClippedAt = lna;                                 // ★ do not climb straight back
             g_rfClippedWhen = now;
+            /* ★ Record the gain that earned this, so the next visit need not earn it again. */
+            const double ovlAt = sdrp->systemGainDb();
+            if (ovlAt > -900.0) {
+                g_ovlCeilDb = ovlAt; g_ovlCeilHz = nowHz; g_ovlCeilWhen = now;
+                LOGI("VibeAGC/RSP: overloaded at %.1f dB of system gain — remembering a ceiling of "
+                     "%.1f dB here for the next %d s", ovlAt, ovlAt - OVL_CEIL_MARGIN_DB,
+                     OVL_CEIL_TTL_S);
+            }
         }
-        else if (ifHasRoom && !nearOverload && lna > lo) {
+        /* ★★★ AND ONLY IF WE ARE ACTUALLY SHORT OF LEVEL. This clause was missing entirely, and
+         *     it is the most expensive omission in the loop. The climb asked only "has the IF got
+         *     room, and is anything clipping" — never "do we NEED more gain". So on any signal
+         *     that was already at target it ratcheted the front end to maximum anyway and dumped
+         *     the surplus back into the IF.
+         *  ★ Measured 2026-09-12, 16:12:54, one second after it declared itself acquired:
+         *      acquired — -7.9 dBFS is within 6 dB of target, tracking from here
+         *      RF gain UP — LNA 2 -> 1 (peak -7.9 dBFS)
+         *      the step put us +10 dB over target — IF reduction 37 -> 47
+         *    Four decibels ABOVE target and it took more RF gain, then threw ten away. Run to its
+         *    conclusion that is the LNA 0 / IF 59 / hardware-overload state this loop kept ending
+         *    in, and it is why 96.6 MHz distorts: maximum front-end gain into a strong signal is
+         *    how intermodulation is made, and the converter never sees it.
+         *  ★★ "RF as high as possible" (Stuart's rule, and SDRplay's own guidance) means do not
+         *    be timid about the front end — not take gain there that nothing asked for. His RSP1B
+         *    rests at LNA 1 because that suits the signal, not because it always maxes out.
+         *  ★★★ 3 dB, not 0, so a signal sitting exactly on target cannot be nudged into a climb
+         *      by its own noise and then have to retreat. That is the flap he asked me to avoid. */
+        else if (ifHasRoom && !nearOverload && lna > lo && err < -3.0) {
             /* ★ ...unless we have just been told that state clips. Half a minute, then try again:
              *   conditions change, and a permanent veto is how the old loop stranded itself. */
             const bool vetoed = g_rfClippedAt == lna - 1 &&
                 std::chrono::duration_cast<std::chrono::seconds>(now - g_rfClippedWhen).count() < 30;
-            if (!vetoed) wantLna = lna - 1;                       // MORE RF gain
+            /* ★★★ AND THE REMEMBERED CEILING. Same frequency, still fresh, and we are already
+             *     within the margin of a gain that overloaded here — so do not go looking for it
+             *     again. This is the only rule in the loop that acts BEFORE the damage. */
+            bool capped = false;
+            if (g_ovlCeilHz > 0.0 && std::fabs(nowHz - g_ovlCeilHz) < nowRate * 0.5 &&
+                std::chrono::duration_cast<std::chrono::seconds>(now - g_ovlCeilWhen).count()
+                    < OVL_CEIL_TTL_S) {
+                const double gNow = sdrp->systemGainDb();
+                capped = gNow > -900.0 && gNow >= g_ovlCeilDb - OVL_CEIL_MARGIN_DB;
+            }
+            if (!vetoed && !capped) wantLna = lna - 1;            // MORE RF gain
+            /* ★ ONCE every 15 s. This loop runs at tick rate and an unrate-limited LOGI in it
+             *   has already taken this radio off the air once (2026-09-12). */
+            else if (capped) {
+                static std::chrono::steady_clock::time_point said{};
+                if (std::chrono::duration_cast<std::chrono::seconds>(now - said).count() >= 15) {
+                    said = now;
+                    LOGI("VibeAGC/RSP: holding RF — %.1f dB is within %.0f dB of the %.1f dB that "
+                         "overloaded here", sdrp->systemGainDb(), OVL_CEIL_MARGIN_DB, g_ovlCeilDb);
+                }
+            }
         }
     }
 
