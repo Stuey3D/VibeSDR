@@ -2622,7 +2622,24 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
      *     reduction is now averaged over kWindowMs of real time and the AVERAGE has to sit outside
      *     the skirt, twice running, before a single step is taken. A transient cannot do that; a
      *     genuinely mis-set front end does it immediately. */
-    constexpr int kTrigLow  = 28;    // below this (on average) the IF stage has slack
+    /* ★★★ THE LOW TRIGGER HAS TO BE NEAR THE WINDOW, NOT AT THE BOTTOM OF IT. 28 dB meant the
+     *     RF stage only ever asked for more gain when the IF AGC was nearly wide open — and it
+     *     almost never gets there, because the IF has 39 dB of range and simply ABSORBS whatever
+     *     the front end gives it. So "the reduction is inside 30-50" is satisfied at RF 0/6 just
+     *     as happily as at RF 5/6, and once the gain had walked down it stayed down for ever.
+     *  ★ Measured on 648 kHz: IF AGC at 43 dB — contentedly mid-window — with the LNA at minimum
+     *    and -16.3 dB of system gain, on a frequency that ran RF 5/6 and +27 dB with 49 dB of SNR
+     *    earlier the same evening. Stuart, on his RSP1B for comparison: RF 8/9 with the IF AGC
+     *    sitting at 35.
+     *  ★★ What actually decides the RF gain is noise figure against overload: the MOST RF gain
+     *    that does not make the IF work too hard. That is SDRplay's own guidance and Stuart's
+     *    ("Realistically the RF gain needs to be as high as possible"), and it means the resting
+     *    place is the TOP of the window, not the middle. Below 40 the IF is adding gain we could
+     *    have taken at the front end, where it costs less noise — so ask for a rung.
+     *  ★★★ The equilibrium becomes a reduction of roughly 40-52: the IF working moderately hard,
+     *      with the RF as high as it can be without pushing that loop to its limit. The 52 trigger
+     *      and every flap guard are untouched. */
+    constexpr int kTrigLow  = 40;    // below this (on average) the IF is doing work the RF should
     constexpr int kTrigHigh = 52;    // above this (on average) it is working too hard
     constexpr int kWindowMs = 500;   // granularity: the reduction is averaged over this
     /* ★★★ HOW FAR OUT DECIDES HOW FAST — Stuart, 2026-09-11: "close to 20 faster the RF agc acts
@@ -3637,7 +3654,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  way — 0 is maximum RF gain). Derived rather than hard-coded to 2 so a model with a
      *  different ladder (an RSP1 has 4 states, a dx has 28) lands somewhere sane instead of
      *  wherever the literal happened to point. */
-    static constexpr int kRspInitRfGainPos = 7;
+    /* ★★★ THE KICK OPENS AT RF GAIN 1, NOT NEAR THE TOP. This was 7, which on a 7-state band
+     *     clamps to the maximum — the log said it plainly: "AGC kick 1/6: LNA state -> 0 (RF gain
+     *     6/6)". So the kick threw the front end wide open before the IF AGC had any say, on an
+     *     aerial we know nothing about, and everything afterwards was recovering from that.
+     *  ★ It is the opposite of what this sequence is for. The kick exists to START the tuner's
+     *    AGC from a known, quiet place; the coarse placement that follows is what finds the
+     *    working gain, in one measured jump. Stuart's sequence exactly: "we set RF Gain to 1 then
+     *    let the IF Gain do its kick and then set AGC ... use that measurement to then set a rough
+     *    RF gain".
+     *  ★★ One rung up rather than the very bottom, so their AGC has something to hold on to. */
+    static constexpr int kRspInitRfGainPos = 1;
     bool useSdrplay() const { return (bool)sdrp; }
     bool useAirspyHf() const { return (bool)ahf; }
     bool useHackRf()   const { return (bool)hrf; }
@@ -7755,16 +7782,30 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *    is the only evidence that their loop is actually driving it. If it never moves,
              *    the RF loop never runs — which is correct: steering off a number nobody is
              *    updating is the end-stop walk vsSdrplayRfAgcTick warns about. */
+            /* ★★★ THE GRACE IS A TIMER AGAIN, AND LIVENESS IS A SEPARATE QUESTION. I made the
+             *     grace wait for the IF reduction to MOVE, reasoning that only then had their AGC
+             *     taken control. That deadlocked the very case the coarse placement exists to
+             *     rescue: at RF gain 1 there is too little signal for their AGC to act on, so the
+             *     reduction sits exactly where the kick left it, so the grace never completes, so
+             *     the coarse placement never runs, so the gain is never raised. Measured: ifgr
+             *     pinned at 59 with the LNA at 5 and nothing moving at all.
+             *  ★ The two questions are different and need separate answers:
+             *      · "has enough time passed to judge anything?" — a timer, and it gates the
+             *        coarse placement, which uses OUR measurement and needs nothing from them;
+             *      · "is their AGC actually driving?" — the reduction having moved, and it gates
+             *        the RF loop, which steers FROM their number and must not run on a static one. */
             static auto settledAt = std::chrono::steady_clock::time_point{};
             static int  handoverGr = -1;
+            static bool ifHasMoved = false;
             if (sdrpSettling) {
                 settledAt = std::chrono::steady_clock::time_point{};
-                handoverGr = -1;
-            } else if (settledAt.time_since_epoch().count() == 0) {
-                const int gnow = sdrp->currentIfGr();
-                if (handoverGr < 0) handoverGr = gnow;            // the value we handed over at
-                else if (gnow != handoverGr)                       // their AGC has taken it
+                handoverGr = -1; ifHasMoved = false;
+            } else {
+                if (settledAt.time_since_epoch().count() == 0)
                     settledAt = std::chrono::steady_clock::now();
+                const int gnow = sdrp->currentIfGr();
+                if (handoverGr < 0) handoverGr = gnow;
+                else if (gnow != handoverGr) ifHasMoved = true;
             }
             const bool ifAgcAlive = sdrp->currentIfGr() > 0;
             const bool graceDone  = settledAt.time_since_epoch().count() != 0 &&
@@ -7798,9 +7839,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *   think we need to start RF gain at 1/6 1/9 as 0 is not providing anything
                      *   for the IF AGC to work with." One rung up costs nothing and gives their
                      *   loop something to hold. */
-                    const int want = g_rspRfAgcStart.load(std::memory_order_relaxed);
-                    const int pos0 = (want < 0 || want > n - 1) ? (n - 1) / 2 : want;
-                    const int pos  = std::max(1, pos0);
+                    /* ★★★ ALWAYS POSITION 1, BECAUSE THE COARSE STEP NOW DOES THE PLACING. Starting
+                     *   at the owner's midpoint made sense when this loop had to walk to a
+                     *   working gain one rung at a time — beginning near the answer saved steps.
+                     *   It does not now: the coarse placement measures the band and jumps once.
+                     *   So the start is deliberately LOW, which is the safe direction on an aerial
+                     *   we know nothing about, and one rung up rather than at the very bottom so
+                     *   the IF AGC has something to work with. Stuart: "we set RF Gain to 1 then
+                     *   let the IF Gain do its kick and then set AGC". */
+                    const int pos  = 1;
                     const int st   = std::max(floorState, (n - 1) - pos);   // ★ position -> state
                     if (st != sdrp->currentLnaState()) {
                         LOGI("RSP RF AGC: starting from RF gain %d/%d (LNA state %d)",
@@ -7927,7 +7974,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  ★ What VibeAGC taught us is kept: the per-band LNA ladder, the DAB matched filter
              *    and notch handling, the honest ADC measurement. What goes is the idea that we
              *    should be writing gRdB at all on this radio. */
-            if (!sdrpSettling && graceDone && ifAgcAlive)
+            /* ★ The RF loop steers from THEIR reduction, so it must not run until that number is
+             *   demonstrably alive — see ifHasMoved above. The coarse placement has no such
+             *   requirement: it measures the band itself. */
+            if (!sdrpSettling && graceDone && ifAgcAlive && ifHasMoved)
                 vsSdrplayRfAgcTick(sdrp.get(), floorState, sdrpAgcWanted);
             /* ★★★ THE NOTCHES ARE NOT PART OF THE GAIN LOOP AND MUST NOT SHARE ITS GATE.
              *     This call used to sit INSIDE the `!sdrpSettling && graceDone && ifAgcAlive`
