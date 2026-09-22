@@ -113,9 +113,11 @@ bool AirspySource::finishOpen(double sampleRateHz, double centreHz, int gainTent
     }
     if (!setSampleRate(sampleRateHz)) { err = "airspy_set_samplerate failed"; close(); return false; }
     open_ = true;
-    setFrequency(centreHz);
+    /* ★ RECORDED, NOT APPLIED. Nothing is written to the tuner here any more: applyAll() does it
+     *  once the stream is running, which is the only time this radio reliably takes it. */
+    centreHz_  = centreHz;
     gainTenth_ = gainTenthDb;
-    if (gainTenthDb < 0) { setLnaAgc(true); setMixerAgc(true); } else applyGain();
+    if (gainTenthDb < 0) { lnaAgc_ = mixerAgc_ = true; }
     ASLOG("Airspy: %s serial %s, %zu rate(s), %.3f MS/s at %.3f MHz",
           model_.c_str(), serial_.c_str(), rates_.size(), sampleRateHz / 1e6, centreHz / 1e6);
     return true;
@@ -127,12 +129,59 @@ void AirspySource::close() {
     open_ = false;
 }
 
+/** ★★★ EVERY SETTING, RE-STATED, AFTER THE STREAM IS RUNNING.
+ *
+ *  Three of the four faults our first Airspy tester reported are one fault (Onfliner, 2026-09-22,
+ *  an Airspy Mini — the first one this driver has ever met):
+ *    · "Gain control isn't working at all and sliders reset after some time"
+ *    · "If you go back to the main menu and reconnect, the frequency stays at whatever it was but
+ *       the audio sounds as if you're tuned to 100.0. Changing the frequency and back fixes it"
+ *    · "Bias-T is not working"
+ *  Every one of those settings was written BEFORE airspy_start_rx. The frequency symptom is the
+ *  proof and it is unambiguous: the UI and the DSP agree on the old frequency and the AUDIO is
+ *  somewhere else entirely, which can only mean the tuner never took the value we sent it — and
+ *  the cure he found, retuning and coming back, is simply the first write that lands AFTER the
+ *  stream is up.
+ *  ★★ THIS IS WHAT EVERY OTHER AIRSPY CLIENT DOES. SDR++ and gr-osmosdr both start the transfer
+ *     and then set frequency and gains; our open() set them all first, when nothing was running.
+ *  ★★ SO THE STATE LIVES IN THIS OBJECT AND THE DEVICE IS TOLD ABOUT IT, rather than the device
+ *     being the record. That also makes a rate change safe (see setSampleRate, which must stop
+ *     the stream) and a reconnect honest: whatever the user last chose is re-stated, once,
+ *     from one place. ★ One function, so a setting added later cannot be forgotten by half of a
+ *     pair of call sites — the hand-maintained-list fault this project keeps paying for. */
+void AirspySource::applyAll() {
+    if (!dev_) return;
+    airspy_set_packing(dev_, packing_ ? 1 : 0);
+    airspy_set_rf_bias(dev_, bias_ ? 1 : 0);
+    airspy_set_freq(dev_, (uint32_t)llround(centreHz_));
+    // ★ Manual stages win when the user has set any of them (lna_ >= 0 marks that); otherwise the
+    //   preset curve, or the radio's own AGCs when nobody has chosen a gain at all.
+    if (lna_ >= 0 || mixer_ >= 0 || vga_ >= 0) {
+        airspy_set_lna_agc(dev_, lnaAgc_ ? 1 : 0);
+        airspy_set_mixer_agc(dev_, mixerAgc_ ? 1 : 0);
+        if (!lnaAgc_   && lna_   >= 0) airspy_set_lna_gain(dev_,   (uint8_t)lna_);
+        if (!mixerAgc_ && mixer_ >= 0) airspy_set_mixer_gain(dev_, (uint8_t)mixer_);
+        if (vga_ >= 0)                 airspy_set_vga_gain(dev_,   (uint8_t)vga_);
+    } else if (gainTenth_ >= 0) {
+        airspy_set_lna_agc(dev_, 0);
+        airspy_set_mixer_agc(dev_, 0);
+        applyGain();
+    } else {
+        airspy_set_lna_agc(dev_, lnaAgc_ ? 1 : 0);
+        airspy_set_mixer_agc(dev_, mixerAgc_ ? 1 : 0);
+    }
+    ASLOG("Airspy: settings re-stated on the live stream — %.3f MHz, bias-T %s, packing %s",
+          centreHz_ / 1e6, bias_ ? "on" : "off", packing_ ? "on" : "off");
+}
+
 bool AirspySource::start(std::string& err) {
     if (!dev_) { err = "Airspy not open"; return false; }
     if (streaming_) return true;
     const int rc = airspy_start_rx(dev_, &airspyRxCallback, this);
     if (rc != AIRSPY_SUCCESS) { err = std::string("airspy_start_rx: ") + airspy_error_name((airspy_error)rc); return false; }
     streaming_ = true;
+    // ★★★ AFTER the stream, never before — see applyAll().
+    applyAll();
     return true;
 }
 
@@ -161,7 +210,22 @@ uint32_t AirspySource::nearestRate(double hz) const {
 bool AirspySource::setSampleRate(double hz) {
     if (!dev_) return false;
     const uint32_t want = nearestRate(hz);
-    if (airspy_set_samplerate(dev_, want) != AIRSPY_SUCCESS) return false;
+    /* ★★★ THE STREAM HAS TO STOP FIRST — "the sample rate won't change, it's stuck at 3.0M"
+     *  (Onfliner's Mini, 2026-09-22). airspy_set_samplerate reconfigures the USB transfer geometry
+     *  and libairspy will not have it while a transfer is running: the call fails, we returned
+     *  false, and the radio stayed on whatever rate open() had chosen. The rate PICKER worked
+     *  perfectly, which is what made it look like the picker.
+     *  ★★ Stop, set, start again — and start() re-states every setting, so the frequency and the
+     *     gains survive the restart rather than coming back at the device's defaults.
+     *  ★ A failed set leaves the stream STOPPED only if the restart also fails, and then the
+     *    caller is told: coming back at the old rate silently would be a radio that says it
+     *    changed and did not. */
+    const bool wasStreaming = streaming_;
+    if (wasStreaming) stop();
+    const bool ok = airspy_set_samplerate(dev_, want) == AIRSPY_SUCCESS;
+    if (ok) rateHz_ = (double)want;
+    if (wasStreaming) { std::string e; if (!start(e)) ASLOG("Airspy: restart after rate change failed: %s", e.c_str()); }
+    if (!ok) return false;
     ASLOG("Airspy: sample rate %.3f MS/s", want / 1e6);
     return true;
 }

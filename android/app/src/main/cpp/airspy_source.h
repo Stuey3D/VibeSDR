@@ -58,6 +58,11 @@ public:
 
     void setSink(IqSink sink) { sink_ = std::move(sink); }
     bool start(std::string& err);
+    /** ★★★ Re-state every setting onto the LIVE stream. This radio does not reliably keep what it
+     *  is told before airspy_start_rx — frequency, gains and bias-T were all being written into
+     *  the void at open, which is three of the four faults our first tester found. Called by
+     *  start(), including the restart inside setSampleRate(). See the .cpp for the evidence. */
+    void applyAll();
     void stop();
 
     void setFrequency(double hz);
@@ -118,6 +123,7 @@ private:
     std::string model_  = "Airspy";
     std::string serial_;
     double centreHz_ = 100e6;
+    double rateHz_   = 0;      // ★ what the device is actually set to, for a rate change that restarts
     int  gainTenth_  = 150;      // ★ preset 15 of 21 — Airspy's own "start here" for linearity
     bool sensitivity_ = false;
     int  lna_ = -1, mixer_ = -1, vga_ = -1;   // -1 = preset mode, no manual stage set
