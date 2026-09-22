@@ -2186,6 +2186,43 @@ static std::atomic<bool>     g_ovlBadProvisional{false};
 static std::atomic<double>   g_agcForgetAt{0.0};  // when the AGC last forgot (IF filter/retune)
 static constexpr int kOvlBadHold       = 120;     // clean ticks before retrying a settled verdict
 static constexpr int kOvlBadHoldProvis = 15;      // ... and after a reconfiguration
+/** ★★★ AND IT GETS STRICTER EACH TIME THE SAME GAIN FAILS AGAIN.
+ *
+ *  MEASURED ON THE SONY'S V4, 2026-09-22, with Stuart watching the waterfall: the loop boosted,
+ *  was pulled down, boosted again, was pulled down again, and only then settled — with visible
+ *  intermodulation at the top of each climb. The log says why, and every judgement in it is
+ *  CORRECT:
+ *      37.2 -> 36.4  converter hot (peak -13.2 dBFS)
+ *            -> 28.0  "still chasing what the front end is making"
+ *            -> 33.8  "clean for 12s - gain back up"          <- climbs back in
+ *            -> 32.8  "that step up cost 5.2 dB of separation - putting it back"
+ *            -> 22.9  "still spraying, going down again"
+ *  ★★ THE HOLD WAS THE PROVISIONAL ONE. Stuart had been tuning, so `g_agcForgetAt` was recent and
+ *     every cut was marked provisional — 15 ticks, about twelve seconds, and then the climb is
+ *     free to walk straight back into the gain that had just been punished. That is the hunt: not
+ *     a wrong verdict, a verdict with too short a memory.
+ *  ★★ A FIXED HOLD CANNOT WIN EITHER WAY. Long enough to stop the hunt is too long for a band that
+ *     really has changed; short enough to follow the band is short enough to hunt. So the hold
+ *     GROWS with repetition instead: the first failure is forgiven quickly, the third is not.
+ *     Each strike doubles it, capped — a gain that has failed four times in a row is being asked
+ *     about every few minutes rather than every twelve seconds.
+ *  ★ NEVER PERMANENT (AGENTS.md). It is still a hold, it still expires, and a retune or an IF
+ *    change clears the strikes outright: the next band starts with a clean record.
+ *  ★ A strike is only counted when the NEW failure is at or above the OLD one. Failing lower is
+ *    the loop descending through a bad patch, not the same mistake repeated. */
+static std::atomic<int>      g_ovlBadStrikes{0};
+static constexpr int kOvlBadStrikeMax  = 4;       // ... doublings; beyond this it stops growing
+/** ★ ONE RULE, TWO READERS — the single step and the blind jump both refuse to climb into a gain
+ *  that failed, and they must agree about for how long or the jump simply steps over the rule the
+ *  single step is obeying. Both call this. */
+static int vsOvlBadHold() {
+    const int base = g_ovlBadProvisional.load(std::memory_order_relaxed)
+                   ? kOvlBadHoldProvis : kOvlBadHold;
+    const int n = g_ovlBadStrikes.load(std::memory_order_relaxed);
+    if (n <= 1) return base;
+    const int shift = (n - 1) > kOvlBadStrikeMax ? kOvlBadStrikeMax : (n - 1);
+    return base << shift;
+}
 static constexpr double kAgcReconfigSec = 10.0;   // a cut this soon after a forget is provisional
 
 /* ══ LIGHTNING (SFERICS) — a badge, not an instrument ═══════════════════════════════════════════
@@ -2725,6 +2762,26 @@ static std::atomic<float>    g_contrastBeforeMove{99.0f};
  *    never fired here — 104.2 measured 21.8-26.9 dB at every gain including the ruinous ones. What
  *    distinguishes the two cases is the CHANGE across a move, not the level. */
 static constexpr float       kContrastCostDb = 2.0f;
+/** ★★★ HOW MUCH OF A GAIN STEP MUST ARRIVE AT THE CHANNEL FOR THE FRONT END TO COUNT AS LINEAR.
+ *  Measured on the Pi 2's R820T2 (2026-09-22, full sweep of 106.9 with the AGC off): every rung
+ *  below the knee lifts the channel ~0.65 dB per dB of gain; at the knee it is 0.0 and above it
+ *  goes negative — more gain, less signal. 0.35 sits between the two populations with room either
+ *  side, so ordinary measurement wander cannot trip it and a stage that has stopped answering
+ *  cannot hide. See the verdict branch that uses it. */
+static constexpr float       kCompressionRatio = 0.35f;
+/** ★★★ AND THE TWO GATES THAT MAKE IT MEAN ANYTHING — both learned by getting it wrong
+ *  (2026-09-22): without them the rule fired at the BOTTOM of the climb and settled 106.9 at
+ *  15.7 dB, half of where the sweep says it belongs.
+ *  ★★ NEAR THE NOISE FLOOR NOTHING RESPONDS EITHER. The same sweep: 0 -> 16.6 dB of gain moves the
+ *     channel 1.3 dB — a ratio of 0.08, deep under the threshold — because the channel is still
+ *     buried and what the gain is lifting is mostly noise. "Gain is not arriving" is only evidence
+ *     of COMPRESSION once there is a signal to compress, so the station must already stand clear
+ *     of its own neighbourhood. At the knee separation is ~6 dB; at the bottom it is 0.2-2.0.
+ *  ★★ AND A BLIND JUMP IS NOT A MEASUREMENT. The misfire was judging a 12.9 dB leap, which crosses
+ *     the noise, the linear stretch and the knee in one move — the ratio then describes none of
+ *     them. Ordinary rungs only; the jump's own cap (kBlindJumpMaxDb) governs the leaps. */
+static constexpr float       kCompressionMinSepDb   = 3.0f;
+static constexpr float       kCompressionMaxStepDb  = 6.0f;
 /* ★★★ HOW FAR A SINGLE UNJUDGED MOVE MAY TRAVEL WHERE HARM SHOWS OUTSIDE THE CHANNEL.
  *     TWO code paths jump the gain by arithmetic on the ADC peak alone — the "recovering:" one
  *     and the "clear by ... — jumping to" one — and the ADC peak cannot see intermodulation from a
@@ -5432,6 +5489,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         g_bestFloorDb.store(0.0f, std::memory_order_relaxed);
         // ★ And the failed step belongs to the OLD frequency — see g_ovlBadGain.
         g_ovlBadGain.store(-1, std::memory_order_relaxed);
+        g_ovlBadStrikes.store(0, std::memory_order_relaxed);   // ★ a new band starts with a clean record
         /* ★★★ THE CONVERTER IS APPLIED HERE AND NOWHERE ELSE. `logicalCenter` is TRUE RF — what
          *   the listener asked for and what every other part of this server believes — and this is
          *   the single line where a frequency stops being that and becomes a number the tuner is
@@ -19355,7 +19413,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  "(%d steps below the ceiling)", rest, steps);
             g_gainRef.store(rest, std::memory_order_relaxed);
             g_ovlSteps.store(steps, std::memory_order_relaxed);
-            g_ovlBadGain.store(-1, std::memory_order_relaxed);   // a fresh start, not the old hunt
+            g_ovlBadGain.store(-1, std::memory_order_relaxed);
+        g_ovlBadStrikes.store(0, std::memory_order_relaxed);   // ★ a new band starts with a clean record   // a fresh start, not the old hunt
             return;
         }
         LOGI("everybody has left — gain back to the owner's resting value %d", rest);
@@ -25257,6 +25316,43 @@ void LocalSdrShim::overloadTick() {
             g_nextStride.store(0, std::memory_order_relaxed);
             g_settled.store(true, std::memory_order_relaxed);
             g_adcCleanRun.store(0, std::memory_order_relaxed);
+        } else if (dir > 0 && prof.watchShoulders && stepDb > 0.5f && stepDb <= kCompressionMaxStepDb
+                   && !g_dabMode.load(std::memory_order_relaxed)
+                   && chWas > -190.0f && chNow > -190.0f
+                   && sepNow >= kCompressionMinSepDb
+                   && (-chFell) < kCompressionRatio * stepDb) {
+            /* ★★★ GAIN THAT DOES NOT REACH THE SIGNAL IS REACHING THE INTERMOD (2026-09-22).
+             *     THE MEASUREMENT: Pi 2 (Nooelec R820T2), 106.9, full sweep with the AGC off —
+             *       gain  channel  contrast  ADC peak  clip%
+             *       28.0   -85.9     8.5      -30.1    0.000
+             *       33.8   -81.5    10.4      -25.2    0.000   ← best SNR, contrast AND separation
+             *       36.4   -81.5    10.4      -25.2    0.000   ← 2.6 dB more gain, NOTHING arrives
+             *       38.6   -83.2     9.7      -26.6    0.000   ← more gain, and the channel is QUIETER
+             *       49.6   -78.3     5.3      -19.9    0.000
+             *     Below the knee each rung lifts the channel about 0.65 dB per dB of gain; above it,
+             *     zero or less. A stage that swallows gain is compressing, and what it makes instead
+             *     is the mush Stuart hears: "everywhere I tune in the FM band its either heart or bbc
+             *     radio northampton spreading their signal all over the place".
+             *  ★★★ WHY THE EXISTING GUARD NEVER SAVED THIS RADIO: it waits for the CONVERTER to rail,
+             *      and on this tuner the converter never does — clip 0.000% at every one of 29 steps,
+             *      peak no higher than -17 dBFS. Stuart's own comparison is the proof: the V4 on the
+             *      SAME AERIAL rails at 43% of samples and is walked down to 28 dB by that guard,
+             *      which is why it never had this problem. The R820T2 goes non-linear long before its
+             *      ADC does, so the stopping rule cannot be a level — it has to be a RESPONSE.
+             *  ★★ Tuner-agnostic by construction: a radio whose front end is still linear answers a
+             *     step with a step and is untouched; one that has stopped answering is past its knee
+             *     whatever its make. Separation cannot do this job — it RISES to 43.9 dB here, which
+             *     is why two attempts at a separation/contrast rule failed (see 524d9222).
+             *  ★ Climbs only, and only where there are shoulders to judge (not DAB, not a wide
+             *    profile), and only for a step big enough to measure. */
+            LOGI("that %.1f dB step up moved the channel %.1f dB (%.1f -> %.1f) — the front end has "
+                 "stopped answering, so the gain is going into intermodulation: back down",
+                 stepDb, -chFell, chWas, chNow);
+            steps_forceDown = true;
+            g_sameDirRun.store(0, std::memory_order_relaxed);
+            g_nextStride.store(0, std::memory_order_relaxed);
+            g_settled.store(true, std::memory_order_relaxed);
+            g_adcCleanRun.store(0, std::memory_order_relaxed);
         } else if (d > 0.5f || contrastRose > 0.5f) {
             /* ★★★ CONTRAST IS ALLOWED TO SAY "KEEP GOING", NOT ONLY "STOP". It was added as a pure
              *     veto — refuses, never requests — and that left the climb steering by separation
@@ -25808,8 +25904,7 @@ void LocalSdrShim::overloadTick() {
         //     the whole reason the straddle happened. Only a long quiet spell earns another try.
         {
             const int bad = g_ovlBadGain.load(std::memory_order_relaxed);
-            const int hold = g_ovlBadProvisional.load(std::memory_order_relaxed)
-                           ? kOvlBadHoldProvis : kOvlBadHold;
+            const int hold = vsOvlBadHold();
             if (bad >= 0 && gains[(size_t)idx] >= bad && cleanRun < hold) return;
         }
         /* ★★★ CLIMB PAST THE OPERATING POINT WHILE THE STATION IS STILL IMPROVING. Below −6 dBFS
@@ -25876,8 +25971,7 @@ void LocalSdrShim::overloadTick() {
          */
         {
             const int bad = g_ovlBadGain.load(std::memory_order_relaxed);
-            const int holdJ = g_ovlBadProvisional.load(std::memory_order_relaxed)
-                            ? kOvlBadHoldProvis : kOvlBadHold;
+            const int holdJ = vsOvlBadHold();
             // ★ Clamped so the learned margin can never be stricter than the one ceiling above —
             //   it was 3.0 (aim at -3.0 dBFS) and that IS the dead zone, by another name.
             const double mgn = std::min(g_ovlMargin.load(std::memory_order_relaxed),
@@ -26065,6 +26159,20 @@ void LocalSdrShim::overloadTick() {
     if (want > steps) {
         // ★ The gain we are LEAVING is the one that could not hold. Recorded before it is replaced.
         const int fromIdx = (tgtIdx - steps) < 0 ? 0 : (tgtIdx - steps);
+        /* ★ THE SAME MISTAKE AGAIN, OR A DIFFERENT ONE? Failing at or above the gain that failed
+         *  last time is the hunt repeating itself and earns a longer hold (see g_ovlBadStrikes);
+         *  failing LOWER is the loop working its way down through a bad patch, which is one
+         *  descent, not two mistakes — that starts the count again. */
+        {
+            const int prevBad = g_ovlBadGain.load(std::memory_order_relaxed);
+            const int nowBad  = gains[(size_t)fromIdx];
+            const int n = (prevBad >= 0 && nowBad >= prevBad)
+                        ? g_ovlBadStrikes.load(std::memory_order_relaxed) + 1 : 1;
+            g_ovlBadStrikes.store(n, std::memory_order_relaxed);
+            if (n > 1)
+                LOGI("that gain has now failed %d times running — not asking about it again for "
+                     "%d ticks", n, vsOvlBadHold());
+        }
         g_ovlBadGain.store(gains[(size_t)fromIdx], std::memory_order_relaxed);
         // ★ A cut this soon after the filter moved is judging a front end mid-resize, not a
         //   settled one — hold it briefly rather than for the full lockout.
@@ -26573,8 +26681,19 @@ void LocalSdrShim::setDirectSampling(int mode) {
      *  hears nothing with nothing on screen to say why (Stuart, 2026-09-20). */
     g_dsNow.store(mode, std::memory_order_relaxed);
 }
+/** ★ What Kotlin told us the USB descriptor says — see setUsbModelName() in the header. */
+static std::mutex        g_usbModelMx;
+static std::string       g_usbModelName;
+void LocalSdrShim::setUsbModelName(const std::string& name) {
+    std::lock_guard<std::mutex> lk(g_usbModelMx);
+    g_usbModelName = name;
+}
+static std::string vsUsbModelName() {
+    std::lock_guard<std::mutex> lk(g_usbModelMx);
+    return g_usbModelName;
+}
 std::string LocalSdrShim::deviceModel() const {
-    if (!p) return "";
+    if (!p) return vsUsbModelName();
     if (p->useSdrplay() && p->sdrp) return p->sdrp->model();
     // ★ Same source and same reasoning as the `radio.model` field further down: the USB strings
     //   carry what is written on the box, and librtlsdr's own name is "Generic RTL2832U OEM" for
@@ -26587,7 +26706,7 @@ std::string LocalSdrShim::deviceModel() const {
             return n;
         }
     }
-    return "";
+    return vsUsbModelName();
 }
 
 void LocalSdrShim::setAutoDirectSampling(bool on, double belowHz) {
@@ -26778,6 +26897,7 @@ static void agcForget(const char* why) {
     g_climbAt.store(0.0, std::memory_order_relaxed);
     g_dropAt.store(0.0, std::memory_order_relaxed);
     g_ovlBadGain.store(-1, std::memory_order_relaxed);
+        g_ovlBadStrikes.store(0, std::memory_order_relaxed);   // ★ a new band starts with a clean record
     g_ovlBadProvisional.store(false, std::memory_order_relaxed);
     g_adcCleanRun.store(0, std::memory_order_relaxed);
     // ★ Stamped so a cut arriving in the next few seconds can be recognised as a verdict on a
@@ -27250,6 +27370,7 @@ std::string LocalSdrShim::radioCapsJson() const {
         // The USB descriptor carries what is written on the box ("Blog V4"), which is far
         // more use than librtlsdr's generic tuner name — the same reasoning as vs_device_name.
         std::string n = "RTL-SDR";
+        { std::string handed = vsUsbModelName(); if (!handed.empty()) n = handed; }
         if (p->usbIndex >= 0) {
             char mfr[256] = {0}, prd[256] = {0}, ser[256] = {0};
             if (rtlsdr_get_device_usb_strings((uint32_t)p->usbIndex, mfr, prd, ser) == 0 && prd[0]) {
