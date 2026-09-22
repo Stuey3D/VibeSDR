@@ -599,9 +599,25 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   // Load saved preferences + name.
   useEffect(() => {
     let cancelled = false;
-    /* ★ The whole read as one retryable unit — see the catch at the end. */
+    /* ★★★ A READ THAT NEVER ANSWERS IS THE ACTUAL FAULT, and it hid behind the error path for two
+     *  days. The screen reported "your saved settings could not be read" with NO REASON attached
+     *  (Stuart's Sony, 2026-09-22, photographed) — and an empty reason is the whole diagnosis:
+     *  nothing threw. `prefsError` was null and `prefsRead` was false, which is only reachable if
+     *  the load never reached either end. AsyncStorage's promises simply never settled.
+     *  ★★ EVERY READ IN THIS PATH IS WRAPPED IN try/catch AND THEREFORE IN NOTHING. getServerName,
+     *     getServerLocationMode and the rest each swallow a REJECTION and return a default — which
+     *     is right — but none of them can do anything about a promise that never settles at all.
+     *     The await simply sits there, the effect never finishes, and the screen looks like a
+     *     server that has no settings rather than one that could not read them.
+     *  ★ So every attempt gets a deadline. A timeout converts an infinite hang into an ordinary
+     *    failure, which the retry and the banner below already know how to handle. Eight seconds
+     *    is far longer than a healthy read (milliseconds) and far shorter than a person's patience.
+     *  ★ It does NOT cancel the underlying read — nothing can — it stops us waiting on it. */
+    const deadline = <T,>(p: Promise<T>, ms = 8000): Promise<T> =>
+      Promise.race([p, new Promise<T>((_, rej) =>
+        setTimeout(() => rej(new Error('the settings did not answer in time')), ms))]);
     const load = async (attempt: number): Promise<void> => {
-      const n = await getServerName(route.params?.name ?? 'VibeSDR');
+      const n = await deadline(getServerName(route.params?.name ?? 'VibeSDR'));
       if (cancelled) return;
       setName(n);
       setPrefsError(null);
@@ -611,7 +627,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
          *   put them anywhere else and every variable after them silently takes its neighbour's
          *   value, which type-checks perfectly and is wrong at run time. */
         const [p, a, pm, sp, r, fp, cp, ws, apw, unc, lim, fm,
-               mu, alw, blk, gl, bmd, dbb, glk, gsp, rg, agl, ragc, px, ru, lhz, lmd, bt] = await Promise.all([
+               mu, alw, blk, gl, bmd, dbb, glk, gsp, rg, agl, ragc, px, ru, lhz, lmd, bt] = await deadline(Promise.all([
           AsyncStorage.getItem(K.proto), AsyncStorage.getItem(K.advertise),
           AsyncStorage.getItem(K.pinMode), AsyncStorage.getItem(K.pin),
           AsyncStorage.getItem(K.rate), AsyncStorage.getItem(K.fps),
@@ -627,7 +643,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           AsyncStorage.getItem(K.proxies), AsyncStorage.getItem(K.radioUse),
           AsyncStorage.getItem(K.landingHz), AsyncStorage.getItem(K.landingMode),
           AsyncStorage.getItem(K.biasT),
-        ]);
+        ]));
         if (!vibeServerOnly && (p === 'rtltcp' || p === 'vibeserver')) setProto(p);
         if (a != null) setAdvertise(a !== '0');
         if (ws != null) setWebServer(ws !== '0');
@@ -710,8 +726,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         if (rg != null && Number.isFinite(Number(rg))) setRestGain(Number(rg));
         if (agl != null) setAgcLock(agl === '1');
         if (px != null) setProxies(px);
-        setLocMode(await getServerLocationMode());
-        setLocCity((await getManualServerLocation())?.label ?? '');
+        setLocMode(await deadline(getServerLocationMode()));
+        setLocCity((await deadline(getManualServerLocation()))?.label ?? '');
         if (pm === 'random' || pm === 'custom' || pm === 'off') setPinMode(pm);
         // Restore the saved PIN for BOTH modes so re-opening the server keeps the
         // same code — it only changes when the user taps refresh (↻) or edits it.
@@ -1105,10 +1121,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
      *  screen is a default rather than the owner's choice, and this multiSet would make that permanent — which
      *  is how "it lost my preferences" becomes true instead of merely looking true. */
     if (!prefsRead) {
+      /* ★★ ONE RULE, TWO READERS — this Alert and the banner at the top of the screen say the same
+       *  thing, and only the banner was corrected. It still told a TV owner to close and reopen an
+       *  app that had no close button, and it still implied the settings were in danger from the
+       *  failure rather than from pressing Start. Both now point at the button that re-reads. */
       Alert.alert('Your saved settings could not be read',
         (prefsError ? prefsError + '\n\n' : '')
-        + 'Everything here is a default, so starting now would overwrite what is still stored on this device. '
-        + 'Close the app and open it again; if it keeps happening, say so before saving.');
+        + 'Everything here is a default, so starting now would overwrite what is still stored on this '
+        + 'device — which is untouched. Use "Try reading them again" at the top of this screen.');
       return;
     }
     if (!(await checkBackgroundAllowed())) return;
