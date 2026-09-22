@@ -1350,7 +1350,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // self-heals a wrong stored type (e.g. an UberSDR-with-kiwi-emulation that a
     // previous build mis-saved as kiwi). Detection returns null only when the
     // host can't be reached — then keep the stored type rather than guessing.
-    let detected = await detectServerType(fav.url);
+    // ★ Hand it what we already believe this server is — a known Kiwi is not asked for our files.
+    let detected = await detectServerType(fav.url, fav.serverType);
 
     // ★★ A SAVED VibeServer PORT GOES STALE ON ITS OWN. The server takes "the
     // first free port" from 48000 up, so if something else holds 48000 at launch

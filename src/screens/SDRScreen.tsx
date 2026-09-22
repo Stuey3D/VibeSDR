@@ -462,6 +462,23 @@ export default function SDRScreen({ route, navigation }: Props) {
     let cancelled = false;
     setDoorPending(true); setDoor(null); setRadioBase(null);
     (async () => {
+      /* ★★★ DO NOT ASK SOMEBODY ELSE'S RECEIVER FOR OUR OWN FILES (2026-09-22, urgent).
+       *  John Seamons (KiwiSDR) wrote with his proxy's access log: VibeSDR fetching
+       *  /vibeserver.json and /vibeserver/radios — and UberSDR's /api/ui-config and
+       *  /api/description — from kiwisdr.com proxy hosts, where none of them exist. "None of these
+       *  files exist on the Kiwi. You should be getting 404s on all of them."
+       *  ★★ This probe ran for EVERY connection, whatever the server was known to be. A KiwiSDR,
+       *     an OpenWebRX or an FM-DX box has no VibeServer front door and never will, so asking is
+       *     pure noise on a stranger's machine — and it is OUR name in their log.
+       *  ★ Unknown type still probes: that is a VibeSDR user typing an address, and the question
+       *    is then about a server we may well own. */
+      // ★ As a string: this screen's own param type lists fewer backends than actually reach it
+      //   (App.tsx widens it for the watch), and a narrow compare would be a silent always-false.
+      const t = String(route.params.serverType ?? '');
+      if (t === 'kiwi' || t === 'web888' || t === 'owrx' || t === 'fmdx') {
+        setDoorPending(false);
+        return;
+      }
       const d = await fetchFrontDoor(baseUrl);
       if (cancelled) return;
       if (!d) {

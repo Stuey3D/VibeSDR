@@ -115,7 +115,9 @@ export const DEFAULT_PORT: Record<BackendType, number> = {
 /** Probe a manually-entered host to pick the backend (v3). Fetches the landing
  *  page and sniffs markers. Returns null when the host can't be reached (the
  *  caller keeps any previously-known type rather than guessing). */
-export async function detectServerType(url: string): Promise<BackendType | null> {
+/** @param known what this server was last seen to be, when the caller has a stored answer. A
+ *  KiwiSDR-family receiver is never asked for VibeServer's files — see the note below. */
+export async function detectServerType(url: string, known?: string | null): Promise<BackendType | null> {
   const base = url.trim().replace(/\/+$/, '')
     .replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
   // Manual AbortController + setTimeout — AbortSignal.timeout() isn't reliably
@@ -148,7 +150,19 @@ export async function detectServerType(url: string): Promise<BackendType | null>
     // mis-typed genuine UberSDR servers in v8.0.0 — so it fell through to the
     // ubersdr default every single time. /vibeserver.json is served regardless
     // of that toggle.
+    /* ★★★ DO NOT ASK A KNOWN KiwiSDR FOR OUR OWN FILES (2026-09-22, urgent). John Seamons wrote
+     *  with his proxy's access log showing VibeSDR requesting /vibeserver.json from kiwisdr.com
+     *  proxy hosts: "None of these files exist on the Kiwi. You should be getting 404s on all of
+     *  them." We re-detect on every connect — deliberately, so a stored type can self-heal — but a
+     *  receiver we already know to be a Kiwi has nothing to heal, and the probe is then noise in
+     *  somebody else's log with our name on it.
+     *  ★★ Worse there than anywhere: a Kiwi does not 404 an unknown path, it NEVER ANSWERS (see
+     *     the timeout note above), so each probe also holds a connection open for 5 s.
+     *  ★ Only skipped when the caller KNOWS. An unknown or absent type still asks, which is the
+     *    case that needs the answer. */
+    const knownKiwi = known === 'kiwi' || known === 'web888';
     try {
+      if (knownKiwi) throw new Error('known KiwiSDR — not asking it for VibeServer files');
       const idr = await withTimeout(base + '/vibeserver.json');
       if (idr.ok) {
         const id = await idr.json();
