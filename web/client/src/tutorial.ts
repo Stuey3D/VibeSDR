@@ -52,9 +52,9 @@ const STEPS: Step[] = [
   {
     ids: ['mVfoDown', 'mVfoUp', 'mStep', 'mZoomOut', 'mZoomIn'],
     title: 'Tuning and zoom — ‹ ›, the step button, − and +',
-    body: 'These are your main controls. Use ‹ and › to move the dial by the amount shown '
-        + 'on the step button — press it to change the step. Use − and + to zoom the spectrum '
-        + 'and waterfall.',
+    body: 'These are your main controls. Use [[‹]] and [[›]] to move the dial by the amount shown '
+        + 'on the step button [[@mStep]] — press it to change the step. Use [[−]] and [[+]] to zoom '
+        + 'the spectrum and waterfall.',
   },
   {
     // ★ The demodulator "button" is the MODE readout inside the pill — mobile.ts binds
@@ -62,24 +62,24 @@ const STEPS: Step[] = [
     //   picker when the DECODERS button became CHAT. It is the control, so it is the target.
     ids: ['mMode'],
     title: 'The demodulator button',
-    body: 'The demodulator button opens the audio modes and the decoders — how you listen, plus '
-        + 'things like RTTY and weather fax.',
+    body: 'The demodulator button [[@mMode]] opens the audio modes and the decoders — how you listen, '
+        + 'plus things like RTTY and weather fax.',
   },
   {
     ids: ['mMenu'],
     title: 'MENU',
-    body: "MENU opens the display settings and the receiver's hardware controls.",
+    body: "[[MENU]] opens the display settings and the receiver's hardware controls.",
   },
   {
     ids: ['mAudio'],
     title: 'The speaker button',
-    body: 'The speaker button holds the audio tools: noise reduction, notch filters and squelch — '
-        + 'and raw IQ output where the receiver offers it.',
+    body: 'The speaker button [[@mAudio]] holds the audio tools: noise reduction, notch filters and '
+        + 'squelch — and raw IQ output where the receiver offers it.',
   },
   {
     ids: ['mChat'],
     title: 'CHAT',
-    body: 'CHAT is for receivers with a shared tuner — use it to ask before you tune.',
+    body: '[[CHAT]] is for receivers with a shared tuner — use it to ask before you tune.',
   },
   {
     // ★★ THE WHOLE ROW, NOT THE TEXT ALONE. #status (the KB/s · fps · ping · buf string) lives
@@ -159,7 +159,24 @@ function installStyle() {
 }
 #tutBox .tutTitle { color: var(--amber, #ffb000); font-size: 12px; letter-spacing: .06em; }
 #tutBox .tutCount { margin-left: auto; font-size: 11px; opacity: .6; white-space: nowrap; }
-#tutBox .tutBody { padding: 10px; font-size: 12px; line-height: 1.55; overflow-y: auto; }
+#tutBox .tutBody { padding: 10px; font-size: 12px; line-height: 1.9; overflow-y: auto; }
+/* ★★★ THE BUTTON ITSELF, IN THE SENTENCE. Naming a control in prose asks the reader to hold a
+   description in their head and then go hunting for something that matches it — and the glyphs
+   are the worst case: a bare ‹ in a paragraph is punctuation, not a button (Stuart, 2026-09-22:
+   "in the decoder box can we have visual representations of the actual buttons themselves").
+   ★★ Drawn from the same tokens as the real control, so it is a picture of THAT button and not a
+      generic key cap: --btn-bg, --btn-border, --btn-text, and .mBtn's 9px radius scaled down.
+      If the receiver's palette changes, these change with it.
+   ★ line-height above is raised to 1.9 so the chips do not crowd the lines they sit in. */
+#tutBox .tutKey {
+  display: inline-block; padding: 1px 7px; margin: 0 1px;
+  background: var(--btn-bg, #1a1206); color: var(--btn-text, var(--amber, #ffb000));
+  border: 1px solid var(--btn-border, var(--amber, #ffb000)); border-radius: 6px;
+  font-family: inherit; font-size: 11px; line-height: 1.5; white-space: nowrap;
+  vertical-align: baseline;
+}
+/* ★ A cloned glyph is sized for a 44px touch target; inside a sentence it takes the line's size. */
+#tutBox .tutKey svg { width: 1.1em; height: 1.1em; vertical-align: -0.15em; display: inline-block; }
 #tutBox .tutFoot {
   display: flex; gap: 8px; padding: 8px 10px; border-top: 1px solid rgba(255,160,0,.25);
   flex-wrap: wrap;
@@ -215,7 +232,37 @@ function render() {
 
   const body = document.createElement('div');
   body.className = 'tutBody';
-  body.textContent = s.body;
+  /* ★★ BUILT, NOT PARSED. `[[…]]` in the copy becomes a chip, and every other character is set as
+   *  TEXT — so the panel never takes a string as markup and there is nothing for a station name or
+   *  a receiver's own wording to inject through. */
+  for (const part of s.body.split(/(\[\[[^\]]+\]\])/)) {
+    if (!part) continue;
+    if (part.startsWith('[[') && part.endsWith(']]')) {
+      const tok = part.slice(2, -2);
+      const key = document.createElement('span');
+      key.className = 'tutKey';
+      /* ★★★ `@id` TAKES THE PICTURE FROM THE BUTTON ITSELF rather than describing it twice. The
+       *  speaker is an inline SVG and the mode button's caption is whatever this listener is
+       *  actually in (NFM, WFM, DAB…), so a literal in the copy would be a drawing of a button
+       *  that may not be the one on screen — the "one rule, two readers" shape, where the copy
+       *  and the control drift apart and only the copy is wrong.
+       *  ★ A DEEP CLONE of the live node, so it cannot be dragged out of the card it belongs to,
+       *    and only from OUR OWN document — never from anything a receiver or a station sent.
+       *  ★ Falls back to the token as text when the control is not on this page, so a chip is
+       *    always drawn and the sentence never loses a word. */
+      if (tok.startsWith('@')) {
+        const src = document.getElementById(tok.slice(1));
+        const svg = src?.querySelector('svg');
+        if (svg) key.appendChild(svg.cloneNode(true));
+        else key.textContent = (src?.textContent || '').trim() || tok.slice(1);
+      } else {
+        key.textContent = tok;
+      }
+      body.appendChild(key);
+    } else {
+      body.appendChild(document.createTextNode(part));
+    }
+  }
 
   const foot = document.createElement('div');
   foot.className = 'tutFoot';
