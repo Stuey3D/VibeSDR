@@ -694,6 +694,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   //   the answer arrives, and "USB SDR" if something is attached that we cannot name — never a
   //   guess at the model. Android only; iOS has no USB host SDR.
   const [localSdrLabel, setLocalSdrLabel] = useState('');
+  /** ★★★ THE RADIO WAS JUST PLUGGED IN — SAID, NOT ASKED. See tryUsbLaunch(). */
+  const [usbJustAttached, setUsbJustAttached] = useState('');
   /* ★★★ ASK AGAIN — A SINGLE ATTEMPT ON MOUNT SILENTLY LOSES THE DONGLE.
    *
    *  ★★★ THE FAULT THIS FIXES. This ran once, on mount, and began
@@ -947,7 +949,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // plugging in an RTL-SDR (USB_DEVICE_ATTACHED). Returns true if it claimed the
   // launch, so the caller skips the default-instance auto-connect. Native flag is
   // read-and-cleared, so it fires once per attach.
-  const tryUsbLaunch = useCallback(async (modeArg?: typeof viewMode): Promise<boolean> => {
+  /* ★ No longer takes the view mode: nothing here connects any more, so there is no connection
+   *  for it to steer. Callers pass it harmlessly; the signature keeps them compiling. */
+  const tryUsbLaunch = useCallback(async (_modeArg?: typeof viewMode): Promise<boolean> => {
     const Local = (NativeModules as any).VibeLocalSDR;
     if (!Local?.consumeUsbLaunch) return false;
     let pending = false;
@@ -981,24 +985,28 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // ★ listDevices() has already given us `localSdrLabel` (the USB product name, or "USB SDR"
     //   when it cannot be named). It is empty only if that lookup has not landed yet, so fall
     //   back to the neutral wording rather than to a guess at the model.
-    if (rtlTcpServerSupported) {
-      Alert.alert(
-        label ? `${label} connected` : 'SDR connected',
-        `How would you like to use ${label ? `this ${label}` : 'this radio'}?`,
-        [
-          { text: 'Listen on this device', onPress: () => { connectLocal(modeArg); } },
-          { text: 'Share over network', onPress: () => navigation.navigate('ServerMode', {}) },
-          { text: 'Cancel', style: 'cancel' },
-        ],
-        { cancelable: true },
-      );
-    } else {
-      await connectLocal(modeArg);
-    }
+    /* ★★★ A QUESTION NOBODY IS THERE TO ANSWER IS A BLOCKED SERVER.
+     *
+     *  This used to be a modal: "how would you like to use this radio?", Listen / Share / Cancel.
+     *  It read well with a person holding the phone, and it was a TRAP the rest of the time.
+     *  ★★ THE XCOVER, 2026-09-22, COLD-BOOTING AFTER ITS BATTERY DIED. Android 11 enumerated the
+     *     dongle on the way up, fired USB_DEVICE_ATTACHED, and launched us — everything needed for
+     *     the server to come back by itself. What stopped it was this alert, sitting on screen
+     *     waiting for a tap in a garage. (It also disproves the premise written in
+     *     VibeServerRestore, that a phone's OTG stack never enumerates a dongle attached while it
+     *     was off: this one does. The main app's start-on-boot follows separately.)
+     *  ★★ AND EVEN "Listen" WOULD HAVE BLOCKED IT. connectLocal() opens the USB device, so
+     *     defaulting to it — which the no-server branch did — takes the dongle the server wants.
+     *     Nothing is auto-connected on an attach any more, on any build.
+     *  ★ What replaces it is a LINE, not a question (Stuart's design): the radio's name over the
+     *    two choices that are already on this screen. It confirms the app has seen the dongle —
+     *    the one thing the alert was genuinely good for — and then gets out of the way.
+     *    The user is where the decision belongs; an empty room is not a user. */
+    setUsbJustAttached(label || 'SDR');
     return true;
     // ★ localSdrLabel IS A DEPENDENCY — without it this closure captures the empty first
-    //   render and every prompt falls back to the generic wording forever.
-  }, [connectLocal, navigation, localSdrLabel]);
+    //   render and the line falls back to the generic wording forever.
+  }, [localSdrLabel]);
   tryUsbLaunchRef.current = tryUsbLaunch;
 
   // RTL-TCP: connect to an rtl_tcp server (host:port) over the network and run the
@@ -2478,6 +2486,15 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     Android only: iOS has no USB host SDR. */}
                 {Platform.OS === 'android' && (<>
                   <SectionHeader label={localSdrLabel || 'USB SDR'} fs={fs} F={F} C={C} />
+                  {/* ★ "…detected" — see tryUsbLaunch. Shown only for a radio plugged in during
+                      THIS session: as a permanent line it would say nothing the heading above it
+                      does not already say. */}
+                  {!!usbJustAttached && (
+                    <Text style={{ fontFamily: F, fontSize: fs(12), color: C.green, marginBottom: 6 }}
+                          numberOfLines={1}>
+                      {usbJustAttached} detected
+                    </Text>
+                  )}
                   {/* ★★★ WHILE SERVING, THIS ROW IS A LOOPBACK CLIENT — NOT A SECOND SHIM.
                       connectLocal() opens the USB device and calls stopSpectrumInternal() first,
                       so pressing Listen with a server running would tear down the very radio the
