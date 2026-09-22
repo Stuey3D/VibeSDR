@@ -156,6 +156,9 @@ export type VibeServerConfig = {
    *  reboot. TypeScript only reports the FIRST unknown property of an object literal, which is why
    *  this read as one stray field rather than seven.
    *  ★ Exactly the shape AGENTS.md warns about: written, never read, and silent about it. */
+  /** ★ DAB whole-multiplex label scan: 1 on, 0 off, -1 "decide from the measurement". Read
+   *  natively as setDabScanLabels. */
+  dabScanLabels?: number;
   /** ★★ Pause the radio below this battery percentage, and resume above `batteryResumeAt` — the
    *  phone-server settings, read natively by VibeServerBoot (setBatteryPolicy). 0 = never pause.
    *  ★ Undeclared until 2026-09-22, like `rawIqLanMaxHz` below: both were being sent and both were
@@ -277,6 +280,25 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     converterOffsetHz: cfg.converterOffsetHz ?? 0,
     converterInputLoHz: cfg.converterInputLoHz ?? 0,
     converterInputHiHz: cfg.converterInputHiHz ?? 0,
+    /* ★★★ AND THE FIVE THAT WERE SET, STORED, SHOWN — AND NEVER SENT. The note at the top of this
+     *  type describes exactly this fault ("the forwarding below did not copy them either") and it
+     *  had happened again to five more settings, because this list is hand-maintained and a hand-
+     *  maintained list is a list that will be wrong.
+     *  ★★ Every one of them is READ on the native side — VibeServerBoot calls setDabScanLabels,
+     *     setBatteryPolicy and the raw-IQ LAN cap out of the stored config, and bootWanted() reads
+     *     startOnBoot — so each was a control that moved, saved, and did nothing at all. Stuart
+     *     found it from the outside on the Sony, 2026-09-22: "the TV reported it could handle
+     *     multistation radio text so I enabled it and ... the setting was being ignored". It was.
+     *  ★★ startOnBoot is the one that would have wasted a night: the whole attach-time resume
+     *     added earlier today is gated on it, and it could never have arrived.
+     *  ★ rawIqLanMaxHz goes over as a STRING because that is how it is read (`cfg.s(...)` then
+     *    toIntOrNull): a JS number arrives as a double and "250000.0" parses to null, which is a
+     *    silent 0 — the same class of bug one layer down. */
+    dabScanLabels: cfg.dabScanLabels ?? -1,
+    startOnBoot: cfg.startOnBoot === true,
+    batteryPauseAt: cfg.batteryPauseAt ?? 0,
+    batteryResumeAt: cfg.batteryResumeAt ?? 40,
+    rawIqLanMaxHz: String(Math.round(cfg.rawIqLanMaxHz ?? 0)),
   });
   // Hand the web client's search its station list. Fire-and-forget: the server is
   // already up and useful without it, and this can involve a network fetch.

@@ -1207,7 +1207,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         // ★ Not gated on `advanced`: what this aerial is good for is a property of the RADIO,
         //   like the resting gain, not of sharing — see the note in VibeServerBoot.
         blockedModes, dabRateBoost,
-        ...(isLite ? { dabScanLabels } : {}),
+        /* ★★★ NO LONGER A CONDITIONAL SPREAD, and that is the point rather than a tidy-up. A
+         *  `...(cond ? {x} : {})` inside an object literal suppresses TypeScript's excess-property
+         *  check for the WHOLE literal, so every setting here could be misspelled or unknown to
+         *  VibeServerConfig and nothing would say a word — which is precisely how five settings
+         *  came to be sent to a function that does not forward them. Sent plainly, the compiler
+         *  checks them; the value is -1 ("decide from the measurement") where there is no control
+         *  to set it, which is what absent meant anyway. */
+        dabScanLabels,
         startOnBoot,
         // ★ The rest of the server's settings — the phone runs the same server, one radio at a
         //   time, so everything the desktop can set is set from here.
