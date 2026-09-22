@@ -2030,6 +2030,18 @@ int main(int argc, char** argv) {
         //   silently do nothing on a server with no country configured.
         return vsradiodns::logoForAuto(pi, ecc, hz, g_runtimeConfig.country);
     });
+    /* ★★★ THE NAME FROM THE SAME LOOKUP — it was fetched and thrown away (2026-09-22). logoFor's
+     *  `nameOut` carries the broadcaster's own <mediumName> from SI.xml, and the bookmark learner
+     *  needs exactly that for a station whose PS marquees and can therefore never settle a name of
+     *  its own (Kiko's 94.5: "UMUARAMA" / "MASSA" rotating, logo resolving perfectly).
+     *  ★ Same ECC derivation as the logo handler above, for the same reason: most encoders never
+     *    send group 1A, so without it the lookup mostly would not run at all. */
+    LocalSdrShim::setStationNameHandler([](const std::string& pi, const std::string& ecc,
+                                           double hz) -> std::string {
+        std::string name;
+        vsradiodns::logoForAuto(pi, ecc, hz, g_runtimeConfig.country, &name);
+        return name;
+    });
     LocalSdrShim::setLogoBytesFetcher([](const std::string& url) { return vsradiodns::fetchIsBinarySafe() ? vsradiodns::httpGetRaw(url) : std::string(); });
     LocalSdrShim::setDabLogoHandler([](const std::string& ecc, const std::string& eid,
                                        const std::string& sid, int scids) -> std::string {

@@ -1538,7 +1538,10 @@ static double bmSnapFm(double hz) {
 }
 
 /** Called from the RDS PS callback. */
-static void bmLearn(double hzRaw, int pi, const std::string& psRaw) {
+/** ★ Defined after the handler globals below; see the call in bmLearn. */
+static void bmTryRadioDnsName(long long key, int pi, int ecc, double hz);
+
+static void bmLearn(double hzRaw, int pi, const std::string& psRaw, int ecc) {
     const std::string ps = bmTrim(psRaw);
     const double hz = bmSnapFm(hzRaw);
     if (hz <= 0 || pi <= 0) return;          // no PI = not locked on to anything
@@ -1595,11 +1598,13 @@ static void bmLearn(double hzRaw, int pi, const std::string& psRaw) {
      *     the same PI, so there is no duplicate and nothing to re-learn.
      *  ★★ It also fixes a quieter UK case: a station whose PS is weak or garbled currently has to
      *     EARN its place, so a marginal one never appears. Now it appears, then improves.
-     *  ★ "PI4322 93.7MHz" rather than a bare "4322", which would read as broken — frequency plus
+     *  ★ "PI: 4322 93.7MHz" rather than a bare "4322", which would read as broken — frequency plus
      *    PI is recognisable, obviously provisional, and still unique. */
     if (it == g_bookmarks.end() && now - p.piSince >= kProvisionalDwellSecs) {
         char prov[64];
-        std::snprintf(prov, sizeof prov, "PI%04X %.1fMHz", (unsigned)pi, hz / 1e6);
+        // ★ "PI: CDEF 107.1MHz" — the colon and space make it read as a LABEL rather than a
+        //   run-together word (Stuart, 2026-09-22, looking at Kiko's list).
+        std::snprintf(prov, sizeof prov, "PI: %04X %.1fMHz", (unsigned)pi, hz / 1e6);
         LearnedBm b;
         b.name = prov; b.pi = pi; b.hz = (long long)llround(hzRaw); b.lastHeard = now;
         b.nameSrc = kNameProvisional;
@@ -1608,6 +1613,29 @@ static void bmLearn(double hzRaw, int pi, const std::string& psRaw) {
         it = g_bookmarks.find(key);
         // ★ Deliberately NOT returning: if a good PS is already in hand this same call can go
         //   straight on to vote on it, so a well-behaved station is never slowed down by this.
+    }
+
+    /* ★★★ THE NAME FROM RadioDNS, WHEN THE STATION'S OWN TEXT CANNOT GIVE ONE (2026-09-22).
+     *  The PS vote below needs the text to SETTLE, and a station that marquees its PS never lets
+     *  it: Kiko's 94.5 rotates "UMUARAMA" / "MASSA" for ever, so the entry keeps its provisional
+     *  "PI: 0022 94.5MHz" label — while the RadioDNS LOGO resolves first time, because that lookup
+     *  is keyed on the identity (PI + ECC + frequency) and not on the text. The same document
+     *  carries <mediumName>: the name was fetched and discarded all along (Stuart: "there was
+     *  something you were discarding from the radiodns lookup that will solve our issue").
+     *  ★★ Only for a label that is still PROVISIONAL — a name we heard and settled is the
+     *     station's own word and outranks a directory. And only after the provisional dwell, so
+     *     spinning across the band asks nothing of the network.
+     *  ★ OFF THIS THREAD: DNS plus an HTTPS fetch, on the RDS callback, would stall the decoder.
+     *    One attempt per station per hour, successful or not; the handler is registered only where
+     *    the transport exists (the Linux/Mac servers — see setStationNameHandler). */
+    if (it != g_bookmarks.end() && it->second.nameSrc < kNameHeard
+            && now - p.piSince >= kProvisionalDwellSecs && ecc > 0) {
+        static std::map<long long, long long> s_rdnsTried;   // key -> when (guarded by g_bmMtx)
+        auto t = s_rdnsTried.find(key);
+        if (t == s_rdnsTried.end() || now - t->second > 3600) {
+            s_rdnsTried[key] = now;
+            bmTryRadioDnsName(key, pi, ecc, hz);
+        }
     }
 
     if (ps.empty()) return;                      // locked on, but no text yet
@@ -3865,6 +3893,7 @@ static LocalSdrShim::GeoIpFn       g_vsGeoIpFn;
 /** ★ Station artwork by PI/ECC/frequency (RadioDNS). Declared with the other handlers rather than
  *  beside its setter, because the ENDPOINT that reads it is thousands of lines above that. */
 static LocalSdrShim::StationLogoFn g_vsStationLogoFn;
+static LocalSdrShim::StationNameFn g_vsStationNameFn;   // ★ see setStationNameHandler
 static LocalSdrShim::DabLogoFn     g_vsDabLogoFn;
 static LocalSdrShim::LogoCacheClearFn g_vsLogoClearFn;
 static LocalSdrShim::AsnFn         g_vsAsnFn;
@@ -9933,7 +9962,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ Learned against THIS listener's VFO — the frequency actually being heard. It used to
         //   read the shared audioFreq, which in per-client mode is nobody's, so a learned
         //   bookmark would be filed under a frequency no one was on.
-        if (ps8) bmLearn(vfoHz, (int)pi, ps8);
+        if (ps8) bmLearn(vfoHz, (int)pi, ps8, st.rdsEcc);
     }
     static void rdsTextCb_(RdsState& st, double vfoHz, Impl* im, const char* rt64) {
         std::lock_guard<std::mutex> lk(st.rdsMtx);
@@ -22947,6 +22976,34 @@ void LocalSdrShim::setStationLogoHandler(StationLogoFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsStationLogoFn = std::move(fn);
 }
+void LocalSdrShim::setStationNameHandler(StationNameFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsStationNameFn = std::move(fn);
+}
+
+/** ★★★ See the call in bmLearn: the name for a station whose own text can never settle. Runs the
+ *  lookup on a thread of its own — DNS plus an HTTPS fetch has no business on the RDS callback. */
+static void bmTryRadioDnsName(long long key, int pi, int ecc, double hz) {
+    LocalSdrShim::StationNameFn fn;
+    { std::lock_guard<std::mutex> cl(g_vsConfigMtx); fn = g_vsStationNameFn; }
+    if (!fn) return;                 // a phone: no transport, nothing to ask
+    char piHex[8];  std::snprintf(piHex,  sizeof piHex,  "%04X", (unsigned)pi);
+    char eccHex[8]; std::snprintf(eccHex, sizeof eccHex, "%02X", (unsigned)(ecc & 0xFF));
+    std::thread([fn, key, pi, hz, sPi = std::string(piHex), sEcc = std::string(eccHex)] {
+        vibeThreadName("vibe-rdns");
+        const std::string name = bmTrim(fn(sPi, sEcc, hz));
+        if (name.empty()) return;
+        std::lock_guard<std::mutex> lk(g_bmMtx);
+        auto it = g_bookmarks.find(key);
+        if (it == g_bookmarks.end() || it->second.pi != pi) return;   // moved on since
+        if (it->second.nameSrc >= kNameRadioDns) return;              // never downgrade
+        it->second.name = name;
+        it->second.nameSrc = kNameRadioDns;
+        bmSaveLocked();
+        LOGI("bookmark %.3f MHz named \"%s\" from RadioDNS — its own text never settles",
+             hz / 1e6, name.c_str());
+    }).detach();
+}
 void LocalSdrShim::setEibiHandler(EibiFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsEibiFn = std::move(fn);
@@ -25845,18 +25902,39 @@ void LocalSdrShim::overloadTick() {
         if (idx > idxBeforeJumps
                 && g_profile.load(std::memory_order_relaxed)->watchShoulders
                 && !g_dabMode.load(std::memory_order_relaxed)) {
+            /* ★★★ AND ONCE THE RUN HAS JUDGED EVIDENCE, DO NOT JUMP BLIND AT ALL — ONE RUNG
+             *     (2026-09-22). The jump is sized from ADC HEADROOM only, which says nothing about
+             *     the band: on 106.9 the loop went 3.7 -> 16.6 -> 29.7 -> 43.4 dB, and the last two
+             *     jumps happened AFTER it had judged real steps, vaulting past the 32.8 dB summit
+             *     the sweep measures. Contrast then walked it only part-way back, so it settled at
+             *     36-40 — which Stuart hears as the locals spreading across the FM band.
+             *  ★★ The FIRST jump of a run is kept: with no baseline yet there is nothing to reason
+             *     from, and separation rises only ~0.1 dB per rung below 23 dB on that station —
+             *     under the "did that help?" threshold — so a judged climb alone cannot cross it.
+             *     That is why capping every jump to 4 dB undershot to 7.7 dB (tried and rejected,
+             *     same day). Evidence first, then one rung at a time.
+             *  ★ A run with a baseline is exactly "we have judged something": g_sepAtRunStart is
+             *    only stored once the separation average has filled (see sepAvgFilled). */
+            const bool judgedRun = g_sepAtRunStart.load(std::memory_order_relaxed) > -190.0f
+                                && g_stepsAtRunStart.load(std::memory_order_relaxed) >= 0;
             int capped = idx;
+            if (judgedRun) {
+                capped = (idxBeforeJumps + 1 < idx) ? idxBeforeJumps + 1 : idx;
+            } else
             while (capped > idxBeforeJumps
                    && (gains[(size_t)capped] - gains[(size_t)idxBeforeJumps]) / 10.0
                         > kBlindJumpMaxDb)
                 capped--;
             if (capped != idx) {
                 LOGI("holding that jump to %.1f dB of the %.1f dB it asked for (%.1f -> %.1f dB) — "
-                     "the converter cannot see what the mixer is doing, so the verdict judges the "
-                     "approach",
+                     "%s",
                      (gains[(size_t)capped] - gains[(size_t)idxBeforeJumps]) / 10.0,
                      (gains[(size_t)idx]    - gains[(size_t)idxBeforeJumps]) / 10.0,
-                     gains[(size_t)idxBeforeJumps] / 10.0, gains[(size_t)capped] / 10.0);
+                     gains[(size_t)idxBeforeJumps] / 10.0, gains[(size_t)capped] / 10.0,
+                     judgedRun ? "this run has judged a step, so the band decides the rest one rung "
+                                 "at a time"
+                               : "the converter cannot see what the mixer is doing, so the verdict "
+                                 "judges the approach");
                 idx  = capped;
                 want = tgtIdx - capped;
             }

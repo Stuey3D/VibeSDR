@@ -7578,7 +7578,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     askServer().then((srv) => srv ?? resolveStationLogo({
       pi: liveStation.pi, name, iso: iso || undefined, freqHz: status.frequency || undefined,
     })).then((url) => {
-      if (!destroyed.current && lastLiveLogoKey.current === key) setLiveLogo(url);
+      /* ★★★ A MISS MUST NOT ERASE A LOGO WE ALREADY HAVE (2026-09-22) — the same fault as the web
+       *  client's. The key contains the NAME, and a station that marquees its PS changes that every
+       *  second, so every rotation that resolved nothing blanked the picture the last one found
+       *  (Kiko's 94.5: the Massa logo shows on "MASSA" and vanishes on "UMUARAMA"). The logo belongs
+       *  to the station; only a change of station is reason to drop it. */
+      if (!destroyed.current && lastLiveLogoKey.current === key && url) setLiveLogo(url);
     // ★ An UNHANDLED REJECTION here is a crash risk in RN, not a missing picture. The resolver
     //   catches internally today, so this guards the next edit to it rather than a live fault.
     }).catch(() => {});

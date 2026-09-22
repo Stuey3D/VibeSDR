@@ -3579,7 +3579,15 @@ async function resolveRdsLogo(name: string, iso: string) {
     if (logoQuery !== key) return;
     // ★ A slow name lookup may land AFTER identity has answered — it must not undo it.
     if (logoFromIdentity && rdsLogoUrl) return;
-    rdsLogoUrl = url || '';
+    /* ★★★ A MISS MUST NOT ERASE THE LOGO WE ALREADY HAVE (2026-09-22). This assigned `url || ''`,
+     *  so on a station that MARQUEES its PS every rotation that matched nothing wiped the picture
+     *  the previous fragment had found: Kiko's 94.5 shows the Massa logo while the PS reads
+     *  "MASSA" and loses it the moment it turns to "UMUARAMA" (Stuart, two screenshots seconds
+     *  apart). The logo belongs to the STATION, and nothing here is evidence the station changed —
+     *  only a PI change is, and that clears it where rdsLogoPi is handled.
+     *  ★ So: a hit replaces, a miss leaves things exactly as they were. */
+    if (!url) return;
+    rdsLogoUrl = url;
     // ★★★ A NAME-SEARCH RESULT IS PROVISIONAL, AND SAYING SO IS THE WHOLE FIX. A NAME IS NOT AN
     //     IDENTITY: radio-browser matched "BBC 3CR" to a generic Radioplayer icon, and because a
     //     logo we already have was never re-examined, that wrong picture LOCKED — even though the

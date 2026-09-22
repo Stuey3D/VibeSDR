@@ -486,6 +486,18 @@ public:
     using StationLogoFn = std::function<std::string(const std::string& piHex,
                                                     const std::string& ecc, double freqHz)>;
     static void setStationLogoHandler(StationLogoFn fn);
+    /** ★★★ THE BROADCASTER'S OWN NAME FOR THIS STATION, from the same RadioDNS document the logo
+     *  comes from — SI.xml carries <mediumName>/<shortName> in the service block (2026-09-22).
+     *  It was already being fetched and THROWN AWAY (vsradiodns::logoFor's `nameOut`).
+     *  ★★ WHY THE BOOKMARK LEARNER NEEDS IT: the PS is the only other source of a name, and a
+     *     station that MARQUEES its PS can never settle one — Kiko's 94.5 rotates "UMUARAMA" and
+     *     "MASSA" while its RadioText is "RADIO MASSA" and the RadioDNS logo resolves perfectly.
+     *     The identity (PI) is certain; only the label is missing, and this supplies it.
+     *  ★ BLOCKING and slow (DNS + HTTPS), so callers run it off the audio path. Empty on a phone,
+     *    where no handler is registered. */
+    using StationNameFn = std::function<std::string(const std::string& piHex,
+                                                    const std::string& ecc, double freqHz)>;
+    static void setStationNameHandler(StationNameFn fn);
     /** ★ The DAB form: by ECC, EId, SId and SCIdS (RadioDNS TS 103 270) — see setStationLogoHandler. */
     using DabLogoFn = std::function<std::string(const std::string& ecc, const std::string& eidHex,
                                                 const std::string& sidHex, int scids)>;
