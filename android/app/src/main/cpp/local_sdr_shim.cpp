@@ -2819,6 +2819,33 @@ static std::atomic<float>    g_chanBeforeMove{0.0f};
  *    no amount of individually-innocent steps can answer wrongly. */
 static std::atomic<float>    g_sepAtRunStart{-200.0f};
 static std::atomic<int>      g_stepsAtRunStart{-1};
+/** ★★★ AND THE BEST SEPARATION THE RUN EVER REACHED — WHICH IS THE COMPARISON THAT MATTERS.
+ *
+ *  ★★★ MEASURED ON THE PI 2'S NOOELEC, 105.4 (Capital, weak), 2026-09-22, the case Stuart was
+ *      listening to when the receiver played BBC Radio Northampton instead:
+ *          gain   channel  shoulders  separation
+ *          33.8   -79.6    -88.6       9.0   <- the peak
+ *          37.2   -79.0    -86.0       7.0
+ *          40.2   -77.7    -84.3       6.6
+ *          43.9   -77.8    -82.2       4.4
+ *          49.6   -76.6    -80.8       4.2   <- where the AGC actually sat, at the ceiling
+ *      Separation collapses by 4.8 dB — more than twice the 2.0 dB the whole-run verdict aborts
+ *      on. It should have fired long before the top. It never did, and the reason is the
+ *      BASELINE: g_sepAtRunStart is separation when the climb BEGAN, which at the bottom of the
+ *      range is 0.3 dB. Measured against that, every step to the ceiling is still an improvement.
+ *      The run was judged against where it started instead of against how good it ever got.
+ *  ★★ SO THE QUESTION BECOMES "am I still as good as the best this climb has managed?" — which
+ *     catches the turn at the knee rather than only catching a run that ends worse than a
+ *     starting point nobody wants to return to.
+ *  ★★ AND THE CHANNEL ALONE CANNOT DO THIS JOB, which is why it is separation. On the same sweep
+ *     the channel level FALLS to -82.8 at 38.6 and then RISES to -76.6 at the ceiling: the second
+ *     rise is the intermodulation product growing, and a peak-hold on the channel would follow it
+ *     up. Separation measures the station AGAINST its neighbourhood, so a front end manufacturing
+ *     signal cannot flatter it.
+ *  ★ Same ruler rule as the baseline: a run measured against the noise floor cannot be compared
+ *    with one measured against the neighbours (see g_sepRulerAtRunStart). */
+static std::atomic<float>    g_sepBestInRun{-200.0f};
+static std::atomic<int>      g_stepsAtSepBest{-1};
 /* ★★★ WHICH RULER THAT BASELINE WAS MEASURED WITH, BECAUSE THERE ARE TWO AND THEY DISAGREE BY TEN
  *     DECIBELS. sepAvgDb is channel-MINUS-shoulders when the shoulder bins fit the window and
  *     channel-minus-NOISE-FLOOR when they do not (see sepFromShoulders) — the same variable
@@ -5302,9 +5329,27 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         int want = (int)std::lround(half * 2.0);
         if (want < 350000) want = 350000;
-        // ★ Wider than the capture is the same as no filter at all — say so plainly rather than
-        //   commanding a number the tuner will ignore.
-        if (want >= (int)(sampleRate * 0.95)) want = 0;
+        /* ★★★ NEVER SWITCH THE FILTER OFF. THIS LINE WAS THE GHOST ON 105.4.
+         *
+         *  It used to read `if (want >= sampleRate * 0.95) want = 0;` — "wider than the capture is
+         *  the same as no filter at all". That is true of the FFT and false of the RADIO. Zero does
+         *  not mean "as wide as the capture", it means the tuner's IF filter is left WIDE OPEN,
+         *  several megahertz of broadcast band arriving at a mixer that only has to handle 1.2.
+         *  ★★★ FOUND BY STUART, 2026-09-22, and it is his diagnosis: "At 1.2 MHz with the IF filter
+         *      auto and fully zoomed out at all gain levels its BBC radio northampton ghost.
+         *      Manually set the IF filter narrow and the gain now correctly picks up Capital ...
+         *      We have been targetting the wrong part, it was never the AGC's fault."
+         *      At every gain, which is what rules the AGC out: the loop was steering a receiver
+         *      whose only selectivity we had switched off, and no gain setting can undo that.
+         *  ★★ WHY IT ONLY BIT THE NOOELEC. The V4 has its own RF input filtering ahead of the
+         *     mixer; the Nooelec and V3 have essentially none, so the IF filter is the ONLY
+         *     selectivity they have and turning it off leaves the whole FM band on the mixer.
+         *     Same aerial, same 49.6 dB: the V4 clean, the Nooelec manufacturing a 200 kHz lump at
+         *     105.1 that is not transmitting.
+         *  ★ So the widest it may ever be is the capture itself — which is all the FFT can show
+         *    anyway, so nothing is lost from the display that was ever visible. */
+        const int captureWide = (int)std::lround(sampleRate);
+        if (want > captureWide) want = captureWide;
         /* ★★★ A FULL-RATE RAW IQ CONSUMER SEES THE WHOLE CAPTURE. The IF filter following the
          *  listener's zoom would hand Trunk Recorder a 2.4 MHz window with only the middle
          *  700 kHz in it (Stuart's screenshot, 2026-09-10 02:39: "IF 700 kHz auto" beside a
@@ -25160,7 +25205,43 @@ void LocalSdrShim::overloadTick() {
                 g_sepAtRunStart.store(-200.0f, std::memory_order_relaxed);
                 g_stepsAtRunStart.store(-1, std::memory_order_relaxed);
             }
-            else if (runSep > -190.0f && runAt >= 0 && dir > 0 && sepNow < runSep - 2.0f
+            /* ★★★ THE CLIMB HAS GONE PAST ITS OWN BEST — see g_sepBestInRun for the measurement
+             *  this comes from. Checked BEFORE the against-the-start test, because a climb that
+             *  has fallen 4.8 dB off its peak while still sitting above where it started is
+             *  exactly the case that test cannot see, and is the one that put BBC Radio
+             *  Northampton on 105.4.
+             *  ★ Same 2.0 dB as the start test and for the same measured reason: separation
+             *    wanders 1.2-2.1 dB on a weak station, so a tighter figure would abort real
+             *    climbs. ★ And the same ruler guard — a peak measured against the noise floor is
+             *    not comparable with a reading against the neighbours. */
+            const float bestSep = g_sepBestInRun.load(std::memory_order_relaxed);
+            const int   bestAt  = g_stepsAtSepBest.load(std::memory_order_relaxed);
+            if (bestSep > -190.0f && bestAt >= 0 && dir > 0 && sepNow > -190.0f
+                    && sepRulerNow == g_sepRulerAtRunStart.load(std::memory_order_relaxed)
+                    && sepNow < bestSep - 2.0f
+                    && !g_dabMode.load(std::memory_order_relaxed)) {
+                LOGI("this climb peaked at %.1f dB of separation and is now %.1f — %.1f dB worse "
+                     "than its own best, so the gain past that point was making signal, not "
+                     "finding it. Back to %d steps below the ceiling",
+                     bestSep, sepNow, bestSep - sepNow, bestAt);
+                g_ovlSteps.store(bestAt, std::memory_order_relaxed);
+                steps_forceDown = true;
+                g_settled.store(true, std::memory_order_relaxed);
+                g_sepAtRunStart.store(-200.0f, std::memory_order_relaxed);
+                g_stepsAtRunStart.store(-1, std::memory_order_relaxed);
+                g_sepBestInRun.store(-200.0f, std::memory_order_relaxed);
+                g_stepsAtSepBest.store(-1, std::memory_order_relaxed);
+                g_agcHurryUntil.store(now + 20.0, std::memory_order_relaxed);
+            }
+            /* ★ Otherwise: is this the best the run has managed? Recorded only under the same
+             *  ruler the peak will be compared with. */
+            else if (sepNow > -190.0f && g_stepsAtRunStart.load(std::memory_order_relaxed) >= 0
+                     && sepRulerNow == g_sepRulerAtRunStart.load(std::memory_order_relaxed)
+                     && sepNow > g_sepBestInRun.load(std::memory_order_relaxed)) {
+                g_sepBestInRun.store(sepNow, std::memory_order_relaxed);
+                g_stepsAtSepBest.store(steps, std::memory_order_relaxed);
+            }
+            if (runSep > -190.0f && runAt >= 0 && dir > 0 && sepNow < runSep - 2.0f
                     && !g_dabMode.load(std::memory_order_relaxed)) {
                 LOGI("this climb has cost %.1f dB of separation overall (%.1f -> %.1f) — every step "
                      "looked harmless, the run did not — back to %d steps below the ceiling",
@@ -26201,9 +26282,14 @@ void LocalSdrShim::overloadTick() {
         g_sepAtRunStart.store(sepBase, std::memory_order_relaxed);
         g_sepRulerAtRunStart.store(p->sepFromShoulders.load(), std::memory_order_relaxed);
         g_stepsAtRunStart.store(steps, std::memory_order_relaxed);
+        // ★ The peak starts as the baseline — see g_sepBestInRun.
+        g_sepBestInRun.store(sepBase, std::memory_order_relaxed);
+        g_stepsAtSepBest.store(steps, std::memory_order_relaxed);
     } else if (want > steps) {
         g_sepAtRunStart.store(-200.0f, std::memory_order_relaxed);
         g_stepsAtRunStart.store(-1, std::memory_order_relaxed);
+        g_sepBestInRun.store(-200.0f, std::memory_order_relaxed);
+        g_stepsAtSepBest.store(-1, std::memory_order_relaxed);
     }
     if (want != steps) {                      // ★ every move goes on trial, up or down alike
         g_sepBeforeMove.store(sepBase, std::memory_order_relaxed);
@@ -26892,6 +26978,7 @@ static void agcForget(const char* why) {
     g_wantDown.store(false, std::memory_order_relaxed);
     g_moveDir.store(0, std::memory_order_relaxed);
     g_sepAtRunStart.store(-200.0f, std::memory_order_relaxed);   // ★ a new station, a new run
+    g_sepBestInRun.store(-200.0f, std::memory_order_relaxed);     // ★ ...and a new best to beat
     g_stepsAtRunStart.store(-1, std::memory_order_relaxed);
     g_sameDirRun.store(0, std::memory_order_relaxed);
     g_floorTestMutedUntil.store(0.0, std::memory_order_relaxed);
