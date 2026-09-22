@@ -185,11 +185,34 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private var wsReady = false
   private var wsGen   = 0   // generation — ignore callbacks from a superseded socket
   private let wsQueue = DispatchQueue(label: "com.vibesdr.ws", qos: .userInteractive)
-  // Set on every WS (re)open; the first received packet triggers a tune
-  // re-assert so the server session always matches app state — sends during
-  // the handshake window can be lost, which left the session on the URL's
-  // freq/mode while the UI showed the restored tune.
+  /* ★★★ EVERY REOPEN OF THIS SOCKET IS A NEW UberSDR SESSION, AND IT STARTS ON THE MODE DEFAULTS.
+   *  UberSDR reads a session's opening state from the URL query and keeps the rest in the session
+   *  object behind the socket (websocket.go: `frequency` ~535, `mode` ~552, `bandwidthLow`/`High`
+   *  ~650-672 applied ~779, `min_snr`/`min_power` ~683-700, `min_margin` ~463). Everything else a
+   *  listener sets — squelch, the SNR gate, server NR, AGC, mute — arrives as a live message and
+   *  lives only for the life of THAT socket.
+   *  ★★ And this socket is reopened often, none of it visible to the user: the opus sample-rate
+   *     flip cycle below (any AM↔USB style mode change), the watchdog/revive path, an engine
+   *     restart, and every network drop. 4530cb06 put frequency+mode back on the URL; the rest was
+   *     still being dropped silently while the UI kept showing the listener's own setting — a
+   *     custom filter quietly reverting to the mode default is the loudest of them.
+   *  ★ So: remember what we last SENT (captured in sendWsText, the one place every audio-socket
+   *    command passes through), put on the reopen URL what the server accepts there, and replay the
+   *    remainder once the socket has PROVED itself — which is the first audio packet, not `.ready`.
+   *    NOT tested against a live receiver yet (2026-09-22). */
   private var wsNeedsTuneAssert = false
+  /// Last audio-socket command of each `type`, verbatim, to be replayed on the next socket.
+  /// Keyed by type so a listener who moved a slider five times replays once.
+  private var wsSessionCmds: [String: String] = [:]
+  /// Last bandwidth we asked for, lifted out of its `tune` message — the URL carries it (see
+  /// audioWsURL) because the server applies the filter as part of the channel create, so sending
+  /// it afterwards is an audible moment of the mode default.
+  private var wsSessionBw: (low: Int, high: Int)?
+  /// Last `min_snr` from a `set_audio_gate`, for the same reason: it is a URL parameter too.
+  private var wsSessionMinSnr: Double?
+  /// sendWsText runs on whichever thread called in (JS, main); the replay runs on the receive
+  /// queue. Small and uncontended — a lock is cheaper than another queue hop per command.
+  private let wsSessionLock = NSLock()
   // SERVER BUG WORKAROUND (FM half-speed, root-caused 2026-06-12): ubersdr
   // creates its opus encoder ONCE per WS at the then-current sample rate;
   // a mode change flips radiod to a new rate but keeps the old encoder, so
@@ -1625,6 +1648,16 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     /* ★★★ NO TUNE ON CONNECT. A client nobody touched must not move the radio — see audioWsURL().
      *  This asserted `currentFreq` on the first connect of each session, and "each session" included
      *  every engine restart, which is the half the reconnect fix did not cover. */
+    /* ★★★ BUT THE REST OF THE SESSION STATE IS REPLAYED HERE, AND ONLY HERE. A packet is the only
+     *  proof the session is real (see above) — a send into the handshake window is lost with no
+     *  error, which is how the old `wsNeedsTuneAssert` came to exist. It is used for this now.
+     *  ★★ This is NOT a tune: `replaySessionCommands` never sends one, and frequency/mode ride the
+     *     URL. Squelch, the SNR gate, server NR, AGC and mute are per-listener settings on
+     *     UberSDR's own VFO — no shared dial can move as a result. NOT yet tested on a receiver. */
+    if wsNeedsTuneAssert {
+      wsNeedsTuneAssert = false
+      replaySessionCommands()
+    }
     // Header sample-rate flip → server's per-WS opus encoder is now mismatched
     // (see wsBaseSr note) — cycle the socket for a fresh encoder. 3-packet
     // confirmation + 4s cooldown so stragglers around the flip can't storm.
@@ -2110,6 +2143,35 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     if currentFreq > 0 {
       path += "&frequency=\(currentFreq)&mode=\(currentMode)"
     }
+    /* ★★★ AND THE FILTER, FOR THE SAME REASON THE FREQUENCY IS HERE. The server reads
+     *  `bandwidthLow`/`bandwidthHigh` from this query (websocket.go ~650-672) and applies them as
+     *  ONE command with the channel create (~779, and the comment there explains why it must be
+     *  one: radiod's per-channel queue holds a single entry). Sent afterwards as a message it still
+     *  lands, but the session opens on the mode default first — and if the socket dies before we
+     *  send, a custom filter is simply gone while the UI still shows it.
+     *  ★★ Bandwidth is the ONLY other thing on this URL that the reopen used to lose outright; the
+     *     rest is replayed (see replaySessionCommands). `min_snr` joins it because it is a query
+     *     parameter too (~683) and a gate that opens late is audible.
+     *  ★ Wide-IQ modes (iq48/96/192/384) ignore URL bandwidth server-side (~677), so no special
+     *    case is needed here — the server drops it.
+     *  ★ Mirror of VibeStreamService.wsUrl() — one rule, two readers: change both or neither. */
+    wsSessionLock.lock()
+    let bw = wsSessionBw
+    let minSnr = wsSessionMinSnr
+    wsSessionLock.unlock()
+    /* ★★★ AND ONLY WITHIN THE SERVER'S RANGE, OR THERE IS NO SESSION AT ALL. UberSDR does not
+     *  ignore an out-of-range bandwidth on the URL — it REFUSES THE CONNECTION and returns
+     *  ("bandwidthLow %d Hz out of range (±12000 Hz)", websocket.go:648-666). So a remembered wide
+     *  filter would cost the listener their audio entirely, which is far worse than the default
+     *  filter this is here to preserve. Out of range: leave it off and let the mode default stand.
+     *  ★ A bypass password lifts the limit server-side, but we cannot know that from here. */
+    if let bw, abs(bw.low) <= 12_000, abs(bw.high) <= 12_000 {
+      path += "&bandwidthLow=\(bw.low)&bandwidthHigh=\(bw.high)"
+    }
+    // -999 is the server's "disabled", which is also its default — nothing to restate.
+    if let minSnr, minSnr > -999 {
+      path += "&min_snr=\(minSnr)"
+    }
     // ★★★ NAME OURSELVES HERE TOO, BECAUSE THIS SOCKET USUALLY ARRIVES FIRST. The JS client delays
     //     the spectrum socket a second to let the session register, so it is THIS one that claims
     //     the occupant slot — and it was anonymous, so the server stamped an empty agent and the
@@ -2175,6 +2237,15 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   /// Transport-agnostic text send (tune asserts, DSP commands). No-op unless the
   /// active socket is connected.
   private func sendWsText(_ text: String) {
+    // ★★ Capture BEFORE the connected-guards below: a command sent while the socket is down is
+    //    exactly the one that must survive to the next one, and both branches drop it silently.
+    noteSessionCommand(text)
+    sendWsTextRaw(text)
+  }
+
+  /// The send itself, without the session-state capture — so a replay does not re-record what it
+  /// is replaying.
+  private func sendWsTextRaw(_ text: String) {
     if wsUsingNW {
       guard let conn = wsConn, wsReady, let data = text.data(using: .utf8) else { return }
       let md  = NWProtocolWebSocket.Metadata(opcode: .text)
@@ -2189,6 +2260,59 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
         if let err { NSLog("[VibePowerModule] ws send error: %@", err.localizedDescription) }
       }
     }
+  }
+
+  /* ★★★ THE SESSION STATE IS WHAT WE LAST SAID, NOT A NEW API. Deliberately captured here rather
+   *  than by asking JS to re-send on reconnect: the JS side does not know when native reopens the
+   *  socket (the sr-flip cycle and the watchdog are native-only), and a second source of truth is
+   *  how the tune ended up with two stale copies fighting over one dial (see _routeTune's note in
+   *  UberSDRWsClient.ts).
+   *  ★★ Only UberSDR's `/ws?` audio socket reaches here. A VibeServer serves /ws/audio through
+   *     LocalAudioPlayer and never opens this one, so none of this can touch a shared dial — and
+   *     note that NOTHING here replays a `tune`: frequency and mode ride the URL, and no re-assert
+   *     is reintroduced (see audioWsURL). */
+  private func noteSessionCommand(_ text: String) {
+    guard let d = text.data(using: .utf8),
+          let obj = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+          let type = obj["type"] as? String else { return }
+    wsSessionLock.lock()
+    defer { wsSessionLock.unlock() }
+    switch type {
+    case "tune":
+      // Frequency/mode are held in currentFreq/currentMode and go out on the URL. A `tune` that
+      // carries filter edges is the bandwidth command (sendBandwidth) — that half we must keep.
+      if let low = obj["bandwidthLow"] as? Int, let high = obj["bandwidthHigh"] as? Int {
+        wsSessionBw = (low, high)
+      }
+    case "set_audio_gate":
+      if let v = obj["min_snr"] as? Double { wsSessionMinSnr = v }
+      else if let v = obj["min_snr"] as? Int { wsSessionMinSnr = Double(v) }
+      wsSessionCmds[type] = text
+    case "set_squelch", "set_agc", "set_dsp", "set_dsp_params", "set_mute", "set_min_margin":
+      wsSessionCmds[type] = text
+    default:
+      // ★ `ping`, `get_dsp_filters` and anything else are one-shot questions, not state. Replaying
+      //   them would be noise at best. An unrecognised command is NOT remembered on purpose: a
+      //   guess at what is state is worse than a known gap.
+      break
+    }
+  }
+
+  /// Replay the session state the URL could not carry. Called once per socket, from the first
+  /// audio packet — a 101 and a `.ready` are equally true of a socket the server is about to drop,
+  /// and a send into that window is lost with no error.
+  private func replaySessionCommands() {
+    wsSessionLock.lock()
+    let cmds = wsSessionCmds
+    wsSessionLock.unlock()
+    guard !cmds.isEmpty else { return }
+    // ★ Fixed order, not dictionary order: `set_dsp_params` means nothing until the filter it
+    //   belongs to has been selected by `set_dsp`.
+    for type in ["set_mute", "set_agc", "set_squelch", "set_audio_gate",
+                 "set_min_margin", "set_dsp", "set_dsp_params"] {
+      if let t = cmds[type] { sendWsTextRaw(t) }
+    }
+    NSLog("[VibePowerModule] replayed %d session command(s) on the new audio WS", cmds.count)
   }
 
   private func sendWsJson(_ obj: [String: Any]) {

@@ -910,6 +910,16 @@ export abstract class UberSDRWsClient {
   // are AUDIO-WS message types — the spectrum WS this client owns doesn't
   // know them. They now go through VibePowerModule.sendAudioCommand (native
   // socket); client NR/NR2/NB run natively in VibeDSP.swift.
+  /* ★★★ AND THE NATIVE SIDE NOW REMEMBERS THEM — DO NOT ADD A JS RE-SEND ON RECONNECT.
+   *  UberSDR keeps these in the session behind the audio socket, so every reopen (the native opus
+   *  sample-rate flip cycle, the watchdog/revive, an engine restart, a network drop) started the
+   *  listener back on the mode defaults while this client still showed their setting. The fix is in
+   *  native, where the reopens happen and where JS cannot see them: VibePowerModule
+   *  noteSessionCommand/replaySessionCommands and VibeStreamService's twin capture what was last
+   *  sent, put bandwidth + min_snr on the reopen URL, and replay the rest on the first audio packet.
+   *  ★★ JS re-sending on its own schedule would be a SECOND source of truth for socket state — the
+   *     exact shape that made two stale copies of the tune fight over one dial (see _routeTune).
+   *  ★ Untested against a live receiver as of 2026-09-22. */
 
   getStatus(): SDRStatus { return { ...this.status }; }
 

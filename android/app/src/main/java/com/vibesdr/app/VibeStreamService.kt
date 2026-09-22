@@ -159,6 +159,28 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     @Volatile private var currentFreq = 14_074_000L
     @Volatile private var currentMode = "usb"
     @Volatile private var currentStep = 1_000L
+
+    /* ★★★ EVERY REOPEN OF THIS SOCKET IS A NEW UberSDR SESSION, AND IT STARTS ON THE MODE DEFAULTS.
+     *  UberSDR reads a session's opening state from the URL query and keeps the rest in the session
+     *  behind the socket (websocket.go: `frequency` ~535, `mode` ~552, `bandwidthLow`/`High`
+     *  ~650-672 applied ~779, `min_snr`/`min_power` ~683-700, `min_margin` ~463). Squelch, the SNR
+     *  gate, server NR, AGC and mute arrive as live messages and live only for THAT socket.
+     *  ★★ And it is reopened constantly, invisibly: the opus sample-rate flip cycle in openWs (any
+     *     AM↔USB style mode change), the watchdog/revive, an engine restart, every network drop.
+     *     4530cb06 put frequency+mode back on the URL; the rest was still lost silently while the
+     *     UI kept showing the listener's own setting.
+     *  ★ So we remember what we last SENT — captured in sendRawCommand/sendWsJson, the two places
+     *    every audio-socket command passes — put on the reopen URL what the server accepts there,
+     *    and replay the remainder on the FIRST AUDIO PACKET (a 101 is not proof of a live session;
+     *    a send into the handshake window is lost with no error). iOS parity: VibePowerModule
+     *    noteSessionCommand / replaySessionCommands. NOT tested on a receiver yet (2026-09-22). */
+    private val wsSessionCmds = java.util.concurrent.ConcurrentHashMap<String, String>()
+    @Volatile private var wsSessionBwLow: Long? = null
+    @Volatile private var wsSessionBwHigh: Long? = null
+    @Volatile private var wsSessionMinSnr: Double? = null
+    /** Armed on every (re)open, spent by the first audio packet — the old iOS `wsNeedsTuneAssert`
+     *  point, which is the only moment the session is known to be real. */
+    @Volatile private var wsNeedsStateReplay = false
     private var currentBase = ""
     private var currentUuid = ""
     // Bypass password (rate-limit/ban bypass) — appended to the audio WS URL
@@ -1221,8 +1243,56 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     }
 
     fun sendRawCommand(json: String) {
+        // ★★ Record BEFORE the socket check: a command sent while the socket is down is exactly the
+        //    one that must survive to the next one, and `ws ?: return` drops it silently.
+        noteSessionCommand(json)
         val sock = ws ?: return
         sock.send(json)
+    }
+
+    /* ★★★ THE SESSION STATE IS WHAT WE LAST SAID, NOT A NEW API. Captured here rather than by
+     *  asking JS to re-send on reconnect: JS does not know when native reopens this socket (the
+     *  sr-flip cycle and the watchdog are native-only), and a second source of truth for socket
+     *  state is how two stale copies of the tune ended up fighting over one dial (see _routeTune in
+     *  UberSDRWsClient.ts).
+     *  ★★ Only UberSDR's `/ws?` audio socket reaches here — a VibeServer serves /ws/audio through
+     *     LocalAudioPlayer and never opens this one — so nothing here can move a shared dial. And
+     *     nothing here replays a `tune`: frequency and mode ride the URL (see wsUrl). */
+    private fun noteSessionCommand(json: String) {
+        val obj = try { JSONObject(json) } catch (_: Exception) { return }
+        when (val type = obj.optString("type")) {
+            "tune" -> {
+                // Frequency/mode live in currentFreq/currentMode and go out on the URL. A `tune`
+                // carrying filter edges is sendBandwidth — that half we must keep.
+                if (obj.has("bandwidthLow") && obj.has("bandwidthHigh")) {
+                    wsSessionBwLow = obj.optLong("bandwidthLow")
+                    wsSessionBwHigh = obj.optLong("bandwidthHigh")
+                }
+            }
+            "set_audio_gate" -> {
+                if (obj.has("min_snr")) wsSessionMinSnr = obj.optDouble("min_snr")
+                wsSessionCmds[type] = json
+            }
+            "set_squelch", "set_agc", "set_dsp", "set_dsp_params", "set_mute", "set_min_margin" ->
+                wsSessionCmds[type] = json
+            // ★ `ping`, `get_dsp_filters` and the rest are one-shot questions, not state. An
+            //   unrecognised command is deliberately NOT remembered: guessing what is state is
+            //   worse than a known gap.
+            else -> {}
+        }
+    }
+
+    /** Replay what the URL could not carry, once per socket, from the first audio packet. */
+    private fun replaySessionCommands() {
+        val sock = ws ?: return
+        // ★ Fixed order, not map order: `set_dsp_params` means nothing until `set_dsp` has chosen
+        //   the filter the params belong to.
+        var n = 0
+        for (type in arrayOf("set_mute", "set_agc", "set_squelch", "set_audio_gate",
+                             "set_min_margin", "set_dsp", "set_dsp_params")) {
+            wsSessionCmds[type]?.let { sock.send(it); n++ }
+        }
+        if (n > 0) Log.i(TAG, "replayed $n session command(s) on the new audio WS")
     }
 
     fun revive() {
@@ -1297,6 +1367,27 @@ class VibeStreamService : MediaBrowserServiceCompat() {
          *  default — FT8 audio under an MW readout (Stuart, on both his Mac and iPhone). No shared
          *  dial exists there to protect. Mirror of VibePowerModule.audioWsURL(). */
         if (currentFreq > 0) url += "&frequency=$currentFreq&mode=$currentMode"
+        /* ★★★ AND THE FILTER, FOR THE SAME REASON THE FREQUENCY IS HERE. The server reads
+         *  `bandwidthLow`/`bandwidthHigh` from this query (websocket.go ~650-672) and applies them
+         *  as ONE command with the channel create (~779 — radiod's per-channel queue holds a single
+         *  entry, which is why it must be one). Sent afterwards as a message it still lands, but the
+         *  session opens on the mode default first, and if the socket dies before we send it a
+         *  custom filter is simply gone while the UI still shows it.
+         *  ★★ `min_snr` joins it because it is a query parameter too (~683) and a gate that opens
+         *     late is audible. Everything else is replayed (replaySessionCommands).
+         *  ★ Wide-IQ modes ignore URL bandwidth server-side (~677), so there is no case to add.
+         *  ★ Mirror of VibePowerModule.audioWsURL() — one rule, two readers: change both or neither. */
+        val bwl = wsSessionBwLow; val bwh = wsSessionBwHigh
+        /* ★★★ ONLY WITHIN ±12000 Hz. UberSDR does not ignore an out-of-range bandwidth on the URL —
+         *  it REFUSES THE WHOLE CONNECTION and returns (websocket.go:648-666), so a remembered wide
+         *  filter would cost the listener all audio, which is far worse than the mode default this
+         *  exists to preserve. Out of range: leave it off. (A bypass password lifts the limit server
+         *  side, but we cannot know that here.) Mirror of VibePowerModule.audioWsURL(). */
+        if (bwl != null && bwh != null &&
+            kotlin.math.abs(bwl) <= 12_000L && kotlin.math.abs(bwh) <= 12_000L)
+            url += "&bandwidthLow=$bwl&bandwidthHigh=$bwh"
+        // -999 is the server's "disabled", which is also its default — nothing to restate.
+        wsSessionMinSnr?.let { if (it > -999) url += "&min_snr=$it" }
         // ★★★ NAME OURSELVES HERE TOO, BECAUSE THIS SOCKET USUALLY ARRIVES FIRST. The JS client
         //     delays the spectrum socket a second to let the session register, so it is THIS one
         //     that claims the occupant slot — and it was anonymous, so the server stamped an empty
@@ -1332,6 +1423,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         Log.i(TAG, "opening audio WS: $url")
         wsBaseSr = 0
         srFlipCount = 0
+        wsNeedsStateReplay = true
         val socket = client.newWebSocket(Request.Builder().url(url).build(),
             object : WebSocketListener() {
                 override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
@@ -1339,6 +1431,17 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     packetCount++
                     lastPacketAt = SystemClock.elapsedRealtime()
                     if (packetCount <= 3) Log.i(TAG, "ws pkt#$packetCount len=${bytes.size}")
+                    /* ★★★ THE FIRST PACKET IS THE ONLY PROOF THE SESSION IS REAL — a 101 is equally
+                     *  true of a socket the server is about to drop, and a send into that window is
+                     *  lost with no error. So the session state the URL could not carry is replayed
+                     *  here, and nowhere else.
+                     *  ★★ This is NOT a tune and does not become one: frequency/mode ride the URL
+                     *     and replaySessionCommands never sends one. Squelch/gate/NR/AGC/mute are
+                     *     per-listener settings on UberSDR's own VFO — no shared dial moves. */
+                    if (wsNeedsStateReplay) {
+                        wsNeedsStateReplay = false
+                        replaySessionCommands()
+                    }
                     // Header rate flip → server encoder mismatched, cycle WS
                     if (bytes.size > HEADER_LEN) {
                         val sr = (bytes[8].toInt() and 0xFF) or ((bytes[9].toInt() and 0xFF) shl 8) or
@@ -1423,7 +1526,11 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     }
 
     private fun sendWsJson(obj: JSONObject) {
-        ws?.send(obj.toString())
+        val s = obj.toString()
+        // ★ The other door into this socket — sendBandwidth comes through here, and the filter is
+        //   the setting a reopen loses most visibly. See noteSessionCommand.
+        noteSessionCommand(s)
+        ws?.send(s)
     }
 
     // ── Watchdog (zombie-socket revive, iOS parity) ──────────────────────────
