@@ -11,6 +11,7 @@ import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { SpectrumClient, MODE_BANDWIDTHS, type SDRMode, type DabState } from './spectrum';
 import { AudioPlayer } from './audio';
 import { initMobileControls } from './mobile';
+import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
 import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken,
          type AuthState } from './auth';
@@ -2018,6 +2019,20 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   // ★★ So a gesture on the gate HOLDS it up until the gesture is over. This is not a delay for
   //    appearance's sake: the overlay is the only thing standing between that click and the dial.
   let gateGestureActive = false;
+  // ★★★ THE GATE IS NOW SHOWN TO EVERY BROWSER, not only the ones that need unlocking. It was
+  //     conditional on `audio.suspended`, so a browser that allows audio never saw it — and it is
+  //     the one screen every listener passes through, which makes it the only place a "View
+  //     tutorial" button can live and be found (Stuart: "we use the start audio screen ... for ALL
+  //     browsers regardless of if they need it or not").
+  // ★★ TWO REASONS TO BE UP, ONE WAY DOWN. `gateDismissed` covers the welcome half — pressed once
+  //    and it is done for this page — while `audio.suspended` still governs on its own, so the
+  //    gate can come BACK later if something suspends the context again, exactly as before.
+  //    Without the second half a browser that suspends after the first press would be silent with
+  //    nothing on screen to say so.
+  let gateDismissed = false;
+  /** ★ Set by the gesture that presses the tutorial button, acted on once the gate is off screen:
+   *  the tour points at controls the gate is covering, so it cannot start while it is up. */
+  let gateWantsTutorial = false;
   const kick = () => { void (async () => { await audio?.resume(); showAudioGate(); })(); };
   for (const ev of ['pointerdown', 'keydown', 'focus'] as const) {
     window.addEventListener(ev, kick);
@@ -2037,8 +2052,21 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   // ★ It disappears the moment audio runs, and never appears at all where the browser allows
   //   audio without a gesture.
   function showAudioGate() {
-    const need = !!audio && audio.suspended && !NO_AUDIO;
+    const needAudio = !!audio && audio.suspended && !NO_AUDIO;
+    const need = needAudio || !gateDismissed;
     let el = document.getElementById('audioGate');
+    // ★ The wording has to follow the reason. A browser that does not need a gesture is not being
+    //   told "your browser needs a click" — that is untrue and reads as a fault. Refreshed on
+    //   every tick rather than fixed at creation, because a context can suspend while the gate is
+    //   already up and the line would then be stale.
+    if (el) {
+      const w = el.querySelector('#audioGateWhy');
+      if (w) {
+        w.textContent = needAudio
+          ? 'Your browser needs a click before it will play audio'
+          : 'Press anywhere to start listening';
+      }
+    }
     // ★ Never mid-gesture — see gateGestureActive. The pointerup that follows is swallowed by the
     //   overlay's own handler, which then takes it down.
     if (!need) {
@@ -2046,6 +2074,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         el.remove();
         // ★ Anything held back while the gate covered the screen can be said now.
         vtsPumpNotices();
+        // ★★ AND ONLY NOW THE TOUR. Started from inside the gate's own handler it would have lit
+        //    up controls behind a full-screen shield, and its "tap outside ends it" would have
+        //    been armed under an overlay that eats every pointer event.
+        if (gateWantsTutorial) { gateWantsTutorial = false; startTutorial(); }
       }
       return;
     }
@@ -2055,6 +2087,11 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     //    a listener reads that as a broken radio rather than as something to click. Dimming the
     //    spectrum says "not started yet" before a word is read, and puts the one action needed in
     //    the middle of the screen where it cannot be missed (Stuart, 2026-08-08, after UberSDR).
+    // ★★ A TOUR CANNOT RUN BEHIND THE SHIELD. If the context suspends again mid-tutorial the gate
+    //    comes back over the very controls the tour is pointing at, and every pointer event is
+    //    swallowed — so the panel would be unreachable and its Escape the only way out. End it
+    //    cleanly instead; the button on this gate is right there to start it again.
+    endTutorial();
     el = document.createElement('div');
     el.id = 'audioGate';
     el.style.cssText = 'position:fixed;inset:0;z-index:60;display:flex;flex-direction:column;'
@@ -2070,11 +2107,28 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       + 'border:1px solid var(--amber,#ffb000);box-shadow:0 0 24px rgba(255,176,0,.25)';
 
     const why = document.createElement('div');
-    why.textContent = 'Your browser needs a click before it will play audio';
+    why.id = 'audioGateWhy';
+    why.textContent = needAudio
+      ? 'Your browser needs a click before it will play audio'
+      : 'Press anywhere to start listening';
     why.style.cssText = 'font:11px/1.5 ui-monospace,monospace;letter-spacing:.06em;'
       + 'color:var(--amber,#ffb000);opacity:.7;text-align:center;padding:0 1em';
 
     el.appendChild(btn); el.appendChild(why);
+
+    // ★★★ THE ONE WAY IN TO THE TOUR, AND IT IS ALWAYS HERE. Nothing runs the tutorial by itself
+    //     — a tour that opens uninvited on a receiver somebody arrived at from a link is an
+    //     obstacle, not help. Equally it is never taken away: the listener most likely to want it
+    //     is the one who skimmed it the first time, so having seen it only changes the WORDING.
+    const tut = document.createElement('button');
+    tut.type = 'button';
+    tut.id = 'gateTutBtn';
+    tut.textContent = tutorialSeen() ? 'View tutorial again' : 'View tutorial';
+    tut.style.cssText = 'font:11px/1 ui-monospace,monospace;letter-spacing:.14em;'
+      + 'padding:9px 22px;border-radius:8px;cursor:pointer;margin-top:4px;'
+      + 'color:var(--amber,#ffb000);background:transparent;opacity:.85;'
+      + 'border:1px solid rgba(255,176,0,.55)';
+    el.appendChild(tut);
 
     // ★★ WEBKIT IS TOLD ABOUT WEBKIT. Safari — and every browser on iOS, which is WebKit
     //    underneath whatever it is called — can leave the AudioContext "running" with a frozen
@@ -2136,7 +2190,15 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         if (ev === 'wheel' || ev === 'dblclick') e.preventDefault();   // scroll/zoom, not a gesture
         // Hold the shield up from the first press of the gesture...
         if (ev === 'pointerdown' || ev === 'mousedown' || ev === 'touchstart') gateGestureActive = true;
-        if (kickers.has(ev)) kick();
+        // ★★ THE TUTORIAL BUTTON IS NOTED HERE, NOT LISTENED FOR ON THE BUTTON. The gate's own
+        //    handlers are CAPTURED on the overlay and call stopImmediatePropagation, so a click
+        //    listener on the button inside it would never run — that is the whole point of the
+        //    shield. Reading the target instead keeps the swallow intact: the press still resumes
+        //    audio and still takes the gate down, it just also remembers where it landed.
+        if ((e.target as Element | null)?.closest?.('#gateTutBtn')) gateWantsTutorial = true;
+        // ★ A press anywhere is the welcome screen's answer. Audio still has its own say — see
+        //   `need` above — so this dismisses the WELCOME, not the audio gate.
+        if (kickers.has(ev)) { gateDismissed = true; kick(); }
         // ...and only let it go once the gesture is finished, on the NEXT tick so the rest of this
         // gesture is still swallowed by an overlay that is still there.
         if (ev === 'click' || ev === 'pointerup' || ev === 'mouseup' || ev === 'touchend') {
@@ -12046,10 +12108,16 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
     const auto = document.getElementById('dsAutoNote');
     const seg  = document.getElementById('dsSeg');
     if (dsUnneeded && note) {
-      note.innerHTML = 'This radio has an <b>upconverter built in</b>, so it already hears HF, medium wave '
-                     + 'and long wave through the tuner. <b>Direct sampling is not needed</b> &mdash; leaving '
-                     + 'it off is correct here. Switching it on bypasses the tuner and takes the gain controls '
-                     + 'with it.';
+      /* ★★ NAME THE RADIO. "This radio has an upconverter" is true of the one in front of them but
+       *  reads like general theory; the model they can see printed on the dongle is what makes it
+       *  land as a statement about THEIR receiver (Stuart, 2026-09-22). caps.model is the USB
+       *  descriptor, so it is the hardware's own word — escaped, because it is device-supplied. */
+      const esc = (s: string) => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] || c));
+      const name = esc(String(caps?.model || '').trim()) || 'an RTL-SDR Blog V4';
+      note.innerHTML = `This radio is <b>${name}</b> and does <b>not require direct sampling</b>: it has an `
+                     + 'up-converter built in, so short wave, medium wave and long wave already arrive through '
+                     + 'the tuner. Leaving it off is correct here &mdash; switching it on bypasses the tuner '
+                     + 'and takes the gain controls with it.';
     }
     if (auto) {
       const mhz = (n: number) => (n / 1e6).toFixed(3).replace(/\.?0+$/, '');
