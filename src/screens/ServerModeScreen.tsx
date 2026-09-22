@@ -1145,7 +1145,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         // ★ Not gated on `advanced`: what this aerial is good for is a property of the RADIO,
         //   like the resting gain, not of sharing — see the note in VibeServerBoot.
         blockedModes, dabRateBoost,
-        ...(isLite ? { dabScanLabels, startOnBoot } : {}),
+        ...(isLite ? { dabScanLabels } : {}),
+        startOnBoot,
         // ★ The rest of the server's settings — the phone runs the same server, one radio at a
         //   time, so everything the desktop can set is set from here.
         sessionLimitSoft: live.current.limitSoft,
@@ -2388,7 +2389,15 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 ★★ NOT the Linux "release when idle", which hands the dongle to another program:
                    Android's permission model means nothing else can pick it up anyway, so
                    releasing would cost the restart and buy nothing (Stuart, 2026-08-19). */}
-            {isLite && (<>
+            {/* ★★★ NOT LITE-ONLY ANY MORE. This was a TV switch on the premise that a phone
+                cannot come back by itself — "a phone's OTG stack generally does not enumerate a
+                dongle attached while it was off". The XCover disproved it on 2026-09-22: it
+                cold-booted with the dongle in, enumerated it, and the attach intent launched us.
+                A phone in a garage has the same problem a TV does and nobody walks to it either.
+                ★ The switch is the only thing that makes the resume legal — see MainActivity
+                  .resumeServerIfWanted(). Without it in the config, bootWanted() read the TV
+                  default, which is false on a phone, and the resume could never fire. */}
+            {(<>
               <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WHEN THIS DEVICE STARTS</Text>
               <View style={[styles.card, { borderColor: C.border }]}>
                 <View style={styles.rowBetween}>
@@ -2402,7 +2411,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
                   {startOnBoot
                     ? 'After a power cut or a restart the server comes back on its own, if it was running before. '
-                      + 'Turn this off if it gets in the way of using the TV. Takes effect from the next Start.'
+                      + (isLite ? 'Turn this off if it gets in the way of using the TV. ' : 'It needs the radio to be '
+                         + 'plugged in when the device starts, and "use by default for this device" ticked when you '
+                         + 'first allowed it. ')
+                      + 'Takes effect from the next Start.'
                     : 'The server waits for you to open this app and press Start after a restart.'}
                 </Text>
               </View>

@@ -156,6 +156,21 @@ export type VibeServerConfig = {
    *  reboot. TypeScript only reports the FIRST unknown property of an object literal, which is why
    *  this read as one stray field rather than seven.
    *  ★ Exactly the shape AGENTS.md warns about: written, never read, and silent about it. */
+  /** ★★ Pause the radio below this battery percentage, and resume above `batteryResumeAt` — the
+   *  phone-server settings, read natively by VibeServerBoot (setBatteryPolicy). 0 = never pause.
+   *  ★ Undeclared until 2026-09-22, like `rawIqLanMaxHz` below: both were being sent and both were
+   *    being read, and neither was named here. They surfaced the moment a NEW field made this
+   *    literal check properly — which is the trap the note further down already describes, that
+   *    TypeScript reports only the FIRST unknown property of an object literal. */
+  batteryPauseAt?: number;
+  batteryResumeAt?: number;
+  /** ★ Raw-IQ span cap for LAN listeners, Hz. 0 = the general `rawIqMax`. */
+  rawIqLanMaxHz?: number;
+  /** ★★★ COME BACK BY YOURSELF AFTER A POWER CUT — armed server AND this switch, both, read
+   *  natively by VibeServerRestore.bootWanted(). It was sent only by the Lite/TV build, so on the
+   *  full app bootWanted() fell through to its default (on for a TV, OFF for a phone) and no phone
+   *  could ever resume. The switch is now offered on both, and read on both. */
+  startOnBoot?: boolean;
   /** Crystal correction in ppm. Absent = leave the radio alone. */
   ppm?: number;
   /** Manual direct sampling: 0 off, 1 I branch, 2 Q branch. */

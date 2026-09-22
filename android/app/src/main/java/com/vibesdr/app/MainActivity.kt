@@ -37,7 +37,39 @@ class MainActivity : ReactActivity() {
   }
 
   private fun noteUsbLaunch(intent: Intent?) {
-    if (intent?.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) usbLaunchPending = true
+    if (intent?.action != UsbManager.ACTION_USB_DEVICE_ATTACHED) return
+    usbLaunchPending = true
+    resumeServerIfWanted()
+  }
+
+  /**
+   * ★★★ PUT THE SERVER BACK WHEN THE RADIO COMES BACK — the other half of removing the attach
+   * prompt, and the half that actually restarts anything.
+   *
+   * ★★ VibeServerRestore's own comment says the boot case is hopeless, because "Android's OTG
+   *    stack never enumerates a dongle that was attached while the phone was off". The XCover
+   *    (Android 11) disproved it on 2026-09-22: its battery died, it cold-booted with the dongle
+   *    in, and the attach intent arrived and launched us. So the main app gets a boot path after
+   *    all — not through BOOT_COMPLETED, which the Lite/TV build uses, but through the attach
+   *    itself, which is STRONGER EVIDENCE: it does not fire until the dongle is really enumerated,
+   *    so there is no waiting and no race with the USB stack. A phone whose OTG stack genuinely
+   *    does not enumerate on boot simply never gets here, and nothing is promised to it.
+   * ★★ THE OWNER'S SWITCH GOVERNS, NOT THE ATTACH. bootWanted() is armed-AND-startOnBoot, so a
+   *    server stopped on purpose stays stopped and someone who has never asked for start-on-boot
+   *    gets nothing. Plugging a dongle into a phone must not silently start broadcasting from it.
+   * ★ Safe when the server is already up: the service's restore path refuses to double-open the
+   *   radio (isShimServing), and this is the same EXTRA_RESTORE the sticky restart and the update
+   *   receiver use — one restore path, not a fourth.
+   */
+  private fun resumeServerIfWanted() {
+    if (!VibeServerRestore.bootWanted(this)) return
+    val svc = Intent(this, RtlTcpServerService::class.java)
+        .putExtra(RtlTcpServerService.EXTRA_RESTORE, true)
+    try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(svc) else startService(svc)
+    } catch (t: Throwable) {
+      android.util.Log.w("MainActivity", "could not resume the server on attach: $t")
+    }
   }
 
   /**
