@@ -594,11 +594,17 @@ export default function ServerModeScreen({ navigation, route }: Props) {
    *  opened this screen to LOOK at a running server. Read only by the unmount teardown below. */
   const keepServingRef = useRef(!!(route.params as any)?.keepOnExit);
 
+  /** ★ Bumped to run the load again — see the retry note on prefsError. */
+  const [prefsTry, setPrefsTry] = useState(0);
   // Load saved preferences + name.
   useEffect(() => {
-    (async () => {
+    let cancelled = false;
+    /* ★ The whole read as one retryable unit — see the catch at the end. */
+    const load = async (attempt: number): Promise<void> => {
       const n = await getServerName(route.params?.name ?? 'VibeSDR');
+      if (cancelled) return;
       setName(n);
+      setPrefsError(null);
       try {
         /* ★★ POSITIONAL, so a name added here must land in the SAME place as its getItem below.
          *   glk/gsp sit immediately after gl because that is where their reads were inserted —
@@ -726,10 +732,26 @@ export default function ServerModeScreen({ navigation, route }: Props) {
          *  ★★ AND THE REAL DAMAGE WAS THE NEXT SAVE: starting the server would have written those defaults over
          *     the settings that were still there, turning a failed read into a genuine loss. Now the screen says
          *     so and refuses to persist until it has actually read them — see prefsRead. */
-        setPrefsError(e?.message ? String(e.message) : 'the settings could not be read');
+        /* ★★★ AND TRY AGAIN BEFORE GIVING UP, because this failure is TRANSIENT BY NATURE. What
+         *  fails is opening AsyncStorage's SQLite while something else still holds it — an
+         *  unflushed write-ahead log after an unclean shutdown, which is exactly the state a TV
+         *  box is in when it has just been rebooted or had the power pulled. Seconds later it
+         *  opens perfectly. The screen was declaring permanent defeat on a lock that clears
+         *  itself, and it happened on the Sony twice (2026-09-20, 2026-09-22).
+         *  ★★ AND ITS ADVICE WAS IMPOSSIBLE TO FOLLOW THERE. "Close the app and open it again" —
+         *     on a TV with no recents and, until today, no close button (see the Cancel note far
+         *     below), that instruction could not be carried out by any means the remote has.
+         *  ★ Three goes, widening: a lock that is going to clear does so in a second or two, and
+         *    a lock that is not going to clear is not helped by hammering it. Only after the last
+         *    one does the banner appear — and it now offers to try again, rather than naming an
+         *    action the device may not be able to perform. */
+        if (attempt < 2 && !cancelled) { await new Promise(r => setTimeout(r, 800 * (attempt + 1))); return load(attempt + 1); }
+        if (!cancelled) setPrefsError(e?.message ? String(e.message) : 'the settings could not be read');
       }
-    })();
-  }, []);
+    };
+    void load(0);
+    return () => { cancelled = true; };
+  }, [prefsTry]);
 
   /* ★★★ LEAVING STOPS THE SERVER — UNLESS YOU ASKED IT NOT TO.
    *
@@ -1589,9 +1611,18 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           <View style={{ borderLeftWidth: 3, borderLeftColor: '#ff8a7d', paddingLeft: 10, marginBottom: 12 }}>
             <Text style={[styles.hint, { color: '#ff8a7d', fontFamily: F, marginBottom: 0 }]}>
               {`Your saved settings could not be read (${prefsError}). What you see below are DEFAULTS — your `
-               + `settings are still stored on this device, so do not start the server until this is fixed, or `
-               + `they will be overwritten. Closing and reopening the app usually clears it.`}
+               + `settings are still stored on this device and have not been touched, so do not start the `
+               + `server until this is fixed, or they will be overwritten.`}
             </Text>
+            {/* ★★ AN ACTION, not an instruction the device may be unable to carry out. It already
+                retried three times on its own; this is for the case where something was genuinely
+                holding the database and has since let go. */}
+            <TouchableOpacity onPress={() => setPrefsTry((n) => n + 1)}
+                              style={{ marginTop: 8, alignSelf: 'flex-start', paddingVertical: 6,
+                                       paddingHorizontal: 14, borderWidth: 1, borderColor: '#ff8a7d',
+                                       borderRadius: 6 }}>
+              <Text style={{ color: '#ff8a7d', fontFamily: F, fontSize: 14 }}>↻ Try reading them again</Text>
+            </TouchableOpacity>
           </View>
         )}
         <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WHAT THIS DEVICE CAN CARRY</Text>
