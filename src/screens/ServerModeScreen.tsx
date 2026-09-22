@@ -2947,8 +2947,20 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           </TouchableOpacity>
         )}
 
-        <TouchableOpacity style={[styles.stopBtn, { borderColor: C.border }]} onPress={() => navigation.goBack()}>
-          <Text style={{ color: C.gold, fontFamily: F, fontSize: 15 }}>‹ Cancel</Text>
+        {/* ★★★ ON LITE THIS IS THE ONLY SCREEN, so "Cancel" went back to nowhere: goBack() on the
+            root of the stack does nothing at all, and the button sat there looking like the way
+            out while being the one thing on the page that could not act. On a phone you would
+            never notice — you leave with the system back gesture or by swiping the app away.
+            ★★ A TV HAS NEITHER. Stuart, 2026-09-22: "on the sony TV there is no multitasking
+               anymore so I cannot close the app". No recents to swipe, and back on the root of a
+               single-screen app just sits there — so the app could not be closed by any means the
+               remote has. The running screen has had "Stop server & close app" all along; the
+               screen you are on BEFORE you start had nothing.
+            ★ So on Lite it closes the app and says so. Nothing is running at this point — this is
+              the pre-start screen — so there is no server to stop and no warning to give. */}
+        <TouchableOpacity style={[styles.stopBtn, { borderColor: C.border }]}
+          onPress={() => { if (isLite) BackHandler.exitApp(); else navigation.goBack(); }}>
+          <Text style={{ color: C.gold, fontFamily: F, fontSize: 15 }}>{isLite ? '✕ Close app' : '‹ Cancel'}</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
