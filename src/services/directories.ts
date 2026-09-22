@@ -32,7 +32,13 @@ export const DIRECTORIES: DirectoryMeta[] = [
     kinds: ['vibeserver'] },
   { id: 'ubersdr',     name: 'UberSDR',     desc: 'Official UberSDR instances',                 kinds: ['ubersdr'] },
   { id: 'receiverbook', name: 'Receiverbook', desc: 'OpenWebRX + KiwiSDR (receiverbook.de)',     kinds: ['owrx', 'kiwi'] },
-  { id: 'kiwisdr',     name: 'KiwiSDR',     desc: 'Public KiwiSDR network (kiwisdr.com)',        kinds: ['kiwi'] },
+  /* ★★★ NAME THE SOURCE WE ACTUALLY FETCH (2026-09-22). This said "(kiwisdr.com)", which is where
+   *  the list ORIGINATES but not where we read it — and John Seamons, seeing that line in a
+   *  screenshot, reasonably asked whether every client was hitting kiwisdr.com directly: "that's
+   *  very bad and you need to be following a different procedure". We read linkfanel's public
+   *  snapshot (KIWI_LIST_URL below), once, when this directory is opened. A label that misnames a
+   *  data source is a claim about somebody else's server, so it has to be exact. */
+  { id: 'kiwisdr',     name: 'KiwiSDR',     desc: 'Public KiwiSDR list (rx.linkfanel.net snapshot)', kinds: ['kiwi'] },
   { id: 'fmdx',        name: 'FM-DX',       desc: 'FM-DX Webserver network (servers.fmdx.org)',  kinds: ['fmdx'] },
   // SpyServer directory listing DELIBERATELY NOT shown (2026-07-09). The public
   // directory is 219 random hobbyist servers, most full/unreachable/session-
