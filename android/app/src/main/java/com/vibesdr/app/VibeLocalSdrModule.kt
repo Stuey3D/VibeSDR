@@ -71,9 +71,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     private fun isHackRf(dev: UsbDevice): Boolean =
         dev.vendorId == HACKRF_VID && dev.productId == HACKRF_PID
 
+    /** ★ An Airspy R2 or Mini (2026-09-22) — see AIRSPY_VID. */
+    private fun isAirspy(dev: UsbDevice): Boolean =
+        dev.vendorId == AIRSPY_VID && dev.productId == AIRSPY_PID
+
     /** Any radio we can open directly over USB. */
     private fun isSupportedRadio(dev: UsbDevice): Boolean =
-        isRtlSdr(dev) || isAirspyHf(dev) || isHackRf(dev)
+        isRtlSdr(dev) || isAirspyHf(dev) || isHackRf(dev) || isAirspy(dev)
 
     private fun describe(dev: UsbDevice, hasPermission: Boolean): WritableMap {
         val m = Arguments.createMap()
@@ -100,6 +104,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
          * assumed there were only two. */
         m.putString("kind", when {
             isAirspyHf(dev) -> "airspyhf"
+            isAirspy(dev)   -> "airspy"
             isHackRf(dev)   -> "hackrf"
             else            -> "rtl"
         })
@@ -296,7 +301,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
          *  memory — and an RTL's 2.4 MS/s was restored onto an HF+ that tops out at 912 kHz. The
          *  serial (readable now that permission is granted) separates two of the same kind. */
         res.putString("radioKind", when {
-            isAirspyHf(dev) -> "airspyhf"; isHackRf(dev) -> "hackrf"; else -> "rtl" })
+            isAirspyHf(dev) -> "airspyhf"; isAirspy(dev) -> "airspy"
+            isHackRf(dev) -> "hackrf"; else -> "rtl" })
         res.putString("radioSerial", try { dev.serialNumber ?: "" } catch (_: SecurityException) { "" })
         promise.resolve(res)
     }
@@ -503,6 +509,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         val maker = (dev.manufacturerName ?: "").trim()
         val fallback = when {
             isAirspyHf(dev) -> "Airspy HF+"
+            isAirspy(dev)   -> "Airspy"      // ★ R2 or Mini — the board id at open says which
             isHackRf(dev)   -> "HackRF One"
             else            -> "RTL-SDR"
         }
@@ -1115,5 +1122,11 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         /** HackRF One — see isHackRf(). Mirrored in res/xml/device_filter.xml (DECIMAL there). */
         internal const val HACKRF_VID = 0x1d50
         internal const val HACKRF_PID = 0x6089
+
+        /** ★ Airspy R2 / Mini — ONE id for both models; the board id read at open tells them
+         *  apart (see airspy_source.cpp). Mirrored in device_filter.xml and in the engine's
+         *  start() dispatch: three copies of one fact, and they must agree. */
+        internal const val AIRSPY_VID = 0x1d50
+        internal const val AIRSPY_PID = 0x60a1
     }
 }

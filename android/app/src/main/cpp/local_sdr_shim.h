@@ -633,6 +633,13 @@ public:
                           int fftSize, double fftRate, const std::string& mode, std::string& err);
     int startHackRf(int index, double centerFreq, double sampleRate, int gainTenthDb,
                     int fftSize, double fftRate, const std::string& mode, std::string& err);
+    /** Airspy R2 / Mini — see airspy_source.h. Same shape as the HackRF pair above. */
+    int startAirspyCommon(int index, int fd, double centerFreq, double sampleRate, int gainTenthDb,
+                          int fftSize, double fftRate, const std::string& mode, std::string& err);
+    int startAirspy(int index, double centerFreq, double sampleRate, int gainTenthDb,
+                    int fftSize, double fftRate, const std::string& mode, std::string& err);
+    int startAirspyFd(int fd, double centerFreq, double sampleRate, int gainTenthDb,
+                      int fftSize, double fftRate, const std::string& mode, std::string& err);
     int startAirspyHf(int index, double centerFreq, double sampleRate, int gainTenthDb,
                       int fftSize, double fftRate, const std::string& mode, std::string& err);
     /** ★ Start an Airspy HF+ from a USB file descriptor — Android's only route in. Reached
@@ -741,6 +748,7 @@ public:
      *  device needing a power cycle. See the lockedRate note in hwinfo. */
     bool isAirspyHf() const;      // cancels + restarts the IQ stream (auto FFT size)
     bool isHackRf() const;        // EXPERIMENTAL — three manual gain stages, and no AGC at all
+    bool isAirspy() const;        // Airspy R2 / Mini — preset gain curves, its own stage AGCs
     void setFftRate(double fps);          // LIVE spectrum frame rate (power saving); audio unaffected
     void setDeemphasis(double tau);       // FM de-emphasis time constant (0=off, 50e-6, 75e-6)
     void setSquelch(bool on, float db);   // power-based audio squelch (dBFS)

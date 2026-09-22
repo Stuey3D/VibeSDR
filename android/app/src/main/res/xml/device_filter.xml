@@ -58,4 +58,5 @@
          never been tested against them and offering the app for a device it then refuses is
          worse than not offering at all. Mirrors VibeLocalSdrModule.HACKRF_VID/PID. -->
     <usb-device vendor-id="7504" product-id="24713" />  <!-- 0x1d50:0x6089 -->
+    <usb-device vendor-id="7504" product-id="24737" />  <!-- 0x1d50:0x60a1 — Airspy R2 / Mini -->
 </resources>

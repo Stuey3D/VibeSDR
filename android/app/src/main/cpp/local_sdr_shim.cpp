@@ -17,6 +17,7 @@
 #include "sdrplay_source.h"
 #include "airspyhf_source.h"
 #include "hackrf_source.h"
+#include "airspy_source.h"
 
 // Android builds the USB/librtlsdr local-hardware path; iOS builds only the
 // RTL-TCP path (no USB host SDR on iOS). The USB code stays compiled on iOS via a
@@ -4496,6 +4497,9 @@ struct LocalSdrShim::Impl {
      *   a list rather than becoming a special case, and it is deliberately LAST everywhere for
      *   the same reason it is last in detectRadios(). */
     std::unique_ptr<vibe::HackRfSource> hrf;
+    /** ★ Airspy R2 / Mini — a different library from the HF+ above (see airspy_source.h). */
+    std::unique_ptr<vibe::AirspySource> asp;
+    int aspIndex = -1;
     int  sdrpIndex = 0;
     int  ahfIndex  = 0;
     int  hrfIndex  = 0;
@@ -4558,6 +4562,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     bool useSdrplay() const { return (bool)sdrp; }
     bool useAirspyHf() const { return (bool)ahf; }
     bool useHackRf()   const { return (bool)hrf; }
+    bool useAirspy()   const { return (bool)asp; }
     std::vector<int> spyGains;             // device gain table (tenths dB)
     int lastGainTenthDb = -1;              // re-applied across a stream restart
 
@@ -5454,6 +5459,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         else if (useSdrplay()) { sdrp->setFrequency((double)hz); lastHwWriteAt.store(nowSecs(), std::memory_order_relaxed); }
         else if (useAirspyHf()) ahf->setFrequency((double)hz);
         else if (useHackRf())   hrf->setFrequency((double)hz);
+        else if (useAirspy())   asp->setFrequency((double)hz);
         // ★★★ HANDED OFF, NOT PERFORMED. This runs under modeMtx (see above, and
         //     flushPendingDongle() which calls it from the DSP loop itself), so doing the control
         //     transfer here blocked demodulation for its whole duration. Everything the rest of
@@ -13506,6 +13512,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (useAirspyHf()) {
             std::vector<double> out;
             const auto& rl = ahf->sampleRates();
+            for (size_t i = rl.size(); i-- > 0; ) out.push_back((double)rl[i]);
+            return out;
+        }
+        /* ★ An R2 does 2.5/10 MS/s and a Mini 3/6 — enumerated from the radio, never assumed. */
+        if (useAirspy()) {
+            std::vector<double> out;
+            const auto& rl = asp->sampleRates();
             for (size_t i = rl.size(); i-- > 0; ) out.push_back((double)rl[i]);
             return out;
         }
@@ -23125,6 +23138,12 @@ int LocalSdrShim::start(int fd, int vid, int pid,
         return startHackRfFd(fd, centerFreq, sampleRate, gainTenthDb,
                              fftSize, fftRate, mode, err);
     }
+    /* ★ Airspy R2 / Mini — one USB id for both; the board id read at open says which (2026-09-22).
+     *  Same id block as the HackRF above, a different product entirely. */
+    if (vid == 0x1d50 && pid == 0x60a1) {
+        return startAirspyFd(fd, centerFreq, sampleRate, gainTenthDb,
+                             fftSize, fftRate, mode, err);
+    }
     std::lock_guard<std::mutex> life(g_lifecycle);
     // ★★★ A RADIO WE ORPHANED IS NOT A RADIO THAT IS MISSING. If a previous stop left a reader
     //     thread we could not kill, this process still holds the dongle — libusb will refuse to
@@ -23499,6 +23518,116 @@ int LocalSdrShim::startHackRfCommon(int index, int fd,
     LocalSdrShim::applyDesiredDsp(impl);
     impl->startHotplugWatch();   // same silence watchdog as every other source
     LOGI("HackRF started (EXPERIMENTAL): index=%d center=%.0f rate=%.0f port=%d",
+         index, centerFreq, impl->sampleRate, chosen);
+    return chosen;
+}
+
+/* ── Airspy R2 / Mini ────────────────────────────────────────────────────────────────────────
+ * ★★ THE SAME TRIO AS THE HackRF ABOVE, on a different source class (airspy_source.h): the same
+ *    lifecycle, the same "tune to centre + offset at OPEN", and the same "the radio decides the
+ *    rate" snap. Kept as its own copy rather than a template so each radio's quirks stay visible.
+ */
+int LocalSdrShim::startAirspy(int index,
+                              double centerFreq, double sampleRate, int gainTenthDb,
+                              int fftSize, double fftRate, const std::string& mode,
+                              std::string& err) {
+    return startAirspyCommon(index, -1, centerFreq, sampleRate, gainTenthDb,
+                             fftSize, fftRate, mode, err);
+}
+
+int LocalSdrShim::startAirspyFd(int fd,
+                                double centerFreq, double sampleRate, int gainTenthDb,
+                                int fftSize, double fftRate, const std::string& mode,
+                                std::string& err) {
+    return startAirspyCommon(-1, fd, centerFreq, sampleRate, gainTenthDb,
+                             fftSize, fftRate, mode, err);
+}
+
+int LocalSdrShim::startAirspyCommon(int index, int fd,
+                              double centerFreq, double sampleRate, int gainTenthDb,
+                              int fftSize, double fftRate, const std::string& mode,
+                              std::string& err) {
+    std::lock_guard<std::mutex> life(g_lifecycle);
+    if (p) { LOGI("stale shim found on Airspy R2/Mini start — tearing down"); stopLocked(); }
+    auto* impl = new Impl();
+    impl->fftRate = fftRate;
+    impl->baseFftRate = fftRate;
+    /* ★ Apply the idle floor NOW, not on the first client event: with nobody connected at
+     *  start the engine otherwise runs at the base rate until somebody arrives and LEAVES —
+     *  which is how the floor measured 8.6 % after a DAB session and 19 % on a fresh launch. */
+    impl->recomputeEngineRate();
+    impl->rtlCenter.store(centerFreq);
+    impl->viewCenter.store(centerFreq);
+    impl->audioFreq.store(centerFreq);
+    impl->mode = mode.empty() ? "wfm" : mode;
+    impl->lastGainTenthDb = gainTenthDb;
+
+    impl->asp = std::make_unique<vibe::AirspySource>();
+    Impl* self = impl;
+    // ★ Samples arrive as cf32 from the source (it converts the radio's int8 once), so this is
+    //   the same float path the HF+ uses — no int16 round trip.
+    impl->asp->setSink([self](const float* iq, int n) {
+        self->lastIqAt.store(Impl::nowSecs(), std::memory_order_relaxed);
+        self->enqueueIqFloat(iq, n, /*blockIfFull=*/false);
+    });
+    /* ★★★ TUNE THE RADIO TO (LOGICAL CENTRE + OFFSET), exactly as the dongle's open path does —
+     *     `rtlCenter` above is the LOGICAL centre and everything else derives the physical DC from
+     *     it by adding hwOffsetHz(). Opening at the raw centre leaves the DC spike on the channel
+     *     until the first retune moves it, and it also puts the radio 250 kHz away from where the
+     *     rest of the server believes it is: the crop, the VFO offset and the waterfall labels all
+     *     assume the offset was applied at tune time.
+     *  ★★ Two tune paths again — this one and setFrequency() — and only one of them applying the
+     *     offset is the same "two readers, one updated" fault that has cost most of tonight. */
+    const double physCentre = centerFreq + impl->hwOffsetHz();
+    const bool opened = (fd >= 0)
+        ? impl->asp->openFd(fd, sampleRate, physCentre, gainTenthDb, err)
+        : impl->asp->open(index, sampleRate, physCentre, gainTenthDb, err);
+    if (!opened) { delete impl; return -1; }
+    /* ★ remembered so releaseRadio can reopen the same one. ★★ ON THE fd PATH THERE IS NOTHING
+     *   TO REMEMBER: the descriptor is single-use and libusb owns it now, so a reopen must come
+     *   back through Android with a fresh one. -1 records "not reopenable from here" rather than
+     *   leaving a stale index that would reopen the WRONG radio on a multi-radio host. */
+    impl->aspIndex = (fd >= 0) ? -1 : index;
+
+    // ★ THE RADIO DECIDES THE RATE. A saved preference from a different radio can easily be
+    //   below this one's 2 MSPS floor; open() has already snapped it, and the FFT size and
+    //   channel decimation must be built from what it actually got.
+    impl->sampleRate = (double)impl->asp->nearestRate(sampleRate);
+    impl->fftSize = fftSizeForRate(impl->sampleRate);
+    impl->startEngine();
+    impl->buildAudio();
+
+    if (!impl->asp->start(err)) {
+        impl->teardownAudio(); impl->rx.stop();
+        impl->asp->close(); delete impl; return -1;
+    }
+
+    int chosen = -1;
+    if (int want = g_vsPort.load(); want > 0) {
+        try { impl->listener = net::listen(bindHost(), want); chosen = want; }
+        catch (...) { impl->listener = nullptr; }
+    } else {
+        for (int p2 = 48000; p2 < 48050; p2++) {
+            try { impl->listener = net::listen(bindHost(), p2); chosen = p2; break; }
+            catch (...) { impl->listener = nullptr; }
+        }
+    }
+    if (!impl->listener) {
+        err = g_vsPort.load() > 0
+            ? "port " + std::to_string(g_vsPort.load()) + " is already in use — choose another"
+            : "no free port in 48000-48049";
+        impl->teardownAudio(); impl->rx.stop();
+        impl->asp->close(); delete impl; return -1;
+    }
+    impl->port = chosen;
+    impl->serverRunning.store(true);
+    impl->acceptThread = std::thread([impl]{ impl->acceptLoop(); });
+    impl->startDspThread();
+
+    p = impl;
+    LocalSdrShim::applyDesiredDsp(impl);
+    impl->startHotplugWatch();   // same silence watchdog as every other source
+    LOGI("Airspy R2/Mini started (EXPERIMENTAL): index=%d center=%.0f rate=%.0f port=%d",
          index, centerFreq, impl->sampleRate, chosen);
     return chosen;
 }
@@ -24516,6 +24645,15 @@ void LocalSdrShim::setGain(int gainTenthDb) {
         g_ovlSteps.store(0, std::memory_order_relaxed);
         p->queueHwGain(gainTenthDb);
         LOGI("gain (rtl_tcp): %.1f dB", gainTenthDb / 10.0);
+        return;
+    }
+    if (p->useAirspy()) {
+        /* ★ 0-21 preset positions on the linearity curve (or sensitivity, if the owner chose it);
+         *  negative = the radio's own LNA+mixer AGC. VibeAGC is RTL-only — see airspy_source.h. */
+        p->lastGainTenthDb = gainTenthDb;
+        p->asp->setGainTenthDb(gainTenthDb);
+        LOGI("gain (Airspy): %s", gainTenthDb < 0 ? "the radio's own AGC"
+                                                  : std::to_string(gainTenthDb / 10).c_str());
         return;
     }
     if (p->useSdrplay()) {
@@ -26476,6 +26614,7 @@ void LocalSdrShim::setFftRate(double fps) {
 }
 bool LocalSdrShim::isAirspyHf() const { return p && p->useAirspyHf(); }
 bool LocalSdrShim::isHackRf()   const { return p && p->useHackRf(); }
+bool LocalSdrShim::isAirspy()   const { return p && p->useAirspy(); }
 
 /**
  * ★★★ EVERYTHING THIS LOOP HAS LEARNED IS ABOUT ONE SIGNAL AT ONE FREQUENCY AT ONE SAMPLE RATE.
@@ -26901,6 +27040,9 @@ std::vector<int> LocalSdrShim::getTunerGains() {
     // offer and gain looks uncontrollable. (Stock clients just show a 0..29 dial.)
     if (p->useSpy()) return p->spyGains;
     if (p->useTcp()) return p->tcpGains;     // rtl_tcp header has no values → R820T table
+    /* ★ An Airspy R2/Mini has no discrete tuner table either: gain is a 0-21 PRESET curve across
+     *  three stages. The slider is drawn from those 22 positions — see AirspySource. */
+    if (p->useAirspy()) return vibe::AirspySource::gainListTenthDb();
     // ★ An RSP has NO discrete tuner-gain table to read: gain is an LNA state plus a
     // continuous IF gain reduction. The client's slider needs SOMETHING to offer, so present
     // a linear 0-49 dB scale — which is exactly the range setGainTenthDb maps onto IF
@@ -26983,6 +27125,25 @@ std::string LocalSdrShim::radioCapsJson() const {
         { const auto& rl = h.sampleRates();
           for (size_t i = 0; i < rl.size(); ++i) { if (i) j += ','; j += std::to_string(rl[i]); } }
         j += "]}";
+        return j;
+    }
+    if (p->useAirspy()) {
+        /* ★ WHAT AN R2/MINI REALLY HAS, so the panel draws that and nothing else: two preset
+         *  curves of 22 positions, three manual stages of 0-15, its own LNA and mixer AGCs,
+         *  bias-T and USB sample packing. No direct sampling (24-1800 MHz, no HF branch) and no
+         *  VibeAGC yet (RTL-only — Stuart, 2026-09-22). */
+        std::string j = ",\"radio\":{\"driver\":\"airspy\",\"model\":\"" + p->asp->model() + "\"";
+        j += ",\"serial\":\"" + p->asp->serial() + "\"";
+        j += ",\"gainPresets\":22,\"stageMax\":15";
+        j += ",\"curve\":\"" + std::string(p->asp->sensitivityCurve() ? "sensitivity" : "linearity") + "\"";
+        j += ",\"lnaAgc\":" + std::string(p->asp->lnaAgc() ? "true" : "false");
+        j += ",\"mixerAgc\":" + std::string(p->asp->mixerAgc() ? "true" : "false");
+        j += ",\"lna\":" + std::to_string(p->asp->lnaGain());
+        j += ",\"mixer\":" + std::to_string(p->asp->mixerGain());
+        j += ",\"vga\":" + std::to_string(p->asp->vgaGain());
+        j += ",\"biasT\":" + std::string(p->asp->biasTee() ? "true" : "false");
+        j += ",\"packing\":" + std::string(p->asp->packing() ? "true" : "false");
+        j += ",\"hasBiasT\":true,\"hasPacking\":true,\"noDirectSampling\":true}";
         return j;
     }
     if (!p->useSdrplay()) {

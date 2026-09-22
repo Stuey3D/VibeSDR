@@ -150,6 +150,7 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/mdns_responder.cpp"
     "${CPP_DIR}/sdrplay_source.cpp"
     "${CPP_DIR}/airspyhf_source.cpp"
+    "${CPP_DIR}/airspy_source.cpp"
     "${CPP_DIR}/hackrf_source.cpp"
     "${CPP_DIR}/spyserver/spyserver_client.cpp"
     "${CPP_DIR}/spyserver/spyserver_messages.cpp"
@@ -239,7 +240,13 @@ endif()
 #     is dlopen'd) self-contained on all three.
 # ★ Falls back to the system library when the prefix is absent, so a plain `cmake` on a dev box
 #   still configures exactly as before.
-set(VIBE_RTLSDR_PREFIX "/opt/vibe-rtlsdr")
+set(VIBE_RTLSDR_PREFIX "/opt/vibe-rtlsdr" CACHE PATH "Bundled librtlsdr prefix (the ARMv6 build points at its own)")
+# ★★ The ARMv6 scalar binary rides INSIDE the armhf package and finds ITS librtlsdr in a subdirectory,
+#    so its RPATH must say so from the moment it is linked — postinst copies it to /usr/bin as-is.
+set(VIBE_RPATH_SUBDIR "" CACHE STRING "Appended to lib/vibeserver in the binary's RPATH (\"/armv6\")")
+# ★★ A finished ARMv6 build to package alongside this one (armhf only): its `vibeserver` and
+#    librtlsdr go to lib/vibeserver/armv6, and postinst installs it on a CPU without NEON.
+set(VIBE_ARMV6_STAGE "" CACHE PATH "Directory holding an ARMv6 vibeserver + librtlsdr.so* to ship too")
 if(UNIX AND NOT APPLE AND EXISTS "${VIBE_RTLSDR_PREFIX}/lib/librtlsdr.so")
   set(VIBE_BUNDLED_RTLSDR ON)
   message(STATUS "librtlsdr: BUNDLED from ${VIBE_RTLSDR_PREFIX}")
@@ -334,6 +341,27 @@ if(EXISTS "${AHF_VENDOR}/airspyhf.c")
   endif()
   target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_AIRSPYHF VIBE_AIRSPYHF_HAS_FD)
   set(AIRSPYHF_VENDORED TRUE)
+endif()
+
+# ── libairspy: Airspy R2 / Mini (2026-09-22) ─────────────────────────────────
+# ★★ VENDORED UNMODIFIED and permissive — airspy.c/.h/commands BSD-3, iqconverter*/filters MIT
+# (libairspy/LICENSE); the credits carry both notices. A DIFFERENT library from libairspyhf, for
+# different radios. Upstream already has airspy_open_fd(), so there is no patch to keep visible.
+# ★ Same arrangement as the HF+ block above: our copy, both platforms, one place to fix.
+set(AIRSPY_VENDOR "${CPP_DIR}/libairspy")
+if(EXISTS "${AIRSPY_VENDOR}/airspy.c")
+  message(STATUS "libairspy: vendored at ${AIRSPY_VENDOR}")
+  target_sources(vibeserver_core PRIVATE
+    "${AIRSPY_VENDOR}/airspy.c"
+    "${AIRSPY_VENDOR}/iqconverter_float.c"
+    "${AIRSPY_VENDOR}/iqconverter_int16.c")
+  target_include_directories(vibeserver_core PUBLIC "${AIRSPY_VENDOR}")
+  find_path(LIBUSB_INC_AS libusb.h PATH_SUFFIXES libusb-1.0
+            HINTS /opt/homebrew/include /usr/local/include /usr/include)
+  if(LIBUSB_INC_AS)
+    target_include_directories(vibeserver_core PRIVATE "${LIBUSB_INC_AS}")
+  endif()
+  target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_AIRSPY)
 endif()
 
 # ── libhackrf: HackRF One (EXPERIMENTAL — this is the DESKTOP half) ───────────
@@ -508,8 +536,15 @@ if(UNIX AND NOT APPLE)
     #     resolves to /usr/lib/vibeserver wherever the package is unpacked — and it is searched
     #     BEFORE the default paths, so our copy wins over the distribution's without replacing it.
     set_target_properties(vibeserver PROPERTIES
-      INSTALL_RPATH "$ORIGIN/../lib/vibeserver"
-      BUILD_WITH_INSTALL_RPATH FALSE)
+      INSTALL_RPATH "$ORIGIN/../lib/vibeserver${VIBE_RPATH_SUBDIR}")
+    if(VIBE_RPATH_SUBDIR)
+      set_target_properties(vibeserver PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE)
+    endif()
+  endif()
+  if(VIBE_ARMV6_STAGE)
+    install(PROGRAMS "${VIBE_ARMV6_STAGE}/vibeserver" DESTINATION lib/vibeserver/armv6)
+    file(GLOB _vibe_v6_libs "${VIBE_ARMV6_STAGE}/librtlsdr.so*")
+    install(FILES ${_vibe_v6_libs} DESTINATION lib/vibeserver/armv6)
   endif()
   install(FILES linux/vibeserver.service DESTINATION lib/systemd/system)
 # ★ The per-radio template and the reconciler that starts the second and later radios.
@@ -617,6 +652,13 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
     #     install anywhere that lacks it. With the private dir declared, dpkg-shlibdeps recognises
     #     the library as one we ship and says nothing about it.
     set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS_PRIVATE_DIRS "${CMAKE_INSTALL_PREFIX}/lib/vibeserver")
+    # ★★ The ARMv6 binary's RPATH ($ORIGIN/../lib/vibeserver/armv6) is only right once postinst has
+    #    copied it to /usr/bin; where it SITS in the package it resolves nowhere, and shlibdeps then
+    #    blamed its librtlsdr.so.0 on the system package — `librtlsdr0 (>= 0.6.0)`, the very library
+    #    we bundle around. Point shlibdeps at the stage it was built from.
+    if(VIBE_ARMV6_STAGE)
+      list(APPEND CPACK_DEBIAN_PACKAGE_SHLIBDEPS_PRIVATE_DIRS "${VIBE_ARMV6_STAGE}")
+    endif()
   endif()
   # ★★★ curl IS A REAL DEPENDENCY AND shlibdeps CANNOT SEE IT. The EiBi schedule is fetched by
   #   shelling out to curl (see vibeserver/eibi.cpp), and shlibdeps only reads the ELF — it knows
