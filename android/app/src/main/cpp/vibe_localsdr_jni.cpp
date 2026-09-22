@@ -981,6 +981,15 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetDirectoryKey(JNIEnv* env, jobject, js
     if (c) env->ReleaseStringUTFChars(k, c);
 }
 
+/** ★ The name the USB descriptor gives this dongle, handed down from Kotlin because the
+ *  fd-open path leaves librtlsdr with no index to look it up from. See setUsbModelName(). */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetUsbModelName(JNIEnv* env, jobject, jstring k) {
+    const char* c = k ? env->GetStringUTFChars(k, nullptr) : nullptr;
+    vibe::LocalSdrShim::setUsbModelName(c ? c : "");
+    if (c) env->ReleaseStringUTFChars(k, c);
+}
+
 /** ★★★ SEVERAL RADIOS FROM ONE ADDRESS. Default is to refuse — a single visitor once took BOTH
  *  radios of a public receiver by opening a tab on each — but an owner may allow it, and on a
  *  SHARED receiver it is the difference between a household being one listener and being three.

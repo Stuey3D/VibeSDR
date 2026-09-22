@@ -115,6 +115,7 @@ object VibeServerRestore {
         //    easier to notice than one that comes back wrong.
         if (cfg.length() == 0) { conn.close(); return "no stored config" }
 
+        VibeLocalSDR.setUsbModelName(VibeServerBoot.usbModelName(dev))   // see VibeServerBoot
         val port = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId, ctx.filesDir)
         VibeServerBoot.startBatteryMonitor(ctx)   // after start — see VibeLocalSdrModule
         // ★★★ AND PUT THE PUBLIC LISTING BACK. The tunnel dies with the process that spawned it, so

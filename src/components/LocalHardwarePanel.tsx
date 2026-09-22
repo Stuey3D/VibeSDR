@@ -58,6 +58,14 @@ const TUNER_BWS = [-1, 0, 1_500_000, 1_000_000, 700_000, 500_000, 350_000];
  *  receiver, so offering it offers a way to break your own reception. ON is 2 — what every real use means —
  *  and the server still accepts 0/1/2, so nothing older breaks. */
 /* ★ -1 = AUTO: the engine switches the tuner out below the crossover and back in above it. */
+/** ★★★ THE RADIOS THAT DO NOT NEED DIRECT SAMPLING — matched on what the dongle says over USB
+ *  ("RTLSDRBlog Blog V4", "RTLSDRBlog Blog V4L"), because that is the hardware's own word for
+ *  itself; a serial or a config label is somebody's typing. Both have an up-converter built in, so
+ *  HF arrives through the tuner and switching the tuner out only makes them deaf. A V3 and the
+ *  Nooelec boards do not match and get the ordinary advice.
+ *  ★ The web client applies the same test in applyRadioCaps() — change both together. */
+const DS_UNNEEDED_RE = /\bblog\s*v4l?\b/i;
+
 const DS_MODES: { label: string; value: number }[] = [
   { label: 'Off', value: 0 }, { label: 'On', value: 2 }, { label: 'Auto', value: -1 },
 ];
@@ -1285,12 +1293,28 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               straight off the ADC; above it, the tuner is back in. Now {p.directSampling ? 'ON' : 'off'}.
             </Text>
           )}
-          <Text style={styles.note}>
-            To receive HF and below — short wave, medium wave and long wave — this radio needs this ON:
-            the tuner is switched out and those bands come straight off the ADC, so the gain controls go with
-            it. Leave it on and the VHF and UHF bands stay deaf, so turn it off when you come back up. Not
-            needed on an RTL-SDR Blog V4, which covers them directly.
-          </Text>
+          {/* ★★★ NAME THE RADIO WHEN WE KNOW IT, rather than hanging the exception off the end of
+              advice that has already been given. The generic paragraph ends "not needed on a Blog V4"
+              — which is true, and is still four lines AFTER telling the owner of a V4 that their
+              radio "needs this ON" (Stuart, 2026-09-22, looking at the Sony TV's V4: "that should
+              say this radio is an RTL-SDR V4 and does not require Direct Sampling"). Somebody who
+              reads the first sentence and acts on it has been told the wrong thing by us.
+              ★★ Same test and same wording as the web client's dsNote — one fact, two readers. */}
+          {DS_UNNEEDED_RE.test(p.radio?.model || '') ? (
+            <Text style={styles.note}>
+              This radio is an {p.radio?.model} and does <Text style={styles.noteStrong}>not</Text> require
+              direct sampling: it has an up-converter built in, so short wave, medium wave and long wave
+              already arrive through the tuner. Leaving this OFF is correct here — switching it on bypasses
+              the tuner and takes the gain controls with it.
+            </Text>
+          ) : (
+            <Text style={styles.note}>
+              To receive HF and below — short wave, medium wave and long wave — this radio needs this ON:
+              the tuner is switched out and those bands come straight off the ADC, so the gain controls go with
+              it. Leave it on and the VHF and UHF bands stay deaf, so turn it off when you come back up. Not
+              needed on an RTL-SDR Blog V4, which covers them directly.
+            </Text>
+          )}
           </>}
           {p.isSpy && <Text style={[styles.note, { marginTop: 16 }]}>
             Frequency correction, bias-T, digital AGC and direct sampling are not part
@@ -1354,4 +1378,5 @@ const styles = StyleSheet.create({
   toggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 16 },
   toggleLabel: { fontSize: 14, color: C.muted },
   note: { fontSize: 11, color: C.dim, marginTop: 6, fontStyle: 'italic' },
+  noteStrong: { color: C.gold, fontWeight: '700' },
 });

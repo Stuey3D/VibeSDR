@@ -764,6 +764,18 @@ public:
      *  librtlsdr's generic tuner name. The setup page needs it to spot a V4, whose internal
      *  up-converter makes automatic direct sampling the wrong choice. Empty if unknown. */
     std::string deviceModel() const;
+    /** ★★★ AND ON ANDROID NOTHING CAN ASK THE DESCRIPTOR. The dongle is opened by FILE DESCRIPTOR
+     *  there — the app has the USB permission, we never enumerate — so `usbIndex` is -1 and
+     *  rtlsdr_get_device_usb_strings() has no index to look up: deviceModel() returned EMPTY on
+     *  every Android server, and the client's "this is a V4, it does not need direct sampling"
+     *  advice could never fire on the one platform where the V4 is most often used. Seen on the
+     *  Sony TV, 2026-09-22: a V4 offering the generic "this radio needs direct sampling ON".
+     *  ★★ Kotlin already knows — `radioModelName()` composes maker + product for the picker — so
+     *     the name is HANDED DOWN rather than looked up. Call BEFORE start(); it is remembered
+     *     across engine rebuilds like the other pre-start settings, and an empty string clears it.
+     *  ★ The enumerated path still wins where it exists (Linux, Mac): it reads the descriptor of
+     *    the device actually opened, and cannot be stale. */
+    static void setUsbModelName(const std::string& name);
     void setSampleRate(double rate);
     /** ★ True when the serving radio is an Airspy HF+, whose sample rate is PINNED at open —
      *  changing it on a live stream is a path no other SDR client takes and ours could leave the

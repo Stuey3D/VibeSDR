@@ -213,6 +213,11 @@ object VibeLocalSDR {
     /** ★ The directory's shared secret — see dirProofFor() in the shim. */
     fun setDirectoryKey(key: String) { ensureLoaded(); nativeSetDirectoryKey(key) }
     private external fun nativeSetDirectoryKey(key: String)
+
+    /** ★ Tell the engine what the dongle calls itself. Android opens by fd, so the engine cannot
+     *  read the descriptor itself and every Android server reported a nameless radio. */
+    fun setUsbModelName(name: String) { ensureLoaded(); nativeSetUsbModelName(name) }
+    private external fun nativeSetUsbModelName(name: String)
     private external fun nativeSetTrustedProxies(csv: String)
 
     /** ★ One radio per address, or several — see the JNI note. Default true (refuse). */

@@ -401,6 +401,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // REPEATEDLY would otherwise crash-loop, re-opening the dongle each time.
         val autoRestore = VibeServerBoot.autoRestore(cfg)
 
+        // ★ Before start: the engine cannot read the descriptor on an fd-open. See usbModelName().
+        VibeLocalSDR.setUsbModelName(VibeServerBoot.usbModelName(dev))
         val port = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId,
                                                 reactContext.filesDir)
         // ★ AFTER the server is up: the monitor pushes the sticky state the moment it registers, and

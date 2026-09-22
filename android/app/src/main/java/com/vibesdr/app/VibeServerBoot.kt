@@ -105,6 +105,25 @@ object VibeServerBoot {
      * ★ The caller owns the USB connection and must close it if this returns <= 0 — it is the only
      *   one that can, and the two paths dispose of it differently.
      */
+    /**
+     * What the dongle's USB descriptor calls it — maker and product, or empty when it says nothing.
+     *
+     * ★★★ DELIBERATELY NOT radioModelName()'s job. That one is a LABEL for a human picking between
+     *     receivers, so it invents a sensible fallback ("RTL-SDR") when the descriptor is silent.
+     *     This one feeds a MODEL TEST in the client — "is this a Blog V4, which needs no direct
+     *     sampling?" — and a guessed name would answer that test with a guess. Silence is the
+     *     honest answer, and the client leaves the generic advice alone when it gets one.
+     * ★ Both callers of applyAndStart hand this down, because Android opens the radio by fd and
+     *   the engine has no index to look the descriptor up from itself.
+     */
+    fun usbModelName(dev: android.hardware.usb.UsbDevice): String {
+        val product = (dev.productName ?: "").trim()
+        val maker   = (dev.manufacturerName ?: "").trim()
+        if (product.isEmpty()) return ""
+        if (maker.isEmpty() || product.lowercase().startsWith(maker.lowercase())) return product
+        return "$maker $product"
+    }
+
     fun applyAndStart(cfg: JSONObject, fd: Int, vendorId: Int, productId: Int, filesDir: File): Int {
         val centerFreq = cfg.n("centerFreq", 100_000_000.0)
         val sampleRate = cfg.n("sampleRate", 2_400_000.0)
