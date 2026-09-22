@@ -25930,39 +25930,30 @@ void LocalSdrShim::overloadTick() {
         if (idx > idxBeforeJumps
                 && g_profile.load(std::memory_order_relaxed)->watchShoulders
                 && !g_dabMode.load(std::memory_order_relaxed)) {
-            /* ★★★ AND ONCE THE RUN HAS JUDGED EVIDENCE, DO NOT JUMP BLIND AT ALL — ONE RUNG
-             *     (2026-09-22). The jump is sized from ADC HEADROOM only, which says nothing about
-             *     the band: on 106.9 the loop went 3.7 -> 16.6 -> 29.7 -> 43.4 dB, and the last two
-             *     jumps happened AFTER it had judged real steps, vaulting past the 32.8 dB summit
-             *     the sweep measures. Contrast then walked it only part-way back, so it settled at
-             *     36-40 — which Stuart hears as the locals spreading across the FM band.
-             *  ★★ The FIRST jump of a run is kept: with no baseline yet there is nothing to reason
-             *     from, and separation rises only ~0.1 dB per rung below 23 dB on that station —
-             *     under the "did that help?" threshold — so a judged climb alone cannot cross it.
-             *     That is why capping every jump to 4 dB undershot to 7.7 dB (tried and rejected,
-             *     same day). Evidence first, then one rung at a time.
-             *  ★ A run with a baseline is exactly "we have judged something": g_sepAtRunStart is
-             *    only stored once the separation average has filled (see sepAvgFilled). */
-            const bool judgedRun = g_sepAtRunStart.load(std::memory_order_relaxed) > -190.0f
-                                && g_stepsAtRunStart.load(std::memory_order_relaxed) >= 0;
+            /* ★★★ TRIED AND REJECTED, 2026-09-22 — recorded so it is not tried again blind.
+             *  (a) "once this run has judged a step, no blind jump — one rung at a time": 106.9
+             *      settled at 44.5 dB, WORSE than the 36-40 without it, because each small step
+             *      still reads as an improvement by SEPARATION and it walks to the top.
+             *  (b) a cumulative contrast backoff (remember the cleanest gain, step back when
+             *      contrast falls 1.5 dB below it): 106.9 settled 43.9 AND it dragged 96.6 from
+             *      28.0 down to 15.7 — on a clean station contrast keeps improving as gain falls,
+             *      so contrast alone is not a safe objective either.
+             *  ★★ WHAT BOTH ATTEMPTS SHOWED: separation RISES all the way to 43.9 dB on 106.9, so
+             *     the thing the loop steers by cannot be what stops it there. The next attempt
+             *     needs a fresh SWEEP of both stations (scripts/agc-sweep.mjs, agcLock borrowed
+             *     and restored) to choose the stopping rule against measured curves, not by feel. */
             int capped = idx;
-            if (judgedRun) {
-                capped = (idxBeforeJumps + 1 < idx) ? idxBeforeJumps + 1 : idx;
-            } else
             while (capped > idxBeforeJumps
                    && (gains[(size_t)capped] - gains[(size_t)idxBeforeJumps]) / 10.0
                         > kBlindJumpMaxDb)
                 capped--;
             if (capped != idx) {
                 LOGI("holding that jump to %.1f dB of the %.1f dB it asked for (%.1f -> %.1f dB) — "
-                     "%s",
+                     "the converter cannot see what the mixer is doing, so the verdict judges the "
+                     "approach",
                      (gains[(size_t)capped] - gains[(size_t)idxBeforeJumps]) / 10.0,
                      (gains[(size_t)idx]    - gains[(size_t)idxBeforeJumps]) / 10.0,
-                     gains[(size_t)idxBeforeJumps] / 10.0, gains[(size_t)capped] / 10.0,
-                     judgedRun ? "this run has judged a step, so the band decides the rest one rung "
-                                 "at a time"
-                               : "the converter cannot see what the mixer is doing, so the verdict "
-                                 "judges the approach");
+                     gains[(size_t)idxBeforeJumps] / 10.0, gains[(size_t)capped] / 10.0);
                 idx  = capped;
                 want = tgtIdx - capped;
             }
