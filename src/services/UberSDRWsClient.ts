@@ -761,6 +761,8 @@ export abstract class UberSDRWsClient {
    *  which is exactly the reconnect war the shim's own comments warn about. Only
    *  a fresh user-initiated connect clears it. */
   private refused = false;
+  /** ★ One re-registration per client for a socket refused before it opened — see ws.onclose. */
+  private reRegisteredAfterRefusal = false;
 
 
 
@@ -1070,8 +1072,20 @@ export abstract class UberSDRWsClient {
       }),
     });
     if (!resp.ok) {
+      /* ★★★ THE SERVER SAYS WHY, IN THE BODY, ON EVERY REFUSAL — AND WE THREW IT AWAY (2026-09-22).
+       *  UberSDR answers a refusal with a non-2xx carrying {allowed:false, reason} (main.go
+       *  3836-4053): 403 = wrong bypass password / this receiver needs one / IP or client banned,
+       *  429 = rate or daily limit, 410 = "your session has been terminated", 503 = full, overall
+       *  or per IP. This read the RAW BODY, so the listener was shown JSON in a "Connection Error"
+       *  box with an "Enter Password" button that could not help — and the screen had to guess the
+       *  case by pattern-matching the text.
+       *  ★★ So: parse it whatever the status, and lead with the STATUS so the screen can branch on
+       *     the case rather than on prose that may be worded anything at all. */
       const text = await resp.text().catch(() => '');
-      throw new Error(`HTTP ${resp.status}: ${text.slice(0, 120)}`);
+      let reason = '';
+      try { reason = String((JSON.parse(text) as { reason?: string })?.reason ?? ''); } catch {}
+      if (!reason) reason = text.slice(0, 120);
+      throw new Error(`HTTP ${resp.status}: ${reason}`);
     }
     // ★★★ THE SERVER TELLS US ITS WHOLE POLICY HERE AND WE USED TO PARSE TWO FIELDS.
     // Measured against WESSEX 2026-07-31 — a single POST returns:
@@ -1140,10 +1154,24 @@ export abstract class UberSDRWsClient {
     return this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}${CLIENT_Q}`);
   }
 
+  /** ★★★ THE VIEW GOES ON THE URL, AS THE REFERENCE CLIENT'S DOES (2026-09-22 audit). UberSDR reads
+   *  `frequency` and `bin_bandwidth` from the query and opens the session on them
+   *  (user_spectrum_websocket.go:184-196); spectrum-display.js sends both. We sent neither, so every
+   *  reconnect opened on the shared default view and then jumped when our zoom arrived a round trip
+   *  later — visible, and it left the rate divisor ignored until that config.
+   *  ★ Only when we have one to state: a first connect with no view yet says nothing and takes the
+   *    server's own default, exactly as before. */
+  private _viewSuffix(): string {
+    const hz = Math.round(this.view.centerHz || 0);
+    const bb = this.view.binBandwidth || 0;
+    if (!(hz > 0) || !(bb > 0)) return '';
+    return `&frequency=${hz}&bin_bandwidth=${bb}`;
+  }
+
   private _openSpectrumWs() {
     if (this.destroyed) return;
 
-    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}${CLIENT_Q}`);
+    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}${this._viewSuffix()}${CLIENT_Q}`);
     // ★★★ SAY WHO WE ARE ON THE SOCKET. The server's connection log records the User-Agent of the
     //     WS upgrade, and React Native's WebSocket sends none by default — so every app session
     //     appeared in the owner's log as "—", indistinguishable from a bot or a bare script, while
@@ -1169,7 +1197,11 @@ export abstract class UberSDRWsClient {
     this._armWatchdog();
 
     let specMsgCount = 0;
+    /** ★ Did THIS socket ever open? See ws.onclose: never opening is a refusal, not a drop. */
+    let wasEverOpen = false;
     ws.onopen = () => {
+      wasEverOpen = true;
+      this.reRegisteredAfterRefusal = false;   // ★ a working socket clears the one-shot — see onclose
       if (this.destroyed) { ws.close(); return; }
       this.dbg('Spectrum WS open');
       this.callbacks.onConnect();
@@ -1242,6 +1274,32 @@ export abstract class UberSDRWsClient {
       clearInterval(ping);
       clearInterval(qual);
       this.dbg('Spectrum WS closed code=' + e.code);
+      /* ★★★ A SOCKET THAT NEVER OPENED IS A REFUSAL, NOT A DROPPED LINK (2026-09-22 audit).
+       *  UberSDR turns the spectrum socket away BEFORE the upgrade when the session is no longer
+       *  registered — HTTP 400, and the registration is dropped after five minutes with no socket
+       *  (user_spectrum_websocket.go:229-233, session.go:2568-2585) — or 403 when kicked or banned
+       *  (:221-227). Every attempt also counts against the per-IP connection limit (:203).
+       *  ★★ Nothing here noticed: `deadReopens` is only counted for a socket that DID open, so the
+       *     re-registration path was unreachable and this retried every 3 s for ever, hammering a
+       *     server that had already said no. Re-register once, then give up and say so.
+       *  ★ `wasEverOpen` is per socket: a link that dropped after working is an ordinary reconnect
+       *    and must keep its old behaviour. */
+      if (!wasEverOpen && !this.destroyed && !this.pausedByApp) {
+        if (!this.reRegisteredAfterRefusal) {
+          this.reRegisteredAfterRefusal = true;
+          this.dbg('spectrum socket refused before it opened — re-registering the session');
+          this._checkConnection()
+            .then(() => { if (!this.destroyed) this._openSpectrumWs(); })
+            .catch((err: unknown) => {
+              this.refused = true;   // ★ terminal: the server has told us why, twice over
+              this.callbacks.onError?.(err instanceof Error ? err.message : String(err));
+            });
+          return;
+        }
+        this.refused = true;
+        this.callbacks.onError?.('This receiver refused the connection.');
+        return;
+      }
       this.lastReconnectAt = Date.now();
       this.gapHist.length = 0;
       this.rttHist.length = 0;   // ★ a new socket, a new path — old pings describe the last one
@@ -1772,6 +1830,23 @@ export abstract class UberSDRWsClient {
   }
 
   private _handleSpectrumMessage(msg: Record<string, unknown>) {
+    /* ★★★ THE SERVER TELLS US WHEN IT REFUSES A REQUEST, AND WE DROPPED IT (2026-09-22 audit).
+     *  UberSDR sends {type:"error", error, status} for a rate-limited command (429) and for a
+     *  centre frequency outside the receiver's range (user_spectrum_websocket.go:414, 466-481).
+     *  With no handler these reached only the "unhandled message" log, so a rejected pan left the
+     *  waterfall drawn at a centre the server never took, with nothing on screen to say why.
+     *  ★ The view is re-synced from the last config we DID get, so the picture matches the radio
+     *    again; the listener is told in the server's own words. */
+    if (msg.type === 'error') {
+      const why = typeof msg.error === 'string' ? msg.error : 'the receiver refused that';
+      const status = Number(msg.status) || 0;
+      this.dbg(`server error${status ? ' ' + status : ''}: ${why}`);
+      noteDecision('ubersdr', `server error ${status || '-'}: ${why}`);
+      this.view.centerHz     = this.status.centerHz;
+      this.view.binBandwidth = this.status.binBandwidth;
+      this.callbacks.onRefused?.(why);
+      return;
+    }
     if (msg.type === 'pong') {
       if (this.pingSentAt > 0) {
         const rtt = Date.now() - this.pingSentAt;
@@ -1794,7 +1869,13 @@ export abstract class UberSDRWsClient {
     if (msg.type === 'config') {
       this._restoreViewOnConfig(msg);
       // Local hardware advertises its full span here → cap zoom-out to it.
+      /* ★ UberSDR states its full-span view as defaultBinCount x defaultBinBandwidth
+       *  (user_spectrum_websocket.go:1068-1069); `maxBandwidth` is a VibeServer field it never
+       *  sends, so the zoom-out cap fell back to a guess (2026-09-22 audit). */
       if (typeof msg.maxBandwidth === 'number') this.maxSpanHz = msg.maxBandwidth;
+      else if (typeof msg.defaultBinBandwidth === 'number' && typeof msg.defaultBinCount === 'number'
+               && msg.defaultBinBandwidth > 0 && msg.defaultBinCount > 0)
+        this.maxSpanHz = msg.defaultBinBandwidth * msg.defaultBinCount;
       if (typeof msg.centerFreq   === 'number') this.status.centerHz     = msg.centerFreq;
       if (typeof msg.binBandwidth === 'number') this.status.binBandwidth = msg.binBandwidth;
       if (typeof msg.binCount     === 'number') {
@@ -1858,10 +1939,18 @@ export abstract class UberSDRWsClient {
        *  hauled it back to 96.1, and both waterfalls emptied while the RDS followed the station nobody could
        *  see. The server says as much in its own config: "a joiner must adopt it rather than impose one".
        *  ★★ So here we adopt: fall through to the lines below, which take the server's centre as ours. */
+      /* ★★★ UberSDR NEVER SENDS A CONFIG NOBODY ASKED FOR (2026-09-22 audit). sendStatus runs only
+       *  in reply to reset / zoom / pan / set_rate / get_status, or once on connect
+       *  (user_spectrum_websocket.go:414-648). So a config that differs from our view is not the
+       *  server changing anything — it is OUR OWN ECHO arriving after the settle window closed,
+       *  which on a slow link is routine: _armSettle adopts the old status at 300 ms, then the
+       *  echo lands, differs, and this re-asserted the OLD view — undoing the user's zoom.
+       *  ★★ The server also rounds binBandwidth to its own ladder (:524-562), so an echo is very
+       *     often "different" by construction; matching on that was never sound here.
+       *  ★ The re-assert exists for a shared dial, which UberSDR does not have. Adopt instead. */
       if (unsolicitedChange) {
-        this.dbg(`unsolicited config (centre ${this.status.centerHz} bb ${this.status.binBandwidth}) — re-asserting view`);
-        this._sendView(Math.round(v.centerHz), v.binBandwidth);
-        return;
+        this.dbg(`config differs from our view (centre ${this.status.centerHz} bb `
+               + `${this.status.binBandwidth}) — adopting it; on UberSDR it is our own echo`);
       }
       this.view.centerHz     = this.status.centerHz;
       this.view.binBandwidth = this.status.binBandwidth;

@@ -4882,10 +4882,37 @@ export default function SDRScreen({ route, navigation }: Props) {
           ]);
           return;
         }
-        if (/429|rate.?limit|too many|refused|denied|blocked|busy/i.test(msg)) {
+        /* ★★★ BRANCH ON WHAT THE SERVER SAID, NOT ON HOW IT WORDED IT (2026-09-22 audit). UberSDR
+         *  refuses with a status and a `reason` (see _checkConnection, which now parses both):
+         *    403 the receiver needs a bypass password, or the one given is wrong, or we are banned
+         *    429 a rate or daily-time limit — the bypass password is the way through
+         *    410 this session has been terminated
+         *    503 full, overall or for this IP
+         *  Only 403-password and 429 have anything a password box can fix. Offering it for "server
+         *  full" or "terminated" — which is what matching on the word "refused" did — is a button
+         *  that cannot work, on top of raw JSON. */
+        const status = Number(msg.match(/^HTTP (\d{3})/)?.[1] ?? 0);
+        const reason = msg.replace(/^HTTP \d{3}:\s*/, '');
+        const banned = /ban(ned)?|blocked/i.test(reason);
+        const needsPassword = status === 429
+          || (status === 403 && !banned);
+        if (needsPassword) {
+          setPwPrompt(true);
+        } else if (status === 503) {
+          Alert.alert('Receiver is full', reason || 'Every listening slot on this receiver is in use.', [
+            { text: 'Back to Servers', onPress: () => navigation.goBack() },
+            { text: 'Try Again', onPress: () => setConnEpoch((n) => n + 1) },
+          ]);
+        } else if (status === 410 || banned) {
+          Alert.alert(status === 410 ? 'Session ended' : 'Refused by this receiver',
+                      reason || 'This receiver will not accept the connection.', [
+            { text: 'Back to Servers', onPress: () => navigation.goBack() },
+          ]);
+        } else if (/429|rate.?limit|too many|refused|denied|blocked|busy/i.test(msg)) {
+          // ★ Other backends still reach this the old way — their refusals are not UberSDR-shaped.
           setPwPrompt(true);
         } else {
-          Alert.alert('Connection Error', msg, [
+          Alert.alert('Connection Error', reason || msg, [
             { text: 'Back to Servers', onPress: () => navigation.goBack() },
             { text: 'Enter Password', onPress: () => setPwPrompt(true) },
           ]);
