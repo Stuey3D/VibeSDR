@@ -818,6 +818,23 @@ export abstract class VibeServerWsClient {
   /** Airspy HF+ controls. Keys are optional — send only what changed.
    *  ★ AGC LAST, matching the server's own apply order: it owns the gain path, so applying it
    *  before a manual attenuation would immediately override it. */
+  /** ★ Airspy R2 / Mini stages — see airspy_source.h. Only the keys present are applied, the same
+   *  shape as its siblings. `curve` false = linearity (Airspy's own default), true = sensitivity;
+   *  lna/mixer/vga are 0-15 each and leave preset mode; biast is owner-only, enforced server side. */
+  airspyControl(o: { curve?: boolean; lna?: number; mixer?: number; vga?: number;
+                     lnaAgc?: boolean; mixerAgc?: boolean; biast?: boolean; packing?: boolean }) {
+    const m: Record<string, unknown> = { type: 'airspy_control' };
+    if (o.curve    !== undefined) m.curve    = o.curve ? 1 : 0;
+    if (o.lna      !== undefined) m.lna      = o.lna;
+    if (o.mixer    !== undefined) m.mixer    = o.mixer;
+    if (o.vga      !== undefined) m.vga      = o.vga;
+    if (o.lnaAgc   !== undefined) m.lnaAgc   = o.lnaAgc ? 1 : 0;
+    if (o.mixerAgc !== undefined) m.mixerAgc = o.mixerAgc ? 1 : 0;
+    if (o.biast    !== undefined) m.biast    = o.biast ? 1 : 0;
+    if (o.packing  !== undefined) m.packing  = o.packing ? 1 : 0;
+    this._sendCtl(m);
+  }
+
   ahfControl(o: { att?: number; lna?: boolean; thresh?: boolean; ppb?: number; agc?: boolean }) {
     const m: Record<string, unknown> = { type: 'ahf_control' };
     if (o.att    !== undefined) m.att    = o.att;

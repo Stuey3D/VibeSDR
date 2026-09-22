@@ -3302,6 +3302,16 @@ export default function SDRScreen({ route, navigation }: Props) {
     const t = setTimeout(() => setShowGainMinWarning(false), 30000);
     return () => clearTimeout(t);
   }, [gainIsAtMinimum]);
+  /* ★ Airspy R2 / Mini stages — mirrored from the radio's own caps (hwinfo) so the panel shows what
+   *  the RADIO has, not what we last sent. See LocalHardwarePanel's isAsp block. */
+  const [aspCurve,    setAspCurve]    = useState<'linearity' | 'sensitivity'>('linearity');
+  const [aspLna,      setAspLna]      = useState(0);
+  const [aspMixer,    setAspMixer]    = useState(0);
+  const [aspVga,      setAspVga]      = useState(0);
+  const [aspLnaAgc,   setAspLnaAgc]   = useState(false);
+  const [aspMixerAgc, setAspMixerAgc] = useState(false);
+  const [aspBiasT,    setAspBiasT]    = useState(false);
+  const [aspPacking,  setAspPacking]  = useState(false);
   const [hrfAmp,     setHrfAmp]     = useState(false);
   const [hrfLna,     setHrfLna]     = useState(0);
   const [hrfVga,     setHrfVga]     = useState(0);
@@ -4460,6 +4470,18 @@ export default function SDRScreen({ route, navigation }: Props) {
       onRadioCaps:  (caps) => {
         if (destroyed.current) return;
         setRadioCaps(caps);
+        /* ★ ADOPT THE AIRSPY'S OWN STATE. Every one of these rides on the caps the engine sends
+         *  with hwinfo, so the panel opens showing the radio rather than a default we invented. */
+        if (caps.driver === 'airspy') {
+          setAspCurve(caps.curve === 'sensitivity' ? 'sensitivity' : 'linearity');
+          if (typeof caps.lna   === 'number') setAspLna(Math.max(0, caps.lna));
+          if (typeof caps.mixer === 'number') setAspMixer(Math.max(0, caps.mixer));
+          if (typeof caps.vga   === 'number') setAspVga(Math.max(0, caps.vga));
+          setAspLnaAgc(!!caps.lnaAgc);
+          setAspMixerAgc(!!caps.mixerAgc);
+          setAspBiasT(!!caps.biasT);
+          setAspPacking(!!caps.packing);
+        }
         // ★ A new radio is a new question: whatever was shown was about the last one.
         gainMinShownRef.current = false;
         // ★ Same arming, same reason: a new radio has its own automation to explain, and the
@@ -9580,6 +9602,23 @@ export default function SDRScreen({ route, navigation }: Props) {
           rspDabNotch={rspDabNotch}
           onRspDabNotch={(v) => { setRspDabNotch(v); (client.current as any)?.rspControl?.({ dabNotch: v }); }}
           gainCapTenthDb={hwGainCap}
+          aspCurve={aspCurve}
+          onAspCurve={(sens) => { setAspCurve(sens ? 'sensitivity' : 'linearity');
+                                  (client.current as any)?.airspyControl?.({ curve: sens }); }}
+          aspLna={aspLna}
+          onAspLna={(v) => { setAspLna(v); (client.current as any)?.airspyControl?.({ lna: v }); }}
+          aspMixer={aspMixer}
+          onAspMixer={(v) => { setAspMixer(v); (client.current as any)?.airspyControl?.({ mixer: v }); }}
+          aspVga={aspVga}
+          onAspVga={(v) => { setAspVga(v); (client.current as any)?.airspyControl?.({ vga: v }); }}
+          aspLnaAgc={aspLnaAgc}
+          onAspLnaAgc={(v) => { setAspLnaAgc(v); (client.current as any)?.airspyControl?.({ lnaAgc: v }); }}
+          aspMixerAgc={aspMixerAgc}
+          onAspMixerAgc={(v) => { setAspMixerAgc(v); (client.current as any)?.airspyControl?.({ mixerAgc: v }); }}
+          aspBiasT={aspBiasT}
+          onAspBiasT={(v) => { setAspBiasT(v); (client.current as any)?.airspyControl?.({ biast: v }); }}
+          aspPacking={aspPacking}
+          onAspPacking={(v) => { setAspPacking(v); (client.current as any)?.airspyControl?.({ packing: v }); }}
           hrfAmp={hrfAmp}
           onHrfAmp={(v) => { setHrfAmp(v); (client.current as any)?.hackrfControl?.({ amp: v }); }}
           hrfLna={hrfLna}

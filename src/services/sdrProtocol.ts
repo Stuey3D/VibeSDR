@@ -145,6 +145,20 @@ export interface RadioCaps {
    *  an UberSDR), not a dongle. There is no tuner at the far end: no gain, no VibeAGC, no dongle
    *  settings. The engine refuses them; the panel does not offer them. */
   noHwGain?: boolean;
+  // ── Airspy R2 / Mini (driver === 'airspy') ──
+  /** 22 preset positions on either curve; each stage is 0-15. */
+  gainPresets?: number;
+  stageMax?: number;
+  curve?: 'linearity' | 'sensitivity' | string;
+  lnaAgc?: boolean;
+  mixerAgc?: boolean;
+  /** ★ The Airspy's mixer stage. Its LNA and VGA reuse `lna`/`vga` below — the HackRF declares
+   *  those already and they mean the same kind of thing (a stage value the radio reports). */
+  mixer?: number;
+  packing?: boolean;
+  hasPacking?: boolean;
+  /** ★ 24-1800 MHz with no direct-sampling branch: the control must not be offered. */
+  noDirectSampling?: boolean;
   // ── Airspy HF+ ──
   attSteps?: number;        // 9 => 0..8
   attStepDb?: number;       // 6 dB per step

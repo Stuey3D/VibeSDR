@@ -663,6 +663,16 @@ private:
                             int gainTenthDb, int fftSize, double fftRate,
                             const std::string& mode, std::string& err);
 public:
+    /** ★ Airspy R2 / Mini only. No-ops on any other source — see airspy_source.h.
+     *  `stage`: 0 = LNA, 1 = mixer, 2 = VGA, each 0-15. `curve`: false = linearity (the default
+     *  Airspy recommend), true = sensitivity. */
+    void setAirspyCurve(bool sensitivity);
+    void setAirspyStage(int stage, int value);
+    void setAirspyLnaAgc(bool on);
+    void setAirspyMixerAgc(bool on);
+    void setAirspyBiasT(bool on);
+    void setAirspyPacking(bool on);
+
     /** Airspy HF+ only controls. No-ops on any other source. */
     void setAhfAgc(bool on);
     void setAhfAgcThreshold(bool high);

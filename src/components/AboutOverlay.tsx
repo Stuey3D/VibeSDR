@@ -188,6 +188,8 @@ const CREDITS: { name: string; detail: string }[] = [
     detail: 'Compression used inside the bundled DSP core.' },
   { name: 'libairspyhf — Airspy (BSD-3)',
     detail: 'The Airspy HF+ Discovery driver. BSD-licensed and shipping as a static library, so the radio works the moment it is plugged in with nothing to install.' },
+  { name: 'libairspy — Airspy (BSD-3-Clause, with MIT parts)',
+    detail: 'The Airspy R2 and Mini driver. Copyright (C) 2013-2016 Benjamin Vernoux, Youssef Touil and Ian Gilmour; airspy.c, airspy.h and airspy_commands.h are BSD-3-Clause, and the IQ converter and filter sources (iqconverter_float.c, iqconverter_int16.c, filters.h) are MIT. Bundled unmodified. Redistributed with those notices and their disclaimers of warranty; the Airspy name is not used to endorse or promote VibeSDR.' },
   { name: 'libhackrf — Great Scott Gadgets (GPL-2.0-or-later)',
     detail: 'The HackRF One driver, for the experimental HackRF support in VibeServer. Bundled as a patched copy: upstream has no way to open a radio from a USB file descriptor, which is the only way an Android app is allowed to open one at all. VibeSDR is GPL-3, which those terms permit.' },
   { name: 'SDRplay — SDRplay Ltd',

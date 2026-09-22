@@ -12021,6 +12021,34 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             return;
         }
+        /* ★★ AIRSPY R2 / MINI CONTROLS (2026-09-22). Its own stages, nothing borrowed from the
+         *  HF+ below: two preset CURVES, three manual stages, the radio's own LNA and mixer AGCs,
+         *  bias-T and USB packing. Gain-shaped fields obey the owner's AGC lock exactly as the
+         *  HF+'s do; packing and the curve are not gain and do not. */
+        if (type == "airspy_control") {
+            if (!sharedGate("Airspy controls")) return;
+            const bool manualLocked = LocalSdrShim::agcLocked();
+            if (jsonNum(msg, "curve", v))    LocalSdrShim::instance().setAirspyCurve(v != 0);
+            if (jsonNum(msg, "lna", v)) {
+                if (manualLocked) LOGI("LNA refused — the owner has locked the AGC on");
+                else              LocalSdrShim::instance().setAirspyStage(0, (int)v);
+            }
+            if (jsonNum(msg, "mixer", v)) {
+                if (manualLocked) LOGI("mixer gain refused — the owner has locked the AGC on");
+                else              LocalSdrShim::instance().setAirspyStage(1, (int)v);
+            }
+            if (jsonNum(msg, "vga", v)) {
+                if (manualLocked) LOGI("VGA refused — the owner has locked the AGC on");
+                else              LocalSdrShim::instance().setAirspyStage(2, (int)v);
+            }
+            if (jsonNum(msg, "lnaAgc", v))   LocalSdrShim::instance().setAirspyLnaAgc(v != 0);
+            if (jsonNum(msg, "mixerAgc", v)) LocalSdrShim::instance().setAirspyMixerAgc(v != 0);
+            if (jsonNum(msg, "biast", v) && adminGate("bias-T"))
+                LocalSdrShim::instance().setAirspyBiasT(v != 0);
+            if (jsonNum(msg, "packing", v))  LocalSdrShim::instance().setAirspyPacking(v != 0);
+            LocalSdrShim::instance().broadcastHwInfo();
+            return;
+        }
         if (type == "ahf_control") {
             if (!sharedGate("Airspy HF+ controls")) return;
             // ★★★ AGC LOCKED MEANS THE MANUAL PATH IS CLOSED TOO. The attenuator and the preamp
@@ -27282,6 +27310,38 @@ std::string LocalSdrShim::radioCapsJson() const {
 //
 // ★★ UNVERIFIED. The proof is changing settings repeatedly on air and the freeze no longer
 //    following. If it still happens, this was not it — do not assume it away.
+
+/* ── Airspy R2 / Mini (2026-09-22) ───────────────────────────────────────────────────────────
+ * ★ Each is a no-op on any other radio, exactly as the HF+ block below: the panel only draws
+ *   these when the caps say `driver:"airspy"`, and the engine refuses to act on a radio that
+ *   does not have them rather than trusting the client to have asked correctly. */
+void LocalSdrShim::setAirspyCurve(bool sensitivity) {
+    if (!p || !p->useAirspy()) return;
+    VIBE_HW_LOCK(); p->asp->setSensitivityCurve(sensitivity);
+}
+void LocalSdrShim::setAirspyStage(int stage, int value) {
+    if (!p || !p->useAirspy()) return;
+    VIBE_HW_LOCK();
+    if (stage == 0)      p->asp->setLnaGain(value);
+    else if (stage == 1) p->asp->setMixerGain(value);
+    else if (stage == 2) p->asp->setVgaGain(value);
+}
+void LocalSdrShim::setAirspyLnaAgc(bool on) {
+    if (!p || !p->useAirspy()) return;
+    VIBE_HW_LOCK(); p->asp->setLnaAgc(on);
+}
+void LocalSdrShim::setAirspyMixerAgc(bool on) {
+    if (!p || !p->useAirspy()) return;
+    VIBE_HW_LOCK(); p->asp->setMixerAgc(on);
+}
+void LocalSdrShim::setAirspyBiasT(bool on) {
+    if (!p || !p->useAirspy()) return;
+    VIBE_HW_LOCK(); p->asp->setBiasTee(on);
+}
+void LocalSdrShim::setAirspyPacking(bool on) {
+    if (!p || !p->useAirspy()) return;
+    VIBE_HW_LOCK(); p->asp->setPacking(on);
+}
 
 void LocalSdrShim::setAhfAgc(bool on) {
     g_dsp.ahfAgc.store(on ? 1 : 0);

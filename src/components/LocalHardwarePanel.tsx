@@ -199,6 +199,17 @@ export interface LocalHardwarePanelProps {
    *  as gain reduction "as per the control in the client"). -1 = none. Clamped rather than refused
    *  server-side, so without this the slider visibly springs back and reads as broken. */
   ifGrFloorDb?: number;
+  /** ★★★ Airspy R2 / Mini live state + setters (only when radio.driver === 'airspy'). Its gain is
+   *  TWO PRESET CURVES of 22 positions — the slider above drives the chosen one — plus three manual
+   *  stages and the radio's own per-stage AGCs. See airspy_source.h. */
+  aspCurve?: 'linearity' | 'sensitivity' | string;  onAspCurve?: (sensitivity: boolean) => void;
+  aspLna?: number;       onAspLna?: (v: number) => void;
+  aspMixer?: number;     onAspMixer?: (v: number) => void;
+  aspVga?: number;       onAspVga?: (v: number) => void;
+  aspLnaAgc?: boolean;   onAspLnaAgc?: (on: boolean) => void;
+  aspMixerAgc?: boolean; onAspMixerAgc?: (on: boolean) => void;
+  aspBiasT?: boolean;    onAspBiasT?: (on: boolean) => void;
+  aspPacking?: boolean;  onAspPacking?: (on: boolean) => void;
   hrfAmp?: boolean;      onHrfAmp?: (on: boolean) => void;
   hrfLna?: number;       onHrfLna?: (db: number) => void;
   hrfVga?: number;       onHrfVga?: (db: number) => void;
@@ -276,6 +287,8 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   const isAhf = p.radio?.driver === 'airspyhf';
   const isRsp = p.radio?.driver === 'sdrplay';
   const isHrf = p.radio?.driver === 'hackrf';
+  const isAsp = p.radio?.driver === 'airspy';       // ★ R2 / Mini — NOT the HF+ (isAhf)
+  const aspMax = Math.max(1, p.radio?.stageMax ?? 15);
   /* ★★★ THE CEILING, IN WHOLE dB, or -1 for none. The wire carries tenths (the dongle's spelling,
    *   which every radio's limit reuses); the HackRF's stages are whole dB, so it is floored —
    *   NEVER rounded, because rounding up would offer a decibel the server then refuses. */
@@ -838,6 +851,92 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                     A notch is wanted ON elsewhere in the spectrum, where a strong local
                     transmitter is what overloads the front end — and OFF when that band is what
                     you came to hear.
+                  </Text>
+                </>
+              )}
+            </>
+          ) : isAsp ? (
+            <>
+              {/* ★★★ AIRSPY R2 / MINI. The single slider above already drives the chosen PRESET
+                  CURVE (0-21) — Airspy's own recommended way to run this radio — so everything
+                  here is the manual path for people who want it, plus the two AGCs.
+                  ★ No VibeAGC: it is RTL-only for now (Stuart, 2026-09-22 — a HackRF and an Airspy
+                    version come when there is hardware to develop them against).
+                  ★ No direct sampling: 24-1800 MHz, there is no HF branch to switch to. */}
+              <Text style={styles.section}>GAIN CURVE</Text>
+              <Seg slot={slot} options={['linearity', 'sensitivity']}
+                   value={p.aspCurve === 'sensitivity' ? 'sensitivity' : 'linearity'}
+                   onChange={(v) => p.onAspCurve?.(v === 'sensitivity')}
+                   fmt={(v) => (v === 'sensitivity' ? 'Sensitivity' : 'Linearity')} />
+              <Text style={styles.note}>
+                Two ways the radio sets its three stages for one slider position. Linearity keeps
+                strong neighbours from spoiling what you are on; sensitivity digs for the weakest
+                signal. Linearity is the safer default on a busy band.
+              </Text>
+
+              <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>LNA AGC</Text>
+                <Switch value={!!p.aspLnaAgc} onValueChange={(v) => p.onAspLnaAgc?.(v)}
+                  trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.aspLnaAgc ? C.gold : '#ccc'} />
+              </View>
+              <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>Mixer AGC</Text>
+                <Switch value={!!p.aspMixerAgc} onValueChange={(v) => p.onAspMixerAgc?.(v)}
+                  trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.aspMixerAgc ? C.gold : '#ccc'} />
+              </View>
+              <Text style={styles.note}>
+                The radio's own automatic gain for those two stages. With either on, its stage below
+                is set by the radio and the slider for it does nothing.
+              </Text>
+
+              {/* Each stage 0-15, the hardware's own granularity. */}
+              <Text style={styles.section}>LNA</Text>
+              <View style={styles.sliderRow}>
+                <Text style={styles.sliderEnd}>0</Text>
+                <Slider style={{ flex: 1, height: 40 }} minimumValue={0} maximumValue={aspMax} step={1}
+                  value={Math.max(0, p.aspLna ?? 0)} disabled={!!p.aspLnaAgc}
+                  onSlidingComplete={(v) => p.onAspLna?.(Math.round(v))}
+                  minimumTrackTintColor={C.gold} maximumTrackTintColor="#444" thumbTintColor={C.gold} />
+                <Text style={styles.sliderEnd}>{aspMax}</Text>
+              </View>
+              <Text style={styles.section}>MIXER</Text>
+              <View style={styles.sliderRow}>
+                <Text style={styles.sliderEnd}>0</Text>
+                <Slider style={{ flex: 1, height: 40 }} minimumValue={0} maximumValue={aspMax} step={1}
+                  value={Math.max(0, p.aspMixer ?? 0)} disabled={!!p.aspMixerAgc}
+                  onSlidingComplete={(v) => p.onAspMixer?.(Math.round(v))}
+                  minimumTrackTintColor={C.gold} maximumTrackTintColor="#444" thumbTintColor={C.gold} />
+                <Text style={styles.sliderEnd}>{aspMax}</Text>
+              </View>
+              <Text style={styles.section}>VGA</Text>
+              <View style={styles.sliderRow}>
+                <Text style={styles.sliderEnd}>0</Text>
+                <Slider style={{ flex: 1, height: 40 }} minimumValue={0} maximumValue={aspMax} step={1}
+                  value={Math.max(0, p.aspVga ?? 0)}
+                  onSlidingComplete={(v) => p.onAspVga?.(Math.round(v))}
+                  minimumTrackTintColor={C.gold} maximumTrackTintColor="#444" thumbTintColor={C.gold} />
+                <Text style={styles.sliderEnd}>{aspMax}</Text>
+              </View>
+              <Text style={styles.note}>
+                Moving any of these leaves the preset curve and sets the stages yourself.
+              </Text>
+
+              <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>Bias-T (4.5V antenna power){locked ? ' — owner only' : ''}</Text>
+                <Switch value={!!p.aspBiasT} onValueChange={(v) => p.onAspBiasT?.(v)}
+                  disabled={locked}
+                  trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.aspBiasT ? C.gold : '#ccc'} />
+              </View>
+              {p.radio?.hasPacking && (
+                <>
+                  <View style={styles.toggleRow}>
+                    <Text style={styles.toggleLabel}>Sample packing</Text>
+                    <Switch value={!!p.aspPacking} onValueChange={(v) => p.onAspPacking?.(v)}
+                      trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.aspPacking ? C.gold : '#ccc'} />
+                  </View>
+                  <Text style={styles.note}>
+                    Sends 12-bit samples over USB instead of 16 — less to carry, a little more work
+                    to unpack. Worth trying if the radio drops samples on this machine.
                   </Text>
                 </>
               )}
