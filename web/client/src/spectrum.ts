@@ -195,6 +195,8 @@ export interface RadioCaps {
   gainPresets?: number;   // positions on the preset curve (22 = 0..21)
   stageMax?: number;      // top of each manual stage (15)
   curve?: 'linearity' | 'sensitivity' | string;
+  gainMode?: number;      // ★ 0 sensitive, 1 linear, 2 free — SDR++'s three modes
+
   lnaAgc?: boolean;       // the radio's own AGC for the LNA...
   mixerAgc?: boolean;     // ...and for the mixer. The VGA has none.
   mixer?: number;

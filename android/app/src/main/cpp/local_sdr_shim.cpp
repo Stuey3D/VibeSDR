@@ -12086,6 +12086,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (type == "airspy_control") {
             if (!sharedGate("Airspy controls")) return;
             const bool manualLocked = LocalSdrShim::agcLocked();
+            if (jsonNum(msg, "mode", v))     LocalSdrShim::instance().setAirspyGainMode((int)v);
             if (jsonNum(msg, "curve", v))    LocalSdrShim::instance().setAirspyCurve(v != 0);
             if (jsonNum(msg, "lna", v)) {
                 if (manualLocked) LOGI("LNA refused — the owner has locked the AGC on");
@@ -27353,6 +27354,10 @@ std::string LocalSdrShim::radioCapsJson() const {
         j += ",\"serial\":\"" + p->asp->serial() + "\"";
         j += ",\"gainPresets\":22,\"stageMax\":15";
         j += ",\"curve\":\"" + std::string(p->asp->sensitivityCurve() ? "sensitivity" : "linearity") + "\"";
+        /* ★ THE MODE IS THE CONTROL NOW — 0 sensitive, 1 linear, 2 free (SDR++'s own order, so a
+         *  user who knows that client meets the same three words in the same sequence). `curve`
+         *  stays beside it for the client that shipped before this existed. */
+        j += ",\"gainMode\":" + std::to_string(p->asp->gainMode());
         j += ",\"lnaAgc\":" + std::string(p->asp->lnaAgc() ? "true" : "false");
         j += ",\"mixerAgc\":" + std::string(p->asp->mixerAgc() ? "true" : "false");
         j += ",\"lna\":" + std::to_string(p->asp->lnaGain());
@@ -27443,6 +27448,12 @@ std::string LocalSdrShim::radioCapsJson() const {
 void LocalSdrShim::setAirspyCurve(bool sensitivity) {
     if (!p || !p->useAirspy()) return;
     VIBE_HW_LOCK(); p->asp->setSensitivityCurve(sensitivity);
+}
+/** ★ Sensitive / Linear / Free — see AirspySource::GainMode. The older `curve` setter above still
+ *  works and simply picks between the two preset modes, because build 479 shipped with it. */
+void LocalSdrShim::setAirspyGainMode(int mode) {
+    if (!p || !p->useAirspy()) return;
+    VIBE_HW_LOCK(); p->asp->setGainMode(mode);
 }
 void LocalSdrShim::setAirspyStage(int stage, int value) {
     if (!p || !p->useAirspy()) return;

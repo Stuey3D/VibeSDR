@@ -84,10 +84,31 @@ public:
     static std::vector<int> gainListTenthDb();
 
     // ── Airspy R2 / Mini specific ───────────────────────────────────────────
-    /** Which preset curve the slider drives: false = linearity (default), true = sensitivity. */
+    /** ★★★ THREE GAIN MODES, THE WAY SDR++ PRESENTS THEM — Sensitive, Linear, Free. Asked for by
+     *  the first person to run this driver on real hardware (Onfliner, 2026-09-22): "I would add
+     *  3 gain modes, as in sdr++ - sensitive, linear, and free. In the case of sensitive and
+     *  linear, there should be one slider."
+     *  ★★ IT IS NOT JUST A TIDIER LAYOUT, it removes an ambiguity we had built in. With a
+     *     Linearity/Sensitivity switch AND three always-visible stage sliders, moving a stage
+     *     silently left preset mode with nothing on screen saying so — the radio was then in a
+     *     state neither control described. A mode you choose cannot be left by accident.
+     *  ★★ MATCHED TO THE REFERENCE, clause by clause (source_modules/airspy_source/src/main.cpp):
+     *     Sensitive and Linear both force BOTH stage AGCs off and set their curve; Free honours
+     *     the per-stage AGC switches and sets the stages by hand, with the VGA always manual
+     *     because it has no AGC. Deviating from the client his users already know would be a
+     *     difference to explain rather than a feature.
+     *  ★ Each preset mode keeps its OWN gain, as SDR++ does (sensitiveGain / linearGain): the two
+     *    curves reach a given signal at different positions, so carrying one across is a jump the
+     *    user did not ask for. */
+    enum GainMode { GainSensitive = 0, GainLinear = 1, GainFree = 2 };
+    void setGainMode(int mode);
+    int  gainMode() const { return mode_; }
+    /** Which preset curve the slider drives: false = linearity (default), true = sensitivity.
+     *  ★ Kept because build 479 shipped with it and its `curve` message is already in the wild —
+     *    it now simply selects between the two preset MODES. */
     void setSensitivityCurve(bool sensitivity);
-    bool sensitivityCurve() const { return sensitivity_; }
-    /** Manual stages, each 0-15. Setting any of them leaves preset mode. */
+    bool sensitivityCurve() const { return mode_ == GainSensitive; }
+    /** Manual stages, each 0-15. Only obeyed in Free mode. */
     void setLnaGain(int v);
     void setMixerGain(int v);
     void setVgaGain(int v);
@@ -116,6 +137,8 @@ public:
 private:
     bool finishOpen(double sampleRateHz, double centreHz, int gainTenthDb, std::string& err);
     void applyGain();
+    /** The one place the three gain modes are turned into libairspy calls. */
+    void applyGainMode();
 
     airspy_device* dev_ = nullptr;
     IqSink sink_;
@@ -125,8 +148,11 @@ private:
     double centreHz_ = 100e6;
     double rateHz_   = 0;      // ★ what the device is actually set to, for a rate change that restarts
     int  gainTenth_  = 150;      // ★ preset 15 of 21 — Airspy's own "start here" for linearity
-    bool sensitivity_ = false;
-    int  lna_ = -1, mixer_ = -1, vga_ = -1;   // -1 = preset mode, no manual stage set
+    int  lna_ = -1, mixer_ = -1, vga_ = -1;   // -1 = never set by the user
+    int  mode_ = GainLinear;                  // ★ Linear is the safer default on a busy band
+    /** ★ One remembered position per preset curve — see the GainMode note. Tenths of a dB, so
+     *  they share the slider's contract with every other radio here. */
+    int  presetTenth_[2] = { -1, -1 };        // [0] = sensitive, [1] = linear
     bool lnaAgc_ = false, mixerAgc_ = false;
     bool bias_ = false, packing_ = false;
     bool open_ = false, streaming_ = false;

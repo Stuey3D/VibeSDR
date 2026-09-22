@@ -211,6 +211,8 @@ export interface LocalHardwarePanelProps {
    *  TWO PRESET CURVES of 22 positions — the slider above drives the chosen one — plus three manual
    *  stages and the radio's own per-stage AGCs. See airspy_source.h. */
   aspCurve?: 'linearity' | 'sensitivity' | string;  onAspCurve?: (sensitivity: boolean) => void;
+  /** ★ 0 sensitive, 1 linear, 2 free — SDR++'s three gain modes. */
+  aspGainMode?: number;  onAspGainMode?: (mode: number) => void;
   aspLna?: number;       onAspLna?: (v: number) => void;
   aspMixer?: number;     onAspMixer?: (v: number) => void;
   aspVga?: number;       onAspVga?: (v: number) => void;
@@ -297,6 +299,11 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   const isHrf = p.radio?.driver === 'hackrf';
   const isAsp = p.radio?.driver === 'airspy';       // ★ R2 / Mini — NOT the HF+ (isAhf)
   const aspMax = Math.max(1, p.radio?.stageMax ?? 15);
+  /* ★ The radio's own mode where it reports one; otherwise inferred from the curve it is on, so a
+   *  server that predates the three-way control still lands on the right pair of words. */
+  const aspMode = typeof p.aspGainMode === 'number'
+                ? p.aspGainMode
+                : (p.aspCurve === 'sensitivity' ? 0 : 1);
   /* ★★★ THE CEILING, IN WHOLE dB, or -1 for none. The wire carries tenths (the dongle's spelling,
    *   which every radio's limit reuses); the HackRF's stages are whole dB, so it is floored —
    *   NEVER rounded, because rounding up would offer a decibel the server then refuses. */
@@ -871,17 +878,30 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   ★ No VibeAGC: it is RTL-only for now (Stuart, 2026-09-22 — a HackRF and an Airspy
                     version come when there is hardware to develop them against).
                   ★ No direct sampling: 24-1800 MHz, there is no HF branch to switch to. */}
-              <Text style={styles.section}>GAIN CURVE</Text>
-              <Seg slot={slot} options={['linearity', 'sensitivity']}
-                   value={p.aspCurve === 'sensitivity' ? 'sensitivity' : 'linearity'}
-                   onChange={(v) => p.onAspCurve?.(v === 'sensitivity')}
-                   fmt={(v) => (v === 'sensitivity' ? 'Sensitivity' : 'Linearity')} />
+              {/* ★★★ THREE MODES, THE WAY SDR++ PRESENTS THEM — asked for by the first person to
+                  run this driver on real hardware: "I would add 3 gain modes, as in sdr++ -
+                  sensitive, linear, and free. In the case of sensitive and linear, there should be
+                  one slider" (Onfliner, 2026-09-22).
+                  ★★ It is not only tidier, it removes an ambiguity we had built in: with a curve
+                     switch AND three always-visible stages, moving a stage silently left preset
+                     mode and nothing on screen said so. A mode you CHOOSE cannot be left by
+                     accident — and the same three words in the same order as the client his users
+                     already know. */}
+              <Text style={styles.section}>GAIN MODE</Text>
+              <Seg slot={slot} options={[0, 1, 2]}
+                   value={aspMode}
+                   onChange={(v) => p.onAspGainMode?.(Number(v))}
+                   fmt={(v) => (v === 0 ? 'Sensitive' : v === 1 ? 'Linear' : 'Free')} />
               <Text style={styles.note}>
-                Two ways the radio sets its three stages for one slider position. Linearity keeps
-                strong neighbours from spoiling what you are on; sensitivity digs for the weakest
-                signal. Linearity is the safer default on a busy band.
+                {aspMode === 2
+                  ? 'Free sets the three stages yourself, with the radio\'s own AGC available on the '
+                    + 'LNA and the mixer.'
+                  : 'The slider above sets all three stages together. Linear keeps strong neighbours '
+                    + 'from spoiling what you are on; Sensitive digs for the weakest signal. Linear is '
+                    + 'the safer default on a busy band.'}
               </Text>
 
+              {aspMode === 2 && (<>
               <View style={styles.toggleRow}>
                 <Text style={styles.toggleLabel}>LNA AGC</Text>
                 <Switch value={!!p.aspLnaAgc} onValueChange={(v) => p.onAspLnaAgc?.(v)}
@@ -926,8 +946,9 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                 <Text style={styles.sliderEnd}>{aspMax}</Text>
               </View>
               <Text style={styles.note}>
-                Moving any of these leaves the preset curve and sets the stages yourself.
+                The VGA has no automatic setting on this radio — it is always yours.
               </Text>
+              </>)}
 
               <View style={styles.toggleRow}>
                 <Text style={styles.toggleLabel}>Bias-T (4.5V antenna power){locked ? ' — owner only' : ''}</Text>

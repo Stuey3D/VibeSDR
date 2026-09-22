@@ -667,6 +667,9 @@ public:
      *  `stage`: 0 = LNA, 1 = mixer, 2 = VGA, each 0-15. `curve`: false = linearity (the default
      *  Airspy recommend), true = sensitivity. */
     void setAirspyCurve(bool sensitivity);
+    /** ★ 0 sensitive, 1 linear, 2 free — SDR++'s three modes, which is what an Airspy owner
+     *  expects to find. See AirspySource::GainMode for why it is a mode and not two switches. */
+    void setAirspyGainMode(int mode);
     void setAirspyStage(int stage, int value);
     void setAirspyLnaAgc(bool on);
     void setAirspyMixerAgc(bool on);

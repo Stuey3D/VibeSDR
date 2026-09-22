@@ -3322,6 +3322,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★ Airspy R2 / Mini stages — mirrored from the radio's own caps (hwinfo) so the panel shows what
    *  the RADIO has, not what we last sent. See LocalHardwarePanel's isAsp block. */
   const [aspCurve,    setAspCurve]    = useState<'linearity' | 'sensitivity'>('linearity');
+  /** ★ 0 sensitive, 1 linear, 2 free — SDR++'s three modes. See AirspySource::GainMode. */
+  const [aspGainMode, setAspGainMode] = useState(1);
   const [aspLna,      setAspLna]      = useState(0);
   const [aspMixer,    setAspMixer]    = useState(0);
   const [aspVga,      setAspVga]      = useState(0);
@@ -4499,6 +4501,9 @@ export default function SDRScreen({ route, navigation }: Props) {
          *  with hwinfo, so the panel opens showing the radio rather than a default we invented. */
         if (caps.driver === 'airspy') {
           setAspCurve(caps.curve === 'sensitivity' ? 'sensitivity' : 'linearity');
+          // ★ The radio's own idea of which mode it is in — painted from it, never from what we
+          //   last sent, so a second listener moving it is reflected here too.
+          if (typeof (caps as any).gainMode === 'number') setAspGainMode((caps as any).gainMode);
           if (typeof caps.lna   === 'number') setAspLna(Math.max(0, caps.lna));
           if (typeof caps.mixer === 'number') setAspMixer(Math.max(0, caps.mixer));
           if (typeof caps.vga   === 'number') setAspVga(Math.max(0, caps.vga));
@@ -9694,6 +9699,12 @@ export default function SDRScreen({ route, navigation }: Props) {
           aspCurve={aspCurve}
           onAspCurve={(sens) => { setAspCurve(sens ? 'sensitivity' : 'linearity');
                                   (client.current as any)?.airspyControl?.({ curve: sens }); }}
+          aspGainMode={aspGainMode}
+          onAspGainMode={(m) => {
+            setAspGainMode(m);
+            if (m !== 2) setAspCurve(m === 0 ? 'sensitivity' : 'linearity');
+            (client.current as any)?.airspyControl?.({ mode: m });
+          }}
           aspLna={aspLna}
           onAspLna={(v) => { setAspLna(v); (client.current as any)?.airspyControl?.({ lna: v }); }}
           aspMixer={aspMixer}

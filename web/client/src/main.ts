@@ -11925,8 +11925,20 @@ function renderAspEnabled() {
  *  every reconnect would overwrite the hardware's own AGC with a stale number. */
 function pushAllAspSettings() {
   if (radioCaps?.driver !== 'airspy') return;
-  const seg = $('aspCurveSeg').querySelector('.on')?.getAttribute('data-curve');
-  aspSend({ curve: seg === '1' ? 1 : 0 });
+  const seg = $('aspModeSeg').querySelector('.on')?.getAttribute('data-mode');
+  aspSend({ mode: Number(seg ?? 1) });
+}
+
+/** ★ Sensitive and Linear are ONE slider — the gain control above this panel, which drives the
+ *  chosen curve. Only Free has three stages, so only Free shows them: a stage sitting there inert
+ *  under a preset curve is a control that does nothing, which is the fault AGENTS.md names. */
+function renderAspMode() {
+  const mode = Number($('aspModeSeg').querySelector('.on')?.getAttribute('data-mode') ?? 1);
+  const free = mode === 2;
+  for (const id of ['rowAspLna', 'rowAspMixer', 'rowAspVga', 'aspManualNote'])
+    $<HTMLElement>(id).hidden = !free;
+  for (const el of Array.from(document.querySelectorAll('#aspCtls .aspFreeOnly')) as HTMLElement[])
+    el.hidden = !free;
 }
 
 /** The radio has just said what it is and what its stages are sitting at — paint that. */
@@ -11941,18 +11953,17 @@ function applyAspCaps(caps: import('./spectrum').RadioCaps | null) {
     $(id).classList.toggle('on', on);
     $(id).textContent = on ? 'ON' : 'OFF';
   };
+  if (typeof caps?.gainMode === 'number') {
+    for (const b of Array.from($('aspModeSeg').querySelectorAll('.btn')) as HTMLElement[])
+      b.classList.toggle('on', b.getAttribute('data-mode') === String(caps.gainMode));
+  }
   tog('aspLnaAgc', !!caps?.lnaAgc);
   tog('aspMixerAgc', !!caps?.mixerAgc);
   tog('aspBiasT', !!caps?.biasT);
   tog('aspPacking', !!caps?.packing);
-  // ★ The curve comes from the radio too — it is the one thing here that a reconnect can restore
-  //   truthfully, because the server holds it.
-  if (caps?.curve) {
-    for (const b of Array.from($('aspCurveSeg').querySelectorAll('.btn')) as HTMLElement[])
-      b.classList.toggle('on', b.getAttribute('data-curve') === (caps.curve === 'sensitivity' ? '1' : '0'));
-  }
   // ★ A radio without packing does not get a packing switch, rather than a dead one.
   $('rowAspPacking').hidden = caps?.hasPacking === false;
+  renderAspMode();
   renderAspEnabled();
   pushAllAspSettings();
 }
@@ -11978,8 +11989,8 @@ function initAirspyControls() {
     };
   };
   stage('aspLna', 'lna'); stage('aspMixer', 'mixer'); stage('aspVga', 'vga');
-  // ★ The curve IS remembered: it is a preference about how to use the radio, not a reading off it.
-  segment('aspCurveSeg', 'curve', (c) => aspSend({ curve: c }), 'asp_curve');
+  // ★ The MODE is remembered: it is a preference about how to use the radio, not a reading off it.
+  segment('aspModeSeg', 'mode', (m) => { aspSend({ mode: m }); renderAspMode(); }, 'asp_mode');
 }
 
 // ── HackRF One (EXPERIMENTAL) ────────────────────────────────────────────────

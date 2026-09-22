@@ -4164,20 +4164,29 @@ select.btn { padding: 6px 8px; }
     <!-- ★ Two curves, not a "mode": both are the same slider, and the difference is how the radio
          splits one position across LNA, mixer and VGA. Linearity protects what you are tuned to
          from strong neighbours; sensitivity reaches for the weakest thing on a quiet band. -->
+    <!-- ★★★ THREE MODES, IN SDR++'s OWN ORDER AND WORDS. Asked for by the first person to run this
+         driver on hardware: "I would add 3 gain modes, as in sdr++ - sensitive, linear, and free.
+         In the case of sensitive and linear, there should be one slider" (Onfliner, 2026-09-22).
+         ★★ And it removes an ambiguity: with a curve switch AND three always-visible stages,
+            moving a stage silently left preset mode with nothing saying so. A mode you choose
+            cannot be left by accident. -->
     <div class="mrow">
-      <label title="Two ways the radio sets its three stages from one slider position. Linearity keeps strong neighbours out of the mixer; sensitivity digs for the weakest signal. Linearity is the safer default on a busy band.">GAIN CURVE</label>
-      <div class="seg" id="aspCurveSeg">
-        <button class="btn on" data-curve="0" title="Keeps strong neighbours from spoiling what you are on.">LINEARITY</button>
-        <button class="btn" data-curve="1" title="Digs for the weakest signal; more prone to overload on a crowded band.">SENSITIVITY</button>
+      <label title="Sensitive and Linear set all three stages from the one gain slider above. Free hands you the three stages. Linear is the safer default on a busy band.">GAIN MODE</label>
+      <div class="seg" id="aspModeSeg">
+        <button class="btn" data-mode="0" title="Digs for the weakest signal; more prone to overload on a crowded band.">SENSITIVE</button>
+        <button class="btn on" data-mode="1" title="Keeps strong neighbours from spoiling what you are on.">LINEAR</button>
+        <button class="btn" data-mode="2" title="Set the LNA, mixer and VGA yourself.">FREE</button>
       </div>
     </div>
     <!-- ★ The radio's own AGC for two of the three stages. Named per stage because that is what
          they are: switching one on does not make the other automatic. -->
-    <div class="mrow">
+    <!-- ★ Free-mode only: a preset curve sets all three stages itself, so an AGC left running
+         under one would fight it. Same rule as the reference client. -->
+    <div class="mrow aspFreeOnly">
       <label title="The radio's own automatic gain for the LNA. With this on, the LNA slider below is set by the radio and yours does nothing.">LNA AGC</label>
       <div class="seg"><button class="btn" id="aspLnaAgc">OFF</button></div>
     </div>
-    <div class="mrow">
+    <div class="mrow aspFreeOnly">
       <label title="The radio's own automatic gain for the mixer. With this on, the mixer slider below is set by the radio and yours does nothing.">MIXER AGC</label>
       <div class="seg"><button class="btn" id="aspMixerAgc">OFF</button></div>
     </div>
@@ -4199,7 +4208,7 @@ select.btn { padding: 6px 8px; }
       <input type="range" id="aspVga" min="0" max="15" step="1" value="0">
       <span class="val" id="aspVgaVal">0</span>
     </div>
-    <div class="mnote" id="aspManualNote" style="margin:2px 0 6px;opacity:.75">Moving any of these leaves the preset curve and sets the stages yourself.</div>
+    <div class="mnote" id="aspManualNote" style="margin:2px 0 6px;opacity:.75">The VGA has no automatic setting on this radio — it is always yours.</div>
     <div class="mrow">
       <label title="4.5 V on the aerial socket for a powered antenna or an LNA. DC into the wrong antenna can damage it.">BIAS-T</label>
       <div class="seg"><button class="btn" id="aspBiasT">OFF</button></div>

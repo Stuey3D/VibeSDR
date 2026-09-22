@@ -117,7 +117,8 @@ bool AirspySource::finishOpen(double sampleRateHz, double centreHz, int gainTent
      *  once the stream is running, which is the only time this radio reliably takes it. */
     centreHz_  = centreHz;
     gainTenth_ = gainTenthDb;
-    if (gainTenthDb < 0) { lnaAgc_ = mixerAgc_ = true; }
+    if (gainTenthDb < 0) { lnaAgc_ = mixerAgc_ = true; mode_ = GainFree; }
+    else                 { presetTenth_[1] = gainTenthDb; mode_ = GainLinear; }
     ASLOG("Airspy: %s serial %s, %zu rate(s), %.3f MS/s at %.3f MHz",
           model_.c_str(), serial_.c_str(), rates_.size(), sampleRateHz / 1e6, centreHz / 1e6);
     return true;
@@ -154,22 +155,7 @@ void AirspySource::applyAll() {
     airspy_set_packing(dev_, packing_ ? 1 : 0);
     airspy_set_rf_bias(dev_, bias_ ? 1 : 0);
     airspy_set_freq(dev_, (uint32_t)llround(centreHz_));
-    // ★ Manual stages win when the user has set any of them (lna_ >= 0 marks that); otherwise the
-    //   preset curve, or the radio's own AGCs when nobody has chosen a gain at all.
-    if (lna_ >= 0 || mixer_ >= 0 || vga_ >= 0) {
-        airspy_set_lna_agc(dev_, lnaAgc_ ? 1 : 0);
-        airspy_set_mixer_agc(dev_, mixerAgc_ ? 1 : 0);
-        if (!lnaAgc_   && lna_   >= 0) airspy_set_lna_gain(dev_,   (uint8_t)lna_);
-        if (!mixerAgc_ && mixer_ >= 0) airspy_set_mixer_gain(dev_, (uint8_t)mixer_);
-        if (vga_ >= 0)                 airspy_set_vga_gain(dev_,   (uint8_t)vga_);
-    } else if (gainTenth_ >= 0) {
-        airspy_set_lna_agc(dev_, 0);
-        airspy_set_mixer_agc(dev_, 0);
-        applyGain();
-    } else {
-        airspy_set_lna_agc(dev_, lnaAgc_ ? 1 : 0);
-        airspy_set_mixer_agc(dev_, mixerAgc_ ? 1 : 0);
-    }
+    applyGainMode();
     ASLOG("Airspy: settings re-stated on the live stream — %.3f MHz, bias-T %s, packing %s",
           centreHz_ / 1e6, bias_ ? "on" : "off", packing_ ? "on" : "off");
 }
@@ -232,45 +218,88 @@ bool AirspySource::setSampleRate(double hz) {
 
 void AirspySource::setGainTenthDb(int tenthDb) {
     gainTenth_ = tenthDb;
-    if (!dev_) return;
-    if (tenthDb < 0) {   // ★ the nearest thing this radio has to "auto" — its own stage AGCs
-        setLnaAgc(true);
-        setMixerAgc(true);
+    /* ★★ "AUTO" ON THIS RADIO IS FREE MODE WITH BOTH STAGE AGCs ON — it has no whole-device
+     *  automatic gain, and the two stage AGCs are the nearest thing it has. Naming it as a MODE
+     *  rather than a magic negative number is the point of the three-way control. */
+    if (tenthDb < 0) {
+        lnaAgc_ = mixerAgc_ = true;
+        mode_   = GainFree;
+        applyGainMode();
         return;
     }
-    setLnaAgc(false);
-    setMixerAgc(false);
-    lna_ = mixer_ = vga_ = -1;   // back to a preset curve
-    applyGain();
+    /* ★ The slider drives whichever preset curve is selected, and is REMEMBERED against it. Moving
+     *  it while in Free mode is the app asking for a preset, so the mode follows the control the
+     *  user actually touched rather than the two disagreeing. */
+    if (mode_ == GainFree) mode_ = GainLinear;
+    presetTenth_[mode_ == GainSensitive ? 0 : 1] = tenthDb;
+    applyGainMode();
 }
 
-void AirspySource::applyGain() {
-    if (!dev_ || gainTenth_ < 0) return;
-    const uint8_t p = (uint8_t)presetFromTenth(gainTenth_);
-    if (sensitivity_) airspy_set_sensitivity_gain(dev_, p);
-    else              airspy_set_linearity_gain(dev_, p);
-    ASLOG("Airspy: %s gain preset %u of %d", sensitivity_ ? "sensitivity" : "linearity", p, kPresets - 1);
+/** ★★★ THE WHOLE GAIN PATH, IN ONE PLACE, matching SDR++ clause by clause — see the GainMode note
+ *  in the header. The two preset modes force BOTH stage AGCs off before setting their curve,
+ *  because a curve sets all three stages and an AGC still running would immediately overwrite two
+ *  of them; Free honours the AGC switches, and the VGA is always manual because it has none. */
+void AirspySource::applyGainMode() {
+    if (!dev_) return;
+    if (mode_ == GainFree) {
+        airspy_set_lna_agc(dev_, lnaAgc_ ? 1 : 0);
+        if (!lnaAgc_)   airspy_set_lna_gain(dev_,   (uint8_t)(lna_   < 0 ? 0 : lna_));
+        airspy_set_mixer_agc(dev_, mixerAgc_ ? 1 : 0);
+        if (!mixerAgc_) airspy_set_mixer_gain(dev_, (uint8_t)(mixer_ < 0 ? 0 : mixer_));
+        airspy_set_vga_gain(dev_, (uint8_t)(vga_ < 0 ? 0 : vga_));
+        ASLOG("Airspy: free gain — LNA %d%s, mixer %d%s, VGA %d",
+              lna_ < 0 ? 0 : lna_, lnaAgc_ ? " (AGC)" : "",
+              mixer_ < 0 ? 0 : mixer_, mixerAgc_ ? " (AGC)" : "", vga_ < 0 ? 0 : vga_);
+        return;
+    }
+    airspy_set_lna_agc(dev_, 0);
+    airspy_set_mixer_agc(dev_, 0);
+    const int tenth = presetTenth_[mode_ == GainSensitive ? 0 : 1];
+    if (tenth < 0) return;              // no position chosen yet — leave the radio as it opened
+    const uint8_t p = (uint8_t)presetFromTenth(tenth);
+    if (mode_ == GainSensitive) airspy_set_sensitivity_gain(dev_, p);
+    else                        airspy_set_linearity_gain(dev_, p);
+    ASLOG("Airspy: %s gain preset %u of %d",
+          mode_ == GainSensitive ? "sensitivity" : "linearity", p, kPresets - 1);
+}
+
+void AirspySource::applyGain() { applyGainMode(); }
+
+void AirspySource::setGainMode(int mode) {
+    mode_ = (mode == GainSensitive || mode == GainFree) ? mode : GainLinear;
+    /* ★ The slider must report the position THIS mode was left at, not the one the other curve
+     *  was on — see the per-mode gains in the header. */
+    if (mode_ != GainFree) gainTenth_ = presetTenth_[mode_ == GainSensitive ? 0 : 1];
+    applyGainMode();
 }
 
 void AirspySource::setSensitivityCurve(bool sensitivity) {
-    sensitivity_ = sensitivity;
-    applyGain();
+    setGainMode(sensitivity ? GainSensitive : GainLinear);
 }
 
+/* ★★ A STAGE IS A FREE-MODE CONTROL. Moving one used to leave the preset curve silently; now it
+ *  selects the mode it belongs to, so the panel and the radio cannot disagree about which of the
+ *  three is in force. */
 void AirspySource::setLnaGain(int v) {
     lna_ = v < 0 ? 0 : (v > 15 ? 15 : v);
-    if (dev_) { setLnaAgc(false); airspy_set_lna_gain(dev_, (uint8_t)lna_); }
+    mode_ = GainFree; lnaAgc_ = false;
+    applyGainMode();
 }
 void AirspySource::setMixerGain(int v) {
     mixer_ = v < 0 ? 0 : (v > 15 ? 15 : v);
-    if (dev_) { setMixerAgc(false); airspy_set_mixer_gain(dev_, (uint8_t)mixer_); }
+    mode_ = GainFree; mixerAgc_ = false;
+    applyGainMode();
 }
 void AirspySource::setVgaGain(int v) {
     vga_ = v < 0 ? 0 : (v > 15 ? 15 : v);
-    if (dev_) airspy_set_vga_gain(dev_, (uint8_t)vga_);
+    mode_ = GainFree;
+    applyGainMode();
 }
-void AirspySource::setLnaAgc(bool on)   { lnaAgc_ = on;   if (dev_) airspy_set_lna_agc(dev_, on ? 1 : 0); }
-void AirspySource::setMixerAgc(bool on) { mixerAgc_ = on; if (dev_) airspy_set_mixer_agc(dev_, on ? 1 : 0); }
+/* ★ The stage AGCs exist only in Free mode — a preset curve sets all three stages itself, so an
+ *  AGC left running there would overwrite two of them the moment it moved. Switching one on
+ *  therefore selects Free, exactly as moving a stage does. */
+void AirspySource::setLnaAgc(bool on)   { lnaAgc_ = on;   mode_ = GainFree; applyGainMode(); }
+void AirspySource::setMixerAgc(bool on) { mixerAgc_ = on; mode_ = GainFree; applyGainMode(); }
 void AirspySource::setBiasTee(bool on)  { bias_ = on;     if (dev_) airspy_set_rf_bias(dev_, on ? 1 : 0); }
 void AirspySource::setPacking(bool on)  { packing_ = on;  if (dev_) airspy_set_packing(dev_, on ? 1 : 0); }
 
