@@ -5393,7 +5393,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 static const int kRungs[] = { 350000, 500000, 700000, 1000000,
                                               1400000, 2000000, 2800000, 4000000 };
                 for (int r : kRungs) if (want <= r) { want = r; break; }
-                if (want >= (int)(sampleRate * 0.95)) want = 0;   // re-check after rounding UP
+                /* ★★★ AND THE SAME RULE A SECOND TIME, WHICH IS WHY THE FIRST FIX WAS NOT ENOUGH.
+                 *  This line read `if (want >= sampleRate * 0.95) want = 0;` — a re-check after
+                 *  rounding up — and it undid the clamp above every time: at 1.2 MS/s the clamp
+                 *  gives 1 200 000, the rung table rounds that UP to 1 400 000, and 1.4 is past
+                 *  0.95 x 1.2, so the filter went back to OFF. The bug was written twice and I
+                 *  found one of them first. (AGENTS.md: ask who ELSE reads this.)
+                 *  ★★ A rung slightly WIDER than the capture is not a problem — it is a real
+                 *     filter, it still keeps the rest of the FM band off the mixer, and anything
+                 *     it passes beyond Nyquist was already being folded in by the capture whether
+                 *     the filter was there or not. An OPEN filter is a different thing entirely.
+                 *  ★ 0 now has exactly one meaning left in this function: a full-rate raw-IQ
+                 *    consumer has asked for the whole capture (see iqFullActive above). */
             }
             /* ★★★ AND A DEADBAND ON THE WAY DOWN, because quantising alone does not stop a
              *     flip-flop that straddles ONE rung boundary. Measured on the Xcover during an FM
@@ -20461,8 +20472,28 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // Re-apply everything the device forgot by being unplugged. Same order as start().
         rtlsdr_set_sample_rate(dev, (uint32_t)sampleRate);
         // ★ Setting the rate re-derives the tuner's IF filter, so ours has to go back on.
-        { const int bw_ = g_tunerBwHz.load(std::memory_order_relaxed);
-          if (bw_ > 0) rtlsdr_set_tuner_bandwidth(dev, (uint32_t)bw_); }
+        /* ★★★ THE IF FILTER IS PROGRAMMED ON EVERY OPEN — IT USED TO BE SKIPPED ENTIRELY.
+         *  This read `if (bw_ > 0) rtlsdr_set_tuner_bandwidth(...)`, and bw_ is 0 until somebody
+         *  asks for a width. Nobody did: applyAutoIf only writes when its answer DIFFERS from the
+         *  stored one, and its answer was also 0 (see the two places that used to force it there),
+         *  so on a fresh start the tuner's filter was never written at all and the radio ran the
+         *  whole session on whatever librtlsdr's init happened to leave — which on an R820T2 is
+         *  wide open.
+         *  ★★★ STUART SAW IT FROM THE OUTSIDE BEFORE I FOUND IT (2026-09-22): "its almost like the
+         *      filter was never set correctly and making it narrow then wide again fixed it." It
+         *      was never set at all; his two manual changes were the first real writes the tuner
+         *      had ever had, and the receiver stayed clean afterwards even back on auto.
+         *  ★★ AND IT MATTERS MOST WHEN AUTO IS OFF, where applyAutoIf returns immediately: such a
+         *     receiver had no path to a programmed filter from any code at all.
+         *  ★ 0 means "no preference", and the honest default for no preference is a filter that
+         *    covers the capture — not an open front end. */
+        {
+            const int bw_ = g_tunerBwHz.load(std::memory_order_relaxed);
+            const uint32_t bwWrite = bw_ > 0 ? (uint32_t)bw_ : (uint32_t)std::lround(sampleRate);
+            rtlsdr_set_tuner_bandwidth(dev, bwWrite);
+            LOGI("tuner IF filter programmed at open: %.0f kHz%s", bwWrite / 1e3,
+                 bw_ > 0 ? "" : " (no preference yet — the capture width)");
+        }
         tuneHw(rtlCenter.load());
         /* ★★★ NEVER THE TUNER'S OWN AGC (2026-09-19). This re-apply path still handed an AUTO radio to
          *  rtlsdr_set_tuner_gain_mode(dev, 0) — the hardware loop the setGain path stopped using long
