@@ -586,9 +586,27 @@ export abstract class UberSDRWsClient {
     // (device-confirmed on both platforms 2026-06-12).
     const spanCap = this.maxSpanHz > 0 ? this.maxSpanHz : this.maxHz;
     const bb = Math.max(6_000 / n, Math.min(binBandwidth, spanCap / n));
-    this.view.centerHz     = f;
+    /* ★★★ CENTRED WHILE THE VIEW ALLOWS IT, THEN SHIFTED — Stuart, 2026-09-22, zooming out from
+     *  648 kHz: "the VFO stays centred and the spectrum and waterfall moves underneath it and once
+     *  zoom is complete the VFO then snaps to its correct location". The caller anchors every zoom
+     *  on the VFO (zoomAnchorHz), so we kept DRAWING it centred while the span grew past what the
+     *  receiver covers; the real centre only arrived with the server's config, and the needle
+     *  jumped. Predict what the geometry actually permits and there is nothing left to snap.
+     *  ★★ FROM THE BACKEND'S OWN RANGE (panSpan), never a constant: clamping the view to the
+     *     RTL-SDR's 100 kHz floor is what once made MSF at 60 kHz unzoomable on the HF+ — see the
+     *     note at the top of this method. An UberSDR reports the receiver's real coverage.
+     *  ★ A span wider than the whole range has no centre to choose: show the range itself. */
+    const span = bb * n;
+    const { loHz, hiHz } = this.panSpan();
+    let c = f;
+    if (hiHz > loHz) {
+      c = (hiHz - loHz) <= span
+        ? (loHz + hiHz) / 2
+        : Math.min(Math.max(f, loHz + span / 2), hiHz - span / 2);
+    }
+    this.view.centerHz     = c;
     this.view.binBandwidth = bb;
-    this._sendView(f, bb);
+    this._sendView(Math.round(c), bb);
   }
 
   pan(frequency: number) {
