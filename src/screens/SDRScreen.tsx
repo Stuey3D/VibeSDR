@@ -1264,6 +1264,24 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (rc) rc.setHwAgc?.(on); else LocalHw?.setAgc?.(on);
   }, [LocalHw, hwClient]);
   // ★ Same shape as onHwPpm: a remote VibeServer's dongle is set over the wire, a local one here.
+  /* ★★★ ONE SENDER FOR BOTH KINDS OF RADIO — and the reason this function exists at all.
+   *  Every Airspy control used to be written `(client.current as any)?.airspyControl?.({...})`.
+   *  That method lives only on the WebSocket client, so with the radio plugged into THIS phone
+   *  there was nothing to call and the optional chaining swallowed it: gain mode, all three
+   *  stages, both AGCs, bias-T and packing did nothing whatsoever, silently, while the panel
+   *  looked complete.
+   *  ★★ Our first Airspy owner found it from the outside, twice: "Gain control isn't working at
+   *     all", "Bias-T is not working", and decisively "LNA and Mixer AGC disabled then the sliders
+   *     moved and no change to the signals at all" — with the AGCs off and the stages written,
+   *     something has to change, and nothing did because nothing was written.
+   *  ★ Same shape as every other control on this screen (see onHwDirectSamp below): remote goes to
+   *    the server, local goes to the engine through the bridge. Written once so the next control
+   *    cannot be added to only one of the two. */
+  const aspSend = useCallback((o: Record<string, number | boolean>) => {
+    const rc: any = client.current as any;
+    if (rc?.airspyControl) { rc.airspyControl(o); return; }
+    (LocalHw as any)?.airspyControl?.(o);
+  }, [LocalHw]);
   const onHwDirectSamp = useCallback((mode: number) => {
     setHwDirectSamp(mode);
     const rc = hwClient();
@@ -9698,27 +9716,27 @@ export default function SDRScreen({ route, navigation }: Props) {
           gainCapTenthDb={hwGainCap}
           aspCurve={aspCurve}
           onAspCurve={(sens) => { setAspCurve(sens ? 'sensitivity' : 'linearity');
-                                  (client.current as any)?.airspyControl?.({ curve: sens }); }}
+                                  aspSend({ curve: sens }); }}
           aspGainMode={aspGainMode}
           onAspGainMode={(m) => {
             setAspGainMode(m);
             if (m !== 2) setAspCurve(m === 0 ? 'sensitivity' : 'linearity');
-            (client.current as any)?.airspyControl?.({ mode: m });
+            aspSend({ mode: m });
           }}
           aspLna={aspLna}
-          onAspLna={(v) => { setAspLna(v); (client.current as any)?.airspyControl?.({ lna: v }); }}
+          onAspLna={(v) => { setAspLna(v); aspSend({ lna: v }); }}
           aspMixer={aspMixer}
-          onAspMixer={(v) => { setAspMixer(v); (client.current as any)?.airspyControl?.({ mixer: v }); }}
+          onAspMixer={(v) => { setAspMixer(v); aspSend({ mixer: v }); }}
           aspVga={aspVga}
-          onAspVga={(v) => { setAspVga(v); (client.current as any)?.airspyControl?.({ vga: v }); }}
+          onAspVga={(v) => { setAspVga(v); aspSend({ vga: v }); }}
           aspLnaAgc={aspLnaAgc}
-          onAspLnaAgc={(v) => { setAspLnaAgc(v); (client.current as any)?.airspyControl?.({ lnaAgc: v }); }}
+          onAspLnaAgc={(v) => { setAspLnaAgc(v); aspSend({ lnaAgc: v }); }}
           aspMixerAgc={aspMixerAgc}
-          onAspMixerAgc={(v) => { setAspMixerAgc(v); (client.current as any)?.airspyControl?.({ mixerAgc: v }); }}
+          onAspMixerAgc={(v) => { setAspMixerAgc(v); aspSend({ mixerAgc: v }); }}
           aspBiasT={aspBiasT}
-          onAspBiasT={(v) => { setAspBiasT(v); (client.current as any)?.airspyControl?.({ biast: v }); }}
+          onAspBiasT={(v) => { setAspBiasT(v); aspSend({ biast: v }); }}
           aspPacking={aspPacking}
-          onAspPacking={(v) => { setAspPacking(v); (client.current as any)?.airspyControl?.({ packing: v }); }}
+          onAspPacking={(v) => { setAspPacking(v); aspSend({ packing: v }); }}
           hrfAmp={hrfAmp}
           onHrfAmp={(v) => { setHrfAmp(v); (client.current as any)?.hackrfControl?.({ amp: v }); }}
           hrfLna={hrfLna}

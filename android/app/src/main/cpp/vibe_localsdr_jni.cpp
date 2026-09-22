@@ -994,6 +994,41 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeBenchProgress(JNIEnv* env, jobject) {
     return env->NewStringUTF(vibe::benchProgressJson().c_str());
 }
 
+/** ★★★ THE AIRSPY'S CONTROLS, FOR LOCAL HARDWARE — WHICH HAD NO PATH TO THE ENGINE AT ALL.
+ *
+ *  The app's Airspy panel sent every control through `client.airspyControl(...)`, and that method
+ *  exists only on the WebSocket client. Plugged into the phone there is no WebSocket, the call was
+ *  written with optional chaining, and so every single control — gain mode, the three stages, both
+ *  stage AGCs, bias-T and packing — did nothing at all, silently. The panel looked complete and was
+ *  decorative.
+ *  ★★★ EXACTLY THE REPORT OUR FIRST AIRSPY OWNER GAVE, twice, across two builds: "Gain control
+ *      isn't working at all", "Bias-T is not working", and then the decisive one — "LNA and Mixer
+ *      AGC disabled then the sliders moved and no change to the signals at all". With the AGCs off
+ *      and the stages written, SOMETHING must change; nothing did, because nothing was written.
+ *  ★★ The same shape as the DAB label-scan setting found hours earlier: a native function that
+ *     exists, compiles, and is unreachable from the only place that would call it. `?.` is what
+ *     makes it silent — see [[android_bridge_missing_reactmethod]].
+ *  ★ One entry point taking (field, value) rather than seven exports: the fields are already an
+ *    enumerated set on the JS side (the same names the WebSocket message uses), and a seventh
+ *    export is a seventh thing to forget. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeAirspyControl(JNIEnv* env, jobject, jstring field, jint value) {
+    const char* f = field ? env->GetStringUTFChars(field, nullptr) : nullptr;
+    const std::string k = f ? f : "";
+    if (f) env->ReleaseStringUTFChars(field, f);
+    auto& sh = vibe::LocalSdrShim::instance();
+    if      (k == "mode")     sh.setAirspyGainMode((int)value);
+    else if (k == "curve")    sh.setAirspyCurve(value != 0);
+    else if (k == "lna")      sh.setAirspyStage(0, (int)value);
+    else if (k == "mixer")    sh.setAirspyStage(1, (int)value);
+    else if (k == "vga")      sh.setAirspyStage(2, (int)value);
+    else if (k == "lnaAgc")   sh.setAirspyLnaAgc(value != 0);
+    else if (k == "mixerAgc") sh.setAirspyMixerAgc(value != 0);
+    else if (k == "biast")    sh.setAirspyBiasT(value != 0);
+    else if (k == "packing")  sh.setAirspyPacking(value != 0);
+    else LOGI("airspy control '%s' is not one this build knows", k.c_str());
+}
+
 /** ★ The name the USB descriptor gives this dongle, handed down from Kotlin because the
  *  fd-open path leaves librtlsdr with no index to look it up from. See setUsbModelName(). */
 extern "C" JNIEXPORT void JNICALL

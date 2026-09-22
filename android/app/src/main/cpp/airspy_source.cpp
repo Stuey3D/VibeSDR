@@ -92,8 +92,24 @@ bool AirspySource::finishOpen(double sampleRateHz, double centreHz, int gainTent
                               std::string& err) {
     // ── What this actually is: board id names the model, the serial tells two apart ──
     uint8_t board = 0;
-    if (airspy_board_id_read(dev_, &board) == AIRSPY_SUCCESS)
-        model_ = std::string("Airspy ") + airspy_board_id_name((airspy_board_id)board);
+    if (airspy_board_id_read(dev_, &board) == AIRSPY_SUCCESS) {
+        /* ★★ THE BOARD ALREADY SAYS "AIRSPY". libairspy's board_id_name returns "AIRSPY MINI" or
+         *  "AIRSPY R2", so prefixing our own "Airspy " produced "Airspy AIRSPY MINI" — which is
+         *  what the panel heading showed our tester ("Airspy AIRSPY Controls", 2026-09-22).
+         *  ★ Prefix only when the board's own name does NOT already carry it, so an unknown future
+         *    board that reports something else is still identified as an Airspy. */
+        std::string bn = airspy_board_id_name((airspy_board_id)board);
+        const bool saysAirspy = bn.size() >= 6
+            && (bn.compare(0, 6, "AIRSPY") == 0 || bn.compare(0, 6, "Airspy") == 0);
+        model_ = saysAirspy ? bn : ("Airspy " + bn);
+        /* ★ And in the case the library uses for a product name rather than shouting it: the model
+         *  is shown as a heading beside "Controls", not as a log line. */
+        if (saysAirspy && bn.size() > 6) {
+            for (size_t i = 1; i < model_.size(); i++)
+                if (model_[i - 1] != ' ' && model_[i] >= 'A' && model_[i] <= 'Z')
+                    model_[i] = (char)(model_[i] - 'A' + 'a');
+        }
+    }
     airspy_read_partid_serialno_t ps{};
     if (airspy_board_partid_serialno_read(dev_, &ps) == AIRSPY_SUCCESS) {
         char b[32];

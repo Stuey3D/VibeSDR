@@ -16,6 +16,8 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.ReadableMap
+import com.facebook.react.bridge.ReadableType
 import com.facebook.react.bridge.WritableArray
 import com.facebook.react.bridge.WritableMap
 
@@ -136,6 +138,50 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
                 else promise.resolve(j.toString())
             } catch (t: Throwable) { promise.reject("bench_failed", t.message ?: "$t") }
         }.start()
+    }
+
+    /**
+     * ★★★ READ EVERY STATION'S NAME ON THE MULTIPLEX — LIVE, not at the next start.
+     *
+     * The switch was written to storage and sent in the start config, and the hint said "takes
+     * effect when the server next starts" — which is true and is not good enough: on a TV the
+     * server is left running for days, so the owner flips it, watches nothing happen, and
+     * reasonably concludes the setting is broken (Stuart, 2026-09-22, having just had the
+     * forwarding bug fixed in the same setting: "the multi station radio text still isnt enabling
+     * even though i set it in the settings on the TV" — the server had not restarted since 22:28).
+     * ★★ The engine has always been able to take it at runtime; there was simply no @ReactMethod,
+     *    so JS could not reach it — the missing-bridge trap, where a native function exists,
+     *    compiles, and is unreachable from the only place that would call it.
+     */
+    @ReactMethod
+    fun setDabScanLabels(mode: Int, promise: Promise) {
+        try { VibeLocalSDR.setDabScanLabels(mode); promise.resolve(true) }
+        catch (t: Throwable) { promise.reject("dab_scan_failed", t.message ?: "$t") }
+    }
+
+    /**
+     * ★★★ THE AIRSPY PANEL'S CONTROLS WHEN THE RADIO IS PLUGGED INTO THIS PHONE.
+     *
+     * Remote receivers get these over the WebSocket (`airspy_control`); local hardware had no path
+     * at all, so the whole panel was decorative — see nativeAirspyControl for the evidence.
+     * ★ Takes the same field names as the WebSocket message, so the two paths cannot drift into
+     *   describing the radio differently. Booleans arrive as 0/1.
+     */
+    @ReactMethod
+    fun airspyControl(opts: ReadableMap, promise: Promise) {
+        try {
+            val it = opts.keySetIterator()
+            while (it.hasNextKey()) {
+                val k = it.nextKey()
+                val v = when (opts.getType(k)) {
+                    ReadableType.Boolean -> if (opts.getBoolean(k)) 1 else 0
+                    ReadableType.Number  -> opts.getDouble(k).toInt()
+                    else                 -> continue
+                }
+                VibeLocalSDR.airspyControl(k, v)
+            }
+            promise.resolve(true)
+        } catch (t: Throwable) { promise.reject("airspy_control_failed", t.message ?: "$t") }
     }
 
     /** ★ How far through the benchmark is, for the bar. Cheap, and safe to call while it runs. */

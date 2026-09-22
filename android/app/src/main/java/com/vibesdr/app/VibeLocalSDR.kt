@@ -218,6 +218,10 @@ object VibeLocalSDR {
     fun setDirectoryKey(key: String) { ensureLoaded(); nativeSetDirectoryKey(key) }
     private external fun nativeSetDirectoryKey(key: String)
 
+    /** ★ One Airspy R2/Mini control — see nativeAirspyControl for why this exists at all. */
+    fun airspyControl(field: String, value: Int) { ensureLoaded(); nativeAirspyControl(field, value) }
+    private external fun nativeAirspyControl(field: String, value: Int)
+
     /** ★ Tell the engine what the dongle calls itself. Android opens by fd, so the engine cannot
      *  read the descriptor itself and every Android server reported a nameless radio. */
     fun setUsbModelName(name: String) { ensureLoaded(); nativeSetUsbModelName(name) }
