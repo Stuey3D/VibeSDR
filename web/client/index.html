@@ -1250,6 +1250,10 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 .mrow label .sub { display: block; font-size: 9.5px; letter-spacing: 0.04em; opacity: 0.62;
                    text-transform: none; margin-top: 1px; }
 #gainAuto.locked { opacity: 0.55; }
+/* ★ A stage the radio's own AGC is driving — greyed but still THERE and still reporting, the same
+   treatment the RSP's locked IF half gets below. It is the right control, it is simply not yours
+   at that moment, and removing it would make the AGC look like it took a feature away. */
+.mrow.dim label, .mrow.dim .val { opacity: 0.55; }
 /* ★ The same treatment for the SDRplay's IF half when the owner has locked the AGC on. Greyed
    but NOT hidden, and the readout keeps animating — a locked control still reports what the
    radio is doing, it just will not take instructions. See syncRspAgcLock in main.ts. */
@@ -4143,6 +4147,68 @@ select.btn { padding: 6px 8px; }
            at 0 in the handler. -->
       <input type="range" id="ahfPpb" min="-5000" max="5000" step="5" value="0">
       <span class="val" id="ahfPpbVal">0 ppb</span>
+    </div>
+  </div>
+  <!-- ★★★ AIRSPY R2 / MINI. Written from libairspy's API against hardware nobody here owns, and
+       confirmed working first power-on by a tester on Discord (2026-09-22) — the app's panel, which
+       this one now mirrors so the web client is not the poor relation.
+       ★★★ THE GAIN SLIDER ABOVE IS THE PRESET CURVE. Airspy's own recommended way to run this
+       radio is one knob, 0-21, against a chosen curve — so everything here is the manual path for
+       people who want it, plus the radio's two internal AGCs.
+       ★★★ NO DIRECT SAMPLING AND NO PPM. 24-1800 MHz, so there is no HF branch to switch to, and
+       the .rtlOnly rows are hidden for this driver like every other non-dongle: a control that
+       only works on one radio does not belong on the others (AGENTS.md).
+       ★ No VibeAGC either: it is RTL-only, shaped against a tuner that behaves nothing like this
+       one, and Stuart's rule is that it does not drive a radio unheard. -->
+  <div id="aspCtls" hidden>
+    <!-- ★ Two curves, not a "mode": both are the same slider, and the difference is how the radio
+         splits one position across LNA, mixer and VGA. Linearity protects what you are tuned to
+         from strong neighbours; sensitivity reaches for the weakest thing on a quiet band. -->
+    <div class="mrow">
+      <label title="Two ways the radio sets its three stages from one slider position. Linearity keeps strong neighbours out of the mixer; sensitivity digs for the weakest signal. Linearity is the safer default on a busy band.">GAIN CURVE</label>
+      <div class="seg" id="aspCurveSeg">
+        <button class="btn on" data-curve="0" title="Keeps strong neighbours from spoiling what you are on.">LINEARITY</button>
+        <button class="btn" data-curve="1" title="Digs for the weakest signal; more prone to overload on a crowded band.">SENSITIVITY</button>
+      </div>
+    </div>
+    <!-- ★ The radio's own AGC for two of the three stages. Named per stage because that is what
+         they are: switching one on does not make the other automatic. -->
+    <div class="mrow">
+      <label title="The radio's own automatic gain for the LNA. With this on, the LNA slider below is set by the radio and yours does nothing.">LNA AGC</label>
+      <div class="seg"><button class="btn" id="aspLnaAgc">OFF</button></div>
+    </div>
+    <div class="mrow">
+      <label title="The radio's own automatic gain for the mixer. With this on, the mixer slider below is set by the radio and yours does nothing.">MIXER AGC</label>
+      <div class="seg"><button class="btn" id="aspMixerAgc">OFF</button></div>
+    </div>
+    <!-- ★ 0-15 on each stage: the hardware's own granularity, not a scaled percentage. Moving any
+         of them leaves the preset curve, which the note says out loud rather than leaving the
+         listener to infer it from a slider that stopped agreeing with the one above. -->
+    <div class="mrow" id="rowAspLna">
+      <label for="aspLna">LNA</label>
+      <input type="range" id="aspLna" min="0" max="15" step="1" value="0">
+      <span class="val" id="aspLnaVal">0</span>
+    </div>
+    <div class="mrow" id="rowAspMixer">
+      <label for="aspMixer">MIXER</label>
+      <input type="range" id="aspMixer" min="0" max="15" step="1" value="0">
+      <span class="val" id="aspMixerVal">0</span>
+    </div>
+    <div class="mrow" id="rowAspVga">
+      <label for="aspVga" title="The VGA has no automatic mode on this radio — it is always yours to set.">VGA</label>
+      <input type="range" id="aspVga" min="0" max="15" step="1" value="0">
+      <span class="val" id="aspVgaVal">0</span>
+    </div>
+    <div class="mnote" id="aspManualNote" style="margin:2px 0 6px;opacity:.75">Moving any of these leaves the preset curve and sets the stages yourself.</div>
+    <div class="mrow">
+      <label title="4.5 V on the aerial socket for a powered antenna or an LNA. DC into the wrong antenna can damage it.">BIAS-T</label>
+      <div class="seg"><button class="btn" id="aspBiasT">OFF</button></div>
+    </div>
+    <!-- ★ Packing is a USB bandwidth trade, not a quality control: the radio sends 12-bit samples
+         packed rather than padded to 16. It matters on a hub or a long cable. -->
+    <div class="mrow" id="rowAspPacking">
+      <label title="Sends samples packed 12-bit instead of padded to 16, which cuts the USB bandwidth by a quarter. Useful on a shared hub or a marginal cable; no effect on what you hear.">USB PACKING</label>
+      <div class="seg"><button class="btn" id="aspPacking">OFF</button></div>
     </div>
   </div>
   <!-- ★★★ HACKRF ONE — EXPERIMENTAL, and the panel says so on screen. Nobody here owns one; the

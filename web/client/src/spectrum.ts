@@ -187,6 +187,22 @@ export interface RadioCaps {
   hrfAmp?: boolean; hrfLna?: boolean; hrfVga?: boolean; hrfBiasT?: boolean;
   amp?: number; lna?: number; vga?: number; biast?: number;
   attStepDb?: number;     // dB per step (6)
+  /* ── Airspy R2 / Mini ──────────────────────────────────────────────────────
+   * ★ The three stage values here are the radio's CURRENT state, like the HackRF's above and for
+   *   the same reason: two of them can be driven by the radio's own AGC, so a saved preference
+   *   would be a guess about a number the hardware owns. `lna`/`vga` are shared with the HackRF
+   *   block — the same words for the same stages — and `mixer` is this radio's third.           */
+  gainPresets?: number;   // positions on the preset curve (22 = 0..21)
+  stageMax?: number;      // top of each manual stage (15)
+  curve?: 'linearity' | 'sensitivity' | string;
+  lnaAgc?: boolean;       // the radio's own AGC for the LNA...
+  mixerAgc?: boolean;     // ...and for the mixer. The VGA has none.
+  mixer?: number;
+  packing?: boolean;      // USB sample packing is ON
+  hasBiasT?: boolean;
+  hasPacking?: boolean;
+  /** ★ 24-1800 MHz, so the direct-sampling row must not be drawn for it — see applyRadioCaps. */
+  noDirectSampling?: boolean;
   hfLna?: boolean;        // has the +6 dB preamp
   hfAgc?: boolean;        // has its own AGC
   agcThreshold?: boolean; // ...with a low/high threshold

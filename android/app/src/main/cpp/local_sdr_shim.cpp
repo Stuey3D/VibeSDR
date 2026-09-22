@@ -27360,6 +27360,19 @@ std::string LocalSdrShim::radioCapsJson() const {
         j += ",\"vga\":" + std::to_string(p->asp->vgaGain());
         j += ",\"biasT\":" + std::string(p->asp->biasTee() ? "true" : "false");
         j += ",\"packing\":" + std::string(p->asp->packing() ? "true" : "false");
+        /* ★★★ AND ITS OWN RATES — THE MINI AND THE R2 ARE NOT THE SAME RADIO. The Mini runs
+         *  6 and 3 MS/s, the R2 10 and 2.5; the HF+ and the HackRF both publish their lists and
+         *  this one did not, so the client had nothing to draw a rate picker from and would have
+         *  shown the dongle's rates on an Airspy. Taken from the DEVICE (airspy_get_samplerates),
+         *  never from the model name — a name is a guess about hardware, and a future board would
+         *  be guessed wrong (AGENTS.md: no inferred hardware readouts).
+         *  ★ 24-1800 MHz for the same reason the HF+ publishes its hole: a dial that offers
+         *    medium wave on this radio is offering silence. */
+        j += ",\"ranges\":[[24000000,1800000000]]";
+        j += ",\"rates\":[";
+        { const auto& rl = p->asp->sampleRates();
+          for (size_t i = 0; i < rl.size(); ++i) { if (i) j += ','; j += std::to_string(rl[i]); } }
+        j += "]";
         j += ",\"hasBiasT\":true,\"hasPacking\":true,\"noDirectSampling\":true}";
         return j;
     }

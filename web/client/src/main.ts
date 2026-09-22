@@ -8005,6 +8005,7 @@ function initDecoders(host: string, auth: AuthState) {
   initRdsResize();
   initRspControls();
   initAhfControls();
+  initAirspyControls();
   initHrfControls();
   $('decodersBtn').onclick = () => togglePanel('decodersPanel');
   $('decClose').onclick = () => closePanels();
@@ -11889,6 +11890,98 @@ function initAhfControls() {
 }
 
 
+// ── Airspy R2 / Mini ─────────────────────────────────────────────────────────
+// ★★★ THE PRESET CURVE IS THE MAIN GAIN SLIDER, not a control in here. Airspy's own recommended
+//     way to run this radio is one knob (0-21) against a chosen curve; the three stages below are
+//     the manual path for people who want it, and touching one leaves the curve behind.
+// ★★★ THE STAGES ARE PAINTED FROM THE RADIO, NEVER FROM A SAVED PREFERENCE. Two of the three can
+//     be driven by the radio's own AGC, so a remembered number would be a claim about a value the
+//     hardware owns — the HackRF's amp switch is handled the same way and for the same reason.
+//     The CURVE is a genuine user choice and is remembered.
+// ★★★ BIAS-T IS OWNER-ONLY, MIRRORING THE SERVER (`adminGate` in the airspy_control handler); the
+//     gains and packing follow `sharedGate`, so one listener moving them moves them for everyone.
+//     If these two rules drift apart the panel lies — it offers what the server will refuse.
+function aspSend(msg: Record<string, unknown>) { spec?.send({ type: 'airspy_control', ...msg }); }
+
+/** ★ A stage the radio's own AGC is driving is not yours to set. Disabled rather than hidden: it
+ *  is still the right control, just not yours at that moment, and hiding it would make the AGC
+ *  look like it removed features. The VGA has no AGC, so it is never disabled here. */
+function renderAspEnabled() {
+  const lnaAuto   = $('aspLnaAgc').classList.contains('on');
+  const mixerAuto = $('aspMixerAgc').classList.contains('on');
+  $<HTMLInputElement>('aspLna').disabled   = lnaAuto;
+  $<HTMLInputElement>('aspMixer').disabled = mixerAuto;
+  $('rowAspLna').classList.toggle('dim', lnaAuto);
+  $('rowAspMixer').classList.toggle('dim', mixerAuto);
+  // ★ Say who is in charge rather than quoting a number that is not in effect — the same lesson
+  //   as the HF+'s attenuator readout, where a greyed figure read as an applied setting.
+  $('aspLnaVal').textContent   = lnaAuto   ? 'set by AGC' : $<HTMLInputElement>('aspLna').value;
+  $('aspMixerVal').textContent = mixerAuto ? 'set by AGC' : $<HTMLInputElement>('aspMixer').value;
+  $('aspVgaVal').textContent   = $<HTMLInputElement>('aspVga').value;
+}
+
+/** Push what the USER chose — which is the curve, and nothing else. See the note above: the three
+ *  stages belong to the radio until somebody moves one, so re-asserting a remembered stage on
+ *  every reconnect would overwrite the hardware's own AGC with a stale number. */
+function pushAllAspSettings() {
+  if (radioCaps?.driver !== 'airspy') return;
+  const seg = $('aspCurveSeg').querySelector('.on')?.getAttribute('data-curve');
+  aspSend({ curve: seg === '1' ? 1 : 0 });
+}
+
+/** The radio has just said what it is and what its stages are sitting at — paint that. */
+function applyAspCaps(caps: import('./spectrum').RadioCaps | null) {
+  const max = Math.max(1, caps?.stageMax ?? 15);
+  for (const id of ['aspLna', 'aspMixer', 'aspVga']) $<HTMLInputElement>(id).max = String(max);
+  const set = (id: string, v: number | undefined) => {
+    if (typeof v === 'number') $<HTMLInputElement>(id).value = String(Math.max(0, Math.min(max, v)));
+  };
+  set('aspLna', caps?.lna); set('aspMixer', caps?.mixer); set('aspVga', caps?.vga);
+  const tog = (id: string, on: boolean) => {
+    $(id).classList.toggle('on', on);
+    $(id).textContent = on ? 'ON' : 'OFF';
+  };
+  tog('aspLnaAgc', !!caps?.lnaAgc);
+  tog('aspMixerAgc', !!caps?.mixerAgc);
+  tog('aspBiasT', !!caps?.biasT);
+  tog('aspPacking', !!caps?.packing);
+  // ★ The curve comes from the radio too — it is the one thing here that a reconnect can restore
+  //   truthfully, because the server holds it.
+  if (caps?.curve) {
+    for (const b of Array.from($('aspCurveSeg').querySelectorAll('.btn')) as HTMLElement[])
+      b.classList.toggle('on', b.getAttribute('data-curve') === (caps.curve === 'sensitivity' ? '1' : '0'));
+  }
+  // ★ A radio without packing does not get a packing switch, rather than a dead one.
+  $('rowAspPacking').hidden = caps?.hasPacking === false;
+  renderAspEnabled();
+  pushAllAspSettings();
+}
+
+function initAirspyControls() {
+  const toggle = (id: string, send: (on: boolean) => void) => {
+    $(id).onclick = () => {
+      const on = !$(id).classList.contains('on');
+      $(id).classList.toggle('on', on);
+      $(id).textContent = on ? 'ON' : 'OFF';
+      send(on);
+      renderAspEnabled();
+    };
+  };
+  toggle('aspLnaAgc',   (on) => aspSend({ lnaAgc: on ? 1 : 0 }));
+  toggle('aspMixerAgc', (on) => aspSend({ mixerAgc: on ? 1 : 0 }));
+  toggle('aspBiasT',    (on) => aspSend({ biast: on ? 1 : 0 }));
+  toggle('aspPacking',  (on) => aspSend({ packing: on ? 1 : 0 }));
+  const stage = (id: string, key: string) => {
+    $<HTMLInputElement>(id).oninput = () => {
+      renderAspEnabled();
+      aspSend({ [key]: Number($<HTMLInputElement>(id).value) });
+    };
+  };
+  stage('aspLna', 'lna'); stage('aspMixer', 'mixer'); stage('aspVga', 'vga');
+  // ★ The curve IS remembered: it is a preference about how to use the radio, not a reading off it.
+  segment('aspCurveSeg', 'curve', (c) => aspSend({ curve: c }), 'asp_curve');
+}
+
 // ── HackRF One (EXPERIMENTAL) ────────────────────────────────────────────────
 // ★★★ THREE STAGES AND NO AGC. libhackrf exposes no automatic mode at all, so there is no AUTO
 //     button here and no VibeAGC either — see hackrf_source.h for why the loop stays away from a
@@ -12076,9 +12169,21 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   const isRsp = caps?.driver === 'sdrplay';
   const isAhf = caps?.driver === 'airspyhf';
   const isHrf = caps?.driver === 'hackrf';
+  /* ★★★ THE FOURTH DRIVER, AND THE REASON EVERY ONE OF THESE TESTS IS NAMED. An Airspy R2/Mini
+   *  arrived and the client had never heard of it, so it fell through every "is it one of the
+   *  other three?" test and was drawn as a DONGLE: RTL gain slider, PPM, digital AGC and a direct
+   *  sampling switch — on a radio that covers 24-1800 MHz and has no HF branch to switch to.
+   *  ★★ This is the "else means dongle" trap AGENTS.md records, and it has now produced a bug
+   *     EVERY time a new radio appeared: the HF+ announced itself as "rtl" in July for the same
+   *     reason. The server was already correct — it publishes driver "airspy" with its stages,
+   *     its curve and its own rate list — and only the client was guessing.
+   *  ★ Caught before the tester met it: an Airspy Mini came up first power-on in the APP, where
+   *    the panel exists, and the web client would have handed the same person dead controls. */
+  const isAsp = caps?.driver === 'airspy';
   $<HTMLElement>('rspCtls').hidden = !isRsp;
   $<HTMLElement>('ahfCtls').hidden = !isAhf;
   $<HTMLElement>('hrfCtls').hidden = !isHrf;
+  $<HTMLElement>('aspCtls').hidden = !isAsp;
   // ★★★ NO SAMPLE-RATE PICKER ON AN HF+. Its rate is fixed at open, because changing it on a
   //     LIVE radio is a path no other SDR client takes: SDR++ (mainline and Brown) grey the
   //     control out while running, gr-osmosdr sets it once at construction, and OpenWebRX is
@@ -12097,7 +12202,7 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   // PER BILLION, and two frequency-correction controls disagreeing about units is exactly the
   // "which one is real?" confusion the RSP bias-T duplication caused.
   for (const el of Array.from(document.querySelectorAll('.rtlOnly')) as HTMLElement[])
-    el.hidden = isRsp || isAhf || isHrf;
+    el.hidden = isRsp || isAhf || isHrf || isAsp;
   /* ★★★ WHAT THIS RECEIVER'S OWNER ACTUALLY SET, under the control that obeys it — and, on a V4 or
    *  V4L, that the control is not needed at all. Both come from hwinfo (autoDs / dsBelowHz / ds),
    *  which had to be taught to send them: `dsActive` alone says what the hardware is doing this
@@ -12153,9 +12258,14 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   //   "gain" at all. One slider standing for three is a control whose label lies just as surely
   //   as one standing for none — the panel above draws the stages the radio actually has.
   const gainRow = $('gain').closest('.mrow') as HTMLElement | null;
-  if (gainRow) gainRow.hidden = isRsp || isAhf || isHrf;
+  if (gainRow) gainRow.hidden = isRsp || isAhf || isHrf;   // ★ NOT isAsp: see below
   const autoRow = $('gainAuto').closest('.mrow') as HTMLElement | null;
-  if (autoRow) autoRow.hidden = isRsp || isAhf || isHrf;
+  /* ★★ THE AIRSPY KEEPS THE GAIN SLIDER AND LOSES THE AUTO ROW. The slider IS its preset curve,
+   *  0-21, which is how Airspy themselves recommend running it — hiding it would take away this
+   *  radio's main control. VibeAGC is the row that goes: it is RTL-only, shaped against a tuner
+   *  that behaves nothing like this one, and an AUTO button that does nothing is the exact fault
+   *  AGENTS.md names. */
+  if (autoRow) autoRow.hidden = isRsp || isAhf || isHrf || isAsp;
   // ★ THE PROTECTED CONTROLS ARE BUILT HERE, so the lock has to be re-applied here. The
   // Airspy and RSP panels only exist once the radio has announced itself, which happens AFTER
   // the admin state is first resolved — so applying it only at connect left the per-radio
@@ -12163,6 +12273,7 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   refreshAdminRow();
   // ★ The rows above have just been rebuilt from the radio's capabilities, which un-hides anything
   //   the LOCK had hidden — so the lock is re-applied here, on every path out of this function.
+  if (isAsp) { applyAspCaps(caps); refreshAdminRow(); applyGainLocked(); return; }
   if (isAhf) { applyAhfCaps(caps); refreshAdminRow(); applyGainLocked(); return; }
   if (isHrf) { applyHrfCaps(caps); refreshAdminRow(); applyGainLocked(); return; }
   if (!isRsp) { applyGainLocked(); return; }
