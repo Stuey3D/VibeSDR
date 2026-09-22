@@ -4070,7 +4070,15 @@ export default function SDRScreen({ route, navigation }: Props) {
           if (svcName) {
             liveStationRef.current = svcName;
             liveBadgeRef.current = 'DAB';
-            setLiveStation((s) => ({ ...s, name: svcName, text: playing?.dls || st.dls || undefined, badge: 'DAB' }));
+            /* ★★★ DO NOT SPREAD THE PREVIOUS STATION IN. `...s` carried the LAST FM STATION'S
+             *  RDS IDENTITY — countryIso, pi, ecc — into the DAB service, because nothing else
+             *  ever clears them. The logo effect keys on name+iso+pi+ecc+freq and then asks
+             *  /vibeserver/stationlogo and resolveStationLogo WITH THAT PI, so a DAB service
+             *  could be answered with the FM station's artwork: Heart's logo on a DAB label
+             *  (Stuart, 2026-09-22, "FM station logos stuck even when moving to DAB").
+             *  A DAB service is identified by its LABEL, not by an RDS PI — so state the fields
+             *  outright and leave the RDS ones empty. */
+            setLiveStation({ name: svcName, text: playing?.dls || st.dls || undefined, badge: 'DAB' });
           }
           // ★ FOLLOW THE SERVER'S BLOCK, not our own request. It may have landed elsewhere (a
           //   remembered multiplex on first tune), and a header that names the block we ASKED for
@@ -7575,7 +7583,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       ? (liveStation.text ? `${name} — ${liveStation.text}` : name)
       : (liveStation.text ?? '');
     // WFM broadcast FM: show the RDS country flag + station logo (from PI/ECC).
-    const wfm = status.mode === 'wfm';
+    // ★★ AND NOT IN DAB. `status.mode` is not necessarily off 'wfm' while a multiplex is being
+    //    decoded — the mode and the DAB button are two different things (see dabBoxOpen) — so the
+    //    flag and the RDS logo need the DAB door as well, exactly as the lock-screen card at the
+    //    top of this file does (`dabOn ? dabActiveLogo : …`). DAB draws its OWN service logos.
+    const wfm = status.mode === 'wfm' && !dabOn;
     const flag = wfm && validIso(liveStation.countryIso) ? isoToFlag(liveStation.countryIso) : undefined;
     const logoUrl = wfm ? (liveLogo ?? undefined) : undefined;
     const composite = `${display}|${flag ?? ''}|${logoUrl ?? ''}`;
@@ -7591,7 +7603,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       setVtsNotif({ key: vtsKey.current, name: display, kind: 'station-on', hold: true, badge: liveBadgeRef.current, flag, logoUrl });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveStation.name, liveStation.text, liveStation.countryIso, liveLogo, status.mode]);
+  }, [liveStation.name, liveStation.text, liveStation.countryIso, liveLogo, status.mode, dabOn]);
 
   // ── Station logo (radio-browser favicon) ────────────────────────────────────
   // NOT gated on WFM any more. The gate existed because a station name only ever
@@ -7654,6 +7666,27 @@ export default function SDRScreen({ route, navigation }: Props) {
     //   catches internally today, so this guards the next edit to it rather than a live fault.
     }).catch(() => {});
   }, [liveStation.name, liveStation.countryIso, liveStation.pi, liveStation.ecc, status.frequency, connectBase]);
+
+  /* ★★★ THE RDS LOGO BELONGS TO BROADCAST FM, AND ONLY WHILE WE ARE ON IT (Stuart, 2026-09-22:
+   *  "the header of the decoder box seems to get FM station logos stuck even when moving to DAB…
+   *  running FT8 with a Heart FM logo is a bit weird").
+   *  Nothing clears `liveStation` on a mode change — RDS metadata simply stops arriving — so the
+   *  last FM station's name, PI and logo used to survive into USB/FT8 and into DAB, and every
+   *  consumer that read `liveLogo` drew Heart's picture over somebody else's mode.
+   *  ★★ THIS IS THE CLEAR THE LOOKUP DELIBERATELY DOES NOT DO. A name-lookup MISS must not erase a
+   *     logo we already have (see the note above: a PS that marqueees "UMUARAMA"/"MASSA" would
+   *     otherwise flicker) — the logo is dropped on a change of STATION or of MODE, which is what
+   *     this is, and never on a failed lookup.
+   *  ★ `lastLiveLogoKey` is reset too, or the effect above would decline to re-resolve on the way
+   *    back ("same key, nothing to do") and WFM would return with no picture. Coming back is still
+   *    cheap: resolveStationLogo and the server answer are both cached, so the re-ask is a cache
+   *    hit rather than a fresh network lookup. */
+  const fmLogoOk = status.mode === 'wfm' && !dabOn;
+  useEffect(() => {
+    if (fmLogoOk) return;
+    lastLiveLogoKey.current = '';
+    setLiveLogo(null);
+  }, [fmLogoOk]);
 
   // ── VTS-aware media session ────────────────────────────────────────────────
   // Track  = freq (user's unit) + demod + tune step ("648 kHz AM · 9 kHz step")
@@ -8590,7 +8623,13 @@ export default function SDRScreen({ route, navigation }: Props) {
           // Keep the VTS on the station you just picked — don't wait for the server's next
           // metadata frame. The logo effect re-resolves off liveStation.name.
           const p = dabProgrammes.find((x) => x.id === id);
-          if (p) { liveStationRef.current = p.name; setLiveStation((s) => ({ ...s, name: p.name })); }
+          if (p) {
+            liveStationRef.current = p.name;
+            // ★★ NO SPREAD — see the DAB state handler: `...s` keeps the last FM station's pi/ecc/
+            //    countryIso, and the logo lookup is keyed on those, so the DAB service inherits the
+            //    FM station's artwork. A picked service is a label and a DAB badge, nothing else.
+            setLiveStation({ name: p.name, badge: 'DAB' });
+          }
         }}
           dabSpeed={dabSpeed}
           onDabSpeed={onDabSpeed}
@@ -9208,7 +9247,13 @@ export default function SDRScreen({ route, navigation }: Props) {
           // Keep the VTS on the station you just picked — don't wait for the server's next
           // metadata frame. The logo effect re-resolves off liveStation.name.
           const p = dabProgrammes.find((x) => x.id === id);
-          if (p) { liveStationRef.current = p.name; setLiveStation((s) => ({ ...s, name: p.name })); }
+          if (p) {
+            liveStationRef.current = p.name;
+            // ★★ NO SPREAD — see the DAB state handler: `...s` keeps the last FM station's pi/ecc/
+            //    countryIso, and the logo lookup is keyed on those, so the DAB service inherits the
+            //    FM station's artwork. A picked service is a label and a DAB badge, nothing else.
+            setLiveStation({ name: p.name, badge: 'DAB' });
+          }
         }}
         dabSpeed={dabSpeed}
         onDabSpeed={onDabSpeed}
