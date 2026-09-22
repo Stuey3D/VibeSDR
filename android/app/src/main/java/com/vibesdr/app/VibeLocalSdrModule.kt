@@ -155,8 +155,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     fun setDabScanLabels(mode: Int, promise: Promise) {
-        try { VibeLocalSDR.setDabScanLabels(mode); promise.resolve(true) }
-        catch (t: Throwable) { promise.reject("dab_scan_failed", t.message ?: "$t") }
+        try {
+            VibeLocalSDR.setDabScanLabels(mode)
+            // ★ ...and into the config a restore replays, or the next rebuild undoes it. See
+            //   VibeServerRestore.updateConfig for the evidence.
+            VibeServerRestore.updateConfig(reactContext, "dabScanLabels", mode)
+            promise.resolve(true)
+        } catch (t: Throwable) { promise.reject("dab_scan_failed", t.message ?: "$t") }
     }
 
     /**

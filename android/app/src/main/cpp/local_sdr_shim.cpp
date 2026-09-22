@@ -23447,8 +23447,18 @@ int LocalSdrShim::start(int fd, int vid, int pid,
     }
     rtlsdr_set_sample_rate(impl->dev, (uint32_t)sampleRate);
     // ★ Setting the rate re-derives the tuner's IF filter, so ours has to go back on.
-    { const int bw_ = g_tunerBwHz.load(std::memory_order_relaxed);
-      if (bw_ > 0) rtlsdr_set_tuner_bandwidth(impl->dev, (uint32_t)bw_); }
+    /* ★★★ THE SAME RULE, AND THIS IS THE THIRD PLACE THAT READS IT. The first fix went into
+     *  reopenDevice() and the receiver STILL came up with an unprogrammed filter, because the
+     *  ordinary start path is this one: a marker present in the binary and no log line on the
+     *  Sony, 2026-09-23 00:02. `if (bw_ > 0)` skips the write while nobody has chosen a width,
+     *  which is every fresh start. See the note in reopenDevice for what that cost. */
+    {
+        const int bw_ = g_tunerBwHz.load(std::memory_order_relaxed);
+        const uint32_t bwWrite = bw_ > 0 ? (uint32_t)bw_ : (uint32_t)std::lround(sampleRate);
+        rtlsdr_set_tuner_bandwidth(impl->dev, bwWrite);
+        LOGI("tuner IF filter programmed at open: %.0f kHz%s", bwWrite / 1e3,
+             bw_ > 0 ? "" : " (no preference yet — the capture width)");
+    }
     // Offset tuning: physically tune HW_OFFSET_HZ above the logical centre.
     impl->tuneHw(centerFreq);
     // ★★★ NEVER THE TUNER'S OWN AUTOMATIC GAIN. `gain < 0` used to mean "hardware AGC", and on an
@@ -26641,8 +26651,13 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
         } else {
             rtlsdr_set_sample_rate(impl->dev, (uint32_t)impl->sampleRate);
             // ★ Setting the rate re-derives the tuner's IF filter, so ours has to go back on.
-            { const int bw_ = g_tunerBwHz.load(std::memory_order_relaxed);
-              if (bw_ > 0) rtlsdr_set_tuner_bandwidth(impl->dev, (uint32_t)bw_); }
+            /* ★ And the third reader — see the note at the main open path. */
+            {
+                const int bw_ = g_tunerBwHz.load(std::memory_order_relaxed);
+                const uint32_t bwWrite = bw_ > 0 ? (uint32_t)bw_ : (uint32_t)std::lround(impl->sampleRate);
+                rtlsdr_set_tuner_bandwidth(impl->dev, bwWrite);
+                LOGI("tuner IF filter programmed at reopen: %.0f kHz", bwWrite / 1e3);
+            }
             impl->tuneHw(impl->rtlCenter.load());
             // ★★★ Manual mode ALWAYS — see the replug handler: AUTO is VibeAGC, never the tuner's own loop.
             rtlsdr_set_tuner_gain_mode(impl->dev, 1);

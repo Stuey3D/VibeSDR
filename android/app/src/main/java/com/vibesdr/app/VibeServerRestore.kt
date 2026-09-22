@@ -53,6 +53,30 @@ object VibeServerRestore {
             .apply()
     }
 
+    /**
+     * ★★★ A SETTING CHANGED WHILE THE SERVER IS RUNNING BELONGS IN THE RESTORE CONFIG TOO.
+     *
+     * `arm` captures the config as it was at the last START, so anything changed afterwards is
+     * invisible to a restore — the server comes back as it was, not as it is. Stuart turned the
+     * DAB whole-multiplex label scan on while the TV was serving, and the very next restore put
+     * it straight back off; the log says `label scan: off` at 00:02:21 with his switch still on
+     * (2026-09-23). He had every reason to think the setting had not stuck, because it had not.
+     * ★★ This is the [[never_defer_a_write_nothing_will_retry]] shape: the toggle wrote to
+     *    AsyncStorage, which only the UI reads, and the thing that rebuilds the server reads
+     *    somewhere else entirely.
+     * ★ Merged rather than replaced, so a key this build does not know about survives.
+     */
+    fun updateConfig(ctx: Context, key: String, value: Any) {
+        val p = prefs(ctx)
+        val cfg = try { org.json.JSONObject(p.getString(K_CONFIG, "{}") ?: "{}") }
+                  catch (_: Throwable) { org.json.JSONObject() }
+        // ★ Nothing to update if the server has never run: the next start writes the whole config.
+        if (cfg.length() == 0) return
+        try { cfg.put(key, value) } catch (_: Throwable) { return }
+        p.edit().putString(K_CONFIG, cfg.toString()).apply()
+        Log.i(TAG, "restore config updated: $key = $value")
+    }
+
     /** The user stopped the server ON PURPOSE — do not resurrect it. */
     /** ★ Was this phone serving when it stopped? The update path asks before it acts — see
      *  VibeUpdateReceiver. Read-only; arming stays the business of the JS that started the server. */
