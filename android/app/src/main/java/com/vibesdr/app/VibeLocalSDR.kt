@@ -125,6 +125,10 @@ object VibeLocalSDR {
     fun runBenchmark(clipPath: String, uplinkKBps: Double): String =
         if (loaded) nativeRunBenchmark(clipPath, uplinkKBps) else ""
     fun getNetStatus(): String { return if (loaded) nativeGetNetStatus() else "{\"tcp\":false}" }
+    /** ★ Live benchmark progress — {running, step, steps, label}. See nativeBenchProgress. */
+    fun benchProgress(): String =
+        if (loaded) nativeBenchProgress() else "{\"running\":false,\"step\":0,\"steps\":0,\"label\":\"\"}"
+    private external fun nativeBenchProgress(): String
 
     fun startSpyServer(host: String, port: Int, centerFreq: Double, sampleRate: Double,
                        gainTenthDb: Int, fftSize: Int, fftRate: Double, mode: String): Int {

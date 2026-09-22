@@ -981,6 +981,19 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetDirectoryKey(JNIEnv* env, jobject, js
     if (c) env->ReleaseStringUTFChars(k, c);
 }
 
+/** ★★★ HOW FAR THROUGH THE BENCHMARK IS — the same figures the Linux/web setup page draws its
+ *  bar from (vibe::benchProgressJson, served there over HTTP). The app measured for two minutes
+ *  behind the word "Measuring…" and nothing else, on the device LEAST able to spare the wait,
+ *  while the engine had step/steps/label ready the whole time (Stuart, 2026-09-22: "no progress
+ *  bar like the VibeServer Linux app either").
+ *  ★ Polled rather than pushed: the benchmark runs on its own thread and a poll cannot get in its
+ *    way, where an event emitted per step would cross onto the JS thread mid-measurement — which
+ *    is the thing being measured. */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeBenchProgress(JNIEnv* env, jobject) {
+    return env->NewStringUTF(vibe::benchProgressJson().c_str());
+}
+
 /** ★ The name the USB descriptor gives this dongle, handed down from Kotlin because the
  *  fd-open path leaves librtlsdr with no index to look it up from. See setUsbModelName(). */
 extern "C" JNIEXPORT void JNICALL

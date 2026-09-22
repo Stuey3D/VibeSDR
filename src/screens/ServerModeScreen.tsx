@@ -291,6 +291,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [benchRows, setBenchRows] = useState<any[]>([]);
   const [benchBusy, setBenchBusy] = useState(false);
   const [benchNote, setBenchNote] = useState('');
+  /** ★ {step, steps, label} while it runs — polled from the engine. See runBench. */
+  const [benchProg, setBenchProg] = useState<{ step: number; steps: number; label: string } | null>(null);
 
   const applyBench = React.useCallback((j: any, firstSetup: boolean) => {
     setBenchRows(Array.isArray(j?.rows) ? j.rows : []);
@@ -322,13 +324,31 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const runBench = React.useCallback(async (manual: boolean) => {
     const mod = (NativeModules as any).VibeLocalSDR;
     if (!mod?.runBenchmark) { setBenchNote('This build cannot measure itself.'); return; }
-    setBenchBusy(true); setBenchNote('');
+    setBenchBusy(true); setBenchNote(''); setBenchProg(null);
+    /* ★★★ SHOW IT MOVING. Two minutes behind the word "Measuring…" is indistinguishable from two
+     *  minutes hung, and this runs on the SLOWEST devices we support — the ones least able to
+     *  spare the wait and most likely to be thought dead (Stuart, 2026-09-22: "no progress bar
+     *  like the VibeServer Linux app either"). The Linux/web setup page has had one all along,
+     *  drawn from figures the engine publishes; nothing was missing but the asking.
+     *  ★ POLLED, not pushed. The benchmark is a CPU measurement on its own thread, and an event
+     *    per step would cross onto the JS thread in the middle of the thing being measured. A
+     *    poll every 700 ms cannot perturb what it is watching.
+     *  ★ Cleared in `finally` whatever happens, so a failed measurement cannot leave a bar
+     *    frozen at 4 of 11 looking like it is still going. */
+    const timer = setInterval(() => {
+      mod.benchProgress?.().then((s: string) => {
+        try {
+          const p = JSON.parse(s);
+          setBenchProg(p?.running ? { step: p.step | 0, steps: p.steps | 0, label: String(p.label || '') } : null);
+        } catch { /* a malformed reading just leaves the bar where it was */ }
+      }).catch(() => {});
+    }, 700);
     try {
       const j = JSON.parse(await mod.runBenchmark(true));
       applyBench(j, !manual || !benchRows.length);
     } catch (e: any) {
       setBenchNote('The measurement did not finish: ' + (e?.message || String(e)));
-    } finally { setBenchBusy(false); }
+    } finally { clearInterval(timer); setBenchProg(null); setBenchBusy(false); }
   }, [applyBench, benchRows.length]);
 
   useEffect(() => {
@@ -1575,8 +1595,24 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           </View>
         )}
         <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WHAT THIS DEVICE CAN CARRY</Text>
+        {/* ★★★ A TV SCROLLS BY MOVING FOCUS, so a block of text ABOVE the first focusable thing on
+            the page is unreachable with a remote: the results sat over the Measure button and the
+            D-pad had nothing to travel to, so nobody using the app the way it is meant to be used
+            on a TV could read their own measurement (Stuart, 2026-09-22: "I cannot scroll up
+            further than the measure again button so i cannot see the results" — and the diagnosis
+            is his: "if there is no selectable option above the block of text ... the remote has
+            nothing to move the scroll on").
+            ★★ So the results become a focusable element in their own right. `focusable` makes the
+               D-pad able to land on them, and landing is what makes the ScrollView bring them into
+               view — the scrolling is a consequence of the focus, not something asked for
+               separately. It is not a button and does nothing when pressed; it only needs to be a
+               place focus can rest.
+            ★ Harmless on a phone: `focusable` does nothing to a touch scroll, which was never
+              the broken case. */}
         {benchRows.length > 0 && (
-          <View style={{ marginBottom: 8 }}>
+          <View focusable={Platform.OS === 'android'} accessible
+                accessibilityLabel="Measurement results"
+                style={{ marginBottom: 8 }}>
             {benchRows.map((r: any) => (
               <View key={r.id} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 2 }}>
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, flex: 1, marginBottom: 0 }]}
@@ -1588,6 +1624,22 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 </Text>
               </View>
             ))}
+          </View>
+        )}
+        {/* ★ The bar, while it runs — see runBench. Steps rather than seconds, because the engine
+            counts steps and a made-up time estimate on an unknown box would be a guess presented
+            as a measurement. Falls back to an indeterminate-looking full-width track until the
+            first reading arrives, so it never flashes empty. */}
+        {benchBusy && !!benchProg && benchProg.steps > 0 && (
+          <View style={{ marginBottom: 8 }}>
+            <View style={{ height: 6, borderRadius: 3, backgroundColor: C.border, overflow: 'hidden' }}>
+              <View style={{ height: 6, borderRadius: 3, backgroundColor: C.green,
+                             width: `${Math.max(2, Math.min(100, (benchProg.step / benchProg.steps) * 100))}%` }} />
+            </View>
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 4, marginBottom: 0 }]}
+                  numberOfLines={1}>
+              {`${benchProg.step} of ${benchProg.steps}${benchProg.label ? ' — ' + benchProg.label : ''}`}
+            </Text>
           </View>
         )}
         <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>

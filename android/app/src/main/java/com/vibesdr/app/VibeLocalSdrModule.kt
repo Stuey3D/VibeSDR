@@ -138,6 +138,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         }.start()
     }
 
+    /** ★ How far through the benchmark is, for the bar. Cheap, and safe to call while it runs. */
+    @ReactMethod
+    fun benchProgress(promise: Promise) {
+        try { promise.resolve(VibeLocalSDR.benchProgress()) }
+        catch (t: Throwable) { promise.reject("bench_progress_failed", t.message ?: "$t") }
+    }
+
     /** The last benchmark result, or null if it has never run on this device. */
     @ReactMethod
     fun lastBenchmark(promise: Promise) {
