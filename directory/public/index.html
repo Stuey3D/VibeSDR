@@ -2661,6 +2661,20 @@ function render(servers, filtered) {
   }
   const groups = [...byCountry.entries()]
     .sort((a, b) => countryName(a[0]).localeCompare(countryName(b[0])));
+  /* ★★★ THE LISTENER'S OWN COUNTRY FIRST, AND OPEN. Alphabetical put Brazil at the top for
+   *  everybody, so Stuart in the UK — usually after his own servers — found his at the bottom
+   *  with somebody else's card open (2026-09-23). Where their country has no servers it is the
+   *  country holding the nearest one instead: Germany lands on the Netherlands, the US on Brazil.
+   *  ★★ ONLY THE FIRST ONE MOVES. The rest stay alphabetical, which is what a list is FOR once
+   *     you are past your own — a distance-sorted list of countries reads as arbitrary unless you
+   *     already know where everything is.
+   *  ★ homeCountry() returns null when the edge said nothing or the guess is unusable, and the
+   *    order is then exactly what it was before. */
+  const home = homeCountry(groups);
+  if (home) {
+    const at = groups.findIndex(([cc]) => cc === home);
+    if (at > 0) groups.unshift(groups.splice(at, 1)[0]);
+  }
 
   /* ★★ THE RANKING. Every server still shown covers the frequency (the red marker did that);
    *    here they are ordered by distance from the transmitter, nearest first, with the caveat
@@ -2684,8 +2698,11 @@ function render(servers, filtered) {
   }
   list.innerHTML = rankHtml + groups.map(([cc, rows], i) => `
     <details class="country" data-key="cc:${esc(cc)}" ${
+      /* ★ Once the listener has opened or closed anything, openKeys is their answer and this
+           does not argue with it. Before that: their own country, or the first card when we
+           could not tell — and a list of one or two is opened whole. */
       openKeys.size ? (openKeys.has(`cc:${cc}`) ? 'open' : '')
-                    : (groups.length <= 2 || i === 0 ? 'open' : '')}>
+                    : (groups.length <= 2 || (home ? cc === home : i === 0) ? 'open' : '')}>
       <summary>${flag(cc)} ${esc(countryName(cc))}
         <span class="n">${rows.length}</span><span class="chev">›</span></summary>
       ${rows.map(serverBlock).join('')}
@@ -2899,10 +2916,39 @@ async function demoServers() {
 
 const DEMO_ON = new URLSearchParams(location.search).has('demo');
 
+/* ★★★ WHERE THIS LISTENER IS — {country, lat, lon} from Cloudflare's edge, see list() in the
+ *  worker. Used for ONE thing: putting their own country at the top of the list and opening it.
+ *  ★★ A HINT, NEVER A FILTER. Behind a VPN it will name the wrong country, and then the wrong card
+ *     opens — which is a small annoyance and nothing more. Nothing is hidden or reordered away on
+ *     the strength of it, so being wrong cannot cost anybody a receiver.
+ *  ★ null until the first load lands, and null for ever if the edge did not say. */
+let YOU = null;
+
+/** The country card to float to the top: the listener's own if it has servers, otherwise the one
+ *  holding the nearest server to them. Returns null when we cannot tell, and the list then stays
+ *  exactly as it was — plain alphabetical. */
+function homeCountry(groups) {
+  if (!YOU) return null;
+  const has = (cc) => groups.some(([c]) => c === cc);
+  // ★ Their own country first, and only if it is actually listed — "closest" is the answer to
+  //   "mine has none", not a better answer than "mine".
+  if (YOU.country && has(YOU.country)) return YOU.country;
+  if (!Number.isFinite(YOU.lat) || !Number.isFinite(YOU.lon)) return null;
+  let best = null, bestKm = Infinity;
+  for (const [cc, rows] of groups) {
+    for (const s of rows) {
+      if (!Number.isFinite(+s.lat) || !Number.isFinite(+s.lon)) continue;
+      const km = kmBetween(YOU.lat, YOU.lon, +s.lat, +s.lon);
+      if (km < bestKm) { bestKm = km; best = cc; }
+    }
+  }
+  return best;
+}
+
 function load(first) {
   return fetch('/api/directory')
     .then((r) => r.json())
-    .then((d) => withLiveCounts(Array.isArray(d.servers) ? d.servers : []))
+    .then((d) => { YOU = (d && d.you) || null; return withLiveCounts(Array.isArray(d.servers) ? d.servers : []); })
     // ★ Real servers first, then the invented ones — so a demo run still shows the estate as it
     //   actually is, with the simulation around it.
     .then(async (servers) => DEMO_ON ? servers.concat(await demoServers()) : servers)

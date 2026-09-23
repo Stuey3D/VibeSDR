@@ -588,7 +588,7 @@ async function eibi(request) {
  *  reads this one endpoint. A requester that sends no `proto` is a legacy app: it cannot read
  *  `minProto`, so a radio it has no controls for is left OUT of what it is told. A requester
  *  that sends `proto=N` gets every radio and greys out the ones above N itself. */
-async function list(env, url) {
+async function list(env, url, request) {
   const reqProto = url && url.searchParams.has('proto') ? Number(url.searchParams.get('proto')) || 0 : null;
   const radiosFor = (rows) => !Array.isArray(rows) ? []
     : reqProto === null ? rows.filter((r) => !(Number(r && r.minProto) > 0)) : rows;
@@ -672,7 +672,24 @@ async function list(env, url) {
       expiresAt: r.expires_at,
     };
   });
-  return json({ servers, count: servers.length, pingSec: PING_SEC });
+  /* ★★★ WHERE THE LISTENER IS, so the page can put their own country at the top and open it.
+   *  Alphabetical order meant Brazil opened for everybody, and Stuart — in the UK, usually after
+   *  his own servers — found his at the bottom (2026-09-23).
+   *  ★★ FROM CLOUDFLARE'S EDGE, not from an IP lookup we would have to ship, keep current and
+   *     explain. `request.cf` is filled by the network that already terminated the connection, so
+   *     it costs nothing and never leaves the edge.
+   *  ★★ AND IT IS A HINT, NOT AN IDENTITY. A VPN or a corporate egress will say the wrong country
+   *     and the page must simply open the wrong card — which is why this only reorders and opens
+   *     something, and never filters anything out. Nothing is hidden on the strength of it.
+   *  ★ Coarse by design: country, and the edge's own city-level lat/lon for "closest country when
+   *    yours has no servers". No address, nothing stored, nothing logged. */
+  const cf = (request && request.cf) || {};
+  const you = {
+    country: typeof cf.country === 'string' ? cf.country : null,
+    lat: Number.isFinite(+cf.latitude)  ? +cf.latitude  : null,
+    lon: Number.isFinite(+cf.longitude) ? +cf.longitude : null,
+  };
+  return json({ servers, count: servers.length, pingSec: PING_SEC, you });
 }
 
 /**
@@ -950,7 +967,7 @@ export default {
     }
 
     try {
-      if (p === '/api/directory' && request.method === 'GET') return await list(env, url);
+      if (p === '/api/directory' && request.method === 'GET') return await list(env, url, request);
       if (p === '/api/directory/name' && request.method === 'GET') return await checkName(url, env);
       if (p === '/api/directory/register' && request.method === 'POST') return await register(request, env);
       if (p === '/api/directory/ping' && request.method === 'POST') return await ping(request, env);
