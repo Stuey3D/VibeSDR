@@ -2839,7 +2839,15 @@ document.getElementById('list').addEventListener('click', (ev) => {
   const r = s && (s.radios || []).find((x) => String(x.id) === id);
   if (!s || !r) return;                   // ★ fall through to the plain href
   ev.preventDefault();
-  const win = window.open('', '_blank', 'noopener');
+  /* ★★★ NO 'noopener' HERE, AND THAT IS NOT AN OVERSIGHT. window.open() WITH noopener RETURNS
+   *     NULL — that is what the option means: no handle back. So this opened a blank tab and then
+   *     had nothing to point at the receiver, and the visitor got about:blank (Stuart, 2026-09-23:
+   *     "I click the radio in the card that is no longer greyed out about.blank"). The handle is
+   *     the entire mechanism: the tab has to be opened synchronously, inside the click, or a popup
+   *     blocker eats it, and it can only be aimed once the fresh nonce comes back.
+   *  ★ The opener link is cut on the next line instead, which is what noopener was there for. */
+  const win = window.open('', '_blank');
+  try { if (win) win.opener = null; } catch (e) { /* cross-origin once it navigates */ }
   void openUnlocked(r, s, win);
 });
 
@@ -2852,7 +2860,15 @@ document.getElementById('list').addEventListener('click', (ev) => {
   const rec = s && s.address ? pinRestore(s.address) : null;
   if (!s || !rec) return;                 // ★ fall through to the plain href
   ev.preventDefault();
-  const win = window.open('', '_blank', 'noopener');
+  /* ★★★ NO 'noopener' HERE, AND THAT IS NOT AN OVERSIGHT. window.open() WITH noopener RETURNS
+   *     NULL — that is what the option means: no handle back. So this opened a blank tab and then
+   *     had nothing to point at the receiver, and the visitor got about:blank (Stuart, 2026-09-23:
+   *     "I click the radio in the card that is no longer greyed out about.blank"). The handle is
+   *     the entire mechanism: the tab has to be opened synchronously, inside the click, or a popup
+   *     blocker eats it, and it can only be aimed once the fresh nonce comes back.
+   *  ★ The opener link is cut on the next line instead, which is what noopener was there for. */
+  const win = window.open('', '_blank');
+  try { if (win) win.opener = null; } catch (e) { /* cross-origin once it navigates */ }
   void (async () => {
     const base = `https://${s.address}`;
     try {
