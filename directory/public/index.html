@@ -1011,12 +1011,22 @@ async function tryServerPin(s, pin) {
   const j = await fetch(u, { cache: 'no-store' }).then((r) => r.json()).catch(() => null);
   let ids = Array.isArray(j && j.radios) ? j.radios.map(String) : [];
 
-  /* ★★★ AN EMPTY LIST IS NOT YET A NO. `/vibeserver/unlock` lives on the FRONT DOOR, and a
-   *     single-radio host — the app, Lite — has no front door to answer it, so it says nothing
-   *     whatever the PIN. That is the Android shape, and it is asked a different question:
-   *     `/vibeserver/auth/verify` runs the real gate and answers 200 or 401 without costing a
-   *     listener slot. Only after BOTH have declined is the PIN actually wrong. */
-  if (!ids.length) {
+  /* ★★★ AN EMPTY LIST IS NOT YET A NO — BUT ONLY WHERE A SERVER PIN EXISTS TO ASK ABOUT.
+   *     `/vibeserver/unlock` lives on the FRONT DOOR, and a single-radio host — the app, Lite —
+   *     has no front door to answer it, so it says nothing whatever the PIN. That is the Android
+   *     shape, and it is asked a different question: `/vibeserver/auth/verify` runs the real gate
+   *     and answers 200 or 401 without costing a listener slot.
+   *
+   * ★★★ THE GUARD IS THE WHOLE THING. Without `s.pin && ch.required` this fallback let ANY PIN
+   *     open a front door that has no MASTER PIN: verify answers 200 because the door itself
+   *     demands nothing, and reading that as "the PIN fits" unlocked every radio behind it. Caught
+   *     on the LIVE directory, 2026-09-23 — 9999 opened the Pi 500's Airspy, whose PIN is 1234.
+   *     It only appeared because the wrong-PIN case was run on a browser that had never seen the
+   *     right one; the first run reused a session that was already unlocked and looked fine.
+   *  ★★ 200 FROM A DOOR THAT ASKS FOR NOTHING IS NOT A YES. A verify is only evidence when the
+   *     thing being verified is actually locked — `pin` says this server has a master PIN and
+   *     `required` is the server saying so itself, at this moment. Both, or do not ask. */
+  if (!ids.length && s.pin === true && ch.required === true) {
     const v = await fetch(`${base}/vibeserver/auth/verify?vs_nonce=${encodeURIComponent(ch.nonce)}`
                           + `&vs_auth=${encodeURIComponent(token)}`, { cache: 'no-store' })
                     .catch(() => null);
