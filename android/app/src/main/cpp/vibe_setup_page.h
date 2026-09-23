@@ -3104,6 +3104,28 @@ function paintPanes() {
   if (sr) sr.classList.toggle("hide", curRadio < 0);
 }
 
+/** ★★★ WHETHER THIS MACHINE HAS ANY USE FOR A SECOND KIND OF PIN, redrawn whenever that could
+ *  have changed — fill() on load and on a tab switch, and after a radio is SAVED.
+ *
+ *  ★★ IT IS ITS OWN FUNCTION BECAUSE TWO MOMENTS NEED IT. Saving a radio runs renderTabs() but
+ *     not fill(), so with the rule written inline the card stayed on screen after its PIN had
+ *     been removed and only went on the next reload — the page contradicting the save it had just
+ *     confirmed. Stuart's sequence is the one to honour: "If the user then removes the PIN the box
+ *     goes too and master PIN then becomes the only PIN" (2026-09-23).
+ *
+ *  ★★★ AND A PIN THAT IS STILL SET KEEPS THE CARD, however few radios there are. The case is an
+ *      owner who locked one of several radios and has since removed the others: blanking the card
+ *      would disable a lock they chose, without telling them, and leave them no way to find it.
+ *      They keep the choice — leave it or clear it — and clearing it is what makes the card go.
+ */
+function paintRadioPinCard() {
+  const card = $("radioPinCard");
+  if (!card) return;
+  const many = radioList().length > 1;
+  const set  = !!((radio().pin || "").length);
+  card.style.display = (many || set) ? "" : "none";
+}
+
 /** Copy what is on screen into the radio this tab belongs to, without saving to the server. */
 function stashRadio() {
   const list = radioList();
@@ -3282,10 +3304,7 @@ function fill() {
    * ★★ A PIN ALREADY SET IS STILL SHOWN even on a one-radio machine: hiding a lock that is
    *    actually locking something would leave an owner unable to find or remove it, which is how
    *    a tidy-up becomes a lockout. Redundant is not the same as inert. */
-  if ($("radioPinCard")) {
-    const many = radioList().length > 1;
-    $("radioPinCard").style.display = (many || (r.pin || "").length) ? "" : "none";
-  }
+  paintRadioPinCard();
   if ($("radioPin")) {
     const pinSet = !!(r.pin || "").length;
     $("radioPin").value = "";
@@ -3983,6 +4002,9 @@ $("saveRadioBtn").onclick = async () => {
     } else {
       $("barMsg").textContent = "Saved. Restart the server below to put it on air.";
       renderTabs();
+      // ★ A PIN just removed means this card may have no reason to exist any more — see
+      //   paintRadioPinCard. renderTabs() alone left it on screen contradicting the save.
+      paintRadioPinCard();
     }
   } catch (e) {
     // ★ Same reasoning as the master save: name the fault, do not guess at the network.
