@@ -425,18 +425,41 @@ std::string buildStatus(int port) {
                     const std::string names   = arr("allowedNames");
                     const std::string allowed = arr("allowed");
                     const std::string hw      = arr("coverage");
+                    /* ★★★ A RADIO BEHIND ITS OWN PIN ADVERTISES NO COVERAGE.
+                     *
+                     *  Stuart, 2026-09-23: "PIN protected radios do not contribute to the
+                     *  Directory total coverage, and the server's card should only show the range
+                     *  that is available to all. So I have a radio that has wideband 500Hz - 2GHz
+                     *  coverage and its pin protected and another limited to MW/FM and its free to
+                     *  use, that server's total coverage should only show MW/FM."
+                     *  ★★ IT IS AN HONESTY RULE, NOT A SECRECY ONE. The radio is still listed and
+                     *     still says it is PIN protected — what it stops is a range nobody can
+                     *     reach pulling people to the listing, and a frequency search offering a
+                     *     receiver that will refuse them. Advertising reach you cannot give is the
+                     *     same fault as the occupancy that "lied about FREE".
+                     *  ★ The radio's own row keeps everything else (name, driver, mode), so a
+                     *    member who holds the PIN still sees what it is and can go and unlock it. */
+                    /* ★ A MASTER PIN PROTECTS EVERY RADIO, so it suppresses every radio's
+                     *  coverage as well — a fully locked server advertises the padlock and nothing
+                     *  else. Otherwise a machine nobody can enter would still be pulling people in
+                     *  on a frequency search, which is the same dishonesty one radio at a time. */
+                    const bool pinLocked = jsonBool(r, "pinLocked") || jsonBool(ident, "pin");
                     // ★★ THREE FIELDS, THREE MEANINGS, THE SAME AS THE FRONT DOOR'S. `coverage` is
                     //    the hardware's reach in Hz, `allowed` is what the owner permits within
                     //    it, `allowedNames` is that in words where the band plan has words. The
                     //    directory used to squash all of it into one word-list called `coverage`,
                     //    which is why it could say less than the landing page no matter how the
                     //    page was written.
-                    if (!hw.empty())      j += ",\"coverage\":" + hw;
-                    if (!names.empty())   j += ",\"allowedNames\":" + names;
-                    if (!allowed.empty()) j += ",\"allowed\":" + allowed;
+                    j += std::string(",\"pinLocked\":") + (pinLocked ? "true" : "false");
+                    if (!pinLocked) {
+                        if (!hw.empty())      j += ",\"coverage\":" + hw;
+                        if (!names.empty())   j += ",\"allowedNames\":" + names;
+                        if (!allowed.empty()) j += ",\"allowed\":" + allowed;
+                    }
                     // ★ What the owner PERMITS, falling back to the hardware where no list is set:
                     //   a search must never offer a band the operator has blocked.
-                    const std::string ranges = !allowed.empty() ? allowed : hw;
+                    const std::string ranges = pinLocked ? std::string()
+                                             : (!allowed.empty() ? allowed : hw);
                     if (!ranges.empty()) j += ",\"ranges\":" + ranges;
                     j += "}";
                     if (k + 1 < radios.size() && radios.find('{', k + 1) == std::string::npos) break;

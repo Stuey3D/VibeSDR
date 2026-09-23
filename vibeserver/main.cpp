@@ -1801,8 +1801,13 @@ int main(int argc, char** argv) {
              *  and a member who holds the right PIN knows there is something to unlock.
              *  ★★ THE PIN ITSELF NEVER APPEARS HERE, only whether there is one. This endpoint is
              *     open by design (a listener choosing between receivers has not authenticated yet),
-             *     so anything on it is public. */
-            j += ",\"locked\":" + std::string(r.pin.empty() ? "false" : "true");
+             *     so anything on it is public.
+             *  ★★★ NOT "locked" — THAT NAME IS TAKEN, by this very object, for a radio whose
+             *     CENTRE the owner has pinned (Mode::LockedRange, further down). Two keys of the
+             *     same name in one JSON object is not an error anywhere: the second simply wins,
+             *     so a PIN flag called `locked` would have been silently overwritten by the tuning
+             *     mode and the directory would have read one as the other. */
+            j += ",\"pinLocked\":" + std::string(r.pin.empty() ? "false" : "true");
             j += ",\"serial\":\"" + jsonEscape(r.serial) + "\"";
             // ★ PUBLIC listing — the landing page renders this, so the serial comes out of the
             //   name. The setup and admin pages read the config API instead and keep the full one.
