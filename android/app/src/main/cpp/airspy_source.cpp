@@ -91,6 +91,18 @@ bool AirspySource::openFd(int fd, double sampleRateHz, double centreHz, int gain
 bool AirspySource::finishOpen(double sampleRateHz, double centreHz, int gainTenthDb,
                               std::string& err) {
     // ── What this actually is: board id names the model, the serial tells two apart ──
+    /* ★★★ libairspy CANNOT TELL A MINI FROM AN R2, and I assumed it could. Its
+     *  airspy_board_id_name() has exactly one real case — AIRSPY_BOARD_ID_PROTO_AIRSPY ->
+     *  "AIRSPY" — and everything else is "Unknown Board ID". So the old code produced
+     *  "Airspy " + "AIRSPY" = "Airspy AIRSPY", which is what the panel headed itself with, and my
+     *  first correction assumed a name like "AIRSPY MINI" that the library never returns.
+     *  ★★ SO THE MODEL IS JUST "Airspy". The two boards ARE distinguishable by their sample rates
+     *     (Mini 6/3 MS/s, R2 10/2.5) and it is tempting to name them from that — but that is an
+     *     INFERENCE about hardware from an unrelated reading, and this project has a rule against
+     *     exactly that (feedback_no_inferred_hardware_readouts): a future board with those rates
+     *     would be named wrongly and confidently. The rates are published in the caps, so a
+     *     listener can see which radio it is without us guessing on their behalf.
+     *  ★ The serial still tells two apart, which is what it is for. */
     uint8_t board = 0;
     if (airspy_board_id_read(dev_, &board) == AIRSPY_SUCCESS) {
         /* ★★ THE BOARD ALREADY SAYS "AIRSPY". libairspy's board_id_name returns "AIRSPY MINI" or
@@ -98,17 +110,13 @@ bool AirspySource::finishOpen(double sampleRateHz, double centreHz, int gainTent
          *  what the panel heading showed our tester ("Airspy AIRSPY Controls", 2026-09-22).
          *  ★ Prefix only when the board's own name does NOT already carry it, so an unknown future
          *    board that reports something else is still identified as an Airspy. */
-        std::string bn = airspy_board_id_name((airspy_board_id)board);
-        const bool saysAirspy = bn.size() >= 6
-            && (bn.compare(0, 6, "AIRSPY") == 0 || bn.compare(0, 6, "Airspy") == 0);
-        model_ = saysAirspy ? bn : ("Airspy " + bn);
-        /* ★ And in the case the library uses for a product name rather than shouting it: the model
-         *  is shown as a heading beside "Controls", not as a log line. */
-        if (saysAirspy && bn.size() > 6) {
-            for (size_t i = 1; i < model_.size(); i++)
-                if (model_[i - 1] != ' ' && model_[i] >= 'A' && model_[i] <= 'Z')
-                    model_[i] = (char)(model_[i] - 'A' + 'a');
-        }
+        const char* raw = airspy_board_id_name((airspy_board_id)board);
+        const std::string bn = raw ? raw : "";
+        /* ★ "AIRSPY" is the library's only real answer and it is the whole name — anything else it
+         *  returns ("Unknown Board ID") describes the LIBRARY's ignorance, not the radio, so it
+         *  does not belong in a heading a listener reads. */
+        model_ = (bn == "AIRSPY" || bn.empty() || bn.compare(0, 7, "Unknown") == 0)
+               ? "Airspy" : ("Airspy " + bn);
     }
     airspy_read_partid_serialno_t ps{};
     if (airspy_board_partid_serialno_read(dev_, &ps) == AIRSPY_SUCCESS) {
