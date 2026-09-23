@@ -859,9 +859,13 @@ link.setAutoContrast(wfAutoContrast)
       NavigationStack {
         List {
           Section("PIN — \(link.serverName)") {
-            TextField("PIN", text: $pinEntry)
+            TextField("PIN", text: $pinEntry)      // ★ digits only — see the radio PIN sheet
               .font(.system(size: 18, design: .rounded))
               .multilineTextAlignment(.center)
+              .onChange(of: pinEntry) { _, v in
+                let digits = v.filter(\.isNumber)
+                if digits != v { pinEntry = digits }
+              }
             Button {
               let p = pinEntry.trimmingCharacters(in: .whitespaces)
               pinEntry = ""
@@ -2630,9 +2634,16 @@ private struct RadioPinSheet: View {
     NavigationStack {
       List {
         Section("PIN — \(radio.label)") {
+          /* ★★ DIGITS ONLY. A PIN is numbers everywhere else in VibeSDR — the setup page and the
+           *  terminal wizard both store digits only — so anything else typed here could never be
+           *  right, and dropping it as it arrives is kinder than a refusal after a round trip. */
           TextField("PIN", text: $entry)
             .font(.system(size: 18, design: .rounded))
             .multilineTextAlignment(.center)
+            .onChange(of: entry) { _, v in
+              let digits = v.filter(\.isNumber)
+              if digits != v { entry = digits }
+            }
           if failed {
             Text("That PIN was not accepted.")
               .font(.system(size: 11)).foregroundStyle(.orange)

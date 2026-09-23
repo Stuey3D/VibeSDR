@@ -25,6 +25,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <cctype>      // ★ isdigit — PINs are digits only
 
 #include "vibeserver_config.h"
 #include "radios.h"
@@ -378,7 +379,14 @@ bool runWizard(vsconfig::Config& cfg, std::vector<vibe::DetectedRadio>& radios,
         mvprintw(9, 2, "on the setup page in a browser. This one stays the master key.");
         attroff(COLOR_PAIR(4));
         std::string pin;
-        prompt(11, "Server PIN, all radios (blank = none)", pin, false, "Press Enter to skip.");
+        prompt(11, "Server PIN, all radios, DIGITS ONLY (blank = none)", pin, false,
+               "Press Enter to skip.");
+        /* ★★ DIGITS ONLY, AND STRIPPED HERE. Every listener's PIN box is a numeric keypad on a
+         *  phone, so a PIN with a letter in it cannot be typed by the people it is for — the owner
+         *  would set it at a desk and lock out every visitor on a handset. Stripping rather than
+         *  refusing keeps the wizard moving; what is stored is what is shown back. */
+        pin.erase(std::remove_if(pin.begin(), pin.end(),
+                                 [](unsigned char ch){ return !std::isdigit(ch); }), pin.end());
         cfg.pin = pin;
     }
     return true;
@@ -650,7 +658,10 @@ void statusScreen(vsconfig::Config& cfg) {
             mvprintw(7, 2, "setup page — removing this one does not remove those.");
             attroff(COLOR_PAIR(4));
             std::string pin;
-            if (!prompt(9, "Server PIN, all radios (blank = none)", pin, false, "Esc to cancel.")) continue;
+            if (!prompt(9, "Server PIN, all radios, DIGITS ONLY (blank = none)", pin, false,
+                        "Esc to cancel.")) continue;
+            pin.erase(std::remove_if(pin.begin(), pin.end(),      // ★ see the wizard's note
+                                     [](unsigned char ch){ return !std::isdigit(ch); }), pin.end());
             std::string err;
             if (!updateConfig(cfg, [&](vsconfig::Config& c){ c.pin = pin; }, err))
                 { msg = "Save failed: " + err; continue; }

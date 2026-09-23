@@ -14298,6 +14298,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             LOGI("VibeServer auth: %s locked out (backoff)", ip.c_str());
             return false;
         }
+        /* ★★★ THE ADMIN PASSWORD OPENS EVERYTHING — Stuart, 2026-09-23: "needless to say admin
+         *  password overrides everything". It is the owner's own key, so being refused entry to a
+         *  radio on their own machine would be absurd; and an owner locked out of one radio by a
+         *  PIN they have forgotten must have a way back in that is not editing a config file over
+         *  SSH.
+         *  ★★ SO THE TWO CREDENTIALS ARE NOT PARALLEL, and I had them so. The first draft treated
+         *     admin as CONTROL and the PIN as ACCESS — a tidy distinction, and the wrong one: the
+         *     person who may change the radio's settings is hardly the person to bar from hearing
+         *     it. Admin is simply above both.
+         *  ★ Checked FIRST, so an admin never spends an attempt against the PIN backoff. */
+        if (adminOkFor(reqLine, sock)) return true;
         std::string nonce = queryParam(reqLine, "vs_nonce");
         std::string token = queryParam(reqLine, "vs_auth");
         /* ★ Both are tried, and a match on either is a pass. The verify() is a constant-time HMAC
@@ -15691,9 +15702,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *    path uses; the directory rate-limits its own callers on top of that. */
             const std::string nonce = queryParam(reqLine, "vs_nonce");
             const std::string token = queryParam(reqLine, "vs_auth");
+            /* ★ An admin opens everything — see vsAuthOk. Asked HERE rather than inside the
+             *  handler because the proof is over the whole request line, which the handler
+             *  (living in main.cpp, one layer up) does not see. */
+            const bool isAdmin = adminOkFor(reqLine, sock);
             LocalSdrShim::UnlockFn ufn;
             { std::lock_guard<std::mutex> lk(g_vsConfigMtx); ufn = g_vsUnlockFn; }
-            const std::string body = ufn ? ufn(nonce, token) : std::string("{\"radios\":[]}");
+            const std::string body = ufn ? ufn(nonce, token, isAdmin) : std::string("{\"radios\":[]}");
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Access-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);

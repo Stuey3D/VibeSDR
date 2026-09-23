@@ -602,8 +602,16 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
            radio on this machine, and still does: either key works here. Leave this empty and the
            radio simply follows the server setting.</p>
         <label><span class="lbl">PIN for this radio</span>
-          <input type="password" id="radioPin" autocomplete="new-password" maxlength="64"
-                 placeholder="Leave empty to follow the server setting">
+          <!-- ★★★ DIGITS ONLY. It is a PIN, not a password, and the whole estate has to agree:
+               the listener's PIN box is inputmode="numeric", so on a phone it shows a KEYPAD.
+               An owner who typed letters here would hand their listeners a keyboard that cannot
+               enter them — fine on the desktop where it was set, impossible on the phone where it
+               is used (Stuart, 2026-09-23: "numbers only, simpler and is a PIN not a password").
+               ★ inputmode for the keypad, pattern for the browser's own check, and the save path
+                 strips anything else — validate at both ends, as this project keeps relearning. -->
+          <input type="password" id="radioPin" autocomplete="new-password" maxlength="16"
+                 inputmode="numeric" pattern="[0-9]*"
+                 placeholder="Digits only — empty follows the server setting">
           <div class="hint" id="radioPinState"></div></label>
         <label id="radioPinClearWrap" style="display:none;align-items:center;gap:10px;margin-top:16px">
           <input type="checkbox" id="radioPinClear">
@@ -3623,7 +3631,12 @@ function collectRadio() {
      *   trip untouched. Sending "" is the ONLY way to clear one, and that takes a tick. */
     ...(function () {
       const box = $("radioPin"); if (!box) return {};
-      const typed = (box.value || "").trim();
+      /* ★★ DIGITS ONLY, STRIPPED RATHER THAN REFUSED. A PIN box on a desktop will happily take
+       *  letters whatever the input hints say, and a PIN with a letter in it cannot be typed on
+       *  the numeric keypad every listener gets — so it would lock the owner's own visitors out
+       *  of a radio the owner believes is open. Stripping is silent but recoverable; the state
+       *  line below tells them what was stored. */
+      const typed = (box.value || "").replace(/[^0-9]/g, "");
       if (typed) return {pin: typed};
       if ($("radioPinClear") && $("radioPinClear").checked) return {pin: ""};
       return {};

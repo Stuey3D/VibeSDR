@@ -8533,10 +8533,15 @@ export default function SDRScreen({ route, navigation }: Props) {
               <TextInput
                 style={styles.radioPickAdminInput}
                 value={radioPin}
-                onChangeText={(t) => { setRadioPin(t); setRadioPinBad(false); }}
+                /* ★★★ DIGITS ONLY, FILTERED AS THEY TYPE. A PIN is numbers — the setup page and
+                 *  the wizard both store digits only now — so a keypad is the right keyboard and
+                 *  anything else that arrives (a hardware keyboard, a paste, a dictation) is
+                 *  dropped rather than sent to be rejected. */
+                onChangeText={(t) => { setRadioPin(t.replace(/[^0-9]/g, '')); setRadioPinBad(false); }}
                 placeholder="PIN for a locked receiver"
                 placeholderTextColor="#7a7a7a"
                 secureTextEntry
+                keyboardType="number-pad"
                 autoCapitalize="none"
                 autoCorrect={false}
                 // ★★★ RETURN UNLOCKS — see doPickerUnlock: an unhandled Return leaves the field

@@ -451,7 +451,8 @@ public:
      *     directory and only ever touches the receiver once the PIN is right — so a locked server
      *     collects no failed connections, which is the whole reason Stuart wanted it there
      *     (2026-09-23, after the Kiwi probe noise). */
-    using UnlockFn = std::function<std::string(const std::string& nonce, const std::string& token)>;
+    using UnlockFn = std::function<std::string(const std::string& nonce, const std::string& token,
+                                               bool isAdmin)>;
     static void setUnlockHandler(UnlockFn fn);
     /** ★ HMAC(secret, nonce) == token, against the same single-use-within-TTL nonce table the PIN
      *  path uses. Exposed so the front door can test one proof against several PINs. */

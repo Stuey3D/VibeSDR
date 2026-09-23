@@ -1764,11 +1764,13 @@ int main(int argc, char** argv) {
      *     what a machine is hiding.
      *  ★ Radios with no PIN are NOT listed here: they need no unlocking, the list already shows
      *    them as open, and naming them would tell a stranger which are which. */
-    LocalSdrShim::setUnlockHandler([](const std::string& nonce,
-                                      const std::string& token) -> std::string {
+    LocalSdrShim::setUnlockHandler([](const std::string& nonce, const std::string& token,
+                                      bool isAdmin) -> std::string {
         vsconfig::ServerConfig srv; std::string err;
         if (!vsconfig::loadServer(g_configPath, srv, err)) srv = g_serverConfig;
-        const bool master = LocalSdrShim::verifyPinProof(srv.pin, nonce, token);
+        /* ★ The admin password opens every radio, so it sweeps the list exactly as the master PIN
+         *  does — "no point being admin if you cannot access the radios" (Stuart, 2026-09-23). */
+        const bool master = isAdmin || LocalSdrShim::verifyPinProof(srv.pin, nonce, token);
         std::string j = "{\"radios\":[";
         bool first = true;
         for (const auto& r : srv.radios) {
