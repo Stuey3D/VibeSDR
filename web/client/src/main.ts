@@ -4546,14 +4546,24 @@ function drawDoorPin(radios: any[]): void {
      *    beats an inline style, so the size is fixed here rather than fought for in the CSS. */
     box.innerHTML =
         '<div style="opacity:.8">Some receivers here are private — a PIN opens the ones it fits.</div>'
-      + '<form id="splashRadioPinForm" style="display:flex;flex-wrap:nowrap;align-items:center;'
-      + 'gap:8px;justify-content:center;margin-top:6px">'
+      /* ★★★ flex-direction:row IS THE WHOLE FIX, and it has to be said out loud. The splash's own
+       *     stylesheet makes its forms COLUMNS, and `display:flex` alone does not override that —
+       *     so the field's `flex:0 0 110px` was sizing the MAIN axis, which in a column is the
+       *     HEIGHT: a 110×110 square with the button stacked underneath, which is the "massive"
+       *     box. `height:32px` never stood a chance against a flex-basis on the main axis.
+       *  ★ Measured in the live page over CDP rather than guessed — twice I reasoned about this
+       *    from the source and was wrong both times, because the rule doing it is not in the file
+       *    the markup is written in. */
+      + '<form id="splashRadioPinForm" style="display:flex;flex-direction:row;flex-wrap:nowrap;'
+      + 'align-items:center;gap:8px;justify-content:center;margin-top:6px;width:auto">'
       // ★ 16px, not smaller: below that iOS zooms the whole page in on focus and does not zoom
       //   back out — the same threshold the PIN field on the receiver page is sized for.
       + '<input id="splashRadioPinInput" type="password" inputmode="numeric" autocomplete="off" '
-      + 'spellcheck="false" placeholder="PIN" style="flex:0 0 110px;width:110px;height:32px;'
+      // ★ flex:none, not a basis: the width and height below then mean what they say whichever
+      //   direction the container ends up in.
+      + 'spellcheck="false" placeholder="PIN" style="flex:none;width:110px;height:32px;'
       + 'padding:0 8px;box-sizing:border-box;font-size:16px;line-height:32px;text-align:center">'
-      + '<button type="submit" id="splashRadioPinGo" style="flex:0 0 auto;height:32px;padding:0 14px;'
+      + '<button type="submit" id="splashRadioPinGo" style="flex:none;height:32px;padding:0 14px;'
       + 'box-sizing:border-box;font-size:12px;line-height:30px">UNLOCK</button></form>'
       + '<div id="splashRadioPinMsg" class="sub" style="margin-top:6px;font-size:11px;opacity:.75"></div>';
     host.insertAdjacentElement('beforebegin', box);

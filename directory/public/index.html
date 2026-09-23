@@ -199,6 +199,30 @@
   .rcStateRow { margin-top: 6px; display:flex; justify-content:flex-end; }
   .rcState.full { color: var(--busy); }
   .rcState.down { color: var(--dim); }
+  /* ★★ A LOCKED RECEIVER IS DIMMED, NOT HIDDEN — the club member holding the PIN has to be able
+     to see the radio they are about to unlock, and a stranger has to see that the server is
+     bigger than the part they can use. Muted, no hover, no ' ›' arrow: nothing suggests it can
+     be clicked, because clicking it is the failed connection we are here to avoid. */
+  .rcard.rcLocked { opacity: .5; border-style: dashed; cursor: default; }
+  .rcState.locked { color: var(--accent); letter-spacing: .08em; }
+  /* ★ The PIN box sits above the cards it opens, small — it is a doorway, not the page. */
+  /* ★★★ flex-direction AND flex:none ARE BOTH DELIBERATE. On the receiver's own door this exact
+     markup came out as a 110×110 square with the button underneath, because that page makes its
+     forms columns and a `flex: 0 0 110px` on a column's child sizes its HEIGHT, not its width.
+     Nothing here sets column today — this states it so nothing can. */
+  .srvPin { display: flex; flex-direction: row; align-items: center; gap: 8px; flex-wrap: wrap;
+            margin: 10px 0 0; font-size: 12px; }
+  .srvPin input { flex: none; width: 110px; height: 32px; padding: 0 8px;
+                  box-sizing: border-box; font-size: 16px; text-align: center;
+                  font-family: inherit; color: var(--freq, #ffb833);
+                  background: rgba(0,0,0,.35); border: 1px solid var(--line);
+                  border-radius: 6px; }
+  .srvPin button { flex: none; height: 32px; padding: 0 14px; box-sizing: border-box;
+                   font-size: 12px; letter-spacing: .06em; font-family: inherit;
+                   color: inherit; background: rgba(255,176,0,.08);
+                   border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+  .srvPin button:disabled { opacity: .5; cursor: default; }
+  .srvPinMsg { flex: 1 1 100%; font-size: 11px; opacity: .8; }
   /* ★ The estate's headcount is the same kind of fact — how much is alive right now. */
   #count { color: var(--phosphor); letter-spacing: .1em; }
   .tag { font-size: 11px; padding: 2px 8px; border-radius: 20px; border: 1px solid var(--line);
@@ -1258,6 +1282,30 @@ function mmss(sec) {
   return `${m}:${String(t).padStart(2, '0')}`;
 }
 
+/* ★★★ ONE BOX PER SERVER, AND ONLY WHERE THERE IS SOMETHING TO OPEN. A PIN field on every card
+ *     would be a page full of invitations to guess; this one appears when the server has actually
+ *     published a locked radio, and goes away once everything it can open is open.
+ *  ★★ It says what it opens, not what it protects. "the ones it opens" is the whole rule in five
+ *     words — master PIN opens the server, a radio's PIN opens that radio, and the visitor does
+ *     not need to know which kind they were handed. */
+function pinBox(s) {
+  if (!serverHasGated(s) || !s.address) return '';
+  const rec = pinRestore(s.address);
+  const left = (s.radios || []).filter((r) => radioGated(r, s)).length;
+  if (!left) {
+    return rec ? `<div class="srvPin"><span class="srvPinMsg">\u{1F513} Unlocked for this visit —
+                    the receivers your PIN opens are listed below.</span></div>` : '';
+  }
+  return `<form class="srvPin" data-pin="${esc(s.address)}" autocomplete="off">
+      <span>${left === 1 ? 'One receiver here is private.' : `${left} receivers here are private.`}
+            If you have a PIN, the ones it opens will appear.</span>
+      <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="16"
+             autocomplete="off" spellcheck="false" placeholder="PIN" aria-label="PIN">
+      <button type="submit">UNLOCK</button>
+      <span class="srvPinMsg"></span>
+    </form>`;
+}
+
 function serverBlock(s) {
   const st = state(s);
 
@@ -1340,7 +1388,7 @@ function serverBlock(s) {
       <span class="meta">${esc(s.grid)}${s.unreachable ? ' · not responding' : ''}</span>
     </summary>
     <div class="body">
-      ${radios}${extra}
+      ${pinBox(s)}${radios}${extra}
       ${s.demo ? '<div class="radio cap">Simulated receiver — nothing to listen to.</div>'
                : `<a class="listen" href="${esc(listenUrl(s))}" target="_blank" rel="noopener noreferrer">Listen</a>`}
     </div>
@@ -2692,6 +2740,55 @@ document.getElementById('stnQ').addEventListener('input', (e) => {
 });
 // ★ Safari fires `search` (not `input`) for the ⓧ on a search field.
 document.getElementById('stnQ').addEventListener('search', (e) => { if (!e.target.value) e.target.dispatchEvent(new Event('input')); });
+
+/* ══ THE PIN BOXES ═══════════════════════════════════════════════════════════════════════════
+ * ★★★ DELEGATED, because the list is rebuilt from scratch every minute and on every filter
+ *     change — a handler bound to a form would be attached to a form that no longer exists, and
+ *     the box would silently stop working a minute after the page loaded. The listener lives on
+ *     #list, which outlives every redraw. */
+document.getElementById('list').addEventListener('submit', async (ev) => {
+  const form = ev.target.closest('form.srvPin');
+  if (!form) return;
+  ev.preventDefault();
+  const addr = form.dataset.pin;
+  const input = form.querySelector('input');
+  const go    = form.querySelector('button');
+  const msg   = form.querySelector('.srvPinMsg');
+  const pin = (input.value || '').trim();
+  input.value = '';                       // ★ off the screen before anything else happens
+  if (!pin) return;
+  const s = ALL.find((x) => x.address === addr);
+  if (!s) return;
+  go.disabled = true; msg.textContent = 'Checking…';
+  let opened = 0;
+  try { opened = await tryServerPin(s, pin); }
+  catch (e) { opened = 0; }
+  go.disabled = false;
+  /* ★★★ THE SAME SENTENCE WHATEVER WENT WRONG — a wrong PIN, a server that has gone off the air
+   *     and a browser without WebCrypto all say this. Anything more specific is an oracle: "that
+   *     PIN is right but the radio is busy" tells a guesser they have found the code. The web
+   *     client's door uses this exact wording, deliberately. */
+  msg.textContent = opened
+    ? (opened === 1 ? 'Unlocked. That receiver is now listed.'
+                    : `Unlocked. ${opened} receivers are now listed.`)
+    : 'That PIN does not open anything here.';
+  if (opened) applyFilters();             // ★ a full redraw: locked <div>s must become <a>s
+});
+
+/* ★★ A radio this visitor has unlocked opens with a FRESH signature, so the receiver checks the
+ *    PIN itself and they land inside instead of meeting its door a second time. The window is
+ *    opened synchronously — a popup blocker will not honour one opened after an await. */
+document.getElementById('list').addEventListener('click', (ev) => {
+  const a = ev.target.closest('a.rcLink[data-unlocked]');
+  if (!a) return;
+  const [addr, id] = (a.dataset.unlocked || '').split('|');
+  const s = ALL.find((x) => x.address === addr);
+  const r = s && (s.radios || []).find((x) => String(x.id) === id);
+  if (!s || !r) return;                   // ★ fall through to the plain href
+  ev.preventDefault();
+  const win = window.open('', '_blank', 'noopener');
+  void openUnlocked(r, s, win);
+});
 document.getElementById('stnQ').addEventListener('focus', () => loadEibi());
 document.addEventListener('click', (e) => { if (!e.target.closest('.stnFind')) { const r = document.getElementById('stnRes'); r.hidden = true; } });
 
