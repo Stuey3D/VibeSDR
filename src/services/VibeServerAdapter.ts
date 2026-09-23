@@ -30,6 +30,48 @@ const LOCAL_CAPS: BackendCapabilities = {
   maxBandwidth: { default: 6000, nfm: 8000, fm: 8000, am: 10000, wfm: 100000 },
 };
 
+/**
+ * ★★★ EVERY CONTROL THE CLIENT CAN SEND, REACHABLE — WITHOUT A LIST TO KEEP.
+ *
+ * SDRScreen holds the ADAPTER, not the client, and calls hardware controls as
+ * `(client.current as any)?.x?.()`. A method that exists on VibeServerWsClient but was never
+ * copied onto the adapter is therefore `undefined`, the optional call swallows it, and the control
+ * moves in the UI while nothing is sent. There is no error anywhere.
+ *
+ * ★★★ THE FILE ALREADY WARNED ABOUT THIS — "Every hardware control needs BOTH halves. If a control
+ *     does nothing, check here first" (2026-07-30, de-emphasis) — and it happened FIVE more times
+ *     anyway, because the warning asks a person to remember something. Audited 2026-09-23, all
+ *     silent, all shipped:
+ *       setTunerBandwidth   — Stuart's Pi 2 IF filter control did nothing at any setting, even as
+ *                             admin; the request never left the phone.
+ *       airspyControl       — an Airspy tester found gain worked and no other control did, because
+ *                             gain is setHwGain (present) and the rest are airspyControl (absent).
+ *       hackrfControl, rspAgcRestart, setHwDirectSampling, setHwAutoDirectSampling,
+ *       setAutoBw, setNoiseBlankerHf — same shape.
+ *
+ * ★★ SO THE LIST IS GONE. Anything the client can do that the adapter has not deliberately
+ *    overridden is forwarded automatically — the same prototype walk ConverterBackend already uses
+ *    one layer up (wrapWithConverter), which is why THAT layer never had this bug.
+ * ★ The adapter's own methods always win: several transform their arguments or apply the converter
+ *   offset, so they must not be replaced by the raw client versions.
+ * ★ `_`-prefixed members are internals and are not exposed.
+ */
+export function forwardUnhandled(target: object, inner: object): void {
+  const mine = new Set<string>();
+  for (let p: object | null = target; p && p !== Object.prototype; p = Object.getPrototypeOf(p))
+    for (const k of Object.getOwnPropertyNames(p)) mine.add(k);
+  for (let p: object | null = inner; p && p !== Object.prototype; p = Object.getPrototypeOf(p)) {
+    for (const k of Object.getOwnPropertyNames(p)) {
+      if (k === 'constructor' || k.startsWith('_') || mine.has(k)) continue;
+      const d = Object.getOwnPropertyDescriptor(p, k);
+      if (!d || typeof d.value !== 'function') continue;
+      mine.add(k);
+      (target as Record<string, unknown>)[k] =
+        (...args: unknown[]) => (d.value as (...a: unknown[]) => unknown).apply(inner, args);
+    }
+  }
+}
+
 export class VibeServerAdapter implements SDRBackend {
   readonly kind: BackendKind = 'ubersdr';
   /* ★ NOT readonly any more, and the declaration should say so: the tuning range is LEARNED from
@@ -53,6 +95,7 @@ export class VibeServerAdapter implements SDRBackend {
   constructor(baseUrl: string, uuid: string, callbacks: BackendCallbacks, password?: string, local = false) {
     // onSMeter/onProfiles unused: S-meter is spectrum-derived, no profiles.
     this.client = this.makeClient(baseUrl, uuid, callbacks, password);
+    forwardUnhandled(this, this.client);
     this.baseUrl = baseUrl;
     this.cb = callbacks;
     /* ★★★ A COPY, NOT THE SHARED CONSTANT. The tuning range is learned from the server below,

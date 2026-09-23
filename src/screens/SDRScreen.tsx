@@ -1278,10 +1278,17 @@ export default function SDRScreen({ route, navigation }: Props) {
    *    the server, local goes to the engine through the bridge. Written once so the next control
    *    cannot be added to only one of the two. */
   const aspSend = useCallback((o: Record<string, number | boolean>) => {
-    const rc: any = client.current as any;
-    if (rc?.airspyControl) { rc.airspyControl(o); return; }
+    /* ★★★ CHOOSE ON WHERE THE RADIO IS, NOT ON WHICH METHOD HAPPENS TO EXIST. This asked "does the
+     *  client have airspyControl?" and fell back to the PHONE's native module when it did not —
+     *  so with the radio on a server and the adapter missing the method (it was), every Airspy
+     *  control was quietly sent to the handset's own idle shim instead. The tester saw gain work
+     *  and nothing else, because gain goes through a method the adapter did have.
+     *  ★ hwClient() is the existing test for "is the radio remote", used by every other control
+     *    on this screen; asking it keeps this one in step with them. */
+    const rc = hwClient();
+    if (rc) { (rc as any).airspyControl?.(o); return; }
     (LocalHw as any)?.airspyControl?.(o);
-  }, [LocalHw]);
+  }, [LocalHw, hwClient]);
   const onHwDirectSamp = useCallback((mode: number) => {
     setHwDirectSamp(mode);
     const rc = hwClient();

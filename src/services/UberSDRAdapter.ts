@@ -10,6 +10,7 @@
 
 import { UberSDRClient, type SDRMode, type SDRStatus } from './UberSDRClient';
 import type { SDRBackend, BackendCallbacks, BackendCapabilities, BackendKind } from './SDRBackend';
+import { forwardUnhandled } from './VibeServerAdapter';
 
 const UBERSDR_CAPS: BackendCapabilities = {
   profiles:       false,
@@ -53,6 +54,10 @@ export class UberSDRAdapter implements SDRBackend {
   constructor(baseUrl: string, uuid: string, callbacks: BackendCallbacks, password?: string, local = false) {
     // onSMeter/onProfiles unused: S-meter is spectrum-derived, no profiles.
     this.client = this.makeClient(baseUrl, uuid, callbacks, password);
+    /* ★ The same automatic forwarding VibeServerAdapter uses — see forwardUnhandled there for the
+     *  seven controls that were silently unreachable because this list was maintained by hand.
+     *  An UberSDR has fewer hardware controls, but "fewer" is exactly how a list goes stale. */
+    forwardUnhandled(this, this.client);
     this.baseUrl = baseUrl;
     this.cb = callbacks;
     /* ★★★ A COPY, NOT THE SHARED CONSTANT. The tuning range is learned from the server below,

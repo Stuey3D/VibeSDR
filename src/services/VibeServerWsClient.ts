@@ -821,9 +821,15 @@ export abstract class VibeServerWsClient {
   /** ★ Airspy R2 / Mini stages — see airspy_source.h. Only the keys present are applied, the same
    *  shape as its siblings. `curve` false = linearity (Airspy's own default), true = sensitivity;
    *  lna/mixer/vga are 0-15 each and leave preset mode; biast is owner-only, enforced server side. */
-  airspyControl(o: { curve?: boolean; lna?: number; mixer?: number; vga?: number;
+  airspyControl(o: { mode?: number; curve?: boolean; lna?: number; mixer?: number; vga?: number;
                      lnaAgc?: boolean; mixerAgc?: boolean; biast?: boolean; packing?: boolean }) {
     const m: Record<string, unknown> = { type: 'airspy_control' };
+    /* ★★★ THE GAIN MODE WAS NEVER PUT ON THE WIRE. The panel sends { mode } for Sensitive /
+     *  Linear / Free and the shim reads `jsonNum(msg, "mode", v)`, but this builder copied every
+     *  field EXCEPT that one — so the three-way control did nothing on a remote receiver even
+     *  once the adapter forwarded the call. A field-by-field copy is a list, and a list goes
+     *  stale the moment a control is added. */
+    if (o.mode     !== undefined) m.mode     = o.mode;
     if (o.curve    !== undefined) m.curve    = o.curve ? 1 : 0;
     if (o.lna      !== undefined) m.lna      = o.lna;
     if (o.mixer    !== undefined) m.mixer    = o.mixer;
@@ -879,8 +885,13 @@ export abstract class VibeServerWsClient {
     if (o.ifagc    !== undefined) m.ifagc    = o.ifagc ? 1 : 0;
     if (o.rfagc    !== undefined) m.rfagc    = o.rfagc ? 1 : 0;
     if (o.agcset   !== undefined) m.agcset   = o.agcset;
-    if (o.rfNotch  !== undefined) m.rfNotch  = o.rfNotch ? 1 : 0;
-    if (o.dabNotch !== undefined) m.dabNotch = o.dabNotch ? 1 : 0;
+    /* ★★★ LOWERCASE, BECAUSE THAT IS WHAT THE SERVER READS. The shim looks for "rfnotch" and
+     *  "dabnotch" (jsonNum is an exact key match); this sent "rfNotch" and "dabNotch", so both
+     *  notches did nothing on every VibeServer — silently, with no log line and no refusal,
+     *  because a key that never matches runs no code at all. The WEB client has always sent them
+     *  lowercase, which is why it worked there and not in the app. */
+    if (o.rfNotch  !== undefined) m.rfnotch  = o.rfNotch ? 1 : 0;
+    if (o.dabNotch !== undefined) m.dabnotch = o.dabNotch ? 1 : 0;
     this._sendCtl(m);
   }
 
