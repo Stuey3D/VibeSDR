@@ -1,17 +1,6 @@
 #!/bin/sh
-# ★★★ THE armhf PACKAGE IS ARMv7 WITH NEON (2026-09-22). On a Pi Zero, Pi Zero W or Pi 1 (ARMv6, no
-#     NEON) it would install cleanly and then die with "Illegal instruction" the first time the DSP
-#     ran — which reads as a broken server, not an unsupported board. Refuse here, in words, instead.
-#  ★ `neon` on a 32-bit kernel, `asimd` on a 64-bit kernel running a 32-bit userland (a Pi 3/4/5 on
-#    32-bit Raspberry Pi OS): both mean the vector unit is there.
+# ★ (2026-09-22) The armhf package now carries an ARMv6 scalar build as well, and postinst installs
+#   it on a CPU without NEON — so nothing is refused here any more. Kept as an empty hook so a later
+#   release has somewhere to put a pre-install check without changing the package layout.
 set -e
-if [ "$1" = "install" ] || [ "$1" = "upgrade" ]; then
-  if [ "$(dpkg --print-architecture)" = "armhf" ] \
-     && ! grep -qwE 'neon|asimd' /proc/cpuinfo 2>/dev/null; then
-    echo "VibeServer needs an ARMv7 (or newer) processor with NEON." >&2
-    echo "This board looks like ARMv6 (Pi Zero / Zero W / Pi 1), which is not supported yet." >&2
-    echo "Minimum confirmed hardware: Raspberry Pi 2 (quad-core ARMv7, 0.9 GHz)." >&2
-    exit 1
-  fi
-fi
 exit 0

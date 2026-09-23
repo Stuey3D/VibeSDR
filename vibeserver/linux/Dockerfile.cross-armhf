@@ -5,8 +5,9 @@ RUN dpkg --add-architecture armhf && apt-get update && apt-get install -y --no-i
       build-essential crossbuild-essential-armhf cmake pkg-config file ca-certificates curl \
       librtlsdr-dev:armhf libusb-1.0-0-dev:armhf libopus-dev:armhf libfftw3-dev:armhf \
       libncursesw5-dev:armhf libhackrf-dev:armhf \
-      libstdc++6:armhf libc6:armhf libgcc-s1:armhf \
+      libstdc++6:armhf libc6:armhf libgcc-s1:armhf libatomic1:armhf \
       dpkg-dev apt-utils gnupg git rsync xz-utils binutils-arm-linux-gnueabihf \
+      clang lld mmdebstrap \
     && rm -rf /var/lib/apt/lists/*
 COPY sdrplay-inc/ /usr/local/include/
 COPY armhf-toolchain.cmake /opt/armhf-toolchain.cmake
@@ -24,4 +25,25 @@ RUN git clone --quiet https://github.com/osmocom/rtl-sdr.git /tmp/rtlsdr \
     && rm -rf /tmp/rtlsdr \
     && file /opt/vibe-rtlsdr/lib/librtlsdr.so.* | grep -q "ARM, EABI5" \
     && strings /opt/vibe-rtlsdr/lib/librtlsdr.so | grep -q "Blog V4L"
+# ★★★ THE ARMv6 HALF — a RASPBIAN bookworm sysroot (see armv6-toolchain.cmake). `extract` unpacks
+#     packages without running any of them, so no emulation is needed to build a foreign root.
+COPY armv6-toolchain.cmake /opt/armv6-toolchain.cmake
+RUN curl -fsSL http://raspbian.raspberrypi.com/raspbian.public.key | gpg --dearmor > /tmp/raspbian.gpg \
+    && mmdebstrap --variant=extract --architectures=armhf --keyring=/tmp/raspbian.gpg \
+         --include=libc6-dev,libstdc++-12-dev,libgcc-12-dev,libusb-1.0-0-dev,libopus-dev,libfftw3-dev,libncurses-dev,libhackrf-dev,libatomic1 \
+         bookworm /opt/rpi-sysroot http://raspbian.raspberrypi.com/raspbian \
+    && rm -rf /opt/rpi-sysroot/var/cache/apt /opt/rpi-sysroot/var/lib/apt/lists \
+    && ls /opt/rpi-sysroot/usr/lib/gcc/arm-linux-gnueabihf/12/crtbegin.o
+# ★ And the bundled librtlsdr, built the same way — an ARMv7 one beside an ARMv6 binary is the same crash.
+RUN git clone --quiet https://github.com/osmocom/rtl-sdr.git /tmp/rtlsdr \
+    && git -C /tmp/rtlsdr checkout --quiet "${RTLSDR_TAG}" \
+    && cmake -S /tmp/rtlsdr -B /tmp/rtlsdr/b -DCMAKE_BUILD_TYPE=Release \
+             -DCMAKE_TOOLCHAIN_FILE=/opt/armv6-toolchain.cmake \
+             -DBUILD_SHARED_LIBS=ON -DDETACH_KERNEL_DRIVER=ON \
+    && cmake --build /tmp/rtlsdr/b --target rtlsdr -j"$(nproc)" \
+    && mkdir -p /opt/vibe-rtlsdr-v6/lib /opt/vibe-rtlsdr-v6/include \
+    && cp -a /tmp/rtlsdr/b/src/librtlsdr.so* /opt/vibe-rtlsdr-v6/lib/ \
+    && cp /tmp/rtlsdr/include/rtl-sdr.h /tmp/rtlsdr/include/rtl-sdr_export.h /opt/vibe-rtlsdr-v6/include/ \
+    && rm -rf /tmp/rtlsdr \
+    && readelf -A /opt/vibe-rtlsdr-v6/lib/librtlsdr.so.0 | grep -q "Tag_CPU_arch: v6"
 WORKDIR /work

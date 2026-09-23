@@ -8,6 +8,18 @@ set -e
 
 case "$1" in
   configure)
+    # ── A. THE RIGHT BUILD FOR THIS PROCESSOR (armhf only, 2026-09-22) ───────────
+    # ★★★ ONE armhf PACKAGE, TWO BUILDS. /usr/bin/vibeserver is ARMv7+NEON — the Pi 2's speed.
+    #     A CPU without NEON (Pi Zero, Zero W, Pi 1 — ARMv6) would die "Illegal instruction" on the
+    #     first DSP call, so it gets the SCALAR build shipped in lib/vibeserver/armv6 instead, whose
+    #     RPATH already points at its own ARMv6 librtlsdr. First thing done, before anything below
+    #     can start the daemon. Re-done on every upgrade, since dpkg puts the NEON build back.
+    #  ★ `neon` on a 32-bit kernel, `asimd` on a 64-bit kernel with a 32-bit userland.
+    if [ -x /usr/lib/vibeserver/armv6/vibeserver ] \
+       && ! grep -qwE 'neon|asimd' /proc/cpuinfo 2>/dev/null; then
+      install -m 0755 /usr/lib/vibeserver/armv6/vibeserver /usr/bin/vibeserver
+      echo "VibeServer: no NEON on this processor — installed the ARMv6 (scalar) build."
+    fi
     # ── 0. THE SERVICE ACCOUNT ───────────────────────────────────────────────
     # ★★★ NOTHING ELSE CREATES IT, AND THE UNIT CANNOT START WITHOUT IT. The service declares
     #     User=vibeserver, so a box where that account does not exist fails at
