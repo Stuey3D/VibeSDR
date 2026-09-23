@@ -36,6 +36,9 @@ CROSS_CMAKE=""
 if [ -n "${VIBE_CROSS_ARCH:-}" ]; then
   ARCH="$VIBE_CROSS_ARCH"
   CROSS_CMAKE="-DCMAKE_TOOLCHAIN_FILE=/opt/$ARCH-toolchain.cmake"
+  # ★★ armhf also carries the ARMv6 SCALAR build (Pi Zero / Pi 1), built first against the Raspbian
+  #    sysroot in the cross image and packaged into lib/vibeserver/armv6 — postinst picks by CPU.
+  [ "$ARCH" = "armhf" ] && CROSS_CMAKE="$CROSS_CMAKE -DVIBE_ARMV6_STAGE=/build/armv6-stage"
   # ★ dpkg-shlibdeps reads these to resolve the ARMHF libraries rather than the host's.
   export DEB_HOST_ARCH="$ARCH" DEB_HOST_MULTIARCH=arm-linux-gnueabihf DEB_HOST_GNU_TYPE=arm-linux-gnueabihf
 fi
@@ -269,6 +272,15 @@ runbuild "
   #     written down, and the release script still had it.
   set -euo pipefail
   cd $BUILD_SRC/vibeserver
+  if [ \"${VIBE_CROSS_ARCH:-}\" = armhf ]; then
+    cmake -S . -B build-armv6 -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=/opt/armv6-toolchain.cmake \
+          -DVIBE_RTLSDR_PREFIX=/opt/vibe-rtlsdr-v6 -DVIBE_RPATH_SUBDIR=/armv6 >/dev/null
+    cmake --build build-armv6 --target vibeserver -j\"${JOBS:-$(nproc)}\" | tail -1
+    readelf -A build-armv6/vibeserver | grep -q 'Tag_CPU_arch: v6' \
+      || { echo '!! the ARMv6 build is not ARMv6'; exit 1; }
+    mkdir -p /build/armv6-stage && cp build-armv6/vibeserver /build/armv6-stage/ \
+      && cp -a /opt/vibe-rtlsdr-v6/lib/librtlsdr.so* /build/armv6-stage/
+  fi
   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVIBESERVER_DEB_REV=$REV \
         -DVIBESERVER_STRICT_RADIOS=ON $CROSS_CMAKE >/dev/null
   # ★★★ JOBS IS SETTABLE BECAUSE AN EMULATED BUILD CANNOT TAKE nproc. Under qemu, four concurrent
