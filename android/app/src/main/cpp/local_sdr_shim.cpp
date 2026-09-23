@@ -8834,7 +8834,29 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *     would run past the usable span, it cannot be used, whatever the mode is
                  *     called. A wide mode nobody has written yet gets the right treatment for free.
                  */
-                const bool shouldersFit = (demodBw * 2.5) < (sampleRate * 0.45);
+                /* ★★★ A SCHMITT TRIGGER, BECAUSE THIS DECIDES WHICH RULER THE AGC STEERS BY.
+                 *
+                 *  It read `(demodBw * 2.5) < (sampleRate * 0.45)` and flipped on its own. At
+                 *  1.2 MS/s with WFM the two sides are 500 kHz and 540 kHz — within 8% — and the
+                 *  automatic IF bandwidth moves demodBw across that line by itself (184 kHz and
+                 *  195 kHz in the same minute's log).
+                 *  ★★★ EVERY FLIP CHANGES WHAT `separation` MEANS: channel-minus-NEIGHBOURS one
+                 *      frame and channel-minus-NOISE-FLOOR the next, 1.9 dB and 33.9 dB for the
+                 *      same radio. Every rule that compares separation over time then refuses to
+                 *      judge (correctly — they are not the same quantity), so the whole-run
+                 *      verdict and the peak-hold both stand down and the climb runs to the
+                 *      ceiling. Measured on the Pi 2, 105.4, 2026-09-23: 150 s and still moving,
+                 *      pinned at 49.6 dB where the swept knee is 33.8.
+                 *  ★★ AND IT IS WORST EXACTLY WHERE IT MATTERS — a 1.2 MS/s capture is what a
+                 *     small box runs, and a 2.048 MS/s receiver (the Sony) sits far from the line
+                 *     and never sees it. That is why this looked like a Nooelec problem.
+                 *  ★ Margins of 0.42 / 0.50 either side: wide enough that the automatic bandwidth
+                 *    cannot walk across them, narrow enough that a real mode change still switches
+                 *    ruler on the next frame. Once switched, the run baselines are thrown away by
+                 *    the existing ruler-change guard, which is right. */
+                const bool wasShoulders = sepFromShoulders.load(std::memory_order_relaxed);
+                const bool shouldersFit = wasShoulders ? (demodBw * 2.5) < (sampleRate * 0.50)
+                                                       : (demodBw * 2.5) < (sampleRate * 0.42);
                 /* ★ The profile picks itself from the same two numbers — see AgcProfile. Announced
                  *   only when it CHANGES, or a per-frame log would bury everything else. */
                 {
