@@ -28,6 +28,20 @@ export interface VibeRadio {
   locked: boolean;
   /** The owner has restricted which frequencies may be tuned. */
   restricted: boolean;
+  /** ★★★ THIS RADIO HAS A PIN OF ITS OWN — `pinLocked`, and NOT the `locked` above.
+   *
+   *  A machine may put ONE receiver behind a PIN while the rest stay open: a club lends a member
+   *  the radio they are licensed for without closing the whole site. The server accepts EITHER
+   *  the machine's master PIN (which opens everything) or this radio's own (which opens only it),
+   *  and works out for itself which was typed — so the listener types ONE code and never has to
+   *  know which kind they hold.
+   *
+   *  ★★★ DIFFERENT FACT, DIFFERENT NAME. `locked` next door means the owner has pinned the tuning
+   *      CENTRE — a fixed window every listener tunes inside — and it has meant that since long
+   *      before PINs were per-radio. Reusing it would have made access silently follow a tuning
+   *      mode; two keys of one name in a JSON object is not an error, the second simply wins.
+   *  ★ Absent on an older server, which must read as "open to anyone", so `=== true`. */
+  pinLocked?: boolean;
   /** Where it is pointed right now, so the picker can say what a radio is FOR. */
   centreHz?: number;
   spanHz?: number;
@@ -106,6 +120,8 @@ export async function fetchFrontDoor(
         users: num(x.users, 1),
         locked: x.locked === true,
         restricted: x.restricted === true,
+        // ★ An older door says nothing here; `=== true` makes that "open", never "locked".
+        pinLocked: x.pinLocked === true,
         centreHz: typeof x.centreHz === 'number' ? x.centreHz : undefined,
         spanHz: typeof x.spanHz === 'number' ? x.spanHz : undefined,
         mode: typeof x.mode === 'string' ? x.mode : undefined,

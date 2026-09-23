@@ -119,6 +119,80 @@ export async function resolveVibeAdminAuth(baseUrl: string, password: string): P
   } catch { return ''; }
 }
 
+/**
+ * ★★★ DOES THIS PIN OPEN THIS RADIO? Returns the auth suffix to carry on the connection when it
+ *     does, and null when it does not.
+ *
+ *  ★★★ ASKED WITH A CHEAP GET, NEVER BY OPENING A SOCKET. `/vibeserver/auth/verify` answers 200 or
+ *      401 and costs the receiver nothing: it does not claim a listener slot, does not displace
+ *      anybody, and does not show up as an arrival in the owner's connection log. Probing with a
+ *      WebSocket would do all three — and against a one-listener radio the probe IS the listener,
+ *      so testing a PIN would knock a stranger off the very radio being asked about. One box may
+ *      have to test several radios in a row; that must stay free.
+ *
+ *  ★★★ THE PIN NEVER LEAVES THE PHONE. Same challenge-response the server PIN has always used —
+ *      a single-use nonce from the receiver and HMAC-SHA256(pin, nonce) over it — so nothing in
+ *      the URL, the proxy log or the crumb trail is worth stealing. There is no fourth mechanism
+ *      here on purpose.
+ *
+ *  ★★ WE DO NOT TRUST `required` AND STOP. That flag reports the MASTER PIN only, so a radio
+ *     behind its OWN PIN answers `false` — believing it would open the card to any code at all.
+ *     The nonce is taken from the reply and the token offered regardless; the server's verdict
+ *     is the only thing that counts.
+ *  ★ Any failure at all — unreachable, malformed, timed out, not this old a server — reads as
+ *    "does not fit". The caller says ONE sentence whatever happened: see the note where it is
+ *    printed, and do not be tempted to distinguish these here.
+ *
+ *  `radioUrl` is the RADIO's base (…/r/<id>), not the door's: a radio's PIN is proved to the
+ *  radio, and the master PIN is accepted there too, so one address answers both cases.
+ */
+export async function verifyVibePin(
+  radioUrl: string, pin: string, timeoutMs = 6000,
+): Promise<boolean> {
+  if (!pin) return false;
+  const base = radioUrl.replace(/\/+$/, '');
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const ch = await fetch(`${base}/vibeserver/auth`, { signal: ctrl.signal, cache: 'no-store' });
+    const j = await ch.json() as { nonce?: string };
+    if (!j?.nonce) return false;
+    const q = `vs_nonce=${encodeURIComponent(j.nonce)}&vs_auth=${vibeAuthToken(pin, j.nonce)}`;
+    const v = await fetch(`${base}/vibeserver/auth/verify?${q}`, { signal: ctrl.signal, cache: 'no-store' });
+    // ★★ 200 fits, 401 does not, and ANYTHING else (404 on a server too old to have the endpoint,
+    //    a 502 from a tunnel) is not a yes. Never infer a pass from "not 401".
+    return v.status === 200;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/**
+ * The auth suffix for a radio we have already proved a PIN against — a FRESH nonce and a fresh
+ * token, resolved at the moment of connecting.
+ *
+ * ★★★ A NONCE IS SINGLE-USE, so the one the verify above spent cannot be carried to the socket:
+ *     re-offering it would be refused as a replay and read, from the outside, as the PIN suddenly
+ *     being wrong on the radio that had just accepted it. The PIN is held in memory for the visit
+ *     and the challenge is answered again here.
+ * ★★ AND `required` IS NOT CONSULTED, for the same reason it is not in verifyVibePin: it reports
+ *    the master PIN, so a radio behind its own would return '' and connect unauthenticated.
+ * ★ '' when the server issues no nonce (too old to have any of this), which connects exactly as
+ *   the app always has.
+ */
+export async function resolveRadioAuth(radioUrl: string, pin: string): Promise<string> {
+  if (!pin) return '';
+  const base = radioUrl.replace(/\/+$/, '');
+  try {
+    const resp = await fetch(`${base}/vibeserver/auth`, { cache: 'no-store' });
+    const j = await resp.json() as { nonce?: string };
+    if (!j?.nonce) return '';
+    return `&vs_nonce=${encodeURIComponent(j.nonce)}&vs_auth=${vibeAuthToken(pin, j.nonce)}`;
+  } catch { return ''; }
+}
+
 export async function resolveVibeAuth(baseUrl: string, pin: string): Promise<string> {
   const base = baseUrl.replace(/\/+$/, '');
   const resp = await fetch(`${base}/vibeserver/auth`);

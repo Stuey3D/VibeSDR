@@ -57,7 +57,7 @@ import { createValueBus } from '../services/valueBus';
 import DabPlusBadge from '../components/DabPlusBadge';
 import type { DabState } from '../services/dabTypes';
 import { DAB_BLOCKS, dabBlockIndex } from '../services/dabBlocks';
-import { resolveVibeAdminAuth } from '../services/vibeAuth';
+import { resolveVibeAdminAuth, verifyVibePin, resolveRadioAuth } from '../services/vibeAuth';
 import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/backendFactory';
 import {
@@ -719,6 +719,88 @@ export default function SDRScreen({ route, navigation }: Props) {
     setAdminAuthQ(cred);
     setAdminPickPw('');
   }, [adminPickPw, adminPickBusy, baseUrl]);
+
+  // ── ★★★ PER-RADIO PINs AT THE DOOR ──────────────────────────────────────────────────────────
+  //
+  // A machine may put ONE radio behind a PIN of its own while the rest stay open — a club lending
+  // a member the receiver they are licensed for, without closing the site to everybody else. The
+  // server accepts EITHER the machine's master PIN (opens everything) or a radio's own (opens that
+  // one) and works out which was typed, so the listener types ONE code and never has to know which
+  // kind they hold.
+  //
+  // ★★★ A LOCKED RADIO IS LISTED AND GREYED, NEVER HIDDEN — the same rule as the unsupported and
+  //     in-use rows above it. Hiding it would leave a member holding the right PIN with nothing to
+  //     type it into, and would make the door lie about its own aerials to everyone else.
+  // ★★★ THE FAILURE SAYS NOTHING. A wrong PIN and a PIN belonging to somebody else's machine give
+  //     the SAME sentence, with no count and no "not that one" — otherwise the box is an oracle
+  //     telling a stranger how many PINs exist here and which card each one fits.
+  // ★★ ONE BOX, NOT ONE PER CARD. Which radio a code opens is the SERVER's question, not the
+  //    listener's: a box per card asks them to guess it first, in public, and be wrong.
+  // ★★ IN MEMORY ONLY, FOR THIS VISIT. Nothing is persisted: leaving the door and coming back asks
+  //    again, and no PIN is written where a later session — or anything else on the phone — could
+  //    read it as a standing permission. Same reasoning as the admin password beneath it.
+  /** PIN per unlocked radio id. The PIN itself, because the CONNECTION needs a fresh nonce of its
+   *  own (see resolveRadioAuth) — a verify's nonce is spent and cannot be replayed at the socket. */
+  const radioPins = useRef<Record<string, string>>({});
+  const [unlockedRadios, setUnlockedRadios] = useState<Record<string, true>>({});
+  const [radioPin, setRadioPin] = useState('');
+  const [radioPinBusy, setRadioPinBusy] = useState(false);
+  const [radioPinBad, setRadioPinBad] = useState(false);
+  /** The chosen radio's auth suffix, once a PIN has opened it.
+   *  ★ A ref as well as state: the client is built inside an effect that fires on the same render
+   *    as the radio choice, and reading the state there would read the value from BEFORE the tap. */
+  const radioAuthRef = useRef('');
+  const [radioAuthSuffix, setRadioAuthSuffix] = useState('');
+  /**
+   * Try the typed PIN against every radio still locked, and open the ones it fits.
+   *
+   * ★★★ ASKED WITH /vibeserver/auth/verify, WHICH IS FREE. It costs the receiver nothing, claims
+   *     no listener slot and displaces nobody — which matters because one tap may test several
+   *     radios in a row, and on a one-listener radio a socket probe would BE the listener, so
+   *     testing a PIN would knock a stranger off the very radio being asked about.
+   * ★★ The master PIN passes on every locked radio and so opens them all in one pass; a radio's
+   *    own passes on exactly one. Neither case is special-cased here — the server decides, and we
+   *    simply believe each verdict.
+   * ★ In parallel, because a door on a tunnel can hold each request for seconds and a queue of
+   *   them reads as the box being broken.
+   */
+  const doRadioPinUnlock = useCallback(async () => {
+    const pin = radioPin;
+    if (!pin || radioPinBusy || !door) return;
+    setRadioPinBusy(true); setRadioPinBad(false);
+    const locked = door.radios.filter((r) => r.pinLocked === true && !unlockedRadios[r.id]);
+    const fits = await Promise.all(locked.map((r) =>
+      verifyVibePin(radioBaseUrl(baseUrl, r.id), pin).catch(() => false)));
+    const opened = locked.filter((_, i) => fits[i]);
+    setRadioPinBusy(false);
+    if (!opened.length) { setRadioPinBad(true); return; }
+    opened.forEach((r) => { radioPins.current[r.id] = pin; });
+    setUnlockedRadios((prev) => {
+      const next = { ...prev };
+      opened.forEach((r) => { next[r.id] = true; });
+      return next;
+    });
+    setRadioPin('');
+  }, [radioPin, radioPinBusy, door, unlockedRadios, baseUrl]);
+  /**
+   * Choose a radio — the one place a radio base is adopted, so the PIN travels with it.
+   *
+   * ★★★ THE PIN MUST REACH THE SOCKET, not merely the card. Unlocking the row and then connecting
+   *     unauthenticated would be refused at the handshake and read, from the outside, as the PIN
+   *     having been wrong — on the radio that had just accepted it. The suffix is resolved here,
+   *     against the RADIO's address (a radio's PIN is proved to the radio), with a fresh nonce.
+   * ★ An open radio resolves nothing and keeps whatever the picker screen handed us, which is the
+   *   machine-wide PIN path this screen has always used.
+   */
+  const chooseRadio = useCallback(async (id: string) => {
+    const pin = radioPins.current[id];
+    if (pin) {
+      const q = await resolveRadioAuth(radioBaseUrl(baseUrl, id), pin);
+      radioAuthRef.current = q;
+      setRadioAuthSuffix(q);
+    }
+    setRadioBase(radioBaseUrl(baseUrl, id));
+  }, [baseUrl]);
   /**
    * ★★★ WHICH OF THESE RADIOS IS ACTUALLY IN USE. The door's radio list is a DIRECTORY, not a
    *     status board — it says what the owner configured and cannot see inside the other radios'
@@ -4998,7 +5080,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     // Local hardware: thread the live device sample rate for panSpan()'s window.
     if (route.params.isLocal) (c as { setLocalSampleRate?: (hz: number) => void }).setLocalSampleRate?.(hwSampleRate);
     // VibeServer PIN: append the auth suffix to the spectrum WS.
-    if (route.params.authSuffix) (c as { setAuthSuffix?: (s: string) => void }).setAuthSuffix?.(route.params.authSuffix);
+    /* ★★★ THE RADIO'S OWN PIN WINS OVER THE MACHINE'S. The picker screen resolved a suffix for the
+     *  DOOR before any radio was chosen, and a radio behind its own PIN is not opened by it — so
+     *  where this visit has proved a PIN against the radio, that is the credential the socket
+     *  carries. Read from the ref because the client is built on the same render as the tap.
+     *  ★ Empty for every open radio, which leaves the machine-wide path exactly as it was. */
+    const authQ = radioAuthRef.current || route.params.authSuffix;
+    if (authQ) (c as { setAuthSuffix?: (s: string) => void }).setAuthSuffix?.(authQ);
     // ★ Declare the backend BEFORE connecting. Both the local shim and the LAN
     // shim (VibeServer) speak fftRate and use the 20/10/5 ladder; waiting for
     // hwinfo to reveal that is a race the controller always lost. See
@@ -8336,7 +8424,18 @@ export default function SDRScreen({ route, navigation }: Props) {
              *  §7) — never hidden, never offered: "Unsupported SDR — update VibeSDR". The number
              *  comes from the server's driver, so new hardware needs no app change to land here. */
             const unsupported = (r.minProto ?? 0) > APP_PROTO;
-            const blocked = (busy && !adminAuthQ) || unsupported;
+            /* ★★★ BEHIND ITS OWN PIN, AND THIS VISIT HAS NOT OPENED IT. Weighed BEFORE anything
+             *  about occupancy, because it is the only fact that matters here: however free this
+             *  receiver is, this listener cannot walk into it, and "FREE" over a card that will
+             *  refuse them is the worst answer available.
+             *  ★★ NOT `r.locked` — that is the owner having pinned the tuning CENTRE, an entirely
+             *     different fact that this row already describes in its detail line. See the note
+             *     on `pinLocked` in vibeserverRadios.ts.
+             *  ★ Locked for the admin too: the admin password is CONTROL and the PIN is ACCESS, and
+             *    they are independent on purpose — the server would refuse the socket, so offering
+             *    the row would only offer a refusal. The box below takes their PIN like anyone's. */
+            const gated = r.pinLocked === true && !unlockedRadios[r.id];
+            const blocked = (busy && !adminAuthQ) || unsupported || gated;
             return (
               <Pressable
                 key={r.id}
@@ -8357,10 +8456,10 @@ export default function SDRScreen({ route, navigation }: Props) {
                       `Someone is listening on ${r.label} now.${when} Taking over disconnects them.`,
                       [{ text: 'Cancel', style: 'cancel' },
                        { text: 'Take over', style: 'destructive',
-                         onPress: () => { setTakeoverIntent(true); setRadioBase(radioBaseUrl(baseUrl, r.id)); } }]);
+                         onPress: () => { setTakeoverIntent(true); void chooseRadio(r.id); } }]);
                     return;
                   }
-                  setRadioBase(radioBaseUrl(baseUrl, r.id));
+                  void chooseRadio(r.id);
                 }}
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -8374,10 +8473,16 @@ export default function SDRScreen({ route, navigation }: Props) {
                   {/* ★ Only ever said when we have been TOLD. An unknown radio shows nothing —
                       claiming "free" about a radio that did not answer is the error that costs
                       somebody a wasted choice. */}
-                  {radioBusy[r.id]?.busy === true && (
+                  {/* ★★★ SAID INSTEAD OF THE OCCUPANCY, NEVER BESIDE IT. "FREE · PIN REQUIRED"
+                      invites the tap it is there to prevent, and whether anyone is listening is
+                      not the listener's problem on a radio they cannot enter at all. */}
+                  {gated && (
+                    <Text style={styles.radioPickBusy}>PIN REQUIRED</Text>
+                  )}
+                  {!gated && radioBusy[r.id]?.busy === true && (
                     <Text style={styles.radioPickBusy}>IN USE</Text>
                   )}
-                  {radioBusy[r.id]?.busy === false && (
+                  {!gated && radioBusy[r.id]?.busy === false && (
                     <Text style={styles.radioPickFree}>FREE</Text>
                   )}
                 </View>
@@ -8388,7 +8493,12 @@ export default function SDRScreen({ route, navigation }: Props) {
                     : ''}
                   {/* ★ Say what would change it. "In use" alone leaves an owner staring at their
                       own receiver with no idea the box below is the way in. */}
-                  {blocked ? ' · owner’s password below to take it' : ''}
+                  {/* ★ Say what would change it — "PIN REQUIRED" alone leaves the member holding
+                      the right code staring at a dead row with no idea the box below is the way
+                      in. The PIN and the owner's password are different doors, so they are named
+                      separately: one is ACCESS, the other CONTROL. */}
+                  {gated ? ' · PIN below to open it' : ''}
+                  {blocked && !gated ? ' · owner’s password below to take it' : ''}
                   {busy && !!adminAuthQ ? ' · you can take this one' : ''}
                 </Text>
                 {/* ★★★ THE AERIAL, UNDER THE RANGE IT QUALIFIES — the same order the browser's
@@ -8412,6 +8522,48 @@ export default function SDRScreen({ route, navigation }: Props) {
                   the exact way the owner was locked out of his own public demo.
               ★ Proved against the DOOR: the admin password is machine-wide, so one entry
                 unlocks whichever radio is chosen next. */}
+          {/* ── ★★★ ONE PIN BOX, FOR WHICHEVER RADIOS IT OPENS ────────────────────────────
+              Shown only while something here is still locked, so an ordinary machine's door is
+              unchanged. Above the admin row because it is the commoner need by far and because
+              they are different doors — the PIN is ACCESS, the password is CONTROL.
+              ★ The same controls as the admin row beneath it, deliberately: one layout, one set
+                of styles, and nothing new to learn at the bottom of this screen. */}
+          {door.radios.some((r) => r.pinLocked === true && !unlockedRadios[r.id]) && (
+            <View style={styles.radioPickAdmin}>
+              <TextInput
+                style={styles.radioPickAdminInput}
+                value={radioPin}
+                onChangeText={(t) => { setRadioPin(t); setRadioPinBad(false); }}
+                placeholder="PIN for a locked receiver"
+                placeholderTextColor="#7a7a7a"
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+                // ★★★ RETURN UNLOCKS — see doPickerUnlock: an unhandled Return leaves the field
+                //     and reaches the window's shortcut layer on the screen behind this one.
+                returnKeyType="go"
+                onSubmitEditing={() => { void doRadioPinUnlock(); }}
+              />
+              <TouchableOpacity
+                style={styles.radioPickAdminBtn}
+                disabled={!radioPin || radioPinBusy}
+                onPress={() => { void doRadioPinUnlock(); }}
+              >
+                <Text style={styles.radioPickAdminBtnText}>
+                  {radioPinBusy ? '…' : 'UNLOCK'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          {radioPinBad && (
+            /* ★★★ ONE SENTENCE, AND IT COUNTS NOTHING. No "none of the 3 locked radios", no "not
+                this one, try another": a box that narrows the answer tells a stranger how many
+                PINs this machine has and which card each one fits. A wrong code, a code for
+                somebody else's machine and a door that did not answer all read the same. */
+            <Text style={styles.radioPickAdminBad}>
+              That PIN does not open anything here.
+            </Text>
+          )}
           <View style={styles.radioPickAdmin}>
             <TextInput
               style={styles.radioPickAdminInput}
@@ -10024,7 +10176,11 @@ export default function SDRScreen({ route, navigation }: Props) {
           //     tunnelled server) and the `/r/<id>` prefix; host+port carries neither, which is
           //     why the audio was going to the front door while the spectrum went to the radio.
           wsBase={connectBase.replace(/^http/, 'ws').replace(/\/+$/, '')}
-          authSuffix={route.params.authSuffix}
+          /* ★★★ BOTH SOCKETS CARRY THE SAME CREDENTIAL. The audio socket is authorised separately
+           *  from the spectrum one, so a per-radio PIN that reached only the spectrum would give a
+           *  waterfall with silence under it — the shape of fault that reads as "the audio is
+           *  broken" rather than "this connection was never authorised". */
+          authSuffix={radioAuthSuffix || route.params.authSuffix}
           adminAuth={adminAuthWire}
           sessionId={sessionUuid}
           // ★★★ NOT ON A SHARED DIAL. This socket says `tune` as it opens, with whatever the screen
