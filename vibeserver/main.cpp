@@ -239,7 +239,9 @@ void usage() {
         "  --fft N           FFT size                     (default 4096)\n"
         "  --fps N           spectrum frames/sec          (default 15)\n"
         "  --port N          listen on this port          (default: first free 48000-48049)\n"
-        "  --pin SECRET      require a PIN from NETWORK clients (this machine never needs it)\n"
+        "  --pin SECRET      the FULL SERVER PIN: required from NETWORK clients for EVERY radio\n"
+        "                    on this machine (this machine itself never needs it). A PIN for a\n"
+        "                    SINGLE radio is set from the setup page instead.\n"
         "  --max-bw HZ       server-enforced bandwidth ceiling\n"
         "  --max-fps N       server-enforced spectrum-rate ceiling\n"
         "  --verbose         log the per-second DSP/hand-off housekeeping too. Off by default:\n"
@@ -277,7 +279,13 @@ void usage() {
         "  --locator GRID    Maidenhead square (deliberately coarse ~4 km)\n"
         "  --lat N --lon N   exact coordinates; these win over a locator\n"
         "\nAccess and operator limits\n"
-        "  --pin SECRET          who may CONNECT at all\n"
+        // ★★ NAME THE SCOPE, BECAUSE THERE ARE NOW TWO PINS. This one is the whole machine: it
+        //    opens — and guards — every radio on it. A radio can also hold a PIN of its OWN, and
+        //    the only place to set that is the setup page, so say so here rather than let an
+        //    owner conclude that one PIN per machine is all there is.
+        "  --pin SECRET          the FULL SERVER PIN — who may CONNECT at all, on ALL radios.\n"
+        "                        To lock ONE radio only, set that radio's own PIN on the setup\n"
+        "                        page; either key then opens it.\n"
         "  --admin-pass SECRET   who may change settings that can DAMAGE the radio\n"
         "  --public              this receiver is shared with strangers: the admin page adds\n"
         "                        listeners, blocking and connection history. Without it the\n"
@@ -1745,6 +1753,39 @@ int main(int argc, char** argv) {
     //    processes and this one cannot see their live state. What it can state truthfully is what
     //    the owner configured and which port each answers on — enough for the landing page to
     //    offer them, and honest about being a directory rather than a status board.
+    /* ★★★ WHICH RADIOS DOES THIS PIN OPEN? Only this process can answer: each radio runs
+     *  separately and knows just its own PIN, while the front door holds the whole config.
+     *  ★★ ONE PROOF, TESTED AGAINST EVERY KEY. The listener types a single code and we work out
+     *     what it fits — the master opens every radio, a radio's own opens that radio. That is
+     *     what lets a club hand a member exactly the radios they are licensed for without asking
+     *     them which one they meant.
+     *  ★★ THE ANSWER IS IDS, NEVER WHICH KEY FITTED, and a wrong PIN returns the same empty list
+     *     as a PIN for a radio that does not exist — otherwise this becomes an oracle for probing
+     *     what a machine is hiding.
+     *  ★ Radios with no PIN are NOT listed here: they need no unlocking, the list already shows
+     *    them as open, and naming them would tell a stranger which are which. */
+    LocalSdrShim::setUnlockHandler([](const std::string& nonce,
+                                      const std::string& token) -> std::string {
+        vsconfig::ServerConfig srv; std::string err;
+        if (!vsconfig::loadServer(g_configPath, srv, err)) srv = g_serverConfig;
+        const bool master = LocalSdrShim::verifyPinProof(srv.pin, nonce, token);
+        std::string j = "{\"radios\":[";
+        bool first = true;
+        for (const auto& r : srv.radios) {
+            if (!r.enabled || !r.configured) continue;
+            const bool mine = master || (!r.pin.empty()
+                                         && LocalSdrShim::verifyPinProof(r.pin, nonce, token));
+            if (!mine) continue;
+            // ★ A radio with no PIN of its own is already open; only the master's sweep includes it.
+            if (!master && r.pin.empty()) continue;
+            if (!first) j += ',';
+            first = false;
+            j += "\"" + jsonEscape(vsconfig::radioId(r.serial)) + "\"";
+        }
+        j += "]}";
+        return j;
+    });
+
     LocalSdrShim::setRadiosHandler([]() -> std::string {
         vsconfig::ServerConfig srv; std::string err;
         if (!vsconfig::loadServer(g_configPath, srv, err)) srv = g_serverConfig;

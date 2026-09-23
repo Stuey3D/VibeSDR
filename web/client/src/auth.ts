@@ -53,7 +53,21 @@ export async function fetchAuthChallenge(
  */
 export async function resolveAuth(base: string, pin: string): Promise<AuthState> {
   const { required, nonce, lockedFor } = await fetchAuthChallenge(base);
-  if (!required) return { query: '', required: false };
+  /* ★★★ "required:false" MEANS THE MASTER PIN IS UNSET — IT DOES NOT MEAN THE DOOR IS OPEN.
+   *  A radio may carry a PIN OF ITS OWN (the club hands a member one receiver, not the site), and
+   *  the server accepts either key on the socket — but this endpoint only ever reported the
+   *  master. So a listener who HAD typed the right code for that radio got `query: ''` here and
+   *  was then refused at the upgrade with nothing to show for it.
+   *  ★★ When a PIN has been supplied we sign the nonce regardless and let the SERVER decide: it
+   *     compares against both secrets in constant time, and on a genuinely open server it is not
+   *     consulting either. Nothing is offered that was not typed, so this costs an open server one
+   *     unread query string and cannot lock anybody out.
+   *  ★ No PIN typed and none demanded is still the plain open case — no query at all. */
+  if (!required && !pin) return { query: '', required: false };
+  if (!required) {
+    if (!nonce) return { query: '', required: false };   // server too old to issue one
+    return { query: `vs_nonce=${nonce}&vs_auth=${vibeAuthToken(pin, nonce)}`, required: false, lockedFor: 0 };
+  }
   // Say so plainly. The WS upgrade would answer 429, but a WebSocket error carries no
   // status code — so the client used to report "wrong PIN" and leave the user retyping
   // a correct one until the backoff quietly expired.

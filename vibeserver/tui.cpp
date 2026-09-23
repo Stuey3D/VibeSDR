@@ -364,14 +364,21 @@ bool runWizard(vsconfig::Config& cfg, std::vector<vibe::DetectedRadio>& radios,
     // ── Step 3: the PIN — optional ───────────────────────────────────────────
     {
         header("First-time setup  ·  step 3 of 3");
-        mvprintw(4, 2, "Set a PIN? (optional)");
+        /* ★★ SAY WHICH PIN THIS IS, now that there are two kinds. This one covers EVERY radio on
+         *  the machine; a single radio can also carry its own, set from the setup page, and either
+         *  key then opens it. Before per-radio PINs existed "a PIN" was unambiguous — it is not
+         *  any more, and an owner who wanted to reserve one radio would otherwise lock all of
+         *  them here and wonder why (Stuart, 2026-09-23). */
+        mvprintw(4, 2, "Set a PIN for the WHOLE server? (optional)");
         attron(COLOR_PAIR(4));
-        mvprintw(5, 2, "A PIN decides who may CONNECT at all. Leave it blank and anyone");
-        mvprintw(6, 2, "who can reach this machine may listen — which is usually what you");
-        mvprintw(7, 2, "want on your own network.");
+        mvprintw(5, 2, "This PIN decides who may CONNECT at all, on EVERY radio here. Leave");
+        mvprintw(6, 2, "it blank and anyone who can reach this machine may listen — which is");
+        mvprintw(7, 2, "usually what you want on your own network.");
+        mvprintw(8, 2, "To lock just ONE radio, leave this blank and set that radio's own PIN");
+        mvprintw(9, 2, "on the setup page in a browser. This one stays the master key.");
         attroff(COLOR_PAIR(4));
         std::string pin;
-        prompt(9, "PIN (blank = none)", pin, false, "Press Enter to skip.");
+        prompt(11, "Server PIN, all radios (blank = none)", pin, false, "Press Enter to skip.");
         cfg.pin = pin;
     }
     return true;
@@ -498,7 +505,7 @@ void statusScreen(vsconfig::Config& cfg) {
         row++;
         attron(A_BOLD); mvprintw(row++, 2, "If you are locked out"); attroff(A_BOLD);
         mvprintw(row++, 4, "p   reset the admin password");
-        mvprintw(row++, 4, "n   reset or clear the PIN");
+        mvprintw(row++, 4, "n   reset or clear the SERVER PIN (all radios)");
         mvprintw(row++, 4, "z   reset to not-set-up  (the browser will ask you to set it up again)");
         mvprintw(row++, 4, "d   look for a newly plugged radio");
         mvprintw(row++, 4, "r   restart the server");
@@ -631,12 +638,19 @@ void statusScreen(vsconfig::Config& cfg) {
             const bool rs = svcRestart();
             msg = std::string("Admin password changed.") + restartNote(rs);
         } else if (c == 'n') {
-            header("Reset the PIN");
+            header("Reset the SERVER PIN");
             attron(COLOR_PAIR(4));
-            mvprintw(4, 2, "The PIN decides who may connect at all. Leave blank to remove it.");
+            /* ★★ NAMED, because clearing "the PIN" here does NOT clear a PIN an owner has set on a
+             *  single radio from the setup page — those are separate keys and this screen cannot
+             *  see them. Someone locked out of one radio who came here, blanked this and found
+             *  themselves still locked out would reasonably think the reset was broken. */
+            mvprintw(4, 2, "This is the SERVER PIN: who may connect at all, on EVERY radio.");
+            mvprintw(5, 2, "Leave blank to remove it.");
+            mvprintw(6, 2, "A PIN set on a SINGLE radio is separate and is cleared from the");
+            mvprintw(7, 2, "setup page — removing this one does not remove those.");
             attroff(COLOR_PAIR(4));
             std::string pin;
-            if (!prompt(6, "PIN (blank = none)", pin, false, "Esc to cancel.")) continue;
+            if (!prompt(9, "Server PIN, all radios (blank = none)", pin, false, "Esc to cancel.")) continue;
             std::string err;
             if (!updateConfig(cfg, [&](vsconfig::Config& c){ c.pin = pin; }, err))
                 { msg = "Save failed: " + err; continue; }

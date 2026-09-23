@@ -169,6 +169,23 @@ function initSplash() {
     hostEl.value = location.host + BASE_PATH;
   }
   if (saved[hostEl.value]) pinEl.value = saved[hostEl.value];
+  // ★★★ UNLOCKED AT THE FRONT DOOR A MOMENT AGO. A card behind a per-radio PIN is only clickable
+  //     once the door has checked the code, and the link it opens is an ordinary page load — so
+  //     without this the listener is asked for the very PIN they have just typed, one click
+  //     earlier, on the same site. The door leaves it in sessionStorage for this radio alone (see
+  //     rememberRadioPin); ?join then submits this form exactly as pressing START does.
+  // ★ AFTER the saved-servers line on purpose: a code typed this visit is the fresher answer than
+  //   one remembered from a previous one, and on a radio whose PIN has since changed it is the
+  //   only one that works.
+  {
+    const m = /^\/r\/([^/?#]+)/.exec(location.pathname);
+    let justUnlocked = '';
+    // ★ Decoded: the door stores the key by the radio's own id and the PATH carries it encoded.
+    try {
+      justUnlocked = m ? (sessionStorage.getItem('vsRadioPin:' + decodeURIComponent(m[1])) || '') : '';
+    } catch { /* private mode, or an id that will not decode */ }
+    if (justUnlocked) pinEl.value = justUnlocked;
+  }
 
   // ★ Set by showSplashRadios() once it knows what this process is. The front door owns no radio,
   //   which changes what the ADMIN button means (see adminSignIn).
@@ -411,6 +428,22 @@ async function shapeSplash(host: string) {
     const r = await fetch(`${httpBase(host)}/vibeserver/auth`, { cache: 'no-store' });
     const j = await r.json();
     if (j.required) return;                      // PIN needed: leave the form as-is
+    /* ★★★ AND THIS RADIO MAY HAVE A PIN OF ITS OWN. /vibeserver/auth answers for the MASTER PIN
+     *  only, so a receiver locked by its own code says "required:false" here — and this used to
+     *  take that at face value, hide the PIN box and put up a START button that could only ever be
+     *  refused. The directory is the one place that knows: `pinLocked` on this radio's entry.
+     *  ★ Only when this page IS a radio behind the front door. A single-process server has no
+     *    per-radio PIN to have, and its directory has nothing to say about one. */
+    const m = /^\/r\/([^/?#]+)/.exec(location.pathname);
+    if (m) {
+      try {
+        const rr = await fetch(P('/vibeserver/radios'), { cache: 'no-store' });
+        const rj = rr.ok ? await rr.json() : null;
+        const me = (Array.isArray(rj?.radios) ? rj.radios : [])
+          .find((x: any) => radioKey(x) === decodeURIComponent(m[1]));
+        if (radioPinLocked(me)) return;          // leave the PIN box exactly where it is
+      } catch { /* an older server: fall through to the open form, as before */ }
+    }
     $('pinRow').hidden = true;
     $<HTMLButtonElement>('btnSaveConnect').hidden = true;
     $('btnConnect').textContent = 'START';
@@ -4200,6 +4233,98 @@ function updateStatus() {
  *     stale, and the staleness is invisible because the visible half is correct. */
 const latestRadioStatus = new Map<string, any>();
 
+// ── ★★★ PER-RADIO PINs — THE FRONT DOOR SIDE ────────────────────────────────────────────────
+//
+// A machine may put ONE radio behind a PIN of its own while the rest stay open: a club lends a
+// member the receiver they are licensed for without closing the whole site. The server accepts
+// EITHER the machine's master PIN (opens everything) or a radio's own PIN (opens that one), and
+// works out for itself which was typed — so the listener types ONE code and never has to know
+// which kind it is.
+//
+// ★★★ A LOCKED RADIO IS LISTED, GREYED — NEVER HIDDEN. The machine tells the truth about what it
+//     has. Hiding it would mean a member holding the right PIN has nothing to type it INTO, and it
+//     would make the site lie about its own aerials to everybody else.
+// ★★★ AND THE FAILURE SAYS NOTHING. A wrong PIN and a PIN for a radio on somebody else's machine
+//     produce the SAME sentence, with no count and no "not this one" — otherwise the box becomes
+//     an oracle telling a stranger how many PINs exist here and which card each one fits.
+// ★★ ONE BOX, NOT ONE PER CARD. Which radio a code opens is the SERVER's question, not the
+//    listener's: a box per card would ask them to guess it first and get it wrong in public.
+
+/** ★ Which radios this visit has opened, by opaque id. Deliberately in-memory: a reload asks
+ *  again, and nothing about the unlock is written where another page could read it as a
+ *  permission. The PIN behind it is stashed for the receiver page only (see rememberRadioPin). */
+const unlockedRadios = new Set<string>();
+
+/** The id a link and the unlock set use — the same expression the cards build their href from. */
+function radioKey(r: any): string { return String(r?.id || r?.serial || ''); }
+
+/** ★★★ `pinLocked`, NOT `locked`. The directory entry already had a `locked` and it means
+ *  something entirely different — the owner has PINNED THE CENTRE (every listener gets their own
+ *  VFO inside one fixed window), which is what the "individual VFOs · locked RF centre" line below
+ *  reads. Two keys of that name in one object is not an error in JSON, the second simply wins, so
+ *  reusing it would have made the PIN flag vanish silently behind a tuning mode. Different fact,
+ *  different name. */
+function radioPinLocked(r: any): boolean { return r?.pinLocked === true; }
+
+/** Locked, and this visit has not opened it. */
+function radioGated(r: any): boolean {
+  return radioPinLocked(r) && !unlockedRadios.has(radioKey(r));
+}
+
+/** ★★ THE PIN TRAVELS TO THE RECEIVER PAGE IN sessionStorage, NEVER IN THE LINK. A card is an
+ *  ordinary <a>, and anything in that href is in the address bar, in history, in the server's log
+ *  and in whatever the listener pastes to a friend. Same origin means the radio's own page can
+ *  simply read it; sessionStorage rather than localStorage because an unlock should last the visit
+ *  and not sit on a shared machine afterwards. initSplash() picks it up — see the pre-fill there. */
+function rememberRadioPin(id: string, pin: string): void {
+  try { sessionStorage.setItem('vsRadioPin:' + id, pin); } catch { /* private mode: they retype */ }
+}
+
+/** ★★★ DOES THIS CODE OPEN THAT RADIO? Asked with the challenge-response the client already uses
+ *  for the server PIN — a nonce from the radio and an HMAC over it — so the PIN itself never
+ *  leaves the browser, never reaches a URL and is never logged. There is no fourth mechanism here.
+ *
+ *  ★★ WE DO NOT ASK /vibeserver/auth WHETHER A PIN IS "required" AND STOP THERE. That field
+ *     reports the MASTER PIN only, so a radio protected by its own PIN answers `false` — trusting
+ *     it would light the card up for any code at all. The nonce is taken from that reply and the
+ *     token is offered regardless; only the server's verdict counts.
+ *
+ *  ★★ THE VERDICT COMES FROM A SOCKET, because the PIN gate is on the WebSocket upgrade and
+ *     nothing else — 401 before the upgrade means the code does not fit, and a 101 means it does.
+ *     It carries THIS visit's own session id, so the probe and the connection that may follow are
+ *     the same listener to the server rather than two arrivals competing for one slot, and it is
+ *     closed the instant it opens. A radio that is merely BUSY still upgrades and still answers
+ *     the question we asked, which is about the PIN and not about occupancy.
+ *  ★ Any failure at all — unreachable, malformed, timed out — reads as "does not fit". The box
+ *    must not explain the difference: see the note on the one sentence it is allowed to say. */
+async function pinOpensRadio(id: string, pin: string): Promise<boolean> {
+  const hostPath = `${location.host}/r/${encodeURIComponent(id)}`;
+  let nonce = '';
+  try { nonce = (await fetchAuthChallenge(httpBase(hostPath))).nonce; } catch { return false; }
+  if (!nonce) return false;
+  const token = vibeAuthToken(pin, nonce);
+  const url = `${wsBase(hostPath)}/ws/user-spectrum?user_session_id=${visitSessionId()}`
+            + `&bid=${browserId()}&mode=binary8&bins=128&proto=1`
+            + `&vs_nonce=${encodeURIComponent(nonce)}&vs_auth=${token}`;
+  return await new Promise<boolean>((resolve) => {
+    let done = false;
+    const finish = (ok: boolean, ws?: WebSocket) => {
+      if (done) return;
+      done = true;
+      try { ws?.close(); } catch { /* already gone */ }
+      resolve(ok);
+    };
+    let ws: WebSocket;
+    try { ws = new WebSocket(url); } catch { resolve(false); return; }
+    // ★ A door on a slow link still has to answer. Six seconds is long enough for a Pi on a
+    //   tunnel and short enough that nobody thinks the box is broken.
+    const t = setTimeout(() => finish(false, ws), 6000);
+    ws.onopen  = () => { clearTimeout(t); finish(true, ws); };
+    ws.onerror = () => { clearTimeout(t); finish(false, ws); };
+    ws.onclose = () => { clearTimeout(t); finish(false); };
+  });
+}
+
 /** ★ THE DAB+ BADGE — the official WorldDAB logo, drawn only beside a receiver whose own status says
  *  it can decode DAB (Stuart, 2026-09-08: "include the little DAB icon in the radio selection screen
  *  to show which radios are setup for DAB"). `st` is the radio's live /vibeserver.json on a landing
@@ -4246,6 +4371,15 @@ function radioCardState(r: any, st: any): { state: string; blocked: boolean } {
    *  ★ Blocked rather than merely labelled: there is nothing a visitor can do here, and a
    *    clickable card that leads to a dead waterfall is worse than one they cannot click. */
   const busyElsewhere = typeof st?.radioBusy === 'string' && st.radioBusy !== '';
+  /* ★★★ BEHIND ITS OWN PIN, AND NOT YET OPENED. Said BEFORE anything about listeners or queues,
+   *  because it is the only fact that matters here: however free this receiver is, this visitor
+   *  cannot walk into it, and "FREE" over a card that refuses them is the worst answer available.
+   *  ★★ NOT down, though — a locked radio that is not answering is DOWN first. Saying it needs a
+   *     PIN would send somebody hunting for a code that would not have helped.
+   *  ★ Blocked for the admin too. The admin password is CONTROL, the PIN is ACCESS, and they are
+   *    independent on purpose (see vsAuthOk) — the server would refuse the socket, so offering the
+   *    link would only be a link to a refusal. The box below takes their PIN like anyone else's. */
+  if (!down && radioGated(r)) return { state: 'PIN REQUIRED', blocked: true };
   const full = !down && max > 0 && listeners >= max && !claimable;
   const admin = inAdminMode();
   let state: string;
@@ -4375,6 +4509,95 @@ function showLandingMessage(text?: unknown, linkUrl?: unknown, linkLabel?: unkno
            // ★ noopener is not decoration: without it the opened page gets window.opener and can
            //   navigate this tab somewhere else.
            + `rel="noopener noreferrer" style="color:var(--amber)">${escapeHtml(label)}</a></div>` : '');
+}
+
+/** ★★★ THE ONE PIN BOX ON THE DOOR.
+ *
+ *  Drawn only while something here is still locked, and it disappears the moment nothing is —
+ *  a box with nothing left to open is a puzzle with no answer, which is the same reason the ADMIN
+ *  field stays hidden on a server with no admin password.
+ *
+ *  ★★★ ONE SENTENCE FOR EVERY FAILURE, AND IT COUNTS NOTHING. "That PIN does not open anything
+ *      here" is what a stranger sees for a mistyped code, for a code that belongs to a receiver on
+ *      somebody else's machine, and for a radio that did not answer. Anything more specific —
+ *      "wrong for the Airspy", "1 of 3 unlocked" — hands out the shape of the site's PINs to
+ *      whoever sits and types.
+ *  ★★ THE FIELD IS EMPTIED THE INSTANT IT IS SUBMITTED, so a shared screen is not left showing a
+ *     club's code, and it is `type=password` so it is never on screen in the clear at all.
+ *  ★ Plain English and no jargon: most people arriving here have been given a number by a friend
+ *    and told which radio it is for.
+ */
+function drawDoorPin(radios: any[]): void {
+  const host = document.getElementById('splashRadios');
+  if (!host) return;
+  const locked = radios.filter((r) => radioGated(r));
+  let box = document.getElementById('splashRadioPin');
+  if (!locked.length) { box?.remove(); return; }
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'splashRadioPin';
+    box.style.cssText = 'margin:10px auto 0;max-width:420px;padding:10px 12px;'
+      + 'border:1px solid rgba(255,176,0,.35);border-radius:8px;'
+      + 'font:12px/1.6 ui-monospace,monospace;text-align:center';
+    box.innerHTML =
+        '<div style="opacity:.8">Some receivers here are private. If you have been given a PIN, '
+      + 'enter it and the ones it opens will become available.</div>'
+      + '<form id="splashRadioPinForm" style="display:flex;gap:8px;justify-content:center;margin-top:8px">'
+      // ★ 16px, not smaller: below that iOS zooms the whole page in on focus and does not zoom
+      //   back out — the same threshold the PIN field on the receiver page is sized for.
+      + '<input id="splashRadioPinInput" type="password" inputmode="numeric" autocomplete="off" '
+      + 'spellcheck="false" placeholder="PIN" style="flex:0 1 140px;font-size:16px;text-align:center">'
+      + '<button type="submit" id="splashRadioPinGo">UNLOCK</button></form>'
+      + '<div id="splashRadioPinMsg" class="sub" style="margin-top:6px;font-size:11px;opacity:.75"></div>';
+    host.insertAdjacentElement('beforebegin', box);
+    const form = document.getElementById('splashRadioPinForm') as HTMLFormElement;
+    form.addEventListener('submit', (ev) => { ev.preventDefault(); void tryDoorPin(); });
+  }
+}
+
+/** Try the typed code against every radio still locked, and open the ones it fits. */
+async function tryDoorPin(): Promise<void> {
+  const input = document.getElementById('splashRadioPinInput') as HTMLInputElement | null;
+  const go    = document.getElementById('splashRadioPinGo') as HTMLButtonElement | null;
+  const msg   = document.getElementById('splashRadioPinMsg');
+  if (!input || !msg) return;
+  const pin = input.value.trim();
+  input.value = '';                       // ★ off the screen before anything else happens
+  if (!pin) return;
+  if (go) go.disabled = true;
+  msg.textContent = 'Checking…';
+
+  let dir: any;
+  try {
+    const r = await fetch(P('/vibeserver/radios'), { cache: 'no-store' });
+    dir = r.ok ? await r.json() : null;
+  } catch { dir = null; }
+  const radios: any[] = Array.isArray(dir?.radios) ? dir.radios : [];
+  const locked = radios.filter((r) => radioGated(r));
+
+  // ★★ ONE AT A TIME. Each locked radio is its own process with its own brute-force backoff, and
+  //    firing every probe at once on a Pi that is also running the DSP is a burst it does not need
+  //    to carry for a code that is probably a typo.
+  let opened = 0;
+  for (const r of locked) {
+    const id = radioKey(r);
+    if (!id) continue;
+    if (await pinOpensRadio(id, pin)) {
+      unlockedRadios.add(id);
+      rememberRadioPin(id, pin);
+      opened++;
+    }
+  }
+
+  if (go) go.disabled = false;
+  // ★★★ The SAME sentence whatever went wrong — see the note on drawDoorPin.
+  msg.textContent = opened
+    ? (opened === 1 ? 'Unlocked. That receiver is now available below.'
+                    : 'Unlocked. Those receivers are now available below.')
+    : 'That PIN does not open anything here.';
+  // ★ A full redraw, not a state patch: cards that were <div> because they were locked have to
+  //   become <a> now, which is exactly the case the in-place refresher hands back to this renderer.
+  if (opened) void showSplashRadios();
 }
 
 async function showSplashRadios(): Promise<void> {
@@ -4592,6 +4815,10 @@ async function showSplashRadios(): Promise<void> {
                        + `</div>` : '')
          + `</${tag}>`;
   }).join('');
+
+  // ★ The one PIN box, above the list it unlocks. Drawn after the cards so a redraw cannot leave
+  //   it pointing at radios that are no longer there.
+  drawDoorPin(radios);
 
   // ★★★ AN ADMIN MUST NOT BOOT SOMEONE WITHOUT MEANING TO. Stuart, 2026-07-28: "some admins may
   //     be kind and let a user keep a session for longer". Taking over a busy radio disconnects

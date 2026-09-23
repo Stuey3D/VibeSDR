@@ -443,6 +443,20 @@ public:
     /** ★★ EVERY RADIO ON THIS MACHINE, for the landing page — served by whichever process owns the
      *  main port. It answers for its siblings, which it can do because they all read one config
      *  file. The shim knows nothing of the schema; the daemon supplies the JSON. */
+    /** ★★★ WHICH RADIOS DOES THIS PIN OPEN? Answered by the FRONT DOOR, because it is the only
+     *  process holding every radio's configuration — each radio runs as its own process and knows
+     *  only its own PIN. Given a nonce and HMAC(pin, nonce) it returns the ids the proof opens:
+     *  every radio for the machine's master PIN, one radio for that radio's own.
+     *  ★★ THE POINT IS THAT THE DIRECTORY CAN ASK. A listener's browser then unlocks through the
+     *     directory and only ever touches the receiver once the PIN is right — so a locked server
+     *     collects no failed connections, which is the whole reason Stuart wanted it there
+     *     (2026-09-23, after the Kiwi probe noise). */
+    using UnlockFn = std::function<std::string(const std::string& nonce, const std::string& token)>;
+    static void setUnlockHandler(UnlockFn fn);
+    /** ★ HMAC(secret, nonce) == token, against the same single-use-within-TTL nonce table the PIN
+     *  path uses. Exposed so the front door can test one proof against several PINs. */
+    static bool verifyPinProof(const std::string& secret, const std::string& nonce,
+                               const std::string& token);
     using RadiosFn = std::function<std::string()>;
     static void setRadiosHandler(RadiosFn fn);
     /** The declared protocol of the /vibeserver/radios request currently being answered (0 = legacy). */

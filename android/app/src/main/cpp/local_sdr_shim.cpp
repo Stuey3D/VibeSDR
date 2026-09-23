@@ -3949,6 +3949,9 @@ static LocalSdrShim::ConfigPersistFn g_vsConfigPersist;
 static LocalSdrShim::EibiFn        g_vsEibiFn;
 static LocalSdrShim::SolarFn       g_vsSolarFn;
 static LocalSdrShim::RadiosFn      g_vsRadiosFn;
+/** ★ Declared HERE, beside the radios handler, because the route that reads it is a thousand lines
+ *  above the setter that fills it — see setUnlockHandler. */
+static LocalSdrShim::UnlockFn      g_vsUnlockFn;
 static std::atomic<int>            g_vsRadiosReqProto{0};   // the proto of the request being answered
 static LocalSdrShim::HandoffFn     g_vsHandoffFn;
 /// Our own "/r/<serial>" prefix, stripped from every request that arrives with it.
@@ -14338,6 +14341,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 || path0.rfind("/setup", 0) == 0
                 || path0.rfind("/vibeserver.json", 0) == 0
                 || path0.rfind("/vibeserver/radios", 0) == 0
+                || path0.rfind("/vibeserver/unlock", 0) == 0
                 || path0.rfind("/vibeserver/stationlogo", 0) == 0
                 || path0.rfind("/vibeserver/dablogo", 0) == 0
                 || path0.rfind("/vibeserver/dabslide", 0) == 0
@@ -14557,8 +14561,35 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             sock->close(); return;
         }
 
+        if (reqLine.find("/vibeserver/auth/verify") != std::string::npos) {
+            /* ★★★ A CHEAP WAY TO ASK "DOES THIS PIN FIT?" — 200 or 401, nothing else.
+             *  Without it the only thing that exercises the PIN gate is a WebSocket upgrade, so a
+             *  client wanting to test a PIN had to open a spectrum socket and close it again. On a
+             *  free radio that momentarily counts as a listener, which is a silly price for a
+             *  question, and it is exactly the "don't make other people's servers carry the cost
+             *  of our behaviour" rule that the Kiwi probing broke (Stuart, 2026-09-23).
+             *  ★★ IT IS THE SAME GATE, not a second implementation: vsAuthOk() answers, so the
+             *     backoff, the loopback exemption and the master-or-radio-PIN rule are whatever
+             *     they are for a real connection. A verify that could disagree with the socket
+             *     would be worse than none.
+             *  ★ vsAuthOk sends its own 401 on failure, so there is nothing to add on that path. */
+            if (!vsAuthOk(sock, reqLine)) { sock->close(); return; }
+            const std::string body = "{\"ok\":true}";
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                          "Access-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close(); return;
+        }
         if (reqLine.find("/vibeserver/auth") != std::string::npos) {
-            std::string secret; { std::lock_guard<std::mutex> lk(g_vsMtx); secret = g_vsSecret; }
+            /* ★★★ EITHER PIN MAKES THIS RADIO "REQUIRED". This read the master secret alone, so a
+             *  radio locked by its OWN PIN answered required:false — and a client that believes a
+             *  radio is open sends no credential, gets refused at the socket, and has nothing on
+             *  screen to explain why. The web client had to work around it by signing a nonce
+             *  whenever a PIN was typed regardless of this answer; with the radio secret counted
+             *  here, the answer is simply true. */
+            std::string secret;
+            { std::lock_guard<std::mutex> lk(g_vsMtx);
+              secret = g_vsSecret.empty() ? g_vsRadioSecret : g_vsSecret; }
             std::string body;
             // ★★ A NONCE EVEN WITH NO PIN. This used to answer a bare {"required":false},
             // which is correct for the PIN and useless for everything else — and the very
@@ -15648,6 +15679,26 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                           "Connection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
+        } else if (reqLine.rfind("GET /vibeserver/unlock", 0) == 0) {
+            /* ★★★ WHICH RADIOS DOES THIS PIN OPEN? — see LocalSdrShim::setUnlockHandler.
+             *  ★★ THE ANSWER IS A LIST OF IDS, NEVER A PIN and never "which PIN fitted". A caller
+             *     learns only what it could have learnt by trying the radios one at a time, and
+             *     learns it in one request instead of several.
+             *  ★★ A WRONG PIN AND A PIN FOR A RADIO THAT DOES NOT EXIST GIVE THE SAME ANSWER —
+             *     an empty list, 200 OK. Anything else turns this into an oracle for guessing
+             *     which radios are hidden, or how many PINs a machine has.
+             *  ★ Backoff still applies, because the verify goes through the same table the PIN
+             *    path uses; the directory rate-limits its own callers on top of that. */
+            const std::string nonce = queryParam(reqLine, "vs_nonce");
+            const std::string token = queryParam(reqLine, "vs_auth");
+            LocalSdrShim::UnlockFn ufn;
+            { std::lock_guard<std::mutex> lk(g_vsConfigMtx); ufn = g_vsUnlockFn; }
+            const std::string body = ufn ? ufn(nonce, token) : std::string("{\"radios\":[]}");
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                          "Access-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close(); return;
+
         } else if (reqLine.rfind("GET /vibeserver/radios", 0) == 0) {
             compatRecord("radios", reqLine, userAgent);
             // ★ Not when it is us — see vsIsSelfPoll.
@@ -23122,6 +23173,14 @@ bool LocalSdrShim::listenForHandoff(const std::string& socketPath, std::string& 
     return true;
 }
 
+void LocalSdrShim::setUnlockHandler(UnlockFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx); g_vsUnlockFn = std::move(fn);
+}
+bool LocalSdrShim::verifyPinProof(const std::string& secret, const std::string& nonce,
+                                  const std::string& token) {
+    if (secret.empty() || nonce.empty() || token.empty()) return false;
+    return g_vsAuthState.verify(secret, nonce, token);
+}
 void LocalSdrShim::setRadiosHandler(RadiosFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsRadiosFn = std::move(fn);

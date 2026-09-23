@@ -583,6 +583,32 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
         <p class="why">Shown to everybody who visits, so keep it about the aerial &mdash; not
            about where you live.</p>
       </div>
+      <!-- ★★★ A PIN THAT OPENS ONE RADIO, NOT THE MACHINE. A club with one receiver pointed at a
+           band its members are licensed for, or a radio on loan, wants a door of its own: the
+           server PIN cannot express that, because it is one answer for every radio on the box.
+           ★★ THE TWO ARE NOT ALTERNATIVES — either key opens this radio. So an owner who already
+           has a server PIN does not lose it by setting one here, and a member who only holds this
+           radio's PIN cannot walk into the others. Saying that plainly matters: the obvious
+           reading of a second PIN box is that it REPLACES the first, and an owner acting on that
+           reading would think they had locked the machine when they had not.
+           ★ EMPTY IS A REAL, AND THE DEFAULT, ANSWER — "this radio follows the server setting",
+           which is exactly what every radio does today. That is why the box is blank rather than
+           pre-filled with anything, and why clearing it is a deliberate tick rather than an
+           empty save (see collectRadio: an empty box means "leave it alone", never "remove it"). -->
+      <div class="card">
+        <h2>PIN for this radio</h2>
+        <p class="why">A PIN here opens <b>this radio only</b>. The server PIN &mdash; the one set
+           when <code>vibeserver</code> was first run at the terminal &mdash; opens <b>every</b>
+           radio on this machine, and still does: either key works here. Leave this empty and the
+           radio simply follows the server setting.</p>
+        <label><span class="lbl">PIN for this radio</span>
+          <input type="password" id="radioPin" autocomplete="new-password" maxlength="64"
+                 placeholder="Leave empty to follow the server setting">
+          <div class="hint" id="radioPinState"></div></label>
+        <label id="radioPinClearWrap" style="display:none;align-items:center;gap:10px;margin-top:16px">
+          <input type="checkbox" id="radioPinClear">
+          <span>Remove the PIN from this radio</span></label>
+      </div>
       <div class="card" id="startCard">
         <h2>Where new listeners start</h2>
         <p class="why">What someone sees the moment they connect.</p>
@@ -3223,6 +3249,23 @@ function fill() {
   //    machine is how every receiver would show the first one's frequency.
   const r = radio();
   $("antenna").value = r.antenna || "";
+  /* ★★★ THE PIN ITSELF NEVER GOES BACK ON SCREEN. The config the page fetched does carry it —
+   *   the whole file comes down behind the admin password — but putting it in an input would put
+   *   a live secret in the DOM, in the browser's autofill store and in any screenshot of this
+   *   page, to no purpose: nobody needs to READ a PIN they already set, they need to change or
+   *   remove it. So the box stays empty and only its STATE is described.
+   * ★★ AND AN EMPTY BOX THEREFORE CANNOT MEAN "NO PIN". It means "unchanged" — which is why
+   *   removing one is a tick of its own. Without that, every save from a page that will not
+   *   render the value would wipe the value. */
+  if ($("radioPin")) {
+    const pinSet = !!(r.pin || "").length;
+    $("radioPin").value = "";
+    $("radioPinClear").checked = false;
+    $("radioPinClearWrap").style.display = pinSet ? "flex" : "none";
+    $("radioPinState").textContent = pinSet
+      ? "A PIN is set on this radio. Type a new one to change it, or tick the box below to remove it."
+      : "No PIN of its own — this radio follows the server setting.";
+  }
   antIconSel = r.antennaIcon || "";
   renderAntIcons();
   fillAntennaSuggestions();
@@ -3568,6 +3611,23 @@ function collectRadio() {
     landingFreq: Math.round(parseFloat($("landingFreq").value || "0") * 1e3),
     antenna: ($("antenna").value || "").trim(),
     antennaIcon: antIconSel,
+
+    /* ★★★ THE ONE FIELD HERE THAT IS SENT ONLY SOMETIMES, and deliberately so. Everything else in
+     *   this object is read off the form and posted every time, because the form always holds the
+     *   truth about it. The PIN is the exception: fill() refuses to render it, so the form does
+     *   NOT hold the truth, and posting the empty box would delete the owner's PIN on the next
+     *   save of any unrelated setting — the "written and never read" fault in reverse.
+     * ★★ Omitting the key is safe in a way that is worth naming: radioFromJson() applies a field
+     *   only when the object mentions it (S() is a no-op on an absent key), and Object.assign
+     *   leaves the radio's stored pin alone here, so an untouched PIN survives the whole round
+     *   trip untouched. Sending "" is the ONLY way to clear one, and that takes a tick. */
+    ...(function () {
+      const box = $("radioPin"); if (!box) return {};
+      const typed = (box.value || "").trim();
+      if (typed) return {pin: typed};
+      if ($("radioPinClear") && $("radioPinClear").checked) return {pin: ""};
+      return {};
+    })(),
     demodMode: $("demodMode").value,
     // ★★★ SENT IN BOTH MODES. Forcing 1 on an unlocked radio silently threw away the box the
     //     owner had just typed in, and with it the entire shared-dial arrangement — the count is
