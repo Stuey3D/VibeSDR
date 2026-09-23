@@ -195,6 +195,9 @@
             font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
             font-family: inherit; }
   .listen:hover { background: #ffc75c; }
+  /* ★ Locked: the same shape so the card does not jump when it opens, but plainly not a button. */
+  .listen.locked { background: transparent; color: var(--accent); border: 1px dashed var(--line);
+                   cursor: default; opacity: .7; }
   /* ★ Green says "room for you"; a full or silent receiver must not borrow it. */
   .rcStateRow { margin-top: 6px; display:flex; justify-content:flex-end; }
   .rcState.full { color: var(--busy); }
@@ -960,15 +963,37 @@ async function pinToken(pin, nonce) {
   return [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/* ★★★ TWO SHAPES OF LOCK, AND THE ANDROID HOSTS ARE THE SECOND ONE. A front door with several
+ *     receivers locks them one at a time (`pinLocked` per radio); the app and Lite host a SINGLE
+ *     radio, so a server PIN and a radio PIN on one machine would be two locks on one door —
+ *     Stuart, 2026-09-23: "they only host single radios, so a pin to connect then a pin for the
+ *     radio seems redundant". They publish the server-level `pin` flag instead, and they need the
+ *     directory to take that PIN just as much: a phone serving from someone's windowsill is the
+ *     LAST thing that should be collecting failed connection attempts.
+ * ★ ALL_LOCKED is the marker for "this PIN opened the whole server". A single-radio host does not
+ *   publish a radio id at all (the live listing shows `id: null` for both Android servers), so
+ *   there is no id to remember and the whole-server case cannot be expressed as a list of them. */
+const ALL_LOCKED = '*';
+
+/** The whole server is behind one PIN — the Android shape — and nobody here has opened it. */
+function serverLocked(s) {
+  if (!s || s.pin !== true) return false;
+  const rec = s.address ? pinRestore(s.address) : null;
+  return !(rec && (rec.ids.has(ALL_LOCKED) || rec.ids.size > 0));
+}
+
 /** A radio nobody here has opened yet. `pinLocked` is the server's word for "this one has a PIN". */
 function radioGated(r, s) {
-  if (!r || r.pinLocked !== true) return false;
   const rec = s && s.address ? pinRestore(s.address) : null;
+  if (rec && rec.ids.has(ALL_LOCKED)) return false;     // ★ the server PIN opened everything
+  if (s && s.pin === true && !rec) return true;         // ★ server-wide lock gates every radio
+  if (!r || r.pinLocked !== true) return false;
   return !(rec && rec.ids.has(String(r.id)));
 }
 
 /** Does this server have anything a PIN would open? Drives whether the box is drawn at all. */
 function serverHasGated(s) {
+  if (serverLocked(s)) return true;
   return !!(s && (s.radios || []).some((r) => r && r.pinLocked === true));
 }
 
@@ -983,8 +1008,20 @@ async function tryServerPin(s, pin) {
   const token = await pinToken(pin, ch.nonce);
   const u = `${base}/vibeserver/unlock?vs_nonce=${encodeURIComponent(ch.nonce)}`
           + `&vs_auth=${encodeURIComponent(token)}`;
-  const j = await fetch(u, { cache: 'no-store' }).then((r) => r.json());
-  const ids = Array.isArray(j && j.radios) ? j.radios.map(String) : [];
+  const j = await fetch(u, { cache: 'no-store' }).then((r) => r.json()).catch(() => null);
+  let ids = Array.isArray(j && j.radios) ? j.radios.map(String) : [];
+
+  /* ★★★ AN EMPTY LIST IS NOT YET A NO. `/vibeserver/unlock` lives on the FRONT DOOR, and a
+   *     single-radio host — the app, Lite — has no front door to answer it, so it says nothing
+   *     whatever the PIN. That is the Android shape, and it is asked a different question:
+   *     `/vibeserver/auth/verify` runs the real gate and answers 200 or 401 without costing a
+   *     listener slot. Only after BOTH have declined is the PIN actually wrong. */
+  if (!ids.length) {
+    const v = await fetch(`${base}/vibeserver/auth/verify?vs_nonce=${encodeURIComponent(ch.nonce)}`
+                          + `&vs_auth=${encodeURIComponent(token)}`, { cache: 'no-store' })
+                    .catch(() => null);
+    if (v && v.status === 200) ids = [ALL_LOCKED];
+  }
   if (!ids.length) return 0;
   pinRemember(s.address, pin, ids);
   /* ★★ AND NOW ASK THE RADIO WHAT IT ACTUALLY IS. A locked radio publishes NOTHING about its
@@ -1390,7 +1427,13 @@ function serverBlock(s) {
     <div class="body">
       ${pinBox(s)}${radios}${extra}
       ${s.demo ? '<div class="radio cap">Simulated receiver — nothing to listen to.</div>'
-               : `<a class="listen" href="${esc(listenUrl(s))}" target="_blank" rel="noopener noreferrer">Listen</a>`}
+               : serverLocked(s)
+               // ★★★ ON A SINGLE-RADIO HOST THIS BUTTON IS THE ONLY WAY IN, so while the server is
+               //     locked it must not be a link: the cards carry no id to click, so an ungated
+               //     Listen is exactly the refused connection the PIN box exists to prevent.
+               ? `<span class="listen locked" title="This server needs a PIN — enter it above">\u{1F512} PIN REQUIRED</span>`
+               : `<a class="listen" href="${esc(listenUrl(s))}" target="_blank" rel="noopener noreferrer"
+                     ${s.pin === true ? `data-unlocked-srv="${esc(s.address)}"` : ''}>Listen</a>`}
     </div>
   </details>`;
 }
@@ -2788,6 +2831,28 @@ document.getElementById('list').addEventListener('click', (ev) => {
   ev.preventDefault();
   const win = window.open('', '_blank', 'noopener');
   void openUnlocked(r, s, win);
+});
+
+/* ★★ The same courtesy for a whole-server PIN (the app and Lite): sign a fresh nonce against the
+ *    server root so the visitor walks straight in rather than meeting its PIN box again. */
+document.getElementById('list').addEventListener('click', (ev) => {
+  const a = ev.target.closest('a.listen[data-unlocked-srv]');
+  if (!a) return;
+  const s = ALL.find((x) => x.address === a.dataset.unlockedSrv);
+  const rec = s && s.address ? pinRestore(s.address) : null;
+  if (!s || !rec) return;                 // ★ fall through to the plain href
+  ev.preventDefault();
+  const win = window.open('', '_blank', 'noopener');
+  void (async () => {
+    const base = `https://${s.address}`;
+    try {
+      const ch = await fetch(`${base}/vibeserver/auth`, { cache: 'no-store' }).then((x) => x.json());
+      const token = ch && ch.nonce ? await pinToken(rec.pin, ch.nonce) : '';
+      if (win) win.location = ch && ch.nonce
+        ? `${base}/?vs_nonce=${encodeURIComponent(ch.nonce)}&vs_auth=${encodeURIComponent(token)}`
+        : `${base}/`;
+    } catch (e) { if (win) win.location = `${base}/`; }
+  })();
 });
 document.getElementById('stnQ').addEventListener('focus', () => loadEibi());
 document.addEventListener('click', (e) => { if (!e.target.closest('.stnFind')) { const r = document.getElementById('stnRes'); r.hidden = true; } });

@@ -595,7 +595,16 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
            which is exactly what every radio does today. That is why the box is blank rather than
            pre-filled with anything, and why clearing it is a deliberate tick rather than an
            empty save (see collectRadio: an empty box means "leave it alone", never "remove it"). -->
-      <div class="card">
+      <!-- ★★★ AND IT IS NOT DRAWN AT ALL ON A ONE-RADIO MACHINE. "This radio only" and "every
+           radio on this machine" describe the same door when there is one radio, so the page
+           would be asking an owner to choose between two identical locks — Stuart, 2026-09-23:
+           "they only host single radios, so a pin to connect then a pin for the radio seems
+           redundant". The app and Lite are always that shape; a Linux box with one radio is too,
+           and the card comes back by itself the moment a second radio is configured. The server
+           PIN remains the answer there, and the directory still takes it before anyone connects.
+           ★ Same rule as AGENTS.md's "a control that only works in one scenario should not be
+             there": a redundant control is not free, it is a question with no right answer. -->
+      <div class="card" id="radioPinCard">
         <h2>PIN for this radio</h2>
         <p class="why">A PIN here opens <b>this radio only</b>. The server PIN &mdash; the one set
            when <code>vibeserver</code> was first run at the terminal &mdash; opens <b>every</b>
@@ -3265,6 +3274,18 @@ function fill() {
    * ★★ AND AN EMPTY BOX THEREFORE CANNOT MEAN "NO PIN". It means "unchanged" — which is why
    *   removing one is a tick of its own. Without that, every save from a page that will not
    *   render the value would wipe the value. */
+  /* ★★★ ONE RADIO MEANS ONE DOOR. With a single receiver "a PIN for this radio" and "the server
+   *     PIN" lock exactly the same thing, so the card is not drawn — the owner is not asked to
+   *     pick between two identical answers (Stuart, 2026-09-23). Counted from the CONFIG, not
+   *     from the platform, so it is right for a one-radio Linux box as well as for the phone, and
+   *     it reappears on its own when a second radio is enabled.
+   * ★★ A PIN ALREADY SET IS STILL SHOWN even on a one-radio machine: hiding a lock that is
+   *    actually locking something would leave an owner unable to find or remove it, which is how
+   *    a tidy-up becomes a lockout. Redundant is not the same as inert. */
+  if ($("radioPinCard")) {
+    const many = radioList().length > 1;
+    $("radioPinCard").style.display = (many || (r.pin || "").length) ? "" : "none";
+  }
   if ($("radioPin")) {
     const pinSet = !!(r.pin || "").length;
     $("radioPin").value = "";
