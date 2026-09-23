@@ -9885,6 +9885,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         currentMode={status.mode}
         onSearchTune={onSearchTune}
         searchBookmarks={searchBookmarks}
+        serverBookmarks={serverBookmarks}
         searchBands={searchBands}
         eibiEnabled={eibiEnabled}
         onEibiToggle={onEibiToggle}

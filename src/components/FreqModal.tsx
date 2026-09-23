@@ -86,6 +86,11 @@ interface FreqModalProps {
    *  modal, passes the real value in. Falls back to the hook where nobody supplies it. */
   topInset?:         number;
   searchBookmarks?:  ServerBookmark[];
+  /** ★★★ THIS RECEIVER'S OWN STATIONS, on their own, for the "ON THIS SERVER" list.
+   *  Passed separately rather than filtered out of `searchBookmarks`, which is the MERGED list
+   *  (yours + the server's + EiBi) — picking them back out of it by `source` would be guessing at
+   *  the shape of something assembled elsewhere, and would silently follow any change to it. */
+  serverBookmarks?:  ServerBookmark[];
   searchBands?:      ServerBand[];
   eibiEnabled?:      boolean;
   onEibiToggle?:     (on: boolean) => void;
@@ -208,7 +213,7 @@ export default function FreqModal({
   profiles = [], activeProfileId, sdrUsage, clientCount, onSelectProfile,
   magicKey, onMagicKey,
   vtsName, vtsFreq, onVtsPrev, onVtsNext, vtsLookup,
-  currentMode = 'usb', onSearchTune, searchBookmarks = [], searchBands = [], topInset,
+  currentMode = 'usb', onSearchTune, searchBookmarks = [], serverBookmarks = [], searchBands = [], topInset,
   eibiEnabled = true, onEibiToggle, userBookmarks = [],
   onAddBookmark, onDeleteBookmark, onToggleBookmarkSync, onExportBookmarks, onImportBookmarks, onPickImportFile,
 }: FreqModalProps) {
@@ -238,6 +243,9 @@ export default function FreqModal({
   const [searchQuery, setSearchQuery]   = useState('');
   const [bmName, setBmName]             = useState('');
   const [bmAll, setBmAll]               = useState(false);
+  /** ★ Closed by default — see the ON THIS SERVER block. A phone card cannot afford a list that
+   *  opens itself, and this one is as long as the receiver has been listening. */
+  const [showServerList, setShowServerList] = useState(false);
   const [bmImportOpen, setBmImportOpen] = useState(false);
   const [bmImportText, setBmImportText] = useState('');
   const [bmImportMsg, setBmImportMsg]   = useState('');
@@ -801,6 +809,58 @@ export default function FreqModal({
                   );
                 })}
               </>))}
+
+              {/* ★★★ WHAT THIS RECEIVER HAS HEARD, WITHOUT HAVING TO GUESS ITS NAME FIRST.
+                  The stations a server has learned by RDS (and the ones its owner saved by hand)
+                  were reachable only by TYPING one into the search box — which works if you
+                  already know what is there, and is useless if you do not. The web client shows
+                  the list outright; the app has the same data and never offered a way to see it
+                  (Stuart, 2026-09-23).
+                  ★★ A BUTTON, NOT AN EXPANDED LIST. His call, and the right one for a phone: the
+                     card is already tall and a receiver that has heard fifty stations would push
+                     everything else off the screen. Closed by default, and the count is on the
+                     button so it is worth pressing (or obviously not).
+                  ★ Only where there IS one — a server with nothing learned yet gets no button
+                    rather than a button that opens an empty list. */}
+              {(serverBookmarks?.length ?? 0) > 0 && (<>
+                {/* ★ BmBtn registers its OWN keyboard-nav slot (see its definition), so it must
+                    not be wrapped in another one: that would put the button in the focus order
+                    twice, and a `ref` on a plain function component is dropped with a warning. */}
+                <BmBtn style={[st.bmSeg, { marginTop: 10,
+                                           borderColor: showServerList ? bdrBrt : bdrDim }]}
+                  onPress={() => setShowServerList(v => !v)}>
+                  <Text style={[st.bmSegText, { color: showServerList ? t.freqColor : dimText }]}>
+                    {showServerList ? '▾ ' : '▸ '}ON THIS SERVER · {serverBookmarks!.length}
+                  </Text>
+                </BmBtn>
+                {showServerList && (<>
+                  {/* ★ Learned entries EXPIRE if the aerial stops hearing them, and a saved one is
+                      somebody's decision — different claims, so the row says which. Where the
+                      backend does not tell us (UberSDR, OWRX, Kiwi send no such flag) the honest
+                      label is none at all rather than a guess. */}
+                  <Text style={[st.bmHint, { color: dimText }]}>
+                    tap to tune · LEARNT = heard by this aerial, SAVED = set by its owner
+                  </Text>
+                  {serverBookmarks!.map((b: ServerBookmark, i: number) => {
+                    const go = () => { tuneBm(b); onClose(); };
+                    const { on, ref: slotRef } = bmSlot(go);
+                    const tag = b.manual === undefined ? '' : (b.manual ? 'SAVED' : 'LEARNT');
+                    return (
+                      <TouchableOpacity key={`srv${i}`} ref={slotRef} activeOpacity={0.7}
+                        style={[st.searchRow, on && { backgroundColor: 'rgba(124,255,155,0.16)' }]}
+                        onPress={go}>
+                        <Text style={[st.searchFreq, { color: t.freqColor }]}>{fmtFreq(b.frequency)}</Text>
+                        <Text style={[st.searchMode, { color: dimText }]}>{(b.mode ?? '—').toUpperCase()}</Text>
+                        {b.name ? <StationLogo name={b.name} itu={b.itu} /> : null}
+                        <Text style={[st.searchName, { color: t.btnText }]} numberOfLines={1}>
+                          {b.flag ? b.flag + ' ' : ''}{b.name}
+                        </Text>
+                        {tag ? <Text style={[st.searchMode, { color: dimText }]}>{tag}</Text> : null}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </>)}
+              </>)}
 
               {onEibiToggle && (
                 <View style={st.bmToggleRow}>
