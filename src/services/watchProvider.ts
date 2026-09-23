@@ -446,9 +446,17 @@ class WatchProvider {
       /* ★ A phone with no watch on it asked every 2 s for the whole session. Until a watch has
        *  ever answered, ask every 10 s; once one has, keep the 2 s the watchdog needs. */
       ++aliveTick;
+      /* ★★★ AHEAD OF THE REACHABILITY GATE, AND THAT ORDER IS THE POINT. sendPhone also leaves the
+       *   status in the WCSession application context — the one thing a Buddy that is NOT RUNNING
+       *   YET can read when it opens (see VibeWatchModule.sendPhone). Behind the gate it was only
+       *   ever refreshed while a watch was already listening, i.e. never in the case it exists for:
+       *   Buddy opened cold in front of a phone mid-session would find a context tens of minutes
+       *   old, judge it stale — correctly — and show the Start screen anyway.
+       * ★ It is not traffic: the native side throttles an unchanged status to one write per 5 s,
+       *   and a context write is a local store the system delivers opportunistically. */
+      if (aliveTick % 2 === 0) Native!.sendPhone(this.phoneStatus);
       if (!this.reachable && !this.everReachable && aliveTick % 5 !== 0) return;
       Native!.isReachable().then((r) => { if (r) this.everReachable = true; this.setReachable(r); }).catch(() => {});
-      if (aliveTick % 2 === 0) Native!.sendPhone(this.phoneStatus);
     }, 2000);
   }
 

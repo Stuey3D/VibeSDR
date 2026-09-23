@@ -561,11 +561,15 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 onPress={() => {
                   const v = dabScanLabels === 1 ? 0 : 1;
                   setDabScanLabels(v); AsyncStorage.setItem(K.dabScanLabels, String(v));
+                  /* ★★ APPLY IT NOW as well as saving it. A TV server runs for days, so "takes
+                   *  effect at the next start" means the switch appears dead to the person who
+                   *  just moved it. The engine has always accepted this at runtime. */
+                  (NativeModules as any).VibeLocalSDR?.setDabScanLabels?.(v);
                 }} />
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
                 Off: listeners see the name and text of the station they are playing. On: every station on
                 the multiplex is named and its text kept, at a real cost in processing on a small box.
-                Takes effect when the server next starts.
+                Applies straight away, and is remembered for the next start.
               </Text>
             </>)}
             {/* ★ There is no native-2.048 toggle: 2.048 IS the DAB capture rate now (see the shim's

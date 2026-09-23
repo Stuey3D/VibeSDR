@@ -239,6 +239,13 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
     guard WCSession.isSupported(), s.activationState == .activated else { return }
     s.transferUserInfo(["k": "goodbye"])
     if s.isReachable { s.sendMessage(["k": "goodbye"], replyHandler: nil, errorHandler: nil) }
+    /* ★★★ AND CORRECT THE THING THE WATCH READS WHEN NOBODY IS AWAKE. The application context
+     *   OUTLIVES this process — see sendPhone — so a phone that dies holding "ready" would tell the
+     *   next Buddy launch it is playing. The goodbye above needs a live link or a queue drain; this
+     *   is a plain overwrite of a value the system already holds, and it is the LAST word either
+     *   way. (Not throttled: there is no next time.) */
+    try? s.updateApplicationContext(["k": "phone", "st": "closed",
+                                     "t": Date().timeIntervalSince1970])
   }
 
   /// JS reads this on a headless (background) boot to decide whether to auto-connect.
@@ -491,10 +498,48 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   }
 
   /// What the PHONE is doing — a boot is not a fault, and the watch should say which.
+  /* ★★★ AND IT IS ALSO LEFT WHERE A WATCH CAN READ IT WITHOUT ASKING.
+   *
+   *  sendMessage only reaches a watch that is reachable AT THIS INSTANT, and the case that matters
+   *  is the opposite one: Buddy has just been OPENED and knows nothing. Buddy cannot ask, by design
+   *  — a message from the wrist can launch this app headless, which is the hijack the whole
+   *  no-auto-cold-boot rule exists to prevent (WatchLink.activate(): no rows yet ⇒ Start screen, no
+   *  ping, no boot). So the phone had to volunteer, on a 4 s JS timer, and a phone iOS has
+   *  suspended has no timer left to volunteer with. Watch silent by design, phone suspended:
+   *  nobody speaks, and Buddy sits on "Start VibeSDR" in front of a phone that is playing.
+   *
+   *  ★★ updateApplicationContext IS THE ONE CHANNEL THAT NEEDS NEITHER SIDE TO BE AWAKE. The system
+   *     holds the latest dictionary and hands it to the watch app when it next activates — so Buddy
+   *     reads it locally, sends NOTHING, and wakes NOTHING. It is evidence rather than a question,
+   *     which is exactly what the anti-hijack rule leaves room for.
+   *  ★★ WITH A TIMESTAMP, because a context OUTLIVES the process that set it. Without one, a phone
+   *     closed hours ago would still be claiming "ready". The watch only believes a fresh one; a
+   *     stale one says nothing at all and it falls back to the Start screen as before. (The pair are
+   *     time-synced to the same source, so the wall clock is usable here to within a second or so.)
+   *  ★ Throttled, and NOT gated on linkAlive: the whole point is the watch that is not there yet.
+   *    appWillTerminate() overwrites it with "closed" so a phone the user swiped away leaves a
+   *    truthful last word rather than a lie that happens to be recent. */
   @objc(sendPhone:)
   func sendPhone(_ status: String) {
+    publishPhoneContext(status)
     guard let s = session, linkAlive else { return }
     s.sendMessage(["k": "phone", "st": status], replyHandler: nil, errorHandler: nil)
+  }
+
+  private var lastCtxStatus = ""
+  private var lastCtxAt = Date.distantPast
+
+  /// Leave the current status where a not-yet-running watch app can read it. See sendPhone.
+  private func publishPhoneContext(_ status: String) {
+    let s = session ?? WCSession.default
+    guard WCSession.isSupported(), s.activationState == .activated else { return }
+    // ★ The watch's freshness window is tens of seconds, so re-stating an unchanged status every
+    //   5 s is ample; a CHANGE always goes straight out.
+    if status == lastCtxStatus, Date().timeIntervalSince(lastCtxAt) < 5 { return }
+    lastCtxStatus = status
+    lastCtxAt = Date()
+    try? s.updateApplicationContext(["k": "phone", "st": status,
+                                     "t": Date().timeIntervalSince1970])
   }
 
   /// The user's FAVOURITE instances. A curated handful — not the 2,000-server

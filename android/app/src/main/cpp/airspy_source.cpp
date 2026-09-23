@@ -340,6 +340,11 @@ uint32_t AirspySource::nearestRate(double hz) const { return (uint32_t)hz; }
 bool AirspySource::setSampleRate(double) { return false; }
 void AirspySource::setGainTenthDb(int) {}
 void AirspySource::applyGain() {}
+/* ★ THE STUB SIDE NEEDS EVERY NEW MEMBER TOO. iOS compiles this branch, and a member added to
+ *  the class but not defined here is an undefined symbol at LINK time — which the Xcode Cloud
+ *  build reports long after the trigger has returned a run id. setGainMode arrived with the three
+ *  gain modes and was missed; the archive check in build_ios.sh caught it. */
+void AirspySource::setGainMode(int) {}
 void AirspySource::setSensitivityCurve(bool) {}
 void AirspySource::setLnaGain(int) {}
 void AirspySource::setMixerGain(int) {}

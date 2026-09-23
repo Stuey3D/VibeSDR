@@ -31,6 +31,15 @@ const audio = new WebSocket(`${base.replace(/\/+$/, '')}/ws/audio?user_session_i
 audio.binaryType = 'arraybuffer';
 
 let L = [], R = [], started = 0, rate = 48000;
+/* ★★★ WAIT FOR THE GAIN TO STOP MOVING BEFORE KEEPING ANY OF IT.
+ *  The first version discarded ONE SECOND and then recorded, which on a receiver whose AGC takes
+ *  80-90 s to settle captures the CLIMB — every gain on the way up, including the high-gain region
+ *  where a front end manufactures signal. A recording of the transient answers a different
+ *  question from the one being asked. Stuart: "did you wait for the agc to settle?" No.
+ *  ★ Settled means gainNow unchanged for `STABLE_MS`, or `MAX_WAIT_MS` gone by — a receiver whose
+ *    loop never quite stops still has to be recordable, and the log says which it was. */
+const STABLE_MS = 15000, MAX_WAIT_MS = 150000;
+let gainNow = null, gainSince = 0, settled = false, t0 = Date.now();
 spec.onopen = () => {
   spec.send(JSON.stringify({ type: 'zoom', frequency: FREQ, binBandwidth: 1200 }));
   spec.send(JSON.stringify({ type: 'tune', frequency: FREQ, mode: 'wfm' }));
@@ -44,6 +53,16 @@ spec.onopen = () => {
   }
 };
 spec.onerror = () => {};
+spec.onmessage = (ev) => {
+  if (typeof ev.data !== 'string') return;
+  let j; try { j = JSON.parse(ev.data); } catch { return; }
+  if (j.type !== 'hwinfo' || !Number.isFinite(j.gainNow)) return;
+  if (j.gainNow !== gainNow) { gainNow = j.gainNow; gainSince = Date.now(); return; }
+  if (!settled && gainSince && Date.now() - gainSince > STABLE_MS) {
+    settled = true;
+    console.error(`  settled at ${(gainNow / 10).toFixed(1)} dB after ${((Date.now() - t0) / 1000).toFixed(0)}s`);
+  }
+};
 audio.onerror = (e) => { console.error('audio socket failed'); process.exit(1); };
 audio.onmessage = (ev) => {
   if (typeof ev.data === 'string') return;
@@ -65,13 +84,24 @@ audio.onmessage = (ev) => {
   let out; try { out = dec.decodeFrame(pkt); } catch { return; }
   if (!out || !out.samplesDecoded) return;
   // ★ Discard the first second: the tune, the AGC settling and the decoder priming are not signal.
-  if (!started) { started = Date.now(); return; }
-  if (Date.now() - started < 1000) return;
+  /* ★ Nothing is kept until the loop has stopped moving — see STABLE_MS above.
+   *  ★★ START_AFTER_MS overrides it with a FIXED pre-roll, which is what makes two receivers
+   *     comparable: each waiting for its own settle starts them at different wall-clock moments,
+   *     and two recordings of different moments cannot be compared at all. */
+  const fixed = Number(process.env.START_AFTER_MS || 0);
+  if (fixed > 0) { if (Date.now() - t0 < fixed) return; }
+  else if (!settled && Date.now() - t0 < MAX_WAIT_MS) return;
+  if (!started) {
+    started = Date.now();
+    setTimeout(finish, SECS * 1000);      // ★ SECS of SETTLED audio, then stop — not SECS from launch
+    if (!settled) console.error(`  gave up waiting after ${(MAX_WAIT_MS / 1000)}s — recording anyway at ${gainNow === null ? '?' : (gainNow / 10).toFixed(1)} dB`);
+    return;
+  }
   if (!rate) rate = out.sampleRate || 48000;
   L.push(out.channelData[0].slice()); R.push(out.channelData[1] ? out.channelData[1].slice() : out.channelData[0].slice());
 };
 
-setTimeout(() => {
+function finish() {
   const n = L.reduce((a, b) => a + b.length, 0);
   if (!n) { console.error('no audio decoded'); process.exit(1); }
   const buf = Buffer.alloc(44 + n * 4);
@@ -88,6 +118,9 @@ setTimeout(() => {
     }
   }
   writeFileSync(outPath, buf);
-  console.log(`${outPath}  ${(n / rate).toFixed(1)}s @ ${rate} Hz`);
+  console.log(`${outPath}  ${(n / rate).toFixed(1)}s @ ${rate} Hz`
+            + (gainNow === null ? '' : `  (gain ${(gainNow / 10).toFixed(1)} dB${settled ? ', settled' : ', NOT settled'})`));
   process.exit(0);
-}, (SECS + 2) * 1000);
+}
+// ★ A receiver that never sends audio at all must still end the run.
+setTimeout(finish, MAX_WAIT_MS + (SECS + 20) * 1000);

@@ -530,12 +530,72 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     } else {
       phoneClosed = true // show the Start screen; no ping, no boot
     }
+    /* ★★★ …AND THEN READ WHAT THE PHONE LEFT LYING ABOUT, which can overturn that latch without a
+     *   single byte being sent. See adoptPhoneContext: a cold Buddy open in front of a phone that
+     *   is mid-session used to land on Start and stay there (Stuart, 2026-09-22: "Buddy is not
+     *   recognising when the phone is running VibeSDR anymore and needs its start button pressed").
+     *   The latch above is right to be the DEFAULT — asking would risk booting the phone — but it
+     *   was also the FINAL answer, because phoneClosed gates ping() and resume() off, so Buddy then
+     *   goes mute and can only be rescued by the phone volunteering on its 4 s JS timer. A
+     *   suspended phone has no timer. That is the deadlock, and evidence the system already holds
+     *   is the way out of it.
+     * ★ Deliberately AFTER the latch, so the default stands whenever the evidence is absent or
+     *   stale. Also tried from activationDidCompleteWith: receivedApplicationContext is only
+     *   documented as valid once the session is activated, and this call has not awaited that. */
+    adoptPhoneContext(s.receivedApplicationContext)
   }
 
   /// The fixed phone→watch row rate. 10fps over Bluetooth (Stuart's rule); the buffer + the jitter-
   /// buffer slot interval are both driven off this, so it MUST match the phone forwarder's cadence
   /// (WatchSpectrumForwarder 60ms / watchProvider MIN_ROW_MS 60).
   static let rowFps = 10.0
+
+  /* ★★★ THE PHONE'S OWN ACCOUNT OF ITSELF, READ WITHOUT ASKING FOR IT.
+   *
+   *  WCSession's application context is the one channel where neither side has to be awake: the
+   *  phone overwrites a single dictionary (VibeWatchModule.sendPhone), the system keeps it, and the
+   *  watch reads it on activation and is handed any later one. Buddy therefore learns that VibeSDR
+   *  is running WITHOUT sending anything — which is the only kind of answer the no-auto-cold-boot
+   *  rule allows, because a message from the wrist can launch the phone app headless.
+   *
+   *  ★★★ IT IS ONLY EVIDENCE WHILE IT IS FRESH. A context outlives the process that wrote it, so an
+   *    old one proves nothing; past the window this says nothing at all and the Start screen stands
+   *    exactly as before. That asymmetry is the safety property here — this function can only ever
+   *    turn a WRONG Start screen into a live one, never the reverse — so nothing that follows can
+   *    hide a phone that really is closed.
+   *  ★★★ AND IT RELEASES `deliberatelyClosed`, which nothing else could. That latch is set by a
+   *    goodbye (or a 'closed' status) and then ignores every subsequent status message — see the
+   *    hijack guard in apply()'s "phone" case, which is right to: a status that arrives after a
+   *    swipe may well be a phone OUR OWN stray ping relaunched. This is different in kind. We never
+   *    provoke a context update, so we cannot be reading our own echo; and the phone's
+   *    appWillTerminate overwrites the context with "closed", so a swiped-away phone leaves a
+   *    truthful last word. A fresh, non-closed context can therefore only mean the user has VibeSDR
+   *    running again — which is the one fact the latch was waiting for and had no way to hear.
+   *  ★ Tolerates a little clock skew (the pair sync to the same source) and refuses anything from
+   *    the future, which would be a skew large enough to make the age meaningless. */
+  private func adoptPhoneContext(_ ctx: [String: Any]) {
+    guard let st = ctx["st"] as? String, !st.isEmpty, let t = ctx["t"] as? Double else { return }
+    let age = Date().timeIntervalSince1970 - t
+    guard age > -10, age < 30 else { return }   // stale, or a clock we cannot reason about
+    // "closed" is the phone's dying word. It needs no action here — the goodbye path owns that —
+    // and acting on it would give this function a way to raise a Start screen, which it must not have.
+    guard st != "closed" else { return }
+    lastAnyAt = Date()
+    if st != phoneStatus { phoneStatusAt = Date() }
+    phoneStatus = st
+    guard phoneClosed || deliberatelyClosed else { return }
+    deliberatelyClosed = false
+    phoneClosed = false
+    reopenPending = false
+    if heartbeat == nil { startHeartbeat() }
+    /* ★ Same pair as apply()'s latch-clear, and for the same reason: clearing the latch is only
+     *  half of coming back. The phone stops forwarding rows on wrist-down and stays stopped until
+     *  it is told otherwise, and nothing else says it while the Start screen is up — without this
+     *  Buddy shows the live screen over a dead feed and the silence watchdog latches again in five
+     *  seconds. Safe to send: we have just established the phone is awake. */
+    send(["cmd": "wrist", "down": isBackground])
+    requestMissing()
+  }
 
   private func startHeartbeat() {
     heartbeat?.invalidate()
@@ -629,6 +689,10 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     if isBackground { waterfall.reset() }   // stale queue/scroll clock; KEEPS the pixels on screen
     resume()                                // isBackground/resumedAt + wrist-up + requestMissing
     ping()                                  // no-op while phoneClosed — the anti-hijack still holds
+    /* ★ A wrist-raise onto a LATCHED Buddy is the same situation as a cold open: we are mute, and
+     *  the phone may have refreshed its context while we were suspended without any message
+     *  reaching us. Local read, nothing sent — see adoptPhoneContext. */
+    if let s = session, s.activationState == .activated { adoptPhoneContext(s.receivedApplicationContext) }
   }
 
   /// Wrist dropped, from whichever screen is up. See becameActive().
@@ -1835,7 +1899,22 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
        *    or activating in a pocket would resume a feed nobody can see.
        */
       if state == .activated && !self.isBackground && !self.phoneClosed { self.resume() }
+      /* ★★ AND NOW THE CONTEXT IS DEFINITELY READABLE. activate() tries this too, but it does not
+       *  wait for activation to complete and the context is only documented as valid once it has —
+       *  so the launch that matters (Buddy opened cold in front of a running phone) may well find
+       *  nothing there. Reading it twice costs nothing: adoptPhoneContext is idempotent and does
+       *  nothing at all once we are already live. */
+      if state == .activated { self.adoptPhoneContext(s.receivedApplicationContext) }
     }
+  }
+
+  /* ★★★ A LATER CONTEXT, PUSHED WHILE WE ARE RUNNING. This is what breaks the deadlock the phone's
+   *   4 s status message was invented for — and it breaks it in the case that one cannot, because
+   *   it does not need the link to be reachable at the moment of sending. While phoneClosed is
+   *   latched Buddy sends nothing and the heartbeat is stopped, so this is the only thing left that
+   *   can tell us we were wrong. */
+  func session(_ s: WCSession, didReceiveApplicationContext ctx: [String: Any]) {
+    DispatchQueue.main.async { self.adoptPhoneContext(ctx) }
   }
 
   func sessionReachabilityDidChange(_ s: WCSession) {

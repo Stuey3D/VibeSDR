@@ -76,6 +76,14 @@ cxx "$CPP/airspyhf_source.cpp"
 #     FIVE Xcode Cloud builds failed on a wall of undefined HackRfSource:: symbols before anyone
 #     looked, because a trigger that returns a run id is not a build that finished.
 cxx "$CPP/hackrf_source.cpp"
+# ★★★ AND THE AIRSPY R2/MINI, for the FOURTH outing of the note above — 2026-09-23, and it failed
+#     the very first iOS build after the driver landed, exactly as the RSP, the HF+ and the HackRF
+#     each did. The shim calls AirspySource::open/openFd unconditionally, so the reference is
+#     emitted whether or not iOS can ever see one; the file's own #else branch supplies the stubs.
+#     ★ The pattern is now four for four: a new radio means a new line HERE, or the next cloud
+#       build dies on a wall of undefined symbols after the trigger has cheerfully returned a
+#       run id. Adding the line costs a few bytes.
+cxx "$CPP/airspy_source.cpp"
 cxx "$CPP/net_shim.cpp"
 # ★★★ fd_passing joined 2026-08-25, and its absence was a LINK error, not a compile one — the
 #     shim calls vibe::sendFdTo() so the reference is emitted whether or not iOS ever passes an
