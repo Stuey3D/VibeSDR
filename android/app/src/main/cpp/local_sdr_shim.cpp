@@ -4682,6 +4682,26 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     bool useAirspyHf() const { return (bool)ahf; }
     bool useHackRf()   const { return (bool)hrf; }
     bool useAirspy()   const { return (bool)asp; }
+
+    /** ★★★ "IS THERE A RADIO AT ALL?" — ONE LIST, BECAUSE THE HAND-WRITTEN ONES KEEP ROTTING.
+     *
+     *  Guards spelled `if (!tcp && !rsp && !ahf && !hrf && !impl->dev) return;` have now failed
+     *  SEVEN times, each time the same way: a driver is added, nobody remembers this particular
+     *  conjunction, `impl->dev` is the LIBRTLSDR handle which the new radio does not have, and the
+     *  function returns at its first line and does nothing at all — silently, and always in the
+     *  direction of doing nothing. The notes above setSampleRate() record the fifth (Airspy HF+,
+     *  "when i chose different options they dont change") and the sixth (HackRF, "hackrf not
+     *  changing sample rates but it is working"); the seventh was the Airspy R2/Mini, reported by
+     *  Onfliner on 2026-09-24 as "Sample rate doesn't work".
+     *
+     *  ★★ NAME EVERY SOURCE — the cure the file keeps prescribing — is written HERE, once. A new
+     *     driver adds one line to this function and every guard built on it is correct; a guard
+     *     that spells the list out itself is a copy that will be forgotten again.
+     *  ★ `dev` last, because it is the one that is NOT a smart pointer and reads as "a dongle". */
+    bool anySource() const {
+        return useSpy() || useTcp() || useSdrplay() || useAirspyHf()
+            || useHackRf() || useAirspy() || (bool)dev;
+    }
     std::vector<int> spyGains;             // device gain table (tenths dB)
     int lastGainTenthDb = -1;              // re-applied across a stream restart
 
@@ -21393,6 +21413,23 @@ struct DesiredDsp {
     std::atomic<int>  ahfAtt{-1};        // 0..8, 6 dB steps
     std::atomic<int>  ahfLna{-1};
     std::atomic<int>  ahfPpb{INT32_MIN}; // calibration; INT32_MIN = never set
+    /* ★★★ AIRSPY R2 / MINI — HELD HERE FOR THE THIRD TIME, FOR THE THIRD RADIO, FOR THE SAME
+     *     REASON. The RSP's note says it, the HF+'s note repeats it, and the R2/Mini arrived
+     *     without them: a setter that writes only through the live AirspySource is lost the moment
+     *     the shim is torn down, because a re-open constructs a fresh source at ITS defaults.
+     *  ★★ Onfliner, 2026-09-24, on a Mini: "If you going to the main menu and then launch the
+     *     dongle again, some settings will be reset … in the case of airspy, airspy controls will
+     *     be reset." Nothing was remembering them anywhere — not here, and not in the app.
+     *  ★ Same sentinels as its neighbours: -1 means "the listener never chose", so a radio the
+     *    user has not touched keeps whatever the driver's own defaults are. */
+    std::atomic<int>  aspMode{-1};       // 0 sensitive, 1 linear, 2 free
+    std::atomic<int>  aspLna{-1};        // 0..14
+    std::atomic<int>  aspMixer{-1};      // 0..15
+    std::atomic<int>  aspVga{-1};        // 0..15
+    std::atomic<int>  aspLnaAgc{-1};     // tri-state
+    std::atomic<int>  aspMixerAgc{-1};   // tri-state
+    std::atomic<int>  aspBiasT{-1};      // tri-state
+    std::atomic<int>  aspPacking{-1};    // tri-state
 };
 static DesiredDsp g_dsp;
 
@@ -21504,6 +21541,22 @@ void LocalSdrShim::applyDesiredDsp(LocalSdrShim::Impl* impl) {
         // controls is what makes "AGC off + a chosen attenuation" land in that order.
         if (g_dsp.ahfAgc.load()     >= 0) impl->ahf->setAgc(g_dsp.ahfAgc.load() != 0);
         if (g_dsp.ahfPpb.load() != INT32_MIN) impl->ahf->setCalibrationPpb(g_dsp.ahfPpb.load());
+    }
+    /* ★★★ AND THE R2 / MINI, the arm this function never had — which is why every Airspy control
+     *  came back at its default after a trip to the main menu. Order matters the same way it does
+     *  for the two radios above: the STAGES first, then the per-stage AGCs, and the MODE last,
+     *  because the mode owns the gain path — Sensitive and Linear force both stage AGCs off and
+     *  impose their own curve, so setting it after the manual controls is what makes "Free with
+     *  these three stages" and "Linear at this position" each land whole. */
+    if (impl->useAirspy() && impl->asp) {
+        if (g_dsp.aspLna.load()      >= 0) impl->asp->setLnaGain(g_dsp.aspLna.load());
+        if (g_dsp.aspMixer.load()    >= 0) impl->asp->setMixerGain(g_dsp.aspMixer.load());
+        if (g_dsp.aspVga.load()      >= 0) impl->asp->setVgaGain(g_dsp.aspVga.load());
+        if (g_dsp.aspLnaAgc.load()   >= 0) impl->asp->setLnaAgc(g_dsp.aspLnaAgc.load() != 0);
+        if (g_dsp.aspMixerAgc.load() >= 0) impl->asp->setMixerAgc(g_dsp.aspMixerAgc.load() != 0);
+        if (g_dsp.aspBiasT.load()    >= 0) impl->asp->setBiasTee(g_dsp.aspBiasT.load() != 0);
+        if (g_dsp.aspPacking.load()  >= 0) impl->asp->setPacking(g_dsp.aspPacking.load() != 0);
+        if (g_dsp.aspMode.load()     >= 0) impl->asp->setGainMode(g_dsp.aspMode.load());
     }
     const float nrs = g_dsp.nrStrength.load();
     if (nrs >= 0.0f) {   // only if the client ever set one; else leave the engine's own
@@ -24481,6 +24534,19 @@ void LocalSdrShim::stopLocked() {
     // are stopped explicitly now, in the same place every other source is.
     if (impl->useAirspyHf()) { impl->ahf->stop(); impl->ahf->close(); }
     if (impl->useSdrplay())  { impl->sdrp->close(); }
+    /* ★★★ AND THE R2 / MINI, WHICH THIS LIST LEFT OUT — the crash the note above describes,
+     *     happening again on the one source that was not named. libairspy runs its own consumer
+     *     thread exactly as libairspyhf does, calling the sink we installed at open (which
+     *     captures the Impl), and AirspySource::close() ran only as part of member destruction
+     *     inside `delete impl` — i.e. after the mutexes that sink locks had gone.
+     *  ★★ Onfliner, 2026-09-24, on a Mini: "the app crashes (it turns out, not always) when going
+     *     to the main menu only with airspy, with rtl-sdr - ok". "Not always" is the signature of
+     *     a race, and "only with airspy" names the source the line above forgot. A native abort,
+     *     so the JS crash guard records nothing and the app simply dies.
+     *  ★ Same shape a third time: the HF+ taught it (2026-07-27), the RSP was "only getting away
+     *    with it", and the R2/Mini arrived afterwards and was never added here. NAME EVERY SOURCE
+     *    — the file says so a few thousand lines below, about this very habit. */
+    if (impl->useAirspy())   { impl->asp->stop(); impl->asp->close(); }
     // ★ Stopped and closed explicitly, in the same place every other source is — the note above
     //   records what leaving it to member-destruction order cost the Airspy.
     if (impl->useHackRf())   { impl->hrf->stop(); impl->hrf->close(); }
@@ -26620,10 +26686,15 @@ bool LocalSdrShim::releaseRadio() {
     //   it would fall into the dongle branch, find no `dev`, and quietly do nothing while the
     //   server reported the radio as released.
     const bool rsp = impl->useSdrplay(), ahf = impl->useAirspyHf(), hrf = impl->useHackRf();
+    /* ★ And the R2/Mini, which the sentence directly above asks for and the line below it forgot.
+     *  It has no setPaused: libairspy stops by ending the transfer, so stop() IS its pause, and
+     *  start() brings it back with every setting re-stated (AirspySource::applyAll). */
+    const bool asp = impl->useAirspy();
 
     if (rsp)      impl->sdrp->setPaused(true);
     else if (ahf) impl->ahf->setPaused(true);
     else if (hrf) impl->hrf->setPaused(true);
+    else if (asp) impl->asp->stop();
     else if (impl->dev) { impl->restarting.store(true); rtlsdr_cancel_async(impl->dev); }
     joinOnce(impl->rtlThread, "reader");
     impl->stopDspThread();
@@ -26641,6 +26712,7 @@ bool LocalSdrShim::releaseRadio() {
         if (rsp)      impl->sdrp->close();
         else if (ahf) { impl->ahf->stop(); impl->ahf->close(); }
         else if (hrf) { impl->hrf->stop(); impl->hrf->close(); }
+        else if (asp) { impl->asp->stop(); impl->asp->close(); }
         else if (impl->dev) { rtlsdr_close(impl->dev); impl->dev = nullptr; }
         impl->restarting.store(false);
     }
@@ -26661,6 +26733,7 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
     Impl* impl = p;
     if (!impl->radioReleased.load()) return true;
     const bool rsp = impl->useSdrplay(), ahf = impl->useAirspyHf(), hrf = impl->useHackRf();
+    const bool asp = impl->useAirspy();      // ★ NAME EVERY SOURCE — see releaseRadio()
     std::lock_guard<std::recursive_mutex> lk(impl->modeMtx);
     // ★★★ ASK AGAIN, NOW THAT WE HOLD THE LOCK. The check above is outside it, and a browser opens
     //     its spectrum and audio sockets together: both arrive, both see the radio released, the
@@ -26735,6 +26808,20 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
             break;
         }
         ok = impl->hrf->open(impl->hrfIndex, impl->sampleRate,
+                             impl->rtlCenter.load() + impl->hwOffsetHz(), -1, err);
+    } else if (asp) {
+        /* ★ Same platform limit as the HackRF above, and the same duty to say so plainly: an
+         *  Airspy opened from an Android USB descriptor has aspIndex -1, because the fd is
+         *  single-use and libusb owns it the moment it is wrapped. Falling through to open(-1)
+         *  would spend the retries and then blame the cable. */
+        if (impl->aspIndex < 0) {
+            err = "this Airspy was opened from an Android USB descriptor, which cannot be "
+                  "reopened — unplug it and plug it back in to hand it back";
+            break;
+        }
+        // ★ -1 for the gain, as the HackRF does: taking the radio back must not move the stages
+        //   the owner set. open() records them and start() re-states them (applyAll).
+        ok = impl->asp->open(impl->aspIndex, impl->sampleRate,
                              impl->rtlCenter.load() + impl->hwOffsetHz(), -1, err);
     } else {
         // ★ BY SERIAL, NOT BY INDEX — findOurDevice refuses to grab a DIFFERENT dongle that has
@@ -27238,7 +27325,15 @@ void LocalSdrShim::setSampleRate(double rate) {
      *     BREAKS EVERY TIME A DRIVER IS ADDED, silently, and always in the direction of doing
      *     nothing. That is why the same sentence keeps being written above it. */
     const bool hrf = impl->useHackRf();
-    if (!tcp && !rsp && !ahf && !hrf && !impl->dev) return;
+    /* ★★★ SEVENTH TIME, AND THE LAST ONE SPELLED OUT BY HAND. The Airspy R2/Mini was added and
+     *     not named here, so this returned at the first line and the rate picker was decorative —
+     *     Onfliner, 2026-09-24: "Sample rate doesn't work". The driver has implemented it
+     *     correctly since 2026-09-22 (AirspySource::setSampleRate stops the stream, sets, and
+     *     restarts); nothing ever called it.
+     *  ★★ The question this guard is really asking is "is there a radio at all", so it now ASKS
+     *     THAT — Impl::anySource(), one list, in one place. See the note there. */
+    const bool asp = impl->useAirspy();
+    if (!impl->anySource()) return;
 
     // ★★★ ASKING FOR THE RATE IT IS ALREADY RUNNING AT MUST DO NOTHING. Everything below stops the
     //     IQ source, joins the reader AND the DSP thread, rebuilds the engine and the audio chain
@@ -27278,6 +27373,11 @@ void LocalSdrShim::setSampleRate(double rate) {
     // ★ Same again for the HackRF: libhackrf reconfigures a running device in place, so stop
     //   CONSUMING while the engine is rebuilt rather than tearing the radio down.
     else if (hrf) { impl->hrf->setPaused(true); }
+    /* ★ The R2/Mini is the one radio here that CANNOT reconfigure in place: libairspy refuses
+     *  airspy_set_samplerate while a transfer is running, which is why AirspySource::setSampleRate
+     *  stops and restarts the stream itself. Nothing to pause — it does its own quiescing, and
+     *  its start() re-states frequency, gains, bias-T and packing afterwards. */
+    else if (asp) { /* handled below by AirspySource::setSampleRate */ }
     else          { impl->restarting.store(true); rtlsdr_cancel_async(impl->dev); }
     // ★★ AND A NET UNDER BOTH JOINS. The lock above removes the race we know about; this keeps a
     //    future one from killing the APP rather than the operation. It logs, because a swallowed
@@ -27349,6 +27449,19 @@ void LocalSdrShim::setSampleRate(double rate) {
         //   between two rungs is rounded — and the DSP must be built for the figure in force, not
         //   the one that was asked for.
         actual = impl->hrf->nearestRate(rate);
+    } else if (asp) {
+        /* ★★★ THE DEVICE HERE TOO, BEFORE THE ENGINE IS BUILT — same ordering as the HF+ and the
+         *     HackRF above, and for the same reason: a radio still delivering the OLD rate into a
+         *     chain built for the NEW one is heard as a pitch shift rather than as an error.
+         *  ★★ AirspySource::setSampleRate STOPS THE STREAM ITSELF, sets the rate and starts it
+         *     again — libairspy will not reconfigure the USB transfer geometry underneath a
+         *     running transfer, which is the whole reason "it's stuck at 3.0M". Its start() then
+         *     re-states frequency, gains, bias-T and packing, so the restart is not a reset.
+         *  ★ Ask the source what it landed on: a Mini offers 3 and 6 MS/s and an R2 2.5 and 10,
+         *    so a request between rungs is rounded and the DSP must be built for what is in
+         *    force. */
+        impl->asp->setSampleRate(rate);
+        actual = impl->asp->nearestRate(rate);
     } else {
         rtlsdr_set_sample_rate(impl->dev, (uint32_t)rate);
         rtlsdr_reset_buffer(impl->dev);
@@ -27389,6 +27502,11 @@ void LocalSdrShim::setSampleRate(double rate) {
         impl->ahf->setPaused(false);
     }
     else if (impl->useHackRf()) { impl->hrf->setPaused(false); }
+    /* ★ Nothing to un-pause: AirspySource::setSampleRate above already restarted its own stream,
+     *  and its start() re-stated every setting onto it. Named explicitly all the same, so this
+     *  radio cannot fall into the `else` and be handed launchCapture() + rtlsdr's restarting
+     *  flag — "else means dongle" is the fault this whole function is a monument to. */
+    else if (asp) { /* AirspySource restarted itself */ }
     else {
         impl->launchCapture();
         impl->restarting.store(false);   // back to normal: a stop now really is an unplug
@@ -27674,17 +27792,35 @@ std::string LocalSdrShim::radioCapsJson() const {
  * ★ Each is a no-op on any other radio, exactly as the HF+ block below: the panel only draws
  *   these when the caps say `driver:"airspy"`, and the engine refuses to act on a radio that
  *   does not have them rather than trusting the client to have asked correctly. */
+/* ★★★ REMEMBER FIRST, THEN WRITE — the shape every other radio's setters already have, and the
+ *     one these seven were missing. Two faults, both reported, both cured by the same line:
+ *
+ *  ★★ A CHOICE MADE WHILE THE RADIO IS SHUT WAS THROWN AWAY. `if (!p || !p->useAirspy()) return;`
+ *     at the TOP means a setting that arrives before the source exists — or between a teardown and
+ *     the next open — never happened at all. setAhfAgc and its neighbours store first for exactly
+ *     this reason, and the comment on DesiredDsp says why: five start paths each build a fresh
+ *     Impl, so anything written only through `p` dies with it.
+ *  ★★ AND A CHOICE MADE WHILE IT IS OPEN DID NOT SURVIVE THE MENU. Onfliner, 2026-09-24: "in the
+ *     case of airspy, airspy controls will be reset" after going to the main menu and launching
+ *     again. Nothing was keeping them: not the app, and not here. With g_dsp holding them,
+ *     applyDesiredDsp() re-states the lot onto the new source.
+ *  ★ The live write stays exactly as it was, under the same hardware lock. */
 void LocalSdrShim::setAirspyCurve(bool sensitivity) {
+    g_dsp.aspMode.store(sensitivity ? 0 /*GainSensitive*/ : 1 /*GainLinear*/);
     if (!p || !p->useAirspy()) return;
     VIBE_HW_LOCK(); p->asp->setSensitivityCurve(sensitivity);
 }
 /** ★ Sensitive / Linear / Free — see AirspySource::GainMode. The older `curve` setter above still
  *  works and simply picks between the two preset modes, because build 479 shipped with it. */
 void LocalSdrShim::setAirspyGainMode(int mode) {
+    g_dsp.aspMode.store(mode);
     if (!p || !p->useAirspy()) return;
     VIBE_HW_LOCK(); p->asp->setGainMode(mode);
 }
 void LocalSdrShim::setAirspyStage(int stage, int value) {
+    if (stage == 0)      g_dsp.aspLna.store(value);
+    else if (stage == 1) g_dsp.aspMixer.store(value);
+    else if (stage == 2) g_dsp.aspVga.store(value);
     if (!p || !p->useAirspy()) return;
     VIBE_HW_LOCK();
     if (stage == 0)      p->asp->setLnaGain(value);
@@ -27692,18 +27828,22 @@ void LocalSdrShim::setAirspyStage(int stage, int value) {
     else if (stage == 2) p->asp->setVgaGain(value);
 }
 void LocalSdrShim::setAirspyLnaAgc(bool on) {
+    g_dsp.aspLnaAgc.store(on ? 1 : 0);
     if (!p || !p->useAirspy()) return;
     VIBE_HW_LOCK(); p->asp->setLnaAgc(on);
 }
 void LocalSdrShim::setAirspyMixerAgc(bool on) {
+    g_dsp.aspMixerAgc.store(on ? 1 : 0);
     if (!p || !p->useAirspy()) return;
     VIBE_HW_LOCK(); p->asp->setMixerAgc(on);
 }
 void LocalSdrShim::setAirspyBiasT(bool on) {
+    g_dsp.aspBiasT.store(on ? 1 : 0);
     if (!p || !p->useAirspy()) return;
     VIBE_HW_LOCK(); p->asp->setBiasTee(on);
 }
 void LocalSdrShim::setAirspyPacking(bool on) {
+    g_dsp.aspPacking.store(on ? 1 : 0);
     if (!p || !p->useAirspy()) return;
     VIBE_HW_LOCK(); p->asp->setPacking(on);
 }
