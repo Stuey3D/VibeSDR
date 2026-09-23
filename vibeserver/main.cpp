@@ -152,6 +152,8 @@ struct Opts {
     double      fftRate = 15;            // spectrum frames/sec
     std::string mode    = "am";
     std::string pin;                     // empty = open access
+    /** ★ THIS radio's own PIN, beside the master — see LocalSdrShim::setVibeServerRadioAuth. */
+    std::string radioPin;
     double      maxBw   = 0;             // 0 = no cap  ─┐ link-management ceilings
     double      maxFps  = 0;             // 0 = default ─┘
     double      lockRate = 0;            // 0 = client-controlled
@@ -465,7 +467,7 @@ std::string primaryIpv4() {
 void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.rxName = c.name; o.rxPlace = c.place; o.rxIso = c.country;
     o.rxGrid = c.locator; o.rxLat = c.lat; o.rxLon = c.lon;
-    o.pin = c.pin; o.adminPass = c.adminPass; o.trustedProxies = c.trustedProxies;
+    o.pin = c.pin; o.radioPin = c.radioPin; o.adminPass = c.adminPass; o.trustedProxies = c.trustedProxies;
     o.sessionLimitMin = c.sessionLimitMin;
     o.gainLimits = c.gainLimits; o.restGain = c.restGain; o.agcLock = c.agcLock;
     o.gainLock = c.gainLock; o.gainLocks = c.gainLocks;
@@ -1334,6 +1336,8 @@ int main(int argc, char** argv) {
     LocalSdrShim::setServeOnLan(true);          // bind 0.0.0.0, not loopback
     LocalSdrShim::setVibeServerPort(o.port);    // 0 = auto-scan
     LocalSdrShim::setVibeServerAuth(o.pin);     // empty = open; loopback is always exempt
+    // ★ ...and this radio's own, which opens THIS radio only. Either is accepted; see vsAuthOk.
+    LocalSdrShim::setVibeServerRadioAuth(o.radioPin);
     LocalSdrShim::setVibeServerLimits(o.maxBw, o.maxFps);
     LocalSdrShim::setVibeServerLockedRate(o.lockRate);
     LocalSdrShim::setVibeServerRateLock(o.rateLock);
@@ -1791,6 +1795,14 @@ int main(int argc, char** argv) {
             //    any link a listener passed on (Stuart, 2026-08-09).
             j += "{\"id\":\"" + jsonEscape(vsconfig::radioId(r.serial)) + "\"";
             j += ",\"minProto\":" + std::to_string(minProto);
+            /* ★★★ IS THIS RADIO BEHIND A PIN OF ITS OWN? The list is what a listener sees before
+             *  choosing, so it must say which radios they can actually walk into — a locked one is
+             *  drawn greyed rather than hidden, so the machine tells the truth about what it has
+             *  and a member who holds the right PIN knows there is something to unlock.
+             *  ★★ THE PIN ITSELF NEVER APPEARS HERE, only whether there is one. This endpoint is
+             *     open by design (a listener choosing between receivers has not authenticated yet),
+             *     so anything on it is public. */
+            j += ",\"locked\":" + std::string(r.pin.empty() ? "false" : "true");
             j += ",\"serial\":\"" + jsonEscape(r.serial) + "\"";
             // ★ PUBLIC listing — the landing page renders this, so the serial comes out of the
             //   name. The setup and admin pages read the config API instead and keep the full one.

@@ -389,6 +389,9 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     auto B = [&](const char* k, bool& dst)        { if (getBool(j, k, b)) dst = b; };
 
     S("serial", r.serial); S("driver", r.driver); S("usbPath", r.usbPath); S("label", r.label);
+    // ★ This radio's own PIN — see RadioConfig::pin. Read AND written (below): a field in only one
+    //   of the two is the fault this file already records, and it is silent both ways.
+    S("pin", r.pin);
     S("antenna", r.antenna); S("antennaIcon", r.antennaIcon);
     B("enabled", r.enabled); B("configured", r.configured);
     I("port", r.port);
@@ -436,6 +439,7 @@ std::string radioToJson(const RadioConfig& r) {
     auto N = [&](const char* k, double v) { o += "\"" + std::string(k) + "\":" + num(v) + ","; };
     auto B = [&](const char* k, bool v)   { o += "\"" + std::string(k) + "\":" + (v ? "true" : "false") + ","; };
     S("serial", r.serial); S("driver", r.driver); S("usbPath", r.usbPath); S("label", r.label);
+    S("pin", r.pin);          // ★ see the reader above
     // ★ The aerial. Written HERE as well as read above — the setup page reads this writer, and
     //   the note further down records what a field in only one of them costs.
     S("antenna", r.antenna); S("antennaIcon", r.antennaIcon);
@@ -807,7 +811,14 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.place = s.place; c.country = s.country;
     c.locator = s.locator; c.lat = s.lat; c.lon = s.lon;
     c.mdnsAdvertise = s.mdnsAdvertise; c.mdnsName = s.mdnsName;
-    c.pin = s.pin; c.adminPass = s.adminPass;
+    /* ★★★ BOTH PINS TRAVEL, AND THE RADIO'S DOES NOT REPLACE THE MASTER. RadioConfig::pin has
+     *  existed since the per-radio config landed and was never read anywhere — the effective
+     *  config simply took the server's and the field sat there being written and ignored.
+     *  ★★ Either one opens THIS radio; only the master opens the others. Substituting instead of
+     *     adding would lock the master out of any radio that set its own, so "master" would be a
+     *     promise the code did not keep (Stuart's club: the committee holds the master, a member
+     *     licensed for HF holds only the HF radio's PIN). */
+    c.pin = s.pin; c.radioPin = r.pin; c.adminPass = s.adminPass;
     // ★ The radio's own limit, falling back to the machine-wide one a pre-per-radio
     //   config would have carried — so an existing server keeps the limit it had.
     c.sessionLimitMin = r.sessionLimitMin > 0 ? r.sessionLimitMin : s.sessionLimitMin;

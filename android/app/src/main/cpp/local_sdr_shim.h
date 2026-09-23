@@ -57,6 +57,10 @@ public:
      *  saved client bookmark would break with no visible cause. Set BEFORE start(). */
     static void setVibeServerPort(int port);
     static void setVibeServerAuth(const std::string& secret);
+    /** ★★★ A PIN FOR THIS RADIO ALONE, alongside the server's master. Either opens this radio;
+     *  only the master opens the others. Lets one machine share some radios freely and reserve
+     *  another — a club whose members are licensed for different bands, in Stuart's case. */
+    static void setVibeServerRadioAuth(const std::string& secret);
     // Server-side compatibility limits, for low-end hosts / slow networks. A
     // maxBandwidthHz <= 0 means "no cap"; maxFftRate <= 0 means "server default".
     // The client still interpolates the waterfall, so a throttled fps stays

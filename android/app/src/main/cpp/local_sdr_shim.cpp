@@ -804,6 +804,9 @@ vibedsp::RxPipeline::Mode rxModeFor(ModeParams::Kind k) {
 static std::atomic<bool>   g_serveOnLan{false};
 static std::mutex          g_vsMtx;
 static std::string         g_vsSecret;                 // empty = no PIN (open)
+/** ★ THIS radio's own PIN — see setVibeServerRadioAuth. Empty = the server's setting alone
+ *  decides, which is every installation that has not asked for per-radio PINs. */
+static std::string         g_vsRadioSecret;
 // Operator-chosen listen port. 0 = scan 48000..48049 for the first free one (historic behaviour).
 // Set explicitly, we use THAT port or fail loudly: silently drifting to another port breaks a
 // router port-forward or a saved bookmark, and "clients can't connect but the server says it's
@@ -14273,8 +14276,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
 
     bool vsAuthOk(const std::shared_ptr<net::Socket>& sock, const std::string& reqLine) {
-        std::string secret; { std::lock_guard<std::mutex> lk(g_vsMtx); secret = g_vsSecret; }
-        if (secret.empty()) return true;                 // open access
+        /* ★★★ TWO KEYS, EITHER OPENS THIS RADIO — see setVibeServerRadioAuth. The server's PIN is
+         *  the master and opens every radio; this radio's own PIN opens only this one. A listener
+         *  types ONE code and the server works out what it fits, which is what lets a club hand a
+         *  member exactly the radios they are licensed for. */
+        std::string secret, radioSecret;
+        { std::lock_guard<std::mutex> lk(g_vsMtx); secret = g_vsSecret; radioSecret = g_vsRadioSecret; }
+        if (secret.empty() && radioSecret.empty()) return true;   // open access
         std::string ip = sock->peerAddress();
         // THE MACHINE RUNNING THE SERVER NEVER NEEDS THE PIN. The PIN controls who on the NETWORK
         // may use your radio; the person sitting at the host is the operator who set it. Making
@@ -14289,8 +14297,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         std::string nonce = queryParam(reqLine, "vs_nonce");
         std::string token = queryParam(reqLine, "vs_auth");
-        if (!nonce.empty() && !token.empty() &&
-            g_vsAuthState.verify(secret, nonce, token)) {
+        /* ★ Both are tried, and a match on either is a pass. The verify() is a constant-time HMAC
+         *  compare on each; trying two costs nothing and leaks nothing about which one fitted. */
+        if (!nonce.empty() && !token.empty()
+            && ((!secret.empty()      && g_vsAuthState.verify(secret, nonce, token))
+             || (!radioSecret.empty() && g_vsAuthState.verify(radioSecret, nonce, token)))) {
             g_vsAuthState.recordOk(ip);
             return true;
         }
@@ -21472,6 +21483,17 @@ void LocalSdrShim::setVibeServerPort(int port) {
 }
 void LocalSdrShim::setVibeServerAuth(const std::string& secret) {
     std::lock_guard<std::mutex> lk(g_vsMtx); g_vsSecret = secret;
+}
+/** ★★★ THIS RADIO'S OWN PIN, BESIDE THE SERVER'S. Either opens this radio; the server's opens
+ *  every radio, which is what makes it the master key. Stuart's case is a club: the committee
+ *  holds the master, a member licensed for HF holds only the HF radio's PIN and types just that
+ *  one (2026-09-23).
+ *  ★★ SET, NOT SUBSTITUTED. If this replaced the server PIN then setting a radio PIN would lock
+ *     the master out of that radio, and "master" would be a promise the code did not keep.
+ *  ★ Empty = this radio adds no PIN of its own; the server's setting decides, exactly as before,
+ *    so nothing changes for anyone who never sets one. */
+void LocalSdrShim::setVibeServerRadioAuth(const std::string& secret) {
+    std::lock_guard<std::mutex> lk(g_vsMtx); g_vsRadioSecret = secret;
 }
 void LocalSdrShim::summonClient() {
     // "The person at the host is looking for you." Costs nothing when nobody is listening.

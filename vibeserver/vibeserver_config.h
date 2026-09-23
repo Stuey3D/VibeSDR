@@ -83,6 +83,9 @@ struct Config {
     int         maxRadiosPerIp = 1;    ///< see ServerConfig::maxRadiosPerIp
     std::string allowRanges, blockRanges;   ///< see RadioConfig::allowRanges
     std::string pin, adminPass;
+    /** ★★ THIS radio's own PIN, if the owner set one — see effectiveFor(). Empty for almost every
+     *  server. Either this or `pin` opens this radio; only `pin` opens the others. */
+    std::string radioPin;
     int         sessionLimitMin = 0;
     /** ★★ Minutes of no interaction after which an ADMIN session's controls re-lock. The
      *  session, its audio and any decoder keep running — only the ability to CHANGE anything
@@ -271,6 +274,17 @@ struct RadioConfig {
     std::string driver;      // "rtlsdr" | "sdrplay" | "airspyhf" | "hackrf" (experimental)
     std::string usbPath;     // physical socket, e.g. "1-2" — the tie-break when serials collide
     std::string label;       // what the owner calls it; shown to listeners
+    /** ★★★ A PIN FOR THIS RADIO ALONE. Empty for almost every server, and empty means "the
+     *  machine's own PIN setting decides", exactly as before — so nothing changes for anyone who
+     *  never sets one.
+     *  ★★ EITHER THIS OR THE SERVER'S MASTER OPENS THIS RADIO; only the master opens the others.
+     *     One machine can therefore share some radios freely and reserve another — a club whose
+     *     members hold different band allocations gives each the PIN for the radios they may use,
+     *     and the committee holds the master (Stuart, 2026-09-23).
+     *  ★★ SET AND CHANGED ONLY FROM THE SETUP PAGE, by an admin, and it persists until removed.
+     *  ★ A radio with a PIN does not contribute to the coverage this server advertises: a range
+     *    nobody can reach should not be drawing people to the listing. */
+    std::string pin;
     /** ★★★ WHAT IS ACTUALLY BOLTED TO THIS RADIO. A receiver publishes what the TUNER can do and
      *  never what the ANTENNA can do — and the antenna is what decides whether tuning somewhere is
      *  worth a visitor's time. The Pi's RTL is deliberately unlocked to 1.7 GHz and will honestly
