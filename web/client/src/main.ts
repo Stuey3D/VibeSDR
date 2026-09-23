@@ -4536,18 +4536,25 @@ function drawDoorPin(radios: any[]): void {
   if (!box) {
     box = document.createElement('div');
     box.id = 'splashRadioPin';
-    box.style.cssText = 'margin:10px auto 0;max-width:420px;padding:10px 12px;'
+    box.style.cssText = 'margin:10px auto 0;max-width:420px;padding:8px 12px;'
       + 'border:1px solid rgba(255,176,0,.35);border-radius:8px;'
-      + 'font:12px/1.6 ui-monospace,monospace;text-align:center';
+      + 'font:12px/1.5 ui-monospace,monospace;text-align:center';
+    /* ★★ EVERY DIMENSION IS STATED HERE, INLINE. Left to the page's own `#splash input` rule this
+     *    came out as a box the height of a card with the button underneath it — a PIN entry that
+     *    dominated the receiver list it is only a doorway to (Stuart, 2026-09-23: "the PIN box
+     *    doesnt have to be so massive"). An id-selector stylesheet rule beats a class, but nothing
+     *    beats an inline style, so the size is fixed here rather than fought for in the CSS. */
     box.innerHTML =
-        '<div style="opacity:.8">Some receivers here are private. If you have been given a PIN, '
-      + 'enter it and the ones it opens will become available.</div>'
-      + '<form id="splashRadioPinForm" style="display:flex;gap:8px;justify-content:center;margin-top:8px">'
+        '<div style="opacity:.8">Some receivers here are private — a PIN opens the ones it fits.</div>'
+      + '<form id="splashRadioPinForm" style="display:flex;flex-wrap:nowrap;align-items:center;'
+      + 'gap:8px;justify-content:center;margin-top:6px">'
       // ★ 16px, not smaller: below that iOS zooms the whole page in on focus and does not zoom
       //   back out — the same threshold the PIN field on the receiver page is sized for.
       + '<input id="splashRadioPinInput" type="password" inputmode="numeric" autocomplete="off" '
-      + 'spellcheck="false" placeholder="PIN" style="flex:0 1 140px;font-size:16px;text-align:center">'
-      + '<button type="submit" id="splashRadioPinGo">UNLOCK</button></form>'
+      + 'spellcheck="false" placeholder="PIN" style="flex:0 0 110px;width:110px;height:32px;'
+      + 'padding:0 8px;box-sizing:border-box;font-size:16px;line-height:32px;text-align:center">'
+      + '<button type="submit" id="splashRadioPinGo" style="flex:0 0 auto;height:32px;padding:0 14px;'
+      + 'box-sizing:border-box;font-size:12px;line-height:30px">UNLOCK</button></form>'
       + '<div id="splashRadioPinMsg" class="sub" style="margin-top:6px;font-size:11px;opacity:.75"></div>';
     host.insertAdjacentElement('beforebegin', box);
     const form = document.getElementById('splashRadioPinForm') as HTMLFormElement;
@@ -4575,17 +4582,40 @@ async function tryDoorPin(): Promise<void> {
   const radios: any[] = Array.isArray(dir?.radios) ? dir.radios : [];
   const locked = radios.filter((r) => radioGated(r));
 
-  // ★★ ONE AT A TIME. Each locked radio is its own process with its own brute-force backoff, and
-  //    firing every probe at once on a Pi that is also running the DSP is a burst it does not need
-  //    to carry for a code that is probably a typo.
+  /* ★★★ ONE QUESTION, NOT ONE PER RADIO. `/vibeserver/unlock` answers with the ids a PIN opens —
+   *     master or admin opens all of them, a radio's own PIN opens that one, a wrong PIN opens
+   *     nothing and says so without revealing which it nearly was. The loop below it opened a
+   *     WEBSOCKET per locked radio to find out, and on a free radio a socket momentarily counts as
+   *     a listener: a mistyped PIN made a burst of connect-and-refuse on somebody's server, which
+   *     is the very thing we are trying not to do to other people's machines (Stuart, 2026-09-23).
+   *  ★★ The probe stays as the fallback, because the unlock route lives on the FRONT DOOR: a
+   *     single-radio server has no handler and answers an empty list, which must not be read as a
+   *     wrong PIN. Empty means "ask the old way", not "no". */
   let opened = 0;
-  for (const r of locked) {
-    const id = radioKey(r);
-    if (!id) continue;
-    if (await pinOpensRadio(id, pin)) {
-      unlockedRadios.add(id);
-      rememberRadioPin(id, pin);
-      opened++;
+  let ids: string[] = [];
+  try {
+    const auth = await resolveAuth(P(''), pin);
+    if (auth?.query) {
+      const u = await fetch(P(`/vibeserver/unlock?${auth.query}`), { cache: 'no-store' });
+      const j = u.ok ? await u.json() : null;
+      ids = Array.isArray(j?.radios) ? j.radios.map(String) : [];
+    }
+  } catch { ids = []; }
+
+  if (ids.length) {
+    for (const id of ids) { unlockedRadios.add(id); rememberRadioPin(id, pin); opened++; }
+  } else {
+    // ★★ ONE AT A TIME. Each locked radio is its own process with its own brute-force backoff, and
+    //    firing every probe at once on a Pi that is also running the DSP is a burst it does not need
+    //    to carry for a code that is probably a typo.
+    for (const r of locked) {
+      const id = radioKey(r);
+      if (!id) continue;
+      if (await pinOpensRadio(id, pin)) {
+        unlockedRadios.add(id);
+        rememberRadioPin(id, pin);
+        opened++;
+      }
     }
   }
 

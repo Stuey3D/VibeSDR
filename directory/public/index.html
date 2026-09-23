@@ -886,6 +886,136 @@ function radioUrl(r, s) {
   return `https://${s.address}/r/${encodeURIComponent(r.id)}/?join=1`;
 }
 
+/* ══ PINS, ANSWERED HERE SO NOBODY'S SERVER COLLECTS THE FAILURES ═══════════════════════════════
+ * ★★★ THE DIRECTORY TAKES THE PIN FIRST. Stuart, 2026-09-23: "the directory takes the PIN code
+ *     first so that we dont bombard a users server … By confining the PIN entry to the directory
+ *     and only allowing the user into the server after correct entry it should prevent unwanted
+ *     connection attempts with someone trying to brute force it on the server itself." The prompt
+ *     was a line of failed connections an operator (John, the KiwiSDR one) had to show us before
+ *     we noticed we were making them. A visitor who mistypes a PIN here costs the operator ONE
+ *     request that never becomes a listener, and their log shows nothing at all.
+ * ★★★ NO PIN IS EVER ON THE WIRE, AND NONE IS EVER IN A URL. The server hands out a nonce; we send
+ *     back HMAC-SHA256(pin, nonce) as hex and nothing else, so what crosses the network cannot be
+ *     replayed against a different nonce and cannot be read back into a PIN. This is the SAME
+ *     scheme the app and the web client use (`src/services/vibeAuth.ts`, `web/client/src/auth.ts`)
+ *     — deliberately one scheme, because a second one is a second set of mistakes.
+ * ★★ ONE BOX, WHATEVER THE PIN OPENS. `/vibeserver/unlock` answers with the ids a PIN opens: every
+ *    radio for the master PIN (or the admin password), just its own for a radio PIN, and an empty
+ *    list for a wrong one — no oracle, so a guesser cannot even learn WHICH PIN they nearly had.
+ *    That is what makes the radio-club case work: one box, and the HF members see the HF radio.
+ * ★ The PIN lives in sessionStorage, keyed by address: it survives a filter change and the page's
+ *   own minute refresh, and it is gone when the tab closes. Nothing is written to localStorage.
+ */
+const PIN_OPEN = new Map();        // address -> { pin, ids:Set<string> }
+
+function pinStoreKey(addr) { return `vsDirPin:${addr}`; }
+
+function pinRestore(addr) {
+  if (PIN_OPEN.has(addr)) return PIN_OPEN.get(addr);
+  let v = null;
+  try { v = JSON.parse(sessionStorage.getItem(pinStoreKey(addr)) || 'null'); } catch (e) { v = null; }
+  const rec = v && v.pin && Array.isArray(v.ids) ? { pin: v.pin, ids: new Set(v.ids) } : null;
+  if (rec) PIN_OPEN.set(addr, rec);
+  return rec;
+}
+
+function pinRemember(addr, pin, ids) {
+  const rec = { pin, ids: new Set(ids) };
+  PIN_OPEN.set(addr, rec);
+  try { sessionStorage.setItem(pinStoreKey(addr), JSON.stringify({ pin, ids: [...rec.ids] })); }
+  catch (e) { /* private mode — the unlock still holds for this render */ }
+  return rec;
+}
+
+/** HMAC-SHA256(pin, nonce) as lowercase hex — the token every VibeServer door expects. */
+async function pinToken(pin, nonce) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(pin), { name: 'HMAC', hash: 'SHA-256' },
+                                            false, ['sign']);
+  const mac = await crypto.subtle.sign('HMAC', key, enc.encode(nonce));
+  return [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** A radio nobody here has opened yet. `pinLocked` is the server's word for "this one has a PIN". */
+function radioGated(r, s) {
+  if (!r || r.pinLocked !== true) return false;
+  const rec = s && s.address ? pinRestore(s.address) : null;
+  return !(rec && rec.ids.has(String(r.id)));
+}
+
+/** Does this server have anything a PIN would open? Drives whether the box is drawn at all. */
+function serverHasGated(s) {
+  return !!(s && (s.radios || []).some((r) => r && r.pinLocked === true));
+}
+
+/* ★★★ ASK ONCE, FOR THE WHOLE SERVER. The older shape of this idea probed radios one at a time
+ *     until one opened, which is exactly the flurry of refusals we are here to prevent — and on a
+ *     ten-radio server a wrong PIN made ten of them. `/vibeserver/unlock` is one question with one
+ *     answer, and it costs the server no listener slot either way. */
+async function tryServerPin(s, pin) {
+  const base = `https://${s.address}`;
+  const ch = await fetch(`${base}/vibeserver/auth`, { cache: 'no-store' }).then((r) => r.json());
+  if (!ch || !ch.nonce) throw new Error('no nonce');
+  const token = await pinToken(pin, ch.nonce);
+  const u = `${base}/vibeserver/unlock?vs_nonce=${encodeURIComponent(ch.nonce)}`
+          + `&vs_auth=${encodeURIComponent(token)}`;
+  const j = await fetch(u, { cache: 'no-store' }).then((r) => r.json());
+  const ids = Array.isArray(j && j.radios) ? j.radios.map(String) : [];
+  if (!ids.length) return 0;
+  pinRemember(s.address, pin, ids);
+  /* ★★ AND NOW ASK THE RADIO WHAT IT ACTUALLY IS. A locked radio publishes NOTHING about its
+   *    coverage to the directory — that is the point of "PIN protected radios do not contribute to
+   *    the Directory total coverage" — so until it is opened its card has no range to print. With
+   *    the PIN in hand we can ask the server directly and fill the card in, rather than showing a
+   *    receiver somebody has just unlocked as a blank. A failure here is not a failed unlock. */
+  try { await refreshUnlockedRadios(s); } catch (e) { /* the unlock stands regardless */ }
+  return ids.length;
+}
+
+/** Re-read the server's own radio list, so unlocked radios describe themselves.
+ *  ★ Verified on the Pi 500 (2026-09-23): `/vibeserver/radios` answers a locked radio's coverage
+ *    to anyone who asks it DIRECTLY — the suppression is in what a server publishes to the
+ *    DIRECTORY, which is what "PIN protected radios do not contribute to the total coverage"
+ *    means. The credentials below are therefore not needed today; they are sent so that this
+ *    keeps working on the day that endpoint is tightened, rather than quietly going blank. */
+async function refreshUnlockedRadios(s) {
+  const rec = pinRestore(s.address);
+  if (!rec) return;
+  const base = `https://${s.address}`;
+  const ch = await fetch(`${base}/vibeserver/auth`, { cache: 'no-store' }).then((r) => r.json());
+  if (!ch || !ch.nonce) return;
+  const token = await pinToken(rec.pin, ch.nonce);
+  const j = await fetch(`${base}/vibeserver/radios?vs_nonce=${encodeURIComponent(ch.nonce)}`
+                        + `&vs_auth=${encodeURIComponent(token)}`, { cache: 'no-store' })
+                  .then((r) => r.json());
+  const fresh = Array.isArray(j && j.radios) ? j.radios : [];
+  for (const f of fresh) {
+    if (!f || !rec.ids.has(String(f.id))) continue;          // only ones this PIN opened
+    const row = (s.radios || []).find((r) => String(r.id) === String(f.id));
+    if (row) Object.assign(row, f);
+  }
+}
+
+/* ★★ THE DOOR STILL CHECKS. Opening an unlocked card signs a FRESH nonce for that radio, so the
+ *    receiver verifies the PIN itself — the directory's yes is a courtesy to the operator's log,
+ *    never the thing that grants entry. The window is opened synchronously (a popup blocker will
+ *    not honour one opened after an await) and then pointed at the signed URL. */
+async function openUnlocked(r, s, win) {
+  const rec = pinRestore(s.address);
+  const url = radioUrl(r, s);
+  if (!rec || !url) { if (win) win.location = url || `https://${s.address}/`; return; }
+  try {
+    const base = `https://${s.address}/r/${encodeURIComponent(r.id)}`;
+    const ch = await fetch(`${base}/vibeserver/auth`, { cache: 'no-store' }).then((x) => x.json());
+    const token = ch && ch.nonce ? await pinToken(rec.pin, ch.nonce) : '';
+    if (win) win.location = ch && ch.nonce
+      ? `${url}&vs_nonce=${encodeURIComponent(ch.nonce)}&vs_auth=${encodeURIComponent(token)}`
+      : url;
+  } catch (e) {
+    if (win) win.location = url;      // ★ the receiver's own PIN box is the fallback, not an error
+  }
+}
+
 /* ══ WHAT A RECEIVER OFFERS ═══════════════════════════════════════════════════════════════════
  * ★★★ SAID OR NOT SHOWN, like everything else here: a badge is a fact the server published.
  *     `rawIq` is "off" | "local" | "public" — only PUBLIC reaches a directory visitor, so only
@@ -1075,9 +1205,27 @@ function radioLine(r, s) {
       ${etiquette}
       ${stateTxt ? `<div class="rcStateRow"><span class="rcState ${isFull ? 'full' : ''}${s && s.unreachable ? ' down' : ''}">${esc(stateTxt)}</span></div>` : ''}
     </div>`;
+  // ★★★ A LOCKED RADIO IS SHOWN, NOT HIDDEN — and it does not link anywhere. Hiding it would make
+  //     the server look smaller than it is and give a member of the club no way to reach the radio
+  //     they hold the PIN for; linking it would send a stranger to a door that refuses them, which
+  //     is precisely the failed connection this whole arrangement exists to avoid. So: greyed, a
+  //     padlock, and the PIN box above the list is the way in.
+  const url = radioUrl(r, s);
+  if (radioGated(r, s)) {
+    return `<div class="rcard rcLocked" title="This receiver needs a PIN — enter it above">
+        ${card.replace(/^<div class="rcard">/, '').replace(/<\/div>$/, '')}
+        <div class="rcStateRow"><span class="rcState locked">\u{1F512} PIN REQUIRED</span></div>
+      </div>`;
+  }
   // ★ The card opens ITS receiver — even a FULL one: the directory may be stale in either
   //   direction, and the receiver's own door is the one that knows. It bounces back if taken.
-  const url = radioUrl(r, s);
+  // ★★ An UNLOCKED one goes through openUnlocked, which signs a fresh nonce so the visitor lands
+  //    inside instead of meeting the receiver's own PIN box a second time.
+  if (url && r.pinLocked === true) {
+    return `<a class="rcLink" href="${esc(url)}" target="_blank" rel="noopener noreferrer"
+               data-unlocked="${esc(s.address)}|${esc(String(r.id))}"
+               title="Open this receiver — unlocked with the PIN you entered">${card}</a>`;
+  }
   return url ? `<a class="rcLink" href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="Open this receiver">${card}</a>` : card;
 }
 
