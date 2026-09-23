@@ -213,6 +213,7 @@ final class SpikeLink: ObservableObject {
   private(set) var pinForRetry = ""
   /// Take the receiver as its owner.
   func takeOver(_ password: String) {
+    noteActivity()
     (client as? UberClient)?.takeOverWithAdmin(password)
     serverBusy = false
   }
@@ -230,6 +231,96 @@ final class SpikeLink: ObservableObject {
     cooldownRefused = false; cooldownSecs = 0
     showSessionPill = false
     sessionNotice = nil
+    // ★ A door you walked back out of is a door you knock on again — see unlockedRadios.
+    unlockedRadios = []
+    radioPins = [:]
+  }
+
+  // ── Auto stop ────────────────────────────────────────────────────────────────
+  //
+  // ★★★ WHY THIS EXISTS (Stuart, verbatim): "with WatchOS 27 it is very easy to accidentally leave
+  //     Jr running in the background especially if you are on the internal speaker which may be
+  //     muted. You'd only be aware when the battery died prematurely." Jr holds a background-audio
+  //     grant on purpose — that is the wrist-down listening the whole app is built around — so
+  //     nothing in the system will ever stop it for you. The only cost of forgetting is the
+  //     battery, and the only evidence is a flat watch hours later.
+  //
+  // ★★ MINUTES, AS AN Int, AND NEVER MILLISECONDS. Below watchOS 27 `Int` is 32-BIT on arm64_32
+  //    (see the arm64_32 trap note): three hours in milliseconds is 10,800,000 which fits, but the
+  //    habit of storing durations in ms does not survive one careless multiply here. Minutes.
+  //
+  // ★★ AND THE DEADLINE COMES FROM THE WALL CLOCK, not `systemUptime`: the watch SLEEPS, and a
+  //    monotonic clock that stops counting while it does would let an app doze all afternoon and
+  //    still believe it had been idle for ninety seconds.
+
+  /// When the user last did anything at all. The auto-stop deadline is measured from here.
+  private var lastActivityAt = Date()
+  private var autoStopTimer: Timer?
+  /// ★ The app auto-stopped and the user has NOT been told yet. Published for the root overlay.
+  @Published var autoStopped = false
+  /// The same fact on disk. ★★★ THE NOTICE HAS TO SURVIVE THE APP DYING. Auto-stop happens with
+  /// the wrist DOWN, by definition — and a backgrounded watch app with no audio left to play is
+  /// precisely the thing watchOS reaps. If the notice lived only in memory the user would raise
+  /// their wrist to a cold launch and no explanation at all, which is the "it just stops randomly"
+  /// bug report this feature would otherwise CREATE.
+  private static let autoStoppedKey = "jrAutoStoppedNotice"
+
+  /// ANY user interaction resets the clock. Funnelled through here so there is one rule.
+  ///
+  /// ★★ Called from every command on this class (tune, zoom, volume, mute, mode, step, bandwidth,
+  ///    squelch, recall, chat, profile, the DAB setters, admin, radio choice), from the crown in
+  ///    ContentView, and from the scene going active. ★ A SERVER message is NOT activity: the
+  ///    point is to detect a listener who has walked away, and the stream keeps arriving whether
+  ///    or not anybody is listening to it.
+  func noteActivity() {
+    lastActivityAt = Date()
+  }
+
+  /// The user's choice, in minutes. 0 = Off.
+  var autoStopMinutes: Int { UserDefaults.standard.integer(forKey: "jrAutoStopMin") }
+
+  /// ★★★ A TIMER, NOT `driverTick`. driverTick is driven by ContentView's frame clock, which only
+  ///     runs while a screen is actually rendering — and the entire scenario this feature exists
+  ///     for is wrist-down, backgrounded, nothing rendering at all. A watchdog that only runs when
+  ///     you are looking at the app can never fire. 15 s is far finer than the coarsest option
+  ///     needs and costs nothing beside the 60 s battery timer it sits next to.
+  private func startAutoStopWatchdog() {
+    let t = Timer(timeInterval: 15, repeats: true) { [weak self] _ in
+      Task { @MainActor in self?.checkAutoStop() }
+    }
+    RunLoop.main.add(t, forMode: .common)
+    autoStopTimer = t
+  }
+
+  private func checkAutoStop() {
+    let mins = autoStopMinutes
+    guard mins > 0, !serverName.isEmpty, client != nil else { return }
+    // ★ Nothing to stop: the session is ALREADY over and one of these screens owns the ending.
+    //   Firing over the top would replace the server's explanation with ours.
+    guard !sessionEnded, !evicted, !serverBusy, !cooldownRefused, !autoStopped else { return }
+    let ours = Double(mins) * 60 - Date().timeIntervalSince(lastActivityAt)
+    // ★★★ A SERVER TIME LIMIT ALWAYS TAKES PRIORITY. When a HARD limit will run out before our
+    //     idle window does, we do not fire at all — the server gets there first and its own TIME
+    //     UP screen must own the ending, with its cooldown and its "try again in…". Two endings
+    //     racing would show whichever won, which is the worse of the two explanations half the
+    //     time and is not reproducible.
+    //  ★★ A SOFT limit is NOT an ending — passing zero there means "your guaranteed time is up,
+    //     you keep the radio" — so auto-stop keeps running on a soft-limited receiver. That is the
+    //     receiver where forgetting costs the most: it never throws you off.
+    if sessionSecsLeft >= 0, !sessionLimitSoft, Double(sessionSecsLeft) <= ours { return }
+    guard ours <= 0 else { return }
+    Vitals.crumb("AUTOSTOP after \(mins)m idle")
+    autoStopped = true
+    UserDefaults.standard.set(true, forKey: Self.autoStoppedKey)
+    // ★ REUSE THE ONE FULL STOP JR HAS. leaveServer drops audio and sockets and lands back on the
+    //   picker; a second teardown invented here would be the one that forgets something.
+    leaveServer()
+  }
+
+  /// The user has read the notice.
+  func clearAutoStopNotice() {
+    autoStopped = false
+    UserDefaults.standard.set(false, forKey: Self.autoStoppedKey)
   }
 
   /// Decide whether the pill is up, from the seconds remaining.
@@ -320,9 +411,9 @@ final class SpikeLink: ObservableObject {
   var supportsChat: Bool { (client?.supportsChat ?? false) || (vibe?.sharedDial ?? false) }
   /// True when that glyph should open the canned dial chat rather than the free-text one.
   var sharedDialChat: Bool { vibe?.sharedDial ?? false }
-  func sendChat(_ text: String) { client?.sendChat(text) }
+  func sendChat(_ text: String) { noteActivity(); client?.sendChat(text) }
   /// EXPLICIT profile switch from the profile menu — never automatic (etiquette).
-  func selectProfile(_ id: String) { client?.selectProfile(id) }
+  func selectProfile(_ id: String) { noteActivity(); client?.selectProfile(id) }
 
   // ── Band plan: NONE yet in the spike. Left blank; the label/edges simply don't draw. ──
   @Published var bandName = ""
@@ -420,6 +511,16 @@ final class SpikeLink: ObservableObject {
   private var stateTick = 0
 
   init() {
+    // ★★★ REGISTER THE AUTO-STOP DEFAULT, because `@AppStorage` NEVER WRITES ONE. The menu tile
+    //     declares `@AppStorage("jrAutoStopMin") = 60`, but that 60 lives inside the property
+    //     wrapper and only reaches UserDefaults when the user picks something. The watchdog has no
+    //     view, so it reads the raw defaults — and `integer(forKey:)` returns 0 for a key that was
+    //     never written, which in this setting means OFF. The feature would have shipped defaulting
+    //     to the exact opposite of its stated default, on every watch that never opened the menu.
+    UserDefaults.standard.register(defaults: ["jrAutoStopMin": 60])
+    // ★ The notice outlives the process on purpose (see autoStoppedKey) — pick it back up here so
+    //   a cold launch after being reaped still explains itself.
+    autoStopped = UserDefaults.standard.bool(forKey: Self.autoStoppedKey)
     // Sonar Green by default, baked into the buffer before the client draws anything.
     waterfall.setLUT(Self.sonarGreenLUT)
     waterfall.peakHold = true
@@ -515,6 +616,7 @@ final class SpikeLink: ObservableObject {
   /// Arm the owner's password on the picker, so the connection that follows goes in as admin —
   /// past the user limit and exempt from the time limit.
   func armAdmin(_ password: String) {
+    noteActivity()
     (client as? UberClient)?.proveAdminForConnect(password)
   }
   /// The radios behind a multi-radio VibeServer's front door — empty unless there is a choice.
@@ -524,10 +626,31 @@ final class SpikeLink: ObservableObject {
   @Published var radioChoiceName = ""
 
   /// Pass the listener's choice down to the client, which then connects.
-  func chooseRadio(_ r: VibeRadio) {
-    (client as? UberClient)?.chooseRadio(r)
+  func chooseRadio(_ r: VibeRadio, pin: String = "") {
+    (client as? UberClient)?.chooseRadio(r, pin: pin)
     radioChoices = []
+    noteActivity()
   }
+
+  /// Radios whose PIN has been accepted DURING THIS SESSION.
+  ///
+  /// ★★★ NOT PERSISTED, AND DELIBERATELY. A PIN on a radio is the owner saying "not everybody" —
+  ///     remembering the unlock on the watch would turn that into "not everybody, once". The
+  ///     front-door PIN is saved against a favourite because it is the credential you need to
+  ///     reach the server at all; this is a second door inside, and it is re-asked for.
+  /// ★ Cleared on leaveServer and on every `start()`, so the next server's radio ids can never
+  ///   inherit an unlock from the last one — ids are per-server and "rtl0" is on half of them.
+  @Published var unlockedRadios: Set<String> = []
+  /// The verified PIN for each unlocked radio, so choosing it can carry the right credential.
+  private var radioPins: [String: String] = [:]
+  func markRadioUnlocked(_ id: String, pin: String) {
+    unlockedRadios.insert(id)
+    radioPins[id] = pin
+  }
+  func pinForRadio(_ id: String) -> String { radioPins[id] ?? "" }
+  /// The credential this connection already holds — tried silently against a locked radio before
+  /// anybody is asked to type, so a MASTER PIN opens every radio with no prompt at all.
+  var currentPin: String { pinForRetry }
   /// What we last connected to, so a PIN entered at the prompt can retry it.
   private(set) var lastConnect: (url: String, host: String, type: ServerType, name: String)?
 
@@ -558,6 +681,13 @@ final class SpikeLink: ObservableObject {
     serverName = name
     lastConnect = (url, host, type, name)
     needsPin = false
+    // ★ Connecting IS a user action, so the idle clock starts here and any stale auto-stop notice
+    //   goes: they have plainly read it, or they would not be back.
+    noteActivity()
+    clearAutoStopNotice()
+    // ★ Radio ids are per-server ("rtl0" is on half of them) — an unlock must never cross.
+    unlockedRadios = []
+    radioPins = [:]
     // ★ Admin belongs to the SESSION, not to the watch. Carried into a new connection it would
     //   claim an exemption this server has never granted — and hide a countdown that is running.
     adminOk = false
@@ -638,7 +768,7 @@ final class SpikeLink: ObservableObject {
     mode = c.mode
     updateBand()
 
-    if !booted { booted = true; startBatteryMonitor(); startPathMonitor() }
+    if !booted { booted = true; startBatteryMonitor(); startPathMonitor(); startAutoStopWatchdog() }
     c.start()
   }
 
@@ -1016,6 +1146,7 @@ final class SpikeLink: ObservableObject {
   private var tuneFlushScheduled = false
 
   func tune(delta: Int) {
+    noteActivity()
     pendingTune += delta
     guard !tuneFlushScheduled else { return }
     tuneFlushScheduled = true
@@ -1031,41 +1162,45 @@ final class SpikeLink: ObservableObject {
     }
   }
 
-  func zoom(delta: Int) { client?.zoom(delta: delta) }
+  func zoom(delta: Int) { noteActivity(); client?.zoom(delta: delta) }
 
   /// LOCAL volume nudge — cosmetic (see `volume`). One detent = one 1/16 step, matching the
   /// companion's quantisation so the meter feels the same.
   func volume(delta: Int) {
+    noteActivity()
     volume = min(1, max(0, volume + Double(delta) / 16))
     if !muted { client?.setVolume(volume) }   // drives the engine's real output gain
   }
 
   func setMuted(_ m: Bool) {
+    noteActivity()
     muted = m
     client?.setVolume(m ? 0 : volume)          // real mute/unmute, not just a glyph
   }
 
   func setMode(_ m: String) {
+    noteActivity()
     client?.setMode(m)
     mode = client?.mode ?? mode
   }
 
   var isOwrx: Bool { client is OwrxClient }   // for the OWRX-specific tutorial line
 
-  func setStep(_ hz: Double) { step = hz }
-  func setDabScale(_ s: Double) { client?.setDabScale(s); dabScale = s }
+  func setStep(_ hz: Double) { noteActivity(); step = hz }
+  func setDabScale(_ s: Double) { noteActivity(); client?.setDabScale(s); dabScale = s }
   /// ★ Enter or leave DAB. `dabActive` is set optimistically so the screen changes on the tap
   ///   rather than a second later when the first `dab` message lands — a watch button that does
   ///   nothing for a second reads as a watch button that did not work.
-  func setDabMode(_ on: Bool) { client?.setDabMode(on); dabActive = on; if !on { dabProgrammes = [] } }
-  func stepDabBlock(_ delta: Int) { client?.stepDabBlock(delta) }
+  func setDabMode(_ on: Bool) { noteActivity(); client?.setDabMode(on); dabActive = on; if !on { dabProgrammes = [] } }
+  func stepDabBlock(_ delta: Int) { noteActivity(); client?.stepDabBlock(delta) }
   /// ★ Absolute, for the picker — see the protocol note on why a delta is wrong there.
-  func setDabBlockIndex(_ index: Int) { client?.setDabBlockIndex(index) }
-  func selectDabService(_ id: Int) { client?.selectDabService(id) }
+  func setDabBlockIndex(_ index: Int) { noteActivity(); client?.setDabBlockIndex(index) }
+  func selectDabService(_ id: Int) { noteActivity(); client?.selectDabService(id) }
 
   /// Passband edges (Hz offsets from carrier). Pushed to the server + mirrored to filtLo/filtHi
   /// (which drive the VFO's dashed sideband lines).
   func setBandwidth(_ low: Double, _ high: Double) {
+    noteActivity()
     client?.setBandwidth(low, high)
     filtLo = low; filtHi = high
   }
@@ -1085,6 +1220,7 @@ final class SpikeLink: ObservableObject {
 
   /// Absolute tune, from the numpad.
   func tune(toHz hz: Double) {
+    noteActivity()
     client?.tuneTo(hz)
     frequency = client?.frequency ?? frequency
   }
@@ -1105,6 +1241,7 @@ final class SpikeLink: ObservableObject {
   /// Recall a bookmark: retune + set demod on the CURRENT server. NEVER switches an OWRX profile —
   /// if the frequency is outside the window tunable right now, refuse and warn rather than clamp.
   func recall(_ b: Bookmark) {
+    noteActivity()
     guard canTune(b.frequency) else { notify("Frequency Range Not Available"); return }
     if !b.mode.isEmpty, b.mode != mode { setMode(b.mode) }
     tune(toHz: b.frequency)
@@ -1220,6 +1357,7 @@ final class SpikeLink: ObservableObject {
   /// `pos`: 0..1 needle position on the signal bar; < 0 = off. Converted to whatever unit this
   /// backend's gate speaks (see sqlScale).
   func setSquelch(_ pos: Double) {
+    noteActivity()
     sql = pos < 0 ? -1 : min(1, pos)
     let s = sqlScale
     // ★ The needle sits on the TRIMMED scale; the gate wants the real level (see visualGainDb).

@@ -320,6 +320,7 @@ struct ControlMenu: View {
   @State private var showProfiles = false
   private var activeProfileName: String { link.profiles.first(where: { $0.active })?.name ?? "—" }
   @State private var showWrist = false
+  @State private var showAutoStop = false
   @State private var showBw = false
   @State private var showSquelch = false
   @State private var showBookmarks = false
@@ -328,6 +329,15 @@ struct ControlMenu: View {
   /// Wrist-down spectrum timeout (seconds; 0 = never drop, keep it running at the cost of
   /// battery). ContentView reads the SAME key to time its suspend. See wristOptions.
   @AppStorage("jrWristTimeout") private var wristTimeout = 30.0
+  /// ★★★ AUTO STOP — minutes of NO USER INTERACTION after which Jr disconnects and sleeps
+  /// (0 = Off). Stuart: "with WatchOS 27 it is very easy to accidentally leave Jr running in the
+  /// background especially if you are on the internal speaker which may be muted. You'd only be
+  /// aware when the battery died prematurely."
+  /// ★★ MINUTES as an Int, never milliseconds — `Int` is 32-BIT on arm64_32 below watchOS 27.
+  /// ★★ The SAME default is ALSO registered in SpikeLink.init(). An @AppStorage default is never
+  ///    written to UserDefaults, and the watchdog has no view to read it through — see the note
+  ///    there. Change one and you must change the other.
+  @AppStorage("jrAutoStopMin") private var autoStopMin = 60
 
   private let cols = Array(repeating: GridItem(.flexible(), spacing: 5), count: 2)
 
@@ -445,6 +455,10 @@ struct ControlMenu: View {
           // Wrist-down spectrum timeout — battery vs "always live". Off keeps the waterfall running
           // with the wrist down (costs power); the timed options drop it after N and reconnect on return.
           tile(name: "WRIST DOWN", value: wristLabel, h: h) { showWrist = true }
+          // AUTO STOP — beside WRIST DOWN because they are the same worry from two ends: that one
+          // decides how long the SPECTRUM survives a glance away, this one how long the whole
+          // SESSION survives being forgotten. Wrist-down saves the radio; this saves the battery.
+          tile(name: "AUTO STOP", value: autoStopLabel, h: h) { showAutoStop = true }
 
           // (RTL-SDR hardware controls live on their OWN button top-left of the waterfall screen — see
           // ContentView — so this grid stays uncluttered for the remote backends that have no dongle.)
@@ -553,6 +567,16 @@ struct ControlMenu: View {
         showWrist = false; dismiss()
       }
     }
+    .sheet(isPresented: $showAutoStop) {
+      PickerList(title: "Auto stop",
+                 items: Self.autoStopOptions.map(\.label),
+                 current: autoStopLabel) { label in
+        if let mins = Self.autoStopOptions.first(where: { $0.label == label })?.mins {
+          autoStopMin = mins
+        }
+        showAutoStop = false; dismiss()
+      }
+    }
     .sheet(isPresented: $showBw) {
       BandwidthView().environmentObject(link)
     }
@@ -582,6 +606,17 @@ struct ControlMenu: View {
   static let wristOptions: [(label: String, secs: Double)] = [
     ("Off", 0), ("30s", 30), ("60s", 60), ("90s", 90), ("3m", 180), ("5m", 300),
   ]
+  /// Auto-stop steps. ★ "Off" LAST, unlike wristOptions: there the common answer is a short
+  /// grace period and Off is exotic, whereas here Off is the thing you pick once you have decided
+  /// you would rather risk the battery — it belongs at the end of a list you read downwards.
+  static let autoStopOptions: [(label: String, mins: Int)] = [
+    ("30m", 30), ("1h", 60), ("2h", 120), ("3h", 180), ("Off", 0),
+  ]
+  private var autoStopLabel: String {
+    ControlMenu.autoStopOptions.first(where: { $0.mins == autoStopMin })?.label
+      ?? "\(autoStopMin)m"
+  }
+
   private var wristLabel: String {
     ControlMenu.wristOptions.first(where: { $0.secs == wristTimeout })?.label
       ?? "\(Int(wristTimeout))s"

@@ -199,6 +199,18 @@ struct ContentView: View {
   /// PIN prompt for a VibeServer that wants one. Driven by `link.needsPin`, so it
   /// appears however the user connected — discovered, favourite or typed IP.
   @State private var pinEntry = ""
+  // ── Per-radio PIN (a door INSIDE the front door) ──────────────────────────
+  /// The locked radio we are asking for a PIN for. nil = not asking.
+  /// ★ A radio can have a PIN OF ITS OWN, separate from the server's. `r.pinLocked` says so; the
+  ///   unrelated `r.locked` means a fixed tuning centre and is nothing to do with credentials.
+  @State private var pinRadio: VibeRadio? = nil
+  @State private var radioPinEntry = ""
+  /// ★★ ONE FAILURE STRING FOR EVERY FAILURE. A wrong PIN and a radio that is not there say
+  ///    exactly the same thing: anything finer is an oracle for which ids exist and how close a
+  ///    guess was, and on a 41 mm screen a count of remaining attempts is nagging, not help.
+  @State private var radioPinFailed = false
+  /// True while a verify is in flight, so the button cannot be hammered into a lockout.
+  @State private var radioPinChecking = false
   /// ★ Cleared the instant it is submitted — the same rule as the PIN and the phone's box.
   @State private var adminPass = ""
   @EnvironmentObject var favs: FavStore
@@ -767,17 +779,42 @@ link.setAutoContrast(wfAutoContrast)
               // ★ Unknown stays tappable. A radio that has not answered is not a radio in use.
               let busy = link.radioBusy[r.id] == true
               // ★ A radio Jr has no controls for is shown greyed and says why (BRIEF-v11 §7).
+              // ★★★ A PIN-LOCKED RADIO STAYS LISTED. Hiding it would be the worse lie: somebody
+              //     who knows the PIN would conclude the radio had been removed, and the owner
+              //     would be debugging a server that is working perfectly. It is shown, it says
+              //     what it wants, and the tap asks for it instead of connecting.
+              let needsRadioPin = r.pinLocked && !link.unlockedRadios.contains(r.id)
               let blocked = (busy && !link.adminArmed) || r.unsupported
               Button {
-                link.chooseRadio(r)
+                // ★★ TRY THE CREDENTIAL WE ALREADY HOLD FIRST, silently. A MASTER PIN — the front
+                //    door's own, already typed to reach this list — opens every radio behind it,
+                //    and making its holder re-type it per radio would be a prompt that exists only
+                //    because we did not ask. Verified, never assumed: only the server knows
+                //    whether the door's PIN carries this far.
+                if needsRadioPin {
+                  beginRadioUnlock(r)
+                } else {
+                  link.chooseRadio(r, pin: link.pinForRadio(r.id))
+                }
               } label: {
                 VStack(alignment: .leading, spacing: 2) {
-                  Text(r.label).font(.system(size: 15, weight: .medium))
+                  HStack(spacing: 4) {
+                    if needsRadioPin {
+                      Image(systemName: "lock.fill")
+                        .font(.system(size: 11)).foregroundStyle(.orange)
+                    }
+                    Text(r.label).font(.system(size: 15, weight: .medium))
+                  }
                   // ★ The summary is what lets someone choose WITHOUT opening a radio and taking
                   //   a seat on it to find out what it is.
                   Text(r.summary)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                  if needsRadioPin {
+                    Text("PIN required")
+                      .font(.system(size: 10, weight: .semibold))
+                      .foregroundStyle(.orange)
+                  }
                   if r.unsupported {
                     Text("Unsupported SDR \u{2014} update VibeSDR Jr")
                       .font(.system(size: 10, weight: .semibold))
@@ -806,6 +843,15 @@ link.setAutoContrast(wfAutoContrast)
           //   compile failure rather than a slow build.
           RadioPickerAdminSection(link: link)
         }
+      }
+      // ★ Attached to the CHOOSER's own content, not beside it: a second sheet on the same view
+      //   as the one already up does not present on watchOS, and the radio list is modal with no
+      //   way out but choosing — so the PIN box has to arrive from inside it.
+      .sheet(item: $pinRadio) { r in
+        RadioPinSheet(radio: r, failed: $radioPinFailed, checking: $radioPinChecking,
+                      entry: $radioPinEntry,
+                      onSubmit: { submitRadioPin(r, $0) },
+                      onCancel: { pinRadio = nil })
       }
       .interactiveDismissDisabled(true)
     }
@@ -882,6 +928,9 @@ link.setAutoContrast(wfAutoContrast)
 
       lastDetent = detent
       crownUsedAt = Date()          // in use — the idle timeout must not fire
+      // ★ …and the AUTO-STOP clock too. Same signal, a much longer fuse: this one is not asking
+      //   "is the crown still in play", it is asking "is anybody still there at all".
+      link.noteActivity()
       // ★ TOUCHING THE CROWN MEANS YOU HAVE SEEN IT. The time-limit notice expires on
       // its own, but a listener who is already reaching for the crown has read it and
       // wants the screen back — waiting out a timer they did not know about is the
@@ -972,6 +1021,10 @@ link.setAutoContrast(wfAutoContrast)
       // ★ Record the REAL scene state up front — this is the honest "is the wrist up" signal the
       // warning/glyph logic needs, independent of the lagging status string (see deliberatelyPaused).
       link.sceneActive = (phase == .active)
+      // ★ RAISING YOUR WRIST IS BEING THERE. Without this the auto-stop clock would keep running
+      //   through a listener who is watching the waterfall and touching nothing — which on a quiet
+      //   band is most of the session.
+      if phase == .active { link.noteActivity() }
       // ★ SUSPENDED OR KILLED? A log that ends on one of these lines was put to sleep; one that
       //   stops mid-tick was terminated. That distinction is the whole point of the last-breath
       //   file, and it costs one crumb per scene change.
@@ -1305,10 +1358,60 @@ link.setAutoContrast(wfAutoContrast)
   /// And the X goes opposite it so your hand isn't covering the way out.
   /// Double-Tap handler: rotate the crown through Tune → Zoom → Volume. Same idle timeout as the
   /// menu (crownUsedAt reset → the 30s lapse in the driver reverts to Tune). Ignored when locked.
+  // ── Per-radio PIN helpers ───────────────────────────────────────────────────
+  /// Whether this server is reached over TLS, for the verify call.
+  private var radioTls: Bool {
+    let u = link.lastConnect?.url ?? ""
+    return u.hasPrefix("https") || u.hasPrefix("wss")
+  }
+
+  /// Tapped a locked radio: try the credential we already hold, and only ask if it does not open it.
+  private func beginRadioUnlock(_ r: VibeRadio) {
+    radioPinFailed = false
+    let master = link.currentPin
+    guard !master.isEmpty else { radioPinEntry = ""; pinRadio = r; return }
+    radioPinChecking = true
+    Task {
+      let ok = await FrontDoor.verifyPin(host: link.lastConnect?.host ?? "", tls: radioTls,
+                                         radioId: r.id, pin: master)
+      radioPinChecking = false
+      if ok {
+        link.markRadioUnlocked(r.id, pin: master)
+        link.chooseRadio(r, pin: master)
+      } else {
+        radioPinEntry = ""
+        pinRadio = r
+      }
+    }
+  }
+
+  /// A typed PIN. ★★★ VERIFIED WITHOUT OPENING A STREAM — `/vibeserver/auth/verify` claims no
+  /// listener slot, so a wrong guess costs the owner nothing and a shared dial is not dragged
+  /// about on the way past. See FrontDoor.verifyPin.
+  private func submitRadioPin(_ r: VibeRadio, _ pin: String) {
+    guard !pin.isEmpty, !radioPinChecking else { return }
+    radioPinFailed = false
+    radioPinChecking = true
+    Task {
+      let ok = await FrontDoor.verifyPin(host: link.lastConnect?.host ?? "", tls: radioTls,
+                                         radioId: r.id, pin: pin)
+      radioPinChecking = false
+      if ok {
+        radioPinEntry = ""
+        pinRadio = nil
+        link.markRadioUnlocked(r.id, pin: pin)
+        link.chooseRadio(r, pin: pin)
+      } else {
+        radioPinFailed = true
+      }
+    }
+  }
+
   private func cycleCrownMode() {
     guard !locked else { return }
     crownMode = crownMode.nextPrimary
     crownUsedAt = Date()
+    link.noteActivity()
     WKInterfaceDevice.current().play(.click)
   }
 
@@ -2495,6 +2598,57 @@ private struct RadioPickerAdminSection: View {
           //   wrong one simply connects you as an ordinary listener.
           Text("Applied when you pick a receiver. A wrong password just connects you normally.")
             .font(.system(size: 9)).foregroundStyle(.secondary)
+        }
+      }
+    }
+  }
+}
+
+/// PIN entry for a radio that has one of its own.
+///
+/// ★★★ THE SAME IDIOM AS EVERY OTHER PIN BOX JR HAS — the server PIN sheet a few hundred lines up
+///     and InstancePickerView.vibePinSheet. A second style of credential entry on a 41 mm screen
+///     would read as a different KIND of secret, and the whole point is that it is the same kind:
+///     a PIN, typed, checked by the server.
+/// ★★ ONE FAILURE STRING. Wrong PIN and no-such-radio say exactly this, with no count of tries and
+///    no hint of which radios exist — the refusal is deliberately uninformative, and the server's
+///    own lockout (see resolveVibeAuth) is what actually stops guessing.
+/// ★ Its own View rather than inlined, for the reason the sibling admin section already carries:
+///   the chooser sheet is at the limit of what the SwiftUI type-checker will solve, and going over
+///   it is a COMPILE FAILURE, not a slow build.
+private struct RadioPinSheet: View {
+  let radio: VibeRadio
+  @Binding var failed: Bool
+  @Binding var checking: Bool
+  @Binding var entry: String
+  let onSubmit: (String) -> Void
+  let onCancel: () -> Void
+
+  private var typed: String { entry.trimmingCharacters(in: .whitespaces) }
+
+  var body: some View {
+    NavigationStack {
+      List {
+        Section("PIN — \(radio.label)") {
+          TextField("PIN", text: $entry)
+            .font(.system(size: 18, design: .rounded))
+            .multilineTextAlignment(.center)
+          if failed {
+            Text("That PIN was not accepted.")
+              .font(.system(size: 11)).foregroundStyle(.orange)
+          }
+          Button {
+            onSubmit(typed)
+          } label: {
+            Text(checking ? "Checking…" : "Unlock")
+              .font(.system(size: 15, weight: .semibold))
+              .frame(maxWidth: .infinity)
+          }
+          // ★ Disabled WHILE CHECKING as well as while empty: each rejected attempt walks the
+          //   server closer to locking this watch out, so a double tap must not spend two.
+          .disabled(typed.isEmpty || checking)
+          Button("Cancel") { onCancel() }
+            .font(.system(size: 12)).tint(.gray)
         }
       }
     }

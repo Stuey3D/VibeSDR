@@ -67,6 +67,12 @@ func sdrTutorialTips(isOwrx: Bool) -> [TutorialTip] {
     //    longer ends the session. Without this line the app appears to have no off switch, and
     //    the user's only recourse is force-quitting it.
     .init(icon: "stop.circle.fill", text: "Audio **keeps playing** when you lower your wrist or press the crown. To stop it and free the receiver, use **Stop** in the menu."),
+    // ★★★ AND SAY THAT IT STOPS ITSELF. This tip sits directly under the one above because the two
+    //     are halves of one fact: audio survives everything, so the app WILL run all day if you
+    //     forget it — and on a muted internal speaker the first you would know is a flat battery.
+    //     A user who does not know about this reads the disconnection as a fault. AGENTS.md: when
+    //     a control exists, the copy that tells the user where it is must exist too.
+    .init(icon: "moon.zzz.fill", text: "If you don't touch anything for a while, Jr **stops on its own** to save battery — **1 hour** by default. Change it under **Auto Stop** in the menu."),
     .init(icon: "antenna.radiowaves.left.and.right", text: "The **connection pill** shows how you're connected and the link quality to the server."),
     // ★ Explains a deliberate behaviour that would otherwise read as poor quality: with Automatic
     //   Link Management on we OPEN SLOWER on purpose, because connection setup is the moment a
@@ -322,6 +328,34 @@ struct WristSDRApp: App {
           refusalScreen(title: "PLEASE WAIT",
                         body: "You have just had a turn on this shared receiver.",
                         note: "Try again in \(link.cooldownText).")
+        }
+        // ★★★ AUTO-STOPPED — LAST in this chain, so a SERVER's ending always wins the screen. The
+        //     server's refusals carry a cooldown and a "try again"; ours carries only an apology,
+        //     and showing it over the top of TIME UP would replace the useful explanation with the
+        //     useless one.
+        // ★★ At the ROOT for the same reason as the others: it happened while the wrist was down,
+        //    so there is no telling which screen is behind it — waterfall, DAB, ADS-B or FM-DX.
+        // ★ Its own card rather than refusalScreen's, because the two buttons there are wrong
+        //   here: nothing refused us, so "Try again" has nothing to retry — the way on is the
+        //   servers list, which is already what dismissing lands on.
+        else if link.autoStopped {
+          ScrollView {
+            VStack(spacing: 8) {
+              Image(systemName: "moon.zzz.fill").font(.system(size: 22)).foregroundColor(.orange)
+              Text("STOPPED").font(.system(size: 17, weight: .bold)).foregroundColor(.orange)
+              Text("Jr stopped listening because nothing was touched for a while, to save your battery.")
+                .font(.system(size: 11)).foregroundColor(.white.opacity(0.75))
+                .multilineTextAlignment(.center)
+              Text("Change or switch this off under AUTO STOP in the menu.")
+                .font(.system(size: 11)).foregroundColor(.white.opacity(0.55))
+                .multilineTextAlignment(.center)
+              Button("OK") { link.clearAutoStopNotice() }
+                .font(.system(size: 13, weight: .semibold)).tint(.orange)
+            }
+            .padding(14)
+          }
+          .background(.black.opacity(0.92))
+          .transition(.opacity)
         }
       }
       // First card on APP OPEN — the Return-to-App setting behind wrist-down listening. Then each screen

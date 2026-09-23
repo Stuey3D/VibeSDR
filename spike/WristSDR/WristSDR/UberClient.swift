@@ -1607,8 +1607,14 @@ final class UberClient: ObservableObject {
   ///
   /// ★ Clearing the list is what dismisses the chooser, so it happens FIRST: leaving it up while
   ///   the sockets open would let a second tap choose a different radio mid-connect.
-  func chooseRadio(_ r: VibeRadio) {
+  /// ★★ `pin` is the RADIO's own credential, already verified against
+  ///    `/vibeserver/auth/verify` by the picker. Empty means "carry on with whatever credential
+  ///    this connection already holds" — which is how a MASTER PIN keeps working: the front door's
+  ///    PIN is already in `vibePin`, the picker found it opened this radio, and there is nothing
+  ///    new to set. Only a radio with a DIFFERENT PIN of its own arrives here with one.
+  func chooseRadio(_ r: VibeRadio, pin: String = "") {
     radioPath = "/r/\(r.id)"
+    if !pin.isEmpty { vibePin = pin }
     // ★★ Choosing a radio the picker has just labelled "in use · you can take it", holding the
     //    password, is the deliberate act — the row said so before it was tapped. A free radio
     //    displaces nobody, so it does not ask for the permission.
@@ -3049,9 +3055,9 @@ final class UberClient: ObservableObject {
         return false
       }
       // HMAC key = the PIN bytes, message = the nonce's ASCII-hex STRING (not decoded), lowercase hex out.
-      let mac = HMAC<SHA256>.authenticationCode(for: Data(nonce.utf8), using: SymmetricKey(data: Data(vibePin.utf8)))
-      let token = mac.map { String(format: "%02x", $0) }.joined()
-      authSuffix = "&vs_nonce=\(nonce)&vs_auth=\(token)"
+      // ★★ THE SUM LIVES IN FrontDoor NOW, because the per-radio PIN check is a second reader of
+      //    the same wire format and a copy of it here would be free to drift. Behaviour unchanged.
+      authSuffix = FrontDoor.authSuffix(pin: vibePin, nonce: nonce)
       needsPin = false
       return true
     } catch {
