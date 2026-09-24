@@ -404,6 +404,13 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     // ★ The SOCKET and the rule that picks it — distinct from `antenna`, the description below.
     S("antennaPort", r.antennaPort); S("antennaMap", r.antennaMap);
     B("antennaPortLocked", r.antennaPortLocked);
+    /* ★★★ AND THE REST OF THE dx FRONT END, AT THE RADIO LEVEL TOO. These reached the top-level
+     *  Config and the two merge helpers but NOT this pair of radio serialisers, so on a machine
+     *  with more than one radio they were never written into the radio's own entry and never read
+     *  back — set, saved, and gone. Exactly the shape AGENTS.md names: one rule, two readers, and
+     *  only one of them updated. `rfNotch` two fields down is the template they should have
+     *  followed from the start. */
+    B("rspHdr", r.rspHdr); B("rspAmNotch", r.rspAmNotch); B("rspExtRef", r.rspExtRef);
     S("antenna", r.antenna); S("antennaIcon", r.antennaIcon);
     B("enabled", r.enabled); B("configured", r.configured);
     I("port", r.port);
@@ -455,6 +462,13 @@ std::string radioToJson(const RadioConfig& r) {
     S("pin", r.pin);          // ★ see the reader above
     S("antennaPort", r.antennaPort); S("antennaMap", r.antennaMap);
     B("antennaPortLocked", r.antennaPortLocked);
+    /* ★★★ AND THE REST OF THE dx FRONT END, AT THE RADIO LEVEL TOO. These reached the top-level
+     *  Config and the two merge helpers but NOT this pair of radio serialisers, so on a machine
+     *  with more than one radio they were never written into the radio's own entry and never read
+     *  back — set, saved, and gone. Exactly the shape AGENTS.md names: one rule, two readers, and
+     *  only one of them updated. `rfNotch` two fields down is the template they should have
+     *  followed from the start. */
+    B("rspHdr", r.rspHdr); B("rspAmNotch", r.rspAmNotch); B("rspExtRef", r.rspExtRef);
     // ★ The aerial. Written HERE as well as read above — the setup page reads this writer, and
     //   the note further down records what a field in only one of them costs.
     S("antenna", r.antenna); S("antennaIcon", r.antennaIcon);

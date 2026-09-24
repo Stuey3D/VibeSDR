@@ -2756,6 +2756,32 @@ async function renderHw() {
         <em>starting</em> state &mdash; the receiver sets them from the frequency being received
         from the first retune onward. Untick it below to control them by hand.</div>
 
+      <!-- ★★★ THE REST OF THE dx FAMILY'S FRONT END. These are the same class of switch as the two
+           notches above and are persisted in the same config, but only the app and the browser
+           could reach them: the owner had no way to say what a receiver should come up with.
+           ★ Shown to every RSP, because this page is written once for the driver and the RADIO is
+             the thing that refuses what it does not have — the live panels hide what is absent. -->
+      <label style="display:flex;align-items:center;gap:10px;margin-top:18px">
+        <input type="checkbox" id="rspAmNotch" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>Medium-wave notch (RSPdx family)</span></label>
+      <div class="hint">A separate filter from the broadcast notch above, on the dx and dx-R2 only:
+        it cuts the medium-wave band ahead of the tuner. Useful on a wire antenna after dark, when
+        a local MW transmitter is what is overloading the front end. <b>Never on to listen to MW</b>
+        &mdash; it removes exactly that.</div>
+
+      <label style="display:flex;align-items:center;gap:10px;margin-top:14px">
+        <input type="checkbox" id="rspHdr" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>HDR mode below 2 MHz (RSPdx family)</span></label>
+      <div class="hint">The high dynamic range path, which the hardware handles itself. It is for
+        exactly the case a long wire creates on medium wave and below: several strong broadcast
+        signals at once, where the front end runs out of headroom before any one of them is loud.</div>
+
+      <label style="display:flex;align-items:center;gap:10px;margin-top:14px">
+        <input type="checkbox" id="rspExtRef" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>24 MHz reference output</span></label>
+      <div class="hint">Puts this radio's clock out on the reference connector, for locking a second
+        receiver to it. Leave it off unless something is plugged into that socket.</div>
+
       <label style="display:flex;align-items:center;gap:10px;margin-top:18px">
         <input type="checkbox" id="rspDabDecim" style="width:16px;height:16px;accent-color:var(--amber)">
         <span>DAB through the API's decimation (flat ensemble)</span></label>
@@ -2938,6 +2964,11 @@ async function renderHw() {
   //     The notches belong to the radio that HAS them, and the inconsistency sat one line apart.
   if ($("rfNotch")) $("rfNotch").checked = !!radio().rfNotch;
   if ($("dabNotch")) $("dabNotch").checked = !!radio().dabNotch;
+  // ★ The rest of the dx family's front end, saved and restored exactly like the two notches —
+  //   the note above is about a field that reached one of these lists and not the other.
+  if ($("rspAmNotch")) $("rspAmNotch").checked = !!radio().rspAmNotch;
+  if ($("rspHdr")) $("rspHdr").checked = !!radio().rspHdr;
+  if ($("rspExtRef")) $("rspExtRef").checked = !!radio().rspExtRef;
   // ★ DEFAULTS TO ON, so an undefined must read as ticked — see userNotch below for why `!!` is
   //   the wrong test for a setting whose default is true.
   // ★ OFF by default now — see g_rspRfAgc. `!!` is the right test again.
@@ -3757,6 +3788,9 @@ function collectRadio() {
     //   be storing a setting that can never apply — the config would describe a radio we are not.
     ...($("rfNotch")  ? {rfNotch:  $("rfNotch").checked}  : {}),
     ...($("dabNotch") ? {dabNotch: $("dabNotch").checked} : {}),
+    ...($("rspAmNotch") ? {rspAmNotch: $("rspAmNotch").checked} : {}),
+    ...($("rspHdr")     ? {rspHdr:     $("rspHdr").checked}     : {}),
+    ...($("rspExtRef")  ? {rspExtRef:  $("rspExtRef").checked}  : {}),
     ...($("rfAgc") ? {rfAgc: $("rfAgc").checked} : {}),
     ...($("rspDabDecim") ? {rspDabDecim: $("rspDabDecim").checked} : {}),
     ...($("agcSet") ? {agcSet: +$("agcSet").value} : {}),
