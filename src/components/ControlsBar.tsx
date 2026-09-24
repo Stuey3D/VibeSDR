@@ -216,9 +216,16 @@ export function meterText(mode: 'snr' | 'smeter' | 'dbfs', m: MeterValues): stri
  *     time, two hours out, and nothing on screen was ever going to put him right.
  *  ★★★ THE ZONE ABBREVIATION IS THE LABEL. The row already ended in one, so swapping the listener's
  *      for the receiver's costs NO extra width — which is what kills the "Server 18:13" idea that
- *      would clip this line. On a UK receiver it still reads "18:13 BST" and is correct; on Kiko's
- *      it reads "14:13 -03", which is unmistakably not your own clock. No glyph needed: a symbol
- *      has to be learnt, and -03 is already how radio writes this.
+ *      would clip this line. On a UK receiver it still reads "18:13 BST"; on Kiko's it reads
+ *      "14:13 -03", which is unmistakably not your own clock.
+ *  ★★★ AND IT NEEDS THE GLYPH AFTER ALL. This note used to argue the opposite — "no glyph needed:
+ *      a symbol has to be learnt". The abbreviation only distinguishes the two clocks when the two
+ *      zones DIFFER: on a UK listener with a UK receiver the row reads "22:07 UTC · 23:07 BST" and
+ *      nothing says which half is whose, and on a receiver whose box is set to UTC it reads
+ *      "22:07 UTC · 22:07 UTC" and looks simply broken (Stuart, 2026-09-24, on the Lenovo — whose
+ *      zone really was Etc/UTC). The symbol does not have to be learnt here: it is the SAME rack
+ *      glyph already sitting in the stats row of this very bar, next to the phone glyph, where it
+ *      has always meant "the server end".
  *  ★ Falls back to the phone's clock when the server has not said (an older build), so the row is
  *    never blank — but it is then labelled with the PHONE's zone, which is the honest reading. */
 function useClock(tzOffsetMin?: number | null, tzAbbr?: string) {
@@ -235,7 +242,8 @@ function useClock(tzOffsetMin?: number | null, tzAbbr?: string) {
   if (tzOffsetMin === null || tzOffsetMin === undefined) {
     const local = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
     const tz    = now.toLocaleDateString([], { timeZoneName: 'short' }).split(', ')[1] || '';
-    return `${utc} UTC  ·  ${local} ${tz}`;
+    // ★ The PHONE's clock — so no server glyph: claiming this came from the receiver would be a lie.
+    return { utc: `${utc} UTC`, srv: `${local} ${tz}`, fromServer: false };
   }
   /* ★ Shift UTC by the receiver's offset and read it back in UTC: that gives its wall clock without
    *  needing an IANA zone name or the phone's tz database, and it is right for the half-hour and
@@ -246,7 +254,21 @@ function useClock(tzOffsetMin?: number | null, tzAbbr?: string) {
   const label = tzAbbr || (tzOffsetMin === 0 ? 'UTC'
     : (tzOffsetMin > 0 ? '+' : '-') + String(Math.floor(mins / 60)).padStart(2, '0')
       + (mins % 60 ? ':' + String(mins % 60).padStart(2, '0') : ''));
-  return `${utc} UTC  ·  ${hhmm} ${label}`;
+  return { utc: `${utc} UTC`, srv: `${hhmm} ${label}`, fromServer: true };
+}
+
+/** The clock row: UTC, then the RECEIVER's wall clock behind the rack glyph that means "server end"
+ *  everywhere else in this bar. */
+function ClockRow({ clock, color, font, size }:
+    { clock: { utc: string; srv: string; fromServer: boolean }; color: string; font?: string; size: number }) {
+  return (
+    <View style={pm.clockRow}>
+      <Text numberOfLines={1} style={{ color, fontFamily: font, fontSize: size }}>{clock.utc}</Text>
+      <Text numberOfLines={1} style={{ color, fontFamily: font, fontSize: size, opacity: 0.6 }}>·</Text>
+      {clock.fromServer ? <ServerGlyph color={color} /> : null}
+      <Text numberOfLines={1} style={{ color, fontFamily: font, fontSize: size }}>{clock.srv}</Text>
+    </View>
+  );
 }
 
 // ── SVG paths (from mockup HTML) ──────────────────────────────────────────────
@@ -729,6 +751,7 @@ const pm = StyleSheet.create({
   phoneGlyph: { width: 8, height: 13, borderWidth: 1, borderRadius: 2,
                 alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 1.5 },
   phoneDot:   { width: 2.5, height: 1.5, borderRadius: 1 },
+  clockRow:   { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1, minWidth: 0 },
   serverGlyph:{ width: 13, height: 11, borderWidth: 1, borderRadius: 2,
                 justifyContent: 'space-evenly', paddingHorizontal: 2 },
   serverLine: { height: 1, borderRadius: 0.5 },
@@ -1062,9 +1085,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
             printed straight through the icons and the rate ("the clock is clipping the status
             icons", Stuart, 2026-09-20). Shrinking is what should give when the row is tight. */}
         <View style={{ flex: 1, minWidth: 0, flexShrink: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <Text numberOfLines={1} style={[por.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT, flexShrink: 1 }]}>
-            {clock}
-          </Text>
+          <ClockRow clock={clock} color={t.clockColor} font={t.font} size={CLOCK_FONT} />
           {/* Time-limited receiver: how long before the server drops us. */}
           {adminMode ? (
             <Text style={{ color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT,
@@ -1316,10 +1337,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
             out of the tuning column in the first place). */}
       <View style={lnd.statusRow}>
         <View style={lnd.statusSide}>
-          <Text numberOfLines={1}
-                style={[lnd.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
-            {clock}
-          </Text>
+          <ClockRow clock={clock} color={t.clockColor} font={t.font} size={CLOCK_FONT} />
           <View style={[lnd.recRow, !isRecording && { opacity: 0 }]} pointerEvents="none">
             <View style={lnd.recDot} />
             <Text style={[lnd.recTime, { fontFamily: t.font, fontSize: CLOCK_FONT }]}>
