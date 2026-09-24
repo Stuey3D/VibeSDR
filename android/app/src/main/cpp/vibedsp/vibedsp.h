@@ -2221,13 +2221,33 @@ private:
     std::thread specThread_;
     std::mutex  specM_;
     std::condition_variable specCv_;
-    std::vector<cf32>  specWork_;            // the window in flight — the worker's while specBusy_
-    std::vector<float> specDone_;            // its result — the DSP thread's once specReady_
+    /* ★★★ A QUEUE, NOT ONE SLOT — ONE SLOT COST THE 32-BIT BOXES HALF THEIR WATERFALL.
+     *
+     *  feed() is called once per audio block (48000/1536 = 31.2 times a second) and processes the
+     *  WHOLE block in one pass, so the emit points inside it — 60 a second in SIGNAL time at
+     *  15 fps x FFT_AVG — happen microseconds apart in WALL time. With a single slot the worker was
+     *  still 8 ms into the first FFT when the second window arrived, so the second was dropped,
+     *  every feed, for ever: submitted 31.2/s of 60 emit points, busydrop 28.9/s, and the wide
+     *  spectrum pinned at 31.2/FFT_AVG = 7.8 fps whatever anyone asked for (measured on the Pi 2,
+     *  2026-09-24). It was never load: the FFT measured 8.06 ms at fftSize 16384 and the worker sat
+     *  at 25 % of one core, able to do ~124/s.
+     *  ★★ Draining harder does NOT fix it — there is nothing ready yet when the second window
+     *     arrives. The frames have to WAIT somewhere, which is what this queue is for.
+     *  ★ Mirrors the demod worker's kDemodQ ring deliberately: one pattern in this file, not two.
+     *    4 deep covers a whole feed's worth of emit points with room spare; beyond that a drop is
+     *    honest (the worker really is behind) and still counted in specDropped_. */
+    static constexpr int kSpecQ = 4;         // windows in flight
+    std::vector<cf32>  specWork_[kSpecQ];    // a window awaiting its FFT
+    std::vector<float> specDone_[kSpecQ];    // its result, once computed
+    enum : uint8_t { SPEC_FREE = 0, SPEC_PENDING = 1, SPEC_READY = 2 };
+    uint8_t specSlot_[kSpecQ] = { SPEC_FREE, SPEC_FREE, SPEC_FREE, SPEC_FREE };
+    int   specWr_ = 0, specCp_ = 0, specRd_ = 0;   // write / compute / read cursors, each in order
     int   specWorkN_ = 0;
-    bool  specBusy_ = false, specReady_ = false, specStop_ = false;
+    bool  specStop_ = false;
     std::atomic<unsigned> specDropped_{0};
     void startSpecThread_();
     void stopSpecThread_();
+    void drainSpecQueue_();                  // deliver every finished frame, oldest first
     // ── the optional demod worker — see setDemodThread ──
     static constexpr int kDemodQ = 4;        // channel blocks in flight
     bool demodThreadWant_ = false, demodOn_ = false;
