@@ -12584,6 +12584,16 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   $<HTMLButtonElement>('rspRfNotch').hidden  = !caps?.rfNotch;
   $<HTMLButtonElement>('rspDabNotch').hidden = !caps?.dabNotch;
   $<HTMLButtonElement>('rspBiasT').hidden    = !caps?.biasT;
+  /* ★★★ THE REST OF THE FRONT END, WHICH ONLY THE PHONE HAD. Each is drawn ONLY where the radio
+   *  reports it: an RSP1A gets none of these and an RSPdx-R2 gets all four. A control that is
+   *  present but inert teaches the listener the FEATURE is broken (AGENTS.md). */
+  $<HTMLButtonElement>('rspAmNotch').hidden = !caps?.amNotch;
+  $<HTMLButtonElement>('rspHdr').hidden     = !caps?.hdr;
+  $<HTMLButtonElement>('rspExtRef').hidden  = !caps?.extRef;
+  setToggleTo('rspAmNotch', !!caps?.amNotchOn, 'rsp_amnotch');
+  setToggleTo('rspHdr',     !!caps?.hdrOn,     'rsp_hdr');
+  setToggleTo('rspExtRef',  !!caps?.extRefOn,  'rsp_extref');
+  renderRspAntenna(caps);
   renderRspVals();
   applyRspLock();   // the panel has only just been built; nothing has applied the lock to it yet
   // ★ The radio has just told us what it is — which is also the moment to tell it what the
@@ -12596,6 +12606,38 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   // ★ AFTER the gr.min above, which has just been reset to the radio's own floor — the OWNER's
   //   ceiling is a second, tighter floor and must be re-applied or the panel rebuild loses it.
   applyIfGainCap();
+}
+
+/** ★★★ THE AERIAL SELECTOR, BUILT FROM WHAT THE RADIO SAYS IT HAS.
+ *
+ *  Never from a model name: an RSP2 has A / B / Hi-Z, a dx A / B / C, a Duo names its tuners, and
+ *  every other RSP has one aerial and no choice to offer. With fewer than two ports the whole row
+ *  hides — a "choice" of one is not a control.
+ *  ★★ The owner may PIN it (antennaLocked), in which case the buttons are shown and disabled with
+ *     the reason visible, rather than removed: a listener who cannot see the control concludes the
+ *     receiver has no aerial switch, and asks for one that is already there.
+ *  ★ Rebuilt on every caps message, because the port the radio is ON can change under us — another
+ *    listener on a shared receiver, or the per-band map following the dial. */
+function renderRspAntenna(caps: import('./spectrum').RadioCaps | null) {
+  const row = $<HTMLElement>('rowRspAntenna');
+  const seg = $<HTMLElement>('rspAntSeg');
+  const ports = Array.isArray(caps?.antennas) ? caps!.antennas! : [];
+  row.hidden = ports.length < 2;
+  $<HTMLElement>('rspAntLocked').hidden = !caps?.antennaLocked;
+  if (row.hidden) { seg.innerHTML = ''; return; }
+  // ★ Same admin test the rest of this panel uses — see rspRestricted: the password only matters
+  //   on a shared receiver that has one, and `adminUnlocked` is this session's answer to it.
+  const locked = !!caps?.antennaLocked && !(srvAdminProtected ? adminUnlocked : true);
+  seg.innerHTML = '';
+  for (const port of ports) {
+    const b = document.createElement('button');
+    b.className = 'btn' + (port === caps?.antenna ? ' on' : '');
+    b.textContent = port;
+    b.disabled = locked;
+    b.title = locked ? 'The owner has pinned the aerial for this receiver' : `Switch to aerial ${port}`;
+    b.onclick = () => { if (!locked) rspSend({ antenna: port }); };
+    seg.appendChild(b);
+  }
 }
 
 function rspSend(msg: Record<string, unknown>) {
@@ -12808,9 +12850,13 @@ function tweenIfGr(target: number) {
 const RSP_PREFS = {
   lna: 'rspLna', ifgr: 'rspIfGr', agcset: 'rspAgcSet',
 } as const;
+/* ★ KEY = THE WIRE WORD, value = the element. Adding a row here is the whole wiring: the click
+ *  handler, the remembered preference and the push-on-reconnect all read this table. The three new
+ *  ones are hidden unless the radio reports them (see applyRspCaps), so a radio without them never
+ *  shows a dead button — and never has one pushed at it either. */
 const RSP_TOGGLES = {
   ifagc: 'rspIfAgc', rfagc: 'rspRfAgc', rfnotch: 'rspRfNotch', dabnotch: 'rspDabNotch',
-  biast: 'rspBiasT',
+  biast: 'rspBiasT', amnotch: 'rspAmNotch', hdr: 'rspHdr', extref: 'rspExtRef',
 } as const;
 
 /** Push every current RSP setting to the server. Called whenever a radio announces itself,

@@ -4090,6 +4090,16 @@ select.btn { padding: 6px 8px; }
       <input type="range" id="rspAgcSet" min="-72" max="-10" value="-30">
       <span class="val" id="rspAgcSetVal">—</span>
     </div>
+    <!-- ★★★ THE AERIAL. GitHub #29 (bower01, RSPdx-R2): "Didn't find the antenna switch either in
+         the admin panel, either in the receiver panel." It was then built for the PHONE only, so
+         the browser client still had none — and the browser is the client nobody has to install.
+         ★★ Built from what the RADIO reports (caps.antennas), never from a model name: an RSP2 has
+            A / B / Hi-Z, a dx has A / B / C, a Duo names tuners. The row hides itself on a radio
+            with one aerial rather than offering a choice of one. -->
+    <div class="mrow" id="rowRspAntenna" hidden>
+      <label>ANTENNA<span id="rspAntLocked" hidden style="color:var(--amber);font-size:0.8em"> · OWNER</span></label>
+      <div class="seg" id="rspAntSeg"></div>
+    </div>
     <div class="mrow" id="rowRspNotch">
       <label>FILTERS<span id="notchOwner" hidden style="color:var(--amber);font-size:0.8em"> · AUTO</span></label>
       <div class="seg">
@@ -4101,6 +4111,11 @@ select.btn { padding: 6px 8px; }
         <button class="btn" id="rspRfNotch" title="Broadcast notch — covers MW and FM. Wanted ON elsewhere in the spectrum, where a strong local broadcast transmitter is what overloads the front end, and OFF when MW or FM is what you came to hear">RF NOTCH</button>
         <button class="btn" id="rspDabNotch" title="DAB band notch, same reasoning as the FM notch">DAB NOTCH</button>
         <button class="btn" id="rspBiasT" title="Bias-T — powers an active antenna or a mast-head amplifier">BIAS-T</button>
+        <!-- ★ Hidden unless the radio HAS it: the AM notch is an RSPdx/dx-R2 part, and a dead
+             button teaches the listener the feature is broken rather than absent. -->
+        <button class="btn" id="rspAmNotch" hidden title="MW notch — cuts the medium-wave broadcast band, separate from the RF notch">AM NOTCH</button>
+        <button class="btn" id="rspHdr" hidden title="High dynamic range — the dx family's path below 2 MHz, where a strong medium-wave signal is what overloads the front end">HDR</button>
+        <button class="btn" id="rspExtRef" hidden title="24 MHz reference output — for locking another receiver to this one's clock">24 MHz REF</button>
       </div>
     </div>
   </div>

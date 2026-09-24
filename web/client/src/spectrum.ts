@@ -179,6 +179,24 @@ export interface RadioCaps {
   rfNotch?: boolean;
   dabNotch?: boolean;
   biasT?: boolean;
+  /* ── SDRplay, the rest of the front end (2026-09-25) ───────────────────────────────────────
+   * ★★★ THESE REACHED THE APP AND NOT THE BROWSER. The antenna selector, HDR, the AM notch and
+   *  the reference output were built for GitHub #29 and wired into the phone's hardware panel
+   *  only, so every listener on the web client — the one client nobody has to install — still had
+   *  an RSPdx with no way to choose its aerial. Stuart, 2026-09-25: "make sure vibeserver inside
+   *  android and everywhere else also has all the new controls for sdrplay and airspy".
+   * ★★ Presence and STATE are separate fields throughout, exactly as the switches above: a radio
+   *    that lacks HDR gets no HDR button rather than a dead one (AGENTS.md — never offer a control
+   *    whose every use is a no-op), and only the radio knows which it is. */
+  antennas?: string[];      // the ports this model actually has; <2 = nothing to choose
+  antenna?: string;         // the one selected now
+  antennaLocked?: boolean;  // the owner pinned it — admin only
+  hdr?: boolean;            // has the dx family's high-dynamic-range path
+  hdrOn?: boolean;
+  amNotch?: boolean;        // has the MW notch (separate from the broadcast RF notch)
+  amNotchOn?: boolean;
+  extRef?: boolean;         // has a 24 MHz reference output
+  extRefOn?: boolean;
   // ── Airspy HF+ ────────────────────────────────────────────────────────────
   attSteps?: number;      // count of attenuator positions (9 = 0..8)
   // ★ HackRF (EXPERIMENTAL): three MANUAL stages and no AGC. `amp`/`lna`/`vga`/`biast` are the
