@@ -1463,6 +1463,9 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerLanding(
         g_runtimeConfig.landingFreq > 0 ? g_runtimeConfig.landingFreq : g_runtimeConfig.freq,
         g_runtimeConfig.demodMode);
+    // ★ And the multiplex it was left on, so a DAB receiver comes back as a DAB receiver rather
+    //   than on the DAB frequency in the default mode — see setVibeServerDabChannel.
+    LocalSdrShim::setVibeServerDabChannel(g_runtimeConfig.dabChannel);
 
     // ── ★★★ mDNS: ADVERTISE THE NAME THE OWNER CHOSE ────────────────────────────────────────
     // This was STORED and never acted on — main.cpp never called startMdns at all, so the Linux
@@ -2204,6 +2207,7 @@ int main(int argc, char** argv) {
             r.lockFreq = next.lockFreq; r.lockRate = next.lockRate;
             r.gain = next.gain; r.lnaState = next.lnaState; r.ifGr = next.ifGr; r.ifAgc = next.ifAgc;
             r.demodMode = next.demodMode; r.landingFreq = next.landingFreq;
+            r.dabChannel = next.dabChannel;   // the mux this radio was left on, so DAB survives a restart
             r.users = next.users; r.maxBw = next.maxBw; r.maxFps = next.maxFps;
             r.fftRate = next.fftRate; r.uncompressed = next.uncompressed;
             r.releaseWhenIdle = next.releaseWhenIdle;

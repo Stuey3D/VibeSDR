@@ -10357,11 +10357,22 @@ const styles = StyleSheet.create({
                      opacity: 0.85 },
   // ★ paddingHorizontal + borderWidth here = the receiver name's paddingRight in WaterfallView
   //   (styles.stationId). They share a right-hand text column; change one, change both.
+  /* ★★★ SMALLER THAN IT WAS. This is a STANDING notice, not an alert — it sits there for the whole
+   *  session — and it was sized like an alert: a 22pt countdown under a full-width caption, wide
+   *  enough on a phone to run over the Advanced RDS panel's own header (Stuart, 2026-09-24: "that
+   *  guaranteed time ends in box is huge ... on the phone app it clips over the top of the
+   *  advanced RDS box ... it needs to be smaller").
+   * ★★ The CAPTION is what made it wide, not the number. "GUARANTEED TIME ENDS IN" at 1.5 letter
+   *    spacing is 23 characters of tracking-out; the thing anyone actually reads is "28:01".
+   *    So the caption drops a point and loses most of its spacing, and the number comes down from
+   *    22 to 16 — still the largest thing in the card, and still legible at arm's length.
+   * ★ The iPad and the Mac have the room, but one size that fits the phone is better than a
+   *   breakpoint here: the card is the same card and a second size is a second thing to keep. */
   rxClock:     { position: 'absolute', zIndex: 210,
-                 paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10,
+                 paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8,
                  borderWidth: 1, backgroundColor: 'rgba(8,6,2,0.72)', alignItems: 'flex-end' },
-  rxClockCap:  { fontFamily: 'Nixie One', fontSize: 9, letterSpacing: 1.5 },
-  rxClockNum:  { fontFamily: 'Nixie One', fontSize: 22, lineHeight: 26 },
+  rxClockCap:  { fontFamily: 'Nixie One', fontSize: 8, letterSpacing: 0.6 },
+  rxClockNum:  { fontFamily: 'Nixie One', fontSize: 16, lineHeight: 19 },
   // ★ The soft-limit "expired" line is a sentence, not a number — it cannot use the 22pt face.
   rxClockSoft: { fontFamily: 'Nixie One', fontSize: 11, lineHeight: 15, maxWidth: 150 },
   // ★ Quieter than the countdown beneath it: the clock is about YOU, this is about the room.

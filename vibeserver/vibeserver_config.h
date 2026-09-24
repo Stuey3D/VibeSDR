@@ -172,6 +172,17 @@ struct Config {
      *  trusted ("the AGC on that is good enough" — Stuart). 1 = locked, 0/-1 = listener's choice. */
     int    agcLock = -1;
     std::string demodMode = "am";        // landing mode for a new listener
+    /* ★★★ THE MULTIPLEX THIS RECEIVER WAS LEFT ON, so DAB survives a RESTART and not merely the
+     *  last listener leaving. The in-memory note (g_dabWantChannel) already puts the next listener
+     *  back on the mux — but it dies with the process, so an app the TV backgrounded, an apt
+     *  upgrade or an APK install came back on the DAB frequency in the DEFAULT mode: WFM. Stuart,
+     *  2026-09-24: "I left the Sony TV in DAB mode came back and it was on the DAB frequency but
+     *  had reverted to WFM". The frequency survived because `freq` is persisted and the intent was
+     *  not — one half of the state written to disk and the other half kept in RAM.
+     *  ★ -1 = not a DAB receiver just now. CLEARED when somebody deliberately switches DAB off,
+     *    which is a person saying "I do not want this" — the same distinction the memory note
+     *    draws, and it must survive a restart too or the receiver argues with them after a reboot. */
+    int    dabChannel = -1;
     double landingFreq = 0;              // 0 = same as freq
 
     // Listeners and ceilings
@@ -362,6 +373,7 @@ struct RadioConfig {
     double freq = 9'410'000, rate = 2'400'000, lockFreq = 0, lockRate = 0;
     int    gain = -1, lnaState = -1, ifGr = -1, ifAgc = -1;
     std::string demodMode = "am";
+    int    dabChannel = -1;              // the mux this radio was left on — see Config::dabChannel
     double landingFreq = 0;
     int    users = 1;
     /* ★★★ 20, NOT 15 — 15 WAS A RATE NOBODY COULD CHOOSE (2026-09-24). The setup page offers

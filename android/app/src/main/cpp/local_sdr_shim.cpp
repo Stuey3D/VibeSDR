@@ -12533,6 +12533,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *  distinction the old unconditional teardown could not draw: leaving on purpose
                  *  and simply going away are different answers. */
                 g_dabWantChannel.store(-1, std::memory_order_relaxed);
+                vsPersist("{\"dabChannel\":-1}");   // ★ and on disk: "no" must outlive the process too
                 g_dabMode.store(false);
                 dabPrimed_ = false;
                 stopDabClock();
@@ -17512,6 +17513,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *     re-applied when somebody arrives. */
                 g_dabWantChannel.store(g_dabChannel.load(std::memory_order_relaxed),
                                        std::memory_order_relaxed);
+                /* ★★★ AND TO DISK, OR IT SURVIVES ONLY THE LISTENER, NOT THE PROCESS. The atomic
+                 *  above dies with the server, so an app the TV backgrounded, an apt upgrade or an
+                 *  APK install came back on the DAB frequency — `freq` IS persisted — in the
+                 *  default mode, WFM. Stuart, 2026-09-24: "I left the Sony TV in DAB mode came back
+                 *  and it was on the DAB frequency but had reverted to WFM". Half the state was
+                 *  written down and half was not, so the receiver came back contradicting itself. */
+                vsPersist("{\"dabChannel\":"
+                          + std::to_string(g_dabWantChannel.load(std::memory_order_relaxed)) + "}");
                 LOGI("[DAB] last listener left — remembering block %d and restoring the receiver; "
                      "the next listener is put back on it",
                      g_dabWantChannel.load(std::memory_order_relaxed));
@@ -23546,6 +23555,13 @@ void LocalSdrShim::setConfigPersistHandler(ConfigPersistFn fn) {
 }
 void LocalSdrShim::setVibeServerSavedFrontEnd(int lnaState, int ifGr, int ifAgc) {
     g_vsSavedLna.store(lnaState); g_vsSavedIfGr.store(ifGr); g_vsSavedIfAgc.store(ifAgc);
+}
+/** ★★★ THE MULTIPLEX THIS RECEIVER WAS LEFT ON, restored from the config at startup.
+ *  Without this the remembered mux lived only as long as the process, so DAB came back as WFM
+ *  after any restart — see the note where it is stored. -1 = not a DAB receiver just now. */
+void LocalSdrShim::setVibeServerDabChannel(int ch) {
+    g_dabWantChannel.store(ch >= 0 ? ch : -1, std::memory_order_relaxed);
+    if (ch >= 0) LOGI("[DAB] this receiver was last left on block %d — the first listener resumes it", ch);
 }
 void LocalSdrShim::setConfigured(bool on) { g_vsConfigured.store(on); }
 void LocalSdrShim::setNativeSetup(bool on) { g_vsNativeSetup.store(on); }

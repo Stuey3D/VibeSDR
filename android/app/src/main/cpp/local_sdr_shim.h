@@ -592,6 +592,9 @@ public:
     /** Has the owner finished browser setup? Distinct from "an admin password is set" — the
      *  wizard makes that mandatory, so it can no longer stand in for this. Drives the
      *  unconfigured landing page, and gates mDNS so an unconfigured server is never discovered. */
+    /** The multiplex this receiver was left on (-1 = none), restored from the config at startup so
+     *  DAB survives a restart and not merely the last listener leaving. */
+    static void setVibeServerDabChannel(int ch);
     static void setConfigured(bool on);
 
     /** ★★★ THIS PLATFORM SETS ITSELF UP IN ITS OWN WINDOW, so the browser setup wizard must not
