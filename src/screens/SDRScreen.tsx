@@ -1100,7 +1100,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       //    the gain — and it lives in the same per-device blob. Older blobs have no field → off.
       const sql = typeof prefs.squelch === 'number' ? Math.max(-100, prefs.squelch) : -100;
       hwSquelchRef.current = sql;
-      const nrLvl = 0, notch = false;
+      /* ★ Restored now, not forced to zero — see the note on the save. The defaults keep the old
+       *  behaviour for a blob written before this, and for a radio nobody has set them on. */
+      const nrLvl = typeof prefs.nrLevel === 'number' ? Math.max(0, Math.min(20, prefs.nrLevel)) : 0;
+      const notch = prefs.notch === true;
       /* ★★★ AND THE FM TREATMENTS, WHICH RESET ON EVERY LAUNCH BECAUSE NOTHING SAVED THEM.
        *  Defaults match the useState defaults above, so a blob written before this existed — or a
        *  radio nobody has set these on — behaves exactly as it did. They are pushed to the radio
@@ -1236,10 +1239,20 @@ export default function SDRScreen({ route, navigation }: Props) {
        *    session detail — exactly like de-emphasis beside them. NR level and auto-notch stay out
        *    deliberately (see below): those are a response to conditions right now. */
       fmNr: fmNr, fmIms: fmIms, fmCeq: fmCeq, fmNb: fmNb, fmNbx: fmNbx, fmAutoBw: fmAutoBw,
+      /* ★★★ AND NOW NR AND THE AUTO-NOTCH TOO — because they are VISIBLE. They were deliberately
+       *  session-scoped, and the reason was sound: "if a user forgets theyve enabled it they dont
+       *  know its on and wonders why the audio sounds funny" (Stuart, 2026-09-24). NR artefacts do
+       *  sound like a broken receiver, and coming back to an invisible one is a fault report
+       *  waiting to happen.
+       *  ★★ What changed is not the risk assessment, it is the SCREEN: the status row now shows
+       *     NR / NB / AN whenever they are on, and tapping the badge opens the sheet that turns
+       *     them off. The objection was never to remembering — it was to remembering in silence.
+       *     ("with indication we can have persistant NR/NB/AN options".)
+       *  ★ An Airspy owner reported the missing persistence the same day, from the other side. */
+      nrLevel: hwNrLevel, notch: hwNotch,
     })).catch(() => {});
-    // NB: nrLevel / notch are intentionally NOT saved (session-scoped).
   }, [isLocal, localHwKey, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwStereo, canConvert, converter, hwSquelch, hwAutoDs, hwDsBelowHz,
-      fmNr, fmIms, fmCeq, fmNb, fmNbx, fmAutoBw]);
+      fmNr, fmIms, fmCeq, fmNb, fmNbx, fmAutoBw, hwNrLevel, hwNotch]);
 
   // VibeServer (remote shim): hardware controls ride the WS to the serving device
   // instead of the (non-existent) local dongle. localHost set = remote session.
@@ -2318,7 +2331,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★ The RECEIVER's clock, from hwinfo — shown in the status row instead of the phone's own time,
    *  which the phone is already displaying two centimetres higher. null = not yet told. */
   const [srvTz, setSrvTz] = useState<{ offsetMin: number | null; abbr: string }>({ offsetMin: null, abbr: '' });
-  const [idleSlow,      setIdleSlow]      = useState(true);
   // Adaptive waterfall-rate policy — see services/linkManager.ts. 'adaptive' is the default:
   // follow what the link will actually carry rather than asking for the maximum and stuttering.
   const [linkMode,      setLinkMode]      = useState<'full'|'adaptive'|'lowData'>('adaptive');
@@ -2331,7 +2343,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     const c = client.current as unknown as { linkMode?: string } | null;
     if (c && 'linkMode' in c) c.linkMode = linkMode;
   }, [linkMode]);
-  const [powersaveUi,   setPowersaveUi]   = useState(false);  // phone's idle-saver pill
   /** ★★ THE OWNER'S uncompressed-audio POLICY, straight from /vibeserver.json. Three-way, and only
    *  'choice' puts a switch in the audio sheet — 'compat' is an automatic fallback with no control
    *  and 'off' never offers raw PCM at all. Null until fetched, and for every non-VibeServer
@@ -2367,7 +2378,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // pills." That is exactly what happens for free — DecoderPanel derives its available height from
   // this same offset, so a taller stack shrinks the body rather than pushing it past the notch.
   // ★ The "still listening?" card is CENTRED, not stacked, so it contributes nothing here.
-  const noticeStackH = (powersaveUi ? NOTICE_PILL_H : 0) + (showIdleTerms ? NOTICE_PILL_H : 0);
+  const noticeStackH = (showIdleTerms ? NOTICE_PILL_H : 0);
   const [vfoNeedle,     setVfoNeedle]     = useState('#ffffff');   // production default
   // Needle/glow brightness 1-10 (5 = original look) — bright palettes can
   // swallow the needle whatever colour it is (Stuart 2026-06-12 eve)
@@ -2670,9 +2681,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (u === 'hz' || u === 'khz' || u === 'mhz') setFreqUnit(u);
     }).catch(() => {});
     // Smooth tune is always on now (no toggle) — don't restore an old saved "off".
-    AsyncStorage.getItem('lsv_idle_slow').then((v: string | null) => {
-      if (v !== null) setIdleSlow(v === '1');
-    }).catch(() => {});
     AsyncStorage.getItem('lsv_frame_rate').then((v: string | null) => {
       if (v === 'native' || v === '10fps') setFrameRate('10fps');   // 'native' migrated → 10 FPS
       else if (v === '20fps' || v === '30fps') setFrameRate(v);
@@ -2700,37 +2708,27 @@ export default function SDRScreen({ route, navigation }: Props) {
   const audioBytes  = useRef(0);
   const gapLinkRef  = useRef<0|1|2|3>(0);
   const rungBars    = useRef<1|2|3>(3);
+  /* ★ Still recorded — the hardware panel reads it to say "settling…" where that sentence is
+   *  useful. What it no longer does is animate the meter; see the note below. */
   const settlingRef = useRef(false);
-  const settleAnim  = useRef<ReturnType<typeof setInterval> | null>(null);
   const effLink = useCallback((): 0|1|2|3 => {
     if (gapLinkRef.current === 0) return 0;      // nothing arriving = disconnected
     return Math.min(gapLinkRef.current, netLinkRef.current, rungBars.current) as 0|1|2|3;
   }, []);
 
-  // ★ SETTLING = "still working out what this link will carry", and it must LOOK
-  // like a question, not an answer. Until the controller has decided, a settled
-  // bar count would be a guess dressed as a measurement — so the bars sweep
-  // 1-2-3-3-2-1 while it decides, then land on the truth. Same idea as a Wi-Fi
-  // glyph cycling while it associates: the animation says "asking", not "bad".
-  /* ★ STARTED WHEN SETTLING STARTS, STOPPED WHEN IT ENDS. This was a 300 ms interval created at
-   *  mount and left running for the life of the screen — 3.3 wakes a second, backgrounded too,
-   *  for an animation that plays for a few seconds after connect. */
-  const startSettleSweep = useCallback(() => {
-    if (settleAnim.current) return;
-    const SWEEP: (1|2|3)[] = [1, 2, 3, 3, 2, 1];
-    let i = 0;
-    settleAnim.current = setInterval(() => {
-      if (!settlingRef.current) {
-        if (settleAnim.current) clearInterval(settleAnim.current);
-        settleAnim.current = null;
-        return;
-      }
-      const b = meterBus.current;
-      if (b.value.link === 0) return;            // disconnected wins outright
-      b.emit({ ...b.value, link: SWEEP[i++ % SWEEP.length] });
-    }, 300);
-  }, []);
-  useEffect(() => () => { if (settleAnim.current) clearInterval(settleAnim.current); }, []);
+  /* ★★★ THE "LEARNING THE CONNECTION" SWEEP IS GONE (Stuart, 2026-09-24: "the connection animation
+   *  when it establishes connection makes the meter look broken as its not smooth and it never has
+   *  been … Just show the rate straight away like before we had that animation").
+   *
+   *  The idea was that a bar count shown before the controller had decided would be "a guess
+   *  dressed as a measurement", so the bars swept 1-2-3-3-2-1 to say "asking". In practice it does
+   *  not read as asking: it is a 300 ms step animation on a meter whose whole job is to be trusted,
+   *  and a meter that jerks is a meter that looks faulty — which is the one thing it must never
+   *  look like. The honest reading was available all along; showing it late to avoid being
+   *  provisional cost more than it saved.
+   *  ★ effLink() already answers correctly while settling: it is the MINIMUM of the frame-gap
+   *    quality, the network quality and the rung, so an undecided rung simply does not pull it
+   *    down. There was nothing to hide. */
   const meterSmooth = useRef({ level: 0, peak: 0, hold: 0 });
   // SNR from radiod's channel status (basebandPower − noiseDensity), pushed by
   // native per audio packet. This is the demodulator's own measurement (zoom-
@@ -4352,7 +4350,6 @@ export default function SDRScreen({ route, navigation }: Props) {
         // Low Data) is a preference, not a symptom, and must never show red.
         rungBars.current = Math.max(1, 4 - Math.max(1, rung)) as 1|2|3;
         settlingRef.current = settling;
-        if (settling) startSettleSweep();
         // Spectrum (from the client) + audio (counted here) = what the LINK is
         // actually carrying, which is the only figure worth showing.
         const audioKb = audioBytes.current / 1024;
@@ -5861,7 +5858,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Touches on RNGH surfaces (waterfall, drums) bypass the JS responder chain,
   // so interaction is marked BOTH in the root capture handler (catches all
   // Pressable UI) and at the top of each gesture callback below.
-  const IDLE_SLOW_MS = 30_000;
   const IDLE_DIVISOR = 3; // skin default-waterfall parity
 
   // ── Idle hand-back: give a SHARED receiver's slot back when nobody is there ──
@@ -5905,71 +5901,29 @@ export default function SDRScreen({ route, navigation }: Props) {
     // check with it, on BOTH sockets, exactly as UberSDR's own web client does.
     (client.current as { noteActivity?: () => void } | null)?.noteActivity?.();
     lastInteractRef.current = Date.now();
-    if (idleActiveRef.current) {
-      idleActiveRef.current = false;
-      // Un-pause the link controller FIRST, then wake to the user's rate — the controller resumes
-      // owning the rate (adaptive re-evaluates, Low Data re-pins). setRate(1) seeds full while it does.
-      (client.current as unknown as { setLinkPaused?: (p: boolean) => void })?.setLinkPaused?.(false);
-      client.current?.setRate(linkModeRef.current === 'lowData' ? 2 : 1); // wake: user's rate immediately
-      // ★ setRate() is a no-op on a VibeServer (one lever). Ask the controller to re-send.
-      (client.current as unknown as { resumeRate?: () => void })?.resumeRate?.();
-      watchProvider.setPowersave(false);
-      setPowersaveUi(false);
-    }
+    /* ★ The wake-from-idle block went with the idle saver. Nothing pauses the controller on a
+     *  timer any more, so there is nothing for a touch to undo — and a touch that quietly re-sent
+     *  the rate would be a second owner of it again, which is the fault the removal was for. */
   }, []);
 
-  useEffect(() => {
-    if (!idleSlow) {
-      if (idleActiveRef.current) {
-        idleActiveRef.current = false;
-        (client.current as unknown as { setLinkPaused?: (p: boolean) => void })?.setLinkPaused?.(false);
-        client.current?.setRate(linkModeRef.current === 'lowData' ? 2 : 1);
-        (client.current as unknown as { resumeRate?: () => void })?.resumeRate?.();
-        watchProvider.setPowersave(false);
-        setPowersaveUi(false);
-      }
-      return;
-    }
-    idleActiveRef.current = false; // new client (baseUrl) starts at divisor 1
-    const t = setInterval(() => {
-      // A watch showing the waterfall with the phone FOREGROUND is an active viewer even
-      // though nobody's touching the phone — don't idle-slow under it. Once the phone
-      // backgrounds (pocket), isActive goes false and the saver DOES engage: that's the
-      // wrist slowdown Buddy's pill explains (rows still flow via the native forwarder).
-      if (watchProvider.isActive) return;
-      // ★★ AN OPEN RDS ANALYSER IS AN ACTIVE VIEWER, for the same reason the watch is: someone
-      // is reading a live readout and has no reason to touch anything for minutes at a time.
-      // ★ And here it does REAL harm, not just a stray pill — `rdsx` is emitted from inside the
-      // spectrum frame loop (sendRdsExt, every other frame), so idling the spectrum to 5 fps
-      // also halves the analyser to ~2.5 Hz. The constellation's whole value is watching it
-      // tighten or spread as you tune, and at that rate it reads as a still image. The saver
-      // would degrade the one thing the user was looking at, and then explain itself with a
-      // pill telling them to touch the screen to undo it.
-      if (advRdsOpenRef.current) return;
-      if (!idleActiveRef.current &&
-          Date.now() - lastInteractRef.current > IDLE_SLOW_MS) {
-        idleActiveRef.current = true;
-        // ★★★ BOTH CALLS OR NEITHER. Pausing the controller REMOVES a brake; the powersave rate is
-        // what replaces it. When only the pause went through — setPowersaveRate was not forwarded
-        // by UberSDRAdapter — the saver made the spectrum run FASTER, under a pill announcing that
-        // it had been slowed (Stuart, 2026-08-02: 10 fps before, 20 fps after).
-        // ★ And a backend that cannot do the rate at all (OWRX, Kiwi, FM-DX implement neither)
-        // must not get the pause OR the pill: a notice explaining a throttle that is not running
-        // is the same fault as a control whose every use is a no-op.
-        const pc = client.current as unknown as {
-          setLinkPaused?: (p: boolean) => void; setPowersaveRate?: () => void };
-        if (typeof pc?.setPowersaveRate !== 'function') { idleActiveRef.current = false; return; }
-        pc.setLinkPaused?.(true);
-        // Absolute 5 fps, not a divisor — see setPowersaveRate(). A divisor
-        // compounded with the controller's rung and bottomed out at ~1 fps.
-        pc.setPowersaveRate();
-        watchProvider.setPowersave(true);   // → Buddy 'powersave' pill
-        setPowersaveUi(true);               // → phone pill
-      }
-    }, 5000);
-    return () => clearInterval(t);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idleSlow, baseUrl]); // baseUrl: new client starts at divisor 1
+  /* ★★★ THE IDLE SLOWDOWN IS GONE. Only BACKGROUNDING now saves power.
+   *
+   *  ★★ ITS PREMISE WAS WRONG. "Nobody has touched the screen for 30 seconds" was read as "nobody
+   *     is looking", and on a waterfall that is exactly backwards: watching a band fill in is the
+   *     one thing you do WITHOUT touching anything. The saver degraded the very thing the user was
+   *     looking at and then put a pill over it telling them to touch the screen to undo it. Stuart,
+   *     2026-09-24: "if the app is front and centre you'd probably want a faster waterfall anyway."
+   *     The exceptions it had grown — an open RDS analyser, a watch showing the waterfall — were
+   *     both the same discovery arriving one case at a time.
+   *
+   *  ★★★ AND IT WAS A SECOND OWNER OF THE FRAME RATE, which this file already names as the root of
+   *     a whole family of bugs: the divisor multiplying the controller's rate, apply() measuring
+   *     its own reduction as starvation, a stale divisor re-asserted on reconnect, and a wake path
+   *     that could not restore the rate because setRate is a no-op on a VibeServer. Four fixes, one
+   *     cause — two things setting one value. There is now ONE owner, the LinkManager, plus
+   *     backgrounding, which is a hard stop rather than a negotiation.
+   *  ★ markInteract() keeps its wake path: it costs nothing, and it is what un-does a powersave
+   *    entered by BACKGROUNDING when the app comes forward again. */
 
   // ── Idle hand-back ─────────────────────────────────────────────────────────
   // Warn at 30 min of no interaction, release a minute later. ANY touch cancels
@@ -6037,11 +5991,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onSmoothTune = useCallback((v: boolean) => {
     setSmoothTune(v);
     AsyncStorage.setItem('lsv_smooth_tune', v ? '1' : '0').catch(() => {});
-  }, []);
-
-  const onIdleSlow = useCallback((v: boolean) => {
-    setIdleSlow(v);
-    AsyncStorage.setItem('lsv_idle_slow', v ? '1' : '0').catch(() => {});
   }, []);
 
   const onLinkMode = useCallback((m: 'full'|'adaptive'|'lowData') => {
@@ -7342,13 +7291,20 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (radioCaps?.driver !== 'rtl') return;
     if (!hwTunerBwAuto && !hwAgc) return;    // nothing to explain, or not known yet
     rtlAutoExplainedRef.current = true;
+    /* ★★★ A STATUS LINE, NOT AN ESSAY. This was up to 230 characters of advice, and the VTS bar is
+     *  a MARQUEE — so it scrolled for the best part of a minute, saying something the listener
+     *  cannot act on while they are reading it (Stuart, 2026-09-24: "the AGC and IF filter message
+     *  in the VTS take an eternity to scroll around and it appears to be very long winded").
+     *  ★★ The bar's job here is to say WHAT IS ON, so that behaviour the listener is about to see —
+     *     the gain moving by itself, the filter following the zoom — is expected rather than
+     *     alarming. The explanation of WHY belongs where it can be read at leisure: the hardware
+     *     panel, which is one tap away and does not scroll.
+     *  ★ Short enough to read at a glance means the dwell can come down with it. */
     showVtsNotice(
-      hwTunerBwAuto && hwAgc
-        ? 'Automatic gain and IF filtering are on. Zoom in to narrow the tuner\u2019s filter \u2014 it can clean up a signal crowded by strong neighbours. Zoom out and the receiver may overload briefly until the AGC settles.'
-        : hwTunerBwAuto
-        ? 'Automatic IF filtering is on \u2014 zooming in narrows the tuner\u2019s filter, so adjust the gain to suit.'
-        : 'Automatic gain is on \u2014 the receiver sets its own gain and takes a moment to settle after a big change.',
-      20000);
+      hwTunerBwAuto && hwAgc ? 'AGC: On  |  IF Filter: Auto'
+        : hwTunerBwAuto      ? 'IF Filter: Auto'
+        :                      'AGC: On',
+      8000);
   }, [radioCaps?.driver, hwTunerBwAuto, hwAgc, showVtsNotice]);
 
   const vtsLastStation    = useRef('');
@@ -8820,21 +8776,11 @@ export default function SDRScreen({ route, navigation }: Props) {
           panel is allowed in landscape there. */}
       {/* Idle power-save: the 30s saver has slowed the spectrum for battery. Tap/tune wakes
           it (markInteract). Non-interactive so it never eats a touch on the waterfall. */}
-      {powersaveUi ? (
-        // ★ CLEAR THE VTS BAR. Both sat at exactly `pillBottom + 8`, so whenever
-        // the VTS bar was on screen it covered the powersave pill completely —
-        // the throttle was active and its ONLY explanation was invisible. That
-        // cost a long debugging session tonight: the rate kept dropping for
-        // "no reason" because the thing saying why was underneath something else.
-        // VTSBar already reports its height, so stack on top of it.
-        <View style={[styles.powersavePill,
-                      { bottom: pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) }]}
-              pointerEvents="none">
-          <Text style={styles.powersavePillText}>
-            ◐  POWER SAVE · spectrum slowed — touch to wake
-          </Text>
-        </View>
-      ) : null}
+      {/* ★ The POWER SAVE pill went with the idle saver that raised it. It was competing for the
+          same strip as the VTS bar — "the pill actually takes up a lot of room when the VTS is on
+          screen showing RDS data" (Stuart, 2026-09-24) — and it explained a throttle that no
+          longer happens. Nothing announces the ADAPTIVE ladder, deliberately: that is a link doing
+          its best, not a mode the user has to dismiss. */}
 
       {/* ★ About to hand a shared receiver back. Sits ABOVE the powersave pill (by
           then it is showing too) and, unlike that one, is DELIBERATELY tappable:
@@ -9302,6 +9248,15 @@ export default function SDRScreen({ route, navigation }: Props) {
           onMenu={onMenuOpen}
           onChat={openChat}
           onAudio={onAudioOpen}
+          /* ★★★ WHAT IS BEING DONE TO THE AUDIO, so the listener can see it — and so it can be
+           *  REMEMBERED. Noise reduction was deliberately never persisted because a forgotten one
+           *  sounds like a broken receiver; with the state on screen that objection is answered
+           *  (Stuart, 2026-09-24: "with indication we can have persistant NR/NB/AN options").
+           *  ★ NB is either blanker — the FM one or the HF one; a listener does not distinguish
+           *    them when asking "why does this sound odd", and two letters would not fit anyway. */
+          dspNr={hwNrLevel > 0 || fmNr}
+          dspNb={fmNb || fmNbx}
+          dspAn={hwNotch}
           onFreqTap={onFreqOpen}
           onModeTap={onModeOpen}
           freqUnit={freqUnit}
@@ -9691,7 +9646,6 @@ export default function SDRScreen({ route, navigation }: Props) {
         frameRate={frameRate}           onFrameRate={onFrameRate}
         wfScroll={wfScroll}             onWfScroll={onWfScroll}
         smoothTune={smoothTune}         onSmoothTune={onSmoothTune}
-        idleSlow={idleSlow}             onIdleSlow={onIdleSlow}
         linkMode={linkMode}             onLinkMode={onLinkMode}
         drumMode={drumMode}             onDrumMode={onDrumMode}
         mediaSkip={mediaSkip}           onMediaSkip={onMediaSkip}

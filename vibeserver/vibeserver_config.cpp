@@ -201,7 +201,6 @@ std::string toJson(const Config& c) {
     N("landingFreq", c.landingFreq);
     N("users", c.users); N("maxBw", c.maxBw); N("maxFps", c.maxFps); N("fftRate", c.fftRate);
     N("uncompressed", c.uncompressed);
-    B("forceIdleSaver", c.forceIdleSaver);
     B("releaseWhenIdle", c.releaseWhenIdle);
     N("idleGrace", c.idleGrace);
     B("rfNotch", c.rfNotch); B("dabNotch", c.dabNotch); B("zoomSpectrum", c.zoomSpectrum);
@@ -280,8 +279,6 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     if (getNum(s, "maxFps", d))      c.maxFps = d;
     if (getNum(s, "fftRate", d))     c.fftRate = d;
     if (getNum(s, "uncompressed", d)) c.uncompressed = (int)d;
-    getBool(s, "forceIdleSaver", c.forceIdleSaver);
-    getBool(s, "forceIdleSaver", c.forceIdleSaver);
     getBool(s, "releaseWhenIdle", c.releaseWhenIdle);
     if (getNum(s, "idleGrace", d))   c.idleGrace = d;
     getBool(s, "rfNotch", c.rfNotch);
@@ -315,7 +312,6 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     if (getNum(s, "maxRadiosPerIp", d)) c.maxRadiosPerIp = (int)(d < 0 ? 0 : d);
     c.oneRadioPerIp = (c.maxRadiosPerIp != 0);
     if (getNum(s, "uncompressed", d)) c.uncompressed = (int)d;
-    getBool(s, "forceIdleSaver", c.forceIdleSaver);
     if (getNum(s, "port", d))        c.port = (int)d;
     getBool(s, "web", c.web);
 
@@ -429,7 +425,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     B("rtlAgc", r.rtlAgc); B("tunerBwAuto", r.tunerBwAuto);
     I("users", r.users); N("maxBw", r.maxBw); N("maxFps", r.maxFps); N("fftRate", r.fftRate);
     I("uncompressed", r.uncompressed);
-    B("forceIdleSaver", r.forceIdleSaver); B("releaseWhenIdle", r.releaseWhenIdle);
+    B("releaseWhenIdle", r.releaseWhenIdle);
     N("idleGrace", r.idleGrace);
     B("rfNotch", r.rfNotch);
     B("dabNotch", r.dabNotch); B("zoomSpectrum", r.zoomSpectrum);
@@ -482,7 +478,7 @@ std::string radioToJson(const RadioConfig& r) {
     B("rtlAgc", r.rtlAgc); B("tunerBwAuto", r.tunerBwAuto);
     N("users", r.users); N("maxBw", r.maxBw); N("maxFps", r.maxFps); N("fftRate", r.fftRate);
     N("uncompressed", r.uncompressed);
-    B("forceIdleSaver", r.forceIdleSaver); B("releaseWhenIdle", r.releaseWhenIdle);
+    B("releaseWhenIdle", r.releaseWhenIdle);
     N("idleGrace", r.idleGrace);
     B("rfNotch", r.rfNotch); B("dabNotch", r.dabNotch); B("zoomSpectrum", r.zoomSpectrum);
     B("autoNotch", r.autoNotch); B("userNotch", r.userNotch);
@@ -546,7 +542,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.demodMode = one.demodMode; r.landingFreq = one.landingFreq;
     r.users = one.users; r.maxBw = one.maxBw; r.maxFps = one.maxFps; r.fftRate = one.fftRate;
     r.uncompressed = one.uncompressed;
-    r.forceIdleSaver = one.forceIdleSaver; r.releaseWhenIdle = one.releaseWhenIdle;
+    r.releaseWhenIdle = one.releaseWhenIdle;
     r.idleGrace = one.idleGrace;
     r.rfNotch = one.rfNotch; r.dabNotch = one.dabNotch; r.zoomSpectrum = one.zoomSpectrum;
     r.autoNotch = one.autoNotch; r.userNotch = one.userNotch;
@@ -671,7 +667,6 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     //     an older build that had no check all arrive by this path. See safeLinkUrl().
     c.landingLinkUrl = safeLinkUrl(c.landingLinkUrl);
     I("uncompressed", c.uncompressed);
-    B("forceIdleSaver", c.forceIdleSaver);
     I("port", c.port); B("web", c.web);
 
     if (haveRadios) {
@@ -868,9 +863,8 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     // ★ The MACHINE's choice wins — one uplink, one answer. A file that only carries the old
     //   per-radio value still works and is migrated up on the next save.
     c.uncompressed = s.uncompressed ? s.uncompressed : r.uncompressed;
-    // ★ The MACHINE's setting — see ServerConfig::forceIdleSaver. An older per-radio value
     //   still counts, so an upgrade does not quietly switch it off.
-    c.forceIdleSaver = s.forceIdleSaver || r.forceIdleSaver; c.releaseWhenIdle = r.releaseWhenIdle;
+    c.releaseWhenIdle = r.releaseWhenIdle;
     c.idleGrace = r.idleGrace;
     c.rfNotch = r.rfNotch; c.dabNotch = r.dabNotch; c.zoomSpectrum = r.zoomSpectrum;
     c.autoNotch = r.autoNotch; c.userNotch = r.userNotch;

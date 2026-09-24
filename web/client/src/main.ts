@@ -1588,7 +1588,6 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       // ★ The owner REQUIRES idle saving (a solar/cellular host, where power outranks a listener's
       // preference). Force it on and lock the control, saying who set it — the same courtesy as a
       // pinned sample rate. Never leave a switch on screen that we would silently ignore.
-      applyForcedIdle(forceIdle === true);
       applyRateOptions();
       populateHw();
     },
@@ -2387,12 +2386,15 @@ function maybeExplainRtlAutomation() {
   //   caps, so firing on caps alone would announce "no automation" on a radio that has both.
   if (!hwTunerAuto && !hwAgcOn) return;
   rtlAutoExplained = true;
-  const msg = hwTunerAuto && hwAgcOn
-    ? 'Automatic gain and IF filtering are on. Zoom in to narrow the tuner\u2019s filter \u2014 it can clean up a signal crowded by strong neighbours. Zoom out and the receiver may overload briefly until the AGC settles.'
-    : hwTunerAuto
-    ? 'Automatic IF filtering is on \u2014 zooming in narrows the tuner\u2019s filter, so adjust the gain to suit.'
-    : 'Automatic gain is on \u2014 the receiver sets its own gain and takes a moment to settle after a big change.';
-  vtsNotice('rtlauto', msg, '', 20000);
+  /* ★★★ A STATUS LINE, NOT AN ESSAY — see the same change in the app. The bar is a marquee, so 230
+   *  characters scrolled for the best part of a minute to say something the listener cannot act on
+   *  while reading it. What they need is WHAT IS ON, so the gain moving by itself and the filter
+   *  following the zoom read as expected rather than as a fault; the WHY lives in the hardware
+   *  panel, where it can be read without chasing it across the screen. */
+  const msg = hwTunerAuto && hwAgcOn ? 'AGC: On  |  IF Filter: Auto'
+    : hwTunerAuto                    ? 'IF Filter: Auto'
+    :                                  'AGC: On';
+  vtsNotice('rtlauto', msg, '', 8000);
 }
 
 let hwTunerBw = 0;
@@ -2710,7 +2712,6 @@ function loop() {
     perfReport(secs);
     updateStatus();
     updateRecTime();
-    checkIdle();
     saveTuned();   // once a second, not per tune — a drum-fast nudge would thrash localStorage
   }
   requestAnimationFrame(loop);
@@ -4047,15 +4048,32 @@ let linkQ: 0 | 1 | 2 | 3 = 0;
 let frameCount = 0;
 let framesPerSec = 0;
 
+/** ★★★ THE GAPS THE LINK IS ACTUALLY DELIVERING — not the ones we asked for.
+ *
+ *  Judging against `wantedFps()` is what made a perfect receiver read yellow. Ask for 20 and a
+ *  server that is quite deliberately emitting 8 is 125 ms apart, against an "expected" 50 — every
+ *  frame late, for ever, on a link with nothing wrong with it (Stuart, 2026-09-24: "on my server
+ *  with absolutely perfect stats it sits on yellow 2 bars a lot … its a steady 8 it never tries
+ *  for more").
+ *  ★★ A SERVER'S CHOSEN RATE IS NOT A LINK FAULT. The meter answers "is this connection healthy",
+ *     and health is whether frames arrive WHEN THE STREAM SAYS THEY WILL — so the yardstick has to
+ *     come from the stream, as the app's already does (its median of gapHist). Steady is healthy
+ *     at any rate; erratic is not, at any rate.
+ *  ★ Median, not mean: one 2-second stall must not redefine "normal" for the next thirty frames. */
+const gapHist: number[] = [];
+function medianGap(): number {
+  if (gapHist.length < 5) return 1000 / Math.max(1, wantedFps());
+  const s = [...gapHist].sort((a, b) => a - b);
+  return s[s.length >> 1];
+}
+
 function noteFrame() {
   frameCount++;
   const now = performance.now();
-  const expected = 1000 / Math.max(1, wantedFps());   // judge against what we ASKED for
   if (lastFrameAt) {
     const gap = now - lastFrameAt;
-    if (gap > expected * 3) linkQ = 1;
-    else if (gap > expected * 1.6) linkQ = 2;
-    else linkQ = 3;
+    gapHist.push(gap);
+    if (gapHist.length > 40) gapHist.shift();
   }
   lastFrameAt = now;
 }
@@ -4072,15 +4090,29 @@ function updateLink() {
   //    the same link.
   if (!spec || !lastFrameAt) linkQ = 0;
   else {
-    const expected = 1000 / Math.max(1, wantedFps());
+    // ★ MEASURED, not requested — see medianGap(). A server sending a steady 8 fps is solid.
+    const expected = medianGap();
     const since = performance.now() - lastFrameAt;
-    // ★ The thresholds are multiples of the EXPECTED frame interval, not fixed milliseconds:
-    //   at 5 fps a 300 ms gap is normal and at 20 fps it is a stall, so a fixed number would
-    //   be wrong at one end of the rate ladder or the other.
-    if (since > 5000)             linkQ = 0;   // nothing for five seconds — gone
+    if (since > 5000)              linkQ = 0;   // nothing for five seconds — gone
     else if (since > expected * 8) linkQ = 1;   // stalling / reconnecting
     else if (since > expected * 3) linkQ = 2;   // jitter, dropped frames
     else                           linkQ = 3;   // solid
+
+    /* ★★★ AND THE LINK IS NOT ONLY ITS FRAME CADENCE. This meter judged the SPECTRUM ARRIVAL and
+     *  nothing else, so a receiver whose frames were perfectly steady read three green bars while
+     *  its round trip was spiking to four and a half SECONDS and the audio buffer was climbing —
+     *  both of them printed on the very same status line (Stuart, on Kiko's server, 2026-09-24).
+     *  A meter that says "healthy" while the listener waits four seconds for a tune to take is
+     *  worse than no meter: it sends them looking for the fault at their own end.
+     *  ★★ ONLY AT GENUINELY BAD FIGURES. The app demotes at 80 ms of jitter and that is far too
+     *     eager — ordinary Wi-Fi does that and nothing is wrong. These are the numbers where a
+     *     person notices: half a second before a control responds, and a buffer that has had to
+     *     grow past a second to hide the burstiness.
+     *  ★ Only ever DOWN. A quiet link cannot lift the bars above what the frames earned. */
+    const rttBars: 1 | 2 | 3 = rtt > 2500 ? 1 : rtt > 600 ? 2 : 3;
+    const bufMs  = audio ? audio.jitterMs : 0;
+    const bufBars: 1 | 2 | 3 = bufMs > 2000 ? 1 : bufMs > 1000 ? 2 : 3;
+    if (linkQ > 0) linkQ = Math.min(linkQ, rttBars, bufBars) as 0 | 1 | 2 | 3;
   }
   const el = $('linkBars');
   el.className = `q${linkQ}`;
@@ -4144,6 +4176,20 @@ function updateStatus() {
    *  which is exactly the moment ambiguity costs something. "ping" rather than "rtt": it is the
    *  word a listener already knows, and this row is read by listeners, not only by us. */
   el.textContent = `${total.toFixed(0)} KB/s · ${fps} fps · ping ${rtt.toFixed(0)} ms${buf}${idle}`;
+  /* ★★★ AND WHAT IS BEING DONE TO THE AUDIO. This page restores noise reduction, the auto-notch
+   *  and the blanker on every connect and has never said so — see the note on #dspTags. Only the
+   *  ones that are ON are drawn, so the row is unchanged whenever nothing is.
+   *  ★ Read from the CONTROLS, not from a second copy of the state: whatever the panel shows is
+   *    what these say, and a control added later cannot leave a stale badge behind. */
+  const tagEl = $('dspTags');
+  if (tagEl) {
+    const nrOn    = (Number(($('nr') as HTMLInputElement | null)?.value) || 0) > 0;
+    const nbOn    = ($('nb') as HTMLInputElement | null)?.classList.contains('on')
+                 || ($('nbx') as HTMLInputElement | null)?.classList.contains('on');
+    const notchOn = ($('notch') as HTMLInputElement | null)?.classList.contains('on');
+    const tags = [nrOn ? 'NR' : '', nbOn ? 'NB' : '', notchOn ? 'AN' : ''].filter(Boolean);
+    tagEl.textContent = tags.length ? ` · ${tags.join(' ')}` : '';
+  }
   // ★ And say what they MEAN on hover — the row has room for a label, not for a sentence.
   el.title = `spectrum ${specKbps.toFixed(0)} KB/s · audio ${audioKbps.toFixed(0)} KB/s`
     + ` · asking for ${wantedFps()} fps`
@@ -6614,18 +6660,19 @@ function updateMediaSession() {
   });
 }
 
-// ── Idle power saving ────────────────────────────────────────────────────────
-//
-// The app's client-side idle slowdown saves the SERVER nothing — the phone still
-// computes and transmits every frame. So here we throttle the server instead:
-// after IDLE_AFTER_MS with no interaction, ask it to drop its spectrum rate. The
-// engine then genuinely skips the FFT work (and the Wi-Fi radio goes quiet with
-// it), which is what matters for a solar-powered server at the allotment.
-//
-// Audio is untouched — an idle server still sounds identical. That's deliberate:
-// you leave it listening and walk away; it's the WATERFALL nobody is watching.
-
-const IDLE_AFTER_MS = 30_000;
+/* ── Power saving on a HIDDEN TAB ─────────────────────────────────────────────
+ *
+ * ★★★ THE 30-SECOND IDLE SLOWDOWN IS GONE, here as in the app. It inferred "nobody is looking"
+ *     from "nobody is touching", and on a waterfall that is exactly backwards: watching a band
+ *     fill in is the one thing you do without touching anything (Stuart, 2026-09-24). It also
+ *     grew exceptions — an open RDS analyser, a watch showing the waterfall — which were the same
+ *     discovery arriving one case at a time.
+ * ★★ A HIDDEN TAB IS DIFFERENT AND IS KEPT. Nothing is being rendered and nobody can be watching,
+ *    so the server genuinely skips the FFT work and the link goes quiet — the real saving, and the
+ *    one that matters to a solar-powered server. It is event-driven (visibilitychange), so no
+ *    timer and no second owner of the frame rate.
+ * ★ Audio is untouched either way: you leave it listening and walk away.
+ */
 /** The listener's chosen full rate. Their machine's limit, not the server's — see wantedFps().
  *  DERIVED from the Speed + Data Rate controls (computeActiveFps); not set directly by the UI. */
 let activeFps = 20;
@@ -7277,10 +7324,6 @@ function onSummoned() {
 
 let lastInteraction = Date.now();
 let throttled = false;
-/** Listener's choice. Off = never ask the server to slow down, however long nobody touches it. */
-let idleSaver = true;
-/** The owner has made idle saving mandatory (hwinfo.forceIdleSaver). */
-let idleForced = false;
 
 /**
  * Offer only the rates the owner actually permits.
@@ -7297,23 +7340,6 @@ function applyRateOptions() {
   applyWaterfallRates();
 }
 
-function applyForcedIdle(forced: boolean) {
-  idleForced = forced;
-  const btn = document.getElementById('idleSaver') as HTMLButtonElement | null;
-  if (!btn) return;
-  if (forced) {
-    idleSaver = true;
-    btn.classList.add('on');
-    btn.textContent = 'ON · SERVER';
-    btn.disabled = true;
-    btn.title = 'The owner of this server requires idle power saving — it may be on battery, solar, or a metered connection.';
-  } else {
-    btn.disabled = false;
-    btn.title = '';
-    btn.textContent = idleSaver ? 'ON' : 'OFF';
-  }
-}
-
 function markActive() {
   lastInteraction = Date.now();
   if (throttled) {
@@ -7323,23 +7349,20 @@ function markActive() {
   }
 }
 
-function checkIdle() {
-  if (!spec || throttled || !idleSaver) return;
-  if (Date.now() - lastInteraction < IDLE_AFTER_MS) return;
+/** Hidden tab: nothing is being drawn, so ask the server to stop producing it. */
+function throttleHidden() {
+  if (!spec || throttled) return;
   throttled = true;
   spec.setFftRate(wantedFps());
   updateStatus();
 }
 
 function initIdleThrottle() {
-  for (const ev of ['pointerdown', 'pointermove', 'wheel', 'keydown'] as const) {
-    window.addEventListener(ev, markActive, { passive: true });
-  }
-  // A backgrounded tab isn't watching either — throttle immediately, and wake on
-  // return rather than waiting out the timer.
+  // ★ Only the tab going away, and coming back. No interaction listeners: nothing is waiting for
+  //   a touch any more, and four passive listeners firing on every pointermove for a timer that
+  //   no longer exists is pure cost.
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { lastInteraction = 0; checkIdle(); }
-    else markActive();
+    if (document.hidden) throttleHidden(); else markActive();
   });
 }
 
@@ -10685,12 +10708,6 @@ function buildMenu() {
   { const d = prefs().wfDataRate; if (typeof d === 'number' && [0, 20, 10, 5].includes(d)) wfDataRate = d; }
   if (wfDataRate > 0 && wfSpeed < wfDataRate) wfSpeed = wfDataRate;
   applyWaterfallRates();
-
-  toggle('idleSaver', (on) => {
-    if (idleForced) return;         // owner-enforced: the control is locked, not merely ignored
-    idleSaver = on;
-    if (!on && throttled) { throttled = false; spec?.setFftRate(wantedFps()); updateStatus(); }
-  }, 'idleSaver', true);
 
   toggle('biasT', (on) => spec!.setHwBiasT(on), 'biasT');
   // ★ READ, DO NOT ASSERT — see the pushOnInit note on toggle(). The AGC belongs to the radio and

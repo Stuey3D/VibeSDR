@@ -137,7 +137,7 @@ const K = {
   pin: 'vs_pin', rate: 'vs_rate', fps: 'vs_fps', compress: 'vs_compress',
   webServer: 'vs_webserver',
   landingMsg: 'vs_landingmsg', landingUrl: 'vs_landingurl', landingLbl: 'vs_landinglbl',
-  idleKick: 'vs_idlekick', limitSoft: 'vs_limitsoft', idleSaver: 'vs_idlesaver',
+  idleKick: 'vs_idlekick', limitSoft: 'vs_limitsoft',
   batteryPauseAt: 'vs_batpause',
   rawIq: 'vs_rawiq', rawIqMax: 'vs_rawiqmax', rawIqLanMaxHz: 'vs_rawiqlanmaxhz',
   lockedCentre: 'vs_lockedcentre', zoomSpectrum: 'vs_zoomspec', spectrogram: 'vs_spectrogram',
@@ -197,7 +197,6 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [rawIqMax, setRawIqMax]     = useState(0);
   const [rawIqLanMaxHz, setRawIqLanMaxHz] = useState(0);
   /** Machine-wide spectrum slowdown when nobody is looking — lives with the frame rate. */
-  const [idleSaver, setIdleSaver]   = useState(false);
   /** ★ Locked mode only: the captured window everyone shares, and real bins at deep zoom. */
   const [lockedCentre, setLockedCentre] = useState(0);
   // ★ ON by default, as the browser's setup page has it: a shared receiver that goes blocky the
@@ -698,7 +697,6 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           setRawIq(Number(await g(K.rawIq)) || 0);
           setRawIqMax(Number(await g(K.rawIqMax)) || 0);
           setRawIqLanMaxHz(Number(await g(K.rawIqLanMaxHz)) || 0);
-          setIdleSaver((await g(K.idleSaver)) === '1');
           setLockedCentre(Number(await g(K.lockedCentre)) || 0);
           // ★ Absent means "never chosen", which must read as the DEFAULT (on) and not as off —
           //   the same trap as any stored boolean whose default is true.
@@ -1105,7 +1103,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   //     change: the setting reverted the moment the server started, which looks exactly like a
   //     save bug. Stuart, 2026-08-21: "the hard/soft limit always reverts back and is not
   //     remembered" — and TWELVE settings were in that state, not one (limitSoft, idleKick,
-  //     idleSaver, lockedCentre, zoomSpec, spectrogram, idleGrace, antenna, antennaIcon and the
+  //     lockedCentre, zoomSpec, spectrogram, idleGrace, antenna, antennaIcon and the
   //     three landing fields).
   //  ★★★ THE FILE HAD ALREADY LEARNED THIS AND FORGOTTEN IT. The note by the deps array describes
   //      the same fault with the admin password — "one stale closure, two symptoms, and an evening
@@ -1116,7 +1114,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   //    carrying the whole config rather than a hand-maintained subset.
   const live = useRef<any>({});
   live.current = {
-    limitSoft, idleKick, idleSaver, lockedCentre, zoomSpec, spectrogram, idleGrace,
+    limitSoft, idleKick, lockedCentre, zoomSpec, spectrogram, idleGrace,
     antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax, rawIqLanMaxHz,
   };
 
@@ -1150,7 +1148,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.landingMsg, live.current.landingMsg], [K.landingUrl, live.current.landingUrl], [K.landingLbl, live.current.landingLbl],
       [K.limitSoft, live.current.limitSoft ? '1' : '0'], [K.idleKick, String(live.current.idleKick)], [K.batteryPauseAt, String(batteryPauseAt)],
       [K.rawIq, String(live.current.rawIq)], [K.rawIqMax, String(live.current.rawIqMax)], [K.rawIqLanMaxHz, String(live.current.rawIqLanMaxHz)],
-      [K.idleSaver, live.current.idleSaver ? '1' : '0'], [K.lockedCentre, String(live.current.lockedCentre)],
+      [K.lockedCentre, String(live.current.lockedCentre)],
       [K.zoomSpectrum, live.current.zoomSpec ? '1' : '0'], [K.spectrogram, live.current.spectrogram ? '1' : '0'],
       [K.idleGrace, String(live.current.idleGrace)], [K.antenna, live.current.antenna], [K.antennaIcon, live.current.antennaIcon],
       [K.allowRanges, allowRanges], [K.blockRanges, blockRanges],
@@ -1225,7 +1223,6 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         sessionLimitSoft: live.current.limitSoft,
         idleKickMin: live.current.idleKick,
         batteryPauseAt, batteryResumeAt: batteryPauseAt > 0 ? batteryPauseAt + 20 : 40,
-        forceIdleSaver: live.current.idleSaver,
         // ★ Raw IQ out. Default OFF, like uncompressed audio. Sent as set; the SERVER refuses it
         //   on a shared dial, so the card stays visible everywhere (Stuart, 2026-09-09: "the card
         //   should be in the GUI on the app screen on the phone").

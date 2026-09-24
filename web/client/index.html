@@ -1076,6 +1076,13 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 #status { font-size: 0.78em; color: var(--text-dim); letter-spacing: 0.1em; white-space: nowrap;
   padding-right: 0.2em; }   /* clear the trailing letter-spacing so the last glyph never clips */
 
+/* ★ The audio-chain badges, beside the link numbers. AMBER rather than dim: this is the one thing
+   on the row the reader is meant to NOTICE, because it is there to answer "why does this sound
+   odd". Empty and therefore invisible whenever nothing is on. */
+#dspTags { font-size: 0.78em; letter-spacing: 0.1em; white-space: nowrap; color: var(--amber, #ffb833);
+  cursor: pointer; }
+#dspTags:empty { display: none; }
+
 /* Link-quality bars — same semantics as the app: 3 green solid, 2 amber jitter,
    1 red stalling, ✕ disconnected. Driven by SPEC frame timing, not just RTT:
    frames stopping is what a failing link actually looks like. */
@@ -3406,6 +3413,16 @@ select.btn { padding: 6px 8px; }
                 <i></i><i></i><i></i>
               </span>
               <span id="status">—</span>
+              <!-- ★★★ WHAT IS BEING DONE TO THE AUDIO — shown only when something is.
+                   This page has ALWAYS restored noise reduction, the auto-notch and the blanker on
+                   every connect (see restorePrefs), with nothing on screen to say so. A listener
+                   who left NR on last week hears the artefacts and concludes the RECEIVER is
+                   broken — "if a user forgets theyve enabled it they dont know its on and wonders
+                   why the audio sounds funny" (Stuart, 2026-09-24). The app grew the same badges
+                   on the same day; the objection was never to remembering, it was to remembering
+                   in silence.
+                   ★ Empty in the ordinary case, so it costs no space at all until it matters. -->
+              <span id="dspTags" title="Audio processing is on — click to open the audio panel"></span>
             </span>
           </div>
         </div>
@@ -4492,10 +4509,10 @@ select.btn { padding: 6px 8px; }
   </div>
   <div class="rowNote">How many real frames per second the server sends. Lower cuts the data used but can
     miss brief signals. Auto adapts to the link, up to your chosen speed.</div>
-  <div class="mrow">
-    <label>IDLE SAVER</label>
-    <div class="seg"><button class="btn on" id="idleSaver">ON</button></div>
-  </div>
+  <!-- ★ The IDLE SAVER switch went with the feature. It slowed the spectrum after 30 s without a
+       touch, which read "nobody is looking" from "nobody is touching" — backwards on a waterfall,
+       the one thing you watch without touching it. A hidden TAB still throttles (nothing is being
+       drawn), and that needs no switch because there is nothing to disagree with. -->
   <!-- No Detail/Resolution control: WebGL renders at full crispness for free on the GPU, and a device
        too old for WebGL falls back to the light half-res 2D path automatically — it wouldn't want a
        CPU-intensive sharp waterfall anyway. Crispness is decided by capability, not a toggle. -->

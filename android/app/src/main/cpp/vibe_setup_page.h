@@ -421,14 +421,14 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           worth doing on a metered connection, or where several people share one uplink.</div></label>
     </div>
 
-    <div class="card">
-      <h2>Power saving</h2>
-        <p class="why">Applies to every radio on this machine.</p>
-      <p class="why">Applies in both modes.</p>
-      <label style="display:flex;align-items:center;gap:10px;margin-top:16px">
-        <input type="checkbox" id="forceIdle" style="width:16px;height:16px;accent-color:var(--amber)">
-        <span>Listeners may not switch off idle power saving</span></label>
-    </div>
+    <!-- ★★★ THE "Power saving" CARD IS GONE WITH THE FEATURE IT GOVERNED. It forced the client's
+         30-second idle slowdown on, and that slowdown has been removed: it inferred "nobody is
+         looking" from "nobody is touching", which on a waterfall is backwards — watching a band
+         fill in is the one thing you do without touching anything (Stuart, 2026-09-24).
+         ★★ The benchmark had already taken the ground from under it: 5, 10 and 20 fps are close
+            enough in CPU that the saving was small even when it worked.
+         ★ The owner's real lever is untouched and is the one that matters on small hardware — the
+           FRAME RATE setting, which caps the whole machine (a Pi Zero is happier at 5). -->
 
       <div class="card">
       <h2>Processor</h2>
@@ -3280,7 +3280,6 @@ function fill() {
 
   $("cpuGovernor").value = cfg.cpuGovernor || "performance";
   $("uncompressed").value = String(cfg.uncompressed || 0);
-  $("forceIdle").checked = !!cfg.forceIdleSaver;
   $("trustedProxies").value = cfg.trustedProxies || "";
   // ★ Absent = "1" (the rule enforced), matching the config's own default — an older server that
   //   never heard of this must not appear to have it switched off.
@@ -3826,7 +3825,6 @@ function stashServer() {
   cfg.mdnsAdvertise = $("mdns").checked;
   cfg.cpuGovernor = $("cpuGovernor").value;
   cfg.uncompressed = parseInt($("uncompressed").value, 10);
-  cfg.forceIdleSaver = $("forceIdle").checked;
   cfg.trustedProxies = $("trustedProxies").value.trim();
   cfg.maxRadiosPerIp = parseInt($("maxRadiosPerIp").value, 10) || 0;
   // ★ Sent alongside for a server that predates the cap: "enforced" unless the owner chose no
@@ -3859,7 +3857,6 @@ function collect() {
 
     cpuGovernor: $("cpuGovernor").value,
     uncompressed: parseInt($("uncompressed").value, 10),
-    forceIdleSaver: $("forceIdle").checked,
     trustedProxies: $("trustedProxies").value.trim(),
     maxRadiosPerIp: parseInt($("maxRadiosPerIp").value, 10) || 0,
     oneRadioPerIp: (parseInt($("maxRadiosPerIp").value, 10) || 0) !== 0,

@@ -94,7 +94,6 @@ export type VibeServerConfig = {
    *  powers down while idle — it cannot picture a band it is not listening to. */
   spectrogram?: boolean;
   /** The spectrum slowdown when nobody is looking. CPU and uplink, not the radio. */
-  forceIdleSaver?: boolean;
   /** ★ RAW IQ OUT: 0 off, 1 local network only, 2 local and public (through the tunnel, via the
    *  VibeIQ bridge). Never on a shared dial — the server refuses it there. */
   rawIq?: number;
@@ -244,7 +243,6 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     lockedCentre: cfg.lockedCentre ?? 0,
     zoomSpectrum: cfg.zoomSpectrum ?? false,
     spectrogram: cfg.spectrogram ?? false,
-    forceIdleSaver: cfg.forceIdleSaver ?? false,
     rawIq: cfg.rawIq ?? 0,
     rawIqMax: cfg.rawIqMax ?? 0,
     // ★ 300 s matches the desktop default. The radio parks; it is never handed away.

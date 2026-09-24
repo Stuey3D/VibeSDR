@@ -18,16 +18,25 @@ const VIBESERVER_CAPS: BackendCapabilities = {
   freqRange:      [0, 30_000_000],
   chat:           true,
   serverNR:       true,
-  maxBandwidth:   { default: 6000 },
+  /* ★★★ WFM IS BROADCAST-WIDE AND THE DEFAULT IS NOT. Without a per-mode entry a remote
+   *  VibeServer fell back to 6 kHz on WFM — the filter slider could not even reach a usable FM
+   *  passband. The local block below has always carried the modes; this one was never given them.
+   *  ★ ±250 kHz matches the web client (its own WFM ceiling is 250000), which is where the figure
+   *    came from: "the bandwith slider in the app reaches a maximum of +-100k, whereas in
+   *    vibeserver it reaches a maximum of +-250k" (Onfliner, 2026-09-24). One receiver should not
+   *    offer two different passbands depending on which client is looking at it. */
+  maxBandwidth:   { default: 6000, nfm: 8000, fm: 8000, am: 10000, wfm: 250000 },
 };
 
 // V4 local hardware (RTL-SDR Blog V4): HF direct ~0.1 MHz up to ~1766 MHz.
-// Per-mode bandwidth ceilings — WFM is broadcast-wide, so the slider must reach
-// ±100 kHz (without a wfm entry it fell back to default=6k and snapped narrow).
+// Per-mode bandwidth ceilings — WFM is broadcast-wide, so the slider must reach ±250 kHz (without
+// a wfm entry it fell back to default=6k and snapped narrow). ★ 250, not 100: the web client has
+// always allowed 250 and the app stopped at 100, so the same radio offered two different maximum
+// passbands depending on which client you looked at it through (Onfliner, 2026-09-24).
 const LOCAL_CAPS: BackendCapabilities = {
   ...VIBESERVER_CAPS,
   freqRange: [100_000, 1_766_000_000],
-  maxBandwidth: { default: 6000, nfm: 8000, fm: 8000, am: 10000, wfm: 100000 },
+  maxBandwidth: { default: 6000, nfm: 8000, fm: 8000, am: 10000, wfm: 250000 },
 };
 
 /**

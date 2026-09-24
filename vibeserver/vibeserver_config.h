@@ -178,7 +178,15 @@ struct Config {
     int    users = 1;
     double maxBw = 0, maxFps = 0, fftRate = 15;
     int    uncompressed = 0;
-    bool   forceIdleSaver = false;
+    /* ★★★ REMOVED: forceIdleSaver. It made the CLIENT's 30-second idle slowdown mandatory, and
+     *  that slowdown no longer exists — it read "nobody is looking" from "nobody is touching",
+     *  which on a waterfall is backwards (Stuart, 2026-09-24). An owner setting that forces a
+     *  behaviour nothing implements is worse than a dead control: it is a dead control that also
+     *  says the server is doing something it is not.
+     *  ★ The measurement had already undercut it: 5, 10 and 20 fps are not much apart in CPU, so
+     *    the saving it promised was small even when it worked. What remains is the ADAPTIVE ladder
+     *    for a genuinely poor link, and the BACKGROUND freeze, which is a real saving.
+     *  ★ Old configs keep the key harmlessly — the loader simply no longer looks for it. */
     /** ★ Let another program (OpenWebRX, a decoder) open the SDR while nobody is listening.
      *  OFF by default: it costs the spectrogram and the band-conditions history, which almost
      *  every server would rather keep. See LocalSdrShim::releaseRadio. */
@@ -352,7 +360,7 @@ struct RadioConfig {
     int    users = 1;
     double maxBw = 0, maxFps = 0, fftRate = 15;
     int    uncompressed = 0;
-    bool   forceIdleSaver = false, releaseWhenIdle = false;
+    bool   releaseWhenIdle = false;
     double idleGrace = 300;
     /** ★★★ WHERE LISTENERS MAY TUNE THIS RADIO. Comma separated, each entry either a named band
      *  ("fm", "air", "mw") or a range in any unit ("87.5MHz-108MHz"). See vibe_bands.h.
@@ -654,7 +662,6 @@ struct ServerConfig {
      *  it. Not to be confused with RadioConfig::releaseWhenIdle, which hands a DEVICE to another
      *  program and is per radio by nature (Stuart, 2026-08-08: "This is the spectrum slowdown and
      *  not the radio releasing when not in use, that one needs to stay per radio"). */
-    bool        forceIdleSaver = false;
     /** ★★★ Reverse proxies whose X-Forwarded-For we believe — comma separated, addresses or
      *  CIDRs ("127.0.0.1, 10.0.0.0/8"). EMPTY BY DEFAULT and empty means "read no headers":
      *  the header is client-supplied text, so trusting it from anyone would let a stranger forge

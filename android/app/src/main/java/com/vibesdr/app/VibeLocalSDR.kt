@@ -321,7 +321,6 @@ object VibeLocalSDR {
     /** Does this radio draw the landing page's 24-hour spectrogram? */
     fun setVibeServerSpectrogram(on: Boolean) { ensureLoaded(); nativeSetVibeServerSpectrogram(on) }
     /** The spectrum slowdown when nobody is looking. CPU and uplink, not the radio. */
-    fun setVibeServerForceIdleSaver(on: Boolean) { ensureLoaded(); nativeSetVibeServerForceIdleSaver(on) }
     /** Seconds after the last listener before the capture parks. The device stays CLAIMED. */
     fun setVibeServerIdleGrace(sec: Double) { ensureLoaded(); nativeSetVibeServerIdleGrace(sec) }
     private external fun nativeSetVibeServerWebEnabled(on: Boolean)
@@ -365,7 +364,6 @@ object VibeLocalSDR {
     private external fun nativeSetVibeServerLockedCentre(hz: Double)
     private external fun nativeSetVibeServerZoomSpectrum(on: Boolean)
     private external fun nativeSetVibeServerSpectrogram(on: Boolean)
-    private external fun nativeSetVibeServerForceIdleSaver(on: Boolean)
     private external fun nativeSetVibeServerIdleGrace(sec: Double)
     private external fun nativeSetStationsJson(json: String)
     private external fun nativeSetLocationJson(json: String)

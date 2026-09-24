@@ -952,6 +952,24 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                      mode and nothing on screen said so. A mode you CHOOSE cannot be left by
                      accident — and the same three words in the same order as the client his users
                      already know. */}
+              {/* ★★★ THE PRESET SLIDER — the "one slider" the three modes were asked for WITH, and
+                  it was never drawn. The note below says "the slider above sets all three stages
+                  together", and for this branch there was no slider above: GainSlider is rendered
+                  in the RTL arm only, so an Airspy in Sensitive or Linear had a mode and no way to
+                  move along its curve. "the linear/sensitive slider is missing" (Onfliner,
+                  2026-09-24), reporting the same gap from the other side.
+                  ★★ Only in the PRESET modes. In Free the three stages below ARE the control, and
+                     a fourth slider driving all of them at once would fight them — which is the
+                     ambiguity the three-way mode was introduced to remove. */}
+              {aspMode !== 2 && (
+                <>
+                  <Text style={styles.section}>
+                    GAIN — {aspMode === 0 ? 'sensitivity' : 'linearity'} curve
+                  </Text>
+                  <GainSlider gains={cappedGains} gainTenthDb={p.gainTenthDb} auto={p.autoGain}
+                              onAuto={p.onAuto} onGain={p.onGain} />
+                </>
+              )}
               <Text style={styles.section}>GAIN MODE</Text>
               <Seg slot={slot} options={[0, 1, 2]}
                    value={aspMode}

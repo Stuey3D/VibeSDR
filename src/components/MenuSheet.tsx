@@ -312,7 +312,6 @@ export interface MenuSheetProps {
   onWfScroll?:        (v: 'sharp' | 'default' | 'smooth') => void;
   smoothTune?:        boolean;
   onSmoothTune?:      (v: boolean) => void;
-  idleSlow?:          boolean;
   onIdleSlow?:        (v: boolean) => void;
   onSpecRatio?:       () => void;
 }
@@ -748,7 +747,7 @@ function MenuSheetBody({
   specPeakScale = 10, onSpecPeakScale,
   peakHold = false, onPeakHold,
   frameRate = '20fps', onFrameRate, wfScroll = 'sharp', onWfScroll,
-  smoothTune = true, onSmoothTune, idleSlow = true, onIdleSlow,
+  smoothTune = true, onSmoothTune,
   onSpecRatio,
 }: MenuSheetProps) {
 
@@ -1297,13 +1296,15 @@ function MenuSheetBody({
                     : 'Four rows per frame — continuous motion on a slow feed, less real detail.'}
                 </Text>
 
-                {/* Power saving — IDLE SAVER: ⅓ server frame rate after 30s
-                    without touch. (Smooth tune is always on — the 120 Hz boost
-                    while interacting; no toggle, to avoid confusion.) */}
-                <SubLabel label="Power Saving" />
-                <BtnRow>
-                  <Btn label="IDLE SAVER"  active={idleSlow}   onPress={() => onIdleSlow?.(!idleSlow)} />
-                </BtnRow>
+                {/* ★★★ THE IDLE SAVER IS GONE, AND SO IS ITS SWITCH. It slowed the spectrum after
+                    30 s without a touch, which read "nobody is looking" from "nobody is touching" —
+                    backwards for a waterfall, the one thing you watch without touching anything
+                    (Stuart, 2026-09-24: "if the app is front and centre you'd probably want a
+                    faster waterfall anyway"). A switch for a feature that no longer exists is the
+                    dead control this project keeps removing, so it goes with it.
+                    ★ What remains is the pair that earns its keep: the ADAPTIVE ladder, for a
+                      genuinely poor connection, and the BACKGROUND freeze — nothing to render off
+                      screen, so nothing to spend battery on. */}
 
                 {/* SIGNAL METER unit — SNR / S-units / dBFS. A DISPLAY choice (it only changes the
                     frequency-pill readout), so it lives with the other display settings — moved here

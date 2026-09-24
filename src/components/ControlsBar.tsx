@@ -297,6 +297,13 @@ export interface ControlsBarProps {
   onChat?:       () => void;
   /** Opens the AUDIO sheet (NR/NB/squelch/notch/REC + server NR). */
   onAudio?:      () => void;
+  /** ★★★ THE AUDIO CHAIN'S STANDING STATE — noise reduction, noise blanker, auto-notch. Shown only
+   *  when ON (see DspBadges), because the case worth reporting is the one the listener has
+   *  forgotten about. These exist so the settings can be REMEMBERED across sessions: NR was never
+   *  persisted precisely because an invisible one sounds like a broken receiver. */
+  dspNr?:        boolean;
+  dspNb?:        boolean;
+  dspAn?:        boolean;
   /** FM-DX: the AUDIO sheet is REC-only, so show a record glyph (not a speaker). */
   audioAsRecord?: boolean;
   /** Deep-link share (instance URL + freq/mode params). Falls back to text. */
@@ -457,6 +464,42 @@ function ServerGlyph({ color }: { color: string }) {
     </View>
   );
 }
+/** ★★★ WHAT IS BEING DONE TO THE AUDIO — shown ONLY when something is.
+ *
+ *  Noise reduction is the reason this exists. It was deliberately never saved across sessions,
+ *  because a listener who has forgotten it is on hears the artefacts and concludes the RECEIVER is
+ *  broken (Stuart, 2026-09-24: "if a user forgets theyve enabled it they dont know its on and
+ *  wonders why the audio sounds funny"). That reasoning is right, and it is also what has kept the
+ *  setting from persisting — which is what an Airspy owner reported as a bug on the same day.
+ *  Both are answered by making the state VISIBLE: once you can see it, remembering it is safe.
+ *
+ *  ★★ NOTHING IS DRAWN WHEN NOTHING IS ON, and that is the whole design. A row of greyed
+ *     placeholders would cost permanent space on every screen to describe the case nobody needs
+ *     telling about; appearing only in the exception is what makes it affordable at all — and the
+ *     status rows are already full enough to be truncating on a 17 Pro Max.
+ *  ★ Tapping opens the audio sheet, so the badge is the way to the thing it is warning about
+ *    rather than a dead ornament.
+ */
+export function DspBadges({ nr, nb, an, onPress, font, color }:
+    { nr?: boolean; nb?: boolean; an?: boolean; onPress?: () => void;
+      font?: string; color?: string }) {
+  const on: string[] = [];
+  if (nr) on.push('NR');
+  if (nb) on.push('NB');
+  if (an) on.push('AN');
+  if (!on.length) return null;                 // ★ the ordinary case costs nothing
+  const body = (
+    <View style={pm.dspRow}>
+      {on.map((k) => (
+        <Text key={k} style={[pm.dspTag, { fontFamily: font, color: color ?? '#ffb833' }]}>{k}</Text>
+      ))}
+    </View>
+  );
+  return onPress
+    ? <TouchableOpacity onPress={onPress} activeOpacity={0.7} hitSlop={8}>{body}</TouchableOpacity>
+    : body;
+}
+
 export function LinkIndicator({ bus }: { bus?: MeterBus }) {
   const m = useMeters(bus);
   const q = m ? m.link : 0;
@@ -656,8 +699,22 @@ const pm = StyleSheet.create({
   sharedTxt:{ letterSpacing: 1.1, fontWeight: '700' },
   linkWrap: { flexDirection: 'row', alignItems: 'flex-end', gap: 1.5, alignSelf: 'center', flexShrink: 0 },
   linkBar:  { width: 3, borderRadius: 1 },
-  linkRow:    { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  /* ★★★ IT MUST WRAP, OR IT TRUNCATES — and it was truncating on a 17 PRO MAX, which is the
+     biggest phone Apple sells: "IF 2800k au" with the rest simply gone (Stuart, 2026-09-24).
+     Portrait has a full-width row and never showed it; LANDSCAPE puts this same indicator in the
+     narrow column under the zoom keys, where a no-wrap row has nowhere to put the overflow.
+     ★★ The content is already conditional (rate, AGC, IF each appear only when known), so the row
+        is usually short — wrapping costs a second line only in the case that was previously
+        losing information altogether.
+     ★ It also protects the SE in Display Zoom, which is the narrowest layout we support and has
+       caught this class of fault before. */
+  linkRow:    { flexDirection: 'row', alignItems: 'center', gap: 4,
+                flexWrap: 'wrap', justifyContent: 'center' },
   linkArrows: { color: 'rgba(255,255,255,0.40)', fontSize: 9, lineHeight: 11 },
+  /* ★ Same size and rhythm as the link stats beside them — these are a reading, not a button, and
+     should not shout. The colour is the amber the rest of the active state uses. */
+  dspRow:     { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  dspTag:     { fontSize: 9, lineHeight: 11, letterSpacing: 1 },
   linkRate:   { color: 'rgba(255,255,255,0.55)', fontSize: 9, lineHeight: 11, marginLeft: 4, fontVariant: ['tabular-nums'] },
   phoneGlyph: { width: 8, height: 13, borderWidth: 1, borderRadius: 2,
                 alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 1.5 },
@@ -798,6 +855,7 @@ function useHandbackFlash() {
 
 function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
+  dspNr, dspNb, dspAn,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia,
   readOnly, sharedDial, storms, adminMode, vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
   onControlRects }: any) {
@@ -1048,9 +1106,19 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
             <Text style={[por.recTime, { fontFamily: t.font, fontSize: CLOCK_FONT }]}>{recTime}</Text>
           </View>
         )}
-        {/* ★ The stats never shrink — they are the thing being covered. */}
-        <View style={{ flexShrink: 0, marginLeft: 'auto', paddingLeft: 6 }}><LinkIndicator bus={bus} /></View>
+        {/* ★★★ THE AUDIO CHAIN, ON THE END OF THE TIMES ROW — and the STATS get a line of their
+            own below. The two were sharing one line and the stats were losing: "IF 2800k au" with
+            the rest cut off, on a 17 Pro Max (Stuart, 2026-09-24). A row that truncates the thing
+            it exists to report is not a status row.
+            ★★ The pill grows DOWNWARD into space that was dead anyway — non-interactive text, so
+               it may sit close to the bottom, but it stays clear of the home indicator (the safe
+               area inset is applied by the screen, not here). */}
+        <DspBadges nr={dspNr} nb={dspNb} an={dspAn} onPress={onAudio}
+                   font={t.font} color={t.clockColor} />
       </View>
+
+      {/* Row 5 — the connection stats, on their own line so they can no longer be truncated. */}
+      <View style={por.statsRow}><LinkIndicator bus={bus} /></View>
 
     </View>
   );
@@ -1061,6 +1129,10 @@ const por = StyleSheet.create({
   btn:      { flex: 1, backgroundColor: 'rgba(20,10,0,0.75)', borderWidth: 1, borderRadius: 4, alignItems: 'center', justifyContent: 'center' },
   btnTxt:   { letterSpacing: 0.5, textAlign: 'center' },
   clockRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 2 },
+  /* ★ Its own line, centred like landscape's. The stats are the widest thing in the bar and the
+     only one that was being cut off; given a row to themselves they simply fit. */
+  statsRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center',
+              paddingHorizontal: 2, marginTop: 1 },
   clock:    { letterSpacing: 1 },
   recRow:   { flexDirection: 'row', alignItems: 'center', gap: 4 },
   recDot:   { width: 6, height: 6, borderRadius: 3, backgroundColor: '#e05050' },
@@ -1071,6 +1143,7 @@ const por = StyleSheet.create({
 
 function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
+  dspNr, dspNb, dspAn,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, chatOff, singleDrum, menuAsBack, vfoNoInertia,
   /* ★★★ sharedDial WAS MISSING FROM THIS LIST AND USED IN THE BODY. The props arrive as {...shared}, so the
    *  name simply was not in scope and the landscape bar threw "Property 'sharedDial' doesn't exist" the moment
@@ -1110,6 +1183,10 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
   const CLOCK_FONT = s.f(7);
 
   return (
+    /* ★ A COLUMN NOW: the controls in one row, the status in another beneath it. This function's
+       root used to BE the drum row, which is why the clock and the stats had to be tucked inside
+       the drum columns — there was nowhere else for them to go. */
+    <View>
     <View ref={drumRowRef} onLayout={guardDrums} style={{ flexDirection: 'row', alignItems: 'stretch', justifyContent: 'center', gap: GAP }}>
 
       {/* ★ Handback flash — see useHandbackFlash. The landscape bar has its own drum row, so
@@ -1127,21 +1204,13 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
         {vfoKeys
           ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} style={{ flex: 1 }} />
           : <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={vfoNoInertia} />}
-        <Text style={[lnd.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
-          {clock}
-        </Text>
+
         {/* ★★ THE SLOT IS ALWAYS THERE, EMPTY OR NOT — and that is the whole point of putting it
             back deliberately rather than just reverting. The recording row used to APPEAR, which
             grew this column and resized the tuning keys under the user's thumb mid-gesture
             (Stuart: "the controls dont have to grow and shrink when recording is happening"). A
             reserved row keeps the timer beside the dial where he wants it AND keeps the keys
             still: the height is identical whether it is recording or not. */}
-        <View style={[lnd.recRow, !isRecording && { opacity: 0 }]} pointerEvents="none">
-          <View style={lnd.recDot} />
-          <Text style={[lnd.recTime, { fontFamily: t.font, fontSize: CLOCK_FONT }]}>
-            {isRecording ? recTime : '0:00'}
-          </Text>
-        </View>
       </View>
 
       {/* STEP + MENU column */}
@@ -1166,7 +1235,12 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
 
       {/* Signal bar + pill — flex so small screens (SE) get a shorter bar with
           everything still fitting; maxWidth caps the stretch on big panels. */}
-      <View style={{ width: s.r(340), justifyContent: 'center' }}
+      {/* ★★★ TOP-ALIGNED, NOT CENTRED. justifyContent:'center' inside a row whose alignItems is
+          'stretch' floated this box in the middle of the tallest column, leaving black padding
+          above AND below it — "Landscape is wasting space, there is black padding above the
+          frequency/signal meter box" (Stuart, 2026-09-24). The drums and the button columns start
+          at the top; this now starts there too, so the row reads as one band of controls. */}
+      <View style={{ width: s.r(340), justifyContent: 'flex-start' }}
             onLayout={(e: any) => setSigW(e.nativeEvent.layout.width)}>
         <View style={[lnd.sigFrame, { height: SIG_H }]}>
           <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} bus={bus} />
@@ -1217,22 +1291,50 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
                  with the control you are least likely to be holding.
               ★ Portrait is untouched: it has a full-width row of its own (por.clockRow) and never
                 had the problem. */}
-          {/* ★ ONLY THE CONNECTION STATS live here. The clock and the recording timer belong with
-              the tuning keys on the left, where they have always been — Stuart asked for the
-              STATS to move ("the connection stats can move under the zoom buttons"), and I moved
-              the clock with them, which is not what he asked for and reads worse: the time is
-              something you glance at beside the dial, not a property of the zoom. */}
-          <View style={{ alignItems: 'center', marginTop: 2 }}>
-            <LinkIndicator bus={bus} />
-          </View>
         </View>
       )}
+
+      </View>
+
+      {/* ★★★ ONE FULL-WIDTH STATUS ROW, BENEATH EVERYTHING — Stuart's layout, 2026-09-24:
+          "have a clear row at the bottom … Server time/UTC Recording Timer | NR/NB/AN | sig 25KB
+          20FPS Gain 29db IF Wide".
+          ★★ It replaces two cramped half-rows tucked under the drums, and it is why the stats can
+             stop truncating: they had the width of ONE COLUMN and now have the bar.
+          ★ Times left, audio chain centre, link right — and the recording slot keeps its reserved
+            space so nothing resizes under a thumb when recording starts (the reason it was pulled
+            out of the tuning column in the first place). */}
+      <View style={lnd.statusRow}>
+        <View style={lnd.statusSide}>
+          <Text numberOfLines={1}
+                style={[lnd.clock, { color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
+            {clock}
+          </Text>
+          <View style={[lnd.recRow, !isRecording && { opacity: 0 }]} pointerEvents="none">
+            <View style={lnd.recDot} />
+            <Text style={[lnd.recTime, { fontFamily: t.font, fontSize: CLOCK_FONT }]}>
+              {isRecording ? recTime : '0:00'}
+            </Text>
+          </View>
+        </View>
+        <DspBadges nr={dspNr} nb={dspNb} an={dspAn} onPress={onAudio}
+                   font={t.font} color={t.clockColor} />
+        <View style={[lnd.statusSide, { justifyContent: 'flex-end' }]}>
+          <LinkIndicator bus={bus} />
+        </View>
+      </View>
 
     </View>
   );
 }
 
 const lnd = StyleSheet.create({
+  /* ★ The bar's own bottom row. `flex: 1` on each side with the badges in the middle keeps the
+     audio chain centred regardless of how long the clock or the stats are. */
+  statusRow:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+                gap: 8, paddingHorizontal: 4, marginTop: 3 },
+  statusSide: { flex: 1, minWidth: 0, flexShrink: 1, flexDirection: 'row',
+                alignItems: 'center', gap: 8 },
   sigFrame: { borderRadius: 7, overflow: 'hidden', backgroundColor: 'rgba(105,98,82,0.30)', justifyContent: 'center', alignSelf: 'stretch' },
   lsBtn:    { flex: 1, backgroundColor: 'rgba(20,10,0,0.75)', borderWidth: 1, borderRadius: 4, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
   // ★★ NO FIXED lineHeight HERE — it is set at the use site, SCALED, alongside fontSize.
@@ -1257,6 +1359,8 @@ function ControlsBar({
   fmStereo = false, activeDecoder = null, dabOn = false,
   onVfoDelta, onBwDelta, onMode, onStep,
   onMenu, onChat, onAudio, audioAsRecord = false, onFreqTap, onModeTap,
+  // ★ The audio chain's standing state — drawn only when ON, see DspBadges.
+  dspNr = false, dspNb = false, dspAn = false,
   instanceHost = 'ubersdr',
   isRecording = false, recSeconds = 0, chatUnread = false,
   freqUnit = 'khz',
@@ -1352,6 +1456,7 @@ function ControlsBar({
     signal: signalLevel, peak: peakLevel,
     stepLabel, onFreqTap, onModeTap,
     onStep: cycleStep, onChat, onMenu, onAudio, audioAsRecord, onShare: handleShare,
+    dspNr, dspNb, dspAn,     // ★ the audio chain's standing state — see DspBadges
     onVfoDelta, onBwDelta,
     clock, isRecording, recTime, chatUnread,
     csDisabled: chatShareDisabled,

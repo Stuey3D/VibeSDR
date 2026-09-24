@@ -368,12 +368,6 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerSpectrogram(JNIEnv*, jobjec
     vibe::LocalSdrShim::setProvidesSpectrogram(on == JNI_TRUE);
 }
 
-// The machine-wide spectrum slowdown when nobody is looking — CPU and uplink, not the radio.
-extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerForceIdleSaver(JNIEnv*, jobject, jboolean on) {
-    vibe::LocalSdrShim::setVibeServerForceIdleSaver(on == JNI_TRUE);
-}
-
 // ★★★ POWER DOWN WHEN NOBODY IS LISTENING, WITHOUT LETTING THE RADIO GO. Seconds after the last
 //     listener before the capture parks. The device stays CLAIMED so it can start again instantly.
 // ★★ AND NOT releaseWhenIdle, deliberately, which is the Linux behaviour of handing the dongle to

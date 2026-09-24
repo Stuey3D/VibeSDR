@@ -434,7 +434,6 @@ final class Server: ObservableObject {
     @AppStorage("lockRate") var lockedRate = 0.0      // 0 = client may change the capture rate
     /// Listeners normally choose whether to let the waterfall idle down. A host on solar and
     /// cellular cannot afford that choice, so its owner can make the saving mandatory.
-    @AppStorage("forceIdle") var forceIdleSaver = false
     @AppStorage("autoStart") var autoStart = true     // start serving as soon as the app launches
     /** Surfaced when macOS refuses to register the login item — silence would look like a toggle
      *  that does nothing. */
@@ -864,7 +863,6 @@ final class Server: ObservableObject {
         cfg.maxFftRate     = maxFps
         cfg.maxBandwidthHz = maxBwHz
         cfg.lockedRate     = lockedRate
-        cfg.forceIdleSaver = forceIdleSaver
         let locJson = locationJson()
 
         // The C strings must outlive the call, so hold them across it.
@@ -2238,7 +2236,6 @@ struct SettingsView: View {
                  *    is shared — it decides how much the server captures and how much CPU and
                  *    bandwidth every listener costs. maxBandwidthHz remains in VsConfig for the
                  *    daemon's config file; what goes is the control nobody else has. */
-                Toggle("Require idle power saving", isOn: $server.forceIdleSaver)
                 Text("The waterfall slows when nobody is touching it, which cuts CPU and data. Listeners "
                        + "can normally switch that off — turn this on to make it compulsory, for a metered "
                        + "connection, battery or solar.")

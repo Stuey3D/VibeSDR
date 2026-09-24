@@ -67,7 +67,6 @@ typedef struct {
     double maxFftRate;     // 0 = default    ─┘
     double lockedRate;     // 0 = client may change the capture rate
     bool   serveWebClient; // serve the browser client at GET /
-    bool   forceIdleSaver; // listeners may NOT switch off idle power-saving (solar/cellular hosts)
     /** Serve RAW audio instead of Opus to NETWORKED listeners? ~187 KB/s each, ~20x the
      *  compressed stream, out of the OWNER's uplink — which is why it is off by default
      *  (zero-init = VS_UNCOMP_OFF). Loopback ignores this field entirely; see above.

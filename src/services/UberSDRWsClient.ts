@@ -1578,9 +1578,21 @@ export abstract class UberSDRWsClient {
       for (let i = 0; i < h.length; i++) if (h[i] > med * 2.5 + 50) stalls++;
       const starving = this.lastFrameAt > 0 &&
         now - this.lastFrameAt > Math.max(2000, med * 4);
-      if (now - this.lastReconnectAt < 8000 || stalls >= 3 || starving || this.rttJit > 250) {
+      /* ★★★ THE ROUND TRIP DEMOTES ONLY WHERE A PERSON WOULD NOTICE. `rttJit > 80` and
+       *  `rttAvg > 400` sat two bars on a link with nothing whatever wrong with it: ordinary Wi-Fi
+       *  jitters by more than 80 ms all day (power save, beacons, a busy AP), and this meter was
+       *  yellow "a lot" on Stuart's own server while "everything is lightning fast response and
+       *  stable" (2026-09-24). A meter that cries wolf on a perfect link teaches people to ignore
+       *  it, which costs exactly the times it is right.
+       *  ★★ AND IT MUST STILL CATCH A REALLY BAD ONE. The figures below are where a listener feels
+       *     it: better than half a second before a control responds is fine, 2.5 s is not, and the
+       *     browser's meter now uses the same two numbers so the two clients cannot disagree about
+       *     one link. (Kiko's server was spiking to 4.5 s — that has to read red, and did not.)
+       *  ★ The FRAME path is still the primary judge: stalls and starvation are what a listener
+       *    actually sees, and they are unchanged. */
+      if (now - this.lastReconnectAt < 8000 || stalls >= 3 || starving || this.rttAvg > 2500) {
         q = 1;
-      } else if (stalls >= 1 || this.rttJit > 80 || this.rttAvg > 400) {
+      } else if (stalls >= 1 || this.rttAvg > 600) {
         q = 2;
       } else {
         q = 3;

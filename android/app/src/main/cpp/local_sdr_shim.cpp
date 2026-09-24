@@ -820,7 +820,6 @@ static std::atomic<double> g_vsMaxFftRate{0.0};        // <=0 = server default (
 // listener may switch it off. A server on solar and cellular in the middle of nowhere cannot afford
 // that choice, so its owner can make the saving MANDATORY: published to clients, which then lock
 // their toggle on and say who set it (the same courtesy as lockedRate).
-static std::atomic<bool>   g_vsForceIdle{false};
 // Serve the browser client at GET /? Off = app-only, so a stranger who finds the
 // address in a browser gets nothing. The WS endpoints stay up (the app uses them);
 // only the human-facing page is withheld.
@@ -14205,10 +14204,6 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         j += std::string(",\"biasT\":") + (g_biasTeeOn.load() ? "true" : "false");
         if (vsDesiredRspBiasT() >= 0)
             j += std::string(",\"rspBiasT\":") + (vsDesiredRspBiasT() ? "true" : "false");
-        // Owner requires the idle saver — the client locks its toggle on rather than offering a
-        // switch we would silently ignore.
-        j += ",\"forceIdleSaver\":";
-        j += (g_serveOnLan.load() && g_vsForceIdle.load()) ? "1" : "0";
         j += "}";
         sendText(sock, j);
     }
@@ -21759,10 +21754,6 @@ void LocalSdrShim::summonClient() {
     { std::lock_guard<std::mutex> lk(p->clientMtx); sock = p->specClient; }
     if (sock && sock->isOpen()) p->sendText(sock, "{\"type\":\"summon\"}");
 }
-void LocalSdrShim::setVibeServerForceIdleSaver(bool on) {
-    g_vsForceIdle.store(on);
-    LOGI("VibeServer idle saver: %s", on ? "REQUIRED (clients may not disable)" : "listener's choice");
-}
 void LocalSdrShim::setVibeServerLimits(double maxBandwidthHz, double maxFftRate) {
     g_vsMaxBandwidth.store(maxBandwidthHz); g_vsMaxFftRate.store(maxFftRate);
 }
@@ -25181,6 +25172,26 @@ void LocalSdrShim::setGain(int gainTenthDb) {
     if (p->useAirspy()) {
         /* ★ 0-21 preset positions on the linearity curve (or sensitivity, if the owner chose it);
          *  negative = the radio's own LNA+mixer AGC. VibeAGC is RTL-only — see airspy_source.h. */
+        /* ★★★ A GENERIC "AUTO GAIN" MUST NOT UNDO A CHOSEN GAIN MODE.
+         *
+         *  On this radio -1 means Free mode with both stage AGCs on — that is what "auto" IS here,
+         *  and setGainTenthDb(-1) sets exactly that. But every client restores its remembered
+         *  hardware settings on connect, and `autoGain` is a GENERIC field that predates gain
+         *  modes: so a listener who had deliberately chosen Sensitive or Linear got -1 pushed at
+         *  them on every reconnect and came back in Free with both AGCs switched on.
+         *  ★★ Onfliner's Mini, 2026-09-24, both symptoms from this one line: "lna agc/mixer agc are
+         *     automatically enabled if you return to the main menu and launch airspy. If you leave
+         *     the gain in sensitive/linear mode and return … the free mode is automatically
+         *     enabled." The per-radio state I added for him was being written and then overwritten.
+         *  ★ An EXPLICIT mode wins; -1 still means auto for a radio nobody has chosen a mode on
+         *    (aspMode -1), which is the out-of-the-box behaviour and is unchanged. */
+        const int wantMode = g_dsp.aspMode.load();
+        if (gainTenthDb < 0 && wantMode >= 0 && wantMode != 2 /*Free*/) {
+            p->asp->setGainMode(wantMode);
+            LOGI("gain (Airspy): auto ignored — the owner chose %s mode",
+                 wantMode == 0 ? "sensitive" : "linear");
+            return;
+        }
         p->lastGainTenthDb = gainTenthDb;
         p->asp->setGainTenthDb(gainTenthDb);
         LOGI("gain (Airspy): %s", gainTenthDb < 0 ? "the radio's own AGC"

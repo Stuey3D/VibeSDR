@@ -138,7 +138,6 @@ struct Opts {
     bool        publicSharing = false;
     int         updateSrvHour = -1, updateSrvDay = -1;   // VibeServer only
     int         updateAllHour = -1, updateAllDay = -1;   // every package
-    bool        forceIdleSaver  = false; // listeners may not switch idle power-saving off
     bool        releaseWhenIdle = false; // hand the SDR to another program while nobody listens
     int         uncompressed    = 0;     // 0 = off, 1 = listener's choice, 2 = compatibility only
     // Receiver identity — published to every listener, and the reason a directory entry is useful.
@@ -435,7 +434,6 @@ bool parse(int argc, char** argv, Opts& o) {
         //     ★ Without this the child would fork a SECOND copy of a radio the app is already
         //       serving, and the two would fight over the device.
         else if (a == "--no-supervise")   o.noSupervise = true;
-        else if (a == "--force-idle-saver") o.forceIdleSaver = true;
         else if (a == "--release-when-idle") o.releaseWhenIdle = true;
         else if (a == "--uncompressed")   { std::string v = need(i);
             o.uncompressed = (v == "choice") ? 1 : (v == "compat") ? 2 : 0; }
@@ -511,7 +509,6 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.users = c.users;
     o.maxBw = c.maxBw; o.maxFps = c.maxFps; o.fftRate = c.fftRate;
     o.uncompressed = c.uncompressed;
-    o.forceIdleSaver = c.forceIdleSaver;
     o.releaseWhenIdle = c.releaseWhenIdle;
     o.idleGrace = c.idleGrace;
     o.rfNotch = c.rfNotch; o.dabNotch = c.dabNotch; o.zoomSpectrum = c.zoomSpectrum;
@@ -549,7 +546,6 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.users = o.users;
     c.maxBw = o.maxBw; c.maxFps = o.maxFps; c.fftRate = o.fftRate;
     c.uncompressed = o.uncompressed;
-    c.forceIdleSaver = o.forceIdleSaver;
     c.releaseWhenIdle = o.releaseWhenIdle;
     c.idleGrace = o.idleGrace;
     c.rfNotch = o.rfNotch; c.dabNotch = o.dabNotch; c.zoomSpectrum = o.zoomSpectrum;
@@ -1671,7 +1667,7 @@ int main(int argc, char** argv) {
                 r.demodMode = c.demodMode; r.landingFreq = c.landingFreq;
                 r.users = c.users; r.maxBw = c.maxBw; r.maxFps = c.maxFps; r.fftRate = c.fftRate;
                 r.uncompressed = c.uncompressed;
-                r.forceIdleSaver = c.forceIdleSaver; r.releaseWhenIdle = c.releaseWhenIdle;
+                r.releaseWhenIdle = c.releaseWhenIdle;
                 r.idleGrace = c.idleGrace;
                 r.rfNotch = c.rfNotch; r.dabNotch = c.dabNotch; r.zoomSpectrum = c.zoomSpectrum;
                 r.autoNotch = c.autoNotch; r.userNotch = c.userNotch;
@@ -2210,7 +2206,7 @@ int main(int argc, char** argv) {
             r.demodMode = next.demodMode; r.landingFreq = next.landingFreq;
             r.users = next.users; r.maxBw = next.maxBw; r.maxFps = next.maxFps;
             r.fftRate = next.fftRate; r.uncompressed = next.uncompressed;
-            r.forceIdleSaver = next.forceIdleSaver; r.releaseWhenIdle = next.releaseWhenIdle;
+            r.releaseWhenIdle = next.releaseWhenIdle;
             r.idleGrace = next.idleGrace;
             r.rfNotch = next.rfNotch; r.dabNotch = next.dabNotch; r.zoomSpectrum = next.zoomSpectrum;
             r.biasT = next.biasT; r.ppm = next.ppm; r.ppb = next.ppb;
@@ -2367,7 +2363,6 @@ int main(int argc, char** argv) {
 #else
     LocalSdrShim::setMaintenanceActions("");   // no section at all, rather than an empty one
 #endif
-    LocalSdrShim::setVibeServerForceIdleSaver(o.forceIdleSaver);
     LocalSdrShim::setVibeServerReleaseWhenIdle(o.releaseWhenIdle);
     LocalSdrShim::setBatteryPolicy(g_serverConfig.batteryPauseAt, g_serverConfig.batteryResumeAt);
     LocalSdrShim::setVibeServerUncompressedAudio(o.uncompressed);

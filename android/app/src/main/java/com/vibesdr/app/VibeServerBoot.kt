@@ -172,7 +172,6 @@ object VibeServerBoot {
         VibeLocalSDR.setVibeServerLockedCentre(cfg.n("lockedCentre", 0.0))
         VibeLocalSDR.setVibeServerZoomSpectrum(cfg.b("zoomSpectrum", false))
         VibeLocalSDR.setVibeServerSpectrogram(cfg.b("spectrogram", false))
-        VibeLocalSDR.setVibeServerForceIdleSaver(cfg.b("forceIdleSaver", false))
         // ★ 0 = never park. 300 s matches the desktop's own default.
         VibeLocalSDR.setVibeServerIdleGrace(cfg.n("idleGraceSec", 300.0))
         VibeLocalSDR.setVibeServerLandingInfo(
