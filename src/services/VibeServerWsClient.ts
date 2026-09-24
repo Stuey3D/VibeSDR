@@ -884,7 +884,13 @@ export abstract class VibeServerWsClient {
                   /** ★ OUR RF loop (the LNA), distinct from the radio's own IF AGC. Wire key is
                    *  `rfagc`, lower case, like its siblings — the server reads exactly that. */
                   rfagc?: boolean;
-                  rfNotch?: boolean; dabNotch?: boolean }) {
+                  rfNotch?: boolean; dabNotch?: boolean;
+                  /* ★ The RSP sweep, 2026-09-24. `antenna` is the port NAME as the radio itself
+                   *  published it in `antennas` — "A"/"B"/"C", "Hi-Z", "Tuner 1 50Ω" — never an
+                   *  index: an index would mean this end and the radio agreeing on an ordering,
+                   *  which is the sort of pact that survives until a model with four ports.
+                   *  ★ hdr/amNotch/extRef are plain toggles the hardware handles. */
+                  antenna?: string; hdr?: boolean; amNotch?: boolean; extRef?: boolean }) {
     const m: Record<string, unknown> = { type: 'rsp_control' };
     if (o.lna      !== undefined) m.lna      = o.lna;
     if (o.ifgr     !== undefined) m.ifgr     = o.ifgr;
@@ -898,6 +904,12 @@ export abstract class VibeServerWsClient {
      *  lowercase, which is why it worked there and not in the app. */
     if (o.rfNotch  !== undefined) m.rfnotch  = o.rfNotch ? 1 : 0;
     if (o.dabNotch !== undefined) m.dabnotch = o.dabNotch ? 1 : 0;
+    // ★ Lowercase keys, like the two above — the shim matches the key exactly, and that mismatch
+    //   is what made the notches dead in the app while they worked in the browser.
+    if (o.antenna  !== undefined) m.antenna  = o.antenna;
+    if (o.hdr      !== undefined) m.hdr      = o.hdr ? 1 : 0;
+    if (o.amNotch  !== undefined) m.amnotch  = o.amNotch ? 1 : 0;
+    if (o.extRef   !== undefined) m.extref   = o.extRef ? 1 : 0;
     this._sendCtl(m);
   }
 

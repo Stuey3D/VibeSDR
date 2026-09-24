@@ -165,6 +165,64 @@ public:
     bool hasDabNotch() const;
     bool hasBiasT() const;
     std::string model() const;
+
+    /* ── ★★★ ANTENNA PORTS ────────────────────────────────────────────────────────────────────
+     *  GitHub #29 (bower01, an RSPdx-R2): "Didn't find the antenna switch either in the admin
+     *  panel, either in the receiver panel. Even when logged in." It was never built.
+     *
+     *  ★★★ THE LIST IS THE FEATURE. A radio with one aerial socket returns an EMPTY list and no
+     *      selector is drawn anywhere — which is every RSP Stuart owns, and is why this cannot
+     *      regress his receivers: the write below is never reached on an RSP1/1A/1B.
+     *      AGENTS.md, "a control that only works on one radio should not be there": the honest
+     *      form of that rule is to ask the radio what it has rather than to branch on a model
+     *      name at the far end.
+     *  ★★ NAMES ARE THE ONES PRINTED ON THE CASE — "A", "B", "C", "Hi-Z" — because the owner is
+     *     looking at the box while they choose. They are also what travels on the wire and what
+     *     a per-band rule is written in ("hf:Hi-Z, vhf:A"), so they must stay stable.
+     *  ★ The RSPduo is deliberately absent: its "antenna" is a TUNER SWAP (and Hi-Z lives on
+     *    tuner 1 only), which is a different operation from writing a field and re-Updating.
+     *    An empty list draws nothing, which is the honest answer until that is built and testable.
+     *  ✗ UNTESTED ON HARDWARE — nobody here owns a multi-antenna RSP (Stuart, 2026-09-24: "I will
+     *    not be able to test this myself though as all my SDR's are single antenna modes"). */
+    /* ── ★★ THE REST OF WHAT AN RSP HAS ──────────────────────────────────────────────────────
+     *  Swept field by field against the vendor headers (2026-09-24). Each is gated by a
+     *  capability so a radio without it draws nothing, exactly as antennaPorts() is.
+     *  ✗ UNTESTED: only RSP1A/1B here. Dual-tuner / diversity deliberately excluded. */
+
+    /** ★★★ HDR — the RSPdx family's high-dynamic-range path BELOW 2 MHz, which is precisely where
+     *  a strong medium-wave signal overloads an ordinary front end. A plain toggle: the hardware
+     *  does the rest (Stuart, 2026-09-24: "its just an on off toggle and the hardware handles it").
+     *  ★ The API also offers an HDR BANDWIDTH; it is left at the 1.7 MHz default rather than
+     *    exposed, because it only narrows what HDR passes and a second control here would be one
+     *    more thing to explain for no gain a listener can hear. */
+    bool hasHdr() const;
+    void setHdr(bool on);
+
+    /** ★ The Duo's AM broadcast notch — a THIRD filter, separate from the FM and DAB notches, and
+     *  the one that matters when a local MW transmitter is flattening 160 m. Tuner 1 only: it sits
+     *  on the Hi-Z port, which is why the API names the field after that tuner. */
+    bool hasAmNotch() const;
+    void setAmNotch(bool on);
+
+    /** ★ 24 MHz reference output (RSP2 and Duo). The ONE control on a Duo that is genuinely shared
+     *  between its two tuners — everything else in RspDuoTunerParamsT is per tuner. */
+    bool hasExtRefOut() const;
+    void setExtRefOut(bool on);
+
+    /** ★★ Frequency correction in ppm. Every dongle has had this for ever and no RSP ever did:
+     *  LocalSdrShim::setPpm returns early unless there is a librtlsdr handle. The RSP keeps it on
+     *  devParams, so it is a property of the radio rather than of a channel. */
+    void setPpm(int ppm);
+
+    std::vector<std::string> antennaPorts() const;
+    /** The port now selected, or "" when this model has none. */
+    std::string antenna() const;
+    /** Select by NAME, as antennaPorts() gives them. Unknown name or single-port model = no-op. */
+    void setAntenna(const std::string& port);
+private:
+    /** ★ Duo only: choose the tuner on the DeviceT before SelectDevice freezes it. No-op elsewhere. */
+    void applyDuoChoice();
+public:
     /** ★★ TOTAL SYSTEM GAIN in dB — the single number SDRconnect shows above its two
      *  sliders, and the thing that makes them comprehensible. LNA state and IF reduction are
      *  each meaningless alone; what a user actually wants to know is what they have ended up
@@ -317,6 +375,10 @@ private:
     std::atomic<bool> apiFailed_{false};
     std::atomic<bool> serviceDead_{false};
     bool dabDecim_ = false;
+    /** ★ The chosen port, kept HERE so it survives a re-Init: reopen() and the stall watchdog both
+     *  rebuild the device parameters from defaults, and a selection that lived only in the API's
+     *  struct would quietly revert to A on every recovery. Empty = never chosen / no ports. */
+    std::string antenna_;
     // ★★★ THE AGC'S OWN NUMBERS, from the gain-change EVENT. The API reports what the loop has
     //     actually done here; our copy of tunerParams.gain is only what WE last wrote, so with the
     //     AGC running it never moves — the readouts sat still and the IF slider never tracked

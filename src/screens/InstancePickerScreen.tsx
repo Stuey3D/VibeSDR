@@ -2032,6 +2032,15 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               <Text style={{ fontFamily: F, fontSize: fs(16), color: blocksApps(inst) ? C.red : C.amber, flex: 1 }} numberOfLines={1}>
                 {isDefault ? '★ ' : ''}{flagEmoji(inst.countryCode) ? flagEmoji(inst.countryCode) + ' ' : ''}{inst.name}
               </Text>
+              {/* ★★★ A PADLOCK WHEN NOTHING HERE IS OPEN — a master PIN, or every radio holding its
+                  own. Stuart, 2026-09-24. It is a statement of fact, not a refusal: the row still
+                  opens, and the receiver asks for the PIN. What it saves is the tap that finds out.
+                  ★ A server with one public radio shows NO padlock, deliberately — see allLocked. */}
+              {inst.allLocked ? (
+                <Text style={{ fontFamily: F, fontSize: fs(13), color: C.textDim, marginLeft: 6 }}>
+                  {'\u{1F512}'}
+                </Text>
+              ) : null}
               {inst.version ? (
                 <Text style={{ fontFamily: F, fontSize: fs(11), color: versionOld ? C.red : C.textDim, marginLeft: 6 }}>
                   v{inst.version}

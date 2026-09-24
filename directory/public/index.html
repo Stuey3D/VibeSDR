@@ -226,6 +226,24 @@
                    border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
   .srvPin button:disabled { opacity: .5; cursor: default; }
   .srvPinMsg { flex: 1 1 100%; font-size: 11px; opacity: .8; }
+  /* ★ The owner's door sits UNDER the PIN, quieter than it: a link-ish button rather than a
+     second call to action, because on most servers it is not for the person reading.
+     ★★ "OWNER", NOT "OPERATOR" — Stuart, 2026-09-24: "Operator could easily refer to a listener as
+        they operate the sdr when using it". He is right, and it is worst exactly here, where the
+        word has to tell a listener this prompt is NOT for them. */
+  .srvAdminToggle { flex: 0 0 auto; background: none; border: 0; padding: 2px 0;
+                    font: inherit; font-size: 11px; color: var(--accent); opacity: .75;
+                    text-decoration: underline; cursor: pointer; }
+  .srvAdminWrap { flex: 1 1 100%; display: flex; flex-direction: row; align-items: center;
+                  gap: 8px; margin-top: 4px; }
+  .srvAdminWrap input { flex: 0 1 190px; height: 32px; padding: 0 8px; box-sizing: border-box;
+                        font-size: 16px; font-family: inherit; color: var(--freq, #ffb833);
+                        background: rgba(0,0,0,.35); border: 1px solid var(--line);
+                        border-radius: 6px; }
+  .srvAdminWrap button { flex: none; height: 32px; padding: 0 12px; box-sizing: border-box;
+                         font-size: 12px; font-family: inherit; color: inherit;
+                         background: rgba(255,176,0,.08); border: 1px solid var(--line);
+                         border-radius: 6px; cursor: pointer; }
   /* ★ The estate's headcount is the same kind of fact — how much is alive right now. */
   #count { color: var(--phosphor); letter-spacing: .1em; }
   .tag { font-size: 11px; padding: 2px 8px; border-radius: 20px; border: 1px solid var(--line);
@@ -975,6 +993,24 @@ async function pinToken(pin, nonce) {
  *   there is no id to remember and the whole-server case cannot be expressed as a list of them. */
 const ALL_LOCKED = '*';
 
+/** ★★★ NOTHING HERE IS OPEN TO A PASSER-BY — the padlock condition (Stuart, 2026-09-24: "All
+ *  Radios on server locked with different PIN's none publicly accessible or master PIN set
+ *  directory shows a Padlock on that server").
+ *
+ *  ★★ TWO WAYS TO BE SHUT, and the listing must not tell them apart: a master PIN over the whole
+ *     server, or every individual radio carrying its own. To somebody scrolling the directory
+ *     those are the same fact — "I cannot listen to this without being given something" — and the
+ *     padlock says exactly that much and no more.
+ *  ★ A server with ONE open radio and three locked ones is NOT padlocked: there is something here
+ *    for anybody, and the greyed cards say what else exists. Hiding that behind a padlock would
+ *    lose a public receiver in a list of private ones. */
+function serverShut(s) {
+  if (!s) return false;
+  if (s.pin === true) return true;
+  const rs = (s.radios || []).filter((r) => r && r.id);
+  return rs.length > 0 && rs.every((r) => r.pinLocked === true);
+}
+
 /** The whole server is behind one PIN — the Android shape — and nobody here has opened it. */
 function serverLocked(s) {
   if (!s || s.pin !== true) return false;
@@ -1079,9 +1115,14 @@ async function openUnlocked(r, s, win) {
     const base = `https://${s.address}/r/${encodeURIComponent(r.id)}`;
     const ch = await fetch(`${base}/vibeserver/auth`, { cache: 'no-store' }).then((x) => x.json());
     const token = ch && ch.nonce ? await pinToken(rec.pin, ch.nonce) : '';
+    /* ★ An operator carries their TICKET through as well as the PIN proof. The receiver reads the
+     *  ticket for the reserved controls and the proof for the door; sending only one of the two
+     *  would sign them in and then refuse them their own gain slider. */
+    const tk = ADMIN_TICKET.get(s.address);
+    const adm = tk ? `&vs_admin_ticket=${encodeURIComponent(tk)}` : '';
     if (win) win.location = ch && ch.nonce
-      ? `${url}&vs_nonce=${encodeURIComponent(ch.nonce)}&vs_auth=${encodeURIComponent(token)}`
-      : url;
+      ? `${url}&vs_nonce=${encodeURIComponent(ch.nonce)}&vs_auth=${encodeURIComponent(token)}${adm}`
+      : url + (adm ? `&${adm.slice(1)}` : '');
   } catch (e) {
     if (win) win.location = url;      // ★ the receiver's own PIN box is the fallback, not an error
   }
@@ -1343,6 +1384,15 @@ function pinBox(s) {
     return rec ? `<div class="srvPin"><span class="srvPinMsg">\u{1F513} Unlocked for this visit —
                     the receivers your PIN opens are listed below.</span></div>` : '';
   }
+  /* ★★★ THE PIN BOX, AND THE ADMIN DOOR UNDER IT (Stuart, 2026-09-24: "ask for PIN with a box
+   *  like it does now with an admin button underneath that has a password prompt box").
+   *
+   *  ★★ THEY ARE NOT THE SAME CREDENTIAL AND THE LAYOUT SAYS SO. A PIN opens RADIOS; the admin
+   *     password opens radios AND the controls an owner has reserved. Putting them in one box
+   *     would make an owner type their password where a listener's PIN goes, and the server would
+   *     refuse it — with the box saying only "that PIN does not open anything here".
+   *  ★ The admin field is hidden until asked for: on a server whose PIN a club hands round, the
+   *    password prompt is not for the visitor and should not be the first thing they see. */
   return `<form class="srvPin" data-pin="${esc(s.address)}" autocomplete="off">
       <span>${left === 1 ? 'One receiver here is private.' : `${left} receivers here are private.`}
             If you have a PIN, the ones it opens will appear.</span>
@@ -1350,6 +1400,12 @@ function pinBox(s) {
              autocomplete="off" spellcheck="false" placeholder="PIN" aria-label="PIN">
       <button type="submit">UNLOCK</button>
       <span class="srvPinMsg"></span>
+      <button type="button" class="srvAdminToggle">I'm the server owner</button>
+      <span class="srvAdminWrap" hidden>
+        <input type="password" class="srvAdminPw" autocomplete="off" spellcheck="false"
+               placeholder="Admin password" aria-label="Admin password">
+        <button type="button" class="srvAdminGo">UNLOCK ALL</button>
+      </span>
     </form>`;
 }
 
@@ -1423,7 +1479,9 @@ function serverBlock(s) {
       ${s.battery && typeof s.battery.level === 'number'
         ? `<span class="battWrap" title="${s.battery.paused ? 'Low power state — the battery is being protected; back when it has charged' : (s.battery.charging ? `Battery ${s.battery.level}%, charging` : `Battery ${s.battery.level}%, not charging`)}">${batteryIcon(s.battery.level, s.battery.charging, s.battery.paused)}</span>`
         : ''}
-      ${s.pin ? '<span class="tag lock" title="This receiver needs a PIN — it is not open to everyone">\u{1F512} PIN</span>' : ''}
+      ${serverShut(s) ? `<span class="tag lock" title="${s.pin
+            ? 'This whole server needs a PIN — it is not open to everyone'
+            : 'Every receiver here has its own PIN — none is open to everyone'}">\u{1F512} PIN</span>` : ''}
       <!-- ★ No 'tunnel' tag: how a server reaches the internet is the operator's business, and
            the word only asked a listener a question they cannot answer (Stuart, 2026-09-16). -->
       ${shareLeft(s) > 0 ? `<span class="tag temp" title="This listing ends when the share does — the receiver stays running, it just stops being advertised here">Temporary share \u00b7 ${esc(untilText(shareLeft(s)))} left</span>` : ''}
@@ -2828,6 +2886,65 @@ document.getElementById('list').addEventListener('submit', async (ev) => {
   if (opened) applyFilters();             // ★ a full redraw: locked <div>s must become <a>s
 });
 
+/* ★★★ THE OPERATOR'S OWN DOOR. Same challenge-response as the PIN — the password never crosses
+ *  the link, only an HMAC over a nonce the server issued — but it ends somewhere different: the
+ *  server mints a short-lived TICKET, and that ticket is what the receiver is opened with, so the
+ *  password is not carried in the URL of a tab that may be left open.
+ *  ★ 404 from admin-ticket means this server has no admin password at all, which is a different
+ *    answer from "wrong password" and deserves different words: nothing to log in to.
+ *  ★ Admin opens every radio, so the whole server is marked open for this visit — that is what
+ *    "ADMIN = Full access" means and the cards must agree with it. */
+document.getElementById('list').addEventListener('click', (ev) => {
+  const t = ev.target.closest('.srvAdminToggle');
+  if (!t) return;
+  const wrap = t.parentElement.querySelector('.srvAdminWrap');
+  if (wrap) { wrap.hidden = !wrap.hidden; if (!wrap.hidden) wrap.querySelector('input')?.focus(); }
+});
+
+document.getElementById('list').addEventListener('click', async (ev) => {
+  const go = ev.target.closest('.srvAdminGo');
+  if (!go) return;
+  const form = go.closest('form.srvPin');
+  const s = ALL.find((x) => x.address === form?.dataset.pin);
+  const pwBox = form?.querySelector('.srvAdminPw');
+  const msg = form?.querySelector('.srvPinMsg');
+  if (!s || !pwBox) return;
+  const pw = (pwBox.value || '').trim();
+  pwBox.value = '';                       // ★ off the screen before anything else happens
+  if (!pw) return;
+  go.disabled = true;
+  if (msg) msg.textContent = 'Checking…';
+  let ok = false, none = false;
+  try {
+    const base = `https://${s.address}`;
+    const ch = await fetch(`${base}/vibeserver/auth`, { cache: 'no-store' }).then((r) => r.json());
+    if (ch && ch.nonce) {
+      const tok = await pinToken(pw, ch.nonce);
+      const r = await fetch(`${base}/vibeserver/admin-ticket?vs_admin_nonce=${encodeURIComponent(ch.nonce)}`
+                            + `&vs_admin_auth=${encodeURIComponent(tok)}`, { cache: 'no-store' });
+      if (r.status === 404) none = true;
+      else if (r.status === 200) {
+        const j = await r.json();
+        if (j && j.ticket) {
+          ADMIN_TICKET.set(s.address, j.ticket);
+          // ★ Everything, because that is what admin means here.
+          pinRemember(s.address, pw, [ALL_LOCKED]);
+          ok = true;
+        }
+      }
+    }
+  } catch (e) { ok = false; }
+  go.disabled = false;
+  if (msg) msg.textContent = ok ? 'Signed in as the owner — every receiver here is open.'
+            : none ? 'This server has no admin password set.'
+                   : 'That password was not accepted.';
+  if (ok) applyFilters();
+});
+
+/** ★ The admin ticket for a server, for this visit only. Deliberately NOT in sessionStorage: it is
+ *  a short lease the server can revoke, and writing it down outlives the reason it was minted. */
+const ADMIN_TICKET = new Map();
+
 /* ★★ A radio this visitor has unlocked opens with a FRESH signature, so the receiver checks the
  *    PIN itself and they land inside instead of meeting its door a second time. The window is
  *    opened synchronously — a popup blocker will not honour one opened after an await. */
@@ -3075,7 +3192,7 @@ function render(servers, filtered) {
         html: `<div class="mkGlyph" title="${esc(st.label)}">${glyph}${n > 1 ? `<b class="mkN">${n}</b>` : ''}</div>`,
       }),
     }).addTo(markers).bindPopup(
-      group.map((g) => { const gs = state(g); return `<b>${esc(g.name)}</b>${g.pin ? ' \u{1F512}' : ''}<br>${esc(g.grid)} · ${esc(gs.label)}<br>`
+      group.map((g) => { const gs = state(g); return `<b>${esc(g.name)}</b>${serverShut(g) ? ' \u{1F512}' : ''}<br>${esc(g.grid)} · ${esc(gs.label)}<br>`
         + `<a href="${esc(listenUrl(g))}" target="_blank" rel="noopener noreferrer">Listen</a>`; }).join('<hr style="border:0;border-top:1px solid #333;margin:6px 0">')
     );
   }

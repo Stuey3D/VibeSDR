@@ -6634,13 +6634,16 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ── NR cycle: off → nr → nr2 — native Swift DSP (VibeDSP.swift skin ports)
   const onNrMode = useCallback((mode: 'off'|'nr'|'nr2') => {
     setNrMode(mode);
-    VibePowerModule?.setNrMode(mode);  // Android: accepted no-op (port pending)
+    // ★ BOTH PLATFORMS: iOS VibePowerModule.swift, Android VibeStreamModule → VibeStreamService
+    //   (nrMode) → VibeDSP.kt in the decode path. The old "port pending" note here was stale and
+    //   cost the control a release on Android before Stuart spotted it (2026-09-24).
+    VibePowerModule?.setNrMode(mode);
   }, []);
 
   // ── NB toggle — native Swift noise blanker ────────────────────────────────
   const onNb = useCallback((on: boolean) => {
     setNb(on);
-    VibePowerModule?.setNoiseBlanker(on);  // Android: accepted no-op (port pending)
+    VibePowerModule?.setNoiseBlanker(on);   // ★ implemented on both — see onNrMode above
   }, []);
 
   // ── SNR squelch (audio gate) ──────────────────────────────────────────────
@@ -9998,6 +10001,15 @@ export default function SDRScreen({ route, navigation }: Props) {
           onRspRfNotch={(v) => { setRspRfNotch(v); (client.current as any)?.rspControl?.({ rfNotch: v }); }}
           rspDabNotch={rspDabNotch}
           onRspDabNotch={(v) => { setRspDabNotch(v); (client.current as any)?.rspControl?.({ dabNotch: v }); }}
+          /* ★★★ THE RSP SWEEP (GitHub #29, 2026-09-24). `client.current`, not hwClient(): these
+           *  reach the engine over the WS in BOTH modes — a dongle on this phone is a VibeServer
+           *  over loopback — and hwClient() is null locally, which is exactly how six FM controls
+           *  spent two releases doing nothing. The state is not mirrored into local React state
+           *  either: the panel reads it back from radioCaps, so the switch shows the RADIO. */
+          onRspAntenna={(port) => (client.current as any)?.rspControl?.({ antenna: port })}
+          onRspHdr={(v) => (client.current as any)?.rspControl?.({ hdr: v })}
+          onRspAmNotch={(v) => (client.current as any)?.rspControl?.({ amNotch: v })}
+          onRspExtRef={(v) => (client.current as any)?.rspControl?.({ extRef: v })}
           gainCapTenthDb={hwGainCap}
           aspCurve={aspCurve}
           onAspCurve={(sens) => { setAspCurve(sens ? 'sensitivity' : 'linearity');

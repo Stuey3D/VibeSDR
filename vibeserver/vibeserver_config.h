@@ -191,6 +191,25 @@ struct Config {
      *  filter must never switch itself on over an owner's head. autoNotch owns rfNotch/dabNotch
      *  while it is on; userNotch says whether LISTENERS may touch them at all. */
     bool autoNotch = false, userNotch = true;
+    /* ★★★ THE AERIAL, AND WHO MAY MOVE IT (GitHub #29, 2026-09-24). `antenna` is the PORT NAME the
+     *  radio itself publishes — "A"/"B"/"C", "Hi-Z", "Tuner 1 50Ω" — never an index, so a config
+     *  written for one model cannot silently mean something else on another. Empty = the radio's
+     *  own default.
+     *  ★★★ NAMED antennaPort, NOT antenna: RadioConfig::antenna is already the owner's
+     *      DESCRIPTION of what is plugged in ("Random Wire Antenna"), and it is what the
+     *      directory prints on the card. One is what the aerial IS, this is which SOCKET the
+     *      radio listens on. Two meanings behind one name is the `locked` collision from the
+     *      PIN work, where the second quietly won.
+     *  ★ Locked is the same shape as userNotch above: shared hardware an owner may keep to
+     *    themselves. Default UNLOCKED, because a personal receiver should not ask its owner for a
+     *    password to use their own switch. */
+    std::string antennaPort;
+    bool antennaPortLocked = false;
+    /* ★ The rest of the RSP sweep. Each is ignored by a model that lacks it — the capability is
+     *  checked in SdrplaySource, not here, so a shared config across radios cannot misfire. */
+    bool rspHdr = false;        ///< RSPdx/dx-R2: high dynamic range below 2 MHz
+    bool rspAmNotch = false;    ///< RSPduo: AM broadcast notch on the Hi-Z port
+    bool rspExtRef = false;     ///< RSP2/Duo: 24 MHz reference output
     /* ★ DAB drops the IF AGC target for OFDM peak headroom — see kDabAgcSetPoint in the shim.
      *  On by default because a breaking-up ensemble on a receiver whose figures look perfect is
      *  the worst kind of fault to leave on by omission; the target itself is adjustable for an
@@ -406,6 +425,9 @@ struct RadioConfig {
     int         agcLock  = -1;  ///< 1 = AGC forced on, listener may not turn it off (RSP, HF+).
     bool   rfNotch = false, dabNotch = false, zoomSpectrum = false;
     bool   autoNotch = false, userNotch = true;   // ★ see the note on the per-radio copy
+    std::string antennaPort;                      // ★ port NAME — see the note in Config
+    bool   antennaPortLocked = false;
+    bool   rspHdr = false, rspAmNotch = false, rspExtRef = false;
     bool   dabAgcOverride = true;
     int    dabAgcTarget = -40;
     bool   rfAgc = false;
@@ -673,6 +695,9 @@ struct ServerConfig {
  *  migrated into a one-entry list — enabled AND configured, because it is a receiver that is
  *  already working and must not be taken off the air by gaining a gate it never had. */
 bool loadServer(const std::string& path, ServerConfig& cfg, std::string& err);
+/** ★ True when a radio's PIN would be swallowed by the master's sweep — see the .cpp for why that
+ *  is a trap rather than a tidiness rule. Exposed so the setup page can say so BEFORE the save. */
+bool pinCollidesWithMaster(const ServerConfig& cfg, const std::string& radioPin);
 bool saveServer(const std::string& path, const ServerConfig& cfg, std::string& err);
 std::string toJson(const ServerConfig& cfg);
 bool fromJson(const std::string& json, ServerConfig& cfg, std::string& err);

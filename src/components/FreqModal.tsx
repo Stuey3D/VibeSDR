@@ -691,7 +691,7 @@ export default function FreqModal({
                     returnKeyType="done"
                   />
                   <Text style={st.magicHint}>
-                    The operator's key for locked profiles. Blank unless they gave you one.
+                    The server owner's key for locked profiles. Blank unless they gave you one.
                     Kept for this session only.
                   </Text>
                 </View>

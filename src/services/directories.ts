@@ -141,6 +141,11 @@ function normaliseRadios(rows: any[]): VibeRadio[] {
       //   absent count reads as unknown, never as an empty radio.
       listeners: typeof r.listeners === 'number' ? r.listeners : undefined,
       locked: !!r.locked,
+      /* ★★★ `pinLocked`, NOT `locked` — two different facts one letter apart. `locked` above is a
+       *  pinned RF centre; this is "this radio has a PIN of its own". The normaliser dropped it,
+       *  so the app's list could not tell a server where every radio is private from one that is
+       *  wide open, and drew neither a padlock nor a hint (2026-09-24). */
+      pinLocked: r.pinLocked === true,
       restricted: !!r.restricted,
       centreHz: typeof r.centreHz === 'number' ? r.centreHz : undefined,
       spanHz: typeof r.spanHz === 'number' ? r.spanHz : undefined,
@@ -201,6 +206,11 @@ async function fetchVibeServers(lat?: number, lon?: number): Promise<SDRInstance
       full: max > 0 && users >= max,
       sessionLimitMins: Number(s.limitMin) > 0 ? Number(s.limitMin) : undefined,
       needsPin: !!s.pin,
+      /* ★ Computed HERE, once, rather than in the row that draws it: the same question is asked by
+       *  the web directory (serverShut) and must get the same answer in both places. */
+      allLocked: !!s.pin
+        || (Array.isArray(s.radios) && s.radios.length > 0
+            && s.radios.every((r: any) => r && r.pinLocked === true)),
       radios: normaliseRadios(radios),
     };
   }).filter((i: SDRInstance) => !!i.url);

@@ -5,6 +5,7 @@
 #include <sdrplay_api.h>
 #include <dlfcn.h>
 #include <cstring>
+#include <algorithm>     // ★ std::find — the antenna name check
 #include <mutex>
 #include <vector>
 #include <atomic>
@@ -301,6 +302,7 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
         return false;
     }
     impl_->dev = devs[index];
+    applyDuoChoice();            // ★ Duo only: pick the tuner BEFORE SelectDevice freezes it
     sdrplay_api_ErrT e = api().SelectDevice(&impl_->dev);
     api().Unlock();
     if (e != sdrplay_api_Success) {
@@ -322,6 +324,15 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
 
     auto* dp = impl_->params->devParams;
     auto* ch = impl_->params->rxChannelA;
+    /* ★ Hi-Z on the Duo is the AM PORT of tuner 1, set on the channel params once they exist —
+     *  the tuner itself was chosen before SelectDevice (applyDuoChoice). Both halves are written
+     *  every time so the two cannot disagree: picking "Tuner 1 50Ω" must put the AM port BACK,
+     *  or the 50Ω socket stays bypassed and the radio reads as deaf above the AM band. */
+    if (impl_->dev.hwVer == SDRPLAY_RSPduo_ID && ch) {
+        ch->rspDuoTunerParams.tuner1AmPortSel =
+            (antenna_ == "Tuner 1 Hi-Z") ? sdrplay_api_RspDuo_AMPORT_1
+                                         : sdrplay_api_RspDuo_AMPORT_2;
+    }
     if (sampleRateHz < 2000000.0) sampleRateHz = 2000000.0;   // zero-IF minimum
     if (dp) dp->fsFreq.fsHz = sampleRateHz;
     if (ch) {
@@ -615,13 +626,48 @@ bool SdrplaySource::restartStream(std::string& err) {
      *    kept the notch IN while every readout said off (Stuart: "the DAB notch says its off but
      *    the gain levels say its on still"). Written again from the struct, the way a fresh open
      *    would see them. */
-    if (impl_->params->devParams && hasRfNotch()) {
+    /* ★★★ AND FOR EVERY MODEL, NOT JUST THE TWO ON THE BENCH. This re-assert existed for the
+     *  RSP1A/1B and fell out of a `default: break;` for the RSP2, the Duo and the RSPdx — so on
+     *  those radios the fault the note above describes was never actually fixed: a stall re-init
+     *  would leave the tuner holding a notch every readout said was off. The models differ in
+     *  WHERE the fields live (channel params on the RSP2/Duo, device params on the dx) and in
+     *  whether the reason is an ordinary one or Ext1, which is why each needs naming.
+     *  ★ Guarded on `params` alone now: the devParams test was right for the RSP1A, whose notches
+     *    live there, and wrong as a gate for the radios whose notches do not. */
+    if (impl_->params && hasRfNotch()) {
         switch (impl_->dev.hwVer) {
             case SDRPLAY_RSP1A_ID: case SDRPLAY_RSP1B_ID:
                 api().Update(impl_->dev.dev, impl_->dev.tuner,
                              (sdrplay_api_ReasonForUpdateT)(sdrplay_api_Update_Rsp1a_RfNotchControl
                                                           | sdrplay_api_Update_Rsp1a_RfDabNotchControl),
                              sdrplay_api_Update_Ext1_None);
+                break;
+            case SDRPLAY_RSP2_ID:
+                // ★ No DAB notch on an RSP2 — hasDabNotch() says so, and asking for one here
+                //   would be asking the API for a control this radio has never had.
+                api().Update(impl_->dev.dev, impl_->dev.tuner,
+                             (sdrplay_api_ReasonForUpdateT)(sdrplay_api_Update_Rsp2_RfNotchControl
+                                                          | sdrplay_api_Update_Rsp2_AntennaControl
+                                                          | sdrplay_api_Update_Rsp2_AmPortSelect),
+                             sdrplay_api_Update_Ext1_None);
+                break;
+            case SDRPLAY_RSPduo_ID:
+                api().Update(impl_->dev.dev, impl_->dev.tuner,
+                             (sdrplay_api_ReasonForUpdateT)(sdrplay_api_Update_RspDuo_RfNotchControl
+                                                          | sdrplay_api_Update_RspDuo_RfDabNotchControl),
+                             sdrplay_api_Update_Ext1_None);
+                break;
+            case SDRPLAY_RSPdx_ID:
+            case SDRPLAY_RSPdxR2_ID:
+                /* ★ The dx carries its antenna selection here too: it lives on devParams beside
+                 *  the notches, so a re-init that restated one and not the other could leave the
+                 *  radio listening to a different aerial than the one on screen. */
+                api().Update(impl_->dev.dev, impl_->dev.tuner,
+                             sdrplay_api_Update_None,
+                             (sdrplay_api_ReasonForUpdateExtension1T)
+                                 (sdrplay_api_Update_RspDx_RfNotchControl
+                                | sdrplay_api_Update_RspDx_RfDabNotchControl
+                                | sdrplay_api_Update_RspDx_AntennaControl));
                 break;
             default: break;
         }
@@ -1129,10 +1175,47 @@ void SdrplaySource::setRfNotch(bool on) {
                                     sdrplay_api_Update_Rsp1a_RfNotchControl,
                                     sdrplay_api_Update_Ext1_None);
             break;
+        // ★ RSP2 and Duo keep theirs on the CHANNEL params, not the device — see the note above
+        //   setDabNotch for why all four models were reported and only two were wired.
+        case SDRPLAY_RSP2_ID:
+            impl_->params->rxChannelA->rsp2TunerParams.rfNotchEnable = on ? 1 : 0;
+            if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                                    sdrplay_api_Update_Rsp2_RfNotchControl,
+                                    sdrplay_api_Update_Ext1_None);
+            break;
+        case SDRPLAY_RSPduo_ID:
+            impl_->params->rxChannelA->rspDuoTunerParams.rfNotchEnable = on ? 1 : 0;
+            if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                                    sdrplay_api_Update_RspDuo_RfNotchControl,
+                                    sdrplay_api_Update_Ext1_None);
+            break;
+        case SDRPLAY_RSPdx_ID:
+        case SDRPLAY_RSPdxR2_ID:
+            if (impl_->params->devParams)
+                impl_->params->devParams->rspDxParams.rfNotchEnable = on ? 1 : 0;
+            if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                                    sdrplay_api_Update_None,
+                                    sdrplay_api_Update_RspDx_RfNotchControl);
+            break;
         default: break;
     }
 }
 
+/* ★★★ THE NOTCHES AND THE BIAS-T EXISTED ON PAPER FOR FOUR MODELS AND WERE WIRED FOR TWO.
+ *
+ *  hasRfNotch() answers true for the RSP1A, RSP1B, RSP2, RSPduo, RSPdx and RSPdx-R2; hasDabNotch()
+ *  for all but the RSP2; hasBiasT() for all of them. The SETTERS below handled `case RSP1A, RSP1B`
+ *  and fell out of a `default: break;` for everything else — so on a Duo, an RSPdx or an RSP2 the
+ *  client drew all three switches, the owner pressed them, and the radio never heard a word of it.
+ *  Found while adding the antenna selector those same owners are missing (GitHub #29, 2026-09-24).
+ *
+ *  ★★ SAME FAULT AS THE ANTENNA, AND THE SAME SHAPE THE WHOLE PROJECT KEEPS PAYING FOR: a
+ *     capability that ANSWERS for a radio the code cannot actually drive. The capability reporter
+ *     and the setter are two readers of one fact, and only one was ever updated.
+ *  ★ The fields live in a different struct per model — channel params on the RSP2 and Duo, DEVICE
+ *    params on the dx — and the dx's update reasons are Ext1 rather than ordinary reasons.
+ *  ✗ UNTESTED ON HARDWARE: only RSP1A/1B here. Written from the vendor headers.
+ */
 void SdrplaySource::setDabNotch(bool on) {
     if (!impl_->params || !impl_->params->rxChannelA || !hasDabNotch()) return;
     switch (impl_->dev.hwVer) {
@@ -1142,6 +1225,20 @@ void SdrplaySource::setDabNotch(bool on) {
             if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
                                     sdrplay_api_Update_Rsp1a_RfDabNotchControl,
                                     sdrplay_api_Update_Ext1_None);
+            break;
+        case SDRPLAY_RSPduo_ID:
+            impl_->params->rxChannelA->rspDuoTunerParams.rfDabNotchEnable = on ? 1 : 0;
+            if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                                    sdrplay_api_Update_RspDuo_RfDabNotchControl,
+                                    sdrplay_api_Update_Ext1_None);
+            break;
+        case SDRPLAY_RSPdx_ID:
+        case SDRPLAY_RSPdxR2_ID:
+            if (impl_->params->devParams)
+                impl_->params->devParams->rspDxParams.rfDabNotchEnable = on ? 1 : 0;
+            if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                                    sdrplay_api_Update_None,
+                                    sdrplay_api_Update_RspDx_RfDabNotchControl);
             break;
         default: break;
     }
@@ -1158,8 +1255,203 @@ void SdrplaySource::setBiasT(bool on) {
                                           sdrplay_api_Update_Rsp1a_BiasTControl,
                                           sdrplay_api_Update_Ext1_None);
             break;
+        case SDRPLAY_RSP2_ID:
+            impl_->params->rxChannelA->rsp2TunerParams.biasTEnable = on ? 1 : 0;
+            if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                                    sdrplay_api_Update_Rsp2_BiasTControl,
+                                    sdrplay_api_Update_Ext1_None);
+            break;
+        case SDRPLAY_RSPduo_ID:
+            impl_->params->rxChannelA->rspDuoTunerParams.biasTEnable = on ? 1 : 0;
+            if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                                    sdrplay_api_Update_RspDuo_BiasTControl,
+                                    sdrplay_api_Update_Ext1_None);
+            break;
+        case SDRPLAY_RSPdx_ID:
+        case SDRPLAY_RSPdxR2_ID:
+            if (impl_->params->devParams)
+                impl_->params->devParams->rspDxParams.biasTEnable = on ? 1 : 0;
+            if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                                    sdrplay_api_Update_None,
+                                    sdrplay_api_Update_RspDx_BiasTControl);
+            break;
         default: break;
     }
+}
+
+/* ══ HDR, THE AM NOTCH, THE REFERENCE OUTPUT AND PPM ══════════════════════════════════════════
+ *  The remainder of the sweep. Every one existed in the API with no path to it from anywhere in
+ *  this project. ✗ None is testable here — only RSP1A/1B on the bench.
+ */
+bool SdrplaySource::hasHdr() const {
+    return impl_->dev.hwVer == SDRPLAY_RSPdx_ID || impl_->dev.hwVer == SDRPLAY_RSPdxR2_ID;
+}
+
+void SdrplaySource::setHdr(bool on) {
+    if (!hasHdr() || !impl_->params || !impl_->params->devParams) return;
+    std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
+    impl_->params->devParams->rspDxParams.hdrEnable = on ? 1 : 0;
+    if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                            sdrplay_api_Update_None,
+                            sdrplay_api_Update_RspDx_HdrEnable);
+    std::fprintf(stderr, "sdrplay: HDR %s\n", on ? "on" : "off");
+}
+
+bool SdrplaySource::hasAmNotch() const { return impl_->dev.hwVer == SDRPLAY_RSPduo_ID; }
+
+void SdrplaySource::setAmNotch(bool on) {
+    if (!hasAmNotch() || !impl_->params || !impl_->params->rxChannelA) return;
+    std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
+    impl_->params->rxChannelA->rspDuoTunerParams.tuner1AmNotchEnable = on ? 1 : 0;
+    if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                            sdrplay_api_Update_RspDuo_Tuner1AmNotchControl,
+                            sdrplay_api_Update_Ext1_None);
+}
+
+bool SdrplaySource::hasExtRefOut() const {
+    return impl_->dev.hwVer == SDRPLAY_RSP2_ID || impl_->dev.hwVer == SDRPLAY_RSPduo_ID;
+}
+
+void SdrplaySource::setExtRefOut(bool on) {
+    if (!hasExtRefOut() || !impl_->params || !impl_->params->devParams) return;
+    std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
+    switch (impl_->dev.hwVer) {
+        case SDRPLAY_RSP2_ID:
+            impl_->params->devParams->rsp2Params.extRefOutputEn = on ? 1 : 0;
+            if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                                    sdrplay_api_Update_Rsp2_ExtRefControl,
+                                    sdrplay_api_Update_Ext1_None);
+            break;
+        case SDRPLAY_RSPduo_ID:
+            impl_->params->devParams->rspDuoParams.extRefOutputEn = on ? 1 : 0;
+            if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                                    sdrplay_api_Update_RspDuo_ExtRefControl,
+                                    sdrplay_api_Update_Ext1_None);
+            break;
+        default: break;
+    }
+}
+
+void SdrplaySource::setPpm(int ppm) {
+    if (!impl_->params || !impl_->params->devParams) return;
+    std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
+    impl_->params->devParams->ppm = (double)ppm;
+    if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                            sdrplay_api_Update_Dev_Ppm, sdrplay_api_Update_Ext1_None);
+    std::fprintf(stderr, "sdrplay: ppm %d\n", ppm);
+}
+
+/* ══ ANTENNA PORTS ════════════════════════════════════════════════════════════════════════════
+ *  GitHub #29. Built from the API headers and SoapySDRPlay3, and ✗ NEVER RUN ON THE HARDWARE —
+ *  nobody here owns a multi-antenna RSP. Everything below is therefore shaped so that a radio
+ *  with ONE socket cannot reach the write at all: antennaPorts() returns empty for the RSP1
+ *  family, and every caller — the caps, the UI, the per-band rules — is driven by that list.
+ */
+std::vector<std::string> SdrplaySource::antennaPorts() const {
+    switch (impl_->dev.hwVer) {
+        /* ★ A and B are 50Ω sockets; Hi-Z is the high-impedance AM port, which the API selects
+         *  through amPortSel rather than antennaSel — a different field, same control to a user. */
+        case SDRPLAY_RSP2_ID:    return { "A", "B", "Hi-Z" };
+        case SDRPLAY_RSPdx_ID:
+        case SDRPLAY_RSPdxR2_ID: return { "A", "B", "C" };
+        /* ★★★ THE RSPduo's "ANTENNA" IS A TUNER, and that is why its names say so. Tuner 1 owns
+         *  both the 50Ω socket and the Hi-Z port (Hi-Z is amPortSel, not a socket of its own);
+         *  tuner 2 has one 50Ω socket and no Hi-Z. Naming them "A/B/C" would be a lie about the
+         *  hardware and unmatchable to the labels on the case.
+         *  ★★ Selecting one is NOT an Update: it is chosen on the DeviceT before SelectDevice, so
+         *     a change costs a re-open (see setAntenna). That is the hardware's price, not ours —
+         *     SwapRspDuoActiveTuner exists but only within an already-running dual/master session,
+         *     which is a different feature (two radios from one Duo) and not this one. */
+        case SDRPLAY_RSPduo_ID:  return { "Tuner 1 50\u03a9", "Tuner 1 Hi-Z", "Tuner 2 50\u03a9" };
+        default:                 return {};
+    }
+}
+
+std::string SdrplaySource::antenna() const {
+    if (antennaPorts().empty()) return "";
+    return antenna_.empty() ? "A" : antenna_;      // A is every model's power-on default
+}
+
+void SdrplaySource::setAntenna(const std::string& port) {
+    const auto ports = antennaPorts();
+    if (ports.empty()) return;                     // single-socket radio: nothing to choose
+    // ★ An unknown name is ignored rather than guessed at. The caller in the shim logs the
+    //   choice and the ports the radio offers, which is where a mismatch is legible.
+    if (std::find(ports.begin(), ports.end(), port) == ports.end()) return;
+    antenna_ = port;                               // remembered across a re-Init — see the member
+    if (!impl_->params || !impl_->params->rxChannelA) return;
+    /* ★★★ UNDER api_mtx, LIKE EVERY OTHER API-TOUCHING CALL. close(), setFrequency and the gain
+     *  writers all take it, and the note on close() records what two unsynchronised teardowns of
+     *  one device struct cost: SIGSEGV. A control write racing a reopen is the same shape. */
+    std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
+    switch (impl_->dev.hwVer) {
+        case SDRPLAY_RSP2_ID: {
+            auto& t = impl_->params->rxChannelA->rsp2TunerParams;
+            /* ★ Hi-Z IS THE AM PORT, not a third antennaSel value — the enum has only A and B.
+             *  Selecting it means amPortSel = AMPORT_1; choosing A or B means putting the AM port
+             *  back to AMPORT_2, or the 50Ω socket stays bypassed and the radio appears deaf on
+             *  everything above the AM band. Both fields, every time, so the two cannot disagree. */
+            const bool hiZ = (port == "Hi-Z");
+            t.amPortSel  = hiZ ? sdrplay_api_Rsp2_AMPORT_1 : sdrplay_api_Rsp2_AMPORT_2;
+            if (!hiZ) t.antennaSel = (port == "B") ? sdrplay_api_Rsp2_ANTENNA_B
+                                                   : sdrplay_api_Rsp2_ANTENNA_A;
+            if (open_) {
+                api().Update(impl_->dev.dev, impl_->dev.tuner,
+                             sdrplay_api_Update_Rsp2_AmPortSelect, sdrplay_api_Update_Ext1_None);
+                if (!hiZ) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                                       sdrplay_api_Update_Rsp2_AntennaControl,
+                                       sdrplay_api_Update_Ext1_None);
+            }
+            break;
+        }
+        case SDRPLAY_RSPdx_ID:
+        case SDRPLAY_RSPdxR2_ID: {
+            if (!impl_->params->devParams) break;
+            auto& d = impl_->params->devParams->rspDxParams;
+            d.antennaSel = (port == "C") ? sdrplay_api_RspDx_ANTENNA_C
+                         : (port == "B") ? sdrplay_api_RspDx_ANTENNA_B
+                                         : sdrplay_api_RspDx_ANTENNA_A;
+            /* ★ RSPdx antenna control is an Ext1 reason, not a Reason — the dx params live on the
+             *  DEVICE rather than the channel, and passing it as an ordinary reason is ignored
+             *  silently (the API returns Success and nothing moves). */
+            if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+                                    sdrplay_api_Update_None,
+                                    sdrplay_api_Update_RspDx_AntennaControl);
+            break;
+        }
+        /* ★★★ THE DUO CANNOT BE SWITCHED IN PLACE. Which tuner is live is fixed on the DeviceT at
+         *  SelectDevice time, so the honest implementation is: remember it, and rebuild the
+         *  device. reopen() already finds the radio by serial and replays the whole open sequence
+         *  (rate, centre, gain, AGC dynamics), which is exactly what this needs and is why it is
+         *  reused rather than hand-rolled — see the note on reopen().
+         *  ★ Silent otherwise: if the radio is not open yet, the choice is simply remembered and
+         *    applied by the next open(). */
+        case SDRPLAY_RSPduo_ID:
+            if (open_) {
+                std::string e;
+                std::fprintf(stderr, "sdrplay: antenna -> %s (re-opening the Duo)\n", port.c_str());
+                if (!reopen(e))
+                    std::fprintf(stderr, "sdrplay: the Duo did not come back: %s\n", e.c_str());
+            }
+            break;
+        default: break;
+    }
+}
+
+/** ★★★ WHICH TUNER THE DUO WILL COME UP ON — decided HERE, on the DeviceT, because SelectDevice
+ *  freezes it. Called from open() before SelectDevice, so it covers reopen() too (reopen replays
+ *  open). On every other model this does nothing at all.
+ *
+ *  ★★ AND IT NAMES THE MODE. The code used to pass whatever GetDevices left in `rspDuoMode`,
+ *     which is Unknown until somebody sets it — SelectDevice is entitled to refuse that, and a
+ *     Duo has never been tested here, so "it probably worked" was never evidence. Single_Tuner is
+ *     what a one-radio server means, stated explicitly.
+ *  ✗ UNTESTED ON HARDWARE. Nobody here owns a Duo. */
+void SdrplaySource::applyDuoChoice() {
+    if (impl_->dev.hwVer != SDRPLAY_RSPduo_ID) return;
+    impl_->dev.rspDuoMode = sdrplay_api_RspDuoMode_Single_Tuner;
+    impl_->dev.tuner = (antenna_.rfind("Tuner 2", 0) == 0) ? sdrplay_api_Tuner_B
+                                                           : sdrplay_api_Tuner_A;
 }
 
 static void streamCb(short* xi, short* xq, sdrplay_api_StreamCbParamsT*,
@@ -1398,6 +1690,17 @@ bool SdrplaySource::hasRfNotch() const { return false; }
 bool SdrplaySource::hasDabNotch() const { return false; }
 bool SdrplaySource::hasBiasT() const { return false; }
 std::string SdrplaySource::model() const { return ""; }
+// ★ No SDRplay API in this build: no radio, so no ports and nothing to select.
+bool SdrplaySource::hasHdr() const { return false; }
+void SdrplaySource::setHdr(bool) {}
+bool SdrplaySource::hasAmNotch() const { return false; }
+void SdrplaySource::setAmNotch(bool) {}
+bool SdrplaySource::hasExtRefOut() const { return false; }
+void SdrplaySource::setExtRefOut(bool) {}
+void SdrplaySource::setPpm(int) {}
+std::vector<std::string> SdrplaySource::antennaPorts() const { return {}; }
+std::string SdrplaySource::antenna() const { return ""; }
+void SdrplaySource::setAntenna(const std::string&) {}
 bool SdrplaySource::apiUnresponsive() { return false; }
 void SdrplaySource::retryApi() {}
 std::string SdrplaySource::deviceNameLocked(int) { return ""; }

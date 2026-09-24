@@ -183,6 +183,13 @@ export interface LocalHardwarePanelProps {
   /** ★ The SDRplay gain API has frozen: every figure here is stale, and a reset is offered. */
   rspGainStuck?: boolean; onRspAgcRestart?: () => void;
   rspRfNotch?: boolean;  onRspRfNotch?: (on: boolean) => void;
+  /* ★ The RSP sweep (GitHub #29, 2026-09-24). The VALUES are read from `radio` — the caps the
+   *  radio itself publishes — rather than mirrored into props here, so the panel always shows the
+   *  hardware rather than what we last sent it. Only the handlers live here. */
+  onRspAntenna?: (port: string) => void;
+  onRspHdr?:     (on: boolean) => void;
+  onRspAmNotch?: (on: boolean) => void;
+  onRspExtRef?:  (on: boolean) => void;
   rspDabNotch?: boolean; onRspDabNotch?: (on: boolean) => void;
   rspBiasT?: boolean;    onRspBiasT?: (on: boolean) => void;
   /** ★★★ HackRF One live state + setters (only when radio.driver === 'hackrf'). EXPERIMENTAL —
@@ -867,7 +874,65 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                     transmitter is what overloads the front end — and OFF when that band is what
                     you came to hear.
                   </Text>
+                  {/* ★ The Duo's AM broadcast notch — a third filter, on the Hi-Z port. */}
+                  {p.radio?.amNotch && (
+                    <View style={[styles.toggleRow, notchesOurs ? null : { opacity: 0.45 }]}>
+                      <Text style={styles.toggleLabel}>AM notch (Hi-Z)</Text>
+                      <Switch value={!!p.radio?.amNotchOn} disabled={!notchesOurs}
+                        onValueChange={(v) => p.onRspAmNotch?.(v)}
+                        trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.radio?.amNotchOn ? C.gold : '#ccc'} />
+                    </View>
+                  )}
                 </>
+              )}
+              {/* ★★★ THE AERIAL. GitHub #29 — an RSPdx-R2 owner: "Didn't find the antenna switch
+                  either in the admin panel, either in the receiver panel. Even when logged in."
+                  ★★ DRAWN FROM THE RADIO'S OWN LIST and nothing else, so a single-socket RSP1
+                     shows nothing here at all. The names are the ones printed on the case.
+                  ★ Locked = the owner has fixed the aerial; shown, greyed, with the reason, rather
+                    than hidden — a listener who cannot see it cannot know why the HF port is not
+                    an option. */}
+              {!!p.radio?.antennas?.length && (
+                <>
+                  <Text style={styles.section}>ANTENNA</Text>
+                  {/* ★ Greyed and inert rather than given a `disabled` prop: Seg has none, and
+                      adding one to a component five other panels share — to fix a control nobody
+                      here can test — is a change with a wider blast radius than the feature. The
+                      notch rows above grey out the same way. */}
+                  <View pointerEvents={p.radio.antennaLocked && !isAdmin ? 'none' : 'auto'}
+                        style={p.radio.antennaLocked && !isAdmin ? { opacity: 0.45 } : null}>
+                    <Seg slot={slot}
+                      options={p.radio.antennas}
+                      value={p.radio.antenna ?? p.radio.antennas[0]}
+                      onChange={(v) => p.onRspAntenna?.(String(v))}
+                      fmt={(v) => String(v)} />
+                  </View>
+                  <Text style={styles.note}>
+                    {p.radio.antennaLocked && !isAdmin
+                      ? 'The server owner has fixed the aerial for this receiver.'
+                      : 'Which socket the radio listens on. Everyone hears the change.'}
+                  </Text>
+                </>
+              )}
+              {/* ★ HDR is the RSPdx family's high-dynamic-range path below 2 MHz — a plain toggle;
+                  the hardware does the rest. It is where a strong medium-wave signal overloads an
+                  ordinary front end, so it earns its place beside the notches. */}
+              {p.radio?.hdr && (
+                <View style={styles.toggleRow}>
+                  <Text style={styles.toggleLabel}>HDR (below 2 MHz)</Text>
+                  <Switch value={!!p.radio?.hdrOn}
+                    onValueChange={(v) => p.onRspHdr?.(v)}
+                    trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.radio?.hdrOn ? C.gold : '#ccc'} />
+                </View>
+              )}
+              {/* ★ 24 MHz reference out (RSP2 / Duo) — the one control a Duo's two tuners share. */}
+              {p.radio?.extRef && (
+                <View style={styles.toggleRow}>
+                  <Text style={styles.toggleLabel}>24 MHz reference out</Text>
+                  <Switch value={!!p.radio?.extRefOn}
+                    onValueChange={(v) => p.onRspExtRef?.(v)}
+                    trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.radio?.extRefOn ? C.gold : '#ccc'} />
+                </View>
               )}
             </>
           ) : isAsp ? (

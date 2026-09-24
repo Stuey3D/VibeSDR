@@ -649,6 +649,12 @@ public:
     void setIfAgcSetPoint(int dBfs);
     void setIfAgcDynamics(int attackMs, int decayMs, int delayMs, int threshDb);
     void setRfNotch(bool on);
+    /* ★ The RSP sweep — see the .cpp. Each is a no-op on a radio that lacks it, because the
+     *  SdrplaySource capability gates the write. */
+    void setRspAntenna(const std::string& port);
+    void setRspHdr(bool on);
+    void setRspAmNotch(bool on);
+    void setRspExtRef(bool on);
     void setDabNotch(bool on);
     void setBiasT(bool on);
     /** Start on an Airspy HF+ (Discovery / Dual Port). Returns the port, or -1 with err set.

@@ -187,6 +187,15 @@ export interface RadioCaps {
   ifGrMin?: number; ifGrMax?: number;
   agcSetPoint?: boolean;
   rfNotch?: boolean; dabNotch?: boolean; biasT?: boolean;
+  /* ★★★ THE RSP SWEEP, 2026-09-24 (GitHub #29). CAPABILITY AND STATE TRAVEL TOGETHER, every time:
+   *  publishing "this radio has three aerials" without "it is on B" is the bias-T fault this file
+   *  already carries a note about — a control whose state cannot be read is not a control.
+   *  ★ `antennas` is the radio's OWN list of port names, and the UI draws from it and nothing
+   *    else — so a single-socket RSP1 publishes an empty list and no selector appears at all. */
+  antennas?: string[]; antenna?: string; antennaLocked?: boolean;
+  hdr?: boolean;     hdrOn?: boolean;        // RSPdx: high dynamic range below 2 MHz
+  amNotch?: boolean; amNotchOn?: boolean;    // RSPduo: AM broadcast notch on the Hi-Z port
+  extRef?: boolean;  extRefOn?: boolean;     // RSP2 / Duo: 24 MHz reference output
 }
 
 export type { DabState } from './dabTypes';

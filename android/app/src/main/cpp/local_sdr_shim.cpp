@@ -4002,6 +4002,8 @@ static int   vsDesiredDabNotch();    // -1 unset, 0 off, 1 on
  *   and it sits thousands of lines before the desired-DSP block these read. */
 static bool  vsAutoNotchOn();
 static bool  vsUserNotchAllowed();
+/* ★ Same reason as its neighbours: the ctl handler sits above the block this reads. */
+static bool  vsAntennaLocked();
 /* ★ The IF AGC target the owner/listener last chose (-999 = never set). Forward-declared for the
  *  same reason as its neighbours: g_dsp is declared thousands of lines below the DAB entry path
  *  that needs to read it. ★★ THIS IS THE THIRD ACCESSOR ADDED FOR THAT REASON TONIGHT — anything
@@ -12389,7 +12391,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (jsonNum(msg, "agcset", v)) {
                 if (g_rspAgcSetLock.load()) {
                     LOGI("AGC target change refused — the owner has locked it");
-                    sendText(sock, "{\"type\":\"notice\",\"why\":\"the operator has fixed this "
+                    sendText(sock, "{\"type\":\"notice\",\"why\":\"the server owner has fixed this "
                                    "receiver's AGC target\"}");
                 } else {
                     LocalSdrShim::instance().setIfAgcSetPoint((int)v);
@@ -12431,6 +12433,45 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                          g_vibeAgcHoldWin.load(std::memory_order_relaxed));
                 }
             }
+            /* ★★★ THE ANTENNA PORT — GitHub #29, bower01's RSPdx-R2: "Didn't find the antenna
+             *  switch either in the admin panel, either in the receiver panel. Even when logged
+             *  in." It had never been built at any layer.
+             *  ★★ IT IS SHARED HARDWARE, like the gain above it, and it is already behind
+             *     sharedGate("gain") at the top of this handler: one listener changing which
+             *     aerial is connected changes it for the whole room, so on a locked receiver it
+             *     takes the admin password and on a personal one it does not.
+             *  ★ Remembered like the notches — an owner who plugs HF into port B means it. */
+            {
+                const std::string ant = jsonStr(msg, "antenna");
+                if (!ant.empty()) {
+                    if (vsAntennaLocked() && !adminGate("the antenna")) {
+                        /* ★ "the server owner", not "the operator" — a listener operates the
+                         *  receiver too, so the word cannot carry the distinction this sentence
+                         *  exists to make (Stuart, 2026-09-24). */
+                        sendText(sock, "{\"type\":\"notice\",\"why\":\"the server owner has fixed "
+                                       "the aerial for this receiver\"}");
+                    } else {
+                        LocalSdrShim::instance().setRspAntenna(ant);
+                        /* ★ Escaped because this string came off the WIRE. setAntenna refuses any
+                         *  name the radio does not have, so nothing hostile reaches the hardware —
+                         *  but it reaches the CONFIG FILE on its way, and a quote there would
+                         *  break every later read of it. */
+                        vsPersist(std::string("{\"antenna\":\"") + dabEscape(ant) + "\"}");
+                        LocalSdrShim::instance().broadcastHwInfo();
+                    }
+                }
+            }
+            // ★ The rest of the RSP sweep — plain toggles, gated by the radio's own capability
+            //   inside SdrplaySource, so a model without one ignores it rather than guessing.
+            if (jsonNum(msg, "hdr", v))    { LocalSdrShim::instance().setRspHdr(v != 0);
+                                             vsPersist(std::string("{\"rspHdr\":") + (v != 0 ? "true" : "false") + "}");
+                                             LocalSdrShim::instance().broadcastHwInfo(); }
+            if (jsonNum(msg, "amnotch", v)) { LocalSdrShim::instance().setRspAmNotch(v != 0);
+                                             vsPersist(std::string("{\"rspAmNotch\":") + (v != 0 ? "true" : "false") + "}");
+                                             LocalSdrShim::instance().broadcastHwInfo(); }
+            if (jsonNum(msg, "extref", v)) { LocalSdrShim::instance().setRspExtRef(v != 0);
+                                             vsPersist(std::string("{\"rspExtRef\":") + (v != 0 ? "true" : "false") + "}");
+                                             LocalSdrShim::instance().broadcastHwInfo(); }
             if (jsonNum(msg, "rfnotch", v))  { LocalSdrShim::instance().setRfNotch(v != 0);
                                                vsPersist(std::string("{\"rfNotch\":") + (v != 0 ? "true" : "false") + "}"); }
             if (jsonNum(msg, "dabnotch", v)) { LocalSdrShim::instance().setDabNotch(v != 0);
@@ -12446,7 +12487,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 sendText(sock, vsAutoNotchOn()
                     ? "{\"type\":\"notice\",\"why\":\"the notches are on automatic \xe2\x80\x94 "
                       "this receiver sets them from the tuned frequency\"}"
-                    : "{\"type\":\"notice\",\"why\":\"the operator has reserved the notch filters\"}");
+                    : "{\"type\":\"notice\",\"why\":\"the server owner has reserved the notch filters\"}");
             // ★ The RSP has its own bias-T, and it is the same hazard as the dongle's.
             if (jsonNum(msg, "biast", v) && adminGate("bias-T"))
                 LocalSdrShim::instance().setBiasT(v != 0);
@@ -12584,7 +12625,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *    rate the gate reads, so the gate is being asked about a radio DAB has already
              *    changed. One more reason it must not stand between a listener and the way out. */
             if (vsModeBlocked("dab")) {
-                sendText(sock, "{\"type\":\"dab_error\",\"why\":\"the operator has switched DAB off on this receiver\"}");
+                sendText(sock, "{\"type\":\"dab_error\",\"why\":\"the server owner has switched DAB off on this receiver\"}");
                 return;
             }
             if (!vsDabCapable()) {
@@ -13175,7 +13216,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  UI keeps is not a rule. Stuart's case: WFM on an RSP1B locked to HF, where the
              *  mode cannot do anything useful and should not be reachable at all. */
             if (!m.empty() && vsModeBlocked(m)) {
-                LOGI("mode %s refused — the operator has switched it off on this receiver", m.c_str());
+                LOGI("mode %s refused — the server owner has switched it off on this receiver", m.c_str());
                 return;
             }
             // Decimation is derived from the mode's bandwidth, so re-negotiate it
@@ -14015,7 +14056,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const vibebands::Ranges perm = vsPermittedRanges(hw);
             // ★★★ BOTH SETS TRAVEL, and that is the point. `ranges` stays the HARDWARE's coverage
             //     and `allowed` carries the owner's limit, so the client can say WHICH wall a
-            //     listener has hit — "the operator does not allow this" and "this radio cannot
+            //     listener has hit — "the server owner does not allow this" and "this radio cannot
             //     hear it" are completely different messages to receive, and telling somebody
             //     their radio is broken when in fact it is policy is the worse of the two
             //     mistakes (Stuart, 2026-08-08).
@@ -17520,7 +17561,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (ext == "fsk") key = "rtty";
             else if (ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb") key = "time";
             if (!key.empty() && vsModeBlocked(key)) {
-                LOGI("decoder %s refused — the operator has switched it off on this receiver", ext.c_str());
+                LOGI("decoder %s refused — the server owner has switched it off on this receiver", ext.c_str());
                 return;
             }
         }
@@ -18242,7 +18283,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 /* ★ The owner's switch, enforced where the decoder is started — the menus hide
                  *  the button, but an old client or a hand-rolled tool must meet the same wall. */
                 if (vsModeBlocked("spots")) {
-                    LOGI("digital spots refused — the operator has switched them off on this receiver");
+                    LOGI("digital spots refused — the server owner has switched them off on this receiver");
                 } else
                 startSpots();    // local FT8/FT4 decoder feeds digital_spot frames
             } else if (type == "unsubscribe_digital_spots") {
@@ -21449,8 +21490,19 @@ struct DesiredDsp {
     std::atomic<int>  aspMixerAgc{-1};   // tri-state
     std::atomic<int>  aspBiasT{-1};      // tri-state
     std::atomic<int>  aspPacking{-1};    // tri-state
+    /* ★ The RSP sweep — the same sentinels as everything else here. -1 means the owner never
+     *  chose, so the radio keeps its own default and nothing is imposed on a fresh open. */
+    std::atomic<int>  rspHdr{-1};        // RSPdx high dynamic range, below 2 MHz
+    std::atomic<int>  rspAmNotch{-1};    // RSPduo AM broadcast notch (tuner 1 / Hi-Z)
+    std::atomic<int>  rspExtRef{-1};     // 24 MHz reference output (RSP2 / Duo)
 };
 static DesiredDsp g_dsp;
+/** ★ The chosen aerial. A STRING, so it cannot live in the atomics above — same purpose though:
+ *  remembered across an Impl rebuild so a re-open does not silently go back to port A. */
+static std::mutex  g_rspAntMtx;
+static std::string g_rspAntenna;
+/** ★ Owner's switch: 0 = any listener may change the aerial, 1 = admin only. See vsAntennaLocked. */
+static std::atomic<int> g_antennaLocked{0};
 
 // ★ Forward-declared up by the hwinfo builder, which reports this state to the client.
 static int   vsDesiredRfNotch()    { return g_dsp.rspRfNotch.load(); }
@@ -21521,6 +21573,12 @@ static void  vsRecordNotchChoice(bool rf, bool dab) {
 static int   vsDesiredAgcSet()     { return g_dsp.rspAgcSet.load(); }
 static bool  vsAutoNotchOn()       { return g_dsp.rspAutoNotch.load() == 1; }
 static bool  vsUserNotchAllowed()  { return g_dsp.rspUserNotch.load() != 0; }
+/** ★★★ THE AERIAL IS THE OWNER'S DECISION TO DELEGATE OR NOT. Stuart, 2026-09-24: "Antenna
+ *  selector should be lockable by admin". It is shared hardware in the strongest sense — changing
+ *  it changes what EVERY listener hears, and on a mast-mounted setup it can point the radio at
+ *  nothing at all. Default is UNLOCKED, matching the notches: a personal receiver should not make
+ *  its owner type a password to use their own switch. */
+static bool  vsAntennaLocked()     { return g_antennaLocked.load() != 0; }
 
 static float vsDesiredNrStrength() { return g_dsp.nrStrength.load(); }
 static int   vsDesiredRspBiasT()   { return g_dsp.rspBiasT.load(); }
@@ -21551,6 +21609,17 @@ void LocalSdrShim::applyDesiredDsp(LocalSdrShim::Impl* impl) {
         if (agc >= 0) { impl->sdrp->setIfAgc(agc != 0); if (agc != 0) sfericHold(10.0); }
         if (agc == 0 && g_dsp.rspIfGr.load() >= 0)
             impl->sdrp->setIfGainReduction(g_dsp.rspIfGr.load());
+    }
+    /* ★ The RSP sweep, re-stated onto a fresh device exactly as its neighbours are. Without this
+     *  a reopen() — the stall watchdog's, or a rate change — would bring the radio back on port A
+     *  with HDR off, whatever the owner chose. */
+    if (impl->useSdrplay() && impl->sdrp) {
+        std::string ant;
+        { std::lock_guard<std::mutex> lk(g_rspAntMtx); ant = g_rspAntenna; }
+        if (!ant.empty())                  impl->sdrp->setAntenna(ant);
+        if (g_dsp.rspHdr.load()     >= 0)  impl->sdrp->setHdr(g_dsp.rspHdr.load() != 0);
+        if (g_dsp.rspAmNotch.load() >= 0)  impl->sdrp->setAmNotch(g_dsp.rspAmNotch.load() != 0);
+        if (g_dsp.rspExtRef.load()  >= 0)  impl->sdrp->setExtRefOut(g_dsp.rspExtRef.load() != 0);
     }
     if (impl->useAirspyHf() && impl->ahf) {
         if (g_dsp.ahfAtt.load()     >= 0) impl->ahf->setAttenuation(g_dsp.ahfAtt.load());
@@ -24160,8 +24229,8 @@ int LocalSdrShim::startSdrplay(int index,
     //        forcing it on every locked receiver would gut an FM-DXer's signal — Hans runs a
     //        public one, on the FM band, and would have had it silently notched out. What is
     //        right for a 2.5-10.5 MHz HF demo is catastrophic one band up. The operator says.
-    if (g_vsRfNotch.load())  { impl->sdrp->setRfNotch(true);  LOGI("RSP: RF notch ON (operator)"); }
-    if (g_vsDabNotch.load()) { impl->sdrp->setDabNotch(true); LOGI("RSP: DAB notch ON (operator)"); }
+    if (g_vsRfNotch.load())  { impl->sdrp->setRfNotch(true);  LOGI("RSP: RF notch ON (owner)"); }
+    if (g_vsDabNotch.load()) { impl->sdrp->setDabNotch(true); LOGI("RSP: DAB notch ON (owner)"); }
 
     impl->fftSize = fftSizeForRate(impl->sampleRate);
     impl->startEngine();
@@ -26941,6 +27010,14 @@ void LocalSdrShim::setPpm(int ppm) {
     if (p->useSpy()) return;   // no ppm setting in the SpyServer protocol
 
     if (p->useTcp()) { p->sendTcpCmd(0x05, (uint32_t)ppm); return; }
+    /* ★★★ AND THE RSP, WHICH HAS NEVER HAD PPM AT ALL. `if (!p->dev) return;` is the librtlsdr
+     *  handle, so every non-dongle fell out here — the eighth appearance of that shape in this
+     *  file, and the reason the sweep of 2026-09-24 went looking. The RSP keeps ppm on devParams,
+     *  so it is a property of the radio, and the API has a reason code of its own for it.
+     *  ★ The Airspy HF+ already has its own, finer control (setCalibrationPpb); the R2/Mini and
+     *    the HackRF have no ppm register at all, so they are honestly left out rather than given
+     *    a control that would do nothing. */
+    if (p->useSdrplay()) { p->sdrp->setPpm(ppm); LOGI("ppm: %d (RSP)", ppm); return; }
     if (!p->dev) return;
     rtlsdr_set_freq_correction(p->dev, ppm); LOGI("ppm: %d", ppm);
 }
@@ -27781,6 +27858,30 @@ std::string LocalSdrShim::radioCapsJson() const {
     //    there with DC on its feedline and no screen anywhere would say so — which is exactly how
     //    one did (2026-08-08). A control you cannot read the state of is not a control.
     j += std::string(",\"biasTOn\":") + (g_biasTeeOn.load() ? "true" : "false");
+    /* ★★★ WHAT THIS PARTICULAR RSP HAS, AND WHERE IT IS SET — GitHub #29. The client draws from
+     *  this list and nothing else, so a single-socket radio (every RSP1) publishes an empty
+     *  `antennas` and no selector appears anywhere. That is what keeps the new control off the
+     *  radios nobody could test it on.
+     *  ★★ The STATE travels with the capability, every time. Publishing only "this radio has
+     *     three aerials" and not "it is on B" is the bias-T fault directly above, which took
+     *     until 2026-08-08 to notice: a control you cannot read the state of is not a control. */
+    {
+        const auto ports = d.antennaPorts();
+        j += ",\"antennas\":[";
+        for (size_t i = 0; i < ports.size(); i++) {
+            if (i) j += ",";
+            j += "\"" + dabEscape(ports[i]) + "\"";
+        }
+        j += "]";
+        if (!ports.empty()) j += ",\"antenna\":\"" + dabEscape(d.antenna()) + "\"";
+        j += std::string(",\"antennaLocked\":") + (vsAntennaLocked() ? "true" : "false");
+    }
+    j += std::string(",\"hdr\":")    + (d.hasHdr()       ? "true" : "false");
+    if (d.hasHdr())       j += std::string(",\"hdrOn\":")    + (g_dsp.rspHdr.load()     > 0 ? "true" : "false");
+    j += std::string(",\"amNotch\":") + (d.hasAmNotch()   ? "true" : "false");
+    if (d.hasAmNotch())   j += std::string(",\"amNotchOn\":") + (g_dsp.rspAmNotch.load() > 0 ? "true" : "false");
+    j += std::string(",\"extRef\":")  + (d.hasExtRefOut() ? "true" : "false");
+    if (d.hasExtRefOut()) j += std::string(",\"extRefOn\":")  + (g_dsp.rspExtRef.load()  > 0 ? "true" : "false");
     j += "}";
     return j;
 }
@@ -27962,6 +28063,25 @@ void LocalSdrShim::setDabNotch(bool v)      { g_dsp.rspDabNotch.store(v ? 1 : 0)
 void LocalSdrShim::setBiasT(bool v)         { g_dsp.rspBiasT.store(v ? 1 : 0);
                                               if (!p || !p->useSdrplay()) return;
                                               VIBE_HW_LOCK(); p->sdrp->setBiasT(v); }
+/* ★★★ THE REST OF THE RSP SWEEP (2026-09-24). Same shape as the three above, and for the same
+ *  reason: remember in g_dsp FIRST so a choice survives the next Impl, then write it if the radio
+ *  is here. GitHub #29 is the antenna; the others were found beside it, all present in the API
+ *  and reachable from nowhere. */
+void LocalSdrShim::setRspAntenna(const std::string& port) {
+    { std::lock_guard<std::mutex> lk(g_rspAntMtx); g_rspAntenna = port; }
+    if (!p || !p->useSdrplay()) return;
+    VIBE_HW_LOCK(); p->sdrp->setAntenna(port);
+    LOGI("RSP antenna -> %s", port.c_str());
+}
+void LocalSdrShim::setRspHdr(bool v)        { g_dsp.rspHdr.store(v ? 1 : 0);
+                                              if (!p || !p->useSdrplay()) return;
+                                              VIBE_HW_LOCK(); p->sdrp->setHdr(v); }
+void LocalSdrShim::setRspAmNotch(bool v)    { g_dsp.rspAmNotch.store(v ? 1 : 0);
+                                              if (!p || !p->useSdrplay()) return;
+                                              VIBE_HW_LOCK(); p->sdrp->setAmNotch(v); }
+void LocalSdrShim::setRspExtRef(bool v)     { g_dsp.rspExtRef.store(v ? 1 : 0);
+                                              if (!p || !p->useSdrplay()) return;
+                                              VIBE_HW_LOCK(); p->sdrp->setExtRefOut(v); }
 #undef VIBE_HW_LOCK
 
 bool LocalSdrShim::isRunning() const { return p != nullptr; }

@@ -41,6 +41,11 @@ export interface SDRInstance {
    *  ask BEFORE connecting — a stranger meeting a PIN box they cannot fill reads it as a broken
    *  server rather than one that was never for them. */
   needsPin?: boolean;
+  /** ★★★ NOTHING HERE IS OPEN TO A PASSER-BY — a master PIN over the whole server, or every radio
+   *  carrying its own. To somebody scrolling a list those are the same fact, so the row shows one
+   *  padlock for both (Stuart, 2026-09-24). A server with ONE open radio is NOT this: there is
+   *  something for anybody, and hiding it behind a padlock would lose it among the private ones. */
+  allLocked?: boolean;
   /** ★★★ THE RADIOS BEHIND A FRONT DOOR, CARRIED FROM THE LISTING ITSELF.
    *
    *  The VibeServer directory has always published these — `directories.ts` parsed them, used the

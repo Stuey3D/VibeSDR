@@ -4785,14 +4785,14 @@ async function showSplashRadios(): Promise<void> {
       range = `${mhz(lo)} – ${mhz(hi)} MHz`;
     } else if (restricted && named.length) {
       range = named.join(', ');
-      rangeTitle = lists || 'The operator has limited where this receiver may tune.';
+      rangeTitle = lists || 'The server owner has limited where this receiver may tune.';
     } else if (restricted && allowed.length) {
       range = allowed.map(([a, b]) => `${hzTxt(a)} – ${hzTxt(b)}`).join(', ');
-      rangeTitle = lists || 'The operator has limited where this receiver may tune.';
+      rangeTitle = lists || 'The server owner has limited where this receiver may tune.';
     } else if (cov.length) {
       range = cov.map(([a, b]) => `${hzTxt(a)} – ${hzTxt(b)}`).join(', ')
             + (restricted ? ' · RESTRICTIONS IN PLACE' : ' · UNRESTRICTED');
-      if (restricted) rangeTitle = lists || 'The operator has limited where this receiver may tune.';
+      if (restricted) rangeTitle = lists || 'The server owner has limited where this receiver may tune.';
     } else {
       range = `${mhz(Number(r.centreHz) || 0)} MHz`;
     }
@@ -7082,7 +7082,7 @@ async function doAdminOverride(password: string, status: HTMLElement) {
  *    themselves, written in the ban box, and it is quite often blunt. It belongs on the admin
  *    page, not quoted back at the person. */
 function showBanned() { showRefusal('NO ACCESS',
-  'This receiver\'s operator has blocked access from your address.<br><br>' +
+  'This receiver\'s owner has blocked access from your address.<br><br>' +
   'If you believe that is a mistake, contact whoever runs this receiver.'); }
 
 /** ★★★ THE IDLE RE-LOCK, as a PILL — not an overlay, and the difference is the whole point.
@@ -11616,7 +11616,7 @@ function lockedWindow(): [number, number] | null {
 
 /** ★★ WHAT THE OWNER PERMITS, as opposed to what the hardware can reach. Absent unless they have
  *  set a limit, in which case it is always a subset of `ranges`. Kept separate so a listener who
- *  hits a wall can be told WHICH wall: "the operator does not allow this" and "this radio cannot
+ *  hits a wall can be told WHICH wall: "the server owner does not allow this" and "this radio cannot
  *  hear it" call for completely different reactions, and telling somebody their radio is broken
  *  when it is policy is the worse mistake of the two. */
 function allowedRanges(): Array<[number, number]> | null {
@@ -11678,7 +11678,7 @@ function clampTune(hz: number): number {
   if (!Number.isFinite(edge)) return Math.max(MIN_TUNE_HZ, Math.min(MAX_TUNE_HZ, want));
   const other = dir > 0 ? above : below;
   const why = hardwareCanReach(want)
-    ? 'the server operator does not allow tuning here'
+    ? 'the server owner does not allow tuning here'
     : 'this radio cannot receive here';
   showTuneGapMsg(Number.isFinite(other)
     ? `${(edge / 1e6).toFixed(3)} MHz — ${why}. Tune ${dir > 0 ? 'up' : 'down'} again to jump to ${(other / 1e6).toFixed(3)} MHz`
@@ -11708,8 +11708,8 @@ function updateRangeGap(centerHz: number, bwHz: number) {
     const next = ranges.filter(([a]) => a > rHi).sort((p, q) => p[0] - q[0])[0];
     // ★ Say WHY, not just where. A wall the operator put up and a wall the hardware imposes look
     //   identical on a waterfall, and a listener told "this radio's range" when the truth is
-    //   "the operator blocked it" goes away believing the receiver is faulty.
-    const whyHi = hardwareCanReach(rHi + 1) ? 'the server operator allows no further'
+    //   "the server owner blocked it" goes away believing the receiver is faulty.
+    const whyHi = hardwareCanReach(rHi + 1) ? 'the server owner allows no further'
                                             : 'this radio receives no higher';
     msg = next
       ? `${(rHi / 1e6).toFixed(3)} MHz — ${whyHi}.\nTune up again to jump to ${(next[0] / 1e6).toFixed(3)} MHz.`
@@ -11717,7 +11717,7 @@ function updateRangeGap(centerHz: number, bwHz: number) {
   } else if (lo < rLo) {                // dead space on the LEFT
     x0 = 0; x1 = (rLo - lo) / bwHz;
     const prev = ranges.filter(([, b]) => b < rLo).sort((p, q) => q[1] - p[1])[0];
-    const whyLo = hardwareCanReach(rLo - 1) ? 'the server operator allows no lower'
+    const whyLo = hardwareCanReach(rLo - 1) ? 'the server owner allows no lower'
                                            : 'this radio receives no lower';
     msg = prev
       ? `${(rLo / 1e6).toFixed(3)} MHz — ${whyLo}.\nTune down again to jump to ${(prev[1] / 1e6).toFixed(3)} MHz.`
@@ -12683,7 +12683,7 @@ function applyRspLock() {
       ? 'Set automatically from the frequency being received — the receiver keeps the notches '
         + 'clear of the band you are on. Not a manual control while this is on.'
       : !hwUserNotch
-      ? "This receiver's operator keeps the notches for themselves — they are part of the front "
+      ? "This receiver's owner keeps the notches for themselves — they are part of the front "
         + 'end, so one listener changing them changes them for everybody.'
       : 'Front-end notch filter.';
   }

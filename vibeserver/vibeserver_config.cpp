@@ -206,6 +206,10 @@ std::string toJson(const Config& c) {
     N("idleGrace", c.idleGrace);
     B("rfNotch", c.rfNotch); B("dabNotch", c.dabNotch); B("zoomSpectrum", c.zoomSpectrum);
     B("autoNotch", c.autoNotch); B("userNotch", c.userNotch);
+    /* ★ The RSP sweep (GitHub #29). antennaPort is a NAME, not an index — see the note in the
+     *  header for why it is not called `antenna`. */
+    S("antennaPort", c.antennaPort); B("antennaPortLocked", c.antennaPortLocked);
+    B("rspHdr", c.rspHdr); B("rspAmNotch", c.rspAmNotch); B("rspExtRef", c.rspExtRef);
     B("dabAgcOverride", c.dabAgcOverride); N("dabAgcTarget", c.dabAgcTarget); B("rfAgc", c.rfAgc); B("rspDabDecim", c.rspDabDecim); N("rfAgcStart", c.rfAgcStart); N("agcSet", c.agcSet); B("agcSetLock", c.agcSetLock);
     S("cpuGovernor", c.cpuGovernor);
     S("trustedProxies", c.trustedProxies);
@@ -283,6 +287,11 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     getBool(s, "dabNotch", c.dabNotch);
     getBool(s, "autoNotch", c.autoNotch);
     getBool(s, "userNotch", c.userNotch);
+    getStr(s, "antennaPort", c.antennaPort);
+    getBool(s, "antennaPortLocked", c.antennaPortLocked);
+    getBool(s, "rspHdr", c.rspHdr);
+    getBool(s, "rspAmNotch", c.rspAmNotch);
+    getBool(s, "rspExtRef", c.rspExtRef);
     getBool(s, "dabAgcOverride", c.dabAgcOverride);
     if (getNum(s, "dabAgcTarget", d)) c.dabAgcTarget = (int)d;
     getBool(s, "rfAgc", c.rfAgc);
@@ -534,6 +543,10 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.idleGrace = one.idleGrace;
     r.rfNotch = one.rfNotch; r.dabNotch = one.dabNotch; r.zoomSpectrum = one.zoomSpectrum;
     r.autoNotch = one.autoNotch; r.userNotch = one.userNotch;
+    // ★ The RSP sweep (GitHub #29) — carried with its neighbours so a single-radio config and a
+    //   multi-radio one cannot disagree about the aerial.
+    r.antennaPort = one.antennaPort; r.antennaPortLocked = one.antennaPortLocked;
+    r.rspHdr = one.rspHdr; r.rspAmNotch = one.rspAmNotch; r.rspExtRef = one.rspExtRef;
     r.dabAgcOverride = one.dabAgcOverride; r.dabAgcTarget = one.dabAgcTarget; r.rfAgc = one.rfAgc; r.rspDabDecim = one.rspDabDecim; r.rfAgcStart = one.rfAgcStart;
     r.agcSet = one.agcSet; r.agcSetLock = one.agcSetLock;
     r.allowRanges = one.allowRanges; r.blockRanges = one.blockRanges;
@@ -853,6 +866,8 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.idleGrace = r.idleGrace;
     c.rfNotch = r.rfNotch; c.dabNotch = r.dabNotch; c.zoomSpectrum = r.zoomSpectrum;
     c.autoNotch = r.autoNotch; c.userNotch = r.userNotch;
+    c.antennaPort = r.antennaPort; c.antennaPortLocked = r.antennaPortLocked;
+    c.rspHdr = r.rspHdr; c.rspAmNotch = r.rspAmNotch; c.rspExtRef = r.rspExtRef;
     c.dabAgcOverride = r.dabAgcOverride; c.dabAgcTarget = r.dabAgcTarget; c.rfAgc = r.rfAgc; c.rspDabDecim = r.rspDabDecim; c.rfAgcStart = r.rfAgcStart;
     c.agcSet = r.agcSet; c.agcSetLock = r.agcSetLock;
     c.allowRanges = r.allowRanges; c.blockRanges = r.blockRanges;
@@ -912,7 +927,32 @@ bool loadServer(const std::string& path, ServerConfig& cfg, std::string& err) {
     return fromJson(body, cfg, err);
 }
 
+/* ★★★ A RADIO'S PIN MAY NOT BE THE MASTER PIN. Stuart, 2026-09-24: "individual PIN's need to
+ *     unlock radios with the lockout that you cannot set a radio to the same pin as master, but
+ *     multiple radios can have the same pin."
+ *
+ *  ★★ WHY IT IS A TRAP AND NOT A TIDINESS RULE: the unlock handler tries the MASTER first, so a
+ *     radio PIN equal to the master opens EVERY radio on the server. An owner who set "1234" on
+ *     the HF rig to keep the VHF one private would have handed out the keys to both, and the
+ *     setup page would show exactly what they intended. The one place that could tell them is
+ *     here.
+ *  ★ Multiple radios sharing a PIN is allowed and is a real case — the club's two HF rigs on one
+ *    code. Only collision with the MASTER is refused.
+ *  ★★ ENFORCED AT THE SAVE, not at the setup page alone: vibeserver.conf is hand-edited, and a
+ *     rule that only the web form knows is a rule the file does not have. */
+bool pinCollidesWithMaster(const ServerConfig& cfg, const std::string& radioPin) {
+    return !radioPin.empty() && !cfg.pin.empty() && radioPin == cfg.pin;
+}
+
 bool saveServer(const std::string& path, const ServerConfig& cfg, std::string& err) {
+    for (const auto& r : cfg.radios) {
+        if (pinCollidesWithMaster(cfg, r.pin)) {
+            err = "the PIN for \"" + (r.label.empty() ? r.serial : r.label)
+                + "\" is the same as the server PIN, which would open every radio rather than "
+                  "just that one — give it a different PIN, or clear it";
+            return false;
+        }
+    }
     const std::string tmp = path + ".tmp";
     FILE* f = fopen(tmp.c_str(), "wb");
     if (!f) { err = std::string("cannot write ") + tmp + ": " + strerror(errno); return false; }

@@ -883,7 +883,7 @@ export class SpectrumClient {
          *
          *  Only `text` was ever read. So every refusal the server sends arrived here and was
          *  turned into the empty string — "the notches are on automatic — …", "the operator has
-         *  reserved the notch filters", "the operator has fixed this …". The server explained
+         *  reserved the notch filters", "the server owner has fixed this …". The server explained
          *  itself and the client discarded the explanation, which is exactly why a locked control
          *  reads as a DEAD control: you press it, nothing happens, and nothing says why.
          *  Stuart, 2026-09-13: "there are things the app leaves in a settings menu that get locked
