@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+#include <cstring>     // ★ strlen — the "Antenna C" noun strip in parseAntennaList
 #include <mutex>
 
 namespace vibebands {
@@ -229,6 +230,23 @@ inline double parseHz(const std::string& raw) {
     return -1;
 }
 
+/** The multiplier a written figure carried, or 0 when it named no unit at all.
+ *  ★ Split out so a RANGE can lend the unit from one end to the other — see parseEntry. */
+inline double unitFactor(const std::string& raw) {
+    const std::string t = trim(raw);
+    char* end = nullptr;
+    strtod(t.c_str(), &end);
+    if (end == t.c_str()) return 0;
+    std::string suffix;
+    for (const char* q = end; *q; ++q) if (!isspace((unsigned char)*q)) suffix += (char)tolower(*q);
+    if (suffix.empty()) return 0;
+    if (suffix == "hz") return 1;
+    if (suffix == "k" || suffix == "khz") return 1e3;
+    if (suffix == "m" || suffix == "mhz") return 1e6;
+    if (suffix == "g" || suffix == "ghz") return 1e9;
+    return 0;
+}
+
 }  // namespace detail
 
 /** Parse one entry: a named band id, or "lo-hi" in any unit. Invalid → !valid(). */
@@ -251,9 +269,26 @@ inline Range parseEntry(const std::string& raw) {
 
     const size_t dash = t.find('-');
     if (dash == std::string::npos || dash == 0) return r;
-    const double lo = detail::parseHz(t.substr(0, dash));
-    const double hi = detail::parseHz(t.substr(dash + 1));
+    const std::string loTxt = t.substr(0, dash), hiTxt = t.substr(dash + 1);
+    double lo = detail::parseHz(loTxt);
+    const double hi = detail::parseHz(hiTxt);
     if (lo < 0 || hi < 0) return r;
+    /* ★★★ THE UNIT AT ONE END GOVERNS BOTH. "30-150MHz" meant 30 HERTZ to 150 MHz, because a bare
+     *  number is hertz and the suffix only ever bound to the half it was written on. Nobody has
+     *  ever meant that: a person writing a range puts the unit once, at the end, and means it for
+     *  the pair. Found 2026-09-24 while testing the per-band aerial list — where "0-30MHz C,
+     *  30-150MHz A" silently became "0-30MHz C, 30Hz-150MHz A", two rules covering HF, and only
+     *  first-match-wins hid it.
+     *  ★★ IT IS NOT NEW TO THAT LIST. parseEntry is also how ALLOWED/BLOCKED bands and per-band
+     *     GAIN CEILINGS are read, so every owner who typed "144-146MHz" in those boxes has had a
+     *     rule starting at 144 Hz. It looked like it worked because the upper end was right and
+     *     the lower end is below anything the radio can tune.
+     *  ★ Only ever LENT UPWARDS, from the half that named a unit to the half that did not — if
+     *    both name one they are both obeyed, including a deliberately mixed "1000-30M". */
+    if (lo > 0) {
+        const double loUnit = detail::unitFactor(loTxt), hiUnit = detail::unitFactor(hiTxt);
+        if (loUnit == 0 && hiUnit > 0) lo *= hiUnit;
+    }
     r.lo = std::min(lo, hi);        // ★ tolerate a reversed pair rather than discarding it
     r.hi = std::max(lo, hi);
     return r;
@@ -366,6 +401,107 @@ inline int valueAt(const GainRules& rules, double hz) {
     for (const auto& g : rules)
         if (hz >= g.band.lo && hz <= g.band.hi) return g.max;
     return -1;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+//  ★★★ PER-BAND ANTENNA — AN AUTOMATIC AERIAL SWITCH
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+//
+//  Stuart, 2026-09-24: "if a user sets it so antanna A could be for HF and below and antenna be
+//  could be for VHF and antenna C could be for UHF … or simply leave the gain at maximum and use
+//  the per band options as simply an automatic antenna selector", and on the syntax: "Owner may
+//  type in 0-30MHz Antenna C  30-150MHz Antenna A  150MHz+ antenna B".
+//
+//  ★★★ IT PARSES WHAT AN OWNER ACTUALLY TYPES, which is the whole reason this is not parseGainList
+//      with a string value. That one demands "band:value"; the examples above have no colon, put
+//      the word "Antenna" in the middle, and use a trailing "+" for "and upwards". A parser that
+//      rejected any of those would be right by its own rules and useless at the only job it has.
+//  ★★ THE VALUE IS A PORT NAME, matched case-insensitively against what the RADIO publishes, never
+//     an index — an index would be this file and the hardware agreeing on an ordering, and that
+//     pact survives exactly until a model with four sockets. An unknown name is dropped at apply
+//     time by SdrplaySource, which knows the ports; nothing here can validate it and nothing here
+//     pretends to.
+//  ★ FIRST MATCH WINS, like valueAt: overlapping rules are the owner's own order, and "the lowest
+//    antenna" is not a safer answer, just an arbitrary one.
+
+struct AntennaRule {
+    Range       band;
+    std::string port;
+    bool valid() const { return band.valid() && !port.empty(); }
+};
+using AntennaRules = std::vector<AntennaRule>;
+
+/** "0-30MHz Antenna C, 30-150MHz A, 150MHz+ antenna B" — also "hf: A" and "all: B". */
+inline AntennaRules parseAntennaList(const std::string& csv) {
+    AntennaRules out;
+    std::string cur;
+    for (size_t i = 0; i <= csv.size(); ++i) {
+        const char c = i < csv.size() ? csv[i] : ',';
+        if (c != ',' && c != '\n' && c != ';') { cur += c; continue; }
+        std::string e = detail::trim(cur);
+        cur.clear();
+        if (e.empty()) continue;
+
+        std::string bandPart, portPart;
+        const size_t colon = e.rfind(':');
+        if (colon != std::string::npos) {
+            bandPart = detail::trim(e.substr(0, colon));
+            portPart = detail::trim(e.substr(colon + 1));
+        } else {
+            // ★ No colon: the RANGE is the first token, the aerial is everything after it — a port
+            //   name may itself contain spaces ("Tuner 1 Hi-Z"), so the remainder is kept whole.
+            const size_t sp = e.find_first_of(" \t");
+            if (sp == std::string::npos) continue;          // a range with no aerial says nothing
+            bandPart = detail::trim(e.substr(0, sp));
+            portPart = detail::trim(e.substr(sp + 1));
+            /* ★★ "0-30 MHz C" — a space before the unit. Without this the range parses as 0-30 Hz
+             *  and the rule silently covers nothing, which is the worst possible outcome: the
+             *  owner's list looks accepted and the aerial never moves. Fold a leading unit back. */
+            std::string firstTok = portPart.substr(0, portPart.find_first_of(" \t"));
+            std::string lowTok;
+            for (char ch : firstTok) lowTok += (char)tolower((unsigned char)ch);
+            if (lowTok == "mhz" || lowTok == "khz" || lowTok == "hz" || lowTok == "ghz") {
+                bandPart += firstTok;
+                const size_t sp2 = portPart.find_first_of(" \t");
+                portPart = sp2 == std::string::npos ? std::string() : detail::trim(portPart.substr(sp2 + 1));
+            }
+        }
+        // ★ "Antenna C" / "ant C" / "port C" — the noun is how a person writes it, not part of the name.
+        for (const char* noun : { "antenna", "aerial", "ant", "port" }) {
+            const size_t n = std::strlen(noun);
+            if (portPart.size() > n) {
+                std::string head;
+                for (size_t k = 0; k < n; k++) head += (char)tolower((unsigned char)portPart[k]);
+                if (head == noun && (portPart[n] == ' ' || portPart[n] == '\t' || portPart[n] == ':')) {
+                    portPart = detail::trim(portPart.substr(n + 1));
+                    break;
+                }
+            }
+        }
+        if (portPart.empty()) continue;
+
+        AntennaRule a;
+        /* ★★ "150MHz+" — AND UPWARDS, which an owner writes far more naturally than naming a top
+         *  end they would have to look up. 1e12 is the same "everything above here" sentinel the
+         *  "all" band uses, so no radio can out-range it. */
+        if (!bandPart.empty() && bandPart.back() == '+') {
+            const double lo = detail::parseHz(bandPart.substr(0, bandPart.size() - 1));
+            if (lo < 0) continue;
+            a.band.lo = lo; a.band.hi = 1e12;
+        } else {
+            a.band = parseEntry(bandPart);
+        }
+        a.port = portPart;
+        if (a.valid()) out.push_back(a);
+    }
+    return out;
+}
+
+/** The aerial for a frequency, or "" when no rule covers it — FIRST match wins. */
+inline std::string antennaAt(const AntennaRules& rules, double hz) {
+    for (const auto& a : rules)
+        if (hz >= a.band.lo && hz <= a.band.hi) return a.port;
+    return std::string();
 }
 
 /** Sort and merge touching/overlapping ranges into a canonical set. */

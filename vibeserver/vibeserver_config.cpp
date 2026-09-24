@@ -209,6 +209,7 @@ std::string toJson(const Config& c) {
     /* ★ The RSP sweep (GitHub #29). antennaPort is a NAME, not an index — see the note in the
      *  header for why it is not called `antenna`. */
     S("antennaPort", c.antennaPort); B("antennaPortLocked", c.antennaPortLocked);
+    S("antennaMap", c.antennaMap);
     B("rspHdr", c.rspHdr); B("rspAmNotch", c.rspAmNotch); B("rspExtRef", c.rspExtRef);
     B("dabAgcOverride", c.dabAgcOverride); N("dabAgcTarget", c.dabAgcTarget); B("rfAgc", c.rfAgc); B("rspDabDecim", c.rspDabDecim); N("rfAgcStart", c.rfAgcStart); N("agcSet", c.agcSet); B("agcSetLock", c.agcSetLock);
     S("cpuGovernor", c.cpuGovernor);
@@ -288,6 +289,7 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     getBool(s, "autoNotch", c.autoNotch);
     getBool(s, "userNotch", c.userNotch);
     getStr(s, "antennaPort", c.antennaPort);
+    getStr(s, "antennaMap", c.antennaMap);
     getBool(s, "antennaPortLocked", c.antennaPortLocked);
     getBool(s, "rspHdr", c.rspHdr);
     getBool(s, "rspAmNotch", c.rspAmNotch);
@@ -401,6 +403,9 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     // ★ This radio's own PIN — see RadioConfig::pin. Read AND written (below): a field in only one
     //   of the two is the fault this file already records, and it is silent both ways.
     S("pin", r.pin);
+    // ★ The SOCKET and the rule that picks it — distinct from `antenna`, the description below.
+    S("antennaPort", r.antennaPort); S("antennaMap", r.antennaMap);
+    B("antennaPortLocked", r.antennaPortLocked);
     S("antenna", r.antenna); S("antennaIcon", r.antennaIcon);
     B("enabled", r.enabled); B("configured", r.configured);
     I("port", r.port);
@@ -449,6 +454,8 @@ std::string radioToJson(const RadioConfig& r) {
     auto B = [&](const char* k, bool v)   { o += "\"" + std::string(k) + "\":" + (v ? "true" : "false") + ","; };
     S("serial", r.serial); S("driver", r.driver); S("usbPath", r.usbPath); S("label", r.label);
     S("pin", r.pin);          // ★ see the reader above
+    S("antennaPort", r.antennaPort); S("antennaMap", r.antennaMap);
+    B("antennaPortLocked", r.antennaPortLocked);
     // ★ The aerial. Written HERE as well as read above — the setup page reads this writer, and
     //   the note further down records what a field in only one of them costs.
     S("antenna", r.antenna); S("antennaIcon", r.antennaIcon);
@@ -546,6 +553,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     // ★ The RSP sweep (GitHub #29) — carried with its neighbours so a single-radio config and a
     //   multi-radio one cannot disagree about the aerial.
     r.antennaPort = one.antennaPort; r.antennaPortLocked = one.antennaPortLocked;
+    r.antennaMap = one.antennaMap;
     r.rspHdr = one.rspHdr; r.rspAmNotch = one.rspAmNotch; r.rspExtRef = one.rspExtRef;
     r.dabAgcOverride = one.dabAgcOverride; r.dabAgcTarget = one.dabAgcTarget; r.rfAgc = one.rfAgc; r.rspDabDecim = one.rspDabDecim; r.rfAgcStart = one.rfAgcStart;
     r.agcSet = one.agcSet; r.agcSetLock = one.agcSetLock;
@@ -866,7 +874,12 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.idleGrace = r.idleGrace;
     c.rfNotch = r.rfNotch; c.dabNotch = r.dabNotch; c.zoomSpectrum = r.zoomSpectrum;
     c.autoNotch = r.autoNotch; c.userNotch = r.userNotch;
-    c.antennaPort = r.antennaPort; c.antennaPortLocked = r.antennaPortLocked;
+    /* ★ The RADIO's own answer wins where it has one — a three-socket RSPdx and a one-socket
+     *  dongle on the same machine cannot share a server-wide aerial setting. Falls back to the
+     *  server-wide value so a single-radio config still works the way it always did. */
+    if (!r.antennaPort.empty()) c.antennaPort = r.antennaPort;
+    if (!r.antennaMap.empty())  c.antennaMap  = r.antennaMap;
+    if (r.antennaPortLocked)    c.antennaPortLocked = true;
     c.rspHdr = r.rspHdr; c.rspAmNotch = r.rspAmNotch; c.rspExtRef = r.rspExtRef;
     c.dabAgcOverride = r.dabAgcOverride; c.dabAgcTarget = r.dabAgcTarget; c.rfAgc = r.rfAgc; c.rspDabDecim = r.rspDabDecim; c.rfAgcStart = r.rfAgcStart;
     c.agcSet = r.agcSet; c.agcSetLock = r.agcSetLock;

@@ -4014,6 +4014,9 @@ static int   vsDesiredAgcSet();
 static void  vsRecordNotchChoice(bool rf, bool dab);
 /* ★ Evaluate and apply the automatic notches for a frequency. Returns true if anything moved. */
 static bool  vsApplyAutoNotch(SdrplaySource* sdrp, double hz);
+/** ★ The owner's per-band aerial list, and the rule that follows from it at a frequency.
+ *  Forward-declared for the same reason as its neighbours — the retune path sits above it. */
+static void  vsApplyAutoAntenna(SdrplaySource* sdrp, double hz);
 
 /* ══ WHICH FRONT-END NOTCHES SUIT THIS FREQUENCY ══════════════════════════════════════════════
  * ★★★ THE RSP's NOTCHES ARE ANALOGUE AND AHEAD OF THE TUNER, so they protect the whole front end
@@ -9611,6 +9614,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const double notchHz = g_dabMode.load(std::memory_order_relaxed)
                                  ? rtlCenter.load()
                                  : LocalSdrShim::instance().listenFrequency();
+            vsApplyAutoAntenna(sdrp.get(), notchHz);   // ★ same two call sites as the notch
             if (vsApplyAutoNotch(sdrp.get(), notchHz))
                 for (auto& pr : allSpecPeers()) sendHwInfo(pr.sock);
             if (n % 2 == 0) {
@@ -19463,6 +19467,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     dabNotch:0 at that very moment).
              * ★★ A CONTROL THAT SHOWS THE WRONG STATE IS WORSE THAN ONE THAT DOES NOTHING: it
              *    invites the owner to "fix" a filter that is already correct. */
+            vsApplyAutoAntenna(sdrp.get(), hz);       // ★ same two call sites as the notch
             if (vsApplyAutoNotch(sdrp.get(), hz))
                 for (auto& pr : allSpecPeers()) sendHwInfo(pr.sock);
             // ★★ The cap is a GAIN POSITION; the LNA state counts the other way. See the note in
@@ -21503,6 +21508,10 @@ static std::mutex  g_rspAntMtx;
 static std::string g_rspAntenna;
 /** ★ Owner's switch: 0 = any listener may change the aerial, 1 = admin only. See vsAntennaLocked. */
 static std::atomic<int> g_antennaLocked{0};
+/** ★ The owner's per-band aerial list, verbatim as typed — "0-30MHz Antenna C, 30-150MHz A,
+ *  150MHz+ B". Parsed at every evaluation rather than at load: it is a handful of rules, and
+ *  keeping the TEXT means what the owner wrote is what the setup page shows back. */
+static std::string g_antennaMap;
 
 // ★ Forward-declared up by the hwinfo builder, which reports this state to the client.
 static int   vsDesiredRfNotch()    { return g_dsp.rspRfNotch.load(); }
@@ -21517,6 +21526,47 @@ static int   vsDesiredDabNotch()   { return g_dsp.rspDabNotch.load(); }
  *    and "wherever" is every route, not the obvious one. Cheap to run and idempotent — it only
  *    touches the hardware when the ANSWER changes — so the safe place is the periodic tick, and
  *    the retune path calls the same function so a band change is still instant. */
+/* ══ THE AERIAL THAT FOLLOWS THE DIAL ═════════════════════════════════════════════════════════
+ *
+ *  Stuart, 2026-09-24: "in addition to the per band gain slider we should add a per band antenna
+ *  selector so that … antenna A could be for HF and below and antenna B could be for VHF and
+ *  antenna C could be for UHF … or simply leave the gain at maximum and use the per band options
+ *  as simply an automatic antenna selector."
+ *
+ *  ★★★ BUILT ON THE AUTO-NOTCH'S HARD-WON SHAPE, and the notes below it are the reasons:
+ *      · evaluated on the periodic TICK as well as on retune, because leaving DAB restores the
+ *        frequency by a route the retune path never sees;
+ *      · compared against what the RADIO reports, never against a cache of our own past decisions
+ *        — anything else moves the aerial and this would not notice;
+ *      · idempotent, so it costs nothing to run often and only touches the hardware on a change.
+ *  ★★ SILENT WHEN THE OWNER HAS WRITTEN NOTHING. An empty map means manual, which is every
+ *     receiver until somebody opts in — this must never take a listener's aerial off them because
+ *     a feature exists.
+ *  ★ An unknown port name is dropped by SdrplaySource, which knows the sockets; a typo in the map
+ *    therefore leaves the aerial alone rather than guessing at the nearest.
+ *  ✗ UNTESTED ON HARDWARE — no multi-aerial RSP here. */
+static void vsApplyAutoAntenna(SdrplaySource* sdrp, double hz) {
+    if (!sdrp || hz <= 0) return;
+    std::string map;
+    { std::lock_guard<std::mutex> lk(g_rspAntMtx); map = g_antennaMap; }
+    if (map.empty()) return;                       // manual: the owner has not asked for this
+    const auto rules = vibebands::parseAntennaList(map);
+    const std::string want = vibebands::antennaAt(rules, hz);
+    if (want.empty()) return;                      // no rule covers here — leave it where it is
+    const std::string now = sdrp->antenna();
+    if (want == now) return;
+    /* ★ Case-insensitively equal counts as equal: the owner types "antenna c" and the radio calls
+     *  it "C", and switching the aerial back and forth on every tick over a capital letter would
+     *  be a fault with a very confusing sound. */
+    std::string a, b;
+    for (char c : want) a += (char)tolower((unsigned char)c);
+    for (char c : now)  b += (char)tolower((unsigned char)c);
+    if (a == b) return;
+    LOGI("auto antenna: %s at %.3f MHz (was %s)", want.c_str(), hz / 1e6,
+         now.empty() ? "unset" : now.c_str());
+    LocalSdrShim::instance().setRspAntenna(want);
+}
+
 static bool  vsApplyAutoNotch(SdrplaySource* sdrp, double hz) {
     /* ★★★ SAY WHY NOTHING HAPPENED. This returned false on three different conditions without a
      *     word, so "the notches are not working" had three possible causes and no way to tell
@@ -28073,6 +28123,11 @@ void LocalSdrShim::setRspAntenna(const std::string& port) {
     VIBE_HW_LOCK(); p->sdrp->setAntenna(port);
     LOGI("RSP antenna -> %s", port.c_str());
 }
+void LocalSdrShim::setRspAntennaMap(const std::string& csv) {
+    { std::lock_guard<std::mutex> lk(g_rspAntMtx); g_antennaMap = csv; }
+    LOGI("per-band aerial list: %s", csv.empty() ? "(none — manual)" : csv.c_str());
+}
+void LocalSdrShim::setAntennaLocked(bool on) { g_antennaLocked.store(on ? 1 : 0); }
 void LocalSdrShim::setRspHdr(bool v)        { g_dsp.rspHdr.store(v ? 1 : 0);
                                               if (!p || !p->useSdrplay()) return;
                                               VIBE_HW_LOCK(); p->sdrp->setHdr(v); }

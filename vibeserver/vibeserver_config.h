@@ -205,6 +205,12 @@ struct Config {
      *    password to use their own switch. */
     std::string antennaPort;
     bool antennaPortLocked = false;
+    /* ★★★ THE AERIAL THAT FOLLOWS THE DIAL. Written the way an owner writes the allowed bands:
+     *  "0-30MHz Antenna C, 30-150MHz Antenna A, 150MHz+ antenna B" (Stuart's own example). Empty
+     *  means manual, which is every receiver until somebody opts in.
+     *  ★ Kept as the TEXT the owner typed, not as parsed rules, so the setup page shows back what
+     *    they wrote rather than a normalised version of it they did not. */
+    std::string antennaMap;
     /* ★ The rest of the RSP sweep. Each is ignored by a model that lacks it — the capability is
      *  checked in SdrplaySource, not here, so a shared config across radios cannot misfire. */
     bool rspHdr = false;        ///< RSPdx/dx-R2: high dynamic range below 2 MHz
@@ -427,6 +433,7 @@ struct RadioConfig {
     bool   autoNotch = false, userNotch = true;   // ★ see the note on the per-radio copy
     std::string antennaPort;                      // ★ port NAME — see the note in Config
     bool   antennaPortLocked = false;
+    std::string antennaMap;                       // ★ per-band aerial list — see the note in Config
     bool   rspHdr = false, rspAmNotch = false, rspExtRef = false;
     bool   dabAgcOverride = true;
     int    dabAgcTarget = -40;

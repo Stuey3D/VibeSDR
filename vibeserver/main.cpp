@@ -175,6 +175,16 @@ struct Opts {
      *   setting, so the config -> Opts -> shim path has no gap for them to fall through. */
     bool        autoNotch = false;
     bool        userNotch = true;
+    /* ★ The aerial and the rest of the RSP sweep (GitHub #29, 2026-09-24). Opts is the third
+     *  struct these fields have to appear in — config, effective, and here — which is exactly the
+     *  hand-maintained shape this file keeps paying for; they are added together and copied
+     *  together in both directions so none can be forgotten by half. */
+    std::string antennaPort;
+    bool        antennaPortLocked = false;
+    std::string antennaMap;
+    bool        rspHdr = false;
+    bool        rspAmNotch = false;
+    bool        rspExtRef = false;
     bool        dabAgcOverride = true;
     int         dabAgcTarget = -40;
     bool        rfAgc = false;
@@ -506,6 +516,11 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.idleGrace = c.idleGrace;
     o.rfNotch = c.rfNotch; o.dabNotch = c.dabNotch; o.zoomSpectrum = c.zoomSpectrum;
     o.autoNotch = c.autoNotch; o.userNotch = c.userNotch;
+    // ★ The aerial (GitHub #29) — carried in BOTH directions with its neighbours. A field copied
+    //   one way only is the fault this file already records, and it is silent both ways.
+    o.antennaPort = c.antennaPort; o.antennaPortLocked = c.antennaPortLocked;
+    o.antennaMap = c.antennaMap;
+    o.rspHdr = c.rspHdr; o.rspAmNotch = c.rspAmNotch; o.rspExtRef = c.rspExtRef;
     o.dabAgcOverride = c.dabAgcOverride; o.dabAgcTarget = c.dabAgcTarget; o.rfAgc = c.rfAgc; o.rspDabDecim = c.rspDabDecim; o.rfAgcStart = c.rfAgcStart;
     o.agcSet = c.agcSet; o.agcSetLock = c.agcSetLock;
     o.port = c.port; o.web = c.web;
@@ -539,6 +554,9 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.idleGrace = o.idleGrace;
     c.rfNotch = o.rfNotch; c.dabNotch = o.dabNotch; c.zoomSpectrum = o.zoomSpectrum;
     c.autoNotch = o.autoNotch; c.userNotch = o.userNotch;
+    c.antennaPort = o.antennaPort; c.antennaPortLocked = o.antennaPortLocked;
+    c.antennaMap = o.antennaMap;
+    c.rspHdr = o.rspHdr; c.rspAmNotch = o.rspAmNotch; c.rspExtRef = o.rspExtRef;
     c.dabAgcOverride = o.dabAgcOverride; c.dabAgcTarget = o.dabAgcTarget; c.rfAgc = o.rfAgc; c.rspDabDecim = o.rspDabDecim; c.rfAgcStart = o.rfAgcStart;
     c.agcSet = o.agcSet; c.agcSetLock = o.agcSetLock;
     c.port = o.port; c.web = o.web;
@@ -1403,6 +1421,15 @@ int main(int argc, char** argv) {
      *  up with before anybody has tuned anywhere. */
     LocalSdrShim::setVibeServerAutoNotch(o.autoNotch);
     LocalSdrShim::setVibeServerUserNotch(o.userNotch);
+    /* ★ The aerial, before the radio is asked for anything: setRspAntenna remembers the choice
+     *  even with no radio open yet, and applyDesiredDsp re-states it on every device. The MAP is
+     *  set after it, so an automatic rule wins over a stale fixed choice at the first tick. */
+    if (!o.antennaPort.empty()) LocalSdrShim::instance().setRspAntenna(o.antennaPort);
+    LocalSdrShim::instance().setRspAntennaMap(o.antennaMap);
+    LocalSdrShim::instance().setAntennaLocked(o.antennaPortLocked);
+    if (o.rspHdr)     LocalSdrShim::instance().setRspHdr(true);
+    if (o.rspAmNotch) LocalSdrShim::instance().setRspAmNotch(true);
+    if (o.rspExtRef)  LocalSdrShim::instance().setRspExtRef(true);
     LocalSdrShim::setVibeServerDabAgc(o.dabAgcOverride, o.dabAgcTarget);
     LocalSdrShim::setVibeServerRfAgc(o.rfAgc);
     LocalSdrShim::setVibeServerRspDabDecim(o.rspDabDecim);

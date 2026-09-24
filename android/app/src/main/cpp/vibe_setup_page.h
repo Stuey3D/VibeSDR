@@ -582,6 +582,30 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
         <div id="antIconPick" class="antIcons"></div>
         <p class="why">Shown to everybody who visits, so keep it about the aerial &mdash; not
            about where you live.</p>
+        <!-- ★★★ WHICH SOCKET, AND WHEN — the RSP's aerial switch (GitHub #29). Drawn only for a
+             radio that HAS more than one socket: hidden for every RSP1 and every dongle, because
+             a selector for a radio with one aerial is a question with one answer.
+             ★★ Deliberately FREE TEXT rather than the band-picker the gain ceilings use. Stuart
+             described what an owner types — "0-30MHz Antenna C, 30-150MHz Antenna A, 150MHz+
+             antenna B" — and the parser was written to accept exactly that, including the word
+             "Antenna" in the middle and the trailing "+". A builder here would be a second way to
+             say the same thing, and the two would drift apart. -->
+        <div id="antPortCard" style="display:none;border-top:1px solid var(--line);margin-top:14px;padding-top:12px">
+          <span class="lbl" style="display:block">Aerial socket</span>
+          <p class="why" id="antPortsNote" style="margin-top:4px"></p>
+          <label><span class="lbl">Switch aerial by band</span>
+            <input type="text" id="antennaMap" maxlength="300"
+                   placeholder="0-30MHz Antenna C, 30-150MHz Antenna A, 150MHz+ antenna B">
+            <div class="hint">Leave empty to choose the aerial by hand. Ranges work the way the
+              allowed bands do &mdash; a unit at either end covers both, and &ldquo;150MHz+&rdquo;
+              means that frequency and upwards. The first rule that matches wins.</div></label>
+          <label class="row" style="gap:8px;align-items:center;margin-top:10px">
+            <input type="checkbox" id="antennaPortLocked" style="width:16px;height:16px;accent-color:var(--amber)">
+            <span>Only I may change the aerial</span></label>
+          <div class="note">The aerial is shared hardware: changing it changes what every listener
+            hears. Ticked, only the admin password can move it &mdash; listeners still see which
+            socket is in use, greyed, with the reason.</div>
+        </div>
       </div>
       <!-- ★★★ A PIN THAT OPENS ONE RADIO, NOT THE MACHINE. A club with one receiver pointed at a
            band its members are licensed for, or a radio on loan, wants a door of its own: the
@@ -3305,6 +3329,17 @@ function fill() {
    *    actually locking something would leave an owner unable to find or remove it, which is how
    *    a tidy-up becomes a lockout. Redundant is not the same as inert. */
   paintRadioPinCard();
+  /* ★ The aerial card follows the RADIO, not the driver name: `antennas` is the list the engine
+   *  publishes from the hardware, so an RSP1 (one socket) and every dongle draw nothing. */
+  if ($("antPortCard")) {
+    const ports = Array.isArray(r.antennas) ? r.antennas : [];
+    $("antPortCard").style.display = ports.length > 1 ? "" : "none";
+    if ($("antPortsNote")) $("antPortsNote").textContent = ports.length > 1
+      ? "This radio has " + ports.length + " sockets: " + ports.join(", ") + "."
+      : "";
+    if ($("antennaMap")) $("antennaMap").value = r.antennaMap || "";
+    if ($("antennaPortLocked")) $("antennaPortLocked").checked = !!r.antennaPortLocked;
+  }
   if ($("radioPin")) {
     const pinSet = !!(r.pin || "").length;
     $("radioPin").value = "";
@@ -3681,6 +3716,8 @@ function collectRadio() {
       if ($("radioPinClear") && $("radioPinClear").checked) return {pin: ""};
       return {};
     })(),
+    antennaMap: $("antennaMap") ? ($("antennaMap").value || "").trim() : "",
+    antennaPortLocked: $("antennaPortLocked") ? !!$("antennaPortLocked").checked : false,
     demodMode: $("demodMode").value,
     // ★★★ SENT IN BOTH MODES. Forcing 1 on an unlocked radio silently threw away the box the
     //     owner had just typed in, and with it the entire shared-dial arrangement — the count is

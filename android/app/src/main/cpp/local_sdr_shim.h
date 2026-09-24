@@ -652,6 +652,11 @@ public:
     /* ★ The RSP sweep — see the .cpp. Each is a no-op on a radio that lacks it, because the
      *  SdrplaySource capability gates the write. */
     void setRspAntenna(const std::string& port);
+    /** ★ The owner's per-band aerial list, verbatim — "0-30MHz Antenna C, 150MHz+ B". Empty =
+     *  manual. Evaluated on every tick and retune; see vsApplyAutoAntenna. */
+    void setRspAntennaMap(const std::string& csv);
+    /** ★ Admin-only aerial: shared hardware the owner may keep to themselves. */
+    void setAntennaLocked(bool on);
     void setRspHdr(bool on);
     void setRspAmNotch(bool on);
     void setRspExtRef(bool on);
