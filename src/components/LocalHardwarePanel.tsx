@@ -966,8 +966,29 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   <Text style={styles.section}>
                     GAIN — {aspMode === 0 ? 'sensitivity' : 'linearity'} curve
                   </Text>
-                  <GainSlider gains={cappedGains} gainTenthDb={p.gainTenthDb} auto={p.autoGain}
-                              onAuto={p.onAuto} onGain={p.onGain} />
+                  {/* ★★★ A PLAIN 0-21 SLIDER, NOT THE DONGLE'S GainSlider — WHICH DREW NOTHING HERE.
+                      GainSlider is driven by a TABLE of discrete gains (`gains`), and when that
+                      table is empty it renders itself DISABLED showing "—". So the control was on
+                      screen and dead, which reads as no control at all: "user enables those modes
+                      and there is no gain control at all ... in free mode all the gain sliders are
+                      there" (Onfliner via Stuart, 2026-09-24). The Free stages worked precisely
+                      because they are plain Sliders with their own min/max and depend on no table.
+                      ★★ AND THE TABLE IS THE WRONG IDEA FOR THIS RADIO ANYWAY. Sensitive and Linear
+                         are a single 0-21 INDEX that libairspy looks up to set the LNA, mixer and
+                         VGA together — a predetermined mix per profile, exactly as SDR++ presents
+                         it. The index is what the slider should move; the shim already carries it
+                         as tenths (index x 10) and remembers one per curve. Deriving the maximum
+                         from the radio's own list when it sent one, and falling back to 21, so a
+                         future Airspy with a longer curve is not clipped by a constant here. */}
+                  <View style={styles.sliderRow}>
+                    <Text style={styles.sliderEnd}>0</Text>
+                    <Slider style={{ flex: 1, height: 40 }} minimumValue={0} step={1}
+                      maximumValue={p.gains.length > 1 ? p.gains.length - 1 : 21}
+                      value={Math.max(0, Math.round((p.gainTenthDb ?? 0) / 10))}
+                      onSlidingComplete={(v) => p.onGain(Math.round(v) * 10)}
+                      minimumTrackTintColor={C.gold} maximumTrackTintColor="#444" thumbTintColor={C.gold} />
+                    <Text style={styles.sliderEnd}>{p.gains.length > 1 ? p.gains.length - 1 : 21}</Text>
+                  </View>
                 </>
               )}
               <Text style={styles.section}>GAIN MODE</Text>
