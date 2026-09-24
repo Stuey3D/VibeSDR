@@ -713,8 +713,18 @@ const pm = StyleSheet.create({
   linkArrows: { color: 'rgba(255,255,255,0.40)', fontSize: 9, lineHeight: 11 },
   /* ★ Same size and rhythm as the link stats beside them — these are a reading, not a button, and
      should not shout. The colour is the amber the rest of the active state uses. */
-  dspRow:     { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  dspTag:     { fontSize: 9, lineHeight: 11, letterSpacing: 1 },
+  dspRow:     { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  /* ★★★ AN ACTIVE BADGE MUST LOOK ACTIVE. These render ONLY when the treatment is on, so the
+   *  reading "grey = inactive" is exactly backwards — and at 9 px they were, in Stuart's words,
+   *  "a couple of grey initials [that] could mean anything" (2026-09-24). They are the only clue
+   *  that the audio is being processed, which is the whole reason NR is allowed to persist across
+   *  sessions: an invisible NR sounds like a broken receiver.
+   *  ★ A tinted pill, not just coloured text: two letters at the edge of a dense status row need a
+   *    shape to be found at a glance. Non-interactive in appearance, but still opens AUDIO. */
+  dspTag:     { fontSize: 11, lineHeight: 13, letterSpacing: 1, fontWeight: '700',
+                paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4, overflow: 'hidden',
+                borderWidth: 1, borderColor: 'rgba(255,184,51,0.55)',
+                backgroundColor: 'rgba(255,184,51,0.16)' },
   linkRate:   { color: 'rgba(255,255,255,0.55)', fontSize: 9, lineHeight: 11, marginLeft: 4, fontVariant: ['tabular-nums'] },
   phoneGlyph: { width: 8, height: 13, borderWidth: 1, borderRadius: 2,
                 alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 1.5 },
@@ -1114,7 +1124,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
                it may sit close to the bottom, but it stays clear of the home indicator (the safe
                area inset is applied by the screen, not here). */}
         <DspBadges nr={dspNr} nb={dspNb} an={dspAn} onPress={onAudio}
-                   font={t.font} color={t.clockColor} />
+                   font={t.font} />
       </View>
 
       {/* Row 5 — the connection stats, on their own line so they can no longer be truncated. */}
@@ -1318,7 +1328,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
           </View>
         </View>
         <DspBadges nr={dspNr} nb={dspNb} an={dspAn} onPress={onAudio}
-                   font={t.font} color={t.clockColor} />
+                   font={t.font} />
         <View style={[lnd.statusSide, { justifyContent: 'flex-end' }]}>
           <LinkIndicator bus={bus} />
         </View>
