@@ -1316,7 +1316,7 @@ export default function SDRScreen({ route, navigation }: Props) {
          *   fixed and the checker actually ran, said so). Direct sampling is a normal listener
          *   control on an RTL below 24 MHz; nbx is the HF noise blanker. */
         setHwDirectSampling?: (v: 0 | 1 | 2) => void; setNoiseBlankerHf?: (on: boolean) => void;
-        setHwAutoDirectSampling?: (on: boolean) => void;
+        setHwAutoDirectSampling?: (on: boolean, belowHz?: number) => void;
         setWeakProc?: (on: boolean) => void; setIms?: (on: boolean) => void;
         setCeq?: (on: boolean) => void; setNoiseBlanker?: (on: boolean) => void;
         setAutoBw?: (on: boolean) => void;
@@ -1412,7 +1412,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onHwAutoDs = useCallback((on: boolean) => {
     setHwAutoDs(on);
     const rc = hwClient();
-    if (rc) rc.setHwAutoDirectSampling?.(on);
+    // ★ The crossover goes with it on BOTH paths — the panel shows one number, so one number has
+    //   to govern. The remote branch used to drop it and the server used its own.
+    if (rc) rc.setHwAutoDirectSampling?.(on, hwDsBelowHz);
     else LocalHw?.setAutoDirectSampling?.(on, hwDsBelowHz);
   }, [LocalHw, hwClient, hwDsBelowHz]);
   // ★★★ THESE TWO WENT ONLY TO THE LOCAL MODULE, so on a networked server they did NOTHING —

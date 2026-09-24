@@ -13434,8 +13434,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (!adminGate("automatic direct sampling")) return;
             if (jsonNum(msg, "value", v)) {
                 const bool on = v != 0;
-                LocalSdrShim::instance().setAutoDirectSampling(
-                    on, (double)g_dsBelowHz.load(std::memory_order_relaxed));
+                /* ★★★ HONOUR THE CROSSOVER THE CLIENT IS SHOWING. The panel draws "below N MHz"
+                 *  and let the user change it, and on a remote server that number governed
+                 *  nothing: this read the SERVER's own g_dsBelowHz and threw the client's away, so
+                 *  the control said one thing and the radio did another — the exact shape of fault
+                 *  this file keeps paying for. Absent = keep ours, so an older client that sends
+                 *  no crossover behaves as it always did. */
+                double below = (double)g_dsBelowHz.load(std::memory_order_relaxed);
+                double wantBelow;
+                if (jsonNum(msg, "belowHz", wantBelow) && wantBelow > 0.0) below = wantBelow;
+                LocalSdrShim::instance().setAutoDirectSampling(on, below);
                 vsPersist(std::string("{\"autoDirectSampling\":") + (on ? "true" : "false") + "}");
                 // ★ Tell every client at once: the control they are looking at has just changed state.
                 LocalSdrShim::instance().broadcastHwInfo();
@@ -13525,20 +13533,30 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             (rx.*setter)(on);
             if (shared) shared->store(on);
         };
+        /* ★ NAMED IN THE LOG, because these six were dead on a local dongle for two releases and
+         *  nothing said so — the switch moved, the audio did not, and there was no way to tell
+         *  from outside which half was at fault (2026-09-24). A listener action, so it is rare. */
+        const auto logDsp = [&](const char* what, bool on) {
+            LOGI("listener DSP: %s %s", what, on ? "on" : "off");
+        };
         if (type == "wsp") {
+            logDsp("weak-signal NR", jsonOn(msg));
             perListener(&vibedsp::RxPipeline::setWeakSignalProc, &ClientDsp::wspOn, &weakProcOn, jsonOn(msg));
             return;
         }
         if (type == "nb") {
+            logDsp("noise blanker", jsonOn(msg));
             perListener(&vibedsp::RxPipeline::setNoiseBlanker, &ClientDsp::nbOn, &nbOn, jsonOn(msg));
             return;
         }
         if (type == "nbx") {
+            logDsp("HF noise blanker", jsonOn(msg));
             /* ★ The audio-menu NOISE BLANKER — the listener's own, every mode but WFM. */
             perListener(&vibedsp::RxPipeline::setNoiseBlankerHf, &ClientDsp::nbxOn, &nbxOn, jsonOn(msg));
             return;
         }
         if (type == "ceq") {
+            logDsp("channel EQ", jsonOn(msg));
             perListener(&vibedsp::RxPipeline::setCeq, &ClientDsp::ceqOn, &ceqOn, jsonOn(msg));
             return;
         }
@@ -13558,6 +13576,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             return;
         }
         if (type == "ims") {
+            logDsp("IMS stereo", jsonOn(msg));
             perListener(&vibedsp::RxPipeline::setIms, &ClientDsp::imsOn, &imsOn, jsonOn(msg));
             return;
         }

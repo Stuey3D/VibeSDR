@@ -714,7 +714,13 @@ export abstract class VibeServerWsClient {
   setHwDirectSampling(v: 0 | 1 | 2) { this._sendCtl({ type: 'directSampling', value: v }); }
   /** ★ AUTO direct sampling (the engine switches the tuner out below the crossover). Admin-gated on
    *  the server, as the web client's setHwAutoDirectSampling is. */
-  setHwAutoDirectSampling(on: boolean) { this._sendCtl({ type: 'autoDirectSampling', value: on ? 1 : 0 }); }
+  setHwAutoDirectSampling(on: boolean, belowHz?: number) {
+    /* ★ The crossover travels WITH the switch. Without it the server used its own figure and the
+     *  panel's "below N MHz" was decoration on a remote receiver — see the shim's handler. */
+    this._sendCtl(belowHz && belowHz > 0
+      ? { type: 'autoDirectSampling', value: on ? 1 : 0, belowHz }
+      : { type: 'autoDirectSampling', value: on ? 1 : 0 });
+  }
 
   /** ★★★ TELL THE SERVER SOMEONE IS ACTUALLY HERE — on BOTH sockets, on ACTIVITY.
    *

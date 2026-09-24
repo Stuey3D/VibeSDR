@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View,
+  Modal, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -359,7 +359,14 @@ export default function AudioSheet({
   const insets = useSafeAreaInsets();
   const isOwrx = serverType === 'owrx';
   const isKiwi = isKiwiProtocol(serverType);   // Web-888 has the same DSP surface
-  const uberDsp = !recordingOnly && !isOwrx && !isLocal && !isKiwi;
+  /* ★★★ AND NOT ON ANDROID, WHERE THEY DO NOTHING. These two are the CLIENT's own DSP — the Swift
+   *  skin ports behind VibePowerModule — and Android's module accepts the call and discards it
+   *  ("accepted no-op (port pending)", SDRScreen). So on every Android handset they were two
+   *  buttons that lit up, stayed lit, and changed no audio at all.
+   *  ★ AGENTS.md: "I would rather a control be removed if it only works in one scenario than keep
+   *    it there dead" — the rule is written about radios, and it reads the same about platforms.
+   *    When the Android port lands, deleting this clause is the whole of what turns them back on. */
+  const uberDsp = !recordingOnly && !isOwrx && !isLocal && !isKiwi && Platform.OS !== 'android';
 
   // Live signal reading — this sheet covers the signal bar, so show the CURRENT level next to the
   // squelch control (set the gate just above where speech sits / just below where noise shows).
