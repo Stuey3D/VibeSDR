@@ -201,6 +201,36 @@ export class LinkManager {
     this.sinceApply++;
     if (this.sinceApply <= WARMUP_TICKS) { this.starvedSecs = 0; return; }
 
+    /* ★★★ A SERVER THAT CANNOT GO FASTER IS NOT A LINK THAT IS STARVING.
+     *
+     *  The Pi 2 is asked for 20 fps, is CPU-bound at about 7.8, and says so in its own log:
+     *  "SPEC RATE: emitting 7.8 fps, asked 20.0 (39% of target)". This controller saw 39%, called
+     *  it starvation and walked down the ladder — and the shortfall did not improve, because the
+     *  bottleneck was never the network. The user lost the frames the server COULD have sent, and
+     *  the bars went red on a link with nothing wrong with it (Stuart, 2026-09-24: "on my server
+     *  with absolutely perfect stats… its a steady 8 it never tries for more").
+     *
+     *  ★★ THE TELL IS STEADINESS. A congested link delivers erratically — bursts, stalls, a
+     *     spread of arrival rates. A server at its ceiling delivers the SAME number every second.
+     *     So a shortfall that barely moves is a ceiling, and the honest response is to accept it:
+     *     asking for less would not gain a single frame, and it would throw some away.
+     *  ★ Measured over the recent window this controller already keeps. Spread rather than
+     *    variance: it is the same arithmetic the meter's median uses, and it needs no tuning
+     *    constant beyond "how close is close". */
+    const steadyShortfall = (() => {
+      if (this.recent.length < 5) return false;
+      const lo = Math.min(...this.recent), hi = Math.max(...this.recent);
+      const mid = (lo + hi) / 2;
+      return mid > 0 && (hi - lo) / mid < 0.25;      // within ±12% of itself: a ceiling, not a link
+    })();
+    if (ratio < STARVE_RATIO && steadyShortfall) {
+      /* ★ Hold, and stop counting it against the link. The rung stays where it is: the server is
+       *  already giving everything it has, and a lower request cannot produce more. */
+      this.starvedSecs = 0; this.healthySecs = 0;
+      this.settling = false;                          // decided: this is the server's ceiling
+      linkDebug.line += ' — server ceiling, holding';
+      return;
+    }
     if (ratio < STARVE_RATIO) {
       this.starvedSecs++; this.healthySecs = 0;
       if (this.starvedSecs >= DEGRADE_AFTER && this.rung < this.ladder.length) {
