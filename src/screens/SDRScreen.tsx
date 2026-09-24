@@ -9252,11 +9252,24 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  REMEMBERED. Noise reduction was deliberately never persisted because a forgotten one
            *  sounds like a broken receiver; with the state on screen that objection is answered
            *  (Stuart, 2026-09-24: "with indication we can have persistant NR/NB/AN options").
-           *  ★ NB is either blanker — the FM one or the HF one; a listener does not distinguish
-           *    them when asking "why does this sound odd", and two letters would not fit anyway. */
-          dspNr={hwNrLevel > 0 || fmNr}
-          dspNb={fmNb || fmNbx}
-          dspAn={hwNotch}
+           *
+           * ★★★ THE FM CHAIN'S OWN TREATMENTS ARE NOT REPORTED, AND READING THEM LIT THE BADGES
+           *     FOR EVERYONE, FOR EVER. `fmNr` and `fmNb` both DEFAULT TO TRUE — they are part of
+           *     how the WFM demodulator is built, not a choice anyone made — so NR and NB were on
+           *     screen permanently, in every mode, including MW where the FM chain is not even
+           *     running (Stuart, 2026-09-24: "the NB NR stays on all the time as it is reading the
+           *     broadcast FM specific ones, I am on MW and the AM ones are off").
+           * ★★ A badge that is always on carries no information. Worse, it MISDESCRIBES: it named
+           *    treatments that were not acting on what he was listening to.
+           * ★ And they do not earn the space: "these dont make much of an audible difference in
+           *   the way that the AM versions do". So the badges report the ones a listener CHOOSES
+           *   and can HEAR — the NR slider, the audio-menu blanker, the auto notch.
+           * ★ NB covers either blanker the listener can switch on; they do not distinguish them
+           *   when asking "why does this sound odd", and two letters would not fit anyway.
+           *   `fmNbx` is every mode BUT WFM, so it is not offered — or claimed — on broadcast FM. */
+          dspNr={hwNrLevel > 0}
+          dspNb={(fmNbx || nb) && status.mode !== 'wfm'}
+          dspAn={isLocal ? hwNotch : netNotch}
           onFreqTap={onFreqOpen}
           onModeTap={onModeOpen}
           freqUnit={freqUnit}
