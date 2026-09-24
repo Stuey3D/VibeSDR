@@ -961,6 +961,19 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   ★★ Only in the PRESET modes. In Free the three stages below ARE the control, and
                      a fourth slider driving all of them at once would fight them — which is the
                      ambiguity the three-way mode was introduced to remove. */}
+              <Text style={styles.section}>GAIN MODE</Text>
+              <Seg slot={slot} options={[0, 1, 2]}
+                   value={aspMode}
+                   onChange={(v) => p.onAspGainMode?.(Number(v))}
+                   fmt={(v) => (v === 0 ? 'Sensitive' : v === 1 ? 'Linear' : 'Free')} />
+              <Text style={styles.note}>
+                {aspMode === 2
+                  ? 'Free sets the three stages yourself, with the radio\'s own AGC available on the '
+                    + 'LNA and the mixer.'
+                  : 'The slider below sets all three stages together. Linear keeps strong neighbours '
+                    + 'from spoiling what you are on; Sensitive digs for the weakest signal. Linear is '
+                    + 'the safer default on a busy band.'}
+              </Text>
               {aspMode !== 2 && (
                 <>
                   <Text style={styles.section}>
@@ -991,19 +1004,6 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   </View>
                 </>
               )}
-              <Text style={styles.section}>GAIN MODE</Text>
-              <Seg slot={slot} options={[0, 1, 2]}
-                   value={aspMode}
-                   onChange={(v) => p.onAspGainMode?.(Number(v))}
-                   fmt={(v) => (v === 0 ? 'Sensitive' : v === 1 ? 'Linear' : 'Free')} />
-              <Text style={styles.note}>
-                {aspMode === 2
-                  ? 'Free sets the three stages yourself, with the radio\'s own AGC available on the '
-                    + 'LNA and the mixer.'
-                  : 'The slider above sets all three stages together. Linear keeps strong neighbours '
-                    + 'from spoiling what you are on; Sensitive digs for the weakest signal. Linear is '
-                    + 'the safer default on a busy band.'}
-              </Text>
 
               {aspMode === 2 && (<>
               <View style={styles.toggleRow}>
