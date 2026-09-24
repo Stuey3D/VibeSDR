@@ -5,6 +5,20 @@ Description=VibeServer — SDR receiver server
 Documentation=https://vibesdr.net
 After=network-online.target
 Wants=network-online.target
+# ★★★ THE RADIOS MUST COME UP WHENEVER THE FRONT DOOR DOES — Wants=, not just PartOf= (2026-09-24).
+#
+# The radios run as their own units (vibeserver@<serial>), started by vibeserver-radios.service.
+# Those carry PartOf=vibeserver.service, which propagates STOP and RESTART but NEVER START. So a
+# plain `systemctl restart vibeserver` worked, and a `stop` followed by a `start` left the front
+# door running with every radio dead: the box answers, lists its radios, and hands every listener
+# to a socket that is not there — "handoff to /run/vibeserver/<serial>.sock failed".
+# ★★ AND STOP/START IS THE NORMAL WAY TO UPDATE. Replacing a running binary fails with "Text file
+#    busy", so anyone installing a build by hand stops the service first. It looks exactly like the
+#    update broke the radio. Found on the Pi 2 doing precisely that (Stuart: "fix that too").
+# ★ Wants= (not Requires=) so a radio that cannot open — dongle unplugged, USB wedged — never stops
+#   the front door from serving the setup page, which is the one thing you need to fix it from.
+Wants=vibeserver-radios.service
+Before=vibeserver-radios.service
 
 [Service]
 Type=simple
