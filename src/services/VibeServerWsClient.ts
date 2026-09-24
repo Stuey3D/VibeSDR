@@ -2572,6 +2572,12 @@ export abstract class VibeServerWsClient {
           this.callbacks.onStatus({ ...this.status });
         } else if (Number.isFinite(serverVfo) && Math.abs(serverVfo - want.frequency) > 500) {
           this.dbg(`landing put us on ${serverVfo}; re-asserting remembered ${want.frequency}`);
+          /* ★★★ SAY THAT THIS IS A RESTORE, BEFORE MAKING IT. The audio socket seals itself on any
+           *  dial that might be shared and breaks the seal only on a value it has not seen — and
+           *  the value we are about to send is exactly the one it opened with, so without this the
+           *  re-assert is indistinguishable from the socket restating itself and is dropped. The
+           *  note above says "deferring costs nothing"; it cost the whole restore. */
+          this.callbacks.onRestoredTune?.(want.frequency, want.mode);
           this.tune(want.frequency, want.mode, { recenter: true });
           // ★★★ AND AGAIN A MOMENT LATER, BECAUSE THE AUDIO PATH IS NOT OURS TO SEE. tune() reaches
           //     the radio through VibePowerModule's native audio socket, and on this server the
@@ -2589,6 +2595,7 @@ export abstract class VibeServerWsClient {
             if (this.destroyed) return;
             if (Math.abs(this.lastServerVfo - want.frequency) > 500) {
               this.dbg(`still on ${this.lastServerVfo}; asserting ${want.frequency} once more`);
+              this.callbacks.onRestoredTune?.(want.frequency, want.mode);
               this.tune(want.frequency, want.mode, { recenter: true });
             }
           }, 2500);

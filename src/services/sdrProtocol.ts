@@ -226,6 +226,17 @@ export interface SDRCallbacks {
                       listeners: number; decoding: boolean }) => void;
   /** Spectator mode said no — the owner tunes this one. An explanation, not an error. */
   onDialRefused?: () => void;
+  /** ★★★ THE CLIENT IS PUTTING THE DIAL BACK WHERE THIS PERSON LEFT IT — a deliberate restore of
+   *  their own last tune, not the screen settling. It exists because the audio socket SEALS itself
+   *  on a dial that might be shared, and that seal cannot tell a restore from the socket merely
+   *  restating its opening position: both carry the same numbers. So the restore was dropped, the
+   *  readout showed the remembered frequency and the radio stayed where it was opened — cured only
+   *  by nudging the dial, which is the one thing that differs from `startTune`.
+   *  ★ Measured on the XCover, 2026-09-24: `zoom -> 909000` twice and no tune at all, with the
+   *    dongle still on the 100 MHz it was opened at (Stuart's video; Onfliner's "sound at 100.0").
+   *  ★ The screen answers it by counting it as a user tune, which is what it is: a person asked
+   *    for this frequency, just not in this session. */
+  onRestoredTune?: (hz: number, mode?: string) => void;
   /** ★ Somebody ELSE moved the shared dial, with the frequency they moved it to. Distinct from
    *  onStatus, which cannot say WHO caused the change — and "why did it move" needs an answer on
    *  screen or the receiver looks broken. */

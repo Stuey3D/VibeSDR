@@ -1101,6 +1101,26 @@ export default function SDRScreen({ route, navigation }: Props) {
       const sql = typeof prefs.squelch === 'number' ? Math.max(-100, prefs.squelch) : -100;
       hwSquelchRef.current = sql;
       const nrLvl = 0, notch = false;
+      /* ★★★ AND THE FM TREATMENTS, WHICH RESET ON EVERY LAUNCH BECAUSE NOTHING SAVED THEM.
+       *  Defaults match the useState defaults above, so a blob written before this existed — or a
+       *  radio nobody has set these on — behaves exactly as it did. They are pushed to the radio
+       *  further down, once the client is up: see the effect that re-asserts them on connect. */
+      const bl = (v: unknown, dflt: boolean) => (typeof v === 'boolean' ? v : dflt);
+      const fmWant = {
+        wsp: bl(prefs.fmNr, true),   ims: bl(prefs.fmIms, true),
+        ceq: bl(prefs.fmCeq, true),  nb:  bl(prefs.fmNb, true),
+        nbx: bl(prefs.fmNbx, false), autobw: bl(prefs.fmAutoBw, true),
+      };
+      /* ★★★ KEPT IN A REF, NOT ONLY IN STATE, BECAUSE hwinfo WILL OVERWRITE THE STATE. onFmDsp
+       *  paints these six from what the RADIO reports — deliberately, they are sticky and shared —
+       *  and it arrives after this restore. Pushing "the current state" a moment later would
+       *  therefore send the radio its own defaults back and the remembered preference would be
+       *  lost in the handover. The ref is what was remembered; the effect below asserts it once. */
+      fmWantRef.current = fmWant;
+      fmWantSent.current = false;      // ★ a fresh device/session — state it again
+      setFmNr(fmWant.wsp);   setFmIms(fmWant.ims);
+      setFmCeq(fmWant.ceq);  setFmNb(fmWant.nb);
+      setFmNbx(fmWant.nbx);  setFmAutoBw(fmWant.autobw);
       setHwAutoGain(auto); setHwPpm(ppm); setHwSampleRate(rate);
       setHwBiasTee(bias); setHwAgc(agc); setHwDirectSamp(ds); setHwDeemph(deemph); setHwStereo(stereo); setHwSquelch(sql); setHwNrLevel(nrLvl); setHwNotch(notch);
       if (typeof prefs.gain === 'number') setHwGain(prefs.gain);
@@ -1207,9 +1227,19 @@ export default function SDRScreen({ route, navigation }: Props) {
       converter: canConvert && !convIsIdentity(converter) ? converter : undefined,
       squelch: hwSquelch,            // ★ remembered per device — see the restore above (#28)
       autoDs: hwAutoDs, dsBelowHz: hwDsBelowHz,   // ★ per-radio audit, 2026-09-22 — was never saved
+      /* ★★★ THE FM TREATMENTS, WHICH NOTHING HAS EVER REMEMBERED. Onfliner, 2026-09-24: "If you
+       *  going to the main menu and then launch the dongle again, some settings will be reset —
+       *  all audio settings except DE-EMPH and squelch". Those two were the only ones in this blob,
+       *  which is the whole of the difference; the rest were pure React state and went back to
+       *  their useState defaults on every mount.
+       *  ★ They are a listener's standing preference for how this radio should sound, not a
+       *    session detail — exactly like de-emphasis beside them. NR level and auto-notch stay out
+       *    deliberately (see below): those are a response to conditions right now. */
+      fmNr: fmNr, fmIms: fmIms, fmCeq: fmCeq, fmNb: fmNb, fmNbx: fmNbx, fmAutoBw: fmAutoBw,
     })).catch(() => {});
     // NB: nrLevel / notch are intentionally NOT saved (session-scoped).
-  }, [isLocal, localHwKey, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwStereo, canConvert, converter, hwSquelch, hwAutoDs, hwDsBelowHz]);
+  }, [isLocal, localHwKey, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwStereo, canConvert, converter, hwSquelch, hwAutoDs, hwDsBelowHz,
+      fmNr, fmIms, fmCeq, fmNb, fmNbx, fmAutoBw]);
 
   // VibeServer (remote shim): hardware controls ride the WS to the serving device
   // instead of the (non-existent) local dongle. localHost set = remote session.
@@ -1402,27 +1432,81 @@ export default function SDRScreen({ route, navigation }: Props) {
     const rc = hwClient();
     if (rc) rc.setStereo?.(on); else LocalHw?.setStereoEnabled?.(on);
   }, [LocalHw, hwClient]);
-  // ★ Server-side only, and typed on SDRBackend so a rename fails the build rather than becoming a
-  //   silent no-op — the `(c as any).setAdminAuth?.()` lesson. A backend without them simply has no
-  //   method, and AudioSheet then draws no row.
+  /* ★★★ THE SIX FM TREATMENTS WENT THROUGH hwClient(), AND ON A DONGLE THAT IS NULL.
+   *
+   *  hwClient() answers only for a shim on ANOTHER device (`isRemoteShim`), so with the radio
+   *  plugged into this phone every one of these was `null?.method?.()` — six switches drawn,
+   *  pressed, and swallowed by the optional chaining. The row is drawn locally because the shim
+   *  honestly reports `wsp` in hwinfo, so the buttons appear precisely where they do nothing:
+   *  AGENTS.md's "a control that only works in one scenario" in its purest form.
+   *
+   *  ★★ AND NOTHING NATIVE WAS MISSING — that is what makes this a one-word fix rather than a new
+   *     JNI bridge. A local dongle IS a VibeServer over loopback: InstancePickerScreen starts the
+   *     embedded server and the screen talks to it through the same WebSocket client, so
+   *     `client.current` is live in BOTH modes and the shim already handles `wsp`, `nb`, `nbx`,
+   *     `ceq`, `autobw` and `ims` on that socket. Measured on the XCover, 2026-09-24: the shim
+   *     logged `ctl <- fftRate`, `ctl <- zoom`, `ctl <- rdsx` arriving from the app over loopback
+   *     while the dongle was plugged into the phone.
+   *
+   *  ★ Same family as "the Airspy panel was decorative on local hardware" (8fde4f4b) and the DAB
+   *    label-scan setting: a method that exists, compiles, and is unreachable from the only place
+   *    that would call it, with `?.` supplying the silence. The cure there was aspSend(); here the
+   *    remote and local destinations are the SAME object, so naming it correctly is the whole fix.
+   *  ★ Still optional-chained: a backend that genuinely lacks the method (OWRX, Kiwi) must no-op,
+   *    and AudioSheet draws no row for it. */
+  const fmClient = useCallback(() => (client.current as {
+    setWeakProc?: (on: boolean) => void; setIms?: (on: boolean) => void;
+    setCeq?: (on: boolean) => void; setNoiseBlanker?: (on: boolean) => void;
+    setNoiseBlankerHf?: (on: boolean) => void; setAutoBw?: (on: boolean) => void;
+  } | null), []);
+  /* ★ What storage remembered for this radio, and whether it has been stated to it yet on this
+   *  connection. Both live outside React state because hwinfo overwrites the state — see the
+   *  restore that fills this in. */
+  const fmWantRef = useRef<{ wsp: boolean; ims: boolean; ceq: boolean; nb: boolean;
+                             nbx: boolean; autobw: boolean } | null>(null);
+  const fmWantSent = useRef(false);
   const onFmNr = useCallback((on: boolean) => {
-    setFmNr(on); hwClient()?.setWeakProc?.(on);
-  }, [hwClient]);
+    setFmNr(on); fmClient()?.setWeakProc?.(on);
+  }, [fmClient]);
   const onFmIms = useCallback((on: boolean) => {
-    setFmIms(on); hwClient()?.setIms?.(on);
-  }, [hwClient]);
+    setFmIms(on); fmClient()?.setIms?.(on);
+  }, [fmClient]);
   const onFmCeq = useCallback((on: boolean) => {
-    setFmCeq(on); hwClient()?.setCeq?.(on);
-  }, [hwClient]);
+    setFmCeq(on); fmClient()?.setCeq?.(on);
+  }, [fmClient]);
   const onFmNbx = useCallback((on: boolean) => {
-    setFmNbx(on); hwClient()?.setNoiseBlankerHf?.(on);
-  }, [hwClient]);
+    setFmNbx(on); fmClient()?.setNoiseBlankerHf?.(on);
+  }, [fmClient]);
   const onFmNb = useCallback((on: boolean) => {
-    setFmNb(on); hwClient()?.setNoiseBlanker?.(on);
-  }, [hwClient]);
+    setFmNb(on); fmClient()?.setNoiseBlanker?.(on);
+  }, [fmClient]);
   const onFmAutoBw = useCallback((on: boolean) => {
-    setFmAutoBw(on); hwClient()?.setAutoBw?.(on);
-  }, [hwClient]);
+    setFmAutoBw(on); fmClient()?.setAutoBw?.(on);
+  }, [fmClient]);
+  /* ★★★ STATE THE REMEMBERED TREATMENTS ONCE THE RADIO HAS OWNED UP TO HAVING THEM.
+   *
+   *  `vibeFmDsp` goes true when hwinfo carries them, which is also the moment onFmDsp has painted
+   *  the radio's own values over the restore. So this is where the preference is asserted — from
+   *  the ref, which still holds what was remembered — and only once per connection.
+   *
+   *  ★★ SAFE ON ANY RECEIVER because these are PER-LISTENER on the server (see the shim's
+   *     perListener() dispatch for wsp/ims/ceq/nb/nbx): stating ours moves nobody else's audio,
+   *     unlike the dial. That is why this needs no shared-dial guard.
+   *  ★ Only for a radio whose settings we store — the local blob is per device, and a remote shim
+   *    has its own owner. */
+  useEffect(() => {
+    if (!isLocal || route.params.localHost) return;
+    if (!vibeFmDsp || fmWantSent.current) return;
+    const want = fmWantRef.current;
+    if (!want) return;
+    fmWantSent.current = true;
+    const c = fmClient();
+    c?.setWeakProc?.(want.wsp); c?.setIms?.(want.ims); c?.setCeq?.(want.ceq);
+    c?.setNoiseBlanker?.(want.nb); c?.setNoiseBlankerHf?.(want.nbx); c?.setAutoBw?.(want.autobw);
+    setFmNr(want.wsp); setFmIms(want.ims); setFmCeq(want.ceq);
+    setFmNb(want.nb); setFmNbx(want.nbx); setFmAutoBw(want.autobw);
+  }, [isLocal, vibeFmDsp, fmClient, route.params.localHost]);
+
   // Mirrored into a ref so the per-frame meter emit can decide whether the gate is closed without
   // re-subscribing the whole audio callback every time the threshold moves.
   const hwSquelchRef = useRef(-100);
@@ -4712,6 +4796,17 @@ export default function SDRScreen({ route, navigation }: Props) {
         // ★ An explanation, not an error: this receiver is listen-only and the owner tunes it.
         setDialHint('This receiver is set to listen only — the owner tunes it.');
       },
+      /* ★★★ A RESTORE IS A PERSON ASKING, JUST NOT IN THIS SESSION — so it counts, and the audio
+       *  socket's seal opens for it. Without the bump the re-assert carries the same numbers the
+       *  socket opened with, LocalAudioPlayer cannot tell it from the socket restating itself, and
+       *  it is dropped: readout on the remembered frequency, radio still where it was opened.
+       *  ★ The forced re-render is the point — userTuneSeq is a REF, so the prop only reaches
+       *    LocalAudioPlayer when something else redraws, and on a quiet reconnect nothing does.
+       *    Its own note warned that a missed bump is "silently dropped"; this is one. */
+      onRestoredTune: () => {
+        if (destroyed.current) return;
+        setTuneAssertNonce((n) => n + 1);
+      },
       onSaid: (from: number, id: string) => {
         if (destroyed.current) return;
         const text = phraseText(id);
@@ -5154,8 +5249,28 @@ export default function SDRScreen({ route, navigation }: Props) {
        *     feature and drops only the risk.
        *  ★ Under by a beat is a slightly later restore; over is a room full of listeners moved off
        *    their station by somebody who only opened the app. */
+      /* ★★★ A DONGLE IN THIS PHONE IS NOT A ROOM, so there is nothing to be timid about.
+       *
+       *  Everything above weighs the risk of dragging OTHER LISTENERS off their station. A USB
+       *  dongle plugged into this handset has no other listeners — it is not published, not shared
+       *  and not reachable — so the probe's answer is irrelevant and its FAILURE is not a reason to
+       *  stay quiet. And staying quiet here does not defer the restore, it loses it: see the seal
+       *  in LocalAudioPlayer, which cannot tell the deferred re-assert from the socket merely
+       *  restating its opening position, because they carry the same numbers.
+       *
+       *  ★★ MEASURED ON THE XCOVER, 2026-09-24. Reconnect to the local dongle and the shim's own
+       *     log shows `zoom -> 909000` twice and NO TUNE AT ALL: the radio stayed on the 100 MHz
+       *     it was opened at while the readout, the view and the band plan all said 909 kHz. That
+       *     is Stuart's video — "the controls say 100.5 but the audio is broken and full of
+       *     static" — and Onfliner's "the sound is still at 100.0", which is the same fault with
+       *     the default frequency showing through.
+       *  ★ `localHost` set means the shim is on ANOTHER device — somebody else's room — so that
+       *    case keeps the careful answer below. */
+      const ownLocalDongle = isLocal && !route.params.localHost;
       if (!destroyed.current) {
-        setAssertTuneOk(chosenRadio ? !isSharedDial(chosenRadio) : (!!occ && occ.maxUsers <= 1));
+        setAssertTuneOk(ownLocalDongle ? true
+          : chosenRadio ? !isSharedDial(chosenRadio)
+          : (!!occ && occ.maxUsers <= 1));
       }
       let j = await AsyncStorage.getItem(tuneKey).catch(() => null);
       // Migrate the pre-per-device global local key on first per-device connect.
@@ -5289,6 +5404,10 @@ export default function SDRScreen({ route, navigation }: Props) {
    *    touches it — which is the whole point.
    */
   const userTuneSeq = useRef(0);
+  /** ★ Forces a redraw so the userTuneSeq REF reaches LocalAudioPlayer as a prop. A restore
+   *  happens on a quiet reconnect where nothing else redraws, so without this the bump is
+   *  invisible to the component that needs it. See onRestoredTune. */
+  const [tuneAssertNonce, setTuneAssertNonce] = useState(0);
   /**
    * ★★★ THE SAME FACT, AS STATE, BECAUSE THE AUDIO SOCKET NEEDS IT AS A PROP. The ref decides at
    *  connect time; this is what stops `LocalAudioPlayer` asserting a tune the moment it opens —
@@ -10199,7 +10318,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           //     count travels with the new frequency or mode in the SAME render. If a future
           //     caller ever bumps it without touching status, the prop will not update and the
           //     tune will be silently dropped — bump state, not just the ref, if that day comes.
-          userTuneSeq={userTuneSeq.current}
+          userTuneSeq={userTuneSeq.current + tuneAssertNonce}
           /* ★★★ AND THIS IS WHERE "THE AUDIO IS FLOWING" ACTUALLY COMES FROM ON A VIBESERVER.
            *
            *  The DAB "tuning in" line clears when audio is heard, and it read `lastAudioAtRef` /
