@@ -410,15 +410,15 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
       <!-- ★ THE ONE SETTING SIMPLE MODE HAD AND FULL DID NOT. The Mac's Simple pane has offered
            this since it shipped; moving everything else to the browser left it behind, so a Full
            mode owner had no way to cap the rate at all (Stuart, 2026-08-11). -->
-      <label><span class="lbl">Ceiling</span>
+      <label><span class="lbl">Waterfall rate</span>
         <select id="maxFps">
-          <option value="0">Full &middot; 20 fps</option>
+          <option value="20">Full &middot; 20 fps</option>
           <option value="10">Half &middot; 10 fps</option>
           <option value="5">Quarter &middot; 5 fps</option>
         </select>
-        <div class="hint">A CEILING, not a lock: a listener may still choose a slower waterfall,
-          they just cannot go above this. Halving it roughly halves what this machine sends —
-          worth doing on a metered connection, or where several people share one uplink.</div></label>
+        <div class="hint">The rate this machine runs at, and the fastest a listener may ask for —
+          they can still choose a slower waterfall. Halving it roughly halves what this machine
+          sends: worth doing on a metered connection, or where several people share one uplink.</div></label>
     </div>
 
     <!-- ★★★ THE "Power saving" CARD IS GONE WITH THE FEATURE IT GOVERNED. It forced the client's
@@ -3304,7 +3304,12 @@ function fill() {
   // ★ Blank rather than 48000 when unset, so the placeholder can say what the default IS. Filling
   //   the box with the default makes it look like a deliberate choice the owner made.
   $("srvPort").value = cfg.port > 0 ? cfg.port : "";
-  $("maxFps").value = String(cfg.maxFps || 0);
+  /* ★★ 0 MEANT "no ceiling", WHICH MEANT THE UNREACHABLE DEFAULT. The base rate fell through to
+   *  fftRate, which defaulted to 15 — a rate this control never offered and no owner could pick,
+   *  so a server set to "Full · 20 fps" ran at 15 and the label was a promise it could not keep.
+   *  An existing config holding 0 (or the orphan 15) reads as Full, and saving writes a real 20. */
+  { const f = Number(cfg.maxFps) || 0;
+    $("maxFps").value = (f === 5 || f === 10) ? String(f) : "20"; }
   renderPortHint();
 
   // ★★ THIS RADIO. Read from the open tab, never from cfg — reading a radio setting off the
@@ -3838,7 +3843,13 @@ function stashServer() {
   cfg.landingLinkUrl = $("landingLinkUrl").value.trim();
   cfg.landingLinkLabel = $("landingLinkLabel").value.trim();
   cfg.port = parseInt($("srvPort").value, 10) > 0 ? parseInt($("srvPort").value, 10) : 0;
-  cfg.maxFps = parseFloat($("maxFps").value) || 0;
+  /* ★★★ ONE CONTROL, BOTH NUMBERS. The ceiling and the rate the engine runs at are separate
+   *  fields (maxFps and fftRate), and only the ceiling had a UI — so they drifted apart and the
+   *  page described a rate the server never used. Whatever the owner picks is now both.
+   *  ★ 20/10/5 divide 60 exactly (3, 6 and 12 repeats), so the client's interpolation gets whole
+   *    frame repeats against a 60 Hz display — Stuart, 2026-09-24. */
+  cfg.maxFps  = parseFloat($("maxFps").value) || 20;
+  cfg.fftRate = cfg.maxFps;
 }
 
 /** The machine: stated once, the same on every tab. */
@@ -3874,7 +3885,8 @@ function collect() {
     // ★ 0 means "no preference", which is what an empty box means. Sending NaN would be written
     //   out as a port and the server would fail to bind with nothing to point at.
     port: parseInt($("srvPort").value, 10) > 0 ? parseInt($("srvPort").value, 10) : 0,
-    maxFps: parseFloat($("maxFps").value) || 0,
+    maxFps: parseFloat($("maxFps").value) || 20,
+    fftRate: parseFloat($("maxFps").value) || 20,
     radios: Array.isArray(cfg.radios) ? cfg.radios : []
   };
 }

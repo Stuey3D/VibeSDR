@@ -176,7 +176,13 @@ struct Config {
 
     // Listeners and ceilings
     int    users = 1;
-    double maxBw = 0, maxFps = 0, fftRate = 15;
+    /* ★★★ 20, NOT 15 — 15 WAS A RATE NOBODY COULD CHOOSE (2026-09-24). The setup page offers
+     *  Full 20 / Half 10 / Quarter 5, but only wrote maxFps (a CEILING), so "Full" meant "no
+     *  ceiling" and the engine fell through to this default: every server set to Full ran at 15
+     *  and the page's own label was unachievable. The page now writes the rate as well.
+     *  ★ 20/10/5 divide 60 exactly (3, 6, 12 repeats), so the client interpolates onto a 60 Hz
+     *    display with whole frame repeats — Stuart: "the interpolation has correct figures". */
+    double maxBw = 0, maxFps = 0, fftRate = 20;
     int    uncompressed = 0;
     /* ★★★ REMOVED: forceIdleSaver. It made the CLIENT's 30-second idle slowdown mandatory, and
      *  that slowdown no longer exists — it read "nobody is looking" from "nobody is touching",
@@ -358,7 +364,13 @@ struct RadioConfig {
     std::string demodMode = "am";
     double landingFreq = 0;
     int    users = 1;
-    double maxBw = 0, maxFps = 0, fftRate = 15;
+    /* ★★★ 20, NOT 15 — 15 WAS A RATE NOBODY COULD CHOOSE (2026-09-24). The setup page offers
+     *  Full 20 / Half 10 / Quarter 5, but only wrote maxFps (a CEILING), so "Full" meant "no
+     *  ceiling" and the engine fell through to this default: every server set to Full ran at 15
+     *  and the page's own label was unachievable. The page now writes the rate as well.
+     *  ★ 20/10/5 divide 60 exactly (3, 6, 12 repeats), so the client interpolates onto a 60 Hz
+     *    display with whole frame repeats — Stuart: "the interpolation has correct figures". */
+    double maxBw = 0, maxFps = 0, fftRate = 20;
     int    uncompressed = 0;
     bool   releaseWhenIdle = false;
     double idleGrace = 300;

@@ -148,7 +148,7 @@ struct Opts {
     double      rate    = 2'400'000;     // capture sample rate, Hz
     int         gain    = -1;            // tenths of dB; <0 = auto
     int         fftSize = 4096;
-    double      fftRate = 15;            // spectrum frames/sec
+    double      fftRate = 20;            // spectrum frames/sec — one of 20/10/5, see vibeserver_config.h
     std::string mode    = "am";
     std::string pin;                     // empty = open access
     /** ★ THIS radio's own PIN, beside the master — see LocalSdrShim::setVibeServerRadioAuth. */
