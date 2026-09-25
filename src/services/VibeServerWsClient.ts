@@ -2190,7 +2190,10 @@ export abstract class VibeServerWsClient {
         eyeR: typeof msg.eyeR === 'string' ? (this.lastEye.R = msg.eyeR) : this.lastEye.R,
         eyeW: num(msg.eyeW, 0), eyeH: num(msg.eyeH, 0), eyeDev: num(msg.eyeDev, 0),
         eyeAmp: Array.isArray(msg.eyeAmp) ? (msg.eyeAmp as unknown[]).map((v) => num(v, 0)) : [0, 0, 0],
-        mpxDev: num(msg.mpxDev, 0), mpxHold: num(msg.mpxHold, 0), mpxNoise: num(msg.mpxNoise, 0),
+        /* ★ mpxAvg defaults to 0 because an OLDER server does not send it — the panel then omits
+         *  the avg clause entirely rather than printing "avg 0 kHz". */
+        mpxDev: num(msg.mpxDev, 0), mpxAvg: num(msg.mpxAvg, 0),
+        mpxHold: num(msg.mpxHold, 0), mpxNoise: num(msg.mpxNoise, 0),
         eon: Array.isArray(msg.eon) ? msg.eon.map((e: any) => ({
           pi: str(e?.pi), ps: str(e?.ps), af: num(e?.af, 0), ta: num(e?.ta, 0) })) : [],
         oda: Array.isArray(msg.oda) ? msg.oda.map((o: any) => ({

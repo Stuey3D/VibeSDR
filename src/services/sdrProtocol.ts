@@ -101,8 +101,21 @@ export interface RdsExt {
   eyeH: number;
   eyeDev: number;
   /** Total peak deviation of the whole composite including audio, kHz; 75 is the limit.
-   *  mpxDev is averaged on the panel's clock, mpxHold is the slow peak-hold tick. */
+   *  ★★★ THREE STATISTICS OF ONE MEASUREMENT, as PIRA's P75 family shows MAX/AVE/MIN. We used to
+   *  publish only the 1.5 s average and call it "deviation", which is why Onfliner reported the
+   *  meter reading low on jazz/classical/speech (2026-09-25, [[BRIEF-deviation-meter]]): on
+   *  processed programme average ≈ peak so it looked right, but at a 10-20 dB crest factor a
+   *  75 kHz peak read about 38. Both testers were telling the truth.
+   *   • mpxDev  — the TRUE PEAK: instant attack, 0.9 s decay. Fast-moving; drives the BAR FILL,
+   *               where movement is information.
+   *   • mpxAvg  — the 1.5 s average mpxDev used to carry. Steady context figure. 0 = an older
+   *               server that does not send it, and then no avg is quoted at all.
+   *   • mpxHold — instant attack, 6 s decay: the excursion memory (PIRA's MAX). This is what the
+   *               DIGITS and the verdict read, because a number that yo-yos cannot be read
+   *               (Stuart: "it looks like a stopwatch, how do you read that?"), and because the
+   *               question a modulation monitor answers is "did it go over". */
   mpxDev: number;
+  mpxAvg: number;
   mpxHold: number;
   /** What the deviation bar removed as noise, kHz rms in its measurement band (0 = not measured). */
   mpxNoise: number;

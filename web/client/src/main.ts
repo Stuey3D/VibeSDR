@@ -10049,6 +10049,7 @@ function drawMpxEye() {
   {
     const dv = $('rdsMpxDev');
     const fill = document.getElementById('rdsMpxFill');
+    const avgM = document.getElementById('rdsMpxAvg');
     const hold = document.getElementById('rdsMpxHold');
     const md = rdsExt?.mpxDev ?? 0;
     const snr = rdsExt?.mpxSnr ?? 0;
@@ -10100,7 +10101,14 @@ function drawMpxEye() {
     const snrIn = 10, snrOut = 8;
     if (snr >= snrIn) devGateOpen = true;
     else if (snr > 0 && snr < snrOut) devGateOpen = false;
-    const usable = md > 0.1 && devGateOpen;
+    /* ★★★ THE HOLD KEEPS THE READOUT ALIVE, NOT THE PEAK. This was `md > 0.1` alone, and with
+     *  `md` now a TRUE PEAK that decays in ~0.9 s it goes to nothing between peaks — on sparse
+     *  programme, or a pause, the whole row would blank while the 6 s hold beside it is still
+     *  showing a perfectly good figure. A readout must not disappear (Stuart: "can't have a
+     *  readout that disappears"), and this is a new way for it to do so that the slow meter could
+     *  not produce. ★ Mirrored from AdvRdsPanel.tsx — same rule, two readers, and this pair has
+     *  already drifted once. */
+    const usable = (md > 0.1 || (rdsExt?.mpxHold ?? 0) > 0.1) && devGateOpen;
     const overRange = md > 100;
     if (dv) {
       /* ★★★ A READOUT MUST NOT DISAPPEAR. Stuart: "can't have a readout that disappears" — and
@@ -10117,12 +10125,21 @@ function drawMpxEye() {
       else {
         // 75 kHz is the legal peak. A little over is common on heavily processed stations; well
         // over is a fault worth seeing.
-        // ★ The TEXT quotes the HOLD, because the question a deviation monitor answers is "did
-        //   it go over", not "where is it this instant" — the bar already shows the latter.
-        // ★ The TEXT quotes the smoothed level, not the hold: the hold is a transient catcher
-        //   and quoting it made every brief excursion look like the station's steady deviation.
-        //   The tick on the bar still shows where the maximum reached.
-        const pk = md;
+        /* ★★★ THE DIGITS QUOTE THE HOLD, AND THE AVERAGE SITS BESIDE IT. These two lines used to
+         *  contradict each other — one said the text quotes the hold, the next said it quotes the
+         *  smoothed level — which is a fair record of how long this was argued over. Both were
+         *  trying to solve the same problem from one number, and it cannot be solved from one:
+         *   · quote the hold alone and every brief excursion reads as the station's steady
+         *     deviation;
+         *   · quote the fast value alone and the digits are unreadable — Stuart, 2026-09-25:
+         *     "if it is bouncing up and down like a yoyo then the number looks like a stopwatch,
+         *     how do you read that?"
+         *  ★★ With BOTH published (see mpxAvg) there is nothing left to trade: the hold answers
+         *  "did it go over", the average answers "where does it normally sit", and neither has to
+         *  pretend to be the other. That is what PIRA's analysers show and it is why the verdict
+         *  below can safely be judged on the peak again. */
+        const pk  = rdsExt?.mpxHold ?? md;
+        const avg = rdsExt?.mpxAvg ?? 0;
         const verdict = overRange ? 'implausible — not a real FM figure'
                       : pk > 82 ? 'OVERMODULATED'
                       : pk > 75 ? 'over the limit' : 'nominal';
@@ -10135,29 +10152,44 @@ function drawMpxEye() {
         //   the guardOccupied note in pipeline.cpp). Say so rather than print a collapsed figure.
         const nzTxt = nz >= 1 ? ` · ${nz.toFixed(0)} kHz noise removed`
                     : nz <= -1 ? ' · neighbour in the guard band, noise not removed' : '';
-        dv.textContent = `deviation ${pk.toFixed(0)} kHz · ${verdict}${nzTxt}`;
+        /* ★ NO "avg 0" AGAINST AN OLDER SERVER. mpxAvg is additive, so a server that predates it
+         *  sends nothing and the clause is simply omitted — the readout then says exactly what it
+         *  has always said rather than reporting a zero it never measured. */
+        const avgTxt = avg >= 1 ? ` · avg ${avg.toFixed(0)} kHz` : '';
+        dv.textContent = `deviation peak ${pk.toFixed(0)} kHz${avgTxt} · ${verdict}${nzTxt}`;
         dv.className = (overRange || pk > 82) ? 'bad' : pk > 75 ? 'ok' : 'good';
       }
     }
     /* 0..100 kHz across the bar, so the 75 kHz limit sits three quarters along and
      * overmodulation still has somewhere to go.
-     * ★★ THE BAR AND THE TICK ARE DIFFERENT NUMBERS. The bar follows the programme on the
-     *   panel's own ~1.5 s clock; the tick is a slow peak-hold that remembers the excursion for
-     *   several seconds. Driving both from one value made the tick yo-yo with the bar, which on
-     *   speech swung 39 to 74 kHz syllable by syllable and could not be read at all. */
-    /* ★★★ THE BAR SHOWS THE PEAK HOLD, NOT THE PROGRAMME LEVEL. Driven by the fast value it
-     *   behaved like a VU meter — Stuart: "it looks more like a VU meter responding to the audio
-     *   more than the signal right now" — and he is right that this is the wrong instrument.
-     *   Deviation DOES follow the audio, because that is what deviation is; but the question a
-     *   deviation monitor answers is "did it go over the limit", not "where is it this
-     *   instant". So the bar is the slow peak-hold and the tick marks the same maximum, and the
-     *   readout stops twitching syllable by syllable. */
+     * ★★★ THREE QUANTITIES ON ONE BAR: FILL = PEAK, MARK = AVERAGE, TICK = HOLD.
+     *
+     * ★★★ THE COMMENT THAT USED TO SIT HERE WAS WRONG, AND THAT IS THE WHOLE STORY OF THE BUG.
+     *   It said "THE BAR SHOWS THE PEAK HOLD, NOT THE PROGRAMME LEVEL" while the fill was in fact
+     *   driven by the smoothed level; the same claim sat in vibedsp.h, where it described a
+     *   fast-attack meter the DSP had stopped being. So every audit read the notes, concluded the
+     *   meter was already a peak meter, and looked elsewhere — while an average was published as
+     *   peak deviation. Two outside testers contradicting each other found it (2026-09-25).
+     *   ★ If you change what these three elements draw, change these words in the same edit.
+     *
+     * ★★ THE OLD OBJECTION IS STILL LIVE AND IS ANSWERED, NOT IGNORED. Stuart, 2026-09-13: "it
+     *   looks more like a VU meter responding to the audio more than the signal right now." He was
+     *   right, and the answer then was to slow the bar down — which is what lost the peak. The
+     *   answer NOW is that the bar keeps moving (a peak meter must) but the NUMBER no longer does:
+     *   the digits quote the 6 s hold. Movement lives where it is information, not where it has to
+     *   be read.
+     *   ▶ If the fill still reads as a VU meter on air, swapping `pct` and `apct` below makes the
+     *     fill the steady average and the mark the peak — one line, deliberately left easy. */
     // ★ The bar is drawn either way — dimmed by the CSS when the reading is not trusted.
-    const pct  = Math.max(0, Math.min(100, md));                       // averaged level
+    const pct  = Math.max(0, Math.min(100, md));                       // the fast PEAK — the fill
+    const apct = Math.max(0, Math.min(100, rdsExt?.mpxAvg ?? 0));      // the steady AVERAGE — the mark
     const hpct = Math.max(0, Math.min(100, rdsExt?.mpxHold ?? 0));     // the maximum it reached
     const bar  = document.getElementById('rdsMpxBar');
     if (bar) bar.classList.toggle('dim', !usable);
     if (fill) fill.style.width = `${pct}%`;
+    /* ★ Hidden outright when the server sends no average (an older one) rather than parked at
+     *  zero, where it would read as "this station averages nothing". */
+    if (avgM) { avgM.style.left = `${apct}%`; avgM.style.opacity = (usable && apct > 0.5) ? '1' : '0'; }
     if (hold) { hold.style.left = `${hpct}%`; hold.style.opacity = usable ? '0.9' : '0'; }
   }
 

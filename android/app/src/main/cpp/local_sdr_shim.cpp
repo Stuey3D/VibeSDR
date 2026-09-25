@@ -5788,7 +5788,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         float rdsEyeDev = 0.0f;                // kHz deviation that full scale represents
         float rdsEyeAmp[3] = { 0.0f, 0.0f, 0.0f };   // pilot / stereo / RDS deviation, kHz
         float rdsMpxDev = 0.0f;                // TOTAL peak deviation, kHz — see RdsExt::mpxDevKHz
-        float rdsMpxDevHold = 0.0f;            // the peak-hold tick
+        float rdsMpxDevAvg = 0.0f;             // the steady 1.5 s average beside it — RdsExt::mpxDevAvgKHz
+        float rdsMpxDevHold = 0.0f;            // the 6 s peak hold — THE FIGURE THE DIGITS SHOW
         float rdsMpxDevNoise = 0.0f;           // the noise the bar had removed, kHz rms
         std::atomic<bool> stereoDetected{false};
         // Last values pushed to THIS listener (change-detect, to avoid marquee re-trigger).
@@ -10296,6 +10297,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         st.rdsEyeDev = x.eyeDevKHz;
         for (int b = 0; b < 3; ++b) st.rdsEyeAmp[b] = x.eyeBandKHz[b];
         st.rdsMpxDev = x.mpxDevKHz;
+        st.rdsMpxDevAvg = x.mpxDevAvgKHz;
         st.rdsMpxDevHold = x.mpxDevHoldKHz;
         st.rdsMpxDevNoise = x.mpxDevNoiseKHz;
         st.rdsRtpTitle = x.rtpTitle ? x.rtpTitle : "";
@@ -19959,14 +19961,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::vector<vibedsp::RdsDecoder::Oda> oda;
         std::vector<int> af, grp, afAll; std::vector<unsigned char> afAllOk;
         std::vector<float> pts, mpx;
-        std::vector<unsigned char> eye[3]; int eyeW = 0, eyeH = 0; float eyeDev = 0.0f, mpxDev = 0.0f, mpxHold = 0.0f, mpxNoise = 0.0f; float eyeAmp[3] = { 0, 0, 0 };
+        std::vector<unsigned char> eye[3]; int eyeW = 0, eyeH = 0; float eyeDev = 0.0f, mpxDev = 0.0f, mpxAvg = 0.0f, mpxHold = 0.0f, mpxNoise = 0.0f; float eyeAmp[3] = { 0, 0, 0 };
         { std::lock_guard<std::mutex> lk(R.rdsMtx);
           pty = R.rdsPty; tp = R.rdsTp; ta = R.rdsTa; ms = R.rdsMs; di = R.rdsDi;
           ptyR = R.rdsPtyRaw; tpR = R.rdsTpRaw; taR = R.rdsTaRaw; msR = R.rdsMsRaw; diR = R.rdsDiRaw;
           ctMin = R.rdsCtMin; ctOff = R.rdsCtOff; gTot = R.rdsGrpTotal;
           af = R.rdsAf; afAll = R.rdsAfAll; afAllOk = R.rdsAfAllOk; grp = R.rdsGrp; pts = R.rdsConst; mpx = R.rdsMpx; afSeen = R.rdsAfSeen;
           for (int b = 0; b < 3; ++b) eye[b] = R.rdsEye[b];
-          eyeW = R.rdsEyeW; eyeH = R.rdsEyeH; eyeDev = R.rdsEyeDev; for (int b = 0; b < 3; ++b) eyeAmp[b] = R.rdsEyeAmp[b]; mpxDev = R.rdsMpxDev; mpxHold = R.rdsMpxDevHold; mpxNoise = R.rdsMpxDevNoise;
+          eyeW = R.rdsEyeW; eyeH = R.rdsEyeH; eyeDev = R.rdsEyeDev; for (int b = 0; b < 3; ++b) eyeAmp[b] = R.rdsEyeAmp[b]; mpxDev = R.rdsMpxDev; mpxAvg = R.rdsMpxDevAvg; mpxHold = R.rdsMpxDevHold; mpxNoise = R.rdsMpxDevNoise;
           rtpT = R.rdsRtpTitle; rtpA = R.rdsRtpArtist; lps = R.rdsLongPs; ptyn = R.rdsPtyn;
           lang = R.rdsLang; pinD = R.rdsPinDay; pinH = R.rdsPinHour; pinM = R.rdsPinMin;
           eon = R.rdsEon; oda = R.rdsOda; phase = R.rdsPhase; phaseCoh = R.rdsPhaseCoh;
@@ -20151,6 +20153,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //   caption must say what each one IS rather than one shared "±N kHz".
         { char b[64]; snprintf(b, sizeof b, ",\"eyeAmp\":[%.1f,%.1f,%.1f]", eyeAmp[0], eyeAmp[1], eyeAmp[2]); j += b; }
         { char b[32]; snprintf(b, sizeof b, "%.1f", mpxDev); j += ",\"mpxDev\":"; j += b; }
+        /* ★ ADDITIVE, so an older client simply ignores it and keeps drawing mpxDev — which for
+         *  it is still the number it has always drawn, just now a peak rather than an average. */
+        { char b[32]; snprintf(b, sizeof b, "%.1f", mpxAvg); j += ",\"mpxAvg\":"; j += b; }
         { char b[32]; snprintf(b, sizeof b, "%.1f", mpxHold); j += ",\"mpxHold\":"; j += b; }
         // ★ What the deviation bar REMOVED as noise (kHz rms in its 66 kHz measurement band), so a
         //   corrected reading can say so — see mpxDevNoise_ in vibedsp.h.

@@ -700,8 +700,8 @@ void RxPipeline::rebuildAudio() {
              *   all along: R1 68-69, Heart 73-74, BBC Northampton 69.
              * ★ Cleared here AND held off briefly below, because the transient outlasts the
              *   reconfigure itself. */
-            mpxDevSm_ = 0.0f; mpxDevHold_ = 0.0f; mpxDevSettle_ = 0.0;
-            mpxNoiseSm_ = 0.0f; mpxDevOut_ = 0.0f; mpxDevNoise_ = 0.0f;
+            mpxDevSm_ = 0.0f; mpxDevAvg_ = 0.0f; mpxDevHold_ = 0.0f; mpxDevSettle_ = 0.0;
+            mpxNoiseSm_ = 0.0f; mpxDevOut_ = 0.0f; mpxDevAvgOut_ = 0.0f; mpxDevNoise_ = 0.0f;
             devWinCnt_ = 0; devWinGp_ = 0.0; devHist_.assign(kDevHistN, 0u);
             ceq_.configure(9); ceqOut_.configure(chFs_);
             ceqEngaged_ = false; ceqDwell_ = 0; ceqEffort_ = 0.0f;
@@ -1480,9 +1480,12 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc) {
                 // ★ Same reasoning as the biquads: a one-pole that goes non-finite stays there.
                 if (!std::isfinite(eyeHp1_) || !std::isfinite(eyeHp2_) || !std::isfinite(eyeHp3_))
                     eyeHp1_ = eyeHp2_ = eyeHp3_ = 0.0f;
-                if (!std::isfinite(mpxDevSm_) || !std::isfinite(mpxDevHold_) || !std::isfinite(mpxNoiseSm_)
-                    || !std::isfinite(devWinGp_))
-                    { mpxDevSm_ = 0.0f; mpxDevHold_ = 0.0f; mpxNoiseSm_ = 0.0f; devWinGp_ = 0.0; }
+                /* ★ THE AVERAGE JOINS THE NaN GUARD. It feeds the guard-band verdict and sizes the
+                 *  noise removal for BOTH figures now, so a NaN here would take the peak with it —
+                 *  a new state must be added to this list or it is a hole in it. */
+                if (!std::isfinite(mpxDevSm_) || !std::isfinite(mpxDevAvg_) || !std::isfinite(mpxDevHold_)
+                    || !std::isfinite(mpxNoiseSm_) || !std::isfinite(devWinGp_))
+                    { mpxDevSm_ = 0.0f; mpxDevAvg_ = 0.0f; mpxDevHold_ = 0.0f; mpxNoiseSm_ = 0.0f; devWinGp_ = 0.0; }
                 if ((int)devHist_.size() != kDevHistN) devHist_.assign(kDevHistN, 0u);
                 if (!std::isfinite(eyePeak_)) eyePeak_ = 0.0f;
                 // ★ AUTOSCALE, with a slow decay so it cannot pump on every bass note. A quiet
@@ -1607,14 +1610,28 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc) {
                  *  measurements"); the tick is a slow peak-hold of the same corrected value. */
                 if (devWinN_ > 0 && devWinCnt_ >= devWinN_) {
                     const double dtW = (double)devWinCnt_ / chFs_;
-                    // The 99.97th percentile — walk down from the top until 0.03 % of the window
-                    // has been passed. The bin's UPPER edge, so a clean tone is not read low.
+                    // The percentile — walk down from the top until `skip` samples have been
+                    // passed. The bin's UPPER edge, so a clean tone is not read low.
                     float pk = 0.0f;
                     {
-                        // 0.3 per mille = 5 samples of a 50 ms window. Bench, spiky multi-tone at 75 kHz:
-                        //   max: +2.5/+6.7/+17 kHz at in-channel CNR 13/9/7 dB; this: +2.1/+3.6/+8.5,
-                        //   for 4 kHz below the max on a clean spiky signal and ~0 on a processed one.
-                        const uint32_t skip = (uint32_t)(devWinCnt_ * 0.0003);
+                        /* ★★★ A FIXED COUNT, NOT A FRACTION OF THE WINDOW. This was
+                         *  `devWinCnt_ * 0.0003` — 0.3 per mille, which is ~5 samples at 160 kHz
+                         *  but grows with the channel rate, so at 250 kHz it discarded the top
+                         *  ~4 samples and at higher rates more again. A SUSTAINED TONE does not
+                         *  care: it puts hundreds of samples in the top bin every window. A
+                         *  SPARSE TRANSIENT — one orchestral attack, a consonant — is only a few
+                         *  samples wide and was thrown away WHOLE, and the quieter the programme
+                         *  the larger the share of its peaks that are sparse. That is part of
+                         *  Onfliner's under-read (2026-09-25), and it is the half that hides
+                         *  inside the rate.
+                         *  ★ Two samples still rejects a lone impulse (the reason the skip
+                         *    exists), and the 66 kHz band-limit plus the guard-band correction
+                         *    are the other two defences. The bench figures that justified 0.3 per
+                         *    mille were taken on a spiky multi-tone, not on real programme.
+                         *  ✗ Do not restore a proportional skip: it makes the reading depend on
+                         *    the sample rate, which is exactly what §3 of the brief proved this
+                         *    measurement is otherwise free of. */
+                        const uint32_t skip = 2;
                         uint32_t seen = 0; int b = kDevHistN - 1;
                         for (; b > 0; --b) { seen += hist[b]; if (seen > skip) break; }
                         pk = (float)(b + 1) / kHistScale;
@@ -1622,11 +1639,53 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc) {
                     }
                     float gp = (float)(devWinGp_ / (double)devWinCnt_);
                     devWinCnt_ = 0; devWinGp_ = 0.0;
-                    // ★★ IGNORE THE FIRST 1.5 s AFTER A RETUNE — see the note at the reconfigure.
-                    if (mpxDevSettle_ < 1.5) { mpxDevSettle_ += dtW; pk = 0.0f; gp = 0.0f;
-                                               mpxDevSm_ = 0.0f; mpxDevHold_ = 0.0f; mpxNoiseSm_ = 0.0f; }
+                    /* ★★ IGNORE THE FIRST 0.4 s AFTER A RETUNE — see the note at the reconfigure.
+                     *  ★★★ WAS 1.5 s, AND THAT WAS SIZED FOR THE OLD SLOW METER. With an
+                     *  instant-attack peak the reading is meaningful as soon as the DC blocker and
+                     *  the PLL have settled, so a 1.5 s blank is now just 1.5 s of the meter
+                     *  saying nothing after every tune — on top of the attack, it was ~5-6 s
+                     *  before the number meant anything (Onfliner: "the slow display of the
+                     *  deviation scale"). */
+                    if (mpxDevSettle_ < 0.4) { mpxDevSettle_ += dtW; pk = 0.0f; gp = 0.0f;
+                                               mpxDevSm_ = 0.0f; mpxDevAvg_ = 0.0f;
+                                               mpxDevHold_ = 0.0f; mpxNoiseSm_ = 0.0f; }
                     const float aSm = 1.0f - (float)std::exp(-dtW / 1.5);
-                    mpxDevSm_   += aSm * (pk - mpxDevSm_);
+                    /* ★★★ TWO STATISTICS FROM ONE WINDOW ARRAY — THE PEAK AND THE AVERAGE.
+                     *
+                     *  ★★★ WHAT WAS WRONG. This line used to be the ONLY one, and it published the
+                     *  1.5 s SYMMETRIC AVERAGE of the window peaks while calling it peak deviation.
+                     *  On processed programme (crest factor 2-4 dB) nearly every 50 ms window peaks
+                     *  at the same value, so average ≈ peak and we read within 1 kHz of MPX Tool —
+                     *  which is exactly what tgcfabian measured. On jazz, classical and speech
+                     *  (crest 10-20 dB) most windows contain no peak at all, so a 75 kHz peak read
+                     *  ≈ 38 — which is exactly what Onfliner measured. ★ TWO TESTERS CONTRADICTED
+                     *  EACH OTHER AND BOTH WERE RIGHT; only the averaging predicts both reports,
+                     *  and Onfliner himself confirmed it by adding that "noisy stations playing
+                     *  loud music it was spot on" (2026-09-25).
+                     *
+                     *  ★★★ AND THE HEADER ABOVE THIS FIELD SAID IT WAS ALREADY A PEAK METER —
+                     *  vibedsp.h claimed "FAST ATTACK, SLOW DECAY … rises INSTANTLY to a new peak"
+                     *  for weeks after this became an average. One rule, two readers, and the
+                     *  stale reader was the DESIGN NOTE, so auditing the source said the meter was
+                     *  fine and it took an outside tester with a reference instrument to find it.
+                     *  That note is now true again.
+                     *
+                     *  ★★ NOTHING IS LOST: the average is still computed and still sent, because
+                     *  it is the steady number Stuart asked for ("average it the same as the other
+                     *  measurements", 2026-09-13) and the one tgcfabian validated. It is
+                     *  relabelled, not removed. PIRA's analysers do the same thing from a 50 ms
+                     *  window identical to ours — they publish MAX, AVE and MIN; we published the
+                     *  AVE alone and labelled it "deviation". */
+                    mpxDevAvg_ += aSm * (pk - mpxDevAvg_);
+                    /* ★★★ THE PEAK: INSTANT ATTACK, ~0.9 s DECAY. This is what a modulation
+                     *  monitor is. A peak that arrives is published immediately; between peaks it
+                     *  falls slowly enough that the bar reads as a level rather than a flicker.
+                     *  ★ THE DIGITS DO NOT FOLLOW THIS — see mpxDevHold_ below. Stuart, 2026-09-25:
+                     *    "if it is bouncing up and down like a yoyo then the number looks like a
+                     *    stopwatch, how do you read that?" He is right, and the answer is that the
+                     *    NUMBER must not be the fast thing: the bar moves, the digits hold. */
+                    const float kPk = (float)std::exp(-dtW / 0.9);
+                    mpxDevSm_ = (pk > mpxDevSm_) ? pk : mpxDevSm_ * kPk;
                     mpxNoiseSm_ += aSm * (gp - mpxNoiseSm_);
                     // σ² in the measurement band, then the quadrature removal — see devNoiseK_.
                     const float sig2 = mpxNoiseSm_ * devNoiseK_;
@@ -1641,15 +1700,47 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc) {
                      *  than 60 % of the raw figure, the guard band is occupied: subtract nothing,
                      *  and report the noise as NEGATIVE so the panel can say why. */
                     const float removal = kC * std::sqrt(std::max(0.0f, sig2));
-                    const bool guardOccupied = mpxDevSm_ > 0.02f && removal > 0.6f * mpxDevSm_;
+                    /* ★★★ THE CORRECTION IS JUDGED AND SIZED ON THE AVERAGE, THEN APPLIED TO BOTH.
+                     *
+                     *  ★★★ WHY NOT JUST RUN THE SAME FORMULA ON THE PEAK. `kC = 4.5` is a bench fit
+                     *  (bench_eye) made against the AVERAGED statistic, and it is a quadrature
+                     *  removal — the right shape for a quantity that behaves like an rms. An
+                     *  instant-attack peak does not: the noise contribution to a single window
+                     *  maximum is not σ-like, so 4.5σ subtracted from a peak is a number with no
+                     *  derivation behind it. Getting that wrong on a weak signal is precisely the
+                     *  "106 kHz peak, OVERMODULATED" failure the band-limit was added to prevent
+                     *  (see the note on mpxDevSettle_ in vibedsp.h) — the fast attack is what makes
+                     *  that failure reachable again.
+                     *  ★★ So: correct the average with the fit that was made for it, take the
+                     *  ABSOLUTE kHz that removed, and subtract the same absolute amount from the
+                     *  peak. The noise floor under a peak and under an average of peaks is the
+                     *  same noise floor; what is not justified is re-deriving its size from a
+                     *  statistic the constant was never fitted against.
+                     *  ▶ Re-fitting kC for a true peak on the bench is the proper answer and is
+                     *    written up in briefs/BRIEF-deviation-meter.md. Until that is measured,
+                     *    this is the honest approximation, and it errs towards removing too
+                     *    little — which shows a reading as noisy rather than inventing silence.
+                     *  ★ The guard-band test also stays on the average, because it is the stable
+                     *    quantity: judging "is a neighbour sitting in my guard band?" off a value
+                     *    that moves with every syllable would make the verdict flicker. */
+                    const bool guardOccupied = mpxDevAvg_ > 0.02f && removal > 0.6f * mpxDevAvg_;
                     if (guardOccupied) {
                         mpxDevNoise_ = -std::sqrt(std::max(0.0f, sig2));
-                        mpxDevOut_ = mpxDevSm_;
+                        mpxDevOut_    = mpxDevSm_;
+                        mpxDevAvgOut_ = mpxDevAvg_;
                     } else {
                         mpxDevNoise_ = std::sqrt(std::max(0.0f, sig2));
-                        const float s2 = mpxDevSm_ * mpxDevSm_ - kC * kC * sig2;
-                        mpxDevOut_ = (s2 > 0.0f) ? std::sqrt(s2) : 0.0f;
+                        const float s2 = mpxDevAvg_ * mpxDevAvg_ - kC * kC * sig2;
+                        mpxDevAvgOut_ = (s2 > 0.0f) ? std::sqrt(s2) : 0.0f;
+                        const float removedAbs = mpxDevAvg_ - mpxDevAvgOut_;   // ≥ 0 by construction
+                        mpxDevOut_ = std::max(0.0f, mpxDevSm_ - removedAbs);
                     }
+                    /* ★★★ THE HOLD IS NOW THE FIGURE THE DIGITS SHOW, not a thin tick nobody reads.
+                     *  Instant attack, 6 s decay: it sits still long enough to be read and then
+                     *  steps down. This is the half of Stuart's objection that the fast bar cannot
+                     *  answer on its own, and it is what MPX Tool's peak flasher gives you.
+                     *  ★ It holds the CORRECTED peak, so it can never sit at a figure the bar has
+                     *    not actually reached. */
                     const float kHold = (float)std::exp(-dtW / 6.0);
                     mpxDevHold_ = (mpxDevOut_ > mpxDevHold_) ? mpxDevOut_ : mpxDevHold_ * kHold;
                 }
@@ -1882,6 +1973,7 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc) {
                 // Full scale is the pilot's peak over 0.75 — the shared axis the plot is drawn on.
                 x.eyeDevKHz = (eyeBandPk_[0] / 0.75f) / eyeHpGain_[0] * 75.0f;
                 x.mpxDevKHz     = mpxDevOut_  * 75.0f;
+                x.mpxDevAvgKHz  = mpxDevAvgOut_ * 75.0f;
                 x.mpxDevNoiseKHz = mpxDevNoise_ * 75.0f;
                 x.mpxDevHoldKHz = mpxDevHold_ * 75.0f;
                 x.rdsDevKHz   = extRdsDev_;

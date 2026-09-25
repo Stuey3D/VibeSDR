@@ -162,7 +162,14 @@ export interface RdsExt {
   eyeAmp: number[];
   /** Total peak deviation of the whole composite INCLUDING audio, kHz. 75 is the limit. */
   mpxDev: number;
-  /** The peak-hold tick — a much slower decay than mpxDev, so a brief excursion is still shown. */
+  /** ★ The STEADY figure: the 1.5 s average of the same 50 ms window maxima. Until 2026-09-25
+   *  `mpxDev` carried THIS and called it peak, which is why the meter agreed with MPX Tool on
+   *  processed programme and read about half the true peak on classical and speech. 0 = an older
+   *  server that does not send it — draw no avg clause at all rather than "avg 0". */
+  mpxAvg: number;
+  /** The peak hold — a much slower decay than mpxDev. ★★ THE DIGITS SHOW THIS: a true peak moves
+   *  far too fast to read as a number ("the number looks like a stopwatch" — Stuart, 2026-09-25).
+   *  The bar follows mpxDev; this is the figure that sits still long enough to be read. */
   mpxHold: number;
   /** What the deviation bar removed as noise, kHz rms in its 66 kHz measurement band. 0 = not measured. */
   mpxNoise: number;
@@ -1190,6 +1197,7 @@ export class SpectrumClient {
           eyeDev: Number(msg.eyeDev ?? 0),
           eyeAmp: Array.isArray(msg.eyeAmp) ? msg.eyeAmp.map(Number) : [0, 0, 0],
           mpxDev: Number(msg.mpxDev ?? 0),
+          mpxAvg: Number(msg.mpxAvg ?? 0),      // ★ 0 on an older server — see the type
           mpxHold: Number(msg.mpxHold ?? 0),
           mpxNoise: Number(msg.mpxNoise ?? 0),
         });

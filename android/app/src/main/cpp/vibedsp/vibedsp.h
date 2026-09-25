@@ -1904,8 +1904,17 @@ public:
              *  nothing reported it. Peak-held with a slow decay so a transient is not missed
              *  between frames. */
             float mpxDevKHz;
+            /** ★★★ THE STEADY FIGURE BESIDE THE PEAK — the 1.5 s average of the same window
+             *  maxima. Until 2026-09-25 THIS was what `mpxDevKHz` carried, labelled as peak, which
+             *  is why the meter agreed with MPX Tool on processed programme and read roughly half
+             *  the true peak on classical and speech (see mpxDevAvg_). Sent alongside rather than
+             *  dropped: it is the number Stuart asked for, and the one an engineer compares with a
+             *  station's average modulation. Display as "peak N · avg M kHz". */
+            float mpxDevAvgKHz;
             /** ★ The PEAK HOLD — a much slower decay, so a brief excursion is still there when
-             *  you look up. The bar follows mpxDevKHz; this is the tick that remembers. */
+             *  you look up. ★★ THE DIGITS SHOW THIS, not mpxDevKHz: a true peak moves too fast to
+             *  read as a number ("the number looks like a stopwatch" — Stuart, 2026-09-25). The
+             *  bar follows mpxDevKHz; this is the figure that sits still. */
             float mpxDevHoldKHz;
             /** ★ The NOISE the deviation reading had to remove, in kHz rms in its own
              *  measurement band — see mpxDevNoise_. Zero when the guard band cannot be measured.
@@ -2450,14 +2459,35 @@ private:
      *  about twenty-five times the work required. This counts samples so the maintenance runs at
      *  ~12 Hz, comfortably ahead of the 6 Hz the frames actually go out at. */
     double                     eyeSince_ = 0.0;      // samples since the last grid maintenance
-    /** ★★★ FAST ATTACK, SLOW DECAY — a deviation meter, not a sample of whatever the last block
-     *  happened to contain. It first shipped with one value driving both the bar and the hold,
-     *  and on speech it swung between 39 and 74 kHz from syllable to syllable, which is
-     *  unreadable (Stuart, 2026-09-13: "going up and down like a yoyo ... looks like it needs
-     *  the same smoothing as the rest of the box").
-     *  ★★ mpxDevSm_ rises INSTANTLY to a new peak and falls with a ~1.5 s time constant — the
-     *  same clock as pilotDev, rdsDev and the eye, so the whole panel can be read together
-     *  [[panel_readouts_need_one_clock]]. mpxDevHold_ falls far slower (~6 s) and is the tick. */
+    /** ★★★ THREE FIGURES FROM ONE 50 ms WINDOW ARRAY — PEAK, AVERAGE, HOLD. A modulation monitor,
+     *  not a sample of whatever the last block happened to contain.
+     *
+     *  ★★★ THE HISTORY MATTERS, BECAUSE THIS NOTE ITSELF WAS THE BUG. It first shipped with one
+     *  value driving both the bar and the hold, and on speech it swung 39 -> 74 kHz syllable to
+     *  syllable, which is unreadable (Stuart, 2026-09-13: "going up and down like a yoyo ... looks
+     *  like it needs the same smoothing as the rest of the box"). The fix made mpxDevSm_ a
+     *  SYMMETRIC 1.5 s average — and THIS COMMENT WAS NOT UPDATED. It went on claiming a fast
+     *  attack for weeks, so every audit of the source concluded the meter was already a peak
+     *  meter and looked elsewhere, while an average was being published as peak deviation. It
+     *  took two outside testers contradicting each other to find it (2026-09-25): within 1 kHz of
+     *  MPX Tool on processed programme, ~half the true peak on classical and speech. Both reports
+     *  were correct; only the averaging explains both. ★ ONE RULE, TWO READERS — and here the
+     *  stale reader was the DESIGN NOTE. If you change the ballistics, change these lines.
+     *
+     *  ★★ mpxDevSm_  — the BAR. Instant attack, ~0.9 s decay. A true peak: a peak that arrives is
+     *     published at once. Movement here is information, and a bar is readable while it moves
+     *     because you read its extent.
+     *  ★★ mpxDevAvg_ — the STEADY figure beside it. The 1.5 s symmetric average, on the same clock
+     *     as pilotDev, rdsDev and the eye, so the panel can still be read together
+     *     [[panel_readouts_need_one_clock]]. This is the number Stuart asked for and the one
+     *     tgcfabian validated against MPX Tool; it is relabelled here, never removed.
+     *  ★★ mpxDevHold_ — the DIGITS. Instant attack, ~6 s decay. Stuart, 2026-09-25: "if it is
+     *     bouncing up and down like a yoyo then the number looks like a stopwatch, how do you read
+     *     that?" Correct — so the number is not the fast thing. The hold sits still long enough to
+     *     read, then steps down, which is what a peak flasher on a real monitor gives you.
+     *
+     *  ★ PIRA's analysers take a 50 ms window 20x/s and publish MAX, AVE and MIN. Our window is
+     *    already exactly theirs; we simply used to publish the AVE alone. */
     /** ★★★ AND IT MUST BE BAND-LIMITED FIRST. Taking the peak of the raw demodulator output
      *  across the WHOLE channel counts everything above the composite — noise and filter ringing
      *  — as deviation, which inflates it badly: Heart 96.6 at 59 dB SNR and 32 dB MPX S/N read
@@ -2466,8 +2496,9 @@ private:
      *  ignores noise; a broadband peak cannot. Three cascaded one-poles at 110 kHz keep the
      *  composite and drop what is above it. */
     double                     mpxDevSettle_ = 0.0;  // seconds since retune; the transient is not the station
-    float                      mpxDevSm_ = 0.0f;     // the bar — see RdsExt::mpxDevKHz
-    float                      mpxDevHold_ = 0.0f;   // the tick — see RdsExt::mpxDevHoldKHz
+    float                      mpxDevSm_ = 0.0f;     // the BAR, a true peak — see RdsExt::mpxDevKHz
+    float                      mpxDevAvg_ = 0.0f;    // the steady figure beside it — RdsExt::mpxDevAvgKHz
+    float                      mpxDevHold_ = 0.0f;   // the DIGITS, a 6 s peak hold — RdsExt::mpxDevHoldKHz
 
     /** ★★ A 2-POLE RESONATOR PER COMPONENT. A one-pole pair is far too broad — the bands are at
      *  19, 38 and 57 kHz and would leak into each other, which would defeat the whole point of
@@ -2579,7 +2610,8 @@ private:
     float  devNoiseK_  = 0.0f;                       // K/G — 0 when the guard band is off the channel
     float  mpxNoiseSm_ = 0.0f;                       // guard power, smoothed on the panel's clock
     float  mpxDevNoise_ = 0.0f;                      // σ in the measurement band, ±1 = ±75 kHz
-    float  mpxDevOut_  = 0.0f;                       // the corrected bar value the wire gets
+    float  mpxDevOut_  = 0.0f;                       // the corrected PEAK the wire gets (the bar)
+    float  mpxDevAvgOut_ = 0.0f;                     // the corrected AVERAGE the wire gets (beside it)
     // ★★★ THE EYE IS TAKEN ABOVE THE AUDIO. L+R has no fixed relationship to the pilot, so
     //     folding the FULL composite onto the pilot phase smears the audio into a featureless
     //     band and buries the three things that ARE coherent with the trigger — the 19 kHz

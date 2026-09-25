@@ -2305,6 +2305,14 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   position: absolute; top: 0; bottom: 0; width: 2px; background: #fff;
   left: 0; opacity: 0; transition: left 0.12s linear, opacity 0.4s linear;
 }
+/* ★★ THE AVERAGE MARK — the steady figure, drawn as a soft vertical mark inside the fill so the
+   two can be read at a glance: how far the peaks reach, and where the programme normally sits. It
+   is deliberately QUIETER than the hold tick (dimmer, wider, no glow); the hold is the thing you
+   are meant to notice, this is context. Absent on an older server, which sends no mpxAvg. */
+#rdsMpxAvg {
+  position: absolute; top: 0; bottom: 0; width: 2px; background: rgba(255,255,255,0.45);
+  left: 0; opacity: 0; transition: left 0.3s linear, opacity 0.4s linear;
+}
 /* ★ The 75 kHz limit, always visible, so the bar means something without a scale. */
 #rdsMpxLimit {
   position: absolute; top: -1px; bottom: -1px; left: 75%; width: 1px;
@@ -3229,7 +3237,7 @@ select.btn { padding: 6px 8px; }
              are right for BBC versus processed commercial (2026-09-13).
              ★ And it stays VISIBLE while it is being calibrated: "how do I calibrate it if I
              cannot see it". Hiding the instrument someone is testing with is no help. -->
-        <div id="rdsMpxBar"><i id="rdsMpxFill"></i><b id="rdsMpxHold"></b><u id="rdsMpxLimit"></u></div>
+        <div id="rdsMpxBar"><i id="rdsMpxFill"></i><s id="rdsMpxAvg"></s><b id="rdsMpxHold"></b><u id="rdsMpxLimit"></u></div>
         <div id="rdsMpxDev">—</div>
         <div id="rdsConstCap">constellation</div>
         <!-- ★ A plain-English verdict, because the plot expects you to already know how to

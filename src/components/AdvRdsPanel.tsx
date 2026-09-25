@@ -570,25 +570,43 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
    *  ★ A ref rather than state: it must not trigger a re-render, only colour the next one. */
   const mpxDevInfo = useMemo(() => {
     const md = x?.mpxDev ?? 0;
+    const hd = x?.mpxHold ?? 0;
+    const av = x?.mpxAvg ?? 0;
     const snr = x?.mpxSnr ?? 0;
     if (snr >= 10) devGate.current = true;
     else if (snr > 0 && snr < 8) devGate.current = false;
-    const ok = md > 0.1 && devGate.current;
-    if (!(md > 0.1)) return { t: 'deviation — no signal', c: C.muted, pct: 0, hold: 0 };
-    const pk = md;
+    /* ★ Live if EITHER figure is up: the hold outlives the peak by 6 s, so gating on one alone
+     *  would blank a reading that is still legitimately on screen. */
+    const live = md > 0.1 || hd > 0.1;
+    const ok = live && devGate.current;
+    if (!live) return { t: 'deviation — no signal', c: C.muted, pct: 0, hold: 0 };
+    /* ★★★ THE DIGITS READ THE 6 s HOLD, THE BAR READS THE FAST PEAK. Since 5.6.50 the server
+     *  publishes three statistics of one measurement (see RdsExt.mpxDev): the true peak moves
+     *  every frame, and Stuart, 2026-09-25: "if it is bouncing up and down like a yoyo then the
+     *  number looks like a stopwatch, how do you read that?" So the number quoted — and the
+     *  verdict judged — is the hold, because what a modulation monitor is asked is "did it go
+     *  over", not "where is it this instant"; quoting the steady average beside it is what makes
+     *  judging on the peak safe. Movement stays visible in the bar fill, where it is information.
+     *  ★ Before this, mpxDev was a 1.5 s AVERAGE mislabelled as peak, so a 75 kHz peak on
+     *  jazz/classical/speech read about 38 (Onfliner, 2026-09-25, [[BRIEF-deviation-meter]]). */
+    const pk = hd;
     /* ★ SAY WHAT WAS REMOVED, as the web does: the server takes the guard-band noise out in
      *  quadrature and reports it; NEGATIVE means a neighbour sat in the guard band and nothing
      *  was removed (Stuart, 2026-09-14: "this one doesn't say if it is subtracting any noise"). */
     const nz = x?.mpxNoise ?? 0;
     const nzTxt = nz >= 1 ? ` · ${nz.toFixed(0)} kHz noise removed`
                 : nz <= -1 ? ' · neighbour in the guard band, noise not removed' : '';
+    /* ★ OMITTED, NOT ZEROED, when the server is older than the three-figure rdsx: an "avg 0 kHz"
+     *  would read as a measurement of nothing. Against an old server this line is byte-identical
+     *  to what it printed before, bar the "peak" label. */
+    const avTxt = av >= 0.5 ? ` · avg ${av.toFixed(0)}` : '';
     const t = (ok
-      ? `deviation ${pk.toFixed(0)} kHz · ${pk > 82 ? 'OVERMODULATED' : pk > 75 ? 'over the limit' : 'nominal'}`
-      : `deviation ${pk.toFixed(0)} kHz · low S/N, unreliable`) + nzTxt;
+      ? `deviation — peak ${pk.toFixed(0)}${avTxt} kHz · ${pk > 82 ? 'OVERMODULATED' : pk > 75 ? 'over the limit' : 'nominal'}`
+      : `deviation — peak ${pk.toFixed(0)}${avTxt} kHz · low S/N, unreliable`) + nzTxt;
     const c = !ok ? C.muted : pk > 82 ? C.bad : pk > 75 ? C.warn : C.good;
     return { t, c, pct: Math.max(0, Math.min(100, md)),
-             hold: Math.max(0, Math.min(100, x?.mpxHold ?? 0)) };
-  }, [x?.mpxDev, x?.mpxHold, x?.mpxSnr, x?.mpxNoise]);
+             hold: Math.max(0, Math.min(100, hd)) };
+  }, [x?.mpxDev, x?.mpxAvg, x?.mpxHold, x?.mpxSnr, x?.mpxNoise]);
   const piNum = p.pi ? parseInt(p.pi, 16) : 0;
   /** Last real RDS deviation reading, so a momentary dropout does not blank the row. */
   const rdsHold = useRef<{ txt: string; col: string; at: number } | null>(null);
@@ -1079,8 +1097,14 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
               <Text style={[s.verdict, { color: eyeVerdict.c, minHeight: 30 }]}>
                 {eyeVerdict.t}
               </Text>
-              {/* ★ The deviation bar: 0-100 kHz with the 75 kHz limit marked three quarters
-                  along, and the peak-hold tick. Drawn dim when the reading is not trusted. */}
+              {/* ★★★ WHAT EACH PART OF THIS BAR ACTUALLY IS — the old note here claimed the FILL
+                  was the peak hold, which it never was, and a stale design note describing a meter
+                  we did not have is exactly why the under-read survived three releases
+                  ([[BRIEF-deviation-meter]], 2026-09-25):
+                    • the FILL  = mpxDev, the fast true peak (instant attack, 0.9 s decay);
+                    • the TICK  = mpxHold, the 6 s excursion memory — also what the digits quote;
+                    • the LINE at 75 % = the limit.
+                  0-100 kHz, so 1 kHz = 1 %. Drawn dim when the reading is not trusted. */}
               <View style={{ width: 180, height: 8, marginTop: 4, borderRadius: 2,
                              backgroundColor: 'rgba(255,160,0,0.10)',
                              borderWidth: 1, borderColor: 'rgba(255,160,0,0.25)',
