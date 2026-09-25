@@ -189,8 +189,14 @@ Design notes and specifications for individual features live in [`briefs/`](brie
 | **Jakob Ketterl (DD5JFK) & the OpenWebRX+ project** | OpenWebRX / OpenWebRX+ servers |
 | **NoobishSVK & contributors** | FM-DX Webserver + the servers.fmdx.org receiver map — protocol reference for the FM-DX backend and its 3LAS MP3 audio (GPL-3.0) |
 | **Oona Räisänen (windytan)** | [redsea](https://github.com/windytan/redsea) (MIT) — the reference for VibeDSP's weak-signal RDS block recovery: syndrome-table burst correction, rhythm-based sync acquisition and error-rate sync dropping. No redsea code is used; the ideas are hers |
+| **Albrecht Lohofener & contributors (welle.io)** | Read clause by clause while building and repairing VibeSDR's own DAB receiver — FIC/FIG parsing, MSC handling and the OFDM front end. No code used; it is the reference that made ours correct |
+| **Stefan Pöschel (dablin)** | Reference for DAB/DAB+ superframe and audio handling, and how a decoder should behave when a subchannel goes away. Read, not copied |
+| **Jan van Katwijk (dab-cmdline)** | Reference for DAB demodulation and the automatic frequency/timing corrections a receiver applies |
+| **FiendChain (DAB-Radio)** | Reference for the DAB physical layer, and the project whose notes pointed at the TII work we took further |
+| **Pothosware & Franco Venturi (SoapySDRPlay3)** | The open, authoritative account of how each SDRplay RSP model behaves — per-model antenna ports, bandwidth-for-sample-rate, and the quirks the vendor headers omit. VibeServer's RSP support was written from the API headers and this. No code used |
 | **Konrad Kosmatka** | librdsparser — reference for the RDS PI + ECC → country mapping (IEC 62106) behind the RDS country flags |
 | **radio-browser.info** | Community station directory used to look up FM-DX / RDS station logos |
+| **Alexandre Rouma & contributors (SDR++ / SDR++ Brown)** | VibeSDR V4's on-device radio was built on the SDR++ Brown DSP core; V5 replaced it with VibeDSP, our own clean-room GPL-free engine, and all SDR++ Brown code was removed — none is bundled now. Some waterfall palettes originate here, and it is the reference for how the Airspy R2/Mini presents its gain: Sensitive / Linear / Free, one slider along the chosen preset curve and the three stages only in Free (GPL-3.0) |
 | **Osmocom / librtlsdr** | RTL-SDR USB driver (Android local hardware + rtl_tcp) |
 | **Airspy** | libairspyhf (BSD-3) — the Airspy HF+ driver |
 | **Great Scott Gadgets** | libhackrf (GPL-2.0-or-later) |
