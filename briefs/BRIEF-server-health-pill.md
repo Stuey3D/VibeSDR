@@ -16,7 +16,11 @@ Public clients receive **levels only, never raw values**.
 > "I'm thinking the Pill should say. Server Health / Icons Underneath"
 
 So there is no A/B toggle to build: ship B, captioned **SERVER HEALTH**, icons on the row beneath.
-"SERVER" alone did not say what the icons were — the caption is the only thing that tells a listener
+★★ **THE REASON IS WIDTH** (Stuart: *"so it isnt too wide"*). A puts the label BESIDE the icons and
+   makes one long row; B stacks it, so the pill stays narrow. It sits top-right over the frequency
+   scale, where width costs spectrum — and the longer caption he wants would make A worse still.
+   Height is the cheaper dimension here: ~44 px stacked against ~28 px wide-and-long.
+★ And "SERVER" alone did not say what the icons were — the caption is the only thing that tells a listener
 these are the RECEIVER's figures and not their own phone's, which is the whole point of the pill.
 ★ The caption is now ~13 characters rather than 6. The pill is content-width, so check it does not
   become the widest element: the icon row (3 icons + a 40 px battery + dividers) is ~150 px, and
