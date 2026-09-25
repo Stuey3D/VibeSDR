@@ -595,6 +595,10 @@ public:
     /** The multiplex this receiver was left on (-1 = none), restored from the config at startup so
      *  DAB survives a restart and not merely the last listener leaving. */
     static void setVibeServerDabChannel(int ch);
+    /** The public health signal — see vibe_health.h. `healthJson()` is the connect snapshot; it is
+     *  empty until the first sample has been taken. */
+    void healthTick();
+    static std::string healthJson();
     static void setConfigured(bool on);
 
     /** ★★★ THIS PLATFORM SETS ITSELF UP IN ITS OWN WINDOW, so the browser setup wizard must not

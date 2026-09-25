@@ -111,6 +111,7 @@
 #include <poll.h>
 #include <sys/socket.h>   // MSG_PEEK, recv — for the hand-off peek        // hand-written: the setup page, GET / when unconfigured
 #include "vibe_admin.h"
+#include "vibe_health.h"
 #include "vibe_proxy.h"
 #include "vibe_admin_ticket.h"
 #include "vibe_bands.h"             // the ban list, the connection log and the machine's vitals
@@ -2259,11 +2260,17 @@ static constexpr double kAgcReconfigSec = 10.0;   // a cut this soon after a for
  * ★ A GAIN STEP LIFTS THE WHOLE BAND TOO — it is the one false positive that would look exactly
  *   like a strike. Measured zero coincidences in 49 strikes, BUT the AGC never moved during that
  *   test, so that is untested rather than cleared; hence the explicit suppression below. */
+/** Set by sfericForget() on a control thread; honoured by the DSP thread inside feed(). */
+static std::atomic<bool> g_sfericClearReq{false};
+
 struct SfericDetect {
     std::vector<float> base;          // per-bin slow baseline, dB
     std::deque<double> hits;          // strike times, newest last
     double lastStrikeAt = 0.0;
     double armedAt      = 0.0;        // baseline needs to settle before we may trigger
+    double pendingAt    = 0.0;        // a candidate awaiting confirmation — see the note in feed()
+    float  pendingFrac  = 0.0f, pendingLvl = 0.0f;
+    static constexpr double kConfirmS = 0.45;   // ★ a flash is over by now; a gain step is not
 
     static constexpr float  kOverDb   = 6.0f;   // a bin counts as lifted at +6 dB over its own base
     static constexpr float  kFrac     = 0.25f;  // ...and a quarter of the band at once is a strike
@@ -2274,6 +2281,13 @@ struct SfericDetect {
 
     /** @return true if this frame WAS a strike. */
     bool feed(const float* accum, float inv, int bins, double now, bool suppress) {
+        // ★ A pending "forget" from a control thread — see sfericForget. Honoured HERE because this
+        //   is the thread that owns `hits`.
+        if (g_sfericClearReq.exchange(false, std::memory_order_relaxed)) {
+            hits.clear();
+            lastStrikeAt = 0.0;
+            armedAt = now + kWarmupS;     // and re-settle the baseline before trusting it again
+        }
         // ★ The AVERAGED accumulator, scaled here rather than copied into a temporary: this runs
         //   on every FFT frame and a per-frame allocation of a few thousand floats is a cost the
         //   badge has not earned.
@@ -2294,6 +2308,39 @@ struct SfericDetect {
         if (suppress || now < armedAt) return false;
         if (frac < kFrac) return false;
         if (now - lastStrikeAt < kRefracS) return false;
+
+        /* ★★★ A STRIKE COMES BACK DOWN; A GAIN CHANGE STAYS UP. This is the discriminator, and it
+         *  needs no telemetry at all — which is the point, because the RSP1A's IF AGC lives inside
+         *  the SDRplay API and never appears in the gain figure this server commands. Stuart,
+         *  2026-09-25: "the agc kick the RSP1A still triggered it", after a rule that watched our
+         *  own commanded gain could not see it.
+         *
+         *  ★★ THE PHYSICS IS THE TEST. A sferic is IMPULSIVE: the band lifts and is back within a
+         *     few hundred milliseconds. A gain change is a STEP: the band lifts and STAYS lifted
+         *     until the baseline catches up. So do not count a candidate when it happens — hold it,
+         *     and count it only once the band has come back. Two frames of patience turn a
+         *     confusion into a decision.
+         *  ★ And it keeps working in the case the badge exists for: during a storm the AGC hunts up
+         *     and down constantly (Stuart: "will swing up and down like mad"), and every one of
+         *     those movements is a step that fails this test, while every real crash passes it.
+         *  ★ `pendingFrac` is kept only to log what the candidate looked like. */
+        if (pendingAt <= 0.0) {                       // a candidate — decide on a later frame
+            pendingAt = now;
+            pendingFrac = frac;
+            for (int i = 0; i < bins; i++) pendingLvl = accum[i] * inv;   // last bin is enough as a probe
+            return false;
+        }
+        if (now - pendingAt < kConfirmS) return false;              // not yet — keep waiting
+        const bool cameBack = frac < kFrac * 0.5f;                  // the band has returned
+        const double heldFrac = frac;
+        pendingAt = 0.0;
+        if (!cameBack) {
+            // ★ Still up after kConfirmS: that was a level SHIFT. Say so in the journal, because a
+            //   badge that silently drops things is as hard to trust as one that invents them.
+            LOGI("sferic: ignored — %.0f %% of the band still up after %.1fs, that is a gain step",
+                 heldFrac * 100.0, kConfirmS);
+            return false;
+        }
         lastStrikeAt = now;
         hits.push_back(now);
         // ★ One line per strike (they are rare by construction): the fraction of the band that
@@ -2351,6 +2398,40 @@ static inline void sfericHold(double secs) {
     const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     double cur = g_sfericHoldUntil.load(std::memory_order_relaxed);
     if (now + secs > cur) g_sfericHoldUntil.store(now + secs, std::memory_order_relaxed);
+}
+/** ★★★ A HOLD IS TOO LATE ON ITS OWN — THROW AWAY WHAT WE ALREADY CAUSED.
+ *
+ *  The rate is measured over FIVE MINUTES, so a single false strike sits in the badge for five
+ *  minutes after the thing that caused it has finished. Stuart, 2026-09-25: "the storm meter is
+ *  still being triggered by the SDRPlay gain initialising and is taking ages to go again" — two
+ *  complaints, and this is the second one. Suppressing FUTURE frames does nothing about the strike
+ *  already recorded.
+ *  ★★ Called where we know WE disturbed the band, so discarding is honest: these hits are ours, not
+ *     the weather's. A detector that keeps reporting its own footprints is worse than no detector —
+ *     the badge must never invent a reading (AGENTS.md). */
+/** ★★★ SUPPRESS WHAT IS COMING *AND* DISCARD WHAT WE ALREADY CAUSED.
+ *
+ *  Stuart, 2026-09-25: "the storm meter is still being triggered by the SDRPlay gain initialising
+ *  and is taking ages to go again ... it sometimes occurs with the RTL AGC making big adjustments
+ *  on startup too." Two complaints in one sentence and they need different fixes:
+ *    - being TRIGGERED: a big gain move lifts every bin at once, which is exactly what a strike
+ *      looks like. Held off here.
+ *    - taking AGES: the rate is measured over FIVE MINUTES (kWindowS), so one false strike sits in
+ *      the badge long after the cause has gone. A hold alone does nothing about a hit already in
+ *      the deque — it has to be thrown away.
+ *  ★★ NOT DRIVER-SPECIFIC. It first showed on the RSP's gain initialisation, but the RTL's own AGC
+ *     climbing at startup does the same thing. Any radio that moves its gain a long way in one go
+ *     produces this, so the fix belongs at "we disturbed the band", not in a driver.
+ *  ★ The clear is a REQUEST, not a write: `hits` belongs to the DSP thread that feeds the detector,
+ *    and reaching into a deque from a control thread is the kind of race that shows up once a month
+ *    as something else entirely. The DSP thread honours it on its next frame, which is within
+ *    milliseconds and always happens.
+ *  ★ Discarding genuine strikes in that window is the right trade: during a 20 dB gain ramp we
+ *    cannot tell ours from the weather's, and a badge that invents a reading is worse than a badge
+ *    that misses one (AGENTS.md — no inferred hardware readouts). */
+static inline void sfericForget(double secs) {
+    sfericHold(secs);
+    g_sfericClearReq.store(true, std::memory_order_relaxed);
 }
 static std::atomic<int>      g_adcHotRun{0};
 /** ★★★ WHEN THE PIPELINE WAS LAST DISTURBED — a dropped IQ buffer, or an engine rate change.
@@ -3450,7 +3531,7 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
              pk, over ? ", OVERLOAD" : "", cur, want, ddir < 0 ? "more" : "less", mean, sdrp->systemGainDb());
         grAtLastStep = (int)llround(mean); structGainAtStep = sdrp->structGainDb();
         LocalSdrShim::instance().setLnaState(want);
-        sfericHold(6.0);   // ★ a ~20 dB step across the band is not a strike either
+        sfericForget(6.0);   // ★ a ~20 dB step across the band is not a strike either
         g_dabRfStepAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
         g_vibeAgcRspLastLna.store(want, std::memory_order_relaxed);
         g_vibeAgcRspLastLnaAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(
@@ -7825,6 +7906,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  same fact must be one function, or one of them drifts. */
     void sendFullState(const std::shared_ptr<net::Socket>& sock) {
         sendConfig(sock); sendHwInfo(sock);
+        /* ★ The health levels too, because they are sent ON CHANGE: a listener arriving during a
+         *  quiet spell would otherwise see no pill at all until something got worse, which is the
+         *  one moment it should look calm rather than absent. */
+        { const std::string hj = LocalSdrShim::healthJson(); if (!hj.empty()) sendText(sock, hj); }
         /* ★ A receiver already on a multiplex tells the client NOW, not at the next half-second
          *  tick: the client opens its DAB box on the first block it sees (Stuart, 2026-09-07:
          *  the second listener on a shared radio got audio and no box). */
@@ -8341,9 +8426,57 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const bool   hfBand    = rtlCenter.load() < 32e6;
             const double sinceHw   = lxNow - g_hwMovedAt.load(std::memory_order_relaxed);
             const bool   held      = lxNow < g_sfericHoldUntil.load(std::memory_order_relaxed);
+            /* ★★★ ARMED ONLY ONCE THE GAIN HAS BEEN STILL — which is the whole rule, and it
+             *  replaces three special cases with one.
+             *
+             *  ★★ WHAT THIS BADGE IS FOR, in Stuart's words (2026-09-25): "what prompted the
+             *     detector to be made in the first place was the evening with a storm nearby, the
+             *     noise floor was rapidly bouncing and stripy with the RTL SDR gain at minimum ...
+             *     the detector was to explain those bands in the noisefloor in the waterfall
+             *     history. It doesnt need to detect from the second you load in, it needs to work
+             *     after the agc has settled and not be falsly triggered by large agc changes when
+             *     moving from say the 40m band to MW or FM bands."
+             *  ★★★ So the question is never "how long since we started" — it is "has the front end
+             *      stopped moving". A gain step lifts every bin at once and is indistinguishable
+             *      from a strike while it happens; once the gain is quiet, anything that lifts the
+             *      band IS the band. That covers startup, a band change, and an AGC ramp in the
+             *      middle of a session, without a rule for each.
+             *  ★ 1.5 s was far too short for a real settle: the RSP's API initialisation and
+             *    VibeAGC's opening climb both run for several seconds, which is why the badge fired
+             *    on connect and on every hop between 40 m and MW. 8 s is comfortably past both.
+             *  ★ AND IT COSTS US REAL STRIKES DURING A RAMP, deliberately: "the agc will hide
+             *    genuine strikes when firing up". Missing a few is the right trade for a badge whose
+             *    job is to EXPLAIN a stripy waterfall afterwards, not to catch every flash. */
+            /* ★★★ IT IS THE SIZE OF THE SWING, NOT THE FACT OF ONE. The rule above suppressed on
+             *  ANY gain movement for 8 s, and that is wrong in the one case this badge exists for:
+             *  Stuart, 2026-09-25: "It needs to handle some agc movement just not massive rapid
+             *  swings when the AGC first fires up. In a normal storm the AGC especially the RSP IF
+             *  agc that is API driven will swing up and down like mad."
+             *  ★★ So a detector blind to gain movement is blind to a storm. What distinguishes the
+             *     startup ramp is its MAGNITUDE — twenty-odd dB in one go, end to end — against the
+             *     few dB an AGC hunts by while riding real static crashes.
+             *  ★ Measured over a SHORT window (peak-to-trough of the commanded gain over 3 s) so a
+             *    fast, large move suppresses and a busy little wobble does not. A slow drift of the
+             *    same total size does not suppress either, which is right: that is the band, not us.
+             *  ★ A retune still gets a short settle of its own — arriving on a new band is a genuine
+             *    discontinuity in what "the noise floor" even means, and it is over in a second. */
+            static constexpr double kSwingDb    = 8.0;    // ★ a ramp, not a wobble
+            static constexpr double kSwingWinS  = 3.0;
+            static constexpr double kRetuneSettleS = 2.0;
+            static std::deque<std::pair<double,int>> gainHist;   // (when, tenth dB), DSP thread only
+            const int gNow = LocalSdrShim::instance().currentGainTenthDb();
+            if (gNow >= 0) {
+                gainHist.emplace_back(lxNow, gNow);
+                while (!gainHist.empty() && lxNow - gainHist.front().first > kSwingWinS)
+                    gainHist.pop_front();
+            }
+            int gLo = INT_MAX, gHi = INT_MIN;
+            for (const auto& g : gainHist) { gLo = std::min(gLo, g.second); gHi = std::max(gHi, g.second); }
+            const bool bigSwing = gHi > gLo && (gHi - gLo) >= (int)(kSwingDb * 10);
             if (hfBand) g_sferic.feed(fftAccum.data(), inv, bins, lxNow,
-                                      sinceGain < 1.5 || sinceCfg < 1.5 || sinceHw < 2.0 || held);
-            else        g_sferic.hits.clear();
+                                      bigSwing || sinceCfg < kRetuneSettleS
+                                      || sinceHw < kRetuneSettleS || held);
+            else        { g_sferic.hits.clear(); gainHist.clear(); }
         }
 
         // ── Spectrum rate audit (passive) ──────────────────────────────────
@@ -9155,7 +9288,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                             //   setting the reduction first and then enabling AGC would let the
                             //   loop immediately undo it. Same ordering rule as ahf_control.
                             sdrp->setIfAgc(savedAgc != 0);          // -1 (unset) => on, as before
-                            if (savedAgc != 0) sfericHold(10.0);   // ★ the radio's own loop now ramps the band
+                            if (savedAgc != 0) sfericForget(10.0);   // ★ the radio's own loop now ramps the band
                             if (savedAgc == 0 && savedGr >= 0) sdrp->setIfGainReduction(savedGr);
                             LOGI("AGC kick 6/6: %s (ifgr %d, lna %d, sysGain %.1f dB)%s",
                                  savedAgc == 0 ? "AGC off — owner's saved gain restored" : "AGC on",
@@ -9543,7 +9676,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *   block change and re-held 200 ms after every release, five times a minute. */
                 if (dabOn && blkNow != dabArmedBlock) { dabArmedBlock = blkNow; dabHoldArmedAt = nowH; }
                 if (dabIfHeld && (!dabOn || blkNow != dabHeldBlock)) {
-                    sdrp->setIfAgc(true); sfericHold(10.0);   // ★ the loop ramps the band on re-enable — not a strike
+                    sdrp->setIfAgc(true); sfericForget(10.0);   // ★ the loop ramps the band on re-enable — not a strike
                     dabIfHeld = false; dabDriftSince = {}; dabHoldArmedAt = nowH; g_dabIfHeld.store(false, std::memory_order_relaxed);
                     LOGI("RSP IF AGC: released — %s", dabOn ? "block changed" : "DAB left");
                 } else if (dabIfHeld) {
@@ -9561,7 +9694,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *   one that can answer it; a level drift waits 5 s. */
                     if (over || (dabDriftSince.time_since_epoch().count() != 0 &&
                                  std::chrono::duration_cast<std::chrono::seconds>(nowH - dabDriftSince).count() >= 5)) {   // ★ an unset timer read as 'since 1970' and released 70 ms after every hold
-                        sdrp->setIfAgc(true); sfericHold(10.0);
+                        sdrp->setIfAgc(true); sfericForget(10.0);
                         dabIfHeld = false; dabDriftSince = {}; dabHoldArmedAt = nowH;
                         g_dabIfHeld.store(false, std::memory_order_relaxed);
                         if (over) g_dabOverClear.store(true, std::memory_order_relaxed);
@@ -9575,7 +9708,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     if (gr >= 24 && gr <= 55) {
                         sdrp->setIfAgc(false);
                         sdrp->setIfGainReduction(gr);
-                        sfericHold(6.0);   // ★ Stuart, 00:20: "getting a storm warning on the RSP" — our toggles, not lightning
+                        sfericForget(6.0);   // ★ Stuart, 00:20: "getting a storm warning on the RSP" — our toggles, not lightning
                         dabIfHeld = true; g_dabIfHeld.store(true, std::memory_order_relaxed); dabHeldBlock = blkNow; dabDriftSince = {};
                         LOGI("RSP IF AGC: held at %d dB for DAB (peak %.1f dBFS) — no gain steps inside the symbols", gr, sdrp->adcPeakDbfs());
                         vsSayVts(std::string("IF gain held at ") + std::to_string(gr) + " dB for DAB.");
@@ -11277,6 +11410,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             rtlCenter.store(g_vsLockedCentre.load());
             tuneHw(g_vsLockedCentre.load());
         }
+        /* ★ A clean slate for a new radio: whatever is in the deque belongs to a different front
+         *  end. The SETTLE rule above is what keeps the opening ramp from registering — this is
+         *  only about not carrying old hits across. */
+        sfericForget(2.0);
         cb.audio    = &Impl::audioCb;
         cb.rdsPs    = &Impl::rdsPsCb;
         cb.rdsPi    = &Impl::rdsPiCb;
@@ -13419,6 +13556,26 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //   refusal above is.
             if (g_vsRateLock.load()) {
                 LOGI("sampleRate ignored — the owner has pinned the rate");
+                return;
+            }
+            /* ★★★ A SHARED DIAL IS NOT YOURS TO RECONFIGURE. Stuart, 2026-09-25: "on a shared tuner
+             *  changing the sample rate is a no no ... Sample rate should only be able to be changed
+             *  if the server owner allows it on single user radios, not on locked range multiple
+             *  VFO's or shared VFO radios."
+             *
+             *  ★★ THE OWNER'S FIGURE WAS ONLY EVER A CEILING, which is the whole bug: set 3 MS/s on
+             *     the RSP1A and a listener could not go ABOVE it but could still drag it DOWN — and
+             *     on a shared tuner that re-opens the source and changes the span for everybody
+             *     listening, not just the person who clicked. A listener may choose what they LOOK
+             *     at; the receiver's own configuration belongs to the room.
+             *  ★ The locked-range case was already right, because a pinned rate refuses everyone.
+             *    It is the shared-VFO case that had no guard at all: sharing the dial is exactly the
+             *    condition under which this must be refused, and nothing tested it.
+             *  ★ Same shape as every other shared-dial rule — refused at the SERVER, because that is
+             *    the only place that knows the receiver is shared. The clients hide the picker too
+             *    (config carries `shared`), but that is politeness, not enforcement. */
+            if (vsSharedDial()) {
+                LOGI("sampleRate ignored — the dial is shared; the rate belongs to the receiver");
                 return;
             }
             /* ★★★ AND DAB OWNS THE RATE, exactly as it owns the dial. Mode I has a 2048-sample
@@ -20731,6 +20888,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 LocalSdrShim::instance().overloadTick();
                 LocalSdrShim::instance().autoBandwidthTick();
                 LocalSdrShim::instance().batteryTick();
+                LocalSdrShim::instance().healthTick();   // ★ its own 1 Hz gate inside
                 /* ★★★ AND FLUSH THE CONNECTION LOG HERE, WHERE EVERY HOST RUNS. It is written
                  *     lazily — open()/close() only mark it dirty — and the only thing calling
                  *     saveIfDue() was the LINUX DAEMON'S loop (vibeserver/main.cpp). On the
@@ -21660,7 +21818,7 @@ void LocalSdrShim::applyDesiredDsp(LocalSdrShim::Impl* impl) {
         // reduction is refused while the AGC owns that register, so set the AGC state FIRST and
         // only push a manual IFGR when the AGC is off. Reversing these drops the value silently.
         const int agc = g_dsp.rspIfAgc.load();
-        if (agc >= 0) { impl->sdrp->setIfAgc(agc != 0); if (agc != 0) sfericHold(10.0); }
+        if (agc >= 0) { impl->sdrp->setIfAgc(agc != 0); if (agc != 0) sfericForget(10.0); }
         if (agc == 0 && g_dsp.rspIfGr.load() >= 0)
             impl->sdrp->setIfGainReduction(g_dsp.rspIfGr.load());
     }
@@ -23295,6 +23453,39 @@ void LocalSdrShim::setBatteryPolicy(int pauseAt, int resumeAt) {
     LOGI("battery policy: suspend at %d%% (0 = never), resume above %d%%", pauseAt, resumeAt);
 }
 bool LocalSdrShim::batteryPaused() const { return g_vsBatteryPaused.load(); }
+/* ★★★ THE PUBLIC HEALTH SIGNAL — levels, never figures (BRIEF-server-health-pill.md).
+ *
+ *  Everything it needs was already gathered for the admin page and locked behind its password, so a
+ *  listener asking "is this receiver struggling?" had no way to find out. This publishes the ANSWER
+ *  and not the evidence: four levels, plus the battery percentage that was already public.
+ *  ★★ A SEPARATE MESSAGE FROM `battery`, deliberately. batteryTick() returns early on a machine with
+ *     no battery — which is every Pi and every x86 server, precisely the machines whose CPU and
+ *     temperature a listener most wants to see. Folding health into that message would have hidden
+ *     it on the hosts it matters for.
+ *  ★ Sent ON CHANGE, and once to each client as it arrives (see the connect snapshot). A level that
+ *    has not moved is not news, and this runs on every listener's socket. */
+static vibehealth::Sampler g_health;
+static vibehealth::Health  g_healthLast;
+static std::atomic<bool>   g_healthValid{false};
+
+std::string LocalSdrShim::healthJson() {
+    return g_healthValid.load() ? vibehealth::json(g_healthLast) : std::string();
+}
+
+void LocalSdrShim::healthTick() {
+    static int64_t lastAt = 0;
+    const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (now - lastAt < 1000) return;                 // ~1 Hz, as the brief specifies
+    lastAt = now;
+    const vibehealth::Health h = g_health.sample(g_vsBatteryLevel.load(), g_vsBatteryCharging.load());
+    const bool first = !g_healthValid.load();
+    if (!first && !vibehealth::differs(h, g_healthLast)) { g_healthLast = h; return; }
+    g_healthLast = h; g_healthValid.store(true);
+    const std::string body = vibehealth::json(h);
+    if (p) for (auto& pr : p->allSpecPeers()) if (pr.sock && pr.sock->isOpen()) p->sendText(pr.sock, body);
+}
+
 void LocalSdrShim::batteryTick() {
     static int64_t lastProbe = 0, lastBroadcast = 0; static int lastLevel = -2; static bool lastChg = false;
     const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();

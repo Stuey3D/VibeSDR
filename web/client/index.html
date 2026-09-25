@@ -1349,6 +1349,32 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
            border-radius: 50%; background: #3ddc84; box-shadow: 0 1px 4px rgba(0,0,0,0.7);
            border: 1px solid rgba(0,0,0,0.25); }
 .sqlNote { color: var(--unit); font-size: 11px; margin-top: 6px; line-height: 1.35; }
+/* ── AUTO SQUELCH ─────────────────────────────────────────────────────────────────────────────
+   ★★★ Stuart, 2026-09-25: "when activated the squelch bar fades but is still visible, and the
+        green ball and line is replaced by an automatically moving red line to indicate where the
+        squelch is set. but auto. Overlaid over the bar itself when faded it should say AUTO
+        SQUELCH ACTIVE". He REFUSED a squelch bar on the main screen (it stays minimal) — this
+        lives in the AUDIO menu, under the manual bar, which is why the button is inside .sqlBlock.
+   ★ The FADE is on the TRACK and the FILL, not on .sqlBar: the overlaid caption and the red
+     threshold line are the two things that must stay legible, and fading their parent would take
+     them with it. "Fades but is still visible" — opacity, never display:none. */
+.sqlBar.auto .sqlTrack { opacity: 0.42; }
+/* The ball is the MANUAL handle. Under auto nothing is draggable, so a handle would be a lie. */
+.sqlBar.auto .sqlBall { display: none; }
+/* ★ A thin RED line, not the green needle: green is "you set this", red is "the radio set this".
+   The transition is what makes it read as automatic — it GLIDES to each new threshold instead of
+   teleporting, so the eye follows the noise floor moving rather than seeing a value change. */
+.sqlBar.auto .sqlNeedle { width: 1px; background: #ff4d4d; box-shadow: 0 0 5px rgba(255,77,77,0.8);
+                          opacity: 1; transition: left 0.45s ease-out; }
+.sqlAutoTag { position: absolute; left: 0; right: 0; bottom: 4px; text-align: center;
+              font-size: 9px; font-weight: 700; letter-spacing: 0.18em; color: #ffd9d9;
+              text-shadow: 0 1px 3px rgba(0,0,0,0.9); pointer-events: none; display: none; }
+/* ★ pointer-events:none above is load-bearing: the caption sits ON the 36px drag hit area, and a
+   div that swallowed pointerdown would make the bar dead in the middle even after auto is off. */
+.sqlBar.auto .sqlAutoTag { display: block; }
+/* ★ Respect the user's motion setting — a line that glides is a nicety, not the feature. */
+@media (prefers-reduced-motion: reduce) { .sqlBar.auto .sqlNeedle { transition: none; } }
+.sqlAutoBtn { flex: none; }   /* ★ the .sqlAutoRow owns the spacing now */
 .rowNote { color: var(--text-dim); font-size: 11px; line-height: 1.35; margin: -2px 0 4px;
            opacity: 0.85; }
 /* NO font-size / letter-spacing here — a leftover from the pre-scaling layout that
@@ -2799,6 +2825,47 @@ select.btn { padding: 6px 8px; }
 @media (prefers-reduced-motion: reduce) {
   #hereFlash { animation: none; opacity: 0.9; }
 }
+
+/* ── SERVER HEALTH PILL ───────────────────────────────────────────────────────────────────────
+   ★★ Caption ABOVE the icons, so the pill stays NARROW: it sits top-right over the frequency
+      scale, where width costs spectrum (Stuart, 2026-09-25: "so it isnt too wide"). Height is the
+      cheaper dimension. Content-width and right-anchored, so it grows leftwards when a slot
+      appears and shrinks when one goes away. */
+#srvHealth { position: fixed; top: 8px; right: 8px; z-index: 60; pointer-events: none;
+             background: rgba(8,12,8,0.86); border: 1.5px solid rgba(120,200,120,0.45);
+             border-radius: 12px; padding: 4px 8px 5px; }
+#srvHealth .hCap { font: 700 9px/1 system-ui, sans-serif; letter-spacing: 0.16em;
+                   color: #B9C0B4; text-align: right; margin-bottom: 3px; }
+#srvHealth .hRow { display: flex; align-items: center; gap: 8px; }
+#srvHealth .hSlot { display: inline-flex; position: relative; }
+#srvHealth .hDiv { width: 1px; align-self: stretch; background: rgba(255,255,255,0.16); }
+/* ★ The percentage and the bolt are drawn INSIDE the outline now (see renderHealthPill), so this
+     slot is just the 40x16 glyph — about 40 px narrower than text alongside it. */
+#srvHealth .hBat { display: inline-flex; align-items: center; }
+/* ★★★ ONLY CRITICAL BREATHES. Everything else is static — an icon that moves is a claim on the
+       listener's attention, and making three of them move at once spends that claim on nothing. */
+@keyframes hBreathe { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+#srvHealth .crit svg { animation: hBreathe 1.4s ease-in-out infinite;
+                       filter: drop-shadow(0 0 3px currentColor); }
+#srvHealth.crit { animation: hBreathe 1.4s ease-in-out infinite; }
+/* ★★ A NON-COLOUR CUE FROM "HIGH" UPWARDS. Elevated and High differ only by hue, which is exactly
+      the pair a red/green colour-blind listener cannot separate — so from High the slot also wears
+      a dot. It is not only for reduced motion; it is for everyone. */
+#srvHealth .dot::after { content: ''; position: absolute; top: -1px; right: -2px;
+                         width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
+@media (prefers-reduced-motion: reduce) {
+  #srvHealth .crit svg, #srvHealth.crit { animation: none; }
+}
+
+
+/* ── AUTO SQUELCH: the switch and its margin, on one line ─────────────────────────────────── */
+.sqlAutoRow { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.sqlAutoMarginWrap { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.sqlAutoMarginWrap input[type=range] { flex: 1; min-width: 60px; height: 18px; }
+.sqlAutoMarginVal { font: 700 10px/1 ui-monospace, monospace; color: #9aa694; min-width: 40px;
+                    text-align: right; }
+.sqlAutoMarginLbl { font: 700 9px/1 system-ui, sans-serif; letter-spacing: 0.1em; color: #7f8a7c;
+                    white-space: nowrap; }
 </style>
 
 <!-- Lock-screen / Now Playing artwork, composited at runtime from the same two
@@ -3366,7 +3433,7 @@ select.btn { padding: 6px 8px; }
           <span class="lbl">VOL</span>
           <input type="range" id="vol" min="0" max="100" value="80">
           <button class="btn" id="muteBtn">MUTE</button>
-          <button class="btn" id="audioBtn" title="Squelch, noise reduction, notch, de-emphasis">AUDIO</button>
+          <button class="btn" id="audioBtn" title="Squelch, noise reduction, notch, de-emphasis — hover and use the mouse wheel for volume">AUDIO</button>
           <button class="btn" id="recordingsBtn" title="Saved recordings">RECORDINGS</button>
           <button class="btn" id="recBtn" title="Record audio to a WAV file"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="4" fill="currentColor"/></svg> REC</button>
           <span class="lbl" id="recTime"></span>
@@ -3717,7 +3784,30 @@ select.btn { padding: 6px 8px; }
   </div>
   <div id="freqMsg" class="lbl"></div>
   <style>.shareBox { width: 100%; box-sizing: border-box; margin-top: 8px; font: inherit; font-size: 11px;
-    background: transparent; color: inherit; border: 1px solid currentColor; border-radius: 4px; padding: 6px; }</style>
+    background: transparent; color: inherit; border: 1px solid currentColor; border-radius: 4px; padding: 6px; }
+/* ── Wheel-volume popover (pointer devices only; the JS gates on hover+fine) ───────────────── */
+#volPop { position: fixed; z-index: 9000; transform: translate(-50%, -100%);
+          background: rgba(8,12,8,0.92); border: 1px solid rgba(255,255,255,0.18);
+          border-radius: 10px; padding: 8px 10px; min-width: 168px;
+          box-shadow: 0 6px 22px rgba(0,0,0,0.55); }
+#volPop .volPopBar { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.14);
+                     overflow: hidden; }
+#volPop .volPopFill { height: 100%; width: 80%; background: #5be36b;
+                      transition: width 60ms linear; }
+#volPop .volPopRow { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
+#volPop .volPopVal { font: 700 11px/1 ui-monospace, monospace; color: #dfe6da; }
+/* ★ The hint is the whole point of the dwell: the gesture is invisible until something says it
+     is there. Quiet enough not to shout on every hover. */
+#volPop .volPopHint { font-size: 10px; color: #98a294; letter-spacing: 0.02em; }
+#volPop .volPopClick { margin-top: 5px; padding-top: 5px; font-size: 10px; color: #8d9689;
+                       border-top: 1px solid rgba(255,255,255,0.10); }
+#volPop.muted .volPopFill { background: #ff4b4b; }
+#volPop.muted .volPopVal  { color: #ff8a8a; }
+/* ★ Muted is red on the AUDIO button however the mute happened — see setMuted(). */
+#audioBtn.mutedRed, #mAudio.mutedRed { color: #ff6b6b; border-color: rgba(255,75,75,0.65); }
+#mAudio.mutedRed svg { stroke: #ff6b6b; }
+@media (prefers-reduced-motion: reduce) { #volPop .volPopFill { transition: none; } }
+</style>
 </div>
 
 <div id="audioPanel">
@@ -3734,6 +3824,26 @@ select.btn { padding: 6px 8px; }
     <div id="sqlBar" class="sqlBar" title="Drag the ball to set the squelch; drag fully left for OFF">
       <div class="sqlTrack"><div id="sqlFill" class="sqlFill"></div></div>
       <div id="sqlNeedle" class="sqlNeedle"><span class="sqlBall"></span></div>
+      <div class="sqlAutoTag" id="sqlAutoTag">AUTO SQUELCH ACTIVE</div>
+    </div>
+    <!-- ★★ AUTO SQUELCH sits UNDER the manual bar because that is where Stuart put it: "under the
+         manual bar we use now there sits an AUTO SQUELCH button". Based on OpenWebRX's auto-squelch
+         (a user of his, Kiko, relies on it there) but CONTINUOUS rather than one-shot — he asked for
+         a line that moves by itself. See setSquelchAuto() for the margin and the smoothing. -->
+    <!-- ★★ THE BUTTON AND ITS ONE KNOB, ON ONE LINE. OpenWebRX exposes the same number as
+         `squelch_auto_margin` in a config file; a slider beside the switch is the same control
+         where the person who needs it actually is. Hidden entirely while auto is off — a slider
+         that adjusts nothing is worse than no slider. -->
+    <div class="sqlAutoRow">
+      <button class="btn sqlAutoBtn" id="sqlAuto" title="Track the channel's own noise automatically — the threshold follows it, with a hang through the gaps between words">AUTO SQUELCH</button>
+      <span class="sqlAutoMarginWrap" id="sqlAutoMarginWrap" hidden>
+        <!-- ★ Named for what it DOES. "Margin" is the word the code and OpenWebRX use, but it says
+             nothing to a listener; "above noise" is the whole of the idea. -->
+        <label class="sqlAutoMarginLbl" for="sqlAutoMargin">ABOVE NOISE</label>
+        <input type="range" id="sqlAutoMargin" min="4" max="20" step="1" value="12"
+               title="How far above the channel's own noise the squelch opens. Lower hears weaker signals and lets more noise through; higher is quieter but can clip the start of a weak over. The red line on the bar moves with it.">
+        <span class="sqlAutoMarginVal" id="sqlAutoMarginVal">+12 dB</span>
+      </span>
     </div>
     <div class="sqlNote" id="sqlNote">Off — audio always passes.</div>
   </div>
@@ -4666,5 +4776,18 @@ select.btn { padding: 6px 8px; }
      own sockets — showing a different server's worth of numbers.
      ★ Never populated until opened. Polling a monitoring endpoint once a second in every
        listener's browser would be a self-inflicted load problem. -->
+
+<!-- ★★★ THE WHEEL VOLUME POPOVER. Pointer devices only — the JS never shows it without
+     (hover: hover) and (pointer: fine), so a touch screen cannot end up with a panel that
+     swallows the tap meant for AUDIO.
+     ★ Outside every panel, position: fixed, so no ancestor's overflow can clip it. -->
+<div id="volPop" hidden aria-hidden="true">
+  <div class="volPopBar"><div class="volPopFill" id="volPopFill"></div></div>
+  <div class="volPopRow"><span class="volPopVal" id="volPopVal">80%</span>
+    <span class="volPopHint">mouse wheel to change volume</span></div>
+  <!-- ★ What a CLICK does, since removing the native tooltip took that away — and it is the less
+       obvious of the two gestures now that hovering does something of its own. -->
+  <div class="volPopClick">click for audio options</div>
+</div>
 
 <script type="module" src="./src/main.ts"></script>

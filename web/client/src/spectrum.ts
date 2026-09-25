@@ -313,6 +313,15 @@ export interface SpectrumCallbacks {
   onNotice?: (text: string) => void;
   /** ★ The server host's battery — level, charging, the owner's floor, and whether it is suspended. */
   onBattery?: (b: { level: number; charging: boolean; pauseAt: number; resumeAt: number; paused: boolean }) => void;
+  /** ★★★ THE SERVER'S HEALTH, AS LEVELS — never figures (BRIEF-server-health-pill.md).
+   *  0 OK, 1 elevated, 2 high, 3 critical. `temp.kind` says what the slot is showing: a real sensor,
+   *  a throttle with a known cause, or nothing at all (the slot is then omitted and the pill
+   *  narrows). Absent on an older server, which keeps the plain battery pill. */
+  onHealth?: (h: {
+    cpu: number; ram: number;
+    temp: { kind: 'sensor' | 'thermal' | 'power' | 'throttle' | 'none'; level: number };
+    bat: { present: boolean; pct?: number; charging?: boolean; level?: number };
+  }) => void;
   /** ★ The server REFUSED something this listener asked for, in its own words — a different
    *  message from the owner's standing notice, and it must not displace it. See case 'notice'. */
   onRefused?: (why: string) => void;
@@ -890,6 +899,16 @@ export class SpectrumClient {
       case 'battery':
         this.cb.onBattery?.({ level: Number(msg.level), charging: msg.charging === true,
                               pauseAt: Number(msg.pauseAt ?? 0), resumeAt: Number(msg.resumeAt ?? 0), paused: msg.paused === true });
+        break;
+      case 'health':
+        this.cb.onHealth?.({
+          cpu: Number(msg.cpu) || 0, ram: Number(msg.ram) || 0,
+          temp: { kind: (msg.temp?.kind ?? 'none'), level: Number(msg.temp?.level) || 0 },
+          bat: msg.bat?.present
+            ? { present: true, pct: Number(msg.bat.pct), charging: msg.bat.charging === true,
+                level: Number(msg.bat.level) || 0 }
+            : { present: false },
+        });
         break;
       case 'notice':
         /* ★★★ ONE TYPE, TWO COMPLETELY DIFFERENT MESSAGES — AND ONE OF THEM WAS BEING DROPPED.

@@ -1197,6 +1197,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onDial: (d) => {
       chatDial(d);
       const on = d.mode !== 'exclusive';
+      /* ★ The receiver's sharing state decides who owns the SAMPLE RATE as well as the dial — see
+       *  populateHw(). Re-drawn here because `dial` can arrive after the hardware panel was built
+       *  (a second listener joining turns an exclusive receiver into a shared one under us). */
+      if (on !== srvShared) { srvShared = on; populateHw(); }
       for (const id of ['chatBtn', 'mChat']) {
         const b = document.getElementById(id) as HTMLButtonElement | null;
         if (!b) continue;
@@ -1238,10 +1242,16 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     // ★ Pushed the instant the owner posts one — the people already watching the spectrum
     //   misbehave are exactly who it is for.
     onNotice: (text: string) => showOwnerNotice(text),
+    /* ★★★ SERVER HEALTH — the pill that replaces the battery one where the server reports levels.
+     *  See renderHealthPill(); the battery-only path below still runs for older servers. */
+    onHealth: (h) => renderHealthPill(h),
     /* ★ SERVER BATTERY. A pill under the clock: quiet green while fine, amber inside ten points
      *  of the owner's floor, red at the floor — so a listener who is then disconnected knows why.
      *  The words come as VTS from the server; this is the number. */
     onBattery: (b) => {
+      // ★ A server that sends `health` owns this corner — see renderHealthPill. The battery figure
+      //   is inside that pill already, so drawing this one too would stack two pills on each other.
+      if (healthPillLive) return;
       let el = document.getElementById('srvBattery');
       if (!el) {
         el = document.createElement('div'); el.id = 'srvBattery';
@@ -1893,6 +1903,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onSigStat: (chan, floor) => {
       if (!Number.isFinite(chan) || !Number.isFinite(floor)) return;
       srvChanDb = chan; srvFloorDb = floor; srvSigValid = true;
+      // ★ Auto squelch steers from THIS figure and nothing else, so recompute exactly when it
+      //   changes — a timer would either lag it or spin between messages.
+      autoSquelchTick();
     },
     onRdsX: (x) => {
       const now = Date.now();
@@ -3961,7 +3974,9 @@ function drawSquelchBar(sigDbRaw: number) {
   const n = document.getElementById('sqlNeedle') as HTMLElement | null;
   if (on) {
     const span = Math.max(1, sqlScaleMax - sqlScaleMin);
-    const frac = Math.max(0, Math.min(1, (squelchDb - sqlScaleMin) / span));
+    // ★ In auto, the needle follows the SETTING (sqlAutoShownDb) rather than the applied value.
+    const shown = sqlAuto && Number.isFinite(sqlAutoShownDb) ? sqlAutoShownDb : squelchDb;
+    const frac = Math.max(0, Math.min(1, (shown - sqlScaleMin) / span));
     setStyle(n, 'left', `${(frac * 100).toFixed(1)}%`);
     setClass(bar, 'closed', sigDbRaw < squelchDb);
   } else {
@@ -3969,10 +3984,280 @@ function drawSquelchBar(sigDbRaw: number) {
     setStyle(n, 'left', '0%');
     setClass(bar, 'closed', false);
   }
+  setClass(bar, 'auto', sqlAuto);
   const note = document.getElementById('sqlNote');
-  setText(note, on
+  setText(note, sqlAuto
+    ? 'Auto — the red line tracks the measured noise floor and keeps the gate a few dB above it. Drag the bar to take over manually.'
+    : on
     ? 'Audio passes only above the ball. The level you set is where it stays — the bar underneath moves with the signal, the threshold does not.'
     : 'Off — audio always passes. Drag the ball up from the left to set a threshold.');
+  // ★★ NEVER OFFER A CONTROL WHOSE EVERY USE IS A NO-OP (AGENTS.md). Auto steers from the server's
+  //    `sig` message, so on a VibeServer too old to send one there is nothing to track — say so in
+  //    the tooltip rather than leaving a button that appears to work and does nothing. Re-checked
+  //    every meter frame because `srvSigValid` flips the moment the first `sig` lands.
+  // ★ The slider belongs to the mode: no auto, no knob. A control for a mode that is off is the
+  //   same dead control AGENTS.md warns about, just slower to notice.
+  const mw = document.getElementById('sqlAutoMarginWrap');
+  if (mw) mw.hidden = !sqlAuto;
+  const ab = document.getElementById('sqlAuto') as HTMLButtonElement | null;
+  if (ab) {
+    setClass(ab, 'on', sqlAuto);
+    const dead = !srvSigValid;
+    if (ab.disabled !== dead) {
+      ab.disabled = dead;
+      ab.title = dead
+        ? 'Unavailable — this server does not report a measured noise floor, so there is nothing for auto squelch to follow'
+        : 'Track the noise floor automatically — the threshold follows the server\'s measured floor plus a few dB';
+    }
+  }
+}
+
+/** ★★★ AUTO SQUELCH — Stuart, 2026-09-25: "if we can make our own auto squelch based on the OWRX
+ *  method … an automatically moving red line to indicate where the squelch is set. but auto."
+ *  OpenWebRX's auto button SAMPLES the meter once and parks the threshold a little above the noise;
+ *  we do the same sum CONTINUOUSLY, because he asked for a line that moves by itself. */
+let sqlAuto = false;
+/** The smoothed noise floor the threshold is built from. NaN until the first `sig` seeds it — a
+ *  zero seed would drag the first few seconds of threshold 100 dB high and mute everything. */
+let sqlFloorEwma = NaN;
+/** ★ MARGIN: 6 dB. The floor figure is a 25th-percentile of the full-rate FFT, so noise PEAKS sit
+ *  above it; 6 dB is one S-unit and comfortably clears that spread while still opening on a signal
+ *  that is only just readable. Below ~4 dB the gate chatters on the noise itself; above ~8 dB it
+ *  starts eating the weak DX this client exists to hear ([[web_client_is_the_moat]]). */
+/** ★★★ 10 dB, AND IT IS MEASURED, NOT GUESSED.
+ *
+ *  Captured 601 real `sig` samples from a 40 m LSB receiver and replayed this algorithm over them
+ *  offline (2026-09-25). The picture was unambiguous:
+ *      baseline settles at  -101.4 dBFS
+ *      noise occupies       baseline +0 .. +7 dB   (70 % of samples)
+ *      speech sits at       baseline +34 dB
+ *  — a 27 dB empty gap between the loudest noise and the quietest speech. Every earlier value
+ *  (6, then 8, then 5) sat INSIDE the noise band, so the gate flapped on noise by construction:
+ *  86 closures in 45 s, median 65 ms, 85 of them under 300 ms. At 10 the replay gives ONE closure
+ *  and no chopping at all, while staying 24 dB below the speech.
+ *  ★★ WHY THE BASELINE MAKES IT THIS BIG: it tracks the noise MINIMUM (it falls fast and rises
+ *     slowly), not the noise average, so the margin has to clear the whole peak-to-trough spread of
+ *     the noise — about 7 dB here — before it clears anything else.
+ *  ★★★ AND IT AGREES WITH THE FIELD. Checked against the two open implementations that have this
+ *      feature (Stuart: "that would make sure we are at least as good as them"):
+ *        - OpenWebRX — `DemodulatorPanel.js`: `self.squelchMargin = 10` (configurable as
+ *          `squelch_auto_margin`), applied as `smeter_level + margin`. The same 10 dB, arrived at
+ *          independently.
+ *        - GQRX — `MainWindow::setSqlLevelAuto()`: `rx->get_signal_pwr() + 3.0`.
+ *      Both are ONE-SHOT and reference the CURRENT level — i.e. the noise AVERAGE at the moment the
+ *      button is pressed. Ours references the tracked noise MINIMUM, which on the measured trace
+ *      sits 3.3 dB lower, so the equivalent margins are GQRX ≈ +6 and OpenWebRX ≈ +13 above OUR
+ *      reference. 10 sits between them.
+ *  ★★★ AND WE ARE AHEAD ON THE PART THAT MATTERS. csdr's `squelch_and_smeter_cc`, the gate
+ *      OpenWebRX actually uses, is `if (power >= squelch_level) pass; else zeros;` — no hysteresis
+ *      and no hang. It chops syllables exactly as ours did before the hang was added. Continuous
+ *      tracking, hysteresis and a hang are all things this has and they do not.
+ *  ★ Tuned by replaying a captured trace rather than by ear. Stuart had been the test rig for an
+ *    hour: "I hate squelch as I can never personally set it right myself either." The trace answers
+ *    in seconds what listening answers in evenings, and the harness is in the scratchpad. */
+/** ★★★ 12 dB — WHERE THE MEASUREMENT AND THE LISTENING AGREE.
+ *
+ *  The replay of a captured 40 m trace put the clean range anywhere from 8 to 30 dB (below 8 the
+ *  gate flaps inside the noise's own spread; above ~30 it starts eating the speech). 10 was chosen
+ *  from that and from OpenWebRX's default. Stuart then found by ear, with the slider, that "12db
+ *  gave me the clean result I was after" — which is INSIDE the measured clean range, and lands
+ *  almost exactly on OpenWebRX's effective figure: their +10 is measured above the noise AVERAGE,
+ *  which on this trace sits 3.3 dB above the MINIMUM this tracker uses, so their number is ~13 in
+ *  our terms. Two independent methods and a third implementation all point at the same place.
+ *  ★ The slider remains, because no single number can be right on every band — but a listener who
+ *    never touches it should land on the value that was right for the person who tuned it. */
+const SQL_AUTO_MARGIN_DEFAULT = 12;
+/** ★ The owner of this listening session can move it — see setupSquelchAutoMargin(). 10 is the
+ *  measured default and what OpenWebRX ships; the slider exists because no single number can be
+ *  right on every band, and the alternative was asking Stuart to listen while I guessed again. */
+let sqlAutoMargin = SQL_AUTO_MARGIN_DEFAULT;
+/** The auto threshold as the USER should see it — see the note where it is set. */
+let sqlAutoShownDb = NaN;
+/** ★★★ THE BUFFER BETWEEN OPEN AND SHUT — hysteresis, and it is the whole difference between a
+ *  usable auto squelch and a chattering one.
+ *
+ *  Stuart, first listen: "it needs to be set just a fraction higher as right now it is rapidly
+ *  cutting in and out there is no buffer between on and off." Raising the margin alone would NOT
+ *  have fixed that: one level for both directions means any signal sitting ON it toggles the gate
+ *  every time the noise wobbles a decibel — at a higher threshold it simply chatters on a stronger
+ *  signal instead.
+ *  ★★ THE GATE IS THE SERVER'S and has no hysteresis of its own (it is a plain
+ *     `sigChanDb < squelchDb`), so the buffer is made HERE by moving the setpoint: once the gate is
+ *     open the threshold drops by this much, so the signal has to fall properly away before it
+ *     shuts, and it must climb the full margin again to reopen. Same trick as the level hysteresis
+ *     in the health pill, for the same reason.
+ *  ★★ AND IT IS WHAT PROTECTS FAINT SPEECH. Stuart, testing on 40m: "its now cutting off faint
+ *     speach". On SSB the wanted signal often sits only a few dB above the noise, so an opening
+ *     threshold high enough to stay shut on noise would chop the quiet half of every over. With the
+ *     buffer, the gate OPENS at +5 and does not close again until +2 — so once it has heard the
+ *     speaker it keeps listening through the quiet parts.
+ *  ★ 3 dB rather than 4: on a narrow SSB passband the whole usable range between noise and a weak
+ *    voice is only a few dB, so the buffer must fit inside it. */
+const SQL_AUTO_HYST_DB = 3;
+/** ★★★ HANG TIME — the thing every real squelch has and this one did not.
+ *
+ *  Stuart, on 40m SSB: "squelch too agressive now, its cutting the voices and it sounds like the
+ *  waynes world stan mikitas donuts skit." That is the gate closing in the GAPS BETWEEN SYLLABLES,
+ *  not on the voice: speech is not continuous, and an instantaneous gate chops every pause into
+ *  silence, which is far more destructive to intelligibility than a little noise would be.
+ *  ★★ Hysteresis alone cannot fix it — the gaps go all the way down to the noise, so no sensible
+ *     close threshold sits below them. What is needed is TIME: having heard a voice, keep listening
+ *     through the pauses. 700 ms comfortably covers the pause between words and between syllables,
+ *     and is short enough that a station which has actually finished does not leave the noise up
+ *     for an awkward length of time.
+ *  ★ Implemented by holding the OPEN (lower) threshold during the hang rather than by gating here —
+ *    the gate itself is the server's, and this is the only lever the client has over it. */
+const SQL_AUTO_HANG_MS = 700;
+let sqlOpenAt = 0;
+/* ★ `sig` arrives at a MEASURED 20/s (not the 10/s first assumed), so the constants below are in
+ *  units of 1/20 s — worth stating, because every time constant here depends on it. */
+
+/** ★★★ TRACK THE CHANNEL'S OWN QUIET LEVEL — not the noise floor.
+ *
+ *  MEASURED on an empty FM channel, 2026-09-25: `chan` sits **12.8 to 30.3 dB above `floor`**
+ *  (median 20.7). They are different quantities — `floor` is a wideband percentile of the whole
+ *  span, `chan` is the peak inside the passband — and the gap between them moves with bandwidth and
+ *  with how busy the band is. So a threshold of "floor + a few dB" is far BELOW what noise alone
+ *  produces in the channel, and the gate can never close: "its not working now other than the odd
+ *  flash of it being off" (Stuart). Raising that margin to match would only work at one bandwidth
+ *  on one band.
+ *  ★★ SO THE REFERENCE IS `chan` ITSELF, tracked for its own quiet baseline: fall quickly towards a
+ *     new low, rise very slowly away from it. That is the standard noise-tracker shape, and it is
+ *     the only one that adapts to the passband the listener has actually chosen.
+ *  ★ FALLS FAST, RISES SLOWLY, and the asymmetry is the point: a signal appearing must NOT drag the
+ *    baseline up with it — that is how an auto squelch talks itself into silence. Coming back down
+ *    after a signal goes is allowed to be quick, because that is a real change in the channel. */
+const SQL_AUTO_FALL = 0.20;    // towards a new minimum: about a quarter of a second
+const SQL_AUTO_RISE = 0.002;   // away from it: tens of seconds, so a carrier cannot lift it
+
+/** ★★★ RESEED WHEN THE CHANNEL CHANGES — a retune, a mode change, a new bandwidth.
+ *
+ *  The baseline only RISES while the gate is shut (see the note in autoSquelchTick), which is what
+ *  stops a long over dragging it up. But it also means that arriving somewhere NOISIER with the gate
+ *  open leaves the baseline stuck at the old band's level for ever: the threshold sits far too low,
+ *  the gate never closes, and the only way out was to toggle auto off and on — which is exactly what
+ *  Stuart had to do moving from MW to 40m LSB (2026-09-25).
+ *  ★★ Falling was never the problem (that path is fast and unconditional). It is specifically the
+ *     blocked rise, and the fix belongs at the moment the question changes, not in the loop.
+ *  ★ NaN means "take the next sample as the truth", the same seed the button uses. */
+let sqlSeedKey = '';
+
+/** The channel we are currently judging: frequency, mode and passband. Any change makes the old
+ *  baseline meaningless. */
+function sqlChannelKey(): string {
+  return spec ? `${Math.round(spec.frequency)}|${spec.mode}|${spec.bandwidthLow}|${spec.bandwidthHigh}` : '';
+}
+
+function autoSquelchTick() {
+  if (!sqlAuto || !srvSigValid) return;
+  /* ★★ NOTICED HERE, NOT WIRED INTO EVERY CALLER. There are five `spec.tune()` sites plus the
+   *  server's own retunes on a shared dial, and hanging a reseed on each is the "one rule, many
+   *  readers" fault — the one that gets missed is the bug. Comparing the channel we SEEDED at
+   *  against the channel we are judging now covers every path, including the ones nobody has
+   *  written yet. */
+  const key = sqlChannelKey();
+  if (key !== sqlSeedKey) { sqlSeedKey = key; sqlFloorEwma = NaN; }
+  /* ★★★ THE BASELINE ONLY RISES WHILE THE GATE IS SHUT. Falling towards a new low is always
+   *  allowed — that is the channel genuinely getting quieter — but rising is only believed when we
+   *  think we are listening to NOISE. Otherwise a long over on 40m slowly drags the baseline up
+   *  into the speaker's own signal, the threshold follows, and the squelch talks itself into
+   *  silence part-way through the transmission. That is the classic way an auto squelch fails, and
+   *  it fails slowly enough to look like something else. */
+  const nowMs = performance.now();
+  /* ★★★ DECIDE ON THE REAL THRESHOLD, APPLY AN OPEN ONE DURING THE HANG.
+   *
+   *  The first attempt at hang merely lowered the threshold by the hysteresis, and a RECORDING
+   *  showed it did nothing: 37 closures in 24 seconds, median 50 ms, EVERY ONE shorter than 300 ms
+   *  and not one longer than a second (7.176 MHz LSB, 2026-09-25). A 700 ms hang cannot produce a
+   *  50 ms closure — proof that the hang was not holding anything open.
+   *  ★★ WHY: the gate belongs to the SERVER, which compares the channel against whatever threshold
+   *     we last sent. In the gap between two syllables the signal falls all the way to the noise,
+   *     straight past a threshold sitting 3 dB down. To hang, the threshold must go BELOW the noise
+   *     for the duration — effectively open — and then come back.
+   *  ★ So there are two thresholds now: `decide`, which judges whether a signal is present and is
+   *    never sent anywhere, and the value actually applied. Judging on the applied one would latch
+   *    permanently open, because during a hang everything is "above" it. */
+  /* ★★★ SEED THE BASELINE BEFORE ANYTHING READS IT. This was the other way round, and the first
+   *  sample after every reseed — which includes the moment auto is switched ON — computed the
+   *  threshold from a NaN baseline. `want` came out NaN, `applySquelch(NaN)` sent a threshold the
+   *  server cannot parse, and because NaN !== NaN the "only on a change" test below was true for
+   *  ever after, so it resent it on every sample. The squelch simply never engaged (Stuart,
+   *  2026-09-25: "auto squelch not triggering at all now").
+   *  ★ The lesson is the ordering, not the NaN: a sentinel that means "not known yet" has to be
+   *    resolved before the first reader, or every reader needs to know about it. */
+  const openish = (nowMs - sqlOpenAt) < SQL_AUTO_HANG_MS;
+  const a = srvChanDb < sqlFloorEwma ? SQL_AUTO_FALL : (openish ? 0 : SQL_AUTO_RISE);
+  sqlFloorEwma = Number.isFinite(sqlFloorEwma) ? sqlFloorEwma + (srvChanDb - sqlFloorEwma) * a
+                                               : srvChanDb;
+  const decide = sqlFloorEwma + sqlAutoMargin - (openish ? SQL_AUTO_HYST_DB : 0);
+  if (srvChanDb >= decide) sqlOpenAt = nowMs;
+  const gateOpen = (nowMs - sqlOpenAt) < SQL_AUTO_HANG_MS;
+  /* ★★★ WHAT THE RED LINE SHOWS IS THE SETTING, NOT WHAT IS MOMENTARILY APPLIED. During a hang the
+   *  applied threshold is at the bottom of the scale (that is how the gate is held open), so drawing
+   *  the line from it would slam it to the far left every time somebody spoke — an indicator that
+   *  jumps about is worse than none. This is the number the margin slider actually sets, so moving
+   *  the slider moves the line, which is what Stuart asked for. */
+  sqlAutoShownDb = decide;
+  // Clamp INSIDE the bar's live scale, and never to SQL_OFF or below: -100 is the "off" sentinel, so
+  // a quiet band whose floor + margin lands there would silently read as squelch OFF.
+  /* ★ Which way the gate is currently sitting decides which threshold applies. `srvChanDb` is the
+   *  same channel figure the SERVER gates on, so this tracks its verdict rather than guessing. */
+  /* ★ Within the hang the receiver stays OPEN (threshold at the bottom of the scale); outside it,
+   *  the real threshold applies. That is what carries the audio through a pause between words —
+   *  and it is why you hear the band quietly in those gaps, which is what a hang is FOR. */
+  const want = gateOpen
+    ? SQL_OFF + 1
+    : Math.round(Math.max(SQL_OFF + 1, Math.min(sqlScaleMax, decide)));
+  // persist=false: an automatic value must not overwrite the manual threshold the user remembers.
+  // ★ Only on a real change — every `applySquelch` is a message to the server, ten times a second
+  //   otherwise, and the wire is shared with the audio.
+  // ★ A non-finite threshold must never reach the wire — see the seeding note above for what it
+  //   cost. Cheap insurance against the next sentinel that arrives here half-resolved.
+  if (Number.isFinite(want) && want !== squelchDb) applySquelch(want, false);
+}
+
+/** Turn auto on/off. Switching OFF restores the user's remembered MANUAL squelch, so the bar comes
+ *  back to exactly what it was before — auto is a mode laid over the control, not a new setting. */
+function setSquelchAuto(on: boolean, persist = true) {
+  sqlAuto = on;
+  if (persist) savePref('squelchAuto', on);
+  if (on) {
+    sqlFloorEwma = NaN; sqlSeedKey = sqlChannelKey();   // seed from the CURRENT channel
+    autoSquelchTick();
+  } else {
+    const p = prefs();
+    applySquelch(typeof p.squelch === 'number' ? p.squelch as number : SQL_OFF, false);
+  }
+  drawSquelchBar(lastSigDb);
+}
+
+/** Wire the AUTO SQUELCH button. */
+/** The margin slider beside the AUTO SQUELCH switch. ★ Shown only while auto is on, and it takes
+ *  effect on the very next `sig` — there is nothing to apply, because the threshold is recomputed
+ *  from scratch every message. */
+function setupSquelchAutoMargin() {
+  const el = document.getElementById('sqlAutoMargin') as HTMLInputElement | null;
+  const val = document.getElementById('sqlAutoMarginVal');
+  if (!el) return;
+  const p = prefs().squelchAutoMargin;
+  sqlAutoMargin = typeof p === 'number' && p >= 4 && p <= 20 ? p : SQL_AUTO_MARGIN_DEFAULT;
+  el.value = String(sqlAutoMargin);
+  if (val) val.textContent = `+${sqlAutoMargin} dB`;
+  el.oninput = () => {
+    sqlAutoMargin = Number(el.value);
+    if (val) val.textContent = `+${sqlAutoMargin} dB`;
+    savePref('squelchAutoMargin', sqlAutoMargin);
+    /* ★ Re-seed on a deliberate change. The baseline itself is still valid — it is the THRESHOLD
+     *  that moved — but re-judging immediately means the bar and the audio agree with the slider
+     *  the moment it is let go, rather than at the next time the gate happens to change state. */
+    autoSquelchTick();
+  };
+}
+
+function setupSquelchAuto() {
+  const b = document.getElementById('sqlAuto');
+  if (!b) return;
+  b.addEventListener('click', () => setSquelchAuto(!sqlAuto));
 }
 
 /** Pointer handling for the squelch bar. Drag anywhere on the bar; drag off the LEFT edge to turn
@@ -3981,6 +4266,13 @@ function setupSquelchBar() {
   const bar = document.getElementById('sqlBar');
   if (!bar) return;
   const applyFromX = (clientX: number) => {
+    // ★★★ A DRAG MEANS "I WANT MANUAL". Chosen over ignoring pointer input: the bar still LOOKS
+    //     draggable under auto (it is faded, not gone), and a control that visibly moves nowhere
+    //     reads as broken rather than as disabled — the same trap as a dead control in FmdxSettings.
+    //     Taking over is also the gesture a user already knows: touch the bar, you own the gate.
+    //     Done BEFORE the mapping below so the automatic line cannot fight the finger — one
+    //     autoSquelchTick() landing mid-drag would otherwise yank the threshold back.
+    if (sqlAuto) setSquelchAuto(false);
     const r = bar.getBoundingClientRect();
     const frac = (clientX - r.left) / Math.max(1, r.width);
     if (frac < -0.04) { applySquelch(SQL_OFF); return; }   // off the left edge = OFF
@@ -6279,6 +6571,47 @@ function dabUiOff() {
  *    could ever look (Stuart, 2026-09-04). Deleting the row means the next control cannot be
  *    added to the dead one by mistake. */
 
+
+/** ★★★ ONE PLACE THAT KNOWS WHAT "MUTED" LOOKS LIKE.
+ *
+ *  Mute was set in four places — the MUTE button, the `m` shortcut, and the two media-session
+ *  handlers — each toggling `audio.muted` AND the button's class by hand. Adding the wheel volume
+ *  (which mutes at 0) and the audio button's red state would have made six, and the one that gets
+ *  forgotten is how a control ends up disagreeing with the thing it controls. Same fault shape as
+ *  AGENTS.md's "one rule, two readers".
+ *  ★ The AUDIO button turns red whenever the receiver is muted, however that happened — not only
+ *    when the wheel did it. A colour that means "muted" must mean it always, or it teaches nothing. */
+function setMuted(on: boolean): void {
+  if (!audio) return;
+  audio.muted = on;
+  document.getElementById('muteBtn')?.classList.toggle('on', on);
+  // ★ Both audio buttons, for the same reason the wheel is wired to both — CSS decides which is
+  //   on screen, so a red state on only one is a red state the user may never see.
+  for (const id of ['audioBtn', 'mAudio'])
+    document.getElementById(id)?.classList.toggle('mutedRed', on);
+  const pop = document.getElementById('volPop');
+  if (pop && !pop.hidden) {
+    const pct = on ? 0 : Math.round(audio.volume * 100);
+    (document.getElementById('volPopFill') as HTMLElement).style.width = `${pct}%`;
+    (document.getElementById('volPopVal') as HTMLElement).textContent = on ? 'MUTED' : `${pct}%`;
+    pop.classList.toggle('muted', on);
+  }
+}
+
+/** Set the volume from 0-100, keeping the slider, the element, the saved preference and the mute
+ *  state in step. ★ 0 IS MUTE — reaching the bottom of the range and still hearing a whisper is
+ *  the behaviour people complain about; and coming back UP unmutes, or the wheel would be a
+ *  one-way trip. */
+function setVolumePct(pct: number): void {
+  if (!audio) return;
+  const p = Math.max(0, Math.min(100, Math.round(pct)));
+  audio.volume = p / 100;
+  const el = document.getElementById('vol') as HTMLInputElement | null;
+  if (el) el.value = String(p);
+  if (p > 0) savePref('volume', audio.volume);   // ★ never save 0 — that is mute, not a volume
+  setMuted(p === 0);
+}
+
 function buildControls() {
   buildVfo();
 
@@ -6331,11 +6664,77 @@ function buildControls() {
     savePref('volume', audio!.volume);
   };
   const mute = $<HTMLButtonElement>('muteBtn');
-  mute.onclick = () => {
-    audio!.muted = !audio!.muted;
-    mute.classList.toggle('on', audio!.muted);
-    updateMediaSession();
-  };
+  mute.onclick = () => { setMuted(!audio!.muted); updateMediaSession(); };
+
+  /* ★★★ THE WHEEL VOLUME, ON THE AUDIO BUTTON — a pointer-only convenience.
+   *
+   *  Stuart, 2026-09-25: "hover over the audio icon for a second or so without clicking, a little
+   *  floating volume control pops up ... mouse wheel to change volume ... when turned all the way
+   *  to 0 it auto activates mute and the audio button goes red."
+   *  ★★ POINTER DEVICES ONLY, and tested rather than assumed: a touch screen fires no wheel and has
+   *     no hover, so the popover would be a panel that appears on tap and swallows the press that
+   *     was meant to open AUDIO. `(hover: hover) and (pointer: fine)` is the honest test for "there
+   *     is a mouse here" — not screen width, which says nothing about the input device.
+   *  ★ The dwell is deliberate. Opening instantly would flash the panel every time the pointer
+   *    crossed the button on its way somewhere else. */
+  const hasPointer = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+  if (hasPointer) {
+    /* ★★★ BOTH AUDIO BUTTONS. There are two — `audioBtn` in the desktop bar and `mAudio` on the
+     *  compact control card — and CSS alone decides which is on screen, so wiring only the first
+     *  meant the gesture did nothing for anyone using the card. Stuart hit exactly that: the
+     *  screenshot shows the card's own tooltip ("Audio: squelch, noise reduction, notch") and no
+     *  popover, on a desktop with a mouse (2026-09-25).
+     *  ★★ The same fault shape as the mute state earlier today: one behaviour, two controls, and
+     *     only one of them taught about it. */
+    const btns = ['audioBtn', 'mAudio']
+      .map(id => document.getElementById(id) as HTMLButtonElement | null)
+      .filter((b): b is HTMLButtonElement => !!b);
+    const pop = $<HTMLElement>('volPop');
+    /* ★★★ THE NATIVE TOOLTIP HAS TO GO, or it lands on top of this one. The browser shows `title`
+     *  after its own dwell — about the same delay as ours — so hovering produced the OS tooltip
+     *  over the volume control and it read as the feature not working at all (Stuart, 2026-09-25:
+     *  "the hover over for the volume isnt working as it still shows the tooltip"). The popover now
+     *  carries everything the title said, including what a CLICK does, so nothing is lost by
+     *  removing it — and only on pointer devices, where the popover exists to replace it. */
+    for (const b of btns) b.removeAttribute('title');
+    let dwell = 0, leave = 0;
+    /** ★ Anchored to whichever button the pointer is actually on — they sit in different places. */
+    let over: HTMLElement | null = null;
+    const place = () => {
+      const r = (over ?? btns[0]).getBoundingClientRect();
+      pop.style.left = `${Math.round(r.left + r.width / 2)}px`;
+      pop.style.top  = `${Math.round(r.top - 10)}px`;
+    };
+    const paint = () => {
+      const pct = audio!.muted ? 0 : Math.round(audio!.volume * 100);
+      $<HTMLElement>('volPopFill').style.width = `${pct}%`;
+      $<HTMLElement>('volPopVal').textContent = audio!.muted ? 'MUTED' : `${pct}%`;
+      pop.classList.toggle('muted', !!audio!.muted);
+    };
+    const show = () => { place(); paint(); pop.hidden = false; };
+    const hide = () => { pop.hidden = true; };
+    const arm = () => { clearTimeout(leave); clearTimeout(dwell); dwell = window.setTimeout(show, 700); };
+    const disarm = () => { clearTimeout(dwell); leave = window.setTimeout(hide, 180); };
+    for (const b of btns) {
+      b.addEventListener('pointerenter', () => { over = b; arm(); });
+      b.addEventListener('pointerleave', disarm);
+    }
+    // ★ The pointer may travel INTO the popover — which is not leaving the control.
+    pop.addEventListener('pointerenter', () => clearTimeout(leave));
+    pop.addEventListener('pointerleave', disarm);
+    /* ★★ A step of 5 % per notch, and NOT passive: the page must not scroll under the pointer
+     *  while the wheel is being used as a volume knob. Both the button and the popover accept it,
+     *  so the gesture continues wherever the pointer happens to be. */
+    const wheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const cur = audio!.muted ? 0 : Math.round(audio!.volume * 100);
+      const next = Math.max(0, Math.min(100, cur + (e.deltaY < 0 ? 5 : -5)));
+      setVolumePct(next);
+      show();                      // wheeling is intent enough — no need to wait out the dwell
+    };
+    for (const b of btns) b.addEventListener('wheel', wheel, { passive: false });
+    pop.addEventListener('wheel', wheel, { passive: false });
+  }
 
   initFreqEntry();
 
@@ -6592,12 +6991,12 @@ function initMediaSession() {
   // for exactly this reason.)
   const ms = navigator.mediaSession;
   ms.setActionHandler('play', () => {
-    if (audio) { audio.muted = false; $('muteBtn').classList.remove('on'); }
+    setMuted(false);
     void audio?.resume();
     updateMediaSession();
   });
   ms.setActionHandler('pause', () => {
-    if (audio) { audio.muted = true; $('muteBtn').classList.add('on'); }
+    setMuted(true);
     updateMediaSession();
   });
   ms.setActionHandler('nexttrack', () => nudge(step));
@@ -8498,6 +8897,118 @@ function stopDecoder() {
 /* ★ THE BATTERY GLYPH — horizontal, iOS-style, the number inside (Stuart, 2026-09-17: "I always
  *  find they read cleaner"). A rounded body, the nub on the right, the fill by level, a bolt over
  *  the fill while charging. Colour: green; amber at 20 % or below; red in the low power state. */
+/* ═══ SERVER HEALTH PILL ═══════════════════════════════════════════════════════════════════════
+ *
+ * ★★★ LEVELS, NOT FIGURES. Listeners asked for the server's CPU; the raw numbers stay on the admin
+ *     page where the owner is. Four levels answer "is this receiver struggling?" without inviting a
+ *     stranger to misread 83 %/800 % as an overload. See BRIEF-server-health-pill.md.
+ * ★★ COMPACT IS THE REQUIREMENT (Stuart: "it needs to be a compact almost widget pill like the
+ *    battery one is now"). Caption above, icons beneath — stacked so it stays NARROW over the
+ *    frequency scale, which is where width costs spectrum. A slot is dropped before the pill grows.
+ * ★ Slots appear only where the server reports them: a Pi with no battery has no battery slot, and a
+ *   machine with no temperature source and no cap has no TEMP slot at all. Never a dead icon.      */
+const HEALTH_COLOURS = ['#5BE36B', '#E8C547', '#FF8A3D', '#FF4B4B'];
+/** ★ Set once a `health` message has been seen; the battery-only pill then never draws again. */
+let healthPillLive = false;
+
+/** 16x16, stroke 1.4, currentColor — so every slot tints by its own level. */
+const HEALTH_ICONS: Record<string, string> = {
+  cpu:  '<rect x="4.5" y="4.5" width="7" height="7" rx="1"/><path d="M6.5 1.8v2.7M9.5 1.8v2.7M6.5 11.5v2.7M9.5 11.5v2.7M1.8 6.5h2.7M1.8 9.5h2.7M11.5 6.5h2.7M11.5 9.5h2.7"/>',
+  ram:  '<rect x="1.8" y="4.5" width="12.4" height="7" rx="1"/><path d="M4.6 11.5v2.2M8 11.5v2.2M11.4 11.5v2.2M5 7v2M8 7v2M11 7v2"/>',
+  temp: '<path d="M8 2.6a1.7 1.7 0 0 1 1.7 1.7v4.4a3 3 0 1 1-3.4 0V4.3A1.7 1.7 0 0 1 8 2.6z"/><circle cx="8" cy="11.4" r="1.2" fill="currentColor" stroke="none"/>',
+  /* ★★★ TWO SNAILS, AND THE DIFFERENCE IS THE CAUSE (Stuart): flames = thermal, bolt = power limit.
+   *  A plain snail says only "slow" and leaves the owner guessing, and the two causes want opposite
+   *  fixes — cool it down, or find a better supply. */
+  snailFire: '<circle cx="6.3" cy="9.6" r="3.3"/><path d="M6.3 9.6a1.2 1.2 0 1 1 1.2-1.2"/><path d="M1.5 13.4h9.8a2.3 2.3 0 0 0 2.3-2.3V9.4"/><path d="M13.6 9.4l-.8-2M13.6 9.4l1-1.8"/><g stroke-width="1.2"><path d="M4.1 5.6c-.8-.8-.4-1.8.2-2.5.1.7.6 1 .5 1.9"/><path d="M6.3 5.2c-1-1.1-.4-2.5.4-3.6.2 1.1.9 1.6.6 3"/><path d="M8.5 5.7c-.7-.7-.3-1.6.3-2.2.1.7.6.9.4 1.8"/></g>',
+  snailBolt: '<circle cx="6.3" cy="9.6" r="3.3"/><path d="M6.3 9.6a1.2 1.2 0 1 1 1.2-1.2"/><path d="M1.5 13.4h9.8a2.3 2.3 0 0 0 2.3-2.3V9.4"/><path d="M13.6 9.4l-.8-2M13.6 9.4l1-1.8"/><path d="M6.6 5.4L5.2 2.2h2.6L6.6 4.4h1.8L5.6 7.2l1-1.8z" stroke-width="1.2"/>',
+  snail:     '<circle cx="6.5" cy="8.2" r="4"/><path d="M6.5 8.2a1.4 1.4 0 1 1 1.4-1.4"/><path d="M1.5 13.4h9.8a2.3 2.3 0 0 0 2.3-2.3V9.4"/><path d="M13.6 9.4l-.8-2M13.6 9.4l1-1.8"/>',
+};
+
+function healthGlyph(name: string, level: number, label: string): string {
+  const col = HEALTH_COLOURS[Math.max(0, Math.min(3, level))];
+  // ★ The critical breath is CSS (see #srvHealth .crit), so reduced motion can switch it off in one
+  //   place rather than here — and a non-motion cue goes with it.
+  return `<span class="hSlot${level >= 3 ? ' crit' : ''}${level >= 2 ? ' dot' : ''}" title="${label}" `
+       + `style="color:${col}"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" `
+       + `stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" `
+       + `aria-hidden="true">${HEALTH_ICONS[name]}</svg></span>`;
+}
+
+const HEALTH_WORDS = ['OK', 'elevated', 'high', 'critical'];
+
+function renderHealthPill(h: {
+  cpu: number; ram: number;
+  temp: { kind: string; level: number };
+  bat: { present: boolean; pct?: number; charging?: boolean; level?: number };
+}): void {
+  /* ★★★ A LATCH, NOT A ONE-OFF REMOVAL. Removing #srvBattery here only worked until the next
+   *  `battery` message, which recreates it — so the old pill reappeared ON TOP of the new one
+   *  (Stuart, 2026-09-25: "the original battery pill has appeared over the new one"). The two
+   *  messages arrive on their own cadences, so whichever is later wins unless one of them stands
+   *  down permanently. Health is the richer signal, so it takes the corner and keeps it. */
+  healthPillLive = true;
+  document.getElementById('srvBattery')?.remove();
+  let el = document.getElementById('srvHealth');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'srvHealth';
+    document.body.appendChild(el);
+  }
+  const slots: string[] = [
+    healthGlyph('cpu', h.cpu, `Processor: ${HEALTH_WORDS[h.cpu]}`),
+    healthGlyph('ram', h.ram, `Memory: ${HEALTH_WORDS[h.ram]}`),
+  ];
+  // ★★ The TEMP slot is three-state: a real sensor, a throttle with a cause, or absent entirely.
+  if (h.temp.kind === 'sensor') slots.push(healthGlyph('temp', h.temp.level, `Temperature: ${HEALTH_WORDS[h.temp.level]}`));
+  else if (h.temp.kind === 'thermal') slots.push(healthGlyph('snailFire', Math.max(2, h.temp.level), 'Throttling: too hot'));
+  else if (h.temp.kind === 'power') slots.push(healthGlyph('snailBolt', Math.max(2, h.temp.level), 'Throttling: power limit'));
+  else if (h.temp.kind === 'throttle') slots.push(healthGlyph('snail', Math.max(2, h.temp.level), 'Throttling'));
+
+  let batHtml = '';
+  if (h.bat.present) {
+    const lv = h.bat.level ?? 0, pct = Math.max(0, Math.min(100, h.bat.pct ?? 0));
+    const col = HEALTH_COLOURS[Math.max(0, Math.min(3, lv))];
+    /* ★★★ THE NUMBER LIVES INSIDE THE BATTERY, with the bolt beside it in the same outline.
+     *  Stuart, 2026-09-25: "I wonder if the number inside the battery with the lightning bolt would
+     *  be the better choice to save even more space." It is: the text and bolt outside cost about
+     *  40 px — most of the slot — on a pill whose whole requirement is to stay narrow.
+     *  ★★ NO PER CENT SIGN. The battery outline already says what the number is, and dropping it is
+     *     what lets "100" fit at a legible size in a 34 px box.
+     *  ★ The charge bar stays BEHIND the text at low alpha, so the glyph still reads as a battery
+     *    filling up rather than a box with a number in it. */
+    const charged = (29.6 * pct / 100).toFixed(1);
+    batHtml = `<span class="hDiv"></span><span class="hBat${lv >= 3 ? ' crit' : ''}" style="color:${col}" `
+      + `title="Battery ${pct}%${h.bat.charging ? ', on power' : ', on battery'}">`
+      + `<svg viewBox="0 0 40 16" width="40" height="16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">`
+      + `<rect x="0.7" y="1.7" width="33" height="12.6" rx="2"/><rect x="35" y="5" width="2" height="6" rx="1" fill="currentColor" stroke="none"/>`
+      + `<rect x="2.4" y="3.4" width="${charged}" height="9.2" rx="1" fill="currentColor" stroke="none" opacity="0.22"/>`
+      /* ★ THE NUMBER READS FIRST, THEN THE BOLT — "55 ⚡", the order it is spoken (Stuart,
+       *  2026-09-25). The bolt was to the left of the number, which read as a charging symbol that
+       *  happened to have a figure after it rather than a battery level that happens to be charging.
+       *  ★★ AND THE NUMBER IS AMBER, always — not the level colour. The OUTLINE carries the level
+       *     (green through red), so tinting the figure too said the same thing twice and left the
+       *     digits hard to read against a red outline at 9 px. Amber is the readout colour
+       *     everywhere else in this client. */
+      + (h.bat.charging
+          ? `<text x="14" y="11.6" font-family="ui-monospace,monospace" font-size="9" font-weight="700" `
+          + `fill="#ffb833" stroke="none" text-anchor="middle">${pct}</text>`
+          + `<path d="M27.4 4.6L24.6 8.6h2.1l-.7 2.9 2.8-4h-2.1z" fill="#ffb833" stroke="none"/>`
+          : `<text x="17" y="11.6" font-family="ui-monospace,monospace" font-size="9" font-weight="700" `
+          + `fill="#ffb833" stroke="none" text-anchor="middle">${pct}</text>`)
+      + `</svg></span>`;
+  }
+  const worst = Math.max(h.cpu, h.ram, h.temp.kind === 'none' ? 0 : h.temp.level, h.bat.level ?? 0);
+  el.className = worst >= 3 ? 'crit' : '';
+  el.style.borderColor = HEALTH_COLOURS[worst].replace(')', '')
+    ? `${HEALTH_COLOURS[worst]}${worst === 0 ? '73' : 'bf'}` : '';   // 0.45 / 0.75 alpha
+  el.innerHTML = `<div class="hCap">SERVER HEALTH</div><div class="hRow">${slots.join('')}${batHtml}</div>`;
+  /* ★ One sentence for a screen reader, since the icons carry no text. */
+  el.setAttribute('aria-label', `Server health: processor ${HEALTH_WORDS[h.cpu]}, memory ${HEALTH_WORDS[h.ram]}`
+    + (h.temp.kind === 'sensor' ? `, temperature ${HEALTH_WORDS[h.temp.level]}`
+       : h.temp.kind === 'none' ? '' : ', throttling')
+    + (h.bat.present ? `, battery ${h.bat.pct}%${h.bat.charging ? ' on power' : ''}` : ''));
+}
+
 function batteryIcon(level: number, charging: boolean, paused: boolean, w = 54, h = 20): string {
   const lv = Math.max(0, Math.min(100, Number(level) || 0));
   // ★ The page's own phosphor green, as the other badges wear it — and RED when low (≤ 20 %) or
@@ -10745,6 +11256,8 @@ function buildMenu() {
 
   // ── Audio (server-side DSP in the shim) ──────────────────────────────────
   setupSquelchBar();
+  setupSquelchAuto();
+  setupSquelchAutoMargin();
 
   slider('nr', 'nrVal',
     (v) => (v === 0 ? 'OFF' : `${v}%`),
@@ -10948,6 +11461,10 @@ function pushSettingsToServer() {
   // "IS THE TAB MUTED?" warning comes straight back.
   const sql = num('squelch');
   if (sql !== undefined) applySquelch(sql, false);
+  // ★ Restored AFTER the manual value: setSquelchAuto(false) reads the remembered manual squelch
+  //   back out of prefs(), so the manual restore above is what a later switch-off returns to.
+  const sqlAutoPref = bool('squelchAuto');
+  if (sqlAutoPref !== undefined && sqlAutoPref !== sqlAuto) setSquelchAuto(sqlAutoPref, false);
   const nr = num('nr');             if (nr !== undefined) spec.setNr(nr > 0, nrStrength(nr));
   const notch = bool('notch');      if (notch !== undefined) spec.setNotch(notch);
   const stereo = bool('stereo');    if (stereo !== undefined) spec.setStereo(stereo);
@@ -11090,6 +11607,9 @@ function applyGainLocked() {
 
 /** The server tells us its real gain steps and sample rates (hwinfo) — the
  *  client can't query a remote dongle, so the controls are built from that. */
+/** ★ True while the dial is shared (the `dial` message says anything but 'exclusive'). */
+let srvShared = false;
+
 function populateHw() {
   if (hwGains.length) {
     const g = $<HTMLInputElement>('gain');
@@ -11144,9 +11664,18 @@ function populateHw() {
   //     refuses outright is worse than none: the user concludes the RADIO is broken rather than
   //     the control (Stuart, 2026-08-02: "still have all the controls though").
   const windowLocked = hwLockedCentre > 0;
-  if (rateRow)  rateRow.hidden = ahfPinned || windowLocked;
-  if (rateLock) rateLock.hidden = !windowLocked || ahfPinned;
-  if (rateLock && windowLocked) {
+  /* ★★★ A SHARED DIAL OWNS ITS RATE TOO. The server now refuses the change (see the shared-dial
+   *  guard on `sampleRate`), so offering the picker would be offering a control whose every use is
+   *  a no-op — the fault AGENTS.md names, and the one the locked-centre note above already learnt.
+   *  ★★ The owner's figure was only ever a CEILING: a listener could not go above it but could drag
+   *     the rate DOWN, which on a shared receiver re-opens the source and changes the span for
+   *     everybody (Stuart, 2026-09-25: "on a shared tuner changing the sample rate is a no no").
+   *  ★ Shown as the same "set by the server" readout as a locked window, rather than hidden
+   *    outright: the rate is still a fact about the receiver worth knowing, it is simply not yours. */
+  const rateNotYours = windowLocked || (srvShared && !adminUnlocked);
+  if (rateRow)  rateRow.hidden = ahfPinned || rateNotYours;
+  if (rateLock) rateLock.hidden = !rateNotYours || ahfPinned;
+  if (rateLock && rateNotYours) {
     const v = rateLock.querySelector('.val');
     const shown = hwRates.length && cap !== Infinity ? cap : 0;
     if (v) v.textContent = shown > 0
@@ -13095,7 +13624,7 @@ function initKeyboard() {
       case '[': case ']': cycleStep(); e.preventDefault(); break;
       case 'ArrowUp':    spec.zoomBy(1.25); updateViewOverlays(); e.preventDefault(); break;
       case 'ArrowDown':  spec.zoomBy(0.8);  updateViewOverlays(); e.preventDefault(); break;
-      case 'm': audio!.muted = !audio!.muted; $('muteBtn').classList.toggle('on', audio!.muted); break;
+      case 'm': setMuted(!audio!.muted); break;
       // ★ T = taller/shorter, but ONLY while the panel that it resizes is open. A shortcut
       // that does nothing visible is worse than no shortcut: the user cannot tell whether
       // they pressed the wrong key or the app is broken (Stuart, 2026-07-26).
