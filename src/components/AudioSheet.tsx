@@ -62,8 +62,12 @@ function NavSlider(props: React.ComponentProps<typeof Slider>) {
   );
 }
 
-function SquelchBar({ level, pos, gate, onDrag, onDragEnd }: {
+function SquelchBar({ level, pos, gate, auto = false, onDrag, onDragEnd }: {
   level: number; pos: number; gate?: boolean;
+  /** Auto squelch is driving the threshold: the bar fades but stays visible, the ball becomes a red
+   *  line that moves on its own, and the bar says so. It stays DRAGGABLE — the drag is how you take
+   *  it back (SDRScreen switches auto off on the first touch). */
+  auto?: boolean;
   /** ★ A NORMALISED value: 0..1 along the bar, or -1 for off. NOT a coordinate — the
    *  parameter was called `x` and that misreading cost a real bug (see the nav note below). */
   onDrag?: (v: number) => void;
@@ -93,7 +97,12 @@ function SquelchBar({ level, pos, gate, onDrag, onDragEnd }: {
     if (Math.abs(pos - held) < 0.02 || (held < 0 && pos < 0)) setHeld(null);
   }, [pos, held]);
 
-  const shown = held ?? pos;
+  /* ★ A leftover `held` must not survive the switch INTO auto: it is this control's memory of a
+   *   finger, and under auto the threshold is no longer the finger's. Without this the red line
+   *   would sit at wherever it was last dragged until the round-trip test happened to agree. */
+  useEffect(() => { if (auto) setHeld(null); }, [auto]);
+
+  const shown = auto ? pos : (held ?? pos);
   const off = shown < 0;
   // Red = the gate is REALLY muting. Prefer its own verdict over bar geometry; while dragging,
   // geometry is all we have (the new threshold hasn't round-tripped yet).
@@ -149,7 +158,9 @@ function SquelchBar({ level, pos, gate, onDrag, onDragEnd }: {
 
   return (
     <View ref={(r: any) => { (bar as any).current = r; (navViewRef as any).current = r; }}
-          style={[st.sqlBarWrap, navFocused && st.sqlBarFocused]}
+          // ★ FADES BUT STAYS VISIBLE (and stays draggable): the live signal is still the thing worth
+          //   watching while auto is on, and a bar that vanished would take the evidence with it.
+          style={[st.sqlBarWrap, navFocused && st.sqlBarFocused, auto && st.sqlBarAuto]}
           {...(onDrag ? pan.panHandlers : {})}
           hitSlop={{ top: 14, bottom: 14, left: 10, right: 10 }}
           onLayout={measure}>
@@ -160,10 +171,91 @@ function SquelchBar({ level, pos, gate, onDrag, onDragEnd }: {
         }]} />
       </View>
       {/* pointerEvents none: the handles must never become the touch target — see the note above. */}
+      {/* ★★ UNDER AUTO THE BALL BECOMES A RED LINE. The ball is a HANDLE and the threshold is no
+             longer yours to hold: a grabbable-looking ball moving by itself invites a fight with the
+             tracker. The line is the same indicator the main signal meter draws, and it is drawn from
+             the SETTING, not from the momentarily-applied threshold — during the hang the applied
+             value is at the bottom of the scale, so a line drawn from it would slam to the far left
+             every time somebody spoke (see the tick in SDRScreen). */}
       <View pointerEvents="none" style={[st.sqlNeedle, { left: handleX },
-                    off && { backgroundColor: 'rgba(255,255,255,0.35)' }]} />
-      <View pointerEvents="none" style={[st.sqlBall,   { left: handleX },
-                    off && { backgroundColor: 'rgba(255,255,255,0.35)' }]} />
+                    auto && st.sqlNeedleAuto,
+                    off && !auto && { backgroundColor: 'rgba(255,255,255,0.35)' }]} />
+      {!auto && (
+        <View pointerEvents="none" style={[st.sqlBall, { left: handleX },
+                      off && { backgroundColor: 'rgba(255,255,255,0.35)' }]} />
+      )}
+      {auto && (
+        <View pointerEvents="none" style={st.sqlAutoOverlay}>
+          <Text style={st.sqlAutoOverlayTxt}>AUTO SQUELCH ACTIVE</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+/* ── The whole squelch control: the live bar, its hint, and auto squelch ─────────────────────────
+ * ★★ ONE COMPONENT FOR ALL THREE BACKENDS' BARS (local/VibeServer, Kiwi, SNR). They were three
+ *    copies of the same JSX, which was survivable while it was a bar and a sentence; adding a
+ *    toggle, a slider and a disabled-reason to each copy is how two of them come to disagree about
+ *    where a control is or what it says. The backend difference is in the CONDITION that draws it,
+ *    which stays where it was.                                                                    */
+function SquelchControl({
+  level, pos, gate, onDrag, onDragEnd, auto, onAuto, margin, onMargin, autoOk,
+}: {
+  level: number; pos: number; gate?: boolean;
+  onDrag?: (v: number) => void; onDragEnd?: () => void;
+  auto: boolean; onAuto?: (on: boolean) => void;
+  margin: number; onMargin?: (db: number) => void;
+  autoOk: boolean;
+}) {
+  return (
+    <View style={{ flex: 1 }}>
+      <SquelchBar level={level} pos={pos} gate={gate} auto={auto}
+                  onDrag={onDrag} onDragEnd={onDragEnd} />
+      <Text style={st.sqlHint}>
+        {auto
+          /* ★ Under auto the old sentence would be a lie — the threshold is MEANT to move. So the
+           *   hint changes to say what the movement is, and to say where the way out is: a drag.
+           *   Stuart: "People love it so we need to get it right but I avoid it because I cannot get
+           *   it right myself." Someone who cannot set it by hand needs to be told it is working. */
+          ? 'The threshold tracks this channel\'s own quiet level and sits the chosen amount above it. Drag the bar to take over by hand.'
+          : 'Your squelch stays at the signal level you set. The needle drifts a little here and on the live meter as the noise floor moves — that\'s normal, not the setting changing.'}
+      </Text>
+      {onAuto && (
+        <NavRow>
+          <View style={st.sqlAutoRow}>
+            <Btn label="AUTO SQUELCH" active={auto}
+                 onPress={autoOk ? () => onAuto(!auto) : undefined}
+                 style={autoOk ? undefined : { opacity: 0.4 }} />
+            {/* ★★ THE REASON, NOT JUST A GREY BUTTON. A toggle that cannot work must say why it
+                   cannot, or the listener concludes the FEATURE is broken rather than unavailable
+                   here — and the accessibility hint carries the same sentence for a reader who
+                   never sees the grey. */}
+            {!autoOk && (
+              <Text style={st.sqlAutoWhy}
+                    accessibilityHint="Auto squelch needs a channel signal reading this receiver does not send.">
+                Needs a channel signal reading this receiver does not send.
+              </Text>
+            )}
+          </View>
+        </NavRow>
+      )}
+      {/* ★ SHOWN ONLY WHILE AUTO IS ON: off, it sets nothing. "ABOVE NOISE" rather than "margin" —
+             margin is what the code and OpenWebRX call it and it means nothing to a listener. */}
+      {onAuto && auto && (
+        <NavRow>
+          <View style={st.sqlAutoMarginRow}>
+            <Text style={st.sqlAutoMarginCap}>ABOVE NOISE</Text>
+            <NavSlider style={st.bwSlider}
+              minimumValue={4} maximumValue={20} step={1}
+              value={Math.max(4, Math.min(20, margin))}
+              onValueChange={(v: number) => onMargin?.(v)}
+              minimumTrackTintColor={C.gold}
+              maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+            <Text style={st.bwVal}>{`+${Math.round(margin)} dB`}</Text>
+          </View>
+        </NavRow>
+      )}
     </View>
   );
 }
@@ -272,6 +364,20 @@ export interface AudioSheetProps {
   onSquelchDrag?: (v: number) => void;
   /** The drag gesture ended — releases the frozen noise floor. */
   onSquelchDragEnd?: () => void;
+  /* ── AUTO SQUELCH ─────────────────────────────────────────────────────────────────────────────
+   * ★★★ THE ALGORITHM IS NOT HERE. SDRScreen owns it, because it owns the channel figure, the noise
+   *     floor and the one per-backend threshold map — see briefs/BRIEF-auto-squelch.md. This sheet
+   *     only draws the switch, the margin and what the tracker has decided. */
+  sqlAuto?: boolean;
+  onSqlAuto?: (on: boolean) => void;
+  /** ABOVE NOISE, dB. "Margin" is what the code and OpenWebRX call it and it means nothing to a
+   *  listener; 4-20, and the default is measured (see SQL_AUTO_MARGIN_DEFAULT). */
+  sqlAutoMargin?: number;
+  onSqlAutoMargin?: (db: number) => void;
+  /** ★★ Does this backend give a channel figure the tracker can steer from? False = the toggle is
+   *  drawn DISABLED WITH THE REASON. ✗ Never silently dead: a switch that does nothing reads as a
+   *  broken feature, which is the same rule as AGENTS.md's control that works on one radio only. */
+  sqlAutoOk?: boolean;
   fmSquelch?:    number;  onFmSquelch?:    (v: number) => void;
   isFmMode?:     boolean;
 
@@ -345,6 +451,7 @@ export default function AudioSheet({
   localSquelch = -100, onLocalSquelch,
   localNR = 0, onLocalNR,
   kiwiSquelch = 0, onKiwiSquelch, onSquelchDrag, onSquelchDragEnd,
+  sqlAuto = false, onSqlAuto, sqlAutoMargin = 12, onSqlAutoMargin, sqlAutoOk = false,
   fmSquelch = -999, onFmSquelch, isFmMode = false,
   notchOn = false, onNotch,
   deemph = 50e-6, onDeemph, stereo = true, onStereo,
@@ -500,15 +607,11 @@ export default function AudioSheet({
           {onLocalSquelch ? (
             <View style={st.bwRow}>
               <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
-              <View style={{ flex: 1 }}>
-                <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1}
-                             gate={liveM?.gate} onDrag={onSquelchDrag} onDragEnd={onSquelchDragEnd} />
-                <Text style={st.sqlHint}>
-                  Your squelch stays at the signal level you set. The needle drifts a little here
-                  and on the live meter as the noise floor moves — that's normal, not the setting
-                  changing.
-                </Text>
-              </View>
+              <SquelchControl level={liveM?.level ?? 0} pos={liveM?.sql ?? -1}
+                              gate={liveM?.gate} onDrag={onSquelchDrag} onDragEnd={onSquelchDragEnd}
+                              auto={sqlAuto} onAuto={onSqlAuto}
+                              margin={sqlAutoMargin} onMargin={onSqlAutoMargin}
+                              autoOk={sqlAutoOk} />
             </View>
           ) : null}
 
@@ -695,15 +798,11 @@ export default function AudioSheet({
           {onKiwiSquelch && (
             <View style={st.bwRow}>
               <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
-              <View style={{ flex: 1 }}>
-                <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1}
-                             gate={liveM?.gate} onDrag={onSquelchDrag} onDragEnd={onSquelchDragEnd} />
-                <Text style={st.sqlHint}>
-                  Your squelch stays at the signal level you set. The needle drifts a little here
-                  and on the live meter as the noise floor moves — that's normal, not the setting
-                  changing.
-                </Text>
-              </View>
+              <SquelchControl level={liveM?.level ?? 0} pos={liveM?.sql ?? -1}
+                              gate={liveM?.gate} onDrag={onSquelchDrag} onDragEnd={onSquelchDragEnd}
+                              auto={sqlAuto} onAuto={onSqlAuto}
+                              margin={sqlAutoMargin} onMargin={onSqlAutoMargin}
+                              autoOk={sqlAutoOk} />
             </View>
           )}
 
@@ -711,15 +810,11 @@ export default function AudioSheet({
           {!recordingOnly && !onLocalSquelch && !onKiwiSquelch && !isOwrx && (
             <View style={st.bwRow}>
               <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
-              <View style={{ flex: 1 }}>
-                <SquelchBar level={liveM?.level ?? 0} pos={liveM?.sql ?? -1}
-                             gate={liveM?.gate} onDrag={onSquelchDrag} onDragEnd={onSquelchDragEnd} />
-                <Text style={st.sqlHint}>
-                  Your squelch stays at the signal level you set. The needle drifts a little here
-                  and on the live meter as the noise floor moves — that's normal, not the setting
-                  changing.
-                </Text>
-              </View>
+              <SquelchControl level={liveM?.level ?? 0} pos={liveM?.sql ?? -1}
+                              gate={liveM?.gate} onDrag={onSquelchDrag} onDragEnd={onSquelchDragEnd}
+                              auto={sqlAuto} onAuto={onSqlAuto}
+                              margin={sqlAutoMargin} onMargin={onSqlAutoMargin}
+                              autoOk={sqlAutoOk} />
             </View>
           )}
 
@@ -871,6 +966,25 @@ const st = StyleSheet.create({
   sqlBall:     { position: 'absolute', top: 0, width: 22, height: 22, borderRadius: 11,
                  marginLeft: -11, backgroundColor: '#3ddc84',
                  borderWidth: 2, borderColor: 'rgba(0,0,0,0.55)' },
+  // ── Auto squelch ─────────────────────────────────────────────────────────────────────────────
+  // ★ Faded, not hidden — the signal is still what you watch. 0.55 keeps the fill readable while
+  //   saying clearly that the threshold is not yours at the moment.
+  sqlBarAuto:  { opacity: 0.55 },
+  // ★ RED, and it runs the full height of the bar: the same indicator the main signal meter uses
+  //   for an automatic threshold, so the two screens read as one thing.
+  sqlNeedleAuto: { top: 0, width: 2, backgroundColor: '#ff4b4b' },
+  sqlAutoOverlay: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 14,
+                    alignItems: 'center', justifyContent: 'center' },
+  sqlAutoOverlayTxt: { color: 'rgba(255,255,255,0.9)', fontFamily: 'Atkinson Hyperlegible',
+                       fontSize: 9, letterSpacing: 1.2 },
+  sqlAutoRow:  { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 6 },
+  // ★ The reason a disabled toggle is disabled, beside it — never a switch that silently does
+  //   nothing. Wraps, because the sentence matters more than the row height.
+  sqlAutoWhy:  { color: 'rgba(255,255,255,0.45)', fontFamily: 'Atkinson Hyperlegible',
+                 fontSize: 10, lineHeight: 13, flex: 1 },
+  sqlAutoMarginRow: { flexDirection: 'row', alignItems: 'center', paddingTop: 2 },
+  sqlAutoMarginCap: { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 10,
+                      letterSpacing: 1, width: 84 },
 
   subPanel: {
     backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 6,

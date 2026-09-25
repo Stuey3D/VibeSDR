@@ -83,6 +83,42 @@ const POWERSAVE_FPS = 5;
 import type { SDRMode, SDRStatus, SDRCallbacks, RadioCaps, RdsExt, IdlePolicy, IqOutState } from './sdrProtocol';
 import { MODE_BANDWIDTHS, UPDATE_APP_MESSAGE } from './sdrProtocol';
 
+/** ★★ THE SERVER'S OWN HEALTH, AS LEVELS AND NOTHING ELSE — 0 OK, 1 elevated, 2 high, 3 critical.
+ *
+ *  There are deliberately NO raw figures here: no °C, no MHz, no RAM number. The raw values stay
+ *  on the admin page, which is the owner's; a listener gets the verdict. That is the same line the
+ *  rest of this client holds — see [[feedback_no_inferred_hardware_readouts]]: a number a listener
+ *  cannot act on invites them to diagnose somebody else's box, and a number we did not measure
+ *  ourselves is a readout we would be inventing.
+ *
+ *  `temp.kind` says WHERE the heat verdict came from, because the honest answer differs per host:
+ *  a real sensor, a thermal zone, a power-supply reading, the Pi's throttle flags, or 'none' at all.
+ *  A box with no thermometer reports kind 'none' — which is not the same as "cool", and the UI must
+ *  not draw it as one.
+ *
+ *  `bat.present` false is the normal case (a mains-powered server has no battery), and then pct,
+ *  charging and level are all absent — not zero. Reading a missing pct as 0 would paint a healthy
+ *  desktop as a phone about to die. */
+export type ServerHealth = {
+  cpu: number;
+  ram: number;
+  temp: { kind: 'sensor' | 'thermal' | 'power' | 'throttle' | 'none'; level: number };
+  bat: { present: boolean; pct?: number; charging?: boolean; level?: number };
+};
+
+/** ★★★ ADDITIVE, SO THE CALLBACK LIVES HERE AND NOT IN THE SHARED SHAPE'S FILE.
+ *  `health` is a message an OLDER SERVER SIMPLY NEVER SENDS. There is no handshake, no capability
+ *  bit and nothing to ask for: the client behaves exactly as it always did against such a server —
+ *  no pill, no placeholder, no error, because the callback is never invoked. Everything that
+ *  consumes this must therefore treat "never heard from" as the resting state, not as a fault.
+ *  ★ Declared by augmentation so the one-file change stays one file; the shape is the same
+ *    optional-callback idiom as onNotice / onRefused / onOverload next to it. */
+declare module './sdrProtocol' {
+  interface SDRCallbacks {
+    onHealth?: (h: ServerHealth) => void;
+  }
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const SPEC_MAGIC    = 0x43455053; // "SPEC" in little-endian uint32
@@ -2214,6 +2250,31 @@ export abstract class VibeServerWsClient {
         gainTenthDb: Number(msg.gain) || 0,
         dir: Number(msg.dir) || 0,
         agc: msg.agc === 1 || msg.agc === true,
+      });
+      return;
+    }
+    // ★★ The server's health verdict — pushed on change, and once inside the connect snapshot so a
+    //    listener who joins a hot box learns about it immediately rather than at the next change.
+    //    ★★★ PARSED DEFENSIVELY, EVERY FIELD. An older or hand-rolled server can send anything
+    //        here, and a throw in this dispatcher does not cost us a pill — it costs us the REST of
+    //        the message loop. So: Number()||0 everywhere (NaN and undefined both land on 0), the
+    //        kind is taken only if it is one of ours, and the battery half is read only when the
+    //        server actually claims a battery. `temp?.` guards temp being absent or not an object.
+    if (msg.type === 'health') {
+      const t: any = msg.temp ?? {};
+      const b: any = msg.bat ?? {};
+      const kind: ServerHealth['temp']['kind'] =
+        t.kind === 'sensor' || t.kind === 'thermal' || t.kind === 'power' || t.kind === 'throttle'
+          ? t.kind : 'none';
+      this.callbacks.onHealth?.({
+        cpu: Number(msg.cpu) || 0,
+        ram: Number(msg.ram) || 0,
+        temp: { kind, level: Number(t.level) || 0 },
+        // ★ present false keeps pct/charging/level ABSENT rather than zeroed — see ServerHealth.
+        bat: b.present
+          ? { present: true, pct: Number(b.pct) || 0, charging: b.charging === true,
+              level: Number(b.level) || 0 }
+          : { present: false },
       });
       return;
     }

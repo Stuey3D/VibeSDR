@@ -121,6 +121,7 @@ import LocalHardwarePanel from '../components/LocalHardwarePanel';
 import FreqModal       from '../components/FreqModal';
 import ModeSelector    from '../components/ModeSelector';
 import AudioSheet      from '../components/AudioSheet';
+import HealthPill, { type Health, type HealthLevel } from '../components/HealthPill';
 import StepPicker      from '../components/StepPicker';
 import ChatDrawer,
   { type ChatMessage } from '../components/ChatDrawer';
@@ -213,6 +214,63 @@ function sigDenorm(x: number): number {
          (SIG_CEIL - SIG_KNEE) * (x - SIG_KNEE_FILL) / (1 - SIG_KNEE_FILL);
 }
 
+/* ── AUTO SQUELCH ────────────────────────────────────────────────────────────────────────────────
+ *
+ * ★★★ THE ALGORITHM IS WRITTEN DOWN, NOT INVENTED HERE: briefs/BRIEF-auto-squelch.md is the
+ *     authority, and this is its SECOND implementation (the web client's `autoSquelchTick` is the
+ *     first, Jr's Swift will be the third). "Three implementations that agree are fine; three that
+ *     drift are not" — so every constant below is copied, not re-derived, and a change to any of
+ *     them belongs in the brief first.
+ *
+ * ★★★ AND IT IS CLIENT-SIDE ON PURPOSE. VibeServer could gate exactly and cheaply, and that would
+ *     leave the feature dead on UberSDR, OpenWebRX, KiwiSDR and FM-DX — four backends out of five,
+ *     i.e. AGENTS.md's control that only works in one scenario. Stuart, 2026-09-25: "Jr's squelch is
+ *     platform agnostic and I want to preserve that."
+ *
+ * ★★★ IT TRACKS THE CHANNEL'S OWN QUIET LEVEL, NEVER A WIDEBAND NOISE FLOOR. Measured on an empty
+ *     FM channel (2026-09-25) the channel figure sits 12.8 to 30.3 dB above the wideband floor,
+ *     median 20.7, and the gap moves with bandwidth and band activity — so "floor + margin" is far
+ *     too low on a wide FM passband and wrong again on a 2.7 kHz SSB one. Referencing the channel
+ *     against ITSELF makes the bandwidth cancel out, which is why one number (12 dB) worked
+ *     unchanged on 40 m SSB and on MW.
+ *   ★ Here that figure is whatever THIS backend's own gate compares — see the frame emit: the Kiwi's
+ *     S-meter dBm, a dongle's channel dBFS, radiod's SNR. Judging on the same quantity the gate
+ *     judges on is what makes one algorithm fit five backends.                                     */
+/** ★ 12 dB, user-adjustable 4-20. The baseline tracks the noise MINIMUM, so the margin has to clear
+ *  the noise's own ~7 dB spread first. Confirmed three ways: replay of a captured trace, Stuart by
+ *  ear on 40 m ("12db gave me the clean result I was after"), and OpenWebRX's effective figure
+ *  (their +10 is above the noise AVERAGE, ≈13 in our terms). The slider stays because no single
+ *  number is right on every band. */
+const SQL_AUTO_MARGIN_DEFAULT = 12;
+/** ★★★ HYSTERESIS, and it is the whole difference between a usable auto squelch and a chattering
+ *  one: one level for both directions means a signal sitting ON it toggles the gate every time the
+ *  noise wobbles a decibel. 3 dB rather than 4 because on a narrow SSB passband the whole gap
+ *  between the noise and a weak voice is only a few dB, so the buffer must fit INSIDE it. */
+const SQL_AUTO_HYST_DB = 3;
+/** ★★★ HANG — the thing every real squelch has. Speech is not continuous, and an instantaneous gate
+ *  chops the gaps between syllables into silence (Stuart on 40 m: "it sounds like the waynes world
+ *  stan mikitas donuts skit"). 700 ms covers a pause between words without leaving the noise up
+ *  after a station has genuinely finished. */
+const SQL_AUTO_HANG_MS = 700;
+/** ★ Falls fast towards a new low, rises very slowly away from it — and the asymmetry is the point:
+ *  a signal appearing must not drag the baseline up with it, which is how an auto squelch talks
+ *  itself into silence. Per SAMPLE, and the sample here is a spectrum frame (~10-20/s, the web
+ *  client's `sig` is a measured 20/s) — the same figures are used deliberately rather than rescaled,
+ *  because the brief's numbers are what was tuned against a real trace and a slower feed only makes
+ *  the tracker gentler in the same direction. */
+const SQL_AUTO_FALL = 0.20;
+const SQL_AUTO_RISE = 0.002;
+/** Persisted GLOBALLY, not per device: auto squelch is a way of listening, and it has to survive
+ *  moving between the five backends it was built for. Same `lsv_` idiom as every other standing
+ *  display preference on this screen. */
+const SQL_AUTO_KEY = 'lsv_squelch_auto';
+const SQL_AUTO_MARGIN_KEY = 'lsv_squelch_auto_margin';
+
+/** The server's health levels arrive as plain numbers off the wire (ServerHealth) and the pill's own
+ *  type is the narrow 0..3. Clamped here rather than cast, because the numbers come from a server we
+ *  do not control — see the defensive parsing in VibeServerWsClient. */
+const healthLevel = (n: number): HealthLevel =>
+  (Math.max(0, Math.min(3, Math.round(n) || 0)) as HealthLevel);
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -2401,6 +2459,17 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Server software version (menu footer — identifies the backend type)
   const [serverVersion, setServerVersion] = useState<string | null>(null);
   const [serverLabel,   setServerLabel]   = useState<string | null>(null);  // OWRX: OpenWebRX/+
+  /** ★★★ THE SERVER'S OWN VERDICT ON HOW IT IS COPING — and null until it says so. `health` is a
+   *  message an older VibeServer simply never sends, and there is no capability bit to ask: the
+   *  resting state is "never heard from", which draws NOTHING. ✗ Not an empty pill, not a
+   *  placeholder — the same rule as HealthPill's own "never a dead slot". */
+  const [health,        setHealth]        = useState<Health | null>(null);
+  /** How tall the pill actually is, so the clock beneath it clears it. ★ MEASURED, not a constant:
+   *  the pill's width and height change with which slots the server sends (no thermometer, no
+   *  battery), and a hand-kept number here would describe whichever machine it was written against.
+   *  ★ Zeroed when the pill goes — onLayout only fires while it EXISTS (same trap as stationIdH). */
+  const [healthPillH,   setHealthPillH]   = useState(0);
+  useEffect(() => { if (!health) setHealthPillH(0); }, [health]);
   const [aboutOpen,     setAboutOpen]     = useState(false);
   const [keyHelpOpen,   setKeyHelpOpen]   = useState(false);
   const [recordingsOpen, setRecordingsOpen] = useState(false);
@@ -2465,6 +2534,26 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [snrSquelch,    setSnrSquelch]    = useState(-999);
   // FM squelch — value ≤ -999 = open. Only active on fm/nfm modes.
   const [fmSquelch,     setFmSquelch]     = useState(-999);
+  /* ── AUTO SQUELCH — see the constants at the top of this file for the algorithm and the brief ──
+   * ★ A MODE LAID OVER THE EXISTING CONTROL, not a new setting: while it is on the same threshold
+   *   path is driven automatically, and switching it off puts back the manual value the listener
+   *   remembers. So there is no second mapping and no second gate — see onSquelchDrag. */
+  const [sqlAuto,        setSqlAutoState]  = useState(false);
+  const [sqlAutoMargin,  setSqlAutoMarginState] = useState(SQL_AUTO_MARGIN_DEFAULT);
+  /** Does THIS backend give a usable channel figure? Set from the frame emit, which is the only
+   *  place that knows. False = the toggle is offered DISABLED with the reason, never silently dead. */
+  const [sqlAutoOk,      setSqlAutoOk]     = useState(false);
+  const sqlAutoRef       = useRef(false);
+  const sqlAutoMarginRef = useRef(SQL_AUTO_MARGIN_DEFAULT);
+  const sqlAutoOkRef     = useRef(false);
+  /** The tracker's whole state. In a ref because the per-frame emit runs inside socket callbacks
+   *  created once — a state closure there would be stale from the second frame onwards.
+   *  `base` NaN = "take the next sample as the truth", the seed the toggle and every reseed use. */
+  const sqlAutoTrk = useRef({ base: NaN, key: '', openAt: 0, shown: NaN, sentOpen: false, sentDb: NaN });
+  /** The manual threshold, in its backend's own native unit, captured the moment auto was switched
+   *  ON — because from then on the live state IS the automatic value, so there is nothing else left
+   *  to restore from. NaN = nothing remembered (auto has never been on this session). */
+  const sqlManualRef     = useRef(NaN);
   // Server-side NR (DSP insert) — filter list + param descriptors arrive via
   // the native audio WS (get_dsp_filters → dsp_filters); params are STRINGS
   // on the wire (server paramInfo is all string-typed).
@@ -2508,6 +2597,15 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  it whole pushed the clock and the receiver name a long way inside an edge nothing was covering — the
    *  waterfall already draws under there. Enough of it to clear a rounded corner, not all of it. */
   const rightInset = Math.max(12, Math.min(insets.right, 20) + 8);
+  /** ★★ THE TOP OF THE RIGHT-HAND HEADER STACK, in one place — the health pill, the session clock,
+   *  the listener count and the admin note all hang off it, and three of them used to write the same
+   *  expression out for themselves. Two readers of one rule is how one of them ends up wrong. */
+  const rightStackTop = insets.top + 46 + (stationIdH > 0 ? stationIdH + 8 : 0);
+  /** ★★ EVERYTHING BELOW THE PILL MOVES DOWN TO FIT IT, and that is the intended trade: the brief's
+   *  whole requirement is that the pill stays COMPACT ("almost a widget pill like the battery one"),
+   *  so a few pixels of travel for the clock is preferable to shrinking it until it cannot be read.
+   *  0 when no server has sent health — nothing moves on an older receiver. */
+  const healthStackShift = healthPillH > 0 ? healthPillH + 8 : 0;
   const [freqModalOpen, setFreqModalOpen] = useState(false);
 
   // Server map overlays (HFDL / Digital spots / CW spots — skin parity)
@@ -4146,6 +4244,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     //     TRY AGAIN, TAKE OVER, or back to the picker — all of which clear this.
     if (terminalRefusal.current) return;
     destroyed.current = false;
+    /* ★★ A NEW CONNECTION KNOWS NOTHING ABOUT THE LAST ONE'S HEALTH. The pill is drawn only from
+     *  what the server has said, and a server that says nothing must show none — so a stale pill
+     *  from the previous receiver would be a reading attributed to a machine that never sent it.
+     *  Same shape as stationIdH being zeroed when its overlay goes. */
+    setHealth(null);
     // ★ A fresh attempt has not got in yet — so an expired credential on a LATER connection can
     //   still take the one-shot retry above.
     connectedOnceRef.current = false;
@@ -4684,6 +4787,20 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (typeof st.autobw === 'boolean') setFmAutoBw(st.autobw);
         if (typeof st.nbx === 'boolean') setFmNbx(st.nbx);
       },
+      /* ★★ PUSHED ON CHANGE, plus once inside the connect snapshot — so a listener joining a hot box
+       *  learns about it immediately rather than at the next change. Stored as-is apart from the
+       *  level clamp (healthLevel): the pill decides what is DRAWN, including which slots exist at
+       *  all, and this screen must not start second-guessing that in two places. */
+      onHealth: (h) => {
+        if (destroyed.current) return;
+        setHealth({
+          cpu: healthLevel(h.cpu), ram: healthLevel(h.ram),
+          temp: { kind: h.temp.kind, level: healthLevel(h.temp.level) },
+          bat: h.bat.present
+            ? { present: true, pct: h.bat.pct, charging: h.bat.charging, level: healthLevel(h.bat.level ?? 0) }
+            : { present: false },
+        });
+      },
       onRadioCaps:  (caps) => {
         if (destroyed.current) return;
         setRadioCaps(caps);
@@ -5029,6 +5146,95 @@ export default function SDRScreen({ route, navigation }: Props) {
             : isLocal          ? (hwSquelchRef.current > -100 ? chDbfs   < hwSquelchRef.current : false)
             : owrxDbm != null  ? undefined
             : (snrSquelchRef.current > -999 ? snrDb < snrSquelchRef.current : false);
+          /* ── AUTO SQUELCH ────────────────────────────────────────────────────────────────────
+           * The brief's algorithm, once, here — where the channel figure, the noise floor, the trim
+           * and the channel's identity are all already in hand. Constants and rationale: the top of
+           * this file; the spec: briefs/BRIEF-auto-squelch.md.
+           *
+           * ★★★ IT JUDGES THE SAME QUANTITY EACH BACKEND'S OWN GATE JUDGES — the three expressions
+           *     below are lifted straight off the `gate` verdict above, so the tracker and the gate
+           *     can never be looking at different numbers. That is what lets ONE algorithm cover
+           *     five backends: the Kiwi's S-meter dBm, a dongle's channel dBFS, radiod's SNR.
+           * ★★★ AND THE THRESHOLD GOES OUT THROUGH onSquelchDrag — the existing, single, per-backend
+           *     inverse map (which also carries the visualGain correction). ✗ A second mapping here
+           *     is exactly how the automatic line and the manual ball would come to disagree.
+           * ★ True OWRX gates SERVER-side and has no bar to drive: no channel figure we may steer
+           *   from, so `autoChan` is NaN and the toggle is offered disabled with the reason. */
+          const autoChan = isKiwi ? rawLevelDbm
+            : isLocal            ? chDbfs
+            : owrxDbm != null    ? NaN
+            : snrDb;
+          /* ★ THE dBFS-MODE BRANCH NEEDS A SETTLED FLOOR, because its position map is the one that
+           *   goes through it (see onSquelchDrag). Until then there is no honest answer, so the
+           *   toggle says so rather than the gate jumping somewhere arbitrary. */
+          const autoNeedsFloor = !isKiwi && !isLocal && owrxDbm == null && signalModeRef.current !== 'snr';
+          const autoOk = Number.isFinite(autoChan) && (!autoNeedsFloor || floorEmaRef.current > -900);
+          if (autoOk !== sqlAutoOkRef.current) { sqlAutoOkRef.current = autoOk; setSqlAutoOk(autoOk); }
+          if (sqlAutoRef.current && autoOk) {
+            const trk = sqlAutoTrk.current;
+            /* ★★ RESEED ON A CHANNEL CHANGE, NOTICED HERE AND NOT WIRED INTO EVERY TUNE SITE — the
+             *  one call site that gets missed is the bug, and a shared dial retunes us without any
+             *  call site at all. `s` is the status THIS frame carries, so the comparison covers every
+             *  path including the ones nobody has written yet. Without it, arriving somewhere noisier
+             *  with the gate open blocks the slow rise for ever and the only escape was toggling auto
+             *  off and on (Stuart, MW → 40 m LSB, 2026-09-25). */
+            const key = `${Math.round(s.frequency)}|${s.mode}|${s.bandwidthLow}|${s.bandwidthHigh}`;
+            if (key !== trk.key) { trk.key = key; trk.base = NaN; }
+            const nowMs = Date.now();
+            /* ★★★ SEED THE BASELINE BEFORE ANYTHING READS IT. With the NaN sentinel resolved AFTER
+             *  `decide`, the first sample of every reseed — which includes the moment auto is
+             *  switched on — produced a NaN threshold, and because NaN !== NaN the "only on a real
+             *  change" test below stayed true for ever, so it was resent every sample and the
+             *  squelch never engaged at all. `base` NaN makes the `<` false, so the seed branch
+             *  runs first and every reader below sees a number. */
+            const openish = (nowMs - trk.openAt) < SQL_AUTO_HANG_MS;
+            const a = autoChan < trk.base ? SQL_AUTO_FALL : (openish ? 0 : SQL_AUTO_RISE);
+            /* ★★★ THE BASELINE ONLY RISES WHILE THE GATE IS SHUT (that is the `openish ? 0`).
+             *  Falling towards a new low is always believed — the channel genuinely got quieter —
+             *  but a rise is only believed while we think we are listening to NOISE. Otherwise a
+             *  long over drags the baseline up into the speaker's own signal, the threshold follows,
+             *  and the squelch talks itself into silence part-way through the transmission. */
+            trk.base = Number.isFinite(trk.base) ? trk.base + (autoChan - trk.base) * a : autoChan;
+            const decide = trk.base + sqlAutoMarginRef.current - (openish ? SQL_AUTO_HYST_DB : 0);
+            if (autoChan >= decide) trk.openAt = nowMs;
+            const gateOpen = (nowMs - trk.openAt) < SQL_AUTO_HANG_MS;
+            trk.shown = decide;
+            /* ★★★ TWO THRESHOLDS, AND THE HANG MUST HOLD THE GATE GENUINELY OPEN. Merely lowering
+             *  the threshold by the hysteresis did NOTHING, and a recording proved it: 37 closures
+             *  in 24 s, median 50 ms, not one over a second — a 700 ms hang cannot produce a 50 ms
+             *  gap. In a syllable gap the signal falls all the way to the noise, straight past a
+             *  threshold only 3 dB down, so during the hang the gate is held GENUINELY OPEN — the
+             *  drag path's own "off" (-1), which is each backend's real open sentinel (-999 / -130 /
+             *  -100), not merely the bottom of the bar.
+             *  ★★ ✗ NOT position 0. The bottom of the bar is not open on every backend: in SNR mode
+             *     it inverts to sigDenorm(0) = 5 dB, and a syllable gap dips below 5 dB SNR — so the
+             *     gate would close inside the hang and chop exactly what the hang exists to carry.
+             *  ★★ `decide` judges presence and is never applied; judging on the APPLIED value
+             *     latches permanently open, because during a hang everything is above it. */
+            const posOf = (db: number) => Math.max(0, Math.min(1,
+              isKiwi || isLocal ? (db + vg + 130) / 90
+              : signalModeRef.current === 'snr' ? sigNorm(db)
+              // dBFS/S-meter mode: the threshold is an SNR figure, drawn against the tracked floor —
+              // the exact forward map onSquelchDrag inverts.
+              : (db + floorEmaRef.current + vg + 130) / 90));
+            /* ★★★ THE RED LINE DRAWS THE SETTING, NOT WHAT IS MOMENTARILY APPLIED. During a hang the
+             *  applied threshold is OFF — that is HOW the gate is held open — so a line drawn from it
+             *  would slam to the far left, or vanish, every time somebody spoke. An indicator that
+             *  jumps about is worse than none. This is also the number the margin slider sets, so
+             *  moving the slider moves the line, which is what Stuart asked for. */
+            sqlN = posOf(decide);
+            // ★ Only on a real change: every apply is a message to the server (and a React state
+            //   update), and this runs on every frame. 1 dB granularity, like the web client's round.
+            const wantDb = Math.round(decide);
+            // ★ While the hang holds it open there is nothing to restate, however far `decide` has
+            //   drifted meanwhile — so the open state is compared on its own, and the threshold is
+            //   only remembered when it is the threshold that went out.
+            if (gateOpen ? !trk.sentOpen : (trk.sentOpen || wantDb !== trk.sentDb)) {
+              trk.sentOpen = gateOpen;
+              if (!gateOpen) trk.sentDb = wantDb;
+              sqlDragRef.current?.(gateOpen ? -1 : sqlN, true);
+            }
+          }
           // Send the meter TEXT THE PHONE DRAWS, not a metric of the watch's choosing.
           // OWRX/Kiwi have no SNR (snrDb is hardcoded 0 on them), so a wrist that
           // rendered SNR showed a permanent "—" while its bar moved perfectly well.
@@ -6605,6 +6811,62 @@ export default function SDRScreen({ route, navigation }: Props) {
     sendAudioCmd({ type: 'set_audio_gate', min_snr: minSnr <= -999 ? -999 : minSnr + 30 });
   }, [sendAudioCmd]);
 
+  /* ── AUTO SQUELCH: the switch, the margin, and what is remembered ─────────────────────────────
+   * ★★ THE MANUAL VALUE IS MIRRORED CONTINUOUSLY WHILE AUTO IS OFF, not captured at the moment the
+   *    switch is thrown. The restore of a dongle's remembered squelch is ASYNC (see the per-device
+   *    blob), so a session that opens with auto already on from the preference would have captured
+   *    the -100 default and then "restored" that instead — the remembered threshold quietly lost in
+   *    the handover. Mirroring means whatever was last set by hand is what comes back, whenever it
+   *    arrived. Frozen the instant auto goes on, because from then on the live value is automatic. */
+  useEffect(() => {
+    if (!sqlAuto) sqlManualRef.current = isKiwi ? kiwiSquelch : isLocal ? hwSquelch : snrSquelch;
+  }, [sqlAuto, isKiwi, isLocal, kiwiSquelch, hwSquelch, snrSquelch]);
+
+  /** Auto on/off. Switching OFF restores the remembered MANUAL threshold, so the bar comes back to
+   *  exactly what it was — auto is a mode laid over the control, not a new setting. */
+  const setSquelchAuto = useCallback((on: boolean, persist = true) => {
+    sqlAutoRef.current = on;
+    setSqlAutoState(on);
+    if (persist) AsyncStorage.setItem(SQL_AUTO_KEY, on ? '1' : '0').catch(() => {});
+    if (on) {
+      // ★ Seed from the CURRENT channel: base NaN = "take the next sample as the truth", and the
+      //   blank key makes the next frame reseed whatever we are actually tuned to.
+      const t = sqlAutoTrk.current;
+      t.base = NaN; t.key = ''; t.openAt = 0; t.shown = NaN; t.sentOpen = false; t.sentDb = NaN;
+    } else {
+      const m = sqlManualRef.current;
+      // ★ The per-backend "off" sentinels, for a session where nothing manual was ever set.
+      if (isKiwi)       onKiwiSquelch(Number.isFinite(m) ? m : -130);
+      else if (isLocal) onLocalSquelch(Number.isFinite(m) ? m : -100);
+      else              onSnrSquelch(Number.isFinite(m) ? m : -999);
+    }
+  }, [isKiwi, isLocal, onKiwiSquelch, onLocalSquelch, onSnrSquelch]);
+
+  /** ABOVE NOISE, 4-20 dB. ★ Nothing to apply: the threshold is recomputed from scratch on every
+   *  frame, so the bar, the red line and the audio all agree with the slider the moment it moves. */
+  const onSqlAutoMargin = useCallback((db: number) => {
+    const v = Math.max(4, Math.min(20, Math.round(db)));
+    sqlAutoMarginRef.current = v;
+    setSqlAutoMarginState(v);
+    AsyncStorage.setItem(SQL_AUTO_MARGIN_KEY, String(v)).catch(() => {});
+  }, []);
+
+  /* ★ Remembered per client, like the web client's prefs. The margin is read FIRST so a restored
+   *   "auto on" starts at the listener's own figure rather than tracking at the default for a frame
+   *   — and an out-of-range or absent value falls back to the measured default rather than to 0. */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const m = Number(await AsyncStorage.getItem(SQL_AUTO_MARGIN_KEY).catch(() => null));
+      if (cancelled) return;
+      if (Number.isFinite(m) && m >= 4 && m <= 20) { sqlAutoMarginRef.current = m; setSqlAutoMarginState(m); }
+      const on = await AsyncStorage.getItem(SQL_AUTO_KEY).catch(() => null);
+      // persist=false: restoring a preference must not rewrite it.
+      if (!cancelled && on === '1') setSquelchAuto(true, false);
+    })();
+    return () => { cancelled = true; };
+  }, [setSquelchAuto]);
+
   // Dragging the squelch ball gives a POSITION on the meter (0..1); each backend's gate wants its
   // own native unit. This is the exact inverse of the forward mapping above — one place, so the
   // ball can never land somewhere the red line wouldn't. x < 0 = the user dragged it off = Off.
@@ -6615,8 +6877,20 @@ export default function SDRScreen({ route, navigation }: Props) {
   // under a stationary finger. See the emit for why that matters.
   const sqlDraggingRef = useRef(false);
   const onSquelchDragEnd = useCallback(() => { sqlDraggingRef.current = false; }, []);
-  const onSquelchDrag = useCallback((x: number) => {
-    sqlDraggingRef.current = true;
+  /* `auto` = this came from the auto-squelch tracker, not from a finger, and it changes two things.
+   * ★★★ IT MUST NOT FREEZE THE NOISE FLOOR. The freeze exists so the needle cannot wander under a
+   *     stationary finger; an automatic apply arrives ~20 times a second for as long as auto is on,
+   *     which would freeze the EMA permanently — and the dBFS-mode branch below READS that floor, so
+   *     it would end up inverting its own stale map for the rest of the session.
+   * ★★★ AND A DRAG MEANS "I WANT MANUAL". Chosen over ignoring the touch: the bar still LOOKS
+   *     draggable under auto (it is faded, not gone), and a control that visibly moves nowhere reads
+   *     as broken rather than as disabled — the same trap as a dead control in FmdxSettings. Taken
+   *     over BEFORE the mapping below, so the tracker's next tick cannot fight the finger. */
+  const onSquelchDrag = useCallback((x: number, auto = false) => {
+    if (!auto) {
+      sqlDraggingRef.current = true;
+      if (sqlAutoRef.current) setSquelchAuto(false);
+    }
     if (x < 0) {
       if (isKiwi) onKiwiSquelch(-130);
       else if (isLocal) onLocalSquelch(-100);
@@ -6647,7 +6921,13 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (floor <= -900) return;
       onSnrSquelch(c * 90 - 130 - vg - floor);
     }
-  }, [isKiwi, isLocal, signalMode, onKiwiSquelch, onLocalSquelch, onSnrSquelch]);
+  }, [isKiwi, isLocal, signalMode, onKiwiSquelch, onLocalSquelch, onSnrSquelch, setSquelchAuto]);
+  /* ★★ THE AUTO TRACKER REACHES THE MAPPER THROUGH A REF, because it lives in the per-frame emit —
+   *  inside socket callbacks that are built ONCE per connection. A captured `onSquelchDrag` would be
+   *  the version from the first render, and this one is rebuilt whenever the meter mode changes, so
+   *  after one mode switch the automatic threshold would be inverted through the old map. */
+  const sqlDragRef = useRef(onSquelchDrag);
+  sqlDragRef.current = onSquelchDrag;
 
   // ── FM squelch ────────────────────────────────────────────────────────────
   const onFmSquelch = useCallback((db: number) => {
@@ -9337,6 +9617,23 @@ export default function SDRScreen({ route, navigation }: Props) {
         </TouchableOpacity>
       )}
 
+      {/* ★★★ THE SERVER'S HEALTH — TOP OF THE RIGHT-HAND STACK, and only when the server has spoken.
+             An older VibeServer never sends `health`, and then there is NOTHING here: no placeholder,
+             no empty pill, no greyed slots. Same rule as the pill's own "never a dead slot", and the
+             same reason — furniture that says nothing reads as a broken feature.
+          ★★ The session clock and the listener count below it move down by the pill's MEASURED
+             height (healthStackShift) rather than the pill being squeezed to fit above them: compact
+             is its requirement, and legible is the point of being compact.
+          ★ pointerEvents none: it is a readout, and it sits over the frequency scale — a touch that
+            lands on it must reach the scale, like every other pill anchored here. */}
+      {!!health && (
+        <View pointerEvents="none"
+              onLayout={(e) => setHealthPillH(Math.round(e.nativeEvent.layout.height))}
+              style={[styles.rxHealth, { top: rightStackTop, right: rightInset }]}>
+          <HealthPill health={health} />
+        </View>
+      )}
+
       {/* ★ `&& !adminOk` is belt and braces, and deliberate: the controls pill has always preferred
             adminMode over the countdown (ControlsBar), and this full-size badge — the one the owner
             actually sees over the waterfall — did not. Two places drawing the same fact from
@@ -9367,7 +9664,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (n == null || n <= 1 || sharedDialProp) return null;
         return (
           <View pointerEvents="none" style={[styles.rxListeners, {
-            top: insets.top + 46 + (stationIdH > 0 ? stationIdH + 8 : 0)
+            top: rightStackTop + healthStackShift
                  + (sessionLeftMs != null && !adminOk ? 52 : 0),
             right: rightInset,
           }]}>
@@ -9386,7 +9683,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {sessionLeftMs != null && !adminOk && (
         <View pointerEvents="none" style={[styles.rxClock, {
-          top: insets.top + 46 + (stationIdH > 0 ? stationIdH + 8 : 0),
+          top: rightStackTop + healthStackShift,
           right: rightInset,
           /* ★★★ A SOFT LIMIT IS A GUARANTEE, NOT A SENTENCE — SO IT MUST NOT COUNT DOWN LIKE ONE.
                  "YOUR TURN ENDS IN 0:00" sat there on a soft server while nothing whatever
@@ -9421,7 +9718,7 @@ export default function SDRScreen({ route, navigation }: Props) {
            the tuning controls, because that is where the VTS bar already is. */}
       {!!adminNote && (
         <View pointerEvents="none" style={[styles.adminNote, {
-          top: insets.top + 46 + (stationIdH > 0 ? stationIdH + 8 : 0),
+          top: rightStackTop + healthStackShift,
           left: Math.max(12, insets.left + 8),
           right: rightInset,
         }]}>
@@ -9882,6 +10179,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         snrSquelch={snrSquelch}          onSnrSquelch={onSnrSquelch}
         onSquelchDrag={onSquelchDrag}
         onSquelchDragEnd={onSquelchDragEnd}
+        /* ★ `sqlAutoOk` is measured, not assumed: the frame emit sets it from whether a channel
+             figure we can steer from is actually arriving. Passed through so the toggle can be
+             offered DISABLED WITH THE REASON rather than sitting there doing nothing. */
+        sqlAuto={sqlAuto}                onSqlAuto={setSquelchAuto}
+        sqlAutoMargin={sqlAutoMargin}    onSqlAutoMargin={onSqlAutoMargin}
+        sqlAutoOk={sqlAutoOk}
         localSquelch={hwSquelch}         onLocalSquelch={isLocal ? onLocalSquelch : undefined}
         localNR={hwNrLevel}              onLocalNR={isLocal ? onLocalNR : undefined}
         kiwiSquelch={kiwiSquelch}        onKiwiSquelch={isKiwi ? onKiwiSquelch : undefined}
@@ -10375,6 +10678,9 @@ const styles = StyleSheet.create({
   rxClockNum:  { fontFamily: 'Nixie One', fontSize: 16, lineHeight: 19 },
   // ★ The soft-limit "expired" line is a sentence, not a number — it cannot use the 22pt face.
   rxClockSoft: { fontFamily: 'Nixie One', fontSize: 11, lineHeight: 15, maxWidth: 150 },
+  /* ★ The pill draws its OWN border, background and radius (it is one design, shared with the web
+   *  client) — this is only a position, at the same zIndex as the clock it sits above. */
+  rxHealth:    { position: 'absolute', zIndex: 210, alignItems: 'flex-end' },
   // ★ Quieter than the countdown beneath it: the clock is about YOU, this is about the room.
   rxListeners: { position: 'absolute', paddingHorizontal: 8, paddingVertical: 3,
                  borderWidth: 1, borderColor: 'rgba(255,160,0,0.30)', borderRadius: 4 },
