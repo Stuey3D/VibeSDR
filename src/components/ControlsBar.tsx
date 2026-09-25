@@ -1475,6 +1475,9 @@ function ControlsBar({
   // onto an external display gets the same cap for free — no extra code.
   const MAX_BAR_W = 1400;
 
+  /* ★ Broadcast FM, and DAB is not it (DAB borrows the WFM demod internally). See the badge note
+   *  in `shared` below. */
+  const bcastFm = !dabOn && String(mode).toLowerCase() === 'wfm';
   const shared = {
     freqStr, unit,
     // §5.1: compose the running decoder onto the demod — USB → USB: RTTY (wefax reads FAX).
@@ -1484,7 +1487,19 @@ function ControlsBar({
     signal: signalLevel, peak: peakLevel,
     stepLabel, onFreqTap, onModeTap,
     onStep: cycleStep, onChat, onMenu, onAudio, audioAsRecord, onShare: handleShare,
-    dspNr, dspNb, dspAn,     // ★ the audio chain's standing state — see DspBadges
+    /* ★★★ NOT ON BROADCAST FM — and computed HERE, once, not in each bar. Stuart, 2026-09-25:
+     *  "the broadcast FM NB/NR dont need indicators in the control bar, the only ones that need it
+     *  are the ones that make a much larger noticeable difference so the MW/HF etc NR/NB/AN."
+     *  ★★ A BADGE EARNS ITS PLACE BY BEING SOMETIMES ABSENT. On WFM these treatments are on by
+     *  default for everyone and do something subtle, so a permanently-lit badge carries no
+     *  information and is noise at the end of a dense row. On MW and HF the same treatments are a
+     *  large, audible choice the listener made — that is worth reporting. The earlier fix made the
+     *  badges read the RIGHT controls; this one asks whether they should be drawn at all.
+     *  ★ Narrow FM keeps them: a weak-signal mode like the rest, not a broadcast one.
+     *  ★★★ IN THE PARENT BECAUSE THIS FILE HAS THE SCAR: sharedDial was handled in PortraitBar and
+     *  not in its landscape twin, and landscape THREW and bounced the app back to the server list.
+     *  One computation, spread to both, cannot drift. */
+    dspNr: dspNr && !bcastFm, dspNb: dspNb && !bcastFm, dspAn: dspAn && !bcastFm,
     onVfoDelta, onBwDelta,
     clock, isRecording, recTime, chatUnread,
     csDisabled: chatShareDisabled,

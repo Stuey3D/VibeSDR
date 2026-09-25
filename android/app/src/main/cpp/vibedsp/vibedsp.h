@@ -2481,10 +2481,13 @@ private:
      *     as pilotDev, rdsDev and the eye, so the panel can still be read together
      *     [[panel_readouts_need_one_clock]]. This is the number Stuart asked for and the one
      *     tgcfabian validated against MPX Tool; it is relabelled here, never removed.
-     *  ★★ mpxDevHold_ — the DIGITS. Instant attack, ~6 s decay. Stuart, 2026-09-25: "if it is
-     *     bouncing up and down like a yoyo then the number looks like a stopwatch, how do you read
-     *     that?" Correct — so the number is not the fast thing. The hold sits still long enough to
-     *     read, then steps down, which is what a peak flasher on a real monitor gives you.
+     *  ★★ mpxDevHold_ — the DIGITS. Instant attack, then a 3 s DWELL: FLAT between steps, never a
+     *     decay. Stuart, 2026-09-25: "if it is bouncing up and down like a yoyo then the number
+     *     looks like a stopwatch, how do you read that?" — and, of the first attempt at this,
+     *     "deviation now changes far too quick I cannot see it to read it". An exponential decay
+     *     IS a continuously changing number, repainted at the frame rate; only a dwell holds.
+     *     ★ A peak HIGHER than the displayed figure still appears at once — an overmodulation
+     *       that waited 3 s would be the one failure this instrument must not have.
      *
      *  ★ PIRA's analysers take a 50 ms window 20x/s and publish MAX, AVE and MIN. Our window is
      *    already exactly theirs; we simply used to publish the AVE alone. */
@@ -2498,7 +2501,12 @@ private:
     double                     mpxDevSettle_ = 0.0;  // seconds since retune; the transient is not the station
     float                      mpxDevSm_ = 0.0f;     // the BAR, a true peak — see RdsExt::mpxDevKHz
     float                      mpxDevAvg_ = 0.0f;    // the steady figure beside it — RdsExt::mpxDevAvgKHz
-    float                      mpxDevHold_ = 0.0f;   // the DIGITS, a 6 s peak hold — RdsExt::mpxDevHoldKHz
+    float                      mpxDevHold_ = 0.0f;   // the DIGITS — a DWELLING peak hold, RdsExt::mpxDevHoldKHz
+    /** ★★ The dwell's own accumulator and clock. The displayed hold is the maximum of the window
+     *  that just closed, held FLAT until the next one closes — a DECAYING "hold" is a number that
+     *  cannot be read (see the dwell note in pipeline.cpp). */
+    float                      mpxDevDwellMax_ = 0.0f;
+    double                     mpxDevDwellT_ = 0.0;
 
     /** ★★ A 2-POLE RESONATOR PER COMPONENT. A one-pole pair is far too broad — the bands are at
      *  19, 38 and 57 kHz and would leak into each other, which would defeat the whole point of

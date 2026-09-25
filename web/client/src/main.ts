@@ -4489,9 +4489,22 @@ function updateStatus() {
      *  breaking — exactly the fault the comment above claims to avoid by reading the controls.
      *  ★ Reading the CONTROLS is still right; the ids just have to be the real ones. */
     const on = (id: string) => !!document.getElementById(id)?.classList.contains('on');
-    const nrOn    = (Number(($('nr') as HTMLInputElement | null)?.value) || 0) > 0;
-    const nbOn    = on('nbBtn') || on('nbxBtn');
-    const notchOn = on('notch');
+    /* ★★★ NOT ON BROADCAST FM. Stuart, 2026-09-25: "the broadcast FM NB/NR dont need indicators
+     *  in the control bar, the only ones that need it are the ones that make a much larger
+     *  noticeable difference so the MW/HF etc NR/NB/AN."
+     *  ★★ WHY THIS IS THE RIGHT FIX AND THE PREVIOUS ONE WAS NOT. The first complaint was that
+     *  "NB NR stays on all the time as it is reading the broadcast FM specific ones, I am on MW
+     *  and the AM ones are off" — and the answer then was to make the badges read the right
+     *  controls. But on WFM these treatments are on by default and do something subtle; a badge
+     *  that is lit for everyone, always, carries no information and is just noise at the end of a
+     *  dense row. On MW and HF the same treatments are a large, audible choice the listener made,
+     *  and THAT is worth a badge. A badge earns its place by being sometimes absent.
+     *  ★ Narrow FM keeps them: it is a weak-signal mode like the rest, not a broadcast one. */
+    const bcastFm = (spec?.mode ?? '') === 'wfm' && !dabOn;
+    const on2 = (id: string) => !bcastFm && on(id);
+    const nrOn    = !bcastFm && (Number(($('nr') as HTMLInputElement | null)?.value) || 0) > 0;
+    const nbOn    = on2('nbBtn') || on2('nbxBtn');
+    const notchOn = on2('notch');
     /* ★★ BOXED, LIKE THE APP. Two or three bare letters at the end of a dense status row read as
      *  leftover text; the app gives them a tinted pill so they say "this is ON" at a glance, and
      *  the two clients should not disagree about what an enabled setting looks like. */
@@ -10116,10 +10129,17 @@ function drawMpxEye() {
        *   layout with it. So the NUMBER IS ALWAYS SHOWN; what changes is how much weight it is
        *   given. Below the S/N gate it is dimmed and labelled "low S/N", which says "here is the
        *   figure, do not lean on it" rather than refusing to answer at all. */
+      /* ★ The three cells are written separately now — see #rdsMpxGrid. Writing the whole row as
+       *  one string is what made it reflow and shift the block under the reader. */
+      const avgEl = document.getElementById('rdsMpxAvgV');
+      const pkEl  = document.getElementById('rdsMpxPkV');
+      const vdEl  = document.getElementById('rdsMpxVerdict');
       if (!usable) {
-        dv.textContent = md > 0.1
-          ? `deviation ${md.toFixed(0)} kHz · low S/N, unreliable`
-          : 'deviation — no signal';
+        /* ★ A READOUT MUST NOT DISAPPEAR, and it must not JUMP either: the cells keep their shape
+         *  and show a dash, so the panel is the same size with no signal as with one. */
+        if (avgEl) avgEl.textContent = '—';
+        if (pkEl)  pkEl.textContent  = md > 0.1 ? `${md.toFixed(0)} kHz` : '—';
+        if (vdEl)  vdEl.textContent  = md > 0.1 ? 'low S/N, unreliable' : 'no signal';
         dv.className = 'dim';
       }
       else {
@@ -10155,8 +10175,11 @@ function drawMpxEye() {
         /* ★ NO "avg 0" AGAINST AN OLDER SERVER. mpxAvg is additive, so a server that predates it
          *  sends nothing and the clause is simply omitted — the readout then says exactly what it
          *  has always said rather than reporting a zero it never measured. */
-        const avgTxt = avg >= 1 ? ` · avg ${avg.toFixed(0)} kHz` : '';
-        dv.textContent = `deviation peak ${pk.toFixed(0)} kHz${avgTxt} · ${verdict}${nzTxt}`;
+        if (avgEl) avgEl.textContent = avg >= 1 ? `${avg.toFixed(0)} kHz` : '—';
+        if (pkEl)  pkEl.textContent  = `${pk.toFixed(0)} kHz`;
+        /* ★ nzTxt already begins with its own separator, so the verdict line reads
+         *  "nominal · 1 kHz noise removed" and wraps as one phrase. */
+        if (vdEl)  vdEl.textContent  = `${verdict}${nzTxt}`.replace(/^ · /, '');
         dv.className = (overRange || pk > 82) ? 'bad' : pk > 75 ? 'ok' : 'good';
       }
     }

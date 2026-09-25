@@ -579,7 +579,10 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
      *  would blank a reading that is still legitimately on screen. */
     const live = md > 0.1 || hd > 0.1;
     const ok = live && devGate.current;
-    if (!live) return { t: 'deviation — no signal', c: C.muted, pct: 0, hold: 0 };
+    /* ★ The cells keep their shape with no signal too — a readout must not disappear, and it
+     *  must not change SIZE either or the panel jumps as a station fades in. */
+    if (!live) return { avg: '—', peak: '—', verdict: 'no signal', c: C.muted,
+                        pct: 0, avgPct: 0, hold: 0 };
     /* ★★★ THE DIGITS READ THE 6 s HOLD, THE BAR READS THE FAST PEAK. Since 5.6.50 the server
      *  publishes three statistics of one measurement (see RdsExt.mpxDev): the true peak moves
      *  every frame, and Stuart, 2026-09-25: "if it is bouncing up and down like a yoyo then the
@@ -599,12 +602,18 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
     /* ★ OMITTED, NOT ZEROED, when the server is older than the three-figure rdsx: an "avg 0 kHz"
      *  would read as a measurement of nothing. Against an old server this line is byte-identical
      *  to what it printed before, bar the "peak" label. */
-    const avTxt = av >= 0.5 ? ` · avg ${av.toFixed(0)}` : '';
-    const t = (ok
-      ? `deviation — peak ${pk.toFixed(0)}${avTxt} kHz · ${pk > 82 ? 'OVERMODULATED' : pk > 75 ? 'over the limit' : 'nominal'}`
-      : `deviation — peak ${pk.toFixed(0)}${avTxt} kHz · low S/N, unreliable`) + nzTxt;
+    /* ★★★ THREE CELLS, NOT ONE SENTENCE. As a single line the readout re-wrapped every time a
+     *  digit changed width and "the whole block shifts" (Stuart, 2026-09-25) — two numbers that
+     *  move independently, several times a second, cannot share a line of running text. So the
+     *  values are returned separately and drawn in a fixed grid; nothing moves but the digits. */
+    const avTxt = av >= 0.5 ? `${av.toFixed(0)} kHz` : '—';
+    const verdict = ok ? (pk > 82 ? 'OVERMODULATED' : pk > 75 ? 'over the limit' : 'nominal')
+                       : 'low S/N, unreliable';
     const c = !ok ? C.muted : pk > 82 ? C.bad : pk > 75 ? C.warn : C.good;
-    return { t, c, pct: Math.max(0, Math.min(100, md)),
+    return { avg: avTxt, peak: `${pk.toFixed(0)} kHz`,
+             verdict: (verdict + nzTxt).replace(/^ · /, ''),
+             c, pct: Math.max(0, Math.min(100, md)),
+             avgPct: Math.max(0, Math.min(100, av)),
              hold: Math.max(0, Math.min(100, hd)) };
   }, [x?.mpxDev, x?.mpxAvg, x?.mpxHold, x?.mpxSnr, x?.mpxNoise]);
   const piNum = p.pi ? parseInt(p.pi, 16) : 0;
@@ -1111,13 +1120,31 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
                              overflow: 'hidden' }}>
                 <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0,
                                width: `${mpxDevInfo.pct}%`, backgroundColor: mpxDevInfo.c }} />
+                {/* ★ The AVERAGE mark — quieter than the hold tick, because the hold is the thing
+                    you are meant to notice and this is context. Matches the web client's bar. */}
+                {mpxDevInfo.avgPct > 0.5 && (
+                  <View style={{ position: 'absolute', top: 0, bottom: 0, width: 2,
+                                 left: `${mpxDevInfo.avgPct}%`, backgroundColor: 'rgba(255,255,255,0.45)' }} />
+                )}
                 <View style={{ position: 'absolute', top: 0, bottom: 0, width: 2,
                                left: `${mpxDevInfo.hold}%`, backgroundColor: '#fff' }} />
                 <View style={{ position: 'absolute', top: 0, bottom: 0, width: 1,
                                left: '75%', backgroundColor: 'rgba(255,255,255,0.55)' }} />
               </View>
-              <Text style={[s.verdict, { color: mpxDevInfo.c, minHeight: 26 }]}>
-                {mpxDevInfo.t}
+              {/* ★★ FIXED COLUMNS: a right-aligned key and a value column wide enough for the
+                  longest reading, with tabular figures so a 1 is not narrower than a 0. The
+                  verdict keeps its own line so a long one wraps under the numbers instead of
+                  pushing them sideways. */}
+              <View style={s.devGrid}>
+                <Text style={[s.devKey, { color: mpxDevInfo.c }]}>Deviation   Average:</Text>
+                <Text style={[s.devVal, { color: mpxDevInfo.c }]}>{mpxDevInfo.avg}</Text>
+              </View>
+              <View style={s.devGrid}>
+                <Text style={[s.devKey, { color: mpxDevInfo.c }]}>Peak:</Text>
+                <Text style={[s.devVal, { color: mpxDevInfo.c }]}>{mpxDevInfo.peak}</Text>
+              </View>
+              <Text style={[s.verdict, { color: mpxDevInfo.c, minHeight: 15 }]}>
+                {mpxDevInfo.verdict}
               </Text>
             </View>
           </View>
@@ -1199,6 +1226,12 @@ const s = StyleSheet.create({
   plotLbl: { fontFamily: FONT, fontSize: 10, letterSpacing: 1, color: C.muted, marginBottom: 2, marginTop: 8 },
   scopeLbl: { fontFamily: FONT, fontSize: 10, letterSpacing: 1, marginTop: 1 },
   verdict: { fontFamily: FONT, fontSize: 12, marginTop: 3 },
+  /* ★ One row of the deviation readout: key right-aligned in a fixed column, value left-aligned
+     in another, so neither moves when the other changes width. */
+  devGrid: { flexDirection: 'row' as const, alignItems: 'baseline' as const, marginTop: 2 },
+  devKey:  { fontFamily: FONT, fontSize: 12, width: 132, textAlign: 'right' as const, opacity: 0.8 },
+  devVal:  { fontFamily: FONT, fontSize: 12, width: 62, textAlign: 'right' as const,
+             marginLeft: 6, fontVariant: ['tabular-nums'] as const },
   // ★ BRIGHTER THAN THE LABELS, deliberately. This is the sentence that TEACHES the plot — "two
   //   clear bands = every bit decided with margin" — so it is prose to be read, not a caption to
   //   be glanced at, and it is the longest run of small text sitting over a live waterfall.

@@ -2323,8 +2323,24 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #rdsMpxDev {
   font-size: 11px; letter-spacing: 0.3px; margin-top: 3px;
   font-family: var(--mono, monospace); color: var(--text-dim);
-  min-height: 2.4em; display: flex; align-items: center; justify-content: center;
+  min-height: 2.4em; display: flex; flex-direction: column; align-items: center; justify-content: center;
 }
+/* ★★ THREE COLUMNS, ALL FIXED: a heading that spans the rows, a right-aligned key, and a value
+   column wide enough for the longest reading. `tabular-nums` is the other half of the job — in a
+   proportional face a 1 is narrower than a 0, so even a fixed column jitters as the digits change.
+   ★ The heading sits on the FIRST row and the second row's first cell is empty, so the two
+     readings line up under each other with the word used once. */
+#rdsMpxGrid {
+  display: grid; grid-template-columns: auto auto 5.5em;
+  column-gap: 0.5em; row-gap: 1px; align-items: baseline;
+  font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1;
+}
+#rdsMpxGrid .mpxHead { grid-row: 1; text-align: right; opacity: 0.85; }
+#rdsMpxGrid .mpxKey  { text-align: right; opacity: 0.75; }
+#rdsMpxGrid .mpxVal  { text-align: left; white-space: nowrap; }
+/* ★ The verdict keeps its own line, so a long one ("neighbour in the guard band, noise not
+   removed") wraps under the numbers instead of pushing them sideways. */
+#rdsMpxVerdict { margin-top: 2px; text-align: center; }
 #rdsMpxDev.good { color: #7dff9a; }
 #rdsMpxDev.ok   { color: #ffd479; }
 #rdsMpxDev.bad  { color: #ff8a7d; }
@@ -3238,7 +3254,20 @@ select.btn { padding: 6px 8px; }
              ★ And it stays VISIBLE while it is being calibrated: "how do I calibrate it if I
              cannot see it". Hiding the instrument someone is testing with is no help. -->
         <div id="rdsMpxBar"><i id="rdsMpxFill"></i><s id="rdsMpxAvg"></s><b id="rdsMpxHold"></b><u id="rdsMpxLimit"></u></div>
-        <div id="rdsMpxDev">—</div>
+        <!-- ★★★ A FIXED GRID, NOT A FLOWING SENTENCE. As one line the readout re-wrapped every time a
+             digit changed width and "the whole block shifts" (Stuart, 2026-09-25) — two numbers that
+             move independently, several times a second, cannot share a line of running text. The
+             labels are right-aligned in their own column and the values sit in a fixed, tabular
+             column, so NOTHING moves except the digits themselves. -->
+        <div id="rdsMpxDev">
+          <div id="rdsMpxGrid">
+            <span class="mpxHead">Deviation</span>
+            <span class="mpxKey">Average:</span><span class="mpxVal" id="rdsMpxAvgV">—</span>
+            <span></span>
+            <span class="mpxKey">Peak:</span><span class="mpxVal" id="rdsMpxPkV">—</span>
+          </div>
+          <div id="rdsMpxVerdict">—</div>
+        </div>
         <div id="rdsConstCap">constellation</div>
         <!-- ★ A plain-English verdict, because the plot expects you to already know how to
              read it. An FM-DXer reads two tight lobes instantly; nobody else does, and the

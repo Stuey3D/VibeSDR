@@ -701,6 +701,7 @@ void RxPipeline::rebuildAudio() {
              * ★ Cleared here AND held off briefly below, because the transient outlasts the
              *   reconfigure itself. */
             mpxDevSm_ = 0.0f; mpxDevAvg_ = 0.0f; mpxDevHold_ = 0.0f; mpxDevSettle_ = 0.0;
+            mpxDevDwellMax_ = 0.0f; mpxDevDwellT_ = 0.0;
             mpxNoiseSm_ = 0.0f; mpxDevOut_ = 0.0f; mpxDevAvgOut_ = 0.0f; mpxDevNoise_ = 0.0f;
             devWinCnt_ = 0; devWinGp_ = 0.0; devHist_.assign(kDevHistN, 0u);
             ceq_.configure(9); ceqOut_.configure(chFs_);
@@ -1484,8 +1485,9 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc) {
                  *  noise removal for BOTH figures now, so a NaN here would take the peak with it —
                  *  a new state must be added to this list or it is a hole in it. */
                 if (!std::isfinite(mpxDevSm_) || !std::isfinite(mpxDevAvg_) || !std::isfinite(mpxDevHold_)
-                    || !std::isfinite(mpxNoiseSm_) || !std::isfinite(devWinGp_))
-                    { mpxDevSm_ = 0.0f; mpxDevAvg_ = 0.0f; mpxDevHold_ = 0.0f; mpxNoiseSm_ = 0.0f; devWinGp_ = 0.0; }
+                    || !std::isfinite(mpxNoiseSm_) || !std::isfinite(devWinGp_) || !std::isfinite(mpxDevDwellMax_))
+                    { mpxDevSm_ = 0.0f; mpxDevAvg_ = 0.0f; mpxDevHold_ = 0.0f; mpxNoiseSm_ = 0.0f; devWinGp_ = 0.0;
+                      mpxDevDwellMax_ = 0.0f; mpxDevDwellT_ = 0.0; }
                 if ((int)devHist_.size() != kDevHistN) devHist_.assign(kDevHistN, 0u);
                 if (!std::isfinite(eyePeak_)) eyePeak_ = 0.0f;
                 // ★ AUTOSCALE, with a slow decay so it cannot pump on every bass note. A quiet
@@ -1648,7 +1650,8 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc) {
                      *  deviation scale"). */
                     if (mpxDevSettle_ < 0.4) { mpxDevSettle_ += dtW; pk = 0.0f; gp = 0.0f;
                                                mpxDevSm_ = 0.0f; mpxDevAvg_ = 0.0f;
-                                               mpxDevHold_ = 0.0f; mpxNoiseSm_ = 0.0f; }
+                                               mpxDevHold_ = 0.0f; mpxNoiseSm_ = 0.0f;
+                                               mpxDevDwellMax_ = 0.0f; mpxDevDwellT_ = 0.0; }
                     const float aSm = 1.0f - (float)std::exp(-dtW / 1.5);
                     /* ★★★ TWO STATISTICS FROM ONE WINDOW ARRAY — THE PEAK AND THE AVERAGE.
                      *
@@ -1741,8 +1744,45 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc) {
                      *  answer on its own, and it is what MPX Tool's peak flasher gives you.
                      *  ★ It holds the CORRECTED peak, so it can never sit at a figure the bar has
                      *    not actually reached. */
-                    const float kHold = (float)std::exp(-dtW / 6.0);
-                    mpxDevHold_ = (mpxDevOut_ > mpxDevHold_) ? mpxDevOut_ : mpxDevHold_ * kHold;
+                    /* ★★★ A DWELL, NOT A DECAY — THIS IS WHAT MAKES THE NUMBER READABLE.
+                     *
+                     *  ★★★ THE MISTAKE THIS REPLACES, BECAUSE IT IS AN EASY ONE TO MAKE AGAIN.
+                     *  This was `mpxDevHold_ * exp(-dtW/6)` — instant attack, 6 s exponential
+                     *  decay — and that is a perfectly good ballistic FOR A BAR and quite wrong
+                     *  for DIGITS: an exponential decay is a CONTINUOUSLY FALLING number, and it
+                     *  is repainted at the 6 Hz frame rate, so the readout counts itself down
+                     *  74, 71, 68, 65 and can never be read. Stuart, 2026-09-25: "deviation now
+                     *  changes far too quick I cannot see it to read it." Calling it a "hold"
+                     *  does not make it hold anything.
+                     *  ★★ AND IT HID WHERE IT WOULD DO LEAST HARM. On a strong processed station
+                     *  peaks arrive in almost every window, so the hold is re-armed at nearly the
+                     *  same value and LOOKS stable — "on the stronger Heart it seems better". The
+                     *  decay only becomes visible when peaks are SPARSE, which is exactly the
+                     *  classical/speech material this whole measurement was fixed for. A fault
+                     *  that hides on the easy case and appears on the important one.
+                     *
+                     *  ★★ WHAT A REAL PEAK-HOLD READOUT DOES: it sits FLAT for a dwell, then
+                     *  steps to the new maximum. So the figure is constant for kDwell seconds at
+                     *  a time and changes in readable steps — with one exception, below.
+                     *  ★ THE EXCEPTION IS THE WHOLE POINT OF THE INSTRUMENT: a peak HIGHER than
+                     *    what is displayed appears IMMEDIATELY. Waiting up to 3 s to report an
+                     *    overmodulation would be the one failure a modulation monitor must not
+                     *    have. So: rise at once, fall only on the step.
+                     *  ★ 3 s is long enough to read a three-digit number without hurrying and
+                     *    short enough that the figure still tracks the programme. */
+                    constexpr double kDwell = 3.0;
+                    if (mpxDevOut_ > mpxDevHold_) mpxDevHold_ = mpxDevOut_;   // an excursion never waits
+                    if (mpxDevOut_ > mpxDevDwellMax_) mpxDevDwellMax_ = mpxDevOut_;
+                    mpxDevDwellT_ += dtW;
+                    if (mpxDevDwellT_ >= kDwell) {
+                        /* ★ The step: the true maximum of the window that just closed. It can go
+                         *  DOWN (that is the point) and it can go up if the rise above happened
+                         *  to be missed by rounding — either way it is a measured figure, never
+                         *  a decayed one. */
+                        mpxDevHold_ = mpxDevDwellMax_;
+                        mpxDevDwellMax_ = 0.0f;
+                        mpxDevDwellT_ = 0.0;
+                    }
                 }
                 /* ★★★ CONVERT WHAT WAS ACCUMULATED, *THEN* DECAY — order matters, and getting it
                  *   wrong is invisible in code review (it shipped the other way round and the
