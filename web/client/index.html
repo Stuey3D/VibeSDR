@@ -743,6 +743,11 @@ html #bar { display: none; }
 #mPillIn.shared #mFreq { font-size: 1.5em; }
 #mMode    { padding: 0.15em 0.45em; }
 #mFreqBox:active, #mMode:active, #mSnr:active { background: rgba(255, 255, 255, 0.18); }
+/* ★ THE PADLOCK: sized off the readout beside it, so it stays proportionate as the card resizes,
+   and dimmed a little — it is a state, not a control, and must not compete with the digits. The
+   box itself loses its "press me" cursor and takes the amber of every other DAB-owned control. */
+#mFreqLock { align-self: center; opacity: 0.8; line-height: 0; margin-right: 0.1em; }
+#mFreqBox.dabLocked { cursor: default; border-color: rgba(255, 204, 136, 0.55); color: #ffcc88; }
 /* ★ The SNR is a BUTTON now (it cycles the reading), so it gets the same boxed treatment as
    the other two — an unmarked readout beside two marked buttons reads as static text. */
 /* ★★ SIZED FOR THE LONGEST OF THE THREE READINGS IT CYCLES, since they share one box and the
@@ -3074,6 +3079,14 @@ select.btn { padding: 6px 8px; }
          an action: which pane you are on must be readable without pressing it. -->
     <button class="btn" id="dabPane" title="Station list / advanced signal info"
             style="display:none">SIGNAL &#9656;</button>
+    <!-- ★★★ THE WAY OUT MUST BE ON THE BOX. There is no ✕ in DAB (see #decHide's note: it stranded
+         you in the mode with nothing on screen), so until this existed the only exit was the
+         demodulator menu — which dismisses the box, so nothing on screen said where to go. Stuart,
+         2026-09-25: "The DAB decoder box needs to have the exit DAB button in the header like the app
+         does otherwise it is not immediately obvious how to exit DAB." The app has had it since
+         2026-09-20 (DabPanel.tsx) — one rule, two readers, and this was the reader without it. -->
+    <button class="btn" id="dabExit" title="Leave DAB and return to the radio"
+            style="display:none">EXIT DAB</button>
     <button class="btn" id="decMin" title="Minimise">–</button>
     <button class="btn" id="decHide" title="Stop and close">&#10005;</button>
   </div>
@@ -3307,7 +3320,14 @@ select.btn { padding: 6px 8px; }
           <!-- ★★ A SHARED DIAL SAYS SO WHERE YOU TUNE (Stuart, 2026-09-19): the connect message goes, this stays.
                Its own box above the three, spanning frequency to SNR; shown only when the server's dial is shared. -->
           <span id="mShared" hidden>SHARED TUNER · ASK BEFORE TUNING</span>
-          <span id="mFreqBox"><span id="mFreq">—</span><span id="mFreqFine"></span><span id="mUnit">MHz</span></span>
+          <!-- ★★★ THE PADLOCK IS THE ONLY HONEST STATE FOR THIS BOX IN DAB. There is no VFO inside a
+               multiplex, so tapping it can do nothing — and a tap that does nothing reads as a broken
+               control (AGENTS.md). The glyph says the box is locked before you touch it, and the tap
+               still answers, with the reason and the way out (Stuart, 2026-09-25: "in DAB mode the
+               frequency entry must have a padlock and advise it is locked due to DAB mode"). -->
+          <span id="mFreqBox"><span id="mFreqLock" hidden aria-hidden="true"><svg viewBox="0 0 10 13" width="9" height="12"
+            fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="1" y="5.5" width="8" height="6.5" rx="1"/><path
+            d="M2.9 5.5V3.6a2.1 2.1 0 0 1 4.2 0v1.9"/></svg></span><span id="mFreq">—</span><span id="mFreqFine"></span><span id="mUnit">MHz</span></span>
           <span id="mMode">NFM</span><!--
           ★★ THE APP'S INTERLOCKING RINGS, not a green "ST". The lettering was the least legible
              thing on a bar that runs to bright green, and the app already has a symbol for this

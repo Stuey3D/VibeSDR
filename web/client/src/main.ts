@@ -1025,6 +1025,13 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       if (wf && lastWindow && (hi <= lastWindow.lo || lo >= lastWindow.hi)) wf.clearHistory();
       lastWindow = { lo, hi };
 
+      /* ★★★ THE NON-DAB DIAL, REMEMBERED AND — IF SOMEBODY JUST LEFT DAB — HANDED BACK. Both halves
+       *  belong here because this message is the truth about where the radio is; see dabNoteNonDab
+       *  and dabApplyRestore. The order matters: spend the wish first (it is about the position we
+       *  are LEAVING), then record the position we have arrived at. */
+      dabApplyRestore();
+      dabNoteNonDab();
+
       /* ★★★ THE FIRST CONFIG OF THE CONNECTION, not "while the frequency is zero". SpectrumClient adopts
        *  cfg.serverVfo BEFORE calling us, so on every server that reports its dial this block never ran:
        *  a returning visitor on their OWN radio was not put back where they left it. Stuart, 2026-09-19:
@@ -6417,6 +6424,22 @@ function dabLockControls(on: boolean) {
   const td = document.getElementById('tuneDown'); const tu = document.getElementById('tuneUp');
   if (td) td.title = on ? 'Previous multiplex' : 'Tune down one step';
   if (tu) tu.title = on ? 'Next multiplex' : 'Tune up one step';
+  /* ★★★ AND THE FREQUENCY ENTRY, WHICH WAS THE ONE CONTROL LEFT LYING. The zoom, the arrows and the
+   *  IF filter were all given their DAB meaning or greyed; typing a frequency was not, so the panel
+   *  opened, took a number, and the server refused the tune — silently, since a refusal on a held
+   *  dial says nothing. A locked box with a padlock and a reason is the same rule applied to the
+   *  last reader (Stuart, 2026-09-25). The gate itself is on #pill's handler, which every route
+   *  goes through; this is the visible half. */
+  const lock = document.getElementById('mFreqLock');
+  const fb   = document.getElementById('mFreqBox');
+  if (lock) lock.hidden = !on;
+  if (fb) {
+    fb.classList.toggle('dabLocked', on);
+    fb.title = on ? 'Locked in DAB mode — exit DAB to tune' : '';
+  }
+  /* ★ The way out, on the box itself — see #dabExit in index.html. */
+  const ex = document.getElementById('dabExit');
+  if (ex) (ex as HTMLElement).style.display = on ? '' : 'none';
   /* ★ THE IF FILTER IS DAB'S while a multiplex is being received — 2.048 MHz for the ensemble.
    *  Greyed, not merely ignored (AGENTS.md), with the reason on the control (Stuart, 2026-09-08). */
   const bw = document.getElementById('tunerBw') as HTMLSelectElement | null;
@@ -6463,6 +6486,11 @@ function dabUiOn() {
   $('decBox').classList.remove('wide');
   $<HTMLButtonElement>('decPrev').style.display = 'none';
   $<HTMLButtonElement>('decSave').style.display = 'none';
+  /* ★★★ WRITE THE PAIR DOWN NOW, WHILE IT IS STILL TRUE. Once DAB has the dial the live values are
+   *  the block's, so entering the mode is the last moment the radio's previous position exists
+   *  anywhere. Persisted, so a reload in DAB — or the browser being closed and reopened on a
+   *  receiver somebody left on a multiplex — still has somewhere to go back to. */
+  if (dabPrevFreq > 0) { savePref('preDabFreq', dabPrevFreq); savePref('preDabMode', dabPrevMode); }
   dabLockControls(true);
   if (spec) spec.dabHeld = true;
   const mux = document.getElementById('dabMux');
@@ -6513,6 +6541,65 @@ function dabUiOn() {
 }
 let dabPrevDecTitle = '';
 
+/* ★★★ WHAT THE RADIO WAS DOING BEFORE DAB TOOK IT — so leaving DAB puts it back.
+ *
+ *  Stuart, 2026-09-25: "when exited the radio needs to remember the last used non DAB frequency and
+ *  demodulator if possible and if nothing has been used such as a server with a DAB landing
+ *  frequency then it just drops back to AM whilst tuned to the DAB block, I chose AM because its
+ *  static noise is not as harsh as NFM/WFM so wont be as off putting or uncomfortable to the
+ *  listeners."
+ *
+ *  ★★★ WHY IT IS RECORDED HERE AND NOT AT THE DAB BUTTON. The pair is captured from every config
+ *  while DAB is OFF, which is the one place that sees the truth: the server is the only thing that
+ *  knows where the dial actually is (see dabUiOff's note on the V4 reading 200 kHz low), and a
+ *  capture hung off the DAB button misses every other way into the mode — a bookmark, a shared
+ *  dial another listener moved, a reload that landed in DAB. ONE READER.
+ *
+ *  ★★★ AND THE RESTORE IS A LATCH, NOT A SEND. Pressing EXIT sends `dab:0`; the server then ends
+ *  DAB and states its new position in a config. Firing a tune alongside the dab:0 races that
+ *  config — the readout would show where we asked and the radio would sit where the server put it,
+ *  which is precisely the reconnect fault that took a day to find. So the wish is parked and spent
+ *  on the FIRST config that arrives out of DAB, on top of the truth.
+ *
+ *  ★ It is legitimate to transmit at all only because EXIT is a USER ACTION — the shared-dial
+ *    contract forbids the client asserting anything on recovery, not on a press. */
+let dabPrevFreq = 0;
+let dabPrevMode: SDRMode | null = null;
+let dabRestore: { hz: number; mode: SDRMode } | null = null;
+
+/** Remember the dial as it is now, if we are not in DAB. Called from every config. */
+function dabNoteNonDab() {
+  if (dabOn || !spec || !(spec.frequency > 0)) return;
+  dabPrevFreq = spec.frequency;
+  dabPrevMode = spec.mode;
+}
+
+/** ★ Arm the restore, then leave. The wish is written down BEFORE the mode goes, because the
+ *  moment DAB ends the remembered pair is the only record of where the radio used to be. */
+function dabArmRestore() {
+  const p = prefs();
+  const hz = dabPrevFreq > 0 ? dabPrevFreq : Number(p.preDabFreq) || 0;
+  const savedMode = dabPrevMode ?? (typeof p.preDabMode === 'string' ? p.preDabMode as SDRMode : null);
+  /* ★★★ AM IS THE FALLBACK, AND IT IS A CHOICE, NOT A DEFAULT. On a server whose landing frequency
+   *  IS a DAB multiplex there is no earlier frequency to go back to, so the radio stays on the
+   *  block and only the demodulator has to be decided. Stuart picked AM for the listener's sake:
+   *  unmodulated AM hiss is gentler than an NFM or WFM squelch-open roar, and this is the one
+   *  moment the app hands somebody a loud noise they did not ask for. hz 0 means "leave the dial
+   *  to the server" — we know less about it than it does. */
+  dabRestore = { hz, mode: savedMode ?? 'am' };
+}
+
+/** Spend the armed restore on the first config that arrives out of DAB. */
+function dabApplyRestore() {
+  if (!dabRestore || dabOn || !spec) return;
+  const r = dabRestore; dabRestore = null;
+  setMode(r.mode, true);
+  /* ★ The dial only if we actually remember one; otherwise the server's own position stands,
+   *  which on a DAB-landing server is the block centre — exactly what was asked for. */
+  if (r.hz > 0 && Math.abs(spec.frequency - r.hz) > 1) spec.tune(clampTune(r.hz));
+  renderFreq();
+}
+
 function dabSetMode(on: boolean) {
   if (on) {
     if (dabState && dabState.channel) {
@@ -6527,6 +6614,7 @@ function dabSetMode(on: boolean) {
       spec?.dab(true, dabChannel);
     }
   } else {
+    dabArmRestore();          // ★ before dabOn goes — see the note above
     dabOn = false;
     wf?.applySettings({ minRangeDb: 30 });
     spec?.dab(false);
@@ -6813,6 +6901,11 @@ function buildControls() {
    *  in UI form. The bar keeps the frequency and ensemble name as the sub-heading. */
   { const pb = document.getElementById('dabPane');
     if (pb) (pb as HTMLElement).onclick = () => dabSetPane(dabPane === 'stations' ? 'signal' : 'stations'); }
+  /* ★★★ EXIT DAB — the same unwinding the demodulator menu does, reached from the box you are
+   *  actually looking at. dabSetMode(false) is the whole path: it arms the restore, tells the
+   *  server, and gives back the zoom, the arrows, the IF filter and the frequency entry. */
+  { const xb = document.getElementById('dabExit');
+    if (xb) (xb as HTMLElement).onclick = () => dabSetMode(false); }
   initBookmarks();
   buildMenu();
 
@@ -12400,6 +12493,13 @@ function initFreqEntry() {
   if (saved === 'hz' || saved === 'khz' || saved === 'mhz') freqUnit = saved;
 
   $('pill').onclick = () => {
+    /* ★★★ ONE GATE FOR EVERY ROUTE INTO THE KEYPAD. #mFreqBox, the desktop pill and the keyboard
+     *  shortcut all end here (deps.openFreqEntry clicks this very element), so the refusal lives
+     *  here rather than at each call site — the one that gets missed is always the bug. And it is a
+     *  refusal WITH ITS REASON AND THE WAY OUT, not a dead press: the padlock says the box is shut,
+     *  this says why and what to do about it (Stuart, 2026-09-25: "advise it is locked due to DAB
+     *  mode, or EXIT DAB MODE TO USE"). */
+    if (dabOn) { showTuneGapMsg('Frequency is locked in DAB mode — there is no dial inside a multiplex. Press EXIT DAB to tune.'); return; }
     togglePanel('freqPanel');
     const el = $<HTMLInputElement>('freqInput');
     el.value = (spec!.frequency / UNIT_DIV[freqUnit]).toFixed(UNIT_DP[freqUnit]);

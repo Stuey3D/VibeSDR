@@ -588,20 +588,43 @@ export abstract class VibeServerWsClient {
    *     at USB's few kHz while the audio plays broadcast FM perfectly. Stuart: "it shows and is
    *     decoding WFM but the VFO itself is super narrow as if it was in AM mode or NFM until I
    *     click WFM again." Clicking the mode button worked because THAT path went through setMode.
-   *  ★ One helper, used by every path that can change the mode, so a future one cannot forget. */
+   *  ★ One helper, used by every path that can change the mode, so a future one cannot forget.
+   *
+   *  ★★★ BUT ONLY ON A REAL CHANGE — "the bandwidth value resets to ±100k if the smartphone is
+   *      switched from landscape to portrait orientation and vice versa" (Onfliner, 2026-09-25).
+   *      ±100k is MODE_BANDWIDTHS.wfm, the DEFAULT, and the listener had widened the filter past
+   *      it (the slider reaches ±250 kHz since 2026-09-24). Nothing about rotating a phone touches
+   *      a filter: what rotation does is re-render this screen, and every mode-BEARING re-assert
+   *      that follows — the native VibeTuned echo through syncFrequency(), the hwinfo re-assert's
+   *      tune(freq, mode), the shared-dial config adopt — landed here with the mode we were
+   *      ALREADY in and threw the width away. The screen then takes its filter straight off this
+   *      status on the next frame (onSpectrum), so the readout collapsed to the default and the
+   *      next send made it true on the radio as well.
+   *  ★★★ THE SERVER ALREADY GETS THIS RIGHT, and mirroring it is the whole fix: the shim rebuilds
+   *      the audio chain — which is what applies the default table — under `if (!m.empty() &&
+   *      m != mode)` (local_sdr_shim.cpp, the `tune` and `mode` handlers). A re-assert of the
+   *      current mode changes nothing there and must change nothing here. AGENTS.md, ONE RULE TWO
+   *      READERS: the rule was the server's and only the server kept it. */
   private _adoptMode(mode: SDRMode) {
+    const changed = mode !== this.status.mode;
     this.status.mode = mode;
+    if (!changed) return;                      // ★ see above — a re-assert is not a mode change
     const bw = MODE_BANDWIDTHS[mode];
     if (bw) { this.status.bandwidthLow = bw[0]; this.status.bandwidthHigh = bw[1]; }
   }
 
   setMode(mode: SDRMode) {
+    const changed = mode !== this.status.mode;
     this.status.mode = mode;
     // Server applies these defaults on every mode change (websocket.go —
     // "These match the defaults in app.js setMode()"). It never reports
     // bandwidth back, so mirror the exact table to stay in sync.
-    const bw = MODE_BANDWIDTHS[mode];
-    if (bw) { this.status.bandwidthLow = bw[0]; this.status.bandwidthHigh = bw[1]; }
+    // ★ On a CHANGE only — see _adoptMode above. Re-picking the mode you are already on rebuilds
+    //   nothing on the server, so it must not silently reset the width here either.
+    if (changed) {
+      const bw = MODE_BANDWIDTHS[mode];
+      if (bw) { this.status.bandwidthLow = bw[0]; this.status.bandwidthHigh = bw[1]; }
+    }
     this._routeTune(this.status.frequency, mode);   // ★ one route — see _routeTune
   }
 

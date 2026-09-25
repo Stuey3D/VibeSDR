@@ -1096,6 +1096,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [hwNrLevel,     setHwNrLevel]     = useState(0);      // audio NR strength 0=off..20 (÷15 → native 0..1.33)
   const [hwNotch,       setHwNotch]       = useState(false);  // auto notch — LOCAL (shim)
   const [netNotch,      setNetNotch]      = useState(false);  // auto notch — NETWORK (UberSDR/OWRX/Kiwi)
+  /** ★ 0 sensitive, 1 linear, 2 free — SDR++'s three modes. See AirspySource::GainMode.
+   *  ★ DECLARED UP HERE WITH THE OTHER REMEMBERED HARDWARE SETTINGS, not down with the rest of the
+   *    Airspy stages: it is written into the per-device blob by the persist effect below, and a
+   *    `const` declared after that effect is a block-scoped use-before-declaration (tsc says so). */
+  const [aspGainMode, setAspGainMode] = useState(1);
 
   // Load saved RTL-SDR hardware settings and apply them to the running session,
   // so gain/bias-T/PPM/etc. persist across connections.
@@ -1179,6 +1184,12 @@ export default function SDRScreen({ route, navigation }: Props) {
        *  lost in the handover. The ref is what was remembered; the effect below asserts it once. */
       fmWantRef.current = fmWant;
       fmWantSent.current = false;      // ★ a fresh device/session — state it again
+      /* ★ The Airspy gain mode, same arrangement and for the same reason — see aspWantModeRef.
+       *  Absent from a blob written before this, and absent for every radio that has no gain mode,
+       *  in which case there is nothing to remember and nothing is asserted. */
+      const aspm = prefs.aspGainMode;
+      aspWantModeRef.current = (aspm === 0 || aspm === 1 || aspm === 2) ? aspm : null;
+      aspWantSent.current = false;
       setFmNr(fmWant.wsp);   setFmIms(fmWant.ims);
       setFmCeq(fmWant.ceq);  setFmNb(fmWant.nb);
       setFmNbx(fmWant.nbx);  setFmAutoBw(fmWant.autobw);
@@ -1308,9 +1319,16 @@ export default function SDRScreen({ route, navigation }: Props) {
        *     ("with indication we can have persistant NR/NB/AN options".)
        *  ★ An Airspy owner reported the missing persistence the same day, from the other side. */
       nrLevel: hwNrLevel, notch: hwNotch,
+      /* ★★★ AND THE AIRSPY'S GAIN MODE — see aspWantModeRef for the report. Written HERE, in the
+       *  effect that fires on the state change, so the choice is on disk the moment it is made:
+       *  there is no later event that would retry it, and the listener leaving for the server list
+       *  is exactly when it has to already be saved.
+       *  ★ Stored on every local radio's blob, harmless where the radio has no gain mode (it is
+       *    never sent unless the radio says it is an Airspy) and the key is per device anyway. */
+      aspGainMode: aspGainMode,
     })).catch(() => {});
   }, [isLocal, localHwKey, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwStereo, canConvert, converter, hwSquelch, hwAutoDs, hwDsBelowHz,
-      fmNr, fmIms, fmCeq, fmNb, fmNbx, fmAutoBw, hwNrLevel, hwNotch]);
+      fmNr, fmIms, fmCeq, fmNb, fmNbx, fmAutoBw, hwNrLevel, hwNotch, aspGainMode]);
 
   // VibeServer (remote shim): hardware controls ride the WS to the serving device
   // instead of the (non-existent) local dongle. localHost set = remote session.
@@ -1538,6 +1556,23 @@ export default function SDRScreen({ route, navigation }: Props) {
   const fmWantRef = useRef<{ wsp: boolean; ims: boolean; ceq: boolean; nb: boolean;
                              nbx: boolean; autobw: boolean } | null>(null);
   const fmWantSent = useRef(false);
+  /** ★★★ THE AIRSPY'S GAIN MODE, REMEMBERED — 0 sensitive, 1 linear, 2 free.
+   *
+   *  "If you select the free gain mode, go back to the server list, and launch airspy again, the
+   *  linear gain mode will be automatically selected, even though the free mode should remain"
+   *  (Onfliner, 2026-09-25). Two halves, and both were missing: the mode was pure React state
+   *  (useState(1) = linear) so leaving the screen lost it, and the driver's own `mode_` is
+   *  `GainLinear` at construction, so re-opening the radio put the HARDWARE back on linear too.
+   *  Nothing wrote it down at either end — the same shape as the FM treatments beside this, found
+   *  by the same tester one day earlier.
+   *  ★★ A REF as well as the blob, for the reason fmWantRef gives: `onRadioCaps` paints
+   *     `aspGainMode` from what the radio reports, and that arrives AFTER this restore. The ref is
+   *     what was remembered; the effect by the aspGainMode state asserts it once per connection.
+   *  ★ Nothing here is Airspy-ONLY in the wrong way: the value is only ever SENT once
+   *    `radioCaps.driver === 'airspy'` — an RTL or an RSP has no gain mode to set and is never
+   *    told about one (AGENTS.md: a control that works on one radio must branch, not leak). */
+  const aspWantModeRef = useRef<number | null>(null);
+  const aspWantSent    = useRef(false);
   const onFmNr = useCallback((on: boolean) => {
     setFmNr(on); fmClient()?.setWeakProc?.(on);
   }, [fmClient]);
@@ -3611,8 +3646,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★ Airspy R2 / Mini stages — mirrored from the radio's own caps (hwinfo) so the panel shows what
    *  the RADIO has, not what we last sent. See LocalHardwarePanel's isAsp block. */
   const [aspCurve,    setAspCurve]    = useState<'linearity' | 'sensitivity'>('linearity');
-  /** ★ 0 sensitive, 1 linear, 2 free — SDR++'s three modes. See AirspySource::GainMode. */
-  const [aspGainMode, setAspGainMode] = useState(1);
   const [aspLna,      setAspLna]      = useState(0);
   const [aspMixer,    setAspMixer]    = useState(0);
   const [aspVga,      setAspVga]      = useState(0);
@@ -3620,6 +3653,32 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [aspMixerAgc, setAspMixerAgc] = useState(false);
   const [aspBiasT,    setAspBiasT]    = useState(false);
   const [aspPacking,  setAspPacking]  = useState(false);
+  /* ★★★ STATE THE REMEMBERED GAIN MODE ONCE THE RADIO HAS OWNED UP TO BEING AN AIRSPY.
+   *
+   *  `radioCaps.driver` is the radio describing itself, and the same hwinfo carries `gainMode` —
+   *  which onRadioCaps has just painted over the restore. So this is where the remembered choice
+   *  is asserted, from the ref that still holds it, and only once per connection. Without it "free"
+   *  survived on disk and the radio still came up linear (Onfliner, 2026-09-25) — the driver's
+   *  `mode_` is GainLinear at construction and re-opening the device is a new construction.
+   *  ★★ AIRSPY ONLY, BY ASKING THE RADIO. An RTL has a gain list, an HF+ has no variable gain and
+   *     an RSP uses IF gain reduction — none of them has a mode to set, and none is sent one
+   *     (AGENTS.md: "a control that only works on one radio should not be there").
+   *  ★ OUR OWN RADIO ONLY — same gate as the FM treatments. A dongle in this phone is ours to set
+   *    up; a remote shim belongs to its own owner, and the gain mode is device-wide there, so
+   *    asserting a remembered one would move somebody else's receiver on our behalf.
+   *  ★ Skipped when the radio already agrees, so nothing goes on the wire for the common case. */
+  useEffect(() => {
+    if (!isLocal || route.params.localHost) return;
+    if (radioCaps?.driver !== 'airspy' || aspWantSent.current) return;
+    const want = aspWantModeRef.current;
+    if (want == null) return;
+    aspWantSent.current = true;
+    const live = (radioCaps as { gainMode?: unknown }).gainMode;
+    if (live === want) return;
+    setAspGainMode(want);
+    if (want !== 2) setAspCurve(want === 0 ? 'sensitivity' : 'linearity');
+    aspSend({ mode: want });
+  }, [isLocal, route.params.localHost, radioCaps, aspSend]);
   const [hrfAmp,     setHrfAmp]     = useState(false);
   const [hrfLna,     setHrfLna]     = useState(0);
   const [hrfVga,     setHrfVga]     = useState(0);
@@ -10286,6 +10345,9 @@ export default function SDRScreen({ route, navigation }: Props) {
                                   aspSend({ curve: sens }); }}
           aspGainMode={aspGainMode}
           onAspGainMode={(m) => {
+            /* ★ The state change is also what SAVES it (the per-device blob's persist effect lists
+             *  aspGainMode) — so "free" is on disk before the listener can leave for the server
+             *  list, and is stated back to the radio on the next connect. See aspWantModeRef. */
             setAspGainMode(m);
             if (m !== 2) setAspCurve(m === 0 ? 'sensitivity' : 'linearity');
             aspSend({ mode: m });
