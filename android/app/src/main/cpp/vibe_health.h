@@ -192,8 +192,23 @@ struct Sampler {
         // ── CPU ────────────────────────────────────────────────────────────────────────────────
         /* ★★★ NORMALISED BY CORE COUNT. The admin card shows a per-core SUM ("104% / 800%"); feeding
          *     that straight in would paint a single busy core red on an 8-core phone. */
+        /* ★★★ NORMALISE BY CORE COUNT IN *BOTH* CASES — this branch was inverted and it painted a
+         *  perfectly healthy Android server red. On Android /proc/stat is unreadable, so readSys()
+         *  falls back to THIS PROCESS's usage, where 100 % means one core: the Sony TV reported
+         *  140 %, meaning vibeserver was using 1.4 of its 4 cores. Used raw against thresholds of
+         *  50/75/90 that is instantly critical, while the machine was in fact about a third busy
+         *  and the stream was flawless (Stuart, 2026-09-25: "not sure what is causing the sony to
+         *  complain about its health as the stream was working perfect ... just listening to wfm
+         *  with no decoders open").
+         *  ★★ BOTH FORMS ARE PER-CORE SUMS — the machine-wide one and the process one alike — so
+         *     both need dividing. The brief says exactly this and I applied it to the wrong half:
+         *     "Always normalise by core count, or a single busy core would show red on an 8-core
+         *     phone." The admin page prints it honestly as "140% / 400%"; this needed the same
+         *     denominator and did not have it.
+         *  ★ The process figure is still the right input where it is all we have: it is what OUR
+         *    work costs, and this badge is about whether the RECEIVER is coping. */
         double cpu = -1;
-        if (s.cpuPct >= 0) cpu = s.cpuIsProcess ? s.cpuPct : (s.cores > 0 ? s.cpuPct / s.cores : s.cpuPct);
+        if (s.cpuPct >= 0) cpu = s.cores > 0 ? s.cpuPct / s.cores : s.cpuPct;
         else if (s.haveLoad && s.cores > 0) cpu = 100.0 * s.load1 / s.cores;   // fallback: load average
         static const double CPU_T[3] = { 50, 75, 90 };
         /* ★★★ THE TWO FIGURES ARE COMBINED, NOT RACED. Taking the worse of them called a busy core
@@ -266,7 +281,13 @@ struct Sampler {
          *    and adding them would double-count one busy machine into a crisis. */
         static const double LOAD_T[3] = { 90, 130, 200 };   // load1 as a % of core count
         double score = pressure;
-        if (loadRatio >= 0) score = std::max(score, std::min(200.0, loadRatio) * 0.5 + 25.0);
+        /* ★ The run queue only says anything once there are MORE runnable threads than cores —
+         *  below that everything gets a core when it asks and the queue is not a shortage. The
+         *  earlier form (ratio/2 + 25) contributed 25 at zero load, which is a score for a machine
+         *  doing nothing at all, and reached critical on an idle Android box whose load average
+         *  counts sleepers. Mapped from 100 % (parity) to 250 % (badly oversubscribed). */
+        if (loadRatio > 100.0)
+            score = std::max(score, 50.0 + (std::min(250.0, loadRatio) - 100.0) * (40.0 / 150.0));
         if (score >= 0) {
             cpuEwma = ewma(cpuEwma, std::min(100.0, score));
             h.cpu = detail::settle(detail::bucket(cpuEwma, CPU_T, true), last.cpu, cpuEwma, CPU_T, 5, true);

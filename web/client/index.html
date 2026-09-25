@@ -2834,9 +2834,14 @@ select.btn { padding: 6px 8px; }
 #srvHealth { position: fixed; top: 8px; right: 8px; z-index: 60; pointer-events: none;
              background: rgba(8,12,8,0.86); border: 1.5px solid rgba(120,200,120,0.45);
              border-radius: 12px; padding: 4px 8px 5px; }
+/* ★ CENTRED, BOTH ROWS. Whichever line is wider sets the pill's width, and the other must sit
+     under it rather than hang off one end: with no battery the icon row is NARROWER than the
+     caption and it read as left-aligned under a wider title (Stuart, 2026-09-25: "No battery the
+     icons should simply centre under the server health title"). Centring is the only rule that
+     holds however many slots are drawn — and slots come and go by design. */
 #srvHealth .hCap { font: 700 9px/1 system-ui, sans-serif; letter-spacing: 0.16em;
-                   color: #B9C0B4; text-align: right; margin-bottom: 3px; }
-#srvHealth .hRow { display: flex; align-items: center; gap: 8px; }
+                   color: #B9C0B4; text-align: center; margin-bottom: 3px; }
+#srvHealth .hRow { display: flex; align-items: center; justify-content: center; gap: 8px; }
 #srvHealth .hSlot { display: inline-flex; position: relative; }
 #srvHealth .hDiv { width: 1px; align-self: stretch; background: rgba(255,255,255,0.16); }
 /* ★ The percentage and the bolt are drawn INSIDE the outline now (see renderHealthPill), so this
@@ -2844,17 +2849,25 @@ select.btn { padding: 6px 8px; }
 #srvHealth .hBat { display: inline-flex; align-items: center; }
 /* ★★★ ONLY CRITICAL BREATHES. Everything else is static — an icon that moves is a claim on the
        listener's attention, and making three of them move at once spends that claim on nothing. */
+/* ★★★ THE ICON BREATHES, THE PILL DOES NOT. Fading the whole pill took the caption and every
+       other slot with it, so at the moment the receiver most needs reading it was hardest to read
+       (Stuart, 2026-09-25: "the whole pill doesnt need to breathe when server health is bad, the
+       individual icon only and maybe the boarder of the box").
+   ★ The border pulses a red glow instead — it draws the eye to the pill without touching the
+     legibility of anything inside it, and it is a SHADOW, so nothing reflows. */
 @keyframes hBreathe { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+@keyframes hBorderPulse { 0%,100% { box-shadow: 0 0 0 rgba(255,75,75,0); }
+                          50%     { box-shadow: 0 0 9px rgba(255,75,75,0.8); } }
 #srvHealth .crit svg { animation: hBreathe 1.4s ease-in-out infinite;
                        filter: drop-shadow(0 0 3px currentColor); }
-#srvHealth.crit { animation: hBreathe 1.4s ease-in-out infinite; }
+#srvHealth.crit { animation: hBorderPulse 1.4s ease-in-out infinite; }
 /* ★★ A NON-COLOUR CUE FROM "HIGH" UPWARDS. Elevated and High differ only by hue, which is exactly
       the pair a red/green colour-blind listener cannot separate — so from High the slot also wears
       a dot. It is not only for reduced motion; it is for everyone. */
 #srvHealth .dot::after { content: ''; position: absolute; top: -1px; right: -2px;
                          width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
 @media (prefers-reduced-motion: reduce) {
-  #srvHealth .crit svg, #srvHealth.crit { animation: none; }
+  #srvHealth .crit svg, #srvHealth.crit { animation: none; box-shadow: none; }
 }
 
 

@@ -221,7 +221,17 @@ export default function HealthPill({
       accessible
       accessibilityRole="text"
       accessibilityLabel={label}
-      style={[styles.pill, { borderColor }, critical && { opacity: breathe }, style]}
+      /* ★★★ THE PILL ITSELF DOES NOT BREATHE — only the offending slot does, and the border glows.
+       *  Fading the whole pill took the caption and every other slot with it, so at the moment the
+       *  receiver most needs reading it was hardest to read (Stuart, 2026-09-25: "the whole pill
+       *  doesnt need to breathe when server health is bad, the individual icon only and maybe the
+       *  boarder of the box").
+       *  ★ A shadow rather than opacity, so nothing inside it dims and nothing reflows. On Android
+       *    shadowRadius is ignored, so the border colour carries it there instead — the slot's own
+       *    breath is the cue on every platform. */
+      style={[styles.pill, { borderColor }, critical && {
+        shadowColor: '#FF4B4B', shadowOpacity: 0.85, shadowRadius: 9, shadowOffset: { width: 0, height: 0 },
+      }, style]}
     >
       <Text style={styles.caption} numberOfLines={1}>SERVER HEALTH</Text>
       <View style={styles.row}>
@@ -322,10 +332,14 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 1.4,          // ≈ 0.16em at 9 px; RN letterSpacing is absolute, not em
     color: CAPTION_GREY,
-    textAlign: 'right',
+    /* ★ CENTRED, like the web client's: whichever line is wider sets the pill's width and the other
+     *  sits under it rather than hanging off one end. With no battery the icon row is NARROWER than
+     *  the caption (Stuart, 2026-09-25: "No battery the icons should simply centre under the server
+     *  health title"), and slots come and go by design, so centring is the only rule that holds. */
+    textAlign: 'center',
     marginBottom: 3,
   },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   slot: { position: 'relative' },
   divider: { width: 1, alignSelf: 'stretch', backgroundColor: 'rgba(255,255,255,0.16)' },
   dot: { position: 'absolute', top: -1, right: -2, width: 4, height: 4, borderRadius: 2 },

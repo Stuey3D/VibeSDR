@@ -815,7 +815,10 @@ static std::string         g_vsRadioSecret;
 // 48001 without a word.)
 static std::atomic<int>    g_vsPort{0};
 static std::atomic<double> g_vsMaxBandwidth{0.0};      // <=0 = no cap
-static std::atomic<double> g_vsMaxFftRate{0.0};        // <=0 = server default (20 fps)
+static std::atomic<double> g_vsMaxFftRate{0.0};
+/** ★ The spectrum rate this machine is MEASURED to deliver, or -1 when nobody is listening. Fed by
+ *  the SPEC RATE audit and shown beside the rate selector so a slow box explains itself. */
+static std::atomic<double> g_specAchievedFps{-1.0};        // <=0 = server default (20 fps)
 // ★ The IDLE SAVER is a CLIENT feature — after a while without interaction the listener asks us to
 // drop the spectrum rate, which saves this host real FFT work and real radio time. Normally the
 // listener may switch it off. A server on solar and cellular in the middle of nowhere cannot afford
@@ -8492,6 +8495,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (tMs - specAuditMs >= 5000.0) {
                 const double got = specAuditFrames * 1000.0 / (tMs - specAuditMs);
                 const double want = fftRate;
+                /* ★★★ WHAT THIS MACHINE ACTUALLY ACHIEVES, published for the setup page.
+                 *  A 32-bit box tops out around 8 fps whatever the owner picks (see the revert note
+                 *  in vibedsp/pipeline.cpp), and the selector offering "Full · 20 fps" on a machine
+                 *  that reaches 8 reads as a fault rather than a limit. Stuart, 2026-09-25: "8 was
+                 *  fine it was just a weird number to see so looked like a fault which it was."
+                 *  ★ Only meaningful while somebody is listening — with no listener the engine sits
+                 *    at its idle floor and the figure would describe nothing. */
+                /* ★ s_listenersCached, NOT specListenerCount() — that takes clientMtx, and this
+                 *  runs on the DSP thread inside onSpectrum. Taking that lock here is how the
+                 *  server hard-deadlocked in August (see the note above specListenerCount): a
+                 *  mutex is not recursive and everything else piles up behind the holder. A cached
+                 *  atomic is exactly what it is there for. */
+                g_specAchievedFps.store(s_listenersCached.load(std::memory_order_relaxed) > 0
+                                        ? got : -1.0, std::memory_order_relaxed);
                 if (want > 0 && std::fabs(got - want) > want * 0.1)
                     LOGI("SPEC RATE: emitting %.1f fps, asked %.1f (engine %.1f, %.0f%% of target)",
                          got, want, want * FFT_AVG, 100.0 * got / want);
@@ -23476,7 +23493,12 @@ void LocalSdrShim::healthTick() {
     static int64_t lastAt = 0;
     const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
-    if (now - lastAt < 1000) return;                 // ~1 Hz, as the brief specifies
+    /* ★ EVERY TWO SECONDS, not every one. Measured on the Pi 2: a full readSys sweep costs 8.2 ms
+     *  (about a dozen /proc and sysfs reads), which at 1 Hz is 0.8 % of one core — small, but that
+     *  machine runs at 75 % busy with the audio thread near a full core, and this is a badge, not a
+     *  control loop. Levels are smoothed and sent on CHANGE, so halving the rate costs nothing
+     *  visible and hands the time back to the audio. */
+    if (now - lastAt < 2000) return;
     lastAt = now;
     const vibehealth::Health h = g_health.sample(g_vsBatteryLevel.load(), g_vsBatteryCharging.load());
     const bool first = !g_healthValid.load();

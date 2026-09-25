@@ -255,3 +255,43 @@ a CLIENT (the panel said "sample rate set by the server", showed the owner lock,
 4. ★ **THE COPY.** The server screen says "Leaving this screen stops the server and frees the
    dongle". That becomes false — AGENTS.md's rule, and the half that always gets skipped.
 5. ★ Not the default. Stopping stays the ordinary way out for a phone that is warm or on battery.
+
+## ▶ THE FPS SELECTOR MUST NOT PROMISE WHAT THE MACHINE CANNOT DELIVER (2026-09-25)
+
+The 7.8 fps ceiling on 32-bit boxes is BACK by choice: lifting it cost audio on the Pi 2 (see the
+revert note in `vibedsp/pipeline.cpp` — the fix delivered several spectrum frames per audio block on
+the DSP thread). Stuart: *"I'd rather have the broken 8fps and it working than this."*
+
+So the selector now offers 20/10/5 on a machine that may only ever reach ~8, which is the same fault
+as "Full · 20 fps" meaning 15 was this morning. Two honest fixes, either is fine:
+
+1. **Say what this machine achieves.** The server already measures it — `SPEC RATE: emitting %.1f
+   fps, asked %.1f` in `local_sdr_shim.cpp` — so the setup page can render "Full · 20 fps (this
+   machine reaches about 8)" from a figure it is already computing.
+2. **Only offer what it can honour.** Hide or disable the rates a measured ceiling cannot reach —
+   the AGENTS.md rule about never offering a control whose every use is a no-op.
+
+★ Prefer (1): a Pi 2 owner should be able to SEE why their waterfall is slower, not merely find the
+  choice missing. (2) is right only if the ceiling is hard and knowable in advance, and it is not —
+  it depends on sample rate, mode and what else the box is doing.
+★ ✗ Do NOT re-raise the ceiling by draining more per block. If it is raised at all, the DELIVERY has
+  to leave the DSP thread or be spread across blocks, and it must be measured on the Pi 2 first.
+
+### ★★★ AND THE REAL FIX, IN STUART'S WORDS (2026-09-25)
+
+> "you separated the spectrum from the DSP thread because the DSP thread consumed too much of 1 core"
+> "all threads separated to spread the load over all cores to get the most out of them
+>  NETWORK - AUDIO - SPECTRUM - DECODER"
+
+The spectrum FFT already runs on `vibe-spec`. What does NOT is the **delivery** — `cb_.spectrum`
+converts the row to dB and hands it to every listener, and that still runs on the DSP thread, which
+owes the audio a block every 32 ms. So the separation is half done, and the half that is missing is
+precisely the half that broke the audio when the queue let it drain freely.
+
+**Re-raising the ceiling therefore means finishing the split, not tuning the drain:** the delivery
+moves onto the spectrum thread, where the work it does belongs by priority and where a burst costs
+nothing but a late waterfall row. The invariant it currently protects ("the callback never runs
+anywhere else") is about who may touch `cfft_` and the client lists, so moving it needs those
+ownership rules rewritten deliberately — not a lock bolted on.
+✗ Do NOT re-attempt this by changing how much is drained per block. That was tried on 2026-09-25 and
+  cost audio on a box that was only 47 % busy.

@@ -176,7 +176,23 @@ void RxPipeline::startSpecThread_() {
  *  ★ The cursors only ever advance in order, so frames reach the callback in the order their
  *    windows were captured — a waterfall drawn out of order is worse than a slow one. */
 void RxPipeline::drainSpecQueue_() {
-    for (;;) {
+    /* ★★★ ONE FRAME PER CALL — A BURST ON THIS THREAD IS AN AUDIO DROP.
+     *
+     *  This ran `for(;;)` until the queue was empty, and the callback it invokes converts a whole
+     *  row to dB and hands it to every listener — ON THE DSP THREAD, which owes the audio a block
+     *  every 32 ms. Draining four frames at once therefore spends four times that work inside one
+     *  audio block, and on a Pi 2 (900 MHz A7, the demod thread already at three-quarters of a
+     *  core) that is enough to miss the deadline. Stuart, 2026-09-25, after this shipped: "the pi2
+     *  is breaking up and stuttering ... 2 distinct drops in the space of a few seconds" — on a box
+     *  measured at 47 % CPU with its clock at maximum, so not a shortage of CPU but a BURST in the
+     *  wrong place.
+     *  ★★ Throughput is unaffected: this is called at the top of feed() AND at every emit point, so
+     *     several frames still leave per block — they just leave one at a time, with audio work
+     *     between them. The single-slot ceiling this replaced is still gone; what is gone now too
+     *     is the spike.
+     *  ★ The queue keeps its depth. Depth absorbs jitter in when the worker finishes; it was never
+     *    meant to be emptied in one breath. */
+    {
         bool have = false;
         {
             std::lock_guard<std::mutex> lk(specM_);
@@ -882,6 +898,24 @@ void RxPipeline::feed(const cf32* iq, int n) {
             std::memcpy(sb,        ring + specRingW_, (size_t)tail       * sizeof(cf32));
             std::memcpy(sb + tail, ring,              (size_t)specRingW_ * sizeof(cf32));
             if (specThreadOn_) {
+                /* ★★★ REVERTED, DELIBERATELY, PENDING MEASUREMENT (2026-09-25).
+                 *
+                 *  Draining here as well as at the top of feed() is what lifted the 7.8 fps ceiling
+                 *  — and it is also what made the Pi 2 stutter: `cb_.spectrum` converts a row and
+                 *  hands it to every listener ON THE DSP THREAD, which owes the audio a block every
+                 *  32 ms, so several deliveries inside one block miss the deadline. The box was at
+                 *  47 % CPU with its clock at maximum, so this was never a shortage of CPU; it was a
+                 *  BURST in a thread that cannot afford one.
+                 *  ★★ Stuart's call, and the right one: "I'd rather have the broken 8fps and it
+                 *     working than this." A waterfall at 7.8 instead of 10 is a cosmetic loss; audio
+                 *     that breaks up is the product failing at its job. The thread priority rule
+                 *     says the same thing — AUDIO outranks SPECTRUM, and this traded the first for
+                 *     the second.
+                 *  ★ The queue itself stays (kSpecQ), because it is harmless: with one collect per
+                 *    feed it simply never fills. Re-raising the ceiling needs the delivery moved off
+                 *    this thread, or spread across blocks — not more work per block — and that needs
+                 *    measuring on the Pi 2 before it goes anywhere near it again.
+                 *  ★ The original note, for whoever picks this up: */
                 /* ★★★ DRAIN HERE TOO, NOT ONLY ONCE PER feed() — THIS COST THE WEAK BOXES HALF
                  *     THEIR WATERFALL (2026-09-24).
                  *
