@@ -102,7 +102,8 @@ the soft TEMPERATURE limit, bits 0/2 are under-voltage and current-limit. So:
 |---|---|---|
 | thermal | snail **on fire** | `get_throttled` bit 3, or a temperature source already at/over its trip |
 | power / under-voltage | snail with a **lightning bolt** | `get_throttled` bit 0 or 2, or a cap with no thermal cause |
-| cap, cause unknown | snail **on fire** is WRONG here — use the bolt only if power is implicated, otherwise the plain snail | — |
+| cap, cause unknown | plain snail (no flames, no bolt) | a cap is observed but nothing says why |
+| **no cap observed** | **nothing** | even if `get_throttled` or the under-voltage alarm is asserting — see the measurement below |
 
 ★ The bolt is drawn in the shell's place at the same 16x16 and stroke, single-colour `currentColor`
   like every other slot, so it tints by level. ✗ Do NOT reuse the battery's charging bolt shape at a
@@ -132,7 +133,33 @@ Throttling is detected when **either** of these holds for ≥ 10 s:
 - `scaling_max_freq < 0.9 × cpuinfo_max_freq` on any online core (a cap has been imposed); **or**
 - machine-total CPU ≥ 60% **and** the mean `scaling_cur_freq` of busy cores is < 60% of `cpuinfo_max_freq`.
 
-On a Pi, `vcgencmd get_throttled` bits 1–3 are authoritative and override the above. Bit 0 (under-voltage) is **not** throttling for this slot; log it for admins only.
+★★★ **MEASURED ON THE PI 500, 2026-09-25 — `get_throttled` IS NOT AUTHORITATIVE AND MUST NOT DRIVE
+THE ICON.** Stuart: *"My Pi500 always reports under voltage but from what I can see it is hitting the
+2.4GHz it should all the time and isnt throttled."* Three samples, four seconds apart, on an idle-ish
+box at 43.9 °C:
+
+```
+throttled=0x50005   cur 2400 MHz   scaling_max 2400   cpuinfo_max 2400
+throttled=0x50000   cur 2400 MHz
+throttled=0x50000   cur 2400 MHz
+```
+
+`0x50005` sets bit 0 (under-voltage NOW) **and bit 2 (THROTTLED NOW)** — while the clock sits at its
+full 2400 MHz and never moves. Four seconds later the live bits have cleared, leaving only the sticky
+bits 16/18 ("has occurred since boot"), which on this machine are set permanently.
+
+**So the rule is inverted from the paragraph this replaces:**
+- The snail appears ONLY on an **observed cap** — `scaling_max_freq < 0.9 x cpuinfo_max_freq`, or low
+  clock under load (§5.2). That is a measurement, not a claim.
+- `get_throttled` (and the `rpi_volt` under-voltage alarm the server actually reads — `readSys()` uses
+  `in0_lcrit_alarm`, NOT vcgencmd, because the service user cannot open `/dev/vcio`) may then be used
+  ONLY to choose WHICH snail: flames for a thermal cause, bolt for a power one.
+- A box reporting under-voltage, or even "throttled now", with its clock at maximum shows **no snail
+  at all**. Anything else would put a permanent warning on Stuart's Pi 500, which is stable and fast
+  ([[pi500_undervoltage_reboot]]: "undervoltage REAL, box STABLE, do not raise it").
+
+> **TRAP — the sticky bits are useless for a live icon.** Bits 16-19 mean "since boot" and, once set,
+> never clear. An icon driven by them is permanent furniture.
 
 > **TRAP — low clock alone means nothing.** Governors (e.g. `interactive`, `schedutil`) idle at the minimum clock: the XCover 4S sits at 800 MHz at ~10% load, which is healthy. Only low clock **under load**, or an imposed cap, counts.
 
