@@ -47,6 +47,27 @@ SERVER HEALTH
 
 > **TRAP — B's 9 px caption** is marginal on low-density Android hosts and web. If it proves unreadable, drop the caption rather than growing the pill; the icons and accessibility label carry the meaning.
 
+## 2a. ★★★ COMPACT IS THE REQUIREMENT, NOT AN ASPIRATION
+
+Stuart, 2026-09-25: *"the risk is that we can make this pill huge it needs to be a compact almost
+widget pill like the battery one is now"* and *"If needed bump the server name and timer down a touch
+to fit it in neatly."*
+
+The existing web pill is the size to beat: `padding: 3px 8px`, `font: 600 12px`, a 54x20 battery
+glyph — about 120x26 px in total. Four slots and a caption must not turn that into a panel.
+
+**Rules that follow, and they win over anything above:**
+- Total pill ≤ **~150 x 44 px**. If a layout cannot hold, DROP A SLOT before growing the pill: the
+  order to shed is TEMP, then RAM — never the battery, which is the one with a number on it.
+- The caption is 9 px and the icons 16 px. ✗ No padding above 8 px, no radius above 12, no shadow
+  that reads as a card.
+- Icons are 16x16 **with no labels** — the caption names the group, and the accessibility label
+  carries the detail. Per-slot text is what makes this a dashboard.
+- **The top-right stack may move to fit it.** The server name/locator and the GUARANTEED TIME card
+  live in the same corner; nudging both down a few pixels is expected and preferred to shrinking the
+  pill or overlapping the frequency scale. Check on the narrowest layout (SE in Display Zoom) before
+  calling it done — that corner is where the RDS panel already collided once.
+
 ## 3. Levels and colours
 
 | Level | Token | Colour | Behaviour |
