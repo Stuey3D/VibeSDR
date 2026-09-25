@@ -6,7 +6,7 @@
 //      timed only the fold and licensed a 25x regression; this times the whole feed().
 //   2. CALIBRATION: a processed composite of KNOWN peak deviation, FM-modulated, with white IQ
 //      noise added at a range of carrier-to-noise ratios. The deviation readout must stay at the
-//      truth as the noise rises — that is the failure Saber's MPXtool dataset showed (+24 kHz on a
+//      truth as the noise rises — that is the failure tgcfabian's MPXtool dataset showed (+24 kHz on a
 //      compliant station at −66 dBFS) and the one the guard-band correction exists to remove.
 //
 //   cmake --build build && ./build/vibedsp_bench_eye [cnr_db ...]

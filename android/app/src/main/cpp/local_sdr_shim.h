@@ -126,7 +126,7 @@ public:
      *   band that HAS a ceiling is fixed there and no listener may move the gain — the same
      *   figures, read a different way. A band with no ceiling is untouched: the lock changes what
      *   a rule MEANS, it never invents one.
-     * ★★ ifGainCapAt is the SDRplay's second stage (Saber's RSP1 clone: the RF stage alone does
+     * ★★ ifGainCapAt is the SDRplay's second stage (tgcfabian's RSP1 clone: the RF stage alone does
      *   not do it), and gainSplitAt is the HackRF's LNA share of the total, 0-100 — a total does
      *   not determine two stages, so a ceiling is enough to limit with and not enough to SET
      *   with. Both are read only where they mean something; see the setters. */
@@ -826,7 +826,7 @@ public:
     void setNotch(bool on);               // automatic notch (adaptive line enhancer)
     // ★ Weak-signal processing: FM stereo high-blend + the audio high-cut, together. One switch,
     //   because they are one treatment — and a DXer A/B-ing a marginal catch wants BOTH out of the
-    //   way, not half of it (asked for by Saber via the FM-DX community, 2026-08-14).
+    //   way, not half of it (asked for by tgcfabian via the FM-DX community, 2026-08-14).
     void setWeakProc(bool on);
     // ★ IMS is SEPARATE from the noise treatment on purpose: NR works on noise, this works on a
     //   neighbour, and measured they want opposite actions. One button for both would leave a

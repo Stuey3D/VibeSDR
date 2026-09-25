@@ -1,6 +1,6 @@
 # Pocket VibeServer — build brief
 
-_Drafted 16 September 2026 from Stuart's goal and Saber's access-point suggestion. Build when the
+_Drafted 16 September 2026 from Stuart's goal and tgcfabian's access-point suggestion. Build when the
 hardware arrives; nothing here needs the radio code to change._
 
 ## The goal

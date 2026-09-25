@@ -856,7 +856,7 @@ async function connect(host: string, pin: string) {
   //     behind an HTTPS reverse proxy served an https page whose auth fetch, config fetch and
   //     every WebSocket were plain http/ws — which the browser BLOCKS as mixed content. The
   //     receiver then failed to connect with nothing wrong at the proxy, and it reads as a broken
-  //     server (Saber, 2026-08-08: "cant use my vibeserver publicly ... doesnt follow the http
+  //     server (tgcfabian, 2026-08-08: "cant use my vibeserver publicly ... doesnt follow the http
   //     scheme from the URL already set").
   // ★★ The test is the PAGE's protocol, not the host's: an https page may not load ANY http
   //    subresource, wherever it points. On a plain http page both stay as they were.
@@ -4412,7 +4412,7 @@ function radioCardState(r: any, st: any): { state: string; blocked: boolean } {
   /* ★★★ BORROWED BY ANOTHER PROGRAM ON THAT MACHINE, and it must READ as unusable. The idle
    *  release hands the dongle to whatever else wants it (OWRX, rtl_fm, anything), and while it is
    *  gone the listener count is ZERO — so the card said FREE, which is the most misleading answer
-   *  available: somebody picks it and watches nothing happen. Stuart hit exactly this on Saber's
+   *  available: somebody picks it and watches nothing happen. Stuart hit exactly this on tgcfabian's
    *  server and concluded the RTL was broken.
    *  ★ Blocked rather than merely labelled: there is nothing a visitor can do here, and a
    *    clickable card that leads to a dead waterfall is worse than one they cannot click. */
@@ -7005,7 +7005,7 @@ function showDeviceBanner(present: boolean, reason?: string) {
   /* ★★★ TWO DIFFERENT FAULTS, AND ONE MESSAGE WAS WRONG FOR BOTH. "Unplugged or has failed —
    *  reconnect it and restart VibeServer" is right when the radio is genuinely gone, and actively
    *  misleading when it is simply held by another program: it sends the owner hunting a cable
-   *  fault we caused. Stuart, on Saber's server (2026-09-08): "I thought his RTL was broken as its
+   *  fault we caused. Stuart, on tgcfabian's server (2026-09-08): "I thought his RTL was broken as its
    *  a cheap clone but he said it may have been in use by OWRX at the time."
    *  ★ So the server now sends a REASON when it has one, and it is shown instead. The radio is
    *    coming back on its own here — the idle release exists precisely so another program may
@@ -9428,7 +9428,7 @@ function drawMpxEye() {
   /* ★★ THE DEVIATION MONITOR — a BAR, because that is what a deviation monitor is. PILOT DEV
    *  and RDS DEV measure their own components; this is the WHOLE composite, audio included,
    *  against the 75 kHz limit — the number a broadcast engineer actually watches, and the one
-   *  the eye has been drawing as a flattened top while nothing reported it (Saber's suggestion,
+   *  the eye has been drawing as a flattened top while nothing reported it (tgcfabian's suggestion,
    *  2026-09-13, and Stuart: "is that visual like our new eye?" — it should be).
    * ★ Peak-HELD on the server with a slow decay, because the point of a deviation monitor is
    *   catching the excursion you were not looking at.
@@ -9596,7 +9596,7 @@ function drawMpxEye() {
        *   the same fault one condition further along (Stuart's band sweep, 2026-09-13).
        * ★★★ THE SAME LATCHED GATE AS THE DEVIATION METER ABOVE (10 dB in, 8 out) — NOT A HARD
        *   20. Two readouts in one box must not contradict each other, and a hard 20 here did
-       *   exactly that: Saber's own FelineFM on 87.0 decoded RDS at 12.4 groups/s with an 80 %
+       *   exactly that: tgcfabian's own FelineFM on 87.0 decoded RDS at 12.4 groups/s with an 80 %
        *   AF score, a clean constellation at 14 % scatter and 71 kHz of deviation shown right
        *   underneath, while this line called it "buried in noise". Stuart: "clearly wrong as
        *   FelineFM is his own station and has the cleanest RDS constellation I've seen." A gate
@@ -11060,7 +11060,7 @@ function applyIfGainCap() {
   const gr = document.getElementById('rspIfGr') as HTMLInputElement | null;
   if (!gr) return;
   // ★ No conversion any more: the owner's figure and this slider are both a REDUCTION in dB, which
-  //   is what Saber asked for — the number he sets is the number a listener sees the slider stop at.
+  //   is what tgcfabian asked for — the number he sets is the number a listener sees the slider stop at.
   const floor = hwIfGrFloor >= 0
     ? Math.max(radioCaps?.ifGrMin ?? 20, Math.min(radioCaps?.ifGrMax ?? 59, hwIfGrFloor))
     : (radioCaps?.ifGrMin ?? 20);

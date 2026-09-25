@@ -1,6 +1,6 @@
 # BRIEF — VibeServer power saving, background survival, and sharing one radio
 
-**Status:** designed 2026-08-01 with Stuart, from a Discord conversation with Saber/Orchid.
+**Status:** designed 2026-08-01 with Stuart, from a Discord conversation with tgcfabian/Orchid.
 Not started. Companion to `BRIEF-band-spectrogram.md` (the snapshot feature came out of the same
 conversation and has its own brief).
 
@@ -9,7 +9,7 @@ conversation and has its own brief).
 ## 1. The three-way power toggle
 
 Stuart's proposal, with the labels corrected. The SHAPE is right — users want the choice, and
-Saber asked for a toggle explicitly. The original REASONS were not (see §2).
+tgcfabian asked for a toggle explicitly. The original REASONS were not (see §2).
 
 | Mode | What it does | Honest description |
 |---|---|---|
@@ -54,9 +54,9 @@ the user can see the state.
 
 ---
 
-## 3. Sharing ONE radio with another app (Saber's OpenWebRX setup)
+## 3. Sharing ONE radio with another app (tgcfabian's OpenWebRX setup)
 
-Saber runs OWRX and VibeServer on one Linux box (a chrooted phone), wants them to share one SDR,
+tgcfabian runs OWRX and VibeServer on one Linux box (a chrooted phone), wants them to share one SDR,
 whichever connects first wins, with a two-button landing page on port 80.
 
 ### ★★ PROVEN ON HARDWARE (Pi 500 + Airspy HF+, 2026-08-01)

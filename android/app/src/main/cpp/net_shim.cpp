@@ -256,7 +256,7 @@ std::shared_ptr<Listener> listen(const std::string& host, int port) {
      *     box that spawned a tunnel, and it only bites when the door restarts — which is what a
      *     settings save does. Set up over the tunnel, it strands you; set up on the LAN, you
      *     never see it. Stuart, comparing against the two boxes he configured remotely: "I'm
-     *     pretty sure this is not a problem I have had with my Pi and Sabers box."
+     *     pretty sure this is not a problem I have had with my Pi and tgcfabian's box."
      *
      *  ★ FD_CLOEXEC after the fact rather than SOCK_CLOEXEC in the socket() call, deliberately:
      *    this file is shared with the Android build and macOS, and the flag spelling is portable

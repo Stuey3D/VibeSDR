@@ -903,11 +903,11 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
                it is ahead of the mixer, so it decides whether the front end overloads at all, and
                capping it leaves the IF AGC its full range to work in. That reasoning assumes
                working hardware: on a damaged RSP1 clone the gain stages misbehave and the owner
-               needs the IF too (Saber, via Stuart, 2026-08-28). Hidden while the AGC is locked on,
+               needs the IF too (tgcfabian, via Stuart, 2026-08-28). Hidden while the AGC is locked on,
                because there the loop owns this control and a ceiling would be a figure nothing
                reads. -->
             <!-- ★★★ THE NAME AND THE UNITS THE LISTENER'S OWN CONTROL USES. This asked for a "max
-                 IF position" — a gain position, to match the RF ceiling beside it — and Saber, who
+                 IF position" — a gain position, to match the RF ceiling beside it — and tgcfabian, who
                  owns the RSP this exists for, reported that it should read as GAIN REDUCTION "as
                  per the control in the client". He is right: the listener's slider says IF GAIN
                  REDUCTION in dB and the wire field carries a reduction, so an owner's figure in
@@ -4113,7 +4113,7 @@ $("saveBtn").onclick = async () => {
     //     TypeError: Cannot set properties of undefined — thrown BEFORE the request was built. The
     //     catch below then reported "Could not reach the server", so the devtools network tab
     //     showed ZERO requests while the page blamed the network.
-    // ★★★ IT IS THE FIRST THING SABER REPORTED and it took all day to find, because the message
+    // ★★★ IT IS THE FIRST THING TGCFABIAN REPORTED and it took all day to find, because the message
     //     named the wrong subsystem: I chased the front door, a 503, a restart race and a flush
     //     race before "0 requests in the network tab" made it obvious the fetch never happened
     //     (2026-08-09). The Server tab is ALSO the tab the page opens on, so this is the first
@@ -4208,7 +4208,7 @@ $("saveBtn").onclick = async () => {
   } catch (e) {
     // ★★★ SAY WHAT ACTUALLY WENT WRONG. This reported "Could not reach the server" for ANY
     //     exception in the block above — including a plain TypeError thrown before the request was
-    //     ever made. Saber spent a day being told the network had failed while his devtools showed
+    //     ever made. tgcfabian spent a day being told the network had failed while his devtools showed
     //     ZERO requests leaving the page, which sent me chasing the server, the front door, a
     //     restart race and a flush race in turn (2026-08-09). A message that names the wrong
     //     subsystem is worse than no message: it is a false lead with authority.

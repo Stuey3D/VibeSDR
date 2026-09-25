@@ -1,8 +1,8 @@
 # BRIEF — the band spectrogram (idle snapshot + sweep)
 
 **Status:** designed 2026-08-01 with Stuart, not started.
-**Origin:** a Discord conversation with Saber/Orchid about Android power saving. It began as a
-keep-alive trick and turned into a feature in its own right — Saber, on seeing the mock-up:
+**Origin:** a Discord conversation with tgcfabian/Orchid about Android power saving. It began as a
+keep-alive trick and turned into a feature in its own right — tgcfabian, on seeing the mock-up:
 *"the one feature ive been lookin for"*.
 
 ★★ **IT IS NOT A POWER-SAVING MODE.** Selling it as one was wrong (see "The anti-kill myth"
@@ -86,7 +86,7 @@ healthy radio while sending nothing.
 - ★★ **The colour must be OUTSIDE the waterfall palette's range** or it reads as signal. The
   palettes run phosphor green → yellow/white, so a desaturated violet/magenta is safe. **Avoid
   amber** — it already means squelch/warning elsewhere in the UI.
-- **Store the reason PER ROW**: listener connected · radio in use by another application (Saber's
+- **Store the reason PER ROW**: listener connected · radio in use by another application (tgcfabian's
   OWRX case, see [[sharing_one_sdr_with_another_app]]) · device asleep / no power · no radio
   attached · profile changed.
 - **Legend shows only reasons actually present** in the visible window — listing statuses that

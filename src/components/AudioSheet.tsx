@@ -309,7 +309,7 @@ export interface AudioSheetProps {
   //     REFLECTION, NB IMPULSES — and measured on the server they want OPPOSITE actions, so one
   //     combined control would be wrong as well as unhelpful. All four default ON and each declines
   //     to act unless its own evidence says it will help, so the switches exist for A/B rather than
-  //     for daily use (asked for by Saber via the FM-DX community).
+  //     for daily use (asked for by tgcfabian via the FM-DX community).
   // ★ Absent handlers = a backend without them (Kiwi, OWRX, FM-DX): the rows simply do not draw,
   //   rather than offering controls that cannot work.
   fmNr?: boolean;   onFmNr?: (on: boolean) => void;

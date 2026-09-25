@@ -630,7 +630,7 @@ static void vsProbeHostBattery() {
         if (batDir.empty()) batDir = "-";
     }
     if (batDir == "-") {
-        /* ★ TERMUX (Saber's box: the Linux server in a proot Ubuntu on an Android phone). Where the
+        /* ★ TERMUX (tgcfabian's box: the Linux server in a proot Ubuntu on an Android phone). Where the
          *  kernel hides /sys/class/power_supply from an unprivileged process, Termux:API's
          *  `termux-battery-status` answers {"percentage":57,"status":"DISCHARGING",...}. Tried
          *  once a minute at most; absent → −1 and the server simply says nothing. */
@@ -840,7 +840,7 @@ static vibedab::DabService g_dab;
  *  (see vibe_dab_txdb.h). Keyed by the ENSEMBLE's country code, so a listener on a border who hears
  *  three countries' multiplexes gets each named from its own country's list. */
 static vibedab::DabTxDb g_dabTxDb;
-/* ★★★ IN DAB, GAIN SERVES THE DECODER — AND A PERFECT DECODER NEEDS NO MORE. Saber (Netherlands,
+/* ★★★ IN DAB, GAIN SERVES THE DECODER — AND A PERFECT DECODER NEEDS NO MORE. tgcfabian (Netherlands,
  *  a very strong ensemble): the loop sat correctly at 0 dB, and every two minutes, when its
  *  memory of the rung that had overloaded expired, it climbed, overloaded the front end, and DAB
  *  stuttered until it cut back (Stuart, 2026-09-07). FM has to climb to find out whether more gain
@@ -3038,7 +3038,7 @@ static std::atomic<bool>   g_radioOrphaned{false};
 /** ★★★ WHY THE RADIO IS NOT OURS RIGHT NOW — and it must reach the LISTENER, not just the log.
  *  When the idle park has released the dongle so another program can use it, and that program
  *  took it, resumeCaptureIdle's reacquire fails. That failure was only LOGI'd, so a listener saw
- *  a server that sat there doing nothing: Stuart, on Saber's box (2026-09-08): "it sits and looks
+ *  a server that sat there doing nothing: Stuart, on tgcfabian's box (2026-09-08): "it sits and looks
  *  like it is locked up ... he said it may have been in use by OWRX at the time which is exactly
  *  how we designed the release radio on idle mode however we also designed a warning that the
  *  radio was in use by another app on the server and that warning never fired up."
@@ -5124,7 +5124,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *     off-centre, harmlessly outside the channel". A WFM channel is 200 kHz wide, so 15 kHz
      *     leaves the spike INSIDE it, and on a HackRF that is not a cosmetic line on the
      *     waterfall: the LO leakage of a direct-conversion front end with no DC servo is big
-     *     enough to take the audio with it (Saber, 2026-08-26, on 87.0 WFM: "it has a large dc
+     *     enough to take the audio with it (tgcfabian, 2026-08-26, on 87.0 WFM: "it has a large dc
      *     spike in the centre which kills the audio").
      * ★★ 250 kHz clears ±100 kHz of WFM with room to spare, and costs nothing that matters: this
      *    radio's SLOWEST rate is 2 MSPS, so the narrowest span it can produce is 2 MHz and the
@@ -12345,7 +12345,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             /* ★★★ THE SECOND STAGE, BECAUSE THE FIRST IS NOT ALWAYS ENOUGH. Capping the RF (LNA)
              *   position is the right primary control — it is ahead of the mixer, so it decides
              *   whether the front end overloads at all — and the note above says why it leaves the
-             *   IF AGC its full range. But Saber's RSP1 clone has damaged gain stages where that
+             *   IF AGC its full range. But tgcfabian's RSP1 clone has damaged gain stages where that
              *   reasoning does not hold, so the owner can cap the IF too (via Stuart, 2026-08-28).
              * ★★ THE NUMBER ON THE WIRE COUNTS THE OTHER WAY, exactly as `lna` does: `ifgr` is a
              *   REDUCTION in dB (20 = maximum gain, 59 = minimum), while the owner's cap is a GAIN
@@ -12856,7 +12856,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             g_dab.armRetune();
             /* ★★★ THE VIEW IS THE WHOLE CAPTURE. A multiplex is 1.536 MHz of flat top; a view
              *  zoomed in past that shows NOTHING BUT the flat top, which reads as an empty band.
-             *  Saber's server was left slightly zoomed in from FM and "it looked like nothing was
+             *  tgcfabian's server was left slightly zoomed in from FM and "it looked like nothing was
              *  being received when in fact it was just the entire visible window looked flat like
              *  a DAB multiplex would" (Stuart, 2026-09-07). Zoom is refused while DAB owns the
              *  view, so the listener could not even fix it. Every listener's view goes back to
@@ -14452,7 +14452,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 || path0.rfind("/vibeserver/spectrogram", 0) == 0
                 // ★★★ THE SETUP PAGE'S SERVER TAB NEEDS THIS DOOR TO ANSWER. A 503 here made the
                 //   whole Server tab unusable — "cant edit anything, doesnt save, reports Could
-                //   not reach server" (Saber, 2026-08-09) — because the tab reads the CPU
+                //   not reach server" (tgcfabian, 2026-08-09) — because the tab reads the CPU
                 //   governor and clock from this endpoint and the failed fetch took the rest of
                 //   the render with it. The door has no RADIO, but it does have a MACHINE, and
                 //   everything the Server tab asks about belongs to the machine.
@@ -19658,7 +19658,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      * reconnects into a radio that has been switched off underneath it. It shows up most on
      * MULTI-LISTENER servers, because that is where extra viewers exist at all, and most when a
      * client is idle or backgrounded, because that is when it is holding only a spectrum socket
-     * (Stuart, 2026-08-27: "i noticed the spectrum freezing most on sabers when it had been idle
+     * (Stuart, 2026-08-27: "i noticed the spectrum freezing most on tgcfabian's when it had been idle
      * or backgrounded").
      *
      * ★ Caller must hold clientMtx. */
@@ -21005,14 +21005,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 //     is a feature — the watchdog declared the dongle unplugged, set deviceLost and
                 //     captureDown, and repeated it every three seconds for ever.
                 // ★★★ WITH `idleGrace: 0` THAT HAPPENS AT STARTUP. Nobody is listening one second
-                //     after launch, so an instant release fires immediately, and Saber's server
+                //     after launch, so an instant release fires immediately, and tgcfabian's server
                 //     spent its whole life reporting a healthy dongle as unplugged (2026-08-09).
                 //     Worse than the noise: deviceLost then poisons the retake path, which is where
                 //     the storm of usb_claim_interface -6 came from.
                 // ★★ The parked case is the same argument. The Airspy path already dodged this by
                 //    reading the SOURCE's last-received time (see above) — the dongle had no such
                 //    guard, so an idle-parked dongle read as an unplugged one too.
-                // ★ `lsusb` in Saber's log lists the device throughout, which is the tell: the
+                // ★ `lsusb` in tgcfabian's log lists the device throughout, which is the tell: the
                 //   hardware was never going anywhere.
                 const bool expectingIq = !radioReleased.load() && !captureIdle.load();
                 // ★★★ EVERY VISITOR LOOKS LIKE LOCALHOST? THEN SOMETHING IS PROXYING AND WE DO NOT KNOW.
@@ -21893,7 +21893,7 @@ void LocalSdrShim::setIfGrFloors(const std::string& csv) {
     LOGI("IF gain reduction floors: %zu rule(s) from \"%s\"", g_ifGrFloors.size(), csv.c_str());
 }
 /* ★★★ IN dB OF REDUCTION, THE WAY THE LISTENER'S CONTROL READS IT. This was briefly a gain
- *   POSITION, converted here to a reduction — and Saber, who owns the RSP this exists for, said
+ *   POSITION, converted here to a reduction — and tgcfabian, who owns the RSP this exists for, said
  *   what that cost: the owner's number and the number on the listener's slider described the same
  *   stage and could not be compared. Now they are the same number.
  * ★★ AND THE TIGHTER RULE IS THE BIGGER ONE. Everywhere else on this page the lowest figure wins,
@@ -26906,7 +26906,7 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
     //     the mutex and then opens a device THIS PROCESS ALREADY HOLDS. Twelve
     //     usb_claim_interface -6 in a row (the retry loop below doing its best), then "the radio is
     //     in use by another program on this machine", which was true only in the sense that we were
-    //     the other program. Saber's log shows REACQUIRED immediately followed by the storm
+    //     the other program. tgcfabian's log shows REACQUIRED immediately followed by the storm
     //     (2026-08-09) — that is the whole bug, and it is why his receiver gave a second of
     //     spectrum and then died.
     // ★★ Textbook double-checked locking: the fast path outside the lock is only safe if the slow
@@ -26921,7 +26921,7 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
     //     another program on this machine", which was simply untrue and left the listener with a
     //     dead receiver and nothing retrying.
     //
-    // ★★★ SABER'S LOG, 2026-08-09, reads exactly this way: `radio REACQUIRED`, a session landing,
+    // ★★★ TGCFABIAN'S LOG, 2026-08-09, reads exactly this way: `radio REACQUIRED`, a session landing,
     //     and then `usb claim interface error -6` followed by `could not take the radio back`.
     //     It "worked for a second and then froze" — because the retake after the next release had
     //     one attempt and gave up. His kernel is a Termux one that even logs a usbfs mmap

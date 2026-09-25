@@ -1899,7 +1899,7 @@ public:
             float eyeBandKHz[3];
             /** ★★ TOTAL PEAK DEVIATION of the whole composite INCLUDING the audio, in kHz — the
              *  headline broadcast measurement, and the one this panel was missing. 75 kHz is the
-             *  limit; above it a station is overmodulating. Suggested by Saber, 2026-09-13, and
+             *  limit; above it a station is overmodulating. Suggested by tgcfabian, 2026-09-13, and
              *  it is the number the eye has been DRAWING all along (flattened peaks) while
              *  nothing reported it. Peak-held with a slow decay so a transient is not missed
              *  between frames. */
@@ -2360,7 +2360,7 @@ private:
     std::atomic<bool> stereoReport_{false};  // force one report even with no edge
     std::atomic<bool> stereoEnabled_{true};  // user force-mono toggle (off = mono)
     // ★★★ THE WEAK-SIGNAL PROCESSING SWITCH — high-blend and the audio high-cut together.
-    //     Requested from the FM-DX community (Saber, via Stuart, 2026-08-14) so it can be A/B'd:
+    //     Requested from the FM-DX community (tgcfabian, via Stuart, 2026-08-14) so it can be A/B'd:
     //     a DXer judging a marginal catch needs to hear what the receiver is DOING to it, and
     //     "off" is a legitimate reference point when comparing receivers. It was left automatic
     //     originally because a switch that does nothing on a strong signal is close to the control
@@ -2559,14 +2559,14 @@ private:
      *  processed composite sits at its peak for far more than that. Bench, spiky multi-tone:
      *  +2.1/+3.6/+8.5 kHz at 13/9/7 dB in-channel CNR against the max's +2.5/+6.7/+17, for
      *  4 kHz under the max on a clean spiky signal and ~0 on a processed one. Skipping 0.1 %
-     *  held to +1.9 at 9 dB but sat 8 kHz under the max, which would move Saber's six exact
+     *  held to +1.9 at 9 dB but sat 8 kHz under the max, which would move tgcfabian's six exact
      *  stations. A 512-bin histogram of |x| makes it one increment per sample and a short walk
      *  per window. */
     static constexpr int kDevHistN = 512;            // bins over 0..1.28 of full scale (0.19 kHz each)
     std::vector<uint32_t> devHist_;                  // the window's histogram of |LP(x)|
     double devWinGp_  = 0.0;                         // running guard-band power in this window
     /** ★★★ THE NOISE IS MEASURED, THEN REMOVED IN QUADRATURE. The maximum of signal+noise is
-     *  biased high, and Saber's 12-station MPXtool dataset showed the bias tracking received
+     *  biased high, and tgcfabian's 12-station MPXtool dataset showed the bias tracking received
      *  level: exact above −60 dBFS, +19 and +24 kHz at −70 — two compliant stations reported as
      *  overmodulated. Simulated with the real statistic the bias fits sqrt(P² + (c·σ)²) − P with
      *  c ≈ 4.5 across processing styles and S/N, NOT a linear c·σ (it grows with σ²; at 0.75 kHz

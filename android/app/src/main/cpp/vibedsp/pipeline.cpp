@@ -1815,8 +1815,8 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc) {
                          *     But adopting it the instant it appears is just as wrong: a single
                          *     bad tick then blanks a figure that is otherwise perfectly healthy,
                          *     which is the whole fault being fixed here.
-                         *  ★ Stuart on Saber's FelineFM — 0 % block errors, carrier locked, full
-                         *    radiotext, and the deviation showing "no subcarrier": "sabers
+                         *  ★ Stuart on tgcfabian's FelineFM — 0 % block errors, carrier locked, full
+                         *    radiotext, and the deviation showing "no subcarrier": "tgcfabian's
                          *    FelineFM has flashed 3.4KHz typical". The subcarrier was there all
                          *    along at a healthy 3.4 kHz; the panel was catching the dips.
                          *  ★★ So a real reading is adopted at once (it proves measurability), and

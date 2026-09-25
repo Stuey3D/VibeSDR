@@ -4,7 +4,7 @@
  * ★★★ WHY THIS IS A SHARED HELPER AND NOT A LOCAL FIX. Every one of these URLs used to be written
  *     as `http://${host}` or `ws://${host}` inline. Behind an HTTPS reverse proxy the page loads
  *     over https and then every one of those is BLOCKED as mixed content, so the receiver fails to
- *     connect with nothing wrong at the proxy — it reads as a broken server (Saber, 2026-08-08,
+ *     connect with nothing wrong at the proxy — it reads as a broken server (tgcfabian, 2026-08-08,
  *     running nginx: "cant use my vibeserver publicly ... doesnt follow the http scheme from the
  *     URL already set").
  *

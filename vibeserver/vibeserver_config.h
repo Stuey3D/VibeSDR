@@ -417,13 +417,13 @@ struct RadioConfig {
     bool        gainLock = false;
     /** ★★ THE SDRPLAY'S SECOND STAGE. `gainLimits` caps the RF (LNA) position because that is what
      *  decides whether the front end overloads; the IF reduction is a separate control and on a
-     *  damaged RSP1 clone the RF stage alone is not enough (Saber, via Stuart, 2026-08-28).
+     *  damaged RSP1 clone the RF stage alone is not enough (tgcfabian, via Stuart, 2026-08-28).
      *  ★ Only meaningful with the AGC lock OFF — a locked IF AGC owns this control, so a ceiling
      *    on it would be a number nothing reads. Same band syntax, same parser.
      *  ★★★ THIS IS A GAIN REDUCTION IN dB — 20 is maximum gain, 59 is minimum — which is what the
      *  listener's own slider says ("IF GAIN REDUCTION ... more reduction = less gain") and what the
      *  wire field `ifgr` carries. It was briefly stored as a GAIN POSITION to match the RF ceiling
-     *  beside it, and Saber said what that cost: the owner's figure and the listener's figure
+     *  beside it, and tgcfabian said what that cost: the owner's figure and the listener's figure
      *  described the same stage and could not be compared. The value is the LEAST reduction a
      *  listener may use, so a BIGGER number is a TIGHTER limit — the opposite of every other
      *  ceiling here, which is exactly why it must be labelled as a reduction and not as a ceiling.

@@ -5,7 +5,7 @@
 //     address then collapses onto one identity: banning an abuser bans the whole audience, the
 //     country flags and the top-countries chart all show the proxy, the connection log cannot tell
 //     two listeners apart, and the admin brute-force lockout can be tripped for everyone at once
-//     by a single scanner. (Saber, 2026-08-08: "the logs spammed to me 127.0.0.1 connected".)
+//     by a single scanner. (tgcfabian, 2026-08-08: "the logs spammed to me 127.0.0.1 connected".)
 //
 // ★★★ AND WHY IT IS OPT-IN. X-Forwarded-For is a header — text the client types. A server that
 //     believes it from anyone lets a stranger claim any address they like, which walks straight

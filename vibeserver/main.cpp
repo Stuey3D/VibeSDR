@@ -564,7 +564,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
 /** ★★★ WHERE THE HAND-OFF SOCKETS LIVE — AND IT CANNOT ASSUME systemd.
  *
  *  RuntimeDirectory= in the unit gives us /run/vibeserver, owned and writable. But VibeServer also
- *  runs where there is no systemd at all — Saber's is a chroot on an Android phone — and there
+ *  runs where there is no systemd at all — tgcfabian's is a chroot on an Android phone — and there
  *  ProtectSystem, RuntimeDirectory and the rest simply do not exist. A path that only works under
  *  a service manager would leave those installs with a front door that can route nothing, and the
  *  only symptom would be "no such file or directory" for every radio.
@@ -632,7 +632,7 @@ static std::string handoffDir() {
 }
 
 /** ★★★ ONE PROCESS PER RADIO, ENFORCED — because "the radio is in use by another program on this
- *      machine" turned out to mean US. Saber's log shows a reacquire succeeding, no IQ arriving,
+ *      machine" turned out to mean US. tgcfabian's log shows a reacquire succeeding, no IQ arriving,
  *      and then eleven `usb_claim_interface error -6` in a row before the server concluded another
  *      program had the dongle and let go. Nothing else on that box wanted it: a second copy of the
  *      same radio process did (2026-08-09).
@@ -665,7 +665,7 @@ static bool claimRadioLock(const std::string& serial) {
 }
 
 /** ★★★ IS THERE ANYTHING ELSE TO START THE RADIOS? `vibeserver-radios` is a systemd unit, and
- *      systemd is not a given: Saber runs this in a chroot with no init at all, and the same is
+ *      systemd is not a given: tgcfabian runs this in a chroot with no init at all, and the same is
  *      true of Docker and WSL. Both halves are checked — `systemctl` on PATH means little if
  *      nothing is listening to it, and /run/systemd/system is the documented way to ask whether
  *      systemd is actually the running init. */
@@ -680,7 +680,7 @@ static bool haveServiceManager() {
  *      looked completely dead: the front door came up, listed the radio, printed its port — and
  *      every request for it failed with `handoff to /run/vibeserver/4.sock failed (No such file or
  *      directory)`, because no process had ever created that socket. The page says "That radio is
- *      not answering at the moment", which reads as broken hardware. Saber lost an evening to it,
+ *      not answering at the moment", which reads as broken hardware. tgcfabian lost an evening to it,
  *      wiped his config five times, and was right every time that nothing else held his SDR.
  *
  * ★★★ AND IT IS A REGRESSION I CAUSED. A headless server is forced to Full mode (see the
@@ -698,7 +698,7 @@ static bool haveServiceManager() {
 static std::vector<pid_t> g_radioKids;
 
 /** ★★★ ASK NICELY, THEN INSIST. A radio process that will not go leaves the SDR claimed and the
- *      terminal full of its DSP log — precisely what Saber hit: Ctrl-C returned his shell while
+ *      terminal full of its DSP log — precisely what tgcfabian hit: Ctrl-C returned his shell while
  *      "[VibeLocalSDR] dsp load" kept scrolling from a process he could no longer find, because it
  *      had been orphaned and reparented away from the tree he was looking at (2026-08-09).
  *      "I can't even find it in my htop" is the signature of an orphan.
@@ -790,7 +790,7 @@ static void superviseRadios(const char* self, const vsconfig::ServerConfig& srv)
             //     execl — which does NOT search PATH — returns ENOENT. The log then reads
             //     "started radio 4 (pid 2601)" immediately followed by "could not start the
             //     process for 4: No such file or directory", which is exactly as confusing as it
-            //     sounds. (Saber, 2026-08-09.)
+            //     sounds. (tgcfabian, 2026-08-09.)
             // ★★ MY TEST PASSED BECAUSE I RAN `./build/vibeserver` — argv[0] was a path, which is
             //    the one way a user never starts it. A test whose invocation differs from the
             //    real one is testing a different program.
@@ -1764,7 +1764,7 @@ int main(int argc, char** argv) {
             //     connection, so the page reports "Could not reach the server" about a change it
             //     just made. It works from curl on the machine itself and fails for the same
             //     server over Tailscale, which is the shape of a flush race, not a logic error
-            //     (Saber, 2026-08-09).
+            //     (tgcfabian, 2026-08-09).
             // ★ A deadline rather than a sleep: the handler must return promptly so the response is
             //   written at all, and the main loop simply waits until this moment to act.
             if (wantRestart) {
@@ -3272,7 +3272,7 @@ int main(int argc, char** argv) {
             //     0` and a reliance on systemd's Restart=always — so on a box with no init, every
             //     settings save from the Server tab KILLED THE SERVER and the page then waited for
             //     something that was never coming, reporting "Could not reach the server."
-            //     (Saber, 2026-08-09: the radio tabs saved fine because only the master save
+            //     (tgcfabian, 2026-08-09: the radio tabs saved fine because only the master save
             //     restarts.) A save that takes the receiver off the air is the worst possible
             //     outcome for the one control an owner must use.
             // ★★ REAP FIRST. execve keeps our pid, so PR_SET_PDEATHSIG will NOT fire for the radio

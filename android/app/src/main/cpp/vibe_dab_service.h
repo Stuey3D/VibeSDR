@@ -587,7 +587,7 @@ public:
         }
         return out;
     }
-    /** ★★★ THE LEARNT RATIO SURVIVES A RESTART. Stuart, on Saber's Linux box (2026-09-07): "the
+    /** ★★★ THE LEARNT RATIO SURVIVES A RESTART. Stuart, on tgcfabian's Linux box (2026-09-07): "the
      *  station was normal speed then there was a little blip then it went slow again and had to
      *  retrain itself". Inside one process the ratio is applied the moment any decoder restarts,
      *  so a retrain after a blip means the PROCESS restarted (systemd brings it straight back)
@@ -1774,7 +1774,7 @@ private:
         /* ★★★ A RATE CHANGE IS NOT A RESTART. This reset the interpolator whenever the input rate
          *  moved — and during the DAB+ start-up glide the measured rate moves on every access
          *  unit, so every unit began with a dropped phase and a re-primed sample: a click per
-         *  unit, fading as the estimate converged, gone once the ratio was remembered. Saber, in
+         *  unit, fading as the estimate converged, gone once the ratio was remembered. tgcfabian, in
          *  the Netherlands where every station is DAB+, heard "weird clicking noises that do
          *  appear to go away" (2026-09-07). The phase and the held samples carry across; only the
          *  step changes. A reset is still right when the STREAM restarts (service change), and
@@ -1965,7 +1965,7 @@ private:
                  *  service at 48 kHz (6 units per super frame) the same latency is three times the
                  *  fraction, the window "converged" below the remembered ratio, overrode it, and
                  *  every station "started at normal speed then went slow and had to relearn"
-                 *  (Stuart, from Saber's box, 2026-09-07). From the first output onwards each
+                 *  (Stuart, from tgcfabian's box, 2026-09-07). From the first output onwards each
                  *  write yields one unit's worth, so the count starts there. */
                 if (s.fmt.accessUnits > 0 && aacPrimed_) aacAuAcc_ += 1;
                 const bool aacGot = aac_.decode(pkt.data(), pkt.size(), dec);
@@ -2058,7 +2058,7 @@ private:
                                  *  burst of lost access units — a sub-second blip — skewed the window by more
                                  *  than 1 %, the rate followed it down, and the audio ran slow until the
                                  *  window had refilled: "normal speed then there was a little blip then it
-                                 *  went slow again and had to retrain itself" (Stuart, on Saber's box,
+                                 *  went slow again and had to retrain itself" (Stuart, on tgcfabian's box,
                                  *  2026-09-07; the Pi's journal shows the same: 44706 against 51200). Now the
                                  *  window is only WATCHED: a disagreement must persist for 400 units (a
                                  *  changed ffmpeg, not a blip) before the ratio is relearnt. */

@@ -1,6 +1,6 @@
 // ★★★ WHOSE ADDRESS IS IT? Behind a reverse proxy the TCP peer is the PROXY, so without this
 //     every listener shares one identity: a ban hits everyone, every flag shows the proxy's
-//     country, and one bad admin password locks out the world (Saber, 2026-08-08, running nginx:
+//     country, and one bad admin password locks out the world (tgcfabian, 2026-08-08, running nginx:
 //     "the logs spammed to me 127.0.0.1 connected and not an ip").
 //
 // ★★★ THE HEADER IS ATTACKER-CONTROLLED. X-Forwarded-For is just text a client can type, so

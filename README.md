@@ -180,11 +180,14 @@ Design notes and specifications for individual features live in [`briefs/`](brie
 |---|---|
 | **Stuart Carr (Stuey3D)** | UI/UX design, concept & testing |
 | **madpsy (M9PSY)** | Creator of UberSDR — protocol, DSP algorithms (NR2 / noise blanker / WebSDR-NR), colour palettes, band plans and bookmark format |
+| **tgcfabian** | The biggest outside source of testing and ideas VibeSDR and VibeServer have had — HackRF support, the deviation monitor, releasing the SDR when idle so other applications can use it, and working behind a reverse proxy all exist or work properly because of him. He ran VibeServer in a genuinely complicated environment and kept reporting what broke there, which is what made it robust rather than merely working on the bench it was written on |
+| **Onfliner** | Airspy R2 / Mini testing and feedback — the first person to run that driver on real hardware, and the reason its three gain modes are presented the way they are |
+| **Hans van Eijsden (FMDX.org)** | Calibration and validation of the Advanced RDS analyser against a Pira FM broadcast analyser — he found that our phase reading was its own reflection and that the deviation figures were scaled wrong, and kept testing until they agreed |
+| **Kiko7250** | Showed how VibeSDR is actually used, and on what hardware, in Brazil — which set off the optimisation push to run on the lowest-end machines we could reach (a Raspberry Pi 2 was bought specifically to build VibeServer on because of it). He also put up the first public VibeServer outside Stuart's and tgcfabian's, which is how Brazilian RDS came to be understood: their stations rotate the station name as a marquee, and the learning RDS bookmarks never worked properly on his server until they were changed to cope with it |
 | **Phil Karn (KA9Q)** | [ka9q-radio](https://github.com/ka9q/ka9q-radio) — the SDR engine underneath UberSDR, and (GPL-3.0) the design reference for VibeSDR's front-end automatic gain: IF-power level targeting, proportional correction and snap-to-hardware-steps. Read and credited, never copied |
 | **John Seamons (ZL/KF6VO)** | Creator of KiwiSDR |
 | **Jakob Ketterl (DD5JFK) & the OpenWebRX+ project** | OpenWebRX / OpenWebRX+ servers |
 | **NoobishSVK & contributors** | FM-DX Webserver + the servers.fmdx.org receiver map — protocol reference for the FM-DX backend and its 3LAS MP3 audio (GPL-3.0) |
-| **Hans van Eijsden (FMDX.org)** | Calibration and validation of the Advanced RDS analyser against a Pira FM broadcast analyser — he found that our phase reading was its own reflection and that the deviation figures were scaled wrong, and kept testing until they agreed |
 | **Oona Räisänen (windytan)** | [redsea](https://github.com/windytan/redsea) (MIT) — the reference for VibeDSP's weak-signal RDS block recovery: syndrome-table burst correction, rhythm-based sync acquisition and error-rate sync dropping. No redsea code is used; the ideas are hers |
 | **Konrad Kosmatka** | librdsparser — reference for the RDS PI + ECC → country mapping (IEC 62106) behind the RDS country flags |
 | **radio-browser.info** | Community station directory used to look up FM-DX / RDS station logos |
