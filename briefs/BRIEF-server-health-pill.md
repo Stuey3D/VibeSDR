@@ -12,20 +12,31 @@ Public clients receive **levels only, never raw values**.
 
 ## 2. Layout
 
-Build both variants. Ship **A** as the default and keep **B** behind a dev/debug toggle so they can be compared on real devices.
+★★★ **DECIDED (Stuart, 2026-09-25): variant B, and the label reads "Server Health".**
+> "I'm thinking the Pill should say. Server Health / Icons Underneath"
+
+So there is no A/B toggle to build: ship B, captioned **SERVER HEALTH**, icons on the row beneath.
+"SERVER" alone did not say what the icons were — the caption is the only thing that tells a listener
+these are the RECEIVER's figures and not their own phone's, which is the whole point of the pill.
+★ The caption is now ~13 characters rather than 6. The pill is content-width, so check it does not
+  become the widest element: the icon row (3 icons + a 40 px battery + dividers) is ~150 px, and
+  "SERVER HEALTH" at 9 px/700 with 0.16em tracking is ~95 px, so the icons should still set the
+  width. If a longer future caption ever exceeds the row, shorten the caption — never grow the pill.
+
+The A variant below is kept only as the record of what was considered and why it lost.
 
 **A — label beside (single row, ~28 px tall)**
 `server │ [CPU] [RAM] [TEMP] │ [BAT 100% ⚡]`
 
 **B — label above (two rows, ~44 px tall)**
 ```
-SERVER
+SERVER HEALTH
 [CPU] [RAM] [TEMP] │ [BAT 100% ⚡]
 ```
 
 - Pill background `rgba(8,12,8,0.86)`, border 1.5 px, radius 14 (A) / 12 (B).
 - Icons 16 × 16, stroke 1.4, round caps, `currentColor`; 8 px gaps; 1 px dividers at `rgba(255,255,255,0.16)`.
-- Label: A = `server`, 12 px/600; B = `SERVER`, 9 px/700, letter-spacing 0.16em, `#B9C0B4`.
+- Label: B (shipping) = `SERVER HEALTH`, 9 px/700, letter-spacing 0.16em, `#B9C0B4`. (A, not shipping, was `server` at 12 px/600.)
 - The pill is **content-width and right-anchored**, so it grows leftwards when a slot appears or disappears.
 - Battery: 40 × 16 outline with a 2 × 6 nub. The inner fill width equals the charge %, in the level colour at 22% alpha. The % text (10 px bold mono) is always shown. A bolt appears only while charging.
 - Hit target ≥ 44 px (A needs invisible vertical padding; B already meets it).
