@@ -15,7 +15,12 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstdint>
+#include <cstring>
+#include <dirent.h>
+#include <map>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 #include "vibe_admin.h"
@@ -118,10 +123,59 @@ inline bool capObserved() {
 
 }  // namespace detail
 
+namespace detail {
+
+/** ★★★ THE BUSIEST CORE, AND WHETHER ANYTHING CAN MOVE OFF IT.
+ *
+ *  Stuart, 2026-09-25, refining this twice: first "we cant have it green when some audio is breaking
+ *  up due to a thread taking up an entire core, like we encountered when first building the Pi2
+ *  build", then the sharper version — "its when that thread, regardless of if itself has grown or if
+ *  other threads are running with it on the same core, starts getting starved that is the issue;
+ *  that 1 core could be 100% and the other cores could be 75 50 60 but that 100% core will be the
+ *  one causing us the issues."
+ *
+ *  ★★ SO THE MEASURE IS THE CORE, NOT OUR THREAD. What starves the audio is the core it happens to
+ *     be on being saturated — by our work or anyone's — and that is invisible in a machine average
+ *     (100/75/50/60 averages to a comfortable 71) and equally invisible in our own thread's figure,
+ *     which says nothing about who else is on that core.
+ *  ★★★ AND A SATURATED CORE IS ONLY A PROBLEM WHEN THERE IS NOWHERE TO GO. One core pegged with
+ *      three idle ones is a stable system — the scheduler simply moves the rest away, which is
+ *      exactly the case he called "happy all day". The same core pegged while the others sit at
+ *      50-75 % means nothing can migrate and whatever is on it waits. That is why the busiest core
+ *      is weighted by the machine's own load below rather than read on its own.
+ *  ★ Straight from /proc/stat's per-cpu lines, so it counts every process on the machine and not
+ *    just ours. Linux only; macOS keeps the machine total alone rather than a guess. */
+inline double busiestCorePct(double) {
+    static std::map<int, std::pair<long, long>> last;   // cpu -> (busy, total)
+    FILE* f = fopen("/proc/stat", "r");
+    if (!f) return -1;
+    char line[512];
+    double worst = -1;
+    while (fgets(line, sizeof line, f)) {
+        int cpu = -1;
+        long u = 0, n = 0, sy = 0, id = 0, io = 0, irq = 0, sirq = 0, st = 0;
+        if (sscanf(line, "cpu%d %ld %ld %ld %ld %ld %ld %ld %ld",
+                   &cpu, &u, &n, &sy, &id, &io, &irq, &sirq, &st) != 9) continue;
+        const long busy  = u + n + sy + irq + sirq + st;      // ★ iowait is NOT busy
+        const long total = busy + id + io;
+        auto it = last.find(cpu);
+        if (it != last.end()) {
+            const long db = busy - it->second.first, dt = total - it->second.second;
+            if (dt > 0) worst = std::max(worst, 100.0 * (double)db / (double)dt);
+        }
+        last[cpu] = { busy, total };
+    }
+    fclose(f);
+    return worst;
+}
+
+}  // namespace detail
+
 /** One sample. Call about once a second; it is cheap (readSys plus at most a few small sysfs reads).
  *  `prev` carries the hysteresis and the smoothing between calls. */
 struct Sampler {
     double cpuEwma = -1, ramEwma = -1;
+    int    iqDropRun = 0;          // consecutive seconds with IQ thrown away
     Health last;
     int    critHoldCpu = 0, critHoldRam = 0, critHoldTemp = 0;
     bool   started = false;
@@ -130,7 +184,8 @@ struct Sampler {
      *  that one busy frame does not repaint the pill. */
     static double ewma(double prev, double v) { return prev < 0 ? v : prev * 0.7 + v * 0.3; }
 
-    Health sample(int batPct, bool batCharging) {
+    Health sample(int batPct, bool batCharging, double dtSec = 1.0,
+                  uint64_t iqDroppedDelta = 0) {
         const vibeadmin::SysStats s = vibeadmin::readSys();
         Health h;
 
@@ -141,10 +196,92 @@ struct Sampler {
         if (s.cpuPct >= 0) cpu = s.cpuIsProcess ? s.cpuPct : (s.cores > 0 ? s.cpuPct / s.cores : s.cpuPct);
         else if (s.haveLoad && s.cores > 0) cpu = 100.0 * s.load1 / s.cores;   // fallback: load average
         static const double CPU_T[3] = { 50, 75, 90 };
-        if (cpu >= 0) {
-            cpuEwma = ewma(cpuEwma, std::min(100.0, cpu));
+        /* ★★★ THE TWO FIGURES ARE COMBINED, NOT RACED. Taking the worse of them called a busy core
+         *  a problem on an idle machine, and it is not one. Stuart, 2026-09-25: "85% thread may be
+         *  happy all day until the core itself gets slammed at 100%, but if that 85% is on its own
+         *  core doing its own thing and the other processes are spread out like they are now then
+         *  that is a stable system even though that thread is high."
+         *
+         *  ★★ SO THE RISK IS CONTENTION, NOT BUSYNESS. A thread pegged at 85 % with three idle cores
+         *     around it owns its core and will keep owning it. The SAME thread on a machine that is
+         *     itself at 80 % is competing for that core, and the moment it loses, the audio it
+         *     carries stutters. The thread figure therefore counts in PROPORTION to how loaded the
+         *     machine is: barely at all when there is room, fully when there is none.
+         *  ★ At an idle machine the thread contributes 40 % of its value; at a saturated one, 100 %.
+         *    An 85 % thread reads 34 (green) on an idle box and 75 (high) on a busy one — which is
+         *    the distinction he drew, expressed as one number instead of two verdicts.
+         *  ★ Still the MAX against the machine total, so a machine in trouble is reported whatever
+         *    its threads are doing individually. */
+        const bool capped = detail::capObserved();
+        const double hottest = detail::busiestCorePct(dtSec);
+        /* ★★★ THE RUN QUEUE — threads that are READY and waiting for a core. This is the most
+         *  direct proxy there is for "something is being starved": a load average above the core
+         *  count means somebody is always queueing, whatever the percentages look like. */
+        const double loadRatio = (s.haveLoad && s.cores > 0) ? 100.0 * s.load1 / s.cores : -1;
+        double pressure = cpu;
+        if (cpu >= 0 && hottest >= 0) {
+            /* ★ How little room there is to move work off that core. At an idle machine the hottest
+             *  core contributes 40 % of its value (a lone busy core is fine); at a saturated one,
+             *  all of it. 100/75/50/60 gives a machine total of 71 and a pressure of 83 — high,
+             *  which is the verdict he wanted; one core at 85 with the rest idle gives 45 — green. */
+            const double contention = 0.4 + 0.6 * std::min(1.0, cpu / 100.0);
+            /* ★★★ AND A KNEE AT SATURATION, which is what reconciles two cases that look like they
+             *  contradict each other. Stuart's own figures, 2026-09-25:
+             *      100 % of 400 %, cores 50/25/15/10  -> fine
+             *      100 % of 400 %, cores 95/ 3/ 1/ 1  -> "Bad, one hiccup away from issues"
+             *  Identical machine totals; the difference is entirely that one core is nearly full.
+             *  And earlier: 85 % on its own core with the rest idle is "happy all day".
+             *  ★★ So below the knee a lone busy core really is fine — there is slack, and the
+             *     scheduler has somewhere to put everything else. Above it there is no slack left
+             *     ON THAT CORE, and the work sitting there cannot be split however idle the rest of
+             *     the machine is. 88 % is where 85 stays green and 95 does not.
+             *  ★ 95 % scores 89.6 — high, and deliberately just short of critical. That is what
+             *    "one hiccup away from issues" means: not broken, but with nothing left in hand. */
+            static constexpr double kKnee = 88.0;
+            const double sat = hottest < kKnee ? 0.0
+                             : 75.0 + (hottest - kKnee) * (25.0 / (100.0 - kKnee));
+            pressure = std::max({ cpu, std::min(100.0, hottest) * contention, sat });
+        }
+        /* ★★★ A COMBINATION DETECTOR — every factor that makes a server hiccup, in one colour.
+         *
+         *  Stuart, 2026-09-25: "we make a combination detector for the CPU meter, that takes all of
+         *  the factors that can cause a server to have hiccups and issues and make the colour react
+         *  accordingly."
+         *
+         *  ★★★ THE STRONGEST FACTOR IS NOT A PROXY AT ALL. Dropped IQ is not a PREDICTION that the
+         *      receiver might struggle — it is the radio's own samples being thrown on the floor
+         *      because nothing collected them in time. When that is happening the pill must not be
+         *      green whatever the percentages say, so it sets a FLOOR rather than joining the
+         *      average.
+         *  ★★★ AND SPECTRUM FRAMES DROPPING IS DELIBERATELY IGNORED. The thread priority is
+         *      NETWORK > AUDIO > SPECTRUM > DECODERS, so shedding spectrum under load is the design
+         *      WORKING — the Pi 2 holds a steady waterfall at a reduced rate with the audio intact,
+         *      and Stuart's own words were "that is the process priority working as it should".
+         *      Colouring the pill for it would report correct behaviour as a fault, which is the
+         *      same mistake the app's link meter made this morning.
+         *  ★★ A frequency CAP counts too: a throttled machine is a slower machine, and the work has
+         *     not got any smaller. It is worth a nudge, not an alarm, because the hardware is
+         *     protecting itself — which is what it is supposed to do.
+         *  ★ Proxies take the MAX, not a sum: these describe the same shortage from different angles
+         *    and adding them would double-count one busy machine into a crisis. */
+        static const double LOAD_T[3] = { 90, 130, 200 };   // load1 as a % of core count
+        double score = pressure;
+        if (loadRatio >= 0) score = std::max(score, std::min(200.0, loadRatio) * 0.5 + 25.0);
+        if (score >= 0) {
+            cpuEwma = ewma(cpuEwma, std::min(100.0, score));
             h.cpu = detail::settle(detail::bucket(cpuEwma, CPU_T, true), last.cpu, cpuEwma, CPU_T, 5, true);
         } else h.cpu = last.cpu;
+        if (loadRatio >= LOAD_T[2] && h.cpu < HIGH) h.cpu = HIGH;   // the queue never clears
+
+        /* ★ A cap is a nudge. ★★ Dropped IQ is a floor: HIGH the moment it happens, CRITICAL if it
+         *  is still happening a few seconds later — by then it is not a blip, it is the state of the
+         *  machine. Counted in whole samples, so any non-zero delta is real. */
+        if (capped && h.cpu < WARM) h.cpu = WARM;
+        if (iqDroppedDelta > 0) {
+            iqDropRun++;
+            if (h.cpu < HIGH) h.cpu = HIGH;
+            if (iqDropRun >= 3) h.cpu = CRIT;
+        } else iqDropRun = 0;
 
         // ── RAM ────────────────────────────────────────────────────────────────────────────────
         static const double RAM_T[3] = { 70, 85, 95 };
@@ -160,7 +297,6 @@ struct Sampler {
          *    readSys() has no trip point, so 80 °C is assumed — the figure the admin page has always
          *    used for its own warning. */
         static const double HEAD_T[3] = { 20, 10, 5 };      // lower headroom is worse
-        const bool capped = detail::capObserved();
         if (s.haveTemp) {
             const double head = 80.0 - s.tempC;
             h.temp = detail::settle(detail::bucket(head, HEAD_T, false), last.temp, head, HEAD_T, 5, false);

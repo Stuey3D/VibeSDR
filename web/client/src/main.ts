@@ -4475,12 +4475,21 @@ function updateStatus() {
    *    what these say, and a control added later cannot leave a stale badge behind. */
   const tagEl = $('dspTags');
   if (tagEl) {
+    /* ★★★ THE BLANKER'S IDS ARE `nbBtn` AND `nbxBtn`, NOT `nb`/`nbx` — SO NB NEVER SHOWED.
+     *  `$('nb')` and `$('nbx')` match nothing in this page, so `nbOn` was false whatever the
+     *  listener had switched on: "NR/AN show but NB isnt even though it is active" (Stuart,
+     *  2026-09-25). The lookup failed silently, which is how a badge ends up lying rather than
+     *  breaking — exactly the fault the comment above claims to avoid by reading the controls.
+     *  ★ Reading the CONTROLS is still right; the ids just have to be the real ones. */
+    const on = (id: string) => !!document.getElementById(id)?.classList.contains('on');
     const nrOn    = (Number(($('nr') as HTMLInputElement | null)?.value) || 0) > 0;
-    const nbOn    = ($('nb') as HTMLInputElement | null)?.classList.contains('on')
-                 || ($('nbx') as HTMLInputElement | null)?.classList.contains('on');
-    const notchOn = ($('notch') as HTMLInputElement | null)?.classList.contains('on');
-    const tags = [nrOn ? 'NR' : '', nbOn ? 'NB' : '', notchOn ? 'AN' : ''].filter(Boolean);
-    tagEl.textContent = tags.length ? ` · ${tags.join(' ')}` : '';
+    const nbOn    = on('nbBtn') || on('nbxBtn');
+    const notchOn = on('notch');
+    /* ★★ BOXED, LIKE THE APP. Two or three bare letters at the end of a dense status row read as
+     *  leftover text; the app gives them a tinted pill so they say "this is ON" at a glance, and
+     *  the two clients should not disagree about what an enabled setting looks like. */
+    tagEl.innerHTML = [nrOn ? 'NR' : '', nbOn ? 'NB' : '', notchOn ? 'AN' : '']
+      .filter(Boolean).map((t) => `<b class="dspTag">${t}</b>`).join('');
   }
   // ★ And say what they MEAN on hover — the row has room for a label, not for a sentence.
   el.title = `spectrum ${specKbps.toFixed(0)} KB/s · audio ${audioKbps.toFixed(0)} KB/s`

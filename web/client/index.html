@@ -2866,6 +2866,17 @@ select.btn { padding: 6px 8px; }
                     text-align: right; }
 .sqlAutoMarginLbl { font: 700 9px/1 system-ui, sans-serif; letter-spacing: 0.1em; color: #7f8a7c;
                     white-space: nowrap; }
+
+/* ── DSP badges in the status row: boxed, like the app ───────────────────────────────────────
+   ★ They are drawn ONLY when the treatment is on, so they must LOOK on: amber in a tinted pill,
+     the same treatment the app gives them. Bare letters at the end of a dense row read as
+     leftover text (Stuart, 2026-09-25: "can these also have a box around them like the app so
+     they stand out as settings that have been enabled"). */
+#dspTags { display: inline-flex; gap: 5px; margin-left: 8px; vertical-align: baseline; }
+#dspTags .dspTag { font: 700 9px/1 ui-monospace, monospace; letter-spacing: 0.08em;
+                   color: #ffb833; background: rgba(255,184,51,0.16);
+                   border: 1px solid rgba(255,184,51,0.55); border-radius: 4px;
+                   padding: 2px 4px; }
 </style>
 
 <!-- Lock-screen / Now Playing artwork, composited at runtime from the same two
