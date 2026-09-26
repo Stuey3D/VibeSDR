@@ -224,3 +224,34 @@ result is arithmetic against our own output, and the peak result is checked agai
    too (every row above ran IF 186-195 k).
 3. **Onfliner is the absolute anchor**, not Stuart — he measured the eleven-station deficit on his
    own MpxTool and can re-read `raw` beside it now that it is published.
+
+### ★★★ FINDING 3 — TWO DIFFERENT RADIOS AGREE, SO IT IS NOT THE RECEIVER
+Same five stations re-read on the Pi 500 with an **RTL-SDR Blog V4** in place of the Airspy HF+:
+
+| station | Airspy avg/raw | V4 avg/raw | clamped |
+|---|---|---|---|
+| Heart 96.6   | 1.4 / 2.0 | **1.4 / 2.0** | both |
+| Flex 96.1    | 2.6 / 3.6 | **2.6 / 3.6** | both |
+| BBC R1 99.7  | 1.2 / 1.8 | 1.3 / 1.8 | both |
+| Classic 100.4| 2.3 / 2.6 | 2.0 / 2.2 | neither |
+| BBC Nhtn 104.2| 1.7 / 1.8 | 1.1 / 1.5 | Airspy NO, V4 YES |
+
+★★ **Flex is identical to the decimal on both radios** (avg 2.6 · peak 5.8 · raw 3.6) despite 14 %
+vs 56 % block errors and 29 vs 26 dB SNR. RDS injection is a transmitter property and both
+receivers agree on it — **the meter is reproducible across front ends**, which is a good result for
+the instrument and a bad one for any "it's that radio" explanation.
+▶ The SAME stations clamp on BOTH. So the clamp is not an Airspy characteristic and not an RTL one:
+it is the guard-band measurement, or what reaches it.
+
+### ✗ THE IF-WIDTH PREDICTION WAS NOT TESTED — DO NOT RECORD IT AS DISPROVED
+I predicted a narrower IF would clamp less. **Both runs were WIDE** — the ADV RDS row read
+"IF NARROW: wide · 110k would cost −16.4 dB" on the V4 and the same on the Airspy. ★ The V4's
+footer "IF 2800 kHz" is the TUNER CAPTURE width, not the demodulator IF; do not read it as narrow.
+
+### ▶ THE ONE CHEAP EXPERIMENT LEFT, before touching any of this code
+**Heart 96.6 (59 dB, 0 % errors — the cleanest clamped case), force IF NARROW to 110k or 168k, and
+re-read `avg` and `raw`.**
+- `avg` comes off `raw * 0.707` ⇒ adjacent-channel energy IS landing in the 63 kHz guard; fix how
+  the guard is measured, or gate the correction on IF width.
+- still clamped at 110k ⇒ the guard is not being contaminated from outside at all and **the
+  subtraction itself is wrong** — a deeper fix, and a different one.
