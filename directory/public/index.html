@@ -92,6 +92,7 @@
        subject. A label that competes with a server pin is a label in the way. */
   /* ★ Country names sit ABOVE the town labels in weight and BELOW them in brightness -- larger so
        they read as the bigger thing, dimmer so they stay behind the receivers. */
+  .reliefImg { image-rendering: auto; }
   .contLbl { font-size: 13px !important; letter-spacing: 3px; opacity: 0.5; }
   /* ★ Airports amber, heliports and ports dimmer -- the airfield is what an ATC listener is
    *  scanning for, so it wins the eye; a port is context until AIS makes it the subject. */
@@ -959,7 +960,7 @@ const MAP_TOWN = '#9ec9a8', MAP_LABEL = 'rgba(210,235,215,0.82)';
  *  redraw has to re-assert it, so a layer can never end up behind the ground it sits on.
  *  ★ Canvas renderers per pane too -- these layers are thousands of polygons, and SVG makes one
  *  DOM node each. */
-const PANES = { shelf: 350, land: 360, cover: 370, urban: 375,
+const PANES = { shelf: 350, land: 360, relief: 365, cover: 370, urban: 375,
                 water: 380, admin: 385, road: 390, place: 395 };
 const paneRenderer = {};
 for (const [name, z] of Object.entries(PANES)) {
@@ -1003,6 +1004,37 @@ function tierName(z) { return z <= 4 ? 'tier0' : z <= 7 ? 'tier1' : 'tier2'; }
  *  ★ The probe is ONE fetch of index.json, and if even that fails we assume the basic pack, which
  *  is the safe direction: we may under-use data that is present, never over-ask for data that is
  *  not. */
+/* ★★★ SHADED RELIEF -- a raster, on purpose, in a basemap that deleted raster TILES. What was
+ *  thrown away was a DEPENDENCY: images fetched on demand from somebody else's server, which went
+ *  black when they were slow. This is one bundled file that ships with the map, so it has none of
+ *  those failure modes -- and terrain genuinely is a continuous field, which is why the attempt to
+ *  draw mountains as polygons produced blobs.
+ *  ★★ IT SITS ABOVE THE LAND FILL AND BELOW EVERYTHING ELSE. The vector land is the ground truth
+ *  for WHERE land is; the relief only says what the ground is doing. Its alpha fades out at sea
+ *  level, so where the two sources disagree about a coastline neither one asserts anything.
+ *  ★ Bounds are Web Mercator's own cut-off latitude, read from the index -- the image was
+ *  reprojected with that exact constant, and 85 instead of 85.0511 slides it off the coast.
+ *  ★ Hidden past z9: at 2 arc-minutes a pixel is ~3.7 km, and beyond that it is just blur over
+ *  data that is already more accurate. */
+let reliefOverlay = null;
+async function drawRelief() {
+  const ix = await mapManifest();
+  const cfg = ix.relief;
+  if (!cfg) return;
+  const z = map.getZoom();
+  const want = z <= 9;
+  if (!want) { if (reliefOverlay) { map.removeLayer(reliefOverlay); reliefOverlay = null; } return; }
+  // ★ Prefer the finer image only when the detail pack is actually installed.
+  const file = (cfg.detail && ix.files.has(cfg.detail)) ? cfg.detail : cfg.basic;
+  if (reliefOverlay && reliefOverlay._vibeFile === file) return;
+  if (reliefOverlay) map.removeLayer(reliefOverlay);
+  const lat = cfg.mercatorLat || 85.0511287798066;
+  reliefOverlay = L.imageOverlay(MD + file, [[-lat, -180], [lat, 180]],
+    { pane: 'relief', opacity: 0.92, interactive: false, className: 'reliefImg' });
+  reliefOverlay._vibeFile = file;
+  reliefOverlay.addTo(map);
+}
+
 let mapIndex = null;
 function mapManifest() {
   if (!mapIndex) {
@@ -1011,8 +1043,9 @@ function mapManifest() {
      *  a stale manifest is indistinguishable from an uninstalled pack. */
     mapIndex = fetch(MD + 'index.json', { cache: 'no-cache' })
       .then((r) => (r.ok ? r.json() : null))
-      .then((ix) => ({ files: new Set(Object.keys(ix?.files || {})), sharded: ix?.sharded || {} }))
-      .catch(() => ({ files: new Set(), sharded: {} }));
+      .then((ix) => ({ files: new Set(Object.keys(ix?.files || {})),
+                       sharded: ix?.sharded || {}, relief: ix?.relief || null }))
+      .catch(() => ({ files: new Set(), sharded: {}, relief: null }));
   }
   return mapIndex;
 }
@@ -1222,9 +1255,18 @@ async function drawWater() {
       inPane('admin', { color: MAP_ADMIN, weight: 0.5, opacity: 0.4, dashArray: '3,3' })).addTo(adminLayer);
   }
 }
-/* ★ Order matters: painted in THIS sequence, so ice lands on top of the range it caps. */
+/* ★★★ NO `alpine` HERE, DELIBERATELY. Natural Earth's 'Range/mtn' polygons are ENVELOPES DRAWN
+ *  AROUND A RANGE FOR LABEL PLACEMENT, not terrain. Filled, they are pale grey slabs that bear no
+ *  relation to where the ground is high -- one of them covers Belgium. Stuart, 2026-09-26: "the
+ *  mountains look a bit shit, bit like big random blobs ... they may have to go."
+ *  ★★ The deserts work BECAUSE a desert genuinely is an area; a mountain range is a shape, and the
+ *  only honest source for it is elevation data. ✗ Do not re-add this layer from NE polygons. If
+ *  peaks are wanted, contour a DEM (ETOPO2v2c is a 73 MB plain int16 grid) -- that is the same
+ *  standard the rest of this basemap is held to.
+ *  ★ Same rule as AGENTS.md's dead control: a feature that misdescribes the world is worse than an
+ *  absent one, because the user believes it. */
 const COVER_COLOUR = { desert: MAP_DESERT, tundra: MAP_TUNDRA, wetland: MAP_WETLAND,
-                       alpine: MAP_ALPINE, ice: MAP_ICE };
+                       ice: MAP_ICE };
 async function drawCover() {
   const z0 = map.getZoom(), box = viewBox();
   const [cover, urban] = await Promise.all([
@@ -1339,7 +1381,7 @@ function redrawMap() {
   redrawT = setTimeout(() => {
     if (drawing) return;
     drawing = true;
-    Promise.all([drawBase(), drawCover(), drawWater(), drawRoads(),
+    Promise.all([drawBase(), drawRelief(), drawCover(), drawWater(), drawRoads(),
                  drawCountryNames(), drawPlaces(), drawPoi()])
       // ★★★ NEVER SWALLOW A DRAW ERROR AGAIN. The silent .catch here is precisely why a TypeError
       //   in drawBase looked like "the feature did not ship" for two deploys.

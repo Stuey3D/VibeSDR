@@ -39,6 +39,7 @@
  */
 import { readFile, writeFile, mkdir, stat, readdir, unlink } from 'node:fs/promises';
 import { readDbf, eachPolygon } from './lib/shapefile.mjs';
+import { readEtopo, buildRelief, encodePng, MERC_LAT } from './lib/relief.mjs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -92,6 +93,10 @@ const SRC = {
    *  long as our map remains compact and high performance."
    *  ★★ CC BY 4.0 -- attribution required, like GeoNames. It rides in index.json. */
   hydrolakes: 'https://data.hydrosheds.org/file/hydrolakes/HydroLAKES_polys_v10_shp.zip',
+  /* ★★ ETOPO2v2c -- 2 arc-minute global elevation, 73 MB zipped, PUBLIC DOMAIN (NOAA). It is a
+   *  plain int16 grid with no container format, which is why it was chosen over ETOPO 2022's
+   *  netCDF: no GDAL, no netCDF library, no toolchain between anyone and a map rebuild. */
+  etopo: 'https://www.ngdc.noaa.gov/mgg/global/relief/ETOPO2/ETOPO2v2-2006/ETOPO2v2c/raw_binary/ETOPO2v2c_i2_LSB.zip',
   cities5000: 'https://download.geonames.org/export/dump/cities5000.zip',
   airports: 'https://davidmegginson.github.io/ourairports-data/airports.csv',
   ports: 'https://msi.nga.mil/api/publications/download?key=16920959/SFH00000/UpdatedPub150.csv&type=download',
@@ -215,10 +220,12 @@ function packLines(geom, dp) {
  *   size, need a projection, and could not be restyled to the app's palette -- which is the entire
  *   reason we left raster tiles behind.
  */
-/* ★ 'Range/mtn' gives the Alps, Rockies, Andes, Himalaya and 218 more as pale peaks. Stuart,
- *  2026-09-26, once the deserts landed: "we could add mountains as white peaks too such as the
- *  alps and rockies". It is the same file and the same filter, so it costs one more class. */
-const COVER_CLASSES = new Set(['Desert', 'Tundra', 'Wetlands', 'Range/mtn']);
+/* ★★★ 'Range/mtn' IS NOT IN THIS SET, AND THAT WAS TESTED THE HARD WAY. Natural Earth's mountain
+ *  polygons are envelopes drawn around a range so a LABEL can be placed on it -- they are not the
+ *  extent of high ground. Filled, they render as pale slabs unrelated to the terrain (one covers
+ *  Belgium). The desert classes work because a desert genuinely IS an area; a mountain range is a
+ *  shape, and only elevation data carries it. ✗ Do not add it back from this file. */
+const COVER_CLASSES = new Set(['Desert', 'Tundra', 'Wetlands']);
 
 /**
  * Shoelace area in square degrees. ★ Not a real area -- it is stretched by latitude and means
@@ -241,8 +248,8 @@ function bigEnough(rings, minArea) {
 }
 
 function buildCover(regionsGj, glaciersGj, dp, minArea = 0) {
-  const out = { desert: [], tundra: [], wetland: [], alpine: [], ice: [] };
-  const bucket = { Desert: 'desert', Tundra: 'tundra', Wetlands: 'wetland', 'Range/mtn': 'alpine' };
+  const out = { desert: [], tundra: [], wetland: [], ice: [] };
+  const bucket = { Desert: 'desert', Tundra: 'tundra', Wetlands: 'wetland' };
   for (const f of regionsGj.features) {
     const cla = (f.properties || {}).FEATURECLA;
     if (!COVER_CLASSES.has(cla)) continue;
@@ -653,6 +660,28 @@ if (!(await stat(hydroShp).catch(() => null))) {
 }
 const hydroDbf = path.join(hydroDir, 'HydroLAKES_polys_v10.dbf');
 
+/* ★★★ SHADED RELIEF -- the one raster in a vector basemap, and deliberately so. Stuart, 2026-09-26:
+ *  "I would like the map to look like a realistic representation of the world just at a more coarse
+ *  detail level for performance and space saving." Terrain IS a continuous field; the attempt to
+ *  express it as polygons is what produced the mountain blobs that were pulled the same afternoon.
+ *  ★ It is BUNDLED, not fetched, so it carries none of the failure modes that made us drop tiles. */
+const etopoDir = path.join(cacheDir, 'etopo');
+const etopoBin = path.join(etopoDir, 'ETOPO2v2c_i2_LSB.bin');
+if (!(await stat(etopoBin).catch(() => null))) {
+  await fetchCached('ETOPO2v2c_i2_LSB.zip', SRC.etopo, { binary: true });
+  process.stderr.write('  unpacking ETOPO2 …');
+  await mkdir(etopoDir, { recursive: true });
+  try {
+    execFileSync('unzip', ['-o', path.join(cacheDir, 'ETOPO2v2c_i2_LSB.zip'), '-d', etopoDir], { stdio: 'pipe' });
+  } catch (e) { die(`etopo: unzip failed (${e.message}).`); }
+  process.stderr.write(' done\n');
+}
+const etopo = readEtopo(etopoBin);
+const reliefImages = [
+  ['relief.png', 'basic', buildRelief(etopo, { width: 2700 })],
+  ['relief-hi.png', 'detail', buildRelief(etopo, { width: 4096 })],
+];
+
 // tier0 world z0–4 · tier1 regional z5–7 · tier2 local z8+
 const layers = [
   // tier0 — only what is legible at z0–4. A small_airport dot at z2 is a pixel of noise.
@@ -701,6 +730,7 @@ const index = {
   // ★ The licences ride WITH the data. GeoNames is CC BY 4.0 and the credit is not optional; any
   //   renderer that loads tier2 places must show it, and it cannot show what it was never told.
   licences: {
+    'noaa-etopo': { layers: ['relief'], licence: 'Public domain (US Government)', url: 'https://www.ncei.noaa.gov/products/etopo-global-relief-model' },
     'natural-earth': { layers: ['countries', 'admin1', 'lakes', 'places(tier0,tier1)', 'urban', 'cover', 'roads', 'rivers', 'shelf'], licence: 'Public domain', url: 'https://www.naturalearthdata.com/' },
     geonames: { layers: ['places(tier2)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© GeoNames', url: 'https://www.geonames.org/' },
     ourairports: { layers: ['airports'], licence: 'Public domain', url: 'https://ourairports.com/data/' },
@@ -708,6 +738,10 @@ const index = {
     'nga-wpi': { layers: ['ports'], licence: 'Public domain (US Government)', url: 'https://msi.nga.mil/Publications/WPI' },
   },
   zoom: { tier0: [0, 4], tier1: [5, 7], tier2: [8, 22] },
+  /* ★ The renderer needs the CUT-OFF LATITUDE to place the image, and it must come from the same
+   *  constant that generated it -- a renderer that hardcodes 85 instead of 85.0511 slides the
+   *  relief a few kilometres off the coastline at high latitude. */
+  relief: { mercatorLat: MERC_LAT, basic: 'relief.png', detail: 'relief-hi.png' },
   /* ★★★ TWO PACKS, AND THE RENDERER MUST WORK WITH ONLY THE FIRST. Stuart, 2026-09-26: "ship the
    *  VibeServer with basic maps and give the server owner the option of a one time download of
    *  the more detailed level 2 maps. same with the app too."
@@ -895,15 +929,24 @@ await mkdir(outDir, { recursive: true });
  *  25 MiB asset limit -- a file nothing referenced any more. A generator that only ever adds leaves
  *  the previous shape of the data lying next to the current one, and the stale copy always wins
  *  somewhere. The output directory is owned by this script, so it says what belongs in it. */
-const keep = new Set([...written.map(([f]) => f), 'index.json', 'country-labels.json']);
+const keep = new Set([...written.map(([f]) => f), 'index.json', 'country-labels.json',
+                      ...reliefImages.map(([f]) => f)]);
 for (const f of await readdir(outDir).catch(() => [])) {
-  if (f.endsWith('.json') && !keep.has(f)) {
+  if ((f.endsWith('.json') || f.endsWith('.png')) && !keep.has(f)) {
     await unlink(path.join(outDir, f));
     console.error(`  pruned stale ${f}`);
   }
 }
 for (const [file, json] of written) await writeFile(path.join(outDir, file), json);
-await writeFile(path.join(outDir, 'index.json'), indexJson);
+for (const [file, pack, img] of reliefImages) {
+  const png = encodePng(img);
+  await writeFile(path.join(outDir, file), png);
+  index.files[file] = { layer: 'relief', bytes: png.length, width: img.width, height: img.height };
+  index.packs[pack].files.push(file);
+  index.packs[pack].bytes += png.length;
+  console.error(`  relief ${file}: ${img.width}x${img.height}, ${(png.length / 1048576).toFixed(2)} MB`);
+}
+await writeFile(path.join(outDir, 'index.json'), JSON.stringify(index));
 
 /* ★★★ THE DETAIL PACK IS SHIPPED AS ONE TARBALL, NOT EIGHT FILES. A server owner or a phone on
  *  cellular clicking "download detailed maps" must get ONE request that either succeeds or fails
