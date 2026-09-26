@@ -873,7 +873,7 @@
         if (!ringInView(line, box)) continue;
         n++;
         L.polyline(line.map(([lon, lat]) => [lat, lon]),
-          inPane('admin', { color: MAP_ADMIN, weight: 0.5, opacity: 0.4, dashArray: '3,3' })).addTo(adminLayer);
+          inPane('admin', { color: MAP_ADMIN, weight: 0.6, opacity: 0.5, dashArray: '3,3' })).addTo(adminLayer);
       }
     }
 
@@ -976,8 +976,15 @@
         for (const ring of rings) {
           if (!ringInView(ring, box)) continue;
           for (const dx of offs) {
+            /* ★★ AT THIS TIER THE COUNTRY OUTLINE *IS* THE BORDER — there is no separate border layer
+             *  until the coast tier, so drawing these in MAP_COAST left every national boundary as
+             *  faint as a shore at exactly the zooms where a reader is orienting themselves by
+             *  country. Stuart asked for borders to be clearer "in all places", and this is the
+             *  other place. ★ The shared edge between two countries is drawn twice (once per
+             *  polygon), so it naturally reads a touch stronger than a lone coastline — which is
+             *  the right emphasis rather than an artefact to fight. */
             L.polygon(ring.map(([lon, lat]) => [lat, lon + dx]), inPane('land', {
-              color: MAP_COAST, weight: 0.6, opacity: 0.8, fillColor: MAP_LAND, fillOpacity: 1,
+              color: MAP_BORDER, weight: 0.9, opacity: 0.9, fillColor: MAP_LAND, fillOpacity: 1,
             })).addTo(basemap);
           }
         }
