@@ -1285,7 +1285,22 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
          *  disabled and the dial stays held on a receiver that is back on FM (my own fault of an
          *  hour earlier: dabOn was cleared and nothing else was). */
         if (dabOn) dabUiOff();
-        dabOn = false; dabState = null; wf?.applySettings({ minRangeDb: 30 }); dabRender(); return;
+        /* ★★★ AND HIDE THE PANES — the same omission the note above records, one reader later.
+         *  dabSetPane() is the ONLY code that ever sets #dabStations' display, and it gates on
+         *  `dabOn`; so clearing the flag without re-running the gate leaves the service list on
+         *  screen with its last contents. The USER-driven exit calls it (see the DAB toggle);
+         *  this SERVER-driven one did not.
+         *  ★★ What that looked like (Stuart, 2026-09-26, Lenovo): "I went from MW to DAB which
+         *     worked fine, then back to FM and tried to open the adv rds box" — and the ADV RDS
+         *     panel came up titled "ADV RDS · listening…" over a full DAB ensemble, Heart 4
+         *     Counties still highlighted, on a receiver demodulating WFM at 96.600. showDecBox()
+         *     does not clear the body for 'rds' (only images and spots turn #decText off), so the
+         *     stale list simply survived underneath the new heading.
+         *  ★ dabSetPane(dabPane) rather than hiding the element directly: the gate already knows
+         *    the rule for BOTH panes (stations and signal), and a second place that hid one of
+         *    them is exactly how this bug got here. */
+        dabOn = false; dabState = null; wf?.applySettings({ minRangeDb: 30 });
+        dabSetPane(dabPane); dabRender(); return;
       }
       /* ★★★ HOLD THE LAST GOOD LIST. A frame where the FIC did not read — a fade, an erased frame,
        *  the moment after a retune — arrives with no services, and painting that blanks the list
