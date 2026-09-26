@@ -5,7 +5,6 @@
 #endif
 #include <cstring>
 #include <cstdio>
-#include <chrono>
 #include <cstdlib>
 #include "simd_internal.h"   // stereoMatrixBlend / interleave2 (NEON)
 #include <cmath>
@@ -141,14 +140,10 @@ RxPipeline::~RxPipeline() { stopDemodThread_(); stopSpecThread_(); }
 
 void RxPipeline::startSpecThread_() {
     if (specThreadOn_) return;
-    for (int k = 0; k < kSpecQ; k++) {
-        specWork_[k].assign((size_t)fftSize_, cf32{0.0f, 0.0f});
-        specDone_[k].assign((size_t)fftSize_, 0.0f);
-        specSlot_[k] = SPEC_FREE;
-    }
-    specWr_ = specCp_ = specRd_ = 0;
+    specWork_.assign((size_t)fftSize_, cf32{0.0f, 0.0f});
+    specDone_.assign((size_t)fftSize_, 0.0f);
     specWorkN_ = fftSize_;
-    specStop_ = false;
+    specBusy_ = specReady_ = specStop_ = false;
     specThreadOn_ = true;
     specThread_ = std::thread([this] {
         if (workerInit()) workerInit()("vibe-spec");
@@ -157,57 +152,16 @@ void RxPipeline::startSpecThread_() {
 #endif
         std::unique_lock<std::mutex> lk(specM_);
         for (;;) {
-            specCv_.wait(lk, [this] { return specSlot_[specCp_] == SPEC_PENDING || specStop_; });
+            specCv_.wait(lk, [this] { return specBusy_ || specStop_; });
             if (specStop_) return;
-            const int k = specCp_;
             lk.unlock();
-            // ★ Outside the lock: this slot and cfft_ are the worker's alone while it is PENDING.
-            //   Nothing else may touch cfft_ while the thread runs — see setSpectrumThread.
+            // ★ Outside the lock: the window and cfft_ are this thread's alone while specBusy_.
             const float scale = 1.0f / (float)((double)specWorkN_ * (double)specWorkN_);
-            cfft_->powerDbShifted(specWork_[k].data(), win_.data(), specDone_[k].data(), scale);
+            cfft_->powerDbShifted(specWork_.data(), win_.data(), specDone_.data(), scale);
             lk.lock();
-            specSlot_[k] = SPEC_READY;
-            specCp_ = (specCp_ + 1) % kSpecQ;
+            specBusy_ = false; specReady_ = true;
         }
     });
-}
-
-/** Deliver every finished spectrum frame, oldest first, on the calling (DSP) thread.
- *  ★ The cursors only ever advance in order, so frames reach the callback in the order their
- *    windows were captured — a waterfall drawn out of order is worse than a slow one. */
-void RxPipeline::drainSpecQueue_() {
-    /* ★★★ ONE FRAME PER CALL — A BURST ON THIS THREAD IS AN AUDIO DROP.
-     *
-     *  This ran `for(;;)` until the queue was empty, and the callback it invokes converts a whole
-     *  row to dB and hands it to every listener — ON THE DSP THREAD, which owes the audio a block
-     *  every 32 ms. Draining four frames at once therefore spends four times that work inside one
-     *  audio block, and on a Pi 2 (900 MHz A7, the demod thread already at three-quarters of a
-     *  core) that is enough to miss the deadline. Stuart, 2026-09-25, after this shipped: "the pi2
-     *  is breaking up and stuttering ... 2 distinct drops in the space of a few seconds" — on a box
-     *  measured at 47 % CPU with its clock at maximum, so not a shortage of CPU but a BURST in the
-     *  wrong place.
-     *  ★★ Throughput is unaffected: this is called at the top of feed() AND at every emit point, so
-     *     several frames still leave per block — they just leave one at a time, with audio work
-     *     between them. The single-slot ceiling this replaced is still gone; what is gone now too
-     *     is the spike.
-     *  ★ The queue keeps its depth. Depth absorbs jitter in when the worker finishes; it was never
-     *    meant to be emptied in one breath. */
-    {
-        bool have = false;
-        {
-            std::lock_guard<std::mutex> lk(specM_);
-            if (specSlot_[specRd_] == SPEC_READY) { specDb_.swap(specDone_[specRd_]); have = true; }
-        }
-        if (!have) return;
-        cb_.spectrum(cb_.ctx, specDb_.data(), fftSize_);
-        {
-            std::lock_guard<std::mutex> lk(specM_);
-            // ★ The swap above left the collected buffer where the slot's result was; it is the
-            //   slot's scratch again now, so hand it back sized and free.
-            specSlot_[specRd_] = SPEC_FREE;
-            specRd_ = (specRd_ + 1) % kSpecQ;
-        }
-    }
 }
 
 void RxPipeline::stopSpecThread_() {
@@ -215,9 +169,7 @@ void RxPipeline::stopSpecThread_() {
     { std::lock_guard<std::mutex> lk(specM_); specStop_ = true; }
     specCv_.notify_all();
     if (specThread_.joinable()) specThread_.join();
-    specThreadOn_ = false;
-    for (int k = 0; k < kSpecQ; k++) specSlot_[k] = SPEC_FREE;
-    specWr_ = specCp_ = specRd_ = 0;
+    specThreadOn_ = false; specBusy_ = specReady_ = false;
 }
 
 // ── The AM chain-width ladder ────────────────────────────────────────────────
@@ -865,13 +817,18 @@ void RxPipeline::feed(const cf32* iq, int n) {
         }
         cf32* ring = reinterpret_cast<cf32*>(specRing_.data());
         cf32* sb   = reinterpret_cast<cf32*>(specBuf_.data());
-        // ★ Frames the worker finished since the last block are delivered HERE, on the DSP thread —
+        // ★ A frame the worker finished since the last block is delivered HERE, on the DSP thread —
         //   the callback never runs anywhere else. See setSpectrumThread.
-        // ★★ EVERY ready frame, not one: a feed submits several windows (see the kSpecQ note), so
-        //    collecting a single one per call would leave the queue permanently full and re-create
-        //    the ceiling the queue exists to remove.
-        if (specThreadOn_) drainSpecQueue_();
+        if (specThreadOn_) {
+            bool have = false;
+            { std::lock_guard<std::mutex> lk(specM_); if (specReady_) { specDb_.swap(specDone_); specReady_ = false; have = true; } }
+            if (have) cb_.spectrum(cb_.ctx, specDb_.data(), fftSize_);
+        }
         const long long stride = std::max(1, specStride_.load(std::memory_order_relaxed));
+        /* ★ BLOCK COPIES, NOT A PER-SAMPLE LOOP (2026-09-16). This walked every IQ sample of
+         *  every mode with four counters and two branches each — 3 % of a Pi 3's WFM budget for
+         *  what is a memcpy. Each chunk is bounded by the ring wrap and by the next emit point,
+         *  so the emit happens at exactly the same sample as before. */
         for (int i = 0; i < n; ) {
             const int room   = fftSize_ - specRingW_;
             /* ★★★ THE STRIDE CAN SHRINK UNDER US (2026-09-17, the XCover crashing every two hours):
@@ -899,56 +856,16 @@ void RxPipeline::feed(const cf32* iq, int n) {
             std::memcpy(sb,        ring + specRingW_, (size_t)tail       * sizeof(cf32));
             std::memcpy(sb + tail, ring,              (size_t)specRingW_ * sizeof(cf32));
             if (specThreadOn_) {
-                /* ★★★ REVERTED, DELIBERATELY, PENDING MEASUREMENT (2026-09-25).
-                 *
-                 *  Draining here as well as at the top of feed() is what lifted the 7.8 fps ceiling
-                 *  — and it is also what made the Pi 2 stutter: `cb_.spectrum` converts a row and
-                 *  hands it to every listener ON THE DSP THREAD, which owes the audio a block every
-                 *  32 ms, so several deliveries inside one block miss the deadline. The box was at
-                 *  47 % CPU with its clock at maximum, so this was never a shortage of CPU; it was a
-                 *  BURST in a thread that cannot afford one.
-                 *  ★★ Stuart's call, and the right one: "I'd rather have the broken 8fps and it
-                 *     working than this." A waterfall at 7.8 instead of 10 is a cosmetic loss; audio
-                 *     that breaks up is the product failing at its job. The thread priority rule
-                 *     says the same thing — AUDIO outranks SPECTRUM, and this traded the first for
-                 *     the second.
-                 *  ★ The queue itself stays (kSpecQ), because it is harmless: with one collect per
-                 *    feed it simply never fills. Re-raising the ceiling needs the delivery moved off
-                 *    this thread, or spread across blocks — not more work per block — and that needs
-                 *    measuring on the Pi 2 before it goes anywhere near it again.
-                 *  ★ The original note, for whoever picks this up: */
-                /* ★★★ DRAIN HERE TOO, NOT ONLY ONCE PER feed() — THIS COST THE WEAK BOXES HALF
-                 *     THEIR WATERFALL (2026-09-24).
-                 *
-                 *  The collect at the top of feed() runs ONCE per call, and feed() is called once
-                 *  per audio block: 48000/1536 = 31.25 times a second, fixed, whatever the RF
-                 *  sample rate. Submission refused while the ONE slot was occupied — a finished
-                 *  frame nobody had collected blocked the next — so the pair formed a single-slot
-                 *  pipe drained at the audio cadence and the whole chain topped out at
-                 *  31.25 / FFT_AVG = 7.8125 fps. Measured on the Pi 2 and the Sony TV: both sat at
-                 *  7.87 fps when asked for 20, from DIFFERENT sample rates (1.2 and 2.048 MS/s),
-                 *  with the CPU 50 % idle and vibe-spec using 19 % of one core. Everything above
-                 *  7.8 went into specDropped_.
-                 *  ★★ AND IT HIT ONLY THE MACHINES THE THREAD SPLIT EXISTS TO HELP: the worker runs
-                 *     only where VIBE_DSP_THREADS is set, which main.cpp does under
-                 *     `#if defined(__arm__) && !defined(__aarch64__)` and the Lite app does
-                 *     explicitly. Every 64-bit server takes the inline path below and reached 20.
-                 *  ★ Stuart, 2026-09-24: "8FPS isn't terrible ... its just a weird number that
-                 *    looks like an error rather than intentional" — it WAS an error.
-                 *  ★ Still delivered on the DSP thread, which is the invariant that matters (see
-                 *    setSpectrumThread): the callback never runs on the worker. */
                 bool taken = false;
                 {
                     std::lock_guard<std::mutex> lk(specM_);
-                    if (specSlot_[specWr_] == SPEC_FREE && specWorkN_ == fftSize_) {
-                        std::memcpy(specWork_[specWr_].data(), sb, (size_t)fftSize_ * sizeof(cf32));
-                        specSlot_[specWr_] = SPEC_PENDING;
-                        specWr_ = (specWr_ + 1) % kSpecQ;
-                        taken = true;
+                    if (!specBusy_ && !specReady_ && specWorkN_ == fftSize_) {
+                        std::memcpy(specWork_.data(), sb, (size_t)fftSize_ * sizeof(cf32));
+                        specBusy_ = true; taken = true;
                     }
                 }
                 if (taken) specCv_.notify_one();
-                else specDropped_.fetch_add(1, std::memory_order_relaxed);   // behind: drop, never wait
+                else specDropped_.fetch_add(1, std::memory_order_relaxed);   // busy: drop, never wait
                 continue;
             }
             const float scale = 1.0f / (float)(fftSize_ * fftSize_);
