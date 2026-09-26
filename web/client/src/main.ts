@@ -9053,8 +9053,35 @@ const HEALTH_ICONS: Record<string, string> = {
   snail:     '<circle cx="6.5" cy="8.2" r="4"/><path d="M6.5 8.2a1.4 1.4 0 1 1 1.4-1.4"/><path d="M1.5 13.4h9.8a2.3 2.3 0 0 0 2.3-2.3V9.4"/><path d="M13.6 9.4l-.8-2M13.6 9.4l1-1.8"/>',
 };
 
-function healthGlyph(name: string, level: number, label: string): string {
-  const col = HEALTH_COLOURS[Math.max(0, Math.min(3, level))];
+/* ★★★ BLEND ALONG THE LADDER RATHER THAN SNAP BETWEEN RUNGS (Stuart, 2026-09-26: "can the icons
+ *  blend between colours rather than snap between green amber red"). `pos` is the server's
+ *  continuous position on the SAME four-threshold ladder the level walks — see Health::cpuPos — so
+ *  floor(pos) is always the level, and the two can never disagree.
+ *  ★★ WHY IT DOES NOT SHIMMER, which is the reason the snap existed. The server interpolates from the
+ *     values it has ALREADY smoothed with an EWMA, and the level's own "rises at once, falls late"
+ *     hysteresis is untouched — so the tint drifts at the pace of the metric rather than flickering
+ *     on a threshold, and the WORDS, the title and the critical breath still come off the rung.
+ *  ★ sRGB interpolation, deliberately: these four anchors are close in lightness and far apart in
+ *    hue, so a naive mix is smooth here, and a perceptual space would be machinery for no visible
+ *    gain. ✗ Do not "improve" it to OKLab without looking at the pill first. */
+function mixHex(a: string, b: string, f: number): string {
+  const p = (h: string) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+  const [r1, g1, b1] = p(a), [r2, g2, b2] = p(b);
+  const m = (x: number, y: number) => Math.round(x + (y - x) * f).toString(16).padStart(2, '0');
+  return `#${m(r1, r2)}${m(g1, g2)}${m(b1, b2)}`;
+}
+function healthColour(level: number, pos?: number): string {
+  const lv = Math.max(0, Math.min(3, level));
+  /* ★ No position (a server older than 5.6.58, or a metric it could not measure) — the four fixed
+   *  colours, exactly as before. A missing field must never become a guessed one. */
+  if (typeof pos !== 'number' || !(pos >= 0)) return HEALTH_COLOURS[lv];
+  const p = Math.max(0, Math.min(3, pos));
+  const lo = Math.min(2, Math.floor(p));
+  return mixHex(HEALTH_COLOURS[lo], HEALTH_COLOURS[lo + 1], p - lo);
+}
+
+function healthGlyph(name: string, level: number, label: string, pos?: number): string {
+  const col = healthColour(level, pos);
   // ★ The critical breath is CSS (see #srvHealth .crit), so reduced motion can switch it off in one
   //   place rather than here — and a non-motion cue goes with it.
   return `<span class="hSlot${level >= 3 ? ' crit' : ''}${level >= 2 ? ' dot' : ''}" title="${label}" `
@@ -9067,7 +9094,8 @@ const HEALTH_WORDS = ['OK', 'elevated', 'high', 'critical'];
 
 function renderHealthPill(h: {
   cpu: number; ram: number;
-  temp: { kind: string; level: number };
+  temp: { kind: string; level: number; pos?: number };
+  cpuPos?: number; ramPos?: number;
   bat: { present: boolean; pct?: number; charging?: boolean; level?: number };
 }): void {
   /* ★★★ A LATCH, NOT A ONE-OFF REMOVAL. Removing #srvBattery here only worked until the next
@@ -9084,11 +9112,11 @@ function renderHealthPill(h: {
     document.body.appendChild(el);
   }
   const slots: string[] = [
-    healthGlyph('cpu', h.cpu, `Processor: ${HEALTH_WORDS[h.cpu]}`),
-    healthGlyph('ram', h.ram, `Memory: ${HEALTH_WORDS[h.ram]}`),
+    healthGlyph('cpu', h.cpu, `Processor: ${HEALTH_WORDS[h.cpu]}`, h.cpuPos),
+    healthGlyph('ram', h.ram, `Memory: ${HEALTH_WORDS[h.ram]}`, h.ramPos),
   ];
   // ★★ The TEMP slot is three-state: a real sensor, a throttle with a cause, or absent entirely.
-  if (h.temp.kind === 'sensor') slots.push(healthGlyph('temp', h.temp.level, `Temperature: ${HEALTH_WORDS[h.temp.level]}`));
+  if (h.temp.kind === 'sensor') slots.push(healthGlyph('temp', h.temp.level, `Temperature: ${HEALTH_WORDS[h.temp.level]}`, h.temp.pos));
   else if (h.temp.kind === 'thermal') slots.push(healthGlyph('snailFire', Math.max(2, h.temp.level), 'Throttling: too hot'));
   else if (h.temp.kind === 'power') slots.push(healthGlyph('snailBolt', Math.max(2, h.temp.level), 'Throttling: power limit'));
   else if (h.temp.kind === 'throttle') slots.push(healthGlyph('snail', Math.max(2, h.temp.level), 'Throttling'));

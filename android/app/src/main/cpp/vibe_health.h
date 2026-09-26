@@ -34,6 +34,18 @@ enum class TempKind { None, Sensor, ThrottleThermal, ThrottlePower, ThrottleUnkn
 
 struct Health {
     Level cpu = OK, ram = OK, temp = OK;
+    /** ★★★ WHERE ON THE LADDER, NOT WHICH RUNG — so the icon can BLEND instead of snapping between
+     *  three colours (Stuart, 2026-09-26: "can the icons blend between colours rather than snap
+     *  between green amber red"). 0.0 = bottom of OK, 1.0 = exactly on the first threshold, 3.0 =
+     *  fully critical. The LEVEL above is unchanged and still decides the words, the title text and
+     *  the critical animation; this only tints.
+     *  ★★ IT DOES NOT RE-EXPOSE THE FIGURE. The pill's whole rule is "LEVELS, NOT FIGURES — the raw
+     *     numbers stay on the admin page" so a stranger cannot misread 800 % as an overload. A
+     *     position on a ladder is not the reading: it carries no units and no scale, and 2.4 tells
+     *     you nothing about how many cores this machine has.
+     *  ★ Computed from the SAME already-EWMA'd values the level uses, so it inherits that smoothing
+     *    and cannot shimmer on its own. -1 = not measured; the client then falls back to the rung. */
+    float cpuPos = -1.0f, ramPos = -1.0f, tempPos = -1.0f;
     TempKind tempKind = TempKind::None;
     bool  batPresent = false, batCharging = false;
     int   batPct = -1;
@@ -56,6 +68,36 @@ inline Level settle(Level now, Level was, double v, const double thr[3], double 
     const double t = thr[was - 1];
     const bool clear = higherIsWorse ? (v < t - back) : (v > t + back);
     return clear ? (Level)(was - 1) : was;
+}
+
+/** ★★★ THE SAME LADDER bucket() WALKS, READ AS A CONTINUOUS POSITION — see Health::cpuPos.
+ *
+ *  bucket() answers "which of the four rungs"; this answers "how far up", by interpolating linearly
+ *  INSIDE the band the value currently sits in. The two can never disagree, because they read the
+ *  same thresholds: floor(pos) is always bucket()'s rung.
+ *  ★★ The bottom band has no lower threshold to interpolate from, so it is measured from zero (or,
+ *     for a headroom metric where LOWER is worse, from twice the first threshold — far enough away
+ *     to be "comfortable" without inventing a scale the caller did not supply).
+ *  ★ Clamped to the top rung: past the critical threshold there is nothing further to say, and an
+ *    unbounded number would let one wild sample drag the colour somewhere it cannot come back from.
+ */
+inline float ladderPos(double v, const double thr[3], bool higherIsWorse) {
+    auto span = [](double a, double b, double x) -> double {
+        if (b == a) return 0.0;
+        const double f = (x - a) / (b - a);
+        return f < 0.0 ? 0.0 : (f > 1.0 ? 1.0 : f);
+    };
+    if (higherIsWorse) {
+        if (v >= thr[2]) return 3.0f;
+        if (v >= thr[1]) return (float)(2.0 + span(thr[1], thr[2], v));
+        if (v >= thr[0]) return (float)(1.0 + span(thr[0], thr[1], v));
+        return (float)span(0.0, thr[0], v);
+    }
+    // Headroom: SMALLER is worse, so the ladder runs downwards.
+    if (v <= thr[2]) return 3.0f;
+    if (v <= thr[1]) return (float)(2.0 + span(thr[1], thr[2], v));
+    if (v <= thr[0]) return (float)(1.0 + span(thr[0], thr[1], v));
+    return (float)span(thr[0] * 2.0, thr[0], v);
 }
 
 inline Level bucket(double v, const double thr[3], bool higherIsWorse) {
@@ -291,6 +333,7 @@ struct Sampler {
         if (score >= 0) {
             cpuEwma = ewma(cpuEwma, std::min(100.0, score));
             h.cpu = detail::settle(detail::bucket(cpuEwma, CPU_T, true), last.cpu, cpuEwma, CPU_T, 5, true);
+            h.cpuPos = detail::ladderPos(cpuEwma, CPU_T, true);
         } else h.cpu = last.cpu;
         if (loadRatio >= LOAD_T[2] && h.cpu < HIGH) h.cpu = HIGH;   // the queue never clears
 
@@ -310,6 +353,7 @@ struct Sampler {
             const double used = 100.0 * (double)(s.memTotalKB - s.memAvailKB) / (double)s.memTotalKB;
             ramEwma = ewma(ramEwma, used);
             h.ram = detail::settle(detail::bucket(ramEwma, RAM_T, true), last.ram, ramEwma, RAM_T, 5, true);
+            h.ramPos = detail::ladderPos(ramEwma, RAM_T, true);
         } else h.ram = last.ram;
 
         // ── TEMP, or a throttle, or nothing ────────────────────────────────────────────────────
@@ -321,6 +365,7 @@ struct Sampler {
         if (s.haveTemp) {
             const double head = 80.0 - s.tempC;
             h.temp = detail::settle(detail::bucket(head, HEAD_T, false), last.temp, head, HEAD_T, 5, false);
+            h.tempPos = detail::ladderPos(head, HEAD_T, false);
             h.tempKind = TempKind::Sensor;
             /* ★ A machine that is BOTH hot and capped is at least High, whatever the headroom says —
              *  the cap is the hardware telling us the reading is optimistic. */
@@ -374,10 +419,23 @@ inline const char* kindName(TempKind k) {
 
 /** The public message. ★ Levels and the battery percentage only — no °C, no MHz, no RAM figure. */
 inline std::string json(const Health& h) {
+    /* ★★ ONE DECIMAL IS ENOUGH AND IS THE POINT. The colour is interpolated from this, and the eye
+     *  cannot resolve a thirtieth of a band — but two decimals would make the field look like a
+     *  measurement, which is exactly what this pill refuses to publish. */
+    auto pos1 = [](float v) {
+        char b2[16]; std::snprintf(b2, sizeof b2, "%.1f", v < 0.0f ? 0.0f : (v > 3.0f ? 3.0f : v));
+        return std::string(b2);
+    };
     std::string j = "{\"type\":\"health\",\"v\":1,\"cpu\":" + std::to_string((int)h.cpu)
                   + ",\"ram\":" + std::to_string((int)h.ram)
                   + ",\"temp\":{\"kind\":\"" + kindName(h.tempKind) + "\",\"level\":"
-                  + std::to_string((int)h.temp) + "}";
+                  + std::to_string((int)h.temp)
+                  + (h.tempPos >= 0.0f ? ",\"pos\":" + pos1(h.tempPos) : std::string()) + "}";
+    /* ★ ADDITIVE, and omitted when not measured: a client older than 5.6.58 ignores these and keeps
+     *  drawing the four fixed colours, and a newer one falls back to the rung when they are absent
+     *  rather than guessing a position. */
+    if (h.cpuPos >= 0.0f) j += ",\"cpuPos\":" + pos1(h.cpuPos);
+    if (h.ramPos >= 0.0f) j += ",\"ramPos\":" + pos1(h.ramPos);
     if (h.batPresent) {
         j += ",\"bat\":{\"present\":true,\"pct\":" + std::to_string(h.batPct)
            + ",\"charging\":" + (h.batCharging ? "true" : "false")

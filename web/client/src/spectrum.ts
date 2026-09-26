@@ -337,7 +337,10 @@ export interface SpectrumCallbacks {
    *  narrows). Absent on an older server, which keeps the plain battery pill. */
   onHealth?: (h: {
     cpu: number; ram: number;
-    temp: { kind: 'sensor' | 'thermal' | 'power' | 'throttle' | 'none'; level: number };
+    /** ★ Continuous position on the same four-rung ladder as `cpu`/`ram`, for the blended tint —
+     *  see Health::cpuPos. Absent on a server older than 5.6.58; the pill then uses the rung. */
+    cpuPos?: number; ramPos?: number;
+    temp: { kind: 'sensor' | 'thermal' | 'power' | 'throttle' | 'none'; level: number; pos?: number };
     bat: { present: boolean; pct?: number; charging?: boolean; level?: number };
   }) => void;
   /** ★ The server REFUSED something this listener asked for, in its own words — a different
@@ -921,7 +924,14 @@ export class SpectrumClient {
       case 'health':
         this.cb.onHealth?.({
           cpu: Number(msg.cpu) || 0, ram: Number(msg.ram) || 0,
-          temp: { kind: (msg.temp?.kind ?? 'none'), level: Number(msg.temp?.level) || 0 },
+          /* ★★ UNDEFINED, NOT ZERO, WHEN ABSENT — and this layer is where that is decided. `Number(x)
+           *  || 0` would turn a missing position into 0.0, i.e. "bottom of OK", so an OLD server
+           *  would paint every icon pure green whatever its level said. The pill distinguishes the
+           *  two, so this must hand it a real absence. */
+          cpuPos: msg.cpuPos === undefined ? undefined : Number(msg.cpuPos),
+          ramPos: msg.ramPos === undefined ? undefined : Number(msg.ramPos),
+          temp: { kind: (msg.temp?.kind ?? 'none'), level: Number(msg.temp?.level) || 0,
+                  pos: msg.temp?.pos === undefined ? undefined : Number(msg.temp.pos) },
           bat: msg.bat?.present
             ? { present: true, pct: Number(msg.bat.pct), charging: msg.bat.charging === true,
                 level: Number(msg.bat.level) || 0 }
