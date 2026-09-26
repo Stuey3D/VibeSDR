@@ -132,5 +132,9 @@ vibeserver/fuzz-corpus/
 #   and scripts/sync-mapdata.sh copies it here before a wrangler deploy. Committing both doubles a
 #   48 MB dataset in the repo and creates a second copy to forget to regenerate.
 directory/public/mapdata/
+# ★ Same reasoning for the shared basemap renderer: web/mapkit/vibemap.js is the one source, and
+#   scripts/gen-vibemap-source.mjs copies it here (and embeds it for the app) before a deploy. A
+#   committed copy is a copy to forget to regenerate, and a stale one deploys just as cleanly.
+directory/public/mapkit/
 # The packaged detail tarball is a release artefact, rebuilt by gen-map-data.mjs on demand.
 dist/mapdata/

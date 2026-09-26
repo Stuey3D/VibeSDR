@@ -22,7 +22,19 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const html = fs.readFileSync(path.join(root, 'directory/public/index.html'), 'utf8');
 const PLAN = JSON.parse(fs.readFileSync(path.join(root, 'directory/public/bandplan.json'), 'utf8'));
-const src = html.match(/<script>([\s\S]*?)<\/script>\s*<\/body>/)[1];
+/* ★★★ THE LAST INLINE SCRIPT, NOT EVERYTHING FROM THE FIRST ONE. `[\s\S]*?` cannot stop at a
+ *  `</script>` it is allowed to swallow, so once the page grew a SECOND inline script (the portable
+ *  store's reset button, up in <main>) this match began at that one and ran through the closing tag,
+ *  the <footer> and two <script src> lines -- and new Function() threw "Unexpected token '<'" on a
+ *  line of HTML. The whole check had been dead since then, silently, which is worse than absent: a
+ *  guard nobody has seen fail is assumed to be passing. ★ The inner group now refuses to cross a
+ *  closing tag, so it can only be the last inline block before </body>. */
+const src = html.match(/<script>((?:(?!<\/script>)[\s\S])*)<\/script>\s*<\/body>/)[1];
+/* ★★ THE PAGE NOW LOADS THE SHARED BASEMAP RENDERER, so the check must too. ✗ Not a VibeMap stub:
+ *  a stub would let the page call an attach() that does not exist anywhere real, which is precisely
+ *  the "written and never read" shape. The real file runs fine here -- its draws are all behind the
+ *  coalesced setTimeout this file stubs out. */
+const VIBEMAP_SRC = fs.readFileSync(path.join(root, 'web/mapkit/vibemap.js'), 'utf8');
 
 // ★★ THE FEED IS FETCHED FIRST, BEFORE ANY STUBBING. The stub replaces setTimeout — which the
 //    HTTP client itself uses — so fetching afterwards fails in a way that looks like a network
@@ -50,11 +62,23 @@ globalThis.localStorage = { getItem: () => null, setItem() {} };
 // ★ The page reads location.search for its ?demo switch. Default: the real directory.
 globalThis.location = { search: process.env.CHECK_DEMO ? '?demo' : '', href: 'https://vibeserver.vibesdr.net/' };
 globalThis.performance = globalThis.performance || { now: () => 0 };
-const layer = { addTo: () => layer, clearLayers() {}, addLayer() {} };
+const layer = { addTo: () => layer, clearLayers() {}, addLayer() {}, getLayers: () => [] };
+const mapStub = {
+  setView: () => mapStub, addLayer() {}, removeLayer() {}, hasLayer: () => false, on() {}, off() {},
+  // ★ The shared renderer declares its z-order in PANES and asks the map for a container background,
+  //   so the stub has to answer those. A stub that throws here would make a map bug out of nothing.
+  createPane: () => ({ style: {} }), getPane: () => ({ style: {} }),
+  getContainer: () => ({ id: 'map', style: {}, ownerDocument: globalThis.document }),
+  getZoom: () => 2, latLngToContainerPoint: () => ({ x: 0, y: 0 }),
+  getBounds: () => ({ pad: () => mapStub.getBounds(), getWest: () => -180, getEast: () => 180,
+                      getSouth: () => -85, getNorth: () => 85 }),
+};
 globalThis.L = {
-  map: () => ({ setView: () => ({}), addLayer() {}, removeLayer() {}, hasLayer: () => false, on() {} }),
+  map: () => mapStub,
   tileLayer: () => ({ addTo() {} }), layerGroup: () => layer, polygon: () => ({ addTo() {} }),
   marker: () => ({ addTo() {}, bindPopup: () => ({}) }), divIcon: () => ({}),
+  canvas: () => ({}), polyline: () => ({ addTo: () => ({ bindTooltip() {} }) }),
+  circleMarker: () => ({ addTo() {} }), imageOverlay: () => ({ addTo() {} }),
 };
 // ★ Serve the page's OWN assets from disk. A stub that answers {} to everything checks the page
 //   against data it will never see — country-shapes.json in particular, without which the demo
@@ -63,6 +87,15 @@ const SHAPES = JSON.parse(fs.readFileSync(path.join(root, 'directory/public/coun
 globalThis.fetch = async (u) => ({ ok: true, json: async () =>
   String(u).includes('bandplan') ? PLAN : String(u).includes('country-shapes') ? SHAPES : {} });
 globalThis.setInterval = () => 0; globalThis.setTimeout = (f) => 0; globalThis.clearTimeout = () => {};
+// ★ Loaded the way the browser loads it: a script of its own, before the page's, defining window.VibeMap.
+globalThis.document.head = { appendChild() {} };
+globalThis.document.createElement = () => ({ style: {} });
+// ★ vibemap.js reads Leaflet off `window`, as a browser script does; the stub above only put it on
+//   globalThis. Two names for one object is exactly the kind of gap that reads as a renderer bug.
+globalThis.window.L = globalThis.L;
+globalThis.window.document = globalThis.document;
+new Function(VIBEMAP_SRC)();
+globalThis.VibeMap = globalThis.window.VibeMap;
 
 const api = new Function(src + `
   return { set ALLv(v){ ALL = v; }, set PLANv(v){ PLAN = v; }, set VIEW(v){ dialView = v; },
