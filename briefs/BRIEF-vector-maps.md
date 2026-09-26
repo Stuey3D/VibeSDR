@@ -326,3 +326,57 @@ found; it would need compiling.
 ★ Carry over the existing honesty caveat verbatim — we know a receiver's LOCATION and HARDWARE
 RANGE, never its ANTENNA, and airband is AM. [[client_infers_server_decisions]] in spirit: do not
 let the UI imply knowledge the data does not contain.
+
+## ★★★ THE PALETTE IS NOW A DECISION, NOT A DEFAULT — do not drift it
+Stuart, 2026-09-26, on the finished basemap: *"the colours of that map are sublime, just the right
+blend of dark and light, not face melting bright but not too dim to be barely readable."*
+
+That is a SIGN-OFF, and it was reached by following one constraint he gave early and repeated —
+*"the map doesnt have to be super dark it can have some colour i just dont want eyeball melting
+white"*. Everything else derives from it, and a casual tweak to any of these breaks the balance:
+
+- **Biomes separate by LIGHTNESS, not hue** (rainforest darkest -> desert lightest). A true-colour
+  biome map is what an atlas does and is unreadable under amber.
+- **The elevation ramp starts at exactly `MAP_LAND`**, so low ground is indistinguishable from the
+  flat vector fill and only climbs to pale snow at genuine altitude.
+- **Hillshade MODULATES (0.72–1.34), it does not replace.** Full-range shading turns every
+  north-east slope black and reads as a hole in the land.
+- **The sea's shading is flatter still (0.88–1.12).** Abyssal slopes are enormous; at land contrast
+  a trench reads as a black gash.
+- **Urban is semi-transparent (0.62)** so the ground tints through — a solid grey lozenge reads as
+  a hole, not a city.
+- **Capitals are the only amber on the map** that is not a landform, so they cannot be mistaken
+  for terrain.
+
+✗ Do not "improve" these individually. They were balanced against each other and against an amber
+UI. If a change is wanted, change it and SHOW HIM, do not assume.
+
+## ★★★ THE LABEL LADDER (Stuart, 2026-09-26) — the map's editorial policy
+> *"continents/geographic regions so things like SAHARA DESERT, THE ANDES ... Then Countries. Then
+> Large Cities and major ports and airports. Then medium cities and towns and larger regional
+> airfields. then the full detail."*
+
+| zoom | rung |
+|---|---|
+| 0–2 | continents, oceans |
+| 3–4 | **physical regions** (SAHARA, ANDES, AMAZON BASIN) and seas |
+| 4–6 | countries |
+| 5–7 | large cities, capitals, major ports, large international airports |
+| 7–9 | medium cities and towns, regional airfields |
+| 10+ | everything: minor strips, runway designators, Maidenhead subsquares |
+
+★★ **EACH RUNG ANSWERS A DIFFERENT QUESTION.** At z3 nobody is asking which town — they are asking
+what that huge sand-coloured area IS. Skipping a rung leaves the user unable to orient at that
+scale, which is what *"this zoom level is very cluttered"* and *"just needs continents"* were both
+reporting: not too much ink, but ink at the WRONG RUNG.
+★ It lives in `LADDER` in one place. ✗ Do not reintroduce scattered `z >= n` checks; they drift.
+★ Region names cost nothing — `ne_10m_geography_regions_polys` was ALREADY downloaded for the old
+cover classes, and carries SAHARA, ANDES, HIMALAYAS, GOBI DESERT, AMAZON BASIN with LABELRANKs.
+
+### ★★★ LABELS ARE PLACED BY COLLISION, AND THE DOT FOLLOWS THE LABEL
+A count cap is the wrong control — 300 is right for the world and absurd over London. Greedy
+placement in RANK ORDER means the important name claims its space first, so LONDON survives and
+Chalfont St Peter drops; a naive pass lets whichever town came first in the file evict the capital.
+★★ And the DOT IS ONLY DRAWN IF THE LABEL WAS PLACED. Drawing dots first meant every rejected
+place still left its mark, so the thinning was invisible and the world view stayed speckled. An
+unlabelled dot says "something is here" and nothing else.

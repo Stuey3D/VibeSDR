@@ -117,6 +117,15 @@ const SRC = {
    *  where people actually settled, and on a coarse map it is the clearest signal of that. 39 MB
    *  of source, thinned hard below. Public domain. */
   railroads: `${NE}/ne_10m_railroads.geojson`,
+  /* ★★★ PHYSICAL REGION NAMES -- the tier the map was missing. Stuart, 2026-09-26: "things like
+   *  SAHARA DESERT, THE ANDES ... span multiple countries or large enough areas of the planet to
+   *  need a label when zoomed out." He is right and it is a real gap: at z3 the map showed a huge
+   *  sand-coloured area with no name on it. Natural Earth has SAHARA, ANDES, HIMALAYAS, GOBI
+   *  DESERT, AMAZON BASIN, ROCKY MOUNTAINS, GREAT PLAINS with their own LABELRANK -- and the
+   *  regions file was ALREADY DOWNLOADED for the old cover classes. Free.
+   *  ★ Marine polys give the oceans and seas the same way. A world map with an unnamed Atlantic
+   *  is not finished. */
+  marine: `${NE}/ne_10m_geography_marine_polys.geojson`,
   cities5000: 'https://download.geonames.org/export/dump/cities5000.zip',
   airports: 'https://davidmegginson.github.io/ourairports-data/airports.csv',
   /* ★★★ RUNWAYS, so a listener can follow what they are hearing. Stuart, 2026-09-26: "a user could
@@ -317,6 +326,46 @@ function buildCover(regionsGj, glaciersGj, dp, minArea = 0, shelvesGj = null) {
  *
  * ✗ Ferry routes are dropped at every tier: a line across open sea reads as a coastline error.
  */
+/**
+ * Physical region labels -> [name, lon, lat, rank, kind].
+ *
+ * ★★ THESE ARE LABELS, NOT SHAPES. We are not drawing the Sahara's outline (the biome raster
+ *   already colours it); we are naming it. So one point per region is the entire payload, and the
+ *   whole layer is a few kB.
+ * ★★★ POSITION COMES FROM THE POLYGON'S BBOX CENTRE, not a true centroid. For a long curved range
+ *   like the Andes a centroid lands in Brazil -- outside the feature it names. The bbox centre is
+ *   not perfect either but it stays on the feature for every case that matters here, and Natural
+ *   Earth's own LABELRANK then decides who is big enough to show.
+ * ★ `kind` separates land from sea so the renderer can colour them differently: a sea name in the
+ *   land palette reads as a place you could stand.
+ */
+const REGION_CLASSES = new Set(['Desert', 'Range/mtn', 'Plateau', 'Plain', 'Basin', 'Lowland',
+                                'Tundra', 'Depression', 'Valley', 'Geoarea', 'Peninsula']);
+function buildRegionLabels(gj, kind, dp, maxRank, classes) {
+  const out = [];
+  for (const f of gj.features) {
+    const p = f.properties || {};
+    const cla = p.FEATURECLA ?? p.featurecla;
+    if (classes && !classes.has(cla)) continue;
+    const name = String(p.NAME ?? p.name ?? '').trim();
+    if (!name) continue;
+    const rank = Number(p.LABELRANK ?? p.labelrank ?? p.SCALERANK ?? p.scalerank ?? 9);
+    if (!Number.isFinite(rank) || rank > maxRank) continue;
+    let w = 180; let s = 90; let e = -180; let n = -90;
+    for (const ring of packPolygons(f.geometry, dp)) {
+      for (const [lon, lat] of ring) {
+        if (lon < w) w = lon; if (lon > e) e = lon;
+        if (lat < s) s = lat; if (lat > n) n = lat;
+      }
+    }
+    if (e < w) continue;
+    out.push([name, round((w + e) / 2, dp), round((s + n) / 2, dp), rank, kind]);
+  }
+  if (!out.length) die(`regions/${kind}: nothing survived rank <= ${maxRank}.`);
+  out.sort((a, b) => a[3] - b[3]);
+  return out;
+}
+
 /** Rivers -> polylines, thinned by scalerank exactly as the roads are. */
 function buildRivers(gj, dp, maxScalerank) {
   const out = [];
@@ -709,7 +758,7 @@ process.stderr.write('gen-map-data: sources\n');
 
 const [c110, c50, c10, admin1, lakes, places, urban50, urban10, regions, glaciers, roads,
        rivers50, rivers10, lakes50, admin150, shelf,
-       iceShelves, minorIslands, geoLines, reefs, playas, railroads] = await Promise.all([
+       iceShelves, minorIslands, geoLines, reefs, playas, railroads, marine] = await Promise.all([
   fetchGeoJson('countries110'),
   fetchGeoJson('countries50'),
   fetchGeoJson('countries10'),
@@ -732,6 +781,7 @@ const [c110, c50, c10, admin1, lakes, places, urban50, urban10, regions, glacier
   fetchGeoJson('reefs'),
   fetchGeoJson('playas'),
   fetchGeoJson('railroads'),
+  fetchGeoJson('marine'),
 ]);
 const airportsCsv = await fetchCached('airports.csv', SRC.airports);
 const portsCsv = await fetchCached('ports.csv', SRC.ports);
@@ -816,6 +866,10 @@ const layers = [
     lines: packLines(f.geometry, 2),
   })).filter((g) => g.lines.length)],
   ['tier0', 'islands', minorIslands.features.flatMap((f) => packPolygons(f.geometry, 2))],
+  ['tier0', 'regions', [
+    ...buildRegionLabels(regions, 'land', 2, 6, REGION_CLASSES),
+    ...buildRegionLabels(marine, 'sea', 2, 4, null),
+  ]],
   ['tier0', 'lakes', bigEnough(lakes50.features.flatMap((f) => packPolygons(f.geometry, 2)), 0.5)],
   // tier1
   ['tier1', 'countries', buildCountries(c50, 2, 'countries50')],
@@ -875,7 +929,7 @@ const index = {
   licences: {
     resolve: { layers: ['relief (biome colouring)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© RESOLVE Ecoregions 2017', url: 'https://ecoregions.appspot.com/' },
     'noaa-etopo': { layers: ['relief'], licence: 'Public domain (US Government)', url: 'https://www.ncei.noaa.gov/products/etopo-global-relief-model' },
-    'natural-earth': { layers: ['countries', 'admin1', 'lakes', 'places(tier0,tier1)', 'urban', 'cover', 'roads', 'rivers', 'shelf', 'islands', 'reefs', 'playas', 'geolines', 'rail', 'runways'], licence: 'Public domain', url: 'https://www.naturalearthdata.com/' },
+    'natural-earth': { layers: ['countries', 'admin1', 'lakes', 'places(tier0,tier1)', 'urban', 'cover', 'roads', 'rivers', 'shelf', 'islands', 'reefs', 'playas', 'geolines', 'rail', 'runways', 'regions'], licence: 'Public domain', url: 'https://www.naturalearthdata.com/' },
     geonames: { layers: ['places(tier2)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© GeoNames', url: 'https://www.geonames.org/' },
     ourairports: { layers: ['airports'], licence: 'Public domain', url: 'https://ourairports.com/data/' },
     hydrolakes: { layers: ['lakes(tier2)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© HydroLAKES / HydroSHEDS', url: 'https://www.hydrosheds.org/products/hydrolakes' },
