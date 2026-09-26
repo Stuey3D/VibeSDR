@@ -2141,6 +2141,9 @@ static std::atomic<unsigned long long> g_usbSamples{0};
 //     between them is what has cost two days.
 static std::atomic<double> g_dspLockMaxMs{0.0};
 static std::atomic<double> g_dspWorkMaxMs{0.0};
+/* ★ Mirrors g_dspWorkMaxMs: the DSP thread is where the pipeline is in scope, and the status JSON
+ *  only sees globals. See the note beside "demodWaits" in the JSON for why this figure matters. */
+static std::atomic<unsigned> g_demodWaits{0u};
 static std::atomic<double> g_dspStatAt{0.0};
 static std::atomic<double>    g_iqLastDropAt{0.0};
 // ★★★ A HANDFUL OF RAILED SAMPLES IN A SECOND IS NOISE, NOT AN OVERLOAD. At 2.4 MSPS a second is
@@ -15769,6 +15772,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                              + ",\"dspCpu\":" + std::to_string((int)(dspLoadPct + 0.5))
                              + ",\"dspLockMs\":" + std::to_string((int)(g_dspLockMaxMs.load(std::memory_order_relaxed) + 0.5))
                              + ",\"dspWorkMs\":" + std::to_string((int)(g_dspWorkMaxMs.load(std::memory_order_relaxed) + 0.5))
+                             /* ★★★ demodWaits — HOW OFTEN THE DSP THREAD BLOCKED ON A FULL DEMOD
+                              *  QUEUE, and the one figure that tells CPU-bound apart from
+                              *  pipeline-bound. It was incremented but NEVER READ: the accessor
+                              *  demodQueueWaits() existed and nothing anywhere called it.
+                              *  ★★ MEASURED ON THE PI 2, 2026-09-26: on a STRONG FM station the box
+                              *  steps from dspCpu 52 to 103 in a single 10 s interval and pins
+                              *  there — steady, for as long as the listen lasts. A compute-bound
+                              *  thread wanders; a thread BLOCKED ON A QUEUE pins just over 100 %,
+                              *  because the blocked time is charged to the same interval. On armhf
+                              *  (the Pi 2 and nothing else) VIBE_DSP_THREADS=1, so the whole WFM
+                              *  chain runs on one `vibe-demod` thread behind a 4-slot queue.
+                              *  ★ So on a 32-bit box dspCpu is NOT a pure CPU figure, and the
+                              *  health pill going red is reporting "the pipeline is not keeping
+                              *  up", not "this core is busy". This counter is what distinguishes
+                              *  them, in one HTTP GET instead of a day of measurement. */
+                             + ",\"demodWaits\":" + std::to_string(
+                                   g_demodWaits.load(std::memory_order_relaxed))
                              + ",\"iqDropAgo\":" + std::to_string((int)llround(
                                    g_iqLastDropAt.load(std::memory_order_relaxed) > 0
                                        ? (double)vsNowEpoch() - g_iqLastDropAt.load(std::memory_order_relaxed)
@@ -19407,6 +19427,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     std::chrono::duration<double,std::milli>(t1 - tLock1).count();
                 if (workMs > g_dspWorkMaxMs.load(std::memory_order_relaxed))
                     g_dspWorkMaxMs.store(workMs, std::memory_order_relaxed);
+                // ★ Cumulative, not a peak: what matters is whether it MOVES while somebody
+                //   listens. Zero and staying zero means the demod thread is keeping up.
+                g_demodWaits.store(rx.demodQueueWaits(), std::memory_order_relaxed);
                 /* ★★★ RATE-LIMIT BY TIME, NOT BY BLOCK COUNT — "every 200 blocks" is not a
                  *     rate at all, because a block is not a fixed amount of time. Measured on
                  *     Stuart's Pi: ONE radio produced 44,680 of these lines in 25 minutes — THIRTY

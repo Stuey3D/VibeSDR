@@ -501,6 +501,56 @@ function buildRegionLabels(gj, kind, dp, maxRank, classes) {
   return out;
 }
 
+/**
+ * Country labels -> [nameEn, lon, lat, labelrank, localName?].
+ *
+ * ★★★ THIS WAS AN ORPHAN. It was produced by a one-off script on 2026-09-26, lived on disk, and
+ *   was in NEITHER PACK — so it shipped in nothing, and survived regeneration only because the
+ *   pruner's keep-list happened to spare it. A fresh clone would have had no country names and
+ *   nothing would have said why. Exactly the "written and never read" shape, inverted.
+ *   ★ A file the generator does not produce is a file that does not exist.
+ *
+ * ★★ POSITIONS ARE NATURAL EARTH'S OWN LABEL_X/LABEL_Y, placed by their cartographers. A centroid
+ *   puts "Norway" in the North Sea and "Chile" in Argentina.
+ *
+ * ★★ THE LOCAL NAME IS CARRIED ONLY WHERE IT EXISTS AND DIFFERS — 70 of 239 countries. Natural
+ *   Earth ships 25 localised NAME_* fields, so most countries have no endonym here at all; an
+ *   empty second line would render as a broken label, and one identical to the English is noise.
+ *   Deutschland, Türkiye, Việt Nam, Україна, اليمن all land.
+ */
+const LABEL_LANG = {
+  DE: ['DE', 'AT', 'CH', 'LI'],
+  FR: ['FR', 'BE', 'MC', 'LU', 'SN', 'CI', 'ML', 'BF', 'NE', 'TD', 'CG', 'CD', 'GA', 'CF', 'CM', 'MG', 'BJ', 'TG', 'GN', 'HT'],
+  ES: ['ES', 'MX', 'AR', 'CO', 'PE', 'VE', 'CL', 'EC', 'GT', 'CU', 'BO', 'DO', 'HN', 'PY', 'SV', 'NI', 'CR', 'PA', 'UY', 'GQ'],
+  PT: ['PT', 'BR', 'AO', 'MZ', 'GW', 'CV', 'ST', 'TL'],
+  IT: ['IT', 'SM', 'VA'], NL: ['NL', 'SR'], PL: ['PL'], RU: ['RU', 'BY', 'KZ', 'KG'],
+  JA: ['JP'], KO: ['KR', 'KP'],
+  AR: ['SA', 'EG', 'DZ', 'MA', 'TN', 'LY', 'SD', 'IQ', 'SY', 'JO', 'YE', 'AE', 'OM', 'KW', 'QA', 'BH', 'LB', 'MR'],
+  EL: ['GR', 'CY'], HE: ['IL'], HI: ['IN'], HU: ['HU'], ID: ['ID'], FA: ['IR', 'AF'], BN: ['BD'],
+  ZH: ['CN', 'TW', 'SG'], TR: ['TR'], SV: ['SE'], VI: ['VN'], UK: ['UA'], DA: ['DK'], NB: ['NO'], FI: ['FI'],
+};
+function buildCountryLabels(gj, dp) {
+  const byIso = {};
+  for (const [lang, isos] of Object.entries(LABEL_LANG)) for (const iso of isos) byIso[iso] = lang;
+  const out = [];
+  for (const f of gj.features) {
+    const p = f.properties || {};
+    const iso = String(p.ISO_A2_EH ?? '').trim();
+    const en = String(p.NAME_EN ?? p.NAME ?? '').trim();
+    const lx = p.LABEL_X; const ly = p.LABEL_Y;
+    if (!iso || iso === '-99' || !en || lx === undefined || lx === null) continue;
+    const lang = byIso[iso];
+    const local = lang ? String(p['NAME_' + lang] ?? '').trim() : '';
+    const rec = [en.slice(0, 30), round(Number(lx), dp), round(Number(ly), dp),
+                 Number(p.LABELRANK ?? 5) || 5];
+    if (local && local !== en) rec.push(local.slice(0, 30));
+    out.push(rec);
+  }
+  if (out.length < 150) die(`country-labels: only ${out.length} labels — LABEL_X/NAME_EN have moved.`);
+  out.sort((a, b) => a[3] - b[3]);
+  return out;
+}
+
 /** Rivers -> polylines, thinned by scalerank exactly as the roads are. */
 function buildRivers(gj, dp, maxScalerank) {
   const out = [];
@@ -1066,6 +1116,8 @@ const layers = [
     lines: packLines(f.geometry, 2),
   })).filter((g) => g.lines.length)],
   ['tier0', 'islands', minorIslands.features.flatMap((f) => packPolygons(f.geometry, 2))],
+  // ★ In BASIC: country names are part of a complete world view, not an optional extra.
+  ['tier0', 'countrylabels', buildCountryLabels(c50, 3)],
   ['tier0', 'regions', [
     ...buildRegionLabels(regions, 'land', 2, 6, REGION_CLASSES),
     ...buildRegionLabels(marine, 'sea', 2, 4, null),
@@ -1332,13 +1384,44 @@ await mkdir(outDir, { recursive: true });
  *  25 MiB asset limit -- a file nothing referenced any more. A generator that only ever adds leaves
  *  the previous shape of the data lying next to the current one, and the stale copy always wins
  *  somewhere. The output directory is owned by this script, so it says what belongs in it. */
-/* ★ Declared HERE, above the pruner that reads it. It was declared with the WRITE block lower
- *  down and the pruner threw 'Cannot access reliefTiles before initialization' -- eight
- *  minutes into a ten-minute build, after every tile had been rendered and none written. */
+/* ★★★ POPULATED HERE, NOT MERELY DECLARED — and that distinction destroyed 64 relief tiles.
+ *  It was first declared with the WRITE block lower down, and the pruner threw "Cannot access
+ *  reliefTiles before initialization". Hoisting the DECLARATION fixed the crash and created a
+ *  worse bug: the pruner then ran against an EMPTY array and deleted every cached tile, because
+ *  "not in the keep set" and "not yet known about" are indistinguishable to a pruner.
+ *  ★★ So the manifest is read BEFORE the prune. A cached run must know what it is keeping before
+ *  it decides what to delete. ✗ Never let a keep-list be built from something filled in later. */
 const reliefTiles = [];
+/* ★★★ TWO LISTS, NOT ONE, and conflating them wrote every tile into the manifest TWICE.
+ *  `prevTiles` is what the PRUNER must not delete — read from the manifest on disk, because a
+ *  cached run knows nothing about tiles it did not build. `reliefTiles` is what this run WRITES.
+ *  Pre-filling the output list with the previous one made the manifest 128 entries for 64 tiles,
+ *  so every relief image was fetched and held twice on the live map — double the texture memory
+ *  on a 1 GB device, and stable enough to look deliberate.
+ *  ★★ I first blamed a race in the renderer and "fixed" that instead. The generation token added
+ *  there is a real improvement and was NOT the cause; the data was simply wrong. ✗ Check the
+ *  artefact before theorising about the code that reads it. */
+const prevTiles = [];
+try {
+  const prev = JSON.parse(await readFile(path.join(outDir, 'relief-tiles.json'), 'utf8'));
+  /* ★ DEDUPED ON READ, so a manifest already corrupted by the bug above heals on the next run
+   *  instead of carrying the duplicates forward for ever. A repair that needs a manual step is a
+   *  repair that does not happen. */
+  if (Array.isArray(prev)) {
+    const seen = new Set();
+    for (const t of prev) {
+      if (!t || !t.file || seen.has(t.file)) continue;
+      seen.add(t.file);
+      prevTiles.push(t);
+    }
+    if (prevTiles.length !== prev.length) {
+      console.error(`  relief: manifest had ${prev.length} entries for ${prevTiles.length} tiles — deduped`);
+    }
+  }
+} catch { /* no previous manifest: nothing cached, so nothing to protect */ }
 const keep = new Set([...written.map(([f]) => f), 'index.json', 'country-labels.json',
                       'relief-tiles.json', ...reliefSpec.map(([f]) => f),
-                      ...reliefTiles.map((t) => t.file)]);
+                      ...prevTiles.map((t) => t.file)]);
 for (const f of await readdir(outDir).catch(() => [])) {
   if ((f.endsWith('.json') || f.endsWith('.png')) && !keep.has(f)) {
     await unlink(path.join(outDir, f));
@@ -1359,8 +1442,12 @@ if (reliefImages.length) {
   console.error(`  relief: 1 global + ${reliefTiles.length} tiles`);
 } else {
   // ★ Cached from a previous run: the files are on disk, but the index and packs still need them.
-  const tiles = JSON.parse(await readFile(path.join(outDir, 'relief-tiles.json'), 'utf8'));
+  const tiles = prevTiles;
   reliefTiles.push(...tiles);
+  /* ★ REWRITTEN even on a cached run. The dedupe above only helps if the corrected list reaches
+   *  disk; otherwise the bad manifest is re-read and re-deduped for ever, and every consumer keeps
+   *  seeing the duplicates. A fix that lives only in memory is not a fix. */
+  await writeFile(path.join(outDir, 'relief-tiles.json'), JSON.stringify(reliefTiles));
   for (const f of [...reliefSpec.map(([x]) => x), ...tiles.map((t) => t.file)]) {
     const bytes = (await stat(path.join(outDir, f))).size;
     const pack = f === 'relief.png' ? 'basic' : 'detail';

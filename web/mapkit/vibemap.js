@@ -635,6 +635,7 @@
     let reliefOverlay = null;
     let reliefTiles = null;
     let reliefKey = '';
+    let reliefGen = 0;   // ★ see drawRelief: the key cannot survive an await
     async function drawRelief() {
       const ix = await mapManifest();
       const cfg = ix.relief;
@@ -658,7 +659,20 @@
        *  nothing does not tear the terrain down and rebuild it. */
       const key = (useTiles ? wanted.map((t) => t.file).join(',') : 'global') + '|' + offs.join(',');
       if (reliefOverlay && reliefKey === key) return;
-      if (reliefOverlay) map.removeLayer(reliefOverlay);
+      /* ★★★ A GENERATION TOKEN, because the key alone cannot survive an await. This function
+       *  awaits the manifest and, once, the tile list — so TWO calls can both pass the key check
+       *  above before either assigns reliefKey. Both then build an overlay; the second overwrites
+       *  `reliefOverlay`, and the FIRST one's images are left on the map with nothing referencing
+       *  them. The result is stable (every later call matches the key) which is exactly why it
+       *  looked deliberate: EVERY RELIEF IMAGE WAS BEING DRAWN AND HELD TWICE. On a 1 GB Xcover
+       *  that is double the texture memory for no pixels.
+       *  ★★ Measured on the live page: 4 images at z8 where 2 tiles were in view, each file
+       *  appearing twice, while worldOffsets() returned a single copy at every zoom.
+       *  ★ The token is claimed BEFORE the build and re-checked after: a newer call always wins,
+       *  and the older one drops out without touching the map. */
+      const myGen = ++reliefGen;
+      if (reliefOverlay) { map.removeLayer(reliefOverlay); reliefOverlay = null; }
+      if (myGen !== reliefGen) return;
       reliefKey = key;
       reliefOverlay = L.layerGroup();
       const add = (file, b) => {
@@ -670,6 +684,9 @@
       };
       if (useTiles) for (const t of wanted) add(t.file, t.bounds);
       else add(cfg.basic, [-180, -lat, 180, lat]);
+      // ★ Last check before it reaches the map: if a newer call started while this one built, drop
+      //   this overlay on the floor rather than adding a set nobody will remove.
+      if (myGen !== reliefGen) return;
       reliefOverlay.addTo(map);
     }
 
@@ -727,7 +744,11 @@
      *  ★ Thin the labels by RANK against zoom, or the world view is a wall of overlapping names. */
     async function drawCountryNames() {
       if (countryLabels === null) {
-        countryLabels = await fetch(MD + 'country-labels.json')
+        /* ★★ tier0-countrylabels.json, not the old hand-made country-labels.json. The original was
+         *  produced by a ONE-OFF SCRIPT on 2026-09-26, lived on disk, and was in NEITHER PACK — so
+         *  it shipped in nothing and survived regeneration only because the pruner's keep-list
+         *  happened to spare it. The generator owns it now, which is the only reason it exists. */
+        countryLabels = await fetch(MD + 'tier0-countrylabels.json')
           .then((r) => (r.ok ? r.json() : [])).catch(() => []);
       }
       countryLabelLayer.clearLayers();
