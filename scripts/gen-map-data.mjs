@@ -39,7 +39,7 @@
  */
 import { readFile, writeFile, mkdir, stat, readdir, unlink } from 'node:fs/promises';
 import { readDbf, eachPolygon } from './lib/shapefile.mjs';
-import { readEtopo, buildRelief, encodePng, rasteriseBiomes, MERC_LAT } from './lib/relief.mjs';
+import { readEtopo, buildRelief, encodePng, rasteriseBiomes, sliceRelief, MERC_LAT } from './lib/relief.mjs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -62,6 +62,14 @@ const REFRESH = process.argv.includes('--refresh');
  *  fresh clone still gets a complete map. ✗ Do not make the cache the default source of truth:
  *  it is keyed on nothing, so any change to relief.mjs needs `--relief`. */
 const FORCE_RELIEF = process.argv.includes('--relief');
+/* ★★★ THE UNPACKED SHAPEFILES ARE DELETED AFTER USE. They are strictly derivable from the zips
+ *  sitting beside them, and keeping both is 1.8 GB of pure duplication — HydroLAKES alone unpacks
+ *  to 1.4 GB against a 782 MB archive. On 2026-09-26 that took Stuart's Mac to 7.8 GB free, and
+ *  deleting them by hand only deferred it: the next run unpacked them again.
+ *  ★ Re-unpacking costs about a minute; the relief cache above already saved eight. Pass
+ *  `--keep-unpacked` when iterating on a shapefile layer and that minute starts to matter. */
+const KEEP_UNPACKED = process.argv.includes('--keep-unpacked');
+const unpacked = [];
 
 const NE = 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson';
 const SRC = {
@@ -878,6 +886,14 @@ function countPoints(v) {
 
 const featureCount = (v) => (Array.isArray(v) ? v.length : Object.keys(v).length);
 
+/** Bytes in a directory, one level deep — enough for the unpacked shapefile dirs. */
+async function dirSize(dir) {
+  const names = await readdir(dir).catch(() => []);
+  let n = 0;
+  for (const f of names) n += (await stat(path.join(dir, f)).catch(() => ({ size: 0 }))).size;
+  return n;
+}
+
 /* ───────────────────────── main ───────────────────────── */
 
 await mkdir(cacheDir, { recursive: true });
@@ -995,15 +1011,24 @@ function buildCoast(dp) {
   return out;
 }
 
+unpacked.push(hydroDir, ecoDir, etopoDir, osmDir);
 const ecoRows = readDbf(path.join(ecoDir, 'Ecoregions2017.dbf'), ['BIOME_NUM']);
 if (ecoRows.length < 500) die(`ecoregions: only ${ecoRows.length} records — the dataset has changed shape.`);
 const ecoShapes = [];
 eachPolygon(ecoShp, (i, rings) => { ecoShapes.push({ biome: ecoRows[i].BIOME_NUM, rings }); });
 if (ecoShapes.length < 500) die(`ecoregions: only ${ecoShapes.length} polygons read.`);
 
-const reliefSpec = [['relief.png', 'basic', 2700], ['relief-hi.png', 'detail', 4096]];
+/* ★★★ ONE GLOBAL IMAGE FOR THE WORLD VIEW, A TILE GRID FOR EVERYTHING CLOSER.
+ *  The global image is bundled (basic) and is all a world or continental view needs. The tiles are
+ *  rendered at 8192 across the planet -- twice the old global image and close to ETOPO's own
+ *  10,800 -- and split 8x8, so a viewer at z10 fetches ONE tile, not the planet. That is what lets
+ *  the resolution go up without the download going up with it. */
+const RELIEF_TILE_SIZE = 8192;
+const RELIEF_TILE_N = 8;
+const reliefSpec = [['relief.png', 'basic', 2700]];
 const reliefCached = !FORCE_RELIEF && (await Promise.all(
-  reliefSpec.map(([f]) => stat(path.join(outDir, f)).then(() => true).catch(() => false))
+  [...reliefSpec.map(([f]) => f), `relief-t0-0.png`].map(
+    (f) => stat(path.join(outDir, f)).then(() => true).catch(() => false))
 )).every(Boolean);
 const reliefImages = [];
 if (reliefCached) {
@@ -1012,6 +1037,15 @@ if (reliefCached) {
   process.stderr.write(`  rasterising ${ecoShapes.length} ecoregions …`);
   for (const [file, pack, width] of reliefSpec) {
     reliefImages.push([file, pack, buildRelief(etopo, { width, biomes: rasteriseBiomes(ecoShapes, width) })]);
+  }
+  // ★ Built once at full size, then sliced. The 8192² buffer is ~268 MB and is released straight
+  //   after — cheaper than rendering each tile's window separately and re-deriving the hillshade
+  //   at every seam, which would show as a visible edge.
+  const big = buildRelief(etopo, {
+    width: RELIEF_TILE_SIZE, biomes: rasteriseBiomes(ecoShapes, RELIEF_TILE_SIZE),
+  });
+  for (const t of sliceRelief(big, RELIEF_TILE_N)) {
+    reliefImages.push([`relief-t${t.x}-${t.y}.png`, 'detail', t.data, t.bounds]);
   }
   process.stderr.write(' done\n');
 }
@@ -1108,7 +1142,9 @@ const index = {
   /* ★ The renderer needs the CUT-OFF LATITUDE to place the image, and it must come from the same
    *  constant that generated it -- a renderer that hardcodes 85 instead of 85.0511 slides the
    *  relief a few kilometres off the coastline at high latitude. */
-  relief: { mercatorLat: MERC_LAT, basic: 'relief.png', detail: 'relief-hi.png' },
+  /* ★ `tiles` names the manifest the renderer loads to place the high-resolution grid; `basic` is
+   *  the single global image that every install has. */
+  relief: { mercatorLat: MERC_LAT, basic: 'relief.png', tiles: 'relief-tiles.json' },
   /* ★★★ TWO PACKS, AND THE RENDERER MUST WORK WITH ONLY THE FIRST. Stuart, 2026-09-26: "ship the
    *  VibeServer with basic maps and give the server owner the option of a one time download of
    *  the more detailed level 2 maps. same with the app too."
@@ -1297,7 +1333,8 @@ await mkdir(outDir, { recursive: true });
  *  the previous shape of the data lying next to the current one, and the stale copy always wins
  *  somewhere. The output directory is owned by this script, so it says what belongs in it. */
 const keep = new Set([...written.map(([f]) => f), 'index.json', 'country-labels.json',
-                      ...reliefSpec.map(([f]) => f)]);
+                      'relief-tiles.json', ...reliefSpec.map(([f]) => f),
+                      ...reliefTiles.map((t) => t.file)]);
 for (const f of await readdir(outDir).catch(() => [])) {
   if ((f.endsWith('.json') || f.endsWith('.png')) && !keep.has(f)) {
     await unlink(path.join(outDir, f));
@@ -1305,23 +1342,33 @@ for (const f of await readdir(outDir).catch(() => [])) {
   }
 }
 for (const [file, json] of written) await writeFile(path.join(outDir, file), json);
-for (const [file, pack, width] of reliefSpec) {
-  const made = reliefImages.find(([f]) => f === file);
-  let bytes;
-  if (made) {
-    const png = encodePng(made[2]);
+const reliefTiles = [];
+if (reliefImages.length) {
+  for (const [file, pack, img, bounds] of reliefImages) {
+    const png = encodePng(img);
     await writeFile(path.join(outDir, file), png);
-    bytes = png.length;
-  } else {
-    // ★ Cached on disk from a previous run; its size still has to reach the index and the pack.
-    bytes = (await stat(path.join(outDir, file))).size;
+    index.files[file] = { layer: 'relief', bytes: png.length, width: img.width, height: img.height };
+    index.packs[pack].files.push(file);
+    index.packs[pack].bytes += png.length;
+    if (bounds) reliefTiles.push({ file, bounds });
   }
-  index.files[file] = { layer: 'relief', bytes, width, height: width };
-  index.packs[pack].files.push(file);
-  index.packs[pack].bytes += bytes;
-  console.error(`  relief ${file}: ${width}x${width}, ${(bytes / 1048576).toFixed(2)} MB`
-    + (made ? '' : ' (cached)'));
+  await writeFile(path.join(outDir, 'relief-tiles.json'), JSON.stringify(reliefTiles));
+  console.error(`  relief: 1 global + ${reliefTiles.length} tiles`);
+} else {
+  // ★ Cached from a previous run: the files are on disk, but the index and packs still need them.
+  const tiles = JSON.parse(await readFile(path.join(outDir, 'relief-tiles.json'), 'utf8'));
+  reliefTiles.push(...tiles);
+  for (const f of [...reliefSpec.map(([x]) => x), ...tiles.map((t) => t.file)]) {
+    const bytes = (await stat(path.join(outDir, f))).size;
+    const pack = f === 'relief.png' ? 'basic' : 'detail';
+    index.files[f] = { layer: 'relief', bytes };
+    index.packs[pack].files.push(f);
+    index.packs[pack].bytes += bytes;
+  }
+  console.error(`  relief: reusing cached global + ${tiles.length} tiles`);
 }
+index.files['relief-tiles.json'] = { layer: 'relief', bytes: 0 };
+index.packs.detail.files.push('relief-tiles.json');
 await writeFile(path.join(outDir, 'index.json'), JSON.stringify(index));
 
 /* ★★★ THE DETAIL PACK IS SHIPPED AS ONE TARBALL, NOT EIGHT FILES. A server owner or a phone on
@@ -1344,6 +1391,20 @@ const tarBytes = (await stat(tarball)).size;
 //   over a phone tether is not a rare event, and it unpacks into a map that is subtly wrong.
 const sha = execFileSync('shasum', ['-a', '256', tarball]).toString().split(/\s+/)[0];
 await writeFile(tarball + '.sha256', `${sha}  ${path.basename(tarball)}\n`);
+
+/* ★ Last thing before the summary, and only once everything has been written: a generator that
+ *  cleans up before it has succeeded is a generator that loses its inputs on a crash. */
+if (!KEEP_UNPACKED) {
+  const { rm } = await import('node:fs/promises');
+  let freed = 0;
+  for (const dir of unpacked) {
+    const size = await dirSize(dir);
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+    freed += size;
+  }
+  if (freed) console.error(`  tidied ${(freed / 1073741824).toFixed(2)} GB of unpacked shapefiles`
+    + ' (--keep-unpacked to retain)');
+}
 
 const pad = (s, n) => String(s).padEnd(n);
 const padl = (s, n) => String(s).padStart(n);

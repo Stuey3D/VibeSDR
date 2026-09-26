@@ -182,6 +182,54 @@ export function buildRelief(grid, { width = 2700, zFactor = 6, biomes = null } =
   return { width: w, height: h, data: px };
 }
 
+/**
+ * Slice a built relief image into an NxN grid of tiles.
+ *
+ * ★★★ THE RELIEF IS TILED FOR THE SAME REASON THE LAKES ARE SHARDED: so nobody downloads the world
+ *   to look at one island. A single global image can only ever be as sharp as its total size
+ *   allows — at 4096 across the whole planet, one pixel is 9.8 km, so at z9 each pixel is smeared
+ *   over ~125 screen pixels and Mount Teide (a 3 km cone, one ETOPO cell) becomes a blur. Stuart:
+ *   "that blur bothers me its weird how the next zoom level is clearer but the mountain is
+ *   missing."
+ *
+ * ★★ TILING BREAKS THAT TRADE. The grid can be rendered at the SOURCE's own resolution because no
+ *   single file has to hold it: a viewer at z10 fetches one or two tiles, not the planet. It is
+ *   the same principle as the vector shards, and it is why "our own tiles, bundled" is nothing
+ *   like the tile DEPENDENCY we removed — these ship with the app and are never fetched from
+ *   anyone.
+ *
+ * ★ Returned as {x, y, bounds:[west,south,east,north], data} so the renderer can place each one
+ *   without recomputing the projection it was built with.
+ */
+export function sliceRelief(img, n) {
+  const side = Math.floor(img.width / n);
+  const out = [];
+  for (let ty = 0; ty < n; ty++) {
+    for (let tx = 0; tx < n; tx++) {
+      const buf = Buffer.alloc(side * side * 4);
+      for (let y = 0; y < side; y++) {
+        const srcOff = ((ty * side + y) * img.width + tx * side) * 4;
+        img.data.copy(buf, y * side * 4, srcOff, srcOff + side * 4);
+      }
+      /* ★ Mercator y -> latitude for this tile's edges. The x edges are linear in longitude; the
+       *  y edges are NOT, which is exactly the trap that would slide every tile north or south. */
+      const latAt = (py) => {
+        const nrm = Math.PI * (1 - (2 * py) / img.height);
+        return (180 / Math.PI) * Math.atan(Math.sinh(nrm));
+      };
+      out.push({
+        x: tx, y: ty,
+        bounds: [
+          -180 + (360 * tx) / n, latAt((ty + 1) * side),
+          -180 + (360 * (tx + 1)) / n, latAt(ty * side),
+        ].map((v) => Number(v.toFixed(6))),
+        data: { width: side, height: side, data: buf },
+      });
+    }
+  }
+  return out;
+}
+
 /* ───────────────────────── a minimal PNG encoder ─────────────────────────
  * ★ RGBA, filter type 0, one IDAT. Node ships the only hard part (deflate) in zlib, so this is
  *   chunk framing and a CRC — far less than a dependency is worth for one file per build.

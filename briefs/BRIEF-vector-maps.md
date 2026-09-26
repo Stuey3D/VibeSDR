@@ -427,3 +427,45 @@ the deploy all live in ONE script, and the deploy is a `subprocess.run` that is 
 every anchor matched and every check passed.** ✗ Never deploy from a separate shell command.
 ★ The checks that now gate every directory deploy: every inline `<script>` through `node --check`,
 and every `MAP_*` used must be declared.
+
+## ▶ PARKED — TERRAIN AS A RECEIVER ATTRIBUTE (Stuart's idea, 2026-09-26)
+> *"topographic may be a good way to identify receivers in high ground, the higher the antenna the
+> better usually so someone up a mountain may end up with AMAZING signal"*
+
+★★★ This turns the relief from DECORATION into INFORMATION, and it is the first thing we could
+honestly add to the station ranking's standing caveat (*"we know a receiver's location and its
+hardware range, not its antenna"*) — because terrain height is a property of WHERE THE RECEIVER IS,
+which we do know, unlike the aerial, which we do not. [[client_infers_server_decisions]] in spirit.
+
+★★ **TWO REASONS NOT TO BUILD IT ON THE CURRENT DEM:**
+1. **ETOPO2 averages over 3.7 km cells.** A receiver on a 200 m hill in lowland reads the AREA
+   average — so it would understate exactly the advantage being surfaced. Fine for "800 m, in the
+   Alps"; useless for distinguishing a hilltop from the valley floor 2 km away, which is the
+   distinction that matters in Britain.
+2. **Elevation alone is the wrong metric.** VHF range follows height above SURROUNDING TERRAIN and
+   a clear horizon, not height above sea level: 50 m on a coastal cliff beats 400 m in a bowl. The
+   real figure is something like "height above the median terrain within 10 km", which needs a
+   finer DEM to mean anything.
+
+▶ So this CHANGES THE CASE FOR A FINER DEM (GEBCO 15 arc-sec ≈ 460 m, or SRTM 90 m). It stops being
+"prettier mountains" and becomes a receiver attribute and a possible ranking signal.
+★ Parked with [[the airband search]] for the same reason: a ranking nobody can evaluate on seven
+servers is a ranking that teaches users to distrust the next one.
+
+## ★★★ RELIEF IS TILED, for the same reason the lakes are sharded
+Stuart, at z9 over Tenerife: *"that blur bothers me its weird how the next zoom level is clearer but
+the mountain is missing."* Both halves were real:
+- A single global image is only as sharp as its total size allows. At 4096 across the planet one
+  pixel is 9.8 km, so at z9 each pixel smears over ~125 screen pixels — and **Mount Teide is one
+  ETOPO cell** (a 3 km cone at 2 arc-min), so it can only ever be a blob.
+- Then at z10 the relief switched OFF entirely and the land went flat, so the blurriest view was
+  the only one carrying the mountain.
+
+★★ **TILING BREAKS THE TRADE.** The grid renders at 8192 across the world — near ETOPO's own
+10,800 — split 8×8, and a viewer at z10 fetches ONE tile rather than the planet. Same principle as
+the vector shards: *do not make somebody download the world to look at their own island.*
+★★★ ✗ AND THIS IS NOT THE TILE DEPENDENCY WE REMOVED. These are OUR tiles, generated at build time
+and BUNDLED; nothing is ever fetched from anyone, and nobody can block them. The thing we deleted
+was a runtime dependency on someone else's servers, not the idea of a grid.
+★ Built once at full size and then SLICED, rather than rendering each tile's window separately —
+re-deriving the hillshade per tile would show as a visible seam at every edge.
