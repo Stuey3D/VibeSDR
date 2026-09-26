@@ -295,3 +295,34 @@ anywhere else") is about who may touch `cfft_` and the client lists, so moving i
 ownership rules rewritten deliberately — not a lock bolted on.
 ✗ Do NOT re-attempt this by changing how much is drained per block. That was tried on 2026-09-25 and
   cost audio on a box that was only 47 % busy.
+
+## The directory's address suggestions are sent and never used (2026-09-26)
+`directory/src/index.js:418` returns a 409 with a **`suggestions` array**, and its own comment says
+why: *"so the app can put them straight into its dropdown rather than making the owner guess what
+is free."* **The app has ZERO references to `suggestions`** — written and never read. What a TV
+owner sees instead, in raw JSON, brackets and quotes and all:
+
+```
+that address is taken — try: ["stuey3d-sonytvio92nh","stuey3d-sonytv1","stuey3d-sonytv2","stuey3d-sonytv3"]
+```
+
+★★ Two faults: a developer artefact printed at a user, and four alternatives offered with **no way
+to choose one** — on a device whose only input is a d-pad and an onscreen keyboard. Stuart,
+2026-09-26: *"this needs a dropdown to choose an alternate, for now I will change the name."*
+▶ Render them as FOCUSABLE buttons (a TV scrolls by moving focus — an unfocusable suggestion is
+unreachable, see the ServerModeScreen note on the Measure results), one press to accept.
+★ It bit him at the worst moment: the address was held by his OWN orphaned registration after a
+`pm clear`, so recovering from one fault dropped him straight into another with no way through.
+
+## Bundle the DAB benchmark clip instead of downloading it (2026-09-26)
+`vibe_benchmark_dab.h:129` fetches `bench-clip-v1/dab-bench.vbu8.gz` from a GitHub release — 18 MB
+gzipped, 23.6 MB raw — and keeps it for ever (*"FETCHED ONCE, KEPT"*). That is the 43 MB sitting in
+the Sony's app data months later.
+★★★ **THAT RELEASE IS SILENTLY LOAD-BEARING AND I NEARLY DELETED IT** while clearing 78 old
+releases tonight; it survived only because I classified it as data rather than a superseded build.
+A benchmark that breaks when somebody tidies a release page is a dependency nobody knows they have.
+▶ Ship the `.gz` as an asset in the **Lite/server APK** (where the benchmark runs at first setup),
+decompress to cache on demand, and **delete the decompressed copy when the benchmark finishes** —
+that last part is worth doing whether or not it is bundled. APK 56 MB → ~74 MB.
+★ Stuart's call, and it reverses the 09-19 note *"too big to ship in an APK"*: *"yeah bundle it
+especially if it can be zipped inside the app and unzipped before the benchmark to save space"*.

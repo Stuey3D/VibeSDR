@@ -1635,12 +1635,25 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             device will have to do (Stuart, 2026-09-19). Lite measures ITSELF the first time; the main app
             offers the button, since a phone big enough to run the app is assumed to cope.
             ★★ It costs the radio about two minutes off the air, so the panel says so before it is pressed. */}
-        {!!prefsError && (
+        {/* ★★★ THE SAME CONDITION AS THE ALERT IN start(), AND IT WAS NOT. The Alert fires on
+            `!prefsRead`; this banner rendered on `!!prefsError`. Those are DIFFERENT failures: a read
+            that never settles leaves prefsError NULL (see the deadline note on the load effect), so the
+            Alert told the owner to press "Try reading them again" and the banner holding that button was
+            never drawn at all. Stuart's Sony, 2026-09-26: *"it says reread your settings from the top of
+            the screen there is no button to do that"* — and his photograph proves the case, because the
+            dialog carried NO reason before "Everything here is a default", which only happens when
+            prefsError is null.
+            ★★ ONE RULE, TWO READERS, for the THIRD time in this one pair — the comment in start() already
+               records correcting the wording in both places and still left the CONDITIONS apart. Wording
+               is not the rule; the rule is "the read failed". ✗ Whoever changes one of these changes both.
+            ★ `!prefsRead` is the authority: it is what start() refuses on, so it is what must offer the
+              way out. prefsError, when there is one, only adds the reason. */}
+        {!prefsRead && (
           <View style={{ borderLeftWidth: 3, borderLeftColor: '#ff8a7d', paddingLeft: 10, marginBottom: 12 }}>
             <Text style={[styles.hint, { color: '#ff8a7d', fontFamily: F, marginBottom: 0 }]}>
-              {`Your saved settings could not be read (${prefsError}). What you see below are DEFAULTS — your `
-               + `settings are still stored on this device and have not been touched, so do not start the `
-               + `server until this is fixed, or they will be overwritten.`}
+              {`Your saved settings could not be read${prefsError ? ` (${prefsError})` : ''}. What you see `
+               + `below are DEFAULTS — your settings are still stored on this device and have not been `
+               + `touched, so do not start the server until this is fixed, or they will be overwritten.`}
             </Text>
             {/* ★★ AN ACTION, not an instruction the device may be unable to carry out. It already
                 retried three times on its own; this is for the case where something was genuinely
