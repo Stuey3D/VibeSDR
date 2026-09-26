@@ -326,3 +326,24 @@ decompress to cache on demand, and **delete the decompressed copy when the bench
 that last part is worth doing whether or not it is bundled. APK 56 MB → ~74 MB.
 ★ Stuart's call, and it reverses the 09-19 note *"too big to ship in an APK"*: *"yeah bundle it
 especially if it can be zipped inside the app and unzipped before the benchmark to save space"*.
+
+## The spectrum fps ceiling is not honoured — 5 asked, 8 delivered (2026-09-26)
+Stuart set the Pi 2's spectrum ceiling to **5 fps** and the client is served **8**. Setting 20 also
+gives 8. So 8 is neither a ceiling nor a floor being respected — the owner's figure is simply not
+the authority. The server's own startup log carries three numbers for one thing:
+
+```
+[VibeLocalSDR] client asked for 5 fps
+[VibeLocalSDR] engine FFT rate 5.0 -> 2.0 fps (x4)
+[VibeLocalSDR] engine fft rate: 2.0 fps (engine 8.0) — the fastest listener's rate
+  ceilings: bandwidth 0 Hz, spectrum 5 fps
+```
+
+★★ This is NOT the same as the old `SPEC RATE 8.1 fps of 20` note — there 8 looked like a CEILING
+the engine could not exceed (the single-slot spectrum hand-off). Here the ask is BELOW 8 and 8 is
+still delivered, so a hand-off ceiling cannot explain it: something is overriding downwards asks.
+★ `config.json` holds **two** `maxFps` values (5 and 0) — front door and radio — so "one rule, two
+readers" is a live suspect: whichever is 0 may be winning and meaning "unlimited".
+▶ It matters for load, not just tidiness: the Pi 2 is doing 60 % more spectrum work than its owner
+asked for, on the box with the least headroom, and the fps ceiling is the main lever an owner has
+for a weak server.
