@@ -447,6 +447,136 @@ which we do know, unlike the aerial, which we do not. [[client_infers_server_dec
    real figure is something like "height above the median terrain within 10 km", which needs a
    finer DEM to mean anything.
 
+### ★★★ STUART'S CORRECTION: THE POSITION IS COARSER THAN THE DEM, so ETOPO2 IS ENOUGH
+> *"Actually we can estimate the height above sea level based on Maidenhead. I know myself I am
+> about 110m above sea level where I live"*
+
+He is right and it inverts the objection above. I was treating the DEM's 3.7 km cells as the
+limiting factor — but **the directory publishes a MAIDENHEAD SQUARE, not an address**, so a
+receiver's position is only known to ~7.5 × 4.6 km. The DEM is FINER THAN THE POSITION. Chasing a
+460 m DEM would buy precision we are not given and cannot use.
+
+**MEASURED against his own ground truth (the best kind of check):** ETOPO2 over IO92NH reads
+78–86 m, mean **82 m**, against his reported **~110 m** — about 30 m low, exactly the shape of a
+3.7 km cell averaging a local rise into the Nene valley.
+
+★★★ **SO THE WORDING IS THE WHOLE DESIGN.** ✗ Never "this receiver is at 110 m" — we cannot know
+that, and stating it is fabricated precision ([[feedback_no_inferred_hardware_readouts]]).
+✓ "This square averages ~80 m" is defensible, and enough to spot the receiver that is up high.
+★ The ~30 m error largely CANCELS for ranking: every square is measured the same way, so
+comparisons stay meaningful even where absolutes run low.
+
+★★★ **THE WORDING, IN STUART'S OWN WORDS (2026-09-26) — use it verbatim:**
+> *"average elevation for the location of this receiver is approx 80m above sea level"*
+
+Every clause is load-bearing. **"average"** admits it is a cell mean. **"for the location"** not
+"of the receiver" — we have a grid square, not an address. **"approx"** carries the ~30 m the DEM
+runs low. ✗ Do not tighten this into "at 80 m": the honesty IS the feature, and the alternative is
+a confident number that is wrong by a third.
+
+### ★★★ CALIBRATED AGAINST THREE INDEPENDENT SOURCES (2026-09-26)
+| source | figure |
+|---|---|
+| Stuart's own estimate | ~110 m |
+| Apple Watch barometric altimeter | 106 m |
+| Postcode lookup, NN3 7UE | **103 m** |
+| **ETOPO2 square average (ours)** | **82 m** |
+
+★★ The three real measurements cluster at **103–110 m**; the DEM runs **21–28 m LOW**, consistently
+— exactly the predicted shape of a 3.7 km cell averaging a local rise into the Nene valley.
+★★★ And it settles the design: **he had three ways to know his real height and the DEM had none of
+them.** A box he types 103 into beats any cleverness on our side.
+
+★★★ **SAMPLED AT THE EXACT COORDINATE, AND INTERPOLATION DOES NOT HELP.** At his measured point
+the DEM reads **78 m against 103 m — 25 m low (24 %)**, and BILINEAR interpolation gives 77.7 m,
+i.e. no change. ✗ This is not a sampling artefact that better maths fixes: the 3.7 km cell genuinely
+is that low, because it averages the village's rise in with the valley around it.
+★★ The telling number: **the highest cell within ~9 km is 108 m.** His real height EXISTS in the
+data — two cells away, smeared into a neighbour. That is the resolution wall, exactly.
+▶ So the DEM value should be the FALLBACK, clearly labelled as a terrain average, and never the
+primary figure. Four independent measurements (110 estimate / 106 watch / 103 postcode / 103 map
+tool) against our 78 settles it.
+
+### ★★★ MEASURED ON REAL RECEIVERS: INNSBRUCK IS THE WHOLE ARGUMENT
+Stuart, 2026-09-26: *"There are a couple of UberSDR's in Austria that have fantastic reception I'm
+pretty sure based on elevation since they are in the alps."* Sampled from our own ETOPO grid, with
+"local mean" = the surrounding ~30 km:
+
+| site | elevation | local mean | **above local** |
+|---|---|---|---|
+| Moulton (Stuart) | 78 m | 90 m | −12 m |
+| **Innsbruck** | **650 m** | 1480 m | **−830 m** |
+| Sonnblick | 2280 m | 1917 m | **+363 m** |
+| Patscherkofel | 2024 m | 1482 m | **+542 m** |
+| Salzburg | 428 m | 622 m | −194 m |
+| Amsterdam | −3 m | −3 m | 0 m |
+
+★★★ **INNSBRUCK IS EIGHT TIMES STUART'S HEIGHT AND THE WORST SITE IN THE TABLE.** It sits 830 m
+BELOW its surroundings, on a valley floor with 2,000 m walls either side — it hears its own valley
+and nothing else. Raw elevation would rank it as "high ground". ✗ **Never rank on elevation alone.**
+
+★★ So report BOTH: *"2,024 m, and 542 m above the surrounding terrain."* The second number is the
+one that predicts reception and the one that correctly puts Sonnblick above Innsbruck.
+★ **And the DEM's 25 m error is IRRELEVANT at this scale** — 25 m against +542 m changes nothing.
+The coarse cell only hurt at Stuart's house, where the entire signal was 30 m. That is precisely
+where the operator's own figure takes over, and precisely why his text box is the right design.
+
+★ **RANK, DON'T STATE.** That page also gives the UK average as 69 m, putting him in the **76.8th
+percentile**. That is the right shape for a "high ground" signal: not an absolute metres figure but
+where a square sits AGAINST EVERY OTHER — which is robust to the systematic ~20 m offset, because
+every square is measured the same way and the bias cancels in the comparison.
+
+### ★★★ THE DESIGN, AS STUART SETTLED IT — a box with a default
+> *"The simple fix is in the location field of a server have a manual elevation box, if left blank
+> will derive from location"*
+
+★★★ **THAT IS THE ANSWER, AND IT IS SMALLER THAN EVERYTHING PROPOSED BEFORE IT.** I had reached for
+a device barometric altimeter and a change to the setup flow; a text field with a sensible default
+does the same job with **no permissions, no sensor drift, no new code path**, and the operator
+types their real figure ONCE and it is right forever.
+★★ It is also the shared-dial contract in miniature: **the party that knows states it; the system
+computes only when nobody has.** A blank box is not missing data — it is consent to estimate.
+▶ To build: an optional `elevationM` on the server's location record; the directory shows the
+operator's figure when present and the DEM square average otherwise, labelled differently so the
+two are never confused ("approx, from terrain" vs the stated value).
+★ I over-engineered this. Recording the smaller answer as the design.
+
+### ▶ Earlier idea, superseded: THE DEVICE ALREADY KNOWS
+Stuart, 2026-09-26: *"right now the altimiter on my apple watch is 106m."* Against ETOPO's **82 m**
+for his square that is **24 m low (~23 %)**, in exactly the expected direction.
+
+★★★ **WHEN AN OPERATOR SETS UP A VIBESERVER FROM THE APP, THE PHONE IS AT THE RECEIVER.** iOS gives
+GPS altitude, and a Watch adds a barometric altimeter calibrated against GPS — which measures the
+LOCAL MICRO-RELIEF that no DEM we could ship will ever see (his 8 m above the road).
+★★ So the design gets SIMPLER, not harder:
+  1. measure once at setup from the device,
+  2. let the operator correct it (they know about the mast; we never will),
+  3. fall back to the DEM square average only when nobody has said.
+The DEM stops being the answer and becomes the DEFAULT, which is where it belongs.
+▶ Caveat to carry: a barometric altimeter drifts with weather, and GPS altitude is ±10–20 m. Take
+it as a measurement to be confirmed, not a reading to publish unseen.
+
+### ★★★ THREE LAYERS OF HEIGHT, AND WE CAN ONLY EVER KNOW ONE
+Stuart, 2026-09-26: *"My house is approx 8m above the road so that adds height."* That is the whole
+gap between ETOPO's 82 m and his 110 m, and it stacks:
+
+| layer | typical size | can we know it? |
+|---|---|---|
+| terrain average over the square | ~80 m here | ✓ computable from the DEM |
+| local micro-relief (his plot above the road) | ~8 m | ✗ invisible to any DEM we would ship |
+| antenna height above ground | 5–20 m, often the BIGGEST term | ✗ invisible, always |
+
+★★★ **SO THE OPERATOR MUST BE ABLE TO STATE IT, AND THEIR FIGURE WINS.** The DEM value is a
+sensible DEFAULT and a sanity check, never an assertion over the top of somebody who knows. This is
+[[shared_dial_contract]] in a different costume: the party that KNOWS states it, and nothing infers
+on their behalf. ✗ A computed height presented as fact is the same fault as an inferred hardware
+readout ([[feedback_no_inferred_hardware_readouts]]).
+
+★★ **AND THE BETTER METRIC IS BUILDABLE NOW:** elevation of a square RELATIVE TO ITS NEIGHBOURS is
+what VHF range actually follows, needs no finer data, and cannot overstate what we know. Stuart's
+square reads 82 m against a local mean around 70 m — modest. A Snowdonia square reads hundreds of
+metres above its neighbours.
+
 ▶ So this CHANGES THE CASE FOR A FINER DEM (GEBCO 15 arc-sec ≈ 460 m, or SRTM 90 m). It stops being
 "prettier mountains" and becomes a receiver attribute and a possible ranking signal.
 ★ Parked with [[the airband search]] for the same reason: a ranking nobody can evaluate on seven

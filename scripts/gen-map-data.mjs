@@ -1332,6 +1332,10 @@ await mkdir(outDir, { recursive: true });
  *  25 MiB asset limit -- a file nothing referenced any more. A generator that only ever adds leaves
  *  the previous shape of the data lying next to the current one, and the stale copy always wins
  *  somewhere. The output directory is owned by this script, so it says what belongs in it. */
+/* ★ Declared HERE, above the pruner that reads it. It was declared with the WRITE block lower
+ *  down and the pruner threw 'Cannot access reliefTiles before initialization' -- eight
+ *  minutes into a ten-minute build, after every tile had been rendered and none written. */
+const reliefTiles = [];
 const keep = new Set([...written.map(([f]) => f), 'index.json', 'country-labels.json',
                       'relief-tiles.json', ...reliefSpec.map(([f]) => f),
                       ...reliefTiles.map((t) => t.file)]);
@@ -1342,7 +1346,6 @@ for (const f of await readdir(outDir).catch(() => [])) {
   }
 }
 for (const [file, json] of written) await writeFile(path.join(outDir, file), json);
-const reliefTiles = [];
 if (reliefImages.length) {
   for (const [file, pack, img, bounds] of reliefImages) {
     const png = encodePng(img);
