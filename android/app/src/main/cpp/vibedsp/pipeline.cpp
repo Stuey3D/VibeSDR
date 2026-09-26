@@ -2017,6 +2017,11 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc) {
                 x.mpxDevNoiseKHz = mpxDevNoise_ * 75.0f;
                 x.mpxDevHoldKHz = mpxDevHold_ * 75.0f;
                 x.rdsDevKHz   = extRdsDev_;
+                /* ★ The measured peak travels beside the average — see RdsExt::rdsDevPeakKHz. Taken
+                 *  LIVE rather than through extRdsDev_'s 1.5 s smoother: it carries its own 3 s dwell,
+                 *  and smoothing a peak is how the averaged figure came to be mislabelled in the first
+                 *  place. */
+                x.rdsDevPeakKHz = rdsDemod_.rdsDeviationPeakKHz();
                 cb_.rdsExt(cb_.ctx, x);
             }
             if (wantRds && pll_.trackable())

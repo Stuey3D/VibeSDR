@@ -5776,6 +5776,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // one keeps coherence high while the angle walks all the way round. See vibedsp.h.
         float rdsPhaseDrift = 0.0f;
         float rdsPilotDev = 0.0f, rdsDev = 0.0f; // injection levels, kHz deviation
+        float rdsDevPeak = 0.0f;                // ★ the MEASURED peak, no assumed crest factor
         std::vector<vibedsp::RdsDecoder::Eon> rdsEon;
         std::vector<vibedsp::RdsDecoder::Oda> rdsOda;
         std::vector<int> rdsAf;
@@ -10313,6 +10314,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         st.rdsPhaseDrift = x.pilotPhaseDriftDegPerSec;
         st.rdsPilotDev = x.pilotDevKHz;
         st.rdsDev      = x.rdsDevKHz;
+        st.rdsDevPeak  = x.rdsDevPeakKHz;
     }
     static void rdsSigCb_(RdsState& st, double vfoHz, Impl* im, float relDb) {
         std::lock_guard<std::mutex> lk(st.rdsMtx);
@@ -19954,7 +19956,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                                 : rx.pilotLocked();
         int pty, tp, ta, ms, di, ctMin, ctOff, gTot, afSeen;
         int ptyR, tpR, taR, msR, diR;
-        int lang, pinD, pinH, pinM; float phase, phaseCoh, pilotDev, rdsDev_, phaseDrift;
+        int lang, pinD, pinH, pinM; float phase, phaseCoh, pilotDev, rdsDev_, rdsDevPk_, phaseDrift;
         int berNow;   // ★ block error rate, ALSO here: the phase verdict needs it
         std::string rtpT, rtpA, lps, ptyn;
         std::vector<vibedsp::RdsDecoder::Eon> eon;
@@ -19973,7 +19975,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           lang = R.rdsLang; pinD = R.rdsPinDay; pinH = R.rdsPinHour; pinM = R.rdsPinMin;
           eon = R.rdsEon; oda = R.rdsOda; phase = R.rdsPhase; phaseCoh = R.rdsPhaseCoh;
           phaseDrift = R.rdsPhaseDrift;
-          pilotDev = R.rdsPilotDev; rdsDev_ = R.rdsDev; berNow = R.rdsBer; }
+          pilotDev = R.rdsPilotDev; rdsDev_ = R.rdsDev; rdsDevPk_ = R.rdsDevPeak; berNow = R.rdsBer; }
         // ★ The pipeline whose figures these are — chosen exactly as RdsState was above, so the
         //   numbers describe the SAME signal as the constellation beside them. A shared radio has
         //   one pipeline per client; a single-user radio has only the Impl's own.
@@ -20019,6 +20021,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                       //        (pilotDev, phaseCoh, ber) is spelled correctly, so nothing looked
                       //        odd in review. See [[wire_value_derived_both_ends]].
                       + ",\"rdsDev\":" + std::to_string(rdsDev_)
+                      /* ★ ADDITIVE: an older client ignores this and keeps drawing rdsDev, which is
+                       *  unchanged. See RdsExt::rdsDevPeakKHz for why the pair exists. */
+                      + ",\"rdsDevPeak\":" + std::to_string(rdsDevPk_)
                       + ",\"ber\":" + std::to_string(berNow)
                       // ★★★ THE WEAK-SIGNAL FIGURES, KEPT ON PURPOSE — not debug scaffolding.
                       //     Stuart: "the FM-DX crowd would appreciate them anyway and that would

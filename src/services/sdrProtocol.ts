@@ -75,7 +75,11 @@ export interface RdsExt {
   lang: number; pinDay: number; pinHour: number; pinMin: number;
   phase: number;         // RDS-to-pilot phase, degrees, folded to [0,90]
   phaseDrift: number; phaseCoh: number;
-  pilotDev: number; rdsDev: number;   // kHz; rdsDev < 0 = not measurable
+  pilotDev: number; rdsDev: number;   // kHz; rdsDev < 0 = not measurable (rdsDev is AVERAGED)
+  /** ★★ MEASURED PEAK RDS deviation, no assumed crest factor — see RdsExt::rdsDevPeakKHz.
+   *  `rdsDev` uses a fixed 1.520 crest where Hans's Pira implies 1.770, so it reads ~16 % low;
+   *  this is the figure an analyser would agree with. 0 = not measured, so draw a dash. */
+  rdsDevPeak: number;
   /** ★ Stereo PLL locked. NOT the constellation's lock, which is RDS — see AdvRdsPanel. */
   pilotLock: boolean;
   ber: number;           // block error rate %, -1 = unknown

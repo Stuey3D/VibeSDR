@@ -9587,8 +9587,26 @@ function renderRds() {
     // of a strong subcarrier, and must never be dressed up as good news.
     // ★ The server now returns -1 with no block sync, which was the cause in that case; this is
     // the second line of defence, for anything else that could put the estimate out of range.
+    /* ★★★ THE VERDICT IS JUDGED ON THE MEASURED PEAK WHEN WE HAVE ONE. `rdev` scales a mean
+     *  envelope by a fixed 1.520 crest factor; Hans's Pira table implies 1.770 on real
+     *  broadcasts, so it reads ~16 % low — which is the "~1.3 dB low against a Pira" the engine
+     *  had already noticed and wrongly filed as a signal-path loss. Judging "weak" on a figure
+     *  that is systematically 16 % under the truth mislabels stations near the boundaries.
+     *  ★★ BOTH ARE SHOWN. The averaged figure is the one validated against Hans's analyser and it
+     *  is NOT changed or hidden (Stuart, 2026-09-26: "we must however also preserve our PIRA
+     *  tested numbers") — peak first, average beside it, exactly as the deviation meter reads. */
+    /* ★★★ THE VERDICT STAYS ON THE PIRA-TESTED FIGURE. The measured peak is shown beside it but
+     *  is NOT yet trusted to judge: the percentile it uses is a free parameter, and on 104.2 it
+     *  put peak/avg at 1.431 where Hans's table implies the correction should be 1.164 — about
+     *  23 % over. Swapping a fitted constant (1.520) for a fitted percentile is the same mistake
+     *  in a new place, and the Pira session's own rule was "MEASURE the constant, don't fit it".
+     *  ★★ So: `rdev` decides the words, exactly as it always has, and nothing validated against
+     *  Hans's analyser changes (Stuart: "we must however also preserve our PIRA tested numbers").
+     *  The peak rides alongside as information until a known MPX input settles the statistic. */
+    const rpk = rdsExt?.rdsDevPeak ?? 0;
     const impossible = rdev > 5.8, strong = rdev >= 4.0, low = rdev < 1.5;
-    rEl.textContent = `${rdev.toFixed(1)} kHz · ${impossible ? 'over spec — suspect' : low ? 'weak' : strong ? 'generous' : 'typical'}`;
+    const pkTxt = rpk > 0.2 ? ` · pk ${rpk.toFixed(1)}` : '';
+    rEl.textContent = `${rdev.toFixed(1)}${pkTxt} kHz · ${impossible ? 'over spec — suspect' : low ? 'weak' : strong ? 'generous' : 'typical'}`;
     rEl.style.color = impossible ? '#ff8a7d' : low ? '#ffd479' : '#7dff9a';
   } else if (rdev >= 0) {
     // ★★ ALWAYS VISIBLE, EVEN AT ZERO. A dash cannot be told from a broken readout, and this one

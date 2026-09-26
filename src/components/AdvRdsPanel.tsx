@@ -523,7 +523,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
       { name: 'STEREO', g: x?.eyeS ?? '', colour: stereoCol, khz: amp[1] ?? 0 },
       { name: 'RDS',    g: x?.eyeR ?? '', colour: rdsCol,    khz: rdev },
     ];
-  }, [x?.eyeP, x?.eyeS, x?.eyeR, x?.pilotDev, x?.rdsDev, x?.mpxSnr, x?.pilotLock, x?.eyeAmp]);
+  }, [x?.eyeP, x?.eyeS, x?.eyeR, x?.pilotDev, x?.rdsDev, x?.rdsDevPeak, x?.mpxSnr, x?.pilotLock, x?.eyeAmp]);
   /* ★★ THE SAME PLAIN-ENGLISH READING THE WEB CLIENT GIVES. A bare scale says how far the axis
    *  goes and nothing about whether that is good, which is the only question anyone has.
    *  ★ THREE PILOT STATES, and the middle one is the point of the plot: a pilot that is PRESENT
@@ -733,8 +733,22 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
     // ★★ THE SCALE HAS A CEILING, SO THE LABELS MUST TOO. 7.5% of 75 kHz = 5.6 kHz is the
     // spec maximum; a reading past it is evidence of a MEASUREMENT problem, never of a
     // strong subcarrier, and must not be dressed up as good news.
+    /* ★★★ JUDGE ON THE MEASURED PEAK WHEN THERE IS ONE. `rdev` scales a mean envelope by a
+     *  fixed 1.520 crest factor; Hans's Pira table implies 1.770 on real broadcasts, so it reads
+     *  ~16 % low — the "~1.3 dB low against a Pira" the engine already knew about and wrongly
+     *  blamed on a signal-path loss. A verdict drawn on a systematically low figure mislabels
+     *  stations at the boundaries.
+     *  ★★ BOTH ARE SHOWN and the averaged one is NOT changed — it is the figure validated against
+     *  Hans's analyser (Stuart, 2026-09-26: "we must however also preserve our PIRA tested
+     *  numbers"). Peak first, average beside it, as the deviation meter reads. */
+    /* ★★★ VERDICT ON THE PIRA-TESTED FIGURE, peak shown beside it. The peak's percentile is a
+     *  free parameter and currently over-corrects by ~23 % against what Hans's table implies, so
+     *  it is information, not authority, until a known MPX input settles the statistic. Nothing
+     *  validated against his analyser changes. */
+    const rpk = x?.rdsDevPeak ?? 0;
+    const pkTxt = rpk > 0.2 ? ` · pk ${rpk.toFixed(1)}` : '';
     const impossible = rdev > 5.8, strong = rdev >= 4.0, low = rdev < 1.5;
-    rdsDevTxt = `${rdev.toFixed(1)} kHz · ${
+    rdsDevTxt = `${rdev.toFixed(1)}${pkTxt} kHz · ${
       impossible ? 'over spec — suspect' : low ? 'weak' : strong ? 'generous' : 'typical'}`;
     rdsDevCol = impossible ? C.bad : low ? C.warn : C.good;
     rdsHold.current = { txt: rdsDevTxt, col: rdsDevCol, at: Date.now() };

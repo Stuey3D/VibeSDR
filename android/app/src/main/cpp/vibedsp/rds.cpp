@@ -210,6 +210,29 @@ int RdsDemod::constellation(float* xy, int maxPts) const {
     return n;
 }
 
+/** ★★★ THE MEASURED PEAK RDS DEVIATION, in kHz — no crest factor, no guard-band subtraction.
+ *  The complex baseband envelope is the deviation the subcarrier contributes (1.0 = 75 kHz), so
+ *  its measured peak is the answer directly. See rdsEnvPk_ for why this exists beside the
+ *  averaged rdsDeviationKHz(), which is deliberately left exactly as it was.
+ *  ★ Returns 0 when nothing has been measured, which the clients show as a dash rather than a
+ *    number — a readout must not invent a figure it has not taken. */
+float RdsDemod::rdsDeviationPeakKHz() const {
+    /* ★★★ THE SAME "NO SUBCARRIER, NO NUMBER" GATE AS THE AVERAGED PATH — and it was missing
+     *  from the first cut of this function. Measured on a DEAD FREQUENCY (2026-09-26, Lenovo on
+     *  100.4 with pilotDev 0.018 and rdsDev -1): this returned **31.6 kHz**, where the spec
+     *  ceiling is 5.6. The envelope of an empty 57 kHz band is noise, and a peak detector is a
+     *  far more efficient collector of noise than a mean — so the very change that makes this
+     *  figure honest on a real station makes it WORSE than the average on a dead one.
+     *  ★★ That is the exact fault the note on rdsDeviationKHz() records from 2026-07-27
+     *  ("12.9 kHz - generous" beside no lock), and I reintroduced it by adding a second reader
+     *  of the same quantity without its guard. ONE RULE, TWO READERS.
+     *  ★ groupTotal is the right scope for the same reason it is there: zero until this station
+     *    has produced groups, cleared when the PI changes, so a dead carrier reads "—" while a
+     *    fading one keeps its last honest value. */
+    if (agg_.groupTotal <= 0) return -1.0f;
+    return rdsPkHold_ * 75.0f;
+}
+
 float RdsDemod::rdsDeviationKHz() const {
     // ★★★ NO SUBCARRIER, NO NUMBER. See the guardPow_ note in vibedsp.h: this band always holds
     // something, so without a floor to subtract, noise becomes a "deviation". Observed on a
@@ -436,6 +459,10 @@ void RdsDemod::reset() {
     if (lpfGI_) lpfGI_->reset();
     if (lpfGQ_) lpfGQ_->reset();
     rdsPow_ = guardPow_ = sigPowSlow_ = 0.0f; guardPhase_ = 0.0;
+    // ★ The envelope histogram lives for the life of the demod — allocated once, never in
+    //   the sample loop, which runs at the baseband rate.
+    rdsHist_.assign(kRdsHistN, 0u); rdsHistN_ = 0;
+    rdsPkHold_ = 0.0f; rdsDwellT_ = 0.0;
     bphase_ = decim_;                  // must match RealFir's own starting phase
     started_ = false;
     mergedAfN_ = 0; mergedAfPi_ = 0; phCos2_ = phSin2_ = 0.0f;
@@ -504,10 +531,53 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
     // ★ Mean-square is tracked alongside the mean envelope: the envelope feeds the legacy
     // uncorrected deviation and subcarrierRelDb, the POWER feeds the noise subtraction, which
     // can only be done on a power. Same smoothing on both so they stay comparable.
+    float blockPk = 0.0f;
     for (int i = 0; i < nb; ++i) {
         const float mag2 = sI_[i] * sI_[i] + sQ_[i] * sQ_[i];
-        rdsRms_ += 0.0005f * (std::sqrt(mag2) - rdsRms_);
+        const float mag  = std::sqrt(mag2);
+        if (mag > blockPk) blockPk = mag;
+        // ★ Histogram the envelope for the percentile — see kRdsHistN. Anything at or above the
+        //   top bin lands in it; the top is twice the spec ceiling, so that is noise, not signal.
+        if ((int)rdsHist_.size() == kRdsHistN) {
+            int bin = (int)(mag * ((float)kRdsHistN / kRdsHistTop));
+            if (bin < 0) bin = 0; else if (bin >= kRdsHistN) bin = kRdsHistN - 1;
+            rdsHist_[bin]++; rdsHistN_++;
+        }
+        rdsRms_ += 0.0005f * (mag - rdsRms_);
         rdsPow_ += 0.0005f * (mag2 - rdsPow_);
+    }
+    /* ★★★ THE PEAK ENVELOPE, MEASURED RATHER THAN ASSUMED. rdsRms_ above is a MEAN, and
+     *  rdsDeviationKHz() turns it into a peak with a fixed 1.520 crest factor that is only right
+     *  for a synthetic spec-shaped envelope; Hans's PIRA table implies 1.770 on real broadcasts,
+     *  a 16.4 % under-read. The envelope IS the deviation the subcarrier contributes (MPX units,
+     *  1.0 = 75 kHz), so its peak needs no constant at all.
+     *  ★★ NOTHING ABOVE CHANGES. rdsRms_, rdsPow_ and every figure derived from them keep their
+     *     exact present behaviour, so the readings validated against Hans's analyser cannot
+     *     regress — this is published ALONGSIDE them (Stuart, 2026-09-26: "we must however also
+     *     preserve our PIRA tested numbers"). */
+    if (nb > 0 && decim_ > 0 && mpxRate_ > 0.0) {
+        const float bbRate = (float)(mpxRate_ / (double)decim_);   // baseband rate after decimation
+        const float dt = (float)nb / bbRate;
+        /* ★★ A DWELL, NOT A DECAY. An exponential "hold" is a continuously falling figure and
+         *  reads like a stopwatch (Stuart, 2026-09-25, of the MPX meter's first cut). Flat for
+         *  3 s, then a step to the percentile of the window that closed. */
+        rdsDwellT_ += dt;
+        if (rdsDwellT_ >= 3.0 && rdsHistN_ > 0) {
+            /* ★★★ THE 99.5th PERCENTILE, NOT THE MAXIMUM — see kRdsHistN. The maximum of a
+             *  three-second window is whatever the worst noise sample was, and it measured 21x
+             *  the mean where the true crest is ~1.77. Walking down from the top until 0.5 % of
+             *  the window has been passed rejects that tail while keeping the envelope's real
+             *  peaks, which are continuous rather than sparse (unlike the MPX meter's transients,
+             *  which is why THAT one needed a fixed sample count and this one wants a fraction). */
+            const uint32_t skip = (uint32_t)(rdsHistN_ * 0.005);
+            uint32_t seen = 0; int b = kRdsHistN - 1;
+            for (; b > 0; --b) { seen += rdsHist_[b]; if (seen > skip) break; }
+            rdsPkHold_ = (float)(b + 1) * (kRdsHistTop / (float)kRdsHistN);
+            std::fill(rdsHist_.begin(), rdsHist_.end(), 0u);
+            rdsHistN_ = 0;
+            rdsDwellT_ = 0.0;
+        }
+        if (!std::isfinite(rdsPkHold_)) { rdsPkHold_ = 0.0f; rdsDwellT_ = 0.0; }
     }
     // ★ The noise-subtracted power, smoothed over SECONDS rather than milliseconds — see
     // rdsDeviationKHz(). Clamped at zero first so a momentary negative excursion pulls the

@@ -109,7 +109,13 @@ export interface RdsExt {
   /** ★ Is the stereo PLL locked. Distinct from the constellation's lock, which is RDS —
    *  one word for two different failures misled the panel's own author. */
   pilotLock: boolean;
-  rdsDev: number;        // RDS injection, kHz deviation (typical 2–4, max 5.6)
+  rdsDev: number;        // RDS injection, kHz deviation (typical 2–4, max 5.6) — AVERAGED estimate
+  /** ★★ The MEASURED PEAK RDS deviation — no assumed crest factor. `rdsDev` beside it scales a
+   *  mean envelope by a fixed 1.520, which Hans's Pira table shows should be ~1.770 on real
+   *  broadcasts: a 16.4 % under-read, the "~1.3 dB low against a Pira" the engine already knew
+   *  about and wrongly blamed on a signal-path loss. Where the two disagree, THIS is the one an
+   *  analyser agrees with. 0 = not measured (draw a dash, never a zero). */
+  rdsDevPeak: number;
   /** Pilot against the transmitted-silence gap at 15–19 kHz, dB. NOT a textbook SNR — the
    *  measuring filter's own leakage caps it near 34 dB — but a real figure of merit, and the
    *  thing that drives high-blend and the audio high-cut. */
@@ -1160,6 +1166,7 @@ export class SpectrumClient {
           pilotDev: Number(msg.pilotDev ?? 0),
           pilotLock: Boolean(msg.pilotLock),
           rdsDev: Number(msg.rdsDev ?? 0),
+          rdsDevPeak: Number(msg.rdsDevPeak ?? 0),   // ★ 0 on an older server — see the type
           mpxSnr: Number(msg.mpxSnr ?? 0),
           multipath: Number(msg.multipath ?? 0),
           multipathOk: Number(msg.multipathOk ?? 0) === 1,

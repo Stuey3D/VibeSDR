@@ -1568,10 +1568,26 @@ public:
      *  which is good for reception and worth being able to see.
      *  ★ Derived from the mean envelope of the recovered baseband and scaled to a peak by a
      *  SIMULATED crest factor, so treat it as indicative rather than calibrated: an analyser
-     *  measures the deviation directly, we infer it after filtering. Known to read ~1.3 dB
-     *  low against a Pira analyser — see rdsDeviationKHz() in rds.cpp for why that residual
-     *  is believed to be a real signal-path loss rather than a scaling error. */
+     *  measures the deviation directly, we infer it after filtering.
+     *
+     *  ★★★ THE ~1.3 dB IT READS LOW AGAINST A PIRA IS **NOT** A SIGNAL-PATH LOSS. This comment
+     *  used to say the residual was "believed to be a real signal-path loss rather than a scaling
+     *  error", and that belief was wrong. 1.3 dB is x1.162, and Hans's own table implies the true
+     *  crest factor is **1.770 +/- 0.048** where this uses **1.520** — a 16.4 % under-read, which
+     *  is the same 1.3 dB. The residual was the ASSUMED CONSTANT all along, and calling it a path
+     *  loss is what stopped anyone looking at the constant again.
+     *  ★★ Confirmed from a second direction on 2026-09-26: Onfliner measured the same deficit
+     *  against MpxTool across eleven stations, and Stuart named the pattern — an average being
+     *  published where the instrument publishes a peak, exactly as the MPX deviation meter did.
+     *  ★ THIS FUNCTION IS DELIBERATELY UNCHANGED so nothing validated against Hans's analyser
+     *  regresses. The measured answer is rdsDeviationPeakKHz(), published beside it. */
     float rdsDeviationKHz() const;
+    /** ★★★ RDS DEVIATION, MEASURED AS A PEAK — no crest factor, nothing assumed. The envelope of
+     *  the recovered baseband IS the deviation the subcarrier contributes (1.0 = 75 kHz), so its
+     *  peak is the figure an analyser shows. Instant attack, then a 3 s DWELL so the number can
+     *  be read (see rdsEnvPk_). Expected to land on the PIRA column where rdsDeviationKHz() sits
+     *  ~16 % under it — that agreement is the test of this whole change. 0 = nothing measured. */
+    float rdsDeviationPeakKHz() const;
     /** ★ Turn on the guard-band noise measurement. Costs a second decimating filter pair on the
      *  RDS front end, so it is the operator's call — see the note on guardPow_. Without it the
      *  deviation figure is reported uncorrected and can read high on a weak signal. */
@@ -1754,6 +1770,45 @@ private:
     float rdsPow_ = 0.0f;              // smoothed mean-square of the RDS baseband
     float guardPow_ = 0.0f;            // ...and of the guard band beside it
     float sigPowSlow_ = 0.0f;          // (rds - guard), smoothed over SECONDS
+    /** ★★★ THE MEASURED PEAK ENVELOPE — the RDS deviation WITHOUT an assumed crest factor.
+     *
+     *  ★★★ WHY THIS EXISTS. `rdsDeviationKHz()` estimates the peak as `rdsRms_ * 1.520`: a
+     *  smoothed MEAN of the envelope multiplied by an ASSUMED crest factor. RDS is not a
+     *  sinusoid — it is data-modulated biphase — so that factor is only right for the
+     *  synthetic envelope `tools/rdsdev_cal.cpp` measured. Hans's PIRA table implies the real
+     *  figure is **1.770 +/- 0.048** across six stations, so the constant under-reads by 16.4%,
+     *  and Onfliner's MpxTool comparison saw the same direction again in 2026-09-26.
+     *  ★★ IT IS THE SAME FAULT AS THE MPX DEVIATION METER, IN A SECOND PLACE: publishing an
+     *  average where the instrument publishes a peak. Stuart spotted the pattern — "Average and
+     *  Peak for all readings ... maybe applying the same average/peak for all readings may help".
+     *  ★ AND IT EXPLAINS WHY THE PILOT WAS NEVER WRONG: `pilotDeviationKHz()` is the coherent
+     *  PLL lock AMPLITUDE of a pure 19 kHz tone, which IS the peak — no crest factor is assumed,
+     *  so nothing could be assumed wrongly. Six of Hans's six match exactly.
+     *
+     *  ★★ The envelope of the complex RDS baseband IS the instantaneous deviation the subcarrier
+     *  contributes, in MPX units where 1.0 = 75 kHz. So its PEAK is the peak deviation directly,
+     *  with no constant of any kind. Measuring beats assuming.
+     *
+     *  ★ BALLISTICS MATCH THE MPX METER (see mpxDevSm_/mpxDevHold_ in this file): instant
+     *    attack with a ~0.6 s decay for the live figure, and a 3 s DWELL for the published one,
+     *    because a decaying "hold" is a number that cannot be read. */
+    /* ★★★ A PERCENTILE, NEVER THE MAXIMUM. The first cut took the absolute peak of the envelope
+     *  and read **21.75 kHz against an averaged 1.57** on a live station — a peak-to-mean of 21
+     *  where a biphase envelope's is about 1.77. Over a three-second window the maximum simply
+     *  finds the worst noise spike, and a peak detector is a far more efficient collector of
+     *  noise than a mean.
+     *  ★★ THE MPX DEVIATION METER ALREADY SOLVED THIS and I did not carry it across: its own note
+     *  records the unfiltered maximum reading "106 kHz, OVERMODULATED" on a clean station, and
+     *  the answer there was a percentile off a histogram. ONE RULE, TWO READERS — the second
+     *  reader being written by the same person an hour later is no protection at all.
+     *  ★ kRdsHistN bins over 0..kRdsHistTop in MPX units (1.0 = 75 kHz); 0.15 = 11.25 kHz, twice
+     *    the 5.6 kHz spec ceiling, so a legitimate reading can never clip the top bin. */
+    static constexpr int   kRdsHistN   = 512;
+    static constexpr float kRdsHistTop = 0.15f;
+    std::vector<uint32_t>  rdsHist_;   // envelope histogram for the dwell window
+    uint32_t rdsHistN_   = 0;          // samples accumulated into it
+    float  rdsPkHold_   = 0.0f;        // the published peak — flat between 3 s steps
+    double rdsDwellT_   = 0.0;         // seconds into the current dwell
     double guardPhase_ = 0.0;          // guard NCO phase, carried across blocks (unused since the rotator)
     float  guardCos_ = 1.0f, guardSin_ = 0.0f;   // the guard oscillator, carried across blocks
     double guardStep_ = 0.0;           // radians per sample for the guard offset
@@ -1872,7 +1927,12 @@ public:
             float pilotPhaseCoherence;
             float pilotPhaseDriftDegPerSec;   // >0 = the phase is turning; see the note on it
             float pilotDevKHz;      // pilot injection, kHz deviation
-            float rdsDevKHz;        // RDS injection, kHz deviation
+            float rdsDevKHz;        // RDS injection, kHz deviation (AVERAGED — see rdsDeviationKHz)
+            /** ★★ The MEASURED PEAK RDS deviation — no assumed crest factor. `rdsDevKHz` beside it
+             *  is the long-standing averaged estimate, kept unchanged so the readings validated
+             *  against Hans's Pira cannot regress. Where they disagree, THIS is the one an
+             *  analyser would agree with. 0 = not measured (draw a dash, never a zero). */
+            float rdsDevPeakKHz;
             /** ★★ THE MPX SPECTRUM, 0-100 kHz — the view SDRconnect calls "MPX SP" and the
              *  most analyser-like display there is: L+R at the bottom, the 19 kHz pilot, the
              *  L-R sidebands around 38 kHz, RDS at 57 kHz, and anything else a station is

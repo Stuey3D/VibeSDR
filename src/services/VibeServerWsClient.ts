@@ -2178,7 +2178,9 @@ export abstract class VibeServerWsClient {
         longPs: str(msg.longPs), ptyn: str(msg.ptyn),
         lang: num(msg.lang), pinDay: num(msg.pinDay), pinHour: num(msg.pinHour), pinMin: num(msg.pinMin),
         phase: num(msg.phase), phaseDrift: num(msg.phaseDrift), phaseCoh: num(msg.phaseCoh, 0),
-        pilotDev: num(msg.pilotDev), rdsDev: num(msg.rdsDev), ber: num(msg.ber),
+        pilotDev: num(msg.pilotDev), rdsDev: num(msg.rdsDev),
+        // ★ 0 on a server older than the measured peak — the panel draws a dash, not a zero.
+        rdsDevPeak: num(msg.rdsDevPeak, 0), ber: num(msg.ber),
         pilotLock: Boolean(msg.pilotLock),
         grp: arr(msg.grp), af: arr(msg.af), xy: arr(msg.xy), mpx: arr(msg.mpx),
         // ★ NAMED EXPLICITLY, like every other field here — this object literal is built by
