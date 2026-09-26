@@ -216,6 +216,57 @@ int RdsDemod::constellation(float* xy, int maxPts) const {
  *  averaged rdsDeviationKHz(), which is deliberately left exactly as it was.
  *  ★ Returns 0 when nothing has been measured, which the clients show as a dash rather than a
  *    number — a readout must not invent a figure it has not taken. */
+/* ══ RDS DEVIATION CALIBRATION ═══════════════════════════════════════════════════════════════════
+ *
+ * ★★★ MEASURED AGAINST A CALIBRATED TRANSMITTER (Onfliner, 2026-09-26), not fitted to field data.
+ *   He set his own transmitter to three known RDS deviations and read them on VibeSDR through an
+ *   Airspy Mini AND an RTL-SDR. Both radios returned IDENTICAL figures, so this is the receiver's
+ *   scale, not one dongle's:
+ *
+ *        set (kHz)   avg    peak     set/avg   set/peak
+ *          1.2       0.9     1.0      1.333     1.200
+ *          3.0       2.3     2.5      1.304     1.200
+ *          5.1       3.9     4.2      1.308     1.214
+ *        mean                         1.315     1.205
+ *
+ * ★★★ THE PEAK IS LOW TOO, AND THAT IS THE WHOLE FINDING. rdsDeviationPeakKHz() applies NO crest
+ *   factor and NO guard subtraction — it is a measured envelope percentile. Its 17 % deficit
+ *   therefore cannot be a constant being wrong: the subcarrier is already small by the time the
+ *   RDS demodulator sees it. Changing 1.520 alone would have hidden a real loss behind a fudged
+ *   constant, which is exactly what this file's own history warns against.
+ * ★★ AND THE TOOL PREDICTED IT. tools/rdsdev_cal.cpp has said since 2026-07-27: "a ~1.3 dB residual
+ *   remains and is believed to be real subcarrier loss in the WFM channel filter, NOT a scaling
+ *   error". 1.3 dB is x1.161; we measure x1.205 (1.62 dB). Same effect, now quantified.
+ *
+ * ★★ SO TWO SEPARATE CORRECTIONS, kept separate because they have different causes and different
+ *   futures:
+ *     kRdsChainGain  — the subcarrier loss BEFORE the RDS demodulator. Physical. Applies to every
+ *                      figure derived from the envelope, peak included.
+ *     the crest factors — mean-envelope -> peak. Theoretical, from rdsdev_cal's synthesised
+ *                      spec-shaped biphase signal; the residual x1.091 says a real broadcast's
+ *                      envelope is slightly peakier than that synthetic one.
+ *   ✗ Do NOT merge them into one number (1.659 x 1.205 = 1.999). They would then be impossible to
+ *     refine independently, and the chain loss is the one likely to vary.
+ *
+ * ★★ THREE INDEPENDENT SOURCES AGREE ON THE DIRECTION, and that is why this is a correction and
+ *   not a guess. Implied TOTAL mean-envelope factor (truth = rdsRms x F x 75):
+ *        Hans's PIRA analyser, live Dutch stations ...... F = 1.770  (+16 % on the old 1.520)
+ *        Onfliner's 22-point MpxTool sweep .............. F = 1.850  (+22 %)
+ *        Onfliner's CALIBRATED TRANSMITTER .............. F = 1.999  (+31 %)   <- adopted
+ *        what we shipped until now ...................... F = 1.520
+ *   ★ The transmitter wins because it is the only one with a KNOWN source; the other two compare
+ *     us against another instrument's opinion. They sit 7-13 % lower, both measured on LIVE
+ *     stations, so we may read slightly high in the field — a smaller and better-understood error
+ *     than the 17-24 % under-read they all agree we had.
+ *
+ * ▶ KNOWN LIMIT, STATED HONESTLY: measured at ONE IF width, on ONE transmitter. If the loss is in
+ *   the channel filter it should change with IF width — so re-measure across widths before
+ *   treating kRdsChainGain as universal. The three levels agreeing to ±1 % says the SHAPE is right
+ *   (a pure scale, not level-dependent), which is the part that matters most.
+ * ▶ Verification: avg 0.9 -> 1.183 against a set 1.2 (-1.4 %); peak 1.0 -> 1.205 (+0.4 %).
+ */
+static constexpr float kRdsChainGain = 1.205f;
+
 float RdsDemod::rdsDeviationPeakKHz() const {
     /* ★★★ THE SAME "NO SUBCARRIER, NO NUMBER" GATE AS THE AVERAGED PATH — and it was missing
      *  from the first cut of this function. Measured on a DEAD FREQUENCY (2026-09-26, Lenovo on
@@ -230,7 +281,7 @@ float RdsDemod::rdsDeviationPeakKHz() const {
      *    has produced groups, cleared when the PI changes, so a dead carrier reads "—" while a
      *    fading one keeps its last honest value. */
     if (agg_.groupTotal <= 0) return -1.0f;
-    return rdsPkHold_ * 75.0f;
+    return rdsPkHold_ * kRdsChainGain * 75.0f;
 }
 
 float RdsDemod::rdsDeviationKHz() const {
@@ -286,7 +337,7 @@ float RdsDemod::rdsDeviationKHz() const {
          *      self-consistent with the decoder beside it, which is a claim we can actually
          *      support: a station cannot be decoding at 0 % block errors from a subcarrier that
          *      is not there. */
-        const float raw = rdsRms_ * 1.520f * 75.0f;
+        const float raw = rdsRms_ * 1.659f * kRdsChainGain * 75.0f;
         const float sigPow = sigPowSlow_;
         if (sigPow <= 0.0f) return raw;
         // 1.381 = peak / RMS of a spec-shaped biphase envelope through our own +/-2.4 kHz
@@ -298,7 +349,7 @@ float RdsDemod::rdsDeviationKHz() const {
          *   demonstrably does not. A correction deeper than 3 dB (half the power) is therefore
          *   evidence that the guard band is seeing something other than our noise — so it is
          *   allowed to trim the reading, not to dominate it. */
-        const float corrected = std::sqrt(sigPow) * 1.381f * 75.0f;
+        const float corrected = std::sqrt(sigPow) * 1.507f * kRdsChainGain * 75.0f;
         return std::max(corrected, raw * 0.707f);
     }
 
@@ -307,7 +358,7 @@ float RdsDemod::rdsDeviationKHz() const {
     // that was a SINUSOID's RMS->peak factor applied to a quantity that is neither an RMS nor
     // a sinusoid, and under-read by ~7%. This path still reads high on a weak signal — the
     // client flags anything past the spec ceiling as suspect.
-    return rdsRms_ * 1.520f * 75.0f;
+    return rdsRms_ * 1.659f * kRdsChainGain * 75.0f;
 }
 
 /* ★★★ THE CONTROL ARM. Deliberately NOT written as a flag on rdsDeviationKHz(): that function is
@@ -319,7 +370,7 @@ float RdsDemod::rdsDeviationKHz() const {
  *  silently stops comparing what it claims to. */
 float RdsDemod::rdsDeviationRawKHz() const {
     if (agg_.groupTotal <= 0) return -1.0f;
-    return rdsRms_ * 1.520f * 75.0f;
+    return rdsRms_ * 1.659f * kRdsChainGain * 75.0f;
 }
 
 // ★ Enabling costs a second decimating filter pair on the RDS front end (the rotation itself is
