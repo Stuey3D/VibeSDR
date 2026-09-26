@@ -101,3 +101,39 @@ If `raw` matches MpxTool and `corrected` does not, suspicion (1) is confirmed in
 transmitter is needed. ✗ Do not re-fit the constant against Onfliner's table — that is fitting to a
 second receiver, which is how the last "0.75x + 0.2" artefact happened
 ([[rds_pira_calibration]]: *"MEASURE the constant, don't fit it to the data"*).
+
+## ★★★ 2026-09-26 — THE MAIN DEVIATION MONITOR IS CONFIRMED. THE RDS FIGURE IS NOT.
+Two independent checks landed the same evening:
+
+1. **Saber, against MpxTool:** *"within 1Khz"* — a reference instrument, a different operator, a
+   different receiver. Stuart: *"SO now I'm not as concerned about the deviation monitor."*
+2. **Stuart's own RTL vs RSP A/B**, same transmitter, same moment, three stations:
+
+| | 100.4 | 96.6 | 96.1 |
+|---|---|---|---|
+| dev avg RTL / RSP | 51 / 49 | 66 / 65 | 78 / 80 |
+| peak RTL / RSP | 58 / 58 | 75 / 80 | 92 / 94 |
+| **pilot** RTL / RSP | 6.8 / 6.8 | 6.5 / 6.1 | **6.4 / 4.9** |
+| RDS lock | both | both | clean 43 % / **no lock** |
+
+★★ **TOTAL MPX DEVIATION AGREES WITHIN 1–2 kHz ACROSS DIFFERENT HARDWARE.** That is the property
+that matters: the figure is of the SIGNAL, not of the radio. ✓ Closed.
+
+★★★ **BUT THE PILOT DOES NOT AGREE WITH ITSELF** — 6.4 vs 4.9 kHz on 96.1, a 23 % spread on one
+transmitter at one instant. It tracks SIGNAL QUALITY (the RSP showed SNR 35 dB and **RDS no lock**
+there; the RTL got a clean 43 % scatter), and the two radios agree EXACTLY on 100.4 where both are
+strong. ▶ So the pilot estimate appears to DEGRADE WITH SNR rather than be miscalibrated — which is
+a different fault from the MpxTool disagreement and needs its own measurement.
+✗ Still do not "fix" the pilot towards MpxTool: it matches Hans's PIRA six for six.
+
+★★★ **AND THE VERDICT FLIPS ON A BOUNDARY, WHICH IS A UX FAULT.** On 96.6 the two radios read peak
+75 and 80 — 7 % apart — and printed **"nominal"** and **"over the limit"**. The numbers agree; the
+WORDS contradict. A listener comparing two receivers will trust neither.
+▶ Needs hysteresis, a wider band, or a qualifier when SNR is marginal. A boundary that a 5 kHz
+difference can cross must not speak in absolutes.
+
+## ▶ STILL OPEN: the RDS SUBCARRIER figure (~16 % low against BOTH references)
+Unchanged by any of the above — it is a different number. The guard-band subtraction remains the
+prime suspect and **the cheap diagnostic has still not been done**: expose the UNCORRECTED `raw`
+beside the corrected one. If `raw` matches and `corrected` does not, it is confirmed in one reading
+and no transmitter is needed.
