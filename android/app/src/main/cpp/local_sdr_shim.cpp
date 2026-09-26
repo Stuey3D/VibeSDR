@@ -27823,6 +27823,40 @@ void LocalSdrShim::setSampleRate(double rate) {
         LOGI("sample rate already %.0f — nothing to do", impl->sampleRate);
         return;
     }
+    /* ★★★ devMtx, IN THE DOCUMENTED ORDER — AND THE THIRD READER THIS FILE FORGOT.
+     *
+     *  The devMtx comment says in as many words: "LOCK ORDER: devMtx BEFORE modeMtx, never the
+     *  reverse. **setSampleRate takes both.**" It did not. It took modeMtx only, and that rule sat
+     *  written-and-never-obeyed until it cost a crash.
+     *
+     *  ★★★ WHAT IT COST, MEASURED (Pi 2, 2026-09-26 20:05:00, selecting DAB):
+     *        AGC: forgetting what it learned (DAB: an ensemble is not the carrier we came off)
+     *        AGC: forgetting what it learned (sample rate changed)
+     *        vibeserver: libusb/os/threads_posix.h:46: usbi_mutex_lock:
+     *                    Assertion `pthread_mutex_lock(mutex) == 0' failed.
+     *        systemd: Main process exited, code=killed, status=6/ABRT
+     *      Which is precisely what the devMtx comment predicted would happen — "on an unattended
+     *      server libusb ABORTS rather than returning an error". The radio process died and
+     *      systemd restarted it on FM five seconds later, which is why this read as "DAB never
+     *      starts and it falls back to 96.6 with no spectrum" rather than as a crash.
+     *
+     *  ★★★ WHY THE EXISTING QUIESCING WAS NOT ENOUGH. The note below stops the IQ source and the
+     *      DSP consumer and concludes the control transfer "runs on an idle libusb". Both threads
+     *      it names ARE stopped — but the HARDWARE WRITER is a third thread, it is not stopped
+     *      here, and writing the tuner's gain is exactly what it does. A mode change is also the
+     *      moment it is busiest: switching to DAB invalidates the AGC twice over (new ensemble,
+     *      new rate), so it is mid-reconvergence precisely when this function tears the device
+     *      down. "Idle libusb" was true of the readers and never true of the writer.
+     *
+     *  ★★ SAFE ACROSS THE JOINS BELOW, and that is not an accident of this edit: the capture
+     *     thread is documented never to take devMtx (it blocks inside rtlsdr_read_async, so it
+     *     would hold it forever), and the DSP thread does not take it either — releaseRadio()
+     *     already joins the capture thread while holding devMtx, so this is the established
+     *     pattern rather than a new one. The hardware writer only ever holds devMtx around short
+     *     control calls, so it cannot hold it against us.
+     *  ★ Taken HERE, above everything, so it also covers the rtlsdr_cancel_async below — which was
+     *    itself an unguarded control call on a handle another thread could be using. */
+    std::lock_guard<std::recursive_mutex> devlk(impl->devMtx);
     // Stop the IQ source + drain the DSP consumer BEFORE taking modeMtx (the
     // dspThread locks modeMtx per buffer, so holding it across the join would
     // deadlock). With both quiesced, the rtlsdr control transfer below runs on an
