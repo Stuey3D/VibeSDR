@@ -187,6 +187,13 @@
     // FT8 / CW / digital spots: the question is WHERE someone is -- towns and the locator grid.
     spots: { airports: false, runways: false, ports: false, rail: false,
              places: 'all', grid: true, roads: false },
+    /* The server's OWN admin map -- "where they connect from", a scatter of country flags. The
+     * reader is asking WHICH COUNTRY, nothing finer, so everything else is noise behind the pins.
+     * Stuart, 2026-09-27: *"Admin map simply needs the boarders and country names"*.
+     * ★ `places: 'countries'` is a new ladder rung: country labels and NOTHING below them. Every
+     *   other profile above wants towns of some size; this one wants the political layer only. */
+    admin: { airports: false, runways: false, ports: false, rail: false,
+             places: 'countries', grid: false, roads: false },
   };
 
   /* ★★★ THE LABEL LADDER, STATED ONCE. Stuart set it out on 2026-09-26 and it is the map's whole
@@ -958,14 +965,7 @@
             })).addTo(basemap);
           }
         }
-        const borders = await layer('tier2', 'borders', box);
-        for (const line of borders || []) {
-          if (!ringInView(line, box)) continue;
-          for (const dx of offs) {
-            L.polyline(line.map(([lon, lat]) => [lat, lon + dx]),
-              inPane('admin', { color: MAP_BORDER, weight: 1.3, opacity: 0.95 })).addTo(basemap);
-          }
-        }
+        await drawBorders();
         mapTier.at = 'coast';
         return;
       }
@@ -989,8 +989,33 @@
           }
         }
       }
+      /* ★★★ BORDERS AT THIS TIER TOO — THEY WERE ONLY EVER DRAWN AT z >= 10. Below that the coast
+       *  branch never runs, so the ONLY thing separating two countries was the outline of each
+       *  filled polygon, and a neighbour drawn afterwards paints its FILL over that stroke along
+       *  the shared edge. Coastlines never suffer it (no polygon on the sea side), which is exactly
+       *  the asymmetry Stuart saw: *"a few country boarders prominent notice netherlands and
+       *  germany boarder, but then the whole of eastern europe is one massive country"* — the west
+       *  looked bordered because it is full of COAST, and landlocked Europe had nothing at all.
+       *  ★★ The data was already there and already generated: tier2-borders.json, 7942 lines, 756 of
+       *     them in eastern Europe. It simply was not being asked for at these zooms.
+       *  ★ One file, not sharded, so loading it zoomed out is one fetch and it is then cached. */
+      await drawBorders();
       mapTier.at = t;
       // ★ Nothing to re-stack: the panes above hold the order. See the bringToFront() note.
+    }
+
+    /* ★ Borders are their OWN lines in their own pane, so they sit ABOVE every country fill and
+     *  cannot be painted over by a neighbour. Used by both tiers — see the note at the call site. */
+    async function drawBorders() {
+      const box = viewBox(), offs = worldOffsets();
+      const borders = await layer('tier2', 'borders', box);
+      for (const line of borders || []) {
+        if (!ringInView(line, box)) continue;
+        for (const dx of offs) {
+          L.polyline(line.map(([lon, lat]) => [lat, lon + dx]),
+            inPane('admin', { color: MAP_BORDER, weight: 1.3, opacity: 0.95 })).addTo(basemap);
+        }
+      }
     }
 
     /* ══ PLACES ══════════════════════════════════════════════════════════════════════════════════ */
@@ -1019,6 +1044,10 @@
        *  competes for space on it. */
       /* ★★ A 'major' profile stops the ladder at large cities however far you zoom in: on an
        *  aircraft map Brixworth is not orientation, it is interference. */
+      /* ★★ 'countries' STOPS THE LADDER BEFORE CITIES ENTIRELY — the admin map asks WHICH COUNTRY
+       *  and nothing finer, so a town of any size is noise behind the flag pins. Country labels
+       *  are drawn by their own layer (see drawCountryNames), not from this list. */
+      if (P.places === 'countries') return;
       if (!rung('cities', z)) return;           // ★ the ladder decides, not a per-site zoom check
       const rankCut = P.places === 'major' ? 3
         : z <= 5 ? 4 : z <= 6 ? 6 : 9;

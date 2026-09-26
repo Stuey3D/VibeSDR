@@ -35,6 +35,9 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = join(root, 'web/mapkit/vibemap.js');
 const TS_OUT = join(root, 'src/generated/vibemapSource.ts');
 const WEB_OUT = join(root, 'directory/public/mapkit/vibemap.js');
+/* ★ The server's web client carries the renderer as a string, exactly as the app does — it is
+ *  one compiled page and cannot fetch a script of its own. See the write below. */
+const CLIENT_OUT = join(root, 'web/client/src/generated/vibemapSource.ts');
 
 const src = readFileSync(SRC, 'utf8');
 
@@ -79,6 +82,14 @@ mkdirSync(dirname(TS_OUT), { recursive: true });
 writeFileSync(TS_OUT, ts);
 mkdirSync(dirname(WEB_OUT), { recursive: true });
 writeFileSync(WEB_OUT, src);
+/* ★★★ AND A THIRD CONSUMER: THE SERVER'S OWN WEB CLIENT. It is a single compiled page with no
+ *  file server of its own for scripts, so like the app it has to CARRY the renderer rather than
+ *  fetch it. Same string, same generator — the whole point of this file is that the directory, the
+ *  app and the server all run ONE renderer (see the note at the top of vibemap.js).
+ *  ★ Written into web/client/src so the existing build picks it up with no new route and no extra
+ *    request; the server already serves /mapdata/v1/, which is all the renderer needs. */
+mkdirSync(dirname(CLIENT_OUT), { recursive: true });
+writeFileSync(CLIENT_OUT, ts);
 
 /* ★ Verify the ARTEFACT, not the command -- a write that produced nothing useful is the failure we
  *  keep paying for (see "A Mac-only compile is not a build"). Read both back and check a marker that
@@ -96,3 +107,4 @@ if (readFileSync(WEB_OUT, 'utf8') !== src) {
 console.log(`gen-vibemap-source: ${src.length} bytes`);
 console.log(`  -> ${TS_OUT.replace(root + '/', '')}`);
 console.log(`  -> ${WEB_OUT.replace(root + '/', '')}`);
+console.log(`  -> ${CLIENT_OUT.replace(root + '/', '')}`);

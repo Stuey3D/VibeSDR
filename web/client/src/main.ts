@@ -68,6 +68,8 @@ let adminSignedInThisView = false;
 import {
   saveRecording, listRecordings, deleteRecording, formatSize, formatDuration,
 } from './recordings';
+/* ★ The shared vector-basemap renderer, carried as a string — see ensureVibeMap(). */
+import { VIBEMAP_JS } from './generated/vibemapSource';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -10966,6 +10968,15 @@ const COL = ${JSON.stringify(BAND_COLOUR)};
  *     between frames.
  *  ★ updateWhenZooming:false for the same reason and not for the tiles' sake: it stops Leaflet
  *    issuing tile work mid-animation that it is only going to throw away. */
+/* ★ Evaluate the shared renderer once, into this page. A <script> element with textContent runs
+ *  synchronously on append, so VibeMap is defined by the time attach() is called below.
+ *  ✗ Not a fetch: the page must work on a LAN server with no route to the internet. */
+function ensureVibeMap(): void {
+  if ((window as any).VibeMap) return;
+  const el = document.createElement('script');
+  el.textContent = VIBEMAP_JS;
+  document.head.appendChild(el);
+}
 const map = L.map('m', { worldCopyJump: true, preferCanvas: true })
   .setView(me ? [me.lat, me.lon] : [25, 5], me ? 4 : 3);
 /* ★★★ NO {s} SUBDOMAIN SHARDING. (✗ NO BACKTICKS IN THIS COMMENT: it lives inside a template
@@ -10979,8 +10990,18 @@ const map = L.map('m', { worldCopyJump: true, preferCanvas: true })
  *  his Mac still drew the map — same house, same public IP, because the Mac was serving cached
  *  tiles and the PC was asking for fresh ones. A free service we had been hammering.
  *  ★ Attribution is a LICENCE CONDITION, not decoration (ODbL) — it stays whatever we host. */
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-  { attribution: '&copy; OpenStreetMap contributors', maxZoom: 14, updateWhenZooming: false }).addTo(map);
+/* ★★★ OUR OWN VECTOR BASEMAP — NO TILES, NO THIRD PARTY, AND IT WORKS OFFLINE. The note above
+ *  records why this had to change: we were BLOCKED by openstreetmap.org for hammering a free
+ *  service from three clients at once. The data is served by this very server at /mapdata/v1/, so
+ *  a LAN listener with no internet still gets a map.
+ *  ★★ The 'spots' PROFILE: cities and towns and the locator grid, no airports, ports, rail or
+ *     roads — for a digital-modes map the question is WHERE SOMEBODY IS (Stuart, 2026-09-27:
+ *     "amateur radio spots too ... countries cities and small towns").
+ *  ★ ONE renderer for three hosts. The directory loads it as a file, the app injects it into a
+ *    WebView, and this page carries it as a string because it is one compiled bundle with no file
+ *    server of its own — all three from web/mapkit/vibemap.js via gen-vibemap-source.mjs. */
+ensureVibeMap();
+(window as any).VibeMap.attach(map, { dataBase: '/mapdata/v1/', profile: 'spots' });
 
 function radius(snr) {
   const s = Math.max(-24, Math.min(12, snr));

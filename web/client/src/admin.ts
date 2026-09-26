@@ -19,6 +19,18 @@ import { fetchAuthChallenge, vibeAuthToken } from './auth';
 import { isoToFlag } from '../../../src/services/rdsCountry';
 import { httpBase } from './origin';
 import { adminTicketQuery, inAdminMode, saveAdminTicket } from './adminticket';
+import { VIBEMAP_JS } from './generated/vibemapSource';
+/* ★ Evaluate the shared renderer once into this page — same string the app injects and the
+ *  directory loads as a file (web/mapkit/vibemap.js via gen-vibemap-source.mjs). A <script> with
+ *  textContent runs synchronously on append, so VibeMap exists by the time attach() is called.
+ *  ✗ Not a fetch: the admin page must work on a LAN server with no route to the internet. */
+function ensureVibeMap(): void {
+  if ((window as any).VibeMap) return;
+  const el = document.createElement('script');
+  el.textContent = VIBEMAP_JS;
+  document.head.appendChild(el);
+}
+
 
 let host = '';
 /** Set by initAdmin so closeAdmin can stop the maintenance-log poll too. */
@@ -541,12 +553,13 @@ function loadLeaflet(): Promise<boolean> {
     css.rel = 'stylesheet';
     css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
     document.head.appendChild(css);
-    /* ★★ THE DARK BASEMAP, MADE RATHER THAN BOUGHT — see the tileLayer below for why we no longer
-     *    use CARTO. Inverting hue as well as luminance keeps water blue instead of orange. */
-    const dark = document.createElement('style');
-    dark.textContent =
-      '.vsDarkTiles{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.9) saturate(.7)}';
-    document.head.appendChild(dark);
+    /* ★ The .vsDarkTiles filter that used to live here is GONE with the tiles it darkened: the
+     *  vector basemap is dark by design and inverting it would fight its own palette. Removed
+     *  rather than left behind — a rule matching nothing is furniture that outlives its reason. */
+    /* ▶ STILL A THIRD-PARTY FETCH, AND IT IS THE LAST ONE. The MAP DATA is ours now and served by
+     *  this server, but Leaflet itself still comes from unpkg. So an admin page on a LAN with no
+     *  route to the internet gets no map at all — the basemap being local does not save it.
+     *  ✗ Do not claim this page works offline until Leaflet is bundled too. */
     const js = document.createElement('script');
     js.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
     js.onload = () => resolve(true);
@@ -568,27 +581,37 @@ async function renderCountryMap(list: any[]): Promise<boolean> {
   if (!ccMap) {
     host.hidden = false;
     host.style.height = '360px';
+    ensureVibeMap();
     ccMap = L.map(host, {
       worldCopyJump: true, zoomControl: true, attributionControl: true,
       // ★ Nobody navigates this map; it is a picture of where people are. Scroll-zoom would steal
       //   the page's scroll wheel on the way past it, which is the classic embedded-map annoyance.
       scrollWheelZoom: false,
     }).setView([25, 5], 1);
-    /* ★★★ PLAIN OSM TILES, DARKENED IN CSS — NOT CARTO. This used to point at CARTO's
-     *     `dark_all` basemap, and the comment here claimed that was "the same dependency class as
-     *     the spots map's OSM tiles". It was not, and that is exactly the distinction that bit us:
-     *     Leaflet needs no key, but the TILE PROVIDER is a separate service with its own terms.
-     *     CARTO now requires an API key and stamps unauthenticated tiles "API KEY REQUIRED" right
-     *     across the map — still HTTP 200, still a valid PNG, so nothing errored and nothing was
-     *     deployed; their terms simply changed underneath us (2026-08-26). A key is not the answer
-     *     either: VibeSDR sells on the App Store, so CARTO would price us as commercial.
-     * ★★ tile.openstreetmap.org needs no key and no account, and this product has served it from
-     *    the spots map for months — so it is a dependency we already carry rather than a new one.
-     * ★ The dark look is kept with a CSS filter on the TILE PANE only. Scoping it to that pane is
-     *   what stops it inverting the flag markers, which live in the marker pane. */
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap', maxZoom: 6, minZoom: 1, className: 'vsDarkTiles',
-    }).addTo(ccMap);
+    /* ★★★ NO TILE PROVIDER AT ALL — AND THE HISTORY IS WHY. This map went CARTO → OSM → ours in
+     *     a month, because a tile provider is a third party whose terms move under you:
+     *       • CARTO began requiring a key and stamped unauthenticated tiles "API KEY REQUIRED"
+     *         across the map — still HTTP 200, still a valid PNG, so NOTHING ERRORED (2026-08-26).
+     *       • openstreetmap.org then BLOCKED us for hammering a free service from three clients
+     *         at once (2026-09-26) — Stuart's PC showed the blocked-tile image while his Mac,
+     *         serving cached tiles, still drew the map.
+     *     Both failures were SILENT to code and visible only to a human looking at the picture.
+     * ★★ So the map is ours now: vector data served by THIS server at /mapdata/v1/, rendered by
+     *    the same web/mapkit/vibemap.js the directory and the app use. No key, no terms, no
+     *    rate limit, and it works on a LAN with no route to the internet.
+     * ★ The old dark CSS filter on the tile pane is gone with the tiles — the vector map is dark
+     *   by design, and filtering it would fight its own palette. */
+    /* ★★★ OUR OWN VECTOR BASEMAP — no tiles, no third party, works with no internet. We were
+     *  BLOCKED by openstreetmap.org on 2026-09-26 for hammering a free service from three clients,
+     *  and this was one of the three. The data comes from THIS server at /mapdata/v1/.
+     *  ★★ The 'admin' PROFILE: borders and country NAMES, nothing else. This map answers ONE
+     *     question — which countries are people connecting from — and a town, an airport or a road
+     *     is noise behind the flag pins. Stuart, 2026-09-27: *"Admin map simply needs the boarders
+     *     and country names"*.
+     *  ★ The dark CSS filter that used to sit on the tile pane is gone with the tiles: the vector
+     *    map is already dark by design, and filtering it would fight its own palette. */
+    ensureVibeMap();
+    (window as any).VibeMap.attach(ccMap, { dataBase: '/mapdata/v1/', profile: 'admin' });
   }
 
   ccMarkers.forEach((m) => ccMap.removeLayer(m));
