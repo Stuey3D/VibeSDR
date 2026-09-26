@@ -266,3 +266,32 @@ to MapKit: it would refetch during the HFDL flyover, split the app into two rend
 completely offline** — which kills the pocket-VibeServer case where an iPhone is the likeliest
 client. We would still need the vectors for Android, web and the server, so MapKit is extra code,
 not less.
+
+## ✗ SUBMARINE CABLES — CHECKED, NOT AVAILABLE, DROPPED (2026-09-26)
+
+The most on-theme layer anyone proposed for a comms app, and we cannot have it. TeleGeography's
+own FAQ, read before anything was built:
+
+> *"The raw, geocoded data underlying TeleGeography's interactive maps is available via an **annual
+> license**."*
+
+★★★ **WHAT IS CC BY-SA 4.0 IS THEIR MAPS AND SCREENSHOTS, NOT THE DATA** — the FAQ's licence
+sentence covers *"any reference to a TeleGeography map, URL, or any related screen capture"*. The
+GeoJSON their site serves is therefore commercial-licence-only, and bundling it in a paid app would
+be taking data we have not paid for. ✗ The endpoint being publicly readable is NOT a licence.
+
+Alternatives considered and rejected:
+- **OpenStreetMap cables** (ODbL, free): coverage is partial and inconsistent. ★★ A half-complete
+  cable map is WORSE than none — it reads as authoritative and quietly misinforms, the same failure
+  shape as the mountain blobs and as a tour card that misdirects (AGENTS.md).
+- **Ask TeleGeography** (`cablemap@telegeography.com`): offered, and still open if anyone wants it.
+
+★ Stuart, 2026-09-26: *"drop the submarine cables its fine."* ✗ Do not re-add from the public
+endpoint on the grounds that it is reachable.
+
+## ★★★ "WE NOW OWN THE TILES" — no: THERE ARE NO TILES
+Worth keeping the framing straight, because it explains what the day actually bought. There is
+nothing to serve, nothing to expire, nothing to cache and nothing to go black. A tile was always
+somebody else's RENDERING of the world handed over as a picture; this is the world as DATA and the
+picture is ours. That is why the palette is a one-line change, why airports are filterable objects
+rather than baked pixels, and why a Pi Zero with no uplink can still draw a map.

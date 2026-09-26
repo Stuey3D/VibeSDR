@@ -113,8 +113,17 @@ const SRC = {
   geoLines: `${NE}/ne_110m_geographic_lines.geojson`,
   reefs: `${NE}/ne_10m_reefs.geojson`,
   playas: `${NE}/ne_10m_playas.geojson`,
+  /* ★ Railways make land read as INHABITED in a way roads alone do not -- a rail network traces
+   *  where people actually settled, and on a coarse map it is the clearest signal of that. 39 MB
+   *  of source, thinned hard below. Public domain. */
+  railroads: `${NE}/ne_10m_railroads.geojson`,
   cities5000: 'https://download.geonames.org/export/dump/cities5000.zip',
   airports: 'https://davidmegginson.github.io/ourairports-data/airports.csv',
+  /* ★★★ RUNWAYS, so a listener can follow what they are hearing. Stuart, 2026-09-26: "a user could
+   *  hear ATC talking about runway 21L or whatever they use, our maps could show them." Every
+   *  runway carries BOTH THRESHOLD COORDINATES and both designators, so this is real geometry and
+   *  a real label -- not a symbol near an airport. Public domain, same source as the airports. */
+  runways: 'https://davidmegginson.github.io/ourairports-data/runways.csv',
   ports: 'https://msi.nga.mil/api/publications/download?key=16920959/SFH00000/UpdatedPub150.csv&type=download',
 };
 
@@ -409,6 +418,48 @@ function simplifyRing(pts, tol) {
   return out;
 }
 
+/**
+ * OurAirports runways -> [icao, leLon, leLat, heLon, heLat, leIdent, heIdent, lengthFt].
+ *
+ * ★★ ONLY RUNWAYS WITH BOTH THRESHOLDS SURVIVE. 48,272 rows, but two-thirds carry no coordinates
+ *   at all (a helipad row is a length and nothing else). A runway drawn from one end and a heading
+ *   would be a GUESS pointing at a real place, which is worse than omitting it: the user would
+ *   line up what they are hearing against a line we invented.
+ * ★ Closed runways are dropped -- ATC does not talk about them, and drawing one is an active
+ *   misdirection for exactly the person this layer exists for.
+ * ★ The `minLengthFt` gate keeps grass strips out of the world view; Sywell's 03L/21R is 4,160 ft
+ *   and stays, its 1,476 ft 15/33 does not.
+ */
+function buildRunways(csv, dp, minLengthFt) {
+  const rows = parseCsv(csv);
+  const h = rows.shift();
+  if (rows.length < 10000) die(`runways: only ${rows.length} rows — source has changed shape.`);
+  const iIdent = col(h, ['airport_ident'], 'runways');
+  const iLen = col(h, ['length_ft'], 'runways');
+  const iClosed = col(h, ['closed'], 'runways');
+  const iLeI = col(h, ['le_ident'], 'runways');
+  const iLeLat = col(h, ['le_latitude_deg'], 'runways');
+  const iLeLon = col(h, ['le_longitude_deg'], 'runways');
+  const iHeI = col(h, ['he_ident'], 'runways');
+  const iHeLat = col(h, ['he_latitude_deg'], 'runways');
+  const iHeLon = col(h, ['he_longitude_deg'], 'runways');
+  const out = [];
+  for (const r of rows) {
+    if (String(r[iClosed]).trim() === '1') continue;
+    const len = Number(r[iLen]);
+    if (!Number.isFinite(len) || len < minLengthFt) continue;
+    const a = [Number(r[iLeLon]), Number(r[iLeLat])];
+    const b = [Number(r[iHeLon]), Number(r[iHeLat])];
+    if (!a.every(Number.isFinite) || !b.every(Number.isFinite)) continue;
+    if (a[0] === 0 && a[1] === 0) continue;
+    out.push([String(r[iIdent] || '').trim(), round(a[0], dp), round(a[1], dp),
+              round(b[0], dp), round(b[1], dp),
+              String(r[iLeI] || '').trim(), String(r[iHeI] || '').trim(), Math.round(len)]);
+  }
+  if (out.length < 5000) die(`runways: only ${out.length} survived >= ${minLengthFt} ft.`);
+  return out;
+}
+
 /** Urban extents -> flat ring list. `scalerank` thins them: 0 is a metropolis, 8 a small town. */
 function buildUrban(gj, dp, maxScalerank, minArea = 0) {
   const out = [];
@@ -450,7 +501,12 @@ function buildCountries(gj, dp, label) {
   return out;
 }
 
-/** Natural Earth populated places -> [name, lon, lat, rank]; rank is NE's scalerank (0 = biggest). */
+/**
+ * Natural Earth populated places -> [name, lon, lat, rank, flag]; rank is NE's scalerank (0 = biggest).
+ * ★★ `flag` is 1 for a NATIONAL capital, 2 for a regional one, 0 otherwise. A capital is not just
+ *   a big city -- it is the one a listener orients by, and on a dark map the cheapest way to say
+ *   so is colour, which needs this one extra number. NE's own `adm0cap`/`featurecla` carry it.
+ */
 function buildNePlaces(gj, dp, maxScalerank) {
   const out = [];
   for (const f of gj.features) {
@@ -463,7 +519,11 @@ function buildNePlaces(gj, dp, maxScalerank) {
     if (typeof rank !== 'number' || rank > maxScalerank) continue;
     const g = f.geometry;
     if (!g || g.type !== 'Point') continue;
-    out.push([String(name), round(g.coordinates[0], dp), round(g.coordinates[1], dp), rank]);
+    const cap = Number(p.adm0cap ?? p.ADM0CAP ?? 0) === 1 ? 1
+      : /Admin-1 capital/i.test(String(p.featurecla ?? p.FEATURECLA ?? '')) ? 2 : 0;
+    const rec = [String(name), round(g.coordinates[0], dp), round(g.coordinates[1], dp), rank];
+    if (cap) rec.push(cap);        // ★ omitted when zero: 7,000 trailing 0s for nothing
+    out.push(rec);
   }
   if (!out.length) die(`places: nothing survived scalerank <= ${maxScalerank}.`);
   return out;
@@ -610,7 +670,11 @@ async function buildGeonames(dp) {
     const lon = Number(f[5]);
     const pop = Number(f[14]) || 0;
     if (!name || !Number.isFinite(lat) || !Number.isFinite(lon)) { bad++; continue; }
-    out.push([name, round(lon, dp), round(lat, dp), geonamesRank(pop)]);
+    const fcode = (f[7] || '').trim();
+    const cap = fcode === 'PPLC' ? 1 : fcode === 'PPLA' ? 2 : 0;
+    const rec = [name, round(lon, dp), round(lat, dp), geonamesRank(pop)];
+    if (cap) rec.push(cap);
+    out.push(rec);
   }
   if (out.length < 10000) die(`cities5000: only ${out.length} towns parsed (expected ~50k) — the dump has changed shape.`);
   if (bad > out.length / 10) die(`cities5000: ${bad} unparseable lines — field order has changed.`);
@@ -645,7 +709,7 @@ process.stderr.write('gen-map-data: sources\n');
 
 const [c110, c50, c10, admin1, lakes, places, urban50, urban10, regions, glaciers, roads,
        rivers50, rivers10, lakes50, admin150, shelf,
-       iceShelves, minorIslands, geoLines, reefs, playas] = await Promise.all([
+       iceShelves, minorIslands, geoLines, reefs, playas, railroads] = await Promise.all([
   fetchGeoJson('countries110'),
   fetchGeoJson('countries50'),
   fetchGeoJson('countries10'),
@@ -667,9 +731,11 @@ const [c110, c50, c10, admin1, lakes, places, urban50, urban10, regions, glacier
   fetchGeoJson('geoLines'),
   fetchGeoJson('reefs'),
   fetchGeoJson('playas'),
+  fetchGeoJson('railroads'),
 ]);
 const airportsCsv = await fetchCached('airports.csv', SRC.airports);
 const portsCsv = await fetchCached('ports.csv', SRC.ports);
+const runwaysCsv = await fetchCached('runways.csv', SRC.runways);
 const towns = await buildGeonames(3);
 
 // ★ Unpacked once into the cache; ~1.5 GB of shapefile that must never reach the repo or a build.
@@ -766,6 +832,10 @@ const layers = [
   ['tier1', 'islands', minorIslands.features.flatMap((f) => packPolygons(f.geometry, 2))],
   ['tier1', 'reefs', reefs.features.flatMap((f) => packLines(f.geometry, 2))],
   ['tier1', 'playas', playas.features.flatMap((f) => packPolygons(f.geometry, 2))],
+  ['tier1', 'rail', railroads.features.filter((f) => {
+    const r = f.properties?.scalerank ?? f.properties?.SCALERANK;
+    return typeof r === 'number' && r <= 5;
+  }).flatMap((f) => packLines(f.geometry, 2))],
   // tier2 — the heavy tier, and the reason for tiering: it is only ever loaded at z8+, where the
   // viewport is a few hundred km across and the renderer culls almost all of it.
   ['tier2', 'countries', buildCountries(c10, 3, 'countries10')],
@@ -775,6 +845,8 @@ const layers = [
   ['tier2', 'lakes', buildHydroLakes(hydroDbf, hydroShp, 3, 1, 0.004)],
   ['tier2', 'places', towns],
   ['tier2', 'airports', buildAirports(airportsCsv, 3, new Set([0, 1, 2, 3, 4]))],
+  // ★ 4 dp (~11 m): a runway is 45 m wide, and at 3 dp its ends round onto the wrong threshold.
+  ['tier2', 'runways', buildRunways(runwaysCsv, 4, 2000)],
   ['tier2', 'cover', buildCover(regions, glaciers, 3, 0, iceShelves)],
   ['tier2', 'urban', buildUrban(urban10, 3, Infinity)],
   ['tier2', 'roads', buildRoads(roads, 3, 8)],
@@ -783,6 +855,12 @@ const layers = [
   ['tier2', 'islands', minorIslands.features.flatMap((f) => packPolygons(f.geometry, 3))],
   ['tier2', 'reefs', reefs.features.flatMap((f) => packLines(f.geometry, 3))],
   ['tier2', 'playas', playas.features.flatMap((f) => packPolygons(f.geometry, 3))],
+  /* ★ `scalerank` again, never `featurecla`: the same lesson as roads. A rail line's class
+   *  ("Railroad", "Disputed") says nothing about whether it belongs at this zoom. */
+  ['tier2', 'rail', railroads.features.filter((f) => {
+    const r = f.properties?.scalerank ?? f.properties?.SCALERANK;
+    return typeof r !== 'number' || r <= 8;
+  }).flatMap((f) => packLines(f.geometry, 3))],
 ];
 
 for (const [tier, name, data] of layers) {
@@ -797,7 +875,7 @@ const index = {
   licences: {
     resolve: { layers: ['relief (biome colouring)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© RESOLVE Ecoregions 2017', url: 'https://ecoregions.appspot.com/' },
     'noaa-etopo': { layers: ['relief'], licence: 'Public domain (US Government)', url: 'https://www.ncei.noaa.gov/products/etopo-global-relief-model' },
-    'natural-earth': { layers: ['countries', 'admin1', 'lakes', 'places(tier0,tier1)', 'urban', 'cover', 'roads', 'rivers', 'shelf', 'islands', 'reefs', 'playas', 'geolines'], licence: 'Public domain', url: 'https://www.naturalearthdata.com/' },
+    'natural-earth': { layers: ['countries', 'admin1', 'lakes', 'places(tier0,tier1)', 'urban', 'cover', 'roads', 'rivers', 'shelf', 'islands', 'reefs', 'playas', 'geolines', 'rail', 'runways'], licence: 'Public domain', url: 'https://www.naturalearthdata.com/' },
     geonames: { layers: ['places(tier2)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© GeoNames', url: 'https://www.geonames.org/' },
     ourairports: { layers: ['airports'], licence: 'Public domain', url: 'https://ourairports.com/data/' },
     hydrolakes: { layers: ['lakes(tier2)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© HydroLAKES / HydroSHEDS', url: 'https://www.hydrosheds.org/products/hydrolakes' },

@@ -5,7 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VibeServer Directory — VibeSDR</title>
 <meta name="description" content="Public VibeServer receivers you can listen to right now.">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<!-- Leaflet is served from HERE, not from a CDN. This was a real hole in the offline story: the
+     whole point of bundling the map data is that a VibeServer on a Pi Zero in captive-hotspot mode
+     with NO UPLINK still draws a map. Fetching the engine from a public CDN meant that server drew
+     NOTHING -- worse than the tile dependency we removed, because without tiles you get a blank
+     basemap and without Leaflet you get no map at all.
+     It is also a third party who can see every visitor to the directory, and a single point of
+     failure for a page whose whole job is to work when other things do not.
+     BSD-2-Clause; the licence travels with the files in vendor/leaflet/LICENSE. -->
+<link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
 <style>
   :root {
     /* ★★★ THE WEB CLIENT'S PALETTE, TO THE VALUE. Stuart wanted the directory to look like the
@@ -93,14 +101,30 @@
   /* ★ Country names sit ABOVE the town labels in weight and BELOW them in brightness -- larger so
        they read as the bigger thing, dimmer so they stay behind the receivers. */
   .reliefImg { image-rendering: auto; }
+  .mapLbl.major { font-size: 11px !important; font-weight: 700; opacity: 0.95; letter-spacing: 0.3px; }
+  .mapLbl.admin1 { opacity: 0.85; }
+  /* ★ A capital is amber against every other label's pale grey -- the one colour on the map that
+   *  is not a landform, so it cannot be mistaken for terrain. */
+  .mapLbl.capital { font-size: 12px !important; font-weight: 700; color: #f0c56a !important;
+                    opacity: 1; letter-spacing: 0.6px; }
+  /* ★ Runway designators sit ON the threshold, centred, in the same pale tone as the tarmac. */
+  .rwLbl { font: 9px ui-monospace, Menlo, monospace !important; color: #e8e2d4; opacity: 0.85;
+           font-weight: 700; letter-spacing: 0.5px; white-space: nowrap;
+           text-shadow: 0 0 3px #000, 0 0 4px #000; transform: translate(-50%, -50%); }
   .gridLbl { font: 9px ui-monospace, Menlo, monospace !important; color: #c98f2e; opacity: 0.4;
              letter-spacing: 1px; white-space: nowrap; transform: translate(-50%, -50%); }
   .contLbl { font-size: 13px !important; letter-spacing: 3px; opacity: 0.5; }
   /* ★ Airports amber, heliports and ports dimmer -- the airfield is what an ATC listener is
    *  scanning for, so it wins the eye; a port is context until AIS makes it the subject. */
-  .apLbl { font: 9px ui-monospace, Menlo, monospace !important; color: #e8b13a; opacity: 0.85;
+  .apLbl { font: 9px ui-monospace, Menlo, monospace !important; color: #e8b13a; opacity: 0.8;
            white-space: nowrap; text-shadow: 0 0 3px #000, 0 0 3px #000; margin: -4px 0 0 4px; }
-  .apLbl.heli { color: #9fb3c8; opacity: 0.6; }
+  .apLbl .g { font-style: normal; opacity: 0.75; margin-right: 2px; }
+  /* ★ Size AND weight climb together: at 9 px a bold weight alone is nearly invisible. */
+  .apLbl.big { font-size: 12px !important; font-weight: 700; opacity: 1; letter-spacing: 0.5px; }
+  .apLbl.med { font-size: 10px !important; opacity: 0.88; }
+  .apLbl.small { opacity: 0.62; }
+  .apLbl.heli { color: #9fb3c8; opacity: 0.55; }
+  .ptLbl .g { font-style: normal; opacity: 0.8; margin-right: 2px; }
   .ptLbl { font: 9px ui-monospace, Menlo, monospace !important; color: #6fc3d6; opacity: 0.62;
            white-space: nowrap; text-shadow: 0 0 3px #000, 0 0 3px #000; margin: -4px 0 0 4px; }
   .ctyLbl i { display: block; font-style: normal; text-transform: none; letter-spacing: 0.4px;
@@ -775,8 +799,8 @@
   Positions are the operator's Maidenhead square — a grid square, not an address.
 </footer>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/@joergdietrich/leaflet.terminator@1.1.0/L.Terminator.js"></script>
+<script src="/vendor/leaflet/leaflet.js"></script>
+<script src="/vendor/leaflet/L.Terminator.js"></script>
 <script>
 // ★★★ THE GREYLINE IS NOT DECORATION FOR THIS AUDIENCE — IT IS INFORMATION. A DXer can see which
 //     receivers are sitting in enhanced propagation right now, which is a reason to click one
@@ -1028,28 +1052,41 @@ function tierName(z) { return z <= 4 ? 'tier0' : z <= 7 ? 'tier1' : 'tier2'; }
  *  ★ The labels sit at each cell's CENTRE rather than a corner -- a locator names an area, and a
  *  label on the line reads as belonging to whichever cell the eye picks. */
 const gridLayer = L.layerGroup().addTo(map);
+/* ★★ SIX CHARACTERS, NOT FOUR. The locator has THREE pairs and the third is the one people
+ *  actually quote: Stuart's own square is IO92NH, and a grid that stops at IO92 does not resolve
+ *  to the thing he reads off his own receiver. Field 20 x 10 deg, square 2 x 1 deg, subsquare
+ *  1/24th of the square = 5 x 2.5 arcmin. ★ The subsquare pair is conventionally LOWER case. */
 function maidenhead(lon, lat) {
-  const L1 = Math.floor((lon + 180) / 20);
-  const L2 = Math.floor((lat + 90) / 10);
-  const n1 = Math.floor(((lon + 180) % 20) / 2);
-  const n2 = Math.floor((lat + 90) % 10);
-  return String.fromCharCode(65 + L1) + String.fromCharCode(65 + L2) + n1 + n2;
+  const x = lon + 180;
+  const y = lat + 90;
+  const f1 = Math.floor(x / 20);
+  const f2 = Math.floor(y / 10);
+  const s1 = Math.floor((x % 20) / 2);
+  const s2 = Math.floor(y % 10);
+  const u1 = Math.floor(((x % 2) / 2) * 24);
+  const u2 = Math.floor((y % 1) * 24);
+  return String.fromCharCode(65 + f1) + String.fromCharCode(65 + f2) + s1 + s2
+       + String.fromCharCode(97 + u1) + String.fromCharCode(97 + u2);
 }
 function drawGrid() {
   gridLayer.clearLayers();
   const z = map.getZoom();
   if (z < 3) return;
-  const fine = z >= 6;
-  const dLon = fine ? 2 : 20;
-  const dLat = fine ? 1 : 10;
+  /* ★ THREE LEVELS, matching the locator's three pairs: fields at world view, squares regionally,
+   *  and subsquares once you are close enough that IO92nh is a place rather than a county. */
+  const level = z >= 9 ? 2 : z >= 6 ? 1 : 0;
+  const dLon = [20, 2, 2 / 24][level];
+  const dLat = [10, 1, 1 / 24][level];
+  const chars = [2, 4, 6][level];
+  const fine = level > 0;
   const b = map.getBounds();
   const w = Math.max(-180, Math.floor(b.getWest() / dLon) * dLon);
   const e = Math.min(180, Math.ceil(b.getEast() / dLon) * dLon);
   const s = Math.max(-90, Math.floor(b.getSouth() / dLat) * dLat);
   const n = Math.min(90, Math.ceil(b.getNorth() / dLat) * dLat);
   // ★ Guard: a wide view at a fine step would be thousands of polylines.
-  if ((e - w) / dLon > 120 || (n - s) / dLat > 120) return;
-  const style = { color: '#c98f2e', weight: fine ? 0.4 : 0.7, opacity: fine ? 0.22 : 0.34,
+  if ((e - w) / dLon > 140 || (n - s) / dLat > 140) return;
+  const style = { color: '#c98f2e', weight: fine ? 0.4 : 0.7, opacity: level === 2 ? 0.18 : fine ? 0.22 : 0.34,
                   interactive: false, pane: 'admin', renderer: paneRenderer.admin };
   for (let lon = w; lon <= e; lon += dLon) {
     L.polyline([[s, lon], [n, lon]], style).addTo(gridLayer);
@@ -1062,7 +1099,7 @@ function drawGrid() {
     for (let lat = s; lat < n; lat += dLat) {
       const code = maidenhead(lon + dLon / 2, lat + dLat / 2);
       L.marker([lat + dLat / 2, lon + dLon / 2], { interactive: false, icon: L.divIcon({
-        className: 'gridLbl', html: fine ? code : code.slice(0, 2),
+        className: 'gridLbl', html: code.slice(0, chars),
         iconSize: [0, 0], iconAnchor: [0, 0],
       }) }).addTo(gridLayer);
     }
@@ -1315,6 +1352,12 @@ async function drawGeoLines() {
   if (z < 2 || z > 8) return;
   const gl = await layer('tier0', 'geolines');
   for (const { name, lines } of gl || []) {
+    /* ★★ THE INTERNATIONAL DATE LINE IS IN THIS FILE TOO, and it is the only entry that is not a
+     *  line of latitude: it zigzags around Kiribati and the Aleutians. Drawn in the same amber
+     *  dash as the tropics it reads as a rendering fault -- Stuart's first look at the finished
+     *  map picked out "rectangles" near Patagonia and Alaska that were exactly this. It says
+     *  nothing about propagation, so it goes. */
+    if (/Date Line/i.test(name)) continue;
     const tropic = /Tropic/i.test(name);
     for (const line of lines) {
       L.polyline(line.map(([lon, lat]) => [lat, lon]),
@@ -1435,11 +1478,25 @@ async function drawPlaces() {
   const places = await layer(await bestTier(tierFor('places', z)), 'places', box);
   placeLayer.clearLayers();
   if (!places) return;
-  for (const [name, lon, lat] of pick(places, box, CAP.places, (r) => r[3] ?? 9)) {
-    L.circleMarker([lat, lon], inPane('place', { radius: 1.5, weight: 0,
-                     fillColor: MAP_TOWN, fillOpacity: 0.9 })).addTo(placeLayer);
-    if (z >= 4) L.marker([lat, lon], { interactive: false, icon: L.divIcon({
-      className: 'mapLbl', html: esc(name), iconSize: [0, 0], iconAnchor: [-4, 5],
+  /* ★★★ A LABEL'S WEIGHT IS ITS IMPORTANCE. Every town drawn at the same 9 px meant London and
+   *  Brixworth carried equal visual weight, which is not a style problem -- it is a MAP that
+   *  refuses to say which place matters. Rank drives the size, and a CAPITAL gets its own colour
+   *  plus a hollow ring, because a capital is the thing a listener orients by and colour reads
+   *  faster than size at a glance.
+   *  ★ Capital flag: 1 = national, 2 = regional. Absent means 0 -- the generator omits it rather
+   *  than write seven thousand trailing zeroes. */
+  for (const [name, lon, lat, rank, cap] of pick(places, box, CAP.places, (r) => r[3] ?? 9)) {
+    const r = rank ?? 9;
+    const major = r <= 2;
+    const cls = cap === 1 ? 'mapLbl capital' : major ? 'mapLbl major' : cap === 2 ? 'mapLbl admin1' : 'mapLbl';
+    L.circleMarker([lat, lon], inPane('place', {
+      radius: cap === 1 ? 2.6 : major ? 2.2 : 1.5,
+      weight: cap === 1 ? 1 : 0, color: MAP_CAPITAL,
+      fillColor: cap === 1 ? MAP_CAPITAL : MAP_TOWN,
+      fillOpacity: cap === 1 ? 0.55 : 0.9,
+    })).addTo(placeLayer);
+    if (z >= 4 || major || cap === 1) L.marker([lat, lon], { interactive: false, icon: L.divIcon({
+      className: cls, html: esc(name), iconSize: [0, 0], iconAnchor: [-5, 6],
     }) }).addTo(placeLayer);
   }
 }
@@ -1453,6 +1510,54 @@ async function drawPlaces() {
  *  IATA, and EGBK is what an ATC listener wants anyway.
  *  ★ Class from the source: 0=large, 1=medium, 2=small, 3=heliport, 4=seaplane. The class gate is
  *  a FLOOR on what is eligible; the viewport cap above decides how many of them actually draw. */
+/* ★★★ AN AIRFIELD WITH NO REAL CODE GETS NO LABEL. OurAirports assigns a SYNTHETIC ident to
+ *  strips that have neither ICAO nor IATA -- "GB-1137", "US-0892" -- and drawing those put
+ *  meaningless tags all over Northamptonshire. The whole reason the code is the label is that it
+ *  is what you TUNE FOR; "GB-1137" cannot be tuned for, is not spoken on the air, and is not
+ *  searchable. A label that carries no information is worse than no label, because the reader
+ *  spends attention deciding it is useless.
+ *  ★ The test is the synthetic form itself (two letters, a dash, digits), not the absence of IATA
+ *  -- Sywell has no IATA and EGBK is exactly what an airband listener wants. */
+const SYNTHETIC_IDENT = /^[A-Z]{2}-\d+$/;
+const hasCode = (r) => Boolean(r[4]) || (Boolean(r[0]) && !SYNTHETIC_IDENT.test(r[0]));
+/* ★★★ RUNWAYS, DRAWN AS REAL GEOMETRY AND LABELLED WITH WHAT ATC SAYS. Stuart, 2026-09-26: "a
+ *  user could hear ATC talking about runway 21L or whatever they use, our maps could show them."
+ *  That is the difference between a map that decorates the audio and one that ANSWERS it.
+ *  ★★ Both thresholds come from the source, so this is the actual centreline and the actual
+ *  heading -- not a symbol rotated to a bearing. Each end is labelled with its own designator,
+ *  because 09L and 27R are the SAME strip of tarmac and which one you hear tells you the wind.
+ *  ★ From z12 only: below that a 3 km runway is a few pixels and its labels would collide with
+ *  the airport code that is already there. */
+const runwayLayer = L.layerGroup().addTo(map);
+async function drawRunways() {
+  runwayLayer.clearLayers();
+  const z = map.getZoom();
+  if (z < 9) return;
+  /* ★★★ THE ZOOM GATE IS PER RUNWAY, BY LENGTH. A flat "z12 and up" hid Stansted's 10,003 ft
+   *  04/22 at z10 and z11, where it is already 40 px long and perfectly legible -- Stuart looked
+   *  for it and it was not there, which reads as MISSING DATA rather than a threshold. A runway
+   *  should appear as soon as it is big enough to see, and that depends on how long it is.
+   *  ★ Roughly: a runway earns its line once it would draw at about 25 px. */
+  const minFt = z >= 12 ? 2000 : z >= 11 ? 4000 : z >= 10 ? 7000 : 9000;
+  const box = viewBox();
+  const rw = await layer(await bestTier('tier2'), 'runways', box);
+  if (!rw) return;
+  for (const [, aLon, aLat, bLon, bLat, leId, heId, len] of rw) {
+    if (len < minFt) continue;
+    if (!inBox(box, aLon, aLat) && !inBox(box, bLon, bLat)) continue;
+    L.polyline([[aLat, aLon], [bLat, bLon]], inPane('road', {
+      color: '#d8d2c4', weight: z >= 14 ? 3.5 : z >= 12 ? 2.2 : 1.6, opacity: 0.75, lineCap: 'butt',
+    })).addTo(runwayLayer).bindTooltip(`${esc(leId)}/${esc(heId)} \u00b7 ${len.toLocaleString()} ft`);
+    // ★ Designators once there is room for them beside the line, not before.
+    if (z < 12) continue;
+    for (const [id, la, lo] of [[leId, aLat, aLon], [heId, bLat, bLon]]) {
+      if (!id) continue;
+      L.marker([la, lo], { interactive: false, icon: L.divIcon({
+        className: 'rwLbl', html: esc(id), iconSize: [0, 0], iconAnchor: [0, 0],
+      }) }).addTo(runwayLayer);
+    }
+  }
+}
 const airportLayer = L.layerGroup().addTo(map);
 const portLayer = L.layerGroup().addTo(map);
 async function drawPoi() {
@@ -1464,17 +1569,28 @@ async function drawPoi() {
   const [airports, ports] = await Promise.all([layer(t, 'airports', box), layer('tier1', 'ports', box)]);
   const aCut = z <= 6 ? 0 : z <= 8 ? 1 : 4;
   for (const [icao, lon, lat, cls, iata, name] of
-       pick(airports || [], box, CAP.airports, (r) => r[3], (r) => r[3] <= aCut)) {
+       pick(airports || [], box, CAP.airports, (r) => r[3], (r) => r[3] <= aCut && hasCode(r))) {
     const code = iata || icao;
+    /* ★★ A GLYPH BEFORE THE CODE, so the kind of field is readable without parsing the code:
+     *  an aeroplane for a runway airport, [H] for a heliport. Stuart asked for both by name.
+     *  ★★★ AND THE BIG FIELDS ARE LOUDER. "Large international airports get a larger easier to
+     *  identify label compared to the hoardes of tiny airfields" -- with one size, EGLL and a
+     *  farm strip competed equally, and the map failed to answer the only question an airband
+     *  listener is asking: which of these is the busy one? */
+    const kind = cls >= 3 ? 'heli' : cls === 0 ? 'big' : cls === 1 ? 'med' : 'small';
+    const glyph = cls >= 3 ? '<i class="g">[H]</i>' : '<i class="g">\u2708</i>';
     L.marker([lat, lon], { icon: L.divIcon({
-      className: 'apLbl' + (cls >= 3 ? ' heli' : ''), html: esc(code),
+      className: 'apLbl ' + kind, html: glyph + esc(code),
       iconSize: [0, 0], iconAnchor: [0, 0],
     }) }).addTo(airportLayer).bindTooltip(esc(name || code));
   }
   if (z < 6) return;
   for (const [name, lon, lat] of pick(ports || [], box, CAP.ports, () => 0)) {
+    // ★ A ship for a sea port -- the same reasoning as the aeroplane: the symbol says what KIND
+    //   of thing this is before the name is read, which matters on a map carrying five kinds.
     L.marker([lat, lon], { icon: L.divIcon({
-      className: 'ptLbl', html: esc(name), iconSize: [0, 0], iconAnchor: [0, 0],
+      className: 'ptLbl', html: '<i class="g">\u2693</i>' + esc(name),
+      iconSize: [0, 0], iconAnchor: [0, 0],
     }) }).addTo(portLayer);
   }
 }
@@ -1489,7 +1605,7 @@ function redrawMap() {
     drawing = true;
     drawGrid();
     Promise.all([drawBase(), drawRelief(), drawCover(), drawWater(), drawRoads(),
-                 drawIslands(), drawGeoLines(),
+                 drawIslands(), drawGeoLines(), drawRunways(),
                  drawCountryNames(), drawPlaces(), drawPoi()])
       // ★★★ NEVER SWALLOW A DRAW ERROR AGAIN. The silent .catch here is precisely why a TypeError
       //   in drawBase looked like "the feature did not ship" for two deploys.
