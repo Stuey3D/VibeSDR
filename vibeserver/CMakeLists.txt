@@ -22,7 +22,7 @@ cmake_minimum_required(VERSION 3.20)
 #     package takes its upstream version from here, and the macOS app's plist is bumped alongside
 #     it. They must not drift: a Pi reporting 3.1.0 while the Mac says 3.0.2 makes every "which
 #     version are you on?" answer ambiguous, which is the question every fault report starts with.
-project(vibeserver VERSION 5.6.54 LANGUAGES CXX C)
+project(vibeserver VERSION 5.6.55 LANGUAGES CXX C)
 
 # ── ★★★ SANITISER BUILDS FOR THE TESTS AND THE OFFLINE REPLAY ────────────────────────────────
 #
@@ -623,6 +623,65 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   #   clobber it on upgrade. Staged elsewhere and copied by postinst ONLY if absent.
   install(FILES linux/vibeserver.conf DESTINATION ${CMAKE_INSTALL_DATADIR}/vibeserver)
 
+  # ── ★★★ THE BUNDLED VECTOR MAP — THE *BASIC* PACK ONLY ────────────────────────────────────────
+  #
+  # The client draws its own map from assets/mapdata/v1 instead of fetching OpenStreetMap tiles, so
+  # a receiver in a loft with no outbound internet still has coastlines. The dataset is in two packs
+  # (declared in that directory's index.json): `basic`, ~22 MB, which travels inside this package
+  # and is therefore always present; and `detail`, ~221 MB, which does NOT — see
+  # briefs/BRIEF-vibeserver-mapdata.md and the Recommends: line below.
+  #
+  # ★★★ THE FILE LIST COMES FROM index.json, NEVER FROM A LIST HERE. The data is generated
+  #     (scripts/gen-map-data.mjs) and its shape changes — shards appear, a layer is added, the
+  #     relief becomes tiles. A hand-copied list would ship a package that installs cleanly and is
+  #     missing a layer, which reads as a renderer bug. Reading the generator's own manifest means
+  #     the package cannot disagree with the data.
+  # ★★ INTO lib/vibeserver/mapdata, beside the other things we own. The binary finds it at
+  #    $exe/../lib/vibeserver/mapdata (see vibe_mapdata.h), which is the same "wherever we are
+  #    unpacked" relation as the bundled librtlsdr's RPATH — not an absolute path baked in.
+  # ★ NOT gzipped here: the server will serve a `<file>.gz` sibling if one exists, but a .deb is
+  #   already xz-compressed as a whole, so a pre-gzipped payload would compress twice for nothing.
+  set(_vibe_map_src "${CMAKE_CURRENT_SOURCE_DIR}/../assets/mapdata/v1")
+  set(_vibe_map_files "")
+  if(EXISTS "${_vibe_map_src}/index.json")
+    file(READ "${_vibe_map_src}/index.json" _vibe_map_index)
+    string(JSON _vibe_map_n ERROR_VARIABLE _vibe_map_err
+           LENGTH "${_vibe_map_index}" packs basic files)
+    if(_vibe_map_n AND NOT _vibe_map_err)
+      math(EXPR _vibe_map_last "${_vibe_map_n} - 1")
+      foreach(i RANGE ${_vibe_map_last})
+        string(JSON _f GET "${_vibe_map_index}" packs basic files ${i})
+        # ★ A declared file that is not on disk is a HALF-GENERATED dataset, and shipping it would
+        #   produce exactly the "layer missing on the live server" fault this list exists to avoid.
+        if(EXISTS "${_vibe_map_src}/${_f}")
+          list(APPEND _vibe_map_files "${_vibe_map_src}/${_f}")
+        else()
+          message(WARNING "map data: ${_f} is in index.json's basic pack but not on disk — "
+                          "re-run scripts/gen-map-data.mjs")
+        endif()
+      endforeach()
+      list(APPEND _vibe_map_files "${_vibe_map_src}/index.json")
+    endif()
+  endif()
+  list(LENGTH _vibe_map_files _vibe_map_count)
+  if(_vibe_map_count GREATER 20)
+    install(FILES ${_vibe_map_files} DESTINATION lib/vibeserver/mapdata)
+    message(STATUS "bundling map data: ${_vibe_map_count} file(s) (basic pack) -> lib/vibeserver/mapdata")
+  elseif(VIBESERVER_ALLOW_NO_MAPDATA)
+    message(WARNING "map data NOT bundled (VIBESERVER_ALLOW_NO_MAPDATA) — the client will draw no "
+                    "map, and installing this package REMOVES the map data a previous one installed")
+  else()
+    # ★★★ FATAL BY DEFAULT, FOR THE REASON THE cloudflared BRANCH ABOVE LEARNED THE HARD WAY: a
+    #     package built from a tree without the data does not merely lack it, it DELETES the copy
+    #     already installed on every machine that upgrades. The server keeps serving radio
+    #     perfectly — the map simply goes blank — so nothing in a log would say what happened.
+    message(FATAL_ERROR
+            "no usable map data at ${_vibe_map_src} (need index.json with a packs.basic file list).\n"
+            "A package built now would REMOVE the map from every machine that installs it.\n"
+            "Fix: node scripts/gen-map-data.mjs\n"
+            "To build without it on purpose: -DVIBESERVER_ALLOW_NO_MAPDATA=ON.")
+  endif()
+
   set(CPACK_GENERATOR "DEB")
   set(CPACK_PACKAGE_NAME "vibeserver")
   set(CPACK_PACKAGE_VENDOR "Stuart Carr")
@@ -690,7 +749,18 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   #    minimal image where the binary is still perfectly useful. Same reasoning as systemd above.
   # ★ The decoder also now SAYS so at start-up when it is absent — see vibe_dab_aacdec.h. A
   #   missing Recommends must never again be a silent downgrade.
-  set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "ffmpeg")
+  # ★★★ AND THE OPTIONAL MAP DETAIL PACK — RECOMMENDS, EMPHATICALLY NOT DEPENDS. 82 MB compressed,
+  #     ~221 MB on disk, and it is the zoomed-in half of the map: coastline shards, second-level
+  #     boundaries, minor roads, small places. A receiver is perfectly usable without it (the basic
+  #     pack inside this package covers the whole world down to zoom 7) and a Pi on a 4 GB card may
+  #     not have room for it at all — so it must never be able to refuse an install.
+  #  ★★ Recommends rather than Suggests because apt installs Recommends by default AND keeps them
+  #     upgraded, which is what makes the data track the server on a machine with the disk for it —
+  #     the same reasoning as ffmpeg above. `--no-install-recommends`, or a machine tight on space,
+  #     simply gets the basic map.
+  #  ★ The server says which layers it has not got, per request, rather than failing silently — see
+  #    the 404 wording in vibe_mapdata.h.
+  set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "ffmpeg, vibeserver-mapdata-detail")
   set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
   set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
       "${CMAKE_CURRENT_SOURCE_DIR}/linux/debian/preinst"

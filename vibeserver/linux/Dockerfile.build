@@ -31,7 +31,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       librtlsdr-dev libusb-1.0-0-dev libopus-dev libfftw3-dev libncursesw5-dev \
       libhackrf-dev \
       dpkg-dev apt-utils gnupg git rsync xz-utils \
+      python3-minimal \
     && rm -rf /var/lib/apt/lists/*
+# ★★ python3-minimal IS NOT OPTIONAL SCENERY: scripts/build-mapdata-deb.sh reads the map data's own
+#    index.json to decide what goes in the optional detail package. bookworm-SLIM has no python3 and
+#    no jq, and a package list parsed with grep is exactly the thing that ships a dataset missing a
+#    layer. ~30 MB in a build image, against a file list that cannot drift from the data.
 
 # ★★ SDRplay headers: STAGED FROM THE BUILD HOST, never downloaded. The API is dlopen'd at
 #    runtime, so the headers are all the build needs — and SDRplay's licence is theirs, which is

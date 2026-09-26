@@ -112,6 +112,7 @@
 #include <sys/socket.h>   // MSG_PEEK, recv — for the hand-off peek        // hand-written: the setup page, GET / when unconfigured
 #include "vibe_admin.h"
 #include "vibe_health.h"
+#include "vibe_mapdata.h"   // the bundled vector map, served from DISK — see the header
 #include "vibe_proxy.h"
 #include "vibe_admin_ticket.h"
 #include "vibe_bands.h"             // the ban list, the connection log and the machine's vitals
@@ -14587,6 +14588,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         vibeThreadName("vibe-conn");
         std::string reqLine, line, wsKey, userAgent, xffHeader, xRealIpHeader;
         long long contentLength = 0;      // ★ needed by POST /vibeserver/config; 0 for everything else
+        bool acceptsGzip = false;         // ★ only /mapdata/ cares — see the header capture below
         if (sock->recvline(reqLine, 8192, 5000) <= 0) { sock->close(); return; }
         // ★★★ STRIP OUR OWN /r/<serial> PREFIX, ONCE, RIGHT HERE.
         //
@@ -14643,6 +14645,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 //   real errors beside it easy to miss.
                 || path0.rfind("/manifest", 0) == 0
                 || path0.rfind("/icon", 0) == 0
+                // ★★★ THE MAP BELONGS TO THE MACHINE, NOT TO A RADIO. The landing page this door
+                //     serves draws the same map as a receiver does, so refusing it here would give
+                //     every multi-radio server a blank map on its front page while each radio's
+                //     page drew one perfectly — the shape of bug that reads as "the map is broken
+                //     on big servers".
+                || path0.rfind("/mapdata/", 0) == 0
                 || path0.rfind("/apple-touch-icon", 0) == 0;
             if (!ok) {
                 // ★★★ A DEAD END IS NOT AN ANSWER. This used to reply with a bare JSON error, so a
@@ -14754,6 +14762,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     size_t b = vv.find_last_not_of(" \t\r\n");
                     if (a != std::string::npos) xffHeader = vv.substr(a, b - a + 1);
                 }
+            }
+            // ★ Only the map data reads this (vibe_mapdata.h): a pre-compressed sibling may only
+            //   go to a client that said it would take one. Captured with the others because the
+            //   headers are consumed once, here, before any route sees the request.
+            if (line.size() > 16) {
+                std::string ak = line.substr(0, 16);
+                for (auto& c : ak) c = (char)tolower(c);
+                if (ak == "accept-encoding:" && line.find("gzip") != std::string::npos)
+                    acceptsGzip = true;
             }
             if (line.size() > 10) {
                 std::string rk = line.substr(0, 10);
@@ -16103,6 +16120,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
+        // ── ★★★ THE BUNDLED VECTOR MAP, FROM DISK ───────────────────────────────────────────────
+        // GET /mapdata/v1/<file> — coastlines, borders, places and the shaded relief the client's
+        // map draws itself from, instead of fetching tiles from OpenStreetMap. See vibe_mapdata.h
+        // for why this one asset is files on disk when everything else here is compiled in, and for
+        // why a missing directory is a 404 rather than a failure.
+        // ★★ Served to the FRONT DOOR as well as to a radio (see the allow-list above): the landing
+        //    page draws the same map, and the door is the process a listener meets first.
+        // ★ HEAD answered too — the app checks whether a server has the detail pack before
+        //   offering to use it, and a HEAD that 404s while the GET works would make that check lie.
+        } else if (reqLine.rfind("GET /mapdata/v1/", 0) == 0 ||
+                   reqLine.rfind("HEAD /mapdata/v1/", 0) == 0) {
+            const bool head = reqLine[0] == 'H';
+            const size_t from = (head ? 17 : 16);   // past "/mapdata/v1/"
+            size_t to = reqLine.find_first_of(" ?#", from);
+            if (to == std::string::npos) to = reqLine.size();
+            vibemap::serve(sock, reqLine.substr(from, to - from), acceptsGzip, head);
         } else if (reqLine.rfind("GET /icon-512.png", 0) == 0) {
             std::string body((const char*)kVibeIcon512, kVibeIcon512Len);
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n"
