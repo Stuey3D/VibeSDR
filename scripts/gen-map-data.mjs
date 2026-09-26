@@ -53,6 +53,15 @@ const cacheDir = path.join(root, '.mapdata-cache');
 
 const CHECK = process.argv.includes('--check');
 const REFRESH = process.argv.includes('--refresh');
+/* ★★★ THE RELIEF IS CACHED BETWEEN RUNS, because it dominates the build and NEVER CHANGES. The
+ *  two images take ~8 of every 10 minutes (a 4096² biome rasterisation over 847 ecoregions, twice)
+ *  and their inputs — ETOPO2 from 2006 and Ecoregions 2017 — are frozen datasets. Rebuilding them
+ *  to re-tune a LABEL POSITION is pure waste, and a ten-minute loop is how you stop iterating on
+ *  the thing you were actually trying to fix.
+ *  ★ `--relief` forces them. They are also rebuilt automatically whenever they are missing, so a
+ *  fresh clone still gets a complete map. ✗ Do not make the cache the default source of truth:
+ *  it is keyed on nothing, so any change to relief.mjs needs `--relief`. */
+const FORCE_RELIEF = process.argv.includes('--relief');
 
 const NE = 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson';
 const SRC = {
@@ -332,13 +341,119 @@ function buildCover(regionsGj, glaciersGj, dp, minArea = 0, shelvesGj = null) {
  * ★★ THESE ARE LABELS, NOT SHAPES. We are not drawing the Sahara's outline (the biome raster
  *   already colours it); we are naming it. So one point per region is the entire payload, and the
  *   whole layer is a few kB.
- * ★★★ POSITION COMES FROM THE POLYGON'S BBOX CENTRE, not a true centroid. For a long curved range
- *   like the Andes a centroid lands in Brazil -- outside the feature it names. The bbox centre is
- *   not perfect either but it stays on the feature for every case that matters here, and Natural
- *   Earth's own LABELRANK then decides who is big enough to show.
+ * ★★★ POSITION IS AN INTERIOR POINT FOUND BY GRID SEARCH — an approximate POLE OF INACCESSIBILITY,
+ *   the point deepest inside the shape. Neither of the obvious answers works:
+ *     - a CENTROID of the Andes lands in Brazil, outside the feature it names;
+ *     - a BBOX CENTRE of the North Atlantic lands in the SAHARA, because its box runs from the
+ *       Gulf of Mexico to the North Sea. Stuart spotted exactly that: "North atlantic ocean
+ *       appears to be in the sahara".
+ *   ★★ I shipped the bbox version claiming it "stays on the feature for every case that matters",
+ *   which was an assumption presented as a check. It took one look at a world map to disprove.
+ *   ★ The search is a coarse grid (points inside the polygon, ranked by distance to the nearest
+ *   edge), so it is exact enough for a label and costs nothing at build time. A label sitting in
+ *   the OPEN part of a shape also reads better than one crammed into a narrow arm of it.
  * ★ `kind` separates land from sea so the renderer can colour them differently: a sea name in the
  *   land palette reads as a place you could stand.
  */
+/** Even-odd point-in-polygon across ALL rings together, so holes count as outside. */
+function inRings(rings, x, y) {
+  let inside = false;
+  for (const ring of rings) {
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i]; const [xj, yj] = ring[j];
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+  }
+  return inside;
+}
+
+/**
+ * The point deepest inside a polygon, by coarse grid search — good enough to hang a label on.
+ * ★ "Deepest" is measured against RING VERTICES rather than true edge distance: a label wants to
+ *   sit in the open middle of a shape, and vertex distance finds that at a fraction of the cost.
+ */
+function interiorPoint(rings) {
+  if (!rings.length) return null;
+  /* ★★★ THE PACIFIC CROSSES THE ANTIMERIDIAN, AND THAT BREAKS EVERYTHING NAIVE. Its rings run from
+   *  +180 straight to -180, so its bounding box spans the ENTIRE WORLD and a point-in-polygon test
+   *  is meaningless across the seam. The visible result: "South Pacific Ocean" placed in SOUTH
+   *  AFRICA (lon ~20 sits inside that bogus box) and the North Pacific given no label at all.
+   *  Stuart found both within a minute.
+   *  ★★ The fix is to do the geometry in a 0..360 frame where the shape is CONTIGUOUS, then wrap
+   *  the answer back to -180..180. A ring crosses if any consecutive pair jumps more than 180 deg
+   *  of longitude -- real coastlines never do, so the test has no false positives. */
+  let wraps = false;
+  for (const ring of rings) {
+    for (let i = 1; i < ring.length && !wraps; i++) {
+      if (Math.abs(ring[i][0] - ring[i - 1][0]) > 180) wraps = true;
+    }
+    if (wraps) break;
+  }
+  if (wraps) {
+    const shifted = rings.map((r) => r.map(([x, y]) => [x < 0 ? x + 360 : x, y]));
+    const pt = interiorPointPlain(shifted);
+    return pt ? [pt[0] > 180 ? pt[0] - 360 : pt[0], pt[1]] : null;
+  }
+  return interiorPointPlain(rings);
+}
+
+/**
+ * Area-weighted centroid of the largest ring. ★ The right answer WHENEVER IT LANDS INSIDE, which
+ * for a broadly convex shape is most of the time and is where a reader expects the name.
+ */
+function ringCentroid(ring) {
+  let a = 0; let cx = 0; let cy = 0;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const f = ring[j][0] * ring[i][1] - ring[i][0] * ring[j][1];
+    a += f; cx += (ring[j][0] + ring[i][0]) * f; cy += (ring[j][1] + ring[i][1]) * f;
+  }
+  if (!a) return null;
+  return [cx / (3 * a), cy / (3 * a)];
+}
+
+function interiorPointPlain(rings) {
+  if (!rings.length) return null;
+  /* ★★★ CENTROID FIRST, DEEPEST-POINT ONLY AS A FALLBACK. Ranking purely by distance-to-coast is
+   *  mathematically defensible and cartographically wrong: the widest open water in the Indian
+   *  Ocean polygon is down at 58°S against the Southern Ocean, and in the North Atlantic it is
+   *  near the EQUATOR — so both names drifted to the edge of the thing they label. The centroid
+   *  sits where a reader expects the name, and the deep-point search is kept for the shapes a
+   *  centroid genuinely fails on: long curved ranges like the Andes, and crescents. */
+  const biggest = rings.reduce((m, r) => (r.length > (m?.length ?? 0) ? r : m), null);
+  const c = biggest && ringCentroid(biggest);
+  if (c && Number.isFinite(c[0]) && Number.isFinite(c[1]) && inRings(rings, c[0], c[1])) return c;
+  let w = 180; let s = 90; let e = -180; let n = -90;
+  for (const ring of rings) {
+    for (const [x, y] of ring) {
+      if (x < w) w = x; if (x > e) e = x;
+      if (y < s) s = y; if (y > n) n = y;
+    }
+  }
+  if (e <= w || n <= s) return [(w + e) / 2, (s + n) / 2];
+  const N = 40;
+  let best = null; let bestD = -1;
+  for (let i = 1; i < N; i++) {
+    const x = w + ((e - w) * i) / N;
+    for (let j = 1; j < N; j++) {
+      const y = s + ((n - s) * j) / N;
+      if (!inRings(rings, x, y)) continue;
+      let d = Infinity;
+      for (const ring of rings) {
+        // ★ Every 4th vertex: a 3,000-point coastline does not need exhaustive sampling to say
+        //   which candidate is further from the shore.
+        for (let k = 0; k < ring.length; k += 4) {
+          const dx = ring[k][0] - x; const dy = ring[k][1] - y;
+          const dd = dx * dx + dy * dy;
+          if (dd < d) d = dd;
+        }
+      }
+      if (d > bestD) { bestD = d; best = [x, y]; }
+    }
+  }
+  // ★ A shape too thin for any grid point to land inside still gets a label, at its box centre.
+  return best || [(w + e) / 2, (s + n) / 2];
+}
+
 const REGION_CLASSES = new Set(['Desert', 'Range/mtn', 'Plateau', 'Plain', 'Basin', 'Lowland',
                                 'Tundra', 'Depression', 'Valley', 'Geoarea', 'Peninsula']);
 function buildRegionLabels(gj, kind, dp, maxRank, classes) {
@@ -351,15 +466,10 @@ function buildRegionLabels(gj, kind, dp, maxRank, classes) {
     if (!name) continue;
     const rank = Number(p.LABELRANK ?? p.labelrank ?? p.SCALERANK ?? p.scalerank ?? 9);
     if (!Number.isFinite(rank) || rank > maxRank) continue;
-    let w = 180; let s = 90; let e = -180; let n = -90;
-    for (const ring of packPolygons(f.geometry, dp)) {
-      for (const [lon, lat] of ring) {
-        if (lon < w) w = lon; if (lon > e) e = lon;
-        if (lat < s) s = lat; if (lat > n) n = lat;
-      }
-    }
-    if (e < w) continue;
-    out.push([name, round((w + e) / 2, dp), round((s + n) / 2, dp), rank, kind]);
+    const rings = packPolygons(f.geometry, dp);
+    const pt = interiorPoint(rings);
+    if (!pt) continue;
+    out.push([name, round(pt[0], dp), round(pt[1], dp), rank, kind]);
   }
   if (!out.length) die(`regions/${kind}: nothing survived rank <= ${maxRank}.`);
   out.sort((a, b) => a[3] - b[3]);
@@ -843,12 +953,20 @@ const ecoShapes = [];
 eachPolygon(ecoShp, (i, rings) => { ecoShapes.push({ biome: ecoRows[i].BIOME_NUM, rings }); });
 if (ecoShapes.length < 500) die(`ecoregions: only ${ecoShapes.length} polygons read.`);
 
-process.stderr.write(`  rasterising ${ecoShapes.length} ecoregions …`);
-const reliefImages = [
-  ['relief.png', 'basic', buildRelief(etopo, { width: 2700, biomes: rasteriseBiomes(ecoShapes, 2700) })],
-  ['relief-hi.png', 'detail', buildRelief(etopo, { width: 4096, biomes: rasteriseBiomes(ecoShapes, 4096) })],
-];
-process.stderr.write(' done\n');
+const reliefSpec = [['relief.png', 'basic', 2700], ['relief-hi.png', 'detail', 4096]];
+const reliefCached = !FORCE_RELIEF && (await Promise.all(
+  reliefSpec.map(([f]) => stat(path.join(outDir, f)).then(() => true).catch(() => false))
+)).every(Boolean);
+const reliefImages = [];
+if (reliefCached) {
+  process.stderr.write('  relief: reusing cached images (--relief to rebuild)\n');
+} else {
+  process.stderr.write(`  rasterising ${ecoShapes.length} ecoregions …`);
+  for (const [file, pack, width] of reliefSpec) {
+    reliefImages.push([file, pack, buildRelief(etopo, { width, biomes: rasteriseBiomes(ecoShapes, width) })]);
+  }
+  process.stderr.write(' done\n');
+}
 
 // tier0 world z0–4 · tier1 regional z5–7 · tier2 local z8+
 const layers = [
@@ -1128,7 +1246,7 @@ await mkdir(outDir, { recursive: true });
  *  the previous shape of the data lying next to the current one, and the stale copy always wins
  *  somewhere. The output directory is owned by this script, so it says what belongs in it. */
 const keep = new Set([...written.map(([f]) => f), 'index.json', 'country-labels.json',
-                      ...reliefImages.map(([f]) => f)]);
+                      ...reliefSpec.map(([f]) => f)]);
 for (const f of await readdir(outDir).catch(() => [])) {
   if ((f.endsWith('.json') || f.endsWith('.png')) && !keep.has(f)) {
     await unlink(path.join(outDir, f));
@@ -1136,13 +1254,22 @@ for (const f of await readdir(outDir).catch(() => [])) {
   }
 }
 for (const [file, json] of written) await writeFile(path.join(outDir, file), json);
-for (const [file, pack, img] of reliefImages) {
-  const png = encodePng(img);
-  await writeFile(path.join(outDir, file), png);
-  index.files[file] = { layer: 'relief', bytes: png.length, width: img.width, height: img.height };
+for (const [file, pack, width] of reliefSpec) {
+  const made = reliefImages.find(([f]) => f === file);
+  let bytes;
+  if (made) {
+    const png = encodePng(made[2]);
+    await writeFile(path.join(outDir, file), png);
+    bytes = png.length;
+  } else {
+    // ★ Cached on disk from a previous run; its size still has to reach the index and the pack.
+    bytes = (await stat(path.join(outDir, file))).size;
+  }
+  index.files[file] = { layer: 'relief', bytes, width, height: width };
   index.packs[pack].files.push(file);
-  index.packs[pack].bytes += png.length;
-  console.error(`  relief ${file}: ${img.width}x${img.height}, ${(png.length / 1048576).toFixed(2)} MB`);
+  index.packs[pack].bytes += bytes;
+  console.error(`  relief ${file}: ${width}x${width}, ${(bytes / 1048576).toFixed(2)} MB`
+    + (made ? '' : ' (cached)'));
 }
 await writeFile(path.join(outDir, 'index.json'), JSON.stringify(index));
 

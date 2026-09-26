@@ -119,8 +119,9 @@
   .contLbl { font-size: 13px !important; letter-spacing: 3px; opacity: 0.5; }
   .rgnLbl { font: 400 11px ui-monospace, Menlo, monospace; color: #cbb98f; opacity: 0.6;
             letter-spacing: 2.2px; white-space: nowrap; transform: translate(-50%, -50%);
+            text-align: center; line-height: 1.3;
             text-shadow: 0 0 4px #000, 0 0 7px #000; pointer-events: none; }
-  .rgnLbl.sea { color: #8fb6cb; font-style: italic; opacity: 0.5; letter-spacing: 3px; }
+  .rgnLbl.sea { color: #8fb6cb; font-style: italic; opacity: 0.42; letter-spacing: 2px; }
   /* ★ Airports amber, heliports and ports dimmer -- the airfield is what an ATC listener is
    *  scanning for, so it wins the eye; a port is context until AIS makes it the subject. */
   .apLbl { font: 9px ui-monospace, Menlo, monospace !important; color: #e8b13a; opacity: 0.8;
@@ -1054,11 +1055,28 @@ async function drawRegionLabels() {
     if (rank > cut) continue;
     if (kind === 'sea' ? !rung('seas', z) : !rung('regions', z)) continue;
     if (!inBox(box, lon, lat)) continue;
-    const fontPx = Math.max(9, 13 - rank);
-    if (!place([lat, lon], name, fontPx, 'centre')) continue;
+    /* ★★ SEA NAMES ARE SMALLER THAN LAND ONES. Stuart: "Font size could be smaller on the seas."
+     *  They cover enormous empty areas, so at the same size as a mountain range they dominate a
+     *  view whose subject is the land. A sea label only has to be findable, not prominent. */
+    /* ★★ SEA NAMES ARE SMALLER THAN LAND ONES. They cover enormous empty areas, so at the same
+     *  size as a mountain range they dominate a view whose subject is the land. */
+    const fontPx = kind === 'sea' ? Math.max(7, 10 - rank) : Math.max(9, 13 - rank);
+    /* ★★★ LONG NAMES STACK, the way a paper atlas sets them:
+     *      NORTH
+     *      ATLANTIC
+     *      OCEAN
+     *  Stuart, 2026-09-26: "Dont be afraid to use multiple lines like other maps do." It is not
+     *  only prettier -- a 20-character label laid flat spans thousands of kilometres and sprawls
+     *  off the water it names, while a stacked one sits INSIDE the shape. That is also why the
+     *  collision box below measures the LONGEST WORD, not the whole string. */
+    const words = String(name).toUpperCase().split(/\s+/).filter(Boolean);
+    const stack = words.length > 1 && name.length > 11;
+    const lines = stack ? words : [words.join(' ')];
+    const widest = lines.reduce((m, l) => Math.max(m, l.length), 0);
+    if (!place([lat, lon], 'x'.repeat(widest), fontPx, 'centre', lines.length)) continue;
     L.marker([lat, lon], { interactive: false, icon: L.divIcon({
       className: 'rgnLbl' + (kind === 'sea' ? ' sea' : ''),
-      html: `<span style="font-size:${fontPx}px">${esc(name.toUpperCase())}</span>`,
+      html: `<span style="font-size:${fontPx}px">${lines.map(esc).join('<br>')}</span>`,
       iconSize: [0, 0], iconAnchor: [0, 0],
     }) }).addTo(regionLabelLayer);
   }
@@ -1177,11 +1195,18 @@ async function drawRelief() {
   if (!want) { if (reliefOverlay) { map.removeLayer(reliefOverlay); reliefOverlay = null; } return; }
   // ★ Prefer the finer image only when the detail pack is actually installed.
   const file = (cfg.detail && ix.files.has(cfg.detail)) ? cfg.detail : cfg.basic;
-  if (reliefOverlay && reliefOverlay._vibeFile === file) return;
+  if (reliefOverlay && reliefOverlay._vibeFile === file
+      && reliefOverlay.getLayers().length === worldOffsets().length) return;
   if (reliefOverlay) map.removeLayer(reliefOverlay);
   const lat = cfg.mercatorLat || 85.0511287798066;
-  reliefOverlay = L.imageOverlay(MD + file, [[-lat, -180], [lat, 180]],
-    { pane: 'relief', opacity: 0.92, interactive: false, className: 'reliefImg' });
+  /* ★ One overlay per visible world copy, in a group: an imageOverlay has fixed bounds, so the
+   *  only way it can appear twice is to BE twice. */
+  reliefOverlay = L.layerGroup();
+  for (const dx of worldOffsets()) {
+    L.imageOverlay(MD + file, [[-lat, -180 + dx], [lat, 180 + dx]],
+      { pane: 'relief', opacity: 0.92, interactive: false, className: 'reliefImg' })
+      .addTo(reliefOverlay);
+  }
   reliefOverlay._vibeFile = file;
   reliefOverlay.addTo(map);
 }
@@ -1324,6 +1349,12 @@ const LADDER = {
   regions: [3, 6],
   seas: [2, 6],
   countries: [4, 7],
+  /* ★★★ CITIES START AT z5. They were appearing at z3 and Stuart called it: "the cities are still
+   *  showing in zoomed out view." The ladder puts large cities on the FOURTH rung, and a rung that
+   *  leaks upward defeats the whole point of having one — at z3 the map should answer "what is
+   *  that region", and a scatter of capitals over it answers a question nobody asked.
+   *  ★ No upper bound: towns stay all the way in, they just get denser. */
+  cities: [5, 22],
 };
 const rung = (k, z) => z >= LADDER[k][0] && z <= LADDER[k][1];
 
@@ -1384,7 +1415,33 @@ const CAP = { places: 700, airports: 200, ports: 80 };
 /** The view, grown by a margin so a small pan does not strip the edges before `moveend` fires. */
 function viewBox() {
   const b = map.getBounds().pad(0.25);
-  return [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+  const w = b.getWest(); const e = b.getEast();
+  /* ★★ NORMALISED TO ONE WORLD for data lookup. On a wide screen at z3 the bounds run past ±180
+   *  and every bbox test then fails against data that only exists once. The COPIES are drawn by
+   *  worldOffsets() below; the culling box always describes a single world. */
+  if (e - w >= 360) return [-180, b.getSouth(), 180, b.getNorth()];
+  return [((w + 180) % 360 + 360) % 360 - 180, b.getSouth(),
+          ((e + 180) % 360 + 360) % 360 - 180, b.getNorth()];
+}
+
+/* ★★★ THE WORLD IS DRAWN ONCE PER VISIBLE COPY. Stuart on a wide display, 2026-09-26: "the map can
+ *  wrap around here ... joys of a wide screen." A TILE layer wraps for free because Leaflet asks
+ *  for tile (x mod n); VECTORS do not — a polygon at lon -170 exists once, and past the antimeridian
+ *  there is simply nothing, which is the dark band either side of the world he is seeing.
+ *  ★★ So each layer is drawn at lon + k*360 for every k the viewport touches. Leaflet is perfectly
+ *  happy with coordinates outside ±180 — it projects them, which is exactly what a second copy is.
+ *  ★ Applied to the layers VISIBLE when wrapping is possible (z<=4-ish): terrain, land, cover,
+ *  water, islands, and the labels that ride on them. ✗ NOT to roads, runways or the locator grid —
+ *  those only draw from z5, z9 and z12, by which point one world fills the screen many times over
+ *  and the extra copies would be pure work for nothing. */
+function worldOffsets() {
+  const b = map.getBounds();
+  const lo = Math.floor((b.getWest() + 180) / 360);
+  const hi = Math.floor((b.getEast() + 180) / 360);
+  if (hi - lo > 4) return [0];                 // pathological zoom-out: one world is enough
+  const out = [];
+  for (let k = lo; k <= hi; k++) out.push(k * 360);
+  return out.length ? out : [0];
 }
 const inBox = ([w, s, e, n], lon, lat) => lat >= s && lat <= n
   && (w <= e ? (lon >= w && lon <= e) : (lon >= w || lon <= e));   // the antimeridian case
@@ -1445,9 +1502,10 @@ async function drawIslands() {
     z >= 4 ? layer(t === 'tier0' ? 'tier1' : t, 'playas', box) : Promise.resolve(null),
   ]);
   islandLayer.clearLayers();
+  const offs = worldOffsets();
   for (const ring of islands || []) {
     if (!ringInView(ring, box)) continue;
-    L.polygon(ring.map(([lon, lat]) => [lat, lon]),
+    for (const dx of offs) L.polygon(ring.map(([lon, lat]) => [lat, lon + dx]),
       inPane('land', { color: MAP_COAST, weight: 0.5, opacity: 0.8,
                        fillColor: MAP_LAND, fillOpacity: 1 })).addTo(islandLayer);
   }
@@ -1495,14 +1553,15 @@ async function drawWater() {
     z >= 5 ? pick2('admin1') : Promise.resolve(null),
   ]);
   shelfLayer.clearLayers(); waterLayer.clearLayers(); adminLayer.clearLayers();
+  const offs = worldOffsets();
   for (const ring of shelf || []) {
     if (!ringInView(ring, box)) continue;
-    L.polygon(ring.map(([lon, lat]) => [lat, lon]),
+    for (const dx of offs) L.polygon(ring.map(([lon, lat]) => [lat, lon + dx]),
       inPane('shelf', { stroke: false, fillColor: MAP_SHELF, fillOpacity: 0.55 })).addTo(shelfLayer);
   }
   for (const ring of lakes || []) {
     if (!ringInView(ring, box)) continue;
-    L.polygon(ring.map(([lon, lat]) => [lat, lon]),
+    for (const dx of offs) L.polygon(ring.map(([lon, lat]) => [lat, lon + dx]),
       inPane('water', { stroke: false, fillColor: MAP_LAKE, fillOpacity: 1 })).addTo(waterLayer);
   }
   let n = 0;
@@ -1543,11 +1602,14 @@ async function drawCover() {
     bestTier(tierFor('urban', z0)).then((t) => layer(t, 'urban', box)),
   ]);
   coverLayer.clearLayers(); urbanLayer.clearLayers();
+  const offs = worldOffsets();
   const paint = (rings, target, pane, colour, opacity) => {
     for (const ring of rings || []) {
       if (!ringInView(ring, box)) continue;
-      L.polygon(ring.map(([lon, lat]) => [lat, lon]),
-        inPane(pane, { stroke: false, fillColor: colour, fillOpacity: opacity })).addTo(target);
+      for (const dx of offs) {
+        L.polygon(ring.map(([lon, lat]) => [lat, lon + dx]),
+          inPane(pane, { stroke: false, fillColor: colour, fillOpacity: opacity })).addTo(target);
+      }
     }
   };
   for (const [k, colour] of Object.entries(COVER_COLOUR)) paint(cover?.[k], coverLayer, 'cover', colour, 0.85);
@@ -1580,12 +1642,15 @@ async function drawBase() {
   if (!countries) return;
   const box = viewBox();
   basemap.clearLayers();
+  const offs = worldOffsets();
   for (const rings of Object.values(countries)) {
     for (const ring of rings) {
       if (!ringInView(ring, box)) continue;
-      L.polygon(ring.map(([lon, lat]) => [lat, lon]), inPane('land', {
-        color: MAP_COAST, weight: 0.6, opacity: 0.8, fillColor: MAP_LAND, fillOpacity: 1,
-      })).addTo(basemap);
+      for (const dx of offs) {
+        L.polygon(ring.map(([lon, lat]) => [lat, lon + dx]), inPane('land', {
+          color: MAP_COAST, weight: 0.6, opacity: 0.8, fillColor: MAP_LAND, fillOpacity: 1,
+        })).addTo(basemap);
+      }
     }
   }
   mapTier.at = t;
@@ -1619,10 +1684,11 @@ function serverBoxes() {
 
 function labelPlacer(padPx = 2) {
   const placed = serverBoxes();
-  return (latlng, text, fontPx, anchor = 'right') => {
+  return (latlng, text, fontPx, anchor = 'right', lines = 1) => {
     const p = map.latLngToContainerPoint(latlng);
     const w = text.length * fontPx * 0.62 + padPx * 2;
-    const h = fontPx + padPx * 2;
+    // ★ A stacked label is taller, not wider — the box has to follow or it will overlap below.
+    const h = fontPx * (lines === 1 ? 1 : lines * 1.3) + padPx * 2;
     const x = anchor === 'centre' ? p.x - w / 2 : p.x + 4;
     const y = anchor === 'centre' ? p.y - h * 1.4 : p.y - h / 2;
     for (const b of placed) {
@@ -1658,8 +1724,9 @@ async function drawPlaces() {
    *  competes for space on it. */
   /* ★★ A 'major' profile stops the ladder at large cities however far you zoom in: on an
    *  aircraft map Brixworth is not orientation, it is interference. */
-  const rankCut = P.places === 'major' ? (z <= 3 ? 1 : 3)
-    : z <= 2 ? 0 : z <= 3 ? 1 : z <= 4 ? 2 : z <= 5 ? 4 : 9;
+  if (!rung('cities', z)) return;           // ★ the ladder decides, not a per-site zoom check
+  const rankCut = P.places === 'major' ? 3
+    : z <= 5 ? 4 : z <= 6 ? 6 : 9;
   for (const [name, lon, lat, rank, cap] of cands) {
     if ((rank ?? 9) > rankCut && cap !== 1) continue;
     // ★ Even capitals thin at the very top: Vaduz and San Marino are not world-view cities.
