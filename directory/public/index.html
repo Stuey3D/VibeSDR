@@ -101,12 +101,15 @@
   /* ★ Country names sit ABOVE the town labels in weight and BELOW them in brightness -- larger so
        they read as the bigger thing, dimmer so they stay behind the receivers. */
   .reliefImg { image-rendering: auto; }
-  .mapLbl.major { font-size: 11px !important; font-weight: 700; opacity: 0.95; letter-spacing: 0.3px; }
+  .mapLbl.major { font-size: 11px; font-weight: 700; opacity: 0.95; letter-spacing: 0.3px; }
   .mapLbl.admin1 { opacity: 0.85; }
   /* ★ A capital is amber against every other label's pale grey -- the one colour on the map that
    *  is not a landform, so it cannot be mistaken for terrain. */
-  .mapLbl.capital { font-size: 12px !important; font-weight: 700; color: #f0c56a !important;
+  .mapLbl.capital { font-size: 12px; font-weight: 700; color: #f0c56a !important;
                     opacity: 1; letter-spacing: 0.6px; }
+  /* ★ Centred over the place, with a heavy shadow so it stays readable across terrain. */
+  .mapLbl.shout { transform: translate(-50%, -140%); letter-spacing: 2px; font-weight: 700;
+                  text-shadow: 0 0 5px #000, 0 0 9px #000, 0 1px 2px #000; }
   /* ★ Runway designators sit ON the threshold, centred, in the same pale tone as the tarmac. */
   .rwLbl { font: 9px ui-monospace, Menlo, monospace !important; color: #e8e2d4; opacity: 0.85;
            font-weight: 700; letter-spacing: 0.5px; white-space: nowrap;
@@ -972,6 +975,11 @@ const MAP_URBAN = '#5a5d62', MAP_DESERT = '#6d6142', MAP_TUNDRA = '#4a5750',
       /* ★ Mountain ranges: a pale grey-stone, DIMMER than the ice. An alpine range and a glacier
        *  next to each other must still be distinguishable -- the Alps carry both. */
       MAP_ALPINE = '#6f7581';
+/* ★ Reef, salt flat and capital-city colours. These were REFERENCED for an hour before they were
+ *  DEFINED: two `replace()` edits silently matched nothing and I did not assert on them, so the
+ *  code compiled and only threw when a capital first entered the viewport. ✗ Never edit this file
+ *  with an unasserted replace -- a no-op edit leaves no trace at all. */
+const MAP_REEF = '#4e8f93', MAP_PLAYA = '#8a8470', MAP_CAPITAL = '#f0c56a';
 const MAP_SEA = '#123049', MAP_LAND = '#3c5a3f', MAP_COAST = '#6fa37b';
 document.getElementById(map.getContainer().id || 'map').style.background = MAP_SEA;
 map.getContainer().style.background = MAP_SEA;
@@ -1074,7 +1082,11 @@ function drawGrid() {
   if (z < 3) return;
   /* ★ THREE LEVELS, matching the locator's three pairs: fields at world view, squares regionally,
    *  and subsquares once you are close enough that IO92nh is a place rather than a county. */
-  const level = z >= 9 ? 2 : z >= 6 ? 1 : 0;
+  /* ★★★ SUBSQUARES START AT z12, NOT z9. At z9 a wide window spans ~8 deg of longitude, which is
+   *  96 subsquare columns by 140 rows -- THIRTEEN THOUSAND labels, and the map disappeared under
+   *  them. The grid is a reference, not the subject; the moment it is easier to read than the
+   *  coastline it has stopped being useful. */
+  const level = z >= 12 ? 2 : z >= 6 ? 1 : 0;
   const dLon = [20, 2, 2 / 24][level];
   const dLat = [10, 1, 1 / 24][level];
   const chars = [2, 4, 6][level];
@@ -1084,8 +1096,12 @@ function drawGrid() {
   const e = Math.min(180, Math.ceil(b.getEast() / dLon) * dLon);
   const s = Math.max(-90, Math.floor(b.getSouth() / dLat) * dLat);
   const n = Math.min(90, Math.ceil(b.getNorth() / dLat) * dLat);
-  // ★ Guard: a wide view at a fine step would be thousands of polylines.
-  if ((e - w) / dLon > 140 || (n - s) / dLat > 140) return;
+  /* ★★★ A HARD CELL BUDGET, not just a per-axis guard. The old check allowed 140 x 140 = 19,600
+   *  cells and still called that safe -- per-axis limits multiply, which is exactly how a guard
+   *  that looks reasonable lets through a number that is not. */
+  const cols = (e - w) / dLon;
+  const rows = (n - s) / dLat;
+  if (cols * rows > 900) return;
   const style = { color: '#c98f2e', weight: fine ? 0.4 : 0.7, opacity: level === 2 ? 0.18 : fine ? 0.22 : 0.34,
                   interactive: false, pane: 'admin', renderer: paneRenderer.admin };
   for (let lon = w; lon <= e; lon += dLon) {
@@ -1094,7 +1110,8 @@ function drawGrid() {
   for (let lat = s; lat <= n; lat += dLat) {
     L.polyline([[lat, w], [lat, e]], style).addTo(gridLayer);
   }
-  if (z < 4) return;
+  // ★ Labels are dearer than lines: a DOM node each. Their budget is tighter than the grid's.
+  if (z < 4 || cols * rows > 320) return;
   for (let lon = w; lon < e; lon += dLon) {
     for (let lat = s; lat < n; lat += dLat) {
       const code = maidenhead(lon + dLon / 2, lat + dLat / 2);
@@ -1260,7 +1277,8 @@ async function drawCountryNames() {
  *  what a map is expected to do and what the global cut could not promise across two datasets with
  *  incompatible rank scales (Natural Earth scalerank vs a rank synthesised from population).
  *  ✗ Do not reintroduce a global cut. It cannot be right for both datasets at once. */
-const CAP = { places: 300, airports: 200, ports: 80 };
+// ★ Generous now: the COLLISION PLACER decides what actually appears, not this number.
+const CAP = { places: 700, airports: 200, ports: 80 };
 /** The view, grown by a margin so a small pan does not strip the edges before `moveend` fires. */
 function viewBox() {
   const b = map.getBounds().pad(0.25);
@@ -1473,6 +1491,31 @@ async function drawBase() {
 
 }
 
+/* ★★★ LABELS ARE PLACED BY COLLISION, NOT BY COUNT. A cap of 300 is right for the WORLD and
+ *  absurd over London, where 300 GeoNames towns land in one viewport and the map vanishes under
+ *  its own place names. The count was never the real control: what matters is whether two labels
+ *  overlap ON SCREEN, which depends on zoom, text length and font size, none of which a cap knows.
+ *  ★★ Greedy, in rank order: the most important place is placed first and keeps its space, so
+ *  LONDON survives and Chalfont St Peter is the one that drops. That ordering is the whole point --
+ *  a naive pass would let whichever town came first in the file evict the capital.
+ *  ★ Cheap on purpose: an axis-aligned box per label and a linear scan. At a few hundred
+ *  candidates that is nothing, and it runs once per redraw, not per frame. */
+function labelPlacer(padPx = 2) {
+  const placed = [];
+  return (latlng, text, fontPx, anchor = 'right') => {
+    const p = map.latLngToContainerPoint(latlng);
+    const w = text.length * fontPx * 0.62 + padPx * 2;
+    const h = fontPx + padPx * 2;
+    const x = anchor === 'centre' ? p.x - w / 2 : p.x + 4;
+    const y = anchor === 'centre' ? p.y - h * 1.4 : p.y - h / 2;
+    for (const b of placed) {
+      if (x < b.x + b.w && x + w > b.x && y < b.y + b.h && y + h > b.y) return false;
+    }
+    placed.push({ x, y, w, h });
+    return true;
+  };
+}
+
 async function drawPlaces() {
   const z = map.getZoom(), box = viewBox();
   const places = await layer(await bestTier(tierFor('places', z)), 'places', box);
@@ -1485,18 +1528,41 @@ async function drawPlaces() {
    *  faster than size at a glance.
    *  ★ Capital flag: 1 = national, 2 = regional. Absent means 0 -- the generator omits it rather
    *  than write seven thousand trailing zeroes. */
-  for (const [name, lon, lat, rank, cap] of pick(places, box, CAP.places, (r) => r[3] ?? 9)) {
+  /* ★ Candidates come in rank order so the placer's greedy pass is also an importance pass. */
+  const cands = pick(places, box, CAP.places, (r) => r[3] ?? 9)
+    .sort((a, b) => (a[3] ?? 9) - (b[3] ?? 9));
+  const place = labelPlacer();
+  for (const [name, lon, lat, rank, cap] of cands) {
     const r = rank ?? 9;
     const major = r <= 2;
     const cls = cap === 1 ? 'mapLbl capital' : major ? 'mapLbl major' : cap === 2 ? 'mapLbl admin1' : 'mapLbl';
+    /* ★★★ A MAJOR CITY'S LABEL GROWS WITH ZOOM. Stuart at z9 over the south-east: "at this level
+     *  London needs a big LONDON label over it." He is right, and a fixed 12 px could never do it
+     *  -- at world view that is already shouting, and at z9 it whispers. The size is therefore a
+     *  function of BOTH rank and zoom: important places get louder as you close in on them, the
+     *  way a real map's type does.
+     *  ★ Uppercase and centred above the dot for the top tier only: it is a label for a REGION of
+     *  the map at that point, not a pin for a point on it. */
+    const shout = cap === 1 || r === 0;
+    const px = shout ? Math.min(22, 11 + Math.max(0, z - 5) * 1.5)
+      : major ? Math.min(14, 10 + Math.max(0, z - 6) * 0.6) : 0;
     L.circleMarker([lat, lon], inPane('place', {
       radius: cap === 1 ? 2.6 : major ? 2.2 : 1.5,
       weight: cap === 1 ? 1 : 0, color: MAP_CAPITAL,
       fillColor: cap === 1 ? MAP_CAPITAL : MAP_TOWN,
       fillOpacity: cap === 1 ? 0.55 : 0.9,
     })).addTo(placeLayer);
-    if (z >= 4 || major || cap === 1) L.marker([lat, lon], { interactive: false, icon: L.divIcon({
-      className: cls, html: esc(name), iconSize: [0, 0], iconAnchor: [-5, 6],
+    if (!(z >= 4 || major || cap === 1)) continue;
+    const big = shout && z >= 7;
+    const text = big ? String(name).toUpperCase() : String(name);
+    const fontPx = px || (major ? 11 : cap === 2 ? 9 : 9);
+    if (!place([lat, lon], text, fontPx, big ? 'centre' : 'right')) continue;
+    /* ★ The size is inline because it is computed from rank AND zoom together; a CSS class can
+     *  express one or the other but not the product. */
+    L.marker([lat, lon], { interactive: false, icon: L.divIcon({
+      className: cls + (big ? ' shout' : ''),
+      html: `<span style="font-size:${fontPx.toFixed(1)}px">${esc(text)}</span>`,
+      iconSize: [0, 0], iconAnchor: big ? [0, 0] : [-5, 6],
     }) }).addTo(placeLayer);
   }
 }

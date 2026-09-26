@@ -295,3 +295,34 @@ nothing to serve, nothing to expire, nothing to cache and nothing to go black. A
 somebody else's RENDERING of the world handed over as a picture; this is the world as DATA and the
 picture is ours. That is why the palette is a one-line change, why airports are filterable objects
 rather than baked pixels, and why a Pi Zero with no uplink can still draw a map.
+
+## ▶ PARKED — "airports dropdown -> nearby airband servers" (2026-09-26)
+
+Stuart's idea, and the data for it is ALREADY BUNDLED: 1,174 large airports with ICAO/IATA, and the
+directory already ranks receivers by distance for "Find a station". It is roughly a twenty-minute
+job whenever it is wanted.
+
+★★ **PARKED DELIBERATELY, AND FOR THE RIGHT REASON.** Stuart, 2026-09-26: *"there is build it and
+they will come and there is build an entire city and they will come ... without servers we cannot
+test it accurately either."* With 7 servers the ranking returns whatever it returns and NOBODY CAN
+TELL IF IT IS GOOD. A ranking that cannot be evaluated cannot be trusted, and shipping one teaches
+users to distrust the next one.
+
+### ★★★ THE DESIGN INSIGHT THAT MUST SURVIVE THE PARKING: THREE RANGES, NOT ONE
+"Nearest server to the airport" is the WRONG query, and Stuart's own station proves it — he hears
+UK area control clearly from Daventry, nowhere near an airport.
+
+| what you hear | transmitted from | useful range |
+|---|---|---|
+| Tower / ground / ATIS | the airfield itself | ~50–80 km (line of sight to the surface) |
+| The AIRCRAFT side only | aircraft at FL350 | ~300–400 km |
+| **Area control (e.g. London Control)** | **NATS remote relay sites** | wherever the relay reaches |
+
+★★★ A plain distance sort presents all three identically, so a user picks a far receiver expecting
+a tower and gets one side of every conversation. Worse, it would MISS THE BEST UK CASE ENTIRELY:
+a receiver far from any airport that hears en-route ATC beautifully via a relay.
+▶ Owed if built: a list of NATS relay sites (Daventry, Clee Hill, Great Dun Fell…). No open dataset
+found; it would need compiling.
+★ Carry over the existing honesty caveat verbatim — we know a receiver's LOCATION and HARDWARE
+RANGE, never its ANTENNA, and airband is AM. [[client_infers_server_decisions]] in spirit: do not
+let the UI imply knowledge the data does not contain.
