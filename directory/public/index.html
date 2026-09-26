@@ -93,6 +93,8 @@
   /* ★ Country names sit ABOVE the town labels in weight and BELOW them in brightness -- larger so
        they read as the bigger thing, dimmer so they stay behind the receivers. */
   .reliefImg { image-rendering: auto; }
+  .gridLbl { font: 9px ui-monospace, Menlo, monospace !important; color: #c98f2e; opacity: 0.4;
+             letter-spacing: 1px; white-space: nowrap; transform: translate(-50%, -50%); }
   .contLbl { font-size: 13px !important; letter-spacing: 3px; opacity: 0.5; }
   /* ★ Airports amber, heliports and ports dimmer -- the airfield is what an ATC listener is
    *  scanning for, so it wins the eye; a port is context until AIS makes it the subject. */
@@ -1016,6 +1018,57 @@ function tierName(z) { return z <= 4 ? 'tier0' : z <= 7 ? 'tier1' : 'tier2'; }
  *  reprojected with that exact constant, and 85 instead of 85.0511 slides it off the coast.
  *  ★ Hidden past z9: at 2 arc-minutes a pixel is ~3.7 km, and beyond that it is just blur over
  *  data that is already more accurate. */
+/* ★★★ THE MAIDENHEAD GRID IS COMPUTED, NOT DOWNLOADED. Stuart asked whether it needed licensing
+ *  (2026-09-26); it does not, because it is not data. The locator system is 18x18 fields of
+ *  20 deg x 10 deg, each divided into 10x10 squares of 2 deg x 1 deg, and that definition is the
+ *  whole dataset. It cannot go stale, it cannot be wrong, and it weighs nothing.
+ *  ★★ Only the lines CROSSING THE VIEW are generated, and only at a zoom where they mean
+ *  something: fields from z3, the finer squares from z6. Drawing the whole world's grid at z2 is
+ *  324 fields of unreadable labels over a map nobody is reading the grid on.
+ *  ★ The labels sit at each cell's CENTRE rather than a corner -- a locator names an area, and a
+ *  label on the line reads as belonging to whichever cell the eye picks. */
+const gridLayer = L.layerGroup().addTo(map);
+function maidenhead(lon, lat) {
+  const L1 = Math.floor((lon + 180) / 20);
+  const L2 = Math.floor((lat + 90) / 10);
+  const n1 = Math.floor(((lon + 180) % 20) / 2);
+  const n2 = Math.floor((lat + 90) % 10);
+  return String.fromCharCode(65 + L1) + String.fromCharCode(65 + L2) + n1 + n2;
+}
+function drawGrid() {
+  gridLayer.clearLayers();
+  const z = map.getZoom();
+  if (z < 3) return;
+  const fine = z >= 6;
+  const dLon = fine ? 2 : 20;
+  const dLat = fine ? 1 : 10;
+  const b = map.getBounds();
+  const w = Math.max(-180, Math.floor(b.getWest() / dLon) * dLon);
+  const e = Math.min(180, Math.ceil(b.getEast() / dLon) * dLon);
+  const s = Math.max(-90, Math.floor(b.getSouth() / dLat) * dLat);
+  const n = Math.min(90, Math.ceil(b.getNorth() / dLat) * dLat);
+  // ★ Guard: a wide view at a fine step would be thousands of polylines.
+  if ((e - w) / dLon > 120 || (n - s) / dLat > 120) return;
+  const style = { color: '#c98f2e', weight: fine ? 0.4 : 0.7, opacity: fine ? 0.22 : 0.34,
+                  interactive: false, pane: 'admin', renderer: paneRenderer.admin };
+  for (let lon = w; lon <= e; lon += dLon) {
+    L.polyline([[s, lon], [n, lon]], style).addTo(gridLayer);
+  }
+  for (let lat = s; lat <= n; lat += dLat) {
+    L.polyline([[lat, w], [lat, e]], style).addTo(gridLayer);
+  }
+  if (z < 4) return;
+  for (let lon = w; lon < e; lon += dLon) {
+    for (let lat = s; lat < n; lat += dLat) {
+      const code = maidenhead(lon + dLon / 2, lat + dLat / 2);
+      L.marker([lat + dLat / 2, lon + dLon / 2], { interactive: false, icon: L.divIcon({
+        className: 'gridLbl', html: fine ? code : code.slice(0, 2),
+        iconSize: [0, 0], iconAnchor: [0, 0],
+      }) }).addTo(gridLayer);
+    }
+  }
+}
+
 let reliefOverlay = null;
 async function drawRelief() {
   const ix = await mapManifest();
@@ -1104,7 +1157,8 @@ async function bestTier(want) {
  *  ✗ Do not collapse this back into one rule: it is the difference between a 0.3 MB step and a
  *  9 MB one, and they do not deserve the same threshold. */
 const TIER_STEP = { countries: 10, cover: 8, urban: 8, roads: 8, rivers: 7, lakes: 7,
-                    admin1: 8, shelf: 8, places: 8, airports: 8 };
+                    admin1: 8, shelf: 8, places: 8, airports: 8, islands: 7,
+                    reefs: 7, playas: 7 };
 function tierFor(what, z) {
   if (z <= 4) return 'tier0';
   return z >= (TIER_STEP[what] ?? 8) ? 'tier2' : 'tier1';
@@ -1218,6 +1272,58 @@ const roadLayer = L.layerGroup().addTo(map);
 const shelfLayer = L.layerGroup().addTo(map);
 const waterLayer = L.layerGroup().addTo(map);      // lakes + rivers
 const adminLayer = L.layerGroup().addTo(map);      // state/province lines
+/* ★★★ MINOR ISLANDS, REEFS AND SALT FLATS.
+ *  ★★ The islands are a CORRECTNESS fix, not decoration: Natural Earth's country polygons drop
+ *  the small ones, and on a DX map those are exactly the wrong ones to lose -- Ascension,
+ *  Tristan da Cunha, St Helena and Rockall are what a listener is hunting for.
+ *  ★ Reefs draw as LINES rather than fills: the Great Barrier Reef is a hazard boundary, and a
+ *  solid fill would read as shallow land. */
+const islandLayer = L.layerGroup().addTo(map);
+async function drawIslands() {
+  const z = map.getZoom(), box = viewBox();
+  const t = await bestTier(tierFor('islands', z));
+  const [islands, reefs, playas] = await Promise.all([
+    layer(t, 'islands', box),
+    z >= 4 ? layer(t === 'tier0' ? 'tier1' : t, 'reefs', box) : Promise.resolve(null),
+    z >= 4 ? layer(t === 'tier0' ? 'tier1' : t, 'playas', box) : Promise.resolve(null),
+  ]);
+  islandLayer.clearLayers();
+  for (const ring of islands || []) {
+    if (!ringInView(ring, box)) continue;
+    L.polygon(ring.map(([lon, lat]) => [lat, lon]),
+      inPane('land', { color: MAP_COAST, weight: 0.5, opacity: 0.8,
+                       fillColor: MAP_LAND, fillOpacity: 1 })).addTo(islandLayer);
+  }
+  for (const ring of playas || []) {
+    if (!ringInView(ring, box)) continue;
+    L.polygon(ring.map(([lon, lat]) => [lat, lon]),
+      inPane('cover', { stroke: false, fillColor: MAP_PLAYA, fillOpacity: 0.8 })).addTo(islandLayer);
+  }
+  for (const line of reefs || []) {
+    if (!ringInView(line, box)) continue;
+    L.polyline(line.map(([lon, lat]) => [lat, lon]),
+      inPane('water', { color: MAP_REEF, weight: 0.7, opacity: 0.5 })).addTo(islandLayer);
+  }
+}
+
+/* ★ Equator, tropics and polar circles -- and on a radio map these are not trivia: the greyline's
+ *  behaviour changes at exactly those latitudes, which is why they are drawn at all. */
+const geoLineLayer = L.layerGroup().addTo(map);
+async function drawGeoLines() {
+  geoLineLayer.clearLayers();
+  const z = map.getZoom();
+  if (z < 2 || z > 8) return;
+  const gl = await layer('tier0', 'geolines');
+  for (const { name, lines } of gl || []) {
+    const tropic = /Tropic/i.test(name);
+    for (const line of lines) {
+      L.polyline(line.map(([lon, lat]) => [lat, lon]),
+        inPane('admin', { color: '#c98f2e', weight: 0.6, opacity: tropic ? 0.3 : 0.42,
+                          dashArray: tropic ? '6,6' : null })).addTo(geoLineLayer);
+    }
+  }
+}
+
 async function drawWater() {
   const z = map.getZoom(), box = viewBox();
   const pick2 = (what) => bestTier(tierFor(what, z)).then((t) => layer(t, what, box));
@@ -1381,7 +1487,9 @@ function redrawMap() {
   redrawT = setTimeout(() => {
     if (drawing) return;
     drawing = true;
+    drawGrid();
     Promise.all([drawBase(), drawRelief(), drawCover(), drawWater(), drawRoads(),
+                 drawIslands(), drawGeoLines(),
                  drawCountryNames(), drawPlaces(), drawPoi()])
       // ★★★ NEVER SWALLOW A DRAW ERROR AGAIN. The silent .catch here is precisely why a TypeError
       //   in drawBase looked like "the feature did not ship" for two deploys.

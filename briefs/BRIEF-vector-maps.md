@@ -188,3 +188,81 @@ take our palette, and its POIs are pixels rather than filterable airport data fo
 native Swift, no flyover, MapKit already present and free. ✗ Bundle nothing into Jr.
 ★ MapKit licensing, as understood (VERIFY before relying): native MapKit is free and unmetered on
 Apple platforms; MapKit JS is metered (~250k map loads/day) against the paid developer membership.
+
+## 2026-09-26 (later) — a realistic planet, and the build-heavy/runtime-light rule
+
+Stuart: *"I would like the map to look like a realistic representation of the world just at a more
+coarse detail level for performance and space saving"* and *"if you need big downloads to compose
+the detail into the map that is fine, as long as our map remains compact and high performance."*
+
+★★★ **THAT IS THE GOVERNING RULE NOW: SPEND ANY AMOUNT AT BUILD TIME, SHIP ALMOST NOTHING.** The
+generator's cache is ~1.7 GB of other people's release artefacts (HydroLAKES 820 MB, Ecoregions
+243 MB, ETOPO2 73 MB, Natural Earth ~50 MB). None of it reaches the repo, an artefact or a user.
+
+### ★★★ TERRAIN AND BIOME ARE RASTERS, AND THAT IS NOT A RETREAT FROM DROPPING TILES
+What we threw away was a **DEPENDENCY** — images fetched on demand from a server that blocked us.
+A bundled image has none of those failure modes. And both of these are genuinely **FIELDS**: every
+point on Earth has exactly one elevation and one biome. Expressing a field as polygons is what
+produced the mountain blobs. Coastlines, roads and lakes are shapes and stay vectors.
+
+| what | source | licence | how it ships |
+|---|---|---|---|
+| elevation + **bathymetry** | ETOPO2v2c | public domain | painted into relief.png |
+| biome (14 classes, 847 ecoregions) | RESOLVE Ecoregions 2017 | **CC BY 4.0** | painted into relief.png |
+
+★★ **ETOPO2v2c WAS CHOSEN OVER ETOPO 2022 DELIBERATELY** — it is a plain int16 grid with no
+container format, so no GDAL and no netCDF library stands between anyone and a map rebuild.
+
+★★★ **HALF THE GRID WAS BEING THROWN AWAY.** The first relief discarded every cell at or below sea
+level, so the map had the Himalaya and a flat blue nothing where the Mid-Atlantic Ridge, the
+trenches and the shelves are. Same file, already parsed: the ocean floor cost NOTHING. ★ And it is
+not decoration on a radio map — the shelf edge is where the HF ground-wave path changes, and for
+AIS the shelf IS where the shipping is.
+
+### Three things in the relief that are correctness, not style
+1. ★★★ **REPROJECTED TO WEB MERCATOR AT BUILD TIME.** `L.imageOverlay` stretches linearly in
+   PROJECTED space. An equirectangular image at ±85° slides Britain hundreds of km south. Doing it
+   in the generator also keeps the renderer dumb, which is where that belongs.
+2. ★★★ **ALPHA FADES OUT WITHIN 120 m OF SEA LEVEL, BOTH WAYS.** NOAA's grid and Natural Earth's
+   coastline disagree by a cell or two *everywhere*; a hard edge scatters green specks into the
+   vector sea. Fading makes the two sources agree by construction — neither asserts anything where
+   they differ.
+3. ★ **The biome owns the lowlands, elevation takes over above ~1200 m**, blended not switched. A
+   hard switch draws a contour line across every mountain.
+
+### ★★★ WHAT THE BIOME RASTER RETIRED
+`COVER_CLASSES` is now **empty**. It held Desert/Tundra/Wetlands — 58, 4 and 3 Natural Earth
+polygons picked because they looked like the right idea. A peer-reviewed global classification
+covers all land correctly, so the old ones would sit ON TOP of a better answer and contradict it.
+Only **ice stays a vector**: an ice sheet has a hard edge worth keeping crisp, and it must still
+draw when the relief image is hidden past z9.
+
+### The mountain-blob lesson, kept
+✗ **NEVER fill Natural Earth's `Range/mtn`.** They are envelopes drawn around a range so a LABEL
+can be placed on it. One covers Belgium. Stuart: *"the mountains look a bit shit, bit like big
+random blobs."* Removed from the DATA, not merely hidden — same rule as AGENTS.md's dead control:
+a feature that misdescribes the world is worse than an absent one, because the user believes it.
+
+### Sharding, and why it is not just a size workaround
+tier2-lakes broke Cloudflare's 25 MiB asset limit, and the fix turned out to be the feature:
+heavy layers split **recursively by density** (a fixed 6x3 grid put 89,390 lakes in one cell
+covering Europe). Each shard records its own DATA bbox, not its grid cell, so an item overhanging
+its cell is still found — testing against the cell clips features at every seam, which looks like
+missing data and is very hard to see. Measured over Northampton: **606 lakes loaded, not 184,869.**
+
+### ★★★ STORE POLICY — A SEPARATE MAP PACK IS FINE, AND WHY
+Both stores restrict **executable code**, not data: Apple 2.5.2 (no downloading/executing code),
+Play's Device and Network Abuse policy (no DEX/native from outside Play). Map data, game assets and
+media are explicitly normal — TomTom and every large mobile game work this way, and both platforms
+ship first-party mechanisms (Apple On-Demand Resources, Google Play Asset Delivery) we could adopt
+later. ▶ Owed regardless: **state the size before downloading**, and **default to Wi-Fi only**.
+★ basic (~18 MB) is nowhere near Play's 200 MB base-APK limit and the detail pack is outside the
+APK entirely.
+
+### ✗ Jr stays on MapKit
+Stuart: *"Jr doesnt need them since they already use apple's mapkit."* Native Swift, no flyover
+animation, MapKit already present and free. ✗ Bundle nothing into Jr. And ✗ do NOT move the iOS app
+to MapKit: it would refetch during the HFDL flyover, split the app into two renderers, and **die
+completely offline** — which kills the pocket-VibeServer case where an iPhone is the likeliest
+client. We would still need the vectors for Android, web and the server, so MapKit is extra code,
+not less.

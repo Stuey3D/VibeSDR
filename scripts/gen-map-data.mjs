@@ -39,7 +39,7 @@
  */
 import { readFile, writeFile, mkdir, stat, readdir, unlink } from 'node:fs/promises';
 import { readDbf, eachPolygon } from './lib/shapefile.mjs';
-import { readEtopo, buildRelief, encodePng, MERC_LAT } from './lib/relief.mjs';
+import { readEtopo, buildRelief, encodePng, rasteriseBiomes, MERC_LAT } from './lib/relief.mjs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -97,6 +97,22 @@ const SRC = {
    *  plain int16 grid with no container format, which is why it was chosen over ETOPO 2022's
    *  netCDF: no GDAL, no netCDF library, no toolchain between anyone and a map rebuild. */
   etopo: 'https://www.ngdc.noaa.gov/mgg/global/relief/ETOPO2/ETOPO2v2-2006/ETOPO2v2c/raw_binary/ETOPO2v2c_i2_LSB.zip',
+  /* ★★ RESOLVE Ecoregions 2017 -- 847 ecoregions in 14 biomes, the peer-reviewed global
+   *  classification (Dinerstein et al. 2017). CC BY 4.0, attribution required. It is what makes
+   *  the Amazon dark and the Sahara sand, and it retires the hand-picked Natural Earth classes. */
+  ecoregions: 'https://storage.googleapis.com/teow2016/Ecoregions2017.zip',
+  /* ★★★ ICE SHELVES ARE A CORRECTNESS FIX, NOT A GARNISH. Without them Antarctica's SHAPE is
+   *  wrong: the Ross and Ronne shelves are each about the size of France and render as open sea.
+   *  ★★ MINOR ISLANDS matter for the opposite reason -- Natural Earth's country polygons drop the
+   *  small ones, and for a DX map those are precisely the wrong ones to lose: Ascension, Tristan,
+   *  St Helena, Rockall are what a listener is hunting.
+   *  ★ Geographic lines (equator, tropics, polar circles) are 60 kB and genuinely useful on a
+   *  radio map -- the greyline's behaviour changes at exactly those latitudes. */
+  iceShelves: `${NE}/ne_10m_antarctic_ice_shelves_polys.geojson`,
+  minorIslands: `${NE}/ne_10m_minor_islands.geojson`,
+  geoLines: `${NE}/ne_110m_geographic_lines.geojson`,
+  reefs: `${NE}/ne_10m_reefs.geojson`,
+  playas: `${NE}/ne_10m_playas.geojson`,
   cities5000: 'https://download.geonames.org/export/dump/cities5000.zip',
   airports: 'https://davidmegginson.github.io/ourairports-data/airports.csv',
   ports: 'https://msi.nga.mil/api/publications/download?key=16920959/SFH00000/UpdatedPub150.csv&type=download',
@@ -220,12 +236,16 @@ function packLines(geom, dp) {
  *   size, need a projection, and could not be restyled to the app's palette -- which is the entire
  *   reason we left raster tiles behind.
  */
-/* ★★★ 'Range/mtn' IS NOT IN THIS SET, AND THAT WAS TESTED THE HARD WAY. Natural Earth's mountain
- *  polygons are envelopes drawn around a range so a LABEL can be placed on it -- they are not the
- *  extent of high ground. Filled, they render as pale slabs unrelated to the terrain (one covers
- *  Belgium). The desert classes work because a desert genuinely IS an area; a mountain range is a
- *  shape, and only elevation data carries it. ✗ Do not add it back from this file. */
-const COVER_CLASSES = new Set(['Desert', 'Tundra', 'Wetlands']);
+/* ★★★ THIS SET IS NOW EMPTY, AND THAT IS THE POINT. It once held Desert, Tundra and Wetlands --
+ *  58, 4 and 3 Natural Earth polygons picked because they looked like the right idea. RESOLVE
+ *  Ecoregions covers all land in 14 peer-reviewed biomes and is rasterised into the relief image,
+ *  so these would now sit ON TOP of a better answer and contradict it.
+ *  ★★ 'Range/mtn' was here too, briefly, and was the lesson: NE's mountain polygons are envelopes
+ *  drawn around a range so a LABEL can be placed on it, not the extent of high ground -- one of
+ *  them covers Belgium. ✗ Do not restore any of these from this file.
+ *  ★ Glaciers stay as VECTORS below, because an ice sheet has a hard edge worth keeping crisp at
+ *  every zoom, and it must still be drawn when the relief image is hidden. */
+const COVER_CLASSES = new Set();
 
 /**
  * Shoelace area in square degrees. ★ Not a real area -- it is stretched by latitude and means
@@ -247,9 +267,9 @@ function bigEnough(rings, minArea) {
   return minArea > 0 ? rings.filter((r) => ringArea(r) >= minArea) : rings;
 }
 
-function buildCover(regionsGj, glaciersGj, dp, minArea = 0) {
-  const out = { desert: [], tundra: [], wetland: [], ice: [] };
-  const bucket = { Desert: 'desert', Tundra: 'tundra', Wetlands: 'wetland' };
+function buildCover(regionsGj, glaciersGj, dp, minArea = 0, shelvesGj = null) {
+  const out = { ice: [] };
+  const bucket = {};
   for (const f of regionsGj.features) {
     const cla = (f.properties || {}).FEATURECLA;
     if (!COVER_CLASSES.has(cla)) continue;
@@ -260,11 +280,14 @@ function buildCover(regionsGj, glaciersGj, dp, minArea = 0) {
     const rings = bigEnough(packPolygons(f.geometry, dp), minArea);
     if (rings.length) out.ice.push(...rings);
   }
-  // ★ Fail loudly per class: an empty `desert` means the FEATURECLA spelling moved and the map
-  //   would ship a uniformly green Sahara with nothing to say it had gone wrong.
-  for (const [k, v] of Object.entries(out)) {
-    if (!v.length) die(`cover/${k}: no polygons — Natural Earth's FEATURECLA values have changed.`);
+  /* ★ Antarctic ice shelves go in the SAME bucket as glaciers: to a reader they are the same
+   *  thing -- permanent ice -- and separating them would only mean two identical draw calls. */
+  for (const f of (shelvesGj?.features || [])) {
+    const rings = bigEnough(packPolygons(f.geometry, dp), minArea);
+    if (rings.length) out.ice.push(...rings);
   }
+  // ★ Fail loudly: an empty `ice` means the glacier layer moved and Greenland ships green.
+  if (!out.ice.length) die('cover/ice: no glacier polygons — the Natural Earth layer has changed.');
   return out;
 }
 
@@ -621,7 +644,8 @@ await mkdir(cacheDir, { recursive: true });
 process.stderr.write('gen-map-data: sources\n');
 
 const [c110, c50, c10, admin1, lakes, places, urban50, urban10, regions, glaciers, roads,
-       rivers50, rivers10, lakes50, admin150, shelf] = await Promise.all([
+       rivers50, rivers10, lakes50, admin150, shelf,
+       iceShelves, minorIslands, geoLines, reefs, playas] = await Promise.all([
   fetchGeoJson('countries110'),
   fetchGeoJson('countries50'),
   fetchGeoJson('countries10'),
@@ -638,6 +662,11 @@ const [c110, c50, c10, admin1, lakes, places, urban50, urban10, regions, glacier
   fetchGeoJson('lakes50'),
   fetchGeoJson('admin150'),
   fetchGeoJson('shelf'),
+  fetchGeoJson('iceShelves'),
+  fetchGeoJson('minorIslands'),
+  fetchGeoJson('geoLines'),
+  fetchGeoJson('reefs'),
+  fetchGeoJson('playas'),
 ]);
 const airportsCsv = await fetchCached('airports.csv', SRC.airports);
 const portsCsv = await fetchCached('ports.csv', SRC.ports);
@@ -677,10 +706,33 @@ if (!(await stat(etopoBin).catch(() => null))) {
   process.stderr.write(' done\n');
 }
 const etopo = readEtopo(etopoBin);
+
+/* ★★★ BIOMES ARE PAINTED INTO THE RELIEF, NOT SHIPPED AS POLYGONS. Ecoregions2017 is a 243 MB
+ *  shapefile covering every acre of land -- as vectors it would dwarf the whole basemap. Like
+ *  elevation it is a FIELD, and a field belongs in the grid we are already writing. */
+const ecoDir = path.join(cacheDir, 'ecoregions');
+const ecoShp = path.join(ecoDir, 'Ecoregions2017.shp');
+if (!(await stat(ecoShp).catch(() => null))) {
+  await fetchCached('Ecoregions2017.zip', SRC.ecoregions, { binary: true });
+  process.stderr.write('  unpacking Ecoregions2017 …');
+  await mkdir(ecoDir, { recursive: true });
+  try {
+    execFileSync('unzip', ['-o', '-j', path.join(cacheDir, 'Ecoregions2017.zip'), '-d', ecoDir], { stdio: 'pipe' });
+  } catch (e) { die(`ecoregions: unzip failed (${e.message}).`); }
+  process.stderr.write(' done\n');
+}
+const ecoRows = readDbf(path.join(ecoDir, 'Ecoregions2017.dbf'), ['BIOME_NUM']);
+if (ecoRows.length < 500) die(`ecoregions: only ${ecoRows.length} records — the dataset has changed shape.`);
+const ecoShapes = [];
+eachPolygon(ecoShp, (i, rings) => { ecoShapes.push({ biome: ecoRows[i].BIOME_NUM, rings }); });
+if (ecoShapes.length < 500) die(`ecoregions: only ${ecoShapes.length} polygons read.`);
+
+process.stderr.write(`  rasterising ${ecoShapes.length} ecoregions …`);
 const reliefImages = [
-  ['relief.png', 'basic', buildRelief(etopo, { width: 2700 })],
-  ['relief-hi.png', 'detail', buildRelief(etopo, { width: 4096 })],
+  ['relief.png', 'basic', buildRelief(etopo, { width: 2700, biomes: rasteriseBiomes(ecoShapes, 2700) })],
+  ['relief-hi.png', 'detail', buildRelief(etopo, { width: 4096, biomes: rasteriseBiomes(ecoShapes, 4096) })],
 ];
+process.stderr.write(' done\n');
 
 // tier0 world z0–4 · tier1 regional z5–7 · tier2 local z8+
 const layers = [
@@ -688,22 +740,32 @@ const layers = [
   ['tier0', 'countries', buildCountries(c110, 2, 'countries110')],
   ['tier0', 'places', buildNePlaces(places, 2, 4)],
   ['tier0', 'airports', buildAirports(airportsCsv, 2, new Set([0]))],
-  ['tier0', 'cover', buildCover(regions, glaciers, 1, 1.0)],
+  ['tier0', 'cover', buildCover(regions, glaciers, 1, 1.0, iceShelves)],
   ['tier0', 'urban', buildUrban(urban50, 2, 2, 0.05)],
   ['tier0', 'rivers', buildRivers(rivers50, 2, 3)],
+  /* ★ Equator, tropics and polar circles. One tier only: they are the same lines at every zoom,
+   *  and arithmetic-exact, so a second copy would be a second thing to keep in step. */
+  ['tier0', 'geolines', geoLines.features.map((f) => ({
+    name: String(f.properties?.name || f.properties?.NAME || ''),
+    lines: packLines(f.geometry, 2),
+  })).filter((g) => g.lines.length)],
+  ['tier0', 'islands', minorIslands.features.flatMap((f) => packPolygons(f.geometry, 2))],
   ['tier0', 'lakes', bigEnough(lakes50.features.flatMap((f) => packPolygons(f.geometry, 2)), 0.5)],
   // tier1
   ['tier1', 'countries', buildCountries(c50, 2, 'countries50')],
   ['tier1', 'places', buildNePlaces(places, 2, Infinity)],
   ['tier1', 'airports', buildAirports(airportsCsv, 2, new Set([0, 1]))],
   ['tier1', 'ports', buildPorts(portsCsv, 2)],
-  ['tier1', 'cover', buildCover(regions, glaciers, 2, 0.05)],
+  ['tier1', 'cover', buildCover(regions, glaciers, 2, 0.05, iceShelves)],
   ['tier1', 'urban', buildUrban(urban50, 2, Infinity, 0.002)],
   ['tier1', 'roads', buildRoads(roads, 2, 4)],
   ['tier1', 'rivers', buildRivers(rivers50, 2, Infinity)],
   ['tier1', 'lakes', lakes50.features.flatMap((f) => packPolygons(f.geometry, 2))],
   ['tier1', 'admin1', admin150.features.flatMap((f) => packLines(f.geometry, 2))],
   ['tier1', 'shelf', shelf.features.flatMap((f) => packPolygons(f.geometry, 2))],
+  ['tier1', 'islands', minorIslands.features.flatMap((f) => packPolygons(f.geometry, 2))],
+  ['tier1', 'reefs', reefs.features.flatMap((f) => packLines(f.geometry, 2))],
+  ['tier1', 'playas', playas.features.flatMap((f) => packPolygons(f.geometry, 2))],
   // tier2 — the heavy tier, and the reason for tiering: it is only ever loaded at z8+, where the
   // viewport is a few hundred km across and the renderer culls almost all of it.
   ['tier2', 'countries', buildCountries(c10, 3, 'countries10')],
@@ -713,11 +775,14 @@ const layers = [
   ['tier2', 'lakes', buildHydroLakes(hydroDbf, hydroShp, 3, 1, 0.004)],
   ['tier2', 'places', towns],
   ['tier2', 'airports', buildAirports(airportsCsv, 3, new Set([0, 1, 2, 3, 4]))],
-  ['tier2', 'cover', buildCover(regions, glaciers, 3)],
+  ['tier2', 'cover', buildCover(regions, glaciers, 3, 0, iceShelves)],
   ['tier2', 'urban', buildUrban(urban10, 3, Infinity)],
   ['tier2', 'roads', buildRoads(roads, 3, 8)],
   ['tier2', 'rivers', buildRivers(rivers10, 3, Infinity)],
   ['tier2', 'shelf', shelf.features.flatMap((f) => packPolygons(f.geometry, 3))],
+  ['tier2', 'islands', minorIslands.features.flatMap((f) => packPolygons(f.geometry, 3))],
+  ['tier2', 'reefs', reefs.features.flatMap((f) => packLines(f.geometry, 3))],
+  ['tier2', 'playas', playas.features.flatMap((f) => packPolygons(f.geometry, 3))],
 ];
 
 for (const [tier, name, data] of layers) {
@@ -730,8 +795,9 @@ const index = {
   // ★ The licences ride WITH the data. GeoNames is CC BY 4.0 and the credit is not optional; any
   //   renderer that loads tier2 places must show it, and it cannot show what it was never told.
   licences: {
+    resolve: { layers: ['relief (biome colouring)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© RESOLVE Ecoregions 2017', url: 'https://ecoregions.appspot.com/' },
     'noaa-etopo': { layers: ['relief'], licence: 'Public domain (US Government)', url: 'https://www.ncei.noaa.gov/products/etopo-global-relief-model' },
-    'natural-earth': { layers: ['countries', 'admin1', 'lakes', 'places(tier0,tier1)', 'urban', 'cover', 'roads', 'rivers', 'shelf'], licence: 'Public domain', url: 'https://www.naturalearthdata.com/' },
+    'natural-earth': { layers: ['countries', 'admin1', 'lakes', 'places(tier0,tier1)', 'urban', 'cover', 'roads', 'rivers', 'shelf', 'islands', 'reefs', 'playas', 'geolines'], licence: 'Public domain', url: 'https://www.naturalearthdata.com/' },
     geonames: { layers: ['places(tier2)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© GeoNames', url: 'https://www.geonames.org/' },
     ourairports: { layers: ['airports'], licence: 'Public domain', url: 'https://ourairports.com/data/' },
     hydrolakes: { layers: ['lakes(tier2)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© HydroLAKES / HydroSHEDS', url: 'https://www.hydrosheds.org/products/hydrolakes' },
