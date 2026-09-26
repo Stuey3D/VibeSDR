@@ -9171,8 +9171,23 @@ function renderHealthPill(h: {
   }
   const worst = Math.max(h.cpu, h.ram, h.temp.kind === 'none' ? 0 : h.temp.level, h.bat.level ?? 0);
   el.className = worst >= 3 ? 'crit' : '';
-  el.style.borderColor = HEALTH_COLOURS[worst].replace(')', '')
-    ? `${HEALTH_COLOURS[worst]}${worst === 0 ? '73' : 'bf'}` : '';   // 0.45 / 0.75 alpha
+  /* ★★★ THE FRAME BLENDS TOO, OR THE PILL SNAPS ROUND SMOOTH ICONS. The slots inside were given a
+   *  continuous tint (see healthColour); this border kept a DISCRETE `HEALTH_COLOURS[worst]` and a
+   *  two-step alpha, so the icons drifted while the ring around them jumped green->amber in one
+   *  frame. Stuart, 2026-09-27: *"the server health pill itself needs the blended colour as i can
+   *  see it hard switching between green and yellow — not smooth like the icons inside it."*
+   *  ★★ THE WORST POSITION, NOT THE WORST LEVEL. All three positions sit on the SAME 0-3 ladder, so
+   *     max() over them is the continuous twin of max() over the levels and cannot disagree with
+   *     `worst` — floor(worstPos) is worst. The battery has no position, so its LEVEL is a floor:
+   *     a flat battery must still be able to redden the ring.
+   *  ★ The alpha ramps with the same number instead of stepping at level 1: a frame that got
+   *    suddenly more opaque was the second half of the same snap. 0x73 -> 0xbf over the first band. */
+  const worstPos = Math.max(
+    h.cpuPos ?? h.cpu, h.ramPos ?? h.ram,
+    h.temp.kind === 'none' ? 0 : (h.temp.pos ?? h.temp.level),
+    h.bat.level ?? 0);
+  const ringAlpha = Math.round(0x73 + (0xbf - 0x73) * Math.min(1, Math.max(0, worstPos)));
+  el.style.borderColor = `${healthColour(worst, worstPos)}${ringAlpha.toString(16).padStart(2, '0')}`;
   el.innerHTML = `<div class="hCap">SERVER HEALTH</div><div class="hRow">${slots.join('')}${batHtml}</div>`;
   /* ★ One sentence for a screen reader, since the icons carry no text. */
   el.setAttribute('aria-label', `Server health: processor ${HEALTH_WORDS[h.cpu]}, memory ${HEALTH_WORDS[h.ram]}`

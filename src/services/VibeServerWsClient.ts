@@ -102,7 +102,11 @@ import { MODE_BANDWIDTHS, UPDATE_APP_MESSAGE } from './sdrProtocol';
 export type ServerHealth = {
   cpu: number;
   ram: number;
-  temp: { kind: 'sensor' | 'thermal' | 'power' | 'throttle' | 'none'; level: number };
+  /** ★ Continuous position on the same four-rung ladder as the level, for the pill's blended tint.
+   *  Absent on a server older than 5.6.60; the pill then uses the rung. See HealthPill. */
+  cpuPos?: number;
+  ramPos?: number;
+  temp: { kind: 'sensor' | 'thermal' | 'power' | 'throttle' | 'none'; level: number; pos?: number };
   bat: { present: boolean; pct?: number; charging?: boolean; level?: number };
 };
 
@@ -2297,7 +2301,14 @@ export abstract class VibeServerWsClient {
       this.callbacks.onHealth?.({
         cpu: Number(msg.cpu) || 0,
         ram: Number(msg.ram) || 0,
-        temp: { kind, level: Number(t.level) || 0 },
+        /* ★★ UNDEFINED, NOT ZERO, WHEN ABSENT — and this is the layer that decides it. `Number(x) || 0`
+         *  would turn a missing position into 0.0, i.e. "bottom of OK", so an OLDER server would
+         *  paint every icon and the pill's ring pure green whatever its LEVEL said. The pill tells
+         *  the two apart; this must hand it a real absence. */
+        cpuPos: msg.cpuPos === undefined ? undefined : Number(msg.cpuPos),
+        ramPos: msg.ramPos === undefined ? undefined : Number(msg.ramPos),
+        temp: { kind, level: Number(t.level) || 0,
+                pos: t.pos === undefined ? undefined : Number(t.pos) },
         // ★ present false keeps pct/charging/level ABSENT rather than zeroed — see ServerHealth.
         bat: b.present
           ? { present: true, pct: Number(b.pct) || 0, charging: b.charging === true,

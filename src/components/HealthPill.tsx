@@ -28,13 +28,39 @@ export type HealthLevel = 0 | 1 | 2 | 3;
 export interface Health {
   cpu: HealthLevel;
   ram: HealthLevel;
+  /** ★ Continuous position on the SAME four-rung ladder as the level above, for the blended tint.
+   *  floor(pos) === level by construction. Absent on a server older than 5.6.60 — the pill then
+   *  uses the rung, exactly as it always did. */
+  cpuPos?: number;
+  ramPos?: number;
   /** `kind: 'none'` means the slot is omitted entirely — not drawn grey. */
-  temp: { kind: 'sensor' | 'thermal' | 'power' | 'throttle' | 'none'; level: HealthLevel };
+  temp: { kind: 'sensor' | 'thermal' | 'power' | 'throttle' | 'none'; level: HealthLevel; pos?: number };
   bat: { present: boolean; pct?: number; charging?: boolean; level?: HealthLevel };
 }
 
 /** 0 OK · 1 Elevated · 2 High · 3 Critical. Verbatim from the web client's HEALTH_COLOURS. */
 const HEALTH_COLOURS = ['#5BE36B', '#E8C547', '#FF8A3D', '#FF4B4B'];
+/* ★★★ THE SAME BLEND AS THE WEB CLIENT, AND IT HAD TO BE ADDED TWICE — ONE RULE, TWO READERS.
+ *  The web client got a continuous tint and this pill kept the four fixed colours, so the app
+ *  snapped where the browser drifted. ✗ Whoever changes one of these changes both; they are two
+ *  renderers of one rule, and the comment above already says these colours are "verbatim from the
+ *  web client's HEALTH_COLOURS".
+ *  ★ `pos` is the server's continuous position on the SAME four-rung ladder as `level`, so
+ *    floor(pos) === level and they cannot disagree. Absent (an older server) → the rung, exactly
+ *    as before. ★ sRGB mix: the anchors are close in lightness, far apart in hue. */
+function mixHex(a: string, b: string, f: number): string {
+  const p = (h: string) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+  const [r1, g1, b1] = p(a), [r2, g2, b2] = p(b);
+  const m = (x: number, y: number) => Math.round(x + (y - x) * f).toString(16).padStart(2, '0');
+  return `#${m(r1, r2)}${m(g1, g2)}${m(b1, b2)}`;
+}
+function healthColour(level: number, pos?: number): string {
+  const lv = clampLevel(level);
+  if (typeof pos !== 'number' || !(pos >= 0)) return HEALTH_COLOURS[lv];
+  const p = Math.max(0, Math.min(3, pos));
+  const lo = Math.min(2, Math.floor(p));
+  return mixHex(HEALTH_COLOURS[lo], HEALTH_COLOURS[lo + 1], p - lo);
+}
 const HEALTH_WORDS = ['OK', 'elevated', 'high', 'critical'];
 
 /** ★ The readout amber this client wears everywhere else — the battery figure, and nothing else. */
@@ -142,9 +168,12 @@ function glyphBody(name: GlyphName, color: string) {
  *    STABLE, do not raise it"). Drawing anything here would put permanent furniture on his machine.
  * ★ A throttle is at least High whatever level arrives: the server has measured a cap, so "OK" would
  *   contradict the glyph the same message asked for. Matches the web client's Math.max(2, level).  */
-function tempSlot(temp: Health['temp']): { name: GlyphName; level: number; word: string } | null {
+function tempSlot(temp: Health['temp']): { name: GlyphName; level: number; word: string; pos?: number } | null {
   switch (temp.kind) {
-    case 'sensor':   return { name: 'temp', level: clampLevel(temp.level), word: `temperature ${HEALTH_WORDS[clampLevel(temp.level)]}` };
+    /* ★ Only the SENSOR case carries a position. The throttle cases force level to max(2, …)
+     *  because a measured cap cannot read "OK", so a ladder position would contradict the level
+     *  they were given — leaving it undefined makes those slots fall back to the rung, correctly. */
+    case 'sensor':   return { name: 'temp', level: clampLevel(temp.level), pos: temp.pos, word: `temperature ${HEALTH_WORDS[clampLevel(temp.level)]}` };
     case 'thermal':  return { name: 'snailFire', level: Math.max(2, clampLevel(temp.level)), word: 'throttling' };
     case 'power':    return { name: 'snailBolt', level: Math.max(2, clampLevel(temp.level)), word: 'throttling' };
     case 'throttle': return { name: 'snail', level: Math.max(2, clampLevel(temp.level)), word: 'throttling' };
@@ -214,7 +243,15 @@ export default function HealthPill({
     + (temp ? `, ${temp.word}` : '')
     + (health.bat.present ? `, battery ${batPct}%${health.bat.charging ? ' on power' : ''}` : '');
 
-  const borderColor = HEALTH_COLOURS[worst] + (worst === 0 ? '73' : 'bf');   // 0.45 / 0.75 alpha
+  /* ★★ THE WORST POSITION, not the worst level — and the alpha ramps with it instead of stepping
+   *  at level 1, because a frame that suddenly got more opaque was the second half of the snap.
+   *  The battery has no position, so its LEVEL is a floor: a flat battery still reddens the ring. */
+  const worstPos = Math.max(
+    health.cpuPos ?? cpu, health.ramPos ?? ram,
+    temp ? (temp.pos ?? temp.level) : 0,
+    health.bat.present ? batLevel : 0);
+  const ringAlpha = Math.round(0x73 + (0xbf - 0x73) * Math.min(1, Math.max(0, worstPos)));
+  const borderColor = healthColour(worst, worstPos) + ringAlpha.toString(16).padStart(2, '0');
 
   return (
     <Animated.View
@@ -235,9 +272,9 @@ export default function HealthPill({
     >
       <Text style={styles.caption} numberOfLines={1}>SERVER HEALTH</Text>
       <View style={styles.row}>
-        <Slot name="cpu" level={cpu} breathe={breathe} />
-        <Slot name="ram" level={ram} breathe={breathe} />
-        {temp ? <Slot name={temp.name} level={temp.level} breathe={breathe} /> : null}
+        <Slot name="cpu" level={cpu} pos={health.cpuPos} breathe={breathe} />
+        <Slot name="ram" level={ram} pos={health.ramPos} breathe={breathe} />
+        {temp ? <Slot name={temp.name} level={temp.level} pos={temp.pos} breathe={breathe} /> : null}
         {health.bat.present ? (
           <>
             <View style={styles.divider} />
@@ -252,8 +289,8 @@ export default function HealthPill({
 /* ★★ A NON-COLOUR CUE FROM "HIGH" UPWARDS, FOR EVERYONE — not just under reduced motion. Elevated
  *    and High differ only by hue, which is exactly the pair a red/green colour-blind listener cannot
  *    separate, so from level 2 the slot also wears a 4 px dot at its top right. */
-function Slot({ name, level, breathe }: { name: GlyphName; level: number; breathe: Animated.Value }) {
-  const color = HEALTH_COLOURS[clampLevel(level)];
+function Slot({ name, level, pos, breathe }: { name: GlyphName; level: number; pos?: number; breathe: Animated.Value }) {
+  const color = healthColour(level, pos);
   return (
     <Animated.View style={[styles.slot, level >= 3 && { opacity: breathe }]}>
       <Glyph name={name} color={color} />
