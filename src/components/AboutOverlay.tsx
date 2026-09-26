@@ -260,6 +260,8 @@ const CREDITS: { name: string; detail: string }[] = [
     detail: 'Public domain, dedicated by David Megginson. Every airfield, heliport and seaplane base, and the runway thresholds and designators.' },
   { name: 'NGA World Port Index',
     detail: 'Public domain (US Government). The world\u2019s sea ports.' },
+  { name: 'OpenStreetMap contributors',
+    detail: 'ODbL. The detailed coastline at close zoom \u2014 the layer that puts an island\u2019s shore where it really is. Downloaded once when the map data is built, never at runtime: the app makes no request to OpenStreetMap for maps. As ODbL requires, the same data is published unrestricted alongside every release.' },
   { name: 'Leaflet',
     detail: 'BSD-2-Clause, by Volodymyr Agafonkin. The map engine \u2014 projection, panning and drawing. Bundled, not fetched, so the maps work with no internet at all.' },
   { name: 'Atkinson Hyperlegible — Braille Institute',

@@ -1637,12 +1637,47 @@ async function drawRoads() {
 
 let drawing = false;
 async function drawBase() {
-  const z = map.getZoom(), t = await bestTier(tierFor('countries', z));
-  const countries = await layer(t, 'countries', viewBox());
-  if (!countries) return;
+  const z = map.getZoom();
   const box = viewBox();
-  basemap.clearLayers();
   const offs = worldOffsets();
+  /* ★★★ AT HIGH ZOOM THE LAND COMES FROM A COASTLINE DATASET, NOT FROM COUNTRY POLYGONS. We were
+   *  deriving the shore from a POLITICAL layer, which is not what it is for: Natural Earth's 10m
+   *  countries give Madeira TEN POINTS for a 57 km island, so Cristiano Ronaldo International's
+   *  over-the-sea runway platform sat stranded in open water. Stuart asked whether it was really
+   *  in the sea -- it genuinely is, on 180 columns, but the COAST beside it was the vague thing.
+   *  ★★ MEASURED, against the runway's own published thresholds:
+   *       country fills  -- both thresholds stranded
+   *       ne_10m_land    -- 05 is 0.45 km offshore, 23 is 2.07 km offshore (does NOT fix it)
+   *       OSM coastline  -- BOTH THRESHOLDS ON LAND
+   *  I first recommended ne_10m_land on point count alone, which is a proxy; the proxy said 5x
+   *  better and the actual test said still broken. ★ Test the thing you care about.
+   *  ★ Borders then have to arrive as their OWN lines, the way a real map separates coast from
+   *  boundary -- with the fill no longer political, the country edges are no longer free. */
+  const coast = z >= 10 ? await layer(await bestTier('tier2'), 'coast', box) : null;
+  basemap.clearLayers();
+  if (coast) {
+    for (const ring of coast) {
+      if (!ringInView(ring, box)) continue;
+      for (const dx of offs) {
+        L.polygon(ring.map(([lon, lat]) => [lat, lon + dx]), inPane('land', {
+          color: MAP_COAST, weight: 0.6, opacity: 0.8, fillColor: MAP_LAND, fillOpacity: 1,
+        })).addTo(basemap);
+      }
+    }
+    const borders = await layer('tier2', 'borders', box);
+    for (const line of borders || []) {
+      if (!ringInView(line, box)) continue;
+      for (const dx of offs) {
+        L.polyline(line.map(([lon, lat]) => [lat, lon + dx]),
+          inPane('admin', { color: MAP_COAST, weight: 0.8, opacity: 0.6 })).addTo(basemap);
+      }
+    }
+    mapTier.at = 'coast';
+    return;
+  }
+  const t = await bestTier(tierFor('countries', z));
+  const countries = await layer(t, 'countries', box);
+  if (!countries) return;
   for (const rings of Object.values(countries)) {
     for (const ring of rings) {
       if (!ringInView(ring, box)) continue;

@@ -135,6 +135,23 @@ const SRC = {
    *  ★ Marine polys give the oceans and seas the same way. A world map with an unnamed Atlantic
    *  is not finished. */
   marine: `${NE}/ne_10m_geography_marine_polys.geojson`,
+  /* ★★★ A REAL COASTLINE, because ours is derived from COUNTRY FILLS and they are generalised to
+   *  the point of being wrong at island scale. Madeira is TEN POINTS in Natural Earth's 10m
+   *  countries -- for a 57 km island -- so its famous over-the-sea runway platform looked stranded
+   *  a kilometre offshore. Stuart: "is this runway really in the sea?" It is, and the runway is
+   *  accurate to ~11 m; it was the COAST beside it that was vague. Putting a precise thing next to
+   *  a vague one makes the precise one look wrong.
+   *  ★★ OSM's own simplified land polygons: 122 points around Madeira against our 10. 23 MB
+   *  download, 6.8 MB gzipped as we ship it.
+   *  ★★★ ODbL — THE ONLY SHARE-ALIKE SOURCE IN THE MAP. Attribution is required AND, because the
+   *  App Store package is DRM'd, §4.7 obliges us to publish an UNRESTRICTED copy as well. The
+   *  detail pack already goes on a GitHub release as a plain tarball, which satisfies that — ✗ do
+   *  not stop publishing it. Charging for the app is expressly fine; ODbL binds the DATA, not the
+   *  code, and OSM data was already in the product via Nominatim. */
+  osmLand: 'https://osmdata.openstreetmap.de/download/simplified-land-polygons-complete-3857.zip',
+  /* ★ With a real coastline the land fill can no longer come from country polygons, so borders
+   *  have to arrive as their own lines — the way a real map separates coast from boundary. */
+  borders: `${NE}/ne_10m_admin_0_boundary_lines_land.geojson`,
   cities5000: 'https://download.geonames.org/export/dump/cities5000.zip',
   airports: 'https://davidmegginson.github.io/ourairports-data/airports.csv',
   /* ★★★ RUNWAYS, so a listener can follow what they are hearing. Stuart, 2026-09-26: "a user could
@@ -868,7 +885,7 @@ process.stderr.write('gen-map-data: sources\n');
 
 const [c110, c50, c10, admin1, lakes, places, urban50, urban10, regions, glaciers, roads,
        rivers50, rivers10, lakes50, admin150, shelf,
-       iceShelves, minorIslands, geoLines, reefs, playas, railroads, marine] = await Promise.all([
+       iceShelves, minorIslands, geoLines, reefs, playas, railroads, marine, borders] = await Promise.all([
   fetchGeoJson('countries110'),
   fetchGeoJson('countries50'),
   fetchGeoJson('countries10'),
@@ -892,6 +909,7 @@ const [c110, c50, c10, admin1, lakes, places, urban50, urban10, regions, glacier
   fetchGeoJson('playas'),
   fetchGeoJson('railroads'),
   fetchGeoJson('marine'),
+  fetchGeoJson('borders'),
 ]);
 const airportsCsv = await fetchCached('airports.csv', SRC.airports);
 const portsCsv = await fetchCached('ports.csv', SRC.ports);
@@ -947,6 +965,36 @@ if (!(await stat(ecoShp).catch(() => null))) {
   } catch (e) { die(`ecoregions: unzip failed (${e.message}).`); }
   process.stderr.write(' done\n');
 }
+/* ★ Web Mercator metres -> lon/lat. OSM ships this set in 3857; everything else here is 4326. */
+const R_MERC = 6378137;
+const mercToLonLat = ([x, y]) => [
+  (x / R_MERC) * 180 / Math.PI,
+  (2 * Math.atan(Math.exp(y / R_MERC)) - Math.PI / 2) * 180 / Math.PI,
+];
+
+const osmDir = path.join(cacheDir, 'osmland');
+const osmShp = path.join(osmDir, 'simplified_land_polygons.shp');
+if (!(await stat(osmShp).catch(() => null))) {
+  await fetchCached('osm-land-simplified.zip', SRC.osmLand, { binary: true });
+  process.stderr.write('  unpacking OSM land polygons …');
+  await mkdir(osmDir, { recursive: true });
+  try {
+    execFileSync('unzip', ['-o', '-j', path.join(cacheDir, 'osm-land-simplified.zip'), '-d', osmDir], { stdio: 'pipe' });
+  } catch (e) { die(`osm land: unzip failed (${e.message}).`); }
+  process.stderr.write(' done\n');
+}
+function buildCoast(dp) {
+  const out = [];
+  eachPolygon(osmShp, (_i, rings) => {
+    for (const ring of rings) {
+      const packed = packRing(ring.map(mercToLonLat), dp, { closed: true });
+      if (packed) out.push(packed);
+    }
+  });
+  if (out.length < 10000) die(`coast: only ${out.length} rings — the OSM land set has changed shape.`);
+  return out;
+}
+
 const ecoRows = readDbf(path.join(ecoDir, 'Ecoregions2017.dbf'), ['BIOME_NUM']);
 if (ecoRows.length < 500) die(`ecoregions: only ${ecoRows.length} records — the dataset has changed shape.`);
 const ecoShapes = [];
@@ -1019,6 +1067,8 @@ const layers = [
   ['tier2', 'airports', buildAirports(airportsCsv, 3, new Set([0, 1, 2, 3, 4]))],
   // ★ 4 dp (~11 m): a runway is 45 m wide, and at 3 dp its ends round onto the wrong threshold.
   ['tier2', 'runways', buildRunways(runwaysCsv, 4, 2000)],
+  ['tier2', 'coast', buildCoast(3)],
+  ['tier2', 'borders', borders.features.flatMap((f) => packLines(f.geometry, 3))],
   ['tier2', 'cover', buildCover(regions, glaciers, 3, 0, iceShelves)],
   ['tier2', 'urban', buildUrban(urban10, 3, Infinity)],
   ['tier2', 'roads', buildRoads(roads, 3, 8)],
@@ -1047,9 +1097,10 @@ const index = {
   licences: {
     resolve: { layers: ['relief (biome colouring)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© RESOLVE Ecoregions 2017', url: 'https://ecoregions.appspot.com/' },
     'noaa-etopo': { layers: ['relief'], licence: 'Public domain (US Government)', url: 'https://www.ncei.noaa.gov/products/etopo-global-relief-model' },
-    'natural-earth': { layers: ['countries', 'admin1', 'lakes', 'places(tier0,tier1)', 'urban', 'cover', 'roads', 'rivers', 'shelf', 'islands', 'reefs', 'playas', 'geolines', 'rail', 'runways', 'regions'], licence: 'Public domain', url: 'https://www.naturalearthdata.com/' },
+    'natural-earth': { layers: ['countries', 'admin1', 'lakes', 'places(tier0,tier1)', 'urban', 'cover', 'roads', 'rivers', 'shelf', 'islands', 'reefs', 'playas', 'geolines', 'rail', 'runways', 'regions', 'borders'], licence: 'Public domain', url: 'https://www.naturalearthdata.com/' },
     geonames: { layers: ['places(tier2)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© GeoNames', url: 'https://www.geonames.org/' },
     ourairports: { layers: ['airports'], licence: 'Public domain', url: 'https://ourairports.com/data/' },
+    osm: { layers: ['coast (tier2)'], licence: 'ODbL — ATTRIBUTION AND SHARE-ALIKE', attribution: '© OpenStreetMap contributors', url: 'https://osmdata.openstreetmap.de/', note: 'ODbL 4.7: an unrestricted copy of this data must be published alongside any DRM-wrapped distribution — see the GitHub release tarball.' },
     hydrolakes: { layers: ['lakes(tier2)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© HydroLAKES / HydroSHEDS', url: 'https://www.hydrosheds.org/products/hydrolakes' },
     'nga-wpi': { layers: ['ports'], licence: 'Public domain (US Government)', url: 'https://msi.nga.mil/Publications/WPI' },
   },

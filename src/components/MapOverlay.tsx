@@ -121,7 +121,17 @@ function buildHtml(
     background-repeat:no-repeat;background-position:right 6px center;}
   .flabel{font-size:9px;letter-spacing:1px;color:rgba(${T.a},0.35);}
   #map{flex:1;position:relative;overflow:hidden;background:${T.bg};}
-  #lmap{position:absolute;inset:0;background:${T.bg};}
+  /* ★★★ THE MAP'S BACKDROP IS THE BASEMAP'S COLOUR, NOT THE APP'S. This was ${T.bg} — near
+     black — behind a LIGHT basemap, so every tile that had not arrived yet showed as a black
+     hole. Stuart, 2026-09-26: "there were black tiles and it looked unsightly", and later "it
+     still renders in with the black boxes anyway".
+     ★★ THAT IS WHAT THE PREFETCHING WAS FOR, AND IT NEVER WORKED — a flyTo arcs through
+     positions and zooms that no fixed warm-up can predict, so the gaps appeared regardless. We
+     were breaching OpenStreetMap's usage policy to paper over a CSS colour, and it got us
+     blocked (2026-09-26). A tile that has not loaded now looks like unrendered land instead of
+     a hole, which costs one line and works whatever the tiles are doing.
+     ★ #f2efe9 is the standard OSM land colour, so a gap reads as map rather than as damage. */
+  #lmap{position:absolute;inset:0;background:#f2efe9;}
   /* ── GPU hints — markers glide between updates on the compositor ── */
   .leaflet-pane{will-change:transform;}
   .leaflet-marker-icon.glide{transition:transform 2.2s linear;will-change:transform;}
@@ -319,26 +329,308 @@ function abbr(c){if(!c)return'';var s=String(c).trim();if(CABBR[s])return CABBR[
 var map=L.map('lmap',{zoomControl:false,attributionControl:true,fadeAnimation:true,zoomAnimation:true,markerZoomAnimation:true,preferCanvas:true})
   .setView([30,0],2);
 L.control.zoom({position:'bottomright'}).addTo(map);
+/* ★★★ A TILE CACHE, BECAUSE THE FLYOVER IS WHAT MAKES THIS MAP DIFFERENT. Leaflet's keepBuffer
+ *  holds a skirt around the CURRENT view and nothing else: zoom in and the world tiles are
+ *  destroyed, zoom back out and they are fetched again over the network, which is the black you
+ *  see. Every other map in this product is panned by a human and never notices. This one snaps
+ *  to each new aircraft, so it crosses the same ground over and over.
+ *  ★★★ Stuart, 2026-09-26: "it went from zoomed in to a zoomed out full world view and it went
+ *  black and it shouldnt have as we already had the full world view previously" — and that is
+ *  exactly right, we HAD fetched them.
+ *  ★★ THIS IS WHAT WAS ASKED FOR ALL ALONG, AND THE CODE DID THE OPPOSITE. What was built was a
+ *  PREFETCH: 21 tiles pulled from OpenStreetMap on every map open, guessing at what a flight
+ *  might cross. It could not work — a flyTo arcs through zooms and positions no fixed warm-up
+ *  predicts — and prefetching a free service is the one thing their usage policy forbids.
+ *  CACHING WHAT WE ACTUALLY FETCHED IS THE OPPOSITE: it is explicitly fine, and it makes us a
+ *  LIGHTER user of OSM, not a heavier one.
+ *  ★ Held as object URLs rather than trusting the HTTP cache: this document is loaded from an
+ *    HTML STRING (see the WebView's source={{html}}), and a WebView's cache for such a document
+ *    is not something to build a feature on. */
+/* ★★★ SMALL, BECAUSE THE FLOOR IS A 1 GB DEVICE. This was 1200 tiles — about 24 MB of RAM —
+ *  which is fine on a desktop and indefensible on the Xcover. Stuart, 2026-09-26: "we cannot use
+ *  RAM remember that we have users on 1GB devices."
+ *  ★★ So RAM is only the HOT layer: enough to cover the current view and its immediate
+ *  neighbours during an animation, while the DURABLE copy lives on the device (see
+ *  briefs/BRIEF-map-tile-cache.md). ~150 tiles is roughly three screenfuls at ~20 kB each. */
+var TILE_MAX = 150;                  // ~3 MB hot layer; the durable copy is in IndexedDB
+var tileCache = new Map();           // "z/x/y" -> object URL, insertion order = LRU
+
+/* ===== THE DURABLE TILE STORE ==========================================================
+ * ★★★ ON DISK, NOT IN RAM. The floor is a 1 GB device, so RAM holds only what is on screen;
+ *  everything fetched also lands in IndexedDB, which the WebView persists across restarts.
+ *  One store serves EVERY map in the app -- MapKind is 'hfdl' | 'digi' | 'cw' and they all
+ *  come through this one component, so the world fetched for an HFDL flyover is already
+ *  there when someone opens the digital spots map.
+ * ★★ AND IT IS A DATA SAVING BEFORE IT IS A SMOOTHNESS FIX. Today every map open re-downloads
+ *  the world -- about 7 MB at z0-4 -- on somebody's mobile allowance, every single time. The
+ *  users most likely to be metered are the same ones on the smallest devices, so this helps
+ *  exactly the people a RAM cache would have hurt.
+ * ★ Sizes, measured: the whole world is ~1365 tiles to z5 (~25 MB) and ~341 to z4 (~7 MB).
+ *  Deeper zooms cost only what somebody actually looks at -- nobody fetches z8 worldwide.
+ * ★★★ VALIDATE BEFORE STORING. A tile truncated by a cellular drop would otherwise persist and
+ *  render broken FOR EVER, which is worse than a gap. Only a 200 with an image content-type and
+ *  a plausible length is kept; anything else is simply not cached and is re-fetched next time.
+ *  Clear Cache remains for whatever still slips through -- a cache you cannot clear is a bug
+ *  report you cannot close (Stuart, 2026-09-26: "just in case of corruption especially on
+ *  Cellular connections"). */
+var TILE_DB = null, TILE_DB_FAILED = false;
+var TILE_BYTES_CAP = 150 * 1024 * 1024;     // hard ceiling; see openMapCache()
+function openMapCache() {
+  if (TILE_DB || TILE_DB_FAILED) return Promise.resolve(TILE_DB);
+  return new Promise(function (res) {
+    var rq;
+    try { rq = indexedDB.open('vibemaps', 1); } catch (e) { TILE_DB_FAILED = true; return res(null); }
+    rq.onupgradeneeded = function () {
+      var db = rq.result;
+      if (!db.objectStoreNames.contains('tiles')) {
+        var st = db.createObjectStore('tiles', { keyPath: 'k' });
+        st.createIndex('used', 'used');      // LRU eviction walks this
+      }
+    };
+    rq.onsuccess = function () { TILE_DB = rq.result; res(TILE_DB); };
+    /* ★ A WebView with storage disabled, or a private window, throws or errors here. That is not
+     *   a fault to report: the map still works, it is simply not cached. */
+    rq.onerror = function () { TILE_DB_FAILED = true; res(null); };
+  });
+}
+function cacheGet(key) {
+  return openMapCache().then(function (db) {
+    if (!db) return null;
+    return new Promise(function (res) {
+      var tx, rq;
+      try { tx = db.transaction('tiles', 'readonly'); rq = tx.objectStore('tiles').get(key); }
+      catch (e) { return res(null); }
+      rq.onsuccess = function () { res(rq.result ? rq.result.b : null); };
+      rq.onerror   = function () { res(null); };
+    });
+  });
+}
+function cachePut(key, blob) {
+  return openMapCache().then(function (db) {
+    if (!db) return;
+    try {
+      var tx = db.transaction('tiles', 'readwrite');
+      tx.objectStore('tiles').put({ k: key, b: blob, used: Date.now(), n: blob.size });
+    } catch (e) { /* quota or a closing db -- the tile still displays, it is just not kept */ }
+  });
+}
+/* ★★ EVICTION IS OLDEST-FIRST AND RUNS RARELY. Walking the whole store on every tile would cost
+ *  more than the fetch it saves, so it is checked every few hundred writes and trims to 80% of
+ *  the cap -- leaving headroom so the next session does not immediately evict again. */
+var putsSinceSweep = 0;
+function maybeSweep() {
+  if (++putsSinceSweep < 300) return;
+  putsSinceSweep = 0;
+  openMapCache().then(function (db) {
+    if (!db) return;
+    var total = 0, rows = [];
+    var tx = db.transaction('tiles', 'readwrite'), st = tx.objectStore('tiles');
+    st.openCursor().onsuccess = function (e) {
+      var c = e.target.result;
+      if (c) { total += (c.value.n || 0); rows.push({ k: c.value.k, used: c.value.used || 0, n: c.value.n || 0 }); return c.continue(); }
+      if (total <= TILE_BYTES_CAP) return;
+      rows.sort(function (a, b) { return a.used - b.used; });
+      var target = TILE_BYTES_CAP * 0.8;
+      for (var i = 0; i < rows.length && total > target; i++) { st.delete(rows[i].k); total -= rows[i].n; }
+    };
+  });
+}
+/** Bytes held, for the settings screen. Reported, never estimated -- a number we invent is a
+ *  number that will be wrong, and this one is shown to users. */
+window.__mapCacheSize = function () {
+  return openMapCache().then(function (db) {
+    if (!db) return 0;
+    return new Promise(function (res) {
+      var total = 0;
+      try {
+        var st = db.transaction('tiles', 'readonly').objectStore('tiles');
+        st.openCursor().onsuccess = function (e) {
+          var c = e.target.result;
+          if (c) { total += (c.value.n || 0); return c.continue(); }
+          res(total);
+        };
+      } catch (e) { res(0); }
+    });
+  });
+};
+window.__mapCacheClear = function () {
+  tileCache.forEach(function (u) { try { URL.revokeObjectURL(u); } catch (e) {} });
+  tileCache.clear();
+  return openMapCache().then(function (db) {
+    if (!db) return;
+    try { db.transaction('tiles', 'readwrite').objectStore('tiles').clear(); } catch (e) {}
+  });
+};
+
+var CachedTileLayer = L.TileLayer.extend({
+  createTile: function (coords, done) {
+    var img = document.createElement('img');
+    img.alt = '';
+    L.DomEvent.on(img, 'load',  L.Util.bind(function () { done(null, img); }, this));
+    L.DomEvent.on(img, 'error', L.Util.bind(function () { done(new Error('tile'), img); }, this));
+    var key = coords.z + '/' + coords.x + '/' + coords.y;
+    var hot = tileCache.get(key);
+    if (hot) {
+      tileCache.delete(key); tileCache.set(key, hot);     // touch: most recently used
+      img.src = hot;                                       // local decode, no network, no gap
+      return img;
+    }
+    var url = this.getTileUrl(coords);
+    function hold(blob) {
+      var u = URL.createObjectURL(blob);
+      tileCache.set(key, u);
+      /* ★ Evict the OLDEST only, and never revoke what is on screen: a revoked URL under a live
+       *   <img> becomes a broken image, which is worse than the gap this exists to remove. */
+      while (tileCache.size > TILE_MAX) {
+        var oldest = tileCache.keys().next().value;
+        var dead = tileCache.get(oldest);
+        tileCache.delete(oldest);
+        if (dead && dead !== u) { try { URL.revokeObjectURL(dead); } catch (e) {} }
+      }
+      img.src = u;
+    }
+    cacheGet(key).then(function (blob) {
+      if (blob) return hold(blob);                         // disk hit: no network at all
+      return fetch(url, { cache: 'force-cache' }).then(function (r) {
+        /* ★★★ THE VALIDATION. A 404 page, a captive-portal redirect or a truncated cellular
+         *  response are all "a response"; none of them is a tile, and storing one poisons this
+         *  key until the cache is cleared. */
+        var ct = r.headers.get('content-type') || '';
+        if (!r.ok || ct.indexOf('image') !== 0) throw new Error('not a tile');
+        return r.blob();
+      }).then(function (b) {
+        if (!b || b.size < 200) throw new Error('short tile');
+        hold(b);
+        cachePut(key, b); maybeSweep();
+      });
+    }).catch(function () { done(new Error('tile'), img); });
+    return img;
+  }
+});
+    return img;
+  }
+});
 // keepBuffer holds a wider skirt of tiles so an ordinary drag never reaches bare canvas;
 // updateWhenZooming stops Leaflet firing requests it will throw away mid-animation.
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-  {attribution:'&copy; OSM',maxZoom:14,keepBuffer:4,updateWhenZooming:false}).addTo(map);
-/* ★★★ WARM THE WHOLE WORLD AT THE LOW ZOOMS, ONCE. Every flyTo arcs out through z0-z3 whatever
- *     its endpoints are, so those tiles are needed by EVERY flight and there are only 21 of them
- *     in total (1 + 4 + 16). Fetching them at startup — while nothing is animating and the user is
- *     reading the topbar — means the wide part of the arc is always already in cache, rather than
- *     being requested per flight and arriving after the animation has passed through it.
- * ★ Fire and forget: no callback, nothing waits on it, and a failure costs exactly the old
- *   behaviour. It runs once per map, not once per flight. */
-(function warmLowZooms(){
-  for(var z=0;z<=2;z++){
-    var n=Math.pow(2,z);
-    for(var x=0;x<n;x++)for(var y=0;y<n;y++){
-      var im=new Image();
-      im.src='https://'+'abc'.charAt((x+y)%3)+'.tile.openstreetmap.org/'+z+'/'+x+'/'+y+'.png';
-    }
+/* ★★★ NO '{s}' SUBDOMAIN SHARDING (backticks avoided — this comment is inside a template literal). a/b/c.tile.openstreetmap.org is DEPRECATED — the OSM
+ *  Foundation asks clients to stop using it, and under HTTP/2 it is actively harmful: three
+ *  hostnames means three TLS handshakes and three connection pools for one server that would
+ *  have multiplexed the lot down one. We were using it in the web client, the admin page AND
+ *  the app.
+ *  ★★ WE WERE BLOCKED FOR THIS (2026-09-26). Stuart's PC showed the blocked-tile image while
+ *  his Mac still drew the map — same house, same public IP, because the Mac was serving cached
+ *  tiles and the PC was asking for fresh ones. A free service we had been hammering.
+ *  ★ Attribution is a LICENCE CONDITION, not decoration (ODbL) — it stays whatever we host. */
+/* ===== THE BASEMAP IS OURS NOW ========================================================
+ * ★★★ VECTORS, NOT TILES. Replaced OpenStreetMap raster tiles entirely (see
+ *  briefs/BRIEF-vector-maps.md). Tiles meant a dependency on a free service that had already
+ *  refused us, black gaps every time the flyover crossed ground it had already covered, mobile
+ *  data spent re-downloading the world, and a projected 150-583 MB on-device cache. The data
+ *  ships with the app: ~26 MB for the planet, of which the flyover only ever draws TIER 0 --
+ *  260 kB, 12,856 points.
+ * ★★★ AND IT IS WHAT MAKES DARK MODE AND THE GREYLINE POSSIBLE AT ALL. Over raster tiles a
+ *  terminator is grey smeared across somebody else's LIGHT basemap. Here land and sea are fills
+ *  we own, so night genuinely darkens the countries underneath it.
+ * ★★ THE BASEMAP IS CONTEXT; THE AIRCRAFT ARE THE SUBJECT. Deliberately no green land and no
+ *  blue sea: realistic colours fight the amber chrome AND the green/amber/red that already carry
+ *  aircraft state. The map stays near-monochrome so the status colours are the only saturated
+ *  thing on screen. */
+var MAP_PAL = KIND === 'hfdl'
+  ? { sea: '#070a0e', land: '#1b1a17', coast: 'rgba(255,190,110,0.30)', border: 'rgba(255,190,110,0.13)',
+      lake: '#0d1218', town: 'rgba(255,200,130,0.55)', label: 'rgba(255,205,140,0.72)' }
+  : { sea: '#060a08', land: '#161a16', coast: 'rgba(150,235,150,0.28)', border: 'rgba(150,235,150,0.12)',
+      lake: '#0b1110', town: 'rgba(170,240,170,0.55)', label: 'rgba(180,245,180,0.70)' };
+document.getElementById('lmap').style.background = MAP_PAL.sea;
+
+/* ★★ TIERS, BECAUSE DRAW TIME IS THE CONSTRAINT AND FILE SIZE IS NOT. 1.38 M points exist; the
+ *  world view needs 12,856 of them. Each tier is fetched once, on the first zoom that needs it,
+ *  and kept -- so the flyover never waits for anything after the first pass. */
+var MAP_TIERS = [
+  { max: 4,   files: ['tier0-countries','tier0-places','tier0-airports'] },
+  { max: 7,   files: ['tier1-countries','tier1-places','tier1-airports','tier1-ports'] },
+  { max: 99,  files: ['tier2-countries','tier2-admin1','tier2-lakes','tier2-places','tier2-airports'] }
+];
+/* ★★★ THE MAP DATA COMES FROM THE SERVER THIS WEBVIEW IS POINTED AT. The document is loaded with
+ *  baseUrl set to the instance origin, so a root-relative path reaches the VibeServer the user is
+ *  listening to -- which is also what makes the offline case work: a local dongle IS a loopback
+ *  VibeServer, and a Pi Zero in hotspot mode serves its own copy with no uplink.
+ *  ★★★ THIS WAS REFERENCED AND NEVER ASSIGNED for half a day. Every tier fetch threw a
+ *  ReferenceError straight into the catch below -- a catch added so that ONE
+ *  missing layer could not take the map down, which instead hid the map failing ENTIRELY. The
+ *  aircraft plotted onto an empty background and nothing anywhere said why.
+ *  ★★ Resilience that hides a total failure is not resilience. The catch now logs. */
+var MAP_DATA_BASE = '/mapdata/v1/';
+var mapData = {}, tierLoaded = [false,false,false], landLayer = null, markLayer = null;
+function tierFor(z){ for (var i=0;i<MAP_TIERS.length;i++) if (z <= MAP_TIERS[i].max) return i; return 2; }
+function loadTier(i){
+  if (tierLoaded[i]) return Promise.resolve();
+  tierLoaded[i] = true;
+  return Promise.all(MAP_TIERS[i].files.map(function(f){
+    return fetch(MAP_DATA_BASE + f + '.json').then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){ if (j) mapData[f] = j; })
+      /* ★ A missing layer must not take the map with it: the aircraft still plot on an empty
+       *  background, which is far better than a blank window. ★★ But it SAYS SO -- a silent catch
+       *  here is what hid MAP_DATA_BASE being undefined for half a day. */
+      .catch(function(e){ try { console.error('map layer ' + f + ' failed:', e); } catch (_) {} });
+  })).then(drawBase);
+}
+/** Redraw land, borders, lakes and place marks for the current zoom. */
+function drawBase(){
+  var z = map.getZoom(), t = tierFor(z), pre = ['tier0','tier1','tier2'][t];
+  if (landLayer) { map.removeLayer(landLayer); landLayer = null; }
+  if (markLayer) { map.removeLayer(markLayer); markLayer = null; }
+  var land = [], marks = [];
+  var polys = mapData[pre + '-countries'];
+  if (polys) {
+    /* ★ FILLED, not stroked. Stuart, 2026-09-26: "obviously the land has to be colour filled to
+     *  stand out against the sea" -- and a coastline stroke alone reads as a wireframe, not a
+     *  map. The stroke on top is what gives the impression of an accurate coast at zoom. */
+    Object.keys(polys).forEach(function(iso){
+      polys[iso].forEach(function(ring){
+        land.push(L.polygon(ring.map(function(p){ return [p[1], p[0]]; }), {
+          stroke: true, color: MAP_PAL.coast, weight: 0.6, fill: true,
+          fillColor: MAP_PAL.land, fillOpacity: 1, interactive: false
+        }));
+      });
+    });
   }
-})();
+  if (mapData[pre + '-lakes']) mapData[pre + '-lakes'].forEach(function(ring){
+    land.push(L.polygon(ring.map(function(p){ return [p[1], p[0]]; }),
+      { stroke: false, fill: true, fillColor: MAP_PAL.lake, fillOpacity: 1, interactive: false }));
+  });
+  if (mapData[pre + '-admin1']) mapData[pre + '-admin1'].forEach(function(line){
+    land.push(L.polyline(line.map(function(p){ return [p[1], p[0]]; }),
+      { color: MAP_PAL.border, weight: 0.5, interactive: false }));
+  });
+  var places = mapData[pre + '-places'];
+  if (places) places.forEach(function(p){
+    /* ★ Rank thresholds keep the world view readable: at z3 only the biggest, by z8 everything.
+     *  Without this the world view is a wall of overlapping names. */
+    if ((p[3] || 0) > (z - 1) * 1.6) return;
+    marks.push(L.circleMarker([p[2], p[1]], { radius: 1.4, color: MAP_PAL.town, weight: 0,
+      fillColor: MAP_PAL.town, fillOpacity: 0.9, interactive: false }));
+    if (z >= 4) marks.push(L.marker([p[2], p[1]], { interactive: false, icon: L.divIcon({
+      className: 'mlbl', html: '<span>' + esc(p[0]) + '</span>', iconSize: [0,0], iconAnchor: [-3, 6] }) }));
+  });
+  var airs = mapData[pre + '-airports'];
+  if (airs) airs.forEach(function(a){
+    if ((a[3] || 0) > Math.max(0, z - 5)) return;      // large first, GA fields only when close in
+    marks.push(L.marker([a[2], a[1]], { interactive: false, icon: L.divIcon({
+      className: 'mapt', html: '<b>&#9992;</b>' + (z >= 7 ? '<span>' + esc(a[4] || a[0]) + '</span>' : ''),
+      iconSize: [0,0], iconAnchor: [0, 0] }) }));
+  });
+  if (land.length)  { landLayer = L.layerGroup(land).addTo(map);  landLayer.bringToBack(); }
+  if (marks.length) { markLayer = L.layerGroup(marks).addTo(map); }
+}
+function esc(t){ return String(t).replace(/[&<>]/g, function(c){ return c==='&'?'&amp;':c==='<'?'&lt;':'&gt;'; }); }
+map.on('zoomend', function(){ loadTier(tierFor(map.getZoom())).then(drawBase); });
+loadTier(0);
+/* ★★★ THE STARTUP TILE WARM-UP IS GONE. It fetched 21 tiles from OpenStreetMap on every
+ *  map open to hide the black gaps during a flyTo — and it did not hide them, because the arc
+ *  passes through zooms and positions no fixed warm-up can anticipate. What it did do was make
+ *  us look like an app bulk-fetching a free service, which their policy forbids and which got
+ *  our tiles refused. The gaps are now invisible because #lmap is the basemap's own colour.
+ *  ✗ Do not reintroduce prefetching against somebody else's tile server. */
 var cnt=document.getElementById('cnt');
 var toast=document.getElementById('toast');
 
@@ -515,7 +807,7 @@ if(KIND==='hfdl'){
           pending++;
           var im=new Image();
           im.onload=im.onerror=function(){if(--pending<=0)fin();};
-          im.src='https://'+'abc'.charAt((x+y)%3)+'.tile.openstreetmap.org/'+z+'/'+x+'/'+y+'.png';
+          im.src='https://tile.openstreetmap.org/'+z+'/'+x+'/'+y+'.png';
         }
       }
     }
