@@ -746,10 +746,16 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
      *  it is information, not authority, until a known MPX input settles the statistic. Nothing
      *  validated against his analyser changes. */
     const rpk = x?.rdsDevPeak ?? 0;
-    const pkTxt = rpk > 0.2 ? ` · pk ${rpk.toFixed(1)}` : '';
+    /* ★★ "TYPICAL" READ AS A SECOND AVERAGE. Stuart, 2026-09-26: "difference between average and
+     *  typical? I read both of those as an average." Beside a figure labelled `avg` it does —
+     *  and it was already the odd one out: the PILOT row above says "nominal" and the MPX
+     *  deviation row says "nominal", so RDS alone spoke a different dialect for the same idea.
+     *  ★ Both numbers are labelled now, in the same words and the same order the deviation row
+     *    uses, so nothing has to be inferred from position. */
+    const pkTxt = rpk > 0.2 ? ` · peak ${rpk.toFixed(1)}` : '';
     const impossible = rdev > 5.8, strong = rdev >= 4.0, low = rdev < 1.5;
-    rdsDevTxt = `${rdev.toFixed(1)}${pkTxt} kHz · ${
-      impossible ? 'over spec — suspect' : low ? 'weak' : strong ? 'generous' : 'typical'}`;
+    rdsDevTxt = `avg ${rdev.toFixed(1)}${pkTxt} kHz · ${
+      impossible ? 'over spec — suspect' : low ? 'weak' : strong ? 'generous' : 'nominal'}`;
     rdsDevCol = impossible ? C.bad : low ? C.warn : C.good;
     rdsHold.current = { txt: rdsDevTxt, col: rdsDevCol, at: Date.now() };
   } else if (rdsHold.current && Date.now() - rdsHold.current.at < 4000) {

@@ -5781,6 +5781,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         float rdsPhaseDrift = 0.0f;
         float rdsPilotDev = 0.0f, rdsDev = 0.0f; // injection levels, kHz deviation
         float rdsDevPeak = 0.0f;                // ★ the MEASURED peak, no assumed crest factor
+        float rdsDevRaw  = 0.0f;                // ★ rdsDev with the guard subtraction skipped — calibration only
         std::vector<vibedsp::RdsDecoder::Eon> rdsEon;
         std::vector<vibedsp::RdsDecoder::Oda> rdsOda;
         std::vector<int> rdsAf;
@@ -10319,6 +10320,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         st.rdsPilotDev = x.pilotDevKHz;
         st.rdsDev      = x.rdsDevKHz;
         st.rdsDevPeak  = x.rdsDevPeakKHz;
+        st.rdsDevRaw   = x.rdsDevRawKHz;
     }
     static void rdsSigCb_(RdsState& st, double vfoHz, Impl* im, float relDb) {
         std::lock_guard<std::mutex> lk(st.rdsMtx);
@@ -20013,6 +20015,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         int pty, tp, ta, ms, di, ctMin, ctOff, gTot, afSeen;
         int ptyR, tpR, taR, msR, diR;
         int lang, pinD, pinH, pinM; float phase, phaseCoh, pilotDev, rdsDev_, rdsDevPk_, phaseDrift;
+        /* ★ Initialised, unlike its neighbours on the line above: every one of those is written
+         *  only inside the locked block below, so a path that skips it reads an indeterminate
+         *  float. Pre-existing and untouched here, but not worth copying into a new field. */
+        float rdsDevRaw_ = 0.0f;
         int berNow;   // ★ block error rate, ALSO here: the phase verdict needs it
         std::string rtpT, rtpA, lps, ptyn;
         std::vector<vibedsp::RdsDecoder::Eon> eon;
@@ -20031,7 +20037,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           lang = R.rdsLang; pinD = R.rdsPinDay; pinH = R.rdsPinHour; pinM = R.rdsPinMin;
           eon = R.rdsEon; oda = R.rdsOda; phase = R.rdsPhase; phaseCoh = R.rdsPhaseCoh;
           phaseDrift = R.rdsPhaseDrift;
-          pilotDev = R.rdsPilotDev; rdsDev_ = R.rdsDev; rdsDevPk_ = R.rdsDevPeak; berNow = R.rdsBer; }
+          pilotDev = R.rdsPilotDev; rdsDev_ = R.rdsDev; rdsDevPk_ = R.rdsDevPeak;
+          rdsDevRaw_ = R.rdsDevRaw; berNow = R.rdsBer; }
         // ★ The pipeline whose figures these are — chosen exactly as RdsState was above, so the
         //   numbers describe the SAME signal as the constellation beside them. A shared radio has
         //   one pipeline per client; a single-user radio has only the Impl's own.
@@ -20080,6 +20087,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                       /* ★ ADDITIVE: an older client ignores this and keeps drawing rdsDev, which is
                        *  unchanged. See RdsExt::rdsDevPeakKHz for why the pair exists. */
                       + ",\"rdsDevPeak\":" + std::to_string(rdsDevPk_)
+                      /* ★★ THE CONTROL ARM, ADDITIVE and unread by any shipped client — the guard-band
+                       *  subtraction skipped, everything else identical. Two numbers side by side
+                       *  say which half of rdsDeviationKHz() owns the ~16 % deficit against MpxTool;
+                       *  one number said nothing for two months. See RdsDemod::rdsDeviationRawKHz().
+                       *  ✗ Never draw this as a deviation — it is deliberately uncorrected. */
+                      + ",\"rdsDevRaw\":" + std::to_string(rdsDevRaw_)
                       + ",\"ber\":" + std::to_string(berNow)
                       // ★★★ THE WEAK-SIGNAL FIGURES, KEPT ON PURPOSE — not debug scaffolding.
                       //     Stuart: "the FM-DX crowd would appreciate them anyway and that would

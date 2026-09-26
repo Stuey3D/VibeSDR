@@ -1588,6 +1588,19 @@ public:
      *  be read (see rdsEnvPk_). Expected to land on the PIRA column where rdsDeviationKHz() sits
      *  ~16 % under it — that agreement is the test of this whole change. 0 = nothing measured. */
     float rdsDeviationPeakKHz() const;
+    /** ★★★ THE UNCORRECTED AVERAGE — A DIAGNOSTIC, NOT A THIRD READING. `rdsDeviationKHz()`
+     *  does two separable things: it applies the 1.520 crest factor, and (when the guard band is
+     *  on) it subtracts a noise floor in power. Both are suspects for the ~16 % deficit against
+     *  MpxTool, and while they are bundled together NEITHER can be tested. This returns the same
+     *  estimate with the noise subtraction SKIPPED — identical maths otherwise, identical gate.
+     *  ★★ So the reading is a one-line experiment on a live station: if `raw` matches MpxTool and
+     *  the corrected figure does not, the guard band is eating signal (which the four-radio
+     *  wide/narrow result in rds.cpp already hints at) and the crest factor is innocent. If both
+     *  sit ~16 % low together, the subtraction is fine and the constant is wrong — and THAT case
+     *  needs a known MPX input, not a curve fit against six of Hans's stations.
+     *  ★ Equals rdsDeviationKHz() exactly when the guard is off. -1 = no station, as with both
+     *  of the above. ✗ Do NOT surface this as a user-facing deviation: it is the control arm. */
+    float rdsDeviationRawKHz() const;
     /** ★ Turn on the guard-band noise measurement. Costs a second decimating filter pair on the
      *  RDS front end, so it is the operator's call — see the note on guardPow_. Without it the
      *  deviation figure is reported uncorrected and can read high on a weak signal. */
@@ -1933,6 +1946,11 @@ public:
              *  against Hans's Pira cannot regress. Where they disagree, THIS is the one an
              *  analyser would agree with. 0 = not measured (draw a dash, never a zero). */
             float rdsDevPeakKHz;
+            /** ★★ THE UNCORRECTED average, for calibration only — see rdsDeviationRawKHz(). It is
+             *  `rdsDevKHz` with the guard-band subtraction skipped, so the two differ ONLY by that
+             *  subtraction and the difference is directly readable. Equal to `rdsDevKHz` when the
+             *  operator has the guard off. ✗ Not a user-facing figure. */
+            float rdsDevRawKHz;
             /** ★★ THE MPX SPECTRUM, 0-100 kHz — the view SDRconnect calls "MPX SP" and the
              *  most analyser-like display there is: L+R at the bottom, the 19 kHz pilot, the
              *  L-R sidebands around 38 kHz, RDS at 57 kHz, and anything else a station is
@@ -2681,6 +2699,9 @@ private:
     bool  extAvgInit_  = false;
     float extPilotDev_ = 0.0f;
     float extRdsDev_   = 0.0f;
+    /* ★ The uncorrected twin of extRdsDev_, same coefficient, same sentinel — the control arm
+     *  for the 16 % deficit. See RdsDemod::rdsDeviationRawKHz(). Diagnostic only. */
+    float extRdsDevRaw_ = 0.0f;
     float extCoh_      = 0.0f;
     float extDrift_    = 0.0f;
     int   extRdsBad_   = 0;   // consecutive unmeasurable RDS ticks

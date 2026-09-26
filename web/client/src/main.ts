@@ -9638,7 +9638,17 @@ function renderRds() {
      *  ★ Both numbers are labelled now, in the same words and the same order the deviation row
      *    uses, so nothing has to be inferred from position. */
     const pkTxt = rpk > 0.2 ? ` · peak ${rpk.toFixed(1)}` : '';
-    rEl.textContent = `avg ${rdev.toFixed(1)}${pkTxt} kHz · ${impossible ? 'over spec — suspect' : low ? 'weak' : strong ? 'generous' : 'nominal'}`;
+    /* ★★★ THE CALIBRATION CONTROL, AND WHY IT IS ONLY SOMETIMES DRAWN. `rdsDevRaw` is `avg` with
+     *  the guard-band noise subtraction skipped — identical maths otherwise, identical smoother.
+     *  When the guard is off the server sends the same number twice, and a row reading
+     *  "avg 2.1 · raw 2.1" is noise in the panel, so it appears only where the subtraction is
+     *  actually doing something (>2 %). ★★ What to do with it: if `raw` lands on MpxTool and `avg`
+     *  reads ~16 % under, the guard band is eating signal and the 1.520 crest factor is innocent.
+     *  If raw and avg sit low TOGETHER, the constant is the suspect — and that case needs a known
+     *  MPX input, not a fit against Hans's six stations. ✗ Not a user-facing deviation. */
+    const rraw = rdsExt?.rdsDevRaw ?? 0;
+    const rawTxt = rraw > 0.2 && Math.abs(rraw - rdev) > rdev * 0.02 ? ` · raw ${rraw.toFixed(1)}` : '';
+    rEl.textContent = `avg ${rdev.toFixed(1)}${pkTxt}${rawTxt} kHz · ${impossible ? 'over spec — suspect' : low ? 'weak' : strong ? 'generous' : 'nominal'}`;
     rEl.style.color = impossible ? '#ff8a7d' : low ? '#ffd479' : '#7dff9a';
   } else if (rdev >= 0) {
     // ★★ ALWAYS VISIBLE, EVEN AT ZERO. A dash cannot be told from a broken readout, and this one

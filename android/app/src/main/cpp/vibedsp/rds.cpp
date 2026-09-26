@@ -310,6 +310,18 @@ float RdsDemod::rdsDeviationKHz() const {
     return rdsRms_ * 1.520f * 75.0f;
 }
 
+/* ★★★ THE CONTROL ARM. Deliberately NOT written as a flag on rdsDeviationKHz(): that function is
+ *  the one thing here validated against Hans's analyser, and threading a parameter through it is
+ *  how a "diagnostic" ends up changing the shipped reading (a DEFAULT PARAMETER is exactly what
+ *  let three of those ship in this project). This duplicates one line instead.
+ *  ★★ The duplication is the POINT — it must stay the uncorrected branch above, character for
+ *  character, including the gate. If the 1.520 ever moves, it moves in BOTH or the comparison
+ *  silently stops comparing what it claims to. */
+float RdsDemod::rdsDeviationRawKHz() const {
+    if (agg_.groupTotal <= 0) return -1.0f;
+    return rdsRms_ * 1.520f * 75.0f;
+}
+
 // ★ Enabling costs a second decimating filter pair on the RDS front end (the rotation itself is
 // a complex multiply per input sample). Configured lazily here rather than in configure(),
 // because the operator can turn it on while a radio is already running.

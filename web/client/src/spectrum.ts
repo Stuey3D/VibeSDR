@@ -116,6 +116,11 @@ export interface RdsExt {
    *  about and wrongly blamed on a signal-path loss. Where the two disagree, THIS is the one an
    *  analyser agrees with. 0 = not measured (draw a dash, never a zero). */
   rdsDevPeak: number;
+  /** ★★ THE UNCORRECTED average — `rdsDev` with the guard-band noise subtraction skipped and
+   *  nothing else changed. A CALIBRATION CONTROL, not a third reading: the two together say
+   *  whether the ~16 % deficit against MpxTool lives in the subtraction or in the 1.520 crest
+   *  factor. Shown only when it differs from `rdsDev`. 0 on a server older than 5.6.56. */
+  rdsDevRaw: number;
   /** Pilot against the transmitted-silence gap at 15–19 kHz, dB. NOT a textbook SNR — the
    *  measuring filter's own leakage caps it near 34 dB — but a real figure of merit, and the
    *  thing that drives high-blend and the audio high-cut. */
@@ -1167,6 +1172,7 @@ export class SpectrumClient {
           pilotLock: Boolean(msg.pilotLock),
           rdsDev: Number(msg.rdsDev ?? 0),
           rdsDevPeak: Number(msg.rdsDevPeak ?? 0),   // ★ 0 on an older server — see the type
+          rdsDevRaw: Number(msg.rdsDevRaw ?? 0),     // ★ diagnostic; 0 on an older server
           mpxSnr: Number(msg.mpxSnr ?? 0),
           multipath: Number(msg.multipath ?? 0),
           multipathOk: Number(msg.multipathOk ?? 0) === 1,

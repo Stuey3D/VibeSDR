@@ -1881,11 +1881,20 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc) {
                     const float  a   = (dt > 0.0) ? (float)(1.0 - std::exp(-dt / 1.5)) : 0.1f;
                     const float  pd  = pll_.pilotDeviationKHz();
                     const float  rd  = rdsDemod_.rdsDeviationKHz();
+                    /* ★★★ THE CONTROL ARM RIDES THE SAME SMOOTHER. Taking the raw figure live beside
+                     *  a 1.5 s average would put the smoothing INTO the difference the reading is
+                     *  meant to isolate, and the deficit being chased is only 16 % — the same order
+                     *  as the wobble a 1.5 s filter removes. Compare like with like or the experiment
+                     *  measures the filter. ★ Both share one sentinel: `agg_.groupTotal <= 0` is the
+                     *  ONLY -1 path in either, so `rr >= 0` exactly when `rd >= 0` and the branches
+                     *  below can carry both. */
+                    const float  rr  = rdsDemod_.rdsDeviationRawKHz();
                     const float  coh = rdsDemod_.pilotPhaseCoherence();
                     const float  drf = rdsDemod_.pilotPhaseDriftDegPerSec();
                     if (!extAvgInit_) {
                         extAvgInit_ = true;
                         extPilotDev_ = pd; extRdsDev_ = rd; extCoh_ = coh; extDrift_ = drf;
+                        extRdsDevRaw_ = rr;
                         extRdsBad_ = 0;
                     } else {
                         extPilotDev_ += a * (pd  - extPilotDev_);
@@ -1905,10 +1914,11 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc) {
                          *    "cannot measure" only after it has held for about a second. */
                         if (rd >= 0.0f) {
                             extRdsBad_ = 0;
-                            if (extRdsDev_ < 0.0f) extRdsDev_ = rd;          // first good reading
-                            else                   extRdsDev_ += a * (rd - extRdsDev_);
+                            if (extRdsDev_ < 0.0f) { extRdsDev_ = rd; extRdsDevRaw_ = rr; }  // first good
+                            else { extRdsDev_    += a * (rd - extRdsDev_);
+                                   extRdsDevRaw_ += a * (rr - extRdsDevRaw_); }
                         } else if (++extRdsBad_ * dt > 1.0) {
-                            extRdsDev_ = rd;                                  // genuinely gone
+                            extRdsDev_ = rd; extRdsDevRaw_ = rr;              // genuinely gone
                         }
                     }
                 }
@@ -1939,6 +1949,7 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc) {
                  *  and smoothing a peak is how the averaged figure came to be mislabelled in the first
                  *  place. */
                 x.rdsDevPeakKHz = rdsDemod_.rdsDeviationPeakKHz();
+                x.rdsDevRawKHz  = extRdsDevRaw_;
                 cb_.rdsExt(cb_.ctx, x);
             }
             if (wantRds && pll_.trackable())

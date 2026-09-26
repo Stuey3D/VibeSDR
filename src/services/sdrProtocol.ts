@@ -80,6 +80,9 @@ export interface RdsExt {
    *  `rdsDev` uses a fixed 1.520 crest where Hans's Pira implies 1.770, so it reads ~16 % low;
    *  this is the figure an analyser would agree with. 0 = not measured, so draw a dash. */
   rdsDevPeak: number;
+  /** ★ UNCORRECTED `rdsDev` — guard-band subtraction skipped. A calibration control, not a
+   *  reading; see RdsDemod::rdsDeviationRawKHz(). 0 on a server older than 5.6.56. */
+  rdsDevRaw: number;
   /** ★ Stereo PLL locked. NOT the constellation's lock, which is RDS — see AdvRdsPanel. */
   pilotLock: boolean;
   ber: number;           // block error rate %, -1 = unknown
