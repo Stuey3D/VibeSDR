@@ -4483,6 +4483,9 @@ function updateStatus() {
   const tagEl = $('dspTags');
   if (tagEl) {
     /* ★★★ THE BLANKER'S IDS ARE `nbBtn` AND `nbxBtn`, NOT `nb`/`nbx` — SO NB NEVER SHOWED.
+     *  ★★ AND FIXING THAT WAS NOT THE WHOLE FIX. See the nbOn line below: the ids were wrong AND
+     *  the wrong button was being consulted. Correcting the ids made the badge work and left it
+     *  reading the FM blanker on MW, so the original report survived its own fix.
      *  `$('nb')` and `$('nbx')` match nothing in this page, so `nbOn` was false whatever the
      *  listener had switched on: "NR/AN show but NB isnt even though it is active" (Stuart,
      *  2026-09-25). The lookup failed silently, which is how a badge ends up lying rather than
@@ -4503,7 +4506,18 @@ function updateStatus() {
     const bcastFm = (spec?.mode ?? '') === 'wfm' && !dabOn;
     const on2 = (id: string) => !bcastFm && on(id);
     const nrOn    = !bcastFm && (Number(($('nr') as HTMLInputElement | null)?.value) || 0) > 0;
-    const nbOn    = on2('nbBtn') || on2('nbxBtn');
+    /* ★★★ `nbxBtn` ONLY — NEVER `nbBtn`. index.html says which is which and I read it backwards:
+     *  `nbxBtn` is "the listener's own impulse blanker for every mode BUT broadcast FM"; `nbBtn`
+     *  is the TEF6686-style blanker in the BROADCAST FM processing row. ORing them lit the badge
+     *  on MW because the FM blanker is on by default there and does nothing — Stuart, 2026-09-26:
+     *  "an NB icon when the user selectable noiseblanker is off and the FM one should be being
+     *  ignored", and a day earlier: "it is reading the broadcast FM specific ones, I am on MW and
+     *  the AM ones are off".
+     *  ★★ THAT EARLIER REPORT WAS THE SAME BUG AND I DID NOT FIX IT. I corrected the element IDs,
+     *  which were also wrong, and left the OR that was the actual fault — so the symptom survived
+     *  a commit that claimed to cure it. Fixing the half you came to fix is exactly what AGENTS.md
+     *  warns about: "verify the whole sentence, not the part you came to fix." */
+    const nbOn    = on2('nbxBtn');
     const notchOn = on2('notch');
     /* ★★ BOXED, LIKE THE APP. Two or three bare letters at the end of a dense status row read as
      *  leftover text; the app gives them a tinted pill so they say "this is ON" at a glance, and
@@ -9605,8 +9619,14 @@ function renderRds() {
      *  The peak rides alongside as information until a known MPX input settles the statistic. */
     const rpk = rdsExt?.rdsDevPeak ?? 0;
     const impossible = rdev > 5.8, strong = rdev >= 4.0, low = rdev < 1.5;
-    const pkTxt = rpk > 0.2 ? ` · pk ${rpk.toFixed(1)}` : '';
-    rEl.textContent = `${rdev.toFixed(1)}${pkTxt} kHz · ${impossible ? 'over spec — suspect' : low ? 'weak' : strong ? 'generous' : 'typical'}`;
+    /* ★★ "TYPICAL" READ AS A SECOND AVERAGE. Stuart, 2026-09-26: "difference between average and
+     *  typical? I read both of those as an average." Beside a figure labelled `avg` it does —
+     *  and it was already the odd one out: the PILOT row above says "nominal" and the MPX
+     *  deviation row says "nominal", so RDS alone spoke a different dialect for the same idea.
+     *  ★ Both numbers are labelled now, in the same words and the same order the deviation row
+     *    uses, so nothing has to be inferred from position. */
+    const pkTxt = rpk > 0.2 ? ` · peak ${rpk.toFixed(1)}` : '';
+    rEl.textContent = `avg ${rdev.toFixed(1)}${pkTxt} kHz · ${impossible ? 'over spec — suspect' : low ? 'weak' : strong ? 'generous' : 'nominal'}`;
     rEl.style.color = impossible ? '#ff8a7d' : low ? '#ffd479' : '#7dff9a';
   } else if (rdev >= 0) {
     // ★★ ALWAYS VISIBLE, EVEN AT ZERO. A dash cannot be told from a broken readout, and this one
@@ -10831,8 +10851,19 @@ const COL = ${JSON.stringify(BAND_COLOUR)};
  *    issuing tile work mid-animation that it is only going to throw away. */
 const map = L.map('m', { worldCopyJump: true, preferCanvas: true })
   .setView(me ? [me.lat, me.lon] : [25, 5], me ? 4 : 3);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-  { attribution: '&copy; OpenStreetMap', maxZoom: 14, updateWhenZooming: false }).addTo(map);
+/* ★★★ NO {s} SUBDOMAIN SHARDING. (✗ NO BACKTICKS IN THIS COMMENT: it lives inside a template
+ *  literal, and a backtick here CLOSES the string and breaks the build — which it did, silently,
+ *  until a type-check hours later. Same trap as MapOverlay.tsx the same morning.) a/b/c.tile.openstreetmap.org is DEPRECATED — the OSM
+ *  Foundation asks clients to stop using it, and under HTTP/2 it is actively harmful: three
+ *  hostnames means three TLS handshakes and three connection pools for one server that would
+ *  have multiplexed the lot down one. We were using it in the web client, the admin page AND
+ *  the app.
+ *  ★★ WE WERE BLOCKED FOR THIS (2026-09-26). Stuart's PC showed the blocked-tile image while
+ *  his Mac still drew the map — same house, same public IP, because the Mac was serving cached
+ *  tiles and the PC was asking for fresh ones. A free service we had been hammering.
+ *  ★ Attribution is a LICENCE CONDITION, not decoration (ODbL) — it stays whatever we host. */
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  { attribution: '&copy; OpenStreetMap contributors', maxZoom: 14, updateWhenZooming: false }).addTo(map);
 
 function radius(snr) {
   const s = Math.max(-24, Math.min(12, snr));

@@ -238,8 +238,30 @@ const CREDITS: { name: string; detail: string }[] = [
     detail: 'Shortwave broadcast schedules used for live station bookmarks.' },
   { name: 'GQRX, KiwiSDR, CuteSDR, SdrDx, OpenWebRX, matplotlib',
     detail: 'Origins of the waterfall colour palettes.' },
-  { name: 'Leaflet, OpenStreetMap & CARTO',
-    detail: 'Map rendering and tiles for the HFDL / digital / CW maps.' },
+  /* ★★★ THE MAP DATA CREDITS, AND THREE OF THEM ARE A LICENCE OBLIGATION, NOT A COURTESY.
+   *  GeoNames, HydroLAKES and RESOLVE Ecoregions are CC BY 4.0: attribution is a CONDITION of
+   *  use, so this block is load-bearing. ✗ Do not trim it for space.
+   *  ★★ The old entry here read "Leaflet, OpenStreetMap & CARTO — map rendering and tiles",
+   *  which described a system deleted on 2026-09-26. The maps are now vectors and a shaded-relief
+   *  image built from public-domain grids, served from the app and each VibeServer, with NO tile
+   *  provider and no network at all. A credit that names the wrong source is worse than none: it
+   *  misattributes someone else's work and hides who actually deserves the thanks. */
+  { name: 'Natural Earth',
+    detail: 'Public domain. Coastlines, countries, state and province lines, urban areas, rivers, lakes, roads, railways, reefs, salt flats, ice, bathymetry and the physical region names.' },
+  { name: 'NOAA / NCEI — ETOPO2v2c',
+    detail: 'Public domain. The global elevation and bathymetry grid behind the shaded relief, on land and on the sea floor.' },
+  { name: 'RESOLVE Ecoregions 2017 (Dinerstein et al.)',
+    detail: 'CC BY 4.0. The 847 ecoregions in 14 biomes that colour the map — rainforest, savanna, desert, taiga and tundra.' },
+  { name: 'HydroLAKES / HydroSHEDS',
+    detail: 'CC BY 4.0. 1.4 million lakes and reservoirs down to 10 hectares — the small water Natural Earth does not carry.' },
+  { name: 'GeoNames',
+    detail: 'CC BY 4.0. The towns and cities at close zoom, including the ones no continental dataset lists.' },
+  { name: 'OurAirports',
+    detail: 'Public domain, dedicated by David Megginson. Every airfield, heliport and seaplane base, and the runway thresholds and designators.' },
+  { name: 'NGA World Port Index',
+    detail: 'Public domain (US Government). The world\u2019s sea ports.' },
+  { name: 'Leaflet',
+    detail: 'BSD-2-Clause, by Volodymyr Agafonkin. The map engine \u2014 projection, panning and drawing. Bundled, not fetched, so the maps work with no internet at all.' },
   { name: 'Atkinson Hyperlegible — Braille Institute',
     detail: 'Primary UI typeface. Nixie One and VT323 are used for the frequency displays.' },
   { name: 'React Native, Expo, Hermes, Skia, Reanimated, Gesture Handler, OkHttp',
