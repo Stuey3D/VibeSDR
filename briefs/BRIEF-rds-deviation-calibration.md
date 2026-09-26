@@ -137,3 +137,44 @@ Unchanged by any of the above — it is a different number. The guard-band subtr
 prime suspect and **the cheap diagnostic has still not been done**: expose the UNCORRECTED `raw`
 beside the corrected one. If `raw` matches and `corrected` does not, it is confirmed in one reading
 and no transmitter is needed.
+
+## 2026-09-26 — THE CONTROL ARM IS BUILT (5.6.56, commit 24e2d453)
+
+The cheap diagnostic this brief has recommended since it was written now exists.
+`RdsDemod::rdsDeviationRawKHz()` returns the averaged estimate with the guard-band noise
+subtraction **skipped** and nothing else changed; it is published as `rdsDevRaw` beside `rdsDev`
+and drawn in the ADV RDS row only where the two differ by more than 2 %.
+
+★★★ **WHY THIS AND NOT A NEW CONSTANT.** `rdsDeviationKHz()` does TWO separable things — applies
+1.520, and subtracts a floor in power. Both are suspects for the ~16 % deficit, and bundled into
+one figure neither is testable. That is why "about 1.3 dB low against a Pira" survived two months
+as a known-but-unresolved note: nobody could tell the halves apart.
+
+### How to read it, on a live station, no transmitter needed
+| observation | conclusion |
+|---|---|
+| `raw` lands on MpxTool, `avg` ~16 % under | **the guard band is eating signal** — consistent with the four-radio wide/narrow result in `rds.cpp` (both WIDE radios read 0.0 "no subcarrier" at 0 % block errors). 1.520 is innocent; fix the guard. |
+| `raw` and `avg` sit ~16 % low **together** | the subtraction is fine and **the constant is the suspect** — and that case needs a KNOWN MPX INPUT, not a fit. |
+| `raw` == `avg` and no `raw` shown | the operator has the guard band **off**; turn it on or the experiment cannot run. |
+
+### What was deliberately NOT done
+- ✗ **1.520 was not changed to 1.770.** That fits a constant to six of Hans's stations. The Pira
+  session's own rule stands: *measure the constant, don't fit it*.
+- ✗ **The percentile in `rdsDeviationPeakKHz()` was not retuned.** On 104.2 it puts peak/avg at
+  1.431 where Hans's table implies 1.164 — ~23 % over, with much wider scatter than PIRA's. Tuning
+  it until it lands on the table is the same mistake in a new parameter.
+- ✗ **`rdsDeviationKHz()` itself is untouched**, and keeps the verdict wording. Stuart, 2026-09-26:
+  *"we must however also preserve our PIRA tested numbers"*, and *"we do need the average as it was
+  what made the number move like a stopwatch"*.
+- ✗ **Not implemented as a flag/default parameter on `rdsDeviationKHz()`.** A default parameter is
+  precisely what let three "written and never read" fields ship in this project. It duplicates one
+  line and says so, so the 1.520 cannot move in one branch only.
+
+### One trap worth keeping
+The control arm rides the **same 1.5 s smoother** as the average. Taking it live beside a smoothed
+figure would put the filter's own wobble into a difference that is only 16 % — the same order. Both
+share one sentinel (`agg_.groupTotal <= 0` is the ONLY -1 path in either), so one branch carries
+both. ★ Compare like with like or the experiment measures the filter.
+
+▶ **NEXT:** get one reading off a station with the guard band ON, beside MpxTool. That single
+reading picks a row in the table above and ends the ambiguity.
