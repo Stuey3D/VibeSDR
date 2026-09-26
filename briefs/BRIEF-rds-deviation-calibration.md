@@ -255,3 +255,47 @@ re-read `avg` and `raw`.**
   the guard is measured, or gate the correction on IF width.
 - still clamped at 110k ⇒ the guard is not being contaminated from outside at all and **the
   subtraction itself is wrong** — a deeper fix, and a different one.
+
+## 2026-09-26, FINAL — THE IF-WIDTH THEORY IS DISPROVED; IT IS THE SUBTRACTION
+
+Heart 96.6 swept across every width on the RTL V4 (SNR 59 throughout):
+
+| bandwidth | errors | MPX S/N | avg / raw | raw x 0.707 | clamped |
+|---|---|---|---|---|---|
+| 110k (+/-55k) | unmeasurable | 5 dB | 3.3 / 4.7 | 3.32 | yes (void — signal destroyed) |
+| 140k (+/-70k) | 39% | 29 dB | 1.2 / 1.7 | 1.20 | yes |
+| 187k | 54% | 23 dB | 1.3 / 1.8 | 1.27 | yes |
+| wide | 0% | 32 dB | 1.4 / 2.0 | 1.41 | yes |
+| **MAXIMUM (+/-250k)** | **0%** | **32 dB** | **1.5 / 2.2** | **1.55** | **yes** |
+
+★★★ **THE CLAMP FIRES AT EVERY WIDTH, INCLUDING MAXIMUM ON A PRISTINE SIGNAL** — 0 % block errors,
+pilot locked 6.7 kHz nominal, "clean · no treatment". At maximum the passband admits MORE
+adjacent-channel energy than any other setting and the correction is no deeper. ✗ **IF width does
+not move it. The leakage-into-the-guard theory is DISPROVED, not merely untested.**
+
+### ✗ FOUR WRONG THEORIES — DO NOT RE-RUN THEM
+1. ✗ The receiver — two radios give identical figures.
+2. ✗ IF width / adjacent-channel leakage — disproved above.
+3. ✗ The 1.520 crest factor — `raw` uses it too and behaves sanely.
+4. ✗ **The guard is at the wrong frequency.** I claimed the rotation's sign put it at 51 kHz inside
+   the stereo subcarrier. **WRONG — I had the sign backwards.** After downconversion 63 kHz sits at
+   **+6 kHz**, and `x·e^-jθ` shifts DOWN, moving +6 kHz to DC. The guard IS at 63 kHz as intended.
+5. ✗ Mismatched filters — `lpfI_` and `lpfGI_` are built from the SAME taps and SAME decim.
+
+### ★★★ WHAT THE ARITHMETIC DEMANDS
+The clamp fires when `sqrt(sigPow) * 1.381 < rdsRms_ * 1.520 * 0.707`, i.e. `sigPow < 0.605 *
+rdsRms_^2`. With `rdsPow_ = k * rdsRms_^2` (k ~ 1.0-1.5 for a biphase envelope), that needs
+**guardPow_ to be 40-60 % of rdsPow_**. On a 0 %-error, 32 dB signal that is NOT a noise floor.
+▶ So either the guard really does see that much at 63 kHz, or **rdsPow_ and guardPow_ are not on
+the same scale** (a gain/normalisation applied in the RDS symbol loop but not the guard loop).
+
+### ▶ NEXT — PUBLISH THE RATIO, DO NOT REASON ABOUT IT
+★★★ Expose `guardPow_/rdsPow_` exactly as `raw` was exposed. One field, one reading, and it
+separates the two branches above. **The `raw` control arm answered a two-month-old question in one
+evening; reasoning from the source got it wrong four times in one night.** [[test_proxy_is_not_the_test]]
+
+## ▶ WHY ONFLINER WANTS +/-250k ALWAYS AVAILABLE — tonight is the evidence
+Maximum bandwidth was the ONLY setting that gave a clean measurement (0 % errors, 32 dB, pilot
+locked, "no treatment"). Every narrower one degraded the thing being measured; 110k left the panel
+unable to measure anything. ★ For deviation/RDS work the widest setting is not a luxury, it is the
+only width where the instrument is trustworthy. Record this as the REASON, not just the request.
