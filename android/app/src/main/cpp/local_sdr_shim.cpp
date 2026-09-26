@@ -27881,6 +27881,45 @@ void LocalSdrShim::setSampleRate(double rate) {
     // ★★ AND A NET UNDER BOTH JOINS. The lock above removes the race we know about; this keeps a
     //    future one from killing the APP rather than the operation. It logs, because a swallowed
     //    failure that says nothing just moves the mystery somewhere harder to find.
+    /* ★★★ WAIT FOR THE READER TO LEAVE LIBUSB, NOT MERELY TO BE JOINED — the release path has done
+     *  this for months and this one never did. MEASURED on the Pi 2 (2026-09-26, LIBUSB_DEBUG=4,
+     *  selecting DAB), and the trace names both halves:
+     *
+     *    [2cc9] libusb_cancel_transfer x16   <- the reader unwinding out of rtlsdr_read_async
+     *    [2cc9] libusb_free_transfer   x16   <- it FREES all sixteen transfer structs
+     *    [2e0a] libusb_submit_transfer       <- us, 23 ms later: a CONTROL transfer
+     *    [2e0a] handle_events_timeout_completed] doing our own event handling
+     *    [2e0a] reap_for_handle] urb type=3 status=-2
+     *           usbi_mutex_lock: Assertion `pthread_mutex_lock(mutex) == 0' failed.
+     *
+     *  ★★★ THE MECHANISM IS NOT "TWO THREADS TOUCH THE DEVICE" — IT IS SUBTLER, AND devMtx CANNOT
+     *      FIX IT. A libusb SYNCHRONOUS control transfer pumps the event loop ITSELF when nobody
+     *      else is ("doing our own event handling"). So rtlsdr_set_sample_rate below becomes a
+     *      SECOND event handler on the same context while the reader is still unwinding, and it
+     *      reaps a transfer the reader has already freed. type=3 is a control URB and -2 is ENOENT.
+     *      Locking every caller is useless here: the reader is documented never to take devMtx
+     *      (it would hold it for the life of the stream), so no lock we hold can exclude it.
+     *      ★ Hence the fix is ORDERING, not mutual exclusion: do not issue a control transfer
+     *        until the reader has actually finished with libusb.
+     *
+     *  ★★ AND ONE CANCEL IS NOT ENOUGH — the same reason releaseRadio() retries it: the flag is
+     *     only raised once the async loop has reached RUNNING, and a rate change racing a start
+     *     asks too early, the request is dropped, and the reader never notices. Retrying costs
+     *     nothing when the first one worked.
+     *  ★ rtlThreadDone is set by a destructor-guard in the reader (`struct Done`), so it means
+     *    "the thread has left the libusb call", which is the thing that matters — a join alone
+     *    returns immediately when the handle is not joinable and proves nothing about libusb.
+     *  ★ 5 s and then carry on, matching releaseRadio: a wedged libusb must not take the radio
+     *    with it, and a rate change that proceeds is no worse than the crash it replaces. */
+    if (!impl->useTcp() && impl->dev && impl->rtlThread.joinable()) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!impl->rtlThreadDone.load() && std::chrono::steady_clock::now() < deadline) {
+            rtlsdr_cancel_async(impl->dev);
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        if (!impl->rtlThreadDone.load())
+            LOGE("rate change: the reader would not leave libusb in 5s — going ahead anyway");
+    }
     joinOnce(impl->rtlThread, "rate change reader");
     impl->stopDspThread();
     std::lock_guard<std::recursive_mutex> lk(impl->modeMtx);
