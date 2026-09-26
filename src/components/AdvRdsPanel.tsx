@@ -753,8 +753,23 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
      *  ★ Both numbers are labelled now, in the same words and the same order the deviation row
      *    uses, so nothing has to be inferred from position. */
     const pkTxt = rpk > 0.2 ? ` · peak ${rpk.toFixed(1)}` : '';
+    /* ★★★ THE UNCORRECTED FIGURE, AND THIS PANEL IS THE ONE THAT MATTERS FOR IT. `rdsDevRaw` is
+     *  `avg` with the guard-band noise subtraction skipped — identical maths otherwise, identical
+     *  smoother — so the pair says whether the ~16 % deficit against MpxTool lives in the
+     *  subtraction or in the 1.520 crest factor.
+     *  ★★★ AND IT NEARLY SHIPPED TO THE ONE PERSON WHO CAN ANSWER THAT WITHOUT THIS LINE. The web
+     *     client got `raw` and this panel did not, because they are two renderers of one rule —
+     *     the ONE RULE, TWO READERS shape, again. Onfliner runs the APP with a local dongle and NO
+     *     server (Stuart, 2026-09-26: "he is using android directly no server"), so the web
+     *     client's copy is invisible to him and build 494 would have been useless for the
+     *     measurement it was built for. ✗ Whoever changes one of these rows changes BOTH.
+     *  ★ Drawn only where the subtraction is actually doing something (>2 %): with the guard idle
+     *    the server sends the same number twice and "avg 2.1 · raw 2.1" is noise in the row. */
+    const rrawV = x?.rdsDevRaw ?? 0;
+    const rawTxt = rrawV > 0.2 && Math.abs(rrawV - rdev) > rdev * 0.02
+      ? ` · raw ${rrawV.toFixed(1)}` : '';
     const impossible = rdev > 5.8, strong = rdev >= 4.0, low = rdev < 1.5;
-    rdsDevTxt = `avg ${rdev.toFixed(1)}${pkTxt} kHz · ${
+    rdsDevTxt = `avg ${rdev.toFixed(1)}${pkTxt}${rawTxt} kHz · ${
       impossible ? 'over spec — suspect' : low ? 'weak' : strong ? 'generous' : 'nominal'}`;
     rdsDevCol = impossible ? C.bad : low ? C.warn : C.good;
     rdsHold.current = { txt: rdsDevTxt, col: rdsDevCol, at: Date.now() };
