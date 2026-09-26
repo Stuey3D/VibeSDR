@@ -2360,7 +2360,20 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
  *  #decBody, so the toggle showed and did nothing (Stuart, 2026-09-07). Same cap as #decText's
  *  big size, bounded by the box's own ceiling above. */
 #decBox.big #decBody { max-height: clamp(300px, 72vh, 900px); }
-#decBox.rds #decBody { max-height: none; overflow-y: visible; }
+/* ★★★ ADV RDS SIZES ITSELF, BUT IT MAY NOT EXCEED THE SCREEN. This was `max-height: none;
+   overflow-y: visible`, i.e. no cap AND no way to scroll — fine while the panel fitted, and a
+   trap the moment it did not. Stuart, 2026-09-26, doing an A/B between an RTL and an RSP:
+   "I was able to get it where I wanted it then some RDS data was received which pushed the
+   figures im interested in off the bottom with no way of getting them back." The group-type
+   list arrives only once a station has been decoding for a while, so the panel GROWS UNDER THE
+   READER, carrying the deviation figures off the bottom of the viewport.
+   ★★ The cap is deliberately generous (85vh) so it does nothing at all until the content would
+   genuinely run off the screen — the earlier fault was a cap that was too TIGHT, clipping the
+   panel at the spectrum/waterfall divide and making it look stuck (2026-07-26). A cap that only
+   engages at the viewport edge cannot reproduce that.
+   ★ `overscroll-behavior: contain` so a flick inside the panel does not scroll the page behind
+   it, which on a touch screen is how you lose your place a second time. */
+#decBox.rds #decBody { max-height: 85vh; overflow-y: auto; overscroll-behavior: contain; }
 #decBox.min #decBody { display: none; }
 #decText {
   margin: 0; color: var(--btn-text); font-size: 12px;
