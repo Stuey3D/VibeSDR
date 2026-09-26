@@ -1008,6 +1008,14 @@ for (const [name, z] of Object.entries(PANES)) {
   paneRenderer[name] = L.canvas({ pane: name });
 }
 const inPane = (name, extra = {}) => ({ pane: name, renderer: paneRenderer[name], interactive: false, ...extra });
+/* ★★★ THE RECEIVERS SIT ABOVE EVERYTHING. Stuart, 2026-09-26, seeing "London" cross a server
+ *  glyph: "our radio icon does need to be above the label though since the servers are what
+ *  people are after here." That is a statement of PRIORITY, not of style -- this page exists to
+ *  find receivers, and the basemap is context for them. A map label may never obscure one.
+ *  ★ Leaflet's default markerPane is 600 and every basemap label lives there too, so order came
+ *  down to DOM insertion -- i.e. to luck. Its own pane at 620 settles it permanently. */
+map.createPane('servers');
+map.getPane('servers').style.zIndex = '620';
 const basemap = L.layerGroup().addTo(map);
 const placeLayer = L.layerGroup().addTo(map);
 /* ★★★ TIERED, BECAUSE 110m LOOKS LIKE A CHILD'S DRAWING. country-shapes.json is Natural Earth
@@ -1114,7 +1122,8 @@ function maidenhead(lon, lat) {
 function drawGrid() {
   gridLayer.clearLayers();
   const z = map.getZoom();
-  if (z < 3) return;
+  // ★ The locator grid belongs on a map about WHERE SOMEONE IS, not on an aircraft or ship map.
+  if (z < 3 || !P.grid) return;
   /* ★ THREE LEVELS, matching the locator's three pairs: fields at world view, squares regionally,
    *  and subsquares once you are close enough that IO92nh is a place rather than a county. */
   /* ★★★ SUBSQUARES START AT z12, NOT z9. At z9 a wide window spans ~8 deg of longitude, which is
@@ -1274,6 +1283,42 @@ function baseTier(z) { return tierFor('countries', z); }
  *  ★★ Each rung ANSWERS a different question. At z3 nobody is asking which town; they are asking
  *  what that huge sand-coloured area IS. A map that skips a rung leaves the user without a way to
  *  orient at that scale, which is what "very cluttered" and "needs continents" were both about. */
+/* ★★★ MAP PROFILES — what the map is FOR decides what it draws. Stuart, 2026-09-26: "the best
+ *  thing about these maps now is that we can tailor what is shown based on what the map is used
+ *  for." That is the dividend of owning the data: a raster tile is somebody else's rendering of
+ *  EVERYTHING, baked in, take it or leave it. A vector map can answer ONE question well.
+ *
+ *  ★★ EACH PROFILE IS A SUBTRACTION, NOT A THEME. Palette, terrain and coastline are identical
+ *  everywhere; what changes is which FEATURES earn screen space. An aircraft map with sea ports on
+ *  it is not richer, it is noisier -- every symbol the user must discard is a tax on the one they
+ *  are actually looking for.
+ *  ★ `places` is a LADDER RUNG, not a boolean: an aeronautical map still wants big cities to
+ *  orient by, it just does not want Brixworth.
+ *  ✗ Do not add a profile that turns ON something the default lacks. A profile only narrows.
+ */
+const PROFILES = {
+  // The directory: somebody is hunting for a RECEIVER, so the map is orientation, broadly drawn.
+  directory: { airports: true, runways: true, ports: true, rail: true,
+               places: 'all', grid: true, roads: true },
+  // HFDL / ACARS / ADS-B: aircraft. Airfields and runways matter; a sea port never does.
+  aero: { airports: true, runways: true, ports: false, rail: false,
+          places: 'major', grid: false, roads: false },
+  // AIS: ships. Ports matter, and a reef is a navigational fact; an airfield is noise.
+  marine: { airports: false, runways: false, ports: true, rail: false,
+            places: 'major', grid: false, roads: false },
+  // FT8 / CW / digital spots: the question is WHERE someone is -- towns and the locator grid.
+  spots: { airports: false, runways: false, ports: false, rail: false,
+           places: 'all', grid: true, roads: false },
+};
+/* ★ Selected by `?map=aero`, so a host page or the app's WebView picks one without a rebuild. */
+let P = PROFILES[new URLSearchParams(location.search).get('map')] || PROFILES.directory;
+window.setMapProfile = (name) => {
+  if (!PROFILES[name]) return false;
+  P = PROFILES[name];
+  redrawMap();
+  return true;
+};
+
 const LADDER = {
   continents: [0, 3],
   regions: [3, 6],
@@ -1514,7 +1559,7 @@ async function drawCover() {
 async function drawRoads() {
   roadLayer.clearLayers();
   const z = map.getZoom();
-  if (z < 5) return;                        // below this a road is a scratch, not a road
+  if (z < 5 || !P.roads) return;            // below this a road is a scratch, not a road
   const box = viewBox();
   const lines = await layer(await bestTier(tierFor('roads', z)), 'roads', box);
   if (!lines) return;
@@ -1557,8 +1602,23 @@ async function drawBase() {
  *  a naive pass would let whichever town came first in the file evict the capital.
  *  ★ Cheap on purpose: an axis-aligned box per label and a linear scan. At a few hundred
  *  candidates that is nothing, and it runs once per redraw, not per frame. */
+/* ★★★ SERVER MARKERS ARE RESERVED BEFORE ANY LABEL IS PLACED. Stacking order alone would leave a
+ *  name half-hidden UNDER the glyph, which is still a name you cannot read next to a receiver you
+ *  cannot see cleanly. Seeding the placer with the markers means the label simply goes elsewhere
+ *  -- or is dropped, which is the right answer when a receiver is what the user came for. */
+function serverBoxes() {
+  const out = [];
+  for (const m of markers.getLayers()) {
+    try {
+      const p = map.latLngToContainerPoint(m.getLatLng());
+      out.push({ x: p.x - 17, y: p.y - 17, w: 34, h: 34 });
+    } catch { /* a marker mid-update has no position yet; skipping it is harmless */ }
+  }
+  return out;
+}
+
 function labelPlacer(padPx = 2) {
-  const placed = [];
+  const placed = serverBoxes();
   return (latlng, text, fontPx, anchor = 'right') => {
     const p = map.latLngToContainerPoint(latlng);
     const w = text.length * fontPx * 0.62 + padPx * 2;
@@ -1596,7 +1656,10 @@ async function drawPlaces() {
    *  it thins the LABELS but still scatters a DOT for every candidate, and 700 pale dots across
    *  the world was the clutter Stuart saw. A place must earn its place on the map before it
    *  competes for space on it. */
-  const rankCut = z <= 2 ? 0 : z <= 3 ? 1 : z <= 4 ? 2 : z <= 5 ? 4 : 9;
+  /* ★★ A 'major' profile stops the ladder at large cities however far you zoom in: on an
+   *  aircraft map Brixworth is not orientation, it is interference. */
+  const rankCut = P.places === 'major' ? (z <= 3 ? 1 : 3)
+    : z <= 2 ? 0 : z <= 3 ? 1 : z <= 4 ? 2 : z <= 5 ? 4 : 9;
   for (const [name, lon, lat, rank, cap] of cands) {
     if ((rank ?? 9) > rankCut && cap !== 1) continue;
     // ★ Even capitals thin at the very top: Vaduz and San Marino are not world-view cities.
@@ -1669,7 +1732,7 @@ const runwayLayer = L.layerGroup().addTo(map);
 async function drawRunways() {
   runwayLayer.clearLayers();
   const z = map.getZoom();
-  if (z < 9) return;
+  if (z < 9 || !P.runways) return;
   /* ★★★ THE ZOOM GATE IS PER RUNWAY, BY LENGTH. A flat "z12 and up" hid Stansted's 10,003 ft
    *  04/22 at z10 and z11, where it is already 40 px long and perfectly legible -- Stuart looked
    *  for it and it was not there, which reads as MISSING DATA rather than a threshold. A runway
@@ -1700,7 +1763,7 @@ const portLayer = L.layerGroup().addTo(map);
 async function drawPoi() {
   const z = map.getZoom();
   airportLayer.clearLayers(); portLayer.clearLayers();
-  if (z < 5) return;
+  if (z < 5 || !(P.airports || P.ports)) return;
   const box = viewBox();
   const t = await bestTier(tierFor('airports', z));
   const [airports, ports] = await Promise.all([layer(t, 'airports', box), layer('tier1', 'ports', box)]);
@@ -1716,6 +1779,7 @@ async function drawPoi() {
      *  identify label compared to the hoardes of tiny airfields" -- with one size, EGLL and a
      *  farm strip competed equally, and the map failed to answer the only question an airband
      *  listener is asking: which of these is the busy one? */
+    if (!P.airports) continue;
     if (!placeAp([lat, lon], iata || icao, cls === 0 ? 12 : 9)) continue;
     const kind = cls >= 3 ? 'heli' : cls === 0 ? 'big' : cls === 1 ? 'med' : 'small';
     const glyph = cls >= 3 ? '<i class="g">[H]</i>' : '<i class="g">\u2708</i>';
@@ -1724,7 +1788,7 @@ async function drawPoi() {
       iconSize: [0, 0], iconAnchor: [0, 0],
     }) }).addTo(airportLayer).bindTooltip(esc(name || code));
   }
-  if (z < 6) return;
+  if (z < 6 || !P.ports) return;
   for (const [name, lon, lat] of pick(ports || [], box, CAP.ports, () => 0)) {
     // ★ A ship for a sea port -- the same reasoning as the aeroplane: the symbol says what KIND
     //   of thing this is before the name is read, which matters on a map carrying five kinds.
@@ -4050,6 +4114,7 @@ function render(servers, filtered) {
         className: 'mkWrap', iconSize: [26, 26], iconAnchor: [13, 13], popupAnchor: [0, -12],
         html: `<div class="mkGlyph" title="${esc(st.label)}">${glyph}${n > 1 ? `<b class="mkN">${n}</b>` : ''}</div>`,
       }),
+      pane: 'servers',
     }).addTo(markers).bindPopup(
       group.map((g) => { const gs = state(g); return `<b>${esc(g.name)}</b>${serverShut(g) ? ' \u{1F512}' : ''}<br>${esc(g.grid)} · ${esc(gs.label)}<br>`
         + `<a href="${esc(listenUrl(g))}" target="_blank" rel="noopener noreferrer">Listen</a>`; }).join('<hr style="border:0;border-top:1px solid #333;margin:6px 0">')

@@ -380,3 +380,50 @@ Chalfont St Peter drops; a naive pass lets whichever town came first in the file
 ★★ And the DOT IS ONLY DRAWN IF THE LABEL WAS PLACED. Drawing dots first meant every rejected
 place still left its mark, so the thinning was invisible and the world view stayed speckled. An
 unlabelled dot says "something is here" and nothing else.
+
+## ★★★ MAP PROFILES — the dividend of owning the data
+Stuart, 2026-09-26: *"the best thing about these maps now is that we can tailor what is shown based
+on what the map is used for. HFDL/ACARS/ADS-B then show the airports and large cities only. AIS show
+the ports and large cities. Digital Spots show Cities and towns."*
+
+★★ **A PROFILE IS A SUBTRACTION, NOT A THEME.** Palette, terrain and coastline are identical in all
+of them; what changes is which FEATURES earn screen space. An aircraft map with sea ports on it is
+not richer, it is NOISIER — every symbol the user must discard is a tax on the one they are looking
+for. ✗ Do not add a profile that turns ON something the default lacks.
+
+| profile | airports | ports | roads | grid | places |
+|---|---|---|---|---|---|
+| `directory` | ✓ | ✓ | ✓ | ✓ | all |
+| `aero` (HFDL/ACARS/ADS-B) | ✓ + runways | ✗ | ✗ | ✗ | major only |
+| `marine` (AIS) | ✗ | ✓ | ✗ | ✗ | major only |
+| `spots` (FT8/CW) | ✗ | ✗ | ✗ | ✓ | all |
+
+MEASURED over the Thames Estuary at z8 (not assumed):
+`directory` 16 airports / 24 ports / 62 roads / 174 places · `aero` 16 / 0 / 0 / 44 ·
+`marine` 0 / 24 / 0 / 44 · `spots` 0 / 0 / 0 / 174 with the grid on.
+
+★ Selected with `?map=aero`, or `window.setMapProfile('aero')` — so a host page or the app's WebView
+picks one with no rebuild. ★ `places` is a LADDER RUNG, not a boolean: an aeronautical map still
+wants big cities to orient by, it just does not want Brixworth.
+▶ **This is why the renderer must be EXTRACTED AND SHARED.** It currently lives only in
+`directory/public/index.html`; the app's `MapOverlay.tsx` and the server's web client each have
+their own copy of the old one. The profiles are for the APP's maps above all, and they cannot reach
+them until the renderer is one file. That extraction is the next real job.
+
+## ★ THE INSTRUMENT TRAP, TWICE IN ONE DAY
+`pgrep -f gen-map-data` matches the **zsh wrapper whose command text contains the string**, not just
+node. I reported the generator "still running" for 31 minutes off a stale wrapper, having flagged
+exactly this failure mode earlier the same morning and then reused the command.
+★★ The working check is `ps -Ao args | grep -q "^node scripts/gen-map-data"`.
+▶ Same family: [[test_that_cannot_fail]], and the `iqDrops` wrong-instrument on the Pi 2.
+
+## ★★★ AN UNASSERTED `replace()` IS A SILENT NO-OP — three deploys were wrong because of it
+Editing this file with Python `str.replace()` and no assertion leaves **no trace at all** when the
+anchor has drifted. `MAP_REEF` and `MAP_CAPITAL` were referenced for an hour before they were
+defined; the capital one only threw when London first entered a viewport.
+★★ And `cmd-that-failed && npx wrangler deploy` STILL DEPLOYED three times, because the `&&` was
+chained to a later check rather than to the edit. **The fix is structural: the edit, the checks and
+the deploy all live in ONE script, and the deploy is a `subprocess.run` that is only reached if
+every anchor matched and every check passed.** ✗ Never deploy from a separate shell command.
+★ The checks that now gate every directory deploy: every inline `<script>` through `node --check`,
+and every `MAP_*` used must be declared.
