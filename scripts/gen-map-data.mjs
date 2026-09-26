@@ -37,7 +37,8 @@
  *   map ships blank — the app looks broken, nobody suspects the build step. Every fetch, every
  *   header lookup and every layer count is asserted before a byte is written.
  */
-import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, stat, readdir, unlink } from 'node:fs/promises';
+import { readDbf, eachPolygon } from './lib/shapefile.mjs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -71,6 +72,26 @@ const SRC = {
   glaciers: `${NE}/ne_10m_glaciated_areas.geojson`,
   // ★★ ROADS -- 48 MB raw, 56,600 features, so this one is filtered HARD. See buildRoads().
   roads: `${NE}/ne_10m_roads.geojson`,
+  // ★ Rivers, coarse lakes and coarse admin-1 so the middle zooms are not a detail cliff: without
+  //   these, z5-9 had countries and nothing inside them, then everything at once at z10.
+  rivers50: `${NE}/ne_50m_rivers_lake_centerlines.geojson`,
+  rivers10: `${NE}/ne_10m_rivers_lake_centerlines.geojson`,
+  lakes50: `${NE}/ne_50m_lakes.geojson`,
+  admin150: `${NE}/ne_50m_admin_1_states_provinces_lines.geojson`,
+  // ★★ The 200 m depth contour: the CONTINENTAL SHELF. One polygon set that turns a flat blue sea
+  //    into somewhere with a shape -- and for an HF listener the shelf edge is a real landmark.
+  shelf: `${NE}/ne_10m_bathymetry_K_200.geojson`,
+  /* ★★★ HYDROLAKES, because NATURAL EARTH SIMPLY DOES NOT HAVE SMALL WATER. Measured 2026-09-26:
+   *  NE's European lake supplement holds 767 lakes for the whole continent and NOT ONE within
+   *  35 km of Northampton -- so Pitsford Reservoir (2.58 km², and the thing Stuart noticed was
+   *  missing) could never appear, at any tier, from any Natural Earth layer. HydroLAKES carries
+   *  1,427,688 lakes down to 10 ha and has it.
+   *  ★★ 820 MB download, and that is FINE: it lands only on the machine running this generator,
+   *  in the gitignored cache, exactly like the 48 MB of Natural Earth already there. Stuart,
+   *  2026-09-26: "if you need big downloads to compose the detail into the map that is fine, as
+   *  long as our map remains compact and high performance."
+   *  ★★ CC BY 4.0 -- attribution required, like GeoNames. It rides in index.json. */
+  hydrolakes: 'https://data.hydrosheds.org/file/hydrolakes/HydroLAKES_polys_v10_shp.zip',
   cities5000: 'https://download.geonames.org/export/dump/cities5000.zip',
   airports: 'https://davidmegginson.github.io/ourairports-data/airports.csv',
   ports: 'https://msi.nga.mil/api/publications/download?key=16920959/SFH00000/UpdatedPub150.csv&type=download',
@@ -194,7 +215,10 @@ function packLines(geom, dp) {
  *   size, need a projection, and could not be restyled to the app's palette -- which is the entire
  *   reason we left raster tiles behind.
  */
-const COVER_CLASSES = new Set(['Desert', 'Tundra', 'Wetlands']);
+/* ★ 'Range/mtn' gives the Alps, Rockies, Andes, Himalaya and 218 more as pale peaks. Stuart,
+ *  2026-09-26, once the deserts landed: "we could add mountains as white peaks too such as the
+ *  alps and rockies". It is the same file and the same filter, so it costs one more class. */
+const COVER_CLASSES = new Set(['Desert', 'Tundra', 'Wetlands', 'Range/mtn']);
 
 /**
  * Shoelace area in square degrees. ★ Not a real area -- it is stretched by latitude and means
@@ -217,8 +241,8 @@ function bigEnough(rings, minArea) {
 }
 
 function buildCover(regionsGj, glaciersGj, dp, minArea = 0) {
-  const out = { desert: [], tundra: [], wetland: [], ice: [] };
-  const bucket = { Desert: 'desert', Tundra: 'tundra', Wetlands: 'wetland' };
+  const out = { desert: [], tundra: [], wetland: [], alpine: [], ice: [] };
+  const bucket = { Desert: 'desert', Tundra: 'tundra', Wetlands: 'wetland', 'Range/mtn': 'alpine' };
   for (const f of regionsGj.features) {
     const cla = (f.properties || {}).FEATURECLA;
     if (!COVER_CLASSES.has(cla)) continue;
@@ -254,6 +278,18 @@ function buildCover(regionsGj, glaciersGj, dp, minArea = 0) {
  *
  * ✗ Ferry routes are dropped at every tier: a line across open sea reads as a coastline error.
  */
+/** Rivers -> polylines, thinned by scalerank exactly as the roads are. */
+function buildRivers(gj, dp, maxScalerank) {
+  const out = [];
+  for (const f of gj.features) {
+    const r = (f.properties || {}).scalerank ?? (f.properties || {}).SCALERANK;
+    if (typeof r !== 'number' || r > maxScalerank) continue;
+    out.push(...packLines(f.geometry, dp));
+  }
+  if (!out.length) die(`rivers: nothing survived scalerank <= ${maxScalerank}.`);
+  return out;
+}
+
 function buildRoads(gj, dp, maxScalerank) {
   const out = [];
   for (const f of gj.features) {
@@ -264,6 +300,82 @@ function buildRoads(gj, dp, maxScalerank) {
     out.push(...packLines(f.geometry, dp));
   }
   if (!out.length) die(`roads: nothing survived scalerank <= ${maxScalerank}.`);
+  return out;
+}
+
+/**
+ * HydroLAKES -> flat ring list, for the ONE tier that can carry it.
+ *
+ * ★★★ THE RAW POLYGONS ARE UNUSABLE AS THEY STAND. They are traced from a 15-arcsec raster, so
+ *   every shoreline is a staircase: lakes >= 1 km² come to 26.7 MILLION points and 430 MB of JSON.
+ *   Rounding does not touch it -- the staircase steps are 0.00417 deg apart, which survives 3 dp.
+ *   Douglas-Peucker at 0.004 deg (~400 m) takes the same lakes to 2.6 M points and 38.5 MB raw,
+ *   9.5 MB gzipped, with no visible change at any zoom this map reaches.
+ *
+ * ★★ ONLY THE LARGEST RING PER LAKE. HydroLAKES encodes islands within a lake as further rings;
+ *   at these zooms an island in a reservoir is sub-pixel, and keeping them buys nothing.
+ *
+ * ★ `shouldRead` is passed to the .shp reader so the 96 % of lakes below the threshold are never
+ *   decoded at all -- the attribute table is read first precisely so the geometry pass can skip.
+ */
+function buildHydroLakes(dbfPath, shpPath, dp, minAreaKm2, tol) {
+  const rows = readDbf(dbfPath, ['Lake_area']);
+  if (rows.length < 1e6) die(`hydrolakes: only ${rows.length} rows — the dataset has changed shape.`);
+  const want = rows.map((r) => r.Lake_area >= minAreaKm2);
+  const out = [];
+  eachPolygon(shpPath, (i, rings) => {
+    /* ★★★ THE TOLERANCE SCALES WITH THE LAKE. A flat 400 m tolerance is right for Lake Superior
+     *  and wrong for a 2.5 km² reservoir: it reduced Pitsford to a TEN-POINT BLOB. The whole
+     *  reason small water is in this dataset is that somebody recognises the shape of the one
+     *  near their house, so a small lake gets a proportionally finer tolerance.
+     *  ★ It costs almost nothing: a small lake has few vertices to begin with, and the big lakes
+     *  that dominate the byte count keep the coarse tolerance. */
+    const area = rows[i].Lake_area;
+    // ★ Clamped to [0.3, 1] x tol: a small lake gets ~120 m, a big one keeps ~400 m. Unclamped
+    //   sqrt scaling took the layer to 125 MB -- the floor is what keeps this affordable.
+    const t = tol * Math.min(1, Math.max(0.3, Math.sqrt(area / 300)));
+    let best = null;
+    for (const ring of rings) {
+      const packed = packRing(simplifyRing(ring, t), dp, { closed: true });
+      if (packed && (!best || packed.length > best.length)) best = packed;
+    }
+    if (best) out.push(best);
+  }, (i) => want[i]);
+  if (out.length < 1000) die(`hydrolakes: only ${out.length} lakes survived >= ${minAreaKm2} km².`);
+  return out;
+}
+
+/**
+ * Douglas-Peucker, ITERATIVE. ★ The textbook recursion blows the stack on a 20,000-point shoreline,
+ * and it does so as a RangeError halfway through a 1.1 GB read — hours in, with nothing written.
+ */
+function simplifyRing(pts, tol) {
+  if (pts.length < 4 || !tol) return pts;
+  const keep = new Uint8Array(pts.length);
+  keep[0] = keep[pts.length - 1] = 1;
+  const stack = [[0, pts.length - 1]];
+  const t2 = tol * tol;
+  while (stack.length) {
+    const [a, b] = stack.pop();
+    if (b - a < 2) continue;
+    const [ax, ay] = pts[a]; const [bx, by] = pts[b];
+    const dx = bx - ax; const dy = by - ay; const den = dx * dx + dy * dy;
+    let far = -1; let fd = 0;
+    for (let i = a + 1; i < b; i++) {
+      const [px, py] = pts[i];
+      let d;
+      if (den === 0) { const ex = px - ax; const ey = py - ay; d = ex * ex + ey * ey; } else {
+        let t = ((px - ax) * dx + (py - ay) * dy) / den;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const ex = px - (ax + t * dx); const ey = py - (ay + t * dy);
+        d = ex * ex + ey * ey;
+      }
+      if (d > fd) { fd = d; far = i; }
+    }
+    if (fd > t2 && far > 0) { keep[far] = 1; stack.push([a, far], [far, b]); }
+  }
+  const out = [];
+  for (let i = 0; i < pts.length; i++) if (keep[i]) out.push(pts[i]);
   return out;
 }
 
@@ -501,7 +613,8 @@ const featureCount = (v) => (Array.isArray(v) ? v.length : Object.keys(v).length
 await mkdir(cacheDir, { recursive: true });
 process.stderr.write('gen-map-data: sources\n');
 
-const [c110, c50, c10, admin1, lakes, places, urban50, urban10, regions, glaciers, roads] = await Promise.all([
+const [c110, c50, c10, admin1, lakes, places, urban50, urban10, regions, glaciers, roads,
+       rivers50, rivers10, lakes50, admin150, shelf] = await Promise.all([
   fetchGeoJson('countries110'),
   fetchGeoJson('countries50'),
   fetchGeoJson('countries10'),
@@ -513,10 +626,32 @@ const [c110, c50, c10, admin1, lakes, places, urban50, urban10, regions, glacier
   fetchGeoJson('regions'),
   fetchGeoJson('glaciers'),
   fetchGeoJson('roads'),
+  fetchGeoJson('rivers50'),
+  fetchGeoJson('rivers10'),
+  fetchGeoJson('lakes50'),
+  fetchGeoJson('admin150'),
+  fetchGeoJson('shelf'),
 ]);
 const airportsCsv = await fetchCached('airports.csv', SRC.airports);
 const portsCsv = await fetchCached('ports.csv', SRC.ports);
 const towns = await buildGeonames(3);
+
+// ★ Unpacked once into the cache; ~1.5 GB of shapefile that must never reach the repo or a build.
+const hydroDir = path.join(cacheDir, 'hydrolakes');
+const hydroShp = path.join(hydroDir, 'HydroLAKES_polys_v10.shp');
+if (!(await stat(hydroShp).catch(() => null))) {
+  await fetchCached('HydroLAKES_polys_v10_shp.zip', SRC.hydrolakes, { binary: true });
+  process.stderr.write('  unpacking HydroLAKES …');
+  await mkdir(hydroDir, { recursive: true });
+  try {
+    execFileSync('unzip', ['-o', '-j', path.join(cacheDir, 'HydroLAKES_polys_v10_shp.zip'),
+      '*/HydroLAKES_polys_v10.dbf', '*/HydroLAKES_polys_v10.shp', '-d', hydroDir], { stdio: 'pipe' });
+  } catch (e) {
+    die(`hydrolakes: unzip failed (${e.message}).`);
+  }
+  process.stderr.write(' done\n');
+}
+const hydroDbf = path.join(hydroDir, 'HydroLAKES_polys_v10.dbf');
 
 // tier0 world z0–4 · tier1 regional z5–7 · tier2 local z8+
 const layers = [
@@ -526,6 +661,8 @@ const layers = [
   ['tier0', 'airports', buildAirports(airportsCsv, 2, new Set([0]))],
   ['tier0', 'cover', buildCover(regions, glaciers, 1, 1.0)],
   ['tier0', 'urban', buildUrban(urban50, 2, 2, 0.05)],
+  ['tier0', 'rivers', buildRivers(rivers50, 2, 3)],
+  ['tier0', 'lakes', bigEnough(lakes50.features.flatMap((f) => packPolygons(f.geometry, 2)), 0.5)],
   // tier1
   ['tier1', 'countries', buildCountries(c50, 2, 'countries50')],
   ['tier1', 'places', buildNePlaces(places, 2, Infinity)],
@@ -534,16 +671,24 @@ const layers = [
   ['tier1', 'cover', buildCover(regions, glaciers, 2, 0.05)],
   ['tier1', 'urban', buildUrban(urban50, 2, Infinity, 0.002)],
   ['tier1', 'roads', buildRoads(roads, 2, 4)],
+  ['tier1', 'rivers', buildRivers(rivers50, 2, Infinity)],
+  ['tier1', 'lakes', lakes50.features.flatMap((f) => packPolygons(f.geometry, 2))],
+  ['tier1', 'admin1', admin150.features.flatMap((f) => packLines(f.geometry, 2))],
+  ['tier1', 'shelf', shelf.features.flatMap((f) => packPolygons(f.geometry, 2))],
   // tier2 — the heavy tier, and the reason for tiering: it is only ever loaded at z8+, where the
   // viewport is a few hundred km across and the renderer culls almost all of it.
   ['tier2', 'countries', buildCountries(c10, 3, 'countries10')],
   ['tier2', 'admin1', admin1.features.flatMap((f) => packLines(f.geometry, 3))],
-  ['tier2', 'lakes', lakes.features.map((f) => packPolygons(f.geometry, 3)).filter((r) => r.length)],
+  // ★ HydroLAKES REPLACES Natural Earth at tier2: it is a strict superset (1.43 M vs 1,590) and
+  //   carrying both would draw every large lake twice.
+  ['tier2', 'lakes', buildHydroLakes(hydroDbf, hydroShp, 3, 1, 0.004)],
   ['tier2', 'places', towns],
   ['tier2', 'airports', buildAirports(airportsCsv, 3, new Set([0, 1, 2, 3, 4]))],
   ['tier2', 'cover', buildCover(regions, glaciers, 3)],
   ['tier2', 'urban', buildUrban(urban10, 3, Infinity)],
   ['tier2', 'roads', buildRoads(roads, 3, 8)],
+  ['tier2', 'rivers', buildRivers(rivers10, 3, Infinity)],
+  ['tier2', 'shelf', shelf.features.flatMap((f) => packPolygons(f.geometry, 3))],
 ];
 
 for (const [tier, name, data] of layers) {
@@ -556,9 +701,10 @@ const index = {
   // ★ The licences ride WITH the data. GeoNames is CC BY 4.0 and the credit is not optional; any
   //   renderer that loads tier2 places must show it, and it cannot show what it was never told.
   licences: {
-    'natural-earth': { layers: ['countries', 'admin1', 'lakes', 'places(tier0,tier1)', 'urban', 'cover', 'roads'], licence: 'Public domain', url: 'https://www.naturalearthdata.com/' },
+    'natural-earth': { layers: ['countries', 'admin1', 'lakes', 'places(tier0,tier1)', 'urban', 'cover', 'roads', 'rivers', 'shelf'], licence: 'Public domain', url: 'https://www.naturalearthdata.com/' },
     geonames: { layers: ['places(tier2)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© GeoNames', url: 'https://www.geonames.org/' },
     ourairports: { layers: ['airports'], licence: 'Public domain', url: 'https://ourairports.com/data/' },
+    hydrolakes: { layers: ['lakes(tier2)'], licence: 'CC BY 4.0 — ATTRIBUTION REQUIRED', attribution: '© HydroLAKES / HydroSHEDS', url: 'https://www.hydrosheds.org/products/hydrolakes' },
     'nga-wpi': { layers: ['ports'], licence: 'Public domain (US Government)', url: 'https://msi.nga.mil/Publications/WPI' },
   },
   zoom: { tier0: [0, 4], tier1: [5, 7], tier2: [8, 22] },
@@ -584,6 +730,92 @@ const index = {
   files: {},
 };
 
+/* ───────────────────────── sharding ─────────────────────────
+ * ★★★ A HEAVY LAYER IS SPLIT INTO GEOGRAPHIC SHARDS, and this is not only about Cloudflare's
+ *   25 MiB asset ceiling (which tier2-lakes broke at 38.5 MiB). It is the same principle as the
+ *   tiers: DO NOT MAKE SOMEBODY DOWNLOAD THE WORLD TO LOOK AT THEIR OWN TOWN. Sharded, a user
+ *   zooming to Northampton fetches the one shard containing Britain, not 184,869 lakes.
+ *
+ * ★★ EACH SHARD RECORDS ITS OWN DATA BBOX, not the grid cell it came from. A ring is assigned by
+ *   its centre, so it can overhang the cell; the renderer intersects against the RECORDED bbox and
+ *   is therefore exact. Assigning by cell and testing against the cell would clip features at
+ *   every shard seam — a class of bug that looks like missing data and is very hard to see.
+ *
+ * ✗ Shard only ARRAYS. The country layer is keyed by ISO code and splitting it would mean a
+ *   country could exist in two shards under one key.
+ */
+const SHARD_LIMIT = 6 * 1024 * 1024;
+const SHARD_MAX_DEPTH = 6;
+
+/** bbox of a ring, a polyline, or a single [name, lon, lat, …] record. */
+function itemBox(item) {
+  if (typeof item[0] === 'string') return [item[1], item[2], item[1], item[2]];
+  let w = 180; let s = 90; let e = -180; let n = -90;
+  for (const [lon, lat] of item) {
+    if (lon < w) w = lon; if (lon > e) e = lon;
+    if (lat < s) s = lat; if (lat > n) n = lat;
+  }
+  return [w, s, e, n];
+}
+
+/**
+ * ★★★ SHARDING IS RECURSIVE, BECAUSE THE WORLD IS NOT EVENLY FULL. A fixed 6x3 grid put 89,390
+ *   lakes into the one cell covering Europe and western Asia and produced a 54.6 MB shard —
+ *   over Cloudflare's 25 MiB asset limit and, worse, a download somebody in Northampton would
+ *   make to see one reservoir. A cell that is still too big is SPLIT AGAIN, so shard size follows
+ *   data density rather than geography.
+ *
+ * ★★ Each shard records its OWN data bbox, not the cell it came from: an item is assigned by its
+ *   centre and may overhang, and the renderer intersects against the recorded box. Testing against
+ *   the cell instead would clip features at every seam — missing data with no error.
+ *
+ * ★ The depth cap exists so a pathological layer cannot recurse forever; it is a guard, not a
+ *   target, and a shard that is still oversize at the cap is reported rather than shipped.
+ */
+function shardRecursive(items, box, depth, out) {
+  const size = JSON.stringify(items).length;
+  if (items.length <= 1 || (size <= SHARD_LIMIT || depth >= SHARD_MAX_DEPTH)) {
+    if (!items.length) return;
+    let b = [180, 90, -180, -90];
+    for (const it of items) {
+      const ib = itemBox(it);
+      if (ib[0] < b[0]) b[0] = ib[0];
+      if (ib[1] < b[1]) b[1] = ib[1];
+      if (ib[2] > b[2]) b[2] = ib[2];
+      if (ib[3] > b[3]) b[3] = ib[3];
+    }
+    out.push({ items, box: b });
+    return;
+  }
+  const [w, s, e, n] = box;
+  const mx = (w + e) / 2; const my = (s + n) / 2;
+  const quads = [[], [], [], []];
+  for (const it of items) {
+    const ib = itemBox(it);
+    const cx = (ib[0] + ib[2]) / 2; const cy = (ib[1] + ib[3]) / 2;
+    quads[(cy >= my ? 2 : 0) + (cx >= mx ? 1 : 0)].push(it);
+  }
+  // ★ If every item lands in one quadrant the split achieved nothing; emit rather than spin.
+  if (quads.some((q) => q.length === items.length)) {
+    let b = [180, 90, -180, -90];
+    for (const it of items) {
+      const ib = itemBox(it);
+      if (ib[0] < b[0]) b[0] = ib[0]; if (ib[1] < b[1]) b[1] = ib[1];
+      if (ib[2] > b[2]) b[2] = ib[2]; if (ib[3] > b[3]) b[3] = ib[3];
+    }
+    out.push({ items, box: b });
+    return;
+  }
+  const boxes = [[w, s, mx, my], [mx, s, e, my], [w, my, mx, n], [mx, my, e, n]];
+  for (let i = 0; i < 4; i++) shardRecursive(quads[i], boxes[i], depth + 1, out);
+}
+
+function shardArray(items) {
+  const out = [];
+  shardRecursive(items, [-180, -90, 180, 90], 0, out);
+  return out;
+}
+
 const rows = [];
 const written = [];
 let totalBytes = 0;
@@ -593,9 +825,40 @@ for (const [tier, name, data] of layers) {
   const json = JSON.stringify(data);
   const bytes = Buffer.byteLength(json);
   const pts = countPoints(data);
-  const file = `${tier}-${name}.json`;
-  index.files[file] = { tier, layer: name, bytes, features: featureCount(data), points: pts };
   const pack = tier === 'tier2' ? 'detail' : 'basic';
+  const base = `${tier}-${name}`;
+  if (bytes > SHARD_LIMIT && Array.isArray(data)) {
+    const cells = shardArray(data);
+    const shards = [];
+    let worst = 0;
+    cells.forEach((cell, k) => {
+      const file = `${base}.s${k}.json`;
+      const sJson = JSON.stringify(cell.items);
+      const sBytes = Buffer.byteLength(sJson);
+      if (sBytes > worst) worst = sBytes;
+      shards.push({ file, box: cell.box.map((v) => Number(v.toFixed(3))) });
+      index.files[file] = { tier, layer: name, bytes: sBytes,
+                            features: cell.items.length, box: shards.at(-1).box };
+      index.packs[pack].files.push(file);
+      index.packs[pack].bytes += sBytes;
+      written.push([file, sJson]);
+    });
+    // ★★ Cloudflare Workers refuse an asset over 25 MiB, and a deploy that fails on it fails AFTER
+    //    everything else has been uploaded. Catch it here, where the fix is a parameter.
+    if (worst > 25 * 1024 * 1024) {
+      die(`${base}: largest shard is ${(worst / 1048576).toFixed(1)} MiB, over the 25 MiB asset limit.`);
+    }
+    // ★ The renderer looks HERE first: shards are opt-in, so a layer without this key is one file.
+    index.sharded ||= {};
+    index.sharded[base] = shards;
+    rows.push({ layer: name, tier, features: featureCount(data), points: pts,
+                kb: bytes / 1024, note: `${shards.length} shards` });
+    totalBytes += bytes;
+    totalPoints += pts;
+    continue;
+  }
+  const file = `${base}.json`;
+  index.files[file] = { tier, layer: name, bytes, features: featureCount(data), points: pts };
   index.packs[pack].files.push(file);
   index.packs[pack].bytes += bytes;
   written.push([file, json]);
@@ -627,6 +890,18 @@ if (CHECK) {
 }
 
 await mkdir(outDir, { recursive: true });
+/* ★★★ PRUNE WHAT THIS RUN DID NOT WRITE. When tier2-lakes was split into 18 shards the unsharded
+ *  38.5 MB file simply STAYED, got rsynced to the directory, and broke the deploy on Cloudflare's
+ *  25 MiB asset limit -- a file nothing referenced any more. A generator that only ever adds leaves
+ *  the previous shape of the data lying next to the current one, and the stale copy always wins
+ *  somewhere. The output directory is owned by this script, so it says what belongs in it. */
+const keep = new Set([...written.map(([f]) => f), 'index.json', 'country-labels.json']);
+for (const f of await readdir(outDir).catch(() => [])) {
+  if (f.endsWith('.json') && !keep.has(f)) {
+    await unlink(path.join(outDir, f));
+    console.error(`  pruned stale ${f}`);
+  }
+}
 for (const [file, json] of written) await writeFile(path.join(outDir, file), json);
 await writeFile(path.join(outDir, 'index.json'), indexJson);
 
@@ -657,7 +932,7 @@ console.log(`\nwrote ${outDir}\n`);
 console.log(`${pad('layer', 11)}${pad('tier', 7)}${padl('features', 10)}${padl('points', 11)}${padl('KB', 10)}`);
 console.log('-'.repeat(49));
 for (const r of rows) {
-  console.log(`${pad(r.layer, 11)}${pad(r.tier, 7)}${padl(r.features.toLocaleString(), 10)}${padl(r.points.toLocaleString(), 11)}${padl(r.kb.toFixed(1), 10)}`);
+  console.log(`${pad(r.layer, 11)}${pad(r.tier, 7)}${padl(r.features.toLocaleString(), 10)}${padl(r.points.toLocaleString(), 11)}${padl(r.kb.toFixed(1), 10)}  ${r.note || ''}`);
 }
 console.log('-'.repeat(49));
 console.log(`${pad('TOTAL', 18)}${padl('', 10)}${padl(totalPoints.toLocaleString(), 11)}${padl((totalBytes / 1024).toFixed(1), 10)}`);

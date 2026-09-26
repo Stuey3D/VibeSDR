@@ -938,12 +938,37 @@ document.getElementById('map').addEventListener('wheel', (e) => {
  *  DESATURATED sand a couple of steps off the green, not the ochre a paper atlas would use. The
  *  cue only has to be strong enough to say "this ground is different", and at these lightnesses a
  *  small step is plenty. ✗ Do not brighten these to match a printed map. */
+const MAP_SHELF = '#19406094', MAP_LAKE = '#1b4a6b', MAP_RIVER = '#3f7ba0',
+      MAP_ADMIN = '#5a7a5f';
 const MAP_URBAN = '#5a5d62', MAP_DESERT = '#6d6142', MAP_TUNDRA = '#4a5750',
-      MAP_WETLAND = '#33523f', MAP_ICE = '#8d9aa2', MAP_ROAD = '#6a6a4e';
+      MAP_WETLAND = '#33523f', MAP_ICE = '#8d9aa2', MAP_ROAD = '#6a6a4e',
+      /* ★ Mountain ranges: a pale grey-stone, DIMMER than the ice. An alpine range and a glacier
+       *  next to each other must still be distinguishable -- the Alps carry both. */
+      MAP_ALPINE = '#6f7581';
 const MAP_SEA = '#123049', MAP_LAND = '#3c5a3f', MAP_COAST = '#6fa37b';
 document.getElementById(map.getContainer().id || 'map').style.background = MAP_SEA;
 map.getContainer().style.background = MAP_SEA;
 const MAP_TOWN = '#9ec9a8', MAP_LABEL = 'rgba(210,235,215,0.82)';
+/* ★★★ LAYER ORDER IS DONE WITH PANES, NEVER WITH bringToFront(). `bringToFront`/`bringToBack`
+ *  live on Leaflet's FeatureGroup, NOT on LayerGroup -- calling them on an `L.layerGroup()` throws
+ *  a TypeError. That is what killed the landcover: drawBase() added the country polygons (which is
+ *  why the map still LOOKED fine), then threw on the re-stacking loop, and redrawMap's .catch
+ *  swallowed it. Stuart saw "not seeing any changes" and there was nothing in the console to find
+ *  because the error never reached it.
+ *  ★★ A pane fixes the class of bug, not the instance: the z-order is DECLARED ONCE here and no
+ *  redraw has to re-assert it, so a layer can never end up behind the ground it sits on.
+ *  ★ Canvas renderers per pane too -- these layers are thousands of polygons, and SVG makes one
+ *  DOM node each. */
+const PANES = { shelf: 350, land: 360, cover: 370, urban: 375,
+                water: 380, admin: 385, road: 390, place: 395 };
+const paneRenderer = {};
+for (const [name, z] of Object.entries(PANES)) {
+  map.createPane(name);
+  map.getPane(name).style.zIndex = String(z);
+  map.getPane(name).style.pointerEvents = 'none';
+  paneRenderer[name] = L.canvas({ pane: name });
+}
+const inPane = (name, extra = {}) => ({ pane: name, renderer: paneRenderer[name], interactive: false, ...extra });
 const basemap = L.layerGroup().addTo(map);
 const placeLayer = L.layerGroup().addTo(map);
 /* ★★★ TIERED, BECAUSE 110m LOOKS LIKE A CHILD'S DRAWING. country-shapes.json is Natural Earth
@@ -978,37 +1003,80 @@ function tierName(z) { return z <= 4 ? 'tier0' : z <= 7 ? 'tier1' : 'tier2'; }
  *  ★ The probe is ONE fetch of index.json, and if even that fails we assume the basic pack, which
  *  is the safe direction: we may under-use data that is present, never over-ask for data that is
  *  not. */
-let mapHave = null;
-function haveFiles() {
-  if (!mapHave) {
-    mapHave = fetch(MD + 'index.json').then((r) => (r.ok ? r.json() : null))
-      .then((ix) => new Set(Object.keys(ix?.files || {})))
-      .catch(() => new Set());
+let mapIndex = null;
+function mapManifest() {
+  if (!mapIndex) {
+    /* ★★ `cache: 'no-cache'` revalidates. A browser holding an index.json from an earlier deploy
+     *  would report layers we now ship as ABSENT, and the renderer would dutifully skip them --
+     *  a stale manifest is indistinguishable from an uninstalled pack. */
+    mapIndex = fetch(MD + 'index.json', { cache: 'no-cache' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((ix) => ({ files: new Set(Object.keys(ix?.files || {})), sharded: ix?.sharded || {} }))
+      .catch(() => ({ files: new Set(), sharded: {} }));
   }
-  return mapHave;
+  return mapIndex;
 }
-async function layer(t, f) {
-  const k = t + '-' + f;
-  const have = await haveFiles();
-  // ★ An empty set means the index itself did not load; fall back to trying tier0/tier1 only.
-  if (have.size ? !have.has(k + '.json') : t === 'tier2') return null;
-  if (!mapTier.loaded[k]) {
-    mapTier.loaded[k] = fetch(MD + k + '.json')
+const haveFiles = () => mapManifest().then((m) => m.files);
+/* ★★★ A SHARDED LAYER IS FETCHED BY VIEWPORT, and that is the point of it -- somebody looking at
+ *  Northampton downloads the shard holding Britain, not all 184,869 lakes on Earth. Each shard is
+ *  matched against its OWN recorded data bbox, so a lake overhanging its grid cell is still found.
+ *  ★ The caller passes the box it is about to draw; with no box (a caller that wants everything)
+ *  every shard is loaded, which is correct but rarely what is wanted. */
+async function layer(t, f, box) {
+  const base = t + '-' + f;
+  const man = await mapManifest();
+  const shards = man.sharded[base];
+  if (shards) {
+    if (t === 'tier2' && !man.files.has(shards[0].file)) return null;
+    const wanted = box ? shards.filter((sh) => !(sh.box[2] < box[0] || sh.box[0] > box[2]
+                                              || sh.box[3] < box[1] || sh.box[1] > box[3]))
+                       : shards;
+    const parts = await Promise.all(wanted.map((sh) => fetchJson(sh.file)));
+    const out = [];
+    for (const p of parts) if (p) out.push(...p);
+    return out;
+  }
+  const k = base;
+  /* ★★★ ONLY tier2 IS GATED ON THE INDEX. tier0/tier1 are the BUNDLED pack -- they are present by
+   *  definition, and asking a manifest for permission to read them means any hiccup in one small
+   *  JSON file blanks the entire basemap. The index exists to answer one question: is the optional
+   *  detail pack installed? */
+  if (t === 'tier2' && !man.files.has(k + '.json')) return null;
+  return fetchJson(k + '.json');
+}
+/** One cached promise per file, so a shard shared by two layers is fetched once. */
+function fetchJson(file) {
+  if (!mapTier.loaded[file]) {
+    mapTier.loaded[file] = fetch(MD + file)
       .then((r) => (r.ok ? r.json() : null)).catch(() => null);
   }
-  return mapTier.loaded[k];
+  return mapTier.loaded[file];
 }
 /** ★ Best tier actually installed, at or below the one the zoom wants. */
 async function bestTier(want) {
-  const have = await haveFiles();
   if (want !== 'tier2') return want;
-  return (have.size && have.has('tier2-countries.json')) ? 'tier2' : 'tier1';
+  return (await mapManifest()).files.has('tier2-countries.json') ? 'tier2' : 'tier1';
 }
 /* ★★ THE OUTLINES AND THE LABELS COME FROM DIFFERENT TIERS ON PURPOSE. Northampton needs tier2's
  *  GeoNames towns at z8, but tier2's 9 MB coastline is not worth downloading to look at one town
  *  -- at z8 a 50m outline is still smooth on screen. So the fine coastline waits until z10, where
  *  the difference is actually visible, and the towns arrive the moment they are needed. */
-function baseTier(z) { return z <= 4 ? 'tier0' : z <= 9 ? 'tier1' : 'tier2'; }
+/* ★★★ THE TIER IS CHOSEN PER LAYER, NOT PER ZOOM, because the layers are not the same weight.
+ *  Holding EVERYTHING at tier1 until z10 was a blunt rule that existed to avoid one file:
+ *  tier2-countries is 8.8 MB and 546,031 points. But tier2's roads, rivers, lakes, urban extents
+ *  and admin-1 lines are what actually make a local view look local, and at z8 the coarse versions
+ *  of those are a visible detail cliff -- 11 road segments over the whole of England.
+ *  ★★ So the fine COASTLINE waits for z10 (at z8 a 50m outline is still smooth on screen and the
+ *  8.8 MB buys nothing you can see), while everything else steps up at z8 where it is needed.
+ *  ✗ Do not collapse this back into one rule: it is the difference between a 0.3 MB step and a
+ *  9 MB one, and they do not deserve the same threshold. */
+const TIER_STEP = { countries: 10, cover: 8, urban: 8, roads: 8, rivers: 7, lakes: 7,
+                    admin1: 8, shelf: 8, places: 8, airports: 8 };
+function tierFor(what, z) {
+  if (z <= 4) return 'tier0';
+  return z >= (TIER_STEP[what] ?? 8) ? 'tier2' : 'tier1';
+}
+function baseTier(z) { return tierFor('countries', z); }
 /* ★★★ AT WORLD VIEW THE COUNTRY NAMES COLLIDE, so the world view does not get country names.
  *  Stuart, 2026-09-26, on the z2 map: "Little bit too much overlap, maybe have continents at this
  *  zoom level". THE LABELS ARE HARD-CODED and that is deliberate -- seven labels whose positions
@@ -1068,7 +1136,7 @@ async function drawCountryNames() {
  *  what a map is expected to do and what the global cut could not promise across two datasets with
  *  incompatible rank scales (Natural Earth scalerank vs a rank synthesised from population).
  *  ✗ Do not reintroduce a global cut. It cannot be right for both datasets at once. */
-const CAP = { places: 220, airports: 140, ports: 60 };
+const CAP = { places: 300, airports: 200, ports: 80 };
 /** The view, grown by a margin so a small pan does not strip the edges before `moveend` fires. */
 function viewBox() {
   const b = map.getBounds().pad(0.25);
@@ -1107,80 +1175,121 @@ function ringInView(ring, box) {
 /* ★ Painted in this order and never another: cover (what the ground is) -> urban (what was built
  *  on it) -> roads (what joins it). Each one is a correction to the one below, so a town in a
  *  desert must be able to cover the sand, and a road must sit on top of both. */
-const coverLayer = L.layerGroup();
-const urbanLayer = L.layerGroup();
-const roadLayer = L.layerGroup();
-const COVER_COLOUR = { desert: MAP_DESERT, tundra: MAP_TUNDRA, wetland: MAP_WETLAND, ice: MAP_ICE };
+const coverLayer = L.layerGroup().addTo(map);
+const urbanLayer = L.layerGroup().addTo(map);
+const roadLayer = L.layerGroup().addTo(map);
+/* ★★ THE SHELF SITS UNDER THE LAND, NOT OVER IT. ne_10m_bathymetry_K_200 is the 200 m contour --
+ *  the continental shelf -- and drawing it above the countries would flood every coast. It is the
+ *  one layer that must end up BELOW basemap, so it is sent to the back last. ★ For an HF listener
+ *  the shelf edge is a real landmark, not decoration. */
+const shelfLayer = L.layerGroup().addTo(map);
+const waterLayer = L.layerGroup().addTo(map);      // lakes + rivers
+const adminLayer = L.layerGroup().addTo(map);      // state/province lines
+async function drawWater() {
+  const z = map.getZoom(), box = viewBox();
+  const pick2 = (what) => bestTier(tierFor(what, z)).then((t) => layer(t, what, box));
+  const [shelf, lakes, rivers, admin1] = await Promise.all([
+    pick2('shelf'), pick2('lakes'), pick2('rivers'),
+    z >= 5 ? pick2('admin1') : Promise.resolve(null),
+  ]);
+  shelfLayer.clearLayers(); waterLayer.clearLayers(); adminLayer.clearLayers();
+  for (const ring of shelf || []) {
+    if (!ringInView(ring, box)) continue;
+    L.polygon(ring.map(([lon, lat]) => [lat, lon]),
+      inPane('shelf', { stroke: false, fillColor: MAP_SHELF, fillOpacity: 0.55 })).addTo(shelfLayer);
+  }
+  for (const ring of lakes || []) {
+    if (!ringInView(ring, box)) continue;
+    L.polygon(ring.map(([lon, lat]) => [lat, lon]),
+      inPane('water', { stroke: false, fillColor: MAP_LAKE, fillOpacity: 1 })).addTo(waterLayer);
+  }
+  let n = 0;
+  for (const line of rivers || []) {
+    if (n > 2000) break;
+    if (!ringInView(line, box)) continue;
+    n++;
+    L.polyline(line.map(([lon, lat]) => [lat, lon]),
+      inPane('water', { color: MAP_RIVER, weight: z >= 8 ? 0.9 : 0.6, opacity: 0.55 })).addTo(waterLayer);
+  }
+  /* ★ Admin-1 lines are DASHED and dim on purpose: a solid line the same weight as a coastline
+   *  reads as a border between countries, which is a factual error on a map, not a style one. */
+  n = 0;
+  for (const line of admin1 || []) {
+    if (n > 2000) break;
+    if (!ringInView(line, box)) continue;
+    n++;
+    L.polyline(line.map(([lon, lat]) => [lat, lon]),
+      inPane('admin', { color: MAP_ADMIN, weight: 0.5, opacity: 0.4, dashArray: '3,3' })).addTo(adminLayer);
+  }
+}
+/* ★ Order matters: painted in THIS sequence, so ice lands on top of the range it caps. */
+const COVER_COLOUR = { desert: MAP_DESERT, tundra: MAP_TUNDRA, wetland: MAP_WETLAND,
+                       alpine: MAP_ALPINE, ice: MAP_ICE };
 async function drawCover() {
-  const t = await bestTier(baseTier(map.getZoom()));
-  const [cover, urban] = await Promise.all([layer(t, 'cover'), layer(t, 'urban')]);
+  const z0 = map.getZoom(), box = viewBox();
+  const [cover, urban] = await Promise.all([
+    bestTier(tierFor('cover', z0)).then((t) => layer(t, 'cover', box)),
+    bestTier(tierFor('urban', z0)).then((t) => layer(t, 'urban', box)),
+  ]);
   coverLayer.clearLayers(); urbanLayer.clearLayers();
-  const box = viewBox();
-  const paint = (rings, target, colour, opacity) => {
+  const paint = (rings, target, pane, colour, opacity) => {
     for (const ring of rings || []) {
       if (!ringInView(ring, box)) continue;
-      L.polygon(ring.map(([lon, lat]) => [lat, lon]), {
-        stroke: false, fillColor: colour, fillOpacity: opacity, interactive: false,
-      }).addTo(target);
+      L.polygon(ring.map(([lon, lat]) => [lat, lon]),
+        inPane(pane, { stroke: false, fillColor: colour, fillOpacity: opacity })).addTo(target);
     }
   };
-  for (const [k, colour] of Object.entries(COVER_COLOUR)) paint(cover?.[k], coverLayer, colour, 0.85);
+  for (const [k, colour] of Object.entries(COVER_COLOUR)) paint(cover?.[k], coverLayer, 'cover', colour, 0.85);
   /* ★★ URBAN IS SEMI-TRANSPARENT ON PURPOSE. Natural Earth's urban extent is a blob around a
    *  city, not its street plan; at full opacity a solid grey lozenge reads as a hole in the map.
    *  Letting the ground tint through keeps it looking like a built-up AREA. */
-  paint(urban, urbanLayer, MAP_URBAN, 0.62);
+  paint(urban, urbanLayer, 'urban', MAP_URBAN, 0.62);
 }
 async function drawRoads() {
   roadLayer.clearLayers();
   const z = map.getZoom();
   if (z < 5) return;                        // below this a road is a scratch, not a road
-  const lines = await layer(await bestTier(z <= 9 ? 'tier1' : 'tier2'), 'roads');
-  if (!lines) return;
   const box = viewBox();
+  const lines = await layer(await bestTier(tierFor('roads', z)), 'roads', box);
+  if (!lines) return;
   let n = 0;
   for (const line of lines) {
-    if (n > 900) break;                     // the same cap that keeps the point layers honest
+    if (n > 2500) break;                     // the same cap that keeps the point layers honest
     if (!ringInView(line, box)) continue;
     n++;
-    L.polyline(line.map(([lon, lat]) => [lat, lon]), {
-      color: MAP_ROAD, weight: z >= 9 ? 1 : 0.7, opacity: 0.5, interactive: false,
-    }).addTo(roadLayer);
+    L.polyline(line.map(([lon, lat]) => [lat, lon]),
+      inPane('road', { color: MAP_ROAD, weight: z >= 9 ? 1 : 0.7, opacity: 0.5 })).addTo(roadLayer);
   }
 }
 
 let drawing = false;
 async function drawBase() {
-  const z = map.getZoom(), t = await bestTier(baseTier(z));
-  const countries = await layer(t, 'countries');
+  const z = map.getZoom(), t = await bestTier(tierFor('countries', z));
+  const countries = await layer(t, 'countries', viewBox());
   if (!countries) return;
   const box = viewBox();
   basemap.clearLayers();
   for (const rings of Object.values(countries)) {
     for (const ring of rings) {
       if (!ringInView(ring, box)) continue;
-      L.polygon(ring.map(([lon, lat]) => [lat, lon]), {
-        color: MAP_COAST, weight: 0.6, opacity: 0.8,
-        fillColor: MAP_LAND, fillOpacity: 1, interactive: false,
-      }).addTo(basemap);
+      L.polygon(ring.map(([lon, lat]) => [lat, lon]), inPane('land', {
+        color: MAP_COAST, weight: 0.6, opacity: 0.8, fillColor: MAP_LAND, fillOpacity: 1,
+      })).addTo(basemap);
     }
   }
-  basemap.bringToBack();
   mapTier.at = t;
   // ★ Re-assert the stack every time the base is rebuilt, or a redraw drops the cover behind it.
-  coverLayer.addTo(map); urbanLayer.addTo(map); roadLayer.addTo(map);
-  coverLayer.bringToFront(); urbanLayer.bringToFront(); roadLayer.bringToFront();
-  placeLayer.bringToFront(); airportLayer.bringToFront();
-  portLayer.bringToFront(); countryLabelLayer.bringToFront();
+
 }
 
 async function drawPlaces() {
-  const places = await layer(await bestTier(tierName(map.getZoom())), 'places');
+  const z = map.getZoom(), box = viewBox();
+  const places = await layer(await bestTier(tierFor('places', z)), 'places', box);
   placeLayer.clearLayers();
   if (!places) return;
-  const z = map.getZoom(), box = viewBox();
   for (const [name, lon, lat] of pick(places, box, CAP.places, (r) => r[3] ?? 9)) {
-    L.circleMarker([lat, lon], { radius: 1.5, weight: 0, fillColor: MAP_TOWN,
-                                 fillOpacity: 0.9, interactive: false }).addTo(placeLayer);
+    L.circleMarker([lat, lon], inPane('place', { radius: 1.5, weight: 0,
+                     fillColor: MAP_TOWN, fillOpacity: 0.9 })).addTo(placeLayer);
     if (z >= 4) L.marker([lat, lon], { interactive: false, icon: L.divIcon({
       className: 'mapLbl', html: esc(name), iconSize: [0, 0], iconAnchor: [-4, 5],
     }) }).addTo(placeLayer);
@@ -1202,9 +1311,10 @@ async function drawPoi() {
   const z = map.getZoom();
   airportLayer.clearLayers(); portLayer.clearLayers();
   if (z < 5) return;
-  const t = await bestTier(tierName(z));
-  const [airports, ports] = await Promise.all([layer(t, 'airports'), layer('tier1', 'ports')]);
-  const box = viewBox(), aCut = z <= 6 ? 0 : z <= 8 ? 1 : 4;
+  const box = viewBox();
+  const t = await bestTier(tierFor('airports', z));
+  const [airports, ports] = await Promise.all([layer(t, 'airports', box), layer('tier1', 'ports', box)]);
+  const aCut = z <= 6 ? 0 : z <= 8 ? 1 : 4;
   for (const [icao, lon, lat, cls, iata, name] of
        pick(airports || [], box, CAP.airports, (r) => r[3], (r) => r[3] <= aCut)) {
     const code = iata || icao;
@@ -1229,8 +1339,12 @@ function redrawMap() {
   redrawT = setTimeout(() => {
     if (drawing) return;
     drawing = true;
-    Promise.all([drawBase(), drawCover(), drawRoads(), drawCountryNames(), drawPlaces(), drawPoi()])
-      .catch(() => {}).finally(() => { drawing = false; });
+    Promise.all([drawBase(), drawCover(), drawWater(), drawRoads(),
+                 drawCountryNames(), drawPlaces(), drawPoi()])
+      // ★★★ NEVER SWALLOW A DRAW ERROR AGAIN. The silent .catch here is precisely why a TypeError
+      //   in drawBase looked like "the feature did not ship" for two deploys.
+      .catch((e) => console.error('map draw failed:', e))
+      .finally(() => { drawing = false; });
   }, 120);
 }
 map.on('zoomend moveend', redrawMap);
