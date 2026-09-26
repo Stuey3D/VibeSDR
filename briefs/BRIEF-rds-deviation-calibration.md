@@ -178,3 +178,49 @@ both. ★ Compare like with like or the experiment measures the filter.
 
 ▶ **NEXT:** get one reading off a station with the guard band ON, beside MpxTool. That single
 reading picks a row in the table above and ends the ambiguity.
+
+## 2026-09-26, LATER — THE CONTROL ARM ANSWERED IN ONE EVENING: IT IS THE GUARD BAND
+
+Five stations, Pi 500 / Airspy HF+ / Northampton, all read off the ADV RDS row:
+
+| station | SNR | errors | avg | peak | raw | raw x 0.707 | pinned at the clamp? |
+|---|---|---|---|---|---|---|---|
+| Flex FM 96.1  | 29 | 14% | 2.6 | 5.8 | 3.6 | 2.55 | **YES** |
+| Heart 96.6    | **58** | **2%** | 1.4 | 2.6 | 2.0 | 1.41 | **YES** |
+| BBC R1 99.7   | 36 | 4%  | 1.2 | 2.4 | 1.8 | 1.27 | **YES** |
+| Classic 100.4 | 37 | **0%** | 2.3 | 3.5 | 2.6 | 1.84 | no |
+| BBC Nhtn 104.2| **68** | **0%** | 1.7 | 2.0 | 1.8 | 1.27 | no |
+
+### ★★★ FINDING 1 — THE PUBLISHED AVERAGE IS OFTEN THE CLAMP, NOT A MEASUREMENT
+`rdsDeviationKHz()` ends `return std::max(corrected, raw * 0.707f)`. On **three of five stations the
+answer IS that floor** — the guard-band subtraction wanted to remove more than half the power and
+was capped. The clamp's own comment says a correction that deep "is evidence that the guard band is
+seeing something other than our noise". That evidence is now in.
+
+★★ **AND NOT ONLY ON WEAK SIGNALS.** Heart 96.6 is 58 dB SNR at 2 % block errors and is pinned. My
+first reading was Flex FM (29 dB, 14 % errors) and I wrote it off as a weak-signal artefact; four
+more samples killed that. ✗ Do not re-explain this as noise — a clean strong station does it too.
+
+▶ **So the ~16 % deficit Onfliner measured lives in the NOISE SUBTRACTION, not in the 1.520 crest
+factor.** The note on `rdsDeviationKHz()` has blamed the constant since 2026-07-27 and pointed every
+investigation the wrong way. ✗ **Do NOT change 1.520.**
+
+### ★★★ FINDING 2 — THE MEASURED PEAK IS RIGHT ON A CLEAN SIGNAL
+BBC Northampton (68 dB, 0 % errors, RDS-to-pilot "99 % steady") gives **peak/avg = 2.0/1.7 = 1.18**,
+against the **1.164** Hans's PIRA table implies the correction should be. Within reading noise of
+exact agreement. The earlier "peak over-reads ~23 % with wide scatter" was measured on NOISIER
+signals — 104.2 at the time was not the clean case it is here.
+▶ `rdsDeviationPeakKHz()` may be sound and simply needs a SIGNAL-QUALITY GATE (block errors ~0,
+phase steady) rather than being shown unconditionally or distrusted unconditionally.
+
+### ▶ NEXT, and none of it needs MpxTool
+Stuart does **not** have MpxTool — Defender quarantined it as `Wacatac.A!ml` (a generic ML
+heuristic). ✗ Do not suggest installing or unblocking it. Neither finding above needs it: the clamp
+result is arithmetic against our own output, and the peak result is checked against Hans's table.
+1. **Count the clamp.** Publish how often `raw * 0.707f` wins. If it is most of the time, the guard
+   band is not measuring a noise floor at all and the correction should be reconsidered whole.
+2. **Ask WHY 63 kHz is hot** on a clean strong station. The four-radio wide/narrow result already
+   said a wide IF admits adjacent-channel energy into the guard; these five say it happens at 195 k
+   too (every row above ran IF 186-195 k).
+3. **Onfliner is the absolute anchor**, not Stuart — he measured the eleven-station deficit on his
+   own MpxTool and can re-read `raw` beside it now that it is published.
