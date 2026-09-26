@@ -9568,7 +9568,19 @@ function renderRds() {
    *     benefit figure nobody computed. */
   const ifShadow = ifC > 0 && (rdsExt?.mpxSnr ?? 0) > 0.5;
   if (rdsExt && ifBw > 0) {
-    ifEl.textContent = `${Math.round(ifBw / 1000)}k narrow` + (ifShadow
+    /* ★★★ THE WORD WAS HARDCODED. This printed "Nk narrow" for EVERY width, so a filter sitting
+     *  at the ordinary FM width announced itself as narrowed and a genuinely wide one said the
+     *  same. Stuart, 2026-09-26, looking at Saber's box: "its 194 now so I would consider that
+     *  Wide as 192K is the usual FM width."
+     *  ★★ A broadcast FM channel is 200 kHz spaced and the signal occupies roughly 180-200 kHz, so
+     *  around 192k IS the ordinary case — it deserves no adjective at all. An adjective is a claim,
+     *  and a claim about every value is a claim about none.
+     *  ★ Only the genuinely unusual gets a word: below 160k the filter is cutting into the
+     *  multiplex (stereo and RDS live out to 57 kHz, i.e. ±60 kHz of the carrier), above 220k it is
+     *  admitting the neighbour. Between them, state the number and stop talking. */
+    const ifK = Math.round(ifBw / 1000);
+    const ifWord = ifK <= 160 ? ' narrow' : ifK >= 220 ? ' wide' : '';
+    ifEl.textContent = `${ifK}k${ifWord}` + (ifShadow
       ? ` · wide would ${ifG > 1.5 ? `gain ${ifG.toFixed(1)} dB` : `cost ${Math.abs(ifG).toFixed(1)} dB`}`
       : '');
     ifEl.style.color = '#7dff9a';
@@ -10198,9 +10210,22 @@ function drawMpxEye() {
          *  below can safely be judged on the peak again. */
         const pk  = rdsExt?.mpxHold ?? md;
         const avg = rdsExt?.mpxAvg ?? 0;
+        /* ★★★ A VERDICT MAY NOT RESOLVE FINER THAN THE MEASUREMENT. This was
+         *  `pk > 75 ? 'over the limit' : 'nominal'`, a hard step exactly on the ±75 kHz legal
+         *  limit — and Stuart's RTL-vs-RSP A/B on 2026-09-26 put the same transmitter, at the same
+         *  instant, at peak 75 on one radio and 80 on the other. The NUMBERS agreed to 7 %; the
+         *  WORDS said "nominal" and "over the limit". A listener comparing two receivers learns to
+         *  trust neither.
+         *  ★★ So the band between them says the same thing on both. 72–82 is "close to the limit":
+         *  honest about where the signal is without claiming a precision the instrument does not
+         *  have. The measured inter-radio spread is what sets the width — ✗ do not narrow it back
+         *  towards 75 without a measurement showing two radios agree more closely than that.
+         *  ★ OVERMODULATED stays where it was: above 82 both radios agreed (92/94 on 96.1), so the
+         *  strong word is still earned. Same shape as the constellation FAULT boundary below —
+         *  a verdict that flips on noise is worse than a coarser one that does not. */
         const verdict = overRange ? 'implausible — not a real FM figure'
                       : pk > 82 ? 'OVERMODULATED'
-                      : pk > 75 ? 'over the limit' : 'nominal';
+                      : pk > 72 ? 'close to the limit' : 'nominal';
         /* ★ SAY WHAT WAS REMOVED. The server measures the noise in the reading's own band from a
          *  guard band at 80 kHz and takes it out in quadrature (see mpxDevNoise_ in vibedsp.h);
          *  on a weak station that can be a large correction, and a reader comparing against
