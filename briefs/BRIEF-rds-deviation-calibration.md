@@ -334,3 +334,36 @@ Repeat four or five points on **5.6.60** and report **`raw` beside `avg`** (the 
   factor is `1.520 * 1.209` = **1.84** — just above Hans's PIRA-implied 1.770 +/- 0.048, from an
   INDEPENDENT calibrated source. Two sources agreeing is a MEASURED constant, not a fit.
 ★ Also from Onfliner: 10.5 (490) fixed the sensitivity and linear-gain sliders — they work properly.
+
+## 2026-09-26, LATE — ONFLINER AGAINST A CALIBRATED TRANSMITTER: THE PEAK IS LOW TOO
+
+Transmitter set to a known RDS deviation; read on VibeSDR. **Airspy and RTL gave IDENTICAL
+figures**, so the meter is reproducible across front ends (again).
+
+| set (kHz) | avg | peak | set/avg | set/peak |
+|---|---|---|---|---|
+| 1.2 | 0.9 | 1.0 | 1.333 | 1.200 |
+| 3.0 | 2.3 | 2.5 | 1.304 | 1.200 |
+| 5.1 | 3.9 | 4.2 | 1.308 | 1.214 |
+| **mean** | | | **1.315 (24.0 % low)** | **1.205 (17.0 % low)** |
+
+### ★★★ THE MEASURED PEAK IS 17 % LOW — AND IT HAS NOTHING TO HIDE BEHIND
+`rdsDeviationPeakKHz()` is `rdsPkHold_ * 75` — a measured envelope percentile, **no crest factor
+and no guard-band subtraction**. So 17 % of the deficit sits UPSTREAM of both, and is a property of
+the envelope measurement itself (or of the 99.5th percentile being legitimately below a true peak —
+those two are not yet separated).
+▶ Only the remaining ~6 % belongs to the 1.520 crest factor.
+✗ **SO DO NOT JUST CHANGE 1.520.** Raising it to 1.999 (what `set/avg` implies) would mask a
+measurement deficit with a fudged constant — the exact failure `rds_pira_calibration` names.
+▶ **Fix the envelope scale / percentile FIRST, then re-measure the crest factor against the same
+transmitter.** The constant cannot be judged until the thing it multiplies is right.
+
+### ★ Cross-check: MpxTool agrees with the transmitter
+The earlier 22-point sweep gave `mpxtool = 1.2173 x vibesdr`; against the transmitter directly the
+avg needs 1.315. MpxTool therefore reads close to the set value, and is a sound reference.
+
+### ▶ STILL UNKNOWN: is Onfliner on build 495?
+No `raw` appeared in any screenshot. That is EITHER "raw ≈ avg, the guard subtracts nothing on a
+clean bench signal" OR "he is on an older build that never sends the field". ✗ Do not treat the
+absence as data until the build is confirmed. ★ "MPX S/N 35 dB · bypassed" is the WEAK-SIGNAL
+TREATMENT being bypassed, not the noise guard — it does not answer this.

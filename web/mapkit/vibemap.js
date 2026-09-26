@@ -81,6 +81,19 @@
    *  with an unasserted replace -- a no-op edit leaves no trace at all. */
   const MAP_REEF = '#4e8f93', MAP_PLAYA = '#8a8470', MAP_CAPITAL = '#f0c56a';
   const MAP_SEA = '#123049', MAP_LAND = '#3c5a3f', MAP_COAST = '#6fa37b';
+  /* ★★★ A NATIONAL BORDER IS NOT A COASTLINE, AND IT WAS DRAWN AS ONE — same MAP_COAST colour,
+   *  LESS weight and LESS opacity than the coast it copied, so a border read as a faded shore.
+   *  Stuart, 2026-09-26: *"can the country boarders be more prominent as the whole of eastern
+   *  europe it is difficult to see where one country ends and another begins"* — and eastern
+   *  Europe is exactly where it fails worst, because there is no coast to carry the shape and
+   *  the only thing separating Slovakia from Hungary WAS that faded line.
+   *  ★★ THREE LINE KINDS, THREE LOOKS, so none has to be inferred from context:
+   *     coast  — MAP_COAST, solid, land meets sea
+   *     border — MAP_BORDER, solid and BRIGHTER, one country meets another
+   *     admin  — MAP_ADMIN, DASHED and dim, a subdivision inside one country
+   *  ★ Lighter than the land family rather than a new hue: the palette is deliberately a set of
+   *    nudges from MAP_LAND (see the note above), and a foreign colour here would shout. */
+  const MAP_BORDER = '#b5dcc0';
   const MAP_TOWN = '#9ec9a8', MAP_LABEL = 'rgba(210,235,215,0.82)';   // MAP_LABEL: see .mapLbl below
 
   /* ══ THE LABEL STYLESHEET ══════════════════════════════════════════════════════════════════════
@@ -950,7 +963,7 @@
           if (!ringInView(line, box)) continue;
           for (const dx of offs) {
             L.polyline(line.map(([lon, lat]) => [lat, lon + dx]),
-              inPane('admin', { color: MAP_COAST, weight: 0.8, opacity: 0.6 })).addTo(basemap);
+              inPane('admin', { color: MAP_BORDER, weight: 1.3, opacity: 0.95 })).addTo(basemap);
           }
         }
         mapTier.at = 'coast';
