@@ -9648,7 +9648,31 @@ function renderRds() {
     pEl.textContent = `${pdev.toFixed(1)} kHz · ${ok ? 'nominal' : pdev < 6 ? 'low' : 'high'}${lockTxt}`;
     pEl.style.color = plk === false ? '#ffd479' : ok ? '#7dff9a' : '#ffd479';
   } else { pEl.textContent = dash; pEl.style.color = ''; }
-  if (rdev > 0.2) {
+  /* ★★★ AND STAND DOWN WHEN THERE IS NOTHING TO MEASURE — THIS ROW WAS THE ONLY ONE THAT DID NOT.
+   *  Stuart, 2026-09-26, Heart 96.6 forced to 110k (±55 kHz, i.e. the passband edge BELOW the
+   *  57 kHz subcarrier): every other field on the panel correctly declined — ERRORS "—",
+   *  MULTIPATH "not measurable at this S/N", CEQ "signal too weak to equalise", RDS↔PILOT
+   *  "unstable — not measurable", the deviation meter "buried in noise — level not measurable",
+   *  the constellation "RDS no lock". RDS DEV alone printed
+   *      avg 3.3 · peak 11.3 · raw 4.7 kHz · nominal
+   *  at 5 dB MPX S/N. **11.3 kHz is TWICE the spec ceiling** (7.5 % of 75 = 5.6 kHz) and it was
+   *  labelled "nominal", because the verdict reads `rdev` while the impossible-value check was
+   *  watching a different number than the one that had gone impossible.
+   *  ★★ THE SERVER'S OWN GATE CANNOT CATCH THIS. `agg_.groupTotal > 0` is sticky PER PI — it exists
+   *     so a FADE keeps its last honest value instead of flapping to a dash — so once a station
+   *     has ever produced groups the row keeps publishing through a total loss of lock. That is
+   *     right for a fade and wrong for a receiver that can no longer hear the subcarrier at all.
+   *  ★ SO REUSE devGateOpen, the panel's existing latched MPX S/N gate (10 dB in, 8 out), rather
+   *    than inventing a threshold. Those numbers are already paid for: a hard 20 called
+   *    tgcfabian's own FelineFM "buried in noise" while it decoded at 12.4 groups/s. One rule, one
+   *    place — the alternative is a sixth outing for the one-threshold flap. */
+  const rdsMeasurable = devGateOpen || (rdsExt?.mpxSnr ?? 0) <= 0;
+  if (rdev > 0.2 && !rdsMeasurable) {
+    /* ★ Say it in the panel's own idiom, and in the SAME words the deviation meter uses two rows
+     *  down — two readouts in one box must not describe the same condition differently. */
+    rEl.textContent = 'not measurable at this S/N';
+    rEl.style.color = '#ffd479';
+  } else if (rdev > 0.2) {
     // ★★ THE SCALE HAS A CEILING, SO THE LABELS MUST TOO. 7.5% of 75 kHz = 5.6 kHz is the spec
     // maximum, and the old wording ran open-ended: anything above 4 kHz was called "generous",
     // so a reading of 12.9 kHz — physically impossible — was presented as a station doing well

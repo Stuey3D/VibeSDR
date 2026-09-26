@@ -299,3 +299,38 @@ Maximum bandwidth was the ONLY setting that gave a clean measurement (0 % errors
 locked, "no treatment"). Every narrower one degraded the thing being measured; 110k left the panel
 unable to measure anything. ★ For deviation/RDS work the widest setting is not a luxury, it is the
 only width where the instrument is trustworthy. Record this as the REASON, not just the request.
+
+## 2026-09-26 — ONFLINER'S CALIBRATED SWEEP: A KNOWN TRANSMITTER, 22 POINTS
+
+Airspy Mini -> VibeSDR, RTL-SDR -> MpxTool, RDS level set on his own transmitter with Stereo Tool.
+**This is a CALIBRATED SOURCE, not field data — it outranks every field reading in this brief.**
+
+```
+fit   mpxtool = 1.1852 * vibesdr + 0.12      (max residual 0.154 kHz; quantisation +/-0.05)
+through origin           = 1.2173 * vibesdr  -> we under-read by 17.8 %
+top half of the range    = 1.2086
+```
+
+### ★★★ IT IS A SCALE ERROR, AND THE SUBTRACTION IS ONLY A SMALL TERM
+The gap GROWS with level (0.1 kHz at 0.2, 1.1 kHz at 5.5) and the ratio settles flat at **1.20**.
+An over-subtraction would show as a roughly CONSTANT gap; this is multiplicative.
+★★ The intercept is **+0.12 kHz**: at zero deviation MpxTool would read 0.12 where we read 0, i.e.
+we subtract slightly MORE noise than MpxTool. So the guard-band clamp found earlier tonight is
+worth ~**0.12 kHz, not 18 %**. ▶ I over-weighted the clamp; it is real but it is not the main fault.
+
+### ★★★ ONLY RDS IS WRONG — HIS OWN CONTROLS PROVE IT
+- **Pilot deviation: 0.1 kHz low**, consistently (~1.5 % of 6.7).
+- **75 kHz deviation, 400 Hz test tone: we read 1 kHz HIGH** (~1.3 %).
+Two controls, both within a couple of percent, OPPOSITE signs. ▶ The MPX chain and the deviation
+meter are effectively VALIDATED. The fault is specific to the RDS path. ✗ Do not go looking for a
+global scaling bug.
+
+### ▶ THE ONE READING THAT CLOSES THIS — ask Onfliner, he has the transmitter
+Repeat four or five points on **5.6.60** and report **`raw` beside `avg`** (the row now prints
+`avg · peak · raw`):
+- `raw/avg ~ 1.41` ⇒ he is CLAMPED; `mpxtool/avg` is only 1.20, so `raw` over-reads by ~18 %
+  ⇒ **1.520 is TOO HIGH**.
+- `raw ~ avg`     ⇒ not clamped, the subtraction is irrelevant, and the true mean-envelope crest
+  factor is `1.520 * 1.209` = **1.84** — just above Hans's PIRA-implied 1.770 +/- 0.048, from an
+  INDEPENDENT calibrated source. Two sources agreeing is a MEASURED constant, not a fit.
+★ Also from Onfliner: 10.5 (490) fixed the sensitivity and linear-gain sliders — they work properly.
