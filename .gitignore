@@ -122,3 +122,15 @@ vibeserver/build-san/
 vibeserver/build-fuzz/
 vibeserver/fuzz-crashes/
 vibeserver/fuzz-corpus/
+
+# Map vector source cache (scripts/gen-map-data.mjs) — ~66 MB of Natural Earth / GeoNames /
+# OurAirports / NGA downloads. Kept ON DISK so re-running the generator while tuning the tier and
+# rounding rules is cheap, but it is somebody else re-publishable data, never a build input.
+.mapdata-cache/
+
+# ★ The directory SERVES the map data but does not OWN it: assets/mapdata/v1 is the single source,
+#   and scripts/sync-mapdata.sh copies it here before a wrangler deploy. Committing both doubles a
+#   48 MB dataset in the repo and creates a second copy to forget to regenerate.
+directory/public/mapdata/
+# The packaged detail tarball is a release artefact, rebuilt by gen-map-data.mjs on demand.
+dist/mapdata/

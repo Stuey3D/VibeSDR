@@ -88,7 +88,27 @@
      arrived as two white boxes over a black map. */
   /* ★★ The dark basemap, made rather than bought — see the tileLayer call for why. Inverting hue
    *    as well as luminance is what keeps water blue instead of orange. */
-  .vsDarkTiles { filter: invert(1) hue-rotate(180deg) brightness(.92) contrast(.9) saturate(.7); }
+  /* ★ Place labels: small, dim, and non-interactive -- the map is CONTEXT, the receivers are the
+       subject. A label that competes with a server pin is a label in the way. */
+  /* ★ Country names sit ABOVE the town labels in weight and BELOW them in brightness -- larger so
+       they read as the bigger thing, dimmer so they stay behind the receivers. */
+  .contLbl { font-size: 13px !important; letter-spacing: 3px; opacity: 0.5; }
+  /* ★ Airports amber, heliports and ports dimmer -- the airfield is what an ATC listener is
+   *  scanning for, so it wins the eye; a port is context until AIS makes it the subject. */
+  .apLbl { font: 9px ui-monospace, Menlo, monospace !important; color: #e8b13a; opacity: 0.85;
+           white-space: nowrap; text-shadow: 0 0 3px #000, 0 0 3px #000; margin: -4px 0 0 4px; }
+  .apLbl.heli { color: #9fb3c8; opacity: 0.6; }
+  .ptLbl { font: 9px ui-monospace, Menlo, monospace !important; color: #6fc3d6; opacity: 0.62;
+           white-space: nowrap; text-shadow: 0 0 3px #000, 0 0 3px #000; margin: -4px 0 0 4px; }
+  .ctyLbl i { display: block; font-style: normal; text-transform: none; letter-spacing: 0.4px;
+              font-size: 9px; opacity: 0.66; }
+  .ctyLbl { font: 10px ui-monospace, "SF Mono", Menlo, Consolas, monospace !important;
+            letter-spacing: 1.4px; text-transform: uppercase; color: rgba(190,225,200,0.55);
+            white-space: nowrap; transform: translate(-50%, -50%); text-shadow: 0 1px 3px rgba(0,0,0,0.95);
+            pointer-events: none; }
+  .mapLbl { font: 9px ui-monospace, "SF Mono", Menlo, Consolas, monospace !important;
+            color: rgba(210,235,215,0.82); white-space: nowrap; text-shadow: 0 1px 2px rgba(0,0,0,0.9);
+            pointer-events: none; }
   .leaflet-control-zoom a { background: var(--panel) !important; color: var(--accent) !important;
                             border-color: var(--line) !important; }
   .leaflet-popup-content-wrapper, .leaflet-popup-tip {
@@ -894,9 +914,328 @@ document.getElementById('map').addEventListener('wheel', (e) => {
  *    decision, and the one left behind is the one that quietly stays broken.
  * ★ The filter is scoped to the tile pane so it darkens the map WITHOUT inverting the markers or
  *   the day/night terminator, which live in the marker and overlay panes. */
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '&copy; OpenStreetMap', maxZoom: 12, className: 'vsDarkTiles',
-}).addTo(map);
+/* ★★★ NO TILES. The basemap is drawn from the SAME country-shapes.json this page already loads
+ *  for the server highlights -- so the dark map costs one extra polygon pass and nothing on the
+ *  wire. What it replaces: OpenStreetMap raster tiles run through a CSS invert+hue-rotate to fake
+ *  a dark theme, because CARTO's proper dark tiles would be commercial use (VibeSDR sells on the
+ *  App Store) and OSM's own are light.
+ *  ★★ AND WE HAD ALREADY BEEN REFUSED TILES (2026-09-26): Stuart's PC showed the blocked-tile
+ *  image while his Mac drew from cache. An inverted basemap we do not control was a dependency
+ *  on a free service, for a picture we were fighting anyway.
+ *  ★★★ THE TERMINATOR IS THE REAL WIN. Over raster tiles the day/night shadow is grey smeared
+ *  across somebody else's LIGHT basemap. Here land and sea are OUR fills, so night genuinely
+ *  darkens the countries underneath it -- which is what a greyline is for.
+ *  ★ Palette chosen by measuring perceptual lightness, not by eye: sea L* 18.9, land L* 35.3,
+ *    dL* 16.4. Two dark colours that differ only in HUE are indistinguishable on a cheap screen
+ *    and to a colour-blind reader -- the land has to be LIGHTER, not just greener. (White is
+ *    L* 100, for scale: Stuart, 2026-09-26, "it can have some colour i just dont want eyeball
+ *    melting white".) */
+/* ★★★ LANDCOVER PALETTE. Stuart, 2026-09-26: "make the built up areas grey with the rural green
+ *  around it ... things like the sahara could be made sand coloured ... fake the experience of a
+ *  real map that little bit more."
+ *  ★★ EVERY ONE OF THESE IS A NUDGE FROM MAP_LAND, NOT A NEW COLOUR. The map has to stay legibly
+ *  dark under an amber UI -- he has said twice that it must not melt eyeballs -- so a desert is a
+ *  DESATURATED sand a couple of steps off the green, not the ochre a paper atlas would use. The
+ *  cue only has to be strong enough to say "this ground is different", and at these lightnesses a
+ *  small step is plenty. ✗ Do not brighten these to match a printed map. */
+const MAP_URBAN = '#5a5d62', MAP_DESERT = '#6d6142', MAP_TUNDRA = '#4a5750',
+      MAP_WETLAND = '#33523f', MAP_ICE = '#8d9aa2', MAP_ROAD = '#6a6a4e';
+const MAP_SEA = '#123049', MAP_LAND = '#3c5a3f', MAP_COAST = '#6fa37b';
+document.getElementById(map.getContainer().id || 'map').style.background = MAP_SEA;
+map.getContainer().style.background = MAP_SEA;
+const MAP_TOWN = '#9ec9a8', MAP_LABEL = 'rgba(210,235,215,0.82)';
+const basemap = L.layerGroup().addTo(map);
+const placeLayer = L.layerGroup().addTo(map);
+/* ★★★ TIERED, BECAUSE 110m LOOKS LIKE A CHILD'S DRAWING. country-shapes.json is Natural Earth
+ *  110m -- 175 countries, 10,554 points, ~1 km precision -- which is fine as a lookup table and
+ *  crude as a coastline (Stuart, 2026-09-26: "it looks too course and like a childs drawing").
+ *  tier1 is the 50m set: 237 countries, 99,354 points, NINE TIMES the detail, and it brings the
+ *  cities the old file never had.
+ *  ★★ Fetched by ZOOM, not all at once: tier0 (254 kB) draws the world instantly, tier1 (2 MB)
+ *  arrives when somebody zooms in. Cached by the browser, so it is one download per version. */
+const MD = '/mapdata/v1/';
+/* ★★ COUNTRY NAMES USE NATURAL EARTH'S OWN LABEL POINTS, not polygon centroids. A centroid puts
+ *  "Norway" in the North Sea and "Chile" in Argentina; LABEL_X/LABEL_Y are placed by hand by the
+ *  cartographers for exactly this. LABELRANK then thins them by zoom, biggest countries first --
+ *  242 labels, 7.4 kB. */
+let countryLabels = null;
+const countryLabelLayer = L.layerGroup().addTo(map);
+const mapTier = { loaded: {}, at: -1 };
+/* ★★ THREE TIERS, and the third one is what puts Northampton on the map. tier1 is Natural Earth's
+ *  ranked places -- Coventry and Cambridge make that list, Northampton does NOT (NE carries 57 UK
+ *  places and his own town is not among them). tier2 is GeoNames cities5000: 69,753 towns, and
+ *  Sywell (EGBK) with it. It is 2 MB, so it is fetched ONLY when somebody zooms in that far. */
+function tierName(z) { return z <= 4 ? 'tier0' : z <= 7 ? 'tier1' : 'tier2'; }
+/* ★★★ ONE LAYER AT A TIME, NOT ONE TIER AT A TIME. Fetching a whole tier means that zooming to
+ *  z8 pulled tier2's countries (9 MB), places (2 MB), airports (4 MB) and ports in one go and
+ *  waited for ALL of them before drawing ANY of them -- 15 MB of stall for a town label. Each
+ *  layer is now its own promise, cached by name, requested only by the thing that draws it. */
+/* ★★★ THE INDEX SAYS WHAT IS INSTALLED, AND THE RENDERER ASKS RATHER THAN ASSUMES. The detail
+ *  pack (tier2, 11.8 MB compressed) is an OPTIONAL one-time download on a VibeServer or in the
+ *  app; the basic pack is bundled and always there. A server without the detail pack must draw a
+ *  correct, complete map -- just a coarser one. ✗ It must never 404 its way to a black hole at
+ *  z8, which is exactly what asking for tier2 unconditionally would do.
+ *  ★ The probe is ONE fetch of index.json, and if even that fails we assume the basic pack, which
+ *  is the safe direction: we may under-use data that is present, never over-ask for data that is
+ *  not. */
+let mapHave = null;
+function haveFiles() {
+  if (!mapHave) {
+    mapHave = fetch(MD + 'index.json').then((r) => (r.ok ? r.json() : null))
+      .then((ix) => new Set(Object.keys(ix?.files || {})))
+      .catch(() => new Set());
+  }
+  return mapHave;
+}
+async function layer(t, f) {
+  const k = t + '-' + f;
+  const have = await haveFiles();
+  // ★ An empty set means the index itself did not load; fall back to trying tier0/tier1 only.
+  if (have.size ? !have.has(k + '.json') : t === 'tier2') return null;
+  if (!mapTier.loaded[k]) {
+    mapTier.loaded[k] = fetch(MD + k + '.json')
+      .then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  }
+  return mapTier.loaded[k];
+}
+/** ★ Best tier actually installed, at or below the one the zoom wants. */
+async function bestTier(want) {
+  const have = await haveFiles();
+  if (want !== 'tier2') return want;
+  return (have.size && have.has('tier2-countries.json')) ? 'tier2' : 'tier1';
+}
+/* ★★ THE OUTLINES AND THE LABELS COME FROM DIFFERENT TIERS ON PURPOSE. Northampton needs tier2's
+ *  GeoNames towns at z8, but tier2's 9 MB coastline is not worth downloading to look at one town
+ *  -- at z8 a 50m outline is still smooth on screen. So the fine coastline waits until z10, where
+ *  the difference is actually visible, and the towns arrive the moment they are needed. */
+function baseTier(z) { return z <= 4 ? 'tier0' : z <= 9 ? 'tier1' : 'tier2'; }
+/* ★★★ AT WORLD VIEW THE COUNTRY NAMES COLLIDE, so the world view does not get country names.
+ *  Stuart, 2026-09-26, on the z2 map: "Little bit too much overlap, maybe have continents at this
+ *  zoom level". THE LABELS ARE HARD-CODED and that is deliberate -- seven labels whose positions
+ *  are a cartographic judgement, not data; no source file could place them better and none can go
+ *  stale. Land centroids would put "Asia" in western China and "Africa" in the Sahara: fine, but
+ *  these are nudged to where the eye expects them over the landmass. */
+const CONTINENT_LABELS = [
+  ['NORTH AMERICA',  -100,  46], ['SOUTH AMERICA', -60, -15], ['EUROPE',  18, 53],
+  ['AFRICA',           20,   3], ['ASIA',           90,  45], ['OCEANIA', 140, -25],
+  ['ANTARCTICA',        0, -78],
+];
+/** ★ Thin the labels by RANK against zoom, or the world view is a wall of overlapping names. */
+async function drawCountryNames() {
+  if (countryLabels === null) {
+    countryLabels = await fetch(MD + 'country-labels.json')
+      .then(r => r.ok ? r.json() : []).catch(() => []);
+  }
+  countryLabelLayer.clearLayers();
+  const z = map.getZoom();
+  if (z <= 3) {                            // world view: continents only, nothing to collide with
+    for (const [name, lon, lat] of CONTINENT_LABELS) {
+      L.marker([lat, lon], { interactive: false, icon: L.divIcon({
+        className: 'ctyLbl contLbl', html: name, iconSize: [0, 0], iconAnchor: [0, 0],
+      }) }).addTo(countryLabelLayer);
+    }
+    return;
+  }
+  if (z > 7) return;                       // zoomed past a country: its name is just clutter
+  const cut = z <= 4 ? 3 : z <= 5 ? 5 : 7;
+  for (const [name, lon, lat, rank, ...rest] of countryLabels) {
+    if (rank > cut) continue;
+    /* ★ The local name rides UNDER the English one, and only where Natural Earth actually has a
+     *  distinct endonym -- 70 of 239 countries. Deutschland, Türkiye, Việt Nam, Україна all land;
+     *  the rest simply show one line rather than a blank second one. */
+    const local = rest[0];
+    const html = esc(name) + (local && z >= 4 ? '<i>' + esc(local) + '</i>' : '');
+    L.marker([lat, lon], { interactive: false, icon: L.divIcon({
+      className: 'ctyLbl', html, iconSize: [0, 0], iconAnchor: [0, 0],
+    }) }).addTo(countryLabelLayer);
+  }
+}
+/* ★★★ EVERY POINT LAYER IS CLIPPED TO THE VIEWPORT AND CAPPED, and that is not an optimisation --
+ *  it is the fix for two faults Stuart hit within a minute of the first deploy (2026-09-26):
+ *  "really slow to respond" and "smaller towns appeared as i zoomed in then disappeared when i
+ *  zoomed in more".
+ *
+ *  ★★ BOTH WERE ONE BUG. The old thinning was a GLOBAL RANK CUT: `rank <= (z - 2) * 1.7` over the
+ *  whole world's list. At z8 the renderer switched to tier2 -- GeoNames, 69,753 towns -- and that
+ *  cut passes EVERY ONE of them, because GeoNames ranks run 0-8 and the cut was 10.2. So it cleared
+ *  the layer and then tried to build 69,753 Leaflet markers for a viewport showing about forty
+ *  towns. The clear is instant and the rebuild never finishes: the towns VANISH and the page hangs.
+ *  The user sees "disappeared" and "slow" as two complaints; they are one line of arithmetic.
+ *
+ *  ★★★ SO THE SELECTION IS NOW: take what is IN VIEW, sort by rank, draw the best N. This is
+ *  monotonic by construction -- zooming in shrinks the viewport, so fewer candidates compete for
+ *  the same N and LOWER-ranked places appear. Detail can only ever GROW on the way in, which is
+ *  what a map is expected to do and what the global cut could not promise across two datasets with
+ *  incompatible rank scales (Natural Earth scalerank vs a rank synthesised from population).
+ *  ✗ Do not reintroduce a global cut. It cannot be right for both datasets at once. */
+const CAP = { places: 220, airports: 140, ports: 60 };
+/** The view, grown by a margin so a small pan does not strip the edges before `moveend` fires. */
+function viewBox() {
+  const b = map.getBounds().pad(0.25);
+  return [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+}
+const inBox = ([w, s, e, n], lon, lat) => lat >= s && lat <= n
+  && (w <= e ? (lon >= w && lon <= e) : (lon >= w || lon <= e));   // the antimeridian case
+
+/** Pick the best `cap` rows in view, cheapest first: clip, then sort only the survivors. */
+function pick(rows, box, cap, rankOf, keep) {
+  const hits = [];
+  for (const r of rows) {
+    if (keep && !keep(r)) continue;
+    if (!inBox(box, r[1], r[2])) continue;
+    hits.push(r);
+  }
+  if (hits.length > cap) {
+    hits.sort((a, b) => rankOf(a) - rankOf(b));
+    hits.length = cap;
+  }
+  return hits;
+}
+
+/* ★★ THE FINE OUTLINES ARE CLIPPED TOO. tier2-countries is 9 MB and ~1.5 M points; handing the
+ *  whole world to Leaflet at z8 is the same mistake in polygon form. A ring is drawn only if its
+ *  own bounding box meets the view. */
+function ringInView(ring, box) {
+  let w = 180, s = 90, e = -180, n = -90;
+  for (const [lon, lat] of ring) {
+    if (lon < w) w = lon; if (lon > e) e = lon;
+    if (lat < s) s = lat; if (lat > n) n = lat;
+  }
+  return !(e < box[0] || w > box[2] || n < box[1] || s > box[3]);
+}
+
+/* ★ Painted in this order and never another: cover (what the ground is) -> urban (what was built
+ *  on it) -> roads (what joins it). Each one is a correction to the one below, so a town in a
+ *  desert must be able to cover the sand, and a road must sit on top of both. */
+const coverLayer = L.layerGroup();
+const urbanLayer = L.layerGroup();
+const roadLayer = L.layerGroup();
+const COVER_COLOUR = { desert: MAP_DESERT, tundra: MAP_TUNDRA, wetland: MAP_WETLAND, ice: MAP_ICE };
+async function drawCover() {
+  const t = await bestTier(baseTier(map.getZoom()));
+  const [cover, urban] = await Promise.all([layer(t, 'cover'), layer(t, 'urban')]);
+  coverLayer.clearLayers(); urbanLayer.clearLayers();
+  const box = viewBox();
+  const paint = (rings, target, colour, opacity) => {
+    for (const ring of rings || []) {
+      if (!ringInView(ring, box)) continue;
+      L.polygon(ring.map(([lon, lat]) => [lat, lon]), {
+        stroke: false, fillColor: colour, fillOpacity: opacity, interactive: false,
+      }).addTo(target);
+    }
+  };
+  for (const [k, colour] of Object.entries(COVER_COLOUR)) paint(cover?.[k], coverLayer, colour, 0.85);
+  /* ★★ URBAN IS SEMI-TRANSPARENT ON PURPOSE. Natural Earth's urban extent is a blob around a
+   *  city, not its street plan; at full opacity a solid grey lozenge reads as a hole in the map.
+   *  Letting the ground tint through keeps it looking like a built-up AREA. */
+  paint(urban, urbanLayer, MAP_URBAN, 0.62);
+}
+async function drawRoads() {
+  roadLayer.clearLayers();
+  const z = map.getZoom();
+  if (z < 5) return;                        // below this a road is a scratch, not a road
+  const lines = await layer(await bestTier(z <= 9 ? 'tier1' : 'tier2'), 'roads');
+  if (!lines) return;
+  const box = viewBox();
+  let n = 0;
+  for (const line of lines) {
+    if (n > 900) break;                     // the same cap that keeps the point layers honest
+    if (!ringInView(line, box)) continue;
+    n++;
+    L.polyline(line.map(([lon, lat]) => [lat, lon]), {
+      color: MAP_ROAD, weight: z >= 9 ? 1 : 0.7, opacity: 0.5, interactive: false,
+    }).addTo(roadLayer);
+  }
+}
+
+let drawing = false;
+async function drawBase() {
+  const z = map.getZoom(), t = await bestTier(baseTier(z));
+  const countries = await layer(t, 'countries');
+  if (!countries) return;
+  const box = viewBox();
+  basemap.clearLayers();
+  for (const rings of Object.values(countries)) {
+    for (const ring of rings) {
+      if (!ringInView(ring, box)) continue;
+      L.polygon(ring.map(([lon, lat]) => [lat, lon]), {
+        color: MAP_COAST, weight: 0.6, opacity: 0.8,
+        fillColor: MAP_LAND, fillOpacity: 1, interactive: false,
+      }).addTo(basemap);
+    }
+  }
+  basemap.bringToBack();
+  mapTier.at = t;
+  // ★ Re-assert the stack every time the base is rebuilt, or a redraw drops the cover behind it.
+  coverLayer.addTo(map); urbanLayer.addTo(map); roadLayer.addTo(map);
+  coverLayer.bringToFront(); urbanLayer.bringToFront(); roadLayer.bringToFront();
+  placeLayer.bringToFront(); airportLayer.bringToFront();
+  portLayer.bringToFront(); countryLabelLayer.bringToFront();
+}
+
+async function drawPlaces() {
+  const places = await layer(await bestTier(tierName(map.getZoom())), 'places');
+  placeLayer.clearLayers();
+  if (!places) return;
+  const z = map.getZoom(), box = viewBox();
+  for (const [name, lon, lat] of pick(places, box, CAP.places, (r) => r[3] ?? 9)) {
+    L.circleMarker([lat, lon], { radius: 1.5, weight: 0, fillColor: MAP_TOWN,
+                                 fillOpacity: 0.9, interactive: false }).addTo(placeLayer);
+    if (z >= 4) L.marker([lat, lon], { interactive: false, icon: L.divIcon({
+      className: 'mapLbl', html: esc(name), iconSize: [0, 0], iconAnchor: [-4, 5],
+    }) }).addTo(placeLayer);
+  }
+}
+
+/* ★★★ AIRPORTS AND SEA PORTS. Stuart, 2026-09-26: "the port names and airports would be useful on
+ *  this map for those seeking out ATC traffic from around the world." Somebody hunting airband
+ *  picks a receiver by what is near a field, and a receiver's marker means nothing until you can
+ *  see the airport it is pointed at.
+ *  ★★ THE CODE IS THE LABEL, not the name -- "EGBK" is what you tune for and what fits; the full
+ *  name is in the tooltip. IATA where it exists (people say "BHX"), ICAO otherwise: Sywell has no
+ *  IATA, and EGBK is what an ATC listener wants anyway.
+ *  ★ Class from the source: 0=large, 1=medium, 2=small, 3=heliport, 4=seaplane. The class gate is
+ *  a FLOOR on what is eligible; the viewport cap above decides how many of them actually draw. */
+const airportLayer = L.layerGroup().addTo(map);
+const portLayer = L.layerGroup().addTo(map);
+async function drawPoi() {
+  const z = map.getZoom();
+  airportLayer.clearLayers(); portLayer.clearLayers();
+  if (z < 5) return;
+  const t = await bestTier(tierName(z));
+  const [airports, ports] = await Promise.all([layer(t, 'airports'), layer('tier1', 'ports')]);
+  const box = viewBox(), aCut = z <= 6 ? 0 : z <= 8 ? 1 : 4;
+  for (const [icao, lon, lat, cls, iata, name] of
+       pick(airports || [], box, CAP.airports, (r) => r[3], (r) => r[3] <= aCut)) {
+    const code = iata || icao;
+    L.marker([lat, lon], { icon: L.divIcon({
+      className: 'apLbl' + (cls >= 3 ? ' heli' : ''), html: esc(code),
+      iconSize: [0, 0], iconAnchor: [0, 0],
+    }) }).addTo(airportLayer).bindTooltip(esc(name || code));
+  }
+  if (z < 6) return;
+  for (const [name, lon, lat] of pick(ports || [], box, CAP.ports, () => 0)) {
+    L.marker([lat, lon], { icon: L.divIcon({
+      className: 'ptLbl', html: esc(name), iconSize: [0, 0], iconAnchor: [0, 0],
+    }) }).addTo(portLayer);
+  }
+}
+
+/* ★ One coalesced redraw for zoom AND pan. Panning now changes what is drawn, so `moveend` must
+ *  redraw too -- and a drag fires it often enough that the work needs a frame to settle. */
+let redrawT = null;
+function redrawMap() {
+  clearTimeout(redrawT);
+  redrawT = setTimeout(() => {
+    if (drawing) return;
+    drawing = true;
+    Promise.all([drawBase(), drawCover(), drawRoads(), drawCountryNames(), drawPlaces(), drawPoi()])
+      .catch(() => {}).finally(() => { drawing = false; });
+  }, 120);
+}
+map.on('zoomend moveend', redrawMap);
+redrawMap();
+
 
 // The day/night shadow, refreshed so it stays honest on a page left open.
 let term = null;
