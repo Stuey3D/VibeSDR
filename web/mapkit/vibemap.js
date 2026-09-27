@@ -358,6 +358,49 @@
     doc.head.appendChild(st);
   }
 
+  /* ══ MEMORY BANDS ═════════════════════════════════════════════════════════════════════════════
+   * ★★★ THE BUDGET IS THE VIEWER'S. Stuart, 2026-09-27: "an iPhone with 8 or 12GB should be fine,
+   *  our limits are our brazilian friends with 1GB devices" -- and a server never draws this map,
+   *  it only SERVES /mapdata (the Sony and the XCover hand the data out; the phone LOOKING at it
+   *  pays). So every host tells the renderer what the viewing device can spare:
+   *    the app            -- native reads it exactly (iOS os_proc_available_memory, Android
+   *                          ActivityManager.MemoryInfo + isLowRamDevice) and passes `memory`
+   *    a browser          -- navigator.deviceMemory (Chrome/Android; it is how a 1 GB phone is seen)
+   *    a browser that says nothing (Safari) -- 'mid', which is only a little above today's cost
+   *  ★★ THE FLOOR IS TODAY'S BEHAVIOUR, NEVER WORSE, and it gains one thing it always needed: a CAP.
+   *   The data cache never evicted, so a 1 GB phone zooming about at detail level just accumulated
+   *   tier2 shards (183 MB of them on disk) until the page was killed.
+   *  ★ What each band buys, in the order that matters for "no sea while dragging":
+   *    pad    -- canvas margin drawn beyond the screen, as a fraction of it per side. This is the
+   *              drag buffer, and it costs PIXELS: (1 + 2*pad)^2 of a screen, per canvas pane.
+   *              The land and water panes get `pad`; the rest get `padRest`.
+   *    cacheMB -- parsed-data cache, LRU-evicted, measured as JSON text (heap is a few times that).
+   *    preload -- fetch tier0 + tier1 (~15 MB) at open, so a zoom never waits on a file.
+   *  ✗ The high band's pad is PROVISIONAL until the WebContent process is measured in Safari's
+   *    inspector: on iOS the web view has its own memory limit, and it is not the phone's 12 GB. */
+  const MEM_BANDS = {
+    floor: { pad: 0.1,  padRest: 0.1,  viewPad: 0.25, cacheMB: 24,  preload: false },
+    mid:   { pad: 0.3,  padRest: 0.15, viewPad: 0.45, cacheMB: 64,  preload: true },
+    high:  { pad: 0.5,  padRest: 0.25, viewPad: 0.65, cacheMB: 256, preload: true },
+  };
+  /** The panes whose margin IS the map: without them a drag shows sea. The rest are detail. */
+  const BUFFER_PANES = { shelf: 1, land: 1, cover: 1, water: 1 };
+
+  /** ★ Band from what the host knows. `m` = { totalMB, availMB, lowRam } -- any field may be missing.
+   *   With nothing at all, a browser's deviceMemory; with not even that, 'mid'. */
+  function memoryBand(m) {
+    const o = m || {};
+    let total = o.totalMB;
+    if (!total && typeof navigator !== 'undefined' && navigator.deviceMemory) total = navigator.deviceMemory * 1024;
+    if (o.lowRam) return 'floor';
+    if (total && total <= 1536) return 'floor';
+    if (o.availMB != null && o.availMB < 400) return 'floor';
+    if (!total) return 'mid';
+    if (total <= 4096) return 'mid';
+    if (o.availMB != null && o.availMB < 1500) return 'mid';
+    return 'high';
+  }
+
   /* ══ ATTACH ════════════════════════════════════════════════════════════════════════════════════
    * Everything below is PER MAP. The constants above are shared and read-only; every layer group,
    * cache and flag is created here, because two maps on one page (a picker and a detail view) must
@@ -372,13 +415,16 @@
     injectCss(map.getContainer().ownerDocument || global.document);
 
     let P = PROFILES[o.profile] || PROFILES.directory;
+    let band = memoryBand(o.memory);
+    let M = MEM_BANDS[band];
+    const padFor = (name) => (BUFFER_PANES[name] ? M.pad : M.padRest);
 
     const paneRenderer = {};
     for (const [name, z] of Object.entries(PANES)) {
       map.createPane(name);
       map.getPane(name).style.zIndex = String(z);
       map.getPane(name).style.pointerEvents = 'none';
-      paneRenderer[name] = L.canvas({ pane: name });
+      paneRenderer[name] = L.canvas({ pane: name, padding: padFor(name) });
     }
     const inPane = (name, extra = {}) =>
       ({ pane: name, renderer: paneRenderer[name], interactive: false, ...extra });
@@ -479,13 +525,61 @@
      *   next redraw asks again. ★ tier2 is gated on the index before it gets here, so an absent
      *   optional file is not re-asked per pan; only a transient miss is retried. */
     function fetchJson(file) {
-      if (!mapTier.loaded[file]) {
-        const p = fetch(MD + file)
-          .then((r) => (r.ok ? r.json() : null)).catch(() => null)
-          .then((v) => { if (v == null && mapTier.loaded[file] === p) delete mapTier.loaded[file]; return v; });
-        mapTier.loaded[file] = p;
+      const hit = mapTier.loaded[file];
+      if (hit) { hit.used = ++useSeq; return hit.p; }
+      const e = { p: null, bytes: 0, used: ++useSeq };
+      e.p = fetch(MD + file)
+        .then((r) => (r.ok ? r.text() : null))
+        .then((txt) => {
+          if (txt == null) return null;
+          e.bytes = txt.length;
+          return JSON.parse(txt);
+        })
+        .catch(() => null)
+        .then((v) => {
+          if (v == null) { if (mapTier.loaded[file] === e) delete mapTier.loaded[file]; }
+          else trimCache();
+          return v;
+        });
+      mapTier.loaded[file] = e;
+      return e.p;
+    }
+
+    /* ★★★ THE DATA CACHE HAS A CEILING NOW, set by the band. Least recently used goes first; tier0
+     *  is never evicted (1.3 MB, and it is the world view -- the one thing that must always draw).
+     *  ★ An evicted file is simply fetched again if it is wanted, from disk or the bridge, never the
+     *    network -- so on a 1 GB phone the cost of the cap is a re-read, not a blank.
+     *  ★ Measured as JSON TEXT, which is what we can count; the parsed heap is a few times larger,
+     *    and the caps are chosen with that multiple in mind. */
+    let useSeq = 0;
+    function trimCache() {
+      const cap = M.cacheMB * 1048576;
+      const ents = Object.entries(mapTier.loaded).filter(([f, e]) => e.bytes && !f.startsWith('tier0-'));
+      let total = ents.reduce((n, [, e]) => n + e.bytes, 0);
+      if (total <= cap) return;
+      ents.sort((a, b) => a[1].used - b[1].used);
+      for (const [f, e] of ents) {
+        if (total <= cap) break;
+        delete mapTier.loaded[f];
+        total -= e.bytes;
       }
-      return mapTier.loaded[file];
+    }
+
+    /* ★★ PRELOAD THE BASIC PACK, ONE FILE AT A TIME, AFTER THE FIRST DRAW. tier0 + tier1 is ~15 MB;
+     *  fetched up front, a zoom from the world to a county never waits on a file. Serial on purpose:
+     *  in the app every miss crosses the RN bridge, and a burst of fifteen would queue ahead of the
+     *  file the user is actually waiting for. Skipped on the floor band -- it is exactly the memory
+     *  a 1 GB phone does not have. */
+    let preloaded = false;
+    async function preloadBasic() {
+      if (preloaded || !M.preload) return;
+      preloaded = true;
+      const man = await mapManifest();
+      const files = [...man.files].filter((f) => /^tier[01]-[^.]+\.json$/.test(f));
+      for (const f of files) {
+        if (!M.preload) return;             // shed mid-way
+        await fetchJson(f);
+      }
     }
 
     /* ★★★ A SHARDED LAYER IS FETCHED BY VIEWPORT, and that is the point of it -- somebody looking at
@@ -524,7 +618,8 @@
     /* ══ VIEW GEOMETRY ═══════════════════════════════════════════════════════════════════════════ */
     /** The view, grown by a margin so a small pan does not strip the edges before `moveend` fires. */
     function viewBox() {
-      const b = map.getBounds().pad(0.25);
+      /* ★ Never narrower than the canvas margin, or the buffer would be drawn empty. */
+      const b = map.getBounds().pad(M.viewPad);
       const w = b.getWest(); const e = b.getEast();
       /* ★★ NORMALISED TO ONE WORLD for data lookup. On a wide screen at z3 the bounds run past ±180
        *  and every bbox test then fails against data that only exists once. The COPIES are drawn by
@@ -1210,6 +1305,19 @@
       }
     }
 
+    function applyBand(b) {
+      if (!MEM_BANDS[b]) return band;
+      band = b; M = MEM_BANDS[b];
+      for (const [name, r] of Object.entries(paneRenderer)) {
+        r.options.padding = padFor(name);
+        // ★ _reset is Leaflet's own viewreset path: resize the canvas to the new margin, repaint.
+        if (r._map && r._reset) r._reset();
+      }
+      trimCache();
+      redrawMap();
+      return band;
+    }
+
     /* ══ THE REDRAW ══════════════════════════════════════════════════════════════════════════════
      * ★ One coalesced redraw for zoom AND pan. Panning changes what is drawn, so `moveend` must
      *  redraw too -- and a drag fires it often enough that the work needs a frame to settle. */
@@ -1238,6 +1346,7 @@
           .finally(() => {
             drawing = false;
             if (redrawAgain) { redrawAgain = false; redrawMap(); }
+            else preloadBasic();
           });
       }, 120);
     }
@@ -1269,6 +1378,15 @@
         return true;
       },
       profile: () => P,
+      /** ★ The band in force, and why -- so a host (or an inspector) can see what it was given. */
+      memory: () => ({ band, ...M }),
+      /** ★★ Re-band from fresh figures (the app calls this on open with what native read). Growing
+       *   only widens margins and raises the cap; shrinking trims at once. */
+      setMemory(m) { return applyBand(memoryBand(m)); },
+      /** ★★★ THE OS WARNED: DROP TO THE FLOOR NOW. Called on a memory warning / onTrimMemory. The
+       *   cache is trimmed to the floor cap and the margins shrink immediately -- being killed
+       *   costs the whole map, a narrower margin costs a moment of sea while dragging. */
+      shed() { return applyBand('floor'); },
       /** ★ Everything this attach added, removed. A host that tears its map down and rebuilds it
        *   (the app's WebView does, on a profile change from native) would otherwise stack renderers
        *   and every redraw would do the work twice. */

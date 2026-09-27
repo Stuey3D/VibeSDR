@@ -28,7 +28,7 @@
  */
 
 import React, { useMemo, useRef, useEffect, useState } from 'react';
-import { Modal, StyleSheet, View, Text, TouchableOpacity } from 'react-native';
+import { AppState, Modal, StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import { useRepeatingKeys } from './PanelNav';
 import { WebView } from 'react-native-webview';
 import { CABBR } from '../assets/countryAbbr';
@@ -534,24 +534,37 @@ window.__mdChunk = function(id, i, n, part){
       if(file.indexOf('index.json') === 0) localOnly = true;
       return ask(file).then(reply);
     };
-    /* ★★★ A file:// FETCH CAN SIMPLY NEVER SETTLE, and then the fallback never runs. WKWebView
-     *  does not reject it the way a failed network request rejects — the promise can sit pending
-     *  for ever, so the catch handler is not the safety net it looks like and the layer is lost in
-     *  silence. That is the shape of every map bug today: a quiet nothing rather than an error.
-     *  ★ So race it. Whichever answers first wins, and a hung read costs 2.5 s instead of the
-     *    layer. The timeout is generous enough that a slow but working read is not thrown away. */
-    var settled = false;
+    /* ★★★ READ IT OFF THE DISK — AND A file:// READ SUCCEEDS WITH STATUS 0, NOT 200.
+     *  This raced fetch() against a 2.5 s timer and accepted the answer only if 'r.ok'. A local
+     *  file is never 'ok': it has no HTTP status, so it reports 0. MEASURED in WKWebView with this
+     *  WebView's exact file-access settings (2026-09-27, the same WebKit as iOS): fetch() of the
+     *  2.2 MB tier1-cover returned ALL 2,263,506 bytes in 54 ms — with ok:false. So every
+     *  successful disk read was thrown away and the layer went over the React Native bridge
+     *  instead, a JSON-encoded, chunked, injectJavaScript round trip. Worse, the first file to be
+     *  "refused" was index.json, which latched localOnly: from then on EVERY file skipped the
+     *  disk entirely. That is the sluggish, streaming map Stuart described ("it appears that we
+     *  cannot read from super fast SSD storage that quickly") — the SSD was never asked.
+     *  ✗ The old note here said a file:// fetch "can simply never settle". Measured, it settles;
+     *    it was being rejected, not hung.
+     *  ★★ XMLHttpRequest, not fetch: same file, 5 ms against 54 ms. A body with status 0 or 200
+     *     is success; anything else, or no answer inside the guard, falls to the bridge. */
     return new Promise(function(resolve){
-      var t = setTimeout(function(){ if(!settled){ settled = true; resolve(miss()); } }, 2500);
-      real(u, opt).then(function(r){
-        if(settled) return;
-        settled = true; clearTimeout(t);
-        resolve(r && r.ok ? r : miss());
-      }).catch(function(){
-        if(settled) return;
-        settled = true; clearTimeout(t);
-        resolve(miss());
-      });
+      var done = false;
+      var finish = function(body){
+        if(done) return; done = true; clearTimeout(t);
+        resolve(body != null ? reply(body) : miss());
+      };
+      var t = setTimeout(function(){ finish(null); }, 2500);
+      try {
+        var x = new XMLHttpRequest();
+        x.open('GET', s);
+        x.onload = function(){
+          var ok = (x.status === 0 || x.status === 200) && x.responseText && x.responseText.length > 0;
+          finish(ok ? x.responseText : null);
+        };
+        x.onerror = function(){ finish(null); };
+        x.send();
+      } catch(e){ finish(null); }
     });
   };
 })();
@@ -1174,6 +1187,17 @@ export default function MapOverlay(
     MapOverlayProps & { spots?: SpotRow[] },
 ) {
   const webRef = useRef<WebView>(null);
+  /* ★★★ THE OS SAYS MEMORY IS TIGHT: THE MAP LETS GO FIRST. The renderer holds a RAM budget sized
+   *  from the device (vibemap.js MEMORY BANDS) — preloaded layers, a data cache and canvas drawn
+   *  past the screen edge so a drag never shows sea. On a memory warning it drops straight to the
+   *  floor band: a narrower margin costs a moment of sea while dragging; being killed costs the
+   *  whole map. Stuart: "use what we can without being intrusive". */
+  useEffect(() => {
+    const sub = AppState.addEventListener('memoryWarning', () => {
+      webRef.current?.injectJavaScript('try{ if (window.VM && VM.shed) VM.shed(); }catch(e){} true;');
+    });
+    return () => sub.remove();
+  }, []);
   const [ignored, setIgnored] = useState(false);
 
   // ★ Esc closes the map. It is OUR page, so shortcuts are not suppressed here — but nothing
@@ -1304,6 +1328,11 @@ export default function MapOverlay(
            *    the page. Fine for TestFlight, where Stuart is the only internal tester; decide
            *    deliberately whether it ships to the store. See PENDING-NEXT-RELEASE.md. */
           webviewDebuggingEnabled
+          /* ★★ IF THE OS KILLS THE PAGE ANYWAY, BRING IT BACK. WKWebView's content process can be
+           *  reclaimed under memory pressure (and Android's renderer likewise), which leaves a blank
+           *  white map that nothing ever redraws. Reloading restarts it on the floor it can afford. */
+          onContentProcessDidTerminate={() => webRef.current?.reload()}
+          onRenderProcessGone={() => { webRef.current?.reload(); }}
           domStorageEnabled
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
