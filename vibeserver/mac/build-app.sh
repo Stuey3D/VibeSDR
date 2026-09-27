@@ -189,6 +189,25 @@ else
   echo "==> cloudflared NOT bundled (run tools/cloudflared-desktop/fetch.sh)"
 fi
 
+# ★★ THE GPU MAP'S FILES (renderer, style, glyphs, icons, basic + relief PMTiles) — served at /mapgl/
+#    by vibe_mapgl.h, which looks for them at <exe>/../Resources/mapgl. Plain names from
+#    directory/public/mapgl (fonts with spaces, .js) plus the style from web/mapkit. Data only, so
+#    the app's own signature seals them; nothing here needs signing separately.
+#  ★ Missing = an app whose maps fall back to the old renderer, not a failed build.
+GL="$ROOT/directory/public/mapgl"
+if [ -s "$GL/vibemap-basic.pmtiles" ] && [ -s "$ROOT/web/mapkit/vibemap-style.json" ]; then
+  rm -rf "$APP/Contents/Resources/mapgl"
+  mkdir -p "$APP/Contents/Resources/mapgl/vendor" "$APP/Contents/Resources/mapgl/icons"
+  cp "$GL/vibemap-basic.pmtiles" "$GL/vibemap-relief.pmtiles" "$APP/Contents/Resources/mapgl/"
+  cp "$ROOT/web/mapkit/vibemap-style.json" "$APP/Contents/Resources/mapgl/"
+  cp "$GL/vendor/"*.js "$GL/vendor/"*.css "$GL/vendor/"LICENSE* "$APP/Contents/Resources/mapgl/vendor/"
+  cp "$GL/icons/"*.png "$APP/Contents/Resources/mapgl/icons/"
+  cp -R "$GL/fonts" "$APP/Contents/Resources/mapgl/fonts"
+  echo "==> bundled GPU map files"
+else
+  echo "==> GPU map files NOT bundled (build the packs, then node scripts/sync-mapgl-assets.mjs)"
+fi
+
 if [ -f "$MAC/AppIcon.icns" ]; then
   cp "$MAC/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 else

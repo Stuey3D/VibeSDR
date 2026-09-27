@@ -67,6 +67,8 @@
 #include "solar.h"
 #include "geoip.h"
 #include "asndb.h"
+#include "proc.h"         // vibeproc::run — the High Detail Maps download (curl, no shell)
+#include "vibe_mapgl.h"   // the GPU map's files and its optional detail pack
 
 // ★ Declared out here on purpose: the anonymous namespace below closes long before
 //   reapRadios() is defined, so a declaration inside it would be a DIFFERENT function
@@ -2410,7 +2412,7 @@ int main(int argc, char** argv) {
     //    re-detected until it is physically replugged — the button would STRAND the receiver.
     //    Same rule as AGENTS.md: remove a control that cannot work rather than leave it visible.
 #if defined(__linux__) && !defined(__ANDROID__)
-    LocalSdrShim::setMaintenanceActions("restart,reboot,shutdown,update-check,update,update-all,maps-install,maps-remove");
+    LocalSdrShim::setMaintenanceActions("restart,reboot,shutdown,update-check,update,update-all,maps-install,maps-remove,mapgl-detail-install,mapgl-detail-remove");
 #else
     LocalSdrShim::setMaintenanceActions("");   // no section at all, rather than an empty one
 #endif
@@ -3072,6 +3074,45 @@ int main(int argc, char** argv) {
     //   given prefix. That only exists in BGP. See asndb.cpp.
     asndb::setDir(vsDataDir());
     vseibi::setDir(vsDataDir());
+
+    // ── ★★ THE GPU MAP — bundled files + the optional High Detail pack ───────────────────────────
+    // The bundle is found relative to the binary (vibe_mapgl.h: $exe/../lib/vibeserver/mapgl, the
+    // Mac app's Resources/mapgl, /usr/lib/vibeserver/mapgl). The detail pack lives in the machine's
+    // writable data directory — /var/lib/vibeserver/mapgl on Linux, which the unit's
+    // StateDirectory= makes ours — shared by every radio process on the box.
+    vibemapgl::setDataDir(vsDataDir() + "/mapgl");
+    {
+        const std::string b = vibemapgl::bundleDir();
+        if (b.empty()) std::printf("VibeServer: no GPU map files installed — the maps fall back to the old renderer.\n");
+        else           std::printf("VibeServer: GPU map files at %s\n", b.c_str());
+    }
+    // ★ curl, as geoip/eibi do: the daemon has no TLS stack of its own. -L because a GitHub
+    //   release asset is a redirect. No --max-time (169 MB on a slow link is legitimately long);
+    //   a STALLED transfer is cut off instead: under 1 KB/s for two minutes.
+    // ★ Progress is the size of the .part file, polled — curl writes it as it goes.
+    vibemapgl::setDownloader([](const std::string& url, const std::string& dest,
+                                std::function<void(int64_t, int64_t)> progress) -> bool {
+        std::atomic<bool> done{false};
+        std::thread poll([&]() {
+            while (!done.load()) {
+                struct stat sb{};
+                if (::stat(dest.c_str(), &sb) == 0) progress((int64_t)sb.st_size, vibemapgl::DETAIL_BYTES);
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            }
+        });
+        const int rc = vibeproc::run({"curl", "-fsSL", "--retry", "3", "--connect-timeout", "30",
+                                      "--speed-limit", "1024", "--speed-time", "120",
+                                      "-o", dest, url});
+        done = true;
+        poll.join();
+        struct stat sb{};
+        if (::stat(dest.c_str(), &sb) == 0) progress((int64_t)sb.st_size, vibemapgl::DETAIL_BYTES);
+        if (rc != 0) {
+            std::fprintf(stderr, "VibeServer: High Detail Maps download: curl exited %d\n", rc);
+            return false;
+        }
+        return true;
+    });
     asndb::load();
     LocalSdrShim::setAsnHandler([](const std::string& ip, uint32_t& asn, std::string& name) {
         return asndb::lookup(ip, asn, name);
@@ -3167,6 +3208,9 @@ int main(int argc, char** argv) {
                                           /* ★ The optional detail map pack — see the helper. Named
                                            *  actions only, so this can install exactly one thing. */
                                           "maps-install", "maps-remove",
+                                          /* ★ Performed by the shim itself (vibe_mapgl.h), never
+                                           *  by the helper; listed so the two lists agree. */
+                                          "mapgl-detail-install", "mapgl-detail-remove",
                                           "sdrplay-restart" };
         bool known = false;
         for (const char* a : kActions) if (action == a) { known = true; break; }

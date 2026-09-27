@@ -463,6 +463,13 @@ add_executable(test-utf8 "${CMAKE_CURRENT_SOURCE_DIR}/test-utf8.cpp")
 vibe_sanitize(test-utf8)
 target_include_directories(test-utf8 PRIVATE "${CPP_DIR}")
 
+# ★ The GPU map's file server (vibe_mapgl.h): Range parsing (a wrong 206 corrupts a tile silently),
+#   path safety, and the atomic detail-pack install. Header-only, no socket, no radio.
+add_executable(test-mapgl-range "${CMAKE_CURRENT_SOURCE_DIR}/test-mapgl-range.cpp")
+vibe_sanitize(test-mapgl-range)
+target_include_directories(test-mapgl-range PRIVATE "${CPP_DIR}")
+target_link_libraries(test-mapgl-range PRIVATE Threads::Threads)
+
 # ★★★ THE DAB TESTS ARE PART OF THE BUILD. Seventeen of them existed and not one was a target —
 #     each was "a two-line g++ command" nobody ran, which is how a 512-byte JSON buffer, an
 #     un-reversed X-PAD and a P/D flag read from the wrong bit all shipped past a test tree that
@@ -691,6 +698,55 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
             "no usable map data at ${_vibe_map_src} (need index.json with a packs.basic file list).\n"
             "A package built now would REMOVE the map from every machine that installs it.\n"
             "Fix: node scripts/gen-map-data.mjs\n"
+            "To build without it on purpose: -DVIBESERVER_ALLOW_NO_MAPDATA=ON.")
+  endif()
+
+  # ── ★★★ THE GPU MAP — renderer, style, glyphs, icons, basic + relief PMTiles ──────────────────
+  # Served at /mapgl/ by vibe_mapgl.h, found at $exe/../lib/vibeserver/mapgl. The optional High
+  # Detail pack is NOT here: the owner downloads it from the admin page into
+  # /var/lib/vibeserver/mapgl (StateDirectory= makes that ours; nothing in postinst needed).
+  # ★ Sourced from directory/public/mapgl (plain names: "JetBrains Mono Bold/", ".js") — NOT
+  #   assets/mapgl, whose names are mangled for Metro — plus the style from web/mapkit.
+  #   scripts/sync-mapgl-assets.mjs fills both from build/maptiles.
+  # ★★★ FATAL WHEN MISSING, for the reason the mapdata block above gives: a package built without
+  #     them REMOVES the files from every machine that upgrades, and the maps quietly degrade.
+  set(_vibe_gl_src "${CMAKE_CURRENT_SOURCE_DIR}/../directory/public/mapgl")
+  set(_vibe_gl_style "${CMAKE_CURRENT_SOURCE_DIR}/../web/mapkit/vibemap-style.json")
+  set(_vibe_gl_missing "")
+  foreach(_f vendor/maplibre-gl.js vendor/maplibre-gl.css vendor/pmtiles.js vendor/vibemapgl.js
+             vendor/vibemapgl-compat.js vibemap-basic.pmtiles vibemap-relief.pmtiles)
+    if(NOT EXISTS "${_vibe_gl_src}/${_f}")
+      list(APPEND _vibe_gl_missing "${_vibe_gl_src}/${_f}")
+    endif()
+  endforeach()
+  if(NOT EXISTS "${_vibe_gl_style}")
+    list(APPEND _vibe_gl_missing "${_vibe_gl_style}")
+  endif()
+  file(GLOB _vibe_gl_fonts LIST_DIRECTORIES true "${_vibe_gl_src}/fonts/*")
+  file(GLOB _vibe_gl_icons "${_vibe_gl_src}/icons/*.png")
+  if(NOT _vibe_gl_fonts)
+    list(APPEND _vibe_gl_missing "${_vibe_gl_src}/fonts/*")
+  endif()
+  if(NOT _vibe_gl_icons)
+    list(APPEND _vibe_gl_missing "${_vibe_gl_src}/icons/*.png")
+  endif()
+  if(NOT _vibe_gl_missing)
+    install(FILES "${_vibe_gl_src}/vibemap-basic.pmtiles" "${_vibe_gl_src}/vibemap-relief.pmtiles"
+                  "${_vibe_gl_style}"
+            DESTINATION lib/vibeserver/mapgl)
+    install(DIRECTORY "${_vibe_gl_src}/vendor/" DESTINATION lib/vibeserver/mapgl/vendor
+            FILES_MATCHING PATTERN "*.js" PATTERN "*.css" PATTERN "LICENSE*")
+    install(DIRECTORY "${_vibe_gl_src}/fonts/" DESTINATION lib/vibeserver/mapgl/fonts
+            FILES_MATCHING PATTERN "*.pbf")
+    install(FILES ${_vibe_gl_icons} DESTINATION lib/vibeserver/mapgl/icons)
+    message(STATUS "bundling GPU map files from ${_vibe_gl_src} -> lib/vibeserver/mapgl")
+  elseif(VIBESERVER_ALLOW_NO_MAPDATA)
+    message(WARNING "GPU map files NOT bundled (VIBESERVER_ALLOW_NO_MAPDATA): missing ${_vibe_gl_missing}")
+  else()
+    message(FATAL_ERROR
+            "GPU map files missing:\n  ${_vibe_gl_missing}\n"
+            "A package built now would REMOVE the GPU map from every machine that installs it.\n"
+            "Fix: build the packs, then node scripts/sync-mapgl-assets.mjs\n"
             "To build without it on purpose: -DVIBESERVER_ALLOW_NO_MAPDATA=ON.")
   endif()
 

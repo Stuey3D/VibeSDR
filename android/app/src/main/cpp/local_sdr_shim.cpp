@@ -113,6 +113,7 @@
 #include "vibe_admin.h"
 #include "vibe_health.h"
 #include "vibe_mapdata.h"   // the bundled vector map, served from DISK — see the header
+#include "vibe_mapgl.h"     // the GPU map's files (renderer, style, glyphs, PMTiles) — see the header
 #include "vibe_proxy.h"
 #include "vibe_admin_ticket.h"
 #include "vibe_bands.h"             // the ban list, the connection log and the machine's vitals
@@ -14988,6 +14989,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::string reqLine, line, wsKey, userAgent, xffHeader, xRealIpHeader;
         long long contentLength = 0;      // ★ needed by POST /vibeserver/config; 0 for everything else
         bool acceptsGzip = false;         // ★ only /mapdata/ cares — see the header capture below
+        std::string rangeHeader;          // ★ only /mapgl/ reads it: PMTiles are read by Range
         if (sock->recvline(reqLine, 8192, 5000) <= 0) { sock->close(); return; }
         // ★★★ STRIP OUR OWN /r/<serial> PREFIX, ONCE, RIGHT HERE.
         //
@@ -15050,6 +15052,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 //     page drew one perfectly — the shape of bug that reads as "the map is broken
                 //     on big servers".
                 || path0.rfind("/mapdata/", 0) == 0
+                // ★ The GPU map (vibe_mapgl.h) — same reasoning: the machine's, not a radio's.
+                || path0.rfind("/mapgl/", 0) == 0
                 || path0.rfind("/apple-touch-icon", 0) == 0;
             if (!ok) {
                 // ★★★ A DEAD END IS NOT AN ANSWER. This used to reply with a bare JSON error, so a
@@ -15170,6 +15174,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 for (auto& c : ak) c = (char)tolower(c);
                 if (ak == "accept-encoding:" && line.find("gzip") != std::string::npos)
                     acceptsGzip = true;
+            }
+            // ★ The GPU map reads its PMTiles archives a few KB at a time (vibe_mapgl.h); without
+            //   the Range header every tile read would be the whole 169 MB file.
+            if (line.size() > 6) {
+                std::string rk6 = line.substr(0, 6);
+                for (auto& c : rk6) c = (char)tolower(c);
+                if (rk6 == "range:") {
+                    auto vv = line.substr(6);
+                    size_t a = vv.find_first_not_of(" \t");
+                    size_t b = vv.find_last_not_of(" \t\r\n");
+                    if (a != std::string::npos) rangeHeader = vv.substr(a, b - a + 1);
+                }
             }
             if (line.size() > 10) {
                 std::string rk = line.substr(0, 10);
@@ -16552,6 +16568,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             size_t to = reqLine.find_first_of(" ?#", from);
             if (to == std::string::npos) to = reqLine.size();
             vibemap::serve(sock, reqLine.substr(from, to - from), acceptsGzip, head);
+        // ── ★★★ THE GPU MAP'S FILES, FROM DISK ──────────────────────────────────────────────────
+        // GET/HEAD /mapgl/<path> — MapLibre, the style, glyphs, icons and the PMTiles packs the
+        // listener's browser renders (briefs/BRIEF-server-gpu-maps.md §1). ★★ Range is honoured:
+        // a PMTiles archive is read a few KB at a time. Allowed wherever /mapdata/ is.
+        } else if (reqLine.rfind("GET /mapgl/", 0) == 0 ||
+                   reqLine.rfind("HEAD /mapgl/", 0) == 0) {
+            const bool head = reqLine[0] == 'H';
+            const size_t from = (head ? 12 : 11);   // past "/mapgl/"
+            size_t to = reqLine.find_first_of(" ?#", from);
+            if (to == std::string::npos) to = reqLine.size();
+            vibemapgl::serve(sock, reqLine.substr(from, to - from), rangeHeader, head);
         } else if (reqLine.rfind("GET /icon-512.png", 0) == 0) {
             std::string body((const char*)kVibeIcon512, kVibeIcon512Len);
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n"
@@ -23029,6 +23056,9 @@ std::string LocalSdrShim::adminStatusJson() {
     }
     { std::lock_guard<std::mutex> lk(g_vsMaintMtx);
       j += ",\"maintenance\":\"" + vibeadmin::esc(g_vsMaintActions) + "\""; }
+    // ★ The GPU map's optional High Detail pack (vibe_mapgl.h). Present on EVERY platform —
+    //   `available:false` is how the page learns this server cannot download it.
+    j += ",\"mapglDetail\":" + vibemapgl::statusJson();
     // ★ The schedule, so the page shows what is actually set rather than what it last sent.
     j += ",\"updateSrvHour\":" + std::to_string(g_vsUpdSrvHour.load())
        + ",\"updateSrvDay\":"  + std::to_string(g_vsUpdSrvDay.load())
@@ -23522,6 +23552,12 @@ int LocalSdrShim::adminKickMatching(const std::string& cidr) {
  *  build with no handler registered answers "not supported on this server", which is the
  *  truth rather than a silent no-op. */
 bool LocalSdrShim::adminAction(const std::string& action, std::string& err) {
+    /* ★★ THE GPU MAP'S DETAIL PACK IS DONE HERE, NOT BY THE DAEMON'S HANDLER. It needs no root and
+     *  no systemd — only a writable directory and a downloader (vibe_mapgl.h) — so it works on
+     *  Android and macOS too, where there is no maintenance handler and no maintenance list at all.
+     *  Whether it can work is vibemapgl's `available`, which the page reads from the status. */
+    if (action == "mapgl-detail-install") return vibemapgl::startDetailInstall(err);
+    if (action == "mapgl-detail-remove")  return vibemapgl::removeDetail(err);
     AdminActionFn fn;
     { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsAdminActionFn; }
     if (!fn) { err = "this server cannot perform maintenance actions"; return false; }
