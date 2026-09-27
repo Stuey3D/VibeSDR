@@ -111,5 +111,23 @@ if (stray.length) {
   ok('no backticks in comments inside the template literal');
 }
 
+/* ★★★ THE PAGE LOADS ITS GPU-MAP SCRIPTS FROM THE ASSET COPIES, NOT FROM web/mapkit. assets/mapgl holds
+ *  a copy of each (stored as .txt so Metro does not bundle them) — and an edit to web/mapkit/vibemapgl.js
+ *  that is not re-synced ships YESTERDAY'S renderer, silently. It happened on 2026-09-27 (the detail pack
+ *  "did nothing" because the page ran the old copy). Fix: node scripts/sync-mapgl-assets.mjs */
+{
+  const { readFileSync, existsSync } = await import('node:fs');
+  const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const pairs = [['web/mapkit/vibemapgl.js', 'assets/mapgl/vendor/vibemapgl.js.txt'],
+                 ['web/mapkit/vibemapgl-compat.js', 'assets/mapgl/vendor/vibemapgl-compat.js.txt'],
+                 ['web/mapkit/vendor/maplibre-gl.js', 'assets/mapgl/vendor/maplibre-gl.js.txt'],
+                 ['web/mapkit/vendor/pmtiles.js', 'assets/mapgl/vendor/pmtiles.js.txt'],
+                 ['web/mapkit/vibemap-style.json', 'assets/mapgl/vibemap-style.json']];
+  const stale = pairs.filter(([src, copy]) => !existsSync(path.join(repo, copy))
+    || !readFileSync(path.join(repo, src)).equals(readFileSync(path.join(repo, copy))));
+  if (stale.length) { fail(`GPU-map asset copies are STALE — run node scripts/sync-mapgl-assets.mjs: ${stale.map(([s]) => s).join(', ')}`); }
+  else ok('GPU-map asset copies match web/mapkit');
+}
+
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall checks passed');
 process.exit(failed ? 1 : 0);
