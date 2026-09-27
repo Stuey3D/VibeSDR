@@ -11419,13 +11419,55 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         double rfHz = audioFreq.load() + audioHz;     // dial (USB) + audio offset
         uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
+        /* ★★★ THESE TWO FIELDS COME OFF THE AIR, AND ANYONE MAY TRANSMIT ANYTHING.
+         *
+         *  ★★★ THIS IS THE RDS FAULT, ON A DIFFERENT DECODER. A corrupted RDS group once put a
+         *      byte that is not valid UTF-8 into a JSON string, the client's JSON.parse threw on
+         *      the WHOLE FRAME, and the spectrum socket died until the text happened to clear. The
+         *      cure there was vibeadmin::utf8Clean at the one choke point every RDS field passes
+         *      through — and its own comment says "one choke point, and the class of fault is
+         *      gone". The spot path simply never went through it: `callDe` and `grid` were
+         *      interpolated raw, so one odd byte from a mis-decode, or a quote in a non-standard
+         *      callsign, takes the DX socket down for every listener.
+         *      Stuart, 2026-09-27: "we need to sandbox everything so a dodgy FT8 receive or a
+         *      dodgy server name in a directory doesnt corrupt and kill the app."
+         *
+         *  ★★★ AND snprintf RETURNS THE LENGTH IT WANTED, NOT WHAT IT WROTE. `n > 0` was the only
+         *      guard, so a long callsign or grid that truncated left n ABOVE sizeof(buf) and
+         *      `std::string(buf, n)` then read PAST THE END of a 384-byte stack buffer — an
+         *      out-of-bounds read whose contents would be sent to the client. Reachable from a
+         *      radio transmission, which is as untrusted as an input gets.
+         *
+         *  ★ A whitelist rather than an escape, because these two fields have a known shape: a
+         *    callsign is letters, digits, / and - ; a locator is letters and digits. Anything else
+         *    is corruption, and dropping it is the same choice utf8Clean makes for a bad byte.
+         *    That also means neither can contain a quote or a backslash, so the JSON is safe by
+         *    construction rather than by remembering to escape. */
+        auto spotSafe = [](const std::string& in, size_t cap) {
+            const std::string c = vibeadmin::utf8Clean(in);
+            std::string o; o.reserve(c.size() < cap ? c.size() : cap);
+            for (char ch : c) {
+                if (o.size() >= cap) break;
+                const unsigned char u = (unsigned char)ch;
+                if ((u >= 'A' && u <= 'Z') || (u >= 'a' && u <= 'z') ||
+                    (u >= '0' && u <= '9') || u == '/' || u == '-') o.push_back(ch);
+            }
+            return o;
+        };
+        const std::string safeCall = spotSafe(callDe, 32);
+        const std::string safeGrid = spotSafe(grid, 8);
         char buf[384];
         int n = snprintf(buf, sizeof(buf),
             "{\"type\":\"digital_spot\",\"data\":{\"mode\":\"%s\",\"callsign\":\"%s\","
             "\"snr\":%d,\"frequency\":%.0f,\"band\":\"%s\",\"grid\":\"%s\",\"timestamp\":%llu}}",
-            isFt4 ? "FT4" : "FT8", callDe.c_str(), snr, rfHz, bandFor(rfHz),
-            grid.c_str(), (unsigned long long)ts);
-        if (n > 0) sendText(dx, std::string(buf, (size_t)n));
+            isFt4 ? "FT4" : "FT8", safeCall.c_str(), snr, rfHz, bandFor(rfHz),
+            safeGrid.c_str(), (unsigned long long)ts);
+        /* ★ Clamped to what was actually WRITTEN. Even with the fields bounded above, a future
+         *  field added to this format string must not be able to resurrect the over-read. */
+        if (n > 0) {
+            const size_t len = (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1;
+            sendText(dx, std::string(buf, len));
+        }
     }
     void startSpots() {
         std::lock_guard<std::mutex> lk(spotsMtx);
