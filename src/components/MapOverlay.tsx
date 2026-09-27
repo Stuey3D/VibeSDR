@@ -33,6 +33,7 @@ import { useRepeatingKeys } from './PanelNav';
 import { WebView } from 'react-native-webview';
 import { CABBR } from '../assets/countryAbbr';
 import { type SpotRow } from '../services/DecoderClient';
+import { ensureMapPack, writeMapPage } from '../services/mapPack';
 /* ★★★ THE SHARED BASEMAP RENDERER, AS A STRING. The app has no file server, so the only way
  *     the WebView can run the SAME map as the directory page and the server's web client is to
  *     carry the source and inject it. ★★ It CONTAINS BACKTICKS, so it may only ever be
@@ -472,7 +473,12 @@ window.__mdDeliver = function(id, body){
   };
 })();
 var VM = VibeMap.attach(map, {
-  dataBase: '/mapdata/v1/',
+  /* ★★★ RELATIVE, NOT ROOT-RELATIVE, AND THE SLASH IS THE WHOLE DIFFERENCE. The page now lives on
+   *  disk at <documents>/vibemap.html with the pack unpacked to <documents>/mapdata/v1/, so
+   *  'mapdata/v1/x.json' resolves to the file beside it. A LEADING slash on a file:// document
+   *  resolves to the FILESYSTEM ROOT — /mapdata/v1/... — which exists nowhere and fails silently,
+   *  one layer at a time, exactly the quiet blank this rework exists to end. */
+  dataBase: 'mapdata/v1/',
   profile: KIND === 'hfdl' ? 'aero' : 'spots'
 });
 /* ★★★ THE STARTUP TILE WARM-UP IS GONE. It fetched 21 tiles from OpenStreetMap on every
@@ -1070,6 +1076,40 @@ export default function MapOverlay(
       { local, wsBase: wsBaseOverride, rxLat, rxLon }) : ''),
     [kind, baseUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon],
   );
+  /* ★★★ THE PAGE IS WRITTEN TO DISK BESIDE THE MAP PACK AND LOADED FROM THERE.
+   *
+   *  ★★★ WHY, AND IT IS THE WHOLE POINT OF THIS REWORK. The page used to be handed to the WebView
+   *      as an HTML STRING with the INSTANCE as its baseUrl, so that /addon/hfdl/* was same-origin
+   *      (most UberSDRs send no CORS headers). That left the map data with nowhere to come from
+   *      but the React Native bridge — ~15 MB of static geometry, several megabytes per layer,
+   *      fetched one round trip at a time. The animation juddered and the map sometimes drew
+   *      blank. Stuart: "that is what I want — maps stored on device so animations are smooth.
+   *      That animation when it works is awesome."
+   *  ★★ SO THE TWO WERE SWAPPED. The page now lives on a LOCAL origin with the pack unpacked
+   *     beside it, and reads layers straight off the filesystem. The only thing left on the bridge
+   *     is the aircraft feed — a few KB every five seconds, which is what a bridge is good at (see
+   *     hostFetch). RN's own fetch is not bound by browser CORS, so an instance that sends none
+   *     still works: the very thing the instance origin was there to buy.
+   *  ★ Rewritten on every open. It is a few hundred KB and it must track the code that generates
+   *    it — a cached page from a previous build is the kind of ghost nobody thinks to look for. */
+  const [pageUri, setPageUri] = useState<string | null>(null);
+  const [packError, setPackError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!visible || !kind || !html) return;
+    let dead = false;
+    (async () => {
+      try {
+        await ensureMapPack();
+        const uri = await writeMapPage(html);
+        if (!dead) { setPageUri(uri); setPackError(null); }
+      } catch (e) {
+        /* ★ Say so rather than showing an empty map for ever. A failure here means no basemap at
+         *  all, which is exactly the silent-blank case this rework exists to end. */
+        if (!dead) setPackError(String((e as Error)?.message || e));
+      }
+    })();
+    return () => { dead = true; };
+  }, [visible, kind, html]);
 
   // Inject any spots not yet pushed (newest-first), so markers/stats don't double
   // count. Local mode only — UberSDR maps own their WS.
@@ -1100,6 +1140,16 @@ export default function MapOverlay(
       supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}
     >
       <View style={mo.root}>
+        {/* ★ Until the pack is unpacked and the page written there is nothing to show. A WebView
+            pointed at a file that does not exist yet renders a blank white document, which is
+            indistinguishable from the map being broken. */}
+        {packError ? (
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+            <Text style={{ color: '#ffb0b0', fontSize: 12, textAlign: 'center' }}>
+              {'The map could not be prepared on this device.\n' + packError}
+            </Text>
+          </View>
+        ) : !pageUri ? null : (
         <WebView
           ref={webRef}
           // baseUrl gives the document the INSTANCE's origin so in-page
@@ -1107,7 +1157,18 @@ export default function MapOverlay(
           // per-instance ubersdr config flag (Server.EnableCORS) and most
           // instances have it off, which silently killed the HFDL polls
           // (digi/CW maps survived because WebSockets bypass CORS).
-          source={{ html, baseUrl: baseUrl.replace(/\/+$/, '') + '/' }}
+          /* ★★★ A FILE ON DISK, NOT AN HTML STRING WITH A REMOTE BASE. See the note beside
+           *  pageUri: this is what lets the renderer read its layers off the filesystem instead
+           *  of pulling them a round trip at a time over the bridge. The instance is still
+           *  reached — by React Native, through hostFetch — so nothing is lost by leaving its
+           *  origin behind, and CORS stops applying at all.
+           *  ★ allowFileAccess / allowFileAccessFromFileURLs are what let a file:// document read
+           *    its siblings; without them the page loads and every layer 404s silently, which is
+           *    the failure this whole rework is trying to stop happening quietly. */
+          source={{ uri: pageUri as string }}
+          allowFileAccess
+          allowFileAccessFromFileURLs
+          allowUniversalAccessFromFileURLs
           originWhitelist={['*']}
           style={mo.web}
           javaScriptEnabled
@@ -1172,6 +1233,7 @@ export default function MapOverlay(
             );
           }}
         />
+        )}
         {disconnected && !ignored && (
           <View style={mo.discWrap} pointerEvents="box-none">
             <View style={mo.discCard}>
