@@ -430,3 +430,10 @@ is "it cannot go faster", and the separate question of why a configured 5 did no
 untested — Stuart has deliberately parked it rather than risk the DSP thread.
 ✗ **DO NOT "fix" this by speeding up the hand-off without measuring `demodWaits` and the audio.**
 That is the change that broke the audio last time.
+
+## Review before the V11 public release: the map WebView is INSPECTABLE
+`MapOverlay`'s WebView now sets `webviewDebuggingEnabled`, so Safari's Develop menu can attach to
+it on macOS and iOS. It was added on 2026-09-27 after four cloud builds were spent on unverifiable
+theories about what that WebView permits — it costs nothing at runtime and shows the user nothing,
+but it also lets anyone holding the device inspect the page. Fine for TestFlight (Stuart is the
+only internal tester). ▶ DECIDE DELIBERATELY whether it ships to the store.

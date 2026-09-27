@@ -469,7 +469,20 @@ window.__mdChunk = function(id, i, n, part){
   if (b.got >= b.n) {
     delete window.__mdParts[id];
     var w = window.__mdWait[id];
-    if (w) { delete window.__mdWait[id]; w(b.buf.join('')); }
+    if (!w) return;
+    delete window.__mdWait[id];
+    /* ✗✗✗ THE JOINED TEXT IS STILL JSON-ENCODED, AND I SHIPPED IT RAW IN 340.
+     *     The direct path interpolates the payload as a JavaScript STRING LITERAL, so the page
+     *     is handed the DECODED text. The chunked path slices that same encoded form, outer
+     *     quotes and all — so joining the pieces reproduces the ENCODED text, not the string.
+     *     Every chunked layer arrived still wearing its backslash-escaped quotes, and parsed as
+     *     nothing.
+     *  ★ One decode here puts the two paths back on the same contract. Splitting the ESCAPED
+     *    text is still right (a boundary cannot then cut a multi-byte character in half) — it
+     *    just has to be UNescaped once it is whole again. */
+    var out = null;
+    try { out = JSON.parse(b.buf.join('')); } catch (e) { out = null; }
+    w(out);
   }
 };
 (function(){
@@ -1259,6 +1272,18 @@ export default function MapOverlay(
           originWhitelist={['*']}
           style={mo.web}
           javaScriptEnabled
+          /* ★★★ INSPECTABLE, BECAUSE FOUR BUILDS WENT ON GUESSES ABOUT WHAT THIS WEBVIEW WAS DOING.
+           *  Permissions, a relative dataBase, a read-access URL, chunked delivery — each shipped,
+           *  each plausible, none confirmed, because nothing could SEE the page. Meanwhile the one
+           *  attempt at visibility (an on-screen error box in 335) wrapped console.error and logged
+           *  per redraw, hard-locking the app: the diagnostic cost more than the bug.
+           *  ★★ This is the cheap version of the same thing. It costs nothing at runtime, shows the
+           *     user nothing, and lets Safari's Develop menu attach to the WebView on macOS and iOS
+           *     — real console, real network, real answers instead of another plausible theory.
+           *  ✗ REVIEW BEFORE THE V11 PUBLIC RELEASE: this also lets anyone with the device inspect
+           *    the page. Fine for TestFlight, where Stuart is the only internal tester; decide
+           *    deliberately whether it ships to the store. See PENDING-NEXT-RELEASE.md. */
+          webviewDebuggingEnabled
           domStorageEnabled
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
