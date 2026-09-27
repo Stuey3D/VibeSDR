@@ -177,6 +177,33 @@ for A in $ARCHES; do
   #     the signature of the environment rather than the code. Raising the VM from 4 to 8 to 12 GiB
   #     did not fix it, because the constraint is concurrency under emulation, not total memory.
   # ★ The native architecture keeps nproc: it is not emulated and it is not the one that breaks.
+  # ✗✗✗ amd64 UNDER qemu IS NOT A BUILD ROUTE, AND THIS REFUSES IT RATHER THAN RELYING ON
+  #     WHOEVER IS DRIVING TO REMEMBER. It has now failed 3 attempts out of 3 across sessions
+  #     (iqbalancer.c at 84 %, resampler.cpp at 8 %, and a whole afternoon of segfaults on a
+  #     DIFFERENT file each run — which is how you tell an environment fault from a code fault),
+  #     all already at JOBS=1. Stuart, 2026-09-27: "DAMNIT why are you emulating X86 you have an
+  #     x86 box with docker you can use … we go through this every time".
+  #  ★★★ "WE GO THROUGH THIS EVERY TIME" IS A SCRIPT BUG, NOT A MEMORY PROBLEM. The knowledge was
+  #      written down, starred, and titled "THE DEFAULT ROUTE, NOT A FALLBACK" — and it still lost
+  #      to a script that quietly offered the slow, broken path. A rule that depends on being
+  #      remembered gets forgotten; one the tool enforces does not. So this is the enforcement.
+  #  ★★ THE TRAP IT ALSO CLOSES: the arm64 half succeeds every time, so an abandoned amd64 leaves
+  #     an ARM-ONLY release — and a stale architecture is invisible from the publishing end. x86
+  #     users would sit on an old package with apt reporting everything up to date.
+  #  ★ The Lenovo/OWRX box is amd64 hardware on the LAN and builds this in about a minute, in a
+  #    BOOKWORM CONTAINER (never on the host — it is Ubuntu 24.04, and CPack would stamp
+  #    libc6 >= 2.38 onto a package meant for Debian 12). It is a live receiver but a private one
+  #    with Stuart as the only listener, so building there disturbs nobody.
+  #  ★ armhf is deliberately NOT covered: it cross-builds here reliably and has no box to go to.
+  if [ "$A" = "amd64" ] && [ "$PLATFORM" != "$HOSTARCH" ] && [ -z "${PREBUILT_ENV:-}" ]; then
+    echo "!! REFUSING to build amd64 under emulation — it has failed 3/3 and takes ~25 min to fail."
+    echo "!! Build it natively on the Lenovo/OWRX box (192.168.86.13, ~1 min) and pass the result:"
+    echo "!!   VIBE_PREBUILT_DEB=/path/to/vibeserver_<ver>-<rev>_amd64.deb $0"
+    echo "!! See the memory note build_emulated_arch_on_real_hardware for the exact container run."
+    echo "!! ✗ Do not work around this by dropping amd64: publishing one arch hides the other."
+    echo "!! (VIBE_ALLOW_EMULATION=1 overrides, if you have a reason qemu will behave today.)"
+    [ -z "${VIBE_ALLOW_EMULATION:-}" ] && exit 1
+  fi
   JOBS_FOR_ARCH=""; [ "$PLATFORM" != "$HOSTARCH" ] && JOBS_FOR_ARCH=1
   [ -n "$JOBS_FOR_ARCH" ] && echo "==> [$A] emulated — building with JOBS=$JOBS_FOR_ARCH"
   docker run --rm --platform "linux/$PLATFORM" \
