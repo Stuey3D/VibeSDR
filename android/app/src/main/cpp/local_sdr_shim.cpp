@@ -13661,6 +13661,61 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *     the radio was not in. See g_tunerBwAuto for what Auto is and why it replaced
                  *     an automatic mode that tried to choose a width from measurements. */
                 const bool autoOn = v < 0;
+                /* ★★★ THE OWNER'S PER-BAND CEILING IS ENFORCED *HERE* TOO, OR IT IS NOT A CEILING.
+                 *
+                 *  ✗✗✗ IT LIVED ONLY INSIDE applyAutoIf, WHICH RETURNS THE MOMENT AUTO IS OFF. So a
+                 *      listener who picked "Wide — set by sample rate" set tunerBwAuto=false, the
+                 *      automatic path never ran, and the whole capture went to the mixer — past a
+                 *      ceiling the owner had set for everybody on a SHARED front end.
+                 *      Measured on the Pi 2 while Stuart tested it: ifCap=1200000 published
+                 *      correctly, and tunerBw=0 auto=false in force beside it. He found it as a
+                 *      standard user: "per band limit ignored... I was a standard user and still
+                 *      could override" (2026-09-27).
+                 *  ★★ GREYING THE MENU WOULD NOT HAVE FIXED THIS. A rule that protects shared
+                 *     hardware has to be enforced where the value is SET, not where it is offered:
+                 *     an old client, a script or a curious person sends the message anyway. The
+                 *     client half is a courtesy; this is the rule. [[client_infers_server_decisions]]
+                 *  ★ A LOCKED band takes the owner's width exactly; an unlocked one may still go
+                 *    NARROWER by hand — the ceiling only ever stopped things being too wide. And 0
+                 *    ("as wide as the sample rate") is the widest there is, so a ceiling rules it
+                 *    out by definition rather than by arithmetic. */
+                /* ★★★ A SHARED DIAL IS LOCKED TO AUTO, AND THE SERVER IS WHAT LOCKS IT.
+                 *  Stuart's rule: "in shared VFO mode no options for IF filter should be present,
+                 *  as dont want user 1 setting 350KHz then leaving and the next listener wondering
+                 *  why the dongle cant pick up much... in shared VFO it would be locked to auto."
+                 *  ★★ AUTO IS THE RIGHT ANSWER THERE RATHER THAN A COMPROMISE, because the VIEW is
+                 *     shared too: "user 1 zooms and pans, it moves for everybody", so a filter that
+                 *     follows the one view follows everybody's.
+                 *  ★★★ AND HIDING THE CONTROL IS NOT ENOUGH. A width pinned by hand while the radio
+                 *      was exclusive would SURVIVE into a shared session with nobody able to undo
+                 *      it — the control gone and the filter still stuck. So a manual width is
+                 *      refused here and auto restored, which is the state the hidden control
+                 *      claims to be in. */
+                /* ★ …and the signed-in admin is exempt, as with the AGC lock: the rule is
+                 *  about LISTENERS on a shared front end, not about the owner. */
+                if (!autoOn && vsSharedDial() && !adminNow(sock)) {
+                    LOGI("manual IF width refused — the dial is shared, the filter follows the "
+                         "shared view");
+                    g_tunerBwAuto.store(true, std::memory_order_relaxed);
+                    LocalSdrShim::instance().applyAutoIf();
+                    LocalSdrShim::instance().broadcastHwInfo();
+                    broadcastConfig();
+                    return;
+                }
+                const int ifCapNow = LocalSdrShim::ifCapAtHz(
+                    LocalSdrShim::instance().listenFrequency());
+                /* ★ The owner's own ceiling still binds LISTENERS; the admin set it and may
+                 *  step outside it to test, which is the whole point of unlocking. */
+                if (!autoOn && ifCapNow > 0 && !adminNow(sock)) {
+                    const bool fixed = LocalSdrShim::gainLockedAt(
+                        LocalSdrShim::instance().listenFrequency());
+                    const int asked = (int)v;
+                    if (fixed || asked == 0 || asked > ifCapNow) {
+                        LOGI("IF %d kHz refused — the owner caps this band at %d kHz%s",
+                             asked / 1000, ifCapNow / 1000, fixed ? " (and has fixed it)" : "");
+                        v = ifCapNow;
+                    }
+                }
                 g_tunerBwAuto.store(autoOn, std::memory_order_relaxed);
                 if (autoOn) LocalSdrShim::instance().applyAutoIf();
                 else        LocalSdrShim::instance().setTunerBandwidth((int)v);

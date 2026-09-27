@@ -2512,10 +2512,23 @@ function syncIfMenu() {
   if (!sel) return;
   const sharedDial   = srvShared || srvSharedDial;
   const lockedMulti  = hwLockedCentre > 0 && srvShared;
-  const notYours     = sharedDial || lockedMulti;
-  // ★ The control itself: gone when the filter is not this listener's to set.
-  const wrap = (sel.closest('label') as HTMLElement | null) ?? sel;
-  wrap.classList.toggle('hide', notYours);
+  /* ★★★ EXCEPT FOR THE ADMIN. Stuart, 2026-09-27: "manual settings shouldnt be available... only
+   *  an admin user gets the controls." Same rule as the AGC lock earlier today: the restriction
+   *  binds LISTENERS, and proving the admin password is what unlocking the controls MEANS. An
+   *  owner who cannot set their own front end by hand cannot investigate their own radio. */
+  const notYours     = (sharedDial || lockedMulti) && !adminUnlocked;
+  /* ★★★ THE WHOLE ROW, VIA THE MECHANISM THIS PAGE ACTUALLY USES.
+   *  ✗ This first did `sel.closest('label')` and toggled a class called 'hide' — and BOTH were
+   *    assumptions I never checked. `#tunerBw` is a bare <select> inside div#rowTunerBw, not
+   *    inside a <label>, so closest() returned null and it styled the select itself; and this page
+   *    has no `.hide` rule at all (it hides with `hidden`, and 38 uses of `.on`). So the code
+   *    shipped, ran, and did nothing — Stuart found the control still fully usable as a standard
+   *    listener on a SHARED dial: "per band limit ignored... I was a standard user and still could
+   *    override", and "remember this is also a shared VFO, I shouldnt be able to control it myself
+   *    anyway".
+   *  ★ Read the markup before writing the selector. Both facts were one grep away. */
+  const row = (document.getElementById('rowTunerBw') as HTMLElement | null) ?? sel;
+  row.hidden = notYours;
   if (notYours) return;
   for (const opt of Array.from(sel.options)) {
     const v = Number(opt.value);
