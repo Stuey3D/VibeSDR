@@ -35,6 +35,7 @@ import { CABBR } from '../assets/countryAbbr';
 import { type SpotRow } from '../services/DecoderClient';
 import { ensureMapPack, writeMapPage } from '../services/mapPack';
 import { ensureMapglPack } from '../services/mapglPack';
+import { detailInstalled, readDetailRange } from '../services/mapglDetail';
 // ★ The GPU map's style — embedded into the page, because the page creates its map synchronously.
 import VIBEMAP_STYLE from '../../assets/mapgl/vibemap-style.json';
 /* ★★★ THE SHARED BASEMAP RENDERER, AS A STRING. The app has no file server, so the only way
@@ -85,7 +86,7 @@ interface MapOverlayProps {
 
 function buildHtml(
   kind: MapKind, baseUrl: string, uuid: string,
-  opts?: { local?: boolean; wsBase?: string | null; rxLat?: number | null; rxLon?: number | null; gl?: boolean },
+  opts?: { local?: boolean; wsBase?: string | null; rxLat?: number | null; rxLon?: number | null; gl?: boolean; detail?: boolean },
 ): string {
   const local = !!opts?.local;
   /* ★★★ THE GPU MAP (vibemapgl.js, route B): MapLibre GL JS in this same WebView, drawing our own
@@ -359,6 +360,7 @@ ${!isHfdl ? `
 var BASE='${base}', WSBASE='${wsBase}', KIND='${kind}', UUID='${uuid}';
 var LOCAL=${local ? 1 : 0};
 var GL_OK=${gl ? 1 : 0};
+var DETAIL_OK=${gl && opts?.detail ? 1 : 0};
 var VM_STYLE=${gl ? JSON.stringify(VIBEMAP_STYLE) : 'null'};
 var RX_LAT=${rxLat || 0}, RX_LON=${rxLon || 0};
 // Maidenhead locator → square-centre lat/lon (on-device FT8 spots carry a grid,
@@ -389,7 +391,16 @@ function glLoad(path,kind){return new Promise(function(res){try{var x=new XMLHtt
   x.onerror=function(){res(null);};x.send();}catch(e){res(null);}});}
 if(GL_OK&&window.VibeMapGL&&window.VibeMapGLCompat&&VM_STYLE){
   try{
-    GLVM=VibeMapGL.createNow(document.getElementById('lmap'),{style:VM_STYLE,load:glLoad,base:'mapgl/',
+    /* ★ The high-detail pack, when installed, is read by byte range over the bridge (mapglDetail.ts):
+     *  the page asks, React Native answers with exactly those bytes, base64. */
+    window.__mgWait={};window.__mgSeq=0;
+    window.__mgDeliver=function(id,b64){var w=window.__mgWait[id];if(!w)return;delete window.__mgWait[id];
+      if(!b64){w(null);return;}try{var bin=atob(b64),u=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);w(u.buffer);}catch(e){w(null);}};
+    var detailRange=DETAIL_OK&&window.ReactNativeWebView?function(off,len){return new Promise(function(res){
+      var id='mg'+(++window.__mgSeq);window.__mgWait[id]=res;
+      window.ReactNativeWebView.postMessage(JSON.stringify({t:'mgrange',id:id,off:off,len:len}));
+      setTimeout(function(){if(window.__mgWait[id]){delete window.__mgWait[id];res(null);}},10000);});}:null;
+    GLVM=VibeMapGL.createNow(document.getElementById('lmap'),{style:VM_STYLE,load:glLoad,base:'mapgl/',detailRange:detailRange,
       profile:(KIND==='hfdl'?'aero':'spots'),center:[0,30],zoom:1});
     if(GLVM){window.L=VibeMapGLCompat.install(GLVM);window.__GL=true;
       GLVM.ready.catch(function(e){console.error('GPU map: '+e);});}
@@ -1269,7 +1280,7 @@ export default function MapOverlay(
   }, [visible, glOk]);
   const html = useMemo(
     () => (kind && glOk !== null ? buildHtml(kind, baseUrl, sessionUuid,
-      { local, wsBase: wsBaseOverride, rxLat, rxLon, gl: glOk }) : ''),
+      { local, wsBase: wsBaseOverride, rxLat, rxLon, gl: glOk, detail: glOk && detailInstalled() }) : ''),
     [kind, baseUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon, glOk],
   );
   /* ★★★ THE PAGE IS WRITTEN TO DISK BESIDE THE MAP PACK AND LOADED FROM THERE.
@@ -1413,6 +1424,15 @@ export default function MapOverlay(
              *  a local origin with the map pack on disk beside it.
              *  ★ A failure answers null rather than throwing: every caller in the page already
              *    treats that as "no data this tick", which is what a poll loop wants. */
+            /* ★★ A BYTE RANGE OF THE HIGH-DETAIL PACK (mapglDetail.ts): the WebView cannot read part of a
+             *  file, React Native can. A few KB per close-zoom tile; null = coarse map there. */
+            if (m && (m as any).t === 'mgrange' && (m as any).id) {
+              const id = String((m as any).id);
+              const b64 = readDetailRange(Number((m as any).off) || 0, Number((m as any).len) || 0);
+              webRef.current?.injectJavaScript(
+                `window.__mgDeliver&&window.__mgDeliver(${JSON.stringify(id)},${b64 ? JSON.stringify(b64) : 'null'});true;`);
+              return;
+            }
             if (m && (m as any).t === 'hostfetch' && (m as any).id) {
               const id = String((m as any).id);
               const path = String((m as any).path || '');

@@ -132,6 +132,20 @@
         if (!b) throw new Error('vibemapgl: the basic pack could not be read');
         protocol.add(new pm.PMTiles(bufferSource('basic', b))); basicUrl = 'pmtiles://basic';
         if (r) { protocol.add(new pm.PMTiles(bufferSource('relief', r))); reliefUrl = 'pmtiles://relief'; }
+        /* ★★ THE OPTIONAL DETAIL PACK (~169 MB) IS NOT READ WHOLE: the host supplies ranged reads
+         *  (the app answers them over the bridge from the one file on disk — mapglDetail.ts). Only the
+         *  bytes a close-zoom view needs ever cross. */
+        if (o.detailRange) {
+          protocol.add(new pm.PMTiles({
+            getKey: () => 'detail',
+            getBytes: async (offset, length) => {
+              const data = await o.detailRange(offset, length);
+              if (!data) throw new Error('vibemapgl: detail read failed');
+              return { data };
+            },
+          }));
+          hasDetail = true; detailUrl = 'pmtiles://detail';
+        }
       }
       const style = prepareStyle(o.style, { hasDetail, basicUrl, reliefUrl, detailUrl, profile });
       if (!reliefUrl) { delete style.sources.relief; style.layers = style.layers.filter((l) => l.source !== 'relief'); }

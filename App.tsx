@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { detailAsked, detailInstalled, downloadDetail, markDetailAsked } from './src/services/mapglDetail';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
-import { Animated, ActivityIndicator, AppState, LogBox, NativeModules, Text, View } from 'react-native';
+import { Alert, Animated, ActivityIndicator, AppState, LogBox, NativeModules, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { TouchableOpacity } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -222,6 +223,32 @@ export default function App() {
   // Install the global JS crash guard once — flaky SDR servers must never abort
   // the whole app; recover to the picker with a server-attributed message.
   useEffect(() => { installCrashGuard(navigationRef); }, []);
+
+  // ── High Detail Maps: asked ONCE (Stuart, 2026-09-27) ──────────────────────
+  //    On first launch — which includes the first launch after updating from an older build, since
+  //    those users have never been asked. Declined = the coarse maps built into the app, which do the
+  //    job; the bottom of the server list offers the download (or removal) at any time.
+  //  ★★ NOT ON A HEADLESS LAUNCH. The watch can cold-launch this app into the BACKGROUND (see the
+  //     watch handler below); an Alert there would be shown to nobody and still count as "asked". So it
+  //     waits for the app to actually be in front of someone, then asks, once.
+  useEffect(() => {
+    let done = false, t: ReturnType<typeof setTimeout> | null = null;
+    const ask = async () => {
+      if (done) return; done = true;
+      if (detailInstalled() || (await detailAsked())) return;
+      t = setTimeout(() => {
+        Alert.alert(
+          'High Detail Maps',
+          'Download the high detail maps? They need approx 200 MB of storage space on this device and are a one time download.\n\nWithout them the standard maps still work. You can download them later from the bottom of the server list.',
+          [{ text: 'Not now', style: 'cancel', onPress: () => { void markDetailAsked(); } },
+           { text: 'Download', onPress: () => { void markDetailAsked(); void downloadDetail(); } }],
+          { cancelable: false });
+      }, 1500);
+    };
+    if (AppState.currentState === 'active') { void ask(); return () => { if (t) clearTimeout(t); }; }
+    const sub = AppState.addEventListener('change', (st) => { if (st === 'active') { sub.remove(); void ask(); } });
+    return () => { sub.remove(); if (t) clearTimeout(t); };
+  }, []);
 
   // ── iCloud sync ────────────────────────────────────────────────────────────
   // Registered here, at the app level, rather than inside the screens that own

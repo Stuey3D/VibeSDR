@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDetailMaps, mb } from '../services/useDetailMaps';
+import { downloadDetail, removeDetail, DETAIL_BYTES } from '../services/mapglDetail';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import { useListNav, NAV_FOCUS, noteTouchInteraction } from '../components/PanelNav';
@@ -1673,6 +1675,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   const restrictedCount = useMemo(() => instances.filter(blocksApps).length, [instances]);
 
   const listRef = useRef<FlatList<ListItem> | null>(null);
+  /** ★ The optional high-detail map pack, for the footer line (installed / size / download progress). */
+  const detailMaps = useDetailMaps();
   // ★★ The DEFAULT screen is the DraggableFlatList, with the whole chooser (custom URL,
   // discovered, directories) as its ListHeaderComponent — so `listData` is the server rows
   // BELOW that header. reveal() only ever had the plain FlatList's ref, so on the screen the
@@ -2678,6 +2682,39 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   sudden drop is the owner's restriction — not a fault in VibeSDR. For unrestricted
                   access, use UberSDR or OpenWebRX.
                 </Text>
+                {/* ★★ HIGH DETAIL MAPS — installed (size, Remove?) or not (approx 200 MB, Download now?),
+                    exactly as Stuart worded it (2026-09-27). The coarse maps built into the app do the
+                    job for HFDL / ADS-B / AIS / ACARS / spots; this is for zooming right in. */}
+                {(() => {
+                  const st = detailMaps.state;
+                  const line = st.kind === 'downloading'
+                    ? `Downloading High Detail Maps… ${st.total > 0 ? Math.floor(100 * st.written / st.total) : 0}% (${mb(st.written)} of ${mb(st.total)})`
+                    : st.kind === 'error'
+                    ? `High Detail Maps download failed — ${st.message}. Tap to try again.`
+                    : detailMaps.installed
+                    ? `High Detail Maps installed, current space taken ${mb(detailMaps.bytes)} — Remove?`
+                    : 'High Detail Maps not installed. These require approx 200 MB of storage space on this device and are a one time download — Download now?';
+                  const onPress = () => {
+                    if (st.kind === 'downloading') return;
+                    if (detailMaps.installed) {
+                      Alert.alert('Remove High Detail Maps?', `This frees ${mb(detailMaps.bytes)}. The standard maps stay, and you can download these again at any time.`,
+                        [{ text: 'Keep', style: 'cancel' }, { text: 'Remove', style: 'destructive', onPress: () => removeDetail() }]);
+                    } else {
+                      Alert.alert('Download High Detail Maps?', `About ${mb(DETAIL_BYTES)}, once. Wi-Fi is recommended. The maps keep working while it downloads.`,
+                        [{ text: 'Not now', style: 'cancel' }, { text: 'Download', onPress: () => { void downloadDetail(); } }]);
+                    }
+                  };
+                  return (
+                    <ChooserRow zone="footer" style={[styles.row, { borderColor: C.border, marginTop: 12, marginBottom: 6 }]} onPress={onPress}>
+                      <View style={styles.rowMain}>
+                        <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.textDim, letterSpacing: 1 }} numberOfLines={1}>MAPS ON THIS DEVICE</Text>
+                        <Text style={{ fontFamily: F, fontSize: fs(13), color: st.kind === 'error' ? C.red ?? C.amber : C.amber, marginTop: 3, lineHeight: fs(18) }}>
+                          {line}
+                        </Text>
+                      </View>
+                    </ChooserRow>
+                  );
+                })()}
               </View>
             }
           />
