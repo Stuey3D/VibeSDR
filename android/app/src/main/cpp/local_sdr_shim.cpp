@@ -2852,6 +2852,28 @@ static std::atomic<float>    g_contrastBeforeMove{99.0f};
  *    never fired here — 104.2 measured 21.8-26.9 dB at every gain including the ruinous ones. What
  *    distinguishes the two cases is the CHANGE across a move, not the level. */
 static constexpr float       kContrastCostDb = 2.0f;
+/** ★★★ THE BEST BAND CONTRAST SEEN SINCE THE LAST RETUNE — because the per-move test above cannot
+ *  see a SLOW SLIDE, and that is how the worst case actually fails.
+ *  ★★★ MEASURED ON THE PI 2, 99.7, WITH kContrastCostDb ALREADY IN FORCE (2026-09-27): the loop
+ *      climbed to 43.9 dB, then kept going to 48.0 dB, and Stuart's own screen shows the whole band
+ *      above 99.8 filled in solid while below 99.5 it is clean — "I can tell you straight away the
+ *      48db the Pi2 is choosing is full of intermodulation". ADC peak -9.5 dBFS, so nothing railed
+ *      and no overload ever came to rescue it.
+ *  ★★ WHY THE PER-MOVE TEST MISSED IT: it compares one step against the one before. On 104.2 the
+ *     contrast falls off a cliff in a single rung and is caught. On 99.7 each rung costs well under
+ *     2 dB and the loop walks down a ramp — every individual step is innocent and the destination
+ *     is ruinous. A rule that only ever looks at the last move cannot add up.
+ *  ★ So remember the BEST contrast this station has shown and judge the LEVEL against it. 0 = unset;
+ *    reset by agcForget alongside every other per-station memory. */
+static std::atomic<float>    g_contrastBest{0.0f};
+/** ★★★ HOW FAR BELOW ITS OWN BEST THE BAND MAY BE FILLED IN BEFORE A CLIMB IS REFUSED.
+ *  ★★ 6.0 dB, and deliberately looser than kContrastCostDb rather than tighter: this arm judges an
+ *     ACCUMULATION, so it must sit clear of the honest wander a per-move test already tolerates
+ *     (~1 dB a step) and clear of a station's own breathing over a minute. On the Pi 2's 99.7 the
+ *     collapse from the top of the climb is far larger than this — there is room to spare.
+ *  ★ It still only ever REFUSES. It cannot ask for gain, so a receiver whose contrast never falls
+ *    (an R860 on a decent aerial) never meets this branch at all. */
+static constexpr float       kContrastSlideDb = 6.0f;
 /** ★★★ HOW MUCH OF A GAIN STEP MUST ARRIVE AT THE CHANNEL FOR THE FRONT END TO COUNT AS LINEAR.
  *  Measured on the Pi 2's R820T2 (2026-09-22, full sweep of 106.9 with the AGC off): every rung
  *  below the knee lifts the channel ~0.65 dB per dB of gain; at the knee it is 0.0 and above it
@@ -13470,7 +13492,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             {
                 double gv = 0;
                 const bool wantsManual = jsonNum(msg, "value", gv) && gv >= 0;
-                if (wantsManual && LocalSdrShim::agcLocked()) {
+                /* ★★★ THE SIGNED-IN ADMIN IS EXEMPT. The comment above used to say there was no
+                 *  admin exemption "because the way an owner turns it off is the SERVER setting,
+                 *  not a message" — tidy, and wrong in the only situation that matters.
+                 *  ★★★ STUART, 2026-09-27, HALFWAY THROUGH DIAGNOSING HIS OWN RECEIVER: "Unlocked
+                 *      controls with the admin password and the override isnt working as I cannot
+                 *      disable vibeAGC to play with the manual gain. It is locked on in the
+                 *      settings but admin should override it."
+                 *  ★★ A lock exists to stop a LISTENER moving the front end, and the owner is not
+                 *     a listener. Sending them to the settings page — which restarts the server —
+                 *     to try a gain by hand makes the experiment cost a reconnection each time,
+                 *     which is how an owner ends up unable to investigate their own radio.
+                 *  ★ It is still exactly one rule: the lock binds everyone who has not proved the
+                 *    admin password. Proving it is what "unlock the controls" MEANS. */
+                if (wantsManual && LocalSdrShim::agcLocked() && !adminNow(sock)) {
                     LOGI("manual gain refused — the owner has locked the AGC on");
                     return;
                 }
@@ -13544,7 +13579,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  has locked it (the Airspy and RSP handlers say so in as many words), and the manual
              *  `gain` handler refuses for the same reason — but this one, the generic switch the
              *  web client actually sends, checked nothing (audit, 2026-09-10). */
-            if (LocalSdrShim::agcLocked() && !jsonOn(msg)) {
+            /* ★ …and the signed-in admin is exempt here too — see the manual-gain branch above for
+             *  why the "no exemption" rule was wrong. An owner who cannot switch their own AGC off
+             *  cannot compare it against a hand-set gain, which is the one experiment that settles
+             *  whether the loop is choosing well. */
+            if (LocalSdrShim::agcLocked() && !jsonOn(msg) && !adminNow(sock)) {
                 LOGI("AGC off refused — locked by the owner");
                 sendHwInfo(sock);
                 return;
@@ -13998,7 +14037,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                       + std::string(",\"gainCap\":")
                       + std::to_string(LocalSdrShim::gainCapAt(
                             LocalSdrShim::instance().listenFrequency()))
-                      + ",\"agcLocked\":" + (LocalSdrShim::agcLocked() ? "true" : "false")
+                      /* ★★★ AND NOT LOCKED FOR THE ADMIN, OR THE FIX ABOVE IS INVISIBLE. The two
+                       *  refusal sites now exempt a signed-in admin, but this flag is what the
+                       *  client draws the switch from — so reporting "locked" would grey the
+                       *  control out and the tap would never be sent. ONE RULE, TWO READERS: the
+                       *  server would accept a message the client had decided not to make.
+                       *  ★ [[disabled_control_reads_as_absent]] — a greyed switch reads as a
+                       *    missing feature, which is how "the override isnt working" looks from
+                       *    the outside even once the server would allow it. */
+                      + ",\"agcLocked\":"
+                      + ((LocalSdrShim::agcLocked() && !adminNow(sock)) ? "true" : "false")
                       /* ★★★ AND WHETHER THE GAIN CAN MOVE AT ALL. `gainCap` alone says "no higher
                        *   than this"; with the owner's lock on, a capped band is FIXED and every
                        *   gain message is refused. A client that is not told draws a live-looking
