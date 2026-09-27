@@ -19,3 +19,8 @@ n=$(ls -1 "$dest" | wc -l | tr -d ' ')
 # ★ Verify the ARTEFACT, not the command: a copy that silently moved nothing is the failure mode.
 [ "$n" -ge 20 ] || { echo "sync-mapdata: only $n files landed in $dest — refusing to call that a sync." >&2; exit 1; }
 echo "sync-mapdata: $n files -> directory/public/mapdata/v1"
+
+# ★★★ AND THE APP CARRIES ITS OWN COPY OF THE BUNDLED PACK, because the app is the map source for
+#  every engine it drives (an UberSDR/KiwiSDR has no /mapdata/v1/ at all). Same rule, same failure
+#  mode: a stale embedded pack looks exactly like a fresh one until a layer is wrong in the app.
+node "$root/scripts/gen-mapdata-source.mjs"

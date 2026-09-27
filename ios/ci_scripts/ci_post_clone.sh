@@ -90,4 +90,16 @@ if [ "$n" -ge 4 ]; then
   exit 1
 fi
 
+# ★★★ REGENERATE THE EMBEDDED BASEMAP, so a committed artefact can never go stale against its
+#     source. src/generated/mapdataBundle.ts is tier0+tier1 of assets/mapdata/v1 turned into a TS
+#     module, and it is COMMITTED on purpose: Xcode Cloud builds a fresh clone, so an ignored
+#     generated file would fail the build outright rather than degrade.
+# ★★ Committed AND regenerated is the point — the commit guarantees the build works, this line
+#    guarantees the bytes match assets/mapdata/v1. Without it the two drift silently and the app
+#    ships last month's coastlines while the repo shows this month's.
+# ★ The map is why this matters: the app is the basemap source for every engine it drives
+#   (UberSDR, KiwiSDR, a local dongle), so a stale bundle is a wrong map everywhere at once.
+echo "--- regenerating the embedded basemap ---"
+node scripts/gen-mapdata-source.mjs || { echo "map bundle generation FAILED"; exit 1; }
+
 echo "--- ci_post_clone: done ---"

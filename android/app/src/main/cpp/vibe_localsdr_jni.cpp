@@ -881,8 +881,27 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetAdminPaths(JNIEnv* env, jobject,
     if (b) {
         std::string bp(b);
         const size_t slash = bp.find_last_of('/');
-        if (slash != std::string::npos)
-            vibe::LocalSdrShim::instance().setNoticePath(bp.substr(0, slash) + "/notice.json");
+        if (slash != std::string::npos) {
+            const std::string dataDir = bp.substr(0, slash);
+            vibe::LocalSdrShim::instance().setNoticePath(dataDir + "/notice.json");
+            /* ★★★ AND THE MAP DIRECTORY, FOR THE SAME REASON AND BY THE SAME DERIVATION.
+             *  vibe_mapdata.h finds its data relative to the EXECUTABLE or under /usr — both of
+             *  which are meaningless on Android, where the server is a library inside an APK and
+             *  there is no writable directory next to it. So every Android-hosted VibeServer
+             *  404'd /mapdata/v1/ and drew a black map: Stuart's Sony Bravia, his XCover, and
+             *  every phone running the app on a local dongle (a local dongle IS a loopback
+             *  VibeServer, so the app's own HFDL and spots maps were hit too).
+             *  ★★ DERIVED, NOT PASSED. The comment above this one explains why the notice path is
+             *  derived rather than given a third JNI parameter — "one more pair of ends that can
+             *  disagree" — and a map directory has exactly the same shape. Kotlin unpacks the
+             *  bundled tier-1 pack into <filesDir>/mapdata and this derives <filesDir>/mapdata
+             *  from the bans path, so the two cannot drift apart.
+             *  ★ Set unconditionally, BEFORE the unpack has necessarily finished: a directory that
+             *  does not exist yet is the header's ordinary clean-404 case ("no maps is a degraded
+             *  map, not a broken server"), and the files simply start answering once they land —
+             *  no restart, no ordering requirement between this and the extraction. */
+            vibemap::setDir(dataDir + "/mapdata");
+        }
     }
     LOGI("admin state persisted to %s / %s", b ? b : "(none)", l ? l : "(none)");
     if (b) env->ReleaseStringUTFChars(bans, b);

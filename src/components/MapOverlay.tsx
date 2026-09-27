@@ -40,6 +40,14 @@ import { type SpotRow } from '../services/DecoderClient';
  *     the template literal and report the error at some unrelated comment line.
  *     Regenerate with: node scripts/gen-vibemap-source.mjs */
 import { VIBEMAP_JS } from '../generated/vibemapSource';
+/* ★★★ AND THE BASEMAP'S DATA, BECAUSE THE APP IS THE MAP SOURCE. The renderer asks for
+ *     /mapdata/v1/<file>, which resolves against the INSTANCE (the WebView's baseUrl) — fine on a
+ *     VibeServer, a 404 on an UberSDR or a KiwiSDR, which is why the HFDL map drew aircraft over a
+ *     void. tier0+tier1 are embedded and served over the bridge when the instance has none.
+ *     ★★ Each entry is a getter: the bytes stay in Hermes's mmapped string table until the map is
+ *     actually opened, so carrying them costs install size and not memory.
+ *     Regenerate with: node scripts/gen-mapdata-source.mjs */
+import { MAPDATA_FILES } from '../generated/mapdataBundle';
 
 export type MapKind = 'hfdl' | 'digi' | 'cw';
 
@@ -382,7 +390,60 @@ L.control.zoom({position:'bottomright'}).addTo(map);
  *  maps ask WHERE someone is, so towns and the locator grid matter and airfields are noise.
  * ★ dataBase is ROOT-RELATIVE on purpose — the document is loaded from the instance origin, so it
  *  reaches the VibeServer the user is actually listening to, including a local dongle (a loopback
- *  VibeServer) and a Pi in hotspot mode with no uplink. */
+ *  VibeServer) and a Pi in hotspot mode with no uplink.
+ * ★★★ AND WHEN THE INSTANCE IS NOT A VIBESERVER, THE APP ANSWERS INSTEAD. An UberSDR serves
+ *  /addon/hfdl/aircraft and does NOT serve /mapdata/v1/ (200 vs 404), so the HFDL map used to draw
+ *  aircraft over a void. Our own vector maps exist precisely so the app stops depending on anyone
+ *  else for a basemap — openstreetmap.org blocked us for hammering their tiles — so the APP is the
+ *  map source for every engine it drives: UberSDR, KiwiSDR, a local dongle. OWRX is the one that
+ *  uses its own maps.
+ * ★★ THE SHIM IS AT fetch(), NOT IN THE RENDERER. vibemap.js reaches for its data in four different
+ *  places (the index probe, fetchJson, the shards, tier0-countrylabels); wrapping fetch catches all
+ *  of them and needs no renderer change, which keeps ONE renderer. ✗ Do not add an app-only data
+ *  path inside vibemap.js.
+ * ★★ NETWORK FIRST, AND THAT IS DELIBERATE: a VibeServer may hold the FULL pack (tier2 shards, the
+ *  relief rasters) and the embedded tier0/tier1 is the FLOOR, not a replacement. One failed
+ *  index.json latches localOnly, so a non-VibeServer costs exactly ONE 404 and never one per layer.
+ * ★ The bytes come over the bridge from RN (see onMessage/__mdDeliver): the data cannot live in this
+ *  page, because the page is a string and 14 MB of it would be built on every open. */
+window.__mdWait = {};
+window.__mdSeq = 0;
+window.__mdDeliver = function(id, body){
+  var w = window.__mdWait[id];
+  if(w){ delete window.__mdWait[id]; w(body); }
+};
+(function(){
+  var localOnly = false;
+  var real = window.fetch.bind(window);
+  var MARK = '/mapdata/v1/';
+  function ask(file){
+    return new Promise(function(res){
+      if(!window.ReactNativeWebView){ res(null); return; }
+      var id = 'md' + (++window.__mdSeq);
+      window.__mdWait[id] = res;
+      window.ReactNativeWebView.postMessage(JSON.stringify({ t:'mapdata', id:id, file:file }));
+      // ★ Never leave the renderer awaiting forever: a lost message must read as "no data",
+      //   which it already handles (it draws the coarser map), not as a hung basemap.
+      setTimeout(function(){ if(window.__mdWait[id]){ delete window.__mdWait[id]; res(null); } }, 10000);
+    });
+  }
+  function reply(body){
+    if(body == null) return new Response('', { status: 404 });
+    return new Response(body, { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }
+  window.fetch = function(u, opt){
+    var s = (typeof u === 'string') ? u : ((u && u.url) || '');
+    var i = s.indexOf(MARK);
+    if(i < 0) return real(u, opt);
+    var file = s.slice(i + MARK.length);
+    if(localOnly) return ask(file).then(reply);
+    var miss = function(){
+      if(file.indexOf('index.json') === 0) localOnly = true;
+      return ask(file).then(reply);
+    };
+    return real(u, opt).then(function(r){ return r && r.ok ? r : miss(); }).catch(miss);
+  };
+})();
 var VM = VibeMap.attach(map, {
   dataBase: '/mapdata/v1/',
   profile: KIND === 'hfdl' ? 'aero' : 'spots'
@@ -1029,8 +1090,33 @@ export default function MapOverlay(
           onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); }}
           onMessage={(e) => {
             const d = e.nativeEvent.data;
-            if (d === 'close') onClose();
-            else if (d === 'pickCity') onPickCity?.();
+            if (d === 'close') return onClose();
+            if (d === 'pickCity') return onPickCity?.();
+            /* ★★ THE PAGE ASKING US FOR BASEMAP DATA. Anything that is not one of the two legacy
+             *  bare-string messages is JSON; an unparseable message is ignored rather than thrown,
+             *  because a map that stops talking is worse than a map missing one layer. */
+            let m: { t?: string; id?: string; file?: string } | null = null;
+            try { m = JSON.parse(d); } catch { return; }
+            if (!m || m.t !== 'mapdata' || !m.id) return;
+            const get = m.file ? MAPDATA_FILES[m.file] : undefined;
+            /* ★ A file we do not carry (a tier2 shard, a relief tile) is answered with null, i.e.
+             *  a 404 — the renderer's own "pack not installed" path, which draws a coarser map.
+             *  ✗ Never leave the request unanswered: the page would wait out its timeout. */
+            const body = get ? get() : null;
+            /* ★★★ U+2028 AND U+2029 ARE LEGAL IN JSON AND ILLEGAL RAW IN JAVASCRIPT SOURCE, and
+             *  this string is injected AS SOURCE. JSON.stringify does not escape them, so a single
+             *  place name carrying one would produce a syntax error inside injectJavaScript —
+             *  silently, since there is no console here — and exactly one map layer would vanish
+             *  with nothing to find.
+             *  ★ Today's pack contains none (checked, 27 files, 0 occurrences). That is luck about
+             *  the DATA, not a property of the mechanism, and the next regeneration can change it. */
+            const js = body === null ? 'null'
+              : JSON.stringify(body)
+                  .replace(new RegExp(String.fromCharCode(0x2028), 'g'), '\\u2028')
+                  .replace(new RegExp(String.fromCharCode(0x2029), 'g'), '\\u2029');
+            webRef.current?.injectJavaScript(
+              `window.__mdDeliver&&window.__mdDeliver(${JSON.stringify(m.id)},${js});true;`,
+            );
           }}
         />
         {disconnected && !ignored && (
