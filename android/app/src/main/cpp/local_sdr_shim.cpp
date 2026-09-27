@@ -5490,6 +5490,48 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *    anyway, so nothing is lost from the display that was ever visible. */
         const int captureWide = (int)std::lround(sampleRate);
         if (want > captureWide) want = captureWide;
+        /* ★★★ AND THE ZOOM MAY NOT OPEN IT ALL THE WAY — THAT IS WHERE 19 dB WAS GOING.
+         *
+         *  ★★★ MEASURED, Pi 2 + RTL-SDR Blog V4, BBC R1 99.7, 2026-09-27, AT UNCHANGED GAIN
+         *      (48.0 dB in both columns — only the filter moved):
+         *        IF 2800 kHz (auto, zoomed out) : SNR 24 dB, ADC peak -9.5 dBFS, band filled in
+         *        IF 1200 kHz (manual)           : SNR 44 dB, ADC peak -3.4 dBFS, band clean
+         *      Stuart: "IF filter 1.2MHz 44db SNR, left at Auto follows zoom 25db" — 19 dB.
+         *  ★★★ THE ADC PEAK RISING AT THE SAME GAIN IS THE PROOF OF WHERE THE RANGE WENT: into
+         *      neighbouring transmitters rather than the wanted station. It is also why the
+         *      overload never fires on a wire antenna — there was never enough WANTED signal in
+         *      the converter to trip it. And 105.4, the ghost of if_filter_was_never_programmed,
+         *      came back as Capital.
+         *  ★★★ THE 2026-09-22 FIX CURED ONLY THE EXTREME CASE. It stopped `want = 0` switching the
+         *      filter OFF; following the zoom still opened it nearly as far, so the same ghost
+         *      returned at the same frequency in milder form. Half a fix, in the one function that
+         *      already carried the lesson.
+         *
+         *  ★★ BUT A CAP, NOT A LOCK, AND NOT A NARROW ONE. Stuart: "we must remember that if
+         *     people are zooming out they want to see more of the band, and an IF filter too
+         *     narrow is going to break that. So my thinking is 2048 = 1.2MHz, 2.4 = 1.5MHz so that
+         *     you arent loosing too much of the overall view when zoomed out." Both anchors are
+         *     ~60 % of the capture, which is what this ratio is — expressed against the SAMPLE
+         *     RATE so it travels to any rate rather than being two magic numbers.
+         *  ★ Zooming IN still narrows further: the view-driven figure above is untouched below the
+         *    cap, and that is the case where following the view does its best work. This only ever
+         *    stops the filter being opened WIDER than it can afford to be.
+         *  ✗ DAB never reaches here — its branch at the top of this function returns first, so an
+         *    ensemble still gets its full kDabIfHz. Stuart asked for that check explicitly and it
+         *    is structural, not a promise.
+         *  ★ The tuner quantises to its own coarse steps anyway (2048 kHz asked for became 2800),
+         *    so the exact ratio matters far less than not handing it the whole capture. */
+        /* ★★ …WITH A FLOOR, BECAUSE A FLAT RATIO EATS A NARROW CAPTURE. Both of Stuart's anchors
+         *  are HIGH rates, where 60 % is still a generous view: 2.4 -> 1.44, 2.048 -> 1.23 MHz.
+         *  Applied blindly the same ratio gives 0.72 MHz at 1.2 MS/s and 0.58 at 960 kS/s —
+         *  throwing away 40 % of an already narrow band view to protect a front end that is only
+         *  being shown 1.2 MHz in the first place, which is most of the protection already.
+         *  ★ So the cap never drops below 1 MHz. At the low rates `captureWide` above is the
+         *    binding limit anyway and this changes nothing; at the high rates, where the 19 dB
+         *    actually was, it is the ratio that bites. */
+        int selectivityCap = (int)std::lround(sampleRate * 0.6);
+        if (selectivityCap < 1000000) selectivityCap = 1000000;
+        if (want > selectivityCap) want = selectivityCap;
         /* ★★★ A FULL-RATE RAW IQ CONSUMER SEES THE WHOLE CAPTURE. The IF filter following the
          *  listener's zoom would hand Trunk Recorder a 2.4 MHz window with only the middle
          *  700 kHz in it (Stuart's screenshot, 2026-09-10 02:39: "IF 700 kHz auto" beside a
