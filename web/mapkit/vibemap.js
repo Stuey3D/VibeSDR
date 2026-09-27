@@ -471,11 +471,19 @@
       return mapIndex;
     }
 
-    /** One cached promise per file, so a shard shared by two layers is fetched once. */
+    /** One cached promise per file, so a shard shared by two layers is fetched once.
+     *  ★★★ A MISS IS NOT CACHED. It used to be: a fetch that lost the app shim's 2.5 s race or its
+     *   10 s bridge timeout ONCE resolved null, and that null was kept for the life of the page --
+     *   so the shard was blank on every later pan, with nothing to say why. Stuart, 2026-09-27 on
+     *   342: "some pans cause the landmass to disappear entirely." A null now evicts itself and the
+     *   next redraw asks again. ★ tier2 is gated on the index before it gets here, so an absent
+     *   optional file is not re-asked per pan; only a transient miss is retried. */
     function fetchJson(file) {
       if (!mapTier.loaded[file]) {
-        mapTier.loaded[file] = fetch(MD + file)
-          .then((r) => (r.ok ? r.json() : null)).catch(() => null);
+        const p = fetch(MD + file)
+          .then((r) => (r.ok ? r.json() : null)).catch(() => null)
+          .then((v) => { if (v == null && mapTier.loaded[file] === p) delete mapTier.loaded[file]; return v; });
+        mapTier.loaded[file] = p;
       }
       return mapTier.loaded[file];
     }
@@ -718,11 +726,12 @@
      *  ★ Sea names are ITALIC and cooler-toned: a sea name in the land palette reads as somewhere you
      *  could stand. */
     async function drawRegionLabels() {
-      regionLabelLayer.clearLayers();
       const z = map.getZoom();
-      if (!rung('regions', z) && !rung('seas', z)) return;
+      if (!rung('regions', z) && !rung('seas', z)) { regionLabelLayer.clearLayers(); return; }
       const regions = await layer('tier0', 'regions');
       if (!regions) return;
+      // ★ Cleared only once the replacement is in hand -- see drawBase.
+      regionLabelLayer.clearLayers();
       const box = viewBox();
       // ★ Same rank-against-zoom thinning as everything else, then the collision placer has the
       //   final say -- these are the biggest labels on the map and they collide hardest.
@@ -768,8 +777,11 @@
          *  produced by a ONE-OFF SCRIPT on 2026-09-26, lived on disk, and was in NEITHER PACK — so
          *  it shipped in nothing and survived regeneration only because the pruner's keep-list
          *  happened to spare it. The generator owns it now, which is the only reason it exists. */
-        countryLabels = await fetch(MD + 'tier0-countrylabels.json')
-          .then((r) => (r.ok ? r.json() : [])).catch(() => []);
+        /* ★★ A MISS IS NOT KEPT (same rule as fetchJson): an empty answer leaves this null, so the
+         *  next redraw asks again instead of the country names being gone for the whole session. */
+        const cl = await fetch(MD + 'tier0-countrylabels.json')
+          .then((r) => (r.ok ? r.json() : null)).catch(() => null);
+        if (cl && cl.length) countryLabels = cl;
       }
       countryLabelLayer.clearLayers();
       const z = map.getZoom();
@@ -782,7 +794,7 @@
       }
       if (!rung('countries', z)) return;
       const cut = z <= 4 ? 3 : z <= 5 ? 5 : 7;
-      for (const [name, lon, lat, rank, ...rest] of countryLabels) {
+      for (const [name, lon, lat, rank, ...rest] of countryLabels || []) {
         if (rank > cut) continue;
         /* ★ The local name rides UNDER the English one, and only where Natural Earth actually has a
          *  distinct endonym -- 70 of 239 countries. Deutschland, Türkiye, Việt Nam, Україна all land;
@@ -825,10 +837,12 @@
     }
 
     async function drawGeoLines() {
-      geoLineLayer.clearLayers();
       const z = map.getZoom();
-      if (z < 2 || z > 8) return;
+      if (z < 2 || z > 8) { geoLineLayer.clearLayers(); return; }
       const gl = await layer('tier0', 'geolines');
+      if (!gl) return;
+      // ★ Cleared only once the replacement is in hand -- see drawBase.
+      geoLineLayer.clearLayers();
       for (const { name, lines } of gl || []) {
         /* ★★ THE INTERNATIONAL DATE LINE IS IN THIS FILE TOO, and it is the only entry that is not a
          *  line of latitude: it zigzags around Kiribati and the Aleutians. Drawn in the same amber
@@ -921,12 +935,13 @@
     }
 
     async function drawRoads() {
-      roadLayer.clearLayers();
       const z = map.getZoom();
-      if (z < 5 || !P.roads) return;            // below this a road is a scratch, not a road
+      if (z < 5 || !P.roads) { roadLayer.clearLayers(); return; }  // below z5 a road is a scratch
       const box = viewBox();
       const lines = await layer(await bestTier(tierFor('roads', z)), 'roads', box);
       if (!lines) return;
+      // ★ Cleared only once the replacement is in hand -- see drawBase.
+      roadLayer.clearLayers();
       let n = 0;
       for (const line of lines) {
         if (n > 2500) break;                     // the same cap that keeps the point layers honest
@@ -955,6 +970,24 @@
        *  ★ Borders then have to arrive as their OWN lines, the way a real map separates coast from
        *  boundary -- with the fill no longer political, the country edges are no longer free. */
       const coast = z >= 10 ? await layer(await bestTier('tier2'), 'coast', box) : null;
+      /* ★★★ THE OLD LAND STAYS UP UNTIL THE NEW LAND HAS ARRIVED. clearLayers() used to run HERE,
+       *  before the countries were awaited -- so every pan wiped the landmass and then waited on a
+       *  fetch (which in the app crosses the RN bridge), and the land visibly streamed back in like
+       *  the OSM tiles this data replaced. And when that fetch came back null, the early return
+       *  below left it wiped: the pans that "lose the land entirely" (Stuart, 2026-09-27, build
+       *  342). ✗ Never clear a layer before its replacement is in hand; a null keeps what is drawn. */
+      const t = coast ? null : await bestTier(tierFor('countries', z));
+      const countries = coast ? null : await layer(t, 'countries', box);
+      /* ★★ AN EMPTY ANSWER RETRIES ITSELF, a bounded number of times. Measured in a harness that
+       *  made the first countries fetch miss: before the eviction fix the land NEVER drew, through
+       *  eight pans; after it, the land waited for the user's first pan. A basemap must not need
+       *  touching to appear, so a miss schedules its own redraw -- 1, 2, 4, 8 s, then stops, and a
+       *  successful draw resets the count. */
+      if (!coast && !countries) {
+        if (baseRetries < 4) { clearTimeout(baseRetryT); baseRetryT = setTimeout(redrawMap, 1000 << baseRetries++); }
+        return;
+      }
+      baseRetries = 0;
       basemap.clearLayers();
       if (coast) {
         for (const ring of coast) {
@@ -969,9 +1002,6 @@
         mapTier.at = 'coast';
         return;
       }
-      const t = await bestTier(tierFor('countries', z));
-      const countries = await layer(t, 'countries', box);
-      if (!countries) return;
       for (const rings of Object.values(countries)) {
         for (const ring of rings) {
           if (!ringInView(ring, box)) continue;
@@ -1100,9 +1130,8 @@
      *  heading -- not a symbol rotated to a bearing. Each end is labelled with its own designator,
      *  because 09L and 27R are the SAME strip of tarmac and which one you hear tells you the wind. */
     async function drawRunways() {
-      runwayLayer.clearLayers();
       const z = map.getZoom();
-      if (z < 9 || !P.runways) return;
+      if (z < 9 || !P.runways) { runwayLayer.clearLayers(); return; }
       /* ★★★ THE ZOOM GATE IS PER RUNWAY, BY LENGTH. A flat "z12 and up" hid Stansted's 10,003 ft
        *  04/22 at z10 and z11, where it is already 40 px long and perfectly legible -- Stuart looked
        *  for it and it was not there, which reads as MISSING DATA rather than a threshold. A runway
@@ -1112,6 +1141,8 @@
       const box = viewBox();
       const rw = await layer(await bestTier('tier2'), 'runways', box);
       if (!rw) return;
+      // ★ Cleared only once the replacement is in hand -- see drawBase.
+      runwayLayer.clearLayers();
       for (const [, aLon, aLat, bLon, bLat, leId, heId, len] of rw) {
         if (len < minFt) continue;
         if (!inBox(box, aLon, aLat) && !inBox(box, bLon, bLat)) continue;
@@ -1141,11 +1172,12 @@
      *  a FLOOR on what is eligible; the viewport cap above decides how many of them actually draw. */
     async function drawPoi() {
       const z = map.getZoom();
-      airportLayer.clearLayers(); portLayer.clearLayers();
-      if (z < 5 || !(P.airports || P.ports)) return;
+      if (z < 5 || !(P.airports || P.ports)) { airportLayer.clearLayers(); portLayer.clearLayers(); return; }
       const box = viewBox();
       const t = await bestTier(tierFor('airports', z));
       const [airports, ports] = await Promise.all([layer(t, 'airports', box), layer('tier1', 'ports', box)]);
+      // ★ Cleared only once the replacement is in hand -- see drawBase.
+      airportLayer.clearLayers(); portLayer.clearLayers();
       const aCut = z <= 6 ? 0 : z <= 8 ? 1 : 4;
       // ★ Airport codes compete with city names for the same pixels, so they get a placer too.
       const placeAp = labelPlacer(z <= 5 ? 6 : 2);
@@ -1182,11 +1214,19 @@
      * ★ One coalesced redraw for zoom AND pan. Panning changes what is drawn, so `moveend` must
      *  redraw too -- and a drag fires it often enough that the work needs a frame to settle. */
     let drawing = false;
+    let redrawAgain = false;
+    let baseRetries = 0;
+    let baseRetryT = null;
     let redrawT = null;
     function redrawMap() {
       clearTimeout(redrawT);
       redrawT = setTimeout(() => {
-        if (drawing) return;
+        /* ★★★ A PAN THAT LANDS MID-DRAW IS REMEMBERED, NOT DROPPED. This used to `return`, so the
+         *  last moveend of a drag was thrown away whenever a draw was still awaiting data, and the
+         *  map sat on geometry culled to the PREVIOUS view box -- land missing at the edges you had
+         *  just panned into, until you happened to pan again. Now it runs once more when the draw
+         *  in flight finishes. */
+        if (drawing) { redrawAgain = true; return; }
         drawing = true;
         drawGrid();
         Promise.all([drawBase(), drawRelief(), drawRegionLabels(), drawCover(), drawWater(), drawRoads(),
@@ -1195,7 +1235,10 @@
           // ★★★ NEVER SWALLOW A DRAW ERROR AGAIN. The silent .catch here is precisely why a TypeError
           //   in drawBase looked like "the feature did not ship" for two deploys.
           .catch((e) => console.error('map draw failed:', e))
-          .finally(() => { drawing = false; });
+          .finally(() => {
+            drawing = false;
+            if (redrawAgain) { redrawAgain = false; redrawMap(); }
+          });
       }, 120);
     }
     map.on('zoomend moveend', redrawMap);
@@ -1230,7 +1273,7 @@
        *   (the app's WebView does, on a profile change from native) would otherwise stack renderers
        *   and every redraw would do the work twice. */
       detach() {
-        clearTimeout(redrawT);
+        clearTimeout(redrawT); clearTimeout(baseRetryT);
         map.off('zoomend moveend', redrawMap);
         for (const lg of allLayers) map.removeLayer(lg);
         if (reliefOverlay) { map.removeLayer(reliefOverlay); reliefOverlay = null; }
