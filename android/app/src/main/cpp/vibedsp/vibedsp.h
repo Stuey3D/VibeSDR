@@ -2129,6 +2129,17 @@ public:
     // FM de-emphasis time constant (seconds): 0 = off, 50e-6 (EU/UK), 75e-6 (US).
     // Applies to WFM and NFM. Takes effect on the next tune/rebuild.
     void setDeemphasis(double tauSec) { deempTau_ = tauSec; dirty_ = true; }
+    /** ★★★ NFM VOICE vs RAW. Voice (the default) band-limits NFM audio to 300 Hz - 3 kHz, as every
+     *  NFM radio does; Raw is the flat discriminator output, unchanged, for external decoders.
+     *  Stuart, 2026-09-27, A/B on his own recording of a 2 m repeater: the 67 Hz CTCSS tone he had
+     *  been hearing as "ground hum" goes entirely, and the band-limited version "sounds better and
+     *  actually would maybe make the noise when no signal nicer to tolerate as NFM is harsh". We had
+     *  NO audio filtering on NFM at all -- DC removal and an optional de-emphasis, nothing else.
+     *  ★ Raw must stay EXACTLY the old path: pagers (POCSAG) and 9600-baud packet need response
+     *    down to near DC, and a 300 Hz high-pass would break them silently.
+     *  ★ Live, no rebuild: the filters are designed on the DSP thread when first needed. */
+    void setNfmVoice(bool on) { nfmVoice_.store(on, std::memory_order_relaxed); }
+    bool nfmVoice() const { return nfmVoice_.load(std::memory_order_relaxed); }
     /** ★ RAW IQ OUT: the channel rate must be at least this (Hz) so the consumer's rate can be
      *  resampled out of it. 0 = no constraint. Rebuilds the chain (same discipline as dirty_). */
     void setIqMinRate(double hz) { iqMinRate_ = hz; dirty_ = true; }
@@ -2603,6 +2614,20 @@ private:
             a2 = (float)((1.0 - alpha) / a0);
             x1 = x2 = y1 = y2 = 0.0f;
         }
+        /** High-pass section (RBJ) -- the NFM voice filter's CTCSS cut. Butterworth Q per section,
+         *  as designLp. */
+        void designHp(double fs, double f0, double q) {
+            if (!(fs > 0.0) || !(f0 > 0.0) || f0 >= fs * 0.5) { b0 = b1 = b2 = a1 = a2 = 0; return; }
+            const double w0 = 2.0 * M_PI * f0 / fs;
+            const double c = std::cos(w0), alpha = std::sin(w0) / (2.0 * q);
+            const double a0 = 1.0 + alpha;
+            b0 = (float)((1.0 + c) * 0.5 / a0);
+            b1 = (float)(-(1.0 + c) / a0);
+            b2 = b0;
+            a1 = (float)(-2.0 * c / a0);
+            a2 = (float)((1.0 - alpha) / a0);
+            x1 = x2 = y1 = y2 = 0.0f;
+        }
         /** |H(e^{jw})|² of this section — for the noise integrals, computed once at design time. */
         double mag2(double w) const {
             const double c1 = std::cos(w), s1 = std::sin(w), c2 = std::cos(2 * w), s2 = std::sin(2 * w);
@@ -2787,6 +2812,12 @@ private:
     int    lastDecim_ = 1;                   // and its decimation factor
     bool   smoothBw_  = false;               // chain can absorb width changes in place
     std::atomic<double> deempTau_{50e-6};    // FM de-emphasis tau (0=off / 50us / 75us)
+    /* ★ NFM voice filter -- see setNfmVoice. 6th-order Butterworth each way: UK repeater tones run
+     *   67-118.8 Hz, and 6th order puts even 118.8 Hz ~48 dB down (4th order: ~32). Designed lazily
+     *   at the rate the mono chain actually runs at; `nfmFiltFs_` 0 = not designed. */
+    std::atomic<bool> nfmVoice_{true};
+    EyeBiquad nfmHp_[3], nfmLp_[3];
+    double nfmFiltFs_ = 0.0;
     // WFM RDS
     RdsDemod rdsDemod_;
     std::vector<float> ref57Buf_, ref57qBuf_, bitClkBuf_;

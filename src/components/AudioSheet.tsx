@@ -346,6 +346,10 @@ export interface AudioSheetProps {
   /** ★ The audio-menu NOISE BLANKER (VibeServer, every mode but WFM) — the web's nbxBtn. */
   nbx?:   boolean;
   onNbx?: (on: boolean) => void;
+  /** ★ NFM audio — true = VOICE (300 Hz-3 kHz), false = RAW. The web's nfmVoiceBtn. Passed only in
+   *  NFM, on a server that has reported the setting. */
+  nfmVoice?:   boolean;
+  onNfmVoice?: (on: boolean) => void;
 
   // Recording
   recording?:   boolean;
@@ -445,7 +449,7 @@ export interface AudioSheetProps {
 
 export default function AudioSheet({
   visible, onClose, onDismiss, serverType = 'ubersdr', signalMode = 'smeter', meterBus, isLocal = false, recordingOnly = false,
-  nr = false, onNr, nb = false, onNb, nbx = false, onNbx,
+  nr = false, onNr, nb = false, onNb, nbx = false, onNbx, nfmVoice = true, onNfmVoice,
   recording = false, onRec, recSeconds = 0, onRecordings,
   snrSquelch = -999, onSnrSquelch,
   localSquelch = -100, onLocalSquelch,
@@ -661,6 +665,25 @@ export default function AudioSheet({
                 <Text style={{ color: nbx ? '#000' : C.muted,
                                fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
                   {nbx ? 'ON' : 'OFF'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* ★ NFM AUDIO — VOICE is how an NFM radio sounds (300 Hz-3 kHz: no CTCSS tone, softer
+              hiss); RAW is the flat output for an external decoder that needs the low end. */}
+          {onNfmVoice && (
+            <View style={st.bwRow}>
+              <Text style={[st.bwLabel, { width: 78 }]}>NFM AUDIO</Text>
+              <View style={{ flex: 1 }} />
+              <TouchableOpacity onPress={() => onNfmVoice?.(!nfmVoice)} hitSlop={8}
+                accessibilityLabel={nfmVoice ? 'NFM audio: voice filtered. Tap for raw.' : 'NFM audio: raw. Tap for voice filtered.'}
+                style={{ paddingHorizontal: 16, paddingVertical: 4, borderRadius: 6,
+                         backgroundColor: nfmVoice ? C.gold : 'transparent',
+                         borderWidth: 1, borderColor: nfmVoice ? C.gold : C.muted }}>
+                <Text style={{ color: nfmVoice ? '#000' : C.muted,
+                               fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
+                  {nfmVoice ? 'VOICE' : 'RAW'}
                 </Text>
               </TouchableOpacity>
             </View>

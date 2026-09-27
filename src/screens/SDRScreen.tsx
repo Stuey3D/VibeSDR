@@ -1093,6 +1093,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [fmCeq, setFmCeq] = useState(true);
   const [fmNb,  setFmNb]  = useState(true);
   const [fmNbx, setFmNbx] = useState(false);   // the audio-menu NOISE BLANKER (every mode but WFM); off until chosen, as the web
+  /* ★★★ NFM AUDIO: VOICE (300 Hz-3 kHz, the default) or RAW (flat, for external decoders). Stuart,
+   *  2026-09-27: we had no NFM audio filtering at all, so a repeater's 67 Hz CTCSS tone played as
+   *  "ground hum" and the hiss between overs was harsh. The row appears only once the server has
+   *  REPORTED the setting (`nfmVoiceKnown`) — an older server has no filter, and a button that does
+   *  nothing reads as a broken feature (AGENTS.md). */
+  const [fmNfmVoice, setFmNfmVoice] = useState(true);
+  const [nfmVoiceKnown, setNfmVoiceKnown] = useState(false);
   const [hwSquelch,     setHwSquelch]     = useState(-100);   // audio squelch dBFS (-100 = off)
   const [hwNrLevel,     setHwNrLevel]     = useState(0);      // audio NR strength 0=off..20 (÷15 → native 0..1.33)
   const [hwNotch,       setHwNotch]       = useState(false);  // auto notch — LOCAL (shim)
@@ -1177,6 +1184,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         wsp: bl(prefs.fmNr, true),   ims: bl(prefs.fmIms, true),
         ceq: bl(prefs.fmCeq, true),  nb:  bl(prefs.fmNb, true),
         nbx: bl(prefs.fmNbx, false), autobw: bl(prefs.fmAutoBw, true),
+        nfmVoice: bl(prefs.fmNfmVoice, true),
       };
       /* ★★★ KEPT IN A REF, NOT ONLY IN STATE, BECAUSE hwinfo WILL OVERWRITE THE STATE. onFmDsp
        *  paints these six from what the RADIO reports — deliberately, they are sticky and shared —
@@ -1194,6 +1202,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       setFmNr(fmWant.wsp);   setFmIms(fmWant.ims);
       setFmCeq(fmWant.ceq);  setFmNb(fmWant.nb);
       setFmNbx(fmWant.nbx);  setFmAutoBw(fmWant.autobw);
+      setFmNfmVoice(fmWant.nfmVoice);
       setHwAutoGain(auto); setHwPpm(ppm); setHwSampleRate(rate);
       setHwBiasTee(bias); setHwAgc(agc); setHwDirectSamp(ds); setHwDeemph(deemph); setHwStereo(stereo); setHwSquelch(sql); setHwNrLevel(nrLvl); setHwNotch(notch);
       if (typeof prefs.gain === 'number') setHwGain(prefs.gain);
@@ -1309,6 +1318,7 @@ export default function SDRScreen({ route, navigation }: Props) {
        *    session detail — exactly like de-emphasis beside them. NR level and auto-notch stay out
        *    deliberately (see below): those are a response to conditions right now. */
       fmNr: fmNr, fmIms: fmIms, fmCeq: fmCeq, fmNb: fmNb, fmNbx: fmNbx, fmAutoBw: fmAutoBw,
+      fmNfmVoice: fmNfmVoice,
       /* ★★★ AND NOW NR AND THE AUTO-NOTCH TOO — because they are VISIBLE. They were deliberately
        *  session-scoped, and the reason was sound: "if a user forgets theyve enabled it they dont
        *  know its on and wonders why the audio sounds funny" (Stuart, 2026-09-24). NR artefacts do
@@ -1329,7 +1339,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       aspGainMode: aspGainMode,
     })).catch(() => {});
   }, [isLocal, localHwKey, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwStereo, canConvert, converter, hwSquelch, hwAutoDs, hwDsBelowHz,
-      fmNr, fmIms, fmCeq, fmNb, fmNbx, fmAutoBw, hwNrLevel, hwNotch, aspGainMode]);
+      fmNr, fmIms, fmCeq, fmNb, fmNbx, fmAutoBw, fmNfmVoice, hwNrLevel, hwNotch, aspGainMode]);
 
   // VibeServer (remote shim): hardware controls ride the WS to the serving device
   // instead of the (non-existent) local dongle. localHost set = remote session.
@@ -1406,6 +1416,7 @@ export default function SDRScreen({ route, navigation }: Props) {
          *   fixed and the checker actually ran, said so). Direct sampling is a normal listener
          *   control on an RTL below 24 MHz; nbx is the HF noise blanker. */
         setHwDirectSampling?: (v: 0 | 1 | 2) => void; setNoiseBlankerHf?: (on: boolean) => void;
+        setNfmVoice?: (on: boolean) => void;
         setHwAutoDirectSampling?: (on: boolean, belowHz?: number) => void;
         setWeakProc?: (on: boolean) => void; setIms?: (on: boolean) => void;
         setCeq?: (on: boolean) => void; setNoiseBlanker?: (on: boolean) => void;
@@ -1550,12 +1561,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     setWeakProc?: (on: boolean) => void; setIms?: (on: boolean) => void;
     setCeq?: (on: boolean) => void; setNoiseBlanker?: (on: boolean) => void;
     setNoiseBlankerHf?: (on: boolean) => void; setAutoBw?: (on: boolean) => void;
+    setNfmVoice?: (on: boolean) => void;
   } | null), []);
   /* ★ What storage remembered for this radio, and whether it has been stated to it yet on this
    *  connection. Both live outside React state because hwinfo overwrites the state — see the
    *  restore that fills this in. */
   const fmWantRef = useRef<{ wsp: boolean; ims: boolean; ceq: boolean; nb: boolean;
-                             nbx: boolean; autobw: boolean } | null>(null);
+                             nbx: boolean; autobw: boolean; nfmVoice: boolean } | null>(null);
   const fmWantSent = useRef(false);
   /** ★★★ THE AIRSPY'S GAIN MODE, REMEMBERED — 0 sensitive, 1 linear, 2 free.
    *
@@ -1586,6 +1598,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onFmNbx = useCallback((on: boolean) => {
     setFmNbx(on); fmClient()?.setNoiseBlankerHf?.(on);
   }, [fmClient]);
+  const onFmNfmVoice = useCallback((on: boolean) => {
+    setFmNfmVoice(on); fmClient()?.setNfmVoice?.(on);
+  }, [fmClient]);
   const onFmNb = useCallback((on: boolean) => {
     setFmNb(on); fmClient()?.setNoiseBlanker?.(on);
   }, [fmClient]);
@@ -1612,8 +1627,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     const c = fmClient();
     c?.setWeakProc?.(want.wsp); c?.setIms?.(want.ims); c?.setCeq?.(want.ceq);
     c?.setNoiseBlanker?.(want.nb); c?.setNoiseBlankerHf?.(want.nbx); c?.setAutoBw?.(want.autobw);
+    c?.setNfmVoice?.(want.nfmVoice);
     setFmNr(want.wsp); setFmIms(want.ims); setFmCeq(want.ceq);
-    setFmNb(want.nb); setFmNbx(want.nbx); setFmAutoBw(want.autobw);
+    setFmNb(want.nb); setFmNbx(want.nbx); setFmAutoBw(want.autobw); setFmNfmVoice(want.nfmVoice);
   }, [isLocal, vibeFmDsp, fmClient, route.params.localHost]);
 
   // Mirrored into a ref so the per-frame meter emit can decide whether the gate is closed without
@@ -4846,6 +4862,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         //   nothing leaves the button where it is rather than being read as "off".
         if (typeof st.autobw === 'boolean') setFmAutoBw(st.autobw);
         if (typeof st.nbx === 'boolean') setFmNbx(st.nbx);
+        if (typeof st.nfmVoice === 'boolean') { setNfmVoiceKnown(true); setFmNfmVoice(st.nfmVoice); }
       },
       /* ★★ PUSHED ON CHANGE, plus once inside the connect snapshot — so a listener joining a hot box
        *  learns about it immediately rather than at the next change. Stored as-is apart from the
@@ -10281,6 +10298,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         fmCeq={fmCeq} onFmCeq={vibeFmDsp ? onFmCeq : undefined}
         fmNb={fmNb}   onFmNb={vibeFmDsp ? onFmNb : undefined}
         nbx={fmNbx}   onNbx={vibeFmDsp ? onFmNbx : undefined}
+        nfmVoice={fmNfmVoice}
+        onNfmVoice={nfmVoiceKnown && (status.mode === 'nfm' || status.mode === 'fm') ? onFmNfmVoice : undefined}
         rawAudio={rawAudio}
         onRawAudio={rawAudioPolicy === 'choice' ? setRawAudio : undefined}
         iq={iqState}

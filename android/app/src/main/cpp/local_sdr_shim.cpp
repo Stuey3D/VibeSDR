@@ -2738,6 +2738,10 @@ static std::atomic<int>      g_tunerBwHz{0};
  *  filter opens to cover wherever you are looking: "the zoom aware IF filter needs to automatically
  *  widen when a user unlocks the view from the VFO and pans the spectrum across." */
 static std::atomic<bool>     g_tunerBwAuto{true};
+/** ★ NFM Voice (300 Hz-3 kHz) vs Raw on the SHARED VFO — per-listener DSP keeps its own on
+ *  ClientDsp::nfmVoice. Up here, not on g_dsp, because the status JSON reports it long before g_dsp
+ *  is declared. Remembered with no radio, like de-emphasis. */
+static std::atomic<bool>     g_nfmVoiceShared{true};
 /* ══ AUTO BANDWIDTH — the TEF6686's trick, in the DEMODULATOR ═══════════════════════════════════
  * ★★★ STUART FOUND THIS ON A REAL TEF6686 (2026-08-24): "If you disable auto bandwidth it becomes
  *     really messy and noisy, but with it on the bandwidth is always adjusting dynamically with
@@ -6525,6 +6529,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         float             nrStrength = 0.5f;
         double            deempTau = -1.0;      // <0 = never set; leave the pipeline's own default
+        std::atomic<bool> nfmVoice{true};       // ★ NFM Voice (300 Hz-3 kHz) vs Raw — re-applied on every rebuild
         std::atomic<bool> stereoOn{true};
         // ★★★ THE FOUR BROADCAST-FM TREATMENTS, PER LISTENER. Held HERE and not only on the
         //     pipeline, because a mode or width change BUILDS A NEW RxPipeline with fresh
@@ -7215,6 +7220,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     because it looks like it is working. Same reasoning as the RSP front end being
             //     re-applied after the AGC kick: whatever rebuilds must restore.
             if (c->deempTau >= 0) c->rx->setDeemphasis(c->deempTau);
+            c->rx->setNfmVoice(c->nfmVoice.load());
             c->rx->setStereoEnabled(c->stereoOn.load());
             // ★ And the four FM treatments, for exactly the reason above. Adding a per-listener
             //   control without adding it here is how it comes to look like it is working.
@@ -12365,6 +12371,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (jsonNum(msg, "tau", tau) && me->rx) { me->deempTau = tau; me->rx->setDeemphasis(tau); }
                 return;
             }
+            if (type == "nfmvoice") {
+                // ★ Stored on the listener BEFORE it touches the pipeline: a mode change builds a new
+                //   RxPipeline, and the rebuild re-applies this — see the note there.
+                const bool on = jsonOn(msg);
+                me->nfmVoice.store(on);
+                if (me->rx) me->rx->setNfmVoice(on);
+                return;
+            }
             if (type == "stereo") {
                 const bool on = jsonOn(msg);
                 me->stereoOn.store(on);
@@ -14154,6 +14168,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             rdsxRecompute();                // see rdsxSocks: one listener's "off" is not everybody's
             return;
         }
+        if (type == "nfmvoice") {
+            if (!sharedGate("NFM voice filter")) return;
+            LocalSdrShim::instance().setNfmVoice(jsonOn(msg));
+            return;
+        }
         if (type == "deemph") {
             if (!sharedGate("de-emphasis")) return;
             // tau in SECONDS (0 = off, 50e-6 or 75e-6).
@@ -14710,6 +14729,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         j += std::string(",\"ceq\":") + (mine(&ClientDsp::ceqOn, ceqOn)      ? "true" : "false");
         j += std::string(",\"nb\":")  + (mine(&ClientDsp::nbOn,  nbOn)       ? "true" : "false");
         j += std::string(",\"nbx\":") + (mine(&ClientDsp::nbxOn, nbxOn)      ? "true" : "false");
+        // ★ REPORTED, so a client shows the NFM Voice/Raw control only on a server that has it —
+        //   an older one never states it, and a button that does nothing is worse than none.
+        j += std::string(",\"nfmvoice\":") + (mine(&ClientDsp::nfmVoice, g_nfmVoiceShared) ? "true" : "false");
         j += std::string(",\"notch\":") + (notchOn.load() ? "true" : "false");
         // ★★★ THE SAME BUG AS `nr`/`notch` ABOVE, AND THE FIX WAS LEFT HALF-DONE. That pair was
         //     added on 2026-07-28 because rendering our saved prefs showed NR OFF while it was
@@ -22257,6 +22279,7 @@ void LocalSdrShim::applyDesiredDsp(LocalSdrShim::Impl* impl) {
     impl->rx.setStereoEnabled(g_dsp.stereoOn.load());
     impl->deempTau = g_dsp.deempTau.load();
     impl->rx.setDeemphasis(impl->deempTau);
+    impl->rx.setNfmVoice(g_nfmVoiceShared.load());
     // ★ RSP controls, only when this radio IS an RSP and only what was actually chosen.
     if (impl->useSdrplay() && impl->sdrp) {
         if (g_dsp.rspLna.load()      >= 0)    impl->sdrp->setLnaState(g_dsp.rspLna.load());
@@ -28459,6 +28482,13 @@ void LocalSdrShim::setSampleRate(double rate) {
         impl->restarting.store(false);   // back to normal: a stop now really is an unplug
     }
     LOGI("sample rate: %.0f (actual %u) fft=%d tcp=%d", rate, actual, impl->fftSize, tcp);
+}
+void LocalSdrShim::setNfmVoice(bool on) {
+    std::lock_guard<std::mutex> life(g_lifecycle);
+    g_nfmVoiceShared.store(on);  // ★ remembered even if there is no radio yet
+    if (!p) return;
+    p->rx.setNfmVoice(on);       // live — no rebuild needed
+    LOGI("nfm audio: %s", on ? "voice (300 Hz-3 kHz)" : "raw");
 }
 void LocalSdrShim::setDeemphasis(double tau) {
     std::lock_guard<std::mutex> life(g_lifecycle);

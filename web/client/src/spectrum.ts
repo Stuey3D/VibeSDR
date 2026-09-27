@@ -420,6 +420,8 @@ export interface SpectrumCallbacks {
     nb: boolean;
     /** ★ The audio-menu NOISE BLANKER (every mode but WFM); undefined from a server without it. */
     nbx?: boolean;
+    /** ★ NFM audio: true = Voice (300 Hz-3 kHz), false = Raw; undefined from a server without it. */
+    nfmVoice?: boolean;
     /** ★ TEF-style automatic demodulator bandwidth, and the width it has settled on (Hz). */
     autobw?: boolean;
     autobwHz?: number;
@@ -1039,6 +1041,7 @@ export class SpectrumClient {
             ceq: msg.ceq !== false,
             nb: msg.nb !== false,
             nbx: typeof msg.nbx === 'boolean' ? msg.nbx : undefined,
+            nfmVoice: typeof msg.nfmvoice === 'boolean' ? msg.nfmvoice : undefined,
             // ★ Only forward what the server actually stated. `undefined` travels through as
             //   "no opinion" and the renderer leaves that control alone.
             /* ★★★ DECLARED IN THE TYPE IS NOT COPIED ON THE WIRE. `autobw` sat in this callback's
@@ -1542,6 +1545,8 @@ export class SpectrumClient {
   /** tau in seconds: 0 = off, 50e-6 or 75e-6. */
   setDeemph(tau: number) { this._send({ type: 'deemph', tau }); }
   setStereo(on: boolean) { this._send({ type: 'stereo', on }); }
+  /** NFM audio — true = Voice (300 Hz-3 kHz), false = Raw (flat, for external decoders). */
+  setNfmVoice(on: boolean) { this._send({ type: 'nfmvoice', on }); }
   /** FM weak-signal processing — high-blend + audio high-cut together. One switch because it is
    *  one treatment: A/B-ing half of it would not answer the question a DXer is asking. */
   setWeakProc(on: boolean) { this._send({ type: 'wsp', on }); }

@@ -2167,6 +2167,28 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc) {
                 nd = audioLpf_->process(demodBuf_.data(), nc, lpfBuf_.data());
                 audioIn = lpfBuf_.data();
             }
+            // ★★★ NFM VOICE: 300 Hz - 3 kHz, 6th order each way (see setNfmVoice). Raw skips this and
+            //     is byte-for-byte the old path. Re-designed on a rate change or on switching back on,
+            //     which also clears the state, so a stale tail never plays into fresh audio.
+            if (mode_ == Mode::NFM && nfmVoice_.load(std::memory_order_relaxed) && audFs_ > 0.0 && nd > 0) {
+                if (nfmFiltFs_ != audFs_) {
+                    static const double kQ6[3] = { 0.5176, 0.7071, 1.9319 };
+                    for (int k = 0; k < 3; ++k) {
+                        nfmHp_[k].designHp(audFs_, 300.0, kQ6[k]);
+                        nfmLp_[k].designLp(audFs_, 3000.0, kQ6[k]);
+                    }
+                    nfmFiltFs_ = audFs_;
+                }
+                float* w = const_cast<float*>(audioIn);
+                for (int i = 0; i < nd; ++i) {
+                    float v = w[i];
+                    for (int k = 0; k < 3; ++k) v = nfmHp_[k].step(v);
+                    for (int k = 0; k < 3; ++k) v = nfmLp_[k].step(v);
+                    w[i] = v;
+                }
+            } else {
+                nfmFiltFs_ = 0.0;   // ★ next time Voice runs it starts from a clean design
+            }
             // ★★ AND THE SAME CUT IN MONO — this is the path Stuart was listening on when he found
             //    the hiss that high-blend could not reach. `audioIn` may be lpfBuf_ or demodBuf_
             //    depending on whether the 15 kHz filter ran, so it is written through the pointer.

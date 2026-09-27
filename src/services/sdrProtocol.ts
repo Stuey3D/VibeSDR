@@ -293,7 +293,9 @@ export interface SDRCallbacks {
    *  opinion" is not "off". The web client learned that the hard way: `!!msg.autobw` turned a
    *  missing field into a false one and pinned its AUTO BW button off for ever. */
   onFmDsp?:     (s: { wsp: boolean; ims: boolean; ceq: boolean; nb: boolean;
-                      autobw?: boolean; nbx?: boolean }) => void;
+                      autobw?: boolean; nbx?: boolean;
+                      /** ★ NFM Voice (true) vs Raw; undefined from a server without the filter. */
+                      nfmVoice?: boolean }) => void;
   /** ★★★ DAB, and it is a VIBESERVER-ONLY callback. `s` is the whole measured state of the
    *  multiplex (see DabState — every field is MEASURED, nothing inferred); null means DAB has
    *  ended, and `err` carries the server's refusal when it could not start. */

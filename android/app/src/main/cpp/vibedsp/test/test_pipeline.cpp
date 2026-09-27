@@ -138,6 +138,43 @@ static void testNFM() {
     checkTone(runPipe(iq, fs, fc, RxPipeline::Mode::NFM, 12000.0), fm, "NFM tone");
 }
 
+// ★★★ NFM VOICE vs RAW (2026-09-27). Voice must take the CTCSS tone and the hiss out and leave the
+//     voice alone; Raw must be exactly the old flat path, because pager and 9600-baud decoders
+//     depend on it. A 67 Hz tone at 500 Hz deviation is the repeater Stuart recorded.
+static void testNfmVoice() {
+    std::printf("-- RxPipeline (NFM voice filter vs raw) --\n");
+    const double fs = 1200000.0, fc = 150000.0;
+    const int Ni = 1 << 21;
+    std::vector<cf32> iq(Ni);
+    double ph = 0.0;
+    for (int i = 0; i < Ni; ++i) {
+        const double t = i / fs;
+        const double inst = fc + 500.0  * std::cos(2.0 * M_PI * 67.0   * t)
+                               + 2000.0 * std::cos(2.0 * M_PI * 1000.0 * t)
+                               + 1000.0 * std::cos(2.0 * M_PI * 5000.0 * t);
+        ph += 2.0 * M_PI * inst / fs;
+        iq[i] = cf32((float)std::cos(ph), (float)std::sin(ph));
+    }
+    auto run = [&](bool voice) {
+        Cap cap; RxPipeline pipe;
+        RxPipeline::Callbacks cb; cb.ctx = &cap; cb.spectrum = onSpec; cb.audio = onAud;
+        pipe.start(fs, 1024, 20.0, 48000, cb);
+        pipe.setNfmVoice(voice);
+        pipe.setTune(fc, RxPipeline::Mode::NFM, 12500.0);
+        for (int o = 0; o < Ni; o += 65536) pipe.feed(iq.data() + o, std::min(65536, Ni - o));
+        return cap.audio;
+    };
+    const auto raw = run(false), voice = run(true);
+    const float r67 = dbAt(raw, 67.0), r1k = dbAt(raw, 1000.0), r5k = dbAt(raw, 5000.0);
+    const float v67 = dbAt(voice, 67.0), v1k = dbAt(voice, 1000.0), v5k = dbAt(voice, 5000.0);
+    std::printf("  raw   : 67 Hz %6.1f  1 kHz %6.1f  5 kHz %6.1f dB\n", r67, r1k, r5k);
+    std::printf("  voice : 67 Hz %6.1f  1 kHz %6.1f  5 kHz %6.1f dB\n", v67, v1k, v5k);
+    check(r67 > r1k - 20.0f, "raw keeps the 67 Hz tone (decoders need the low end)");
+    check(r67 - v67 >= 40.0f, "voice cuts 67 Hz CTCSS by >= 40 dB");
+    check(r5k - v5k >= 15.0f, "voice cuts 5 kHz by >= 15 dB");
+    check(std::abs(r1k - v1k) <= 1.0f, "voice leaves 1 kHz within 1 dB");
+}
+
 static void testSSB() {
     std::printf("-- RxPipeline (SSB USB) --\n");
     const double fs = 1200000.0, fc = 80000.0, fa = 1000.0;
@@ -720,6 +757,7 @@ int main() {
     testResampler();
     testPipeline();
     testNFM();
+    testNfmVoice();
     testSSB();
     testWFM();
     testWFMStereo();

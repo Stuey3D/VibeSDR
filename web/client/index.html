@@ -3997,6 +3997,16 @@ select.btn { padding: 6px 8px; }
     <label>NOISE BLANKER</label>
     <div class="seg"><button class="btn" id="nbxBtn" title="Impulse noise blanker on your own channel — the crackle of distant lightning, power-line hash, ignition, thermostats, switch-mode supplies. Removes the moments an impulse occupies rather than filtering continuously; on a clean signal it blanks nothing. Not for broadcast FM, which has its own NB below. The owner may also run a wider one on the whole receiver.">OFF</button></div>
   </div>
+  <!-- ★★★ NFM AUDIO: VOICE or RAW. Voice band-limits to 300 Hz - 3 kHz as every NFM radio does —
+       the repeater's CTCSS tone (the "hum" Stuart heard on 2 m) goes, and the hiss between overs is
+       much easier to live with. Raw is the flat discriminator output for an external decoder
+       (pagers, 9600-baud packet) that needs the low end. Shown only in NFM, and only once the server
+       has REPORTED the setting — an older server has no such filter, and a button that does nothing
+       would read as a broken feature. -->
+  <div class="mrow" id="nfmVoiceRow" hidden>
+    <label>NFM AUDIO</label>
+    <div class="seg"><button class="btn on" id="nfmVoiceBtn" title="VOICE: 300 Hz to 3 kHz, as a normal NFM radio sounds — removes the repeater's sub-audible CTCSS tone and softens the hiss. RAW: the flat, unfiltered demodulator output, for piping into an external decoder (pagers, 9600-baud packet) that needs the low frequencies.">VOICE</button></div>
+  </div>
   <div class="msub">BROADCAST FM</div>
   <div class="mrow">
     <label>FM DE-EMPHASIS</label>

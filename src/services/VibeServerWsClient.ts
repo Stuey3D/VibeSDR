@@ -772,6 +772,8 @@ export abstract class VibeServerWsClient {
    *  row). The web client has had it since the listener NB landed; the app did not (Stuart,
    *  2026-09-15: "noise blanker missing"). Same wire word as the web: `nbx`. */
   setNoiseBlankerHf(on: boolean) { this._sendCtl({ type: 'nbx', on }); }
+  /** ★ NFM audio: true = Voice (300 Hz-3 kHz), false = Raw. Same wire word as the web: `nfmvoice`. */
+  setNfmVoice(on: boolean) { this._sendCtl({ type: 'nfmvoice', on }); }
   /** ★ Direct sampling on a REMOTE RTL — the web's dsSeg. The app's handler went only to its own
    *  local dongle, so on a networked server the control did nothing. 0 off, 1 I, 2 Q. */
   setHwDirectSampling(v: 0 | 1 | 2) { this._sendCtl({ type: 'directSampling', value: v }); }
@@ -2407,12 +2409,13 @@ export abstract class VibeServerWsClient {
       //     that HAS the treatment but does not talk about it, so default ON rather than OFF.
       if (typeof msg.wsp === 'boolean' || typeof msg.ims === 'boolean'
           || typeof msg.ceq === 'boolean' || typeof msg.nb === 'boolean'
-          || typeof msg.autobw === 'boolean') {
+          || typeof msg.autobw === 'boolean' || typeof msg.nfmvoice === 'boolean') {
         this.callbacks.onFmDsp?.({
           wsp: msg.wsp !== false, ims: msg.ims !== false,
           ceq: msg.ceq !== false, nb: msg.nb !== false,
           autobw: typeof msg.autobw === 'boolean' ? msg.autobw : undefined,
           nbx: typeof msg.nbx === 'boolean' ? msg.nbx : undefined,
+          nfmVoice: typeof msg.nfmvoice === 'boolean' ? msg.nfmvoice : undefined,
         });
       }
       if (Array.isArray(msg.gains)) this.callbacks.onHwGains?.(msg.gains as number[]);

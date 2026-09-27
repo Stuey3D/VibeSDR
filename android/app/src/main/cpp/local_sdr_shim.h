@@ -828,6 +828,7 @@ public:
     bool isAirspy() const;        // Airspy R2 / Mini — preset gain curves, its own stage AGCs
     void setFftRate(double fps);          // LIVE spectrum frame rate (power saving); audio unaffected
     void setDeemphasis(double tau);       // FM de-emphasis time constant (0=off, 50e-6, 75e-6)
+    void setNfmVoice(bool on);            // NFM audio: true = Voice (300 Hz-3 kHz), false = Raw (flat)
     void setSquelch(bool on, float db);   // power-based audio squelch (dBFS)
     void setNR(bool on);                  // audio noise reduction on/off
     void setNrStrength(float s);          // NR aggressiveness 0..1.4 (>1 = over-subtraction)

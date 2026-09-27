@@ -1005,6 +1005,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       noteFrame();
       wf!.push(bins, centerHz, bwHz);
       updateSignal(bins, centerHz, bwHz);
+      syncNfmVoiceRow();
       // ★ Auto squelch's reference: how far the channel stands above its empty neighbours on THIS
       //   view (squelchNeighbours.ts). Only worked out while auto is on — it is a scan of the frame.
       if (sqlAuto && spec) {
@@ -1414,6 +1415,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       setToggleTo('imsBtn', s.ims, 'ims', (on) => on ? 'IMS ON' : 'IMS OFF');
       setToggleTo('ceqBtn', s.ceq, 'ceq', (on) => on ? 'CEQ ON' : 'CEQ OFF');
       setToggleTo('nbBtn',  s.nb,  'nb',  (on) => on ? 'NB ON'  : 'NB OFF');
+      if (typeof s.nfmVoice === 'boolean') {
+        nfmVoiceKnown = true;   // ★ the row may now appear (in NFM) — see syncNfmVoiceRow
+        setToggleTo('nfmVoiceBtn', s.nfmVoice, 'nfmVoice', (on) => on ? 'VOICE' : 'RAW');
+      }
       if (typeof s.nbx === 'boolean') {
         setHidden($('nbxRow'), false);
         setToggleTo('nbxBtn', s.nbx, 'nbx', (on) => on ? 'ON' : 'OFF');
@@ -7118,6 +7123,16 @@ function buildControls() {
  *  tree they walk includes the open decoder box (~4,800 nodes). That is what warmed Stuart's
  *  iPhone. Stuart: "I want everything to be super efficient." */
 function setHidden(el: HTMLElement | null, v: boolean) { if (el && el.hidden !== v) el.hidden = v; }
+
+/** ★ Has the server REPORTED the NFM Voice/Raw setting? Only then does the row exist for it. */
+let nfmVoiceKnown = false;
+/** ★ NFM AUDIO is an NFM control: shown in NFM on a server that has it, hidden everywhere else.
+ *  Checked on every frame rather than hung on the mode-change sites — the same reason the squelch
+ *  reseed is (one of those sites, or a shared-dial retune, is the one that gets missed). */
+function syncNfmVoiceRow() {
+  const m = spec?.mode;
+  setHidden(document.getElementById('nfmVoiceRow'), !(nfmVoiceKnown && (m === 'nfm' || m === 'fm')));
+}
 function setText(el: Element | null, s: string) { if (el && el.textContent !== s) el.textContent = s; }
 function setStyle(el: HTMLElement | null, prop: string, v: string) { if (el && el.style.getPropertyValue(prop) !== v) el.style.setProperty(prop, v); }
 function setClass(el: Element | null, c: string, on: boolean) { if (el && el.classList.contains(c) !== on) el.classList.toggle(c, on); }
@@ -11771,6 +11786,12 @@ function buildMenu() {
   }, 'nb', true);
   // ★ The audio-menu NOISE BLANKER — its own state, every mode but WFM. Off until chosen.
   toggle('nbxBtn', (on) => { spec!.setNoiseBlankerHf(on); }, 'nbx', false, false);
+  // ★ The listener's own choice, remembered and restored like stereo. Voice is the default.
+  toggle('nfmVoiceBtn', (on) => {
+    $('nfmVoiceBtn').textContent = on ? 'VOICE' : 'RAW';
+    spec!.setNfmVoice(on);
+  }, 'nfmVoice', true);
+  $('nfmVoiceBtn').textContent = $('nfmVoiceBtn').classList.contains('on') ? 'VOICE' : 'RAW';
   // ★★ DEFAULTS ON, like the other four. It is the TEF6686's own behaviour and the reason Stuart
   //    went looking for it: "if you disable auto bandwidth it becomes really messy and noisy". It
   //    declines to act on anything that is not FM broadcast and on anything with no pilot, so it
@@ -11949,6 +11970,7 @@ function pushSettingsToServer() {
   const ims = bool('ims');          if (ims !== undefined) spec.setIms(ims);
   const ceq = bool('ceq');          if (ceq !== undefined) spec.setCeq(ceq);
   const nb = bool('nb');            if (nb !== undefined) spec.setNoiseBlanker(nb);
+  const nfmV = bool('nfmVoice');    if (nfmV !== undefined) spec.setNfmVoice(nfmV);
   const deemph = num('deemph');     if (deemph !== undefined) spec.setDeemph(deemph * 1e-6);
   // ★★★ HARDWARE SETTINGS ARE THE OWNER'S, AND ONLY AN ADMIN MAY SEND THEM. Everything above this
   //     line is THIS listener's own processing — squelch, noise reduction, de-emphasis — and is
