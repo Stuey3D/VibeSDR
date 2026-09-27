@@ -836,17 +836,29 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
              the AGC because a client re-asserted its stored value, this one because it had no
              config field at all and lived only in the running process. -->
         <label class="hide" id="tunerBwAutoRow">
-          <span class="lbl">IF filter follows the zoom &mdash; RTL-SDR</span>
+          <span class="lbl">IF filter &mdash; RTL-SDR</span>
           <select id="tunerBwAuto">
-            <option value="0">Off &mdash; the filter stays as wide as the sample rate</option>
-            <option value="1">On &mdash; narrows as a listener zooms in</option>
+            <option value="0">Wide open &mdash; the whole capture reaches the mixer</option>
+            <option value="1">Selective &mdash; about 60% of the sample rate (recommended)</option>
           </select>
+          <!-- ★★★ THE LABELS USED TO SAY "follows the zoom" / "narrows as a listener zooms in",
+               and on 2026-09-27 that stopped being true: the filter is now a FIXED width sized
+               from the sample rate and the view does not move it at all. Copy that describes a
+               behaviour the code no longer has is worse than no copy, because an owner picks
+               from it (AGENTS.md: when a control moves, fix the copy that says where it is).
+               ★★ And the old "Off" was quietly the WORST setting, while reading like the safe,
+               do-nothing one. Naming it "Wide open" says what it costs. -->
           <div class="note">The R820T tuner has a real IF filter, and it is the only selectivity
-            ahead of the mixer. Narrowing it as someone zooms into a station keeps strong
-            neighbours out of the front end, which is where cross-modulation is made &mdash; it
-            widens again automatically when they zoom out. Only for a FREE-TUNING receiver: on a
-            locked-frequency one you choose selectivity with the SAMPLE RATE instead, once, at
-            setup.</div></label>
+            ahead of the mixer. <b>Selective</b> keeps it at about 60% of the sample rate &mdash;
+            1.2&nbsp;MHz at 2.048&nbsp;MS/s, 1.5&nbsp;MHz at 2.4 &mdash; so neighbouring
+            transmitters stay out of the front end, where cross-modulation is made. Measured on an
+            RTL-SDR Blog V4 at unchanged gain, that is worth about <b>19&nbsp;dB of
+            signal-to-noise</b>: a band with clean gaps between stations instead of one filled in.
+            <b>Wide open</b> hands the mixer the entire capture and is only worth choosing if you
+            are recording full-rate raw IQ and need every hertz of it &mdash; a full-rate IQ
+            consumer opens the filter by itself anyway, for as long as it runs.
+            <br>The filter no longer follows the zoom. It used to, and widening it reset the gain
+            loop and clicked the audio on AM every time the view moved.</div></label>
         <label class="hide" id="gainAgcLockRow" class="row">
           <input type="checkbox" id="gainAgcLock">
           <span class="lbl">Lock VibeAGC on</span>

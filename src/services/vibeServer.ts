@@ -137,7 +137,13 @@ export type VibeServerConfig = {
   /** ★ RTL gain automation. Protection defaults ON (it can only prevent clipping); the AGC defaults
    *  OFF, because it may raise the gain above the owner's figure. See VibeServerBoot. */
   rtlAgc?: boolean;
-  /** ★ RTL only: the tuner IF filter narrows as a listener zooms in. */
+  /** ★ RTL only: the tuner's IF filter is held SELECTIVE — about 60 % of the sample rate
+   *  (1.2 MHz at 2.048 MS/s), so neighbouring transmitters stay out of the mixer.
+   *  ★★ The name is historical: it once meant "the filter follows the zoom", and it stopped
+   *  meaning that on 2026-09-27 — the width is fixed now and the view does not move it. Worth
+   *  19 dB of SNR on a V4, measured at unchanged gain. False = wide open, i.e. the whole capture
+   *  reaches the mixer, which only suits a full-rate raw IQ recording.
+   *  ✗ Do not "correct" this to the old wording from the field name. */
   tunerBwAuto?: boolean;
   /** Reverse proxies whose X-Forwarded-For we believe — required behind a tunnel, or every
    *  visitor arrives as 127.0.0.1 and the limits and ban list cannot tell anyone apart. */
