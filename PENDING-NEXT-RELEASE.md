@@ -398,6 +398,15 @@ to go looking for a fault that is not there, which is worse than not mentioning 
 > most low-end 32-bit hosts cannot sustain more than 10 fps anyway, so the rate is being left
 > alone rather than risking the audio. 64-bit servers are unaffected and honour the setting
 > exactly.
+>
+> For scale: OpenWebRX defaults to 9 fps and does not interpolate at all.
+
+★★ **THE OWRX COMPARISON IS THE MOST USEFUL LINE IN THE NOTE**, because it gives the reader a
+reference they already trust. Stuart, 2026-09-27: *"9fps is the OWRX default anyway and they dont
+interpolate at all."* So an armhf VibeServer at 7.7 fps WITH interpolation is not a degraded
+receiver — it is roughly what a large part of the hobby already runs, presented better.
+▶ ★ Attributed to Stuart, who runs an OpenWebRX box; not independently measured here. If it ever
+goes into user-facing copy verbatim, check the current OWRX default rather than trusting this line.
 
 ### MEASURED, so the claim can be defended (2026-09-27, passive frame count over 20 s)
 | box | arch | configured | delivered |
