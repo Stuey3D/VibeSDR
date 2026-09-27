@@ -5684,6 +5684,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 static const int kRungs[] = { 350000, 500000, 700000, 1000000,
                                               1400000, 2000000, 2800000, 4000000 };
                 for (int r : kRungs) if (want <= r) { want = r; break; }
+                /* ★★★ BUT AN OWNER'S CEILING MUST ROUND *DOWN*, OR IT IS NOT A CEILING.
+                 *  Rounding up is right for a VIEW-driven width — see above, rounding down would
+                 *  clip the very span the number was computed to cover. It is wrong for a figure
+                 *  an owner typed as a limit: Stuart set FM to 1.2 MHz, the ladder rounded it up
+                 *  to the 1400 rung, and the readout showed "IF 1400 kHz 🔒" — a padlock on a
+                 *  width WIDER than the one he asked for. "I did choose 1.2MHz band limit and its
+                 *  showing 1.4MHz" (2026-09-27).
+                 *  ★★ So step back down to the largest rung that HONOURS the ceiling. If the ceiling
+                 *     is below every rung the narrowest one stands — the hardware cannot do better,
+                 *     and a filter narrower than the ladder's floor does not exist to be chosen. */
+                if (ownerIfCap > 0 && want > ownerIfCap) {
+                    int best = 0;
+                    for (int r : kRungs) if (r <= ownerIfCap && r > best) best = r;
+                    want = best > 0 ? best : kRungs[0];
+                }
                 /* ★★★ AND THE SAME RULE A SECOND TIME, WHICH IS WHY THE FIRST FIX WAS NOT ENOUGH.
                  *  This line read `if (want >= sampleRate * 0.95) want = 0;` — a re-check after
                  *  rounding up — and it undid the clamp above every time: at 1.2 MS/s the clamp

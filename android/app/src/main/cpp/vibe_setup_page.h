@@ -951,14 +951,20 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
                      there is signal. It is how "All bands: wide" replaces the global switch
                      this section took the place of. -->
                 <option value="99999">Wide &mdash; the whole capture</option>
-                <option value="1500">1.5 MHz</option>
-                <option value="1200">1.2 MHz</option>
+                <!-- ★★★ THE TUNER'S ACTUAL RUNGS, NOT ROUND NUMBERS. The filter ladder in
+                     applyAutoIf is 350 / 500 / 700 / 1000 / 1400 / 2000 / 2800 kHz, and this list
+                     offered 1.5, 1.2, 800, 600, 450 — none of which exist. Choosing 1.2 landed on
+                     1400 and the readout said so, which reads as the setting being ignored:
+                     Stuart, 2026-09-27, "I did choose 1.2MHz band limit and its showing 1.4MHz."
+                     ★★ A menu that offers a value the hardware cannot produce is a menu that lies.
+                     What is chosen here is now exactly what the chip reports back. -->
+                <option value="2800">2.8 MHz</option>
+                <option value="2000">2.0 MHz</option>
+                <option value="1400">1.4 MHz</option>
                 <option value="1000">1.0 MHz</option>
-                <option value="800">800 kHz</option>
-                <option value="600">600 kHz</option>
+                <option value="700">700 kHz</option>
                 <option value="500">500 kHz</option>
-                <option value="450">450 kHz</option>
-                <option value="350">350 kHz</option>
+                <option value="350">350 kHz &mdash; narrowest</option>
               </select>
             </div>
             <label class="row hide" id="gainLockRow" style="gap:8px;margin-top:10px">
