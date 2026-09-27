@@ -452,6 +452,26 @@ window.__mdDeliver = function(id, body){
   var w = window.__mdWait[id];
   if(w){ delete window.__mdWait[id]; w(body); }
 };
+/* ★★★ BIG FILES ARRIVE IN PIECES, BECAUSE ONE INJECTION CANNOT CARRY THEM.
+ *  Three builds showed the same pattern and I kept reading it as a permissions problem: the small
+ *  label files arrived and every megabyte layer — tier0-cover, tier1-cover, the coastlines — did
+ *  not, so the map drew sea, continent labels and nothing else. Stuart saw it three times: "no
+ *  map, just sea", "I see labels for continents".
+ *  ★★ SIZE WAS THE ONLY VARIABLE THAT EVER CORRELATED. injectJavaScript hands WKWebView a script
+ *     SOURCE STRING, and a 2.2 MB one does not survive the trip. Splitting it needs no permission
+ *     from anybody, which is the point: it removes the guess rather than making a better one.
+ *  ★ Reassembled in order and only resolved when every part is in, so a short delivery fails as
+ *    "no data" — the renderer's own coarse-map path — rather than as half a continent. */
+window.__mdParts = {};
+window.__mdChunk = function(id, i, n, part){
+  var b = window.__mdParts[id] || (window.__mdParts[id] = { n: n, got: 0, buf: [] });
+  b.buf[i] = part; b.got++;
+  if (b.got >= b.n) {
+    delete window.__mdParts[id];
+    var w = window.__mdWait[id];
+    if (w) { delete window.__mdWait[id]; w(b.buf.join('')); }
+  }
+};
 (function(){
   var localOnly = false;
   var real = window.fetch.bind(window);
@@ -1295,9 +1315,25 @@ export default function MapOverlay(
               : JSON.stringify(body)
                   .replace(new RegExp(String.fromCharCode(0x2028), 'g'), '\\u2028')
                   .replace(new RegExp(String.fromCharCode(0x2029), 'g'), '\\u2029');
-            webRef.current?.injectJavaScript(
-              `window.__mdDeliver&&window.__mdDeliver(${JSON.stringify(m.id)},${js});true;`,
-            );
+            /* ★★★ CHUNKED ABOVE 256 KB. See __mdChunk: a single injection cannot carry a megabyte
+             *  layer, which is why the map had sea and labels and no land for three builds.
+             *  ★ The whole body is still JSON-escaped ONCE, then the escaped text is split — so a
+             *    multi-byte character can never be cut in half by the boundary. */
+            const CHUNK = 256 * 1024;
+            if (js === 'null' || js.length <= CHUNK) {
+              webRef.current?.injectJavaScript(
+                `window.__mdDeliver&&window.__mdDeliver(${JSON.stringify(m.id)},${js});true;`,
+              );
+            } else {
+              const n = Math.ceil(js.length / CHUNK);
+              for (let i = 0; i < n; i++) {
+                const part = js.slice(i * CHUNK, (i + 1) * CHUNK);
+                webRef.current?.injectJavaScript(
+                  `window.__mdChunk&&window.__mdChunk(${JSON.stringify(m.id)},${i},${n},${
+                    JSON.stringify(part)});true;`,
+                );
+              }
+            }
           }}
         />
         )}

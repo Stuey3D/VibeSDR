@@ -615,7 +615,19 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
      *  move independently, several times a second, cannot share a line of running text. So the
      *  values are returned separately and drawn in a fixed grid; nothing moves but the digits. */
     const avTxt = av >= 0.5 ? `${av.toFixed(0)} kHz` : '—';
-    const verdict = ok ? (pk > 82 ? 'OVERMODULATED' : pk > 75 ? 'over the limit' : 'nominal')
+    /* ★★★ A VERDICT MAY NOT RESOLVE FINER THAN THE MEASUREMENT, and the hedge goes ABOVE the
+     *  limit. Stuart's RTL-vs-RSP A/B (2026-09-26) put the same transmitter, same instant, at
+     *  peak 75 on one radio and 80 on the other: the numbers agreed to 7 %, so a hard step at 75
+     *  makes two radios disagree in WORDS about a signal they agree about in figures.
+     *  ★★ So 75–82 hedges — at 78 the reading could be a compliant 75 on another radio. Below 75
+     *     there is nothing to hedge: ±75 kHz IS the spec and reaching it is correct behaviour, so
+     *     the panel says "nominal" and means it. ✗ The web client had this band at 72–82, which
+     *     straddled the limit and swallowed "nominal" entirely — every healthy station sits just
+     *     under 75 by design (Stuart: "at around 74-75KHz which is the spec it says close to the
+     *     limit"). Fixed in both readers together; they must keep saying the same thing.
+     *  ★ OVERMODULATED stays above 82, where both radios agreed (92/94 on 96.1). */
+    const verdict = ok ? (pk > 82 ? 'OVERMODULATED'
+                        : pk > 75 ? 'close to the limit' : 'nominal')
                        : 'low S/N, unreliable';
     const c = !ok ? C.muted : pk > 82 ? C.bad : pk > 75 ? C.warn : C.good;
     return { avg: avTxt, peak: `${pk.toFixed(0)} kHz`,

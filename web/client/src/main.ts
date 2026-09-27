@@ -10386,16 +10386,26 @@ function drawMpxEye() {
          *  instant, at peak 75 on one radio and 80 on the other. The NUMBERS agreed to 7 %; the
          *  WORDS said "nominal" and "over the limit". A listener comparing two receivers learns to
          *  trust neither.
-         *  ★★ So the band between them says the same thing on both. 72–82 is "close to the limit":
-         *  honest about where the signal is without claiming a precision the instrument does not
-         *  have. The measured inter-radio spread is what sets the width — ✗ do not narrow it back
-         *  towards 75 without a measurement showing two radios agree more closely than that.
+         *  ★★ So the band between them says the same thing on both. The measured inter-radio spread
+         *  is what sets its WIDTH — ✗ do not narrow it without a measurement showing two radios
+         *  agree more closely than that.
+         *  ✗✗✗ BUT IT WAS ON THE WRONG SIDE OF THE LIMIT, AND IT ATE THE ONLY GOOD VERDICT. The
+         *      band ran 72–82, straddling 75 — so a station modulating to 74 or 75, which is
+         *      EXACTLY what ±75 kHz asks of it, was told it was "close to the limit". Stuart,
+         *      2026-09-27: "in the advanced RDS there is no longer a Nominal label … at around
+         *      74-75KHz which is the spec it says close to the limit". Every healthy station sits
+         *      just under 75 by design, so in practice "nominal" had stopped existing.
+         *  ★★ The soft band belongs ABOVE 75, where the ambiguity actually matters: at 78 the reading
+         *     could be a compliant 75 on another radio, so hedge. At 74 there is nothing to hedge
+         *     about — it is in spec on any radio, and the panel should say so.
+         *  ★ ±75 kHz IS THE SPEC, NOT A DANGER LINE. Reaching it is correct behaviour; a broadcaster
+         *    who stayed at 60 to be safe would just be quieter than everyone else.
          *  ★ OVERMODULATED stays where it was: above 82 both radios agreed (92/94 on 96.1), so the
          *  strong word is still earned. Same shape as the constellation FAULT boundary below —
          *  a verdict that flips on noise is worse than a coarser one that does not. */
         const verdict = overRange ? 'implausible — not a real FM figure'
                       : pk > 82 ? 'OVERMODULATED'
-                      : pk > 72 ? 'close to the limit' : 'nominal';
+                      : pk > 75 ? 'close to the limit' : 'nominal';
         /* ★ SAY WHAT WAS REMOVED. The server measures the noise in the reading's own band from a
          *  guard band at 80 kHz and takes it out in quadrature (see mpxDevNoise_ in vibedsp.h);
          *  on a weak station that can be a large correction, and a reader comparing against
