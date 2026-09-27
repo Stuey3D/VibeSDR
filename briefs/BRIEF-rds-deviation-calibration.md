@@ -404,7 +404,21 @@ Six stations on the Lenovo/RSP1A, 2026-09-27, all on 5.6.64:
 
 A correct station sits near **0** or near **90** (quadrature). **Every LOCKED station here reads
 28-44** — the middle ground the code calls a fault — across three different broadcasters.
-✗✗ **SUSPICION RETRACTED THE SAME NIGHT — THE PHASE READOUT IS ALREADY CALIBRATED.** I reasoned
+✗✗ **SUSPICION DISPROVEN — AND THE EVIDENCE WAS ALREADY IN THE MEMORY INDEX.**
+`rds_pira_calibration.md` holds Hans's six-station Pira table from 2026-07-27, and it contains the
+answer outright: **the Pira itself measured Qmusic at 50 deg and Radio 10 at 45 deg.** Real
+transmitters DO sit in the middle band; it is not a zone that should be empty. Our agreement after
+the [0,180) fold fix was **0, +3, +4, +4, +1, +3 degrees** across all six.
+★★ THE TABLE ALSO CARRIES A SIXTH SOURCE FOR THE DEVIATION CONSTANT. PIRA RDS vs ours (then using
+1.414): 2.8/2.3, 3.5/2.9, 2.6/2.0, 4.5/3.5, 4.1/3.3, 4.4/3.5 — implied constants 1.72, 1.71, 1.84,
+1.82, 1.76, 1.78, **mean 1.77**. That is where "PIRA implies 1.770" came from, with the raw data
+behind it at last.
+✗ **I SPECULATED INSTEAD OF READING THE CALIBRATION TABLE I ALREADY HAD.** Stuart: *"phase was
+also calibrated against the PIRA too — you should have a table."* ▶ Before invoking "suspect the
+measurement", CHECK WHETHER IT HAS A CALIBRATION HISTORY. This one does, in a memory file the index
+links from the RDS cluster.
+
+✗✗ (original wording) SUSPICION RETRACTED — THE PHASE READOUT IS ALREADY CALIBRATED. I reasoned
 that every locked station reading 28-44 looked like the deviation bug (where every station read
 "weak" because the MEASUREMENT was low) and flagged it for a calibrated check. Stuart, immediately:
 *"phase was also calibrated against the PIRA too."*
