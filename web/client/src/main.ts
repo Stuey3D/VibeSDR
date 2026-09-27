@@ -1013,6 +1013,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       updateRangeGap(centerHz, bwHz);
     },
     onConfig: (cfg) => {
+      /* ★★★ THE RECEIVER HAS ANSWERED A TUNE — which is what a sweep must pace against. See
+       *  sweepAwaitingEcho: the ping cannot see how long a retune actually takes. */
+      sweepEchoAt = Date.now();
+      sweepAwaitingEcho = false;
       // ★★ ALSO HERE, not only in onHwInfo. lockedWindow() needs the capture bandwidth, which
       //    arrives with the CONFIG — and the two messages have no guaranteed order, so setting it
       //    on one alone leaves the filter unset whenever that one lands first. Cheap and
@@ -12319,6 +12323,26 @@ const SWEEP_RAMP_MS = 2500;  // LO -> HI, a continuous ramp rather than gears
  *   steps, which is the structural guarantee the note above insists on. */
 const SWEEP_MAX_GAP_MS = 400;   // never crawl slower than this, however bad the link
 const SWEEP_RTT_FLOOR_MS = 60;  // below this the link is not the constraint — ignore it
+/* ★★★ THE PING WAS THE WRONG INSTRUMENT, AND A LAN HID IT. The pacing above is gated on `rtt`,
+ *  so on Stuart's Pi 2 — ping 22 ms, well under SWEEP_RTT_FLOOR_MS — `paced` is ZERO and the
+ *  sweep runs flat out at the 22/s ceiling regardless. But the ping measures the NETWORK, and
+ *  what a sweep actually queues is WORK: a retune is hardware writes, an AGC that must re-settle
+ *  and a resampler, none of which a 900 MHz box does in the 45 ms a 22/s sweep allows.
+ *  Stuart, 2026-09-27: "we need to slow the sweep down in the client too as it often goes faster
+ *  than the connection can keep up with."
+ *  ★★★ SO PACE ON THE RECEIVER'S OWN ANSWER. The server echoes a `config` for every tune, so
+ *      waiting for it measures the real cost of the step on THAT receiver — self-tuning, with no
+ *      magic number to guess and nothing to re-tune when someone runs a slower box than any we
+ *      own. It is what the comment above always intended ("ONE ROUND TRIP IN FLIGHT is the
+ *      target"); only the instrument was wrong.
+ *  ★★ WITH A TIMEOUT, OR A LOST ECHO FREEZES THE DIAL. A dropped or coalesced config must not
+ *     strand the sweep for ever: past this the tick proceeds anyway and the sweep degrades to the
+ *     old ideal-rate behaviour rather than stopping. ✗ Never make a control depend on a message
+ *     arriving with no way forward if it does not.
+ *  ★ Taps are untouched, as before: this governs the auto-repeat tick only. */
+const SWEEP_ECHO_TIMEOUT_MS = 700;
+let sweepAwaitingEcho = false;
+let sweepEchoAt = 0;
 
 /**
  * @param tap   what one press does — the decisive, familiar amount.
@@ -12333,6 +12357,9 @@ function attachHoldSweep(el: HTMLElement, tap: () => void, sweep: () => void = t
   const stop = () => {
     if (holdT !== null) { clearTimeout(holdT); holdT = null; }
     if (tickT !== null) { clearTimeout(tickT); tickT = null; }
+    /* ★ Release clears the wait, or a sweep that ended while a step was still unacknowledged
+     *  would make the NEXT sweep hesitate for a reply that belongs to the last one. */
+    sweepAwaitingEcho = false;
     el.classList.remove('sweeping');
   };
   el.addEventListener('pointerdown', (e) => {
@@ -12345,6 +12372,16 @@ function attachHoldSweep(el: HTMLElement, tap: () => void, sweep: () => void = t
       el.classList.add('sweeping');
       const started = Date.now();
       const tick = () => {
+        /* ★★★ WAIT FOR THE RECEIVER, NOT FOR A TIMER. If the previous step has not been echoed
+         *  yet, come back rather than piling another tune on top of it — that is how the dial
+         *  runs away from the radio. See SWEEP_ECHO_TIMEOUT_MS: past the timeout we go anyway, so
+         *  a lost echo slows the sweep instead of freezing it. */
+        if (sweepAwaitingEcho && Date.now() - sweepEchoAt < SWEEP_ECHO_TIMEOUT_MS) {
+          tickT = window.setTimeout(tick, 30);
+          return;
+        }
+        sweepAwaitingEcho = true;
+        sweepEchoAt = Date.now();
         sweep();
         // Rate recomputed per tick, so the acceleration is smooth.
         const t = Math.min(1, (Date.now() - started) / SWEEP_RAMP_MS);
