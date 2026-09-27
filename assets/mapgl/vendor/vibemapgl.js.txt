@@ -51,6 +51,9 @@
     st.sources.relief = Object.assign({}, st.sources.relief, { url: reliefUrl });
     if (hasDetail) {
       st.sources.detail = Object.assign({}, st.sources.detail, { url: detailUrl });
+      // ★ Layers that only stand in for detail ones (runways-coarse) go, so nothing is drawn twice.
+      const only = new Set((st.metadata && st.metadata['vibesdr:basicOnlyLayers']) || []);
+      st.layers = st.layers.filter((l) => !only.has(l.id));
     } else {
       // ★ No detail pack: drop its layers and let the basic ones carry on over-zoomed (see the style's
       //   vibesdr:basicOnlyExtend) — a coarser map, never a hole.

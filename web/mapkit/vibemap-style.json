@@ -2,7 +2,7 @@
  "version": 8,
  "name": "VibeSDR basemap (GPU)",
  "metadata": {
-  "vibesdr:note": "One style for the app (MapLibre Native) and the web (MapLibre GL JS). Palette copied from vibemap.js; zooms are MapLibre zooms (Leaflet zoom minus one) \u2014 see scripts/gen-map-tiles.mjs. Sources and glyphs are placeholders the host fills in.",
+  "vibesdr:note": "One style for the app (MapLibre Native) and the web (MapLibre GL JS). Palette copied from vibemap.js; zooms are MapLibre zooms (Leaflet zoom minus one) — see scripts/gen-map-tiles.mjs. Sources and glyphs are placeholders the host fills in.",
   "vibesdr:todo": "glyphs/sprites are filled in by each host: bundled JetBrains Mono (gen-map-glyphs.mjs) and the icons in assets/mapicons.",
   "vibesdr:relief": "Today's baked relief (buildRelief), cut into a z0-4 WebP pyramid by gen-map-tiles.mjs; opacity 0.92 and stacking (above land, below cover) copied from vibemap.js drawRelief.",
   "vibesdr:zoom": "Every zoom here is MapLibre = Leaflet - 1. Rules copied from vibemap.js (LADDER, drawPlaces, drawPoi, drawCountryNames, drawRegionLabels).",
@@ -33,7 +33,8 @@
      "rail",
      "roads-b",
      "roads-d",
-     "runways"
+     "runways",
+     "runways-coarse"
     ],
     "places": "major"
    },
@@ -43,11 +44,12 @@
      "airports-6",
      "airports-7",
      "airports-8",
-     "runways",
      "ports",
      "rail",
      "roads-b",
-     "roads-d"
+     "roads-d",
+     "runways",
+     "runways-coarse"
     ],
     "places": "all"
    },
@@ -71,7 +73,8 @@
      "rail",
      "roads-b",
      "roads-d",
-     "runways"
+     "runways",
+     "runways-coarse"
     ],
     "places": "countries"
    },
@@ -127,7 +130,10 @@
    "place-dots-c",
    "airports-6"
   ],
-  "vibesdr:basicOnlyNote": "Without the optional detail pack every 'detail' layer is dropped and these basic layers lose their maxzoom, so the basic data carries on over-zoomed rather than leaving a hole."
+  "vibesdr:basicOnlyNote": "Without the optional detail pack every 'detail' layer is dropped and these basic layers lose their maxzoom, so the basic data carries on over-zoomed rather than leaving a hole.",
+  "vibesdr:basicOnlyLayers": [
+   "runways-coarse"
+  ]
  },
  "glyphs": "GLYPHS_URL",
  "sources": {
@@ -135,20 +141,20 @@
    "type": "vector",
    "url": "BASIC_URL",
    "maxzoom": 6,
-   "attribution": "Natural Earth \u00b7 OurAirports \u00b7 NGA World Port Index"
+   "attribution": "Natural Earth · OurAirports · NGA World Port Index"
   },
   "detail": {
    "type": "vector",
    "url": "DETAIL_URL",
    "maxzoom": 10,
-   "attribution": "\u00a9 GeoNames \u00b7 \u00a9 OpenStreetMap contributors \u00b7 \u00a9 HydroLAKES / HydroSHEDS"
+   "attribution": "© GeoNames · © OpenStreetMap contributors · © HydroLAKES / HydroSHEDS"
   },
   "relief": {
    "type": "raster",
    "url": "RELIEF_URL",
    "tileSize": 512,
    "maxzoom": 4,
-   "attribution": "NOAA ETOPO \u00b7 \u00a9 RESOLVE Ecoregions 2017"
+   "attribution": "NOAA ETOPO · © RESOLVE Ecoregions 2017"
   },
   "continents": {
    "type": "geojson",
@@ -629,6 +635,29 @@
     "line-dasharray": [
      4,
      3
+    ]
+   }
+  },
+  {
+   "id": "runways-coarse",
+   "type": "line",
+   "source": "basic",
+   "source-layer": "runways",
+   "minzoom": 8,
+   "paint": {
+    "line-color": "#c9c9b0",
+    "line-width": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     8,
+     1.5,
+     12,
+     5
     ]
    }
   },

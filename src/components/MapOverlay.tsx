@@ -119,6 +119,12 @@ function buildHtml(
 ${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="mapgl/vendor/maplibre-gl.js"></script><script src="mapgl/vendor/pmtiles.js"></script><script src="mapgl/vendor/vibemapgl.js"></script><script src="mapgl/vendor/vibemapgl-compat.js"></script>' : ''}
 <style>
   html,body{margin:0;padding:0;height:100%;background:${T.bg};overflow:hidden;}
+  /* ★★★ NOTHING ON THIS PAGE IS SELECTABLE OR DRAGGABLE. On a Mac the iPad app gets mouse presses as
+     TOUCHES; a press held a moment is a long-press, which selected the page's text and LIFTED it — so
+     grabbing the map dragged a ghost of the count and the zoom buttons instead (Stuart, 2026-09-27,
+     build 344). Leaflet cancelled every touchstart, so that path never opened; MapLibre does not. */
+  *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-user-drag:none;}
+  select{-webkit-user-select:auto;user-select:auto;}
   body{display:flex;flex-direction:column;font-family:'Courier New',monospace;}
   /* ── topbar — skin lsv-hfdl-topbar / lsv-smap-topbar (single slim row) ── */
   #topbar{display:flex;align-items:center;gap:8px;padding:6px 10px;
@@ -403,6 +409,8 @@ if(GL_OK&&window.VibeMapGL&&window.VibeMapGLCompat&&VM_STYLE){
     GLVM=VibeMapGL.createNow(document.getElementById('lmap'),{style:VM_STYLE,load:glLoad,base:'mapgl/',detailRange:detailRange,
       profile:(KIND==='hfdl'?'aero':'spots'),center:[0,30],zoom:1});
     if(GLVM){window.L=VibeMapGLCompat.install(GLVM);window.__GL=true;
+      // ★ Belt to the CSS braces above: no native selection or drag ever starts on this page.
+      ['selectstart','dragstart'].forEach(function(t){document.addEventListener(t,function(e){e.preventDefault();},{capture:true});});
       GLVM.ready.catch(function(e){console.error('GPU map: '+e);});}
   }catch(e){console.error('GPU map unavailable: '+e);GLVM=null;}
 }

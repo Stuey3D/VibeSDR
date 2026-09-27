@@ -181,8 +181,17 @@ for (const [name, lon, lat, rank, kind] of load('tier0', 'regions'))
 }
 // ★ Runways as the real centreline between both thresholds, each end labelled with its own
 //   designator — exactly what drawRunways does.
-for (const [id, lon1, lat1, lon2, lat2, le, he, ft] of load('tier2', 'runways'))
-  emit('vibemap-detail', 'runways', [9, MAXZ], { type: 'LineString', coordinates: [[lon1, lat1], [lon2, lat2]] }, { id, le: le || '', he: he || '', ft: ft || 0 });
+/* ★★ AND IN THE BASIC PACK TOO (Stuart, 2026-09-27: "this detail level is fine, add the runways and we
+ *  are golden"). The basic source is read no deeper than MapLibre z6 (the style's maxzoom) and
+ *  over-zoomed from there, so its copy lives in the z6 tiles only (Leaflet [7, 7]) and the style's
+ *  runways-coarse layer shows it from the same zoom as the detail one. A z6 tile quantises to ~150 m
+ *  cells, so an end sits within ~60 m at UK latitudes — about a pixel at z10, far inside the coarse
+ *  coastline's own error. With the detail pack in, runways-coarse is dropped (vibesdr:basicOnlyLayers). */
+for (const [id, lon1, lat1, lon2, lat2, le, he, ft] of load('tier2', 'runways')) {
+  const g = { type: 'LineString', coordinates: [[lon1, lat1], [lon2, lat2]] }, props = { id, le: le || '', he: he || '', ft: ft || 0 };
+  emit('vibemap-detail', 'runways', [9, MAXZ], g, props);
+  emit('vibemap-basic', 'runways', [7, 7], g, props);
+}
 
 await Promise.all(Object.values(sinks).map((s) => new Promise((r) => s.end(r))));
 console.log('features:', count);
