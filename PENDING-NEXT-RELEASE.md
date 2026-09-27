@@ -372,3 +372,35 @@ the spec maximum is 5.6 (7.5 % of 75). The verdict still said **nominal**, becau
 ★ This will get MORE common, not less: the 2026-09-27 calibration lifts peaks ~20 %, so noisy
 stations will cross 5.8 that never used to. ▶ Judge "over spec" on whichever figure exceeds the
 ceiling, not on the averaged one alone.
+
+## ★ KNOWN ISSUE TO SHIP WITH THE 32-BIT (armhf) SERVER RELEASE — spectrum frame rate
+
+**Ship this, do not quietly fix it.** Stuart, 2026-09-27: *"we ship a known issue line with the
+32bit release stating that the FPS appears to be stuck at 8FPS regardless of if set at 5/10/20
+FPS, and the fix we tried caused too high consumption on the DSP thread which caused the audio to
+drop and sound broken. Most low end 32bit servers will not be able to handle more than 10FPS only,
+so this is a minor issue that may end up having to stay as I do not want to risk the DSP and audio
+threads. 64Bit servers are unaffected."*
+
+### The wording for the release note
+> **Known issue — 32-bit servers only.** The spectrum frame rate sits at about 8 fps whatever you
+> set it to. The fix we tried cost too much time on the DSP thread and broke the audio, and most
+> low-end 32-bit hosts cannot sustain more than 10 fps anyway, so the rate is being left alone
+> rather than risking the audio. 64-bit servers are unaffected and honour the setting exactly.
+
+### MEASURED, so the claim can be defended (2026-09-27, passive frame count over 20 s)
+| box | arch | configured | delivered |
+|---|---|---|---|
+| Pi 2 | **armhf (32-bit)** | `maxFftRate=0` | **7.7 fps** |
+| Pi 500 | arm64 | `maxFftRate=20` | **20.0 fps** |
+| XCover 4S | arm64 | `maxFftRate=10` | **10.0 fps** |
+
+★★ **Both 64-bit boxes honour the figure EXACTLY**, which is what makes "64-bit unaffected"
+sayable. ✗ I nearly wrote that line without checking it.
+★★ **AND THE PI 2 REPORTS `maxFftRate=0`** — no ceiling set at all — so on that box ~7.7 fps is a
+THROUGHPUT limit, not a setting being overridden. That matches the one-slot spectrum hand-off
+already on record ([[spectrum_worker_single_slot_ceiling]], "7.8 fps"). ▶ So the honest mechanism
+is "it cannot go faster", and the separate question of why a configured 5 did not LOWER it is
+untested — Stuart has deliberately parked it rather than risk the DSP thread.
+✗ **DO NOT "fix" this by speeding up the hand-off without measuring `demodWaits` and the audio.**
+That is the change that broke the audio last time.
