@@ -241,6 +241,7 @@ inline void savePeaks() {
 /** Each core's current clock (kHz). Empty when cpufreq is absent — a Mac, a container.
  *  (Declared ahead of calibrateAllCore, which samples it.) */
 inline std::map<int, long> coreClocks();
+inline bool governorPinsClock();
 /** ★★★ CALIBRATE THE ALL-CORE MAXIMUM ON PURPOSE — Stuart, 2026-09-27: "On initial benchmark run a
  *  quick CPU stress test on all cores." Waiting for load to happen by accident meant a fresh install
  *  had no reference at all, and a box whose first busy spell began hot learned a THROTTLED figure.
@@ -251,6 +252,9 @@ inline std::map<int, long> coreClocks();
  *  ★ Only ever RAISES a stored peak (merged by max), so a later cooler run still refines it.
  *  Returns the calibrated all-core average in MHz, or -1 where cpufreq is absent. */
 inline double calibrateAllCore(double seconds = 3.0) {
+    // ★ Under a governor that pins the clock this would record the pinned MINIMUM as the maximum.
+    //   Skip, and stay uncalibrated, so the next benchmark under a normal governor does it properly.
+    if (governorPinsClock()) return -1;
     const unsigned n = std::max(1u, std::thread::hardware_concurrency());
     std::atomic<bool> stop{false};
     std::vector<std::thread> spin;
@@ -285,6 +289,29 @@ inline std::map<int, long> coreClocks() {
         if (access(cpuDir.c_str(), F_OK) != 0) break;
     }
     return out;
+}
+/** ★★★ IS THE GOVERNOR HOLDING THE CLOCK DOWN ON PURPOSE? Stuart, 2026-09-27: "we also have to be
+ *  concious of if set to On Demand or PowerSave our processes might not ever push the core to its
+ *  maximum clock anyway". A pinned clock is the OWNER'S CONFIGURATION, not throttling — a fire or
+ *  lightning snail there would send them chasing the wrong fault, and calibration would learn the pinned
+ *  minimum as the "maximum". So the snail stands down.
+ *  ★★ THE NAME IS A TRAP: "powersave" PINS the minimum on the generic drivers (acpi-cpufreq, cpufreq-dt,
+ *     intel_cpufreq = intel_pstate PASSIVE, amd-pstate passive) — but on intel_pstate ACTIVE and
+ *     amd-pstate-epp it is DYNAMIC and boosts under load (the Lenovo reached 4.0 GHz on it). "userspace"
+ *     is a fixed clock. The dynamic governors (ondemand, schedutil, conservative, performance) reach the
+ *     maximum under load, which is handled by judging BUSY cores only (see snailTick). */
+inline bool governorPinsClock() {
+    auto rd = [](const std::string& path) {
+        std::string v;
+        if (FILE* f = fopen(path.c_str(), "r")) { char b[64] = {0}; if (fgets(b, sizeof b, f)) v = b; fclose(f); }
+        while (!v.empty() && (v.back() == '\n' || v.back() == ' ')) v.pop_back();
+        return v;
+    };
+    const std::string base = sysRoot() + "/devices/system/cpu/cpu0/cpufreq/";
+    const std::string gov = rd(base + "scaling_governor"), drv = rd(base + "scaling_driver");
+    if (gov == "userspace") return true;
+    if (gov == "powersave") return !(drv == "intel_pstate" || drv == "amd-pstate-epp");
+    return false;
 }
 /** The CPU's OWN throttle report, where it gives one (Intel): how many times it throttled for heat,
  *  and how many for a power limit. -1 = this machine does not say. Summed over cores. */
@@ -321,6 +348,8 @@ namespace detail {
  *      is weighted by the machine's own load below rather than read on its own.
  *  ★ Straight from /proc/stat's per-cpu lines, so it counts every process on the machine and not
  *    just ours. Linux only; macOS keeps the machine total alone rather than a guess. */
+/** Each core's busy % from the last busiestCorePct() call — the snail judges only BUSY cores. */
+inline std::map<int, double>& coreBusy() { static std::map<int, double> m; return m; }
 inline double busiestCorePct(double) {
     static std::map<int, std::pair<long, long>> last;   // cpu -> (busy, total)
     FILE* f = fopen("/proc/stat", "r");
@@ -337,7 +366,11 @@ inline double busiestCorePct(double) {
         auto it = last.find(cpu);
         if (it != last.end()) {
             const long db = busy - it->second.first, dt = total - it->second.second;
-            if (dt > 0) worst = std::max(worst, 100.0 * (double)db / (double)dt);
+            if (dt > 0) {
+                const double pct = 100.0 * (double)db / (double)dt;
+                worst = std::max(worst, pct);
+                coreBusy()[cpu] = pct;
+            }
         }
         last[cpu] = { busy, total };
     }
@@ -367,10 +400,22 @@ struct Sampler {
      *  core's clock. Separate from sample() so it can be driven directly (test-health-snail.cpp) —
      *  sample() reads live load from /proc, which a test machine may not even have. Updates slowNow
      *  and the cause holds. */
-    void snailTick(bool loaded, const std::map<int, long>& clocks) {
+    void snailTick(bool loaded, const std::map<int, long>& clocks,
+                   const std::map<int, double>& busy = detail::coreBusy()) {
         auto& peaks = detail::corePeaks();
         double ratioSum = 0; int ratioN = 0; bool learned = false;
+        // ★★ A GOVERNOR THAT PINS THE CLOCK IS CONFIGURATION, NOT THROTTLING — see governorPinsClock.
+        if (detail::governorPinsClock()) loaded = false;
         for (const auto& kv : clocks) {
+            /* ★★★ ONLY BUSY CORES ARE JUDGED. An idle core under ondemand/schedutil sits at its minimum
+             *  BY DESIGN; averaging it in would drag a healthy machine under the margin. A core that is
+             *  saturated under a dynamic governor MUST be at its maximum — if it is not, something is
+             *  holding it back. Where per-core load is unknown (no /proc/stat, e.g. Android), every core
+             *  is judged, as before. */
+            if (!busy.empty()) {
+                const auto b = busy.find(kv.first);
+                if (b == busy.end() || b->second < 85.0) continue;
+            }
             long ref;
             if (detail::kBoostClocks) {
                 long& pk = peaks[kv.first];

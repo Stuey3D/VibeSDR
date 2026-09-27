@@ -57,6 +57,26 @@ int main() {
         s.snailTick(true, clocks(4, 1500000));
         ok(s.thermalHold > 0, "thermal counter rose: cause = heat (fire)");
         ok(s.powerHold == 0, "no power counter on this kernel: power NOT inferred");
+        // ★ Idle cores sit at their minimum under a dynamic governor — only BUSY cores are judged.
+        {
+            vibehealth::Sampler g;
+            std::map<int, long> mixed = {{0, 2400000}, {1, 2400000}, {2, 600000}, {3, 600000}};
+            std::map<int, double> busy = {{0, 99}, {1, 98}, {2, 5}, {3, 3}};
+            for (int i = 0; i < 10; i++) g.snailTick(true, mixed, busy);
+            ok(!g.slowNow, "two busy cores at max, two idle at min: NO snail (idle cores ignored)");
+            std::map<int, long> held = {{0, 1500000}, {1, 1500000}, {2, 600000}, {3, 600000}};
+            for (int i = 0; i < 5; i++) g.snailTick(true, held, busy);
+            ok(g.slowNow, "busy cores held at 1.5 GHz for 5 s: SNAIL");
+        }
+        // ★ A governor that pins the clock is configuration, not throttling.
+        {
+            std::ofstream(g_root + "/devices/system/cpu/cpu0/cpufreq/scaling_governor") << "powersave\n";
+            std::ofstream(g_root + "/devices/system/cpu/cpu0/cpufreq/scaling_driver") << "cpufreq-dt\n";
+            vibehealth::Sampler g;
+            ok(!run(g, 10, true, 600000), "powersave on cpufreq-dt (pinned minimum) under load: NO snail");
+            std::ofstream(g_root + "/devices/system/cpu/cpu0/cpufreq/scaling_governor") << "ondemand\n";
+            ok(run(g, 5, true, 600000), "same clocks under ondemand (should have boosted): SNAIL");
+        }
     } else {
         // An Intel-like chip: 3.9 GHz single-core boost advertised, 3.1 GHz real all-core.
         cores(4, 3900000);
@@ -72,6 +92,15 @@ int main() {
         ok(run(s, 5, true, 2600000), "84 % of all-core peak for 5 s: SNAIL");
         ok(!run(s, 5, true, 3100000), "back at the all-core peak: cleared");
         ok(!run(s, 20, false, 800000), "idle: never a snail");
+        // ★ intel_pstate's "powersave" is DYNAMIC (the Lenovo reached 4.0 GHz on it) — must NOT be
+        //   mistaken for a pinned clock.
+        std::ofstream(g_root + "/devices/system/cpu/cpu0/cpufreq/scaling_governor") << "powersave\n";
+        std::ofstream(g_root + "/devices/system/cpu/cpu0/cpufreq/scaling_driver") << "intel_pstate\n";
+        vibehealth::Sampler p;
+        ok(run(p, 5, true, 2600000), "intel_pstate powersave, slowed under load: SNAIL (not treated as pinned)");
+        std::ofstream(g_root + "/devices/system/cpu/cpu0/cpufreq/scaling_driver") << "intel_cpufreq\n";
+        vibehealth::Sampler q;
+        ok(!run(q, 10, true, 800000), "intel_cpufreq (passive) powersave = pinned: NO snail");
     }
     fs::remove_all(g_root);
     std::printf("%s\n", fails ? "FAILED" : "all passed");
