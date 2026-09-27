@@ -591,6 +591,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         val res = Arguments.createMap()
         res.putString("driver", when {
             isAirspyHf(dev) -> "airspyhf"
+            isAirspy(dev)   -> "airspy"     // ★ was missing: an Airspy R2/Mini reported "rtl" here (2026-09-28)
             isHackRf(dev)   -> "hackrf"
             else            -> "rtl"
         })

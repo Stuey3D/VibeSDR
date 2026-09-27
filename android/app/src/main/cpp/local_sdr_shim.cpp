@@ -15586,9 +15586,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const bool rsp = !noRadio && LocalSdrShim::instance().isSdrplay();
             const bool hf  = !noRadio && LocalSdrShim::instance().isAirspyHf();
             const bool hrf = !noRadio && LocalSdrShim::instance().isHackRf();
+            const bool asp = !noRadio && LocalSdrShim::instance().isAirspy();   // ★ R2/Mini: was reported "rtl" (2026-09-28)
             const bool lost = noRadio || deviceLost.load();
             std::string j = std::string("{\"driver\":\"")
-                          + (lost ? "none" : rsp ? "sdrplay" : hf ? "airspyhf" : hrf ? "hackrf" : "rtl")
+                          + (lost ? "none" : rsp ? "sdrplay" : hf ? "airspyhf" : hrf ? "hackrf" : asp ? "airspy" : "rtl")
                           + "\",\"present\":" + (lost ? "false" : "true")
                           + ",\"rates\":[" + supportedRates() + "]"
                           // ★ What the dongle calls itself, so the setup page can warn that a
@@ -22958,7 +22959,8 @@ std::string LocalSdrShim::adminStatusJson() {
         j += std::string(",\"radio\":{\"present\":") + (lost ? "false" : "true")
            + ",\"driver\":\"" + (lost ? "none" : isSdrplay() ? "sdrplay"
                                               : isAirspyHf() ? "airspyhf"
-                                              : isHackRf()   ? "hackrf" : "rtl") + "\"";
+                                              : isHackRf()   ? "hackrf"
+                                              : isAirspy()   ? "airspy" : "rtl") + "\"";   // ★ R2/Mini was "rtl" (2026-09-28)
         j += ",\"centreHz\":" + std::to_string((long long)(g_vsLockedCentre.load() > 0
                                     ? g_vsLockedCentre.load() : (p ? p->rtlCenter.load() : 0)));
         j += ",\"spanHz\":" + std::to_string((long long)captureSpanHz());
@@ -23732,7 +23734,7 @@ static vibebands::Ranges vsTunableRanges() {
 
     auto& shim = LocalSdrShim::instance();
     const std::string drv = shim.isSdrplay() ? "sdrplay" : shim.isAirspyHf() ? "airspyhf"
-                          : shim.isHackRf() ? "hackrf" : "rtl";
+                          : shim.isHackRf() ? "hackrf" : shim.isAirspy() ? "airspy" : "rtl";   // ★ R2/Mini was "rtl" (2026-09-28)
     const vibebands::Ranges hw = vibebands::driverCoverage(drv);
     if (hw.empty()) return {};
     // ★ vsPermittedRanges returns EMPTY to mean "the owner set no lists", which is the opposite of

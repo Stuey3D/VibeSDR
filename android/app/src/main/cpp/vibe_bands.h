@@ -565,6 +565,9 @@ inline Ranges driverCoverage(const std::string& driver) {
     //   hear medium or long wave at all without an upconverter, and a directory entry claiming
     //   it could would send listeners to silence. (Experimental driver; see hackrf_source.h.)
     if (driver == "hackrf")   return { {1.0e6, 6.0e9} };
+    // ★ Airspy R2 / Mini: 24 - 1800 MHz (R820T2 tuner, no HF without an upconverter). Until
+    //   2026-09-28 it reached here as "rtl" and claimed medium wave it cannot hear.
+    if (driver == "airspy")   return { {24.0e6, 1.8e9} };
     return {};                                   // unknown: say nothing rather than guess
 }
 
