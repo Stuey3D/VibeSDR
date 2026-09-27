@@ -967,6 +967,20 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
                 <option value="350">350 kHz &mdash; narrowest</option>
               </select>
             </div>
+            <div class="note"><b>Left alone, the filter is as wide as the sample rate needs.</b>
+              Nothing is narrowed, and the spectrum has no roll-off at its edges.
+              <br>Narrowing is for an aerial that needs it. A long wire hands the tuner the whole
+              FM band at once and the front end manufactures its own interference from it, which a
+              narrower IF filter keeps out: measured on an RTL-SDR Blog V4 on a long wire, at
+              UNCHANGED gain, that was worth <b>19&nbsp;dB of signal-to-noise</b> &mdash; a band
+              with clean gaps between stations instead of one filled in. An amplified loop on the
+              same software and the same build needs none of it, which is why this is a choice and
+              not a default.
+              <br>Set a width and this band never widens past it; zooming in still narrows below
+              it. With <b>Lock this band</b> ticked it is the width, fixed, and listeners get no IF
+              control at all. <b>All bands</b> applies it everywhere.
+              <br>DAB, full-rate raw IQ and ADS&#8209;B take the full width regardless &mdash; they
+              need the whole capture.</div>
             <label class="row hide" id="gainLockRow" style="gap:8px;margin-top:10px">
               <input type="checkbox" id="gainLock">
               <span>Lock this band &mdash; the ceiling above is the SETTING, not a limit</span>

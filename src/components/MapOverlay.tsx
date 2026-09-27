@@ -406,6 +406,33 @@ L.control.zoom({position:'bottomright'}).addTo(map);
  *  index.json latches localOnly, so a non-VibeServer costs exactly ONE 404 and never one per layer.
  * ★ The bytes come over the bridge from RN (see onMessage/__mdDeliver): the data cannot live in this
  *  page, because the page is a string and 14 MB of it would be built on every open. */
+/* ★★★ THE INSTANCE IS FETCHED BY REACT NATIVE, NOT BY THIS PAGE — AND THAT IS THE WHOLE POINT.
+ *  The page used to be given the INSTANCE as its origin so /addon/hfdl/* was same-origin (most
+ *  UberSDRs have CORS off). That forced the MAP DATA over the RN bridge instead, which is exactly
+ *  backwards: ~15 MB of static map on the slow path, a few KB of aircraft every 5 s on the fast
+ *  one. Stuart: "that is what I want — maps stored on device so animations are smooth."
+ *  ★★ So the page now loads from a LOCAL origin with the map pack beside it on disk, and the only
+ *     thing crossing the bridge is the small, frequent aircraft feed. RN's fetch is not bound by
+ *     browser CORS, so an instance with CORS off still works — the very reason the instance origin
+ *     was chosen in the first place, now served better by not using it.
+ *  ★ Returns parsed JSON or null; every caller already treats a failure as "no data this tick". */
+window.__hfWait = {};
+window.__hfSeq = 0;
+window.__hfDeliver = function(id, body){
+  var w = window.__hfWait[id];
+  if(w){ delete window.__hfWait[id]; w(body); }
+};
+function hostFetch(path){
+  return new Promise(function(res){
+    if(!window.ReactNativeWebView){ res(null); return; }
+    var id = 'hf' + (++window.__hfSeq);
+    window.__hfWait[id] = res;
+    window.ReactNativeWebView.postMessage(JSON.stringify({ t:'hostfetch', id:id, path:path }));
+    /* ★ Never wait for ever: a lost reply must read as "nothing this tick", which every caller
+     *  already handles, rather than stalling the poll loop that feeds the animation. */
+    setTimeout(function(){ if(window.__hfWait[id]){ delete window.__hfWait[id]; res(null); } }, 12000);
+  });
+}
 window.__mdWait = {};
 window.__mdSeq = 0;
 window.__mdDeliver = function(id, body){
@@ -503,7 +530,7 @@ function showSetLoc(){
 if(LOCAL){
   if(RX_LAT||RX_LON)addRx(); else showSetLoc();
 }else{
-  fetch(BASE+'/api/description').then(function(r){return r.json();}).then(function(d){
+  hostFetch('/api/description').then(function(d){ if(!d) throw 0; return d; }).then(function(d){
     var gps=d&&d.receiver&&d.receiver.gps;
     if(gps&&(gps.lat||gps.lon)){RX_LAT=gps.lat;RX_LON=gps.lon;}
     addRx();
@@ -709,7 +736,7 @@ if(KIND==='hfdl'){
   // skin _fetchGS — fields: gs_id, location, frequencies[{freq_khz,enabled}],
   // last_sig_level, last_heard
   function fetchGS(){
-    fetch(BASE+'/addon/hfdl/groundstations').then(function(r){if(!r.ok)throw 0;return r.json();}).then(function(data){
+    hostFetch('/addon/hfdl/groundstations').then(function(data){ if(!data) throw 0; return data; }).then(function(data){
       (Array.isArray(data)?data:[]).forEach(function(s){
         var id=s.gs_id;
         var name=s.location||('GS '+id);
@@ -768,7 +795,7 @@ if(KIND==='hfdl'){
 
   // skin _fetchAC — latest flight detection → toast + glow + snap
   function fetchAC(){
-    fetch(BASE+'/addon/hfdl/aircraft').then(function(r){if(!r.ok)throw 0;return r.json();}).then(function(data){
+    hostFetch('/addon/hfdl/aircraft').then(function(data){ if(!data) throw 0; return data; }).then(function(data){
       var ac=Array.isArray(data)?data:[];
       cnt.textContent=ac.length;
       var latest=null;
@@ -1097,6 +1124,32 @@ export default function MapOverlay(
              *  because a map that stops talking is worse than a map missing one layer. */
             let m: { t?: string; id?: string; file?: string } | null = null;
             try { m = JSON.parse(d); } catch { return; }
+            /* ★★★ THE INSTANCE FETCH, DONE HERE INSTEAD OF IN THE PAGE. See hostFetch: RN is not
+             *  bound by browser CORS, so this reaches an UberSDR that sends no CORS headers —
+             *  which is what the instance-origin trick was for, and it frees the page to live on
+             *  a local origin with the map pack on disk beside it.
+             *  ★ A failure answers null rather than throwing: every caller in the page already
+             *    treats that as "no data this tick", which is what a poll loop wants. */
+            if (m && (m as any).t === 'hostfetch' && (m as any).id) {
+              const id = String((m as any).id);
+              const path = String((m as any).path || '');
+              const url = baseUrl.replace(/\/+$/, '') + path;
+              const deliver = (body: string) =>
+                webRef.current?.injectJavaScript(
+                  `window.__hfDeliver&&window.__hfDeliver(${JSON.stringify(id)},${body});true;`);
+              fetch(url, { signal: AbortSignal.timeout(10000) })
+                .then(r => (r.ok ? r.text() : null))
+                .then(t => {
+                  /* ★ Parsed here so a malformed body becomes null rather than a syntax error
+                   *  injected into the page — the RDS lesson: one bad payload must not take the
+                   *  whole thing down. */
+                  if (t === null) { deliver('null'); return; }
+                  try { JSON.parse(t); } catch { deliver('null'); return; }
+                  deliver(t);
+                })
+                .catch(() => deliver('null'));
+              return;
+            }
             if (!m || m.t !== 'mapdata' || !m.id) return;
             const get = m.file ? MAPDATA_FILES[m.file] : undefined;
             /* ★ A file we do not carry (a tier2 shard, a relief tile) is answered with null, i.e.

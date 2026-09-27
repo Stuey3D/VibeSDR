@@ -5534,8 +5534,27 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *     only being shown 1.2 MHz anyway. Never below 1 MHz — at the low rates `captureWide`
          *     below is what binds and this changes nothing; at the high rates the ratio bites.
          *  ★ A CEILING ONLY. Zooming IN still goes under it, which is the whole point above. */
-        int selectivityCap = (int)std::lround(sampleRate * 0.6);
-        if (selectivityCap < 1000000) selectivityCap = 1000000;
+        /* ★★★ UNSET MEANS AS WIDE AS THE SAMPLE RATE NEEDS — NOT 60%.
+         *  This imposed a 60% ceiling on every receiver, and Stuart reversed it once he saw what
+         *  it meant: "unless set, the IF filter is the widest it needs to be for that sample rate.
+         *  I only need the 1.4MHz setting for my particular antenna — the YouLoop and LNA doesnt
+         *  need it." And decisively: "the issue is right now I didnt know that it was defaulting
+         *  to a 60% filter."
+         *  ★★ THE COST OF THE OLD DEFAULT WAS REAL AND FELL ON THE WRONG PEOPLE. Narrowing shows
+         *     as roll-off at the edges of a zoomed-out view — shoulders an owner reasonably reads
+         *     as a fault in their radio — and the 19 dB it buys is only there on a front end that
+         *     is actually being overloaded. On the Pi 500's amplified YouLoop the band contrast
+         *     never collapses at all, so the narrowing was pure loss.
+         *  ★ So the automatic width is the capture (clamped above) and an owner narrows it per
+         *    band when their aerial needs it. ✗ A default that silently trades spectrum for a
+         *    problem most receivers do not have is the wrong way round.
+         *  ▶ KNOWN TENSION, recorded rather than argued: the listener who most needs the
+         *    narrowing — a novice on whatever wire came in the box — is the least likely to find
+         *    the setting. The answer to that is to DETECT it and say so on the admin page, not to
+         *    impose it on everybody. See the band-contrast measurements of 2026-09-27. */
+        /* ★ `captureWide` itself is declared below, so the same value is taken from the rate
+         *  here; the clamp down there is what actually holds it to the capture. */
+        int selectivityCap = (int)std::lround(sampleRate);
         /* ★★★ AND THE OWNER'S OWN CEILING FOR THIS BAND, WHICH BEATS THE AUTOMATIC ONE.
          *  Stuart, 2026-09-27: "keep auto filter as it is for now, that works for most things, but
          *  we have a per band maximum so that in this case I'd tell it never expand past 1.2MHz on
