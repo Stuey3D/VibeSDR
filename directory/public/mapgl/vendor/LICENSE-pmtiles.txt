@@ -1,0 +1,3 @@
+pmtiles 4.5.0 — BSD-3-Clause licence (declared in its package.json; the npm package ships no LICENSE file).
+Source: https://github.com/protomaps/PMTiles (js/). Copyright Protomaps LLC.
+Vendored as web/mapkit/vendor/pmtiles.js (dist/pmtiles.js, unmodified).

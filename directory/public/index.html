@@ -14,6 +14,7 @@
      failure for a page whose whole job is to work when other things do not.
      BSD-2-Clause; the licence travels with the files in vendor/leaflet/LICENSE. -->
 <link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/mapgl/vendor/maplibre-gl.css">
 <style>
   :root {
     /* ★★★ THE WEB CLIENT'S PALETTE, TO THE VALUE. Stuart wanted the directory to look like the
@@ -106,6 +107,16 @@
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
   .leaflet-popup-content { font-size: 12px; }
   .leaflet-container a.leaflet-popup-close-button { color: var(--dim); }
+  /* ★ The same dress on the GPU map (MapLibre's popups and controls) — see THE SWITCH below. */
+  .maplibregl-popup-content { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; border-radius: 8px; padding: 10px 12px; }
+  .maplibregl-popup-tip { border-top-color: var(--line) !important; border-bottom-color: var(--line) !important; }
+  .maplibregl-popup-close-button { color: var(--dim); font-size: 16px; }
+  .maplibregl-ctrl-group { background: var(--panel); border: 1px solid var(--line); }
+  .maplibregl-ctrl-group button + button { border-top: 1px solid var(--line); }
+  .maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg); opacity: 0.8; }
+  .maplibregl-ctrl-attrib, .maplibregl-ctrl-attrib.maplibregl-compact { background: rgba(0,0,0,0.6); color: var(--dim); font-size: 9px; }
+  .maplibregl-ctrl-attrib a { color: var(--dim); }
   main { padding: 16px 20px 60px; max-width: 900px; margin: 0 auto; }
 
   .legend { display: flex; gap: 18px; flex-wrap: wrap; color: var(--dim);
@@ -769,6 +780,14 @@
      exactly why the app's map was a much older and cruder one. Canonical source: web/mapkit/vibemap.js
      -- this is a copy written by scripts/gen-vibemap-source.mjs. ✗ Do not edit the copy. -->
 <script src="/mapkit/vibemap.js"></script>
+<!-- ★★ THE GPU MAP — the app's renderer, style, packs and relief (web/mapkit/, copied here by
+     scripts/sync-mapgl-assets.mjs). Leaflet + vibemap.js above stay as the fallback for a browser
+     without WebGL 2. -->
+<script src="/mapgl/vendor/maplibre-gl.js"></script>
+<script src="/mapgl/vendor/pmtiles.js"></script>
+<script src="/mapgl/vendor/vibemapgl.js"></script>
+<script src="/mapgl/vendor/vibemapgl-compat.js"></script>
+<script src="/mapgl/vibemap-style.js"></script>
 <script>
 // ★★★ THE GREYLINE IS NOT DECORATION FOR THIS AUDIENCE — IT IS INFORMATION. A DXer can see which
 //     receivers are sitting in enhanced propagation right now, which is a reason to click one
@@ -891,6 +910,30 @@ function jumpToList() {
   });
 }
 
+/* ══ THE SWITCH ══════════════════════════════════════════════════════════════════════════════════
+ * ★★★ Stuart, 2026-09-27: "get that etopo on the directory too". This page drew the relief on the old
+ *     Leaflet renderer, under the crude 1:110M outlines, with seams between its relief images. With
+ *     WebGL 2 it now draws the app's GPU map instead — one style, one set of packs, one relief — and
+ *     window.L becomes the adapter (vibemapgl-compat.js), so every L.marker / layerGroup / polygon /
+ *     fitBounds below lands on it unchanged. No WebGL 2, or anything failing here, leaves Leaflet.
+ * ★ The packs stream by HTTP Range (only the tiles in view) through the Worker's servePmtiles. */
+const LEAFLET = window.L;
+let GLVM = null;
+if (window.VibeMapGL && window.VibeMapGLCompat && window.VM_STYLE) {
+  try {
+    const load = (path, kind) => fetch(path).then((r) => (r.ok ? (kind === 'text' ? r.text() : r.arrayBuffer()) : null)).catch(() => null);
+    GLVM = VibeMapGL.createNow(document.getElementById('map'), {
+      style: window.VM_STYLE, load, base: '/mapgl/', rangeBase: location.origin + '/mapgl/',
+      profile: new URLSearchParams(location.search).get('map') || 'directory', center: [0, 30], zoom: 1,
+    });
+    if (GLVM) {
+      window.L = VibeMapGLCompat.install(GLVM);
+      L.control.zoom({ position: 'topleft' }).addTo();
+      GLVM.ready.catch((e) => console.error('GPU map: ' + e));
+    }
+  } catch (e) { console.error('GPU map unavailable: ' + e); GLVM = null; window.L = LEAFLET; }
+}
+
 const map = L.map('map', { worldCopyJump: true, scrollWheelZoom: false }).setView([30, 0], 2);
 document.getElementById('map').addEventListener('wheel', (e) => {
   // ★ Modifier held = zoom, and only then is the page's own scroll taken away.
@@ -934,12 +977,12 @@ function serverBoxes() {
 /* ★ `?map=aero` picks a profile without a rebuild, and window.setMapProfile lets a host page or
  *  the app's WebView switch it at runtime. Both were here before the extraction and both are part
  *  of this page's contract, so they stay -- the renderer only supplies setProfile(). */
-const vibeMap = VibeMap.attach(map, {
+const vibeMap = GLVM ? null : VibeMap.attach(map, {
   dataBase: '/mapdata/v1/',
   profile: new URLSearchParams(location.search).get('map') || 'directory',
   reserve: serverBoxes,
 });
-window.setMapProfile = (name) => vibeMap.setProfile(name);
+window.setMapProfile = (name) => (GLVM ? GLVM.setProfile(name) : vibeMap.setProfile(name));
 /* ★★ EXPOSED SO THE BASEMAP CAN BE MEASURED, NOT EYEBALLED. scratchpad/baseline.js counts what
  *  every layer actually draws at nine fixed views and compares the numbers across a change, which is
  *  the only reason we know this extraction changed nothing. Before the extraction those layer groups
@@ -951,7 +994,11 @@ window.vibeMap = vibeMap;
 
 // The day/night shadow, refreshed so it stays honest on a page left open.
 let term = null;
-try {
+// ★ The GPU map draws its own greyline (vibemapgl.js nightRing) — the same one the HFDL map shows.
+// ★ Guarded: a greyline that fails must never stop the script below it (the server list) — a stale
+//   copy of vibemapgl.js without setNight did exactly that in testing, 2026-09-28.
+if (GLVM) { try { GLVM.setNight(true, 0.28); } catch (e) { console.error('greyline: ' + e); } }
+else try {
   term = L.terminator({ fillOpacity: 0.28, color: '#000', weight: 0 });
   term.addTo(map);
   setInterval(() => { try { term.setTime(new Date()); } catch {} }, 60000);

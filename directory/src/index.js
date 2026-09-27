@@ -944,6 +944,46 @@ async function iqLookup(codeRaw, env) {
               200, { 'cache-control': 'no-store' });
 }
 
+/* ══ THE GPU MAP'S TILE PACKS, BY BYTE RANGE ══════════════════════════════════════════════════════
+ * ★★ The directory map reads /mapgl/*.pmtiles the way a browser should: only the tiles in view, by
+ *    HTTP Range (vibemapgl.js rangeBase) — never 19 MB per visit. Static assets reach us through this
+ *    Worker (run_worker_first), and ASSETS.fetch answers a Range with the WHOLE file (measured: 200,
+ *    full length). So each pack is put in the edge cache once per data centre, whole, and the Cache
+ *    API answers every Range from it with a 206 by itself — no slicing code of ours on the hot path.
+ * ★ The cache key carries the deployed file's ETag, so a redeploy is never answered from the old copy.
+ * ★ If the cache will not hold it (wrangler dev has none), the bytes are sliced here instead: slower,
+ *   never wrong. */
+async function servePmtiles(request, env) {
+  const url = new URL(request.url); url.search = '';
+  const head = await env.ASSETS.fetch(new Request(url.toString(), { method: 'HEAD' }));
+  if (!head.ok) return head;
+  const etag = head.headers.get('etag') || '';
+  const key = `${url.toString()}?v=${encodeURIComponent(etag)}`;
+  const range = request.headers.get('range');
+  const ask = () => new Request(key, { headers: range ? { range } : {} });
+  const cache = caches.default;
+  const hit = await cache.match(ask());
+  if (hit) return hit;
+  const full = await env.ASSETS.fetch(new Request(url.toString()));
+  if (!full.ok) return full;
+  const body = await full.arrayBuffer();
+  const headers = { 'content-type': 'application/octet-stream', 'accept-ranges': 'bytes',
+                    'cache-control': 'public, max-age=86400', ...(etag ? { etag } : {}) };
+  try {
+    await cache.put(key, new Response(body, { headers: { ...headers, 'content-length': String(body.byteLength) } }));
+    const again = await cache.match(ask());
+    if (again) return again;
+  } catch { /* no cache here: slice below */ }
+  if (!range) return new Response(body, { headers });
+  const m = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+  const size = body.byteLength;
+  let a, b;
+  if (m && m[1] !== '') { a = Number(m[1]); b = m[2] !== '' ? Math.min(Number(m[2]), size - 1) : size - 1; }
+  else if (m && m[2] !== '') { a = Math.max(0, size - Number(m[2])); b = size - 1; }
+  if (a === undefined || a >= size || b < a) return new Response(null, { status: 416, headers: { 'content-range': `bytes */${size}` } });
+  return new Response(body.slice(a, b + 1), { status: 206, headers: { ...headers, 'content-range': `bytes ${a}-${b}/${size}` } });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -991,6 +1031,7 @@ export default {
       return json({ error: 'server error' }, 500);
     }
 
+    if (p.startsWith('/mapgl/') && p.endsWith('.pmtiles') && request.method === 'GET') return servePmtiles(request, env);
     return env.ASSETS.fetch(request);
   },
 };

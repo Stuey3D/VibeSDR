@@ -122,7 +122,13 @@ if (stray.length) {
                  ['web/mapkit/vibemapgl-compat.js', 'assets/mapgl/vendor/vibemapgl-compat.js.txt'],
                  ['web/mapkit/vendor/maplibre-gl.js', 'assets/mapgl/vendor/maplibre-gl.js.txt'],
                  ['web/mapkit/vendor/pmtiles.js', 'assets/mapgl/vendor/pmtiles.js.txt'],
-                 ['web/mapkit/vibemap-style.json', 'assets/mapgl/vibemap-style.json']];
+                 ['web/mapkit/vibemap-style.json', 'assets/mapgl/vibemap-style.json'],
+                 // ★ AND THE DIRECTORY'S (2026-09-28): a stale vibemapgl.js there lacked setNight, threw, and
+                 //   stopped the page script before the server list — the whole directory, not just the map.
+                 ['web/mapkit/vibemapgl.js', 'directory/public/mapgl/vendor/vibemapgl.js'],
+                 ['web/mapkit/vibemapgl-compat.js', 'directory/public/mapgl/vendor/vibemapgl-compat.js'],
+                 ['web/mapkit/vendor/maplibre-gl.js', 'directory/public/mapgl/vendor/maplibre-gl.js'],
+                 ['web/mapkit/vendor/pmtiles.js', 'directory/public/mapgl/vendor/pmtiles.js']];
   const stale = pairs.filter(([src, copy]) => !existsSync(path.join(repo, copy))
     || !readFileSync(path.join(repo, src)).equals(readFileSync(path.join(repo, copy))));
   if (stale.length) { fail(`GPU-map asset copies are STALE — run node scripts/sync-mapgl-assets.mjs: ${stale.map(([s]) => s).join(', ')}`); }

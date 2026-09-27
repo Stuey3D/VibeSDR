@@ -65,8 +65,10 @@
       const m = { _ll: ll(latlng), _el: document.createElement('div'), _popup: null, _interactive: o.interactive !== false };
       m._mk = new ml.Marker({ element: m._el, anchor: 'center' }).setLngLat([m._ll.lng, m._ll.lat]);
       if (o.zIndexOffset) m._el.style.zIndex = String(o.zIndexOffset);
+      if (o.title) m._el.title = o.title;
       if (o.icon) applyIcon(m, o.icon);
-      m.addTo = (map) => { m._mk.addTo(map._gl || gl); return m; };
+      m.addTo = (t) => { if (t && t._isGroup) t.addLayer(m); else m._mk.addTo(gl); return m; };
+      m._show = () => m._mk.addTo(gl);
       m.remove = () => { m._mk.remove(); return m; };
       m.setLatLng = (p) => { m._ll = ll(p); m._mk.setLngLat([m._ll.lng, m._ll.lat]); return m; };
       m.getLatLng = () => m._ll;
@@ -114,7 +116,8 @@
     function CircleMarker(latlng, st) {
       const c = { id: ++circleSeq, ll: ll(latlng), st: Object.assign({}, st), html: null };
       const h = {
-        addTo: () => { circles.set(c.id, c); queueCircles(); return h; },
+        addTo: (t) => { if (t && t._isGroup) t.addLayer(h); else h._show(); return h; },
+        _show: () => { circles.set(c.id, c); queueCircles(); },
         remove: () => { circles.delete(c.id); queueCircles(); return h; },
         setStyle: (s) => { Object.assign(c.st, s); queueCircles(); return h; },
         setLatLng: (p) => { c.ll = ll(p); queueCircles(); return h; },
@@ -124,6 +127,63 @@
         getPopup: () => (c.html ? {} : null),
       };
       return h;
+    }
+
+    // ── Polygons → one GPU fill + outline layer (the directory's country highlight, the greyline) ──
+    const polys = new Map(); let polySeq = 0, polyDirty = false;
+    function flushPolys() {
+      polyDirty = false;
+      const src = gl.getSource('lc-polys');
+      if (!src) return;
+      src.setData({ type: 'FeatureCollection', features: [...polys.values()].map((q) => ({
+        type: 'Feature', id: q.id, properties: Object.assign({}, q.st),
+        geometry: { type: 'MultiPolygon', coordinates: q.rings.map((r) => [r]) } })) });
+    }
+    function queuePolys() { if (!polyDirty) { polyDirty = true; requestAnimationFrame(flushPolys); } }
+    vm.ready.then(() => {
+      if (gl.getSource('lc-polys')) return;
+      gl.addSource('lc-polys', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      // ★ Below the circles and every label: a highlight or a night shadow is ground, not a marker.
+      const under = gl.getStyle().layers.find((l) => l.type === 'symbol');
+      gl.addLayer({ id: 'lc-polys-fill', type: 'fill', source: 'lc-polys', paint: {
+        'fill-color': ['coalesce', ['get', 'fillColor'], ['get', 'color'], '#3388ff'],
+        'fill-opacity': ['coalesce', ['get', 'fillOpacity'], 0.2] } }, under && under.id);
+      gl.addLayer({ id: 'lc-polys-line', type: 'line', source: 'lc-polys', paint: {
+        'line-color': ['coalesce', ['get', 'color'], '#3388ff'],
+        'line-width': ['coalesce', ['get', 'weight'], 3],
+        'line-opacity': ['case', ['==', ['get', 'stroke'], false], 0, ['coalesce', ['get', 'opacity'], 1]] } }, under && under.id);
+      flushPolys();
+    });
+    /** Leaflet polygon: [lat, lng] rings (one ring, or a list of them). Each ring is drawn as its own
+     *  polygon — what the directory's country outlines are — never as holes. */
+    function Polygon(latlngs, st) {
+      const isRing = (a) => Array.isArray(a) && a.length && (Array.isArray(a[0]) ? typeof a[0][0] === 'number' : a[0].lat != null);
+      const toRing = (r) => { const c = r.map((p) => { const q = ll(p); return [q.lng, q.lat]; });
+        if (c.length && (c[0][0] !== c[c.length - 1][0] || c[0][1] !== c[c.length - 1][1])) c.push(c[0]); return c; };
+      const q = { id: ++polySeq, rings: (isRing(latlngs) ? [latlngs] : latlngs).map(toRing), st: Object.assign({}, st) };
+      const h = {
+        addTo: (t) => { if (t && t._isGroup) t.addLayer(h); else h._show(); return h; },
+        _show: () => { polys.set(q.id, q); queuePolys(); },
+        remove: () => { polys.delete(q.id); queuePolys(); return h; },
+        setStyle: (s2) => { Object.assign(q.st, s2); queuePolys(); return h; },
+        setLatLngs: (a) => { q.rings = (isRing(a) ? [a] : a).map(toRing); queuePolys(); return h; },
+      };
+      return h;
+    }
+    /** Leaflet layerGroup: its members show only while the group is on the map. */
+    function LayerGroup() {
+      const members = new Set(); let on = false;
+      const g = {
+        _isGroup: true,
+        addLayer: (l) => { members.add(l); if (on) (l._show ? l._show() : l.addTo(map)); return g; },
+        removeLayer: (l) => { members.delete(l); l.remove(); return g; },
+        clearLayers: () => { for (const l of members) l.remove(); members.clear(); return g; },
+        getLayers: () => [...members],
+        addTo: () => { on = true; for (const l of members) (l._show ? l._show() : l.addTo(map)); return g; },
+        remove: () => { on = false; for (const l of members) l.remove(); return g; },
+        _on: () => on,
+      };
+      return g;
     }
 
     // ── The map ─────────────────────────────────────────────────────────────────────────────────
@@ -148,6 +208,19 @@
       once(ev, fn) { gl.once(ev, fn); return map; },
       off(ev, fn) { for (const e of String(ev).split(/\s+/)) gl.off(e, fn); return map; },
       removeLayer(layer) { if (layer && layer.remove) layer.remove(); return map; },
+      hasLayer(layer) { return !!(layer && layer._on ? layer._on() : false); },
+      zoomIn(d) { gl.zoomIn({ duration: 250 }); return map; },
+      zoomOut(d) { gl.zoomOut({ duration: 250 }); return map; },
+      /** fitBounds(Bounds | [[lat, lng], …], { padding: [x, y] | point, maxZoom }) — immediate, as Leaflet's is. */
+      fitBounds(b, o) {
+        o = o || {};
+        const bb = b && b._mb ? b : Bounds(b);
+        const pad = Array.isArray(o.padding) ? { x: o.padding[0], y: o.padding[1] } : (o.padding || { x: 0, y: 0 });
+        gl.fitBounds(bb._mb, { padding: { top: pad.y, bottom: pad.y, left: pad.x, right: pad.x },
+                               maxZoom: o.maxZoom != null ? o.maxZoom - DZ : 22, duration: 0 });
+        return map;
+      },
+      latLngToContainerPoint(p) { const q = ll(p); const pt = gl.project([q.lng, q.lat]); return { x: pt.x, y: pt.y }; },
       invalidateSize() { gl.resize(); return map; },
       getContainer: () => gl.getContainer(),
       latLngToLayerPoint(p) { const q = ll(p); const pt = gl.project([q.lng, q.lat]); return { x: pt.x, y: pt.y }; },
@@ -156,7 +229,9 @@
 
     const L = {
       __gpu: true,
-      map() { return map; },
+      map(id, o) { if (o && o.scrollWheelZoom === false) gl.scrollZoom.disable(); return map; },
+      layerGroup: LayerGroup,
+      polygon: Polygon,
       marker: Marker,
       circleMarker: CircleMarker,
       divIcon: (options) => ({ options }),

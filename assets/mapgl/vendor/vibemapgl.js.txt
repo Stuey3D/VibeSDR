@@ -101,6 +101,32 @@
     }
   }
 
+  /* ══ THE GREYLINE — where it is night right now ══════════════════════════════════════════════════
+   * ★★ Stuart, 2026-09-27: on the HFDL map too — "be interesting to see how many planes are flying at
+   *    night vs the day". For this audience it is information, not decoration: HF propagates differently
+   *    either side of it. Computed here (no Leaflet plugin), so every host draws the same line.
+   * ★ Same astronomy as L.Terminator, which the directory used: the sun's right ascension and
+   *   declination from the date, then for each longitude the latitude where the sun is on the horizon.
+   *   The night side is closed over whichever pole is dark. Clamped to ±85° (Web Mercator's edge). */
+  function nightRing(date) {
+    const rad = Math.PI / 180, jd = date.getTime() / 86400000 + 2440587.5, n = jd - 2451545;
+    const gmst = (18.697374558 + 24.06570982441908 * n) % 24;
+    const Lm = (280.46 + 0.9856474 * n) % 360, g = (357.528 + 0.9856003 * n) % 360;
+    const lambda = (Lm + 1.915 * Math.sin(g * rad) + 0.02 * Math.sin(2 * g * rad)) * rad;
+    const eps = (23.4393 - 0.0000004 * n) * rad;
+    const alpha = Math.atan2(Math.cos(eps) * Math.sin(lambda), Math.cos(lambda)) / rad;
+    const delta = Math.asin(Math.sin(eps) * Math.sin(lambda));
+    const ring = [];
+    for (let lng = -180; lng <= 180; lng += 1) {
+      const ha = (gmst * 15 + lng - alpha) * rad;
+      const lat = Math.atan(-Math.cos(ha) / Math.tan(delta)) / rad;
+      ring.push([lng, Math.max(-85, Math.min(85, lat))]);
+    }
+    const pole = delta < 0 ? 85 : -85;          // ★ the dark pole: the north in the southern summer
+    ring.unshift([-180, pole]); ring.push([180, pole]); ring.push([-180, pole]);
+    return ring;
+  }
+
   /**
    * ★★ SYNCHRONOUS, BECAUSE THE PAGES ARE. A host page calls L.map(...) and uses the map on the next
    *  line; MapLibre's constructor is synchronous, so the map exists at once — sea-coloured — and the
@@ -207,7 +233,22 @@
         }
         return true;
       },
-      destroy() { map.remove(); },
+      /** The night shadow on (refreshed every minute) or off. Drawn under the labels and markers. */
+      setNight(on, opacity) {
+        clearInterval(this._nightT); this._nightT = null;
+        ready.then(() => {
+          const data = () => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [nightRing(new Date())] } });
+          if (!on) { if (map.getLayer('vs-night')) map.removeLayer('vs-night'); if (map.getSource('vs-night')) map.removeSource('vs-night'); return; }
+          if (!map.getSource('vs-night')) {
+            map.addSource('vs-night', { type: 'geojson', data: data() });
+            const under = map.getStyle().layers.find((l) => l.type === 'symbol');
+            map.addLayer({ id: 'vs-night', type: 'fill', source: 'vs-night',
+              paint: { 'fill-color': '#000', 'fill-opacity': opacity != null ? opacity : 0.28, 'fill-antialias': false } }, under && under.id);
+          }
+          this._nightT = setInterval(() => { const s = map.getSource('vs-night'); if (s) s.setData(data()); }, 60000);
+        });
+      },
+      destroy() { clearInterval(this._nightT); map.remove(); },
     };
   }
   /** The same, for a host that can wait: resolves once the style is in. */
@@ -218,5 +259,5 @@
     return vm;
   }
 
-  global.VibeMapGL = { create, createNow, prepareStyle, webgl2 };
+  global.VibeMapGL = { create, createNow, prepareStyle, webgl2, nightRing };
 })(typeof window !== 'undefined' ? window : globalThis);
