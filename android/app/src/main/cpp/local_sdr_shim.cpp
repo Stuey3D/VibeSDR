@@ -26034,7 +26034,29 @@ void LocalSdrShim::overloadTick() {
     g_nextStride.store(0, std::memory_order_relaxed);   // ★ wrong once: back to one rung
             g_settled.store(true, std::memory_order_relaxed);
             g_adcCleanRun.store(0, std::memory_order_relaxed);
-        } else if (d > 0.5f && dir > 0 && contrastFell > kContrastCostDb) {
+        } else if (dir > 0 && contrastFell > kContrastCostDb) {
+            /* ★★★ THE `d > 0.5f` THAT USED TO GUARD THIS LINE LEFT A HOLE THE SIZE OF EVERY STRONG
+             *  STATION, AND MEASUREMENT FOUND IT (2026-09-27, 12 runs over three V4s).
+             *  The chain refuses a climb when separation got WORSE (d < -0.5), or when separation
+             *  improved AND contrast collapsed (the old d > 0.5 here). Between those two lies
+             *  -0.5 <= d <= 0.5 — separation essentially unchanged — and NOTHING judged it. That
+             *  band is not an edge case: it is where a STRONG station lives, because its separation
+             *  is already high and a rung barely moves it. So the loop could fill the band in with
+             *  complete impunity on exactly the signals that do it most.
+             *  ★★★ MEASURED: XCover (64-bit, RTL-SDR Blog V4), BBC Northampton 104.2 — climbing
+             *      22.9 -> 29.7 dB cost 21 dB of headroom (peak minus the floor BETWEEN carriers).
+             *      Pi 2 on the same station: 29.7 -> 40.2 dB cost 38 dB. Across all 12 runs a dB of
+             *      gain bought about a dB of intermod on every box, 64-bit included.
+             *  ★★★ AND THIS KILLS THE 32-BIT THEORY. The Pi 500 — the box that "works fine" — gives
+             *      away 10.4 dB on BBC R1 by parking at 22.9 dB when 12.5 dB measured better. It
+             *      looks healthy only because its amplified loop means it seldom has to climb.
+             *      The variable was the STATION, not the word size.
+             *  ★★ STILL REFUSES, NEVER REQUESTS, so the safety argument above is untouched: on an
+             *     R860, where contrast does not collapse as the gain rises, contrastFell stays near
+             *     zero and this branch never fires. Relaxing the separation gate cannot make it ask
+             *     for gain — it can only stop a climb that is manufacturing mush.
+             *  ★ kContrastCostDb (2.0) already sits above the ~1 dB of band breathing measured on a
+             *    well-behaved climb, so flat separation plus honest wander still does not trip it. */
             /* ★★★ IT BOUGHT THIS CHANNEL AND SOLD THE BAND. A climb that lifts the tuned station a
              *  little while filling in the gaps between every OTHER station is not an improvement,
              *  it is the front end starting to manufacture — and the separation objective alone
@@ -26050,9 +26072,17 @@ void LocalSdrShim::overloadTick() {
              *     asks for gain. So on an R860 — every other server Stuart runs — where contrast
              *     does not collapse as the gain rises, this term is ~0 and nothing changes at all.
              *  ★ Only on the way UP. Coming down cannot be the thing that made the mush. */
-            LOGI("that step up bought %.1f dB of separation (%.1f -> %.1f) but cost %.1f dB of band "
-                 "contrast (%.1f -> %.1f) — that is the front end filling the band in, putting it back",
-                 d, sepWas, sepNow, contrastFell, contrastWas, contrastNow);
+            /* ★ The message has to stay true now the separation gate is gone: with d near zero
+             *  "bought 0.1 dB of separation" reads as a finding when it is actually the whole
+             *  point — the step bought NOTHING and still cost the band. Say which case it is. */
+            if (d > 0.5f)
+                LOGI("that step up bought %.1f dB of separation (%.1f -> %.1f) but cost %.1f dB of "
+                     "band contrast (%.1f -> %.1f) — that is the front end filling the band in, "
+                     "putting it back", d, sepWas, sepNow, contrastFell, contrastWas, contrastNow);
+            else
+                LOGI("that step up left separation unchanged (%.1f -> %.1f) and cost %.1f dB of "
+                     "band contrast (%.1f -> %.1f) — gain that arrives only as mush, putting it back",
+                     sepWas, sepNow, contrastFell, contrastWas, contrastNow);
             steps_forceDown = true;
             g_sameDirRun.store(0, std::memory_order_relaxed);
             g_nextStride.store(0, std::memory_order_relaxed);
