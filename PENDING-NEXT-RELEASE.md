@@ -382,11 +382,22 @@ drop and sound broken. Most low end 32bit servers will not be able to handle mor
 so this is a minor issue that may end up having to stay as I do not want to risk the DSP and audio
 threads. 64Bit servers are unaffected."*
 
+★★ **AND IT IS INVISIBLE IN USE — SAY SO.** Stuart, 2026-09-27: *"This bug doesnt effect the
+usage of the server or the app in anyway and the interpolation effectively hides it. The only
+reason I even noticed it was the diagnostic figure in the controls."* That is what makes shipping
+it a judgement rather than a shrug: the waterfall interpolates between frames, so nobody sees 7.7
+instead of 20 — the only place the difference exists is the number the diagnostics print.
+▶ A release note that says "known issue" without saying "you will not notice this" invites people
+to go looking for a fault that is not there, which is worse than not mentioning it.
+
 ### The wording for the release note
 > **Known issue — 32-bit servers only.** The spectrum frame rate sits at about 8 fps whatever you
-> set it to. The fix we tried cost too much time on the DSP thread and broke the audio, and most
-> low-end 32-bit hosts cannot sustain more than 10 fps anyway, so the rate is being left alone
-> rather than risking the audio. 64-bit servers are unaffected and honour the setting exactly.
+> set it to. **You will not see it**: the waterfall interpolates between frames, so the display
+> looks the same either way, and the only place the difference shows is the frame-rate figure in
+> the diagnostics. The fix we tried cost too much time on the DSP thread and broke the audio, and
+> most low-end 32-bit hosts cannot sustain more than 10 fps anyway, so the rate is being left
+> alone rather than risking the audio. 64-bit servers are unaffected and honour the setting
+> exactly.
 
 ### MEASURED, so the claim can be defended (2026-09-27, passive frame count over 20 s)
 | box | arch | configured | delivered |
