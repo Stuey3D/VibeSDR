@@ -1417,7 +1417,14 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       setToggleTo('nbBtn',  s.nb,  'nb',  (on) => on ? 'NB ON'  : 'NB OFF');
       if (typeof s.nfmVoice === 'boolean') {
         nfmVoiceKnown = true;   // ★ the row may now appear (in NFM) — see syncNfmVoiceRow
-        setToggleTo('nfmVoiceBtn', s.nfmVoice, 'nfmVoice', (on) => on ? 'VOICE' : 'RAW');
+        /* ★★ THE REPORT MUST NOT OVERWRITE THE LISTENER'S CHOICE. A new session reports the
+         *  server's default (Voice), possibly before the restored Raw has landed — saving that
+         *  report as the pref (setToggleTo's prefKey) would quietly forget the choice. So the
+         *  remembered value wins: re-stated if the server disagrees, and shown. Only a CLICK saves. */
+        const want = prefs().nfmVoice;
+        if (typeof want === 'boolean' && want !== s.nfmVoice) spec?.setNfmVoice(want);
+        setToggleTo('nfmVoiceBtn', typeof want === 'boolean' ? want : s.nfmVoice, undefined,
+                    (on) => on ? 'VOICE' : 'RAW');
       }
       if (typeof s.nbx === 'boolean') {
         setHidden($('nbxRow'), false);

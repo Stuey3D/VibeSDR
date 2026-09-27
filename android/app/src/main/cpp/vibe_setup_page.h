@@ -475,6 +475,20 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
          single-user one has neither and gets the allow/block lists instead. Asking it last, as
          this page used to, means answering questions that the next answer makes irrelevant. -->
     <div id="radioPane">
+      <!-- ★★★ THE RADIO'S NAME — what listeners see on the waterfall, in the radio list and in the
+           directory. Display only: nothing is written to the device. It was always stored (the
+           `label` in config.json) but could only be changed by editing that file by hand, which is
+           what Kiko did (2026-09-27) to show "RTL-SDR Blog V3" instead of the factory string.
+           ★ Blank means the name it came with: the server refills it from the device's own current
+           name on save — which also picks up a dongle whose EEPROM name has since been changed. -->
+      <div class="card">
+        <h2>SDR display name</h2>
+        <p class="why">Changes the displayed name of this SDR in the server and directory listings.
+           This makes no changes to the hardware, and if left clear the default name obtained from
+           the USB port will be used.</p>
+        <input type="text" id="radioName" maxlength="60" autocomplete="off"
+               placeholder="Default: the name obtained from the USB port">
+      </div>
       <div class="card">
       <h2>How will it be used?</h2>
       <p class="why">This decides what listeners are allowed to change.</p>
@@ -3422,6 +3436,7 @@ function fill() {
   // ★★ THIS RADIO. Read from the open tab, never from cfg — reading a radio setting off the
   //    machine is how every receiver would show the first one's frequency.
   const r = radio();
+  $("radioName").value = r.label || "";
   $("antenna").value = r.antenna || "";
   /* ★★★ THE PIN ITSELF NEVER GOES BACK ON SCREEN. The config the page fetched does carry it —
    *   the whole file comes down behind the admin password — but putting it in an input would put
@@ -3802,6 +3817,9 @@ function collectRadio() {
     landingFreq: Math.round(parseFloat($("landingFreq").value || "0") * 1e3),
     antenna: ($("antenna").value || "").trim(),
     antennaIcon: antIconSel,
+    // ★ The radio's display name. Empty is sent as empty on purpose: the server refills it from
+    //   the device's own name (see the save handler in main.cpp) — that IS "no name = default".
+    label: ($("radioName").value || "").trim(),
 
     /* ★★★ THE ONE FIELD HERE THAT IS SENT ONLY SOMETIMES, and deliberately so. Everything else in
      *   this object is read off the form and posted every time, because the form always holds the

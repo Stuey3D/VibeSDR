@@ -1712,6 +1712,35 @@ int main(int argc, char** argv) {
             std::string ignored;
             if (!vsconfig::loadServer(g_configPath, next, ignored)) next = g_serverConfig;
             if (!vsconfig::fromJson(json, next, err)) return false;
+            /* ★★★ A BLANK NAME MEANS "THE NAME IT HAD BEFORE ANYBODY CHANGED IT". The radio's
+             *  `label` is what listeners see, and until now it could only be changed by editing
+             *  config.json by hand (Kiko did, 2026-09-27). The setup page now edits it, and clearing
+             *  the box must not leave a radio called nothing: it is refilled from the device's OWN
+             *  current name, exactly as first detection names it. That also cures the other half of
+             *  Kiko's report — the label was cached at first detection, so renaming the dongle's
+             *  EEPROM never reached listeners; clearing the name now picks the new one up.
+             *  ★ Display only: nothing here touches the hardware.
+             *  ★ Enumerates ONLY when a label actually came back blank, so an ordinary save never
+             *    walks the USB bus under a running radio. */
+            {
+                bool anyBlank = false;
+                for (const auto& r : next.radios)
+                    if (r.label.find_first_not_of(" \t") == std::string::npos) { anyBlank = true; break; }
+                if (anyBlank) {
+                    const auto found = vibe::detectRadios();
+                    for (auto& r : next.radios) {
+                        if (r.label.find_first_not_of(" \t") != std::string::npos) continue;
+                        r.label.clear();
+                        for (const auto& d : found)
+                            if (d.driver == r.driver && !r.serial.empty() && d.serial == r.serial) {
+                                r.label = d.name; break;
+                            }
+                        // ★ Not attached right now: fall back to what every reader already falls back
+                        //   to (`r.label.empty() ? r.driver : r.label`), stated rather than left blank.
+                        if (r.label.empty()) r.label = r.driver;
+                    }
+                }
+            }
 
             // ★★ A RESTART IS ASKED FOR, NOT ASSUMED. The setup page saves a tab at a time — and a
             //    tab save that bounced every listener off the OTHER radios would make the page
