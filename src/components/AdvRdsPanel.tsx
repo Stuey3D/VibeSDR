@@ -808,9 +808,20 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
    *     screen saying so (2026-09-27).
    *  ★ The 4 s hold below is for a momentary DROPOUT and must not paper over this: a signal that
    *    is simply too weak is a standing condition, not a blink, so the refusal comes first. */
-  const devGateOpen = devGate.current || mpxSnr <= 0;
+  /* ✗✗✗ AND BLOCK SYNC IS NOT THE SAME AS USABLE BLOCKS. Gated on S/N alone, a station at 100 %
+   *     BLOCK ERRORS printed "avg 7.2 · peak 13.6 · raw 10.2 kHz" — measured from pure noise in the
+   *     ±2.4 kHz band — while every neighbouring field said "not measurable" (Stuart, 2026-09-27,
+   *     107.400). The frame before showed a dash only because errors read "—" (no sync at all); at
+   *     100 % you HAVE sync and zero good blocks, and the row measured the hiss.
+   *  ★ 50 % is not a tuned constant — it is the point past which most blocks are wrong. The
+   *    "over spec — suspect" ceiling still stands behind this as the last line of defence. */
+  /* ★ Read from the live extras here rather than the `ber` further down, which is declared for
+   *  the flags row 60 lines later — same number, but this gate runs first. */
+  const berNow = (x && x.ber >= 0) ? x.ber : (p.ber ?? -1);
+  const rdsBerBad = berNow >= 50;
+  const devGateOpen = (devGate.current || mpxSnr <= 0) && !rdsBerBad;
   if (rdev > 0.2 && !devGateOpen) {
-    rdsDevTxt = 'not measurable at this S/N';
+    rdsDevTxt = rdsBerBad ? 'not measurable at this error rate' : 'not measurable at this S/N';
     rdsDevCol = C.warn;
     // ✗ Deliberately NOT written to rdsHold: holding a refusal would keep it on screen for 4 s
     //   after the signal recovered, and the hold exists to smooth the opposite case.

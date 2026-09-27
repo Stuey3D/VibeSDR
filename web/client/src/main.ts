@@ -9759,11 +9759,26 @@ function renderRds() {
    *    than inventing a threshold. Those numbers are already paid for: a hard 20 called
    *    tgcfabian's own FelineFM "buried in noise" while it decoded at 12.4 groups/s. One rule, one
    *    place — the alternative is a sixth outing for the one-threshold flap. */
-  const rdsMeasurable = devGateOpen || (rdsExt?.mpxSnr ?? 0) <= 0;
+  /* ✗✗✗ BLOCK SYNC IS NOT THE SAME AS USABLE BLOCKS. This was gated on S/N alone, so a station
+   *     with 100 % BLOCK ERRORS printed "avg 7.2 · peak 13.6 · raw 10.2 kHz" — measured from pure
+   *     noise in the ±2.4 kHz band — while every neighbouring field on the same screen said "not
+   *     measurable" (Stuart, 2026-09-27, 107.400). The frame before it showed a dash only because
+   *     errors were "—" (no sync at all): at 100 % you HAVE sync and zero good blocks, and the row
+   *     happily measured the hiss.
+   *  ★★ The "over spec — suspect" ceiling did fire, and that is the LAST line of defence, not the
+   *     right one — it catches an impossible number after the fact instead of declining to state
+   *     one. Same fault shape as the rotation detector: a confident output from unusable input.
+   *  ★ 50 % is not a tuned constant, it is the point past which the majority of blocks are wrong;
+   *    nothing derived from the subcarrier deserves a figure there. */
+  const rdsBerBad = rdsBer >= 50;
+  const rdsMeasurable = (devGateOpen || (rdsExt?.mpxSnr ?? 0) <= 0) && !rdsBerBad;
   if (rdev > 0.2 && !rdsMeasurable) {
     /* ★ Say it in the panel's own idiom, and in the SAME words the deviation meter uses two rows
      *  down — two readouts in one box must not describe the same condition differently. */
-    rEl.textContent = 'not measurable at this S/N';
+    /* ★ NAME THE REASON. "at this S/N" in front of a 34 dB S/N reading reads as a broken panel;
+     *  the error rate is a different complaint and the user can see both numbers. */
+    rEl.textContent = rdsBerBad ? 'not measurable at this error rate'
+                                : 'not measurable at this S/N';
     rEl.style.color = '#ffd479';
   } else if (rdev > 0.2) {
     // ★★ THE SCALE HAS A CEILING, SO THE LABELS MUST TOO. 7.5% of 75 kHz = 5.6 kHz is the spec
