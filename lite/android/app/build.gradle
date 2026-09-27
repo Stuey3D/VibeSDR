@@ -91,7 +91,9 @@ def SHARED = ['VibeLocalSDR.kt', 'VibeServerBoot.kt', 'VibeServerRestore.kt', 'R
               // ★★ The server benchmark VibeLocalSdrModule calls (runBenchmark/lastBenchmark). Missing from
               //    this list, the module does not compile at all — and gradle stops with the PREVIOUS APK still
               //    sitting in outputs/, which is exactly how a stale build once shipped as a new one.
-              'VibeBenchmark.kt']
+              'VibeBenchmark.kt',
+              // ★★★ The GPU map: asset unpack + the JNI downloader for the High Detail pack.
+              'VibeMapGL.kt']
 tasks.register('syncShared', Sync) {
     from("${MAIN}/java/com/vibesdr/app") { include SHARED }
     into "${buildDir}/shared-src/com/vibesdr/app"
@@ -124,6 +126,9 @@ tasks.register('syncFonts', Sync) {
     into "${buildDir}/rn-fonts/fonts"
 }
 preBuild.dependsOn syncShared, syncSharedRes, syncJniLibs, bundleJs, syncFonts
+// ★★★ The GPU map files the server serves at /mapgl/ — the MAIN app's script, so both APKs carry the
+//     same pack by construction (briefs/BRIEF-server-gpu-maps.md §2).
+apply from: "${MAIN}/../../mapgl-assets.gradle"
 
 dependencies {
     implementation 'androidx.core:core-ktx:1.13.1'

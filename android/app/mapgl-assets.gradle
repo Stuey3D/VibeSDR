@@ -1,0 +1,75 @@
+/* ★★★ THE GPU MAP, BUNDLED INTO THE APK SO THE ANDROID VIBESERVER CAN SERVE IT (2026-09-28).
+ *
+ *  Applied by BOTH Android apps — the main app (android/app/build.gradle) and VibeServer Lite
+ *  (lite/android/app/build.gradle) — because both run the same C++ server, and a map that only one
+ *  of them can serve is the "wired at one end" bug again.
+ *
+ *  Contract: briefs/BRIEF-server-gpu-maps.md §1/§2. The server serves /mapgl/<path> from
+ *  filesDir/mapgl-bundled/, which VibeMapGL.kt unpacks from these assets once per content version.
+ *
+ *  Source: directory/public/mapgl/ (plain names, the §1 layout) MINUS vibemap-style.js, PLUS
+ *  web/mapkit/vibemap-style.json. The directory copy is what scripts/sync-mapgl-assets.mjs writes,
+ *  so it is the same bytes the app and the directory draw.
+ *
+ *  ★★ ASSET NAMES CARRY NO SPACES. The fonts live in "JetBrains Mono Bold/" and the URL keeps the
+ *     space (%20); the asset path swaps it for '_' and the MANIFEST maps each asset back to its real
+ *     name, so nothing depends on aapt's treatment of a space in a path.
+ *  ★★ THE MANIFEST IS THE VERSION. `mapgl/manifest.tsv` = one "asset\tdest\tbytes" line per file,
+ *     and a first line "#version <bytes>-<count>-<sha1 prefix>". The unpacker writes that version
+ *     into its marker LAST, so a changed pack (or a half-copy) is always redone.
+ *  ★ FAILS THE BUILD when the source is missing — an APK whose server silently serves no map is
+ *    worse than no APK.
+ */
+import java.security.MessageDigest
+
+def mapglRepo = buildscript.sourceFile.parentFile.parentFile.parentFile   // android/app/ → repo
+def mapglSrc = new File(mapglRepo, 'directory/public/mapgl')
+def mapglStyle = new File(mapglRepo, 'web/mapkit/vibemap-style.json')
+def mapglOut = file("${buildDir}/mapgl-assets")
+
+tasks.register('bundleMapglAssets') {
+    inputs.dir(mapglSrc)
+    inputs.file(mapglStyle)
+    outputs.dir(mapglOut)
+    doLast {
+        if (!new File(mapglSrc, 'vibemap-basic.pmtiles').isFile() || !mapglStyle.isFile())
+            throw new GradleException("GPU map source missing: need ${mapglSrc}/vibemap-basic.pmtiles " +
+                "and ${mapglStyle}. Run: node scripts/sync-mapgl-assets.mjs")
+        project.delete(mapglOut)
+        def dest = new File(mapglOut, 'mapgl')
+        dest.mkdirs()
+        // [relative dest name, source file]
+        def entries = []
+        mapglSrc.eachFileRecurse(groovy.io.FileType.FILES) { f ->
+            def rel = mapglSrc.toPath().relativize(f.toPath()).toString().replace('\\', '/')
+            if (rel == 'vibemap-style.js' || f.name.startsWith('.')) return
+            entries << [rel, f]
+        }
+        entries << ['vibemap-style.json', mapglStyle]
+        entries.sort { a, b -> a[0] <=> b[0] }
+        def sha = MessageDigest.getInstance('SHA-1')
+        long total = 0
+        def lines = []
+        entries.each { e ->
+            String rel = e[0]; File f = e[1]
+            String asset = rel.replace(' ', '_')
+            def out = new File(dest, asset)
+            out.parentFile.mkdirs()
+            byte[] bytes = f.bytes
+            out.bytes = bytes
+            sha.update(rel.getBytes('UTF-8')); sha.update(bytes)
+            total += bytes.length
+            lines << "${asset}\t${rel}\t${bytes.length}"
+        }
+        def ver = "${total}-${entries.size()}-" + sha.digest().encodeHex().toString().substring(0, 12)
+        new File(dest, 'manifest.tsv').setText("#version ${ver}\n" + lines.join('\n') + '\n', 'UTF-8')
+        logger.lifecycle("mapgl assets: ${entries.size()} files, ${total} bytes, version ${ver}")
+    }
+}
+
+android {
+    sourceSets { main { assets.srcDirs += [mapglOut] } }
+    // ★ The pmtiles hold already-compressed tiles; storing them saves the unpack an inflate of 20 MB.
+    androidResources { noCompress 'pmtiles' }
+}
+tasks.named('preBuild') { dependsOn 'bundleMapglAssets' }

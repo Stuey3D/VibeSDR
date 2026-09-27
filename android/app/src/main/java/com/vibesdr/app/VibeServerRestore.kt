@@ -150,6 +150,7 @@ object VibeServerRestore {
         // ★ Never allowed to fail the start: restoreIfWanted swallows everything.
         if (port > 0) VibeTunnel.restoreIfWanted(ctx, port)
         if (port > 0) VibeGeoData.start(ctx)
+        if (port > 0) VibeMapGL.start(ctx)   // the GPU map — see VibeMapGL
         // ★★ STATION LOGOS FROM THE BROADCASTER, wired on BOTH start paths. The geo lookup above
         //    had to learn that lesson too: a headless restore is how this server usually comes
         //    back, so anything wired only where the UI starts it is missing exactly when nobody

@@ -351,6 +351,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             return
         }
         Log.i(TAG, "spectrum started on port $port")
+        // ★ A local dongle IS a loopback VibeServer: its web client's spots map fetches /mapgl/ too.
+        VibeMapGL.start(reactApplicationContext)
         val res = Arguments.createMap()
         res.putInt("port", port)
         res.putString("wsBaseUrl", "http://127.0.0.1:$port")
@@ -476,6 +478,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // ★★ COUNTRY AND NETWORK LOOKUP, wired up and refreshed if stale. Idempotent and cheap
         //    unless a download is actually needed — see VibeGeoData.
         if (port > 0) VibeGeoData.start(reactApplicationContext)
+        // ★★★ THE GPU MAP (/mapgl/) — unpacked from the APK once, plus the High Detail downloader.
+        //     On BOTH start paths, for the same reason as the line above. See VibeMapGL.
+        if (port > 0) VibeMapGL.start(reactApplicationContext)
         // ★★ STATION LOGOS FROM THE BROADCASTER, wired on BOTH start paths. The geo lookup above
         //    had to learn that lesson too: a headless restore is how this server usually comes
         //    back, so anything wired only where the UI starts it is missing exactly when nobody

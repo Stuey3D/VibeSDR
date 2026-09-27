@@ -213,6 +213,9 @@ tasks.register('copyCloudflared', Copy) {
 }
 tasks.named('preBuild') { dependsOn 'copyCloudflared' }
 
+// ★★★ The GPU map files the Android VibeServer serves at /mapgl/ — see mapgl-assets.gradle.
+apply from: file('mapgl-assets.gradle')
+
 // Apply static values from `gradle.properties` to the `android.packagingOptions`
 // Accepts values in comma delimited lists, example:
 // android.packagingOptions.pickFirsts=/LICENSE,**/picasa.ini

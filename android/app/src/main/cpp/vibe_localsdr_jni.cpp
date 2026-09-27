@@ -21,6 +21,9 @@
  *    build_ios.sh does not compile this JNI file at all — so a clean compile there proved nothing
  *    about this one. The Android build is the only thing that compiles it. */
 #include "vibe_mapdata.h"
+// ★★★ The GPU map (/mapgl/) — the bundle + data dirs and the JNI downloader, wired below.
+#include "vibe_mapgl.h"
+#include <functional>
 // ★ The daemon's own country/network lookup, compiled in here too — see the CMakeLists note.
 #include "../../../../../vibeserver/geoip.h"
 #include "../../../../../vibeserver/asndb.h"
@@ -94,6 +97,82 @@ static std::string jniHttpGet(const std::string& url, const std::string& accept)
     if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
     if (attached) g_vm->DetachCurrentThread();
     return out;
+}
+
+// ── GPU map: the High Detail downloader, which is Kotlin because Android has no curl ─────────
+//
+// ★★★ SAME RULES AS jniHttpGet ABOVE, for the same reasons: the server calls this from its own
+//     worker thread, which the JVM has never seen (attach, and detach again), and which carries
+//     the SYSTEM class loader (so no FindClass here — the class is cached as a global ref by
+//     nativeInit, which is called FROM Kotlin and is handed the class directly).
+// ★ The progress function lives on THIS stack frame for the whole blocking call; Kotlin gets its
+//   address as an opaque jlong and hands it back through nativeProgress, on this same thread.
+static jclass    g_mapglCls = nullptr;
+static jmethodID g_mapglDownload = nullptr;
+
+static bool jniMapglDownload(const std::string& url, const std::string& dest,
+                             std::function<void(int64_t, int64_t)> progress) {
+    if (!g_vm || !g_mapglCls || !g_mapglDownload) {
+        LOGE("mapgl download: the JNI downloader was never initialised");
+        return false;
+    }
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (g_vm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) {
+        if (g_vm->AttachCurrentThread(&env, nullptr) != JNI_OK) {
+            LOGE("mapgl download: could not attach the worker thread to the JVM");
+            return false;
+        }
+        attached = true;
+    }
+    jstring ju = env->NewStringUTF(url.c_str());
+    jstring jd = env->NewStringUTF(dest.c_str());
+    const jlong handle = (jlong)(intptr_t)&progress;
+    jboolean ok = env->CallStaticBooleanMethod(g_mapglCls, g_mapglDownload, ju, jd, handle);
+    if (env->ExceptionCheck()) {
+        // ★ VibeMapGL.download catches its own; this is the guard against the next edit.
+        env->ExceptionDescribe(); env->ExceptionClear();
+        LOGE("mapgl download: Java exception — treated as a failed download");
+        ok = JNI_FALSE;
+    }
+    env->DeleteLocalRef(ju);
+    env->DeleteLocalRef(jd);
+    if (attached) g_vm->DetachCurrentThread();
+    return ok == JNI_TRUE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeMapGL_nativeProgress(JNIEnv*, jclass, jlong handle, jlong written, jlong total) {
+    auto* fn = reinterpret_cast<std::function<void(int64_t, int64_t)>*>((intptr_t)handle);
+    if (fn && *fn) (*fn)((int64_t)written, (int64_t)total);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeMapGL_nativeInit(JNIEnv* env, jclass cls, jstring jData) {
+    if (!g_mapglCls) {
+        g_mapglCls = (jclass)env->NewGlobalRef(cls);
+        g_mapglDownload = env->GetStaticMethodID(cls, "download", "(Ljava/lang/String;Ljava/lang/String;J)Z");
+        if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); g_mapglDownload = nullptr; }
+    }
+    const char* d = jData ? env->GetStringUTFChars(jData, nullptr) : nullptr;
+    if (d) { vibemapgl::setDataDir(d); env->ReleaseStringUTFChars(jData, d); }
+    if (g_mapglDownload) {
+        vibemapgl::setDownloader(jniMapglDownload);
+        LOGI("mapgl: data dir set, JNI downloader installed");
+    } else {
+        // ★ No downloader → statusJson reports available:false and the admin page says so
+        //   instead of offering a button that cannot work.
+        LOGE("mapgl: VibeMapGL.download not found — High Detail download unavailable");
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeMapGL_nativeSetBundleDir(JNIEnv* env, jclass, jstring jDir) {
+    const char* d = jDir ? env->GetStringUTFChars(jDir, nullptr) : nullptr;
+    if (!d) return;
+    vibemapgl::setBundleDir(d);
+    LOGI("mapgl: bundle dir %s", d);
+    env->ReleaseStringUTFChars(jDir, d);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -907,7 +986,16 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetAdminPaths(JNIEnv* env, jobject,
              *  does not exist yet is the header's ordinary clean-404 case ("no maps is a degraded
              *  map, not a broken server"), and the files simply start answering once they land —
              *  no restart, no ordering requirement between this and the extraction. */
-            vibemap::setDir(dataDir + "/mapdata");
+            /* ★★★ "/mapdata/v1", NOT "/mapdata" (fixed 2026-09-28). The comment above says Kotlin
+             *  unpacks the tier-1 pack into <filesDir>/mapdata — no Kotlin ever did. The only unpack
+             *  is the main app's JS (src/services/mapPack.ts), and it writes to
+             *  Paths.document/mapdata/v1/<file> = <filesDir>/mapdata/v1/, while vibemap::serve
+             *  opens <dir>/<file> with a FLAT name. So this pointed one directory too high and
+             *  404'd every file even on a phone whose app HAD unpacked the pack.
+             *  ★ Lite has no JS unpack at all (its bundle is ServerModeScreen only), so on Lite
+             *    this directory stays absent and /mapdata/v1/ 404s cleanly — the GPU map at
+             *    /mapgl/ (VibeMapGL.kt) is what Lite serves. */
+            vibemap::setDir(dataDir + "/mapdata/v1");
         }
     }
     LOGI("admin state persisted to %s / %s", b ? b : "(none)", l ? l : "(none)");
