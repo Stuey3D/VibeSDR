@@ -52,12 +52,50 @@ inline const char* armCore(unsigned part) {
 }
 } // namespace hwdetail
 
+/** ★★★ HOW MANY CPUs PHYSICALLY EXIST — /sys/devices/system/cpu/present, a range list ("0-1", "0-3,6").
+ *  This used _SC_NPROCESSORS_CONF, which glibc counts from the CPU slots the FIRMWARE DECLARES. Kiko's
+ *  Celeron N4000 — 2 cores, 2 threads, no Hyper-Threading — reported "cores":4 (Stuart, 2026-09-27: "for
+ *  some reason Kiko's server is reporting 4 cores on a dual core chip"). Budget Gemini Lake laptops share
+ *  firmware with the quad N4100, declare four slots, and Linux boots saying "Allowing 4 CPUs, 2 hotplug
+ *  CPUs". Stuart's own servers declare exactly what they have, which is why they always looked right.
+ *  ★★ NOT the ONLINE count either: a phone switches idle cores OFF, so "online" would under-report an
+ *     8-core XCover as 4 at idle. "present" is the hardware, whatever its power state.
+ *  ★ The benchmark and the health pill already use the online count (they measure what can RUN now),
+ *    so they were never wrong — only this published card was. Falls back to online where "present"
+ *    cannot be read. */
+/** Count a kernel CPU list — "0-1", "0-3,6", "0". 0 when it cannot be read. */
+inline long countCpuList(const char* p) {
+    long n = 0;
+    while (*p && *p != '\n') {
+        char* e; const long a = strtol(p, &e, 10); if (e == p) return 0; p = e;
+        long b = a;
+        if (*p == '-') { b = strtol(p + 1, &e, 10); if (e == p + 1) return 0; p = e; }
+        if (b >= a) n += b - a + 1;
+        if (*p == ',') p++;
+        else if (*p && *p != '\n') return 0;   // ★ anything unexpected: do not guess, fall back
+    }
+    return n;
+}
+inline long presentCpus() {
+    if (FILE* f = fopen("/sys/devices/system/cpu/present", "r")) {
+        char buf[256] = {0};
+        const bool got = fgets(buf, sizeof buf, f) != nullptr;
+        fclose(f);
+        if (got) { const long n = countCpuList(buf); if (n > 0) return n; }
+    }
+    return sysconf(_SC_NPROCESSORS_ONLN);
+}
+
 /** `{"cpu":"…","cores":4,"mhz":1000,"ramMb":1946,"isa":"32-bit NEON"}` — fields the OS would not give are omitted. */
 inline std::string hardwareJson() {
     static const std::string cached = [] {
         using namespace hwdetail;
         std::string cpu; long mhz = 0, ramMb = 0;
-        const long cores = sysconf(_SC_NPROCESSORS_CONF);
+#if defined(__APPLE__)
+        const long cores = sysconf(_SC_NPROCESSORS_CONF);   // ★ macOS has no /sys; its count is the real one
+#else
+        const long cores = presentCpus();
+#endif
 #if defined(__APPLE__)
         char buf[256]; size_t n = sizeof buf;
         if (sysctlbyname("machdep.cpu.brand_string", buf, &n, nullptr, 0) == 0) cpu = trim(std::string(buf, strnlen(buf, n)));
