@@ -23349,7 +23349,10 @@ bool LocalSdrShim::adminAction(const std::string& action, std::string& err) {
           return false;
       } }
     if (action != "reboot" && action != "restart" && action != "update-check" &&
-        action != "update" && action != "update-all" && action != "shutdown") {
+        action != "update" && action != "update-all" && action != "shutdown" &&
+        /* ★ The optional detail map pack. Guarded here as well as in the daemon, because this
+         *  list is what refuses a script or an old build that asks anyway. */
+        action != "maps-install" && action != "maps-remove") {
         err = "unknown action: " + action;
         return false;
     }

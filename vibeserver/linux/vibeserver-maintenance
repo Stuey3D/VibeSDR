@@ -97,5 +97,20 @@ case "$action" in
                 # ★ ONLY this package, and never a fresh install of anything else. `--only-upgrade`
                 #   means a request for `update` cannot pull in a new package by name.
                 DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade vibeserver ;;
+  maps-install) log "installing the detail map pack"
+                # ★★★ THE FULL MAP PACK, ON REQUEST. The server ships the basic pack; the detail
+                #   pack is ~82 MB compressed and is its own package precisely so it is a choice
+                #   rather than a download every owner pays for. Stuart's original shape for this:
+                #   "tier 1 with prompt to download full maps when first setting up, and a setting
+                #   to download them from the admin page afterwards."
+                # ★ A named package and nothing else, the same discipline as `update` above: this
+                #   path runs as root, so it asks for ONE thing by name and can never be talked
+                #   into installing something else.
+                apt-get update
+                DEBIAN_FRONTEND=noninteractive apt-get install -y vibeserver-mapdata-detail ;;
+  maps-remove)  log "removing the detail map pack"
+                # ★ The way back. 82 MB on a Pi's SD card is worth being able to reclaim, and an
+                #   install with no uninstall is a decision an owner cannot revisit.
+                DEBIAN_FRONTEND=noninteractive apt-get remove -y vibeserver-mapdata-detail ;;
   *)            log "ignoring unknown action '$action'"; exit 0 ;;
 esac

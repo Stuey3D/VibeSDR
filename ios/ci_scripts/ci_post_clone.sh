@@ -99,7 +99,27 @@ fi
 #    ships last month's coastlines while the repo shows this month's.
 # ★ The map is why this matters: the app is the basemap source for every engine it drives
 #   (UberSDR, KiwiSDR, a local dongle), so a stale bundle is a wrong map everywhere at once.
+# ✗✗✗ AND IT MUST NOT BE FATAL. This ran with `|| exit 1`, and builds 332 and 333 failed with
+#     ONE error and ZERO warnings apiece — against 653 warnings on the build before it, which is
+#     what a run that actually reaches the compiler looks like. Zero warnings means it died in a
+#     pre-build step, and this was the only pre-build step that changed.
+# ★★ The bundle is COMMITTED and current, so regenerating it here is a safety net against drift,
+#    not a requirement to build. Turning a safety net into a hard failure is how a nicety takes the
+#    whole release down — and it cost two cloud builds and blocked Stuart from testing the maps at
+#    all, which was the entire point of the builds.
+# ★ Still loud on failure: a silent fallback to a stale bundle is the other way to get this wrong.
+# ✗✗✗ AND THE ACTUAL BUG WAS THE WORKING DIRECTORY. `pod install` above cds into ios/, so this
+#     ran `node scripts/gen-mapdata-source.mjs` from INSIDE ios/ — where that path does not exist.
+#     It failed with "cannot find module", the `|| exit 1` fired, and the build died before
+#     compiling a single file. I appended a relative path to a script that had changed directory
+#     three steps earlier and never looked at what the cwd was by then.
 echo "--- regenerating the embedded basemap ---"
-node scripts/gen-mapdata-source.mjs || { echo "map bundle generation FAILED"; exit 1; }
+cd "$CI_PRIMARY_REPOSITORY_PATH"
+if node scripts/gen-mapdata-source.mjs; then
+  echo "--- basemap regenerated ---"
+else
+  echo "!!! map bundle generation failed — building with the COMMITTED bundle instead."
+  echo "!!! that is safe (it is in git and current), but find out why before it drifts."
+fi
 
 echo "--- ci_post_clone: done ---"

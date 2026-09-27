@@ -2381,7 +2381,7 @@ int main(int argc, char** argv) {
     //    re-detected until it is physically replugged — the button would STRAND the receiver.
     //    Same rule as AGENTS.md: remove a control that cannot work rather than leave it visible.
 #if defined(__linux__) && !defined(__ANDROID__)
-    LocalSdrShim::setMaintenanceActions("restart,reboot,shutdown,update-check,update,update-all");
+    LocalSdrShim::setMaintenanceActions("restart,reboot,shutdown,update-check,update,update-all,maps-install,maps-remove");
 #else
     LocalSdrShim::setMaintenanceActions("");   // no section at all, rather than an empty one
 #endif
@@ -3135,6 +3135,9 @@ int main(int argc, char** argv) {
         //   SDRplay API service stopped answering and only a restart of the service cures it.
         static const char* kActions[] = { "reboot", "shutdown", "restart",
                                           "update-check", "update", "update-all",
+                                          /* ★ The optional detail map pack — see the helper. Named
+                                           *  actions only, so this can install exactly one thing. */
+                                          "maps-install", "maps-remove",
                                           "sdrplay-restart" };
         bool known = false;
         for (const char* a : kActions) if (action == a) { known = true; break; }
