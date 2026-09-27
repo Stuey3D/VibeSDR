@@ -47,7 +47,12 @@
        *  element (maplibregl-marker — position:absolute, the transform it drives); assigning className
        *  wiped them, and the marker only landed right by luck (WKWebView test, 2026-09-27). */
       if (m._cls) for (const c of m._cls) el.classList.remove(c);
-      m._cls = ['leaflet-marker-icon'].concat(String(o.className || '').split(/\s+/).filter(Boolean));
+      /* ★★ AND leaflet-interactive, AS LEAFLET DOES FOR EVERY MARKER (unless interactive:false). The pages
+       *  still load leaflet.css, which sets pointer-events:none on .leaflet-marker-icon and gives it back
+       *  only with .leaflet-interactive — without it every tap fell THROUGH the aircraft to the map and
+       *  no popup ever opened (Stuart, build 344: "cannot click on an aircraft"). */
+      m._cls = ['leaflet-marker-icon'].concat(m._interactive ? ['leaflet-interactive'] : [],
+        String(o.className || '').split(/\s+/).filter(Boolean));
       for (const c of m._cls) el.classList.add(c);                   // ★ the pages' CSS targets these
       el.innerHTML = o.html || '';
       const sz = o.iconSize || [0, 0], an = o.iconAnchor || [sz[0] / 2, sz[1] / 2];
@@ -57,7 +62,7 @@
     }
     function Marker(latlng, o) {
       o = o || {};
-      const m = { _ll: ll(latlng), _el: document.createElement('div'), _popup: null };
+      const m = { _ll: ll(latlng), _el: document.createElement('div'), _popup: null, _interactive: o.interactive !== false };
       m._mk = new ml.Marker({ element: m._el, anchor: 'center' }).setLngLat([m._ll.lng, m._ll.lat]);
       if (o.zIndexOffset) m._el.style.zIndex = String(o.zIndexOffset);
       if (o.icon) applyIcon(m, o.icon);
