@@ -404,10 +404,13 @@ Six stations on the Lenovo/RSP1A, 2026-09-27, all on 5.6.64:
 
 A correct station sits near **0** or near **90** (quadrature). **Every LOCKED station here reads
 28-44** — the middle ground the code calls a fault — across three different broadcasters.
-▶ Either three genuinely faulty encoders, or **a systematic offset in our phase measurement**.
-★★★ THE SAME SHAPE AS THE DEVIATION BUG FIXED HOURS EARLIER: every station read "weak" and the
-MEASUREMENT was low, not the stations. The rule that came out of it applies here unchanged —
-**when a verdict band is almost never reached, suspect the measurement before the band.**
-✗ Do NOT act on this yet: six stations from one location on one radio is not enough, and UK
-encoders may genuinely run offset. ▶ It wants a CALIBRATED check — Onfliner's transmitter can set a
-known RDS-to-pilot phase, which is the same route that settled the deviation constant.
+✗✗ **SUSPICION RETRACTED THE SAME NIGHT — THE PHASE READOUT IS ALREADY CALIBRATED.** I reasoned
+that every locked station reading 28-44 looked like the deviation bug (where every station read
+"weak" because the MEASUREMENT was low) and flagged it for a calibrated check. Stuart, immediately:
+*"phase was also calibrated against the PIRA too."*
+▶ **So these are REAL transmitter offsets**, not a measurement bias — UK encoders genuinely running
+off quadrature, which is a finding in its own right and one no other software reports.
+★★ THE LESSON IS MINE, NOT THE CODE'S: "when a band is almost never reached, suspect the
+measurement" is a good rule, and I applied it to a number that HAD already been checked against a
+reference. ✗ Before invoking it, ask whether the measurement has a calibration history — this one
+does, recorded on rdsPilotPhaseDeg in vibedsp.h (HansVanEijsden, FMDX.org, 2026-07-26).
