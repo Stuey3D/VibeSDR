@@ -136,7 +136,19 @@ jobs:
         #   nothing, compiled nothing, and finished in 35 s with "could not process any code". The
         #   CMake project lives in vibeserver/, and this builds it explicitly.
         run: |
-          cmake -S vibeserver -B vibeserver/build-codeql -DCMAKE_BUILD_TYPE=Release
+          # ★★★ -DVIBESERVER_ALLOW_NO_TUNNEL=ON, OR CODEQL NEVER RUNS AT ALL.
+          #     CMakeLists.txt refuses to configure without tools/cloudflared-desktop/bin/, and it
+          #     is right to: a package built without it would REMOVE the tunnel from every machine
+          #     that installed it, and a server behind CGNAT would lose its only address. The
+          #     binary is fetched by fetch.sh and not committed, so a fresh CI clone never has it.
+          # ★★ THE RESULT WAS NOT A NOISY FAILURE, IT WAS NO ANALYSIS. Every push failed at
+          #    CONFIGURE, before a single line of C++ was scanned — so the server code, the part
+          #    that faces the internet, has never actually been through CodeQL. A red tick that is
+          #    ignored because "it does not affect things" is the most expensive kind.
+          # ★ This flag is the escape hatch the guard's own error message names, and it is exactly
+          #   right here: CodeQL analyses source, it never ships a package.
+          cmake -S vibeserver -B vibeserver/build-codeql -DCMAKE_BUILD_TYPE=Release \
+                -DVIBESERVER_ALLOW_NO_TUNNEL=ON
           cmake --build vibeserver/build-codeql -j "$(nproc)"
 
       - name: Perform CodeQL Analysis
