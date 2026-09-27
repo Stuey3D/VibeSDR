@@ -216,6 +216,24 @@ static inline void joinOnce(std::thread& t, const char* what) {
     catch (const std::exception& e) { LOGE("%s: join failed — %s", what, e.what()); }
 }
 
+/** ★★★ START A READER WITHOUT EVER ABORTING. Assigning a new std::thread onto one that is still
+ *  joinable calls std::terminate — no exception, no message, just `libc++abi: terminating`. And
+ *  joinOnce() above, which catches a failed join, leaves the thread STILL joinable when it does, so
+ *  the very next line of every restart site used to be the abort. Seen 2026-09-27 on the idle→wake
+ *  path: `reader (restart): join failed — thread::join failed: Invalid argument`, then terminating.
+ *  Stuart: "some people hand off an SDR to another app" — that hand-off runs through these restarts.
+ *  ★ The race itself is closed by idleMtx (see pauseCaptureIdle); this is the backstop, so that if
+ *    a path nobody has found yet races the same way, it costs a logged, detached thread instead of
+ *    the whole server. */
+static inline void installReader(std::thread& slot, std::thread&& t, const char* what) {
+    if (slot.joinable()) {
+        LOGE("%s: a previous thread is still attached — detaching it rather than aborting the "
+             "process (a join raced; see installReader)", what);
+        slot.detach();
+    }
+    slot = std::move(t);
+}
+
 constexpr int STREAM_BUFFER_SIZE = 1000000;
 
 // Convert `nF` interleaved u8 I/Q bytes to floats: f = (b - 127.4)/128. Runs at
@@ -17439,8 +17457,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
 
         // A listener has arrived — wake the dongle if it was idled while nobody was connected. Idempotent
-        // (guarded by captureIdle), so whichever of the two sockets lands first does it. Only starts a
-        // capture thread (no join), so it's safe here.
+        // (guarded by captureIdle), so whichever of the two sockets lands first does it.
+        // ★ It DOES join — the rtl_tcp branch joins the old reader before starting a new one — which
+        //   is why it is serialised against pauseCaptureIdle by idleMtx. This line used to say "no
+        //   join, so it's safe here", and that belief is what the 2026-09-27 abort was made of.
         resumeCaptureIdle();
 
         // ★ SAME-SESSION TAKEOVER. A client that resumes from background reconnects with its SAME
@@ -19874,7 +19894,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         Impl* self = this;
         rtlThreadDone.store(false);
         joinOnce(rtlThread, "reader (restart)");   // ★ see startDspThread — never overwrite a joinable thread
-        rtlThread = std::thread([self, bufLen]{
+        installReader(rtlThread, std::thread([self, bufLen]{
             // ★★★ THE REAPER MUST OUTRANK THE CONSUMERS. This thread does almost no work — it
             //     hands libusb back its completed transfers and resubmits them — but it is the
             //     only thread in the process whose lateness LOSES DATA THAT CANNOT BE RECOVERED.
@@ -19906,7 +19926,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             } else {
                 LOGE("RTL-SDR stream stopped but the device is still present — restarting");
             }
-        });
+        }), "reader (restart)");
     }
 
     // ── Idle: stop the dongle when nobody is listening ────────────────────────────────────────────
@@ -19916,6 +19936,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // set `restarting` for the whole paused period so the capture watchdog treats the stopped stream as
     // deliberate (it `continue`s on `restarting`) and never false-alarms "dongle gone" or relaunches.
     std::atomic<bool> captureIdle{false};
+    /** ★★★ PAUSE AND RESUME, ONE AT A TIME. pauseCaptureIdle (the last listener leaving, on the
+     *  disconnect path) sets captureIdle and THEN joins the reader — and a listener arriving in that
+     *  gap ran resumeCaptureIdle on the connect path, saw captureIdle, and joined the SAME reader.
+     *  Two joins: the loser gets EINVAL, and the restart that follows assigned a new thread onto a
+     *  still-joinable one — std::terminate (2026-09-27, reproduced once with --idle-grace 0). This
+     *  lock makes the resume wait until the pause has finished stopping the reader.
+     *  ★ Taken by NOTHING that holds another lock: both callers run lock-free, and resume takes the
+     *    radio back (g_lifecycle) BEFORE it takes this, never inside it. */
+    std::mutex idleMtx;
     /** When the idle park becomes due (nowSecs()), or 0 if no park is pending. Armed when the
      *  LAST listener leaves and cleared the moment one returns — see g_vsIdleGraceSec. */
     std::atomic<double> idleParkDueAt{0.0};
@@ -19956,6 +19985,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             LOGI("no listeners — capture STAYS RUNNING (shared receiver: keeps the AGC converged)");
             return;
         }
+        std::lock_guard<std::mutex> idleLk(idleMtx);          // ★ see idleMtx — one of pause/resume at a time
         if (captureIdle.exchange(true)) return;               // already paused
         // ★★ EVERY SOURCE NAMED EXPLICITLY. The final `else` used to mean "must be a dongle",
         // which was true with two sources and silently wrong with three — see resumeCaptureIdle
@@ -20333,6 +20363,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 notifyDeviceState();
             }
         }
+        std::lock_guard<std::mutex> idleLk(idleMtx);          // ★ AFTER reacquire — see idleMtx
         if (!captureIdle.exchange(false)) return;             // wasn't paused
         // ★★★ THIS `else` REPORTED A WORKING RADIO AS UNPLUGGED. With an Airspy attached, `dev`
         // is null, so the dongle branch called launchCapture() anyway — rtlsdr_read_async(NULL)
@@ -20346,10 +20377,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             tcpRunning.store(true);
             rtlThreadDone.store(false);
             joinOnce(rtlThread, "reader (restart)");
-            rtlThread = std::thread([this]{
+            installReader(rtlThread, std::thread([this]{
                 struct Done { Impl* s; ~Done(){ s->rtlThreadDone.store(true); } } done{this};
                 tcpReadLoop();
-            });
+            }), "reader (restart)");
         }
         else if (useSdrplay()) { sdrp->setPaused(false); }
         else if (useAirspyHf()) { ahf->setPaused(false); }
@@ -25104,10 +25135,10 @@ int LocalSdrShim::startTcp(const std::string& host, int port,
     impl->tcpRunning.store(true);
     impl->rtlThreadDone.store(false);
     joinOnce(impl->rtlThread, "reader (restart)");
-    impl->rtlThread = std::thread([impl]{
+    installReader(impl->rtlThread, std::thread([impl]{
         struct Done { Impl* s; ~Done(){ s->rtlThreadDone.store(true); } } done{impl};
         impl->tcpReadLoop();
-    });
+    }), "reader (restart)");
 
     p = impl;
     LocalSdrShim::applyDesiredDsp(impl);   // the listener's DSP choices survive this restart
@@ -25246,10 +25277,10 @@ int LocalSdrShim::startSpyServer(const std::string& host, int port,
     impl->startDspThread();
     impl->tcpRunning.store(true);                 // shared "network source alive" flag
     joinOnce(impl->rtlThread, "reader (restart)");
-    impl->rtlThread    = std::thread([impl]{ impl->spyReadLoop(); });
+    installReader(impl->rtlThread, std::thread([impl]{ impl->spyReadLoop(); }), "reader (restart)");
     impl->spyFftRunning.store(true);
     joinOnce(impl->spyFftThread, "spy fft (restart)");
-    impl->spyFftThread = std::thread([impl]{ impl->spyFftLoop(); });
+    installReader(impl->spyFftThread, std::thread([impl]{ impl->spyFftLoop(); }), "spy fft (restart)");
 
     p = impl;
     LocalSdrShim::applyDesiredDsp(impl);   // the listener's DSP choices survive this restart
@@ -28457,10 +28488,10 @@ void LocalSdrShim::setSampleRate(double rate) {
         impl->tcpRunning.store(true);
         impl->rtlThreadDone.store(false);
         joinOnce(impl->rtlThread, "reader (restart)");
-        impl->rtlThread = std::thread([impl]{
+        installReader(impl->rtlThread, std::thread([impl]{
             struct Done { Impl* s; ~Done(){ s->rtlThreadDone.store(true); } } done{impl};
             impl->tcpReadLoop();
-        });
+        }), "reader (restart)");
     }
     else if (rsp) { impl->sdrp->setPaused(false); }
     else if (impl->useAirspyHf()) {
