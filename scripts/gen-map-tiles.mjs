@@ -101,9 +101,13 @@ const packFor = (tier) => (tier === 'tier2' ? 'vibemap-detail' : 'vibemap-basic'
 /* ── Areas ───────────────────────────────────────────────────────────────────────────────── */
 for (const tier of ['tier0', 'tier1', 'tier2']) {
   // Countries: { iso: [ring, ...] }. Below the coast tier the country outline IS the land.
-  for (const obj of load(tier, 'countries'))
+  /* ★★ NO tier0 (1:110M) COUNTRIES: tier1 (1:50M) draws from z0. Stuart, 2026-09-27: zoomed out, the
+   *  110M outlines sat crudely over a relief that shows the true coast, and "one click in the whole stack
+   *  cleans up". tippecanoe thins each tile to its own resolution, so 50M at z0-3 costs little. */
+  const cRange = tier === 'tier0' ? null : tier === 'tier1' ? [0, range(tier, 'countries')[1]] : range(tier, 'countries');
+  if (cRange) for (const obj of load(tier, 'countries'))
     for (const [iso, rings] of Object.entries(obj))
-      for (const r of rings) { const c = closed(r); if (c) emit(packFor(tier), 'land', range(tier, 'countries'), { type: 'Polygon', coordinates: [c] }, { iso }); }
+      for (const r of rings) { const c = closed(r); if (c) emit(packFor(tier), 'land', cRange, { type: 'Polygon', coordinates: [c] }, { iso }); }
   // Cover: { class: [ring, ...] } — ice, desert, forest… what the ground is.
   for (const obj of load(tier, 'cover'))
     for (const [cls, rings] of Object.entries(obj))

@@ -133,7 +133,8 @@
   "vibesdr:basicOnlyNote": "Without the optional detail pack every 'detail' layer is dropped and these basic layers lose their maxzoom, so the basic data carries on over-zoomed rather than leaving a hole.",
   "vibesdr:basicOnlyLayers": [
    "runways-coarse"
-  ]
+  ],
+  "vibesdr:textScale": 1.2
  },
  "glyphs": "GLYPHS_URL",
  "sources": {

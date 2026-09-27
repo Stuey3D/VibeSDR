@@ -63,7 +63,28 @@
       for (const l of st.layers) if (extend.has(l.id)) delete l.maxzoom;
     }
     applyProfileToStyle(st, profile);
+    applyTextScale(st);
     return st;
+  }
+  /* ★ ONE KNOB FOR LABEL SIZE (vibesdr:textScale), not forty hand edits. Stuart, 2026-09-27: "all fonts
+   *  could be a little bigger". A zoom curve must stay the TOP-LEVEL expression (MapLibre's rule), so its
+   *  stop outputs are scaled; anything else is wrapped whole. */
+  function applyTextScale(st) {
+    const k = st.metadata && st.metadata['vibesdr:textScale'];
+    if (!k || k === 1) return;
+    const scale = (v) => (typeof v === 'number' ? Math.round(v * k * 10) / 10 : ['*', k, v]);
+    for (const l of st.layers) {
+      const t = l.layout && l.layout['text-size'];
+      if (t === undefined) continue;
+      if (Array.isArray(t) && (t[0] === 'interpolate' || t[0] === 'step') && JSON.stringify(t[t[0] === 'step' ? 1 : 2]) === '["zoom"]') {
+        const out = t.slice();
+        // interpolate: [op, curve, input, z0, v0, z1, v1…]; step: [op, input, v0, z1, v1…]
+        for (let i = t[0] === 'step' ? 2 : 4; i < out.length; i += 2) out[i] = scale(out[i]);
+        l.layout['text-size'] = out;
+      } else {
+        l.layout['text-size'] = scale(t);
+      }
+    }
   }
   function applyProfileToStyle(st, name) {
     const P = (st.metadata && st.metadata['vibesdr:profiles']) || {};

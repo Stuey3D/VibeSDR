@@ -119,6 +119,8 @@ function buildHtml(
 ${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="mapgl/vendor/maplibre-gl.js"></script><script src="mapgl/vendor/pmtiles.js"></script><script src="mapgl/vendor/vibemapgl.js"></script><script src="mapgl/vendor/vibemapgl-compat.js"></script>' : ''}
 <style>
   html,body{margin:0;padding:0;height:100%;background:${T.bg};overflow:hidden;}
+  /* ★ Every size here went up 2 px on 2026-09-27 (Stuart: the legend was a strain, "all fonts could be
+     a little bigger"). On a Mac the iPad app is shown at 77 %, so 10 px was landing near 7.7. */
   /* ★★★ NOTHING ON THIS PAGE IS SELECTABLE OR DRAGGABLE. On a Mac the iPad app gets mouse presses as
      TOUCHES; a press held a moment is a long-press, which selected the page's text and LIFTED it — so
      grabbing the map dragged a ghost of the count and the zoom buttons instead (Stuart, 2026-09-27,
@@ -132,14 +134,14 @@ ${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="
     padding-top:max(8px,env(safe-area-inset-top));
     background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.97);border-bottom:1px solid rgba(${T.a},0.18);flex-shrink:0;z-index:2;}
   #back{background:rgba(${T.a},0.08);border:1px solid rgba(${T.a},0.30);border-radius:8px;
-    color:rgba(${T.a},0.85);font-family:inherit;font-size:12px;letter-spacing:1px;padding:5px 10px;
+    color:rgba(${T.a},0.85);font-family:inherit;font-size:14px;letter-spacing:1px;padding:5px 10px;
     cursor:pointer;flex-shrink:0;-webkit-tap-highlight-color:transparent;touch-action:manipulation;}
   #back:active{background:rgba(${T.a},0.18);}
-  #title{font-size:13px;letter-spacing:2px;color:rgba(${T.a},0.80);flex:1;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  #cntwrap{display:flex;align-items:center;gap:5px;font-size:11px;letter-spacing:1px;color:rgba(${T.a},0.60);flex-shrink:0;}
-  #cnt{color:rgba(${T.hi},0.90);font-size:14px;}
+  #title{font-size:15px;letter-spacing:2px;color:rgba(${T.a},0.80);flex:1;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  #cntwrap{display:flex;align-items:center;gap:5px;font-size:13px;letter-spacing:1px;color:rgba(${T.a},0.60);flex-shrink:0;}
+  #cnt{color:rgba(${T.hi},0.90);font-size:16px;}
   #snap{background:rgba(255,160,0,0.08);border:1px solid rgba(255,160,0,0.20);border-radius:8px;
-    color:rgba(255,160,0,0.45);font-size:10px;letter-spacing:0.5px;padding:5px 7px;cursor:pointer;
+    color:rgba(255,160,0,0.45);font-size:12px;letter-spacing:0.5px;padding:5px 7px;cursor:pointer;
     font-family:inherit;-webkit-tap-highlight-color:transparent;touch-action:manipulation;line-height:1.2;text-align:center;flex-shrink:0;}
   #snap.on{border-color:rgba(255,160,0,0.50);color:rgba(255,190,60,0.90);background:rgba(255,160,0,0.10);}
   /* ── filters row (digi/cw) — skin lsv-smap-filters ── */
@@ -147,11 +149,11 @@ ${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="
     padding-left:max(10px,env(safe-area-inset-left));padding-right:max(10px,env(safe-area-inset-right));
     background:rgba(6,9,6,0.97);border-bottom:1px solid rgba(${T.a},0.10);flex-shrink:0;flex-wrap:wrap;}
   select{background:rgba(${T.a},0.06);border:1px solid rgba(${T.a},0.25);border-radius:6px;
-    color:rgba(${T.a},0.85);font-family:inherit;font-size:10px;letter-spacing:0.5px;padding:4px 20px 4px 7px;cursor:pointer;
+    color:rgba(${T.a},0.85);font-family:inherit;font-size:12px;letter-spacing:0.5px;padding:4px 20px 4px 7px;cursor:pointer;
     appearance:none;-webkit-appearance:none;
     background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='rgba(${T.a},0.6)' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
     background-repeat:no-repeat;background-position:right 6px center;}
-  .flabel{font-size:9px;letter-spacing:1px;color:rgba(${T.a},0.35);}
+  .flabel{font-size:11px;letter-spacing:1px;color:rgba(${T.a},0.35);}
   #map{flex:1;position:relative;overflow:hidden;background:${T.bg};}
   /* ★★★ THE MAP'S BACKDROP IS THE BASEMAP'S COLOUR, NOT THE APP'S. This was ${T.bg} — near
      black — behind a LIGHT basemap, so every tile that had not arrived yet showed as a black
@@ -183,16 +185,16 @@ ${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="
   .leaflet-fade-anim .leaflet-tile{will-change:opacity;}
   /* skin map theming */
   .leaflet-tile{filter:brightness(0.65) saturate(0.7);}
-  .leaflet-popup-content-wrapper{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);border:1px solid rgba(${T.a},0.30);color:rgba(${T.txt},0.90);font-family:'Courier New',monospace;font-size:11px;border-radius:8px;}
+  .leaflet-popup-content-wrapper{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);border:1px solid rgba(${T.a},0.30);color:rgba(${T.txt},0.90);font-family:'Courier New',monospace;font-size:13px;border-radius:8px;}
   .leaflet-popup-tip{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);}
   .leaflet-popup-close-button{color:rgba(${T.a},0.50)!important;}
   .leaflet-popup-content{margin:10px 12px;font-family:'Courier New',monospace;}
   .leaflet-control-zoom a{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.90);color:rgba(${T.a},0.70);border-color:rgba(${T.a},0.20);}
   .leaflet-bottom{padding-bottom:max(8px,env(safe-area-inset-bottom));}
-  .leaflet-control-attribution{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.70);color:rgba(${T.a},0.25);font-size:8px;}
+  .leaflet-control-attribution{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.70);color:rgba(${T.a},0.25);font-size:10px;}
   /* ★ THE GPU MAP'S CONTROLS WEAR THE SAME CLOTHES as the Leaflet ones above — same colours, font and
    *  sizes — so switching renderer does not restyle the page. */
-  .maplibregl-popup-content{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);border:1px solid rgba(${T.a},0.30);color:rgba(${T.txt},0.90);font-family:'Courier New',monospace;font-size:11px;border-radius:8px;padding:10px 12px;}
+  .maplibregl-popup-content{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);border:1px solid rgba(${T.a},0.30);color:rgba(${T.txt},0.90);font-family:'Courier New',monospace;font-size:13px;border-radius:8px;padding:10px 12px;}
   .maplibregl-popup-anchor-bottom .maplibregl-popup-tip,.maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,.maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip{border-top-color:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);}
   .maplibregl-popup-anchor-top .maplibregl-popup-tip,.maplibregl-popup-anchor-top-left .maplibregl-popup-tip,.maplibregl-popup-anchor-top-right .maplibregl-popup-tip{border-bottom-color:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);}
   .maplibregl-popup-anchor-left .maplibregl-popup-tip{border-right-color:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);}
@@ -201,7 +203,7 @@ ${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="
   .maplibregl-ctrl-group{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.90);border:1px solid rgba(${T.a},0.20);}
   .maplibregl-ctrl-group button+button{border-top:1px solid rgba(${T.a},0.20);}
   .maplibregl-ctrl-group button .maplibregl-ctrl-icon{filter:invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg);opacity:0.7;}
-  .maplibregl-ctrl-attrib,.maplibregl-ctrl-attrib.maplibregl-compact{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.70);color:rgba(${T.a},0.45);font-size:8px;}
+  .maplibregl-ctrl-attrib,.maplibregl-ctrl-attrib.maplibregl-compact{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.70);color:rgba(${T.a},0.45);font-size:10px;}
   .maplibregl-ctrl-attrib a{color:rgba(${T.a},0.55);}
   .maplibregl-ctrl-attrib-button{filter:invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg);opacity:0.55;}
   /* skin lsv-hfdl pulse + rings (verbatim keyframes) */
@@ -216,19 +218,19 @@ ${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="
   /* ── toast — skin lsv-hfdl-toast / lsv-smap-toast ── */
   #toast{position:absolute;bottom:max(10px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
     z-index:1000;background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.93);border:1px solid rgba(${T.a},0.30);border-radius:20px;
-    padding:6px 14px;font-size:11px;letter-spacing:1px;
+    padding:6px 14px;font-size:13px;letter-spacing:1px;
     color:rgba(${T.hi},0.90);white-space:nowrap;opacity:0;transition:opacity 0.4s;max-width:90vw;
     overflow:hidden;text-overflow:ellipsis;cursor:pointer;}
   #toast.on{opacity:1;}
-  .tf{color:#ffe566;font-size:12px;}
+  .tf{color:#ffe566;font-size:14px;}
   .tg{color:rgba(255,160,0,0.55);}
-  .ta{color:rgba(255,160,0,0.40);font-size:10px;}
+  .ta{color:rgba(255,160,0,0.40);font-size:12px;}
   /* ── legend — skin lsv-smap-legend / lsv-hfdl-legend ── */
   #legend{position:absolute;bottom:max(44px,calc(env(safe-area-inset-bottom) + 34px));left:max(10px,env(safe-area-inset-left));
-    z-index:1000;font-size:10px;letter-spacing:0.8px;color:rgba(${T.hi},0.80);pointer-events:auto;}
+    z-index:1000;font-size:12px;letter-spacing:0.8px;color:rgba(${T.hi},0.80);pointer-events:auto;}
   #legbtn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;
     background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.88);border:1px solid rgba(${T.a},0.30);border-radius:8px;cursor:pointer;
-    font-size:14px;line-height:1;-webkit-tap-highlight-color:transparent;touch-action:manipulation;color:rgba(${T.hi},0.80);}
+    font-size:16px;line-height:1;-webkit-tap-highlight-color:transparent;touch-action:manipulation;color:rgba(${T.hi},0.80);}
   #legbtn:active{background:rgba(${T.a},0.15);}
   #legbody{display:none;position:absolute;bottom:0;left:34px;background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.92);
     border:1px solid rgba(${T.a},0.18);border-radius:8px;padding:7px 9px;white-space:nowrap;
@@ -238,10 +240,10 @@ ${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="
   #legbody::-webkit-scrollbar{width:4px;}
   #legbody::-webkit-scrollbar-track{background:transparent;}
   #legbody::-webkit-scrollbar-thumb{background:rgba(${T.a},0.40);border-radius:2px;}
-  .lg-row{display:flex;align-items:center;gap:8px;margin:3px 0;font-size:10px;}
-  .lg-dot{display:inline-block;width:10px;height:10px;border-radius:50%;flex-shrink:0;}
-  .lg-sec{font-size:9px;letter-spacing:1.5px;color:rgba(${T.a},0.40);margin:6px 0 3px;}
-  .scroll-arrow{display:none;position:sticky;left:0;right:0;text-align:center;font-size:11px;line-height:1;padding:2px 0;pointer-events:none;color:rgba(${T.hi},0.90);}
+  .lg-row{display:flex;align-items:center;gap:8px;margin:3px 0;font-size:12px;}
+  .lg-dot{display:inline-block;width:12px;height:12px;border-radius:50%;flex-shrink:0;}
+  .lg-sec{font-size:11px;letter-spacing:1.5px;color:rgba(${T.a},0.40);margin:6px 0 3px;}
+  .scroll-arrow{display:none;position:sticky;left:0;right:0;text-align:center;font-size:13px;line-height:1;padding:2px 0;pointer-events:none;color:rgba(${T.hi},0.90);}
   .scroll-arrow-up{top:0;}
   .scroll-arrow-dn{bottom:0;}
   .scroll-arrow.arr-on{display:block;}
@@ -250,10 +252,10 @@ ${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="
     z-index:1000;pointer-events:auto;}
   #statsbtn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;
     background:rgba(6,9,6,0.88);border:1px solid rgba(${T.a},0.30);border-radius:8px;cursor:pointer;
-    font-size:13px;line-height:1;-webkit-tap-highlight-color:transparent;touch-action:manipulation;color:rgba(${T.hi},0.80);}
+    font-size:15px;line-height:1;-webkit-tap-highlight-color:transparent;touch-action:manipulation;color:rgba(${T.hi},0.80);}
   #statsbtn:active{background:rgba(${T.a},0.15);}
   #stsheet{display:none;position:absolute;inset:0;z-index:1500;background:rgba(4,12,4,0.82);
-    color:rgba(${T.hi},0.80);font-size:10px;letter-spacing:0.8px;
+    color:rgba(${T.hi},0.80);font-size:12px;letter-spacing:0.8px;
     backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
     overflow-y:scroll;overflow-x:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y;
     padding:16px max(16px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));
@@ -263,16 +265,16 @@ ${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="
   #stsheet::-webkit-scrollbar-thumb{background:rgba(${T.a},0.50);border-radius:3px;min-height:40px;}
   #stsheet.open{display:block;}
   .st-close{position:sticky;top:0;float:right;background:rgba(${T.a},0.12);border:1px solid rgba(${T.a},0.35);
-    border-radius:8px;color:rgba(${T.hi},0.85);font-family:inherit;font-size:11px;letter-spacing:1px;padding:5px 10px;
+    border-radius:8px;color:rgba(${T.hi},0.85);font-family:inherit;font-size:13px;letter-spacing:1px;padding:5px 10px;
     cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;margin-bottom:8px;z-index:10;}
-  .st-title{font-size:13px;letter-spacing:2px;color:rgba(${T.a},0.70);margin-bottom:12px;padding-top:2px;}
+  .st-title{font-size:15px;letter-spacing:2px;color:rgba(${T.a},0.70);margin-bottom:12px;padding-top:2px;}
   .st-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:700px;margin:0 auto;}
   @media(max-width:480px){.st-grid{grid-template-columns:1fr;}}
   .st-card{background:rgba(6,9,6,0.60);border:1px solid rgba(${T.a},0.12);border-radius:8px;padding:10px 12px;}
-  .st-sect{font-size:9px;letter-spacing:1.5px;color:rgba(${T.a},0.45);margin:0 0 6px;}
-  .st-row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin:4px 0;font-size:11px;}
-  .st-val{color:rgba(${T.hi},0.95);font-size:12px;font-weight:bold;}
-  .st-sub{font-size:9px;color:rgba(${T.a},0.45);letter-spacing:0.5px;margin:-2px 0 6px;}
+  .st-sect{font-size:11px;letter-spacing:1.5px;color:rgba(${T.a},0.45);margin:0 0 6px;}
+  .st-row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin:4px 0;font-size:13px;}
+  .st-val{color:rgba(${T.hi},0.95);font-size:14px;font-weight:bold;}
+  .st-sub{font-size:11px;color:rgba(${T.a},0.45);letter-spacing:0.5px;margin:-2px 0 6px;}
   .st-bar{height:3px;background:rgba(${T.a},0.12);border-radius:2px;margin:2px 0 6px;}
   .st-bf{height:3px;background:rgba(${T.a},0.65);border-radius:2px;transition:width 0.4s;}
 </style>
@@ -687,7 +689,7 @@ function age(ms){var s=Math.floor((Date.now()-ms)/1000);if(s<5)return'just now';
 function distKm(lat,lon){if(!RX_LAT&&!RX_LON)return null;var R=6371,r=Math.PI/180;var dLat=(lat-RX_LAT)*r,dLon=(lon-RX_LON)*r;var a=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(RX_LAT*r)*Math.cos(lat*r)*Math.sin(dLon/2)*Math.sin(dLon/2);return Math.round(R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a)));}
 
 var RX_SVG='<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><polygon points="11,1 21,10 17,10 17,21 13,21 13,15 9,15 9,21 5,21 5,10 1,10" fill="rgba(255,200,60,0.85)" stroke="rgba(0,0,0,0.5)" stroke-width="1"/></svg>';
-function addRx(){if(RX_LAT||RX_LON){L.marker([RX_LAT,RX_LON],{icon:L.divIcon({html:RX_SVG,className:'',iconSize:[22,22],iconAnchor:[11,22]}),zIndexOffset:1000}).addTo(map).bindPopup('<div style="font-size:11px;letter-spacing:1px;">&#127968; Your receiver</div>');map.setView([RX_LAT,RX_LON],KIND==='hfdl'?4:3);}}
+function addRx(){if(RX_LAT||RX_LON){L.marker([RX_LAT,RX_LON],{icon:L.divIcon({html:RX_SVG,className:'',iconSize:[22,22],iconAnchor:[11,22]}),zIndexOffset:1000}).addTo(map).bindPopup('<div style="font-size:13px;letter-spacing:1px;">&#127968; Your receiver</div>');map.setView([RX_LAT,RX_LON],KIND==='hfdl'?4:3);}}
 
 // Local/Kiwi (on-device decoder): RX position is injected (no /api/description).
 // 0,0 = Null Island = unknown → offer a "set location" button that asks RN for a
@@ -695,7 +697,7 @@ function addRx(){if(RX_LAT||RX_LON){L.marker([RX_LAT,RX_LON],{icon:L.divIcon({ht
 function showSetLoc(){
   var b=document.createElement('button');
   b.textContent='\\uD83D\\uDCCD SET LOCATION';
-  b.style.cssText='position:absolute;left:50%;bottom:18px;transform:translateX(-50%);z-index:900;background:rgba(6,9,6,0.92);color:rgba('+'${T.hi}'+',0.95);border:1px solid rgba('+'${T.a}'+',0.5);border-radius:8px;padding:9px 16px;font-family:inherit;font-size:12px;letter-spacing:1px;';
+  b.style.cssText='position:absolute;left:50%;bottom:18px;transform:translateX(-50%);z-index:900;background:rgba(6,9,6,0.92);color:rgba('+'${T.hi}'+',0.95);border:1px solid rgba('+'${T.a}'+',0.5);border-radius:8px;padding:9px 16px;font-family:inherit;font-size:14px;letter-spacing:1px;';
   b.addEventListener('click',function(){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage('pickCity');});
   document.getElementById('map').appendChild(b);
 }
@@ -777,7 +779,7 @@ if(KIND==='hfdl'){
   function sigBars(dbfs){if(dbfs==null||dbfs===0)return 0;if(dbfs>-40)return 3;if(dbfs>-55)return 2;return 1;}
   function sigMeterHTML(dbfs){
     var bars=sigBars(dbfs);
-    if(bars===0)return'<span style="font-size:9px;color:rgba(255,60,60,0.8);letter-spacing:0.5px;">&#10005; NO SIG</span>';
+    if(bars===0)return'<span style="font-size:11px;color:rgba(255,60,60,0.8);letter-spacing:0.5px;">&#10005; NO SIG</span>';
     var colours=['rgba(255,60,60,0.85)','rgba(255,200,40,0.85)','rgba(60,220,80,0.85)'];
     var heights=[6,9,12];
     var h='<span style="display:inline-flex;align-items:flex-end;gap:2px;margin-left:2px;">';
@@ -903,8 +905,8 @@ if(KIND==='hfdl'){
     var sig=a.sig_level?a.sig_level.toFixed(1)+' dBFS':'';
     var tracked=a.tracked_km?Math.round(a.tracked_km).toLocaleString()+' km'+(spd?' &bull; '+spd:''):spd;
     var row=function(label,val){return val?'<tr><td style="color:rgba(255,160,0,0.5);padding-right:8px;white-space:nowrap;">'+label+'</td><td style="color:rgba(255,210,80,0.9);">'+val+'</td></tr>':'';};
-    return '<div style="font-size:11px;letter-spacing:0.8px;">'
-      +'<div style="font-size:13px;font-weight:600;color:rgba(255,210,60,1);margin-bottom:6px;">'+fl+(a.icao&&a.icao!==fl?' <span style="font-size:10px;color:rgba(255,180,60,0.55);">'+a.icao+'</span>':'')+'</div>'
+    return '<div style="font-size:13px;letter-spacing:0.8px;">'
+      +'<div style="font-size:15px;font-weight:600;color:rgba(255,210,60,1);margin-bottom:6px;">'+fl+(a.icao&&a.icao!==fl?' <span style="font-size:12px;color:rgba(255,180,60,0.55);">'+a.icao+'</span>':'')+'</div>'
       +'<table style="border-collapse:collapse;">'
       +row('Freq',freq)
       +row('Via',gsN)
@@ -930,33 +932,33 @@ if(KIND==='hfdl'){
         var lastHeard=s.last_heard||0;
         var sigLine;
         if(sig){
-          sigLine=sigMeterHTML(sig)+'<span style="font-size:9px;color:rgba(255,160,0,0.40);margin-left:3px;">'+sig.toFixed(1)+' dBFS</span>';
+          sigLine=sigMeterHTML(sig)+'<span style="font-size:11px;color:rgba(255,160,0,0.40);margin-left:3px;">'+sig.toFixed(1)+' dBFS</span>';
         }else if(lastHeard>0){
           var el=Math.floor(Date.now()/1000-lastHeard),elStr;
           if(el<60)elStr=el+'s ago';else if(el<3600)elStr=Math.floor(el/60)+'m ago';
           else if(el<86400)elStr=Math.floor(el/3600)+'h '+Math.floor((el%3600)/60)+'m ago';
           else elStr=Math.floor(el/86400)+'d ago';
-          sigLine='<span style="font-size:9px;color:rgba(255,80,60,0.70);">&#10005; No sig &mdash; last '+elStr+'</span>';
+          sigLine='<span style="font-size:11px;color:rgba(255,80,60,0.70);">&#10005; No sig &mdash; last '+elStr+'</span>';
         }else{
-          sigLine='<span style="font-size:9px;color:rgba(180,80,60,0.55);">&#10005; Never heard</span>';
+          sigLine='<span style="font-size:11px;color:rgba(180,80,60,0.55);">&#10005; Never heard</span>';
         }
-        var ph='<div style="font-size:12px;letter-spacing:1px;color:rgba(255,200,80,0.9)">'+name+'</div>'
+        var ph='<div style="font-size:14px;letter-spacing:1px;color:rgba(255,200,80,0.9)">'+name+'</div>'
           +'<div style="margin-top:4px;display:flex;align-items:center;gap:6px;">'
-          +'<span style="font-size:10px;color:rgba(255,160,0,0.55);">Signal:</span>'+sigLine+'</div>';
+          +'<span style="font-size:12px;color:rgba(255,160,0,0.55);">Signal:</span>'+sigLine+'</div>';
         var d=distKm(s.lat,s.lon);
-        if(d)ph+='<div style="margin-top:3px;font-size:10px;color:rgba(255,160,0,0.5);">'+d+' km from receiver</div>';
+        if(d)ph+='<div style="margin-top:3px;font-size:12px;color:rgba(255,160,0,0.5);">'+d+' km from receiver</div>';
         if(freqs.length){
           ph+='<div style="margin-top:6px;">';
           freqs.forEach(function(f){
             var k=f.freq_khz||0,en=f.enabled!==false;
             ph+='<div style="margin:3px 0;display:flex;align-items:center;gap:5px;">'
-            +'<span style="color:'+(en?'rgba(255,180,60,0.9)':'rgba(180,120,30,0.45)')+';min-width:66px;font-size:11px;">'+(k?(k/1000).toFixed(3)+' MHz':'?')+'</span>'
-            +(en?'<span style="color:rgba(80,220,80,0.7);font-size:9px;">&#9679; ON</span>':'<span style="color:rgba(255,80,80,0.35);font-size:9px;">&#9675; off</span>')
+            +'<span style="color:'+(en?'rgba(255,180,60,0.9)':'rgba(180,120,30,0.45)')+';min-width:66px;font-size:13px;">'+(k?(k/1000).toFixed(3)+' MHz':'?')+'</span>'
+            +(en?'<span style="color:rgba(80,220,80,0.7);font-size:11px;">&#9679; ON</span>':'<span style="color:rgba(255,80,80,0.35);font-size:11px;">&#9675; off</span>')
             +'</div>';
           });
           ph+='</div>';
         }else{
-          ph+='<div style="color:rgba(255,160,0,0.35);font-size:10px;margin-top:4px;">No frequencies listed</div>';
+          ph+='<div style="color:rgba(255,160,0,0.35);font-size:12px;margin-top:4px;">No frequencies listed</div>';
         }
         if(gsM[id]){
           gsM[id].setPopupContent(ph);
@@ -1095,15 +1097,15 @@ if(KIND==='digi'||KIND==='cw'){
   function popup(s){
     var hz=spotHz(s.freq);
     var band=spotBand(s);
-    return'<div style="font-size:12px;color:rgba(120,240,120,0.95);letter-spacing:1px;">'+s.call+'</div>'
-    +'<div style="margin-top:4px;font-size:10px;color:rgba(80,200,80,0.70);">'
+    return'<div style="font-size:14px;color:rgba(120,240,120,0.95);letter-spacing:1px;">'+s.call+'</div>'
+    +'<div style="margin-top:4px;font-size:12px;color:rgba(80,200,80,0.70);">'
     +(s.mode?'<span style="margin-right:6px;">'+s.mode+'</span>':'')
     +(band?'<span style="margin-right:6px;">'+band+'</span>':'')
     +(hz?'<span>'+(hz/1e6).toFixed(4)+' MHz</span>':'')+'</div>'
-    +'<div style="margin-top:3px;font-size:10px;color:rgba(80,200,80,0.55);">'
+    +'<div style="margin-top:3px;font-size:12px;color:rgba(80,200,80,0.55);">'
     +(s.snr!==undefined?'SNR: '+s.snr+' dB':'')+(s.wpm?' &bull; '+Math.round(s.wpm)+' wpm':'')
     +(s.country?' &bull; '+abbr(s.country):'')+'</div>'
-    +'<div style="margin-top:2px;font-size:9px;color:rgba(80,200,80,0.35);">'+age(s.t)
+    +'<div style="margin-top:2px;font-size:11px;color:rgba(80,200,80,0.35);">'+age(s.t)
     +(s.distKm?' &bull; '+Math.round(s.distKm)+' km':'')+'</div>';
   }
   function upsert(s){
@@ -1136,7 +1138,7 @@ if(KIND==='digi'||KIND==='cw'){
     var vis=spots.filter(passes);
     if(!vis.length){
       setT('s-close','—');setT('s-far','—');setT('s-close-sub','');setT('s-far-sub','');
-      setH('s-countries','<div style="font-size:9px;color:rgba(80,200,80,0.35)">No data</div>');
+      setH('s-countries','<div style="font-size:11px;color:rgba(80,200,80,0.35)">No data</div>');
       setH('s-bands','');if(!isCW)setH('s-modes','');
       return;
     }
@@ -1152,7 +1154,7 @@ if(KIND==='digi'||KIND==='cw'){
     }
     var cm={};vis.forEach(function(s){var c=abbr(s.country)||'Unknown';cm[c]=(cm[c]||0)+1;});
     var ct=Object.keys(cm).sort(function(a,b){return cm[b]-cm[a];}).slice(0,3);
-    setH('s-countries',ct.length?ct.map(function(c,i){return barRow((i+1)+'. '+c,cm[c],cm[ct[0]]);}).join(''):'<div style="font-size:9px;color:rgba(80,200,80,0.35)">No country data</div>');
+    setH('s-countries',ct.length?ct.map(function(c,i){return barRow((i+1)+'. '+c,cm[c],cm[ct[0]]);}).join(''):'<div style="font-size:11px;color:rgba(80,200,80,0.35)">No country data</div>');
     var bm={};vis.forEach(function(s){var b=spotBand(s)||'?';bm[b]=(bm[b]||0)+1;});
     var bx=Math.max.apply(null,Object.keys(bm).map(function(b){return bm[b];}).concat([1]));
     setH('s-bands',BAND_ORDER.filter(function(b){return bm[b];}).map(function(b){return barRow(b,bm[b],bx);}).join('')||'&mdash;');
