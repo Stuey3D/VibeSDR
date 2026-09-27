@@ -904,7 +904,9 @@ if(KIND==='hfdl'){
     var spd=a.gnd_spd_kts?Math.round(a.gnd_spd_kts)+' kts':'';
     var gsN=gsNames[a.gs_id]||'';
     var freq=a.freq_khz?(a.freq_khz/1000).toFixed(3)+' MHz':'';
-    var sig=a.sig_level?a.sig_level.toFixed(1)+' dBFS':'';
+    // ★ The 3-bar meter beside the figure (Stuart, 2026-09-28: "I dont know what constitutes a good signal
+    //   or bad one") — the SAME sigBars thresholds as the ground-station popups, so the two never disagree.
+    var sig=a.sig_level?sigMeterHTML(a.sig_level)+' <span style="margin-left:4px;">'+a.sig_level.toFixed(1)+' dBFS</span>':'';
     var tracked=a.tracked_km?Math.round(a.tracked_km).toLocaleString()+' km'+(spd?' &bull; '+spd:''):spd;
     var row=function(label,val){return val?'<tr><td style="color:rgba(255,160,0,0.5);padding-right:8px;white-space:nowrap;">'+label+'</td><td style="color:rgba(255,210,80,0.9);">'+val+'</td></tr>':'';};
     return '<div style="font-size:13px;letter-spacing:0.8px;">'
