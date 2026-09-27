@@ -2788,6 +2788,18 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   color: var(--unit); white-space: pre-wrap; word-break: break-word;
 }
 #actLog[hidden] { display: none; }
+/* ★ The GPU map's own controls in this page's dress (the directory does the same) — MapLibre's
+   defaults are white panels, which glare on a dark admin page. */
+#adminCountryMap .maplibregl-ctrl-group { background: var(--btn-bg); border: 1px solid var(--btn-border); }
+#adminCountryMap .maplibregl-ctrl-group button + button { border-top: 1px solid var(--btn-border); }
+#adminCountryMap .maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg); opacity: 0.8; }
+#adminCountryMap .maplibregl-ctrl-attrib, #adminCountryMap .maplibregl-ctrl-attrib.maplibregl-compact { background: rgba(0,0,0,0.6); color: var(--text-dim); font-size: 9px; }
+#adminCountryMap .maplibregl-ctrl-attrib a { color: var(--text-dim); }
+/* The High Detail Maps download, as a bar under its sentence. */
+#mapglDetailBar { height: 4px; max-width: 420px; margin: 0 0 8px; border-radius: 2px;
+                  background: var(--btn-bg); border: 1px solid var(--btn-border); overflow: hidden; }
+#mapglDetailBar i { display: block; height: 100%; width: 0; background: var(--amber); transition: width .4s; }
+
 #actLog.done  { color: var(--btn-text); }
 #actLog.failed { border-color: rgba(224,80,80,0.6); color: #ff8b7d; }
 /* ★ The one button here that cannot be undone from this page looks different. Everything else
@@ -3816,6 +3828,16 @@ select.btn { padding: 6px 8px; }
       fixes current, but an OS upgrade can occasionally need attention and nobody will be watching,
       so weekly is the sensible choice. Both run at the hour you pick, local time.
     </p>
+    <!-- ★★ HIGH DETAIL MAPS — the optional close-in pack for the GPU map this server serves at
+         /mapgl/ (towns, lakes, runways). One row that says what is true NOW, read from the server's
+         status every refresh: installed + space used, not installed + what it costs, the download
+         in progress, the error with a Retry — or, where this server has no way to download at all,
+         a sentence saying so instead of a button that could never work (AGENTS.md). -->
+    <div id="mapglDetailRow" class="aRow" hidden>
+      <span id="mapglDetailText" class="dim wrap"></span>
+      <button class="btn" id="mapglDetailBtn" hidden></button>
+    </div>
+    <div id="mapglDetailBar" hidden><i></i></div>
     <p class="dim wrap" id="actMsg"></p>
     <!-- ★★ THE OUTPUT, UNDER THE BUTTON THAT CAUSED IT. "Install updates" can run for minutes;
          without this it was a button that went quiet, and quiet is indistinguishable from broken

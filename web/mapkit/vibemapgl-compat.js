@@ -135,9 +135,29 @@
       polyDirty = false;
       const src = gl.getSource('lc-polys');
       if (!src) return;
+      for (const q of polys.values()) if (q.st.dashArray) dashLayer(q.st);
       src.setData({ type: 'FeatureCollection', features: [...polys.values()].map((q) => ({
-        type: 'Feature', id: q.id, properties: Object.assign({}, q.st),
+        type: 'Feature', id: q.id, properties: Object.assign({}, q.st, q.st.dashArray ? { _dash: String(q.st.dashArray) } : {}),
         geometry: { type: 'MultiPolygon', coordinates: q.rings.map((r) => [r]) } })) });
+    }
+    /* ★ DASHED OUTLINES (Leaflet's dashArray — the spots map's range rings). MapLibre cannot drive
+     *  line-dasharray from a feature, so each distinct pattern gets its own line layer, made on first
+     *  use and filtered to its features; the plain outline layer skips anything dashed. Leaflet's
+     *  dashes are PIXELS, MapLibre's are multiples of the line width — hence the division. */
+    const dashes = new Map();
+    function dashLayer(st) {
+      const key = String(st.dashArray);
+      if (dashes.has(key) || !gl.getSource('lc-polys')) return;
+      const w = st.weight != null ? st.weight : 3;
+      const arr = key.split(/[\s,]+/).map(Number).filter((n) => isFinite(n) && n >= 0).map((n) => n / (w || 1));
+      const id = 'lc-polys-dash-' + dashes.size;
+      dashes.set(key, id);
+      const under = gl.getStyle().layers.find((l) => l.type === 'symbol');
+      gl.addLayer({ id, type: 'line', source: 'lc-polys', filter: ['==', ['get', '_dash'], key], paint: {
+        'line-color': ['coalesce', ['get', 'color'], '#3388ff'],
+        'line-width': ['coalesce', ['get', 'weight'], 3],
+        'line-opacity': ['case', ['==', ['get', 'stroke'], false], 0, ['coalesce', ['get', 'opacity'], 1]],
+        ...(arr.length >= 2 ? { 'line-dasharray': arr } : {}) } }, under && under.id);
     }
     function queuePolys() { if (!polyDirty) { polyDirty = true; requestAnimationFrame(flushPolys); } }
     vm.ready.then(() => {
@@ -147,8 +167,9 @@
       const under = gl.getStyle().layers.find((l) => l.type === 'symbol');
       gl.addLayer({ id: 'lc-polys-fill', type: 'fill', source: 'lc-polys', paint: {
         'fill-color': ['coalesce', ['get', 'fillColor'], ['get', 'color'], '#3388ff'],
-        'fill-opacity': ['coalesce', ['get', 'fillOpacity'], 0.2] } }, under && under.id);
-      gl.addLayer({ id: 'lc-polys-line', type: 'line', source: 'lc-polys', paint: {
+        // ★ Leaflet's fill:false (a ring, not a disc) is an outline with nothing inside it.
+        'fill-opacity': ['case', ['==', ['get', 'fill'], false], 0, ['coalesce', ['get', 'fillOpacity'], 0.2]] } }, under && under.id);
+      gl.addLayer({ id: 'lc-polys-line', type: 'line', source: 'lc-polys', filter: ['!', ['has', '_dash']], paint: {
         'line-color': ['coalesce', ['get', 'color'], '#3388ff'],
         'line-width': ['coalesce', ['get', 'weight'], 3],
         'line-opacity': ['case', ['==', ['get', 'stroke'], false], 0, ['coalesce', ['get', 'opacity'], 1]] } }, under && under.id);
@@ -168,6 +189,38 @@
         setStyle: (s2) => { Object.assign(q.st, s2); queuePolys(); return h; },
         setLatLngs: (a) => { q.rings = (isRing(a) ? [a] : a).map(toRing); queuePolys(); return h; },
       };
+      return h;
+    }
+    /** Leaflet circle: a radius in METRES round a point — drawn as a geodesic ring (true great-circle
+     *  distance, which is what a range ring means), through the polygon layers above. Leaflet drew a
+     *  projected ellipse instead; on a regional map the two agree, far out the geodesic is the honest one.
+     *  ★ A ring that encloses a pole (5000 km from the UK does) cannot close across the map: its
+     *    longitudes run a full 360°. It is closed OVER the pole instead, off the top of the map. */
+    function circleRing(c, m) {
+      const rad = Math.PI / 180, d = m / 6371008.8, la = c.lat * rad, lo = c.lng * rad, N = 128;
+      const out = []; let prev = null;
+      for (let i = 0; i < N; i++) {
+        const b = (2 * Math.PI * i) / N;
+        const lat = Math.asin(Math.sin(la) * Math.cos(d) + Math.cos(la) * Math.sin(d) * Math.cos(b));
+        let lng = (lo + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(la), Math.cos(d) - Math.sin(la) * Math.sin(lat))) / rad;
+        if (prev != null) { while (lng - prev > 180) lng -= 360; while (lng - prev < -180) lng += 360; }
+        prev = lng; out.push([lat / rad, lng]);
+      }
+      const span = out[out.length - 1][1] - out[0][1];
+      if (Math.abs(span) > 180) {
+        const pole = (c.lat >= 0 ? 89.9 : -89.9);
+        out.push([pole, out[out.length - 1][1]], [pole, out[0][1]]);
+      }
+      return out;
+    }
+    function Circle(latlng, st) {
+      st = Object.assign({ fill: true }, st);
+      let c = ll(latlng), r = st.radius != null ? st.radius : 10;
+      const h = Polygon(circleRing(c, r), st);
+      h.getLatLng = () => c;
+      h.getRadius = () => r;
+      h.setLatLng = (p) => { c = ll(p); return h.setLatLngs([circleRing(c, r)]); };
+      h.setRadius = (m) => { r = m; return h.setLatLngs([circleRing(c, r)]); };
       return h;
     }
     /** Leaflet layerGroup: its members show only while the group is on the map. */
@@ -232,6 +285,7 @@
       map(id, o) { if (o && o.scrollWheelZoom === false) gl.scrollZoom.disable(); return map; },
       layerGroup: LayerGroup,
       polygon: Polygon,
+      circle: Circle,
       marker: Marker,
       circleMarker: CircleMarker,
       divIcon: (options) => ({ options }),

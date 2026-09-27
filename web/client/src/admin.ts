@@ -20,6 +20,7 @@ import { isoToFlag } from '../../../src/services/rdsCountry';
 import { httpBase } from './origin';
 import { adminTicketQuery, inAdminMode, saveAdminTicket } from './adminticket';
 import { VIBEMAP_JS } from './generated/vibemapSource';
+import { loadMapGLScripts, mapglLoad, probeMapGL } from './mapgl';
 /* ★ Evaluate the shared renderer once into this page — same string the app injects and the
  *  directory loads as a file (web/mapkit/vibemap.js via gen-vibemap-source.mjs). A <script> with
  *  textContent runs synchronously on append, so VibeMap exists by the time attach() is called.
@@ -537,8 +538,10 @@ const CC_POS: Record<string, [number, number]> = {
   ZA:[-29,24.7],
 };
 
-let ccMap: any = null;               // the Leaflet map, once it exists
+let ccMap: any = null;               // the map (Leaflet, or the GPU map's Leaflet-shaped adapter)
+let ccL: any = null;                 // ★ the L that made ccMap — the markers must come from the same one
 let ccMarkers: any[] = [];
+let ccMapPending: Promise<boolean> | null = null;
 let leafletPending: Promise<boolean> | null = null;
 
 /** ★★ LOADED ONLY WHEN AN OWNER OPENS ADMIN, and from the same CDN the spots map already uses.
@@ -575,10 +578,50 @@ function loadLeaflet(): Promise<boolean> {
 async function renderCountryMap(list: any[]): Promise<boolean> {
   const host = document.getElementById('adminCountryMap');
   if (!host || !list.length) return false;
+  // ★ Made ONCE, however many 2-second refreshes arrive while the scripts are still loading.
+  if (!ccMapPending) ccMapPending = makeCountryMap(host);
+  if (!await ccMapPending) { ccMapPending = null; return false; }
+  const L = ccL;
+  drawCountryMarkers(L, list);
+  return true;
+}
+
+/* ★★★ THE GPU MAP FIRST, SERVED BY THIS SERVER (Stuart, 2026-09-28: "the new maps serving for their
+ *     admin pages"). MapLibre, the style, the fonts and the packs all come from /mapgl/ on this
+ *     machine, so the map needs no internet at all — which the Leaflet path below never managed, as
+ *     its own note says. The adapter answers the same L.map / L.marker / L.divIcon calls, so the
+ *     markers below are drawn by one piece of code whichever map is underneath.
+ *  ★ No WebGL 2, an older server without /mapgl/, or any failure: today's Leaflet map, unchanged. */
+async function makeCountryMap(host: HTMLElement): Promise<boolean> {
+  const kit = await probeMapGL();
+  if (kit && await loadMapGLScripts(kit.base)) {
+    host.hidden = false;
+    host.style.height = '360px';
+    const w = window as any;
+    let vm: any = null;
+    try {
+      vm = w.VibeMapGL.createNow(host, {
+        style: kit.style, load: mapglLoad, base: kit.base, rangeBase: kit.base, detail: kit.detail,
+        profile: 'admin', center: [5, 25], zoom: 0,
+      });
+      if (vm) {
+        ccL = w.VibeMapGLCompat.install(vm);
+        ccMap = ccL.map(host, { scrollWheelZoom: false });
+        ccL.control.zoom({ position: 'topleft' }).addTo();
+        vm.ready.catch((e: unknown) => console.error('Admin GPU map: the style did not load', e));
+        return true;
+      }
+    } catch (e) {
+      console.error('Admin GPU map failed — using the Leaflet map', e);
+      try { vm?.destroy(); } catch (e2) { console.error('Admin GPU map: tidy-up failed', e2); }
+      ccMap = null; ccL = null;
+    }
+  }
   if (!await loadLeaflet()) return false;
   const L = (window as any).L;
+  ccL = L;
 
-  if (!ccMap) {
+  {
     host.hidden = false;
     host.style.height = '360px';
     ensureVibeMap();
@@ -613,7 +656,10 @@ async function renderCountryMap(list: any[]): Promise<boolean> {
     ensureVibeMap();
     (window as any).VibeMap.attach(ccMap, { dataBase: '/mapdata/v1/', profile: 'admin' });
   }
+  return true;
+}
 
+function drawCountryMarkers(L: any, list: any[]) {
   ccMarkers.forEach((m) => ccMap.removeLayer(m));
   ccMarkers = [];
   const max = Math.max(...list.map((c) => Number(c.n) || 0), 1);
@@ -638,7 +684,6 @@ async function renderCountryMap(list: any[]): Promise<boolean> {
       icon, title: `${ccName(c.cc)} — ${n} visitor${n === 1 ? '' : 's'}`,
     }).addTo(ccMap));
   }
-  return true;
 }
 
 function renderCountries(list: any[]) {
@@ -1309,7 +1354,11 @@ async function refresh() {
       { const ls = document.getElementById('secLearned'); if (ls) ls.hidden = false; }
       const offered = String(st.maintenance ?? '').split(',').filter(Boolean);
       const sec = document.getElementById('secMaintenance');
-      if (sec) sec.hidden = offered.length === 0;
+      // ★ High Detail Maps live here too, and a server can offer them with no package actions at
+      //   all (an Android phone) — so the section shows for either.
+      const md = st.mapglDetail && typeof st.mapglDetail === 'object' ? st.mapglDetail : null;
+      if (sec) sec.hidden = offered.length === 0 && !md;
+      renderMapglDetail(md);
       for (const [id, act] of [['actUpdateCheck', 'update-check'], ['actUpdate', 'update'],
                                ['actUpdateAll', 'update-all'],
                                ['actRestart', 'restart'], ['actReboot', 'reboot']] as const) {
@@ -1388,6 +1437,90 @@ async function refresh() {
       $('adminHost').textContent = `${host} — not responding (${(e as Error).message})`;
     }
   }
+}
+
+// ── High Detail Maps (the GPU map's optional close-in pack) ──────────────────────────────────
+//
+// ★★ WHAT THE SERVER SAYS, EVERY REFRESH. The status carries mapglDetail =
+//    {installed, bytes, downloading, written, total, error, available}; this row only ever draws
+//    that — never what this page last asked for — so a download started from another browser, or
+//    finished while this one was closed, reads correctly. The panel's 2-second refresh IS the poll.
+// ★ Stuart's wording, one sentence and one button: what is true, and the one thing to do about it.
+type MapglAction = 'mapgl-detail-install' | 'mapgl-detail-remove' | '';
+let mapglAction: MapglAction = '';
+let mapglBytes = 0;
+let mapglShown = '';
+const MAPGL_DETAIL_MB = 169;     // ★ DETAIL_BYTES 177024426 ≈ 169 MiB — the same asset the app downloads
+
+function renderMapglDetail(md: any) {
+  const row = document.getElementById('mapglDetailRow');
+  const text = document.getElementById('mapglDetailText');
+  const btn = document.getElementById('mapglDetailBtn') as HTMLButtonElement | null;
+  const bar = document.getElementById('mapglDetailBar');
+  if (!row || !text || !btn || !bar) return;
+  if (!md) { row.hidden = true; bar.hidden = true; mapglAction = ''; mapglShown = ''; return; }
+  const mb = (n: number) => Math.max(1, Math.round((Number(n) || 0) / 1048576));
+  let sentence = '', label = '', action: MapglAction = '', pct = -1;
+  if (md.downloading) {
+    const total = Number(md.total) || 0, written = Number(md.written) || 0;
+    pct = total > 0 ? Math.min(100, Math.floor((100 * written) / total)) : 0;
+    sentence = total > 0
+      ? `Downloading High Detail Maps — ${pct}% (${mb(written)} of ${mb(total)} MB).`
+      : 'Downloading High Detail Maps — starting…';
+  } else if (md.installed) {
+    mapglBytes = Number(md.bytes) || 0;
+    sentence = `High Detail Maps installed, space used ${mb(mapglBytes)} MB —`;
+    label = 'REMOVE'; action = 'mapgl-detail-remove';
+  } else if (md.available === false) {
+    // ★★ NO BUTTON. This server has no way to fetch the file, and a button that can only fail is
+    //    worse than a sentence that says why (AGENTS.md).
+    sentence = 'High Detail Maps not installed. This server cannot download them itself, so they '
+             + 'cannot be installed from here — the maps work without them, with less detail close in.';
+  } else if (md.error) {
+    sentence = `High Detail Maps download failed: ${String(md.error)}`;
+    label = 'RETRY'; action = 'mapgl-detail-install';
+  } else {
+    sentence = `High Detail Maps not installed. They need about ${MAPGL_DETAIL_MB} MB on this server `
+             + 'and are a one-time download —';
+    label = 'DOWNLOAD NOW'; action = 'mapgl-detail-install';
+  }
+  row.hidden = false;
+  bar.hidden = pct < 0;
+  if (pct >= 0) (bar.firstElementChild as HTMLElement).style.width = pct + '%';
+  mapglAction = action;
+  // ★ Only touch the DOM when the words change: re-rendering a button every 2 s under the pointer
+  //   eats the click that lands mid-swap.
+  const key = sentence + '|' + label;
+  if (key === mapglShown) return;
+  mapglShown = key;
+  text.textContent = sentence;
+  btn.textContent = label;
+  btn.hidden = !label;
+  btn.disabled = false;
+}
+
+async function mapglDetailClick(msg: (id: string, text: string) => void) {
+  const action = mapglAction;
+  if (!action) return;
+  if (action === 'mapgl-detail-remove' && !window.confirm(
+    `Remove High Detail Maps from this server?\n\nThis frees about ${Math.max(1, Math.round(mapglBytes / 1048576))} MB. `
+    + 'The maps keep working with less detail close in, and you can download them again at any time.')) return;
+  const btn = document.getElementById('mapglDetailBtn') as HTMLButtonElement | null;
+  if (btn) btn.disabled = true;
+  try {
+    await post('action', { action });
+    // ★ A download reports itself in the row (the progress), so nothing here would stay true.
+    msg('actMsg', action === 'mapgl-detail-remove' ? 'High Detail Maps removed.' : '');
+  } catch (e) {
+    console.error(`High Detail Maps: ${action} failed`, e);
+    // ★ The server's own sentence ("the High Detail Maps are already downloading"), as a sentence.
+    const m = String((e as Error).message || 'the server refused');
+    msg('actMsg', m.charAt(0).toUpperCase() + m.slice(1) + (/[.!?]$/.test(m) ? '' : '.'));
+    if (btn) btn.disabled = false;
+  }
+  // ★ Show the server's answer now rather than at the next 2-second tick.
+  try { mapglShown = ''; renderMapglDetail((await get('status')).mapglDetail ?? null); }
+  catch (e) { console.error('High Detail Maps: status after the action could not be read', e); }
 }
 
 // ── Open / close ──────────────────────────────────────────────────────────────────────────────
@@ -1721,5 +1854,6 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
     + 'This is a full system upgrade, running unattended. It keeps security fixes current, but an '
     + 'OS upgrade can occasionally need attention and nobody will be watching.'));
   $('actRestart')?.addEventListener('click', () => act('restart', 'Restart VibeServer?'));
+  $('mapglDetailBtn')?.addEventListener('click', () => void mapglDetailClick(msg));
   $('actReboot')?.addEventListener('click', () => act('reboot', 'Reboot the whole machine?'));
 }

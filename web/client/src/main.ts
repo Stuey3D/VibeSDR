@@ -71,6 +71,7 @@ import {
 } from './recordings';
 /* ★ The shared vector-basemap renderer, carried as a string — see ensureVibeMap(). */
 import { VIBEMAP_JS } from './generated/vibemapSource';
+import { probeMapGL, type MapGLKit } from './mapgl';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -11029,7 +11030,24 @@ function pushSpotsToMap() {
   } catch { spotsMapWin = null; }      // window went away mid-push
 }
 
+/* ★★★ THE GPU MAP, SERVED BY THIS SERVER (Stuart, 2026-09-28: "Digital spots (sent from server
+ *     rendered on client)"). The window opens AT ONCE — inside the click, or the browser blocks it —
+ *     and is written a moment later, once we know whether this browser has WebGL 2 and this server
+ *     has /mapgl/ (probeMapGL). Its scripts are ABSOLUTE URLs on this server: the window is
+ *     about:blank, and its own location says nothing about where the server is.
+ *  ★ No WebGL 2 or no /mapgl/: the Leaflet map exactly as before. */
 function openSpotsMap() {
+  const w = window.open('', '_blank');
+  if (!w) { $('decStatus').textContent = 'popup blocked'; return; }
+  spotsMapWin = w;
+  void probeMapGL().then((kit) => {
+    if (w.closed) return;
+    w.document.write(spotsMapHtml(kit));
+    w.document.close();
+  });
+}
+
+function spotsMapHtml(kit: MapGLKit | null): string {
   const me = myPos();
   const pts = spotsMapPoints();
 
@@ -11038,9 +11056,16 @@ function openSpotsMap() {
   const ES = '<' + '/script>';
   const ST = '<' + '/style>';
 
-  const html = `<!doctype html><meta charset="utf-8"><title>VibeSDR — Digital Spots Map</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">${ES}
+  // ★ The GPU map's files from THIS server, loaded by the parser in order before the page's script.
+  const glHead = kit ? `<link rel="stylesheet" href="${kit.base}vendor/maplibre-gl.css">
+<script src="${kit.base}vendor/maplibre-gl.js">${ES}
+<script src="${kit.base}vendor/pmtiles.js">${ES}
+<script src="${kit.base}vendor/vibemapgl.js">${ES}
+<script src="${kit.base}vendor/vibemapgl-compat.js">${ES}` : '';
+  const safe = (v: unknown) => JSON.stringify(v).replace(/</g, '\\u003c');
+
+  return `<!doctype html><meta charset="utf-8"><title>VibeSDR — Digital Spots Map</title>
+${glHead}
 <style>
   :root{--amber:#ffb833;--dim:rgba(255,160,0,0.45);--bg:rgba(8,6,2,0.94);
         --bdr:rgba(255,160,0,0.30);--hi:#ffe566}
@@ -11084,6 +11109,11 @@ function openSpotsMap() {
   #empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
     color:var(--dim);pointer-events:none;z-index:900;font-size:13px}
   .pop{font:12px ui-monospace,Menlo,monospace;color:#111;line-height:1.5}
+  .maplibregl-ctrl-group{background:var(--bg);border:1px solid var(--bdr)}
+  .maplibregl-ctrl-group button .maplibregl-ctrl-icon{filter:invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg);opacity:.8}
+  .maplibregl-ctrl-top-left{top:0;left:285px}
+  .maplibregl-ctrl-attrib,.maplibregl-ctrl-attrib.maplibregl-compact{background:rgba(0,0,0,0.6);color:var(--dim);font-size:9px}
+  .maplibregl-ctrl-attrib a{color:var(--dim)}
 ${ST}
 <div id="wrap">
   <div id="top">
@@ -11105,9 +11135,20 @@ ${ST}
 <script>
 // ★★ MUTABLE, and everything that reads it lives in render(). The page used to be top-level
 //    procedural code over a const, which is exactly why it could never update.
-let spots = ${JSON.stringify(pts).replace(/</g, '\\u003c')};
-const me = ${JSON.stringify(me)};
-const COL = ${JSON.stringify(BAND_COLOUR)};
+let spots = ${safe(pts)};
+const me = ${safe(me)};
+const COL = ${safe(BAND_COLOUR)};
+// ★ The GPU map's kit, from the page that opened this one: where /mapgl/ is, the style, and whether
+//   the detail pack is installed. null = the Leaflet map.
+const GL = ${kit ? safe(kit) : 'null'};
+// ★ The receiver's clock, handed over as it stood when this window opened (the old code read the
+//   opener's variables by name, which do not exist in this window).
+const TZ_OFF = ${safe(srvTzOffsetMin)};
+const TZ_ABBR = ${safe(srvTzAbbr)};
+// ★ The Leaflet fallback's renderer (web/mapkit/vibemap.js), as a string for a script element.
+const VIBEMAP_SRC = ${safe(VIBEMAP_JS)};
+// ★ Its data, on the server that opened this window — absolute, since this window is about:blank.
+const GL_DATA_BASE = ${safe(/^https?:$/.test(location.protocol) ? location.origin + '/mapdata/v1/' : '/mapdata/v1/')};
 
 /* ★★★ preferCanvas IS AN AUDIO FIX, WHICH IS NOT WHERE ANYONE WOULD LOOK FOR ONE. This map is a
  *     SAME-ORIGIN window.open, so it shares its main thread with the page that is playing the
@@ -11123,17 +11164,18 @@ const COL = ${JSON.stringify(BAND_COLOUR)};
  *     between frames.
  *  ★ updateWhenZooming:false for the same reason and not for the tiles' sake: it stops Leaflet
  *    issuing tile work mid-animation that it is only going to throw away. */
-/* ★ Evaluate the shared renderer once, into this page. A <script> element with textContent runs
- *  synchronously on append, so VibeMap is defined by the time attach() is called below.
- *  ✗ Not a fetch: the page must work on a LAN server with no route to the internet. */
-function ensureVibeMap(): void {
-  if ((window as any).VibeMap) return;
+/* ★ THE LEAFLET FALLBACK'S RENDERER, evaluated once into this page. A script element with
+ *  textContent runs synchronously on append, so VibeMap exists by the time attach() is called.
+ *  ★★ This used to be the OPENER's TypeScript pasted into this page's template — a type annotation
+ *     and the opener's VIBEMAP_JS identifier, neither of which exists here — so the whole script
+ *     was a SyntaxError and the page drew NOTHING: no map, no stats, no legend (found 2026-09-28).
+ *     Plain JavaScript now, and the source arrives as data (VIBEMAP_SRC above). */
+function ensureVibeMap() {
+  if (window.VibeMap) return;
   const el = document.createElement('script');
-  el.textContent = VIBEMAP_JS;
+  el.textContent = VIBEMAP_SRC;
   document.head.appendChild(el);
 }
-const map = L.map('m', { worldCopyJump: true, preferCanvas: true })
-  .setView(me ? [me.lat, me.lon] : [25, 5], me ? 4 : 3);
 /* ★★★ NO {s} SUBDOMAIN SHARDING. (✗ NO BACKTICKS IN THIS COMMENT: it lives inside a template
  *  literal, and a backtick here CLOSES the string and breaks the build — which it did, silently,
  *  until a type-check hours later. Same trap as MapOverlay.tsx the same morning.) a/b/c.tile.openstreetmap.org is DEPRECATED — the OSM
@@ -11155,17 +11197,84 @@ const map = L.map('m', { worldCopyJump: true, preferCanvas: true })
  *  ★ ONE renderer for three hosts. The directory loads it as a file, the app injects it into a
  *    WebView, and this page carries it as a string because it is one compiled bundle with no file
  *    server of its own — all three from web/mapkit/vibemap.js via gen-vibemap-source.mjs. */
-ensureVibeMap();
-(window as any).VibeMap.attach(map, { dataBase: '/mapdata/v1/', profile: 'spots' });
 
+// ★ Filled by boot below: the GPU adapter's L, or Leaflet's. Everything that draws waits for it.
+let L = null, map = null, spotLayer = null, vm = null;
+
+/* ★★★ THE GPU MAP FIRST — every file from the server that opened this window (GL.base). The
+ *     adapter (vibemapgl-compat.js) answers the same L.map / circleMarker / circle / layerGroup
+ *     calls, so the spots, the receiver and the range rings below are drawn by one piece of code
+ *     whichever map is underneath. The spots are GPU circles; the greyline is on (Stuart wants it on
+ *     digital spots too — HF propagates differently either side of it). */
+function bootGPU() {
+  if (!GL || !window.VibeMapGL || !window.VibeMapGLCompat) return false;
+  try {
+    const load = (path, kind) => fetch(path).then((r) => {
+      if (!r.ok) { console.error('GPU map: ' + path + ' answered HTTP ' + r.status); return null; }
+      return kind === 'text' ? r.text() : r.arrayBuffer();
+    }).catch((e) => { console.error('GPU map: ' + path + ' could not be fetched', e); return null; });
+    // ★ Created AT the view it opens on (MapLibre zooms are one below Leaflet's).
+    vm = VibeMapGL.createNow(document.getElementById('m'), {
+      style: GL.style, load, base: GL.base, rangeBase: GL.base, detail: GL.detail, profile: 'spots',
+      center: me ? [me.lon, me.lat] : [5, 25], zoom: (me ? 4 : 3) - 1,
+    });
+    if (!vm) return false;                         // no WebGL 2 after all
+    L = VibeMapGLCompat.install(vm);
+    vm.ready.catch((e) => console.error('GPU map: the style did not load', e));
+    vm.setNight(true);
+    L.control.zoom({ position: 'topleft' }).addTo();
+    return true;
+  } catch (e) {
+    console.error('GPU map unavailable — using the Leaflet map', e);
+    try { if (vm) vm.destroy(); } catch (e2) { console.error('GPU map: tidy-up failed', e2); }
+    vm = null; L = null;
+    return false;
+  }
+}
+
+/* The Leaflet map as it always was — Leaflet from unpkg, our vector basemap from /mapdata/v1/. */
+function bootLeaflet() {
+  const css = document.createElement('link');
+  css.rel = 'stylesheet'; css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+  document.head.appendChild(css);
+  const js = document.createElement('script');
+  js.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+  js.onload = () => {
+    L = window.L;
+    ensureVibeMap();
+    setupMap();
+    window.VibeMap.attach(map, { dataBase: GL_DATA_BASE, profile: 'spots' });
+    render();
+  };
+  js.onerror = () => {
+    console.error('Spots map: Leaflet could not be loaded from unpkg.com, and the GPU map is not available here');
+    document.getElementById('empty').textContent = 'The map could not be loaded — the statistics still update.';
+  };
+  document.head.appendChild(js);
+}
+
+function setupMap() {
+  map = L.map('m', { worldCopyJump: true, preferCanvas: true });
+  if (!vm) map.setView(me ? [me.lat, me.lon] : [25, 5], me ? 4 : 3);
+  spotLayer = L.layerGroup().addTo(map);
+  if (me) {
+    L.circleMarker([me.lat, me.lon], { radius: 7, color: '#fff', weight: 2,
+      fillColor: '#e05050', fillOpacity: 1 }).addTo(map)
+      .bindPopup('<div class="pop"><b>RX</b><br>Receiver</div>');
+    for (const km of [1000, 2500, 5000]) {
+      L.circle([me.lat, me.lon], { radius: km * 1000, color: 'rgba(255,160,0,0.30)',
+        weight: 1, fill: false, dashArray: '4 6' }).addTo(map);
+    }
+  }
+}
 function radius(snr) {
   const s = Math.max(-24, Math.min(12, snr));
   return 4 + ((s + 24) / 36) * 9;
 }
 // Spot markers live in their own layer so a redraw can replace them without touching the
 // receiver marker, the range rings or the tile layer.
-const spotLayer = L.layerGroup().addTo(map);
 function drawMarkers() {
+  if (!spotLayer) return;                        // the map is still loading; render() runs again then
   spotLayer.clearLayers();
   for (const s of spots) {
     L.circleMarker([s.lat, s.lon], {
@@ -11179,21 +11288,12 @@ function drawMarkers() {
       (s.frequency / 1e6).toFixed(3) + ' MHz</div>');
   }
 }
-if (me) {
-  L.circleMarker([me.lat, me.lon], { radius: 7, color: '#fff', weight: 2,
-    fillColor: '#e05050', fillOpacity: 1 }).addTo(map)
-    .bindPopup('<div class="pop"><b>RX</b><br>Receiver</div>');
-  for (const km of [1000, 2500, 5000]) {
-    L.circle([me.lat, me.lon], { radius: km * 1000, color: 'rgba(255,160,0,0.30)',
-      weight: 1, fill: false, dashArray: '4 6' }).addTo(map);
-  }
-}
 // ★★★ FIT ONCE, ON THE FIRST DRAW ONLY. Re-fitting on every update would yank the map away
 //     from wherever the user had panned or zoomed, every fifteen seconds as the next FT8 cycle
 //     lands — which would make live updating worse than the snapshot it replaces.
 let fitted = false;
 function fitOnce() {
-  if (fitted) return;
+  if (fitted || !map) return;
   const all = spots.map(s => [s.lat, s.lon]);
   if (me) all.push([me.lat, me.lon]);
   if (all.length > 1) { map.fitBounds(all, { padding: [60, 60] }); fitted = true; }
@@ -11318,7 +11418,8 @@ document.getElementById('summary').innerHTML = spots.length
   : cell('WAITING', 'no spots yet', '');
 
 }
-render();
+render();                                        // the statistics at once, map or no map
+if (bootGPU()) { setupMap(); render(); } else bootLeaflet();
 
 // ★★★ LIVE. The opener pushes a fresh point list whenever a spot arrives.
 addEventListener('message', (ev) => {
@@ -11330,21 +11431,21 @@ addEventListener('message', (ev) => {
 // Clock + panel toggles
 function tick() {
   const d = new Date();
-  let right: string;
-  if (srvTzOffsetMin === null) {
+  let right;
+  if (TZ_OFF === null) {
     right = d.toLocaleTimeString();                       // no server clock yet — show the browser's
   } else {
     /* ★ Shift UTC by the server's offset and read the result back in UTC: that gives the
      *  receiver's wall clock without needing an IANA zone name or the browser's tz database. */
-    const at = new Date(d.getTime() + srvTzOffsetMin * 60_000);
+    const at = new Date(d.getTime() + TZ_OFF * 60000);
     const hhmmss = at.toISOString().slice(11, 19);
     /* ★ The ABBREVIATION IS THE LABEL — no "Server:" prefix and no glyph, so the row costs exactly
      *  what it did before. On a UK receiver it reads "18:13:22 BST", unchanged and correct; on
      *  Kiko's it reads "14:13:22 -03", which is unmistakably not your own clock. */
-    const label = srvTzAbbr || (srvTzOffsetMin === 0 ? 'UTC'
-      : (srvTzOffsetMin > 0 ? '+' : '-')
-        + String(Math.floor(Math.abs(srvTzOffsetMin) / 60)).padStart(2, '0')
-        + (Math.abs(srvTzOffsetMin) % 60 ? ':' + String(Math.abs(srvTzOffsetMin) % 60).padStart(2, '0') : ''));
+    const label = TZ_ABBR || (TZ_OFF === 0 ? 'UTC'
+      : (TZ_OFF > 0 ? '+' : '-')
+        + String(Math.floor(Math.abs(TZ_OFF) / 60)).padStart(2, '0')
+        + (Math.abs(TZ_OFF) % 60 ? ':' + String(Math.abs(TZ_OFF) % 60).padStart(2, '0') : ''));
     right = hhmmss + ' ' + label;
   }
   document.getElementById('clock').textContent =
@@ -11357,12 +11458,6 @@ const bind = (id, el) => {
 };
 bind('tStats', 'stats'); bind('tSummary', 'summary'); bind('tLegend', 'legend');
 ${ES}`;
-
-  const w = window.open('', '_blank');
-  if (!w) { $('decStatus').textContent = 'popup blocked'; return; }
-  w.document.write(html);
-  w.document.close();
-  spotsMapWin = w;
 }
 
 
