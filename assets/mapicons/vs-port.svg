@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24">
+  <!-- Sea port: the ⚓ vibemap.js drew in text. -->
+  <circle cx="12" cy="4.5" r="2" fill="none" stroke="#fff" stroke-width="2"/>
+  <path d="M12 6.5V21M8 10h8M4 13a8 8 0 0 0 16 0" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+</svg>
