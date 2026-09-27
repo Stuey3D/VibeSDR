@@ -16,7 +16,8 @@
 #pragma once
 #include "vibedsp/vibedsp.h"
 #if defined(VIBE_HAVE_OPUS)
-#include "opus_audio_encoder.h"   // ★ a listener's audio is encoded per listener — see runListener
+#include "opus_audio_encoder.h"
+#include "vibe_health.h"         // ★ the snail's all-core calibration runs as the benchmark's first step   // ★ a listener's audio is encoded per listener — see runListener
 #endif
 #include <algorithm>
 #include <atomic>
@@ -354,8 +355,19 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         auto& p = benchProgress();
         p.running.store(true);
         p.step.store(0);
-        p.steps.store(1 + 7 + 4 + (moreRows ? 2 : 0));
+        p.steps.store(1 + 1 + 7 + 4 + (moreRows ? 2 : 0));
         { std::lock_guard<std::mutex> lk(p.m); p.label = "starting"; }
+    }
+    /* ★★★ FIRST, WHILE THE MACHINE IS COOLEST: the all-core clock calibration the throttle snail is
+     *  judged against (vibe_health.h, calibrateAllCore). Stuart, 2026-09-27: "On initial benchmark run
+     *  a quick CPU stress test on all cores" — and "Only ever needs to be done on initial setup", so a
+     *  machine that already holds a calibration skips it. Three seconds: enough to reach boost, not
+     *  enough to heat-soak the chip into the very throttling it measures. */
+    benchStep("CPU clock calibration");
+    double allCoreMHz = -1;
+    if (vibehealth::detail::kBoostClocks && !vibehealth::detail::calibrated()) {   // ★ x86 only — see kBoostClocks
+        (void)vibehealth::detail::corePeaks();          // ★ load any stored calibration first
+        if (!vibehealth::detail::calibrated()) allCoreMHz = vibehealth::detail::calibrateAllCore(3.0);
     }
     benchStep("network uplink");
     if (uplinkKBps == -2) { if (progress) progress(0, 1, "network uplink"); uplinkKBps = measureUplinkKBps(); }
@@ -460,6 +472,9 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
     }
     j += "],\"recommendRate\":" + std::to_string((long long)rec);
     j += ",\"cores\":" + std::to_string(cores);
+    // ★ The all-core clock this run calibrated the throttle snail to (MHz), or absent when it was
+    //   already calibrated at setup or the machine has no cpufreq to read.
+    if (allCoreMHz > 0) j += ",\"allCoreMHz\":" + std::to_string((int)std::lround(allCoreMHz));
     // ★ Listeners the LINK carries at 100 kB/s each — Stuart's worst case, above the ~80-90 kB/s DAB+ peaks
     //   (a jitter buffer catching up). The smaller of this and the CPU figures is the honest ceiling.
     if (uplinkKBps > 0) {

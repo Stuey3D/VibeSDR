@@ -481,6 +481,18 @@ foreach(t ${VIBE_DAB_TESTS})
   add_test(NAME dab-${t} COMMAND test-dab-${t})
   add_dependencies(dab-tests test-dab-${t})
 endforeach()
+# ★ The throttle snail (vibe_health.h), driven through a fake sysfs tree. Built TWICE: this machine's own
+#   path (cpuinfo_max on ARM, calibrated peak on x86) and the x86 calibrated path forced, so both are
+#   exercised whichever box runs the tests.
+foreach(v native boost)
+  add_executable(test-health-snail-${v} "${CMAKE_CURRENT_SOURCE_DIR}/test-health-snail.cpp")
+  target_include_directories(test-health-snail-${v} PRIVATE "${CPP_DIR}")
+  target_link_libraries(test-health-snail-${v} PRIVATE Threads::Threads)
+  if(v STREQUAL "boost")
+    target_compile_definitions(test-health-snail-${v} PRIVATE VIBE_HEALTH_TEST_BOOST)
+  endif()
+  add_test(NAME health-snail-${v} COMMAND test-health-snail-${v})
+endforeach()
 # The offline replay harness: the same chain over a VIBE_IQ_DUMP capture, in seconds.
 # ★ dab-offline and the receiver test take the PFFFT path so the SERVER's transform is what gets
 #   replayed and tested; the other DAB tests keep the header-only radix-2, which is the reference.

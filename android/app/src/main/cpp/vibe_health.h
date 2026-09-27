@@ -13,6 +13,10 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <sys/stat.h>
+#include <thread>
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
@@ -163,6 +167,136 @@ inline bool capObserved() {
     return false;
 }
 
+
+/* ══ THE SNAIL: LOADED, AND SLOWER THAN THIS MACHINE CAN RUN WITH EVERY CORE BUSY ═════════════════
+ * ★★★ Stuart, 2026-09-27: "the snail should appear when the system is fully loaded but not using its
+ *     full CPU clock indicating throttling is happening. Snail on fire for thermal, snail [with] a
+ *     lightning bolt indicates power" — and, for Intel: "it should detect the all core max speed and
+ *     if system is loaded and the all core speed is anything below its maximum it should indicate".
+ *     Until then the snail could only come from capObserved() — a LOWERED CEILING — which Intel
+ *     never does (it drops the actual clock under an unchanged ceiling), and only on a machine with
+ *     no temperature sensor. Kiko's fanless N4000 ran 15 min at 100 %, load 5.45, 76.8 °C and could
+ *     never have shown one.
+ * ★★ THE ALL-CORE MAXIMUM IS LEARNED, BECAUSE NOTHING PUBLISHES IT. cpuinfo_max_freq on Intel is the
+ *    SINGLE-core boost — a healthy chip with every core busy runs below it by design, so comparing
+ *    against it would call every Intel box throttled. The real all-core figure lives in an MSR that
+ *    needs root. So: whenever the machine is fully loaded, each core's clock is recorded and the
+ *    HIGHEST is kept. A chip runs its best all-core clock in the first seconds of load, before the
+ *    heat builds, so even a fanless box captures it on its first busy spell.
+ * ★ PER CORE, against each core's own learned peak, then averaged — so a big.LITTLE phone's slow
+ *   cluster is judged against itself, never against the fast one.
+ * ★ Kept on disk (peakFile) so a restart does not forget what the silicon can do. */
+inline std::string& peakFile() { static std::string f; return f; }
+/** ★ The sysfs root, "/sys" in life. A test points it at a fake tree so the snail can be driven
+ *  through every case on a machine that has no cpufreq at all (see test-health-snail.cpp). */
+inline std::string& sysRoot() { static std::string r = "/sys"; return r; }
+/** ★★★ ONLY x86 NEEDS CALIBRATING. Stuart, 2026-09-27: "hardware where we can read the throttle status
+ *  like Raspberry Pi etc don't need a throttle indication calibration." The reason is the CLOCK, not the
+ *  flags: Intel/AMD advertise a single-core BOOST as cpuinfo_max_freq, which a healthy chip cannot hold
+ *  with every core busy, so the all-core figure must be measured. ARM (Pis, phones, TV boxes) has no
+ *  such boost — its cpuinfo_max_freq IS the all-core maximum, and is used directly.
+ *  ★ (The Pi's firmware flags are not the trigger: 2026-09-25 they read "throttled now" while every
+ *    core ran its full 2400 MHz — see capObserved. They would only ever name a cause.) */
+#if defined(__x86_64__) || defined(__i386__) || defined(VIBE_HEALTH_TEST_BOOST)
+constexpr bool kBoostClocks = true;
+#else
+constexpr bool kBoostClocks = false;
+#endif
+/** Has the benchmark's all-core stress run on this machine? Stuart: "Only ever needs to be done on
+ *  initial setup" — so it is stored with the peaks and checked before the stress ever runs again. */
+inline bool& calibrated() { static bool c = false; return c; }
+inline std::map<int, long>& corePeaks() {
+    static std::map<int, long> m; static long long seenMtime = -1;
+    /* ★★ RE-READ WHEN THE FILE CHANGES, not once. On Linux the benchmark runs in one process and every
+     *  radio is its own process with its own sampler; loaded once, a radio that started before the
+     *  calibration would never see it. A stat a second is nothing. Merged by MAX, so a peak this
+     *  process learned itself is never lowered by an older file. */
+    if (!peakFile().empty()) {
+        struct stat st;
+        if (stat(peakFile().c_str(), &st) == 0 && (long long)st.st_mtime != seenMtime) {
+            seenMtime = (long long)st.st_mtime;
+            if (FILE* f = fopen(peakFile().c_str(), "r")) {
+                int cal = 0;
+                if (fscanf(f, " calibrated %d", &cal) == 1 && cal) calibrated() = true;
+                int c; long k;
+                while (fscanf(f, "%d %ld", &c, &k) == 2) if (k > m[c]) m[c] = k;
+                fclose(f);
+            }
+        }
+    }
+    return m;
+}
+inline void savePeaks() {
+    if (peakFile().empty()) return;
+    // ★ Write-then-rename: several radio processes on one machine may learn at once, and a reader
+    //   must never see half a file.
+    const std::string tmp = peakFile() + "." + std::to_string((long)getpid());
+    if (FILE* f = fopen(tmp.c_str(), "w")) {
+        fprintf(f, "calibrated %d\n", calibrated() ? 1 : 0);
+        for (const auto& kv : corePeaks()) fprintf(f, "%d %ld\n", kv.first, kv.second);
+        fclose(f);
+        std::rename(tmp.c_str(), peakFile().c_str());
+    }
+}
+/** Each core's current clock (kHz). Empty when cpufreq is absent — a Mac, a container.
+ *  (Declared ahead of calibrateAllCore, which samples it.) */
+inline std::map<int, long> coreClocks();
+/** ★★★ CALIBRATE THE ALL-CORE MAXIMUM ON PURPOSE — Stuart, 2026-09-27: "On initial benchmark run a
+ *  quick CPU stress test on all cores." Waiting for load to happen by accident meant a fresh install
+ *  had no reference at all, and a box whose first busy spell began hot learned a THROTTLED figure.
+ *  The benchmark is when a burst is expected, the machine is cool and nobody is listening.
+ *  ★ SHORT ON PURPOSE: long enough for the governor to ramp and the boost to engage, not long enough
+ *    to heat-soak the chip — which would calibrate against the very throttling it exists to detect.
+ *    Every core spins; each core's clock is sampled every 100 ms and its best kept.
+ *  ★ Only ever RAISES a stored peak (merged by max), so a later cooler run still refines it.
+ *  Returns the calibrated all-core average in MHz, or -1 where cpufreq is absent. */
+inline double calibrateAllCore(double seconds = 3.0) {
+    const unsigned n = std::max(1u, std::thread::hardware_concurrency());
+    std::atomic<bool> stop{false};
+    std::vector<std::thread> spin;
+    for (unsigned i = 0; i < n; i++)
+        spin.emplace_back([&stop] {
+            volatile double x = 1.0000001;
+            while (!stop.load(std::memory_order_relaxed))
+                for (int k = 0; k < 20000; k++) x = x * 1.0000001 + 1e-12;
+        });
+    std::map<int, long> best;
+    const auto t0 = std::chrono::steady_clock::now();
+    while (std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() < seconds) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        for (const auto& kv : coreClocks()) if (kv.second > best[kv.first]) best[kv.first] = kv.second;
+    }
+    stop.store(true);
+    for (auto& t : spin) t.join();
+    if (best.empty()) return -1;
+    auto& peaks = corePeaks();
+    calibrated() = true;
+    double sum = 0;
+    for (const auto& kv : best) { if (kv.second > peaks[kv.first]) peaks[kv.first] = kv.second; sum += kv.second; }
+    savePeaks();
+    return sum / best.size() / 1000.0;
+}
+inline std::map<int, long> coreClocks() {
+    std::map<int, long> out;
+    for (int i = 0; i < 256; i++) {
+        const std::string cpuDir = sysRoot() + "/devices/system/cpu/cpu" + std::to_string(i);
+        const long cur = readLong(cpuDir + "/cpufreq/scaling_cur_freq");
+        if (cur > 0) { out[i] = cur; continue; }
+        if (access(cpuDir.c_str(), F_OK) != 0) break;
+    }
+    return out;
+}
+/** The CPU's OWN throttle report, where it gives one (Intel): how many times it throttled for heat,
+ *  and how many for a power limit. -1 = this machine does not say. Summed over cores. */
+inline long throttleCount(const char* name) {
+    long sum = -1;
+    for (int i = 0; i < 256; i++) {
+        const long v = readLong(sysRoot() + "/devices/system/cpu/cpu" + std::to_string(i) + "/thermal_throttle/" + name);
+        if (v < 0) { if (i == 0) return -1; break; }
+        sum = (sum < 0 ? 0 : sum) + v;
+    }
+    return sum;
+}
 }  // namespace detail
 
 namespace detail {
@@ -220,11 +354,62 @@ struct Sampler {
     int    iqDropRun = 0;          // consecutive seconds with IQ thrown away
     Health last;
     int    critHoldCpu = 0, critHoldRam = 0, critHoldTemp = 0;
+    int    slowRun = 0, fastRun = 0;   // consecutive seconds below / back above the all-core peak
+    bool   slowNow = false;
+    long   lastCoreThr = -1, lastPkgPwr = -1;
+    int    thermalHold = 0, powerHold = 0;   // seconds left on the CPU's own cause report
     bool   started = false;
 
     /** ★ EWMA at 0.3: fast enough that a real spike shows within a couple of seconds, slow enough
      *  that one busy frame does not repaint the pill. */
     static double ewma(double prev, double v) { return prev < 0 ? v : prev * 0.7 + v * 0.3; }
+    /** ★ One second of the snail's judgement, given whether the machine is fully loaded and each
+     *  core's clock. Separate from sample() so it can be driven directly (test-health-snail.cpp) —
+     *  sample() reads live load from /proc, which a test machine may not even have. Updates slowNow
+     *  and the cause holds. */
+    void snailTick(bool loaded, const std::map<int, long>& clocks) {
+        auto& peaks = detail::corePeaks();
+        double ratioSum = 0; int ratioN = 0; bool learned = false;
+        for (const auto& kv : clocks) {
+            long ref;
+            if (detail::kBoostClocks) {
+                long& pk = peaks[kv.first];
+                if (loaded && kv.second > pk) { pk = kv.second; learned = true; }
+                ref = pk;
+            } else {
+                // ★ ARM: the advertised maximum IS the all-core maximum — no learning needed.
+                ref = detail::readLong(detail::sysRoot() + "/devices/system/cpu/cpu"
+                                       + std::to_string(kv.first) + "/cpufreq/cpuinfo_max_freq");
+            }
+            if (ref > 0) { ratioSum += (double)kv.second / (double)ref; ratioN++; }
+        }
+        if (learned) detail::savePeaks();
+        // ★ 7 % margin, sustained 5 s: the clock wobbles a few percent on its own, and a snail that
+        //   flickers is noise. It clears only after 5 s back above, for the same reason.
+        const bool below = loaded && ratioN > 0 && (ratioSum / ratioN) < 0.93;
+        slowRun = below ? slowRun + 1 : 0;
+        fastRun = below ? 0 : fastRun + 1;
+        if (slowRun >= 5) slowNow = true;
+        if (fastRun >= 5) slowNow = false;
+        /* ★★ ONLY WHAT THE HARDWARE WILL TELL AN UNPRIVILEGED PROCESS — MEASURED, 2026-09-27:
+         *    Intel (Lenovo, kernel 6.8): core_ and package_throttle_count ARE readable — the CPU's own
+         *      report of throttling for HEAT. The power-limit counters no longer exist in this kernel,
+         *      and RAPL shows the limit (200 W) but not the draw (energy_uj is root-only). So Intel can
+         *      PROVE thermal and cannot read power. (HWiNFO reads MSR_CORE_PERF_LIMIT_REASONS through a
+         *      root driver; granting a network service raw MSR access is not worth it.)
+         *    Pi 500: no firmware throttle flags (get_throttled needs /dev/vcio); the rpi_volt
+         *      under-voltage alarm is the power evidence.
+         *  ✗ "Slow and not hot, so it must be power" would be an INFERRED hardware readout. A slowed
+         *    machine with no readable cause gets the plain snail. package_power_limit_count is still
+         *    read for older kernels that have it. A rise within the last 10 s counts. */
+        const long thrC = detail::throttleCount("core_throttle_count");
+        const long thrP = detail::throttleCount("package_throttle_count");
+        const long thr = (thrC < 0 && thrP < 0) ? -1 : std::max(0L, thrC) + std::max(0L, thrP);
+        const long pwr = detail::throttleCount("package_power_limit_count");
+        thermalHold = (thr >= 0 && lastCoreThr >= 0 && thr > lastCoreThr) ? 10 : std::max(0, thermalHold - 1);
+        powerHold   = (pwr >= 0 && lastPkgPwr  >= 0 && pwr > lastPkgPwr)  ? 10 : std::max(0, powerHold - 1);
+        lastCoreThr = thr; lastPkgPwr = pwr;
+    }
 
     Health sample(int batPct, bool batCharging, double dtSec = 1.0,
                   uint64_t iqDroppedDelta = 0) {
@@ -356,30 +541,31 @@ struct Sampler {
             h.ramPos = detail::ladderPos(ramEwma, RAM_T, true);
         } else h.ram = last.ram;
 
+        // ── THE SNAIL: loaded and below the all-core maximum (see snailTick) ───────────────────
+        snailTick(cpu >= 90.0, detail::coreClocks());
+        const bool slowed = slowNow || capped;
         // ── TEMP, or a throttle, or nothing ────────────────────────────────────────────────────
         /* ★★ HEADROOM, NOT TEMPERATURE. 70 °C is fine on a chip that throttles at 100 and serious on
          *    one that throttles at 80, so the level is "how far from the limit", never the reading.
          *    readSys() has no trip point, so 80 °C is assumed — the figure the admin page has always
          *    used for its own warning. */
         static const double HEAD_T[3] = { 20, 10, 5 };      // lower headroom is worse
-        if (s.haveTemp) {
+        if (slowed) {
+            /* ★★★ THROTTLED WINS THE SLOT, SENSOR OR NOT. This used to be reachable only on a machine
+             *  WITHOUT a temperature sensor, so a thermometer on a throttling machine said "warm" while
+             *  the real message was "running slow". The cause picks the snail: the CPU's own counters
+             *  first, then what we can see — within 10 °C of the limit is heat, under-voltage is power. */
+            const bool hot   = thermalHold > 0 || (s.haveTemp && 80.0 - s.tempC <= 10.0);
+            const bool power = powerHold > 0 || (s.haveVolt && s.underVoltageNow);
+            h.tempKind = (power && !hot) ? TempKind::ThrottlePower
+                       : hot             ? TempKind::ThrottleThermal
+                                         : TempKind::ThrottleUnknown;
+            h.temp = HIGH;
+        } else if (s.haveTemp) {
             const double head = 80.0 - s.tempC;
             h.temp = detail::settle(detail::bucket(head, HEAD_T, false), last.temp, head, HEAD_T, 5, false);
             h.tempPos = detail::ladderPos(head, HEAD_T, false);
             h.tempKind = TempKind::Sensor;
-            /* ★ A machine that is BOTH hot and capped is at least High, whatever the headroom says —
-             *  the cap is the hardware telling us the reading is optimistic. */
-            if (capped && h.temp < HIGH) h.temp = HIGH;
-        } else if (capped) {
-            /* ★★★ THE CAUSE CHOOSES THE SNAIL, and only a real cap gets here (see capObserved).
-             *  Flames = heat, bolt = power. Two causes, opposite fixes: cool it down, or find a
-             *  better supply. Stuart, 2026-09-25: "snail on fire thermal throttle, snail with a
-             *  lightning bolt power limit throttled."
-             *  ★ under-voltage is the only power evidence this server collects (readSys reads the
-             *    rpi_volt alarm, NOT vcgencmd — the service user cannot open /dev/vcio). */
-            h.tempKind = (s.haveVolt && s.underVoltageNow) ? TempKind::ThrottlePower
-                                                           : TempKind::ThrottleUnknown;
-            h.temp = HIGH;
         } else {
             h.tempKind = TempKind::None;                   // ★ slot omitted; the pill gets narrower
             h.temp = OK;

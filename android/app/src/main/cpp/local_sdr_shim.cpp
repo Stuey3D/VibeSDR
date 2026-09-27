@@ -24312,6 +24312,10 @@ void LocalSdrShim::setBookmarksPath(const std::string& path) {
     {
         const size_t slash = path.find_last_of('/');
         g_dab.setRatioFile((slash == std::string::npos ? std::string() : path.substr(0, slash + 1)) + "dab-aac-ratio");
+        /* ★ And the snail's calibrated all-core clock peaks (vibe_health.h), for the same reason:
+         *  learned once at initial setup, and a restart must not forget them. One file per machine —
+         *  every radio process on a Linux box shares this directory and re-reads it on change. */
+        vibehealth::detail::peakFile() = (slash == std::string::npos ? std::string() : path.substr(0, slash + 1)) + "cpu-allcore-peak.txt";
         g_dab.setCacheDir((slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-carousel");
         { std::lock_guard<std::mutex> lk(g_dabGainMemMtx);
           g_dabGainFile = (slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-gains.txt";
