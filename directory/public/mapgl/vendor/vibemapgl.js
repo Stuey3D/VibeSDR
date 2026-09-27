@@ -223,8 +223,39 @@
         const bmp = await createImageBitmap(new Blob([buf], { type: 'image/png' }));
         map.addImage(n, bmp, { sdf: true, pixelRatio: 2 });
       }
+      installAirportNames();
       return true;
     })();
+
+    /* ★★ AN AIRPORT'S FULL NAME ON HOVER (or tap). The Leaflet map put it in a DOM title; here the codes are
+     *  drawn on the GPU, so the map shows it itself (Stuart, 2026-09-28, the directory: "the hover over
+     *  airport codes to show the full name is not working"). One small popup, reused. */
+    function installAirportNames() {
+      const ids = map.getStyle().layers.filter((l) => l['source-layer'] === 'airports').map((l) => l.id);
+      if (!ids.length) return;
+      const tip = new ml.Popup({ closeButton: false, closeOnClick: false, className: 'vs-airport-tip', offset: 10, maxWidth: '260px' });
+      const text = (p) => {
+        const code = [p.icao, p.iata].filter(Boolean).join(' / ');
+        const el = document.createElement('div');
+        el.style.cssText = 'font-size:12px;line-height:1.35;white-space:nowrap';
+        el.textContent = p.name || code;          // ★ textContent: a name is data, never markup
+        if (p.name && code) { const c = document.createElement('div'); c.style.opacity = '0.6'; c.textContent = code; el.appendChild(c); }
+        return el;
+      };
+      const show = (e) => {
+        const f = e.features && e.features[0];
+        if (!f || !(f.properties.name || f.properties.icao)) return;
+        map.getCanvas().style.cursor = 'help';
+        tip.setLngLat(f.geometry.coordinates).setDOMContent(text(f.properties)).addTo(map);
+      };
+      const hide = () => { map.getCanvas().style.cursor = ''; tip.remove(); };
+      for (const id of ids) {
+        map.on('mousemove', id, show);
+        map.on('mouseleave', id, hide);
+        map.on('click', id, show);                 // ★ touch has no hover
+      }
+      map.on('movestart', hide);
+    }
 
     return {
       map, ready,

@@ -3262,28 +3262,42 @@ function render(servers, filtered) {
   for (const d of list.querySelectorAll('details.srv'))
     if (openKeys.has(d.dataset.key)) d.open = true;
 
-  /* ★★ SERVERS ON THE SAME SQUARE SHARE ONE MARKER WITH A COUNT. Four servers showed as two dots
-   *    because three of them are Stuart's (review, 2026-09-16); a dot with "3" on it says so, and
-   *    its popup lists them all. A divIcon rather than a circleMarker so the CSS above decides the
-   *    shape — the legend, the list and the map cannot drift apart. */
-  const byPos = new Map();
-  for (const s of servers) {
-    const k = `${(+s.lat).toFixed(3)},${(+s.lon).toFixed(3)}`;
-    if (!byPos.has(k)) byPos.set(k, []);
-    byPos.get(k).push(s);
+  mapServers = servers;
+  const pts = servers.map((s) => [s.lat, s.lon]);
+  if (pts.length && !mapFitted) { mapFitted = true; map.fitBounds(pts, { padding: [40, 40], maxZoom: 6 }); }
+  drawServerMarkers();
+}
+
+/* ★★ SERVERS THAT SHARE A PIN ON SCREEN SHARE ONE MARKER WITH A COUNT — AND IT LISTS THEM ALL.
+ *    It used to group only servers on the SAME square (Stuart's review, 2026-09-16: four servers as two
+ *    dots). But two squares side by side are one blob zoomed out, and the top pin hid the other: Stuart,
+ *    2026-09-28 — "if I see a single radio due to the zoom level then clicking it should list all the
+ *    radios in that area" (his XCover reports IO92NG, the other four IO92NH, and zoomed out he could
+ *    reach only the XCover). So the grouping is by distance ON SCREEN and is redone after every zoom:
+ *    pins nearer than MERGE_PX merge, and zooming in separates them again.
+ * ★ A divIcon rather than a circleMarker so the CSS above decides the shape — the legend, the list
+ *   and the map cannot drift apart. */
+var mapServers = [];   // ★ var: render() may run before this line is reached
+var MERGE_PX = 30;
+function drawServerMarkers() {
+  markers.clearLayers();
+  const groups = [];                      // { p: screen point of the first member, lat, lon, members }
+  for (const s of mapServers) {
+    let p;
+    try { p = map.latLngToContainerPoint([s.lat, s.lon]); } catch { continue; }
+    const near = groups.find((g) => Math.hypot(g.p.x - p.x, g.p.y - p.y) < MERGE_PX);
+    if (near) near.members.push(s); else groups.push({ p, lat: s.lat, lon: s.lon, members: [s] });
   }
-  const pts = [];
-  for (const group of byPos.values()) {
+  for (const { lat, lon, members: group } of groups) {
     const s = group[0], st = state(s);
     const free = group.some((g) => state(g).cls === 'sh-free');
     const cls = group.length > 1 ? (free ? 'sh-free' : st.cls) : st.cls;
     const n = group.length;
-    pts.push([s.lat, s.lon]);
     // ★ A PIN'd server wears the padlock; a group takes the glyph of its best state and a count.
     const pinned = group.every((g) => g.pin);
     // ★ The state carries its own colour (the page's --free/--busy/--temp); the key is the class.
     const glyph = pinned ? padlockGlyph(24) : radioGlyph(STATE_COL[String(cls).replace(/^sh-/, '')] || st.colour || STATE_COL.unknown, 24);
-    L.marker([s.lat, s.lon], {
+    L.marker([lat, lon], {
       title: group.map((g) => g.name).join(', '),
       icon: L.divIcon({
         className: 'mkWrap', iconSize: [26, 26], iconAnchor: [13, 13], popupAnchor: [0, -12],
@@ -3292,11 +3306,12 @@ function render(servers, filtered) {
       pane: 'servers',
     }).addTo(markers).bindPopup(
       group.map((g) => { const gs = state(g); return `<b>${esc(g.name)}</b>${serverShut(g) ? ' \u{1F512}' : ''}<br>${esc(g.grid)} · ${esc(gs.label)}<br>`
-        + `<a href="${esc(listenUrl(g))}" target="_blank" rel="noopener noreferrer">Listen</a>`; }).join('<hr style="border:0;border-top:1px solid #333;margin:6px 0">')
+        + `<a href="${esc(listenUrl(g))}" target="_blank" rel="noopener noreferrer">Listen</a>`; }).join('<hr style="border:0;border-top:1px solid #333;margin:6px 0">'),
+      { maxWidth: 260 }
     );
   }
-  if (pts.length && !mapFitted) { mapFitted = true; map.fitBounds(pts, { padding: [40, 40], maxZoom: 6 }); }
 }
+map.on('zoomend', drawServerMarkers);
 
 /**
  * ★★★ THE PING IS LIVENESS, NOT TELEMETRY. A server renews its listing every 15 minutes, so the
