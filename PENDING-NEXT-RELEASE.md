@@ -347,3 +347,20 @@ readers" is a live suspect: whichever is 0 may be winning and meaning "unlimited
 ▶ It matters for load, not just tidiness: the Pi 2 is doing 60 % more spectrum work than its owner
 asked for, on the box with the least headroom, and the fps ceiling is the main lever an owner has
 for a weak server.
+
+## The RDS row trusts MPX S/N but ignores BLOCK ERRORS (2026-09-27)
+NLive 106.9 on the Lenovo: **83 % block errors**, 30 % multipath severe, 80 % constellation
+scatter — and the row still reads `avg 2.7 · peak 5.7 · raw 3.8 kHz · nominal`.
+★★ The measurability gate added the same night keys on **MPX S/N** (latched 10 dB in / 8 out), and
+at 24 dB it opens correctly. But MPX S/N says the MULTIPLEX is readable, not that RDS is. **Block
+errors measure exactly that**, and at 83 % the deviation figure is not a measurement of anything.
+▶ Gate the RDS row on block errors as well — above roughly 20-30 % it should decline, in the
+panel's own idiom, exactly as MULTIPATH and CEQ already do.
+
+## The impossible-value check watches the wrong number (2026-09-27)
+`peak 5.7 kHz` on that same station is a hair under the 5.8 "over spec — suspect" threshold, and
+the spec maximum is 5.6 (7.5 % of 75). The verdict still said **nominal**, because it is judged on
+`rdev` (2.7) while **`peak` is the figure that went implausible**.
+★ This will get MORE common, not less: the 2026-09-27 calibration lifts peaks ~20 %, so noisy
+stations will cross 5.8 that never used to. ▶ Judge "over spec" on whichever figure exceeds the
+ceiling, not on the averaged one alone.
