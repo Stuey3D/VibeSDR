@@ -389,3 +389,25 @@ All within a rounding step, and the verdict moved "weak" -> "nominal".
 ★ `raw 2.6` vs `avg 1.8` is a ratio of 1.44 — above 1.414, so **the guard band is still clamping**
 on a real band. That is the separate environmental fault; on Onfliner's clean bench no `raw` showed
 at all. Both conditions are now visible rather than hidden.
+
+## ▶ SUSPICION, NOT A FINDING: EVERY PHASE-LOCKED STATION READS 28-44 DEGREES
+Six stations on the Lenovo/RSP1A, 2026-09-27, all on 5.6.64:
+
+| station | RDS-to-pilot |
+|---|---|
+| Heart 96.6 | **28 deg off nominal**, 95 % steady |
+| BBC R2 88.6 | **37 deg off nominal**, 82 % steady |
+| BBC R1 99.7 | **44 deg FAULT**, 81 % steady |
+| Classic FM 100.4 | rotating 146 deg/s (free-running encoder) |
+| BBC Northampton 104.2 | rotating 4 deg/s |
+| NLive 106.9 | rotating 4 deg/s |
+
+A correct station sits near **0** or near **90** (quadrature). **Every LOCKED station here reads
+28-44** — the middle ground the code calls a fault — across three different broadcasters.
+▶ Either three genuinely faulty encoders, or **a systematic offset in our phase measurement**.
+★★★ THE SAME SHAPE AS THE DEVIATION BUG FIXED HOURS EARLIER: every station read "weak" and the
+MEASUREMENT was low, not the stations. The rule that came out of it applies here unchanged —
+**when a verdict band is almost never reached, suspect the measurement before the band.**
+✗ Do NOT act on this yet: six stations from one location on one radio is not enough, and UK
+encoders may genuinely run offset. ▶ It wants a CALIBRATED check — Onfliner's transmitter can set a
+known RDS-to-pilot phase, which is the same route that settled the deviation constant.
