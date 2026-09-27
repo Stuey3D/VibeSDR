@@ -21,6 +21,18 @@ The shape already agreed for the old cached tiles, reused:
 ▶ Disclosure plus a way back. ✗ An app that silently occupies 200 MB and offers no way to reclaim
 it is the thing people uninstall over.
 
+★★ **AND THE SAME PLACE OFFERS THE DOWNLOAD, FOR ANYONE WHO MISSED THE PROMPT.** Stuart,
+2026-09-27: *"also a button in the main directory to download the higher detailed maps in case the
+original prompt was missed."* So one control that reads the device's actual state and offers the
+opposite action:
+| detail maps installed? | the footer says |
+|---|---|
+| no | **Download higher-detail maps** — with the size it will take |
+| yes | **On Device Maps Storage in Use 200 MB** — removing restores 150 MB. **Remove?** |
+★★★ A first-run prompt is a ONE-TIME offer, and a one-time offer is one a person misses while
+they are busy getting a radio working. A setting that is only reachable by reinstalling is not a
+setting. ▶ The prompt is the convenience; THIS is the actual control.
+
 ## ★★★ THE ARCHITECTURE PROBLEM THIS SOLVES — AND IT IS CURRENTLY BACKWARDS
 The WebView is loaded with the INSTANCE as its origin so `/addon/hfdl/aircraft` is same-origin
 (most UberSDRs have CORS off). But a page on `https://someone.ubersdr.org` may not read local files
