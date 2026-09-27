@@ -423,7 +423,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     S("demodMode", r.demodMode); N("landingFreq", r.landingFreq);
     I("dabChannel", r.dabChannel);   // the mux this radio was left on
     S("allowRanges", r.allowRanges); S("blockRanges", r.blockRanges);
-    S("gainLimits", r.gainLimits); I("restGain", r.restGain); I("agcLock", r.agcLock);
+    S("gainLimits", r.gainLimits); S("ifLimits", r.ifLimits); I("restGain", r.restGain); I("agcLock", r.agcLock);
     // ★ The three that turn a ceiling into a setting — added to BOTH writers, see the note below.
     B("gainLock", r.gainLock); S("gainLocks", r.gainLocks);
     S("ifGrLimits", r.ifGrLimits); S("gainSplits", r.gainSplits);
@@ -486,7 +486,7 @@ std::string radioToJson(const RadioConfig& r) {
     //     A field added to one writer and not the other is invisible until someone trusts it.
     S("allowRanges", r.allowRanges); S("blockRanges", r.blockRanges);
     // ★ BOTH WRITERS, as the note above insists: the setup page reads the API one.
-    S("gainLimits", r.gainLimits); N("restGain", r.restGain); N("agcLock", r.agcLock);
+    S("gainLimits", r.gainLimits); S("ifLimits", r.ifLimits); N("restGain", r.restGain); N("agcLock", r.agcLock);
     B("gainLock", r.gainLock); S("gainLocks", r.gainLocks);
     S("ifGrLimits", r.ifGrLimits); S("gainSplits", r.gainSplits);
     B("rateLock", r.rateLock); B("dabRateBoost", r.dabRateBoost);
@@ -573,7 +573,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.dabAgcOverride = one.dabAgcOverride; r.dabAgcTarget = one.dabAgcTarget; r.rfAgc = one.rfAgc; r.rspDabDecim = one.rspDabDecim; r.rfAgcStart = one.rfAgcStart;
     r.agcSet = one.agcSet; r.agcSetLock = one.agcSetLock;
     r.allowRanges = one.allowRanges; r.blockRanges = one.blockRanges;
-    r.gainLimits = one.gainLimits; r.restGain = one.restGain; r.agcLock = one.agcLock;
+    r.gainLimits = one.gainLimits; r.ifLimits = one.ifLimits; r.restGain = one.restGain; r.agcLock = one.agcLock;
     r.gainLock = one.gainLock; r.gainLocks = one.gainLocks;
     r.ifGrLimits = one.ifGrLimits; r.gainSplits = one.gainSplits;
     r.rateLock = one.rateLock;
@@ -898,7 +898,7 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.dabAgcOverride = r.dabAgcOverride; c.dabAgcTarget = r.dabAgcTarget; c.rfAgc = r.rfAgc; c.rspDabDecim = r.rspDabDecim; c.rfAgcStart = r.rfAgcStart;
     c.agcSet = r.agcSet; c.agcSetLock = r.agcSetLock;
     c.allowRanges = r.allowRanges; c.blockRanges = r.blockRanges;
-    c.gainLimits = r.gainLimits; c.restGain = r.restGain; c.agcLock = r.agcLock;
+    c.gainLimits = r.gainLimits; c.ifLimits = r.ifLimits; c.restGain = r.restGain; c.agcLock = r.agcLock;
     c.gainLock = r.gainLock; c.gainLocks = r.gainLocks;
     c.ifGrLimits = r.ifGrLimits; c.gainSplits = r.gainSplits;
     c.rateLock = r.rateLock;

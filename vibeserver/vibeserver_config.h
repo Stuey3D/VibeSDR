@@ -137,6 +137,7 @@ struct Config {
     /** Per-band gain ceilings: "lo-hi:max" in MHz, comma separated, e.g. "88-108:250".
      *  Empty = no limit anywhere, which is the behaviour before this existed. */
     std::string gainLimits;
+    std::string ifLimits;      ///< per-band IF ceiling, kHz — see the note above
     /** Which bands are FIXED at their ceiling rather than limited by it — see RadioConfig. */
     std::string gainLocks;
     /** Legacy radio-wide lock (4.1.47/48); a fallback while gainLocks is empty. */
@@ -400,6 +401,10 @@ struct RadioConfig {
     //     POSITION (higher = more gain — the raw LNA state counts the other way, and storing THAT
     //     would make a "limit" mean its own inverse), an HF+ has no variable gain at all.
     std::string gainLimits;   ///< "88-108:250" in MHz, comma separated. Empty = no limit.
+    /** ★ Per-band IF ceiling in kHz, "fm:1200" — the tuner filter may narrow below this but
+     *  never widen past it. Same parser and the same "tighter rule wins" as gainLimits.
+     *  ✗ DAB, a full-rate raw IQ consumer and ADS-B take the full width regardless. */
+    std::string ifLimits;
     /** ★★★ THE CEILING BECOMES A SETTING. Same figures, different meaning: with this on, a band
      *  that has a ceiling is FIXED there and no listener may move the gain at all — the sliders
      *  serve as a limiter or as a fixed value depending on this one flag (Stuart, 2026-08-28).

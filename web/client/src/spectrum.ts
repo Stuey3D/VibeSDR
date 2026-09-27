@@ -452,7 +452,9 @@ export interface SpectrumCallbacks {
   /** ★ The tuner's IF filter in Hz, 0 = automatic. Its own callback rather than a fourteenth
    *  argument on onHwInfo — that signature is already at the length where a caller gets one
    *  positional wrong and nothing complains. */
-  onTunerBw?: (hz: number, rfCentreHz: number, auto: boolean) => void;
+  /** ★ ifCap: the owner's per-band IF ceiling in Hz at the tuned frequency, -1 for none.
+   *  Carried here rather than in onHwInfo's positional list, which is long enough already. */
+  onTunerBw?: (hz: number, rfCentreHz: number, auto: boolean, ifCap: number) => void;
   /** ★★★ THE DONGLE'S DIGITAL AGC — the flag the AGC BUTTON actually commands. `agc` on hwinfo is
    *  VibeAGC; setHwAgc() sends {type:'agc'}, which the server routes to the RTL2832's digital AGC.
    *  The button was painted from the first and wired to the second, so it could never agree with
@@ -995,7 +997,10 @@ export class SpectrumClient {
       case 'hwinfo':
         if (msg.tunerBw !== undefined)
           this.cb.onTunerBw?.(Number(msg.tunerBw) || 0, Number(msg.rfCentre) || 0,
-                              msg.tunerBwAuto === true);
+                              msg.tunerBwAuto === true,
+                              /* ★ -1 when an older server does not send it, which reads as
+                               *  "no ceiling" and leaves the readout exactly as it was. */
+                              msg.ifCap === undefined ? -1 : Number(msg.ifCap));
         if (typeof msg.tzOffsetMin === 'number')
           this.cb.onServerClock?.(Number(msg.tzOffsetMin), String(msg.tzAbbr || ''));
         this.cb.onDsActive?.(msg.dsActive === true,

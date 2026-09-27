@@ -859,6 +859,22 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
             consumer opens the filter by itself anyway, for as long as it runs.
             <br>The filter no longer follows the zoom. It used to, and widening it reset the gain
             loop and clicked the audio on AM every time the view moved.</div></label>
+        <label class="hide" id="ifLimitsRow">
+          <span class="lbl">Per-band IF ceiling &mdash; RTL-SDR</span>
+          <input id="ifLimits" type="text" placeholder="e.g. fm:1200">
+          <!-- â A plain field rather than the band-picker the gain ceilings use. It is the
+               same RULE and the same parser, but the picker is a lot of machinery for a setting
+               most owners will write once, and a text box that works beats a chip list that is
+               half-built. It can grow into the picker later. -->
+          <div class="note">Stops the filter widening past a figure YOU choose, band by band, in
+            kHz. Write <b>fm:1200</b> to hold FM broadcast at 1.2&nbsp;MHz and leave everything
+            else automatic; several rules are comma separated (<b>fm:1200, air:2400</b>), and band
+            names work as well as <b>88-108:1200</b>. Where two rules cover one frequency the
+            NARROWER wins, as with the gain ceilings.
+            <br>It is a ceiling only: zooming in still narrows below it. The gain readout shows
+            <b>IF 1200 kHz &#128274;</b> on a band you have fixed.
+            <br>DAB, full-rate raw IQ and ADS&#8209;B take the full width regardless &mdash; they
+            need the whole capture, and a ceiling would break them.</div></label>
         <label class="hide" id="gainAgcLockRow" class="row">
           <input type="checkbox" id="gainAgcLock">
           <span class="lbl">Lock VibeAGC on</span>
@@ -2257,6 +2273,7 @@ function renderGain() {
   //    when it is wrong, which is why this survived a release.
   $("rtlAgcRow").classList.toggle("hide", !isRtl);
   $("tunerBwAutoRow").classList.toggle("hide", !isRtl);   // ★ RTL only — the others have no such filter
+  $("ifLimitsRow").classList.toggle("hide", !isRtl);      // â same filter, same radios
   // ★★ AND THE LOCK NOW APPLIES TO A DONGLE TOO. It was RSP/HF only because those were the radios
   //    with an AGC to lock; the RTL has one now — ours — and the lock reaches it by the same
   //    setGainLimits(..., agcLock) path. Offering the AGC without the means to fix it on is half a
@@ -2344,6 +2361,7 @@ function renderGain() {
   // ★ Absent = AGC off. An older config must not read as though the owner had asked for it.
   $("rtlAgc").value = r.rtlAgc ? "1" : "0";
   $("tunerBwAuto").value = r.tunerBwAuto ? "1" : "0";
+  $("ifLimits").value = r.ifLimits || "";
   // ★★ AFTER the line above, not before it — this OVERRIDES it, and written the other way round it
   //    was silently undone. Shown as ON and greyed when the lock is on, because that is what the
   //    receiver will actually do; a page that displays "off" for something it is about to run is
@@ -3560,6 +3578,10 @@ function fill() {
   $("tunerBwAuto").addEventListener("change", () => {
     radio().tunerBwAuto = $("tunerBwAuto").value === "1";
   });
+  /* â Its own handler, for the reason the comment above gives: a field collected by some
+   *  other control's listener is wired up by accident, on a condition nobody stated. */
+  $("ifLimits").addEventListener("change", () => { radio().ifLimits = $("ifLimits").value.trim(); });
+  $("ifLimits").addEventListener("input",  () => { radio().ifLimits = $("ifLimits").value.trim(); });
   $("rtlAgc").addEventListener("change", () => {
     radio().rtlAgc = $("rtlAgc").value === "1";
     const n = $("gainRestAgcNote");

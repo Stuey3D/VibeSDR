@@ -1733,6 +1733,10 @@ int main(int argc, char** argv) {
                     // ★ Everything else here still needs a restart, and the page still says so —
                     //   sample rate and ports cannot change under a running capture.
                     LocalSdrShim::setGainLimits(g_runtimeConfig.gainLimits);
+                    // ★ In the same breath as the gain ceilings, for the same reason: both are
+                    //   the owner's per-band rules and a path that applies one without the
+                    //   other enforces half of what the setup screen shows.
+                    LocalSdrShim::setIfLimits(g_runtimeConfig.ifLimits);
                     // ★ The lock and its two companions ride with the ceilings — they are the same
                     //   setting read a different way, so they must land in the same breath or a
                     //   live save leaves the server enforcing half of what the page shows.
@@ -2294,6 +2298,7 @@ int main(int argc, char** argv) {
     //     rather than a lock: the control stays theirs, it simply cannot go past what the owner
     //     allows in that band. Empty limits and -1s are exactly the behaviour before this existed.
     LocalSdrShim::setGainLimits(o.gainLimits);
+    LocalSdrShim::setIfLimits(o.ifLimits);
     LocalSdrShim::setGainLock(o.gainLock);
     LocalSdrShim::setGainLocks(o.gainLocks);
     LocalSdrShim::setIfGrFloors(o.ifGrLimits);

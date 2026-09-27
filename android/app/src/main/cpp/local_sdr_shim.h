@@ -99,6 +99,10 @@ public:
 
     /** Per-band ceilings, "fm:250, 0-30M:400". Empty = no limit anywhere (today's behaviour). */
     static void setGainLimits(const std::string& csv);
+    /** Per-band IF ceilings, kHz, "fm:1200, air:2400" — see setIfLimits. */
+    static void setIfLimits(const std::string& csv);
+    /** The owner's IF ceiling at this frequency in Hz, or -1 for none. */
+    static int  ifCapAtHz(double hz);
     /** The gain to return to when everybody has left, in the radio's units. -1 = leave it be. */
     static void setRestGain(int gain);
     /** Force the AGC on and refuse to let a listener turn it off (RSP and Airspy HF+). */

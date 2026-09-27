@@ -1120,10 +1120,18 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetDabScanLabels(JNIEnv*, jobject, jint 
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetGainLimits(JNIEnv* env, jobject,
-                                                      jstring csv, jint rest, jboolean agcLock) {
+                                                      jstring csv, jint rest, jboolean agcLock,
+                                                      jstring ifCsv) {
     const char* c = csv ? env->GetStringUTFChars(csv, nullptr) : nullptr;
     vibe::LocalSdrShim::setGainLimits(c ? c : "");
     if (c) env->ReleaseStringUTFChars(csv, c);
+    /* ★★★ THE IF CEILINGS TRAVEL WITH THE GAIN CEILINGS, on the SAME call. They are the same
+     *  kind of thing — the owner's per-band rules — and the Linux server applies them together
+     *  for the same reason. A separate entry point would be one more pair of ends that can
+     *  disagree, which is precisely how the notice path sat wired at one end for months. */
+    const char* i = ifCsv ? env->GetStringUTFChars(ifCsv, nullptr) : nullptr;
+    vibe::LocalSdrShim::setIfLimits(i ? i : "");
+    if (i) env->ReleaseStringUTFChars(ifCsv, i);
     vibe::LocalSdrShim::setRestGain((int)rest);
     vibe::LocalSdrShim::setAgcLock(agcLock == JNI_TRUE);
 }

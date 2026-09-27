@@ -1214,6 +1214,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  populateHw(). Re-drawn here because `dial` can arrive after the hardware panel was built
        *  (a second listener joining turns an exclusive receiver into a shared one under us). */
       if (on !== srvShared) { srvShared = on; populateHw(); }
+      // ★ sharing decides whether the IF filter is this listener's to set at all.
+      syncIfMenu();
       for (const id of ['chatBtn', 'mChat']) {
         const b = document.getElementById(id) as HTMLButtonElement | null;
         if (!b) continue;
@@ -1569,6 +1571,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       applyHrfGainCap();   // ★ hwinfo carries the cap, and it CHANGES as the listener tunes bands
       applyGainLocked();   // ★ ...and so does the LOCK, which is per band for the same reason
       hwLockedCentre = lockedCentre ?? 0;
+      syncIfMenu();   // ★ a locked range with more than one listener removes the control
       // ★ Search is narrowed to what this receiver can actually reach — see setTunableWindow().
       //   Set from here because this is where the lock becomes known, and re-set on every hwinfo
       //   so a server whose window changes does not leave the filter describing the old one.
@@ -1886,9 +1889,12 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         if (el.title !== title) el.title = title;
       }
     },
-    onTunerBw: (hz: number, rfCentreHz: number, auto: boolean) => {
+    onTunerBw: (hz: number, rfCentreHz: number, auto: boolean, ifCap: number) => {
       hwTunerBw = hz;
       hwTunerAuto = auto;
+      // ★ The owner's ceiling for the band being listened to — see ifText, which draws the padlock.
+      hwIfCap = ifCap;
+      syncIfMenu();   // ★ the ceiling decides which widths are offered
       // ★ The IF-filter mode arrives separately from caps, so this is often the moment the
       //   explanation becomes possible to write correctly.
       maybeExplainRtlAutomation();
@@ -2466,9 +2472,62 @@ const pkText = () => {
 /** ★ The IF width beside the gain, because with VibeClarity running they are two halves of one
  *  decision and a gain figure alone does not explain what the receiver did. Silent when the filter
  *  is wide, which is the case that needs no explanation. */
-const ifText = () => (hwTunerBw > 0
-  ? ` · IF ${(hwTunerBw / 1e3).toFixed(0)} kHz${hwTunerAuto ? ' auto' : ''}`
-  : '');
+const ifText = () => {
+  if (hwTunerBw <= 0) return '';
+  /* ★★★ A PADLOCK WHERE THE OWNER HAS FIXED THE CEILING FOR THIS BAND. Stuart, 2026-09-27: "we
+   *  have a per band maximum so that in this case I'd tell it never expand past 1.2MHz on FM, and
+   *  in the chip you can see IF 1200KHz (padlock icon)" — reading, with the gain beside it,
+   *  "AGC 29.7 dB · Overload · IF 1200 kHz 🔒". The same convention a locked gain band already
+   *  uses ("RF 7 · IF 25 🔒"), so one symbol means one thing across the readout.
+   *  ★★ It says WHY the width will not move. A ceiling the client cannot see is a control that
+   *     springs back: the filter simply refuses to widen and the receiver reads as broken rather
+   *     than governed — the fault gainCap and agcLocked were each given a flag to avoid.
+   *  ★ Only where it BITES. The ceiling is reported for the band being listened to, so away from
+   *    a capped band there is nothing to say and "auto" is the honest word. */
+  const capped = hwIfCap > 0 && hwTunerBw >= hwIfCap - 1000;
+  const tail = capped ? ' \u{1F512}' : (hwTunerAuto ? ' auto' : '');
+  return ` · IF ${(hwTunerBw / 1e3).toFixed(0)} kHz${tail}`;
+};
+/** ★ The owner's IF ceiling at the tuned frequency, Hz, or -1 for none — see ifText. */
+let hwIfCap = -1;
+
+/* ★★★ WHO MAY TOUCH THE IF FILTER, AND HOW FAR. Stuart, 2026-09-27, setting the whole policy:
+ *
+ *  ★★ SHARED VFO -> NO OPTIONS AT ALL. "dont want user 1 setting 350KHz then leaving and the next
+ *     listener wondering why the dongle cant pick up much." A filter is HARDWARE: one listener's
+ *     choice is everybody's, and it outlives them. So on a shared dial it is the server's to
+ *     decide — Auto, plus whatever ceiling the owner set for the band.
+ *  ★★ LOCKED RANGE WITH MULTIPLE VFOs -> REMOVED ENTIRELY. "this is a hardware setting that
+ *     effects everybody and who's VFO is the IF filter tied to?" There is no answer to that
+ *     question, so there is no control.
+ *  ★★ SINGLE LISTENER -> OPTIONS, BOUNDED BY THE OWNER. With FM capped at 1.2 MHz, Wide and
+ *     1.5 MHz are not offered; 1.2 and everything below it are.
+ *  ★★★ AND THE POINT OF ALL THREE: "Users never have to know what is going on." The ceiling is
+ *      the owner's decision once, not a question put to a listener who has no way to answer it.
+ *  ★ DISABLED WITH A REASON, not silently dropped, wherever the control still exists — a missing
+ *    control reads as a missing feature, which is the fault this file keeps relearning. Only the
+ *    two shared cases remove it, because there the feature genuinely is not the listener's. */
+function syncIfMenu() {
+  const sel = document.getElementById('tunerBw') as HTMLSelectElement | null;
+  if (!sel) return;
+  const sharedDial   = srvShared || srvSharedDial;
+  const lockedMulti  = hwLockedCentre > 0 && srvShared;
+  const notYours     = sharedDial || lockedMulti;
+  // ★ The control itself: gone when the filter is not this listener's to set.
+  const wrap = (sel.closest('label') as HTMLElement | null) ?? sel;
+  wrap.classList.toggle('hide', notYours);
+  if (notYours) return;
+  for (const opt of Array.from(sel.options)) {
+    const v = Number(opt.value);
+    /* ★ Auto (-1) always stays: it is the setting the ceiling REFINES, not one it forbids.
+     *  Wide (0) means "as wide as the sample rate", so a ceiling rules it out by definition. */
+    const tooWide = hwIfCap > 0 && (v === 0 || v > hwIfCap);
+    opt.disabled = tooWide;
+    opt.title = tooWide
+      ? `The owner has capped this band at ${(hwIfCap / 1e3).toFixed(0)} kHz`
+      : '';
+  }
+}
 /* ★ The readout says the WIDTH and nothing else. An earlier version claimed the filter "costs
  *   ~11 dB on the wanted signal", from a differential measurement whose normalisation window
  *   (+/-96 kHz) overlapped the point being read — so the figure described the method, not the

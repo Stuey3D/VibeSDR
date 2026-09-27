@@ -2003,6 +2003,9 @@ static constexpr int        kHandoverNoticeSec = 15;
 // ── ★★★ GAIN LIMITS ─────────────────────────────────────────────────────────────────────────
 static std::mutex            g_gainLimMtx;
 static vibebands::GainRules  g_gainLimits;
+/** ★ The owner's per-band IF ceiling, in kHz. Same type and same parser as the gain ceilings
+ *  above — see setIfLimits. Guarded by g_gainLimMtx, which already covers the sibling list. */
+static vibebands::GainRules  g_ifLimits;
 static std::atomic<int>      g_restGain{-1};
 static std::atomic<bool>     g_agcLock{false};
 // ★ The lock and its two companions share g_gainLimMtx with the ceilings — they are read together
@@ -5482,18 +5485,71 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  ✗ DAB is untouched (its branch returns above), a MANUAL width is untouched
          *    (`tunerBwAuto` is checked above), and a full-rate raw IQ consumer still opens it wide
          *    below — that override comes after this. */
-        int want = (int)std::lround(sampleRate * 0.6);
-        /* ★★ …WITH A FLOOR, BECAUSE A FLAT RATIO EATS A NARROW CAPTURE. Both of Stuart's anchors
-         *  are HIGH rates, where 60 % still leaves a generous view: 2.4 -> 1.44, 2.048 -> 1.23 MHz.
-         *  Applied blindly the same ratio gives 720 kHz at 1.2 MS/s and 576 at 960 kS/s — throwing
-         *  away 40 % of an already narrow view to protect a front end that is only being shown
-         *  1.2 MHz in the first place, which is most of the protection already.
-         *  ★ So never below 1 MHz. At the low rates the capture limit below is what binds and this
-         *    changes nothing; at the high rates, where the 19 dB actually was, the ratio bites. */
-        if (want < 1000000) want = 1000000;
-        /* ★ …and never below what the demodulator itself needs, whatever the rate says. */
-        const int demodNeeds = (int)std::lround(rxBwHz * 1.2);
-        if (want < demodNeeds) want = demodNeeds;
+        /* ★★★ IT FOLLOWS THE ZOOM DOWNWARD, AND IS CAPPED GOING UP. The two directions are NOT the
+         *  same behaviour and they were sharing a variable, which is why removing "follows the
+         *  zoom" wholesale (my first attempt, 2026-09-27) threw away a good half with the bad one.
+         *  ★★ NARROWING IS FREE: it takes energy AWAY, so it cannot overload anything, and the
+         *     `widened` branch below shows it does NOT call agcForget. Stuart's case for keeping
+         *     it: "in the HF band you'd probably be zoomed into say the 40M band which is only
+         *     about a 300KHz view anyway, so may as well filter the rest of it you are not viewing
+         *     out" — 300 kHz of a 2 MHz capture means 85 % of the interference is discardable.
+         *     "Makes that 40M band the best it can be."
+         *  ★★★ WIDENING IS WHAT COST 19 dB. It calls agcForget, and unchecked it opens the filter
+         *      to the whole capture. MEASURED on the Pi 2 with a V4 at UNCHANGED gain (48.0 dB
+         *      both ways): IF 2800 kHz gave 24 dB SNR with the band filled in; IF 1200 kHz gave
+         *      44 dB with black gaps. ADC peak -9.5 -> -3.4 dBFS at the same gain, which says the
+         *      converter's range was going into neighbouring transmitters. 105.4, the ghost of
+         *      if_filter_was_never_programmed, came back as Capital.
+         *  ★ The remaining cost is one USB control transfer per change — the AM click. Stuart:
+         *    "so minor anyway, you'd have to be rapidly zooming in and out continuously for it to
+         *    be a big issue", and the capped range makes the moves smaller besides. */
+        double half = rxBwHz * 0.5;
+        {
+            const double span = displaySpan() / zoomFactor.load();
+            half = std::max(half, std::fabs(viewCenter.load() - rf) + span * 0.5 + rxBwHz * 0.5);
+            /* ★★★ BUT NOT ON A SHARED DIAL (2026-09-22). There is ONE view for everybody there,
+             *     and the server states it; a joiner's default full-span view is not a request,
+             *     it is a client that has not adopted yet. Counting it walked the filter open four
+             *     rungs on every join — four AGC resets, the blip Stuart heard when a second user
+             *     connected. "The server doesnt need to accomodate the joiners span." Stuart put
+             *     the rule plainly on 2026-09-27: "a new joiner shouldnt trigger the AGC and IF
+             *     filter unless they are THE FIRST listener on the box."
+             *     Widest-view-wins stays for per-listener-VFO radios, where user 2 really does
+             *     have their own view. */
+            if (!vsSharedDial())
+            for (auto& pr : allSpecPeers()) {
+                auto c = dspFor(pr.sock);
+                if (!c || c->viewSpanHz <= 0) continue;
+                half = std::max(half,
+                    std::fabs(c->viewCentreHz - rf) + c->viewSpanHz * 0.5 + rxBwHz * 0.5);
+            }
+        }
+        int want = (int)std::lround(half * 2.0);
+        /* ★★★ THE CEILING — 60 % OF THE CAPTURE, WHICH IS WHERE THE 19 dB LIVED. Stuart's anchors:
+         *  "2048 = 1.2MHz, 2.4 = 1.5MHz so that you arent loosing too much of the overall view
+         *  when zoomed out." Expressed against the sample rate so it travels to any rate instead
+         *  of being two magic numbers.
+         *  ★★ WITH A FLOOR, because a flat ratio eats a narrow capture: 60 % of 1.2 MS/s is
+         *     720 kHz, throwing away 40 % of an already narrow view to protect a front end that is
+         *     only being shown 1.2 MHz anyway. Never below 1 MHz — at the low rates `captureWide`
+         *     below is what binds and this changes nothing; at the high rates the ratio bites.
+         *  ★ A CEILING ONLY. Zooming IN still goes under it, which is the whole point above. */
+        int selectivityCap = (int)std::lround(sampleRate * 0.6);
+        if (selectivityCap < 1000000) selectivityCap = 1000000;
+        if (want > selectivityCap) want = selectivityCap;
+        /* ★★★ AND THE OWNER'S OWN CEILING FOR THIS BAND, WHICH BEATS THE AUTOMATIC ONE.
+         *  Stuart, 2026-09-27: "keep auto filter as it is for now, that works for most things, but
+         *  we have a per band maximum so that in this case I'd tell it never expand past 1.2MHz on
+         *  FM." FM is crowded and wants selectivity; a quiet band does not, and the right answer
+         *  genuinely differs — the more so on a V4, which reaches HF through an upconverter and so
+         *  puts HF through the same tuner (only the V3 bypasses it with direct sampling).
+         *  ★★ A CEILING, like the gain ceilings it is modelled on: zooming in still goes under it.
+         *     It can only ever make the filter NARROWER than the automatic rule would have.
+         *  ✗ DAB, a full-rate raw IQ consumer and (in time) ADS-B override this and take the full
+         *    sample-rate width — those three genuinely need the whole capture. DAB returns at the
+         *    top of this function and raw IQ overrides below, so neither reaches this line. */
+        const int ownerIfCap = LocalSdrShim::ifCapAtHz(rf);
+        if (ownerIfCap > 0 && want > ownerIfCap) want = ownerIfCap;
         if (want < 350000) want = 350000;
         /* ★★★ NEVER SWITCH THE FILTER OFF. THIS LINE WAS THE GHOST ON 105.4.
          *
@@ -14275,6 +14331,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
            + std::string(bwAutoNow ? "true" : "false")
            + ",\"tunerBw\":"
            + std::to_string(g_tunerBwHz.load(std::memory_order_relaxed))
+           /* ★★★ AND THE OWNER'S CEILING FOR THIS BAND, SO THE READOUT CAN SAY SO. Stuart wants
+            *  the chip to read "IF 1200 kHz" with a padlock where he has fixed it, exactly as a
+            *  locked gain band reads "RF 7 · IF 25 🔒". A ceiling the client does not know about
+            *  is a control that springs back: the value simply refuses to move and the receiver
+            *  looks broken rather than governed — the same fault gainCap and agcLocked were both
+            *  given a flag to avoid.
+            *  ★ -1 = no ceiling here, which is the common answer and costs a handful of bytes.
+            *    Reported at the frequency being listened to, so it follows the dial across bands. */
+           + ",\"ifCap\":"
+           + std::to_string(LocalSdrShim::ifCapAtHz(
+                 LocalSdrShim::instance().listenFrequency()))
            + ",\"rfCentre\":"
            + std::to_string((long long)llround(
                  LocalSdrShim::instance().rfCentreHz()));
@@ -22142,6 +22209,28 @@ void LocalSdrShim::setGainLimits(const std::string& csv) {
     std::lock_guard<std::mutex> lk(g_gainLimMtx);
     g_gainLimits = vibebands::parseGainList(csv);
     LOGI("gain limits: %zu rule(s) from \"%s\"", g_gainLimits.size(), csv.c_str());
+}
+/** ★★★ PER-BAND IF CEILING — "never expand past 1.2 MHz on FM".
+ *  Stuart, 2026-09-27: "we have a per band maximum so that in this case I'd tell it never expand
+ *  past 1.2MHz on FM, and in the chip you can see IF 1200KHz (padlock icon)."
+ *  ★★ SAME PARSER, SAME RULE, SAME SHAPE AS THE GAIN CEILINGS. `GainRule` is a band plus an int,
+ *     and gainCapAt's "where two overlap the tighter one wins" is exactly right for a filter
+ *     ceiling too: an owner writing two rules that cover one frequency meant the narrower. Two
+ *     parsers for one idea is how they drift apart.
+ *  ★ Written in kHz, because that is what the readout says ("IF 1200 kHz"): "fm:1200".
+ *    Named bands work as well as "88-108:1200" — parseEntry is ITU-region aware and a typed pair
+ *    is not. */
+void LocalSdrShim::setIfLimits(const std::string& csv) {
+    std::lock_guard<std::mutex> lk(g_gainLimMtx);
+    g_ifLimits = vibebands::parseGainList(csv);
+    LOGI("IF ceilings: %zu rule(s) from \"%s\"", g_ifLimits.size(), csv.c_str());
+}
+/** The owner's IF ceiling at this frequency, in Hz, or -1 for none. */
+int LocalSdrShim::ifCapAtHz(double hz) {
+    std::lock_guard<std::mutex> lk(g_gainLimMtx);
+    if (g_ifLimits.empty()) return -1;
+    const int kHz = vibebands::gainCapAt(g_ifLimits, hz);
+    return kHz > 0 ? kHz * 1000 : -1;
 }
 void LocalSdrShim::setRestGain(int gain) {
     g_restGain.store(gain);
