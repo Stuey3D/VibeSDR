@@ -356,6 +356,14 @@ at 24 dB it opens correctly. But MPX S/N says the MULTIPLEX is readable, not tha
 errors measure exactly that**, and at 83 % the deviation figure is not a measurement of anything.
 ▶ Gate the RDS row on block errors as well — above roughly 20-30 % it should decline, in the
 panel's own idiom, exactly as MULTIPATH and CEQ already do.
+★★★ **THE GENERAL RULE: GATE EACH FIGURE ON THE THING IT ACTUALLY DEPENDS ON.** On that same
+station the MPX DEVIATION meter was RIGHT — it read 78 avg / 95 peak, said OVERMODULATED, and
+Stuart confirmed it by ear: *"the audio sounds crushed"*. It needs only the multiplex, which is
+what MPX S/N measures, so it stayed trustworthy at 24 dB with 83 % block errors. The RDS figure
+needs the SUBCARRIER TO DECODE, and that is what block errors measure. One signal-quality number
+cannot gate both. ✗ I had wrongly called the overmodulation verdict "unproven at low SNR"; the ear
+settled it, and the meter now has two independent confirmations (Saber's MPXtool within 1 kHz on a
+clean signal, and this by-ear check on a dirty one).
 
 ## The impossible-value check watches the wrong number (2026-09-27)
 `peak 5.7 kHz` on that same station is a hair under the 5.8 "over spec — suspect" threshold, and
