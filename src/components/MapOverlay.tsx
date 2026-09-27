@@ -406,44 +406,6 @@ L.control.zoom({position:'bottomright'}).addTo(map);
  *  index.json latches localOnly, so a non-VibeServer costs exactly ONE 404 and never one per layer.
  * ★ The bytes come over the bridge from RN (see onMessage/__mdDeliver): the data cannot live in this
  *  page, because the page is a string and 14 MB of it would be built on every open. */
-/* ★★★ A WEBVIEW HAS NO CONSOLE, WHICH IS WHY THIS CLASS OF BUG SURVIVES. The renderer already
- *  logs its draw failures — vibemap.js ends redrawMap with .catch(e => console.error('map draw
- *  failed:', e)) precisely because a silent catch once let a TypeError stop the map with nothing
- *  to find. In here that console goes nowhere, so the same fault is invisible all over again.
- *  ★★ Stuart, 2026-09-27: "one second the map will be shown and then it will move slightly and
- *     the whole thing disappears just leaving floating city labels" — the signature of a throw
- *     PART WAY through a redraw: layers added before it survive, everything after is never drawn.
- *  ★ Forwarded to RN rather than swallowed. An error we cannot see is an error we will guess at,
- *    and guessing is what has cost the most time today. */
-window.__mdErr = function(what, e){
-  try {
-    var msg = (e && (e.stack || e.message)) ? String(e.stack || e.message) : String(e);
-    if (window.ReactNativeWebView)
-      window.ReactNativeWebView.postMessage(JSON.stringify({ t:'maperr', what:what, msg:msg.slice(0,700) }));
-    /* ★★ AND ON THE GLASS, because console.warn is invisible on a TestFlight device and a
-     *  diagnostic nobody can read is not a diagnostic. Stuart works by screenshot, so the error
-     *  has to be somewhere a screenshot catches it.
-     *  ★ Tap to dismiss, and it never covers the map's own controls. */
-    var box = document.getElementById('mdErrBox');
-    if (!box) {
-      box = document.createElement('div');
-      box.id = 'mdErrBox';
-      box.style.cssText = 'position:absolute;left:8px;right:8px;bottom:8px;z-index:2000;'
-        + 'background:rgba(60,0,0,0.92);color:#ffb0b0;border:1px solid rgba(255,90,90,0.6);'
-        + 'border-radius:8px;padding:8px 10px;font:11px ui-monospace,Menlo,monospace;'
-        + 'white-space:pre-wrap;max-height:38%;overflow:auto';
-      box.addEventListener('click', function(){ box.remove(); });
-      document.body.appendChild(box);
-    }
-    box.textContent = 'MAP ERROR (' + what + ')\n' + msg.slice(0, 700);
-  } catch (x) {}
-};
-window.addEventListener('error', function(ev){ window.__mdErr('window.onerror', ev.error || ev.message); });
-window.addEventListener('unhandledrejection', function(ev){ window.__mdErr('unhandledrejection', ev.reason); });
-(function(){ var ce = console.error; console.error = function(){
-  try { window.__mdErr('console.error', Array.prototype.join.call(arguments, ' ')); } catch(x){}
-  try { ce.apply(console, arguments); } catch(x){}
-}; })();
 window.__mdWait = {};
 window.__mdSeq = 0;
 window.__mdDeliver = function(id, body){
@@ -1135,12 +1097,6 @@ export default function MapOverlay(
              *  because a map that stops talking is worse than a map missing one layer. */
             let m: { t?: string; id?: string; file?: string } | null = null;
             try { m = JSON.parse(d); } catch { return; }
-            /* ★ The page telling us it threw — see window.__mdErr. Logged rather than silently
-             *  dropped: this is the only way a WebView fault reaches anybody. */
-            if (m && m.t === 'maperr') {
-              console.warn('[map] ' + String((m as any).what) + ': ' + String((m as any).msg));
-              return;
-            }
             if (!m || m.t !== 'mapdata' || !m.id) return;
             const get = m.file ? MAPDATA_FILES[m.file] : undefined;
             /* ★ A file we do not carry (a tier2 shard, a relief tile) is answered with null, i.e.
