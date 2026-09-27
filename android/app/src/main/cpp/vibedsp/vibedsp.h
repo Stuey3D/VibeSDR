@@ -1627,7 +1627,11 @@ public:
      *  station's own pilot tripled, so a locked encoder sits still no matter how weak the
      *  signal — a steady march means the station's subcarrier is genuinely not 3x its pilot,
      *  which is a transmitter fault and not a reception one. -1 = not measurable. */
-    float pilotPhaseDriftDegPerSec() const { return phDriftDeg_; }
+    /* ★ SIGNED INSIDE, MAGNITUDE OUT. phDriftDeg_ accumulates a SIGNED rate so that wander
+     *  cancels and only a consistent direction survives (see measurePhaseDrift — the absolute
+     *  value used to rectify noise into rotation). Readers want "how fast", not "which way",
+     *  so the sign is spent doing the one job it exists for and dropped here. */
+    float pilotPhaseDriftDegPerSec() const { return std::fabs(phDriftDeg_); }
 private:
     void measurePhaseDrift();
 public:
@@ -1838,7 +1842,7 @@ private:
     // rotates fast (constellation draws a CIRCLE, coherence dies, already detected) and
     // Harborough FM rotates slowly (67% steady, phase walking 0->82 deg in six seconds, and
     // the old detector said nothing). Stuart caught the slow one on air, 2026-07-27.
-    float phDriftDeg_ = 0.0f;      // smoothed |drift|, degrees per second
+    float phDriftDeg_ = 0.0f;      // smoothed SIGNED drift, deg/s (sign cancels wander)
     float phLastDeg_  = -1.0f;     // previous sample of the RAW (unfolded) angle
     double phLastAt_  = 0.0;       // seconds, for dt
     double phClock_   = 0.0;       // sample-derived clock; no wall time in the DSP layer

@@ -405,9 +405,32 @@ void RdsDemod::measurePhaseDrift() {
         float d = deg - phLastDeg_;
         while (d >  90.0f) d -= 180.0f;
         while (d < -90.0f) d += 180.0f;
-        const float rate = std::fabs(d) / (float)dt;
-        // ★ Smoothed hard. This is a transmitter characteristic; it should not flicker, and a
-        // single noisy sample must not be able to accuse a broadcaster of anything.
+        /* ✗✗✗ THIS WAS `std::fabs(d) / dt`, AND AN ABSOLUTE VALUE RECTIFIES NOISE INTO ROTATION.
+         *     A locked encoder's sample-to-sample change has mean ZERO — the estimate wanders
+         *     either side of the true angle. |d| does not: its mean is strictly positive and
+         *     proportional to the JITTER, so the quieter the station, the faster we said its
+         *     encoder was running. Measured on the stationary case (4000 samples, dt 0.25 s):
+         *
+         *       jitter 1° → 3.5 °/s      jitter 2° → 7.2 °/s      jitter 5° → 27.7 °/s
+         *
+         *     against a 2 °/s accusation threshold. At 5° of jitter it read HIGHER for a station
+         *     rotating at 0 °/s (27.7) than for one genuinely rotating at 5 °/s (20.7) — the
+         *     estimator was ranking by noise, not by rotation.
+         *  ★★ AND SMOOTHING CANNOT SAVE IT. The old comment reasoned that a hard smoother stops one
+         *     noisy sample accusing a broadcaster, which is true of the SAMPLE and false of the
+         *     STATISTIC: averaging a rectified quantity converges to mean|noise|, not to zero.
+         *     There is no averaging time that fixes a rectifier. Same shape as the RDS deviation
+         *     estimator that scaled hiss into "12.9 kHz · generous" — an estimate that RISES as
+         *     the signal gets worse is measuring the wrong thing.
+         *  ★★★ SIGNED IS THE WHOLE FIX. Real rotation has a consistent DIRECTION and accumulates;
+         *      noise changes sign and cancels. Stuart, 2026-09-27: "I do find a lot of rotating
+         *      encoders that slowly move back and forth" — back and forth IS the sign changing,
+         *      which is the one thing |d| throws away. Same run, signed: 0.0 / 0.2 / 0.4 °/s on
+         *      the stationary cases, while a true 5 °/s still reads 4.3-6.3.
+         *  ★ The magnitude is taken at the END, for the display, so the rate still reads positive
+         *    whichever way the encoder runs. */
+        const float rate = d / (float)dt;
+        // ★ Smoothed hard. This is a transmitter characteristic; it should not flicker.
         phDriftDeg_ += 0.15f * (rate - phDriftDeg_);
     }
     phLastDeg_ = deg;
