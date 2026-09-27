@@ -15,6 +15,7 @@
  */
 
 import { UPDATE_APP_MESSAGE } from '../services/sdrProtocol';
+import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../services/squelchNeighbours';
 import { APP_PROTO } from '../constants/version';
 import React, {
   useCallback, useEffect, useMemo, useRef, useState,
@@ -2584,7 +2585,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** The tracker's whole state. In a ref because the per-frame emit runs inside socket callbacks
    *  created once — a state closure there would be stale from the second frame onwards.
    *  `base` NaN = "take the next sample as the truth", the seed the toggle and every reseed use. */
-  const sqlAutoTrk = useRef({ base: NaN, key: '', openAt: 0, shown: NaN, sentOpen: false, sentDb: NaN });
+  const sqlAutoTrk = useRef({ base: NaN, key: '', openAt: 0, shown: NaN, sentOpen: false, sentDb: NaN, near: NaN });
   /** The manual threshold, in its backend's own native unit, captured the moment auto was switched
    *  ON — because from then on the live state IS the automatic value, so there is nothing else left
    *  to restore from. NaN = nothing remembered (auto has never been on this session). */
@@ -5238,7 +5239,20 @@ export default function SDRScreen({ route, navigation }: Props) {
              *  with the gate open blocks the slow rise for ever and the only escape was toggling auto
              *  off and on (Stuart, MW → 40 m LSB, 2026-09-25). */
             const key = `${Math.round(s.frequency)}|${s.mode}|${s.bandwidthLow}|${s.bandwidthHigh}`;
-            if (key !== trk.key) { trk.key = key; trk.base = NaN; }
+            if (key !== trk.key) { trk.key = key; trk.base = NaN; trk.near = NaN; }
+            /* ★★★ THE REFERENCE THE SIGNAL CANNOT BE IN — squelchNeighbours.ts, shared with the web
+             *  client. What `autoChan` would read if this channel were empty: the channel figure minus
+             *  how far the channel stands above its empty neighbours on the view. Unit-free, so the
+             *  Kiwi's dBm, a dongle's dBFS and radiod's SNR all use it the same way. Without it,
+             *  tuning ONTO a voice seeded the baseline on the voice and held the gate shut for the
+             *  whole over (Stuart, 2 m NFM, 2026-09-27 — found in the web client; same algorithm here).
+             *  ★ Same geometry as `peak` above: the VFO at the middle of `newBins`, spanning s.bwHz. */
+            const excess = channelExcessDb(newBins, s.frequency, s.bwHz, s.frequency, s.bandwidthLow, s.bandwidthHigh);
+            const nearInst = Number.isFinite(excess) ? autoChan - excess : NaN;
+            if (Number.isFinite(nearInst)) {
+              trk.near = Number.isFinite(trk.near) ? trk.near + (nearInst - trk.near) * SQL_NEAR_SMOOTH : nearInst;
+              if (!Number.isFinite(trk.base)) trk.base = nearInst;   // ★ seed from it, never the channel
+            }
             const nowMs = Date.now();
             /* ★★★ SEED THE BASELINE BEFORE ANYTHING READS IT. With the NaN sentinel resolved AFTER
              *  `decide`, the first sample of every reseed — which includes the moment auto is
@@ -5254,6 +5268,9 @@ export default function SDRScreen({ route, navigation }: Props) {
              *  long over drags the baseline up into the speaker's own signal, the threshold follows,
              *  and the squelch talks itself into silence part-way through the transmission. */
             trk.base = Number.isFinite(trk.base) ? trk.base + (autoChan - trk.base) * a : autoChan;
+            // ★★ And a ceiling: the tracker is kept as tuned; the neighbours only stop it believing a
+            //    level the empty channels beside it do not have.
+            if (Number.isFinite(trk.near) && trk.base > trk.near + SQL_NEAR_CEIL_DB) trk.base = trk.near + SQL_NEAR_CEIL_DB;
             const decide = trk.base + sqlAutoMarginRef.current - (openish ? SQL_AUTO_HYST_DB : 0);
             if (autoChan >= decide) trk.openAt = nowMs;
             const gateOpen = (nowMs - trk.openAt) < SQL_AUTO_HANG_MS;
@@ -6891,7 +6908,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       // ★ Seed from the CURRENT channel: base NaN = "take the next sample as the truth", and the
       //   blank key makes the next frame reseed whatever we are actually tuned to.
       const t = sqlAutoTrk.current;
-      t.base = NaN; t.key = ''; t.openAt = 0; t.shown = NaN; t.sentOpen = false; t.sentDb = NaN;
+      t.base = NaN; t.key = ''; t.openAt = 0; t.shown = NaN; t.sentOpen = false; t.sentDb = NaN; t.near = NaN;
     } else {
       const m = sqlManualRef.current;
       // ★ The per-backend "off" sentinels, for a session where nothing manual was ever set.

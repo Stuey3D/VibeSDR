@@ -17,6 +17,7 @@ import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAu
          type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
+import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src/services/squelchNeighbours';
 
 /** The fastest an RTL-SDR can actually sustain over USB. Above this the dongle DROPS
  *  SAMPLES — audio glitches, gaps in the waterfall — and it does so silently, which is
@@ -1004,6 +1005,13 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       noteFrame();
       wf!.push(bins, centerHz, bwHz);
       updateSignal(bins, centerHz, bwHz);
+      // ★ Auto squelch's reference: how far the channel stands above its empty neighbours on THIS
+      //   view (squelchNeighbours.ts). Only worked out while auto is on — it is a scan of the frame.
+      if (sqlAuto && spec) {
+        sqlNearExcess = channelExcessDb(bins, centerHz, bwHz, spec.frequency, spec.bandwidthLow, spec.bandwidthHigh);
+        sqlNearAt = performance.now();
+        sqlNearKey = sqlChannelKey();
+      }
       // ★★ PAINT THE CARD'S METER ON THE FRAME, not on the card's 250 ms poll. Everything else in
       //    that poll describes something a human changes (frequency, mode, recording) and 4 Hz is
       //    plenty; the meter describes the BAND, and at 4 Hz nineteen of every twenty readings the
@@ -4241,6 +4249,12 @@ const SQL_AUTO_RISE = 0.002;   // away from it: tens of seconds, so a carrier ca
  *     blocked rise, and the fix belongs at the moment the question changes, not in the loop.
  *  ★ NaN means "take the next sample as the truth", the same seed the button uses. */
 let sqlSeedKey = '';
+/** The neighbour excess from the latest frame (NaN = the view cannot say), when, and for which channel. */
+let sqlNearExcess = NaN;
+let sqlNearAt = 0;
+let sqlNearKey = '';
+/** The neighbour reference in `chan` units, smoothed — see SQL_NEAR_SMOOTH. */
+let sqlNearRef = NaN;
 
 /** The channel we are currently judging: frequency, mode and passband. Any change makes the old
  *  baseline meaningless. */
@@ -4256,7 +4270,19 @@ function autoSquelchTick() {
    *  against the channel we are judging now covers every path, including the ones nobody has
    *  written yet. */
   const key = sqlChannelKey();
-  if (key !== sqlSeedKey) { sqlSeedKey = key; sqlFloorEwma = NaN; }
+  if (key !== sqlSeedKey) { sqlSeedKey = key; sqlFloorEwma = NaN; sqlNearRef = NaN; }
+  /* ★★★ THE REFERENCE THE SIGNAL CANNOT BE IN. What `chan` would read if this channel were empty:
+   *  the channel figure minus how far the channel stands above its empty neighbours on the view.
+   *  It is right the instant you tune — including tuning ONTO a voice, which is exactly the case that
+   *  seeded the old tracker on the signal and held the gate shut for the whole over (Stuart, 2 m,
+   *  2026-09-27). Stale or from another channel = not used. */
+  const nearInst = (Number.isFinite(sqlNearExcess) && sqlNearKey === key
+                    && performance.now() - sqlNearAt < 1000) ? srvChanDb - sqlNearExcess : NaN;
+  if (Number.isFinite(nearInst)) {
+    sqlNearRef = Number.isFinite(sqlNearRef) ? sqlNearRef + (nearInst - sqlNearRef) * SQL_NEAR_SMOOTH : nearInst;
+    // ★ SEED FROM IT, never from a channel that may be carrying the signal.
+    if (!Number.isFinite(sqlFloorEwma)) sqlFloorEwma = nearInst;
+  }
   /* ★★★ THE BASELINE ONLY RISES WHILE THE GATE IS SHUT. Falling towards a new low is always
    *  allowed — that is the channel genuinely getting quieter — but rising is only believed when we
    *  think we are listening to NOISE. Otherwise a long over on 40m slowly drags the baseline up
@@ -4289,6 +4315,12 @@ function autoSquelchTick() {
   const a = srvChanDb < sqlFloorEwma ? SQL_AUTO_FALL : (openish ? 0 : SQL_AUTO_RISE);
   sqlFloorEwma = Number.isFinite(sqlFloorEwma) ? sqlFloorEwma + (srvChanDb - sqlFloorEwma) * a
                                                : srvChanDb;
+  /* ★★ AND IT IS A CEILING. The tracker is kept exactly as measured and tuned — the neighbours only
+   *  stop it believing a level that empty channels beside it do not have. Without this, a baseline
+   *  learned while a carrier was up (auto switched on mid-over, or no view to measure from yet) stays
+   *  wrong until the carrier drops. */
+  if (Number.isFinite(sqlNearRef) && sqlFloorEwma > sqlNearRef + SQL_NEAR_CEIL_DB)
+    sqlFloorEwma = sqlNearRef + SQL_NEAR_CEIL_DB;
   const decide = sqlFloorEwma + sqlAutoMargin - (openish ? SQL_AUTO_HYST_DB : 0);
   if (srvChanDb >= decide) sqlOpenAt = nowMs;
   const gateOpen = (nowMs - sqlOpenAt) < SQL_AUTO_HANG_MS;
@@ -4322,7 +4354,7 @@ function setSquelchAuto(on: boolean, persist = true) {
   sqlAuto = on;
   if (persist) savePref('squelchAuto', on);
   if (on) {
-    sqlFloorEwma = NaN; sqlSeedKey = sqlChannelKey();   // seed from the CURRENT channel
+    sqlFloorEwma = NaN; sqlNearRef = NaN; sqlSeedKey = sqlChannelKey();   // seed from the CURRENT channel
     autoSquelchTick();
   } else {
     const p = prefs();
