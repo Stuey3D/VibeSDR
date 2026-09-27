@@ -2212,6 +2212,10 @@ export abstract class VibeServerWsClient {
         snrOk: Number(msg.snrOk ?? 1) === 1,
         multipath: num(msg.multipath, 0),
         multipathOk: Number(msg.multipathOk ?? 0) === 1,
+        // ★ Default 1 ("running") matches the browser's parse, so an older server that omits the
+        //   field behaves identically in both clients rather than diverging on the fallback.
+        imsBlend: Number(msg.imsBlend ?? 0),
+        imsWhy: Number(msg.imsWhy ?? 1),
         hiCutLmr: num(msg.hiCutLmr, 15000), hiCutAud: num(msg.hiCutAud, 15000),
         nbRate: num(msg.nbRate, 0),
         ceqOn: Number(msg.ceqOn ?? 0) === 1,

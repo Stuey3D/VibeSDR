@@ -139,6 +139,11 @@ export interface RdsExt {
    *  path — and it is NOT the same fault as weakness. */
   multipath: number;
   multipathOk: boolean;  // false = too noisy to tell a reflection from the noise
+  /** ★★ What the IMS (multipath suppressor) is DOING about it, in Hz of L−R blend. The server has
+   *  always sent these two and only the browser read them, so the app's Multipath row measured
+   *  the damage and stayed silent on the cure. WRITTEN AND NEVER READ, again. */
+  imsBlend?: number;     // Hz it has rolled L−R down to; 0 = not blending
+  imsWhy?: number;       // 1 running, 2 CEQ has it, 3 nothing to suppress, 4 NR already blending, 5 not measurable
   hiCutLmr: number;      // where high-blend has rolled the stereo difference off, Hz
   hiCutAud: number;      // where the audio high-cut is sitting, Hz
   nbRate: number;        // fraction of samples the noise blanker is excising

@@ -9820,6 +9820,12 @@ export default function SDRScreen({ route, navigation }: Props) {
           bus={advRdsBus}
           ps={liveStation.name} rt={liveStation.text} pi={liveStation.pi}
           countryIso={liveStation.countryIso}
+          // ★ The ECC was already sitting in liveStation and simply never handed over, so the
+          //   COUNTRY row could only ever say "from PI". Written and never read, again.
+          ecc={liveStation.ecc}
+          // ★ WSP state, so MPX S/N can say "bypassed" instead of calling a switched-off
+          //   processor a clean signal.
+          wsp={fmNr}
           logoUri={liveLogo}
           raw={advRdsRaw} onRaw={setAdvRdsRaw}
           tall={advRdsTall} onTall={setAdvRdsTall}

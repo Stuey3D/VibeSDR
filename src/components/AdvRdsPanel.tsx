@@ -119,6 +119,14 @@ export interface AdvRdsPanelProps {
   bus?: ValueBus<RdsExt | null>;
   /** Basic RDS, which arrives on its own message and is shown by the VTS bar too. */
   ps?: string; rt?: string; pi?: string; ber?: number; countryIso?: string;
+  /** ★ The Extended Country Code, so the COUNTRY row can say how it knows. Without it the row
+   *  hardcoded "· from PI", which is a claim about PROVENANCE and was false whenever the ECC had
+   *  actually arrived — the web client has shown "GB · ECC E1" all along. ONE RULE, TWO READERS. */
+  ecc?: number;
+  /** ★★ Whether weak-signal processing is ON. The MPX S/N row's second clause describes what the
+   *  receiver is DOING, so with WSP switched off "clean · no treatment" is not a measurement, it
+   *  is the panel mistaking a disabled feature for a clean signal. */
+  wsp?: boolean;
   /** ★★★ THE LOGO THE REST OF THE APP IS ALREADY SHOWING, resolved once by SDRScreen with the PI
    *  and the tuned FREQUENCY — which is what RadioDNS needs and what this panel does not have.
    *  Resolving again from the NAME alone gave a different, weaker answer: the identity path could
@@ -619,6 +627,8 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   const piNum = p.pi ? parseInt(p.pi, 16) : 0;
   /** Last real RDS deviation reading, so a momentary dropout does not blank the row. */
   const rdsHold = useRef<{ txt: string; col: string; at: number } | null>(null);
+  /** Last real multipath string, shown dimmed as "… · held" when the S/N dips out. */
+  const mpHeld = useRef<string | null>(null);
 
   // ── PTY ─────────────────────────────────────────────────────────────────────
   const ptyV = (raw ? x?.ptyRaw : x?.pty) ?? -1;
@@ -648,6 +658,14 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
     //     with the pilot collapsed the quotients explode — 70 dB beside 580% multipath, measured on
     //     air. A confident number about an unmeasurable signal is worse than a blank.
     snrTxt = 'no pilot to measure';
+  } else if (mpxSnr > 0.5 && p.wsp === false) {
+    /* ★★★ A SWITCHED-OFF PROCESSOR IS NOT A CLEAN SIGNAL. The second clause describes what the
+     *  receiver is DOING about the noise, and with weak-signal processing off it is doing nothing
+     *  BY INSTRUCTION — which reads identically to "nothing was needed" unless we say so. The
+     *  browser has printed "bypassed" here all along and the app printed the flattering version,
+     *  so the same server produced two different stories about the same signal.
+     *  ★ No colour: neither good news nor bad, just a control the listener set. */
+    snrTxt = `${mpxSnr.toFixed(0)} dB · bypassed`;
   } else if (mpxSnr > 0.5) {
     const lmr = x?.hiCutLmr ?? 15000, aud = x?.hiCutAud ?? 15000;
     const acting = lmr < 14000 || aud < 14000;
@@ -669,7 +687,29 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
                 : mp < 0.10 ? 'slight' : mp < 0.20 ? 'moderate' : 'severe';
     mpTxt = pct < 0.5 ? label : `${pct.toFixed(1)}% · ${label}`;
     mpCol = mp < 0.03 ? C.good : mp < 0.10 ? undefined : mp < 0.20 ? C.warn : C.bad;
+    mpHeld.current = mpTxt;
+  } else if (x && mpHeld.current) {
+    /* ★★ HOLD THE LAST REAL READING RATHER THAN ANNOUNCE DEFEAT. `multipathOk` drops out on a
+     *  fade for a frame or two, and "too noisy to judge" flashing over a perfectly good 4.6%
+     *  reading is a worse answer than the reading itself. Dimmed and labelled "held" so it is
+     *  never mistaken for live — same as the browser. */
+    mpTxt = `${mpHeld.current} · held`;
+    mpCol = C.muted;
   } else if (x) mpTxt = 'too noisy to judge';
+  /* ★★★ AND SAY WHAT THE SUPPRESSOR IS DOING ABOUT IT. The row measured the damage and never
+   *  mentioned the cure, so a listener watching IMS pull a station out of a reflection saw only
+   *  the damage figure and concluded nothing was happening.
+   *  ★ Appended AFTER the whole chain, deliberately — it applies to the held and the live cases
+   *    alike, and the browser's own comment warns against burying it inside one arm. */
+  if (x && snrOk) {
+    const ib = x.imsBlend ?? 0, iw = x.imsWhy ?? 1;
+    mpTxt += ib > 0 ? ` · IMS blending L−R to ${(ib / 1000).toFixed(1)}k`
+      : iw === 2 ? ' · IMS standing by · CEQ has it'
+      : iw === 3 ? ' · IMS standing by · nothing to suppress'
+      : iw === 4 ? ' · IMS standing by · NR already blending further'
+      : iw === 5 ? ' · multipath not measurable at this S/N'
+      : '';
+  }
   // ★ CEQ is shown as BEFORE → AFTER: "engaged" says nothing about whether it helped, and a blind
   //   equaliser quietly making things worse is the failure mode that matters.
   let ceqTxt = DASH;
@@ -702,13 +742,29 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   //     it means the opposite. The browser has always coloured it; the app did not, so the same
   //     server produced two different-looking answers (Stuart, 2026-08-15).
   let ifCol: string | undefined;
-  if (x && ifC > 0 && mpxSnr > 0.5) {
-    ifCol = (ifBw > 0 || ifG > 1.5) ? C.good : undefined;
-    ifTxt = ifBw > 0
-      ? `${Math.round(ifBw / 1000)}k narrow · wide would ` +
-        (ifG > 1.5 ? `gain ${ifG.toFixed(1)} dB` : `cost ${Math.abs(ifG).toFixed(1)} dB`)
-      : `wide · ${Math.round(ifC / 1000)}k ` +
-        (ifG > 1.5 ? 'would help' : ifG < -1.5 ? 'would cost' : 'no real gain');
+  /* ★★★ REPORT THE FILTER THAT IS ACTUALLY APPLIED, EVEN WITH NO SHADOW TO COMPARE IT TO. The row
+   *  was gated ENTIRELY on `ifC > 0` — the shadow measurement — so with IMS off, or before the
+   *  shadow settles, a genuinely narrowed IF showed a DASH. A dash reads as "no filtering", which
+   *  is the opposite of the truth, and it is the auto-bandwidth case that hits ordinary users.
+   *  ★★★ AND THE ADJECTIVE MUST COME FROM THE WIDTH. "narrow" was hardcoded, so a 196k IF — wider
+   *  than the 150k a broadcast signal needs — was announced as "196k narrow". The panel was
+   *  contradicting its own number. <=160k is narrow, >=220k is wide, and in between gets NO
+   *  adjective rather than a made-up one.
+   *  ★ The comparison clause is appended only when the shadow exists, because that is the only
+   *    thing that ever needed the shadow. */
+  if (x && ifBw > 0) {
+    ifCol = C.good;
+    const w = Math.round(ifBw / 1000);
+    const adj = ifBw <= 160000 ? ' narrow' : ifBw >= 220000 ? ' wide' : '';
+    ifTxt = `${w}k${adj}`;
+    if (ifC > 0 && mpxSnr > 0.5) {
+      ifTxt += ' · wide would ' +
+        (ifG > 1.5 ? `gain ${ifG.toFixed(1)} dB` : `cost ${Math.abs(ifG).toFixed(1)} dB`);
+    }
+  } else if (x && ifC > 0 && mpxSnr > 0.5) {
+    ifCol = ifG > 1.5 ? C.good : undefined;
+    ifTxt = `wide · ${Math.round(ifC / 1000)}k ` +
+      (ifG > 1.5 ? 'would help' : ifG < -1.5 ? 'would cost' : 'no real gain');
   }
 
   let pilotTxt = DASH, pilotCol: string | undefined;
@@ -729,15 +785,35 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   // 2026-07-28). Hold the last real reading briefly, then say zero honestly — a steady "0.0 kHz"
   // is information, a strobing dash is not.
   let rdsDevTxt = '0.0 kHz · none', rdsDevCol: string | undefined = C.muted;
-  if (rdev > 0.2) {
+  /* ★★★ REFUSE THE FIGURE BELOW THE GATE — the row was answering a question it could not hear.
+   *  `devGate` is the same latched MPX S/N hysteresis the deviation METER already uses (in at
+   *  >=10 dB, out below 8), and it was computed right here and consulted only for the meter's
+   *  verdict. So on a 5 dB signal this row still printed something like
+   *  "avg 3.3 · peak 11.3 · raw 4.7 kHz · nominal" — a peak nearly 2x the spec maximum, dressed
+   *  up with the word "nominal", from noise in the RDS band.
+   *  ★★ Kiko's Brazilian set is the live evidence: WHATS 67 at 35 % block errors and 15 dB MPX
+   *     S/N, mento at 18 % — the two least trustworthy readings of the seven, with nothing on
+   *     screen saying so (2026-09-27).
+   *  ★ The 4 s hold below is for a momentary DROPOUT and must not paper over this: a signal that
+   *    is simply too weak is a standing condition, not a blink, so the refusal comes first. */
+  const devGateOpen = devGate.current || mpxSnr <= 0;
+  if (rdev > 0.2 && !devGateOpen) {
+    rdsDevTxt = 'not measurable at this S/N';
+    rdsDevCol = C.warn;
+    // ✗ Deliberately NOT written to rdsHold: holding a refusal would keep it on screen for 4 s
+    //   after the signal recovered, and the hold exists to smooth the opposite case.
+  } else if (rdev > 0.2) {
     // ★★ THE SCALE HAS A CEILING, SO THE LABELS MUST TOO. 7.5% of 75 kHz = 5.6 kHz is the
     // spec maximum; a reading past it is evidence of a MEASUREMENT problem, never of a
     // strong subcarrier, and must not be dressed up as good news.
     /* ★★★ JUDGE ON THE MEASURED PEAK WHEN THERE IS ONE. `rdev` scales a mean envelope by a
-     *  fixed 1.520 crest factor; Hans's Pira table implies 1.770 on real broadcasts, so it reads
-     *  ~16 % low — the "~1.3 dB low against a Pira" the engine already knew about and wrongly
-     *  blamed on a signal-path loss. A verdict drawn on a systematically low figure mislabels
-     *  stations at the boundaries.
+     *  crest factor. ✓ FIXED 2026-09-26 (40857b93): the deficit was TWO things, a 1.205 chain
+     *  loss and a crest factor of 1.659 rather than 1.520, and both are now applied in rds.cpp.
+     *  ★ Historical note, because the numbers below are read against it: BEFORE that fix this
+     *  read ~16 % low — the "~1.3 dB low against a Pira" the engine already knew about and
+     *  wrongly blamed on a signal-path loss. A verdict drawn on a systematically low figure
+     *  mislabels stations at the boundaries, which is why it mattered.
+     *  ✗ Any reading captured on a build older than 5.6.64 needs ×1.205 before comparing.
      *  ★★ BOTH ARE SHOWN and the averaged one is NOT changed — it is the figure validated against
      *  Hans's analyser (Stuart, 2026-09-26: "we must however also preserve our PIRA tested
      *  numbers"). Peak first, average beside it, as the deviation meter reads. */
@@ -755,8 +831,9 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
     const pkTxt = rpk > 0.2 ? ` · peak ${rpk.toFixed(1)}` : '';
     /* ★★★ THE UNCORRECTED FIGURE, AND THIS PANEL IS THE ONE THAT MATTERS FOR IT. `rdsDevRaw` is
      *  `avg` with the guard-band noise subtraction skipped — identical maths otherwise, identical
-     *  smoother — so the pair says whether the ~16 % deficit against MpxTool lives in the
-     *  subtraction or in the 1.520 crest factor.
+     *  smoother — so the pair said whether the ~16 % deficit against MpxTool lived in the
+     *  subtraction or in the crest factor. ✓ It answered: the crest factor, plus a chain loss.
+     *  ★ Kept, because it is the control arm that makes any FUTURE deviation claim checkable.
      *  ★★★ AND IT NEARLY SHIPPED TO THE ONE PERSON WHO CAN ANSWER THAT WITHOUT THIS LINE. The web
      *     client got `raw` and this panel did not, because they are two renderers of one rule —
      *     the ONE RULE, TWO READERS shape, again. Onfliner runs the APP with a local dongle and NO
@@ -859,8 +936,19 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
 
   // ── Country. ★ Say WHY it is blank: the flag logic refuses to guess, so "waiting" is the
   // honest reading rather than a bare dash that looks like a failure.
+  /* ★★★ SAY HOW WE KNOW. "from PI" is a claim about PROVENANCE — the country was GUESSED from the
+   *  PI code's country nibble — and it was hardcoded, so the row went on saying "guessed" long
+   *  after group 1A had delivered the Extended Country Code that settles it properly. The ECC is
+   *  what distinguishes the countries that share a PI nibble, so the difference is not cosmetic.
+   *  ★ Four states, the same four the browser draws: confirmed by ECC, guessed from PI, an ECC we
+   *    hold but cannot match to a country, and nothing yet. */
+  const eccV = p.ecc ?? 0;
   const countryTxt = p.countryIso
-    ? `${p.countryIso.toUpperCase()} · from PI`
+    ? `${p.countryIso.toUpperCase()} · ${eccV > 0
+        ? `ECC ${eccV.toString(16).toUpperCase()}` : 'from PI'}`
+    : eccV > 0 ? `ECC ${eccV.toString(16).toUpperCase()} · unmatched`
+    // ★ Still gated on groups actually RECEIVED — "waiting for ECC" before a single group has
+    //   arrived would blame a missing 1A for what is really a missing signal.
     : (x?.gtot ?? 0) > 0 ? 'waiting for ECC (1A)' : DASH;
 
   // ── Group share + rate ──────────────────────────────────────────────────────
@@ -1040,7 +1128,11 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
               its order. Two clients describing the same decoder differently is worse than one
               of them being sparse: a DXer comparing a phone against a laptop on the same
               station cannot tell a real difference from a naming difference. */}
-          <Row raw={raw} label="PI"          value={p.pi ?? DASH} />
+          {/* ★ Hex AND decimal, as the browser has always shown it: the databases and
+              lists DXers actually use are split between the two notations, so printing one
+              forces a conversion by hand at the very moment someone is logging a catch. */}
+          <Row raw={raw} label="PI"
+               value={p.pi ? `${p.pi} · ${piNum}` : DASH} />
           <Row raw={raw} label="Station"     value={p.ps || DASH} />
           <Row raw={raw} label="Type"        value={ptyTxt}
                conf={(x?.pty ?? -1) >= 0} />
