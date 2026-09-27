@@ -4560,13 +4560,20 @@ select.btn { padding: 6px 8px; }
            listener causes by zooming needs no verification and cannot surprise anyone. -->
       <option value="-1">Auto &mdash; follows zoom</option>
       <option value="0">Wide &mdash; set by sample rate</option>
-      <option value="1500000">1.5 MHz</option>
-      <option value="1200000">1.2 MHz</option>
+      <!-- ★★★ THE TUNER'S ACTUAL RUNGS. This list offered 1.5 MHz, 1.2, 800, 600 and 450 — round
+           numbers, none of which the filter ladder in applyAutoIf can produce. It rounds to
+           350 / 500 / 700 / 1000 / 1400 / 2000 / 2800 kHz, so picking 1.2 landed on 1400 and the
+           readout said 1400: the setting looked ignored. Stuart, 2026-09-27: "I did choose 1.2MHz
+           band limit and its showing 1.4MHz", then "I wonder where the 1.2 came from?" — from
+           this menu, and from a spec written in round numbers on top of it.
+           ★★ The SAME list is offered in the owner's setup page. One rule, two readers: a width
+           that exists in one menu and not the other is how they drift. -->
+      <option value="2800000">2.8 MHz</option>
+      <option value="2000000">2.0 MHz</option>
+      <option value="1400000">1.4 MHz</option>
       <option value="1000000">1.0 MHz</option>
-      <option value="800000">800 kHz</option>
-      <option value="600000">600 kHz</option>
+      <option value="700000">700 kHz</option>
       <option value="500000">500 kHz</option>
-      <option value="450000">450 kHz</option>
       <option value="350000">350 kHz &mdash; narrowest</option>
     </select>
   </div>
