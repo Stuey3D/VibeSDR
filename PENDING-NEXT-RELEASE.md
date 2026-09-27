@@ -399,14 +399,20 @@ to go looking for a fault that is not there, which is worse than not mentioning 
 > alone rather than risking the audio. 64-bit servers are unaffected and honour the setting
 > exactly.
 >
-> For scale: OpenWebRX defaults to 9 fps and does not interpolate at all.
+> For scale: other online SDR software uses 9 fps as its default, with no interpolation at all.
 
-★★ **THE OWRX COMPARISON IS THE MOST USEFUL LINE IN THE NOTE**, because it gives the reader a
-reference they already trust. Stuart, 2026-09-27: *"9fps is the OWRX default anyway and they dont
-interpolate at all."* So an armhf VibeServer at 7.7 fps WITH interpolation is not a degraded
-receiver — it is roughly what a large part of the hobby already runs, presented better.
-▶ ★ Attributed to Stuart, who runs an OpenWebRX box; not independently measured here. If it ever
-goes into user-facing copy verbatim, check the current OWRX default rather than trusting this line.
+★★ **THE COMPARISON IS THE MOST USEFUL LINE IN THE NOTE**, because it gives the reader a
+reference they already trust: another widely used online SDR server defaults to 9 fps and does not
+interpolate. So an armhf VibeServer at 7.7 fps WITH interpolation is not a degraded receiver — it
+is roughly what a large part of the hobby already runs, presented better.
+✗✗ **DO NOT NAME THE OTHER PROJECT IN SHIPPED COPY.** Stuart, 2026-09-27: *"don't mention it by
+name but state that other online SDR software uses 9fps as their default without any interpolation
+at all."* Naming a peer project in a release note invites a comparison rather than giving context,
+and we are guests on other people's software often enough to extend the same courtesy
+([[third_party_receiver_etiquette]]).
+▶ ★ The figure is Stuart's, from running such a server; not independently measured here. Check
+that project's CURRENT default before the line ships — defaults change, and this one is being
+quoted to reassure people.
 
 ### MEASURED, so the claim can be defended (2026-09-27, passive frame count over 20 s)
 | box | arch | configured | delivered |
