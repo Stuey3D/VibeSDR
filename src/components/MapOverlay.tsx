@@ -481,7 +481,25 @@ window.__mdDeliver = function(id, body){
       if(file.indexOf('index.json') === 0) localOnly = true;
       return ask(file).then(reply);
     };
-    return real(u, opt).then(function(r){ return r && r.ok ? r : miss(); }).catch(miss);
+    /* ★★★ A file:// FETCH CAN SIMPLY NEVER SETTLE, and then the fallback never runs. WKWebView
+     *  does not reject it the way a failed network request rejects — the promise can sit pending
+     *  for ever, so the catch handler is not the safety net it looks like and the layer is lost in
+     *  silence. That is the shape of every map bug today: a quiet nothing rather than an error.
+     *  ★ So race it. Whichever answers first wins, and a hung read costs 2.5 s instead of the
+     *    layer. The timeout is generous enough that a slow but working read is not thrown away. */
+    var settled = false;
+    return new Promise(function(resolve){
+      var t = setTimeout(function(){ if(!settled){ settled = true; resolve(miss()); } }, 2500);
+      real(u, opt).then(function(r){
+        if(settled) return;
+        settled = true; clearTimeout(t);
+        resolve(r && r.ok ? r : miss());
+      }).catch(function(){
+        if(settled) return;
+        settled = true; clearTimeout(t);
+        resolve(miss());
+      });
+    });
   };
 })();
 var VM = VibeMap.attach(map, {
@@ -1206,6 +1224,15 @@ export default function MapOverlay(
            *    its siblings; without them the page loads and every layer 404s silently, which is
            *    the failure this whole rework is trying to stop happening quietly. */
           source={{ uri: pageUri as string }}
+          /* ★★★ allowingReadAccessToURL IS THE iOS HALF, AND I SHIPPED WITHOUT IT. The three
+           *  props below are ANDROID settings; on iOS WKWebView will load the file you point it
+           *  at and refuse to read its SIBLINGS unless the enclosing directory is granted here.
+           *  So the page came up, the sea drew, the small label files squeaked through on the
+           *  bridge fallback and every large layer — tier0-cover, tier1-cover, megabytes each —
+           *  died on the fallback's timeout. Stuart saw exactly that: "no map, just sea", then
+           *  "I see labels for continents".
+           *  ★ The grant is the page's own directory, nothing wider: the pack sits beside it. */
+          allowingReadAccessToURL={(pageUri || '').replace(/\/[^/]*$/, '/')}
           allowFileAccess
           allowFileAccessFromFileURLs
           allowUniversalAccessFromFileURLs
