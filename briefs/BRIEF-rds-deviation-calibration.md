@@ -367,3 +367,25 @@ No `raw` appeared in any screenshot. That is EITHER "raw ≈ avg, the guard subt
 clean bench signal" OR "he is on an older build that never sends the field". ✗ Do not treat the
 absence as data until the build is confirmed. ★ "MPX S/N 35 dB · bypassed" is the WEAK-SIGNAL
 TREATMENT being bypassed, not the noise guard — it does not answer this.
+
+### ★★ INDEPENDENT CORROBORATION: "RDS WAS HARDLY EVER GREEN"
+Stuart, 2026-09-27, after the fix went on: *"RDS was hardly ever green."* The panel's thresholds
+are `< 1.5 kHz` = weak (amber) and `>= 4.0` = generous. Real-world RDS injection is typically
+~2 kHz, so a correctly scaled receiver should show MOST stations green. Ours read them at 1.2-1.4 —
+**just under the weak threshold** — so nearly every healthy station looked marginal.
+▶ x1.315 puts those same stations at 1.6-1.8: green, as they always should have been.
+★★★ **THE COLOUR DISTRIBUTION WAS ITSELF EVIDENCE OF THE SCALE ERROR**, and it needed no
+transmitter, no analyser and no second instrument — the thresholds were right and the measurement
+was low. Invisible on one station; obvious across hundreds. ★ Worth remembering as a check in its
+own right: when a verdict band is almost never reached, suspect the measurement before the band.
+
+### ▶ Verified on air (Lenovo, RSP1A, Heart 96.6, 5.6.64)
+| | before | after | predicted |
+|---|---|---|---|
+| avg | 1.4 | **1.8** | 1.4 x 1.315 = 1.84 |
+| peak | 2.6 | **3.2** | 2.6 x 1.205 = 3.13 |
+| raw | 2.0 | **2.6** | 2.0 x 1.315 = 2.63 |
+All within a rounding step, and the verdict moved "weak" -> "nominal".
+★ `raw 2.6` vs `avg 1.8` is a ratio of 1.44 — above 1.414, so **the guard band is still clamping**
+on a real band. That is the separate environmental fault; on Onfliner's clean bench no `raw` showed
+at all. Both conditions are now visible rather than hidden.
