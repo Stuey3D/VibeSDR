@@ -138,3 +138,6 @@ directory/public/mapdata/
 directory/public/mapkit/
 # The packaged detail tarball is a release artefact, rebuilt by gen-map-data.mjs on demand.
 dist/mapdata/
+
+# GPU map tile packs (scripts/gen-map-tiles.mjs) — large build output, never committed
+/build/maptiles/
