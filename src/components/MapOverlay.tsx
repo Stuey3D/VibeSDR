@@ -151,8 +151,20 @@ function buildHtml(
   #lmap{position:absolute;inset:0;background:#f2efe9;}
   /* ── GPU hints — markers glide between updates on the compositor ── */
   .leaflet-pane{will-change:transform;}
-  .leaflet-marker-icon.glide{transition:transform 2.2s linear;will-change:transform;}
+  /* ★★★ NO PER-MARKER will-change. It promotes EVERY marker to its own compositor layer, and
+     on a busy receiver that is 600+ layers — far past any browser's budget. The symptom is
+     unmistakable once you know it: Stuart, 2026-09-27, "the map only updates one aircraft at a
+     time". That is not the code updating them in sequence; it is the browser only managing one at
+     a time, each setLatLng forcing its own style recalculation and composite, so a single pass
+     takes seconds and you watch them move in single file.
+     ★★ The transition stays — that is the gliding Stuart wants — but the compositor decides what
+     to promote, which is what it is good at. The pane above still gets the hint, once, for all of
+     them together.
+     ★ body.nog kills the transition outright while zooming, and now also when there are simply
+     too many aircraft to animate honestly — see AC_GLIDE_MAX. */
+  .leaflet-marker-icon.glide{transition:transform 2.2s linear;}
   body.nog .leaflet-marker-icon.glide{transition:none;}
+  body.nogmany .leaflet-marker-icon.glide{transition:none;}
   .leaflet-fade-anim .leaflet-tile{will-change:opacity;}
   /* skin map theming */
   .leaflet-tile{filter:brightness(0.65) saturate(0.7);}
@@ -512,6 +524,15 @@ document.getElementById('legbtn').addEventListener('click',function(e){
 });
 
 // Marker glide must not fight Leaflet's zoom repositioning
+/* ★★★ PAST THIS MANY AIRCRAFT, STOP PRETENDING TO ANIMATE. A 2.2 s transition on 600 markers
+ *  is not a smooth glide, it is a queue — and the queue is what makes the whole map feel broken.
+ *  Below the threshold the animation is the thing Stuart wants ("that animation when it works is
+ *  awesome"); above it, honest jumps beat a stutter.
+ *  ★ Re-evaluated on every update, so a receiver that quietens down starts gliding again. */
+var AC_GLIDE_MAX = 220;
+window.__acGlideCheck = function(n){
+  document.body.classList.toggle('nogmany', n > AC_GLIDE_MAX);
+};
 map.on('zoomstart',function(){document.body.classList.add('nog');});
 map.on('zoomend',function(){setTimeout(function(){document.body.classList.remove('nog');},60);});
 // Orientation change → relayout
@@ -804,6 +825,9 @@ if(KIND==='hfdl'){
     hostFetch('/addon/hfdl/aircraft').then(function(data){ if(!data) throw 0; return data; }).then(function(data){
       var ac=Array.isArray(data)?data:[];
       cnt.textContent=ac.length;
+      /* ★ Decide whether gliding is honest at this many aircraft BEFORE moving any of them, so
+       *  the class is already right for this pass rather than one poll behind. */
+      if(window.__acGlideCheck)window.__acGlideCheck(ac.length);
       var latest=null;
       ac.forEach(function(a){
         if(a.lat==null||a.lon==null)return;
