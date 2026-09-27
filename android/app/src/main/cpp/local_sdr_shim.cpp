@@ -2737,7 +2737,7 @@ static std::atomic<int>      g_tunerBwHz{0};
  *  ★★ AND IT WIDENS WHEN THE VIEW LEAVES THE VFO. Unlock the view and pan across the band and the
  *  filter opens to cover wherever you are looking: "the zoom aware IF filter needs to automatically
  *  widen when a user unlocks the view from the VFO and pans the spectrum across." */
-static std::atomic<bool>     g_tunerBwAuto{false};
+static std::atomic<bool>     g_tunerBwAuto{true};
 /* ══ AUTO BANDWIDTH — the TEF6686's trick, in the DEMODULATOR ═══════════════════════════════════
  * ★★★ STUART FOUND THIS ON A REAL TEF6686 (2026-08-24): "If you disable auto bandwidth it becomes
  *     really messy and noisy, but with it on the bandwidth is always adjusting dynamically with
@@ -5536,7 +5536,6 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  ★ A CEILING ONLY. Zooming IN still goes under it, which is the whole point above. */
         int selectivityCap = (int)std::lround(sampleRate * 0.6);
         if (selectivityCap < 1000000) selectivityCap = 1000000;
-        if (want > selectivityCap) want = selectivityCap;
         /* ★★★ AND THE OWNER'S OWN CEILING FOR THIS BAND, WHICH BEATS THE AUTOMATIC ONE.
          *  Stuart, 2026-09-27: "keep auto filter as it is for now, that works for most things, but
          *  we have a per band maximum so that in this case I'd tell it never expand past 1.2MHz on
@@ -5548,8 +5547,36 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  ✗ DAB, a full-rate raw IQ consumer and (in time) ADS-B override this and take the full
          *    sample-rate width — those three genuinely need the whole capture. DAB returns at the
          *    top of this function and raw IQ overrides below, so neither reaches this line. */
+        /* ★★★ THE OWNER'S FIGURE REPLACES THE DEFAULT — IT DOES NOT SIT UNDER IT.
+         *  ✗ This first clamped `want` to the owner's number AFTER the 60 % cap, so the per-band
+         *  setting could only ever NARROW: an owner wanting 1.8 MHz at 2.048 MS/s had no way to
+         *  ask, because 1.23 MHz had already been imposed. A knob that only turns down from a
+         *  number you cannot change is not the adjustable setting Stuart asked for, and he spotted
+         *  it ("Did you just hardcode a limit into something I said needed to be user
+         *  adjustable?") before it shipped.
+         *  ★★ So 60 % is the DEFAULT — what happens when nobody has said otherwise — and a
+         *     per-band figure is the ceiling in force instead of it, above or below. That is how a
+         *     default should behave; the alternative is a limit wearing a default's clothes.
+         *  ★ Still bounded by `captureWide` above: nothing can ask for more filter than there is
+         *    capture. And zooming IN still narrows below whichever ceiling applies. */
         const int ownerIfCap = LocalSdrShim::ifCapAtHz(rf);
-        if (ownerIfCap > 0 && want > ownerIfCap) want = ownerIfCap;
+        /* ★★★ AND THE BAND'S LOCK GOVERNS THE FILTER AS WELL AS THE GAIN. Stuart, 2026-09-27:
+         *  "that way the button to lock the gain can lock the gain and the filter; without it the
+         *  filter can still move like the gain, with auto filter width and auto gain" — and then
+         *  plainly: "with the lock enabled the FM Band gets a set gain and set filter with no user
+         *  adjustable options."
+         *  ★★ So the lock means the same thing for both, which is the point of reusing it: a
+         *     LOCKED band's width is the SETTING — the zoom does not narrow under it either — and
+         *     an UNLOCKED band's width is a ceiling it may still move below. Exactly the
+         *     "RF 7 · IF 25 🔒 versus up to RF 7 · IF 20" distinction the gain chips already draw.
+         *  ★ A band with no IF width of its own is untouched by its lock here; locking a gain
+         *    ceiling was never a statement about the filter. */
+        if (ownerIfCap > 0 && LocalSdrShim::gainLockedAt(rf)) {
+            want = ownerIfCap;
+        } else {
+            const int ceiling = ownerIfCap > 0 ? ownerIfCap : selectivityCap;
+            if (want > ceiling) want = ceiling;
+        }
         if (want < 350000) want = 350000;
         /* ★★★ NEVER SWITCH THE FILTER OFF. THIS LINE WAS THE GHOST ON 105.4.
          *
@@ -14342,6 +14369,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
            + ",\"ifCap\":"
            + std::to_string(LocalSdrShim::ifCapAtHz(
                  LocalSdrShim::instance().listenFrequency()))
+           /* ★★★ AND WHETHER IT IS FIXED RATHER THAN MERELY CAPPED. "With the lock enabled the FM
+            *  Band gets a set gain and set filter with no user adjustable options" (Stuart) — so
+            *  on a locked band the client must offer NO IF control at all, exactly as it offers no
+            *  gain controls there. A client that is not told draws a live-looking menu whose every
+            *  use is a no-op, which is the fault gainLocked exists to prevent.
+            *  ★ Only true where a width is actually set: locking a gain ceiling was never a
+            *    statement about the filter, and greying a working control would be its own bug. */
+           + ",\"ifLocked\":"
+           + std::string((LocalSdrShim::ifCapAtHz(
+                              LocalSdrShim::instance().listenFrequency()) > 0
+                          && LocalSdrShim::gainLockedAt(
+                              LocalSdrShim::instance().listenFrequency()))
+                         ? "true" : "false")
            + ",\"rfCentre\":"
            + std::to_string((long long)llround(
                  LocalSdrShim::instance().rfCentreHz()));

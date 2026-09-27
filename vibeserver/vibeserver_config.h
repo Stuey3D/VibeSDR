@@ -166,7 +166,7 @@ struct Config {
      *     that only works on one radio should not be there".
      *  ★ The shim/JNI setter stays as a no-op so an older app still sending the flag is swallowed.
      *    An old config file keeps the key; it is simply never read. */
-    bool   tunerBwAuto = false;     ///< see RadioConfig::tunerBwAuto
+    bool   tunerBwAuto = true;      ///< see RadioConfig::tunerBwAuto — ON by default, see there
 
     /** ★★ Force the AGC on and refuse to let a listener turn it off. RSP and Airspy HF+ only —
      *  it is the WHOLE feature for the HF+, which has no variable gain to cap and whose AGC is
@@ -460,7 +460,13 @@ struct RadioConfig {
      *  free-tuning receiver (a locked-centre owner chooses selectivity with the SAMPLE RATE
      *  instead, decided once at setup). Persisted for the same reason rtlAgc is: it is the
      *  RADIO's setting, and Stuart had to re-enable it "every time i connect". */
-    bool        tunerBwAuto = false;
+     /* ★★★ DEFAULTS ON (2026-09-27). It defaulted to FALSE, which left the tuner's IF filter
+      *  WIDE OPEN on every fresh RTL server — the whole capture reaching the mixer. Measured
+      *  on a V4 at unchanged gain that is worth 19 dB of SNR, so the out-of-the-box default
+      *  was the degraded one, for exactly the novice on a random wire who cannot know the
+      *  setting exists. An owner who wants the whole capture now says so per band ('all'
+      *  covers the radio) rather than the other way round. */
+    bool        tunerBwAuto = true;
     /** For a MANUAL gain: come down when the front end overloads, and go back up when it eases —
      *  never above the gain that is set. ON by default, because there is nothing it can do that the
      *  owner would not have wanted; the only choice it removes is the choice to keep clipping.

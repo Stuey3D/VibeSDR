@@ -835,46 +835,6 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
              and expects to STAY set. Stuart had to re-enable both on every connect (2026-08-25) —
              the AGC because a client re-asserted its stored value, this one because it had no
              config field at all and lived only in the running process. -->
-        <label class="hide" id="tunerBwAutoRow">
-          <span class="lbl">IF filter &mdash; RTL-SDR</span>
-          <select id="tunerBwAuto">
-            <option value="0">Wide open &mdash; the whole capture reaches the mixer</option>
-            <option value="1">Selective &mdash; about 60% of the sample rate (recommended)</option>
-          </select>
-          <!-- ★★★ THE LABELS USED TO SAY "follows the zoom" / "narrows as a listener zooms in",
-               and on 2026-09-27 that stopped being true: the filter is now a FIXED width sized
-               from the sample rate and the view does not move it at all. Copy that describes a
-               behaviour the code no longer has is worse than no copy, because an owner picks
-               from it (AGENTS.md: when a control moves, fix the copy that says where it is).
-               ★★ And the old "Off" was quietly the WORST setting, while reading like the safe,
-               do-nothing one. Naming it "Wide open" says what it costs. -->
-          <div class="note">The R820T tuner has a real IF filter, and it is the only selectivity
-            ahead of the mixer. <b>Selective</b> keeps it at about 60% of the sample rate &mdash;
-            1.2&nbsp;MHz at 2.048&nbsp;MS/s, 1.5&nbsp;MHz at 2.4 &mdash; so neighbouring
-            transmitters stay out of the front end, where cross-modulation is made. Measured on an
-            RTL-SDR Blog V4 at unchanged gain, that is worth about <b>19&nbsp;dB of
-            signal-to-noise</b>: a band with clean gaps between stations instead of one filled in.
-            <b>Wide open</b> hands the mixer the entire capture and is only worth choosing if you
-            are recording full-rate raw IQ and need every hertz of it &mdash; a full-rate IQ
-            consumer opens the filter by itself anyway, for as long as it runs.
-            <br>The filter no longer follows the zoom. It used to, and widening it reset the gain
-            loop and clicked the audio on AM every time the view moved.</div></label>
-        <label class="hide" id="ifLimitsRow">
-          <span class="lbl">Per-band IF ceiling &mdash; RTL-SDR</span>
-          <input id="ifBwLimits" type="text" placeholder="e.g. fm:1200">
-          <!-- â A plain field rather than the band-picker the gain ceilings use. It is the
-               same RULE and the same parser, but the picker is a lot of machinery for a setting
-               most owners will write once, and a text box that works beats a chip list that is
-               half-built. It can grow into the picker later. -->
-          <div class="note">Stops the filter widening past a figure YOU choose, band by band, in
-            kHz. Write <b>fm:1200</b> to hold FM broadcast at 1.2&nbsp;MHz and leave everything
-            else automatic; several rules are comma separated (<b>fm:1200, air:2400</b>), and band
-            names work as well as <b>88-108:1200</b>. Where two rules cover one frequency the
-            NARROWER wins, as with the gain ceilings.
-            <br>It is a ceiling only: zooming in still narrows below it. The gain readout shows
-            <b>IF 1200 kHz &#128274;</b> on a band you have fixed.
-            <br>DAB, full-rate raw IQ and ADS&#8209;B take the full width regardless &mdash; they
-            need the whole capture, and a ceiling would break them.</div></label>
         <label class="hide" id="gainAgcLockRow" class="row">
           <input type="checkbox" id="gainAgcLock">
           <span class="lbl">Lock VibeAGC on</span>
@@ -968,6 +928,39 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
                  wants: Stuart, 2026-08-28 — "I can lock the gain on FM but allow it to be unlocked
                  but limited for HF." Ticked here it applies to THIS band; pick "All bands" and it
                  is the whole radio, because "all bands" was always just another band. -->
+            <!-- ★★★ THE TUNER'S IF FILTER, PER BAND, AND IT BELONGS WITH THE GAIN CEILINGS.
+                 Stuart, 2026-09-27: "put it with the per band ceilings, so for me now I would
+                 select FM broadcast band, leave the gain untouched but from a dropdown set 1.2MHz
+                 IF filter."
+                 ★★ SET LEVELS, NOT A TYPED FIGURE. The R820T2 quantises to its own coarse steps
+                 — asking for 2048 kHz gives 2800, and 1228 gives 1400 — so a free-text box promises
+                 a precision the hardware has not got, and the padlock would show a number the
+                 owner never typed. These are the SAME widths the listener's menu offers, so what
+                 is set is what is seen.
+                 ★★ AND THE LOCK BELOW GOVERNS BOTH. Stuart: "that way the button to lock the gain
+                 can lock the gain and the filter; without it the filter can still move like the
+                 gain, with auto filter width and auto gain." Unlocked, this is a CEILING and
+                 zooming still narrows under it; locked, it is the width, fixed.
+                 ★ The gain may be left untouched — a band carrying only an IF width is a rule. -->
+            <div class="row" id="gainIfBwRow" style="gap:8px;margin-top:6px">
+              <span class="dim" style="flex:0 0 auto">IF filter for this band</span>
+              <select id="gainIfBw" style="flex:1 1 180px">
+                <option value="">&mdash; automatic &mdash;</option>
+                <!-- ★ 99999 = "as wide as the capture". The clamp to captureWide upstream
+                     turns it into the real figure, so this cannot ask for more filter than
+                     there is signal. It is how "All bands: wide" replaces the global switch
+                     this section took the place of. -->
+                <option value="99999">Wide &mdash; the whole capture</option>
+                <option value="1500">1.5 MHz</option>
+                <option value="1200">1.2 MHz</option>
+                <option value="1000">1.0 MHz</option>
+                <option value="800">800 kHz</option>
+                <option value="600">600 kHz</option>
+                <option value="500">500 kHz</option>
+                <option value="450">450 kHz</option>
+                <option value="350">350 kHz</option>
+              </select>
+            </div>
             <label class="row hide" id="gainLockRow" style="gap:8px;margin-top:10px">
               <input type="checkbox" id="gainLock">
               <span>Lock this band &mdash; the ceiling above is the SETTING, not a limit</span>
@@ -2106,6 +2099,13 @@ function gainSideSet(key, band, val) {
 
 function gainChips() {
   const list = (radio().gainLimits || "").split(",").map(t => t.trim()).filter(Boolean);
+  /* ★★★ A BAND MAY BE HERE FOR ITS FILTER ALONE. gainLimits is the gain ceilings; a rule that
+   *  only sets an IF width has no entry there, and listing from gainLimits alone would accept the
+   *  setting and then never show it — written and never read, from the owner's side of the glass.
+   *  ★ Appended with a ceiling of -1, which the renderer below reads as "no gain limit here". */
+  const ifBw = gainSideList("ifBwLimits");
+  for (const b of Object.keys(ifBw))
+    if (!list.some(e => e.slice(0, e.lastIndexOf(":")) === b)) list.push(b + ":-1");
   const ifs = gainSideList("ifGrLimits"), sp = gainSideList("gainSplits");
   const locks = gainSideList("gainLocks");
   const isHrf = (radio().driver || "") === "hackrf";
@@ -2120,12 +2120,19 @@ function gainChips() {
      * ★ The padlock is the thing the eye finds first in a list of ten bands; "up to" carries the
      *   other case in words rather than leaving it as the absence of a symbol. */
     const lock = locks[band] > 0;
-    let txt = (lock ? "" : "up to ") + "RF " + gainFromRaw(val);
+    /* ★ A filter-only rule has no gain ceiling to describe, so it must not claim one. */
+    let txt = val >= 0 ? (lock ? "" : "up to ") + "RF " + gainFromRaw(val) : "";
     // ★ "IF ≥ 25 dB" — a FLOOR on the reduction, so the ≥ is the right way round and the unit is
     //   the client's. Written the other way it would read as a ceiling and mean its own opposite.
     if (ifs[band] !== undefined && ifs[band] >= 0) txt += " \u00b7 IF \u2265 " + ifs[band] + " dB";
     if (lock && isHrf) txt += " \u00b7 " + (sp[band] !== undefined && sp[band] >= 0 ? sp[band] : 50)
                              + "% LNA";
+    /* ★★ THE FILTER WIDTH, in the chip where the owner checks their work — and the padlock
+     *  below covers it too, because the lock governs both: locked means the gain AND the filter
+     *  are the SETTING, unlocked means both are ceilings that may still move. */
+    if (ifBw[band] > 0) txt += (txt ? " \u00b7 " : "")
+                             + (ifBw[band] >= 99999 ? "IF wide"
+                                : "IF " + ifBw[band] + " kHz");
     if (lock) txt += " \uD83D\uDD12";
     return `<span class="bandChip">${esc(bandLabel(band))} ${esc(txt)}` +
            `<button type="button" data-g="${i}" aria-label="Remove">\u00d7</button></span>`;
@@ -2140,7 +2147,7 @@ function gainChips() {
       //    is exactly how a setting comes back from the dead when the band is added again later.
       const band = gone.lastIndexOf(":") >= 0 ? gone.slice(0, gone.lastIndexOf(":")) : gone;
       if (band) { gainSideSet("ifGrLimits", band, null); gainSideSet("gainSplits", band, null);
-                  gainSideSet("gainLocks", band, null); }
+                  gainSideSet("gainLocks", band, null); gainSideSet("ifBwLimits", band, null); }
       gainChips();
     });
 }
@@ -2148,12 +2155,23 @@ function gainChips() {
 function gainAdd() {
   const band = $("gainPick").value;
   const raw  = gainToRaw($("gainMax").value);
-  // ★ Both halves or nothing: a band with no ceiling is not a rule, and a ceiling with no band
-  //   would silently apply everywhere — the opposite of what someone capping ONE band intends.
-  if (!band || raw < 0) return;
+  /* ★★★ THE IF WIDTH IS THE OTHER HALF OF A BAND RULE NOW, and either alone is enough.
+   *  Stuart, 2026-09-27: "I would select FM broadcast band, leave the gain untouched but from a
+   *  dropdown set 1.2MHz IF filter." Requiring a gain ceiling before a filter width could be
+   *  recorded would make the commonest case — FM needs selectivity, its gain is fine —
+   *  impossible to express. */
+  const ifKHz = parseInt($("gainIfBw").value, 10);
+  const hasIf = isFinite(ifKHz) && ifKHz > 0;
+  // ★ A band is still required: a rule with no band would silently apply everywhere, which
+  //   is the opposite of what someone setting ONE band intends.
+  if (!band || (raw < 0 && !hasIf)) return;
+  gainSideSet("ifBwLimits", band, hasIf ? ifKHz : null);
   const cur = (radio().gainLimits || "").split(",").map(t => t.trim()).filter(Boolean)
                 .filter(e => e.slice(0, e.lastIndexOf(":")) !== band);   // replace, don't duplicate
-  cur.push(band + ":" + raw);
+  /* ★★ ONLY IF A GAIN CEILING WAS GIVEN. Writing "band:-1" for a filter-only rule would put a
+   *  nonsense ceiling in the config and make the chip claim a gain limit nobody set. A band may
+   *  now appear in the list on the strength of its IF width alone — see gainChips. */
+  if (raw >= 0) cur.push(band + ":" + raw);
   radio().gainLimits = cur.join(",");
   // ★ The two companion figures are OPTIONAL and are written for the same band in the same breath —
   //   an IF box left empty simply means "no IF ceiling on this band", which is the behaviour before
@@ -2170,6 +2188,7 @@ function gainAdd() {
   else gainSideSet("gainSplits", band, null);
   $("gainMax").value = "";
   $("gainIfMax").value = "";
+  $("gainIfBw").value = "";
   gainChips();
 }
 
@@ -2272,8 +2291,6 @@ function renderGain() {
   //  ★ A hidden-by-default row needs its unhide written in the SAME edit; there is nothing to see
   //    when it is wrong, which is why this survived a release.
   $("rtlAgcRow").classList.toggle("hide", !isRtl);
-  $("tunerBwAutoRow").classList.toggle("hide", !isRtl);   // ★ RTL only — the others have no such filter
-  $("ifLimitsRow").classList.toggle("hide", !isRtl);      // â same filter, same radios
   // ★★ AND THE LOCK NOW APPLIES TO A DONGLE TOO. It was RSP/HF only because those were the radios
   //    with an AGC to lock; the RTL has one now — ours — and the lock reaches it by the same
   //    setGainLimits(..., agcLock) path. Offering the AGC without the means to fix it on is half a
@@ -2360,8 +2377,6 @@ function renderGain() {
   $("gainRest").value = gainFromRaw(r.restGain);
   // ★ Absent = AGC off. An older config must not read as though the owner had asked for it.
   $("rtlAgc").value = r.rtlAgc ? "1" : "0";
-  $("tunerBwAuto").value = r.tunerBwAuto ? "1" : "0";
-  $("ifBwLimits").value = r.ifBwLimits || "";
   // ★★ AFTER the line above, not before it — this OVERRIDES it, and written the other way round it
   //    was silently undone. Shown as ON and greyed when the lock is on, because that is what the
   //    receiver will actually do; a page that displays "off" for something it is about to run is
@@ -3572,16 +3587,9 @@ function fill() {
   //    a control that will be lost. Every input on this page needs its own handler.
   /* ★★★ ITS OWN LISTENER. This was first appended inside the gainRest handler, so the value was
    *      only ever recorded if the owner happened to edit the REST GAIN field afterwards —
-   *      choosing it and saving stored false, and the config read back `"tunerBwAuto":false` with
+   *      choosing it and saving stored nothing, silently — the control has since been removed, but
    *      the owner insisting they had set it. A control that is collected by somebody else's
    *      handler is not wired up; it is wired up by accident, on a condition nobody stated. */
-  $("tunerBwAuto").addEventListener("change", () => {
-    radio().tunerBwAuto = $("tunerBwAuto").value === "1";
-  });
-  /* â Its own handler, for the reason the comment above gives: a field collected by some
-   *  other control's listener is wired up by accident, on a condition nobody stated. */
-  $("ifBwLimits").addEventListener("change", () => { radio().ifBwLimits = $("ifBwLimits").value.trim(); });
-  $("ifBwLimits").addEventListener("input",  () => { radio().ifBwLimits = $("ifBwLimits").value.trim(); });
   $("rtlAgc").addEventListener("change", () => {
     radio().rtlAgc = $("rtlAgc").value === "1";
     const n = $("gainRestAgcNote");

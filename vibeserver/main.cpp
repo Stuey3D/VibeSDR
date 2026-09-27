@@ -120,7 +120,13 @@ struct Opts {
     std::string gainLimits;              // "fm:250, 0-30M:400" — per-band ceilings
     int         restGain = -1;           // returned to when everybody has left
     bool        rtlAgc = false;          // VibeSDR's own AGC for the dongle — see RadioConfig
-    bool        tunerBwAuto = false;     // tuner IF filter follows the zoom — see RadioConfig
+     /* ★★★ DEFAULTS ON (2026-09-27). It defaulted to FALSE, which left the tuner's IF filter
+      *  WIDE OPEN on every fresh RTL server — the whole capture reaching the mixer. Measured
+      *  on a V4 at unchanged gain that is worth 19 dB of SNR, so the out-of-the-box default
+      *  was the degraded one, for exactly the novice on a random wire who cannot know the
+      *  setting exists. An owner who wants the whole capture now says so per band ('all'
+      *  covers the radio) rather than the other way round. */
+    bool        tunerBwAuto = true;      // tuner IF filter is MANAGED — see RadioConfig
     int         agcLock  = -1;           // 1 = AGC forced on (RSP, Airspy HF+)
     bool        gainLock = false;        // LEGACY radio-wide lock; fallback while gainLocks is empty
     std::string gainLocks;               // which bands are FIXED at their ceiling — see RadioConfig
