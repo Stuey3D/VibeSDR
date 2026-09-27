@@ -529,6 +529,8 @@ document.getElementById('legbtn').addEventListener('click',function(e){
  *  Below the threshold the animation is the thing Stuart wants ("that animation when it works is
  *  awesome"); above it, honest jumps beat a stutter.
  *  ★ Re-evaluated on every update, so a receiver that quietens down starts gliding again. */
+/* ★ MOVES per poll, not markers on screen. 220 aircraft all moving at once (ADS-B) is a
+ *  queue; 220 of 600 sitting still (HFDL) costs nothing to glide. */
 var AC_GLIDE_MAX = 220;
 window.__acGlideCheck = function(n){
   document.body.classList.toggle('nogmany', n > AC_GLIDE_MAX);
@@ -827,7 +829,7 @@ if(KIND==='hfdl'){
       cnt.textContent=ac.length;
       /* ★ Decide whether gliding is honest at this many aircraft BEFORE moving any of them, so
        *  the class is already right for this pass rather than one poll behind. */
-      if(window.__acGlideCheck)window.__acGlideCheck(ac.length);
+      var _moved=0;
       var latest=null;
       ac.forEach(function(a){
         if(a.lat==null||a.lon==null)return;
@@ -855,6 +857,16 @@ if(KIND==='hfdl'){
         // otherwise setLatLng alone rides the CSS transition (GPU glide)
         var sig=acColour(a.last_seen,glowAC===a.key)+'|'+Math.round(hdg/3);
         if(acM[a.key]){
+          /* ★★★ COUNT WHAT ACTUALLY MOVES, NOT WHAT EXISTS. I first gated the glide on the
+           *  NUMBER OF AIRCRAFT, and Stuart corrected it: "with HFDL not all aircraft update at
+           *  once... ADSB you'd have a point." Quite right — HFDL position reports arrive
+           *  sporadically, so a receiver holding 600 aircraft may move a handful in a poll.
+           *  Gliding those is nearly free, and switching the animation off at 600 would have
+           *  killed it on exactly the busy receivers where it looks best.
+           *  ★ ADS-B is the case the gate is really for: everything moving, every second. Counting
+           *    MOVES rather than markers serves both without knowing which protocol is feeding it. */
+          var _p=acM[a.key].getLatLng();
+          if(!_p||Math.abs(_p.lat-a.lat)>1e-6||Math.abs(_p.lng-a.lon)>1e-6)_moved++;
           acM[a.key].setLatLng([a.lat,a.lon]);
           acM[a.key]._d={bearing:hdg,last_seen:a.last_seen};
           if(acM[a.key]._sigr!==sig){
@@ -875,6 +887,10 @@ if(KIND==='hfdl'){
         if(!cur[k]){try{map.removeLayer(acM[k]);}catch(e){}delete acM[k];if(glowAC===k)glowAC=null;}
       });
       fetchGS();
+      /* ★ Decided from the moves this poll actually made — see the note where _moved is
+       *  counted. Re-evaluated every time, so a burst switches the glide off and a quiet
+       *  minute brings it straight back. */
+      if(window.__acGlideCheck)window.__acGlideCheck(_moved);
     }).catch(function(){cnt.textContent='\\u2715';});
   }
   fetchAC();
