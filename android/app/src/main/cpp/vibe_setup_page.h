@@ -2155,17 +2155,28 @@ function gainChips() {
                                 : "IF " + ifBw[band] + " kHz");
     if (lock) txt += " \uD83D\uDD12";
     return `<span class="bandChip">${esc(bandLabel(band))} ${esc(txt)}` +
-           `<button type="button" data-g="${i}" aria-label="Remove">\u00d7</button></span>`;
+           `<button type="button" data-g="${esc(band)}" aria-label="Remove">\u00d7</button></span>`;
   }).join("") || '<span class="dim">No ceilings \u2014 listeners have the full range.</span>';
   for (const b of host.querySelectorAll("button[data-g]"))
     b.addEventListener("click", () => {
-      const arr = (radio().gainLimits || "").split(",").map(t => t.trim()).filter(Boolean);
-      const gone = arr.splice(parseInt(b.getAttribute("data-g"), 10), 1)[0] || "";
-      radio().gainLimits = arr.join(",");
+      /* ★★★ REMOVE BY BAND, NOT BY POSITION. This spliced an INDEX out of gainLimits, and the
+       *  chip list is no longer built from gainLimits alone — a band carrying only an IF width
+       *  has no gain ceiling, so it is appended for display. Its index therefore pointed PAST the
+       *  end of gainLimits, the splice removed nothing, and the × did nothing at all: Stuart,
+       *  2026-09-27, "the X button is not clearing per band gain/IF".
+       *  ★★ I extended the RENDER to include filter-only bands and not the REMOVE. Same rule, two
+       *     readers, one updated — for the third time today. Keying on the band name makes the two
+       *     agree by construction, whichever list the row came from.
+       *  ★ A band with no gain ceiling simply is not in this array, and filtering it out is a
+       *    no-op rather than an error. */
+      const band = b.getAttribute("data-g") || "";
+      radio().gainLimits = (radio().gainLimits || "").split(",").map(t => t.trim())
+        .filter(Boolean)
+        .filter(e => e.slice(0, e.lastIndexOf(":")) !== band)
+        .join(",");
       // ★★ AND TAKE ITS COMPANIONS WITH IT. An IF ceiling or a split for a band that no longer has
       //    a ceiling is a figure nothing reads — invisible here and still in the config file, which
       //    is exactly how a setting comes back from the dead when the band is added again later.
-      const band = gone.lastIndexOf(":") >= 0 ? gone.slice(0, gone.lastIndexOf(":")) : gone;
       if (band) { gainSideSet("ifGrLimits", band, null); gainSideSet("gainSplits", band, null);
                   gainSideSet("gainLocks", band, null); gainSideSet("ifBwLimits", band, null); }
       gainChips();
