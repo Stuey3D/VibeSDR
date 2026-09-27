@@ -75,7 +75,7 @@ const closed = (ring) => {
   return (a[0] === b[0] && a[1] === b[1]) ? ring : [...ring, a];
 };
 
-if (ONLY !== 'relief') {   // (--only=basic still writes both NDJSONs; only the basic pack is tiled)
+if (ONLY !== 'relief') {   // (--only=basic writes and tiles the basic pack only)
 /* ── Writers: one NDJSON per pack, each feature carrying its own layer and zoom range ────────── */
 const sinks = {};
 let count = {};
@@ -90,6 +90,9 @@ function sink(pack) {
  *  once, here, so nothing above has to think about it. The top stays MAXZ (over-zoom covers it). */
 const toML = (z) => Math.max(0, z - 1);
 function emit(pack, layer, [lminzoom, lmaxzoom], geometry, properties = {}) {
+  // ★ --only=basic must not write the DETAIL intermediate: it is gigabytes, and rewriting it on every
+  //   coarse rebuild is what filled the Mac on 2026-09-28 (with the test profiles).
+  if (ONLY === 'basic' && pack !== 'vibemap-basic') return;
   const minzoom = toML(lminzoom), maxzoom = lmaxzoom >= MAXZ ? MAXZ : toML(lmaxzoom);
   if (minzoom > maxzoom) return;
   sink(pack).write(JSON.stringify({ type: 'Feature', tippecanoe: { layer, minzoom, maxzoom },
@@ -191,12 +194,20 @@ for (const [name, lon, lat, rank, kind] of load('tier0', 'regions'))
  *  runways-coarse layer shows it from the same zoom as the detail one. A z6 tile quantises to ~150 m
  *  cells, so an end sits within ~60 m at UK latitudes — about a pixel at z10, far inside the coarse
  *  coastline's own error. With the detail pack in, runways-coarse is dropped (vibesdr:basicOnlyLayers). */
+/* ★★ BROKEN RUNWAYS ARE DROPPED. 17 of 14,173 have an end at 0 / 0,0 in the source (a missing coordinate
+ *  read as zero) or ends tens of km apart. BR-1561 ran from 0°E 59°N to 0,0 — a white line straight down
+ *  the Greenwich meridian through London (Stuart, 2026-09-28, the directory). Nothing real is lost: the
+ *  longest runways in the world are ~5.5 km. */
+const runwayKm = (a, b, c, d) => { const t = Math.PI / 180; return 6371 * Math.hypot((c - a) * t * Math.cos((b + d) / 2 * t), (d - b) * t); };
+let droppedRunways = 0;
 for (const [id, lon1, lat1, lon2, lat2, le, he, ft] of load('tier2', 'runways')) {
+  if (!lon1 || !lat1 || !lon2 || !lat2 || runwayKm(lon1, lat1, lon2, lat2) > 6) { droppedRunways++; continue; }
   const g = { type: 'LineString', coordinates: [[lon1, lat1], [lon2, lat2]] }, props = { id, le: le || '', he: he || '', ft: ft || 0 };
   emit('vibemap-detail', 'runways', [9, MAXZ], g, props);
   emit('vibemap-basic', 'runways', [7, 7], g, props);
 }
 
+console.log(`runways: ${droppedRunways} dropped as broken`);
 await Promise.all(Object.values(sinks).map((s) => new Promise((r) => s.end(r))));
 console.log('features:', count);
 
