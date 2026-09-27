@@ -2004,8 +2004,8 @@ static constexpr int        kHandoverNoticeSec = 15;
 static std::mutex            g_gainLimMtx;
 static vibebands::GainRules  g_gainLimits;
 /** ★ The owner's per-band IF ceiling, in kHz. Same type and same parser as the gain ceilings
- *  above — see setIfLimits. Guarded by g_gainLimMtx, which already covers the sibling list. */
-static vibebands::GainRules  g_ifLimits;
+ *  above — see setIfBwLimits. Guarded by g_gainLimMtx, which already covers the sibling list. */
+static vibebands::GainRules  g_ifBwLimits;
 static std::atomic<int>      g_restGain{-1};
 static std::atomic<bool>     g_agcLock{false};
 // ★ The lock and its two companions share g_gainLimMtx with the ceilings — they are read together
@@ -22220,16 +22220,16 @@ void LocalSdrShim::setGainLimits(const std::string& csv) {
  *  ★ Written in kHz, because that is what the readout says ("IF 1200 kHz"): "fm:1200".
  *    Named bands work as well as "88-108:1200" — parseEntry is ITU-region aware and a typed pair
  *    is not. */
-void LocalSdrShim::setIfLimits(const std::string& csv) {
+void LocalSdrShim::setIfBwLimits(const std::string& csv) {
     std::lock_guard<std::mutex> lk(g_gainLimMtx);
-    g_ifLimits = vibebands::parseGainList(csv);
-    LOGI("IF ceilings: %zu rule(s) from \"%s\"", g_ifLimits.size(), csv.c_str());
+    g_ifBwLimits = vibebands::parseGainList(csv);
+    LOGI("IF ceilings: %zu rule(s) from \"%s\"", g_ifBwLimits.size(), csv.c_str());
 }
 /** The owner's IF ceiling at this frequency, in Hz, or -1 for none. */
 int LocalSdrShim::ifCapAtHz(double hz) {
     std::lock_guard<std::mutex> lk(g_gainLimMtx);
-    if (g_ifLimits.empty()) return -1;
-    const int kHz = vibebands::gainCapAt(g_ifLimits, hz);
+    if (g_ifBwLimits.empty()) return -1;
+    const int kHz = vibebands::gainCapAt(g_ifBwLimits, hz);
     return kHz > 0 ? kHz * 1000 : -1;
 }
 void LocalSdrShim::setRestGain(int gain) {

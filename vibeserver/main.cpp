@@ -125,6 +125,11 @@ struct Opts {
     bool        gainLock = false;        // LEGACY radio-wide lock; fallback while gainLocks is empty
     std::string gainLocks;               // which bands are FIXED at their ceiling — see RadioConfig
     std::string ifGrLimits;            // SDRplay IF ceiling, per band
+    /* ★★ NOT ifGrLimits — and the compiler suggesting that name is why this one is spelled
+     *  out. ifGrLimits is the SDRplay's IF GAIN REDUCTION, a gain setting. ifBwLimits is the
+     *  RTL tuner's IF FILTER WIDTH in kHz, per band, "fm:1200". Two similar names for two
+     *  different things is how the wrong one gets wired. */
+    std::string ifBwLimits;            // RTL tuner IF filter ceiling in kHz, per band
     std::string gainSplits;              // HackRF LNA share of the total, 0-100, per band
     bool        rateLock = false;        // the sample rate is PINNED, not merely capped
     bool        dabRateBoost = false;    // DAB may borrow 2.048 MS/s — see Config::dabRateBoost
@@ -486,6 +491,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.pin = c.pin; o.radioPin = c.radioPin; o.adminPass = c.adminPass; o.trustedProxies = c.trustedProxies;
     o.sessionLimitMin = c.sessionLimitMin;
     o.gainLimits = c.gainLimits; o.restGain = c.restGain; o.agcLock = c.agcLock;
+    o.ifBwLimits = c.ifBwLimits;
     o.gainLock = c.gainLock; o.gainLocks = c.gainLocks;
     o.ifGrLimits = c.ifGrLimits; o.gainSplits = c.gainSplits;
     o.rateLock = c.rateLock; o.dabRateBoost = c.dabRateBoost; o.rawIq = c.rawIq; o.rawIqMax = c.rawIqMax; o.rawIqLanMaxHz = c.rawIqLanMaxHz; o.nbWide = c.nbWide;
@@ -531,6 +537,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.pin = o.pin; c.adminPass = o.adminPass; c.trustedProxies = o.trustedProxies;
     c.sessionLimitMin = o.sessionLimitMin;
     c.gainLimits = o.gainLimits; c.restGain = o.restGain; c.agcLock = o.agcLock;
+    c.ifBwLimits = o.ifBwLimits;
     c.gainLock = o.gainLock; c.gainLocks = o.gainLocks;
     c.ifGrLimits = o.ifGrLimits; c.gainSplits = o.gainSplits;
     c.rateLock = o.rateLock; c.dabRateBoost = o.dabRateBoost; c.rawIq = o.rawIq; c.rawIqMax = o.rawIqMax; c.rawIqLanMaxHz = o.rawIqLanMaxHz; c.nbWide = o.nbWide;
@@ -1736,7 +1743,7 @@ int main(int argc, char** argv) {
                     // ★ In the same breath as the gain ceilings, for the same reason: both are
                     //   the owner's per-band rules and a path that applies one without the
                     //   other enforces half of what the setup screen shows.
-                    LocalSdrShim::setIfLimits(g_runtimeConfig.ifLimits);
+                    LocalSdrShim::setIfBwLimits(g_runtimeConfig.ifBwLimits);
                     // ★ The lock and its two companions ride with the ceilings — they are the same
                     //   setting read a different way, so they must land in the same breath or a
                     //   live save leaves the server enforcing half of what the page shows.
@@ -2298,7 +2305,7 @@ int main(int argc, char** argv) {
     //     rather than a lock: the control stays theirs, it simply cannot go past what the owner
     //     allows in that band. Empty limits and -1s are exactly the behaviour before this existed.
     LocalSdrShim::setGainLimits(o.gainLimits);
-    LocalSdrShim::setIfLimits(o.ifLimits);
+    LocalSdrShim::setIfBwLimits(o.ifBwLimits);
     LocalSdrShim::setGainLock(o.gainLock);
     LocalSdrShim::setGainLocks(o.gainLocks);
     LocalSdrShim::setIfGrFloors(o.ifGrLimits);

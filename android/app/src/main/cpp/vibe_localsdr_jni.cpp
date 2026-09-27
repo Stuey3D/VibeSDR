@@ -1130,7 +1130,7 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetGainLimits(JNIEnv* env, jobject,
      *  for the same reason. A separate entry point would be one more pair of ends that can
      *  disagree, which is precisely how the notice path sat wired at one end for months. */
     const char* i = ifCsv ? env->GetStringUTFChars(ifCsv, nullptr) : nullptr;
-    vibe::LocalSdrShim::setIfLimits(i ? i : "");
+    vibe::LocalSdrShim::setIfBwLimits(i ? i : "");
     if (i) env->ReleaseStringUTFChars(ifCsv, i);
     vibe::LocalSdrShim::setRestGain((int)rest);
     vibe::LocalSdrShim::setAgcLock(agcLock == JNI_TRUE);

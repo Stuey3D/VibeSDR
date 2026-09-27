@@ -267,7 +267,7 @@ object VibeServerBoot {
                 adv && cfg.b("agcLock", false),
                 // ★ The per-band IF ceilings, in the same call as the gain ceilings they sit
                 //   beside on the setup page — see the note below about applying half a screen.
-                if (adv) cfg.s("ifLimits") else "")
+                if (adv) cfg.s("ifBwLimits") else "")
             // ★ In the same breath as the ceilings they reinterpret: the lock decides whether those
             //   figures are a limit or the setting, so a path that applies one without the other
             //   enforces half of what the screen shows.

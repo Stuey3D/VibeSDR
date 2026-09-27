@@ -861,7 +861,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
             loop and clicked the audio on AM every time the view moved.</div></label>
         <label class="hide" id="ifLimitsRow">
           <span class="lbl">Per-band IF ceiling &mdash; RTL-SDR</span>
-          <input id="ifLimits" type="text" placeholder="e.g. fm:1200">
+          <input id="ifBwLimits" type="text" placeholder="e.g. fm:1200">
           <!-- â A plain field rather than the band-picker the gain ceilings use. It is the
                same RULE and the same parser, but the picker is a lot of machinery for a setting
                most owners will write once, and a text box that works beats a chip list that is
@@ -2361,7 +2361,7 @@ function renderGain() {
   // ★ Absent = AGC off. An older config must not read as though the owner had asked for it.
   $("rtlAgc").value = r.rtlAgc ? "1" : "0";
   $("tunerBwAuto").value = r.tunerBwAuto ? "1" : "0";
-  $("ifLimits").value = r.ifLimits || "";
+  $("ifBwLimits").value = r.ifBwLimits || "";
   // ★★ AFTER the line above, not before it — this OVERRIDES it, and written the other way round it
   //    was silently undone. Shown as ON and greyed when the lock is on, because that is what the
   //    receiver will actually do; a page that displays "off" for something it is about to run is
@@ -3580,8 +3580,8 @@ function fill() {
   });
   /* â Its own handler, for the reason the comment above gives: a field collected by some
    *  other control's listener is wired up by accident, on a condition nobody stated. */
-  $("ifLimits").addEventListener("change", () => { radio().ifLimits = $("ifLimits").value.trim(); });
-  $("ifLimits").addEventListener("input",  () => { radio().ifLimits = $("ifLimits").value.trim(); });
+  $("ifBwLimits").addEventListener("change", () => { radio().ifBwLimits = $("ifBwLimits").value.trim(); });
+  $("ifBwLimits").addEventListener("input",  () => { radio().ifBwLimits = $("ifBwLimits").value.trim(); });
   $("rtlAgc").addEventListener("change", () => {
     radio().rtlAgc = $("rtlAgc").value === "1";
     const n = $("gainRestAgcNote");
