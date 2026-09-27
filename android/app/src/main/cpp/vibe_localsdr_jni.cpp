@@ -14,6 +14,13 @@
 #include <rtl-sdr.h>
 #include "local_sdr_shim.h"
 #include "vibe_benchmark_dab.h"   // ★ the server benchmark — see nativeRunBenchmark
+/* ★★ vibemap::setDir — where this server keeps its map pack. Android has no directory next to the
+ *  executable and no /usr, which is what vibe_mapdata.h searches, so the path is set explicitly
+ *  from the data dir down in nativeSetAdminPaths.
+ *  ✗ I ADDED THAT CALL AND NOT THIS LINE, and the iOS lib build did not catch it because
+ *    build_ios.sh does not compile this JNI file at all — so a clean compile there proved nothing
+ *    about this one. The Android build is the only thing that compiles it. */
+#include "vibe_mapdata.h"
 // ★ The daemon's own country/network lookup, compiled in here too — see the CMakeLists note.
 #include "../../../../../vibeserver/geoip.h"
 #include "../../../../../vibeserver/asndb.h"
