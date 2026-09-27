@@ -401,7 +401,12 @@ L.control.zoom({position:'bottomright'}).addTo(map);
  * ★★ PROFILES ARE SUBTRACTIONS. A profile decides which FEATURES earn screen space, never the
  *  palette: HFDL is aircraft, so airfields and runways matter and sea ports are noise; the spot
  *  maps ask WHERE someone is, so towns and the locator grid matter and airfields are noise.
- * ★ dataBase is ROOT-RELATIVE on purpose — the document is loaded from the instance origin, so it
+ * ✗ STALE COMMENT, CORRECTED 2026-09-27: dataBase is RELATIVE ('mapdata/v1/'), not root-relative.
+ *   This line went on claiming the opposite after the value changed, and the fetch shim's MARK —
+ *   the one place that has to agree with it — was left matching the old spelling. That cost three
+ *   builds of blue sea. Whatever this says, the shim now matches WITHOUT a leading slash so both
+ *   spellings work; keep it that way rather than re-tightening it.
+ * ★ (Historical) dataBase was ROOT-RELATIVE — the document is loaded from the instance origin, so it
  *  reaches the VibeServer the user is actually listening to, including a local dongle (a loopback
  *  VibeServer) and a Pi in hotspot mode with no uplink.
  * ★★★ AND WHEN THE INSTANCE IS NOT A VIBESERVER, THE APP ANSWERS INSTEAD. An UberSDR serves
@@ -488,7 +493,22 @@ window.__mdChunk = function(id, i, n, part){
 (function(){
   var localOnly = false;
   var real = window.fetch.bind(window);
-  var MARK = '/mapdata/v1/';
+  /* ✗✗✗ THE MARK HAD A LEADING SLASH AND dataBase DID NOT, SO THE SHIM NEVER FIRED.
+   *     dataBase is 'mapdata/v1/' — I made it relative earlier today to fix a different symptom
+   *     — and this tested indexOf('/mapdata/v1/'). A request for 'mapdata/v1/tier0-cover.json'
+   *     does not contain that string, so indexOf returned -1, the shim handed it to the REAL
+   *     fetch, it resolved against file://.../vibemap.html, found nothing, and failed. No
+   *     exception, no console output, no land: Stuart attached Safari's inspector to the page and
+   *     the console was COMPLETELY EMPTY, which is what finally pinned it.
+   *  ★★ AN EMPTY CONSOLE WAS THE FINDING, not a dead end. The page was not crashing, it was
+   *     running perfectly and being handed nothing — and every layer fails to a quiet null by
+   *     design, so silence is exactly what a delivery miss looks like from inside the page.
+   *  ★★ ONE RULE, TWO READERS, and I wrote both halves. The comment on dataBase three hundred
+   *     lines down STILL said "root-relative on purpose" after I made it relative. When a value
+   *     and the thing that matches it live apart, changing one is changing half.
+   *  ★ Matching without the leading slash accepts both spellings, so neither a relative nor a
+   *    root-relative dataBase can break it again. */
+  var MARK = 'mapdata/v1/';
   function ask(file){
     return new Promise(function(res){
       if(!window.ReactNativeWebView){ res(null); return; }
