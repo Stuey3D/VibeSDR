@@ -28,4 +28,8 @@ config.transformer.transformIgnorePatterns = [
   ')/)',
 ];
 
+// ★ The GPU map's bundled files (assets/mapgl, see scripts/sync-mapgl-assets.mjs) ship as native assets:
+//   PMTiles tile packs and MapLibre glyph PBFs. WebP is already an image asset.
+config.resolver.assetExts = [...config.resolver.assetExts, 'pmtiles', 'pbf', 'txt'];   // .txt = the map page's scripts, see sync-mapgl-assets
+
 module.exports = config;

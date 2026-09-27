@@ -34,6 +34,9 @@ import { WebView } from 'react-native-webview';
 import { CABBR } from '../assets/countryAbbr';
 import { type SpotRow } from '../services/DecoderClient';
 import { ensureMapPack, writeMapPage } from '../services/mapPack';
+import { ensureMapglPack } from '../services/mapglPack';
+// ★ The GPU map's style — embedded into the page, because the page creates its map synchronously.
+import VIBEMAP_STYLE from '../../assets/mapgl/vibemap-style.json';
 /* ★★★ THE SHARED BASEMAP RENDERER, AS A STRING. The app has no file server, so the only way
  *     the WebView can run the SAME map as the directory page and the server's web client is to
  *     carry the source and inject it. ★★ It CONTAINS BACKTICKS, so it may only ever be
@@ -82,9 +85,13 @@ interface MapOverlayProps {
 
 function buildHtml(
   kind: MapKind, baseUrl: string, uuid: string,
-  opts?: { local?: boolean; wsBase?: string | null; rxLat?: number | null; rxLon?: number | null },
+  opts?: { local?: boolean; wsBase?: string | null; rxLat?: number | null; rxLon?: number | null; gl?: boolean },
 ): string {
   const local = !!opts?.local;
+  /* ★★★ THE GPU MAP (vibemapgl.js, route B): MapLibre GL JS in this same WebView, drawing our own
+   *  tiles from <documents>/mapgl/. The page's HFDL / spots code is unchanged — vibemapgl-compat.js
+   *  answers its Leaflet calls with the GPU map underneath. Off (gl false) = today's Leaflet page. */
+  const gl = !!opts?.gl;
   const base = baseUrl.replace(/\/+$/, '');
   const wsBase = local && opts?.wsBase ? opts.wsBase.replace(/\/+$/, '') : base.replace(/^http/, 'ws');
   const rxLat = opts?.rxLat ?? 0;
@@ -108,6 +115,7 @@ function buildHtml(
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>${VIBEMAP_JS}</script>
+${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="mapgl/vendor/maplibre-gl.js"></script><script src="mapgl/vendor/pmtiles.js"></script><script src="mapgl/vendor/vibemapgl.js"></script><script src="mapgl/vendor/vibemapgl-compat.js"></script>' : ''}
 <style>
   html,body{margin:0;padding:0;height:100%;background:${T.bg};overflow:hidden;}
   body{display:flex;flex-direction:column;font-family:'Courier New',monospace;}
@@ -175,6 +183,20 @@ function buildHtml(
   .leaflet-control-zoom a{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.90);color:rgba(${T.a},0.70);border-color:rgba(${T.a},0.20);}
   .leaflet-bottom{padding-bottom:max(8px,env(safe-area-inset-bottom));}
   .leaflet-control-attribution{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.70);color:rgba(${T.a},0.25);font-size:8px;}
+  /* ★ THE GPU MAP'S CONTROLS WEAR THE SAME CLOTHES as the Leaflet ones above — same colours, font and
+   *  sizes — so switching renderer does not restyle the page. */
+  .maplibregl-popup-content{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);border:1px solid rgba(${T.a},0.30);color:rgba(${T.txt},0.90);font-family:'Courier New',monospace;font-size:11px;border-radius:8px;padding:10px 12px;}
+  .maplibregl-popup-anchor-bottom .maplibregl-popup-tip,.maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,.maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip{border-top-color:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);}
+  .maplibregl-popup-anchor-top .maplibregl-popup-tip,.maplibregl-popup-anchor-top-left .maplibregl-popup-tip,.maplibregl-popup-anchor-top-right .maplibregl-popup-tip{border-bottom-color:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);}
+  .maplibregl-popup-anchor-left .maplibregl-popup-tip{border-right-color:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);}
+  .maplibregl-popup-anchor-right .maplibregl-popup-tip{border-left-color:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);}
+  .maplibregl-popup-close-button{color:rgba(${T.a},0.50);font-size:16px;}
+  .maplibregl-ctrl-group{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.90);border:1px solid rgba(${T.a},0.20);}
+  .maplibregl-ctrl-group button+button{border-top:1px solid rgba(${T.a},0.20);}
+  .maplibregl-ctrl-group button .maplibregl-ctrl-icon{filter:invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg);opacity:0.7;}
+  .maplibregl-ctrl-attrib,.maplibregl-ctrl-attrib.maplibregl-compact{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.70);color:rgba(${T.a},0.45);font-size:8px;}
+  .maplibregl-ctrl-attrib a{color:rgba(${T.a},0.55);}
+  .maplibregl-ctrl-attrib-button{filter:invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg);opacity:0.55;}
   /* skin lsv-hfdl pulse + rings (verbatim keyframes) */
   @keyframes pulseac{0%,100%{filter:drop-shadow(0 0 3px rgba(255,255,80,0.5));}50%{filter:drop-shadow(0 0 10px rgba(255,255,80,1)) drop-shadow(0 0 18px rgba(255,200,0,0.7));}}
   @keyframes pulsegs{0%,100%{filter:drop-shadow(0 0 3px rgba(80,200,255,0.5));}50%{filter:drop-shadow(0 0 10px rgba(80,220,255,1)) drop-shadow(0 0 18px rgba(0,180,255,0.7));}}
@@ -336,6 +358,8 @@ ${!isHfdl ? `
 <script>
 var BASE='${base}', WSBASE='${wsBase}', KIND='${kind}', UUID='${uuid}';
 var LOCAL=${local ? 1 : 0};
+var GL_OK=${gl ? 1 : 0};
+var VM_STYLE=${gl ? JSON.stringify(VIBEMAP_STYLE) : 'null'};
 var RX_LAT=${rxLat || 0}, RX_LON=${rxLon || 0};
 // Maidenhead locator → square-centre lat/lon (on-device FT8 spots carry a grid,
 // not lat/lon). 4- or 6-char; returns null if invalid.
@@ -355,6 +379,22 @@ function abbr(c){if(!c)return'';var s=String(c).trim();if(CABBR[s])return CABBR[
 // the device least able to afford it. Canvas draws them into one element for the same picture.
 // ★ It changes VECTOR layers only: the aircraft and ground-station divIcons stay DOM, which is
 //   what they must be — they carry the CSS glide and pulse animations.
+/* ★★★ THE SWITCH. With WebGL 2 and the map files on disk, the GPU map is created here and
+ *  window.L becomes the adapter, so every L.marker / flyToBounds below lands on the GPU map. Anything
+ *  else — no WebGL 2, files missing, an exception — leaves Leaflet exactly as it was. */
+var GLVM=null;
+function glLoad(path,kind){return new Promise(function(res){try{var x=new XMLHttpRequest();x.open('GET',path);
+  x.responseType=kind==='text'?'text':'arraybuffer';
+  x.onload=function(){res((x.status===0||x.status===200)&&x.response?x.response:null);};
+  x.onerror=function(){res(null);};x.send();}catch(e){res(null);}});}
+if(GL_OK&&window.VibeMapGL&&window.VibeMapGLCompat&&VM_STYLE){
+  try{
+    GLVM=VibeMapGL.createNow(document.getElementById('lmap'),{style:VM_STYLE,load:glLoad,base:'mapgl/',
+      profile:(KIND==='hfdl'?'aero':'spots'),center:[0,30],zoom:1});
+    if(GLVM){window.L=VibeMapGLCompat.install(GLVM);window.__GL=true;
+      GLVM.ready.catch(function(e){console.error('GPU map: '+e);});}
+  }catch(e){console.error('GPU map unavailable: '+e);GLVM=null;}
+}
 var map=L.map('lmap',{zoomControl:false,attributionControl:true,fadeAnimation:true,zoomAnimation:true,markerZoomAnimation:true,preferCanvas:true})
   .setView([30,0],2);
 L.control.zoom({position:'bottomright'}).addTo(map);
@@ -568,7 +608,7 @@ window.__mdChunk = function(id, i, n, part){
     });
   };
 })();
-var VM = VibeMap.attach(map, {
+var VM = window.__GL ? null : VibeMap.attach(map, {
   /* ★★★ RELATIVE, NOT ROOT-RELATIVE, AND THE SLASH IS THE WHOLE DIFFERENCE. The page now lives on
    *  disk at <documents>/vibemap.html with the pack unpacked to <documents>/mapdata/v1/, so
    *  'mapdata/v1/x.json' resolves to the file beside it. A LEADING slash on a file:// document
@@ -732,6 +772,17 @@ if(KIND==='hfdl'){
   // skin rings — overlay-pane divs, CSS animation, self-removing
   var ringAC=null, ringGS=null;
   function placeRing(latlng,cls){
+    /* ★ On the GPU map a ring is a zero-size marker MapLibre keeps in place, with the ring INSIDE it:
+     *  the ring animates its own transform (scale + centring), which MapLibre would overwrite if it
+     *  were the marker element itself. */
+    if(window.__GL){
+      var wrap=document.createElement('div');wrap.style.width='0';wrap.style.height='0';
+      var ring=document.createElement('div');ring.className='ring '+cls;ring.style.left='0';ring.style.top='0';
+      wrap.appendChild(ring);
+      var gm=new maplibregl.Marker({element:wrap,anchor:'center'}).setLngLat([latlng.lng,latlng.lat]).addTo(map._gl);
+      wrap._mk=gm;wrap._tid=setTimeout(function(){gm.remove();},4400);
+      return wrap;
+    }
     var pane=map.getPane('overlayPane');if(!pane)return null;
     var el=document.createElement('div');
     el.className='ring '+cls;
@@ -740,7 +791,7 @@ if(KIND==='hfdl'){
     el._tid=setTimeout(function(){if(el.parentNode)el.parentNode.removeChild(el);},4400);
     return el;
   }
-  function removeRing(el){if(!el)return;clearTimeout(el._tid);if(el.parentNode)el.parentNode.removeChild(el);}
+  function removeRing(el){if(!el)return;clearTimeout(el._tid);if(el._mk){el._mk.remove();return;}if(el.parentNode)el.parentNode.removeChild(el);}
 
   /* ★★★ THE TILE PREWARM IS GONE, AND REMOVING IT IS THE FIX FOR WHAT IT EXISTED TO HIDE.
    *     It fetched the destination's OSM tiles before a flyTo, because Leaflet asks for tiles when
@@ -1206,10 +1257,20 @@ export default function MapOverlay(
   useRepeatingKeys(visible, (k: string) => { if (k === 'Escape') closeRef.current(); }, []);
   useEffect(() => { if (!disconnected) setIgnored(false); }, [disconnected]);
   const injected = useRef<Set<string>>(new Set());
+  /* ★★ THE GPU MAP'S FILES FIRST: copied into <documents>/mapgl/ once (mapglPack.ts). Until that
+   *  answers, no page is built; if it FAILS, the page is built for Leaflet — a map, never a hole. */
+  const [glOk, setGlOk] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!visible || glOk !== null) return;
+    let dead = false;
+    ensureMapglPack().then(() => { if (!dead) setGlOk(true); })
+      .catch((e) => { console.warn('GPU map files unavailable, using Leaflet:', e); if (!dead) setGlOk(false); });
+    return () => { dead = true; };
+  }, [visible, glOk]);
   const html = useMemo(
-    () => (kind ? buildHtml(kind, baseUrl, sessionUuid,
-      { local, wsBase: wsBaseOverride, rxLat, rxLon }) : ''),
-    [kind, baseUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon],
+    () => (kind && glOk !== null ? buildHtml(kind, baseUrl, sessionUuid,
+      { local, wsBase: wsBaseOverride, rxLat, rxLon, gl: glOk }) : ''),
+    [kind, baseUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon, glOk],
   );
   /* ★★★ THE PAGE IS WRITTEN TO DISK BESIDE THE MAP PACK AND LOADED FROM THERE.
    *
