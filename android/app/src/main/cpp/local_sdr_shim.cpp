@@ -5449,25 +5449,51 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *     areas." The widest view wins, which means a shared radio opens up automatically and
          *     a single listener still gets the full selectivity — no policy switch needed for
          *     either case. */
-        double half = rxBwHz * 0.5;
-        {
-            const double span = displaySpan() / zoomFactor.load();
-            half = std::max(half, std::fabs(viewCenter.load() - rf) + span * 0.5 + rxBwHz * 0.5);
-            /* ★★★ BUT NOT ON A SHARED DIAL (2026-09-22). There is ONE view for everybody there,
-             *     and the server states it; a joiner's default full-span view is not a request,
-             *     it is a client that has not adopted yet. Counting it walked the filter open four
-             *     rungs on every join — four AGC resets, the blip Stuart heard when a second user
-             *     connected. "The server doesnt need to accomodate the joiners span." Widest-view-
-             *     wins stays for per-listener-VFO radios, where user 2 really has their own view. */
-            if (!vsSharedDial())
-            for (auto& pr : allSpecPeers()) {
-                auto c = dspFor(pr.sock);
-                if (!c || c->viewSpanHz <= 0) continue;
-                half = std::max(half,
-                    std::fabs(c->viewCentreHz - rf) + c->viewSpanHz * 0.5 + rxBwHz * 0.5);
-            }
-        }
-        int want = (int)std::lround(half * 2.0);
+        /* ★★★ THE FILTER NO LONGER FOLLOWS THE VIEW AT ALL (2026-09-27). It used to be
+         *  `half = max(rxBw/2, |viewCentre - rf| + span/2 + rxBw/2)` plus every peer's span, so
+         *  zooming OUT walked the tuner's IF wide open. THREE separate faults came out of that,
+         *  and the third is what settled it:
+         *
+         *  1. ★★★ NINETEEN DECIBELS. Measured on the Pi 2 with an RTL-SDR Blog V4 at UNCHANGED
+         *     gain (48.0 dB both ways — only the filter moved): IF 2800 kHz gave 24 dB SNR with
+         *     the band filled in; IF 1200 kHz gave 44 dB with black gaps between stations. The ADC
+         *     peak rose -9.5 -> -3.4 dBFS at the same gain, which says where the converter's range
+         *     was going: into neighbouring transmitters, not the wanted station. It is also why
+         *     the overload never fires on a wire antenna — never enough WANTED signal to trip it.
+         *     105.4, the ghost of if_filter_was_never_programmed, came back as Capital.
+         *  2. ★★★ EVERY WIDENING FORGETS THE AGC. See the `widened` branch below: zooming out
+         *     calls agcForget and arms a fast cut, so a zoom in and back out threw away the gain
+         *     loop's state twice. We spent a day proving that loop is sensitive to exactly this.
+         *  3. ★★★ AND IT CLICKS. Stuart, choosing this: "zooming ends up with small clicking
+         *     noises on AM anyway." Every change here is a SYNCHRONOUS USB control transfer on the
+         *     bus carrying the IQ (see the note below) — audible, on the air, for a filter move
+         *     nobody asked for.
+         *
+         *  ★★ SO IT IS A FIXED WIDTH, SIZED FROM THE SAMPLE RATE. Stuart's anchors: "2048 =
+         *     1.2MHz, 2.4 = 1.5MHz so that you arent loosing too much of the overall view when
+         *     zoomed out" — both ~60 % of the capture, expressed as a ratio so it travels to any
+         *     rate instead of being two magic numbers. Zooming can no longer move it in EITHER
+         *     direction, so there is nothing left to reset the AGC, click the audio, or be dragged
+         *     open by a joiner who has not adopted the shared view yet.
+         *  ★ What this gives up: a zoomed-right-in listener no longer gets an extra-narrow IF.
+         *    That was worth less than it cost — the measured 19 dB is all in 2800 -> 1200, and
+         *    1200 -> 400 would buy a smaller increment at the price of a gain reset every time the
+         *    view moved.
+         *  ✗ DAB is untouched (its branch returns above), a MANUAL width is untouched
+         *    (`tunerBwAuto` is checked above), and a full-rate raw IQ consumer still opens it wide
+         *    below — that override comes after this. */
+        int want = (int)std::lround(sampleRate * 0.6);
+        /* ★★ …WITH A FLOOR, BECAUSE A FLAT RATIO EATS A NARROW CAPTURE. Both of Stuart's anchors
+         *  are HIGH rates, where 60 % still leaves a generous view: 2.4 -> 1.44, 2.048 -> 1.23 MHz.
+         *  Applied blindly the same ratio gives 720 kHz at 1.2 MS/s and 576 at 960 kS/s — throwing
+         *  away 40 % of an already narrow view to protect a front end that is only being shown
+         *  1.2 MHz in the first place, which is most of the protection already.
+         *  ★ So never below 1 MHz. At the low rates the capture limit below is what binds and this
+         *    changes nothing; at the high rates, where the 19 dB actually was, the ratio bites. */
+        if (want < 1000000) want = 1000000;
+        /* ★ …and never below what the demodulator itself needs, whatever the rate says. */
+        const int demodNeeds = (int)std::lround(rxBwHz * 1.2);
+        if (want < demodNeeds) want = demodNeeds;
         if (want < 350000) want = 350000;
         /* ★★★ NEVER SWITCH THE FILTER OFF. THIS LINE WAS THE GHOST ON 105.4.
          *
@@ -5529,9 +5555,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  ★ So the cap never drops below 1 MHz. At the low rates `captureWide` above is the
          *    binding limit anyway and this changes nothing; at the high rates, where the 19 dB
          *    actually was, it is the ratio that bites. */
-        int selectivityCap = (int)std::lround(sampleRate * 0.6);
-        if (selectivityCap < 1000000) selectivityCap = 1000000;
-        if (want > selectivityCap) want = selectivityCap;
+        /* ★ (The selectivity ratio itself now lives where `want` is first computed, above — it is
+         *  the width, not a cap on a view-driven figure, because the view no longer drives it.
+         *  ONE rule, in one place: a second copy here is how two numbers drift apart.) */
         /* ★★★ A FULL-RATE RAW IQ CONSUMER SEES THE WHOLE CAPTURE. The IF filter following the
          *  listener's zoom would hand Trunk Recorder a 2.4 MHz window with only the middle
          *  700 kHz in it (Stuart's screenshot, 2026-09-10 02:39: "IF 700 kHz auto" beside a
