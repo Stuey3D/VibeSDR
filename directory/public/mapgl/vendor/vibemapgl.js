@@ -199,8 +199,18 @@
       }
       const style = prepareStyle(o.style, { hasDetail, basicUrl, reliefUrl, detailUrl, profile });
       if (!reliefUrl) { delete style.sources.relief; style.layers = style.layers.filter((l) => l.source !== 'relief'); }
-      map.setStyle(style);
-      await new Promise((res) => (map.isStyleLoaded() ? res() : map.once('style.load', res)));
+      /* ★★★ diff:false, OR `ready` CAN HANG FOREVER. setStyle defaults to applying the new style as a DIFF
+       *  against the sea-only one — and a diff never fires 'style.load'. Whether the wait below then
+       *  finished depended on whether isStyleLoaded() happened to be true at that instant: the HFDL page
+       *  and the directory got through, the DIGITAL SPOTS page did not — so the spot circles (added on
+       *  `ready`), the icons and the greyline never arrived: "72 spots", none drawn (Stuart, build 345).
+       *  A full load always fires 'style.load'. The timeout is so this can never again wait silently. */
+      map.setStyle(style, { diff: false });
+      await new Promise((res) => {
+        if (map.isStyleLoaded()) return res();
+        const t = setTimeout(() => { console.error('vibemapgl: style.load not seen in 10 s — carrying on'); res(); }, 10000);
+        map.once('style.load', () => { clearTimeout(t); res(); });
+      });
       // ★ Credits start COLLAPSED (MapLibre opens its compact panel at first) — a tap on (i) shows them,
       //   as Leaflet's small strip did, without a white panel over the bottom of the map.
       const attrib = container.querySelector && container.querySelector('.maplibregl-ctrl-attrib');
