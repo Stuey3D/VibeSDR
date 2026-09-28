@@ -340,6 +340,12 @@ export type DabScanResult = {
  *  engine does it; see VibeLocalSdrModule.dabQuickScan for how it gets a radio when the server is
  *  not running. `known` = only the stations the running server has already heard, instantly.
  */
+/** ★ What the quick scan is doing right now (opening the radio, starting the receiver, locking…) — polled
+ *  by the settings screen so the wait has words beside the seconds. '' when unknown or idle. */
+export async function dabScanPhase(): Promise<string> {
+  if (!Local?.dabScanPhase) return '';
+  return String(await Local.dabScanPhase());
+}
 export async function dabQuickScan(block: string, known: boolean, blockedModes: string): Promise<DabScanResult> {
   if (!Local?.dabQuickScan) return { ok: false, why: 'this build cannot scan' };
   return JSON.parse(await Local.dabQuickScan(block, known, blockedModes)) as DabScanResult;

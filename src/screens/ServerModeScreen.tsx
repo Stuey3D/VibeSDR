@@ -36,7 +36,7 @@ import {
   getServerLocationMode, setServerLocationMode, getManualServerLocation,
   getResolvedServerLocation,
   setManualServerLocation, resolveLocation, publishLocation,
-  getDabBlocks, dabQuickScan, type DabBlock,
+  getDabBlocks, dabQuickScan, dabScanPhase, type DabBlock,
   type FpsTier, type VibeServerInfo, type VibeServerStatus, type LocationMode,
 } from '../services/vibeServer';
 import { loadActiveEibi } from '../services/eibi';
@@ -435,6 +435,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [dabStations, setDabStations]     = useState<Record<number, { sid: number; label: string }[]>>({});
   const [dabScanBusy, setDabScanBusy]     = useState(false);
   const [dabScanSecs, setDabScanSecs]     = useState(0);
+  /** ★ What the scan is doing (native), shown beside the seconds — see dabScanPhase(). */
+  const [dabScanStage, setDabScanStage]   = useState('');
   const [dabScanMsg, setDabScanMsg]       = useState('');
   const [dabLandNote, setDabLandNote]     = useState('');
   /** ★ "SDR display name" — the radio's name in the server and directory listings. '' = the USB port's. */
@@ -1194,10 +1196,15 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     const ch = landingDabCh;
     const b = dabBlocks[ch];
     if (!b || dabScanBusy) return;
-    setDabScanBusy(true); setDabScanSecs(0); setDabScanMsg('');
+    setDabScanBusy(true); setDabScanSecs(0); setDabScanMsg(''); setDabScanStage('');
     const t0 = Date.now();
-    // ★ Progress, because it takes a while: locking a multiplex is 3-6 s and the names follow it.
-    const tick = setInterval(() => setDabScanSecs(Math.round((Date.now() - t0) / 1000)), 250);
+    // ★ Progress, because it takes a while: the radio is opened and a receiver started around the
+    //   scan itself, then locking a multiplex is 3-6 s and the names follow it. The PHASE is shown
+    //   with the seconds, so a slow step is named rather than looking like a hang.
+    const tick = setInterval(() => {
+      setDabScanSecs(Math.round((Date.now() - t0) / 1000));
+      dabScanPhase().then(setDabScanStage).catch((e) => console.warn('[server] scan phase:', e));
+    }, 500);
     try {
       // ★ known=false: the settings are only on screen while the server is stopped, when there is no
       //   running engine holding a memory of heard stations — so it is always a real scan here.
@@ -2384,7 +2391,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   </TouchableOpacity>
                   <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
                     {dabScanBusy
-                      ? 'Locking onto the multiplex takes a few seconds, then the station names arrive. Up to 15 s.'
+                      ? (dabScanStage ? `${dabScanStage.charAt(0).toUpperCase()}${dabScanStage.slice(1)}\u2026 ` : '')
+                        + 'The radio is started for the scan, locks onto the multiplex in a few seconds, then '
+                        + 'the station names arrive. The scan itself stops at 15 s.'
                       : dabScanMsg || 'Tunes the radio to this block for a few seconds and lists its stations.'}
                   </Text>
                   <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 10 }]}>Station</Text>

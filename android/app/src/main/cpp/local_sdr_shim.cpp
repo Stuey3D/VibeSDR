@@ -1184,6 +1184,18 @@ static std::atomic<double> g_dabSavedRtl{0.0}, g_dabSavedAudio{0.0}, g_dabSavedV
  *  DAB mode reverts VibeAGC to manual every time" (Stuart). Two halves of one setting, and I
  *  saved one of them. */
 static std::atomic<bool>   g_dabSavedAgcOn{false};
+/* ★★★ AND WHERE THE GAIN ACTUALLY WAS (2026-09-28). With VibeAGC running, g_gainTarget is the loop's
+ *  CEILING — the tuner's maximum — not a gain anybody chose, and g_dabSavedGain saved exactly that.
+ *  dabRestore then handed it to setGain() as if it were the owner's figure: the tuner went to 49.6 dB
+ *  in MANUAL ("gain: 49.6 dB", "RTL AGC: off" — the Sony's log on every DAB exit), and the flag was
+ *  switched back on with no ceiling behind it, so the loop believed it was sitting at the top because
+ *  it was. The next DAB entry (a listener, or the setup page's quick scan) inherited 49.6 dB and began
+ *  acquiring a multiplex through a front end at full gain. Reproduced on the Mac against the fake
+ *  source: the first scan's exit re-armed the AGC, the second's wrote 49.6 dB manual.
+ *  ★ This is the gain the RADIO was at on entry, so a return to a carrier with the AGC on starts where
+ *    the loop had it, and the AGC takes over from there. -1 = not known (the loop starts from wherever
+ *    the radio is). */
+static std::atomic<int>    g_dabSavedHwGain{-1};
 /* ★★★ THE IF AGC TARGET WANTS TO BE LOWER FOR DAB, AND THE REASON IS OFDM. A DAB ensemble is
  *     1536 carriers summed, so its peak-to-average ratio is around 10 dB — the peaks are enormous
  *     next to the average the AGC is levelling. An AGC that holds the AVERAGE at -30 dBFS is
@@ -10781,7 +10793,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         rx.requestReset();
         g_vsLockedCentre.store(g_dabSavedCentre.load());
         g_vsLockedRate.store(g_dabSavedRate.load());
-        LocalSdrShim::instance().setGain(g_dabSavedGain.load());
+        /* ★★★ AN AGC CEILING IS NOT A GAIN — see g_dabSavedHwGain. On a radio VibeAGC drives (a dongle, or
+         *  rtl_tcp with a gain table) that was running the AGC when DAB began, put the tuner back where
+         *  the loop HAD it and hand the loop back below (after the frequency is restored, so the per-band
+         *  ceiling is the carrier's, not Band III's). Every other case is exactly as before: a manual gain
+         *  is a decision and comes back as it was. */
+        /* ★ A saved gain of -1 on such a radio IS the AGC ("auto" is VibeAGC on a dongle — see setGain), so
+         *  it counts as the AGC having been on even where the flag had not caught up. Measured on the Mac:
+         *  without this the FIRST exit re-armed the AGC by setGain(-1) and then cleared its flag, leaving the
+         *  ceiling as g_gainTarget for the SECOND entry to save — and the second exit wrote 49.6 dB manual. */
+        const bool agcBack = (dev != nullptr || (useTcp() && tcpHasGain()))
+                          && (g_dabSavedAgcOn.load() || g_dabSavedGain.load() < 0);
+        if (agcBack) {
+            const int hw = g_dabSavedHwGain.load(std::memory_order_relaxed);
+            if (hw >= 0) LocalSdrShim::instance().setGain(hw);   // the starting point only — AGC follows
+        } else {
+            LocalSdrShim::instance().setGain(g_dabSavedGain.load());
+        }
         { const int l = g_dabSavedLna.exchange(-1, std::memory_order_relaxed);
           if (l >= 0 && useSdrplay() && sdrp && l != sdrp->currentLnaState()) {
               LOGI("RSP RF AGC: DAB left — LNA state back to %d, where the carrier had it", l);
@@ -10808,6 +10836,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (rc > 0.0) { rtlCenter.store(rc); tuneHw(rc); }
         if (g_dabSavedAudio.load() > 0.0) audioFreq.store(g_dabSavedAudio.load());
         if (g_dabSavedView.load()  > 0.0) viewCenter.store(g_dabSavedView.load());
+        /* ★★ AND THE AGC BACK IN CHARGE, with its ceiling derived afresh for the frequency we are now on
+         *  (setGain(-1) → setVibeAgcRtl(true): the tuner's top, or this band's cap). The flag alone was
+         *  what used to be restored — a loop told it was on, with its ceiling at the gain it stood on. */
+        if (agcBack) {
+            LocalSdrShim::instance().setGain(-1);
+            if (lastGainTenthDb >= 0)
+                LOGI("[DAB] mode OFF: VibeAGC back in charge from %.1f dB (where it had the carrier)",
+                     lastGainTenthDb / 10.0);
+            else
+                LOGI("[DAB] mode OFF: VibeAGC back in charge");
+        }
         updateZoomView();
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
         /* ★★★ AND RE-ASSERT IT ON THE DSP THREAD, AFTER ANY REBUILD HAS LANDED.
@@ -10868,7 +10907,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         resumeCaptureIdle();
         if (radioReleased.load()) return fail("another program on this server has the radio just now");
         LOGI("[DAB] quick station scan: block %s (up to %.0f s)", vibedab::kBandIII[idx].name, maxSec);
+        /* ★★★ WHERE THE TIME GOES, IN THE LOG (2026-09-28). The Sony took 43 s for a scan whose loop is
+         *  capped at 15, so most of it was spent somewhere this function did not measure. Every phase is
+         *  now stamped — entering DAB, first lock, first FIB, the list complete, handing back — with the
+         *  gain at each, because a scan that acquires through an overloaded front end looks exactly like
+         *  a slow one. */
+        const double tEnter = nowSecs();
         handleControl(nullptr, "{\"type\":\"dab\",\"on\":1,\"channel\":" + std::to_string(idx) + "}");
+        const double enterSecs = nowSecs() - tEnter;
         if (!g_dabMode.load(std::memory_order_relaxed)) {
             { std::lock_guard<std::mutex> lk(clientMtx); if (!nobodyWatchingLocked()) listening = 1; }
             if (!listening) armIdlePark();
@@ -10879,13 +10925,25 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         bool complete = false, everLocked = false, cancelled = false;
         size_t lastN = 0;
         double lastChange = 0.0;
+        double lockAt = -1.0, fibAt = -1.0;
         std::string ensemble;
+        LOGI("[DAB] quick scan: DAB entered in %.1f s, gain %.1f dB%s", enterSecs, lastGainTenthDb / 10.0,
+             g_vibeAgcRtlOn.load(std::memory_order_relaxed) ? " (VibeAGC)" : "");
         for (;;) {
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
             if (g_dabScanCancel.load()) { cancelled = true; break; }
             { std::lock_guard<std::mutex> lk(clientMtx); if (!nobodyWatchingLocked()) { cancelled = true; break; } }
             const double t = nowSecs() - t0;
-            if (g_dab.quality().locked) everLocked = true;
+            const auto q = g_dab.quality();
+            if (q.locked && lockAt < 0) {
+                lockAt = t;
+                LOGI("[DAB] quick scan: locked at %.1f s, gain %.1f dB", t, lastGainTenthDb / 10.0);
+            }
+            if (q.fibRate > 0.0f && fibAt < 0) {
+                fibAt = t;
+                LOGI("[DAB] quick scan: first FIB at %.1f s, gain %.1f dB", t, lastGainTenthDb / 10.0);
+            }
+            if (q.locked) everLocked = true;
             rows = g_dab.playableAudio(&complete);
             bool labelled = !rows.empty();
             for (const auto& r : rows) if (r.label.find_first_not_of(' ') == std::string::npos) { labelled = false; break; }
@@ -10898,6 +10956,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         ensemble = g_dab.ensembleLabel();
         while (!ensemble.empty() && ensemble.back() == ' ') ensemble.pop_back();
         const double took = nowSecs() - t0;
+        const double tExit = nowSecs();
         // ★ Hand it back as a departing listener would — and WITHOUT the "off" message's clearing of
         //   the remembered multiplex (that is a person saying no; this is nobody saying anything).
         g_dabMode.store(false);
@@ -10908,9 +10967,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         bool empty;
         { std::lock_guard<std::mutex> lk(clientMtx); empty = nobodyWatchingLocked(); }
         if (empty && !stopping.load()) armIdlePark();
-        LOGI("[DAB] quick station scan: %s — %zu station(s)%s in %.1f s%s",
+        LOGI("[DAB] quick station scan: %s — %zu station(s)%s in %.1f s%s (DAB entry %.1f s, lock at %.1f s, "
+             "first FIB at %.1f s, hand-back %.1f s; -1 = never)",
              vibedab::kBandIII[idx].name, rows.size(), complete ? " (complete)" : "",
-             took, cancelled ? " — CANCELLED, a listener arrived" : "");
+             took, cancelled ? " — CANCELLED, a listener arrived" : "",
+             enterSecs, lockAt, fibAt, nowSecs() - tExit);
         std::string j = std::string("{\"ok\":true,\"block\":\"") + vibedab::kBandIII[idx].name + "\""
                       + ",\"channel\":" + std::to_string(idx)
                       + ",\"ensemble\":\"" + dabEscape(ensemble) + "\""
@@ -13394,6 +13455,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 g_dabSavedRate.store(g_vsLockedRate.load());
                 g_dabSavedGain.store(g_gainTarget.load(std::memory_order_relaxed));
                 g_dabSavedAgcOn.store(g_vibeAgcRtlOn.load(std::memory_order_relaxed));
+                g_dabSavedHwGain.store(lastGainTenthDb, std::memory_order_relaxed);   // ★ see g_dabSavedHwGain
                 /* ★ The RSP's LNA state too. DAB's rule opens the front end for a weak
                  *   multiplex; back on medium wave that state pinned the IF at 59 and the window
                  *   rule took a rung 7 s after EVERY return (suite runs 1-3, 23:55-00:25, one

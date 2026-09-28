@@ -161,14 +161,33 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
      * when it is serving — a stopped engine has no memory loaded).
      * ★ Several seconds long (up to 15), so never on the bridge thread.
      */
+    /** ★★ WHAT THE SCAN IS DOING NOW, for the screen's progress line — see dabScanPhase(). */
+    @Volatile private var scanPhase = ""
+    /** ★★ The scan's current phase, polled by the settings screen while it waits: the Sony took 43 s
+     *  (2026-09-28) against a promised "up to 15 s", because the radio has to be opened and a private
+     *  engine started and stopped around the engine's own 15 s. A counter with no words beside it
+     *  reads as a hang; the phase says what the time is being spent on. */
+    @ReactMethod
+    fun dabScanPhase(promise: Promise) { promise.resolve(scanPhase) }
+
     @ReactMethod
     fun dabQuickScan(block: String, known: Boolean, blockedModes: String, promise: Promise) {
         Thread {
+            val t0 = android.os.SystemClock.elapsedRealtime()
+            /* ★★★ EVERY PHASE STAMPED IN THE LOG, so the next slow scan names the phase that was slow
+             *  instead of leaving it to be argued about (the engine stamps its own half: entry, lock,
+             *  first FIB, hand-back). */
+            fun phase(p: String) {
+                scanPhase = p
+                Log.i(TAG, "DAB quick scan: +${android.os.SystemClock.elapsedRealtime() - t0} ms — $p")
+            }
             try {
                 val st = org.json.JSONObject(VibeLocalSDR.getVibeServerStatus())
                 val livePort = if (st.optBoolean("running", false)) st.optInt("port", 0) else 0
                 if (livePort > 0) {
+                    phase("scanning $block on the running server")
                     promise.resolve(dabScanHttp(livePort, block, known))
+                    phase("done")
                     return@Thread
                 }
                 if (known) { promise.resolve("{\"ok\":true,\"known\":true,\"services\":[]}"); return@Thread }
@@ -179,6 +198,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
                     promise.reject("no_permission", "Allow this app to use the radio (start the server once), then scan again")
                     return@Thread
                 }
+                phase("opening the radio")
                 stopSpectrumInternal()
                 val conn = mgr.openDevice(dev)
                     ?: run { promise.reject("open_failed", "The radio could not be opened"); return@Thread }
@@ -195,15 +215,21 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
                     VibeLocalSDR.setVibeServerLandingDab(-1, 0)
                     VibeLocalSDR.setUsbModelName(VibeServerBoot.usbModelName(dev))
                     VibeLocalSDR.setBookmarksPath(java.io.File(reactContext.filesDir, "vibe_bookmarks.json").absolutePath)
+                    phase("starting the receiver")
                     val port = VibeLocalSDR.startSpectrum(conn.fileDescriptor, dev.vendorId, dev.productId,
                                                           225_648_000.0, 2_048_000.0, -1, 1024, 5.0, "wfm")
                     if (port <= 0) { promise.reject("start_failed", "The radio would not start for the scan"); return@Thread }
-                    promise.resolve(dabScanHttp(port, block, false))
+                    phase("locking onto $block and reading its station names")
+                    val body = dabScanHttp(port, block, false)
+                    phase("putting the radio away")
+                    promise.resolve(body)
                 } finally {
                     try { VibeLocalSDR.stopSpectrumSync() } catch (t: Throwable) { Log.w(TAG, "scan: stop failed: ${t.message}") }
                     try { conn.close() } catch (t: Throwable) { Log.w(TAG, "scan: close failed: ${t.message}") }
+                    phase("done")
                 }
             } catch (t: Throwable) {
+                phase("failed: ${t.message ?: t}")
                 promise.reject("dab_scan", t.message ?: "$t")
             }
         }.start()
