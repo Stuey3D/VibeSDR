@@ -17,6 +17,7 @@
 //    arrangement and worth keeping. Only the divergence is below.
 import { VibeServerWsClient, LADDERS_FOR } from './VibeServerWsClient';
 import { parseDabMessage, dabSafeText, type DabState } from './dabTypes';
+import { holdNativeHealing } from '../components/AudioPlayer';
 
 export {
   MODE_BANDWIDTHS,
@@ -67,7 +68,25 @@ export class VibeServerClient extends VibeServerWsClient {
    *  ★★ THE HOLD IS SET BEFORE THE SEND AND CLEARED BEFORE THE SEND. A `dab off` that raced its
    *     own reply used to leave the view locked until the next connect; the lock is a client-side
    *     rule about what the user may ask for, so it belongs to the REQUEST, not to the answer. */
+  /* ★★★ EVERY DAB TRANSITION HOLDS THE NATIVE SELF-HEAL — HERE, NOT AT THE CALL SITES. Entering,
+   *     leaving and changing a multiplex, and picking a service, are seconds of frames arriving
+   *     with nothing to play (acquisition + priming), which the heal judged a stall and "repaired"
+   *     mid-lock (Stuart, 2026-09-29: "DAB worked previously to the new audio watchdog"). Every
+   *     sender — the DAB button, the block drum, a DAB bookmark, a mode pick that leaves DAB, the
+   *     wrist — ends in dab()/dabService(), so holding here holds for all of them (ONE RULE, ONE
+   *     READER). 15 s for a multiplex change: a 32-bit server can take that long to lock. 6 s for
+   *     a service inside the tuned multiplex. */
+  static readonly DAB_MUX_HOLD_MS = 15_000;
+  static readonly DAB_SERVICE_HOLD_MS = 6_000;
+  /** The last multiplex / service the SERVER reported — a change we did not ask for (the owner's
+   *  landing after a connect, another listener on the shared dial) is the same pause. */
+  private dabSeenChannel: string | null = null;
+  private dabSeenSid: number | null = null;
+
   dab(on: boolean, channel?: number, sid?: number) {
+    holdNativeHealing(VibeServerClient.DAB_MUX_HOLD_MS,
+      on ? `DAB on${channel !== undefined ? ' block #' + channel : ''}` : 'DAB off');
+    if (!on) { this.dabSeenChannel = null; this.dabSeenSid = null; }
     this.dabHeld = on;
     const m: Record<string, unknown> = { type: 'dab', on: on ? 1 : 0 };
     if (channel !== undefined) m.channel = channel;
@@ -76,7 +95,10 @@ export class VibeServerClient extends VibeServerWsClient {
   }
 
   /** Switch service WITHIN the tuned multiplex — no retune, no re-acquire. */
-  dabService(sid: number) { this.sendSpectrum({ type: 'dab_service', sid }); }
+  dabService(sid: number) {
+    holdNativeHealing(VibeServerClient.DAB_SERVICE_HOLD_MS, `DAB service ${sid}`);
+    this.sendSpectrum({ type: 'dab_service', sid });
+  }
 
   /** ★ Raw IQ out for THIS session — the audio sheet's row. The server answers with `iqout`. */
   iqOut(on: boolean, rate = 48000) { this.sendSpectrum({ type: 'iqout', on: on ? 1 : 0, rate }); }
@@ -86,12 +108,31 @@ export class VibeServerClient extends VibeServerWsClient {
    *  EXPLANATION, not a protocol fault — the panel says why rather than showing a dead button. */
   protected handleServerMessage(msg: Record<string, unknown>): boolean {
     switch (msg.type) {
-      case 'dab':
+      case 'dab': {
+        const st = parseDabMessage(msg);
+        /* ★★ A TRANSITION NOBODY HERE ASKED FOR — the server landing on DAB after a connect, or
+         *    another listener moving the shared dial. Held on a CHANGE only: `dab` arrives every
+         *    second, and holding on each one would switch the heal off for the whole of DAB. (Our
+         *    own requests already held in dab()/dabService(); a second hold only extends it.) */
+        const ch = st.channel || null;
+        const sid = st.sid > 0 ? st.sid : null;
+        if (!this.dabHeld) {
+          holdNativeHealing(VibeServerClient.DAB_MUX_HOLD_MS, `server reports DAB${ch ? ' ' + ch : ''}`);
+        } else if (ch !== null && this.dabSeenChannel !== null && ch !== this.dabSeenChannel) {
+          holdNativeHealing(VibeServerClient.DAB_MUX_HOLD_MS, `server reports DAB block ${ch}`);
+        } else if (sid !== null && this.dabSeenSid !== null && sid !== this.dabSeenSid) {
+          holdNativeHealing(VibeServerClient.DAB_SERVICE_HOLD_MS, `server reports DAB service ${sid}`);
+        }
+        if (ch !== null) this.dabSeenChannel = ch;
+        if (sid !== null) this.dabSeenSid = sid;
         this.dabHeld = true;
-        this.callbacks.onDab?.(parseDabMessage(msg));
+        this.callbacks.onDab?.(st);
         return true;
+      }
       case 'dab_off':
+        if (this.dabHeld) holdNativeHealing(VibeServerClient.DAB_MUX_HOLD_MS, 'server reports DAB off');
         this.dabHeld = false;
+        this.dabSeenChannel = null; this.dabSeenSid = null;
         this.callbacks.onDab?.(null);
         return true;
       case 'iqout':
