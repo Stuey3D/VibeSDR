@@ -37,43 +37,49 @@ export function hasWebGL2(): boolean {
   try { return !!document.createElement('canvas').getContext('webgl2'); } catch { return false; }
 }
 
-let kitPending: Promise<MapGLKit | null> | null = null;
+let basePending: Promise<{ base: string; style: any } | null> | null = null;
 
-/** Can this page draw the GPU map, and with what? Resolved once per page; a failure is retried on
- *  the next call (a server mid-restart must not cost the map for the rest of the visit). */
-export function probeMapGL(): Promise<MapGLKit | null> {
-  if (kitPending) return kitPending;
-  kitPending = (async () => {
-    const base = mapglBase();
-    if (!base) return null;
-    if (!hasWebGL2()) { console.info('GPU map: no WebGL 2 in this browser — using the Leaflet map'); return null; }
-    let style: any = null;
-    try {
-      const r = await fetch(base + 'vibemap-style.json', { cache: 'no-cache' });
-      if (!r.ok) {
-        // ★ An older server (no /mapgl/ yet) says 404 here. Leaflet it is — said, not hidden.
-        console.error(`GPU map: ${base}vibemap-style.json answered HTTP ${r.status} — using the Leaflet map`);
+/** Can this page draw the GPU map, and with what?
+ *  ★ The style is fetched ONCE per page; whether the DETAIL pack is installed is asked on EVERY call.
+ *    It was cached with the rest, so a pack downloaded from the admin page while the page was open was
+ *    not used by the spots map opened afterwards (Stuart, 2026-09-28, Pi 500: "High detail maps
+ *    downloaded but the spots map doesnt seem to be using them"). One HEAD per map opening is nothing.
+ *  A failure is retried on the next call (a server mid-restart must not cost the map for the visit). */
+export async function probeMapGL(): Promise<MapGLKit | null> {
+  if (!basePending) {
+    basePending = (async () => {
+      const base = mapglBase();
+      if (!base) return null;
+      if (!hasWebGL2()) { console.info('GPU map: no WebGL 2 in this browser — using the Leaflet map'); return null; }
+      try {
+        const r = await fetch(base + 'vibemap-style.json', { cache: 'no-cache' });
+        if (!r.ok) {
+          // ★ An older server (no /mapgl/ yet) says 404 here. Leaflet it is — said, not hidden.
+          console.error(`GPU map: ${base}vibemap-style.json answered HTTP ${r.status} — using the Leaflet map`);
+          return null;
+        }
+        return { base, style: await r.json() };
+      } catch (e) {
+        console.error('GPU map: the style could not be loaded — using the Leaflet map', e);
         return null;
       }
-      style = await r.json();
-    } catch (e) {
-      console.error('GPU map: the style could not be loaded — using the Leaflet map', e);
-      return null;
-    }
-    let detail = false;
-    try {
-      const h = await fetch(base + 'vibemap-detail.pmtiles', { method: 'HEAD', cache: 'no-store' });
-      detail = h.status === 200;
-      // ★ 404 is the normal "not installed" answer; anything else is worth a line in the console.
-      if (!h.ok && h.status !== 404) console.error(`GPU map: HEAD vibemap-detail.pmtiles answered HTTP ${h.status}`);
-    } catch (e) {
-      console.error('GPU map: could not ask whether the detail pack is installed', e);
-    }
-    return { base, style, detail };
-  })();
-  kitPending.then((k) => { if (!k) kitPending = null; });
-  return kitPending;
+    })();
+    basePending.then((k) => { if (!k) basePending = null; });
+  }
+  const got = await basePending;
+  if (!got) return null;
+  let detail = false;
+  try {
+    const h = await fetch(got.base + 'vibemap-detail.pmtiles', { method: 'HEAD', cache: 'no-store' });
+    detail = h.status === 200;
+    // ★ 404 is the normal "not installed" answer; anything else is worth a line in the console.
+    if (!h.ok && h.status !== 404) console.error(`GPU map: HEAD vibemap-detail.pmtiles answered HTTP ${h.status}`);
+  } catch (e) {
+    console.error('GPU map: could not ask whether the detail pack is installed', e);
+  }
+  return { base: got.base, style: got.style, detail };
 }
+
 
 /** The loader vibemapgl.js asks for fonts and icons with. A miss is logged and answered null (the
  *  renderer then skips that glyph range or icon — a missing label, never a dead map). */

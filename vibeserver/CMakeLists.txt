@@ -714,7 +714,7 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   set(_vibe_gl_style "${CMAKE_CURRENT_SOURCE_DIR}/../web/mapkit/vibemap-style.json")
   set(_vibe_gl_missing "")
   foreach(_f vendor/maplibre-gl.js vendor/maplibre-gl.css vendor/pmtiles.js vendor/vibemapgl.js
-             vendor/vibemapgl-compat.js vibemap-basic.pmtiles vibemap-relief.pmtiles)
+             vendor/vibemapgl-compat.js vibemap-basic.pmtiles vibemap-relief.pmtiles vibemap-runways.pmtiles)
     if(NOT EXISTS "${_vibe_gl_src}/${_f}")
       list(APPEND _vibe_gl_missing "${_vibe_gl_src}/${_f}")
     endif()
@@ -731,7 +731,7 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
     list(APPEND _vibe_gl_missing "${_vibe_gl_src}/icons/*.png")
   endif()
   if(NOT _vibe_gl_missing)
-    install(FILES "${_vibe_gl_src}/vibemap-basic.pmtiles" "${_vibe_gl_src}/vibemap-relief.pmtiles"
+    install(FILES "${_vibe_gl_src}/vibemap-basic.pmtiles" "${_vibe_gl_src}/vibemap-relief.pmtiles" "${_vibe_gl_src}/vibemap-runways.pmtiles"
                   "${_vibe_gl_style}"
             DESTINATION lib/vibeserver/mapgl)
     install(DIRECTORY "${_vibe_gl_src}/vendor/" DESTINATION lib/vibeserver/mapgl/vendor

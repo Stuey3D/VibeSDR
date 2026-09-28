@@ -414,8 +414,9 @@ if(GL_OK&&window.VibeMapGL&&window.VibeMapGLCompat&&VM_STYLE){
       // ★ Belt to the CSS braces above: no native selection or drag ever starts on this page.
       ['selectstart','dragstart'].forEach(function(t){document.addEventListener(t,function(e){e.preventDefault();},{capture:true});});
       GLVM.ready.catch(function(e){console.error('GPU map: '+e);});
-      // ★ The greyline on the HFDL map (Stuart, 2026-09-27): how many aircraft are flying in the dark.
-      if(KIND==='hfdl')GLVM.setNight(true);}
+      // ★ The greyline on EVERY map (Stuart): HFDL 2026-09-27 — how many aircraft fly in the dark — and the
+      //   digital / CW spots 2026-09-28, where it is propagation information, as in the web client.
+      GLVM.setNight(true);}
   }catch(e){console.error('GPU map unavailable: '+e);GLVM=null;}
 }
 var map=L.map('lmap',{zoomControl:false,attributionControl:true,fadeAnimation:true,zoomAnimation:true,markerZoomAnimation:true,preferCanvas:true})

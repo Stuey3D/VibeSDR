@@ -17,10 +17,10 @@ import path from 'node:path';
 
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const BUILD = path.join(root, 'build/maptiles'), DEST = path.join(root, 'assets/mapgl');
-for (const need of ['vibemap-basic.pmtiles', 'vibemap-relief.pmtiles', 'fonts', 'icons'])
+for (const need of ['vibemap-basic.pmtiles', 'vibemap-relief.pmtiles', 'vibemap-runways.pmtiles', 'fonts', 'icons'])
   if (!existsSync(path.join(BUILD, need))) { console.error(`missing build/maptiles/${need} — run gen-map-tiles / gen-map-glyphs first`); process.exit(1); }
 rmSync(DEST, { recursive: true, force: true }); mkdirSync(DEST, { recursive: true });
-for (const f of ['vibemap-basic.pmtiles', 'vibemap-relief.pmtiles', 'icons']) cpSync(path.join(BUILD, f), path.join(DEST, f), { recursive: true });
+for (const f of ['vibemap-basic.pmtiles', 'vibemap-relief.pmtiles', 'vibemap-runways.pmtiles', 'icons']) cpSync(path.join(BUILD, f), path.join(DEST, f), { recursive: true });
 /* ★★ FONT FOLDERS WITHOUT SPACES IN THE BUNDLE. MapLibre needs them on disk as the font's own name
  *  ("JetBrains Mono Bold/0-255.pbf"), but spaces in BUNDLED asset paths are a known React Native
  *  packaging hazard. So the asset is stored as JetBrains_Mono_Bold/…, and the manifest names the spaced
@@ -72,7 +72,7 @@ console.log(`assets/mapgl: ${files.length} files, ${(total / 1048576).toFixed(1)
  * ★★ RUN BEFORE `wrangler deploy` in directory/ — a stale copy deploys as happily as a fresh one. */
 const DIR_OUT = path.join(root, 'directory/public/mapgl');
 rmSync(DIR_OUT, { recursive: true, force: true }); mkdirSync(path.join(DIR_OUT, 'vendor'), { recursive: true });
-for (const f of ['vibemap-basic.pmtiles', 'vibemap-relief.pmtiles', 'icons', 'fonts']) cpSync(path.join(BUILD, f), path.join(DIR_OUT, f), { recursive: true });
+for (const f of ['vibemap-basic.pmtiles', 'vibemap-relief.pmtiles', 'vibemap-runways.pmtiles', 'icons', 'fonts']) cpSync(path.join(BUILD, f), path.join(DIR_OUT, f), { recursive: true });
 for (const [src, name] of [['web/mapkit/vendor/maplibre-gl.js', 'maplibre-gl.js'], ['web/mapkit/vendor/maplibre-gl.css', 'maplibre-gl.css'],
                            ['web/mapkit/vendor/pmtiles.js', 'pmtiles.js'], ['web/mapkit/vibemapgl.js', 'vibemapgl.js'],
                            ['web/mapkit/vibemapgl-compat.js', 'vibemapgl-compat.js'],

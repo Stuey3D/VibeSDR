@@ -33,8 +33,7 @@
      "rail",
      "roads-b",
      "roads-d",
-     "runways",
-     "runways-coarse"
+     "runways"
     ],
     "places": "major"
    },
@@ -48,8 +47,7 @@
      "rail",
      "roads-b",
      "roads-d",
-     "runways",
-     "runways-coarse"
+     "runways"
     ],
     "places": "all"
    },
@@ -73,8 +71,7 @@
      "rail",
      "roads-b",
      "roads-d",
-     "runways",
-     "runways-coarse"
+     "runways"
     ],
     "places": "countries"
    },
@@ -131,9 +128,6 @@
    "airports-6"
   ],
   "vibesdr:basicOnlyNote": "Without the optional detail pack every 'detail' layer is dropped and these basic layers lose their maxzoom, so the basic data carries on over-zoomed rather than leaving a hole.",
-  "vibesdr:basicOnlyLayers": [
-   "runways-coarse"
-  ],
   "vibesdr:textScale": 1.2
  },
  "glyphs": "GLYPHS_URL",
@@ -255,6 +249,12 @@
      }
     ]
    }
+  },
+  "runways": {
+   "type": "vector",
+   "url": "RUNWAYS_URL",
+   "maxzoom": 10,
+   "attribution": "OurAirports"
   }
  },
  "layers": [
@@ -640,32 +640,9 @@
    }
   },
   {
-   "id": "runways-coarse",
-   "type": "line",
-   "source": "basic",
-   "source-layer": "runways",
-   "minzoom": 8,
-   "paint": {
-    "line-color": "#c9c9b0",
-    "line-width": [
-     "interpolate",
-     [
-      "linear"
-     ],
-     [
-      "zoom"
-     ],
-     8,
-     1.5,
-     12,
-     5
-    ]
-   }
-  },
-  {
    "id": "runways",
    "type": "line",
-   "source": "detail",
+   "source": "runways",
    "source-layer": "runways",
    "minzoom": 8,
    "paint": {

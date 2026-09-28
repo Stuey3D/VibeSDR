@@ -92,7 +92,7 @@ const toML = (z) => Math.max(0, z - 1);
 function emit(pack, layer, [lminzoom, lmaxzoom], geometry, properties = {}) {
   // ★ --only=basic must not write the DETAIL intermediate: it is gigabytes, and rewriting it on every
   //   coarse rebuild is what filled the Mac on 2026-09-28 (with the test profiles).
-  if (ONLY === 'basic' && pack !== 'vibemap-basic') return;
+  if (ONLY === 'basic' && pack === 'vibemap-detail') return;
   const minzoom = toML(lminzoom), maxzoom = lmaxzoom >= MAXZ ? MAXZ : toML(lmaxzoom);
   if (minzoom > maxzoom) return;
   sink(pack).write(JSON.stringify({ type: 'Feature', tippecanoe: { layer, minzoom, maxzoom },
@@ -188,12 +188,13 @@ for (const [name, lon, lat, rank, kind] of load('tier0', 'regions'))
 }
 // ★ Runways as the real centreline between both thresholds, each end labelled with its own
 //   designator — exactly what drawRunways does.
-/* ★★ AND IN THE BASIC PACK TOO (Stuart, 2026-09-27: "this detail level is fine, add the runways and we
- *  are golden"). The basic source is read no deeper than MapLibre z6 (the style's maxzoom) and
- *  over-zoomed from there, so its copy lives in the z6 tiles only (Leaflet [7, 7]) and the style's
- *  runways-coarse layer shows it from the same zoom as the detail one. A z6 tile quantises to ~150 m
- *  cells, so an end sits within ~60 m at UK latitudes — about a pixel at z10, far inside the coarse
- *  coastline's own error. With the detail pack in, runways-coarse is dropped (vibesdr:basicOnlyLayers). */
+/* ★★★ RUNWAYS LIVE IN THEIR OWN SMALL BUNDLED PACK — NOT IN THE DOWNLOAD (Stuart, 2026-09-28: "when our
+ *  users download the high detail pack they only have to do it once not a full new download to fix a
+ *  glitch"). The detail pack is 169 MB and fetched once; runways are data that gets corrected (17 broken
+ *  ones on 2026-09-28). So vibemap-runways.pmtiles (z8-10, full precision, ~1 MB) ships with the app and
+ *  every server and is fixed by a normal update. The basic pack's coarse z6 copy is gone too: one
+ *  accurate source for every device, download or not. (Detail v1 still CONTAINS runways; the style no
+ *  longer reads them.) */
 /* ★★ BROKEN RUNWAYS ARE DROPPED. 17 of 14,173 have an end at 0 / 0,0 in the source (a missing coordinate
  *  read as zero) or ends tens of km apart. BR-1561 ran from 0°E 59°N to 0,0 — a white line straight down
  *  the Greenwich meridian through London (Stuart, 2026-09-28, the directory). Nothing real is lost: the
@@ -203,8 +204,7 @@ let droppedRunways = 0;
 for (const [id, lon1, lat1, lon2, lat2, le, he, ft] of load('tier2', 'runways')) {
   if (!lon1 || !lat1 || !lon2 || !lat2 || runwayKm(lon1, lat1, lon2, lat2) > 6) { droppedRunways++; continue; }
   const g = { type: 'LineString', coordinates: [[lon1, lat1], [lon2, lat2]] }, props = { id, le: le || '', he: he || '', ft: ft || 0 };
-  emit('vibemap-detail', 'runways', [9, MAXZ], g, props);
-  emit('vibemap-basic', 'runways', [7, 7], g, props);
+  emit('vibemap-runways', 'runways', [9, MAXZ], g, props);
 }
 
 console.log(`runways: ${droppedRunways} dropped as broken`);
@@ -212,12 +212,12 @@ await Promise.all(Object.values(sinks).map((s) => new Promise((r) => s.end(r))))
 console.log('features:', count);
 
 /* ── Tiles ───────────────────────────────────────────────────────────────────────────────── */
-for (const pack of ['vibemap-basic', 'vibemap-detail']) {
-  if (ONLY === 'basic' && pack !== 'vibemap-basic') continue;   // ★ --only=basic keeps the existing detail pack
+for (const pack of ['vibemap-basic', 'vibemap-runways', 'vibemap-detail']) {
+  if (ONLY === 'basic' && pack === 'vibemap-detail') continue;   // ★ --only=basic keeps the existing detail pack
   const out = path.join(OUT, `${pack}.pmtiles`);
   // ★ No tile-size or feature limits: tippecanoe's defaults DROP features to fit 500 kB tiles,
   //   which would be a silent change of map. Our tiers are already thinned by design.
-  execFileSync('tippecanoe', ['-o', out, '--force', '-Z0', `-z${pack === 'vibemap-basic' ? 7 : MAXZ}`,
+  execFileSync('tippecanoe', ['-o', out, '--force', `-Z${pack === 'vibemap-runways' ? 8 : 0}`, `-z${pack === 'vibemap-basic' ? 7 : MAXZ}`,
     '--no-feature-limit', '--no-tile-size-limit', '--quiet',
     '-P', path.join(OUT, `${pack}.ndjson`)], { stdio: 'inherit' });
   console.log(`${pack}.pmtiles  ${(statSync(out).size / 1048576).toFixed(1)} MB`);

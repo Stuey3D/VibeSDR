@@ -217,7 +217,7 @@ inline Where resolve(const std::string& encoded, std::string& rel) {
     if (seg.size() == 1) {
         const std::string& f = seg[0];
         if (f == DETAIL_NAME) { rel = f; return Where::Data; }
-        if (f == "vibemap-basic.pmtiles" || f == "vibemap-relief.pmtiles" ||
+        if (f == "vibemap-basic.pmtiles" || f == "vibemap-relief.pmtiles" || f == "vibemap-runways.pmtiles" ||
             f == "vibemap-style.json") { rel = f; return Where::Bundle; }
         return Where::None;
     }

@@ -57,6 +57,7 @@ int main() {
     ok(bundled("vibemap-style.json", "vibemap-style.json"), "the style");
     ok(bundled("vibemap-basic.pmtiles", "vibemap-basic.pmtiles"), "the basic pack");
     ok(bundled("vibemap-relief.pmtiles", "vibemap-relief.pmtiles"), "the relief pack");
+    ok(bundled("vibemap-runways.pmtiles", "vibemap-runways.pmtiles"), "the runways pack");
     ok(bundled("fonts/JetBrains%20Mono%20Bold/0-255.pbf", "fonts/JetBrains Mono Bold/0-255.pbf"),
        "★ a font name with %20 decodes to its directory");
     ok(bundled("icons/vs-aircraft.png", "icons/vs-aircraft.png"), "icons");

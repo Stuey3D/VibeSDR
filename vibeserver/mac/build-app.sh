@@ -198,7 +198,7 @@ GL="$ROOT/directory/public/mapgl"
 if [ -s "$GL/vibemap-basic.pmtiles" ] && [ -s "$ROOT/web/mapkit/vibemap-style.json" ]; then
   rm -rf "$APP/Contents/Resources/mapgl"
   mkdir -p "$APP/Contents/Resources/mapgl/vendor" "$APP/Contents/Resources/mapgl/icons"
-  cp "$GL/vibemap-basic.pmtiles" "$GL/vibemap-relief.pmtiles" "$APP/Contents/Resources/mapgl/"
+  cp "$GL/vibemap-basic.pmtiles" "$GL/vibemap-relief.pmtiles" "$GL/vibemap-runways.pmtiles" "$APP/Contents/Resources/mapgl/"
   cp "$ROOT/web/mapkit/vibemap-style.json" "$APP/Contents/Resources/mapgl/"
   cp "$GL/vendor/"*.js "$GL/vendor/"*.css "$GL/vendor/"LICENSE* "$APP/Contents/Resources/mapgl/vendor/"
   cp "$GL/icons/"*.png "$APP/Contents/Resources/mapgl/icons/"

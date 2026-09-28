@@ -44,11 +44,16 @@
 
   /** The style with this host's URLs, the detail pack's presence and the profile applied — a pure
    *  function of its inputs, so every host gets the same answer from the same facts. */
-  function prepareStyle(src, { hasDetail, basicUrl, reliefUrl, detailUrl, profile }) {
+  function prepareStyle(src, { hasDetail, basicUrl, reliefUrl, detailUrl, runwaysUrl, profile }) {
     const st = JSON.parse(JSON.stringify(src));
     st.glyphs = 'vs://fonts/{fontstack}/{range}.pbf';
     st.sources.basic = Object.assign({}, st.sources.basic, { url: basicUrl });
     st.sources.relief = Object.assign({}, st.sources.relief, { url: reliefUrl });
+    // ★ Runways: their own small bundled pack, so a correction never needs the detail download again.
+    if (st.sources.runways) {
+      if (runwaysUrl) st.sources.runways = Object.assign({}, st.sources.runways, { url: runwaysUrl });
+      else { delete st.sources.runways; st.layers = st.layers.filter((l) => l.source !== 'runways'); }
+    }
     if (hasDetail) {
       st.sources.detail = Object.assign({}, st.sources.detail, { url: detailUrl });
       // ★ Layers that only stand in for detail ones (runways-coarse) go, so nothing is drawn twice.
@@ -169,11 +174,12 @@
       });
       const protocol = new pm.Protocol();
       ml.addProtocol('pmtiles', protocol.tile);
-      let basicUrl, reliefUrl = null, detailUrl = null, hasDetail = false;
+      let basicUrl, reliefUrl = null, detailUrl = null, runwaysUrl = null, hasDetail = false;
       if (o.rangeBase) {
         // ★ A browser: stream by HTTP range, only the tiles in view.
         basicUrl = 'pmtiles://' + o.rangeBase + 'vibemap-basic.pmtiles';
         reliefUrl = 'pmtiles://' + o.rangeBase + 'vibemap-relief.pmtiles';
+        runwaysUrl = 'pmtiles://' + o.rangeBase + 'vibemap-runways.pmtiles';
         if (o.detail) { hasDetail = true; detailUrl = 'pmtiles://' + o.rangeBase + 'vibemap-detail.pmtiles'; }
       } else {
         // ★ The app: each bundled pack read ONCE off disk (milliseconds) and served from memory.
@@ -182,6 +188,9 @@
         if (!b) throw new Error('vibemapgl: the basic pack could not be read');
         protocol.add(new pm.PMTiles(bufferSource('basic', b))); basicUrl = 'pmtiles://basic';
         if (r) { protocol.add(new pm.PMTiles(bufferSource('relief', r))); reliefUrl = 'pmtiles://relief'; }
+        const rw = await o.load(base + 'vibemap-runways.pmtiles', 'arraybuffer');
+        if (rw) { protocol.add(new pm.PMTiles(bufferSource('runways', rw))); runwaysUrl = 'pmtiles://runways'; }
+        else console.error('vibemapgl: vibemap-runways.pmtiles missing — no runways');
         /* ★★ THE OPTIONAL DETAIL PACK (~169 MB) IS NOT READ WHOLE: the host supplies ranged reads
          *  (the app answers them over the bridge from the one file on disk — mapglDetail.ts). Only the
          *  bytes a close-zoom view needs ever cross. */
@@ -197,7 +206,7 @@
           hasDetail = true; detailUrl = 'pmtiles://detail';
         }
       }
-      const style = prepareStyle(o.style, { hasDetail, basicUrl, reliefUrl, detailUrl, profile });
+      const style = prepareStyle(o.style, { hasDetail, basicUrl, reliefUrl, detailUrl, runwaysUrl, profile });
       if (!reliefUrl) { delete style.sources.relief; style.layers = style.layers.filter((l) => l.source !== 'relief'); }
       /* ★★★ diff:false, OR `ready` CAN HANG FOREVER. setStyle defaults to applying the new style as a DIFF
        *  against the sea-only one — and a diff never fires 'style.load'. Whether the wait below then
