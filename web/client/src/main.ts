@@ -12629,11 +12629,13 @@ function formatStep(hz: number): string {
 // debouncing — that is precisely what would break "rapid taps = rapid steps".
 const HOLD_MS = 350;
 const SWEEP_LO = 3;          // steps/sec when the sweep starts
-const SWEEP_HI = 22;         // steps/sec ceiling
-const SWEEP_RAMP_MS = 2500;  // LO -> HI, a continuous ramp rather than gears
+const SWEEP_HI = 15;         // steps/sec ceiling — was 22; ★ slowed 2026-09-28 (Stuart: "it can overwhelm a
+                             //   server especially a slower one"). Between the old 22 and the app's ~11 sends/s
+                             //   (TunerKeys 90 ms coalescing); the echo pacing below still holds it back further.
+const SWEEP_RAMP_MS = 3500;  // LO -> HI, a continuous ramp rather than gears (was 2500 — a gentler climb)
 /* ★★★ AND A CEILING SET BY THE RECEIVER, NOT BY US. Every sweep tick is a tune command on the
- *     spectrum socket and the server answers each one. At the 22/s ceiling that is a step every
- *     45 ms — so against a receiver answering in 1159 ms (a phone under a chroot, over a tunnel,
+ *     spectrum socket and the server answers each one. At the 15/s ceiling (22 before 2026-09-28) that is a step every
+ *     67 ms (45 at 22) — so against a receiver answering in 1159 ms (a phone under a chroot, over a tunnel,
  *     2026-08-26) roughly twenty-five commands are in flight before the first is acknowledged.
  *     The dial then runs away from the radio and the whole receiver feels broken, while a SINGLE
  *     tap on the same server feels fine, because one round trip nobody notices. Stuart: "clicking
