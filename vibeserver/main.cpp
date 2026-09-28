@@ -1710,7 +1710,9 @@ int main(int argc, char** argv) {
              *  the friendly name return like we have on Android"). Folded into the config the page
              *  already fetches; the page reads it back on load and on a poll. */
             std::string j = vsconfig::toJson(out);
-            if (!j.empty() && j.back() == '}') j.insert(j.size() - 1, ",\"dirStatus\":" + vibedir::statusJson());
+            // ★ The JSON ends "}\n", so j.back() was never '}' and dirStatus NEVER reached the setup page
+            //   (found 2026-09-28). Splice before the LAST brace, wherever the trailing whitespace is.
+            if (const auto at = j.rfind('}'); at != std::string::npos) j.insert(at, ",\"dirStatus\":" + vibedir::statusJson());
             /* ★★ THE BAND III BLOCK NAMES, FROM THE TABLE THE RECEIVER TUNES — for the DAB landing
              *  station's block selector, whose stored value is an INDEX into that table. Sent here as
              *  well as in /vibeserver/hardware so a radio that is not running (no hardware answer)
