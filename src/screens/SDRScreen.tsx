@@ -9740,7 +9740,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           setPillBottom((rootH > 0 ? rootH : screenH) - y);
         }}
       >
-        <PanelBoundary name="Controls" autoRetry>
+        <PanelBoundary name="Controls" autoRetry noticeTop={0}>
         <ControlsBar
           srvTzOffsetMin={srvTz.offsetMin}
           srvTzAbbr={srvTz.abbr}
