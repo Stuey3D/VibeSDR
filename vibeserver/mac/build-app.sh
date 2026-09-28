@@ -84,6 +84,15 @@ echo "==> version $VIBE_VER (from CMakeLists.txt)"
 # ★ Derived, not counted: major*10000 + minor*100 + patch. Monotonic while versions go up, needs
 #   no state file, and cannot drift from the version the way a hand-typed counter does.
 VIBE_BUILD=$(echo "$VIBE_VER" | awk -F. '{printf "%d", $1*10000 + $2*100 + $3}')
+# ★ A pre-release (VIBESERVER_PRERELEASE "b1" in CMakeLists.txt) must number BELOW its release and above
+#   the last one: 11.0.0 b1 = 110000 - 100 + 1 = 109901; 11.0.0 itself = 110000. The marketing version
+#   stays plain 11.0.0 (Apple requires digits); the label rides on the GitHub release tag.
+VIBE_PRE=$(sed -n 's/^set(VIBESERVER_PRERELEASE "\([A-Za-z0-9]*\)").*/\1/p' "$ROOT/vibeserver/CMakeLists.txt")
+if [ -n "$VIBE_PRE" ]; then
+  VIBE_PRE_N=$(echo "$VIBE_PRE" | tr -dc '0-9'); VIBE_PRE_N=${VIBE_PRE_N:-1}
+  VIBE_BUILD=$((VIBE_BUILD - 100 + VIBE_PRE_N))
+  echo "==> pre-release $VIBE_PRE"
+fi
 echo "==> build $VIBE_BUILD (derived from $VIBE_VER)"
 
 cat > "$APP/Contents/Info.plist" <<PLIST

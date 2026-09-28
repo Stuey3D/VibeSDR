@@ -184,6 +184,11 @@ set(VIBESERVER_VERSION "${CMAKE_MATCH_1}")
 if(NOT VIBESERVER_VERSION)
   message(FATAL_ERROR "could not read the version from vibeserver/CMakeLists.txt — see the note above")
 endif()
+# ★ The pre-release label (e.g. b1 → 11.0.0~b1) lives on its own line there; read it the same way.
+string(REGEX MATCH "set\\(VIBESERVER_PRERELEASE \"([A-Za-z0-9]*)\"\\)" _vs_unused "${_vs_cmakelists}")
+if(CMAKE_MATCH_1)
+  set(VIBESERVER_VERSION "${VIBESERVER_VERSION}~${CMAKE_MATCH_1}")
+endif()
 # ★ Set only by lite/android/app/build.gradle — see the flavour report in local_sdr_shim.cpp.
 if (VIBE_LITE_APP)
   target_compile_definitions(vibelocalsdr PRIVATE VIBE_LITE_APP=1)

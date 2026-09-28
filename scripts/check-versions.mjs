@@ -64,5 +64,22 @@ else {
   } else ok(`Jr ${jrAll[0]} tracks the app's .${appMinor}`);
 }
 
+// ── V11: ONE MAJOR ACROSS EVERY PRODUCT (docs/BRIEF-v11-compatibility.md §3) ───────────────────
+// ★ Stuart, 2026-09-28: "EVERYTHING becomes V11 … our equivalent of Apple's OS 26 moment." Minor and
+//   patch move independently per component; the MAJOR is shared, so "which V are you on?" has one answer.
+//   Lite and the Mac app read the server's line, so checking the server covers them.
+const vsCmake = read('vibeserver/CMakeLists.txt');
+const serverVer = vsCmake.match(/project\(vibeserver VERSION ([0-9.]+)/)?.[1];
+const serverPre = vsCmake.match(/set\(VIBESERVER_PRERELEASE "([A-Za-z0-9]*)"\)/)?.[1] ?? '';
+const major = (v) => String(v ?? '').split('.')[0];
+console.log(`   .. server ${serverVer}${serverPre ? '~' + serverPre : ''} · app ${want} · Jr ${jrAll[0]}`);
+for (const [name, v] of [['app (app.json)', want], ['Jr', jrAll[0]]]) {
+  if (major(v) !== major(serverVer)) fail(`${name} is major ${major(v)} but the server is major ${major(serverVer)}`);
+  else ok(`${name} shares the server's major (${major(v)})`);
+}
+// ★ A pre-release label belongs to the SERVER package and the GitHub releases only — never the app's
+//   own version string (see the Beta note in src/constants/version.ts).
+if (/[^0-9.]/.test(constTs ?? '')) fail(`APP_VERSION '${constTs}' carries a label — the app's own version must be plain`);
+
 console.log(bad ? `\nFAILED ${bad}\n` : '\nall good\n');
 process.exit(bad ? 1 : 0);

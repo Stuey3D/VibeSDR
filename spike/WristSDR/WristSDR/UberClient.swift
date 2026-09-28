@@ -22,7 +22,7 @@ enum JrVersion {
   ///     minProto is above it is greyed out in the picker.
   static let proto = 1
   static let short: String =
-    (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "1.2"
+    (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "11.0"
 }
 
 

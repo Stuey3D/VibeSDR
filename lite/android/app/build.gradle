@@ -5,7 +5,11 @@ plugins {
 
 def MAIN   = file("../../../android/app/src/main")          // the main app's sources — READ ONLY
 def NATIVE = file("../../native")                            // Lite's API-21 prebuilts
-def serverVersion = (file("../../../vibeserver/CMakeLists.txt").text =~ /project\(vibeserver VERSION ([0-9.]+)/)[0][1]
+def vsCmake = file("../../../vibeserver/CMakeLists.txt").text
+def serverVersion = (vsCmake =~ /project\(vibeserver VERSION ([0-9.]+)/)[0][1]
+// ★ The pre-release label (b1 → 11.0.0~b1-lite) — see VIBESERVER_PRERELEASE in that file.
+def vsPre = (vsCmake =~ /set\(VIBESERVER_PRERELEASE "([A-Za-z0-9]*)"\)/)
+if (vsPre.find() && vsPre.group(1)) serverVersion = serverVersion + "~" + vsPre.group(1)
 
 android {
     // ★ The NAMESPACE stays com.vibesdr.app: the engine's JNI symbols are Java_com_vibesdr_app_*,
@@ -38,7 +42,7 @@ android {
         applicationId 'com.vibesdr.serverlite'
         minSdkVersion 21            // Android 5.0 — a 2017 Fire 7 is 5.1.1 (API 22)
         targetSdkVersion 28         // ★ sideload-only: old enough that an old tablet's rules apply
-        versionCode 4
+        versionCode 5
         versionName serverVersion + "-lite"
         ndk { abiFilters 'armeabi-v7a' }
         externalNativeBuild {
