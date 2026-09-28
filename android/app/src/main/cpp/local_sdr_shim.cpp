@@ -956,6 +956,27 @@ static std::atomic<int>    g_dabChannel{-1};
  *    CLEARED when somebody deliberately switches DAB off — because that is a person saying "I do
  *    not want this", which is exactly the distinction the old teardown could not draw. */
 static std::atomic<int>    g_dabWantChannel{-1};
+/** ★★ AND THE STATION ON IT, so a resume brings back BBC Radio 1 and not merely 12B with nothing
+ *  playing. Remembered beside the block, persisted beside it (`dabSid`), cleared with it. 0 = none. */
+static std::atomic<uint32_t> g_dabWantSid{0};
+/** ★★★ A DAB STATION AS THE LANDING (Stuart, 2026-09-28 — an FM-stop aerial on the TV leaves DAB as
+ *  the only thing worth dropping a new listener on). Block index into kBandIII, -1 = no DAB landing,
+ *  and the service's SId (0 = the block only; the listener picks from the station list).
+ *  ★ Applied through the EXISTING DAB entry — see the landing block in the spectrum accept path —
+ *    never by setting a demodulator called "dab" (the bug noted at the per-client tune path).
+ *  ★ Never applied while "dab" is in the blocked modes or the radio cannot do DAB: the server
+ *    refuses rather than trusting a config that says both. */
+static std::atomic<int>      g_vsLandingDabCh{-1};
+static std::atomic<uint32_t> g_vsLandingDabSid{0};
+/** ★ The owner's display name for this radio (Android's "SDR display name") — see setRadioLabel. */
+static std::mutex            g_vsRadioLabelMtx;
+static std::string           g_vsRadioLabel;
+/** ★ Has any listener arrived since this process started? See the shared-dial arm of the landing. */
+static std::atomic<bool>     g_vsAnySessionYet{false};
+/* ★★★ THE QUICK STATION SCAN (setup page) — one at a time, and a listener arriving CANCELS it. The
+ *  scan borrows an idle radio for a few seconds; the moment somebody wants it, it is theirs. */
+static std::atomic<bool>     g_dabScanActive{false};
+static std::atomic<bool>     g_dabScanCancel{false};
 /* ★★★ THE GAIN EACH BLOCK LAST DECODED AT, in AGC steps below the ceiling. DAB enters at the
  *  AGC's resting gain (12.5 dB on the V4) and a weak block then waits the entry settle plus one
  *  climb per 0.4 s before the first FIB — 3 to 6 s on 10D, which wants ~36 dB. A block that has
@@ -1275,6 +1296,7 @@ static std::atomic<bool>   g_dabLockHeld{false};
  *  never the driver name — so a locked-down V4 is refused and a future wideband radio inherits the
  *  right answer for free. */
 static bool vsDabCapable();
+static bool vsDabCapableHw();   // ★ the same, ignoring the owner's block — see its definition
 // ★ Forward-declared alongside vsDabCapable for the same reason: the DAB entry path refuses
 //   thousands of lines above the definition, and it needs to name WHICH restriction bit.
 static bool vsDabDecoderAvailable();
@@ -10706,6 +10728,120 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              rc / 1e6, ar, g_dabSavedAudio.load() / 1e6);
     }
 
+    /** ★★★ THE QUICK STATION SCAN — the setup page's "what is on 12B?" (DAB landing station, 2026-09-28).
+     *
+     *  Borrows the IDLE radio for a few seconds: enters DAB on the block through the ordinary entry
+     *  (handleControl, the same path a listener and the landing use — rate, centre, IF filter, gain
+     *  memory and clock in their load-bearing order), waits for the ensemble to describe its services,
+     *  and hands the receiver back exactly as a departing listener would (dabRestore) — without
+     *  touching the remembered multiplex, because a scan is nobody saying "leave me on this".
+     *
+     *  ★★ REFUSED WHILE ANYBODY IS ON THE RADIO. It moves the whole capture; on a shared receiver that
+     *     is everybody's dial, and on a one-listener radio it is that listener's station. The answer
+     *     says how many are on, so the owner knows why rather than suspecting the scan.
+     *  ★★ AND A LISTENER ARRIVING MID-SCAN WINS — see dabScanYield(), called from the accept path.
+     *  ★ How long: acquisition is 3-6 s on a weak block (see g_dabGainMem), and the full service
+     *    list (FIG 0/2 + 1/1) follows within a second or two of the first FIB. So: stop as soon as
+     *    the MCI is complete and every row is labelled; stop early at ~8 s if nothing ever locked;
+     *    never past `maxSec`. A scan that finds labels but not a complete MCI returns what it has,
+     *    with `complete:false`, rather than pretending the list is final.
+     *  ★ Every station it hears is also learned as a bookmark by the ordinary DAB path, so the next
+     *    visit to the setup page lists them without a scan (`known=1`). */
+    std::string dabQuickScan(int idx, double maxSec) {
+        auto fail = [](const std::string& why) {
+            return std::string("{\"ok\":false,\"why\":\"") + dabEscape(why) + "\"}";
+        };
+        if (idx < 0 || size_t(idx) >= vibedab::kBandIIICount) return fail("that is not a Band III block");
+        if (g_dabScanActive.exchange(true)) return fail("a station scan is already running on this radio");
+        struct Done { ~Done() { g_dabScanActive.store(false); } } done;
+        g_dabScanCancel.store(false);
+        int listening = 0;
+        { std::lock_guard<std::mutex> lk(clientMtx);
+          if (!nobodyWatchingLocked()) listening = std::max(1, specListenerCountLocked()); }
+        if (listening > 0)
+            return fail(std::string("not while somebody is listening \xe2\x80\x94 ")
+                        + (listening == 1 ? "1 listener is" : std::to_string(listening) + " listeners are")
+                        + " on this radio, and a scan would move their dial. Try again when it is free.");
+        if (g_dabMode.load(std::memory_order_relaxed)) return fail("the radio is already on a multiplex");
+        if (vsModeBlocked("dab")) return fail("DAB is blocked on this radio");
+        if (!vsDabCapable()) return fail(!vsDabDecoderAvailable()
+            ? "this server has no AAC decoder (ffmpeg), so it cannot do DAB"
+            : "this radio cannot reach a DAB multiplex at 2.048 MS/s with its current settings");
+        resumeCaptureIdle();
+        if (radioReleased.load()) return fail("another program on this server has the radio just now");
+        LOGI("[DAB] quick station scan: block %s (up to %.0f s)", vibedab::kBandIII[idx].name, maxSec);
+        handleControl(nullptr, "{\"type\":\"dab\",\"on\":1,\"channel\":" + std::to_string(idx) + "}");
+        if (!g_dabMode.load(std::memory_order_relaxed)) {
+            { std::lock_guard<std::mutex> lk(clientMtx); if (!nobodyWatchingLocked()) listening = 1; }
+            if (!listening) armIdlePark();
+            return fail("the radio would not open that block");
+        }
+        const double t0 = nowSecs();
+        std::vector<vibedab::DabService::LearnRow> rows;
+        bool complete = false, everLocked = false, cancelled = false;
+        size_t lastN = 0;
+        double lastChange = 0.0;
+        std::string ensemble;
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            if (g_dabScanCancel.load()) { cancelled = true; break; }
+            { std::lock_guard<std::mutex> lk(clientMtx); if (!nobodyWatchingLocked()) { cancelled = true; break; } }
+            const double t = nowSecs() - t0;
+            if (g_dab.quality().locked) everLocked = true;
+            rows = g_dab.playableAudio(&complete);
+            bool labelled = !rows.empty();
+            for (const auto& r : rows) if (r.label.find_first_not_of(' ') == std::string::npos) { labelled = false; break; }
+            if (rows.size() != lastN) { lastN = rows.size(); lastChange = t; }
+            if (complete && labelled) break;                           // the whole list, named
+            if (labelled && t > 6.0 && t - lastChange > 3.0) break;    // stable for 3 s — as good as it gets
+            if (!everLocked && t > 8.0) break;                         // nothing on this block here
+            if (t > maxSec) break;
+        }
+        ensemble = g_dab.ensembleLabel();
+        while (!ensemble.empty() && ensemble.back() == ' ') ensemble.pop_back();
+        const double took = nowSecs() - t0;
+        // ★ Hand it back as a departing listener would — and WITHOUT the "off" message's clearing of
+        //   the remembered multiplex (that is a person saying no; this is nobody saying anything).
+        g_dabMode.store(false);
+        dabPrimed_ = false;
+        stopDabClock();
+        dabRestore();
+        applyAutoIf();
+        bool empty;
+        { std::lock_guard<std::mutex> lk(clientMtx); empty = nobodyWatchingLocked(); }
+        if (empty && !stopping.load()) armIdlePark();
+        LOGI("[DAB] quick station scan: %s — %zu station(s)%s in %.1f s%s",
+             vibedab::kBandIII[idx].name, rows.size(), complete ? " (complete)" : "",
+             took, cancelled ? " — CANCELLED, a listener arrived" : "");
+        std::string j = std::string("{\"ok\":true,\"block\":\"") + vibedab::kBandIII[idx].name + "\""
+                      + ",\"channel\":" + std::to_string(idx)
+                      + ",\"ensemble\":\"" + dabEscape(ensemble) + "\""
+                      + ",\"locked\":" + (everLocked ? "true" : "false")
+                      + ",\"complete\":" + (complete ? "true" : "false")
+                      + ",\"cancelled\":" + (cancelled ? "true" : "false")
+                      + ",\"secs\":" + std::to_string(int(took + 0.5))
+                      + ",\"services\":[";
+        bool first = true;
+        for (const auto& r : rows) {
+            std::string l = r.label;
+            while (!l.empty() && l.back() == ' ') l.pop_back();
+            if (l.empty()) continue;
+            if (!first) j += ",";
+            first = false;
+            j += "{\"sid\":" + std::to_string(r.sid) + ",\"label\":\"" + dabEscape(l) + "\"}";
+        }
+        return j + "]}";
+    }
+    /** ★ A listener has arrived: a running scan gives the radio back NOW. Bounded — the scan checks
+     *  every 200 ms, so this normally returns within a fifth of a second. */
+    void dabScanYield() {
+        if (!g_dabScanActive.load()) return;
+        g_dabScanCancel.store(true);
+        LOGI("[DAB] a listener arrived during a quick station scan — cancelling it");
+        for (int i = 0; i < 40 && g_dabScanActive.load(); ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
     /** ★ Has the DAB audio buffer reached its working depth? See the pre-buffer note below. */
     bool dabPrimed_ = false;
     /** ★ Frames of silence emitted to keep the cadence unbroken — published, so a lost super
@@ -13028,7 +13164,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *  distinction the old unconditional teardown could not draw: leaving on purpose
                  *  and simply going away are different answers. */
                 g_dabWantChannel.store(-1, std::memory_order_relaxed);
-                vsPersist("{\"dabChannel\":-1}");   // ★ and on disk: "no" must outlive the process too
+                g_dabWantSid.store(0, std::memory_order_relaxed);
+                vsPersist("{\"dabChannel\":-1,\"dabSid\":0}");   // ★ and on disk: "no" must outlive the process too
                 g_dabMode.store(false);
                 dabPrimed_ = false;
                 stopDabClock();
@@ -15718,7 +15855,67 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (!gov.empty()) j += ",\"governor\":\"" + jsonEscape(gov) + "\"";
                 if (!mhz.empty()) j += ",\"cpuKHz\":" + mhz;
             }
+            /* ★★★ THE DAB LANDING STATION'S TWO FACTS (2026-09-28). `dabHw`: could this radio do DAB
+             *  if its owner had not blocked it — the setup page draws NO toggle at all when it could
+             *  not (an Airspy HF+ tops out below 2.048 MS/s), and uses `dab` (the owner's block
+             *  included) to say that blocking DAB removed the landing. `dabBlocks`: the Band III
+             *  list from vibedab::kBandIII itself, with the ensemble names this aerial has heard,
+             *  so the block selector reads "12B · BBC National" rather than a column of numbers —
+             *  and cannot drift from the list the receiver tunes. */
+            if (!noRadio) {
+                j += std::string(",\"dabHw\":") + (vsDabCapableHw() ? "true" : "false")
+                   + ",\"dab\":" + (vsDabCapable() ? "true" : "false");
+                std::map<int, std::string> heard;
+                { std::lock_guard<std::mutex> lk(g_dabEnsMemMtx); dabEnsLoadLocked(); heard = g_dabEnsMem; }
+                j += ",\"dabBlocks\":[";
+                for (size_t i = 0; i < vibedab::kBandIIICount; ++i) {
+                    if (i) j += ",";
+                    j += std::string("{\"name\":\"") + vibedab::kBandIII[i].name + "\",\"hz\":"
+                       + std::to_string(vibedab::kBandIII[i].centreHz);
+                    auto h = heard.find(int(i));
+                    if (h != heard.end() && !h->second.empty()) j += ",\"ensemble\":\"" + dabEscape(h->second) + "\"";
+                    j += "}";
+                }
+                j += "]";
+            }
             j += "}";
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                          "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(j.size()) + "\r\n\r\n" + j);
+            sock->close();
+            return;
+
+        } else if (reqLine.rfind("GET /vibeserver/dab-scan", 0) == 0) {
+            /* ★★★ THE SETUP PAGE'S QUICK STATION SCAN — see dabQuickScan. Admin-gated: it takes the
+             *  radio for several seconds, which is an owner's decision, not a visitor's. Loopback
+             *  passes (the phone/TV app asking its own server), as for every other owner endpoint.
+             *  `?block=12B` scans; `&known=1` answers from the stations this receiver has ALREADY
+             *  learned on that block (bookmarks), instantly and without touching the radio. */
+            if (!vsAdminHttpOk(sock, reqLine)) { sock->close(); return; }
+            const std::string blk = queryParam(reqLine, "block");
+            int idx = -1;
+            if (const vibedab::Channel* c = vibedab::channelByName(blk.c_str()))
+                idx = int(c - &vibedab::kBandIII[0]);
+            std::string j;
+            if (idx < 0) {
+                j = "{\"ok\":false,\"why\":\"unknown block\"}";
+            } else if (queryParam(reqLine, "known") == "1") {
+                const long long centre = (long long)vibedab::kBandIII[idx].centreHz;
+                j = std::string("{\"ok\":true,\"known\":true,\"block\":\"") + vibedab::kBandIII[idx].name
+                  + "\",\"channel\":" + std::to_string(idx) + ",\"services\":[";
+                bool first = true;
+                std::lock_guard<std::mutex> lk(g_bmMtx);
+                for (const auto& kv : g_bookmarks) {
+                    const LearnedBm& b = kv.second;
+                    if (b.mode != "dab" || b.sid <= 0 || std::llabs(b.hz - centre) > 1000) continue;
+                    if (!first) j += ",";
+                    first = false;
+                    j += "{\"sid\":" + std::to_string(b.sid) + ",\"label\":\"" + dabEscape(b.name) + "\"}";
+                }
+                j += "]}";
+            } else {
+                j = dabQuickScan(idx, 15.0);
+            }
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(j.size()) + "\r\n\r\n" + j);
@@ -16131,6 +16328,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             std::string hostField;
             { std::lock_guard<std::mutex> lk(g_vsAdminMtx);
               if (!g_srvHost.empty()) hostField = ",\"host\":\"" + jsonEscape(g_srvHost) + "\""; }
+            // ★ The owner's name for this radio, ONLY when they gave one — absent means "use the
+            //   name from the USB port", which is exactly what every reader did before.
+            { std::lock_guard<std::mutex> lk(g_vsRadioLabelMtx);
+              if (!g_vsRadioLabel.empty()) hostField += ",\"radioLabel\":\"" + jsonEscape(g_vsRadioLabel) + "\""; }
             // ★★★ ONE READING OF THE STATE, USED BY BOTH FIELDS. `claimable` and `freeInSec` are
             //     two answers to the same question — is this listener still inside their
             //     guarantee — and a client that reads them as one sentence gets a contradiction
@@ -17777,8 +17978,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *   has their own VFO, a new session genuinely starts somewhere, and the owner's
              *   answer to "where should a stranger begin" is the right one. */
             const bool sharedDialNow = vsSharedDial();
-            if (sharedDialNow && firstOfSession && landedSession != session)
-                LOGI("shared dial — landing skipped, the radio keeps the dial it was left on");
+            // (the "shared dial — landing skipped" line is written below, after the DAB landing,
+            //  which may legitimately land the FIRST session a freshly started shared dial sees)
 
             /* ★★★ AND IF THE DIAL IT WAS LEFT ON IS A MULTIPLEX, GO BACK TO IT.
              *
@@ -17793,14 +17994,78 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     of those six is exactly how this subsystem got broken before.
              *  ★ Only when nobody is already in DAB, and only for the first socket of a session —
              *    a second socket joining must not re-enter a mode it is already in. */
-            if (g_dabWantChannel.load(std::memory_order_relaxed) >= 0
-                && !g_dabMode.load(std::memory_order_relaxed)
-                && firstOfSession && landedSession != session) {
-                const int want = g_dabWantChannel.load(std::memory_order_relaxed);
-                LOGI("[DAB] a listener arrived and this receiver was left on block %d — resuming it", want);
-                handleControl(sock, "{\"type\":\"dab\",\"on\":1,\"channel\":" + std::to_string(want) + "}");
+            /* ★★★ A QUICK STATION SCAN MAY BE BORROWING THE IDLE RADIO — the listener wins. Cancel it
+             *  and wait (bounded) for it to hand the receiver back exactly as it found it, so every
+             *  decision below sees the radio's real state rather than the scan's multiplex. */
+            if (firstOfSession) dabScanYield();
+
+            /* ★★★ THE DAB LANDING STATION, AND WHICH RULE WINS (2026-09-28).
+             *  Precedence, in one place:
+             *    1. A SHARED DIAL is never landed (the rule above). It keeps the dial it was left on,
+             *       and that includes a remembered multiplex — resumed below, as always. The ONE
+             *       exception is the very first session after the server starts with nothing
+             *       remembered: there is no "where it was left" yet, and the owner's landing is the
+             *       only answer — exactly as the capture itself starts on the landing frequency.
+             *    2. Every OTHER radio lands each new session where the owner said, so a configured
+             *       DAB landing BEATS a remembered block there: the plain landing frequency already
+             *       overrides wherever the last listener left the VFO, and a remembered multiplex is
+             *       just the last listener's VFO. (Resuming it and then landing elsewhere would also
+             *       enter DAB twice.)
+             *    3. An admin taking the receiver back, or a session that has already tuned
+             *       (preTuned), is not landed — and still gets the remembered multiplex, as before.
+             *    4. DAB blocked by the owner, or a radio that cannot reach a multiplex: no DAB
+             *       landing at all, whatever the config says — the plain landing applies instead.
+             *  ★ Through handleControl, the SAME entry the remembered-block resume uses, never
+             *    `mode = "dab"` (see the per-client tune path: "dab" is not a demodulator). */
+            const bool newSession = firstOfSession && landedSession != session;
+            const bool firstEver  = firstOfSession && !g_vsAnySessionYet.exchange(true);
+            const int  landDabCh  = g_vsLandingDabCh.load(std::memory_order_relaxed);
+            bool landOnDab = false;
+            if (newSession && landDabCh >= 0 && !adminOk.load() && !preTuned
+                && (!sharedDialNow || (firstEver && g_dabWantChannel.load(std::memory_order_relaxed) < 0))) {
+                if (vsModeBlocked("dab"))
+                    LOGI("[DAB] landing station ignored — DAB is blocked on this radio; the plain landing applies");
+                else if (!vsDabCapable())
+                    LOGI("[DAB] landing station ignored — this receiver cannot reach a DAB multiplex now; "
+                         "the plain landing applies");
+                else if (size_t(landDabCh) >= vibedab::kBandIIICount)
+                    LOGI("[DAB] landing station ignored — block index %d is not a Band III block", landDabCh);
+                else landOnDab = true;
             }
-            if (firstOfSession && landedSession != session && !adminOk.load() && !preTuned
+            if (!landOnDab && g_dabWantChannel.load(std::memory_order_relaxed) >= 0
+                && !g_dabMode.load(std::memory_order_relaxed)
+                && newSession) {
+                const int want = g_dabWantChannel.load(std::memory_order_relaxed);
+                const uint32_t wantSid = g_dabWantSid.load(std::memory_order_relaxed);
+                LOGI("[DAB] a listener arrived and this receiver was left on block %d (service 0x%X) — resuming it",
+                     want, unsigned(wantSid));
+                handleControl(sock, "{\"type\":\"dab\",\"on\":1,\"channel\":" + std::to_string(want)
+                              + (wantSid ? ",\"sid\":" + std::to_string(wantSid) : std::string()) + "}");
+            }
+            if (landOnDab) {
+                const uint32_t sid = g_vsLandingDabSid.load(std::memory_order_relaxed);
+                LOGI("[DAB] new session — landing on DAB block %s, service 0x%X",
+                     vibedab::kBandIII[landDabCh].name, unsigned(sid));
+                handleControl(sock, "{\"type\":\"dab\",\"on\":1,\"channel\":" + std::to_string(landDabCh)
+                              + (sid ? ",\"sid\":" + std::to_string(sid) : std::string()) + "}");
+                // ★ If the entry refused (a race with a rate change), say so rather than leave a
+                //   listener on nothing — the plain landing below is the fallback.
+                if (!g_dabMode.load(std::memory_order_relaxed)) {
+                    LOGI("[DAB] the landing block would not open — falling back to the plain landing");
+                    landOnDab = false;
+                } else {
+                    landedSession = session;
+                    // ★ Same bookkeeping as the plain landing — see the loopback warning there.
+                    if (sock) {
+                        const std::string pa = sock->peerAddress();
+                        if (pa == "127.0.0.1" || pa == "::1" || pa.rfind("127.", 0) == 0)
+                            g_vsLoopbackSessions.fetch_add(1);
+                    }
+                }
+            }
+            if (sharedDialNow && firstOfSession && landedSession != session)
+                LOGI("shared dial — landing skipped, the radio keeps the dial it was left on");
+            if (!landOnDab && firstOfSession && landedSession != session && !adminOk.load() && !preTuned
                 && !sharedDialNow) {
                 landedSession = session;
                 // ★ See the loopback warning in the watchdog: a proxy or tunnel connects from
@@ -18226,6 +18491,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *     re-applied when somebody arrives. */
                 g_dabWantChannel.store(g_dabChannel.load(std::memory_order_relaxed),
                                        std::memory_order_relaxed);
+                // ★★ AND THE STATION — the block alone came back with nothing selected.
+                // ★ What is PLAYING, else what was ASKED FOR — a listener who left before the
+                //   ensemble listed their station still meant that station.
+                g_dabWantSid.store(g_dab.service() ? g_dab.service() : g_dab.wantedService(),
+                                   std::memory_order_relaxed);
                 /* ★★★ AND TO DISK, OR IT SURVIVES ONLY THE LISTENER, NOT THE PROCESS. The atomic
                  *  above dies with the server, so an app the TV backgrounded, an apt upgrade or an
                  *  APK install came back on the DAB frequency — `freq` IS persisted — in the
@@ -18233,10 +18503,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *  and it was on the DAB frequency but had reverted to WFM". Half the state was
                  *  written down and half was not, so the receiver came back contradicting itself. */
                 vsPersist("{\"dabChannel\":"
-                          + std::to_string(g_dabWantChannel.load(std::memory_order_relaxed)) + "}");
-                LOGI("[DAB] last listener left — remembering block %d and restoring the receiver; "
-                     "the next listener is put back on it",
-                     g_dabWantChannel.load(std::memory_order_relaxed));
+                          + std::to_string(g_dabWantChannel.load(std::memory_order_relaxed))
+                          + ",\"dabSid\":" + std::to_string(g_dabWantSid.load(std::memory_order_relaxed)) + "}");
+                LOGI("[DAB] last listener left — remembering block %d (service 0x%X) and restoring the "
+                     "receiver; the next listener is put back on it",
+                     g_dabWantChannel.load(std::memory_order_relaxed),
+                     unsigned(g_dabWantSid.load(std::memory_order_relaxed)));
                 dabRestore();
             }
             if (stillEmpty && !stopping.load()) armIdlePark();
@@ -23909,7 +24181,16 @@ static bool vsDabDecoderAvailable() {
     return probe.available();
 }
 
+/** ★★ COULD THIS RADIO DO DAB IF ITS OWNER HAD NOT SWITCHED IT OFF? The setup page needs the two
+ *  apart: "cannot" hides the DAB landing toggle entirely (AGENTS.md — never draw a control that
+ *  cannot act), while "blocked" keeps the page able to SAY that blocking DAB removed the landing. */
+static bool vsDabCapableHw();
 static bool vsDabCapable() {
+    // ★ The owner may switch it off outright, whatever the hardware can do.
+    if (vsModeBlocked("dab")) return false;
+    return vsDabCapableHw();
+}
+static bool vsDabCapableHw() {
     /* ★★ NOTHING TO DECODE WITH = NOT CAPABLE, and this comes first because it is the one
      *  restriction no amount of tuning, rate or operator setting can work around. */
     if (!vsDabDecoderAvailable()) return false;
@@ -23950,8 +24231,7 @@ static bool vsDabCapable() {
      *  reach the capture rate — but a receiver that can only manage 2.048 is still perfectly
      *  usable, because the service resamples only when it is actually given 2.4. So the gate
      *  stays at the DECODER's rate and the capture rate is best-effort. */
-    // ★ And the owner may switch it off outright, whatever the hardware can do.
-    if (vsModeBlocked("dab")) return false;
+    // ★ The owner's block is checked in vsDabCapable() — this is the hardware's half.
     return vibedab::radioCanDab(r.data(), r.size(), cap);
 }
 
@@ -24464,9 +24744,19 @@ void LocalSdrShim::setVibeServerSavedFrontEnd(int lnaState, int ifGr, int ifAgc)
 /** ★★★ THE MULTIPLEX THIS RECEIVER WAS LEFT ON, restored from the config at startup.
  *  Without this the remembered mux lived only as long as the process, so DAB came back as WFM
  *  after any restart — see the note where it is stored. -1 = not a DAB receiver just now. */
-void LocalSdrShim::setVibeServerDabChannel(int ch) {
+void LocalSdrShim::setVibeServerDabChannel(int ch, uint32_t sid) {
     g_dabWantChannel.store(ch >= 0 ? ch : -1, std::memory_order_relaxed);
-    if (ch >= 0) LOGI("[DAB] this receiver was last left on block %d — the first listener resumes it", ch);
+    // ★ The station only means something with its block — a SId on no block is dropped.
+    g_dabWantSid.store(ch >= 0 ? sid : 0, std::memory_order_relaxed);
+    if (ch >= 0) LOGI("[DAB] this receiver was last left on block %d (service 0x%X) — the first listener resumes it",
+                      ch, unsigned(ch >= 0 ? sid : 0));
+}
+void LocalSdrShim::setVibeServerLandingDab(int ch, uint32_t sid) {
+    const bool ok = ch >= 0 && size_t(ch) < vibedab::kBandIIICount;
+    g_vsLandingDabCh.store(ok ? ch : -1, std::memory_order_relaxed);
+    g_vsLandingDabSid.store(ok ? sid : 0, std::memory_order_relaxed);
+    if (ok) LOGI("[DAB] landing station: block %s, service 0x%X", vibedab::kBandIII[ch].name, unsigned(sid));
+    else if (ch >= 0) LOGI("[DAB] landing station ignored — block index %d is not a Band III block", ch);
 }
 void LocalSdrShim::setConfigured(bool on) { g_vsConfigured.store(on); }
 void LocalSdrShim::setNativeSetup(bool on) { g_vsNativeSetup.store(on); }
@@ -28134,6 +28424,18 @@ void LocalSdrShim::setDirectSampling(int mode) {
 /** ★ What Kotlin told us the USB descriptor says — see setUsbModelName() in the header. */
 static std::mutex        g_usbModelMx;
 static std::string       g_usbModelName;
+void LocalSdrShim::setRadioLabel(const std::string& name) {
+    std::string n = name;
+    // ★ Same shape as the Linux field (maxlength 60), trimmed; control bytes dropped — it is printed
+    //   in a directory card and a JSON string, and nothing legitimate in a name is one.
+    n.erase(std::remove_if(n.begin(), n.end(), [](unsigned char c) { return c < 0x20; }), n.end());
+    while (!n.empty() && n.front() == ' ') n.erase(n.begin());
+    while (!n.empty() && n.back() == ' ') n.pop_back();
+    if (n.size() > 60) n.resize(60);
+    std::lock_guard<std::mutex> lk(g_vsRadioLabelMtx);
+    g_vsRadioLabel = n;
+    LOGI("radio display name: %s", n.empty() ? "(default — the name from the USB port)" : n.c_str());
+}
 void LocalSdrShim::setUsbModelName(const std::string& name) {
     std::lock_guard<std::mutex> lk(g_usbModelMx);
     g_usbModelName = name;

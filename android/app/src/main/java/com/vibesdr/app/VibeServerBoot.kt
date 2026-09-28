@@ -178,6 +178,25 @@ object VibeServerBoot {
             cfg.s("antenna"), cfg.s("antennaIcon"),
             cfg.s("landingMessage"), cfg.s("landingLinkUrl"), cfg.s("landingLinkLabel"))
 
+        // ★★★ WHERE A NEW LISTENER STARTS — told to the engine, not only used as the start frequency.
+        //     The daemon has always done this (main.cpp → setVibeServerLanding); this boot never did,
+        //     so on the phone and the TV a new session was never landed at all. The app sends
+        //     centerFreq + mode only when the owner set a landing, so absent = no landing, as before.
+        if (cfg.has("centerFreq") && cfg.s("mode").isNotEmpty())
+            VibeLocalSDR.setVibeServerLanding(centerFreq, mode)
+        else
+            VibeLocalSDR.setVibeServerLanding(0.0, "")
+        // ★★★ AND A DAB STATION AS THE LANDING (Stuart, 2026-09-28). Refused here as well as in the
+        //     engine when "dab" is blocked: a config that says both must never land on DAB.
+        val dabBlocked = cfg.s("blockedModes").split(',', ';', ' ').any { it.trim().equals("dab", true) }
+        VibeLocalSDR.setVibeServerLandingDab(
+            if (dabBlocked) -1 else cfg.i("landingDabChannel", -1),
+            if (dabBlocked) 0 else cfg.i("landingDabSid", 0))
+        // ★★ The multiplex (and station) it was LEFT on, surviving a restart — see the JNI note.
+        VibeLocalSDR.setDabMemoryPath(File(filesDir, "vibe_dab_memory.txt").absolutePath)
+        // ★ The owner's name for the radio ("SDR display name"); blank = the USB port's name, as before.
+        VibeLocalSDR.setRadioLabel(cfg.s("radioLabel").trim())
+
         // ── ★★★ ADVANCED MODE ───────────────────────────────────────────────────────────────────
         // ★★ Always applied to a DEFINITE value, never "only when advanced". A limit left set from
         //    a previous run would outlive the mode that asked for it, with no way for the owner to

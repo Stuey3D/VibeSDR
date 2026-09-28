@@ -36,6 +36,7 @@ import {
   getServerLocationMode, setServerLocationMode, getManualServerLocation,
   getResolvedServerLocation,
   setManualServerLocation, resolveLocation, publishLocation,
+  getDabBlocks, dabQuickScan, type DabBlock,
   type FpsTier, type VibeServerInfo, type VibeServerStatus, type LocationMode,
 } from '../services/vibeServer';
 import { loadActiveEibi } from '../services/eibi';
@@ -167,7 +168,13 @@ const K = {
   convOffsetMhz: 'vs_convoffset', convLoMhz: 'vs_convlo', convHiMhz: 'vs_convhi', convDown: 'vs_convdown',
   proxies: 'vs_proxies', radioUse: 'vs_radiouse', oneRadioPerIp: 'vs_oneradioperip',
   landingHz: 'vs_landinghz', landingMode: 'vs_landingmode', biasT: 'vs_biast',
+  landingDabCh: 'vs_landingdabch', landingDabSid: 'vs_landingdabsid', landingDabSvc: 'vs_landingdabsvc',
+  radioLabel: 'vs_radiolabel',
 };
+
+/** Is DAB in the owner's blocked-modes list? Same reading as the engine's (any case, , ; or space). */
+const dabBlockedNow = (csv: string) =>
+  csv.split(/[,;\s]+/).filter(Boolean).some((t) => t.toLowerCase() === 'dab');
 
 export default function ServerModeScreen({ navigation, route }: Props) {
   const { colors: C, font: F } = themeFor();
@@ -406,6 +413,20 @@ export default function ServerModeScreen({ navigation, route }: Props) {
    *  ★ 0 = leave it to the server's own default rather than assert a frequency nobody chose. */
   const [landingHz, setLandingHz]     = useState(0);
   const [landingMode, setLandingMode] = useState('wfm');
+  /** ★★★ A DAB STATION AS THE LANDING (Stuart, 2026-09-28) — the block (an index into the engine's own
+   *  Band III table, -1 = none), the station's SId (0 = the block only) and its label. The frequency
+   *  and mode above stay as the FALLBACK. See the WHERE LISTENERS START card. */
+  const [landingDabCh, setLandingDabCh]   = useState(-1);
+  const [landingDabSid, setLandingDabSid] = useState(0);
+  const [landingDabSvc, setLandingDabSvc] = useState('');
+  const [dabBlocks, setDabBlocks]         = useState<DabBlock[]>([]);
+  const [dabStations, setDabStations]     = useState<Record<number, { sid: number; label: string }[]>>({});
+  const [dabScanBusy, setDabScanBusy]     = useState(false);
+  const [dabScanSecs, setDabScanSecs]     = useState(0);
+  const [dabScanMsg, setDabScanMsg]       = useState('');
+  const [dabLandNote, setDabLandNote]     = useState('');
+  /** ★ "SDR display name" — the radio's name in the server and directory listings. '' = the USB port's. */
+  const [radioLabel, setRadioLabel]       = useState('');
   /** ★★ BIAS-T LIVES HERE, not only in the client's hardware panel. On a phone acting as the
    *  server there may be no client attached at all — and a powered loop needs its DC before the
    *  first listener arrives, not after one turns up and unlocks the hardware (Stuart, 2026-08-17:
@@ -723,6 +744,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           setIdleGrace(ig === '' ? 300 : (Number(ig) || 0));
           setAntenna(await g(K.antenna));
           setAntennaIcon(await g(K.antennaIcon));
+          setRadioLabel(await g(K.radioLabel));
+          { const ch = await g(K.landingDabCh);
+            if (ch !== '' && Number.isFinite(Number(ch))) setLandingDabCh(Number(ch)); }
+          setLandingDabSid(Number(await g(K.landingDabSid)) || 0);
+          setLandingDabSvc(await g(K.landingDabSvc));
+          // ★ The block list comes from the ENGINE's table — the stored value is an index into it.
+          try { setDabBlocks(await getDabBlocks()); }
+          catch (e: any) { setDabScanMsg('Could not read the DAB block list: ' + (e?.message ?? e)); }
         })();
         if (ru === 'locked' || ru === 'single') setRadioUse(ru);
         if (lhz != null && Number.isFinite(Number(lhz))) setLandingHz(Number(lhz));
@@ -921,7 +950,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         const cov = (allowRanges || '').split(',').map((t) => t.trim()).filter(Boolean)
                       .map((t) => bands.find((b) => b.id === t)?.label || t).join(', ');
         await (NativeModules as any).VibeLocalSDR?.tunnelRepublish?.(
-          nm, where?.grid || '', running.port, radio?.model || '', radio?.driver || '',
+          nm, where?.grid || '', running.port, radioLabel.trim() || radio?.model || '', radio?.driver || '',
           (antenna || '').trim(), cov, radioUse === 'locked',
           publicTemp ? shareSeconds() : 0);
       } catch { /* the listing keeps the window it had */ }
@@ -956,7 +985,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         //     position is only read when some other setting is edited (Stuart, 2026-08-22: "if I
         //     were to take my moto and say set it up from a holiday destination would the map move
         //     with it"). Resolved first, then compared, so a move is a change like any other.
-        const sig = [nm, cov, (antenna || '').trim(), radio?.model, radio?.driver,
+        const sig = [nm, cov, (antenna || '').trim(), radioLabel.trim() || radio?.model, radio?.driver,
                      radioUse === 'locked', where?.grid || ''].join('|');
         if (republished.current === sig) return;
         republished.current = sig;
@@ -966,7 +995,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         //    name is that it is what a stranger arriving from the directory was promised.
         try { await publishLocation(); } catch {}
         await (NativeModules as any).VibeLocalSDR?.tunnelRepublish?.(
-          nm, where?.grid || '', running.port, radio?.model || '', radio?.driver || '',
+          // ★ The owner's "SDR display name" when set, else the USB port's name exactly as before.
+          nm, where?.grid || '', running.port, radioLabel.trim() || radio?.model || '', radio?.driver || '',
           // ★★ -1 = leave the share window alone. It was 0, which the server reads as "make this
           //    PERMANENT" — so this correction, which exists only to refresh the aerial and the
           //    band names, would have wiped the end off a temporary share every time it ran.
@@ -979,7 +1009,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     //    Two minutes is far below the 15-minute ping and costs one location read.
     const t = setInterval(() => { republished.current = ''; }, 120_000);
     return () => clearInterval(t);
-  }, [publicOn, running, publicName, name, allowRanges, antenna, bands, radio, radioUse]);
+  }, [publicOn, running, publicName, name, allowRanges, antenna, bands, radio, radioUse, radioLabel]);
 
   /**
    * Can this build tunnel at all, and are we already listed?
@@ -1126,10 +1156,62 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   //  ★ A ref is assigned on every render, so it cannot be stale by construction and a setting added
   //    later is carried without anyone remembering anything. Same reasoning as VibeServerBoot
   //    carrying the whole config rather than a hand-maintained subset.
+  /* ── ★★★ THE DAB LANDING STATION (Stuart, 2026-09-28) ──────────────────────────────────────── */
+  const setDabLanding = (ch: number, sid: number, svc: string) => {
+    setLandingDabCh(ch); setLandingDabSid(sid); setLandingDabSvc(svc);
+    AsyncStorage.multiSet([[K.landingDabCh, String(ch)], [K.landingDabSid, String(sid)], [K.landingDabSvc, svc]]);
+  };
+  const plainLandingWords = () => {
+    const m = (landingMode || 'wfm').toUpperCase();
+    if (!(landingHz > 0)) return `the radio's own frequency in ${m}`;
+    const f = landingHz >= 1e6 ? `${(landingHz / 1e6).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')} MHz`
+                               : `${Math.round(landingHz / 1000)} kHz`;
+    return `${f} ${m}`;
+  };
+  /** ★★ ONLY ON A RADIO THAT CAN DO DAB (AGENTS.md: never a control that cannot act). The Airspy HF+
+   *   tops out below 2.048 MS/s; a locked centre with its own VFOs cannot move onto a multiplex; a
+   *   rate pinned below 2.048 MS/s cannot carry one unless DAB may borrow the rate. The engine
+   *   checks all of this again at the moment of landing and falls back to the frequency above. */
+  const dabLandCapable = !!radio && radio.driver !== 'airspyhf' && dabBlocks.length > 0
+    && !(advanced && radioUse === 'locked' && maxUsers > 1)
+    && (rate === 0 || rate >= 2_048_000 || dabRateBoost);
+  const dabLandOffered = dabLandCapable && !dabBlockedNow(blockedModes);
+  const dabLandOn = dabLandOffered && landingDabCh >= 0 && landingDabCh < dabBlocks.length;
+  const runDabScan = async () => {
+    const ch = landingDabCh;
+    const b = dabBlocks[ch];
+    if (!b || dabScanBusy) return;
+    setDabScanBusy(true); setDabScanSecs(0); setDabScanMsg('');
+    const t0 = Date.now();
+    // ★ Progress, because it takes a while: locking a multiplex is 3-6 s and the names follow it.
+    const tick = setInterval(() => setDabScanSecs(Math.round((Date.now() - t0) / 1000)), 250);
+    try {
+      // ★ known=false: the settings are only on screen while the server is stopped, when there is no
+      //   running engine holding a memory of heard stations — so it is always a real scan here.
+      const j = await dabQuickScan(b.name, false, blockedModes);
+      if (!j.ok) { setDabScanMsg('Scan not done: ' + (j.why || 'the radio refused')); return; }
+      const list = Array.isArray(j.services) ? j.services : [];
+      setDabStations((prev) => ({ ...prev, [ch]: list }));
+      const n = list.length;
+      setDabScanMsg(j.cancelled
+        ? 'A listener arrived, so the scan stopped and handed them the radio. Try again when it is free.'
+        : !j.locked ? `Nothing found on ${b.name} \u2014 no multiplex locked in ${j.secs} s. Try another block.`
+        : n ? `${n} station${n === 1 ? '' : 's'} on ${b.name}${j.ensemble ? ` (${j.ensemble})` : ''}`
+              + (j.complete ? '.' : ' \u2014 the ensemble had not listed everything yet; scan again for the rest.')
+        : `${b.name} locked but named no stations in ${j.secs} s. Scan again, or check the aerial.`);
+    } catch (e: any) {
+      setDabScanMsg('Scan failed: ' + (e?.message ?? String(e)));
+    } finally {
+      clearInterval(tick);
+      setDabScanBusy(false);
+    }
+  };
+
   const live = useRef<any>({});
   live.current = {
     limitSoft, idleKick, lockedCentre, zoomSpec, spectrogram, idleGrace,
     antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax, rawIqLanMaxHz,
+    landingDabCh, landingDabSid, landingDabSvc, radioLabel,
   };
 
   const start = useCallback(async () => {
@@ -1175,6 +1257,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.convOffsetMhz, convOffsetMhz], [K.convLoMhz, convLoMhz], [K.convHiMhz, convHiMhz], [K.convDown, convDown ? '1' : '0'],
       [K.agcLock, agcLock ? '1' : '0'], [K.proxies, proxies],
       [K.oneRadioPerIp, oneRadioPerIp ? '1' : '0'],
+      [K.landingDabCh, String(live.current.landingDabCh)], [K.landingDabSid, String(live.current.landingDabSid)],
+      [K.landingDabSvc, live.current.landingDabSvc], [K.radioLabel, live.current.radioLabel],
     ]);
     if (Platform.OS === 'android' && Platform.Version >= 33) {
       try { await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS); } catch {}
@@ -1223,6 +1307,12 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         // ★ Not gated on `advanced`: what this aerial is good for is a property of the RADIO,
         //   like the resting gain, not of sharing — see the note in VibeServerBoot.
         blockedModes, dabRateBoost,
+        // ★★★ THE DAB LANDING STATION — never sent beside a DAB block (the engine refuses it too).
+        ...(dabBlockedNow(blockedModes) || live.current.landingDabCh < 0
+          ? { landingDabChannel: -1, landingDabSid: 0, landingDabService: '' }
+          : { landingDabChannel: live.current.landingDabCh, landingDabSid: live.current.landingDabSid,
+              landingDabService: live.current.landingDabSvc }),
+        radioLabel: live.current.radioLabel,
         /* ★★★ NO LONGER A CONDITIONAL SPREAD, and that is the point rather than a tidy-up. A
          *  `...(cond ? {x} : {})` inside an object literal suppresses TypeScript's excess-property
          *  check for the WHOLE literal, so every setting here could be misspelled or unknown to
@@ -1491,7 +1581,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                         //    not be the one place they are missing. The machine it runs on is added
                         //    natively, where Build.MODEL and the SoC live.
                         const st = await Local?.tunnelStart?.(nm, where.grid, running.port, '',
-                                                            radio?.model || '', radio?.driver || '',
+                                                            radioLabel.trim() || radio?.model || '', radio?.driver || '',
                                                             (antenna || '').trim(),
                                                             // ★★★ THE BANDS IN WORDS, FROM THE
                                                             //   SERVER'S OWN PLAN. allowRanges is
@@ -2143,6 +2233,23 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               </TouchableOpacity>
             </View>
 
+            {/* ★★★ SDR DISPLAY NAME — the same card, the same words, as the Linux setup page (5.6.75),
+                just above the Simple/Advanced toggle (Stuart, 2026-09-28). Kiko's S8 listed its radio
+                as "Realtek RTL2838UHIDIR" in the directory with no way to change it. Display only:
+                nothing is written to the hardware, and blank is exactly today's name. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>SDR DISPLAY NAME</Text>
+            <View style={[styles.card, { borderColor: C.border }]}>
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
+                Changes the displayed name of this SDR in the server and directory listings. This makes
+                no changes to the hardware, and if left clear the default name obtained from the USB
+                port will be used.
+              </Text>
+              <TextInput value={radioLabel} maxLength={60} autoCorrect={false}
+                onChangeText={(v) => { setRadioLabel(v); AsyncStorage.setItem(K.radioLabel, v); }}
+                placeholder="Default: the name obtained from the USB port" placeholderTextColor={C.goldDim}
+                style={[styles.input, { marginTop: 8, color: C.amber, fontFamily: F, borderColor: C.border }]} />
+            </View>
+
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>MODE</Text>
             <View style={{ flexDirection: 'row', gap: 8 }}>
               {([false, true] as const).map(v => (
@@ -2221,7 +2328,91 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             {radioUse === 'locked' && centreBlock}
             {radioUse === 'locked' && rateBlock}
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WHERE LISTENERS START</Text>
-            <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+            {/* ★★★ A DAB STATION AS THE LANDING — Stuart's words, 2026-09-28: "just above the entry for
+                frequency and demod selector have a use DAB station as landing station? tap yes and then
+                a block selector pops up and you choose a block … then next to that a quick station
+                scan and then a selection box for the station". Only on a radio that can do DAB. */}
+            {dabLandOffered && (
+              <View style={[styles.card, { borderColor: dabLandOn ? C.green : C.border, marginBottom: 8 }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Text style={{ color: C.gold, fontFamily: F, fontSize: 13, flex: 1 }}>
+                    Use a DAB station as the landing station?
+                  </Text>
+                  <Switch value={dabLandOn}
+                    onValueChange={(v) => {
+                      setDabScanMsg(''); setDabLandNote('');
+                      if (!v) { setDabLanding(-1, 0, ''); return; }
+                      const i12b = dabBlocks.findIndex((b) => b.name === '12B');
+                      setDabLanding(i12b >= 0 ? i12b : 0, 0, '');
+                    }} />
+                </View>
+                {dabLandOn && (<>
+                  <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 10 }]}>Block</Text>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                    {dabBlocks.map((b, i) => (
+                      <TouchableOpacity key={b.name}
+                        onPress={() => { if (i !== landingDabCh) { setDabLanding(i, 0, ''); setDabScanMsg(''); } }}
+                        style={{ paddingVertical: 6, paddingHorizontal: 9, borderRadius: 6, borderWidth: 1,
+                                 borderColor: i === landingDabCh ? C.green : C.border,
+                                 backgroundColor: i === landingDabCh ? C.green + '18' : 'transparent' }}>
+                        <Text style={{ color: i === landingDabCh ? C.green : C.textDim, fontFamily: F, fontSize: 12 }}>
+                          {b.name}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <TouchableOpacity onPress={() => { void runDabScan(); }} disabled={dabScanBusy}
+                    style={[styles.regen, { borderColor: C.border, marginTop: 10, alignItems: 'center',
+                                            opacity: dabScanBusy ? 0.5 : 1 }]}>
+                    <Text style={{ color: C.gold, fontFamily: F, fontSize: 13 }}>
+                      {dabScanBusy ? `SCANNING ${dabBlocks[landingDabCh]?.name ?? ''}… ${dabScanSecs} s`
+                                   : `QUICK STATION SCAN — ${dabBlocks[landingDabCh]?.name ?? ''}`}
+                    </Text>
+                  </TouchableOpacity>
+                  <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                    {dabScanBusy
+                      ? 'Locking onto the multiplex takes a few seconds, then the station names arrive. Up to 15 s.'
+                      : dabScanMsg || 'Tunes the radio to this block for a few seconds and lists its stations.'}
+                  </Text>
+                  <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 10 }]}>Station</Text>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                    {[{ sid: 0, label: 'No station — listeners choose from the list' },
+                      ...(landingDabSid > 0 && !(dabStations[landingDabCh] || []).some((x) => x.sid === landingDabSid)
+                          ? [{ sid: landingDabSid, label: landingDabSvc || `Service ${landingDabSid.toString(16).toUpperCase()}` }]
+                          : []),
+                      ...(dabStations[landingDabCh] || [])].map((st) => (
+                      <TouchableOpacity key={st.sid}
+                        onPress={() => setDabLanding(landingDabCh, st.sid, st.sid > 0 ? st.label : '')}
+                        style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 6, borderWidth: 1,
+                                 borderColor: st.sid === landingDabSid ? C.green : C.border,
+                                 backgroundColor: st.sid === landingDabSid ? C.green + '18' : 'transparent' }}>
+                        <Text style={{ color: st.sid === landingDabSid ? C.green : C.textDim, fontFamily: F, fontSize: 12 }}>
+                          {st.label}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                    A new listener is put straight onto this station. DAB takes a few seconds to lock
+                    onto a multiplex, so they hear it shortly after they arrive.
+                  </Text>
+                </>)}
+              </View>
+            )}
+            {!!dabLandNote && (
+              <Text style={[styles.hint, { color: C.amber, fontFamily: F, marginBottom: 8 }]}>{dabLandNote}</Text>
+            )}
+            {!dabLandOffered && landingDabCh >= 0 && !dabBlockedNow(blockedModes) && (
+              <Text style={[styles.hint, { color: C.amber, fontFamily: F, marginBottom: 8 }]}>
+                {`This radio cannot reach DAB with these settings, so its DAB landing station will not be used \u2014 listeners will start on ${plainLandingWords()} instead.`}
+              </Text>
+            )}
+            {dabLandOn && (
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 6 }]}>
+                If the DAB station cannot be opened, listeners start here instead:
+              </Text>
+            )}
+            <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center', opacity: dabLandOn ? 0.55 : 1 }}>
               <TextInput value={landingHz ? String(Math.round(landingHz / 1000)) : ''}
                 onChangeText={(v) => { const hz = Math.round((Number(v.replace(/[^0-9.]/g, '')) || 0) * 1000);
                                        setLandingHz(hz); AsyncStorage.setItem(K.landingHz, String(hz)); }}
@@ -2229,7 +2420,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 keyboardType="numeric"
                 style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F, flex: 1 }]} />
             </View>
-            <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap', opacity: dabLandOn ? 0.55 : 1 }}>
               {(['wfm', 'nfm', 'am', 'usb', 'lsb'] as const).map(m => (
                 <TouchableOpacity key={m}
                   onPress={() => { setLandingMode(m); AsyncStorage.setItem(K.landingMode, m); }}
@@ -2891,6 +3082,12 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                           if (off) set.delete(m.id); else set.add(m.id);
                           const v = [...set].join(',');
                           setBlockedModes(v); AsyncStorage.setItem(K.blockedModes, v);
+                          // ★★★ BLOCKING DAB REMOVES THE DAB LANDING STATION — and says so.
+                          if (m.id === 'dab' && !off && landingDabCh >= 0) {
+                            setDabLanding(-1, 0, '');
+                            setDabLandNote('DAB is blocked on this radio, so its DAB landing station has been '
+                              + `removed \u2014 listeners will start on ${plainLandingWords()} instead.`);
+                          } else if (m.id === 'dab' && off) setDabLandNote('');
                         }}
                         style={{
                           paddingVertical: 6, paddingHorizontal: 10, borderRadius: 6,

@@ -140,6 +140,90 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         }.start()
     }
 
+    /** ★ The Band III block list, from the receiver's own table — see VibeLocalSDR.dabBlocksJson. */
+    @ReactMethod
+    fun dabBlocks(promise: Promise) {
+        try { promise.resolve(VibeLocalSDR.dabBlocksJson()) } catch (t: Throwable) { promise.reject("dab_blocks", t) }
+    }
+
+    /**
+     * ★★★ THE QUICK STATION SCAN for the DAB landing station (Stuart, 2026-09-28) — "what is on 12B?".
+     *
+     * The ENGINE does the work (GET /vibeserver/dab-scan: enter DAB on the block through the ordinary
+     * entry, wait for the ensemble to list its services, hand the radio back). This only gets it a
+     * radio to do it on:
+     *   - SERVING already: ask the running server over loopback. It refuses, with the reason, while
+     *     anybody is listening — a scan would move their dial.
+     *   - NOT serving (the settings screen is only shown then): open the radio, bring the engine up
+     *     on LOOPBACK ONLY for the length of the scan, ask it, and put everything away again. No
+     *     listing, no mDNS, no foreground service — nothing a listener could ever see.
+     * `known = true` answers from the stations the server has already heard on that block (only
+     * when it is serving — a stopped engine has no memory loaded).
+     * ★ Several seconds long (up to 15), so never on the bridge thread.
+     */
+    @ReactMethod
+    fun dabQuickScan(block: String, known: Boolean, blockedModes: String, promise: Promise) {
+        Thread {
+            try {
+                val st = org.json.JSONObject(VibeLocalSDR.getVibeServerStatus())
+                val livePort = if (st.optBoolean("running", false)) st.optInt("port", 0) else 0
+                if (livePort > 0) {
+                    promise.resolve(dabScanHttp(livePort, block, known))
+                    return@Thread
+                }
+                if (known) { promise.resolve("{\"ok\":true,\"known\":true,\"services\":[]}"); return@Thread }
+                val mgr = usbManager ?: run { promise.reject("no_usb", "USB service unavailable"); return@Thread }
+                val dev = mgr.deviceList.values.firstOrNull { isSupportedRadio(it) }
+                    ?: run { promise.reject("no_device", "No SDR found — plug the radio in to scan"); return@Thread }
+                if (!mgr.hasPermission(dev)) {
+                    promise.reject("no_permission", "Allow this app to use the radio (start the server once), then scan again")
+                    return@Thread
+                }
+                stopSpectrumInternal()
+                val conn = mgr.openDevice(dev)
+                    ?: run { promise.reject("open_failed", "The radio could not be opened"); return@Thread }
+                try {
+                    // ★ A clean, private engine: loopback only, no PIN, nothing pinned that would stop it
+                    //   reaching 2.048 MS/s, and the owner's blocked modes (a blocked DAB is refused).
+                    VibeLocalSDR.setServeOnLan(false)
+                    VibeLocalSDR.setVibeServerAuth("")
+                    VibeLocalSDR.setVibeServerLockedCentre(0.0)
+                    VibeLocalSDR.setVibeServerLockedRate(0.0)
+                    VibeLocalSDR.setMaxUsers(1)
+                    VibeLocalSDR.setDabPolicy(true, blockedModes)
+                    VibeLocalSDR.setVibeServerLanding(0.0, "")
+                    VibeLocalSDR.setVibeServerLandingDab(-1, 0)
+                    VibeLocalSDR.setUsbModelName(VibeServerBoot.usbModelName(dev))
+                    VibeLocalSDR.setBookmarksPath(java.io.File(reactContext.filesDir, "vibe_bookmarks.json").absolutePath)
+                    val port = VibeLocalSDR.startSpectrum(conn.fileDescriptor, dev.vendorId, dev.productId,
+                                                          225_648_000.0, 2_048_000.0, -1, 1024, 5.0, "wfm")
+                    if (port <= 0) { promise.reject("start_failed", "The radio would not start for the scan"); return@Thread }
+                    promise.resolve(dabScanHttp(port, block, false))
+                } finally {
+                    try { VibeLocalSDR.stopSpectrumSync() } catch (t: Throwable) { Log.w(TAG, "scan: stop failed: ${t.message}") }
+                    try { conn.close() } catch (t: Throwable) { Log.w(TAG, "scan: close failed: ${t.message}") }
+                }
+            } catch (t: Throwable) {
+                promise.reject("dab_scan", t.message ?: "$t")
+            }
+        }.start()
+    }
+
+    private fun dabScanHttp(port: Int, block: String, known: Boolean): String {
+        val url = java.net.URL("http://127.0.0.1:$port/vibeserver/dab-scan?block=" +
+            java.net.URLEncoder.encode(block, "UTF-8") + (if (known) "&known=1" else ""))
+        val c = url.openConnection() as java.net.HttpURLConnection
+        c.connectTimeout = 3000
+        c.readTimeout = 25000   // ★ the scan itself is capped at 15 s by the engine
+        c.setRequestProperty("User-Agent", "VibeServer-setup")
+        try {
+            val code = c.responseCode
+            val body = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
+            if (code !in 200..299) throw java.io.IOException("the server answered $code")
+            return body
+        } finally { c.disconnect() }
+    }
+
     /**
      * ★★★ READ EVERY STATION'S NAME ON THE MULTIPLEX — LIVE, not at the next start.
      *

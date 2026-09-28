@@ -437,7 +437,11 @@ object VibeTunnel {
         //     radio this process is holding — which the app already knows the make of.
         if (radios.length() == 0 && (radioModel.isNotEmpty() || radioDriver.isNotEmpty())) {
             radios.put(JSONObject().apply {
-                put("name", radioModel.ifEmpty { "Radio" })
+                /* ★★ THE OWNER'S NAME FOR IT FIRST ("SDR display name", 2026-09-28) — read from the server's
+                 *  own identity, so a HEADLESS restore publishing values stored weeks ago still carries
+                 *  the current name. Absent (the owner left it blank) = the USB port's name, as before. */
+                put("name", ident?.optString("radioLabel", "")?.takeIf { it.isNotEmpty() }
+                            ?: radioModel.ifEmpty { "Radio" })
                 put("driver", radioDriver)
                 // ★★★ THE RADIO'S MODE, NOT A GUESS. `locked` means each listener gets their own
                 //     VFO inside a fixed window; unlocked with room for several means ONE dial that
@@ -797,6 +801,12 @@ object VibeTunnel {
                             antenna: String, coverage: String, locked: Boolean,
                             shareForSec: Long): String? {
         val status = buildStatus(port, radioModel, radioDriver, antenna, coverage, locked)
+        // ★ Which name the listing will carry for each radio — the "SDR display name" or the USB port's.
+        run {
+            val arr = status.optJSONArray("radios")
+            val names = (0 until (arr?.length() ?: 0)).joinToString { arr!!.optJSONObject(it)?.optString("name") ?: "" }
+            Log.i(TAG, "directory: publishing radio name(s) [$names]")
+        }
         val url = tunnelUrl
         if (url.isEmpty()) { lastError = "no tunnel yet"; return null }
 

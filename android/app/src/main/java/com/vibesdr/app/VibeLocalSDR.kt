@@ -245,6 +245,23 @@ object VibeLocalSDR {
     /** DAB may borrow 2.048 MS/s on a slower receiver, and the modes/decoders switched off. */
     fun setDabPolicy(rateBoost: Boolean, blockedCsv: String) { ensureLoaded(); nativeSetDabPolicy(rateBoost, blockedCsv) }
     private external fun nativeSetDabPolicy(rateBoost: Boolean, blockedCsv: String)
+    /** ★★ Where a NEW session starts (Hz + demodulator). hz <= 0 / "" = no landing. */
+    fun setVibeServerLanding(hz: Double, mode: String) { ensureLoaded(); nativeSetVibeServerLanding(hz, mode) }
+    private external fun nativeSetVibeServerLanding(hz: Double, mode: String)
+    /** ★★★ A DAB station as the landing: block index into Band III (-1 = none) and the SId (0 = block only). */
+    fun setVibeServerLandingDab(channel: Int, sid: Int) { ensureLoaded(); nativeSetVibeServerLandingDab(channel, sid) }
+    private external fun nativeSetVibeServerLandingDab(channel: Int, sid: Int)
+    /** ★ The radio's display name ("SDR display name"); "" = the name from the USB port. */
+    fun setRadioLabel(name: String) { ensureLoaded(); nativeSetRadioLabel(name) }
+    private external fun nativeSetRadioLabel(name: String)
+    /** ★ The Band III block list, from the receiver's own table: `[{"name":"5A","hz":…},…]`. */
+    fun dabBlocksJson(): String { ensureLoaded(); return nativeDabBlocksJson() }
+    private external fun nativeDabBlocksJson(): String
+    /** ★★ Where the multiplex (and station) this receiver was left on is kept, so DAB survives a
+     *  restart on Android as it does on Linux. Reads it back into the engine and registers the
+     *  engine's persist handler for the pair. Call before the radio starts. */
+    fun setDabMemoryPath(path: String) { ensureLoaded(); nativeSetDabMemoryPath(path) }
+    private external fun nativeSetDabMemoryPath(path: String)
     /** ★ DAB whole-multiplex label scan: -1 build default (off on Lite), 0 off, 1 on. */
     fun setDabScanLabels(mode: Int) { ensureLoaded(); nativeSetDabScanLabels(mode) }
     private external fun nativeSetDabScanLabels(mode: Int)

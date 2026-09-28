@@ -153,6 +153,25 @@ std::string num(double v) {
 
 } // namespace
 
+bool dabBlocked(const std::string& blockedModes) {
+    std::string tok;
+    for (size_t i = 0; i <= blockedModes.size(); ++i) {
+        const char ch = i < blockedModes.size() ? blockedModes[i] : ',';
+        if (ch == ',' || ch == ';' || ch == ' ' || ch == '\t') {
+            if (tok == "dab") return true;
+            tok.clear();
+        } else tok += char(std::tolower((unsigned char)ch));
+    }
+    return false;
+}
+
+bool dropBlockedDabLanding(const std::string& blockedModes, int& ch, int& sid, std::string& service) {
+    if (ch < 0 && sid == 0 && service.empty()) return false;
+    if (!dabBlocked(blockedModes)) return false;
+    ch = -1; sid = 0; service.clear();
+    return true;
+}
+
 std::string mdnsLabel(const std::string& friendly) {
     std::string out;
     bool lastDash = false;
@@ -194,12 +213,16 @@ std::string toJson(const Config& c) {
     N("updateAllDay",  c.updateAllDay);
     N("freq", c.freq); N("rate", c.rate); N("lockFreq", c.lockFreq); N("lockRate", c.lockRate);
     N("dabChannel", c.dabChannel);
+    N("dabSid", c.dabSid);   // ★ the station on that multiplex — always beside dabChannel
     N("gain", c.gain);
     N("lnaState", c.lnaState);
     N("ifGr", c.ifGr);
     N("ifAgc", c.ifAgc);
     S("demodMode", c.demodMode);
     N("landingFreq", c.landingFreq);
+    // ★ The DAB landing station — see Config::landingDabChannel.
+    N("landingDabChannel", c.landingDabChannel); N("landingDabSid", c.landingDabSid);
+    S("landingDabService", c.landingDabService);
     N("users", c.users); N("maxBw", c.maxBw); N("maxFps", c.maxFps); N("fftRate", c.fftRate);
     N("uncompressed", c.uncompressed);
     B("releaseWhenIdle", c.releaseWhenIdle);
@@ -275,7 +298,11 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     if (getNum(s, "ifAgc", d))       c.ifAgc = (int)d;
     getStr(s, "demodMode", c.demodMode);
     { double dch; if (getNum(s, "dabChannel", dch)) c.dabChannel = (int)dch; }
+    { double dsid; if (getNum(s, "dabSid", dsid)) c.dabSid = (int)dsid; }
     if (getNum(s, "landingFreq", d)) c.landingFreq = d;
+    { double v; if (getNum(s, "landingDabChannel", v)) c.landingDabChannel = (int)v;
+                if (getNum(s, "landingDabSid", v))     c.landingDabSid = (int)v; }
+    getStr(s, "landingDabService", c.landingDabService);
     if (getNum(s, "users", d))       c.users = (int)d;
     if (getNum(s, "maxBw", d))       c.maxBw = d;
     if (getNum(s, "maxFps", d))      c.maxFps = d;
@@ -321,6 +348,8 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     //    start is worse than one with an odd value in it, so the rule is: clamp the recoverable,
     //    reject only the contradictory.
     if (c.users < 1) c.users = 1;
+    // ★ Blocking DAB removes the DAB landing — before the early return, so a live patch obeys it too.
+    dropBlockedDabLanding(c.blockedModes, c.landingDabChannel, c.landingDabSid, c.landingDabService);
     if (!validate) return true;      // a live patch — see the note in the header
     // ★★★ MULTI-USER NO LONGER MEANS LOCKED. This rejected the FM-DX arrangement outright — an
     //     UNLOCKED radio with room for several listeners, all sharing one dial — which is now a
@@ -422,6 +451,10 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     I("gain", r.gain); I("lnaState", r.lnaState); I("ifGr", r.ifGr); I("ifAgc", r.ifAgc);
     S("demodMode", r.demodMode); N("landingFreq", r.landingFreq);
     I("dabChannel", r.dabChannel);   // the mux this radio was left on
+    I("dabSid", r.dabSid);           // ...and the station on it
+    // ★ The DAB landing station — read AND written (radioToJson), the pair this file keeps losing.
+    I("landingDabChannel", r.landingDabChannel); I("landingDabSid", r.landingDabSid);
+    S("landingDabService", r.landingDabService);
     S("allowRanges", r.allowRanges); S("blockRanges", r.blockRanges);
     S("gainLimits", r.gainLimits); S("ifBwLimits", r.ifBwLimits); I("restGain", r.restGain); I("agcLock", r.agcLock);
     // ★ The three that turn a ceiling into a setting — added to BOTH writers, see the note below.
@@ -451,6 +484,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     I("sessionLimitMin", r.sessionLimitMin); B("sessionLimitSoft", r.sessionLimitSoft);
     I("idleKickMin", r.idleKickMin);
     I("dabScanLabels", r.dabScanLabels);
+    dropBlockedDabLanding(r.blockedModes, r.landingDabChannel, r.landingDabSid, r.landingDabService);
 }
 
 std::string radioToJson(const RadioConfig& r) {
@@ -479,6 +513,9 @@ std::string radioToJson(const RadioConfig& r) {
     N("gain", r.gain); N("lnaState", r.lnaState); N("ifGr", r.ifGr); N("ifAgc", r.ifAgc);
     S("demodMode", r.demodMode); N("landingFreq", r.landingFreq);
     N("dabChannel", r.dabChannel);   // the mux this radio was left on
+    N("dabSid", r.dabSid);
+    N("landingDabChannel", r.landingDabChannel); N("landingDabSid", r.landingDabSid);
+    S("landingDabService", r.landingDabService);
     // ★★★ THE BAND LISTS MUST TRAVEL. There are TWO radio writers — one for the file and one for
     //     the config API — and only the file one had these. The setup page reads the API, so the
     //     lists it showed were always empty and the ones it saved were always blank: an owner set
@@ -558,7 +595,9 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.freq = one.freq; r.rate = one.rate; r.lockFreq = one.lockFreq; r.lockRate = one.lockRate;
     r.gain = one.gain; r.lnaState = one.lnaState; r.ifGr = one.ifGr; r.ifAgc = one.ifAgc;
     r.demodMode = one.demodMode; r.landingFreq = one.landingFreq;
-    r.dabChannel = one.dabChannel;
+    r.dabChannel = one.dabChannel; r.dabSid = one.dabSid;
+    r.landingDabChannel = one.landingDabChannel; r.landingDabSid = one.landingDabSid;
+    r.landingDabService = one.landingDabService;
     r.users = one.users; r.maxBw = one.maxBw; r.maxFps = one.maxFps; r.fftRate = one.fftRate;
     r.uncompressed = one.uncompressed;
     r.releaseWhenIdle = one.releaseWhenIdle;
@@ -870,7 +909,9 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.freq = r.freq; c.rate = r.rate; c.lockFreq = r.lockFreq; c.lockRate = r.lockRate;
     c.gain = r.gain; c.lnaState = r.lnaState; c.ifGr = r.ifGr; c.ifAgc = r.ifAgc;
     c.demodMode = r.demodMode; c.landingFreq = r.landingFreq;
-    c.dabChannel = r.dabChannel;
+    c.dabChannel = r.dabChannel; c.dabSid = r.dabSid;
+    c.landingDabChannel = r.landingDabChannel; c.landingDabSid = r.landingDabSid;
+    c.landingDabService = r.landingDabService;
     // ★★★ AN UNLOCKED RADIO STARTS WHERE ITS LISTENERS WILL. A locked radio's centre is the
     //     owner's fixed window and must not move. An unlocked one has no window to protect, and
     //     leaving the capture on `freq` meant the radio sat on a band nobody was going to use —
@@ -917,6 +958,10 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
      *     set it (Stuart, 2026-09-15: "I went in, disabled WFM/ADV RDS/DAB … and they've been
      *     ignored"). The file on the Pi held "wfm,rds,dab"; the radio never saw it. */
     c.blockedModes = r.blockedModes;
+    // ★★ And the rule that goes with it, on the flattened copy the worker actually reads — a
+    //    radio entry that somehow says both (hand-edited, or written by an older page) still
+    //    never lands on DAB.
+    dropBlockedDabLanding(c.blockedModes, c.landingDabChannel, c.landingDabSid, c.landingDabService);
     /* ★★★ THE LAST LINK IN THE CHAIN, AND THE ONE THAT WAS MISSING. This function flattens a
      *     RADIO's settings into the server-level Config that the worker process actually reads, so
      *     a per-radio field that is not copied here simply never arrives — however correctly it is

@@ -181,6 +181,9 @@ public:
 
     }
     uint32_t service() const { return sid_; }
+    /** ★ The service ASKED FOR — set before the ensemble has arrived, and what a resume should bring
+     *  back if the listener left before it ever played (see the shim's g_dabWantSid). */
+    uint32_t wantedService() const { return want_; }
     /** The receiver tells us where the radio actually is, so the two can be compared. */
     /* ★★★ CALLED ON vibe-dsp FOR EVERY BLOCK, so these never take m_ (2026-09-19, a Raspberry Pi 2).
      *  They did — two lock/unlocks per IQ block just to store a number — and the worker holds m_
@@ -575,6 +578,26 @@ public:
         if (!lk.owns_lock()) return false;
         out = learnableLocked_();
         return true;
+    }
+    /** ★★ WHAT A LISTENER COULD BE PUT ON — for the setup page's quick station scan (a DAB landing
+     *  station). The SAME filter as the station list in jsonLocked_(): audio, a known sub-channel,
+     *  no conditional access — a station the list would not offer must not be offered as a landing
+     *  either (AGENTS.md: never a control whose every use is a no-op). `mciComplete` says whether
+     *  the ensemble has described ALL its services yet, which is when a scan may stop early.
+     *  ★ Takes the decoder's lock: callers are the HTTP scan thread, never vibe-dsp. */
+    std::vector<LearnRow> playableAudio(bool* mciComplete) {
+        std::lock_guard<std::mutex> lk(m_);
+        std::vector<LearnRow> out;
+        const Ensemble& e = rx_.ensemble();
+        if (mciComplete) *mciComplete = e.mciComplete();
+        for (const auto& kv : e.services) {
+            const Service& sv = kv.second;
+            if (sv.isData || !sv.complete(e.subChannels)) continue;
+            const ServiceComponent* pc = sv.primaryComponent();
+            if (!pc || pc->tmid != 0 || pc->subChId < 0 || pc->ca) continue;
+            out.push_back({ sv.sid, sv.label, sv.ecc >= 0 ? sv.ecc : e.ecc, int(e.eid) });
+        }
+        return out;
     }
     std::vector<LearnRow> learnableLocked_() {
         std::vector<LearnRow> out;

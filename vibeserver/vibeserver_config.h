@@ -184,7 +184,20 @@ struct Config {
      *    which is a person saying "I do not want this" — the same distinction the memory note
      *    draws, and it must survive a restart too or the receiver argues with them after a reboot. */
     int    dabChannel = -1;
+    /** ★★ And the STATION on that multiplex (DAB SId), so a resume brings back the station and not
+     *  merely the block. 0 = none. Written and cleared beside dabChannel, always as a pair. */
+    int    dabSid = 0;
     double landingFreq = 0;              // 0 = same as freq
+    /* ★★★ A DAB STATION AS THE LANDING (Stuart, 2026-09-28: an aerial behind an FM-stop filter leaves
+     *  DAB as the only thing worth dropping a new listener on). landingDabChannel is an index into
+     *  vibedab::kBandIII (-1 = no DAB landing — today's behaviour), landingDabSid the service
+     *  (0 = the block only), landingDabService its label, kept so the page can show what was chosen
+     *  without re-scanning. landingFreq/demodMode stay as they were: they are the FALLBACK.
+     *  ★★ NEVER TOGETHER WITH "dab" IN blockedModes. The readers clear it (see dropBlockedDabLanding),
+     *     so a config that says both can never land on DAB, whichever page or hand wrote it. */
+    int    landingDabChannel = -1;
+    int    landingDabSid = 0;
+    std::string landingDabService;
 
     // Listeners and ceilings
     int    users = 1;
@@ -375,7 +388,11 @@ struct RadioConfig {
     int    gain = -1, lnaState = -1, ifGr = -1, ifAgc = -1;
     std::string demodMode = "am";
     int    dabChannel = -1;              // the mux this radio was left on — see Config::dabChannel
+    int    dabSid = 0;                   // ...and the station on it — see Config::dabSid
     double landingFreq = 0;
+    int    landingDabChannel = -1;       // ★ a DAB landing station — see Config::landingDabChannel
+    int    landingDabSid = 0;
+    std::string landingDabService;
     int    users = 1;
     /* ★★★ 20, NOT 15 — 15 WAS A RATE NOBODY COULD CHOOSE (2026-09-24). The setup page offers
      *  Full 20 / Half 10 / Quarter 5, but only wrote maxFps (a CEILING), so "Full" meant "no
@@ -858,5 +875,13 @@ const char* defaultPath();
  *  responder claims it; if those two derive it separately they drift, and the address the owner
  *  was shown stops being the address that works. */
 std::string mdnsLabel(const std::string& friendlyName);
+
+/** Is "dab" in a blocked-modes list ("wfm,dab", any case, comma/semicolon/space separated)? */
+bool dabBlocked(const std::string& blockedModes);
+/** ★★★ BLOCKING DAB REMOVES THE DAB LANDING STATION (Stuart, 2026-09-28). Clears the three
+ *  landing fields when "dab" is blocked and returns true if it did. Called by EVERY reader
+ *  (Config, RadioConfig, and the flatten the worker reads), so a config that says both can never
+ *  land a listener on DAB — the page's sentence is the courtesy, this is the rule. */
+bool dropBlockedDabLanding(const std::string& blockedModes, int& ch, int& sid, std::string& service);
 
 } // namespace vsconfig

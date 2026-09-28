@@ -63,6 +63,7 @@
 #include <netinet/in.h>
 #include "vibeserver_config.h"
 #include "vibe_bands.h"
+#include "vibe_dab_channels.h"   // ★ the Band III list the setup page's DAB landing offers
 #include "vibe_benchmark_dab.h"   // ★ the server benchmark and its DAB rows — see setBenchmarkHandlers below
 #include "eibi.h"
 #include "solar.h"
@@ -1481,7 +1482,12 @@ int main(int argc, char** argv) {
         g_runtimeConfig.demodMode);
     // ★ And the multiplex it was left on, so a DAB receiver comes back as a DAB receiver rather
     //   than on the DAB frequency in the default mode — see setVibeServerDabChannel.
-    LocalSdrShim::setVibeServerDabChannel(g_runtimeConfig.dabChannel);
+    LocalSdrShim::setVibeServerDabChannel(g_runtimeConfig.dabChannel, uint32_t(std::max(0, g_runtimeConfig.dabSid)));
+    // ★★★ AND A DAB STATION AS THE LANDING, when the owner chose one. The config readers have already
+    //     cleared it if "dab" is blocked (dropBlockedDabLanding); the shim refuses it again at the
+    //     moment of landing if the radio cannot do DAB. See the precedence note in the accept path.
+    LocalSdrShim::setVibeServerLandingDab(g_runtimeConfig.landingDabChannel,
+                                          uint32_t(std::max(0, g_runtimeConfig.landingDabSid)));
 
     // ── ★★★ mDNS: ADVERTISE THE NAME THE OWNER CHOSE ────────────────────────────────────────
     // This was STORED and never acted on — main.cpp never called startMdns at all, so the Linux
@@ -1684,6 +1690,8 @@ int main(int argc, char** argv) {
                 r.lockFreq = c.lockFreq; r.lockRate = c.lockRate;
                 r.gain = c.gain; r.lnaState = c.lnaState; r.ifGr = c.ifGr; r.ifAgc = c.ifAgc;
                 r.demodMode = c.demodMode; r.landingFreq = c.landingFreq;
+                r.landingDabChannel = c.landingDabChannel; r.landingDabSid = c.landingDabSid;
+                r.landingDabService = c.landingDabService;
                 r.users = c.users; r.maxBw = c.maxBw; r.maxFps = c.maxFps; r.fftRate = c.fftRate;
                 r.uncompressed = c.uncompressed;
                 r.releaseWhenIdle = c.releaseWhenIdle;
@@ -1703,6 +1711,19 @@ int main(int argc, char** argv) {
              *  already fetches; the page reads it back on load and on a poll. */
             std::string j = vsconfig::toJson(out);
             if (!j.empty() && j.back() == '}') j.insert(j.size() - 1, ",\"dirStatus\":" + vibedir::statusJson());
+            /* ★★ THE BAND III BLOCK NAMES, FROM THE TABLE THE RECEIVER TUNES — for the DAB landing
+             *  station's block selector, whose stored value is an INDEX into that table. Sent here as
+             *  well as in /vibeserver/hardware so a radio that is not running (no hardware answer)
+             *  still offers the same list, in the same order, rather than a copy in the page. */
+            {
+                std::string b = ",\"dabBlocks\":[";
+                for (size_t i = 0; i < vibedab::kBandIIICount; ++i)
+                    b += std::string(i ? "," : "") + "\"" + vibedab::kBandIII[i].name + "\"";
+                b += "]";
+                // ★ The LAST brace, not the last byte: toJson ends the object with a newline.
+                const size_t close = j.rfind('}');
+                if (close != std::string::npos) j.insert(close, b);
+            }
             return j;
         },
         [](const std::string& json, std::string& err) -> bool {
@@ -1800,6 +1821,15 @@ int main(int argc, char** argv) {
                     LocalSdrShim::setVibeServerTuneLimits(
                         g_runtimeConfig.mode == vsconfig::Mode::LockedRange ? "" : g_runtimeConfig.allowRanges,
                         g_runtimeConfig.mode == vsconfig::Mode::LockedRange ? "" : g_runtimeConfig.blockRanges);
+                    // ★★ WHERE THE NEXT LISTENER STARTS — live, because it is read only at a new
+                    //    session, so there is nobody to disturb, and an owner who sets a DAB landing
+                    //    station should not have to restart to see it. (A save that blocks DAB has
+                    //    already had its landing cleared by the config reader — dropBlockedDabLanding.)
+                    LocalSdrShim::setVibeServerLanding(
+                        g_runtimeConfig.landingFreq > 0 ? g_runtimeConfig.landingFreq : g_runtimeConfig.freq,
+                        g_runtimeConfig.demodMode);
+                    LocalSdrShim::setVibeServerLandingDab(g_runtimeConfig.landingDabChannel,
+                                                          uint32_t(std::max(0, g_runtimeConfig.landingDabSid)));
                     std::printf("VibeServer: gain limits/rest gain/AGC lock applied live "
                                 "(rest=%d, agcLock=%d)\n", g_runtimeConfig.restGain,
                                 g_runtimeConfig.agcLock);
@@ -2257,6 +2287,9 @@ int main(int argc, char** argv) {
             r.gain = next.gain; r.lnaState = next.lnaState; r.ifGr = next.ifGr; r.ifAgc = next.ifAgc;
             r.demodMode = next.demodMode; r.landingFreq = next.landingFreq;
             r.dabChannel = next.dabChannel;   // the mux this radio was left on, so DAB survives a restart
+            r.dabSid = next.dabSid;           // ...and the station on it, so the resume plays it
+            r.landingDabChannel = next.landingDabChannel; r.landingDabSid = next.landingDabSid;
+            r.landingDabService = next.landingDabService;
             r.users = next.users; r.maxBw = next.maxBw; r.maxFps = next.maxFps;
             r.fftRate = next.fftRate; r.uncompressed = next.uncompressed;
             r.releaseWhenIdle = next.releaseWhenIdle;

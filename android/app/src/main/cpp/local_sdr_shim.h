@@ -598,7 +598,17 @@ public:
      *  unconfigured landing page, and gates mDNS so an unconfigured server is never discovered. */
     /** The multiplex this receiver was left on (-1 = none), restored from the config at startup so
      *  DAB survives a restart and not merely the last listener leaving. */
-    static void setVibeServerDabChannel(int ch);
+    static void setVibeServerDabChannel(int ch, uint32_t sid);
+    /** ★★★ A DAB STATION AS THE LANDING — block index into vibedab::kBandIII (-1 = none) and the
+     *  service's SId (0 = the block only). Applied on a new session through the ordinary DAB entry;
+     *  see the landing block in the spectrum accept path for the precedence against the remembered
+     *  multiplex, and for why a blocked or incapable radio falls back to the plain landing. */
+    static void setVibeServerLandingDab(int ch, uint32_t sid);
+    /** ★ The radio's DISPLAY NAME ("SDR display name" — Linux's `label`), for a host that has no
+     *  front door to publish it (Android). Empty = the name from the USB port, exactly as before.
+     *  Published in /vibeserver.json as `radioLabel` only when set, so the directory publisher can
+     *  prefer it; `radio.model` is untouched, because clients run MODEL TESTS on that. */
+    static void setRadioLabel(const std::string& name);
     /** The public health signal — see vibe_health.h. `healthJson()` is the connect snapshot; it is
      *  empty until the first sample has been taken. */
     void healthTick();

@@ -29,6 +29,10 @@
 #include "../../../../../vibeserver/asndb.h"
 #include "../../../../../vibeserver/radiodns.h"
 #include "vibe_bands.h"   // the server's own band list, shared with the limiter
+#include "vibe_dab_channels.h"   // ★ Band III, for the DAB landing station's block list
+#include <cstdio>
+#include <cstdlib>
+#include <mutex>
 #include "rtl_tcp_server.h"
 
 #define LOG_TAG "VibeLocalSDR"
@@ -1197,6 +1201,104 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetDabPolicy(JNIEnv* env, jobject,
     const char* b = blockedCsv ? env->GetStringUTFChars(blockedCsv, nullptr) : nullptr;
     vibe::LocalSdrShim::setVibeServerBlockedModes(b ? b : "");
     if (b) env->ReleaseStringUTFChars(blockedCsv, b);
+}
+
+/* ★★★ WHERE A NEW LISTENER STARTS — ON ANDROID TOO (2026-09-28). The daemon has always told the shim
+ *  its landing (main.cpp → setVibeServerLanding); the Android boot never did, so on the phone and the
+ *  TV the landing only ever reached the server as the START frequency, and a new session was never
+ *  landed at all. hz <= 0 or an empty mode = no landing, which is what an app with none set sends. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerLanding(JNIEnv* env, jobject, jdouble hz, jstring mode) {
+    const char* m = mode ? env->GetStringUTFChars(mode, nullptr) : nullptr;
+    vibe::LocalSdrShim::setVibeServerLanding((double)hz, m ? m : "");
+    if (m) env->ReleaseStringUTFChars(mode, m);
+}
+/** ★★★ A DAB STATION AS THE LANDING — block index into kBandIII (-1 = none) and the service SId. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerLandingDab(JNIEnv*, jobject, jint ch, jint sid) {
+    vibe::LocalSdrShim::setVibeServerLandingDab((int)ch, sid > 0 ? (uint32_t)sid : 0u);
+}
+/** ★ The radio's display name ("SDR display name"); empty = the name from the USB port. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetRadioLabel(JNIEnv* env, jobject, jstring name) {
+    const char* c = name ? env->GetStringUTFChars(name, nullptr) : nullptr;
+    vibe::LocalSdrShim::setRadioLabel(c ? c : "");
+    if (c) env->ReleaseStringUTFChars(name, c);
+}
+/** ★ The Band III blocks, from the table the receiver tunes — for the app's DAB landing selector,
+ *  which stores an INDEX into it. `[{"name":"5A","hz":174928000},…]` */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeDabBlocksJson(JNIEnv* env, jobject) {
+    std::string j = "[";
+    for (size_t i = 0; i < vibedab::kBandIIICount; ++i)
+        j += std::string(i ? "," : "") + "{\"name\":\"" + vibedab::kBandIII[i].name + "\",\"hz\":"
+           + std::to_string(vibedab::kBandIII[i].centreHz) + "}";
+    return env->NewStringUTF((j + "]").c_str());
+}
+
+/* ★★★ THE MULTIPLEX (AND STATION) THIS RECEIVER WAS LEFT ON — SURVIVING A RESTART ON ANDROID TOO.
+ *  On Linux the shim's vsPersist("{\"dabChannel\":…,\"dabSid\":…}") reaches the daemon's persist
+ *  handler and lands in config.json, and main.cpp hands it back at the next start. Android registered
+ *  NO handler, so every patch went nowhere and a TV left in DAB came back on WFM after the app was
+ *  restarted — the exact fault Stuart reported on 2026-09-24, still open on this platform.
+ *  ★★ This file is the whole of it: two numbers, "<block> <sid>", rewritten atomically whenever the
+ *     shim reports them and read back here, at start, into setVibeServerDabChannel.
+ *  ★ Only the DAB pair is kept. The shim also persists admin gain nudges and the like through this
+ *    same handler; on Android those settings belong to the APP's own store (the server screen), so
+ *    they are deliberately not written here — a second store for them would be a second truth. */
+static std::mutex  g_dabMemMtx;
+static std::string g_dabMemPath;
+static int         g_dabMemCh = -1;
+static uint32_t    g_dabMemSid = 0;
+static bool dabMemNum(const std::string& patch, const char* key, long long& out) {
+    const std::string k = std::string("\"") + key + "\"";
+    size_t p = patch.find(k);
+    if (p == std::string::npos) return false;
+    p = patch.find(':', p + k.size());
+    if (p == std::string::npos) return false;
+    char* end = nullptr;
+    const long long v = std::strtoll(patch.c_str() + p + 1, &end, 10);
+    if (end == patch.c_str() + p + 1) return false;
+    out = v;
+    return true;
+}
+static void dabMemWriteLocked() {
+    if (g_dabMemPath.empty()) return;
+    const std::string tmp = g_dabMemPath + ".tmp";
+    FILE* f = std::fopen(tmp.c_str(), "w");
+    if (!f) { LOGE("DAB memory: cannot write %s", tmp.c_str()); return; }
+    std::fprintf(f, "%d %u\n", g_dabMemCh, (unsigned)g_dabMemSid);
+    std::fclose(f);
+    if (std::rename(tmp.c_str(), g_dabMemPath.c_str()) != 0)
+        LOGE("DAB memory: cannot replace %s", g_dabMemPath.c_str());
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetDabMemoryPath(JNIEnv* env, jobject, jstring path) {
+    const char* c = path ? env->GetStringUTFChars(path, nullptr) : nullptr;
+    const std::string p = c ? c : "";
+    if (c) env->ReleaseStringUTFChars(path, c);
+    int ch = -1; unsigned sid = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_dabMemMtx);
+        g_dabMemPath = p;
+        g_dabMemCh = -1; g_dabMemSid = 0;
+        if (!p.empty()) {
+            if (FILE* f = std::fopen(p.c_str(), "r")) {
+                if (std::fscanf(f, "%d %u", &ch, &sid) == 2 && ch >= 0) { g_dabMemCh = ch; g_dabMemSid = sid; }
+                else { ch = -1; sid = 0; }
+                std::fclose(f);
+            }
+        }
+    }
+    vibe::LocalSdrShim::setVibeServerDabChannel(ch, sid);
+    vibe::LocalSdrShim::setConfigPersistHandler([](const std::string& patch) {
+        long long v = 0;
+        std::lock_guard<std::mutex> lk(g_dabMemMtx);
+        bool changed = false;
+        if (dabMemNum(patch, "dabChannel", v)) { g_dabMemCh = v >= 0 ? int(v) : -1; changed = true; }
+        if (dabMemNum(patch, "dabSid", v))     { g_dabMemSid = v > 0 ? uint32_t(v) : 0u; changed = true; }
+        if (changed) { if (g_dabMemCh < 0) g_dabMemSid = 0; dabMemWriteLocked(); }
+    });
 }
 
 /* ★ DAB whole-multiplex label scan: -1 = the build's default (off on 32-bit ARM = VibeServer Lite, on

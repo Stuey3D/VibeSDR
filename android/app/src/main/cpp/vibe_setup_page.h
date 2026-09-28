@@ -667,7 +667,34 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
       <div class="card" id="startCard">
         <h2>Where new listeners start</h2>
         <p class="why">What someone sees the moment they connect.</p>
-        <div class="row">
+        <!-- ★★★ A DAB STATION AS THE LANDING (Stuart, 2026-09-28, in his words: "just above the entry
+             for frequency and demod selector have a use DAB station as landing station? tap yes and
+             then a block selector pops up and you choose a block … then next to that a quick station
+             scan and then a selection box for the station"). Drawn ONLY for a radio that can do DAB —
+             an Airspy HF+ never sees it (AGENTS.md: no control that cannot act). When DAB is blocked
+             on the radio the toggle is not offered, and the note below says why the landing went. -->
+        <div id="dabLandWrap" class="hide">
+          <label style="display:flex;align-items:center;gap:10px">
+            <input type="checkbox" id="dabLandOn">
+            <span>Use a DAB station as the landing station?</span></label>
+          <div id="dabLandBox" class="hide" style="margin-top:10px">
+            <div class="row" style="align-items:flex-end">
+              <label><span class="lbl">Block</span>
+                <select id="dabLandBlock"></select></label>
+              <button type="button" class="ghost" id="dabLandScan" style="flex:0 0 auto">Quick station scan</button>
+            </div>
+            <div class="hint" id="dabLandScanMsg"></div>
+            <label style="margin-top:10px"><span class="lbl">Station</span>
+              <select id="dabLandStation"></select></label>
+            <div class="hint">A new listener is put straight onto this station. DAB takes a few
+              seconds to lock onto a multiplex, so they hear it shortly after they arrive.</div>
+          </div>
+        </div>
+        <div class="hint" id="dabLandNote"></div>
+        <div class="hint" id="plainLandHead" style="display:none;margin-top:10px">If the DAB station
+          cannot be opened &mdash; the radio busy on something that stops it reaching DAB &mdash;
+          listeners start here instead:</div>
+        <div class="row" id="plainLandRow">
           <label><span class="lbl">Frequency (kHz)</span>
             <input type="number" id="landingFreq" step="0.1"></label>
           <label><span class="lbl">Mode</span>
@@ -1836,6 +1863,7 @@ function setMode(locked) {
   if (typeof usersNote === "function") usersNote();
   if (typeof syncUncompressed === "function") syncUncompressed();
   syncSpectroOffer();
+  if (typeof dabLandRender === "function") dabLandRender();   // ★ a locked centre with own VFOs cannot do DAB
 }
 
 /** ★★★ THE OFFER FOLLOWS THE RULE, LIVE. A radio only qualifies while its window is FIXED and it
@@ -1986,8 +2014,213 @@ function modeBlockRender() {
       if (el.checked) set.delete(el.dataset.mode); else set.add(el.dataset.mode);
       radio().blockedModes = [...set].join(",");
       modeBlockSummary();
+      dabLandOnBlockedChange(el.dataset.mode, !el.checked);
     });
   });
+}
+
+/* ── ★★★ THE DAB LANDING STATION (Stuart, 2026-09-28) ─────────────────────────────────────────
+ *  A toggle above the landing frequency; yes → a block selector, a quick station scan beside it,
+ *  and a station selector. Stored on the radio as landingDabChannel (an index into the server's own
+ *  Band III table — the list below comes FROM that table, so the two cannot drift), landingDabSid
+ *  and landingDabService (the label, so the choice shows without a re-scan).
+ *  ★★ Offered only on a radio that can do DAB (dabLandHwCan). Blocking DAB removes it, here AND on
+ *     the server (dropBlockedDabLanding) — the sentence in #dabLandNote is the page saying so. */
+let HW_PREFIX = "";            // "" when the open tab is this process's radio, else "/r/<serial>"
+let dabLandStations = {};      // block index -> [{sid,label}] heard or scanned
+let dabLandScanning = false;
+
+function dabLandBlocks() {
+  if (HW && Array.isArray(HW.dabBlocks) && HW.dabBlocks.length) return HW.dabBlocks;
+  return (cfg && Array.isArray(cfg.dabBlocks) ? cfg.dabBlocks : []).map(n => ({ name: String(n) }));
+}
+/** Could this radio do DAB at all — ignoring the owner's own block, which has its own sentence? */
+function dabLandHwCan() {
+  const r = radio();
+  let can;
+  if (HW && typeof HW.dabHw === "boolean" && !HW.offline) can = HW.dabHw;
+  // ★ A radio that is not running cannot answer; its DRIVER can. The HF+ never reaches 2.048 MS/s.
+  else can = r.driver !== "airspyhf" && DAB_DECODER;
+  // ★ A locked centre with its own VFOs cannot move the capture onto a multiplex (vsDabCapable).
+  if (r.mode === "locked" && parseInt($("users").value || "1", 10) > 1) can = false;
+  return can && dabLandBlocks().length > 0;
+}
+function plainLandingWords() {
+  const k = parseFloat($("landingFreq").value || "0");
+  const m = String($("demodMode").value || "am").toUpperCase();
+  if (!(k > 0)) return `the radio's own frequency in ${m}`;
+  const f = k >= 1000 ? (k / 1000).toFixed(4).replace(/0+$/, "").replace(/\.$/, "") + " MHz"
+                      : String(k).replace(/\.0$/, "") + " kHz";
+  return `${f} ${m}`;
+}
+async function authQueryFor(prefix) {
+  if (!prefix) return authQuery();
+  if (TICKET) return `vs_admin_ticket=${encodeURIComponent(TICKET)}`;
+  const r = await fetch(prefix + "/vibeserver/auth", {cache:"no-store"});
+  const nonce = (await r.json()).nonce;
+  const tok = toHex(hmacSha256(bytesOf(PASS), bytesOf(nonce)));
+  return `vs_admin_nonce=${encodeURIComponent(nonce)}&vs_admin_auth=${tok}`;
+}
+function dabLandStationRender() {
+  const r = radio();
+  const idx = Number(r.landingDabChannel);
+  const sel = $("dabLandStation");
+  const list = (dabLandStations[idx] || []).slice();
+  const sid = Number(r.landingDabSid) || 0;
+  // ★ The saved choice stays visible even before a scan has confirmed it is still on the air.
+  if (sid > 0 && !list.some(s => Number(s.sid) === sid))
+    list.unshift({ sid, label: r.landingDabService || ("Service " + sid.toString(16).toUpperCase()) });
+  sel.innerHTML = `<option value="0">No station — listeners choose from the list</option>`
+    + list.map(s => `<option value="${Number(s.sid)}">${esc(s.label)}</option>`).join("");
+  sel.value = String(sid);
+}
+async function dabLandLoadKnown(idx) {
+  // ★ Stations this receiver has ALREADY heard on the block — instant, and the radio is not touched.
+  if (!HW || HW.offline) return;
+  const b = dabLandBlocks()[idx]; if (!b) return;
+  try {
+    const q = await authQueryFor(HW_PREFIX);
+    const j = await (await fetch(`${HW_PREFIX}/vibeserver/dab-scan?block=${encodeURIComponent(b.name)}&known=1&${q}`,
+                                 {cache:"no-store"})).json();
+    if (j && j.ok && Array.isArray(j.services)) {
+      const have = dabLandStations[idx] || [];
+      for (const s of j.services) if (!have.some(h => h.sid === s.sid)) have.push(s);
+      dabLandStations[idx] = have;
+      if (Number(radio().landingDabChannel) === idx) dabLandStationRender();
+    }
+  } catch (e) { $("dabLandScanMsg").textContent = "Could not read the stations this radio has heard: " + e.message; }
+}
+function dabLandRender() {
+  const wrap = $("dabLandWrap"); if (!wrap) return;
+  const r = radio();
+  const hwCan = dabLandHwCan();
+  const blocked = modeBlockSet().has("dab");
+  const offer = hwCan && !blocked;
+  wrap.classList.toggle("hide", !offer);
+  const on = offer && Number(r.landingDabChannel) >= 0;
+  $("dabLandOn").checked = on;
+  $("dabLandBox").classList.toggle("hide", !on);
+  // ★ VISIBLY SUPERSEDED, not both active: the frequency and mode become the fallback.
+  $("plainLandHead").style.display = on ? "" : "none";
+  $("plainLandRow").style.opacity = on ? ".55" : "";
+  const note = $("dabLandNote");
+  if (!offer && Number(r.landingDabChannel) >= 0 && !blocked)
+    note.textContent = "This radio cannot reach DAB with its current settings, so its DAB landing "
+      + `station will not be used — listeners will start on ${plainLandingWords()} instead.`;
+  else if (!r._dabLandRemoved) note.textContent = "";
+  if (!on) return;
+  const blocks = dabLandBlocks();
+  const sel = $("dabLandBlock");
+  sel.innerHTML = blocks.map((b, i) =>
+    `<option value="${i}">${esc(b.name)}${b.ensemble ? " · " + esc(b.ensemble) : ""}</option>`).join("");
+  sel.value = String(r.landingDabChannel);
+  const scan = $("dabLandScan");
+  scan.disabled = dabLandScanning || !HW || !!HW.offline;
+  if (!dabLandScanning && (!HW || HW.offline))
+    $("dabLandScanMsg").textContent = "This radio is not running, so it cannot scan just now. Choose the "
+      + "block and save; once it is serving, scan again to pick the station.";
+  dabLandStationRender();
+}
+function dabLandOnBlockedChange(mode, blockedNow) {
+  // ★★★ BLOCKING DAB REMOVES THE DAB LANDING STATION — and says so, in a sentence.
+  const r = radio();
+  if (mode !== "dab") return;
+  if (blockedNow && Number(r.landingDabChannel) >= 0) {
+    r.landingDabChannel = -1; r.landingDabSid = 0; r.landingDabService = "";
+    r._dabLandRemoved = true;
+    $("dabLandNote").textContent = "DAB is blocked on this radio, so its DAB landing station has been "
+      + `removed — listeners will start on ${plainLandingWords()} instead.`;
+  } else if (!blockedNow && r._dabLandRemoved) {
+    r._dabLandRemoved = false;
+    $("dabLandNote").textContent = "";
+  }
+  dabLandRender();
+}
+function dabLandDefaultBlock() {
+  const blocks = dabLandBlocks();
+  // ★ A block this aerial has actually heard beats a guess; 12B (BBC National in the UK) beats 5A.
+  let i = blocks.findIndex(b => b.ensemble);
+  if (i < 0) i = blocks.findIndex(b => b.name === "12B");
+  return i < 0 ? 0 : i;
+}
+async function dabLandScanRun() {
+  const r = radio();
+  const idx = Number(r.landingDabChannel);
+  const b = dabLandBlocks()[idx];
+  if (!b || dabLandScanning) return;
+  dabLandScanning = true;
+  const btn = $("dabLandScan"), msg = $("dabLandScanMsg");
+  btn.disabled = true;
+  const t0 = Date.now();
+  // ★ Progress, because it takes a while: locking a multiplex is 3-6 s, the names follow it, and
+  //   the server stops as soon as the list is complete (15 s at the very most).
+  const tick = setInterval(() => {
+    const s = Math.round((Date.now() - t0) / 1000);
+    msg.textContent = `Scanning ${b.name}… ${s} s — locking onto the multiplex takes a few `
+      + "seconds, then the station names arrive. Up to 15 s.";
+  }, 250);
+  try {
+    const q = await authQueryFor(HW_PREFIX);
+    const res = await fetch(`${HW_PREFIX}/vibeserver/dab-scan?block=${encodeURIComponent(b.name)}&${q}`,
+                            {cache:"no-store"});
+    if (res.status === 401) throw new Error("the server did not accept the admin password");
+    const j = await res.json();
+    if (!j.ok) msg.textContent = "Scan not done: " + (j.why || "the server refused");
+    else {
+      dabLandStations[idx] = Array.isArray(j.services) ? j.services : [];
+      const n = dabLandStations[idx].length;
+      msg.textContent = j.cancelled
+        ? "A listener arrived, so the scan stopped and handed them the radio. "
+          + (n ? `${n} station${n === 1 ? "" : "s"} found before it stopped.` : "Try again when it is free.")
+        : !j.locked ? `Nothing found on ${b.name} — no multiplex locked in ${j.secs} s. Try another block.`
+        : n ? `${n} station${n === 1 ? "" : "s"} on ${b.name}${j.ensemble ? " (" + j.ensemble + ")" : ""}`
+              + (j.complete ? "." : " — the ensemble had not listed everything yet; scan again for the rest.")
+        : `${b.name} locked but named no stations in ${j.secs} s. Scan again, or check the aerial.`;
+      if (j.ensemble && dabLandBlocks()[idx]) dabLandBlocks()[idx].ensemble = j.ensemble;
+    }
+  } catch (e) {
+    msg.textContent = "Scan failed: " + e.message;
+  } finally {
+    clearInterval(tick);
+    dabLandScanning = false;
+    dabLandRender();
+  }
+}
+function dabLandInit() {
+  $("dabLandOn").addEventListener("change", () => {
+    const r = radio();
+    if ($("dabLandOn").checked) {
+      r.landingDabChannel = dabLandDefaultBlock(); r.landingDabSid = 0; r.landingDabService = "";
+      $("dabLandScanMsg").textContent = "";
+      dabLandLoadKnown(r.landingDabChannel);
+    } else {
+      r.landingDabChannel = -1; r.landingDabSid = 0; r.landingDabService = "";
+    }
+    dabLandRender();
+  });
+  $("dabLandBlock").addEventListener("change", () => {
+    const r = radio();
+    r.landingDabChannel = parseInt($("dabLandBlock").value, 10);
+    r.landingDabSid = 0; r.landingDabService = "";   // ★ a station belongs to its block
+    $("dabLandScanMsg").textContent = "";
+    dabLandLoadKnown(r.landingDabChannel);
+    dabLandRender();
+  });
+  $("dabLandStation").addEventListener("change", () => {
+    const r = radio();
+    const sid = parseInt($("dabLandStation").value, 10) || 0;
+    const opt = $("dabLandStation").selectedOptions[0];
+    r.landingDabSid = sid;
+    r.landingDabService = sid > 0 && opt ? opt.textContent : "";
+  });
+  $("dabLandScan").addEventListener("click", dabLandScanRun);
+  // ★ The sentence names the fallback, so it follows the fallback when the owner edits it.
+  for (const id of ["landingFreq", "demodMode"]) $(id).addEventListener("change", () => {
+    if (radio()._dabLandRemoved)
+      $("dabLandNote").textContent = "DAB is blocked on this radio, so its DAB landing station has been "
+        + `removed — listeners will start on ${plainLandingWords()} instead.`;
+  });
+  $("users").addEventListener("input", dabLandRender);
 }
 
 /** One line saying what this receiver will and will not offer. */
@@ -2763,6 +2996,10 @@ async function renderHw() {
   // ★ Only the sliders are re-wired, not the whole card: renderGain() rewrites the gain boxes from
   //   the stored config, which would wipe a figure the owner was part-way through typing.
   HW = hw;
+  // ★ Where THIS tab's radio answers — the DAB landing's scan must reach the radio, not the door.
+  HW_PREFIX = mine ? "" : "/r/" + encodeURIComponent(r.serial || "");
+  dabLandRender();
+  if (Number(r.landingDabChannel) >= 0) dabLandLoadKnown(Number(r.landingDabChannel));
   wireGainSlider("gainRestSlider", "gainRest");
   wireGainSlider("gainMaxSlider", "gainMax");
   fillGainBands();   // ★ BANDS is only trustworthy here — see fillGainBands.
@@ -3554,6 +3791,7 @@ function fill() {
   $("landingFreq").value = ((r.landingFreq || r.freq || 0) / 1e3).toFixed(1);
   $("demodMode").value = r.demodMode || "am";
   $("users").value = r.users || 1;
+  dabLandRender();
 
   if ($("biasT")) $("biasT").checked = !!r.biasT;
   if ($("ppm"))   $("ppm").value = r.ppm != null ? r.ppm : 0;
@@ -3909,6 +4147,16 @@ function collectRadio() {
     antennaMap: $("antennaMap") ? ($("antennaMap").value || "").trim() : "",
     antennaPortLocked: $("antennaPortLocked") ? !!$("antennaPortLocked").checked : false,
     demodMode: $("demodMode").value,
+    // ★★★ THE DAB LANDING STATION — edited straight onto the radio object, carried through here.
+    //     Never sent alongside a DAB block (the server clears that pair anyway: dropBlockedDabLanding).
+    ...(function () {
+      const r = radio();
+      const ch = Number.isFinite(Number(r.landingDabChannel)) ? Number(r.landingDabChannel) : -1;
+      if (ch < 0 || modeBlockSet().has("dab"))
+        return { landingDabChannel: -1, landingDabSid: 0, landingDabService: "" };
+      return { landingDabChannel: ch, landingDabSid: Number(r.landingDabSid) || 0,
+               landingDabService: String(r.landingDabService || "") };
+    })(),
     // ★★★ SENT IN BOTH MODES. Forcing 1 on an unlocked radio silently threw away the box the
     //     owner had just typed in, and with it the entire shared-dial arrangement — the count is
     //     what turns an unlocked receiver into an FM-DX one.
@@ -4185,6 +4433,7 @@ $("signinBtn").onclick = () => signIn(false);
 if (TICKET) signIn(true);
 $("pass").addEventListener("keydown", e => { if (e.key === "Enter") $("signinBtn").click(); });
 
+dabLandInit();
 $("modeSingle").onclick = () => setMode(false);
 $("modeLocked").onclick = () => setMode(true);
 $("name").addEventListener("input", addr);

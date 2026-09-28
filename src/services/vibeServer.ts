@@ -118,6 +118,14 @@ export type VibeServerConfig = {
   blockRanges?: string;
   /** Modes and decoders the owner has switched off, comma separated (e.g. "dab,wfm"). */
   blockedModes?: string;
+  /** ★★★ A DAB STATION AS THE LANDING (2026-09-28): Band III block index (-1 = none — the landing
+   *  frequency applies), the service SId (0 = the block only) and its label. Ignored by the server
+   *  when "dab" is in blockedModes, or when the radio cannot reach a multiplex. */
+  landingDabChannel?: number;
+  landingDabSid?: number;
+  landingDabService?: string;
+  /** ★ The radio's display name ("SDR display name"). '' = the name from the USB port. */
+  radioLabel?: string;
   /** DAB may borrow the 2.4 MS/s it captures at, on a receiver configured slower. */
   dabRateBoost?: boolean;
   /** Per-band gain ceilings ("all:250,fm:150"), the gain to return to when everyone leaves
@@ -261,6 +269,11 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     allowRanges: cfg.allowRanges ?? '',
     blockRanges: cfg.blockRanges ?? '',
     blockedModes: cfg.blockedModes ?? '',
+    // ★ Sent on EVERY start (restore included), at a definite value — see VibeServerBoot.
+    landingDabChannel: cfg.landingDabChannel ?? -1,
+    landingDabSid: cfg.landingDabSid ?? 0,
+    landingDabService: cfg.landingDabService ?? '',
+    radioLabel: (cfg.radioLabel ?? '').trim(),
     dabRateBoost: cfg.dabRateBoost === true,
     gainLimits: cfg.gainLimits ?? '',
     restGain: cfg.restGain ?? -1,
@@ -310,6 +323,27 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
   void publishLocation();
   startBookmarkAutosave();
   return info;
+}
+
+/** ★ The Band III blocks, from the receiver's OWN table (the landing stores an index into it). */
+export type DabBlock = { name: string; hz: number };
+export async function getDabBlocks(): Promise<DabBlock[]> {
+  if (!Local?.dabBlocks) return [];
+  return JSON.parse(await Local.dabBlocks()) as DabBlock[];
+}
+export type DabScanResult = {
+  ok: boolean; why?: string; known?: boolean; block?: string; ensemble?: string;
+  locked?: boolean; complete?: boolean; cancelled?: boolean; secs?: number;
+  services?: { sid: number; label: string }[];
+};
+/**
+ * ★★★ THE QUICK STATION SCAN — tune the block briefly and read its stations (up to ~15 s). The
+ *  engine does it; see VibeLocalSdrModule.dabQuickScan for how it gets a radio when the server is
+ *  not running. `known` = only the stations the running server has already heard, instantly.
+ */
+export async function dabQuickScan(block: string, known: boolean, blockedModes: string): Promise<DabScanResult> {
+  if (!Local?.dabQuickScan) return { ok: false, why: 'this build cannot scan' };
+  return JSON.parse(await Local.dabQuickScan(block, known, blockedModes)) as DabScanResult;
 }
 
 /**
