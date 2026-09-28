@@ -894,7 +894,14 @@ if(KIND==='hfdl'){
     },15000);
   }
   toast.addEventListener('click',function(){
-    if(lastFlight&&lastFlight.key)fitToLatest(lastFlight.key,lastFlight.gsid);
+    if(!lastFlight||!lastFlight.key)return;
+    fitToLatest(lastFlight.key,lastFlight.gsid);
+    /* ★ AND OPEN ITS CARD (Stuart, 2026-09-28: tapping the "flight received" pill should show the
+     *  pop-up on the plane — the pointer turned to a hand and nothing opened). Opened NOW, not on
+     *  'moveend': the card is pinned to the marker and rides the fly, and an aircraft already in view
+     *  produces no move at all, so a moveend-only open would silently never happen. */
+    var m=acM[lastFlight.key];
+    if(m&&m.openPopup){try{m.openPopup();}catch(e){console.error('HFDL: could not open the aircraft card',e);}}
   });
 
   // skin _buildACPopup table — Alt row dropped (never populates upstream),
