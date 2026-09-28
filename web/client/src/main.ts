@@ -1840,10 +1840,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       if (m.userNotch !== undefined) hwUserNotch = Number(m.userNotch) !== 0;
       applyRspLock();
       if (Number(m.autoNotch) === 1) {
-        if (m.rfNotch  !== undefined) setToggleTo('rspRfNotch',  Number(m.rfNotch),  'rsp_rfnotch');
-        if (m.dabNotch !== undefined) setToggleTo('rspDabNotch', Number(m.dabNotch), 'rsp_dabnotch');
+        if (m.rfNotch  !== undefined) setToggleTo('rspRfNotch',  Number(m.rfNotch) !== 0,  'rsp_rfnotch');
+        if (m.dabNotch !== undefined) setToggleTo('rspDabNotch', Number(m.dabNotch) !== 0, 'rsp_dabnotch');
       }
-      if (m.rfAgc !== undefined) setToggleTo('rspRfAgc', Number(m.rfAgc), 'rsp_rfagc');
+      if (m.rfAgc !== undefined) setToggleTo('rspRfAgc', Number(m.rfAgc) !== 0, 'rsp_rfagc');
       if (typeof m.agcSet === 'number') {
         const el = $<HTMLInputElement>('rspAgcSet');
         const pressedAt = recentPress.get('rspAgcSet') ?? 0;

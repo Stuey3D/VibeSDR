@@ -286,6 +286,8 @@ export interface DabState {
    *  digital flow: audio exists at the server when this is climbing, whatever the player does. */
   pcmPushed?: number;
   mp2In?: number; mp2Bad?: number; mp2Concealed?: number; mp2NoSync?: number;
+  /** MP2 sub-band groups whose scale-factor CRC failed and kept their last good factors. */
+  scfConcealed?: number;
   dls?: string; dlsCrcOk?: number; dlsCrcFail?: number;
   /** ★ DL Plus (TS 102 980): the station's own division of the label into artist, title and the
    *  rest — DAB's RT+, keyed by name. `dlpRunning` false means the ITEM has ended (an ad break,
@@ -429,7 +431,7 @@ export interface SpectrumCallbacks {
     autobwHz?: number;
     imsBlend?: number;
     nrStrength?: number;      // 0..1.4 (>1 = over-subtraction), absent = never set
-    rfNotch?: boolean; dabNotch?: boolean;
+    rfNotch?: boolean; dabNotch?: boolean; rfAgc?: boolean;
     /** ★ TWO SEPARATE BIAS-TEES: `biasT` is the dongle's, `rspBiasT` the RSP's. Different
      *  hardware, different setter, different button — never fold them into one field. */
     biasT?: boolean; rspBiasT?: boolean;
