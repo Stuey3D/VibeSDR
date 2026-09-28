@@ -9050,8 +9050,13 @@ function initDecoders(host: string, auth: AuthState) {
     onSstvMode: (name) => { $('decStatus').textContent = name; },
     onStatus: (t) => { $('decStatus').textContent = t; },
     onSpot: (sp) => {
+      // ★★★ No count cap (it held 500 reports, so an all-filters map dropped older stations — Stuart,
+      //   2026-09-28). The newest report per call|band|mode replaces its older one: the list already
+      //   shows only the newest per station, and memory grows with stations heard, not with time.
+      const k = `${sp.callsign}|${sp.band}|${sp.mode}`;
+      const dup = spots.findIndex(o => `${o.callsign}|${o.band}|${o.mode}` === k);
+      if (dup >= 0) spots.splice(dup, 1);
       spots.unshift(sp);
-      if (spots.length > 500) spots.pop();
       renderSpots();
       pushSpotsToMap();      // ★ keep an open map current — see pushSpotsToMap()
       setDecLive(true);

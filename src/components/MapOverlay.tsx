@@ -1068,7 +1068,12 @@ if(KIND==='hfdl'){
 // ════════ DIGI / CW spots (skin lsv-digmap / lsv-cwmap parity) ════════
 if(KIND==='digi'||KIND==='cw'){
   var isCW=(KIND==='cw');
-  var spots=[], markers={}, MAXS=500;
+  /* ★★★ NO COUNT CAP. This held the newest 500 spot REPORTS, so with every filter on All the map
+   *  topped out near 500 and then dropped older stations as new decodes arrived (Stuart, 2026-09-28:
+   *  "a user said they wanted to see all spots"). The map draws one marker per call|band|mode, so
+   *  that is all we keep: the newest report per station replaces its older one. Memory now grows with
+   *  the number of distinct stations heard, not with time, and the markers are GPU circles. */
+  var spots=[], byKey={}, markers={};
   var fMode=document.getElementById('fMode'), fBand=document.getElementById('fBand'), fAge=document.getElementById('fAge');
 
   // skin BAND_COLOUR — markers coloured by band, sized by SNR
@@ -1228,8 +1233,10 @@ if(KIND==='digi'||KIND==='cw'){
   function ingest(d){
     var s=norm(d||{},isCW);
     if(!s)return;
+    var k=key(s), old=byKey[k];
+    if(old){var i=spots.indexOf(old);if(i>=0)spots.splice(i,1);}
+    byKey[k]=s;
     spots.unshift(s);
-    if(spots.length>MAXS)spots.length=MAXS;
     upsert(s);
     updateCount();
     showSpotToast(s);
