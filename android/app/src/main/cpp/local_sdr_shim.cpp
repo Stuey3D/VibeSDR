@@ -6098,6 +6098,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // itself on a channel change. Guarded: only the macOS core links libopus today.
 #ifdef VIBE_HAVE_OPUS
     vibe::OpusAudioEncoder opusEnc;
+    /* ★★★ ONE LOCK FOR BOTH SHARED ENCODERS (opusEnc, opusSilence). Three threads reach them: the
+     *  vibe-dsp thread (every demodulator's onAudio), the vibe-dabclk thread (pumpDabAudio → onAudio,
+     *  and `dabInject_` is a plain bool, so the DSP thread can pass the DAB gate while the clock
+     *  thread is injecting), and the network thread (`opusEnc.reset()` when the first listener's
+     *  audio socket connects). OpusAudioEncoder is not thread-safe: reset()/a channel change DESTROY
+     *  the libopus state another thread may be inside. Found by the client self-heal harness,
+     *  2026-09-28: SIGSEGV in opus_encode at 0x70 on vibe-dsp, right after a DAB → WFM switch with
+     *  the listener's audio socket reconnecting — the whole server down for every listener.
+     *  ★ Held only for an encode of one block (well under a millisecond); nothing blocks inside. */
+    std::mutex opusMtx;
 #endif
     // VibeServer wire-byte counters (cumulative), split spectrum vs audio, for the
     // sharing screen's live "what the server is pushing" readout. The rate is
@@ -11389,6 +11399,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //   somebody is, its first packet is not a half-filled frame.
             std::vector<int16_t> zeros((size_t)count * (ch == 1 && !audioForceMono.load() ? 2 : ch), 0);
             std::vector<std::vector<uint8_t>> drop;
+            std::lock_guard<std::mutex> lk(opusMtx);   // ★ see opusMtx
             opusSilence.setBitrate(opusBitrateFor(ch));
             opusSilence.encode(zeros.data(), count, ch == 1 && !audioForceMono.load() ? 2 : ch, drop);
         }
@@ -11428,9 +11439,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // current web client — is never sent it, so nothing breaks; it gets PCM below.
         if (audioWantsOpus.load()) {
             vibe::OpusAudioEncoder& enc = silence ? opusSilence : opusEnc;   // ★ two streams, one shape
-            enc.setBitrate(opusBitrateFor(contentCh));
             std::vector<std::vector<uint8_t>> packets;
-            enc.encode(pcm, count, ch, packets);   // buffers into 20 ms frames internally
+            {
+                std::lock_guard<std::mutex> lk(opusMtx);   // ★ see opusMtx — the fan-out below is outside it
+                enc.setBitrate(opusBitrateFor(contentCh));
+                enc.encode(pcm, count, ch, packets);   // buffers into 20 ms frames internally
+            }
             const uint32_t sr = (uint32_t)vibe::OpusAudioEncoder::kSampleRate;   // always 48 kHz
             for (auto& pkt : packets) {
                 std::vector<uint8_t> frame; frame.reserve(6 + pkt.size());
@@ -17913,7 +17927,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 audioForceMono.store(forceMono);
 #ifdef VIBE_HAVE_OPUS
                 audioWantsOpus.store(wantsOpus);
-                opusEnc.reset();   // fresh stream for the new listener — no carried-over remainder
+                { std::lock_guard<std::mutex> lk(opusMtx);   // ★ the DSP thread may be mid-encode — see opusMtx
+                  opusEnc.reset(); }   // fresh stream for the new listener — no carried-over remainder
 #else
                 audioWantsOpus.store(false);   // no encoder in this build
 #endif
