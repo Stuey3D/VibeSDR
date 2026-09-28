@@ -81,6 +81,10 @@
    *  with an unasserted replace -- a no-op edit leaves no trace at all. */
   const MAP_REEF = '#4e8f93', MAP_PLAYA = '#8a8470', MAP_CAPITAL = '#f0c56a';
   const MAP_SEA = '#123049', MAP_LAND = '#3c5a3f', MAP_COAST = '#6fa37b';
+  /* The same credit the GPU style carries in its sources (web/mapkit/vibemap-style.json). */
+  const MAP_ATTRIBUTION = 'Natural Earth &middot; NOAA ETOPO &middot; &copy; GeoNames &middot; '
+    + '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a> &middot; '
+    + '&copy; HydroLAKES / HydroSHEDS &middot; &copy; RESOLVE Ecoregions 2017 &middot; OurAirports &middot; NGA World Port Index';
   /* ★★★ A NATIONAL BORDER IS NOT A COASTLINE, AND IT WAS DRAWN AS ONE — same MAP_COAST colour,
    *  LESS weight and LESS opacity than the coast it copied, so a border read as a faded shore.
    *  Stuart, 2026-09-26: *"can the country boarders be more prominent as the whole of eastern
@@ -413,6 +417,15 @@
      *  what made this renderer un-shareable (`markers` was a directory-page const). */
     const reserve = typeof o.reserve === 'function' ? o.reserve : () => [];
     injectCss(map.getContainer().ownerDocument || global.document);
+    /* ★★★ THE DATA CREDIT TRAVELS WITH THE DATA. This renderer draws the same bundled layers as the
+     *  GPU map, and three of them (GeoNames, HydroLAKES, RESOLVE) are CC BY 4.0 and the detailed
+     *  coastline is ODbL: attribution is a CONDITION of using them, not a courtesy. The GPU map
+     *  carries it in its style's sources; this path had an attribution control and nothing in it,
+     *  so every Leaflet fallback (no WebGL2, no /mapgl/) showed the map uncredited. Added here,
+     *  once, so every host of this renderer gets it without having to remember. */
+    if (map.attributionControl && typeof map.attributionControl.addAttribution === 'function') {
+      map.attributionControl.addAttribution(MAP_ATTRIBUTION);
+    }
 
     let P = PROFILES[o.profile] || PROFILES.directory;
     let band = memoryBand(o.memory);
