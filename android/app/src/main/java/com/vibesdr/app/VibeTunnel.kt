@@ -552,6 +552,13 @@ object VibeTunnel {
             out.put("pin", j.optBoolean("pin", false))
             // ★ The contract this server speaks (docs/PROTOCOL.md).
             if (j.has("proto")) { out.put("proto", j.optInt("proto", 1)); out.put("minProto", j.optInt("minProto", 0)) }
+            /* ★★ WHICH VibeServer, AND WHICH VERSION — Android never sent either, so the directory
+             *  listed the Sony TV (Lite) and the phones with NO version, while every Linux box showed
+             *  one (Kiko spotted it; Stuart, 2026-09-28). The same whitelist trap directory.cpp hit on
+             *  2026-09-21: this payload is a curated subset of vibeserver.json, and nobody had told it.
+             *  Taken from the server's own vibeserver.json, as on Linux, so the number cannot drift. */
+            j.optString("version").takeIf { it.isNotEmpty() }?.let { out.put("version", it) }
+            j.optString("flavour").takeIf { it.isNotEmpty() }?.let { out.put("flavour", it) }
             // ★ The machine — CPU, cores, clock, RAM, instruction set — as the server measured it (vibe_hwinfo.h).
             j.optJSONObject("hw")?.let { out.put("hw", it) }
             // ★ The phone's battery, as the server publishes it — the badge beside the entry.
