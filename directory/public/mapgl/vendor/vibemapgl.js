@@ -157,6 +157,23 @@
       maxPitch: 0, dragRotate: false, pitchWithRotate: false, touchPitch: false,
     });
     map.touchZoomRotate.disableRotation();
+    /* ★★ SAFARI'S TRACKPAD PINCH ZOOMS THE MAP, NOT THE PAGE. On a Mac, Safari reports a pinch as its own
+     *  gesturestart/gesturechange/gestureend events (Chrome sends ctrl+wheel, which MapLibre handles);
+     *  MapLibre does not listen for them, so Safari zoomed the WHOLE PAGE (Stuart, 2026-09-28, the spots
+     *  map). Taken here: the page zoom is refused over the map and the scale drives the map's zoom,
+     *  anchored where the pinch is. Harmless elsewhere — no other engine fires these events. */
+    {
+      let z0 = null;
+      const pt = (e) => { const r = container.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+      container.addEventListener('gesturestart', (e) => { e.preventDefault(); z0 = map.getZoom(); }, { passive: false });
+      container.addEventListener('gesturechange', (e) => {
+        e.preventDefault();
+        if (z0 == null || !(e.scale > 0)) return;
+        const around = (e.clientX != null) ? map.unproject(pt(e)) : map.getCenter();
+        map.easeTo({ zoom: z0 + Math.log2(e.scale), around, duration: 0 });
+      }, { passive: false });
+      container.addEventListener('gestureend', (e) => { e.preventDefault(); z0 = null; }, { passive: false });
+    }
     /* ★ A LOST GPU CONTEXT (backgrounded, memory pressure) is not a dead map: MapLibre restores its own
      *  resources on 'webglcontextrestored'. The host is told either way. */
     map.on('webglcontextlost', () => { if (o.onContextLost) o.onContextLost(); });
