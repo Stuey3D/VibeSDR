@@ -136,6 +136,15 @@ final class UberClient: ObservableObject {
   /// Enter or leave DAB. `block` nil = the remembered one (or 5A on a first visit).
   func setDab(_ on: Bool, block: Int? = nil) {
     guard isVibe else { return }
+    /* ★★★ HOLD THE SELF-HEAL THROUGH A DAB TRANSITION. Entering, leaving or changing a multiplex
+     *  has seconds where frames arrive and nothing plays yet (acquisition, then priming) — which
+     *  is exactly the self-heal's "receiving, not playing" fault. The web client has held for
+     *  every DAB action since the self-heal went in; Jr never did, so on the Sony (2026-09-29)
+     *  entering 7D rebuilt the audio (the crack), then reopened the audio socket mid-acquisition,
+     *  and kept at it until audio stopped for good — watchOS suspended Jr, the heartbeat stopped,
+     *  and the server released the session. 15 s, not the web's 6: a 32-bit server can take that
+     *  long to lock a multiplex, and a hold only delays a genuine repair, it never prevents one. */
+    heal.hold(now: ProcessInfo.processInfo.systemUptime, seconds: 15)
     if !on {
       specSock.send(json: ["type": "dab", "on": 0])
       dabActive = false; dabProgrammesV = []; dabEnsembleV = ""; dabActiveSid = -1
@@ -172,6 +181,7 @@ final class UberClient: ObservableObject {
   /// Switch service inside the tuned multiplex — no retune, no re-acquire.
   func selectDabSid(_ sid: Int) {
     guard isVibe, dabActive else { return }
+    heal.hold(now: ProcessInfo.processInfo.systemUptime, seconds: 6)   // ★ as the web client — see setDab
     specSock.send(json: ["type": "dab_service", "sid": sid])
     dabActiveSid = sid
   }
