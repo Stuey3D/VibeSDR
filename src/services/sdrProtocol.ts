@@ -205,6 +205,8 @@ export interface RadioCaps {
    *  design: 0 is both the safe default and a real value, so "0" is exactly what a stale mirror
    *  looks like and there is nothing to tell them apart. */
   amp?: number; lna?: number; vga?: number; biast?: number;
+  /** ★ HackRF stage ranges, dB, as the server publishes them (absent from an older server). */
+  lnaMax?: number; lnaStep?: number; vgaMax?: number; vgaStep?: number;
   hrfAmp?: boolean; hrfLna?: boolean; hrfVga?: boolean; hrfBiasT?: boolean;
   hwAgc?: boolean;
   // ── SDRplay RSP ──
@@ -359,6 +361,17 @@ export interface SDRCallbacks {
   /** ★ The tuner's IF filter: the width in Hz (0 = wide open) and whether it is FOLLOWING THE
    *  ZOOM. The web client has had this picker since the filter existed; the app never had one. */
   onHwTunerBw?: (hz: number, auto: boolean) => void;
+  /** ★★★ WHAT THE SERVER SAYS ABOUT ITS IF FILTER BEYOND THE WIDTH — the manual widths it can set
+   *  (`tunerBws`, Hz; null from a server too old to publish them), the owner's ceiling for this band
+   *  (`ifCap`, Hz, -1 = none) and whether that ceiling is FIXED for listeners (`ifLocked`). Stuart,
+   *  2026-09-28: "The app should have NO HARDCODED SETTINGS it should detect its settings from the
+   *  server." The web client has read ifCap since it existed; the app never did. */
+  onHwIfPolicy?: (p: { widths: number[] | null; cap: number; locked: boolean }) => void;
+  /** ★★★ THE DONGLE'S STATE THAT hwinfo CARRIES AND NOTHING HERE READ — the RTL2832's own digital
+   *  AGC (`digitalAgc`, what the panel's "RTL2832 digital AGC" switch COMMANDS — not VibeAGC, which
+   *  is `agc`), the dongle's bias-T (`biasT`) and the frequency correction (`ppm`). Each is
+   *  undefined when the server did not state it, which must never be read as "off". */
+  onHwDongleState?: (s: { digitalAgc?: boolean; biasT?: boolean; ppm?: number }) => void;
   /** Advanced RDS analyser frame (~5 Hz), only while setAdvRds(true). */
   onRdsExt?:    (x: RdsExt) => void;
   /** What the serving radio is and what it can do (hwinfo.radio). */

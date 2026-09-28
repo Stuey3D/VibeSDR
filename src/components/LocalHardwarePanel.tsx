@@ -47,11 +47,18 @@ const C = {
 // ★ This is only the FALLBACK, used when neither the server nor the radio states its rates. A
 //   VibeServer sends its own list and that always wins; see the Seg below.
 const SAMPLE_RATES = [250000, 1024000, 1536000, 1800000, 2048000, 2400000];
-/** ★ The tuner IF widths the picker offers. -1 = AUTO (follows the zoom), 0 = wide open.
- *  ★★ The same list the web client offers, minus the ones that were no-ops there: below about
- *     350 kHz the R820T stops honouring the request, so offering 300/250/200 was three choices
- *     that all did the same thing. */
-const TUNER_BWS = [-1, 0, 1_500_000, 1_000_000, 700_000, 500_000, 350_000];
+/** ★★★ THE IF WIDTHS COME FROM THE SERVER (`tunerBws` in hwinfo — the rungs applyAutoIf itself
+ *  rounds to), never from here. Stuart, 2026-09-28: "The app should have NO HARDCODED SETTINGS it
+ *  should detect its settings from the server." This list had drifted from the web client's and
+ *  from the server's ladder: it offered 1.5 MHz (not a rung — it lands on 1.4 and looks ignored)
+ *  and lacked 2.8 / 2.0 / 1.4, the widths Auto actually moves through, so the panel could not even
+ *  show what Auto had picked.
+ *  ★ This copy of the ladder is the LOCAL-HARDWARE FALLBACK ONLY (a bundled engine that predates
+ *    `tunerBws`); against a remote server that does not publish a list, only Auto and Wide are
+ *    offered and the width in force is shown as a readout. Keep it equal to kIfRungs. */
+const IF_RUNGS_LOCAL = [2_800_000, 2_000_000, 1_400_000, 1_000_000, 700_000, 500_000, 350_000];
+const fmtIfWidth = (hz: number) =>
+  hz >= 1_000_000 ? `${(hz / 1e6).toFixed(1)} MHz` : `${Math.round(hz / 1000)} kHz`;
 
 /* ★★ OFF / ON, NOT OFF / I / Q (Stuart, 2026-09-20: "I cannot think of a time I branch is needed"). On an RTL
  *  the whole of HF arrives on the Q branch; the I branch is a curiosity whose only effect here is a deaf
@@ -78,8 +85,14 @@ export interface LocalHardwarePanelProps {
   autoGain: boolean;
   onAuto: (auto: boolean) => void;
   onGain: (tenthDb: number) => void;
-  ppm: number;
+  /** ★ undefined = a remote server that has not stated it: shown as unknown, never as our guess. */
+  ppm?: number;
   onPpm: (ppm: number) => void;
+  /** ★★ The panel is showing a REMOTE server's radio: every option list and value comes from the
+   *  server, and where an older one does not publish something the panel shows a readout of what
+   *  is in force instead of offering a list of its own (Stuart, 2026-09-28). False for the phone's
+   *  own dongle, whose settings are the app's. */
+  fromServer?: boolean;
   sampleRate: number;
   onSampleRate: (rate: number) => void;
   isTcp?: boolean;           // RTL-TCP allows low rates (UberSDR sends ~192k); USB doesn't
@@ -106,10 +119,15 @@ export interface LocalHardwarePanelProps {
    *  the server then publishes true RF to every client. See converter.ts. */
   converter?:   ConverterProfile;
   onConverter?: (c: ConverterProfile) => void;
-  biasTee: boolean;
+  /** ★ undefined = not stated by a remote server (see ppm). */
+  biasTee?: boolean;
   onBiasTee: (on: boolean) => void;
-  agc: boolean;
+  /** ★ The RTL2832's own DIGITAL AGC — what {type:'agc'} commands. NOT VibeAGC, which is the gain
+   *  slider's AUTO (`autoGain`). undefined = not stated by a remote server. */
+  agc?: boolean;
   onAgc: (on: boolean) => void;
+  /** ★ Direct sampling live on the hardware now (0/2), from hwinfo — under AUTO it moves by itself. */
+  dsLive?: number;
   directSampling: number;
   onDirectSampling: (mode: number) => void;
   /** ★ Owner's AUTO direct-sampling switch and its crossover (Hz), from the radio's hwinfo. */
@@ -140,6 +158,16 @@ export interface LocalHardwarePanelProps {
   tunerBw?: number;
   tunerBwAuto?: boolean;
   onTunerBw?: (hz: number) => void;
+  /** ★ The manual widths the SERVER can set (hwinfo `tunerBws`), null from an older server. */
+  ifWidths?: number[] | null;
+  /** ★ The owner's IF ceiling for this band, Hz, -1 = none (hwinfo `ifCap`). */
+  ifCap?: number;
+  /** ★ The owner has FIXED the width on this band for listeners (hwinfo `ifLocked`). */
+  ifLocked?: boolean;
+  /** ★★★ The filter is not this listener's to set: a SHARED DIAL, or a locked range with several
+   *  VFOs — the web client's syncIfMenu rule, which the server now enforces too. The admin is
+   *  exempt; the parent has already folded that in. */
+  ifOwnerOnly?: boolean;
   adminSet?: boolean;
   adminOk?: boolean;
   /** Password entered by the user. Resolving it to a nonce+HMAC is the screen's job. */
@@ -233,8 +261,12 @@ export interface LocalHardwarePanelProps {
   hrfBiasT?: boolean;    onHrfBiasT?: (on: boolean) => void;
 }
 
-function Seg<T>({ options, value, onChange, fmt, sub, slot }: {
+function Seg<T>({ options, value, onChange, fmt, sub, slot, disabled }: {
   options: T[]; value: T; onChange: (v: T) => void; fmt: (v: T) => string;
+  /** ★ An option the SERVER will refuse (e.g. wider than the owner's IF ceiling) — drawn, dimmed
+   *  and inert, with the reason in a note beside the row, rather than dropped: a choice that
+   *  vanishes reads as a missing feature, one that springs back reads as a broken one. */
+  disabled?: (v: T) => boolean;
   /** ★ An optional SECOND LINE under the title — used by the converter row to name the products
    *  that use each LO. Undefined for every other Seg in this panel, which stays exactly as it was:
    *  a row of one-word options does not want a subtitle slot it never fills. */
@@ -254,10 +286,11 @@ function Seg<T>({ options, value, onChange, fmt, sub, slot }: {
     <View style={styles.segRow}>
       {options.map((o, i) => {
         const active = o === value;
-        const on = slot?.(() => onChange(o));
+        const off = !!disabled?.(o);
+        const on = off ? false : slot?.(() => onChange(o));
         return (
-          <TouchableOpacity key={i}
-            style={[styles.seg, active && styles.segActive,
+          <TouchableOpacity key={i} disabled={off}
+            style={[styles.seg, active && styles.segActive, off && { opacity: 0.35 },
                     on && kb && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
             onPress={() => onChange(o)}>
             <Text style={[styles.segTxt, active && styles.segTxtActive]}>{fmt(o)}</Text>
@@ -337,8 +370,12 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
    *   in the web client and the clamp in the server's hackrf_control handler — all three must
    *   agree or the panel misdescribes the radio. */
   const hrfLnaNow = p.hrfLna ?? 0, hrfVgaNow = p.hrfVga ?? 0;
-  const hrfLnaMax = capDb < 0 ? 40 : Math.min(40, Math.max(0, capDb - hrfVgaNow));
-  const hrfVgaMax = capDb < 0 ? 62 : Math.min(62, Math.max(0, capDb - hrfLnaNow));
+  /* ★ The stages' ranges as the RADIO publishes them (radioCapsJson); the constants are libhackrf's
+   *  own and only stand in for a server too old to say. */
+  const hrfLnaTop = p.radio?.lnaMax ?? 40, hrfVgaTop = p.radio?.vgaMax ?? 62;
+  const hrfLnaStep = p.radio?.lnaStep ?? 8, hrfVgaStep = p.radio?.vgaStep ?? 2;
+  const hrfLnaMax = capDb < 0 ? hrfLnaTop : Math.min(hrfLnaTop, Math.max(0, capDb - hrfVgaNow));
+  const hrfVgaMax = capDb < 0 ? hrfVgaTop : Math.min(hrfVgaTop, Math.max(0, capDb - hrfLnaNow));
   /* ★★★ AND THE DONGLE'S SLIDER TOO — this was wrong before the HackRF existed. The gain LIST
    *   came straight from the radio with the owner's ceiling never applied, so the slider ran to
    *   the hardware's maximum while the server clamped every value above the limit. Drop the
@@ -1109,7 +1146,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               <View style={styles.sliderRow}>
                 <Text style={styles.sliderEnd}>0</Text>
                 <Slider style={{ flex: 1, height: 40 }}
-                  minimumValue={0} maximumValue={Math.max(8, hrfLnaMax)} step={8}
+                  minimumValue={0} maximumValue={Math.max(hrfLnaStep, hrfLnaMax)} step={hrfLnaStep}
                   value={Math.min(hrfLnaNow, hrfLnaMax)}
                   onValueChange={(v) => p.onHrfLna?.(Math.min(hrfLnaMax, Math.round(v)))}
                   minimumTrackTintColor={C.abtn} maximumTrackTintColor="#444" thumbTintColor={C.gold} />
@@ -1126,7 +1163,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               <View style={styles.sliderRow}>
                 <Text style={styles.sliderEnd}>0</Text>
                 <Slider style={{ flex: 1, height: 40 }}
-                  minimumValue={0} maximumValue={Math.max(2, hrfVgaMax)} step={2}
+                  minimumValue={0} maximumValue={Math.max(hrfVgaStep, hrfVgaMax)} step={hrfVgaStep}
                   value={Math.min(hrfVgaNow, hrfVgaMax)}
                   onValueChange={(v) => p.onHrfVga?.(Math.min(hrfVgaMax, Math.round(v)))}
                   minimumTrackTintColor={C.abtn} maximumTrackTintColor="#444" thumbTintColor={C.gold} />
@@ -1214,6 +1251,16 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               applied to a radio it was never about. hwinfo has carried `rates` all along.
               ★ Priority: the server's pin > the server's list > THE RADIO'S OWN LIST > the RTL
               default. The last branch keeps the >=1 MHz filter, because there it IS an RTL. */}
+          {/* ★★ A REMOTE SERVER THAT NAMES NO RATES GETS A READOUT, NOT OUR LIST. SAMPLE_RATES is
+              this app's own idea of an RTL, and offering it for somebody else's radio is a guess
+              presented as the radio's menu (Stuart, 2026-09-28: no hard-coded settings against a
+              server). Every current server sends `rates`; this is for one that does not. */}
+          {p.fromServer && !(p.serverRates && p.serverRates.length) && !(p.radio?.rates && p.radio.rates.length) ? (
+            <Text style={styles.note}>
+              {`${(p.sampleRate / 1e6).toFixed(p.sampleRate % 1e6 === 0 ? 1 : 3)
+                   .replace(/0+$/, '').replace(/\.$/, '.0')}M — this server does not list the rates it offers.`}
+            </Text>
+          ) : (
           <Seg slot={slot} options={p.serverRates && p.serverRates.length
                           ? [...p.serverRates].sort((a, b) => a - b)
                           : p.radio?.rates && p.radio.rates.length
@@ -1221,6 +1268,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                           : p.isTcp ? SAMPLE_RATES : SAMPLE_RATES.filter(r => r >= 1_000_000)}
                value={p.sampleRate} onChange={p.onSampleRate}
                fmt={(r) => `${(r / 1e6).toFixed(r % 1e6 === 0 ? 1 : 3).replace(/0+$/, '').replace(/\.$/, '.0')}M`} />
+          )}
           </>}
           </>}
           {/* ★★★ THE TUNER'S IF FILTER — beside the sample rate, because they are the same
@@ -1237,19 +1285,61 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           <Text style={styles.section}>IF FILTER</Text>
           <Text style={styles.note}>2.048 MHz — held by DAB: wide enough for a 1.536 MHz ensemble, narrow enough to keep the next block out.</Text>
           </>}
-          {p.hasTunerBw && !p.isSpy && isRtl && p.onTunerBw && !p.dabOn && <>
-          <Text style={styles.section}>IF FILTER</Text>
-          <Seg slot={slot} options={TUNER_BWS}
-               value={p.tunerBwAuto ? -1 : (p.tunerBw ?? 0)}
-               onChange={(v) => p.onTunerBw?.(v)}
-               fmt={(v) => v < 0 ? 'Auto' : v === 0 ? 'Wide' : `${Math.round(v / 1000)}k`} />
-          <Text style={styles.note}>
-            {p.tunerBwAuto
-              ? 'Following the zoom — narrower as you zoom in, wide again as you zoom out.'
-              : 'Auto follows the zoom, which keeps strong neighbours out of the front end '
-                + 'without you having to think about it.'}
-          </Text>
-          </>}
+          {p.hasTunerBw && !p.isSpy && isRtl && p.onTunerBw && !p.dabOn && (() => {
+            const now = p.tunerBw ?? 0;
+            /* ★ What is in force, in words — the whole row when the filter is not this listener's,
+             *  and the Auto chip's own label otherwise ("Auto · 1.4 MHz now"). */
+            const nowText = p.tunerBwAuto
+              ? `Auto${now > 0 ? ` · ${fmtIfWidth(now)} now` : ' · wide now'}`
+              : now > 0 ? fmtIfWidth(now) : 'Wide — set by the sample rate';
+            /* ★★★ NOT THIS LISTENER'S TO SET — no chips at all, and one line saying what the filter
+             *  is doing and who set it. Stuart, 2026-09-28, on a shared tuner: changing it
+             *  "immediately snaps back to auto", and "on shared VFO's this should be hidden anyway".
+             *  The web client's syncIfMenu hides the row for the same two cases, and the server now
+             *  refuses them outright. The line stays so the filter does not read as a missing
+             *  feature (AGENTS.md). */
+            if (p.ifOwnerOnly) return <>
+              <Text style={styles.section}>IF FILTER</Text>
+              <Text style={styles.note}>
+                {p.tunerBwAuto
+                  ? `IF filter: ${nowText} — following the zoom, set by the owner.`
+                  : `IF filter: ${nowText} — set by the owner. This receiver is shared, so only its owner changes it.`}
+              </Text>
+            </>;
+            /* ★ The owner has FIXED the width on this band: the server takes the owner's figure
+             *  whatever a listener sends, so there is nothing to offer. */
+            if (p.ifLocked && !isAdmin) return <>
+              <Text style={styles.section}>IF FILTER</Text>
+              <Text style={styles.note}>{`IF filter: ${fmtIfWidth(p.ifCap && p.ifCap > 0 ? p.ifCap : now)} — fixed on this band by the owner.`}</Text>
+            </>;
+            const widths = p.ifWidths && p.ifWidths.length
+              ? [...p.ifWidths].sort((a, b) => b - a)
+              : p.fromServer ? [] : IF_RUNGS_LOCAL;
+            /* ★ A width the list does not offer (an owner's config value) is shown rather than the
+             *  picker snapping to something the radio is not using — the web client does the same. */
+            if (!p.tunerBwAuto && now > 0 && !widths.includes(now)) widths.push(now);
+            const cap = (p.ifCap ?? -1) > 0 && !isAdmin ? (p.ifCap as number) : -1;
+            /* ★ Auto is never refused — it is what the ceiling REFINES. Wide means "as wide as the
+             *  capture", so a ceiling rules it out by definition; anything wider than the cap too. */
+            const tooWide = (v: number) => cap > 0 && (v === 0 || v > cap);
+            return <>
+              <Text style={styles.section}>IF FILTER</Text>
+              <Seg slot={slot} options={[-1, 0, ...widths]}
+                   value={p.tunerBwAuto ? -1 : now}
+                   disabled={tooWide}
+                   onChange={(v) => p.onTunerBw?.(v)}
+                   fmt={(v) => v < 0 ? (p.tunerBwAuto ? nowText : 'Auto') : v === 0 ? 'Wide' : fmtIfWidth(v)} />
+              <Text style={styles.note}>
+                {p.tunerBwAuto
+                  ? 'Following the zoom — narrower as you zoom in, wide again as you zoom out.'
+                  : 'Auto follows the zoom, which keeps strong neighbours out of the front end '
+                    + 'without you having to think about it.'}
+                {cap > 0 ? ` The owner has capped this band at ${fmtIfWidth(cap)}, so wider settings are not available.` : ''}
+                {p.fromServer && !(p.ifWidths && p.ifWidths.length)
+                  ? ' This server does not list its filter widths, so only Auto and Wide are offered.' : ''}
+              </Text>
+            </>;
+          })()}
           {p.isSpy && <Text style={styles.note}>
             Sample rate is chosen automatically from the mode: the server decimates
             before sending, which is what keeps a SpyServer usable over a hotspot or
@@ -1387,19 +1477,31 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               panel became a hybrid of two receivers. */}
           {!p.isSpy && isRtl && canProtected && !p.radio?.noHwGain && <>
           <Text style={styles.section}>FREQUENCY CORRECTION (PPM)</Text>
+          {/* ★★ A VALUE THE SERVER HAS NOT STATED IS SHOWN AS UNKNOWN, never as this phone's guess —
+              a stepper reading "0 ppm", a bias-T switch reading OFF, on a radio at +12 with DC on its
+              feedline is the lie these rows were hidden for once already. Current servers state
+              all three (hwinfo `ppm`, `biasT`, `digitalAgc`); only an older one leaves them blank. */}
+          {p.ppm === undefined ? (
+            <Text style={styles.note}>Not reported by this server — it is set on the server itself.</Text>
+          ) : (
           <View style={styles.stepperRow}>
-            <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm(p.ppm - 1)) && kbNav && { borderColor: NAV_FOCUS, borderWidth: 2 }]} onPress={() => p.onPpm(p.ppm - 1)}><Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
+            <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm((p.ppm ?? 0) - 1)) && kbNav && { borderColor: NAV_FOCUS, borderWidth: 2 }]} onPress={() => p.onPpm((p.ppm ?? 0) - 1)}><Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
             <Text style={styles.stepVal}>{p.ppm > 0 ? `+${p.ppm}` : p.ppm} ppm</Text>
-            <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm(p.ppm + 1)) && kbNav && { borderColor: NAV_FOCUS, borderWidth: 2 }]} onPress={() => p.onPpm(p.ppm + 1)}><Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
+            <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm((p.ppm ?? 0) + 1)) && kbNav && { borderColor: NAV_FOCUS, borderWidth: 2 }]} onPress={() => p.onPpm((p.ppm ?? 0) + 1)}><Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
           </View>
+          )}
 
           <View style={styles.toggleRow}>
             <Text style={styles.toggleLabel}>Bias-T (5V antenna power)</Text>
-            <Switch value={p.biasTee} onValueChange={p.onBiasTee} trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.biasTee ? C.gold : '#ccc'} />
+            {p.biasTee === undefined
+              ? <Text style={styles.note}>not reported</Text>
+              : <Switch value={p.biasTee} onValueChange={p.onBiasTee} trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.biasTee ? C.gold : '#ccc'} />}
           </View>
           <View style={styles.toggleRow}>
             <Text style={styles.toggleLabel}>RTL2832 digital AGC</Text>
-            <Switch value={p.agc} onValueChange={p.onAgc} trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.agc ? C.gold : '#ccc'} />
+            {p.agc === undefined
+              ? <Text style={styles.note}>not reported</Text>
+              : <Switch value={p.agc} onValueChange={p.onAgc} trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.agc ? C.gold : '#ccc'} />}
           </View>
 
           <Text style={styles.section}>DIRECT SAMPLING</Text>
@@ -1415,7 +1517,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           {p.autoDs && (
             <Text style={styles.note}>
               Auto: below {((p.dsBelowHz ?? 24e6) / 1e6).toFixed(0)} MHz the tuner is switched out and HF comes
-              straight off the ADC; above it, the tuner is back in. Now {p.directSampling ? 'ON' : 'off'}.
+              straight off the ADC; above it, the tuner is back in. Now {(p.dsLive ?? p.directSampling) ? 'ON' : 'off'}.
             </Text>
           )}
           {/* ★★★ NAME THE RADIO WHEN WE KNOW IT, rather than hanging the exception off the end of

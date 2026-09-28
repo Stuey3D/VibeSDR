@@ -2456,6 +2456,30 @@ export abstract class VibeServerWsClient {
       //   not be read as "wide open", which is a claim about hardware we have not been told about.
       if (msg.tunerBw !== undefined)
         this.callbacks.onHwTunerBw?.(Number(msg.tunerBw) || 0, msg.tunerBwAuto === true);
+      // ★ The filter's manual widths, the owner's ceiling and its lock — see onHwIfPolicy. Sent
+      //   beside tunerBw, so only a server that has the filter says anything here.
+      if (msg.tunerBw !== undefined)
+        this.callbacks.onHwIfPolicy?.({
+          widths: Array.isArray(msg.tunerBws)
+            ? (msg.tunerBws as unknown[]).map(Number).filter((n) => Number.isFinite(n) && n > 0)
+            : null,
+          cap: typeof msg.ifCap === 'number' ? msg.ifCap : -1,
+          locked: msg.ifLocked === true,
+        });
+      /* ★★★ THE DONGLE'S DIGITAL AGC, BIAS-T AND PPM — on the wire for months, read by nobody here.
+       *  ★★ `digitalAgc` IS NOT `agc`. `agc` is VibeAGC (the loop that owns the gain); `digitalAgc`
+       *     is the RTL2832's own, which is what {type:'agc'} — the panel's switch — commands. The web
+       *     client once painted the switch from `agc` and it behaved as though its polarity were
+       *     inverted (local_sdr_shim.cpp, "ONE NAME, TWO READERS"); the app then did the same on
+       *     2026-09-28 (c3bfb82f fed VibeAGC into hwAgc). Each field goes to the control it names.
+       *  ★ Written 1/0 or true/false depending on the field — accept both. Absent = unknown. */
+      {
+        const b = (v: unknown) => (v === true || v === 1 ? true : v === false || v === 0 ? false : undefined);
+        const st = { digitalAgc: b(msg.digitalAgc), biasT: b(msg.biasT),
+                     ppm: typeof msg.ppm === 'number' ? msg.ppm : undefined };
+        if (st.digitalAgc !== undefined || st.biasT !== undefined || st.ppm !== undefined)
+          this.callbacks.onHwDongleState?.(st);
+      }
       if (msg.rfCentre !== undefined || msg.lockedCentre !== undefined)
         this.callbacks.onRfCentre?.(Number(msg.rfCentre) || 0, Number(msg.lockedCentre) || 0);
       // ★ Only the VibeServer shim sends hwinfo, and it carries the owner's FRAME-RATE CEILING.

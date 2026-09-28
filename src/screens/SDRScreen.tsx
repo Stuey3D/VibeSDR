@@ -1079,6 +1079,32 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★ AUTO direct sampling and its crossover, as the radio reports them (hwinfo). */
   const [hwAutoDs,      setHwAutoDs]      = useState(false);
   const [hwDsBelowHz,   setHwDsBelowHz]   = useState(24_000_000);
+  /* ★★★ TWO KINDS OF HARDWARE STATE, AND ONLY ONE OF THEM IS SAVED (Stuart, 2026-09-28).
+   *  The fields above are what the per-device blob REMEMBERS and restores. For the phone's own
+   *  dongle (local hardware, not a VibeServer) they are this app's settings: restored → sent →
+   *  and the loopback server's hwinfo echo is NOT adopted into them, so the echo can never
+   *  overwrite or churn what was saved. For a REMOTE VibeServer they are the SERVER's state,
+   *  adopted from hwinfo, and nothing about them is saved (see hwSavedBlob) — "the app should have
+   *  NO HARDCODED SETTINGS it should detect its settings from the server, the only time it needs
+   *  its own independent settings is when using the sdr in local hardware mode and not serving it".
+   *  The fields below are LIVE readings from hwinfo in both modes and are never saved. */
+  const adoptHw = isVibeServer;
+  /** ★ VibeAGC is running on the radio right now (hwinfo `agc`). NOT the digital-AGC switch. */
+  const [hwVibeAgc,     setHwVibeAgc]     = useState(false);
+  /** ★ The gain the radio is at right now, tenths of dB; -1 = not reported. */
+  const [hwGainLive,    setHwGainLive]    = useState(-1);
+  /** ★ Direct sampling live on the hardware now (0 off / 2 on) — under AUTO it moves by itself. */
+  const [hwDsLive,      setHwDsLive]      = useState(0);
+  /** ★ The server stated its direct-sampling setting at all — AUTO is offered only then. */
+  const [hwHasAutoDs,   setHwHasAutoDs]   = useState(false);
+  /** ★ A REMOTE server has stated these (undefined = not yet, or an older server that never
+   *  does). Until then the panel shows no figure rather than this phone's guess. */
+  const [hwStated, setHwStated] = useState<{ ppm?: boolean; biasT?: boolean; digitalAgc?: boolean }>({});
+  /** ★ The IF filter's manual widths as the SERVER publishes them (null = an older server that
+   *  does not), the owner's ceiling for this band (Hz, -1 = none) and whether it is fixed. */
+  const [hwIfWidths,    setHwIfWidths]    = useState<number[] | null>(null);
+  const [hwIfCap,       setHwIfCap]       = useState(-1);
+  const [hwIfLocked,    setHwIfLocked]    = useState(false);
   const [hwDeemph,      setHwDeemph]      = useState(50e-6);  // FM de-emphasis tau (0/50µs/75µs)
   const [hwStereo,      setHwStereo]      = useState(true);   // WFM stereo on / forced mono (local)
   // ★★ THE BROADCAST-FM TREATMENTS. All four default ON, matching the server: each only acts on the
@@ -1126,6 +1152,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Load saved RTL-SDR hardware settings and apply them to the running session,
   // so gain/bias-T/PPM/etc. persist across connections.
   const hwLoaded = useRef(false);
+  /** ★ The hardware fields exactly as the blob held them — written back unchanged by a remote
+   *  session. See hwSavedBlob. */
+  const hwLoadedPrefsRef = useRef<Record<string, unknown>>({});
 
   /** ★★★ THE CONVERTER IN FRONT OF A LOCAL DONGLE — and note the gate is NOT bare `isLocal`.
    *   A VibeServer session arrives with isLocal true because it reuses the local protocol path
@@ -1214,9 +1243,30 @@ export default function SDRScreen({ route, navigation }: Props) {
       setFmNr(fmWant.wsp);   setFmIms(fmWant.ims);
       setFmCeq(fmWant.ceq);  setFmNb(fmWant.nb);
       setFmNbx(fmWant.nbx);  setFmAutoBw(fmWant.autobw);
-      setHwAutoGain(auto); setHwPpm(ppm); setHwSampleRate(rate);
-      setHwBiasTee(bias); setHwAgc(agc); setHwDirectSamp(ds); setHwDeemph(deemph); setHwStereo(stereo); setHwSquelch(sql); setHwNrLevel(nrLvl); setHwNotch(notch);
-      if (typeof prefs.gain === 'number') setHwGain(prefs.gain);
+      /* ★★★ WHAT WAS LOADED, KEPT VERBATIM — so a REMOTE session writes these fields back exactly
+       *  as it found them (see hwSavedBlob). The key for a remote VibeServer is the same `usb` blob
+       *  a local dongle uses, so writing the server's adopted state here would hand the NEXT local
+       *  session somebody else's radio settings. */
+      hwLoadedPrefsRef.current = {
+        autoGain: prefs.autoGain, gain: prefs.gain, ppm: prefs.ppm, sampleRate: prefs.sampleRate,
+        biasTee: prefs.biasTee, agc: prefs.agc, directSampling: prefs.directSampling,
+        autoDs: prefs.autoDs, dsBelowHz: prefs.dsBelowHz,
+      };
+      setHwDeemph(deemph); setHwStereo(stereo); setHwSquelch(sql); setHwNrLevel(nrLvl); setHwNotch(notch);
+      /* ★★★ A REMOTE SERVER'S HARDWARE IS NOT RESTORED FROM HERE AT ALL — not into the panel and
+       *  not into LocalHw, which is THIS PHONE's engine (and, if the phone is serving, its served
+       *  radio). The server states its own gain, AGC, rate, bias-T, ppm and direct sampling in
+       *  hwinfo, and the panel draws exactly that. The listener's own preferences (audio, squelch,
+       *  FM treatments) are still restored below. */
+      const restoreHw = !isVibeServer;
+      if (restoreHw) {
+        setHwAutoGain(auto); setHwPpm(ppm); setHwSampleRate(rate);
+        setHwBiasTee(bias); setHwAgc(agc); setHwDirectSamp(ds);
+        if (typeof prefs.gain === 'number') setHwGain(prefs.gain);
+        /* ★ The crossover too. It was never restored into state, so the first save after a local
+         *  connect wrote the 24 MHz default over the one the owner had chosen. */
+        if (typeof prefs.dsBelowHz === 'number' && prefs.dsBelowHz > 0) setHwDsBelowHz(prefs.dsBelowHz);
+      }
       /* ★★ THE ENGAGED FLAG PERSISTS WITH THE PROFILE, not just the profile. A converter left
        *   switched on is almost certainly still plugged in, and making the user re-engage it on
        *   every connect would be a worse default than remembering. Restored only where it can
@@ -1236,12 +1286,14 @@ export default function SDRScreen({ route, navigation }: Props) {
         });
       }
       // Re-apply to the native session (already running from startSpectrum).
-      LocalHw?.setPpm?.(ppm);
-      LocalHw?.setBiasTee?.(bias);
-      LocalHw?.setAgc?.(agc);
-      LocalHw?.setDirectSampling?.(ds);
-      setHwAutoDs(autoDs);
-      if (autoDs) LocalHw?.setAutoDirectSampling?.(true, typeof prefs.dsBelowHz === 'number' ? prefs.dsBelowHz : 24e6);
+      if (restoreHw) {
+        LocalHw?.setPpm?.(ppm);
+        LocalHw?.setBiasTee?.(bias);
+        LocalHw?.setAgc?.(agc);
+        LocalHw?.setDirectSampling?.(ds);
+        setHwAutoDs(autoDs);
+        if (autoDs) LocalHw?.setAutoDirectSampling?.(true, typeof prefs.dsBelowHz === 'number' ? prefs.dsBelowHz : 24e6);
+      }
       LocalHw?.setDeemphasis?.(deemph);
       LocalHw?.setStereoEnabled?.(stereo);
       LocalHw?.setSquelch?.(sql > -100, sql);
@@ -1250,19 +1302,21 @@ export default function SDRScreen({ route, navigation }: Props) {
       LocalHw?.setNrStrength?.(nrLvl <= 12 ? nrLvl / 12 : 1 + ((nrLvl - 12) / 3) * 0.4);
       LocalHw?.setNR?.(nrLvl > 0);
       LocalHw?.setNotch?.(notch);
-      if (rate !== 2_400_000) LocalHw?.setSampleRate?.(rate);
-      LocalHw?.setGain?.(auto ? -1 : (typeof prefs.gain === 'number' ? prefs.gain : 0));
-      try {
-        const g = await LocalHw?.getTunerGains?.();
-        if (!cancelled && Array.isArray(g) && g.length) {
-          setHwGains(g);
-          if (typeof prefs.gain !== 'number') setHwGain(g[Math.floor(g.length / 2)]);
-        }
-      } catch {}
+      if (restoreHw) {
+        if (rate !== 2_400_000) LocalHw?.setSampleRate?.(rate);
+        LocalHw?.setGain?.(auto ? -1 : (typeof prefs.gain === 'number' ? prefs.gain : 0));
+        try {
+          const g = await LocalHw?.getTunerGains?.();
+          if (!cancelled && Array.isArray(g) && g.length) {
+            setHwGains(g);
+            if (typeof prefs.gain !== 'number') setHwGain(g[Math.floor(g.length / 2)]);
+          }
+        } catch {}
+      }
       hwLoaded.current = true;
     })();
     return () => { cancelled = true; };
-  }, [isLocal, LocalHw, localHwKey, canConvert]);
+  }, [isLocal, LocalHw, localHwKey, canConvert, isVibeServer]);
 
   // Background-restriction nudge (local hardware only). Aggressive OEMs
   // (Motorola/Lenovo, some others) ship apps "Restricted" by default, which makes
@@ -1308,18 +1362,27 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => { cancelled = true; };
   }, [isLocal, LocalHw]);
 
+  /* ★★★ THE HARDWARE HALF OF THE SAVED BLOB — and null for a REMOTE server, whose adopted state
+   *  must never be written (see adoptHw). Null is a stable value, so on a remote session an hwinfo
+   *  (which arrives on every AGC step) does not re-run the save either: no churn. For local
+   *  hardware these states change only on a restore or a user action — never on the loopback
+   *  echo — so what is saved is always what the owner chose. */
+  const hwSavedBlob = useMemo(() => (adoptHw ? null : {
+    autoGain: hwAutoGain, gain: hwGain, ppm: hwPpm, sampleRate: hwSampleRate,
+    biasTee: hwBiasTee, agc: hwAgc, directSampling: hwDirectSamp,
+    autoDs: hwAutoDs, dsBelowHz: hwDsBelowHz,   // ★ per-radio audit, 2026-09-22 — was never saved
+  }), [adoptHw, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwAutoDs, hwDsBelowHz]);
   // Persist hardware settings whenever they change (after the initial load).
   useEffect(() => {
     if (!isLocal || !hwLoaded.current) return;
     AsyncStorage.setItem(localHwKey, JSON.stringify({
-      autoGain: hwAutoGain, gain: hwGain, ppm: hwPpm, sampleRate: hwSampleRate,
-      biasTee: hwBiasTee, agc: hwAgc, directSampling: hwDirectSamp, deemph: hwDeemph, stereo: hwStereo,
+      ...(hwSavedBlob ?? hwLoadedPrefsRef.current),
+      deemph: hwDeemph, stereo: hwStereo,
       // ★ Scoped to the DEVICE (`tcp:host:port` or `usb`) like everything else in this blob — a
       //   converter is a property of one physical dongle-plus-front-end, and that is exactly what
       //   localDeviceKey identifies. Nothing new to sync or migrate.
       converter: canConvert && !convIsIdentity(converter) ? converter : undefined,
       squelch: hwSquelch,            // ★ remembered per device — see the restore above (#28)
-      autoDs: hwAutoDs, dsBelowHz: hwDsBelowHz,   // ★ per-radio audit, 2026-09-22 — was never saved
       /* ★★★ THE FM TREATMENTS, WHICH NOTHING HAS EVER REMEMBERED. Onfliner, 2026-09-24: "If you
        *  going to the main menu and then launch the dongle again, some settings will be reset —
        *  all audio settings except DE-EMPH and squelch". Those two were the only ones in this blob,
@@ -1348,7 +1411,7 @@ export default function SDRScreen({ route, navigation }: Props) {
        *    never sent unless the radio says it is an Airspy) and the key is per device anyway. */
       aspGainMode: aspGainMode,
     })).catch(() => {});
-  }, [isLocal, localHwKey, hwAutoGain, hwGain, hwPpm, hwSampleRate, hwBiasTee, hwAgc, hwDirectSamp, hwDeemph, hwStereo, canConvert, converter, hwSquelch, hwAutoDs, hwDsBelowHz,
+  }, [isLocal, localHwKey, hwSavedBlob, hwDeemph, hwStereo, canConvert, converter, hwSquelch,
       fmNr, fmIms, fmCeq, fmNb, fmNbx, fmAutoBw, hwNrLevel, hwNotch, aspGainMode]);
 
   // VibeServer (remote shim): hardware controls ride the WS to the serving device
@@ -3645,7 +3708,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (radioCaps?.driver === 'hackrf') {
       return (radioCaps.lna ?? 0) === 0 && (radioCaps.vga ?? 0) === 0;
     }
-    if (!hwAgc && hwGains.length > 0) return hwGain <= hwGains[0];
+    // ★ VibeAGC (hwVibeAgc), not the RTL2832 digital-AGC switch (hwAgc) — see onHwAgc.
+    if (!hwVibeAgc && hwGains.length > 0) return (hwGainLive >= 0 ? hwGainLive : hwGain) <= hwGains[0];
     return false;
   })();
   /* ★★★ ON CONNECT, THEN IT FADES — NEVER A STANDING WARNING. Stuart: "cannot have a permanent
@@ -4489,16 +4553,32 @@ export default function SDRScreen({ route, navigation }: Props) {
       //     to 12.5db but when I opened it in the app it was at 29.7db" (Stuart, 2026-08-15).
       // ★★ ADOPTED, NOT PUSHED BACK. Arriving at somebody's receiver is not a reason to change it,
       //    and on a shared one it would re-gain the radio under everybody already on it.
+      /* ★★★ EVERY ADOPTION BELOW FOLLOWS ONE RULE (see adoptHw): a LIVE reading is always taken;
+       *  a SAVED setting is taken only from a REMOTE server. On the phone's own dongle the loopback
+       *  server's echo must not overwrite what the owner saved — the restore already told the radio
+       *  those values, and the echo can arrive from BEFORE the restore landed.
+       *  ★ All of it LOCAL STATE ONLY: none of these setters sends anything; only the panel's
+       *    handlers (onHwAuto, onHwGain, …) do, and only on a user's touch. */
       onHwDirectSampling: (autoDs: boolean, belowHz: number, live: number) => {
         if (destroyed.current) return;
+        setHwHasAutoDs(true);
+        setHwDsLive(live);
+        if (!adoptHw) return;
         setHwAutoDs(autoDs);
         if (belowHz > 0) setHwDsBelowHz(belowHz);
         setHwDirectSamp(live);
       },
       onHwGainNow: (tenthDb: number) => {
         if (destroyed.current) return;
+        setHwGainLive(tenthDb);
+        if (!adoptHw) return;
+        /* ★★★ THE GAIN FIGURE, NOT THE MODE. This also did setHwAutoGain(false) on every report —
+         *  and a server running VibeAGC reports the gain the loop has chosen (≥ 0) on every step, so
+         *  the panel read MANUAL at "RF gain 0.0 dB" on a receiver whose owner had VibeAGC ON and
+         *  LOCKED (Stuart, 2026-09-28, the Sony TV). Whether the gain is automatic is `agc`'s to
+         *  say (onHwAgc); -1 here is only an old server's way of saying "auto". */
         if (tenthDb < 0) { setHwAutoGain(true); return; }
-        setHwAutoGain(false); setHwGain(tenthDb);
+        setHwGain(tenthDb);
       },
       onHwRates: (rates: number[]) => { if (!destroyed.current && rates.length) setHwServerRates(rates); },
       /* ★★★ THE RADIO'S OWN CAPTURE RATE, ADOPTED. Same rule as onHwGainNow directly above, and it
@@ -4507,7 +4587,7 @@ export default function SDRScreen({ route, navigation }: Props) {
        *  had saved for the device — a readout of our own memory, presented as the radio's state.
        *  ★ LOCAL STATE ONLY. It must never be sent back: adopting is the whole point, and echoing
        *    it would re-assert a value at a radio we do not own. */
-      onHwRateNow: (hz: number) => { if (!destroyed.current && hz > 0) setHwSampleRate(hz); },
+      onHwRateNow: (hz: number) => { if (!destroyed.current && hz > 0 && adoptHw) setHwSampleRate(hz); },
       // ★★★ VIBEAGC ON THE STATUS ROW. The server's own gain loop moves the radio under the
       //     listener, and until now nothing on the phone said so — a receiver that re-gains itself
       //     with no explanation reads as a fault. Kept SHORT ("GAIN ↑ 8.7 dB"): the browser has
@@ -4517,12 +4597,18 @@ export default function SDRScreen({ route, navigation }: Props) {
       onHwAgc: (on: boolean) => {
         if (destroyed.current) return;
         /* ★★ AND THE STATE, NOT ONLY THE LABEL. This painted "AGC" on the status row and never set
-         *  hwAgc — so against a remote server the app believed the gain was MANUAL: the gain-at-minimum
-         *  warning fired while VibeAGC was deliberately holding a strong station at minimum (Stuart,
-         *  2026-09-28, Sony TV, S9+40), and the VibeAGC control could show the wrong state. Adopted as
-         *  LOCAL STATE ONLY — setHwAgc never sends (onHwAgc the control handler does), and the saved
-         *  per-device settings are only written for local hardware. */
-        setHwAgc(on);
+         *  any state — so against a remote server the app believed the gain was MANUAL: the
+         *  gain-at-minimum warning fired while VibeAGC was deliberately holding a strong station at
+         *  minimum (Stuart, 2026-09-28, Sony TV, S9+40), and the panel read MANUAL.
+         *  ★★★ INTO hwVibeAgc AND THE GAIN SLIDER'S AUTO — NEVER hwAgc. `agc` on hwinfo is VibeAGC;
+         *      hwAgc is the "RTL2832 digital AGC" switch, which commands a different AGC. c3bfb82f
+         *      first put it into hwAgc, which lit the digital-AGC switch from VibeAGC and — on the
+         *      phone's own dongle — SAVED it, so the next local connect would have switched the
+         *      RTL2832's AGC on. That switch is fed from `digitalAgc` (onHwDongleState).
+         *  ★ Local state only: neither setter sends, and hwAutoGain is saved only for local
+         *    hardware, where it is not adopted (see adoptHw). */
+        setHwVibeAgc(on);
+        if (adoptHw) setHwAutoGain(on);
         const b = meterBus.current;
         if (b) b.emit({ ...b.value, agcText: on ? b.value.agcText || 'AGC' : '' });
       },
@@ -4564,6 +4650,24 @@ export default function SDRScreen({ route, navigation }: Props) {
       /* ★ The owner's switched-off modes and decoders. The server refuses them, so the app must
        *  not offer them — see onHwBlockedModes in UberSDRClient. */
       onHwBlockedModes: (list: string[]) => { if (!destroyed.current) setBlockedModes(new Set(list)); },
+      onHwIfPolicy: ({ widths, cap, locked }) => {
+        if (destroyed.current) return;
+        setHwIfWidths(widths); setHwIfCap(cap); setHwIfLocked(locked);
+      },
+      /* ★ The dongle's digital AGC, bias-T and ppm — adopted from a REMOTE server only (on local
+       *  hardware they are this app's saved settings; see adoptHw). */
+      onHwDongleState: (st) => {
+        if (destroyed.current || !adoptHw) return;
+        if (st.digitalAgc !== undefined) setHwAgc(st.digitalAgc);
+        if (st.biasT !== undefined) setHwBiasTee(st.biasT);
+        if (st.ppm !== undefined) setHwPpm(st.ppm);
+        setHwStated((prev) => {
+          const next = { ppm: prev.ppm || st.ppm !== undefined, biasT: prev.biasT || st.biasT !== undefined,
+                         digitalAgc: prev.digitalAgc || st.digitalAgc !== undefined };
+          return next.ppm === prev.ppm && next.biasT === prev.biasT && next.digitalAgc === prev.digitalAgc
+            ? prev : next;
+        });
+      },
       onHwTunerBw: (hz: number, auto: boolean) => {
         if (destroyed.current) return;
         setHwHasTunerBw(true); setHwTunerBw(hz); setHwTunerBwAuto(auto);
@@ -7695,7 +7799,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (rtlAutoExplainedRef.current) return;
     if (radioCaps?.driver !== 'rtl') return;
-    if (!hwTunerBwAuto && !hwAgc) return;    // nothing to explain, or not known yet
+    if (!hwTunerBwAuto && !hwVibeAgc) return;    // nothing to explain, or not known yet
     rtlAutoExplainedRef.current = true;
     /* ★★★ A STATUS LINE, NOT AN ESSAY. This was up to 230 characters of advice, and the VTS bar is
      *  a MARQUEE — so it scrolled for the best part of a minute, saying something the listener
@@ -7707,11 +7811,11 @@ export default function SDRScreen({ route, navigation }: Props) {
      *     panel, which is one tap away and does not scroll.
      *  ★ Short enough to read at a glance means the dwell can come down with it. */
     showVtsNotice(
-      hwTunerBwAuto && hwAgc ? 'AGC: On  |  IF Filter: Auto'
+      hwTunerBwAuto && hwVibeAgc ? 'AGC: On  |  IF Filter: Auto'
         : hwTunerBwAuto      ? 'IF Filter: Auto'
         :                      'AGC: On',
       8000);
-  }, [radioCaps?.driver, hwTunerBwAuto, hwAgc, showVtsNotice]);
+  }, [radioCaps?.driver, hwTunerBwAuto, hwVibeAgc, showVtsNotice]);
 
   const vtsLastStation    = useRef('');
   const vtsBandKey        = useRef<string | null>(null);
@@ -10370,6 +10474,16 @@ export default function SDRScreen({ route, navigation }: Props) {
           hasTunerBw={hwHasTunerBw}
           tunerBw={hwTunerBw}
           tunerBwAuto={hwTunerBwAuto}
+          ifWidths={hwIfWidths}
+          ifCap={hwIfCap}
+          ifLocked={hwIfLocked}
+          /* ★★★ WHOSE FILTER IT IS — the web client's syncIfMenu rule, and now the server's too
+           *  (local_sdr_shim.cpp tunerbw, "WHO MAY SET IT"): on a SHARED DIAL, or a locked range with
+           *  several VFOs, the IF filter is everybody's hardware and only the signed-in owner sets it.
+           *  One listener's 350 kHz would outlive them and leave the next wondering why the dongle
+           *  hears nothing (Stuart, 2026-09-27/28). */
+          ifOwnerOnly={!adminOk && (sharedDial || (hwLockedCentre > 0 && occMaxUsers > 1))}
+          fromServer={adoptHw}
           onTunerBw={(hz) => {
             // ★ Optimistic, like every other control here: the server echoes hwinfo back and the
             //   picker settles on what the RADIO says, so a refusal corrects it within a frame.
@@ -10463,11 +10577,14 @@ export default function SDRScreen({ route, navigation }: Props) {
           visible={hwOpen}
           onClose={() => setHwOpen(false)}
           gains={hwGains}
-          gainTenthDb={hwGain}
+          /* ★ Under VibeAGC the slider shows where the LOOP has the gain now, not the resting figure
+           *  it would return to. On a remote server hwGain already IS that figure (adopted); on the
+           *  phone's own dongle hwGain is the owner's saved manual gain and must stay so. */
+          gainTenthDb={hwAutoGain && hwGainLive >= 0 ? hwGainLive : hwGain}
           autoGain={hwAutoGain}
           onAuto={onHwAuto}
           onGain={onHwGain}
-          ppm={hwPpm}
+          ppm={adoptHw && !hwStated.ppm ? undefined : hwPpm}
           onPpm={onHwPpm}
           sampleRate={hwSampleRate}
           onSampleRate={onHwSampleRate}
@@ -10475,15 +10592,18 @@ export default function SDRScreen({ route, navigation }: Props) {
           serverRates={hwServerRates}
           lockedRate={hwLockedRate}
           dabOn={dabOn}
-          biasTee={hwBiasTee}
+          biasTee={adoptHw && !hwStated.biasT ? undefined : hwBiasTee}
           onBiasTee={onHwBiasTee}
-          agc={hwAgc}
+          agc={adoptHw && !hwStated.digitalAgc ? undefined : hwAgc}
           onAgc={onHwAgc}
+          dsLive={hwDsLive}
           directSampling={hwDirectSamp}
           onDirectSampling={onHwDirectSamp}
           autoDs={hwAutoDs}
           dsBelowHz={hwDsBelowHz}
-          onAutoDs={onHwAutoDs}
+          /* ★ AUTO only where the server has said it has the setting — an older one would be
+           *  offered a position it cannot honour (the web's hwHasAutoDs rule). */
+          onAutoDs={!adoptHw || hwHasAutoDs ? onHwAutoDs : undefined}
         />
       ) : null}
 

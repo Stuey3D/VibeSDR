@@ -2758,6 +2758,20 @@ static std::atomic<double>   g_demodBwHz{200000.0};
  *  set it last is a register that must be asserted every time, not set once and trusted.
  *  0 = librtlsdr's automatic choice, which is what every build before this one did. */
 static std::atomic<int>      g_tunerBwHz{0};
+/** ★★★ THE IF FILTER'S RUNGS — ONE LIST, THREE READERS. applyAutoIf rounds to these, and hwinfo
+ *  publishes them as `tunerBws` so BOTH clients draw their manual picker from what this server can
+ *  actually set, instead of each carrying its own hard-coded copy. They had drifted: the app offered
+ *  1.5 MHz (not a rung — it lands on 1.4 and looks ignored) and lacked 2.8 / 2.0 / 1.4, the very
+ *  widths Auto moves through, so the app could not even show what Auto had picked (Stuart,
+ *  2026-09-28: "IF filter options seem different to what is offered in the client").
+ *  ★ Stuart's rule for the whole panel, same day: "The app should have NO HARDCODED SETTINGS it
+ *    should detect its settings from the server." */
+static const int kIfRungs[] = { 350000, 500000, 700000, 1000000,
+                                1400000, 2000000, 2800000, 4000000 };
+/** ★ The frequency correction last asked for, so hwinfo can REPORT it. The RTL has no getter worth
+ *  trusting over the wire (rtl_tcp has none at all), and a stepper that shows this phone's own idea
+ *  of the ppm is a readout of our memory presented as the radio's state — the gainNow lesson. */
+static std::atomic<int>      g_ppmNow{0};
 /** ★★★ AUTO: THE IF FILTER FOLLOWS THE ZOOM, and that is the whole of it.
  *
  *  ★★★ WHY THIS AND NOT AN AUTOMATIC ONE THAT CHOOSES. A previous attempt measured the band and
@@ -5745,8 +5759,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              * ★ The ladder ends below the capture; anything above becomes `want == 0` (no filter)
              *   in the clamp above, which is the zoomed-out case that wants no filtering at all. */
             if (want > 0) {
-                static const int kRungs[] = { 350000, 500000, 700000, 1000000,
-                                              1400000, 2000000, 2800000, 4000000 };
+                const auto& kRungs = kIfRungs;   // ★ one ladder — hwinfo publishes the same list
                 for (int r : kRungs) if (want <= r) { want = r; break; }
                 /* ★★★ BUT AN OWNER'S CEILING MUST ROUND *DOWN*, OR IT IS NOT A CEILING.
                  *  Rounding up is right for a VIEW-driven width — see above, rounding down would
@@ -13960,6 +13973,35 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     behind the admin password with the rest of the protected set.
              *  ★ 0 = back to librtlsdr's automatic choice, which is what every build before this
              *    one did and is still the default. */
+            /* ★★★ WHO MAY SET IT — THE SAME THREE CASES THE CLIENTS DRAW (syncIfMenu in the web
+             *  client, the IF FILTER row in LocalHardwarePanel). Stuart, 2026-09-27/28:
+             *    1. SHARED DIAL (one VFO, several listeners) -> the owner's only. "on shared VFO's
+             *       this should be hidden anyway" — one listener's 350 kHz is everybody's, and it
+             *       outlives them.
+             *    2. LOCKED RANGE WITH SEVERAL VFOs -> the owner's only. "who's VFO is the IF filter
+             *       tied to?" has no answer.
+             *    3. ONE LISTENER -> theirs, bounded by the owner's per-band ceiling (below).
+             *  ★★★ THIS WAS A SILENT PARTIAL GATE. sharedGate() only asks about a LOCKED centre, so
+             *      on an open shared dial any listener's width got through it, and the refusal
+             *      further down covered only MANUAL widths — and answered them by forcing Auto,
+             *      which also undid a width the signed-in owner had chosen. A listener could not
+             *      set the filter, but could reset the owner's. Now nothing a listener sends
+             *      changes it on a shared receiver, Auto included.
+             *  ★★ AND SAID OUT LOUD. The client's picker snapped back with no reason ("immediately
+             *     snaps back to auto") — a refusal nobody explains reads as a broken control. The
+             *     notice `why` is the refusal channel both clients already show (the VTS in the
+             *     app, the pill on the web), and the hwinfo that follows puts THIS listener's
+             *     picker back on what the radio is really doing without disturbing anybody else.
+             *  ★ Before sharedGate, so a listener on a locked range gets this sentence rather than
+             *    adminGate's "that password was not accepted", which they never typed. */
+            if ((vsSharedDial() || (g_vsLockedCentre.load() > 0.0 && g_vsMaxUsers.load() > 1))
+                    && !adminNow(sock)) {
+                LOGI("tunerbw refused — the IF filter is shared hardware; only the owner sets it here");
+                sendText(sock, "{\"type\":\"notice\",\"why\":\"The IF filter is shared by everyone "
+                               "on this receiver, so only its owner can change it\"}");
+                sendHwInfo(sock);
+                return;
+            }
             if (!sharedGate("tunerbw")) return;
             /* ★★★ NOT IN DAB. The ensemble IS the capture and the filter is pinned at 2.048 MHz for
              *  it (see the DAB entry path); narrowing it takes the multiplex's edges off and the
@@ -14009,16 +14051,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *      refused here and auto restored, which is the state the hidden control
                  *      claims to be in. */
                 /* ★ …and the signed-in admin is exempt, as with the AGC lock: the rule is
-                 *  about LISTENERS on a shared front end, not about the owner. */
-                if (!autoOn && vsSharedDial() && !adminNow(sock)) {
-                    LOGI("manual IF width refused — the dial is shared, the filter follows the "
-                         "shared view");
-                    g_tunerBwAuto.store(true, std::memory_order_relaxed);
-                    LocalSdrShim::instance().applyAutoIf();
-                    LocalSdrShim::instance().broadcastHwInfo();
-                    broadcastConfig();
-                    return;
-                }
+                 *  about LISTENERS on a shared front end, not about the owner.
+                 *  ★★ ENFORCED AT THE TOP OF THIS HANDLER NOW (see "WHO MAY SET IT"), where it
+                 *     refuses without touching the filter. The block that stood here forced Auto
+                 *     on every refusal, which let a listener undo the owner's width. */
                 const int ifCapNow = LocalSdrShim::ifCapAtHz(
                     LocalSdrShim::instance().listenFrequency());
                 /* ★ The owner's own ceiling still binds LISTENERS; the admin set it and may
@@ -14799,6 +14835,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
            + std::string(bwAutoNow ? "true" : "false")
            + ",\"tunerBw\":"
            + std::to_string(g_tunerBwHz.load(std::memory_order_relaxed))
+           /* ★★★ THE WIDTHS THIS SERVER CAN SET, so no client carries its own list (see kIfRungs).
+            *  Only the rungs a manual choice is worth offering at the rate being captured: a rung
+            *  more than ~20 % wider than the capture filters nothing the capture has not already
+            *  cut, so offering it is a choice that does nothing. Auto (-1) and Wide (0) are MODES,
+            *  not widths, and every client that reads this list adds them itself. */
+           + ",\"tunerBws\":[" + [] {
+                 std::string l;
+                 const double cap = LocalSdrShim::instance().captureSpanHz();
+                 for (int r : kIfRungs) {
+                     if (cap > 0 && r > cap * 1.2) continue;
+                     if (!l.empty()) l += ',';
+                     l += std::to_string(r);
+                 }
+                 return l;
+             }() + "]"
+           /* ★ The frequency correction in force — reported so a remote client ADOPTS it rather
+            *  than drawing its own remembered figure (gainNow's lesson, one control over). */
+           + ",\"ppm\":" + std::to_string(g_ppmNow.load(std::memory_order_relaxed))
            /* ★★★ AND THE OWNER'S CEILING FOR THIS BAND, SO THE READOUT CAN SAY SO. Stuart wants
             *  the chip to read "IF 1200 kHz" with a padlock where he has fixed it, exactly as a
             *  locked gain band reads "RF 7 · IF 25 🔒". A ceiling the client does not know about
@@ -28403,6 +28457,7 @@ void LocalSdrShim::setPpm(int ppm) {
     // ★ A SECOND lock would only add an inversion to invert — modeMtx is already recursive
     //   and already the one held across engine rebuilds.
     VIBE_HW_LOCK();
+    g_ppmNow.store(ppm, std::memory_order_relaxed);   // ★ the intent, reported by hwinfo
     if (p->radioReleased.load()) return;   // the radio is lent to another program
     if (p->useSpy()) return;   // no ppm setting in the SpyServer protocol
 
@@ -29276,6 +29331,10 @@ std::string LocalSdrShim::radioCapsJson() const {
          *     names outright. ★ And VibeAGC is deliberately absent too (hackrf_source.h says why:
          *     nobody here can hear the loop work yet). */
         j += ",\"hrfAmp\":true,\"hrfLna\":true,\"hrfVga\":true,\"hrfBiasT\":true,\"hwAgc\":false";
+        /* ★ AND THE STAGES' OWN RANGES, so the panel sizes its sliders from the radio rather than
+         *  from constants of its own (Stuart, 2026-09-28: no hard-coded settings against a server).
+         *  libhackrf: LNA 0-40 dB in 8 dB steps, VGA 0-62 dB in 2 dB steps. */
+        j += ",\"lnaMax\":40,\"lnaStep\":8,\"vgaMax\":62,\"vgaStep\":2";
         j += ",\"amp\":"  + std::to_string(h.ampEnabled());
         j += ",\"lna\":"  + std::to_string(h.lnaGainDb());
         j += ",\"vga\":"  + std::to_string(h.vgaGainDb());

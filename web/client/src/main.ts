@@ -1924,9 +1924,30 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         if (el.title !== title) el.title = title;
       }
     },
-    onTunerBw: (hz: number, rfCentreHz: number, auto: boolean, ifCap: number) => {
+    onTunerBw: (hz: number, rfCentreHz: number, auto: boolean, ifCap: number, widths?: number[] | null) => {
       hwTunerBw = hz;
       hwTunerAuto = auto;
+      /* ★★★ THE WIDTHS COME FROM THE SERVER when it publishes them (`tunerBws` — the rungs its own
+       *  Auto rounds to), so this menu, the app's and the server's ladder cannot drift apart again
+       *  (Stuart, 2026-09-28: "IF filter options seem different to what is offered in the client";
+       *  "NO HARDCODED SETTINGS"). Auto (-1) and Wide (0) are modes and stay. Rebuilt only when the
+       *  list CHANGES — hwinfo arrives on every AGC step. The markup's list stands for an older server. */
+      if (widths && widths.length) {
+        const sel = document.getElementById('tunerBw') as HTMLSelectElement | null;
+        const sig = widths.join(',');
+        if (sel && sel.dataset.widths !== sig) {
+          sel.dataset.widths = sig;
+          for (const o of Array.from(sel.options)) if (Number(o.value) > 0) o.remove();
+          const sorted = [...widths].sort((a, b) => b - a);
+          sorted.forEach((w, i) => {
+            const o = document.createElement('option');
+            o.value = String(w);
+            o.textContent = (w >= 1e6 ? `${(w / 1e6).toFixed(1)} MHz` : `${Math.round(w / 1e3)} kHz`)
+                          + (i === sorted.length - 1 ? ' \u2014 narrowest' : '');
+            sel.appendChild(o);
+          });
+        }
+      }
       // ★ The owner's ceiling for the band being listened to — see ifText, which draws the padlock.
       hwIfCap = ifCap;
       syncIfMenu();   // ★ the ceiling decides which widths are offered
