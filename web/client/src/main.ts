@@ -11253,13 +11253,16 @@ function bootLeaflet() {
   document.head.appendChild(js);
 }
 
+var RX_HOUSE = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><polygon points="11,1 21,10 17,10 17,21 13,21 13,15 9,15 9,21 5,21 5,10 1,10" fill="rgba(255,200,60,0.85)" stroke="rgba(0,0,0,0.5)" stroke-width="1"/></svg>';
 function setupMap() {
   map = L.map('m', { worldCopyJump: true, preferCanvas: true });
   if (!vm) map.setView(me ? [me.lat, me.lon] : [25, 5], me ? 4 : 3);
   spotLayer = L.layerGroup().addTo(map);
   if (me) {
-    L.circleMarker([me.lat, me.lon], { radius: 7, color: '#fff', weight: 2,
-      fillColor: '#e05050', fillOpacity: 1 }).addTo(map)
+    // ★ The receiver is the app's little house (Stuart, 2026-09-28), not a red dot — the same icon on
+    //   every map, anchored at its doorstep.
+    L.marker([me.lat, me.lon], { zIndexOffset: 1000, icon: L.divIcon({ html: RX_HOUSE, className: '',
+      iconSize: [22, 22], iconAnchor: [11, 22], popupAnchor: [0, -20] }) }).addTo(map)
       .bindPopup('<div class="pop"><b>RX</b><br>Receiver</div>');
     for (const km of [1000, 2500, 5000]) {
       L.circle([me.lat, me.lon], { radius: km * 1000, color: 'rgba(255,160,0,0.30)',
@@ -11394,7 +11397,7 @@ if (me && withKm.length) {
 // Legend
 const bandsUsed = [...new Set(spots.map(s => s.band))];
 document.getElementById('legend').innerHTML =
-  (me ? '<div class="lrow"><span class="sw" style="background:#e05050"></span>Receiver</div>' : '') +
+  (me ? '<div class="lrow"><span style="display:inline-flex;width:12px;height:12px">' + RX_HOUSE.replace('width="22" height="22"', 'width="12" height="12"') + '</span>Receiver</div>' : '') +
   (bandsUsed.length
     ? bandsUsed.map(b => '<div class="lrow"><span class="sw" style="background:' +
         (COL[b] || '#aaa') + '"></span>' + b + '</div>').join('')
