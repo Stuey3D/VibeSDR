@@ -5,8 +5,12 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Handler
@@ -90,10 +94,40 @@ class RtlTcpServerService : Service() {
                 val st = VibeServerRestore.recoverUsbIfNeeded(applicationContext)
                 if (st != null && st != lastUsbState) Log.i(TAG, "USB recovery: $st")
                 lastUsbState = st
+                /* ★★★ GONE LONGER THAN A BLIP — STOP, as the owner's Stop button would (Stuart, 2026-09-29;
+                 *  see VibeServerRestore.RADIO_BLIP_WINDOW_MS). The engine would otherwise wait for its
+                 *  dongle for ever and serve again the moment it was replugged, however much later. */
+                if (st == VibeServerRestore.RADIO_GONE_TOO_LONG) {
+                    VibeServerRestore.stopBecauseRadioGone(applicationContext)
+                    handler.post { stopSelf() }
+                }
             } catch (t: Throwable) {
                 Log.w(TAG, "USB recovery failed: $t")
             } finally { usbPollBusy = false }
         }.start()
+    }
+
+    /** ★★ THE MOMENT THE SERVED RADIO LEAVES, stamped for the blip rule — see
+     *  VibeServerRestore.noteRadioGone. A runtime receiver, so it exists exactly while a server does;
+     *  USB_DEVICE_DETACHED is a system broadcast, so no export flag is needed. The engine's own
+     *  dead-handle report stamps it too (recoverUsbIfNeeded), for a departure this misses. */
+    private var detachReceiver: BroadcastReceiver? = null
+    private fun watchForDetach() {
+        if (detachReceiver != null) return
+        val r = object : BroadcastReceiver() {
+            override fun onReceive(c: Context, i: Intent) {
+                if (i.action != UsbManager.ACTION_USB_DEVICE_DETACHED) return
+                @Suppress("DEPRECATION")
+                val dev = i.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE) ?: return
+                if (!VibeLocalSdrModule.isServableRadio(dev.vendorId, dev.productId)) return
+                if (!VibeServerRestore.isShimServing()) return
+                VibeServerRestore.noteRadioGone(applicationContext, "USB detach of ${dev.deviceName}")
+            }
+        }
+        try {
+            registerReceiver(r, IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED))
+            detachReceiver = r
+        } catch (t: Throwable) { Log.w(TAG, "cannot watch for the radio detaching: $t") }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -138,6 +172,8 @@ class RtlTcpServerService : Service() {
                             "Waiting for USB permission — open VibeServer Lite once and allow the radio"
                         "no SDR attached" -> "No radio found — check the dongle is plugged in"
                         "no stored config" -> "Nothing saved to restore — start the server once from the app"
+                        VibeServerRestore.RADIO_GONE_TOO_LONG ->
+                            "The radio was unplugged for more than 5 minutes, so the server was not restarted — open the app and press Start"
                         else -> "Could not restart the server: $err"
                     }
                     handler.post { updateNotification() }
@@ -157,6 +193,7 @@ class RtlTcpServerService : Service() {
         startForegroundInternal()
         acquireWakeLock()
         wifiLock.acquire()
+        watchForDetach()
         handler.removeCallbacks(ticker)
         handler.post(ticker)
         return START_STICKY
@@ -267,6 +304,10 @@ class RtlTcpServerService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(ticker)
+        detachReceiver?.let { r ->
+            try { unregisterReceiver(r) } catch (t: Throwable) { Log.w(TAG, "unregistering the detach watch: $t") }
+        }
+        detachReceiver = null
         releaseWakeLock()
         wifiLock.release()
         super.onDestroy()

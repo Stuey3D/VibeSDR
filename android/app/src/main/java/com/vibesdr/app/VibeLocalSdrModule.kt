@@ -78,8 +78,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         dev.vendorId == AIRSPY_VID && dev.productId == AIRSPY_PID
 
     /** Any radio we can open directly over USB. */
-    private fun isSupportedRadio(dev: UsbDevice): Boolean =
-        isRtlSdr(dev) || isAirspyHf(dev) || isHackRf(dev) || isAirspy(dev)
+    private fun isSupportedRadio(dev: UsbDevice): Boolean = isServableRadio(dev.vendorId, dev.productId)
 
     private fun describe(dev: UsbDevice, hasPermission: Boolean): WritableMap {
         val m = Arguments.createMap()
@@ -1309,5 +1308,14 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
          *  start() dispatch: three copies of one fact, and they must agree. */
         internal const val AIRSPY_VID = 0x1d50
         internal const val AIRSPY_PID = 0x60a1
+
+        /** ★ Any radio a server can be running on — the same four allowlists as isSupportedRadio(),
+         *  reachable without a module instance. The service asks it of a USB device that has just
+         *  DETACHED, to know whether the server's radio is what left (VibeServerRestore.noteRadioGone). */
+        internal fun isServableRadio(vid: Int, pid: Int): Boolean =
+            RTL_SDR_VIDPIDS.contains((vid shl 16) or pid) ||
+            (vid == AIRSPYHF_VID && pid == AIRSPYHF_PID) ||
+            (vid == HACKRF_VID && pid == HACKRF_PID) ||
+            (vid == AIRSPY_VID && pid == AIRSPY_PID)
     }
 }

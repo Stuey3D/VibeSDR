@@ -60,6 +60,9 @@ class MainActivity : ReactActivity() {
    * ★★ THERE IS NO "START ON BOOT" SWITCH ANY MORE (2026-09-28) — see
    *    VibeServerRestore.attachResumeWanted. The attach is the one event Android grants the radio
    *    on, which is why this path survived the switch's removal and BOOT_COMPLETED did not.
+   * ★★★ AND ONLY AFTER A BLIP (Stuart, 2026-09-29): a radio back within five minutes of leaving resumes
+   *     the server; one away longer — or never seen to leave, which is what a restart looks like — does
+   *     not, and the server is disarmed so it stays stopped. See VibeServerRestore.RADIO_BLIP_WINDOW_MS.
    * ★ Safe when the server is already up: the service's restore path refuses to double-open the
    *   radio (isShimServing), and this is the same EXTRA_RESTORE the sticky restart and the update
    *   receiver use — one restore path, not a fourth.

@@ -645,6 +645,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [starting, setStarting] = useState(false);
   const [error, setError]     = useState<string | null>(null);
   const runningRef = useRef(false);
+  /** ★ Consecutive status reads saying the server is not running — see the live-status poll. */
+  const stoppedReads = useRef(0);
   /* ★★ Set by keepServingAndBrowse(), and PRE-SET when the picker's "Currently serving" row
    *  opened this screen to LOOK at a running server. Read only by the unmount teardown below. */
   const keepServingRef = useRef(!!(route.params as any)?.keepOnExit);
@@ -897,6 +899,22 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     if (!running) return;
     const t = setInterval(async () => {
       const s = await getVibeServerStatus();
+      /* ★★★ THE SERVER CAN STOP WITHOUT THIS SCREEN STOPPING IT. Its radio gone for more than five
+       *     minutes stops it natively (VibeServerRestore.RADIO_BLIP_WINDOW_MS — Stuart, 2026-09-29: an
+       *     owner who unplugged it for a while may have forgotten they were serving). Only an explicit
+       *     `running:false` counts — a failed read (null) says nothing — and only TWICE in a row, so the
+       *     moment inside a restart (a settings save stops and starts the engine) is not mistaken for it.
+       *     The screen then goes back to the settings and Start, saying why, rather than showing a live
+       *     server that is not there. Applies to an ADOPTED server too, hence `running`, not runningRef. */
+      stoppedReads.current = s && s.running === false ? stoppedReads.current + 1 : 0;
+      if (stoppedReads.current >= 2) {
+        stoppedReads.current = 0;
+        runningRef.current = false;
+        setRunning(null);
+        setError('The server has stopped. If its radio was unplugged for more than 5 minutes it is not '
+          + 'restarted on its own — plug it in and press Start to serve again.');
+        return;
+      }
       if (s) setStatus(s);
       // ★★★ THE LISTING CAN COME BACK WITHOUT THE SCREEN ASKING IT TO. Turning the server on
       //     re-establishes a listing that was left on, and that happens on its own, seconds later,
