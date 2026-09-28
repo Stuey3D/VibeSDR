@@ -68,6 +68,10 @@ mkdir -p "$POOL" "$DIST/main/binary-$ARCH"
 UPSTREAM="$(grep -oE 'project\([^)]*VERSION[[:space:]]+[0-9.]+' "$SRC_DIR/vibeserver/CMakeLists.txt" \
             | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 [ -n "$UPSTREAM" ] || { echo "could not read the version from vibeserver/CMakeLists.txt"; exit 1; }
+# ★ V11 betas: `set(VIBESERVER_PRERELEASE "b1")` in the same file makes the package 11.0.0~b1 (CMake
+#   appends it). Read it here too, or the version check below refuses every beta (it did, for B1).
+PRE="$(sed -n 's/^set(VIBESERVER_PRERELEASE "\([A-Za-z0-9]*\)").*/\1/p' "$SRC_DIR/vibeserver/CMakeLists.txt" | head -1)"
+[ -n "$PRE" ] && UPSTREAM="${UPSTREAM}~${PRE}"
 # ★★★ NEVER REUSE A REVISION NUMBER. This used to walk up from 1 looking for a gap — and the
 # PRUNE below deletes old revisions, so it kept finding the numbers it had just freed. A publish
 # after a prune therefore shipped a DIFFERENT package under a version that had already been
