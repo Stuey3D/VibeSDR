@@ -38,6 +38,11 @@ if (endMark < 0) { console.error('✗ could not find the end of the rdsx builder
 const body = cpp.slice(start, endMark);
 const sent = new Set([...body.matchAll(/\\"([A-Za-z][\w.]*)\\"\s*:/g)].map(m => m[1]));
 sent.delete('type');
+// ★ The eye grids' keys are NOT literal in the JSON assembly: the builder loops over
+//   `kEyeKeys[3] = { "eyeP", "eyeS", "eyeR" }`, so the regex above cannot see them. Read that array
+//   rather than listing the names here — a hand copy is one more place for them to drift (2026-09-28).
+const eyeArr = body.match(/kEyeKeys\[\d+\]\s*=\s*\{([^}]*)\}/);
+if (eyeArr) for (const m of eyeArr[1].matchAll(/"([A-Za-z]\w*)"/g)) sent.add(m[1]);
 
 // The client's parser: ONLY the `case 'rdsx':` block. ★ A window of "roughly around there" swept
 // in msg.* reads from the sig, rspstat, admin and hwinfo handlers and reported nineteen false
