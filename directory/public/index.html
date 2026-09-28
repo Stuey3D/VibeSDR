@@ -1218,9 +1218,12 @@ async function openUnlocked(r, s, win) {
      *  would sign them in and then refuse them their own gain slider. */
     const tk = ADMIN_TICKET.get(s.address);
     const adm = tk ? `&vs_admin_ticket=${encodeURIComponent(tk)}` : '';
-    if (win) win.location = ch && ch.nonce
-      ? `${url}&vs_nonce=${encodeURIComponent(ch.nonce)}&vs_auth=${encodeURIComponent(token)}${adm}`
-      : url + (adm ? `&${adm.slice(1)}` : '');
+    /* ★★ THE PROOF RIDES IN THE FRAGMENT (#…): a browser never sends it to the network, so it is not in
+     *  any proxy or edge log, and the receiver strips it from the address bar on arrival
+     *  (main.ts adoptPinProofFromUrl — which is also what finally USES it, 2026-09-28). */
+    if (win) win.location = ch && ch.nonce && token
+      ? `${url}${adm}#vs_nonce=${encodeURIComponent(ch.nonce)}&vs_auth=${encodeURIComponent(token)}`
+      : url + adm;
   } catch (e) {
     if (win) win.location = url;      // ★ the receiver's own PIN box is the fallback, not an error
   }

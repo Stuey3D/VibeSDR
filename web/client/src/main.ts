@@ -445,7 +445,7 @@ async function shapeSplash(host: string) {
         const rj = rr.ok ? await rr.json() : null;
         const me = (Array.isArray(rj?.radios) ? rj.radios : [])
           .find((x: any) => radioKey(x) === decodeURIComponent(m[1]));
-        if (radioPinLocked(me)) return;          // leave the PIN box exactly where it is
+        if (radioPinLocked(me) && !pinProof()) return;   // leave the PIN box exactly where it is
       } catch { /* an older server: fall through to the open form, as before */ }
     }
     $('pinRow').hidden = true;
@@ -868,8 +868,9 @@ async function connect(host: string, pin: string) {
   const wsBaseUrl = wsBase(host);
 
   let auth: AuthState;
+  const proof = pin ? '' : pinProof();   // ★ a PIN typed here wins over the directory's proof
   try {
-    auth = await resolveAuth(httpBaseUrl, pin);
+    auth = proof ? { query: proof, required: true, lockedFor: 0 } : await resolveAuth(httpBaseUrl, pin);
   } catch (e) {
     if (e instanceof Error && e.message === 'PIN required') throw new Error('This server needs a PIN');
     // Only a genuine fetch failure means "unreachable". Anything else is a real
@@ -974,7 +975,17 @@ async function connect(host: string, pin: string) {
     const probe = new WebSocket(specUrl);
     const t = setTimeout(() => { probe.close(); reject(new Error('Server did not respond')); }, 6000);
     probe.onopen = () => { clearTimeout(t); probe.close(); resolve(); };
-    probe.onerror = () => { clearTimeout(t); reject(new Error(auth.required ? 'Wrong PIN, or server refused the connection' : 'Server refused the connection')); };
+    probe.onerror = () => {
+      clearTimeout(t);
+      if (proof) {
+        // ★ Refused or expired: forget it and show the PIN box, so the next try is the typed code.
+        dropPinProof();
+        $('pinRow').hidden = false;
+        reject(new Error('The PIN from the directory was not accepted here — please enter it again'));
+        return;
+      }
+      reject(new Error(auth.required ? 'Wrong PIN, or server refused the connection' : 'Server refused the connection'));
+    };
   });
 
   startApp(specUrl, audioUrl, host, auth);
@@ -7468,6 +7479,48 @@ function adoptAdminTicketFromUrl() {
   history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + location.hash);
 }
 adoptAdminTicketFromUrl();
+
+/* ★★★ THE DIRECTORY'S PIN PROOF, USED — it was built and never read (Stuart, 2026-09-28: "entering the
+ *     PIN on the directory doesnt actually unlock the radio"). The directory checks the PIN against
+ *     this radio (its own nonce, signed with HMAC(pin, nonce) — the PIN itself never travels), then
+ *     opens /r/<id>/?join=1 carrying that proof. Nothing here adopted it, so ?join connected with NO
+ *     credential, was refused (and very likely counted as a failed attempt against the server —
+ *     exactly what "the directory takes the PIN first" exists to prevent), and the PIN box came back.
+ *  ★ Read from the FRAGMENT (#vs_nonce=…&vs_auth=…, never sent over the network) or, from an older
+ *    directory, the query; stored per radio for this tab (the nonce is good for about an hour, so a
+ *    reconnect reuses it) and stripped from the address bar at once. */
+function pinProofKey(): string {
+  const m = /^\/r\/([^/?#]+)/.exec(location.pathname);
+  try { return m ? 'vsPinProof:' + decodeURIComponent(m[1]) : ''; } catch { return ''; }
+}
+function adoptPinProofFromUrl() {
+  const key = pinProofKey();
+  const h = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const q = new URLSearchParams(location.search);
+  const src = h.get('vs_auth') ? h : q;
+  const nonce = src.get('vs_nonce'), authTok = src.get('vs_auth');
+  if (!nonce || !authTok) return;
+  if (key) {
+    try { sessionStorage.setItem(key, JSON.stringify({ q: `vs_nonce=${encodeURIComponent(nonce)}&vs_auth=${encodeURIComponent(authTok)}`, t: Date.now() })); }
+    catch (e) { console.error('PIN proof: could not keep it for this tab', e); }
+  }
+  for (const u of [h, q]) { u.delete('vs_nonce'); u.delete('vs_auth'); }
+  const rest = q.toString(), frag = h.toString();
+  history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + (frag ? '#' + frag : ''));
+}
+adoptPinProofFromUrl();
+/** The directory's proof for THIS radio, if it is still fresh (the server's nonce lives ~1 h). */
+function pinProof(): string {
+  const key = pinProofKey();
+  if (!key) return '';
+  try {
+    const j = JSON.parse(sessionStorage.getItem(key) || 'null');
+    if (j && typeof j.q === 'string' && Date.now() - Number(j.t) < 55 * 60 * 1000) return j.q;
+    if (j) sessionStorage.removeItem(key);
+  } catch { /* nothing kept */ }
+  return '';
+}
+function dropPinProof() { const k = pinProofKey(); if (k) try { sessionStorage.removeItem(k); } catch { /* */ } }
 
 /** ★★ A NOTICE MUST GREET SOMEONE WHO ARRIVES AFTER IT WAS POSTED. The push only reaches sockets
  *  that were already open, and the person opening the page now is precisely the one about to judge
