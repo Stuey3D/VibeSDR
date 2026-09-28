@@ -1194,16 +1194,21 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
               has no emoji form, so it stays a glyph on every platform without a variation
               selector to get lost in a copy-paste. */}
           <Row raw={raw} label="RDS⇔pilot"   value={phaseTxt} colour={phaseCol}
-               reserve="rotating 00°/s — encoder not locked to pilot" />
+               reserve="rotating 000°/s — encoder not locked to pilot" />
           {/* ★ Multipath is a REFLECTION, not weakness — a strong station can show it, and unlike
               noise it is not cured by narrowing. Worth knowing which fault you are hearing. */}
+          {/* ★★ THE RESERVE IS THE TRUE WORST CASE, not a guess (Stuart, 2026-09-28: fixed heights stop the
+              box pulsing, "but it needs to have enough room to display its longest message"). This was
+              "too noisy to judge" — a third of the real longest, so the value overprinted CEQ. Longest
+              base ("NN.N% · moderate · held", padded to 100.0%) + longest IMS clause. If a clause is
+              added to mpTxt, add it here too. */}
           <Row raw={raw} label="Multipath"   value={mpTxt} colour={mpCol}
-               reserve="too noisy to judge" />
+               reserve="100.0% · moderate · held · IMS standing by · NR already blending further" />
           <Row raw={raw} label="CEQ"         value={ceqTxt} colour={ceqCol}
                reserve="standing by · nothing to correct" />
           <Row raw={raw} label="Blanker"     value={nbTxt} reserve="nothing to blank" />
           <Row raw={raw} label="IF narrow"   value={ifTxt} colour={ifCol}
-               reserve="110k narrow · wide would cost 11.0 dB" />
+               reserve="999k narrow · wide would cost 99.9 dB" />
           <Row raw={raw} label="Now playing" value={nowPlaying || DASH} />
           <Row raw={raw} label="Long PS"     value={x?.longPs || DASH} />
           <Row raw={raw} label="PTYN"        value={x?.ptyn || DASH} />
