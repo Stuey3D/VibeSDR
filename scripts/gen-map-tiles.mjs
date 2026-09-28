@@ -205,6 +205,15 @@ for (const [id, lon1, lat1, lon2, lat2, le, he, ft] of load('tier2', 'runways'))
   if (!lon1 || !lat1 || !lon2 || !lat2 || runwayKm(lon1, lat1, lon2, lat2) > 6) { droppedRunways++; continue; }
   const g = { type: 'LineString', coordinates: [[lon1, lat1], [lon2, lat2]] }, props = { id, le: le || '', he: he || '', ft: ft || 0 };
   emit('vibemap-runways', 'runways', [9, MAXZ], g, props);
+  /* ★ THE END NUMBERS, as the Leaflet map had them (Stuart, 2026-09-28: "the runways used to have the
+   *  numbers"). One label point per threshold, set just BEYOND it along the runway's own line (a tenth
+   *  of its length, 60-250 m) so the number sits at the end rather than on the tarmac. le = the first
+   *  coordinate's end, he = the second's (OurAirports' low/high end). */
+  const dx = lon2 - lon1, dy = lat2 - lat1, len = Math.hypot(dx, dy) || 1;
+  const km = runwayKm(lon1, lat1, lon2, lat2), out = Math.min(0.25, Math.max(0.06, km * 0.1)) / (km || 1);
+  const endPt = (lon, lat, sgn) => [Math.round((lon + sgn * dx * out) * 1e5) / 1e5, Math.round((lat + sgn * dy * out) * 1e5) / 1e5];
+  if (le) emit('vibemap-runways', 'runwayends', [10, MAXZ], { type: 'Point', coordinates: endPt(lon1, lat1, -1) }, { des: le });
+  if (he) emit('vibemap-runways', 'runwayends', [10, MAXZ], { type: 'Point', coordinates: endPt(lon2, lat2, 1) }, { des: he });
 }
 
 console.log(`runways: ${droppedRunways} dropped as broken`);

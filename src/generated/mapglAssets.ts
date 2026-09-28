@@ -3,7 +3,7 @@
  *   with the path it must have on disk. mapglPack.ts copies them to <documents>/mapgl/ once — the
  *   fonts need a real {fontstack}/{range}.pbf folder layout, which native assets do not have. */
 /* eslint-disable */
-export const MAPGL_BYTES = 25230812;
+export const MAPGL_BYTES = 26201777;
 export const MAPGL_FILES: ReadonlyArray<readonly [string, number]> = [
   ["fonts/JetBrains Mono Bold/0-255.pbf", require("../../assets/mapgl/fonts/JetBrains_Mono_Bold/0-255.pbf")],
   ["fonts/JetBrains Mono Bold/1024-1279.pbf", require("../../assets/mapgl/fonts/JetBrains_Mono_Bold/1024-1279.pbf")],

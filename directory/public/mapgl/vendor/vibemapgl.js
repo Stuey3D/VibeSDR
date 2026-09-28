@@ -263,7 +263,8 @@
       const text = (p) => {
         const code = [p.icao, p.iata].filter(Boolean).join(' / ');
         const el = document.createElement('div');
-        el.style.cssText = 'font-size:12px;line-height:1.35;white-space:nowrap';
+        // ★ Wraps: "Charles de Gaulle International Airport" overflowed a nowrap box on a phone (2026-09-28).
+        el.style.cssText = 'font-size:12px;line-height:1.35;white-space:normal;overflow-wrap:anywhere';
         el.textContent = p.name || code;          // ★ textContent: a name is data, never markup
         if (p.name && code) { const c = document.createElement('div'); c.style.opacity = '0.6'; c.textContent = code; el.appendChild(c); }
         return el;
@@ -281,6 +282,8 @@
         map.on('click', id, show);                 // ★ touch has no hover
       }
       map.on('movestart', hide);
+      // ★ Touch has no mouseleave: a tap anywhere that is not an airport puts the name away.
+      map.on('click', (e) => { if (!map.queryRenderedFeatures(e.point, { layers: ids }).length) hide(); });
     }
 
     return {

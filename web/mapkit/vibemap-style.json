@@ -33,7 +33,8 @@
      "rail",
      "roads-b",
      "roads-d",
-     "runways"
+     "runways",
+     "runway-ends"
     ],
     "places": "major"
    },
@@ -47,7 +48,8 @@
      "rail",
      "roads-b",
      "roads-d",
-     "runways"
+     "runways",
+     "runway-ends"
     ],
     "places": "all"
    },
@@ -71,7 +73,8 @@
      "rail",
      "roads-b",
      "roads-d",
-     "runways"
+     "runways",
+     "runway-ends"
     ],
     "places": "countries"
    },
@@ -660,6 +663,42 @@
      12,
      5
     ]
+   }
+  },
+  {
+   "id": "runway-ends",
+   "type": "symbol",
+   "source": "runways",
+   "source-layer": "runwayends",
+   "minzoom": 9.5,
+   "layout": {
+    "text-field": [
+     "get",
+     "des"
+    ],
+    "text-font": [
+     "JetBrains Mono Bold"
+    ],
+    "text-size": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     9.5,
+     9,
+     12,
+     12
+    ],
+    "text-allow-overlap": false,
+    "text-padding": 1
+   },
+   "paint": {
+    "text-color": "#e8e8d0",
+    "text-halo-color": "rgba(0,0,0,0.75)",
+    "text-halo-width": 1.2
    }
   },
   {
