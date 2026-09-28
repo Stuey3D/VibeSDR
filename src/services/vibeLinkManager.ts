@@ -223,11 +223,21 @@ export class LinkManager {
       const mid = (lo + hi) / 2;
       return mid > 0 && (hi - lo) / mid < 0.25;      // within ±12% of itself: a ceiling, not a link
     })();
-    if (ratio < STARVE_RATIO && steadyShortfall) {
+    if (ratio < HEALTHY_RATIO && steadyShortfall) {
       /* ★ Hold, and stop counting it against the link. The rung stays where it is: the server is
-       *  already giving everything it has, and a lower request cannot produce more. */
+       *  already giving everything it has, and a lower request cannot produce more.
+       *  ★★★ BELOW HEALTHY, NOT ONLY BELOW STARVE — AND THE BARS ARE TOLD. This used to fire only
+       *      under 60 %. The controller OPENS on the middle rung (10 fps) by design, and a 32-bit
+       *      server's 7.8 fps ceiling is 78 % of that: above starve, below healthy, so it never
+       *      climbed and never starved — it held rung 2 for the whole session, and the bars are
+       *      drawn from the rung, so a punctual, perfectly healthy link showed 2 of 3 for ever
+       *      (Stuart, 2026-09-28, Pi 2 and Sony TV; the 64-bit servers showed 3). A steady shortfall
+       *      is the SERVER's ceiling, so the rung says nothing about the link: unless this link has
+       *      genuinely starved, report no back-off. The rung itself stays put — asking a 32-bit box
+       *      for more would only add FFT work for frames it cannot deliver. */
       this.starvedSecs = 0; this.healthySecs = 0;
       this.settling = false;                          // decided: this is the server's ceiling
+      if (!this.everStarved) this.adaptiveRung = 1;
       linkDebug.line += ' — server ceiling, holding';
       return;
     }
