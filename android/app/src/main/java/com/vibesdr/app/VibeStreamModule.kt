@@ -170,6 +170,12 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun revive() { VibeStreamService.instance?.revive() }
 
+    /** ★★★ Hold the native self-heal across a DAB transition (entering/leaving DAB, a block change,
+     *  a service pick) — seconds of frames arriving and nothing playing that are NOT a stall.
+     *  ★ @ReactMethod or it does not exist to JS (see noteServerFreq). No service = no heal to hold. */
+    @ReactMethod
+    fun holdHealing(ms: Double) { VibeStreamService.instance?.holdHealing(ms.toLong()) }
+
     /** ★★★ ADOPT THE SERVER'S DIAL — A CACHE UPDATE, NOT A CONTROL ACTION. JS calls this when the
      *  server's `config` says where the dial is; it must never reach the wire. Its twin below,
      *  sendTuneCommand, is the ONLY thing that transmits, and only from a user action.

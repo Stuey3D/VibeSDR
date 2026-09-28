@@ -944,6 +944,22 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     healTimer = t
   }
 
+  /// ★★★ A PAUSE THE CALLER KNOWS ABOUT IS NOT A STALL. JS calls this at every DAB transition
+  ///     (entering/leaving DAB, changing block, picking a service): frames arrive for seconds while
+  ///     the server acquires the multiplex and primes the decoder, and nothing plays. Judged as a
+  ///     fault, the heal rebuilt the pipeline and then reopened the socket in the middle of the
+  ///     acquisition — DAB stopped working on the Sony Lite (Stuart, 2026-09-29). The web client
+  ///     has always held (audio.holdHealing); the native heal never heard about DAB at all.
+  ///     Hops to main: `heal` is only ever touched there (healTick). Extends, never shortens.
+  @objc func holdHealing(_ ms: NSNumber) {
+    let seconds = max(0, ms.doubleValue) / 1000
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.heal.hold(now: ProcessInfo.processInfo.systemUptime, seconds: seconds)
+      NSLog("[VibePowerModule] self-heal held for %.1f s", seconds)
+    }
+  }
+
   /// Main thread, once a second.
   private func healTick() {
     healLock.lock(); let rx = healRx; let played = healPlayed; healLock.unlock()

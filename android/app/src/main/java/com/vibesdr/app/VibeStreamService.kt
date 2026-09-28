@@ -1356,6 +1356,19 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         mainHandler.post { reviveIfDead(3_000) }
     }
 
+    /** ★★★ A PAUSE THE CALLER KNOWS ABOUT IS NOT A STALL. JS calls this at every DAB transition:
+     *  frames arrive for seconds while the server acquires the multiplex and primes the decoder,
+     *  and nothing plays. Judged as a fault, the heal rebuilt the pipeline and reopened the socket
+     *  mid-acquisition — DAB stopped working on the Sony Lite (Stuart, 2026-09-29). Posted to main:
+     *  `heal` is only ever touched there (healTick). Extends, never shortens. */
+    fun holdHealing(ms: Long) {
+        val m = ms.coerceAtLeast(0)
+        mainHandler.post {
+            heal.hold(SystemClock.elapsedRealtime(), m)
+            Log.i(TAG, "self-heal held for $m ms")
+        }
+    }
+
     private fun tuneByStep(direction: Int) {
         // External (OWRX/Kiwi): tuning lives in JS — delegate so we don't tune the
         // native UberSDR WS (resurrecting a session). JS handles step vs bookmark

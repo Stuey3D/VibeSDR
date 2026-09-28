@@ -44,11 +44,41 @@ export const VibePowerModule = NativeModules.VibePowerModule as
       setDefaultInstance?: (name: string) => void;   // '' = none (Siri "set a default")
       setVoiceConnected?: (connected: boolean) => void;   // Siri: emit now vs stash
       getPendingVoiceQuery?: () => Promise<string | null>;   // cold-launch Siri query
+      /** ★★★ Hold the NATIVE self-heal across a legitimate pause (a DAB transition) — see
+       *  holdNativeHealing below. Optional: native builds before it lack it. */
+      holdHealing?:      (ms: number) => void;
       getDebugInfoSync:  () => string;
       addListener:       (name: string) => void;
       removeListeners:   (count: number) => void;
     }
   | undefined;
+
+/** ★★★ A PAUSE THE CALLER KNOWS ABOUT IS NOT A STALL. The self-heal (VibePowerModule.swift /
+ *  VibeStreamService.kt `heal`) repairs "frames arriving, nothing playing for 3 s" — and entering,
+ *  leaving or changing a DAB multiplex, or picking a service, is exactly that for several seconds
+ *  while the server acquires and primes. Judged as a fault, the heal rebuilt the pipeline and then
+ *  reopened the socket in the middle of the acquisition: "DAB worked previously to the new audio
+ *  watchdog" (Stuart, 2026-09-29, Sony VibeServer Lite). The web client has held since the heal
+ *  was written (audio.holdHealing); the native heal runs below JS and never heard about DAB.
+ *  ★ Extends, never shortens. A native build without the method logs ONCE and carries on — the
+ *    heal it would hold does not exist in that build either. */
+let holdHealingMissingLogged = false;
+export function holdNativeHealing(ms: number, why: string): void {
+  const fn = VibePowerModule?.holdHealing;
+  if (typeof fn !== 'function') {
+    if (!holdHealingMissingLogged) {
+      holdHealingMissingLogged = true;
+      console.warn(`[AudioPlayer] native holdHealing unavailable in this build — self-heal not held (${why})`);
+    }
+    return;
+  }
+  try {
+    fn(ms);
+    noteAudioEvent(`self-heal held ${Math.round(ms / 1000)} s — ${why}`);
+  } catch (e) {
+    console.warn('[AudioPlayer] holdHealing failed:', e);
+  }
+}
 
 export interface AudioPlayerProps {
   baseUrl:       string | null;
