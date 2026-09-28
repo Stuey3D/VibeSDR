@@ -116,6 +116,7 @@
 #include "vibe_mapgl.h"     // the GPU map's files (renderer, style, glyphs, PMTiles) — see the header
 #include "vibe_proxy.h"
 #include "vibe_admin_ticket.h"
+#include "vibe_airspy_limit.h"      // the owner's per-band limit on an Airspy R2 / Mini
 #include "vibe_bands.h"             // the ban list, the connection log and the machine's vitals
 
 #define LOG_TAG "VibeLocalSDR"
@@ -2055,6 +2056,15 @@ static std::atomic<bool>     g_gainLock{false};
 static vibebands::GainRules  g_ifGrFloors;     // SDRplay: least IF gain REDUCTION in dB, per band
 static vibebands::GainRules  g_gainSplits;     // HackRF LNA share of the total, 0-100, per band
 static vibebands::GainRules  g_gainLocks;      // which bands are FIXED at their ceiling
+static vibebands::GainRules  g_gainCurves;     // Airspy R2/Mini: 0 linearity / 1 sensitivity, per band
+/** ★★★ THE AIRSPY R2 / MINI's RULE AT A FREQUENCY — the one place the three per-band answers are
+ *  put together (vibe_airspy_limit.h). Every reader below asks this, so the handler, the retune and
+ *  hwinfo cannot disagree about what the rule is. Inactive while not serving (gainCapAt says so). */
+static vibe::asplimit::Limit aspLimitAt(double hz) {
+    return vibe::asplimit::limitFrom(vibe::LocalSdrShim::gainCapAt(hz),
+                                     vibe::LocalSdrShim::gainCurveAt(hz),
+                                     vibe::LocalSdrShim::gainLockedAt(hz));
+}
 /** ★★★ RTL OVERLOAD PROTECTION — the RSP gets a hardware flag, the dongle gets this.
  *
  *  `g_gainTarget` is what the OWNER (or an admin listener) asked for; `g_ovlSteps` is how many
@@ -12851,53 +12861,65 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (type == "airspy_control") {
             if (!sharedGate("Airspy controls")) return;
             const bool manualLocked = LocalSdrShim::agcLocked();
-            /* ★★★ THE OWNER'S PER-BAND CEILING BINDS THIS RADIO TOO (2026-09-28). The setup page
-             *     now offers ceilings for an R2 / Mini, as a PRESET POSITION — and a ceiling that
-             *     Free mode walks straight past is a setting that does nothing, which AGENTS.md
-             *     forbids drawing. So on a capped band the gain stays on a curve: Free and the
-             *     three manual stages (and their AGCs, which only exist in Free) are refused, and a
-             *     curve switch is re-clamped, because each curve remembers its own position and
-             *     the other one may sit above the ceiling. On a LOCKED band the owner's position
-             *     and curve are the setting, so every gain-shaped field is refused — the HackRF's
-             *     rule. Bias-T and packing are not gain and are untouched. */
-            const double capHz  = LocalSdrShim::instance().listenFrequency();
-            const int    capT   = LocalSdrShim::gainCapAt(capHz);
-            const bool   capped = capT >= 0;
-            const bool   fixed  = capped && LocalSdrShim::gainLockedAt(capHz);
-            bool curveMoved = false;
+            /* ★★★ THE OWNER'S PER-BAND LIMIT: A CURVE, A POSITION, AND NOTHING ELSE (Stuart,
+             *     2026-09-28): "if a per band limit is in place tie it to one of the gain curves
+             *     and limit that and then block any manual gain with the individual gain controls."
+             *     The whole rule is vibe_airspy_limit.h; this is where it is enforced, because a
+             *     rule that protects shared hardware is enforced where the value is SET — an old
+             *     client, a script or a curious person sends the message anyway.
+             *  ★★ In a limited band: the band's curve only (Free and the other curve refused), and
+             *     the three manual stages and both stage AGCs refused — none of them is a position
+             *     on a curve, so no ceiling on one can bind them. The POSITION itself travels on the
+             *     generic `gain` message (clamped there on LIMIT, refused on LOCK). Bias-T and
+             *     packing are not gain and are untouched.
+             *  ★★ THE ADMIN IS HELD TO IT TOO, as every other radio's gain ceiling and gain lock
+             *     hold the admin (the `gain` handler and hackrf_control have no admin exemption).
+             *     It is the owner's decision about protecting their own front end, made in the setup
+             *     page; lifting it is done there, not by stepping around it from a listening page.
+             *  ★ A refusal SAYS WHY and re-sends THIS listener the true state, so their panel snaps
+             *    back to what the radio is doing rather than showing a setting it is not using —
+             *    the tunerbw refusal's pattern (71279367). Outside a limited band nothing here
+             *    changes: every control is exactly as it always was. */
+            const double capHz = LocalSdrShim::instance().listenFrequency();
+            const vibe::asplimit::Limit lim = aspLimitAt(capHz);
+            using vibe::asplimit::Field;
+            std::string refusedWhat;   // the first thing refused, for the one notice
+            auto refuse = [&](const char* what) {
+                LOGI("Airspy %s refused — the owner %s this band to %s %d", what,
+                     lim.locked ? "locks" : "limits", lim.curveName(), lim.maxPos);
+                if (refusedWhat.empty()) refusedWhat = what;
+            };
+            /* ★ Naming the band's own curve is accepted and changes nothing — the radio is already
+             *  on it (applyGainCapForFreq put it there). Only another curve or Free is refused. */
             if (jsonNum(msg, "mode", v)) {
-                if (fixed)                LOGI("Airspy gain mode refused — the owner has fixed this band");
-                else if (capped && (int)v == 2)
-                                          LOGI("Airspy free mode refused — the owner caps this band at preset %d", capT / 10);
-                else { LocalSdrShim::instance().setAirspyGainMode((int)v); curveMoved = true; }
+                if (vibe::asplimit::refuses(lim, Field::Mode, (int)v)) refuse("gain mode");
+                else if (!lim.active) LocalSdrShim::instance().setAirspyGainMode((int)v);
             }
             if (jsonNum(msg, "curve", v)) {
-                if (fixed) LOGI("Airspy curve refused — the owner has fixed this band");
-                else       { LocalSdrShim::instance().setAirspyCurve(v != 0); curveMoved = true; }
+                if (vibe::asplimit::refuses(lim, Field::Curve, (int)v)) refuse("gain curve");
+                else if (!lim.active) LocalSdrShim::instance().setAirspyCurve(v != 0);
             }
-            if (curveMoved && capped) applyGainCapForFreq(capHz);
-            const char* stageRefusal = manualLocked ? "the owner has locked the AGC on"
-                                     : capped       ? "the owner caps this band, which holds the gain on a curve"
-                                                    : nullptr;
-            if (jsonNum(msg, "lna", v)) {
-                if (stageRefusal) LOGI("LNA refused — %s", stageRefusal);
-                else              LocalSdrShim::instance().setAirspyStage(0, (int)v);
-            }
-            if (jsonNum(msg, "mixer", v)) {
-                if (stageRefusal) LOGI("mixer gain refused — %s", stageRefusal);
-                else              LocalSdrShim::instance().setAirspyStage(1, (int)v);
-            }
-            if (jsonNum(msg, "vga", v)) {
-                if (stageRefusal) LOGI("VGA refused — %s", stageRefusal);
-                else              LocalSdrShim::instance().setAirspyStage(2, (int)v);
+            /* ★ The owner's AGC lock still closes the manual stages on an UNLIMITED band, exactly as
+             *  before — it is a separate rule and this does not replace it (manualLocked, above). */
+            static const char* kStage[3] = { "LNA", "mixer gain", "VGA" };
+            static const char* kKey[3]   = { "lna", "mixer", "vga" };
+            for (int st = 0; st < 3; ++st) {
+                if (!jsonNum(msg, kKey[st], v)) continue;
+                if (vibe::asplimit::refuses(lim, Field::Stage)) refuse(kStage[st]);
+                else if (manualLocked) LOGI("%s refused — the owner has locked the AGC on", kStage[st]);
+                else LocalSdrShim::instance().setAirspyStage(st, (int)v);
             }
             if (jsonNum(msg, "lnaAgc", v)) {
-                if (capped) LOGI("LNA AGC refused — the owner caps this band");
-                else        LocalSdrShim::instance().setAirspyLnaAgc(v != 0);
+                if (vibe::asplimit::refuses(lim, Field::StageAgc)) refuse("LNA AGC");
+                else LocalSdrShim::instance().setAirspyLnaAgc(v != 0);
             }
             if (jsonNum(msg, "mixerAgc", v)) {
-                if (capped) LOGI("mixer AGC refused — the owner caps this band");
-                else        LocalSdrShim::instance().setAirspyMixerAgc(v != 0);
+                if (vibe::asplimit::refuses(lim, Field::StageAgc)) refuse("mixer AGC");
+                else LocalSdrShim::instance().setAirspyMixerAgc(v != 0);
+            }
+            if (!refusedWhat.empty()) {
+                sendText(sock, "{\"type\":\"notice\",\"why\":\"" + vibe::asplimit::why(lim) + "\"}");
+                sendHwInfo(sock);
             }
             if (jsonNum(msg, "biast", v) && adminGate("bias-T"))
                 LocalSdrShim::instance().setAirspyBiasT(v != 0);
@@ -14103,6 +14125,47 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     LOGI("DAB: manual gain set — the listener has taken the gain");
                 }
             }
+            /* ★★★ THE AIRSPY R2 / MINI IN A LIMITED BAND — the slider is a POSITION ON THE BAND'S
+             *   CURVE and nothing else (vibe_airspy_limit.h). "auto" is Free mode with the stage
+             *   AGCs on this radio, so it is refused; on LOCK every position is refused; on LIMIT a
+             *   position is clamped to the owner's and written together with the curve, so the
+             *   radio cannot be on the other curve even for a moment. Refusals and clamps both
+             *   re-send THIS listener the true state (and a refusal says why), so the slider does
+             *   not sit on a value the radio is not using. Held for the admin too, like the other
+             *   radios' ceilings below. An unlimited band falls through to the lines below
+             *   untouched. */
+            if (useAirspy()) {
+                const vibe::asplimit::Limit lim = aspLimitAt(LocalSdrShim::instance().listenFrequency());
+                if (lim.active) {
+                    double pv = -1;
+                    const bool hasVal = jsonNum(msg, "value", pv);
+                    // ★ -1 is "auto" too, on the wire the slider's own AUTO end sends.
+                    const bool isAuto = msg.find("\"auto\":true") != std::string::npos
+                                     || (hasVal && pv < 0);
+                    const bool hasPos = hasVal && !isAuto;
+                    const bool refused = isAuto
+                        || (hasPos && vibe::asplimit::refuses(lim, vibe::asplimit::Field::Position));
+                    if (refused) {
+                        LOGI("Airspy gain %s refused — the owner %s this band to %s %d",
+                             isAuto ? "auto" : "change", lim.locked ? "locks" : "limits",
+                             lim.curveName(), lim.maxPos);
+                        sendText(sock, "{\"type\":\"notice\",\"why\":\"" + vibe::asplimit::why(lim) + "\"}");
+                        sendHwInfo(sock);
+                        return;
+                    }
+                    if (!hasPos) return;
+                    if (!sharedGate("gain")) return;
+                    const int askedPos = (int)std::lround(pv / 10.0);
+                    const int pos = vibe::asplimit::clampPos(lim, askedPos);
+                    if (pos != askedPos)
+                        LOGI("Airspy position %d held to %d by the owner's limit (%s)",
+                             askedPos, pos, lim.curveName());
+                    LocalSdrShim::instance().setAirspyPreset(lim.mode(), pos * 10);
+                    vsPersist("{\"gain\":" + std::to_string(pos * 10) + "}");
+                    if (pos != askedPos) sendHwInfo(sock);
+                    return;
+                }
+            }
             /* ★★★ AND THE CEILING CAN BE A SETTING RATHER THAN A LIMIT. With the gain lock on, a
              *   band the owner capped is FIXED at that figure: refused, not clamped, because
              *   applyGainCapForFreq has already put the gain exactly there and a clamp would only
@@ -14120,13 +14183,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // behind the admin password; a personal one leaves it alone.
             if (!sharedGate("gain")) return;
             if (msg.find("\"auto\":true") != std::string::npos) {
-                /* ★ On an Airspy R2 / Mini "auto" is Free mode with the stage AGCs, which no
-                 *   preset ceiling can bind — see airspy_control. Refused where a ceiling applies. */
-                if (useAirspy()
-                    && LocalSdrShim::gainCapAt(LocalSdrShim::instance().listenFrequency()) >= 0) {
-                    LOGI("Airspy auto gain refused — the owner caps this band");
-                    return;
-                }
+                // ★ An Airspy R2 / Mini in a limited band never reaches here — see above.
                 LocalSdrShim::instance().setGain(-1); vsPersist("{\"gain\":-1}");
             } else if (jsonNum(msg,"value",v)) {
                 // ★★★ THE OWNER'S CEILING FOR THIS BAND. A ceiling, not a lock: the listener keeps
@@ -20480,6 +20537,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *    limit is not disturbed and nothing is silently raised. */
     /** The ceiling last announced to clients, so a change can be sent and nothing else. */
     std::atomic<int> lastSentGainCap{-2};
+    std::atomic<int> lastSentAspLimit{-2};   ///< the Airspy R2/Mini rule last announced — see below
 
     void applyGainCapForFreq(double hz) {
         const int cap = LocalSdrShim::gainCapAt(hz);
@@ -20501,7 +20559,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const int       bwNow = g_tunerBwHz.load(std::memory_order_relaxed);
         const bool hwMoved = (lastSentRfCentre.exchange(rfNow) != rfNow)
                            | (lastSentTunerBw.exchange(bwNow) != bwNow);
-        if (lastSentGainCap.exchange(cap) != cap || hwMoved)
+        /* ★ THE AIRSPY R2 / MINI's RULE IS MORE THAN THE FIGURE — its curve and its lock can change
+         *  between two bands with the same position, and the panel draws both. Keyed on all three,
+         *  and only on that radio, so nothing changes for the others. */
+        bool aspRuleMoved = false;
+        if (useAirspy()) {
+            const vibe::asplimit::Limit al = aspLimitAt(hz);
+            const int key = al.active ? (al.sensitivity ? 1000 : 0) + (al.locked ? 100 : 0) + al.maxPos
+                                      : -1;
+            aspRuleMoved = lastSentAspLimit.exchange(key) != key;
+        }
+        if (lastSentGainCap.exchange(cap) != cap || hwMoved || aspRuleMoved)
             for (auto& pr : allSpecPeers()) sendHwInfo(pr.sock);
         /* ★★★ VibeAGC OBEYS THE BAND'S CEILING. The loop's ceiling was always the tuner's
          *     maximum (49.6 dB), so an owner who capped FM at 25 dB got 25 dB for a manual
@@ -20640,23 +20708,31 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             return;
         }
-        /* ★★★ THE AIRSPY R2 / MINI: THE CEILING IS A PRESET POSITION (index x 10, the same tenths
-         *     the slider speaks — see AirspySource::gainListTenthDb), and it can only be honoured on
-         *     a preset curve. Free mode sets the three stages by hand or hands two of them to the
-         *     radio's own AGC, and neither has any relation to a position on a curve — so on a
-         *     capped band the radio is brought back onto its curve, at the listener's own position
-         *     if that is within the ceiling and at the ceiling if not. Falling into the RTL line
-         *     below read lastGainTenthDb, which a mode change never updates, so a listener in Free
-         *     simply kept whatever the stages were doing. */
+        /* ★★★ THE AIRSPY R2 / MINI: THE BAND'S CURVE, AT A POSITION ON IT (vibe_airspy_limit.h).
+         *     The owner chose a curve for this band as well as a figure, so entering it puts the
+         *     radio on THAT curve — whatever mode or curve the listener was using elsewhere — at
+         *     the owner's position (LOCK), or at the position the radio remembers on that curve if
+         *     it is within the ceiling and at the ceiling if not (LIMIT). Free mode, the manual
+         *     stages and the stage AGCs are then closed by airspy_control until the band is left.
+         *  ★ Curve and position are written in ONE call (setAirspyPreset): switching curve first
+         *    would sit the radio at whatever that curve last held, possibly above the ceiling.
+         *  ★ LEAVING the band changes nothing on the radio — like every other ceiling here, nothing
+         *    is raised on a retune — it only opens the controls again (hwinfo carries aspLimit
+         *    null, and the handler stops refusing). */
         if (useAirspy() && asp) {
-            const bool free = asp->gainMode() == vibe::AirspySource::GainFree;
-            const int  cur  = asp->gainTenthDb();
-            const int  base = cur >= 0 ? cur : cap;
-            const int  want = fix ? cap : std::min(base, cap);
-            if (free || cur != want) {
-                LOGI("retune into a %s band — Airspy %s preset %d -> %d", fix ? "fixed" : "capped",
-                     free ? "free mode" : "curve", cur < 0 ? -1 : cur / 10, want / 10);
-                LocalSdrShim::instance().setGain(want);
+            const vibe::asplimit::Limit lim = aspLimitAt(hz);
+            const int curMode  = asp->gainMode();
+            const int curvePos = asp->presetTenth(lim.mode()) < 0 ? -1
+                               : (asp->presetTenth(lim.mode()) + 5) / 10;
+            const vibe::asplimit::Target t = vibe::asplimit::target(lim, curMode, curvePos);
+            if (t.change) {
+                LOGI("retune into a %s band — Airspy %s -> %s %d",
+                     lim.locked ? "locked" : "limited",
+                     curMode == vibe::asplimit::kModeFree ? "free mode"
+                         : curMode == vibe::asplimit::kModeSensitive ? "sensitivity" : "linearity",
+                     lim.curveName(), t.pos);
+                LocalSdrShim::instance().setAirspyPreset(t.mode, t.pos * 10);
+                for (auto& pr : allSpecPeers()) sendHwInfo(pr.sock);
             }
             return;
         }
@@ -20746,6 +20822,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         LOGI("everybody has left — gain back to the owner's resting value %d", rest);
         LocalSdrShim::instance().setGain(rest);
+        /* ★ An Airspy R2 / Mini parked inside a limited band goes back onto the band's curve and
+         *  under its figure: the resting position is the owner's too, but the band rule is the
+         *  narrower of the two and the one a listener arriving here will be held to. */
+        if (useAirspy()) applyGainCapForFreq(LocalSdrShim::instance().listenFrequency());
     }
 
     /* ★★★ IS ANYBODY WATCHING? ONE ANSWER, FOR EVERY PLACE THAT ASKS.
@@ -22884,6 +22964,21 @@ void LocalSdrShim::applyDesiredDsp(LocalSdrShim::Impl* impl) {
         if (g_dsp.aspBiasT.load()    >= 0) impl->asp->setBiasTee(g_dsp.aspBiasT.load() != 0);
         if (g_dsp.aspPacking.load()  >= 0) impl->asp->setPacking(g_dsp.aspPacking.load() != 0);
         if (g_dsp.aspMode.load()     >= 0) impl->asp->setGainMode(g_dsp.aspMode.load());
+        /* ★★ AND THE OWNER'S BAND RULE LAST OF ALL — a new source opening inside a limited band
+         *  must not come up in the Free mode (or on the other curve) the listener left it in
+         *  elsewhere. Written straight to the source, like every line above: this runs where they
+         *  do, and the retune path's setter takes the hardware lock itself. */
+        const vibe::asplimit::Limit lim = aspLimitAt(LocalSdrShim::instance().listenFrequency());
+        if (lim.active) {
+            const int cp = impl->asp->presetTenth(lim.mode());
+            const vibe::asplimit::Target t =
+                vibe::asplimit::target(lim, impl->asp->gainMode(), cp < 0 ? -1 : (cp + 5) / 10);
+            if (t.change) {
+                g_dsp.aspMode.store(t.mode);
+                impl->lastGainTenthDb = t.pos * 10;
+                impl->asp->setPreset(t.mode, t.pos * 10);
+            }
+        }
     }
     const float nrs = g_dsp.nrStrength.load();
     if (nrs >= 0.0f) {   // only if the client ever set one; else leave the engine's own
@@ -23127,6 +23222,22 @@ int LocalSdrShim::gainSplitAt(double hz) {
     if (g_gainSplits.empty()) return -1;
     const int v = vibebands::valueAt(g_gainSplits, hz);   // a preference, not a limit — first wins
     return v < 0 ? -1 : (v > 100 ? 100 : v);
+}
+
+void LocalSdrShim::setGainCurves(const std::string& csv) {
+    std::lock_guard<std::mutex> lk(g_gainLimMtx);
+    g_gainCurves = vibebands::parseGainList(csv);
+    LOGI("Airspy gain curves: %zu band(s) from \"%s\"", g_gainCurves.size(), csv.c_str());
+}
+/* ★ First match wins (valueAt), like the HackRF split: a curve is a choice, not a limit, so there
+ *  is no "safer" of two overlapping answers — the owner's own order decides. -1 while not serving,
+ *  for the same reason every limit here is: see gainLockedAt. */
+int LocalSdrShim::gainCurveAt(double hz) {
+    if (!g_serveOnLan.load()) return -1;
+    std::lock_guard<std::mutex> lk(g_gainLimMtx);
+    if (g_gainCurves.empty()) return -1;
+    const int v = vibebands::valueAt(g_gainCurves, hz);
+    return v < 0 ? -1 : (v > 0 ? 1 : 0);
 }
 
 void LocalSdrShim::setAgcLock(bool on) {
@@ -29322,6 +29433,19 @@ std::string LocalSdrShim::radioCapsJson() const {
         { const auto& rl = p->asp->sampleRates();
           for (size_t i = 0; i < rl.size(); ++i) { if (i) j += ','; j += std::to_string(rl[i]); } }
         j += "]";
+        /* ★★★ THE OWNER'S BAND RULE, FOR THE PANEL (vibe_airspy_limit.h) — in the radio object
+         *  because this is what the panel is drawn from, and hwinfo (which carries it) is re-sent
+         *  when the rule changes (applyGainCapForFreq). A limited band: {"curve","max","locked"};
+         *  an unlimited one: null — never absent on this radio, so a client is told the rule has
+         *  GONE rather than left holding the last one. No other radio carries the field at all. */
+        {
+            const vibe::asplimit::Limit l = aspLimitAt(listenFrequency());
+            if (!l.active) j += ",\"aspLimit\":null";
+            else j += std::string(",\"aspLimit\":{\"curve\":\"")
+                    + (l.sensitivity ? "sensitivity" : "linearity")
+                    + "\",\"max\":" + std::to_string(l.maxPos)
+                    + ",\"locked\":" + (l.locked ? "true" : "false") + "}";
+        }
         j += ",\"hasBiasT\":true,\"hasPacking\":true,\"noDirectSampling\":true}";
         return j;
     }
@@ -29437,6 +29561,14 @@ void LocalSdrShim::setAirspyGainMode(int mode) {
     g_dsp.aspMode.store(mode);
     if (!p || !p->useAirspy()) return;
     VIBE_HW_LOCK(); p->asp->setGainMode(mode);
+}
+void LocalSdrShim::setAirspyPreset(int mode, int tenthDb) {
+    const int m = mode == 0 ? 0 /*GainSensitive*/ : 1 /*GainLinear*/;
+    g_dsp.aspMode.store(m);
+    if (!p || !p->useAirspy()) return;
+    VIBE_HW_LOCK();
+    p->lastGainTenthDb = tenthDb;
+    p->asp->setPreset(m, tenthDb);
 }
 void LocalSdrShim::setAirspyStage(int stage, int value) {
     if (stage == 0)      g_dsp.aspLna.store(value);

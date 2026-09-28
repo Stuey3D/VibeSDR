@@ -324,6 +324,14 @@ void AirspySource::setSensitivityCurve(bool sensitivity) {
     setGainMode(sensitivity ? GainSensitive : GainLinear);
 }
 
+void AirspySource::setPreset(int mode, int tenthDb) {
+    mode_ = (mode == GainSensitive) ? GainSensitive : GainLinear;
+    if (tenthDb < 0) tenthDb = 0;
+    presetTenth_[mode_ == GainSensitive ? 0 : 1] = tenthDb;
+    gainTenth_ = tenthDb;
+    applyGainMode();
+}
+
 /* ★★ A STAGE IS A FREE-MODE CONTROL. Moving one used to leave the preset curve silently; now it
  *  selects the mode it belongs to, so the panel and the radio cannot disagree about which of the
  *  three is in force. */
@@ -377,6 +385,7 @@ void AirspySource::applyGain() {}
  *  gain modes and was missed; the archive check in build_ios.sh caught it. */
 void AirspySource::setGainMode(int) {}
 void AirspySource::setSensitivityCurve(bool) {}
+void AirspySource::setPreset(int, int) {}
 void AirspySource::setLnaGain(int) {}
 void AirspySource::setMixerGain(int) {}
 void AirspySource::setVgaGain(int) {}

@@ -109,6 +109,15 @@ public:
      *    it now simply selects between the two preset MODES. */
     void setSensitivityCurve(bool sensitivity);
     bool sensitivityCurve() const { return mode_ == GainSensitive; }
+    /** ★★ A CURVE AND A POSITION ON IT, IN ONE WRITE — for the owner's per-band limit
+     *  (vibe_airspy_limit.h). setGainMode() then setGainTenthDb() would put the radio on the new
+     *  curve at whatever position THAT curve last held — possibly above the owner's ceiling — for
+     *  the moment between the two calls. mode = GainSensitive or GainLinear. */
+    void setPreset(int mode, int tenthDb);
+    /** The position this preset curve remembers, tenths; -1 = never set on it. */
+    int  presetTenth(int mode) const {
+        return mode == GainSensitive ? presetTenth_[0] : mode == GainLinear ? presetTenth_[1] : -1;
+    }
     /** Manual stages, each 0-15. Only obeyed in Free mode. */
     void setLnaGain(int v);
     void setMixerGain(int v);

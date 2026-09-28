@@ -459,7 +459,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     S("gainLimits", r.gainLimits); S("ifBwLimits", r.ifBwLimits); I("restGain", r.restGain); I("agcLock", r.agcLock);
     // ★ The three that turn a ceiling into a setting — added to BOTH writers, see the note below.
     B("gainLock", r.gainLock); S("gainLocks", r.gainLocks);
-    S("ifGrLimits", r.ifGrLimits); S("gainSplits", r.gainSplits);
+    S("ifGrLimits", r.ifGrLimits); S("gainSplits", r.gainSplits); S("gainCurves", r.gainCurves);
     B("rateLock", r.rateLock); B("dabRateBoost", r.dabRateBoost);
     I("rawIq", r.rawIq); I("rawIqMax", r.rawIqMax); I("nbWide", r.nbWide);
     I("rawIqLanMaxHz", r.rawIqLanMaxHz);
@@ -525,7 +525,7 @@ std::string radioToJson(const RadioConfig& r) {
     // ★ BOTH WRITERS, as the note above insists: the setup page reads the API one.
     S("gainLimits", r.gainLimits); S("ifBwLimits", r.ifBwLimits); N("restGain", r.restGain); N("agcLock", r.agcLock);
     B("gainLock", r.gainLock); S("gainLocks", r.gainLocks);
-    S("ifGrLimits", r.ifGrLimits); S("gainSplits", r.gainSplits);
+    S("ifGrLimits", r.ifGrLimits); S("gainSplits", r.gainSplits); S("gainCurves", r.gainCurves);
     B("rateLock", r.rateLock); B("dabRateBoost", r.dabRateBoost);
     N("rawIq", r.rawIq); N("rawIqMax", r.rawIqMax); N("nbWide", r.nbWide);
     N("rawIqLanMaxHz", r.rawIqLanMaxHz);
@@ -614,7 +614,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.allowRanges = one.allowRanges; r.blockRanges = one.blockRanges;
     r.gainLimits = one.gainLimits; r.ifBwLimits = one.ifBwLimits; r.restGain = one.restGain; r.agcLock = one.agcLock;
     r.gainLock = one.gainLock; r.gainLocks = one.gainLocks;
-    r.ifGrLimits = one.ifGrLimits; r.gainSplits = one.gainSplits;
+    r.ifGrLimits = one.ifGrLimits; r.gainSplits = one.gainSplits; r.gainCurves = one.gainCurves;
     r.rateLock = one.rateLock;
     r.dabRateBoost = one.dabRateBoost;   // ★ and the other direction — see the note in the flatten
     r.rtlAgc = one.rtlAgc; r.tunerBwAuto = one.tunerBwAuto;   // ★ the same holes on migration
@@ -941,7 +941,7 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.allowRanges = r.allowRanges; c.blockRanges = r.blockRanges;
     c.gainLimits = r.gainLimits; c.ifBwLimits = r.ifBwLimits; c.restGain = r.restGain; c.agcLock = r.agcLock;
     c.gainLock = r.gainLock; c.gainLocks = r.gainLocks;
-    c.ifGrLimits = r.ifGrLimits; c.gainSplits = r.gainSplits;
+    c.ifGrLimits = r.ifGrLimits; c.gainSplits = r.gainSplits; c.gainCurves = r.gainCurves;
     c.rateLock = r.rateLock;
     /* ★★★ AND dabRateBoost — THE SAME HOLE AGAIN (2026-09-19). Saved per radio, parsed back by
      *     radioFromJson, read by main() into the shim — and never copied HERE, so a Full-mode radio

@@ -1334,13 +1334,19 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetGainLimits(JNIEnv* env, jobject,
  *    control with no radio to act on is the thing AGENTS.md says to remove rather than ship inert. */
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetGainLock(JNIEnv* env, jobject,
-                                                    jstring locks, jstring splits, jboolean rateLock) {
+                                                    jstring locks, jstring splits, jboolean rateLock,
+                                                    jstring curves) {
     const char* l = locks ? env->GetStringUTFChars(locks, nullptr) : nullptr;
     vibe::LocalSdrShim::setGainLocks(l ? l : "");
     if (l) env->ReleaseStringUTFChars(locks, l);
     const char* c = splits ? env->GetStringUTFChars(splits, nullptr) : nullptr;
     vibe::LocalSdrShim::setGainSplits(c ? c : "");
     if (c) env->ReleaseStringUTFChars(splits, c);
+    /* ★ The Airspy R2 / Mini's curve per limited band — in the same call as the locks it sits
+     *  beside, for the reason given above: one screen, one apply. */
+    const char* cv = curves ? env->GetStringUTFChars(curves, nullptr) : nullptr;
+    vibe::LocalSdrShim::setGainCurves(cv ? cv : "");
+    if (cv) env->ReleaseStringUTFChars(curves, cv);
     vibe::LocalSdrShim::setVibeServerRateLock(rateLock == JNI_TRUE);
 }
 
