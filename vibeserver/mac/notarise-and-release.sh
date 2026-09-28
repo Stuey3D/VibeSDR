@@ -57,6 +57,15 @@ if [ -n "$SRC_VER" ] && [ "$SRC_VER" != "$VER" ] && [ "${ALLOW_STALE:-0}" != "1"
   exit 1
 fi
 
+# ── The minimum-macOS gate, again ───────────────────────────────────────────
+# ★★★ build-app.sh already ran it, and this runs it AGAIN on exactly the bundle about to be signed.
+#     This script does not build (see above), so the app in front of it can be one build-app.sh
+#     never gated: an older build, a hand-copied one, one built before the gate existed. 5.6.78 was
+#     notarised with an engine built for macOS 27 and a cloudflared for 15 inside a "14.0" app —
+#     Apple's notary does not check that, and nothing else here did either. Every Mach-O at or
+#     below LSMinimumSystemVersion, only system or in-bundle dylibs, or no signature.
+"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-bundle.sh" --app "$APP"
+
 # ── Sign ────────────────────────────────────────────────────────────────────
 # Hardened runtime is REQUIRED for notarisation. Sign inside-out: nested code first, then the app.
 # --options runtime enables the hardened runtime; --timestamp gets a secure timestamp.

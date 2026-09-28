@@ -1,2 +1,6 @@
 build/
 build-*/
+
+# ★ Mac third-party libraries + cloudflared, built from pinned source by mac/build-deps.sh.
+#   Build output, never committed: the script and its SHA-256 pins are the source of truth.
+mac/deps/

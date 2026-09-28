@@ -9,7 +9,8 @@
 #
 # ★★★ AND UNLIKE ANDROID, NO PATCH IS NEEDED HERE. tools/cloudflared-android/build.sh compiles
 #     from source because Go's resolver reads /etc/resolv.conf and Android does not ship one. Linux
-#     and macOS do, so the OFFICIAL RELEASE BINARY works untouched — and taking Cloudflare's own
+#     does, so the OFFICIAL RELEASE BINARY works untouched (macOS: see the note at the bottom —
+#     the Mac now compiles its own, for a reason that has nothing to do with DNS) — and taking Cloudflare's own
 #     build means we are not shipping a toolchain's worth of difference from what they test.
 #
 # ★★ Apache-2.0, which is why any of this is allowed: redistribution is fine WITH THE LICENCE
@@ -40,12 +41,11 @@ fetch() {                       # fetch <asset> <dest-name>
 fetch cloudflared-linux-arm64  cloudflared-linux-arm64
 fetch cloudflared-linux-arm    cloudflared-linux-arm      # ★ 32-bit ARM — VibeServer Lite (Pi 2 etc.)
 fetch cloudflared-linux-amd64  cloudflared-linux-amd64
-fetch cloudflared-darwin-arm64.tgz cloudflared-darwin-arm64.tgz
-if [ ! -s "$OUT/cloudflared-darwin-arm64" ]; then
-  tar -xzf "$OUT/cloudflared-darwin-arm64.tgz" -C "$OUT"
-  mv "$OUT/cloudflared" "$OUT/cloudflared-darwin-arm64"
-  chmod +x "$OUT/cloudflared-darwin-arm64"
-fi
+# ★★★ NO darwin BINARY ANY MORE (2026-09-28). Cloudflare's cloudflared-darwin-arm64 is built for
+#     macOS 15.0 (LC_BUILD_VERSION minos 15.0), and VibeServer.app promises macOS 14 — so on a 14
+#     Mac the tunnel switch started nothing. vibeserver/mac/build-deps.sh COMPILES the same pinned
+#     tag instead (CGO off, Go's own floor), and build-app.sh bundles only that one. Fetching the
+#     release binary here would only leave the wrong one lying around to be picked up again.
 
 if [ ! -s "$OUT/LICENSE" ]; then
   echo "==> fetching the licence"

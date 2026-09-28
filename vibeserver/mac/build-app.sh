@@ -13,16 +13,44 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MAC="$ROOT/vibeserver/mac"
 BUILD="$ROOT/vibeserver/build"
 APP="$BUILD/VibeServer.app"
+LOGS="$BUILD/mac-logs"
+mkdir -p "$LOGS"
+
+# ★★★ ONE MINIMUM macOS, READ BY EVERY STEP. The Info.plist said 14.0 while the engine was built
+#     for 27.0 and cloudflared for 15.0 (5.6.78): three numbers, only one of them typed on purpose.
+#     MACOS_MINIMUM feeds the plist, swiftc's target, CMake's deployment target and build-deps.sh,
+#     and check-bundle.sh verifies the result against the plist at the end.
+MACOS_MIN="$(tr -d '[:space:]' < "$MAC/MACOS_MINIMUM")"
+[ -n "$MACOS_MIN" ] || { echo "!! vibeserver/mac/MACOS_MINIMUM is empty"; exit 1; }
+echo "==> minimum macOS $MACOS_MIN (vibeserver/mac/MACOS_MINIMUM)"
+
+# ★★★ THIRD-PARTY LIBRARIES FROM OUR OWN BUILD, NOT HOMEBREW. A Homebrew bottle is built for the
+#     OS of the Mac that installed it (macOS 26 objects inside the 14.0 5.6.78). build-deps.sh
+#     builds librtlsdr/libusb/libopus and cloudflared from pinned, hash-checked source for
+#     MACOS_MIN; it is idempotent, so on every build after the first this takes a fraction of a second.
+"$MAC/build-deps.sh"
+DEPS="$MAC/deps"
 
 echo "==> Building the C++ core"
 # ★★★ STRICT: a release build must contain every radio the release claims to contain. Without
 #     this flag a missing brew formula removes a driver silently, leaving one cmake STATUS line as
 #     the only trace — which is how 3.0.0-2 shipped with the setup wizard compiled out. It matters
 #     most for the HackRF: the one person who can test it cannot tell a missing driver from a
-#     broken one. Needs `brew install hackrf librtlsdr libusb`.
+#     broken one. It used to need `brew install hackrf librtlsdr libusb`; since 2026-09-28 it
+#     needs nothing from Homebrew any more: the libraries come from build-deps.sh (VIBE_MAC_DEPS),
+#     and libairspyhf / libairspy / libhackrf are vendored and compiled into the core.
+# ★★★ CMAKE_OSX_DEPLOYMENT_TARGET — without it CMake builds for THE BUILD MAC'S OS. 5.6.78's
+#     vibeserver-engine was minos 27.0 (this Mac runs a 27 beta), so Full mode could not start on
+#     any real user's Mac, and nothing here noticed. arm64 matches swiftc's target below.
+# ★★ Output goes to LOGS, not /dev/null: the linker's "built for newer macOS version" warning was
+#    the one line that told the truth, and it was being thrown away. check-bundle.sh reads them.
 cmake -S "$ROOT/vibeserver" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release \
-      -DVIBESERVER_STRICT_RADIOS=ON >/dev/null
-cmake --build "$BUILD" --target vibeserver_core -j >/dev/null
+      -DVIBESERVER_STRICT_RADIOS=ON \
+      -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_MIN" -DCMAKE_OSX_ARCHITECTURES=arm64 \
+      -DVIBE_MAC_DEPS="$DEPS/prefix" >"$LOGS/configure.log" 2>&1 \
+  || { tail -40 "$LOGS/configure.log"; echo "!! cmake configure failed"; exit 1; }
+cmake --build "$BUILD" --target vibeserver_core -j >"$LOGS/core.log" 2>&1 \
+  || { tail -40 "$LOGS/core.log"; echo "!! vibeserver_core build failed"; exit 1; }
 # ★★★ AND THE FRONT-DOOR BINARY, WHICH FULL MODE SPAWNS. Simple mode runs the server IN-PROCESS
 #     (vs_start) and needs none of this; Full mode is multi-process by design — a front door that
 #     owns no radio, one process per radio — exactly as on Linux. Rather than re-implement that
@@ -30,7 +58,11 @@ cmake --build "$BUILD" --target vibeserver_core -j >/dev/null
 #     identically to Linux" is true by construction instead of by maintenance.
 # ★ It must be built from the same tree in the same configuration as the core the app links, or
 #   the two halves of one product drift apart between releases.
-cmake --build "$BUILD" --target vibeserver -j >/dev/null
+# ★ Relinked EVERY time (the rm), so the engine's link — and any ld warning in it — is in THIS
+#   build's log. An up-to-date target is a skipped link and a log that proves nothing.
+rm -f "$BUILD/vibeserver"
+cmake --build "$BUILD" --target vibeserver -j >"$LOGS/engine.log" 2>&1 \
+  || { tail -40 "$LOGS/engine.log"; echo "!! vibeserver (engine) build failed"; exit 1; }
 
 echo "==> Assembling the bundle"
 rm -rf "$APP"
@@ -70,7 +102,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
        GitHub release disagreed with the product (2026-08-11). -->
   <key>CFBundleShortVersionString</key><string>${VIBE_VER}</string>
   <key>CFBundleVersion</key>           <string>${VIBE_BUILD}</string>
-  <key>LSMinimumSystemVersion</key>    <string>14.0</string>
+  <key>LSMinimumSystemVersion</key>    <string>${MACOS_MIN}</string>
   <!-- Menu-bar resident: no Dock icon, no window on launch. -->
   <key>LSUIElement</key>               <true/>
   <!-- macOS asks before we can be reached on the LAN; explain why rather than letting the bare
@@ -124,24 +156,16 @@ if [ -f "$ROOT/android/app/src/main/cpp/libairspyhf/airspyhf.c" ]; then AHFLIB="
 # HackRF bug on 2026-08-26, and this line is the sixth site of it. Any future driver needs adding
 # in BOTH places.
 HRFLIB=$(grep -m1 '^HACKRF_LIB:' "$BUILD/CMakeCache.txt" | cut -d= -f2)
-# ★ FORCE THE STATIC ARCHIVE for EVERY Homebrew lib, next to whatever find_library cached. A notarised
-# hardened-runtime app that links a Homebrew DYLIB crashes on launch for everyone: absent on machines
-# without Homebrew, and even on the dev box the hardened runtime rejects it for a Team-ID mismatch
-# (0.2.0: dyld "Library not loaded: librtlsdr.0.dylib"). librtlsdr/libusb had NO .a preference here —
-# only opus did — so a stale cache pointing at the dylib shipped a broken app. Belt-and-braces even
-# after wiping the cmake cache.
-_rtldir=$(dirname "$RTLSDR"); [ -f "$_rtldir/librtlsdr.a" ]  && RTLSDR="$_rtldir/librtlsdr.a"
-_usbdir=$(dirname "$USBLIB"); [ -f "$_usbdir/libusb-1.0.a" ] && USBLIB="$_usbdir/libusb-1.0.a"
-_opusdir=$(dirname "$OPUSLIB"); [ -f "$_opusdir/libopus.a" ] && OPUSLIB="$_opusdir/libopus.a"
-if [ -n "$AHFLIB" ]; then
-  _ahfdir=$(dirname "$AHFLIB"); [ -f "$_ahfdir/libairspyhf.a" ] && AHFLIB="$_ahfdir/libairspyhf.a"
-fi
-if [ -n "$HRFLIB" ]; then
-  _hrfdir=$(dirname "$HRFLIB"); [ -f "$_hrfdir/libhackrf.a" ] && HRFLIB="$_hrfdir/libhackrf.a"
-fi
+# ★★ NO HOMEBREW FALLBACK ANY MORE. This used to swap each cached Homebrew path for the .a beside
+#    it — right for "no dylib", wrong for "built for this Mac only": those archives were macOS 26
+#    objects. The cache now holds build-deps.sh's archives (VIBE_MAC_DEPS forces them), and the gate
+#    at the end FAILS the build if a package-manager path ever reaches this link line again.
+# ★ The link inputs are written down so the gate can check exactly what was linked.
+printf '%s\n' $LIBS "$RTLSDR" "$USBLIB" "$OPUSLIB" ${AHFLIB:+"$AHFLIB"} ${HRFLIB:+"$HRFLIB"} \
+  > "$LOGS/swift-link-inputs.txt"
 
 swiftc \
-  -O -target arm64-apple-macos14.0 \
+  -O -target "arm64-apple-macos$MACOS_MIN" \
   -parse-as-library \
   -import-objc-header "$ROOT/vibeserver/vibeserver_api.h" \
   -I "$ROOT/vibeserver" \
@@ -155,7 +179,10 @@ swiftc \
   -framework IOKit -framework CoreFoundation -framework Security -framework AppKit -framework SwiftUI \
   -framework CoreLocation \
   -framework AudioToolbox -framework CoreAudio \
-  -o "$APP/Contents/MacOS/VibeServer"
+  -o "$APP/Contents/MacOS/VibeServer" >"$LOGS/swift.log" 2>&1 \
+  || { cat "$LOGS/swift.log"; echo "!! swiftc failed"; exit 1; }
+# Swift's own warnings used to reach the terminal; they still do.
+[ -s "$LOGS/swift.log" ] && cat "$LOGS/swift.log"
 
 # ★★ SHIP THE FRONT DOOR INSIDE THE BUNDLE. Contents/MacOS is the right home: it is code, it is
 #    covered by the app's signature, and it is read-only once installed — an executable dropped in
@@ -180,20 +207,23 @@ cp "$MAC/Resources/"MenuBar*.png "$APP/Contents/Resources/"
 #     — a menu-bar app with a manual prerequisite is not a one-switch feature (Stuart, 2026-08-23).
 #  ★★ Apache-2.0: redistribution is permitted WITH THE LICENCE ALONGSIDE, so it ships beside it.
 #  ★ Missing = an app without the tunnel, not a failed build — a fresh clone has not run fetch.sh.
-CF="$ROOT/tools/cloudflared-desktop/bin/cloudflared-darwin-arm64"
-if [ -s "$CF" ]; then
-  # ★★★ IN MacOS/, NOT Resources/. The notarise script signs every executable in MacOS/ by
-  #     ENUMERATION — precisely so a helper added later cannot be missed — and an unsigned Mach-O
-  #     anywhere in the bundle fails notarisation. It also runs perfectly on the machine that built
-  #     it, so the break would surface only in the artefact somebody downloads. That has happened
-  #     here once already, with vibeserver-engine.
-  cp "$CF" "$APP/Contents/MacOS/cloudflared"
-  chmod +x "$APP/Contents/MacOS/cloudflared"
-  cp "$ROOT/tools/cloudflared-desktop/bin/LICENSE" "$APP/Contents/Resources/LICENSE.cloudflared"
-  echo "==> bundled cloudflared"
-else
-  echo "==> cloudflared NOT bundled (run tools/cloudflared-desktop/fetch.sh)"
-fi
+# ★★★ COMPILED BY build-deps.sh, NOT DOWNLOADED. Cloudflare's own darwin binary (what
+#     tools/cloudflared-desktop/fetch.sh fetches) is minos 15.0, so the tunnel could not run on the
+#     macOS 14 the app promises. Same tag, built from source with CGO off (see build-deps.sh).
+#  ★ REQUIRED now: build-deps.sh always builds it, so a missing one is a broken deps tree, not a
+#    fresh clone — and a release that silently lost the tunnel is the kind that ships.
+CF="$DEPS/cloudflared/cloudflared"
+[ -x "$CF" ] && [ -s "$DEPS/cloudflared/LICENSE" ] \
+  || { echo "!! no compiled cloudflared at $CF — run vibeserver/mac/build-deps.sh"; exit 1; }
+# ★★★ IN MacOS/, NOT Resources/. The notarise script signs every executable in MacOS/ by
+#     ENUMERATION — precisely so a helper added later cannot be missed — and an unsigned Mach-O
+#     anywhere in the bundle fails notarisation. It also runs perfectly on the machine that built
+#     it, so the break would surface only in the artefact somebody downloads. That has happened
+#     here once already, with vibeserver-engine.
+cp "$CF" "$APP/Contents/MacOS/cloudflared"
+chmod +x "$APP/Contents/MacOS/cloudflared"
+cp "$DEPS/cloudflared/LICENSE" "$APP/Contents/Resources/LICENSE.cloudflared"
+echo "==> bundled cloudflared ($("$CF" --version | head -1))"
 
 # ★★ THE GPU MAP'S FILES (renderer, style, glyphs, icons, basic + relief PMTiles) — served at /mapgl/
 #    by vibe_mapgl.h, which looks for them at <exe>/../Resources/mapgl. Plain names from
@@ -225,6 +255,20 @@ fi
 codesign --force --sign - --identifier com.stuey3d.vibeserver "$APP" >/dev/null 2>&1 || true
 
 echo "==> Built $APP"
+
+# ★★★ THE GATE. Every Mach-O in the bundle at or below LSMinimumSystemVersion, only system or
+#     in-bundle dylibs, every linked archive's objects at or below it, no "built for newer macOS"
+#     warning in any link, no package-manager path on any link line. A failure here stops the
+#     build BEFORE it is installed anywhere.
+GATE=(--app "$APP")
+for a in $LIBS "$RTLSDR" "$USBLIB" "$OPUSLIB" ${AHFLIB:+"$AHFLIB"} ${HRFLIB:+"$HRFLIB"}; do
+  GATE+=(--archive "$a")
+done
+for l in core.log engine.log swift.log; do GATE+=(--ldlog "$LOGS/$l"); done
+GATE+=(--linkinput "$BUILD/CMakeFiles/vibeserver.dir/link.txt"
+       --linkinput "$BUILD/CMakeFiles/vibeserver_core.dir/flags.make"
+       --linkinput "$LOGS/swift-link-inputs.txt")
+"$MAC/check-bundle.sh" "${GATE[@]}"
 
 if [ "${1:-}" != "--no-copy" ]; then
   # ★★ /Applications, NOT the Desktop. A build on the Desktop and an older copy in /Applications

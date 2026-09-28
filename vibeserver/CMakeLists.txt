@@ -228,6 +228,31 @@ endif()
 # ★★ And forcing static there actively BREAKS: Debian's libusb-1.0.a needs libudev symbols that are
 # not pulled in, so the link fails with a wall of undefined `udev_*` references (Raspberry Pi,
 # 2026-07-31). Shared linking is both idiomatic and the only thing that works.
+# ★★★ macOS RELEASE BUILDS: OUR OWN LIBRARIES, BUILT FOR THE APP'S MINIMUM macOS (2026-09-28).
+#     Homebrew's archives are built for the OS of the Mac that installed them — 5.6.78 linked
+#     macOS 26 objects into a 14.0 app, and ld said so only in a warning nobody saw.
+#     vibeserver/mac/build-deps.sh builds librtlsdr/libusb/libopus from pinned source with the
+#     deployment target, and build-app.sh passes its prefix here. Set, it is the ONLY source: every
+#     path below is forced to it, so nothing can quietly resolve back to /opt/homebrew — and a
+#     missing file is a configure error, not a fallback.
+# ★ Unset (a plain dev `cmake`), everything below behaves exactly as it always has.
+set(VIBE_MAC_DEPS "" CACHE PATH "macOS: prefix from vibeserver/mac/build-deps.sh (release builds)")
+if(APPLE AND VIBE_MAC_DEPS)
+  foreach(_f lib/librtlsdr.a lib/libusb-1.0.a lib/libopus.a include/rtl-sdr.h
+             include/libusb-1.0/libusb.h include/opus/opus.h)
+    if(NOT EXISTS "${VIBE_MAC_DEPS}/${_f}")
+      message(FATAL_ERROR "VIBE_MAC_DEPS=${VIBE_MAC_DEPS} has no ${_f} — run vibeserver/mac/build-deps.sh")
+    endif()
+  endforeach()
+  set(RTLSDR_LIB    "${VIBE_MAC_DEPS}/lib/librtlsdr.a"       CACHE FILEPATH "" FORCE)
+  set(USB_LIB       "${VIBE_MAC_DEPS}/lib/libusb-1.0.a"      CACHE FILEPATH "" FORCE)
+  set(OPUS_LIB      "${VIBE_MAC_DEPS}/lib/libopus.a"         CACHE FILEPATH "" FORCE)
+  set(RTLSDR_INC    "${VIBE_MAC_DEPS}/include"               CACHE PATH "" FORCE)
+  set(OPUS_INC      "${VIBE_MAC_DEPS}/include"               CACHE PATH "" FORCE)
+  set(LIBUSB_INC    "${VIBE_MAC_DEPS}/include/libusb-1.0"    CACHE PATH "" FORCE)
+  set(LIBUSB_INC_AS "${VIBE_MAC_DEPS}/include/libusb-1.0"    CACHE PATH "" FORCE)
+  message(STATUS "macOS deps: ${VIBE_MAC_DEPS} (built for macOS ${CMAKE_OSX_DEPLOYMENT_TARGET})")
+endif()
 set(_saved_suffixes ${CMAKE_FIND_LIBRARY_SUFFIXES})
 if(APPLE)
   set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
@@ -390,8 +415,26 @@ endif()
 #     android/app/src/main/cpp/CMakeLists.txt. This block is the desktop's system/Homebrew
 #     libhackrf, which is stock and has NO hackrf_open_fd — hence VIBE_HACKRF_HAS_FD, which is
 #     set there and deliberately not here.
+# ★★★ EXCEPT A macOS RELEASE (VIBE_MAC_DEPS set): there it compiles the SAME vendored cpp/libhackrf
+#     Android does — libhackrf 2026.01.3, the exact release Homebrew gave the Mac — into the core, so
+#     it is built for the app's minimum macOS with everything else instead of arriving as a macOS 26
+#     Homebrew object. The Android patches are additive (hackrf_open_fd, a skip_configuration flag
+#     only that entry point sets) or #ifdef __ANDROID__, so the desktop open path is upstream's.
+#  ★ VIBE_HACKRF_HAS_FD stays off here all the same: the Mac enumerates, it never opens by fd.
+set(HACKRF_VENDOR "${CPP_DIR}/libhackrf")
+if(APPLE AND VIBE_MAC_DEPS AND EXISTS "${HACKRF_VENDOR}/hackrf.c")
+  message(STATUS "libhackrf: vendored at ${HACKRF_VENDOR} (HackRF support: EXPERIMENTAL)")
+  target_sources(vibeserver_core PRIVATE "${HACKRF_VENDOR}/hackrf.c")
+  # hackrf.c includes <libusb.h> unqualified; hackrf_source.cpp's <libhackrf/hackrf.h> resolves
+  # through CPP_DIR, already a PUBLIC include of the core — so it can only see the vendored header.
+  target_include_directories(vibeserver_core PRIVATE "${VIBE_MAC_DEPS}/include/libusb-1.0")
+  target_compile_definitions(vibeserver_core PUBLIC VIBE_HAS_HACKRF)
+  set(HACKRF_LIB "" CACHE FILEPATH "" FORCE)   # ★ build-app.sh reads this: nothing extra to link
+  set(HACKRF_VENDORED TRUE)
+else()
 find_library(HACKRF_LIB NAMES hackrf HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
 find_path(HACKRF_INC libhackrf/hackrf.h HINTS /opt/homebrew/include /usr/local/include /usr/include)
+endif()
 # ★★★ PREFER THE STATIC ARCHIVE ON macOS, exactly as the librtlsdr and libairspyhf blocks do — a
 #     cached dylib path is how a notarised build ships broken. Homebrew's libhackrf.a needs only
 #     libusb, which this target already links, so nothing new has to be bundled or re-signed.
@@ -401,7 +444,9 @@ if(APPLE AND HACKRF_LIB)
     set(HACKRF_LIB "${_hrf_dir}/libhackrf.a")
   endif()
 endif()
-if(HACKRF_LIB AND HACKRF_INC)
+if(HACKRF_VENDORED)
+  # (compiled into the core above)
+elseif(HACKRF_LIB AND HACKRF_INC)
   message(STATUS "libhackrf: ${HACKRF_LIB} (HackRF support: EXPERIMENTAL)")
   target_include_directories(vibeserver_core PUBLIC "${HACKRF_INC}")
   target_link_libraries(vibeserver_core PUBLIC "${HACKRF_LIB}")
